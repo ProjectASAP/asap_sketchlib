@@ -1,0 +1,12 @@
+# HELP fake_machine_metric Generating fake machine time series data
+# TYPE fake_machine_metric gauge
+fake_machine_metric{cpu_usage="0",machine_id="machine_id_0"} 2.110306116e+09
+fake_machine_metric{cpu_usage="1",machine_id="machine_id_1"} 3.325512888e+09
+fake_machine_metric{cpu_usage="2",machine_id="machine_id_2"} 1.01157291e+08
+fake_machine_metric{cpu_usage="3",machine_id="machine_id_3"} 7.58467841e+08
+fake_machine_metric{cpu_usage="4",machine_id="machine_id_4"} 2.613575526e+09
+fake_machine_metric{cpu_usage="5",machine_id="machine_id_5"} 2.98663838e+09
+fake_machine_metric{cpu_usage="6",machine_id="machine_id_6"} 8.33629928e+08
+fake_machine_metric{cpu_usage="7",machine_id="machine_id_7"} 5.92745137e+08
+fake_machine_metric{cpu_usage="0",machine_id="machine_id_8"} 3.392295302e+09
+fake_machine_metric{cpu_usage="1",machine_id="machine_id_9"} 3.124336733e+09

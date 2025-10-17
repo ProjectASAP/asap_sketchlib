@@ -1,0 +1,44 @@
+{
+  "columns": 32,
+  "file_format": "JSON",
+  "integer_insertions": 55,
+  "rows": 4,
+  "sketch_type": "CountMin",
+  "string_insertions": 21,
+  "test_integers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "test_strings": [
+    {
+      "count": 5,
+      "key": "apple"
+    },
+    {
+      "count": 3,
+      "key": "banana"
+    },
+    {
+      "count": 7,
+      "key": "cherry"
+    },
+    {
+      "count": 2,
+      "key": "date"
+    },
+    {
+      "count": 4,
+      "key": "elderberry"
+    }
+  ],
+  "timestamp": "2025-10-02T05:17:08.858126+00:00",
+  "total_insertions": 76
+}

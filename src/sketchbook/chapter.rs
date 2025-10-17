@@ -1,0 +1,134 @@
+use crate::utils::iv_to_f64;
+use serde::{Deserialize, Serialize};
+
+use super::super::sketches::*;
+use super::super::utils::SketchInput;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(deserialize = "'de: 'a"))]
+pub enum Chapter<'a> {
+    CM(CountMin),
+    #[serde(borrow)]
+    COCO(Coco<'a>),
+    CU(CountUniv),
+    ELASTIC(Elastic),
+    HLL(HllDfModified),
+    KLL(KLL),
+    LOCHER(LocherSketch),
+    UNIVMON(UnivMon),
+}
+
+impl<'a> Chapter<'a> {
+    /// Insert a value into the sketch
+    pub fn insert(&mut self, val: &SketchInput<'a>) {
+        match self {
+            Chapter::CM(sketch) => sketch.insert_cm(val),
+            Chapter::COCO(sketch) => sketch.insert(val, 1),
+            Chapter::CU(sketch) => sketch.insert_once(val),
+            Chapter::ELASTIC(sketch) => match val {
+                SketchInput::String(s) => sketch.insert(s.to_string()),
+                SketchInput::I32(i) => sketch.insert(i.to_string()),
+                SketchInput::I64(i) => sketch.insert(i.to_string()),
+                SketchInput::U32(u) => sketch.insert(u.to_string()),
+                SketchInput::U64(u) => sketch.insert(u.to_string()),
+                SketchInput::F32(f) => sketch.insert(f.to_string()),
+                SketchInput::F64(f) => sketch.insert(f.to_string()),
+                SketchInput::Str(s) => sketch.insert(s.to_string()),
+                SketchInput::Bytes(items) => {
+                    let s = String::from_utf8_lossy(items).to_string();
+                    sketch.insert(s)
+                }
+            },
+            Chapter::HLL(sketch) => sketch.insert(val),
+            Chapter::KLL(sketch) => sketch.update(iv_to_f64(val)),
+            Chapter::LOCHER(sketch) => {
+                // Locher requires a String
+                if let SketchInput::String(s) = val {
+                    sketch.insert(s, 1);
+                }
+            }
+            Chapter::UNIVMON(sketch) => {
+                // UnivMon requires update with key, value, bottom_layer_num
+                // Using default bottom_layer_num of 0
+                if let SketchInput::Str(s) = val {
+                    sketch.update(s, 1, 0);
+                } else if let SketchInput::String(s) = val {
+                    sketch.update(s.as_str(), 1, 0);
+                }
+            }
+        }
+    }
+
+    /// Merge another sketch of the same type into this one
+    pub fn merge(&mut self, other: &Chapter<'a>) -> Result<(), &'static str> {
+        match (self, other) {
+            (Chapter::CM(s), Chapter::CM(o)) => {
+                s.merge(o);
+                Ok(())
+            }
+            (Chapter::COCO(s), Chapter::COCO(o)) => {
+                s.merge(o);
+                Ok(())
+            }
+            (Chapter::CU(s), Chapter::CU(o)) => {
+                s.merge(o);
+                Ok(())
+            }
+            // (Bucket::ELASTIC(s), Bucket::ELASTIC(o)) => {
+            //     s.merge(o);
+            //     Ok(())
+            // }, // not yet
+            (Chapter::HLL(s), Chapter::HLL(o)) => {
+                s.merge(o);
+                Ok(())
+            }
+            (Chapter::KLL(s), Chapter::KLL(o)) => {
+                s.merge(o);
+                Ok(())
+            }
+            // (Bucket::LOCHER(s), Bucket::LOCHER(o)) => {
+            //     s.merge(o);
+            //     Ok(())
+            // }, // not yet
+            (Chapter::UNIVMON(s), Chapter::UNIVMON(o)) => {
+                s.merge_with(o);
+                Ok(())
+            }
+            _ => Err("Cannot merge sketches of different types"),
+        }
+    }
+
+    pub fn query(&self, key: &SketchInput<'a>) -> Result<f64, &'static str> {
+        match (self, key) {
+            (Chapter::CM(count_min), _) => Ok(count_min.get_est(key) as f64),
+            (Chapter::COCO(coco), _) => Ok(coco.clone().estimate(key.clone()) as f64),
+            (Chapter::CU(count_univ), _) => Ok(count_univ.get_est(key) as f64),
+            (Chapter::ELASTIC(elastic), SketchInput::String(s)) => {
+                Ok(elastic.clone().query(s.clone()) as f64)
+            }
+            (Chapter::HLL(hll_df_modified), _) => Ok(hll_df_modified.get_est() as f64),
+            (Chapter::KLL(kll), SketchInput::I32(i)) => Ok(kll.quantile(*i as f64)),
+            (Chapter::KLL(kll), SketchInput::I64(i)) => Ok(kll.quantile(*i as f64)),
+            (Chapter::KLL(kll), SketchInput::U32(u)) => Ok(kll.quantile(*u as f64)),
+            (Chapter::KLL(kll), SketchInput::U64(u)) => Ok(kll.quantile(*u as f64)),
+            (Chapter::KLL(kll), SketchInput::F32(f)) => Ok(kll.quantile(*f as f64)),
+            (Chapter::KLL(kll), SketchInput::F64(f)) => Ok(kll.quantile(*f)),
+            (Chapter::LOCHER(locher_sketch), SketchInput::Str(s)) => Ok(locher_sketch.estimate(*s)),
+            _ => Err("Parameter type and Sketch Type Mismatched"),
+        }
+    }
+
+    /// Get the type of sketch as a string
+    pub fn sketch_type(&self) -> &'static str {
+        match self {
+            Chapter::CM(_) => "CountMin",
+            Chapter::COCO(_) => "Coco",
+            Chapter::CU(_) => "CountUniv",
+            Chapter::ELASTIC(_) => "Elastic",
+            Chapter::HLL(_) => "HLL",
+            Chapter::KLL(_) => "KLL",
+            Chapter::LOCHER(_) => "Locher",
+            Chapter::UNIVMON(_) => "UnivMon",
+        }
+    }
+}

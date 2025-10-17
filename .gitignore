@@ -1,0 +1,7 @@
+sliding-prometheus/target/
+querysimulation/target
+datamover/target
+slideaway
+.DS_Store
+target
+querysimulation/.vscode
