@@ -14,6 +14,7 @@ pub enum Chapter<'a> {
     ELASTIC(Elastic),
     HLL(HllDfModified),
     KLL(KLL),
+    UNIFORM(UniformSampling),
     LOCHER(LocherSketch),
     UNIVMON(UnivMon),
 }
@@ -41,6 +42,9 @@ impl<'a> Chapter<'a> {
             },
             Chapter::HLL(sketch) => sketch.insert(val),
             Chapter::KLL(sketch) => sketch.update(iv_to_f64(val)),
+            Chapter::UNIFORM(sketch) => {
+                let _ = sketch.update_input(val);
+            }
             Chapter::LOCHER(sketch) => {
                 // Locher requires a String
                 if let SketchInput::String(s) = val {
@@ -86,6 +90,7 @@ impl<'a> Chapter<'a> {
                 s.merge(o);
                 Ok(())
             }
+            (Chapter::UNIFORM(s), Chapter::UNIFORM(o)) => s.merge(o),
             // (Bucket::LOCHER(s), Bucket::LOCHER(o)) => {
             //     s.merge(o);
             //     Ok(())
@@ -113,6 +118,28 @@ impl<'a> Chapter<'a> {
             (Chapter::KLL(kll), SketchInput::U64(u)) => Ok(kll.quantile(*u as f64)),
             (Chapter::KLL(kll), SketchInput::F32(f)) => Ok(kll.quantile(*f as f64)),
             (Chapter::KLL(kll), SketchInput::F64(f)) => Ok(kll.quantile(*f)),
+            (Chapter::UNIFORM(sampler), SketchInput::U64(idx)) => sampler
+                .sample_at(*idx as usize)
+                .ok_or("Sample index out of bounds"),
+            (Chapter::UNIFORM(sampler), SketchInput::U32(idx)) => sampler
+                .sample_at(*idx as usize)
+                .ok_or("Sample index out of bounds"),
+            (Chapter::UNIFORM(sampler), SketchInput::I64(idx)) if *idx >= 0 => sampler
+                .sample_at(*idx as usize)
+                .ok_or("Sample index out of bounds"),
+            (Chapter::UNIFORM(sampler), SketchInput::I32(idx)) if *idx >= 0 => sampler
+                .sample_at(*idx as usize)
+                .ok_or("Sample index out of bounds"),
+            (Chapter::UNIFORM(sampler), SketchInput::Str(cmd)) => match *cmd {
+                "len" => Ok(sampler.len() as f64),
+                "total_seen" => Ok(sampler.total_seen() as f64),
+                _ => Err("Unsupported command for UniformSampling"),
+            },
+            (Chapter::UNIFORM(sampler), SketchInput::String(cmd)) => match cmd.as_str() {
+                "len" => Ok(sampler.len() as f64),
+                "total_seen" => Ok(sampler.total_seen() as f64),
+                _ => Err("Unsupported command for UniformSampling"),
+            },
             (Chapter::LOCHER(locher_sketch), SketchInput::Str(s)) => Ok(locher_sketch.estimate(*s)),
             _ => Err("Parameter type and Sketch Type Mismatched"),
         }
@@ -127,6 +154,7 @@ impl<'a> Chapter<'a> {
             Chapter::ELASTIC(_) => "Elastic",
             Chapter::HLL(_) => "HLL",
             Chapter::KLL(_) => "KLL",
+            Chapter::UNIFORM(_) => "UniformSampling",
             Chapter::LOCHER(_) => "Locher",
             Chapter::UNIVMON(_) => "UnivMon",
         }

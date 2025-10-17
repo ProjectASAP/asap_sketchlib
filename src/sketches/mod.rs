@@ -33,6 +33,9 @@ pub use locher::LocherSketch;
 pub mod microscope;
 pub use microscope::MicroScope;
 
+pub mod uniform;
+pub use uniform::UniformSampling;
+
 pub mod univmon;
 pub use univmon::UnivMon;
 
