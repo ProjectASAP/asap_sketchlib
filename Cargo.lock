@@ -1341,7 +1341,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sketchlib-rs"
+name = "sketchlib-rust"
 version = "0.1.0"
 dependencies = [
  "ahash",

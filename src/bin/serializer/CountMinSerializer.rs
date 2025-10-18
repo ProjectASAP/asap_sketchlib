@@ -1,6 +1,6 @@
-use querysimulation::sketches::CountMin;
-use querysimulation::sketches::utils::SketchInput;
-use querysimulation::utils::hash_it;
+use sketchlib_rust::sketches::CountMin;
+use sketchlib_rust::sketches::utils::SketchInput;
+use sketchlib_rust::utils::hash_it;
 use rmp_serde::to_vec_named;
 use std::fs;
 use std::path::Path;

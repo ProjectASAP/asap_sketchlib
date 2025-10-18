@@ -1,5 +1,5 @@
-use querysimulation::sketches::CountUniv;
-use querysimulation::sketches::utils::SketchInput;
+use sketchlib_rust::sketches::CountUniv;
+use sketchlib_rust::sketches::utils::SketchInput;
 use rmp_serde::to_vec_named;
 use std::fs;
 use std::path::Path;

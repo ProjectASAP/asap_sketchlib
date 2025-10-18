@@ -1,4 +1,4 @@
-use querysimulation::sketches::{countmin::CountMinMS, utils::SketchInput};
+use sketchlib_rust::sketches::{countmin::CountMinMS, utils::SketchInput};
 // use std::collections::HashMap;
 
 fn main() {

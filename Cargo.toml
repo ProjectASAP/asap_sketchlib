@@ -1,5 +1,5 @@
 [package]
-name = "sketchlib-rs"
+name = "sketchlib-rust"
 version = "0.1.0"
 edition = "2024"
 
@@ -28,7 +28,7 @@ prom_text_format_parser = "0.1.0"
 
 [lib]
 crate-type = ["rlib"]
-name = "querysimulation"
+name = "sketchlib_rust"
 path = "src/lib.rs"
 
 [[bin]]

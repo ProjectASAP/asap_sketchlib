@@ -1,4 +1,4 @@
-use querysimulation::{sketches::Coco, utils::SketchInput};
+use sketchlib_rust::{sketches::Coco, utils::SketchInput};
 use std::fs;
 use std::path::Path;
 

@@ -1,5 +1,5 @@
-// use querysimulation::sketches::countmin::CountMin;
-use querysimulation::sketches::kll::KLL;
+// use sketchlib_rust::sketches::countmin::CountMin;
+use sketchlib_rust::sketches::kll::KLL;
 // use rand::rngs::StdRng;
 // use rand::{thread_rng, Rng, SeedableRng};
 // use std::collections::HashMap;

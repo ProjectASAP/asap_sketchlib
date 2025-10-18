@@ -1,4 +1,4 @@
-use querysimulation::sketches::KLL;
+use sketchlib_rust::sketches::KLL;
 use rmp_serde::to_vec_named;
 use std::fs;
 use std::path::Path;

@@ -1,5 +1,5 @@
-use querysimulation::sketches::countmin::CountMin;
-use querysimulation::sketches::utils::SketchInput;
+use sketchlib_rust::sketches::countmin::CountMin;
+use sketchlib_rust::sketches::utils::SketchInput;
 // use std::collections::HashMap;
 
 fn main() {

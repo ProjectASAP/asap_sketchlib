@@ -1,4 +1,4 @@
-use querysimulation::sketches::{
+use sketchlib_rust::sketches::{
     CountMin, CountUniv, HllDfModified, KLL, UnivMon, utils::LASTSTATE, utils::SketchInput,
     utils::hash_it,
 };

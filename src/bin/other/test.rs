@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::BufReader;
 use serde::{Deserialize};
 use rmp_serde::{Deserializer};
-use querysimulation::sketches::{countmin::CountMin, utils::InsertableValue};
+use sketchlib_rust::sketches::{countmin::CountMin, utils::InsertableValue};
 use std::io::Cursor;
 
 #[derive(Debug, Deserialize)]

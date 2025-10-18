@@ -1,4 +1,4 @@
-use querysimulation::sketches::microscope::MicroScope;
+use sketchlib_rust::sketches::microscope::MicroScope;
 // use std::collections::HashMap;
 
 fn main() {

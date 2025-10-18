@@ -1,4 +1,4 @@
-use querysimulation::sketches::TopKHeap;
+use sketchlib_rust::sketches::TopKHeap;
 
 pub fn main() {
     equal_value_string_multi_insert();

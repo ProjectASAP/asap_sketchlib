@@ -20,7 +20,7 @@ At this moment, ```cargo test``` is a good starting point.
 ### Example: Count-Min frequency
 
 ```rust
-use querysimulation::{CountMin, sketches::utils::SketchInput};
+use sketchlib_rust::{CountMin, sketches::utils::SketchInput};
 
 fn main() {
     let mut cm = CountMin::default();
@@ -35,7 +35,7 @@ fn main() {
 ### Example: Windowed aggregates with Exponential Histogram
 
 ```rust
-use querysimulation::{
+use sketchlib_rust::{
     sketchbook::{Chapter, ExponentialHistogram},
     sketches::{countmin::CountMin, utils::SketchInput},
 };

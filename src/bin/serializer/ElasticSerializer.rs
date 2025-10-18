@@ -1,4 +1,4 @@
-use querysimulation::sketches::Elastic;
+use sketchlib_rust::sketches::Elastic;
 use rmp_serde::to_vec_named;
 use std::fs;
 use std::path::Path;

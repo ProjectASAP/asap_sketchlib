@@ -1,4 +1,4 @@
-use querysimulation::{
+use sketchlib_rust::{
     sketches::univmon::UnivMon,
     utils::{LASTSTATE, SketchInput, hash_it},
 };

@@ -1,4 +1,4 @@
-use querysimulation::{
+use sketchlib_rust::{
     sketchbook::Chapter,
     sketches::{
         coco::Coco, countmin::CountMin, hll::HllDfModified, kll::KLL, locher::LocherSketch,

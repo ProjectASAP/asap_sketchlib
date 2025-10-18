@@ -1,4 +1,4 @@
-use querysimulation::sketches::hll::HLL;
+use sketchlib_rust::sketches::hll::HLL;
 use std::collections::HashSet;
 
 fn main() {

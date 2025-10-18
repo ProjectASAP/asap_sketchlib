@@ -1,5 +1,5 @@
-use querysimulation::sketches::utils::InsertableValue;
-use querysimulation::utils::hash_it;
+use sketchlib_rust::sketches::utils::InsertableValue;
+use sketchlib_rust::utils::hash_it;
 
 pub fn main() {
     println!("===Check i32===");

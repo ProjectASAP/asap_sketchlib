@@ -1,4 +1,4 @@
-use querysimulation::sketches::locher::LocherSketch;
+use sketchlib_rust::sketches::locher::LocherSketch;
 
 fn main() {
     basic_test();
