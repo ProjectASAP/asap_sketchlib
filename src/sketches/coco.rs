@@ -61,10 +61,7 @@ mod tests {
         let total_us = coco.estimate_with_udf(SketchInput::Str("us"), matcher);
         assert_eq!(total_us, 4);
 
-        let total_all = coco.estimate_with_udf(
-            SketchInput::Str("region"),
-            matcher,
-        );
+        let total_all = coco.estimate_with_udf(SketchInput::Str("region"), matcher);
         assert_eq!(total_all, 10);
     }
 

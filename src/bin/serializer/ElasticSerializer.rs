@@ -1,5 +1,5 @@
-use sketchlib_rust::sketches::Elastic;
 use rmp_serde::to_vec_named;
+use sketchlib_rust::sketches::Elastic;
 use std::fs;
 use std::path::Path;
 

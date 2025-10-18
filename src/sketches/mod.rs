@@ -44,5 +44,9 @@ pub use utils::SEED;
 pub use utils::STATELIST;
 pub use utils::{STATE1, STATE2, STATE3, STATE4, STATE5};
 
+pub mod structured;
+pub use structured::CountMin as StructuredCountMin;
+pub use structured::HyperLogLog;
+
 #[cfg(test)]
 pub mod test_utils;

@@ -1,6 +1,6 @@
+use rmp_serde::to_vec_named;
 use sketchlib_rust::sketches::Coco;
 use sketchlib_rust::sketches::utils::SketchInput;
-use rmp_serde::to_vec_named;
 use std::fs;
 use std::path::Path;
 

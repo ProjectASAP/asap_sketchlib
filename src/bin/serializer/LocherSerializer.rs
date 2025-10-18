@@ -1,5 +1,5 @@
-use sketchlib_rust::sketches::LocherSketch;
 use rmp_serde::to_vec_named;
+use sketchlib_rust::sketches::LocherSketch;
 use std::fs;
 use std::path::Path;
 

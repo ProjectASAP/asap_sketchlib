@@ -20,8 +20,7 @@ fn chapter_countmin_reports_inserted_frequency() {
     }
     let estimate = chapter
         .query(&input)
-        .expect("countmin chapter should query")
-        as u64;
+        .expect("countmin chapter should query") as u64;
     assert!(
         estimate >= 12,
         "expected count >= 12 for inserted key, got {}",
@@ -56,9 +55,7 @@ fn chapter_uniform_sampling_tracks_length_and_samples() {
         chapter.insert(&SketchInput::I32(value));
     }
 
-    let len = chapter
-        .query(&SketchInput::Str("len"))
-        .expect("len query") as usize;
+    let len = chapter.query(&SketchInput::Str("len")).expect("len query") as usize;
     let total_seen = chapter
         .query(&SketchInput::Str("total_seen"))
         .expect("total_seen query");
