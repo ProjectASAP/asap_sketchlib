@@ -1,7 +1,6 @@
-use sketchlib_rust::Chapter;
 use sketchlib_rust::sketchbook::ExponentialHistogram;
 use sketchlib_rust::sketches::hll::HllDfModified;
-use sketchlib_rust::sketches::utils::SketchInput;
+use sketchlib_rust::{Chapter, SketchInput};
 use std::fs;
 use std::path::PathBuf;
 

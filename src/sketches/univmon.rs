@@ -1,4 +1,5 @@
-use super::{CountUniv, TopKHeap, utils::LASTSTATE, utils::SketchInput, utils::hash_it};
+use super::{CountUniv, TopKHeap};
+use crate::common::{LASTSTATE, SketchInput, hash_it};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -328,7 +329,7 @@ impl UnivMon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketches::utils::{LASTSTATE, SketchInput, hash_it};
+    use crate::{LASTSTATE, SketchInput, hash_it};
 
     fn bottom_layer_for(um: &UnivMon, key: &str) -> usize {
         let hash = hash_it(LASTSTATE, &SketchInput::Str(key));

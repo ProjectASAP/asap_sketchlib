@@ -1,5 +1,5 @@
-use super::super::sketches::utils::SketchInput;
 use super::Chapter;
+use crate::SketchInput;
 
 #[derive(Clone, Debug)]
 pub struct EHVolume<'bucket> {

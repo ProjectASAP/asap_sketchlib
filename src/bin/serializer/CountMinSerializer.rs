@@ -1,7 +1,5 @@
 use rmp_serde::to_vec_named;
-use sketchlib_rust::sketches::CountMin;
-use sketchlib_rust::sketches::utils::SketchInput;
-use sketchlib_rust::utils::hash_it;
+use sketchlib_rust::{SketchInput, hash_it, sketches::CountMin};
 use std::fs;
 use std::path::Path;
 

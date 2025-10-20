@@ -512,7 +512,7 @@ impl MicroScopeCM {
 mod tests {
     use super::*;
     use crate::sketches::test_utils::sample_zipf_u64;
-    use crate::sketches::utils::{SketchInput, hash_it};
+    use crate::{SketchInput, hash_it};
     use std::collections::HashMap;
 
     fn counter_index(row: usize, key: &SketchInput, columns: usize) -> usize {

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::sketches::utils::SketchInput;
+use crate::SketchInput;
 
 const DEFAULT_SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 const GAMMA: u64 = 0xBF58_476D_1CE4_E5B9;

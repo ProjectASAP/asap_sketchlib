@@ -27,7 +27,7 @@ Every sketch exposes a consistent lifecycle: construct the sketch, insert data, 
 Create two sketches with matching dimensions.
 
 ```rust
-use sketchlib_rust::{CountMin, sketches::utils::SketchInput};
+use sketchlib_rust::{CountMin, SketchInput};
 
 let mut primary = CountMin::init_cm_with_row_col(3, 64);
 let mut peer = CountMin::init_cm_with_row_col(3, 64);
@@ -350,7 +350,8 @@ Initialize the windowed coordinator with a sketch template.
 ```rust
 use sketchlib_rust::{
     sketchbook::{Chapter, ExponentialHistogram},
-    sketches::{countmin::CountMin, utils::SketchInput},
+    sketches::countmin::CountMin,
+    SketchInput,
 };
 
 let template = Chapter::CM(CountMin::default());
@@ -382,7 +383,8 @@ At this moment, ```cargo test``` is a good starting point.
 
 ## Library Map
 
-- `src/sketches`: core sketch implementations plus helpers such as `SketchInput`, hashing utilities, and serialization hooks.
+- `src/common`: shared structures (`SketchMatrix`, `SketchList`), the `SketchInput` enum, and hashing helpers used by sketches and sketchbook.
+- `src/sketches`: core sketch implementations plus serialization hooks.
 - `src/sketchbook`: orchestration layers (Hydra, Chapter, ExponentialHistogram) for combining sketches into label-aware and time-aware structures.
 - `src/deserializers`: serde-ready records that decode hex-encoded MessagePack payloads emitted by Arroyo and PromSketch experiments.
 - `src/bin/sketch_tester`: per-sketch binaries that exercise insertion/query paths and print diagnostics.

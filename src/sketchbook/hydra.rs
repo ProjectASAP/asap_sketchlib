@@ -1,9 +1,8 @@
 use std::cmp::Ordering;
 
-use crate::utils::hash_it;
+use crate::{SketchInput, hash_it};
 
 use super::super::sketches::countmin::CountMin;
-use super::super::sketches::utils::SketchInput;
 use super::Chapter;
 
 #[cfg(test)]

@@ -135,7 +135,7 @@ impl Count {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketches::utils::SketchInput;
+    use crate::SketchInput;
 
     #[test]
     fn count_tracks_exact_frequency_for_single_key() {

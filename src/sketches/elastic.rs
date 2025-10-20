@@ -1,7 +1,6 @@
-use crate::utils::LASTSTATE;
+use crate::{LASTSTATE, SketchInput, hash_it};
 
 use super::CountMin;
-use super::utils::{SketchInput, hash_it};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -122,7 +121,7 @@ impl Elastic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketches::utils::{LASTSTATE, SketchInput};
+    use crate::{LASTSTATE, SketchInput, hash_it};
 
     fn bucket_for(id: &str, sketch: &Elastic) -> usize {
         let hash = hash_it(LASTSTATE, &SketchInput::String(id.to_string()));

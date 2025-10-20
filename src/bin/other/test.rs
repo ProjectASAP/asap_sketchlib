@@ -1,9 +1,8 @@
+use rmp_serde::Deserializer;
+use serde::Deserialize;
+use sketchlib_rust::{SketchInput, sketches::countmin::CountMin};
 use std::fs::File;
-use std::io::BufReader;
-use serde::{Deserialize};
-use rmp_serde::{Deserializer};
-use sketchlib_rust::sketches::{countmin::CountMin, utils::InsertableValue};
-use std::io::Cursor;
+use std::io::{BufReader, Cursor};
 
 #[derive(Debug, Deserialize)]
 struct Record {
@@ -26,7 +25,10 @@ pub fn parse_and_print_bytes(path: &str) {
     sketch.debug();
     for s in record.ha.iter() {
         match s.parse::<u32>() {
-            Ok(n) => println!("estimate result is: {}", sketch.get_est(&InsertableValue::U32(n))),
+            Ok(n) => println!(
+                "estimate result is: {}",
+                sketch.get_est(&SketchInput::U32(n))
+            ),
             Err(e) => println!("whatever {}", e),
         }
     }

@@ -1,8 +1,7 @@
-use crate::utils::iv_to_f64;
+use crate::{SketchInput, utils::iv_to_f64};
 use serde::{Deserialize, Serialize};
 
 use super::super::sketches::*;
-use super::super::utils::SketchInput;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(deserialize = "'de: 'a"))]

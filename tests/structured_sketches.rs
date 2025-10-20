@@ -1,6 +1,6 @@
 use sketchlib_rust::{
-    SketchList, SketchMatrix,
-    sketches::{HyperLogLog, StructuredCountMin, utils::SketchInput},
+    SketchInput, SketchList, SketchMatrix,
+    sketches::{HyperLogLog, StructuredCountMin},
 };
 
 #[test]

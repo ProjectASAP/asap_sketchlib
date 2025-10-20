@@ -1,7 +1,4 @@
-use crate::{
-    common::SketchList,
-    sketches::utils::{LASTSTATE, SketchInput, hash_it},
-};
+use crate::common::{LASTSTATE, SketchInput, SketchList, hash_it};
 
 const NUM_REGISTERS: usize = 1 << 14;
 const HISTOGRAM_SIZE: usize = 52;

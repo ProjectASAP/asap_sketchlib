@@ -1,6 +1,5 @@
 use rmp_serde::to_vec_named;
-use sketchlib_rust::sketches::UnivMon;
-use sketchlib_rust::sketches::utils::SketchInput;
+use sketchlib_rust::{SketchInput, sketches::UnivMon};
 use std::fs;
 use std::path::Path;
 
@@ -37,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (flow_key, count) in &test_flows {
         let key = flow_key.to_string();
         // Find bottom layer using hash
-        let hash = sketchlib_rust::utils::hash_it(5, &SketchInput::Str(&key));
+        let hash = sketchlib_rust::hash_it(5, &SketchInput::Str(&key));
         let bottom_layer = univmon.find_bottom_layer_num(hash, layer);
 
         // Update the UnivMon with the flow

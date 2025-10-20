@@ -1,5 +1,5 @@
+use sketchlib_rust::SketchInput;
 use sketchlib_rust::sketches::count::Count;
-use sketchlib_rust::sketches::utils::SketchInput;
 // use std::collections::HashMap;
 
 fn main() {

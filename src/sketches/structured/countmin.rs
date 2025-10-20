@@ -1,7 +1,4 @@
-use crate::{
-    common::SketchMatrix,
-    sketches::utils::{SketchInput, hash_it},
-};
+use crate::common::{SketchInput, SketchMatrix, hash_it};
 
 /// Count-Min sketch built on top of the shared `SketchMatrix` abstraction.
 #[derive(Clone, Debug)]
