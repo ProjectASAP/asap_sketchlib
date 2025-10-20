@@ -39,3 +39,12 @@ pub fn hash_it(d: usize, key: &SketchInput) -> u64 {
         SketchInput::Bytes(items) => XxHash64::oneshot(SEEDLIST[d], *items),
     }
 }
+
+pub fn hash_for_all_rows(r: usize, key: &SketchInput) -> Vec<u64> {
+    let mut ret = Vec::with_capacity(r);
+    let val = hash_it(0, key);
+    for i in 0..r {
+        ret.push((val >> 12 * i) & (0x1 << 13 - 1));
+    }
+    ret
+}

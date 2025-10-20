@@ -26,6 +26,9 @@ twox-hash = "2.1.2"
 bincode = {version = "2.0.1", features = ["serde"]}
 prom_text_format_parser = "0.1.0"
 
+[dev-dependencies]
+criterion = "0.5"
+
 [lib]
 crate-type = ["rlib"]
 name = "sketchlib_rust"
@@ -118,3 +121,7 @@ path = "src/bin/serializer/LocherSerializer.rs"
 [[bin]]
 name = "serialize_UnivMon"
 path = "src/bin/serializer/UnivMonSerializer.rs"
+
+[[bench]]
+name = "structured_countmin"
+harness = false

@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 
 use super::MicroScope;
-use super::utils::{SketchInput, hash_it};
+// use super::utils::{SketchInput, hash_it};
+use super::super::input::{SketchInput, hash_it};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CountMin {
