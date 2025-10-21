@@ -1,5 +1,5 @@
-use sketchlib_rust::sketches::hll::HLLDataFusion;
-use std::collections::HashSet;
+// use sketchlib_rust::sketches::hll::HLLDataFusion;
+// use std::collections::HashSet;
 
 fn main() {
     println!("=== HLLHIP Test Suite ===\n");

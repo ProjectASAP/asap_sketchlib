@@ -1,6 +1,6 @@
 use crate::{
     common::{SketchInput, SketchMatrix, hash_it},
-    input::hash_for_all_rows,
+    // input::hash_for_all_rows,
 };
 
 /// Count-Min sketch built on top of the shared `SketchMatrix` abstraction.
