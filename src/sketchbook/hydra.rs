@@ -43,7 +43,7 @@ impl<'a> Hydra<'a> {
 
     /// Assume key is a string that aggregate different keys
     /// with ";" for now
-    fn update(&mut self, key: &str, value: &SketchInput<'a>) {
+    pub fn update(&mut self, key: &str, value: &SketchInput<'a>) {
         let parts: Vec<&str> = key.split(';').filter(|s| !s.is_empty()).collect();
         let n = parts.len();
         let mut result = Vec::new();
