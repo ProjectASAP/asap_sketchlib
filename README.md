@@ -55,6 +55,34 @@ let estimate = primary.get_est(&key);
 println!("approximate error count = {}", estimate);
 ```
 
+#### Structured Count-Min (hash reuse)
+
+The structured variant keeps row slices inside a shared 64-bit digest so `fast_insert` and `fast_estimate` perform the hash only once per value.
+
+Create the optimized sketch and key.
+
+```rust
+use sketchlib_rust::{StructuredCountMin, common::SketchInput};
+
+let mut sketch = StructuredCountMin::with_dimensions(4, 2048);
+let key = SketchInput::String("warning".into());
+```
+
+Apply high-throughput updates while reusing the precomputed hash internally.
+
+```rust
+for _ in 0..10_000 {
+    sketch.fast_insert(&key);
+}
+```
+
+Estimate the frequency with the same single-hash shortcut.
+
+```rust
+let approx = sketch.fast_estimate(&key);
+println!("fast estimate ≈ {}", approx);
+```
+
 Other sketches follow the same shape with their own method names (for example `KLL::update`, `HllDfModified::insert`, `Elastic::insert`). Depending on the sketch, inserts may take a `SketchInput` or a domain-specific value (such as `f64` for quantiles); most provide a `merge` method that rejects mismatched shapes at runtime.
 
 #### KLL (quantile CDF)
