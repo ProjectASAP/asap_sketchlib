@@ -1,3 +1,4 @@
+use core::hash;
 use std::ops::{Index, IndexMut};
 
 use serde::{Deserialize, Serialize};
@@ -429,21 +430,41 @@ impl<T> Vector2D<T> {
     where
         T: Clone + Ord,
     {
+        // let mask = (1u64 << 13) - 1;
+        // let mut min: Option<T> = None;
+        // for row in 0..self.rows {
+        //     let hashed = (hashed_val >> (12 * row)) & mask;
+        //     let col = ((hashed & ((1u64 << 32) - 1)) as usize) % self.cols;
+        //     let value = self.data[row * self.cols + col].clone();
+        //     if let Some(current) = &mut min {
+        //         if value < *current {
+        //             *current = value;
+        //         }
+        //     } else {
+        //         min = Some(value);
+        //     }
+        // }
+        // min.expect("fast_query called on empty matrix")
         let mask = (1u64 << 13) - 1;
-        let mut min: Option<T> = None;
-        for row in 0..self.rows {
+        let mut min = self.data[(hashed_val as usize & ((1usize << 13) - 1)) % self.cols].clone();
+        for row in 1..self.rows {
             let hashed = (hashed_val >> (12 * row)) & mask;
             let col = ((hashed & ((1u64 << 32) - 1)) as usize) % self.cols;
-            let value = self.data[row * self.cols + col].clone();
-            if let Some(current) = &mut min {
-                if value < *current {
-                    *current = value;
-                }
-            } else {
-                min = Some(value);
+            if min >  self.data[row * self.cols + col] {
+                min = self.data[row*self.cols+col].clone();
             }
         }
-        min.expect("fast_query called on empty matrix")
+        min
+        //     let value = self.data[row * self.cols + col].clone();
+        //     if let Some(current) = &mut min {
+        //         if value < *current {
+        //             *current = value;
+        //         }
+        //     } else {
+        //         min = Some(value);
+        //     }
+        // }
+        // min.expect("fast_query called on empty matrix")
     }
 
     /// Returns an immutable slice corresponding to a full row.

@@ -20,7 +20,8 @@ This note captures the current surface area of the crate and the rough roadmap. 
 
 - **Performance parity checks** — structured Count-Min fast paths are positive, but other structured sketches need profiling versus their legacy counterparts; `SketchMatrix` and `Vector2D` performance showing mysterious output
   - insertion: `Vector2D` is much faster
-  - estimation: `Vector2D` is much slower
+  - estimation: `Vector2D` is ~~much~~ slower
+  - **GiveUp**: assume insertion is supposed to happen more often than estimation, will keep it as what it is
 
 - **Sketchbook ergonomics** — public APIs still settle; expect naming/shape changes as we converge on a consistent surface.
 

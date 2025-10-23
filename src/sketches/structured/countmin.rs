@@ -68,7 +68,7 @@ impl CountMin {
         let hashed_vals = hash_it(0, value);
 
         for row in 0..self.rows() {
-            let hashed = (hashed_vals >> 12 * row) & (0x1 << 13 - 1);
+            let hashed = (hashed_vals >> (12 * row)) & ((0x1 << 13) - 1);
             let col = ((hashed & ((1u64 << 32) - 1)) as usize) % self.cols();
             let weight = self.counts[row][col];
             if weight < min_weight {
@@ -103,7 +103,7 @@ impl CountMin {
         let mut min = u64::MAX;
         let hashed_vals = hash_it(0, value);
         for row in 0..self.rows() {
-            let hashed = (hashed_vals >> 12 * row) & (0x1 << 13 - 1);
+            let hashed = (hashed_vals >> (12 * row)) & ((0x1 << 13) - 1);
             let col = ((hashed & ((1u64 << 32) - 1)) as usize) % self.cols();
             min = min.min(self.counts[row][col]);
         }

@@ -45,7 +45,7 @@ pub struct Count {
 
 impl Default for Count {
     fn default() -> Self {
-        Self::with_dimensions(4, 32)
+        Self::with_dimensions(3, 4096)
     }
 }
 
