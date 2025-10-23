@@ -1,5 +1,8 @@
 use crate::hash_it;
 use crate::{LASTSTATE, SketchInput, Vector1D};
+use rmp_serde::{
+    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
+};
 use serde::{Deserialize, Serialize};
 
 /// The greater is P, the smaller the error.
@@ -81,6 +84,26 @@ impl HyperLogLog {
             est = -1.0 * correction_aux * (1.0 - est / correction_aux).ln();
         }
         est as usize
+    }
+
+    /// Serializes the sketch into MessagePack bytes.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        to_vec_named(self)
+    }
+
+    /// Convenience alias matching the previous API shape used elsewhere.
+    pub fn serialize(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        self.serialize_to_bytes()
+    }
+
+    /// Deserializes a sketch from MessagePack bytes.
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        from_slice(bytes)
+    }
+
+    /// Convenience alias matching the previous API shape used elsewhere.
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        Self::deserialize_from_bytes(bytes)
     }
 }
 
@@ -184,6 +207,26 @@ impl HllDf {
         z += m * self.hlldf_sigma(histogram[0] as f64 / m);
         (0.5 / 2_f64.ln() * m * m / z).round() as usize
     }
+
+    /// Serializes the sketch into MessagePack bytes.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        to_vec_named(self)
+    }
+
+    /// Convenience alias matching previous APIs.
+    pub fn serialize(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        self.serialize_to_bytes()
+    }
+
+    /// Deserializes a sketch from MessagePack bytes.
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        from_slice(bytes)
+    }
+
+    /// Convenience alias matching previous APIs.
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        Self::deserialize_from_bytes(bytes)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -240,6 +283,26 @@ impl HllDs {
     pub fn get_est(&self) -> usize {
         self.est as usize
     }
+
+    /// Serializes the sketch into MessagePack bytes.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        to_vec_named(self)
+    }
+
+    /// Convenience alias matching previous APIs.
+    pub fn serialize(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        self.serialize_to_bytes()
+    }
+
+    /// Deserializes a sketch from MessagePack bytes.
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        from_slice(bytes)
+    }
+
+    /// Convenience alias matching previous APIs.
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        Self::deserialize_from_bytes(bytes)
+    }
 }
 
 #[cfg(test)]
@@ -249,6 +312,7 @@ mod tests {
 
     const TARGETS: [usize; 7] = [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000];
     const ERROR_TOLERANCE: f64 = 0.02;
+    const SERDE_SAMPLE: usize = 100_000;
 
     trait HllEstimator: Default {
         fn push(&mut self, input: &SketchInput);
@@ -257,6 +321,13 @@ mod tests {
 
     trait HllMerge: HllEstimator + Clone {
         fn merge_into(&mut self, other: &Self);
+    }
+
+    trait HllSerializable: HllEstimator {
+        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>;
+        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+        where
+            Self: Sized;
     }
 
     impl HllEstimator for HyperLogLog {
@@ -272,6 +343,16 @@ mod tests {
     impl HllMerge for HyperLogLog {
         fn merge_into(&mut self, other: &Self) {
             self.merge(other);
+        }
+    }
+
+    impl HllSerializable for HyperLogLog {
+        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+            HyperLogLog::serialize_to_bytes(self)
+        }
+
+        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+            HyperLogLog::deserialize_from_bytes(bytes)
         }
     }
 
@@ -291,6 +372,16 @@ mod tests {
         }
     }
 
+    impl HllSerializable for HllDf {
+        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+            HllDf::serialize_to_bytes(self)
+        }
+
+        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+            HllDf::deserialize_from_bytes(bytes)
+        }
+    }
+
     impl HllEstimator for HllDs {
         fn push(&mut self, input: &SketchInput) {
             self.insert(input);
@@ -298,6 +389,16 @@ mod tests {
 
         fn estimate(&self) -> f64 {
             self.get_est() as f64
+        }
+    }
+
+    impl HllSerializable for HllDs {
+        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+            HllDs::serialize_to_bytes(self)
+        }
+
+        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+            HllDs::deserialize_from_bytes(bytes)
         }
     }
 
@@ -332,6 +433,21 @@ mod tests {
         let mut left = HllDs::default();
         let right = HllDs::default();
         left.merge(&right);
+    }
+
+    #[test]
+    fn hyperloglog_round_trip_serialization() {
+        assert_serialization_round_trip::<HyperLogLog>("HyperLogLog");
+    }
+
+    #[test]
+    fn hlldf_round_trip_serialization() {
+        assert_serialization_round_trip::<HllDf>("HllDf");
+    }
+
+    #[test]
+    fn hllds_round_trip_serialization() {
+        assert_serialization_round_trip::<HllDs>("HllDs");
     }
 
     fn assert_accuracy<S>(name: &str)
@@ -399,5 +515,43 @@ mod tests {
                 "{name} merge error {error:.4} exceeded {ERROR_TOLERANCE} (truth {truth}, estimate {estimate})"
             );
         }
+    }
+
+    fn assert_serialization_round_trip<S>(name: &str)
+    where
+        S: HllSerializable,
+    {
+        let mut sketch = S::default();
+        for value in 0..SERDE_SAMPLE {
+            let input = SketchInput::U64(value as u64);
+            sketch.push(&input);
+        }
+
+        let encoded = sketch
+            .serialize_to_bytes()
+            .unwrap_or_else(|err| panic!("{name} serialize_to_bytes failed: {err}"));
+        assert!(
+            !encoded.is_empty(),
+            "{name} serialization output should not be empty"
+        );
+
+        let decoded = S::deserialize_from_bytes(&encoded)
+            .unwrap_or_else(|err| panic!("{name} deserialize_from_bytes failed: {err}"));
+
+        let reencoded = decoded
+            .serialize_to_bytes()
+            .unwrap_or_else(|err| panic!("{name} re-serialize failed: {err}"));
+
+        assert_eq!(
+            encoded, reencoded,
+            "{name} serialized bytes differed after round trip"
+        );
+
+        let original_est = sketch.estimate();
+        let decoded_est = decoded.estimate();
+        assert!(
+            (original_est - decoded_est).abs() <= ERROR_TOLERANCE * original_est.max(1.0),
+            "{name} estimate mismatch after round trip: before {original_est}, after {decoded_est}"
+        );
     }
 }
