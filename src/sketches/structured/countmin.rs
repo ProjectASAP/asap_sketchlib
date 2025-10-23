@@ -171,17 +171,18 @@ impl VectorCountMin {
 
     /// Inserts an observation while using the standard Count-Min minimum row update rule.
     pub fn insert(&mut self, value: &SketchInput) {
-
         for r in 0..self.row {
             let hashed = hash_it(r, value);
             let col = ((hashed & ((1u64 << 32) - 1)) as usize) % self.col;
-            self.counts.update_one_counter(r, col, std::ops::Add::add, 1_u64);
+            self.counts
+                .update_one_counter(r, col, std::ops::Add::add, 1_u64);
         }
     }
 
     /// Inserts an observation using the combined hash optimization.
     pub fn fast_insert(&mut self, value: &SketchInput) {
-        self.counts.fast_insert(std::ops::Add::add, 1_u64, hash_it(0, value));
+        self.counts
+            .fast_insert(std::ops::Add::add, 1_u64, hash_it(0, value));
     }
 
     /// Returns the frequency estimate for the provided value.
@@ -211,7 +212,12 @@ impl VectorCountMin {
 
         for i in 0..self.row {
             for j in 0..self.col {
-                self.counts.update_one_counter(i, j, std::ops::Add::add, other.counts.query_one_counter(i, j));
+                self.counts.update_one_counter(
+                    i,
+                    j,
+                    std::ops::Add::add,
+                    other.counts.query_one_counter(i, j),
+                );
             }
         }
     }

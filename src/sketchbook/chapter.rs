@@ -18,6 +18,59 @@ pub enum Chapter<'a> {
     UNIVMON(UnivMon),
 }
 
+#[derive(Clone, Debug)]
+pub enum L2HH {
+    COUNT(VectorCount),
+}
+
+impl L2HH {
+    /// Creates a count-based L2 heavy hitter sketch with the requested dimensions.
+    pub fn count_with_dimensions(rows: usize, cols: usize) -> Self {
+        L2HH::COUNT(VectorCount::with_dimensions(rows, cols))
+    }
+
+    /// Inserts a single observation.
+    pub fn insert(&mut self, value: &SketchInput) {
+        let _ = self.update(value, 1);
+    }
+
+    /// Inserts an observation with an explicit weight and returns the current estimate.
+    pub fn update(&mut self, value: &SketchInput, weight: i64) -> f64 {
+        match self {
+            L2HH::COUNT(sketch) => {
+                sketch.insert_with_count(value, weight);
+                sketch.estimate(value)
+            }
+        }
+    }
+
+    /// Returns the estimated frequency for the provided value.
+    pub fn estimate(&self, value: &SketchInput) -> f64 {
+        match self {
+            L2HH::COUNT(sketch) => sketch.estimate(value),
+        }
+    }
+
+    /// Provides an optional query interface for compatibility with older code.
+    pub fn query(&self, value: &SketchInput) -> Option<f64> {
+        Some(self.estimate(value))
+    }
+
+    /// Approximates the L2 norm of the sketch.
+    pub fn get_l2(&self) -> f64 {
+        match self {
+            L2HH::COUNT(sketch) => sketch.l2(),
+        }
+    }
+
+    /// Merges another L2 heavy hitter sketch into this one.
+    pub fn merge(&mut self, other: &L2HH) {
+        match (self, other) {
+            (L2HH::COUNT(left), L2HH::COUNT(right)) => left.merge(right),
+        }
+    }
+}
+
 impl<'a> Chapter<'a> {
     /// Insert a value into the sketch
     pub fn insert(&mut self, val: &SketchInput<'a>) {

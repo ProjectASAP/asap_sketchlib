@@ -3,7 +3,7 @@ pub use coco::Bucket;
 pub use coco::Coco;
 
 pub mod count;
-pub use count::Count;
+// pub use count::Count;
 pub use count::CountUniv;
 
 pub mod countmin;
@@ -45,9 +45,11 @@ pub mod utils;
 // pub use utils::{STATE1, STATE2, STATE3, STATE4, STATE5};
 
 pub mod structured;
+pub use structured::Count as StructuredCount;
 pub use structured::CountMin as StructuredCountMin;
-pub use structured::VectorCountMin;
 pub use structured::HyperLogLog;
+pub use structured::VectorCount;
+pub use structured::VectorCountMin;
 
 #[cfg(test)]
 pub mod test_utils;

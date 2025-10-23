@@ -1,5 +1,7 @@
 use std::ops::{Index, IndexMut};
 
+use serde::{Deserialize, Serialize};
+
 /// Lightweight wrapper for a row-major matrix that enforces rectangular shape.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SketchMatrix<T> {
@@ -223,14 +225,14 @@ impl<T> IndexMut<usize> for SketchList<T> {
 }
 
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Vector1D<T: Clone> {
     data: Vec<T>,
     length: usize,
 }
 
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Vector2D<T> {
     data: Vec<T>,
     row: usize,
@@ -238,7 +240,7 @@ pub struct Vector2D<T> {
 }
 
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Vector3D<T> {
     data: Vec<T>,
     layer: usize,
