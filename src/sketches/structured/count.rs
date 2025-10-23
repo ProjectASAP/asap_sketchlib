@@ -244,3 +244,80 @@ impl VectorCount {
         &self.counts
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::SketchInput;
+
+    #[test]
+    fn count_estimate_matches_inserts() {
+        let mut sketch = Count::with_dimensions(4, 64);
+        let key = SketchInput::Str("alpha");
+        let other = SketchInput::Str("beta");
+
+        for _ in 0..5 {
+            sketch.insert(&key);
+        }
+
+        assert_eq!(sketch.estimate(&key), 5.0);
+        assert_eq!(sketch.estimate(&other), 0.0);
+    }
+
+    #[test]
+    fn count_merge_combines_counts() {
+        let mut left = Count::with_dimensions(3, 32);
+        let mut right = Count::with_dimensions(3, 32);
+        let key = SketchInput::Str("gamma");
+
+        for _ in 0..4 {
+            left.insert(&key);
+        }
+        for _ in 0..3 {
+            right.insert(&key);
+        }
+
+        left.merge(&right);
+
+        assert_eq!(left.estimate(&key), 7.0);
+        assert_eq!(right.estimate(&key), 3.0);
+    }
+
+    #[test]
+    fn vector_count_fast_paths_match_regular() {
+        let mut regular = VectorCount::with_dimensions(4, 64);
+        let mut fast = VectorCount::with_dimensions(4, 64);
+        let key = SketchInput::Str("delta");
+
+        for _ in 0..6 {
+            regular.insert(&key);
+            fast.fast_insert(&key);
+        }
+
+        let regular_est = regular.estimate(&key);
+        let fast_est = fast.fast_estimate(&key);
+
+        assert_eq!(regular_est, 6.0);
+        assert_eq!(fast_est, 6.0);
+        assert!(
+            (regular_est - fast_est).abs() < f64::EPSILON,
+            "fast path estimate should align with regular path"
+        );
+    }
+
+    #[test]
+    fn vector_count_merge_adds_counters() {
+        let mut left = VectorCount::with_dimensions(3, 32);
+        let mut right = VectorCount::with_dimensions(3, 32);
+        let key = SketchInput::Str("epsilon");
+
+        left.insert_with_count(&key, 2);
+        left.insert_with_count(&key, 3);
+        right.insert_with_count(&key, 4);
+
+        left.merge(&right);
+
+        assert_eq!(left.estimate(&key), 9.0);
+        assert_eq!(right.estimate(&key), 4.0);
+    }
+}

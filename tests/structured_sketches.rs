@@ -201,6 +201,54 @@ fn vector_count_matches_structured_count_on_shared_stream() {
 }
 
 #[test]
+fn structured_and_vector_counts_stay_in_sync_after_merges() {
+    let mut primary_matrix = StructuredCount::with_dimensions(3, 64);
+    let mut primary_vector = VectorCount::with_dimensions(3, 64);
+    let mut shard_matrix = StructuredCount::with_dimensions(3, 64);
+    let mut shard_vector = VectorCount::with_dimensions(3, 64);
+
+    let heavy = SketchInput::String("merged-hot-key".into());
+    let cold = SketchInput::String("merged-cold-key".into());
+
+    for _ in 0..6 {
+        primary_matrix.insert(&heavy);
+        primary_vector.insert(&heavy);
+    }
+    for _ in 0..2 {
+        primary_matrix.insert(&cold);
+        primary_vector.insert(&cold);
+    }
+
+    for _ in 0..5 {
+        shard_matrix.insert(&heavy);
+        shard_vector.insert(&heavy);
+    }
+    shard_vector.insert(&cold);
+    shard_matrix.insert(&cold);
+
+    primary_matrix.merge(&shard_matrix);
+    primary_vector.merge(&shard_vector);
+
+    let heavy_matrix = primary_matrix.estimate(&heavy);
+    let heavy_vector = primary_vector.estimate(&heavy);
+    let cold_matrix = primary_matrix.estimate(&cold);
+    let cold_vector = primary_vector.estimate(&cold);
+
+    assert!(
+        (heavy_matrix - heavy_vector).abs() < f64::EPSILON,
+        "heavy key estimates should align between matrix and vector sketches: matrix={heavy_matrix}, vector={heavy_vector}"
+    );
+    assert!(
+        (cold_matrix - cold_vector).abs() < f64::EPSILON,
+        "cold key estimates should align between matrix and vector sketches: matrix={cold_matrix}, vector={cold_vector}"
+    );
+    assert!(
+        heavy_matrix.abs() >= cold_matrix.abs(),
+        "heavy key magnitude should dominate cold key after merge"
+    );
+}
+
+#[test]
 fn hyperloglog_estimate_is_within_reasonable_error() {
     // ensures HyperLogLog leverages SketchList to provide a cardinality estimate near truth
     let mut sketch = HyperLogLog::new();

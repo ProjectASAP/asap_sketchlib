@@ -227,3 +227,87 @@ impl VectorCountMin {
         &self.counts
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::SketchInput;
+
+    #[test]
+    fn countmin_insert_and_estimate_roundtrip() {
+        let mut sketch = CountMin::with_dimensions(3, 64);
+        let key = SketchInput::Str("alpha");
+
+        for _ in 0..4 {
+            sketch.insert(&key);
+        }
+
+        assert_eq!(sketch.estimate(&key), 4);
+    }
+
+    #[test]
+    fn countmin_fast_insert_roundtrip() {
+        let mut sketch = CountMin::with_dimensions(3, 64);
+        let key = SketchInput::Str("alpha-fast");
+
+        for _ in 0..4 {
+            sketch.fast_insert(&key);
+        }
+
+        assert_eq!(sketch.fast_estimate(&key), 4);
+    }
+
+    #[test]
+    fn countmin_merge_combines_sketches() {
+        let mut left = CountMin::with_dimensions(3, 64);
+        let mut right = CountMin::with_dimensions(3, 64);
+        let key = SketchInput::Str("beta");
+
+        for _ in 0..3 {
+            left.insert(&key);
+        }
+        for _ in 0..2 {
+            right.insert(&key);
+        }
+
+        left.merge(&right);
+
+        assert_eq!(left.estimate(&key), 5);
+        assert_eq!(right.estimate(&key), 2);
+    }
+
+    #[test]
+    fn vector_countmin_fast_paths_match_regular() {
+        let mut slow = VectorCountMin::with_dimensions(3, 64);
+        let mut fast = VectorCountMin::with_dimensions(3, 64);
+        let key = SketchInput::Str("gamma");
+
+        for _ in 0..5 {
+            slow.insert(&key);
+            fast.fast_insert(&key);
+        }
+
+        let slow_est = slow.estimate(&key);
+        let fast_est = fast.fast_estimate(&key);
+
+        assert_eq!(slow_est, 5);
+        assert_eq!(fast_est, 5);
+        assert_eq!(slow_est, fast_est);
+    }
+
+    #[test]
+    fn vector_countmin_merge_adds_counters() {
+        let mut left = VectorCountMin::with_dimensions(2, 32);
+        let mut right = VectorCountMin::with_dimensions(2, 32);
+        let key = SketchInput::Str("delta");
+
+        left.insert(&key);
+        left.insert(&key);
+        right.insert(&key);
+
+        left.merge(&right);
+
+        assert_eq!(left.estimate(&key), 3);
+        assert_eq!(right.estimate(&key), 1);
+    }
+}

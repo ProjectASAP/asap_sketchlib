@@ -8,17 +8,19 @@ This note captures the current surface area of the crate and the rough roadmap. 
 
 - **Core sketch suite** — Count-Min, Count/CountUniv, Coco, Elastic, multiple HyperLogLog variants, KLL, Locher, Microscope, and UnivMon ship with serde support and reference binaries in `src/bin/sketch_tester`.
 
-- **Sketchbook orchestration** — `Chapter` unifies insert/query across sketches, enabling higher-level runners like `Hydra` (label combinations) and `ExponentialHistogram` (sliding windows).
+- **Sketchbook orchestration** — `Chapter` unifies insert/query across sketches, enabling higher-level runners like `Hydra` (label combinations) and `ExponentialHistogram` (sliding windows); `UnivMon` that can takes in `L2HH` sketch, although `L2HH` sketch currently only have `CountSketch` as the instance
 
-- **Structured sketches** — `structured::CountMin` and `structured::HyperLogLog` build on `SketchMatrix`/`SketchList`, so new sketches can share storage code instead of re-rolling `Vec<Vec<_>>`.
+- **Structured sketches** — `structured::CountMin` and `structured::HyperLogLog` build on `SketchMatrix`/`SketchList`, so new sketches can share storage code instead of re-rolling `Vec<Vec<_>>`; also added `Vector1D`, `Vector2D`, `Vector3D`, targeting for performance.
 
 - **Benchmark scaffolding** — Criterion benches (`cargo bench --bench structured_countmin`) compare `insert` vs `fast_insert` and `estimate` vs `fast_estimate`. Latest runs show fast insert now beating the baseline, while fast estimate holds steady or improves when hash reuse matters.
 
 ## WIP & Known Gaps
 
-- **Bring UnivMon into sketchbook** — evolving UnivMon into a “serving algorithm” alongside Hydra/ExponentialHistogram so Chapter can drive it directly. (**First Priority**)
+- **Bring UnivMon into sketchbook** ~~— evolving UnivMon into a “serving algorithm” alongside Hydra/ExponentialHistogram so Chapter can drive it directly. (**First Priority**)~~ Added
 
-- **Performance parity checks** — structured Count-Min fast paths are positive, but other structured sketches need profiling versus their legacy counterparts.
+- **Performance parity checks** — structured Count-Min fast paths are positive, but other structured sketches need profiling versus their legacy counterparts; `SketchMatrix` and `Vector2D` performance showing mysterious output
+  - insertion: `Vector2D` is much faster
+  - estimation: `Vector2D` is much slower
 
 - **Sketchbook ergonomics** — public APIs still settle; expect naming/shape changes as we converge on a consistent surface.
 
