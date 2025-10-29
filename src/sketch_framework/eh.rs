@@ -1,5 +1,5 @@
-use super::super::sketches::utils::SketchInput;
 use super::Chapter;
+use crate::SketchInput;
 
 #[derive(Clone, Debug)]
 pub struct EHVolume<'bucket> {
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn test_new_exponential_histogram() {
         let eh: ExponentialHistogram =
-            ExponentialHistogram::new(2, 1000, Chapter::HLL(crate::HllDfModified::default()));
+            ExponentialHistogram::new(2, 1000, Chapter::HLL(crate::HllDf::default()));
         assert_eq!(eh.k, 2);
         assert_eq!(eh.window, 1000);
         assert_eq!(eh.volume_count(), 0);
@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn test_basic_insertion() {
         let mut eh: ExponentialHistogram =
-            ExponentialHistogram::new(2, 1000, Chapter::HLL(crate::HllDfModified::default()));
+            ExponentialHistogram::new(2, 1000, Chapter::HLL(crate::HllDf::default()));
 
         eh.update(100, &SketchInput::I64(1));
 
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn test_window_expiration() {
         let mut eh: ExponentialHistogram =
-            ExponentialHistogram::new(2, 100, Chapter::HLL(crate::HllDfModified::default()));
+            ExponentialHistogram::new(2, 100, Chapter::HLL(crate::HllDf::default()));
 
         for i in 0..5 {
             eh.update(i * 30, &SketchInput::U64(i));
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_volume_merging() {
         let mut eh: ExponentialHistogram =
-            ExponentialHistogram::new(2, 100, Chapter::HLL(crate::HllDfModified::default()));
+            ExponentialHistogram::new(2, 100, Chapter::HLL(crate::HllDf::default()));
 
         for i in 0..10 {
             eh.update(i * 10, &SketchInput::U64(i));
@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn test_cover_functionality() {
         let mut eh: ExponentialHistogram =
-            ExponentialHistogram::new(2, 1000, Chapter::HLL(crate::HllDfModified::default()));
+            ExponentialHistogram::new(2, 1000, Chapter::HLL(crate::HllDf::default()));
 
         // Insert value at times 100, 200, 300
         for i in 1..=3 {
@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn test_update_window() {
         let mut eh: ExponentialHistogram =
-            ExponentialHistogram::new(2, 1000, Chapter::HLL(crate::HllDfModified::default()));
+            ExponentialHistogram::new(2, 1000, Chapter::HLL(crate::HllDf::default()));
         assert_eq!(eh.window, 1000);
 
         eh.update_window(2000);
@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn test_query_interval_merge() {
         let mut eh: ExponentialHistogram =
-            ExponentialHistogram::new(2, 10000, Chapter::HLL(crate::HllDfModified::default()));
+            ExponentialHistogram::new(2, 10000, Chapter::HLL(crate::HllDf::default()));
 
         // Insert with some data
         for i in 0..5 {
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn test_empty_histogram() {
         let eh: ExponentialHistogram =
-            ExponentialHistogram::new(2, 1000, Chapter::HLL(crate::HllDfModified::default()));
+            ExponentialHistogram::new(2, 1000, Chapter::HLL(crate::HllDf::default()));
 
         assert_eq!(eh.volume_count(), 0);
         assert_eq!(eh.get_min_time(), None);

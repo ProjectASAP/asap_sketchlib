@@ -449,7 +449,7 @@ impl CDF {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketches::test_utils::{sample_uniform_f64, sample_zipf_f64};
+    use crate::test_utils::{sample_uniform_f64, sample_zipf_f64};
 
     #[derive(Clone, Copy)]
     enum TestDistribution {

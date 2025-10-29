@@ -1,8 +1,7 @@
-use crate::utils::iv_to_f64;
+use crate::SketchInput;
 use serde::{Deserialize, Serialize};
 
 use super::super::sketches::*;
-use super::super::utils::SketchInput;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(deserialize = "'de: 'a"))]
@@ -12,11 +11,88 @@ pub enum Chapter<'a> {
     COCO(Coco<'a>),
     CU(CountUniv),
     ELASTIC(Elastic),
-    HLL(HllDfModified),
+    HLL(HllDf),
     KLL(KLL),
     UNIFORM(UniformSampling),
     LOCHER(LocherSketch),
     UNIVMON(UnivMon),
+}
+
+#[derive(Clone, Debug)]
+pub enum L2HH {
+    // COUNT(VectorCount),
+}
+
+// impl L2HH {
+//     /// Creates a count-based L2 heavy hitter sketch with the requested dimensions.
+//     pub fn count_with_dimensions(rows: usize, cols: usize) -> Self {
+//         L2HH::COUNT(VectorCount::with_dimensions(rows, cols))
+//     }
+
+//     /// Inserts a single observation.
+//     pub fn insert(&mut self, value: &SketchInput) {
+//         let _ = self.update(value, 1);
+//     }
+
+//     /// Inserts an observation with an explicit weight and returns the current estimate.
+//     pub fn update(&mut self, value: &SketchInput, weight: i64) -> f64 {
+//         match self {
+//             L2HH::COUNT(sketch) => {
+//                 sketch.insert_with_count(value, weight);
+//                 sketch.estimate(value)
+//             }
+//         }
+//     }
+
+//     /// Returns the estimated frequency for the provided value.
+//     pub fn estimate(&self, value: &SketchInput) -> f64 {
+//         match self {
+//             L2HH::COUNT(sketch) => sketch.estimate(value),
+//         }
+//     }
+
+//     /// Provides an optional query interface for compatibility with older code.
+//     pub fn query(&self, value: &SketchInput) -> Option<f64> {
+//         Some(self.estimate(value))
+//     }
+
+//     /// Approximates the L2 norm of the sketch.
+//     pub fn get_l2(&self) -> f64 {
+//         match self {
+//             L2HH::COUNT(sketch) => sketch.l2(),
+//         }
+//     }
+
+//     /// Merges another L2 heavy hitter sketch into this one.
+//     pub fn merge(&mut self, other: &L2HH) {
+//         match (self, other) {
+//             (L2HH::COUNT(left), L2HH::COUNT(right)) => left.merge(right),
+//         }
+//     }
+// }
+
+/// this should be a temporary function
+/// modify KLL to remove this function
+pub fn iv_to_f64(i: &SketchInput) -> f64 {
+    match i {
+        SketchInput::I32(x) => *x as f64,
+        SketchInput::I64(x) => *x as f64,
+        SketchInput::U32(x) => *x as f64,
+        SketchInput::U64(x) => *x as f64,
+        SketchInput::F32(x) => *x as f64,
+        SketchInput::F64(f) => *f,
+        SketchInput::Str(_) => todo!(),
+        SketchInput::String(_) => todo!(),
+        SketchInput::Bytes(_) => todo!(),
+        SketchInput::I8(_) => todo!(),
+        SketchInput::I16(_) => todo!(),
+        SketchInput::I128(_) => todo!(),
+        SketchInput::ISIZE(_) => todo!(),
+        SketchInput::U8(_) => todo!(),
+        SketchInput::U16(_) => todo!(),
+        SketchInput::U128(_) => todo!(),
+        SketchInput::USIZE(_) => todo!(),
+    }
 }
 
 impl<'a> Chapter<'a> {
@@ -39,6 +115,14 @@ impl<'a> Chapter<'a> {
                     let s = String::from_utf8_lossy(items).to_string();
                     sketch.insert(s)
                 }
+                SketchInput::I8(_) => todo!(),
+                SketchInput::I16(_) => todo!(),
+                SketchInput::I128(_) => todo!(),
+                SketchInput::ISIZE(_) => todo!(),
+                SketchInput::U8(_) => todo!(),
+                SketchInput::U16(_) => todo!(),
+                SketchInput::U128(_) => todo!(),
+                SketchInput::USIZE(_) => todo!(),
             },
             Chapter::HLL(sketch) => sketch.insert(val),
             Chapter::KLL(sketch) => sketch.update(iv_to_f64(val)),

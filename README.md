@@ -27,7 +27,7 @@ Every sketch exposes a consistent lifecycle: construct the sketch, insert data, 
 Create two sketches with matching dimensions.
 
 ```rust
-use sketchlib_rust::{CountMin, sketches::utils::SketchInput};
+use sketchlib_rust::{CountMin, SketchInput};
 
 let mut primary = CountMin::init_cm_with_row_col(3, 64);
 let mut peer = CountMin::init_cm_with_row_col(3, 64);
@@ -53,6 +53,34 @@ Estimate the frequency for the tracked key.
 ```rust
 let estimate = primary.get_est(&key);
 println!("approximate error count = {}", estimate);
+```
+
+#### Structured Count-Min (hash reuse)
+
+The structured variant keeps row slices inside a shared 64-bit digest so `fast_insert` and `fast_estimate` perform the hash only once per value.
+
+Create the optimized sketch and key.
+
+```rust
+use sketchlib_rust::{StructuredCountMin, common::SketchInput};
+
+let mut sketch = StructuredCountMin::with_dimensions(4, 2048);
+let key = SketchInput::String("warning".into());
+```
+
+Apply high-throughput updates while reusing the precomputed hash internally.
+
+```rust
+for _ in 0..10_000 {
+    sketch.fast_insert(&key);
+}
+```
+
+Estimate the frequency with the same single-hash shortcut.
+
+```rust
+let approx = sketch.fast_estimate(&key);
+println!("fast estimate ≈ {}", approx);
 ```
 
 Other sketches follow the same shape with their own method names (for example `KLL::update`, `HllDfModified::insert`, `Elastic::insert`). Depending on the sketch, inserts may take a `SketchInput` or a domain-specific value (such as `f64` for quantiles); most provide a `merge` method that rejects mismatched shapes at runtime.
@@ -350,7 +378,8 @@ Initialize the windowed coordinator with a sketch template.
 ```rust
 use sketchlib_rust::{
     sketchbook::{Chapter, ExponentialHistogram},
-    sketches::{countmin::CountMin, utils::SketchInput},
+    sketches::countmin::CountMin,
+    SketchInput,
 };
 
 let template = Chapter::CM(CountMin::default());
@@ -382,7 +411,8 @@ At this moment, ```cargo test``` is a good starting point.
 
 ## Library Map
 
-- `src/sketches`: core sketch implementations plus helpers such as `SketchInput`, hashing utilities, and serialization hooks.
+- `src/common`: shared structures (`SketchMatrix`, `SketchList`), the `SketchInput` enum, and hashing helpers used by sketches and sketchbook.
+- `src/sketches`: core sketch implementations plus serialization hooks.
 - `src/sketchbook`: orchestration layers (Hydra, Chapter, ExponentialHistogram) for combining sketches into label-aware and time-aware structures.
 - `src/deserializers`: serde-ready records that decode hex-encoded MessagePack payloads emitted by Arroyo and PromSketch experiments.
 - `src/bin/sketch_tester`: per-sketch binaries that exercise insertion/query paths and print diagnostics.

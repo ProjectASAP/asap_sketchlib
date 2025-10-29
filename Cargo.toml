@@ -26,95 +26,18 @@ twox-hash = "2.1.2"
 bincode = {version = "2.0.1", features = ["serde"]}
 prom_text_format_parser = "0.1.0"
 
+[dev-dependencies]
+criterion = "0.5"
+
 [lib]
 crate-type = ["rlib"]
 name = "sketchlib_rust"
 path = "src/lib.rs"
 
-[[bin]]
-name = "test_all_sketch"
-path = "src/bin/sketch_tester/SketchExaminer.rs"
+[[bench]]
+name = "hash_detailed"
+harness = false
 
-[[bin]]
-name = "coco_test"
-path = "src/bin/sketch_tester/CocoTest.rs"
-
-[[bin]]
-name = "cm_test"
-path = "src/bin/sketch_tester/CMTest.rs"
-
-[[bin]]
-name = "count_test"
-path = "src/bin/sketch_tester/CountTest.rs"
-
-[[bin]]
-name = "heap_test"
-path = "src/bin/sketch_tester/HeapTest.rs"
-
-[[bin]]
-name = "hlldf_test"
-path = "src/bin/sketch_tester/HLLDFTest.rs"
-
-[[bin]]
-name = "hllhip_test"
-path = "src/bin/sketch_tester/HLLHIPTest.rs"
-
-[[bin]]
-name = "hll_test"
-path = "src/bin/sketch_tester/HLLTest.rs"
-
-[[bin]]
-name = "kll_test"
-path = "src/bin/sketch_tester/KLLTest.rs"
-
-[[bin]]
-name = "locher_test"
-path = "src/bin/sketch_tester/LocherTest.rs"
-
-[[bin]]
-name = "ms_test"
-path = "src/bin/sketch_tester/MicroscopeTest.rs"
-
-[[bin]]
-name = "mscm_test"
-path = "src/bin/sketch_tester/MSCMTest.rs"
-
-[[bin]]
-name = "um_test"
-path = "src/bin/sketch_tester/UnivMonTest.rs"
-
-[[bin]]
-name = "eh_test"
-path = "src/bin/sketch_tester/EHTest.rs"
-
-[[bin]]
-name = "serialize_coco"
-path = "src/bin/serializer/CocoSerializer.rs"
-
-[[bin]]
-name = "serialize_cm"
-path = "src/bin/serializer/CountMinSerializer.rs"
-
-[[bin]]
-name = "serialize_cu"
-path = "src/bin/serializer/CountUnivSerializer.rs"
-
-[[bin]]
-name = "serialize_elastic"
-path = "src/bin/serializer/ElasticSerializer.rs"
-
-[[bin]]
-name = "serialize_hll"
-path = "src/bin/serializer/HllSerializer.rs"
-
-[[bin]]
-name = "serialize_kll"
-path = "src/bin/serializer/KllSerializer.rs"
-
-[[bin]]
-name = "serialize_locher"
-path = "src/bin/serializer/LocherSerializer.rs"
-
-[[bin]]
-name = "serialize_UnivMon"
-path = "src/bin/serializer/UnivMonSerializer.rs"
+[[bench]]
+name = "countmin"
+harness = false

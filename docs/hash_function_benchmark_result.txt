@@ -1,0 +1,44 @@
+% cargo bench --bench hash_detailed
+   Compiling sketchlib-rust v0.1.0 (/Users/yancheng/ApproximationFirst/sketchlib-rust)
+warning: unused import: `um::*`
+  --> src/sketch_framework/mod.rs:12:9
+   |
+12 | pub use um::*;
+   |         ^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: `sketchlib-rust` (lib) generated 1 warning (run `cargo fix --lib -p sketchlib-rust` to apply 1 suggestion)
+    Finished `bench` profile [optimized] target(s) in 3.61s
+     Running benches/hash_detailed.rs (target/release/deps/hash_detailed-20801536c75c9f0f)
+Gnuplot not found, using plotters backend
+xxhash_variants/xxhash32/64
+                        time:   [10.819 µs 10.826 µs 10.832 µs]
+                        change: [-0.3086% -0.0240% +0.2799%] (p = 0.89 > 0.05)
+                        No change in performance detected.
+Found 6 outliers among 100 measurements (6.00%)
+  1 (1.00%) high mild
+  5 (5.00%) high severe
+xxhash_variants/xxhash64/64
+                        time:   [20.642 µs 20.677 µs 20.727 µs]
+                        change: [+0.2053% +0.7699% +1.3939%] (p = 0.01 < 0.05)
+                        Change within noise threshold.
+Found 15 outliers among 100 measurements (15.00%)
+  2 (2.00%) low severe
+  3 (3.00%) low mild
+  2 (2.00%) high mild
+  8 (8.00%) high severe
+xxhash_variants/xxhash3_64/64
+                        time:   [8.3516 µs 8.3585 µs 8.3660 µs]
+                        change: [-0.0843% +4.5527% +12.018%] (p = 0.18 > 0.05)
+                        No change in performance detected.
+Found 8 outliers among 100 measurements (8.00%)
+  1 (1.00%) high mild
+  7 (7.00%) high severe
+xxhash_variants/xxhash3_128/64
+                        time:   [11.740 µs 11.749 µs 11.759 µs]
+                        change: [-0.4504% +0.0282% +0.4688%] (p = 0.92 > 0.05)
+                        No change in performance detected.
+Found 12 outliers among 100 measurements (12.00%)
+  8 (8.00%) high mild
+  4 (4.00%) high severe

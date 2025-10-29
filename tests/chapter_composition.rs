@@ -1,8 +1,10 @@
 use sketchlib_rust::{
-    sketchbook::Chapter,
+    HllDf,
+    common::SketchInput,
+    sketch_framework::Chapter,
     sketches::{
-        coco::Coco, countmin::CountMin, hll::HllDfModified, kll::KLL, locher::LocherSketch,
-        uniform::UniformSampling, univmon::UnivMon, utils::SketchInput,
+        coco::Coco, countmin::CountMin, kll::KLL, locher::LocherSketch, uniform::UniformSampling,
+        univmon::UnivMon,
     },
 };
 
@@ -20,8 +22,7 @@ fn chapter_countmin_reports_inserted_frequency() {
     }
     let estimate = chapter
         .query(&input)
-        .expect("countmin chapter should query")
-        as u64;
+        .expect("countmin chapter should query") as u64;
     assert!(
         estimate >= 12,
         "expected count >= 12 for inserted key, got {}",
@@ -56,9 +57,7 @@ fn chapter_uniform_sampling_tracks_length_and_samples() {
         chapter.insert(&SketchInput::I32(value));
     }
 
-    let len = chapter
-        .query(&SketchInput::Str("len"))
-        .expect("len query") as usize;
+    let len = chapter.query(&SketchInput::Str("len")).expect("len query") as usize;
     let total_seen = chapter
         .query(&SketchInput::Str("total_seen"))
         .expect("total_seen query");
@@ -112,7 +111,7 @@ fn chapter_coco_supports_partial_queries() {
 #[test]
 fn chapter_hll_exposes_cardinality_estimate() {
     // HLL variant should expose an approximate distinct count via Chapter::query
-    let mut chapter = Chapter::HLL(HllDfModified::new());
+    let mut chapter = Chapter::HLL(HllDf::new());
     for value in 0..5_000u64 {
         chapter.insert(&SketchInput::U64(value));
     }

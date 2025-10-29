@@ -1,7 +1,9 @@
-pub mod deserializers;
-pub mod sketchbook;
+pub mod common;
+pub mod sketch_framework;
 pub mod sketches;
+#[cfg(test)]
+pub mod test_utils;
 
-pub use deserializers::*;
-pub use sketchbook::*;
+pub use common::*;
+pub use sketch_framework::*;
 pub use sketches::*;
