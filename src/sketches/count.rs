@@ -49,13 +49,6 @@ impl Count {
         for r in 0..self.row {
             let hashed = hash_it_to_128(r, value);
             let col = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
-            // let sign_bit = {
-            //     if ((hashed >> 127) & 1) == 1 {
-            //         1
-            //     } else {
-            //         -1
-            //     }
-            // };
             let bit = ((hashed >> (127)) & 1) as i64;
             let sign_bit = -(1 - 2 * bit);
             self.counts
@@ -64,6 +57,8 @@ impl Count {
     }
 
     /// Inserts an observation with hash optimization of Count Sketch updating algorithm.
+    /// On some architecture, this optimization may not have effect for small sketch
+    /// Inferred reason is the u128 is expensive
     pub fn fast_insert(&mut self, value: &SketchInput) {
         let hashed_val = hash_it_to_128(0, value);
         self.fast_insert_with_hash_value(hashed_val);
@@ -74,18 +69,17 @@ impl Count {
     pub fn fast_insert_with_hash_value(&mut self, hashed_val: u128) {
         let mask_bits = self.counts.get_mask_bits() as usize;
         let mask = (1u128 << mask_bits) - 1;
-        let mut shift_amount = 0; // Pre-compute shift to avoid multiplication in loop
-        let mut sign_bit_pos = 127; // Pre-compute sign bit position to avoid subtraction
+        let mut shift_amount = 0;
+        let mut sign_bit_pos = 127;
         for _r in 0..self.row {
             let hashed = (hashed_val >> shift_amount) & mask;
             let col = (hashed as usize) % self.col;
-            // Extract sign bit from high bits
             let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
             let sign_bit = -(1 - 2 * bit);
             self.counts
                 .update_one_counter(_r, col, |a, b| *a += sign_bit * b, 1_i64);
-            shift_amount += mask_bits; // Increment instead of multiply
-            sign_bit_pos -= 1; // Decrement instead of subtract in expression
+            shift_amount += mask_bits;
+            sign_bit_pos -= 1;
         }
     }
 
@@ -95,19 +89,9 @@ impl Count {
         for r in 0..self.row {
             let hashed = hash_it_to_128(r, value);
             let col = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
-            // let sign_bit = (hashed >> 127) & 1;
-            // let counter = self.counts.query_one_counter(r, col);
-            // if sign_bit > 0 {
-            //     estimates.push(counter);
-            // } else {
-            //     estimates.push(-counter);
-            // }
-            // Extract sign bit from the same position used in fast_insert
-            // Branchless: convert bit (0 or 1) to sign (-1 or 1)
             let bit = ((hashed >> (127)) & 1) as i64;
             let sign_bit = -(1 - 2 * bit);
             let counter = self.counts.query_one_counter(r, col);
-            // Apply the sign
             estimates.push(sign_bit * counter);
         }
         if estimates.is_empty() {
@@ -123,24 +107,24 @@ impl Count {
     }
 
     /// Returns the frequency estimate for the provided value, with hash optimization.
+    /// On some architecture, this optimization may not have effect for small sketch
+    /// Inferred reason is the u128 is expensive
     pub fn fast_estimate(&self, value: &SketchInput) -> f64 {
         let hashed_val = hash_it_to_128(0, value);
         let mask_bits = self.counts.get_mask_bits() as usize;
         let mask = (1u128 << mask_bits) - 1;
         let mut estimates = Vec::with_capacity(self.row);
-        let mut shift_amount = 0; // Pre-compute shift to avoid multiplication in loop
-        let mut sign_bit_pos = 127; // Pre-compute sign bit position to avoid subtraction
+        let mut shift_amount = 0;
+        let mut sign_bit_pos = 127;
         for r in 0..self.row {
             let hashed = (hashed_val >> shift_amount) & mask;
             let col = (hashed as usize) % self.col;
-            // Extract sign bit from high bits
             let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
             let sign_bit = -(1 - 2 * bit);
             let counter = self.counts.query_one_counter(r, col);
-            // Apply the sign
             estimates.push(sign_bit * counter);
-            shift_amount += mask_bits; // Increment instead of multiply
-            sign_bit_pos -= 1; // Decrement instead of subtract in expression
+            shift_amount += mask_bits;
+            sign_bit_pos -= 1;
         }
         if estimates.is_empty() {
             return 0.0;
