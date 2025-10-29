@@ -56,7 +56,7 @@ impl Count {
             //         -1
             //     }
             // };
-            let bit = ((hashed >> (127 )) & 1) as i64;
+            let bit = ((hashed >> (127)) & 1) as i64;
             let sign_bit = -(1 - 2 * bit);
             self.counts
                 .update_one_counter(r, col, |a, b| *a += sign_bit * b, 1_i64);
@@ -223,9 +223,11 @@ pub struct CountUniv {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SketchInput, hash_it_to_128};
     use crate::test_utils::sample_zipf_u64;
+    use crate::{SketchInput, hash_it_to_128};
     use std::collections::HashMap;
+    const LARGE_ROW_NUM: usize = 5;
+    const LARGE_COL_NUM: usize = 32768;
 
     fn counter_index(row: usize, key: &SketchInput, columns: usize) -> usize {
         let hash = hash_it_to_128(row, key);
@@ -457,6 +459,36 @@ mod tests {
         let accuracy = within_tolerance as f64 / total as f64;
         assert!(
             accuracy >= 0.70,
+            "Only {:.2}% of keys within tolerance ({} of {}); expected at least 70%",
+            accuracy * 100.0,
+            within_tolerance,
+            total
+        );
+    }
+
+    #[test]
+    fn zipf_stream_large_sketch() {
+        let (sketch, truth) = run_zipf_stream(
+            LARGE_ROW_NUM,
+            LARGE_COL_NUM,
+            8192,
+            1.1,
+            200_000,
+            0x5eed_c0de,
+        );
+        let mut within_tolerance = 0usize;
+        for (&value, &count) in &truth {
+            let estimate = sketch.estimate(&SketchInput::U64(value));
+            let rel_error = ((estimate - count as f64).abs()) / (count as f64);
+            if rel_error < 0.10 {
+                within_tolerance += 1;
+            }
+        }
+
+        let total = truth.len();
+        let accuracy = within_tolerance as f64 / total as f64;
+        assert!(
+            accuracy >= 0.90,
             "Only {:.2}% of keys within tolerance ({} of {}); expected at least 70%",
             accuracy * 100.0,
             within_tolerance,
