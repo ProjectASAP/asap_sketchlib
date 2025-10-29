@@ -1,18 +1,44 @@
+$ cargo bench --bench count
+   Compiling sketchlib-rust v0.1.0 (/users/yuanyc/sketchlib-rust)
+warning: unused import: `um::*`
+  --> src/sketch_framework/mod.rs:12:9
+   |
+12 | pub use um::*;
+   |         ^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: `sketchlib-rust` (lib) generated 1 warning (run `cargo fix --lib -p sketchlib-rust` to apply 1 suggestion)
+    Finished `bench` profile [optimized] target(s) in 5.20s
+     Running benches/count.rs (target/release/deps/count-7fea8596a4fc36c8)
+Gnuplot not found, using plotters backend
 count_default/insert_only
-                        time:   [578.42 µs 579.16 µs 580.09 µs]
-Found 16 outliers among 100 measurements (16.00%)
-  5 (5.00%) high mild
-  11 (11.00%) high severe
-count_default/fast_insert_only
-                        time:   [597.67 µs 597.91 µs 598.17 µs]
-Found 6 outliers among 100 measurements (6.00%)
+                        time:   [568.68 µs 568.74 µs 568.81 µs]
+                        change: [+0.1129% +0.1294% +0.1448%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 10 outliers among 100 measurements (10.00%)
+  1 (1.00%) low severe
+  3 (3.00%) low mild
   2 (2.00%) high mild
   4 (4.00%) high severe
-count_default/estimate  time:   [1.2971 ms 1.2992 ms 1.3019 ms]
-Found 6 outliers among 100 measurements (6.00%)
-  6 (6.00%) high mild
+count_default/fast_insert_only
+                        time:   [562.81 µs 562.95 µs 563.08 µs]
+                        change: [-0.6463% -0.5953% -0.5493%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+Benchmarking count_default/estimate: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 5.9s, enable flat sampling, or reduce sample count to 60.
+count_default/estimate  time:   [1.1642 ms 1.1651 ms 1.1661 ms]
+                        change: [+0.8140% +0.9450% +1.0585%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking count_default/fast_estimate: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 5.7s, enable flat sampling, or reduce sample count to 60.
 count_default/fast_estimate
-                        time:   [1.2953 ms 1.2971 ms 1.2997 ms]
-Found 7 outliers among 100 measurements (7.00%)
-  7 (7.00%) high severe
-
+                        time:   [1.1362 ms 1.1369 ms 1.1377 ms]
+                        change: [+6.2964% +6.4037% +6.5048%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 12 outliers among 100 measurements (12.00%)
+  10 (10.00%) high mild
+  2 (2.00%) high severe

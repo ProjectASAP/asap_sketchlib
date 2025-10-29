@@ -4,6 +4,8 @@ use sketchlib_rust::{Count, SketchInput};
 
 const SAMPLE_COUNT: usize = 16_384;
 const RNG_SEED: u64 = 0x5eed_c0de_1234_5678;
+const DEFAULT_ROW_NUM: usize = 5;
+const DEFAULT_COL_NUM: usize = 32768;
 
 fn build_keys() -> Vec<SketchInput<'static>> {
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
@@ -18,7 +20,7 @@ fn bench_count(c: &mut Criterion) {
 
     group.bench_function("insert_only", |b| {
         b.iter_with_setup(
-            || Count::default(),
+            || Count::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM),
             |mut sketch| {
                 for key in &keys {
                     sketch.insert(key);
@@ -30,7 +32,7 @@ fn bench_count(c: &mut Criterion) {
 
     group.bench_function("fast_insert_only", |b| {
         b.iter_with_setup(
-            || Count::default(),
+            || Count::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM),
             |mut sketch| {
                 for key in &keys {
                     sketch.fast_insert(key);
@@ -40,12 +42,12 @@ fn bench_count(c: &mut Criterion) {
         );
     });
 
-    let mut insert_prefilled = Count::default();
+    let mut insert_prefilled = Count::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM);
     for key in &keys {
         insert_prefilled.insert(key);
     }
 
-    let mut fast_prefilled = Count::default();
+    let mut fast_prefilled = Count::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM);
     for key in &keys {
         fast_prefilled.fast_insert(key);
     }
