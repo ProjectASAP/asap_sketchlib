@@ -49,13 +49,15 @@ impl Count {
         for r in 0..self.row {
             let hashed = hash_it_to_128(r, value);
             let col = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
-            let sign_bit = {
-                if ((hashed >> 127) & 1) == 1 {
-                    1
-                } else {
-                    -1
-                }
-            };
+            // let sign_bit = {
+            //     if ((hashed >> 127) & 1) == 1 {
+            //         1
+            //     } else {
+            //         -1
+            //     }
+            // };
+            let bit = ((hashed >> (127 )) & 1) as i64;
+            let sign_bit = -(1 - 2 * bit);
             self.counts
                 .update_one_counter(r, col, |a, b| *a += sign_bit * b, 1_i64);
         }
@@ -76,13 +78,11 @@ impl Count {
             let hashed = (hashed_val >> (mask_bits as usize * r)) & mask;
             let col = (hashed as usize) % self.col;
             // Extract sign bit from a different position in the original hash for each row
-            let sign_bit = {
-                if ((hashed_val >> (127 - r)) & 1) == 1 {
-                    1
-                } else {
-                    -1
-                }
-            };
+            // Branchless: convert bit (0 or 1) to sign (-1 or 1)
+            // If bit is 1: 1 - 2*1 = -1 -> negate to get 1
+            // If bit is 0: 1 - 2*0 = 1 -> negate to get -1
+            let bit = ((hashed_val >> (127 - r)) & 1) as i64;
+            let sign_bit = -(1 - 2 * bit);
             self.counts
                 .update_one_counter(r, col, |a, b| *a += sign_bit * b, 1_i64);
         }
@@ -94,13 +94,20 @@ impl Count {
         for r in 0..self.row {
             let hashed = hash_it_to_128(r, value);
             let col = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
-            let sign_bit = (hashed >> 127) & 1;
+            // let sign_bit = (hashed >> 127) & 1;
+            // let counter = self.counts.query_one_counter(r, col);
+            // if sign_bit > 0 {
+            //     estimates.push(counter);
+            // } else {
+            //     estimates.push(-counter);
+            // }
+            // Extract sign bit from the same position used in fast_insert
+            // Branchless: convert bit (0 or 1) to sign (-1 or 1)
+            let bit = ((hashed >> (127)) & 1) as i64;
+            let sign_bit = -(1 - 2 * bit);
             let counter = self.counts.query_one_counter(r, col);
-            if sign_bit > 0 {
-                estimates.push(counter);
-            } else {
-                estimates.push(-counter);
-            }
+            // Apply the sign
+            estimates.push(sign_bit * counter);
         }
         if estimates.is_empty() {
             return 0.0;
@@ -125,14 +132,12 @@ impl Count {
             let hashed = (hashed_val >> (mask_bits as usize * r)) & mask;
             let col = (hashed as usize) % self.col;
             // Extract sign bit from the same position used in fast_insert
-            let sign_bit = (hashed_val >> (127 - r)) & 1;
+            // Branchless: convert bit (0 or 1) to sign (-1 or 1)
+            let bit = ((hashed_val >> (127 - r)) & 1) as i64;
+            let sign_bit = -(1 - 2 * bit);
             let counter = self.counts.query_one_counter(r, col);
-            // Apply the sign: if sign_bit is 0, we need to negate the counter
-            if sign_bit > 0 {
-                estimates.push(counter);
-            } else {
-                estimates.push(-counter);
-            }
+            // Apply the sign
+            estimates.push(sign_bit * counter);
         }
         if estimates.is_empty() {
             return 0.0;
