@@ -1,6 +1,11 @@
-# sketchlib-rs
+# sketchlib-rust
 
-`sketchlib-rs` is an experimental Rust library that bundles probabilistic sketches and orchestration utilities for streaming telemetry experiments. The ultimate goal is an easy-to-import rust library to use in either streaming engines or local programs.
+`sketchlib-rust` is a sketch library for native rust sketch. This repo contains mainly three parts:
+
+- Basic building blocks: located in `/src/common`, contains common structure to build sketches and other common utilities
+- Native Sketch: located in `/src/sketches`, contains rust sketches, migration from hard coded sketch into common structure based sketches
+  - Completed Migration: CountMin, HyperLogLog
+- Sketch Framework: located in `/src/sketch_framework`, contains sketch serving strategies
 
 ## Highlights
 
@@ -425,6 +430,24 @@ At this moment, ```cargo test``` is a good starting point.
 - MessagePack via `rmp-serde` keeps payloads compact while `serde_bytes` ensures buffers stay binary-friendly.
 - `deserializers::Record` and friends handle the hex framing that Arroyo UDFs produce before shipping to downstream consumers.
 - Enable the `arroyo` feature (`cargo build --features arroyo`) to compile the UDF plugin glue when embedding in Arroyo jobs.
+
+## Optimization
+
+### Single Hash Reuse
+
+For a `CountMinSketch` with 3 rows and 4096 columns, the minimun size requirement of hash value is: `3*log(4096)=36` bits. One large hash value (i.e., 64 bits) is sufficient to insert the whole sketch, making hashing for each row unnecessary. This suggests an optimization that if the hash value is large enough, hash each key once is sufficient to insert the whole sketch.
+
+## Benchmark
+
+Benchmark located in `/benches`, with the help of rust benchmark support.
+
+### To Run
+
+To run the benchmark for `CountMinSketch` to check the optimization techniques applied to `insert()` and `estimate()`:
+
+```bash
+cargo bench --bench countmin
+```
 
 ## Development
 
