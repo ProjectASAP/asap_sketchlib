@@ -1,0 +1,18 @@
+count_default/insert_only
+                        time:   [578.42 µs 579.16 µs 580.09 µs]
+Found 16 outliers among 100 measurements (16.00%)
+  5 (5.00%) high mild
+  11 (11.00%) high severe
+count_default/fast_insert_only
+                        time:   [597.67 µs 597.91 µs 598.17 µs]
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) high mild
+  4 (4.00%) high severe
+count_default/estimate  time:   [1.2971 ms 1.2992 ms 1.3019 ms]
+Found 6 outliers among 100 measurements (6.00%)
+  6 (6.00%) high mild
+count_default/fast_estimate
+                        time:   [1.2953 ms 1.2971 ms 1.2997 ms]
+Found 7 outliers among 100 measurements (7.00%)
+  7 (7.00%) high severe
+

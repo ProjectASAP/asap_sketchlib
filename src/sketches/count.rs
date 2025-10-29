@@ -77,7 +77,7 @@ impl Count {
             let col = (hashed as usize) % self.col;
             // Extract sign bit from a different position in the original hash for each row
             let sign_bit = {
-                if ((hashed_val >> (64 + r)) & 1) == 1 {
+                if ((hashed_val >> (127 - r)) & 1) == 1 {
                     1
                 } else {
                     -1
@@ -125,7 +125,7 @@ impl Count {
             let hashed = (hashed_val >> (mask_bits as usize * r)) & mask;
             let col = (hashed as usize) % self.col;
             // Extract sign bit from the same position used in fast_insert
-            let sign_bit = (hashed_val >> (64 + r)) & 1;
+            let sign_bit = (hashed_val >> (127 - r)) & 1;
             let counter = self.counts.query_one_counter(r, col);
             // Apply the sign: if sign_bit is 0, we need to negate the counter
             if sign_bit > 0 {
