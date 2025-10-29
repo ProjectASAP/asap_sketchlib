@@ -3,7 +3,7 @@ pub use coco::Bucket;
 pub use coco::Coco;
 
 pub mod count;
-// pub use count::Count;
+pub use count::Count;
 pub use count::CountUniv;
 
 pub mod countmin;

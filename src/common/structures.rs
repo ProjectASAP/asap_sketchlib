@@ -2,6 +2,35 @@ use std::ops::{Index, IndexMut};
 
 use serde::{Deserialize, Serialize};
 
+/// Helper trait for converting sketch counter types to f64 for median calculation.
+pub trait ToF64 {
+    fn to_f64(self) -> f64;
+}
+
+impl ToF64 for u64 {
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
+}
+
+impl ToF64 for i64 {
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
+}
+
+impl ToF64 for u32 {
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
+}
+
+impl ToF64 for i32 {
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
+}
+
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Vector1D<T: Clone> {
@@ -195,13 +224,13 @@ impl<T> Vector2D<T> {
     }
 
     /// Applies an update to a single cell via the supplied operator.
-    pub fn update_one_counter<F>(&mut self, row: usize, col: usize, op: F, value: T)
+    pub fn update_one_counter<F, V>(&mut self, row: usize, col: usize, op: F, value: V)
     where
-        F: Fn(T, T) -> T,
+        F: Fn(&mut T, V),
         T: Clone,
     {
         let idx = row * self.cols + col;
-        self.data[idx] = op(self.data[idx].clone(), value);
+        op(&mut self.data[idx], value);
     }
 
     /// get the number of bits required to cover the col size
@@ -227,10 +256,10 @@ impl<T> Vector2D<T> {
 
     /// Inserts a value along every row using a hashed column selection.
     #[inline(always)]
-    pub fn fast_insert<F>(&mut self, op: F, value: T, hashed_val: u128)
+    pub fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: u128)
     where
-        F: Fn(T, T) -> T,
-        T: Clone,
+        F: Fn(&mut T, V),
+        V: Clone,
     {
         let mask_bits = self.get_mask_bits();
         let mask = (1u128 << mask_bits) - 1;
@@ -239,7 +268,7 @@ impl<T> Vector2D<T> {
             let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
             let col = (hashed as usize) % cols;
             let idx = row * cols + col;
-            self.data[idx] = op(self.data[idx].clone(), value.clone());
+            op(&mut self.data[idx], value.clone());
         }
     }
 
@@ -253,7 +282,7 @@ impl<T> Vector2D<T> {
 
     /// Queries all rows using precomputed hashed values to find the minimum.
     #[inline(always)]
-    pub fn fast_query(&self, hashed_val: u128) -> T
+    pub fn fast_query_min(&self, hashed_val: u128) -> T
     where
         T: Clone + Ord,
     {
@@ -273,6 +302,61 @@ impl<T> Vector2D<T> {
             }
         }
         min
+    }
+
+    /// Queries all rows using precomputed hashed values to find the median.
+    ///
+    /// Note: This method requires T to be convertible to f64 for median calculation.
+    #[inline(always)]
+    pub fn fast_query_median(&self, hashed_val: u128) -> f64
+    where
+        T: Clone + Ord + Copy + ToF64,
+    {
+        let mask_bits = self.get_mask_bits();
+        let mask = (1u128 << mask_bits) - 1;
+        let mut estimates = Vec::with_capacity(self.rows);
+        for r in 0..self.rows {
+            let hashed = (hashed_val >> (mask_bits as usize * r)) & mask;
+            let col = (hashed as usize) % self.cols;
+            let idx = r * self.cols + col;
+            estimates.push(self.data[idx]);
+        }
+        if estimates.is_empty() {
+            return 0.0;
+        }
+        estimates.sort_unstable();
+        let mid = estimates.len() / 2;
+        if estimates.len() % 2 == 1 {
+            estimates[mid].to_f64()
+        } else {
+            let left = estimates[mid - 1].to_f64();
+            let right = estimates[mid].to_f64();
+            (left + right) / 2.0
+        }
+    }
+
+    /// Queries all rows using precomputed hashed values to find the maximum.
+    #[inline(always)]
+    pub fn fast_query_max(&self, hashed_val: u128) -> T
+    where
+        T: Clone + Ord,
+    {
+        let mask_bits = self.get_mask_bits();
+        let mask = (1u128 << mask_bits) - 1;
+        let cols = self.cols;
+        let hashed = (hashed_val) & mask;
+        let c0 = (hashed as usize) % cols;
+        let mut max = self.data[c0].clone();
+        for row in 1..self.rows {
+            let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
+            let col = (hashed as usize) % cols;
+            let idx = row * cols + col;
+            let candidate = self.data[idx].clone();
+            if candidate > max {
+                max = candidate;
+            }
+        }
+        max
     }
 
     /// Returns an immutable slice corresponding to a full row.

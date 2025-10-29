@@ -39,5 +39,9 @@ name = "hash_detailed"
 harness = false
 
 [[bench]]
+name = "count"
+harness = false
+
+[[bench]]
 name = "countmin"
 harness = false
