@@ -3,8 +3,8 @@ use rmp_serde::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::super::input::{SketchInput, hash_it};
 use crate::Vector2D;
+use crate::{SketchInput, hash_it};
 
 const DEFAULT_ROW_NUM: usize = 3;
 const DEFAULT_COL_NUM: usize = 4096;

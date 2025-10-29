@@ -1,9 +1,10 @@
 use sketchlib_rust::{
-    HllDf, HyperLogLog,
+    HllDf,
+    common::SketchInput,
     sketch_framework::Chapter,
     sketches::{
         coco::Coco, countmin::CountMin, kll::KLL, locher::LocherSketch, uniform::UniformSampling,
-        univmon::UnivMon, utils::SketchInput,
+        univmon::UnivMon,
     },
 };
 

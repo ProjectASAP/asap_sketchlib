@@ -1,4 +1,4 @@
-use crate::{SketchInput, utils::iv_to_f64};
+use crate::SketchInput;
 use serde::{Deserialize, Serialize};
 
 use super::super::sketches::*;
@@ -71,6 +71,30 @@ pub enum L2HH {
 //     }
 // }
 
+/// this should be a temporary function
+/// modify KLL to remove this function
+pub fn iv_to_f64(i: &SketchInput) -> f64 {
+    match i {
+        SketchInput::I32(x) => *x as f64,
+        SketchInput::I64(x) => *x as f64,
+        SketchInput::U32(x) => *x as f64,
+        SketchInput::U64(x) => *x as f64,
+        SketchInput::F32(x) => *x as f64,
+        SketchInput::F64(f) => *f,
+        SketchInput::Str(_) => todo!(),
+        SketchInput::String(_) => todo!(),
+        SketchInput::Bytes(_) => todo!(),
+        SketchInput::I8(_) => todo!(),
+        SketchInput::I16(_) => todo!(),
+        SketchInput::I128(_) => todo!(),
+        SketchInput::ISIZE(_) => todo!(),
+        SketchInput::U8(_) => todo!(),
+        SketchInput::U16(_) => todo!(),
+        SketchInput::U128(_) => todo!(),
+        SketchInput::USIZE(_) => todo!(),
+    }
+}
+
 impl<'a> Chapter<'a> {
     /// Insert a value into the sketch
     pub fn insert(&mut self, val: &SketchInput<'a>) {
@@ -91,6 +115,14 @@ impl<'a> Chapter<'a> {
                     let s = String::from_utf8_lossy(items).to_string();
                     sketch.insert(s)
                 }
+                SketchInput::I8(_) => todo!(),
+                SketchInput::I16(_) => todo!(),
+                SketchInput::I128(_) => todo!(),
+                SketchInput::ISIZE(_) => todo!(),
+                SketchInput::U8(_) => todo!(),
+                SketchInput::U16(_) => todo!(),
+                SketchInput::U128(_) => todo!(),
+                SketchInput::USIZE(_) => todo!(),
             },
             Chapter::HLL(sketch) => sketch.insert(val),
             Chapter::KLL(sketch) => sketch.update(iv_to_f64(val)),

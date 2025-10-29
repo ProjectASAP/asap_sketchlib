@@ -1,4 +1,4 @@
-use super::utils::{SketchInput, hash_it};
+use crate::{SketchInput, hash_it};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -137,6 +137,14 @@ impl<'long_enough_sketch, 'just_for_est> Bucket<'long_enough_sketch> {
                 SketchInput::Str(s) => print!(" <str::{}, {}> ", s, self.val),
                 SketchInput::String(s) => print!(" <String::{}, {}> ", s, self.val),
                 SketchInput::Bytes(_items) => todo!(),
+                SketchInput::I8(_) => todo!(),
+                SketchInput::I16(_) => todo!(),
+                SketchInput::I128(_) => todo!(),
+                SketchInput::ISIZE(_) => todo!(),
+                SketchInput::U8(_) => todo!(),
+                SketchInput::U16(_) => todo!(),
+                SketchInput::U128(_) => todo!(),
+                SketchInput::USIZE(_) => todo!(),
             },
             None => print!(" <None, {}> ", self.val),
         }

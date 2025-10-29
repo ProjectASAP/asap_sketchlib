@@ -37,3 +37,7 @@ path = "src/lib.rs"
 [[bench]]
 name = "structured_countmin"
 harness = false
+
+[[bench]]
+name = "hash_detailed"
+harness = false

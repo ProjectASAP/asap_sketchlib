@@ -1,4 +1,4 @@
-use super::utils::{LASTSTATE, SketchInput, hash_it};
+use crate::{LASTSTATE, SketchInput, hash_it};
 use serde::{Deserialize, Serialize};
 
 pub struct Count {

@@ -1,5 +1,5 @@
 use super::heap::TopKHeap;
-use super::utils::{SketchInput, hash_it};
+use crate::{SketchInput, hash_it};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
