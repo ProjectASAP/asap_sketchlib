@@ -35,9 +35,9 @@ name = "sketchlib_rust"
 path = "src/lib.rs"
 
 [[bench]]
-name = "structured_countmin"
+name = "hash_detailed"
 harness = false
 
 [[bench]]
-name = "hash_detailed"
+name = "countmin"
 harness = false

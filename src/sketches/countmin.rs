@@ -3,8 +3,8 @@ use rmp_serde::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::Vector2D;
 use crate::{SketchInput, hash_it};
+use crate::{Vector2D, hash_for_enough_bits};
 
 const DEFAULT_ROW_NUM: usize = 3;
 const DEFAULT_COL_NUM: usize = 4096;
@@ -67,8 +67,10 @@ impl CountMin {
 
     /// Inserts an observation using the combined hash optimization.
     pub fn fast_insert(&mut self, value: &SketchInput) {
+        let bits_required = self.counts.get_required_bits();
+        let hashed_val = hash_for_enough_bits(0, value, bits_required);
         self.counts
-            .fast_insert(std::ops::Add::add, 1_u64, hash_it(0, value));
+            .fast_insert(std::ops::Add::add, 1_u64, hashed_val);
     }
 
     /// Returns the frequency estimate for the provided value.
@@ -85,7 +87,10 @@ impl CountMin {
 
     /// Returns the frequency estimate for the provided value, with hash optimization.
     pub fn fast_estimate(&self, value: &SketchInput) -> u64 {
-        self.counts.fast_query(hash_it(0, value))
+        // self.counts.fast_query(hash_it(0, value))
+        let bits_required = self.counts.get_required_bits();
+        let hashed_val = hash_for_enough_bits(0, value, bits_required);
+        self.counts.fast_query(hashed_val)
     }
 
     /// Merges another sketch while asserting compatible dimensions.
@@ -159,7 +164,7 @@ impl CountMin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketches::test_utils::sample_zipf_u64;
+    use crate::test_utils::sample_zipf_u64;
     use crate::{SketchInput, hash_it};
     use std::collections::HashMap;
 
@@ -219,6 +224,18 @@ mod tests {
                 storage.row_slice(row)
             );
         }
+    }
+
+    #[test]
+    fn required_bits_match_expected_thresholds() {
+        let default_dims = CountMin::with_dimensions(3, 4096);
+        assert_eq!(default_dims.as_storage().get_required_bits(), 64);
+
+        let smaller_cols = CountMin::with_dimensions(3, 64);
+        assert_eq!(smaller_cols.as_storage().get_required_bits(), 32);
+
+        let larger_shape = CountMin::with_dimensions(5, 1_048_576);
+        assert_eq!(larger_shape.as_storage().get_required_bits(), 128);
     }
 
     #[test]

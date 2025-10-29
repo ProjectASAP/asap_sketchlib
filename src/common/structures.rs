@@ -204,22 +204,40 @@ impl<T> Vector2D<T> {
         self.data[idx] = op(self.data[idx].clone(), value);
     }
 
+    /// get the number of bits required to cover the col size
+    #[inline(always)]
+    pub fn get_mask_bits(&self) -> u32 {
+        if self.cols.is_power_of_two() {
+            self.cols.ilog2()
+        } else {
+            self.cols.ilog2() + 1
+        }
+    }
+
+    /// get the number of bits required for hashed value
+    /// only three case possible: 32, 64, 128
+    #[inline]
+    pub fn get_required_bits(&self) -> usize {
+        let mut bits_required = self.get_mask_bits() as usize;
+        bits_required = bits_required * self.rows;
+        bits_required = 32 << ((bits_required > 32) as u32 + (bits_required > 64) as u32);
+        bits_required = bits_required.min(128);
+        bits_required
+    }
+
     /// Inserts a value along every row using a hashed column selection.
-    pub fn fast_insert<F>(&mut self, op: F, value: T, hashed_val: u64)
+    #[inline(always)]
+    pub fn fast_insert<F>(&mut self, op: F, value: T, hashed_val: u128)
     where
         F: Fn(T, T) -> T,
         T: Clone,
     {
-        let mask = (1u64 << 13) - 1;
+        let mask_bits = self.get_mask_bits();
+        let mask = (1u128 << mask_bits) - 1;
         let cols = self.cols;
-        let pow2 = cols.is_power_of_two();
         for row in 0..self.rows {
-            let hashed = (hashed_val >> (12 * row)) & mask;
-            let col = if pow2 {
-                (hashed as usize) & (cols - 1)
-            } else {
-                (hashed as usize) % cols
-            };
+            let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
+            let col = (hashed as usize) % cols;
             let idx = row * cols + col;
             self.data[idx] = op(self.data[idx].clone(), value.clone());
         }
@@ -235,28 +253,21 @@ impl<T> Vector2D<T> {
 
     /// Queries all rows using precomputed hashed values to find the minimum.
     #[inline(always)]
-    pub fn fast_query(&self, hashed_val: u64) -> T
+    pub fn fast_query(&self, hashed_val: u128) -> T
     where
         T: Clone + Ord,
     {
-        let mask = (1u64 << 13) - 1;
+        let mask_bits = self.get_mask_bits();
+        let mask = (1u128 << mask_bits) - 1;
         let cols = self.cols;
-        let pow2 = cols.is_power_of_two();
-
-        // Row 0
-        let h0 = (hashed_val & mask) as usize;
-        let c0 = if pow2 { h0 & (cols - 1) } else { h0 % cols };
+        let hashed = (hashed_val) & mask;
+        let c0 = (hashed as usize) % cols;
         let mut min = self.data[c0].clone();
-
-        // Remaining rows
         for row in 1..self.rows {
-            let hashed = (hashed_val >> (12 * row)) & mask;
-            let col = if pow2 {
-                (hashed as usize) & (cols - 1)
-            } else {
-                (hashed as usize) % cols
-            };
-            let candidate = self.data[row * cols + col].clone();
+            let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
+            let col = (hashed as usize) % cols;
+            let idx = row * cols + col;
+            let candidate = self.data[idx].clone();
             if candidate < min {
                 min = candidate;
             }

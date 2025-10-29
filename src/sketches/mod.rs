@@ -53,6 +53,3 @@ pub mod structured;
 // pub use structured::HyperLogLog;
 // pub use structured::VectorCount;
 // pub use structured::VectorCountMin;
-
-#[cfg(test)]
-pub mod test_utils;
