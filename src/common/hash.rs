@@ -64,6 +64,54 @@ pub fn hash_it(d: usize, key: &SketchInput) -> u64 {
     }
 }
 
+pub fn hash_it_to_128(d: usize, key: &SketchInput) -> u128 {
+    match key {
+        SketchInput::I32(i) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+        }
+        SketchInput::I64(i) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+        }
+        SketchInput::U32(u) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+        }
+        SketchInput::U64(u) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+        }
+        SketchInput::F32(f) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*f as u64).to_ne_bytes())
+        }
+        SketchInput::F64(f) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*f as u64).to_ne_bytes())
+        }
+        SketchInput::Str(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
+        SketchInput::String(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
+        SketchInput::Bytes(items) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], *items),
+        SketchInput::I8(i) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+        }
+        SketchInput::I16(i) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+        }
+        SketchInput::I128(i) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u128).to_ne_bytes())
+        }
+        SketchInput::ISIZE(i) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+        }
+        SketchInput::U8(u) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+        }
+        SketchInput::U16(u) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+        }
+        SketchInput::U128(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
+        SketchInput::USIZE(u) => {
+            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+        }
+    }
+}
+
 /// idx: index of the hash seed
 /// key: wrapper of the input to be hashed
 /// requirement: bits requirement, only 32, 64, 128 allowed
