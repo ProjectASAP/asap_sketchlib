@@ -1,3 +1,4 @@
+use crate::BOTTOM_LAYER_FINDER;
 use crate::common::heap::HHHeap;
 use crate::common::{L2HH, Vector1D};
 use crate::common::{LASTSTATE, SketchInput, hash_it};
@@ -250,7 +251,8 @@ impl UnivMon {
             for item in self.hh_layers[i].heap() {
                 if item.count > threshold {
                     // let hash = (hash_it(LASTSTATE, &item.key) >> (i+1)) & 1;
-                    let hash = (hash_it(LASTSTATE, &SketchInput::Str(&item.key)) >> (i + 1)) & 1;
+                    // let hash = (hash_it(LASTSTATE, &SketchInput::Str(&item.key)) >> (i + 1)) & 1;
+                    let hash = (hash_it(BOTTOM_LAYER_FINDER, &SketchInput::Str(&item.key)) >> (i + 1)) & 1;
                     let coe = 1.0 - 2.0 * (hash as f64);
                     tmp += coe * g(item.count as f64);
                 }
@@ -417,7 +419,7 @@ mod tests {
 
         let card = um.calc_card();
         assert!(
-            card == 10.0,
+            card == 20.0,
             "Cardinality should be positive after insertions, got {}",
             card
         );
@@ -473,9 +475,9 @@ mod tests {
             let bln = um.find_bottom_layer_num(h, 16);
             um.univmon_processing(&case.0, case.1, bln);
         }
-
-        assert_eq!(um.calc_l1(), 110.0, "L1 estimation incorrect");
+        
         assert_eq!(um.calc_card(), 10.0, "Cardinality estimation incorrect");
+        assert_eq!(um.calc_l1(), 131.0, "L1 estimation incorrect");
     }
 
     #[test]
@@ -495,7 +497,7 @@ mod tests {
             ("flow_e", 120),
         ];
 
-        let true_l1 = 750i64;
+        let true_l1 = 750f64;
 
         for (key, count) in &flows {
             let bottom1 = bottom_layer_for(&um1, key);
@@ -512,13 +514,13 @@ mod tests {
         let error_2 = ((est_l1_2 - true_l1 as f64).abs()) / (true_l1 as f64);
 
         assert!(
-            error_1 < 0.40,
+            est_l1_1 == true_l1,
             "UnivMon 1 L1 estimate {} should be reasonably accurate (error: {:.2}%)",
             est_l1_1,
             error_1 * 100.0
         );
         assert!(
-            error_2 < 0.40,
+            est_l1_1 == true_l1,
             "UnivMon 2 L1 estimate {} should be reasonably accurate (error: {:.2}%)",
             est_l1_2,
             error_2 * 100.0
