@@ -17,13 +17,156 @@
 
 ## API Overview
 
-### `SketchInput`
 
-`SketchInput` is the common entry point for data flowing into every sketch implementation. It supports four families of values so call sites do not need per-sketch conversions:
-- Integer counters: `I32`, `I64`, `U32`, `U64`
-- Floating point samples: `F32`, `F64`
-- Text keys: borrowed `Str` and owned `String`
-- Binary payloads: `Bytes`
+### Provided Enum
+
+There are some bbuilt-in enum to make it easier to use the sketch.
+
+#### `SketchInput`
+
+`SketchInput` is a unified enum wrapper that serves as the common entry point for data flowing into every sketch implementation. It supports multiple primitive types and formats, eliminating the need for per-sketch type conversions.
+
+**Signed Integers:**
+
+- `I8(i8)`, `I16(i16)`, `I32(i32)`, `I64(i64)`, `I128(i128)`, `ISIZE(isize)`
+
+**Unsigned Integers:**
+
+- `U8(u8)`, `U16(u16)`, `U32(u32)`, `U64(u64)`, `U128(u128)`, `USIZE(usize)`
+
+**Floating Point:**
+
+- `F32(f32)`, `F64(f64)`
+
+**Text/Binary:**
+
+- `Str(&'a str)` - borrowed string slice
+- `String(String)` - owned string
+- `Bytes(&'a [u8])` - borrowed byte slice
+
+Example usage:
+
+```rust
+use sketchlib_rust::SketchInput;
+
+let int_key = SketchInput::U64(12345);
+let str_key = SketchInput::Str("user_id");
+let string_key = SketchInput::String("event_name".to_string());
+let float_key = SketchInput::F64(3.14159);
+```
+
+### Supporting Types
+
+#### L2HH
+
+`L2HH` is an enum wrapper for Count Sketch variants that track both frequency estimates and L2 norm (second frequency moment). It is primarily used internally by UnivMon for multi-moment estimation.
+
+**Variants:**
+
+- `COUNT(CountL2HH)` - Count Sketch with L2 heavy-hitter tracking
+
+**Methods:**
+
+- `update_and_est(&mut self, key: &SketchInput, value: i64) -> f64` - Updates the sketch and returns the frequency estimate (includes L2 update)
+- `update_and_est_without_l2(&mut self, key: &SketchInput, value: i64) -> f64` - Updates without maintaining L2 state (faster for upper layers)
+- `get_l2(&self) -> f64` - Returns the current L2 norm estimate
+- `merge(&mut self, other: &L2HH)` - Merges another L2HH sketch
+
+Example usage in UnivMon context:
+
+```rust
+use sketchlib_rust::common::input::L2HH;
+use sketchlib_rust::CountL2HH;
+use sketchlib_rust::SketchInput;
+
+let mut l2hh = L2HH::COUNT(CountL2HH::with_dimensions(3, 2048));
+let key = SketchInput::Str("flow_id");
+
+// Update and get frequency estimate
+let freq = l2hh.update_and_est(&key, 1);
+println!("frequency: {}", freq);
+
+// Get L2 norm
+let l2_norm = l2hh.get_l2();
+println!("L2 norm: {}", l2_norm);
+```
+
+#### HydraQuery
+
+`HydraQuery` is an enum that specifies the type of query to perform on a Hydra sketch. Different sketch types support different query semantics.
+
+**Variants:**
+
+- `Frequency(SketchInput)` - Query the frequency/count of a specific item (for CountMin, Count, etc.)
+- `Quantile(f64)` - Query the CDF at a threshold value (for KLL, DDSketch, etc.)
+- `Cardinality` - Query the number of distinct elements (for HyperLogLog, etc.)
+
+Example usage:
+
+```rust
+use sketchlib_rust::common::input::{HydraQuery, HydraCounter};
+use sketchlib_rust::{Hydra, HllDf, SketchInput};
+
+// Create Hydra with HyperLogLog for cardinality queries
+let hll_template = HydraCounter::HLL(HllDf::new());
+let mut hydra = Hydra::with_dimensions(3, 128, hll_template);
+
+// Insert data
+for id in 0..1000 {
+    hydra.update("region=us-west", &SketchInput::U64(id));
+}
+
+// Query cardinality
+let card = hydra.query_key(vec!["region=us-west"], &HydraQuery::Cardinality);
+println!("distinct count: {}", card);
+```
+
+#### HydraCounter
+
+`HydraCounter` is an enum that wraps different sketch types for use within Hydra's multi-dimensional framework. Each variant supports specific query types.
+
+**Variants:**
+
+- `CM(CountMin)` - Count-Min Sketch for frequency queries
+- `HLL(HllDf)` - HyperLogLog for cardinality queries
+
+**Methods:**
+
+- `insert(&mut self, value: &SketchInput)` - Inserts a value into the underlying sketch
+- `query(&self, query: &HydraQuery) -> Result<f64, String>` - Queries the sketch; returns error if query type is incompatible
+- `merge(&mut self, other: &HydraCounter) -> Result<(), String>` - Merges another counter; returns error if types differ
+
+**Query Compatibility Matrix:**
+
+| Sketch Type | Frequency | Quantile | Cardinality |
+|-------------|-----------|----------|-------------|
+| CM          | ✓         | ✗        | ✗           |
+| HLL         | ✗         | ✗        | ✓           |
+
+Example usage:
+
+```rust
+use sketchlib_rust::common::input::{HydraCounter, HydraQuery};
+use sketchlib_rust::{CountMin, SketchInput};
+
+// Create a CountMin-based counter
+let mut counter = HydraCounter::CM(CountMin::with_dimensions(3, 64));
+
+// Insert values
+let key = SketchInput::String("event".into());
+counter.insert(&key);
+counter.insert(&key);
+
+// Query frequency (compatible)
+let freq = counter.query(&HydraQuery::Frequency(key)).unwrap();
+println!("frequency: {}", freq);
+
+// Query cardinality (incompatible - returns error)
+match counter.query(&HydraQuery::Cardinality) {
+    Ok(_) => println!("success"),
+    Err(e) => println!("error: {}", e), // "CountMin does not support cardinality queries"
+}
+```
 
 ### Core Sketches
 
@@ -331,40 +474,6 @@ let cdf = sketch.quantile(32.0);
 println!("fraction of samples <= 32 ≈ {cdf:.3}");
 ```
 
-#### HyperLogLog (cardinality)
-
-Stand up two HLL sketches.
-
-```rust
-use sketchlib_rust::sketches::{hll::HllDfModified, utils::SketchInput};
-
-let mut uniques = HllDfModified::new();
-let mut shard = HllDfModified::new();
-```
-
-Insert hashed values into each sketch.
-
-```rust
-for user in 0..10_000u64 {
-    uniques.insert(&SketchInput::U64(user));
-}
-for user in 5_000..7_500u64 {
-    shard.insert(&SketchInput::U64(user));
-}
-```
-
-Merge register state from the shard.
-
-```rust
-uniques.merge(&shard);
-```
-
-Read back the approximate cardinality.
-
-```rust
-println!("approximate distinct users = {}", uniques.get_est());
-```
-
 #### Elastic (heavy + light split)
 
 Create an Elastic sketch with a heavy bucket array.
@@ -422,69 +531,6 @@ Merge the shard back into the primary sketch.
 
 ```rust
 coco.merge(&shard);
-```
-
-#### CountUniv (signed frequency moments)
-
-Set up two CountUniv sketches to accumulate signed counts.
-
-```rust
-use sketchlib_rust::sketches::{count::CountUniv, utils::SketchInput};
-
-let mut traffic = CountUniv::init_countuniv_with_rc(3, 64);
-let mut replica = CountUniv::init_countuniv_with_rc(3, 64);
-let key = SketchInput::Str("db-query");
-```
-
-Apply positive deltas to both sketches.
-
-```rust
-traffic.insert_once(&key);
-traffic.insert_with_count(&key, 4);
-replica.insert_with_count(&key, 7);
-```
-
-Merge row-wise counters from the replica.
-
-```rust
-traffic.merge(&replica);
-```
-
-Recover the median estimate and l2 norm.
-
-```rust
-let est = traffic.get_est(&key);
-let l2 = traffic.get_l2();
-println!("signed estimate ≈ {est}, l2 norm ≈ {l2}");
-```
-
-#### UnivMon (multi-moment pyramid)
-
-Create the UnivMon pyramid and derive placement metadata.
-
-```rust
-use sketchlib_rust::sketches::{
-    univmon::UnivMon,
-    utils::{SketchInput, hash_it, LASTSTATE},
-};
-
-let mut sketch = UnivMon::init_univmon(32, 3, 1024, 4, 0);
-let key = "flow::123";
-let hash = hash_it(LASTSTATE, &SketchInput::Str(key));
-let bottom = sketch.find_bottom_layer_num(hash, sketch.layer);
-```
-
-Update every layer through the computed bottom.
-
-```rust
-sketch.update(key, 1, bottom);
-sketch.update(key, 1, bottom);
-```
-
-Read back aggregate signals such as cardinality.
-
-```rust
-println!("approximate cardinality = {}", sketch.calc_card());
 ```
 
 #### Locher (heavy hitter sampling)
@@ -551,38 +597,7 @@ println!("merged chapter estimate = {estimate}");
 
 When the underlying sketch does not implement an operation (for example, Locher lacks merge support today), `Chapter::merge` returns an error explaining the mismatch.
 
-### Coordinating multi-label sketches with Hydra
-
-`Hydra` fans a single transition across many `Chapter` instances, automatically building label combinations so queries can drill into any subset of tags. Its public `update` method accepts semicolon-delimited keys (for example `service=api;route=/search`) and replays the same `SketchInput` into every label combination before answering multidimensional queries via `Hydra::query_key`.
-
-Initialize the coordinator with a `Chapter` template.
-
-```rust
-use sketchlib_rust::{
-    sketchbook::{Chapter, Hydra},
-    sketches::{countmin::CountMin, utils::SketchInput},
-};
-
-let template = Chapter::CM(CountMin::init_cm_with_row_col(3, 64));
-let mut hydra = Hydra::new(3, 128, template);
-```
-
-Replay updates across every label combination.
-
-```rust
-let value = SketchInput::String("latency>250ms".into());
-hydra.update("service=api;route=/search", &value);
-hydra.update("service=api;route=/search", &value);
-```
-
-Query a subset of labels for the aggregated estimate.
-
-```rust
-let estimate = hydra.query_key(vec!["service=api", "route=/search"], &value);
-println!("2-D combination count ≈ {}", estimate);
-```
-
-### Time-bounded aggregates with Exponential Histogram
+### Exponential Histogram: Time-bounded aggregates
 
 Initialize the windowed coordinator with a sketch template.
 
