@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{CountL2HH, CountMin};
+use crate::{CountL2HH, CountMin, HllDf};
 
 /// enum to wrap input for sketch
 /// mainly supports primitive type
@@ -63,10 +63,93 @@ impl L2HH {
     }
 }
 
+/// Query type for Hydra sketches
+/// Different sketches support different query semantics
+#[derive(Clone, Debug)]
+pub enum HydraQuery<'a> {
+    /// Query for frequency of a specific item (for CountMin, Count, etc.)
+    Frequency(SketchInput<'a>),
+    /// Query for quantile/CDF at a threshold (for KLL, DDSketch, etc.)
+    Quantile(f64),
+    /// Query for cardinality (for HyperLogLog, etc.)
+    Cardinality,
+}
+
 /// enum that can be used as counter in Hydra
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum HydraCounter {
     CM(CountMin),
+    HLL(HllDf),
+}
+
+impl HydraCounter {
+    /// Insert a value into the counter sketch
+    /// This updates the underlying sketch with the given value
+    pub fn insert(&mut self, value: &SketchInput) {
+        match self {
+            HydraCounter::CM(cm) => cm.fast_insert(value),
+            HydraCounter::HLL(hll) => hll.insert(value),
+        }
+    }
+
+    /// Query the counter sketch with the appropriate query type
+    /// Returns the estimated statistic as f64
+    ///
+    /// # Arguments
+    /// * `query` - The query type (Frequency, Quantile, Cardinality, etc.)
+    ///
+    /// # Returns
+    /// * `Ok(f64)` - The estimated statistic
+    /// * `Err(String)` - Error message if query type is incompatible with sketch type
+    ///
+    /// # Examples
+    /// ```
+    /// // For CountMin, only Frequency queries are valid
+    /// let result = counter.query(&HydraQuery::Frequency(SketchInput::I64(42)));
+    ///
+    /// // For KLL, only Quantile queries would be valid
+    /// let result = counter.query(&HydraQuery::Quantile(0.5)); // median
+    /// ```
+    pub fn query(&self, query: &HydraQuery) -> Result<f64, String> {
+        match (self, query) {
+            (HydraCounter::CM(cm), HydraQuery::Frequency(value)) => {
+                Ok(cm.fast_estimate(value) as f64)
+            }
+            (HydraCounter::CM(_), HydraQuery::Quantile(_)) => {
+                Err("CountMin does not support quantile queries. Use a quantile sketch like KLL instead.".to_string())
+            }
+            (HydraCounter::CM(_), HydraQuery::Cardinality) => {
+                Err("CountMin does not support cardinality queries. Use HyperLogLog instead.".to_string())
+            }
+            (HydraCounter::HLL(_), HydraQuery::Frequency(_)) => {
+                Err("HyperLogLog does not support frequency queries. Use a frequency sketch like CM instead.".to_string())
+            },
+            (HydraCounter::HLL(_), HydraQuery::Quantile(_)) => {
+                Err("HyperLogLog does not support quantile queries. Use a quantile sketch like KLL instead.".to_string())
+            },
+            (HydraCounter::HLL(hll_df), HydraQuery::Cardinality) => {
+                Ok(hll_df.get_est() as f64)
+            },
+        }
+    }
+
+    /// Merge another HydraCounter into this one
+    /// Both counters must be of the same type
+    pub fn merge(&mut self, other: &HydraCounter) -> Result<(), String> {
+        match (self, other) {
+            (HydraCounter::CM(self_cm), HydraCounter::CM(other_cm)) => {
+                self_cm.merge(other_cm);
+                Ok(())
+            }
+            (HydraCounter::HLL(h1), HydraCounter::HLL(h2)) => {
+                h1.merge(h2);
+                Ok(())
+            },
+            (_,_) => {
+                Err("Sketch Type in Hydra Counter different, cannot merge".to_string())
+            },
+        }
+    }
 }
 
 /// A key-count pair used in heap-based sketches for tracking heavy hitters.

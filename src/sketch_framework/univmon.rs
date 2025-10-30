@@ -1,7 +1,6 @@
-use crate::BOTTOM_LAYER_FINDER;
 use crate::common::heap::HHHeap;
+use crate::common::{BOTTOM_LAYER_FINDER, SketchInput, hash_it};
 use crate::common::{L2HH, Vector1D};
-use crate::common::{LASTSTATE, SketchInput, hash_it};
 use crate::sketches::count::CountL2HH;
 use serde::{Deserialize, Serialize};
 
@@ -252,7 +251,8 @@ impl UnivMon {
                 if item.count > threshold {
                     // let hash = (hash_it(LASTSTATE, &item.key) >> (i+1)) & 1;
                     // let hash = (hash_it(LASTSTATE, &SketchInput::Str(&item.key)) >> (i + 1)) & 1;
-                    let hash = (hash_it(BOTTOM_LAYER_FINDER, &SketchInput::Str(&item.key)) >> (i + 1)) & 1;
+                    let hash =
+                        (hash_it(BOTTOM_LAYER_FINDER, &SketchInput::Str(&item.key)) >> (i + 1)) & 1;
                     let coe = 1.0 - 2.0 * (hash as f64);
                     tmp += coe * g(item.count as f64);
                 }
@@ -475,7 +475,7 @@ mod tests {
             let bln = um.find_bottom_layer_num(h, 16);
             um.univmon_processing(&case.0, case.1, bln);
         }
-        
+
         assert_eq!(um.calc_card(), 10.0, "Cardinality estimation incorrect");
         assert_eq!(um.calc_l1(), 131.0, "L1 estimation incorrect");
     }
