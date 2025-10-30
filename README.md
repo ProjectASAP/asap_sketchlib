@@ -431,6 +431,10 @@ At this moment, ```cargo test``` is a good starting point.
 - `deserializers::Record` and friends handle the hex framing that Arroyo UDFs produce before shipping to downstream consumers.
 - Enable the `arroyo` feature (`cargo build --features arroyo`) to compile the UDF plugin glue when embedding in Arroyo jobs.
 
+## Common Structure
+
+To build new sketch with the Common API, check [this](./docs/common_api.md)
+
 ## Optimization
 
 ### Single Hash Reuse
@@ -453,8 +457,8 @@ cargo bench --bench countmin
 
 - Format sources with `cargo fmt` before committing changes.
 - Lint with `cargo clippy --all-targets --all-features` to catch obvious mistakes across sketches and orchestration layers.
-- Run targeted binaries such as `cargo run --bin cm_test` when iterating on a specific sketch.
-- Regenerate serialized fixtures via the serializer binaries whenever sketch layouts change.
+<!-- - Run targeted binaries such as `cargo run --bin cm_test` when iterating on a specific sketch. -->
+<!-- - Regenerate serialized fixtures via the serializer binaries whenever sketch layouts change. -->
 
 ## Status & Next Steps
 
@@ -464,3 +468,7 @@ cargo bench --bench countmin
 - Contributions and experiment results are welcome—open an issue describing the workload or sketch you plan to add.
 - Missing many testing
 - Missing many serialization and deserialization support
+
+## Future Update TimeLine
+
+For planned future update, please check [timeline.md](./docs/timeline.md) for more detail.

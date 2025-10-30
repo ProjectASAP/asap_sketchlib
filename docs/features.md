@@ -33,6 +33,12 @@ This note captures the current surface area of the crate and the rough roadmap. 
 
 - **Parity across variants** — structured Count-Min still trails the legacy module for helpers like merge/debug. We must either match functionality or deprecate the old path.
 
+## Feature Explanation
+
+### Manually Implemented Hash
+
+Provide native xxhash algorithm
+
 ## Future Directions
 
 - Add **OctoSketch** as another sketch-serving coordinator.

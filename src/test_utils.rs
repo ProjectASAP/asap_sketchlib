@@ -1,3 +1,6 @@
+//! Common Functionality for Unit Tests
+//! Generate a atream of f64 under Zipf Distribution
+
 #![cfg(test)]
 
 use rand::SeedableRng;
