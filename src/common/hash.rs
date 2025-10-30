@@ -3,16 +3,31 @@ use twox_hash::{XxHash3_64, XxHash3_128, XxHash32};
 use super::SketchInput;
 
 pub const LASTSTATE: usize = 5;
+pub const BOTTOM_LAYER_FINDER: usize = 19;
 
 const MASK_32BITS: u64 = (1 << 32) - 1;
 
-pub const SEEDLIST: [u64; 6] = [
+pub const SEEDLIST: [u64; 20] = [
     0xcafe3553,
     0xade3415118,
     0x8cc70208,
     0x2f024b2b,
     0x451a3df5,
     0x6a09e667,
+    0xbb67ae85,
+    0x3c6ef372,
+    0xa54ff53a,
+    0x510e527f,
+    0x9b05688c,
+    0x1f83d9ab,
+    0x5be0cd19,
+    0xcbbb9d5d,
+    0x629a292a,
+    0x9159015a,
+    0x152fecd8,
+    0x67332667,
+    0x8eb44a87,
+    0xdb0c2e0d,
 ];
 
 /// I32, U32, F32 will all be treated as 64-bit value.

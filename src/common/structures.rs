@@ -1,3 +1,9 @@
+//! Common data structure that is served as basic building block
+//! Vector1D:
+//! Vector2D:
+//! Vector3D:
+//! CommonHeap:
+
 use std::ops::{Index, IndexMut};
 
 use serde::{Deserialize, Serialize};
@@ -48,8 +54,10 @@ impl<T> Vector1D<T> {
     }
 
     /// Creates a vector by cloning `value` `len` times.
-    pub fn filled(len: usize, value: T) -> Self 
-    where T: Clone,{
+    pub fn filled(len: usize, value: T) -> Self
+    where
+        T: Clone,
+    {
         Self {
             data: vec![value; len],
             length: len,
@@ -57,7 +65,10 @@ impl<T> Vector1D<T> {
     }
 
     /// Replaces the contents with `len` clones of `value`.
-    pub fn fill(&mut self, value: T) where T: Clone, {
+    pub fn fill(&mut self, value: T)
+    where
+        T: Clone,
+    {
         self.data.clear();
         self.data.resize(self.length, value);
         self.length = self.data.len();
@@ -435,5 +446,478 @@ impl<T> Vector3D<T> {
             row,
             col,
         }
+    }
+}
+
+/// Trait defining heap ordering behavior.
+/// Implement this trait to define custom heap orderings.
+pub trait CommonHeapOrder<T> {
+    /// Returns true if parent and child should be swapped.
+    /// This determines whether the heap is min or max, and what property to compare.
+    fn should_swap(&self, parent: &T, child: &T) -> bool;
+
+    /// Returns true if the new value should replace the root when heap is at capacity.
+    /// For min-heap: new value should be larger than root
+    /// For max-heap: new value should be smaller than root
+    fn should_replace_root(&self, root: &T, new_value: &T) -> bool;
+}
+
+/// Min-heap ordering: smaller values have higher priority (bubble up).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommonMinHeap;
+
+impl<T: Ord> CommonHeapOrder<T> for CommonMinHeap {
+    #[inline(always)]
+    fn should_swap(&self, parent: &T, child: &T) -> bool {
+        child < parent
+    }
+
+    #[inline(always)]
+    fn should_replace_root(&self, root: &T, new_value: &T) -> bool {
+        // For min-heap: replace root (minimum) if new value is larger
+        new_value > root
+    }
+}
+
+/// Max-heap ordering: larger values have higher priority (bubble up).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommonMaxHeap;
+
+impl<T: Ord> CommonHeapOrder<T> for CommonMaxHeap {
+    #[inline(always)]
+    fn should_swap(&self, parent: &T, child: &T) -> bool {
+        child > parent
+    }
+
+    #[inline(always)]
+    fn should_replace_root(&self, root: &T, new_value: &T) -> bool {
+        // For max-heap: replace root (maximum) if new value is smaller
+        new_value < root
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommonHeap<T, O: CommonHeapOrder<T>> {
+    data: Vec<T>,
+    size: usize,
+    order: O,
+}
+
+impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
+    /// Creates a new heap with the specified capacity and ordering.
+    pub fn with_capacity(capacity: usize, order: O) -> Self {
+        Self {
+            data: Vec::with_capacity(capacity),
+            size: capacity,
+            order,
+        }
+    }
+
+    /// Returns the number of elements currently in the heap.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Returns true if the heap is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Returns the maximum capacity of the heap.
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.size
+    }
+
+    /// Returns true if the heap is at full capacity.
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.data.len() >= self.size
+    }
+
+    /// Clears all elements from the heap.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
+
+    /// Returns a reference to the root element (min or max depending on order) without removing it.
+    #[inline]
+    pub fn peek(&self) -> Option<&T> {
+        self.data.first()
+    }
+
+    /// Returns a mutable reference to the root element without removing it.
+    #[inline]
+    pub fn peek_mut(&mut self) -> Option<&mut T> {
+        self.data.first_mut()
+    }
+
+    /// Inserts an element into the heap.
+    /// If the heap is at capacity, the root element is replaced if appropriate.
+    pub fn push(&mut self, value: T) {
+        if self.data.len() < self.size {
+            self.data.push(value);
+            self.bubble_up(self.data.len() - 1);
+        } else if !self.data.is_empty() && self.order.should_replace_root(&self.data[0], &value) {
+            // For bounded heap: replace root if new value should replace it
+            self.data[0] = value;
+            self.bubble_down(0);
+        }
+    }
+
+    /// Removes and returns the root element (min or max depending on order).
+    pub fn pop(&mut self) -> Option<T> {
+        if self.data.is_empty() {
+            return None;
+        }
+        if self.data.len() == 1 {
+            return self.data.pop();
+        }
+        let root = self.data.swap_remove(0);
+        self.bubble_down(0);
+        Some(root)
+    }
+
+    /// Updates an element at the given index and maintains heap property.
+    /// Returns true if the element was moved.
+    #[inline]
+    pub fn update_at(&mut self, index: usize) -> bool {
+        if index >= self.data.len() {
+            return false;
+        }
+        if !self.bubble_down(index) {
+            self.bubble_up(index);
+            true
+        } else {
+            true
+        }
+    }
+
+    /// Provides immutable access to the underlying data slice.
+    #[inline]
+    pub fn as_slice(&self) -> &[T] {
+        &self.data
+    }
+
+    /// Returns an iterator over heap elements (not in sorted order).
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.data.iter()
+    }
+
+    /// Returns a mutable iterator over heap elements.
+    /// Warning: Modifying elements may break heap invariants.
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.data.iter_mut()
+    }
+
+    /// Gets the index of the left child.
+    #[inline(always)]
+    fn left_child(i: usize) -> usize {
+        2 * i + 1
+    }
+
+    /// Gets the index of the right child.
+    #[inline(always)]
+    fn right_child(i: usize) -> usize {
+        2 * i + 2
+    }
+
+    /// Gets the index of the parent.
+    #[inline(always)]
+    fn parent(i: usize) -> usize {
+        (i.saturating_sub(1)) / 2
+    }
+
+    /// Bubbles an element down to maintain heap property.
+    /// Returns true if the element was moved.
+    fn bubble_down(&mut self, mut idx: usize) -> bool {
+        let start_idx = idx;
+        let len = self.data.len();
+
+        while idx < len {
+            let left = Self::left_child(idx);
+            let right = Self::right_child(idx);
+            let mut target = idx;
+
+            // Find which child (if any) should be swapped with parent
+            if left < len && self.order.should_swap(&self.data[target], &self.data[left]) {
+                target = left;
+            }
+            if right < len
+                && self
+                    .order
+                    .should_swap(&self.data[target], &self.data[right])
+            {
+                target = right;
+            }
+
+            if target == idx {
+                break;
+            }
+
+            self.data.swap(idx, target);
+            idx = target;
+        }
+
+        idx != start_idx
+    }
+
+    /// Bubbles an element up to maintain heap property.
+    fn bubble_up(&mut self, mut idx: usize) {
+        while idx > 0 {
+            let parent_idx = Self::parent(idx);
+            if self
+                .order
+                .should_swap(&self.data[parent_idx], &self.data[idx])
+            {
+                self.data.swap(parent_idx, idx);
+                idx = parent_idx;
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+// Convenience constructors for common heap types
+impl<T: Ord> CommonHeap<T, CommonMinHeap> {
+    /// Creates a new min-heap with the specified capacity.
+    #[inline]
+    pub fn new_min(capacity: usize) -> Self {
+        Self::with_capacity(capacity, CommonMinHeap)
+    }
+}
+
+impl<T: Ord> CommonHeap<T, CommonMaxHeap> {
+    /// Creates a new max-heap with the specified capacity.
+    #[inline]
+    pub fn new_max(capacity: usize) -> Self {
+        Self::with_capacity(capacity, CommonMaxHeap)
+    }
+}
+
+impl<T, O: CommonHeapOrder<T>> Index<usize> for CommonHeap<T, O> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.data[index]
+    }
+}
+
+impl<T, O: CommonHeapOrder<T>> IndexMut<usize> for CommonHeap<T, O> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.data[index]
+    }
+}
+
+#[cfg(test)]
+mod heap_tests {
+    use crate::{CommonHeap, CommonHeapOrder, CommonMaxHeap, CommonMinHeap, common::input::HHItem};
+
+    #[test]
+    fn test_min_heap_basic() {
+        let mut heap = CommonHeap::<i32, CommonMinHeap>::new_min(5);
+        heap.push(5);
+        heap.push(3);
+        heap.push(7);
+        heap.push(1);
+
+        assert_eq!(heap.peek(), Some(&1));
+        assert_eq!(heap.pop(), Some(1));
+        assert_eq!(heap.pop(), Some(3));
+        assert_eq!(heap.pop(), Some(5));
+        assert_eq!(heap.pop(), Some(7));
+        assert_eq!(heap.pop(), None);
+    }
+
+    #[test]
+    fn test_max_heap_basic() {
+        let mut heap = CommonHeap::<i32, CommonMaxHeap>::new_max(5);
+        heap.push(5);
+        heap.push(3);
+        heap.push(7);
+        heap.push(1);
+
+        assert_eq!(heap.peek(), Some(&7));
+        assert_eq!(heap.pop(), Some(7));
+        assert_eq!(heap.pop(), Some(5));
+        assert_eq!(heap.pop(), Some(3));
+        assert_eq!(heap.pop(), Some(1));
+        assert_eq!(heap.pop(), None);
+    }
+
+    #[test]
+    fn test_bounded_heap_capacity() {
+        let mut heap = CommonHeap::<i32, CommonMinHeap>::new_min(3);
+
+        heap.push(5);
+        heap.push(3);
+        heap.push(7);
+        assert_eq!(heap.len(), 3);
+
+        // Should not grow beyond capacity
+        heap.push(1);
+        assert_eq!(heap.len(), 3);
+
+        // Smallest should be replaced by larger value since it's a min heap
+        heap.push(10);
+        assert_eq!(heap.len(), 3);
+
+        // Should contain 5, 7, 10 (1 and 3 were kicked out)
+        let mut vals: Vec<i32> = vec![];
+        while let Some(v) = heap.pop() {
+            vals.push(v);
+        }
+        vals.sort();
+        assert_eq!(vals, vec![5, 7, 10]);
+    }
+
+    #[test]
+    fn test_update_at() {
+        let mut heap = CommonHeap::<i32, CommonMinHeap>::new_min(5);
+        heap.push(10);
+        heap.push(20);
+        heap.push(5);
+
+        // Modify element and update heap
+        heap[1] = 3;
+        heap.update_at(1);
+
+        assert_eq!(heap.peek(), Some(&3));
+    }
+
+    #[test]
+    fn test_custom_struct_with_ord() {
+        let mut heap = CommonHeap::<HHItem, CommonMinHeap>::new_min(3);
+        heap.push(HHItem::new("five".to_string(), 5));
+        heap.push(HHItem::new("three".to_string(), 3));
+        heap.push(HHItem::new("seven".to_string(), 7));
+
+        assert_eq!(heap.peek().map(|item| item.count), Some(3));
+    }
+
+    #[test]
+    fn test_topk_use_case() {
+        // Simulates TopKHeap use case: maintain top-K items by count
+        // Use min-heap so smallest is at root and can be evicted
+
+        // Create a min-heap with capacity 3 to keep top-3 items
+        let mut heap = CommonHeap::<HHItem, CommonMinHeap>::new_min(3);
+
+        // Insert items (simulating TopKHeap behavior)
+        for i in 1..=5 {
+            heap.push(HHItem::new(format!("key-{}", i), i));
+        }
+
+        // Should keep top 3: counts 3, 4, 5
+        assert_eq!(heap.len(), 3);
+        let mut counts: Vec<i64> = heap.iter().map(|item| item.count).collect();
+        counts.sort_unstable();
+        assert_eq!(counts, vec![3, 4, 5]);
+
+        // Test finding an item (linear search like TopKHeap::find)
+        let found = heap.iter().find(|item| item.key == "key-4");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().count, 4);
+    }
+
+    #[test]
+    fn test_heap_size() {
+        // Verify that MinHeap/MaxHeap add zero overhead
+        use std::mem::size_of;
+
+        let vec_size = size_of::<Vec<u64>>();
+        let heap_min_size = size_of::<CommonHeap<u64, CommonMinHeap>>();
+        let heap_max_size = size_of::<CommonHeap<u64, CommonMaxHeap>>();
+
+        println!("Vec<u64> size: {}", vec_size);
+        println!("Heap<u64, MinHeap> size: {}", heap_min_size);
+        println!("Heap<u64, MaxHeap> size: {}", heap_max_size);
+
+        // Vec is (ptr, capacity, len) = 24 bytes on 64-bit
+        // Our heap is (Vec, usize, O) where O is zero-sized
+        // So it should be 24 + 8 = 32 bytes
+        assert_eq!(heap_min_size, vec_size + size_of::<usize>());
+        assert_eq!(heap_max_size, vec_size + size_of::<usize>());
+    }
+
+    #[test]
+    fn test_topk_with_custom_comparator() {
+        // Example of custom heap ordering (though Item already has Ord by count)
+        // This demonstrates how to create custom orderings
+        #[derive(Clone)]
+        struct CompareByCount;
+
+        impl CommonHeapOrder<HHItem> for CompareByCount {
+            fn should_swap(&self, parent: &HHItem, child: &HHItem) -> bool {
+                child.count < parent.count
+            }
+
+            fn should_replace_root(&self, root: &HHItem, new_value: &HHItem) -> bool {
+                new_value.count > root.count
+            }
+        }
+
+        let mut heap = CommonHeap::<HHItem, CompareByCount>::with_capacity(3, CompareByCount);
+
+        heap.push(HHItem::new("a".to_string(), 5));
+        heap.push(HHItem::new("b".to_string(), 3));
+        heap.push(HHItem::new("c".to_string(), 7));
+        heap.push(HHItem::new("d".to_string(), 1)); // Won't be added
+        heap.push(HHItem::new("e".to_string(), 10)); // Will replace min
+
+        assert_eq!(heap.len(), 3);
+        let min_count = heap.peek().map(|item| item.count);
+        assert_eq!(min_count, Some(5)); // 5 is now the minimum in the heap
+    }
+
+    #[test]
+    fn test_exact_topk_heap_replacement() {
+        // This test demonstrates EXACT TopKHeap behavior using generic Heap
+
+        // TopKHeap::init_heap(3) equivalent:
+        let mut heap = CommonHeap::<HHItem, CommonMinHeap>::new_min(3);
+
+        // TopKHeap::update("key-1", 1) equivalent:
+        let find_and_update =
+            |heap: &mut CommonHeap<HHItem, CommonMinHeap>, key: &str, count: i64| {
+                // TopKHeap::find() equivalent:
+                let idx_opt = heap.iter().position(|item| item.key == key);
+
+                if let Some(idx) = idx_opt {
+                    // Found: update count
+                    heap[idx].count = count;
+                    heap.update_at(idx);
+                } else {
+                    // Not found: insert (TopKHeap::insert equivalent)
+                    heap.push(HHItem::new(key.to_string(), count));
+                }
+            };
+
+        // Replicate the exact test from TopKHeap
+        for i in 1..=5 {
+            let key = format!("key-{}", i);
+            find_and_update(&mut heap, &key, i);
+        }
+
+        // Should match TopKHeap behavior exactly
+        assert_eq!(heap.len(), 3);
+        let mut counts: Vec<i64> = heap.iter().map(|item| item.count).collect();
+        counts.sort_unstable();
+        assert_eq!(counts, vec![3, 4, 5]); // Same as TopKHeap test!
+
+        // TopKHeap::find() equivalent:
+        let found = heap.iter().find(|item| item.key == "key-4");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().count, 4);
+
+        // TopKHeap::clean() equivalent:
+        heap.clear();
+        assert!(heap.is_empty());
     }
 }

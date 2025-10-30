@@ -202,8 +202,8 @@ pub struct CountL2HH {
     l2: Vector1D<i64>,
     row: usize,
     col: usize,
+    seed_idx: usize,
 }
-
 
 impl Default for CountL2HH {
     fn default() -> Self {
@@ -213,11 +213,16 @@ impl Default for CountL2HH {
 
 impl CountL2HH {
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
+        Self::with_dimensions_and_seed(rows, cols, 0)
+    }
+
+    pub fn with_dimensions_and_seed(rows: usize, cols: usize, seed_idx: usize) -> Self {
         let mut sk = CountL2HH {
             counts: Vector2D::init(rows, cols),
             l2: Vector1D::init(rows),
             row: rows,
             col: cols,
+            seed_idx,
         };
         sk.counts.fill(0);
         sk.l2.fill(0);
@@ -259,33 +264,10 @@ impl CountL2HH {
         }
     }
 
-    // pub fn insert_once<T: Hash+?Sized>(&mut self, val: &T) {
-    //     self.insert_with_count(val, 1);
-    // }
-    pub fn insert_once(&mut self, val: &SketchInput) {
-        self.insert_with_count(val, 1);
-    }
-
-    pub fn insert_with_count(&mut self, val: &SketchInput, c: i64) {
-        for i in 0..self.row {
-            let hashed = hash_it_to_128(i, val);
-            let idx = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
-            let bit = ((hashed >> 127) & 1) as i64;
-            let sign_bit = -(1 - 2 * bit);
-
-            let old_value = self.counts[i][idx];
-            let new_value = old_value + sign_bit * c;
-            self.counts[i][idx] = new_value;
-
-            let old_l2 = self.l2[i];
-            let new_l2 = old_l2 + new_value * new_value - old_value * old_value;
-            self.l2[i] = new_l2;
-        }
-    }
-
     /// Inserts with hash optimization - computes hash once and reuses it.
+    /// due to the limitation of seeds, use fast_insert only
     pub fn fast_insert_with_count(&mut self, val: &SketchInput, c: i64) {
-        let hashed_val = hash_it_to_128(0, val);
+        let hashed_val = hash_it_to_128(self.seed_idx, val);
         self.fast_insert_with_count_and_hash(hashed_val, c);
     }
 
@@ -315,20 +297,10 @@ impl CountL2HH {
         }
     }
 
-    pub fn insert_with_count_without_l2(&mut self, val: &SketchInput, c: i64) {
-        for i in 0..self.row {
-            let hashed = hash_it_to_128(i, val);
-            let idx = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
-            let bit = ((hashed >> 127) & 1) as i64;
-            let sign_bit = -(1 - 2 * bit);
-
-            self.counts[i][idx] += sign_bit * c;
-        }
-    }
-
     /// Inserts without L2 update using hash optimization.
+    /// due to the limitation of seeds, use fast_insert only
     pub fn fast_insert_with_count_without_l2(&mut self, val: &SketchInput, c: i64) {
-        let hashed_val = hash_it_to_128(0, val);
+        let hashed_val = hash_it_to_128(self.seed_idx, val);
         self.fast_insert_with_count_without_l2_and_hash(hashed_val, c);
     }
 
@@ -345,33 +317,25 @@ impl CountL2HH {
             let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
             let sign_bit = -(1 - 2 * bit);
 
-            self.counts[i][idx] += sign_bit*c;
+            self.counts[i][idx] += sign_bit * c;
 
             shift_amount += mask_bits;
             sign_bit_pos -= 1;
         }
     }
 
-    pub fn update_and_est(&mut self, val: &SketchInput, c: i64) -> f64 {
-        self.insert_with_count(val, c);
-        self.get_est(val)
-    }
-
-    pub fn update_and_est_without_l2(&mut self, val: &SketchInput, c: i64) -> f64 {
-        self.insert_with_count_without_l2(val, c);
-        self.get_est(val)
-    }
-
     /// Update and estimate with hash optimization.
+    /// due to the limitation of seeds, use fast_insert only
     pub fn fast_update_and_est(&mut self, val: &SketchInput, c: i64) -> f64 {
-        let hashed_val = hash_it_to_128(0, val);
+        let hashed_val = hash_it_to_128(self.seed_idx, val);
         self.fast_insert_with_count_and_hash(hashed_val, c);
         self.fast_get_est_with_hash(hashed_val)
     }
 
     /// Update and estimate without L2 with hash optimization.
+    /// due to the limitation of seeds, use fast_insert only
     pub fn fast_update_and_est_without_l2(&mut self, val: &SketchInput, c: i64) -> f64 {
-        let hashed_val = hash_it_to_128(0, val);
+        let hashed_val = hash_it_to_128(self.seed_idx, val);
         self.fast_insert_with_count_without_l2_and_hash(hashed_val, c);
         self.fast_get_est_with_hash(hashed_val)
     }
@@ -401,38 +365,15 @@ impl CountL2HH {
         return l2.sqrt();
     }
 
-    pub fn get_est(&self, val: &SketchInput) -> f64 {
-        let mut lst = Vec::new();
-        for i in 0..self.row {
-            let hashed = hash_it_to_128(i, val);
-            let idx = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
-            let bit = ((hashed >> 127) & 1) as i64;
-            let sign_bit = -(1 - 2 * bit);
-            let counter = self.counts.query_one_counter(i, idx);
-            lst.push(sign_bit * counter);
-        }
-        lst.sort();
-        // get median
-        if self.row == 1 {
-            return lst[0] as f64;
-        } else if self.row == 2 {
-            return (lst[0] + lst[1]) as f64 / 2.0;
-        } else if self.row == 3 {
-            return lst[1] as f64;
-        } else if self.row % 2 == 0 {
-            return (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0;
-        } else {
-            return lst[self.row / 2] as f64;
-        }
-    }
-
     /// Returns the frequency estimate with hash optimization.
+    /// due to the limitation of seeds, use fast_insert only
     pub fn fast_get_est(&self, val: &SketchInput) -> f64 {
-        let hashed_val = hash_it_to_128(0, val);
+        let hashed_val = hash_it_to_128(self.seed_idx, val);
         self.fast_get_est_with_hash(hashed_val)
     }
 
     /// Returns the frequency estimate using precomputed hash value.
+    /// due to the limitation of seeds, use fast_insert only
     pub fn fast_get_est_with_hash(&self, hashed_val: u128) -> f64 {
         let mask_bits = self.counts.get_mask_bits() as usize;
         let mask = (1u128 << mask_bits) - 1;
@@ -786,10 +727,10 @@ mod tests {
         let mut sketch = CountL2HH::with_dimensions(3, 32);
         let key = SketchInput::Str("gamma");
 
-        let est_after_first = sketch.update_and_est(&key, 5);
+        let est_after_first = sketch.fast_update_and_est(&key, 5);
         assert_eq!(est_after_first, 5.0);
 
-        let est_after_second = sketch.update_and_est(&key, -2);
+        let est_after_second = sketch.fast_update_and_est(&key, -2);
         assert_eq!(est_after_second, 3.0);
 
         let l2 = sketch.get_l2();
@@ -802,11 +743,12 @@ mod tests {
         let mut right = CountL2HH::with_dimensions(3, 32);
         let key = SketchInput::U32(42);
 
-        left.insert_with_count(&key, 4);
-        right.insert_with_count(&key, 9);
+        left.fast_insert_with_count(&key, 4);
+        assert_eq!(left.fast_get_est(&key), 4.0);
+        right.fast_insert_with_count(&key, 9);
+        assert_eq!(right.fast_get_est(&key), 9.0);
 
         left.merge(&right);
-        assert_eq!(left.get_est(&key), 13.0);
+        assert_eq!(left.fast_get_est(&key), 13.0);
     }
 }
-

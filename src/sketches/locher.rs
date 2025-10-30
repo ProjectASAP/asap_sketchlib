@@ -1,5 +1,6 @@
-use super::heap::TopKHeap;
+use crate::HHHeap;
 use crate::{SketchInput, hash_it};
+use crate::{Vector1D, Vector2D};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
@@ -7,21 +8,14 @@ use std::cmp::Ordering;
 pub struct LocherSketch {
     pub r: usize,
     pub l: usize,
-    pub rows: Vec<Vec<TopKHeap>>,
-    pub row_sum: Vec<f64>,
+    pub rows: Vector2D<HHHeap>,
+    pub row_sum: Vector1D<f64>,
 }
 
 impl LocherSketch {
     pub fn new(r: usize, l: usize, k: usize) -> Self {
-        let mut rows = Vec::with_capacity(r);
-        for _ in 0..r {
-            let mut v = Vec::with_capacity(l);
-            for _ in 0..l {
-                v.push(TopKHeap::init_heap(k as u32));
-            }
-            rows.push(v);
-        }
-        let row_sum = vec![0.0; r];
+        let rows = Vector2D::from_fn(r, l, |_row, _col| HHHeap::new(k));
+        let row_sum = Vector1D::filled(r, 0.0);
 
         Self {
             r,
@@ -36,7 +30,7 @@ impl LocherSketch {
             let idx = hash_it(i, &&SketchInput::String(e.clone())) as usize % self.l;
             let cell = &mut self.rows[i][idx];
             let before = match cell.find(e) {
-                Some(idx) => cell.heap[idx].count,
+                Some(heap_idx) => cell.heap()[heap_idx].count,
                 None => 0,
             };
             // println!("check e: {}", e);
@@ -44,7 +38,7 @@ impl LocherSketch {
             self.row_sum[i] -= before as f64;
             cell.update(e, before + 1);
             let after = match cell.find(e) {
-                Some(idx) => cell.heap[idx].count,
+                Some(heap_idx) => cell.heap()[heap_idx].count,
                 None => 0,
             };
             // println!("after is: {}", after);
@@ -58,7 +52,7 @@ impl LocherSketch {
             let idx = hash_it(i, &SketchInput::Str(e)) as usize % self.l;
             // let est = self.rows[i][idx].find(e).unwrap_or(0);
             let est = match self.rows[i][idx].find(e) {
-                Some(v) => self.rows[i][idx].heap[v].count,
+                Some(v) => self.rows[i][idx].heap()[v].count,
                 None => 0,
             };
             let others = self.row_sum[i] - est as f64;

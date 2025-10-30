@@ -14,13 +14,8 @@ pub enum Chapter<'a> {
     HLL(HllDf),
     KLL(KLL),
     UNIFORM(UniformSampling),
-    LOCHER(LocherSketch),
-    UNIVMON(UnivMon),
-}
-
-#[derive(Clone, Debug)]
-pub enum L2HH {
-    // COUNT(VectorCount),
+    // LOCHER(LocherSketch),
+    // UNIVMON(UnivMon),
 }
 
 // impl L2HH {
@@ -101,7 +96,7 @@ impl<'a> Chapter<'a> {
         match self {
             Chapter::CM(sketch) => sketch.insert_cm(val),
             Chapter::COCO(sketch) => sketch.insert(val, 1),
-            Chapter::CU(sketch) => sketch.insert_once(val),
+            Chapter::CU(sketch) => sketch.fast_insert_with_count(val, 1),
             Chapter::ELASTIC(sketch) => match val {
                 SketchInput::String(s) => sketch.insert(s.to_string()),
                 SketchInput::I32(i) => sketch.insert(i.to_string()),
@@ -128,22 +123,21 @@ impl<'a> Chapter<'a> {
             Chapter::KLL(sketch) => sketch.update(iv_to_f64(val)),
             Chapter::UNIFORM(sketch) => {
                 let _ = sketch.update_input(val);
-            }
-            Chapter::LOCHER(sketch) => {
-                // Locher requires a String
-                if let SketchInput::String(s) = val {
-                    sketch.insert(s, 1);
-                }
-            }
-            Chapter::UNIVMON(sketch) => {
-                // UnivMon requires update with key, value, bottom_layer_num
-                // Using default bottom_layer_num of 0
-                if let SketchInput::Str(s) = val {
-                    sketch.update(s, 1, 0);
-                } else if let SketchInput::String(s) = val {
-                    sketch.update(s.as_str(), 1, 0);
-                }
-            }
+            } // Chapter::LOCHER(sketch) => {
+              //     // Locher requires a String
+              //     if let SketchInput::String(s) = val {
+              //         sketch.insert(s, 1);
+              //     }
+              // }
+              // Chapter::UNIVMON(sketch) => {
+              //     // UnivMon requires update with key, value, bottom_layer_num
+              //     // Using default bottom_layer_num of 0
+              //     if let SketchInput::Str(s) = val {
+              //         sketch.update(s, 1, 0);
+              //     } else if let SketchInput::String(s) = val {
+              //         sketch.update(s.as_str(), 1, 0);
+              //     }
+              // }
         }
     }
 
@@ -179,10 +173,10 @@ impl<'a> Chapter<'a> {
             //     s.merge(o);
             //     Ok(())
             // }, // not yet
-            (Chapter::UNIVMON(s), Chapter::UNIVMON(o)) => {
-                s.merge_with(o);
-                Ok(())
-            }
+            // (Chapter::UNIVMON(s), Chapter::UNIVMON(o)) => {
+            //     s.merge_with(o);
+            //     Ok(())
+            // }
             _ => Err("Cannot merge sketches of different types"),
         }
     }
@@ -191,7 +185,7 @@ impl<'a> Chapter<'a> {
         match (self, key) {
             (Chapter::CM(count_min), _) => Ok(count_min.get_est(key) as f64),
             (Chapter::COCO(coco), _) => Ok(coco.clone().estimate(key.clone()) as f64),
-            (Chapter::CU(count_univ), _) => Ok(count_univ.get_est(key) as f64),
+            (Chapter::CU(count_univ), _) => Ok(count_univ.fast_get_est(key) as f64),
             (Chapter::ELASTIC(elastic), SketchInput::String(s)) => {
                 Ok(elastic.clone().query(s.clone()) as f64)
             }
@@ -224,7 +218,7 @@ impl<'a> Chapter<'a> {
                 "total_seen" => Ok(sampler.total_seen() as f64),
                 _ => Err("Unsupported command for UniformSampling"),
             },
-            (Chapter::LOCHER(locher_sketch), SketchInput::Str(s)) => Ok(locher_sketch.estimate(*s)),
+            // (Chapter::LOCHER(locher_sketch), SketchInput::Str(s)) => Ok(locher_sketch.estimate(*s)),
             _ => Err("Parameter type and Sketch Type Mismatched"),
         }
     }
@@ -239,8 +233,8 @@ impl<'a> Chapter<'a> {
             Chapter::HLL(_) => "HLL",
             Chapter::KLL(_) => "KLL",
             Chapter::UNIFORM(_) => "UniformSampling",
-            Chapter::LOCHER(_) => "Locher",
-            Chapter::UNIVMON(_) => "UnivMon",
+            // Chapter::LOCHER(_) => "Locher",
+            // Chapter::UNIVMON(_) => "UnivMon",
         }
     }
 }
