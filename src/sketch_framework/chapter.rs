@@ -9,7 +9,7 @@ pub enum Chapter<'a> {
     CM(CountMin),
     #[serde(borrow)]
     COCO(Coco<'a>),
-    CU(CountUniv),
+    CU(CountL2HH),
     ELASTIC(Elastic),
     HLL(HllDf),
     KLL(KLL),

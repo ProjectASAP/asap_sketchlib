@@ -4,7 +4,7 @@ pub use coco::Coco;
 
 pub mod count;
 pub use count::Count;
-pub use count::CountUniv;
+pub use count::CountL2HH;
 
 pub mod countmin;
 pub use countmin::CountMin;

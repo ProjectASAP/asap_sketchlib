@@ -1,4 +1,4 @@
-use super::{CountUniv, TopKHeap};
+use super::{CountL2HH, TopKHeap};
 use crate::common::{LASTSTATE, SketchInput, hash_it};
 use serde::{Deserialize, Serialize};
 
@@ -8,7 +8,7 @@ pub struct UnivMon {
     pub row: usize,
     pub col: usize,
     pub layer: usize,
-    pub cs_layers: Vec<CountUniv>,
+    pub cs_layers: Vec<CountL2HH>,
     pub hh_layers: Vec<TopKHeap>,
     pub max_time: usize, // as most machine will be 64 bit, usize should suffice
     pub min_time: usize, // for sliding window model
@@ -35,7 +35,7 @@ impl UnivMon {
         for _ in 0..l {
             // every Count sketch will have different seeds
             // not sure if this is going to be a problem
-            um.cs_layers.push(CountUniv::init_count());
+            um.cs_layers.push(CountL2HH::default());
             um.hh_layers.push(TopKHeap::init_heap(k as u32));
         }
         um
@@ -66,17 +66,17 @@ impl UnivMon {
                 // every Count sketch will have different seeds
                 // not sure if this is going to be a problem
                 um.cs_layers
-                    .push(CountUniv::init_countuniv_with_rc(3, 2048));
+                    .push(CountL2HH::with_dimensions(3, 2048));
                 um.hh_layers.push(TopKHeap::init_heap(k as u32));
             }
         } else {
             for _ in 0..8 {
                 um.cs_layers
-                    .push(CountUniv::init_countuniv_with_rc(3, 2048));
+                    .push(CountL2HH::with_dimensions(3, 2048));
                 um.hh_layers.push(TopKHeap::init_heap(100));
             }
             for _ in 8..l {
-                um.cs_layers.push(CountUniv::init_countuniv_with_rc(3, 512));
+                um.cs_layers.push(CountL2HH::with_dimensions(3, 512));
                 um.hh_layers.push(TopKHeap::init_heap(100));
             }
         }
@@ -298,14 +298,7 @@ impl UnivMon {
 
     pub fn merge_with(&mut self, other: &UnivMon) {
         for i in 0..self.layer {
-            let row = self.cs_layers[i].row;
-            let col = self.cs_layers[i].col;
-
-            for j in 0..row {
-                for k in 0..col {
-                    self.cs_layers[i].matrix[j][k] += other.cs_layers[i].matrix[j][k];
-                }
-            }
+            self.cs_layers[i].merge(&other.cs_layers[i]);
 
             let mut topk = TopKHeap::init_heap(self.k as u32);
             for item in &self.hh_layers[i].heap {

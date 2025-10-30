@@ -60,8 +60,7 @@ impl CountMin {
         for r in 0..self.row {
             let hashed = hash_it_to_128(r, value);
             let col = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
-            self.counts
-                .update_one_counter(r, col, |a, b| *a += b, 1_u64);
+            self.counts[r][col] += 1;
         }
     }
 
@@ -84,7 +83,8 @@ impl CountMin {
             let hashed = hash_it_to_128(r, value);
             let col = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
             // let idx = row * cols + col;
-            min = min.min(self.counts.query_one_counter(r, col));
+            // min = min.min(self.counts.query_one_counter(r, col));
+            min = min.min(self.counts[r][col]);
         }
         min
     }
@@ -105,12 +105,7 @@ impl CountMin {
 
         for i in 0..self.row {
             for j in 0..self.col {
-                self.counts.update_one_counter(
-                    i,
-                    j,
-                    |a, b| *a += b,
-                    other.counts.query_one_counter(i, j),
-                );
+                self.counts[i][j] += other.counts[i][j];
             }
         }
     }

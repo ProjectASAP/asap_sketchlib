@@ -33,12 +33,12 @@ impl ToF64 for i32 {
 
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Vector1D<T: Clone> {
+pub struct Vector1D<T> {
     data: Vec<T>,
     length: usize,
 }
 
-impl<T: Clone> Vector1D<T> {
+impl<T> Vector1D<T> {
     /// Creates an empty vector with reserved capacity.
     pub fn init(len: usize) -> Self {
         Self {
@@ -48,7 +48,8 @@ impl<T: Clone> Vector1D<T> {
     }
 
     /// Creates a vector by cloning `value` `len` times.
-    pub fn filled(len: usize, value: T) -> Self {
+    pub fn filled(len: usize, value: T) -> Self 
+    where T: Clone,{
         Self {
             data: vec![value; len],
             length: len,
@@ -56,7 +57,7 @@ impl<T: Clone> Vector1D<T> {
     }
 
     /// Replaces the contents with `len` clones of `value`.
-    pub fn fill(&mut self, value: T) {
+    pub fn fill(&mut self, value: T) where T: Clone, {
         self.data.clear();
         self.data.resize(self.length, value);
         self.length = self.data.len();
@@ -130,12 +131,28 @@ impl<T: Clone> Vector1D<T> {
     }
 
     /// Applies an update to a single cell via the supplied operator.
-    pub fn update_one_counter<F>(&mut self, pos: usize, op: F, value: T)
+    pub fn update_one_counter<F, V>(&mut self, pos: usize, op: F, value: V)
     where
-        F: Fn(T, T) -> T,
+        F: Fn(&mut T, V),
         T: Clone,
     {
-        self.data[pos] = op(self.data[pos].clone(), value);
+        op(&mut self.data[pos], value);
+    }
+}
+
+impl<T> Index<usize> for Vector1D<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        debug_assert!(index < self.length, "index out of bounds");
+        &self.data[index]
+    }
+}
+
+impl<T> IndexMut<usize> for Vector1D<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        debug_assert!(index < self.length, "index out of bounds");
+        &mut self.data[index]
     }
 }
 
@@ -273,6 +290,7 @@ impl<T> Vector2D<T> {
     }
 
     /// Reads a single counter by `(row, col)`.
+    /// seems to be faster than [][] operation
     pub fn query_one_counter(&self, row: usize, col: usize) -> T
     where
         T: Clone,

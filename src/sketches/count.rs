@@ -1,4 +1,4 @@
-use crate::{LASTSTATE, SketchInput, Vector2D, hash_it, hash_it_to_128};
+use crate::{SketchInput, Vector1D, Vector2D, hash_it_to_128};
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
@@ -197,11 +197,274 @@ impl Count {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct CountUniv {
-    pub row: usize,
-    pub col: usize,
-    pub matrix: Vec<Vec<i64>>,
-    pub l2: Vec<i64>,
+pub struct CountL2HH {
+    counts: Vector2D<i64>,
+    l2: Vector1D<i64>,
+    row: usize,
+    col: usize,
+}
+
+
+impl Default for CountL2HH {
+    fn default() -> Self {
+        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+    }
+}
+
+impl CountL2HH {
+    pub fn with_dimensions(rows: usize, cols: usize) -> Self {
+        let mut sk = CountL2HH {
+            counts: Vector2D::init(rows, cols),
+            l2: Vector1D::init(rows),
+            row: rows,
+            col: cols,
+        };
+        sk.counts.fill(0);
+        sk.l2.fill(0);
+        sk
+    }
+
+    /// Number of rows in the sketch.
+    pub fn rows(&self) -> usize {
+        self.row
+    }
+
+    /// Number of columns in the sketch.
+    pub fn cols(&self) -> usize {
+        self.col
+    }
+
+    /// Exposes the backing matrix for inspection/testing.
+    pub fn as_storage(&self) -> &Vector2D<i64> {
+        &self.counts
+    }
+
+    /// Mutable access used internally for testing scenarios.
+    pub fn as_storage_mut(&mut self) -> &mut Vector2D<i64> {
+        &mut self.counts
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        assert_eq!(
+            (self.row, self.col),
+            (other.row, other.col),
+            "dimension mismatch while merging CountL2HH sketches"
+        );
+
+        for i in 0..self.row {
+            for j in 0..self.col {
+                self.counts[i][j] += other.counts[i][j];
+            }
+            self.l2[i] = other.l2[i];
+        }
+    }
+
+    // pub fn insert_once<T: Hash+?Sized>(&mut self, val: &T) {
+    //     self.insert_with_count(val, 1);
+    // }
+    pub fn insert_once(&mut self, val: &SketchInput) {
+        self.insert_with_count(val, 1);
+    }
+
+    pub fn insert_with_count(&mut self, val: &SketchInput, c: i64) {
+        for i in 0..self.row {
+            let hashed = hash_it_to_128(i, val);
+            let idx = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
+            let bit = ((hashed >> 127) & 1) as i64;
+            let sign_bit = -(1 - 2 * bit);
+
+            let old_value = self.counts[i][idx];
+            let new_value = old_value + sign_bit * c;
+            self.counts[i][idx] = new_value;
+
+            let old_l2 = self.l2[i];
+            let new_l2 = old_l2 + new_value * new_value - old_value * old_value;
+            self.l2[i] = new_l2;
+        }
+    }
+
+    /// Inserts with hash optimization - computes hash once and reuses it.
+    pub fn fast_insert_with_count(&mut self, val: &SketchInput, c: i64) {
+        let hashed_val = hash_it_to_128(0, val);
+        self.fast_insert_with_count_and_hash(hashed_val, c);
+    }
+
+    /// Inserts with hash optimization using precomputed hash value.
+    pub fn fast_insert_with_count_and_hash(&mut self, hashed_val: u128, c: i64) {
+        let mask_bits = self.counts.get_mask_bits() as usize;
+        let mask = (1u128 << mask_bits) - 1;
+        let mut shift_amount = 0;
+        let mut sign_bit_pos = 127;
+
+        for i in 0..self.row {
+            let hashed = (hashed_val >> shift_amount) & mask;
+            let idx = (hashed as usize) % self.col;
+            let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
+            let sign_bit = -(1 - 2 * bit);
+
+            let old_value = self.counts.query_one_counter(i, idx);
+            let new_value = old_value + sign_bit * c;
+            self.counts[i][idx] = new_value;
+
+            let old_l2 = self.l2.as_slice()[i];
+            let new_l2 = old_l2 + new_value * new_value - old_value * old_value;
+            self.l2[i] = new_l2;
+
+            shift_amount += mask_bits;
+            sign_bit_pos -= 1;
+        }
+    }
+
+    pub fn insert_with_count_without_l2(&mut self, val: &SketchInput, c: i64) {
+        for i in 0..self.row {
+            let hashed = hash_it_to_128(i, val);
+            let idx = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
+            let bit = ((hashed >> 127) & 1) as i64;
+            let sign_bit = -(1 - 2 * bit);
+
+            self.counts[i][idx] += sign_bit * c;
+        }
+    }
+
+    /// Inserts without L2 update using hash optimization.
+    pub fn fast_insert_with_count_without_l2(&mut self, val: &SketchInput, c: i64) {
+        let hashed_val = hash_it_to_128(0, val);
+        self.fast_insert_with_count_without_l2_and_hash(hashed_val, c);
+    }
+
+    /// Inserts without L2 update using precomputed hash value.
+    pub fn fast_insert_with_count_without_l2_and_hash(&mut self, hashed_val: u128, c: i64) {
+        let mask_bits = self.counts.get_mask_bits() as usize;
+        let mask = (1u128 << mask_bits) - 1;
+        let mut shift_amount = 0;
+        let mut sign_bit_pos = 127;
+
+        for i in 0..self.row {
+            let hashed = (hashed_val >> shift_amount) & mask;
+            let idx = (hashed as usize) % self.col;
+            let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
+            let sign_bit = -(1 - 2 * bit);
+
+            self.counts[i][idx] += sign_bit*c;
+
+            shift_amount += mask_bits;
+            sign_bit_pos -= 1;
+        }
+    }
+
+    pub fn update_and_est(&mut self, val: &SketchInput, c: i64) -> f64 {
+        self.insert_with_count(val, c);
+        self.get_est(val)
+    }
+
+    pub fn update_and_est_without_l2(&mut self, val: &SketchInput, c: i64) -> f64 {
+        self.insert_with_count_without_l2(val, c);
+        self.get_est(val)
+    }
+
+    /// Update and estimate with hash optimization.
+    pub fn fast_update_and_est(&mut self, val: &SketchInput, c: i64) -> f64 {
+        let hashed_val = hash_it_to_128(0, val);
+        self.fast_insert_with_count_and_hash(hashed_val, c);
+        self.fast_get_est_with_hash(hashed_val)
+    }
+
+    /// Update and estimate without L2 with hash optimization.
+    pub fn fast_update_and_est_without_l2(&mut self, val: &SketchInput, c: i64) -> f64 {
+        let hashed_val = hash_it_to_128(0, val);
+        self.fast_insert_with_count_without_l2_and_hash(hashed_val, c);
+        self.fast_get_est_with_hash(hashed_val)
+    }
+
+    pub fn get_l2_sqr(&self) -> f64 {
+        let mut lst = Vec::new();
+        for i in 0..self.row {
+            lst.push(self.l2.as_slice()[i]);
+        }
+        lst.sort();
+        // get median
+        if self.row == 1 {
+            return lst[0] as f64;
+        } else if self.row == 2 {
+            return (lst[0] + lst[1]) as f64 / 2.0;
+        } else if self.row == 3 {
+            return lst[1] as f64;
+        } else if self.row % 2 == 0 {
+            return (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0;
+        } else {
+            return lst[self.row / 2] as f64;
+        }
+    }
+
+    pub fn get_l2(&self) -> f64 {
+        let l2 = self.get_l2_sqr();
+        return l2.sqrt();
+    }
+
+    pub fn get_est(&self, val: &SketchInput) -> f64 {
+        let mut lst = Vec::new();
+        for i in 0..self.row {
+            let hashed = hash_it_to_128(i, val);
+            let idx = ((hashed as u64 & LOWER_32_MASK) as usize) % self.col;
+            let bit = ((hashed >> 127) & 1) as i64;
+            let sign_bit = -(1 - 2 * bit);
+            let counter = self.counts.query_one_counter(i, idx);
+            lst.push(sign_bit * counter);
+        }
+        lst.sort();
+        // get median
+        if self.row == 1 {
+            return lst[0] as f64;
+        } else if self.row == 2 {
+            return (lst[0] + lst[1]) as f64 / 2.0;
+        } else if self.row == 3 {
+            return lst[1] as f64;
+        } else if self.row % 2 == 0 {
+            return (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0;
+        } else {
+            return lst[self.row / 2] as f64;
+        }
+    }
+
+    /// Returns the frequency estimate with hash optimization.
+    pub fn fast_get_est(&self, val: &SketchInput) -> f64 {
+        let hashed_val = hash_it_to_128(0, val);
+        self.fast_get_est_with_hash(hashed_val)
+    }
+
+    /// Returns the frequency estimate using precomputed hash value.
+    pub fn fast_get_est_with_hash(&self, hashed_val: u128) -> f64 {
+        let mask_bits = self.counts.get_mask_bits() as usize;
+        let mask = (1u128 << mask_bits) - 1;
+        let mut lst = Vec::new();
+        let mut shift_amount = 0;
+        let mut sign_bit_pos = 127;
+
+        for i in 0..self.row {
+            let hashed = (hashed_val >> shift_amount) & mask;
+            let idx = (hashed as usize) % self.col;
+            let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
+            let sign_bit = -(1 - 2 * bit);
+            let counter = self.counts.query_one_counter(i, idx);
+            lst.push(sign_bit * counter);
+
+            shift_amount += mask_bits;
+            sign_bit_pos -= 1;
+        }
+        lst.sort();
+        // get median
+        if self.row == 1 {
+            return lst[0] as f64;
+        } else if self.row == 2 {
+            return (lst[0] + lst[1]) as f64 / 2.0;
+        } else if self.row == 3 {
+            return lst[1] as f64;
+        } else if self.row % 2 == 0 {
+            return (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0;
+        } else {
+            return lst[self.row / 2] as f64;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -519,8 +782,8 @@ mod tests {
     }
 
     #[test]
-    fn countuniv_estimates_and_l2_are_consistent() {
-        let mut sketch = CountUniv::init_countuniv_with_rc(3, 32);
+    fn countl2hh_estimates_and_l2_are_consistent() {
+        let mut sketch = CountL2HH::with_dimensions(3, 32);
         let key = SketchInput::Str("gamma");
 
         let est_after_first = sketch.update_and_est(&key, 5);
@@ -534,9 +797,9 @@ mod tests {
     }
 
     #[test]
-    fn countuniv_merge_combines_frequency_vectors() {
-        let mut left = CountUniv::init_countuniv_with_rc(3, 32);
-        let mut right = CountUniv::init_countuniv_with_rc(3, 32);
+    fn countl2hh_merge_combines_frequency_vectors() {
+        let mut left = CountL2HH::with_dimensions(3, 32);
+        let mut right = CountL2HH::with_dimensions(3, 32);
         let key = SketchInput::U32(42);
 
         left.insert_with_count(&key, 4);
@@ -547,227 +810,3 @@ mod tests {
     }
 }
 
-impl Default for CountUniv {
-    fn default() -> Self {
-        Self::init_count()
-    }
-}
-
-impl CountUniv {
-    pub fn debug(&self) -> () {
-        println!("Counters: ");
-        for i in 0..self.row {
-            println!("row {}: {:?}", i, self.matrix[i]);
-        }
-        println!("L2: {:?}", self.l2);
-    }
-
-    pub fn init_count() -> Self {
-        CountUniv::init_countuniv_with_rc(4, 32)
-    }
-
-    pub fn init_countuniv_with_rc(r: usize, c: usize) -> Self {
-        assert!(r <= 5, "Too many rows, not supported now");
-        let mat = vec![vec![0; c]; r];
-        CountUniv {
-            row: r,
-            col: c,
-            matrix: mat,
-            l2: vec![0; r],
-        }
-    }
-
-    pub fn merge(&mut self, other: &CountUniv) {
-        assert!(self.row == other.row, "Row number different, cannot merge");
-        assert!(self.col == other.col, "Col number different, cannot merge");
-        for i in 0..self.row {
-            for j in 0..self.col {
-                self.matrix[i][j] += other.matrix[i][j];
-            }
-        }
-    }
-
-    // pub fn insert_once<T: Hash+?Sized>(&mut self, val: &T) {
-    //     self.insert_with_count(val, 1);
-    // }
-    pub fn insert_once(&mut self, val: &SketchInput) {
-        self.insert_with_count(val, 1);
-    }
-
-    // pub fn insert_with_count<T: Hash+?Sized>(&mut self, val: &T, c: i64) {
-    //     for i in 0..self.row {
-    //         let h = hash_it(i, &val);
-    //         let s = hash_it(LASTSTATE, &val);
-    //         // just use lower 32 bit, whatever
-    //         let idx = ((h & ((0x1 << 32) - 1)) as usize) % self.col;
-    //         let sign = s % 2;
-    //         let old_value = self.matrix[i][idx];
-    //         if sign == 1 {
-    //             self.matrix[i][idx] += c;
-    //         } else {
-    //             self.matrix[i][idx] -= c;
-    //         }
-    //         self.l2[i] = self.l2[i] + self.matrix[i][idx]*self.matrix[i][idx] - old_value*old_value;
-    //     }
-    // }
-    pub fn insert_with_count(&mut self, val: &SketchInput, c: i64) {
-        for i in 0..self.row {
-            let h = hash_it(i, &val);
-            let s = hash_it(LASTSTATE, &val);
-            // just use lower 32 bit, whatever
-            let idx = ((h & ((0x1 << 32) - 1)) as usize) % self.col;
-            let sign = s % 2;
-            let old_value = self.matrix[i][idx];
-            if sign == 1 {
-                self.matrix[i][idx] += c;
-            } else {
-                self.matrix[i][idx] -= c;
-            }
-            self.l2[i] =
-                self.l2[i] + self.matrix[i][idx] * self.matrix[i][idx] - old_value * old_value;
-        }
-    }
-
-    // pub fn insert_with_count_without_l2<T: Hash+?Sized>(&mut self, val: &T, c: i64) {
-    //     for i in 0..self.row {
-    //         let h = hash_it(i, &val);
-    //         let s = hash_it(LASTSTATE, &val);
-    //         // just use lower 32 bit, whatever
-    //         let idx = ((h & ((0x1 << 32) - 1)) as usize) % self.col;
-    //         let sign = s % 2;
-    //         if sign == 1 {
-    //             self.matrix[i][idx] += c;
-    //         } else {
-    //             self.matrix[i][idx] -= c;
-    //         }
-    //     }
-    // }
-    pub fn insert_with_count_without_l2(&mut self, val: &SketchInput, c: i64) {
-        for i in 0..self.row {
-            let h = hash_it(i, &val);
-            let s = hash_it(LASTSTATE, &val);
-            // just use lower 32 bit, whatever
-            let idx = ((h & ((0x1 << 32) - 1)) as usize) % self.col;
-            let sign = s % 2;
-            if sign == 1 {
-                self.matrix[i][idx] += c;
-            } else {
-                self.matrix[i][idx] -= c;
-            }
-        }
-    }
-
-    // pub fn update_and_est<T: Hash+?Sized>(&mut self, val: &T, c: i64) -> f64 {
-    //     self.insert_with_count(val, c);
-    //     self.get_est(val)
-    // }
-    pub fn update_and_est(&mut self, val: &SketchInput, c: i64) -> f64 {
-        self.insert_with_count(val, c);
-        self.get_est(val)
-    }
-
-    // pub fn update_and_est_without_l2<T: Hash+?Sized>(&mut self, val: &T, c: i64) -> f64 {
-    //     self.insert_with_count_without_l2(val, c);
-    //     self.get_est(val)
-    // }
-    pub fn update_and_est_without_l2(&mut self, val: &SketchInput, c: i64) -> f64 {
-        self.insert_with_count_without_l2(val, c);
-        self.get_est(val)
-    }
-
-    pub fn get_l2_sqr(&self) -> f64 {
-        let mut lst = Vec::new();
-        for i in 0..self.row {
-            lst.push(self.l2[i]);
-        }
-        lst.sort();
-        // get median
-        if self.row == 1 {
-            return lst[0] as f64;
-        } else if self.row == 2 {
-            return (lst[0] + lst[1]) as f64 / 2.0;
-        } else if self.row == 3 {
-            return lst[1] as f64;
-        } else if self.row % 2 == 0 {
-            return (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0;
-        } else {
-            return lst[self.row / 2] as f64;
-        }
-    }
-
-    pub fn get_l2(&self) -> f64 {
-        // let mut lst = Vec::new();
-        // for i in 0..self.row {
-        //     lst.push(self.l2[i]);
-        // }
-        // lst.sort();
-        // // get median
-        // let l2;
-        // if self.row == 1 {
-        //     l2 = lst[0] as f64;
-        // } else if self.row == 2 {
-        //     l2 = (lst[0] + lst[1]) as f64 / 2.0;
-        // } else if self.row == 3 {
-        //     l2 = lst[1] as f64;
-        // } else if self.row % 2 == 0 {
-        //     l2 =  (lst[self.row/2] + lst[(self.row/2) - 1]) as f64 / 2.0;
-        // } else {
-        //     l2 = lst[self.row / 2] as f64;
-        // }
-        let l2 = self.get_l2_sqr();
-        return l2.sqrt();
-    }
-
-    // pub fn get_est<T: Hash+?Sized>(&self, val: &T) -> f64 {
-    //     let mut lst = Vec::new();
-    //     for i in 0..self.row {
-    //         let h = hash_it(i, &val);
-    //         let s = hash_it(LASTSTATE, &val);
-    //         // just use lower 32 bit, whatever
-    //         let idx = ((h & ((0x1 << 32) - 1)) as usize) % self.col;
-    //         let sign = s % 2;
-    //         if sign == 1 { lst.push(self.matrix[i][idx]); } else { lst.push(self.matrix[i][idx] * (-1)); }
-    //     }
-    //     lst.sort();
-    //     // get median
-    //     if self.row == 1 {
-    //         return lst[0] as f64;
-    //     } else if self.row == 2 {
-    //         return (lst[0] + lst[1]) as f64 / 2.0;
-    //     } else if self.row == 3 {
-    //         return lst[1] as f64;
-    //     } else if self.row % 2 == 0 {
-    //         return (lst[self.row/2] + lst[(self.row/2) - 1]) as f64 / 2.0;
-    //     } else {
-    //         return lst[self.row / 2] as f64;
-    //     }
-    // }
-    pub fn get_est(&self, val: &SketchInput) -> f64 {
-        let mut lst = Vec::new();
-        for i in 0..self.row {
-            let h = hash_it(i, &val);
-            let s = hash_it(LASTSTATE, &val);
-            // just use lower 32 bit, whatever
-            let idx = ((h & ((0x1 << 32) - 1)) as usize) % self.col;
-            let sign = s % 2;
-            if sign == 1 {
-                lst.push(self.matrix[i][idx]);
-            } else {
-                lst.push(self.matrix[i][idx] * (-1));
-            }
-        }
-        lst.sort();
-        // get median
-        if self.row == 1 {
-            return lst[0] as f64;
-        } else if self.row == 2 {
-            return (lst[0] + lst[1]) as f64 / 2.0;
-        } else if self.row == 3 {
-            return lst[1] as f64;
-        } else if self.row % 2 == 0 {
-            return (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0;
-        } else {
-            return lst[self.row / 2] as f64;
-        }
-    }
-}
