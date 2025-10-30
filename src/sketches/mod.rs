@@ -15,7 +15,7 @@ pub use elastic::Elastic;
 pub use elastic::HeavyBucket;
 
 pub mod heap;
-pub use heap::Item;
+pub use crate::common::input::Item;
 pub use heap::TopKHeap;
 
 pub mod hll;

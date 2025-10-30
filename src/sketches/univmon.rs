@@ -65,14 +65,12 @@ impl UnivMon {
             for _ in 0..l {
                 // every Count sketch will have different seeds
                 // not sure if this is going to be a problem
-                um.cs_layers
-                    .push(CountL2HH::with_dimensions(3, 2048));
+                um.cs_layers.push(CountL2HH::with_dimensions(3, 2048));
                 um.hh_layers.push(TopKHeap::init_heap(k as u32));
             }
         } else {
             for _ in 0..8 {
-                um.cs_layers
-                    .push(CountL2HH::with_dimensions(3, 2048));
+                um.cs_layers.push(CountL2HH::with_dimensions(3, 2048));
                 um.hh_layers.push(TopKHeap::init_heap(100));
             }
             for _ in 8..l {

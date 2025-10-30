@@ -204,7 +204,6 @@ pub struct CountL2HH {
     col: usize,
 }
 
-
 impl Default for CountL2HH {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
@@ -345,7 +344,7 @@ impl CountL2HH {
             let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
             let sign_bit = -(1 - 2 * bit);
 
-            self.counts[i][idx] += sign_bit*c;
+            self.counts[i][idx] += sign_bit * c;
 
             shift_amount += mask_bits;
             sign_bit_pos -= 1;
@@ -809,4 +808,3 @@ mod tests {
         assert_eq!(left.get_est(&key), 13.0);
     }
 }
-

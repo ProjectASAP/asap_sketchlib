@@ -7,11 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Item {
-    pub key: String,
-    pub count: i64,
-}
+use crate::common::input::Item;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TopKHeap {
@@ -174,16 +170,6 @@ impl TopKHeap {
                 break;
             }
         }
-    }
-}
-
-impl Item {
-    pub fn init_item(k: String, c: i64) -> Self {
-        Item { key: k, count: c }
-    }
-
-    pub fn print_item(&self) -> () {
-        println!("key: {} with count: {}", self.key, self.count);
     }
 }
 
