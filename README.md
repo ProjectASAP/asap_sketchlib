@@ -641,28 +641,48 @@ At this moment, ```cargo test``` is a good starting point.
 
 ## Library Map
 
-- `src/common`: shared structures (`SketchMatrix`, `SketchList`), the `SketchInput` enum, and hashing helpers used by sketches and sketchbook.
-- `src/sketches`: core sketch implementations plus serialization hooks.
-- `src/sketchbook`: orchestration layers (Hydra, Chapter, ExponentialHistogram) for combining sketches into label-aware and time-aware structures.
-- `src/deserializers`: serde-ready records that decode hex-encoded MessagePack payloads emitted by Arroyo and PromSketch experiments.
-- `src/bin/sketch_tester`: per-sketch binaries that exercise insertion/query paths and print diagnostics.
-- `src/bin/serializer`: tools that build serialized artifacts saved in `localsketch/` for cross-language testing.
-- `localsketch/` and `testdata/`: canned sketches and timestamp fixtures useful for reproducible experiments.
+### Core Modules
 
-## Serialization & Interop
+- **`src/common/`** - Foundation for all sketches ([common_api.md](./docs/common_api.md))
+  - `input.rs` - `SketchInput` enum, `HHItem`, framework enums (`HydraCounter`, `L2HH`, `HydraQuery`)
+  - `structures.rs` - High-performance data structures (`Vector1D`, `Vector2D`, `Vector3D`, `CommonHeap`)
+  - `heap.rs` - `HHHeap` convenience wrapper for heavy hitter tracking
+  - Hashing utilities (`hash_it`, `SEEDLIST`) for deterministic sketch operations
 
-- `SketchInput` unifies numeric keys, floats, strings, and byte blobs so sketches share the same entry points.
-- MessagePack via `rmp-serde` keeps payloads compact while `serde_bytes` ensures buffers stay binary-friendly.
-- `deserializers::Record` and friends handle the hex framing that Arroyo UDFs produce before shipping to downstream consumers.
-- Enable the `arroyo` feature (`cargo build --features arroyo`) to compile the UDF plugin glue when embedding in Arroyo jobs.
+- **`src/sketches/`** - Core sketch implementations ([sketch_api.md](./docs/sketch_api.md))
+  - ✅ **Recommended** (built on common structures): `countmin.rs`, `count.rs`, `hll.rs`
+  - ⚠️ **Legacy**: `coco.rs`, `elastic.rs`, `kll.rs`, `uniform.rs`, `microscope.rs`, `locher.rs`
+  - `structured/` - Migration zone for sketches adopting common API
+
+- **`src/sketch_framework/`** - Orchestration and serving layers
+  - `chapter.rs` - Unified interface (`Chapter` enum) wrapping all sketch types
+  - `hydra.rs` - Multi-dimensional hierarchical heavy hitters
+  - `univmon.rs` - Universal monitoring (L1, L2, entropy, cardinality)
+  - `eh.rs` - Exponential histogram for sliding window queries
+
+### Testing & Benchmarking
+
+- **`benches/`** - Criterion-based performance benchmarks
+  - Run with: `cargo bench --bench structured_countmin`
+
+### Documentation
+
+- **`docs/`** - Comprehensive API and feature documentation
+  - [sketch_api.md](./docs/sketch_api.md) - Complete sketch API reference with usage examples
+  - [common_api.md](./docs/common_api.md) - Data structures and shared utilities
+  - [features.md](./docs/features.md) - Feature status and roadmap
+  - [benchmark.md](./docs/benchmark.md) - Performance testing methodology
+  - [timeline.md](./docs/timeline.md) - Development history
+
+### Legacy/Experimental
+
+- **`src/deserializers/`** - Hex-encoded MessagePack deserialization (for Arroyo/PromSketch interop)
+- **`src/bin/serializer/`** - Tools for generating serialized test fixtures
+- **`localsketch/`** and **`testdata/`** - Canned sketches and fixtures for reproducible testing
 
 ## Common Structure
 
 To build new sketch with the Common API, check [this](./docs/common_api.md)
-
-### Single Hash Reuse
-
-For a `CountMinSketch` with 3 rows and 4096 columns, the minimun size requirement of hash value is: `3*log(4096)=36` bits. One large hash value (i.e., 64 bits) is sufficient to insert the whole sketch, making hashing for each row unnecessary. This suggests an optimization that if the hash value is large enough, hash each key once is sufficient to insert the whole sketch.
 
 ## Development
 
