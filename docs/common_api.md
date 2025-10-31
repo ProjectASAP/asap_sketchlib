@@ -6,7 +6,7 @@ The `src/common` module provides the foundational building blocks for all sketch
 
 - **Data Structures** ([structures.rs](#data-structures-structuresrs)) - High-performance containers optimized for sketch workloads
 - **Input Types** ([input.rs](#input-types-inputrs)) - Unified type system for sketch ingestion
-- **Hashing Utilities** ([input.rs](#hashing-helpers)) - Deterministic hash functions and seed management
+- **Hashing Utilities** ([hash.rs](#hashing-helpers)) - Deterministic hash functions and seed management
 
 ---
 

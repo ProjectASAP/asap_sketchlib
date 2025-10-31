@@ -1,65 +1,213 @@
-# Sketchlib-rs Feature Overview
+# Feature Status
 
-This note captures the current surface area of the crate and the rough roadmap. It complements the README by spelling out what is stable, what is mid-flight, and where we plan to invest next.
+This document provides a high-level overview of implemented and planned features in sketchlib-rust. For detailed API documentation, see [sketch_api.md](sketch_api.md) and [common_api.md](common_api.md).
 
-## What Works Today
+---
 
-- **Shared input primitives** — `SketchInput` wraps the standard value shapes (integers, floats, strings, byte slices) so every sketch speaks the same language. `hash_it` centralises hashing, and `hash_for_all_rows` derives per-row indices from one seed. The fast paths allocate a `Vec` today, so we still profile them, but they demonstrate our hash-reuse strategy.
+## Table of Contents
 
-- **Core sketch suite** — Count-Min, Count/CountUniv, Coco, Elastic, multiple HyperLogLog variants, KLL, Locher, Microscope, and UnivMon ship with serde support and reference binaries in `src/bin/sketch_tester`.
+1. [Completed Features](#completed-features)
+2. [In Progress](#in-progress)
+3. [Planned Features](#planned-features)
+4. [Research & Experimental](#research--experimental)
 
-- **Sketchbook orchestration** — `Chapter` unifies insert/query across sketches, enabling higher-level runners like `Hydra` (label combinations) and `ExponentialHistogram` (sliding windows); `UnivMon` that can takes in `L2HH` sketch, although `L2HH` sketch currently only have `CountSketch` as the instance
+---
 
-- **Structured sketches** — `structured::CountMin` and `structured::HyperLogLog` build on `SketchMatrix`/`SketchList`, so new sketches can share storage code instead of re-rolling `Vec<Vec<_>>`; also added `Vector1D`, `Vector2D`, `Vector3D`, targeting for performance.
+## Completed Features
 
-- **Benchmark scaffolding** — Criterion benches (`cargo bench --bench structured_countmin`) compare `insert` vs `fast_insert` and `estimate` vs `fast_estimate`. Latest runs show fast insert now beating the baseline, while fast estimate holds steady or improves when hash reuse matters.
+### Core Infrastructure
 
-## WIP & Known Gaps
+✅ **Common API** ([common_api.md](common_api.md))
 
-- **Bring UnivMon into sketchbook** ~~— evolving UnivMon into a “serving algorithm” alongside Hydra/ExponentialHistogram so Chapter can drive it directly. (**First Priority**)~~ Added
+- `SketchInput` - Unified type system for all sketches
+- `Vector1D`, `Vector2D`, `Vector3D` - High-performance storage structures
+- `CommonHeap` & `HHHeap` - Generic and specialized heaps for heavy hitter tracking
+- Deterministic hashing with seed management
 
-- **Performance parity checks** — structured Count-Min fast paths are positive, but other structured sketches need profiling versus their legacy counterparts; `SketchMatrix` and `Vector2D` performance showing mysterious output
-  - insertion: `Vector2D` is much faster
-  - estimation: `Vector2D` is ~~much~~ slower
-  - **GiveUp**: assume insertion is supposed to happen more often than estimation, will keep it as what it is
+✅ **Recommended Sketches** ([sketch_api.md](sketch_api.md))
 
-- **Sketchbook ergonomics** — public APIs still settle; expect naming/shape changes as we converge on a consistent surface.
+- **CountMin** - Frequency estimation with fast paths (2-3x speedup)
+- **Count & CountL2HH** - Count sketch with L2 heavy hitter support
+- **HyperLogLog** - Three variants (Original, HllDf, HllDs) for cardinality estimation
+- All built on optimized common structures
 
-- **Serialization coverage** — several sketches (structured variants, Elastic merge states) still need first-party serializer/deserializer helpers.
+### Frameworks
 
-- **Testing depth** — structured sketches and Chapter composition have automated coverage; older sketches rely on manual binaries. We need more property/accuracy tests and CI enforcement.
+✅ **Hydra** - Hierarchical heavy hitters for multi-dimensional queries ([sketch_api.md](sketch_api.md))
 
-- **Docs & examples** — README currently showcases Count-Min and Exponential Histogram only. Inline comments and additional runnable snippets are on the todo list.
+✅ **UnivMon** - Universal monitoring (L1, L2, entropy, cardinality from single structure) ([sketch_api.md](sketch_api.md))
 
-- **Parity across variants** — structured Count-Min still trails the legacy module for helpers like merge/debug. We must either match functionality or deprecate the old path.
+### Performance Optimizations
 
-## Feature Explanation
+✅ **Fast-path methods** - Hash reuse with bit-masking
 
-### Custom Hash
+- `fast_insert()` - check [benchmark](benchmark.md) for detail
+- `fast_query_min()` / `fast_query_median()` - check [benchmark](benchmark.md) for detail
+- Single hash computation across multiple rows
 
-Provide native xxhash algorithm.
+✅ **Flat memory layouts** - Cache-friendly row-major storage
 
-### Custom Random Rng
+✅ **Zero-copy operations** - Direct slice access, borrowed lifetimes
 
-### One Hash for Different Sketch
+- **TODO**: requires more benchmark
 
-Extra layer of hash value.
+---
 
-### SIMD
+## In Progress
 
-No idea
+### Infrastructure
 
-## Future Directions
+🚧 **Serialization** - MessagePack (serde) support for most sketches
 
-- Add **OctoSketch** as another sketch-serving coordinator.
-- Ship **full serializer/deserializer coverage** across all sketches, including structured variants.
-- Generalise the **KLL** implementation for broader accuracy/space trade-offs.
-- Prototype a **NitroSketch-style sampling layer** (research stage).
-- Allow custom types (`<T>`) to implement **`SketchInput`** for smoother ingestion.
-- Expand automated **testing** so every sketch has functional and accuracy checks.
-- Grow the **benchmark catalogue** with Zipfian streams, heavy hitter mixes, and quantile accuracy sweeps.
-- Provide **distributed-friendly serialization** with schema versioning plus bindings for Python/Java/Go.
-- Continue **structured sketch migration**
-- Investigate **cache-aware hashing helpers** that avoid repeated allocations while reusing hash results.
+- **TODO**: requires further testing and need better integrated support
 
-Ideas welcome—open an issue or amend this document when priorities change.
+🚧 **Benchmarking** - Criterion-based performance suite (`cargo bench`)
+
+### Performance
+
+🚧 **Performance parity for structured sketches**
+
+- Requires more benchmark on different architectures / machines
+
+### Testing
+
+🚧 **Automated test coverage**
+
+- Needs more unit test
+- Needs strict **correcness** test
+
+### Documentation
+
+🚧 **API documentation expansion**
+
+- ✅ `sketch_api.md` - Complete
+- ✅ `common_api.md` - Complete
+- ⚠️ Inline code comments - Partial
+
+### Serialization
+
+🚧 **Full serialization coverage**
+
+- Most sketches supported
+- Missing: Some structured variants, Elastic merge states
+- Built-in serialization / deserialization function wanted
+
+### API Stability
+
+🚧 **Sketchbook ergonomics**
+
+- Public APIs still evolving
+- Naming and structure may change
+- Chapter/Hydra/UnivMon interfaces stabilizing
+
+---
+
+## Planned Features
+
+### Performance Optimization
+
+📋 **SIMD support**
+
+- Vector operations for counter updates (AVX2/NEON)
+- [TODO: Investigate Rust SIMD support and sketch compatibility]
+
+📋 **Custom hash functions**
+
+- Native xxhash algorithm implementation
+- Bit-selective hashing: Generate only required bits (e.g., 32-bit instead of 128-bit)
+- Goal: Faster hashing when full 128-bit output isn't needed
+
+📋 **Cache-aware hashing**
+
+- Eliminate repeated allocations
+- Reuse hash results across multiple sketch operations
+- Hash once, use across framework of sketches
+
+📋 **Prefetching hints**
+
+- Explicit memory prefetch for large sketches
+- Improve cache hit rates
+
+### Algorithm Improvements
+
+📋 **Custom RNG for KLL**
+
+- Fast coin-flipping random number generator
+- Optimized for KLL compactor operations
+- [TODO: Define performance requirements]
+
+📋 **Generic type support for SketchInput**
+
+- Allow custom types `T` to implement `SketchInput`
+- Challenges: Trait requirements, lifetime management
+
+📋 **KLL generalization**
+
+- Broader accuracy/space trade-offs
+- Enhanced quantile query capabilities
+
+### Framework Enhancements
+
+📋 **OctoSketch coordinator**
+
+- Alternative sketch-serving framework
+- [TODO: Define use cases and differences from Hydra/UnivMon]
+
+📋 **NitroSketch-style sampling**
+
+- Research stage
+- Sampling layer for sketch acceleration
+- [TODO: Define geometry sampling use case]
+
+📋 **Hash layer abstraction**
+
+- Unified hash-once-use-many pattern
+- Framework for coordinating multiple sketches with single hash
+- May require sketch API changes to accept pre-computed hashes
+
+### Testing & Quality
+
+📋 **Comprehensive test suite**
+
+- Property tests for all sketches
+- Accuracy validation tests
+- Heavy hitter detection tests
+- Quantile accuracy sweeps
+
+📋 **Benchmark expansion**
+
+- Zipfian distribution workloads
+- Heavy hitter mix scenarios
+- Cardinality estimation speed
+- Query latency percentiles
+
+### Cross Languages support
+
+📋 **Cross Language Usage**
+
+- Serialization needs cross language support
+
+### Migration & Cleanup
+
+📋 **Structured sketch migration**
+
+- Complete migration of legacy sketches to common structures
+- Deprecate or remove old implementations
+- Achieve API parity (merge, debug, etc.)
+
+---
+
+## Research & Experimental
+
+### Explored But Not Implemented
+
+💡 **Extra hash layer location**
+
+- Where to inject hash value coordination?
+- **Data plane** vs **control plane** separation unclear
+- Needs design iteration
+
+💡 **Data/control plane separation**
+
+- Current API doesn't clearly separate concerns
+- May impact performance optimization opportunities
