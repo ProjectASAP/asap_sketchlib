@@ -17,27 +17,21 @@ fn bench_countmin(c: &mut Criterion) {
     let mut group = c.benchmark_group("countmin_default");
 
     group.bench_function("insert_only", |b| {
-        b.iter_with_setup(
-            || CountMin::default(),
-            |mut sketch| {
-                for key in &keys {
-                    sketch.insert(key);
-                }
-                black_box(sketch);
-            },
-        );
+        b.iter_with_setup(CountMin::default, |mut sketch| {
+            for key in &keys {
+                sketch.insert(key);
+            }
+            black_box(sketch);
+        });
     });
 
     group.bench_function("fast_insert_only", |b| {
-        b.iter_with_setup(
-            || CountMin::default(),
-            |mut sketch| {
-                for key in &keys {
-                    sketch.fast_insert(key);
-                }
-                black_box(sketch);
-            },
-        );
+        b.iter_with_setup(CountMin::default, |mut sketch| {
+            for key in &keys {
+                sketch.fast_insert(key);
+            }
+            black_box(sketch);
+        });
     });
 
     let mut insert_prefilled = CountMin::default();

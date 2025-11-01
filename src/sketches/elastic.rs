@@ -26,6 +26,12 @@ pub struct Elastic {
     pub bktlen: i32,
 }
 
+impl Default for HeavyBucket {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HeavyBucket {
     pub fn new() -> Self {
         HeavyBucket {
@@ -36,7 +42,7 @@ impl HeavyBucket {
         }
     }
 
-    pub fn evict(&mut self, id: String) -> () {
+    pub fn evict(&mut self, id: String) {
         self.flow_id = id;
         self.vote_pos = 1;
         self.vote_neg = 1;
@@ -62,8 +68,8 @@ impl Elastic {
         }
         let light = CountMin::default();
         Elastic {
-            heavy: heavy,
-            light: light,
+            heavy,
+            light,
             bktlen: l,
         }
     }
@@ -73,7 +79,7 @@ impl Elastic {
         let hash = hash_it(LASTSTATE, &SketchInput::String(id.clone()));
         let idx = hash as usize % self.bktlen as usize;
         let heavy_bkt = &mut self.heavy[idx];
-        if heavy_bkt.flow_id == "" && heavy_bkt.vote_neg == 0 && heavy_bkt.vote_pos == 0 {
+        if heavy_bkt.flow_id.is_empty() && heavy_bkt.vote_neg == 0 && heavy_bkt.vote_pos == 0 {
             // empty
             heavy_bkt.flow_id = id;
             heavy_bkt.vote_pos += 1;
@@ -107,13 +113,13 @@ impl Elastic {
                 // let light_result = self.light.get_est(&id) as i32;
                 let light_result = self.light.get_est(&SketchInput::String(id)) as i32;
                 let heavy_result = heavy_bkt.vote_pos;
-                return light_result + heavy_result;
+                light_result + heavy_result
             } else {
-                return heavy_bkt.vote_pos;
+                heavy_bkt.vote_pos
             }
         } else {
             // return self.light.get_est(&id) as i32;
-            return self.light.get_est(&SketchInput::String(id)) as i32;
+            self.light.get_est(&SketchInput::String(id)) as i32
         }
     }
 }
@@ -171,13 +177,11 @@ mod tests {
 
         assert!(
             heavy_est >= 10,
-            "expected heavy bucket >= 10 after repeated inserts, got {}",
-            heavy_est
+            "expected heavy bucket >= 10 after repeated inserts, got {heavy_est}"
         );
         assert!(
             light_est >= 6,
-            "colliding flow should accumulate in CountMin, expected >= 6, got {}",
-            light_est
+            "colliding flow should accumulate in CountMin, expected >= 6, got {light_est}"
         );
     }
 }

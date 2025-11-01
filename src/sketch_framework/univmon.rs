@@ -115,20 +115,16 @@ impl UnivMon {
                 return l - 1;
             }
         }
-        return layer - 1;
+        layer - 1
     }
 
     pub fn update(&mut self, key: &str, value: i64, bottom_layer_num: usize) {
         for i in 0..=bottom_layer_num {
-            let count;
-            if i == 0 {
-                // self.cs_layers[i].insert_count(key);
-                // count = self.cs_layers[i].update_and_est(key, value);
-                count = self.cs_layers[i].update_and_est(&SketchInput::Str(key), value);
+            let count = if i == 0 {
+                self.cs_layers[i].update_and_est(&SketchInput::Str(key), value)
             } else {
-                // count = self.cs_layers[i].update_and_est_without_l2(key,value);
-                count = self.cs_layers[i].update_and_est_without_l2(&SketchInput::Str(key), value);
-            }
+                self.cs_layers[i].update_and_est_without_l2(&SketchInput::Str(key), value)
+            };
             self.hh_layers[i].update(key, count as i64);
         }
     }
@@ -168,15 +164,11 @@ impl UnivMon {
         // hardcode one more time
         if bottom_layer_num < 8 {
             for l in (0..=bottom_layer_num).rev() {
-                let median;
-                if l == 0 {
-                    // median = self.cs_layers[l].update_and_est(key, value);
-                    median = self.cs_layers[l].update_and_est(&SketchInput::Str(key), value);
+                let median = if l == 0 {
+                    self.cs_layers[l].update_and_est(&SketchInput::Str(key), value)
                 } else {
-                    // median = self.cs_layers[l].update_and_est_without_l2(key, value);
-                    median =
-                        self.cs_layers[l].update_and_est_without_l2(&SketchInput::Str(key), value);
-                }
+                    self.cs_layers[l].update_and_est_without_l2(&SketchInput::Str(key), value)
+                };
                 self.hh_layers[l].update(key, median as i64);
             }
         } else {
@@ -412,7 +404,7 @@ mod tests {
         let mut um = UnivMon::init_univmon(20, 3, 2048, 8, 0);
 
         for i in 0..20 {
-            let key = format!("flow_{}", i);
+            let key = format!("flow_{i}");
             let bottom = bottom_layer_for(&um, &key);
             um.univmon_processing(&key, 10, bottom);
         }
@@ -420,8 +412,7 @@ mod tests {
         let card = um.calc_card();
         assert!(
             card == 20.0,
-            "Cardinality should be positive after insertions, got {}",
-            card
+            "Cardinality should be positive after insertions, got {card}"
         );
     }
 
@@ -510,8 +501,8 @@ mod tests {
         let est_l1_1 = um1.calc_l1();
         let est_l1_2 = um2.calc_l1();
 
-        let error_1 = ((est_l1_1 - true_l1 as f64).abs()) / (true_l1 as f64);
-        let error_2 = ((est_l1_2 - true_l1 as f64).abs()) / (true_l1 as f64);
+        let error_1 = ((est_l1_1 - true_l1).abs()) / true_l1;
+        let error_2 = ((est_l1_2 - true_l1).abs()) / true_l1;
 
         assert!(
             est_l1_1 == true_l1,

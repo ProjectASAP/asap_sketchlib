@@ -185,7 +185,7 @@ impl<'a> Chapter<'a> {
         match (self, key) {
             (Chapter::CM(count_min), _) => Ok(count_min.get_est(key) as f64),
             (Chapter::COCO(coco), _) => Ok(coco.clone().estimate(key.clone()) as f64),
-            (Chapter::CU(count_univ), _) => Ok(count_univ.fast_get_est(key) as f64),
+            (Chapter::CU(count_univ), _) => Ok(count_univ.fast_get_est(key)),
             (Chapter::ELASTIC(elastic), SketchInput::String(s)) => {
                 Ok(elastic.clone().query(s.clone()) as f64)
             }

@@ -25,9 +25,9 @@ impl LocherSketch {
         }
     }
 
-    pub fn insert(&mut self, e: &String, _v: u64) {
+    pub fn insert(&mut self, e: &str, _v: u64) {
         for i in 0..self.r {
-            let idx = hash_it(i, &&SketchInput::String(e.clone())) as usize % self.l;
+            let idx = hash_it(i, &SketchInput::String(e.to_owned())) as usize % self.l;
             let cell = &mut self.rows[i][idx];
             let before = match cell.find(e) {
                 Some(heap_idx) => cell.heap()[heap_idx].count,
@@ -98,8 +98,7 @@ mod tests {
         let estimate = sketch.estimate(&key);
         assert!(
             estimate >= 15.0,
-            "expected estimate to be close to 30, got {}",
-            estimate
+            "expected estimate to be close to 30, got {estimate}"
         );
         assert_eq!(sketch.estimate("missing"), 0.0);
     }

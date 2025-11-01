@@ -348,21 +348,21 @@ impl CountL2HH {
         lst.sort();
         // get median
         if self.row == 1 {
-            return lst[0] as f64;
+            lst[0] as f64
         } else if self.row == 2 {
-            return (lst[0] + lst[1]) as f64 / 2.0;
+            (lst[0] + lst[1]) as f64 / 2.0
         } else if self.row == 3 {
-            return lst[1] as f64;
+            lst[1] as f64
         } else if self.row % 2 == 0 {
-            return (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0;
+            (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0
         } else {
-            return lst[self.row / 2] as f64;
+            lst[self.row / 2] as f64
         }
     }
 
     pub fn get_l2(&self) -> f64 {
         let l2 = self.get_l2_sqr();
-        return l2.sqrt();
+        l2.sqrt()
     }
 
     /// Returns the frequency estimate with hash optimization.
@@ -395,15 +395,15 @@ impl CountL2HH {
         lst.sort();
         // get median
         if self.row == 1 {
-            return lst[0] as f64;
+            lst[0] as f64
         } else if self.row == 2 {
-            return (lst[0] + lst[1]) as f64 / 2.0;
+            (lst[0] + lst[1]) as f64 / 2.0
         } else if self.row == 3 {
-            return lst[1] as f64;
+            lst[1] as f64
         } else if self.row % 2 == 0 {
-            return (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0;
+            (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0
         } else {
-            return lst[self.row / 2] as f64;
+            lst[self.row / 2] as f64
         }
     }
 }
@@ -494,8 +494,7 @@ mod tests {
             assert_eq!(
                 sketch.counts.query_one_counter(row, idx),
                 expected,
-                "row {} counter mismatch",
-                row
+                "row {row} counter mismatch"
             );
         }
     }
@@ -520,9 +519,7 @@ mod tests {
             let estimate = fast.fast_estimate(key);
             assert!(
                 (estimate - 1.0).abs() < f64::EPSILON,
-                "fast estimate for key {:?} should be 1.0, got {}",
-                key,
-                estimate
+                "fast estimate for key {key:?} should be 1.0, got {estimate}"
             );
         }
     }
@@ -547,9 +544,7 @@ mod tests {
             let estimate = sketch.estimate(key);
             assert!(
                 (estimate - 1.0).abs() < f64::EPSILON,
-                "estimate for key {:?} should be 1.0, got {}",
-                key,
-                estimate
+                "estimate for key {key:?} should be 1.0, got {estimate}"
             );
         }
     }
@@ -567,9 +562,7 @@ mod tests {
         let estimate = sketch.estimate(&key);
         assert!(
             (estimate - repeats as f64).abs() < f64::EPSILON,
-            "expected estimate {}, got {}",
-            repeats,
-            estimate
+            "expected estimate {repeats}, got {estimate}"
         );
     }
 
@@ -594,9 +587,7 @@ mod tests {
             let estimate = sketch.fast_estimate(key);
             assert!(
                 (estimate - 5.0).abs() < f64::EPSILON,
-                "fast estimate for key {:?} should be 5.0, got {}",
-                key,
-                estimate
+                "fast estimate for key {key:?} should be 5.0, got {estimate}"
             );
         }
     }
@@ -734,7 +725,7 @@ mod tests {
         assert_eq!(est_after_second, 3.0);
 
         let l2 = sketch.get_l2();
-        assert!(l2 >= 3.0, "expected non-trivial l2, got {}", l2);
+        assert!(l2 >= 3.0, "expected non-trivial l2, got {l2}");
     }
 
     #[test]

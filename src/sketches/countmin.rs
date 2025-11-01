@@ -247,8 +247,7 @@ mod tests {
             assert_eq!(
                 cm.counts.query_one_counter(row, idx),
                 1,
-                "row {} counter should be 1",
-                row
+                "row {row} counter should be 1"
             );
         }
     }
@@ -275,8 +274,7 @@ mod tests {
             assert_eq!(
                 slow.estimate(key),
                 fast.fast_estimate(key),
-                "fast path should match standard insert for key {:?}",
-                key
+                "fast path should match standard insert for key {key:?}"
             );
         }
     }

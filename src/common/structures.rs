@@ -223,6 +223,10 @@ impl<T> Vector2D<T> {
         self.data.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.data.len() == 0
+    }
+
     /// Provides immutable access to the flattened storage.
     pub fn as_slice(&self) -> &[T] {
         &self.data
@@ -276,7 +280,7 @@ impl<T> Vector2D<T> {
     #[inline]
     pub fn get_required_bits(&self) -> usize {
         let mut bits_required = self.get_mask_bits() as usize;
-        bits_required = bits_required * self.rows;
+        bits_required *= self.rows;
         bits_required = 32 << ((bits_required > 32) as u32 + (bits_required > 64) as u32);
         bits_required = bits_required.min(128);
         bits_required
@@ -842,7 +846,7 @@ mod heap_tests {
 
         // Insert items (simulating TopKHeap behavior)
         for i in 1..=5 {
-            heap.push(HHItem::new(format!("key-{}", i), i));
+            heap.push(HHItem::new(format!("key-{i}"), i));
         }
 
         // Should keep top 3: counts 3, 4, 5
@@ -866,9 +870,9 @@ mod heap_tests {
         let heap_min_size = size_of::<CommonHeap<u64, CommonMinHeap>>();
         let heap_max_size = size_of::<CommonHeap<u64, CommonMaxHeap>>();
 
-        println!("Vec<u64> size: {}", vec_size);
-        println!("Heap<u64, MinHeap> size: {}", heap_min_size);
-        println!("Heap<u64, MaxHeap> size: {}", heap_max_size);
+        println!("Vec<u64> size: {vec_size}");
+        println!("Heap<u64, MinHeap> size: {heap_min_size}");
+        println!("Heap<u64, MaxHeap> size: {heap_max_size}");
 
         // Vec is (ptr, capacity, len) = 24 bytes on 64-bit
         // Our heap is (Vec, usize, O) where O is zero-sized
@@ -932,7 +936,7 @@ mod heap_tests {
 
         // Replicate the exact test from TopKHeap
         for i in 1..=5 {
-            let key = format!("key-{}", i);
+            let key = format!("key-{i}");
             find_and_update(&mut heap, &key, i);
         }
 

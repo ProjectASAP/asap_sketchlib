@@ -38,9 +38,10 @@ impl Hydra {
         let mut result = Vec::new();
         for i in 1..(1 << n) {
             let mut current_combination: Vec<&str> = Vec::new();
-            for j in 0..n {
+            // for j in 0..n {
+            for (j, &part_item) in parts.iter().enumerate().take(n) {
                 if (i >> j) & 1 == 1 {
-                    current_combination.push(parts[j]);
+                    current_combination.push(part_item);
                 }
             }
             result.push(current_combination.join(";"));
@@ -131,8 +132,7 @@ mod tests {
         let combined = hydra.query_frequency(vec!["user", "session"], &value);
         assert!(
             combined >= 5.0,
-            "expected frequency at least 5, got {}",
-            combined
+            "expected frequency at least 5, got {combined}"
         );
 
         let unrelated = hydra.query_frequency(vec!["other"], &value);
@@ -155,9 +155,7 @@ mod tests {
             let combined = hydra.query_frequency(vec!["key1", "key3"], &query_value);
             assert!(
                 combined >= i as f64,
-                "expected frequency at least {}, got {}",
-                i,
-                combined
+                "expected frequency at least {i}, got {combined}"
             );
         }
 
@@ -195,38 +193,33 @@ mod tests {
         let freq_10 = hydra.query_frequency(vec!["key1"], &SketchInput::F64(10.0));
         assert_eq!(
             freq_10, 2.0,
-            "expected frequency of 10.0 for key1 to be 2, got {}",
-            freq_10
+            "expected frequency of 10.0 for key1 to be 2, got {freq_10}"
         );
 
         let freq_20 = hydra.query_frequency(vec!["key1"], &SketchInput::F64(20.0));
         assert_eq!(
             freq_20, 1.0,
-            "expected frequency of 20.0 for key1 to be 1, got {}",
-            freq_20
+            "expected frequency of 20.0 for key1 to be 1, got {freq_20}"
         );
 
         let freq_30 = hydra.query_frequency(vec!["key1"], &SketchInput::F64(30.0));
         assert_eq!(
             freq_30, 1.0,
-            "expected frequency of 30.0 for key1 to be 1, got {}",
-            freq_30
+            "expected frequency of 30.0 for key1 to be 1, got {freq_30}"
         );
 
         // key4 appears in 3 entries with values 40.0, 50.0, 60.0
         let freq_40 = hydra.query_frequency(vec!["key4"], &SketchInput::F64(40.0));
         assert_eq!(
             freq_40, 1.0,
-            "expected frequency of 40.0 for key4 to be 1, got {}",
-            freq_40
+            "expected frequency of 40.0 for key4 to be 1, got {freq_40}"
         );
 
         // Test multi-label subpopulation queries
         let freq_multi = hydra.query_frequency(vec!["key1", "key3"], &SketchInput::F64(10.0));
         assert_eq!(
             freq_multi, 1.0,
-            "expected frequency of 10.0 for key1;key to be 1, got {}",
-            freq_multi
+            "expected frequency of 10.0 for key1;key to be 1, got {freq_multi}"
         );
 
         // key1;key2;key3 is the full key appearing 3 times
@@ -234,16 +227,14 @@ mod tests {
             hydra.query_frequency(vec!["key1", "key2", "key3"], &SketchInput::F64(20.0));
         assert_eq!(
             freq_full, 1.0,
-            "expected frequency of 20.0 for key1;key2;key3 to be 1, got {}",
-            freq_full
+            "expected frequency of 20.0 for key1;key2;key3 to be 1, got {freq_full}"
         );
 
         // Test cross-population queries (should be 0 as key1 and key8 never appear together)
         let freq_cross = hydra.query_frequency(vec!["key1", "key8"], &SketchInput::F64(10.0));
         assert_eq!(
             freq_cross, 0.0,
-            "expected frequency of 10.0 for key1;key8 to be 0/empty, got {}",
-            freq_cross
+            "expected frequency of 10.0 for key1;key8 to be 0/empty, got {freq_cross}"
         );
     }
 
@@ -277,24 +268,21 @@ mod tests {
         let card_key1 = hydra.query_key(vec!["key1"], &HydraQuery::Cardinality);
         assert!(
             (card_key1 - 3.0).abs() < EPSILON,
-            "expected cardinality near 3 for key1, got {}",
-            card_key1
+            "expected cardinality near 3 for key1, got {card_key1}"
         );
 
         // key4 appears with 3 distinct values: 40.0, 50.0, 60.0
         let card_key4 = hydra.query_key(vec!["key4"], &HydraQuery::Cardinality);
         assert!(
             (card_key4 - 3.0).abs() < EPSILON,
-            "expected cardinality near 3 for key4, got {}",
-            card_key4
+            "expected cardinality near 3 for key4, got {card_key4}"
         );
 
         // key7 appears with 3 distinct values: 70.0, 80.0, 90.0
         let card_key7 = hydra.query_key(vec!["key7"], &HydraQuery::Cardinality);
         assert!(
             (card_key7 - 3.0).abs() < EPSILON,
-            "expected cardinality near 3 for key7, got {}",
-            card_key7
+            "expected cardinality near 3 for key7, got {card_key7}"
         );
 
         // Test multi-label cardinality
@@ -302,16 +290,14 @@ mod tests {
         let card_multi = hydra.query_key(vec!["key1", "key2"], &HydraQuery::Cardinality);
         assert!(
             (card_multi - 3.0).abs() < EPSILON,
-            "expected cardinality near 3 for key1;key2, got {}",
-            card_multi
+            "expected cardinality near 3 for key1;key2, got {card_multi}"
         );
 
         // key1;key2;key3 is the full key with 3 distinct values
         let card_full = hydra.query_key(vec!["key1", "key2", "key3"], &HydraQuery::Cardinality);
         assert!(
             (card_full - 3.0).abs() < EPSILON,
-            "expected cardinality near 3 for key1;key2;key3, got {}",
-            card_full
+            "expected cardinality near 3 for key1;key2;key3, got {card_full}"
         );
 
         // Test cross-population queries (should be 0 as key1 and key7 never appear together)

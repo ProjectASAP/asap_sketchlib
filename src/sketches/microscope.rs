@@ -14,7 +14,7 @@ pub struct MicroScope {
 }
 
 impl MicroScope {
-    pub fn debug(&self) -> () {
+    pub fn debug(&self) {
         println!("pixel counters: {:?}", self.pixel_counters);
         println!("zooming counter: {}", self.zooming_counter);
         println!("shutter counter: {}", self.shutter_counter);
@@ -46,7 +46,7 @@ impl MicroScope {
         self.zooming_counter += 1;
         // for i from 0 to (T+1)
         for i in 0..self.sub_window_count {
-            self.pixel_counters[i] = self.pixel_counters[i] / self.c;
+            self.pixel_counters[i] /= self.c;
         }
     }
 
@@ -62,7 +62,7 @@ impl MicroScope {
         }
         if flag {
             for i in 0..self.sub_window_count {
-                self.pixel_counters[i] = self.pixel_counters[i] * self.c;
+                self.pixel_counters[i] *= self.c;
             }
             self.zooming_counter -= 1;
         }
@@ -132,7 +132,6 @@ impl MicroScope {
         self.carry_in(pixel_idx);
         // zoom-in operation
         self.zoom_in();
-        return;
     }
 
     pub fn query(&self, timestamp: u64) -> f64 {
@@ -153,7 +152,7 @@ impl MicroScope {
         let rate = 1.0 - ((timestamp % sub_window_size) as f64 / sub_window_size as f64);
         let delta_f = rate * (self.pixel_counters[last_sub_window]) as f64;
         res += delta_f;
-        return res;
+        res
     }
 
     pub fn delete(&mut self, timestamp: u64) {
@@ -202,8 +201,7 @@ mod tests {
         let estimate = scope.query(0);
         assert!(
             estimate >= 18.0,
-            "expected query to report close to 20, got {}",
-            estimate
+            "expected query to report close to 20, got {estimate}"
         );
     }
 
@@ -222,10 +220,10 @@ mod tests {
 
         base.merge(&other, 20);
         let estimate = base.query(20);
+        // The recommended way
         assert!(
             estimate >= 15.0,
-            "after merge expected estimate to reflect combined inserts, got {}",
-            estimate
+            "after merge expected estimate to reflect combined inserts, got {estimate}" // variable captured here
         );
     }
 }
