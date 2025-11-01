@@ -67,20 +67,16 @@ impl Count {
     /// Inserts an observation with hash optimization of Count Sketch updating algorithm.
     /// The hash may be reused with other sketches
     pub fn fast_insert_with_hash_value(&mut self, hashed_val: u128) {
-        let mask_bits = self.counts.get_mask_bits() as usize;
-        let mask = (1u128 << mask_bits) - 1;
-        let mut shift_amount = 0;
-        let mut sign_bit_pos = 127;
-        for _r in 0..self.row {
-            let hashed = (hashed_val >> shift_amount) & mask;
-            let col = (hashed as usize) % self.col;
-            let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
-            let sign_bit = -(1 - 2 * bit);
-            self.counts
-                .update_one_counter(_r, col, |a, b| *a += sign_bit * b, 1_i64);
-            shift_amount += mask_bits;
-            sign_bit_pos -= 1;
-        }
+        self.counts.fast_insert_row_dependent(
+            |counter, value, row| {
+                let sign_bit_pos = 127 - row;
+                let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
+                let sign_bit = -(1 - 2 * bit);
+                *counter += sign_bit * value;
+            },
+            1_i64,
+            hashed_val,
+        );
     }
 
     /// Returns the frequency estimate for the provided value.

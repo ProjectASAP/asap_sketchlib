@@ -105,6 +105,11 @@ impl HydraCounter {
     /// # Examples
     /// ```
     /// // For CountMin, only Frequency queries are valid
+    /// use sketchlib_rust::input::HydraCounter;
+    /// use sketchlib_rust::input::HydraQuery;
+    /// use sketchlib_rust::CountMin;
+    /// use sketchlib_rust::SketchInput;
+    /// let counter = HydraCounter::CM(CountMin::default());
     /// let result = counter.query(&HydraQuery::Frequency(SketchInput::I64(42)));
     ///
     /// // For KLL, only Quantile queries would be valid

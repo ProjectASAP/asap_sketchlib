@@ -173,15 +173,25 @@ pub struct Vector2D<T> {
     data: Vec<T>,
     rows: usize,
     cols: usize,
+    mask_bits: u32,
+    mask: u128,
 }
 
 impl<T> Vector2D<T> {
     /// Creates an empty matrix with reserved capacity.
     pub fn init(rows: usize, cols: usize) -> Self {
+        let mask_bits = if cols.is_power_of_two() {
+            cols.ilog2()
+        } else {
+            cols.ilog2() + 1
+        };
+        let mask = (1u128 << mask_bits) - 1;
         Self {
             data: Vec::with_capacity(rows * cols),
             rows,
             cols,
+            mask_bits,
+            mask,
         }
     }
 
@@ -190,13 +200,25 @@ impl<T> Vector2D<T> {
     where
         F: FnMut(usize, usize) -> T,
     {
+        let mask_bits = if cols.is_power_of_two() {
+            cols.ilog2()
+        } else {
+            cols.ilog2() + 1
+        };
+        let mask = (1u128 << mask_bits) - 1;
         let mut data = Vec::with_capacity(rows * cols);
         for r in 0..rows {
             for c in 0..cols {
                 data.push(f(r, c));
             }
         }
-        Self { data, rows, cols }
+        Self {
+            data,
+            rows,
+            cols,
+            mask_bits,
+            mask,
+        }
     }
 
     /// Replaces the contents with clones of `value`.
@@ -293,14 +315,38 @@ impl<T> Vector2D<T> {
         F: Fn(&mut T, V),
         V: Clone,
     {
-        let mask_bits = self.get_mask_bits();
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
         let cols = self.cols;
         for row in 0..self.rows {
             let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
             let col = (hashed as usize) % cols;
             let idx = row * cols + col;
             op(&mut self.data[idx], value.clone());
+        }
+    }
+
+    /// Inserts a value along every row using a hashed column selection,
+    /// with row-dependent operations.
+    ///
+    /// This method is useful when the operation needs to vary based on the row number,
+    /// such as when computing row-specific sign bits or applying different transformations
+    /// per row. The closure receives the mutable counter reference, the value, and the
+    /// current row index.
+    #[inline(always)]
+    pub fn fast_insert_row_dependent<F, V>(&mut self, op: F, value: V, hashed_val: u128)
+    where
+        F: Fn(&mut T, V, usize),
+        V: Clone,
+    {
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
+        let cols = self.cols;
+        for row in 0..self.rows {
+            let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
+            let col = (hashed as usize) % cols;
+            let idx = row * cols + col;
+            op(&mut self.data[idx], value.clone(), row);
         }
     }
 
@@ -319,8 +365,8 @@ impl<T> Vector2D<T> {
     where
         T: Clone + Ord,
     {
-        let mask_bits = self.get_mask_bits();
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
         let cols = self.cols;
         let hashed = (hashed_val) & mask;
         let c0 = (hashed as usize) % cols;
@@ -345,8 +391,8 @@ impl<T> Vector2D<T> {
     where
         T: Clone + Ord + Copy + ToF64,
     {
-        let mask_bits = self.get_mask_bits();
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
         let mut estimates = Vec::with_capacity(self.rows);
         for r in 0..self.rows {
             let hashed = (hashed_val >> (mask_bits as usize * r)) & mask;
@@ -370,8 +416,8 @@ impl<T> Vector2D<T> {
     where
         F: Fn(&T, &Q) -> f64,
     {
-        let mask_bits = self.get_mask_bits();
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
         let mut estimates = Vec::with_capacity(self.rows);
         for r in 0..self.rows {
             let hashed = (hashed_val >> (mask_bits as usize * r)) & mask;
@@ -405,8 +451,8 @@ impl<T> Vector2D<T> {
     where
         T: Clone + Ord,
     {
-        let mask_bits = self.get_mask_bits();
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
         let cols = self.cols;
         let hashed = (hashed_val) & mask;
         let c0 = (hashed as usize) % cols;
