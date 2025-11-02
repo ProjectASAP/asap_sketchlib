@@ -73,7 +73,8 @@ impl CountMin {
     /// Inserts an observation using the combined hash optimization.
     /// Hash value can be reused with other sketches.
     pub fn fast_insert_with_hash_value(&mut self, hashed_val: u128) {
-        self.counts.fast_insert(|a, b, _| *a += b, 1_u64, hashed_val);
+        self.counts
+            .fast_insert(|a, b, _| *a += b, 1_u64, hashed_val);
     }
 
     /// Returns the frequency estimate for the provided value.

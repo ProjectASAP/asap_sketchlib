@@ -49,7 +49,8 @@ impl Hydra {
 
         for subkey in &result {
             let hash = hash_it_to_128(HYDRA_SEED, &SketchInput::String(subkey.to_string()));
-            self.sketches.fast_insert(|a, b, _| a.insert(b), value, hash);
+            self.sketches
+                .fast_insert(|a, b, _| a.insert(b), value, hash);
         }
     }
 
@@ -65,11 +66,10 @@ impl Hydra {
     pub fn query_key(&self, key: Vec<&str>, query: &HydraQuery) -> f64 {
         let key_string = key.join(";");
         let hashed_val = hash_it_to_128(HYDRA_SEED, &SketchInput::String(key_string.to_string()));
-        self.sketches.fast_query_median_with_key(
-            hashed_val,
-            query,
-            |counter, q, _, _| counter.query(q).unwrap(),
-        )
+        self.sketches
+            .fast_query_median_with_key(hashed_val, query, |counter, q, _, _| {
+                counter.query(q).unwrap()
+            })
     }
 
     /// Convenience method for querying frequency (for CountMin-based Hydra)

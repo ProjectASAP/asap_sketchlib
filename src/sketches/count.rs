@@ -105,14 +105,36 @@ impl Count {
     /// Returns the frequency estimate for the provided value, with hash optimization.
     /// On some architecture, this optimization may not have effect for small sketch
     /// Inferred reason is the u128 is expensive
+    /// Due to the sorting function speed difference, not calling common API here
+    /// sort_unstable() is faster than sort_by() with partial_cmp
     pub fn fast_estimate(&self, value: &SketchInput) -> f64 {
         let hashed_val = hash_it_to_128(0, value);
-        self.counts.fast_query_median(hashed_val, |val, row, hash| {
-            let sign_bit_pos = 127 - row;
-            let bit = ((hash >> sign_bit_pos) & 1) as i64;
-            let sign_bit = -(1 - 2 * bit);
-            sign_bit as f64 * (*val as f64)
-        })
+        // self.counts.fast_query_median(hashed_val, |val, row, hash| {
+        //     let sign_bit_pos = 127 - row;
+        //     let bit = ((hash >> sign_bit_pos) & 1) as i64;
+        //     let sign_bit = -(1 - 2 * bit);
+        //     sign_bit as f64 * (*val as f64)
+        // })
+        let mut estimates = Vec::with_capacity(self.counts.rows());
+        let mask_bits = self.counts.get_mask_bits();
+        let mask = (1 << mask_bits) - 1;
+        for row in 0..self.counts.rows() {
+            let shifted = hashed_val >> (mask_bits as usize * row);
+            let col = (shifted & mask) as usize % self.counts.cols();
+            let sign_bit = ((hashed_val >> (127 - row)) & 1) as i64;
+            let sign = -(1 - 2 * sign_bit);
+            estimates.push(self.counts.query_one_counter(row, col) * sign);
+        }
+        if estimates.is_empty() {
+            return 0.0;
+        }
+        estimates.sort_unstable();
+        let mid = estimates.len() / 2;
+        if estimates.len() % 2 == 1 {
+            estimates[mid] as f64
+        } else {
+            (estimates[mid - 1] as f64 + estimates[mid] as f64) / 2.0
+        }
     }
 
     /// Merges another sketch while asserting compatible dimensions.

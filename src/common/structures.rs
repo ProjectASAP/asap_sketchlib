@@ -622,7 +622,13 @@ impl<T> Vector2D<T> {
     ///     });
     /// ```
     #[inline(always)]
-    pub fn fast_query_aggregate<F, Q, R>(&self, hashed_val: u128, query_key: &Q, init: R, fold_fn: F) -> R
+    pub fn fast_query_aggregate<F, Q, R>(
+        &self,
+        hashed_val: u128,
+        query_key: &Q,
+        init: R,
+        fold_fn: F,
+    ) -> R
     where
         F: Fn(R, &T, &Q, usize, u128) -> R,
     {
