@@ -67,20 +67,16 @@ impl Count {
     /// Inserts an observation with hash optimization of Count Sketch updating algorithm.
     /// The hash may be reused with other sketches
     pub fn fast_insert_with_hash_value(&mut self, hashed_val: u128) {
-        let mask_bits = self.counts.get_mask_bits() as usize;
-        let mask = (1u128 << mask_bits) - 1;
-        let mut shift_amount = 0;
-        let mut sign_bit_pos = 127;
-        for _r in 0..self.row {
-            let hashed = (hashed_val >> shift_amount) & mask;
-            let col = (hashed as usize) % self.col;
-            let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
-            let sign_bit = -(1 - 2 * bit);
-            self.counts
-                .update_one_counter(_r, col, |a, b| *a += sign_bit * b, 1_i64);
-            shift_amount += mask_bits;
-            sign_bit_pos -= 1;
-        }
+        self.counts.fast_insert(
+            |counter, value, row| {
+                let sign_bit_pos = 127 - row;
+                let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
+                let sign_bit = -(1 - 2 * bit);
+                *counter += sign_bit * value;
+            },
+            1_i64,
+            hashed_val,
+        );
     }
 
     /// Returns the frequency estimate for the provided value.
@@ -109,22 +105,25 @@ impl Count {
     /// Returns the frequency estimate for the provided value, with hash optimization.
     /// On some architecture, this optimization may not have effect for small sketch
     /// Inferred reason is the u128 is expensive
+    /// Due to the sorting function speed difference, not calling common API here
+    /// sort_unstable() is faster than sort_by() with partial_cmp
     pub fn fast_estimate(&self, value: &SketchInput) -> f64 {
         let hashed_val = hash_it_to_128(0, value);
-        let mask_bits = self.counts.get_mask_bits() as usize;
-        let mask = (1u128 << mask_bits) - 1;
-        let mut estimates = Vec::with_capacity(self.row);
-        let mut shift_amount = 0;
-        let mut sign_bit_pos = 127;
-        for r in 0..self.row {
-            let hashed = (hashed_val >> shift_amount) & mask;
-            let col = (hashed as usize) % self.col;
-            let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
-            let sign_bit = -(1 - 2 * bit);
-            let counter = self.counts.query_one_counter(r, col);
-            estimates.push(sign_bit * counter);
-            shift_amount += mask_bits;
-            sign_bit_pos -= 1;
+        // self.counts.fast_query_median(hashed_val, |val, row, hash| {
+        //     let sign_bit_pos = 127 - row;
+        //     let bit = ((hash >> sign_bit_pos) & 1) as i64;
+        //     let sign_bit = -(1 - 2 * bit);
+        //     sign_bit as f64 * (*val as f64)
+        // })
+        let mut estimates = Vec::with_capacity(self.counts.rows());
+        let mask_bits = self.counts.get_mask_bits();
+        let mask = (1 << mask_bits) - 1;
+        for row in 0..self.counts.rows() {
+            let shifted = hashed_val >> (mask_bits as usize * row);
+            let col = (shifted & mask) as usize % self.counts.cols();
+            let sign_bit = ((hashed_val >> (127 - row)) & 1) as i64;
+            let sign = -(1 - 2 * sign_bit);
+            estimates.push(self.counts.query_one_counter(row, col) * sign);
         }
         if estimates.is_empty() {
             return 0.0;
@@ -348,21 +347,21 @@ impl CountL2HH {
         lst.sort();
         // get median
         if self.row == 1 {
-            return lst[0] as f64;
+            lst[0] as f64
         } else if self.row == 2 {
-            return (lst[0] + lst[1]) as f64 / 2.0;
+            (lst[0] + lst[1]) as f64 / 2.0
         } else if self.row == 3 {
-            return lst[1] as f64;
+            lst[1] as f64
         } else if self.row % 2 == 0 {
-            return (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0;
+            (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0
         } else {
-            return lst[self.row / 2] as f64;
+            lst[self.row / 2] as f64
         }
     }
 
     pub fn get_l2(&self) -> f64 {
         let l2 = self.get_l2_sqr();
-        return l2.sqrt();
+        l2.sqrt()
     }
 
     /// Returns the frequency estimate with hash optimization.
@@ -395,15 +394,15 @@ impl CountL2HH {
         lst.sort();
         // get median
         if self.row == 1 {
-            return lst[0] as f64;
+            lst[0] as f64
         } else if self.row == 2 {
-            return (lst[0] + lst[1]) as f64 / 2.0;
+            (lst[0] + lst[1]) as f64 / 2.0
         } else if self.row == 3 {
-            return lst[1] as f64;
+            lst[1] as f64
         } else if self.row % 2 == 0 {
-            return (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0;
+            (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0
         } else {
-            return lst[self.row / 2] as f64;
+            lst[self.row / 2] as f64
         }
     }
 }
@@ -494,8 +493,7 @@ mod tests {
             assert_eq!(
                 sketch.counts.query_one_counter(row, idx),
                 expected,
-                "row {} counter mismatch",
-                row
+                "row {row} counter mismatch"
             );
         }
     }
@@ -520,9 +518,7 @@ mod tests {
             let estimate = fast.fast_estimate(key);
             assert!(
                 (estimate - 1.0).abs() < f64::EPSILON,
-                "fast estimate for key {:?} should be 1.0, got {}",
-                key,
-                estimate
+                "fast estimate for key {key:?} should be 1.0, got {estimate}"
             );
         }
     }
@@ -547,9 +543,7 @@ mod tests {
             let estimate = sketch.estimate(key);
             assert!(
                 (estimate - 1.0).abs() < f64::EPSILON,
-                "estimate for key {:?} should be 1.0, got {}",
-                key,
-                estimate
+                "estimate for key {key:?} should be 1.0, got {estimate}"
             );
         }
     }
@@ -567,9 +561,7 @@ mod tests {
         let estimate = sketch.estimate(&key);
         assert!(
             (estimate - repeats as f64).abs() < f64::EPSILON,
-            "expected estimate {}, got {}",
-            repeats,
-            estimate
+            "expected estimate {repeats}, got {estimate}"
         );
     }
 
@@ -594,9 +586,7 @@ mod tests {
             let estimate = sketch.fast_estimate(key);
             assert!(
                 (estimate - 5.0).abs() < f64::EPSILON,
-                "fast estimate for key {:?} should be 5.0, got {}",
-                key,
-                estimate
+                "fast estimate for key {key:?} should be 5.0, got {estimate}"
             );
         }
     }
@@ -734,7 +724,7 @@ mod tests {
         assert_eq!(est_after_second, 3.0);
 
         let l2 = sketch.get_l2();
-        assert!(l2 >= 3.0, "expected non-trivial l2, got {}", l2);
+        assert!(l2 >= 3.0, "expected non-trivial l2, got {l2}");
     }
 
     #[test]

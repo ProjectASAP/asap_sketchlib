@@ -157,10 +157,12 @@ pub struct Vector2D<T> {
     data: Vec<T>,
     rows: usize,
     cols: usize,
+    mask_bits: u32,  // Pre-computed for performance
+    mask: u128,      // Pre-computed bitmask
 }
 ```
 
-**Design:** Row-major flat storage (`data[row * cols + col]`) provides cache-friendly sequential access. Specialized fast-path methods leverage bit-masking and hash reuse for optimal sketch operations.
+**Design:** Row-major flat storage (`data[row * cols + col]`) provides cache-friendly sequential access. Pre-computed mask values eliminate redundant computation from hot paths. Specialized fast-path methods leverage bit-masking and hash reuse for optimal sketch operations with zero-cost abstractions.
 
 #### Vector2D Constructors
 
@@ -217,12 +219,12 @@ where
 
 #### Fast-Path Methods (Hash-Optimized)
 
-These methods are the **core innovation** of the common structure. They use pre-computed hash values with bit-masking to efficiently select columns across multiple rows **without re-hashing**.
+These methods are the **core innovation** of the common structure. They use pre-computed hash values with bit-masking to efficiently select columns across multiple rows **without re-hashing**. The API follows zero-cost abstraction principles - unused parameters are eliminated by the compiler with no runtime overhead.
 
 ##### Hash Configuration
 
 ```rust
-// Compute mask bits for column selection
+// Compute mask bits for column selection (legacy - prefer pre-computed values)
 fn get_mask_bits(&self) -> u32
 
 // Determine required hash width (32, 64, or 128 bits)
@@ -231,86 +233,190 @@ fn get_required_bits(&self) -> usize
 
 **How it works:**
 
-For a sketch with `cols` columns, we need `log2(cols)` bits per row to select a column. For 3 rows with 4096 columns (12 bits each), we need 36 total bits, so `u64` or `u128` hash values are used.
+For a sketch with `cols` columns, we need `log2(cols)` bits per row to select a column. For 3 rows with 4096 columns (12 bits each), we need 36 total bits, so `u64` or `u128` hash values are used. The mask values are **pre-computed during construction** and cached in the struct for optimal performance.
 
-##### Fast Insert
+##### Fast Insert (Unified)
 
 ```rust
 fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: u128)
 where
-    F: Fn(&mut T, V),
+    F: Fn(&mut T, V, usize),  // Closure: (counter, value, row_index)
     V: Clone
 ```
 
-**Purpose:** Insert a value into all rows using a single pre-computed hash.
+**Purpose:** Insert a value into all rows using a single pre-computed hash. Supports both row-independent and row-dependent operations through a unified interface.
 
 **Algorithm:**
 
 1. Extract `mask_bits` from hash for each row using bit shifting
 2. Apply modulo to get column index: `col = (hash_chunk % cols)`
-3. Apply operation `op` to `data[row * cols + col]`
+3. Apply operation `op(&mut counter, value, row)` to `data[row * cols + col]`
+
+**Zero-Cost Abstraction:** The `row` parameter can be ignored with `_` for row-independent operations - the compiler eliminates the unused parameter with no runtime cost.
+
+**Examples:**
+
+```rust
+// Row-independent (CountMin sketch)
+let hash = hash_it_to_128(0, &SketchInput::U64(12345));
+cm.fast_insert(|counter, val, _| *counter += val, 1, hash);
+
+// Row-dependent (Count sketch with sign bits)
+sketch.fast_insert(|counter, value, row| {
+    let sign_bit = (hash >> (127 - row)) & 1;
+    let sign = -(1 - 2 * sign_bit as i64);
+    *counter += sign * value;
+}, 1, hash);
+```
+
+##### Fast Query Methods (7 Methods for Flexibility)
+
+The query API provides specialized methods for common aggregations plus a generic method for custom logic. All methods support row-dependent transformations through closures.
+
+###### 1. Fast Query Min
+
+```rust
+fn fast_query_min<F, R>(&self, hashed_val: u128, op: F) -> R
+where
+    F: Fn(&T, usize, u128) -> R,  // Closure: (counter, row, hash) -> value
+    R: Ord,
+```
+
+**Purpose:** Query all rows and return the minimum value after applying transformation.
+
+**Examples:**
+
+```rust
+// Simple min (row-independent)
+let min = cm.fast_query_min(hash, |val, _, _| *val);
+
+// Row-weighted min
+let min = sketch.fast_query_min(hash, |val, row, _| *val * weight(row));
+```
+
+###### 2. Fast Query Max
+
+```rust
+fn fast_query_max<F, R>(&self, hashed_val: u128, op: F) -> R
+where
+    F: Fn(&T, usize, u128) -> R,
+    R: Ord,
+```
+
+**Purpose:** Query all rows and return the maximum value after applying transformation.
 
 **Example:**
 
 ```rust
-let hash = hash_it(0, &SketchInput::U64(12345));  // Pre-compute once
-cm.fast_insert(|counter, val| *counter += val, 1, hash);
+let max = sketch.fast_query_max(hash, |val, _, _| *val);
 ```
 
-##### Fast Query (Min)
+###### 3. Fast Query Median
 
 ```rust
-fn fast_query_min(&self, hashed_val: u128) -> T
+fn fast_query_median<F>(&self, hashed_val: u128, op: F) -> f64
 where
-    T: Clone + Ord
+    F: Fn(&T, usize, u128) -> f64,
 ```
 
-**Purpose:** Query all rows and return the minimum counter value (for Count-Min sketch).
+**Purpose:** Query all rows, apply transformation, and return the median (for Count Sketch).
 
-**Algorithm:**
+**Examples:**
+
+```rust
+// Simple median (row-independent)
+let median = sketch.fast_query_median(hash, |val, _, _| *val as f64);
+
+// Count sketch with row-dependent sign bits
+let median = sketch.fast_query_median(hash, |val, row, hash| {
+    let sign_bit = (hash >> (127 - row)) & 1;
+    let sign = -(1 - 2 * sign_bit as i64) as f64;
+    *val as f64 * sign
+});
+```
+
+###### 4. Fast Query Min with Key
+
+```rust
+fn fast_query_min_with_key<F, Q, R>(&self, hashed_val: u128, query_key: &Q, op: F) -> R
+where
+    F: Fn(&T, &Q, usize, u128) -> R,  // Closure: (counter, key, row, hash)
+    R: Ord,
+```
+
+**Purpose:** Query with an additional query key parameter (for complex counter types).
+
+**Example:**
+
+```rust
+// HeavyKeeper-style lookup
+let min = sketch.fast_query_min_with_key(hash, &key,
+    |counter, key, _, _| counter.estimate(key));
+```
+
+###### 5. Fast Query Max with Key
+
+```rust
+fn fast_query_max_with_key<F, Q, R>(&self, hashed_val: u128, query_key: &Q, op: F) -> R
+where
+    F: Fn(&T, &Q, usize, u128) -> R,
+    R: Ord,
+```
+
+**Purpose:** Query with key parameter, return maximum.
+
+###### 6. Fast Query Median with Key
+
+```rust
+fn fast_query_median_with_key<F, Q>(&self, hashed_val: u128, query_key: &Q, op: F) -> f64
+where
+    F: Fn(&T, &Q, usize, u128) -> f64,
+```
+
+**Purpose:** Query with key parameter, return median (for Hydra framework).
+
+**Example:**
+
+```rust
+// Hydra subpopulation query
+let median = sketch.fast_query_median_with_key(hash, &query,
+    |counter, q, _, _| counter.query(q).unwrap());
+```
+
+###### 7. Fast Query Aggregate (Ultimate Flexibility)
+
+```rust
+fn fast_query_aggregate<F, Q, R>(&self, hashed_val: u128, query_key: &Q, init: R, fold_fn: F) -> R
+where
+    F: Fn(R, &T, &Q, usize, u128) -> R,  // Fold: (accumulator, counter, key, row, hash)
+```
+
+**Purpose:** Generic fold/reduce operation for custom aggregation logic beyond min/max/median.
+
+**Examples:**
+
+```rust
+// Custom weighted sum
+let sum = sketch.fast_query_aggregate(hash, &(), 0.0,
+    |acc, val, _, row, _| acc + (*val as f64 * weight(row)));
+
+// Building a custom collection
+let mut results = Vec::new();
+let values = sketch.fast_query_aggregate(hash, &(), &mut results,
+    |acc, val, _, row, hash| {
+        acc.push(transform(val, row, hash));
+        acc
+    });
+```
+
+**Algorithm (Common to All Query Methods):**
 
 1. Extract column index from hash for each row
 2. Read `data[row * cols + col]`
-3. Return minimum across all rows
+3. Apply closure transformation
+4. Aggregate according to method (min/max/median/custom)
 
-**Example:**
-
-```rust
-let hash = hash_it(0, &SketchInput::U64(12345));
-let frequency = cm.fast_query_min(hash);
-```
-
-##### Fast Query (Median)
-
-```rust
-fn fast_query_median(&self, hashed_val: u128) -> f64
-where
-    T: Clone + Ord + Copy + ToF64
-
-fn fast_query_median_with_key<F, Q>(&self, hashed_val: u128, op: F, q: &Q) -> f64
-where
-    F: Fn(&T, &Q) -> f64
-```
-
-**Purpose:** Query all rows and return the median estimate (for Count Sketch).
-
-**Algorithm:**
-
-1. Extract column index from hash for each row
-2. Convert counters to `f64` using `ToF64` trait or query the counter to get `f64` with user-provided function and query-key
-3. Sort and compute median (odd length: middle value; even length: average of two middle values)
-
-**Variant with key:** Allows custom query operations (e.g., Hydra partial key matching).
-
-##### Fast Query (Max)
-
-```rust
-fn fast_query_max(&self, hashed_val: u128) -> T
-where
-    T: Clone + Ord
-```
-
-**Purpose:** Query all rows and return the maximum counter value.
+**Performance Note:** All closures are `#[inline(always)]` and monomorphized at compile time, resulting in zero overhead compared to hand-written loops.
 
 #### Direct Cell Access
 

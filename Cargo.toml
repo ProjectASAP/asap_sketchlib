@@ -33,6 +33,7 @@ criterion = "0.5"
 crate-type = ["rlib"]
 name = "sketchlib_rust"
 path = "src/lib.rs"
+bench = false
 
 [[bench]]
 name = "hash_detailed"

@@ -81,7 +81,8 @@ impl HyperLogLog {
             }
         } else if est > 143165576.533 {
             let correction_aux = i32::MAX as f64;
-            est = -1.0 * correction_aux * (1.0 - est / correction_aux).ln();
+            // est = -1.0 * correction_aux * (1.0 - est / correction_aux).ln();
+            est = 1.0 * -correction_aux * (1.0 - est / correction_aux).ln();
         }
         est as usize
     }
@@ -277,7 +278,7 @@ impl HllDs {
     }
 
     pub fn merge(&mut self, _: &HllDs) {
-        assert!(false, "Hll with HIP Estimator should not be merged");
+        panic!("Hll with HIP Estimator should not be merged");
     }
 
     pub fn get_est(&self) -> usize {

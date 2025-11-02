@@ -43,9 +43,7 @@ pub fn hash_it(d: usize, key: &SketchInput) -> u64 {
         SketchInput::U32(u) => {
             XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
         }
-        SketchInput::U64(u) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
+        SketchInput::U64(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
         SketchInput::F32(f) => {
             XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*f as u64).to_ne_bytes())
         }
@@ -54,7 +52,7 @@ pub fn hash_it(d: usize, key: &SketchInput) -> u64 {
         }
         SketchInput::Str(s) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
         SketchInput::String(s) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
-        SketchInput::Bytes(items) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], *items),
+        SketchInput::Bytes(items) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], items),
         SketchInput::I8(i) => {
             XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
         }
@@ -91,9 +89,7 @@ pub fn hash_it_to_128(d: usize, key: &SketchInput) -> u128 {
         SketchInput::U32(u) => {
             XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
         }
-        SketchInput::U64(u) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
+        SketchInput::U64(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
         SketchInput::F32(f) => {
             XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*f as u64).to_ne_bytes())
         }
@@ -102,7 +98,7 @@ pub fn hash_it_to_128(d: usize, key: &SketchInput) -> u128 {
         }
         SketchInput::Str(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
         SketchInput::String(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
-        SketchInput::Bytes(items) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], *items),
+        SketchInput::Bytes(items) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], items),
         SketchInput::I8(i) => {
             XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
         }
@@ -165,7 +161,7 @@ pub fn hash_for_enough_bits(idx: usize, key: &SketchInput, bits_expectation: usi
                 XxHash32::oneshot((SEEDLIST[idx] & MASK_32BITS) as u32, (*s).as_bytes()) as u128
             }
             SketchInput::Bytes(items) => {
-                XxHash32::oneshot((SEEDLIST[idx] & MASK_32BITS) as u32, *items) as u128
+                XxHash32::oneshot((SEEDLIST[idx] & MASK_32BITS) as u32, items) as u128
             }
             SketchInput::I8(i) => {
                 XxHash32::oneshot((SEEDLIST[idx] & MASK_32BITS) as u32, &i.to_ne_bytes()) as u128
@@ -219,7 +215,7 @@ pub fn hash_for_enough_bits(idx: usize, key: &SketchInput, bits_expectation: usi
                 XxHash3_64::oneshot_with_seed(SEEDLIST[idx], (*s).as_bytes()) as u128
             }
             SketchInput::Bytes(items) => {
-                XxHash3_64::oneshot_with_seed(SEEDLIST[idx], *items) as u128
+                XxHash3_64::oneshot_with_seed(SEEDLIST[idx], items) as u128
             }
             SketchInput::I8(i) => {
                 XxHash3_64::oneshot_with_seed(SEEDLIST[idx], &i.to_ne_bytes()) as u128
@@ -258,7 +254,7 @@ pub fn hash_for_enough_bits(idx: usize, key: &SketchInput, bits_expectation: usi
             SketchInput::String(s) => {
                 XxHash3_128::oneshot_with_seed(SEEDLIST[idx], (*s).as_bytes())
             }
-            SketchInput::Bytes(items) => XxHash3_128::oneshot_with_seed(SEEDLIST[idx], *items),
+            SketchInput::Bytes(items) => XxHash3_128::oneshot_with_seed(SEEDLIST[idx], items),
             SketchInput::I8(i) => XxHash3_128::oneshot_with_seed(SEEDLIST[idx], &i.to_ne_bytes()),
             SketchInput::I16(i) => XxHash3_128::oneshot_with_seed(SEEDLIST[idx], &i.to_ne_bytes()),
             SketchInput::I128(i) => XxHash3_128::oneshot_with_seed(SEEDLIST[idx], &i.to_ne_bytes()),

@@ -83,10 +83,11 @@ impl<'bucket> ExponentialHistogram<'bucket> {
                     self.merge_at_index(i + 1);
                 }
                 same_size_vol = 1;
-                if i + 1 < self.payload.len() && i > 0 {
-                    if self.payload[i + 1].size == self.payload[i].size {
-                        same_size_vol += 1;
-                    }
+                if i + 1 < self.payload.len()
+                    && i > 0
+                    && self.payload[i + 1].size == self.payload[i].size
+                {
+                    same_size_vol += 1;
                 }
             }
 

@@ -173,15 +173,25 @@ pub struct Vector2D<T> {
     data: Vec<T>,
     rows: usize,
     cols: usize,
+    mask_bits: u32,
+    mask: u128,
 }
 
 impl<T> Vector2D<T> {
     /// Creates an empty matrix with reserved capacity.
     pub fn init(rows: usize, cols: usize) -> Self {
+        let mask_bits = if cols.is_power_of_two() {
+            cols.ilog2()
+        } else {
+            cols.ilog2() + 1
+        };
+        let mask = (1u128 << mask_bits) - 1;
         Self {
             data: Vec::with_capacity(rows * cols),
             rows,
             cols,
+            mask_bits,
+            mask,
         }
     }
 
@@ -190,13 +200,25 @@ impl<T> Vector2D<T> {
     where
         F: FnMut(usize, usize) -> T,
     {
+        let mask_bits = if cols.is_power_of_two() {
+            cols.ilog2()
+        } else {
+            cols.ilog2() + 1
+        };
+        let mask = (1u128 << mask_bits) - 1;
         let mut data = Vec::with_capacity(rows * cols);
         for r in 0..rows {
             for c in 0..cols {
                 data.push(f(r, c));
             }
         }
-        Self { data, rows, cols }
+        Self {
+            data,
+            rows,
+            cols,
+            mask_bits,
+            mask,
+        }
     }
 
     /// Replaces the contents with clones of `value`.
@@ -221,6 +243,10 @@ impl<T> Vector2D<T> {
     /// Returns the total number of elements.
     pub fn len(&self) -> usize {
         self.data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.len() == 0
     }
 
     /// Provides immutable access to the flattened storage.
@@ -276,27 +302,46 @@ impl<T> Vector2D<T> {
     #[inline]
     pub fn get_required_bits(&self) -> usize {
         let mut bits_required = self.get_mask_bits() as usize;
-        bits_required = bits_required * self.rows;
+        bits_required *= self.rows;
         bits_required = 32 << ((bits_required > 32) as u32 + (bits_required > 64) as u32);
         bits_required = bits_required.min(128);
         bits_required
     }
 
     /// Inserts a value along every row using a hashed column selection.
+    ///
+    /// The closure receives three parameters: mutable counter reference, the value,
+    /// and the current row index. For simple operations that don't need the row index,
+    /// use `_` to ignore it (zero performance cost due to compiler optimization).
+    ///
+    /// # Examples
+    ///
+    /// Simple increment (row-independent):
+    /// ```ignore
+    /// sketch.fast_insert(|counter, value, _| *counter += value, 1, hash);
+    /// ```
+    ///
+    /// Row-dependent operation (e.g., Count sketch with sign bits):
+    /// ```ignore
+    /// sketch.fast_insert(|counter, value, row| {
+    ///     let sign = compute_sign(hash, row);
+    ///     *counter += sign * value;
+    /// }, 1, hash);
+    /// ```
     #[inline(always)]
     pub fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: u128)
     where
-        F: Fn(&mut T, V),
+        F: Fn(&mut T, V, usize),
         V: Clone,
     {
-        let mask_bits = self.get_mask_bits();
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
         let cols = self.cols;
         for row in 0..self.rows {
             let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
             let col = (hashed as usize) % cols;
             let idx = row * cols + col;
-            op(&mut self.data[idx], value.clone());
+            op(&mut self.data[idx], value.clone(), row);
         }
     }
 
@@ -310,22 +355,38 @@ impl<T> Vector2D<T> {
     }
 
     /// Queries all rows using precomputed hashed values to find the minimum.
+    ///
+    /// The closure receives: counter reference, row index, and hash value.
+    /// Use `_` to ignore unused parameters (zero performance cost).
+    ///
+    /// # Examples
+    ///
+    /// Simple min (row-independent):
+    /// ```ignore
+    /// let min = sketch.fast_query_min(hash, |val, _, _| *val);
+    /// ```
+    ///
+    /// Row-dependent with transformation:
+    /// ```ignore
+    /// let min = sketch.fast_query_min(hash, |val, row, _| *val as f64 * weight(row));
+    /// ```
     #[inline(always)]
-    pub fn fast_query_min(&self, hashed_val: u128) -> T
+    pub fn fast_query_min<F, R>(&self, hashed_val: u128, op: F) -> R
     where
-        T: Clone + Ord,
+        F: Fn(&T, usize, u128) -> R,
+        R: Ord,
     {
-        let mask_bits = self.get_mask_bits();
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
         let cols = self.cols;
-        let hashed = (hashed_val) & mask;
+        let hashed = hashed_val & mask;
         let c0 = (hashed as usize) % cols;
-        let mut min = self.data[c0].clone();
+        let mut min = op(&self.data[c0], 0, hashed_val);
         for row in 1..self.rows {
             let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
             let col = (hashed as usize) % cols;
             let idx = row * cols + col;
-            let candidate = self.data[idx].clone();
+            let candidate = op(&self.data[idx], row, hashed_val);
             if candidate < min {
                 min = candidate;
             }
@@ -335,45 +396,182 @@ impl<T> Vector2D<T> {
 
     /// Queries all rows using precomputed hashed values to find the median.
     ///
-    /// Note: This method requires T to be convertible to f64 for median calculation.
+    /// The closure receives: counter reference, row index, and hash value.
+    /// Returns f64 values which are collected and sorted to compute median.
+    /// Use `_` to ignore unused parameters (zero performance cost).
+    ///
+    /// # Examples
+    ///
+    /// Simple median (row-independent):
+    /// ```ignore
+    /// let median = sketch.fast_query_median(hash, |val, _, _| *val as f64);
+    /// ```
+    ///
+    /// Row-dependent (e.g., Count sketch with sign bits):
+    /// ```ignore
+    /// let median = sketch.fast_query_median(hash, |val, row, hash| {
+    ///     let sign_bit = (hash >> (127 - row)) & 1;
+    ///     let sign = -(1 - 2 * sign_bit as i64) as f64;
+    ///     *val as f64 * sign
+    /// });
+    /// ```
     #[inline(always)]
-    pub fn fast_query_median(&self, hashed_val: u128) -> f64
+    pub fn fast_query_median<F>(&self, hashed_val: u128, op: F) -> f64
     where
-        T: Clone + Ord + Copy + ToF64,
+        F: Fn(&T, usize, u128) -> f64,
     {
-        let mask_bits = self.get_mask_bits();
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
         let mut estimates = Vec::with_capacity(self.rows);
-        for r in 0..self.rows {
-            let hashed = (hashed_val >> (mask_bits as usize * r)) & mask;
+        for row in 0..self.rows {
+            let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
             let col = (hashed as usize) % self.cols;
-            let idx = r * self.cols + col;
-            estimates.push(self.data[idx].to_f64());
+            let idx = row * self.cols + col;
+            estimates.push(op(&self.data[idx], row, hashed_val));
         }
 
         // Inline median computation
         self.compute_median_inline_f64(&mut estimates)
     }
 
-    /// Queries all rows with query_key `q` using precomputed hashed values to find the median.
+    /// Queries all rows using precomputed hashed values to find the maximum.
     ///
-    /// Note: This method requires T to be convertible to f64 for median calculation.
-    /// # Arguments
-    /// * `op` - Function that applies to counter T
-    /// * `q` - Query Key
+    /// The closure receives: counter reference, row index, and hash value.
+    /// Use `_` to ignore unused parameters (zero performance cost).
+    ///
+    /// # Examples
+    ///
+    /// Simple max (row-independent):
+    /// ```ignore
+    /// let max = sketch.fast_query_max(hash, |val, _, _| *val);
+    /// ```
+    ///
+    /// Row-dependent with transformation:
+    /// ```ignore
+    /// let max = sketch.fast_query_max(hash, |val, row, _| *val as f64 / (row + 1) as f64);
+    /// ```
     #[inline(always)]
-    pub fn fast_query_median_with_key<F, Q>(&self, hashed_val: u128, op: F, q: &Q) -> f64
+    pub fn fast_query_max<F, R>(&self, hashed_val: u128, op: F) -> R
     where
-        F: Fn(&T, &Q) -> f64,
+        F: Fn(&T, usize, u128) -> R,
+        R: Ord,
     {
-        let mask_bits = self.get_mask_bits();
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
+        let cols = self.cols;
+        let hashed = hashed_val & mask;
+        let c0 = (hashed as usize) % cols;
+        let mut max = op(&self.data[c0], 0, hashed_val);
+        for row in 1..self.rows {
+            let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
+            let col = (hashed as usize) % cols;
+            let idx = row * cols + col;
+            let candidate = op(&self.data[idx], row, hashed_val);
+            if candidate > max {
+                max = candidate;
+            }
+        }
+        max
+    }
+
+    /// Queries all rows to find the minimum with a query key.
+    ///
+    /// The closure receives: counter reference, query key, row index, and hash value.
+    /// Use `_` to ignore unused parameters (zero performance cost).
+    ///
+    /// # Examples
+    ///
+    /// With complex counter type:
+    /// ```ignore
+    /// let min = sketch.fast_query_min_with_key(hash, &query_key,
+    ///     |counter, key, _, _| counter.estimate(key));
+    /// ```
+    #[inline(always)]
+    pub fn fast_query_min_with_key<F, Q, R>(&self, hashed_val: u128, query_key: &Q, op: F) -> R
+    where
+        F: Fn(&T, &Q, usize, u128) -> R,
+        R: Ord,
+    {
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
+        let cols = self.cols;
+        let hashed = hashed_val & mask;
+        let c0 = (hashed as usize) % cols;
+        let mut min = op(&self.data[c0], query_key, 0, hashed_val);
+        for row in 1..self.rows {
+            let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
+            let col = (hashed as usize) % cols;
+            let idx = row * cols + col;
+            let candidate = op(&self.data[idx], query_key, row, hashed_val);
+            if candidate < min {
+                min = candidate;
+            }
+        }
+        min
+    }
+
+    /// Queries all rows to find the maximum with a query key.
+    ///
+    /// The closure receives: counter reference, query key, row index, and hash value.
+    /// Use `_` to ignore unused parameters (zero performance cost).
+    ///
+    /// # Examples
+    ///
+    /// With complex counter type:
+    /// ```ignore
+    /// let max = sketch.fast_query_max_with_key(hash, &query_key,
+    ///     |counter, key, _, _| counter.estimate(key));
+    /// ```
+    #[inline(always)]
+    pub fn fast_query_max_with_key<F, Q, R>(&self, hashed_val: u128, query_key: &Q, op: F) -> R
+    where
+        F: Fn(&T, &Q, usize, u128) -> R,
+        R: Ord,
+    {
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
+        let cols = self.cols;
+        let hashed = hashed_val & mask;
+        let c0 = (hashed as usize) % cols;
+        let mut max = op(&self.data[c0], query_key, 0, hashed_val);
+        for row in 1..self.rows {
+            let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
+            let col = (hashed as usize) % cols;
+            let idx = row * cols + col;
+            let candidate = op(&self.data[idx], query_key, row, hashed_val);
+            if candidate > max {
+                max = candidate;
+            }
+        }
+        max
+    }
+
+    /// Queries all rows to find the median with a query key.
+    ///
+    /// The closure receives: counter reference, query key, row index, and hash value.
+    /// Returns f64 values which are collected and sorted to compute median.
+    /// Use `_` to ignore unused parameters (zero performance cost).
+    ///
+    /// # Examples
+    ///
+    /// With complex counter type:
+    /// ```ignore
+    /// let median = sketch.fast_query_median_with_key(hash, &query_key,
+    ///     |counter, key, _, _| counter.estimate(key));
+    /// ```
+    #[inline(always)]
+    pub fn fast_query_median_with_key<F, Q>(&self, hashed_val: u128, query_key: &Q, op: F) -> f64
+    where
+        F: Fn(&T, &Q, usize, u128) -> f64,
+    {
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
         let mut estimates = Vec::with_capacity(self.rows);
-        for r in 0..self.rows {
-            let hashed = (hashed_val >> (mask_bits as usize * r)) & mask;
+        for row in 0..self.rows {
+            let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
             let col = (hashed as usize) % self.cols;
-            let idx = r * self.cols + col;
-            estimates.push(op(&self.data[idx], q));
+            let idx = row * self.cols + col;
+            estimates.push(op(&self.data[idx], query_key, row, hashed_val));
         }
 
         self.compute_median_inline_f64(&mut estimates)
@@ -395,28 +593,55 @@ impl<T> Vector2D<T> {
         }
     }
 
-    /// Queries all rows using precomputed hashed values to find the maximum.
+    /// Queries all rows with custom aggregation logic (fold/reduce pattern).
+    ///
+    /// This is the most flexible query method, allowing custom aggregation beyond
+    /// min/max/median. Uses a fold pattern where the closure receives an accumulator
+    /// and updates it for each row.
+    ///
+    /// The closure receives: accumulator, counter reference, query key, row index, and hash value.
+    /// Use `_` to ignore unused parameters (zero performance cost).
+    ///
+    /// # Examples
+    ///
+    /// Custom sum with row-dependent weights:
+    /// ```ignore
+    /// let sum = sketch.fast_query_aggregate(hash, &(), 0.0,
+    ///     |acc, val, _, row, _| acc + (*val as f64 * weight(row)));
+    /// ```
+    ///
+    /// Count sketch estimation (sign-based sum then median):
+    /// ```ignore
+    /// let mut estimates = Vec::new();
+    /// sketch.fast_query_aggregate(hash, &(), &mut estimates,
+    ///     |acc, val, _, row, hash| {
+    ///         let sign_bit = (hash >> (127 - row)) & 1;
+    ///         let sign = -(1 - 2 * sign_bit as i64) as f64;
+    ///         acc.push(*val as f64 * sign);
+    ///         acc
+    ///     });
+    /// ```
     #[inline(always)]
-    pub fn fast_query_max(&self, hashed_val: u128) -> T
+    pub fn fast_query_aggregate<F, Q, R>(
+        &self,
+        hashed_val: u128,
+        query_key: &Q,
+        init: R,
+        fold_fn: F,
+    ) -> R
     where
-        T: Clone + Ord,
+        F: Fn(R, &T, &Q, usize, u128) -> R,
     {
-        let mask_bits = self.get_mask_bits();
-        let mask = (1u128 << mask_bits) - 1;
-        let cols = self.cols;
-        let hashed = (hashed_val) & mask;
-        let c0 = (hashed as usize) % cols;
-        let mut max = self.data[c0].clone();
-        for row in 1..self.rows {
+        let mask_bits = self.mask_bits;
+        let mask = self.mask;
+        let mut acc = init;
+        for row in 0..self.rows {
             let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
-            let col = (hashed as usize) % cols;
-            let idx = row * cols + col;
-            let candidate = self.data[idx].clone();
-            if candidate > max {
-                max = candidate;
-            }
+            let col = (hashed as usize) % self.cols;
+            let idx = row * self.cols + col;
+            acc = fold_fn(acc, &self.data[idx], query_key, row, hashed_val);
         }
-        max
+        acc
     }
 
     /// Returns an immutable slice corresponding to a full row.
@@ -842,7 +1067,7 @@ mod heap_tests {
 
         // Insert items (simulating TopKHeap behavior)
         for i in 1..=5 {
-            heap.push(HHItem::new(format!("key-{}", i), i));
+            heap.push(HHItem::new(format!("key-{i}"), i));
         }
 
         // Should keep top 3: counts 3, 4, 5
@@ -866,9 +1091,9 @@ mod heap_tests {
         let heap_min_size = size_of::<CommonHeap<u64, CommonMinHeap>>();
         let heap_max_size = size_of::<CommonHeap<u64, CommonMaxHeap>>();
 
-        println!("Vec<u64> size: {}", vec_size);
-        println!("Heap<u64, MinHeap> size: {}", heap_min_size);
-        println!("Heap<u64, MaxHeap> size: {}", heap_max_size);
+        println!("Vec<u64> size: {vec_size}");
+        println!("Heap<u64, MinHeap> size: {heap_min_size}");
+        println!("Heap<u64, MaxHeap> size: {heap_max_size}");
 
         // Vec is (ptr, capacity, len) = 24 bytes on 64-bit
         // Our heap is (Vec, usize, O) where O is zero-sized
@@ -932,7 +1157,7 @@ mod heap_tests {
 
         // Replicate the exact test from TopKHeap
         for i in 1..=5 {
-            let key = format!("key-{}", i);
+            let key = format!("key-{i}");
             find_and_update(&mut heap, &key, i);
         }
 

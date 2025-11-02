@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(sampler.len(), expected_size(0.25, sampler.total_seen()));
         for value in sampler.samples() {
             assert!(value.floor() == value);
-            assert!(value >= 0.0 && value < 128.0);
+            assert!((0.0..128.0).contains(&value));
         }
     }
 

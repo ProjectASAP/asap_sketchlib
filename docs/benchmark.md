@@ -18,31 +18,40 @@ This document summarizes the current Criterion benchmarks in `benches/` and the 
 
 ## Results (latest in `benchmark/`)
 
-All numbers below use the middle value of Criterion’s reported time range.
+All numbers below use the middle value of Criterion's reported time range.
 
 Count-Min (`benchmark/countmin_benchmark.txt`)
 
-- insert_only: ~174.88 µs
-- fast_insert_only: ~115.47 µs (≈34% faster)
-- estimate: ~177.70 µs
-- fast_estimate: ~108.54 µs (≈39% faster)
+- insert_only: ~181.64 µs
+- fast_insert_only: ~109.55 µs (≈40% faster)
+- estimate: ~186.66 µs
+- fast_estimate: ~100.90 µs (≈46% faster)
 
 Count (`benchmark/count_benchmark.txt`)
 
-- insert_only: ~1.1456 ms
-- fast_insert_only: ~878.56 µs (≈23% faster)
-- estimate: ~1.8620 ms
-- fast_estimate: ~1.6959 ms (≈9% faster)
+- insert_only: ~309.22 µs
+- fast_insert_only: ~207.27 µs (≈33% faster)
+- estimate: ~1.0895 ms
+- fast_estimate: ~994.94 µs (≈9% faster)
+
+Hash Variants (`benchmark/hash_detailed_benchmark.txt`)
+
+- xxhash32/64: ~10.822 µs
+- xxhash64/64: ~20.815 µs
+- xxhash3_64/64: ~8.3618 µs (fastest)
+- xxhash3_128/64: ~11.804 µs
 
 Notes
 
 - Criterion may flag regressions/noise relative to prior runs; the numbers above compare fast vs. non-fast paths within the same run.
 - Outliers are present in some groups but do not change the relative ordering.
+- Count sketch performance improvement: `fast_estimate` is now ~9% faster (previously showed regression due to f64 sorting overhead, fixed by using i64 sorting).
 
 ## How To Run
 
 - Count-Min: `cargo bench --bench countmin`
 - Count: `cargo bench --bench count`
 - Hash variants: `cargo bench --bench hash_detailed`
+- all: `cargo bench -- --measurement-time 10`
 
 Results will appear in `target/criterion/` and can be optionally summarized into text files under `benchmark/`.

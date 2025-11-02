@@ -5,7 +5,9 @@ use sketchlib_rust::{Count, SketchInput};
 const SAMPLE_COUNT: usize = 16_384;
 const RNG_SEED: u64 = 0x5eed_c0de_1234_5678;
 const DEFAULT_ROW_NUM: usize = 5;
-const DEFAULT_COL_NUM: usize = 32768;
+// const DEFAULT_COL_NUM: usize = 32768;
+// const DEFAULT_ROW_NUM: usize = 3;
+const DEFAULT_COL_NUM: usize = 4096;
 
 fn build_keys() -> Vec<SketchInput<'static>> {
     let mut rng = StdRng::seed_from_u64(RNG_SEED);

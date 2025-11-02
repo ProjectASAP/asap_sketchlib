@@ -88,7 +88,7 @@ impl Coin {
         x ^= x >> 12;
         x ^= x << 25;
         x ^= x >> 27;
-        return x.wrapping_mul(2685821657736338717);
+        x.wrapping_mul(2685821657736338717)
     }
 
     pub fn toss(&mut self) -> i32 {
@@ -115,9 +115,10 @@ impl Compactor {
         if l == 0 || l == 1 {
         } else if l == 2 {
             if self.items[0] > self.items[1] {
-                let temp = self.items[0];
-                self.items[0] = self.items[1];
-                self.items[1] = temp;
+                // let temp = self.items[0];
+                // self.items[0] = self.items[1];
+                // self.items[1] = temp;
+                self.items.swap(0, 1);
             }
         } else {
             self.items.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -145,11 +146,11 @@ impl Compactor {
         dst
     }
 
-    pub fn print_compactor(&self) -> () {
+    pub fn print_compactor(&self) {
         println!("compactor: {:?}", self.items);
     }
 
-    pub fn append_all(&mut self, to_add: &mut Vec<f64>) -> () {
+    pub fn append_all(&mut self, to_add: &mut Vec<f64>) {
         self.items.append(to_add);
     }
 
@@ -174,7 +175,7 @@ impl KLL {
         kll
     }
 
-    fn set_max_size(&mut self) -> () {
+    fn set_max_size(&mut self) {
         self.max_size = 0;
         for i in 0..self.compactor_count {
             self.max_size += KLL::capacity(self, i);
@@ -208,7 +209,7 @@ impl KLL {
         // self.print_compactors();
     }
 
-    pub fn print_compactors(&self) -> () {
+    pub fn print_compactors(&self) {
         for c in self.compactors.iter() {
             c.print_compactor();
             // println!("{}th compactor: {:?}", i, self.compactors[i].items);
