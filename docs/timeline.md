@@ -10,13 +10,13 @@
 |Correctness Testing-Hydra|🚧|11.07.2025||
 |Correctness Testing-UnivMon|🚧|11.07.2025||
 |Migration-KLL|❌|11.07.2025|should be useful|
-|TODO-OctoSketch|❌|11.15.2025|make sense as a framework|
+|TODO-OctoSketch|❌|11.15.2025|make sense as a framework; multi thread; DPDK ignore for now|
 |Migration-ExponentialHistogram|❌|11.15.2025|seems to be doable|
 |prove accuracy for Hydra+KLL|❌|11.15.2025|wow...|
 |[Custom Hash Algorithm](./features.md#custom-hash)|❌|🫥|No idea...|
 |[Custom Random Rng](./features.md#custom-random-rng)|❌|🫥|No idea...|
 |[SIMD](features.md#performance-optimization)|❌|🫥|No idea...|
-|~~Geometric Sampling~~ NitroSketch|❌|11.15.2025|11.15.2025|
+|~~Geometric Sampling~~ NitroSketch|❌|11.15.2025|sampling on input stream|
 |TODO-Elastic|❌|🫥||
 |TODO-SpaceSaving|❌|🫥|battle with Amazon|
 |TODO-Locher|❌|🫥||
