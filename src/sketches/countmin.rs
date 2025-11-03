@@ -96,6 +96,11 @@ impl CountMin {
         self.counts.fast_query_min(hashed_val, |val, _, _| *val)
     }
 
+    /// Returns the frequency estimate using a pre-computed hash value.
+    pub fn fast_estimate_with_hash(&self, hashed_val: u128) -> u64 {
+        self.counts.fast_query_min(hashed_val, |val, _, _| *val)
+    }
+
     /// Merges another sketch while asserting compatible dimensions.
     pub fn merge(&mut self, other: &Self) {
         assert_eq!(

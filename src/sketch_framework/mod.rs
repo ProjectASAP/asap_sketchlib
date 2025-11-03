@@ -5,6 +5,9 @@ pub use eh::ExponentialHistogram;
 pub mod chapter;
 pub use chapter::Chapter;
 
+pub mod hashlayer;
+pub use hashlayer::HashLayer;
+
 pub mod hydra;
 pub use hydra::Hydra;
 

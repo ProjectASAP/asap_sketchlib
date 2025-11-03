@@ -37,6 +37,8 @@ This document provides a high-level overview of implemented and planned features
 
 ✅ **UnivMon** - Universal monitoring (L1, L2, entropy, cardinality from single structure) ([sketch_api.md](sketch_api.md))
 
+✅ **HashLayer** - Hash-once-use-many pattern for coordinating multiple sketches with single hash computation
+
 ### Performance Optimizations
 
 ✅ **Fast-path methods** - Hash reuse with bit-masking
@@ -158,12 +160,6 @@ This document provides a high-level overview of implemented and planned features
 - Research stage
 - Sampling layer for sketch acceleration
 - [TODO: Define geometry sampling use case]
-
-📋 **Hash layer abstraction**
-
-- Unified hash-once-use-many pattern
-- Framework for coordinating multiple sketches with single hash
-- May require sketch API changes to accept pre-computed hashes
 
 ### Testing & Quality
 

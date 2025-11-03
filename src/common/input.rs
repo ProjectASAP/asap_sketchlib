@@ -1,6 +1,82 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{CountL2HH, CountMin, HllDf};
+use crate::{Count, CountL2HH, CountMin, HllDf};
+
+/// enum that can be any sketch type
+/// Provides a unified interface for different sketch implementations
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum AnySketch {
+    CountMin(CountMin),
+    Count(Count),
+    HllDf(HllDf),
+}
+
+impl AnySketch {
+    /// Insert a value into the sketch
+    pub fn insert(&mut self, val: &SketchInput) {
+        match self {
+            AnySketch::CountMin(sketch) => sketch.insert_cm(val),
+            AnySketch::Count(sketch) => sketch.fast_insert(val),
+            AnySketch::HllDf(sketch) => sketch.insert(val),
+        }
+    }
+
+    /// Insert a value into the sketch
+    pub fn insert_with_hash(&mut self, hashed_val: u128) {
+        match self {
+            AnySketch::CountMin(sketch) => sketch.fast_insert_with_hash_value(hashed_val),
+            AnySketch::Count(sketch) => sketch.fast_insert_with_hash_value(hashed_val),
+            AnySketch::HllDf(sketch) => sketch.insert_with_hash(hashed_val),
+        }
+    }
+
+    /// Merge another sketch of the same type into this one
+    pub fn merge(&mut self, other: &AnySketch) -> Result<(), &'static str> {
+        match (self, other) {
+            (AnySketch::CountMin(s), AnySketch::CountMin(o)) => {
+                s.merge(o);
+                Ok(())
+            }
+            (AnySketch::Count(s), AnySketch::Count(o)) => {
+                s.merge(o);
+                Ok(())
+            }
+            (AnySketch::HllDf(s), AnySketch::HllDf(o)) => {
+                s.merge(o);
+                Ok(())
+            }
+            _ => Err("Cannot merge sketches of different types"),
+        }
+    }
+
+    /// Query the sketch for an estimate
+    pub fn query(&self, key: &SketchInput) -> Result<f64, &'static str> {
+        match self {
+            AnySketch::CountMin(cm) => Ok(cm.get_est(key) as f64),
+            AnySketch::Count(cs) => Ok(cs.fast_estimate(key)),
+            AnySketch::HllDf(hll_df) => Ok(hll_df.get_est() as f64),
+        }
+    }
+
+    /// Query using a pre-computed hash value
+    /// Note: For HllDf (cardinality sketch), the hash_value is ignored and total cardinality is returned
+    pub fn query_with_hash(&self, hash_value: u128) -> Result<f64, &'static str> {
+        match self {
+            AnySketch::CountMin(cm) => Ok(cm.fast_estimate_with_hash(hash_value) as f64),
+            AnySketch::Count(cs) => Ok(cs.fast_estimate_with_hash(hash_value)),
+            AnySketch::HllDf(hll_df) => Ok(hll_df.get_est() as f64),
+        }
+    }
+
+    /// Get the type of sketch as a string
+    pub fn sketch_type(&self) -> &'static str {
+        match self {
+            AnySketch::CountMin(_) => "CountMin",
+            AnySketch::Count(_) => "Count",
+            AnySketch::HllDf(_) => "HllDf",
+        }
+    }
+}
 
 /// enum to wrap input for sketch
 /// mainly supports primitive type

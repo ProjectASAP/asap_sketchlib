@@ -115,6 +115,16 @@ impl Count {
         })
     }
 
+    /// Returns the frequency estimate using a pre-computed hash value.
+    pub fn fast_estimate_with_hash(&self, hashed_val: u128) -> f64 {
+        self.counts.fast_query_median(hashed_val, |val, row, hash| {
+            let sign_bit_pos = 127 - row;
+            let bit = ((hash >> sign_bit_pos) & 1) as i64;
+            let sign_bit = -(1 - 2 * bit);
+            sign_bit * (*val)
+        })
+    }
+
     /// Merges another sketch while asserting compatible dimensions.
     pub fn merge(&mut self, other: &Self) {
         assert_eq!(

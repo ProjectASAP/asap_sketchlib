@@ -6,7 +6,8 @@ This document summarizes the current Criterion benchmarks in `benches/` and the 
 
 - Count-Min (`benches/countmin.rs`) — compares `insert_only` vs `fast_insert_only`, and `estimate` vs `fast_estimate` on the same workload.
 - Count (`benches/count.rs`) — same comparisons as above, using explicit dimensions (`rows=5`, `cols=4096`).
-- Hash variants (`benches/hash_detailed.rs`) — micro-benchmarks for `xxhash32`, `xxhash64`, `xxhash3_64`, and `xxhash3_128` against fixed-size payloads. (No checked-in results yet.)
+- Hash variants (`benches/hash_detailed.rs`) — micro-benchmarks for `xxhash32`, `xxhash64`, `xxhash3_64`, and `xxhash3_128` against fixed-size payloads.
+- HashLayer (`benches/hashlayer.rs`) — measures the performance benefit of computing hash once and reusing it across multiple sketches.
 
 ## Setup & Methodology
 
@@ -36,22 +37,29 @@ Count (`benchmark/count_benchmark.txt`)
 
 Hash Variants (`benchmark/hash_detailed_benchmark.txt`)
 
-- xxhash32/64: ~10.831 µs
-- xxhash64/64: ~20.868 µs
-- xxhash3_64/64: ~8.4750 µs (fastest)
-- xxhash3_128/64: ~12.307 µs
+- xxhash32/64: ~10.81 µs
+- xxhash64/64: ~20.71 µs
+- xxhash3_64/64: ~8.35 µs (fastest)
+- xxhash3_128/64: ~11.72 µs
+
+HashLayer (`benches/hashlayer.rs`)
+
+- separate_insert_three_sketches: ~196.91 µs (each sketch computes its own hash)
+- hashlayer_insert_all: ~144.97 µs (hash computed once, reused across all sketches) (≈26% faster)
 
 Notes
 
 - Criterion may flag regressions/noise relative to prior runs; the numbers above compare fast vs. non-fast paths within the same run.
 - Outliers are present in some groups but do not change the relative ordering.
 - Count sketch performance improvement: `fast_estimate` is now ~12.5% faster (previously showed regression due to f64 sorting overhead, fixed by using i64 sorting).
+- HashLayer provides a practical abstraction for managing multiple sketches with minimal overhead (~9%) compared to raw hash-once implementation.
 
 ## How To Run
 
 - Count-Min: `cargo bench --bench countmin`
 - Count: `cargo bench --bench count`
 - Hash variants: `cargo bench --bench hash_detailed`
-- all: `cargo bench -- --measurement-time 10`
+- HashLayer: `cargo bench --bench hashlayer`
+- All benchmarks: `cargo bench -- --measurement-time 10`
 
 Results will appear in `target/criterion/` and can be optionally summarized into text files under `benchmark/`.

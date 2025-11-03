@@ -46,3 +46,7 @@ harness = false
 [[bench]]
 name = "countmin"
 harness = false
+
+[[bench]]
+name = "hashlayer"
+harness = false

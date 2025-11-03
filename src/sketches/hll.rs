@@ -1,5 +1,5 @@
-use crate::hash_it;
 use crate::{LASTSTATE, SketchInput, Vector1D};
+use crate::{hash_it, hash_it_to_128};
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
@@ -127,7 +127,16 @@ impl HllDf {
     }
 
     pub fn insert(&mut self, obj: &SketchInput) {
-        let hashed_val = hash_it(LASTSTATE, obj);
+        let hashed_val = hash_it_to_128(LASTSTATE, obj);
+        self.insert_with_hash(hashed_val);
+        // let hashed_val = hash_it(LASTSTATE, obj);
+        // let bucket_num = ((hashed_val >> HLL_Q) & HLL_P_MASK) as usize;
+        // let leading_zero = ((hashed_val << HLL_P) + HLL_P_MASK).leading_zeros() as u8 + 1;
+        // self.registers.update_if_greater(bucket_num, leading_zero);
+    }
+
+    pub fn insert_with_hash(&mut self, h: u128) {
+        let hashed_val = h as u64;
         let bucket_num = ((hashed_val >> HLL_Q) & HLL_P_MASK) as usize;
         let leading_zero = ((hashed_val << HLL_P) + HLL_P_MASK).leading_zeros() as u8 + 1;
         self.registers.update_if_greater(bucket_num, leading_zero);

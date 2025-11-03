@@ -123,6 +123,25 @@ let card = hydra.query_key(vec!["region=us-west"], &HydraQuery::Cardinality);
 println!("distinct count: {}", card);
 ```
 
+#### AnySketch
+
+`AnySketch` is an enum that wraps different sketch types into a unified interface, enabling hash-once-use-many optimization patterns. It's primarily used by `HashLayer` to coordinate multiple sketches efficiently. **No need** to use `AnySketch` without `HashLayer`.
+
+**Variants:**
+
+- `CountMin(CountMin)` - Count-Min Sketch for frequency estimation
+- `Count(Count)` - Count Sketch for unbiased frequency estimation
+- `HllDf(HllDf)` - HyperLogLog for cardinality estimation
+
+**Methods:**
+
+- `insert(&mut self, val: &SketchInput)` - Insert a value using SketchInput
+- `insert_with_hash(&mut self, hash_value: u128)` - Insert using pre-computed hash (optimization)
+- `query(&self, key: &SketchInput) -> Result<f64, &'static str>` - Query using SketchInput
+- `query_with_hash(&self, hash_value: u128) -> Result<f64, &'static str>` - Query using pre-computed hash
+- `merge(&mut self, other: &AnySketch) -> Result<(), &'static str>` - Merge sketches of same type
+- `sketch_type(&self) -> &'static str` - Get sketch type name
+
 #### HydraCounter
 
 `HydraCounter` is an enum that wraps different sketch types for use within Hydra's multi-dimensional framework. Each variant supports specific query types.
@@ -382,6 +401,63 @@ um2.update(key2, 15, bottom2);
 um1.merge_with(&um2);
 println!("merged L1: {}", um1.calc_l1());
 ```
+
+#### HashLayer
+
+HashLayer provides a performance optimization for managing multiple sketches by computing hash values once and reusing them across all sketches. This is particularly beneficial when you need to update 3-5 sketches simultaneously.
+
+Initialize with default sketches (CountMin, Count, HllDf):
+
+```rust
+use sketchlib_rust::sketch_framework::hashlayer::HashLayer;
+
+let mut layer = HashLayer::default();
+```
+
+Or create with custom sketch configuration:
+
+```rust
+use sketchlib_rust::input::AnySketch;
+use sketchlib_rust::{CountMin, Count};
+
+let sketches = vec![
+    AnySketch::CountMin(CountMin::with_dimensions(5, 2048)),
+    AnySketch::Count(Count::with_dimensions(5, 2048)),
+];
+let mut layer = HashLayer::new(sketches);
+```
+
+Insert to all sketches with hash computed once:
+
+```rust
+use sketchlib_rust::SketchInput;
+
+for value in 0..10_000 {
+    let input = SketchInput::U64(value);
+    layer.insert_all(&input);  // Hash computed once, reused for all sketches
+}
+```
+
+Insert to specific sketch indices:
+
+```rust
+let input = SketchInput::U64(42);
+layer.insert_at(&[0, 1], &input);  // Only insert to sketches at index 0 and 1
+```
+
+Query specific sketches by index:
+
+```rust
+let input = SketchInput::U64(42);
+let estimate = layer.query_at(0, &input).unwrap();  // Query sketch at index 0
+println!("estimate from sketch 0: {}", estimate);
+```
+
+**Performance Benefits:**
+
+- 26-32% faster than separate insertions for 3 sketches (see [benchmark.md](./docs/benchmark.md))
+- Query with pre-computed hash is ~72% faster
+- Most effective with 3-5 sketch pairs
 
 #### Hydra
 
@@ -656,6 +732,7 @@ At this moment, ```cargo test``` is a good starting point.
 
 - **`src/sketch_framework/`** - Orchestration and serving layers
   - `chapter.rs` - Unified interface (`Chapter` enum) wrapping all sketch types
+  - `hashlayer.rs` - Hash-once-use-many optimization for multiple sketches
   - `hydra.rs` - Multi-dimensional hierarchical heavy hitters
   - `univmon.rs` - Universal monitoring (L1, L2, entropy, cardinality)
   - `eh.rs` - Exponential histogram for sliding window queries
