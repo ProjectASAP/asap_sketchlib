@@ -9,7 +9,7 @@
 |Correctness Testing-HLL|🚧|11.07.2025||
 |Correctness Testing-Hydra|🚧|11.07.2025||
 |Correctness Testing-UnivMon|🚧|11.07.2025||
-|Migration-KLL|❌|11.07.2025|should be useful|
+|Migration-KLL|❌|11.07.2025|should be useful; support numerical value|
 |TODO-OctoSketch|❌|11.15.2025|make sense as a framework; multi thread; DPDK ignore for now|
 |Migration-ExponentialHistogram|❌|11.15.2025|seems to be doable|
 |prove accuracy for Hydra+KLL|❌|11.15.2025|wow...|
