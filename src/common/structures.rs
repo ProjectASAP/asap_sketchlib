@@ -149,6 +149,46 @@ impl<T> Vector1D<T> {
     {
         op(&mut self.data[pos], value);
     }
+
+    /// Appends an element to the back of the vector.
+    pub fn push(&mut self, value: T) {
+        self.data.push(value);
+        self.length = self.data.len();
+    }
+
+    /// Moves all elements from `other` into `self`, leaving `other` empty.
+    pub fn append(&mut self, other: &mut Vec<T>) {
+        self.data.append(other);
+        self.length = self.data.len();
+    }
+
+    /// Clones and appends all elements in a slice to the vector.
+    pub fn extend_from_slice(&mut self, other: &[T])
+    where
+        T: Clone,
+    {
+        self.data.extend_from_slice(other);
+        self.length = self.data.len();
+    }
+
+    /// Swaps two elements in the vector.
+    pub fn swap(&mut self, a: usize, b: usize) {
+        self.data.swap(a, b);
+    }
+
+    /// Sorts the vector with a comparator function.
+    pub fn sort_by<F>(&mut self, compare: F)
+    where
+        F: FnMut(&T, &T) -> std::cmp::Ordering,
+    {
+        self.data.sort_by(compare);
+    }
+
+    /// Clears the vector, removing all values.
+    pub fn clear(&mut self) {
+        self.data.clear();
+        self.length = 0;
+    }
 }
 
 impl<T> Index<usize> for Vector1D<T> {
@@ -164,6 +204,15 @@ impl<T> IndexMut<usize> for Vector1D<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         debug_assert!(index < self.length, "index out of bounds");
         &mut self.data[index]
+    }
+}
+
+impl<'a, T> IntoIterator for &'a Vector1D<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.data.iter()
     }
 }
 

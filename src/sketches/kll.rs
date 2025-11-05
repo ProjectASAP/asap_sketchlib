@@ -3,6 +3,32 @@
 use rand::{Rng, rng};
 use serde::{Deserialize, Serialize};
 
+use crate::{SketchInput, Vector1D};
+
+/// Convert SketchInput to f64 for KLL sketch
+/// Returns an error if the input is not numeric
+fn sketch_input_to_f64(input: &SketchInput) -> Result<f64, &'static str> {
+    match input {
+        SketchInput::I8(v) => Ok(*v as f64),
+        SketchInput::I16(v) => Ok(*v as f64),
+        SketchInput::I32(v) => Ok(*v as f64),
+        SketchInput::I64(v) => Ok(*v as f64),
+        SketchInput::I128(v) => Ok(*v as f64),
+        SketchInput::ISIZE(v) => Ok(*v as f64),
+        SketchInput::U8(v) => Ok(*v as f64),
+        SketchInput::U16(v) => Ok(*v as f64),
+        SketchInput::U32(v) => Ok(*v as f64),
+        SketchInput::U64(v) => Ok(*v as f64),
+        SketchInput::U128(v) => Ok(*v as f64),
+        SketchInput::USIZE(v) => Ok(*v as f64),
+        SketchInput::F32(v) => Ok(*v as f64),
+        SketchInput::F64(v) => Ok(*v),
+        SketchInput::Str(_) | SketchInput::String(_) | SketchInput::Bytes(_) => {
+            Err("KLL sketch only accepts numeric inputs")
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Coin {
     st: u64,
@@ -11,7 +37,7 @@ struct Coin {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Compactor {
-    items: Vec<f64>,
+    items: Vector1D<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -104,7 +130,9 @@ impl Coin {
 
 impl Compactor {
     pub fn new() -> Self {
-        Compactor { items: Vec::new() }
+        Compactor {
+            items: Vector1D::init(0)
+        }
     }
 
     // what is the difference between :-(
@@ -183,7 +211,7 @@ impl KLL {
     }
 
     fn grow(&mut self) {
-        self.compactors.push(Compactor { items: Vec::new() });
+        self.compactors.push(Compactor::new());
         self.compactor_count = self.compactors.len() as i32;
         self.set_max_size();
     }
@@ -198,15 +226,21 @@ impl KLL {
         f64::powf(2.0 / 3.0, i as f64)
     }
 
-    pub fn update(&mut self, x: f64) {
+    /// Update the sketch with a numeric value from SketchInput
+    /// Returns an error if the input is not numeric
+    pub fn update(&mut self, x: &SketchInput) -> Result<(), &'static str> {
+        let value = sketch_input_to_f64(x)?;
+        self.compactors[0].items.push(value);
+        self.size += 1;
+        self.compact();
+        Ok(())
+    }
+
+    /// Update the sketch with a raw f64 value (for internal use and testing)
+    pub fn update_f64(&mut self, x: f64) {
         self.compactors[0].items.push(x);
         self.size += 1;
-        // for i in 0..self.compactors.len() {
-        //     self.compactors[i].print_compactor();
-        // }
         self.compact();
-        // println!("update with: {}", x);
-        // self.print_compactors();
     }
 
     pub fn print_compactors(&self) {
@@ -232,7 +266,7 @@ impl KLL {
                 let next_to_compact_size = self.compactors[i as usize + 1].size();
                 let mut new_items = self.compactors[i as usize].compact(&mut self.co, Vec::new());
                 self.compactors[i as usize + 1].append_all(&mut new_items);
-                self.compactors[i as usize].items = Vec::new();
+                self.compactors[i as usize].items.clear();
                 self.size = self.size
                     + self.compactors[i as usize].size()
                     + self.compactors[i as usize + 1].size();
@@ -316,7 +350,7 @@ impl KLL {
         }
 
         for (h, c_other) in other.compactors.iter().enumerate() {
-            self.compactors[h].items.extend_from_slice(&c_other.items);
+            self.compactors[h].items.extend_from_slice(c_other.items.as_slice());
         }
 
         self.update_size();
@@ -488,7 +522,7 @@ mod tests {
         };
 
         for &value in &values {
-            sketch.update(value);
+            sketch.update_f64(value);
         }
 
         (sketch, values)
@@ -562,6 +596,30 @@ mod tests {
             values.sort_by(|a, b| a.partial_cmp(b).unwrap());
             assert_quantiles_within_error(&sketch, &values, QUANTILES, TOLERANCE);
         }
+    }
+
+    #[test]
+    fn test_sketch_input_api() {
+        let mut kll = KLL::init_kll(128);
+
+        // Test with different numeric types
+        kll.update(&SketchInput::I32(10)).unwrap();
+        kll.update(&SketchInput::I64(20)).unwrap();
+        kll.update(&SketchInput::F64(30.5)).unwrap();
+        kll.update(&SketchInput::F32(40.2)).unwrap();
+        kll.update(&SketchInput::U32(50)).unwrap();
+
+        // Query quantiles
+        let cdf = kll.cdf();
+        let median = cdf.query(0.5);
+
+        // Median should be around 30
+        assert!(median > 20.0 && median < 40.0, "Median = {}", median);
+
+        // Test error handling for non-numeric input
+        let result = kll.update(&SketchInput::String("not a number".to_string()));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "KLL sketch only accepts numeric inputs");
     }
 
     #[test]
