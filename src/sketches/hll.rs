@@ -283,14 +283,14 @@ impl HllDs {
             self.registers.update_if_greater(bucket_num, leading_zero);
             self.est += NUM_REGISTERS as f64 / (self.kxq0 + self.kxq1);
             if old_value < 32 {
-                self.kxq0 -= 1.0 / ((1 << old_value) as f64);
+                self.kxq0 -= 1.0 / ((1_u64 << old_value) as f64);
             } else {
-                self.kxq1 -= 1.0 / ((1 << old_value) as f64);
+                self.kxq1 -= 1.0 / ((1_u64 << old_value) as f64);
             }
             if new_value < 32 {
-                self.kxq0 += 1.0 / ((1 << new_value) as f64);
+                self.kxq0 += 1.0 / ((1_u64 << new_value) as f64);
             } else {
-                self.kxq1 += 1.0 / ((1 << new_value) as f64);
+                self.kxq1 += 1.0 / ((1_u64 << new_value) as f64);
             }
         }
     }
@@ -501,8 +501,8 @@ mod tests {
         hll_correctness_test_helper::<HyperLogLog>(&mut hll);
         let mut hlldf = HllDf::default();
         hll_correctness_test_helper::<HllDf>(&mut hlldf);
-        // let mut hllds = HllDs::default();
-        // hll_correctness_test_helper(&mut hllds);
+        let mut hllds = HllDs::default();
+        hll_correctness_test_helper(&mut hllds);
     }
 
     // insert 10 values and check corresponding counter is updated
