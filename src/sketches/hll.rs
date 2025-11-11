@@ -326,6 +326,8 @@ impl HllDs {
 
 #[cfg(test)]
 mod tests {
+
+
     use super::*;
     use crate::SketchInput;
 
@@ -335,7 +337,9 @@ mod tests {
 
     trait HllEstimator: Default {
         fn push(&mut self, input: &SketchInput);
+        fn insert_with_hash(&mut self, hashed: u128);
         fn estimate(&self) -> f64;
+        fn index(&self, i: usize) -> u8;
     }
 
     trait HllMerge: HllEstimator + Clone {
@@ -354,8 +358,16 @@ mod tests {
             self.insert(input);
         }
 
+        fn insert_with_hash(&mut self, hashed: u128) {
+            self.insert_with_hash(hashed);
+        }
+
         fn estimate(&self) -> f64 {
             self.get_est() as f64
+        }
+
+        fn index(&self, i: usize) -> u8 {
+            self.registers[i]
         }
     }
 
@@ -380,8 +392,14 @@ mod tests {
             self.insert(input);
         }
 
+        fn insert_with_hash(&mut self, hashed: u128) {
+            self.insert_with_hash(hashed);
+        }
         fn estimate(&self) -> f64 {
             self.get_est() as f64
+        }
+        fn index(&self, i: usize) -> u8 {
+            self.registers[i]
         }
     }
 
@@ -406,8 +424,15 @@ mod tests {
             self.insert(input);
         }
 
+        fn insert_with_hash(&mut self, hashed: u128) {
+            self.insert_with_hash(hashed);
+        }
+
         fn estimate(&self) -> f64 {
             self.get_est() as f64
+        }
+        fn index(&self, i: usize) -> u8 {
+            self.registers[i]
         }
     }
 
@@ -473,26 +498,35 @@ mod tests {
     #[test]
     fn hll_correctness_test() {
         let mut hll = HyperLogLog::default();
+        hll_correctness_test_helper::<HyperLogLog>(&mut hll);
+        let mut hlldf = HllDf::default();
+        hll_correctness_test_helper::<HllDf>(&mut hlldf);
+        // let mut hllds = HllDs::default();
+        // hll_correctness_test_helper(&mut hllds);
+    }
+
+    // insert 10 values and check corresponding counter is updated
+    fn hll_correctness_test_helper<T>(hll: &mut T) where T: HllEstimator, {
         hll.insert_with_hash(0x0002_0000_0000_0000);
-        assert_eq!(hll.registers[0], 1, "the first bit should be 1, but get {}", hll.registers[0]);
+        assert_eq!(hll.index(0), 1, "the first bit should be 1, but get {}", hll.index(0));
         hll.insert_with_hash(0x0000_0000_0000_0000);
-        assert_eq!(hll.registers[0], 51, "the first bit should be 51, but get {}", hll.registers[0]);
+        assert_eq!(hll.index(0), 51, "the first bit should be 51, but get {}", hll.index(0));
         hll.insert_with_hash(0xfffc_3000_0000_0000);
-        assert_eq!(hll.registers[HLL_P_MASK as usize], 5, "the last bit should be 5, but get {}", hll.registers[HLL_P_MASK as usize]);
+        assert_eq!(hll.index(HLL_P_MASK as usize), 5, "the last bit should be 5, but get {}", hll.index(HLL_P_MASK as usize));
         hll.insert_with_hash(0xcafe_0000_0000_0000);
-        assert_eq!(hll.registers[12991], 1, "the 12991th bit should be 1, but get {}", hll.registers[12991]);
+        assert_eq!(hll.index(12991), 1, "the 12991th bit should be 1, but get {}", hll.index(12991));
         hll.insert_with_hash(0xcafc_00ce_cafe_face);
-        assert_eq!(hll.registers[12991], 11, "the 12991th bit should be 11, but get {}", hll.registers[12991]);
+        assert_eq!(hll.index(12991), 11, "the 12991th bit should be 11, but get {}", hll.index(12991));
         hll.insert_with_hash(0xface_cafe_face_cafe);
-        assert_eq!(hll.registers[16051], 1, "the 16051th bit should be 1, but get {}", hll.registers[16051]);
+        assert_eq!(hll.index(16051), 1, "the 16051th bit should be 1, but get {}", hll.index(16051));
         hll.insert_with_hash(0xfacc_ca00_0000_cafe);
-        assert_eq!(hll.registers[16051], 3, "the 16051th bit should be 3, but get {}", hll.registers[16051]);
+        assert_eq!(hll.index(16051), 3, "the 16051th bit should be 3, but get {}", hll.index(16051));
         hll.insert_with_hash(0x0831_8310_0000_0000);
-        assert_eq!(hll.registers[524], 2, "the 8390th bit should be 5, but get {}", hll.registers[8390]);
+        assert_eq!(hll.index(524), 2, "the 8390th bit should be 5, but get {}", hll.index(8390));
         hll.insert_with_hash(0x3014_1592_6535_8000);
-        assert_eq!(hll.registers[3077], 6, "the 12308th bit should be 4, but get {}", hll.registers[12308]);
+        assert_eq!(hll.index(3077), 6, "the 12308th bit should be 4, but get {}", hll.index(12308));
         hll.insert_with_hash(0xcafc_0ace_cafe_face);
-        assert_eq!(hll.registers[12991], 11, "the 12991th bit should still be 11, but get {}", hll.registers[0]);
+        assert_eq!(hll.index(12991), 11, "the 12991th bit should still be 11, but get {}", hll.index(0));
     }
 
     fn assert_accuracy<S>(name: &str)
