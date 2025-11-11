@@ -44,12 +44,8 @@ pub fn hash_it(d: usize, key: &SketchInput) -> u64 {
             XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
         }
         SketchInput::U64(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
-        SketchInput::F32(f) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*f as u64).to_ne_bytes())
-        }
-        SketchInput::F64(f) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*f as u64).to_ne_bytes())
-        }
+        SketchInput::F32(f) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
+        SketchInput::F64(f) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
         SketchInput::Str(s) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
         SketchInput::String(s) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
         SketchInput::Bytes(items) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], items),
@@ -78,6 +74,59 @@ pub fn hash_it(d: usize, key: &SketchInput) -> u64 {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{sample_uniform_f64, sample_zipf_u64};
+    use std::collections::HashSet;
+
+    // Test: ensures the hash collision is not likely to happen
+    // the input cardinality should be roughly the same with cardinality of hashed value
+    #[test]
+    fn hash_it_to_128_preserves_cardinality() {
+        const SEED_IDX: usize = 0;
+        const SAMPLE_SIZE: usize = 5_000;
+
+        let uniform_values = sample_uniform_f64(0.0, 1_000_000.0, SAMPLE_SIZE, 42);
+        let uniform_input_cardinality = uniform_values
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<HashSet<_>>()
+            .len();
+        let uniform_hash_cardinality = uniform_values
+            .iter()
+            .map(|value| hash_it_to_128(SEED_IDX, &SketchInput::F64(*value)))
+            .collect::<HashSet<_>>()
+            .len();
+        assert_eq!(
+            uniform_input_cardinality, uniform_hash_cardinality,
+            "uniform samples should not collide after hashing"
+        );
+
+        let zipf_values = sample_zipf_u64(10_000, 1.1, SAMPLE_SIZE, 7);
+        let zipf_input_cardinality = zipf_values.iter().copied().collect::<HashSet<_>>().len();
+        let zipf_hash_cardinality = zipf_values
+            .iter()
+            .map(|value| hash_it_to_128(SEED_IDX, &SketchInput::U64(*value)))
+            .collect::<HashSet<_>>()
+            .len();
+        assert_eq!(
+            zipf_input_cardinality, zipf_hash_cardinality,
+            "zipf samples should not collide after hashing"
+        );
+    }
+
+    #[test]
+    fn hash_it_to_128_is_deterministic_for_repeated_inputs() {
+        const SEED_IDX: usize = 3;
+        let key = SketchInput::String("deterministic-key".to_string());
+        let expected = hash_it_to_128(SEED_IDX, &key);
+        for _ in 0..100 {
+            assert_eq!(expected, hash_it_to_128(SEED_IDX, &key));
+        }
+    }
+}
+
 pub fn hash_it_to_128(d: usize, key: &SketchInput) -> u128 {
     match key {
         SketchInput::I32(i) => {
@@ -90,12 +139,8 @@ pub fn hash_it_to_128(d: usize, key: &SketchInput) -> u128 {
             XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
         }
         SketchInput::U64(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
-        SketchInput::F32(f) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*f as u64).to_ne_bytes())
-        }
-        SketchInput::F64(f) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*f as u64).to_ne_bytes())
-        }
+        SketchInput::F32(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
+        SketchInput::F64(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
         SketchInput::Str(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
         SketchInput::String(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
         SketchInput::Bytes(items) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], items),
