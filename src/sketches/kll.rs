@@ -61,43 +61,6 @@ pub struct KLL {
     co: Coin,
 }
 
-// removing as sampler is only for optimization
-// impl Sampler {
-//     pub fn update(&mut self, x: f64, w: u64, mut to: Vec<f64>) -> Vec<f64> {
-//         let ph = 1u64 << self.h;
-//         let mut rng = rand::thread_rng();
-
-//         if self.w + w <= ph {
-//             self.w += w;
-//             if rng.r#gen::<f64>() * (w as f64) < self.w as f64 {
-//                 self.y = x;
-//             }
-//             if self.w == ph {
-//                 self.w = 0;
-//                 to.push(self.y);
-//                 return to;
-//             }
-//         } else if self.w < w {
-//             if rng.r#gen::<f64>() * (w as f64) < ph as f64 {
-//                 to.push(x);
-//                 return to;
-//             }
-//         } else {
-//             self.w = w;
-//             self.y = x;
-//             if rng.r#gen::<f64>() * (w as f64) < ph as f64 {
-//                 to.push(x);
-//                 return to;
-//             }
-//         }
-//         to
-//     }
-
-//     pub fn grow(&mut self) {
-//         self.h += 1;
-//     }
-// }
-
 // the coin is... not intuitive
 // well... well... well...
 // whatever, it seems to be usable
@@ -151,20 +114,6 @@ impl Compactor {
         } else {
             self.items.sort_by(|a, b| a.partial_cmp(b).unwrap());
         }
-        // ok, from this part is converted by ChatGPT
-        // I have no idea what the hell it is
-        // looks like just, allocate extra memory...? maybe ignore for now
-        // let free = dst.capacity() - dst.len();
-        // if free < self.items.len() / 2 {
-        //     let extra = self.items.len() / 2 - free;
-        //     dst.reserve(extra);
-        // }
-        // let offs = co.toss() as usize;
-        // while self.items.len() >= 2 {
-        //     let l = self.items.len() - 2;
-        //     dst.push(self.items[l + offs]);
-        //     self.items.truncate(l);
-        // }
         let keep = co.toss() as usize;
         for i in 0..self.items.len() {
             if i % 2 == keep {
@@ -271,73 +220,8 @@ impl KLL {
                     + self.compactors[i as usize].size()
                     + self.compactors[i as usize + 1].size();
                 self.size = self.size - to_compact_size - next_to_compact_size;
-                // if self.size < self.max_size {
-                //     break;
-                // }
             }
         }
-        // why the filter doesn't work??? what...? why???
-        // self.compactors = self.compactors.iter().filter(| c | (**c).size() > 0).collect();
-        // I don't want the first compactor to be kicked out
-
-        // println!("before shrink: ");
-        // self.print_compactors();
-
-        // if self.compactors[0].size() > 0 {
-        // self.compactors.retain(|c| c.size() > 0);
-        // }
-        // self.compactors = self
-        // .compactors
-        // .drain(..)
-        // .enumerate()
-        // .filter(|(i, c)| *i == 0 || c.size() > 0)
-        // .map(|(_, c)| c)
-        // .collect();
-        // self.compactor_count = self.compactors.len() as i32;
-        // self.set_max_size();
-
-        // let mut new_compactors = Vec::new();
-        // for i in 0..self.compactor_count {
-        //     if self.compactors[i as usize].size() != 0 {
-        //         let new_compactor = self.compactors[i as usize].clone();
-        //         new_compactors.push(new_compactor);
-        //     } else if i == 0 {
-        //         let new_compactor = self.compactors[0].clone();
-        //         new_compactors.push(new_compactor);
-        //     }
-        // }
-        // self.compactors = new_compactors;
-        // self.compactor_count = self.compactors.len() as i32;
-        // self.set_max_size();
-
-        // println!("after shrink: ");
-        // self.print_compactors();
-
-        // // the following is a translation of golang implementation
-        // // I think it is not accurate
-        // // whatever, maybe I'm wrong... again!
-        // while self.size >= self.max_size {
-        //     for i in 0..self.compactors.len() {
-        //         if self.compactors[i].size() >= self.capacity(i as i32) {
-        //             if i as i32 +1 >= self.compactor_count {
-        //                 self.grow();
-        //             }
-        //             let prev_h = self.compactors[i].size();
-        //             let prev_h1 = self.compactors[i+1].size();
-        //             let mut new_items = self.compactors[i].compact(&mut self.co, Vec::new());
-        //             self.compactors[i+1].append_all(&mut new_items);
-        //             // after compact, the old compactor is supposed to be empty, right?
-        //             // then, why the golang implementation doesn't have that at all?
-        //             self.compactors[i].items = Vec::new();
-        //             self.size = self.size + self.compactors[i].size() + self.compactors[i+1].size();
-        //             self.size = self.size - prev_h - prev_h1;
-        //             self.set_max_size();
-        //             if self.size < self.max_size {
-        //                 break;
-        //             }
-        //         }
-        //     }
-        // }
     }
 
     pub fn update_size(&mut self) {
