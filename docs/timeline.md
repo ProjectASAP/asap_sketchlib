@@ -16,7 +16,7 @@
 |[Custom Hash Algorithm](./features.md#custom-hash)|❌|🫥|No idea...|
 |[Custom Random Rng](./features.md#custom-random-rng)|❌|🫥|No idea...|
 |[SIMD](features.md#performance-optimization)|❌|🫥|No idea...|
-|~~Geometric Sampling~~ NitroSketch|❌|11.15.2025|sampling on input stream... terrible performance|
+|~~Geometric Sampling~~ NitroSketch|🚧|11.15.2025|sampling on input stream... terrible performance 🤦‍♂️|
 |TODO-Elastic|❌|🫥||
 |TODO-SpaceSaving|❌|🫥|battle with Amazon|
 |TODO-Locher|❌|🫥||
@@ -25,6 +25,6 @@
 |Optimize-KLL|❌|🫥|this optimization refers to the compression algorithm...so...|
 |fast range + range reduction to replace mod op |❌|🫥||
 |multi thread sketch insertion|❌|🫥||
-|benchmark with DataSketches|||C++&Java|
-|benchmark with Amazon|||C++&Java|
+|benchmark with DataSketches|🚧||C++&Java|
+|benchmark with Amazon|🚧||C++&Java|
 |benchmark|🚧|Continuous|always adding|
