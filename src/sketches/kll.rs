@@ -173,7 +173,8 @@ impl KLL {
     fn compact_from_level(&mut self, start_level: usize) {
         let mut level = start_level;
         while level < self.compactors.len() {
-            let capacity = KLL::compactor_capacity((self.compactors.len() - 1 - level) as i32, self.k);
+            let capacity =
+                KLL::compactor_capacity((self.compactors.len() - 1 - level) as i32, self.k);
             if self.compactors[level].len() > capacity {
                 self.compact_level(level);
             }
@@ -441,6 +442,7 @@ mod tests {
         (sketch, values)
     }
 
+    // return element from input with given quantile
     fn quantile_from_sorted(data: &[f64], quantile: f64) -> f64 {
         assert!(!data.is_empty(), "data set must not be empty");
         if quantile <= 0.0 {
@@ -450,7 +452,8 @@ mod tests {
             return data[data.len() - 1];
         }
         let n = data.len();
-        let idx = ((quantile * n as f64).ceil() as isize - 1).clamp(0, (n - 1) as isize) as usize;
+        let idx = ((quantile * n as f64).ceil() as isize - 1)
+            .clamp(0, (n - 1) as isize) as usize;
         data[idx]
     }
 
@@ -459,39 +462,33 @@ mod tests {
         sorted_truth: &[f64],
         quantiles: &[(f64, &str)],
         tolerance: f64,
+        context: &str,
+        sample_size: usize,
+        seed: u64,
     ) {
-        // println!("sorted truth: {:?}", sorted_truth);
         let cdf = sketch.cdf();
         for &(quantile, label) in quantiles {
-            // let truth = quantile_from_sorted(sorted_truth, quantile);
-            let truth_min = quantile_from_sorted(sorted_truth, quantile - tolerance);
-            let truth_max = quantile_from_sorted(sorted_truth, quantile + tolerance);
+            let lower_q = (quantile - tolerance).max(0.0);
+            let upper_q = (quantile + tolerance).min(1.0);
+            let truth_min = quantile_from_sorted(sorted_truth, lower_q);
+            let truth_max = quantile_from_sorted(sorted_truth, upper_q);
             let estimate = cdf.query(quantile);
-            // assert!(
-            //     rank_error <= tolerance,
-            //     "{label} exceeded tolerance: truth={truth:.4},
-            //         estimate={estimate:.4}, rank_error={rank_error:.4},
-            //         total_length={}",
-            //     sorted_truth.len()
-            // );
             assert!(
                 (truth_min..=truth_max).contains(&estimate),
-                "{label} exceeded tolerance: truth_min={truth_min:.4}, truth_max={truth_max:.4},
-                estimate={estimate:.4}, tolerance={tolerance:.4}, quantile={quantile:.2}, 
-                total_length={}",
+                "{label} exceeded tolerance: context={context}, sample_size={sample_size}, seed=0x{seed:08x}, \
+                quantile={quantile:.4}, truth_min={truth_min:.4}, truth_max={truth_max:.4}, \
+                estimate={estimate:.4}, tolerance={tolerance:.4}, total_length={}",
                 sorted_truth.len()
             );
         }
     }
 
     #[test]
-    fn uniform_distribution_quantiles_within_five_percent() {
+    fn distributions_quantiles_stay_within_rank_error() {
         const TOLERANCE: f64 = 0.02;
-        // const TOLERANCE: f64 = 0.5;
-        const DISTRIBUTION: TestDistribution = TestDistribution::Uniform {
-            min: 000.0,
-            max: 10_000.0,
-        };
+        const SAMPLE_SIZES: &[usize] = &[
+            1_000, 5_000, 20_000, 100_000, 1_000_000, 5_000_000,
+        ];
         const QUANTILES: &[(f64, &str)] = &[
             (0.0, "min"),
             (0.10, "p10"),
@@ -502,15 +499,49 @@ mod tests {
             (1.0, "max"),
         ];
 
-        for (idx, sample_size) in [1_000usize, 5_000usize, 20_000usize]
-            .into_iter()
-            .enumerate()
-        {
-            let seed = 0xA5A5_0000_u64 + idx as u64;
-            let (sketch, mut values) =
-                build_kll_with_distribution(SKETCH_K, sample_size, DISTRIBUTION, seed);
-            values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            assert_quantiles_within_error(&sketch, &values, QUANTILES, TOLERANCE);
+        struct Case {
+            name: &'static str,
+            distribution: TestDistribution,
+            seed_base: u64,
+        }
+
+        let cases = [
+            Case {
+                name: "uniform",
+                distribution: TestDistribution::Uniform {
+                    min: 0.0,
+                    max: 100_000_000.0,
+                },
+                seed_base: 0xA5A5_0000,
+            },
+            Case {
+                name: "zipf",
+                distribution: TestDistribution::Zipf {
+                    min: 1_000_000.0,
+                    max: 10_000_000.0,
+                    domain: 8_192,
+                    exponent: 1.1,
+                },
+                seed_base: 0xB4B4_0000,
+            },
+        ];
+
+        for case in cases {
+            for (idx, &sample_size) in SAMPLE_SIZES.iter().enumerate() {
+                let seed = case.seed_base + idx as u64;
+                let (sketch, mut values) =
+                    build_kll_with_distribution(SKETCH_K, sample_size, case.distribution, seed);
+                values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                assert_quantiles_within_error(
+                    &sketch,
+                    &values,
+                    QUANTILES,
+                    TOLERANCE,
+                    case.name,
+                    sample_size,
+                    seed,
+                );
+            }
         }
     }
 
@@ -542,40 +573,8 @@ mod tests {
     }
 
     #[test]
-    fn zipf_distribution_quantiles_within_five_percent() {
-        // const TOLERANCE: f64 = 0.5;
-        const TOLERANCE: f64 = 0.1;
-        const DISTRIBUTION: TestDistribution = TestDistribution::Zipf {
-            min: 1_000_000.0,
-            max: 10_000_000.0,
-            domain: 8_192,
-            exponent: 1.1,
-        };
-        const QUANTILES: &[(f64, &str)] = &[
-            (0.0, "min"),
-            (0.10, "p10"),
-            (0.25, "p25"),
-            (0.50, "p50"),
-            (0.75, "p75"),
-            (0.90, "p90"),
-            (1.0, "max"),
-        ];
-
-        for (idx, sample_size) in [1_000usize, 5_000usize, 20_000usize]
-            .into_iter()
-            .enumerate()
-        {
-            let seed = 0xB4B4_0000_u64 + idx as u64;
-            let (sketch, mut values) =
-                build_kll_with_distribution(SKETCH_K, sample_size, DISTRIBUTION, seed);
-            values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            assert_quantiles_within_error(&sketch, &values, QUANTILES, TOLERANCE);
-        }
-    }
-
-    #[test]
     fn merge_preserves_quantiles_within_tolerance() {
-        const TOLERANCE: f64 = 0.1;
+        const TOLERANCE: f64 = 0.02;
         const QUANTILES: &[(f64, &str)] = &[
             (0.0, "min"),
             (0.10, "p10"),
@@ -602,7 +601,15 @@ mod tests {
 
         let mut sorted = values.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert_quantiles_within_error(&sketch_a, &sorted, QUANTILES, TOLERANCE);
+        assert_quantiles_within_error(
+            &sketch_a,
+            &sorted,
+            QUANTILES,
+            TOLERANCE,
+            "merge",
+            values.len(),
+            0x00C0_FFEE,
+        );
     }
 
     #[test]
