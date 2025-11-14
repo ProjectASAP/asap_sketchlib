@@ -45,7 +45,7 @@ pub struct Quantile {
 // pub type CDF = Vec<Quantile>;
 // Cumulative Distribution Function
 pub struct CDF {
-    quantile_list: Vec<Quantile>,
+    quantile_list: Vector1D<Quantile>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -83,25 +83,41 @@ impl Coin {
     }
 }
 
+impl Default for KLL {
+    fn default() -> Self {
+        Self::init_kll(20)
+    }
+}
+
 impl KLL {
     pub fn init_kll(k: i32) -> Self {
-        let mut compactors = Vector1D::init(1);
-        compactors.push(Vector1D::init(0));
+        let norm_k = k.max(2) as usize;
+        let mut compactors = Vector1D::init(0);
+        let base_capacity = KLL::capacity_for(0, 1, norm_k);
+        compactors.push(Vector1D::from_vec(Vec::with_capacity(base_capacity)));
         KLL {
             compactors,
-            k: k.max(2) as usize,
+            k: norm_k,
             total_count: 0,
             co: Coin::new(),
         }
     }
 
     fn grow(&mut self) {
-        self.compactors.push(Vector1D::init(0));
+        let level_idx = self.compactors.len();
+        let total_levels = level_idx + 1;
+        let capacity = KLL::capacity_for(level_idx, total_levels, self.k);
+        self.compactors
+            .push(Vector1D::from_vec(Vec::with_capacity(capacity)));
     }
 
     fn capacity(&self, level: usize) -> usize {
-        let height = KLL::compute_height(self.compactors.len() as i32 - level as i32 - 1);
-        (f64::ceil(self.k as f64 * height) as usize) + 1
+        KLL::capacity_for(level, self.compactors.len(), self.k)
+    }
+
+    fn capacity_for(level: usize, total_levels: usize, k: usize) -> usize {
+        let height = KLL::compute_height(total_levels as i32 - level as i32 - 1);
+        (f64::ceil(k as f64 * height) as usize) + 1
     }
 
     fn ensure_level(&mut self, level: usize) {
@@ -226,8 +242,8 @@ impl KLL {
     }
 
     pub fn cdf(&self) -> CDF {
-        let mut q: CDF = CDF {
-            quantile_list: Vec::with_capacity(self.buffer_size()),
+        let mut q = CDF {
+            quantile_list: Vector1D::from_vec(Vec::with_capacity(self.buffer_size())),
         };
 
         let mut total_w = 0.0;
@@ -252,7 +268,7 @@ impl KLL {
 
         // Convert q to cumulative distribution
         let mut cur_w = 0.0;
-        for entry in &mut q.quantile_list {
+        for entry in q.quantile_list.iter_mut() {
             cur_w += entry.quantile;
             entry.quantile = cur_w / total_w;
         }
@@ -263,60 +279,75 @@ impl KLL {
 
 impl CDF {
     pub fn quantile(&self, x: f64) -> f64 {
-        match self
-            .quantile_list
-            .binary_search_by(|e| e.value.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Less))
-        {
-            Ok(idx) => self.quantile_list[idx].quantile,
+        if self.quantile_list.is_empty() {
+            return 0.0;
+        }
+        let slice = self.quantile_list.as_slice();
+        match slice.binary_search_by(|e| {
+            e.value
+                .partial_cmp(&x)
+                .unwrap_or(std::cmp::Ordering::Less)
+        }) {
+            Ok(idx) => slice[idx].quantile,
             Err(0) => 0.0,
-            Err(idx) => self.quantile_list[idx - 1].quantile,
+            Err(idx) => slice[idx - 1].quantile,
         }
     }
 
     /// Returns the estimated value corresponding to quantile `p`
     pub fn query(&self, p: f64) -> f64 {
-        match self.quantile_list.binary_search_by(|e| {
+        if self.quantile_list.is_empty() {
+            return 0.0;
+        }
+        let slice = self.quantile_list.as_slice();
+        match slice.binary_search_by(|e| {
             e.quantile
                 .partial_cmp(&p)
                 .unwrap_or(std::cmp::Ordering::Less)
         }) {
-            Ok(idx) => self.quantile_list[idx].value,
-            Err(idx) if idx == self.quantile_list.len() => {
-                self.quantile_list[self.quantile_list.len() - 1].value
-            }
-            Err(idx) => self.quantile_list[idx].value,
+            Ok(idx) => slice[idx].value,
+            Err(idx) if idx == slice.len() => slice[slice.len() - 1].value,
+            Err(idx) => slice[idx].value,
         }
     }
 
     /// Quantile estimation of value `x` using linear interpolation
     pub fn quantile_li(&self, x: f64) -> f64 {
-        let idx = self.quantile_list.partition_point(|e| e.value < x);
-        if idx == self.quantile_list.len() {
+        let slice = self.quantile_list.as_slice();
+        if slice.is_empty() {
+            return 0.0;
+        }
+        let idx = slice.partition_point(|e| e.value < x);
+        if idx == slice.len() {
             return 1.0;
         }
         if idx == 0 {
             return 0.0;
         }
-        let a = self.quantile_list[idx - 1].value;
-        let aq = self.quantile_list[idx - 1].quantile;
-        let b = self.quantile_list[idx].value;
-        let bq = self.quantile_list[idx].quantile;
+        let a = slice[idx - 1].value;
+        let aq = slice[idx - 1].quantile;
+        let b = slice[idx].value;
+        let bq = slice[idx].quantile;
         ((a - x) * bq + (x - b) * aq) / (a - b)
     }
 
     /// Value estimation given quantile `p`, using linear interpolation
     pub fn query_li(&self, p: f64) -> f64 {
-        let idx = self.quantile_list.partition_point(|e| e.quantile < p);
-        if idx == self.quantile_list.len() {
-            return self.quantile_list[self.quantile_list.len() - 1].value;
+        let slice = self.quantile_list.as_slice();
+        if slice.is_empty() {
+            return 0.0;
+        }
+        let idx = slice.partition_point(|e| e.quantile < p);
+        if idx == slice.len() {
+            return slice[slice.len() - 1].value;
         }
         if idx == 0 {
-            return self.quantile_list[0].value;
+            return slice[0].value;
         }
-        let a = self.quantile_list[idx - 1].value;
-        let aq = self.quantile_list[idx - 1].quantile;
-        let b = self.quantile_list[idx].value;
-        let bq = self.quantile_list[idx].quantile;
+        let a = slice[idx - 1].value;
+        let aq = slice[idx - 1].quantile;
+        let b = slice[idx].value;
+        let bq = slice[idx].quantile;
         ((aq - p) * b + (p - bq) * a) / (aq - bq)
     }
 }
@@ -496,5 +527,46 @@ mod tests {
             values.sort_by(|a, b| a.partial_cmp(b).unwrap());
             assert_quantiles_within_error(&sketch, &values, QUANTILES, TOLERANCE);
         }
+    }
+
+    #[test]
+    fn merge_preserves_quantiles_within_tolerance() {
+        const TOLERANCE: f64 = 0.05;
+        const QUANTILES: &[(f64, &str)] = &[
+            (0.0, "min"),
+            (0.10, "p10"),
+            (0.25, "p25"),
+            (0.50, "p50"),
+            (0.75, "p75"),
+            (0.90, "p90"),
+            (1.0, "max"),
+        ];
+
+        let values = sample_uniform_f64(1_000_000.0, 10_000_000.0, 10_000, 0xC0FFEE);
+        let mut sketch_a = KLL::init_kll(SKETCH_K);
+        let mut sketch_b = KLL::init_kll(SKETCH_K);
+
+        for (idx, value) in values.iter().copied().enumerate() {
+            if idx % 2 == 0 {
+                sketch_a.update_f64(value);
+            } else {
+                sketch_b.update_f64(value);
+            }
+        }
+
+        sketch_a.merge(&sketch_b);
+
+        let mut sorted = values.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_quantiles_within_error(&sketch_a, &sorted, QUANTILES, TOLERANCE);
+    }
+
+    #[test]
+    fn cdf_handles_empty_sketch() {
+        let sketch = KLL::init_kll(64);
+        let cdf = sketch.cdf();
+        assert_eq!(cdf.quantile(123.0), 0.0);
+        assert_eq!(cdf.query(0.5), 0.0);
+        assert_eq!(cdf.query_li(0.5), 0.0);
     }
 }
