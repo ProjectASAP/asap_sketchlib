@@ -554,6 +554,51 @@ let cdf = sketch.quantile(32.0);
 println!("fraction of samples <= 32 ≈ {cdf:.3}");
 ```
 
+### DDSketch (relative-error quantiles, mergeable)
+
+
+DDSketch provides approximate quantile estimation with configurable relative error guarantees. It is useful for summarizing distributions such as latencies or value-heavy metrics where accurate high-percentile estimation is required. This implementation follows the DDSketch design from the original paper and integrates cleanly with the library's common structures.
+
+
+### Initialization
+```rust
+use sketchlib_rust::sketches::ddsketch::DDSketch;
+
+// alpha is the relative error bound
+let mut dds = DDSketch::new(0.01);
+```
+
+
+### Insertion
+
+```rust
+dds.add(1.0);
+dds.add(5.2);
+dds.add(42.0);
+```
+
+
+### Quantile Queries
+```rust
+let p50 = dds.get_value_at_quantile(0.50).unwrap();
+let p90 = dds.get_value_at_quantile(0.90).unwrap();
+let p99 = dds.get_value_at_quantile(0.99).unwrap();
+```
+
+### Merge
+Two DDSketch instances may be merged if they share the same `alpha`.
+```rust
+let mut a = DDSketch::new(0.01);
+let mut b = DDSketch::new(0.01);
+
+a.add(1.0);
+a.add(2.0);
+b.add(10.0);
+b.add(20.0);
+
+a.merge(&b);
+```
+
 #### Elastic (heavy + light split)
 
 Create an Elastic sketch with a heavy bucket array.
