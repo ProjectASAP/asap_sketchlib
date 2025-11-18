@@ -120,7 +120,9 @@ impl<'a> Chapter<'a> {
                 SketchInput::USIZE(_) => todo!(),
             },
             Chapter::HLL(sketch) => sketch.insert(val),
-            Chapter::KLL(sketch) => sketch.update(iv_to_f64(val)),
+            Chapter::KLL(sketch) => {
+                let _ = sketch.update(val);
+            }
             Chapter::UNIFORM(sketch) => {
                 let _ = sketch.update_input(val);
             } // Chapter::LOCHER(sketch) => {

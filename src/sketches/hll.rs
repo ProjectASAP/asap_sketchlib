@@ -327,7 +327,6 @@ impl HllDs {
 #[cfg(test)]
 mod tests {
 
-
     use super::*;
     use crate::SketchInput;
 
@@ -506,28 +505,86 @@ mod tests {
     }
 
     // insert 10 values and check corresponding counter is updated
-    fn hll_correctness_test_helper<T>(hll: &mut T) where T: HllEstimator, {
+    fn hll_correctness_test_helper<T>(hll: &mut T)
+    where
+        T: HllEstimator,
+    {
         hll.insert_with_hash(0x0002_0000_0000_0000);
-        assert_eq!(hll.index(0), 1, "the first bucket should be 1, but get {}", hll.index(0));
+        assert_eq!(
+            hll.index(0),
+            1,
+            "the first bucket should be 1, but get {}",
+            hll.index(0)
+        );
         hll.insert_with_hash(0x0000_0000_0000_0000);
-        assert_eq!(hll.index(0), 51, "the first bucket should be 51, but get {}", hll.index(0));
+        assert_eq!(
+            hll.index(0),
+            51,
+            "the first bucket should be 51, but get {}",
+            hll.index(0)
+        );
         hll.insert_with_hash(0xfffc_3000_0000_0000);
-        assert_eq!(hll.index(HLL_P_MASK as usize), 5, "the last bucket should be 5, but get {}", hll.index(HLL_P_MASK as usize));
+        assert_eq!(
+            hll.index(HLL_P_MASK as usize),
+            5,
+            "the last bucket should be 5, but get {}",
+            hll.index(HLL_P_MASK as usize)
+        );
         hll.insert_with_hash(0xcafe_0000_0000_0000);
-        assert_eq!(hll.index(12991), 1, "the 12991th bucket should be 1, but get {}", hll.index(12991));
+        assert_eq!(
+            hll.index(12991),
+            1,
+            "the 12991th bucket should be 1, but get {}",
+            hll.index(12991)
+        );
         hll.insert_with_hash(0xcafc_00ce_cafe_face);
-        assert_eq!(hll.index(12991), 11, "the 12991th bucket should be 11, but get {}", hll.index(12991));
+        assert_eq!(
+            hll.index(12991),
+            11,
+            "the 12991th bucket should be 11, but get {}",
+            hll.index(12991)
+        );
         hll.insert_with_hash(0xface_cafe_face_cafe);
-        assert_eq!(hll.index(16051), 1, "the 16051th bucket should be 1, but get {}", hll.index(16051));
+        assert_eq!(
+            hll.index(16051),
+            1,
+            "the 16051th bucket should be 1, but get {}",
+            hll.index(16051)
+        );
         hll.insert_with_hash(0xfacc_ca00_0000_cafe);
-        assert_eq!(hll.index(16051), 3, "the 16051th bucket should be 3, but get {}", hll.index(16051));
+        assert_eq!(
+            hll.index(16051),
+            3,
+            "the 16051th bucket should be 3, but get {}",
+            hll.index(16051)
+        );
         hll.insert_with_hash(0x0831_8310_0000_0000);
-        assert_eq!(hll.index(524), 2, "the 524th bucket should be 2, but get {}", hll.index(524));
+        assert_eq!(
+            hll.index(524),
+            2,
+            "the 524th bucket should be 2, but get {}",
+            hll.index(524)
+        );
         hll.insert_with_hash(0x3014_1592_6535_8000);
-        assert_eq!(hll.index(3077), 6, "the 3077th bucket should be 6, but get {}", hll.index(3077));
+        assert_eq!(
+            hll.index(3077),
+            6,
+            "the 3077th bucket should be 6, but get {}",
+            hll.index(3077)
+        );
         hll.insert_with_hash(0xcafc_0ace_cafe_face);
-        assert_eq!(hll.index(12991), 11, "the 12991th bucket should still be 11, but get {}", hll.index(12991));
-        assert_eq!(hll.index(1000), 0, "no unintended changes, but get {} at bucket 1000", hll.index(1000));
+        assert_eq!(
+            hll.index(12991),
+            11,
+            "the 12991th bucket should still be 11, but get {}",
+            hll.index(12991)
+        );
+        assert_eq!(
+            hll.index(1000),
+            0,
+            "no unintended changes, but get {} at bucket 1000",
+            hll.index(1000)
+        );
     }
 
     fn assert_accuracy<S>(name: &str)

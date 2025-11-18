@@ -57,7 +57,7 @@ pub fn sample_zipf_f64(
         .collect()
 }
 
-pub fn sample_normal_f64( mean: f64, std: f64, sample_size: usize, seed: u64) -> Vec<f64> {
+pub fn sample_normal_f64(mean: f64, std: f64, sample_size: usize, seed: u64) -> Vec<f64> {
     assert!(sample_size > 0, "sample size must be positive");
     assert!(std >= 0.0, "std must be nonnegative");
     let eps = 1e-12;
@@ -87,7 +87,14 @@ pub fn sample_normal_f64( mean: f64, std: f64, sample_size: usize, seed: u64) ->
     vals
 }
 
-pub fn sample_binomial_f64( min: f64, max: f64, trials: usize, p: f64, sample_size: usize, seed: u64) -> Vec<f64> {
+pub fn sample_binomial_f64(
+    min: f64,
+    max: f64,
+    trials: usize,
+    p: f64,
+    sample_size: usize,
+    seed: u64,
+) -> Vec<f64> {
     assert!(sample_size > 0, "sample size must be positive");
     assert!((0.0..=1.0).contains(&p), "p must be in [0,1]");
     assert!(max >= min, "expects max >= min");
@@ -97,10 +104,11 @@ pub fn sample_binomial_f64( min: f64, max: f64, trials: usize, p: f64, sample_si
         .expect("sample_size * trials overflow");
     let mut us = sample_uniform_f64(0.0, 1.0, need, seed).into_iter();
 
-    let span = if trials > 0 { 
-        (max - min) / trials as f64 
-    } 
-    else { 0.0 };
+    let span = if trials > 0 {
+        (max - min) / trials as f64
+    } else {
+        0.0
+    };
     let mut out = Vec::with_capacity(sample_size);
 
     for _ in 0..sample_size {
@@ -116,7 +124,7 @@ pub fn sample_binomial_f64( min: f64, max: f64, trials: usize, p: f64, sample_si
     out
 }
 
-pub fn sample_exponential_f64(lambda: f64, sample_size: usize,seed: u64) -> Vec<f64> {
+pub fn sample_exponential_f64(lambda: f64, sample_size: usize, seed: u64) -> Vec<f64> {
     assert!(lambda > 0.0, "lambda must be positive");
     assert!(sample_size > 0, "sample size must be positive");
 
@@ -124,6 +132,6 @@ pub fn sample_exponential_f64(lambda: f64, sample_size: usize,seed: u64) -> Vec<
     let eps = 1e-12; //padding of sorts to avoid log(0)
     let us = sample_uniform_f64(eps, 1.0 - eps, sample_size, seed);
 
-    // Apply inverse-CDF transform: X = -ln(U) / λ 
+    // Apply inverse-CDF transform: X = -ln(U) / λ
     us.into_iter().map(|u| -u.ln() / lambda).collect() //iterator map and collect
 }
