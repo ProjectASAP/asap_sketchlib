@@ -462,8 +462,7 @@ mod tests {
             return data[data.len() - 1];
         }
         let n = data.len();
-        let idx = ((quantile * n as f64).ceil() as isize - 1)
-            .clamp(0, (n - 1) as isize) as usize;
+        let idx = ((quantile * n as f64).ceil() as isize - 1).clamp(0, (n - 1) as isize) as usize;
         data[idx]
     }
 
@@ -496,9 +495,7 @@ mod tests {
     #[test]
     fn distributions_quantiles_stay_within_rank_error() {
         const TOLERANCE: f64 = 0.02;
-        const SAMPLE_SIZES: &[usize] = &[
-            1_000, 5_000, 20_000, 100_000, 1_000_000, 5_000_000,
-        ];
+        const SAMPLE_SIZES: &[usize] = &[1_000, 5_000, 20_000, 100_000, 1_000_000, 5_000_000];
         const QUANTILES: &[(f64, &str)] = &[
             (0.0, "min"),
             (0.10, "p10"),
