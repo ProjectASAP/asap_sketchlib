@@ -42,6 +42,8 @@ pub struct Nitro {
     pub is_nitro_mode: bool,
     sampling_rate: f64,
     pub to_skip: usize,
+    /// Precomputed: 1.0 / ln(1 - sampling_rate) for geometric sampling
+    inv_ln_one_minus_p: f64,
     #[serde(skip)]
     #[serde(default = "new_small_rng")]
     generator: SmallRng,
@@ -58,6 +60,7 @@ impl Default for Nitro {
             is_nitro_mode: false,
             sampling_rate: 0.0,
             to_skip: 0,
+            inv_ln_one_minus_p: 0.0, // not used unless Nitro mode is enabled
             generator: new_small_rng(), // not used unless Nitro mode is enabled
         }
     }
@@ -69,22 +72,36 @@ impl Nitro {
             !rate.is_nan() && rate > 0.0 && rate <= 1.0,
             "sample_rate must be within (0.0, 1.0]"
         );
+        let inv_ln = if (rate - 1.0).abs() <= f64::EPSILON {
+            0.0 // Not used for full sampling
+        } else {
+            1.0 / (1.0 - rate).ln()
+        };
         Self {
             is_nitro_mode: true,
             sampling_rate: rate,
             to_skip: 0,
+            inv_ln_one_minus_p: inv_ln,
             generator: new_small_rng(),
         }
     }
 
     pub fn draw_geometric(&mut self) {
+        if self.is_full_sampling() {
+            self.to_skip = 0;
+            return;
+        }
         let k = loop {
             let r = self.generator.random::<f64>();
             if r != 0.0_f64 && r != 1.0_f64 {
                 break r;
             }
         };
-        self.to_skip = ((1.0 - k).ln() / (1.0 - self.sampling_rate).ln()).ceil() as usize;
+        self.to_skip = ((1.0 - k).ln() * self.inv_ln_one_minus_p).ceil() as usize;
+    }
+
+    pub fn reduce_to_skip(&mut self) {
+        self.to_skip -= 1;
     }
 
     pub fn get_sampling_rate(&self) -> f64 {

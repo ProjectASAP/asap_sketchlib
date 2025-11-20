@@ -14,7 +14,9 @@ pub struct Vector2D<T> {
 }
 
 impl<T> Vector2D<T> {
-    /// Creates an empty matrix with reserved capacity.
+    /// Creates an empty matrix with reserved capacity for `rows * cols` elements.
+    /// The underlying storage is left uninitialized until `fill` or similar methods are called,
+    /// allowing callers to decide when and how counters are populated.
     pub fn init(rows: usize, cols: usize) -> Self {
         let mask_bits = if cols.is_power_of_two() {
             cols.ilog2()
@@ -32,7 +34,9 @@ impl<T> Vector2D<T> {
         }
     }
 
-    /// Builds a matrix using a generator that receives `(row, col)`.
+    /// Builds a matrix by invoking a generator for every `(row, col)` position.
+    /// Useful for types that require per-cell construction logic (e.g., heaps or buckets)
+    /// instead of cloning a single value across all cells.
     pub fn from_fn<F>(rows: usize, cols: usize, mut f: F) -> Self
     where
         F: FnMut(usize, usize) -> T,
@@ -59,7 +63,32 @@ impl<T> Vector2D<T> {
         }
     }
 
-    /// Replaces the contents with clones of `value`.
+    /// Enables Nitro sampling with the provided rate.
+    pub fn enable_nitro(&mut self, sampling_rate: f64) {
+        self.nitro = Nitro::init_nitro(sampling_rate);
+    }
+
+    /// Disables Nitro sampling and resets the internal state.
+    pub fn disable_nitro(&mut self) {
+        self.nitro = Nitro::default();
+    }
+
+    pub fn reduce_to_skip(&mut self) {
+        self.nitro.reduce_to_skip();
+    }
+
+    /// Returns the Nitro configuration.
+    pub fn nitro(&self) -> &Nitro {
+        &self.nitro
+    }
+
+    /// Returns a mutable Nitro configuration reference.
+    pub fn nitro_mut(&mut self) -> &mut Nitro {
+        &mut self.nitro
+    }
+
+    /// Replaces the entire matrix with `rows * cols` clones of `value`, reusing the existing allocation.
+    /// This is the most efficient way to reset counters to a baseline without reallocating.
     pub fn fill(&mut self, value: T)
     where
         T: Clone,
@@ -181,6 +210,33 @@ impl<T> Vector2D<T> {
             let idx = row * cols + col;
             op(&mut self.data[idx], value.clone(), row);
         }
+    }
+
+    /// Nitro-aware insertion that respects sampling configuration.
+    ///
+    /// When Nitro mode is disabled this is identical to [`fast_insert`]. When enabled,
+    /// inserts are performed only when the Nitro sampler fires; skipped calls return
+    /// immediately without touching the counters. Callers are responsible for passing
+    /// appropriately scaled values (e.g., `nitro().scaled_increment(delta)`) so that
+    /// down-sampled updates remain unbiased.
+    #[inline(always)]
+    pub fn fast_insert_nitro<F, V>(&mut self, op: F, value: V, hashed_val: u128)
+    where
+        F: Fn(&mut T, V, usize),
+        V: Clone,
+    {
+        if !self.nitro.is_nitro_mode {
+            self.fast_insert(op, value, hashed_val);
+            return;
+        }
+
+        if self.nitro.to_skip > 0 {
+            self.nitro.to_skip -= 1;
+            return;
+        }
+
+        self.fast_insert(op, value, hashed_val);
+        self.nitro.draw_geometric();
     }
 
     /// Reads a single counter by `(row, col)`.

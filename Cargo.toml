@@ -50,3 +50,7 @@ harness = false
 [[bench]]
 name = "hashlayer"
 harness = false
+
+[[bench]]
+name = "nitro"
+harness = false
