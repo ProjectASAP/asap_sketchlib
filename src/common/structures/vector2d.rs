@@ -115,6 +115,15 @@ impl<T> Vector2D<T> {
         self.cols
     }
 
+    /// Allocate a new row with default value at the end
+    pub fn allocate_extra_row(&mut self, value: T)
+    where
+        T: Clone,
+    {
+        self.rows += 1;
+        self.data.resize(self.rows * self.cols, value);
+    }
+
     /// Returns the total number of elements.
     pub fn len(&self) -> usize {
         self.data.len()

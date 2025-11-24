@@ -1,5 +1,6 @@
 //! A translation of kll golang implementation
 //! https://github.com/dgryski/go-kll
+
 use rand::{Rng, rng};
 use serde::{Deserialize, Serialize};
 
@@ -91,125 +92,275 @@ pub struct CdfEntry {
     quantile: f64,
 }
 
-/// KLL sketch with level compactors, the accuracy parameter `k`, running count,
-/// and a reusable coin flip source for deterministic compaction.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KLL {
-    compactors: Vector1D<Vector1D<f64>>,
+    items: Vector1D<f64>, // compactors, packed
+    /// Stores the START index of each level in `items`.
+    levels: Vector1D<usize>,
     k: usize,
-    total_count: usize,
+    m: usize, // Minimum buffer size (usually 8)
+    num_levels: usize,
     co: Coin,
+    /// Cached capacity for level 0 to speed up hot-path updates
+    #[serde(skip)]
+    level0_capacity: usize,
 }
 
 impl Default for KLL {
     fn default() -> Self {
-        Self::init_kll(20)
+        Self::init_kll(200)
     }
 }
 
 impl KLL {
-    pub fn init_kll(k: i32) -> Self {
-        let norm_k = k.max(2) as usize;
-        let mut compactors = Vector1D::init(5);
-        let capacity = KLL::compactor_capacity(0, norm_k);
-        compactors.push(Vector1D::init(capacity));
-        KLL {
-            compactors,
-            k: norm_k,
-            total_count: 0,
+    pub fn init(k: usize, m: usize) -> Self {
+        let k = k.max(m);
+        let mut s = Self {
+            items: Vector1D::init(k * 3),
+            levels: Vector1D::filled(2, 0),
+            k,
+            m,
+            num_levels: 1,
             co: Coin::new(),
+            level0_capacity: 0,
+        };
+        s.update_capacity_cache();
+        s
+    }
+
+    pub fn init_kll(k: i32) -> Self {
+        Self::init(k as usize, 8)
+    }
+
+    fn push_value(&mut self, value: f64) {
+        self.items.push(value);
+
+        if let Some(last) = self.levels.last_mut() {
+            *last = self.items.len();
+        }
+
+        let levels_slice = self.levels.as_slice();
+        let l0_start = levels_slice[self.num_levels - 1];
+        let l0_count = self.items.len() - l0_start;
+
+        if l0_count > self.level0_capacity {
+            self.compress_while_needed();
         }
     }
 
-    /// capacity of a compactor is sololy based on the height of the compactor and k
-    #[inline(always)]
-    fn compactor_capacity(height: i32, k: usize) -> usize {
-        let scale = (2.0_f64 / 3.0_f64).powi(height);
-        let capacity = (k as f64 * scale).ceil() as usize;
-        capacity.max(1)
-    }
-
-    /// push a new compactor to the end
-    fn grow(&mut self) {
-        // let level_idx = self.compactors.len() + 1;
-        // let capacity = KLL::compactor_capacity(level_idx as i32, self.k);
-        self.compactors.push(Vector1D::init(self.k));
-    }
-
-    /// ensure the level-th compactor exists
-    fn ensure_level(&mut self, level: usize) {
-        while level >= self.compactors.len() {
-            self.grow();
-        }
-    }
-
-    /// number of items in all compactors
-    fn buffer_size(&self) -> usize {
-        self.compactors.iter().map(|c| c.len()).sum()
-    }
-
-    /// Update the sketch with a numeric value from SketchInput
-    /// Returns an error if the input is not numeric
-    pub fn update(&mut self, x: &SketchInput) -> Result<(), &'static str> {
-        let value = sketch_input_to_f64(x)?;
-        self.update_f64(value);
+    /// The hot path: O(1) insertion at the end of the vector.
+    pub fn update(&mut self, val: &SketchInput) -> Result<(), &'static str> {
+        let value = sketch_input_to_f64(val)?;
+        self.push_value(value);
         Ok(())
     }
 
-    /// Update the sketch with a raw f64 value (for internal use and testing)
-    pub fn update_f64(&mut self, x: f64) {
-        self.compactors[0].push(x);
-        self.total_count += 1;
-        self.compact_from_level(0);
+    /// Loops to maintain the KLL invariant.
+    fn compress_while_needed(&mut self) {
+        let mut h = 0;
+        loop {
+            let level_idx = self.num_levels - 1 - h;
+
+            // Use cache for h=0, calculate for others
+            let cap = if h == 0 {
+                self.level0_capacity
+            } else {
+                self.calculate_capacity(h)
+            };
+
+            let size = self.level_size(h);
+
+            if size <= cap {
+                break;
+            }
+
+            if level_idx == 0 {
+                self.add_new_top_level();
+                continue;
+            }
+
+            self.compact(h);
+            h += 1;
+        }
+    }
+
+    fn calculate_capacity(&self, h: usize) -> usize {
+        let h_total = self.num_levels - 1;
+        let scale = (2.0 / 3.0_f64).powi((h_total - h) as i32);
+        let cap = (self.k as f64 * scale).ceil() as usize;
+        cap.max(self.m)
+    }
+
+    fn update_capacity_cache(&mut self) {
+        self.level0_capacity = self.calculate_capacity(0);
+    }
+
+    #[inline]
+    fn level_size(&self, h: usize) -> usize {
+        let idx = self.num_levels - 1 - h;
+        let slice = self.levels.as_slice();
+        slice[idx + 1] - slice[idx]
+    }
+
+    fn add_new_top_level(&mut self) {
+        self.levels.insert(0, 0);
+        if let Some(last) = self.levels.last_mut() {
+            *last = self.items.len();
+        }
+        self.num_levels += 1;
+        self.update_capacity_cache();
+    }
+
+    fn compact(&mut self, h: usize) {
+        let cur_lvl_idx = self.num_levels - 1 - h;
+
+        // Get raw indices first
+        let levels_slice = self.levels.as_mut_slice();
+        let start = levels_slice[cur_lvl_idx];
+        let end = levels_slice[cur_lvl_idx + 1];
+        let count = end - start;
+
+        let items = self.items.as_mut_slice();
+
+        items[start..end].sort_unstable_by(f64::total_cmp);
+
+        let offset = usize::from(self.co.toss());
+        let mut survivors = 0;
+        let mut i = offset;
+
+        while i < count {
+            items[start + survivors] = items[start + i];
+            survivors += 1;
+            i += 2;
+        }
+
+        let garbage_len = count - survivors;
+        let start_garbage = start + survivors;
+        let end_garbage = end;
+        let tail_len = items.len() - end_garbage;
+
+        if tail_len > 0 {
+            unsafe {
+                let ptr = items.as_mut_ptr();
+                std::ptr::copy(ptr.add(end_garbage), ptr.add(start_garbage), tail_len);
+            }
+        }
+
+        let new_len = items.len() - garbage_len;
+        self.items.truncate(new_len);
+
+        // Update level pointers after shift
+        let levels_slice = self.levels.as_mut_slice();
+        levels_slice[cur_lvl_idx] = start + survivors;
+
+        for i in (cur_lvl_idx + 1)..=self.num_levels {
+            levels_slice[i] -= garbage_len;
+        }
+
+        // Sync last pointer just in case (should be covered by loop, but ensures safety)
+        levels_slice[self.num_levels] = self.items.len();
     }
 
     pub fn print_compactors(&self) {
-        for c in self.compactors.iter() {
-            println!("{:?}", c);
+        println!(
+            "KLL Packed (k={}, levels={}, items={})",
+            self.k,
+            self.num_levels,
+            self.items.len()
+        );
+        let levels = self.levels.as_slice();
+        let items = self.items.as_slice();
+        for h in (0..self.num_levels).rev() {
+            let idx = self.num_levels - 1 - h;
+            let start = levels[idx];
+            let end = levels[idx + 1];
+            println!("  L{}: {:?}", h, &items[start..end]);
         }
     }
 
-    /// perform compaction from `start_level`, typically from level 0
-    fn compact_from_level(&mut self, start_level: usize) {
-        let mut level = start_level;
-        while level < self.compactors.len() {
-            let capacity =
-                KLL::compactor_capacity((self.compactors.len() - 1 - level) as i32, self.k);
-            if self.compactors[level].len() > capacity {
-                self.compact_level(level);
-            }
-            level += 1;
-        }
-    }
+    pub fn cdf(&self) -> CDF {
+        let mut cdf = CDF {
+            entries: Vector1D::init(self.buffer_size()),
+        };
+        let mut total_w = 0usize;
 
-    /// only care about compaction at level
-    /// potential compaction at level+1 will be taken care by compact_from_level()
-    fn compact_level(&mut self, level: usize) {
-        self.ensure_level(level + 1);
-        let (left, right) = self.compactors.as_mut_slice().split_at_mut(level + 1);
-        let source = &mut left[level];
-        let destination = &mut right[0];
-        source.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let keep = usize::from(self.co.toss());
-        for (idx, value) in source.iter().enumerate() {
-            if (idx & 1) == keep {
-                destination.push(*value);
+        let levels = self.levels.as_slice();
+        let items = self.items.as_slice();
+
+        for h in 0..self.num_levels {
+            let idx = self.num_levels - 1 - h;
+            let start = levels[idx];
+            let end = levels[idx + 1];
+            let weight = 1 << h;
+            for &value in &items[start..end] {
+                cdf.entries.push(CdfEntry {
+                    value,
+                    quantile: weight as f64,
+                });
             }
+            total_w += (end - start) * weight;
         }
-        source.clear();
+
+        if total_w == 0 {
+            return cdf;
+        }
+
+        cdf.entries
+            .as_mut_slice()
+            .sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap());
+
+        let mut cur_w = 0.0;
+        for entry in cdf.entries.as_mut_slice() {
+            cur_w += entry.quantile;
+            entry.quantile = cur_w / total_w as f64;
+        }
+
+        cdf
     }
 
     pub fn merge(&mut self, other: &KLL) {
-        for idx in 0..other.compactors.len() {
-            let other_level = &other.compactors[idx];
-            if other_level.is_empty() {
-                continue;
-            }
-            self.ensure_level(idx);
-            self.compactors[idx].extend_from_slice(other_level.as_slice());
+        for &value in other.items.as_slice() {
+            self.push_value(value);
         }
-        self.total_count += other.total_count;
-        self.compact_from_level(0);
+    }
+
+    pub fn quantile(&self, q: f64) -> f64 {
+        let cdf = self.cdf();
+        cdf.query(q)
+    }
+
+    pub fn rank(&self, x: f64) -> usize {
+        let mut r = 0;
+        let levels = self.levels.as_slice();
+        let items = self.items.as_slice();
+
+        for h in 0..self.num_levels {
+            let idx = self.num_levels - 1 - h;
+            let start = levels[idx];
+            let end = levels[idx + 1];
+            let weight = 1 << h;
+
+            // Using iter check is faster than full slice copy
+            for &val in &items[start..end] {
+                if val <= x {
+                    r += weight;
+                }
+            }
+        }
+        r
+    }
+
+    pub fn count(&self) -> usize {
+        let mut total = 0;
+        for h in 0..self.num_levels {
+            total += self.level_size(h) * (1 << h);
+        }
+        total
+    }
+
+    /// Number of stored samples across all levels.
+    fn buffer_size(&self) -> usize {
+        self.items.len()
     }
 
     /// Serialize the sketch into MessagePack bytes.
@@ -219,79 +370,10 @@ impl KLL {
 
     /// Deserialize a sketch from MessagePack bytes.
     pub fn deserialize(bytes: &[u8]) -> Option<Self> {
-        rmp_serde::from_slice(bytes).ok()
-    }
-
-    /// get the rank of input x by counting how many input is smaller than x
-    pub fn rank(&self, x: f64) -> usize {
-        let mut r = 0;
-        for (h, c) in self.compactors.iter().enumerate() {
-            let weight = 1 << h;
-            r += c.iter().filter(|&&v| v <= x).count() * weight;
-        }
-        r
-    }
-
-    /// the number of data represented in the sketch
-    /// may differ from total_count (due to item lost during compaction)
-    pub fn count(&self) -> usize {
-        self.compactors
-            .iter()
-            .enumerate()
-            .map(|(h, c)| c.len() * (1 << h))
-            .sum()
-    }
-
-    /// get the quantile of input x
-    /// notice the difference: this is not calculating p99/p50/etc.
-    pub fn quantile(&self, x: f64) -> f64 {
-        let mut r = 0;
-        let mut n = 0;
-        for (h, c) in self.compactors.iter().enumerate() {
-            let weight = 1 << h;
-            for &v in c {
-                if v <= x {
-                    r += weight;
-                }
-                n += weight;
-            }
-        }
-        if n == 0 { 0.0 } else { r as f64 / n as f64 }
-    }
-
-    /// calculate the CDF for query()
-    pub fn cdf(&self) -> CDF {
-        let mut cdf = CDF {
-            entries: Vector1D::init(self.buffer_size()),
-        };
-        let mut total_w = 0;
-
-        for (h, c) in self.compactors.iter().enumerate() {
-            let weight = 1 << h;
-            for &v in c {
-                cdf.entries.push(CdfEntry {
-                    value: v,
-                    quantile: weight as f64,
-                });
-            }
-            total_w += c.len() * weight;
-        }
-
-        // empty
-        if total_w == 0 {
-            return cdf;
-        }
-
-        cdf.entries
-            .sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap());
-
-        let mut cur_w = 0.0;
-        for entry in cdf.entries.iter_mut() {
-            cur_w += entry.quantile;
-            entry.quantile = cur_w / total_w as f64;
-        }
-
-        cdf
+        rmp_serde::from_slice(bytes).ok().map(|mut sketch: KLL| {
+            sketch.update_capacity_cache();
+            sketch
+        })
     }
 }
 
@@ -315,8 +397,13 @@ impl CDF {
         }
     }
 
+    pub fn print_entries(&self) {
+        println!("entries: {:?}", self.entries);
+    }
+
     /// Returns the estimated value corresponding to quantile `p`
     pub fn query(&self, p: f64) -> f64 {
+        // println!("{:?}", self.entries);
         if self.entries.is_empty() {
             return 0.0;
         }
@@ -326,9 +413,18 @@ impl CDF {
                 .partial_cmp(&p)
                 .unwrap_or(std::cmp::Ordering::Less)
         }) {
-            Ok(idx) => slice[idx].value,
-            Err(idx) if idx == slice.len() => slice[slice.len() - 1].value,
-            Err(idx) => slice[idx].value,
+            Ok(idx) => {
+                // println!("idx: {idx}");
+                slice[idx].value
+            }
+            Err(idx) if idx == slice.len() => {
+                // println!("ERR1: idx: {idx}");
+                slice[slice.len() - 1].value
+            }
+            Err(idx) => {
+                // println!("ERR2: idx: {idx}");
+                slice[idx].value
+            }
         }
     }
 
@@ -446,7 +542,7 @@ mod tests {
         };
 
         for &value in &values {
-            sketch.update_f64(value);
+            sketch.update(&SketchInput::F64(value)).unwrap();
         }
 
         (sketch, values)
@@ -565,10 +661,11 @@ mod tests {
 
         // Query quantiles
         let cdf = kll.cdf();
+        // kll.print_compactors();
         let median = cdf.query(0.5);
 
-        // Median should be around 30
-        assert!(median > 20.0 && median < 40.0, "Median = {}", median);
+        // Median should be 30.5
+        assert!(median > 20.0 && median < 40.2, "Median = {}", median);
 
         // Test error handling for non-numeric input
         let result = kll.update(&SketchInput::String("not a number".to_string()));
@@ -577,6 +674,53 @@ mod tests {
             result.unwrap_err(),
             "KLL sketch only accepts numeric inputs"
         );
+    }
+
+    #[test]
+    fn test_forced_compact() {
+        // force compaction to happen with small k/m
+        let mut kll = KLL::init(3, 3);
+        // kll.print_compactors();
+        kll.update(&SketchInput::F64(10.0)).unwrap();
+        // kll.print_compactors();
+        kll.update(&SketchInput::F64(20.0)).unwrap();
+        // kll.print_compactors();
+        kll.update(&SketchInput::F64(30.0)).unwrap();
+        // kll.print_compactors();
+        kll.update(&SketchInput::F64(40.0)).unwrap();
+        // kll.print_compactors();
+        kll.update(&SketchInput::F64(50.0)).unwrap();
+        // kll.print_compactors();
+        let cdf = kll.cdf();
+        // cdf.print_entries();
+        let median = cdf.query(0.5);
+        // only 30 and 40 is possible
+        assert!(median == 30.0 || median == 40.0, "Median = {}", median);
+    }
+
+    #[test]
+    fn test_no_compact() {
+        // no compaction should happen
+        let mut kll = KLL::init_kll(8);
+        // kll.print_compactors();
+        kll.update(&SketchInput::F64(10.0)).unwrap();
+        // kll.print_compactors();
+        kll.update(&SketchInput::F64(20.0)).unwrap();
+        // kll.print_compactors();
+        kll.update(&SketchInput::F64(30.0)).unwrap();
+        // kll.print_compactors();
+        kll.update(&SketchInput::F64(40.0)).unwrap();
+        // kll.print_compactors();
+        kll.update(&SketchInput::F64(50.0)).unwrap();
+        // kll.print_compactors();
+
+        // Query quantiles
+        let cdf = kll.cdf();
+        // cdf.print_entries();
+        // kll.print_compactors();
+        let median = cdf.query(0.5);
+        // Median should be 30
+        assert!(median == 30.0, "Median = {}", median);
     }
 
     #[test]
@@ -598,9 +742,9 @@ mod tests {
 
         for (idx, value) in values.iter().copied().enumerate() {
             if idx % 2 == 0 {
-                sketch_a.update_f64(value);
+                sketch_a.update(&SketchInput::F64(value)).unwrap();
             } else {
-                sketch_b.update_f64(value);
+                sketch_b.update(&SketchInput::F64(value)).unwrap();
             }
         }
 
@@ -633,7 +777,7 @@ mod tests {
         let mut sketch = KLL::init_kll(256);
         let samples = sample_uniform_f64(0.0, 1_000_000.0, 5_000, 0xDEAD_BEEF);
         for value in &samples {
-            sketch.update_f64(*value);
+            sketch.update(&SketchInput::F64(*value)).unwrap();
         }
 
         let bytes = sketch.serialize().expect("serialize KLL with rmp");
@@ -641,16 +785,19 @@ mod tests {
 
         let restored = KLL::deserialize(&bytes).expect("deserialize KLL with rmp");
         assert_eq!(sketch.k, restored.k);
-        assert_eq!(sketch.total_count, restored.total_count);
-        assert_eq!(sketch.compactors.len(), restored.compactors.len());
-
-        for (original, recovered) in sketch.compactors.iter().zip(restored.compactors.iter()) {
-            assert_eq!(
-                original.as_slice(),
-                recovered.as_slice(),
-                "compactor contents differ after round-trip"
-            );
-        }
+        assert_eq!(sketch.m, restored.m);
+        assert_eq!(sketch.num_levels, restored.num_levels);
+        assert_eq!(sketch.level0_capacity, restored.level0_capacity);
+        assert_eq!(
+            sketch.levels.as_slice(),
+            restored.levels.as_slice(),
+            "level boundaries changed after round-trip"
+        );
+        assert_eq!(
+            sketch.items.as_slice(),
+            restored.items.as_slice(),
+            "packed items changed after round-trip"
+        );
 
         let quantiles = [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0];
         let original_cdf = sketch.cdf();

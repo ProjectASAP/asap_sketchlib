@@ -1,19 +1,17 @@
 use serde::{Deserialize, Serialize};
-use std::ops::{Index, IndexMut};
+use std::ops::{Index, IndexMut, Range};
 
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Vector1D<T> {
     data: Vec<T>,
-    length: usize,
 }
 
 impl<T> Vector1D<T> {
     /// Creates an empty vector with reserved capacity.
-    pub fn init(len: usize) -> Self {
+    pub fn init(capacity: usize) -> Self {
         Self {
-            data: Vec::with_capacity(len),
-            length: len,
+            data: Vec::with_capacity(capacity),
         }
     }
 
@@ -24,7 +22,6 @@ impl<T> Vector1D<T> {
     {
         Self {
             data: vec![value; len],
-            length: len,
         }
     }
 
@@ -33,20 +30,23 @@ impl<T> Vector1D<T> {
     where
         T: Clone,
     {
+        let l = self.data.len();
         self.data.clear();
-        self.data.resize(self.length, value);
-        self.length = self.data.len();
+        self.data.resize(l, value);
     }
 
     /// Builds a vector from supplied storage.
     pub fn from_vec(vec: Vec<T>) -> Self {
-        let length = vec.len();
-        Self { data: vec, length }
+        Self { data: vec }
     }
 
     /// Returns the number of stored elements.
     pub fn len(&self) -> usize {
         self.data.len()
+    }
+
+    pub fn insert(&mut self, pos: usize, val: T) {
+        self.data.insert(pos, val);
     }
 
     /// Indicates whether the vector is empty.
@@ -62,6 +62,15 @@ impl<T> Vector1D<T> {
     /// Provides mutable access to the underlying slice.
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.data
+    }
+
+    pub fn last_mut(&mut self) -> Option<&mut T> {
+        self.data.last_mut()
+    }
+
+    /// Returns a raw mutable pointer to the backing storage.
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.data.as_mut_ptr()
     }
 
     /// Returns a reference by index when it exists.
@@ -117,13 +126,16 @@ impl<T> Vector1D<T> {
     /// Appends an element to the back of the vector.
     pub fn push(&mut self, value: T) {
         self.data.push(value);
-        self.length = self.data.len();
+    }
+
+    /// Truncates the vector to the specified length.
+    pub fn truncate(&mut self, len: usize) {
+        self.data.truncate(len);
     }
 
     /// Moves all elements from `other` into `self`, leaving `other` empty.
     pub fn append(&mut self, other: &mut Vec<T>) {
         self.data.append(other);
-        self.length = self.data.len();
     }
 
     /// Clones and appends all elements in a slice to the vector.
@@ -132,7 +144,6 @@ impl<T> Vector1D<T> {
         T: Clone,
     {
         self.data.extend_from_slice(other);
-        self.length = self.data.len();
     }
 
     /// Swaps two elements in the vector.
@@ -148,10 +159,17 @@ impl<T> Vector1D<T> {
         self.data.sort_by(compare);
     }
 
+    /// Sorts without preserving order but without allocations.
+    pub fn sort_unstable_by<F>(&mut self, compare: F)
+    where
+        F: FnMut(&T, &T) -> std::cmp::Ordering,
+    {
+        self.data.sort_unstable_by(compare);
+    }
+
     /// Clears the vector, removing all values.
     pub fn clear(&mut self) {
         self.data.clear();
-        self.length = 0;
     }
 }
 
@@ -159,15 +177,31 @@ impl<T> Index<usize> for Vector1D<T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
-        debug_assert!(index < self.length, "index out of bounds");
+        debug_assert!(index < self.data.len(), "index out of bounds");
         &self.data[index]
     }
 }
 
 impl<T> IndexMut<usize> for Vector1D<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        debug_assert!(index < self.length, "index out of bounds");
+        debug_assert!(index < self.data.len(), "index out of bounds");
         &mut self.data[index]
+    }
+}
+
+impl<T> Index<Range<usize>> for Vector1D<T> {
+    type Output = [T];
+
+    fn index(&self, range: Range<usize>) -> &Self::Output {
+        debug_assert!(range.end <= self.data.len(), "range end out of bounds");
+        &self.data[range]
+    }
+}
+
+impl<T> IndexMut<Range<usize>> for Vector1D<T> {
+    fn index_mut(&mut self, range: Range<usize>) -> &mut Self::Output {
+        debug_assert!(range.end <= self.data.len(), "range end out of bounds");
+        &mut self.data[range]
     }
 }
 
