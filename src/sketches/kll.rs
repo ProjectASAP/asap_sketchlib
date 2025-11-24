@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{SketchInput, Vector1D};
 
+const CAPACITY_CACHE_LEN: usize = 20;
+const MAX_CACHEABLE_K: usize = 26_602;
+const CAPACITY_DECAY: f64 = 2.0 / 3.0;
+
 /// Convert SketchInput to f64 for KLL sketch
 /// Returns an error if the input is not numeric
 fn sketch_input_to_f64(input: &SketchInput) -> Result<f64, &'static str> {
@@ -101,6 +105,12 @@ pub struct KLL {
     m: usize, // Minimum buffer size (usually 8)
     num_levels: usize,
     co: Coin,
+    /// Cached level capacities by height (from top to bottom)
+    #[serde(skip)]
+    capacity_cache: [u32; CAPACITY_CACHE_LEN],
+    /// Tracks current top height so we can index into the cache quickly.
+    #[serde(skip)]
+    top_height: usize,
     /// Cached capacity for level 0 to speed up hot-path updates
     #[serde(skip)]
     level0_capacity: usize,
@@ -114,17 +124,24 @@ impl Default for KLL {
 
 impl KLL {
     pub fn init(k: usize, m: usize) -> Self {
-        let k = k.max(m);
+        let mut norm_m = m.min(MAX_CACHEABLE_K);
+        norm_m = norm_m.max(2);
+        let mut norm_k = k.max(norm_m);
+        if norm_k > MAX_CACHEABLE_K {
+            norm_k = MAX_CACHEABLE_K;
+        }
         let mut s = Self {
-            items: Vector1D::init(k * 3),
+            items: Vector1D::init(norm_k * 3),
             levels: Vector1D::filled(2, 0),
-            k,
-            m,
+            k: norm_k,
+            m: norm_m,
             num_levels: 1,
             co: Coin::new(),
+            capacity_cache: [0; CAPACITY_CACHE_LEN],
+            top_height: 0,
             level0_capacity: 0,
         };
-        s.update_capacity_cache();
+        s.rebuild_capacity_cache();
         s
     }
 
@@ -160,14 +177,8 @@ impl KLL {
         let mut h = 0;
         loop {
             let level_idx = self.num_levels - 1 - h;
-
-            // Use cache for h=0, calculate for others
-            let cap = if h == 0 {
-                self.level0_capacity
-            } else {
-                self.calculate_capacity(h)
-            };
-
+            let cap = self.capacity_for_level(h);
+            
             let size = self.level_size(h);
 
             if size <= cap {
@@ -184,15 +195,25 @@ impl KLL {
         }
     }
 
-    fn calculate_capacity(&self, h: usize) -> usize {
-        let h_total = self.num_levels - 1;
-        let scale = (2.0 / 3.0_f64).powi((h_total - h) as i32);
-        let cap = (self.k as f64 * scale).ceil() as usize;
-        cap.max(self.m)
+    fn capacity_for_level(&self, level: usize) -> usize {
+        if self.num_levels == 0 {
+            return self.m;
+        }
+        let height_from_top = self.top_height.saturating_sub(level);
+        let idx = height_from_top.min(CAPACITY_CACHE_LEN - 1);
+        self.capacity_cache[idx] as usize
     }
-
-    fn update_capacity_cache(&mut self) {
-        self.level0_capacity = self.calculate_capacity(0);
+    
+    fn rebuild_capacity_cache(&mut self) {
+        self.top_height = self.num_levels.saturating_sub(1);
+        let mut scale = 1.0_f64;
+        for idx in 0..CAPACITY_CACHE_LEN {
+            let scaled = ((self.k as f64) * scale).ceil() as usize;
+            let cap = scaled.max(self.m);
+            self.capacity_cache[idx] = cap as u32;
+            scale *= CAPACITY_DECAY;
+        }
+        self.level0_capacity = self.capacity_for_level(0);
     }
 
     #[inline]
@@ -208,7 +229,8 @@ impl KLL {
             *last = self.items.len();
         }
         self.num_levels += 1;
-        self.update_capacity_cache();
+        self.top_height = self.num_levels - 1;
+        self.level0_capacity = self.capacity_for_level(0);
     }
 
     fn compact(&mut self, h: usize) {
@@ -370,10 +392,12 @@ impl KLL {
 
     /// Deserialize a sketch from MessagePack bytes.
     pub fn deserialize(bytes: &[u8]) -> Option<Self> {
-        rmp_serde::from_slice(bytes).ok().map(|mut sketch: KLL| {
-            sketch.update_capacity_cache();
-            sketch
-        })
+        rmp_serde::from_slice(bytes)
+            .ok()
+            .map(|mut sketch: KLL| {
+                sketch.rebuild_capacity_cache();
+                sketch
+            })
     }
 }
 
@@ -787,6 +811,7 @@ mod tests {
         assert_eq!(sketch.k, restored.k);
         assert_eq!(sketch.m, restored.m);
         assert_eq!(sketch.num_levels, restored.num_levels);
+        assert_eq!(sketch.top_height, restored.top_height);
         assert_eq!(sketch.level0_capacity, restored.level0_capacity);
         assert_eq!(
             sketch.levels.as_slice(),
