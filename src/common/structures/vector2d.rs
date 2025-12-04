@@ -162,6 +162,7 @@ impl<T> Vector2D<T> {
     }
 
     /// Applies an update to a single cell via the supplied operator.
+    #[inline(always)]
     pub fn update_one_counter<F, V>(&mut self, row: usize, col: usize, op: F, value: V)
     where
         F: Fn(&mut T, V),
@@ -254,6 +255,32 @@ impl<T> Vector2D<T> {
 
         self.fast_insert(op, value, hashed_val);
         self.nitro.draw_geometric();
+    }
+
+    #[inline(always)]
+    pub fn update_by_row<F, V>(&mut self, row: usize, hashed: u128, op: F, value: V) 
+        where
+        F: Fn(&mut T, V),
+        T: Clone,
+        {
+        let idx = (hashed >> (self.mask_bits as usize * row)) as usize & (self.mask as usize);
+        // op(&mut self.data[self.cols * row + idx], value);
+        self.update_one_counter(row, idx, op, value);
+    }
+
+    #[inline(always)]
+    pub fn reduce_nitro_skip(&mut self, c: usize) {
+        self.nitro.reduce_to_skip_by_count(c)
+    }
+
+    #[inline(always)]
+    pub fn update_nitro_skip(&mut self, c: usize) {
+        self.nitro.to_skip = c
+    }
+
+    #[inline(always)]
+    pub fn get_nitro_skip(&mut self) -> usize {
+        self.nitro.to_skip
     }
 
     /// Reads a single counter by `(row, col)`.

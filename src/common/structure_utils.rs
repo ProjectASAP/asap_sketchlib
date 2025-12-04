@@ -115,6 +115,11 @@ impl Nitro {
     }
 
     #[inline(always)]
+    pub fn reduce_to_skip_by_count(&mut self, c: usize) {
+        self.to_skip -= c;
+    }
+
+    #[inline(always)]
     pub fn get_sampling_rate(&self) -> f64 {
         self.sampling_rate
     }

@@ -90,11 +90,29 @@ impl CountMin {
     /// Inserts an observation using Nitro-aware sampling logic.
     #[inline(always)]
     pub fn fast_insert_nitro(&mut self, value: &SketchInput) {
-        if self.counts.nitro().to_skip > 0 {
-            self.counts.reduce_to_skip();
+        // if self.counts.nitro().to_skip > 0 {
+        //     self.counts.reduce_to_skip();
+        // } else {
+        //     let hashed_val = hash_it_to_128(0, value);
+        //     self.fast_insert_nitro_with_hash_value(hashed_val);
+        // }
+        let delta = self.counts.nitro().delta;
+        // let nitro = self.counts.nitro_mut();
+        if self.counts.nitro().to_skip >= self.row {
+            self.counts.reduce_nitro_skip(self.row);
         } else {
-            let hashed_val = hash_it_to_128(0, value);
-            self.fast_insert_nitro_with_hash_value(hashed_val);
+            let hashed = hash_it_to_128(0, value);
+            let mut r = self.counts.nitro().to_skip;
+            loop {
+                self.counts.update_by_row(r, hashed, |a, b| *a += b, delta);
+                self.counts.nitro_mut().draw_geometric();
+                if r + self.counts.nitro_mut().to_skip + 1 >= self.row {
+                    break;
+                }
+                r += self.counts.nitro_mut().to_skip + 1;
+            }
+            let temp = self.counts.get_nitro_skip();
+            self.counts.update_nitro_skip((r + temp + 1) - self.row);
         }
     }
 
