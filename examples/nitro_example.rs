@@ -60,6 +60,9 @@ fn no_skip_update(inputs: &Vec<u64>, sketch: &mut Vec<u32>) {
     }
 }
 
+// To compile: % cargo build --release --example nitro_example 
+// To check flamegraph: % samply record ./target/release/examples/nitro_example
+// To perf: $ sudo perf stat -e cycles,instructions,branches,branch-misses ./target/release/examples/nitro_example
 pub fn main() {
     let value_to_insert = build_input();
     let mut nitro_row = Nitro::init_nitro(0.01);
