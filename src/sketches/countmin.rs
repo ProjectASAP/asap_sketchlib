@@ -84,7 +84,7 @@ impl CountMin {
     /// Hash value can be reused with other sketches.
     pub fn fast_insert_with_hash_value(&mut self, hashed_val: u128) {
         self.counts
-            .fast_insert(|a, b, _| *a += b, 1_u64, hashed_val);
+            .fast_insert(|a, b, _| *a += *b, 1_u64, hashed_val);
     }
 
     /// Inserts an observation using Nitro-aware sampling logic.
@@ -116,25 +116,6 @@ impl CountMin {
         }
     }
 
-    /// Inserts an observation using Nitro-aware sampling logic with a pre-computed hash value.
-    #[inline(always)]
-    pub fn fast_insert_nitro_with_hash_value(&mut self, hashed_val: u128) {
-        // let delta = self.nitro_scaled_delta();
-        let delta = self.counts.get_delta();
-        self.counts
-            .fast_insert(|a, b, _| *a += b, delta, hashed_val);
-        self.counts.nitro_mut().draw_geometric();
-    }
-
-    // /// Inserts an observation using Nitro-aware sampling logic with a pre-computed hash value.
-    // #[inline(always)]
-    // pub fn fast_insert_nitro_with_hash_value(&mut self, hashed_val: u128) {
-    //     // let delta = self.nitro_scaled_delta();
-    //     let delta = self.counts.get_delta();
-    //     self.counts
-    //         .fast_insert_nitro(|a, b, _| *a += b, delta, hashed_val);
-    // }
-
     /// Returns the frequency estimate for the provided value.
     pub fn estimate(&self, value: &SketchInput) -> u64 {
         let mut min = u64::MAX;
@@ -157,6 +138,12 @@ impl CountMin {
     /// Returns the frequency estimate using a pre-computed hash value.
     pub fn fast_estimate_with_hash(&self, hashed_val: u128) -> u64 {
         self.counts.fast_query_min(hashed_val, |val, _, _| *val)
+    }
+
+    pub fn nitro_estimate(&self, value: &SketchInput) -> f64 {
+        let hashed_val = hash_it_to_128(0, value);
+        self.counts
+            .fast_query_median(hashed_val, |val, _, _| (*val) as f64)
     }
 
     /// Merges another sketch while asserting compatible dimensions.

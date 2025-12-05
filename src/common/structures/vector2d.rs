@@ -216,7 +216,7 @@ impl<T> Vector2D<T> {
     #[inline(always)]
     pub fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: u128)
     where
-        F: Fn(&mut T, V, usize),
+        F: Fn(&mut T, &V, usize),
         V: Clone,
     {
         let mask_bits = self.mask_bits;
@@ -226,35 +226,8 @@ impl<T> Vector2D<T> {
             let hashed = (hashed_val >> (mask_bits as usize * row)) & mask;
             let col = (hashed as usize) % cols;
             let idx = row * cols + col;
-            op(&mut self.data[idx], value.clone(), row);
+            op(&mut self.data[idx], &value, row);
         }
-    }
-
-    /// Nitro-aware insertion that respects sampling configuration.
-    ///
-    /// When Nitro mode is disabled this is identical to [`fast_insert`]. When enabled,
-    /// inserts are performed only when the Nitro sampler fires; skipped calls return
-    /// immediately without touching the counters. Callers are responsible for passing
-    /// appropriately scaled values (e.g., `nitro().scaled_increment(delta)`) so that
-    /// down-sampled updates remain unbiased.
-    #[inline(always)]
-    pub fn fast_insert_nitro<F, V>(&mut self, op: F, value: V, hashed_val: u128)
-    where
-        F: Fn(&mut T, V, usize),
-        V: Clone,
-    {
-        if !self.nitro.is_nitro_mode {
-            self.fast_insert(op, value, hashed_val);
-            return;
-        }
-
-        if self.nitro.to_skip > 0 {
-            self.nitro.to_skip -= 1;
-            return;
-        }
-
-        self.fast_insert(op, value, hashed_val);
-        self.nitro.draw_geometric();
     }
 
     #[inline(always)]
@@ -263,9 +236,8 @@ impl<T> Vector2D<T> {
         F: Fn(&mut T, V),
         T: Clone,
     {
-        let idx = (hashed >> (self.mask_bits as usize * row)) as usize & (self.mask as usize);
-        // op(&mut self.data[self.cols * row + idx], value);
-        self.update_one_counter(row, idx, op, value);
+        let col = (hashed >> (self.mask_bits as usize * row)) as usize & (self.mask as usize);
+        self.update_one_counter(row, col, op, value);
     }
 
     #[inline(always)]
@@ -530,9 +502,7 @@ impl<T> Vector2D<T> {
                 let (mut v0, mut v1, v2) = (values[0], values[1], values[2]);
                 // ensure v0 is smaller than v1
                 if v0 > v1 {
-                    let t = v0;
-                    v0 = v1;
-                    v1 = t;
+                    std::mem::swap(&mut v0, &mut v1);
                 }
                 // ensure v1 is smaller than v2, and ignore the actual v2 value
                 if v1 > v2 {
@@ -548,15 +518,11 @@ impl<T> Vector2D<T> {
                 let (mut v0, mut v1, mut v2, mut v3) = (values[0], values[1], values[2], values[3]);
                 // ensure the order of v0 and v1
                 if v0 > v1 {
-                    let t = v0;
-                    v0 = v1;
-                    v1 = t;
+                    std::mem::swap(&mut v0, &mut v1);
                 }
                 // ensure the order of v2 and v3
                 if v2 > v3 {
-                    let t = v2;
-                    v2 = v3;
-                    v3 = t;
+                    std::mem::swap(&mut v2, &mut v3);
                 }
                 // the smaller of v0 and v2 will be smaller than v1 anyway
                 // ignore the smaller one, which will be min (dropped)
@@ -575,15 +541,11 @@ impl<T> Vector2D<T> {
                     (values[0], values[1], values[2], values[3], values[4]);
                 // ensure the order of v0 and v1
                 if v0 > v1 {
-                    let t = v0;
-                    v0 = v1;
-                    v1 = t;
+                    std::mem::swap(&mut v0, &mut v1);
                 }
                 // ensure the order of v3 and v4
                 if v3 > v4 {
-                    let t = v3;
-                    v3 = v4;
-                    v4 = t;
+                    std::mem::swap(&mut v3, &mut v4);
                 }
                 // the smaller of v0 v3 will be smaller than v1 v4 and the other
                 // smaller than 3 value, so not median of 5
@@ -601,9 +563,7 @@ impl<T> Vector2D<T> {
                 // v4 will be one of the two greatest
                 // safely ignored
                 if v1 > v2 {
-                    let t = v1;
-                    v1 = v2;
-                    v2 = t;
+                    std::mem::swap(&mut v1, &mut v2);
                 }
                 if v2 > v3 {
                     v2 = v3;

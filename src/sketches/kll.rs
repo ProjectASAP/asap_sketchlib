@@ -275,8 +275,12 @@ impl KLL {
         let levels_slice = self.levels.as_mut_slice();
         levels_slice[cur_lvl_idx] = start + survivors;
 
-        for i in (cur_lvl_idx + 1)..=self.num_levels {
-            levels_slice[i] -= garbage_len;
+        for pos in levels_slice
+            .iter_mut()
+            .take(self.num_levels + 1)
+            .skip(cur_lvl_idx + 1)
+        {
+            *pos -= garbage_len;
         }
 
         // Sync last pointer just in case (should be covered by loop, but ensures safety)

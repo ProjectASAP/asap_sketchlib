@@ -72,7 +72,7 @@ impl Count {
                 let sign_bit_pos = 127 - row;
                 let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
                 let sign_bit = -(1 - 2 * bit);
-                *counter += sign_bit * value;
+                *counter += sign_bit * *value;
             },
             1_i64,
             hashed_val,
