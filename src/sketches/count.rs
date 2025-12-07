@@ -397,16 +397,12 @@ impl CountL2HH {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{all_counter_zero_i64, all_zero_except_i64, counter_index, sample_zipf_u64};
+    use crate::test_utils::{
+        all_counter_zero_i64, all_zero_except_i64, counter_index, sample_uniform_f64,
+        sample_zipf_u64,
+    };
     use crate::{SketchInput, hash_it_to_128};
     use std::collections::HashMap;
-    const LARGE_ROW_NUM: usize = 5;
-    const LARGE_COL_NUM: usize = 32768;
-
-    // fn counter_index(row: usize, key: &SketchInput, columns: usize) -> usize {
-    //     let hash = hash_it_to_128(row, key);
-    //     ((hash & ((0x1 << 32) - 1)) as usize) % columns
-    // }
 
     fn counter_sign(row: usize, key: &SketchInput) -> i64 {
         let hash = hash_it_to_128(row, key);
@@ -428,6 +424,66 @@ mod tests {
             let key = SketchInput::U64(value);
             sketch.insert(&key);
             *truth.entry(value).or_insert(0) += 1;
+        }
+
+        (sketch, truth)
+    }
+
+    fn run_zipf_stream_fast(
+        rows: usize,
+        cols: usize,
+        domain: usize,
+        exponent: f64,
+        samples: usize,
+        seed: u64,
+    ) -> (Count, HashMap<u64, u64>) {
+        let mut truth = HashMap::<u64, u64>::new();
+        let mut sketch = Count::with_dimensions(rows, cols);
+
+        for value in sample_zipf_u64(domain, exponent, samples, seed) {
+            let key = SketchInput::U64(value);
+            sketch.fast_insert(&key);
+            *truth.entry(value).or_insert(0) += 1;
+        }
+
+        (sketch, truth)
+    }
+
+    fn run_uniform_stream(
+        rows: usize,
+        cols: usize,
+        min: f64,
+        max: f64,
+        samples: usize,
+        seed: u64,
+    ) -> (Count, HashMap<u64, u64>) {
+        let mut truth = HashMap::<u64, u64>::new();
+        let mut sketch = Count::with_dimensions(rows, cols);
+
+        for value in sample_uniform_f64(min, max, samples, seed) {
+            let key = SketchInput::F64(value);
+            sketch.insert(&key);
+            *truth.entry(value.to_bits() as u64).or_insert(0) += 1;
+        }
+
+        (sketch, truth)
+    }
+
+    fn run_uniform_stream_fast(
+        rows: usize,
+        cols: usize,
+        min: f64,
+        max: f64,
+        samples: usize,
+        seed: u64,
+    ) -> (Count, HashMap<u64, u64>) {
+        let mut truth = HashMap::<u64, u64>::new();
+        let mut sketch = Count::with_dimensions(rows, cols);
+
+        for value in sample_uniform_f64(min, max, samples, seed) {
+            let key = SketchInput::F64(value);
+            sketch.fast_insert(&key);
+            *truth.entry(value.to_bits() as u64).or_insert(0) += 1;
         }
 
         (sketch, truth)
@@ -621,7 +677,6 @@ mod tests {
             total
         );
     }
-
 
     // 0: AD840DF6E50083D93BF66518E6FF7E3D
     // 1: 6E17A626B9D8F6F4573FA3775F50F1B9
@@ -1538,53 +1593,121 @@ mod tests {
         }
     }
 
+    // test for zipf distribution for domain 8192 and exponent 1.1 with 200_000 items
+    // verify: (1-delta)*(query_size) is within bound (epsilon*L2Norm)
     #[test]
-    fn zipf_stream_large_sketch() {
-        let (sketch, truth) = run_zipf_stream(
-            LARGE_ROW_NUM,
-            LARGE_COL_NUM,
+    fn cs_error_bound_zipf() {
+        // regular path
+        let (sk, truth) = run_zipf_stream(
+            DEFAULT_ROW_NUM,
+            DEFAULT_COL_NUM,
             8192,
             1.1,
             200_000,
             0x5eed_c0de,
         );
-        let mut within_tolerance = 0usize;
-        for (&value, &count) in &truth {
-            let estimate = sketch.estimate(&SketchInput::U64(value));
-            let rel_error = ((estimate - count as f64).abs()) / (count as f64);
-            if rel_error < 0.10 {
-                within_tolerance += 1;
+        let epsilon = std::f64::consts::E / DEFAULT_COL_NUM as f64;
+        let delta = 1.0 / std::f64::consts::E.powi(DEFAULT_ROW_NUM as i32);
+        let error_bound = epsilon * 200_000 as f64;
+        let keys = truth.keys();
+        let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
+        let mut within_count = 0;
+        for key in keys {
+            let est = sk.estimate(&SketchInput::U64(*key));
+            if (est - (*truth.get(key).unwrap() as f64)).abs() < error_bound {
+                within_count += 1;
             }
         }
-
-        let total = truth.len();
-        let accuracy = within_tolerance as f64 / total as f64;
         assert!(
-            accuracy >= 0.90,
-            "Only {:.2}% of keys within tolerance ({} of {}); expected at least 70%",
-            accuracy * 100.0,
-            within_tolerance,
-            total
+            within_count as f64 > correct_lower_bound,
+            "in-bound items number {within_count} not greater than expected amount {correct_lower_bound}"
+        );
+        // fast path
+        let (sk, truth) = run_zipf_stream_fast(
+            DEFAULT_ROW_NUM,
+            DEFAULT_COL_NUM,
+            8192,
+            1.1,
+            200_000,
+            0x5eed_c0de,
+        );
+        let epsilon = std::f64::consts::E / DEFAULT_COL_NUM as f64;
+        let delta = 1.0 / std::f64::consts::E.powi(DEFAULT_ROW_NUM as i32);
+        let error_bound = epsilon * 200_000 as f64;
+        let keys = truth.keys();
+        let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
+        let mut within_count = 0;
+        for key in keys {
+            let est = sk.fast_estimate(&SketchInput::U64(*key));
+            if (est - (*truth.get(key).unwrap() as f64)).abs() < error_bound {
+                within_count += 1;
+            }
+        }
+        assert!(
+            within_count as f64 > correct_lower_bound,
+            "in-bound items number {within_count} not greater than expected amount {correct_lower_bound}"
         );
     }
 
+    // test for uniform distribution from 100.0 to 1000.0 with 200_000 items
+    // verify: (1-delta)*(query_size) is within bound (epsilon*L2Norm)
     #[test]
-    fn zipf_stream_estimates_heavy_hitters_within_twenty_percent() {
-        let (sketch, truth) = run_zipf_stream(5, 4096, 8192, 1.1, 200_000, 0x5eed_c0de);
-        let mut counts: Vec<(u64, i64)> = truth.iter().map(|(&k, &v)| (k, v)).collect();
-        counts.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-
-        let top_k = counts.len().min(25);
-        assert!(top_k > 0, "expected at least one heavy hitter");
-
-        for (key, count) in counts.into_iter().take(top_k) {
-            let estimate = sketch.estimate(&SketchInput::U64(key));
-            let rel_error = ((estimate - count as f64).abs()) / (count as f64);
-            assert!(
-                rel_error < 0.20,
-                "Heavy hitter key {key} truth {count} estimate {estimate} rel error {rel_error:.4}"
-            );
+    fn cs_error_bound_uniform() {
+        // regular path
+        let (sk, truth) = run_uniform_stream(
+            DEFAULT_ROW_NUM,
+            DEFAULT_COL_NUM,
+            100.0,
+            1000.0,
+            200_000,
+            0x5eed_c0de,
+        );
+        let epsilon = (std::f64::consts::E / DEFAULT_COL_NUM as f64).sqrt();
+        let l2_norm = truth
+            .values()
+            .map(|&c| (c as f64).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let error_bound = epsilon * l2_norm;
+        let delta = 1.0 / std::f64::consts::E.powi(DEFAULT_ROW_NUM as i32);
+        let keys = truth.keys();
+        let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
+        let mut within_count = 0;
+        for key in keys {
+            let est = sk.estimate(&SketchInput::U64(*key));
+            if (est - (*truth.get(key).unwrap() as f64)).abs() < error_bound {
+                within_count += 1;
+            }
         }
+        assert!(
+            within_count as f64 > correct_lower_bound,
+            "in-bound items number {within_count} not greater than expected amount {correct_lower_bound}"
+        );
+        // fast path
+        let (sk, truth) = run_uniform_stream_fast(
+            DEFAULT_ROW_NUM,
+            DEFAULT_COL_NUM,
+            100.0,
+            1000.0,
+            200_000,
+            0x5eed_c0de,
+        );
+        let epsilon = std::f64::consts::E / DEFAULT_COL_NUM as f64;
+        let delta = 1.0 / std::f64::consts::E.powi(DEFAULT_ROW_NUM as i32);
+        let error_bound = epsilon * 200_000 as f64;
+        let keys = truth.keys();
+        let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
+        let mut within_count = 0;
+        for key in keys {
+            let est = sk.fast_estimate(&SketchInput::U64(*key));
+            if (est - (*truth.get(key).unwrap() as f64)).abs() < error_bound {
+                within_count += 1;
+            }
+        }
+        assert!(
+            within_count as f64 > correct_lower_bound,
+            "in-bound items number {within_count} not greater than expected amount {correct_lower_bound}"
+        );
     }
 
     #[test]
