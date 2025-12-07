@@ -213,7 +213,7 @@ impl CountMin {
 mod tests {
     use super::*;
     use crate::SketchInput;
-    use crate::test_utils::{all_counter_zero, all_zero_except, counter_index, sample_zipf_u64};
+    use crate::test_utils::{all_counter_zero_u64, all_zero_except_u64, counter_index, sample_zipf_u64};
     use std::collections::HashMap;
 
     fn run_zipf_stream(
@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(cm.rows(), 3);
         assert_eq!(cm.cols(), 4096);
         let storage = cm.as_storage();
-        all_counter_zero(storage);
+        all_counter_zero_u64(storage);
 
         // test for custom dimension size
         let cm_customize = CountMin::with_dimensions(3, 17);
@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(cm_customize.cols(), 17);
 
         let storage_customize = cm_customize.as_storage();
-        all_counter_zero(storage_customize);
+        all_counter_zero_u64(storage_customize);
     }
 
     #[test]
@@ -531,7 +531,7 @@ mod tests {
             data[0xEC0 + sk.col * 2]
         );
         // other remains zero
-        all_zero_except(
+        all_zero_except_u64(
             sk.as_storage(),
             vec![
                 0xE3D,
@@ -742,7 +742,7 @@ mod tests {
             data[0xEC0 + sk.col * 2]
         );
         // other remains zero
-        all_zero_except(
+        all_zero_except_u64(
             sk.as_storage(),
             vec![
                 0xE3D,
@@ -968,7 +968,7 @@ mod tests {
             data[0x687 + sk.col * 2]
         );
         // others are 0
-        all_zero_except(
+        all_zero_except_u64(
             sk.as_storage(),
             vec![
                 0xE3D,
@@ -1180,7 +1180,7 @@ mod tests {
             data[0x687 + sk.col * 2]
         );
         // others are still 0
-        all_zero_except(
+        all_zero_except_u64(
             sk.as_storage(),
             vec![
                 0xE3D,
