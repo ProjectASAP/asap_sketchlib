@@ -87,38 +87,39 @@ impl Hydra {
 
 #[cfg(test)]
 mod tests {
+    use crate::KLL;
+
     use super::*;
 
     const EPSILON: f64 = 1e-6;
 
-    // fn query_cdf(hydra: &Hydra<'_>, key_parts: &[&str], threshold: f64) -> f64 {
-    //     let query_input = SketchInput::F64(threshold);
-    //     hydra.query_key(key_parts.to_vec(), &query_input)
-    // }
+    fn query_cdf(hydra: &Hydra, key_parts: &[&str], threshold: f64) -> f64 {
+        hydra.query_quantile(key_parts.to_vec(), threshold)
+    }
 
-    // fn build_kll_test_hydra() -> Hydra<'static> {
-    //     let template = Chapter::KLL(KLL::init_kll(200));
-    //     let mut hydra = Hydra::new(3, 64, template);
+    fn build_kll_test_hydra() -> Hydra {
+        let template = HydraCounter::KLL(KLL::default());
+        let mut hydra = Hydra::with_dimensions(3, 64, template);
 
-    //     let dataset = [
-    //         ("key1;key2;key3", 10.0),
-    //         ("key1;key2;key3", 20.0),
-    //         ("key1;key2;key3", 30.0),
-    //         ("key4;key5;key6", 40.0),
-    //         ("key4;key5;key6", 50.0),
-    //         ("key4;key5;key6", 60.0),
-    //         ("key7;key8;key9", 70.0),
-    //         ("key7;key8;key9", 80.0),
-    //         ("key7;key8;key9", 90.0),
-    //     ];
+        let dataset = [
+            ("key1;key2;key3", 10.0),
+            ("key1;key2;key3", 20.0),
+            ("key1;key2;key3", 30.0),
+            ("key4;key5;key6", 40.0),
+            ("key4;key5;key6", 50.0),
+            ("key4;key5;key6", 60.0),
+            ("key7;key8;key9", 70.0),
+            ("key7;key8;key9", 80.0),
+            ("key7;key8;key9", 90.0),
+        ];
 
-    //     for (key, value) in dataset {
-    //         let input = SketchInput::F64(value);
-    //         hydra.update(key, &input);
-    //     }
+        for (key, value) in dataset {
+            let input = SketchInput::F64(value);
+            hydra.update(key, &input);
+        }
 
-    //     hydra
-    // }
+        hydra
+    }
 
     #[test]
     fn hydra_updates_countmin_frequency() {
@@ -315,72 +316,72 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn hydra_tracks_kll_quantiles() {
-    //     let mut hydra = Hydra::with_dimensions(3, 64, Chapter::KLL(KLL::init_kll(200)));
-    //     let samples = [
-    //         SketchInput::F64(10.0),
-    //         SketchInput::F64(20.0),
-    //         SketchInput::F64(30.0),
-    //         SketchInput::F64(40.0),
-    //         SketchInput::F64(50.0),
-    //     ];
+    #[test]
+    fn hydra_tracks_kll_quantiles() {
+        let mut hydra = Hydra::with_dimensions(3, 64, HydraCounter::KLL(KLL::default()));
+        let samples = [
+            SketchInput::F64(10.0),
+            SketchInput::F64(20.0),
+            SketchInput::F64(30.0),
+            SketchInput::F64(40.0),
+            SketchInput::F64(50.0),
+        ];
 
-    //     for sample in &samples {
-    //         hydra.update("metrics;latency", sample);
-    //     }
+        for sample in &samples {
+            hydra.update("metrics;latency", sample);
+        }
 
-    //     let query_value = SketchInput::F64(35.0);
-    //     let quantile = hydra.query_key(vec!["metrics", "latency"], &query_value);
-    //     assert!(
-    //         (quantile - 0.6).abs() < 1e-9,
-    //         "expected quantile near 0.6, got {}",
-    //         quantile
-    //     );
+        // let query_value = SketchInput::F64(35.0);
+        let quantile = hydra.query_key(vec!["metrics", "latency"], &HydraQuery::Quantile(50.0));
+        assert!(
+            (quantile - 0.6).abs() < 1e-9,
+            "expected quantile near 0.6, got {}",
+            quantile
+        );
 
-    //     let empty_bucket = hydra.query_key(vec!["other", "key"], &query_value);
-    //     assert_eq!(empty_bucket, 0.0);
-    // }
+        let empty_bucket = hydra.query_key(vec!["other", "key"], &HydraQuery::Quantile(50.0));
+        assert_eq!(empty_bucket, 0.0);
+    }
 
-    // #[test]
-    // fn hydra_kll_single_label_cdfs() {
-    //     let hydra = build_kll_test_hydra();
+    #[test]
+    fn hydra_kll_single_label_cdfs() {
+        let hydra = build_kll_test_hydra();
 
-    //     assert!((query_cdf(&hydra, &["key1"], 15.0) - (1.0 / 3.0)).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key1"], 25.0) - (2.0 / 3.0)).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key1"], 35.0) - 1.0).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key1"], 15.0) - (1.0 / 3.0)).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key1"], 25.0) - (2.0 / 3.0)).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key1"], 35.0) - 1.0).abs() < EPSILON);
 
-    //     assert!((query_cdf(&hydra, &["key4"], 45.0) - (1.0 / 3.0)).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key4"], 55.0) - (2.0 / 3.0)).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key4"], 65.0) - 1.0).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key4"], 45.0) - (1.0 / 3.0)).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key4"], 55.0) - (2.0 / 3.0)).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key4"], 65.0) - 1.0).abs() < EPSILON);
 
-    //     assert!((query_cdf(&hydra, &["key7"], 75.0) - (1.0 / 3.0)).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key7"], 85.0) - (2.0 / 3.0)).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key7"], 95.0) - 1.0).abs() < EPSILON);
-    // }
+        assert!((query_cdf(&hydra, &["key7"], 75.0) - (1.0 / 3.0)).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key7"], 85.0) - (2.0 / 3.0)).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key7"], 95.0) - 1.0).abs() < EPSILON);
+    }
 
-    // #[test]
-    // fn hydra_kll_multi_label_cdfs() {
-    //     let hydra = build_kll_test_hydra();
+    #[test]
+    fn hydra_kll_multi_label_cdfs() {
+        let hydra = build_kll_test_hydra();
 
-    //     assert!((query_cdf(&hydra, &["key1", "key3"], 25.0) - (2.0 / 3.0)).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key1", "key2", "key3"], 30.0) - 1.0).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key4", "key5"], 55.0) - (2.0 / 3.0)).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key4", "key5", "key6"], 60.0) - 1.0).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key7", "key8", "key9"], 85.0) - (2.0 / 3.0)).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key1", "key7"], 50.0) - 0.0).abs() < EPSILON);
-    // }
+        assert!((query_cdf(&hydra, &["key1", "key3"], 25.0) - (2.0 / 3.0)).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key1", "key2", "key3"], 30.0) - 1.0).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key4", "key5"], 55.0) - (2.0 / 3.0)).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key4", "key5", "key6"], 60.0) - 1.0).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key7", "key8", "key9"], 85.0) - (2.0 / 3.0)).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key1", "key7"], 50.0) - 0.0).abs() < EPSILON);
+    }
 
-    // #[test]
-    // fn hydra_kll_extreme_queries() {
-    //     let hydra = build_kll_test_hydra();
+    #[test]
+    fn hydra_kll_extreme_queries() {
+        let hydra = build_kll_test_hydra();
 
-    //     assert!((query_cdf(&hydra, &["key1"], 0.0) - 0.0).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key1"], 100.0) - 1.0).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key1"], 0.0) - 0.0).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key1"], 100.0) - 1.0).abs() < EPSILON);
 
-    //     assert!((query_cdf(&hydra, &["key4", "key5", "key6"], 35.0) - 0.0).abs() < EPSILON);
-    //     assert!((query_cdf(&hydra, &["key4", "key5", "key6"], 100.0) - 1.0).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key4", "key5", "key6"], 35.0) - 0.0).abs() < EPSILON);
+        assert!((query_cdf(&hydra, &["key4", "key5", "key6"], 100.0) - 1.0).abs() < EPSILON);
 
-    //     assert!((query_cdf(&hydra, &["unknown"], 50.0) - 0.0).abs() < EPSILON);
-    // }
+        assert!((query_cdf(&hydra, &["unknown"], 50.0) - 0.0).abs() < EPSILON);
+    }
 }

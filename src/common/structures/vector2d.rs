@@ -680,6 +680,79 @@ impl<T> IndexMut<usize> for Vector2D<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    fn build_three() -> Vec<[f64; 3]> {
+        let mut rng = StdRng::seed_from_u64(0x5eed_c0de_1234_5678);
+        (0..1_000)
+            .map(|_| {
+                [
+                    rng.random::<f64>(),
+                    rng.random::<f64>(),
+                    rng.random::<f64>(),
+                ]
+            })
+            .collect()
+    }
+
+    fn build_four() -> Vec<[f64; 4]> {
+        let mut rng = StdRng::seed_from_u64(0x5eed_c0de_1234_5678);
+        (0..1_000)
+            .map(|_| {
+                [
+                    rng.random::<f64>(),
+                    rng.random::<f64>(),
+                    rng.random::<f64>(),
+                    rng.random::<f64>(),
+                ]
+            })
+            .collect()
+    }
+
+    fn build_five() -> Vec<[f64; 5]> {
+        let mut rng = StdRng::seed_from_u64(0x5eed_c0de_1234_5678);
+        (0..1_000)
+            .map(|_| {
+                [
+                    rng.random::<f64>(),
+                    rng.random::<f64>(),
+                    rng.random::<f64>(),
+                    rng.random::<f64>(),
+                    rng.random::<f64>(),
+                ]
+            })
+            .collect()
+    }
+
+    fn median_three_sort(values: &mut [f64; 3]) -> f64 {
+        values.sort_unstable_by(f64::total_cmp);
+        let mid = values.len() / 2;
+        if values.len() % 2 == 1 {
+            values[mid]
+        } else {
+            (values[mid - 1] + values[mid]) / 2.0
+        }
+    }
+
+    fn median_four_sort(values: &mut [f64; 4]) -> f64 {
+        values.sort_unstable_by(f64::total_cmp);
+        let mid = values.len() / 2;
+        if values.len() % 2 == 1 {
+            values[mid]
+        } else {
+            (values[mid - 1] + values[mid]) / 2.0
+        }
+    }
+
+    fn median_five_sort(values: &mut [f64; 5]) -> f64 {
+        values.sort_unstable_by(f64::total_cmp);
+        let mid = values.len() / 2;
+        if values.len() % 2 == 1 {
+            values[mid]
+        } else {
+            (values[mid - 1] + values[mid]) / 2.0
+        }
+    }
 
     // placeholder, potentially useful
     #[test]
@@ -694,5 +767,38 @@ mod tests {
         assert_eq!(larger_shape.get_required_bits(), 128);
     }
 
-    // add test for median operation
+    #[test]
+    fn median_test() {
+        let mut three_vec = build_three();
+        let mut four_vec = build_four();
+        let mut five_vec = build_five();
+        let dummy: Vector2D<f64> = Vector2D::init(1, 1); // a dummy Vector2D to run the inline function
+        for v in &mut three_vec {
+            let fast_median = dummy.compute_median_inline_f64(v);
+            let sort_median = median_three_sort(v);
+            assert_eq!(
+                fast_median, sort_median,
+                "median for sort is {sort_median} but fast gives {fast_median}, input is {:?}",
+                v
+            );
+        }
+        for v in &mut four_vec {
+            let fast_median = dummy.compute_median_inline_f64(v);
+            let sort_median = median_four_sort(v);
+            assert_eq!(
+                fast_median, sort_median,
+                "median for sort is {sort_median} but fast gives {fast_median}, input is {:?}",
+                v
+            );
+        }
+        for v in &mut five_vec {
+            let fast_median = dummy.compute_median_inline_f64(v);
+            let sort_median = median_five_sort(v);
+            assert_eq!(
+                fast_median, sort_median,
+                "median for sort is {sort_median} but fast gives {fast_median}, input is {:?}",
+                v
+            );
+        }
+    }
 }
