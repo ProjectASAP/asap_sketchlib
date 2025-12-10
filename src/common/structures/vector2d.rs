@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 
-use crate::Nitro;
+use crate::{Nitro, compute_median_inline_f64};
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Vector2D<T> {
@@ -341,7 +341,7 @@ impl<T> Vector2D<T> {
         }
 
         // Inline median computation
-        self.compute_median_inline_f64(&mut estimates)
+        compute_median_inline_f64(&mut estimates)
     }
 
     /// Queries all rows using precomputed hashed values to find the maximum.
@@ -484,105 +484,7 @@ impl<T> Vector2D<T> {
             estimates.push(op(&self.data[idx], query_key, row, hashed_val));
         }
 
-        self.compute_median_inline_f64(&mut estimates)
-    }
-
-    /// Compute median from a mutable slice of f64 values (inline helper)
-    /// This is used by query_median_with_custom_hash for HydraCounter queries
-    #[inline(always)]
-    fn compute_median_inline_f64(&self, values: &mut [f64]) -> f64 {
-        match values.len() {
-            0 => 0.0,
-            1 => values[0],
-            2 => (values[0] + values[1]) / 2.0,
-            // starting here is an assumption that LLVM and compiler
-            // will load var into register and perform simple register swap
-            // no heavy sort or memory swap
-            3 => {
-                let (mut v0, mut v1, v2) = (values[0], values[1], values[2]);
-                // ensure v0 is smaller than v1
-                if v0 > v1 {
-                    std::mem::swap(&mut v0, &mut v1);
-                }
-                // ensure v1 is smaller than v2, and ignore the actual v2 value
-                if v1 > v2 {
-                    v1 = v2;
-                }
-                // ensure v1 is still greater than v0
-                if v0 > v1 {
-                    v1 = v0;
-                }
-                v1
-            }
-            4 => {
-                let (mut v0, mut v1, mut v2, mut v3) = (values[0], values[1], values[2], values[3]);
-                // ensure the order of v0 and v1
-                if v0 > v1 {
-                    std::mem::swap(&mut v0, &mut v1);
-                }
-                // ensure the order of v2 and v3
-                if v2 > v3 {
-                    std::mem::swap(&mut v2, &mut v3);
-                }
-                // the smaller of v0 and v2 will be smaller than v1 anyway
-                // ignore the smaller one, which will be min (dropped)
-                if v0 > v2 {
-                    v2 = v0;
-                }
-                // the greater of v1 and v3 will be greater than v2 anyway
-                // ignore the greeater one, which will be max (dropped)
-                if v1 > v3 {
-                    v1 = v3;
-                }
-                (v1 + v2) / 2.0
-            }
-            5 => {
-                let (mut v0, mut v1, mut v2, mut v3, mut v4) =
-                    (values[0], values[1], values[2], values[3], values[4]);
-                // ensure the order of v0 and v1
-                if v0 > v1 {
-                    std::mem::swap(&mut v0, &mut v1);
-                }
-                // ensure the order of v3 and v4
-                if v3 > v4 {
-                    std::mem::swap(&mut v3, &mut v4);
-                }
-                // the smaller of v0 v3 will be smaller than v1 v4 and the other
-                // smaller than 3 value, so not median of 5
-                if v0 > v3 {
-                    v3 = v0;
-                }
-                // the greater of v1 v4 will be greater than v0 v3 and the other
-                // greater than 3 value, so not median of 5
-                if v1 > v4 {
-                    v1 = v4;
-                }
-                // median of 5 is reduced to median of v1 v2 v3
-                // v0 and v4 will not change the order
-                // v0 will be one of the two smallest
-                // v4 will be one of the two greatest
-                // safely ignored
-                if v1 > v2 {
-                    std::mem::swap(&mut v1, &mut v2);
-                }
-                if v2 > v3 {
-                    v2 = v3;
-                }
-                if v1 > v2 {
-                    v2 = v1;
-                }
-                v2
-            }
-            _ => {
-                values.sort_unstable_by(f64::total_cmp);
-                let mid = values.len() / 2;
-                if values.len() % 2 == 1 {
-                    values[mid]
-                } else {
-                    (values[mid - 1] + values[mid]) / 2.0
-                }
-            }
-        }
+        compute_median_inline_f64(&mut estimates)
     }
 
     /// Queries all rows with custom aggregation logic (fold/reduce pattern).
@@ -680,79 +582,6 @@ impl<T> IndexMut<usize> for Vector2D<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
-
-    fn build_three() -> Vec<[f64; 3]> {
-        let mut rng = StdRng::seed_from_u64(0x5eed_c0de_1234_5678);
-        (0..1_000)
-            .map(|_| {
-                [
-                    rng.random::<f64>(),
-                    rng.random::<f64>(),
-                    rng.random::<f64>(),
-                ]
-            })
-            .collect()
-    }
-
-    fn build_four() -> Vec<[f64; 4]> {
-        let mut rng = StdRng::seed_from_u64(0x5eed_c0de_1234_5678);
-        (0..1_000)
-            .map(|_| {
-                [
-                    rng.random::<f64>(),
-                    rng.random::<f64>(),
-                    rng.random::<f64>(),
-                    rng.random::<f64>(),
-                ]
-            })
-            .collect()
-    }
-
-    fn build_five() -> Vec<[f64; 5]> {
-        let mut rng = StdRng::seed_from_u64(0x5eed_c0de_1234_5678);
-        (0..1_000)
-            .map(|_| {
-                [
-                    rng.random::<f64>(),
-                    rng.random::<f64>(),
-                    rng.random::<f64>(),
-                    rng.random::<f64>(),
-                    rng.random::<f64>(),
-                ]
-            })
-            .collect()
-    }
-
-    fn median_three_sort(values: &mut [f64; 3]) -> f64 {
-        values.sort_unstable_by(f64::total_cmp);
-        let mid = values.len() / 2;
-        if values.len() % 2 == 1 {
-            values[mid]
-        } else {
-            (values[mid - 1] + values[mid]) / 2.0
-        }
-    }
-
-    fn median_four_sort(values: &mut [f64; 4]) -> f64 {
-        values.sort_unstable_by(f64::total_cmp);
-        let mid = values.len() / 2;
-        if values.len() % 2 == 1 {
-            values[mid]
-        } else {
-            (values[mid - 1] + values[mid]) / 2.0
-        }
-    }
-
-    fn median_five_sort(values: &mut [f64; 5]) -> f64 {
-        values.sort_unstable_by(f64::total_cmp);
-        let mid = values.len() / 2;
-        if values.len() % 2 == 1 {
-            values[mid]
-        } else {
-            (values[mid - 1] + values[mid]) / 2.0
-        }
-    }
 
     // placeholder, potentially useful
     #[test]
@@ -765,40 +594,5 @@ mod tests {
 
         let larger_shape: Vector2D<u64> = Vector2D::init(5, 1_048_576);
         assert_eq!(larger_shape.get_required_bits(), 128);
-    }
-
-    #[test]
-    fn median_test() {
-        let mut three_vec = build_three();
-        let mut four_vec = build_four();
-        let mut five_vec = build_five();
-        let dummy: Vector2D<f64> = Vector2D::init(1, 1); // a dummy Vector2D to run the inline function
-        for v in &mut three_vec {
-            let fast_median = dummy.compute_median_inline_f64(v);
-            let sort_median = median_three_sort(v);
-            assert_eq!(
-                fast_median, sort_median,
-                "median for sort is {sort_median} but fast gives {fast_median}, input is {:?}",
-                v
-            );
-        }
-        for v in &mut four_vec {
-            let fast_median = dummy.compute_median_inline_f64(v);
-            let sort_median = median_four_sort(v);
-            assert_eq!(
-                fast_median, sort_median,
-                "median for sort is {sort_median} but fast gives {fast_median}, input is {:?}",
-                v
-            );
-        }
-        for v in &mut five_vec {
-            let fast_median = dummy.compute_median_inline_f64(v);
-            let sort_median = median_five_sort(v);
-            assert_eq!(
-                fast_median, sort_median,
-                "median for sort is {sort_median} but fast gives {fast_median}, input is {:?}",
-                v
-            );
-        }
     }
 }

@@ -35,7 +35,5 @@ pub use microscope::MicroScope;
 pub mod uniform;
 pub use uniform::UniformSampling;
 
-pub mod utils;
-
 pub mod ddsketch;
 pub use ddsketch::DDSketch;

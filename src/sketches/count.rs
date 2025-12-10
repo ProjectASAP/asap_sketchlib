@@ -1,4 +1,4 @@
-use crate::{SketchInput, Vector1D, Vector2D, hash_it_to_128};
+use crate::{SketchInput, Vector1D, Vector2D, hash_it_to_128, compute_median_inline_f64};
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
@@ -327,23 +327,11 @@ impl CountL2HH {
     }
 
     pub fn get_l2_sqr(&self) -> f64 {
-        let mut lst = Vec::new();
-        for i in 0..self.row {
-            lst.push(self.l2.as_slice()[i]);
-        }
-        lst.sort();
-        // get median
-        if self.row == 1 {
-            lst[0] as f64
-        } else if self.row == 2 {
-            (lst[0] + lst[1]) as f64 / 2.0
-        } else if self.row == 3 {
-            lst[1] as f64
-        } else if self.row % 2 == 0 {
-            (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0
-        } else {
-            lst[self.row / 2] as f64
-        }
+        let mut values: Vec<f64> = self.l2.as_slice()[..self.row]
+            .iter()
+            .map(|&v| v as f64)
+            .collect();
+        compute_median_inline_f64(&mut values)
     }
 
     pub fn get_l2(&self) -> f64 {
@@ -363,7 +351,7 @@ impl CountL2HH {
     pub fn fast_get_est_with_hash(&self, hashed_val: u128) -> f64 {
         let mask_bits = self.counts.get_mask_bits() as usize;
         let mask = (1u128 << mask_bits) - 1;
-        let mut lst = Vec::new();
+        let mut lst = Vec::with_capacity(self.row);
         let mut shift_amount = 0;
         let mut sign_bit_pos = 127;
 
@@ -373,24 +361,12 @@ impl CountL2HH {
             let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
             let sign_bit = -(1 - 2 * bit);
             let counter = self.counts.query_one_counter(i, idx);
-            lst.push(sign_bit * counter);
+            lst.push((sign_bit * counter) as f64);
 
             shift_amount += mask_bits;
             sign_bit_pos -= 1;
         }
-        lst.sort();
-        // get median
-        if self.row == 1 {
-            lst[0] as f64
-        } else if self.row == 2 {
-            (lst[0] + lst[1]) as f64 / 2.0
-        } else if self.row == 3 {
-            lst[1] as f64
-        } else if self.row % 2 == 0 {
-            (lst[self.row / 2] + lst[(self.row / 2) - 1]) as f64 / 2.0
-        } else {
-            lst[self.row / 2] as f64
-        }
+        compute_median_inline_f64(&mut lst)
     }
 }
 

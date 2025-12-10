@@ -169,7 +169,6 @@ pub fn hash_it_to_128(d: usize, key: &SketchInput) -> u128 {
     }
 }
 
-
 pub fn hash_it_to_64(d: usize, key: &SketchInput) -> u64 {
     match key {
         SketchInput::I32(i) => {

@@ -517,4 +517,113 @@ mod tests {
             error_2 * 100.0
         );
     }
+
+    // #[test]
+    // fn test_layer_update_correctness() {
+    //     // 1. Initialize UnivMon with enough layers
+    //     let layers = 8;
+    //     // Small dimensions to make debugging easier, but enough to avoid collisions in this simple test
+    //     let mut um = UnivMon::init_univmon(10, 5, 128, layers, 0);
+
+    //     let key = "test_key_layer_logic";
+    //     let value = 10;
+
+    //     // 2. Pre-calculate the expected bottom layer for this key
+    //     // We use the same hasher the struct uses internally
+    //     let hash = hash_it(BOTTOM_LAYER_FINDER, &SketchInput::Str(key));
+    //     let expected_bottom = um.find_bottom_layer_num(hash, layers);
+
+    //     // 3. Perform Update
+    //     um.univmon_processing(key, value, expected_bottom);
+
+    //     // 4. Verification Loop
+    //     for i in 0..layers {
+    //         // Check Heap Presence
+    //         let in_heap = um.hh_layers[i].find(key).is_some();
+
+    //         // Check Sketch Estimate
+    //         // We use estimate() to see if the counter was incremented
+    //         let count_est = um.cs_layers[i].get_estimate(&SketchInput::Str(key));
+
+    //         if i <= expected_bottom {
+    //             // Case A: Layers the item SHOULD exist in
+    //             assert!(in_heap, "Key should be in heap for layer {}", i);
+    //             assert_eq!(count_est, value, "Sketch at layer {} should track count", i);
+    //         } else {
+    //             // Case B: Layers the item should NOT exist in (it was sampled out)
+    //             assert!(!in_heap, "Key should NOT be in heap for layer {}", i);
+    //             // Ideally 0, but technically collisions could occur.
+    //             // With 'value=10' and empty sketch, it should be 0.
+    //             assert_eq!(count_est, 0, "Sketch at layer {} should be empty", i);
+    //         }
+    //     }
+    // }
+
+    #[test]
+    fn test_statistical_accuracy() {
+        // 1. Setup: Larger sketch for statistical significance
+        // k=50 (top-k size), r=5 (rows), c=1024 (cols), l=10 (layers)
+        let mut um = UnivMon::init_univmon(50, 5, 1024, 10, 0);
+
+        // 2. Generate Data: A simple skewed distribution
+        // 1 heavy hitter (count 1000), 10 medium (count 100), 100 noise (count 1)
+        let mut true_l2_sq = 0.0;
+        let mut true_entropy_term = 0.0;
+        let mut total_count = 0.0;
+
+        let scenarios = vec![("heavy", 1000, 1), ("medium", 100, 10), ("noise", 1, 100)];
+
+        for (prefix, count, repeat) in scenarios {
+            for i in 0..repeat {
+                let key = format!("{}_{}", prefix, i);
+                let val = count as i64;
+                let val_f = val as f64;
+
+                // Ground Truth Calculation
+                true_l2_sq += val_f * val_f;
+                true_entropy_term += val_f * val_f.log2();
+                total_count += val_f;
+
+                // Update Sketch
+                let hash = hash_it(BOTTOM_LAYER_FINDER, &SketchInput::Str(&key));
+                let bln = um.find_bottom_layer_num(hash, 10);
+                um.univmon_processing(&key, val, bln);
+            }
+        }
+
+        // 3. Calculate True Metrics
+        let true_l2 = true_l2_sq.sqrt();
+        let true_entropy = total_count.log2() - (true_entropy_term / total_count);
+
+        // 4. Get Estimates
+        let est_l2 = um.calc_l2();
+        let est_entropy = um.calc_entropy();
+
+        // 5. Assertions (Allowing ~10% error for test-sized sketches)
+        let l2_err = (est_l2 - true_l2).abs() / true_l2;
+        let ent_err = (est_entropy - true_entropy).abs() / true_entropy;
+
+        println!(
+            "True L2: {:.2}, Est L2: {:.2}, Error: {:.2}%",
+            true_l2,
+            est_l2,
+            l2_err * 100.0
+        );
+        println!(
+            "True Ent: {:.2}, Est Ent: {:.2}, Error: {:.2}%",
+            true_entropy,
+            est_entropy,
+            ent_err * 100.0
+        );
+
+        // UnivMon is generally very accurate for L2
+        assert!(l2_err < 0.15, "L2 Error too high: {:.2}%", l2_err * 100.0);
+
+        // Entropy is harder, usually requires higher k, allowing slightly looser bound
+        assert!(
+            ent_err < 0.15,
+            "Entropy Error too high: {:.2}%",
+            ent_err * 100.0
+        );
+    }
 }
