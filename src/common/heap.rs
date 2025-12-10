@@ -40,23 +40,31 @@ impl HHHeap {
         if let Some(idx) = self.find(key) {
             self.heap[idx].count = count;
             self.heap.update_at(idx);
-            true
-        } else {
-            let owned = input_to_owned(key);
-            self.heap.push(HHItem::create_item(owned, count));
-            true
+            return true;
         }
+
+        if !self.should_accept_new(count) {
+            return true;
+        }
+
+        let owned = input_to_owned(key);
+        self.heap.push(HHItem::create_item(owned, count));
+        true
     }
 
     pub fn update_heap_item(&mut self, key: &HeapItem, count: i64) -> bool {
         if let Some(idx) = self.find_heap_item(key) {
             self.heap[idx].count = count;
             self.heap.update_at(idx);
-            true
-        } else {
-            self.heap.push(HHItem::create_item(key.to_owned(), count));
-            true
+            return true;
         }
+
+        if !self.should_accept_new(count) {
+            return true;
+        }
+
+        self.heap.push(HHItem::create_item(key.to_owned(), count));
+        true
     }
 
     /// Provides access to the underlying data as a slice.
@@ -106,6 +114,17 @@ impl HHHeap {
     /// Returns the capacity of the heap.
     pub fn capacity(&self) -> usize {
         self.k
+    }
+
+    #[inline]
+    fn should_accept_new(&self, count: i64) -> bool {
+        if self.heap.len() < self.k {
+            return true;
+        }
+        self.heap
+            .peek()
+            .map(|min_item| count > min_item.count)
+            .unwrap_or(true)
     }
 }
 
