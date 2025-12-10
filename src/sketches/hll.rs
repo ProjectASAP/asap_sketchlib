@@ -1,5 +1,5 @@
 use crate::hash_it_to_64;
-use crate::{LASTSTATE, SketchInput, Vector1D};
+use crate::{LASTSTATE, SketchInput};
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
@@ -15,7 +15,7 @@ const HLL_P_MASK: u64 = (NUM_REGISTERS as u64) - 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HyperLogLog {
-    registers: Vector1D<u8>,
+    registers: Vec<u8>,
 }
 
 impl Default for HyperLogLog {
@@ -27,7 +27,7 @@ impl Default for HyperLogLog {
 impl HyperLogLog {
     pub fn new() -> Self {
         HyperLogLog {
-            registers: Vector1D::filled(NUM_REGISTERS, 0_u8),
+            registers: vec![0_u8; NUM_REGISTERS],
         }
     }
 
@@ -41,7 +41,10 @@ impl HyperLogLog {
         // let hashed_val = hashed as u64;
         let bucket_num = ((hashed_val >> HLL_Q) & HLL_P_MASK) as usize;
         let leading_zero = ((hashed_val << HLL_P) + HLL_P_MASK).leading_zeros() as u8 + 1;
-        self.registers.update_if_greater(bucket_num, leading_zero);
+        let reg = &mut self.registers[bucket_num];
+        if leading_zero > *reg {
+            *reg = leading_zero;
+        }
     }
 
     pub fn merge(&mut self, other: &HyperLogLog) {
@@ -50,8 +53,11 @@ impl HyperLogLog {
             "Different register length, should not merge"
         );
         for i in 0..NUM_REGISTERS {
-            self.registers
-                .update_if_greater(i, *other.registers.get(i).unwrap());
+            let reg = &mut self.registers[i];
+            let other_val = other.registers[i];
+            if other_val > *reg {
+                *reg = other_val;
+            }
         }
     }
     /// indicator function in the original HyperLogLog paper
@@ -116,7 +122,7 @@ impl HyperLogLog {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HllDf {
-    registers: Vector1D<u8>,
+    registers: Vec<u8>,
 }
 
 impl Default for HllDf {
@@ -128,7 +134,7 @@ impl Default for HllDf {
 impl HllDf {
     pub fn new() -> Self {
         HllDf {
-            registers: Vector1D::filled(NUM_REGISTERS, 0_u8),
+            registers: vec![0_u8; NUM_REGISTERS],
         }
     }
 
@@ -142,7 +148,10 @@ impl HllDf {
         // let hashed_val = h as u64;
         let bucket_num = ((hashed_val >> HLL_Q) & HLL_P_MASK) as usize;
         let leading_zero = ((hashed_val << HLL_P) + HLL_P_MASK).leading_zeros() as u8 + 1;
-        self.registers.update_if_greater(bucket_num, leading_zero);
+        let reg = &mut self.registers[bucket_num];
+        if leading_zero > *reg {
+            *reg = leading_zero;
+        }
     }
 
     pub fn merge(&mut self, other: &HllDf) {
@@ -151,8 +160,11 @@ impl HllDf {
             "Different register length, should not merge"
         );
         for i in 0..NUM_REGISTERS {
-            self.registers
-                .update_if_greater(i, *other.registers.get(i).unwrap());
+            let reg = &mut self.registers[i];
+            let other_val = other.registers[i];
+            if other_val > *reg {
+                *reg = other_val;
+            }
         }
     }
     /// "New cardinality estimation algorithms for HyperLogLog sketches"
@@ -244,7 +256,7 @@ impl HllDf {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HllDs {
-    registers: Vector1D<u8>,
+    registers: Vec<u8>,
     kxq0: f64,
     kxq1: f64,
     est: f64,
@@ -259,7 +271,7 @@ impl Default for HllDs {
 impl HllDs {
     pub fn new() -> Self {
         HllDs {
-            registers: Vector1D::filled(NUM_REGISTERS, 0_u8),
+            registers: vec![0_u8; NUM_REGISTERS],
             kxq0: NUM_REGISTERS as f64,
             kxq1: 0.0,
             est: 0.0,
@@ -280,7 +292,7 @@ impl HllDs {
         let old_value = *self.registers.get(bucket_num).unwrap();
         let new_value = leading_zero;
         if new_value > old_value {
-            self.registers.update_if_greater(bucket_num, leading_zero);
+            self.registers[bucket_num] = leading_zero;
             self.est += NUM_REGISTERS as f64 / (self.kxq0 + self.kxq1);
             if old_value < 32 {
                 self.kxq0 -= 1.0 / ((1_u64 << old_value) as f64);
