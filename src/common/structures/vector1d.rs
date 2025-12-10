@@ -99,6 +99,7 @@ impl<T> Vector1D<T> {
     }
 
     /// Update value at ```pos``` if ```val``` is greater
+    #[inline(always)]
     pub fn update_if_greater(&mut self, pos: usize, val: T)
     where
         T: Copy + Ord,
@@ -107,6 +108,7 @@ impl<T> Vector1D<T> {
     }
 
     /// Update value at ```pos``` if ```val``` is greater
+    #[inline(always)]
     pub fn update_if_smaller(&mut self, pos: usize, val: T)
     where
         T: Copy + Ord,
@@ -115,6 +117,7 @@ impl<T> Vector1D<T> {
     }
 
     /// Applies an update to a single cell via the supplied operator.
+    #[inline(always)]
     pub fn update_one_counter<F, V>(&mut self, pos: usize, op: F, value: V)
     where
         F: Fn(&mut T, V),
