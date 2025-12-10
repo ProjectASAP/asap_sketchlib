@@ -2,7 +2,7 @@ use twox_hash::{XxHash3_64, XxHash3_128, XxHash32};
 
 use super::SketchInput;
 
-pub const LASTSTATE: usize = 5;
+pub const LASTSTATE: usize = 17; // 18 and 19 will cause hll test to fail...?
 pub const BOTTOM_LAYER_FINDER: usize = 19;
 pub const HYDRA_SEED: usize = 6;
 

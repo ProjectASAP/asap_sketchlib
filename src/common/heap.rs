@@ -4,7 +4,7 @@
 //! where the HHHeap is a Min Heap that can take in
 //! HHItem defined in crate::common::input::HHItem
 
-use crate::common::input::HHItem;
+use crate::common::input::{HHItem, SketchInput};
 use crate::common::{CommonHeap, CommonMinHeap};
 use serde::{Deserialize, Serialize};
 
@@ -175,12 +175,13 @@ use serde::{Deserialize, Serialize};
 /// Wrapper around CommonHeap for HHItem with TopK heavy hitter tracking.
 /// Modern replacement for TopKHeap using the generic CommonHeap structure.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct HHHeap {
-    heap: CommonHeap<HHItem, CommonMinHeap>,
+pub struct HHHeap<'a> {
+    #[serde(borrow = "'a")]
+    heap: CommonHeap<HHItem<'a>, CommonMinHeap>,
     k: usize,
 }
 
-impl HHHeap {
+impl<'a> HHHeap<'a> {
     /// Creates a new HHHeap with capacity k.
     pub fn new(k: usize) -> Self {
         HHHeap {
@@ -190,18 +191,18 @@ impl HHHeap {
     }
 
     /// Finds an item by key, returns the index if found.
-    pub fn find(&self, key: &str) -> Option<usize> {
-        self.heap.iter().position(|item| item.key == key)
+    pub fn find(&self, key: &SketchInput) -> Option<usize> {
+        self.heap.iter().position(|item| item.key == *key)
     }
 
     /// Updates an existing item's count or inserts a new item.
-    pub fn update(&mut self, key: &str, count: i64) -> bool {
+    pub fn update(&mut self, key: &SketchInput<'a>, count: i64) -> bool {
         if let Some(idx) = self.find(key) {
             self.heap[idx].count = count;
             self.heap.update_at(idx);
             true
         } else {
-            self.heap.push(HHItem::new(key.to_string(), count));
+            self.heap.push(HHItem::new(key.to_owned(), count));
             true
         }
     }
@@ -222,13 +223,13 @@ impl HHHeap {
     }
 
     /// Returns the memory used by the heap in bytes.
-    pub fn get_memory_bytes(&self) -> f64 {
-        let mut total = 0.0;
-        for item in self.heap.iter() {
-            total += item.key.len() as f64 + 8.0; // key length + i64 count
-        }
-        total
-    }
+    // pub fn get_memory_bytes(&self) -> f64 {
+    //     let mut total = 0.0;
+    //     for item in self.heap.iter() {
+    //         total += item.key.len() as f64 + 8.0; // key length + i64 count
+    //     }
+    //     total
+    // }
 
     /// Clears the heap.
     pub fn clear(&mut self) {
@@ -246,7 +247,7 @@ impl HHHeap {
     }
 
     /// Creates a copy of another HHHeap.
-    pub fn from_heap(other: &HHHeap) -> Self {
+    pub fn from_heap(other: &HHHeap<'a>) -> Self {
         other.clone()
     }
 

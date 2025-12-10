@@ -1,4 +1,4 @@
-use crate::{SketchInput, Vector1D, Vector2D, hash_it_to_128, compute_median_inline_f64};
+use crate::{SketchInput, Vector1D, Vector2D, compute_median_inline_f64, hash_it_to_128};
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
@@ -283,12 +283,12 @@ impl CountL2HH {
         }
     }
 
-    /// Inserts without L2 update using hash optimization.
-    /// due to the limitation of seeds, use fast_insert only
-    pub fn fast_insert_with_count_without_l2(&mut self, val: &SketchInput, c: i64) {
-        let hashed_val = hash_it_to_128(self.seed_idx, val);
-        self.fast_insert_with_count_without_l2_and_hash(hashed_val, c);
-    }
+    // /// Inserts without L2 update using hash optimization.
+    // /// due to the limitation of seeds, use fast_insert only
+    // pub fn fast_insert_with_count_without_l2(&mut self, val: &SketchInput, c: i64) {
+    //     let hashed_val = hash_it_to_128(self.seed_idx, val);
+    //     self.fast_insert_with_count_without_l2_and_hash(hashed_val, c);
+    // }
 
     /// Inserts without L2 update using precomputed hash value.
     pub fn fast_insert_with_count_without_l2_and_hash(&mut self, hashed_val: u128, c: i64) {

@@ -5,14 +5,15 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct LocherSketch {
+pub struct LocherSketch<'a> {
     pub r: usize,
     pub l: usize,
-    pub rows: Vector2D<HHHeap>,
+    #[serde(borrow = "'a")]
+    pub rows: Vector2D<HHHeap<'a>>,
     pub row_sum: Vector1D<f64>,
 }
 
-impl LocherSketch {
+impl<'a> LocherSketch<'a> {
     pub fn new(r: usize, l: usize, k: usize) -> Self {
         let rows = Vector2D::from_fn(r, l, |_row, _col| HHHeap::new(k));
         let row_sum = Vector1D::filled(r, 0.0);
@@ -25,19 +26,19 @@ impl LocherSketch {
         }
     }
 
-    pub fn insert(&mut self, e: &str, _v: u64) {
+    pub fn insert(&mut self, e: &'a str, _v: u64) {
         for i in 0..self.r {
             let idx = hash_it(i, &SketchInput::String(e.to_owned())) as usize % self.l;
             let cell = &mut self.rows[i][idx];
-            let before = match cell.find(e) {
+            let before = match cell.find(&SketchInput::Str(e)) {
                 Some(heap_idx) => cell.heap()[heap_idx].count,
                 None => 0,
             };
             // println!("check e: {}", e);
             // println!("before is: {}", before);
             self.row_sum[i] -= before as f64;
-            cell.update(e, before + 1);
-            let after = match cell.find(e) {
+            cell.update(&SketchInput::Str(e), before + 1);
+            let after = match cell.find(&SketchInput::Str(e)) {
                 Some(heap_idx) => cell.heap()[heap_idx].count,
                 None => 0,
             };
@@ -51,7 +52,7 @@ impl LocherSketch {
         for i in 0..self.r {
             let idx = hash_it(i, &SketchInput::Str(e)) as usize % self.l;
             // let est = self.rows[i][idx].find(e).unwrap_or(0);
-            let est = match self.rows[i][idx].find(e) {
+            let est = match self.rows[i][idx].find(&SketchInput::Str(e)) {
                 Some(v) => self.rows[i][idx].heap()[v].count,
                 None => 0,
             };

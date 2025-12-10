@@ -104,6 +104,31 @@ pub enum SketchInput<'a> {
     Bytes(&'a [u8]),
 }
 
+impl<'a> PartialEq for SketchInput<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::I8(l0), Self::I8(r0)) => l0 == r0,
+            (Self::I16(l0), Self::I16(r0)) => l0 == r0,
+            (Self::I32(l0), Self::I32(r0)) => l0 == r0,
+            (Self::I64(l0), Self::I64(r0)) => l0 == r0,
+            (Self::I128(l0), Self::I128(r0)) => l0 == r0,
+            (Self::ISIZE(l0), Self::ISIZE(r0)) => l0 == r0,
+            (Self::U8(l0), Self::U8(r0)) => l0 == r0,
+            (Self::U16(l0), Self::U16(r0)) => l0 == r0,
+            (Self::U32(l0), Self::U32(r0)) => l0 == r0,
+            (Self::U64(l0), Self::U64(r0)) => l0 == r0,
+            (Self::U128(l0), Self::U128(r0)) => l0 == r0,
+            (Self::USIZE(l0), Self::USIZE(r0)) => l0 == r0,
+            (Self::F32(l0), Self::F32(r0)) => l0 == r0,
+            (Self::F64(l0), Self::F64(r0)) => l0 == r0,
+            (Self::Str(l0), Self::Str(r0)) => l0 == r0,
+            (Self::String(l0), Self::String(r0)) => l0 == r0,
+            (Self::Bytes(l0), Self::Bytes(r0)) => l0 == r0,
+            _ => false,
+        }
+    }
+}
+
 /// enum that can be used by UnivMon
 /// using CountL2HH as State-Of-Art example
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -256,38 +281,47 @@ impl HydraCounter {
 }
 
 /// A key-count pair used in heap-based sketches for tracking heavy hitters.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct HHItem {
-    pub key: String,
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct HHItem<'a> {
+    #[serde(borrow = "'a")]
+    pub key: SketchInput<'a>,
     pub count: i64,
 }
 
-impl HHItem {
+impl<'a> HHItem<'a> {
     /// Creates a new Item with the given key and count.
-    pub fn new(key: String, count: i64) -> Self {
+    pub fn new(key: SketchInput<'a>, count: i64) -> Self {
         HHItem { key, count }
     }
 
     /// Legacy constructor for compatibility.
-    pub fn init_item(key: String, count: i64) -> Self {
+    pub fn init_item(key: SketchInput<'a>, count: i64) -> Self {
         HHItem { key, count }
     }
 
     /// Prints the item in a human-readable format.
     pub fn print_item(&self) {
-        println!("key: {} with count: {}", self.key, self.count);
+        println!("key: {:?} with count: {}", self.key, self.count);
     }
 }
 
 // Implement Ord and PartialOrd to compare by count
-impl Ord for HHItem {
+impl<'a> Ord for HHItem<'a> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.count.cmp(&other.count)
     }
 }
 
-impl PartialOrd for HHItem {
+impl<'a> PartialOrd for HHItem<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
+
+impl<'a> PartialEq for HHItem<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.count == other.count
+    }
+}
+
+impl<'a> Eq for HHItem<'a> {}
