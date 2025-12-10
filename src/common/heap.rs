@@ -209,7 +209,7 @@ impl<'a> HHHeap<'a> {
 
     /// Provides access to the underlying data as a slice.
     /// Named `heap` for API compatibility with TopKHeap.
-    pub fn heap(&self) -> &[HHItem] {
+    pub fn heap(&self) -> &[HHItem<'_>] {
         self.heap.as_slice()
     }
 
