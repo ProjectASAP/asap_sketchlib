@@ -3,6 +3,7 @@ use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 
 const DEFAULT_ROW_NUM: usize = 3;
 const DEFAULT_COL_NUM: usize = 4096;
@@ -189,6 +190,12 @@ pub struct CountL2HH {
     row: usize,
     col: usize,
     seed_idx: usize,
+    #[serde(skip, default = "default_scratch_buffer")]
+    scratch: RefCell<Vec<f64>>,
+}
+
+fn default_scratch_buffer() -> RefCell<Vec<f64>> {
+    RefCell::new(Vec::new())
 }
 
 impl Default for CountL2HH {
@@ -209,6 +216,7 @@ impl CountL2HH {
             row: rows,
             col: cols,
             seed_idx,
+            scratch: RefCell::new(Vec::with_capacity(rows)),
         };
         sk.counts.fill(0);
         // sk.l2.fill(rows, 0);
@@ -351,7 +359,8 @@ impl CountL2HH {
     pub fn fast_get_est_with_hash(&self, hashed_val: u128) -> f64 {
         let mask_bits = self.counts.get_mask_bits() as usize;
         let mask = (1u128 << mask_bits) - 1;
-        let mut lst = Vec::with_capacity(self.row);
+        let mut lst = self.scratch.borrow_mut();
+        lst.clear();
         let mut shift_amount = 0;
         let mut sign_bit_pos = 127;
 
@@ -366,7 +375,9 @@ impl CountL2HH {
             shift_amount += mask_bits;
             sign_bit_pos -= 1;
         }
-        compute_median_inline_f64(&mut lst)
+        let result = compute_median_inline_f64(&mut lst[..]);
+        lst.clear();
+        result
     }
 }
 
