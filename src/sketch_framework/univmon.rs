@@ -1,5 +1,5 @@
 use crate::common::heap::HHHeap;
-use crate::common::{BOTTOM_LAYER_FINDER, SketchInput, hash_it_to_64};
+use crate::common::{BOTTOM_LAYER_FINDER, SketchInput, input_to_owned, hash_it_to_64, hash_item_to_64};
 use crate::common::{L2HH, Vector1D};
 use crate::sketches::count::CountL2HH;
 use serde::{Deserialize, Serialize};
@@ -10,10 +10,9 @@ const DEFAULT_HEAP_SIZE: usize = 32;
 const DEFAULT_LAYER_SIZE: usize = 8;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct UnivMon<'a> {
+pub struct UnivMon {
     pub l2_sketch_layers: Vector1D<L2HH>,
-    #[serde(borrow = "'a")]
-    pub hh_layers: Vector1D<HHHeap<'a>>,
+    pub hh_layers: Vector1D<HHHeap>,
     pub layer_size: usize,
     pub sketch_row: usize,
     pub sketch_col: usize,
@@ -21,7 +20,7 @@ pub struct UnivMon<'a> {
     pub bucket_size: usize,
 }
 
-impl<'a> Default for UnivMon<'a> {
+impl Default for UnivMon {
     fn default() -> Self {
         UnivMon::init_univmon(
             DEFAULT_HEAP_SIZE,
@@ -32,7 +31,7 @@ impl<'a> Default for UnivMon<'a> {
     }
 }
 
-impl<'a> UnivMon<'a> {
+impl UnivMon {
     pub fn init_univmon(
         heap_size: usize,
         sketch_row: usize,
@@ -71,36 +70,36 @@ impl<'a> UnivMon<'a> {
     }
 
     #[inline(always)]
-    fn update(&mut self, key: &SketchInput<'a>, value: i64, bottom_layer_num: usize) {
+    fn update(&mut self, key: &SketchInput, value: i64, bottom_layer_num: usize) {
         for i in 0..=bottom_layer_num {
             let count = if i == 0 {
                 self.l2_sketch_layers[i].update_and_est(key, value)
             } else {
                 self.l2_sketch_layers[i].update_and_est_without_l2(key, value)
             };
-            self.hh_layers[i].update(key, count as i64);
+            self.hh_layers[i].update(&input_to_owned(key), count as i64);
         }
     }
 
     #[inline(always)]
-    fn process_univmon(&mut self, key: &SketchInput<'a>, value: i64, bottom_layer_num: usize) {
+    fn process_univmon(&mut self, key: &SketchInput, value: i64, bottom_layer_num: usize) {
         self.bucket_size += value as usize;
         self.update(key, value, bottom_layer_num);
     }
 
-    pub fn insert(&mut self, key: &SketchInput<'a>, value: i64) {
+    pub fn insert(&mut self, key: &SketchInput, value: i64) {
         let h = hash_it_to_64(BOTTOM_LAYER_FINDER, key);
         let bottom_layer_num = self.find_bottom_layer_num(h, self.layer_size);
         self.process_univmon(key, value, bottom_layer_num)
     }
 
-    pub fn fast_insert(&mut self, key: &SketchInput<'a>, value: i64) {
+    pub fn fast_insert(&mut self, key: &SketchInput, value: i64) {
         self.bucket_size += value as usize;
         let h = hash_it_to_64(BOTTOM_LAYER_FINDER, key);
         let bottom_layer_num = self.find_bottom_layer_num(h, self.layer_size);
         let count = self.l2_sketch_layers[bottom_layer_num].update_and_est(key, value);
         for i in 0..=bottom_layer_num {
-            self.hh_layers[i].update(key, count as i64);
+            self.hh_layers[i].update(&input_to_owned(key), count as i64);
         }
     }
 
@@ -145,7 +144,7 @@ impl<'a> UnivMon<'a> {
                 if item.count > threshold {
                     // let hash = (hash_it(LASTSTATE, &item.key) >> (i+1)) & 1;
                     // let hash = (hash_it(LASTSTATE, &SketchInput::Str(&item.key)) >> (i + 1)) & 1;
-                    let hash = (hash_it_to_64(BOTTOM_LAYER_FINDER, &item.key) >> (i + 1)) & 1;
+                    let hash = (hash_item_to_64(BOTTOM_LAYER_FINDER, &item.key) >> (i + 1)) & 1;
                     let coe = 1.0 - 2.0 * (hash as f64);
                     tmp += coe * g(item.count as f64);
                 }
@@ -186,7 +185,8 @@ impl<'a> UnivMon<'a> {
         self.calc_g_sum(|_| 1.0, true)
     }
 
-    pub fn merge<'o: 'a>(&mut self, other: &'a UnivMon<'o>) {
+    pub fn merge(&mut self, other: &UnivMon)
+    {
         assert_eq!(
             self.layer_size, other.layer_size,
             "layer size should be equal to merge"
@@ -204,7 +204,7 @@ impl<'a> UnivMon<'a> {
         }
     }
 
-    pub fn heap_at_layer(&mut self, layer: usize) -> &mut HHHeap<'a> {
+    pub fn heap_at_layer(&mut self, layer: usize) -> &mut HHHeap {
         &mut self.hh_layers[layer]
     }
 }
@@ -212,7 +212,7 @@ impl<'a> UnivMon<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SketchInput;
+    use crate::{HeapItem, SketchInput};
 
     // fn bottom_layer_for(um: &UnivMon, key: &str) -> usize {
     //     let hash = hash_it(BOTTOM_LAYER_FINDER, &SketchInput::Str(key));
@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(um.bucket_size, 40);
 
         let idx = um.hh_layers[0]
-            .find(&SketchInput::Str(key))
+            .find(&HeapItem::String(key.to_owned()))
             .expect("heavy hitter should track key");
         assert!(
             um.hh_layers[0].heap()[idx].count >= 20,
@@ -278,14 +278,20 @@ mod tests {
         left.merge(&right);
 
         let left_heap = left.heap_at_layer(00);
+        let right_heap = right.heap_at_layer(0);
         // let right_heap = right.heap_at_layer(00);
         let idx_left = left_heap
-            .find(&SketchInput::Str(key_right))
+            .find(&HeapItem::String(key_left.to_owned()))
             .expect("left key present");
-        // let idx_right = left.hh_layers[0]
-        //     .find(&SketchInput::Str(key_right))
-        //     .expect("right key present");
-        assert!(left_heap.heap()[idx_left].count > 0);
+        let idx_right_in_left = left_heap
+            .find(&HeapItem::String(key_right.to_owned()))
+            .expect("left key present");
+        let idx_right = right_heap
+            .find(&HeapItem::String(key_right.to_owned()))
+            .expect("right key present");
+        assert!(left_heap.heap()[idx_left].count == 25, "left in left is: {}", left_heap.heap()[idx_left].count);
+        assert!(right_heap.heap()[idx_right].count == 30, "right in right is: {}", right_heap.heap()[idx_right].count);
+        assert!(left_heap.heap()[idx_right_in_left].count == 30, "right in left is: {}", left_heap.heap()[idx_right_in_left].count);
         // assert!(left.hh_layers[0].heap()[idx_right].count > 0);
     }
 

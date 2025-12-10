@@ -88,21 +88,71 @@ pub enum SketchInput<'a> {
     I64(i64),
     I128(i128),
     ISIZE(isize),
-
     U8(u8),
     U16(u16),
     U32(u32),
     U64(u64),
     U128(u128),
     USIZE(usize),
-
     F32(f32),
     F64(f64),
-
     Str(&'a str),
     String(String),
     Bytes(&'a [u8]),
 }
+
+/// enum to wrap items heap can hold
+/// mainly supports primitive type
+/// borrowed type is not suitable here
+/// user may insert some value to the heap and get rid of the value
+/// however, the heap may live longer than user holding the value
+/// in other words, sketch input can borrow the value
+/// but when it comes to heap, the value should be owned, not borrowed
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
+pub enum HeapItem {
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    I128(i128),
+    ISIZE(isize),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    U128(u128),
+    USIZE(usize),
+    F32(f32),
+    F64(f64),
+    String(String),
+}
+
+pub fn input_to_owned<'a>(input: &SketchInput<'a>) -> HeapItem {
+    match input {
+        SketchInput::I8(i) => HeapItem::I8(*i),
+        SketchInput::I16(i) => HeapItem::I16(*i),
+        SketchInput::I32(i) => HeapItem::I32(*i),
+        SketchInput::I64(i) => HeapItem::I64(*i),
+        SketchInput::I128(i) => HeapItem::I128(*i),
+        SketchInput::ISIZE(i) => HeapItem::ISIZE(*i),
+        SketchInput::U8(u) => HeapItem::U8(*u),
+        SketchInput::U16(u) => HeapItem::U16(*u),
+        SketchInput::U32(u) => HeapItem::U32(*u),
+        SketchInput::U64(u) => HeapItem::U64(*u),
+        SketchInput::U128(u) => HeapItem::U128(*u),
+        SketchInput::USIZE(u) => HeapItem::USIZE(*u),
+        SketchInput::F32(f) => HeapItem::F32(*f),
+        SketchInput::F64(f) => HeapItem::F64(*f),
+        SketchInput::Str(s) => HeapItem::String((*s).to_owned()),
+        SketchInput::String(s) => HeapItem::String((*s).to_owned()),
+        SketchInput::Bytes(items) => {
+            let byte_array = (*items).to_owned();
+            let s = String::from_utf8(byte_array).unwrap();
+            HeapItem::String(s)
+        },
+    }
+}
+
 
 impl<'a> PartialEq for SketchInput<'a> {
     fn eq(&self, other: &Self) -> bool {
@@ -282,21 +332,24 @@ impl HydraCounter {
 
 /// A key-count pair used in heap-based sketches for tracking heavy hitters.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct HHItem<'a> {
-    #[serde(borrow = "'a")]
-    pub key: SketchInput<'a>,
+pub struct HHItem {
+    pub key: HeapItem,
     pub count: i64,
 }
 
-impl<'a> HHItem<'a> {
+impl HHItem {
     /// Creates a new Item with the given key and count.
-    pub fn new(key: SketchInput<'a>, count: i64) -> Self {
-        HHItem { key, count }
+    pub fn new(k: SketchInput, count: i64) -> Self {
+        HHItem { key: input_to_owned(&k), count }
+    }
+
+    pub fn create_item(k: HeapItem, count: i64) -> Self {
+        HHItem { key: k, count }
     }
 
     /// Legacy constructor for compatibility.
-    pub fn init_item(key: SketchInput<'a>, count: i64) -> Self {
-        HHItem { key, count }
+    pub fn init_item(k: SketchInput, count: i64) -> Self {
+        HHItem { key: input_to_owned(&k), count }
     }
 
     /// Prints the item in a human-readable format.
@@ -306,22 +359,22 @@ impl<'a> HHItem<'a> {
 }
 
 // Implement Ord and PartialOrd to compare by count
-impl<'a> Ord for HHItem<'a> {
+impl Ord for HHItem {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.count.cmp(&other.count)
     }
 }
 
-impl<'a> PartialOrd for HHItem<'a> {
+impl PartialOrd for HHItem {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<'a> PartialEq for HHItem<'a> {
+impl PartialEq for HHItem {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key && self.count == other.count
     }
 }
 
-impl<'a> Eq for HHItem<'a> {}
+impl Eq for HHItem {}

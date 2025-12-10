@@ -4,7 +4,8 @@
 //! where the HHHeap is a Min Heap that can take in
 //! HHItem defined in crate::common::input::HHItem
 
-use crate::common::input::{HHItem, SketchInput};
+use crate::HeapItem;
+use crate::common::input::{HHItem};
 use crate::common::{CommonHeap, CommonMinHeap};
 use serde::{Deserialize, Serialize};
 
@@ -175,13 +176,12 @@ use serde::{Deserialize, Serialize};
 /// Wrapper around CommonHeap for HHItem with TopK heavy hitter tracking.
 /// Modern replacement for TopKHeap using the generic CommonHeap structure.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct HHHeap<'a> {
-    #[serde(borrow = "'a")]
-    heap: CommonHeap<HHItem<'a>, CommonMinHeap>,
+pub struct HHHeap {
+    heap: CommonHeap<HHItem, CommonMinHeap>,
     k: usize,
 }
 
-impl<'a> HHHeap<'a> {
+impl HHHeap {
     /// Creates a new HHHeap with capacity k.
     pub fn new(k: usize) -> Self {
         HHHeap {
@@ -191,25 +191,25 @@ impl<'a> HHHeap<'a> {
     }
 
     /// Finds an item by key, returns the index if found.
-    pub fn find(&self, key: &SketchInput) -> Option<usize> {
+    pub fn find(&self, key: &HeapItem) -> Option<usize> {
         self.heap.iter().position(|item| item.key == *key)
     }
 
     /// Updates an existing item's count or inserts a new item.
-    pub fn update(&mut self, key: &SketchInput<'a>, count: i64) -> bool {
+    pub fn update<'k>(&mut self, key: &HeapItem, count: i64) -> bool {
         if let Some(idx) = self.find(key) {
             self.heap[idx].count = count;
             self.heap.update_at(idx);
             true
         } else {
-            self.heap.push(HHItem::new(key.to_owned(), count));
+            self.heap.push(HHItem::create_item(key.to_owned(), count));
             true
         }
     }
 
     /// Provides access to the underlying data as a slice.
     /// Named `heap` for API compatibility with TopKHeap.
-    pub fn heap(&self) -> &[HHItem<'_>] {
+    pub fn heap(&self) -> &[HHItem] {
         self.heap.as_slice()
     }
 
@@ -247,7 +247,7 @@ impl<'a> HHHeap<'a> {
     }
 
     /// Creates a copy of another HHHeap.
-    pub fn from_heap(other: &HHHeap<'a>) -> Self {
+    pub fn from_heap(other: &HHHeap) -> Self {
         other.clone()
     }
 
