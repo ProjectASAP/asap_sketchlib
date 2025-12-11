@@ -6,15 +6,16 @@
 
 use crate::common::input::HHItem;
 use crate::common::{CommonHeap, CommonMinHeap};
-use crate::{HeapItem, SketchInput, hash_it_to_64, hash_item_to_64, input_to_owned};
+use crate::{hash_it_to_64, hash_item_to_64, input_to_owned, HeapItem, SketchInput};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Wrapper around CommonHeap for HHItem with TopK heavy hitter tracking.
 /// Modern replacement for TopKHeap using the generic CommonHeap structure.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct HHHeap {
     heap: CommonHeap<HHItem, CommonMinHeap>,
-    positions: Vec<Option<(HeapItem, usize)>>,
+    positions: HashMap<u64, Vec<(HeapItem, usize)>>,
     k: usize,
 }
 
@@ -23,7 +24,7 @@ impl HHHeap {
     pub fn new(k: usize) -> Self {
         HHHeap {
             heap: CommonHeap::new_min(k),
-            positions: vec![None; k],
+            positions: HashMap::with_capacity(k),
             k,
         }
     }
@@ -31,18 +32,20 @@ impl HHHeap {
     /// Finds an item by key, returns the index if found.
     pub fn find(&self, key: &SketchInput) -> Option<usize> {
         let slot = self.slot_for_input(key);
-        match &self.positions[slot] {
-            Some((value, i)) if value == key => Some(*i),
-            _ => None,
-        }
+        self.positions.get(&slot).and_then(|bucket| {
+            bucket
+                .iter()
+                .find_map(|(value, idx)| if value == key { Some(*idx) } else { None })
+        })
     }
 
     pub fn find_heap_item(&self, key: &HeapItem) -> Option<usize> {
         let slot = self.slot_for_item(key);
-        match &self.positions[slot] {
-            Some((value, i)) if value == key => Some(*i),
-            _ => None,
-        }
+        self.positions.get(&slot).and_then(|bucket| {
+            bucket
+                .iter()
+                .find_map(|(value, idx)| if value == key { Some(*idx) } else { None })
+        })
     }
 
     /// Updates an existing item's count or inserts a new item.
@@ -108,7 +111,7 @@ impl HHHeap {
     /// Clears the heap.
     pub fn clear(&mut self) {
         self.heap.clear();
-        self.reset_positions();
+        self.positions.clear();
     }
 
     /// Returns the number of items in the heap.
@@ -143,31 +146,24 @@ impl HHHeap {
     }
 
     fn refresh_positions(&mut self) {
-        self.reset_positions();
+        self.positions.clear();
         for (idx, item) in self.heap.iter().enumerate() {
             let slot = self.slot_for_item(&item.key);
-            self.positions[slot] = Some((item.key.clone(), idx));
-        }
-    }
-
-    fn reset_positions(&mut self) {
-        if self.positions.len() != self.k {
-            self.positions = vec![None; self.k];
-        } else {
-            for slot in self.positions.iter_mut() {
-                *slot = None;
-            }
+            self.positions
+                .entry(slot)
+                .or_default()
+                .push((item.key.clone(), idx));
         }
     }
 
     #[inline]
-    fn slot_for_input(&self, key: &SketchInput) -> usize {
-        (hash_it_to_64(0, key) as usize) % self.k
+    fn slot_for_input(&self, key: &SketchInput) -> u64 {
+        hash_it_to_64(0, key)
     }
 
     #[inline]
-    fn slot_for_item(&self, key: &HeapItem) -> usize {
-        (hash_item_to_64(0, key) as usize) % self.k
+    fn slot_for_item(&self, key: &HeapItem) -> u64 {
+        hash_item_to_64(0, key)
     }
 }
 
