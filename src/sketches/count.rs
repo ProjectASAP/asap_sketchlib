@@ -45,6 +45,11 @@ impl Count {
         self.col
     }
 
+    /// Enables Nitro sampling with the provided rate.
+    pub fn enable_nitro(&mut self, sampling_rate: f64) {
+        self.counts.enable_nitro(sampling_rate);
+    }
+
     /// Inserts an observation with standard Count Sketch updating algorithm.
     pub fn insert(&mut self, value: &SketchInput) {
         for r in 0..self.row {
