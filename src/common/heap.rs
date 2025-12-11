@@ -6,7 +6,7 @@
 
 use crate::common::input::HHItem;
 use crate::common::{CommonHeap, CommonMinHeap};
-use crate::{hash_it_to_64, hash_item_to_64, input_to_owned, HeapItem, SketchInput};
+use crate::{HeapItem, SketchInput, hash_it_to_64, hash_item_to_64, input_to_owned};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

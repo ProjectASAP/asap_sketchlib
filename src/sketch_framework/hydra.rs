@@ -78,18 +78,17 @@ impl Hydra {
         self.query_key(key, &HydraQuery::Frequency(value.clone()))
     }
 
-    /// Convenience method for querying quantiles (for KLL-based Hydra in the future)
-    /// This is a wrapper around query_key with HydraQuery::Quantile
+    /// Convenience method for querying cumulative distribution for a tracked metric
+    /// This is a wrapper around query_key with HydraQuery::Cdf
     pub fn query_quantile(&self, key: Vec<&str>, threshold: f64) -> f64 {
-        self.query_key(key, &HydraQuery::Quantile(threshold))
+        self.query_key(key, &HydraQuery::Cdf(threshold))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::KLL;
-
     use super::*;
+    use crate::{Count, CountMin, HllDf, KLL, UnivMon};
 
     const EPSILON: f64 = 1e-6;
 
@@ -99,7 +98,7 @@ mod tests {
 
     fn build_kll_test_hydra() -> Hydra {
         let template = HydraCounter::KLL(KLL::default());
-        let mut hydra = Hydra::with_dimensions(3, 64, template);
+        let mut hydra = Hydra::with_dimensions(3, 1024, template);
 
         let dataset = [
             ("key1;key2;key3", 10.0),
@@ -332,14 +331,14 @@ mod tests {
         }
 
         // let query_value = SketchInput::F64(35.0);
-        let quantile = hydra.query_key(vec!["metrics", "latency"], &HydraQuery::Quantile(50.0));
+        let quantile = hydra.query_key(vec!["metrics", "latency"], &HydraQuery::Cdf(30.0));
         assert!(
             (quantile - 0.6).abs() < 1e-9,
-            "expected quantile near 0.6, got {}",
+            "expected CDF near 0.6, got {}",
             quantile
         );
 
-        let empty_bucket = hydra.query_key(vec!["other", "key"], &HydraQuery::Quantile(50.0));
+        let empty_bucket = hydra.query_key(vec!["other", "key"], &HydraQuery::Cdf(50.0));
         assert_eq!(empty_bucket, 0.0);
     }
 
@@ -383,5 +382,192 @@ mod tests {
         assert!((query_cdf(&hydra, &["key4", "key5", "key6"], 100.0) - 1.0).abs() < EPSILON);
 
         assert!((query_cdf(&hydra, &["unknown"], 50.0) - 0.0).abs() < EPSILON);
+    }
+
+    // Helper to generate a default CountMin counter
+    fn cm_counter() -> HydraCounter {
+        HydraCounter::CM(CountMin::default())
+    }
+
+    // Helper to generate a default Count Sketch counter
+    fn count_counter() -> HydraCounter {
+        HydraCounter::CS(Count::default())
+    }
+
+    // Helper to generate a default UnivMon counter
+    fn univmon_counter() -> HydraCounter {
+        HydraCounter::UNIVERSAL(UnivMon::default())
+    }
+
+    #[test]
+    fn test_count_min_frequency_query() {
+        let mut counter = cm_counter();
+        let key = SketchInput::I64(42);
+
+        // 1. Insert data
+        counter.insert(&key);
+        counter.insert(&key);
+        counter.insert(&key);
+
+        // 2. Query Frequency (Valid)
+        let query = HydraQuery::Frequency(key);
+        let result = counter.query(&query);
+
+        assert!(result.is_ok());
+        // CountMin isn't always exact, but for small inputs/defaults it usually is
+        assert_eq!(result.unwrap(), 3.0);
+    }
+
+    #[test]
+    fn test_count_min_invalid_query_types() {
+        let counter = cm_counter();
+
+        // 1. Test Quantile query (Invalid for CM)
+        let result = counter.query(&HydraQuery::Quantile(0.5));
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Count-Min Sketch Counter does not support Quantile Query"
+        );
+
+        // 2. Test Cardinality query (Invalid for CM)
+        let result = counter.query(&HydraQuery::Cardinality);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_hll_cardinality_query() {
+        let mut counter = HydraCounter::HLL(HllDf::default());
+
+        // 1. Insert unique items
+        for i in 0..100 {
+            counter.insert(&SketchInput::I64(i));
+        }
+        // Duplicate insertions shouldn't affect cardinality
+        counter.insert(&SketchInput::I64(0));
+
+        // 2. Query Cardinality (Valid)
+        let result = counter.query(&HydraQuery::Cardinality);
+        assert!(result.is_ok());
+
+        // HLL is probabilistic, check for reasonable error margin (e.g., +/- 5%)
+        let card = result.unwrap();
+        assert!(
+            card > 90.0 && card < 110.0,
+            "Expected approx 100, got {}",
+            card
+        );
+    }
+
+    #[test]
+    fn test_kll_quantile_query() {
+        // Assuming KLL has a default implementation
+        let mut counter = HydraCounter::KLL(KLL::default());
+
+        // Insert numbers 1 to 100
+        for i in 1..=100 {
+            counter.insert(&SketchInput::F64(i as f64));
+        }
+
+        // Query Median (0.5)
+        let result = counter.query(&HydraQuery::Quantile(0.5));
+        assert!(result.is_ok());
+
+        // Median of 1..100 is approx 50
+        let median = result.unwrap();
+        assert!(
+            (median - 50.0).abs() < 5.0,
+            "Expected approx 50, got {}",
+            median
+        );
+    }
+
+    #[test]
+    fn test_univmon_universal_queries() {
+        let mut counter = univmon_counter();
+
+        // Insert distribution:
+        // Item "A": 10 times
+        // Item "B": 20 times
+        let key_a = SketchInput::Str("A");
+        let key_b = SketchInput::Str("B");
+
+        for _ in 0..10 {
+            counter.insert(&key_a);
+        }
+        for _ in 0..20 {
+            counter.insert(&key_b);
+        }
+
+        // 1. Test L1 Norm (Total Sum of Weights)
+        // Should be 10 + 20 = 30
+        let l1 = counter.query(&HydraQuery::L1Norm).unwrap();
+        assert_eq!(l1, 30.0);
+
+        // 2. Test Cardinality
+        // Should be 2 ("A" and "B")
+        let card = counter.query(&HydraQuery::Cardinality).unwrap();
+        assert!((card - 2.0).abs() < 0.5, "Cardinality should be approx 2");
+
+        // 3. Test Entropy
+        // UnivMon calculates entropy, should be > 0 for this distribution
+        let entropy = counter.query(&HydraQuery::Entropy).unwrap();
+        assert!(entropy > 0.0);
+    }
+
+    #[test]
+    fn test_merge_counters() {
+        // Test merging two CountMin sketches via the Hydra wrapper
+        let mut c1 = cm_counter();
+        let mut c2 = cm_counter();
+
+        c1.insert(&SketchInput::I64(1));
+        c2.insert(&SketchInput::I64(1));
+
+        // Valid merge
+        assert!(c1.merge(&c2).is_ok());
+
+        let count = c1
+            .query(&HydraQuery::Frequency(SketchInput::I64(1)))
+            .unwrap();
+        assert_eq!(count, 2.0, "Merge should sum the counts");
+
+        // Invalid merge (Different types)
+        let hll = HydraCounter::HLL(HllDf::default());
+        assert!(c1.merge(&hll).is_err());
+    }
+
+    #[test]
+    fn test_count_frequency_query() {
+        let mut counter = count_counter();
+        let key = SketchInput::I64(7);
+
+        for _ in 0..4 {
+            counter.insert(&key);
+        }
+
+        let query = HydraQuery::Frequency(key);
+        let result = counter.query(&query);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            4.0,
+            "Count Sketch should track all inserts"
+        );
+    }
+
+    #[test]
+    fn test_count_invalid_query_types() {
+        let counter = count_counter();
+
+        let quantile = counter.query(&HydraQuery::Quantile(0.5));
+        assert!(quantile.is_err());
+        assert_eq!(
+            quantile.unwrap_err(),
+            "Count Sketch Counter does not support Quantile Query"
+        );
+
+        let cardinality = counter.query(&HydraQuery::Cardinality);
+        assert!(cardinality.is_err());
     }
 }

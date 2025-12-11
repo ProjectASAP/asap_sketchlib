@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
-use std::hash::{Hash, Hasher};
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+};
 
-use crate::{Count, CountL2HH, CountMin, HllDf, KLL};
+use crate::{Count, CountL2HH, CountMin, HllDf, KLL, UnivMon};
 
 /// enum that can be any sketch type
 /// Provides a unified interface for different sketch implementations
@@ -323,10 +326,29 @@ pub enum HydraQuery<'a> {
     Frequency(SketchInput<'a>),
     /// Query for quantile/CDF at a threshold (for KLL, DDSketch, etc.)
     Quantile(f64),
+    /// Query cumulative distribution up to a threshold value
+    Cdf(f64),
     /// Query for cardinality (for HyperLogLog, etc.)
     Cardinality,
+    L1Norm,
+    L2Norm,
+    Entropy,
     // whether adding rank needs mroe consideration
     // Rank(f64),
+}
+
+impl<'a> fmt::Display for HydraQuery<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HydraQuery::Frequency(_) => write!(f, "Frequency Query"),
+            HydraQuery::Quantile(_) => write!(f, "Quantile Query"),
+            HydraQuery::Cdf(_) => write!(f, "CDF Query"),
+            HydraQuery::Cardinality => write!(f, "Cardinality Query"),
+            HydraQuery::L1Norm => write!(f, "L1Norm Query"),
+            HydraQuery::L2Norm => write!(f, "L2Norm Query"),
+            HydraQuery::Entropy => write!(f, "Entropy Query"),
+        }
+    }
 }
 
 /// enum that can be used as counter in Hydra
@@ -336,6 +358,19 @@ pub enum HydraCounter {
     HLL(HllDf),
     CS(Count),
     KLL(KLL),
+    UNIVERSAL(UnivMon),
+}
+
+impl fmt::Display for HydraCounter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HydraCounter::CM(_) => write!(f, "Count-Min Sketch Counter"),
+            HydraCounter::HLL(_) => write!(f, "HyperLogLog Counter"),
+            HydraCounter::CS(_) => write!(f, "Count Sketch Counter"),
+            HydraCounter::KLL(_) => write!(f, "KLL Counter"),
+            HydraCounter::UNIVERSAL(_) => write!(f, "UnivMon Counter"),
+        }
+    }
 }
 
 impl HydraCounter {
@@ -347,6 +382,7 @@ impl HydraCounter {
             HydraCounter::HLL(hll) => hll.insert(value),
             HydraCounter::CS(count) => count.fast_insert(value),
             HydraCounter::KLL(kll) => kll.update(value).unwrap(),
+            HydraCounter::UNIVERSAL(u) => u.insert(value, 1),
         }
     }
 
@@ -377,40 +413,22 @@ impl HydraCounter {
         match (self, query) {
             (HydraCounter::CM(cm), HydraQuery::Frequency(value)) => {
                 Ok(cm.fast_estimate(value) as f64)
-            },
-            (HydraCounter::HLL(hll_df), HydraQuery::Cardinality) => {
-                Ok(hll_df.get_est() as f64)
-            },
+            }
+            (HydraCounter::HLL(hll_df), HydraQuery::Cardinality) => Ok(hll_df.get_est() as f64),
             (HydraCounter::CS(count), HydraQuery::Frequency(value)) => {
                 Ok(count.fast_estimate(value) as f64)
-            },
-            (HydraCounter::KLL(kll), HydraQuery::Quantile(q)) => {
-                Ok(kll.quantile(*q))
-            },
-            (HydraCounter::CM(_), HydraQuery::Quantile(_)) => {
-                Err("CountMin does not support quantile queries. Use a quantile sketch like KLL instead.".to_string())
-            },
-            (HydraCounter::CM(_), HydraQuery::Cardinality) => {
-                Err("CountMin does not support cardinality queries. Use HyperLogLog instead.".to_string())
-            },
-            (HydraCounter::HLL(_), HydraQuery::Frequency(_)) => {
-                Err("HyperLogLog does not support frequency queries. Use a frequency sketch like CM instead.".to_string())
-            },
-            (HydraCounter::HLL(_), HydraQuery::Quantile(_)) => {
-                Err("HyperLogLog does not support quantile queries. Use a quantile sketch like KLL instead.".to_string())
-            },
-            (HydraCounter::CS(_), HydraQuery::Quantile(_)) => {
-                Err("Count Sketch does not support quantile queries. Use a quantile sketch like KLL instead.".to_string())
-            },
-            (HydraCounter::CS(_), HydraQuery::Cardinality) => {
-                Err("Count Sketch does not support cardinality queries. Use HyperLogLog instead.".to_string())
-            },
-            (HydraCounter::KLL(_), HydraQuery::Frequency(_)) => {
-                Err("KLL does not support frequency queries. Use a frequency sketch like CM instead.".to_string())
-            },
-            (HydraCounter::KLL(_), HydraQuery::Cardinality) => {
-                Err("KLL does not support cardinality queries. Use a sketch like HLL instead.".to_string())
-            },
+            }
+            (HydraCounter::KLL(kll), HydraQuery::Quantile(q)) => Ok(kll.quantile(*q)),
+            (HydraCounter::KLL(kll), HydraQuery::Cdf(value)) => Ok(kll.cdf().quantile(*value)),
+            (HydraCounter::UNIVERSAL(um), HydraQuery::Cardinality) => Ok(um.calc_card()),
+            (HydraCounter::UNIVERSAL(um), HydraQuery::L1Norm) => Ok(um.calc_l1()),
+            (HydraCounter::UNIVERSAL(um), HydraQuery::L2Norm) => Ok(um.calc_l2()),
+            (HydraCounter::UNIVERSAL(um), HydraQuery::Entropy) => Ok(um.calc_entropy()),
+            (c, q) => Err(format!(
+                "{} does not support {}",
+                c.to_string(),
+                q.to_string()
+            )),
         }
     }
 
