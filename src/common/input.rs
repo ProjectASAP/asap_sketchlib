@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::hash::{Hash, Hasher};
 
 use crate::{Count, CountL2HH, CountMin, HllDf, KLL};
 
@@ -149,10 +150,9 @@ pub fn input_to_owned<'a>(input: &SketchInput<'a>) -> HeapItem {
             let byte_array = (*items).to_owned();
             let s = String::from_utf8(byte_array).unwrap();
             HeapItem::String(s)
-        },
+        }
     }
 }
-
 
 impl<'a> PartialEq for SketchInput<'a> {
     fn eq(&self, other: &Self) -> bool {
@@ -175,6 +175,37 @@ impl<'a> PartialEq for SketchInput<'a> {
             (Self::String(l0), Self::String(r0)) => l0 == r0,
             (Self::Bytes(l0), Self::Bytes(r0)) => l0 == r0,
             _ => false,
+        }
+    }
+}
+
+impl<'a> Eq for SketchInput<'a> {}
+
+impl Hash for SketchInput<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            SketchInput::I8(v) => v.hash(state),
+            SketchInput::I16(v) => v.hash(state),
+            SketchInput::I32(v) => v.hash(state),
+            SketchInput::I64(v) => v.hash(state),
+            SketchInput::I128(v) => v.hash(state),
+            SketchInput::ISIZE(v) => v.hash(state),
+            SketchInput::U8(v) => v.hash(state),
+            SketchInput::U16(v) => v.hash(state),
+            SketchInput::U32(v) => v.hash(state),
+            SketchInput::U64(v) => v.hash(state),
+            SketchInput::U128(v) => v.hash(state),
+            SketchInput::USIZE(v) => v.hash(state),
+            SketchInput::F32(v) => state.write_u32(v.to_bits()),
+            SketchInput::F64(v) => state.write_u64(v.to_bits()),
+            SketchInput::Str(s) => s.hash(state),
+            SketchInput::String(s) => s.hash(state),
+            SketchInput::Bytes(bytes) => {
+                let str_repr = std::str::from_utf8(bytes)
+                    .expect("HeapItem only supports UTF-8 bytes for hashing");
+                str_repr.hash(state);
+            }
         }
     }
 }
@@ -221,6 +252,31 @@ impl<'a> PartialEq<HeapItem> for SketchInput<'a> {
 impl<'a> PartialEq<&HeapItem> for SketchInput<'a> {
     fn eq(&self, other: &&HeapItem) -> bool {
         self == *other
+    }
+}
+
+impl Eq for HeapItem {}
+
+impl Hash for HeapItem {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            HeapItem::I8(val) => val.hash(state),
+            HeapItem::I16(val) => val.hash(state),
+            HeapItem::I32(val) => val.hash(state),
+            HeapItem::I64(val) => val.hash(state),
+            HeapItem::I128(val) => val.hash(state),
+            HeapItem::ISIZE(val) => val.hash(state),
+            HeapItem::U8(val) => val.hash(state),
+            HeapItem::U16(val) => val.hash(state),
+            HeapItem::U32(val) => val.hash(state),
+            HeapItem::U64(val) => val.hash(state),
+            HeapItem::U128(val) => val.hash(state),
+            HeapItem::USIZE(val) => val.hash(state),
+            HeapItem::F32(val) => state.write_u32(val.to_bits()),
+            HeapItem::F64(val) => state.write_u64(val.to_bits()),
+            HeapItem::String(val) => val.hash(state),
+        }
     }
 }
 
@@ -385,7 +441,10 @@ pub struct HHItem {
 impl HHItem {
     /// Creates a new Item with the given key and count.
     pub fn new(k: SketchInput, count: i64) -> Self {
-        HHItem { key: input_to_owned(&k), count }
+        HHItem {
+            key: input_to_owned(&k),
+            count,
+        }
     }
 
     pub fn create_item(k: HeapItem, count: i64) -> Self {
@@ -394,7 +453,10 @@ impl HHItem {
 
     /// Legacy constructor for compatibility.
     pub fn init_item(k: SketchInput, count: i64) -> Self {
-        HHItem { key: input_to_owned(&k), count }
+        HHItem {
+            key: input_to_owned(&k),
+            count,
+        }
     }
 
     /// Prints the item in a human-readable format.

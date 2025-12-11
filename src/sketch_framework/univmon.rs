@@ -185,8 +185,7 @@ impl UnivMon {
         self.calc_g_sum(|_| 1.0, true)
     }
 
-    pub fn merge(&mut self, other: &UnivMon)
-    {
+    pub fn merge(&mut self, other: &UnivMon) {
         assert_eq!(
             self.layer_size, other.layer_size,
             "layer size should be equal to merge"
@@ -289,9 +288,21 @@ mod tests {
         let idx_right = right_heap
             .find_heap_item(&HeapItem::String(key_right.to_owned()))
             .expect("right key present");
-        assert!(left_heap.heap()[idx_left].count == 25, "left in left is: {}", left_heap.heap()[idx_left].count);
-        assert!(right_heap.heap()[idx_right].count == 30, "right in right is: {}", right_heap.heap()[idx_right].count);
-        assert!(left_heap.heap()[idx_right_in_left].count == 30, "right in left is: {}", left_heap.heap()[idx_right_in_left].count);
+        assert!(
+            left_heap.heap()[idx_left].count == 25,
+            "left in left is: {}",
+            left_heap.heap()[idx_left].count
+        );
+        assert!(
+            right_heap.heap()[idx_right].count == 30,
+            "right in right is: {}",
+            right_heap.heap()[idx_right].count
+        );
+        assert!(
+            left_heap.heap()[idx_right_in_left].count == 30,
+            "right in left is: {}",
+            left_heap.heap()[idx_right_in_left].count
+        );
         // assert!(left.hh_layers[0].heap()[idx_right].count > 0);
     }
 

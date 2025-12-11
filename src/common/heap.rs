@@ -4,9 +4,9 @@
 //! where the HHHeap is a Min Heap that can take in
 //! HHItem defined in crate::common::input::HHItem
 
-use crate::{HeapItem, SketchInput, input_to_owned};
-use crate::common::input::{HHItem};
+use crate::common::input::HHItem;
 use crate::common::{CommonHeap, CommonMinHeap};
+use crate::{HeapItem, SketchInput, hash_it_to_64, hash_item_to_64, input_to_owned};
 use serde::{Deserialize, Serialize};
 
 /// Wrapper around CommonHeap for HHItem with TopK heavy hitter tracking.
@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct HHHeap {
     heap: CommonHeap<HHItem, CommonMinHeap>,
+    positions: Vec<Option<(HeapItem, usize)>>,
     k: usize,
 }
 
@@ -22,17 +23,26 @@ impl HHHeap {
     pub fn new(k: usize) -> Self {
         HHHeap {
             heap: CommonHeap::new_min(k),
+            positions: vec![None; k],
             k,
         }
     }
 
     /// Finds an item by key, returns the index if found.
     pub fn find(&self, key: &SketchInput) -> Option<usize> {
-        self.heap.iter().position(|item| item.key == key)
+        let slot = self.slot_for_input(key);
+        match &self.positions[slot] {
+            Some((value, i)) if value == key => Some(*i),
+            _ => None,
+        }
     }
 
     pub fn find_heap_item(&self, key: &HeapItem) -> Option<usize> {
-        self.heap.iter().position(|item| item.key == *key)
+        let slot = self.slot_for_item(key);
+        match &self.positions[slot] {
+            Some((value, i)) if value == key => Some(*i),
+            _ => None,
+        }
     }
 
     /// Updates an existing item's count or inserts a new item.
@@ -40,6 +50,7 @@ impl HHHeap {
         if let Some(idx) = self.find(key) {
             self.heap[idx].count = count;
             self.heap.update_at(idx);
+            self.refresh_positions();
             return true;
         }
 
@@ -49,6 +60,7 @@ impl HHHeap {
 
         let owned = input_to_owned(key);
         self.heap.push(HHItem::create_item(owned, count));
+        self.refresh_positions();
         true
     }
 
@@ -56,6 +68,7 @@ impl HHHeap {
         if let Some(idx) = self.find_heap_item(key) {
             self.heap[idx].count = count;
             self.heap.update_at(idx);
+            self.refresh_positions();
             return true;
         }
 
@@ -64,6 +77,7 @@ impl HHHeap {
         }
 
         self.heap.push(HHItem::create_item(key.to_owned(), count));
+        self.refresh_positions();
         true
     }
 
@@ -94,6 +108,7 @@ impl HHHeap {
     /// Clears the heap.
     pub fn clear(&mut self) {
         self.heap.clear();
+        self.reset_positions();
     }
 
     /// Returns the number of items in the heap.
@@ -126,13 +141,42 @@ impl HHHeap {
             .map(|min_item| count > min_item.count)
             .unwrap_or(true)
     }
+
+    fn refresh_positions(&mut self) {
+        self.reset_positions();
+        for (idx, item) in self.heap.iter().enumerate() {
+            let slot = self.slot_for_item(&item.key);
+            self.positions[slot] = Some((item.key.clone(), idx));
+        }
+    }
+
+    fn reset_positions(&mut self) {
+        if self.positions.len() != self.k {
+            self.positions = vec![None; self.k];
+        } else {
+            for slot in self.positions.iter_mut() {
+                *slot = None;
+            }
+        }
+    }
+
+    #[inline]
+    fn slot_for_input(&self, key: &SketchInput) -> usize {
+        (hash_it_to_64(0, key) as usize) % self.k
+    }
+
+    #[inline]
+    fn slot_for_item(&self, key: &HeapItem) -> usize {
+        (hash_item_to_64(0, key) as usize) % self.k
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        CommonHeap, CommonHeapOrder, CommonMaxHeap, CommonMinHeap, HeapItem, SketchInput, common::input::HHItem
+        CommonHeap, CommonHeapOrder, CommonMaxHeap, CommonMinHeap, HeapItem, SketchInput,
+        common::input::HHItem,
     };
 
     fn heap_item_from_str(value: &str) -> HeapItem {
@@ -183,8 +227,6 @@ mod tests {
         heap.clear();
         assert!(heap.heap.is_empty());
     }
-
-
 
     #[test]
     fn test_min_heap_basic() {
@@ -278,7 +320,10 @@ mod tests {
 
         // Insert items (simulating TopKHeap behavior)
         for i in 1..=5 {
-            heap.push(HHItem::new(SketchInput::String(format!("key-{i}").to_owned()), i));
+            heap.push(HHItem::new(
+                SketchInput::String(format!("key-{i}").to_owned()),
+                i,
+            ));
         }
 
         // Should keep top 3: counts 3, 4, 5
@@ -288,7 +333,9 @@ mod tests {
         assert_eq!(counts, vec![3, 4, 5]);
 
         // Test finding an item (linear search like TopKHeap::find)
-        let found = heap.iter().find(|item| item.key == HeapItem::String("key-4".to_owned()));
+        let found = heap
+            .iter()
+            .find(|item| item.key == HeapItem::String("key-4".to_owned()));
         assert!(found.is_some());
         assert_eq!(found.unwrap().count, 4);
     }
@@ -354,7 +401,9 @@ mod tests {
         let find_and_update =
             |heap: &mut CommonHeap<HHItem, CommonMinHeap>, key: &str, count: i64| {
                 // TopKHeap::find() equivalent:
-                let idx_opt = heap.iter().position(|item| item.key == HeapItem::String(key.to_owned()));
+                let idx_opt = heap
+                    .iter()
+                    .position(|item| item.key == HeapItem::String(key.to_owned()));
 
                 if let Some(idx) = idx_opt {
                     // Found: update count
@@ -379,7 +428,9 @@ mod tests {
         assert_eq!(counts, vec![3, 4, 5]); // Same as TopKHeap test!
 
         // TopKHeap::find() equivalent:
-        let found = heap.iter().find(|item| item.key == HeapItem::String("key-4".to_owned()));
+        let found = heap
+            .iter()
+            .find(|item| item.key == HeapItem::String("key-4".to_owned()));
         assert!(found.is_some());
         assert_eq!(found.unwrap().count, 4);
 

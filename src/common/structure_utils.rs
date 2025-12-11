@@ -246,8 +246,6 @@ mod tests {
     use super::*;
     use rand::{Rng, SeedableRng, rngs::StdRng};
 
-    
-
     fn build_three() -> Vec<[f64; 3]> {
         let mut rng = StdRng::seed_from_u64(0x5eed_c0de_1234_5678);
         (0..1_000)
