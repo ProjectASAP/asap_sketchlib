@@ -3,7 +3,6 @@ use rmp_serde::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::PRECOMPUTED_SAMPLE;
 use crate::Vector2D;
 use crate::{SketchInput, hash_it_to_128};
 
@@ -91,6 +90,19 @@ impl CountMin {
     /// Inserts an observation using Nitro-aware sampling logic.
     #[inline(always)]
     pub fn fast_insert_nitro(&mut self, value: &SketchInput) {
+        // this is incorrect, just to test for speed
+        let delta = self.counts.nitro().delta;
+        if self.counts.nitro().to_skip >= self.row {
+            self.counts.reduce_nitro_skip(self.row);
+        } else {
+            let hashed = hash_it_to_128(0, value);
+            let r = self.counts.nitro().to_skip;
+            self.counts.update_by_row(r, hashed, |a, b| *a += b, delta);
+            self.counts.nitro_mut().draw_geometric();
+            let temp = self.counts.get_nitro_skip();
+            self.counts.update_nitro_skip((r + temp + 1) - self.row);
+        }
+
         // let delta = self.counts.nitro().delta;
         // // let nitro = self.counts.nitro_mut();
         // if self.counts.nitro().to_skip >= self.row {
@@ -149,71 +161,71 @@ impl CountMin {
 
         // 1. ACCESS: Pull state into local registers (HOISTING)
         // accessing self.counts.nitro() repeatedly is slow. Do it once.
-        let nitro = self.counts.nitro();
-        let (mut idx, inv_p, mut to_skip, mask) = nitro.get_ctx();
+        // let nitro = self.counts.nitro();
+        // let (mut idx, inv_p, mut to_skip, mask) = nitro.get_ctx();
 
-        // 2. FAST PATH: Packet Skipped Completely
-        if to_skip >= self.row {
-            // Update local register
-            to_skip -= self.row;
-            // Write back to memory and exit
-            self.counts.nitro_mut().commit_ctx(idx, to_skip);
-            return;
-        }
+        // // 2. FAST PATH: Packet Skipped Completely
+        // if to_skip >= self.row {
+        //     // Update local register
+        //     to_skip -= self.row;
+        //     // Write back to memory and exit
+        //     self.counts.nitro_mut().commit_ctx(idx, to_skip);
+        //     return;
+        // }
 
-        // 3. INITIALIZATION
-        let delta = nitro.delta;
-        let hashed = hash_it_to_128(0, value);
-        let mut r = to_skip; // Start at the first row we hit
+        // // 3. INITIALIZATION
+        // let delta = nitro.delta;
+        // let hashed = hash_it_to_128(0, value);
+        // let mut r = to_skip; // Start at the first row we hit
 
-        // 4. THE HOT LOOP (Inlined & Unchecked)
-        loop {
-            // Update the specific row
-            // Note: Ensure update_by_row is #[inline(always)] in Vector2D
-            self.counts.update_by_row(r, hashed, |a, b| *a += b, delta);
+        // // 4. THE HOT LOOP (Inlined & Unchecked)
+        // loop {
+        //     // Update the specific row
+        //     // Note: Ensure update_by_row is #[inline(always)] in Vector2D
+        //     self.counts.update_by_row(r, hashed, |a, b| *a += b, delta);
 
-            // INLINED draw_geometric
-            // SAFETY: We manually mask the index, so it is always within bounds
-            // Assuming PRECOMPUTED_SAMPLE is size 65536 and mask is 0xFFFF
-            let random_val = unsafe { *PRECOMPUTED_SAMPLE.get_unchecked(idx) };
-            idx = (idx + 1) & mask;
+        //     // INLINED draw_geometric
+        //     // SAFETY: We manually mask the index, so it is always within bounds
+        //     // Assuming PRECOMPUTED_SAMPLE is size 65536 and mask is 0xFFFF
+        //     let random_val = unsafe { *PRECOMPUTED_SAMPLE.get_unchecked(idx) };
+        //     idx = (idx + 1) & mask;
 
-            // MATH OPTIMIZATION: Use truncation (as usize) instead of .ceil()
-            // This is valid if precomputed values are set up correctly,
-            // or we accept the microscopic bias.
-            // If strict exactness is needed: (val * inv_p).ceil() as usize
-            let next_jump = (random_val * inv_p) as usize;
+        //     // MATH OPTIMIZATION: Use truncation (as usize) instead of .ceil()
+        //     // This is valid if precomputed values are set up correctly,
+        //     // or we accept the microscopic bias.
+        //     // If strict exactness is needed: (val * inv_p).ceil() as usize
+        //     let next_jump = (random_val * inv_p) as usize;
 
-            // Check bounds
-            if r + next_jump + 1 >= self.row {
-                // Calculate remaining skip for next packet
-                to_skip = (r + next_jump + 1) - self.row;
-                break;
-            }
+        //     // Check bounds
+        //     if r + next_jump + 1 >= self.row {
+        //         // Calculate remaining skip for next packet
+        //         to_skip = (r + next_jump + 1) - self.row;
+        //         break;
+        //     }
 
-            r += next_jump + 1;
-        }
+        //     r += next_jump + 1;
+        // }
 
-        // 5. COMMIT: Write local registers back to struct memory
-        self.counts.nitro_mut().commit_ctx(idx, to_skip);
+        // // 5. COMMIT: Write local registers back to struct memory
+        // self.counts.nitro_mut().commit_ctx(idx, to_skip);
     }
 
-    #[cold]
-    fn finish_complex_update(&mut self, start_r: usize, hashed: u128, delta: u64) {
-        let mut r = start_r;
-        loop {
-            self.counts.update_by_row(r, hashed, |a, b| *a += b, delta);
-            self.counts.nitro_mut().draw_geometric();
+    // #[cold]
+    // fn finish_complex_update(&mut self, start_r: usize, hashed: u128, delta: u64) {
+    //     let mut r = start_r;
+    //     loop {
+    //         self.counts.update_by_row(r, hashed, |a, b| *a += b, delta);
+    //         self.counts.nitro_mut().draw_geometric();
 
-            let next_skip = self.counts.get_nitro_skip();
-            if r + next_skip + 1 >= self.row {
-                let remaining = (r + next_skip + 1) - self.row;
-                self.counts.update_nitro_skip(remaining);
-                break;
-            }
-            r += next_skip + 1;
-        }
-    }
+    //         let next_skip = self.counts.get_nitro_skip();
+    //         if r + next_skip + 1 >= self.row {
+    //             let remaining = (r + next_skip + 1) - self.row;
+    //             self.counts.update_nitro_skip(remaining);
+    //             break;
+    //         }
+    //         r += next_skip + 1;
+    //     }
+    // }
 
     /// Returns the frequency estimate for the provided value.
     pub fn estimate(&self, value: &SketchInput) -> u64 {

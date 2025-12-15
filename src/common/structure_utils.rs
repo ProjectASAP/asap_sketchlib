@@ -3,11 +3,12 @@
 //! Vector2D:
 //! Vector3D:
 //! CommonHeap:
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng, rng};
+// use rand::rngs::SmallRng;
+// use rand::{Rng, SeedableRng, rng};
 use serde::{Deserialize, Serialize};
 
-use crate::PRECOMPUTED_SAMPLE;
+// use crate::PRECOMPUTED_SAMPLE;
+use crate::PRECOMPUTED_SAMPLE_RATE_1PERCENT;
 /// Helper trait for converting sketch counter types to f64 for median calculation.
 pub trait ToF64 {
     fn to_f64(self) -> f64;
@@ -48,18 +49,18 @@ pub struct Nitro {
     pub to_skip: usize,
     /// Precomputed: 1.0 / ln(1 - sampling_rate) for geometric sampling
     inv_ln_one_minus_p: f64,
-    #[serde(skip)]
-    #[serde(default = "new_small_rng")]
-    generator: SmallRng,
+    // #[serde(skip)]
+    // #[serde(default = "new_small_rng")]
+    // // generator: SmallRng,
     pub delta: u64,
     idx: usize,
     mask: usize,
 }
 
-fn new_small_rng() -> SmallRng {
-    let mut seed_rng = rng();
-    SmallRng::from_rng(&mut seed_rng)
-}
+// fn new_small_rng() -> SmallRng {
+//     let mut seed_rng = rng();
+//     SmallRng::from_rng(&mut seed_rng)
+// }
 
 impl Default for Nitro {
     fn default() -> Self {
@@ -68,7 +69,7 @@ impl Default for Nitro {
             sampling_rate: 0.0,
             to_skip: 0,
             inv_ln_one_minus_p: 0.0, // not used unless Nitro mode is enabled
-            generator: new_small_rng(), // not used unless Nitro mode is enabled
+            // generator: new_small_rng(), // not used unless Nitro mode is enabled
             delta: 0,
             idx: 0,
             mask: 0x10000,
@@ -92,7 +93,7 @@ impl Nitro {
             sampling_rate: rate,
             to_skip: 0,
             inv_ln_one_minus_p: inv_ln,
-            generator: new_small_rng(),
+            // generator: new_small_rng(),
             delta: 0,
             idx: 0,
             mask: 0x10000,
@@ -115,7 +116,10 @@ impl Nitro {
         //     }
         // };
         // self.to_skip = ((1.0 - k).ln() * self.inv_ln_one_minus_p).ceil() as usize;
-        self.to_skip = (PRECOMPUTED_SAMPLE[self.idx] * self.inv_ln_one_minus_p).ceil() as usize;
+
+        // self.to_skip = (PRECOMPUTED_SAMPLE[self.idx] * self.inv_ln_one_minus_p).ceil() as usize;
+
+        self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].ceil() as usize;
         self.idx = (self.idx + 1) & self.mask;
     }
 
