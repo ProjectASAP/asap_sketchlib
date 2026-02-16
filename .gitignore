@@ -11,3 +11,5 @@ profile.json.gz
 
 # Local binaries
 binary
+
+Cargo.lock
