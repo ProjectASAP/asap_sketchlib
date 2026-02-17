@@ -3,34 +3,31 @@
 
 use crate::{
     SketchInput,
-    sketch_framework::{EhSketch, ExponentialHistogram},
+    sketch_framework::{Chapter, ExponentialHistogram},
 };
 
 use super::{NodeInsert, NodeQuery, OrchestratorNode};
 
-pub struct EhNode<T, Q>
+pub struct EhNode<Q>
 where
-    T: EhSketch + Clone,
-    Q: Fn(&T, &NodeQuery<'_>) -> Result<f64, &'static str>,
+    Q: Fn(&Chapter, &NodeQuery<'_>) -> Result<f64, &'static str>,
 {
-    eh: ExponentialHistogram<T>,
+    eh: ExponentialHistogram,
     query_fn: Q,
 }
 
-impl<T, Q> EhNode<T, Q>
+impl<Q> EhNode<Q>
 where
-    T: EhSketch + Clone,
-    Q: Fn(&T, &NodeQuery<'_>) -> Result<f64, &'static str>,
+    Q: Fn(&Chapter, &NodeQuery<'_>) -> Result<f64, &'static str>,
 {
-    pub fn new(eh: ExponentialHistogram<T>, query_fn: Q) -> Self {
+    pub fn new(eh: ExponentialHistogram, query_fn: Q) -> Self {
         Self { eh, query_fn }
     }
 }
 
-impl<T, Q> OrchestratorNode for EhNode<T, Q>
+impl<Q> OrchestratorNode for EhNode<Q>
 where
-    T: EhSketch + Clone,
-    Q: Fn(&T, &NodeQuery<'_>) -> Result<f64, &'static str>,
+    Q: Fn(&Chapter, &NodeQuery<'_>) -> Result<f64, &'static str>,
 {
     fn kind(&self) -> &'static str {
         "EH"
@@ -43,7 +40,8 @@ where
     fn insert_ex(&mut self, input: &NodeInsert<'_>) -> Result<(), &'static str> {
         match input {
             NodeInsert::Eh { time, value } => {
-                self.eh.update(*time, value).map_err(|_| "EH update failed")
+                self.eh.update(*time, value);
+                Ok(())
             }
             _ => Err("Input type not supported by EH node"),
         }

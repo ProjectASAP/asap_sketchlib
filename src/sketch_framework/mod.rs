@@ -1,10 +1,10 @@
 pub mod eh;
 pub use eh::EHVolume;
-pub use eh::EhSketch;
 pub use eh::ExponentialHistogram;
 
 pub mod chapter;
 pub use chapter::Chapter;
+pub use chapter::SketchNorm;
 
 pub mod hashlayer;
 pub use hashlayer::HashLayer;

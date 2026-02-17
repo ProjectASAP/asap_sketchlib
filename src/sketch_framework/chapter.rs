@@ -3,13 +3,20 @@ use serde::{Deserialize, Serialize};
 
 use super::super::sketches::*;
 use super::UnivMon;
-use super::eh::EHNorm;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SketchNorm {
+    L1,
+    L2,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Chapter {
     CM(CountMin<Vector2D<i32>, FastPath>),
     COCO(Coco),
-    CU(CountL2HH),
+    COUNTL2HH(CountL2HH),
+    CS(Count<Vector2D<i32>, FastPath>),
+    DDS(DDSketch),
     ELASTIC(Elastic),
     HLL(HyperLogLog<DataFusion>),
     KLL(KLL),
@@ -43,142 +50,28 @@ pub fn iv_to_f64(i: &SketchInput) -> f64 {
 }
 
 impl Chapter {
-    fn numeric_input_to_f64(input: &SketchInput) -> Option<f64> {
-        match input {
-            SketchInput::I8(v) => Some(*v as f64),
-            SketchInput::I16(v) => Some(*v as f64),
-            SketchInput::I32(v) => Some(*v as f64),
-            SketchInput::I64(v) => Some(*v as f64),
-            SketchInput::I128(v) => Some(*v as f64),
-            SketchInput::ISIZE(v) => Some(*v as f64),
-            SketchInput::U8(v) => Some(*v as f64),
-            SketchInput::U16(v) => Some(*v as f64),
-            SketchInput::U32(v) => Some(*v as f64),
-            SketchInput::U64(v) => Some(*v as f64),
-            SketchInput::U128(v) => Some(*v as f64),
-            SketchInput::USIZE(v) => Some(*v as f64),
-            SketchInput::F32(v) => Some(*v as f64),
-            SketchInput::F64(v) => Some(*v),
-            SketchInput::Str(_) | SketchInput::String(_) | SketchInput::Bytes(_) => None,
-        }
-    }
-
-    pub fn eh_weight_for_norm(&self, norm: EHNorm, input: &SketchInput) -> Result<f64, String> {
-        if !self.supports_norm(norm) {
-            return Err(format!(
-                "{} does not support {:?} mode",
-                self.sketch_type(),
-                norm
-            ));
-        }
-        let numeric = Self::numeric_input_to_f64(input);
-        match norm {
-            EHNorm::L1 => Ok(numeric.map(|v| v.abs()).unwrap_or(1.0)),
-            EHNorm::L2 => {
-                let value = numeric.ok_or_else(|| {
-                    format!(
-                        "L2 EH mode requires numeric input, got {:?} for {}",
-                        input,
-                        self.sketch_type()
-                    )
-                })?;
-                Ok(value * value)
-            }
-        }
-    }
-
-    pub fn supports_norm(&self, norm: EHNorm) -> bool {
+    pub fn supports_norm(&self, norm: SketchNorm) -> bool {
         match self {
-            Chapter::CU(_) | Chapter::UNIVMON(_) => norm == EHNorm::L2,
+            Chapter::COUNTL2HH(_) | Chapter::UNIVMON(_) => norm == SketchNorm::L2,
             Chapter::CM(_)
+            | Chapter::CS(_)
+            | Chapter::DDS(_)
             | Chapter::COCO(_)
             | Chapter::ELASTIC(_)
             | Chapter::HLL(_)
             | Chapter::KLL(_)
-            | Chapter::UNIFORM(_) => norm == EHNorm::L1,
+            | Chapter::UNIFORM(_) => norm == SketchNorm::L1,
         }
     }
 
-    pub fn insert_weighted(
-        &mut self,
-        val: &SketchInput,
-        delta: i64,
-        norm: EHNorm,
-    ) -> Result<(), String> {
-        if delta <= 0 {
-            return Err(format!("weighted insert requires delta > 0, got {delta}"));
-        }
-        if !self.supports_norm(norm) {
-            return Err(format!(
-                "{} does not support {:?} mode",
-                self.sketch_type(),
-                norm
-            ));
-        }
-
+    pub(crate) fn eh_l2_mass(&self) -> Option<f64> {
         match self {
-            Chapter::CM(sketch) => {
-                for _ in 0..delta {
-                    sketch.insert(val);
-                }
-                Ok(())
-            }
-            Chapter::COCO(sketch) => match val {
-                SketchInput::Str(s) => {
-                    sketch.insert(s, delta as u64);
-                    Ok(())
-                }
-                SketchInput::String(s) => {
-                    sketch.insert(s.as_str(), delta as u64);
-                    Ok(())
-                }
-                _ => Err("Coco weighted insert requires string input".to_string()),
-            },
-            Chapter::CU(sketch) => {
-                sketch.fast_insert_with_count(val, delta);
-                Ok(())
-            }
-            Chapter::ELASTIC(sketch) => {
-                let id = match val {
-                    SketchInput::String(s) => s.clone(),
-                    SketchInput::I32(i) => i.to_string(),
-                    SketchInput::I64(i) => i.to_string(),
-                    SketchInput::U32(u) => u.to_string(),
-                    SketchInput::U64(u) => u.to_string(),
-                    SketchInput::F32(f) => f.to_string(),
-                    SketchInput::F64(f) => f.to_string(),
-                    SketchInput::Str(s) => s.to_string(),
-                    SketchInput::Bytes(items) => String::from_utf8_lossy(items).to_string(),
-                    _ => {
-                        return Err(
-                            "Elastic weighted insert does not support this input".to_string()
-                        );
-                    }
-                };
-                for _ in 0..delta {
-                    sketch.insert(id.clone());
-                }
-                Ok(())
-            }
-            Chapter::HLL(_) => Err("HLL does not support weighted inserts in EH mode".to_string()),
-            Chapter::KLL(sketch) => {
-                if norm == EHNorm::L2 {
-                    return Err("KLL only supports EHNorm::L1 in EH mode".to_string());
-                }
-                for _ in 0..delta {
-                    sketch
-                        .update(val)
-                        .map_err(|e| format!("KLL weighted insert failed: {e}"))?;
-                }
-                Ok(())
-            }
-            Chapter::UNIFORM(_) => {
-                Err("UniformSampling does not support weighted inserts in EH mode".to_string())
-            }
+            Chapter::COUNTL2HH(sketch) => Some(sketch.get_l2_sqr()),
             Chapter::UNIVMON(sketch) => {
-                sketch.insert(val, delta);
-                Ok(())
+                let l2 = sketch.calc_l2();
+                Some(l2 * l2)
             }
+            _ => None,
         }
     }
 
@@ -191,7 +84,11 @@ impl Chapter {
                 SketchInput::String(s) => sketch.insert(s.as_str(), 1),
                 _ => {}
             },
-            Chapter::CU(sketch) => sketch.fast_insert_with_count(val, 1),
+            Chapter::COUNTL2HH(sketch) => sketch.fast_insert_with_count(val, 1),
+            Chapter::CS(sketch) => sketch.insert(val),
+            Chapter::DDS(sketch) => {
+                let _ = sketch.add_input(val);
+            }
             Chapter::ELASTIC(sketch) => match val {
                 SketchInput::String(s) => sketch.insert(s.to_string()),
                 SketchInput::I32(i) => sketch.insert(i.to_string()),
@@ -242,7 +139,15 @@ impl Chapter {
                 s.merge(o);
                 Ok(())
             }
-            (Chapter::CU(s), Chapter::CU(o)) => {
+            (Chapter::COUNTL2HH(s), Chapter::COUNTL2HH(o)) => {
+                s.merge(o);
+                Ok(())
+            }
+            (Chapter::CS(s), Chapter::CS(o)) => {
+                s.merge(o);
+                Ok(())
+            }
+            (Chapter::DDS(s), Chapter::DDS(o)) => {
                 s.merge(o);
                 Ok(())
             }
@@ -278,7 +183,38 @@ impl Chapter {
             (Chapter::COCO(coco), SketchInput::String(s)) => {
                 Ok(coco.clone().estimate(s.as_str()) as f64)
             }
-            (Chapter::CU(count_univ), _) => Ok(count_univ.fast_get_est(key)),
+            (Chapter::COUNTL2HH(count_univ), _) => Ok(count_univ.fast_get_est(key)),
+            (Chapter::CS(count_sketch), _) => Ok(count_sketch.estimate(key)),
+            (Chapter::DDS(dd), SketchInput::I32(i)) => dd
+                .get_value_at_quantile(*i as f64)
+                .ok_or("DDSketch has no samples"),
+            (Chapter::DDS(dd), SketchInput::I64(i)) => dd
+                .get_value_at_quantile(*i as f64)
+                .ok_or("DDSketch has no samples"),
+            (Chapter::DDS(dd), SketchInput::U32(u)) => dd
+                .get_value_at_quantile(*u as f64)
+                .ok_or("DDSketch has no samples"),
+            (Chapter::DDS(dd), SketchInput::U64(u)) => dd
+                .get_value_at_quantile(*u as f64)
+                .ok_or("DDSketch has no samples"),
+            (Chapter::DDS(dd), SketchInput::F32(f)) => dd
+                .get_value_at_quantile(*f as f64)
+                .ok_or("DDSketch has no samples"),
+            (Chapter::DDS(dd), SketchInput::F64(f)) => dd
+                .get_value_at_quantile(*f)
+                .ok_or("DDSketch has no samples"),
+            (Chapter::DDS(dd), SketchInput::Str(cmd)) => match *cmd {
+                "count" => Ok(dd.get_count() as f64),
+                "min" => dd.min().ok_or("DDSketch has no samples"),
+                "max" => dd.max().ok_or("DDSketch has no samples"),
+                _ => Err("Unsupported command for DDSketch"),
+            },
+            (Chapter::DDS(dd), SketchInput::String(cmd)) => match cmd.as_str() {
+                "count" => Ok(dd.get_count() as f64),
+                "min" => dd.min().ok_or("DDSketch has no samples"),
+                "max" => dd.max().ok_or("DDSketch has no samples"),
+                _ => Err("Unsupported command for DDSketch"),
+            },
             (Chapter::ELASTIC(elastic), SketchInput::String(s)) => {
                 Ok(elastic.clone().query(s.clone()) as f64)
             }
@@ -335,7 +271,9 @@ impl Chapter {
         match self {
             Chapter::CM(_) => "CountMin",
             Chapter::COCO(_) => "Coco",
-            Chapter::CU(_) => "CountUniv",
+            Chapter::COUNTL2HH(_) => "CountL2HH",
+            Chapter::CS(_) => "CountSketch",
+            Chapter::DDS(_) => "DDSketch",
             Chapter::ELASTIC(_) => "Elastic",
             Chapter::HLL(_) => "HLL",
             Chapter::KLL(_) => "KLL",
@@ -351,18 +289,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn insert_weighted_routes_delta_to_univmon_and_cu() {
+    fn insert_routes_to_countl2hh_and_univmon() {
         let key = SketchInput::I64(7);
 
-        let mut cu = Chapter::CU(CountL2HH::with_dimensions(5, 1024));
-        cu.insert_weighted(&key, 9, EHNorm::L2)
-            .expect("weighted CU insert");
-        let cu_est = cu.query(&key).expect("query CU");
-        assert!(cu_est >= 9.0, "expected CU estimate >= 9, got {cu_est}");
+        let mut count_l2hh = Chapter::COUNTL2HH(CountL2HH::with_dimensions(5, 1024));
+        for _ in 0..9 {
+            count_l2hh.insert(&key);
+        }
+        let l2hh_est = count_l2hh.query(&key).expect("query COUNTL2HH");
+        assert!(
+            l2hh_est >= 9.0,
+            "expected COUNTL2HH estimate >= 9, got {l2hh_est}"
+        );
 
         let mut um = Chapter::UNIVMON(UnivMon::default());
-        um.insert_weighted(&key, 6, EHNorm::L2)
-            .expect("weighted UnivMon insert");
+        for _ in 0..6 {
+            um.insert(&key);
+        }
         match um {
             Chapter::UNIVMON(ref u) => assert_eq!(u.bucket_size, 6),
             _ => panic!("expected UnivMon chapter variant"),
@@ -370,31 +313,47 @@ mod tests {
     }
 
     #[test]
-    fn insert_weighted_rejects_unsupported_variants() {
-        let mut hll = Chapter::HLL(crate::HyperLogLog::<crate::DataFusion>::default());
-        let err = hll.insert_weighted(&SketchInput::I64(1), 3, EHNorm::L1);
-        assert!(err.is_err(), "expected weighted HLL insert to fail");
+    fn count_sketch_insert_and_query_round_trip() {
+        let mut cs = Chapter::CS(Count::<Vector2D<i32>, FastPath>::default());
+        let key = SketchInput::I64(11);
+        cs.insert(&key);
+        let est = cs.query(&key).expect("query CountSketch");
+        assert!(est >= 1.0, "expected CountSketch estimate >= 1, got {est}");
     }
 
     #[test]
-    fn eh_weight_for_norm_kll_l2_returns_err() {
-        let kll = Chapter::KLL(KLL::default());
-        let err = kll.eh_weight_for_norm(EHNorm::L2, &SketchInput::F64(1.5));
-        assert!(err.is_err(), "expected KLL L2 weight to fail");
+    fn ddsketch_insert_and_quantile_query_round_trip() {
+        let mut dd = Chapter::DDS(DDSketch::new(0.01));
+        dd.insert(&SketchInput::F64(10.0));
+        dd.insert(&SketchInput::F64(20.0));
+        dd.insert(&SketchInput::F64(30.0));
+
+        let q50 = dd
+            .query(&SketchInput::F64(0.5))
+            .expect("query DDSketch q50");
+        assert!(q50 >= 10.0 && q50 <= 30.0, "unexpected q50 {q50}");
     }
 
     #[test]
     fn supports_norm_whitelist_is_enforced() {
         let cm = Chapter::CM(CountMin::<Vector2D<i32>, FastPath>::default());
-        assert!(cm.supports_norm(EHNorm::L1));
-        assert!(!cm.supports_norm(EHNorm::L2));
+        assert!(cm.supports_norm(SketchNorm::L1));
+        assert!(!cm.supports_norm(SketchNorm::L2));
 
-        let cu = Chapter::CU(CountL2HH::with_dimensions(5, 1024));
-        assert!(cu.supports_norm(EHNorm::L2));
-        assert!(!cu.supports_norm(EHNorm::L1));
+        let count_l2hh = Chapter::COUNTL2HH(CountL2HH::with_dimensions(5, 1024));
+        assert!(count_l2hh.supports_norm(SketchNorm::L2));
+        assert!(!count_l2hh.supports_norm(SketchNorm::L1));
+
+        let cs = Chapter::CS(Count::<Vector2D<i32>, FastPath>::default());
+        assert!(cs.supports_norm(SketchNorm::L1));
+        assert!(!cs.supports_norm(SketchNorm::L2));
+
+        let dd = Chapter::DDS(DDSketch::new(0.01));
+        assert!(dd.supports_norm(SketchNorm::L1));
+        assert!(!dd.supports_norm(SketchNorm::L2));
 
         let um = Chapter::UNIVMON(UnivMon::default());
-        assert!(um.supports_norm(EHNorm::L2));
-        assert!(!um.supports_norm(EHNorm::L1));
+        assert!(um.supports_norm(SketchNorm::L2));
+        assert!(!um.supports_norm(SketchNorm::L1));
     }
 }
