@@ -4,12 +4,13 @@
 //! buckets use full UnivMon sketches. When a map bucket grows too large,
 //! it is promoted to a UnivMon sketch.
 //!
-//! Includes a `UnivSketchPool` that pre-allocates and recycles `UnivMon`
-//! instances to avoid repeated allocation/deallocation overhead.
+//! Uses `UnivSketchPool` (from `univmon_optimized`) to recycle `UnivMon`
+//! instances across promotion, merge, and expiration cycles.
 
 use std::collections::HashMap;
 
 use crate::common::input::{heap_item_to_sketch_input, input_to_owned};
+use crate::sketch_framework::univmon_optimized::UnivSketchPool;
 use crate::{HeapItem, SketchInput, UnivMon};
 
 const MASS_EPSILON: f64 = 1e-9;
@@ -23,93 +24,6 @@ fn calc_map_l22(freq_map: &HashMap<HeapItem, i64>) -> f64 {
     freq_map.values().map(|&v| (v as f64) * (v as f64)).sum()
 }
 
-/// Object pool for `UnivMon` sketches.
-///
-/// Pre-allocates a fixed number of sketches and tracks which slots are in use
-/// via a simple bitmap (`Vec<bool>`). When all pre-allocated slots are occupied,
-/// the pool grows by appending new sketches. Returned sketches are reset via
-/// `UnivMon::free()` and their slot is marked as available for reuse.
-pub struct UnivSketchPool {
-    pool: Vec<UnivMon>,
-    in_use: Vec<bool>,
-    size: usize,
-    heap_size: usize,
-    sketch_row: usize,
-    sketch_col: usize,
-    layer_size: usize,
-}
-
-impl UnivSketchPool {
-    /// Creates a new pool with `cap` pre-allocated sketches.
-    pub fn new(
-        cap: usize,
-        heap_size: usize,
-        sketch_row: usize,
-        sketch_col: usize,
-        layer_size: usize,
-    ) -> Self {
-        let pool: Vec<UnivMon> = (0..cap)
-            .map(|_| UnivMon::init_univmon(heap_size, sketch_row, sketch_col, layer_size))
-            .collect();
-        let in_use = vec![false; cap];
-        UnivSketchPool {
-            pool,
-            in_use,
-            size: 0,
-            heap_size,
-            sketch_row,
-            sketch_col,
-            layer_size,
-        }
-    }
-
-    /// Acquires a sketch from the pool, returning `(pool_index, &mut UnivMon)`.
-    ///
-    /// Finds the first free slot. If none is available, grows the pool by one.
-    /// The returned sketch is guaranteed to be in a clean (zeroed) state.
-    pub fn get(&mut self) -> (usize, &mut UnivMon) {
-        // Find first free slot
-        for i in 0..self.in_use.len() {
-            if !self.in_use[i] {
-                self.in_use[i] = true;
-                self.size += 1;
-                return (i, &mut self.pool[i]);
-            }
-        }
-
-        // Pool is full — grow by one
-        let idx = self.pool.len();
-        self.pool.push(UnivMon::init_univmon(
-            self.heap_size,
-            self.sketch_row,
-            self.sketch_col,
-            self.layer_size,
-        ));
-        self.in_use.push(true);
-        self.size += 1;
-        (idx, &mut self.pool[idx])
-    }
-
-    /// Returns a sketch to the pool by its index. Resets all counters.
-    pub fn put(&mut self, pool_idx: usize) {
-        if pool_idx < self.pool.len() && self.in_use[pool_idx] {
-            self.pool[pool_idx].free();
-            self.in_use[pool_idx] = false;
-            self.size -= 1;
-        }
-    }
-
-    /// Number of sketches currently checked out.
-    pub fn active_count(&self) -> usize {
-        self.size
-    }
-
-    /// Total capacity (including both free and in-use slots).
-    pub fn capacity(&self) -> usize {
-        self.pool.len()
-    }
-}
-
 /// Map-tier bucket: exact frequency counts.
 #[derive(Clone, Debug)]
 pub struct EHMapBucket {
@@ -120,11 +34,10 @@ pub struct EHMapBucket {
     pub max_time: u64,
 }
 
-/// Sketch-tier bucket: UnivMon sketch with its pool index for recycling.
+/// Sketch-tier bucket: owns a UnivMon sketch outright.
 #[derive(Clone, Debug)]
 pub struct EHSketchBucket {
     pub sketch: UnivMon,
-    pub pool_idx: Option<usize>,
     pub l22: f64,
     pub bucket_size: usize,
     pub min_time: u64,
@@ -263,21 +176,19 @@ impl EHUnivOptimized {
     }
 
     pub fn update(&mut self, time: u64, key: &SketchInput, value: i64) {
-        // 1. Expire old sketch buckets, returning sketches to pool
+        // 1. Expire old sketch buckets, recycling sketches to pool
         let cutoff = time.saturating_sub(self.window);
-        let expired: Vec<Option<usize>> = self
+        let expired_count = self
             .sketch_buckets
             .iter()
             .take_while(|b| b.max_time < cutoff)
-            .map(|b| b.pool_idx)
-            .collect();
-        if !expired.is_empty() {
-            for pool_idx in &expired {
-                if let Some(idx) = pool_idx {
-                    self.pool.put(*idx);
-                }
+            .count();
+        if expired_count > 0 {
+            let expired: Vec<EHSketchBucket> =
+                self.sketch_buckets.drain(0..expired_count).collect();
+            for bucket in expired {
+                self.pool.put(bucket.sketch);
             }
-            self.sketch_buckets.drain(0..expired.len());
         }
 
         // 2. Expire old map buckets
@@ -341,33 +252,22 @@ impl EHUnivOptimized {
     fn promote_oldest_map(&mut self, sum_l22: f64) {
         let oldest = self.map_buckets.remove(0);
 
-        // Get a sketch from the pool instead of allocating a new one
-        let (pool_idx, sketch) = self.pool.get();
+        // Take a sketch from the pool (moved, not borrowed) — zero allocation
+        // if the pool has a recycled sketch available.
+        let mut sketch = self.pool.take();
         for (key, value) in &oldest.freq_map {
             let input = heap_item_to_sketch_input(key);
             sketch.insert(&input, *value);
         }
 
         let l22 = sketch.l2_sketch_layers[0].get_l2().powi(2);
-        let bucket_size = oldest.bucket_size;
-        let min_time = oldest.min_time;
-        let max_time = oldest.max_time;
-
-        // We need to clone since pool owns the sketch; bucket needs its own copy
-        // after populating data into the pool sketch. However, to truly benefit
-        // from the pool (avoid alloc), we swap the sketch out of the pool slot
-        // and mark the slot as free, then put the sketch directly into the bucket.
-        // The pool slot will be re-initialized when next needed.
-        let owned_sketch = sketch.clone();
-        self.pool.put(pool_idx);
 
         self.sketch_buckets.push(EHSketchBucket {
-            sketch: owned_sketch,
-            pool_idx: None,
+            sketch,
             l22,
-            bucket_size,
-            min_time,
-            max_time,
+            bucket_size: oldest.bucket_size,
+            min_time: oldest.min_time,
+            max_time: oldest.max_time,
         });
 
         self.merge_sketch_buckets(sum_l22);
@@ -400,6 +300,8 @@ impl EHUnivOptimized {
                 bucket.max_time = bucket.max_time.max(other.max_time);
                 bucket.min_time = bucket.min_time.min(other.min_time);
                 bucket.l22 = bucket.sketch.l2_sketch_layers[0].get_l2().powi(2);
+                // Recycle the consumed sketch back to the pool
+                self.pool.put(other.sketch);
             } else {
                 sum_l22 += l22_next;
             }
@@ -589,15 +491,15 @@ impl EHUnivOptimized {
             self.k, self.window, self.max_map_size
         );
         println!(
-            "Pool: {}/{} active/capacity",
-            self.pool.active_count(),
-            self.pool.capacity()
+            "Pool: {}/{} available/total_allocated",
+            self.pool.available(),
+            self.pool.total_allocated()
         );
         println!("Sketch buckets ({}):", self.sketch_buckets.len());
         for (i, b) in self.sketch_buckets.iter().enumerate() {
             println!(
-                "  [S{}] min_time={}, max_time={}, bucket_size={}, l22={:.2}, pool_idx={:?}",
-                i, b.min_time, b.max_time, b.bucket_size, b.l22, b.pool_idx
+                "  [S{}] min_time={}, max_time={}, bucket_size={}, l22={:.2}",
+                i, b.min_time, b.max_time, b.bucket_size, b.l22
             );
         }
         println!("Map buckets ({}):", self.map_buckets.len());
@@ -837,60 +739,11 @@ mod tests {
     }
 
     #[test]
-    fn pool_basic_get_put() {
-        let mut pool = UnivSketchPool::new(2, 16, 2, 5, 2);
-        assert_eq!(pool.capacity(), 2);
-        assert_eq!(pool.active_count(), 0);
-
-        let (idx0, _) = pool.get();
-        assert_eq!(idx0, 0);
-        assert_eq!(pool.active_count(), 1);
-
-        let (idx1, _) = pool.get();
-        assert_eq!(idx1, 1);
-        assert_eq!(pool.active_count(), 2);
-
-        // Pool is full, should grow
-        let (idx2, _) = pool.get();
-        assert_eq!(idx2, 2);
-        assert_eq!(pool.capacity(), 3);
-        assert_eq!(pool.active_count(), 3);
-
-        // Return one
-        pool.put(idx1);
-        assert_eq!(pool.active_count(), 2);
-
-        // Should reuse slot 1
-        let (idx_reuse, _) = pool.get();
-        assert_eq!(idx_reuse, 1);
-        assert_eq!(pool.active_count(), 3);
-    }
-
-    #[test]
-    fn pool_free_resets_sketch() {
-        let mut pool = UnivSketchPool::new(1, 16, 2, 5, 2);
-
-        // Get a sketch, insert some data
-        let (idx, sketch) = pool.get();
-        sketch.insert(&SketchInput::I64(42), 100);
-        assert!(sketch.bucket_size > 0);
-
-        // Return it — should reset
-        pool.put(idx);
-
-        // Get it back — should be clean
-        let (idx2, sketch2) = pool.get();
-        assert_eq!(idx2, idx);
-        assert_eq!(sketch2.bucket_size, 0);
-        assert!((sketch2.l2_sketch_layers[0].get_l2()).abs() < 1e-9);
-    }
-
-    #[test]
     fn pool_used_during_promotion() {
         // Verify the pool is actually used during EH promotion
         let mut eh = EHUnivOptimized::with_pool_cap(8, 100000, 16, 2, 5, 2, 2);
 
-        assert_eq!(eh.pool().capacity(), 2);
+        assert_eq!(eh.pool().total_allocated(), 2);
 
         // Insert enough to trigger promotions
         for i in 0..200u64 {
@@ -898,8 +751,8 @@ mod tests {
         }
 
         assert!(!eh.sketch_buckets.is_empty());
-        // Pool should have been used (capacity may have grown if many concurrent buckets)
-        assert!(eh.pool().capacity() >= 2);
+        // Pool should have been used (total_allocated may have grown if many concurrent buckets)
+        assert!(eh.pool().total_allocated() >= 2);
     }
 
     // -----------------------------------------------------------------------
@@ -1071,9 +924,9 @@ mod tests {
 
         // The system should still be functional and pool should not have grown unboundedly
         assert!(
-            eh.pool().capacity() < 50,
+            eh.pool().total_allocated() < 50,
             "Pool grew too large: {}",
-            eh.pool().capacity()
+            eh.pool().total_allocated()
         );
 
         // Query should still work
