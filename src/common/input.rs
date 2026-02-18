@@ -283,6 +283,13 @@ impl L2HH {
             }
         }
     }
+
+    /// Resets all counters to zero without reallocating.
+    pub fn clear(&mut self) {
+        match self {
+            L2HH::COUNT(count_l2hh) => count_l2hh.clear(),
+        }
+    }
 }
 
 /// Query type for Hydra sketches.

@@ -212,6 +212,16 @@ impl UnivMon {
         self.calc_g_sum(|_| 1.0, true)
     }
 
+    /// Resets the sketch to its initial state without reallocating.
+    /// Zeroes all counters and clears all heaps, matching the Go `Free()` method.
+    pub fn free(&mut self) {
+        self.bucket_size = 0;
+        for i in 0..self.layer_size {
+            self.l2_sketch_layers[i].clear();
+            self.hh_layers[i].clear();
+        }
+    }
+
     pub fn merge(&mut self, other: &UnivMon) {
         assert_eq!(
             self.layer_size, other.layer_size,

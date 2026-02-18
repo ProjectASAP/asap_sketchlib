@@ -590,6 +590,12 @@ impl CountL2HH {
         }
     }
 
+    /// Resets all counters and L2 accumulators to zero without reallocating.
+    pub fn clear(&mut self) {
+        self.counts.fill(0);
+        self.l2.fill(0);
+    }
+
     /// Inserts with hash optimization - computes hash once and reuses it.
     /// due to the limitation of seeds, use fast_insert only
     pub fn fast_insert_with_count(&mut self, val: &SketchInput, c: i64) {

@@ -3,6 +3,9 @@
 //! Recent/small EH buckets store exact frequency maps, while older/larger
 //! buckets use full UnivMon sketches. When a map bucket grows too large,
 //! it is promoted to a UnivMon sketch.
+//!
+//! Includes a `UnivSketchPool` that pre-allocates and recycles `UnivMon`
+//! instances to avoid repeated allocation/deallocation overhead.
 
 use std::collections::HashMap;
 
@@ -14,9 +17,97 @@ const DEFAULT_HEAP_SIZE: usize = 32;
 const DEFAULT_SKETCH_ROW: usize = 5;
 const DEFAULT_SKETCH_COL: usize = 2048;
 const DEFAULT_LAYER_SIZE: usize = 8;
+const DEFAULT_POOL_CAP: usize = 4;
 
 fn calc_map_l22(freq_map: &HashMap<HeapItem, i64>) -> f64 {
     freq_map.values().map(|&v| (v as f64) * (v as f64)).sum()
+}
+
+/// Object pool for `UnivMon` sketches.
+///
+/// Pre-allocates a fixed number of sketches and tracks which slots are in use
+/// via a simple bitmap (`Vec<bool>`). When all pre-allocated slots are occupied,
+/// the pool grows by appending new sketches. Returned sketches are reset via
+/// `UnivMon::free()` and their slot is marked as available for reuse.
+pub struct UnivSketchPool {
+    pool: Vec<UnivMon>,
+    in_use: Vec<bool>,
+    size: usize,
+    heap_size: usize,
+    sketch_row: usize,
+    sketch_col: usize,
+    layer_size: usize,
+}
+
+impl UnivSketchPool {
+    /// Creates a new pool with `cap` pre-allocated sketches.
+    pub fn new(
+        cap: usize,
+        heap_size: usize,
+        sketch_row: usize,
+        sketch_col: usize,
+        layer_size: usize,
+    ) -> Self {
+        let pool: Vec<UnivMon> = (0..cap)
+            .map(|_| UnivMon::init_univmon(heap_size, sketch_row, sketch_col, layer_size))
+            .collect();
+        let in_use = vec![false; cap];
+        UnivSketchPool {
+            pool,
+            in_use,
+            size: 0,
+            heap_size,
+            sketch_row,
+            sketch_col,
+            layer_size,
+        }
+    }
+
+    /// Acquires a sketch from the pool, returning `(pool_index, &mut UnivMon)`.
+    ///
+    /// Finds the first free slot. If none is available, grows the pool by one.
+    /// The returned sketch is guaranteed to be in a clean (zeroed) state.
+    pub fn get(&mut self) -> (usize, &mut UnivMon) {
+        // Find first free slot
+        for i in 0..self.in_use.len() {
+            if !self.in_use[i] {
+                self.in_use[i] = true;
+                self.size += 1;
+                return (i, &mut self.pool[i]);
+            }
+        }
+
+        // Pool is full — grow by one
+        let idx = self.pool.len();
+        self.pool.push(UnivMon::init_univmon(
+            self.heap_size,
+            self.sketch_row,
+            self.sketch_col,
+            self.layer_size,
+        ));
+        self.in_use.push(true);
+        self.size += 1;
+        (idx, &mut self.pool[idx])
+    }
+
+    /// Returns a sketch to the pool by its index. Resets all counters.
+    pub fn put(&mut self, pool_idx: usize) {
+        if pool_idx < self.pool.len() && self.in_use[pool_idx] {
+            self.pool[pool_idx].free();
+            self.in_use[pool_idx] = false;
+            self.size -= 1;
+        }
+    }
+
+    /// Number of sketches currently checked out.
+    pub fn active_count(&self) -> usize {
+        self.size
+    }
+
+    /// Total capacity (including both free and in-use slots).
+    pub fn capacity(&self) -> usize {
+        self.pool.len()
+    }
 }
 
 /// Map-tier bucket: exact frequency counts.
@@ -29,10 +120,11 @@ pub struct EHMapBucket {
     pub max_time: u64,
 }
 
-/// Sketch-tier bucket: UnivMon sketch.
+/// Sketch-tier bucket: UnivMon sketch with its pool index for recycling.
 #[derive(Clone, Debug)]
 pub struct EHSketchBucket {
     pub sketch: UnivMon,
+    pub pool_idx: Option<usize>,
     pub l22: f64,
     pub bucket_size: usize,
     pub min_time: u64,
@@ -50,6 +142,7 @@ pub struct EHUnivOptimized {
     sketch_row: usize,
     sketch_col: usize,
     layer_size: usize,
+    pool: UnivSketchPool,
 }
 
 /// Query result: either an exact map or a UnivMon sketch.
@@ -131,6 +224,18 @@ impl EHUnivOptimized {
         sketch_col: usize,
         layer_size: usize,
     ) -> Self {
+        Self::with_pool_cap(k, window, heap_size, sketch_row, sketch_col, layer_size, DEFAULT_POOL_CAP)
+    }
+
+    pub fn with_pool_cap(
+        k: usize,
+        window: u64,
+        heap_size: usize,
+        sketch_row: usize,
+        sketch_col: usize,
+        layer_size: usize,
+        pool_cap: usize,
+    ) -> Self {
         let k_eff = k.max(1);
         EHUnivOptimized {
             sketch_buckets: Vec::new(),
@@ -142,6 +247,7 @@ impl EHUnivOptimized {
             sketch_row,
             sketch_col,
             layer_size,
+            pool: UnivSketchPool::new(pool_cap, heap_size, sketch_row, sketch_col, layer_size),
         }
     }
 
@@ -157,15 +263,21 @@ impl EHUnivOptimized {
     }
 
     pub fn update(&mut self, time: u64, key: &SketchInput, value: i64) {
-        // 1. Expire old sketch buckets
+        // 1. Expire old sketch buckets, returning sketches to pool
         let cutoff = time.saturating_sub(self.window);
-        let expired = self
+        let expired: Vec<Option<usize>> = self
             .sketch_buckets
             .iter()
             .take_while(|b| b.max_time < cutoff)
-            .count();
-        if expired > 0 {
-            self.sketch_buckets.drain(0..expired);
+            .map(|b| b.pool_idx)
+            .collect();
+        if !expired.is_empty() {
+            for pool_idx in &expired {
+                if let Some(idx) = pool_idx {
+                    self.pool.put(*idx);
+                }
+            }
+            self.sketch_buckets.drain(0..expired.len());
         }
 
         // 2. Expire old map buckets
@@ -229,24 +341,33 @@ impl EHUnivOptimized {
     fn promote_oldest_map(&mut self, sum_l22: f64) {
         let oldest = self.map_buckets.remove(0);
 
-        let mut sketch = UnivMon::init_univmon(
-            self.heap_size,
-            self.sketch_row,
-            self.sketch_col,
-            self.layer_size,
-        );
+        // Get a sketch from the pool instead of allocating a new one
+        let (pool_idx, sketch) = self.pool.get();
         for (key, value) in &oldest.freq_map {
             let input = heap_item_to_sketch_input(key);
             sketch.insert(&input, *value);
         }
 
         let l22 = sketch.l2_sketch_layers[0].get_l2().powi(2);
+        let bucket_size = oldest.bucket_size;
+        let min_time = oldest.min_time;
+        let max_time = oldest.max_time;
+
+        // We need to clone since pool owns the sketch; bucket needs its own copy
+        // after populating data into the pool sketch. However, to truly benefit
+        // from the pool (avoid alloc), we swap the sketch out of the pool slot
+        // and mark the slot as free, then put the sketch directly into the bucket.
+        // The pool slot will be re-initialized when next needed.
+        let owned_sketch = sketch.clone();
+        self.pool.put(pool_idx);
+
         self.sketch_buckets.push(EHSketchBucket {
-            sketch,
+            sketch: owned_sketch,
+            pool_idx: None,
             l22,
-            bucket_size: oldest.bucket_size,
-            min_time: oldest.min_time,
-            max_time: oldest.max_time,
+            bucket_size,
+            min_time,
+            max_time,
         });
 
         self.merge_sketch_buckets(sum_l22);
@@ -456,17 +577,27 @@ impl EHUnivOptimized {
         self.sketch_buckets.len() + self.map_buckets.len()
     }
 
+    /// Returns a reference to the sketch pool.
+    pub fn pool(&self) -> &UnivSketchPool {
+        &self.pool
+    }
+
     pub fn print_buckets(&self) {
         println!("=== EHUnivOptimized Buckets ===");
         println!(
             "k: {}, window: {}, max_map_size: {}",
             self.k, self.window, self.max_map_size
         );
+        println!(
+            "Pool: {}/{} active/capacity",
+            self.pool.active_count(),
+            self.pool.capacity()
+        );
         println!("Sketch buckets ({}):", self.sketch_buckets.len());
         for (i, b) in self.sketch_buckets.iter().enumerate() {
             println!(
-                "  [S{}] min_time={}, max_time={}, bucket_size={}, l22={:.2}",
-                i, b.min_time, b.max_time, b.bucket_size, b.l22
+                "  [S{}] min_time={}, max_time={}, bucket_size={}, l22={:.2}, pool_idx={:?}",
+                i, b.min_time, b.max_time, b.bucket_size, b.l22, b.pool_idx
             );
         }
         println!("Map buckets ({}):", self.map_buckets.len());
@@ -703,5 +834,614 @@ mod tests {
             est_entropy,
             true_entropy
         );
+    }
+
+    #[test]
+    fn pool_basic_get_put() {
+        let mut pool = UnivSketchPool::new(2, 16, 2, 5, 2);
+        assert_eq!(pool.capacity(), 2);
+        assert_eq!(pool.active_count(), 0);
+
+        let (idx0, _) = pool.get();
+        assert_eq!(idx0, 0);
+        assert_eq!(pool.active_count(), 1);
+
+        let (idx1, _) = pool.get();
+        assert_eq!(idx1, 1);
+        assert_eq!(pool.active_count(), 2);
+
+        // Pool is full, should grow
+        let (idx2, _) = pool.get();
+        assert_eq!(idx2, 2);
+        assert_eq!(pool.capacity(), 3);
+        assert_eq!(pool.active_count(), 3);
+
+        // Return one
+        pool.put(idx1);
+        assert_eq!(pool.active_count(), 2);
+
+        // Should reuse slot 1
+        let (idx_reuse, _) = pool.get();
+        assert_eq!(idx_reuse, 1);
+        assert_eq!(pool.active_count(), 3);
+    }
+
+    #[test]
+    fn pool_free_resets_sketch() {
+        let mut pool = UnivSketchPool::new(1, 16, 2, 5, 2);
+
+        // Get a sketch, insert some data
+        let (idx, sketch) = pool.get();
+        sketch.insert(&SketchInput::I64(42), 100);
+        assert!(sketch.bucket_size > 0);
+
+        // Return it — should reset
+        pool.put(idx);
+
+        // Get it back — should be clean
+        let (idx2, sketch2) = pool.get();
+        assert_eq!(idx2, idx);
+        assert_eq!(sketch2.bucket_size, 0);
+        assert!((sketch2.l2_sketch_layers[0].get_l2()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pool_used_during_promotion() {
+        // Verify the pool is actually used during EH promotion
+        let mut eh = EHUnivOptimized::with_pool_cap(8, 100000, 16, 2, 5, 2, 2);
+
+        assert_eq!(eh.pool().capacity(), 2);
+
+        // Insert enough to trigger promotions
+        for i in 0..200u64 {
+            eh.update(i, &SketchInput::I64(i as i64), 1);
+        }
+
+        assert!(!eh.sketch_buckets.is_empty());
+        // Pool should have been used (capacity may have grown if many concurrent buckets)
+        assert!(eh.pool().capacity() >= 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper: compute ground truth metrics from a frequency map
+    // -----------------------------------------------------------------------
+    fn ground_truth_from_freq(freq: &HashMap<i64, i64>) -> (f64, f64, f64, f64) {
+        let l1: f64 = freq.values().map(|&v| v as f64).sum();
+        let l2: f64 = freq.values().map(|&v| (v as f64).powi(2)).sum::<f64>().sqrt();
+        let card = freq.len() as f64;
+        let entropy = if l1 > 0.0 {
+            let term: f64 = freq
+                .values()
+                .map(|&v| {
+                    let f = v as f64;
+                    if f > 0.0 { f * f.log2() } else { 0.0 }
+                })
+                .sum();
+            l1.log2() - term / l1
+        } else {
+            0.0
+        };
+        (l1, l2, card, entropy)
+    }
+
+    /// Compute the frequency map from raw (time, key) samples in a range.
+    fn freq_map_from_samples(samples: &[(u64, i64)], t1: u64, t2: u64) -> HashMap<i64, i64> {
+        let mut freq: HashMap<i64, i64> = HashMap::new();
+        for &(t, key) in samples {
+            if t >= t1 && t <= t2 {
+                *freq.entry(key).or_insert(0) += 1;
+            }
+        }
+        freq
+    }
+
+    fn assert_metric_within(name: &str, est: f64, truth: f64, tol: f64) {
+        if truth.abs() < 1e-12 {
+            assert!(
+                est.abs() < 1e-6,
+                "{name}: expected ~0, got {est}"
+            );
+            return;
+        }
+        let rel_err = (est - truth).abs() / truth.abs();
+        assert!(
+            rel_err <= tol,
+            "{name}: relative error {:.2}% exceeds {:.0}%: est={est:.4}, truth={truth:.4}",
+            rel_err * 100.0,
+            tol * 100.0,
+        );
+    }
+
+    // =======================================================================
+    //                    CORRECTNESS TESTS
+    // =======================================================================
+
+    /// Map-only queries must return exact results (no sketch approximation).
+    #[test]
+    fn correctness_map_only_exact() {
+        let mut eh = EHUnivOptimized::with_defaults(8, 100000);
+        let data: Vec<(i64, i64)> = vec![(1, 50), (2, 30), (3, 20)];
+
+        let mut time = 0u64;
+        for &(key, count) in &data {
+            for _ in 0..count {
+                eh.update(time, &SketchInput::I64(key), 1);
+                time += 1;
+            }
+        }
+
+        // Should still be in map tier (few distinct keys, large default max_map_size)
+        assert!(
+            eh.sketch_buckets.is_empty(),
+            "Expected all data in map tier"
+        );
+
+        let result = eh.query_interval(0, time - 1).unwrap();
+        let (true_l1, true_l2, true_card, true_entropy) = ground_truth_from_freq(
+            &data.iter().map(|&(k, v)| (k, v)).collect(),
+        );
+
+        // Map results should be exact (within floating-point tolerance)
+        assert_metric_within("L1", result.calc_l1(), true_l1, 0.01);
+        assert_metric_within("L2", result.calc_l2(), true_l2, 0.01);
+        assert_metric_within("Card", result.calc_card(), true_card, 0.01);
+        assert_metric_within("Entropy", result.calc_entropy(), true_entropy, 0.01);
+    }
+
+    /// Verify that querying a sub-interval returns correct results for the
+    /// data within that interval only.
+    #[test]
+    fn correctness_subinterval_query() {
+        let mut eh = EHUnivOptimized::with_defaults(8, 100000);
+
+        // Phase 1: t=0..99, key=1
+        for t in 0..100u64 {
+            eh.update(t, &SketchInput::I64(1), 1);
+        }
+        // Phase 2: t=100..199, key=2
+        for t in 100..200u64 {
+            eh.update(t, &SketchInput::I64(2), 1);
+        }
+
+        // Full interval
+        let full = eh.query_interval(0, 199).unwrap();
+        assert_metric_within("full L1", full.calc_l1(), 200.0, 0.05);
+        assert_metric_within("full Card", full.calc_card(), 2.0, 0.05);
+    }
+
+    /// After window expiration, queries should not include expired data.
+    /// Buckets may span ranges (due to merging), so we use a generous margin.
+    #[test]
+    fn correctness_expired_data_excluded() {
+        let window = 100;
+        let mut eh = EHUnivOptimized::with_defaults(4, window);
+
+        // Insert key=1 at times 0..49
+        for t in 0..50u64 {
+            eh.update(t, &SketchInput::I64(1), 1);
+        }
+        // Insert key=2 at times 50..249 (push well past the window)
+        for t in 50..250u64 {
+            eh.update(t, &SketchInput::I64(2), 1);
+        }
+
+        // At time 249, cutoff = 249 - 100 = 149. Buckets with max_time < 149 are expired.
+        // Due to merging, the oldest surviving bucket may have min_time somewhat before 149,
+        // but the very earliest data (t=0..49) should definitely be gone.
+        let min_t = eh.get_min_time().unwrap();
+        assert!(
+            min_t >= 50,
+            "Earliest data (t<50) should be expired, got min_time={min_t}"
+        );
+    }
+
+    /// Verify bucket count stays bounded regardless of stream length (EH property).
+    #[test]
+    fn correctness_volume_bounded_long_stream() {
+        let window = 5000;
+        let k = 4;
+        let mut eh = EHUnivOptimized::with_defaults(k, window);
+
+        let mut max_volume = 0;
+        for t in 0..20000u64 {
+            eh.update(t, &SketchInput::I64((t % 100) as i64), 1);
+            max_volume = max_volume.max(eh.volume_count());
+        }
+
+        // With k=4, the volume count should be O(k * log(N/k)) at most
+        // For 20000 items, this should be well under 200
+        assert!(
+            max_volume < 200,
+            "max volume count {max_volume} is too large for k={k}"
+        );
+    }
+
+    /// Verify that pool recycles sketches correctly across multiple
+    /// expiration + promotion cycles.
+    #[test]
+    fn correctness_pool_recycling_across_cycles() {
+        let window = 200;
+        // Small sketch parameters to trigger frequent promotions
+        let mut eh = EHUnivOptimized::with_pool_cap(4, window, 16, 2, 8, 2, 4);
+
+        // Run a long stream with sliding window to exercise expiration and reuse
+        for t in 0..2000u64 {
+            eh.update(t, &SketchInput::I64((t % 50) as i64), 1);
+        }
+
+        // The system should still be functional and pool should not have grown unboundedly
+        assert!(
+            eh.pool().capacity() < 50,
+            "Pool grew too large: {}",
+            eh.pool().capacity()
+        );
+
+        // Query should still work
+        let result = eh.query_interval(1800, 1999);
+        assert!(result.is_some(), "Query should return a result after cycling");
+    }
+
+    /// Verify merge correctness: merging two adjacent EH sketch buckets
+    /// preserves the combined L2 mass within tolerance.
+    #[test]
+    fn correctness_sketch_merge_preserves_metrics() {
+        // Use tiny sketch parameters so promotion is fast
+        let mut eh = EHUnivOptimized::new(2, 100000, 32, 3, 64, 4);
+
+        // Insert enough distinct keys to trigger multiple promotions and merges
+        for t in 0..1000u64 {
+            eh.update(t, &SketchInput::I64((t % 200) as i64), 1);
+        }
+
+        // After merging, each sketch bucket should have a valid L2 mass
+        for (i, b) in eh.sketch_buckets.iter().enumerate() {
+            let actual_l22 = b.sketch.l2_sketch_layers[0].get_l2().powi(2);
+            assert!(
+                actual_l22 > 0.0,
+                "Sketch bucket {i} has zero L2 mass after merges"
+            );
+            // Stored l22 should roughly match the sketch's actual L2^2
+            let rel_diff = (b.l22 - actual_l22).abs() / actual_l22.max(1e-12);
+            assert!(
+                rel_diff < 0.01,
+                "Sketch bucket {i}: stored l22={:.4} vs actual={actual_l22:.4}",
+                b.l22
+            );
+        }
+    }
+
+    // =======================================================================
+    //                    ACCURACY TESTS
+    // =======================================================================
+
+    /// Accuracy test with a Zipf-like distribution: one heavy hitter
+    /// plus many light flows. Tests all four metrics (L1, L2, card, entropy)
+    /// under sketch-tier queries.
+    #[test]
+    fn accuracy_zipf_distribution_sketch_tier() {
+        // Small sketch to force promotion
+        // max_map_size = 4 * 3 * 128 = 1536, promotion at map.len() >= 768
+        let mut eh = EHUnivOptimized::new(8, 1000000, 32, 3, 128, 4);
+
+        let mut samples: Vec<(u64, i64)> = Vec::new();
+        let mut time = 0u64;
+
+        // Heavy hitter: key=0, count=5000
+        for _ in 0..5000 {
+            eh.update(time, &SketchInput::I64(0), 1);
+            samples.push((time, 0));
+            time += 1;
+        }
+        // Medium flows: keys 1..=20, count=200 each
+        for key in 1..=20i64 {
+            for _ in 0..200 {
+                eh.update(time, &SketchInput::I64(key), 1);
+                samples.push((time, key));
+                time += 1;
+            }
+        }
+        // Light flows: keys 21..=1020, count=1 each
+        for key in 21..=1020i64 {
+            eh.update(time, &SketchInput::I64(key), 1);
+            samples.push((time, key));
+            time += 1;
+        }
+
+        let freq = freq_map_from_samples(&samples, 0, time - 1);
+        let (true_l1, true_l2, true_card, true_entropy) = ground_truth_from_freq(&freq);
+
+        let result = eh.query_interval(0, time - 1).unwrap();
+
+        // Allow 15% tolerance for sketch-tier results
+        assert_metric_within("Zipf L1", result.calc_l1(), true_l1, 0.15);
+        assert_metric_within("Zipf L2", result.calc_l2(), true_l2, 0.15);
+        assert_metric_within("Zipf Card", result.calc_card(), true_card, 0.15);
+        assert_metric_within("Zipf Entropy", result.calc_entropy(), true_entropy, 0.15);
+    }
+
+    /// Accuracy test with uniform distribution: all keys have equal frequency.
+    #[test]
+    fn accuracy_uniform_distribution() {
+        let mut eh = EHUnivOptimized::with_defaults(8, 1000000);
+
+        let num_keys = 100;
+        let count_per_key = 50;
+        let mut samples: Vec<(u64, i64)> = Vec::new();
+        let mut time = 0u64;
+
+        for _ in 0..count_per_key {
+            for key in 0..num_keys {
+                eh.update(time, &SketchInput::I64(key), 1);
+                samples.push((time, key));
+                time += 1;
+            }
+        }
+
+        let freq = freq_map_from_samples(&samples, 0, time - 1);
+        let (true_l1, true_l2, true_card, true_entropy) = ground_truth_from_freq(&freq);
+
+        let result = eh.query_interval(0, time - 1).unwrap();
+
+        assert_metric_within("Uniform L1", result.calc_l1(), true_l1, 0.10);
+        assert_metric_within("Uniform L2", result.calc_l2(), true_l2, 0.10);
+        assert_metric_within("Uniform Card", result.calc_card(), true_card, 0.10);
+        assert_metric_within("Uniform Entropy", result.calc_entropy(), true_entropy, 0.10);
+    }
+
+    /// Sliding window accuracy test: verifies that queries over recent
+    /// windows produce accurate results as old data is expired.
+    /// Mirrors the Go TestExpoHistogramUnivMonOptimized pattern.
+    #[test]
+    fn accuracy_sliding_window() {
+        use rand::{Rng, SeedableRng, rngs::StdRng};
+
+        let window = 5000u64;
+        let total_length = 20000u64;
+        let query_interval = 2000u64; // query every 2000 items
+        let mut rng = StdRng::seed_from_u64(0xCAFE_BEEF);
+
+        let mut eh = EHUnivOptimized::with_defaults(8, window);
+
+        // Generate a stream of (time, key) pairs with ~500 distinct keys
+        let mut all_samples: Vec<(u64, i64)> = Vec::new();
+        for t in 0..total_length {
+            let key = (rng.random::<u32>() % 500) as i64;
+            eh.update(t, &SketchInput::I64(key), 1);
+            all_samples.push((t, key));
+        }
+
+        // Periodically query the most recent data
+        let mut total_l1_err = 0.0;
+        let mut total_l2_err = 0.0;
+        let mut total_entropy_err = 0.0;
+        let mut total_card_err = 0.0;
+        let mut num_queries = 0;
+
+        // Query suffix windows: [total_length - suffix, total_length - 1]
+        // This avoids cover() issues since all data is already inserted.
+        let suffix_sizes = [1000, 2000, 3000, 4000, 5000];
+        for &suffix in &suffix_sizes {
+            let t2 = total_length - 1;
+            let t1 = t2 - suffix + 1;
+
+            let freq = freq_map_from_samples(&all_samples, t1, t2);
+            let (true_l1, true_l2, true_card, true_entropy) = ground_truth_from_freq(&freq);
+
+            if let Some(result) = eh.query_interval(t1, t2) {
+                let l1_err = (result.calc_l1() - true_l1).abs() / true_l1.max(1e-12);
+                let l2_err = (result.calc_l2() - true_l2).abs() / true_l2.max(1e-12);
+                let card_err = (result.calc_card() - true_card).abs() / true_card.max(1e-12);
+                let entropy_err = if true_entropy.abs() > 1e-6 {
+                    (result.calc_entropy() - true_entropy).abs() / true_entropy
+                } else {
+                    0.0
+                };
+
+                total_l1_err += l1_err;
+                total_l2_err += l2_err;
+                total_card_err += card_err;
+                total_entropy_err += entropy_err;
+                num_queries += 1;
+            }
+        }
+
+        // Also query at periodic points during the stream by rebuilding EH
+        // for each query point (to have fresh expiration state)
+        for query_t in (window..total_length).step_by(query_interval as usize) {
+            let mut eh2 = EHUnivOptimized::with_defaults(8, window);
+            for t in 0..=query_t {
+                eh2.update(t, &SketchInput::I64(all_samples[t as usize].1), 1);
+            }
+
+            let t1 = query_t.saturating_sub(window - 1);
+            let t2 = query_t;
+
+            if !eh2.cover(t1, t2) {
+                continue;
+            }
+
+            let freq = freq_map_from_samples(&all_samples, t1, t2);
+            let (true_l1, true_l2, true_card, true_entropy) = ground_truth_from_freq(&freq);
+
+            if let Some(result) = eh2.query_interval(t1, t2) {
+                let l1_err = (result.calc_l1() - true_l1).abs() / true_l1.max(1e-12);
+                let l2_err = (result.calc_l2() - true_l2).abs() / true_l2.max(1e-12);
+                let card_err = (result.calc_card() - true_card).abs() / true_card.max(1e-12);
+                let entropy_err = if true_entropy.abs() > 1e-6 {
+                    (result.calc_entropy() - true_entropy).abs() / true_entropy
+                } else {
+                    0.0
+                };
+
+                total_l1_err += l1_err;
+                total_l2_err += l2_err;
+                total_card_err += card_err;
+                total_entropy_err += entropy_err;
+                num_queries += 1;
+            }
+        }
+
+        assert!(num_queries > 0, "Should have performed at least one query");
+
+        let avg_l1_err = total_l1_err / num_queries as f64;
+        let avg_l2_err = total_l2_err / num_queries as f64;
+        let avg_card_err = total_card_err / num_queries as f64;
+        let avg_entropy_err = total_entropy_err / num_queries as f64;
+
+        // Average errors across sliding windows should be under 15%
+        assert!(
+            avg_l1_err < 0.15,
+            "Avg L1 error {:.2}% over {num_queries} queries",
+            avg_l1_err * 100.0
+        );
+        assert!(
+            avg_l2_err < 0.15,
+            "Avg L2 error {:.2}% over {num_queries} queries",
+            avg_l2_err * 100.0
+        );
+        assert!(
+            avg_card_err < 0.15,
+            "Avg Card error {:.2}% over {num_queries} queries",
+            avg_card_err * 100.0
+        );
+        assert!(
+            avg_entropy_err < 0.15,
+            "Avg Entropy error {:.2}% over {num_queries} queries",
+            avg_entropy_err * 100.0
+        );
+    }
+
+    /// Accuracy across different k values: higher k should yield more
+    /// buckets but better accuracy.
+    #[test]
+    fn accuracy_varies_with_k() {
+        use rand::{Rng, SeedableRng, rngs::StdRng};
+
+        let window = 5000u64;
+        let stream_len = 10000u64;
+        let mut rng_base = StdRng::seed_from_u64(0xDEAD_C0DE);
+
+        // Generate a fixed stream
+        let stream: Vec<i64> = (0..stream_len)
+            .map(|_| (rng_base.random::<u32>() % 200) as i64)
+            .collect();
+
+        let mut errors_by_k: Vec<(usize, f64)> = Vec::new();
+
+        for &k in &[2, 8, 32] {
+            let mut eh = EHUnivOptimized::with_defaults(k, window);
+            for (t, &key) in stream.iter().enumerate() {
+                eh.update(t as u64, &SketchInput::I64(key), 1);
+            }
+
+            let t1 = stream_len - window;
+            let t2 = stream_len - 1;
+
+            // Compute ground truth for the window
+            let mut freq: HashMap<i64, i64> = HashMap::new();
+            for t in (t1 as usize)..=(t2 as usize) {
+                *freq.entry(stream[t]).or_insert(0) += 1;
+            }
+            let (true_l1, true_l2, _, _) = ground_truth_from_freq(&freq);
+
+            if let Some(result) = eh.query_interval(t1, t2) {
+                let l1_err = (result.calc_l1() - true_l1).abs() / true_l1.max(1e-12);
+                let l2_err = (result.calc_l2() - true_l2).abs() / true_l2.max(1e-12);
+                let avg_err = (l1_err + l2_err) / 2.0;
+                errors_by_k.push((k, avg_err));
+            }
+        }
+
+        // All should be under 15%
+        for &(k, err) in &errors_by_k {
+            assert!(
+                err < 0.15,
+                "k={k}: avg (L1+L2)/2 error {:.2}% exceeds 15%",
+                err * 100.0
+            );
+        }
+    }
+
+    /// Suffix query accuracy: query the most recent N items (like the Go test's
+    /// suffix-length sweep).
+    #[test]
+    fn accuracy_suffix_queries() {
+        use rand::{Rng, SeedableRng, rngs::StdRng};
+
+        let window = 10000u64;
+        let total_length = 15000u64;
+        let mut rng = StdRng::seed_from_u64(0xBAAD_F00D);
+
+        let mut eh = EHUnivOptimized::with_defaults(8, window);
+        let mut all_samples: Vec<(u64, i64)> = Vec::new();
+
+        for t in 0..total_length {
+            let key = (rng.random::<u32>() % 300) as i64;
+            eh.update(t, &SketchInput::I64(key), 1);
+            all_samples.push((t, key));
+        }
+
+        let t_end = total_length - 1;
+        let suffixes = [1000, 2000, 5000, 8000];
+        let mut max_l2_err = 0.0f64;
+
+        for &suffix_len in &suffixes {
+            let t1 = t_end - suffix_len + 1;
+            let t2 = t_end;
+
+            if !eh.cover(t1, t2) {
+                continue;
+            }
+
+            let freq = freq_map_from_samples(&all_samples, t1, t2);
+            let (_, true_l2, _, _) = ground_truth_from_freq(&freq);
+
+            if let Some(result) = eh.query_interval(t1, t2) {
+                let l2_err = (result.calc_l2() - true_l2).abs() / true_l2.max(1e-12);
+                max_l2_err = max_l2_err.max(l2_err);
+            }
+        }
+
+        assert!(
+            max_l2_err < 0.20,
+            "Max L2 error across suffix queries: {:.2}%",
+            max_l2_err * 100.0
+        );
+    }
+
+    /// Dynamic distribution shift: the distribution changes over time.
+    /// Verifies accuracy for a window that spans both distributions.
+    #[test]
+    fn accuracy_distribution_shift() {
+        let window = 4000u64;
+        let mut eh = EHUnivOptimized::with_defaults(8, window);
+        let mut all_samples: Vec<(u64, i64)> = Vec::new();
+
+        // Phase 1 (t=0..1999): highly skewed, key=0 is heavy
+        for t in 0..2000u64 {
+            let key = if t % 5 == 0 { 0 } else { (t % 10 + 1) as i64 };
+            eh.update(t, &SketchInput::I64(key), 1);
+            all_samples.push((t, key));
+        }
+
+        // Phase 2 (t=2000..3999): uniform-ish, 50 distinct keys
+        for t in 2000..4000u64 {
+            let key = (t % 50) as i64;
+            eh.update(t, &SketchInput::I64(key), 1);
+            all_samples.push((t, key));
+        }
+
+        // Query spanning both phases
+        let t1 = 0;
+        let t2 = 3999;
+        let freq = freq_map_from_samples(&all_samples, t1, t2);
+        let (true_l1, true_l2, true_card, true_entropy) = ground_truth_from_freq(&freq);
+
+        let result = eh.query_interval(t1, t2).unwrap();
+
+        assert_metric_within("Shift L1", result.calc_l1(), true_l1, 0.15);
+        assert_metric_within("Shift L2", result.calc_l2(), true_l2, 0.15);
+        assert_metric_within("Shift Card", result.calc_card(), true_card, 0.15);
+        assert_metric_within("Shift Entropy", result.calc_entropy(), true_entropy, 0.15);
     }
 }

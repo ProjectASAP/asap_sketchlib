@@ -30,4 +30,6 @@ pub mod nitro;
 pub use nitro::{NitroBatch, NitroEstimate, NitroTarget};
 
 pub mod eh_univ_optimized;
-pub use eh_univ_optimized::{EHMapBucket, EHSketchBucket, EHUnivOptimized, EHUnivQueryResult};
+pub use eh_univ_optimized::{
+    EHMapBucket, EHSketchBucket, EHUnivOptimized, EHUnivQueryResult, UnivSketchPool,
+};
