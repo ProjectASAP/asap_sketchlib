@@ -54,6 +54,26 @@ pub enum HeapItem {
     String(String),
 }
 
+pub fn heap_item_to_sketch_input(item: &HeapItem) -> SketchInput<'_> {
+    match item {
+        HeapItem::I8(v) => SketchInput::I8(*v),
+        HeapItem::I16(v) => SketchInput::I16(*v),
+        HeapItem::I32(v) => SketchInput::I32(*v),
+        HeapItem::I64(v) => SketchInput::I64(*v),
+        HeapItem::I128(v) => SketchInput::I128(*v),
+        HeapItem::ISIZE(v) => SketchInput::ISIZE(*v),
+        HeapItem::U8(v) => SketchInput::U8(*v),
+        HeapItem::U16(v) => SketchInput::U16(*v),
+        HeapItem::U32(v) => SketchInput::U32(*v),
+        HeapItem::U64(v) => SketchInput::U64(*v),
+        HeapItem::U128(v) => SketchInput::U128(*v),
+        HeapItem::USIZE(v) => SketchInput::USIZE(*v),
+        HeapItem::F32(v) => SketchInput::F32(*v),
+        HeapItem::F64(v) => SketchInput::F64(*v),
+        HeapItem::String(s) => SketchInput::Str(s),
+    }
+}
+
 pub fn input_to_owned<'a>(input: &SketchInput<'a>) -> HeapItem {
     match input {
         SketchInput::I8(i) => HeapItem::I8(*i),
@@ -261,6 +281,13 @@ impl L2HH {
             (L2HH::COUNT(self_count), L2HH::COUNT(other_count)) => {
                 self_count.merge(other_count);
             }
+        }
+    }
+
+    /// Resets all counters to zero without reallocating.
+    pub fn clear(&mut self) {
+        match self {
+            L2HH::COUNT(count_l2hh) => count_l2hh.clear(),
         }
     }
 }

@@ -26,5 +26,13 @@ pub use hydra::Hydra;
 pub mod univmon;
 pub use univmon::UnivMon;
 
+pub mod univmon_optimized;
+pub use univmon_optimized::{UnivMonPyramid, UnivSketchPool};
+
 pub mod nitro;
 pub use nitro::{NitroBatch, NitroEstimate, NitroTarget};
+
+pub mod eh_univ_optimized;
+pub use eh_univ_optimized::{
+    EHMapBucket, EHSketchBucket, EHUnivOptimized, EHUnivQueryResult,
+};

@@ -13,7 +13,7 @@ pub use hash::{
     hash_item128_seeded, hash_mode_for_matrix, hash64_seeded, hash128_seeded,
 };
 pub use heap::HHHeap;
-pub use input::{HHItem, HeapItem, L2HH, SketchInput, input_to_owned};
+pub use input::{HHItem, HeapItem, L2HH, SketchInput, heap_item_to_sketch_input, input_to_owned};
 pub use precompute_hash::PRECOMPUTED_HASH;
 pub use precompute_sample::PRECOMPUTED_SAMPLE;
 pub use precompute_sample2::PRECOMPUTED_SAMPLE_RATE_1PERCENT;

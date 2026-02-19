@@ -7,7 +7,6 @@ use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::ops::Neg;
 
@@ -529,12 +528,6 @@ pub struct CountL2HH {
     row: usize,
     col: usize,
     seed_idx: usize,
-    #[serde(skip, default = "default_scratch_buffer")]
-    scratch: RefCell<Vec<f64>>,
-}
-
-fn default_scratch_buffer() -> RefCell<Vec<f64>> {
-    RefCell::new(Vec::new())
 }
 
 // Default CountL2HH configuration.
@@ -557,10 +550,8 @@ impl CountL2HH {
             row: rows,
             col: cols,
             seed_idx,
-            scratch: RefCell::new(Vec::with_capacity(rows)),
         };
         sk.counts.fill(0);
-        // sk.l2.fill(rows, 0);
         sk
     }
 
@@ -597,6 +588,12 @@ impl CountL2HH {
             }
             self.l2[i] = other.l2[i];
         }
+    }
+
+    /// Resets all counters and L2 accumulators to zero without reallocating.
+    pub fn clear(&mut self) {
+        self.counts.fill(0);
+        self.l2.fill(0);
     }
 
     /// Inserts with hash optimization - computes hash once and reuses it.
@@ -700,8 +697,7 @@ impl CountL2HH {
     pub fn fast_get_est_with_hash(&self, hashed_val: u128) -> f64 {
         let mask_bits = self.counts.get_mask_bits() as usize;
         let mask = (1u128 << mask_bits) - 1;
-        let mut lst = self.scratch.borrow_mut();
-        lst.clear();
+        let mut lst = Vec::with_capacity(self.row);
         let mut shift_amount = 0;
         let mut sign_bit_pos = 127;
 
@@ -716,9 +712,7 @@ impl CountL2HH {
             shift_amount += mask_bits;
             sign_bit_pos -= 1;
         }
-        let result = compute_median_inline_f64(&mut lst[..]);
-        lst.clear();
-        result
+        compute_median_inline_f64(&mut lst[..])
     }
 
     /// Serializes the CountL2HH sketch into MessagePack bytes.
