@@ -1,5 +1,7 @@
 # sketchlib-rust
 
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 `sketchlib-rust` is a sketch library for native rust sketch, with potential optimization. This repo contains mainly these parts:
 
 - **Building blocks**: located in `/src/common`, contains common structure to build sketches and other common utilities
@@ -806,3 +808,9 @@ To build new sketch with the Common API, check [this](./docs/common_api.md)
 
 - Format sources with `cargo fmt` before committing changes.
 - Lint with `cargo clippy --all-targets --all-features` to catch obvious mistakes across sketches and orchestration layers.
+
+## License
+
+Copyright 2025 ProjectASAP
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
