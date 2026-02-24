@@ -40,3 +40,6 @@ pub use ddsketch::DDSketch;
 
 pub mod fold_cms;
 pub use fold_cms::{FoldCMS, FoldCell, FoldEntry};
+
+pub mod fold_cs;
+pub use fold_cs::FoldCS;
