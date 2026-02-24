@@ -279,6 +279,17 @@ impl KLL {
         levels_slice[self.num_levels] = self.items.len();
     }
 
+    /// Reset the sketch to its initial state, preserving `k`, `m`, and the
+    /// backing `items` allocation. After clearing, the sketch behaves as if
+    /// freshly constructed.
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.levels = Vector1D::filled(2, 0);
+        self.num_levels = 1;
+        self.co = Coin::new();
+        self.rebuild_capacity_cache();
+    }
+
     /// Prints the compactors for debugging.
     pub fn print_compactors(&self) {
         println!(

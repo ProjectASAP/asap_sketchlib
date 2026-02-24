@@ -384,6 +384,19 @@ impl FoldCS {
         out
     }
 
+    // -- Clear --------------------------------------------------------------
+
+    /// Reset all cells to [`FoldCell::Empty`] and clear the heap.
+    ///
+    /// The outer `Vec<FoldCell>` allocation is preserved; inner `Collided(Vec)`
+    /// data is dropped.
+    pub fn clear(&mut self) {
+        for cell in &mut self.cells {
+            *cell = FoldCell::Empty;
+        }
+        self.heap.clear();
+    }
+
     // -- Heap helpers -------------------------------------------------------
 
     /// Re-query all heap items from `other` against `self` and update our heap.

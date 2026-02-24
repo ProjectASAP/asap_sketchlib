@@ -36,3 +36,8 @@ pub mod eh_univ_optimized;
 pub use eh_univ_optimized::{
     EHMapBucket, EHSketchBucket, EHUnivOptimized, EHUnivQueryResult,
 };
+
+pub mod tumbling;
+pub use tumbling::{
+    FoldCMSConfig, FoldCSConfig, KLLConfig, SketchPool, TumblingSketch, TumblingWindow,
+};
