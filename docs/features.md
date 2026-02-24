@@ -54,7 +54,9 @@ This document provides a high-level overview of implemented and planned features
 
 ✅ **UnivMonPyramid** - Two-tier sketch dimensions with `UnivSketchPool` for optimized insert and memory management
 
-✅ **FoldCMS** - Folding Count-Min Sketch for memory-efficient sub-window aggregation ([fold_cms.md](fold_cms.md))
+✅ **FoldCMS** - Folding Count-Min Sketch for memory-efficient sub-window aggregation ([fold_sketch_design.md](fold_sketch_design.md))
+
+✅ **FoldCS** - Folding Count Sketch for memory-efficient sub-window aggregation with signed counters and median query ([fold_sketch_design.md](fold_sketch_design.md))
 
 ✅ **Orchestrator** - Node-level manager for sketches and frameworks (EH/HashLayer/Nitro)
 
