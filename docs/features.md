@@ -46,7 +46,7 @@ This document provides a high-level overview of implemented and planned features
 
 ✅ **NitroBatch** - Batch-mode sampling wrapper for CMS/Count FastPath
 
-✅ **Chapter** - Unified sketch enum for insert/merge/query across sketch types
+✅ **EHSketchList** - Unified sketch enum for insert/merge/query across sketch types
 
 ✅ **ExponentialHistogram** - Sliding window coordinator for mergeable sketches
 
@@ -126,7 +126,7 @@ This document provides a high-level overview of implemented and planned features
 
 - Public APIs still evolving
 - Naming and structure may change
-- Chapter/Hydra/UnivMon interfaces stabilizing
+- EHSketchList/Hydra/UnivMon interfaces stabilizing
 
 ---
 

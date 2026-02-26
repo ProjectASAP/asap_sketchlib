@@ -672,9 +672,9 @@ Estimate the adjusted heavy-hitter count.
 println!("heavy estimate ≈ {}", sketch.estimate(&key));
 ```
 
-### `Chapter`: one enum to drive them all
+### `EHSketchList`: one enum to drive them all
 
-`Chapter` wraps each sketch in a single enum so callers can build pipelines without matching on individual types. The enum normalizes `insert`, `merge`, and `query` across the different sketches and returns helpful errors when an operation is not supported.
+`EHSketchList` wraps each sketch in a single enum so callers can build pipelines without matching on individual types. The enum normalizes `insert`, `merge`, and `query` across the different sketches and returns helpful errors when an operation is not supported.
 
 **Variants:**
 
@@ -689,13 +689,13 @@ println!("heavy estimate ≈ {}", sketch.estimate(&key));
 - `UNIFORM(UniformSampling)` - Uniform reservoir sampling
 - `UNIVMON(UnivMon)` - UnivMon universal monitoring
 
-Construct two `Chapter` wrappers over Count-Min sketches.
+Construct two `EHSketchList` wrappers over Count-Min sketches.
 
 ```rust
-use sketchlib_rust::{Chapter, CountMin, FastPath, Vector2D, SketchInput};
+use sketchlib_rust::{EHSketchList, CountMin, FastPath, Vector2D, SketchInput};
 
-let mut counts = Chapter::CM(CountMin::<Vector2D<i32>, FastPath>::default());
-let mut canary = Chapter::CM(CountMin::<Vector2D<i32>, FastPath>::default());
+let mut counts = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::default());
+let mut canary = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::default());
 let key = SketchInput::String("endpoint=/search".into());
 ```
 
@@ -706,7 +706,7 @@ counts.insert(&key);
 canary.insert(&key);
 ```
 
-Merge compatible `Chapter` variants.
+Merge compatible `EHSketchList` variants.
 
 ```rust
 counts.merge(&canary)?;
@@ -716,19 +716,19 @@ Query estimates without matching on the underlying sketch.
 
 ```rust
 let estimate = counts.query(&key)?;
-println!("merged chapter estimate = {estimate}");
+println!("merged sketch estimate = {estimate}");
 ```
 
-When the underlying sketch does not implement an operation, `Chapter::merge` returns an error explaining the mismatch.
+When the underlying sketch does not implement an operation, `EHSketchList::merge` returns an error explaining the mismatch.
 
 ### Exponential Histogram: Time-bounded aggregates
 
 Initialize the windowed coordinator with a sketch template.
 
 ```rust
-use sketchlib_rust::{Chapter, ExponentialHistogram, CountMin, FastPath, Vector2D, SketchInput};
+use sketchlib_rust::{EHSketchList, ExponentialHistogram, CountMin, FastPath, Vector2D, SketchInput};
 
-let template = Chapter::CM(CountMin::<Vector2D<i32>, FastPath>::default());
+let template = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::default());
 let mut eh = ExponentialHistogram::new(3, 120, template);
 ```
 
@@ -742,8 +742,8 @@ eh.update(70, &SketchInput::String("flow".into()));
 Query the merged sketch for a given interval.
 
 ```rust
-if let Some(volume) = eh.query_interval_merge(0, 120) {
-    let estimate = volume.query(&SketchInput::String("flow".into())).unwrap();
+if let Some(bucket) = eh.query_interval_merge(0, 120) {
+    let estimate = bucket.query(&SketchInput::String("flow".into())).unwrap();
     println!("approximate count inside window = {}", estimate);
 }
 ```
@@ -772,7 +772,7 @@ At this moment, ```cargo test``` is a good starting point.
   - **Legacy**: `coco.rs`, `elastic.rs`, `uniform.rs`, `microscope.rs`, `locher.rs`
 
 - **`src/sketch_framework/`** - Orchestration and serving layers
-  - `chapter.rs` - Unified interface (`Chapter` enum) wrapping all sketch types
+  - `eh_sketch_list.rs` - Unified interface (`EHSketchList` enum) wrapping all sketch types
   - `hashlayer.rs` - Hash-once-use-many optimization for multiple sketches
   - `hydra.rs` - Multi-dimensional hierarchical heavy hitters (includes `MultiHeadHydra`)
   - `univmon.rs` - Universal monitoring (L1, L2, entropy, cardinality)
