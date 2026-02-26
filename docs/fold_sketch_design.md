@@ -1,6 +1,6 @@
 # FoldSketch: Design and Algorithm
 
-A memory-efficient technique for reducing sub-window sketch storage in time-windowed stream monitoring.
+A memory-efficient technique for reducing sub-window sketch storage in long-range time-windowed query.
 
 **Implementation:**
 - FoldCMS: [`src/sketches/fold_cms.rs`](../src/sketches/fold_cms.rs)
@@ -28,7 +28,7 @@ A memory-efficient technique for reducing sub-window sketch storage in time-wind
 
 ## 1. Motivation
 
-In time-windowed stream monitoring, a query window of duration T is divided into n sub-windows of duration T/n. Each sub-window maintains a Count-Min Sketch (CMS) summarizing the items that arrive during that interval. At query time, sub-window sketches are merged element-wise to answer frequency or heavy-hitter queries over the full window.
+In time-windowed queries (e.g., tumbling windows), a query window of duration T is divided into n sub-windows of duration T/n. Each sub-window maintains a Count-Min Sketch (CMS) summarizing the items that arrive during that interval. At query time, sub-window sketches are merged element-wise to answer frequency or heavy-hitter queries over the full window.
 
 The fundamental problem: **every sub-window must allocate a full R x W CMS**, where W is the width required for the final merged query's accuracy guarantee. This width is dictated by the full window's stream volume and error tolerance, not by the sub-window's cardinality.
 
@@ -717,8 +717,9 @@ The heap's counts are always derived from the underlying sketch query (which is 
 
 ### 10.1 Exponential Histogram (EH) Integration
 
-FoldCMS and FoldCS are designed to work with the **Exponential Histogram** framework for sliding window monitoring. In this framework:
+FoldCMS and FoldCS are designed to work with window frameworks such as tumbling window, and Exponential Histogram framework. 
 
+In Exponential Histogram framework:
 - Each arriving sub-window creates a new FoldCMS/FoldCS at a high fold level k
 - The EH maintains a sequence of "buckets" of geometrically increasing size
 - When two buckets of equal size are merged, their sketches are **unfold-merged**, reducing the fold level by 1
