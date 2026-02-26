@@ -223,6 +223,33 @@ impl FoldCS {
         self.reconcile_heap_from(other);
     }
 
+    // -- Scatter helper -----------------------------------------------------
+
+    /// Scatter all entries from `self` into a pre-allocated `target` sketch at
+    /// any lower (or equal) fold level. Zero cloning — borrows only.
+    ///
+    /// The scatter formula `new_fc = full_col & (target.fold_cols - 1)` works
+    /// for any source-to-target level jump in a single pass because every
+    /// `FoldCell` entry carries its permanent `full_col` address.
+    fn scatter_into(&self, target: &mut FoldCS) {
+        debug_assert_eq!(self.rows, target.rows);
+        debug_assert_eq!(self.full_cols, target.full_cols);
+        debug_assert!(target.fold_level <= self.fold_level);
+
+        let target_fold_cols = target.fold_cols;
+        for r in 0..self.rows {
+            let src_row_off = r * self.fold_cols;
+            let dst_row_off = r * target_fold_cols;
+            for c in 0..self.fold_cols {
+                let cell = &self.cells[src_row_off + c];
+                for (full_col, count) in cell.iter() {
+                    let new_fc = (full_col as usize) & (target_fold_cols - 1);
+                    target.cells[dst_row_off + new_fc].insert(full_col, count);
+                }
+            }
+        }
+    }
+
     // -- Unfold merge -------------------------------------------------------
 
     /// Merge two **same-level** FoldCS sketches into a new sketch one fold
@@ -246,18 +273,9 @@ impl FoldCS {
             heap: HHHeap::new(heap_k),
         };
 
-        // Scatter entries from both sources into the wider grid.
-        for source in [a, b] {
-            for r in 0..source.rows {
-                for c in 0..source.fold_cols {
-                    let cell = &source.cells[r * source.fold_cols + c];
-                    for (full_col, count) in cell.iter() {
-                        let new_fc = (full_col as usize) & (new_fold_cols - 1);
-                        result.cells[r * new_fold_cols + new_fc].insert(full_col, count);
-                    }
-                }
-            }
-        }
+        // Single-pass scatter from both sources into the wider grid.
+        a.scatter_into(&mut result);
+        b.scatter_into(&mut result);
 
         // Reconcile top-k heaps from both sources.
         for source in [a, b] {
@@ -274,95 +292,93 @@ impl FoldCS {
     /// Fully unfold a FoldCS to fold_level 0 (equivalent to a standard CS).
     /// If already at level 0 this returns a clone.
     pub fn unfold_full(&self) -> FoldCS {
-        if self.fold_level == 0 {
-            return self.clone();
-        }
-
-        let mut current = self.clone();
-        while current.fold_level > 0 {
-            let empty = FoldCS::new(
-                current.rows,
-                current.full_cols,
-                current.fold_level,
-                current.heap.capacity(),
-            );
-            current = FoldCS::unfold_merge(&current, &empty);
-        }
-        current
+        self.unfold_to(0)
     }
 
     // -- Hierarchical merge -------------------------------------------------
 
     /// Unfold `self` down to the target fold level (must be <= current level).
     /// If already at the target level, returns a clone.
+    ///
+    /// Single-pass scatter: 1 allocation, 1 pass — regardless of how many
+    /// levels are skipped.
     pub fn unfold_to(&self, target_level: u32) -> FoldCS {
         assert!(
             target_level <= self.fold_level,
             "target_level {target_level} > current fold_level {}",
             self.fold_level
         );
-        let mut current = self.clone();
-        while current.fold_level > target_level {
-            let empty = FoldCS::new(
-                current.rows,
-                current.full_cols,
-                current.fold_level,
-                current.heap.capacity(),
-            );
-            current = FoldCS::unfold_merge(&current, &empty);
+        if target_level == self.fold_level {
+            return self.clone();
         }
-        current
+
+        let new_fold_cols = self.full_cols >> target_level;
+        let mut result = FoldCS {
+            rows: self.rows,
+            fold_cols: new_fold_cols,
+            full_cols: self.full_cols,
+            fold_level: target_level,
+            cells: vec![FoldCell::Empty; self.rows * new_fold_cols],
+            heap: HHHeap::new(self.heap.capacity()),
+        };
+
+        self.scatter_into(&mut result);
+
+        // Reconcile heap.
+        for item in self.heap.heap() {
+            let key_ref = heap_item_to_sketch_input(&item.key);
+            let est = result.query(&key_ref);
+            result.heap.update(&key_ref, est);
+        }
+
+        result
     }
 
-    /// Merge a sequence of FoldCS sketches via pairwise unfolding.
+    // -- N-way hierarchical merge -------------------------------------------
+
+    /// Merge a sequence of FoldCS sketches into a single level-0 sketch.
     ///
-    /// Adjacent pairs are unfold-merged, then the results are paired again,
-    /// until one sketch remains. Handles non-power-of-two lengths and
-    /// mixed fold levels (the higher-level sketch is unfolded to match).
+    /// Allocates one level-0 result and scatters all N inputs directly into
+    /// it. **0 clones, 1 allocation, N scatter passes.** Handles mixed fold
+    /// levels — each source is scattered from whatever level it is at.
     pub fn hierarchical_merge(sketches: &[FoldCS]) -> FoldCS {
         assert!(
             !sketches.is_empty(),
             "need at least one sketch to merge"
         );
         if sketches.len() == 1 {
-            return sketches[0].clone();
+            return sketches[0].unfold_to(0);
         }
 
-        let mut current: Vec<FoldCS> = sketches.to_vec();
-        while current.len() > 1 {
-            let mut next = Vec::with_capacity((current.len() + 1) / 2);
-            let mut i = 0;
-            while i + 1 < current.len() {
-                let left = &current[i];
-                let right = &current[i + 1];
-                if left.fold_level == 0 && right.fold_level == 0 {
-                    let mut merged = left.clone();
-                    merged.merge_same_level(right);
-                    next.push(merged);
-                } else if left.fold_level == right.fold_level {
-                    next.push(FoldCS::unfold_merge(left, right));
-                } else {
-                    // Different levels: unfold the higher one to match the lower.
-                    let target = left.fold_level.min(right.fold_level);
-                    let a = left.unfold_to(target);
-                    let b = right.unfold_to(target);
-                    if target == 0 {
-                        let mut merged = a;
-                        merged.merge_same_level(&b);
-                        next.push(merged);
-                    } else {
-                        next.push(FoldCS::unfold_merge(&a, &b));
-                    }
-                }
-                i += 2;
-            }
-            // Odd one out — carry forward.
-            if i < current.len() {
-                next.push(current[i].clone());
-            }
-            current = next;
+        let rows = sketches[0].rows;
+        let full_cols = sketches[0].full_cols;
+        let heap_k = sketches.iter().map(|s| s.heap.capacity()).max().unwrap();
+
+        let mut result = FoldCS {
+            rows,
+            fold_cols: full_cols,
+            full_cols,
+            fold_level: 0,
+            cells: vec![FoldCell::Empty; rows * full_cols],
+            heap: HHHeap::new(heap_k),
+        };
+
+        for sk in sketches {
+            assert_eq!(sk.rows, rows, "row count mismatch");
+            assert_eq!(sk.full_cols, full_cols, "full_cols mismatch");
+            sk.scatter_into(&mut result);
         }
-        current.into_iter().next().unwrap()
+
+        // Reconcile heaps from all sources.
+        for sk in sketches {
+            for item in sk.heap.heap() {
+                let key_ref = heap_item_to_sketch_input(&item.key);
+                let est = result.query(&key_ref);
+                result.heap.update(&key_ref, est);
+            }
+        }
+
+        result
     }
 
     // -- Conversion ---------------------------------------------------------
@@ -382,6 +398,19 @@ impl FoldCS {
             }
         }
         out
+    }
+
+    // -- Clear --------------------------------------------------------------
+
+    /// Reset all cells to [`FoldCell::Empty`] and clear the heap.
+    ///
+    /// The outer `Vec<FoldCell>` allocation is preserved; inner `Collided(Vec)`
+    /// data is dropped.
+    pub fn clear(&mut self) {
+        for cell in &mut self.cells {
+            *cell = FoldCell::Empty;
+        }
+        self.heap.clear();
     }
 
     // -- Heap helpers -------------------------------------------------------
@@ -1048,5 +1077,116 @@ mod tests {
             "only {pct_within:.1}% within bound, expected > {:.1}%",
             expected_fraction * 100.0
         );
+    }
+
+    // -- Scatter-based optimization tests -----------------------------------
+
+    #[test]
+    fn scatter_merge_matches_standard_cs_n1_to_n8() {
+        // Verify N-way scatter merge produces identical results to a standard
+        // CS that saw all the same inserts, for N = 1..8.
+        let rows = 3;
+        let cols = 1024;
+        let fold_level = 3;
+
+        for n in 1..=8u64 {
+            let mut sketches = Vec::new();
+            let mut standard =
+                Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+
+            for epoch in 0..n {
+                let mut sk = FoldCS::new(rows, cols, fold_level, 10);
+                for i in (epoch * 10)..((epoch + 1) * 10) {
+                    let key = SketchInput::U64(i);
+                    sk.insert(&key, 1);
+                    standard.insert(&key);
+                }
+                sketches.push(sk);
+            }
+
+            let merged = FoldCS::hierarchical_merge(&sketches);
+            assert_eq!(merged.fold_level(), 0, "N={n}: should reach level 0");
+
+            for i in 0..(n * 10) {
+                let key = SketchInput::U64(i);
+                assert_eq!(
+                    merged.query(&key),
+                    standard.estimate(&key) as i64,
+                    "N={n}: mismatch for key {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unfold_to_single_pass_preserves_flat_counters() {
+        // Verify that unfold_to (single-pass scatter) preserves exact flat
+        // counters for every possible target level.
+        let rows = 3;
+        let cols = 256;
+        let fold_level = 4;
+
+        let mut sk = FoldCS::new(rows, cols, fold_level, 10);
+        for i in 0..40 {
+            sk.insert(&SketchInput::U64(i), (i + 1) as i64);
+        }
+
+        let expected = sk.to_flat_counters();
+
+        for target in (0..fold_level).rev() {
+            let unfolded = sk.unfold_to(target);
+            assert_eq!(unfolded.fold_level(), target);
+            assert_eq!(unfolded.fold_cols(), cols >> target);
+            assert_eq!(
+                unfolded.to_flat_counters(),
+                expected,
+                "flat counters mismatch at target_level={target}"
+            );
+        }
+    }
+
+    #[test]
+    fn unfold_to_same_level_returns_clone() {
+        let mut sk = FoldCS::new(3, 256, 3, 10);
+        sk.insert(&SketchInput::Str("x"), 42);
+
+        let result = sk.unfold_to(3);
+        assert_eq!(result.fold_level(), 3);
+        assert_eq!(result.query(&SketchInput::Str("x")), 42);
+    }
+
+    #[test]
+    fn hierarchical_merge_mixed_fold_levels() {
+        // Sketches at different fold levels should merge correctly.
+        let rows = 3;
+        let cols = 1024;
+
+        let mut sk_high = FoldCS::new(rows, cols, 4, 10);
+        let mut sk_low = FoldCS::new(rows, cols, 2, 10);
+
+        for i in 0..20u64 {
+            sk_high.insert(&SketchInput::U64(i), 1);
+        }
+        for i in 10..30u64 {
+            sk_low.insert(&SketchInput::U64(i), 1);
+        }
+
+        let merged = FoldCS::hierarchical_merge(&[sk_high.clone(), sk_low.clone()]);
+        assert_eq!(merged.fold_level(), 0);
+
+        // Build reference by scattering each to level 0 and merging.
+        let a = sk_high.unfold_to(0);
+        let b = sk_low.unfold_to(0);
+        let mut reference = a;
+        reference.merge_same_level(&b);
+
+        for i in 0..30u64 {
+            let key = SketchInput::U64(i);
+            assert_eq!(
+                merged.query(&key),
+                reference.query(&key),
+                "mixed-level merge mismatch for key {i}"
+            );
+        }
     }
 }
