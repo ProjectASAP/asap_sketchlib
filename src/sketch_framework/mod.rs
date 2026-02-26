@@ -1,10 +1,10 @@
 pub mod eh;
-pub use eh::EHVolume;
+pub use eh::EHBucket;
 pub use eh::ExponentialHistogram;
 
-pub mod chapter;
-pub use chapter::Chapter;
-pub use chapter::SketchNorm;
+pub mod eh_sketch_list;
+pub use eh_sketch_list::EHSketchList;
+pub use eh_sketch_list::SketchNorm;
 
 pub mod hashlayer;
 pub use hashlayer::HashLayer;
@@ -34,5 +34,5 @@ pub use nitro::{NitroBatch, NitroEstimate, NitroTarget};
 
 pub mod eh_univ_optimized;
 pub use eh_univ_optimized::{
-    EHMapBucket, EHSketchBucket, EHUnivOptimized, EHUnivQueryResult,
+    EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUnivQueryResult,
 };

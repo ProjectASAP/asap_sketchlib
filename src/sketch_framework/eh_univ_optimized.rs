@@ -36,7 +36,7 @@ pub struct EHMapBucket {
 
 /// Sketch-tier bucket: owns a UnivMon sketch outright.
 #[derive(Clone, Debug)]
-pub struct EHSketchBucket {
+pub struct EHUnivMonBucket {
     pub sketch: UnivMon,
     pub l22: f64,
     pub bucket_size: usize,
@@ -46,7 +46,7 @@ pub struct EHSketchBucket {
 
 /// The hybrid EH structure.
 pub struct EHUnivOptimized {
-    pub sketch_buckets: Vec<EHSketchBucket>,
+    pub um_buckets: Vec<EHUnivMonBucket>,
     pub map_buckets: Vec<EHMapBucket>,
     pub k: usize,
     pub window: u64,
@@ -151,7 +151,7 @@ impl EHUnivOptimized {
     ) -> Self {
         let k_eff = k.max(1);
         EHUnivOptimized {
-            sketch_buckets: Vec::new(),
+            um_buckets: Vec::new(),
             map_buckets: Vec::new(),
             k: k_eff,
             window,
@@ -179,13 +179,13 @@ impl EHUnivOptimized {
         // 1. Expire old sketch buckets, recycling sketches to pool
         let cutoff = time.saturating_sub(self.window);
         let expired_count = self
-            .sketch_buckets
+            .um_buckets
             .iter()
             .take_while(|b| b.max_time < cutoff)
             .count();
         if expired_count > 0 {
-            let expired: Vec<EHSketchBucket> =
-                self.sketch_buckets.drain(0..expired_count).collect();
+            let expired: Vec<EHUnivMonBucket> =
+                self.um_buckets.drain(0..expired_count).collect();
             for bucket in expired {
                 self.pool.put(bucket.sketch);
             }
@@ -262,7 +262,7 @@ impl EHUnivOptimized {
 
         let l22 = sketch.l2_sketch_layers[0].get_l2().powi(2);
 
-        self.sketch_buckets.push(EHSketchBucket {
+        self.um_buckets.push(EHUnivMonBucket {
             sketch,
             l22,
             bucket_size: oldest.bucket_size,
@@ -274,17 +274,17 @@ impl EHUnivOptimized {
     }
 
     fn merge_sketch_buckets(&mut self, mut sum_l22: f64) {
-        if self.sketch_buckets.len() < 2 {
+        if self.um_buckets.len() < 2 {
             return;
         }
-        let mut i = self.sketch_buckets.len() - 2;
+        let mut i = self.um_buckets.len() - 2;
         loop {
-            let l22_i = self.sketch_buckets[i]
+            let l22_i = self.um_buckets[i]
                 .sketch
                 .l2_sketch_layers[0]
                 .get_l2()
                 .powi(2);
-            let l22_next = self.sketch_buckets[i + 1]
+            let l22_next = self.um_buckets[i + 1]
                 .sketch
                 .l2_sketch_layers[0]
                 .get_l2()
@@ -292,8 +292,8 @@ impl EHUnivOptimized {
             let pair_l22 = l22_i + l22_next;
             let threshold = sum_l22 / (self.k as f64);
             if pair_l22 <= threshold + MASS_EPSILON {
-                let other = self.sketch_buckets.remove(i + 1);
-                let bucket = &mut self.sketch_buckets[i];
+                let other = self.um_buckets.remove(i + 1);
+                let bucket = &mut self.um_buckets[i];
                 bucket.sketch.merge(&other.sketch);
                 bucket.sketch.bucket_size += other.sketch.bucket_size;
                 bucket.bucket_size += other.bucket_size;
@@ -313,7 +313,7 @@ impl EHUnivOptimized {
     }
 
     pub fn query_interval(&self, t1: u64, t2: u64) -> Option<EHUnivQueryResult> {
-        let s_count = self.sketch_buckets.len();
+        let s_count = self.um_buckets.len();
         let m_count = self.map_buckets.len();
         let total = s_count + m_count;
         if total == 0 {
@@ -325,13 +325,13 @@ impl EHUnivOptimized {
 
         // Search sketch buckets
         for i in 0..s_count {
-            if t1 >= self.sketch_buckets[i].min_time && t1 <= self.sketch_buckets[i].max_time {
+            if t1 >= self.um_buckets[i].min_time && t1 <= self.um_buckets[i].max_time {
                 from_bucket = i;
                 break;
             }
         }
         for i in 0..s_count {
-            if t2 >= self.sketch_buckets[i].min_time && t2 <= self.sketch_buckets[i].max_time {
+            if t2 >= self.um_buckets[i].min_time && t2 <= self.um_buckets[i].max_time {
                 to_bucket = i;
                 break;
             }
@@ -355,7 +355,7 @@ impl EHUnivOptimized {
         if m_count > 0 && t2 > self.map_buckets[m_count - 1].max_time {
             to_bucket = m_count - 1 + s_count;
         }
-        if s_count > 0 && t1 < self.sketch_buckets[0].min_time {
+        if s_count > 0 && t1 < self.um_buckets[0].min_time {
             from_bucket = 0;
         } else if s_count == 0 && m_count > 0 && t1 < self.map_buckets[0].min_time {
             from_bucket = 0;
@@ -363,7 +363,7 @@ impl EHUnivOptimized {
 
         // Snap from_bucket forward if t1 is closer to max_time of the bucket
         if from_bucket < s_count {
-            let b = &self.sketch_buckets[from_bucket];
+            let b = &self.um_buckets[from_bucket];
             if t1.abs_diff(b.min_time) > t1.abs_diff(b.max_time) && from_bucket + 1 < total {
                 from_bucket += 1;
             }
@@ -389,10 +389,10 @@ impl EHUnivOptimized {
         // Three cases
         if to_bucket < s_count {
             // Case 1: Both in sketch tier
-            let mut merged = self.sketch_buckets[from_bucket].sketch.clone();
+            let mut merged = self.um_buckets[from_bucket].sketch.clone();
             for i in (from_bucket + 1)..=to_bucket {
-                merged.merge(&self.sketch_buckets[i].sketch);
-                merged.bucket_size += self.sketch_buckets[i].sketch.bucket_size;
+                merged.merge(&self.um_buckets[i].sketch);
+                merged.bucket_size += self.um_buckets[i].sketch.bucket_size;
             }
             Some(EHUnivQueryResult::Sketch(merged))
         } else if from_bucket >= s_count {
@@ -419,8 +419,8 @@ impl EHUnivOptimized {
                 self.layer_size,
             );
             for i in from_bucket..s_count {
-                merged.merge(&self.sketch_buckets[i].sketch);
-                merged.bucket_size += self.sketch_buckets[i].sketch.bucket_size;
+                merged.merge(&self.um_buckets[i].sketch);
+                merged.bucket_size += self.um_buckets[i].sketch.bucket_size;
             }
 
             // Merge qualifying map buckets into a temporary map
@@ -450,7 +450,7 @@ impl EHUnivOptimized {
     }
 
     pub fn get_min_time(&self) -> Option<u64> {
-        let sketch_min = self.sketch_buckets.first().map(|b| b.min_time);
+        let sketch_min = self.um_buckets.first().map(|b| b.min_time);
         let map_min = self.map_buckets.first().map(|b| b.min_time);
         match (sketch_min, map_min) {
             (Some(s), Some(m)) => Some(s.min(m)),
@@ -461,7 +461,7 @@ impl EHUnivOptimized {
     }
 
     pub fn get_max_time(&self) -> Option<u64> {
-        let sketch_max = self.sketch_buckets.last().map(|b| b.max_time);
+        let sketch_max = self.um_buckets.last().map(|b| b.max_time);
         let map_max = self.map_buckets.last().map(|b| b.max_time);
         match (sketch_max, map_max) {
             (Some(s), Some(m)) => Some(s.max(m)),
@@ -475,8 +475,8 @@ impl EHUnivOptimized {
         self.window = window;
     }
 
-    pub fn volume_count(&self) -> usize {
-        self.sketch_buckets.len() + self.map_buckets.len()
+    pub fn bucket_count(&self) -> usize {
+        self.um_buckets.len() + self.map_buckets.len()
     }
 
     /// Returns a reference to the sketch pool.
@@ -495,8 +495,8 @@ impl EHUnivOptimized {
             self.pool.available(),
             self.pool.total_allocated()
         );
-        println!("Sketch buckets ({}):", self.sketch_buckets.len());
-        for (i, b) in self.sketch_buckets.iter().enumerate() {
+        println!("Sketch buckets ({}):", self.um_buckets.len());
+        for (i, b) in self.um_buckets.iter().enumerate() {
             println!(
                 "  [S{}] min_time={}, max_time={}, bucket_size={}, l22={:.2}",
                 i, b.min_time, b.max_time, b.bucket_size, b.l22
@@ -517,10 +517,10 @@ impl EHUnivOptimized {
     }
 
     pub fn get_memory_info(&self) -> (usize, usize, Vec<usize>, Vec<usize>) {
-        let sketch_sizes: Vec<usize> = self.sketch_buckets.iter().map(|b| b.bucket_size).collect();
+        let sketch_sizes: Vec<usize> = self.um_buckets.iter().map(|b| b.bucket_size).collect();
         let map_sizes: Vec<usize> = self.map_buckets.iter().map(|b| b.bucket_size).collect();
         (
-            self.sketch_buckets.len(),
+            self.um_buckets.len(),
             self.map_buckets.len(),
             sketch_sizes,
             map_sizes,
@@ -540,7 +540,7 @@ mod tests {
         eh.update(101, &SketchInput::I64(2), 3);
         eh.update(102, &SketchInput::I64(1), 2);
 
-        assert!(eh.sketch_buckets.is_empty());
+        assert!(eh.um_buckets.is_empty());
         assert!(!eh.map_buckets.is_empty());
 
         let result = eh.query_interval(100, 102).unwrap();
@@ -571,11 +571,11 @@ mod tests {
             eh.update(i, &SketchInput::I64(i as i64), 1);
         }
 
-        // With k=1 and L2 merging, volume count should stay bounded
+        // With k=1 and L2 merging, bucket count should stay bounded
         assert!(
-            eh.volume_count() < 50,
-            "volume_count {} should be bounded below 50",
-            eh.volume_count()
+            eh.bucket_count() < 50,
+            "bucket_count {} should be bounded below 50",
+            eh.bucket_count()
         );
     }
 
@@ -586,7 +586,7 @@ mod tests {
         // promotion at 2 * map.len() >= 20, i.e. map.len() >= 10
         let mut eh = EHUnivOptimized::new(8, 100000, 16, 2, 5, 2);
 
-        assert!(eh.sketch_buckets.is_empty());
+        assert!(eh.um_buckets.is_empty());
 
         // Insert many distinct keys to grow the oldest map bucket
         for i in 0..200u64 {
@@ -594,7 +594,7 @@ mod tests {
         }
 
         assert!(
-            !eh.sketch_buckets.is_empty(),
+            !eh.um_buckets.is_empty(),
             "Should have promoted at least one map bucket to sketch"
         );
     }
@@ -631,7 +631,7 @@ mod tests {
             eh.update(i, &SketchInput::I64(i as i64), 1);
         }
 
-        assert!(!eh.sketch_buckets.is_empty(), "Need sketch buckets");
+        assert!(!eh.um_buckets.is_empty(), "Need sketch buckets");
         assert!(!eh.map_buckets.is_empty(), "Need map buckets");
 
         // Query spanning both tiers
@@ -750,7 +750,7 @@ mod tests {
             eh.update(i, &SketchInput::I64(i as i64), 1);
         }
 
-        assert!(!eh.sketch_buckets.is_empty());
+        assert!(!eh.um_buckets.is_empty());
         // Pool should have been used (total_allocated may have grown if many concurrent buckets)
         assert!(eh.pool().total_allocated() >= 2);
     }
@@ -825,7 +825,7 @@ mod tests {
 
         // Should still be in map tier (few distinct keys, large default max_map_size)
         assert!(
-            eh.sketch_buckets.is_empty(),
+            eh.um_buckets.is_empty(),
             "Expected all data in map tier"
         );
 
@@ -895,17 +895,17 @@ mod tests {
         let k = 4;
         let mut eh = EHUnivOptimized::with_defaults(k, window);
 
-        let mut max_volume = 0;
+        let mut max_bucket = 0;
         for t in 0..20000u64 {
             eh.update(t, &SketchInput::I64((t % 100) as i64), 1);
-            max_volume = max_volume.max(eh.volume_count());
+            max_bucket = max_bucket.max(eh.bucket_count());
         }
 
-        // With k=4, the volume count should be O(k * log(N/k)) at most
+        // With k=4, the bucket count should be O(k * log(N/k)) at most
         // For 20000 items, this should be well under 200
         assert!(
-            max_volume < 200,
-            "max volume count {max_volume} is too large for k={k}"
+            max_bucket < 200,
+            "max bucket count {max_bucket} is too large for k={k}"
         );
     }
 
@@ -947,7 +947,7 @@ mod tests {
         }
 
         // After merging, each sketch bucket should have a valid L2 mass
-        for (i, b) in eh.sketch_buckets.iter().enumerate() {
+        for (i, b) in eh.um_buckets.iter().enumerate() {
             let actual_l22 = b.sketch.l2_sketch_layers[0].get_l2().powi(2);
             assert!(
                 actual_l22 > 0.0,

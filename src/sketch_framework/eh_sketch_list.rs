@@ -11,7 +11,7 @@ pub enum SketchNorm {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Chapter {
+pub enum EHSketchList {
     CM(CountMin<Vector2D<i32>, FastPath>),
     COCO(Coco),
     COUNTL2HH(CountL2HH),
@@ -49,25 +49,25 @@ pub fn iv_to_f64(i: &SketchInput) -> f64 {
     }
 }
 
-impl Chapter {
+impl EHSketchList {
     pub fn supports_norm(&self, norm: SketchNorm) -> bool {
         match self {
-            Chapter::COUNTL2HH(_) | Chapter::UNIVMON(_) => norm == SketchNorm::L2,
-            Chapter::CM(_)
-            | Chapter::CS(_)
-            | Chapter::DDS(_)
-            | Chapter::COCO(_)
-            | Chapter::ELASTIC(_)
-            | Chapter::HLL(_)
-            | Chapter::KLL(_)
-            | Chapter::UNIFORM(_) => norm == SketchNorm::L1,
+            EHSketchList::COUNTL2HH(_) | EHSketchList::UNIVMON(_) => norm == SketchNorm::L2,
+            EHSketchList::CM(_)
+            | EHSketchList::CS(_)
+            | EHSketchList::DDS(_)
+            | EHSketchList::COCO(_)
+            | EHSketchList::ELASTIC(_)
+            | EHSketchList::HLL(_)
+            | EHSketchList::KLL(_)
+            | EHSketchList::UNIFORM(_) => norm == SketchNorm::L1,
         }
     }
 
     pub(crate) fn eh_l2_mass(&self) -> Option<f64> {
         match self {
-            Chapter::COUNTL2HH(sketch) => Some(sketch.get_l2_sqr()),
-            Chapter::UNIVMON(sketch) => {
+            EHSketchList::COUNTL2HH(sketch) => Some(sketch.get_l2_sqr()),
+            EHSketchList::UNIVMON(sketch) => {
                 let l2 = sketch.calc_l2();
                 Some(l2 * l2)
             }
@@ -78,18 +78,18 @@ impl Chapter {
     /// Insert a value into the sketch
     pub fn insert(&mut self, val: &SketchInput) {
         match self {
-            Chapter::CM(sketch) => sketch.insert(val),
-            Chapter::COCO(sketch) => match val {
+            EHSketchList::CM(sketch) => sketch.insert(val),
+            EHSketchList::COCO(sketch) => match val {
                 SketchInput::Str(s) => sketch.insert(s, 1),
                 SketchInput::String(s) => sketch.insert(s.as_str(), 1),
                 _ => {}
             },
-            Chapter::COUNTL2HH(sketch) => sketch.fast_insert_with_count(val, 1),
-            Chapter::CS(sketch) => sketch.insert(val),
-            Chapter::DDS(sketch) => {
+            EHSketchList::COUNTL2HH(sketch) => sketch.fast_insert_with_count(val, 1),
+            EHSketchList::CS(sketch) => sketch.insert(val),
+            EHSketchList::DDS(sketch) => {
                 let _ = sketch.add_input(val);
             }
-            Chapter::ELASTIC(sketch) => match val {
+            EHSketchList::ELASTIC(sketch) => match val {
                 SketchInput::String(s) => sketch.insert(s.to_string()),
                 SketchInput::I32(i) => sketch.insert(i.to_string()),
                 SketchInput::I64(i) => sketch.insert(i.to_string()),
@@ -111,15 +111,15 @@ impl Chapter {
                 SketchInput::U128(_) => todo!(),
                 SketchInput::USIZE(_) => todo!(),
             },
-            Chapter::HLL(sketch) => sketch.insert(val),
-            Chapter::KLL(sketch) => {
+            EHSketchList::HLL(sketch) => sketch.insert(val),
+            EHSketchList::KLL(sketch) => {
                 let _ = sketch.update(val);
             }
-            Chapter::UNIFORM(sketch) => {
+            EHSketchList::UNIFORM(sketch) => {
                 let _ = sketch.update_input(val);
             }
-            Chapter::UNIVMON(sketch) => sketch.insert(val, 1),
-            // Chapter::LOCHER(sketch) => {
+            EHSketchList::UNIVMON(sketch) => sketch.insert(val, 1),
+            // EHSketchList::LOCHER(sketch) => {
             //     // Locher requires a String
             //     if let SketchInput::String(s) = val {
             //         sketch.insert(s, 1);
@@ -129,25 +129,25 @@ impl Chapter {
     }
 
     /// Merge another sketch of the same type into this one
-    pub fn merge(&mut self, other: &Chapter) -> Result<(), &'static str> {
+    pub fn merge(&mut self, other: &EHSketchList) -> Result<(), &'static str> {
         match (self, other) {
-            (Chapter::CM(s), Chapter::CM(o)) => {
+            (EHSketchList::CM(s), EHSketchList::CM(o)) => {
                 s.merge(o);
                 Ok(())
             }
-            (Chapter::COCO(s), Chapter::COCO(o)) => {
+            (EHSketchList::COCO(s), EHSketchList::COCO(o)) => {
                 s.merge(o);
                 Ok(())
             }
-            (Chapter::COUNTL2HH(s), Chapter::COUNTL2HH(o)) => {
+            (EHSketchList::COUNTL2HH(s), EHSketchList::COUNTL2HH(o)) => {
                 s.merge(o);
                 Ok(())
             }
-            (Chapter::CS(s), Chapter::CS(o)) => {
+            (EHSketchList::CS(s), EHSketchList::CS(o)) => {
                 s.merge(o);
                 Ok(())
             }
-            (Chapter::DDS(s), Chapter::DDS(o)) => {
+            (EHSketchList::DDS(s), EHSketchList::DDS(o)) => {
                 s.merge(o);
                 Ok(())
             }
@@ -155,16 +155,16 @@ impl Chapter {
             //     s.merge(o);
             //     Ok(())
             // }, // not yet
-            (Chapter::HLL(s), Chapter::HLL(o)) => {
+            (EHSketchList::HLL(s), EHSketchList::HLL(o)) => {
                 s.merge(o);
                 Ok(())
             }
-            (Chapter::KLL(s), Chapter::KLL(o)) => {
+            (EHSketchList::KLL(s), EHSketchList::KLL(o)) => {
                 s.merge(o);
                 Ok(())
             }
-            (Chapter::UNIFORM(s), Chapter::UNIFORM(o)) => s.merge(o),
-            (Chapter::UNIVMON(s), Chapter::UNIVMON(o)) => {
+            (EHSketchList::UNIFORM(s), EHSketchList::UNIFORM(o)) => s.merge(o),
+            (EHSketchList::UNIVMON(s), EHSketchList::UNIVMON(o)) => {
                 s.merge(o);
                 Ok(())
             }
@@ -178,90 +178,90 @@ impl Chapter {
 
     pub fn query(&self, key: &SketchInput) -> Result<f64, &'static str> {
         match (self, key) {
-            (Chapter::CM(count_min), _) => Ok(count_min.estimate(key) as f64),
-            (Chapter::COCO(coco), SketchInput::Str(s)) => Ok(coco.clone().estimate(s) as f64),
-            (Chapter::COCO(coco), SketchInput::String(s)) => {
+            (EHSketchList::CM(count_min), _) => Ok(count_min.estimate(key) as f64),
+            (EHSketchList::COCO(coco), SketchInput::Str(s)) => Ok(coco.clone().estimate(s) as f64),
+            (EHSketchList::COCO(coco), SketchInput::String(s)) => {
                 Ok(coco.clone().estimate(s.as_str()) as f64)
             }
-            (Chapter::COUNTL2HH(count_univ), _) => Ok(count_univ.fast_get_est(key)),
-            (Chapter::CS(count_sketch), _) => Ok(count_sketch.estimate(key)),
-            (Chapter::DDS(dd), SketchInput::I32(i)) => dd
+            (EHSketchList::COUNTL2HH(count_univ), _) => Ok(count_univ.fast_get_est(key)),
+            (EHSketchList::CS(count_sketch), _) => Ok(count_sketch.estimate(key)),
+            (EHSketchList::DDS(dd), SketchInput::I32(i)) => dd
                 .get_value_at_quantile(*i as f64)
                 .ok_or("DDSketch has no samples"),
-            (Chapter::DDS(dd), SketchInput::I64(i)) => dd
+            (EHSketchList::DDS(dd), SketchInput::I64(i)) => dd
                 .get_value_at_quantile(*i as f64)
                 .ok_or("DDSketch has no samples"),
-            (Chapter::DDS(dd), SketchInput::U32(u)) => dd
+            (EHSketchList::DDS(dd), SketchInput::U32(u)) => dd
                 .get_value_at_quantile(*u as f64)
                 .ok_or("DDSketch has no samples"),
-            (Chapter::DDS(dd), SketchInput::U64(u)) => dd
+            (EHSketchList::DDS(dd), SketchInput::U64(u)) => dd
                 .get_value_at_quantile(*u as f64)
                 .ok_or("DDSketch has no samples"),
-            (Chapter::DDS(dd), SketchInput::F32(f)) => dd
+            (EHSketchList::DDS(dd), SketchInput::F32(f)) => dd
                 .get_value_at_quantile(*f as f64)
                 .ok_or("DDSketch has no samples"),
-            (Chapter::DDS(dd), SketchInput::F64(f)) => dd
+            (EHSketchList::DDS(dd), SketchInput::F64(f)) => dd
                 .get_value_at_quantile(*f)
                 .ok_or("DDSketch has no samples"),
-            (Chapter::DDS(dd), SketchInput::Str(cmd)) => match *cmd {
+            (EHSketchList::DDS(dd), SketchInput::Str(cmd)) => match *cmd {
                 "count" => Ok(dd.get_count() as f64),
                 "min" => dd.min().ok_or("DDSketch has no samples"),
                 "max" => dd.max().ok_or("DDSketch has no samples"),
                 _ => Err("Unsupported command for DDSketch"),
             },
-            (Chapter::DDS(dd), SketchInput::String(cmd)) => match cmd.as_str() {
+            (EHSketchList::DDS(dd), SketchInput::String(cmd)) => match cmd.as_str() {
                 "count" => Ok(dd.get_count() as f64),
                 "min" => dd.min().ok_or("DDSketch has no samples"),
                 "max" => dd.max().ok_or("DDSketch has no samples"),
                 _ => Err("Unsupported command for DDSketch"),
             },
-            (Chapter::ELASTIC(elastic), SketchInput::String(s)) => {
+            (EHSketchList::ELASTIC(elastic), SketchInput::String(s)) => {
                 Ok(elastic.clone().query(s.clone()) as f64)
             }
-            (Chapter::HLL(hll_df_modified), _) => Ok(hll_df_modified.estimate() as f64),
-            (Chapter::KLL(kll), SketchInput::I32(i)) => Ok(kll.quantile(*i as f64)),
-            (Chapter::KLL(kll), SketchInput::I64(i)) => Ok(kll.quantile(*i as f64)),
-            (Chapter::KLL(kll), SketchInput::U32(u)) => Ok(kll.quantile(*u as f64)),
-            (Chapter::KLL(kll), SketchInput::U64(u)) => Ok(kll.quantile(*u as f64)),
-            (Chapter::KLL(kll), SketchInput::F32(f)) => Ok(kll.quantile(*f as f64)),
-            (Chapter::KLL(kll), SketchInput::F64(f)) => Ok(kll.quantile(*f)),
-            (Chapter::UNIFORM(sampler), SketchInput::U64(idx)) => sampler
+            (EHSketchList::HLL(hll_df_modified), _) => Ok(hll_df_modified.estimate() as f64),
+            (EHSketchList::KLL(kll), SketchInput::I32(i)) => Ok(kll.quantile(*i as f64)),
+            (EHSketchList::KLL(kll), SketchInput::I64(i)) => Ok(kll.quantile(*i as f64)),
+            (EHSketchList::KLL(kll), SketchInput::U32(u)) => Ok(kll.quantile(*u as f64)),
+            (EHSketchList::KLL(kll), SketchInput::U64(u)) => Ok(kll.quantile(*u as f64)),
+            (EHSketchList::KLL(kll), SketchInput::F32(f)) => Ok(kll.quantile(*f as f64)),
+            (EHSketchList::KLL(kll), SketchInput::F64(f)) => Ok(kll.quantile(*f)),
+            (EHSketchList::UNIFORM(sampler), SketchInput::U64(idx)) => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
-            (Chapter::UNIFORM(sampler), SketchInput::U32(idx)) => sampler
+            (EHSketchList::UNIFORM(sampler), SketchInput::U32(idx)) => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
-            (Chapter::UNIFORM(sampler), SketchInput::I64(idx)) if *idx >= 0 => sampler
+            (EHSketchList::UNIFORM(sampler), SketchInput::I64(idx)) if *idx >= 0 => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
-            (Chapter::UNIFORM(sampler), SketchInput::I32(idx)) if *idx >= 0 => sampler
+            (EHSketchList::UNIFORM(sampler), SketchInput::I32(idx)) if *idx >= 0 => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
-            (Chapter::UNIFORM(sampler), SketchInput::Str(cmd)) => match *cmd {
+            (EHSketchList::UNIFORM(sampler), SketchInput::Str(cmd)) => match *cmd {
                 "len" => Ok(sampler.len() as f64),
                 "total_seen" => Ok(sampler.total_seen() as f64),
                 _ => Err("Unsupported command for UniformSampling"),
             },
-            (Chapter::UNIFORM(sampler), SketchInput::String(cmd)) => match cmd.as_str() {
+            (EHSketchList::UNIFORM(sampler), SketchInput::String(cmd)) => match cmd.as_str() {
                 "len" => Ok(sampler.len() as f64),
                 "total_seen" => Ok(sampler.total_seen() as f64),
                 _ => Err("Unsupported command for UniformSampling"),
             },
-            (Chapter::UNIVMON(um), SketchInput::Str(cmd)) => match *cmd {
+            (EHSketchList::UNIVMON(um), SketchInput::Str(cmd)) => match *cmd {
                 "cardinality" | "card" => Ok(um.calc_card()),
                 "l1" => Ok(um.calc_l1()),
                 "l2" => Ok(um.calc_l2()),
                 "entropy" => Ok(um.calc_entropy()),
                 _ => Err("Unsupported command for UnivMon"),
             },
-            (Chapter::UNIVMON(um), SketchInput::String(cmd)) => match cmd.as_str() {
+            (EHSketchList::UNIVMON(um), SketchInput::String(cmd)) => match cmd.as_str() {
                 "cardinality" | "card" => Ok(um.calc_card()),
                 "l1" => Ok(um.calc_l1()),
                 "l2" => Ok(um.calc_l2()),
                 "entropy" => Ok(um.calc_entropy()),
                 _ => Err("Unsupported command for UnivMon"),
             },
-            // (Chapter::LOCHER(locher_sketch), SketchInput::Str(s)) => Ok(locher_sketch.estimate(*s)),
+            // (EHSketchList::LOCHER(locher_sketch), SketchInput::Str(s)) => Ok(locher_sketch.estimate(*s)),
             _ => Err("Parameter type and Sketch Type Mismatched"),
         }
     }
@@ -269,17 +269,17 @@ impl Chapter {
     /// Get the type of sketch as a string
     pub fn sketch_type(&self) -> &'static str {
         match self {
-            Chapter::CM(_) => "CountMin",
-            Chapter::COCO(_) => "Coco",
-            Chapter::COUNTL2HH(_) => "CountL2HH",
-            Chapter::CS(_) => "CountSketch",
-            Chapter::DDS(_) => "DDSketch",
-            Chapter::ELASTIC(_) => "Elastic",
-            Chapter::HLL(_) => "HLL",
-            Chapter::KLL(_) => "KLL",
-            Chapter::UNIFORM(_) => "UniformSampling",
-            Chapter::UNIVMON(_) => "UnivMon",
-            // Chapter::LOCHER(_) => "Locher",
+            EHSketchList::CM(_) => "CountMin",
+            EHSketchList::COCO(_) => "Coco",
+            EHSketchList::COUNTL2HH(_) => "CountL2HH",
+            EHSketchList::CS(_) => "CountSketch",
+            EHSketchList::DDS(_) => "DDSketch",
+            EHSketchList::ELASTIC(_) => "Elastic",
+            EHSketchList::HLL(_) => "HLL",
+            EHSketchList::KLL(_) => "KLL",
+            EHSketchList::UNIFORM(_) => "UniformSampling",
+            EHSketchList::UNIVMON(_) => "UnivMon",
+            // EHSketchList::LOCHER(_) => "Locher",
         }
     }
 }
@@ -292,7 +292,7 @@ mod tests {
     fn insert_routes_to_countl2hh_and_univmon() {
         let key = SketchInput::I64(7);
 
-        let mut count_l2hh = Chapter::COUNTL2HH(CountL2HH::with_dimensions(5, 1024));
+        let mut count_l2hh = EHSketchList::COUNTL2HH(CountL2HH::with_dimensions(5, 1024));
         for _ in 0..9 {
             count_l2hh.insert(&key);
         }
@@ -302,19 +302,19 @@ mod tests {
             "expected COUNTL2HH estimate >= 9, got {l2hh_est}"
         );
 
-        let mut um = Chapter::UNIVMON(UnivMon::default());
+        let mut um = EHSketchList::UNIVMON(UnivMon::default());
         for _ in 0..6 {
             um.insert(&key);
         }
         match um {
-            Chapter::UNIVMON(ref u) => assert_eq!(u.bucket_size, 6),
+            EHSketchList::UNIVMON(ref u) => assert_eq!(u.bucket_size, 6),
             _ => panic!("expected UnivMon chapter variant"),
         }
     }
 
     #[test]
     fn count_sketch_insert_and_query_round_trip() {
-        let mut cs = Chapter::CS(Count::<Vector2D<i32>, FastPath>::default());
+        let mut cs = EHSketchList::CS(Count::<Vector2D<i32>, FastPath>::default());
         let key = SketchInput::I64(11);
         cs.insert(&key);
         let est = cs.query(&key).expect("query CountSketch");
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn ddsketch_insert_and_quantile_query_round_trip() {
-        let mut dd = Chapter::DDS(DDSketch::new(0.01));
+        let mut dd = EHSketchList::DDS(DDSketch::new(0.01));
         dd.insert(&SketchInput::F64(10.0));
         dd.insert(&SketchInput::F64(20.0));
         dd.insert(&SketchInput::F64(30.0));
@@ -336,23 +336,23 @@ mod tests {
 
     #[test]
     fn supports_norm_whitelist_is_enforced() {
-        let cm = Chapter::CM(CountMin::<Vector2D<i32>, FastPath>::default());
+        let cm = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::default());
         assert!(cm.supports_norm(SketchNorm::L1));
         assert!(!cm.supports_norm(SketchNorm::L2));
 
-        let count_l2hh = Chapter::COUNTL2HH(CountL2HH::with_dimensions(5, 1024));
+        let count_l2hh = EHSketchList::COUNTL2HH(CountL2HH::with_dimensions(5, 1024));
         assert!(count_l2hh.supports_norm(SketchNorm::L2));
         assert!(!count_l2hh.supports_norm(SketchNorm::L1));
 
-        let cs = Chapter::CS(Count::<Vector2D<i32>, FastPath>::default());
+        let cs = EHSketchList::CS(Count::<Vector2D<i32>, FastPath>::default());
         assert!(cs.supports_norm(SketchNorm::L1));
         assert!(!cs.supports_norm(SketchNorm::L2));
 
-        let dd = Chapter::DDS(DDSketch::new(0.01));
+        let dd = EHSketchList::DDS(DDSketch::new(0.01));
         assert!(dd.supports_norm(SketchNorm::L1));
         assert!(!dd.supports_norm(SketchNorm::L2));
 
-        let um = Chapter::UNIVMON(UnivMon::default());
+        let um = EHSketchList::UNIVMON(UnivMon::default());
         assert!(um.supports_norm(SketchNorm::L2));
         assert!(!um.supports_norm(SketchNorm::L1));
     }

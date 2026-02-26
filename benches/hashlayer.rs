@@ -1,7 +1,7 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sketchlib_rust::{
-    Count, CountMin, FastPath, HllDf, RegularPath, SketchInput, Vector2D,
+    Count, CountMin, FastPath, HyperLogLog, DataFusion, RegularPath, SketchInput, Vector2D,
     sketch_framework::hashlayer::HashLayer,
 };
 
@@ -25,7 +25,7 @@ fn bench_separate_insert_three_sketches(c: &mut Criterion) {
                 (
                     CountMin::<Vector2D<i32>, FastPath>::default(),
                     Count::<Vector2D<i32>, RegularPath>::default(),
-                    HllDf::default(),
+                    HyperLogLog::<DataFusion>::default(),
                 )
             },
             |(mut cm, mut count, mut hll)| {

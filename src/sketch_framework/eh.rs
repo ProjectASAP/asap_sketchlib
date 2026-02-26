@@ -1,13 +1,13 @@
 
-use super::Chapter;
-use super::chapter::SketchNorm;
+use super::EHSketchList;
+use super::eh_sketch_list::SketchNorm;
 use crate::SketchInput;
 
 const MASS_EPSILON: f64 = 1e-9;
 
 #[derive(Clone, Debug)]
-pub struct EHVolume {
-    pub volume: Chapter,
+pub struct EHBucket {
+    pub bucket: EHSketchList,
     pub size: usize,
     pub l2_mass: f64,
     pub min_time: u64,
@@ -16,37 +16,37 @@ pub struct EHVolume {
 
 #[derive(Clone, Debug)]
 pub struct ExponentialHistogram {
-    pub payload: Vec<EHVolume>,
+    pub payload: Vec<EHBucket>,
     pub window: u64,
     pub k: usize,
     pub merge_norm: SketchNorm,
-    pub type_to_clone: Chapter,
+    pub type_to_clone: EHSketchList,
 }
 
-fn infer_merge_norm(chapter: &Chapter) -> SketchNorm {
-    if chapter.supports_norm(SketchNorm::L2) && !chapter.supports_norm(SketchNorm::L1) {
+fn infer_merge_norm(eh_sketch: &EHSketchList) -> SketchNorm {
+    if eh_sketch.supports_norm(SketchNorm::L2) && !eh_sketch.supports_norm(SketchNorm::L1) {
         SketchNorm::L2
     } else {
         SketchNorm::L1
     }
 }
 
-fn compute_l2_mass(chapter: &Chapter) -> f64 {
-    chapter.eh_l2_mass().unwrap_or(0.0)
+fn compute_l2_mass(eh_sketch: &EHSketchList) -> f64 {
+    eh_sketch.eh_l2_mass().unwrap_or(0.0)
 }
 
-impl EHVolume {
-    pub fn to_merge(&mut self, other: EHVolume) {
-        let _ = self.volume.merge(&other.volume);
+impl EHBucket {
+    pub fn to_merge(&mut self, other: EHBucket) {
+        let _ = self.bucket.merge(&other.bucket);
         self.size += other.size;
         self.max_time = self.max_time.max(other.max_time);
         self.min_time = self.min_time.min(other.min_time);
-        self.l2_mass = compute_l2_mass(&self.volume);
+        self.l2_mass = compute_l2_mass(&self.bucket);
     }
 }
 
 impl ExponentialHistogram {
-    pub fn new(k: usize, window: u64, eh_type: Chapter) -> Self {
+    pub fn new(k: usize, window: u64, eh_type: EHSketchList) -> Self {
         let k_eff = k.max(1);
         ExponentialHistogram {
             payload: Vec::new(),
@@ -69,7 +69,7 @@ impl ExponentialHistogram {
 
     pub fn update_with<F>(&mut self, time: u64, update_fn: F)
     where
-        F: FnOnce(&mut Chapter),
+        F: FnOnce(&mut EHSketchList),
     {
         let expired_count = self
             .payload
@@ -83,9 +83,9 @@ impl ExponentialHistogram {
 
         let mut sketch = self.type_to_clone.clone();
         update_fn(&mut sketch);
-        let new_eh_vol = EHVolume {
+        let new_eh_vol = EHBucket {
             l2_mass: compute_l2_mass(&sketch),
-            volume: sketch,
+            bucket: sketch,
             size: 1,
             min_time: time,
             max_time: time,
@@ -189,11 +189,11 @@ impl ExponentialHistogram {
         self.payload.first().map(|b| b.min_time)
     }
 
-    pub fn volume_count(&self) -> usize {
+    pub fn bucket_count(&self) -> usize {
         self.payload.len()
     }
 
-    pub fn query_interval_merge(&self, t1: u64, t2: u64) -> Option<Chapter> {
+    pub fn query_interval_merge(&self, t1: u64, t2: u64) -> Option<EHSketchList> {
         if self.payload.is_empty() {
             return None;
         }
@@ -225,13 +225,13 @@ impl ExponentialHistogram {
             to_volume = self.payload.len() - 1;
         }
         if from_volume < to_volume {
-            let mut merged = self.payload[from_volume].volume.clone();
+            let mut merged = self.payload[from_volume].bucket.clone();
             for i in (from_volume + 1)..=to_volume {
-                let _ = merged.merge(&self.payload[i].volume);
+                let _ = merged.merge(&self.payload[i].bucket);
             }
             Some(merged)
         } else {
-            Some(self.payload[from_volume].volume.clone())
+            Some(self.payload[from_volume].bucket.clone())
         }
     }
 
@@ -265,14 +265,14 @@ mod tests {
         let eh_l1 = ExponentialHistogram::new(
             2,
             1000,
-            Chapter::CM(crate::CountMin::<crate::Vector2D<i32>, crate::FastPath>::default()),
+            EHSketchList::CM(crate::CountMin::<crate::Vector2D<i32>, crate::FastPath>::default()),
         );
         assert_eq!(eh_l1.merge_norm, SketchNorm::L1);
 
         let eh_l2 = ExponentialHistogram::new(
             2,
             1000,
-            Chapter::COUNTL2HH(crate::CountL2HH::with_dimensions(5, 2048)),
+            EHSketchList::COUNTL2HH(crate::CountL2HH::with_dimensions(5, 2048)),
         );
         assert_eq!(eh_l2.merge_norm, SketchNorm::L2);
     }
@@ -282,14 +282,14 @@ mod tests {
         let mut eh = ExponentialHistogram::new(
             2,
             100,
-            Chapter::CM(crate::CountMin::<crate::Vector2D<i32>, crate::FastPath>::default()),
+            EHSketchList::CM(crate::CountMin::<crate::Vector2D<i32>, crate::FastPath>::default()),
         );
 
         for i in 0..10 {
             eh.update(i * 10, &SketchInput::I64(1));
         }
 
-        assert!(eh.volume_count() < 10);
+        assert!(eh.bucket_count() < 10);
     }
 
     #[test]
@@ -297,27 +297,27 @@ mod tests {
         let mut eh = ExponentialHistogram::new(
             1,
             100,
-            Chapter::COUNTL2HH(crate::CountL2HH::with_dimensions(5, 2048)),
+            EHSketchList::COUNTL2HH(crate::CountL2HH::with_dimensions(5, 2048)),
         );
 
         eh.update_with(1, |chapter| {
-            if let Chapter::COUNTL2HH(sketch) = chapter {
+            if let EHSketchList::COUNTL2HH(sketch) = chapter {
                 sketch.fast_insert_with_count(&SketchInput::I64(1), 1);
             }
         });
         eh.update_with(2, |chapter| {
-            if let Chapter::COUNTL2HH(sketch) = chapter {
+            if let EHSketchList::COUNTL2HH(sketch) = chapter {
                 sketch.fast_insert_with_count(&SketchInput::I64(2), 1);
             }
         });
         eh.update_with(3, |chapter| {
-            if let Chapter::COUNTL2HH(sketch) = chapter {
+            if let EHSketchList::COUNTL2HH(sketch) = chapter {
                 sketch.fast_insert_with_count(&SketchInput::I64(3), 20);
             }
         });
 
         // First two low-mass buckets should satisfy pair <= (1/k)*sum_newer with k=1.
-        assert!(eh.volume_count() <= 2);
+        assert!(eh.bucket_count() <= 2);
     }
 
     #[test]
@@ -325,26 +325,26 @@ mod tests {
         let mut eh = ExponentialHistogram::new(
             1,
             100,
-            Chapter::COUNTL2HH(crate::CountL2HH::with_dimensions(5, 2048)),
+            EHSketchList::COUNTL2HH(crate::CountL2HH::with_dimensions(5, 2048)),
         );
 
         eh.update_with(1, |chapter| {
-            if let Chapter::COUNTL2HH(sketch) = chapter {
+            if let EHSketchList::COUNTL2HH(sketch) = chapter {
                 sketch.fast_insert_with_count(&SketchInput::I64(7), 2);
             }
         });
         eh.update_with(2, |chapter| {
-            if let Chapter::COUNTL2HH(sketch) = chapter {
+            if let EHSketchList::COUNTL2HH(sketch) = chapter {
                 sketch.fast_insert_with_count(&SketchInput::I64(8), 2);
             }
         });
         eh.update_with(3, |chapter| {
-            if let Chapter::COUNTL2HH(sketch) = chapter {
+            if let EHSketchList::COUNTL2HH(sketch) = chapter {
                 sketch.fast_insert_with_count(&SketchInput::I64(9), 16);
             }
         });
 
-        assert!(eh.volume_count() <= 2);
+        assert!(eh.bucket_count() <= 2);
         assert!(eh.payload.iter().all(|v| v.l2_mass >= 0.0));
     }
 
@@ -353,12 +353,12 @@ mod tests {
         let mut eh = ExponentialHistogram::new(
             2,
             1000,
-            Chapter::HLL(crate::HyperLogLog::<crate::DataFusion>::default()),
+            EHSketchList::HLL(crate::HyperLogLog::<crate::DataFusion>::default()),
         );
 
         eh.update(100, &SketchInput::I64(1));
 
-        assert_eq!(eh.volume_count(), 1);
+        assert_eq!(eh.bucket_count(), 1);
         assert_eq!(eh.get_min_time(), Some(100));
         assert_eq!(eh.get_max_time(), Some(100));
         assert!(eh.query_interval_merge(100, 100).is_some());

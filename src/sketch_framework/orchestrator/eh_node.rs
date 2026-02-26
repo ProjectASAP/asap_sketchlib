@@ -3,14 +3,14 @@
 
 use crate::{
     SketchInput,
-    sketch_framework::{Chapter, ExponentialHistogram},
+    sketch_framework::{EHSketchList, ExponentialHistogram},
 };
 
 use super::{NodeInsert, NodeQuery, OrchestratorNode};
 
 pub struct EhNode<Q>
 where
-    Q: Fn(&Chapter, &NodeQuery<'_>) -> Result<f64, &'static str>,
+    Q: Fn(&EHSketchList, &NodeQuery<'_>) -> Result<f64, &'static str>,
 {
     eh: ExponentialHistogram,
     query_fn: Q,
@@ -18,7 +18,7 @@ where
 
 impl<Q> EhNode<Q>
 where
-    Q: Fn(&Chapter, &NodeQuery<'_>) -> Result<f64, &'static str>,
+    Q: Fn(&EHSketchList, &NodeQuery<'_>) -> Result<f64, &'static str>,
 {
     pub fn new(eh: ExponentialHistogram, query_fn: Q) -> Self {
         Self { eh, query_fn }
@@ -27,7 +27,7 @@ where
 
 impl<Q> OrchestratorNode for EhNode<Q>
 where
-    Q: Fn(&Chapter, &NodeQuery<'_>) -> Result<f64, &'static str>,
+    Q: Fn(&EHSketchList, &NodeQuery<'_>) -> Result<f64, &'static str>,
 {
     fn kind(&self) -> &'static str {
         "EH"

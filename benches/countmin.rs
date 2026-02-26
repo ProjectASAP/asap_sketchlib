@@ -1,7 +1,7 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sketchlib_rust::{
-    CountMin, FastPath, FixedMatrix, RegularPath, SketchInput, Vector2D, hash_it_to_128,
+    CountMin, FastPath, FixedMatrix, RegularPath, SketchInput, Vector2D, hash128_seeded,
 };
 
 const SAMPLE_COUNT: usize = 1_000_000;
@@ -25,7 +25,7 @@ impl StackCms {
     #[inline(always)]
     fn insert(&mut self, value: &SketchInput) {
         for r in 0..STACK_CMS_ROWS {
-            let hashed = hash_it_to_128(r, value);
+            let hashed = hash128_seeded(r, value);
             let col = ((hashed as u64 & LOWER_32_MASK) as usize) % STACK_CMS_COLS;
             let idx = r * STACK_CMS_COLS + col;
             self.counts[idx] += 1;
@@ -36,7 +36,7 @@ impl StackCms {
     fn estimate(&self, value: &SketchInput) -> i32 {
         let mut min = i32::MAX;
         for r in 0..STACK_CMS_ROWS {
-            let hashed = hash_it_to_128(r, value);
+            let hashed = hash128_seeded(r, value);
             let col = ((hashed as u64 & LOWER_32_MASK) as usize) % STACK_CMS_COLS;
             let idx = r * STACK_CMS_COLS + col;
             min = min.min(self.counts[idx]);
