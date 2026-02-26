@@ -230,6 +230,7 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
     /// * `config`      — sketch configuration for constructing fresh sketches.
     /// * `pool_cap`    — initial number of pre-allocated pool sketches.
     pub fn new(window_size: u64, max_windows: usize, config: S::Config, pool_cap: usize) -> Self {
+        assert!(window_size > 0, "window_size must be > 0");
         let mut pool = SketchPool::new(pool_cap, config.clone());
         let active = pool.take();
         TumblingWindow {
@@ -474,6 +475,20 @@ mod tests {
         assert_eq!(sk.count(), 0, "count should be 0 after clear");
         let cdf = sk.cdf();
         assert_eq!(cdf.query(0.5), 0.0, "empty sketch should return 0.0");
+    }
+
+    // -- Construction guard tests --------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "window_size must be > 0")]
+    fn zero_window_size_panics() {
+        let config = FoldCMSConfig {
+            rows: 3,
+            full_cols: 1024,
+            fold_level: 3,
+            top_k: 10,
+        };
+        let _tw = TumblingWindow::<FoldCMS>::new(0, 5, config, 4);
     }
 
     // -- Window mechanics tests ----------------------------------------------
