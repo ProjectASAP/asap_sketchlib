@@ -1,18 +1,22 @@
 use crate::HHHeap;
-use crate::{SketchInput, hash64_seeded};
+use crate::{DefaultXxHasher, SketchHasher, SketchInput};
 use crate::{Vector1D, Vector2D};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::marker::PhantomData;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct LocherSketch {
+#[serde(bound = "")]
+pub struct LocherSketch<H: SketchHasher = DefaultXxHasher> {
     pub r: usize,
     pub l: usize,
     pub rows: Vector2D<HHHeap>,
     pub row_sum: Vector1D<f64>,
+    #[serde(skip)]
+    _hasher: PhantomData<H>,
 }
 
-impl LocherSketch {
+impl<H: SketchHasher> LocherSketch<H> {
     pub fn new(r: usize, l: usize, k: usize) -> Self {
         let rows = Vector2D::from_fn(r, l, |_row, _col| HHHeap::new(k));
         let row_sum = Vector1D::filled(r, 0.0);
@@ -22,12 +26,13 @@ impl LocherSketch {
             l,
             rows,
             row_sum,
+            _hasher: PhantomData,
         }
     }
 
     pub fn insert(&mut self, e: &str, _v: u64) {
         for i in 0..self.r {
-            let idx = hash64_seeded(i, &SketchInput::String(e.to_owned())) as usize % self.l;
+            let idx = H::hash64_seeded(i, &SketchInput::String(e.to_owned())) as usize % self.l;
             let cell = &mut self.rows[i][idx];
             let before = match cell.find(&SketchInput::Str(e)) {
                 Some(heap_idx) => cell.heap()[heap_idx].count,
@@ -49,7 +54,7 @@ impl LocherSketch {
     pub fn estimate(&self, e: &str) -> f64 {
         let mut per_row = Vec::with_capacity(self.r);
         for i in 0..self.r {
-            let idx = hash64_seeded(i, &SketchInput::Str(e)) as usize % self.l;
+            let idx = H::hash64_seeded(i, &SketchInput::Str(e)) as usize % self.l;
             // let est = self.rows[i][idx].find(e).unwrap_or(0);
             let est = match self.rows[i][idx].find(&SketchInput::Str(e)) {
                 Some(v) => self.rows[i][idx].heap()[v].count,
@@ -88,7 +93,7 @@ mod tests {
     #[test]
     fn locher_estimate_tracks_inserted_frequency() {
         // inserting the same key multiple times should result in a strong estimate
-        let mut sketch = LocherSketch::new(3, 32, 5);
+        let mut sketch: LocherSketch = LocherSketch::new(3, 32, 5);
         let key = "service::a".to_string();
 
         for _ in 0..30 {

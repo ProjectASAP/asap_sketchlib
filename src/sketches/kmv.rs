@@ -1,6 +1,9 @@
-use crate::{CANONICAL_HASH_SEED, CommonHeap, KeepLargest, SketchInput, hash64_seeded};
+use crate::{
+    CANONICAL_HASH_SEED, CommonHeap, DefaultXxHasher, KeepLargest, SketchHasher, SketchInput,
+};
 
 use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
 
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
@@ -13,9 +16,12 @@ const KMV_DEFAULT_LENGTH: usize = 4096_usize;
 // "On synopses for distinct-value estimation under multiset operations"
 // https://dl.acm.org/doi/10.1145/1247480.1247504
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct KMV {
+#[serde(bound = "")]
+pub struct KMV<H: SketchHasher = DefaultXxHasher> {
     pub k: usize,
     pub k_vals: CommonHeap<u64, KeepLargest>,
+    #[serde(skip)]
+    _hasher: PhantomData<H>,
 }
 
 impl Default for KMV {
@@ -24,16 +30,17 @@ impl Default for KMV {
     }
 }
 
-impl KMV {
+impl<H: SketchHasher> KMV<H> {
     pub fn new(k: usize) -> Self {
         Self {
             k,
             k_vals: CommonHeap::new_max(k),
+            _hasher: PhantomData,
         }
     }
 
     pub fn insert(&mut self, item: &SketchInput) {
-        let hashed = hash64_seeded(CANONICAL_HASH_SEED, item);
+        let hashed = H::hash64_seeded(CANONICAL_HASH_SEED, item);
         self.insert_by_hash(hashed);
     }
 
@@ -57,7 +64,7 @@ impl KMV {
         (self.k - 1) as f64 / mapped
     }
 
-    pub fn merge(&mut self, other: &mut KMV) {
+    pub fn merge(&mut self, other: &mut KMV<H>) {
         assert_eq!(
             self.k, other.k,
             "Two KMV sketch have different k size, not mergeable"
@@ -92,7 +99,7 @@ mod tests {
 
     #[test]
     fn assert_accuracy() {
-        let mut sketch = KMV::default();
+        let mut sketch: KMV = KMV::default();
         let mut inserted: usize = 0;
 
         for &target in TARGETS.iter() {
@@ -118,8 +125,8 @@ mod tests {
 
     #[test]
     fn assert_merge_accuracy() {
-        let mut left = KMV::default();
-        let mut right = KMV::default();
+        let mut left: KMV = KMV::default();
+        let mut right: KMV = KMV::default();
         let mut next_even: usize = 0;
         let mut next_odd: usize = 1;
 
@@ -155,7 +162,7 @@ mod tests {
 
     #[test]
     fn assert_serialization_round_trip() {
-        let mut sketch = KMV::default();
+        let mut sketch: KMV = KMV::default();
         for value in 0..SERDE_SAMPLE {
             let input = SketchInput::U64(value as u64);
             sketch.insert(&input);
@@ -169,7 +176,7 @@ mod tests {
             "KMV serialization output should not be empty"
         );
 
-        let mut decoded = KMV::deserialize_from_bytes(&encoded)
+        let mut decoded: KMV = KMV::deserialize_from_bytes(&encoded)
             .unwrap_or_else(|err| panic!("KMV deserialize_from_bytes failed: {err}"));
 
         let reencoded = decoded

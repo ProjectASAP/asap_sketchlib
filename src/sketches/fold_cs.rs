@@ -17,7 +17,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::fold_cms::FoldCell;
-use crate::{HHHeap, SketchInput, compute_median_inline_f64, hash64_seeded, heap_item_to_sketch_input};
+use crate::{DefaultXxHasher, HHHeap, SketchHasher, SketchInput, compute_median_inline_f64, heap_item_to_sketch_input};
+use std::marker::PhantomData;
 
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
@@ -35,7 +36,8 @@ const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 /// Unlike [`FoldCMS`], insert applies a random ±1 sign per (row, key), and
 /// query returns the **median** of sign-corrected row estimates.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FoldCS {
+#[serde(bound = "")]
+pub struct FoldCS<H: SketchHasher = DefaultXxHasher> {
     /// Number of hash functions (rows). Same across all fold levels.
     rows: usize,
     /// Number of physical columns = `full_cols >> fold_level`.
@@ -48,9 +50,11 @@ pub struct FoldCS {
     cells: Vec<FoldCell>,
     /// Top-K heavy-hitter tracking heap.
     heap: HHHeap,
+    #[serde(skip)]
+    _hasher: PhantomData<H>,
 }
 
-impl FoldCS {
+impl<H: SketchHasher> FoldCS<H> {
     // -- Construction -------------------------------------------------------
 
     /// Creates a new FoldCS.
@@ -84,6 +88,7 @@ impl FoldCS {
             fold_level,
             cells,
             heap: HHHeap::new(top_k),
+            _hasher: PhantomData,
         }
     }
 
@@ -156,7 +161,7 @@ impl FoldCS {
     /// Sign convention matches `count.rs`: bit63==1 → +1, bit63==0 → -1.
     #[inline(always)]
     fn hash_for(&self, row: usize, key: &SketchInput) -> (u16, i64) {
-        let hashed = hash64_seeded(row, key);
+        let hashed = H::hash64_seeded(row, key);
         let full_col = ((hashed & LOWER_32_MASK) as usize % self.full_cols) as u16;
         let sign = if (hashed >> 63) & 1 == 1 { 1i64 } else { -1i64 };
         (full_col, sign)
@@ -210,7 +215,7 @@ impl FoldCS {
 
     /// Merge `other` into `self` without unfolding. Both must share the same
     /// `full_cols`, `rows`, and `fold_level`.
-    pub fn merge_same_level(&mut self, other: &FoldCS) {
+    pub fn merge_same_level(&mut self, other: &FoldCS<H>) {
         assert_eq!(self.rows, other.rows, "row count mismatch");
         assert_eq!(self.full_cols, other.full_cols, "full_cols mismatch");
         assert_eq!(self.fold_level, other.fold_level, "fold_level mismatch");
@@ -231,7 +236,7 @@ impl FoldCS {
     /// The scatter formula `new_fc = full_col & (target.fold_cols - 1)` works
     /// for any source-to-target level jump in a single pass because every
     /// `FoldCell` entry carries its permanent `full_col` address.
-    fn scatter_into(&self, target: &mut FoldCS) {
+    fn scatter_into(&self, target: &mut FoldCS<H>) {
         debug_assert_eq!(self.rows, target.rows);
         debug_assert_eq!(self.full_cols, target.full_cols);
         debug_assert!(target.fold_level <= self.fold_level);
@@ -254,7 +259,7 @@ impl FoldCS {
 
     /// Merge two **same-level** FoldCS sketches into a new sketch one fold
     /// level lower (doubled physical columns).
-    pub fn unfold_merge(a: &FoldCS, b: &FoldCS) -> FoldCS {
+    pub fn unfold_merge(a: &FoldCS<H>, b: &FoldCS<H>) -> FoldCS<H> {
         assert_eq!(a.rows, b.rows, "row count mismatch");
         assert_eq!(a.full_cols, b.full_cols, "full_cols mismatch");
         assert_eq!(a.fold_level, b.fold_level, "fold_level mismatch");
@@ -271,6 +276,7 @@ impl FoldCS {
             fold_level: new_level,
             cells: vec![FoldCell::Empty; a.rows * new_fold_cols],
             heap: HHHeap::new(heap_k),
+            _hasher: PhantomData,
         };
 
         // Single-pass scatter from both sources into the wider grid.
@@ -291,7 +297,7 @@ impl FoldCS {
 
     /// Fully unfold a FoldCS to fold_level 0 (equivalent to a standard CS).
     /// If already at level 0 this returns a clone.
-    pub fn unfold_full(&self) -> FoldCS {
+    pub fn unfold_full(&self) -> FoldCS<H> {
         self.unfold_to(0)
     }
 
@@ -302,7 +308,7 @@ impl FoldCS {
     ///
     /// Single-pass scatter: 1 allocation, 1 pass — regardless of how many
     /// levels are skipped.
-    pub fn unfold_to(&self, target_level: u32) -> FoldCS {
+    pub fn unfold_to(&self, target_level: u32) -> FoldCS<H> {
         assert!(
             target_level <= self.fold_level,
             "target_level {target_level} > current fold_level {}",
@@ -320,6 +326,7 @@ impl FoldCS {
             fold_level: target_level,
             cells: vec![FoldCell::Empty; self.rows * new_fold_cols],
             heap: HHHeap::new(self.heap.capacity()),
+            _hasher: PhantomData,
         };
 
         self.scatter_into(&mut result);
@@ -341,7 +348,7 @@ impl FoldCS {
     /// Allocates one level-0 result and scatters all N inputs directly into
     /// it. **0 clones, 1 allocation, N scatter passes.** Handles mixed fold
     /// levels — each source is scattered from whatever level it is at.
-    pub fn hierarchical_merge(sketches: &[FoldCS]) -> FoldCS {
+    pub fn hierarchical_merge(sketches: &[FoldCS<H>]) -> FoldCS<H> {
         assert!(
             !sketches.is_empty(),
             "need at least one sketch to merge"
@@ -361,6 +368,7 @@ impl FoldCS {
             fold_level: 0,
             cells: vec![FoldCell::Empty; rows * full_cols],
             heap: HHHeap::new(heap_k),
+            _hasher: PhantomData,
         };
 
         for sk in sketches {
@@ -416,7 +424,7 @@ impl FoldCS {
     // -- Heap helpers -------------------------------------------------------
 
     /// Re-query all heap items from `other` against `self` and update our heap.
-    fn reconcile_heap_from(&mut self, other: &FoldCS) {
+    fn reconcile_heap_from(&mut self, other: &FoldCS<H>) {
         for item in other.heap.heap() {
             let key_ref = heap_item_to_sketch_input(&item.key);
             let est = self.query(&key_ref);
@@ -440,7 +448,7 @@ mod tests {
 
     #[test]
     fn fold_cs_dimensions() {
-        let sketch = FoldCS::new(3, 4096, 4, 10);
+        let sketch: FoldCS = FoldCS::new(3, 4096, 4, 10);
         assert_eq!(sketch.rows(), 3);
         assert_eq!(sketch.full_cols(), 4096);
         assert_eq!(sketch.fold_cols(), 256); // 4096 / 2^4
@@ -449,7 +457,7 @@ mod tests {
 
     #[test]
     fn fold_cs_level_zero_is_full() {
-        let sketch = FoldCS::new_full(3, 1024, 10);
+        let sketch: FoldCS = FoldCS::new_full(3, 1024, 10);
         assert_eq!(sketch.fold_cols(), 1024);
         assert_eq!(sketch.fold_level(), 0);
     }
@@ -457,18 +465,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "full_cols must be a power of two")]
     fn fold_cs_rejects_non_power_of_two() {
-        FoldCS::new(3, 1000, 0, 10);
+        let _: FoldCS = FoldCS::new(3, 1000, 0, 10);
     }
 
     #[test]
     #[should_panic(expected = "fold_level")]
     fn fold_cs_rejects_excessive_fold_level() {
-        FoldCS::new(3, 256, 9, 10); // 256 = 2^8, fold_level 9 is too big
+        let _: FoldCS = FoldCS::new(3, 256, 9, 10); // 256 = 2^8, fold_level 9 is too big
     }
 
     #[test]
     fn fold_cs_insert_query_single_key() {
-        let mut sketch = FoldCS::new(3, 1024, 4, 10);
+        let mut sketch: FoldCS = FoldCS::new(3, 1024, 4, 10);
         let key = SketchInput::Str("hello");
         sketch.insert(&key, 7);
         assert_eq!(sketch.query(&key), 7);
@@ -476,7 +484,7 @@ mod tests {
 
     #[test]
     fn fold_cs_insert_accumulates() {
-        let mut sketch = FoldCS::new(3, 1024, 4, 10);
+        let mut sketch: FoldCS = FoldCS::new(3, 1024, 4, 10);
         let key = SketchInput::Str("hello");
         sketch.insert(&key, 3);
         sketch.insert(&key, 4);
@@ -485,14 +493,14 @@ mod tests {
 
     #[test]
     fn fold_cs_absent_key_returns_zero() {
-        let mut sketch = FoldCS::new(3, 1024, 4, 10);
+        let mut sketch: FoldCS = FoldCS::new(3, 1024, 4, 10);
         sketch.insert(&SketchInput::Str("present"), 10);
         assert_eq!(sketch.query(&SketchInput::Str("absent")), 0);
     }
 
     #[test]
     fn fold_cs_multiple_keys() {
-        let mut sketch = FoldCS::new(3, 4096, 4, 10);
+        let mut sketch: FoldCS = FoldCS::new(3, 4096, 4, 10);
         for i in 0..100u64 {
             sketch.insert(&SketchInput::U64(i), i as i64);
         }
@@ -514,7 +522,7 @@ mod tests {
     fn fold_cs_sign_application() {
         // Verify that raw cell values include both positive and negative entries,
         // confirming sign is being applied on insert.
-        let mut sketch = FoldCS::new(5, 1024, 4, 10);
+        let mut sketch: FoldCS = FoldCS::new(5, 1024, 4, 10);
         for i in 0..50u64 {
             sketch.insert(&SketchInput::U64(i), 1);
         }
@@ -545,7 +553,7 @@ mod tests {
         let cols = 256; // small for deterministic testing
         let fold_level = 3; // 256/8 = 32 physical columns
 
-        let mut fold = FoldCS::new(rows, cols, fold_level, 10);
+        let mut fold: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         let keys: Vec<SketchInput> = (0..50).map(|i| SketchInput::I32(i)).collect();
@@ -571,7 +579,7 @@ mod tests {
         let cols = 256;
         let fold_level = 3;
 
-        let mut fold = FoldCS::new(rows, cols, fold_level, 10);
+        let mut fold: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         let keys: Vec<SketchInput> = (0..50).map(|i| SketchInput::I32(i)).collect();
@@ -598,7 +606,7 @@ mod tests {
         let cols = 512;
         let fold_level = 4;
 
-        let mut fold = FoldCS::new(rows, cols, fold_level, 10);
+        let mut fold: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..30 {
@@ -622,8 +630,8 @@ mod tests {
         let cols = 1024;
         let fold_level = 3;
 
-        let mut a = FoldCS::new(rows, cols, fold_level, 10);
-        let mut b = FoldCS::new(rows, cols, fold_level, 10);
+        let mut a: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
+        let mut b: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
 
         let key = SketchInput::Str("user_001");
         a.insert(&key, 100);
@@ -639,8 +647,8 @@ mod tests {
         let cols = 512;
         let fold_level = 4;
 
-        let mut fa = FoldCS::new(rows, cols, fold_level, 10);
-        let mut fb = FoldCS::new(rows, cols, fold_level, 10);
+        let mut fa: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
+        let mut fb: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut sa = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
         let mut sb = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
@@ -676,8 +684,8 @@ mod tests {
         let cols = 1024;
         let fold_level = 3;
 
-        let a = FoldCS::new(rows, cols, fold_level, 10);
-        let b = FoldCS::new(rows, cols, fold_level, 10);
+        let a: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
+        let b: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
 
         let result = FoldCS::unfold_merge(&a, &b);
         assert_eq!(result.fold_level(), 2);
@@ -690,8 +698,8 @@ mod tests {
         let cols = 256;
         let fold_level = 2;
 
-        let mut a = FoldCS::new(rows, cols, fold_level, 10);
-        let mut b = FoldCS::new(rows, cols, fold_level, 10);
+        let mut a: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
+        let mut b: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
 
         let key_a = SketchInput::Str("alpha");
         let key_b = SketchInput::Str("beta");
@@ -710,8 +718,8 @@ mod tests {
         let cols = 512;
         let fold_level = 2;
 
-        let mut fa = FoldCS::new(rows, cols, fold_level, 10);
-        let mut fb = FoldCS::new(rows, cols, fold_level, 10);
+        let mut fa: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
+        let mut fb: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut sa = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
         let mut sb = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
@@ -751,7 +759,7 @@ mod tests {
         let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for epoch in 0..4u64 {
-            let mut sk = FoldCS::new(rows, cols, fold_level, 10);
+            let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
             for i in (epoch * 10)..((epoch + 1) * 10) {
                 let key = SketchInput::U64(i);
                 sk.insert(&key, 1);
@@ -781,7 +789,7 @@ mod tests {
         let cols = 256;
         let fold_level = 4;
 
-        let mut sk = FoldCS::new(rows, cols, fold_level, 10);
+        let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         for i in 0..30 {
             sk.insert(&SketchInput::I32(i), 1);
         }
@@ -803,7 +811,7 @@ mod tests {
         let cols = 128;
         let fold_level = 3;
 
-        let mut fold = FoldCS::new(rows, cols, fold_level, 10);
+        let mut fold: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..20 {
@@ -830,7 +838,7 @@ mod tests {
         let cols = 4096;
         let fold_level = 4; // 256 physical cols
 
-        let mut sk = FoldCS::new(rows, cols, fold_level, 10);
+        let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         for i in 0..50u64 {
             sk.insert(&SketchInput::U64(i), 1);
         }
@@ -857,7 +865,7 @@ mod tests {
 
     #[test]
     fn heap_tracks_heavy_hitters() {
-        let mut sk = FoldCS::new(3, 1024, 3, 5);
+        let mut sk: FoldCS = FoldCS::new(3, 1024, 3, 5);
 
         for _ in 0..100 {
             sk.insert(&SketchInput::Str("heavy"), 1);
@@ -879,8 +887,8 @@ mod tests {
 
     #[test]
     fn heap_survives_same_level_merge() {
-        let mut a = FoldCS::new(3, 1024, 3, 5);
-        let mut b = FoldCS::new(3, 1024, 3, 5);
+        let mut a: FoldCS = FoldCS::new(3, 1024, 3, 5);
+        let mut b: FoldCS = FoldCS::new(3, 1024, 3, 5);
 
         for _ in 0..50 {
             a.insert(&SketchInput::Str("user_x"), 1);
@@ -902,8 +910,8 @@ mod tests {
 
     #[test]
     fn heap_survives_unfold_merge() {
-        let mut a = FoldCS::new(3, 512, 2, 5);
-        let mut b = FoldCS::new(3, 512, 2, 5);
+        let mut a: FoldCS = FoldCS::new(3, 512, 2, 5);
+        let mut b: FoldCS = FoldCS::new(3, 512, 2, 5);
 
         for _ in 0..40 {
             a.insert(&SketchInput::Str("endpoint_a"), 1);
@@ -933,7 +941,7 @@ mod tests {
         let exponent = 1.1;
         let samples = 200_000;
 
-        let mut fold = FoldCS::new(rows, cols, fold_level, 20);
+        let mut fold: FoldCS = FoldCS::new(rows, cols, fold_level, 20);
         let mut truth = HashMap::<u64, i64>::new();
 
         for value in sample_zipf_u64(domain, exponent, samples, 0x5eed_c0de) {
@@ -990,7 +998,7 @@ mod tests {
         for w in 0..num_subwindows {
             let start = w * samples_per_window;
             let end = start + samples_per_window;
-            let mut sk = FoldCS::new(rows, full_cols, fold_level, top_k);
+            let mut sk: FoldCS = FoldCS::new(rows, full_cols, fold_level, top_k);
 
             for &value in &stream[start..end] {
                 sk.insert(&SketchInput::U64(value), 1);
@@ -1095,7 +1103,7 @@ mod tests {
                 Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
             for epoch in 0..n {
-                let mut sk = FoldCS::new(rows, cols, fold_level, 10);
+                let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
                 for i in (epoch * 10)..((epoch + 1) * 10) {
                     let key = SketchInput::U64(i);
                     sk.insert(&key, 1);
@@ -1126,7 +1134,7 @@ mod tests {
         let cols = 256;
         let fold_level = 4;
 
-        let mut sk = FoldCS::new(rows, cols, fold_level, 10);
+        let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         for i in 0..40 {
             sk.insert(&SketchInput::U64(i), (i + 1) as i64);
         }
@@ -1147,7 +1155,7 @@ mod tests {
 
     #[test]
     fn unfold_to_same_level_returns_clone() {
-        let mut sk = FoldCS::new(3, 256, 3, 10);
+        let mut sk: FoldCS = FoldCS::new(3, 256, 3, 10);
         sk.insert(&SketchInput::Str("x"), 42);
 
         let result = sk.unfold_to(3);
@@ -1161,8 +1169,8 @@ mod tests {
         let rows = 3;
         let cols = 1024;
 
-        let mut sk_high = FoldCS::new(rows, cols, 4, 10);
-        let mut sk_low = FoldCS::new(rows, cols, 2, 10);
+        let mut sk_high: FoldCS = FoldCS::new(rows, cols, 4, 10);
+        let mut sk_low: FoldCS = FoldCS::new(rows, cols, 2, 10);
 
         for i in 0..20u64 {
             sk_high.insert(&SketchInput::U64(i), 1);

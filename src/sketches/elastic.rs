@@ -1,8 +1,9 @@
-use crate::{CANONICAL_HASH_SEED, SketchInput, hash64_seeded};
+use crate::{CANONICAL_HASH_SEED, DefaultXxHasher, SketchHasher, SketchInput};
 
 use super::{CountMin, RegularPath};
 use crate::Vector2D;
 use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct HeavyCounter {
@@ -21,10 +22,13 @@ pub struct HeavyBucket {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Elastic {
+#[serde(bound = "")]
+pub struct Elastic<H: SketchHasher = DefaultXxHasher> {
     pub heavy: Vec<HeavyBucket>,
-    pub light: CountMin<Vector2D<i32>, RegularPath>,
+    pub light: CountMin<Vector2D<i32>, RegularPath, H>,
     pub bktlen: i32,
+    #[serde(skip)]
+    _hasher: PhantomData<H>,
 }
 
 impl Default for HeavyBucket {
@@ -57,7 +61,7 @@ impl Default for Elastic {
     }
 }
 
-impl Elastic {
+impl<H: SketchHasher> Elastic<H> {
     pub fn new() -> Self {
         Elastic::init_with_length(8)
     }
@@ -67,17 +71,17 @@ impl Elastic {
         for _ in 0..l {
             heavy.push(HeavyBucket::new());
         }
-        let light = CountMin::<Vector2D<i32>, RegularPath>::default();
+        let light = CountMin::<Vector2D<i32>, RegularPath, H>::with_dimensions(3, 4096);
         Elastic {
             heavy,
             light,
             bktlen: l,
+            _hasher: PhantomData,
         }
     }
 
     pub fn insert(&mut self, id: String) {
-        // let hash = hash64_seeded(CANONICAL_HASH_SEED, &id);
-        let hash = hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::String(id.clone()));
+        let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::String(id.clone()));
         let idx = hash as usize % self.bktlen as usize;
         let heavy_bkt = &mut self.heavy[idx];
         if heavy_bkt.flow_id.is_empty() && heavy_bkt.vote_neg == 0 && heavy_bkt.vote_pos == 0 {
@@ -105,8 +109,7 @@ impl Elastic {
     }
 
     pub fn query(&mut self, id: String) -> i32 {
-        // let hash = hash64_seeded(CANONICAL_HASH_SEED, &id);
-        let hash = hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::String(id.clone()));
+        let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::String(id.clone()));
         let idx = hash as usize % self.bktlen as usize;
         let heavy_bkt = &self.heavy[idx];
         if id == heavy_bkt.flow_id {
@@ -138,7 +141,7 @@ mod tests {
     #[test]
     fn heavy_bucket_tracks_repeated_flow_exactly() {
         // repeated inserts of the same flow should accumulate in the heavy bucket
-        let mut sketch = Elastic::init_with_length(8);
+        let mut sketch: Elastic = Elastic::init_with_length(8);
         let flow = "flow::primary".to_string();
 
         for _ in 0..12 {
@@ -152,7 +155,7 @@ mod tests {
     #[test]
     fn light_sketch_counts_colliding_flows() {
         // simulate two flows mapped to the same bucket so the light CountMin tracks the second one
-        let mut sketch = Elastic::init_with_length(8);
+        let mut sketch: Elastic = Elastic::init_with_length(8);
         let primary = "flow::primary";
         let primary_bucket = bucket_for(primary, &sketch);
 

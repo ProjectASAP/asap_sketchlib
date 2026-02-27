@@ -6,9 +6,9 @@ use std::marker::PhantomData;
 
 use crate::FastPathHasher;
 use crate::{
-    DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, FastPath, FixedMatrix, MatrixHashType,
-    MatrixStorage, NitroTarget, QuickMatrixI64, QuickMatrixI128, RegularPath, SketchInput,
-    Vector2D, hash64_seeded, hash128_seeded,
+    DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath, FixedMatrix,
+    MatrixHashType, MatrixStorage, NitroTarget, QuickMatrixI64, QuickMatrixI128, RegularPath,
+    SketchHasher, SketchInput, Vector2D, hash64_seeded,
 };
 
 const DEFAULT_ROW_NUM: usize = 3;
@@ -18,12 +18,15 @@ pub const QUICKSTART_COL_NUM: usize = 2048;
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CountMin<S: MatrixStorage = Vector2D<i32>, Mode = RegularPath> {
+#[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
+pub struct CountMin<S: MatrixStorage = Vector2D<i32>, Mode = RegularPath, H: SketchHasher = DefaultXxHasher> {
     counts: S,
     row: usize,
     col: usize,
     #[serde(skip)]
     _mode: PhantomData<Mode>,
+    #[serde(skip)]
+    _hasher: PhantomData<H>,
 }
 
 // Default CountMin sketch for Vector2D<i32> (RegularPath).
@@ -153,7 +156,7 @@ impl Default for CountMin<DefaultMatrixI128, FastPath> {
 }
 
 // CountMin constructors for Vector2D-backed storage.
-impl<T, M> CountMin<Vector2D<T>, M>
+impl<T, M, H: SketchHasher> CountMin<Vector2D<T>, M, H>
 where
     T: Copy + Default + std::ops::AddAssign,
 {
@@ -164,6 +167,7 @@ where
             row: rows,
             col: cols,
             _mode: PhantomData,
+            _hasher: PhantomData,
         };
         sk.counts.fill(T::default());
         sk
@@ -171,7 +175,7 @@ where
 }
 
 // Core CountMin API for any storage.
-impl<S: MatrixStorage, Mode> CountMin<S, Mode> {
+impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
     pub fn from_storage(counts: S) -> Self {
         let row = counts.rows();
         let col = counts.cols();
@@ -180,6 +184,7 @@ impl<S: MatrixStorage, Mode> CountMin<S, Mode> {
             row,
             col,
             _mode: PhantomData,
+            _hasher: PhantomData,
         }
     }
 
@@ -225,14 +230,14 @@ impl<S: MatrixStorage, Mode> CountMin<S, Mode> {
 }
 
 // Serialization helpers for CountMin.
-impl<S: MatrixStorage + Serialize, Mode> CountMin<S, Mode> {
+impl<S: MatrixStorage + Serialize, Mode, H: SketchHasher> CountMin<S, Mode, H> {
     /// Serializes the sketch into MessagePack bytes.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         to_vec_named(self)
     }
 }
 
-impl<S: MatrixStorage + for<'de> Deserialize<'de>, Mode> CountMin<S, Mode> {
+impl<S: MatrixStorage + for<'de> Deserialize<'de>, Mode, H: SketchHasher> CountMin<S, Mode, H> {
     /// Deserializes a sketch from MessagePack bytes.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         from_slice(bytes)
@@ -241,7 +246,7 @@ impl<S: MatrixStorage + for<'de> Deserialize<'de>, Mode> CountMin<S, Mode> {
 
 // SketchInput adapters for the regular Count-Min update rule.
 // Regular-path CountMin operations.
-impl<S: MatrixStorage> CountMin<S, RegularPath>
+impl<S: MatrixStorage, H: SketchHasher> CountMin<S, RegularPath, H>
 where
     S::Counter: Copy + Ord + From<i32> + std::ops::AddAssign,
 {
@@ -251,7 +256,7 @@ where
         let rows = self.counts.rows(); // For IntegerMatrix, this returns const
         let cols = self.counts.cols(); // For IntegerMatrix, this returns const
         for r in 0..rows {
-            let hashed = hash64_seeded(r, value);
+            let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             self.counts.increment_by_row(r, col, S::Counter::from(1));
         }
@@ -262,7 +267,7 @@ where
         let rows = self.counts.rows(); // For IntegerMatrix, this returns const
         let cols = self.counts.cols(); // For IntegerMatrix, this returns const
         for r in 0..rows {
-            let hashed = hash64_seeded(r, value);
+            let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             self.counts.increment_by_row(r, col, many);
         }
@@ -291,7 +296,7 @@ where
         let cols = self.counts.cols(); // For IntegerMatrix, this returns const
         let mut min = S::Counter::from(i32::MAX);
         for r in 0..rows {
-            let hashed = hash64_seeded(r, value);
+            let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             min = min.min(self.counts.query_one_counter(r, col));
         }
@@ -323,7 +328,7 @@ where
 
 // SketchInput adapters for the fast-path Count-Min update rule.
 // Fast-path CountMin operations using precomputed hashes.
-impl<S> CountMin<S, FastPath>
+impl<S, H: SketchHasher> CountMin<S, FastPath, H>
 where
     S: MatrixStorage + FastPathHasher,
     S::Counter: Copy + Ord + From<i32> + std::ops::AddAssign,
@@ -369,7 +374,7 @@ where
 
 // Core fast-path operations that operate on pre-computed hashes.
 // Fast-path CountMin operations.
-impl<S> CountMin<S, FastPath>
+impl<S, H: SketchHasher> CountMin<S, FastPath, H>
 where
     S: MatrixStorage,
     S::Counter: Copy + Ord + From<i32> + std::ops::AddAssign,
@@ -417,7 +422,7 @@ where
 }
 
 // Nitro sampling helpers for fast-path CountMin.
-impl CountMin<Vector2D<i32>, FastPath> {
+impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
     /// Enables Nitro sampling with the provided rate.
     pub fn enable_nitro(&mut self, sampling_rate: f64) {
         self.counts.enable_nitro(sampling_rate);
@@ -436,7 +441,7 @@ impl CountMin<Vector2D<i32>, FastPath> {
         if self.counts.nitro().to_skip >= rows {
             self.counts.reduce_nitro_skip(rows);
         } else {
-            let hashed = hash128_seeded(0, value);
+            let hashed = H::hash128_seeded(0, value);
             let r = self.counts.nitro().to_skip;
             self.counts.update_by_row(r, hashed, |a, b| *a += b, delta);
             self.counts.nitro_mut().draw_geometric();
@@ -455,7 +460,7 @@ impl CountMin<Vector2D<i32>, FastPath> {
 
 /// Thin wrappers to satisfy the NitroTarget trait for CountMin.
 // NitroTarget integration for fast-path CountMin.
-impl NitroTarget for CountMin<Vector2D<i32>, FastPath> {
+impl<H: SketchHasher> NitroTarget for CountMin<Vector2D<i32>, FastPath, H> {
     #[inline(always)]
     fn rows(&self) -> usize {
         self.counts.rows()
