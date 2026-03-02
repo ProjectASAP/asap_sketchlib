@@ -469,6 +469,73 @@ impl<H: SketchHasher> NitroTarget for CountMin<Vector2D<i32>, FastPath, H> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// OctoSketch child sketch for multi-threaded delta-based promotion.
+// ---------------------------------------------------------------------------
+
+use crate::octo_delta::{CM_PROMASK, CmDelta};
+
+/// Lightweight CountMin child sketch with u8 counters.
+/// Used by OctoSketch workers: accumulates counts in u8 cells and emits
+/// `CmDelta` entries when a counter reaches the promotion threshold.
+pub struct CountMinChild {
+    counts: Vector2D<u8>,
+}
+
+impl CountMinChild {
+    /// Creates a child sketch matching the parent's dimensions.
+    pub fn with_dimensions(rows: usize, cols: usize) -> Self {
+        let mut counts = Vector2D::init(rows, cols);
+        counts.fill(0u8);
+        CountMinChild { counts }
+    }
+
+    pub fn rows(&self) -> usize {
+        self.counts.rows()
+    }
+
+    pub fn cols(&self) -> usize {
+        self.counts.cols()
+    }
+
+    /// Insert a key, emitting `CmDelta` entries via `emit` when a counter
+    /// reaches `CM_PROMASK`. The counter is reset to 0 after emission.
+    #[inline(always)]
+    pub fn insert_and_emit(&mut self, value: &SketchInput, mut emit: impl FnMut(CmDelta)) {
+        let rows = self.counts.rows();
+        let cols = self.counts.cols();
+        let data = self.counts.as_mut_slice();
+        for r in 0..rows {
+            let hashed = hash64_seeded(r, value);
+            let col = ((hashed & LOWER_32_MASK) as usize) % cols;
+            let cell = &mut data[r * cols + col];
+            *cell = cell.wrapping_add(1);
+            if *cell >= CM_PROMASK {
+                emit(CmDelta {
+                    row: r as u16,
+                    col: col as u16,
+                    value: *cell,
+                });
+                *cell = 0;
+            }
+        }
+    }
+}
+
+/// Apply a `CmDelta` to a full-precision parent CountMin sketch.
+impl<S: MatrixStorage> CountMin<S, RegularPath>
+where
+    S::Counter: Copy + std::ops::AddAssign + From<i32>,
+{
+    pub fn apply_delta(&mut self, delta: CmDelta) {
+        self.counts.increment_by_row(
+            delta.row as usize,
+            delta.col as usize,
+            S::Counter::from(delta.value as i32),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

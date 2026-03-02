@@ -331,6 +331,60 @@ impl HyperLogLogHIP {
         }
     }
 }
+// ---------------------------------------------------------------------------
+// OctoSketch child sketch for multi-threaded delta-based promotion.
+// ---------------------------------------------------------------------------
+
+use crate::octo_delta::HllDelta;
+
+/// Lightweight HLL child sketch backed by a fixed register array.
+/// Emits `HllDelta` whenever a register is improved (PROMASK = 0,
+/// meaning every improvement is propagated immediately).
+pub struct HllChild {
+    registers: Box<[u8; NUM_REGISTERS]>,
+}
+
+impl Default for HllChild {
+    fn default() -> Self {
+        Self {
+            registers: Box::new([0u8; NUM_REGISTERS]),
+        }
+    }
+}
+
+impl HllChild {
+    /// Insert using a pre-computed hash, emitting `HllDelta` on register improvement.
+    #[inline(always)]
+    pub fn insert_with_hash_and_emit(&mut self, hashed_val: u64, mut emit: impl FnMut(HllDelta)) {
+        let bucket_num = ((hashed_val >> HLL_Q) & HLL_P_MASK) as usize;
+        let leading_zero = ((hashed_val << HLL_P) + HLL_P_MASK).leading_zeros() as u8 + 1;
+        if leading_zero > self.registers[bucket_num] {
+            self.registers[bucket_num] = leading_zero;
+            emit(HllDelta {
+                pos: bucket_num as u16,
+                value: leading_zero,
+            });
+        }
+    }
+
+    /// Insert a key, emitting `HllDelta` on register improvement.
+    #[inline(always)]
+    pub fn insert_and_emit(&mut self, obj: &SketchInput, emit: impl FnMut(HllDelta)) {
+        let hashed_val = hash64_seeded(CANONICAL_HASH_SEED, obj);
+        self.insert_with_hash_and_emit(hashed_val, emit);
+    }
+}
+
+/// Apply an `HllDelta` to a full-precision parent HyperLogLog sketch.
+impl<Variant> HyperLogLog<Variant> {
+    pub fn apply_delta(&mut self, delta: HllDelta) {
+        let pos = delta.pos as usize;
+        if delta.value > self.registers[pos] {
+            self.registers[pos] = delta.value;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
