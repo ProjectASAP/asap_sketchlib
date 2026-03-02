@@ -15,7 +15,6 @@ smallvec = "1.13.2"
 prost = "0.13"
 bytes = "1"
 core_affinity = "0.8"
-ringbuf = "0.4"
 
 [dev-dependencies]
 criterion = "0.5"

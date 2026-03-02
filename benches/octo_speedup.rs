@@ -1,10 +1,11 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use sketchlib_rust::{
-    hash64_seeded, run_octo, CmOctoParent, CmOctoWorker, Count, CountMin, CountOctoParent,
-    CountOctoWorker, HllOctoParent, HllOctoWorker, HyperLogLog, OctoConfig, Regular, RegularPath,
-    SketchInput, Vector2D,
+    CmOctoParent, CmOctoWorker, Count, CountMin, CountOctoParent, CountOctoWorker, HllOctoParent,
+    HllOctoWorker, HyperLogLog, OctoConfig, Regular, RegularPath, SketchInput, Vector2D,
+    hash64_seeded, run_octo,
 };
+use std::sync::mpsc;
 use std::thread;
 
 const RNG_SEED: u64 = 0x0c70_2026_5eed_1234;
@@ -16,6 +17,7 @@ const DOMAIN_MASK: u64 = (1 << 20) - 1;
 const QUEUE_CAPACITY: usize = 65_536;
 const WORKER_COUNTS: [usize; 4] = [1, 2, 4, 8];
 const PARTITION_SEED: usize = 19;
+const MERGE_INTERVAL: usize = 10_000;
 
 fn build_inputs(sample_count: usize) -> Vec<SketchInput<'static>> {
     let mut rng = StdRng::seed_from_u64(RNG_SEED ^ (sample_count as u64));
@@ -24,39 +26,66 @@ fn build_inputs(sample_count: usize) -> Vec<SketchInput<'static>> {
         .collect()
 }
 
-fn partition_indices(inputs: &[SketchInput<'_>], num_workers: usize) -> Vec<Vec<usize>> {
-    let mut partitions: Vec<Vec<usize>> = (0..num_workers).map(|_| Vec::new()).collect();
-    for (idx, item) in inputs.iter().enumerate() {
-        let h = hash64_seeded(PARTITION_SEED, item) as usize;
-        partitions[h % num_workers].push(idx);
-    }
-    partitions
+#[inline(always)]
+fn should_merge(number: usize, interval: usize, thread_num: usize, thread_id: usize) -> bool {
+    number != 0 && number % (interval * thread_num) == interval * thread_id
 }
 
 fn run_regular_countmin_merge(
     inputs: &[SketchInput<'_>],
     num_workers: usize,
 ) -> CountMin<Vector2D<i32>, RegularPath> {
-    let partitions = partition_indices(inputs, num_workers);
-    let mut workers = Vec::with_capacity(num_workers);
+    let mut workers = Vec::new();
 
     thread::scope(|s| {
+        let mut worker_txs = Vec::with_capacity(num_workers);
         let mut handles = Vec::with_capacity(num_workers);
-        for partition in partitions.iter() {
+        for worker_id in 0..num_workers {
+            let (tx, rx) = mpsc::channel::<Option<usize>>();
+            worker_txs.push(tx);
             handles.push(s.spawn(move || {
                 let mut child = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
                     CM_COUNT_ROWS,
                     CM_COUNT_COLS,
                 );
-                for &idx in partition {
-                    child.insert(&inputs[idx]);
+                let mut partials = Vec::new();
+                let mut number = 0usize;
+                while let Ok(msg) = rx.recv() {
+                    match msg {
+                        Some(idx) => {
+                            child.insert(&inputs[idx]);
+                            number += 1;
+                            if should_merge(number, MERGE_INTERVAL, num_workers, worker_id) {
+                                partials.push(child);
+                                child = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                                    CM_COUNT_ROWS,
+                                    CM_COUNT_COLS,
+                                );
+                            }
+                        }
+                        None => break,
+                    }
                 }
-                child
+                partials.push(child);
+                partials
             }));
         }
 
+        s.spawn(move || {
+            for (idx, item) in inputs.iter().enumerate() {
+                let h = hash64_seeded(PARTITION_SEED, item) as usize;
+                let worker_id = h % num_workers;
+                worker_txs[worker_id]
+                    .send(Some(idx))
+                    .expect("regular CountMin worker receiver dropped unexpectedly");
+            }
+            for tx in worker_txs {
+                let _ = tx.send(None);
+            }
+        });
+
         for h in handles {
-            workers.push(h.join().expect("regular CountMin worker thread panicked"));
+            workers.extend(h.join().expect("regular CountMin worker thread panicked"));
         }
     });
 
@@ -72,26 +101,57 @@ fn run_regular_count_merge(
     inputs: &[SketchInput<'_>],
     num_workers: usize,
 ) -> Count<Vector2D<i32>, RegularPath> {
-    let partitions = partition_indices(inputs, num_workers);
-    let mut workers = Vec::with_capacity(num_workers);
+    let mut workers = Vec::new();
 
     thread::scope(|s| {
+        let mut worker_txs = Vec::with_capacity(num_workers);
         let mut handles = Vec::with_capacity(num_workers);
-        for partition in partitions.iter() {
+        for worker_id in 0..num_workers {
+            let (tx, rx) = mpsc::channel::<Option<usize>>();
+            worker_txs.push(tx);
             handles.push(s.spawn(move || {
                 let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(
                     CM_COUNT_ROWS,
                     CM_COUNT_COLS,
                 );
-                for &idx in partition {
-                    child.insert(&inputs[idx]);
+                let mut partials = Vec::new();
+                let mut number = 0usize;
+                while let Ok(msg) = rx.recv() {
+                    match msg {
+                        Some(idx) => {
+                            child.insert(&inputs[idx]);
+                            number += 1;
+                            if should_merge(number, MERGE_INTERVAL, num_workers, worker_id) {
+                                partials.push(child);
+                                child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(
+                                    CM_COUNT_ROWS,
+                                    CM_COUNT_COLS,
+                                );
+                            }
+                        }
+                        None => break,
+                    }
                 }
-                child
+                partials.push(child);
+                partials
             }));
         }
 
+        s.spawn(move || {
+            for (idx, item) in inputs.iter().enumerate() {
+                let h = hash64_seeded(PARTITION_SEED, item) as usize;
+                let worker_id = h % num_workers;
+                worker_txs[worker_id]
+                    .send(Some(idx))
+                    .expect("regular Count worker receiver dropped unexpectedly");
+            }
+            for tx in worker_txs {
+                let _ = tx.send(None);
+            }
+        });
+
         for h in handles {
-            workers.push(h.join().expect("regular Count worker thread panicked"));
+            workers.extend(h.join().expect("regular Count worker thread panicked"));
         }
     });
 
@@ -104,23 +164,51 @@ fn run_regular_count_merge(
 }
 
 fn run_regular_hll_merge(inputs: &[SketchInput<'_>], num_workers: usize) -> HyperLogLog<Regular> {
-    let partitions = partition_indices(inputs, num_workers);
-    let mut workers = Vec::with_capacity(num_workers);
+    let mut workers = Vec::new();
 
     thread::scope(|s| {
+        let mut worker_txs = Vec::with_capacity(num_workers);
         let mut handles = Vec::with_capacity(num_workers);
-        for partition in partitions.iter() {
+        for worker_id in 0..num_workers {
+            let (tx, rx) = mpsc::channel::<Option<usize>>();
+            worker_txs.push(tx);
             handles.push(s.spawn(move || {
                 let mut child = HyperLogLog::<Regular>::default();
-                for &idx in partition {
-                    child.insert(&inputs[idx]);
+                let mut partials = Vec::new();
+                let mut number = 0usize;
+                while let Ok(msg) = rx.recv() {
+                    match msg {
+                        Some(idx) => {
+                            child.insert(&inputs[idx]);
+                            number += 1;
+                            if should_merge(number, MERGE_INTERVAL, num_workers, worker_id) {
+                                partials.push(child);
+                                child = HyperLogLog::<Regular>::default();
+                            }
+                        }
+                        None => break,
+                    }
                 }
-                child
+                partials.push(child);
+                partials
             }));
         }
 
+        s.spawn(move || {
+            for (idx, item) in inputs.iter().enumerate() {
+                let h = hash64_seeded(PARTITION_SEED, item) as usize;
+                let worker_id = h % num_workers;
+                worker_txs[worker_id]
+                    .send(Some(idx))
+                    .expect("regular HLL worker receiver dropped unexpectedly");
+            }
+            for tx in worker_txs {
+                let _ = tx.send(None);
+            }
+        });
+
         for h in handles {
-            workers.push(h.join().expect("regular HLL worker thread panicked"));
+            workers.extend(h.join().expect("regular HLL worker thread panicked"));
         }
     });
 
@@ -136,6 +224,23 @@ fn bench_countmin_merge_compare(c: &mut Criterion) {
     let mut group = c.benchmark_group("countmin_merge_compare");
     group.sample_size(10);
     group.throughput(Throughput::Elements(inputs.len() as u64));
+
+    group.bench_function("single_thread_insert", |b| {
+        b.iter_with_setup(
+            || {
+                CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                    CM_COUNT_ROWS,
+                    CM_COUNT_COLS,
+                )
+            },
+            |mut sketch| {
+                for input in &inputs {
+                    sketch.insert(input);
+                }
+                black_box(sketch);
+            },
+        );
+    });
 
     for &workers in &WORKER_COUNTS {
         group.bench_with_input(
@@ -182,6 +287,18 @@ fn bench_count_merge_compare(c: &mut Criterion) {
     group.sample_size(10);
     group.throughput(Throughput::Elements(inputs.len() as u64));
 
+    group.bench_function("single_thread_insert", |b| {
+        b.iter_with_setup(
+            || Count::<Vector2D<i32>, RegularPath>::with_dimensions(CM_COUNT_ROWS, CM_COUNT_COLS),
+            |mut sketch| {
+                for input in &inputs {
+                    sketch.insert(input);
+                }
+                black_box(sketch);
+            },
+        );
+    });
+
     for &workers in &WORKER_COUNTS {
         group.bench_with_input(
             BenchmarkId::new("octo_style", workers),
@@ -226,6 +343,15 @@ fn bench_hll_merge_compare(c: &mut Criterion) {
     let mut group = c.benchmark_group("hll_merge_compare");
     group.sample_size(10);
     group.throughput(Throughput::Elements(inputs.len() as u64));
+
+    group.bench_function("single_thread_insert", |b| {
+        b.iter_with_setup(HyperLogLog::<Regular>::default, |mut sketch| {
+            for input in &inputs {
+                sketch.insert(input);
+            }
+            black_box(sketch);
+        });
+    });
 
     for &workers in &WORKER_COUNTS {
         group.bench_with_input(

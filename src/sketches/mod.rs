@@ -47,8 +47,8 @@ pub use cs_heap::CSHeap;
 pub mod octo_delta;
 pub use octo_delta::{CM_PROMASK, COUNT_PROMASK, CmDelta, CountDelta, HLL_PROMASK, HllDelta};
 
-pub use countmin::CountMinChild;
 pub use count::CountChild;
+pub use countmin::CountMinChild;
 pub use hll::HllChild;
 
 pub mod fold_cms;
