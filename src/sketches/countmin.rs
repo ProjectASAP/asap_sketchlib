@@ -498,10 +498,9 @@ impl CountMinChild {
         self.counts.cols()
     }
 
-    /// Insert a key, emitting `CmDelta` entries via `emit` when a counter
-    /// reaches `CM_PROMASK`. The counter is reset to 0 after emission.
+    /// Insert a key and emit a `CmDelta` each time a counter reaches `CM_PROMASK`.
     #[inline(always)]
-    pub fn insert_and_emit(&mut self, value: &SketchInput, mut emit: impl FnMut(CmDelta)) {
+    pub fn insert(&mut self, value: &SketchInput, emit: &mut dyn FnMut(CmDelta)) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         let data = self.counts.as_mut_slice();
@@ -545,6 +544,21 @@ mod tests {
     use crate::{SketchInput, hash64_seeded};
     use core::f64;
     use std::collections::HashMap;
+
+    #[test]
+    fn countmin_child_insert_emits_at_threshold() {
+        let mut child = CountMinChild::with_dimensions(3, 64);
+        let key = SketchInput::U64(42);
+        let mut deltas: Vec<CmDelta> = Vec::new();
+
+        for _ in 0..(CM_PROMASK - 1) {
+            child.insert(&key, &mut |d| deltas.push(d));
+        }
+        assert!(deltas.is_empty(), "should not emit before threshold");
+
+        child.insert(&key, &mut |d| deltas.push(d));
+        assert_eq!(deltas.len(), 3, "should emit one delta per row");
+    }
 
     fn run_zipf_stream(
         rows: usize,

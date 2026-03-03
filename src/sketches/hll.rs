@@ -353,9 +353,9 @@ impl Default for HllChild {
 }
 
 impl HllChild {
-    /// Insert using a pre-computed hash, emitting `HllDelta` on register improvement.
+    /// Insert using a pre-computed hash and emit `HllDelta` on register improvement.
     #[inline(always)]
-    pub fn insert_with_hash_and_emit(&mut self, hashed_val: u64, mut emit: impl FnMut(HllDelta)) {
+    pub fn insert_with_hash(&mut self, hashed_val: u64, emit: &mut dyn FnMut(HllDelta)) {
         let bucket_num = ((hashed_val >> HLL_Q) & HLL_P_MASK) as usize;
         let leading_zero = ((hashed_val << HLL_P) + HLL_P_MASK).leading_zeros() as u8 + 1;
         if leading_zero > self.registers[bucket_num] {
@@ -367,11 +367,11 @@ impl HllChild {
         }
     }
 
-    /// Insert a key, emitting `HllDelta` on register improvement.
+    /// Insert a key and emit `HllDelta` on register improvement.
     #[inline(always)]
-    pub fn insert_and_emit(&mut self, obj: &SketchInput, emit: impl FnMut(HllDelta)) {
+    pub fn insert(&mut self, obj: &SketchInput, emit: &mut dyn FnMut(HllDelta)) {
         let hashed_val = hash64_seeded(CANONICAL_HASH_SEED, obj);
-        self.insert_with_hash_and_emit(hashed_val, emit);
+        self.insert_with_hash(hashed_val, emit);
     }
 }
 
@@ -394,6 +394,19 @@ mod tests {
     const TARGETS: [usize; 7] = [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000];
     const ERROR_TOLERANCE: f64 = 0.02;
     const SERDE_SAMPLE: usize = 100_000;
+
+    #[test]
+    fn hll_child_insert_emits_on_improvement() {
+        let mut child = HllChild::default();
+        let mut deltas: Vec<HllDelta> = Vec::new();
+
+        child.insert(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        assert_eq!(deltas.len(), 1, "first insert should improve one register");
+
+        let before = deltas.len();
+        child.insert(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        assert_eq!(deltas.len(), before, "duplicate should not emit");
+    }
 
     trait HllEstimator: Default {
         fn push(&mut self, input: &SketchInput);

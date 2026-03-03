@@ -746,9 +746,9 @@ impl CountChild {
     }
 
     /// Insert a key with the Count sketch sign convention.
-    /// Emits `CountDelta` entries via `emit` when |counter| >= `COUNT_PROMASK`.
+    /// Emits `CountDelta` when |counter| >= `COUNT_PROMASK`, then resets the counter.
     #[inline(always)]
-    pub fn insert_and_emit(&mut self, value: &SketchInput, mut emit: impl FnMut(CountDelta)) {
+    pub fn insert(&mut self, value: &SketchInput, emit: &mut dyn FnMut(CountDelta)) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         let data = self.counts.as_mut_slice();
@@ -792,6 +792,21 @@ mod tests {
     };
     use crate::{SketchInput, hash64_seeded};
     use std::collections::HashMap;
+
+    #[test]
+    fn count_child_insert_emits_at_threshold() {
+        let mut child = CountChild::with_dimensions(3, 64);
+        let key = SketchInput::U64(99);
+        let mut deltas: Vec<CountDelta> = Vec::new();
+
+        for _ in 0..200 {
+            child.insert(&key, &mut |d| deltas.push(d));
+        }
+        assert!(
+            deltas.len() >= 3,
+            "expected at least one promoted delta per row"
+        );
+    }
 
     fn counter_sign(row: usize, key: &SketchInput) -> i32 {
         let hash = hash64_seeded(row, key);

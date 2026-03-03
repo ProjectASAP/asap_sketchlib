@@ -6,18 +6,18 @@
 //! threshold. An aggregator thread applies deltas to a full-precision parent sketch.
 
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock, Weak};
 use std::sync::mpsc;
 use std::thread;
 
 use crate::{
     CmDelta, Count, CountChild, CountDelta, CountMin, CountMinChild, HllChild, HllDelta,
-    HyperLogLog, Regular, RegularPath, SketchInput, Vector2D, hash64_seeded,
+    HyperLogLog, Regular, RegularPath, SketchInput, Vector2D,
 };
 
 /// Legacy queue capacity default retained for config compatibility.
 const DEFAULT_QUEUE_CAPACITY: usize = 65536;
-const WORKER_DISPATCH_BATCH_SIZE: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Traits
@@ -27,12 +27,12 @@ const WORKER_DISPATCH_BATCH_SIZE: usize = 64;
 pub trait OctoWorker: Send {
     type Delta: Copy + Send + 'static;
 
-    /// Process one input, emitting zero or more deltas via `emit`.
+    /// Process one input and emit zero or more deltas.
     fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(Self::Delta));
 }
 
 /// Parent-side trait: absorbs deltas into a full-precision sketch.
-pub trait OctoParent: Send {
+pub trait OctoAggregator: Send {
     type Delta: Copy + Send + 'static;
 
     /// Apply a single delta to the parent sketch.
@@ -71,190 +71,147 @@ pub struct OctoResult<P> {
     pub parent: P,
 }
 
-/// Owned variant of `SketchInput` for cross-thread transport.
-#[derive(Clone, Debug)]
-pub enum OwnedSketchInput {
-    I8(i8),
-    I16(i16),
-    I32(i32),
-    I64(i64),
-    I128(i128),
-    ISIZE(isize),
-    U8(u8),
-    U16(u16),
-    U32(u32),
-    U64(u64),
-    U128(u128),
-    USIZE(usize),
-    F32(f32),
-    F64(f64),
-    String(String),
-    Bytes(Vec<u8>),
-}
-
-impl OwnedSketchInput {
-    fn as_sketch_input(&self) -> SketchInput<'_> {
-        match self {
-            OwnedSketchInput::I8(v) => SketchInput::I8(*v),
-            OwnedSketchInput::I16(v) => SketchInput::I16(*v),
-            OwnedSketchInput::I32(v) => SketchInput::I32(*v),
-            OwnedSketchInput::I64(v) => SketchInput::I64(*v),
-            OwnedSketchInput::I128(v) => SketchInput::I128(*v),
-            OwnedSketchInput::ISIZE(v) => SketchInput::ISIZE(*v),
-            OwnedSketchInput::U8(v) => SketchInput::U8(*v),
-            OwnedSketchInput::U16(v) => SketchInput::U16(*v),
-            OwnedSketchInput::U32(v) => SketchInput::U32(*v),
-            OwnedSketchInput::U64(v) => SketchInput::U64(*v),
-            OwnedSketchInput::U128(v) => SketchInput::U128(*v),
-            OwnedSketchInput::USIZE(v) => SketchInput::USIZE(*v),
-            OwnedSketchInput::F32(v) => SketchInput::F32(*v),
-            OwnedSketchInput::F64(v) => SketchInput::F64(*v),
-            OwnedSketchInput::String(s) => SketchInput::Str(s.as_str()),
-            OwnedSketchInput::Bytes(b) => SketchInput::Bytes(b.as_slice()),
-        }
-    }
-}
-
-impl From<&SketchInput<'_>> for OwnedSketchInput {
-    fn from(value: &SketchInput<'_>) -> Self {
-        match value {
-            SketchInput::I8(v) => OwnedSketchInput::I8(*v),
-            SketchInput::I16(v) => OwnedSketchInput::I16(*v),
-            SketchInput::I32(v) => OwnedSketchInput::I32(*v),
-            SketchInput::I64(v) => OwnedSketchInput::I64(*v),
-            SketchInput::I128(v) => OwnedSketchInput::I128(*v),
-            SketchInput::ISIZE(v) => OwnedSketchInput::ISIZE(*v),
-            SketchInput::U8(v) => OwnedSketchInput::U8(*v),
-            SketchInput::U16(v) => OwnedSketchInput::U16(*v),
-            SketchInput::U32(v) => OwnedSketchInput::U32(*v),
-            SketchInput::U64(v) => OwnedSketchInput::U64(*v),
-            SketchInput::U128(v) => OwnedSketchInput::U128(*v),
-            SketchInput::USIZE(v) => OwnedSketchInput::USIZE(*v),
-            SketchInput::F32(v) => OwnedSketchInput::F32(*v),
-            SketchInput::F64(v) => OwnedSketchInput::F64(*v),
-            SketchInput::Str(s) => OwnedSketchInput::String((*s).to_string()),
-            SketchInput::String(s) => OwnedSketchInput::String(s.clone()),
-            SketchInput::Bytes(b) => OwnedSketchInput::Bytes(b.to_vec()),
-        }
-    }
-}
-
-enum IngressMsg {
-    Data(OwnedSketchInput),
-    End,
-}
-
 enum WorkerMsg {
-    Batch(Vec<OwnedSketchInput>),
+    Data(SketchInput<'static>),
     End,
 }
 
+/// Extends a `SketchInput` lifetime to `'static` for cross-thread transport in
+/// streaming mode. Caller must ensure all borrowed data outlives worker processing.
 #[inline(always)]
-fn worker_index(hash: u64, num_workers: usize) -> usize {
-    if num_workers.is_power_of_two() {
-        (hash as usize) & (num_workers - 1)
-    } else {
-        (hash as usize) % num_workers
-    }
-}
-
-#[inline]
-fn flush_worker_batch(
-    worker_input_txs: &[mpsc::Sender<WorkerMsg>],
-    pending: &mut [Vec<OwnedSketchInput>],
-    worker_id: usize,
-) {
-    if pending[worker_id].is_empty() {
-        return;
-    }
-    let batch = std::mem::take(&mut pending[worker_id]);
-    worker_input_txs[worker_id]
-        .send(WorkerMsg::Batch(batch))
-        .expect("worker receiver dropped unexpectedly");
-}
-
-#[inline]
-fn flush_all_worker_batches(
-    worker_input_txs: &[mpsc::Sender<WorkerMsg>],
-    pending: &mut [Vec<OwnedSketchInput>],
-) {
-    for worker_id in 0..pending.len() {
-        flush_worker_batch(worker_input_txs, pending, worker_id);
-    }
-}
-
-#[inline]
-fn send_end_to_all_workers(worker_input_txs: &[mpsc::Sender<WorkerMsg>]) {
-    for tx in worker_input_txs {
-        let _ = tx.send(WorkerMsg::End);
-    }
+unsafe fn assume_input_static(input: SketchInput<'_>) -> SketchInput<'static> {
+    // SAFETY: enforced by caller contract described above.
+    unsafe { std::mem::transmute::<SketchInput<'_>, SketchInput<'static>>(input) }
 }
 
 /// Streaming Octo runtime that accepts incremental inserts and finalizes into a parent sketch.
 pub struct OctoRuntime<W, P>
 where
     W: OctoWorker + 'static,
-    P: OctoParent<Delta = W::Delta> + Send + 'static,
+    P: OctoAggregator<Delta = W::Delta> + Send + Sync + 'static,
 {
-    ingress_tx: mpsc::Sender<IngressMsg>,
-    dispatcher_handle: Option<thread::JoinHandle<()>>,
-    worker_handles: Vec<thread::JoinHandle<()>>,
-    aggregator_handle: Option<thread::JoinHandle<P>>,
+    core: Option<OctoCore<P>>,
     _worker_marker: PhantomData<W>,
 }
 
-impl<W, P> OctoRuntime<W, P>
+/// Read-only handle for querying the live aggregator state while runtime is active.
+pub struct OctoReadHandle<P> {
+    parent: Weak<RwLock<P>>,
+}
+
+impl<P> Clone for OctoReadHandle<P> {
+    fn clone(&self) -> Self {
+        Self {
+            parent: Weak::clone(&self.parent),
+        }
+    }
+}
+
+impl<P> OctoReadHandle<P> {
+    /// Executes a read-only closure over the live parent state.
+    pub fn with_parent<R>(&self, f: impl FnOnce(&P) -> R) -> R {
+        let parent = self
+            .parent
+            .upgrade()
+            .expect("Octo runtime has been finished and parent state was dropped");
+        let guard = parent.read().expect("parent lock poisoned");
+        f(&guard)
+    }
+}
+
+struct OctoCore<P> {
+    worker_input_txs: Vec<mpsc::Sender<WorkerMsg>>,
+    next_worker: AtomicUsize,
+    worker_handles: Vec<thread::JoinHandle<()>>,
+    aggregator_handle: Option<thread::JoinHandle<()>>,
+    parent: Arc<RwLock<P>>,
+    closed: AtomicBool,
+}
+
+impl<P> OctoCore<P> {
+    fn read_handle(&self) -> OctoReadHandle<P> {
+        OctoReadHandle {
+            parent: Arc::downgrade(&self.parent),
+        }
+    }
+
+    fn close(&self) {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        for tx in &self.worker_input_txs {
+            let _ = tx.send(WorkerMsg::End);
+        }
+    }
+}
+
+impl<P> OctoCore<P> {
+    fn into_parent(mut self) -> P {
+        self.close();
+
+        for handle in self.worker_handles.drain(..) {
+            handle.join().expect("worker thread panicked during finish");
+        }
+
+        if let Some(aggregator) = self.aggregator_handle.take() {
+            aggregator
+                .join()
+                .expect("aggregator thread panicked during finish");
+        }
+
+        let parent_lock = match Arc::try_unwrap(self.parent) {
+            Ok(lock) => lock,
+            Err(_) => panic!("Octo parent still has external strong references at finish"),
+        };
+        parent_lock.into_inner().expect("parent lock poisoned")
+    }
+}
+
+impl<P> OctoCore<P>
 where
-    W: OctoWorker + 'static,
-    P: OctoParent<Delta = W::Delta> + Send + 'static,
+    P: Send + Sync + 'static,
 {
-    pub fn new<F, PF>(config: &OctoConfig, worker_factory: F, parent_factory: PF) -> Self
+    fn start<W>(workers: Vec<W>, parent: P, num_workers: usize, pin_cores: bool) -> Self
     where
-        F: Fn(usize) -> W + Send + Sync + 'static,
-        PF: FnOnce() -> P + Send + 'static,
+        W: OctoWorker + 'static,
+        P: OctoAggregator<Delta = W::Delta>,
     {
-        let num_workers = config.num_workers.max(1);
-        let (ingress_tx, ingress_rx) = mpsc::channel::<IngressMsg>();
+        assert_eq!(workers.len(), num_workers);
+
         let (delta_tx, delta_rx) = mpsc::channel::<W::Delta>();
-        let pin_cores = config.pin_cores;
+        let parent = Arc::new(RwLock::new(parent));
+        let parent_for_aggregator = Arc::clone(&parent);
 
         let aggregator_handle = thread::spawn(move || {
             if pin_cores {
                 let _ = core_affinity::set_for_current(core_affinity::CoreId { id: num_workers });
             }
-            let mut parent = parent_factory();
             for delta in delta_rx {
-                parent.apply(delta);
+                let mut guard = parent_for_aggregator
+                    .write()
+                    .expect("parent lock poisoned in aggregator");
+                guard.apply(delta);
             }
-            parent
         });
 
-        let wf = Arc::new(worker_factory);
         let mut worker_input_txs = Vec::with_capacity(num_workers);
         let mut worker_handles = Vec::with_capacity(num_workers);
-        for worker_id in 0..num_workers {
+        for (worker_id, mut worker) in workers.into_iter().enumerate() {
             let (worker_tx, worker_rx) = mpsc::channel::<WorkerMsg>();
             worker_input_txs.push(worker_tx);
-            let wf_clone = Arc::clone(&wf);
             let delta_tx_worker = delta_tx.clone();
-            let pin_cores = config.pin_cores;
+            let pin_cores = pin_cores;
             worker_handles.push(thread::spawn(move || {
                 if pin_cores {
                     let _ = core_affinity::set_for_current(core_affinity::CoreId { id: worker_id });
                 }
-                let mut worker = wf_clone(worker_id);
                 while let Ok(msg) = worker_rx.recv() {
                     match msg {
-                        WorkerMsg::Batch(batch) => {
-                            for input in batch {
-                                let borrowed = input.as_sketch_input();
-                                worker.process(&borrowed, &mut |delta| {
-                                    delta_tx_worker.send(delta).expect(
-                                        "aggregator receiver dropped while workers still running",
-                                    );
-                                });
-                            }
-                        }
+                        WorkerMsg::Data(input) => worker.process(&input, &mut |delta| {
+                            delta_tx_worker.send(delta).expect(
+                                "aggregator receiver dropped while workers still running",
+                            );
+                        }),
                         WorkerMsg::End => break,
                     }
                 }
@@ -262,48 +219,61 @@ where
         }
         drop(delta_tx);
 
-        let dispatcher_handle = thread::spawn(move || {
-            let mut sent_end = false;
-            let mut pending = vec![Vec::new(); num_workers];
-            while let Ok(msg) = ingress_rx.recv() {
-                match msg {
-                    IngressMsg::Data(input) => {
-                        let borrowed = input.as_sketch_input();
-                        let worker_id =
-                            worker_index(hash64_seeded(PARTITION_SEED, &borrowed), num_workers);
-                        pending[worker_id].push(input);
-                        if pending[worker_id].len() >= WORKER_DISPATCH_BATCH_SIZE {
-                            flush_worker_batch(&worker_input_txs, &mut pending, worker_id);
-                        }
-                    }
-                    IngressMsg::End => {
-                        flush_all_worker_batches(&worker_input_txs, &mut pending);
-                        send_end_to_all_workers(&worker_input_txs);
-                        sent_end = true;
-                        break;
-                    }
-                }
-            }
-
-            if !sent_end {
-                flush_all_worker_batches(&worker_input_txs, &mut pending);
-                send_end_to_all_workers(&worker_input_txs);
-            }
-        });
-
         Self {
-            ingress_tx,
-            dispatcher_handle: Some(dispatcher_handle),
+            worker_input_txs,
+            next_worker: AtomicUsize::new(0),
             worker_handles,
             aggregator_handle: Some(aggregator_handle),
+            parent,
+            closed: AtomicBool::new(false),
+        }
+    }
+}
+
+impl<W, P> OctoRuntime<W, P>
+where
+    W: OctoWorker + 'static,
+    P: OctoAggregator<Delta = W::Delta> + Send + Sync + 'static,
+{
+    pub fn new<F, PF>(config: &OctoConfig, worker_factory: F, parent_factory: PF) -> Self
+    where
+        F: Fn(usize) -> W,
+        PF: FnOnce() -> P,
+    {
+        let num_workers = config.num_workers.max(1);
+        let workers: Vec<W> = (0..num_workers).map(worker_factory).collect();
+        let parent = parent_factory();
+        let core = OctoCore::start(workers, parent, num_workers, config.pin_cores);
+
+        Self {
+            core: Some(core),
             _worker_marker: PhantomData,
         }
     }
 
+    pub fn read_handle(&self) -> OctoReadHandle<P> {
+        self.core
+            .as_ref()
+            .expect("runtime core missing")
+            .read_handle()
+    }
+
+    pub fn close(&self) {
+        self.core.as_ref().expect("runtime core missing").close();
+    }
+
     pub fn insert(&mut self, input: SketchInput<'_>) {
-        self.ingress_tx
-            .send(IngressMsg::Data(OwnedSketchInput::from(&input)))
-            .expect("dispatcher receiver dropped while runtime is active");
+        let core = self.core.as_ref().expect("runtime core missing");
+        if core.closed.load(Ordering::Acquire) {
+            panic!("cannot insert after runtime has been closed");
+        }
+
+        let worker_id = core.next_worker.fetch_add(1, Ordering::AcqRel) % core.worker_input_txs.len();
+        // SAFETY: caller explicitly guarantees borrowed data lives long enough.
+        let static_input = unsafe { assume_input_static(input) };
+        core.worker_input_txs[worker_id]
+            .send(WorkerMsg::Data(static_input))
+            .expect("worker receiver dropped while runtime is active");
     }
 
     pub fn insert_batch(&mut self, inputs: &[SketchInput<'_>]) {
@@ -313,27 +283,11 @@ where
     }
 
     pub fn finish(mut self) -> OctoResult<P> {
-        self.ingress_tx
-            .send(IngressMsg::End)
-            .expect("dispatcher receiver dropped before finish");
-        drop(self.ingress_tx);
-
-        if let Some(dispatcher) = self.dispatcher_handle.take() {
-            dispatcher
-                .join()
-                .expect("dispatcher thread panicked during finish");
-        }
-
-        for handle in self.worker_handles {
-            handle.join().expect("worker thread panicked during finish");
-        }
-
         let parent = self
-            .aggregator_handle
+            .core
             .take()
-            .expect("aggregator handle missing")
-            .join()
-            .expect("aggregator thread panicked during finish");
+            .expect("runtime core missing")
+            .into_parent();
 
         OctoResult { parent }
     }
@@ -363,7 +317,7 @@ impl OctoWorker for CmOctoWorker {
 
     #[inline(always)]
     fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(CmDelta)) {
-        self.child.insert_and_emit(input, emit);
+        self.child.insert(input, emit);
     }
 }
 
@@ -372,7 +326,7 @@ pub struct CmOctoParent {
     pub sketch: CountMin<Vector2D<i32>, RegularPath>,
 }
 
-impl OctoParent for CmOctoParent {
+impl OctoAggregator for CmOctoParent {
     type Delta = CmDelta;
 
     #[inline(always)]
@@ -401,7 +355,7 @@ impl OctoWorker for CountOctoWorker {
 
     #[inline(always)]
     fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(CountDelta)) {
-        self.child.insert_and_emit(input, emit);
+        self.child.insert(input, emit);
     }
 }
 
@@ -410,7 +364,7 @@ pub struct CountOctoParent {
     pub sketch: Count<Vector2D<i32>, RegularPath>,
 }
 
-impl OctoParent for CountOctoParent {
+impl OctoAggregator for CountOctoParent {
     type Delta = CountDelta;
 
     #[inline(always)]
@@ -445,7 +399,7 @@ impl OctoWorker for HllOctoWorker {
 
     #[inline(always)]
     fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(HllDelta)) {
-        self.child.insert_and_emit(input, emit);
+        self.child.insert(input, emit);
     }
 }
 
@@ -454,7 +408,7 @@ pub struct HllOctoParent {
     pub sketch: HyperLogLog<Regular>,
 }
 
-impl OctoParent for HllOctoParent {
+impl OctoAggregator for HllOctoParent {
     type Delta = HllDelta;
 
     #[inline(always)]
@@ -467,104 +421,27 @@ impl OctoParent for HllOctoParent {
 // Core execution engine
 // ---------------------------------------------------------------------------
 
-/// Hash-based input partitioning seed index (uses the last seed in SEEDLIST
-/// to avoid collision with sketch-internal seeds which use indices 0..~5).
-const PARTITION_SEED: usize = 19;
-
 /// Runs the OctoSketch multi-threaded insert protocol.
 ///
-/// 1. Dispatches `inputs` across workers online by hash through channels.
+/// 1. Dispatches `inputs` across workers round-robin through per-worker channels.
 /// 2. Each worker maintains a child sketch, emitting deltas via an MPSC channel.
 /// 3. The aggregator blocks on the channel and applies deltas to the parent.
 /// 4. Returns the fully-merged parent sketch.
-///
-/// Uses `std::thread::scope` so `inputs` can have any lifetime (no `'static` needed).
 pub fn run_octo<W, P>(
     inputs: &[SketchInput<'_>],
     config: &OctoConfig,
-    worker_factory: impl Fn(usize) -> W + Send + Sync,
+    worker_factory: impl Fn(usize) -> W,
     parent_factory: impl FnOnce() -> P,
 ) -> OctoResult<P>
 where
-    W: OctoWorker,
-    P: OctoParent<Delta = W::Delta>,
+    W: OctoWorker + 'static,
+    P: OctoAggregator<Delta = W::Delta> + Send + Sync + 'static,
 {
-    let num_workers = config.num_workers.max(1);
-    let _capacity = config.queue_capacity.max(1024);
-
-    // Step 1: Create an unbounded MPSC channel for worker-to-aggregator deltas.
-    let (tx, rx) = mpsc::channel::<W::Delta>();
-
-    // Step 2: Run dispatcher + workers + aggregator inside a scoped thread block.
-    let mut parent = parent_factory();
-
-    thread::scope(|s| {
-        // Pin the aggregator (calling thread) to core num_workers if requested.
-        if config.pin_cores {
-            let _ = core_affinity::set_for_current(core_affinity::CoreId { id: num_workers });
-        }
-
-        // Spawn worker threads.
-        let wf = &worker_factory;
-        let mut worker_input_txs = Vec::with_capacity(num_workers);
-        for worker_id in 0..num_workers {
-            let (worker_tx, worker_rx) = mpsc::channel::<WorkerMsg>();
-            worker_input_txs.push(worker_tx);
-            let tx_worker = tx.clone();
-            let pin_cores = config.pin_cores;
-
-            s.spawn(move || {
-                // Pin to core.
-                if pin_cores {
-                    let _ = core_affinity::set_for_current(core_affinity::CoreId { id: worker_id });
-                }
-
-                let mut worker = wf(worker_id);
-                while let Ok(msg) = worker_rx.recv() {
-                    match msg {
-                        WorkerMsg::Batch(batch) => {
-                            for input in batch {
-                                let borrowed = input.as_sketch_input();
-                                worker.process(&borrowed, &mut |delta| {
-                                    tx_worker.send(delta).expect(
-                                        "aggregator receiver dropped while workers still running",
-                                    );
-                                });
-                            }
-                        }
-                        WorkerMsg::End => break,
-                    }
-                }
-            });
-        }
-
-        // Spawn dispatcher thread: hash-route each input to a worker channel.
-        s.spawn(move || {
-            let mut pending = vec![Vec::new(); num_workers];
-            for item in inputs {
-                let owned = OwnedSketchInput::from(item);
-                let borrowed = owned.as_sketch_input();
-                let worker_id = worker_index(hash64_seeded(PARTITION_SEED, &borrowed), num_workers);
-                pending[worker_id].push(owned);
-                if pending[worker_id].len() >= WORKER_DISPATCH_BATCH_SIZE {
-                    flush_worker_batch(&worker_input_txs, &mut pending, worker_id);
-                }
-            }
-
-            flush_all_worker_batches(&worker_input_txs, &mut pending);
-            send_end_to_all_workers(&worker_input_txs);
-        });
-
-        // Drop the main sender so the receiver closes once all worker clones drop.
-        drop(tx);
-
-        // Aggregator collect loop: block until a delta arrives; exits when senders are dropped.
-        for delta in rx {
-            parent.apply(delta);
-        }
-    });
-
-    OctoResult { parent }
+    let mut runtime = OctoRuntime::new(config, worker_factory, parent_factory);
+    for input in inputs {
+        runtime.insert(input.clone());
+    }
+    runtime.finish()
 }
 
 #[cfg(test)]
@@ -584,12 +461,12 @@ mod tests {
 
         // Insert CM_PROMASK-1 times: no delta yet.
         for _ in 0..(crate::CM_PROMASK - 1) {
-            child.insert_and_emit(&key, |d| deltas.push(d));
+            child.insert(&key, &mut |d| deltas.push(d));
         }
         assert!(deltas.is_empty(), "should not emit before threshold");
 
         // One more insert triggers the delta.
-        child.insert_and_emit(&key, |d| deltas.push(d));
+        child.insert(&key, &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 3, "should emit one delta per row (3 rows)");
         for d in &deltas {
             assert_eq!(d.value, crate::CM_PROMASK);
@@ -619,7 +496,7 @@ mod tests {
 
         // Insert enough times to trigger at least one delta.
         for _ in 0..200 {
-            child.insert_and_emit(&key, |d| deltas.push(d));
+            child.insert(&key, &mut |d| deltas.push(d));
         }
         // With COUNT_PROMASK = 63 and 3 rows, after 200 inserts we
         // should have emitted at least 3 deltas (one per row per threshold).
@@ -648,12 +525,12 @@ mod tests {
         let mut deltas: Vec<HllDelta> = Vec::new();
 
         // First insert should always emit (register goes from 0 to something > 0).
-        child.insert_and_emit(&SketchInput::U64(1), |d| deltas.push(d));
+        child.insert(&SketchInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 1, "first insert should emit a delta");
 
         // Inserting the same value again should NOT emit (register unchanged).
         let len_before = deltas.len();
-        child.insert_and_emit(&SketchInput::U64(1), |d| deltas.push(d));
+        child.insert(&SketchInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), len_before, "duplicate should not emit");
     }
 
@@ -888,6 +765,74 @@ mod tests {
     }
 
     #[test]
+    fn octo_runtime_live_read_handle_observes_progress() {
+        let config = OctoConfig {
+            num_workers: 2,
+            pin_cores: false,
+            queue_capacity: 4096,
+        };
+        let mut runtime = OctoRuntime::new(
+            &config,
+            |_| CountingWorker,
+            || CountingParent { total: 0 },
+        );
+        let reader = runtime.read_handle();
+
+        for i in 0..64u64 {
+            runtime.insert(SketchInput::U64(i));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let observed = reader.with_parent(|p| p.total);
+        assert!(observed <= 64, "live reader should observe a partial or complete total");
+
+        let result = runtime.finish();
+        assert_eq!(result.parent.total, 64, "all inserted items should be accounted for");
+        assert!(
+            result.parent.total >= observed,
+            "final total should not be less than live snapshot"
+        );
+    }
+
+    #[test]
+    fn octo_runtime_close_is_idempotent() {
+        let config = OctoConfig {
+            num_workers: 2,
+            pin_cores: false,
+            queue_capacity: 4096,
+        };
+        let runtime = OctoRuntime::new(
+            &config,
+            |_| HllOctoWorker::new(),
+            || HllOctoParent {
+                sketch: HyperLogLog::<Regular>::default(),
+            },
+        );
+        runtime.close();
+        runtime.close();
+        let result = runtime.finish();
+        assert_eq!(result.parent.sketch.estimate(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot insert after runtime has been closed")]
+    fn octo_runtime_insert_after_close_panics() {
+        let config = OctoConfig {
+            num_workers: 2,
+            pin_cores: false,
+            queue_capacity: 4096,
+        };
+        let mut runtime = OctoRuntime::new(
+            &config,
+            |_| HllOctoWorker::new(),
+            || HllOctoParent {
+                sketch: HyperLogLog::<Regular>::default(),
+            },
+        );
+        runtime.close();
+        runtime.insert(SketchInput::U64(1));
+    }
+
+    #[test]
     fn octo_runtime_empty_stream_finishes() {
         let config = OctoConfig {
             num_workers: 4,
@@ -923,7 +868,7 @@ mod tests {
         total: u64,
     }
 
-    impl OctoParent for CountingParent {
+    impl OctoAggregator for CountingParent {
         type Delta = u64;
 
         fn apply(&mut self, delta: Self::Delta) {
@@ -932,69 +877,76 @@ mod tests {
     }
 
     #[test]
-    fn worker_index_is_deterministic_for_pow2_and_non_pow2_workers() {
-        let key = SketchInput::U64(0xdead_beef);
-        let hash = hash64_seeded(PARTITION_SEED, &key);
-
-        let idx_pow2_a = worker_index(hash, 8);
-        let idx_pow2_b = worker_index(hash, 8);
-        assert_eq!(idx_pow2_a, idx_pow2_b);
-        assert_eq!(idx_pow2_a, (hash as usize) & 7);
-
-        let idx_non_pow2_a = worker_index(hash, 6);
-        let idx_non_pow2_b = worker_index(hash, 6);
-        assert_eq!(idx_non_pow2_a, idx_non_pow2_b);
-        assert_eq!(idx_non_pow2_a, (hash as usize) % 6);
-    }
-
-    #[test]
-    fn run_octo_batch_flush_boundary_matches_reference_count() {
-        let config = OctoConfig {
-            num_workers: 3,
-            pin_cores: false,
-            queue_capacity: 4096,
-        };
-        let sizes = [
-            WORKER_DISPATCH_BATCH_SIZE - 1,
-            WORKER_DISPATCH_BATCH_SIZE,
-            WORKER_DISPATCH_BATCH_SIZE + 1,
-        ];
-
-        for &n in &sizes {
-            let inputs: Vec<SketchInput<'_>> = (0..n as u64)
-                .map(|i| SketchInput::U64(i ^ 0x1234))
-                .collect();
-            let result = run_octo(
-                &inputs,
-                &config,
-                |_| CountingWorker,
-                || CountingParent { total: 0 },
-            );
-            assert_eq!(
-                result.parent.total, n as u64,
-                "batch boundary size {n} should process all items"
-            );
-        }
-    }
-
-    #[test]
-    fn octo_runtime_end_flush_preserves_tail_items() {
+    fn octo_runtime_close_preserves_queued_items_without_dispatcher() {
         let config = OctoConfig {
             num_workers: 4,
             pin_cores: false,
             queue_capacity: 4096,
         };
-        let n = WORKER_DISPATCH_BATCH_SIZE + 7;
-        let mut runtime =
-            OctoRuntime::new(&config, |_| CountingWorker, || CountingParent { total: 0 });
+        let n = 257usize;
+        let mut runtime = OctoRuntime::new(
+            &config,
+            |_| CountingWorker,
+            || CountingParent { total: 0 },
+        );
 
         for i in 0..n as u64 {
             runtime.insert(SketchInput::U64(i + 42));
         }
+        runtime.close();
         let result = runtime.finish();
         assert_eq!(
             result.parent.total, n as u64,
-            "runtime finish should flush partial worker batches"
+            "runtime close should preserve already queued items"
         );
+    }
+
+    struct WorkerIdEmitter {
+        worker_id: usize,
+    }
+
+    impl OctoWorker for WorkerIdEmitter {
+        type Delta = usize;
+
+        fn process(&mut self, _input: &SketchInput, emit: &mut dyn FnMut(Self::Delta)) {
+            emit(self.worker_id);
+        }
+    }
+
+    struct WorkerLoadParent {
+        loads: Vec<u64>,
+    }
+
+    impl OctoAggregator for WorkerLoadParent {
+        type Delta = usize;
+
+        fn apply(&mut self, delta: Self::Delta) {
+            self.loads[delta] += 1;
+        }
+    }
+
+    #[test]
+    fn octo_runtime_round_robin_selector_distributes_deterministically() {
+        let num_workers = 3;
+        let inserts = 10u64;
+        let config = OctoConfig {
+            num_workers,
+            pin_cores: false,
+            queue_capacity: 4096,
+        };
+        let mut runtime = OctoRuntime::new(
+            &config,
+            |worker_id| WorkerIdEmitter { worker_id },
+            || WorkerLoadParent {
+                loads: vec![0; num_workers],
+            },
+        );
+
+        for i in 0..inserts {
+            runtime.insert(SketchInput::U64(i));
+        }
+        let result = runtime.finish();
+
+        assert_eq!(result.parent.loads, vec![4, 3, 3]);
     }
 }
