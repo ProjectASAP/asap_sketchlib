@@ -1,9 +1,9 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sketchlib_rust::{
-    CmOctoParent, CmOctoWorker, Count, CountMin, CountOctoParent, CountOctoWorker, HllOctoParent,
-    HllOctoWorker, HyperLogLog, OctoAggregator, OctoConfig, OctoWorker, Regular, RegularPath,
-    SketchInput, Vector2D,
+    CmDelta, Count, CountMin, CountOctoParent, CountOctoWorker, HllOctoParent, HllOctoWorker,
+    HyperLogLog, OctoAggregator, OctoConfig, OctoWorker, Regular, RegularPath, SketchInput,
+    Vector2D,
 };
 use std::sync::{Once, mpsc};
 use std::thread;
@@ -20,6 +20,38 @@ const WORKER_COUNTS: [usize; 4] = [1, 2, 4, 8];
 const MERGE_INTERVAL: usize = 10_000;
 
 static SANITY_ONCE: Once = Once::new();
+
+struct BenchCmOctoWorker {
+    sketch: CountMin<Vector2D<i32>, RegularPath>,
+}
+
+impl BenchCmOctoWorker {
+    fn new(rows: usize, cols: usize) -> Self {
+        Self {
+            sketch: CountMin::with_dimensions(rows, cols),
+        }
+    }
+}
+
+impl OctoWorker for BenchCmOctoWorker {
+    type Delta = CmDelta;
+
+    fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(Self::Delta)) {
+        self.sketch.insert_emit_delta(input, emit);
+    }
+}
+
+struct BenchCmOctoParent {
+    sketch: CountMin<Vector2D<i32>, RegularPath>,
+}
+
+impl OctoAggregator for BenchCmOctoParent {
+    type Delta = CmDelta;
+
+    fn apply(&mut self, delta: Self::Delta) {
+        self.sketch.apply_delta(delta);
+    }
+}
 
 fn build_inputs(sample_count: usize) -> Vec<SketchInput<'static>> {
     let mut rng = StdRng::seed_from_u64(RNG_SEED ^ (sample_count as u64));
@@ -110,11 +142,16 @@ fn run_periodic_countmin_full_merge_sharded(
     thread::scope(|s| {
         let (merge_tx, merge_rx) = mpsc::channel::<CountMinMergeMsg>();
         let aggregator = s.spawn(move || {
-            let mut parent =
-                CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(CM_COUNT_ROWS, CM_COUNT_COLS);
+            let mut parent = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                CM_COUNT_ROWS,
+                CM_COUNT_COLS,
+            );
             let mut finished_workers = 0usize;
             while finished_workers < num_workers {
-                match merge_rx.recv().expect("CountMin merge channel closed unexpectedly") {
+                match merge_rx
+                    .recv()
+                    .expect("CountMin merge channel closed unexpectedly")
+                {
                     CountMinMergeMsg::Snapshot(snapshot) => parent.merge(&snapshot),
                     CountMinMergeMsg::Done => finished_workers += 1,
                 }
@@ -125,8 +162,10 @@ fn run_periodic_countmin_full_merge_sharded(
         for shard in shards {
             let merge_tx_worker = merge_tx.clone();
             s.spawn(move || {
-                let mut child =
-                    CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(CM_COUNT_ROWS, CM_COUNT_COLS);
+                let mut child = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                    CM_COUNT_ROWS,
+                    CM_COUNT_COLS,
+                );
                 let mut local_inserts = 0usize;
                 for input in shard {
                     child.insert(input);
@@ -168,7 +207,10 @@ fn run_periodic_count_full_merge_sharded(
                 Count::<Vector2D<i32>, RegularPath>::with_dimensions(CM_COUNT_ROWS, CM_COUNT_COLS);
             let mut finished_workers = 0usize;
             while finished_workers < num_workers {
-                match merge_rx.recv().expect("Count merge channel closed unexpectedly") {
+                match merge_rx
+                    .recv()
+                    .expect("Count merge channel closed unexpectedly")
+                {
                     CountMergeMsg::Snapshot(snapshot) => parent.merge(&snapshot),
                     CountMergeMsg::Done => finished_workers += 1,
                 }
@@ -179,8 +221,10 @@ fn run_periodic_count_full_merge_sharded(
         for shard in shards {
             let merge_tx_worker = merge_tx.clone();
             s.spawn(move || {
-                let mut child =
-                    Count::<Vector2D<i32>, RegularPath>::with_dimensions(CM_COUNT_ROWS, CM_COUNT_COLS);
+                let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(
+                    CM_COUNT_ROWS,
+                    CM_COUNT_COLS,
+                );
                 let mut local_inserts = 0usize;
                 for input in shard {
                     child.insert(input);
@@ -221,7 +265,10 @@ fn run_periodic_hll_full_merge_sharded(
             let mut parent = HyperLogLog::<Regular>::default();
             let mut finished_workers = 0usize;
             while finished_workers < num_workers {
-                match merge_rx.recv().expect("HLL merge channel closed unexpectedly") {
+                match merge_rx
+                    .recv()
+                    .expect("HLL merge channel closed unexpectedly")
+                {
                     HllMergeMsg::Snapshot(snapshot) => parent.merge(&snapshot),
                     HllMergeMsg::Done => finished_workers += 1,
                 }
@@ -275,8 +322,8 @@ fn sanity_check_periodic_baselines() {
         let octo_cm = run_octo_sharded(
             &shards,
             &config,
-            |_| CmOctoWorker::new(CM_COUNT_ROWS, CM_COUNT_COLS),
-            || CmOctoParent {
+            |_| BenchCmOctoWorker::new(CM_COUNT_ROWS, CM_COUNT_COLS),
+            || BenchCmOctoParent {
                 sketch: CountMin::with_dimensions(CM_COUNT_ROWS, CM_COUNT_COLS),
             },
         )
@@ -360,8 +407,8 @@ fn bench_countmin_merge_compare(c: &mut Criterion) {
                     let parent = run_octo_sharded(
                         &shards,
                         &config,
-                        |_| CmOctoWorker::new(CM_COUNT_ROWS, CM_COUNT_COLS),
-                        || CmOctoParent {
+                        |_| BenchCmOctoWorker::new(CM_COUNT_ROWS, CM_COUNT_COLS),
+                        || BenchCmOctoParent {
                             sketch: CountMin::with_dimensions(CM_COUNT_ROWS, CM_COUNT_COLS),
                         },
                     );

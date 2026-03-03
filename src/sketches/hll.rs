@@ -331,31 +331,12 @@ impl HyperLogLogHIP {
         }
     }
 }
-// ---------------------------------------------------------------------------
-// OctoSketch child sketch for multi-threaded delta-based promotion.
-// ---------------------------------------------------------------------------
-
 use crate::octo_delta::HllDelta;
 
-/// Lightweight HLL child sketch backed by a fixed register array.
-/// Emits `HllDelta` whenever a register is improved (PROMASK = 0,
-/// meaning every improvement is propagated immediately).
-pub struct HllChild {
-    registers: Box<[u8; NUM_REGISTERS]>,
-}
-
-impl Default for HllChild {
-    fn default() -> Self {
-        Self {
-            registers: Box::new([0u8; NUM_REGISTERS]),
-        }
-    }
-}
-
-impl HllChild {
+impl<Variant> HyperLogLog<Variant> {
     /// Insert using a pre-computed hash and emit `HllDelta` on register improvement.
     #[inline(always)]
-    pub fn insert_with_hash(&mut self, hashed_val: u64, emit: &mut dyn FnMut(HllDelta)) {
+    pub fn insert_emit_delta_with_hash(&mut self, hashed_val: u64, emit: &mut dyn FnMut(HllDelta)) {
         let bucket_num = ((hashed_val >> HLL_Q) & HLL_P_MASK) as usize;
         let leading_zero = ((hashed_val << HLL_P) + HLL_P_MASK).leading_zeros() as u8 + 1;
         if leading_zero > self.registers[bucket_num] {
@@ -369,9 +350,9 @@ impl HllChild {
 
     /// Insert a key and emit `HllDelta` on register improvement.
     #[inline(always)]
-    pub fn insert(&mut self, obj: &SketchInput, emit: &mut dyn FnMut(HllDelta)) {
+    pub fn insert_emit_delta(&mut self, obj: &SketchInput, emit: &mut dyn FnMut(HllDelta)) {
         let hashed_val = hash64_seeded(CANONICAL_HASH_SEED, obj);
-        self.insert_with_hash(hashed_val, emit);
+        self.insert_emit_delta_with_hash(hashed_val, emit);
     }
 }
 
@@ -397,14 +378,14 @@ mod tests {
 
     #[test]
     fn hll_child_insert_emits_on_improvement() {
-        let mut child = HllChild::default();
+        let mut child = HyperLogLog::<Regular>::default();
         let mut deltas: Vec<HllDelta> = Vec::new();
 
-        child.insert(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        child.insert_emit_delta(&SketchInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 1, "first insert should improve one register");
 
         let before = deltas.len();
-        child.insert(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        child.insert_emit_delta(&SketchInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), before, "duplicate should not emit");
     }
 

@@ -7,13 +7,13 @@
 
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock, Weak};
 use std::sync::mpsc;
+use std::sync::{Arc, RwLock, Weak};
 use std::thread;
 
 use crate::{
-    CmDelta, Count, CountChild, CountDelta, CountMin, CountMinChild, HllChild, HllDelta,
-    HyperLogLog, Regular, RegularPath, SketchInput, Vector2D,
+    CmDelta, Count, CountDelta, CountMin, HllDelta, HyperLogLog, Regular, RegularPath, SketchInput,
+    Vector2D,
 };
 
 /// Legacy queue capacity default retained for config compatibility.
@@ -208,9 +208,9 @@ where
                 while let Ok(msg) = worker_rx.recv() {
                     match msg {
                         WorkerMsg::Data(input) => worker.process(&input, &mut |delta| {
-                            delta_tx_worker.send(delta).expect(
-                                "aggregator receiver dropped while workers still running",
-                            );
+                            delta_tx_worker
+                                .send(delta)
+                                .expect("aggregator receiver dropped while workers still running");
                         }),
                         WorkerMsg::End => break,
                     }
@@ -268,7 +268,8 @@ where
             panic!("cannot insert after runtime has been closed");
         }
 
-        let worker_id = core.next_worker.fetch_add(1, Ordering::AcqRel) % core.worker_input_txs.len();
+        let worker_id =
+            core.next_worker.fetch_add(1, Ordering::AcqRel) % core.worker_input_txs.len();
         // SAFETY: caller explicitly guarantees borrowed data lives long enough.
         let static_input = unsafe { assume_input_static(input) };
         core.worker_input_txs[worker_id]
@@ -299,15 +300,15 @@ where
 
 // -- CountMin --
 
-/// OctoSketch worker backed by a `CountMinChild`.
+/// OctoSketch worker backed by `CountMin`.
 pub struct CmOctoWorker {
-    child: CountMinChild,
+    sketch: CountMin<Vector2D<i32>, RegularPath>,
 }
 
 impl CmOctoWorker {
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
-            child: CountMinChild::with_dimensions(rows, cols),
+            sketch: CountMin::with_dimensions(rows, cols),
         }
     }
 }
@@ -317,7 +318,7 @@ impl OctoWorker for CmOctoWorker {
 
     #[inline(always)]
     fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(CmDelta)) {
-        self.child.insert(input, emit);
+        self.sketch.insert_emit_delta(input, emit);
     }
 }
 
@@ -337,15 +338,15 @@ impl OctoAggregator for CmOctoParent {
 
 // -- Count Sketch --
 
-/// OctoSketch worker backed by a `CountChild`.
+/// OctoSketch worker backed by `Count`.
 pub struct CountOctoWorker {
-    child: CountChild,
+    child: Count<Vector2D<i32>, RegularPath>,
 }
 
 impl CountOctoWorker {
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
-            child: CountChild::with_dimensions(rows, cols),
+            child: Count::with_dimensions(rows, cols),
         }
     }
 }
@@ -355,7 +356,7 @@ impl OctoWorker for CountOctoWorker {
 
     #[inline(always)]
     fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(CountDelta)) {
-        self.child.insert(input, emit);
+        self.child.insert_emit_delta(input, emit);
     }
 }
 
@@ -375,15 +376,15 @@ impl OctoAggregator for CountOctoParent {
 
 // -- HyperLogLog --
 
-/// OctoSketch worker backed by an `HllChild`.
+/// OctoSketch worker backed by `HyperLogLog`.
 pub struct HllOctoWorker {
-    child: HllChild,
+    child: HyperLogLog<Regular>,
 }
 
 impl HllOctoWorker {
     pub fn new() -> Self {
         Self {
-            child: HllChild::default(),
+            child: HyperLogLog::default(),
         }
     }
 }
@@ -399,7 +400,7 @@ impl OctoWorker for HllOctoWorker {
 
     #[inline(always)]
     fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(HllDelta)) {
-        self.child.insert(input, emit);
+        self.child.insert_emit_delta(input, emit);
     }
 }
 
@@ -454,19 +455,19 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn cm_child_emits_delta_at_threshold() {
-        let mut child = CountMinChild::with_dimensions(3, 64);
+    fn cm_insert_emit_delta_emits_at_threshold() {
+        let mut worker_sketch = CountMin::with_dimensions(3, 64);
         let key = SketchInput::U64(42);
         let mut deltas: Vec<CmDelta> = Vec::new();
 
         // Insert CM_PROMASK-1 times: no delta yet.
         for _ in 0..(crate::CM_PROMASK - 1) {
-            child.insert(&key, &mut |d| deltas.push(d));
+            worker_sketch.insert_emit_delta(&key, &mut |d| deltas.push(d));
         }
         assert!(deltas.is_empty(), "should not emit before threshold");
 
         // One more insert triggers the delta.
-        child.insert(&key, &mut |d| deltas.push(d));
+        worker_sketch.insert_emit_delta(&key, &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 3, "should emit one delta per row (3 rows)");
         for d in &deltas {
             assert_eq!(d.value, crate::CM_PROMASK);
@@ -490,13 +491,13 @@ mod tests {
 
     #[test]
     fn count_child_emits_delta_at_threshold() {
-        let mut child = CountChild::with_dimensions(3, 64);
+        let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = SketchInput::U64(99);
         let mut deltas: Vec<CountDelta> = Vec::new();
 
         // Insert enough times to trigger at least one delta.
         for _ in 0..200 {
-            child.insert(&key, &mut |d| deltas.push(d));
+            child.insert_emit_delta(&key, &mut |d| deltas.push(d));
         }
         // With COUNT_PROMASK = 63 and 3 rows, after 200 inserts we
         // should have emitted at least 3 deltas (one per row per threshold).
@@ -521,16 +522,16 @@ mod tests {
 
     #[test]
     fn hll_child_emits_delta_on_improvement() {
-        let mut child = HllChild::default();
+        let mut child = HyperLogLog::<Regular>::default();
         let mut deltas: Vec<HllDelta> = Vec::new();
 
         // First insert should always emit (register goes from 0 to something > 0).
-        child.insert(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        child.insert_emit_delta(&SketchInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 1, "first insert should emit a delta");
 
         // Inserting the same value again should NOT emit (register unchanged).
         let len_before = deltas.len();
-        child.insert(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        child.insert_emit_delta(&SketchInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), len_before, "duplicate should not emit");
     }
 
@@ -771,11 +772,8 @@ mod tests {
             pin_cores: false,
             queue_capacity: 4096,
         };
-        let mut runtime = OctoRuntime::new(
-            &config,
-            |_| CountingWorker,
-            || CountingParent { total: 0 },
-        );
+        let mut runtime =
+            OctoRuntime::new(&config, |_| CountingWorker, || CountingParent { total: 0 });
         let reader = runtime.read_handle();
 
         for i in 0..64u64 {
@@ -783,10 +781,16 @@ mod tests {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
         let observed = reader.with_parent(|p| p.total);
-        assert!(observed <= 64, "live reader should observe a partial or complete total");
+        assert!(
+            observed <= 64,
+            "live reader should observe a partial or complete total"
+        );
 
         let result = runtime.finish();
-        assert_eq!(result.parent.total, 64, "all inserted items should be accounted for");
+        assert_eq!(
+            result.parent.total, 64,
+            "all inserted items should be accounted for"
+        );
         assert!(
             result.parent.total >= observed,
             "final total should not be less than live snapshot"
@@ -884,11 +888,8 @@ mod tests {
             queue_capacity: 4096,
         };
         let n = 257usize;
-        let mut runtime = OctoRuntime::new(
-            &config,
-            |_| CountingWorker,
-            || CountingParent { total: 0 },
-        );
+        let mut runtime =
+            OctoRuntime::new(&config, |_| CountingWorker, || CountingParent { total: 0 });
 
         for i in 0..n as u64 {
             runtime.insert(SketchInput::U64(i + 42));

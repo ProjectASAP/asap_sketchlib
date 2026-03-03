@@ -37,8 +37,8 @@ pub use eh_univ_optimized::{EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUni
 
 pub mod octo;
 pub use octo::{
-    CmOctoParent, CmOctoWorker, CountOctoParent, CountOctoWorker, HllOctoParent, HllOctoWorker,
-    OctoAggregator, OctoConfig, OctoReadHandle, OctoResult, OctoRuntime, OctoWorker, run_octo,
+    CountOctoParent, CountOctoWorker, HllOctoParent, HllOctoWorker, OctoAggregator, OctoConfig,
+    OctoReadHandle, OctoResult, OctoRuntime, OctoWorker, run_octo,
 };
 
 pub mod tumbling;

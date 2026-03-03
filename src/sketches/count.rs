@@ -2,7 +2,7 @@ use crate::{
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
     QuickMatrixI128, RegularPath, SketchHasher, SketchInput, Vector1D, Vector2D,
-    compute_median_inline_f64,
+    compute_median_inline_f64, hash64_seeded,
 };
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
@@ -716,53 +716,28 @@ impl<H: SketchHasher> CountL2HH<H> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// OctoSketch child sketch for multi-threaded delta-based promotion.
-// ---------------------------------------------------------------------------
-
 use crate::octo_delta::{COUNT_PROMASK, CountDelta};
 
-/// Lightweight Count sketch child with i8 counters.
-/// Used by OctoSketch workers: accumulates signed counts and emits
-/// `CountDelta` entries when |counter| reaches the promotion threshold.
-pub struct CountChild {
-    counts: Vector2D<i8>,
-}
-
-impl CountChild {
-    /// Creates a child sketch matching the parent's dimensions.
-    pub fn with_dimensions(rows: usize, cols: usize) -> Self {
-        let mut counts = Vector2D::init(rows, cols);
-        counts.fill(0i8);
-        CountChild { counts }
-    }
-
-    pub fn rows(&self) -> usize {
-        self.counts.rows()
-    }
-
-    pub fn cols(&self) -> usize {
-        self.counts.cols()
-    }
-
+/// Worker-side update for OctoSketch delta promotion.
+impl Count<Vector2D<i32>, RegularPath> {
     /// Insert a key with the Count sketch sign convention.
     /// Emits `CountDelta` when |counter| >= `COUNT_PROMASK`, then resets the counter.
     #[inline(always)]
-    pub fn insert(&mut self, value: &SketchInput, emit: &mut dyn FnMut(CountDelta)) {
+    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut dyn FnMut(CountDelta)) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         let data = self.counts.as_mut_slice();
         for r in 0..rows {
             let hashed = hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
-            let sign: i8 = if ((hashed >> 63) & 1) == 1 { 1 } else { -1 };
+            let sign: i32 = if ((hashed >> 63) & 1) == 1 { 1 } else { -1 };
             let cell = &mut data[r * cols + col];
-            *cell = cell.saturating_add(sign);
-            if cell.unsigned_abs() >= COUNT_PROMASK {
+            *cell += sign;
+            if cell.unsigned_abs() >= COUNT_PROMASK as u32 {
                 emit(CountDelta {
                     row: r as u16,
                     col: col as u16,
-                    value: *cell,
+                    value: *cell as i8,
                 });
                 *cell = 0;
             }
@@ -795,12 +770,12 @@ mod tests {
 
     #[test]
     fn count_child_insert_emits_at_threshold() {
-        let mut child = CountChild::with_dimensions(3, 64);
+        let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = SketchInput::U64(99);
         let mut deltas: Vec<CountDelta> = Vec::new();
 
         for _ in 0..200 {
-            child.insert(&key, &mut |d| deltas.push(d));
+            child.insert_emit_delta(&key, &mut |d| deltas.push(d));
         }
         assert!(
             deltas.len() >= 3,
