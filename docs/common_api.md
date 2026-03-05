@@ -10,7 +10,8 @@ The `src/common` module provides foundational building blocks for all sketch imp
 2. [Input Types](#input-types)
 3. [Data Structures](#data-structures)
 4. [Hashing Functions](#hashing-functions)
-5. [Heavy Hitter Heap](#heavy-hitter-heap)
+5. [Hash Customization](#hash-customization)
+6. [Heavy Hitter Heap](#heavy-hitter-heap)
 
 ---
 
@@ -58,9 +59,11 @@ use sketchlib_rust::common::{
     HHHeap,
 
     // Hash functions
+    SketchHasher, DefaultXxHasher,
     hash64_seeded, hash128_seeded,
     hash_item64_seeded, hash_item128_seeded,
     hash_for_matrix, hash_for_matrix_seeded, hash_for_matrix_seeded_with_mode,
+    hash_for_matrix_generic, hash_for_matrix_seeded_generic,
     hash_mode_for_matrix, MatrixHashMode,
 
     // Constants
@@ -310,6 +313,7 @@ pub struct Vector2D<T> {
     cols: usize,
     mask_bits: u32,     // Pre-computed for fast column selection
     mask: u128,
+    hash_mode: MatrixHashMode,
     nitro: Nitro,       // Optional sampling support
 }
 ```
@@ -339,6 +343,7 @@ fn update_one_counter<F, V>(&mut self, row: usize, col: usize, op: F, value: V)
     where F: Fn(&mut T, V), T: Clone
 fn update_by_row<F, V>(&mut self, row: usize, hashed: u128, op: F, value: V)
     where F: Fn(&mut T, V), T: Clone
+fn hash_for_matrix(&self, value: &SketchInput) -> MatrixHashType
 fn get_mask_bits(&self) -> u32
 fn get_required_bits(&self) -> usize
 fn query_one_counter(&self, row: usize, col: usize) -> T where T: Clone
@@ -351,26 +356,26 @@ fn get_row(&self) -> usize
 
 ```rust
 // Insert using pre-computed hash
-fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: u128)
+fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: &MatrixHashType)
     where F: Fn(&mut T, &V, usize), V: Clone
 
 // Query methods
-fn fast_query_min<F, R>(&self, hashed_val: u128, op: F) -> R
-    where F: Fn(&T, usize, u128) -> R, R: Ord
-fn fast_query_max<F, R>(&self, hashed_val: u128, op: F) -> R
-    where F: Fn(&T, usize, u128) -> R, R: Ord
-fn fast_query_median<F>(&self, hashed_val: u128, op: F) -> f64
-    where F: Fn(&T, usize, u128) -> f64
+fn fast_query_min<F, R>(&self, hashed_val: &MatrixHashType, op: F) -> R
+    where F: Fn(&T, usize, &MatrixHashType) -> R, R: Ord
+fn fast_query_max<F, R>(&self, hashed_val: &MatrixHashType, op: F) -> R
+    where F: Fn(&T, usize, &MatrixHashType) -> R, R: Ord
+fn fast_query_median<F>(&self, hashed_val: &MatrixHashType, op: F) -> f64
+    where F: Fn(&T, usize, &MatrixHashType) -> f64
 
 // Query with key parameter
-fn fast_query_min_with_key<F, Q, R>(&self, hashed_val: u128, query_key: &Q, op: F) -> R
-    where F: Fn(&T, &Q, usize, u128) -> R, R: Ord
-fn fast_query_max_with_key<F, Q, R>(&self, hashed_val: u128, query_key: &Q, op: F) -> R
-fn fast_query_median_with_key<F, Q>(&self, hashed_val: u128, query_key: &Q, op: F) -> f64
+fn fast_query_min_with_key<F, Q, R>(&self, hashed_val: &MatrixHashType, query_key: &Q, op: F) -> R
+    where F: Fn(&T, &Q, usize, &MatrixHashType) -> R, R: Ord
+fn fast_query_max_with_key<F, Q, R>(&self, hashed_val: &MatrixHashType, query_key: &Q, op: F) -> R
+fn fast_query_median_with_key<F, Q>(&self, hashed_val: &MatrixHashType, query_key: &Q, op: F) -> f64
 
 // Generic aggregation
-fn fast_query_aggregate<F, Q, R>(&self, hashed_val: u128, query_key: &Q, init: R, fold_fn: F) -> R
-    where F: Fn(R, &T, &Q, usize, u128) -> R
+fn fast_query_aggregate<F, Q, R>(&self, hashed_val: &MatrixHashType, query_key: &Q, init: R, fold_fn: F) -> R
+    where F: Fn(R, &T, &Q, usize, &MatrixHashType) -> R
 ```
 
 **Nitro sampling support:**
@@ -407,7 +412,7 @@ pub const QUICKSTART_SIZE: usize = QUICKSTART_ROW_NUM * QUICKSTART_COL_NUM;
 **Notes:**
 
 - Fixed layout avoids dynamic allocation resizing.
-- Hash width is `u64` (fewer bits than `Vector2D`'s `u128`).
+- Hash width is `u64` (while `Vector2D` uses `MatrixHashType` and can use packed 64/128 or per-row hashes).
 
 ### Vector3D
 
@@ -520,6 +525,74 @@ let hash = hash128_seeded(0, &key);  // Use seed 0
 ```
 
 **Note:** Index `d` must be `< SEEDLIST.len()` (panics otherwise).
+
+---
+
+## Hash Customization
+
+The library exposes a pluggable hasher trait so sketches can be instantiated
+with a custom hash implementation when needed.
+
+### SketchHasher Trait
+
+```rust
+pub trait SketchHasher: Clone + Debug {
+    fn hash64_seeded(d: usize, key: &SketchInput) -> u64;
+    fn hash128_seeded(d: usize, key: &SketchInput) -> u128;
+    fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64;
+    fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128;
+}
+```
+
+`DefaultXxHasher` is the built-in implementation (XxHash3).
+
+### Generic Hash Helpers
+
+`src/common/hash.rs` also provides generic helpers for matrix hash generation:
+
+```rust
+fn hash_for_matrix_generic<H: SketchHasher>(
+    rows: usize,
+    cols: usize,
+    key: &SketchInput,
+) -> MatrixHashType
+
+fn hash_for_matrix_seeded_generic<H: SketchHasher>(
+    seed_idx: usize,
+    rows: usize,
+    cols: usize,
+    key: &SketchInput,
+) -> MatrixHashType
+```
+
+### Custom Hasher Example
+
+```rust
+use sketchlib_rust::{
+    CountMin, DefaultXxHasher, HeapItem, RegularPath, SketchHasher, SketchInput, Vector2D,
+};
+
+#[derive(Clone, Debug)]
+struct MyHasher;
+
+impl SketchHasher for MyHasher {
+    fn hash64_seeded(d: usize, key: &SketchInput) -> u64 {
+        <DefaultXxHasher as SketchHasher>::hash64_seeded(d, key)
+    }
+    fn hash128_seeded(d: usize, key: &SketchInput) -> u128 {
+        <DefaultXxHasher as SketchHasher>::hash128_seeded(d, key)
+    }
+    fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
+        <DefaultXxHasher as SketchHasher>::hash_item64_seeded(d, key)
+    }
+    fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
+        <DefaultXxHasher as SketchHasher>::hash_item128_seeded(d, key)
+    }
+}
+
+let mut cm = CountMin::<Vector2D<i32>, RegularPath, MyHasher>::with_dimensions(3, 1024);
+cm.insert(&SketchInput::U64(42));
+```
 
 ---
 

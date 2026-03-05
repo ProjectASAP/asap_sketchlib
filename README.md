@@ -6,10 +6,10 @@
 
 - **Building blocks**: located in `/src/common`, contains common structure to build sketches and other common utilities
   - More detail about building block can be found in: [common api](./docs/common_api.md)
-- **Native Sketch**: located in `/src/sketches`, contains rust sketches, migration from hard coded sketch into common structure based sketches
-  - Completed Migration: CountMin, HyperLogLog, Count
-- **Sketch Framework**: located in `/src/sketch_framework`, contains sketch serving strategies
-  - Complete Migration: Hydra, UnivMon
+- **Native Sketch**: located in `/src/sketches`, contains Rust sketch implementations built on common structures where applicable
+  - Core structured sketches include: CountMin, Count, HyperLogLog
+- **Sketch Framework**: located in `/src/sketch_framework`, contains sketch serving/orchestration strategies
+  - Includes: Hydra, UnivMon, HashLayer, ExponentialHistogram, Nitro, Orchestrator
 - **Optimization**: integrated into sketches implementation
   - More detail about optimization techniques/features can be found in: [features](./docs/features.md)
 
@@ -752,7 +752,7 @@ if let Some(bucket) = eh.query_interval_merge(0, 120) {
 <!-- - Install a Rust toolchain that supports edition 2024 (currently nightly via `rustup toolchain install nightly`).
 - Build everything: `cargo build --all-targets`.
 - Run the library tests: `cargo test --all-features`.
-- Explore the sketch demos: `cargo run --bin test_all_sketch` or any tester in `src/bin/sketch_tester`. -->
+- Explore helper binaries in `src/bin/` (e.g., `cargo run --bin generate_precomputed_hash`). -->
 At this moment, ```cargo test``` is a good starting point.
 
 ## Library Map
@@ -763,8 +763,8 @@ At this moment, ```cargo test``` is a good starting point.
   - `input.rs` - `SketchInput` enum, `HeapItem`, `HHItem`, framework enums (`HydraCounter`, `L2HH`, `HydraQuery`)
   - `structures/` - High-performance data structures (`Vector1D`, `Vector2D`, `Vector3D`, `CommonHeap`, `MatrixStorage`, `FixedMatrix`)
   - `heap.rs` - `HHHeap` convenience wrapper for heavy hitter tracking
-  - `hash.rs` - Hashing utilities (`hash_for_matrix`, `hash64_seeded`, `SEEDLIST`, `BOTTOM_LAYER_FINDER`) for deterministic sketch operations
-  - `mode.rs` - `RegularPath` / `FastPath` type-level insert/estimate path selection
+  - `hash.rs` - Hashing utilities (`hash_for_matrix`, `hash64_seeded`, `SEEDLIST`, `BOTTOM_LAYER_FINDER`) plus `SketchHasher` for custom hasher injection
+  - `mode.rs` is under `src/sketches/` and provides `RegularPath` / `FastPath` type-level insert/estimate path selection
 
 - **`src/sketches/`** - Core sketch implementations ([sketch_api.md](./docs/sketch_api.md))
   - **Recommended** (built on common structures): `countmin.rs`, `count.rs`, `hll.rs`
@@ -794,11 +794,9 @@ At this moment, ```cargo test``` is a good starting point.
   - [common_api.md](./docs/common_api.md) - Data structures and shared utilities
   - [features.md](./docs/features.md) - Feature status and roadmap
 
-### Legacy/Experimental
+### Utilities
 
-- **`src/deserializers/`** - Hex-encoded MessagePack deserialization (for Arroyo/PromSketch interop)
-- **`src/bin/serializer/`** - Tools for generating serialized test fixtures
-- **`localsketch/`** and **`testdata/`** - Canned sketches and fixtures for reproducible testing
+- **`src/bin/`** - Helper binaries for generating precomputed fixtures (`generate_precomputed_hash`, `generate_precomputed_sample`, `generate_precomputed_sample2`)
 
 ## Common Structure
 

@@ -24,6 +24,7 @@ This document provides a high-level overview of implemented and planned features
 - `MatrixStorage` + `FixedMatrix` - Fixed 5 × 2048 backing for quickstart CMS/CS
 - `CommonHeap` & `HHHeap` - Generic and specialized heaps for heavy hitter tracking
 - Deterministic hashing with seed management
+- `SketchHasher` trait with `DefaultXxHasher` for pluggable hash implementations
 - `RegularPath` / `FastPath` modes - Type-level pairing of insert/estimate paths
 
 ✅ **Recommended Sketches** ([sketch_api.md](sketch_api.md))

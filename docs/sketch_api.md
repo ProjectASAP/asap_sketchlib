@@ -15,6 +15,8 @@ frameworks). Additional sketches are **⚠️ legacy/experimental** and may have
 - **Hydra** - Framework for hierarchical heavy hitters
 - **UnivMon** - Framework for universal monitoring
 - **HashLayer** - Hash-reuse orchestration for multiple sketches
+- **ExponentialHistogram** - Sliding-window coordinator for mergeable sketches
+- **EHUnivOptimized** - Hybrid EH + UnivMon with map/sketch tiers and sketch pooling
 - **NitroBatch** - Batch-mode sampling wrapper for sketches
 - **Orchestrator** - Node-level manager for sketches and frameworks
 
@@ -52,7 +54,7 @@ frameworks). Additional sketches are **⚠️ legacy/experimental** and may have
 
 Count-Min sketch provides approximate frequency counting with sub-linear space using multiple hash functions and returns the minimum counter value.
 
-**Type:** `CountMin<S = Vector2D<i32>, Mode = RegularPath>`
+**Type:** `CountMin<S = Vector2D<i32>, Mode = RegularPath, H = DefaultXxHasher>`
 
 **Storage options:**
 
@@ -70,6 +72,8 @@ Mode and storage types mirror CountMin and enforce matching insert/estimate path
 
 Mode and storage are part of the type signature, so insert/estimate pairs and
 hash widths are enforced by the type system.
+
+`H` selects the hash implementation via the `SketchHasher` trait.
 
 **Constructor Methods:**
 
@@ -129,7 +133,7 @@ There are two versions of the Count Sketch: standard Count Sketch, and Count Ske
 
 Count Sketch uses signed counters and random hash functions to provide unbiased frequency estimates. Returns the median of row estimates.
 
-**Type:** `Count<S = Vector2D<i32>, Mode = RegularPath>`
+**Type:** `Count<S = Vector2D<i32>, Mode = RegularPath, H = DefaultXxHasher>`
 
 **Storage options:**
 
@@ -142,6 +146,8 @@ Count Sketch uses signed counters and random hash functions to provide unbiased 
 
 - `RegularPath`: per-row hashing
 - `FastPath`: single hash reused across rows
+
+`H` selects the hash implementation via the `SketchHasher` trait.
 
 **Constructor Methods:**
 
@@ -211,6 +217,8 @@ fn get_l2_sqr(&self) -> f64    // Squared L2 norm
 **File:** [src/sketches/hll.rs](../src/sketches/hll.rs)
 
 There are three HyperLogLog variants with different characteristics:
+
+**Generic type:** `HyperLogLog<Variant, H = DefaultXxHasher>`
 
 #### HyperLogLog<Regular> (Classic)
 
@@ -562,6 +570,112 @@ fn into_target(self) -> S
 
 ---
 
+### ExponentialHistogram (Sliding Window)
+
+**File:** [src/sketch_framework/eh.rs](../src/sketch_framework/eh.rs)
+
+ExponentialHistogram maintains mergeable sketch buckets over a time window and
+supports interval queries by merging covered buckets.
+
+**Constructor Methods:**
+
+```rust
+fn new(k: usize, window: u64, eh_type: EHSketchList) -> Self
+```
+
+**Update / Query Methods:**
+
+```rust
+fn update(&mut self, time: u64, val: &SketchInput)
+fn update_with<F>(&mut self, time: u64, update_fn: F) where F: FnOnce(&mut EHSketchList)
+fn query_interval_merge(&self, t1: u64, t2: u64) -> Option<EHSketchList>
+```
+
+**Window / Introspection Methods:**
+
+```rust
+fn update_window(&mut self, window: u64)
+fn cover(&self, mint: u64, maxt: u64) -> bool
+fn get_min_time(&self) -> Option<u64>
+fn get_max_time(&self) -> Option<u64>
+fn bucket_count(&self) -> usize
+fn get_memory_info(&self) -> (usize, Vec<usize>)
+fn print_buckets(&self)
+```
+
+---
+
+### EHUnivOptimized (Hybrid EH + UnivMon)
+
+**File:** [src/sketch_framework/eh_univ_optimized.rs](../src/sketch_framework/eh_univ_optimized.rs)
+
+EHUnivOptimized keeps recent buckets as exact maps and older/larger buckets as
+`UnivMon` sketches. It reuses sketches via `UnivSketchPool` to reduce allocation
+overhead during promotion/merge/expiration.
+
+**Constructor Methods:**
+
+```rust
+fn new(
+    k: usize,
+    window: u64,
+    heap_size: usize,
+    sketch_row: usize,
+    sketch_col: usize,
+    layer_size: usize,
+) -> Self
+
+fn with_pool_cap(
+    k: usize,
+    window: u64,
+    heap_size: usize,
+    sketch_row: usize,
+    sketch_col: usize,
+    layer_size: usize,
+    pool_cap: usize,
+) -> Self
+
+fn with_defaults(k: usize, window: u64) -> Self
+```
+
+**Update / Query Methods:**
+
+```rust
+fn update(&mut self, time: u64, key: &SketchInput, value: i64)
+fn query_interval(&self, t1: u64, t2: u64) -> Option<EHUnivQueryResult>
+```
+
+**Window / Introspection Methods:**
+
+```rust
+fn cover(&self, mint: u64, maxt: u64) -> bool
+fn get_min_time(&self) -> Option<u64>
+fn get_max_time(&self) -> Option<u64>
+fn update_window(&mut self, window: u64)
+fn bucket_count(&self) -> usize
+fn pool(&self) -> &UnivSketchPool
+fn get_memory_info(&self) -> (usize, usize, Vec<usize>, Vec<usize>)
+fn print_buckets(&self)
+```
+
+**Result Type:**
+
+```rust
+enum EHUnivQueryResult {
+    Sketch(UnivMon),
+    Map { freq_map: HashMap<HeapItem, i64>, total_count: usize },
+}
+
+impl EHUnivQueryResult {
+    fn calc_l1(&self) -> f64
+    fn calc_l2(&self) -> f64
+    fn calc_entropy(&self) -> f64
+    fn calc_card(&self) -> f64
+}
+```
+
+---
+
 ## Usage Examples
 
 ### Basic Frequency Counting (CMS, RegularPath)
@@ -688,6 +802,38 @@ Many sketches provide optimized paths:
 - `FastPath` mode (CountMin/Count) selects single-hash algorithms at the type level
 - Methods with `_with_hash_value` suffix accept pre-computed hashes for multi-sketch coordination
 
+### Custom Hashers
+
+`CountMin`, `Count`, and `HyperLogLog` accept a hasher generic `H` that
+implements `SketchHasher` (default: `DefaultXxHasher`).
+
+```rust
+use sketchlib_rust::{
+    CountMin, DefaultXxHasher, HeapItem, RegularPath, SketchHasher, SketchInput, Vector2D,
+};
+
+#[derive(Clone, Debug)]
+struct MyHasher;
+
+impl SketchHasher for MyHasher {
+    fn hash64_seeded(d: usize, key: &SketchInput) -> u64 {
+        <DefaultXxHasher as SketchHasher>::hash64_seeded(d, key)
+    }
+    fn hash128_seeded(d: usize, key: &SketchInput) -> u128 {
+        <DefaultXxHasher as SketchHasher>::hash128_seeded(d, key)
+    }
+    fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
+        <DefaultXxHasher as SketchHasher>::hash_item64_seeded(d, key)
+    }
+    fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
+        <DefaultXxHasher as SketchHasher>::hash_item128_seeded(d, key)
+    }
+}
+
+let mut cm = CountMin::<Vector2D<i32>, RegularPath, MyHasher>::with_dimensions(3, 1024);
+cm.insert(&SketchInput::U64(7));
+```
+
 ### SketchInput
 
 All sketches accept the `SketchInput` enum for type-agnostic insertion:
@@ -710,7 +856,7 @@ pub enum SketchInput<'a> {
 - **Frequency:** CountMin, Count, CountL2HH
 - **Cardinality:** HyperLogLog (Regular, DataFusion, HIP)
 - **Quantile:** KLL, DDSketch
-- **Frameworks:** Hydra, UnivMon, HashLayer, NitroBatch, Orchestrator
+- **Frameworks:** Hydra, UnivMon, HashLayer, ExponentialHistogram, EHUnivOptimized, NitroBatch, Orchestrator
 
 **File Locations:**
 
