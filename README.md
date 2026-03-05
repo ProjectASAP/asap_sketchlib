@@ -827,6 +827,7 @@ To build new sketch with the Common API, check [this](./docs/common_api.md)
       <strong style="font-size: 16px;">Zeying Zhu</strong><br />
       <sub><a href="https://github.com/zzylol">GitHub</a></sub>
     </td>
+  </tr>
 </table>
 
 ## License

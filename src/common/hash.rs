@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 use twox_hash::{XxHash3_64, XxHash3_128};
 
 use super::{HeapItem, MatrixHashType, SketchInput};
@@ -31,6 +32,229 @@ pub const SEEDLIST: [u64; 20] = [
     0x8eb44a87,
     0xdb0c2e0d,
 ];
+
+/// Trait abstracting hash function signatures for probabilistic data structures.
+///
+/// All methods are static (no `&self`) to enable zero-cost monomorphization.
+/// Implement this trait to inject a custom hash algorithm into any sketch struct.
+pub trait SketchHasher: Clone + Debug {
+    fn hash64_seeded(d: usize, key: &SketchInput) -> u64;
+    fn hash128_seeded(d: usize, key: &SketchInput) -> u128;
+    fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64;
+    fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128;
+}
+
+/// Default hasher using twox_hash (XxHash3). This is the built-in implementation
+/// used when no custom hasher is specified.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DefaultXxHasher;
+
+impl SketchHasher for DefaultXxHasher {
+    #[inline(always)]
+    fn hash64_seeded(d: usize, key: &SketchInput) -> u64 {
+        match key {
+            SketchInput::I32(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            SketchInput::I64(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            SketchInput::U32(u) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            SketchInput::U64(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
+            SketchInput::F32(f) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
+            SketchInput::F64(f) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
+            SketchInput::Str(s) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
+            SketchInput::String(s) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
+            SketchInput::Bytes(items) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], items),
+            SketchInput::I8(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            SketchInput::I16(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            SketchInput::I128(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u128).to_ne_bytes())
+            }
+            SketchInput::ISIZE(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            SketchInput::U8(u) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            SketchInput::U16(u) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            SketchInput::U128(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
+            SketchInput::USIZE(u) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn hash128_seeded(d: usize, key: &SketchInput) -> u128 {
+        match key {
+            SketchInput::I32(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            SketchInput::I64(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            SketchInput::U32(u) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            SketchInput::U64(u) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes())
+            }
+            SketchInput::F32(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
+            SketchInput::F64(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
+            SketchInput::Str(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
+            SketchInput::String(s) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes())
+            }
+            SketchInput::Bytes(items) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], items),
+            SketchInput::I8(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            SketchInput::I16(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            SketchInput::I128(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u128).to_ne_bytes())
+            }
+            SketchInput::ISIZE(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            SketchInput::U8(u) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            SketchInput::U16(u) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            SketchInput::U128(u) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes())
+            }
+            SketchInput::USIZE(u) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
+        match key {
+            HeapItem::I32(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            HeapItem::I64(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            HeapItem::U32(u) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            HeapItem::U64(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
+            HeapItem::F32(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
+            HeapItem::F64(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
+            HeapItem::String(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
+            HeapItem::I8(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            HeapItem::I16(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            HeapItem::I128(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u128).to_ne_bytes())
+            }
+            HeapItem::ISIZE(i) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            HeapItem::U8(u) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            HeapItem::U16(u) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            HeapItem::U128(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
+            HeapItem::USIZE(u) => {
+                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
+        match key {
+            HeapItem::I32(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            HeapItem::I64(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            HeapItem::U32(u) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            HeapItem::U64(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
+            HeapItem::F32(f) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
+            HeapItem::F64(f) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
+            HeapItem::String(s) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
+            HeapItem::I8(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            HeapItem::I16(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            HeapItem::I128(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u128).to_ne_bytes())
+            }
+            HeapItem::ISIZE(i) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
+            }
+            HeapItem::U8(u) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            HeapItem::U16(u) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+            HeapItem::U128(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
+            HeapItem::USIZE(u) => {
+                XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Backwards-compatible free functions — delegate to DefaultXxHasher
+// ---------------------------------------------------------------------------
+
+/// I32, U32, F32 will all be treated as 64-bit value.
+#[inline(always)]
+pub fn hash64_seeded(d: usize, key: &SketchInput) -> u64 {
+    DefaultXxHasher::hash64_seeded(d, key)
+}
+
+#[inline(always)]
+pub fn hash128_seeded(d: usize, key: &SketchInput) -> u128 {
+    DefaultXxHasher::hash128_seeded(d, key)
+}
+
+// for speed, add separate function
+#[inline(always)]
+pub fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
+    DefaultXxHasher::hash_item128_seeded(d, key)
+}
+
+// for speed, add separate function
+#[inline(always)]
+pub fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
+    DefaultXxHasher::hash_item64_seeded(d, key)
+}
+
+// ---------------------------------------------------------------------------
+// Matrix hash helpers
+// ---------------------------------------------------------------------------
 
 #[inline(always)]
 fn mask_bits_for_cols(cols: usize) -> u32 {
@@ -88,161 +312,53 @@ pub fn hash_for_matrix_seeded_with_mode(
     rows: usize,
     key: &SketchInput,
 ) -> MatrixHashType {
+    hash_for_matrix_seeded_with_mode_generic::<DefaultXxHasher>(seed_idx, mode, rows, key)
+}
+
+/// Generic version of matrix hash that uses a custom hasher.
+#[inline(always)]
+pub fn hash_for_matrix_seeded_with_mode_generic<H: SketchHasher>(
+    seed_idx: usize,
+    mode: MatrixHashMode,
+    rows: usize,
+    key: &SketchInput,
+) -> MatrixHashType {
     match mode {
         MatrixHashMode::Packed64 => {
-            MatrixHashType::Packed64(hash64_seeded(seed_idx % SEEDLIST.len(), key))
+            MatrixHashType::Packed64(H::hash64_seeded(seed_idx % SEEDLIST.len(), key))
         }
         MatrixHashMode::Packed128 => {
-            MatrixHashType::Packed128(hash128_seeded(seed_idx % SEEDLIST.len(), key))
+            MatrixHashType::Packed128(H::hash128_seeded(seed_idx % SEEDLIST.len(), key))
         }
         MatrixHashMode::Rows => {
             let mut hashes = SmallVec::<[u64; 8]>::with_capacity(rows);
             for row in 0..rows {
                 let seed = (seed_idx + row) % SEEDLIST.len();
-                hashes.push(hash64_seeded(seed, key));
+                hashes.push(H::hash64_seeded(seed, key));
             }
             MatrixHashType::Rows(hashes)
         }
     }
 }
 
-/// I32, U32, F32 will all be treated as 64-bit value.
-pub fn hash64_seeded(d: usize, key: &SketchInput) -> u64 {
-    match key {
-        SketchInput::I32(i) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        SketchInput::I64(i) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        SketchInput::U32(u) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
-        SketchInput::U64(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
-        SketchInput::F32(f) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
-        SketchInput::F64(f) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
-        SketchInput::Str(s) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
-        SketchInput::String(s) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
-        SketchInput::Bytes(items) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], items),
-        SketchInput::I8(i) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        SketchInput::I16(i) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        SketchInput::I128(i) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u128).to_ne_bytes())
-        }
-        SketchInput::ISIZE(i) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        SketchInput::U8(u) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
-        SketchInput::U16(u) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
-        SketchInput::U128(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
-        SketchInput::USIZE(u) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
-    }
+/// Generic version of hash_for_matrix that uses a custom hasher.
+pub fn hash_for_matrix_generic<H: SketchHasher>(
+    rows: usize,
+    cols: usize,
+    key: &SketchInput,
+) -> MatrixHashType {
+    hash_for_matrix_seeded_generic::<H>(0, rows, cols, key)
 }
 
-pub fn hash128_seeded(d: usize, key: &SketchInput) -> u128 {
-    match key {
-        SketchInput::I32(i) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        SketchInput::I64(i) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        SketchInput::U32(u) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
-        SketchInput::U64(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
-        SketchInput::F32(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
-        SketchInput::F64(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
-        SketchInput::Str(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
-        SketchInput::String(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
-        SketchInput::Bytes(items) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], items),
-        SketchInput::I8(i) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        SketchInput::I16(i) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        SketchInput::I128(i) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u128).to_ne_bytes())
-        }
-        SketchInput::ISIZE(i) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        SketchInput::U8(u) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
-        SketchInput::U16(u) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
-        SketchInput::U128(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
-        SketchInput::USIZE(u) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
-    }
-}
-
-// for speed, add separate function
-pub fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
-    match key {
-        HeapItem::I32(i) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes()),
-        HeapItem::I64(i) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes()),
-        HeapItem::U32(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes()),
-        HeapItem::U64(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
-        HeapItem::F32(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
-        HeapItem::F64(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
-        HeapItem::String(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
-        HeapItem::I8(i) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes()),
-        HeapItem::I16(i) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes()),
-        HeapItem::I128(i) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u128).to_ne_bytes())
-        }
-        HeapItem::ISIZE(i) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        HeapItem::U8(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes()),
-        HeapItem::U16(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes()),
-        HeapItem::U128(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
-        HeapItem::USIZE(u) => {
-            XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
-    }
-}
-
-// for speed, add separate function
-pub fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
-    match key {
-        HeapItem::I32(i) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes()),
-        HeapItem::I64(i) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes()),
-        HeapItem::U32(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes()),
-        HeapItem::U64(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
-        HeapItem::F32(f) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
-        HeapItem::F64(f) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
-        HeapItem::String(s) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
-        HeapItem::I8(i) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes()),
-        HeapItem::I16(i) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes()),
-        HeapItem::I128(i) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u128).to_ne_bytes())
-        }
-        HeapItem::ISIZE(i) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())
-        }
-        HeapItem::U8(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes()),
-        HeapItem::U16(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes()),
-        HeapItem::U128(u) => XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
-        HeapItem::USIZE(u) => {
-            XxHash3_64::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
-        }
-    }
+/// Generic version of hash_for_matrix_seeded that uses a custom hasher.
+pub fn hash_for_matrix_seeded_generic<H: SketchHasher>(
+    seed_idx: usize,
+    rows: usize,
+    cols: usize,
+    key: &SketchInput,
+) -> MatrixHashType {
+    let mode = hash_mode_for_matrix(rows, cols);
+    hash_for_matrix_seeded_with_mode_generic::<H>(seed_idx, mode, rows, key)
 }
 
 #[cfg(test)]

@@ -1,7 +1,8 @@
 use crate::{
-    DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, FastPath, FastPathHasher, FixedMatrix,
-    MatrixHashType, MatrixStorage, NitroTarget, QuickMatrixI64, QuickMatrixI128, RegularPath,
-    SketchInput, Vector1D, Vector2D, compute_median_inline_f64, hash64_seeded, hash128_seeded,
+    DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
+    FastPathHasher, FixedMatrix, MatrixHashType, MatrixStorage, NitroTarget, QuickMatrixI64,
+    QuickMatrixI128, RegularPath, SketchHasher, SketchInput, Vector1D, Vector2D,
+    compute_median_inline_f64,
 };
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
@@ -16,12 +17,15 @@ const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 /// Count Sketch based on Common structure
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Count<S: MatrixStorage = Vector2D<i32>, Mode = RegularPath> {
+#[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
+pub struct Count<S: MatrixStorage = Vector2D<i32>, Mode = RegularPath, H: SketchHasher = DefaultXxHasher> {
     counts: S,
     row: usize,
     col: usize,
     #[serde(skip)]
     _mode: PhantomData<Mode>,
+    #[serde(skip)]
+    _hasher: PhantomData<H>,
 }
 
 pub trait CountSketchCounter: Copy + std::ops::AddAssign + Neg<Output = Self> + From<i32> {
@@ -195,7 +199,7 @@ impl Default for Count<QuickMatrixI128, FastPath> {
 }
 
 // Count constructors for Vector2D-backed storage.
-impl<T, M> Count<Vector2D<T>, M>
+impl<T, M, H: SketchHasher> Count<Vector2D<T>, M, H>
 where
     T: CountSketchCounter,
 {
@@ -206,6 +210,7 @@ where
             row: rows,
             col: cols,
             _mode: PhantomData,
+            _hasher: PhantomData,
         };
         sk.counts.fill(T::from(0));
         sk
@@ -213,7 +218,7 @@ where
 }
 
 // Core Count API for any storage/counter.
-impl<S, C, Mode> Count<S, Mode>
+impl<S, C, Mode, H: SketchHasher> Count<S, Mode, H>
 where
     S: MatrixStorage<Counter = C>,
     C: CountSketchCounter,
@@ -226,6 +231,7 @@ where
             row,
             col,
             _mode: PhantomData,
+            _hasher: PhantomData,
         }
     }
 
@@ -273,7 +279,7 @@ where
 }
 
 // Serialization helpers for Count.
-impl<S, C, Mode> Count<S, Mode>
+impl<S, C, Mode, H: SketchHasher> Count<S, Mode, H>
 where
     S: MatrixStorage<Counter = C> + Serialize,
     C: CountSketchCounter,
@@ -285,7 +291,7 @@ where
 }
 
 // Deserialization helpers for Count.
-impl<S, C, Mode> Count<S, Mode>
+impl<S, C, Mode, H: SketchHasher> Count<S, Mode, H>
 where
     S: MatrixStorage<Counter = C> + for<'de> Deserialize<'de>,
     C: CountSketchCounter,
@@ -297,7 +303,7 @@ where
 }
 
 // Regular-path Count operations.
-impl<S, C> Count<S, RegularPath>
+impl<S, C, H: SketchHasher> Count<S, RegularPath, H>
 where
     S: MatrixStorage<Counter = C>,
     C: CountSketchCounter,
@@ -307,7 +313,7 @@ where
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
-            let hashed = hash64_seeded(r, value);
+            let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             let bit = ((hashed >> 63) & 1) as i32;
             let sign_bit = if bit == 1 { 1 } else { -1 };
@@ -325,7 +331,7 @@ where
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
-            let hashed = hash64_seeded(r, value);
+            let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             let bit = ((hashed >> 63) & 1) as i32;
             let sign_bit = if bit == 1 { 1 } else { -1 };
@@ -341,7 +347,7 @@ where
         let cols = self.counts.cols();
         let mut estimates = Vec::with_capacity(rows);
         for r in 0..rows {
-            let hashed = hash64_seeded(r, value);
+            let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             let bit = ((hashed >> 63) & 1) as i32;
             let sign_bit = if bit == 1 { 1 } else { -1 };
@@ -366,7 +372,7 @@ where
 }
 
 // Fast-path Count operations using precomputed hashes.
-impl<S> Count<S, FastPath>
+impl<S, H: SketchHasher> Count<S, FastPath, H>
 where
     S: MatrixStorage + FastPathHasher,
     S::Counter: CountSketchCounter,
@@ -463,7 +469,7 @@ where
 }
 
 // Debug helpers for i32 Vector2D Count.
-impl<M> Count<Vector2D<i32>, M> {
+impl<M, H: SketchHasher> Count<Vector2D<i32>, M, H> {
     /// Human-friendly helper used by the serializer demo binaries.
     pub fn debug(&self) {
         for row in 0..self.counts.rows() {
@@ -473,7 +479,7 @@ impl<M> Count<Vector2D<i32>, M> {
 }
 
 // Nitro sampling helpers for fast-path Count.
-impl Count<Vector2D<i32>, FastPath> {
+impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
     /// Enables Nitro sampling with the provided rate.
     pub fn enable_nitro(&mut self, sampling_rate: f64) {
         self.counts.enable_nitro(sampling_rate);
@@ -486,7 +492,7 @@ impl Count<Vector2D<i32>, FastPath> {
         if self.counts.nitro().to_skip >= rows {
             self.counts.reduce_nitro_skip(rows);
         } else {
-            let hashed = hash128_seeded(0, value);
+            let hashed = H::hash128_seeded(0, value);
             let mut r = self.counts.nitro().to_skip;
             loop {
                 let bit = (hashed >> (127 - r)) & 1;
@@ -506,7 +512,7 @@ impl Count<Vector2D<i32>, FastPath> {
 }
 
 // NitroTarget integration for fast-path Count.
-impl NitroTarget for Count<Vector2D<i32>, FastPath> {
+impl<H: SketchHasher> NitroTarget for Count<Vector2D<i32>, FastPath, H> {
     #[inline(always)]
     fn rows(&self) -> usize {
         self.counts.rows()
@@ -522,12 +528,15 @@ impl NitroTarget for Count<Vector2D<i32>, FastPath> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct CountL2HH {
+#[serde(bound = "")]
+pub struct CountL2HH<H: SketchHasher = DefaultXxHasher> {
     counts: Vector2D<i64>,
     l2: Vector1D<i64>,
     row: usize,
     col: usize,
     seed_idx: usize,
+    #[serde(skip)]
+    _hasher: PhantomData<H>,
 }
 
 // Default CountL2HH configuration.
@@ -538,7 +547,7 @@ impl Default for CountL2HH {
 }
 
 // CountL2HH constructors and operations.
-impl CountL2HH {
+impl<H: SketchHasher> CountL2HH<H> {
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
         Self::with_dimensions_and_seed(rows, cols, 0)
     }
@@ -550,6 +559,7 @@ impl CountL2HH {
             row: rows,
             col: cols,
             seed_idx,
+            _hasher: PhantomData,
         };
         sk.counts.fill(0);
         sk
@@ -599,7 +609,7 @@ impl CountL2HH {
     /// Inserts with hash optimization - computes hash once and reuses it.
     /// due to the limitation of seeds, use fast_insert only
     pub fn fast_insert_with_count(&mut self, val: &SketchInput, c: i64) {
-        let hashed_val = hash128_seeded(self.seed_idx, val);
+        let hashed_val = H::hash128_seeded(self.seed_idx, val);
         self.fast_insert_with_count_and_hash(hashed_val, c);
     }
 
@@ -659,7 +669,7 @@ impl CountL2HH {
     /// Update and estimate with hash optimization.
     /// due to the limitation of seeds, use fast_insert only
     pub fn fast_update_and_est(&mut self, val: &SketchInput, c: i64) -> f64 {
-        let hashed_val = hash128_seeded(self.seed_idx, val);
+        let hashed_val = H::hash128_seeded(self.seed_idx, val);
         self.fast_insert_with_count_and_hash(hashed_val, c);
         self.fast_get_est_with_hash(hashed_val)
     }
@@ -667,7 +677,7 @@ impl CountL2HH {
     /// Update and estimate without L2 with hash optimization.
     /// due to the limitation of seeds, use fast_insert only
     pub fn fast_update_and_est_without_l2(&mut self, val: &SketchInput, c: i64) -> f64 {
-        let hashed_val = hash128_seeded(self.seed_idx, val);
+        let hashed_val = H::hash128_seeded(self.seed_idx, val);
         self.fast_insert_with_count_without_l2_and_hash(hashed_val, c);
         self.fast_get_est_with_hash(hashed_val)
     }
@@ -688,7 +698,7 @@ impl CountL2HH {
     /// Returns the frequency estimate with hash optimization.
     /// due to the limitation of seeds, use fast_insert only
     pub fn fast_get_est(&self, val: &SketchInput) -> f64 {
-        let hashed_val = hash128_seeded(self.seed_idx, val);
+        let hashed_val = H::hash128_seeded(self.seed_idx, val);
         self.fast_get_est_with_hash(hashed_val)
     }
 
@@ -1223,7 +1233,7 @@ mod tests {
 
     #[test]
     fn countl2hh_estimates_and_l2_are_consistent() {
-        let mut sketch = CountL2HH::with_dimensions(3, 32);
+        let mut sketch: CountL2HH = CountL2HH::with_dimensions(3, 32);
         let key = SketchInput::Str("gamma");
 
         let est_after_first = sketch.fast_update_and_est(&key, 5);
@@ -1238,8 +1248,8 @@ mod tests {
 
     #[test]
     fn countl2hh_merge_combines_frequency_vectors() {
-        let mut left = CountL2HH::with_dimensions(3, 32);
-        let mut right = CountL2HH::with_dimensions(3, 32);
+        let mut left: CountL2HH = CountL2HH::with_dimensions(3, 32);
+        let mut right: CountL2HH = CountL2HH::with_dimensions(3, 32);
         let key = SketchInput::U32(42);
 
         left.fast_insert_with_count(&key, 4);
@@ -1253,7 +1263,7 @@ mod tests {
 
     #[test]
     fn countl2hh_round_trip_serialization() {
-        let mut sketch = CountL2HH::with_dimensions_and_seed(3, 32, 7);
+        let mut sketch: CountL2HH = CountL2HH::with_dimensions_and_seed(3, 32, 7);
         let key = SketchInput::Str("serialize");
 
         sketch.fast_insert_with_count(&key, 11);
@@ -1267,7 +1277,7 @@ mod tests {
         assert!(!encoded.is_empty(), "serialized bytes should not be empty");
         let data = encoded.clone();
 
-        let decoded = CountL2HH::deserialize_from_bytes(&data)
+        let decoded: CountL2HH = CountL2HH::deserialize_from_bytes(&data)
             .expect("deserialize CountL2HH from MessagePack");
 
         assert_eq!(sketch.rows(), decoded.rows());

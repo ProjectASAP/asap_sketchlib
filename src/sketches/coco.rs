@@ -11,9 +11,10 @@
 //! ## Reference
 //! * "CocoSketch: High-Performance Sketch-based Measurement over Arbitrary Key Spaces"
 
-use crate::{SketchInput, Vector2D, hash64_seeded};
+use crate::{DefaultXxHasher, SketchHasher, SketchInput, Vector2D};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CocoBucket {
@@ -22,10 +23,13 @@ pub struct CocoBucket {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Coco {
+#[serde(bound = "")]
+pub struct Coco<H: SketchHasher = DefaultXxHasher> {
     pub w: usize,
     pub d: usize,
     pub table: Vector2D<CocoBucket>,
+    #[serde(skip)]
+    _hasher: PhantomData<H>,
 }
 
 const DEFAULT_WIDTH: usize = 64;
@@ -86,7 +90,7 @@ impl Default for Coco {
     }
 }
 
-impl Coco {
+impl<H: SketchHasher> Coco<H> {
     pub fn new() -> Self {
         Coco::init_with_size(DEFAULT_WIDTH, DEFAULT_DEPTH)
     }
@@ -108,6 +112,7 @@ impl Coco {
             w,
             d,
             table: Vector2D::from_fn(d, w, |_, _| CocoBucket::default()),
+            _hasher: PhantomData,
         }
     }
 
@@ -121,7 +126,7 @@ impl Coco {
         for i in 0..self.d {
             // let idx = STATELIST[i].hash_one(&key) as usize % self.w;
             // let idx = hash64_seeded(i, &key) as usize % self.w;
-            let idx = hash64_seeded(i, &key_input) as usize % self.w;
+            let idx = H::hash64_seeded(i, &key_input) as usize % self.w;
             match &self.table[i][idx].full_key {
                 Some(k) => {
                     if k == key {
@@ -149,7 +154,7 @@ impl Coco {
         }
         // let idx = STATELIST[min_val_row].hash_one(&key) as usize % self.w;
         // let idx = hash64_seeded(min_val_row, &key) as usize % self.w;
-        let idx = hash64_seeded(min_val_row, &key_input) as usize % self.w;
+        let idx = H::hash64_seeded(min_val_row, &key_input) as usize % self.w;
         self.table[min_val_row][idx].val += v;
         match self.table[min_val_row][idx].full_key {
             Some(_) => {
@@ -196,7 +201,7 @@ impl Coco {
         total
     }
 
-    pub fn merge(&mut self, other: &Coco) {
+    pub fn merge(&mut self, other: &Coco<H>) {
         assert_eq!(self.d, other.d, "Different depth, do nothing");
         assert_eq!(self.w, other.w, "Different width, do nothing");
         for i in 0..self.d {
@@ -219,7 +224,7 @@ mod tests {
     #[test]
     fn insert_then_estimate_matches_full_value_for_partial_key() {
         // cover end-to-end flow of inserting a key and querying with a substring
-        let mut coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
         let key = "user:1234";
 
         coco.insert(key, 3);
@@ -232,7 +237,7 @@ mod tests {
     #[test]
     fn estimate_with_udf_allows_custom_partial_matching() {
         // ensure custom UDF matching logic aggregates only intended buckets
-        let mut coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
         coco.insert("region=us|id=1", 4);
         coco.insert("region=eu|id=2", 6);
 
@@ -250,8 +255,8 @@ mod tests {
     #[test]
     fn merge_combines_tables_without_losing_counts() {
         // verify merging replays entries so both sketches contribute to totals
-        let mut left = Coco::init_with_size(TEST_W, TEST_D);
-        let mut right = Coco::init_with_size(TEST_W, TEST_D);
+        let mut left: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut right: Coco = Coco::init_with_size(TEST_W, TEST_D);
 
         left.insert("alpha:key", 7);
         right.insert("beta:key", 11);

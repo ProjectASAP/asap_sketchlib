@@ -33,9 +33,8 @@
 // - Refactored into a generic `HyperLogLog<Variant>` structure.
 // ----------------------------------------------------------------
 
-use crate::hash64_seeded;
 use crate::structures::fixed_structure::HllBucketList;
-use crate::{CANONICAL_HASH_SEED, SketchInput};
+use crate::{CANONICAL_HASH_SEED, DefaultXxHasher, SketchHasher, SketchInput, hash64_seeded};
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
@@ -51,10 +50,13 @@ const NUM_REGISTERS: usize = 1_usize << HLL_P;
 const HLL_P_MASK: u64 = (NUM_REGISTERS as u64) - 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HyperLogLog<Variant> {
+#[serde(bound = "")]
+pub struct HyperLogLog<Variant, H: SketchHasher = DefaultXxHasher> {
     registers: HllBucketList,
     #[serde(skip)]
     _marker: PhantomData<Variant>,
+    #[serde(skip)]
+    _hasher: PhantomData<H>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
@@ -70,18 +72,19 @@ pub struct HyperLogLogHIP {
     est: f64,
 }
 
-impl<Variant> Default for HyperLogLog<Variant> {
+impl<Variant, H: SketchHasher> Default for HyperLogLog<Variant, H> {
     fn default() -> Self {
         Self::new_base()
     }
 }
 
 // Core HyperLogLog logic (hash-based operations + serialization).
-impl<Variant> HyperLogLog<Variant> {
+impl<Variant, H: SketchHasher> HyperLogLog<Variant, H> {
     fn new_base() -> Self {
         Self {
             registers: HllBucketList::default(),
             _marker: PhantomData,
+            _hasher: PhantomData,
         }
     }
 
@@ -127,9 +130,9 @@ impl<Variant> HyperLogLog<Variant> {
 }
 
 // SketchInput adapters (hashing + batch helpers).
-impl<Variant> HyperLogLog<Variant> {
+impl<Variant, H: SketchHasher> HyperLogLog<Variant, H> {
     pub fn insert(&mut self, obj: &SketchInput) {
-        let hashed_val = hash64_seeded(CANONICAL_HASH_SEED, obj);
+        let hashed_val = H::hash64_seeded(CANONICAL_HASH_SEED, obj);
         self.insert_with_hash(hashed_val);
     }
 
@@ -140,7 +143,7 @@ impl<Variant> HyperLogLog<Variant> {
     }
 }
 
-impl HyperLogLog<Regular> {
+impl<H: SketchHasher> HyperLogLog<Regular, H> {
     pub fn new() -> Self {
         Self::new_base()
     }
@@ -179,7 +182,7 @@ impl HyperLogLog<Regular> {
     }
 }
 
-impl HyperLogLog<DataFusion> {
+impl<H: SketchHasher> HyperLogLog<DataFusion, H> {
     pub fn new() -> Self {
         Self::new_base()
     }
@@ -312,6 +315,8 @@ impl HyperLogLogHIP {
 }
 
 // SketchInput adapters for HIP (hashing + batch helpers).
+// Note: HyperLogLogHIP is not parameterized by H since it is a separate,
+// self-contained struct. It uses the free-function wrapper (DefaultXxHasher).
 impl HyperLogLogHIP {
     /// "Back to the Future: an Even More Nearly Optimal Cardinality Estimation Algorithm"
     /// Kevin J. Lang, https://arxiv.org/pdf/1708.06839

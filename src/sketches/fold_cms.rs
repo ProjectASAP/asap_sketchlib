@@ -17,7 +17,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{HHHeap, SketchInput, hash64_seeded, heap_item_to_sketch_input};
+use crate::{DefaultXxHasher, HHHeap, SketchHasher, SketchInput, heap_item_to_sketch_input};
+use std::marker::PhantomData;
 
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
@@ -191,7 +192,8 @@ impl<'a> Iterator for FoldCellIter<'a> {
 /// expanding only on real collisions. When sub-windows are merged the columns
 /// are "unfolded" back towards the full-width CMS.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FoldCMS {
+#[serde(bound = "")]
+pub struct FoldCMS<H: SketchHasher = DefaultXxHasher> {
     /// Number of hash functions (rows). Same across all fold levels.
     rows: usize,
     /// Number of physical columns = `full_cols >> fold_level`.
@@ -204,9 +206,11 @@ pub struct FoldCMS {
     cells: Vec<FoldCell>,
     /// Top-K heavy-hitter tracking heap.
     heap: HHHeap,
+    #[serde(skip)]
+    _hasher: PhantomData<H>,
 }
 
-impl FoldCMS {
+impl<H: SketchHasher> FoldCMS<H> {
     // -- Construction -------------------------------------------------------
 
     /// Creates a new FoldCMS.
@@ -240,6 +244,7 @@ impl FoldCMS {
             fold_level,
             cells,
             heap: HHHeap::new(top_k),
+            _hasher: PhantomData,
         }
     }
 
@@ -309,7 +314,7 @@ impl FoldCMS {
     /// Compute the full-width column for `(row, key)`.
     #[inline(always)]
     fn full_col_for(&self, row: usize, key: &SketchInput) -> u16 {
-        let hashed = hash64_seeded(row, key);
+        let hashed = H::hash64_seeded(row, key);
         ((hashed & LOWER_32_MASK) as usize % self.full_cols) as u16
     }
 
@@ -362,7 +367,7 @@ impl FoldCMS {
     ///
     /// After merging, the top-k heap is reconciled by re-querying all heap
     /// items from both sources against the merged sketch.
-    pub fn merge_same_level(&mut self, other: &FoldCMS) {
+    pub fn merge_same_level(&mut self, other: &FoldCMS<H>) {
         assert_eq!(self.rows, other.rows, "row count mismatch");
         assert_eq!(self.full_cols, other.full_cols, "full_cols mismatch");
         assert_eq!(self.fold_level, other.fold_level, "fold_level mismatch");
@@ -383,7 +388,7 @@ impl FoldCMS {
     /// The scatter formula `new_fc = full_col & (target.fold_cols - 1)` works
     /// for any source-to-target level jump in a single pass because every
     /// `FoldCell` entry carries its permanent `full_col` address.
-    fn scatter_into(&self, target: &mut FoldCMS) {
+    fn scatter_into(&self, target: &mut FoldCMS<H>) {
         debug_assert_eq!(self.rows, target.rows);
         debug_assert_eq!(self.full_cols, target.full_cols);
         debug_assert!(target.fold_level <= self.fold_level);
@@ -408,7 +413,7 @@ impl FoldCMS {
     /// level lower (doubled physical columns).
     ///
     /// Both `a` and `b` must be at fold level k > 0. The result is at level k-1.
-    pub fn unfold_merge(a: &FoldCMS, b: &FoldCMS) -> FoldCMS {
+    pub fn unfold_merge(a: &FoldCMS<H>, b: &FoldCMS<H>) -> FoldCMS<H> {
         assert_eq!(a.rows, b.rows, "row count mismatch");
         assert_eq!(a.full_cols, b.full_cols, "full_cols mismatch");
         assert_eq!(a.fold_level, b.fold_level, "fold_level mismatch");
@@ -425,6 +430,7 @@ impl FoldCMS {
             fold_level: new_level,
             cells: vec![FoldCell::Empty; a.rows * new_fold_cols],
             heap: HHHeap::new(heap_k),
+            _hasher: PhantomData,
         };
 
         // Single-pass scatter from both sources into the wider grid.
@@ -445,18 +451,18 @@ impl FoldCMS {
 
     /// Fully unfold a FoldCMS to fold_level 0 (equivalent to a standard CMS).
     /// If already at level 0 this returns a clone.
-    pub fn unfold_full(&self) -> FoldCMS {
+    pub fn unfold_full(&self) -> FoldCMS<H> {
         self.unfold_to(0)
     }
 
     // -- Hierarchical merge -------------------------------------------------
 
-    /// Unfold `self` down to the target fold level (must be ≤ current level).
+    /// Unfold `self` down to the target fold level (must be <= current level).
     /// If already at the target level, returns a clone.
     ///
     /// Single-pass scatter: 1 allocation, 1 pass — regardless of how many
     /// levels are skipped.
-    pub fn unfold_to(&self, target_level: u32) -> FoldCMS {
+    pub fn unfold_to(&self, target_level: u32) -> FoldCMS<H> {
         assert!(
             target_level <= self.fold_level,
             "target_level {target_level} > current fold_level {}",
@@ -474,6 +480,7 @@ impl FoldCMS {
             fold_level: target_level,
             cells: vec![FoldCell::Empty; self.rows * new_fold_cols],
             heap: HHHeap::new(self.heap.capacity()),
+            _hasher: PhantomData,
         };
 
         self.scatter_into(&mut result);
@@ -495,7 +502,7 @@ impl FoldCMS {
     /// Allocates one level-0 result and scatters all N inputs directly into
     /// it. **0 clones, 1 allocation, N scatter passes.** Handles mixed fold
     /// levels — each source is scattered from whatever level it is at.
-    pub fn hierarchical_merge(sketches: &[FoldCMS]) -> FoldCMS {
+    pub fn hierarchical_merge(sketches: &[FoldCMS<H>]) -> FoldCMS<H> {
         assert!(
             !sketches.is_empty(),
             "need at least one sketch to merge"
@@ -515,6 +522,7 @@ impl FoldCMS {
             fold_level: 0,
             cells: vec![FoldCell::Empty; rows * full_cols],
             heap: HHHeap::new(heap_k),
+            _hasher: PhantomData,
         };
 
         for sk in sketches {
@@ -573,7 +581,7 @@ impl FoldCMS {
     // -- Heap helpers -------------------------------------------------------
 
     /// Re-query all heap items from `other` against `self` and update our heap.
-    fn reconcile_heap_from(&mut self, other: &FoldCMS) {
+    fn reconcile_heap_from(&mut self, other: &FoldCMS<H>) {
         for item in other.heap.heap() {
             let key_ref = heap_item_to_sketch_input(&item.key);
             let est = self.query(&key_ref);
@@ -592,6 +600,7 @@ mod tests {
     use crate::test_utils::sample_zipf_u64;
     use crate::{CountMin, HeapItem, RegularPath, Vector2D};
     use std::collections::HashMap;
+
 
     // -- FoldCell unit tests ------------------------------------------------
 
@@ -719,7 +728,7 @@ mod tests {
 
     #[test]
     fn fold_cms_dimensions() {
-        let sketch = FoldCMS::new(3, 4096, 4, 10);
+        let sketch: FoldCMS = FoldCMS::new(3, 4096, 4, 10);
         assert_eq!(sketch.rows(), 3);
         assert_eq!(sketch.full_cols(), 4096);
         assert_eq!(sketch.fold_cols(), 256); // 4096 / 2^4
@@ -728,7 +737,7 @@ mod tests {
 
     #[test]
     fn fold_cms_level_zero_is_full() {
-        let sketch = FoldCMS::new_full(3, 1024, 10);
+        let sketch: FoldCMS = FoldCMS::new_full(3, 1024, 10);
         assert_eq!(sketch.fold_cols(), 1024);
         assert_eq!(sketch.fold_level(), 0);
     }
@@ -736,18 +745,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "full_cols must be a power of two")]
     fn fold_cms_rejects_non_power_of_two() {
-        FoldCMS::new(3, 1000, 0, 10);
+        let _: FoldCMS = FoldCMS::new(3, 1000, 0, 10);
     }
 
     #[test]
     #[should_panic(expected = "fold_level")]
     fn fold_cms_rejects_excessive_fold_level() {
-        FoldCMS::new(3, 256, 9, 10); // 256 = 2^8, fold_level 9 is too big
+        let _: FoldCMS = FoldCMS::new(3, 256, 9, 10); // 256 = 2^8, fold_level 9 is too big
     }
 
     #[test]
     fn fold_cms_insert_query_single_key() {
-        let mut sketch = FoldCMS::new(3, 1024, 4, 10);
+        let mut sketch: FoldCMS = FoldCMS::new(3, 1024, 4, 10);
         let key = SketchInput::Str("hello");
         sketch.insert(&key, 7);
         assert_eq!(sketch.query(&key), 7);
@@ -755,7 +764,7 @@ mod tests {
 
     #[test]
     fn fold_cms_insert_accumulates() {
-        let mut sketch = FoldCMS::new(3, 1024, 4, 10);
+        let mut sketch: FoldCMS = FoldCMS::new(3, 1024, 4, 10);
         let key = SketchInput::Str("hello");
         sketch.insert(&key, 3);
         sketch.insert(&key, 4);
@@ -764,14 +773,14 @@ mod tests {
 
     #[test]
     fn fold_cms_absent_key_returns_zero() {
-        let mut sketch = FoldCMS::new(3, 1024, 4, 10);
+        let mut sketch: FoldCMS = FoldCMS::new(3, 1024, 4, 10);
         sketch.insert(&SketchInput::Str("present"), 10);
         assert_eq!(sketch.query(&SketchInput::Str("absent")), 0);
     }
 
     #[test]
     fn fold_cms_multiple_keys() {
-        let mut sketch = FoldCMS::new(3, 4096, 4, 10);
+        let mut sketch: FoldCMS = FoldCMS::new(3, 4096, 4, 10);
         for i in 0..100u64 {
             sketch.insert(&SketchInput::U64(i), i as i64);
         }
@@ -793,7 +802,7 @@ mod tests {
         let cols = 256; // small for deterministic testing
         let fold_level = 3; // 256/8 = 32 physical columns
 
-        let mut fold = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut fold: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         let mut standard = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         let keys: Vec<SketchInput> = (0..50).map(|i| SketchInput::I32(i)).collect();
@@ -830,7 +839,7 @@ mod tests {
         let cols = 512;
         let fold_level = 4;
 
-        let mut fold = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut fold: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         let mut standard = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         // Insert keys with varying counts.
@@ -855,8 +864,8 @@ mod tests {
         let cols = 1024;
         let fold_level = 3;
 
-        let mut a = FoldCMS::new(rows, cols, fold_level, 10);
-        let mut b = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut a: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut b: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
 
         let key = SketchInput::Str("user_001");
         a.insert(&key, 100);
@@ -872,8 +881,8 @@ mod tests {
         let cols = 512;
         let fold_level = 4;
 
-        let mut fa = FoldCMS::new(rows, cols, fold_level, 10);
-        let mut fb = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut fa: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut fb: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         let mut sa = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
         let mut sb = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
@@ -909,8 +918,8 @@ mod tests {
         let cols = 1024;
         let fold_level = 3;
 
-        let a = FoldCMS::new(rows, cols, fold_level, 10);
-        let b = FoldCMS::new(rows, cols, fold_level, 10);
+        let a: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
+        let b: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
 
         let result = FoldCMS::unfold_merge(&a, &b);
         assert_eq!(result.fold_level(), 2);
@@ -923,8 +932,8 @@ mod tests {
         let cols = 256;
         let fold_level = 2;
 
-        let mut a = FoldCMS::new(rows, cols, fold_level, 10);
-        let mut b = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut a: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut b: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
 
         let key_a = SketchInput::Str("alpha");
         let key_b = SketchInput::Str("beta");
@@ -943,8 +952,8 @@ mod tests {
         let cols = 512;
         let fold_level = 2;
 
-        let mut fa = FoldCMS::new(rows, cols, fold_level, 10);
-        let mut fb = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut fa: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut fb: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         let mut sa = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
         let mut sb = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
@@ -984,7 +993,7 @@ mod tests {
         let mut standard = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for epoch in 0..4u64 {
-            let mut sk = FoldCMS::new(rows, cols, fold_level, 10);
+            let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
             for i in (epoch * 10)..((epoch + 1) * 10) {
                 let key = SketchInput::U64(i);
                 sk.insert(&key, 1);
@@ -1014,7 +1023,7 @@ mod tests {
         let cols = 256;
         let fold_level = 4;
 
-        let mut sk = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         for i in 0..30 {
             sk.insert(&SketchInput::I32(i), 1);
         }
@@ -1036,7 +1045,7 @@ mod tests {
         let cols = 128;
         let fold_level = 3;
 
-        let mut fold = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut fold: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         let mut standard = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..20 {
@@ -1063,7 +1072,7 @@ mod tests {
         let cols = 4096;
         let fold_level = 4; // 256 physical cols
 
-        let mut sk = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         // Insert only 50 distinct keys into a 256-column folded sketch.
         for i in 0..50u64 {
             sk.insert(&SketchInput::U64(i), 1);
@@ -1095,7 +1104,7 @@ mod tests {
 
     #[test]
     fn heap_tracks_heavy_hitters() {
-        let mut sk = FoldCMS::new(3, 1024, 3, 5);
+        let mut sk: FoldCMS = FoldCMS::new(3, 1024, 3, 5);
 
         // Insert keys with different frequencies.
         for _ in 0..100 {
@@ -1119,8 +1128,8 @@ mod tests {
 
     #[test]
     fn heap_survives_same_level_merge() {
-        let mut a = FoldCMS::new(3, 1024, 3, 5);
-        let mut b = FoldCMS::new(3, 1024, 3, 5);
+        let mut a: FoldCMS = FoldCMS::new(3, 1024, 3, 5);
+        let mut b: FoldCMS = FoldCMS::new(3, 1024, 3, 5);
 
         for _ in 0..50 {
             a.insert(&SketchInput::Str("user_x"), 1);
@@ -1142,8 +1151,8 @@ mod tests {
 
     #[test]
     fn heap_survives_unfold_merge() {
-        let mut a = FoldCMS::new(3, 512, 2, 5);
-        let mut b = FoldCMS::new(3, 512, 2, 5);
+        let mut a: FoldCMS = FoldCMS::new(3, 512, 2, 5);
+        let mut b: FoldCMS = FoldCMS::new(3, 512, 2, 5);
 
         for _ in 0..40 {
             a.insert(&SketchInput::Str("endpoint_a"), 1);
@@ -1173,7 +1182,7 @@ mod tests {
         let exponent = 1.1;
         let samples = 200_000;
 
-        let mut fold = FoldCMS::new(rows, cols, fold_level, 20);
+        let mut fold: FoldCMS = FoldCMS::new(rows, cols, fold_level, 20);
         let mut truth = HashMap::<u64, i64>::new();
 
         for value in sample_zipf_u64(domain, exponent, samples, 0x5eed_c0de) {
@@ -1210,13 +1219,13 @@ mod tests {
         let fold_level = 4;
 
         // Epoch 1: 10:00-10:01
-        let mut epoch1 = FoldCMS::new(rows, cols, fold_level, 5);
+        let mut epoch1: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
         epoch1.insert(&SketchInput::Str("user_001"), 350);
         epoch1.insert(&SketchInput::Str("user_002"), 10);
         epoch1.insert(&SketchInput::Str("user_003"), 600);
 
         // Epoch 2: 10:01-10:02
-        let mut epoch2 = FoldCMS::new(rows, cols, fold_level, 5);
+        let mut epoch2: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
         epoch2.insert(&SketchInput::Str("user_001"), 350);
         epoch2.insert(&SketchInput::Str("user_002"), 5);
         epoch2.insert(&SketchInput::Str("user_003"), 700);
@@ -1236,13 +1245,13 @@ mod tests {
         let cols = 4096;
         let fold_level = 4;
 
-        let mut epoch1 = FoldCMS::new(rows, cols, fold_level, 5);
+        let mut epoch1: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
         epoch1.insert(&SketchInput::Str("/api/v1/search"), 300);
         epoch1.insert(&SketchInput::Str("/api/v1/checkout"), 5);
         epoch1.insert(&SketchInput::Str("/api/v1/login"), 200);
         epoch1.insert(&SketchInput::Str("/api/v2/recommend"), 1);
 
-        let mut epoch2 = FoldCMS::new(rows, cols, fold_level, 5);
+        let mut epoch2: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
         epoch2.insert(&SketchInput::Str("/api/v1/search"), 50);
         epoch2.insert(&SketchInput::Str("/api/v1/checkout"), 5);
         epoch2.insert(&SketchInput::Str("/api/v1/login"), 10);
@@ -1291,7 +1300,7 @@ mod tests {
         for w in 0..num_subwindows {
             let start = w * samples_per_window;
             let end = start + samples_per_window;
-            let mut sk = FoldCMS::new(rows, full_cols, fold_level, top_k);
+            let mut sk: FoldCMS = FoldCMS::new(rows, full_cols, fold_level, top_k);
 
             for &value in &stream[start..end] {
                 sk.insert(&SketchInput::U64(value), 1);
@@ -1384,19 +1393,19 @@ mod tests {
         let cols = 4096;
         let fold_level = 4;
 
-        let mut epoch1 = FoldCMS::new(rows, cols, fold_level, 5);
+        let mut epoch1: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
         epoch1.insert(&SketchInput::Str("192.168.1.1"), 50);
         epoch1.insert(&SketchInput::Str("10.0.0.42"), 10_000);
         epoch1.insert(&SketchInput::Str("172.16.5.99"), 30);
         epoch1.insert(&SketchInput::Str("10.0.0.43"), 8_000);
 
-        let mut epoch2 = FoldCMS::new(rows, cols, fold_level, 5);
+        let mut epoch2: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
         epoch2.insert(&SketchInput::Str("192.168.1.1"), 45);
         epoch2.insert(&SketchInput::Str("10.0.0.42"), 15_000);
         epoch2.insert(&SketchInput::Str("172.16.5.99"), 25);
         epoch2.insert(&SketchInput::Str("10.0.0.43"), 200);
 
-        let mut epoch3 = FoldCMS::new(rows, cols, fold_level, 5);
+        let mut epoch3: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
         epoch3.insert(&SketchInput::Str("192.168.1.1"), 60);
         epoch3.insert(&SketchInput::Str("10.0.0.42"), 12_000);
         epoch3.insert(&SketchInput::Str("172.16.5.99"), 9_000);
@@ -1434,7 +1443,7 @@ mod tests {
                 CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
             for epoch in 0..n {
-                let mut sk = FoldCMS::new(rows, cols, fold_level, 10);
+                let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
                 for i in (epoch * 10)..((epoch + 1) * 10) {
                     let key = SketchInput::U64(i);
                     sk.insert(&key, 1);
@@ -1465,7 +1474,8 @@ mod tests {
         let cols = 256;
         let fold_level = 4;
 
-        let mut sk = FoldCMS::new(rows, cols, fold_level, 10);
+        // let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
+        let mut sk = FoldCMS::<DefaultXxHasher>::new(rows, cols, fold_level, 10);
         for i in 0..40 {
             sk.insert(&SketchInput::U64(i), (i + 1) as i64);
         }
@@ -1486,7 +1496,7 @@ mod tests {
 
     #[test]
     fn unfold_to_same_level_returns_clone() {
-        let mut sk = FoldCMS::new(3, 256, 3, 10);
+        let mut sk: FoldCMS = FoldCMS::new(3, 256, 3, 10);
         sk.insert(&SketchInput::Str("x"), 42);
 
         let result = sk.unfold_to(3);
@@ -1500,8 +1510,8 @@ mod tests {
         let rows = 3;
         let cols = 1024;
 
-        let mut sk_high = FoldCMS::new(rows, cols, 4, 10);
-        let mut sk_low = FoldCMS::new(rows, cols, 2, 10);
+        let mut sk_high: FoldCMS = FoldCMS::new(rows, cols, 4, 10);
+        let mut sk_low: FoldCMS = FoldCMS::new(rows, cols, 2, 10);
 
         for i in 0..20u64 {
             sk_high.insert(&SketchInput::U64(i), 1);

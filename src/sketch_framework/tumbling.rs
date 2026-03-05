@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn fold_cms_clear_resets_to_empty() {
-        let mut sk = FoldCMS::new(3, 1024, 3, 10);
+        let mut sk: FoldCMS = FoldCMS::new(3, 1024, 3, 10);
         for i in 0..50u64 {
             sk.insert(&SketchInput::U64(i), 1);
         }
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn fold_cs_clear_resets_to_empty() {
-        let mut sk = FoldCS::new(3, 1024, 3, 10);
+        let mut sk: FoldCS = FoldCS::new(3, 1024, 3, 10);
         for i in 0..50u64 {
             sk.insert(&SketchInput::U64(i), 1);
         }
@@ -581,7 +581,7 @@ mod tests {
         };
         let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 10, config.clone(), 4);
 
-        let mut manual = FoldCMS::new(
+        let mut manual: FoldCMS = FoldCMS::new(
             config.rows,
             config.full_cols,
             config.fold_level,
@@ -1676,7 +1676,7 @@ mod tests {
             config.clone(),
             num_windows + 2,
         );
-        let mut mono = FoldCMS::new(rows, full_cols, fold_level, top_k);
+        let mut mono: FoldCMS = FoldCMS::new(rows, full_cols, fold_level, top_k);
 
         let stream = sample_zipf_u64(domain, exponent, total_samples, 0xDE_AD01);
         let mut truth = HashMap::<u64, i64>::new();
@@ -1735,7 +1735,7 @@ mod tests {
             config.clone(),
             num_windows + 2,
         );
-        let mut mono = FoldCS::new(rows, full_cols, fold_level, top_k);
+        let mut mono: FoldCS = FoldCS::new(rows, full_cols, fold_level, top_k);
 
         let stream = sample_zipf_u64(domain, exponent, total_samples, 0xDE_AD02);
         let mut truth = HashMap::<u64, i64>::new();
