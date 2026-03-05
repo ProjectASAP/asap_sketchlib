@@ -19,7 +19,11 @@ const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
-pub struct CountMin<S: MatrixStorage = Vector2D<i32>, Mode = RegularPath, H: SketchHasher = DefaultXxHasher> {
+pub struct CountMin<
+    S: MatrixStorage = Vector2D<i32>,
+    Mode = RegularPath,
+    H: SketchHasher = DefaultXxHasher,
+> {
     counts: S,
     row: usize,
     col: usize,

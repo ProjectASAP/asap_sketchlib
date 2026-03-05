@@ -71,25 +71,21 @@ impl EHUnivQueryResult {
     pub fn calc_l1(&self) -> f64 {
         match self {
             Self::Sketch(um) => um.calc_l1(),
-            Self::Map { freq_map, .. } => {
-                freq_map.values().map(|&v| (v as f64).abs()).sum()
-            }
+            Self::Map { freq_map, .. } => freq_map.values().map(|&v| (v as f64).abs()).sum(),
         }
     }
 
     pub fn calc_l2(&self) -> f64 {
         match self {
             Self::Sketch(um) => um.calc_l2(),
-            Self::Map { freq_map, .. } => {
-                freq_map
-                    .values()
-                    .map(|&v| {
-                        let f = v as f64;
-                        f * f
-                    })
-                    .sum::<f64>()
-                    .sqrt()
-            }
+            Self::Map { freq_map, .. } => freq_map
+                .values()
+                .map(|&v| {
+                    let f = v as f64;
+                    f * f
+                })
+                .sum::<f64>()
+                .sqrt(),
         }
     }
 
@@ -108,11 +104,7 @@ impl EHUnivQueryResult {
                     .values()
                     .map(|&v| {
                         let f = v as f64;
-                        if f > 0.0 {
-                            f * f.log2()
-                        } else {
-                            0.0
-                        }
+                        if f > 0.0 { f * f.log2() } else { 0.0 }
                     })
                     .sum();
                 n.log2() - sum_f_log_f / n
@@ -137,7 +129,15 @@ impl EHUnivOptimized {
         sketch_col: usize,
         layer_size: usize,
     ) -> Self {
-        Self::with_pool_cap(k, window, heap_size, sketch_row, sketch_col, layer_size, DEFAULT_POOL_CAP)
+        Self::with_pool_cap(
+            k,
+            window,
+            heap_size,
+            sketch_row,
+            sketch_col,
+            layer_size,
+            DEFAULT_POOL_CAP,
+        )
     }
 
     pub fn with_pool_cap(
@@ -184,8 +184,7 @@ impl EHUnivOptimized {
             .take_while(|b| b.max_time < cutoff)
             .count();
         if expired_count > 0 {
-            let expired: Vec<EHUnivMonBucket> =
-                self.um_buckets.drain(0..expired_count).collect();
+            let expired: Vec<EHUnivMonBucket> = self.um_buckets.drain(0..expired_count).collect();
             for bucket in expired {
                 self.pool.put(bucket.sketch);
             }
@@ -279,14 +278,10 @@ impl EHUnivOptimized {
         }
         let mut i = self.um_buckets.len() - 2;
         loop {
-            let l22_i = self.um_buckets[i]
-                .sketch
-                .l2_sketch_layers[0]
+            let l22_i = self.um_buckets[i].sketch.l2_sketch_layers[0]
                 .get_l2()
                 .powi(2);
-            let l22_next = self.um_buckets[i + 1]
-                .sketch
-                .l2_sketch_layers[0]
+            let l22_next = self.um_buckets[i + 1].sketch.l2_sketch_layers[0]
                 .get_l2()
                 .powi(2);
             let pair_l22 = l22_i + l22_next;
@@ -662,13 +657,7 @@ mod tests {
         let mut eh = EHUnivOptimized::with_defaults(4, 100000);
 
         // Insert a known distribution
-        let data: Vec<(i64, i64)> = vec![
-            (1, 100),
-            (2, 200),
-            (3, 50),
-            (4, 150),
-            (5, 80),
-        ];
+        let data: Vec<(i64, i64)> = vec![(1, 100), (2, 200), (3, 50), (4, 150), (5, 80)];
 
         let mut time = 0u64;
         for &(key, count) in &data {
@@ -760,7 +749,11 @@ mod tests {
     // -----------------------------------------------------------------------
     fn ground_truth_from_freq(freq: &HashMap<i64, i64>) -> (f64, f64, f64, f64) {
         let l1: f64 = freq.values().map(|&v| v as f64).sum();
-        let l2: f64 = freq.values().map(|&v| (v as f64).powi(2)).sum::<f64>().sqrt();
+        let l2: f64 = freq
+            .values()
+            .map(|&v| (v as f64).powi(2))
+            .sum::<f64>()
+            .sqrt();
         let card = freq.len() as f64;
         let entropy = if l1 > 0.0 {
             let term: f64 = freq
@@ -790,10 +783,7 @@ mod tests {
 
     fn assert_metric_within(name: &str, est: f64, truth: f64, tol: f64) {
         if truth.abs() < 1e-12 {
-            assert!(
-                est.abs() < 1e-6,
-                "{name}: expected ~0, got {est}"
-            );
+            assert!(est.abs() < 1e-6, "{name}: expected ~0, got {est}");
             return;
         }
         let rel_err = (est - truth).abs() / truth.abs();
@@ -824,15 +814,11 @@ mod tests {
         }
 
         // Should still be in map tier (few distinct keys, large default max_map_size)
-        assert!(
-            eh.um_buckets.is_empty(),
-            "Expected all data in map tier"
-        );
+        assert!(eh.um_buckets.is_empty(), "Expected all data in map tier");
 
         let result = eh.query_interval(0, time - 1).unwrap();
-        let (true_l1, true_l2, true_card, true_entropy) = ground_truth_from_freq(
-            &data.iter().map(|&(k, v)| (k, v)).collect(),
-        );
+        let (true_l1, true_l2, true_card, true_entropy) =
+            ground_truth_from_freq(&data.iter().map(|&(k, v)| (k, v)).collect());
 
         // Map results should be exact (within floating-point tolerance)
         assert_metric_within("L1", result.calc_l1(), true_l1, 0.01);
@@ -931,7 +917,10 @@ mod tests {
 
         // Query should still work
         let result = eh.query_interval(1800, 1999);
-        assert!(result.is_some(), "Query should return a result after cycling");
+        assert!(
+            result.is_some(),
+            "Query should return a result after cycling"
+        );
     }
 
     /// Verify merge correctness: merging two adjacent EH sketch buckets

@@ -105,15 +105,11 @@ impl SketchHasher for DefaultXxHasher {
             SketchInput::U32(u) => {
                 XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u as u64).to_ne_bytes())
             }
-            SketchInput::U64(u) => {
-                XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes())
-            }
+            SketchInput::U64(u) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*u).to_ne_bytes()),
             SketchInput::F32(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
             SketchInput::F64(f) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], &f.to_ne_bytes()),
             SketchInput::Str(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
-            SketchInput::String(s) => {
-                XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes())
-            }
+            SketchInput::String(s) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], (*s).as_bytes()),
             SketchInput::Bytes(items) => XxHash3_128::oneshot_with_seed(SEEDLIST[d], items),
             SketchInput::I8(i) => {
                 XxHash3_128::oneshot_with_seed(SEEDLIST[d], &(*i as u64).to_ne_bytes())

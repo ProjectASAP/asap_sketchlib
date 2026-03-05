@@ -1,4 +1,3 @@
-
 use super::EHSketchList;
 use super::eh_sketch_list::SketchNorm;
 use crate::SketchInput;

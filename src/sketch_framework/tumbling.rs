@@ -10,10 +10,10 @@
 //! Any type implementing [`TumblingWindowSketch`] can be used. Built-in
 //! implementations are provided for [`FoldCMS`], [`FoldCS`], and [`KLL`].
 
+use crate::SketchInput;
 use crate::fold_cms::FoldCMS;
 use crate::fold_cs::FoldCS;
 use crate::kll::KLL;
-use crate::SketchInput;
 
 // ---------------------------------------------------------------------------
 // TumblingWindowSketch trait
@@ -78,7 +78,12 @@ impl TumblingWindowSketch for FoldCMS {
     type Config = FoldCMSConfig;
 
     fn from_config(config: &Self::Config) -> Self {
-        FoldCMS::new(config.rows, config.full_cols, config.fold_level, config.top_k)
+        FoldCMS::new(
+            config.rows,
+            config.full_cols,
+            config.fold_level,
+            config.top_k,
+        )
     }
 
     fn tumbling_insert(&mut self, key: &SketchInput, value: i64) {
@@ -98,7 +103,12 @@ impl TumblingWindowSketch for FoldCS {
     type Config = FoldCSConfig;
 
     fn from_config(config: &Self::Config) -> Self {
-        FoldCS::new(config.rows, config.full_cols, config.fold_level, config.top_k)
+        FoldCS::new(
+            config.rows,
+            config.full_cols,
+            config.fold_level,
+            config.top_k,
+        )
     }
 
     fn tumbling_insert(&mut self, key: &SketchInput, value: i64) {
@@ -1114,9 +1124,7 @@ mod tests {
         let p50 = cdf.query(0.50);
         let p90 = cdf.query(0.90);
 
-        eprintln!(
-            "[kll_tumbling_distribution_shift] p10={p10:.1}, p50={p50:.1}, p90={p90:.1}"
-        );
+        eprintln!("[kll_tumbling_distribution_shift] p10={p10:.1}, p50={p50:.1}, p90={p90:.1}");
 
         assert!(
             p10 < 200.0,
@@ -1884,12 +1892,8 @@ mod tests {
                 fold_level: 4,
                 top_k: 20,
             };
-            let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(
-                total_samples as u64 + 1,
-                10,
-                config,
-                4,
-            );
+            let mut tw: TumblingWindow<FoldCS> =
+                TumblingWindow::new(total_samples as u64 + 1, 10, config, 4);
 
             let stream = sample_zipf_u64(5000, 1.1, total_samples, 0x51_0002);
             let mut truth = HashMap::<u64, i64>::new();
@@ -1926,12 +1930,8 @@ mod tests {
         // --- KLL subsection ---
         {
             let config = KLLConfig { k: 200, m: 8 };
-            let mut tw: TumblingWindow<KLL> = TumblingWindow::new(
-                total_samples as u64 + 1,
-                10,
-                config,
-                4,
-            );
+            let mut tw: TumblingWindow<KLL> =
+                TumblingWindow::new(total_samples as u64 + 1, 10, config, 4);
 
             let values = sample_uniform_f64(0.0, 1_000_000.0, total_samples, 0x51_0003);
             for (i, &v) in values.iter().enumerate() {
@@ -1974,12 +1974,8 @@ mod tests {
             fold_level: 3,
             top_k: 10,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(
-            window_size,
-            max_windows,
-            config,
-            max_windows + 2,
-        );
+        let mut tw: TumblingWindow<FoldCMS> =
+            TumblingWindow::new(window_size, max_windows, config, max_windows + 2);
 
         let stream = sample_zipf_u64(500, 1.2, total_samples, 0x77_1100);
 
@@ -1995,8 +1991,7 @@ mod tests {
         // Build truth for what the tumbling window actually retains.
         // The retained windows cover the most recent portion of the stream.
         let total_windows_created = total_samples / window_size as usize;
-        let retained_start_window =
-            total_windows_created.saturating_sub(max_windows);
+        let retained_start_window = total_windows_created.saturating_sub(max_windows);
         let retained_start_sample = retained_start_window * window_size as usize;
 
         let mut retained_truth = HashMap::<u64, i64>::new();
@@ -2065,7 +2060,8 @@ mod tests {
                 time += 1;
             }
             // Advance time to next window boundary.
-            let next_boundary = ((time / samples_per_window as u64) + 1) * samples_per_window as u64;
+            let next_boundary =
+                ((time / samples_per_window as u64) + 1) * samples_per_window as u64;
             time = next_boundary;
         }
 
@@ -2083,9 +2079,7 @@ mod tests {
             }
         }
         let pct = within as f64 / truth.len() as f64 * 100.0;
-        eprintln!(
-            "[tumbling_skewed_load] pct_within_bound={pct:.1}%, bound={bound:.2}"
-        );
+        eprintln!("[tumbling_skewed_load] pct_within_bound={pct:.1}%, bound={bound:.2}");
         assert!(
             pct > 90.0,
             "only {pct:.1}% within CMS bound with skewed load (expected > 90%)"

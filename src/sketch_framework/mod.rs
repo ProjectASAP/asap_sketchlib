@@ -33,11 +33,9 @@ pub mod nitro;
 pub use nitro::{NitroBatch, NitroEstimate, NitroTarget};
 
 pub mod eh_univ_optimized;
-pub use eh_univ_optimized::{
-    EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUnivQueryResult,
-};
+pub use eh_univ_optimized::{EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUnivQueryResult};
 
 pub mod tumbling;
 pub use tumbling::{
-    FoldCMSConfig, FoldCSConfig, KLLConfig, SketchPool, TumblingWindowSketch, TumblingWindow,
+    FoldCMSConfig, FoldCSConfig, KLLConfig, SketchPool, TumblingWindow, TumblingWindowSketch,
 };

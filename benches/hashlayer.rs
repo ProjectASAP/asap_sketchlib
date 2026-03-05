@@ -1,7 +1,7 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sketchlib_rust::{
-    Count, CountMin, FastPath, HyperLogLog, DataFusion, RegularPath, SketchInput, Vector2D,
+    Count, CountMin, DataFusion, FastPath, HyperLogLog, RegularPath, SketchInput, Vector2D,
     sketch_framework::hashlayer::HashLayer,
 };
 

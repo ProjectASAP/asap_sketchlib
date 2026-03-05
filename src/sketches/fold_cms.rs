@@ -61,7 +61,10 @@ impl FoldCell {
     pub fn insert(&mut self, full_col: u16, delta: i64) {
         match self {
             FoldCell::Empty => {
-                *self = FoldCell::Single { full_col, count: delta };
+                *self = FoldCell::Single {
+                    full_col,
+                    count: delta,
+                };
             }
             FoldCell::Single {
                 full_col: existing_col,
@@ -303,10 +306,7 @@ impl<H: SketchHasher> FoldCMS<H> {
 
     /// Number of cells that contain more than one entry (real collisions).
     pub fn collided_cells(&self) -> usize {
-        self.cells
-            .iter()
-            .filter(|c| c.entry_count() > 1)
-            .count()
+        self.cells.iter().filter(|c| c.entry_count() > 1).count()
     }
 
     // -- Hashing helpers ----------------------------------------------------
@@ -503,10 +503,7 @@ impl<H: SketchHasher> FoldCMS<H> {
     /// it. **0 clones, 1 allocation, N scatter passes.** Handles mixed fold
     /// levels — each source is scattered from whatever level it is at.
     pub fn hierarchical_merge(sketches: &[FoldCMS<H>]) -> FoldCMS<H> {
-        assert!(
-            !sketches.is_empty(),
-            "need at least one sketch to merge"
-        );
+        assert!(!sketches.is_empty(), "need at least one sketch to merge");
         if sketches.len() == 1 {
             return sketches[0].unfold_to(0);
         }
@@ -600,7 +597,6 @@ mod tests {
     use crate::test_utils::sample_zipf_u64;
     use crate::{CountMin, HeapItem, RegularPath, Vector2D};
     use std::collections::HashMap;
-
 
     // -- FoldCell unit tests ------------------------------------------------
 
@@ -1094,10 +1090,7 @@ mod tests {
             "total_entries={total_entries} unexpectedly low"
         );
         // Very few fold-collisions expected with 50 keys in 256 physical columns.
-        assert!(
-            collided < 30,
-            "expected few collided cells, got {collided}"
-        );
+        assert!(collided < 30, "expected few collided cells, got {collided}");
     }
 
     // -- Top-K heap integration ---------------------------------------------
@@ -1259,22 +1252,10 @@ mod tests {
 
         epoch1.merge_same_level(&epoch2);
 
-        assert_eq!(
-            epoch1.query(&SketchInput::Str("/api/v1/search")),
-            350
-        );
-        assert_eq!(
-            epoch1.query(&SketchInput::Str("/api/v1/login")),
-            210
-        );
-        assert_eq!(
-            epoch1.query(&SketchInput::Str("/api/v2/recommend")),
-            101
-        );
-        assert_eq!(
-            epoch1.query(&SketchInput::Str("/api/v1/checkout")),
-            10
-        );
+        assert_eq!(epoch1.query(&SketchInput::Str("/api/v1/search")), 350);
+        assert_eq!(epoch1.query(&SketchInput::Str("/api/v1/login")), 210);
+        assert_eq!(epoch1.query(&SketchInput::Str("/api/v2/recommend")), 101);
+        assert_eq!(epoch1.query(&SketchInput::Str("/api/v1/checkout")), 10);
     }
 
     // -- Large-window merge benchmark ---------------------------------------
@@ -1439,8 +1420,7 @@ mod tests {
 
         for n in 1..=8u64 {
             let mut sketches = Vec::new();
-            let mut standard =
-                CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut standard = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
             for epoch in 0..n {
                 let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);

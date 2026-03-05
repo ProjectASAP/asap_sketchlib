@@ -5,11 +5,11 @@
 //!   dimensions — larger "elephant" layers for heavy hitters and smaller
 //!   "mouse" layers for the long tail, matching the PromSketch design.
 
+use crate::UnivMon;
 use crate::common::heap::HHHeap;
-use crate::common::{BOTTOM_LAYER_FINDER, SketchInput, hash64_seeded, hash_item64_seeded};
+use crate::common::{BOTTOM_LAYER_FINDER, SketchInput, hash_item64_seeded, hash64_seeded};
 use crate::common::{L2HH, Vector1D};
 use crate::sketches::count::CountL2HH;
-use crate::UnivMon;
 
 /// Object pool for `UnivMon` sketches.
 ///
@@ -150,9 +150,7 @@ impl UnivMonPyramid {
                 .collect()
         };
 
-        let hh_vec: Vec<HHHeap> = (0..total_layers)
-            .map(|_| HHHeap::new(heap_size))
-            .collect();
+        let hh_vec: Vec<HHHeap> = (0..total_layers).map(|_| HHHeap::new(heap_size)).collect();
 
         UnivMonPyramid {
             l2_sketch_layers: Vector1D::from_vec(sk_vec),
@@ -222,8 +220,7 @@ impl UnivMonPyramid {
         if bottom < self.elephant_layers {
             // All touched layers are elephant layers.
             if bottom > 0 {
-                let count = self.l2_sketch_layers[bottom]
-                    .update_and_est_without_l2(key, value);
+                let count = self.l2_sketch_layers[bottom].update_and_est_without_l2(key, value);
                 // Reuse bottom-layer estimate for upper-layer heaps.
                 for l in (1..=bottom).rev() {
                     self.hh_layers[l].update(key, count as i64);
@@ -236,8 +233,7 @@ impl UnivMonPyramid {
             }
         } else {
             // Bottom layer is a mouse layer (smaller sketch dimensions).
-            let count = self.l2_sketch_layers[bottom]
-                .update_and_est_without_l2(key, value);
+            let count = self.l2_sketch_layers[bottom].update_and_est_without_l2(key, value);
             for l in (1..=bottom).rev() {
                 self.hh_layers[l].update(key, count as i64);
             }
@@ -273,8 +269,7 @@ impl UnivMonPyramid {
 
             for item in self.hh_layers[i].heap() {
                 if item.count > threshold {
-                    let hash =
-                        (hash_item64_seeded(BOTTOM_LAYER_FINDER, &item.key) >> (i + 1)) & 1;
+                    let hash = (hash_item64_seeded(BOTTOM_LAYER_FINDER, &item.key) >> (i + 1)) & 1;
                     let coe = 1.0 - 2.0 * (hash as f64);
                     tmp += coe * g(item.count as f64);
                 }
@@ -293,10 +288,7 @@ impl UnivMonPyramid {
     }
 
     pub fn calc_entropy(&self) -> f64 {
-        let tmp = self.calc_g_sum(
-            |x| if x > 0.0 { x * x.log2() } else { 0.0 },
-            false,
-        );
+        let tmp = self.calc_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 }, false);
         (self.bucket_size as f64).log2() - tmp / (self.bucket_size as f64)
     }
 
@@ -403,12 +395,7 @@ mod tests {
     fn pyramid_basic_insert_and_query() {
         let mut um = UnivMonPyramid::with_defaults();
 
-        let cases: Vec<(&str, i64)> = vec![
-            ("hello", 10),
-            ("world", 20),
-            ("hello", 5),
-            ("foo", 30),
-        ];
+        let cases: Vec<(&str, i64)> = vec![("hello", 10), ("world", 20), ("hello", 5), ("foo", 30)];
 
         for (key, val) in &cases {
             um.insert(&SketchInput::Str(key), *val);

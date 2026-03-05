@@ -17,7 +17,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::fold_cms::FoldCell;
-use crate::{DefaultXxHasher, HHHeap, SketchHasher, SketchInput, compute_median_inline_f64, heap_item_to_sketch_input};
+use crate::{
+    DefaultXxHasher, HHHeap, SketchHasher, SketchInput, compute_median_inline_f64,
+    heap_item_to_sketch_input,
+};
 use std::marker::PhantomData;
 
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
@@ -147,10 +150,7 @@ impl<H: SketchHasher> FoldCS<H> {
 
     /// Number of cells that contain more than one entry (real collisions).
     pub fn collided_cells(&self) -> usize {
-        self.cells
-            .iter()
-            .filter(|c| c.entry_count() > 1)
-            .count()
+        self.cells.iter().filter(|c| c.entry_count() > 1).count()
     }
 
     // -- Hashing helpers ----------------------------------------------------
@@ -349,10 +349,7 @@ impl<H: SketchHasher> FoldCS<H> {
     /// it. **0 clones, 1 allocation, N scatter passes.** Handles mixed fold
     /// levels — each source is scattered from whatever level it is at.
     pub fn hierarchical_merge(sketches: &[FoldCS<H>]) -> FoldCS<H> {
-        assert!(
-            !sketches.is_empty(),
-            "need at least one sketch to merge"
-        );
+        assert!(!sketches.is_empty(), "need at least one sketch to merge");
         if sketches.len() == 1 {
             return sketches[0].unfold_to(0);
         }
@@ -823,10 +820,7 @@ mod tests {
         let flat = fold.to_flat_counters();
         let std_flat = standard.as_storage().as_slice();
         for (i, (f, s)) in flat.iter().zip(std_flat.iter()).enumerate() {
-            assert_eq!(
-                *f, *s,
-                "flat counter mismatch at [{i}]: fold={f}, std={s}"
-            );
+            assert_eq!(*f, *s, "flat counter mismatch at [{i}]: fold={f}, std={s}");
         }
     }
 
@@ -855,10 +849,7 @@ mod tests {
             total_entries >= rows * 45,
             "total_entries={total_entries} unexpectedly low"
         );
-        assert!(
-            collided < 30,
-            "expected few collided cells, got {collided}"
-        );
+        assert!(collided < 30, "expected few collided cells, got {collided}");
     }
 
     // -- Top-K heap integration ---------------------------------------------
@@ -1099,8 +1090,7 @@ mod tests {
 
         for n in 1..=8u64 {
             let mut sketches = Vec::new();
-            let mut standard =
-                Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
             for epoch in 0..n {
                 let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
