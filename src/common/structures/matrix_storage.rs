@@ -71,7 +71,7 @@ pub trait MatrixStorage {
     fn fast_query_min<F, R>(&self, hashed_val: &Self::HashValueType, op: F) -> R
     where
         F: Fn(&Self::Counter, usize, &Self::HashValueType) -> R,
-        R: Ord;
+        R: PartialOrd;
 
     fn fast_query_median<F>(&self, hashed_val: &Self::HashValueType, op: F) -> f64
     where

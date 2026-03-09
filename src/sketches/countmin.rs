@@ -2,6 +2,7 @@ use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::marker::PhantomData;
 
 use crate::FastPathHasher;
@@ -70,6 +71,19 @@ impl Default for CountMin<Vector2D<i128>, RegularPath> {
 
 // Default CountMin sketch for Vector2D<i128> (FastPath).
 impl Default for CountMin<Vector2D<i128>, FastPath> {
+    fn default() -> Self {
+        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+    }
+}
+
+// Default CountMin sketch for Vector2D<f64> (RegularPath and FastPath).
+impl Default for CountMin<Vector2D<f64>, RegularPath> {
+    fn default() -> Self {
+        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+    }
+}
+
+impl Default for CountMin<Vector2D<f64>, FastPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
     }
@@ -249,16 +263,16 @@ impl<S: MatrixStorage + for<'de> Deserialize<'de>, Mode, H: SketchHasher> CountM
 }
 
 // SketchInput adapters for the regular Count-Min update rule.
-// Regular-path CountMin operations.
+// Regular-path CountMin operations. Uses PartialOrd to support both integer and f64 counters.
 impl<S: MatrixStorage, H: SketchHasher> CountMin<S, RegularPath, H>
 where
-    S::Counter: Copy + Ord + From<i32> + std::ops::AddAssign,
+    S::Counter: Copy + PartialOrd + From<i32> + std::ops::AddAssign,
 {
     /// Inserts an observation while using the standard Count-Min minimum row update rule.
     #[inline(always)]
     pub fn insert(&mut self, value: &SketchInput) {
-        let rows = self.counts.rows(); // For IntegerMatrix, this returns const
-        let cols = self.counts.cols(); // For IntegerMatrix, this returns const
+        let rows = self.counts.rows();
+        let cols = self.counts.cols();
         for r in 0..rows {
             let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
@@ -266,10 +280,11 @@ where
         }
     }
 
+    /// Inserts observations with the given count (supports fractional weights for f64 counters).
     #[inline(always)]
     pub fn insert_many(&mut self, value: &SketchInput, many: S::Counter) {
-        let rows = self.counts.rows(); // For IntegerMatrix, this returns const
-        let cols = self.counts.cols(); // For IntegerMatrix, this returns const
+        let rows = self.counts.rows();
+        let cols = self.counts.cols();
         for r in 0..rows {
             let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
@@ -296,41 +311,14 @@ where
     /// Returns the frequency estimate for the provided value.
     #[inline(always)]
     pub fn estimate(&self, value: &SketchInput) -> S::Counter {
-        let rows = self.counts.rows(); // For IntegerMatrix, this returns const
-        let cols = self.counts.cols(); // For IntegerMatrix, this returns const
+        let rows = self.counts.rows();
+        let cols = self.counts.cols();
         let mut min = S::Counter::from(i32::MAX);
         for r in 0..rows {
             let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
-            min = min.min(self.counts.query_one_counter(r, col));
-        }
-        min
-    }
-}
-
-/// f64-counter path: supports fractional weights without integer rounding.
-impl<H: SketchHasher> CountMin<Vector2D<f64>, RegularPath, H> {
-    /// Insert a fractional-weight observation.
-    pub fn insert_weighted(&mut self, value: &SketchInput, weight: f64) {
-        let rows = self.counts.rows();
-        let cols = self.counts.cols();
-        for r in 0..rows {
-            let hashed = H::hash64_seeded(r, value);
-            let col = ((hashed & LOWER_32_MASK) as usize) % cols;
-            self.counts.increment_by_row(r, col, weight);
-        }
-    }
-
-    /// Frequency estimate as f64 (no Ord bound required).
-    pub fn estimate_f64(&self, value: &SketchInput) -> f64 {
-        let rows = self.counts.rows();
-        let cols = self.counts.cols();
-        let mut min = f64::MAX;
-        for r in 0..rows {
-            let hashed = H::hash64_seeded(r, value);
-            let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             let v = self.counts.query_one_counter(r, col);
-            if v < min {
+            if v.partial_cmp(&min).map(|o| o == Ordering::Less).unwrap_or(false) {
                 min = v;
             }
         }
@@ -364,11 +352,11 @@ where
 }
 
 // SketchInput adapters for the fast-path Count-Min update rule.
-// Fast-path CountMin operations using precomputed hashes.
+// Fast-path CountMin operations using precomputed hashes. Uses PartialOrd for f64 support.
 impl<S, H: SketchHasher> CountMin<S, FastPath, H>
 where
     S: MatrixStorage + FastPathHasher,
-    S::Counter: Copy + Ord + From<i32> + std::ops::AddAssign,
+    S::Counter: Copy + PartialOrd + From<i32> + std::ops::AddAssign,
 {
     /// Inserts an observation using the combined hash optimization.
     #[inline(always)]
@@ -410,11 +398,10 @@ where
 }
 
 // Core fast-path operations that operate on pre-computed hashes.
-// Fast-path CountMin operations.
 impl<S, H: SketchHasher> CountMin<S, FastPath, H>
 where
     S: MatrixStorage,
-    S::Counter: Copy + Ord + From<i32> + std::ops::AddAssign,
+    S::Counter: Copy + PartialOrd + From<i32> + std::ops::AddAssign,
 {
     /// Inserts an observation using the combined hash optimization.
     /// Hash value can be reused with other sketches.

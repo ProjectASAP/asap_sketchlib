@@ -197,8 +197,9 @@ macro_rules! impl_fixed_matrix {
             fn fast_query_min<F, R>(&self, hashed_val: &$hash_ty, op: F) -> R
             where
                 F: Fn(&Self::Counter, usize, &$hash_ty) -> R,
-                R: Ord,
+                R: PartialOrd,
             {
+                use std::cmp::Ordering;
                 let hashed_val = *hashed_val;
                 let hashed = hashed_val & Self::MASK;
                 let col = (hashed as usize) % $cols;
@@ -208,7 +209,7 @@ macro_rules! impl_fixed_matrix {
                     let col = (hashed as usize) % $cols;
                     let idx = row * $cols + col;
                     let candidate = op(&self.data[idx], row, &hashed_val);
-                    if candidate < min {
+                    if candidate.partial_cmp(&min).map(|o| o == Ordering::Less).unwrap_or(false) {
                         min = candidate;
                     }
                 }
