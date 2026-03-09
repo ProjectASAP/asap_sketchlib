@@ -1,9 +1,10 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use crossbeam_channel::{TryRecvError, bounded};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sketchlib_rust::{
-    CmDelta, Count, CountMin, CountOctoParent, CountOctoWorker, HllOctoParent, HllOctoWorker,
-    HyperLogLog, OctoAggregator, OctoConfig, OctoWorker, Regular, RegularPath, SketchInput,
-    Vector2D,
+    CmDelta, Count, CountMin, CountOctoAggregator, CountOctoWorker, HllOctoAggregator,
+    HllOctoWorker, HyperLogLog, OctoAggregator, OctoConfig, OctoWorker, Regular, RegularPath,
+    SketchInput, Vector2D,
 };
 use std::sync::{Once, mpsc};
 use std::thread;
@@ -36,16 +37,19 @@ impl BenchCmOctoWorker {
 impl OctoWorker for BenchCmOctoWorker {
     type Delta = CmDelta;
 
-    fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(Self::Delta)) {
+    fn process<F>(&mut self, input: &SketchInput, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
         self.sketch.insert_emit_delta(input, emit);
     }
 }
 
-struct BenchCmOctoParent {
+struct BenchCmOctoAggregator {
     sketch: CountMin<Vector2D<i32>, RegularPath>,
 }
 
-impl OctoAggregator for BenchCmOctoParent {
+impl OctoAggregator for BenchCmOctoAggregator {
     type Delta = CmDelta;
 
     fn apply(&mut self, delta: Self::Delta) {
@@ -83,20 +87,50 @@ where
 {
     let num_workers = shards.len();
     thread::scope(|s| {
-        let (delta_tx, delta_rx) = mpsc::channel::<W::Delta>();
+        let queue_capacity = config.queue_capacity.max(1);
+        let mut worker_txs = Vec::with_capacity(num_workers);
+        let mut worker_rxs = Vec::with_capacity(num_workers);
+        for _ in 0..num_workers {
+            let (tx, rx) = bounded::<W::Delta>(queue_capacity);
+            worker_txs.push(tx);
+            worker_rxs.push(Some(rx));
+        }
+
         let aggregator = s.spawn(move || {
             let mut parent = parent_factory();
             if config.pin_cores {
                 let _ = core_affinity::set_for_current(core_affinity::CoreId { id: num_workers });
             }
-            for delta in delta_rx {
-                parent.apply(delta);
+
+            let mut disconnected = 0usize;
+            while disconnected < num_workers {
+                let mut made_progress = false;
+                for rx_slot in &mut worker_rxs {
+                    let Some(rx) = rx_slot else {
+                        continue;
+                    };
+                    match rx.try_recv() {
+                        Ok(delta) => {
+                            parent.apply(delta);
+                            made_progress = true;
+                        }
+                        Err(TryRecvError::Empty) => {}
+                        Err(TryRecvError::Disconnected) => {
+                            *rx_slot = None;
+                            disconnected += 1;
+                        }
+                    }
+                }
+                if !made_progress {
+                    std::hint::spin_loop();
+                }
             }
             parent
         });
 
-        for (worker_id, shard) in shards.iter().enumerate() {
-            let delta_tx_worker = delta_tx.clone();
+        for (worker_id, (shard, delta_tx_worker)) in
+            shards.iter().zip(worker_txs.into_iter()).enumerate()
+        {
             let mut worker = worker_factory(worker_id);
             let pin_cores = config.pin_cores;
             s.spawn(move || {
@@ -112,7 +146,6 @@ where
                 }
             });
         }
-        drop(delta_tx);
 
         aggregator
             .join()
@@ -323,7 +356,7 @@ fn sanity_check_periodic_baselines() {
             &shards,
             &config,
             |_| BenchCmOctoWorker::new(CM_COUNT_ROWS, CM_COUNT_COLS),
-            || BenchCmOctoParent {
+            || BenchCmOctoAggregator {
                 sketch: CountMin::with_dimensions(CM_COUNT_ROWS, CM_COUNT_COLS),
             },
         )
@@ -338,7 +371,7 @@ fn sanity_check_periodic_baselines() {
             &shards,
             &config,
             |_| CountOctoWorker::new(CM_COUNT_ROWS, CM_COUNT_COLS),
-            || CountOctoParent {
+            || CountOctoAggregator {
                 sketch: Count::with_dimensions(CM_COUNT_ROWS, CM_COUNT_COLS),
             },
         )
@@ -355,7 +388,7 @@ fn sanity_check_periodic_baselines() {
             &shards,
             &config,
             |_| HllOctoWorker::new(),
-            || HllOctoParent {
+            || HllOctoAggregator {
                 sketch: HyperLogLog::<Regular>::default(),
             },
         )
@@ -408,7 +441,7 @@ fn bench_countmin_merge_compare(c: &mut Criterion) {
                         &shards,
                         &config,
                         |_| BenchCmOctoWorker::new(CM_COUNT_ROWS, CM_COUNT_COLS),
-                        || BenchCmOctoParent {
+                        || BenchCmOctoAggregator {
                             sketch: CountMin::with_dimensions(CM_COUNT_ROWS, CM_COUNT_COLS),
                         },
                     );
@@ -470,7 +503,7 @@ fn bench_count_merge_compare(c: &mut Criterion) {
                         &shards,
                         &config,
                         |_| CountOctoWorker::new(CM_COUNT_ROWS, CM_COUNT_COLS),
-                        || CountOctoParent {
+                        || CountOctoAggregator {
                             sketch: Count::with_dimensions(CM_COUNT_ROWS, CM_COUNT_COLS),
                         },
                     );
@@ -529,7 +562,7 @@ fn bench_hll_merge_compare(c: &mut Criterion) {
                         &shards,
                         &config,
                         |_| HllOctoWorker::new(),
-                        || HllOctoParent {
+                        || HllOctoAggregator {
                             sketch: HyperLogLog::<Regular>::default(),
                         },
                     );

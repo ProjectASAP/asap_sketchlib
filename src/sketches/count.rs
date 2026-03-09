@@ -723,7 +723,7 @@ impl Count<Vector2D<i32>, RegularPath> {
     /// Insert a key with the Count sketch sign convention.
     /// Emits `CountDelta` when |counter| >= `COUNT_PROMASK`, then resets the counter.
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut dyn FnMut(CountDelta)) {
+    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta)) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         let data = self.counts.as_mut_slice();

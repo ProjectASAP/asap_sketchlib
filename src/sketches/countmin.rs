@@ -332,16 +332,16 @@ impl CountMin<Vector2D<i32>, RegularPath> {
     /// Inserts one key and emits a `CmDelta` whenever a touched counter reaches
     /// a `CM_PROMASK` multiple.
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut dyn FnMut(CmDelta)) {
+    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CmDelta)) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
-        let threshold = CM_PROMASK as i32;
+        // let threshold = CM_PROMASK as i32;
         for r in 0..rows {
             let hashed = hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             self.counts.increment_by_row(r, col, 1);
             let current = self.counts.query_one_counter(r, col);
-            if current % threshold == 0 {
+            if current % CM_PROMASK as i32 == 0 {
                 emit(CmDelta {
                     row: r as u16,
                     col: col as u16,

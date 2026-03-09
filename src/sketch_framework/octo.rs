@@ -7,9 +7,10 @@
 
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, RwLock, Weak};
 use std::thread;
+
+use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 
 use crate::{
     CmDelta, Count, CountDelta, CountMin, HllDelta, HyperLogLog, Regular, RegularPath, SketchInput,
@@ -28,10 +29,12 @@ pub trait OctoWorker: Send {
     type Delta: Copy + Send + 'static;
 
     /// Process one input and emit zero or more deltas.
-    fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(Self::Delta));
+    fn process<F>(&mut self, input: &SketchInput, emit: &mut F)
+    where
+        F: FnMut(Self::Delta);
 }
 
-/// Parent-side trait: absorbs deltas into a full-precision sketch.
+/// Aggregator-side trait: absorbs deltas into a full-precision sketch.
 pub trait OctoAggregator: Send {
     type Delta: Copy + Send + 'static;
 
@@ -51,8 +54,7 @@ pub struct OctoConfig {
     /// Worker i is pinned to core i, aggregator to core num_workers.
     /// Silently skipped if pinning fails.
     pub pin_cores: bool,
-    /// Legacy queue capacity retained for compatibility (default: 65536).
-    /// Currently unused by the unbounded MPSC transport.
+    /// Queue capacity for bounded worker-input and worker-delta channels (default: 65536).
     pub queue_capacity: usize,
 }
 
@@ -120,7 +122,7 @@ impl<P> OctoReadHandle<P> {
 }
 
 struct OctoCore<P> {
-    worker_input_txs: Vec<mpsc::Sender<WorkerMsg>>,
+    worker_input_txs: Vec<Sender<WorkerMsg>>,
     next_worker: AtomicUsize,
     worker_handles: Vec<thread::JoinHandle<()>>,
     aggregator_handle: Option<thread::JoinHandle<()>>,
@@ -171,35 +173,70 @@ impl<P> OctoCore<P>
 where
     P: Send + Sync + 'static,
 {
-    fn start<W>(workers: Vec<W>, parent: P, num_workers: usize, pin_cores: bool) -> Self
+    fn start<W>(
+        workers: Vec<W>,
+        parent: P,
+        num_workers: usize,
+        pin_cores: bool,
+        queue_capacity: usize,
+    ) -> Self
     where
         W: OctoWorker + 'static,
         P: OctoAggregator<Delta = W::Delta>,
     {
         assert_eq!(workers.len(), num_workers);
+        let queue_capacity = queue_capacity.max(1);
 
-        let (delta_tx, delta_rx) = mpsc::channel::<W::Delta>();
         let parent = Arc::new(RwLock::new(parent));
         let parent_for_aggregator = Arc::clone(&parent);
+        let mut delta_txs: Vec<Sender<W::Delta>> = Vec::with_capacity(num_workers);
+        let mut delta_rxs: Vec<Option<Receiver<W::Delta>>> = Vec::with_capacity(num_workers);
+        for _ in 0..num_workers {
+            let (tx, rx) = bounded::<W::Delta>(queue_capacity);
+            delta_txs.push(tx);
+            delta_rxs.push(Some(rx));
+        }
 
         let aggregator_handle = thread::spawn(move || {
             if pin_cores {
                 let _ = core_affinity::set_for_current(core_affinity::CoreId { id: num_workers });
             }
-            for delta in delta_rx {
-                let mut guard = parent_for_aggregator
-                    .write()
-                    .expect("parent lock poisoned in aggregator");
-                guard.apply(delta);
+
+            let mut disconnected_workers = 0usize;
+            while disconnected_workers < num_workers {
+                let mut made_progress = false;
+                for rx_slot in &mut delta_rxs {
+                    let Some(rx) = rx_slot else {
+                        continue;
+                    };
+                    match rx.try_recv() {
+                        Ok(delta) => {
+                            let mut guard = parent_for_aggregator
+                                .write()
+                                .expect("parent lock poisoned in aggregator");
+                            guard.apply(delta);
+                            made_progress = true;
+                        }
+                        Err(TryRecvError::Empty) => {}
+                        Err(TryRecvError::Disconnected) => {
+                            *rx_slot = None;
+                            disconnected_workers += 1;
+                        }
+                    }
+                }
+                if !made_progress {
+                    std::hint::spin_loop();
+                }
             }
         });
 
         let mut worker_input_txs = Vec::with_capacity(num_workers);
         let mut worker_handles = Vec::with_capacity(num_workers);
-        for (worker_id, mut worker) in workers.into_iter().enumerate() {
-            let (worker_tx, worker_rx) = mpsc::channel::<WorkerMsg>();
+        for (worker_id, (mut worker, delta_tx_worker)) in
+            workers.into_iter().zip(delta_txs.into_iter()).enumerate()
+        {
+            let (worker_tx, worker_rx) = bounded::<WorkerMsg>(queue_capacity);
             worker_input_txs.push(worker_tx);
-            let delta_tx_worker = delta_tx.clone();
             let pin_cores = pin_cores;
             worker_handles.push(thread::spawn(move || {
                 if pin_cores {
@@ -217,7 +254,6 @@ where
                 }
             }));
         }
-        drop(delta_tx);
 
         Self {
             worker_input_txs,
@@ -243,7 +279,13 @@ where
         let num_workers = config.num_workers.max(1);
         let workers: Vec<W> = (0..num_workers).map(worker_factory).collect();
         let parent = parent_factory();
-        let core = OctoCore::start(workers, parent, num_workers, config.pin_cores);
+        let core = OctoCore::start(
+            workers,
+            parent,
+            num_workers,
+            config.pin_cores,
+            config.queue_capacity,
+        );
 
         Self {
             core: Some(core),
@@ -317,17 +359,20 @@ impl OctoWorker for CmOctoWorker {
     type Delta = CmDelta;
 
     #[inline(always)]
-    fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(CmDelta)) {
+    fn process<F>(&mut self, input: &SketchInput, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
         self.sketch.insert_emit_delta(input, emit);
     }
 }
 
 /// OctoSketch parent wrapping a full-precision `CountMin`.
-pub struct CmOctoParent {
+pub struct CmOctoAggregator {
     pub sketch: CountMin<Vector2D<i32>, RegularPath>,
 }
 
-impl OctoAggregator for CmOctoParent {
+impl OctoAggregator for CmOctoAggregator {
     type Delta = CmDelta;
 
     #[inline(always)]
@@ -355,17 +400,20 @@ impl OctoWorker for CountOctoWorker {
     type Delta = CountDelta;
 
     #[inline(always)]
-    fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(CountDelta)) {
+    fn process<F>(&mut self, input: &SketchInput, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
         self.child.insert_emit_delta(input, emit);
     }
 }
 
 /// OctoSketch parent wrapping a full-precision `Count`.
-pub struct CountOctoParent {
+pub struct CountOctoAggregator {
     pub sketch: Count<Vector2D<i32>, RegularPath>,
 }
 
-impl OctoAggregator for CountOctoParent {
+impl OctoAggregator for CountOctoAggregator {
     type Delta = CountDelta;
 
     #[inline(always)]
@@ -399,17 +447,20 @@ impl OctoWorker for HllOctoWorker {
     type Delta = HllDelta;
 
     #[inline(always)]
-    fn process(&mut self, input: &SketchInput, emit: &mut dyn FnMut(HllDelta)) {
+    fn process<F>(&mut self, input: &SketchInput, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
         self.child.insert_emit_delta(input, emit);
     }
 }
 
 /// OctoSketch parent wrapping a full-precision `HyperLogLog<Regular>`.
-pub struct HllOctoParent {
+pub struct HllOctoAggregator {
     pub sketch: HyperLogLog<Regular>,
 }
 
-impl OctoAggregator for HllOctoParent {
+impl OctoAggregator for HllOctoAggregator {
     type Delta = HllDelta;
 
     #[inline(always)]
@@ -584,7 +635,7 @@ mod tests {
             &inputs,
             &config,
             |_| CmOctoWorker::new(rows, cols),
-            || CmOctoParent {
+            || CmOctoAggregator {
                 sketch: CountMin::with_dimensions(rows, cols),
             },
         );
@@ -621,7 +672,7 @@ mod tests {
             &inputs,
             &config,
             |_| HllOctoWorker::new(),
-            || HllOctoParent {
+            || HllOctoAggregator {
                 sketch: HyperLogLog::<Regular>::default(),
             },
         );
@@ -653,7 +704,7 @@ mod tests {
             &inputs,
             &config,
             |_| CountOctoWorker::new(rows, cols),
-            || CountOctoParent {
+            || CountOctoAggregator {
                 sketch: Count::with_dimensions(rows, cols),
             },
         );
@@ -685,7 +736,7 @@ mod tests {
             &inputs,
             &config,
             |_| HllOctoWorker::new(),
-            || HllOctoParent {
+            || HllOctoAggregator {
                 sketch: HyperLogLog::<Regular>::default(),
             },
         );
@@ -713,7 +764,7 @@ mod tests {
             &inputs,
             &config,
             |_| CmOctoWorker::new(rows, cols),
-            || CmOctoParent {
+            || CmOctoAggregator {
                 sketch: CountMin::with_dimensions(rows, cols),
             },
         );
@@ -721,7 +772,7 @@ mod tests {
         let mut runtime = OctoRuntime::new(
             &config,
             move |_| CmOctoWorker::new(rows, cols),
-            move || CmOctoParent {
+            move || CmOctoAggregator {
                 sketch: CountMin::with_dimensions(rows, cols),
             },
         );
@@ -748,7 +799,7 @@ mod tests {
         let mut runtime = OctoRuntime::new(
             &config,
             |_| HllOctoWorker::new(),
-            || HllOctoParent {
+            || HllOctoAggregator {
                 sketch: HyperLogLog::<Regular>::default(),
             },
         );
@@ -772,8 +823,11 @@ mod tests {
             pin_cores: false,
             queue_capacity: 4096,
         };
-        let mut runtime =
-            OctoRuntime::new(&config, |_| CountingWorker, || CountingParent { total: 0 });
+        let mut runtime = OctoRuntime::new(
+            &config,
+            |_| CountingWorker,
+            || CountingAggregator { total: 0 },
+        );
         let reader = runtime.read_handle();
 
         for i in 0..64u64 {
@@ -807,7 +861,7 @@ mod tests {
         let runtime = OctoRuntime::new(
             &config,
             |_| HllOctoWorker::new(),
-            || HllOctoParent {
+            || HllOctoAggregator {
                 sketch: HyperLogLog::<Regular>::default(),
             },
         );
@@ -828,7 +882,7 @@ mod tests {
         let mut runtime = OctoRuntime::new(
             &config,
             |_| HllOctoWorker::new(),
-            || HllOctoParent {
+            || HllOctoAggregator {
                 sketch: HyperLogLog::<Regular>::default(),
             },
         );
@@ -846,7 +900,7 @@ mod tests {
         let runtime = OctoRuntime::new(
             &config,
             |_| HllOctoWorker::new(),
-            || HllOctoParent {
+            || HllOctoAggregator {
                 sketch: HyperLogLog::<Regular>::default(),
             },
         );
@@ -863,16 +917,19 @@ mod tests {
     impl OctoWorker for CountingWorker {
         type Delta = u64;
 
-        fn process(&mut self, _input: &SketchInput, emit: &mut dyn FnMut(Self::Delta)) {
+        fn process<F>(&mut self, _input: &SketchInput, emit: &mut F)
+        where
+            F: FnMut(Self::Delta),
+        {
             emit(1);
         }
     }
 
-    struct CountingParent {
+    struct CountingAggregator {
         total: u64,
     }
 
-    impl OctoAggregator for CountingParent {
+    impl OctoAggregator for CountingAggregator {
         type Delta = u64;
 
         fn apply(&mut self, delta: Self::Delta) {
@@ -888,8 +945,11 @@ mod tests {
             queue_capacity: 4096,
         };
         let n = 257usize;
-        let mut runtime =
-            OctoRuntime::new(&config, |_| CountingWorker, || CountingParent { total: 0 });
+        let mut runtime = OctoRuntime::new(
+            &config,
+            |_| CountingWorker,
+            || CountingAggregator { total: 0 },
+        );
 
         for i in 0..n as u64 {
             runtime.insert(SketchInput::U64(i + 42));
@@ -909,16 +969,19 @@ mod tests {
     impl OctoWorker for WorkerIdEmitter {
         type Delta = usize;
 
-        fn process(&mut self, _input: &SketchInput, emit: &mut dyn FnMut(Self::Delta)) {
+        fn process<F>(&mut self, _input: &SketchInput, emit: &mut F)
+        where
+            F: FnMut(Self::Delta),
+        {
             emit(self.worker_id);
         }
     }
 
-    struct WorkerLoadParent {
+    struct WorkerLoadAggregator {
         loads: Vec<u64>,
     }
 
-    impl OctoAggregator for WorkerLoadParent {
+    impl OctoAggregator for WorkerLoadAggregator {
         type Delta = usize;
 
         fn apply(&mut self, delta: Self::Delta) {
@@ -938,7 +1001,7 @@ mod tests {
         let mut runtime = OctoRuntime::new(
             &config,
             |worker_id| WorkerIdEmitter { worker_id },
-            || WorkerLoadParent {
+            || WorkerLoadAggregator {
                 loads: vec![0; num_workers],
             },
         );

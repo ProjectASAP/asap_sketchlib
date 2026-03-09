@@ -336,7 +336,11 @@ use crate::octo_delta::HllDelta;
 impl<Variant> HyperLogLog<Variant> {
     /// Insert using a pre-computed hash and emit `HllDelta` on register improvement.
     #[inline(always)]
-    pub fn insert_emit_delta_with_hash(&mut self, hashed_val: u64, emit: &mut dyn FnMut(HllDelta)) {
+    pub fn insert_emit_delta_with_hash(
+        &mut self,
+        hashed_val: u64,
+        emit: &mut impl FnMut(HllDelta),
+    ) {
         let bucket_num = ((hashed_val >> HLL_Q) & HLL_P_MASK) as usize;
         let leading_zero = ((hashed_val << HLL_P) + HLL_P_MASK).leading_zeros() as u8 + 1;
         if leading_zero > self.registers[bucket_num] {
@@ -350,7 +354,7 @@ impl<Variant> HyperLogLog<Variant> {
 
     /// Insert a key and emit `HllDelta` on register improvement.
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, obj: &SketchInput, emit: &mut dyn FnMut(HllDelta)) {
+    pub fn insert_emit_delta(&mut self, obj: &SketchInput, emit: &mut impl FnMut(HllDelta)) {
         let hashed_val = hash64_seeded(CANONICAL_HASH_SEED, obj);
         self.insert_emit_delta_with_hash(hashed_val, emit);
     }
