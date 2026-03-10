@@ -199,7 +199,6 @@ macro_rules! impl_fixed_matrix {
                 F: Fn(&Self::Counter, usize, &$hash_ty) -> R,
                 R: PartialOrd,
             {
-                use std::cmp::Ordering;
                 let hashed_val = *hashed_val;
                 let hashed = hashed_val & Self::MASK;
                 let col = (hashed as usize) % $cols;
@@ -209,11 +208,7 @@ macro_rules! impl_fixed_matrix {
                     let col = (hashed as usize) % $cols;
                     let idx = row * $cols + col;
                     let candidate = op(&self.data[idx], row, &hashed_val);
-                    if candidate
-                        .partial_cmp(&min)
-                        .map(|o| o == Ordering::Less)
-                        .unwrap_or(false)
-                    {
+                    if candidate < min {
                         min = candidate;
                     }
                 }

@@ -386,18 +386,13 @@ impl<T> Vector2D<T> {
         F: Fn(&T, usize, &MatrixHashType) -> R,
         R: PartialOrd,
     {
-        use std::cmp::Ordering;
         let c0 = self.col_for_row(hashed_val, 0);
         let mut min = op(&self.data[c0], 0, hashed_val);
         for row in 1..self.rows {
             let col = self.col_for_row(hashed_val, row);
             let idx = row * self.cols + col;
             let candidate = op(&self.data[idx], row, hashed_val);
-            if candidate
-                .partial_cmp(&min)
-                .map(|o| o == Ordering::Less)
-                .unwrap_or(false)
-            {
+            if candidate < min {
                 min = candidate;
             }
         }
@@ -486,18 +481,13 @@ impl<T> Vector2D<T> {
         F: Fn(&T, usize, &MatrixHashType) -> R,
         R: PartialOrd,
     {
-        use std::cmp::Ordering;
         let c0 = self.col_for_row(hashed_val, 0);
         let mut max = op(&self.data[c0], 0, hashed_val);
         for row in 1..self.rows {
             let col = self.col_for_row(hashed_val, row);
             let idx = row * self.cols + col;
             let candidate = op(&self.data[idx], row, hashed_val);
-            if candidate
-                .partial_cmp(&max)
-                .map(|o| o == Ordering::Greater)
-                .unwrap_or(false)
-            {
+            if candidate > max {
                 max = candidate;
             }
         }
@@ -533,18 +523,13 @@ impl<T> Vector2D<T> {
         F: Fn(&T, &Q, usize, &MatrixHashType) -> R,
         R: PartialOrd,
     {
-        use std::cmp::Ordering;
         let c0 = self.col_for_row(hashed_val, 0);
         let mut min = op(&self.data[c0], query_key, 0, hashed_val);
         for row in 1..self.rows {
             let col = self.col_for_row(hashed_val, row);
             let idx = row * self.cols + col;
             let candidate = op(&self.data[idx], query_key, row, hashed_val);
-            if candidate
-                .partial_cmp(&min)
-                .map(|o| o == Ordering::Less)
-                .unwrap_or(false)
-            {
+            if candidate < min {
                 min = candidate;
             }
         }
@@ -580,18 +565,13 @@ impl<T> Vector2D<T> {
         F: Fn(&T, &Q, usize, &MatrixHashType) -> R,
         R: PartialOrd,
     {
-        use std::cmp::Ordering;
         let c0 = self.col_for_row(hashed_val, 0);
         let mut max = op(&self.data[c0], query_key, 0, hashed_val);
         for row in 1..self.rows {
             let col = self.col_for_row(hashed_val, row);
             let idx = row * self.cols + col;
             let candidate = op(&self.data[idx], query_key, row, hashed_val);
-            if candidate
-                .partial_cmp(&max)
-                .map(|o| o == Ordering::Greater)
-                .unwrap_or(false)
-            {
+            if candidate > max {
                 max = candidate;
             }
         }

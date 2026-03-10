@@ -2,7 +2,6 @@ use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
 use std::marker::PhantomData;
 
 use crate::FastPathHasher;
@@ -318,10 +317,7 @@ where
             let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             let v = self.counts.query_one_counter(r, col);
-            if v.partial_cmp(&min)
-                .map(|o| o == Ordering::Less)
-                .unwrap_or(false)
-            {
+            if v < min {
                 min = v;
             }
         }
