@@ -13,7 +13,7 @@
 | Quantiles/distribution | `KLL`, `DDSketch` | You need percentile/latency summaries over streams. |
 | Multi-sketch orchestration/windowing | `Hydra`, `UnivMon`, `HashLayer`, `ExponentialHistogram`, `EHUnivOptimized`, `NitroBatch`, `Orchestrator` | You need hierarchical queries, sketch coordination, or sliding-window aggregation. |
 
-Full sketch status and API details: [Sketch API](./docs/sketch_api.md).
+Full sketch status and API details: [APIs Index](./docs/apis.md).
 
 ## Quick Start
 
@@ -373,8 +373,6 @@ cargo test --all-features
 cargo bench
 ```
 
-More examples and deep-dive usage: [README Details](./docs/readme_details.md).
-
 ## Why sketchlib-rust (vs Apache DataSketches)
 
 - Native Rust library: no JNI/FFI bridge needed for Rust services.
@@ -387,7 +385,9 @@ When DataSketches may be a better fit:
 - You need its broader algorithm catalog and long-running production maturity.
 - You need direct compatibility with existing DataSketches deployments across Java/C++/Python ecosystems.
 
-For common structures, hashing internals, roadmap, and design notes, start from [Docs Index](./docs/index.md) (includes [Common API](./docs/common_api.md), [Feature Status](./docs/features.md), and [Fold Sketch Design](./docs/fold_sketch_design.md)).
+## Documentation
+
+For more details, see [Docs Index](./docs/index.md).
 
 ## Contributors
 
