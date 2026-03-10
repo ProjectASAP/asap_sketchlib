@@ -12,7 +12,7 @@ use std::time::Duration;
 
 const RNG_SEED: u64 = 0x0c70_2026_5eed_1234;
 const CM_COUNT_ROWS: usize = 3;
-const CM_COUNT_COLS: usize = 4096;
+const CM_COUNT_COLS: usize = 65536;
 const CM_COUNT_INPUTS: usize = 1_000_000;
 const HLL_INPUTS: usize = 500_000;
 const DOMAIN_MASK: u64 = (1 << 20) - 1;
