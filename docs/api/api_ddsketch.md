@@ -1,6 +1,6 @@
 # API: DDSketch
 
-Status: `Additional`
+Status: `Ready`
 
 ## Purpose
 

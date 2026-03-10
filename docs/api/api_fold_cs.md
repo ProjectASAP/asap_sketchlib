@@ -1,6 +1,6 @@
 # API: FoldCS
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 

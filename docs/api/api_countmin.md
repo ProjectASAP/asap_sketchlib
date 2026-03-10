@@ -1,6 +1,6 @@
 # API: CountMin
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 

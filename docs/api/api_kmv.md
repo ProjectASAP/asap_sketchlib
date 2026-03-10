@@ -1,6 +1,6 @@
 # API: KMV
 
-Status: `Legacy/Experimental`
+Status: `Unstable`
 
 > Warning: This API is available and tested, but not yet integrated into the primary structured framework surfaces.
 
@@ -61,4 +61,4 @@ let _ = kmv.estimate();
 
 ## Status
 
-Legacy/Experimental visibility retained by request.
+Unstable; retained for compatibility visibility.

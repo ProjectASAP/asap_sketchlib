@@ -1,8 +1,8 @@
 # API: Elastic
 
-Status: `Legacy/Experimental`
+Status: `Unstable`
 
-> Warning: This API is kept for backward compatibility. It does not follow the full structured API parity used by recommended sketches.
+> Warning: This API is kept for backward compatibility. It does not follow the full structured API parity used by Ready sketches.
 
 ## Purpose
 
@@ -57,4 +57,4 @@ let _ = sk.query("flow".to_string());
 
 ## Status
 
-Legacy/Experimental; migration work is tracked in `features.md`.
+Unstable; migration work is tracked in `features.md`.

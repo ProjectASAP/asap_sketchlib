@@ -41,4 +41,4 @@ This is the canonical API entry point for `sketchlib-rust`.
 ## Notes
 
 - Shared enums and foundational types are canonical in [Common Module API](./api/api_common.md).
-- Legacy APIs remain visible with explicit caveats until migration completes.
+- Unstable APIs remain visible with explicit caveats until migration completes.

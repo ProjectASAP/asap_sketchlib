@@ -1,6 +1,6 @@
 # API: Coco
 
-Status: `Legacy/Experimental`
+Status: `Unstable`
 
 > Warning: This API is kept for backward compatibility. It uses specialized substring semantics and does not match structured sketch interfaces.
 
@@ -60,4 +60,4 @@ let _ = sk.estimate("region=us");
 
 ## Status
 
-Legacy/Experimental.
+Unstable.

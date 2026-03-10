@@ -1,6 +1,6 @@
 # API: NitroBatch
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 
@@ -65,4 +65,4 @@ nitro.insert(&[1, 2, 3, 4]);
 
 ## Status
 
-Recommended for batch sampling workflows.
+Ready for batch sampling workflows.

@@ -1,6 +1,6 @@
 # API: KLL
 
-Status: `Additional`
+Status: `Ready`
 
 ## Purpose
 

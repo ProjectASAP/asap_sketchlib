@@ -1,6 +1,6 @@
 # API: EHUnivOptimized
 
-Status: `Recommended`
+Status: `Unstable`
 
 ## Purpose
 
@@ -85,4 +85,4 @@ let _ = eh.query_interval(0, 120);
 
 ## Status
 
-Recommended optimized sliding-window universal monitoring path.
+Unstable (update soon); optimized sliding-window universal monitoring path.

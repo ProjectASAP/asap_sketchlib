@@ -1,6 +1,6 @@
 # API: Count Sketch
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 

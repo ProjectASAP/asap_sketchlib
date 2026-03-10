@@ -1,6 +1,6 @@
 # API: UnivMon
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 

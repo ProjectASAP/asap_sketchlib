@@ -1,6 +1,6 @@
 # API: FoldCMS
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 

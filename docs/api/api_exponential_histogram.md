@@ -1,6 +1,6 @@
 # API: ExponentialHistogram
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 
@@ -61,4 +61,4 @@ let _ = eh.query_interval_merge(0, 120);
 
 ## Status
 
-Recommended sliding-window coordinator.
+Ready sliding-window coordinator.

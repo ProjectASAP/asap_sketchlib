@@ -1,6 +1,6 @@
 # API: TumblingWindow
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 
@@ -70,4 +70,4 @@ let _ = tw.query_recent(1);
 
 ## Status
 
-Recommended window manager for folded sketches and KLL.
+Ready window manager for folded sketches and KLL.

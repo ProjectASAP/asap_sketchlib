@@ -27,7 +27,7 @@ This document provides a high-level overview of implemented and planned features
 - `SketchHasher` trait with `DefaultXxHasher` for pluggable hash implementations
 - `RegularPath` / `FastPath` modes - Type-level pairing of insert/estimate paths
 
-✅ **Recommended Sketches** ([apis.md](apis.md))
+✅ **Ready Sketch APIs** ([apis.md](apis.md))
 
 - **CountMin** - Frequency estimation with fast paths (2-3x speedup)
 - **Count & CountL2HH** - Count sketch with L2 heavy hitter support
@@ -51,7 +51,7 @@ This document provides a high-level overview of implemented and planned features
 
 ✅ **ExponentialHistogram** - Sliding window coordinator for mergeable sketches
 
-✅ **EHUnivOptimized** - Hybrid two-tier ExponentialHistogram for UnivMon with sketch memory reuse
+⚠️ **EHUnivOptimized** - Hybrid two-tier ExponentialHistogram for UnivMon with sketch memory reuse (currently `Unstable` in [apis.md](apis.md))
 
 ✅ **UnivMonPyramid** - Two-tier sketch dimensions with `UnivSketchPool` for optimized insert and memory management
 

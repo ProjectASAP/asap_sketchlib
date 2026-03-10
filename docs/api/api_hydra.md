@@ -1,6 +1,6 @@
 # API: Hydra
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 

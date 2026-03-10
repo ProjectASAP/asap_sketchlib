@@ -1,6 +1,6 @@
 # API: HyperLogLog
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 

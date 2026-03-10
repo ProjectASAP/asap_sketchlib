@@ -1,6 +1,6 @@
 # API: Locher
 
-Status: `Legacy/Experimental`
+Status: `Unstable`
 
 > Warning: This API is not top-level re-exported and remains an experimental module path.
 
@@ -55,4 +55,4 @@ let _ = sk.estimate("flow");
 
 ## Status
 
-Legacy/Experimental.
+Unstable.

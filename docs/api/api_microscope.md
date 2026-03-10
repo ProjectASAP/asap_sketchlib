@@ -1,6 +1,6 @@
 # API: MicroScope
 
-Status: `Legacy/Experimental`
+Status: `Unstable`
 
 > Warning: `merge` is explicitly marked as placeholder in source and should be treated as experimental.
 
@@ -59,4 +59,4 @@ let _ = sk.query(1);
 
 ## Status
 
-Legacy/Experimental.
+Unstable.

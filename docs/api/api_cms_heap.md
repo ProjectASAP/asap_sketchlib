@@ -1,6 +1,6 @@
 # API: CMSHeap
 
-Status: `Additional`
+Status: `Ready`
 
 ## Purpose
 

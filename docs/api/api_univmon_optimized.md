@@ -1,6 +1,6 @@
 # API: UnivMon Optimized
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 
@@ -79,4 +79,4 @@ assert!(um.calc_l1() >= 1.0);
 
 ## Status
 
-Recommended optimized path for pooled UnivMon deployments.
+Ready optimized path for pooled UnivMon deployments.

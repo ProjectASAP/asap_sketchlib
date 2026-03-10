@@ -1,8 +1,8 @@
 # API: UniformSampling
 
-Status: `Legacy/Experimental`
+Status: `Unstable`
 
-> Warning: Useful and tested, but currently documented as legacy/experimental until broader API alignment work completes.
+> Warning: Useful and tested, but currently documented as Unstable until broader API alignment work completes.
 
 ## Purpose
 
@@ -64,4 +64,4 @@ let _ = sk.samples();
 
 ## Status
 
-Legacy/Experimental.
+Unstable.

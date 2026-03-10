@@ -1,6 +1,6 @@
 # API: CSHeap
 
-Status: `Additional`
+Status: `Ready`
 
 ## Purpose
 

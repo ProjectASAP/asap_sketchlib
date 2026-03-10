@@ -1,6 +1,6 @@
 # API: HashLayer
 
-Status: `Recommended`
+Status: `Ready`
 
 ## Purpose
 
