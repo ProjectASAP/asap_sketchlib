@@ -1,7 +1,5 @@
 # Contributors
 
-Migrated from `docs/readme_details.md`.
-
 ## Contributors
 
 <table>
@@ -22,4 +20,3 @@ Migrated from `docs/readme_details.md`.
     </td>
   </tr>
 </table>
-
