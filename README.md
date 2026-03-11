@@ -795,6 +795,21 @@ At this moment, ```cargo test``` is a good starting point.
 
 - **`benches/`** - Criterion-based performance benchmarks
   - Run with: `cargo bench`
+- **CMS guarantee plots** - theorem-focused error/probability visualization
+  - Quick profile (3 trials, `N={1e2..1e6}`):
+    - `cargo run --release --bin cms_guarantee_plot -- --mode quick`
+  - Full profile (10 trials, `N={1e2..1e9}`):
+    - `cargo run --release --bin cms_guarantee_plot -- --mode full`
+  - Optional runtime cap:
+    - `cargo run --release --bin cms_guarantee_plot -- --mode full --max-n 1000000`
+  - Artifacts are written to `data/results/cms_guarantee/<mode>_<timestamp>/`:
+    - `metrics.csv` (per trial)
+    - `summary.csv` (worst/mean aggregates)
+  - Plot from CSV using Python/matplotlib:
+    - `python3 scripts/plot_cms_guarantee.py --summary data/results/cms_guarantee/<mode>_<timestamp>/summary.csv --out-dir data/results/cms_guarantee/<mode>_<timestamp>/`
+  - Interpretation:
+    - Panel A bars (`max_abs_error_worst`) should remain below the `epsilon * N` line.
+    - Panel B bars (`violation_rate_worst`) should remain below the `delta` line.
 
 ### Documentation
 
@@ -805,7 +820,7 @@ At this moment, ```cargo test``` is a good starting point.
 
 ### Utilities
 
-- **`src/bin/`** - Helper binaries for generating precomputed fixtures (`generate_precomputed_hash`, `generate_precomputed_sample`, `generate_precomputed_sample2`)
+- **`src/bin/`** - Helper binaries for generating precomputed fixtures and experiments (`generate_precomputed_hash`, `generate_precomputed_sample`, `generate_precomputed_sample2`, `cms_guarantee_plot`)
 
 ## Common Structure
 
