@@ -4,12 +4,11 @@
 
 fn main() {
     prost_build::compile_protos(
-        &["../proto/sketchlib.proto"],
-        &["../proto"],
+        &["proto/sketchlib.proto"],
+        &["proto"],
     )
     .expect("prost_build failed to compile sketchlib.proto");
 }
-
 
 //use sketchlib-go to build:
 
