@@ -49,9 +49,11 @@ message SketchEnvelope {
     DDSketchState    ddsketch     = 14;
     UnivMonState     univmon      = 15;
     HydraState       hydra        = 16;
+    CocoSketchState  coco         = 17;
+    ElasticState     elastic      = 18;
   }
 
-  reserved 17 to 31;  // Reserved for future sketch types.
+  reserved 19 to 31;  // Reserved for future sketch types.
 }
 
 // ProducerInfo records which library version created this envelope.
@@ -488,6 +490,66 @@ enum HydraCounterType {
   HYDRA_COUNTER_TYPE_HLL          = 3;
   HYDRA_COUNTER_TYPE_KLL          = 4;
   HYDRA_COUNTER_TYPE_UNIVMON      = 5;
+}
+
+// ============================================================================
+// CocoSketch
+// ============================================================================
+
+// CocoSketchState is the portable state of a CocoSketch flow-size estimator.
+//
+// The bucket table is stored flat in row-major order (d rows × width cols).
+// Element [r][c] is at index r * width + c.
+message CocoSketchState {
+  // Number of hash rows.
+  uint32 d = 1;
+
+  // Number of buckets per row.
+  uint32 width = 2;
+
+  // Full hash stored in each bucket, length = d * width.
+  // Zero means the bucket is empty (has_keys[i] == false).
+  repeated uint64 hashes = 3 [packed = true];
+
+  // Cumulative count value per bucket, length = d * width.
+  repeated uint64 vals = 4 [packed = true];
+
+  // Whether each bucket holds a valid key entry, length = d * width.
+  repeated bool has_keys = 5 [packed = true];
+
+  reserved 6 to 15;
+}
+
+// ============================================================================
+// ElasticSketch
+// ============================================================================
+
+// ElasticState is the portable state of an Elastic Sketch.
+//
+// The Elastic Sketch has a heavy part (one bucket per index) and a light
+// Count-Min layer. The heavy part is serialized as parallel arrays.
+// The light layer is stored as a CountMinState with FLOAT64 counters.
+message ElasticState {
+  // Number of heavy buckets.
+  uint32 bucket_count = 1;
+
+  // Per-bucket flow identifiers (strings), length = bucket_count.
+  // Empty string means the bucket is unoccupied.
+  repeated string flow_ids = 2;
+
+  // Positive vote counts per bucket, length = bucket_count.
+  repeated sint32 vote_pos = 3 [packed = true];
+
+  // Negative vote counts per bucket, length = bucket_count.
+  repeated sint32 vote_neg = 4 [packed = true];
+
+  // Whether each bucket is in eviction state, length = bucket_count.
+  repeated bool evictions = 5 [packed = true];
+
+  // Light Count-Min layer (FLOAT64 counters).
+  CountMinState light = 6;
+
+  reserved 7 to 15;
 }
 
 // HydraCell holds the serialized state of one Hydra grid cell.
