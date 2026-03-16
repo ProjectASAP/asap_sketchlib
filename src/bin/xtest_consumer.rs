@@ -49,24 +49,34 @@ fn main() {
     let bytes = read_file(in_dir.join("countmin.pb"));
     let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode countmin envelope");
 
-    println!("[CountMin] Step 2/3 — Validate envelope (format_version={}, producer={})",
+    println!(
+        "[CountMin] Step 2/3 — Validate envelope (format_version={}, producer={})",
         env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library));
+        env.producer.as_ref().map_or("?", |p| &p.library)
+    );
 
     let cm_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::CountMin(ref s)) => s.clone(),
         other => fatal_env("CountMin", &other),
     };
 
-    println!("[CountMin]   rows={} cols={} counter_type={:?}",
-        cm_state.rows, cm_state.cols, CounterType::try_from(cm_state.counter_type));
+    println!(
+        "[CountMin]   rows={} cols={} counter_type={:?}",
+        cm_state.rows,
+        cm_state.cols,
+        CounterType::try_from(cm_state.counter_type)
+    );
 
     // Reconstruct the row-major float matrix.
     let rows = cm_state.rows as usize;
     let cols = cm_state.cols as usize;
     let counts = &cm_state.counts_float;
     if counts.len() != rows * cols {
-        eprintln!("[CountMin] FAIL: counts length {} != rows*cols {}", counts.len(), rows * cols);
+        eprintln!(
+            "[CountMin] FAIL: counts length {} != rows*cols {}",
+            counts.len(),
+            rows * cols
+        );
         all_ok = false;
     }
 
@@ -74,7 +84,10 @@ fn main() {
     let hot_key = b"item:42" as &[u8];
     let hot_hash = xxh3_64_seeded(SEED_0, hot_key);
 
-    println!("[CountMin] Step 3/3 — Point query 'item:42' (hash=0x{:016x})", hot_hash);
+    println!(
+        "[CountMin] Step 3/3 — Point query 'item:42' (hash=0x{:016x})",
+        hot_hash
+    );
 
     let bits_per_row = col_bits(cols);
     let mask = (cols as u64) - 1;
@@ -87,7 +100,10 @@ fn main() {
             min_freq = v;
         }
     }
-    println!("[CountMin]   min frequency estimate = {:.0} (expect ≥ 101)", min_freq);
+    println!(
+        "[CountMin]   min frequency estimate = {:.0} (expect ≥ 101)",
+        min_freq
+    );
     if min_freq < 101.0 {
         eprintln!("[CountMin] FAIL: frequency {:.0} < 101", min_freq);
         all_ok = false;
@@ -103,23 +119,33 @@ fn main() {
     let bytes = read_file(in_dir.join("kll.pb"));
     let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode kll envelope");
 
-    println!("[KLL] Step 2/3 — Validate envelope (format_version={}, producer={})",
+    println!(
+        "[KLL] Step 2/3 — Validate envelope (format_version={}, producer={})",
         env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library));
+        env.producer.as_ref().map_or("?", |p| &p.library)
+    );
 
     let kll_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Kll(ref s)) => s.clone(),
         other => fatal_env("KLL", &other),
     };
 
-    println!("[KLL]   k={} m={} num_levels={} items={} levels={}",
-        kll_state.k, kll_state.m, kll_state.num_levels,
-        kll_state.items.len(), kll_state.levels.len());
+    println!(
+        "[KLL]   k={} m={} num_levels={} items={} levels={}",
+        kll_state.k,
+        kll_state.m,
+        kll_state.num_levels,
+        kll_state.items.len(),
+        kll_state.levels.len()
+    );
 
     let kll = KllFromProto::from_state(&kll_state);
     let p50 = kll.quantile(0.50);
     let p99 = kll.quantile(0.99);
-    println!("[KLL] Step 3/3 — p50 ≈ {:.1} (expect ~5000)  p99 ≈ {:.1} (expect ~9900)", p50, p99);
+    println!(
+        "[KLL] Step 3/3 — p50 ≈ {:.1} (expect ~5000)  p99 ≈ {:.1} (expect ~9900)",
+        p50, p99
+    );
 
     let p50_ok = (p50 - 5000.0).abs() / 5000.0 < 0.05;
     let p99_ok = (p99 - 9900.0).abs() / 9900.0 < 0.05;
@@ -138,26 +164,40 @@ fn main() {
     let bytes = read_file(in_dir.join("ddsketch.pb"));
     let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode ddsketch envelope");
 
-    println!("[DDSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
+    println!(
+        "[DDSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
         env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library));
+        env.producer.as_ref().map_or("?", |p| &p.library)
+    );
 
     let dd_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Ddsketch(ref s)) => s.clone(),
         other => fatal_env("DDSketch", &other),
     };
 
-    println!("[DDSketch]   alpha={:.4} count={} buckets={} offset={}",
-        dd_state.alpha, dd_state.count, dd_state.store_counts.len(), dd_state.store_offset);
+    println!(
+        "[DDSketch]   alpha={:.4} count={} buckets={} offset={}",
+        dd_state.alpha,
+        dd_state.count,
+        dd_state.store_counts.len(),
+        dd_state.store_offset
+    );
 
     let dd = DdFromProto::from_state(&dd_state);
     let p50_dd = dd.quantile(0.50);
     let p99_dd = dd.quantile(0.99);
-    println!("[DDSketch] Step 3/3 — p50 ≈ {:.2} (expect ~5000)  p99 ≈ {:.2} (expect ~9900)",
-        p50_dd.unwrap_or(f64::NAN), p99_dd.unwrap_or(f64::NAN));
+    println!(
+        "[DDSketch] Step 3/3 — p50 ≈ {:.2} (expect ~5000)  p99 ≈ {:.2} (expect ~9900)",
+        p50_dd.unwrap_or(f64::NAN),
+        p99_dd.unwrap_or(f64::NAN)
+    );
 
-    let p50_ok = p50_dd.map(|v| (v - 5000.0).abs() / 5000.0 < 0.02).unwrap_or(false);
-    let p99_ok = p99_dd.map(|v| (v - 9900.0).abs() / 9900.0 < 0.02).unwrap_or(false);
+    let p50_ok = p50_dd
+        .map(|v| (v - 5000.0).abs() / 5000.0 < 0.02)
+        .unwrap_or(false);
+    let p99_ok = p99_dd
+        .map(|v| (v - 9900.0).abs() / 9900.0 < 0.02)
+        .unwrap_or(false);
     if p50_ok && p99_ok {
         println!("[DDSketch]   PASS");
     } else {
@@ -173,20 +213,29 @@ fn main() {
     let bytes = read_file(in_dir.join("hll.pb"));
     let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode hll envelope");
 
-    println!("[HLL] Step 2/3 — Validate envelope (format_version={}, producer={})",
+    println!(
+        "[HLL] Step 2/3 — Validate envelope (format_version={}, producer={})",
         env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library));
+        env.producer.as_ref().map_or("?", |p| &p.library)
+    );
 
     let hll_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Hll(ref s)) => s.clone(),
         other => fatal_env("HLL", &other),
     };
 
-    println!("[HLL]   variant={} precision={} registers={}",
-        hll_state.variant, hll_state.precision, hll_state.registers.len());
+    println!(
+        "[HLL]   variant={} precision={} registers={}",
+        hll_state.variant,
+        hll_state.precision,
+        hll_state.registers.len()
+    );
 
     let hll_card = hll_datafusion_estimate(&hll_state);
-    println!("[HLL] Step 3/3 — cardinality ≈ {} (expect ~50000)", hll_card);
+    println!(
+        "[HLL] Step 3/3 — cardinality ≈ {} (expect ~50000)",
+        hll_card
+    );
     if hll_card >= 40_000 && hll_card <= 65_000 {
         println!("[HLL]   PASS");
     } else {
@@ -202,23 +251,32 @@ fn main() {
     let bytes = read_file(in_dir.join("countsketch.pb"));
     let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode countsketch envelope");
 
-    println!("[CountSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
+    println!(
+        "[CountSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
         env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library));
+        env.producer.as_ref().map_or("?", |p| &p.library)
+    );
 
     let cs_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::CountSketch(ref s)) => s.clone(),
         other => fatal_env("CountSketch", &other),
     };
 
-    println!("[CountSketch]   rows={} cols={} counter_type={:?}",
-        cs_state.rows, cs_state.cols, CounterType::try_from(cs_state.counter_type));
+    println!(
+        "[CountSketch]   rows={} cols={} counter_type={:?}",
+        cs_state.rows,
+        cs_state.cols,
+        CounterType::try_from(cs_state.counter_type)
+    );
 
     // Query "cs:hot" — inserted 200 extra times.
     // Go hash: common.Hash64([]byte("cs:hot")) = xxh3_64_seeded(seedList[0], b"cs:hot")
     let cs_hot_hash = xxh3_64_seeded(SEED_0, b"cs:hot");
     let cs_est = count_sketch_query_float(&cs_state, cs_hot_hash);
-    println!("[CountSketch] Step 3/3 — 'cs:hot' est = {:.0} (expect ≥ 200)", cs_est);
+    println!(
+        "[CountSketch] Step 3/3 — 'cs:hot' est = {:.0} (expect ≥ 200)",
+        cs_est
+    );
     if cs_est >= 200.0 {
         println!("[CountSketch]   PASS");
     } else {
@@ -234,24 +292,33 @@ fn main() {
     let bytes = read_file(in_dir.join("coco.pb"));
     let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode coco envelope");
 
-    println!("[CocoSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
+    println!(
+        "[CocoSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
         env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library));
+        env.producer.as_ref().map_or("?", |p| &p.library)
+    );
 
     let coco_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Coco(ref s)) => s.clone(),
         other => fatal_env("CocoSketch", &other),
     };
 
-    println!("[CocoSketch]   d={} width={} buckets={}",
-        coco_state.d, coco_state.width, coco_state.hashes.len());
+    println!(
+        "[CocoSketch]   d={} width={} buckets={}",
+        coco_state.d,
+        coco_state.width,
+        coco_state.hashes.len()
+    );
 
     // Query "coco:hot" — inserted with val=500.
     // Go uses: hash = common.Hash64([]byte("coco:hot")) = xxh3_64_seeded(seedList[0], ...)
     // DeriveIndex(hash, row, width): col = (hash >> (row * maskBitsForWidth(width))) & (width-1)
     let coco_hash = xxh3_64_seeded(SEED_0, b"coco:hot");
     let coco_est = coco_estimate(&coco_state, coco_hash);
-    println!("[CocoSketch] Step 3/3 — 'coco:hot' est = {} (expect ≥ 500)", coco_est);
+    println!(
+        "[CocoSketch] Step 3/3 — 'coco:hot' est = {} (expect ≥ 500)",
+        coco_est
+    );
     if coco_est >= 500 {
         println!("[CocoSketch]   PASS");
     } else {
@@ -267,25 +334,32 @@ fn main() {
     let bytes = read_file(in_dir.join("elastic.pb"));
     let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode elastic envelope");
 
-    println!("[ElasticSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
+    println!(
+        "[ElasticSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
         env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library));
+        env.producer.as_ref().map_or("?", |p| &p.library)
+    );
 
     let elastic_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Elastic(ref s)) => s.clone(),
         other => fatal_env("ElasticSketch", &other),
     };
 
-    println!("[ElasticSketch]   bucket_count={} light_rows={} light_cols={}",
+    println!(
+        "[ElasticSketch]   bucket_count={} light_rows={} light_cols={}",
         elastic_state.bucket_count,
         elastic_state.light.as_ref().map_or(0, |l| l.rows),
-        elastic_state.light.as_ref().map_or(0, |l| l.cols));
+        elastic_state.light.as_ref().map_or(0, |l| l.cols)
+    );
 
     // Query "elephant" — inserted 1000 times.
     // Go uses CanonicalHashSeed = seedList[5] = 0x6a09e667
     let elephant_hash = xxh3_64_seeded(SEED_5, b"elephant");
     let elephant_est = elastic_query(&elastic_state, "elephant", elephant_hash);
-    println!("[ElasticSketch] Step 3/3 — 'elephant' est = {} (expect ≥ 900)", elephant_est);
+    println!(
+        "[ElasticSketch] Step 3/3 — 'elephant' est = {} (expect ≥ 900)",
+        elephant_est
+    );
     if elephant_est >= 900 {
         println!("[ElasticSketch]   PASS");
     } else {
@@ -301,26 +375,36 @@ fn main() {
     let bytes = read_file(in_dir.join("univmon.pb"));
     let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode univmon envelope");
 
-    println!("[UnivMon] Step 2/3 — Validate envelope (format_version={}, producer={})",
+    println!(
+        "[UnivMon] Step 2/3 — Validate envelope (format_version={}, producer={})",
         env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library));
+        env.producer.as_ref().map_or("?", |p| &p.library)
+    );
 
     let um_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Univmon(ref s)) => s.clone(),
         other => fatal_env("UnivMon", &other),
     };
 
-    println!("[UnivMon]   layer_size={} sketch_rows={} sketch_cols={} heap_size={}",
-        um_state.layer_size, um_state.sketch_rows, um_state.sketch_cols, um_state.heap_size);
+    println!(
+        "[UnivMon]   layer_size={} sketch_rows={} sketch_cols={} heap_size={}",
+        um_state.layer_size, um_state.sketch_rows, um_state.sketch_cols, um_state.heap_size
+    );
 
     let um_card = univmon_cardinality(&um_state);
     // Note: the g-sum heuristic typically underestimates (Go itself reports ~4250 for 10k inserts).
     // We verify the Rust result matches Go's algorithm rather than the true cardinality.
-    println!("[UnivMon] Step 3/3 — cardinality ≈ {:.0} (g-sum heuristic, Go also ~4250)", um_card);
+    println!(
+        "[UnivMon] Step 3/3 — cardinality ≈ {:.0} (g-sum heuristic, Go also ~4250)",
+        um_card
+    );
     if um_card >= 1_000.0 && um_card <= 15_000.0 {
         println!("[UnivMon]   PASS");
     } else {
-        eprintln!("[UnivMon] FAIL: cardinality {:.0} not in [1000, 15000]", um_card);
+        eprintln!(
+            "[UnivMon] FAIL: cardinality {:.0} not in [1000, 15000]",
+            um_card
+        );
         all_ok = false;
     }
 
@@ -332,18 +416,24 @@ fn main() {
     let bytes = read_file(in_dir.join("hydra.pb"));
     let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode hydra envelope");
 
-    println!("[Hydra] Step 2/3 — Validate envelope (format_version={}, producer={})",
+    println!(
+        "[Hydra] Step 2/3 — Validate envelope (format_version={}, producer={})",
         env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library));
+        env.producer.as_ref().map_or("?", |p| &p.library)
+    );
 
     let hydra_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Hydra(ref s)) => s.clone(),
         other => fatal_env("Hydra", &other),
     };
 
-    println!("[Hydra]   row_num={} col_num={} counter_type={} cells={}",
-        hydra_state.row_num, hydra_state.col_num,
-        hydra_state.counter_type, hydra_state.cells.len());
+    println!(
+        "[Hydra]   row_num={} col_num={} counter_type={} cells={}",
+        hydra_state.row_num,
+        hydra_state.col_num,
+        hydra_state.counter_type,
+        hydra_state.cells.len()
+    );
 
     // Query "hydra:42" — inserted 51 times (1 base + 50 extra).
     // Routing: subkey_hash = xxh3_64_seeded(seedList[6]=0xbb67ae85, b"hydra:42")
@@ -351,7 +441,10 @@ fn main() {
     let hydra_subkey_hash = xxh3_64_seeded(SEED_6, b"hydra:42");
     let hydra_value_hash = xxh3_64_seeded(SEED_0, b"hydra:42");
     let hydra_est = hydra_query_cm(&hydra_state, hydra_subkey_hash, hydra_value_hash);
-    println!("[Hydra] Step 3/3 — 'hydra:42' est = {:.0} (expect ≥ 51)", hydra_est);
+    println!(
+        "[Hydra] Step 3/3 — 'hydra:42' est = {:.0} (expect ≥ 51)",
+        hydra_est
+    );
     if hydra_est >= 51.0 {
         println!("[Hydra]   PASS");
     } else {
@@ -377,9 +470,9 @@ fn main() {
 // Seed constants matching Go's seedList
 // ---------------------------------------------------------------------------
 
-const SEED_0: u64 = 0xcafe3553;       // seedList[0] — Hash64 / default hash
-const SEED_5: u64 = 0x6a09e667;       // seedList[5] — CanonicalHashSeed
-const SEED_6: u64 = 0xbb67ae85;       // seedList[6] — defaultHydraSeed
+const SEED_0: u64 = 0xcafe3553; // seedList[0] — Hash64 / default hash
+const SEED_5: u64 = 0x6a09e667; // seedList[5] — CanonicalHashSeed
+const SEED_6: u64 = 0xbb67ae85; // seedList[6] — defaultHydraSeed
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -474,8 +567,8 @@ fn hll_tau(mut x: f64) -> f64 {
 
 fn hll_datafusion_estimate(state: &HyperLogLogState) -> u64 {
     let precision = state.precision as usize;
-    let register_bits = 64 - precision;           // Q = 50
-    let m = (1usize << precision) as f64;         // 16384
+    let register_bits = 64 - precision; // Q = 50
+    let m = (1usize << precision) as f64; // 16384
 
     // Build histogram C[v] for v in 0..=(register_bits+1)
     let hist_len = register_bits + 2;
@@ -601,7 +694,7 @@ fn elastic_light_min(state: &ElasticState, hash: u64) -> i64 {
     };
     let rows = light.rows as usize;
     let cols = light.cols as usize;
-    let bits = col_bits(cols);  // trailing zeros of cols = 11 for 2048
+    let bits = col_bits(cols); // trailing zeros of cols = 11 for 2048
     let mask = (cols as u64) - 1;
     let counts = &light.counts_float;
 
@@ -614,7 +707,11 @@ fn elastic_light_min(state: &ElasticState, hash: u64) -> i64 {
             min_val = v;
         }
     }
-    if min_val == f64::MAX { 0 } else { min_val as i64 }
+    if min_val == f64::MAX {
+        0
+    } else {
+        min_val as i64
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -693,9 +790,21 @@ fn cs_l2_from_state(cs: Option<&CountSketchState>) -> f64 {
 
 fn median_of_three_f64(a: f64, b: f64, c: f64) -> f64 {
     if a <= b {
-        if b <= c { b } else if a <= c { c } else { a }
+        if b <= c {
+            b
+        } else if a <= c {
+            c
+        } else {
+            a
+        }
     } else {
-        if a <= c { a } else if b <= c { c } else { b }
+        if a <= c {
+            a
+        } else if b <= c {
+            c
+        } else {
+            b
+        }
     }
 }
 
@@ -722,8 +831,12 @@ fn xorshift64(x: &mut u64) {
 fn hydra_fill_positions(subkey_hash: u64, d: usize, w: usize) -> Vec<usize> {
     let mut x = subkey_hash ^ HYDRA_SEED_CM1;
     let mut y = subkey_hash ^ HYDRA_SEED_CM2;
-    if x == 0 { x = HYDRA_SEED_CM1; }
-    if y == 0 { y = HYDRA_SEED_CM2 | 1; }
+    if x == 0 {
+        x = HYDRA_SEED_CM1;
+    }
+    if y == 0 {
+        y = HYDRA_SEED_CM2 | 1;
+    }
 
     let mut pos = Vec::with_capacity(d);
     for _ in 0..d {
@@ -750,9 +863,7 @@ fn hydra_query_cm(state: &HydraState, subkey_hash: u64, value_hash: u64) -> f64 
         }
         let cell = &cells[cell_idx];
         let freq = match &cell.sketch {
-            Some(hydra_cell::Sketch::CountMin(cm)) => {
-                cm_query_min(cm, value_hash)
-            }
+            Some(hydra_cell::Sketch::CountMin(cm)) => cm_query_min(cm, value_hash),
             _ => 0.0,
         };
         estimates.push(freq);
@@ -796,7 +907,11 @@ impl KllFromProto {
         let items: Vec<f64> = s.items.clone();
         let levels: Vec<usize> = s.levels.iter().map(|&v| v as usize).collect();
         let num_levels = s.num_levels as usize;
-        Self { items, levels, num_levels }
+        Self {
+            items,
+            levels,
+            num_levels,
+        }
     }
 
     fn weighted_samples(&self) -> Vec<(f64, u64)> {
@@ -891,8 +1006,12 @@ impl DdFromProto {
             if seen >= rank {
                 let bin = self.store_offset + i as i32;
                 let mut v = self.bin_representative(bin);
-                if v < self.min { v = self.min; }
-                if v > self.max { v = self.max; }
+                if v < self.min {
+                    v = self.min;
+                }
+                if v > self.max {
+                    v = self.max;
+                }
                 return Some(v);
             }
         }
