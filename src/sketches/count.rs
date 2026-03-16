@@ -76,6 +76,14 @@ impl FastPathSign for u64 {
     }
 }
 
+// Implements fast-path sign extraction for u128.
+impl FastPathSign for u128 {
+    fn sign_for_row(&self, row: usize) -> i32 {
+        let bit = (self >> (127 - row)) & 1;
+        (bit as i32 * 2) - 1
+    }
+}
+
 // Default Count sketch for Vector2D<i32> (RegularPath).
 impl Default for Count<Vector2D<i32>, RegularPath> {
     fn default() -> Self {

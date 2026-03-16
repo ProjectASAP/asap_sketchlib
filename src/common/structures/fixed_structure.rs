@@ -4,8 +4,6 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::{Index, IndexMut, Range};
 
-use crate::{MatrixStorage, compute_median_inline_f64};
-
 pub const QUICKSTART_ROW_NUM: usize = 5;
 pub const QUICKSTART_COL_NUM: usize = 2048;
 pub const QUICKSTART_SIZE: usize = QUICKSTART_ROW_NUM * QUICKSTART_COL_NUM;
@@ -15,16 +13,6 @@ pub const DEFAULT_COL_NUM: usize = 4096;
 /// The greater is P, the smaller the error.
 const HLL_P: usize = 14_usize;
 const NUM_REGISTERS: usize = 1_usize << HLL_P;
-
-const fn mask_bits(cols: usize) -> usize {
-    let mut bits = 0;
-    let mut value = 1;
-    while value < cols {
-        value <<= 1;
-        bits += 1;
-    }
-    bits
-}
 
 #[derive(Clone, Debug)]
 pub struct HllBucketList {
@@ -107,6 +95,7 @@ impl HllBucketList {
     }
 }
 
+#[macro_export]
 macro_rules! impl_fixed_matrix {
     ($name:ident, $counter:ty, $rows:literal, $cols:literal, $hash_ty:ty) => {
         #[derive(Clone, Debug)]
@@ -115,7 +104,15 @@ macro_rules! impl_fixed_matrix {
         }
 
         impl $name {
-            const MASK_BITS: usize = mask_bits($cols);
+            const MASK_BITS: usize = {
+                let mut bits = 0usize;
+                let mut value = 1usize;
+                while value < $cols {
+                    value <<= 1;
+                    bits += 1;
+                }
+                bits
+            };
             const MASK: $hash_ty = ((1 as $hash_ty) << Self::MASK_BITS) - 1;
         }
 
@@ -127,29 +124,29 @@ macro_rules! impl_fixed_matrix {
             }
         }
 
-        impl Serialize for $name {
+        impl $crate::__private::serde::Serialize for $name {
             fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
             where
-                S: Serializer,
+                S: $crate::__private::serde::Serializer,
             {
-                serde_big_array::BigArray::serialize(&*self.data, serializer)
+                $crate::__private::serde_big_array::BigArray::serialize(&*self.data, serializer)
             }
         }
 
-        impl<'de> Deserialize<'de> for $name {
+        impl<'de> $crate::__private::serde::Deserialize<'de> for $name {
             fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
             where
-                D: Deserializer<'de>,
+                D: $crate::__private::serde::Deserializer<'de>,
             {
                 let data: [$counter; $rows * $cols] =
-                    serde_big_array::BigArray::deserialize(deserializer)?;
+                    $crate::__private::serde_big_array::BigArray::deserialize(deserializer)?;
                 Ok(Self {
                     data: Box::new(data),
                 })
             }
         }
 
-        impl MatrixStorage for $name {
+        impl $crate::MatrixStorage for $name {
             type Counter = $counter;
             type HashValueType = $hash_ty;
 
@@ -228,7 +225,7 @@ macro_rules! impl_fixed_matrix {
                     let idx = row * $cols + col;
                     estimates.push(op(&self.data[idx], row, &hashed_val));
                 }
-                compute_median_inline_f64(&mut estimates)
+                $crate::compute_median_inline_f64(&mut estimates)
             }
 
             #[inline(always)]

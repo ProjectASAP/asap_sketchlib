@@ -8,7 +8,7 @@ use crate::FastPathHasher;
 use crate::{
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath, FixedMatrix,
     MatrixHashType, MatrixStorage, NitroTarget, QuickMatrixI64, QuickMatrixI128, RegularPath,
-    SketchHasher, SketchInput, Vector2D, hash64_seeded,
+    SketchHasher, SketchInput, Vector2D, hash64_seeded, hash128_seeded,
 };
 
 const DEFAULT_ROW_NUM: usize = 3;
@@ -328,6 +328,24 @@ where
 /// Count-Min sketch with floating-point counters (no integer rounding).
 pub type CountMinF64<H = DefaultXxHasher> = CountMin<Vector2D<f64>, RegularPath, H>;
 
+trait FastPathSeedHash: Sized {
+    fn hash_seed0(value: &SketchInput) -> Self;
+}
+
+impl FastPathSeedHash for u64 {
+    #[inline(always)]
+    fn hash_seed0(value: &SketchInput) -> Self {
+        hash64_seeded(0, value)
+    }
+}
+
+impl FastPathSeedHash for u128 {
+    #[inline(always)]
+    fn hash_seed0(value: &SketchInput) -> Self {
+        hash128_seeded(0, value)
+    }
+}
+
 // Fast-path hashing adapter for Vector2D.
 impl<T> FastPathHasher for Vector2D<T>
 where
@@ -339,14 +357,15 @@ where
     }
 }
 
-// Fast-path hashing adapter for u64-backed storage.
+// Fast-path hashing adapter for primitive packed-hash storage.
 impl<S> FastPathHasher for S
 where
-    S: MatrixStorage<HashValueType = u64>,
+    S: MatrixStorage,
+    S::HashValueType: FastPathSeedHash,
 {
     #[inline(always)]
-    fn hash_for_matrix(&self, value: &SketchInput) -> u64 {
-        hash64_seeded(0, value)
+    fn hash_for_matrix(&self, value: &SketchInput) -> S::HashValueType {
+        S::HashValueType::hash_seed0(value)
     }
 }
 
