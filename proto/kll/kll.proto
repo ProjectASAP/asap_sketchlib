@@ -1,0 +1,58 @@
+// kll.proto — Portable wire format for KLL quantile sketch state.
+
+syntax = "proto3";
+
+package sketchlib.v1;
+
+option go_package = "github.com/ProjectASAP/sketchlib-go/proto/kll;kllpb";
+
+// ============================================================================
+// KLL Sketch
+// ============================================================================
+
+// KLLState is the portable state of a KLL quantile sketch.
+//
+// The items array is partitioned into compaction levels by the levels[] array:
+//   items[ levels[i] .. levels[i+1] )  are the retained items at level i.
+//
+// Derived state that must be recomputed on load (not serialized):
+//   capacity_cache  — computed from k, m, and level boundaries.
+//   level0_capacity — computed from k and num_levels.
+//   top_height      — equals num_levels - 1.
+message KLLState {
+  // Target compactor capacity k. Must be >= 8.
+  uint32 k = 1;
+
+  // Minimum compactor size m. Must satisfy 2 <= m <= k.
+  uint32 m = 2;
+
+  // Number of levels currently in use.
+  uint32 num_levels = 3;
+
+  // Level boundary indices into items[], length = num_levels + 1.
+  // levels[0] is always 0; levels[num_levels] = len(items).
+  repeated uint32 levels = 4 [packed = true];
+
+  // All retained samples in level order, length = levels[num_levels].
+  repeated double items = 5 [packed = true];
+
+  // Random bit generator state for deterministic compaction continuation.
+  // Required for sketches that will receive further updates after loading.
+  // Consumers that only query may ignore this field.
+  CoinState coin = 6;
+
+  reserved 7 to 15;
+}
+
+// CoinState is the RNG used by KLL's probabilistic compaction.
+// Both Go and Rust use an identical xorshift-based generator.
+message CoinState {
+  // Xorshift generator internal state word.
+  uint64 state = 1;
+
+  // Up to 64 random bits buffered for single-bit coin flips.
+  uint64 bit_cache = 2;
+
+  // Number of valid bits remaining in bit_cache (0–64).
+  uint32 remaining_bits = 3;
+}

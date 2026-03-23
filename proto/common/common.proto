@@ -1,0 +1,98 @@
+// common.proto — Shared types used across all sketch-specific proto files.
+//
+// Contains: ProducerInfo, HashSpec, HashAlgorithm, SeedDerivation, CounterType.
+// These are referenced by the per-sketch protos and the top-level envelope.
+
+syntax = "proto3";
+
+package sketchlib.v1;
+
+option go_package = "github.com/ProjectASAP/sketchlib-go/proto/common;commonpb";
+
+// ============================================================================
+// Producer Info
+// ============================================================================
+
+// ProducerInfo records which library version created this envelope.
+message ProducerInfo {
+  // One of "sketchlib-go" or "sketchlib-rust".
+  string library = 1;
+
+  // Semantic version string of the producing library, e.g. "0.1.0".
+  string version = 2;
+}
+
+// ============================================================================
+// Hash Specification
+// ============================================================================
+
+// HashSpec fully describes the hashing configuration so both sides can confirm
+// they will compute identical bucket indices.
+//
+// Both libraries share:
+//   canonical_seed_index = 5  (CanonicalHashSeed / CANONICAL_HASH_SEED)
+//   seed_list            = the 20-entry table in hash.go / hash.rs
+//   seed_derivation      = ADDITIVE_OFFSET for per-row seeds
+message HashSpec {
+  // Hash algorithm used for all sketch operations.
+  HashAlgorithm algorithm = 1;
+
+  // Index into seed_list used as the primary (canonical) hash seed.
+  // Both libraries default to 5.
+  uint32 canonical_seed_index = 2;
+
+  // Complete seed table. Must be identical on both sides for correct results.
+  // Both libraries currently use exactly 20 seeds; producers always emit all 20.
+  repeated uint64 seed_list = 3 [packed = true];
+
+  // How per-row seeds are derived from the base seed index.
+  SeedDerivation seed_derivation = 4;
+}
+
+// HashAlgorithm enumerates supported hash algorithms.
+// Only XXH3_64 is cross-language stable for the current implementation.
+enum HashAlgorithm {
+  HASH_ALGORITHM_UNSPECIFIED = 0;
+
+  // xxHash3 64-bit with seed (zeebo/xxh3 in Go; twox-hash XxHash3_64 in Rust).
+  // This is the standard algorithm for both libraries.
+  HASH_ALGORITHM_XXH3_64 = 1;
+
+  // xxHash3 128-bit with seed. Used for HLL register indexing and packed matrix
+  // hashes that exceed 64 bits.
+  HASH_ALGORITHM_XXH3_128 = 2;
+
+  // xxHash 64-bit (non-XXH3). Reserved for legacy data; not produced by either
+  // current library.
+  HASH_ALGORITHM_XXHASH64 = 3;
+}
+
+// SeedDerivation describes how per-row seed indices are produced.
+enum SeedDerivation {
+  SEED_DERIVATION_UNSPECIFIED = 0;
+
+  // Each row r uses seed_list[(base + r) % len(seed_list)].
+  // Standard derivation for multi-row sketches (CountMin, CountSketch).
+  SEED_DERIVATION_ADDITIVE_OFFSET = 1;
+
+  // All rows share a single hash (Packed64 or Packed128 fast-path).
+  // Applicable only when the total bit-width fits in 64 or 128 bits.
+  SEED_DERIVATION_PACKED = 2;
+}
+
+// ============================================================================
+// Counter Type
+// ============================================================================
+
+// CounterType identifies the numeric type used to store matrix counters.
+// Go defaults to FLOAT64; Rust defaults to INT32.
+// Determines which counts_* array is populated in CountMinState and
+// CountSketchState.
+enum CounterType {
+  COUNTER_TYPE_UNSPECIFIED = 0;
+  COUNTER_TYPE_INT32       = 1;  // Rust default for CountMin / CountSketch.
+  COUNTER_TYPE_INT64       = 2;
+  // INT128 is stored as pairs of int64 (hi, lo) interleaved in counts_int.
+  COUNTER_TYPE_INT128      = 3;
+  COUNTER_TYPE_FLOAT64     = 4;  // Go default for CountMin / CountSketch.
+}

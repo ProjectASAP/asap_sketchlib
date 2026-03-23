@@ -1,0 +1,62 @@
+// hll.proto — Portable wire format for HyperLogLog sketch state.
+
+syntax = "proto3";
+
+package sketchlib.v1;
+
+option go_package = "github.com/ProjectASAP/sketchlib-go/proto/hll;hllpb";
+
+// ============================================================================
+// HyperLogLog
+// ============================================================================
+
+// HyperLogLogState is the portable state of a HyperLogLog cardinality sketch.
+//
+// Precision p determines the register count: num_registers = 2^precision.
+// Both libraries default to precision = 14 (16 384 registers).
+//
+// The variant field is required because the three estimator algorithms are
+// not interchangeable: loading a DataFusion state into a Regular estimator
+// (or vice versa) produces incorrect cardinality estimates.
+message HyperLogLogState {
+  // HLL estimator variant. Required.
+  HLLVariant variant = 1;
+
+  // Log₂ of the number of registers (precision parameter p).
+  // Default = 14 → 16 384 registers.
+  uint32 precision = 2;
+
+  // Raw register values, length = 2^precision.
+  // Each byte stores the maximum (leading-zeros + 1) seen for that bucket.
+  // Stored as a raw byte string for compact encoding (1 byte per register).
+  bytes registers = 3;
+
+  // ---- HIP-variant extra fields (populated only when variant = HIP) --------
+
+  // HIP accumulator component kxq0.
+  double hip_kxq0 = 4;
+
+  // HIP accumulator component kxq1.
+  double hip_kxq1 = 5;
+
+  // HIP running cardinality estimate.
+  double hip_est = 6;
+
+  reserved 7 to 15;
+}
+
+// HLLVariant identifies which HLL estimator algorithm the registers belong to.
+enum HLLVariant {
+  HLL_VARIANT_UNSPECIFIED = 0;
+
+  // Classic HLL with bias-correction tables (Flajolet et al. 2007).
+  HLL_VARIANT_REGULAR = 1;
+
+  // Otmar Ertl's improved estimator used by Apache DataFusion.
+  // Not compatible with REGULAR registers.
+  HLL_VARIANT_DATAFUSION = 2;
+
+  // Kevin Lang's HyperLogLog++ Improved Proposal (HIP).
+  // Requires hip_kxq0, hip_kxq1, hip_est to be populated.
+  HLL_VARIANT_HIP = 3;
+}

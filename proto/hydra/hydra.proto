@@ -1,0 +1,80 @@
+// hydra.proto — Portable wire format for Hydra multi-sketch framework state.
+
+syntax = "proto3";
+
+package sketchlib.v1;
+
+import "countminsketch/countminsketch.proto";
+import "countsketch/countsketch.proto";
+import "hll/hll.proto";
+import "kll/kll.proto";
+import "univmon/univmon.proto";
+
+option go_package = "github.com/ProjectASAP/sketchlib-go/proto/hydra;hydrapb";
+
+// ============================================================================
+// Hydra Sketch
+// ============================================================================
+
+// HydraState is the portable state of a Hydra multi-sketch framework.
+//
+// Hydra maintains a grid of row_num child sketches (cells), each of the
+// same type (counter_type). Items are routed to a specific row cell using a
+// position hash derived from the item's subkey. An optional global "big
+// counter" sketch aggregates the full stream.
+//
+// Current implementations set col_num = 1 (one sketch per row). The field is
+// included for schema completeness and future extensions.
+message HydraState {
+  // Number of sketch rows (D / number of subpopulations).
+  uint32 row_num = 1;
+
+  // Number of sketch columns per row. Currently always 1.
+  uint32 col_num = 2;
+
+  // The sketch type used for every cell.
+  HydraCounterType counter_type = 3;
+
+  // Serialized cells in row-major order, length = row_num * col_num.
+  // Each cell's oneof field must match counter_type.
+  repeated HydraCell cells = 4;
+
+  // Optional global sketch covering the entire stream.
+  // Absent when global counter is disabled (enable_global_counter = false).
+  HydraCell big_counter = 5;
+
+  // Seed index used for subpopulation routing (Go: seedHydra, Rust: HYDRA_SEED).
+  // Both libraries default to 6.
+  uint32 seed_index = 6;
+
+  // True when per-cell TopK tracking is enabled.
+  bool enable_topk = 7;
+
+  // True when fanout subkey expansion is active.
+  bool fanout_subkeys = 8;
+
+  reserved 9 to 15;
+}
+
+// HydraCounterType identifies the sketch algorithm used inside Hydra cells.
+enum HydraCounterType {
+  HYDRA_COUNTER_TYPE_UNSPECIFIED  = 0;
+  HYDRA_COUNTER_TYPE_COUNT_MIN    = 1;
+  HYDRA_COUNTER_TYPE_COUNT_SKETCH = 2;
+  HYDRA_COUNTER_TYPE_HLL          = 3;
+  HYDRA_COUNTER_TYPE_KLL          = 4;
+  HYDRA_COUNTER_TYPE_UNIVMON      = 5;
+}
+
+// HydraCell holds the serialized state of one Hydra grid cell.
+// Exactly one field in the oneof must be set, and it must match the parent
+// HydraState.counter_type.
+message HydraCell {
+  oneof sketch {
+    CountMinState    count_min    = 1;
+    CountSketchState count_sketch = 2;
+    HyperLogLogState hll          = 3;
+    KLLState         kll          = 4;
+    UnivMonState     univmon      = 5;
+  }
+}

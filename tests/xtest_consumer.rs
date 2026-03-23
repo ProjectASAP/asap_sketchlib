@@ -4,7 +4,7 @@
 //! deserialises each sketch from the portable wire format, and runs sanity queries
 //! to confirm the data survived the language boundary intact.
 //!
-//! Files consumed (from <indir>/):
+//! Files consumed (from $XTEST_DIR/):
 //!   countmin.pb    — CountMinState with float64 counters
 //!   kll.pb         — KLLState with quantile items and coin RNG state
 //!   ddsketch.pb    — DDSketchState with alpha + bucket array
@@ -16,24 +16,17 @@
 //!   hydra.pb       — HydraState (CM-cell grid)
 //!
 //! Usage:
-//!   cargo run --bin xtest_consumer <indir>
+//!   XTEST_DIR=<path> cargo test --test xtest_consumer -- --nocapture
 
 use prost::Message;
 use sketchlib_rust::proto::sketchlib::*;
-use std::{env, fs, path::Path, process};
+use std::{env, fs, path::Path};
 use twox_hash::XxHash3_64;
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("usage: xtest_consumer <indir>");
-        process::exit(1);
-    }
-    let in_dir = Path::new(&args[1]);
+#[test]
+fn cross_language_proto() {
+    let xtest_dir = env::var("XTEST_DIR").expect("XTEST_DIR env var not set");
+    let in_dir = Path::new(&xtest_dir);
 
     println!("=======================================================");
     println!("  sketchlib-rust ← xtest_consumer");
@@ -57,7 +50,7 @@ fn main() {
 
     let cm_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::CountMin(ref s)) => s.clone(),
-        other => fatal_env("CountMin", &other),
+        other => panic!("expected CountMin sketch_state, got {:?}", other),
     };
 
     println!(
@@ -127,7 +120,7 @@ fn main() {
 
     let kll_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Kll(ref s)) => s.clone(),
-        other => fatal_env("KLL", &other),
+        other => panic!("expected KLL sketch_state, got {:?}", other),
     };
 
     println!(
@@ -172,7 +165,7 @@ fn main() {
 
     let dd_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Ddsketch(ref s)) => s.clone(),
-        other => fatal_env("DDSketch", &other),
+        other => panic!("expected DDSketch sketch_state, got {:?}", other),
     };
 
     println!(
@@ -221,7 +214,7 @@ fn main() {
 
     let hll_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Hll(ref s)) => s.clone(),
-        other => fatal_env("HLL", &other),
+        other => panic!("expected HLL sketch_state, got {:?}", other),
     };
 
     println!(
@@ -259,7 +252,7 @@ fn main() {
 
     let cs_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::CountSketch(ref s)) => s.clone(),
-        other => fatal_env("CountSketch", &other),
+        other => panic!("expected CountSketch sketch_state, got {:?}", other),
     };
 
     println!(
@@ -300,7 +293,7 @@ fn main() {
 
     let coco_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Coco(ref s)) => s.clone(),
-        other => fatal_env("CocoSketch", &other),
+        other => panic!("expected CocoSketch sketch_state, got {:?}", other),
     };
 
     println!(
@@ -342,7 +335,7 @@ fn main() {
 
     let elastic_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Elastic(ref s)) => s.clone(),
-        other => fatal_env("ElasticSketch", &other),
+        other => panic!("expected ElasticSketch sketch_state, got {:?}", other),
     };
 
     println!(
@@ -383,7 +376,7 @@ fn main() {
 
     let um_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Univmon(ref s)) => s.clone(),
-        other => fatal_env("UnivMon", &other),
+        other => panic!("expected UnivMon sketch_state, got {:?}", other),
     };
 
     println!(
@@ -424,7 +417,7 @@ fn main() {
 
     let hydra_state = match env.sketch_state {
         Some(sketch_envelope::SketchState::Hydra(ref s)) => s.clone(),
-        other => fatal_env("Hydra", &other),
+        other => panic!("expected Hydra sketch_state, got {:?}", other),
     };
 
     println!(
@@ -461,9 +454,10 @@ fn main() {
         println!("  All cross-language checks PASSED.");
     } else {
         println!("  One or more cross-language checks FAILED.");
-        process::exit(1);
     }
     println!("=======================================================");
+
+    assert!(all_ok, "one or more cross-language checks failed");
 }
 
 // ---------------------------------------------------------------------------
@@ -480,15 +474,7 @@ const SEED_6: u64 = 0xbb67ae85; // seedList[6] — defaultHydraSeed
 
 fn read_file(path: impl AsRef<Path>) -> Vec<u8> {
     let p = path.as_ref();
-    fs::read(p).unwrap_or_else(|e| {
-        eprintln!("FATAL: cannot read {}: {}", p.display(), e);
-        process::exit(1);
-    })
-}
-
-fn fatal_env(name: &str, got: &Option<sketch_envelope::SketchState>) -> ! {
-    eprintln!("FATAL: expected {} sketch_state, got {:?}", name, got);
-    process::exit(1);
+    fs::read(p).unwrap_or_else(|e| panic!("cannot read {}: {}", p.display(), e))
 }
 
 /// Number of bits needed to index into a column vector of given width.
@@ -797,14 +783,12 @@ fn median_of_three_f64(a: f64, b: f64, c: f64) -> f64 {
         } else {
             a
         }
+    } else if a <= c {
+        a
+    } else if b <= c {
+        c
     } else {
-        if a <= c {
-            a
-        } else if b <= c {
-            c
-        } else {
-            b
-        }
+        b
     }
 }
 

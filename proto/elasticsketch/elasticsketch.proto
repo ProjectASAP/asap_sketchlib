@@ -1,0 +1,41 @@
+// elasticsketch.proto — Portable wire format for Elastic Sketch state.
+
+syntax = "proto3";
+
+package sketchlib.v1;
+
+import "countminsketch/countminsketch.proto";
+
+option go_package = "github.com/ProjectASAP/sketchlib-go/proto/elasticsketch;elasticsketchpb";
+
+// ============================================================================
+// ElasticSketch
+// ============================================================================
+
+// ElasticState is the portable state of an Elastic Sketch.
+//
+// The Elastic Sketch has a heavy part (one bucket per index) and a light
+// Count-Min layer. The heavy part is serialized as parallel arrays.
+// The light layer is stored as a CountMinState with FLOAT64 counters.
+message ElasticState {
+  // Number of heavy buckets.
+  uint32 bucket_count = 1;
+
+  // Per-bucket flow identifiers (strings), length = bucket_count.
+  // Empty string means the bucket is unoccupied.
+  repeated string flow_ids = 2;
+
+  // Positive vote counts per bucket, length = bucket_count.
+  repeated sint32 vote_pos = 3 [packed = true];
+
+  // Negative vote counts per bucket, length = bucket_count.
+  repeated sint32 vote_neg = 4 [packed = true];
+
+  // Whether each bucket is in eviction state, length = bucket_count.
+  repeated bool evictions = 5 [packed = true];
+
+  // Light Count-Min layer (FLOAT64 counters).
+  CountMinState light = 6;
+
+  reserved 7 to 15;
+}
