@@ -1,0 +1,48 @@
+// ddsketch.proto — Portable wire format for DDSketch quantile sketch state.
+
+syntax = "proto3";
+
+package sketchlib.v1;
+
+option go_package = "github.com/ProjectASAP/sketchlib-go/proto/ddsketch;ddsketchpb";
+
+// ============================================================================
+// DDSketch
+// ============================================================================
+
+// DDSketchState is the portable state of a DDSketch quantile sketch.
+//
+// Only alpha is required to reconstruct the index mapping. Consumers must
+// recompute all derived mapping values on load:
+//   gamma        = (1.0 + alpha) / (1.0 - alpha)
+//   log_gamma    = ln(gamma)
+//   inv_log_gamma = 1.0 / log_gamma
+//
+// Bucket indices: a value v maps to bucket floor(ln(v) * inv_log_gamma).
+// Stored bucket absolute_index = array_index + store_offset.
+message DDSketchState {
+  // Relative accuracy guarantee. Required. Must satisfy 0 < alpha < 1.
+  double alpha = 1;
+
+  // Bucket count array in index order (ascending absolute bucket index).
+  // Absolute index of store_counts[i] is i + store_offset.
+  repeated uint64 store_counts = 2 [packed = true];
+
+  // Absolute bucket index corresponding to store_counts[0].
+  // May be negative (values < 1.0 map to negative bucket indices).
+  sint32 store_offset = 3;
+
+  // Total number of values added.
+  uint64 count = 4;
+
+  // Sum of all values added (for mean computation).
+  double sum = 5;
+
+  // Minimum value observed. +Inf when the sketch is empty.
+  double min = 6;
+
+  // Maximum value observed. -Inf when the sketch is empty.
+  double max = 7;
+
+  reserved 8 to 15;
+}

@@ -1,0 +1,35 @@
+// cocosketch.proto — Portable wire format for CocoSketch flow-size estimator state.
+
+syntax = "proto3";
+
+package sketchlib.v1;
+
+option go_package = "github.com/ProjectASAP/sketchlib-go/proto/cocosketch;cocosketchpb";
+
+// ============================================================================
+// CocoSketch
+// ============================================================================
+
+// CocoSketchState is the portable state of a CocoSketch flow-size estimator.
+//
+// The bucket table is stored flat in row-major order (d rows × width cols).
+// Element [r][c] is at index r * width + c.
+message CocoSketchState {
+  // Number of hash rows.
+  uint32 d = 1;
+
+  // Number of buckets per row.
+  uint32 width = 2;
+
+  // Full hash stored in each bucket, length = d * width.
+  // Zero means the bucket is empty (has_keys[i] == false).
+  repeated uint64 hashes = 3 [packed = true];
+
+  // Cumulative count value per bucket, length = d * width.
+  repeated uint64 vals = 4 [packed = true];
+
+  // Whether each bucket holds a valid key entry, length = d * width.
+  repeated bool has_keys = 5 [packed = true];
+
+  reserved 6 to 15;
+}

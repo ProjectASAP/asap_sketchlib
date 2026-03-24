@@ -1,0 +1,81 @@
+// sketchlib.proto — Top-level envelope for sketchlib portable wire format.
+//
+// This file defines only the SketchEnvelope message. All sketch-specific
+// message types live in their per-sketch proto files:
+//
+//   common/common.proto              — HashSpec, ProducerInfo, CounterType, ...
+//   countminsketch/countminsketch.proto — CountMinState
+//   countsketch/countsketch.proto    — CountSketchState, TopKState, HeapEntry
+//   hll/hll.proto                    — HyperLogLogState, HLLVariant
+//   kll/kll.proto                    — KLLState, CoinState
+//   ddsketch/ddsketch.proto          — DDSketchState
+//   univmon/univmon.proto            — UnivMonState, UnivMonLayer
+//   hydra/hydra.proto                — HydraState, HydraCounterType, HydraCell
+//
+// Design goals:
+//   - Cross-language: Go (sketchlib-go) ↔ Rust (sketchlib-rust) round-trips.
+//   - Forward-compatible: new fields use reserved numbers; old readers skip them.
+//   - Logical state only: no pointers, no runtime caches, no gob/msgpack artefacts.
+//   - Derived values (gamma, L2 norms, capacity caches) are always recomputed on load.
+//   - Flat row-major arrays for all 2-D matrices.
+//   - Hash specification is explicit so consumers can detect configuration mismatches.
+//
+// Version history:
+//   1 — initial portable format (CountMin, Count, HLL, KLL, DDSketch)
+//   2 — extended to UnivMon and Hydra (reserved, not yet stable)
+
+syntax = "proto3";
+
+package sketchlib.v1;
+
+import "common/common.proto";
+import "countminsketch/countminsketch.proto";
+import "countsketch/countsketch.proto";
+import "hll/hll.proto";
+import "kll/kll.proto";
+import "ddsketch/ddsketch.proto";
+import "univmon/univmon.proto";
+import "hydra/hydra.proto";
+import "cocosketch/cocosketch.proto";
+import "elasticsketch/elasticsketch.proto";
+
+option go_package = "github.com/ProjectASAP/sketchlib-go/proto/sketch_envelope;sketch_envelopepb";
+
+// ============================================================================
+// Top-Level Envelope
+// ============================================================================
+
+// SketchEnvelope is the portable container for all sketch transfers.
+// Producers fill exactly one field inside sketch_state.
+// Consumers check format_version first, then dispatch on the oneof.
+message SketchEnvelope {
+  // Schema version. Consumers should reject envelopes whose version exceeds
+  // the highest version they understand.
+  //   1 = CountMin, Count, HLL, KLL, DDSketch
+  //   2 = UnivMon, Hydra (reserved)
+  //   3 = CocoSketch, ElasticSketch (reserved)
+  uint32 format_version = 1;
+
+  // Library and build info of the producing side.
+  ProducerInfo producer = 2;
+
+  // Complete hashing configuration. Consumers must validate this against their
+  // own configuration before performing updates or queries on the loaded sketch.
+  // Mismatches do not prevent loading but will cause diverging results.
+  HashSpec hash_spec = 3;
+
+  // The sketch payload. Exactly one field must be set.
+  oneof sketch_state {
+    CountMinState    count_min    = 10;
+    CountSketchState count_sketch = 11;
+    HyperLogLogState hll          = 12;
+    KLLState         kll          = 13;
+    DDSketchState    ddsketch     = 14;
+    UnivMonState     univmon      = 15;
+    HydraState       hydra        = 16;
+    CocoSketchState  coco         = 17;
+    ElasticState     elastic      = 18;
+  }
+
+  reserved 19 to 31;  // Reserved for future sketch types.
+}

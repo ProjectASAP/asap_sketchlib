@@ -1,0 +1,74 @@
+// countsketch.proto — Portable wire format for Count Sketch state.
+// Also contains TopKState and HeapEntry used by CountSketch and UnivMon.
+
+syntax = "proto3";
+
+package sketchlib.v1;
+
+import "common/common.proto";
+
+option go_package = "github.com/ProjectASAP/sketchlib-go/proto/countsketch;countsketchpb";
+
+// ============================================================================
+// Count Sketch
+// ============================================================================
+
+// CountSketchState is the portable state of a Count (±1) Sketch.
+//
+// The counter matrix is signed because Count Sketch uses ±1 increments.
+// The matrix layout is identical to CountMinState (row-major, flat).
+//
+// L2 norms are derived values and must be recomputed on load:
+//   l2[r] = sqrt( sum_c counts[r][c]^2 )
+// Producers may include them as a convenience for consumers that only query.
+message CountSketchState {
+  // Matrix dimensions. Both must be > 0.
+  uint32 rows = 1;
+  uint32 cols = 2;
+
+  // Indicates which counts_* field below is populated.
+  CounterType counter_type = 3;
+
+  // Signed integer counters in row-major order, length = rows * cols.
+  // Populated when counter_type ∈ {INT32, INT64}.
+  repeated sint64 counts_int = 4 [packed = true];
+
+  // Floating-point counters in row-major order, length = rows * cols.
+  // Populated when counter_type = FLOAT64 (Go producer).
+  repeated double counts_float = 5 [packed = true];
+
+  // Per-row L2 norms, length = rows. Derived — recompute on load if absent.
+  repeated double l2 = 6 [packed = true];
+
+  // Optional heavy-hitter (TopK min-heap) state.
+  // Absent when TopK tracking is disabled.
+  TopKState topk = 7;
+
+  reserved 8 to 15;
+}
+
+// ============================================================================
+// TopK / Heavy-Hitter State
+// ============================================================================
+
+// TopKState is the serialized state of a min-heap heavy-hitter tracker.
+message TopKState {
+  // Maximum number of entries retained.
+  uint32 k = 1;
+
+  // All retained entries. Order is not guaranteed (heap order is not preserved).
+  repeated HeapEntry entries = 2;
+}
+
+// HeapEntry is one heavy-hitter record inside a TopKState.
+message HeapEntry {
+  // String key identifying the heavy hitter (e.g. flow ID, IP address).
+  // For binary keys, producers should use base64 or hex encoding and document
+  // their choice; a future bytes_key field is reserved at number 3.
+  string key = 1;
+
+  // Approximate frequency or weight accumulated for this key.
+  double count = 2;
+
+  reserved 3;  // Reserved for bytes_key alternative.
+}

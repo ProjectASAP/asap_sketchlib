@@ -1,0 +1,50 @@
+// univmon.proto — Portable wire format for Universal Monitoring (UnivMon) sketch state.
+
+syntax = "proto3";
+
+package sketchlib.v1;
+
+import "countsketch/countsketch.proto";
+
+option go_package = "github.com/ProjectASAP/sketchlib-go/proto/univmon;univmonpb";
+
+// ============================================================================
+// UnivMon
+// ============================================================================
+
+// UnivMonState is the portable state of a Universal Monitoring (UnivMon) sketch.
+//
+// UnivMon is a hierarchy of L Count Sketches paired with L heavy-hitter heaps.
+// An item's hash trailing-zero count determines which layers receive it, giving
+// each layer a geometrically decreasing sample of the stream.
+//
+// All layers share the same sketch dimensions and heap capacity.
+message UnivMonState {
+  // Number of layers L in the hierarchy (inclusive of all levels).
+  uint32 layer_size = 1;
+
+  // Count Sketch dimensions shared by all layers.
+  uint32 sketch_rows = 2;
+  uint32 sketch_cols = 3;
+
+  // Heavy-hitter heap capacity shared by all layers.
+  uint32 heap_size = 4;
+
+  // Total items inserted across all layers (the "bucket size" counter).
+  uint64 bucket_size = 5;
+
+  // Per-layer state, in order from layer 0 (finest) to layer_size-1 (coarsest).
+  // Length must equal layer_size.
+  repeated UnivMonLayer layers = 6;
+
+  reserved 7 to 15;
+}
+
+// UnivMonLayer is the joint state of one UnivMon layer.
+message UnivMonLayer {
+  // The Count Sketch accumulating items at this layer.
+  CountSketchState sketch = 1;
+
+  // The heavy-hitter heap for this layer.
+  TopKState heap = 2;
+}

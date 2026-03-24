@@ -19,7 +19,7 @@
 - ✅ Framework coverage includes `Hydra`, `UnivMon`, `HashLayer`, `ExponentialHistogram`, and `NitroBatch`
 - ✅ Folded window sketches are implemented: `FoldCMS` and `FoldCS` ([design doc](./docs/fold_sketch_design.md))
 - ✅ Optimized EH path is implemented via `EHUnivOptimized` (hybrid map + sketch tiers with sketch pooling)
-- ✅ Hashing is customizable through `SketchHasher` (default: `DefaultXxHasher`)
+- ✅ All built-in sketches and frameworks use the shared `xxh3` helpers in `src/common/hash.rs`
 - 🚧 Ongoing work focuses on feature expansion, broader test coverage, benchmark depth, serialization coverage, and API stabilization
 
 ## API Overview
@@ -772,7 +772,7 @@ At this moment, ```cargo test``` is a good starting point.
   - `input.rs` - `SketchInput` enum, `HeapItem`, `HHItem`, framework enums (`HydraCounter`, `L2HH`, `HydraQuery`)
   - `structures/` - High-performance data structures (`Vector1D`, `Vector2D`, `Vector3D`, `CommonHeap`, `MatrixStorage`, `FixedMatrix`)
   - `heap.rs` - `HHHeap` convenience wrapper for heavy hitter tracking
-  - `hash.rs` - Hashing utilities (`hash_for_matrix`, `hash64_seeded`, `SEEDLIST`, `BOTTOM_LAYER_FINDER`) plus `SketchHasher` for custom hasher injection
+  - `hash.rs` - Shared `xxh3` hashing utilities (`hash_for_matrix`, `hash64_seeded`, `SEEDLIST`, `BOTTOM_LAYER_FINDER`) used by all built-in sketches and frameworks
   - `mode.rs` is under `src/sketches/` and provides `RegularPath` / `FastPath` type-level insert/estimate path selection
 
 - **`src/sketches/`** - Core sketch implementations ([sketch_api.md](./docs/sketch_api.md))

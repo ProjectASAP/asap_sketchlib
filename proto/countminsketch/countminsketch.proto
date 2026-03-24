@@ -1,0 +1,59 @@
+// countminsketch.proto — Portable wire format for Count-Min Sketch state.
+
+syntax = "proto3";
+
+package sketchlib.v1;
+
+import "common/common.proto";
+
+option go_package = "github.com/ProjectASAP/sketchlib-go/proto/countminsketch;countminsketchpb";
+
+// ============================================================================
+// Count-Min Sketch
+// ============================================================================
+
+// CountMinState is the portable state of a Count-Min Sketch.
+//
+// The counter matrix is stored flat in row-major order:
+//   element [r][c] is at index r * cols + c.
+//
+// The Go implementation tracks auxiliary sum/L1/L2 arrays that the Rust
+// implementation does not produce. These fields are optional; consumers
+// that need them must recompute from raw insertions if absent.
+message CountMinState {
+  // Matrix dimensions. Both must be > 0.
+  uint32 rows = 1;
+  uint32 cols = 2;
+
+  // Indicates which counts_* field below is populated.
+  CounterType counter_type = 3;
+
+  // Integer counters in row-major order, length = rows * cols.
+  // Populated when counter_type ∈ {INT32, INT64}.
+  // Use sint64 for efficient varint encoding of near-zero values.
+  // For INT128 counters, values are interleaved as (hi_i, lo_i) pairs,
+  // making the effective length 2 * rows * cols.
+  repeated sint64 counts_int = 4 [packed = true];
+
+  // Floating-point counters in row-major order, length = rows * cols.
+  // Populated when counter_type = FLOAT64 (Go producer).
+  repeated double counts_float = 5 [packed = true];
+
+  // ---- Optional Go-extension fields ----------------------------------------
+  // These are produced by sketchlib-go and absent from sketchlib-rust producers.
+  // Consumers should treat absence as "unknown; recompute if needed".
+
+  // Sum-weighted counter matrix (same layout as counts_*), length = rows * cols.
+  repeated double sum_counts = 6 [packed = true];
+
+  // Sum-of-squares counter matrix, length = rows * cols.
+  repeated double sum2_counts = 7 [packed = true];
+
+  // Per-row L1 norms, length = rows.
+  repeated double l1 = 8 [packed = true];
+
+  // Per-row L2 norms, length = rows. Recompute if absent.
+  repeated double l2 = 9 [packed = true];
+
+  reserved 10 to 15;
+}

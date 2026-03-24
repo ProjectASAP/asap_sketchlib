@@ -31,7 +31,6 @@ Copyright 2019 DataDog, Inc.
 
 This product depends on the following Rust crates:
 
-ahash - Copyright (c) 2018 Tom Kaitchuck (MIT/Apache-2.0)
 rand - Copyright (c) 2018 Rust Project Developers (MIT/Apache-2.0)
 serde - Copyright (c) 2014 David Tolnay (MIT/Apache-2.0)
 rmp-serde - Copyright (c) 2017 Nikolai Vazquez (MIT)
