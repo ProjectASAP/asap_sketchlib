@@ -20,13 +20,19 @@
 
 use prost::Message;
 use sketchlib_rust::proto::sketchlib::*;
-use std::{env, fs, path::Path};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use twox_hash::XxHash3_64;
 
 #[test]
 fn cross_language_proto() {
-    let xtest_dir = env::var("XTEST_DIR").expect("XTEST_DIR env var not set");
-    let in_dir = Path::new(&xtest_dir);
+    let xtest_dir = XtestDir::prepare();
+    let in_dir = xtest_dir.path();
 
     println!("=======================================================");
     println!("  sketchlib-rust ← xtest_consumer");
@@ -475,6 +481,91 @@ const SEED_6: u64 = 0xbb67ae85; // seedList[6] — defaultHydraSeed
 fn read_file(path: impl AsRef<Path>) -> Vec<u8> {
     let p = path.as_ref();
     fs::read(p).unwrap_or_else(|e| panic!("cannot read {}: {}", p.display(), e))
+}
+
+struct XtestDir {
+    path: PathBuf,
+    cleanup: bool,
+}
+
+impl XtestDir {
+    fn prepare() -> Self {
+        if let Ok(dir) = env::var("XTEST_DIR") {
+            return Self {
+                path: PathBuf::from(dir),
+                cleanup: false,
+            };
+        }
+
+        let out_dir = new_xtest_temp_dir();
+        generate_xtest_fixtures(&out_dir);
+        Self {
+            path: out_dir,
+            cleanup: true,
+        }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for XtestDir {
+    fn drop(&mut self) {
+        if self.cleanup {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+fn generate_xtest_fixtures(out_dir: &Path) {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("sketchlib-rust should live under the repo root");
+    let go_dir = repo_root.join("sketchlib-go");
+
+    let output = Command::new("go")
+        .args(["run", "./cmd/xtest_producer"])
+        .arg(out_dir)
+        .current_dir(&go_dir)
+        .output()
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to run Go xtest producer from {}: {}",
+                go_dir.display(),
+                err
+            )
+        });
+
+    if !output.status.success() {
+        panic!(
+            "Go xtest producer failed with status {}.\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+}
+
+fn new_xtest_temp_dir() -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let base = env::temp_dir();
+    for _ in 0..16 {
+        let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let candidate = base.join(format!("sketchlib-xtest-{ts}-{nonce}"));
+        match fs::create_dir(&candidate) {
+            Ok(()) => return candidate,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => panic!("failed to create temp dir {}: {}", candidate.display(), err),
+        }
+    }
+
+    panic!("failed to allocate temp directory for cross-language fixtures");
 }
 
 /// Number of bits needed to index into a column vector of given width.
