@@ -126,6 +126,44 @@ impl<H: SketchHasher> Elastic<H> {
             self.light.estimate(&SketchInput::String(id)) as i32
         }
     }
+
+    pub fn merge(&mut self, other: &Elastic<H>) {
+        assert_eq!(
+            self.bktlen, other.bktlen,
+            "bucket length mismatch while merging Elastic sketches"
+        );
+
+        self.flush_heavy_to_light();
+
+        let mut other_clone = other.clone();
+        other_clone.flush_heavy_to_light();
+
+        self.light.merge(&other_clone.light);
+        self.reset_heavy();
+    }
+
+    fn spill_heavy_to_light(&mut self, bucket: &HeavyBucket) {
+        if bucket.flow_id.is_empty() || bucket.vote_pos <= 0 {
+            return;
+        }
+        let flow_id = bucket.flow_id.clone();
+        for _ in 0..bucket.vote_pos {
+            self.light.insert(&SketchInput::String(flow_id.clone()));
+        }
+    }
+
+    fn flush_heavy_to_light(&mut self) {
+        let buckets = self.heavy.clone();
+        for bucket in &buckets {
+            self.spill_heavy_to_light(bucket);
+        }
+    }
+
+    fn reset_heavy(&mut self) {
+        for bucket in &mut self.heavy {
+            *bucket = HeavyBucket::new();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -187,5 +225,60 @@ mod tests {
             light_est >= 6,
             "colliding flow should accumulate in CountMin, expected >= 6, got {light_est}"
         );
+    }
+
+    #[test]
+    fn merge_flushes_heavy_and_sum_merges_light() {
+        let mut left: Elastic = Elastic::init_with_length(16);
+        let mut right: Elastic = Elastic::init_with_length(16);
+
+        for _ in 0..30 {
+            left.insert("flow::left".to_string());
+        }
+        for _ in 0..18 {
+            right.insert("flow::right".to_string());
+        }
+
+        left.merge(&right);
+
+        assert!(left.query("flow::left".to_string()) >= 30);
+        assert!(left.query("flow::right".to_string()) >= 18);
+        assert!(left.heavy.iter().all(|bucket| {
+            bucket.flow_id.is_empty()
+                && bucket.vote_pos == 0
+                && bucket.vote_neg == 0
+                && !bucket.eviction
+        }));
+    }
+
+    #[test]
+    fn merge_preserves_colliding_flow_mass() {
+        let mut left: Elastic = Elastic::init_with_length(8);
+        let primary = "flow::primary";
+        let primary_bucket = bucket_for(primary, &left);
+
+        let mut secondary = None;
+        for idx in 0..10_000 {
+            let candidate = format!("flow::secondary::{idx}");
+            if bucket_for(&candidate, &left) == primary_bucket && candidate != primary {
+                secondary = Some(candidate);
+                break;
+            }
+        }
+        let secondary = secondary.expect("unable to find colliding key for merge test");
+
+        for _ in 0..20 {
+            left.insert(primary.to_string());
+        }
+
+        let mut right: Elastic = Elastic::init_with_length(8);
+        for _ in 0..9 {
+            right.insert(secondary.clone());
+        }
+
+        left.merge(&right);
+
+        assert!(left.query(primary.to_string()) >= 20);
+        assert!(left.query(secondary.clone()) >= 9);
     }
 }
