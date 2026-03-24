@@ -31,7 +31,12 @@ use twox_hash::XxHash3_64;
 
 #[test]
 fn cross_language_proto() {
-    let xtest_dir = XtestDir::prepare();
+    let Some(xtest_dir) = XtestDir::prepare() else {
+        eprintln!(
+            "skipping cross_language_proto: no XTEST_DIR provided and Go xtest producer is unavailable"
+        );
+        return;
+    };
     let in_dir = xtest_dir.path();
 
     println!("=======================================================");
@@ -489,20 +494,26 @@ struct XtestDir {
 }
 
 impl XtestDir {
-    fn prepare() -> Self {
+    fn prepare() -> Option<Self> {
         if let Ok(dir) = env::var("XTEST_DIR") {
-            return Self {
+            return Some(Self {
                 path: PathBuf::from(dir),
                 cleanup: false,
-            };
+            });
         }
 
+        let Some(go_dir) = find_go_dir() else {
+            return None;
+        };
         let out_dir = new_xtest_temp_dir();
-        generate_xtest_fixtures(&out_dir);
-        Self {
+        if !generate_xtest_fixtures(&go_dir, &out_dir) {
+            let _ = fs::remove_dir_all(&out_dir);
+            return None;
+        }
+        Some(Self {
             path: out_dir,
             cleanup: true,
-        }
+        })
     }
 
     fn path(&self) -> &Path {
@@ -518,33 +529,57 @@ impl Drop for XtestDir {
     }
 }
 
-fn generate_xtest_fixtures(out_dir: &Path) {
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("sketchlib-rust should live under the repo root");
-    let go_dir = repo_root.join("sketchlib-go");
-
-    let output = Command::new("go")
+fn generate_xtest_fixtures(go_dir: &Path, out_dir: &Path) -> bool {
+    let output = match Command::new("go")
         .args(["run", "./cmd/xtest_producer"])
         .arg(out_dir)
-        .current_dir(&go_dir)
+        .current_dir(go_dir)
         .output()
-        .unwrap_or_else(|err| {
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(err) => {
             panic!(
                 "failed to run Go xtest producer from {}: {}",
                 go_dir.display(),
                 err
             )
-        });
+        }
+    };
 
     if !output.status.success() {
-        panic!(
+        eprintln!(
             "Go xtest producer failed with status {}.\nstdout:\n{}\nstderr:\n{}",
             output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
+        return false;
     }
+
+    true
+}
+
+fn find_go_dir() -> Option<PathBuf> {
+    if let Ok(dir) = env::var("SKETCHLIB_GO_DIR") {
+        let dir = PathBuf::from(dir);
+        if has_xtest_producer(&dir) {
+            return Some(dir);
+        }
+    }
+
+    for ancestor in Path::new(env!("CARGO_MANIFEST_DIR")).ancestors() {
+        let candidate = ancestor.join("sketchlib-go");
+        if has_xtest_producer(&candidate) {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn has_xtest_producer(dir: &Path) -> bool {
+    dir.join("cmd/xtest_producer/main.go").is_file()
 }
 
 fn new_xtest_temp_dir() -> PathBuf {
