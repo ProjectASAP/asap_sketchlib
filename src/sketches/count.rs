@@ -1,6 +1,6 @@
 use crate::{
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
-    FastPathHasher, FixedMatrix, MatrixHashType, MatrixStorage, NitroTarget, QuickMatrixI64,
+    FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
     QuickMatrixI128, RegularPath, SketchHasher, SketchInput, Vector1D, Vector2D,
     compute_median_inline_f64,
 };
@@ -54,33 +54,6 @@ impl CountSketchCounter for i64 {
 impl CountSketchCounter for i128 {
     fn to_f64(self) -> f64 {
         self as f64
-    }
-}
-
-pub trait FastPathSign {
-    fn sign_for_row(&self, row: usize) -> i32;
-}
-
-// Implements fast-path sign extraction for MatrixHashType.
-impl FastPathSign for MatrixHashType {
-    fn sign_for_row(&self, row: usize) -> i32 {
-        MatrixHashType::sign_for_row(self, row)
-    }
-}
-
-// Implements fast-path sign extraction for u64.
-impl FastPathSign for u64 {
-    fn sign_for_row(&self, row: usize) -> i32 {
-        let bit = (self >> (63 - row)) & 1;
-        (bit as i32 * 2) - 1
-    }
-}
-
-// Implements fast-path sign extraction for u128.
-impl FastPathSign for u128 {
-    fn sign_for_row(&self, row: usize) -> i32 {
-        let bit = (self >> (127 - row)) & 1;
-        (bit as i32 * 2) - 1
     }
 }
 
@@ -386,14 +359,13 @@ where
 // Fast-path Count operations using precomputed hashes.
 impl<S, H: SketchHasher> Count<S, FastPath, H>
 where
-    S: MatrixStorage + FastPathHasher,
+    S: MatrixStorage + crate::FastPathHasher<H>,
     S::Counter: CountSketchCounter,
-    S::HashValueType: FastPathSign,
 {
     /// Inserts an observation using the combined hash optimization.
     #[inline(always)]
     pub fn insert(&mut self, value: &SketchInput) {
-        let hashed_val = self.counts.hash_for_matrix(value);
+        let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts.fast_insert(
             |counter, value, row| {
                 let sign = hashed_val.sign_for_row(row);
@@ -407,7 +379,7 @@ where
 
     #[inline(always)]
     pub fn insert_many(&mut self, value: &SketchInput, many: S::Counter) {
-        let hashed_val = self.counts.hash_for_matrix(value);
+        let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts.fast_insert(
             |counter, value, row| {
                 let sign = hashed_val.sign_for_row(row);
@@ -422,7 +394,7 @@ where
     /// Returns the frequency estimate for the provided value.
     #[inline(always)]
     pub fn estimate(&self, value: &SketchInput) -> f64 {
-        let hashed_val = self.counts.hash_for_matrix(value);
+        let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts
             .fast_query_median(&hashed_val, |val, row, hash| {
                 let sign = hash.sign_for_row(row);
@@ -437,7 +409,7 @@ where
     /// Inserts an observation using a pre-computed hash value.
     /// Hash value can be reused with other sketches.
     #[inline(always)]
-    pub fn fast_insert_with_hash_value(&mut self, hashed_val: &S::HashValueType) {
+    pub fn fast_insert_with_hash_value(&mut self, hashed_val: &H::HashType) {
         self.counts.fast_insert(
             |counter, value, row| {
                 let sign = hashed_val.sign_for_row(row);
@@ -450,11 +422,7 @@ where
     }
 
     #[inline(always)]
-    pub fn fast_insert_many_with_hash_value(
-        &mut self,
-        hashed_val: &S::HashValueType,
-        many: S::Counter,
-    ) {
+    pub fn fast_insert_many_with_hash_value(&mut self, hashed_val: &H::HashType, many: S::Counter) {
         self.counts.fast_insert(
             |counter, value, row| {
                 let sign = hashed_val.sign_for_row(row);
@@ -468,7 +436,7 @@ where
 
     /// Returns the frequency estimate using a pre-computed hash value.
     #[inline(always)]
-    pub fn fast_estimate_with_hash(&self, hashed_val: &S::HashValueType) -> f64 {
+    pub fn fast_estimate_with_hash(&self, hashed_val: &H::HashType) -> f64 {
         self.counts.fast_query_median(hashed_val, |val, row, hash| {
             let sign = hash.sign_for_row(row);
             if sign > 0 {
@@ -1093,7 +1061,9 @@ mod tests {
 
         for i in 0..10 {
             let value = SketchInput::I32(i);
-            let hash = storage.hash_for_matrix(&value);
+            let hash = <Vector2D<i32> as FastPathHasher<DefaultXxHasher>>::hash_for_matrix(
+                storage, &value,
+            );
             for row in 0..rows {
                 let hashed = hash.row_hash(row, mask_bits, mask);
                 let col = (hashed % cols as u128) as usize;

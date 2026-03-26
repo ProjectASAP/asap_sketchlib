@@ -4,11 +4,10 @@ use rmp_serde::{
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use crate::FastPathHasher;
 use crate::{
-    DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath, FixedMatrix,
-    MatrixHashType, MatrixStorage, NitroTarget, QuickMatrixI64, QuickMatrixI128, RegularPath,
-    SketchHasher, SketchInput, Vector2D, hash64_seeded, hash128_seeded,
+    DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
+    FastPathHasher, FixedMatrix, MatrixStorage, NitroTarget, QuickMatrixI64, QuickMatrixI128,
+    RegularPath, SketchHasher, SketchInput, Vector2D,
 };
 
 const DEFAULT_ROW_NUM: usize = 3;
@@ -328,65 +327,24 @@ where
 /// Count-Min sketch with floating-point counters (no integer rounding).
 pub type CountMinF64<H = DefaultXxHasher> = CountMin<Vector2D<f64>, RegularPath, H>;
 
-trait FastPathSeedHash: Sized {
-    fn hash_seed0(value: &SketchInput) -> Self;
-}
-
-impl FastPathSeedHash for u64 {
-    #[inline(always)]
-    fn hash_seed0(value: &SketchInput) -> Self {
-        hash64_seeded(0, value)
-    }
-}
-
-impl FastPathSeedHash for u128 {
-    #[inline(always)]
-    fn hash_seed0(value: &SketchInput) -> Self {
-        hash128_seeded(0, value)
-    }
-}
-
-// Fast-path hashing adapter for Vector2D.
-impl<T> FastPathHasher for Vector2D<T>
-where
-    T: Copy + std::ops::AddAssign,
-{
-    #[inline(always)]
-    fn hash_for_matrix(&self, value: &SketchInput) -> MatrixHashType {
-        Vector2D::hash_for_matrix(self, value)
-    }
-}
-
-// Fast-path hashing adapter for primitive packed-hash storage.
-impl<S> FastPathHasher for S
-where
-    S: MatrixStorage,
-    S::HashValueType: FastPathSeedHash,
-{
-    #[inline(always)]
-    fn hash_for_matrix(&self, value: &SketchInput) -> S::HashValueType {
-        S::HashValueType::hash_seed0(value)
-    }
-}
-
 // SketchInput adapters for the fast-path Count-Min update rule.
 // Fast-path CountMin operations using precomputed hashes. Uses PartialOrd for f64 support.
 impl<S, H: SketchHasher> CountMin<S, FastPath, H>
 where
-    S: MatrixStorage + FastPathHasher,
+    S: MatrixStorage + crate::FastPathHasher<H>,
     S::Counter: Copy + PartialOrd + From<i32> + std::ops::AddAssign,
 {
     /// Inserts an observation using the combined hash optimization.
     #[inline(always)]
     pub fn insert(&mut self, value: &SketchInput) {
-        let hashed_val = self.counts.hash_for_matrix(value);
+        let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts
             .fast_insert(|a, b, _| *a += *b, S::Counter::from(1), &hashed_val);
     }
 
     #[inline(always)]
     pub fn insert_many(&mut self, value: &SketchInput, many: S::Counter) {
-        let hashed_val = self.counts.hash_for_matrix(value);
+        let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts
             .fast_insert(|a, b, _| *a += *b, many, &hashed_val);
     }
@@ -410,7 +368,7 @@ where
     /// Returns the frequency estimate for the provided value.
     #[inline(always)]
     pub fn estimate(&self, value: &SketchInput) -> S::Counter {
-        let hashed_val = self.counts.hash_for_matrix(value);
+        let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts.fast_query_min(&hashed_val, |val, _, _| *val)
     }
 }
@@ -424,25 +382,21 @@ where
     /// Inserts an observation using the combined hash optimization.
     /// Hash value can be reused with other sketches.
     #[inline(always)]
-    pub fn fast_insert_with_hash_value(&mut self, hashed_val: &S::HashValueType) {
+    pub fn fast_insert_with_hash_value(&mut self, hashed_val: &H::HashType) {
         self.counts
             .fast_insert(|a, b, _| *a += *b, S::Counter::from(1), hashed_val);
     }
 
     #[inline(always)]
     /// Inserts multiple observations using a pre-computed hash value.
-    pub fn fast_insert_many_with_hash_value(
-        &mut self,
-        hashed_val: &S::HashValueType,
-        many: S::Counter,
-    ) {
+    pub fn fast_insert_many_with_hash_value(&mut self, hashed_val: &H::HashType, many: S::Counter) {
         self.counts
             .fast_insert(|a, b, _| *a += *b, many, hashed_val);
     }
 
     /// Inserts a batch of observations using pre-computed hash values.
     #[inline(always)]
-    pub fn bulk_insert_with_hashes(&mut self, hashes: &[S::HashValueType]) {
+    pub fn bulk_insert_with_hashes(&mut self, hashes: &[H::HashType]) {
         for hashed_val in hashes {
             self.fast_insert_with_hash_value(hashed_val);
         }
@@ -450,7 +404,7 @@ where
 
     /// Inserts a batch of observations with per-item counts using pre-computed hash values.
     #[inline(always)]
-    pub fn bulk_insert_many_with_hashes(&mut self, hashes: &[(S::HashValueType, S::Counter)]) {
+    pub fn bulk_insert_many_with_hashes(&mut self, hashes: &[(H::HashType, S::Counter)]) {
         for (hashed_val, many) in hashes {
             self.fast_insert_many_with_hash_value(hashed_val, *many);
         }
@@ -458,7 +412,7 @@ where
 
     /// Returns the frequency estimate using a pre-computed hash value.
     #[inline(always)]
-    pub fn fast_estimate_with_hash(&self, hashed_val: &S::HashValueType) -> S::Counter {
+    pub fn fast_estimate_with_hash(&self, hashed_val: &H::HashType) -> S::Counter {
         self.counts.fast_query_min(hashed_val, |val, _, _| *val)
     }
 }
@@ -494,7 +448,7 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
 
     /// Returns the median estimate using a fast-path matrix hash.
     pub fn nitro_estimate(&self, value: &SketchInput) -> f64 {
-        let hashed_val = self.counts.hash_for_matrix(value);
+        let hashed_val = <Vector2D<i32> as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts
             .fast_query_median(&hashed_val, |val, _, _| (*val) as f64)
     }
@@ -518,10 +472,10 @@ impl<H: SketchHasher> NitroTarget for CountMin<Vector2D<i32>, FastPath, H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SketchInput;
     use crate::test_utils::{
         all_counter_zero_i32, counter_index, sample_uniform_f64, sample_zipf_u64,
     };
+    use crate::{SketchInput, hash64_seeded};
     use core::f64;
     use std::collections::HashMap;
 

@@ -11,7 +11,7 @@ pub mod heap;
 pub use heap::{CommonHeap, CommonHeapOrder, KeepLargest, KeepSmallest};
 
 pub mod matrix_storage;
-pub use matrix_storage::{FastPathHasher, MatrixHashType, MatrixStorage};
+pub use matrix_storage::{FastPathHasher, MatrixFastHash, MatrixHashType, MatrixStorage};
 
 pub mod fixed_structure;
 pub use fixed_structure::{

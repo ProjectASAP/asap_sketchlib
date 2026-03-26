@@ -97,23 +97,15 @@ impl HllBucketList {
 
 #[macro_export]
 macro_rules! impl_fixed_matrix {
-    ($name:ident, $counter:ty, $rows:literal, $cols:literal, $hash_ty:ty) => {
+    ($name:ident, $counter:ty, $rows:literal, $cols:literal) => {
         #[derive(Clone, Debug)]
         pub struct $name {
             pub data: Box<[$counter; $rows * $cols]>,
         }
 
         impl $name {
-            const MASK_BITS: usize = {
-                let mut bits = 0usize;
-                let mut value = 1usize;
-                while value < $cols {
-                    value <<= 1;
-                    bits += 1;
-                }
-                bits
-            };
-            const MASK: $hash_ty = ((1 as $hash_ty) << Self::MASK_BITS) - 1;
+            const ROWS: usize = $rows;
+            const COLS: usize = $cols;
         }
 
         impl Default for $name {
@@ -148,7 +140,6 @@ macro_rules! impl_fixed_matrix {
 
         impl $crate::MatrixStorage for $name {
             type Counter = $counter;
-            type HashValueType = $hash_ty;
 
             #[inline(always)]
             fn rows(&self) -> usize {
@@ -176,35 +167,32 @@ macro_rules! impl_fixed_matrix {
             }
 
             #[inline(always)]
-            fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: &$hash_ty)
+            fn fast_insert<Hash, F, V>(&mut self, op: F, value: V, hashed_val: &Hash)
             where
+                Hash: $crate::MatrixFastHash,
                 F: Fn(&mut Self::Counter, &V, usize),
                 V: Clone,
             {
-                let hashed_val = *hashed_val;
                 for row in 0..$rows {
-                    let hashed = (hashed_val >> (Self::MASK_BITS * row)) & Self::MASK;
-                    let col = (hashed as usize) % $cols;
+                    let col = hashed_val.col_for_row(row, $cols);
                     let idx = row * $cols + col;
                     op(&mut self.data[idx], &value, row);
                 }
             }
 
             #[inline(always)]
-            fn fast_query_min<F, R>(&self, hashed_val: &$hash_ty, op: F) -> R
+            fn fast_query_min<Hash, F, R>(&self, hashed_val: &Hash, op: F) -> R
             where
-                F: Fn(&Self::Counter, usize, &$hash_ty) -> R,
+                Hash: $crate::MatrixFastHash,
+                F: Fn(&Self::Counter, usize, &Hash) -> R,
                 R: PartialOrd,
             {
-                let hashed_val = *hashed_val;
-                let hashed = hashed_val & Self::MASK;
-                let col = (hashed as usize) % $cols;
-                let mut min = op(&self.data[col], 0, &hashed_val);
+                let col = hashed_val.col_for_row(0, $cols);
+                let mut min = op(&self.data[col], 0, hashed_val);
                 for row in 1..$rows {
-                    let hashed = (hashed_val >> (Self::MASK_BITS * row)) & Self::MASK;
-                    let col = (hashed as usize) % $cols;
+                    let col = hashed_val.col_for_row(row, $cols);
                     let idx = row * $cols + col;
-                    let candidate = op(&self.data[idx], row, &hashed_val);
+                    let candidate = op(&self.data[idx], row, hashed_val);
                     if candidate < min {
                         min = candidate;
                     }
@@ -213,17 +201,16 @@ macro_rules! impl_fixed_matrix {
             }
 
             #[inline(always)]
-            fn fast_query_median<F>(&self, hashed_val: &$hash_ty, op: F) -> f64
+            fn fast_query_median<Hash, F>(&self, hashed_val: &Hash, op: F) -> f64
             where
-                F: Fn(&Self::Counter, usize, &$hash_ty) -> f64,
+                Hash: $crate::MatrixFastHash,
+                F: Fn(&Self::Counter, usize, &Hash) -> f64,
             {
-                let hashed_val = *hashed_val;
                 let mut estimates = Vec::with_capacity($rows);
                 for row in 0..$rows {
-                    let hashed = (hashed_val >> (Self::MASK_BITS * row)) & Self::MASK;
-                    let col = (hashed as usize) % $cols;
+                    let col = hashed_val.col_for_row(row, $cols);
                     let idx = row * $cols + col;
-                    estimates.push(op(&self.data[idx], row, &hashed_val));
+                    estimates.push(op(&self.data[idx], row, hashed_val));
                 }
                 $crate::compute_median_inline_f64(&mut estimates)
             }
@@ -233,16 +220,27 @@ macro_rules! impl_fixed_matrix {
                 self.data[row * $cols + col]
             }
         }
+
+        impl<H> $crate::FastPathHasher<H> for $name
+        where
+            H: $crate::SketchHasher,
+        {
+            #[inline(always)]
+            fn hash_for_matrix(&self, value: &$crate::SketchInput) -> H::HashType {
+                <H::HashType as $crate::MatrixFastHash>::assert_compatible(Self::ROWS, Self::COLS);
+                H::hash_for_matrix_seeded(0, Self::ROWS, Self::COLS, value)
+            }
+        }
     };
 }
 
-impl_fixed_matrix!(QuickMatrixI32, i32, 5, 2048, u64);
-impl_fixed_matrix!(QuickMatrixI64, i64, 5, 2048, u64);
-impl_fixed_matrix!(QuickMatrixI128, i128, 5, 2048, u64);
+impl_fixed_matrix!(QuickMatrixI32, i32, 5, 2048);
+impl_fixed_matrix!(QuickMatrixI64, i64, 5, 2048);
+impl_fixed_matrix!(QuickMatrixI128, i128, 5, 2048);
 
-impl_fixed_matrix!(DefaultMatrixI32, i32, 3, 4096, u64);
-impl_fixed_matrix!(DefaultMatrixI64, i64, 3, 4096, u64);
-impl_fixed_matrix!(DefaultMatrixI128, i128, 3, 4096, u64);
+impl_fixed_matrix!(DefaultMatrixI32, i32, 3, 4096);
+impl_fixed_matrix!(DefaultMatrixI64, i64, 3, 4096);
+impl_fixed_matrix!(DefaultMatrixI128, i128, 3, 4096);
 
 /// Backward compatibility: FixedMatrix = QuickMatrixI32.
 pub type FixedMatrix = QuickMatrixI32;

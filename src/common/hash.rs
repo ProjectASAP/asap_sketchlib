@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use twox_hash::{XxHash3_64, XxHash3_128};
 
-use super::{HeapItem, MatrixHashType, SketchInput};
+use super::{HeapItem, MatrixFastHash, MatrixHashType, SketchInput};
 use smallvec::SmallVec;
 
 pub const CANONICAL_HASH_SEED: usize = 5; // 18 and 19 will cause hll test to fail...? is 5 faster...?
@@ -43,10 +43,19 @@ fn normalized_seed_idx(d: usize) -> usize {
 /// All methods are static (no `&self`) to enable zero-cost monomorphization.
 /// Implement this trait to inject a custom hash algorithm into any sketch struct.
 pub trait SketchHasher: Clone + Debug {
+    type HashType: MatrixFastHash + Clone + Debug;
+
     fn hash64_seeded(d: usize, key: &SketchInput) -> u64;
     fn hash128_seeded(d: usize, key: &SketchInput) -> u128;
     fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64;
     fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128;
+
+    fn hash_for_matrix_seeded(
+        seed_idx: usize,
+        rows: usize,
+        cols: usize,
+        key: &SketchInput,
+    ) -> Self::HashType;
 }
 
 /// Default hasher using twox_hash (XxHash3). This is the built-in implementation
@@ -55,6 +64,8 @@ pub trait SketchHasher: Clone + Debug {
 pub struct DefaultXxHasher;
 
 impl SketchHasher for DefaultXxHasher {
+    type HashType = MatrixHashType;
+
     #[inline(always)]
     fn hash64_seeded(d: usize, key: &SketchInput) -> u64 {
         let seed = SEEDLIST[normalized_seed_idx(d)];
@@ -157,6 +168,16 @@ impl SketchHasher for DefaultXxHasher {
             HeapItem::U128(u) => XxHash3_64::oneshot_with_seed(seed, &(*u).to_ne_bytes()),
             HeapItem::USIZE(u) => XxHash3_64::oneshot_with_seed(seed, &(*u as u64).to_ne_bytes()),
         }
+    }
+
+    #[inline(always)]
+    fn hash_for_matrix_seeded(
+        seed_idx: usize,
+        rows: usize,
+        cols: usize,
+        key: &SketchInput,
+    ) -> Self::HashType {
+        hash_for_matrix_seeded_generic::<Self>(seed_idx, rows, cols, key)
     }
 }
 
@@ -302,6 +323,72 @@ mod tests {
     use crate::test_utils::{sample_uniform_f64, sample_zipf_u64};
     use std::collections::HashSet;
 
+    #[derive(Clone, Debug)]
+    struct Packed64Hasher;
+
+    impl SketchHasher for Packed64Hasher {
+        type HashType = u64;
+
+        fn hash64_seeded(d: usize, key: &SketchInput) -> u64 {
+            DefaultXxHasher::hash64_seeded(d, key)
+        }
+
+        fn hash128_seeded(d: usize, key: &SketchInput) -> u128 {
+            DefaultXxHasher::hash128_seeded(d, key)
+        }
+
+        fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
+            DefaultXxHasher::hash_item64_seeded(d, key)
+        }
+
+        fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
+            DefaultXxHasher::hash_item128_seeded(d, key)
+        }
+
+        fn hash_for_matrix_seeded(
+            seed_idx: usize,
+            rows: usize,
+            cols: usize,
+            key: &SketchInput,
+        ) -> Self::HashType {
+            <u64 as MatrixFastHash>::assert_compatible(rows, cols);
+            DefaultXxHasher::hash64_seeded(seed_idx, key)
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct Packed128Hasher;
+
+    impl SketchHasher for Packed128Hasher {
+        type HashType = u128;
+
+        fn hash64_seeded(d: usize, key: &SketchInput) -> u64 {
+            DefaultXxHasher::hash64_seeded(d, key)
+        }
+
+        fn hash128_seeded(d: usize, key: &SketchInput) -> u128 {
+            DefaultXxHasher::hash128_seeded(d, key)
+        }
+
+        fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
+            DefaultXxHasher::hash_item64_seeded(d, key)
+        }
+
+        fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
+            DefaultXxHasher::hash_item128_seeded(d, key)
+        }
+
+        fn hash_for_matrix_seeded(
+            seed_idx: usize,
+            rows: usize,
+            cols: usize,
+            key: &SketchInput,
+        ) -> Self::HashType {
+            <u128 as MatrixFastHash>::assert_compatible(rows, cols);
+            DefaultXxHasher::hash128_seeded(seed_idx, key)
+        }
+    }
+
     // Test: ensures the hash collision is not likely to happen
     // the input cardinality should be roughly the same with cardinality of hashed value
     #[test]
@@ -375,5 +462,28 @@ mod tests {
             hash128_seeded(SEEDLIST.len() + CANONICAL_HASH_SEED, &key),
             hash128_seeded(CANONICAL_HASH_SEED, &key)
         );
+    }
+
+    #[test]
+    fn packed64_hasher_accepts_compatible_dimensions() {
+        let key = SketchInput::U64(7);
+        let hash = Packed64Hasher::hash_for_matrix_seeded(0, 3, 4096, &key);
+        assert_eq!(hash, DefaultXxHasher::hash64_seeded(0, &key));
+    }
+
+    #[test]
+    fn packed128_hasher_accepts_larger_dimensions() {
+        let key = SketchInput::U64(11);
+        let hash = Packed128Hasher::hash_for_matrix_seeded(0, 8, 4096, &key);
+        assert_eq!(hash, DefaultXxHasher::hash128_seeded(0, &key));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SketchHasher hash type u64 cannot represent fast-path hash for rows=8, cols=4096; use u128 or MatrixHashType"
+    )]
+    fn packed64_hasher_rejects_oversized_dimensions() {
+        let key = SketchInput::U64(19);
+        let _ = Packed64Hasher::hash_for_matrix_seeded(0, 8, 4096, &key);
     }
 }

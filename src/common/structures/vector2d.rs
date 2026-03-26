@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 
 use crate::{
-    MatrixHashMode, MatrixHashType, MatrixStorage, Nitro, SketchInput, compute_median_inline_f64,
-    hash_for_matrix_seeded_with_mode, hash_mode_for_matrix,
+    FastPathHasher, MatrixFastHash, MatrixHashType, MatrixStorage, Nitro, SketchHasher,
+    SketchInput, compute_median_inline_f64,
 };
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
 #[derive(Clone, Debug, Serialize)]
@@ -13,13 +13,11 @@ pub struct Vector2D<T> {
     cols: usize,
     mask_bits: u32,
     mask: u128,
-    #[serde(skip)]
-    hash_mode: MatrixHashMode,
     nitro: Nitro,
 }
 
 // Helper type for deserialization: we only read stored fields and recompute
-// derived ones (mask_bits, mask, hash_mode) from rows/cols.
+// derived ones (mask_bits, mask) from rows/cols.
 #[derive(Deserialize)]
 struct Vector2DDeserialize<T> {
     data: Vec<T>,
@@ -44,14 +42,12 @@ where
             input.cols.ilog2() + 1
         };
         let mask = (1u128 << mask_bits) - 1;
-        let hash_mode = hash_mode_for_matrix(input.rows, input.cols);
         Ok(Self {
             data: input.data,
             rows: input.rows,
             cols: input.cols,
             mask_bits,
             mask,
-            hash_mode,
             nitro: input.nitro,
         })
     }
@@ -68,14 +64,12 @@ impl<T> Vector2D<T> {
             cols.ilog2() + 1
         };
         let mask = (1u128 << mask_bits) - 1;
-        let hash_mode = hash_mode_for_matrix(rows, cols);
         Self {
             data: Vec::with_capacity(rows * cols),
             rows,
             cols,
             mask_bits,
             mask,
-            hash_mode,
             nitro: Nitro::default(),
         }
     }
@@ -93,7 +87,6 @@ impl<T> Vector2D<T> {
             cols.ilog2() + 1
         };
         let mask = (1u128 << mask_bits) - 1;
-        let hash_mode = hash_mode_for_matrix(rows, cols);
         let mut data = Vec::with_capacity(rows * cols);
         for r in 0..rows {
             for c in 0..cols {
@@ -106,7 +99,6 @@ impl<T> Vector2D<T> {
             cols,
             mask_bits,
             mask,
-            hash_mode,
             nitro: Nitro::default(),
         }
     }
@@ -154,28 +146,8 @@ impl<T> Vector2D<T> {
     }
 
     #[inline(always)]
-    fn col_for_row(&self, hashed_val: &MatrixHashType, row: usize) -> usize {
-        match hashed_val {
-            MatrixHashType::Packed64(h) => {
-                ((*h >> (self.mask_bits * row as u32)) as u128 & self.mask) as usize
-            }
-            MatrixHashType::Packed128(h) => {
-                ((*h >> (self.mask_bits * row as u32)) & self.mask) as usize
-            }
-            MatrixHashType::Rows(small_vec) => {
-                debug_assert!(
-                    row < small_vec.len(),
-                    "row index out of bounds for hash rows"
-                );
-                ((small_vec[row] as u128) & self.mask) as usize
-            }
-        }
-    }
-
-    /// Hashes a sketch input using the cached hash mode for this matrix.
-    #[inline(always)]
-    pub fn hash_for_matrix(&self, value: &SketchInput) -> MatrixHashType {
-        hash_for_matrix_seeded_with_mode(0, self.hash_mode, self.rows, value)
+    fn col_for_row<Hash: MatrixFastHash>(&self, hashed_val: &Hash, row: usize) -> usize {
+        hashed_val.col_for_row(row, self.cols)
     }
 
     /// Returns the number of rows.
@@ -305,8 +277,9 @@ impl<T> Vector2D<T> {
     /// }, 1i64, &hash);
     /// ```
     #[inline(always)]
-    pub fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: &MatrixHashType)
+    pub fn fast_insert<Hash, F, V>(&mut self, op: F, value: V, hashed_val: &Hash)
     where
+        Hash: MatrixFastHash,
         F: Fn(&mut T, &V, usize),
         V: Clone,
     {
@@ -381,9 +354,10 @@ impl<T> Vector2D<T> {
     /// # let _ = min;
     /// ```
     #[inline(always)]
-    pub fn fast_query_min<F, R>(&self, hashed_val: &MatrixHashType, op: F) -> R
+    pub fn fast_query_min<Hash, F, R>(&self, hashed_val: &Hash, op: F) -> R
     where
-        F: Fn(&T, usize, &MatrixHashType) -> R,
+        Hash: MatrixFastHash,
+        F: Fn(&T, usize, &Hash) -> R,
         R: PartialOrd,
     {
         let c0 = self.col_for_row(hashed_val, 0);
@@ -432,9 +406,10 @@ impl<T> Vector2D<T> {
     /// # let _ = median;
     /// ```
     #[inline(always)]
-    pub fn fast_query_median<F>(&self, hashed_val: &MatrixHashType, op: F) -> f64
+    pub fn fast_query_median<Hash, F>(&self, hashed_val: &Hash, op: F) -> f64
     where
-        F: Fn(&T, usize, &MatrixHashType) -> f64,
+        Hash: MatrixFastHash,
+        F: Fn(&T, usize, &Hash) -> f64,
     {
         let mut estimates = Vec::with_capacity(self.rows);
         for row in 0..self.rows {
@@ -712,7 +687,6 @@ where
     T: Copy + std::ops::AddAssign,
 {
     type Counter = T;
-    type HashValueType = MatrixHashType;
     #[inline(always)]
     fn rows(&self) -> usize {
         self.rows()
@@ -738,8 +712,9 @@ where
     }
 
     #[inline(always)]
-    fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: &MatrixHashType)
+    fn fast_insert<Hash, F, V>(&mut self, op: F, value: V, hashed_val: &Hash)
     where
+        Hash: MatrixFastHash,
         F: Fn(&mut Self::Counter, &V, usize),
         V: Clone,
     {
@@ -747,18 +722,20 @@ where
     }
 
     #[inline(always)]
-    fn fast_query_min<F, R>(&self, hashed_val: &MatrixHashType, op: F) -> R
+    fn fast_query_min<Hash, F, R>(&self, hashed_val: &Hash, op: F) -> R
     where
-        F: Fn(&Self::Counter, usize, &MatrixHashType) -> R,
+        Hash: MatrixFastHash,
+        F: Fn(&Self::Counter, usize, &Hash) -> R,
         R: PartialOrd,
     {
         self.fast_query_min(hashed_val, op)
     }
 
     #[inline(always)]
-    fn fast_query_median<F>(&self, hashed_val: &MatrixHashType, op: F) -> f64
+    fn fast_query_median<Hash, F>(&self, hashed_val: &Hash, op: F) -> f64
     where
-        F: Fn(&Self::Counter, usize, &MatrixHashType) -> f64,
+        Hash: MatrixFastHash,
+        F: Fn(&Self::Counter, usize, &Hash) -> f64,
     {
         self.fast_query_median(hashed_val, op)
     }
@@ -766,6 +743,18 @@ where
     #[inline(always)]
     fn query_one_counter(&self, row: usize, col: usize) -> Self::Counter {
         self.query_one_counter(row, col)
+    }
+}
+
+impl<T, H> FastPathHasher<H> for Vector2D<T>
+where
+    T: Copy + std::ops::AddAssign,
+    H: SketchHasher,
+{
+    #[inline(always)]
+    fn hash_for_matrix(&self, value: &SketchInput) -> H::HashType {
+        H::HashType::assert_compatible(self.rows, self.cols);
+        H::hash_for_matrix_seeded(0, self.rows, self.cols, value)
     }
 }
 

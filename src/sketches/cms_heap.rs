@@ -255,7 +255,7 @@ where
 
 impl<S, H: SketchHasher> CMSHeap<S, FastPath, H>
 where
-    S: MatrixStorage + crate::FastPathHasher,
+    S: MatrixStorage + crate::FastPathHasher<H>,
     S::Counter: Copy + Ord + From<i32> + Into<i64> + std::ops::AddAssign,
 {
     /// Inserts a single observation using fast-path hashing and updates the heap.

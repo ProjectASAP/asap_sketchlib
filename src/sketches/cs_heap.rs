@@ -4,7 +4,7 @@
 //! Every insertion updates both the frequency sketch and the heap, mirroring
 //! the pattern used by [`CMSHeap`] but with Count Sketch (median estimator).
 
-use crate::sketches::count::{CountSketchCounter, FastPathSign};
+use crate::sketches::count::CountSketchCounter;
 use crate::{
     Count, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FixedMatrix, HHHeap, MatrixStorage, QuickMatrixI64, QuickMatrixI128, RegularPath, SketchHasher,
@@ -262,9 +262,8 @@ where
 
 impl<S, H: SketchHasher> CSHeap<S, FastPath, H>
 where
-    S: MatrixStorage + crate::FastPathHasher,
+    S: MatrixStorage + crate::FastPathHasher<H>,
     S::Counter: CountSketchCounter,
-    S::HashValueType: FastPathSign,
 {
     /// Inserts a single observation using fast-path hashing and updates the heap.
     #[inline]
