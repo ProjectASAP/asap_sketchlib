@@ -51,9 +51,103 @@ impl MatrixHashType {
     }
 }
 
+pub trait MatrixFastHash: Clone {
+    fn assert_compatible(rows: usize, cols: usize);
+    fn col_for_row(&self, row: usize, cols: usize) -> usize;
+    fn sign_for_row(&self, row: usize) -> i32;
+}
+
+impl MatrixFastHash for MatrixHashType {
+    #[inline(always)]
+    fn assert_compatible(_rows: usize, _cols: usize) {}
+
+    #[inline(always)]
+    fn col_for_row(&self, row: usize, cols: usize) -> usize {
+        let mask_bits = if cols.is_power_of_two() {
+            cols.ilog2()
+        } else {
+            cols.ilog2() + 1
+        };
+        let mask = (1u128 << mask_bits) - 1;
+        self.row_hash(row, mask_bits, mask) as usize % cols
+    }
+
+    #[inline(always)]
+    fn sign_for_row(&self, row: usize) -> i32 {
+        MatrixHashType::sign_for_row(self, row)
+    }
+}
+
+impl MatrixFastHash for u64 {
+    #[inline(always)]
+    fn assert_compatible(rows: usize, cols: usize) {
+        let mask_bits = if cols.is_power_of_two() {
+            cols.ilog2() as usize
+        } else {
+            cols.ilog2() as usize + 1
+        };
+        let bits_per_row = mask_bits + 1;
+        let bits_required = bits_per_row.saturating_mul(rows);
+        assert!(
+            bits_required <= 64,
+            "SketchHasher hash type u64 cannot represent fast-path hash for rows={rows}, cols={cols}; use u128 or MatrixHashType"
+        );
+    }
+
+    #[inline(always)]
+    fn col_for_row(&self, row: usize, cols: usize) -> usize {
+        let mask_bits = if cols.is_power_of_two() {
+            cols.ilog2() as usize
+        } else {
+            cols.ilog2() as usize + 1
+        };
+        let mask = (1u64 << mask_bits) - 1;
+        ((*self >> (mask_bits * row)) & mask) as usize % cols
+    }
+
+    #[inline(always)]
+    fn sign_for_row(&self, row: usize) -> i32 {
+        let bit = (self >> (63 - row)) & 1;
+        (bit as i32 * 2) - 1
+    }
+}
+
+impl MatrixFastHash for u128 {
+    #[inline(always)]
+    fn assert_compatible(rows: usize, cols: usize) {
+        let mask_bits = if cols.is_power_of_two() {
+            cols.ilog2() as usize
+        } else {
+            cols.ilog2() as usize + 1
+        };
+        let bits_per_row = mask_bits + 1;
+        let bits_required = bits_per_row.saturating_mul(rows);
+        assert!(
+            bits_required <= 128,
+            "SketchHasher hash type u128 cannot represent fast-path hash for rows={rows}, cols={cols}; use MatrixHashType"
+        );
+    }
+
+    #[inline(always)]
+    fn col_for_row(&self, row: usize, cols: usize) -> usize {
+        let mask_bits = if cols.is_power_of_two() {
+            cols.ilog2() as usize
+        } else {
+            cols.ilog2() as usize + 1
+        };
+        let mask = (1u128 << mask_bits) - 1;
+        ((*self >> (mask_bits * row)) & mask) as usize % cols
+    }
+
+    #[inline(always)]
+    fn sign_for_row(&self, row: usize) -> i32 {
+        let bit = (self >> (127 - row)) & 1;
+        (bit as i32 * 2) - 1
+    }
+}
+
 pub trait MatrixStorage {
     type Counter: Clone;
-    type HashValueType;
     fn rows(&self) -> usize;
     fn cols(&self) -> usize;
 
@@ -63,23 +157,29 @@ pub trait MatrixStorage {
 
     fn increment_by_row(&mut self, row: usize, col: usize, value: Self::Counter);
 
-    fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: &Self::HashValueType)
+    fn fast_insert<Hash, F, V>(&mut self, op: F, value: V, hashed_val: &Hash)
     where
+        Hash: MatrixFastHash,
         F: Fn(&mut Self::Counter, &V, usize),
         V: Clone;
 
-    fn fast_query_min<F, R>(&self, hashed_val: &Self::HashValueType, op: F) -> R
+    fn fast_query_min<Hash, F, R>(&self, hashed_val: &Hash, op: F) -> R
     where
-        F: Fn(&Self::Counter, usize, &Self::HashValueType) -> R,
+        Hash: MatrixFastHash,
+        F: Fn(&Self::Counter, usize, &Hash) -> R,
         R: PartialOrd;
 
-    fn fast_query_median<F>(&self, hashed_val: &Self::HashValueType, op: F) -> f64
+    fn fast_query_median<Hash, F>(&self, hashed_val: &Hash, op: F) -> f64
     where
-        F: Fn(&Self::Counter, usize, &Self::HashValueType) -> f64;
+        Hash: MatrixFastHash,
+        F: Fn(&Self::Counter, usize, &Hash) -> f64;
 
     fn query_one_counter(&self, row: usize, col: usize) -> Self::Counter;
 }
 
-pub trait FastPathHasher: MatrixStorage {
-    fn hash_for_matrix(&self, value: &SketchInput) -> Self::HashValueType;
+pub trait FastPathHasher<H>: MatrixStorage
+where
+    H: crate::SketchHasher,
+{
+    fn hash_for_matrix(&self, value: &SketchInput) -> H::HashType;
 }

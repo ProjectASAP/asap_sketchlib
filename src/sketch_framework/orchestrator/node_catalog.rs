@@ -260,20 +260,90 @@ impl FreqSketch {
                 mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
                 seed_idx: 0,
             }),
-            FreqSketch::CountMinFixed(_)
-            | FreqSketch::CountFixed(_)
-            | FreqSketch::CountMinDefaultI32Fast(_)
-            | FreqSketch::CountMinDefaultI64Fast(_)
-            | FreqSketch::CountMinDefaultI128Fast(_)
-            | FreqSketch::CountMinQuickI32Fast(_)
-            | FreqSketch::CountMinQuickI64Fast(_)
-            | FreqSketch::CountMinQuickI128Fast(_)
-            | FreqSketch::CountDefaultI32Fast(_)
-            | FreqSketch::CountDefaultI64Fast(_)
-            | FreqSketch::CountDefaultI128Fast(_)
-            | FreqSketch::CountQuickI32Fast(_)
-            | FreqSketch::CountQuickI64Fast(_)
-            | FreqSketch::CountQuickI128Fast(_) => Some(HashDomain::FastPath64 { seed_idx: 0 }),
+            FreqSketch::CountMinFixed(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountFixed(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountMinDefaultI32Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountMinDefaultI64Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountMinDefaultI128Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountMinQuickI32Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountMinQuickI64Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountMinQuickI128Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountDefaultI32Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountDefaultI64Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountDefaultI128Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountQuickI32Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountQuickI64Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
+            FreqSketch::CountQuickI128Fast(sketch) => Some(HashDomain::Matrix {
+                rows: sketch.rows(),
+                cols: sketch.cols(),
+                mode: hash_mode_for_matrix(sketch.rows(), sketch.cols()),
+                seed_idx: 0,
+            }),
             _ => None,
         }
     }
@@ -386,44 +456,44 @@ impl FreqSketch {
             (FreqSketch::CountV2I128Fast(cs), HashValue::Matrix(h)) => {
                 Ok(cs.fast_estimate_with_hash(h))
             }
-            (FreqSketch::CountMinFixed(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinFixed(cm), HashValue::Matrix(h)) => {
                 Ok(cm.fast_estimate_with_hash(h) as f64)
             }
-            (FreqSketch::CountMinDefaultI32Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinDefaultI32Fast(cm), HashValue::Matrix(h)) => {
                 Ok(cm.fast_estimate_with_hash(h) as f64)
             }
-            (FreqSketch::CountMinDefaultI64Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinDefaultI64Fast(cm), HashValue::Matrix(h)) => {
                 Ok(cm.fast_estimate_with_hash(h) as f64)
             }
-            (FreqSketch::CountMinDefaultI128Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinDefaultI128Fast(cm), HashValue::Matrix(h)) => {
                 Ok(cm.fast_estimate_with_hash(h) as f64)
             }
-            (FreqSketch::CountMinQuickI32Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinQuickI32Fast(cm), HashValue::Matrix(h)) => {
                 Ok(cm.fast_estimate_with_hash(h) as f64)
             }
-            (FreqSketch::CountMinQuickI64Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinQuickI64Fast(cm), HashValue::Matrix(h)) => {
                 Ok(cm.fast_estimate_with_hash(h) as f64)
             }
-            (FreqSketch::CountMinQuickI128Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinQuickI128Fast(cm), HashValue::Matrix(h)) => {
                 Ok(cm.fast_estimate_with_hash(h) as f64)
             }
-            (FreqSketch::CountFixed(cs), HashValue::Fast64(h)) => Ok(cs.fast_estimate_with_hash(h)),
-            (FreqSketch::CountDefaultI32Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountFixed(cs), HashValue::Matrix(h)) => Ok(cs.fast_estimate_with_hash(h)),
+            (FreqSketch::CountDefaultI32Fast(cs), HashValue::Matrix(h)) => {
                 Ok(cs.fast_estimate_with_hash(h))
             }
-            (FreqSketch::CountDefaultI64Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountDefaultI64Fast(cs), HashValue::Matrix(h)) => {
                 Ok(cs.fast_estimate_with_hash(h))
             }
-            (FreqSketch::CountDefaultI128Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountDefaultI128Fast(cs), HashValue::Matrix(h)) => {
                 Ok(cs.fast_estimate_with_hash(h))
             }
-            (FreqSketch::CountQuickI32Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountQuickI32Fast(cs), HashValue::Matrix(h)) => {
                 Ok(cs.fast_estimate_with_hash(h))
             }
-            (FreqSketch::CountQuickI64Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountQuickI64Fast(cs), HashValue::Matrix(h)) => {
                 Ok(cs.fast_estimate_with_hash(h))
             }
-            (FreqSketch::CountQuickI128Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountQuickI128Fast(cs), HashValue::Matrix(h)) => {
                 Ok(cs.fast_estimate_with_hash(h))
             }
             _ => Err("Hash value type not supported"),
@@ -456,59 +526,59 @@ impl FreqSketch {
                 cs.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountMinFixed(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinFixed(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountMinDefaultI32Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinDefaultI32Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountMinDefaultI64Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinDefaultI64Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountMinDefaultI128Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinDefaultI128Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountMinQuickI32Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinQuickI32Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountMinQuickI64Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinQuickI64Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountMinQuickI128Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinQuickI128Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountFixed(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountFixed(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountDefaultI32Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountDefaultI32Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountDefaultI64Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountDefaultI64Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountDefaultI128Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountDefaultI128Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountQuickI32Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountQuickI32Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountQuickI64Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountQuickI64Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 true
             }
-            (FreqSketch::CountQuickI128Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountQuickI128Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 true
             }
@@ -542,59 +612,59 @@ impl FreqSketch {
                 cs.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountMinFixed(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinFixed(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountMinDefaultI32Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinDefaultI32Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountMinDefaultI64Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinDefaultI64Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountMinDefaultI128Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinDefaultI128Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountMinQuickI32Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinQuickI32Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountMinQuickI64Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinQuickI64Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountMinQuickI128Fast(cm), HashValue::Fast64(h)) => {
+            (FreqSketch::CountMinQuickI128Fast(cm), HashValue::Matrix(h)) => {
                 cm.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountFixed(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountFixed(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountDefaultI32Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountDefaultI32Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountDefaultI64Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountDefaultI64Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountDefaultI128Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountDefaultI128Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountQuickI32Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountQuickI32Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountQuickI64Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountQuickI64Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 Ok(())
             }
-            (FreqSketch::CountQuickI128Fast(cs), HashValue::Fast64(h)) => {
+            (FreqSketch::CountQuickI128Fast(cs), HashValue::Matrix(h)) => {
                 cs.fast_insert_with_hash_value(h);
                 Ok(())
             }
