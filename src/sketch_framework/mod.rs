@@ -7,17 +7,12 @@ pub use eh_sketch_list::EHSketchList;
 pub use eh_sketch_list::SketchNorm;
 
 pub mod hashlayer;
-pub use hashlayer::HashLayer;
+pub use hashlayer::{HashLayer, HashLayerSketch};
 
-pub mod orchestrator;
-pub use orchestrator::node_catalog::{
-    CardinalitySketch, FreqSketch, GSumSketch, HashDomain, HashReuseSketch, HashValue,
-    OrchestratedSketch, OrchestratorInsert, OrchestratorQuery, OrchestratorSketch, QuantileSketch,
-    SubpopulationSketch, UnivMonQuery,
-};
-pub use orchestrator::{
-    EhNode, HashLayerNode, NitroNode, NodeInsert, NodeMeta, NodeQuery, NodeSelector, Orchestrator,
-    OrchestratorNode, SketchNode,
+pub mod sketch_catalog;
+pub use sketch_catalog::{
+    CardinalitySketch, FreqSketch, GSumSketch, HashReuseTag, HashValue, QuantileSketch,
+    SubpopulationSketch, SubquerySketch, UnivMonQuery,
 };
 
 pub mod hydra;
