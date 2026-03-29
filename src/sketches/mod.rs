@@ -25,12 +25,7 @@ pub mod kll;
 pub use kll::KLL;
 
 pub mod kmv;
-
-pub mod locher;
-// pub use locher::LocherSketch;
-
-pub mod microscope;
-pub use microscope::MicroScope;
+pub use kmv::KMV;
 
 pub mod uniform;
 pub use uniform::UniformSampling;
