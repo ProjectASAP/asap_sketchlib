@@ -1,12 +1,11 @@
-//! Sketch enum taxonomy and shared orchestration utilities.
-//! Defines capability-grouped sketch enums and hash fast-path helpers used by the sketch orchestrator.
+//! Sketch family enums and shared adapter traits.
+//! Groups sketches by capability and provides erased fast-path interfaces used by the framework.
 
 use crate::common::structure_utils::ToF64;
 use crate::sketches::count::CountSketchCounter;
 use crate::{
-    CANONICAL_HASH_SEED, Coco, Count, CountMin, DDSketch, DataFusion, FastPath, HyperLogLog,
-    HyperLogLogHIP, KLL, MatrixHashMode, MatrixHashType, Regular, RegularPath, SketchHasher,
-    SketchInput, UnivMon, hash_for_matrix_seeded_with_mode_generic, hash_mode_for_matrix,
+    Coco, Count, CountMin, DDSketch, DataFusion, FastPath, HyperLogLog, HyperLogLogHIP, KLL,
+    MatrixHashType, Regular, RegularPath, SketchHasher, SketchInput, UnivMon,
     hydra::MultiHeadHydra, sketch_framework::Hydra,
 };
 use std::ops::AddAssign;
@@ -19,51 +18,8 @@ pub enum UnivMonQuery {
     Entropy,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HashReuseTag {
-    MatrixPacked64 { seed_idx: usize },
-    MatrixPacked128 { seed_idx: usize },
-    MatrixRows { rows: usize, seed_idx: usize },
-    FastPath64 { seed_idx: usize },
-}
-
-impl HashReuseTag {
-    pub(crate) fn hash_for_input<H>(&self, input: &SketchInput) -> HashValue
-    where
-        H: SketchHasher<HashType = MatrixHashType>,
-    {
-        match *self {
-            HashReuseTag::MatrixPacked64 { seed_idx } => {
-                HashValue::Matrix(hash_for_matrix_seeded_with_mode_generic::<H>(
-                    seed_idx,
-                    MatrixHashMode::Packed64,
-                    1,
-                    input,
-                ))
-            }
-            HashReuseTag::MatrixPacked128 { seed_idx } => {
-                HashValue::Matrix(hash_for_matrix_seeded_with_mode_generic::<H>(
-                    seed_idx,
-                    MatrixHashMode::Packed128,
-                    1,
-                    input,
-                ))
-            }
-            HashReuseTag::MatrixRows { rows, seed_idx } => {
-                HashValue::Matrix(hash_for_matrix_seeded_with_mode_generic::<H>(
-                    seed_idx,
-                    MatrixHashMode::Rows,
-                    rows,
-                    input,
-                ))
-            }
-            HashReuseTag::FastPath64 { seed_idx } => {
-                HashValue::Fast64(H::hash64_seeded(seed_idx, input))
-            }
-        }
-    }
-}
-
+// Shared hash wrapper for the broader sketch catalog.
+// Some sketches consume matrix fast-path hashes, while others only need a 64-bit hash.
 #[derive(Clone, Debug)]
 pub enum HashValue {
     Matrix(MatrixHashType),
@@ -124,9 +80,10 @@ where
     }
 }
 
-impl<S> CountMinFastOps for CountMin<S, FastPath>
+impl<S, H> CountMinFastOps for CountMin<S, FastPath, H>
 where
-    S: crate::MatrixStorage + crate::FastPathHasher<crate::DefaultXxHasher> + 'static,
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
     S::Counter: Copy + PartialOrd + From<i32> + AddAssign + ToF64 + 'static,
 {
     fn insert(&mut self, val: &SketchInput) {
@@ -168,9 +125,10 @@ where
     }
 }
 
-impl<S> CountFastOps for Count<S, FastPath>
+impl<S, H> CountFastOps for Count<S, FastPath, H>
 where
-    S: crate::MatrixStorage + crate::FastPathHasher<crate::DefaultXxHasher> + 'static,
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
     S::Counter: CountSketchCounter + 'static,
 {
     fn insert(&mut self, val: &SketchInput) {
@@ -205,12 +163,13 @@ pub enum FreqSketch {
     CountRegular(Box<dyn CountRegularOps>),
 }
 
-impl<S> From<CountMin<S, FastPath>> for FreqSketch
+impl<S, H> From<CountMin<S, FastPath, H>> for FreqSketch
 where
-    S: crate::MatrixStorage + crate::FastPathHasher<crate::DefaultXxHasher> + 'static,
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
     S::Counter: Copy + PartialOrd + From<i32> + AddAssign + ToF64 + 'static,
 {
-    fn from(value: CountMin<S, FastPath>) -> Self {
+    fn from(value: CountMin<S, FastPath, H>) -> Self {
         FreqSketch::CountMinFast(Box::new(value))
     }
 }
@@ -225,12 +184,13 @@ where
     }
 }
 
-impl<S> From<Count<S, FastPath>> for FreqSketch
+impl<S, H> From<Count<S, FastPath, H>> for FreqSketch
 where
-    S: crate::MatrixStorage + crate::FastPathHasher<crate::DefaultXxHasher> + 'static,
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
     S::Counter: CountSketchCounter + 'static,
 {
-    fn from(value: Count<S, FastPath>) -> Self {
+    fn from(value: Count<S, FastPath, H>) -> Self {
         FreqSketch::CountFast(Box::new(value))
     }
 }
@@ -274,18 +234,6 @@ impl FreqSketch {
         match self {
             FreqSketch::CountMinFast(_) | FreqSketch::CountMinRegular(_) => "CountMin",
             FreqSketch::CountFast(_) | FreqSketch::CountRegular(_) => "Count",
-        }
-    }
-
-    pub fn hash_reuse_tag(&self) -> Option<HashReuseTag> {
-        match self {
-            FreqSketch::CountMinFast(sketch) => {
-                Some(matrix_hash_reuse_tag(sketch.rows(), sketch.cols(), 0))
-            }
-            FreqSketch::CountFast(sketch) => {
-                Some(matrix_hash_reuse_tag(sketch.rows(), sketch.cols(), 0))
-            }
-            _ => None,
         }
     }
 
@@ -347,12 +295,6 @@ impl FreqSketch {
 impl CardinalitySketch {
     pub fn sketch_type(&self) -> &'static str {
         "HLL"
-    }
-
-    pub fn hash_reuse_tag(&self) -> Option<HashReuseTag> {
-        Some(HashReuseTag::FastPath64 {
-            seed_idx: CANONICAL_HASH_SEED,
-        })
     }
 
     pub fn insert(&mut self, val: &SketchInput) {
@@ -424,10 +366,6 @@ impl QuantileSketch {
         }
     }
 
-    pub fn hash_reuse_tag(&self) -> Option<HashReuseTag> {
-        None
-    }
-
     pub fn insert(&mut self, val: &SketchInput) {
         match self {
             QuantileSketch::Kll(sketch) => {
@@ -467,10 +405,6 @@ impl SubpopulationSketch {
         }
     }
 
-    pub fn hash_reuse_tag(&self) -> Option<HashReuseTag> {
-        None
-    }
-
     pub fn insert(&mut self, _val: &SketchInput) {
         match self {
             SubpopulationSketch::Hydra(_) | SubpopulationSketch::MultiHydra(_) => {}
@@ -504,10 +438,6 @@ impl SubquerySketch {
         match self {
             SubquerySketch::Coco(_) => "Coco",
         }
-    }
-
-    pub fn hash_reuse_tag(&self) -> Option<HashReuseTag> {
-        None
     }
 
     pub fn insert(&mut self, val: &SketchInput) {
@@ -547,10 +477,6 @@ impl GSumSketch {
         "UnivMon"
     }
 
-    pub fn hash_reuse_tag(&self) -> Option<HashReuseTag> {
-        None
-    }
-
     pub fn insert(&mut self, val: &SketchInput) {
         match self {
             GSumSketch::UnivMon(sketch) => sketch.insert(val, 1),
@@ -571,13 +497,5 @@ impl GSumSketch {
 
     pub fn insert_with_hash_only(&mut self, _hash: &HashValue) -> Result<(), &'static str> {
         Err("Hash value type not supported")
-    }
-}
-
-fn matrix_hash_reuse_tag(rows: usize, cols: usize, seed_idx: usize) -> HashReuseTag {
-    match hash_mode_for_matrix(rows, cols) {
-        MatrixHashMode::Packed64 => HashReuseTag::MatrixPacked64 { seed_idx },
-        MatrixHashMode::Packed128 => HashReuseTag::MatrixPacked128 { seed_idx },
-        MatrixHashMode::Rows => HashReuseTag::MatrixRows { rows, seed_idx },
     }
 }

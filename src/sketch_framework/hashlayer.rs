@@ -2,105 +2,212 @@
 //! This module provides a small manager that reuses hashes across compatible sketches.
 
 use crate::{
-    Count, CountMin, DefaultXxHasher, FastPath, SketchInput, Vector1D, Vector2D,
-    sketch_framework::sketch_catalog::{CardinalitySketch, FreqSketch, HashReuseTag, HashValue},
+    Count, CountMin, DataFusion, DefaultXxHasher, FastPath, HyperLogLog, HyperLogLogHIP,
+    MatrixHashMode, MatrixHashType, Regular, SketchHasher, SketchInput, Vector1D, Vector2D,
+    hash_for_matrix_seeded_with_mode_generic, hash_mode_for_matrix,
+    sketch_framework::sketch_catalog::{CountFastOps, CountMinFastOps},
 };
+use std::marker::PhantomData;
+
+// Mirrors the matrix fast-path hash layout used by Count-Min / Count Sketch.
+// HashLayer needs this plan because it computes the shared prehash from SketchInput
+// before forwarding it to the sketches in the layer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MatrixHashPlan {
+    Packed64,
+    Packed128,
+    Rows { rows: usize },
+}
+
+impl MatrixHashPlan {
+    fn from_dimensions(rows: usize, cols: usize) -> Self {
+        match hash_mode_for_matrix(rows, cols) {
+            MatrixHashMode::Packed64 => MatrixHashPlan::Packed64,
+            MatrixHashMode::Packed128 => MatrixHashPlan::Packed128,
+            MatrixHashMode::Rows => MatrixHashPlan::Rows { rows },
+        }
+    }
+
+    fn hash_for_input<H>(&self, input: &SketchInput) -> MatrixHashType
+    where
+        H: SketchHasher<HashType = MatrixHashType>,
+    {
+        match *self {
+            MatrixHashPlan::Packed64 => {
+                hash_for_matrix_seeded_with_mode_generic::<H>(0, MatrixHashMode::Packed64, 1, input)
+            }
+            MatrixHashPlan::Packed128 => hash_for_matrix_seeded_with_mode_generic::<H>(
+                0,
+                MatrixHashMode::Packed128,
+                1,
+                input,
+            ),
+            MatrixHashPlan::Rows { rows } => {
+                hash_for_matrix_seeded_with_mode_generic::<H>(0, MatrixHashMode::Rows, rows, input)
+            }
+        }
+    }
+}
 
 pub enum HashLayerSketch {
-    Freq(FreqSketch),
-    Cardinality(CardinalitySketch),
+    CountMinFast(Box<dyn CountMinFastOps>),
+    CountFast(Box<dyn CountFastOps>),
+    HllDf(HyperLogLog<DataFusion>),
+    HllRegular(HyperLogLog<Regular>),
+    HllHip(HyperLogLogHIP),
 }
 
 impl HashLayerSketch {
     pub fn sketch_type(&self) -> &'static str {
         match self {
-            HashLayerSketch::Freq(sketch) => sketch.sketch_type(),
-            HashLayerSketch::Cardinality(sketch) => sketch.sketch_type(),
+            HashLayerSketch::CountMinFast(_) => "CountMin",
+            HashLayerSketch::CountFast(_) => "Count",
+            HashLayerSketch::HllDf(_)
+            | HashLayerSketch::HllRegular(_)
+            | HashLayerSketch::HllHip(_) => "HLL",
         }
     }
 
-    pub fn hash_reuse_tag(&self) -> Option<HashReuseTag> {
+    fn matrix_hash_plan(&self) -> Option<MatrixHashPlan> {
         match self {
-            HashLayerSketch::Freq(sketch) => sketch.hash_reuse_tag(),
-            HashLayerSketch::Cardinality(sketch) => sketch.hash_reuse_tag(),
+            HashLayerSketch::CountMinFast(sketch) => Some(MatrixHashPlan::from_dimensions(
+                sketch.rows(),
+                sketch.cols(),
+            )),
+            HashLayerSketch::CountFast(sketch) => Some(MatrixHashPlan::from_dimensions(
+                sketch.rows(),
+                sketch.cols(),
+            )),
+            HashLayerSketch::HllDf(_)
+            | HashLayerSketch::HllRegular(_)
+            | HashLayerSketch::HllHip(_) => None,
         }
     }
 
-    pub fn insert(&mut self, val: &SketchInput) {
+    pub fn query_with_hash(&self, hash: &MatrixHashType) -> Result<f64, &'static str> {
         match self {
-            HashLayerSketch::Freq(sketch) => sketch.insert(val),
-            HashLayerSketch::Cardinality(sketch) => sketch.insert(val),
+            HashLayerSketch::CountMinFast(sketch) => Ok(sketch.fast_estimate(hash)),
+            HashLayerSketch::CountFast(sketch) => Ok(sketch.fast_estimate(hash)),
+            HashLayerSketch::HllDf(hll) => Ok(hll.estimate() as f64),
+            HashLayerSketch::HllRegular(hll) => Ok(hll.estimate() as f64),
+            HashLayerSketch::HllHip(hll) => Ok(hll.estimate() as f64),
         }
     }
 
-    pub fn query(&self, val: &SketchInput) -> Result<f64, &'static str> {
+    pub fn insert_with_hash(&mut self, hash: &MatrixHashType) -> Result<(), &'static str> {
         match self {
-            HashLayerSketch::Freq(sketch) => sketch.query(val),
-            HashLayerSketch::Cardinality(sketch) => sketch.query(val),
-        }
-    }
-
-    pub fn query_with_hash_value(&self, hash: &HashValue) -> Result<f64, &'static str> {
-        match self {
-            HashLayerSketch::Freq(sketch) => sketch.query_with_hash_value(hash),
-            HashLayerSketch::Cardinality(sketch) => sketch.query_with_hash_value(hash),
-        }
-    }
-
-    pub fn insert_with_hash_value(&mut self, hash: &HashValue, val: &SketchInput) {
-        if self.try_insert_with_hash_value(hash, val) {
-            return;
-        }
-        self.insert(val);
-    }
-
-    pub fn try_insert_with_hash_value(&mut self, hash: &HashValue, val: &SketchInput) -> bool {
-        match self {
-            HashLayerSketch::Freq(sketch) => sketch.try_insert_with_hash_value(hash, val),
-            HashLayerSketch::Cardinality(sketch) => sketch.try_insert_with_hash_value(hash),
-        }
-    }
-
-    pub fn insert_with_hash_only(&mut self, hash: &HashValue) -> Result<(), &'static str> {
-        match self {
-            HashLayerSketch::Freq(sketch) => sketch.insert_with_hash_only(hash),
-            HashLayerSketch::Cardinality(sketch) => sketch.insert_with_hash_only(hash),
+            HashLayerSketch::CountMinFast(sketch) => {
+                sketch.fast_insert(hash);
+                Ok(())
+            }
+            HashLayerSketch::CountFast(sketch) => {
+                sketch.fast_insert(hash);
+                Ok(())
+            }
+            HashLayerSketch::HllDf(hll) => {
+                hll.insert_with_hash(hash.lower_64());
+                Ok(())
+            }
+            HashLayerSketch::HllRegular(hll) => {
+                hll.insert_with_hash(hash.lower_64());
+                Ok(())
+            }
+            HashLayerSketch::HllHip(hll) => {
+                hll.insert_with_hash(hash.lower_64());
+                Ok(())
+            }
         }
     }
 }
 
-pub struct HashLayer {
+impl<S, H> From<CountMin<S, FastPath, H>> for HashLayerSketch
+where
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
+    S::Counter: Copy
+        + PartialOrd
+        + From<i32>
+        + std::ops::AddAssign
+        + crate::common::structure_utils::ToF64
+        + 'static,
+{
+    fn from(value: CountMin<S, FastPath, H>) -> Self {
+        HashLayerSketch::CountMinFast(Box::new(value))
+    }
+}
+
+impl<S, H> From<Count<S, FastPath, H>> for HashLayerSketch
+where
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
+    S::Counter: crate::sketches::count::CountSketchCounter + 'static,
+{
+    fn from(value: Count<S, FastPath, H>) -> Self {
+        HashLayerSketch::CountFast(Box::new(value))
+    }
+}
+
+impl From<HyperLogLog<DataFusion>> for HashLayerSketch {
+    fn from(value: HyperLogLog<DataFusion>) -> Self {
+        HashLayerSketch::HllDf(value)
+    }
+}
+
+impl From<HyperLogLog<Regular>> for HashLayerSketch {
+    fn from(value: HyperLogLog<Regular>) -> Self {
+        HashLayerSketch::HllRegular(value)
+    }
+}
+
+impl From<HyperLogLogHIP> for HashLayerSketch {
+    fn from(value: HyperLogLogHIP) -> Self {
+        HashLayerSketch::HllHip(value)
+    }
+}
+
+pub struct HashLayer<H = DefaultXxHasher>
+where
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+{
     sketches: Vector1D<HashLayerSketch>,
-    hash_reuse_tag: Option<HashReuseTag>,
+    matrix_hash_plan: Option<MatrixHashPlan>,
+    _hasher: PhantomData<H>,
 }
 
-impl Default for HashLayer {
+impl<H> Default for HashLayer<H>
+where
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+{
     fn default() -> Self {
         Self::new(vec![
-            HashLayerSketch::Freq(CountMin::<Vector2D<i32>, FastPath>::default().into()),
-            HashLayerSketch::Freq(Count::<Vector2D<i32>, FastPath>::default().into()),
+            CountMin::<Vector2D<i32>, FastPath, H>::with_dimensions(3, 4096).into(),
+            Count::<Vector2D<i32>, FastPath, H>::with_dimensions(3, 4096).into(),
         ])
         .expect("default HashLayer sketches must share one hash reuse tag")
     }
 }
 
-impl HashLayer {
+impl<H> HashLayer<H>
+where
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+{
     pub fn new(lst: Vec<HashLayerSketch>) -> Result<Self, &'static str> {
-        let hash_reuse_tag = Self::validate_sketches(&lst)?;
+        let matrix_hash_plan = Self::validate_sketches(&lst)?;
         Ok(HashLayer {
             sketches: Vector1D::from_vec(lst),
-            hash_reuse_tag,
+            matrix_hash_plan,
+            _hasher: PhantomData,
         })
     }
 
     pub fn push(&mut self, sketch: HashLayerSketch) -> Result<(), &'static str> {
-        let sketch_tag = Self::validate_sketch(&sketch)?;
-        match self.hash_reuse_tag {
-            Some(layer_tag) if layer_tag != sketch_tag => {
-                return Err("HashLayer sketches must share the same hash reuse tag");
+        let sketch_plan = sketch.matrix_hash_plan();
+        match (self.matrix_hash_plan, sketch_plan) {
+            (Some(layer_plan), Some(sketch_plan)) if layer_plan != sketch_plan => {
+                return Err("HashLayer matrix sketches must share the same matrix hash plan");
             }
-            None => {
-                self.hash_reuse_tag = Some(sketch_tag);
+            (None, Some(sketch_plan)) => {
+                self.matrix_hash_plan = Some(sketch_plan);
             }
             _ => {}
         }
@@ -108,72 +215,87 @@ impl HashLayer {
         Ok(())
     }
 
-    fn validate_sketches(lst: &[HashLayerSketch]) -> Result<Option<HashReuseTag>, &'static str> {
-        let mut layer_tag = None;
+    fn validate_sketches(lst: &[HashLayerSketch]) -> Result<Option<MatrixHashPlan>, &'static str> {
+        let mut layer_plan = None;
         for sketch in lst {
-            let sketch_tag = Self::validate_sketch(sketch)?;
-            match layer_tag {
-                Some(existing_tag) if existing_tag != sketch_tag => {
-                    return Err("HashLayer sketches must share the same hash reuse tag");
+            if let Some(sketch_plan) = sketch.matrix_hash_plan() {
+                match layer_plan {
+                    Some(existing_plan) if existing_plan != sketch_plan => {
+                        return Err(
+                            "HashLayer matrix sketches must share the same matrix hash plan",
+                        );
+                    }
+                    None => layer_plan = Some(sketch_plan),
+                    _ => {}
                 }
-                None => layer_tag = Some(sketch_tag),
-                _ => {}
             }
         }
-        Ok(layer_tag)
-    }
-
-    fn validate_sketch(sketch: &HashLayerSketch) -> Result<HashReuseTag, &'static str> {
-        sketch
-            .hash_reuse_tag()
-            .ok_or("HashLayer only accepts sketches with hash reuse support")
-    }
-
-    pub fn hash_reuse_tag(&self) -> Option<HashReuseTag> {
-        self.hash_reuse_tag
+        Ok(layer_plan)
     }
 
     /// Insert to all sketches using the layer's shared hash computation.
     pub fn insert_all(&mut self, val: &SketchInput) {
-        let Some(tag) = self.hash_reuse_tag else {
-            return;
-        };
-        let hash = Self::hash_for_tag(tag, val);
+        let hash = self.hash_input(val);
         for i in 0..self.sketches.len() {
             self.sketches[i]
-                .insert_with_hash_only(&hash)
+                .insert_with_hash(&hash)
                 .expect("HashLayer sketch must accept the layer hash type");
         }
     }
 
     /// Insert to specific sketch indices using the layer's shared hash computation.
     pub fn insert_at(&mut self, indices: &[usize], val: &SketchInput) {
-        let Some(tag) = self.hash_reuse_tag else {
-            return;
-        };
-        let hash = Self::hash_for_tag(tag, val);
+        let hash = self.hash_input(val);
         for &idx in indices {
             if idx < self.sketches.len() {
                 self.sketches[idx]
-                    .insert_with_hash_only(&hash)
+                    .insert_with_hash(&hash)
                     .expect("HashLayer sketch must accept the layer hash type");
             }
         }
     }
 
+    /// Insert a batch of inputs to all sketches using the layer's shared hash computation.
+    pub fn bulk_insert_all(&mut self, values: &[SketchInput]) {
+        for value in values {
+            self.insert_all(value);
+        }
+    }
+
+    /// Insert a batch of inputs to specific sketch indices using the layer's shared hash computation.
+    pub fn bulk_insert_at(&mut self, indices: &[usize], values: &[SketchInput]) {
+        for value in values {
+            self.insert_at(indices, value);
+        }
+    }
+
     /// Insert to all sketches using a pre-computed hash value
-    pub fn insert_all_with_hash(&mut self, hash_value: &HashValue) {
+    pub fn insert_all_with_hash(&mut self, hash_value: &H::HashType) {
         for i in 0..self.sketches.len() {
-            let _ = self.sketches[i].insert_with_hash_only(hash_value);
+            let _ = self.sketches[i].insert_with_hash(hash_value);
         }
     }
 
     /// Insert to specific sketch indices using a pre-computed hash value
-    pub fn insert_at_with_hash(&mut self, indices: &[usize], hash_value: &HashValue) {
+    pub fn insert_at_with_hash(&mut self, indices: &[usize], hash_value: &H::HashType) {
         for &idx in indices {
             if idx < self.sketches.len() {
-                let _ = self.sketches[idx].insert_with_hash_only(hash_value);
+                let _ = self.sketches[idx].insert_with_hash(hash_value);
             }
+        }
+    }
+
+    /// Insert a batch of pre-computed hash values to all sketches.
+    pub fn bulk_insert_all_with_hashes(&mut self, hash_values: &[H::HashType]) {
+        for hash_value in hash_values {
+            self.insert_all_with_hash(hash_value);
+        }
+    }
+
+    /// Insert a batch of pre-computed hash values to specific sketch indices.
+    pub fn bulk_insert_at_with_hashes(&mut self, indices: &[usize], hash_values: &[H::HashType]) {
+        for hash_value in hash_values {
+            self.insert_at_with_hash(indices, hash_value);
         }
     }
 
@@ -182,40 +304,34 @@ impl HashLayer {
         if index >= self.sketches.len() {
             return Err("Index out of bounds");
         }
-        let tag = self
-            .hash_reuse_tag
-            .ok_or("HashLayer has no reusable sketches")?;
-        let hash = Self::hash_for_tag(tag, val);
-        self.sketches[index].query_with_hash_value(&hash)
+        let hash = self.hash_input(val);
+        self.sketches[index].query_with_hash(&hash)
     }
 
     /// Query a specific sketch by index using a pre-computed hash value
     pub fn query_at_with_hash(
         &self,
         index: usize,
-        hash_value: &HashValue,
+        hash_value: &H::HashType,
     ) -> Result<f64, &'static str> {
         if index >= self.sketches.len() {
             return Err("Index out of bounds");
         }
-        self.sketches[index].query_with_hash_value(hash_value)
+        self.sketches[index].query_with_hash(hash_value)
     }
 
     /// Query all sketches and return results as a vector
     pub fn query_all(&self, val: &SketchInput) -> Vec<Result<f64, &'static str>> {
-        let Some(tag) = self.hash_reuse_tag else {
-            return Vec::new();
-        };
-        let hash = Self::hash_for_tag(tag, val);
+        let hash = self.hash_input(val);
         (0..self.sketches.len())
-            .map(|i| self.sketches[i].query_with_hash_value(&hash))
+            .map(|i| self.sketches[i].query_with_hash(&hash))
             .collect()
     }
 
     /// Query all sketches using a pre-computed hash value
-    pub fn query_all_with_hash(&self, hash_value: &HashValue) -> Vec<Result<f64, &'static str>> {
+    pub fn query_all_with_hash(&self, hash_value: &H::HashType) -> Vec<Result<f64, &'static str>> {
         (0..self.sketches.len())
-            .map(|i| self.sketches[i].query_with_hash_value(hash_value))
+            .map(|i| self.sketches[i].query_with_hash(hash_value))
             .collect()
     }
 
@@ -247,8 +363,12 @@ impl HashLayer {
         }
     }
 
-    fn hash_for_tag(tag: HashReuseTag, input: &SketchInput) -> HashValue {
-        tag.hash_for_input::<DefaultXxHasher>(input)
+    pub fn hash_input(&self, input: &SketchInput) -> H::HashType {
+        if let Some(plan) = self.matrix_hash_plan {
+            plan.hash_for_input::<H>(input)
+        } else {
+            MatrixHashType::Packed64(H::hash64_seeded(crate::CANONICAL_HASH_SEED, input))
+        }
     }
 }
 
@@ -256,7 +376,7 @@ impl HashLayer {
 mod tests {
     use super::*;
     use crate::test_utils::sample_zipf_u64;
-    use crate::{DataFusion, HyperLogLog, RegularPath};
+    use crate::{DataFusion, HyperLogLog};
     use std::collections::HashMap;
 
     const SAMPLE_SIZE: usize = 10_000;
@@ -294,7 +414,7 @@ mod tests {
         let baseline = create_baseline(&data);
 
         // Create HashLayer with default sketches
-        let mut layer = HashLayer::default();
+        let mut layer: HashLayer<DefaultXxHasher> = HashLayer::default();
         assert_eq!(layer.len(), 2); // CountMin, Count
 
         // Insert all data
@@ -344,7 +464,7 @@ mod tests {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
         let baseline = create_baseline(&data);
 
-        let mut layer = HashLayer::default();
+        let mut layer: HashLayer<DefaultXxHasher> = HashLayer::default();
 
         // Insert only to CountMin (index 0) and Count (index 1), not HllDf
         for &value in &data {
@@ -369,7 +489,7 @@ mod tests {
     fn test_hashlayer_query_all() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
 
-        let mut layer = HashLayer::default();
+        let mut layer: HashLayer<DefaultXxHasher> = HashLayer::default();
 
         for &value in &data {
             let input = SketchInput::U64(value);
@@ -389,19 +509,60 @@ mod tests {
     }
 
     #[test]
+    fn test_hashlayer_bulk_insert_variants() {
+        let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
+        let inputs: Vec<SketchInput> = data.iter().copied().map(SketchInput::U64).collect();
+
+        let mut bulk_layer: HashLayer<DefaultXxHasher> = HashLayer::default();
+        bulk_layer.bulk_insert_all(&inputs);
+
+        let mut single_layer: HashLayer<DefaultXxHasher> = HashLayer::default();
+        for input in &inputs {
+            single_layer.insert_all(input);
+        }
+
+        let probe = SketchInput::U64(data[0]);
+        let bulk_countmin = bulk_layer
+            .query_at(0, &probe)
+            .expect("bulk query should succeed");
+        let single_countmin = single_layer
+            .query_at(0, &probe)
+            .expect("single query should succeed");
+        assert_eq!(bulk_countmin, single_countmin);
+
+        let hashes: Vec<MatrixHashType> = inputs
+            .iter()
+            .map(|input| bulk_layer.hash_input(input))
+            .collect();
+
+        let mut bulk_hash_layer: HashLayer<DefaultXxHasher> = HashLayer::default();
+        bulk_hash_layer.bulk_insert_all_with_hashes(&hashes);
+
+        let mut single_hash_layer: HashLayer<DefaultXxHasher> = HashLayer::default();
+        for hash in &hashes {
+            single_hash_layer.insert_all_with_hash(hash);
+        }
+
+        let bulk_hash_count = bulk_hash_layer
+            .query_at_with_hash(1, &hashes[0])
+            .expect("bulk hash query should succeed");
+        let single_hash_count = single_hash_layer
+            .query_at_with_hash(1, &hashes[0])
+            .expect("single hash query should succeed");
+        assert_eq!(bulk_hash_count, single_hash_count);
+    }
+
+    #[test]
     fn test_hashlayer_with_hash_optimization() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
         let baseline = create_baseline(&data);
 
-        let mut layer = HashLayer::default();
+        let mut layer: HashLayer<DefaultXxHasher> = HashLayer::default();
 
         // Insert using pre-computed hash (the key optimization)
         for &value in &data {
             let input = SketchInput::U64(value);
-            let hash = layer
-                .hash_reuse_tag()
-                .expect("default HashLayer should have a shared reuse tag")
-                .hash_for_input::<DefaultXxHasher>(&input);
+            let hash = layer.hash_input(&input);
             layer.insert_all_with_hash(&hash);
         }
 
@@ -409,10 +570,7 @@ mod tests {
         let mut errors = Vec::new();
         for (&key, &true_count) in baseline.iter().take(50) {
             let input = SketchInput::U64(key);
-            let hash = layer
-                .hash_reuse_tag()
-                .expect("default HashLayer should have a shared reuse tag")
-                .hash_for_input::<DefaultXxHasher>(&input);
+            let hash = layer.hash_input(&input);
 
             let countmin_est = layer
                 .query_at_with_hash(0, &hash)
@@ -436,10 +594,9 @@ mod tests {
         let baseline = create_baseline(&data);
         let true_cardinality = baseline.len();
 
-        let mut layer = HashLayer::new(vec![HashLayerSketch::Cardinality(
-            CardinalitySketch::HllDf(HyperLogLog::<DataFusion>::default()),
-        )])
-        .expect("single-family HLL layer should be valid");
+        let mut layer: HashLayer<DefaultXxHasher> =
+            HashLayer::new(vec![HyperLogLog::<DataFusion>::default().into()])
+                .expect("single-family HLL layer should be valid");
 
         for &value in &data {
             let input = SketchInput::U64(value);
@@ -466,7 +623,7 @@ mod tests {
 
     #[test]
     fn test_hashlayer_direct_access() {
-        let mut layer = HashLayer::default();
+        let mut layer: HashLayer<DefaultXxHasher> = HashLayer::default();
 
         // Test direct access via get()
         assert!(layer.get(0).is_some(), "Should access sketch at index 0");
@@ -483,7 +640,7 @@ mod tests {
 
     #[test]
     fn test_hashlayer_bounds_checking() {
-        let layer = HashLayer::default();
+        let layer: HashLayer<DefaultXxHasher> = HashLayer::default();
         let input = SketchInput::U64(42);
 
         // Test query bounds checking
@@ -492,10 +649,7 @@ mod tests {
         assert_eq!(result.unwrap_err(), "Index out of bounds");
 
         // Test query_at_with_hash bounds checking
-        let hash = layer
-            .hash_reuse_tag()
-            .expect("default HashLayer should have a shared reuse tag")
-            .hash_for_input::<DefaultXxHasher>(&input);
+        let hash = layer.hash_input(&input);
         let result = layer.query_at_with_hash(999, &hash);
         assert!(result.is_err(), "Should error on out of bounds query");
         assert_eq!(result.unwrap_err(), "Index out of bounds");
@@ -505,15 +659,12 @@ mod tests {
     fn test_hashlayer_custom_sketches() {
         // Create a custom HashLayer with specific sketch configurations
         let sketches = vec![
-            HashLayerSketch::Freq(
-                CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
-            ),
-            HashLayerSketch::Freq(
-                Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
-            ),
+            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
+            Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
         ];
 
-        let mut layer = HashLayer::new(sketches).expect("custom HashLayer should be valid");
+        let mut layer: HashLayer<DefaultXxHasher> =
+            HashLayer::new(sketches).expect("custom HashLayer should be valid");
         assert_eq!(layer.len(), 2);
         assert!(!layer.is_empty());
 
@@ -534,34 +685,21 @@ mod tests {
     }
 
     #[test]
-    fn test_hashlayer_rejects_non_reusable_sketches() {
-        let result = HashLayer::new(vec![HashLayerSketch::Freq(
-            CountMin::<Vector2D<i32>, RegularPath>::default().into(),
-        )]);
+    fn test_hashlayer_supports_mixed_matrix_and_hll_sketches() {
+        let mut layer = HashLayer::<DefaultXxHasher>::new(vec![
+            CountMin::<Vector2D<i32>, FastPath>::default().into(),
+            HyperLogLog::<DataFusion>::default().into(),
+        ])
+        .expect("matrix sketches and HLL should share the same layer hash");
 
-        assert!(result.is_err(), "regular sketches should be rejected");
-        match result {
-            Err(err) => assert_eq!(
-                err,
-                "HashLayer only accepts sketches with hash reuse support"
-            ),
-            Ok(_) => panic!("regular sketches should be rejected"),
+        let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
+        for &value in &data {
+            layer.insert_all(&SketchInput::U64(value));
         }
-    }
 
-    #[test]
-    fn test_hashlayer_rejects_mixed_hash_families() {
-        let result = HashLayer::new(vec![
-            HashLayerSketch::Freq(CountMin::<Vector2D<i32>, FastPath>::default().into()),
-            HashLayerSketch::Cardinality(CardinalitySketch::HllDf(
-                HyperLogLog::<DataFusion>::default(),
-            )),
-        ]);
-
-        assert!(result.is_err(), "mixed hash families should be rejected");
-        match result {
-            Err(err) => assert_eq!(err, "HashLayer sketches must share the same hash reuse tag"),
-            Ok(_) => panic!("mixed hash families should be rejected"),
-        }
+        let results = layer.query_all(&SketchInput::U64(data[0]));
+        assert_eq!(results.len(), 2, "Should have 2 results");
+        assert!(results[0].is_ok(), "CountMin query should succeed");
+        assert!(results[1].is_ok(), "HLL query should succeed");
     }
 }

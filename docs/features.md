@@ -90,8 +90,6 @@ This document provides a high-level overview of implemented and planned features
 
 - **TODO**: requires further testing and need better integrated support
 
-🚧 **Benchmarking** - Criterion-based performance suite (`cargo bench`)
-
 ### Performance
 
 🚧 **Performance parity for structured sketches**

@@ -15,9 +15,6 @@ smallvec = "1.13.2"
 prost = "0.13"
 bytes = "1"
 
-[dev-dependencies]
-criterion = "0.5"
-
 [build-dependencies]
 prost-build = "0.13"
 
@@ -26,42 +23,6 @@ crate-type = ["rlib"]
 name = "sketchlib_rust"
 path = "src/lib.rs"
 bench = false
-
-[[bench]]
-name = "hash_detailed"
-harness = false
-
-[[bench]]
-name = "count"
-harness = false
-
-[[bench]]
-name = "countmin"
-harness = false
-
-[[bench]]
-name = "hashlayer"
-harness = false
-
-[[bench]]
-name = "nitro"
-harness = false
-
-[[bench]]
-name = "nitro_batch"
-harness = false
-
-[[bench]]
-name = "row_access"
-harness = false
-
-[[bench]]
-name = "box_vec"
-harness = false
-
-[[bench]]
-name = "median_bench"
-harness = false
 
 #[profile.release]
 #debug = true

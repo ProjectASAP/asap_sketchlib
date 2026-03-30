@@ -11,8 +11,8 @@ pub use hashlayer::{HashLayer, HashLayerSketch};
 
 pub mod sketch_catalog;
 pub use sketch_catalog::{
-    CardinalitySketch, FreqSketch, GSumSketch, HashReuseTag, HashValue, QuantileSketch,
-    SubpopulationSketch, SubquerySketch, UnivMonQuery,
+    CardinalitySketch, FreqSketch, GSumSketch, HashValue, QuantileSketch, SubpopulationSketch,
+    SubquerySketch, UnivMonQuery,
 };
 
 pub mod hydra;
