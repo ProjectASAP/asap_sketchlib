@@ -7,7 +7,7 @@ pub use eh_sketch_list::EHSketchList;
 pub use eh_sketch_list::SketchNorm;
 
 pub mod hashlayer;
-pub use hashlayer::{HashLayer, HashLayerSketch};
+pub use hashlayer::{EnsembleSketch, HashSketchEnsemble};
 
 pub mod sketch_catalog;
 

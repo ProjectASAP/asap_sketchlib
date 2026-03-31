@@ -1,6 +1,6 @@
 //! Erased fast-path adapter traits for matrix-backed sketches.
 //!
-//! These traits let `HashLayer` hold type-erased `Box<dyn CountMinFastOps>`
+//! These traits let `HashSketchEnsemble` hold type-erased `Box<dyn CountMinFastOps>`
 //! and `Box<dyn CountFastOps>` without knowing the concrete storage or hasher.
 
 use crate::common::structure_utils::ToF64;
