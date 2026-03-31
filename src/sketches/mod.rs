@@ -44,6 +44,9 @@ pub use cms_heap::CMSHeap;
 pub mod cs_heap;
 pub use cs_heap::CSHeap;
 
+pub mod octo_delta;
+pub use octo_delta::{CM_PROMASK, COUNT_PROMASK, CmDelta, CountDelta, HLL_PROMASK, HllDelta};
+
 pub mod fold_cms;
 pub use fold_cms::{FoldCMS, FoldCell, FoldEntry};
 

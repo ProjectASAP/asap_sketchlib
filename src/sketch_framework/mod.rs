@@ -35,6 +35,12 @@ pub use nitro::{NitroBatch, NitroEstimate, NitroTarget};
 pub mod eh_univ_optimized;
 pub use eh_univ_optimized::{EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUnivQueryResult};
 
+pub mod octo;
+pub use octo::{
+    CountOctoAggregator, CountOctoWorker, HllOctoAggregator, HllOctoWorker, OctoAggregator,
+    OctoConfig, OctoReadHandle, OctoResult, OctoRuntime, OctoWorker, run_octo,
+};
+
 pub mod tumbling;
 pub use tumbling::{
     FoldCMSConfig, FoldCSConfig, KLLConfig, SketchPool, TumblingWindow, TumblingWindowSketch,
