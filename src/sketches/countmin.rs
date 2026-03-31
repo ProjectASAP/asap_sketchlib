@@ -7,7 +7,8 @@ use std::marker::PhantomData;
 use crate::octo_delta::{CM_PROMASK, CmDelta};
 use crate::{
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
-    FastPathHasher, FixedMatrix, MatrixStorage, NitroTarget, QuickMatrixI64, QuickMatrixI128,
+    FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
+    QuickMatrixI128,
     RegularPath, SketchHasher, SketchInput, Vector2D, hash64_seeded,
 };
 
@@ -328,7 +329,7 @@ where
 /// Count-Min sketch with floating-point counters (no integer rounding).
 pub type CountMinF64<H = DefaultXxHasher> = CountMin<Vector2D<f64>, RegularPath, H>;
 
-impl<S: MatrixStorage<Counter = i32>, Mode, H: SketchHasher> CountMin<S, Mode, H> {
+impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMin<S, RegularPath, H> {
     #[inline(always)]
     pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CmDelta)) {
         let rows = self.counts.rows();
@@ -336,6 +337,30 @@ impl<S: MatrixStorage<Counter = i32>, Mode, H: SketchHasher> CountMin<S, Mode, H
         for r in 0..rows {
             let hashed = hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
+            self.counts.increment_by_row(r, col, 1);
+            let current = self.counts.query_one_counter(r, col);
+            if current % CM_PROMASK as i32 == 0 {
+                emit(CmDelta {
+                    row: r as u16,
+                    col: col as u16,
+                    value: CM_PROMASK,
+                });
+            }
+        }
+    }
+}
+
+impl<S, H: SketchHasher> CountMin<S, FastPath, H>
+where
+    S: MatrixStorage<Counter = i32> + FastPathHasher<H>,
+{
+    #[inline(always)]
+    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CmDelta)) {
+        let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
+        let rows = self.counts.rows();
+        let cols = self.counts.cols();
+        for r in 0..rows {
+            let col = hashed_val.col_for_row(r, cols);
             self.counts.increment_by_row(r, col, 1);
             let current = self.counts.query_one_counter(r, col);
             if current % CM_PROMASK as i32 == 0 {

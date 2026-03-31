@@ -718,7 +718,7 @@ impl<H: SketchHasher> CountL2HH<H> {
 
 use crate::octo_delta::{COUNT_PROMASK, CountDelta};
 
-impl<S: MatrixStorage<Counter = i32>, Mode, H: SketchHasher> Count<S, Mode, H> {
+impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> {
     #[inline(always)]
     pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta)) {
         let rows = self.counts.rows();
@@ -727,6 +727,32 @@ impl<S: MatrixStorage<Counter = i32>, Mode, H: SketchHasher> Count<S, Mode, H> {
             let hashed = hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             let sign: i32 = if ((hashed >> 63) & 1) == 1 { 1 } else { -1 };
+            self.counts.increment_by_row(r, col, sign);
+            let current = self.counts.query_one_counter(r, col);
+            if current.unsigned_abs() >= COUNT_PROMASK as u32 {
+                emit(CountDelta {
+                    row: r as u16,
+                    col: col as u16,
+                    value: current as i8,
+                });
+                self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
+            }
+        }
+    }
+}
+
+impl<S, H: SketchHasher> Count<S, FastPath, H>
+where
+    S: MatrixStorage<Counter = i32> + FastPathHasher<H>,
+{
+    #[inline(always)]
+    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta)) {
+        let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
+        let rows = self.counts.rows();
+        let cols = self.counts.cols();
+        for r in 0..rows {
+            let col = hashed_val.col_for_row(r, cols);
+            let sign = hashed_val.sign_for_row(r);
             self.counts.increment_by_row(r, col, sign);
             let current = self.counts.query_one_counter(r, col);
             if current.unsigned_abs() >= COUNT_PROMASK as u32 {
