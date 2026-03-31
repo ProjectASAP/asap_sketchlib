@@ -8,7 +8,7 @@ use crate::octo_delta::{CM_PROMASK, CmDelta};
 use crate::{
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixStorage, NitroTarget, QuickMatrixI64, QuickMatrixI128,
-    RegularPath, SketchHasher, SketchInput, Vector2D,
+    RegularPath, SketchHasher, SketchInput, Vector2D, hash64_seeded,
 };
 
 const DEFAULT_ROW_NUM: usize = 3;
@@ -354,28 +354,6 @@ impl CountMin<Vector2D<i32>, RegularPath> {
     pub fn apply_delta(&mut self, delta: CmDelta) {
         self.counts
             .increment_by_row(delta.row as usize, delta.col as usize, delta.value as i32);
-    }
-}
-
-// Fast-path hashing adapter for Vector2D.
-impl<T> FastPathHasher for Vector2D<T>
-where
-    T: Copy + std::ops::AddAssign,
-{
-    #[inline(always)]
-    fn hash_for_matrix(&self, value: &SketchInput) -> MatrixHashType {
-        Vector2D::hash_for_matrix(self, value)
-    }
-}
-
-// Fast-path hashing adapter for u64-backed storage.
-impl<S> FastPathHasher for S
-where
-    S: MatrixStorage<HashValueType = u64>,
-{
-    #[inline(always)]
-    fn hash_for_matrix(&self, value: &SketchInput) -> u64 {
-        hash64_seeded(0, value)
     }
 }
 
