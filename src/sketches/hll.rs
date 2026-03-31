@@ -367,6 +367,47 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
         }
     }
 }
+
+use crate::octo_delta::HllDelta;
+
+impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
+    HyperLogLogImpl<Variant, Registers, H>
+{
+    #[inline(always)]
+    pub fn insert_emit_delta_with_hash(
+        &mut self,
+        hashed_val: u64,
+        emit: &mut impl FnMut(HllDelta),
+    ) {
+        let bucket_num =
+            ((hashed_val >> Registers::REGISTER_BITS) & Registers::P_MASK) as usize;
+        let leading_zero =
+            ((hashed_val << Registers::PRECISION) + Registers::P_MASK).leading_zeros() as u8 + 1;
+        let regs = self.registers.as_mut_slice();
+        if leading_zero > regs[bucket_num] {
+            regs[bucket_num] = leading_zero;
+            emit(HllDelta {
+                pos: bucket_num as u16,
+                value: leading_zero,
+            });
+        }
+    }
+
+    #[inline(always)]
+    pub fn insert_emit_delta(&mut self, obj: &SketchInput, emit: &mut impl FnMut(HllDelta)) {
+        let hashed_val = H::hash64_seeded(CANONICAL_HASH_SEED, obj);
+        self.insert_emit_delta_with_hash(hashed_val, emit);
+    }
+
+    pub fn apply_delta(&mut self, delta: HllDelta) {
+        let pos = delta.pos as usize;
+        let regs = self.registers.as_mut_slice();
+        if delta.value > regs[pos] {
+            regs[pos] = delta.value;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -377,6 +418,19 @@ mod tests {
     const ERROR_TOLERANCE: f64 = 0.02;
     const P12_ERROR_TOLERANCE: f64 = 0.03;
     const SERDE_SAMPLE: usize = 100_000;
+
+    #[test]
+    fn hll_child_insert_emits_on_improvement() {
+        let mut child = HyperLogLog::<Regular>::default();
+        let mut deltas: Vec<HllDelta> = Vec::new();
+
+        child.insert_emit_delta(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        assert_eq!(deltas.len(), 1, "first insert should improve one register");
+
+        let before = deltas.len();
+        child.insert_emit_delta(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        assert_eq!(deltas.len(), before, "duplicate should not emit");
+    }
 
     trait HllEstimator: Default {
         fn push(&mut self, input: &SketchInput);

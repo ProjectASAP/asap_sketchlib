@@ -2,7 +2,7 @@ use crate::{
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
     QuickMatrixI128, RegularPath, SketchHasher, SketchInput, Vector1D, Vector2D,
-    compute_median_inline_f64,
+    compute_median_inline_f64, hash64_seeded,
 };
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
@@ -716,6 +716,45 @@ impl<H: SketchHasher> CountL2HH<H> {
     }
 }
 
+use crate::octo_delta::{COUNT_PROMASK, CountDelta};
+
+impl Count<Vector2D<i32>, RegularPath> {
+    #[inline(always)]
+    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta)) {
+        let rows = self.counts.rows();
+        let cols = self.counts.cols();
+        let data = self.counts.as_mut_slice();
+        for r in 0..rows {
+            let hashed = hash64_seeded(r, value);
+            let col = ((hashed & LOWER_32_MASK) as usize) % cols;
+            let sign: i32 = if ((hashed >> 63) & 1) == 1 { 1 } else { -1 };
+            let cell = &mut data[r * cols + col];
+            *cell += sign;
+            if cell.unsigned_abs() >= COUNT_PROMASK as u32 {
+                emit(CountDelta {
+                    row: r as u16,
+                    col: col as u16,
+                    value: *cell as i8,
+                });
+                *cell = 0;
+            }
+        }
+    }
+}
+
+impl<S: MatrixStorage> Count<S, RegularPath>
+where
+    S::Counter: Copy + std::ops::AddAssign + From<i32>,
+{
+    pub fn apply_delta(&mut self, delta: CountDelta) {
+        self.counts.increment_by_row(
+            delta.row as usize,
+            delta.col as usize,
+            S::Counter::from(delta.value as i32),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -724,6 +763,21 @@ mod tests {
     };
     use crate::{SketchInput, hash64_seeded};
     use std::collections::HashMap;
+
+    #[test]
+    fn count_child_insert_emits_at_threshold() {
+        let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let key = SketchInput::U64(99);
+        let mut deltas: Vec<CountDelta> = Vec::new();
+
+        for _ in 0..200 {
+            child.insert_emit_delta(&key, &mut |d| deltas.push(d));
+        }
+        assert!(
+            deltas.len() >= 3,
+            "expected at least one promoted delta per row"
+        );
+    }
 
     fn counter_sign(row: usize, key: &SketchInput) -> i32 {
         let hash = hash64_seeded(row, key);
