@@ -4,10 +4,10 @@
 //! worker sketch when a local counter overflows the promotion threshold (PROMASK).
 
 /// CountMin promotion threshold: emit delta when u8 counter >= 127.
-pub const CM_PROMASK: u8 = 0x7f;
+pub const CM_PROMASK: u8 = 0x1f;
 
 /// Count sketch promotion threshold: emit delta when |i8 counter| >= 63.
-pub const COUNT_PROMASK: u8 = 0x3f;
+pub const COUNT_PROMASK: u8 = 0x1f;
 
 /// HLL promotion threshold: 0 means every register improvement is emitted.
 pub const HLL_PROMASK: u8 = 0;
