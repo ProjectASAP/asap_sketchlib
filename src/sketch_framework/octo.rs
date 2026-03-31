@@ -507,7 +507,7 @@ mod tests {
 
     #[test]
     fn cm_insert_emit_delta_emits_at_threshold() {
-        let mut worker_sketch = CountMin::with_dimensions(3, 64);
+        let mut worker_sketch = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = SketchInput::U64(42);
         let mut deltas: Vec<CmDelta> = Vec::new();
 

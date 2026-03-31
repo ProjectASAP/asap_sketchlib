@@ -718,31 +718,30 @@ impl<H: SketchHasher> CountL2HH<H> {
 
 use crate::octo_delta::{COUNT_PROMASK, CountDelta};
 
-impl Count<Vector2D<i32>, RegularPath> {
+impl<S: MatrixStorage<Counter = i32>, Mode, H: SketchHasher> Count<S, Mode, H> {
     #[inline(always)]
     pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta)) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
-        let data = self.counts.as_mut_slice();
         for r in 0..rows {
             let hashed = hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             let sign: i32 = if ((hashed >> 63) & 1) == 1 { 1 } else { -1 };
-            let cell = &mut data[r * cols + col];
-            *cell += sign;
-            if cell.unsigned_abs() >= COUNT_PROMASK as u32 {
+            self.counts.increment_by_row(r, col, sign);
+            let current = self.counts.query_one_counter(r, col);
+            if current.unsigned_abs() >= COUNT_PROMASK as u32 {
                 emit(CountDelta {
                     row: r as u16,
                     col: col as u16,
-                    value: *cell as i8,
+                    value: current as i8,
                 });
-                *cell = 0;
+                self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
             }
         }
     }
 }
 
-impl<S: MatrixStorage> Count<S, RegularPath>
+impl<S: MatrixStorage, Mode, H: SketchHasher> Count<S, Mode, H>
 where
     S::Counter: Copy + std::ops::AddAssign + From<i32>,
 {

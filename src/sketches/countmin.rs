@@ -328,7 +328,7 @@ where
 /// Count-Min sketch with floating-point counters (no integer rounding).
 pub type CountMinF64<H = DefaultXxHasher> = CountMin<Vector2D<f64>, RegularPath, H>;
 
-impl CountMin<Vector2D<i32>, RegularPath> {
+impl<S: MatrixStorage<Counter = i32>, Mode, H: SketchHasher> CountMin<S, Mode, H> {
     #[inline(always)]
     pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CmDelta)) {
         let rows = self.counts.rows();
@@ -347,10 +347,18 @@ impl CountMin<Vector2D<i32>, RegularPath> {
             }
         }
     }
+}
 
+impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H>
+where
+    S::Counter: Copy + std::ops::AddAssign + From<i32>,
+{
     pub fn apply_delta(&mut self, delta: CmDelta) {
-        self.counts
-            .increment_by_row(delta.row as usize, delta.col as usize, delta.value as i32);
+        self.counts.increment_by_row(
+            delta.row as usize,
+            delta.col as usize,
+            S::Counter::from(delta.value as i32),
+        );
     }
 }
 
