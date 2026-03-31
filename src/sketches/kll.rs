@@ -493,7 +493,10 @@ impl Serialize for KLL {
         let used_end = self.levels[self.num_levels];
         let wire = KLLWire {
             items: self.items[used_start..used_end].to_vec(),
-            levels: self.levels[..=self.num_levels].iter().map(|&l| l - used_start).collect(),
+            levels: self.levels[..=self.num_levels]
+                .iter()
+                .map(|&l| l - used_start)
+                .collect(),
             k: self.k,
             m: self.m,
             num_levels: self.num_levels,
