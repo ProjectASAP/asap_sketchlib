@@ -8,8 +8,7 @@ use crate::octo_delta::{CM_PROMASK, CmDelta};
 use crate::{
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
-    QuickMatrixI128,
-    RegularPath, SketchHasher, SketchInput, Vector2D, hash64_seeded,
+    QuickMatrixI128, RegularPath, SketchHasher, SketchInput, Vector2D, hash64_seeded,
 };
 
 const DEFAULT_ROW_NUM: usize = 3;
