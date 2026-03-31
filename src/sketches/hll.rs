@@ -379,8 +379,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         hashed_val: u64,
         emit: &mut impl FnMut(HllDelta),
     ) {
-        let bucket_num =
-            ((hashed_val >> Registers::REGISTER_BITS) & Registers::P_MASK) as usize;
+        let bucket_num = ((hashed_val >> Registers::REGISTER_BITS) & Registers::P_MASK) as usize;
         let leading_zero =
             ((hashed_val << Registers::PRECISION) + Registers::P_MASK).leading_zeros() as u8 + 1;
         let regs = self.registers.as_mut_slice();
