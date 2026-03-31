@@ -16,5 +16,6 @@ pub use matrix_storage::{FastPathHasher, MatrixFastHash, MatrixHashType, MatrixS
 pub mod fixed_structure;
 pub use fixed_structure::{
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, FixedMatrix, HllBucketList,
-    QuickMatrixI32, QuickMatrixI64, QuickMatrixI128,
+    HllBucketListP12, HllBucketListP14, HllBucketListP16, HllRegisterStorage, QuickMatrixI32,
+    QuickMatrixI64, QuickMatrixI128,
 };

@@ -10,90 +10,132 @@ pub const QUICKSTART_SIZE: usize = QUICKSTART_ROW_NUM * QUICKSTART_COL_NUM;
 pub const DEFAULT_ROW_NUM: usize = 3;
 pub const DEFAULT_COL_NUM: usize = 4096;
 
-/// The greater is P, the smaller the error.
-const HLL_P: usize = 14_usize;
-const NUM_REGISTERS: usize = 1_usize << HLL_P;
+pub trait HllRegisterStorage:
+    Clone + std::fmt::Debug + Default + Serialize + for<'de> Deserialize<'de>
+{
+    const PRECISION: usize;
+    const REGISTER_BITS: usize;
+    const NUM_REGISTERS: usize;
+    const P_MASK: u64;
 
-#[derive(Clone, Debug)]
-pub struct HllBucketList {
-    pub registers: Box<[u8; NUM_REGISTERS]>,
+    fn as_slice(&self) -> &[u8];
+    fn as_mut_slice(&mut self) -> &mut [u8];
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        Self::NUM_REGISTERS
+    }
 }
 
-impl Default for HllBucketList {
-    fn default() -> Self {
-        Self {
-            registers: Box::new([0_u8; NUM_REGISTERS]),
+macro_rules! impl_hll_bucket_list {
+    ($name:ident, $precision:literal, $num_registers:expr) => {
+        #[derive(Clone, Debug)]
+        pub struct $name {
+            pub registers: Box<[u8; $num_registers]>,
         }
-    }
+
+        impl $name {
+            pub const PRECISION: usize = $precision;
+            pub const REGISTER_BITS: usize = 64_usize - $precision;
+            pub const NUM_REGISTERS: usize = $num_registers;
+            pub const P_MASK: u64 = ($num_registers as u64) - 1;
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self {
+                    registers: Box::new([0_u8; $num_registers]),
+                }
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                serde_big_array::BigArray::serialize(&*self.registers, serializer)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let data: [u8; $num_registers] =
+                    serde_big_array::BigArray::deserialize(deserializer)?;
+                Ok(Self {
+                    registers: Box::new(data),
+                })
+            }
+        }
+
+        impl Index<usize> for $name {
+            type Output = u8;
+
+            fn index(&self, index: usize) -> &Self::Output {
+                debug_assert!(index < $num_registers, "index out of bounds");
+                &self.registers[index]
+            }
+        }
+
+        impl IndexMut<usize> for $name {
+            fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+                debug_assert!(index < $num_registers, "index out of bounds");
+                &mut self.registers[index]
+            }
+        }
+
+        impl Index<Range<usize>> for $name {
+            type Output = [u8];
+
+            fn index(&self, range: Range<usize>) -> &Self::Output {
+                debug_assert!(range.end <= $num_registers, "range end out of bounds");
+                &self.registers[range]
+            }
+        }
+
+        impl IndexMut<Range<usize>> for $name {
+            fn index_mut(&mut self, range: Range<usize>) -> &mut Self::Output {
+                debug_assert!(range.end <= $num_registers, "range end out of bounds");
+                &mut self.registers[range]
+            }
+        }
+
+        impl<'a> IntoIterator for &'a $name {
+            type Item = &'a u8;
+            type IntoIter = std::slice::Iter<'a, u8>;
+
+            fn into_iter(self) -> Self::IntoIter {
+                self.registers.iter()
+            }
+        }
+
+        impl HllRegisterStorage for $name {
+            const PRECISION: usize = Self::PRECISION;
+            const REGISTER_BITS: usize = Self::REGISTER_BITS;
+            const NUM_REGISTERS: usize = Self::NUM_REGISTERS;
+            const P_MASK: u64 = Self::P_MASK;
+
+            #[inline(always)]
+            fn as_slice(&self) -> &[u8] {
+                &self.registers[..]
+            }
+
+            #[inline(always)]
+            fn as_mut_slice(&mut self) -> &mut [u8] {
+                &mut self.registers[..]
+            }
+        }
+    };
 }
 
-impl Serialize for HllBucketList {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serde_big_array::BigArray::serialize(&*self.registers, serializer)
-    }
-}
+impl_hll_bucket_list!(HllBucketListP12, 12, 1_usize << 12);
+impl_hll_bucket_list!(HllBucketListP14, 14, 1_usize << 14);
+impl_hll_bucket_list!(HllBucketListP16, 16, 1_usize << 16);
 
-impl<'de> Deserialize<'de> for HllBucketList {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let data: [u8; NUM_REGISTERS] = serde_big_array::BigArray::deserialize(deserializer)?;
-        Ok(Self {
-            registers: Box::new(data),
-        })
-    }
-}
-
-impl Index<usize> for HllBucketList {
-    type Output = u8;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        debug_assert!(index < NUM_REGISTERS, "index out of bounds");
-        &self.registers[index]
-    }
-}
-
-impl IndexMut<usize> for HllBucketList {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        debug_assert!(index < NUM_REGISTERS, "index out of bounds");
-        &mut self.registers[index]
-    }
-}
-
-impl Index<Range<usize>> for HllBucketList {
-    type Output = [u8];
-
-    fn index(&self, range: Range<usize>) -> &Self::Output {
-        debug_assert!(range.end <= NUM_REGISTERS, "range end out of bounds");
-        &self.registers[range]
-    }
-}
-
-impl IndexMut<Range<usize>> for HllBucketList {
-    fn index_mut(&mut self, range: Range<usize>) -> &mut Self::Output {
-        debug_assert!(range.end <= NUM_REGISTERS, "range end out of bounds");
-        &mut self.registers[range]
-    }
-}
-
-impl<'a> IntoIterator for &'a HllBucketList {
-    type Item = &'a u8;
-    type IntoIter = std::slice::Iter<'a, u8>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.registers.iter()
-    }
-}
-
-impl HllBucketList {
-    pub fn len(&self) -> usize {
-        NUM_REGISTERS as usize
-    }
-}
+pub type HllBucketList = HllBucketListP14;
 
 #[macro_export]
 macro_rules! impl_fixed_matrix {
