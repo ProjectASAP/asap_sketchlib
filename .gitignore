@@ -1,14 +1,12 @@
-sliding-prometheus/target/
-querysimulation/target
-datamover/target
-slideaway
 .DS_Store
 target
 .target
-querysimulation/.vscode
 profile.json.gz
 # Local assistant metadata
 .claude
+.tmp
+.idea
+.vscode
 
 # Local binaries
 binary
