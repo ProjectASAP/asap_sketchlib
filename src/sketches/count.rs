@@ -2,7 +2,7 @@ use crate::{
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
     QuickMatrixI128, RegularPath, SketchHasher, SketchInput, Vector1D, Vector2D,
-    compute_median_inline_f64,
+    compute_median_inline_f64, hash64_seeded,
 };
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
@@ -716,6 +716,70 @@ impl<H: SketchHasher> CountL2HH<H> {
     }
 }
 
+use crate::octo_delta::{COUNT_PROMASK, CountDelta};
+
+impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> {
+    #[inline(always)]
+    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta)) {
+        let rows = self.counts.rows();
+        let cols = self.counts.cols();
+        for r in 0..rows {
+            let hashed = hash64_seeded(r, value);
+            let col = ((hashed & LOWER_32_MASK) as usize) % cols;
+            let sign: i32 = if ((hashed >> 63) & 1) == 1 { 1 } else { -1 };
+            self.counts.increment_by_row(r, col, sign);
+            let current = self.counts.query_one_counter(r, col);
+            if current.unsigned_abs() >= COUNT_PROMASK as u32 {
+                emit(CountDelta {
+                    row: r as u16,
+                    col: col as u16,
+                    value: current as i8,
+                });
+                self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
+            }
+        }
+    }
+}
+
+impl<S, H: SketchHasher> Count<S, FastPath, H>
+where
+    S: MatrixStorage<Counter = i32> + FastPathHasher<H>,
+{
+    #[inline(always)]
+    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta)) {
+        let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
+        let rows = self.counts.rows();
+        let cols = self.counts.cols();
+        for r in 0..rows {
+            let col = hashed_val.col_for_row(r, cols);
+            let sign = hashed_val.sign_for_row(r);
+            self.counts.increment_by_row(r, col, sign);
+            let current = self.counts.query_one_counter(r, col);
+            if current.unsigned_abs() >= COUNT_PROMASK as u32 {
+                emit(CountDelta {
+                    row: r as u16,
+                    col: col as u16,
+                    value: current as i8,
+                });
+                self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
+            }
+        }
+    }
+}
+
+impl<S: MatrixStorage, Mode, H: SketchHasher> Count<S, Mode, H>
+where
+    S::Counter: Copy + std::ops::AddAssign + From<i32>,
+{
+    pub fn apply_delta(&mut self, delta: CountDelta) {
+        self.counts.increment_by_row(
+            delta.row as usize,
+            delta.col as usize,
+            S::Counter::from(delta.value as i32),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -724,6 +788,21 @@ mod tests {
     };
     use crate::{SketchInput, hash64_seeded};
     use std::collections::HashMap;
+
+    #[test]
+    fn count_child_insert_emits_at_threshold() {
+        let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let key = SketchInput::U64(99);
+        let mut deltas: Vec<CountDelta> = Vec::new();
+
+        for _ in 0..200 {
+            child.insert_emit_delta(&key, &mut |d| deltas.push(d));
+        }
+        assert!(
+            deltas.len() >= 3,
+            "expected at least one promoted delta per row"
+        );
+    }
 
     fn counter_sign(row: usize, key: &SketchInput) -> i32 {
         let hash = hash64_seeded(row, key);

@@ -1,160 +1,366 @@
-//! Hash-layer orchestration for hash-reuse-capable sketches.
-//! This module provides a small manager that reuses hashes across compatible sketches.
+//! Hash-layer: group sketches that share a compatible hash so the hash is
+//! computed once per insert and fanned out to every sketch in the layer.
+//!
+//! # Motivation
+//!
+//! If you have two Count-Min Sketches of the same shape, inserting a key into
+//! both normally requires hashing the key twice — producing identical results.
+//! `HashSketchEnsemble` eliminates that redundancy: it hashes each input once and
+//! forwards the result to every sketch it manages.
+//!
+//! # Which sketches can live in a `HashSketchEnsemble`
+//!
+//! Only sketches with a true prehashed insertion path are accepted:
+//!
+//! * `CountMin<_, FastPath, _>` — Count-Min Sketch (fast path)
+//! * `Count<_, FastPath, _>` — Count Sketch (fast path)
+//! * `HyperLogLog<DataFusion>` / `HyperLogLog<Regular>` / `HyperLogLogHIP`
+//!
+//! All matrix-backed sketches (CMS / Count) in one layer must agree on the
+//! same hash layout (determined by rows × cols dimensions).  HLL sketches can
+//! coexist with them because they only consume the lower 64 bits of the shared
+//! hash.
+//!
+//! # Querying
+//!
+//! Because frequency sketches (CMS, Count) and cardinality sketches (HLL)
+//! answer fundamentally different questions, the query API is split:
+//!
+//! * [`HashSketchEnsemble::estimate`] / [`HashSketchEnsemble::estimate_with_hash`] — frequency
+//!   estimate for a key (CMS / Count only).
+//! * [`HashSketchEnsemble::cardinality`] — distinct-count estimate (HLL only).
 
 use crate::{
-    Count, CountMin, DataFusion, FastPath, HyperLogLog, SketchInput, Vector1D, Vector2D,
-    sketch_framework::{CardinalitySketch, FreqSketch, HashDomain, HashValue, OrchestratedSketch},
+    Count, CountMin, DataFusion, DefaultXxHasher, FastPath, HyperLogLog, HyperLogLogHIP,
+    MatrixHashMode, MatrixHashType, Regular, SketchHasher, SketchInput, Vector1D,
+    hash_for_matrix_seeded_with_mode_generic, hash_mode_for_matrix,
+    sketch_framework::sketch_catalog::{CountFastOps, CountMinFastOps},
 };
+use std::marker::PhantomData;
 
-pub struct HashLayer {
-    sketches: Vector1D<OrchestratedSketch>,
+// Pre-computed hash configuration derived from matrix dimensions.
+// Stored once so `hash_input` can avoid recomputing the mode on every call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HashConfig {
+    mode: MatrixHashMode,
+    rows: usize,
 }
 
-impl Default for HashLayer {
-    fn default() -> Self {
-        Self::new(vec![
-            OrchestratedSketch::Freq(FreqSketch::CountMin(
-                CountMin::<Vector2D<i32>, FastPath>::default(),
-            )),
-            OrchestratedSketch::Freq(FreqSketch::Count(
-                Count::<Vector2D<i32>, FastPath>::default(),
-            )),
-            OrchestratedSketch::Cardinality(CardinalitySketch::HllDf(
-                HyperLogLog::<DataFusion>::default(),
-            )),
-        ])
-        .expect("default HashLayer sketches must support hash reuse")
+impl HashConfig {
+    fn from_dimensions(rows: usize, cols: usize) -> Self {
+        HashConfig {
+            mode: hash_mode_for_matrix(rows, cols),
+            rows,
+        }
+    }
+
+    fn hash_for_input<H>(&self, input: &SketchInput) -> MatrixHashType
+    where
+        H: SketchHasher<HashType = MatrixHashType>,
+    {
+        hash_for_matrix_seeded_with_mode_generic::<H>(0, self.mode, self.rows, input)
     }
 }
 
-impl HashLayer {
-    pub fn new(lst: Vec<OrchestratedSketch>) -> Result<Self, &'static str> {
-        for sketch in &lst {
-            Self::validate(sketch)?;
+pub enum EnsembleSketch {
+    CountMinFast(Box<dyn CountMinFastOps>),
+    CountFast(Box<dyn CountFastOps>),
+    HllDf(HyperLogLog<DataFusion>),
+    HllRegular(HyperLogLog<Regular>),
+    HllHip(HyperLogLogHIP),
+}
+
+impl EnsembleSketch {
+    pub fn sketch_type(&self) -> &'static str {
+        match self {
+            EnsembleSketch::CountMinFast(_) => "CountMin",
+            EnsembleSketch::CountFast(_) => "Count",
+            EnsembleSketch::HllDf(_)
+            | EnsembleSketch::HllRegular(_)
+            | EnsembleSketch::HllHip(_) => "HLL",
         }
-        Ok(HashLayer {
-            sketches: Vector1D::from_vec(lst),
+    }
+
+    fn hash_config(&self) -> Option<HashConfig> {
+        match self {
+            EnsembleSketch::CountMinFast(s) => {
+                Some(HashConfig::from_dimensions(s.rows(), s.cols()))
+            }
+            EnsembleSketch::CountFast(s) => Some(HashConfig::from_dimensions(s.rows(), s.cols())),
+            EnsembleSketch::HllDf(_)
+            | EnsembleSketch::HllRegular(_)
+            | EnsembleSketch::HllHip(_) => None,
+        }
+    }
+
+    pub fn insert_with_hash(&mut self, hash: &MatrixHashType) {
+        match self {
+            EnsembleSketch::CountMinFast(sketch) => sketch.fast_insert(hash),
+            EnsembleSketch::CountFast(sketch) => sketch.fast_insert(hash),
+            EnsembleSketch::HllDf(hll) => hll.insert_with_hash(hash.lower_64()),
+            EnsembleSketch::HllRegular(hll) => hll.insert_with_hash(hash.lower_64()),
+            EnsembleSketch::HllHip(hll) => hll.insert_with_hash(hash.lower_64()),
+        }
+    }
+
+    /// Returns the frequency estimate for a key.
+    /// `Some(f64)` for CMS / Count, `None` for HLL.
+    pub fn estimate_with_hash(&self, hash: &MatrixHashType) -> Option<f64> {
+        match self {
+            EnsembleSketch::CountMinFast(sketch) => Some(sketch.fast_estimate(hash)),
+            EnsembleSketch::CountFast(sketch) => Some(sketch.fast_estimate(hash)),
+            EnsembleSketch::HllDf(_)
+            | EnsembleSketch::HllRegular(_)
+            | EnsembleSketch::HllHip(_) => None,
+        }
+    }
+
+    /// Returns the cardinality (distinct-count) estimate.
+    /// `Some(f64)` for HLL, `None` for CMS / Count.
+    pub fn cardinality(&self) -> Option<f64> {
+        match self {
+            EnsembleSketch::HllDf(hll) => Some(hll.estimate() as f64),
+            EnsembleSketch::HllRegular(hll) => Some(hll.estimate() as f64),
+            EnsembleSketch::HllHip(hll) => Some(hll.estimate() as f64),
+            EnsembleSketch::CountMinFast(_) | EnsembleSketch::CountFast(_) => None,
+        }
+    }
+}
+
+impl<S, H> From<CountMin<S, FastPath, H>> for EnsembleSketch
+where
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
+    S::Counter: Copy
+        + PartialOrd
+        + From<i32>
+        + std::ops::AddAssign
+        + crate::common::structure_utils::ToF64
+        + 'static,
+{
+    fn from(value: CountMin<S, FastPath, H>) -> Self {
+        EnsembleSketch::CountMinFast(Box::new(value))
+    }
+}
+
+impl<S, H> From<Count<S, FastPath, H>> for EnsembleSketch
+where
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
+    S::Counter: crate::sketches::count::CountSketchCounter + 'static,
+{
+    fn from(value: Count<S, FastPath, H>) -> Self {
+        EnsembleSketch::CountFast(Box::new(value))
+    }
+}
+
+impl From<HyperLogLog<DataFusion>> for EnsembleSketch {
+    fn from(value: HyperLogLog<DataFusion>) -> Self {
+        EnsembleSketch::HllDf(value)
+    }
+}
+
+impl From<HyperLogLog<Regular>> for EnsembleSketch {
+    fn from(value: HyperLogLog<Regular>) -> Self {
+        EnsembleSketch::HllRegular(value)
+    }
+}
+
+impl From<HyperLogLogHIP> for EnsembleSketch {
+    fn from(value: HyperLogLogHIP) -> Self {
+        EnsembleSketch::HllHip(value)
+    }
+}
+
+pub struct HashSketchEnsemble<H = DefaultXxHasher>
+where
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+{
+    sketches: Vector1D<EnsembleSketch>,
+    hash_config: Option<HashConfig>,
+    _hasher: PhantomData<H>,
+}
+
+impl<H> HashSketchEnsemble<H>
+where
+    H: SketchHasher<HashType = MatrixHashType> + 'static,
+{
+    pub fn new(sketches: Vec<EnsembleSketch>) -> Result<Self, &'static str> {
+        let hash_config = Self::validate_sketches(&sketches)?;
+        Ok(HashSketchEnsemble {
+            sketches: Vector1D::from_vec(sketches),
+            hash_config,
+            _hasher: PhantomData,
         })
     }
 
-    pub fn push(&mut self, sketch: OrchestratedSketch) -> Result<(), &'static str> {
-        Self::validate(&sketch)?;
+    pub fn push(&mut self, sketch: EnsembleSketch) -> Result<(), &'static str> {
+        let sketch_cfg = sketch.hash_config();
+        match (self.hash_config, sketch_cfg) {
+            (Some(layer_cfg), Some(sketch_cfg)) if layer_cfg != sketch_cfg => {
+                return Err(
+                    "all matrix sketches in a HashSketchEnsemble must share the same dimensions",
+                );
+            }
+            (None, Some(sketch_cfg)) => {
+                self.hash_config = Some(sketch_cfg);
+            }
+            _ => {}
+        }
         self.sketches.push(sketch);
         Ok(())
     }
 
-    fn validate(sketch: &OrchestratedSketch) -> Result<(), &'static str> {
-        if sketch.supports_hash_reuse() {
-            Ok(())
-        } else {
-            Err("OrchestratedSketch does not support hash reuse")
-        }
-    }
-
-    /// Insert to all sketches using sketch-specific hash computation
-    pub fn insert_all(&mut self, val: &SketchInput) {
-        let mut hash_cache: Vec<(HashDomain, HashValue)> = Vec::new();
-        for i in 0..self.sketches.len() {
-            if let Some(domain) = self.sketches[i].hash_domain() {
-                let hash = Self::hash_for_domain(&mut hash_cache, domain, val);
-                self.sketches[i].insert_with_hash_value(&hash, val);
-            } else {
-                self.sketches[i].insert(val);
-            }
-        }
-    }
-
-    /// Insert to specific sketch indices using sketch-specific hash computation
-    pub fn insert_at(&mut self, indices: &[usize], val: &SketchInput) {
-        let mut hash_cache: Vec<(HashDomain, HashValue)> = Vec::new();
-        for &idx in indices {
-            if idx < self.sketches.len() {
-                if let Some(domain) = self.sketches[idx].hash_domain() {
-                    let hash = Self::hash_for_domain(&mut hash_cache, domain, val);
-                    self.sketches[idx].insert_with_hash_value(&hash, val);
-                } else {
-                    self.sketches[idx].insert(val);
+    fn validate_sketches(sketches: &[EnsembleSketch]) -> Result<Option<HashConfig>, &'static str> {
+        let mut layer_cfg = None;
+        for sketch in sketches {
+            if let Some(cfg) = sketch.hash_config() {
+                match layer_cfg {
+                    Some(existing) if existing != cfg => {
+                        return Err(
+                            "all matrix sketches in a HashSketchEnsemble must share the same dimensions",
+                        );
+                    }
+                    None => layer_cfg = Some(cfg),
+                    _ => {}
                 }
             }
         }
+        Ok(layer_cfg)
     }
 
-    /// Insert to all sketches using a pre-computed hash value
-    pub fn insert_all_with_hash(&mut self, hash_value: &HashValue) {
-        for i in 0..self.sketches.len() {
-            let _ = self.sketches[i].insert_with_hash_only(hash_value);
+    // -- Hashing --------------------------------------------------------------
+
+    /// Compute the shared hash for an input using this layer's hash
+    /// configuration and hasher `H`.
+    pub fn hash_input(&self, input: &SketchInput) -> H::HashType {
+        if let Some(cfg) = self.hash_config {
+            cfg.hash_for_input::<H>(input)
+        } else {
+            MatrixHashType::Packed64(H::hash64_seeded(crate::CANONICAL_HASH_SEED, input))
         }
     }
 
-    /// Insert to specific sketch indices using a pre-computed hash value
-    pub fn insert_at_with_hash(&mut self, indices: &[usize], hash_value: &HashValue) {
+    // -- Insertion -------------------------------------------------------------
+
+    /// Hash `val` once and insert into every sketch in the layer.
+    pub fn insert(&mut self, val: &SketchInput) {
+        let hash = self.hash_input(val);
+        for i in 0..self.sketches.len() {
+            self.sketches[i].insert_with_hash(&hash);
+        }
+    }
+
+    /// Insert a pre-computed hash into every sketch in the layer.
+    pub fn insert_with_hash(&mut self, hash: &H::HashType) {
+        for i in 0..self.sketches.len() {
+            self.sketches[i].insert_with_hash(hash);
+        }
+    }
+
+    /// Hash `val` once and insert into the sketches at `indices` only.
+    pub fn insert_at(&mut self, indices: &[usize], val: &SketchInput) {
+        let hash = self.hash_input(val);
         for &idx in indices {
             if idx < self.sketches.len() {
-                let _ = self.sketches[idx].insert_with_hash_only(hash_value);
+                self.sketches[idx].insert_with_hash(&hash);
             }
         }
     }
 
-    /// Query a specific sketch by index
-    pub fn query_at(&self, index: usize, val: &SketchInput) -> Result<f64, &'static str> {
-        if index >= self.sketches.len() {
-            return Err("Index out of bounds");
-        }
-        if let Some(domain) = self.sketches[index].hash_domain() {
-            let mut hash_cache = Vec::new();
-            let hash = Self::hash_for_domain(&mut hash_cache, domain, val);
-            self.sketches[index].query_with_hash_value(&hash)
-        } else {
-            self.sketches[index].query(val)
+    /// Insert a pre-computed hash into the sketches at `indices` only.
+    pub fn insert_at_with_hash(&mut self, indices: &[usize], hash: &H::HashType) {
+        for &idx in indices {
+            if idx < self.sketches.len() {
+                self.sketches[idx].insert_with_hash(hash);
+            }
         }
     }
 
-    /// Query a specific sketch by index using a pre-computed hash value
-    pub fn query_at_with_hash(
+    /// Insert a batch of inputs into every sketch in the layer.
+    pub fn bulk_insert(&mut self, values: &[SketchInput]) {
+        for value in values {
+            self.insert(value);
+        }
+    }
+
+    /// Insert a batch of pre-computed hashes into every sketch in the layer.
+    pub fn bulk_insert_with_hashes(&mut self, hashes: &[H::HashType]) {
+        for hash in hashes {
+            self.insert_with_hash(hash);
+        }
+    }
+
+    /// Insert a batch of inputs into the sketches at `indices` only.
+    pub fn bulk_insert_at(&mut self, indices: &[usize], values: &[SketchInput]) {
+        for value in values {
+            self.insert_at(indices, value);
+        }
+    }
+
+    /// Insert a batch of pre-computed hashes into the sketches at `indices` only.
+    pub fn bulk_insert_at_with_hashes(&mut self, indices: &[usize], hashes: &[H::HashType]) {
+        for hash in hashes {
+            self.insert_at_with_hash(indices, hash);
+        }
+    }
+
+    // -- Querying: frequency --------------------------------------------------
+
+    /// Frequency estimate for a key at the given sketch index.
+    ///
+    /// Returns an error if the index is out of bounds or the sketch is not a
+    /// frequency sketch (CMS / Count).
+    pub fn estimate(&self, index: usize, val: &SketchInput) -> Result<f64, &'static str> {
+        if index >= self.sketches.len() {
+            return Err("index out of bounds");
+        }
+        let hash = self.hash_input(val);
+        self.sketches[index]
+            .estimate_with_hash(&hash)
+            .ok_or("sketch at this index is not a frequency sketch")
+    }
+
+    /// Frequency estimate using a pre-computed hash.
+    pub fn estimate_with_hash(
         &self,
         index: usize,
-        hash_value: &HashValue,
+        hash: &H::HashType,
     ) -> Result<f64, &'static str> {
         if index >= self.sketches.len() {
-            return Err("Index out of bounds");
+            return Err("index out of bounds");
         }
-        self.sketches[index].query_with_hash_value(hash_value)
+        self.sketches[index]
+            .estimate_with_hash(hash)
+            .ok_or("sketch at this index is not a frequency sketch")
     }
 
-    /// Query all sketches and return results as a vector
-    pub fn query_all(&self, val: &SketchInput) -> Vec<Result<f64, &'static str>> {
-        let mut hash_cache: Vec<(HashDomain, HashValue)> = Vec::new();
-        (0..self.sketches.len())
-            .map(|i| {
-                if let Some(domain) = self.sketches[i].hash_domain() {
-                    let hash = Self::hash_for_domain(&mut hash_cache, domain, val);
-                    self.sketches[i].query_with_hash_value(&hash)
-                } else {
-                    self.sketches[i].query(val)
-                }
-            })
-            .collect()
+    // -- Querying: cardinality ------------------------------------------------
+
+    /// Cardinality (distinct-count) estimate at the given sketch index.
+    ///
+    /// Returns an error if the index is out of bounds or the sketch is not an
+    /// HLL variant.
+    pub fn cardinality(&self, index: usize) -> Result<f64, &'static str> {
+        if index >= self.sketches.len() {
+            return Err("index out of bounds");
+        }
+        self.sketches[index]
+            .cardinality()
+            .ok_or("sketch at this index is not a cardinality sketch")
     }
 
-    /// Query all sketches using a pre-computed hash value
-    pub fn query_all_with_hash(&self, hash_value: &HashValue) -> Vec<Result<f64, &'static str>> {
-        (0..self.sketches.len())
-            .map(|i| self.sketches[i].query_with_hash_value(hash_value))
-            .collect()
-    }
+    // -- Accessors ------------------------------------------------------------
 
-    /// Get the number of sketches in the layer
     pub fn len(&self) -> usize {
         self.sketches.len()
     }
 
-    /// Check if the layer is empty
     pub fn is_empty(&self) -> bool {
         self.sketches.is_empty()
     }
 
-    /// Get a reference to a specific sketch
-    pub fn get(&self, index: usize) -> Option<&OrchestratedSketch> {
+    pub fn get(&self, index: usize) -> Option<&EnsembleSketch> {
         if index < self.sketches.len() {
             Some(&self.sketches[index])
         } else {
@@ -162,26 +368,12 @@ impl HashLayer {
         }
     }
 
-    /// Get a mutable reference to a specific sketch
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut OrchestratedSketch> {
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut EnsembleSketch> {
         if index < self.sketches.len() {
             Some(&mut self.sketches[index])
         } else {
             None
         }
-    }
-
-    fn hash_for_domain(
-        cache: &mut Vec<(HashDomain, HashValue)>,
-        domain: HashDomain,
-        input: &SketchInput,
-    ) -> HashValue {
-        if let Some((_, hash)) = cache.iter().find(|(d, _)| *d == domain) {
-            return hash.clone();
-        }
-        let hash = domain.hash_for_input(input);
-        cache.push((domain, hash));
-        cache.last().expect("hash cache entry").1.clone()
     }
 }
 
@@ -189,16 +381,15 @@ impl HashLayer {
 mod tests {
     use super::*;
     use crate::test_utils::sample_zipf_u64;
-    use crate::{CANONICAL_HASH_SEED, MatrixHashType, hash128_seeded};
+    use crate::{DataFusion, HyperLogLog, Vector2D};
     use std::collections::HashMap;
 
     const SAMPLE_SIZE: usize = 10_000;
     const ZIPF_DOMAIN: usize = 1_000;
     const ZIPF_EXPONENT: f64 = 1.5;
     const SEED: u64 = 42;
-    const ERROR_TOLERANCE: f64 = 0.1; // 10% error tolerance
+    const ERROR_TOLERANCE: f64 = 0.1;
 
-    /// Create a baseline HashMap from zipf data
     fn create_baseline(data: &[u64]) -> HashMap<u64, i64> {
         let mut baseline = HashMap::new();
         for &value in data {
@@ -207,263 +398,227 @@ mod tests {
         baseline
     }
 
-    /// Calculate relative error between estimate and truth
     fn relative_error(estimate: f64, truth: i64) -> f64 {
         if truth == 0 {
-            if estimate == 0.0 {
-                0.0
-            } else {
-                1.0 // Maximum error if truth is 0 but estimate is not
-            }
+            if estimate == 0.0 { 0.0 } else { 1.0 }
         } else {
             ((estimate - truth as f64).abs()) / (truth as f64)
         }
     }
 
+    fn default_layer() -> HashSketchEnsemble<DefaultXxHasher> {
+        HashSketchEnsemble::new(vec![
+            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+            Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+        ])
+        .expect("compatible sketches")
+    }
+
     #[test]
-    fn test_hashlayer_insert_all() {
-        // Generate zipf data
+    fn test_insert_and_estimate() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
         let baseline = create_baseline(&data);
 
-        // Create HashLayer with default sketches
-        let mut layer = HashLayer::default();
-        assert_eq!(layer.len(), 3); // CountMin, Count, HllDf
+        let mut layer = default_layer();
+        assert_eq!(layer.len(), 2);
 
-        // Insert all data
         for &value in &data {
-            let input = SketchInput::U64(value);
-            layer.insert_all(&input);
+            layer.insert(&SketchInput::U64(value));
         }
 
-        // Test queries for CountMin (index 0) and Count (index 1)
-        let mut countmin_errors = Vec::new();
-        let mut count_errors = Vec::new();
+        let mut cms_errors = Vec::new();
+        let mut cs_errors = Vec::new();
 
         for (&key, &true_count) in baseline.iter().take(100) {
             let input = SketchInput::U64(key);
 
-            // Query CountMin sketch (index 0)
-            let countmin_est = layer.query_at(0, &input).expect("Query should succeed");
-            let countmin_err = relative_error(countmin_est, true_count);
-            countmin_errors.push(countmin_err);
+            let cms_est = layer.estimate(0, &input).expect("CMS estimate");
+            cms_errors.push(relative_error(cms_est, true_count));
 
-            // Query Count sketch (index 1)
-            let count_est = layer.query_at(1, &input).expect("Query should succeed");
-            let count_err = relative_error(count_est, true_count);
-            count_errors.push(count_err);
+            let cs_est = layer.estimate(1, &input).expect("CS estimate");
+            cs_errors.push(relative_error(cs_est, true_count));
         }
 
-        // Calculate average errors
-        let avg_countmin_error: f64 =
-            countmin_errors.iter().sum::<f64>() / countmin_errors.len() as f64;
-        let avg_count_error: f64 = count_errors.iter().sum::<f64>() / count_errors.len() as f64;
+        let avg_cms = cms_errors.iter().sum::<f64>() / cms_errors.len() as f64;
+        let avg_cs = cs_errors.iter().sum::<f64>() / cs_errors.len() as f64;
 
-        println!("Average CountMin error: {avg_countmin_error:.4}");
-        println!("Average Count error: {avg_count_error:.4}");
-
-        assert!(
-            avg_countmin_error < ERROR_TOLERANCE,
-            "CountMin average error {avg_countmin_error:.4} exceeded tolerance {ERROR_TOLERANCE:.4}"
-        );
-        assert!(
-            avg_count_error < ERROR_TOLERANCE,
-            "Count average error {avg_count_error:.4} exceeded tolerance {ERROR_TOLERANCE:.4}"
-        );
+        assert!(avg_cms < ERROR_TOLERANCE, "CMS avg error {avg_cms:.4}");
+        assert!(avg_cs < ERROR_TOLERANCE, "CS avg error {avg_cs:.4}");
     }
 
     #[test]
-    fn test_hashlayer_insert_at_specific_indices() {
+    fn test_insert_at() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
         let baseline = create_baseline(&data);
 
-        let mut layer = HashLayer::default();
+        let mut layer = default_layer();
 
-        // Insert only to CountMin (index 0) and Count (index 1), not HllDf
         for &value in &data {
-            let input = SketchInput::U64(value);
-            layer.insert_at(&[0, 1], &input);
+            layer.insert_at(&[0], &SketchInput::U64(value));
         }
 
-        // Test that CountMin and Count have data
         let sample_key = *baseline.keys().next().unwrap();
         let input = SketchInput::U64(sample_key);
 
-        let countmin_result = layer.query_at(0, &input);
-        assert!(countmin_result.is_ok());
-        assert!(countmin_result.unwrap() > 0.0, "CountMin should have data");
+        let cms_est = layer.estimate(0, &input).expect("CMS estimate");
+        assert!(cms_est > 0.0, "CMS at index 0 should have data");
 
-        let count_result = layer.query_at(1, &input);
-        assert!(count_result.is_ok());
-        assert!(count_result.unwrap() > 0.0, "Count should have data");
+        let cs_est = layer.estimate(1, &input).expect("CS estimate");
+        assert_eq!(cs_est, 0.0, "CS at index 1 should be empty");
     }
 
     #[test]
-    fn test_hashlayer_query_all() {
+    fn test_insert_with_hash_matches_insert() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
 
-        let mut layer = HashLayer::default();
+        let mut layer_a = default_layer();
+        let mut layer_b = default_layer();
 
         for &value in &data {
             let input = SketchInput::U64(value);
-            layer.insert_all(&input);
+            layer_a.insert(&input);
+
+            let hash = layer_b.hash_input(&input);
+            layer_b.insert_with_hash(&hash);
         }
 
-        // Query all sketches at once
-        let test_value = data[0];
-        let input = SketchInput::U64(test_value);
-        let results = layer.query_all(&input);
+        let probe = SketchInput::U64(data[0]);
+        let hash = layer_a.hash_input(&probe);
 
-        assert_eq!(results.len(), 3, "Should have 3 results");
-
-        // CountMin and Count should return valid estimates
-        assert!(results[0].is_ok(), "CountMin query should succeed");
-        assert!(results[1].is_ok(), "Count query should succeed");
-
-        // HllDf returns cardinality (should also succeed)
-        assert!(results[2].is_ok(), "HllDf query should succeed");
+        let est_a = layer_a.estimate(0, &probe).unwrap();
+        let est_b = layer_b.estimate_with_hash(0, &hash).unwrap();
+        assert_eq!(est_a, est_b);
     }
 
     #[test]
-    fn test_hashlayer_with_hash_optimization() {
-        let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
-        let baseline = create_baseline(&data);
-
-        let mut layer = HashLayer::default();
-
-        // Insert using pre-computed hash (the key optimization)
-        for &value in &data {
-            let input = SketchInput::U64(value);
-            let hash = HashValue::Matrix(MatrixHashType::Packed128(hash128_seeded(
-                CANONICAL_HASH_SEED,
-                &input,
-            )));
-            layer.insert_all_with_hash(&hash);
-        }
-
-        // Query using pre-computed hash
-        let mut errors = Vec::new();
-        for (&key, &true_count) in baseline.iter().take(50) {
-            let input = SketchInput::U64(key);
-            let hash = HashValue::Matrix(MatrixHashType::Packed128(hash128_seeded(
-                CANONICAL_HASH_SEED,
-                &input,
-            )));
-
-            let countmin_est = layer
-                .query_at_with_hash(0, &hash)
-                .expect("Query should succeed");
-            let err = relative_error(countmin_est, true_count);
-            errors.push(err);
-        }
-
-        let avg_error: f64 = errors.iter().sum::<f64>() / errors.len() as f64;
-        println!("Average error with hash optimization: {avg_error:.4}");
-
-        assert!(
-            avg_error < ERROR_TOLERANCE,
-            "Average error with hash {avg_error:.4} exceeded tolerance {ERROR_TOLERANCE:.4}"
-        );
-    }
-
-    #[test]
-    fn test_hashlayer_hll_cardinality() {
+    fn test_hll_cardinality() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
         let baseline = create_baseline(&data);
         let true_cardinality = baseline.len();
 
-        let mut layer = HashLayer::default();
+        let mut layer: HashSketchEnsemble<DefaultXxHasher> =
+            HashSketchEnsemble::new(vec![HyperLogLog::<DataFusion>::default().into()])
+                .expect("HLL-only layer");
 
         for &value in &data {
-            let input = SketchInput::U64(value);
-            layer.insert_all(&input);
+            layer.insert(&SketchInput::U64(value));
         }
 
-        // Query HllDf (index 2) for cardinality
-        let dummy_input = SketchInput::U64(0); // Value doesn't matter for HLL
-        let hll_estimate = layer
-            .query_at(2, &dummy_input)
-            .expect("HLL query should succeed");
-
-        let cardinality_error = relative_error(hll_estimate, true_cardinality as i64);
-
-        println!("True cardinality: {true_cardinality}");
-        println!("HLL estimate: {hll_estimate:.0}");
-        println!("Cardinality error: {cardinality_error:.4}");
+        let hll_est = layer.cardinality(0).expect("HLL cardinality");
+        let err = relative_error(hll_est, true_cardinality as i64);
 
         assert!(
-            cardinality_error < 0.02, // HLL should have ~2% error
-            "HLL cardinality error {cardinality_error:.4} too high (true: {true_cardinality}, estimate: {hll_estimate:.0})"
+            err < 0.02,
+            "HLL cardinality error {err:.4} too high \
+             (true: {true_cardinality}, estimate: {hll_est:.0})"
         );
     }
 
     #[test]
-    fn test_hashlayer_direct_access() {
-        let mut layer = HashLayer::default();
+    fn test_estimate_on_hll_returns_error() {
+        let layer: HashSketchEnsemble<DefaultXxHasher> =
+            HashSketchEnsemble::new(vec![HyperLogLog::<DataFusion>::default().into()])
+                .expect("HLL-only layer");
 
-        // Test direct access via get()
-        assert!(layer.get(0).is_some(), "Should access sketch at index 0");
-        assert!(layer.get(1).is_some(), "Should access sketch at index 1");
-        assert!(layer.get(2).is_some(), "Should access sketch at index 2");
-        assert!(
-            layer.get(3).is_none(),
-            "Should return None for out of bounds"
-        );
+        let result = layer.estimate(0, &SketchInput::U64(42));
+        assert!(result.is_err());
+    }
 
-        // Test mutable access via get_mut()
-        let sketch = layer.get_mut(0).expect("Should get mutable reference");
+    #[test]
+    fn test_cardinality_on_cms_returns_error() {
+        let layer = default_layer();
+        let result = layer.cardinality(0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_direct_access() {
+        let mut layer = default_layer();
+
+        assert!(layer.get(0).is_some());
+        assert!(layer.get(1).is_some());
+        assert!(layer.get(2).is_none());
+
+        let sketch = layer.get_mut(0).expect("mutable ref");
         assert_eq!(sketch.sketch_type(), "CountMin");
     }
 
     #[test]
-    fn test_hashlayer_bounds_checking() {
-        let layer = HashLayer::default();
-        let input = SketchInput::U64(42);
+    fn test_bounds_checking() {
+        let layer = default_layer();
 
-        // Test query bounds checking
-        let result = layer.query_at(999, &input);
-        assert!(result.is_err(), "Should error on out of bounds query");
-        assert_eq!(result.unwrap_err(), "Index out of bounds");
+        assert!(layer.estimate(999, &SketchInput::U64(0)).is_err());
+        assert!(layer.cardinality(999).is_err());
 
-        // Test query_at_with_hash bounds checking
-        let hash = HashValue::Matrix(MatrixHashType::Packed128(hash128_seeded(
-            CANONICAL_HASH_SEED,
-            &input,
-        )));
-        let result = layer.query_at_with_hash(999, &hash);
-        assert!(result.is_err(), "Should error on out of bounds query");
-        assert_eq!(result.unwrap_err(), "Index out of bounds");
+        let hash = layer.hash_input(&SketchInput::U64(0));
+        assert!(layer.estimate_with_hash(999, &hash).is_err());
     }
 
     #[test]
-    fn test_hashlayer_custom_sketches() {
-        // Create a custom HashLayer with specific sketch configurations
-        let sketches = vec![
-            OrchestratedSketch::Freq(FreqSketch::CountMin(
-                CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
-            )),
-            OrchestratedSketch::Freq(FreqSketch::Count(
-                Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
-            )),
-        ];
-
-        let mut layer = HashLayer::new(sketches).expect("custom HashLayer should be valid");
+    fn test_custom_dimensions() {
+        let mut layer: HashSketchEnsemble<DefaultXxHasher> = HashSketchEnsemble::new(vec![
+            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
+            Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
+        ])
+        .expect("compatible sketches");
         assert_eq!(layer.len(), 2);
         assert!(!layer.is_empty());
 
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
-
         for &value in &data {
-            let input = SketchInput::U64(value);
-            layer.insert_all(&input);
+            layer.insert(&SketchInput::U64(value));
         }
 
-        // Verify both sketches have data
-        let test_input = SketchInput::U64(data[0]);
-        let result0 = layer.query_at(0, &test_input);
-        let result1 = layer.query_at(1, &test_input);
+        let input = SketchInput::U64(data[0]);
+        assert!(layer.estimate(0, &input).unwrap() > 0.0);
+        assert!(layer.estimate(1, &input).unwrap() > 0.0);
+    }
 
-        assert!(result0.is_ok() && result0.unwrap() > 0.0);
-        assert!(result1.is_ok() && result1.unwrap() > 0.0);
+    #[test]
+    fn test_mixed_matrix_and_hll() {
+        let mut layer = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
+            CountMin::<Vector2D<i32>, FastPath>::default().into(),
+            HyperLogLog::<DataFusion>::default().into(),
+        ])
+        .expect("CMS + HLL layer");
+
+        let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
+        let baseline = create_baseline(&data);
+
+        for &value in &data {
+            layer.insert(&SketchInput::U64(value));
+        }
+
+        let cms_est = layer
+            .estimate(0, &SketchInput::U64(data[0]))
+            .expect("CMS estimate");
+        assert!(cms_est > 0.0);
+
+        let card = layer.cardinality(1).expect("HLL cardinality");
+        let err = relative_error(card, baseline.len() as i64);
+        assert!(err < 0.05, "HLL error {err:.4}");
+    }
+
+    #[test]
+    fn test_push_compatible() {
+        let mut layer: HashSketchEnsemble<DefaultXxHasher> = HashSketchEnsemble::new(vec![
+            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+        ])
+        .expect("single CMS");
+
+        let result = layer.push(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into());
+        assert!(result.is_ok());
+        assert_eq!(layer.len(), 2);
+    }
+
+    #[test]
+    fn test_push_incompatible_rejected() {
+        let mut layer: HashSketchEnsemble<DefaultXxHasher> = HashSketchEnsemble::new(vec![
+            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+        ])
+        .expect("single CMS");
+
+        let result = layer.push(Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into());
+        assert!(result.is_err());
     }
 }

@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::common::input::sketch_input_to_f64;
 use crate::{SketchInput, Vector1D};
 
+const MAX_LEVELS: usize = 61;
+
 const CAPACITY_CACHE_LEN: usize = 20;
 const MAX_CACHEABLE_K: usize = 26_602;
 const CAPACITY_DECAY: f64 = 2.0 / 3.0;
@@ -83,25 +85,113 @@ pub struct CdfEntry {
     quantile: f64,
 }
 
-/// KLL quantile sketch using a compact, insert-optimized layout.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Computes the maximum number of items the sketch can hold across all
+/// levels for the given `k` and `m`. The buffer is pre-allocated to this
+/// size so that no dynamic reallocation ever occurs.
+fn compute_max_capacity(k: usize, m: usize) -> usize {
+    let mut total = 0;
+    let mut scale = 1.0_f64;
+    for _ in 0..MAX_LEVELS {
+        total += ((k as f64) * scale).ceil().max(m as f64) as usize;
+        scale *= CAPACITY_DECAY;
+    }
+    total
+}
+
+/// Halves a sorted run, placing survivors in the **upper** (right) half of
+/// `items[begin..begin+pop]` so they are contiguous with the level above.
+/// Traverses backwards to avoid overwriting unread source elements.
+#[inline]
+fn randomly_halve_up(items: &mut [f64], begin: usize, pop: usize, offset: usize) -> usize {
+    let num_survivors = (pop - offset + 1) / 2;
+    let dest = begin + pop - num_survivors;
+    for d in (0..num_survivors).rev() {
+        items[dest + d] = items[begin + offset + 2 * d];
+    }
+    num_survivors
+}
+
+/// Merges two contiguous sorted runs in `slice` using `f64::total_cmp`.
+/// `slice[..left_len]` is the first sorted run, `slice[left_len..]` is the
+/// second.  `buf` is a reusable scratch buffer.
+#[inline]
+fn merge_sorted_runs(slice: &mut [f64], left_len: usize, buf: &mut Vec<f64>) {
+    let total = slice.len();
+    if left_len == 0 || left_len >= total {
+        return;
+    }
+    if slice[left_len - 1].total_cmp(&slice[left_len]).is_le() {
+        return;
+    }
+
+    let right_len = total - left_len;
+    buf.clear();
+
+    if left_len <= right_len {
+        buf.extend_from_slice(&slice[..left_len]);
+        let mut i = 0;
+        let mut j = left_len;
+        let mut k = 0;
+        while i < buf.len() && j < total {
+            if buf[i].total_cmp(&slice[j]).is_le() {
+                slice[k] = buf[i];
+                i += 1;
+            } else {
+                slice[k] = slice[j];
+                j += 1;
+            }
+            k += 1;
+        }
+        if i < buf.len() {
+            slice[k..k + (buf.len() - i)].copy_from_slice(&buf[i..]);
+        }
+    } else {
+        buf.extend_from_slice(&slice[left_len..]);
+        let mut i = left_len;
+        let mut j = buf.len();
+        let mut k = total;
+        while i > 0 && j > 0 {
+            k -= 1;
+            if buf[j - 1].total_cmp(&slice[i - 1]).is_ge() {
+                slice[k] = buf[j - 1];
+                j -= 1;
+            } else {
+                slice[k] = slice[i - 1];
+                i -= 1;
+            }
+        }
+        if j > 0 {
+            slice[..j].copy_from_slice(&buf[..j]);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// KLL sketch
+// ---------------------------------------------------------------------------
+
+/// KLL quantile sketch using a compact, insert-optimized, grow-downward layout.
+///
+/// Memory layout (grows leftward):
+/// ```text
+/// items: [ free ← | L0 (unsorted) | L1 | L2 | … | L_top ]
+///         0        levels[0]                        levels[num_levels]
+/// ```
+///
+/// `levels[h]` = start of level h.  `levels[h+1] - levels[h]` = size of level h.
+#[derive(Clone, Debug)]
 pub struct KLL {
-    items: Vector1D<f64>, // compactors, packed
-    /// Stores the START index of each level in `items`.
-    levels: Vector1D<usize>,
+    items: Box<[f64]>,
+    levels: Box<[usize]>,
     k: usize,
-    m: usize, // Minimum buffer size (usually 8)
+    m: usize,
     num_levels: usize,
+    max_capacity: usize,
     co: Coin,
-    /// Cached level capacities by height (from top to bottom)
-    #[serde(skip)]
     capacity_cache: [u32; CAPACITY_CACHE_LEN],
-    /// Tracks current top height so we can index into the cache quickly.
-    #[serde(skip)]
     top_height: usize,
-    /// Cached capacity for level 0 to speed up hot-path updates
-    #[serde(skip)]
     level0_capacity: usize,
+    merge_buf: Vec<f64>,
 }
 
 impl Default for KLL {
@@ -119,16 +209,24 @@ impl KLL {
         if norm_k > MAX_CACHEABLE_K {
             norm_k = MAX_CACHEABLE_K;
         }
+        let max_cap = compute_max_capacity(norm_k, norm_m);
         let mut s = Self {
-            items: Vector1D::init(norm_k * 3),
-            levels: Vector1D::filled(2, 0),
+            items: vec![0.0_f64; max_cap].into_boxed_slice(),
+            levels: {
+                let mut v = vec![0usize; MAX_LEVELS + 1];
+                v[0] = max_cap;
+                v[1] = max_cap;
+                v.into_boxed_slice()
+            },
             k: norm_k,
             m: norm_m,
             num_levels: 1,
+            max_capacity: max_cap,
             co: Coin::new(),
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
             level0_capacity: 0,
+            merge_buf: Vec::with_capacity(norm_k),
         };
         s.rebuild_capacity_cache();
         s
@@ -139,51 +237,91 @@ impl KLL {
         Self::init(k as usize, 8)
     }
 
+    /// Hot-path insert: decrement `levels[0]`, write item, check capacity.
+    #[inline]
     fn push_value(&mut self, value: f64) {
-        self.items.push(value);
-
-        if let Some(last) = self.levels.last_mut() {
-            *last = self.items.len();
+        if self.levels[0] == 0 {
+            self.compress_while_updating();
         }
+        self.levels[0] -= 1;
+        self.items[self.levels[0]] = value;
 
-        let levels_slice = self.levels.as_slice();
-        let l0_start = levels_slice[self.num_levels - 1];
-        let l0_count = self.items.len() - l0_start;
-
-        if l0_count > self.level0_capacity {
-            self.compress_while_needed();
+        if self.levels[1] - self.levels[0] > self.level0_capacity {
+            self.compress_while_updating();
         }
     }
 
-    /// The hot path: O(1) insertion at the end of the vector.
     pub fn update(&mut self, val: &SketchInput) -> Result<(), &'static str> {
         let value = sketch_input_to_f64(val)?;
         self.push_value(value);
         Ok(())
     }
 
-    /// Loops to maintain the KLL invariant.
-    fn compress_while_needed(&mut self) {
+    // -- Compaction ----------------------------------------------------------
+
+    fn compress_while_updating(&mut self) {
         let mut h = 0;
         loop {
-            let level_idx = self.num_levels - 1 - h;
+            let pop = self.level_size(h);
             let cap = self.capacity_for_level(h);
-
-            let size = self.level_size(h);
-
-            if size <= cap {
+            if pop <= cap {
                 break;
             }
-
-            if level_idx == 0 {
+            if h + 1 == self.num_levels {
                 self.add_new_top_level();
-                continue;
             }
-
             self.compact(h);
             h += 1;
         }
     }
+
+    fn compact(&mut self, h: usize) {
+        let beg = self.levels[h];
+        let end = self.levels[h + 1];
+        let pop = end - beg;
+
+        if h == 0 {
+            self.items[beg..end].sort_unstable_by(f64::total_cmp);
+        }
+
+        let offset = usize::from(self.co.toss());
+        let num_survivors = randomly_halve_up(&mut self.items, beg, pop, offset);
+        let surv_start = beg + pop - num_survivors;
+
+        let pop_above = self.levels[h + 2] - end;
+        if pop_above > 0 {
+            merge_sorted_runs(
+                &mut self.items[surv_start..end + pop_above],
+                num_survivors,
+                &mut self.merge_buf,
+            );
+        }
+
+        let delta = surv_start - beg;
+        if delta > 0 && h > 0 {
+            let lo = self.levels[0];
+            let hi = beg;
+            if hi > lo {
+                self.items.copy_within(lo..hi, lo + delta);
+            }
+            for lvl in self.levels[..h].iter_mut() {
+                *lvl += delta;
+            }
+        }
+
+        self.levels[h] = surv_start;
+        self.levels[h + 1] = surv_start;
+    }
+
+    fn add_new_top_level(&mut self) {
+        let sentinel = self.levels[self.num_levels];
+        self.num_levels += 1;
+        self.levels[self.num_levels] = sentinel;
+        self.top_height = self.num_levels - 1;
+        self.level0_capacity = self.capacity_for_level(0);
+    }
+
+    // -- Capacity helpers ----------------------------------------------------
 
     fn capacity_for_level(&self, level: usize) -> usize {
         if self.num_levels == 0 {
@@ -208,122 +346,22 @@ impl KLL {
 
     #[inline]
     fn level_size(&self, h: usize) -> usize {
-        let idx = self.num_levels - 1 - h;
-        let slice = self.levels.as_slice();
-        slice[idx + 1] - slice[idx]
+        self.levels[h + 1] - self.levels[h]
     }
 
-    fn add_new_top_level(&mut self) {
-        self.levels.insert(0, 0);
-        if let Some(last) = self.levels.last_mut() {
-            *last = self.items.len();
-        }
-        self.num_levels += 1;
-        self.top_height = self.num_levels - 1;
-        self.level0_capacity = self.capacity_for_level(0);
-    }
+    // -- Query-side ----------------------------------------------------------
 
-    fn compact(&mut self, h: usize) {
-        let cur_lvl_idx = self.num_levels - 1 - h;
-
-        // Get raw indices first
-        let levels_slice = self.levels.as_mut_slice();
-        let start = levels_slice[cur_lvl_idx];
-        let end = levels_slice[cur_lvl_idx + 1];
-        let count = end - start;
-
-        let items = self.items.as_mut_slice();
-
-        items[start..end].sort_unstable_by(f64::total_cmp);
-
-        let offset = usize::from(self.co.toss());
-        let mut survivors = 0;
-        let mut i = offset;
-
-        while i < count {
-            items[start + survivors] = items[start + i];
-            survivors += 1;
-            i += 2;
-        }
-
-        let garbage_len = count - survivors;
-        let start_garbage = start + survivors;
-        let end_garbage = end;
-        let tail_len = items.len() - end_garbage;
-
-        if tail_len > 0 {
-            // Safety: source and destination ranges may overlap, but `ptr::copy` handles overlap.
-            // The ranges are within `items` and `tail_len` ensures we stay in-bounds.
-            unsafe {
-                let ptr = items.as_mut_ptr();
-                std::ptr::copy(ptr.add(end_garbage), ptr.add(start_garbage), tail_len);
-            }
-        }
-
-        let new_len = items.len() - garbage_len;
-        self.items.truncate(new_len);
-
-        // Update level pointers after shift
-        let levels_slice = self.levels.as_mut_slice();
-        levels_slice[cur_lvl_idx] = start + survivors;
-
-        for pos in levels_slice
-            .iter_mut()
-            .take(self.num_levels + 1)
-            .skip(cur_lvl_idx + 1)
-        {
-            *pos -= garbage_len;
-        }
-
-        // Sync last pointer just in case (should be covered by loop, but ensures safety)
-        levels_slice[self.num_levels] = self.items.len();
-    }
-
-    /// Reset the sketch to its initial state, preserving `k`, `m`, and the
-    /// backing `items` allocation. After clearing, the sketch behaves as if
-    /// freshly constructed.
-    pub fn clear(&mut self) {
-        self.items.clear();
-        self.levels = Vector1D::filled(2, 0);
-        self.num_levels = 1;
-        self.co = Coin::new();
-        self.rebuild_capacity_cache();
-    }
-
-    /// Prints the compactors for debugging.
-    pub fn print_compactors(&self) {
-        println!(
-            "KLL Packed (k={}, levels={}, items={})",
-            self.k,
-            self.num_levels,
-            self.items.len()
-        );
-        let levels = self.levels.as_slice();
-        let items = self.items.as_slice();
-        for h in (0..self.num_levels).rev() {
-            let idx = self.num_levels - 1 - h;
-            let start = levels[idx];
-            let end = levels[idx + 1];
-            println!("  L{}: {:?}", h, &items[start..end]);
-        }
-    }
-
-    /// Builds a CDF representation of the sketch.
     pub fn cdf(&self) -> Cdf {
         let mut cdf = Cdf {
             entries: Vector1D::init(self.buffer_size()),
         };
         let mut total_w = 0usize;
 
-        let levels = self.levels.as_slice();
-        let items = self.items.as_slice();
-
         for h in 0..self.num_levels {
-            let idx = self.num_levels - 1 - h;
-            let start = levels[idx];
-            let end = levels[idx + 1];
+            let start = self.levels[h];
+            let end = self.levels[h + 1];
             let weight = 1 << h;
-            for &value in &items[start..end] {
+            for &value in &self.items[start..end] {
                 cdf.entries.push(CdfEntry {
                     value,
                     quantile: weight as f64,
@@ -349,33 +387,26 @@ impl KLL {
         cdf
     }
 
-    /// Merges another sketch into this one.
     pub fn merge(&mut self, other: &KLL) {
-        for &value in other.items.as_slice() {
+        let used_start = other.levels[0];
+        let used_end = other.levels[other.num_levels];
+        for &value in &other.items[used_start..used_end] {
             self.push_value(value);
         }
     }
 
-    /// Returns the estimated value at quantile `q`.
     pub fn quantile(&self, q: f64) -> f64 {
         let cdf = self.cdf();
         cdf.query(q)
     }
 
-    /// Returns the estimated rank of value `x`.
     pub fn rank(&self, x: f64) -> usize {
         let mut r = 0;
-        let levels = self.levels.as_slice();
-        let items = self.items.as_slice();
-
         for h in 0..self.num_levels {
-            let idx = self.num_levels - 1 - h;
-            let start = levels[idx];
-            let end = levels[idx + 1];
+            let start = self.levels[h];
+            let end = self.levels[h + 1];
             let weight = 1 << h;
-
-            // Using iter check is faster than full slice copy
-            for &val in &items[start..end] {
+            for &val in &self.items[start..end] {
                 if val <= x {
                     r += weight;
                 }
@@ -384,7 +415,6 @@ impl KLL {
         r
     }
 
-    /// Returns the total count of observations seen by the sketch.
     pub fn count(&self) -> usize {
         let mut total = 0;
         for h in 0..self.num_levels {
@@ -393,22 +423,120 @@ impl KLL {
         total
     }
 
-    /// Number of stored samples across all levels.
     fn buffer_size(&self) -> usize {
-        self.items.len()
+        self.levels[self.num_levels] - self.levels[0]
     }
 
-    /// Serialize the sketch into MessagePack bytes.
+    // -- Lifecycle -----------------------------------------------------------
+
+    pub fn clear(&mut self) {
+        let mc = self.max_capacity;
+        self.levels[0] = mc;
+        self.levels[1] = mc;
+        self.num_levels = 1;
+        self.co = Coin::new();
+        self.rebuild_capacity_cache();
+    }
+
+    pub fn print_compactors(&self) {
+        println!(
+            "KLL Packed (k={}, levels={}, items={})",
+            self.k,
+            self.num_levels,
+            self.buffer_size()
+        );
+        for h in (0..self.num_levels).rev() {
+            let start = self.levels[h];
+            let end = self.levels[h + 1];
+            println!("  L{}: {:?}", h, &self.items[start..end]);
+        }
+    }
+
+    // -- Serialization -------------------------------------------------------
+
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         rmp_serde::to_vec(self)
     }
 
-    /// Deserialize a sketch from MessagePack bytes.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        rmp_serde::from_slice(bytes).map(|mut sketch: KLL| {
-            sketch.rebuild_capacity_cache();
-            sketch
-        })
+        rmp_serde::from_slice(bytes)
+    }
+
+    fn ensure_levels_sorted(&mut self) {
+        if self.num_levels <= 1 {
+            return;
+        }
+        for h in 1..self.num_levels {
+            let s = self.levels[h];
+            let e = self.levels[h + 1];
+            if s < e {
+                self.items[s..e].sort_unstable_by(f64::total_cmp);
+            }
+        }
+    }
+}
+
+/// Wire format for serialization (only the used portion of the buffer).
+#[derive(Serialize, Deserialize)]
+struct KLLWire {
+    items: Vec<f64>,
+    levels: Vec<usize>,
+    k: usize,
+    m: usize,
+    num_levels: usize,
+    co: Coin,
+}
+
+impl Serialize for KLL {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let used_start = self.levels[0];
+        let used_end = self.levels[self.num_levels];
+        let wire = KLLWire {
+            items: self.items[used_start..used_end].to_vec(),
+            levels: self.levels[..=self.num_levels]
+                .iter()
+                .map(|&l| l - used_start)
+                .collect(),
+            k: self.k,
+            m: self.m,
+            num_levels: self.num_levels,
+            co: self.co.clone(),
+        };
+        wire.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for KLL {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = KLLWire::deserialize(deserializer)?;
+        let max_cap = compute_max_capacity(wire.k, wire.m);
+        let used_len = wire.items.len();
+        let offset = max_cap - used_len;
+
+        let mut items = vec![0.0_f64; max_cap].into_boxed_slice();
+        items[offset..offset + used_len].copy_from_slice(&wire.items);
+
+        let mut levels = vec![0usize; MAX_LEVELS + 1].into_boxed_slice();
+        for (i, &l) in wire.levels.iter().enumerate() {
+            levels[i] = l + offset;
+        }
+
+        let mut sketch = KLL {
+            items,
+            levels,
+            k: wire.k,
+            m: wire.m,
+            num_levels: wire.num_levels,
+            max_capacity: max_cap,
+            co: wire.co,
+            capacity_cache: [0; CAPACITY_CACHE_LEN],
+            top_height: 0,
+            level0_capacity: 0,
+            merge_buf: Vec::with_capacity(wire.k),
+        };
+        sketch.rebuild_capacity_cache();
+        sketch.ensure_levels_sorted();
+        Ok(sketch)
     }
 }
 
@@ -827,13 +955,17 @@ mod tests {
         assert_eq!(sketch.top_height, restored.top_height);
         assert_eq!(sketch.level0_capacity, restored.level0_capacity);
         assert_eq!(
-            sketch.levels.as_slice(),
-            restored.levels.as_slice(),
+            sketch.levels, restored.levels,
             "level boundaries changed after round-trip"
         );
+
+        let s_start = sketch.levels[0];
+        let s_end = sketch.levels[sketch.num_levels];
+        let r_start = restored.levels[0];
+        let r_end = restored.levels[restored.num_levels];
         assert_eq!(
-            sketch.items.as_slice(),
-            restored.items.as_slice(),
+            &sketch.items[s_start..s_end],
+            &restored.items[r_start..r_end],
             "packed items changed after round-trip"
         );
 

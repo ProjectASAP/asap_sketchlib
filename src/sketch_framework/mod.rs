@@ -7,18 +7,9 @@ pub use eh_sketch_list::EHSketchList;
 pub use eh_sketch_list::SketchNorm;
 
 pub mod hashlayer;
-pub use hashlayer::HashLayer;
+pub use hashlayer::{EnsembleSketch, HashSketchEnsemble};
 
-pub mod orchestrator;
-pub use orchestrator::node_catalog::{
-    CardinalitySketch, FreqSketch, GSumSketch, HashDomain, HashReuseSketch, HashValue,
-    OrchestratedSketch, OrchestratorInsert, OrchestratorQuery, OrchestratorSketch, QuantileSketch,
-    SubpopulationSketch, UnivMonQuery,
-};
-pub use orchestrator::{
-    EhNode, HashLayerNode, NitroNode, NodeInsert, NodeMeta, NodeQuery, NodeSelector, Orchestrator,
-    OrchestratorNode, SketchNode,
-};
+pub mod sketch_catalog;
 
 pub mod hydra;
 pub use hydra::Hydra;
@@ -34,6 +25,12 @@ pub use nitro::{NitroBatch, NitroEstimate, NitroTarget};
 
 pub mod eh_univ_optimized;
 pub use eh_univ_optimized::{EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUnivQueryResult};
+
+pub mod octo;
+pub use octo::{
+    CountOctoAggregator, CountOctoWorker, HllOctoAggregator, HllOctoWorker, OctoAggregator,
+    OctoConfig, OctoReadHandle, OctoResult, OctoRuntime, OctoWorker, run_octo,
+};
 
 pub mod tumbling;
 pub use tumbling::{

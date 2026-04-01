@@ -791,11 +791,6 @@ At this moment, ```cargo test``` is a good starting point.
   - `nitro.rs` - `NitroBatch` batch-mode sampling wrapper
   - `orchestrator/` - Node-level manager for sketches and frameworks (EH/HashLayer/Nitro nodes)
 
-### Testing & Benchmarking
-
-- **`benches/`** - Criterion-based performance benchmarks
-  - Run with: `cargo bench`
-
 ### Documentation
 
 - **`docs/`** - API and feature documentation

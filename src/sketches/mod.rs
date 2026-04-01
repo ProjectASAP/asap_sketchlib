@@ -19,18 +19,16 @@ pub use elastic::Elastic;
 pub use elastic::HeavyBucket;
 
 pub mod hll;
-pub use hll::{DataFusion, HyperLogLog, HyperLogLogHIP, Regular};
+pub use hll::{
+    DataFusion, HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogHIPP14,
+    HyperLogLogHIPP16, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, Regular,
+};
 
 pub mod kll;
 pub use kll::KLL;
 
 pub mod kmv;
-
-pub mod locher;
-// pub use locher::LocherSketch;
-
-pub mod microscope;
-pub use microscope::MicroScope;
+pub use kmv::KMV;
 
 pub mod uniform;
 pub use uniform::UniformSampling;
@@ -43,6 +41,9 @@ pub use cms_heap::CMSHeap;
 
 pub mod cs_heap;
 pub use cs_heap::CSHeap;
+
+pub mod octo_delta;
+pub use octo_delta::{CM_PROMASK, COUNT_PROMASK, CmDelta, CountDelta, HLL_PROMASK, HllDelta};
 
 pub mod fold_cms;
 pub use fold_cms::{FoldCMS, FoldCell, FoldEntry};
