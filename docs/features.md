@@ -39,7 +39,8 @@ This document provides a high-level overview of implemented and planned features
 ### Frameworks
 
 ✅ **Hydra** - Hierarchical heavy hitters for multi-dimensional queries ([apis.md](apis.md))
-  - Includes `MultiHeadHydra` for per-dimension counter sets
+
+- Includes `MultiHeadHydra` for per-dimension counter sets
 
 ✅ **UnivMon** - Universal monitoring (L1, L2, entropy, cardinality from single structure) ([apis.md](apis.md))
 

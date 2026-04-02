@@ -9,7 +9,6 @@ computed once per insert and fanned out to every sketch in the ensemble.
 Supports both frequency sketches (CountMin, Count) and cardinality sketches
 (HyperLogLog variants).
 
-
 ### Quick Example
 
 ```rust
