@@ -15,15 +15,16 @@ cargo test
 Test file: [`src/sketches/countmin.rs`](../src/sketches/countmin.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `dimension_test` | Default/custom dimensions initialize zeroed counters. | Verifies default dimensions (`rows=3`, `cols=4096`), custom dimensions (`3x17`), and zero-initialized counters after construction. |
 | `fast_insert_same_estimate` | Fast and regular insert paths produce identical estimates. | Inserts five string keys once into both `RegularPath` and `FastPath` sketches (`3x64`) and asserts equal estimates for every key. |
 | `merge_adds_counters_element_wise` | Merge sums counters element-wise for matching dimensions. | Merges two `2x32` sketches after inserting the same key (`1` on left, `2` on right) and checks merged per-row target counters equal `3`. |
-| `merge_requires_matching_dimensions` | Merge panics on dimension mismatch. | Confirms merging sketches with mismatched dimensions (`2x32` vs `3x32`) panics with `dimension mismatch while merging CountMin sketches`. |
+| `countmin_insert_emit_delta_emits_at_threshold_and_resets_period` | Worker-path delta emission fires at promotion threshold and resets. | Inserts key into `3x64` CMS via `insert_emit_delta`; verifies no delta emitted before `CM_PROMASK` inserts, then exactly `3` deltas (one per row) with `value == CM_PROMASK` at threshold, no extra deltas in next sub-threshold window, and another batch of `3` at the next threshold. |
+| `countmin_apply_delta_increments_parent_counter` | Apply delta increments parent counter. | Constructs a `CmDelta{row=1, col=5, value=CM_PROMASK}`, applies it to a `3x64` parent CMS, and verifies the target counter at `(1,5)` equals `CM_PROMASK`. |
 | `cm_regular_path_correctness` | Regular-path hashing, counters, and estimates are exact on a deterministic stream. | Recomputes expected counter indices for `I32(0..9)` using per-row hashing, asserts exact full-matrix equality after one pass, doubled counters after second pass, and estimate `== 2` for each inserted key. |
 | `cm_fast_path_correctness` | Fast-path counter placement matches bit-sliced hash mapping. | Recomputes expected fast-path indices for `I32(0..9)` from one hash plus row bit-slices/mask bits and asserts exact full-matrix equality. |
-| `cm_error_bound_zipf` | Zipf-stream error bound holds for regular and fast paths. | On `200_000` Zipf samples with domain `8192` and exponent `1.1`, checks both paths satisfy: number of distinct queried keys with `|estimate - true| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
-| `cm_error_bound_uniform` | Uniform-stream error bound holds for regular and fast paths. | On `200_000` uniform samples in `[100.0, 1000.0]`, checks both paths satisfy: number of distinct queried keys with `|estimate - true| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
+| `cm_error_bound_zipf` | Zipf-stream error bound holds for regular and fast paths. | On `200_000` Zipf samples with domain `8192` and exponent `1.1`, checks both paths satisfy: number of distinct queried keys with `\|estimate - true\| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
+| `cm_error_bound_uniform` | Uniform-stream error bound holds for regular and fast paths. | On `200_000` uniform samples in `[100.0, 1000.0]`, checks both paths satisfy: number of distinct queried keys with `\|estimate - true\| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
 | `count_min_round_trip_serialization` | Serialization round trip preserves full sketch state. | Serializes/deserializes a populated `3x8` regular-path sketch and verifies dimensions plus the full counter array are unchanged. |
 
 ### Count Sketch
@@ -31,7 +32,7 @@ Test file: [`src/sketches/countmin.rs`](../src/sketches/countmin.rs)
 Test file: [`src/sketches/count.rs`](../src/sketches/count.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `default_initializes_expected_dimensions` | Default dimensions initialize zeroed counters. | Verifies default Count Sketch dimensions (`rows=3`, `cols=4096`) and that all counters are zero after construction. |
 | `with_dimensions_uses_custom_sizes` | Custom dimensions initialize zeroed rows. | Verifies `with_dimensions(3, 17)` applies requested shape and each row slice is zero-initialized. |
 | `insert_updates_signed_counters_per_row` | Regular insert applies per-row signed updates. | After one insert of key `"alpha"` into a `3x64` sketch, checks each row’s hashed counter equals that row’s expected sign (`+1` or `-1`). |
@@ -40,11 +41,11 @@ Test file: [`src/sketches/count.rs`](../src/sketches/count.rs)
 | `estimate_recovers_frequency_for_repeated_key` | Regular path recovers repeated-key frequency. | Inserts key `"theta"` 37 times into a regular-path sketch (`3x64`) and asserts estimate `== 37.0`. |
 | `fast_path_recovers_repeated_insertions` | Fast path recovers repeated insertions across keys. | Inserts five keys for 5 rounds into a fast-path sketch (`4x256`) and asserts estimate `== 5.0` for each key. |
 | `merge_adds_counters_element_wise` | Merge sums signed counters for matching dimensions. | Merges two regular-path `2x32` sketches after inserting the same key (`1` on left, `2` on right) and checks per-row target counters equal `sign(row,key) * 3`. |
-| `merge_requires_matching_dimensions` | Merge panics on dimension mismatch. | Confirms merging `2x32` with `3x32` panics with `dimension mismatch while merging CountMin sketches`. |
+| `count_child_insert_emits_at_threshold` | Worker-path delta emission fires after sufficient inserts. | Inserts key into `3x64` Count Sketch via `insert_emit_delta` for `200` iterations and verifies at least `3` deltas (one per row) are emitted. |
 | `zipf_stream_stays_within_twenty_percent_for_most_keys` | Zipf stream keeps relative error under 20% for most keys. | On Zipf stream (`rows=5`, `cols=8192`, `domain=8192`, `exponent=1.1`, `N=200_000`), computes per-key relative error and requires at least 70% of keys with error `< 0.20`. |
 | `cs_regular_path_correctness` | Regular-path counter/sign mapping and estimates are exact on deterministic inserts. | Recomputes expected signed counter updates for `I32(0..9)` using regular hashing/sign logic, asserts exact matrix match after one pass, doubled counters after second pass, and estimate `== 2.0` for each inserted key. |
 | `cs_fast_path_correctness` | Fast-path row-hash/sign mapping matches expected counters. | Recomputes expected fast-path updates for `I32(0..9)` using matrix hash row slices and row signs, then asserts exact full-matrix equality. |
-| `cs_error_bound_zipf` | Zipf-stream error bound check passes for regular and fast paths. | On Zipf samples (`domain=8192`, `exponent=1.1`, `N=200_000`) with default dimensions, both paths require: count of distinct queried keys with `|estimate - true| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
+| `cs_error_bound_zipf` | Zipf-stream error bound check passes for regular and fast paths. | On Zipf samples (`domain=8192`, `exponent=1.1`, `N=200_000`) with default dimensions, both paths require: count of distinct queried keys with `\|estimate - true\| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
 | `cs_error_bound_uniform` | Uniform-stream error bound check passes for regular and fast paths. | On uniform samples in `[100.0, 1000.0]` with `N=200_000` and default dimensions, requires for both paths that in-bound distinct keys exceed `(1-delta)` fraction (`delta = e^-rows`); regular path uses `epsilon = sqrt(e / cols)` and bound `epsilon * L2_norm`, fast path uses `epsilon = e / cols` and bound `epsilon * N`. |
 | `count_sketch_round_trip_serialization` | Serialization round trip preserves full Count Sketch state. | Serializes/deserializes a populated regular-path `3x8` sketch and verifies dimensions plus full counter array are unchanged. |
 | `countl2hh_estimates_and_l2_are_consistent` | CountL2HH updates keep estimate and L2 consistent. | For `CountL2HH(3x32)`, applies `+5` then `-2` to one key, verifies estimates `5.0` then `3.0`, and asserts non-trivial L2 (`>= 3.0`). |
@@ -56,15 +57,24 @@ Test file: [`src/sketches/count.rs`](../src/sketches/count.rs)
 Test file: [`src/sketches/hll.rs`](../src/sketches/hll.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
-| `hyperloglog_accuracy_within_two_percent` | Regular HyperLogLog stays within 2% relative error across scale checkpoints. | Inserts sequential unique `U64` values and checks at targets `[10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000]` that relative error `|estimate-truth|/truth <= 0.02`. |
+| --- | --- | --- |
+| `hll_child_insert_emits_on_improvement` | Child insert emits delta only on register improvement. | Inserts a key via `insert_emit_delta` into `HyperLogLog<Regular>`; verifies exactly `1` delta emitted on the first insert and `0` additional deltas on a duplicate insert. |
+| `hyperloglog_accuracy_within_two_percent` | Regular HyperLogLog stays within 2% relative error across scale checkpoints. | Inserts sequential unique `U64` values and checks at targets `[10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000]` that relative error `\|estimate-truth\|/truth <= 0.02`. |
 | `hlldf_accuracy_within_two_percent` | DataFusion HyperLogLog stays within 2% relative error across scale checkpoints. | Applies the same checkpointed unique-stream accuracy test as regular HLL, requiring relative error `<= 0.02` at each target cardinality. |
 | `hllds_accuracy_within_two_percent` | HIP HyperLogLog stays within 2% relative error across scale checkpoints. | Applies the same checkpointed unique-stream accuracy test to `HyperLogLogHIP`, requiring relative error `<= 0.02` at each target cardinality. |
+| `hyperloglog_p12_accuracy_within_two_percent` | P12 Regular HyperLogLog stays within P12 error tolerance across scale checkpoints. | Applies the same checkpointed unique-stream accuracy test to `HyperLogLogP12<Regular>`, requiring relative error `<= P12_ERROR_TOLERANCE` at each target cardinality. |
+| `hlldf_p12_accuracy_within_two_percent` | P12 DataFusion HyperLogLog stays within P12 error tolerance across scale checkpoints. | Applies the same checkpointed accuracy test to `HyperLogLogP12<DataFusion>`, requiring relative error `<= P12_ERROR_TOLERANCE`. |
+| `hllds_p12_accuracy_within_two_percent` | P12 HIP HyperLogLog stays within P12 error tolerance across scale checkpoints. | Applies the same checkpointed accuracy test to `HyperLogLogHIPP12`, requiring relative error `<= P12_ERROR_TOLERANCE`. |
 | `hyperloglog_merge_within_two_percent` | Regular HyperLogLog merge remains within 2% relative error. | Splits unique stream into even keys (left) and odd keys (right), merges sketches at each target checkpoint, and requires merged relative error `<= 0.02`. |
 | `hlldf_merge_within_two_percent` | DataFusion HyperLogLog merge remains within 2% relative error. | Uses the same even/odd split merge scenario and requires merged relative error `<= 0.02` at each target checkpoint. |
+| `hyperloglog_p12_merge_within_two_percent` | P12 Regular HyperLogLog merge remains within P12 error tolerance. | Applies the same even/odd split merge scenario to `HyperLogLogP12<Regular>`, requiring merged relative error `<= P12_ERROR_TOLERANCE`. |
+| `hlldf_p12_merge_within_two_percent` | P12 DataFusion HyperLogLog merge remains within P12 error tolerance. | Applies the same even/odd split merge scenario to `HyperLogLogP12<DataFusion>`, requiring merged relative error `<= P12_ERROR_TOLERANCE`. |
 | `hyperloglog_round_trip_serialization` | Regular HyperLogLog round trip preserves bytes and estimate stability. | After inserting `100_000` unique values, verifies serialized payload is non-empty, `deserialize -> reserialize` bytes are identical, and estimate drift is within `0.02 * max(original_est, 1.0)`. |
 | `hlldf_round_trip_serialization` | DataFusion HyperLogLog round trip preserves bytes and estimate stability. | Applies the same `100_000`-value serialization round-trip checks: non-empty bytes, byte-for-byte reserialization equality, and bounded estimate drift. |
 | `hllds_round_trip_serialization` | HIP HyperLogLog round trip preserves bytes and estimate stability. | Applies the same `100_000`-value serialization round-trip checks for `HyperLogLogHIP`: non-empty bytes, byte-for-byte reserialization equality, and bounded estimate drift. |
+| `hyperloglog_p12_round_trip_serialization` | P12 Regular HyperLogLog round trip preserves bytes and estimate stability. | Applies the same `100_000`-value serialization round-trip checks for `HyperLogLogP12<Regular>`: non-empty bytes, byte-for-byte reserialization equality, and bounded estimate drift. |
+| `hlldf_p12_round_trip_serialization` | P12 DataFusion HyperLogLog round trip preserves bytes and estimate stability. | Applies the same `100_000`-value serialization round-trip checks for `HyperLogLogP12<DataFusion>`: non-empty bytes, byte-for-byte reserialization equality, and bounded estimate drift. |
+| `hllds_p12_round_trip_serialization` | P12 HIP HyperLogLog round trip preserves bytes and estimate stability. | Applies the same `100_000`-value serialization round-trip checks for `HyperLogLogHIPP12`: non-empty bytes, byte-for-byte reserialization equality, and bounded estimate drift. |
 | `hll_correctness_test` | Register update logic matches expected bucket/index behavior for all HLL variants. | Runs fixed hashed inserts against Regular, DataFusion, and HIP variants; asserts exact expected register values at specific bucket indices and confirms an untouched bucket remains zero. |
 
 ### KLL
@@ -72,7 +82,7 @@ Test file: [`src/sketches/hll.rs`](../src/sketches/hll.rs)
 Test file: [`src/sketches/kll.rs`](../src/sketches/kll.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `coin_bit_cache_behavior` | Coin consumes cached random bits in deterministic bit order. | From a fixed seed, validates 3 successive 64-bit RNG blocks are consumed bit-by-bit (`0..63`) before refill, matching expected xorshift-derived bits exactly. |
 | `coin_state_never_zero` | Coin state is never zero, including zero-seed initialization. | Verifies `Coin::from_seed(0)` normalizes to non-zero state and remains non-zero across 128 tosses. |
 | `distributions_quantiles_stay_within_rank_error` | KLL quantiles stay within 2% rank tolerance across distributions and scales. | For `k=200`, checks quantiles `{0,0.1,0.25,0.5,0.75,0.9,1}` on Uniform (`0..100,000,000`) and Zipf (`1,000,000..10,000,000`, domain `8192`, exponent `1.1`) streams at sizes `[1_000, 5_000, 20_000, 100_000, 1_000_000, 5_000_000]`; each estimate must fall within truth interval defined by `q +/- 0.02`. |
@@ -88,7 +98,7 @@ Test file: [`src/sketches/kll.rs`](../src/sketches/kll.rs)
 Test file: [`src/sketches/ddsketch.rs`](../src/sketches/ddsketch.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `insert_and_query_basic` | Basic insert/query preserves count semantics and quantile monotonicity. | Inserts mixed values `[0.0, -5.0, 1.0, 2.0, 3.0, 10.0, 50.0, 100.0, 1000.0]`, verifies non-positive values are ignored (`count == 7`), and checks queried quantiles at `{0.0, 0.5, 0.9, 0.99, 1.0}` are monotone and bounded by sketch min/max. |
 | `empty_quantile_returns_none` | Empty sketch returns no quantiles and zero count. | For a new `DDSketch(alpha=0.01)`, asserts `get_value_at_quantile` returns `None` for `p in {0.0, 0.5, 1.0}` and `get_count() == 0`. |
 | `dds_uniform_distribution_quantiles` | Uniform-distribution quantiles stay within configured relative error. | With `alpha=0.01`, samples sizes `[1_000, 5_000, 20_000]` from uniform range `[1_000_000, 10_000_000]` (seeded), and requires relative error `<= 0.01` at quantiles `{0, 0.1, 0.25, 0.5, 0.75, 0.9, 1}` against sorted-truth quantiles. |
@@ -103,7 +113,7 @@ Test file: [`src/sketches/ddsketch.rs`](../src/sketches/ddsketch.rs)
 Test file: [`src/sketches/fold_cms.rs`](../src/sketches/fold_cms.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `cell_starts_empty` | Empty FoldCell reports no entries and zero counts. | Verifies `FoldCell::Empty` has `entry_count=0`, `is_empty=true`, and returns `0` for arbitrary queries. |
 | `cell_single_insert` | First insert creates a single-entry cell. | Inserts `(full_col=10, delta=5)` into an empty cell and checks single-entry shape plus exact hit/miss query behavior. |
 | `cell_single_accumulates` | Re-inserting same full column accumulates in place. | Inserts `(10,5)` then `(10,3)`, verifies count becomes `8`, entry count stays `1`, and state remains `Single`. |
@@ -138,7 +148,7 @@ Test file: [`src/sketches/fold_cms.rs`](../src/sketches/fold_cms.rs)
 | `heap_tracks_heavy_hitters` | Integrated heap tracks heavy hitters and their counts. | Inserts `"heavy"` 100 times, `"medium"` 10, `"light"` 1, then verifies heap contains `"heavy"` with count `100`. |
 | `heap_survives_same_level_merge` | Heap reconciliation after same-level merge preserves top-key totals. | Merges sketches with `"user_x"` counts `50` and `70`, then verifies heap contains `"user_x"` with merged count `120`. |
 | `heap_survives_unfold_merge` | Heap reconciliation after unfold merge preserves top-key totals. | Unfold-merges sketches with `"endpoint_a"` counts `40` and `60`, then verifies heap contains `"endpoint_a"` with count `100`. |
-| `fold_cms_error_bound_zipf` | Zipf-stream CMS error-bound criterion holds. | On Zipf stream (`domain=8192`, `exponent=1.1`, `N=200_000`) with `rows=3`, `cols=4096`, verifies keys with `|estimate-true| < epsilon * N` exceed `(1-delta) * distinct_key_count`, where `epsilon=e/cols` and `delta=e^-rows`. |
+| `fold_cms_error_bound_zipf` | Zipf-stream CMS error-bound criterion holds. | On Zipf stream (`domain=8192`, `exponent=1.1`, `N=200_000`) with `rows=3`, `cols=4096`, verifies keys with `\|estimate-true\| < epsilon * N` exceed `(1-delta) * distinct_key_count`, where `epsilon=e/cols` and `delta=e^-rows`. |
 | `scenario_rate_limiting` | Rate-limiting scenario merge reproduces expected per-user totals. | Merges two epoch sketches and verifies exact counts: `user_001=700`, `user_002=15`, `user_003=1300`. |
 | `scenario_error_frequency` | Endpoint error-frequency scenario merge reproduces expected totals. | Merges two epoch sketches and verifies exact endpoint counts: `search=350`, `login=210`, `recommend=101`, `checkout=10`. |
 | `large_window_merge_benchmark_cms` | Large-window hierarchical merge satisfies CMS statistical bound on Zipf workload. | Splits `500_000` Zipf samples (`domain=10_000`, `exponent=1.1`) into 16 folded subwindows (`rows=3`, `full_cols=4096`, `fold_level=4`), merges hierarchically, and asserts fraction within `epsilon*N` exceeds `1-delta` (`epsilon=e/full_cols`, `delta=e^-rows`). |
@@ -153,7 +163,7 @@ Test file: [`src/sketches/fold_cms.rs`](../src/sketches/fold_cms.rs)
 Test file: [`src/sketches/fold_cs.rs`](../src/sketches/fold_cs.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `fold_cs_dimensions` | Constructor sets FoldCS geometry consistently with level. | For `new(3,4096,4,10)`, verifies `rows=3`, `full_cols=4096`, `fold_cols=256`, and `fold_level=4`. |
 | `fold_cs_level_zero_is_full` | Level-0 constructor uses full column width. | For `new_full(3,1024,10)`, verifies `fold_cols=full_cols=1024` and `fold_level=0`. |
 | `fold_cs_rejects_non_power_of_two` | Constructor panics when full column count is not power-of-two. | Verifies `new(3,1000,0,10)` panics with `full_cols must be a power of two`. |
@@ -178,7 +188,7 @@ Test file: [`src/sketches/fold_cs.rs`](../src/sketches/fold_cs.rs)
 | `heap_tracks_heavy_hitters` | Integrated heap tracks heavy hitters and their counts. | Inserts `"heavy"` 100 times, `"medium"` 10, `"light"` 1, then verifies heap contains `"heavy"` with count `100`. |
 | `heap_survives_same_level_merge` | Heap reconciliation after same-level merge preserves top-key totals. | Merges sketches with `"user_x"` counts `50` and `70`, then verifies heap contains `"user_x"` with merged count `120`. |
 | `heap_survives_unfold_merge` | Heap reconciliation after unfold merge preserves top-key totals. | Unfold-merges sketches with `"endpoint_a"` counts `40` and `60`, then verifies heap contains `"endpoint_a"` with count `100`. |
-| `fold_cs_error_bound_zipf` | Zipf-stream Count Sketch error-bound criterion holds. | On Zipf stream (`domain=8192`, `exponent=1.1`, `N=200_000`) with `rows=3`, `cols=4096`, verifies keys with `|estimate-true| < epsilon * L2_norm` exceed `(1-delta) * distinct_key_count`, where `epsilon=sqrt(e/cols)` and `delta=e^-rows`. |
+| `fold_cs_error_bound_zipf` | Zipf-stream Count Sketch error-bound criterion holds. | On Zipf stream (`domain=8192`, `exponent=1.1`, `N=200_000`) with `rows=3`, `cols=4096`, verifies keys with `\|estimate-true\| < epsilon * L2_norm` exceed `(1-delta) * distinct_key_count`, where `epsilon=sqrt(e/cols)` and `delta=e^-rows`. |
 | `large_window_merge_benchmark_cs` | Large-window hierarchical merge satisfies Count Sketch statistical bound on Zipf workload. | Splits `500_000` Zipf samples (`domain=10_000`, `exponent=1.1`) into 16 folded subwindows (`rows=3`, `full_cols=4096`, `fold_level=4`), merges hierarchically, and asserts fraction within `epsilon * L2_norm` exceeds `1-delta` (`epsilon=sqrt(e/full_cols)`, `delta=e^-rows`). |
 | `scatter_merge_matches_standard_cs_n1_to_n8` | Scatter-based hierarchical merge matches standard CS for N-way inputs. | For `N=1..8` sketches, merges each set hierarchically, verifies result reaches level 0, and checks all queried keys match a standard CS fed the same inserts. |
 | `unfold_to_single_pass_preserves_flat_counters` | `unfold_to` preserves exact flat counters at every target level. | Starting from `fold_level=4` sketch with weighted inserts (`1..40`), unfolds to targets `3,2,1,0` and verifies each unfolded sketch keeps identical flat counters. |
@@ -190,7 +200,7 @@ Test file: [`src/sketches/fold_cs.rs`](../src/sketches/fold_cs.rs)
 Test file: [`src/sketches/cms_heap.rs`](../src/sketches/cms_heap.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `insert_and_estimate` | Repeated inserts increment Count-Min estimate for one key. | Inserts `"hello"` 5 times into `CMSHeap::new(3,64,10)` and verifies `estimate("hello") == 5`. |
 | `heap_tracks_top_k` | Heap keeps highest-frequency keys within top-k capacity. | Inserts keys `1..5` with frequencies `10,20,30,40,50` into `top_k=3` sketch and verifies heap counts are exactly `[30,40,50]`. |
 | `merge_reconciles_heaps` | Merge combines counters and refreshes heap counts from merged sketch. | Merges two sketches containing `"merge_key"` counts `10` and `20`, then verifies merged estimate and heap count are both `30`. |
@@ -220,7 +230,7 @@ Test file: [`src/sketches/cms_heap.rs`](../src/sketches/cms_heap.rs)
 Test file: [`src/sketches/cs_heap.rs`](../src/sketches/cs_heap.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `insert_and_estimate` | Repeated inserts increment Count Sketch estimate for one key. | Inserts `"hello"` 5 times into `CSHeap::new(5,256,10)` and verifies estimate is `5.0` within `1e-9`. |
 | `heap_tracks_top_k` | Heap keeps highest-frequency keys within top-k capacity. | Inserts keys `1..5` with frequencies `100,200,300,400,500` into `top_k=3` sketch and verifies heap counts are exactly `[300,400,500]`. |
 | `merge_reconciles_heaps` | Merge combines counters and refreshes heap counts from merged sketch. | Merges two sketches containing `"merge_key"` counts `10` and `20`, then verifies estimate is `30.0` and heap count is `30`. |
@@ -250,7 +260,7 @@ Test file: [`src/sketches/cs_heap.rs`](../src/sketches/cs_heap.rs)
 Test file: [`src/sketches/elastic.rs`](../src/sketches/elastic.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `heavy_bucket_tracks_repeated_flow_exactly` | Heavy bucket tracks repeated flow exactly. | Top-K/heavy-hitter tracking and updates behave as expected. |
 | `light_sketch_counts_colliding_flows` | Light sketch counts colliding flows. | Core functional behavior for this component path is validated. |
 
@@ -259,7 +269,7 @@ Test file: [`src/sketches/elastic.rs`](../src/sketches/elastic.rs)
 Test file: [`src/sketches/coco.rs`](../src/sketches/coco.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `insert_then_estimate_matches_full_value_for_partial_key` | Insert then estimate matches full value for partial key. | Core behavior for insert/query/update and deterministic semantics is validated. |
 | `estimate_with_udf_allows_custom_partial_matching` | Estimate with udf allows custom partial matching. | Core behavior for insert/query/update and deterministic semantics is validated. |
 | `merge_combines_tables_without_losing_counts` | Merge combines tables without losing counts. | Merge behavior preserves expected aggregate semantics and internal invariants. |
@@ -269,35 +279,17 @@ Test file: [`src/sketches/coco.rs`](../src/sketches/coco.rs)
 Test file: [`src/sketches/kmv.rs`](../src/sketches/kmv.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `assert_accuracy` | Assert accuracy. | Accuracy/error behavior stays within expected bounds on representative workloads. |
 | `assert_merge_accuracy` | Assert merge accuracy. | Merge behavior preserves expected aggregate semantics and internal invariants. |
 | `assert_serialization_round_trip` | Assert serialization round trip. | Serialization/deserialization preserves component state and behavior after round trip. |
-
-<!-- ### Locher
-
-Test file: [`src/sketches/locher.rs`](../src/sketches/locher.rs)
-
-| test_name | test_description | what_is_tested |
-|---|---|---|
-| `locher_estimate_tracks_inserted_frequency` | Locher estimate tracks inserted frequency. | Core behavior for insert/query/update and deterministic semantics is validated. |
-| `median_handles_even_and_empty_inputs` | Median handles even and empty inputs. | Core behavior for insert/query/update and deterministic semantics is validated. | -->
-
-<!-- ### MicroScope
-
-Test file: [`src/sketches/microscope.rs`](../src/sketches/microscope.rs)
-
-| test_name | test_description | what_is_tested |
-|---|---|---|
-| `insert_and_query_track_recent_volume` | Insert and query track recent volume. | Temporal/windowed behavior remains correct under time-based scenarios. |
-| `merge_combines_counters_for_matching_windows` | Merge combines counters for matching windows. | Merge behavior preserves expected aggregate semantics and internal invariants. | -->
 
 ### UniformSampling
 
 Test file: [`src/sketches/uniform.rs`](../src/sketches/uniform.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `sample_count_tracks_rate` | Sample count tracks rate. | Core behavior for insert/query/update and deterministic semantics is validated. |
 | `samples_are_drawn_from_input_stream` | Samples are drawn from input stream. | Core behavior for insert/query/update and deterministic semantics is validated. |
 | `merge_combines_samples_using_rate_based_target` | Merge combines samples using rate based target. | Merge behavior preserves expected aggregate semantics and internal invariants. |
@@ -311,7 +303,7 @@ Test file: [`src/sketches/uniform.rs`](../src/sketches/uniform.rs)
 Test file: [`src/sketch_framework/hydra.rs`](../src/sketch_framework/hydra.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `hydra_updates_countmin_frequency` | Hydra updates countmin frequency. | Updates `"user;session"` with value `"event"` 5 times and verifies combined query `>= 5` while an unrelated key query is exactly `0.0`. |
 | `hydra_updates_countmin_frequency_multiple_values` | Hydra updates countmin frequency multiple values. | Inserts values `I64(0..4)` with multiplicity `i` under one key, verifies per-value fan-out query `>= i`, and checks unrelated-key query returns `0.0`. |
 | `hydra_round_trip_serialization` | Hydra round trip serialization. | After mixed inserts, verifies MessagePack round trip keeps non-empty payload, preserves dimensions/template type, and keeps queried frequencies exactly unchanged. |
@@ -331,27 +323,31 @@ Test file: [`src/sketch_framework/hydra.rs`](../src/sketch_framework/hydra.rs)
 | `test_count_frequency_query` | Test count frequency query. | Inserts one Count Sketch key four times and verifies `Frequency` query succeeds with exact result `4.0`. |
 | `test_count_invalid_query_types` | Test count invalid query types. | Verifies unsupported Count Sketch queries fail, including exact `Quantile` error message and error on `Cardinality`. |
 
-### HashLayer
+### HashSketchEnsemble
 
 Test file: [`src/sketch_framework/hashlayer.rs`](../src/sketch_framework/hashlayer.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
-| `test_hashlayer_insert_all` | Test hashlayer insert all. | On Zipf stream (`N=10_000`, `domain=1000`, `exp=1.5`), verifies default layer size is `3` and average relative error for CountMin/Count queries over sampled keys is below `0.1`. |
-| `test_hashlayer_insert_at_specific_indices` | Test hashlayer insert at specific indices. | Inserts only into indices `[0,1]` and verifies queried estimates at CountMin/Count indices are successful and strictly positive. |
-| `test_hashlayer_query_all` | Test hashlayer query all. | After bulk inserts, verifies `query_all` returns exactly `3` results and each result is `Ok` (including HLL index). |
-| `test_hashlayer_with_hash_optimization` | Test hashlayer with hash optimization. | Uses precomputed `Packed128` hashes for insert/query paths and verifies average CountMin relative error over sampled keys remains below `0.1`. |
-| `test_hashlayer_hll_cardinality` | Test hashlayer HLL cardinality. | Compares HLL cardinality estimate (index `2`) to true distinct count and requires relative error `< 0.02`. |
-| `test_hashlayer_direct_access` | Test hashlayer direct access. | Verifies `get(0..2)` returns `Some`, out-of-bounds `get(3)` returns `None`, and mutable access at index `0` reports sketch type `"CountMin"`. |
-| `test_hashlayer_bounds_checking` | Test hashlayer bounds checking. | Confirms `query_at(999, ...)` and `query_at_with_hash(999, ...)` both return `Err("Index out of bounds")`. |
-| `test_hashlayer_custom_sketches` | Test hashlayer custom sketches. | Builds custom two-sketch layer (`CountMin` + `Count`, `5x2048`), verifies `len=2`/non-empty, and confirms both indices return successful positive estimates after inserts. |
+| --- | --- | --- |
+| `test_insert_and_estimate` | Insert and frequency estimate accuracy on Zipf stream. | On Zipf stream (`N=10_000`, `domain=1000`, `exp=1.5`), builds default 2-sketch ensemble (CMS + Count, `3x4096`) and verifies average relative error for both CMS (index `0`) and Count (index `1`) frequency estimates over sampled keys is below `0.1`. |
+| `test_insert_at` | Targeted insert updates only specified indices. | Inserts only at index `[0]` via `insert_at`, then verifies CMS at index `0` has a positive estimate while Count at index `1` returns `0.0`. |
+| `test_insert_with_hash_matches_insert` | Pre-computed hash insert matches regular insert. | Builds two identical ensembles; one uses `insert()`, the other uses `hash_input()` + `insert_with_hash()`. Verifies CMS estimates at index `0` are identical for a probe key. |
+| `test_hll_cardinality` | HLL-only ensemble cardinality accuracy. | Builds HLL-only ensemble (`HyperLogLog<DataFusion>`), inserts Zipf stream, and verifies cardinality relative error vs true distinct count is `< 0.02`. |
+| `test_estimate_on_hll_returns_error` | Frequency query on HLL sketch returns error. | Calls `estimate()` on an HLL-only ensemble and verifies it returns `Err`. |
+| `test_cardinality_on_cms_returns_error` | Cardinality query on CMS sketch returns error. | Calls `cardinality()` on a CMS+Count ensemble and verifies it returns `Err`. |
+| `test_direct_access` | Index-based get/get_mut and sketch type reporting. | Verifies `get(0)` and `get(1)` return `Some`, `get(2)` returns `None`, and `get_mut(0)` reports `sketch_type() == "CountMin"`. |
+| `test_bounds_checking` | Out-of-bounds queries return errors. | Confirms `estimate(999, ...)`, `cardinality(999)`, and `estimate_with_hash(999, ...)` all return `Err`. |
+| `test_custom_dimensions` | Custom-dimension ensemble insert and estimate. | Builds 2-sketch ensemble (CMS + Count, `5x2048`), verifies `len=2`/non-empty, inserts Zipf stream, and confirms both indices return positive estimates. |
+| `test_mixed_matrix_and_hll` | Mixed CMS + HLL ensemble queries. | Builds ensemble with one CMS and one `HyperLogLog<DataFusion>`, inserts Zipf stream, verifies CMS estimate at index `0` is positive and HLL cardinality error at index `1` is `< 0.05`. |
+| `test_push_compatible` | Push compatible sketch succeeds. | Creates single-CMS ensemble (`3x4096`), pushes a Count sketch with matching dimensions, verifies `push` returns `Ok` and `len=2`. |
+| `test_push_incompatible_rejected` | Push incompatible sketch is rejected. | Creates single-CMS ensemble (`3x4096`), pushes a Count sketch with different dimensions (`5x2048`), verifies `push` returns `Err`. |
 
 ### UnivMon
 
 Test file: [`src/sketch_framework/univmon.rs`](../src/sketch_framework/univmon.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `univmon_round_trip_serialization` | Univmon round trip serialization. | After weighted inserts, verifies non-empty serialization and round-trip preservation of configuration fields, `bucket_size`, `L1/L2/entropy` (`<1e-6` drift), and cardinality (`< EPSILON` drift). |
 | `update_populates_bucket_size_and_heavy_hitters` | Update populates bucket size and heavy hitters. | Inserting one hot key `40` times sets `bucket_size=40`, tracks key in heavy-hitter heap with count `>=20`, and yields exact `L1=40` and `cardinality=1`. |
 | `merge_with_combines_heavy_hitters` | Merge with combines heavy hitters. | Merging sketches with disjoint heavy keys verifies merged left heap contains both contributions (`left=25`, `right=30`) while right heap retains `right=30`. |
@@ -367,7 +363,7 @@ Test file: [`src/sketch_framework/univmon.rs`](../src/sketch_framework/univmon.r
 Test file: [`src/sketch_framework/univmon_optimized.rs`](../src/sketch_framework/univmon_optimized.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `pool_basic_take_put` | Pool basic take put. | Validates pool accounting: initial preallocation (`available=2`, `allocated=2`), on-demand allocation when empty (`allocated=3`), and reuse on put/take without further allocation. |
 | `pool_free_resets_sketch` | Pool free resets sketch. | Confirms returning a used sketch to pool resets state so retaken sketch has `bucket_size=0` and near-zero `L2` in layer `0`. |
 | `pyramid_basic_insert_and_query` | Pyramid basic insert and query. | For simple inserts, verifies exact aggregate state with `bucket_size=65`, `L1` approximately `65` (`<1e-6`), and `cardinality=3`. |
@@ -384,7 +380,7 @@ Test file: [`src/sketch_framework/univmon_optimized.rs`](../src/sketch_framework
 Test file: [`src/sketch_framework/nitro.rs`](../src/sketch_framework/nitro.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `nitro_batch_countmin_error_bound_zipf` | Nitro batch countmin error bound Zipf. | On Zipf stream (`rows=3`, `cols=4096`, `N=200_000`), verifies CountMin estimates satisfy in-bound key count `> (1-delta)*distinct` using `epsilon=e/cols`, `delta=e^-rows`, and bound `epsilon*N`. |
 | `nitro_batch_count_error_bound_zipf` | Nitro batch count error bound Zipf. | Applies the same probabilistic in-bound criterion to Count Sketch median estimates with `epsilon=e/cols`, `delta=e^-rows`, and bound `epsilon*N`. |
 
@@ -393,7 +389,7 @@ Test file: [`src/sketch_framework/nitro.rs`](../src/sketch_framework/nitro.rs)
 Test file: [`src/sketch_framework/eh.rs`](../src/sketch_framework/eh.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `constructor_infers_merge_norm` | Constructor infers merge norm. | Verifies constructor infers `SketchNorm::L1` for CM payload and `SketchNorm::L2` for `COUNTL2HH` payload. |
 | `l1_merge_invariant_same_size` | L1 merge invariant same size. | Under repeated updates with `k=2`, verifies L1 merge policy compacts buckets so `bucket_count < 10`. |
 | `l2_merge_invariant_sum_l22` | L2 merge invariant sum l22. | With `k=1` and weighted updates, verifies L2 merge rule keeps bucket count bounded (`bucket_count <= 2`). |
@@ -405,7 +401,7 @@ Test file: [`src/sketch_framework/eh.rs`](../src/sketch_framework/eh.rs)
 Test file: [`src/sketch_framework/eh_sketch_list.rs`](../src/sketch_framework/eh_sketch_list.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `insert_routes_to_countl2hh_and_univmon` | Insert routes to countl2hh and univmon. | Verifies variant routing by checking `COUNTL2HH` estimate `>=9` after 9 inserts and `UNIVMON` `bucket_size=6` after 6 inserts. |
 | `count_sketch_insert_and_query_round_trip` | Count sketch insert and query round trip. | Confirms Count Sketch variant updates/query path by inserting one key and verifying returned estimate is at least `1.0`. |
 | `ddsketch_insert_and_quantile_query_round_trip` | DDSketch insert and quantile query round trip. | Inserts `10,20,30` into DDSketch variant and verifies queried median (`q=0.5`) lies within `[10.0, 30.0]`. |
@@ -416,7 +412,7 @@ Test file: [`src/sketch_framework/eh_sketch_list.rs`](../src/sketch_framework/eh
 Test file: [`src/sketch_framework/eh_univ_optimized.rs`](../src/sketch_framework/eh_univ_optimized.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `basic_insertion_and_query` | Basic insertion and query. | For updates `{(1,5),(2,3),(1,2)}` across `[100,102]`, verifies map-tier result with exact counts (`1->7`, `2->3`, `total=10`) plus `L1=10` and `cardinality=2`. |
 | `map_merge_bounds_volume` | Map merge bounds volume. | With `k=1` and 50 one-count updates, verifies merge policy bounds growth so `bucket_count < 50`. |
 | `promotion_creates_sketch_buckets` | Promotion creates sketch buckets. | Under small promotion thresholds and many distinct updates, verifies at least one map bucket is promoted (`um_buckets` becomes non-empty). |
@@ -443,7 +439,7 @@ Test file: [`src/sketch_framework/eh_univ_optimized.rs`](../src/sketch_framework
 Test file: [`src/sketch_framework/tumbling.rs`](../src/sketch_framework/tumbling.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `pool_take_returns_preallocated` | Pool take returns preallocated. | Verifies preallocated pool accounting (`available=4`, `allocated=4`) and that one `take()` decrements availability without increasing allocations. |
 | `pool_take_allocates_when_empty` | Pool take allocates when empty. | Starting from zero-capacity pool, verifies `take()` performs on-demand allocation (`total_allocated` becomes `1`). |
 | `pool_put_recycles` | Pool put recycles. | Confirms returned sketch is recycled by checking availability returns to `1` with no extra allocation growth. |
@@ -469,7 +465,7 @@ Test file: [`src/sketch_framework/tumbling.rs`](../src/sketch_framework/tumbling
 | `tumbling_eviction_correctness` | Tumbling eviction correctness. | Verifies retained-window keys are `>90%` within CMS bound and keys appearing only in evicted windows stay below the same bound. |
 | `tumbling_query_recent_accuracy` | Tumbling query recent accuracy. | For `query_recent(3)`, verifies recent-window keys are `>90%` within CMS bound and excluded-window-only keys remain below bound. |
 | `fold_cms_tumbling_heap_correctness` | Fold CMS tumbling heap correctness. | On skewed Zipf stream, verifies merged heap is non-empty and recalls at least `80%` of true top-`20` keys. |
-| `fold_cs_tumbling_query_recent_accuracy` | Fold CS tumbling query recent accuracy. | For FoldCS `query_recent(3)`, verifies `>90%` of recent keys are within CS bound and excluded-only keys have `|estimate| <= bound`. |
+| `fold_cs_tumbling_query_recent_accuracy` | Fold CS tumbling query recent accuracy. | For FoldCS `query_recent(3)`, verifies `>90%` of recent keys are within CS bound and excluded-only keys have `\|estimate\| <= bound`. |
 | `kll_tumbling_query_recent_accuracy` | KLL tumbling query recent accuracy. | Verifies recent-window KLL quantiles `{0.10,0.25,0.50,0.75,0.90}` fall within `+/-0.03` rank tolerance. |
 | `fold_cs_tumbling_heap_correctness` | Fold CS tumbling heap correctness. | On skewed Zipf stream, verifies merged FoldCS heap is non-empty and recalls at least `80%` of true top-`20` keys. |
 | `fold_cms_tumbling_vs_monolithic` | Fold CMS tumbling vs monolithic. | Compares same stream against monolithic FoldCMS and requires tumbling mean absolute error to stay within `1.5x` monolithic MAE. |
@@ -478,6 +474,7 @@ Test file: [`src/sketch_framework/tumbling.rs`](../src/sketch_framework/tumbling
 | `tumbling_single_window_accuracy` | Tumbling single window accuracy. | When data fits one window (no closures), verifies FoldCMS/FoldCS each keep `>90%` keys within bounds and KLL q25/q50/q75 remain within `+/-0.02` rank tolerance. |
 | `tumbling_very_small_windows` | Tumbling very small windows. | With tiny windows (`size=10`) and retained-tail evaluation, verifies CMS accuracy remains above `85%` keys within theoretical bound. |
 | `tumbling_skewed_load` | Tumbling skewed load. | Under highly imbalanced per-window load, verifies merged CMS still keeps more than `90%` of keys within `epsilon*L1` bound. |
+
 ## Common
 
 ### Common Hash Utilities
@@ -485,7 +482,7 @@ Test file: [`src/sketch_framework/tumbling.rs`](../src/sketch_framework/tumbling
 Test file: [`src/common/hash.rs`](../src/common/hash.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `hash128_seeded_preserves_cardinality` | Hash128 seeded preserves cardinality. | With `SEED_IDX=0` and `SAMPLE_SIZE=5000`, verifies uniform and Zipf sample unique-input counts exactly match unique-hash counts (no observed collisions). |
 | `hash128_seeded_is_deterministic_for_repeated_inputs` | Hash128 seeded is deterministic for repeated inputs. | For fixed key `"deterministic-key"` and seed `3`, verifies 100 repeated `hash128_seeded` calls always equal the first hash value. |
 
@@ -494,7 +491,7 @@ Test file: [`src/common/hash.rs`](../src/common/hash.rs)
 Test file: [`src/common/heap.rs`](../src/common/heap.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `heap_retains_top_k_items_by_count` | Heap retains top K items by count. | For `HHHeap::new(3)` updated with counts `1..5`, verifies heap size is `3` and retained counts are exactly `[3,4,5]`. |
 | `update_count_increments_existing_entry` | Update count increments existing entry. | Repeatedly updates key `alpha` with counts `1,2,3` and verifies stored heap entry count is `3` (incremental update, not replacement). |
 | `clean_resets_heap_state` | Clean resets heap state. | After inserting two items into `HHHeap::new(2)`, `clear()` is verified to leave the heap empty. |
@@ -513,7 +510,7 @@ Test file: [`src/common/heap.rs`](../src/common/heap.rs)
 Test file: [`src/common/structure_utils.rs`](../src/common/structure_utils.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `median_test` | Median test. | For 1,000 seeded random arrays of lengths 3, 4, and 5, verifies `compute_median_inline_f64` exactly matches sort-based median for every case. |
 
 ### Vector2D (Common Structure)
@@ -521,5 +518,5 @@ Test file: [`src/common/structure_utils.rs`](../src/common/structure_utils.rs)
 Test file: [`src/common/structures/vector2d.rs`](../src/common/structures/vector2d.rs)
 
 | test_name | test_description | what_is_tested |
-|---|---|---|
+| --- | --- | --- |
 | `required_bits_match_expected_thresholds` | Required bits match expected thresholds. | Verifies `Vector2D::get_required_bits()` returns `64` for `(3,4096)`, `32` for `(3,64)`, and `128` for `(5,1_048_576)`. |
