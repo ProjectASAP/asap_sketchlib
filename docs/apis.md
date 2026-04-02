@@ -21,7 +21,7 @@ This is the canonical API entry point for `sketchlib-rust`.
 ## Framework APIs
 
 - [Hydra](./api/api_hydra.md) - `Ready`
-- [HashLayer](./api/api_hashlayer.md) - `Ready`
+- [HashSketchEnsemble](./api/api_hashlayer.md) - `Ready`
 - [UnivMon](./api/api_univmon.md) - `Ready`
 - [UnivMon Optimized](./api/api_univmon_optimized.md) - `Ready`
 - [NitroBatch](./api/api_nitrobatch.md) - `Ready`
