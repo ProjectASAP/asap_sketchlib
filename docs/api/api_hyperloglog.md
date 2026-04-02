@@ -4,13 +4,36 @@ Status: `Ready`
 
 ## Purpose
 
-Approximate cardinality estimation.
+Approximate cardinality (distinct-count) estimation.
 
-## Type/Struct
+## Types
 
-- `HyperLogLog<Regular, H = DefaultXxHasher>`
-- `HyperLogLog<DataFusion, H = DefaultXxHasher>`
-- `HyperLogLogHIP`
+The library provides three HLL algorithm variants, each available at
+multiple precision levels.
+
+### Algorithm Variants
+
+- `HyperLogLog<Regular, H>` — classic HyperLogLog (Flajolet et al.).
+- `HyperLogLog<DataFusion, H>` — improved estimator (Ertl, arXiv:1702.01284).
+- `HyperLogLogHIP` — Historic Inverse Probability estimator (Lang, arXiv:1708.06839). Not mergeable.
+
+### Precision Aliases
+
+Each variant is backed by a register storage with a configurable precision
+parameter `p` (number of address bits). Higher precision uses more memory
+but improves accuracy.
+
+| Alias | Precision | Registers | Underlying Type |
+| --- | --- | --- | --- |
+| `HyperLogLogP12<Variant, H>` | p=12 | 4,096 | `HyperLogLogImpl<Variant, HllBucketListP12, H>` |
+| `HyperLogLogP14<Variant, H>` | p=14 | 16,384 | `HyperLogLogImpl<Variant, HllBucketListP14, H>` |
+| `HyperLogLogP16<Variant, H>` | p=16 | 65,536 | `HyperLogLogImpl<Variant, HllBucketListP16, H>` |
+| `HyperLogLog<Variant, H>` | p=14 (default) | 16,384 | = `HyperLogLogP14<Variant, H>` |
+| `HyperLogLogHIPP12` | p=12 | 4,096 | `HyperLogLogHIPImpl<HllBucketListP12>` |
+| `HyperLogLogHIPP14` | p=14 | 16,384 | `HyperLogLogHIPImpl<HllBucketListP14>` |
+| `HyperLogLogHIP` | p=14 (default) | 16,384 | = `HyperLogLogHIPP14` |
+
+`H` defaults to `DefaultXxHasher` and can be omitted in most usage.
 
 ## Constructors
 
@@ -19,7 +42,7 @@ fn new() -> Self
 fn default() -> Self
 ```
 
-## Insert/Update
+## Insert / Update
 
 ```rust
 fn insert(&mut self, obj: &SketchInput)
@@ -34,11 +57,19 @@ fn insert_many_with_hashes(&mut self, hashes: &[u64])
 fn estimate(&self) -> usize
 ```
 
+`Regular` also exposes:
+
+```rust
+fn indicator(&self) -> f64
+```
+
 ## Merge
 
 ```rust
 fn merge(&mut self, other: &Self)
 ```
+
+Available on `Regular` and `DataFusion` variants. **Not available on HIP.**
 
 ## Serialization
 
@@ -52,7 +83,7 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```rust
 use sketchlib_rust::{DataFusion, HyperLogLog, SketchInput};
 
-let mut hll = HyperLogLog::<DataFusion>::new();
+let mut hll = HyperLogLog::<DataFusion>::default();
 for i in 0..1000u64 {
     hll.insert(&SketchInput::U64(i));
 }
@@ -63,6 +94,8 @@ assert!(card > 900);
 ## Caveats
 
 - `HyperLogLogHIP` is not mergeable.
+- P12 variants trade accuracy for lower memory; expect slightly higher
+  error than the default P14.
 
 ## Status
 

@@ -28,6 +28,7 @@ This is the canonical API entry point for `sketchlib-rust`.
 - [ExponentialHistogram](./api/api_exponential_histogram.md) - `Ready`
 - [EHSketchList](./api/api_ehsketchlist.md) - `Ready`
 - [EHUnivOptimized](./api/api_ehunivoptimized.md) - `Unstable (update soon)`
+- [OctoSketch](./api/api_octo.md) - `Ready`
 - [TumblingWindow](./api/api_tumbling_window.md) - `Ready`
 
 ## Common Utility APIs
