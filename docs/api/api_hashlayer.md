@@ -4,7 +4,55 @@ Status: `Ready`
 
 ## Purpose
 
-Group multiple compatible sketches that share a hash layout so the hash is computed once per insert and fanned out to every sketch in the ensemble. Supports both frequency sketches (CountMin, Count) and cardinality sketches (HyperLogLog variants).
+Group multiple compatible sketches that share a hash layout so the hash is
+computed once per insert and fanned out to every sketch in the ensemble.
+Supports both frequency sketches (CountMin, Count) and cardinality sketches
+(HyperLogLog variants).
+
+
+### Quick Example
+
+```rust
+use sketchlib_rust::*;
+use sketchlib_rust::sketch_framework::HashSketchEnsemble;
+
+// Two CMS + one HLL sharing one hash per insert
+let mut ensemble = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
+    CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+    CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+    HyperLogLog::<DataFusion>::default().into(),
+]).unwrap();
+
+// Insert — hashes once, updates all 3 sketches
+ensemble.insert(&SketchInput::U64(42));
+
+// Query frequency (CMS at index 0)
+let freq = ensemble.estimate(0, &SketchInput::U64(42)).unwrap();
+
+// Query cardinality (HLL at index 2)
+let card = ensemble.cardinality(2).unwrap();
+
+// Pre-computed hash path for hot loops
+let hash = ensemble.hash_input(&SketchInput::U64(42));
+ensemble.insert_with_hash(&hash);
+let freq = ensemble.estimate_with_hash(0, &hash).unwrap();
+```
+
+### Motivation
+
+Without an ensemble, sharing a hash across sketches requires manual
+coordination:
+
+```rust
+let hash = hash_for_matrix_seeded_generic::<MyHasher>(0, rows, cols, &input);
+cms_a.fast_insert_with_hash_value(&hash);
+cms_b.fast_insert_with_hash_value(&hash);
+hll.insert_with_hash(hash.lower_64());
+```
+
+`HashSketchEnsemble` wraps this pattern into a single structure that manages
+the hash configuration, validates dimensional compatibility, and exposes a
+uniform insert/query API.
 
 ## Types
 
