@@ -11,7 +11,7 @@
 | Frequency estimation | `CountMin`, `Count Sketch` | You need fast approximate counts for high-volume keys. |
 | Cardinality estimation | `HyperLogLog` (`Regular`, `DataFusion`, `HIP`) | You need approximate distinct counts with bounded memory. |
 | Quantiles/distribution | `KLL`, `DDSketch` | You need percentile/latency summaries over streams. |
-| Multi-sketch orchestration/windowing | `Hydra`, `UnivMon`, `HashLayer`, `ExponentialHistogram`, `EHUnivOptimized`, `NitroBatch`, `Orchestrator` | You need hierarchical queries, sketch coordination, or sliding-window aggregation. |
+| Multi-sketch orchestration/windowing | `Hydra`, `UnivMon`, `HashLayer`, `ExponentialHistogram`, `EHUnivOptimized`, `NitroBatch`, `Octo` | You need hierarchical queries, sketch coordination, or sliding-window aggregation. |
 
 Full sketch status and API details: [APIs Index](./docs/apis.md).
 
