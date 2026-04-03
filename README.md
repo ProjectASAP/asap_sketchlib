@@ -90,8 +90,15 @@ For more details, see [Docs Index](./docs/index.md).
 
 ## Contributors
 
+### Major Contributors
+
 - [Yancheng Yuan](https://github.com/GordonYuanyc)
 - [Zeying Zhu](https://github.com/zzylol)
+
+### Other Contributors
+
+- [Sie Deta Dirganjaya](https://github.com/SieDeta)
+- [Gnanesh Gnani](https://github.com/GnaneshGnani)
 
 ## License
 

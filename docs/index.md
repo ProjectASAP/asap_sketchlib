@@ -22,4 +22,3 @@ This page is the docs home for `sketchlib-rust`.
 
 - [Contributors](./contributors.md)
 - [License](./license.md)
-

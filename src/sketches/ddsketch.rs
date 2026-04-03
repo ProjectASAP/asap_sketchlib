@@ -8,6 +8,12 @@ use serde::{Deserialize, Serialize};
 
 /// DDSketch implementation based on:
 /// https://www.vldb.org/pvldb/vol12/p2195-masson.pdf
+///
+/// Provenance:
+/// This file was adapted from earlier DDSketch work in the private
+/// `approx-telemetry/sketchlib-rust` repository. Original contributor for that
+/// implementation: Srinath Ramachandran. It was later migrated and modified in
+/// this repository.
 
 // Number of buckets to grow by when expanding.
 const GROW_CHUNK: usize = 128;
