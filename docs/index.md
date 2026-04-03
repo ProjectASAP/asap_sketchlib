@@ -13,6 +13,7 @@ This page is the docs home for `sketchlib-rust`.
 - [APIs Index](./apis.md)
 - [API Pages Directory](./api/)
 - [Common API](./api/api_common.md)
+- [Advanced Use Cases](./advanced_use_cases.md)
 - [Test Coverage Map](./tests.md)
 - [Feature Status](./features.md)
 - [Fold Sketch Design](./fold_sketch_design.md)
@@ -21,3 +22,4 @@ This page is the docs home for `sketchlib-rust`.
 
 - [Contributors](./contributors.md)
 - [License](./license.md)
+
