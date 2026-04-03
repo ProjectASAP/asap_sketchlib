@@ -11,7 +11,7 @@
 | Frequency estimation | `CountMin`, `Count Sketch` | You need fast approximate counts for high-volume keys. |
 | Cardinality estimation | `HyperLogLog` (`Regular`, `DataFusion`, `HIP`) | You need approximate distinct counts with bounded memory. |
 | Quantiles/distribution | `KLL`, `DDSketch` | You need percentile/latency summaries over streams. |
-| Multi-sketch orchestration/windowing | `Hydra`, `UnivMon`, `HashLayer`, `ExponentialHistogram`, `EHUnivOptimized`, `NitroBatch`, `Octo` | You need hierarchical queries, sketch coordination, or sliding-window aggregation. |
+| Multi-sketch orchestration/windowing | `Hydra`, `UnivMon`, `HashSketchEnsemble`, `ExponentialHistogram`, `EHUnivOptimized`, `NitroBatch`, `OctoSketch` | You need hierarchical queries, sketch coordination, or sliding-window aggregation. |
 
 Full sketch status and API details: [APIs Index](./docs/apis.md).
 
@@ -21,26 +21,17 @@ Simple demo use case: estimate unique users with HyperLogLog.
 Example usage:
 
 ```rust
-use sketchlib_rust::common::input::{HydraCounter, HydraQuery};
-use sketchlib_rust::{CountMin, FastPath, SketchInput, Vector2D};
+use sketchlib_rust::{DataFusion, HyperLogLog, SketchInput};
 
-// Create a CountMin-based counter
-let mut counter = HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::default());
+let mut hll = HyperLogLog::<DataFusion>::default();
 
-// Insert values
-let key = SketchInput::String("event".into());
-counter.insert(&key, None);
-counter.insert(&key, None);
-
-// Query frequency (compatible)
-let freq = counter.query(&HydraQuery::Frequency(key)).unwrap();
-println!("frequency: {}", freq);
-
-// Query cardinality (incompatible - returns error)
-match counter.query(&HydraQuery::Cardinality) {
-    Ok(_) => println!("success"),
-    Err(e) => println!("error: {}", e),
+// Simulate a stream of user IDs (with duplicates)
+for user_id in [101, 202, 303, 101, 404, 202, 505, 101] {
+    hll.insert(&SketchInput::U64(user_id));
 }
+
+let unique_users = hll.estimate();
+println!("estimated unique users: {unique_users}"); // ≈ 5
 ```
 
 To validate the repo quickly:
@@ -61,7 +52,7 @@ cargo bench
 
 - Native Rust library: no JNI/FFI bridge needed for Rust services.
 - Rust-first API surface: typed inputs (`SketchInput`) and consistent `insert`/`estimate`/`merge` patterns across sketches.
-- Built-in framework layer: `Hydra`, `HashLayer`, `ExponentialHistogram`, and `EHUnivOptimized` are included in the same crate.
+- Built-in framework layer: `Hydra`, `HashSketchEnsemble`, `ExponentialHistogram`, and `EHUnivOptimized` are included in the same crate.
 - Optimization hooks for Rust workloads: shared-hash fast paths and pluggable hashing via `SketchHasher`.
 
 When DataSketches may be a better fit:
