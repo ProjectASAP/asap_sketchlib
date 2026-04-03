@@ -22,9 +22,9 @@ implementations, and orchestration/windowing frameworks in one crate.
 
 ## Current State
 
-- ✅ Core sketch APIs marked `Ready` in [apis.md](./apis.md): `CountMin`, `Count Sketch`, `HyperLogLog`, `KLL`, `DDSketch`, `FoldCMS`, `FoldCS`, `CMSHeap`, `CSHeap`
-- ⚠️ Core sketch APIs currently marked `Unstable`: `Elastic`, `Coco`, `UniformSampling`, `KMV`
-- ✅ Framework APIs marked `Ready`: `Hydra`, `HashLayer`, `UnivMon`, `UnivMon Optimized`, `NitroBatch`, `ExponentialHistogram`, `EHSketchList`, `TumblingWindow`
-- ⚠️ Framework APIs currently marked `Unstable`: `EHUnivOptimized`
-- ✅ Shared common-layer APIs are available under [Common Utility APIs](./apis.md#common-utility-apis)
-- 🚧 Ongoing work focuses on API stabilization, broader tests, and benchmark depth (see [Feature Status](./features.md))
+- **Ready**: Core sketch APIs marked `Ready` in [apis.md](./apis.md): `CountMin`, `Count Sketch`, `HyperLogLog`, `KLL`, `DDSketch`, `FoldCMS`, `FoldCS`, `CMSHeap`, `CSHeap`
+- **Notice**: Core sketch APIs currently marked `Unstable`: `Elastic`, `Coco`, `UniformSampling`, `KMV`
+- Framework APIs marked `Ready`: `Hydra`, `HashLayer`, `UnivMon`, `UnivMon Optimized`, `NitroBatch`, `ExponentialHistogram`, `EHSketchList`, `TumblingWindow`
+- Framework APIs currently marked `Unstable`: `EHUnivOptimized`
+- Shared common-layer APIs are available under [Common Utility APIs](./apis.md#common-utility-apis)
+- **Ongoing** work focuses on API stabilization, broader tests, and benchmark depth (see [Feature Status](./features.md))
