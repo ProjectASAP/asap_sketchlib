@@ -52,11 +52,11 @@ cargo bench
 
 Performance is the primary motivation for this library:
 
-- Sub-microsecond insert/query with zero heap allocation in the common path: cache-friendly flat counter arrays, row-major layout, and direct slice access.
-- `FastPath` mode: a single hash across all rows via bit masking, giving 2-3x throughput over independent-hash modes. See [Key Abstractions](#key-abstractions).
-- Native Rust: no JNI/FFI bridge. Memory layout, allocation, and hashing are fully under the caller's control.
-- Rust-first API: typed inputs (`SketchInput`) and consistent `insert`/`estimate`/`merge` patterns across all sketches, with pluggable hashing via `SketchHasher`.
-- Built-in framework layer (`Hydra`, `HashSketchEnsemble`, `ExponentialHistogram`, `UnivMon`) included in the same crate with hash reuse across sketch collections.
+- Performance-focused implementations with cache-friendly flat counter arrays, row-major layouts, and direct slice access in core sketch paths.
+- `FastPath` mode computes a single hash and derives row indices via bit masking, reducing hashing overhead relative to independent-hash modes.
+- Native Rust: no JNI/FFI bridge. Memory layout, allocation, and hashing stay within the Rust implementation.
+- Rust-first API: typed inputs (`SketchInput`) and largely consistent `insert`/`estimate`/`merge` patterns across the main sketches, with pluggable hashing via `SketchHasher`.
+- Built-in framework layer (`Hydra`, `HashSketchEnsemble`, `ExponentialHistogram`, `UnivMon`) included in the same crate, including hash-reuse support for coordinated sketch collections.
 
 When DataSketches may be a better fit:
 
@@ -65,16 +65,6 @@ When DataSketches may be a better fit:
 - You need long-running production maturity and an Apache-governed release cycle.
 
 Algorithms this library provides that DataSketches does not: `UnivMon` (universal monitoring), `Hydra` (hierarchical subpopulation sketching), `FoldCMS`/`FoldCS` (memory-efficient windowed sketching), and `NitroBatch`.
-
-## Key Abstractions
-
-**`RegularPath` / `FastPath`** — Type-level mode parameters for `CountMin` and `Count Sketch`. `RegularPath` computes R independent hash calls per insert. `FastPath` computes one hash and derives all row indices via bit masking, giving 2-3x higher insert throughput at the cost of slight row correlation (safe for most workloads). Choose `FastPath` when insert rate is the bottleneck.
-
-**`HydraCounter`** — An enum selecting the inner sketch type for each Hydra node (a CMS or Count Sketch variant). Passed at construction via `Hydra::with_dimensions`. Determines what query types are supported.
-
-**`HydraQuery`** — An enum for querying Hydra: `HydraQuery::Frequency(SketchInput)` for frequency estimation or `HydraQuery::Quantile(threshold)` for quantile queries. Defined in [`docs/api/api_common_input.md`](./docs/api/api_common_input.md).
-
-**`SketchInput`** — A unified enum covering all scalar and string key types (`U64`, `Str`, `F64`, etc.), providing a single insert/estimate interface across all sketches.
 
 ## Choosing Between Sketches for the Same Goal
 

@@ -1,3 +1,10 @@
+//! Elastic Sketch.
+//!
+//! Reference:
+//! - Chen et al., "Elastic Sketch: Adaptive and Fast Network-wide Measurements,"
+//!   SIGCOMM 2018.
+//!   https://dl.acm.org/doi/10.1145/3230543.3230544
+
 use crate::{CANONICAL_HASH_SEED, DefaultXxHasher, SketchHasher, SketchInput};
 
 use super::{CountMin, RegularPath};

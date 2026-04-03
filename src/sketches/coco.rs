@@ -10,6 +10,7 @@
 //!
 //! ## Reference
 //! * "CocoSketch: High-Performance Sketch-based Measurement over Arbitrary Key Spaces"
+//! * https://dl.acm.org/doi/10.1145/3452296.3472892
 
 use crate::{DefaultXxHasher, SketchHasher, SketchInput, Vector2D};
 use rand::Rng;

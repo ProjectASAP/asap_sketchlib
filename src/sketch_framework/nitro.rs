@@ -1,6 +1,10 @@
 //! Nitro Sketch, with batch processing
 //! Assume the Nitro Sketch can get a batch of input
 //! For streaming Nitro, please refers to Nitro struct in structure_utils.rs
+//!
+//! Reference:
+//! - NitroSketch paper.
+//!   https://dl.acm.org/doi/10.1145/3341302.3342076
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng, rng};
