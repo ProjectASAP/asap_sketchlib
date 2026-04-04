@@ -40,7 +40,7 @@ message CountMinState {
   repeated double counts_float = 5 [packed = true];
 
   // ---- Optional Go-extension fields ----------------------------------------
-  // These are produced by sketchlib-go and absent from sketchlib-rust producers.
+  // These are produced by sketchlib-go and absent from ASAPSketchLib producers.
   // Consumers should treat absence as "unknown; recompute if needed".
 
   // Sum-weighted counter matrix (same layout as counts_*), length = rows * cols.

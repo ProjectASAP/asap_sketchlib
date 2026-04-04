@@ -1,6 +1,6 @@
 # APIs Index
 
-This is the canonical API entry point for `sketchlib-rust`.
+This is the canonical API entry point for `ASAPSketchLib`.
 
 ## Core Sketch APIs
 

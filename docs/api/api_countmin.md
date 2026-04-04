@@ -56,7 +56,7 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use sketchlib_rust::{CountMin, SketchInput};
+use asap_sketch_lib::{CountMin, SketchInput};
 
 let mut cm = CountMin::with_dimensions(3, 1024);
 cm.insert(&SketchInput::U64(42));

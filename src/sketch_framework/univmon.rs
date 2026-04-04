@@ -21,7 +21,7 @@
 //! * **Cardinality**: Estimation of the number of distinct elements.
 //! * **Heavy Hitters**: Tracking top flows across different sampling granularities.
 //!
-//! This implementation is part of the `sketchlib-rust` library.
+//! This implementation is part of the `ASAPSketchLib` library.
 
 use crate::common::heap::HHHeap;
 use crate::common::{BOTTOM_LAYER_FINDER, SketchInput, hash_item64_seeded, hash64_seeded};

@@ -1,6 +1,6 @@
 # Project Overview
 
-`sketchlib-rust` is a Rust sketch library for approximate streaming analytics.
+`ASAPSketchLib` is a Rust sketch library for approximate streaming analytics.
 It provides reusable data-structure building blocks, production-focused sketch
 implementations, and orchestration/windowing frameworks in one crate.
 

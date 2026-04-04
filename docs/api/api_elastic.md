@@ -43,7 +43,7 @@ Derives serde; no dedicated byte API helpers.
 ## Examples
 
 ```rust
-use sketchlib_rust::Elastic;
+use asap_sketch_lib::Elastic;
 
 let mut sk = Elastic::init_with_length(8);
 sk.insert("flow".to_string());

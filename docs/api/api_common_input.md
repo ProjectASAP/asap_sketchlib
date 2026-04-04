@@ -17,7 +17,7 @@ Canonical input and ownership model shared across sketches/frameworks.
 - `HydraCounter`
 - `L2HH`
 
-`HydraQuery` and `HydraCounter` are defined in `sketchlib_rust::input`.
+`HydraQuery` and `HydraCounter` are defined in `asap_sketch_lib::input`.
 
 ## Constructors / Conversions
 
@@ -95,8 +95,8 @@ enum HeapItem {
 ## Examples
 
 ```rust
-use sketchlib_rust::{SketchInput, input_to_owned};
-use sketchlib_rust::input::HydraQuery;
+use asap_sketch_lib::{SketchInput, input_to_owned};
+use asap_sketch_lib::input::HydraQuery;
 
 let q = HydraQuery::Frequency(SketchInput::Str("key"));
 let _ = q;

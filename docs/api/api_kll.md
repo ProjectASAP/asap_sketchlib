@@ -57,7 +57,7 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use sketchlib_rust::{KLL, SketchInput};
+use asap_sketch_lib::{KLL, SketchInput};
 
 let mut kll = KLL::init_kll(200);
 kll.update(&SketchInput::F64(10.0)).unwrap();

@@ -19,7 +19,7 @@
 //!   XTEST_DIR=<path> cargo test --test xtest_consumer -- --nocapture
 
 use prost::Message;
-use sketchlib_rust::proto::sketchlib::*;
+use asap_sketch_lib::proto::sketchlib::*;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -40,7 +40,7 @@ fn cross_language_proto() {
     let in_dir = xtest_dir.path();
 
     println!("=======================================================");
-    println!("  sketchlib-rust ← xtest_consumer");
+    println!("  ASAPSketchLib ← xtest_consumer");
     println!("=======================================================");
 
     let mut all_ok = true;

@@ -931,7 +931,7 @@ fn heap(&self) -> &HHHeap
 ### Rate Limiting (Per-User Request Counting) -- FoldCMS
 
 ```rust
-use sketchlib_rust::{FoldCMS, SketchInput};
+use asap_sketch_lib::{FoldCMS, SketchInput};
 
 let rows = 3;
 let full_cols = 4096;
@@ -959,7 +959,7 @@ assert_eq!(epoch1.query(&SketchInput::Str("user_003")), 1300);
 ### DDoS Detection with Hierarchical Merge -- FoldCMS
 
 ```rust
-use sketchlib_rust::{FoldCMS, SketchInput};
+use asap_sketch_lib::{FoldCMS, SketchInput};
 
 let rows = 3;
 let full_cols = 4096;
@@ -984,7 +984,7 @@ assert_eq!(total, 37_000);
 ### Heavy Hitter Detection -- FoldCS
 
 ```rust
-use sketchlib_rust::{FoldCS, SketchInput};
+use asap_sketch_lib::{FoldCS, SketchInput};
 
 let rows = 3;
 let full_cols = 4096;

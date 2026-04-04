@@ -1,8 +1,8 @@
-# sketchlib-rust
+# ASAPSketchLib
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-`sketchlib-rust` is a Rust sketch library with reusable sketch building blocks, sketch implementations, and orchestration frameworks.
+`ASAPSketchLib` is a Rust sketch library with reusable sketch building blocks, sketch implementations, and orchestration frameworks.
 
 ## Supported Sketches
 
@@ -21,7 +21,7 @@ Simple demo use case: estimate unique users with HyperLogLog.
 Example usage:
 
 ```rust
-use sketchlib_rust::{DataFusion, HyperLogLog, SketchInput};
+use asap_sketch_lib::{DataFusion, HyperLogLog, SketchInput};
 
 let mut hll = HyperLogLog::<DataFusion>::default();
 
@@ -48,7 +48,7 @@ cargo test --all-features
 cargo bench
 ```
 
-## Why sketchlib-rust (vs Apache DataSketches)
+## Why ASAPSketchLib (vs Apache DataSketches)
 
 Performance is the primary motivation for this library:
 

@@ -50,7 +50,7 @@ Not currently provided as a dedicated public API.
 ## Examples
 
 ```rust
-use sketchlib_rust::{CMSHeap, SketchInput, Vector2D, RegularPath};
+use asap_sketch_lib::{CMSHeap, SketchInput, Vector2D, RegularPath};
 
 let mut sk = CMSHeap::<Vector2D<i64>, RegularPath>::new(3, 256, 8);
 sk.insert(&SketchInput::Str("flow"));

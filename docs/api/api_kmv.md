@@ -48,7 +48,7 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use sketchlib_rust::{KMV, SketchInput};
+use asap_sketch_lib::{KMV, SketchInput};
 
 let mut kmv = KMV::new(1024);
 kmv.insert(&SketchInput::U64(1));

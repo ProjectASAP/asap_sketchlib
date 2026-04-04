@@ -51,7 +51,7 @@ No dedicated serialization API.
 ## Examples
 
 ```rust
-use sketchlib_rust::{CountMin, FastPath, NitroBatch, Vector2D};
+use asap_sketch_lib::{CountMin, FastPath, NitroBatch, Vector2D};
 
 let base = CountMin::<Vector2D<i32>, FastPath>::default();
 let mut nitro = NitroBatch::with_target(0.1, base);

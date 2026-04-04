@@ -65,7 +65,7 @@ Not applicable at this utility-layer boundary.
 ## Examples
 
 ```rust
-use sketchlib_rust::Vector2D;
+use asap_sketch_lib::Vector2D;
 
 let matrix = Vector2D::<i32>::init(3, 16);
 assert_eq!(matrix.rows(), 3);

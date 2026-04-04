@@ -34,7 +34,7 @@ src/common/
 ## Public Exports
 
 ```rust
-use sketchlib_rust::common::{
+use asap_sketch_lib::common::{
     // Input layer
     SketchInput, HeapItem, HHItem, L2HH,
     input_to_owned, heap_item_to_sketch_input,
@@ -90,7 +90,7 @@ use sketchlib_rust::common::{
 ## Quick Example
 
 ```rust
-use sketchlib_rust::{hash64_seeded, SketchInput, Vector2D, CANONICAL_HASH_SEED};
+use asap_sketch_lib::{hash64_seeded, SketchInput, Vector2D, CANONICAL_HASH_SEED};
 
 let _h = hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::U64(42));
 let matrix = Vector2D::<i32>::init(3, 16);

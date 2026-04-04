@@ -52,7 +52,7 @@ Not currently provided as a dedicated public API.
 ## Examples
 
 ```rust
-use sketchlib_rust::{FoldCMS, SketchInput};
+use asap_sketch_lib::{FoldCMS, SketchInput};
 
 let mut sk = FoldCMS::new(3, 4096, 4, 16);
 sk.insert(&SketchInput::Str("k"), 3);

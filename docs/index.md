@@ -1,6 +1,6 @@
 # Documentation Index
 
-This page is the docs home for `sketchlib-rust`.
+This page is the docs home for `ASAPSketchLib`.
 
 ## Start Here
 

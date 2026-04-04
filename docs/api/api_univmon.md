@@ -51,7 +51,7 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use sketchlib_rust::{SketchInput, UnivMon};
+use asap_sketch_lib::{SketchInput, UnivMon};
 
 let mut um = UnivMon::init_univmon(32, 3, 1024, 4);
 um.insert(&SketchInput::Str("flow"), 1);
