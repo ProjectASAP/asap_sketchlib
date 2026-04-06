@@ -81,7 +81,7 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use asap_sketch_lib::{DataFusion, HyperLogLog, SketchInput};
+use asap_sketchlib::{DataFusion, HyperLogLog, SketchInput};
 
 let mut hll = HyperLogLog::<DataFusion>::default();
 for i in 0..1000u64 {

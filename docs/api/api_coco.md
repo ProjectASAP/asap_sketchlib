@@ -46,7 +46,7 @@ Derives serde; no dedicated byte API helpers.
 ## Examples
 
 ```rust
-use asap_sketch_lib::Coco;
+use asap_sketchlib::Coco;
 
 let mut sk = Coco::init_with_size(64, 4);
 sk.insert("region=us|id=1", 3);

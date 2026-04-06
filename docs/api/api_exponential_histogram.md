@@ -47,7 +47,7 @@ No dedicated serialization API.
 ## Examples
 
 ```rust
-use asap_sketch_lib::{CountMin, EHSketchList, ExponentialHistogram, FastPath, SketchInput, Vector2D};
+use asap_sketchlib::{CountMin, EHSketchList, ExponentialHistogram, FastPath, SketchInput, Vector2D};
 
 let template = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::default());
 let mut eh = ExponentialHistogram::new(3, 120, template);

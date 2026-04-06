@@ -68,8 +68,8 @@ counter keeps running; the delta carries the threshold value.
 ### CountMin Delta Example
 
 ```rust
-use asap_sketch_lib::{CountMin, RegularPath, Vector2D, SketchInput};
-use asap_sketch_lib::octo_delta::CmDelta;
+use asap_sketchlib::{CountMin, RegularPath, SketchInput, Vector2D};
+use asap_sketchlib::sketches::octo_delta::CmDelta;
 
 let mut child = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
 let mut parent = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
@@ -100,8 +100,8 @@ value. After emission, the child counter resets to zero.
 ### Count Sketch Delta Example
 
 ```rust
-use asap_sketch_lib::{Count, RegularPath, Vector2D, SketchInput};
-use asap_sketch_lib::octo_delta::CountDelta;
+use asap_sketchlib::{Count, RegularPath, SketchInput, Vector2D};
+use asap_sketchlib::sketches::octo_delta::CountDelta;
 
 let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
 let mut parent = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
@@ -133,8 +133,8 @@ every improvement is emitted immediately.
 ### HyperLogLog Example
 
 ```rust
-use asap_sketch_lib::{HyperLogLog, Regular, SketchInput};
-use asap_sketch_lib::octo_delta::HllDelta;
+use asap_sketchlib::{HyperLogLog, Regular, SketchInput};
+use asap_sketchlib::sketches::octo_delta::HllDelta;
 
 let mut child = HyperLogLog::<Regular>::default();
 let mut parent = HyperLogLog::<Regular>::default();

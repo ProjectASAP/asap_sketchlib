@@ -15,7 +15,7 @@ This page covers three distinct categories of advanced usage in `ASAPSketchLib`.
 `Hydra` maintains a hierarchy of sketches keyed by semicolon-separated dimension prefixes. A single `update` call fans out into the appropriate dimension nodes. Queries can then target any prefix subtree.
 
 ```rust
-use asap_sketch_lib::{Hydra, SketchInput};
+use asap_sketchlib::{Hydra, SketchInput};
 
 let mut hydra = Hydra::default();
 hydra.update("region=us;service=api", &SketchInput::Str("err"), None);

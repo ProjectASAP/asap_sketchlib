@@ -66,7 +66,7 @@ No dedicated serialization API.
 ## Examples
 
 ```rust
-use asap_sketch_lib::{SketchInput, UnivMonPyramid};
+use asap_sketchlib::{SketchInput, UnivMonPyramid};
 
 let mut um = UnivMonPyramid::with_defaults();
 um.insert(&SketchInput::U64(1), 1);

@@ -54,7 +54,7 @@ Serialized through serde as part of parent structures.
 ## Examples
 
 ```rust
-use asap_sketch_lib::{CountMin, EHSketchList, FastPath, SketchInput, Vector2D};
+use asap_sketchlib::{CountMin, EHSketchList, FastPath, SketchInput, Vector2D};
 
 let mut sk = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::default());
 sk.insert(&SketchInput::U64(1));

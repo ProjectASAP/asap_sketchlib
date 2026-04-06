@@ -51,7 +51,7 @@ Not currently provided as a dedicated public API.
 ## Examples
 
 ```rust
-use asap_sketch_lib::{FoldCS, SketchInput};
+use asap_sketchlib::{FoldCS, SketchInput};
 
 let mut sk = FoldCS::new(3, 4096, 4, 16);
 sk.insert(&SketchInput::Str("k"), 5);

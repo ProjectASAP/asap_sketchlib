@@ -59,7 +59,7 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use asap_sketch_lib::{Hydra, SketchInput};
+use asap_sketchlib::{Hydra, SketchInput};
 
 let mut hydra = Hydra::default();
 hydra.update("region=us;service=api", &SketchInput::Str("err"), None);

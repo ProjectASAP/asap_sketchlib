@@ -21,7 +21,7 @@ Simple demo use case: estimate unique users with HyperLogLog.
 Example usage:
 
 ```rust
-use asap_sketch_lib::{DataFusion, HyperLogLog, SketchInput};
+use asap_sketchlib::{DataFusion, HyperLogLog, SketchInput};
 
 let mut hll = HyperLogLog::<DataFusion>::default();
 

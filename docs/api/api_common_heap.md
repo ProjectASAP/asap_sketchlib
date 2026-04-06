@@ -47,7 +47,7 @@ No dedicated byte API helpers.
 ## Examples
 
 ```rust
-use asap_sketch_lib::{HHHeap, SketchInput};
+use asap_sketchlib::{HHHeap, SketchInput};
 
 let mut hh = HHHeap::new(8);
 hh.update(&SketchInput::Str("u1"), 10);

@@ -12,8 +12,8 @@ Supports both frequency sketches (CountMin, Count) and cardinality sketches
 ### Quick Example
 
 ```rust
-use asap_sketch_lib::*;
-use asap_sketch_lib::sketch_framework::HashSketchEnsemble;
+use asap_sketchlib::*;
+use asap_sketchlib::HashSketchEnsemble;
 
 // Two CMS + one HLL sharing one hash per insert
 let mut ensemble = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
@@ -78,11 +78,11 @@ fn push(&mut self, sketch: EnsembleSketch) -> Result<(), &'static str>
 Sketches are converted into `EnsembleSketch` via `From` impls, so you can use `.into()`:
 
 ```rust
-use asap_sketch_lib::{
+use asap_sketchlib::{
     CountMin, Count, FastPath, Vector2D, DefaultXxHasher,
     HyperLogLog, DataFusion,
 };
-use asap_sketch_lib::sketch_framework::hashlayer::{HashSketchEnsemble, EnsembleSketch};
+use asap_sketchlib::sketch_framework::hashlayer::{EnsembleSketch, HashSketchEnsemble};
 
 let ensemble = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
     CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),

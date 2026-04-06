@@ -63,7 +63,7 @@ Not applicable.
 ## Examples
 
 ```rust
-use asap_sketch_lib::{hash64_seeded, SketchInput, CANONICAL_HASH_SEED};
+use asap_sketchlib::{hash64_seeded, SketchInput, CANONICAL_HASH_SEED};
 
 let h = hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::U64(42));
 assert!(h > 0 || h == 0);

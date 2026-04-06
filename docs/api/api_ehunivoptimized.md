@@ -72,7 +72,7 @@ No dedicated serialization API.
 ## Examples
 
 ```rust
-use asap_sketch_lib::{EHUnivOptimized, SketchInput};
+use asap_sketchlib::{EHUnivOptimized, SketchInput};
 
 let mut eh = EHUnivOptimized::with_defaults(2, 120);
 eh.update(1, &SketchInput::U64(10), 1);

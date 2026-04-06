@@ -50,7 +50,7 @@ Derives serde; no dedicated byte API helpers.
 ## Examples
 
 ```rust
-use asap_sketch_lib::UniformSampling;
+use asap_sketchlib::UniformSampling;
 
 let mut sk = UniformSampling::new(0.2);
 sk.update(1.0);

@@ -55,7 +55,7 @@ No dedicated serialization API.
 ## Examples
 
 ```rust
-use asap_sketch_lib::{FoldCMSConfig, SketchInput, TumblingWindow};
+use asap_sketchlib::{FoldCMSConfig, SketchInput, TumblingWindow};
 
 let cfg = FoldCMSConfig { rows: 3, full_cols: 4096, fold_level: 4, top_k: 16 };
 let mut tw = TumblingWindow::new(60, 8, cfg, 4);
