@@ -1,5 +1,5 @@
 [package]
-name = "asap-sketchlib"
+name = "asap_sketchlib"
 version = "0.1.0"
 edition = "2024"
 
