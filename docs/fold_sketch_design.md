@@ -3,6 +3,7 @@
 A memory-efficient technique for reducing sub-window sketch storage in long-range time-windowed query.
 
 **Implementation:**
+
 - FoldCMS: [`src/sketches/fold_cms.rs`](../src/sketches/fold_cms.rs)
 - FoldCS: [`src/sketches/fold_cs.rs`](../src/sketches/fold_cs.rs)
 
@@ -26,7 +27,7 @@ A memory-efficient technique for reducing sub-window sketch storage in long-rang
 
 ---
 
-## 1. Motivation
+## Motivation
 
 In time-windowed queries (e.g., tumbling windows), a query window of duration T is divided into n sub-windows of duration T/n. Each sub-window maintains a Count-Min Sketch (CMS) summarizing the items that arrive during that interval. At query time, sub-window sketches are merged element-wise to answer frequency or heavy-hitter queries over the full window.
 
@@ -34,11 +35,11 @@ The fundamental problem: **every sub-window must allocate a full R x W CMS**, wh
 
 ### Example Scenarios
 
-**Scenario 1: API Rate Limiting**
+#### Scenario 1: API Rate Limiting
 
 A rate limiter monitors per-user request counts over a 10-minute sliding window. The full window needs W = 4096 columns for epsilon = 0.00066 accuracy across millions of requests. But each 1-minute sub-window only sees ~200 active users.
 
-```
+```text
 Standard approach:
   10 sub-windows x (3 rows x 4096 cols x 8 bytes) = 980 KB
 
@@ -46,20 +47,20 @@ Actual distinct items per sub-window: ~200
   200 items across 4096 columns -> 95% of cells are zeros
 ```
 
-**Scenario 2: Error Frequency Monitoring**
+#### Scenario 2: Error Frequency Monitoring
 
 An observability system tracks per-endpoint error counts. The merged 10-minute window needs W = 4096, but each 1-minute sub-window sees errors from only ~50 endpoints.
 
-```
+```text
 Standard approach:  980 KB for 10 sub-windows
 Active cells per sub-window: ~50 out of 4096 per row -> 98.8% waste
 ```
 
-**Scenario 3: DDoS Detection**
+#### Scenario 3: DDoS Detection
 
 A network monitor counts per-source-IP packets over a 5-minute window. Each 10-second sub-window needs W = 8192 for the merged query, but only ~500 IPs are active in any 10-second interval.
 
-```
+```text
 Standard approach:
   30 sub-windows x (5 rows x 8192 cols x 8 bytes) = 9.8 MB
 
@@ -70,10 +71,10 @@ Active cells per sub-window: ~500 out of 8192 per row -> 93.9% waste
 
 ---
 
-## 2. Naming Convention
+## Naming Convention
 
 | Name | Description |
-|------|-------------|
+| ------ | ------------- |
 | **FoldSketch** | The general technique of column-folding for any linear sketch |
 | **FoldCMS** | Column-folded Count-Min Sketch |
 | **FoldCS** | Column-folded Count Sketch |
@@ -84,13 +85,13 @@ The "fold" metaphor: imagine the full W-column sketch printed on paper. Folding 
 
 ---
 
-## 3. Core Insight
+## Core Insight
 
 ### The Key Observation
 
 In a CMS with R rows and W columns, inserting a key computes R hash values, each selecting one of W columns. The column index for row r is:
 
-```
+```rust
 full_col_r(key) = hash_r(key) mod W
 ```
 
@@ -100,13 +101,13 @@ This `full_col` is the key's **permanent address** in the full-width CMS — it 
 
 Define a **fold level** k >= 0. A FoldCMS at level k uses:
 
-```
+```rust
 fold_cols = W / 2^k = W >> k
 ```
 
 physical columns. Each key's physical column is:
 
-```
+```rust
 fold_col = full_col mod fold_cols
          = full_col & (fold_cols - 1)    // because fold_cols is a power of 2
 ```
@@ -115,7 +116,7 @@ Multiple `full_col` values map to the same `fold_col`. Each physical cell stores
 
 ### Visual Representation
 
-```
+```text
 Full CMS (level 0), W = 8:
   +---+---+---+---+---+---+---+---+
   | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |    8 cells, one counter each
@@ -142,13 +143,13 @@ The critical property: **folding is purely a storage optimization**. Every entry
 
 ---
 
-## 4. Data Structure Design
+## Data Structure Design
 
 ### Tagged Cell Architecture
 
 The core data structure is a **tagged cell** that lazily expands based on actual collision pressure. These types are shared between FoldCMS and FoldCS.
 
-```
+```text
 FoldEntry
 +-- full_col: u16     permanent column address in the full W-column sketch
 +-- count: i64        accumulated counter value
@@ -163,7 +164,7 @@ FoldCell (enum)
 
 State transitions:
 
-```
+```text
    Empty --insert(f1, d)--> Single(f1, d)
                                  |
                     insert(f1, d')  |  insert(f2, d2)  where f2 != f1
@@ -181,7 +182,7 @@ A cell **never** transitions backward (Collided -> Single -> Empty). This is saf
 
 ### FoldCMS Structure
 
-```
+```text
 FoldCMS
 +-- rows: usize           R independent hash functions
 +-- fold_cols: usize      W / 2^k physical columns
@@ -193,7 +194,7 @@ FoldCMS
 
 ### FoldCS Structure
 
-```
+```text
 FoldCS
 +-- rows: usize           R independent hash functions
 +-- fold_cols: usize      W / 2^k physical columns
@@ -217,13 +218,13 @@ The cell grid is stored in row-major order: `cells[r * fold_cols + c]` gives the
 
 ---
 
-## 5. Operations
+## Operations
 
 The operations below are described for FoldCMS. FoldCS uses the same merge/unfold logic with different insert and query semantics (see [Section 8](#foldcs-folding-count-sketch)).
 
-### 5.1 Insert
+### FoldCMSInsert
 
-```
+```pseudo
 INSERT(sketch, key, delta):
     for each row r in 0..R:
         full_col  <- hash_r(key) mod W           // permanent address
@@ -258,9 +259,9 @@ INSERT(sketch, key, delta):
 **Time complexity**: O(R x E) per insert, where E is the average entries per cell.
 For sparse sub-windows (D << fold_cols), E ~ 1 and insert is O(R).
 
-### 5.2 Point Query
+### Point Query
 
-```
+```pseudo
 QUERY(sketch, key) -> i64:
     min_count <- +inf
     for each row r in 0..R:
@@ -277,11 +278,11 @@ QUERY(sketch, key) -> i64:
 
 **Time complexity**: O(R x E). Returns exactly the same value as a standard W-column CMS.
 
-### 5.3 Same-Level Merge
+### Same-Level Merge
 
 Combines two FoldCMS sketches at the same fold level without changing the physical column count. Used to aggregate sub-windows that share the same granularity.
 
-```
+```pseudo
 MERGE_SAME_LEVEL(self, other):
     assert self.fold_level == other.fold_level
     assert self.full_cols == other.full_cols
@@ -297,11 +298,11 @@ The cell-level `insert` respects lazy expansion: if both cells contain entries f
 
 **Time complexity**: O(R x fold_cols x E)
 
-### 5.4 Unfold Merge
+### Unfold Merge
 
 The central merge operation: combines two **same-level** sketches at level k into a new sketch at level k-1, doubling the physical column count. Entries are scattered to their correct positions in the wider grid.
 
-```
+```pseudo
 UNFOLD_MERGE(a, b) -> FoldCMS:        // both at level k, result at level k-1
     assert a.fold_level == b.fold_level > 0
     new_level <- a.fold_level - 1
@@ -322,7 +323,7 @@ UNFOLD_MERGE(a, b) -> FoldCMS:        // both at level k, result at level k-1
 
 **Geometric interpretation**: At the old level k, entries with `full_col = f` are in physical column `f mod old_fold_cols`. At level k-1, they move to `f mod (2 x old_fold_cols)`. Since `new_fold_cols = 2 x old_fold_cols`:
 
-```
+```pseudo
 new_fc = f mod (2 x old_fold_cols)
 
 This is either:
@@ -334,11 +335,11 @@ Each old cell's entries split into at most 2 destination cells. Entries that sha
 
 **Time complexity**: O(R x fold_cols x E) for each source sketch.
 
-### 5.5 Unfold to Target Level
+### Unfold to Target Level
 
 Repeatedly unfold-merges with an empty sketch to reduce fold level step by step:
 
-```
+```pseudo
 UNFOLD_TO(sketch, target_level) -> FoldCMS:
     assert target_level <= sketch.fold_level
     current <- clone(sketch)
@@ -348,11 +349,11 @@ UNFOLD_TO(sketch, target_level) -> FoldCMS:
     return current
 ```
 
-### 5.6 Hierarchical Merge
+### Hierarchical Merge
 
 Merges an arbitrary-length sequence of sketches via pairwise unfold-merging:
 
-```
+```pseudo
 HIERARCHICAL_MERGE(sketches[0..n]) -> FoldCMS:
     current <- sketches
     while |current| > 1:
@@ -377,6 +378,7 @@ HIERARCHICAL_MERGE(sketches[0..n]) -> FoldCMS:
 ```
 
 For n sketches at fold level k:
+
 - **Round 1**: n/2 pairs -> n/2 sketches at level k-1
 - **Round 2**: n/4 pairs -> n/4 sketches at level k-2
 - ...
@@ -384,11 +386,11 @@ For n sketches at fold level k:
 
 Non-power-of-two counts are handled by carrying the odd sketch forward, then merging it in the next round after unfolding to match the partner's level.
 
-### 5.7 Conversion to Flat Counters
+### Conversion to Flat Counters
 
 Extract a standard R x W counter array from any fold level:
 
-```
+```pseudo
 TO_FLAT_COUNTERS(sketch) -> i64[R][W]:
     out <- zeros(R, W)
     for each row r:
@@ -402,31 +404,34 @@ This produces exactly the same array as a standard CMS that processed the same s
 
 ---
 
-## 6. Memory Analysis
+## Memory Analysis
 
-### 6.1 Standard CMS Memory
+### Standard CMS Memory
 
-```
+```pseudo
 Memory_CMS = R x W x sizeof(counter)
            = R x W x 8 bytes    (for i64 counters)
 ```
 
-### 6.2 FoldCMS/FoldCS Memory Model
+### FoldCMS/FoldCS Memory Model
 
 FoldCMS and FoldCS share the same memory model since they use identical cell types. Memory has two components:
 
 **Cell grid**: Fixed overhead for the physical column grid.
-```
+
+```pseudo
 Cell grid = R x fold_cols x sizeof(FoldCell)
 ```
 
 The `FoldCell` enum uses Rust's tagged union representation:
+
 - `Empty`: discriminant only (part of grid allocation)
 - `Single { full_col: u16, count: i64 }`: discriminant + inline data, no heap allocation
 - `Collided(Vec<FoldEntry>)`: discriminant + Vec header (pointer + length + capacity = 24 bytes) + heap-allocated entries
 
 **Active entries**: Per-entry cost for non-empty cells.
-```
+
+```pseudo
 Active entries <= R x D x sizeof(FoldEntry)
                = R x D x 10 bytes    (u16 + i64)
 ```
@@ -434,33 +439,35 @@ Active entries <= R x D x sizeof(FoldEntry)
 where D is the number of distinct keys in the sub-window.
 
 **Total memory**:
-```
+
+```pseudo
 Memory_Fold ~ R x (fold_cols x C_cell + D x C_entry + collisions x C_vec)
 ```
 
 where:
+
 - C_cell ~ 32 bytes (enum with inline Single variant)
 - C_entry = 10 bytes (u16 + i64 FoldEntry)
 - C_vec = 24 bytes (Vec header, only for Collided cells)
 - collisions = number of physical cells with 2+ distinct full_cols
 
-### 6.3 Collision Analysis
+### Collision Analysis
 
 For D distinct keys, R rows, and fold_cols physical columns, the expected number of fold-collisions per row follows the birthday paradox:
 
-```
+```pseudo
 E[collisions per row] ~ D - fold_cols x (1 - (1 - 1/fold_cols)^D)
                        ~ D^2/(2 x fold_cols)    for D << fold_cols
 ```
 
 When fold_cols >= 2D, collisions are rare and most cells remain in the `Single` state.
 
-### 6.4 Comparison Table
+### Comparison Table
 
 Parameters: R = 3, W = 4096, sizeof(counter) = 8 bytes.
 
 | Fold Level k | fold_cols | D | FoldCMS/FoldCS Memory | Standard Sketch | Savings |
-|:---:|:---:|:---:|:---:|:---:|:---:|
+| :---: | :---: | :---: | :---: | :---: | :---: |
 | 0 | 4096 | -- | >= 384 KB | 96 KB | worse (level 0 has per-cell tag overhead) |
 | 2 | 1024 | 200 | ~104 KB | 96 KB | ~1x |
 | 4 | 256 | 200 | ~30 KB | 96 KB | **3.2x** |
@@ -470,13 +477,13 @@ Parameters: R = 3, W = 4096, sizeof(counter) = 8 bytes.
 | 8 | 16 | 200 | ~7.5 KB | 96 KB | **12.8x** |
 | 8 | 16 | 50 | ~3 KB | 96 KB | **32x** |
 
-### 6.5 When to Use FoldSketch
+### When to Use FoldSketch
 
 **FoldCMS/FoldCS is beneficial when**: D << W and k >= 3.
 
 **Guideline for choosing k**: Set fold_cols ~ 2D to 4D for a good balance between memory savings and collision rate.
 
-```
+```text
 D = 200, W = 4096  ->  fold_cols ~ 400-800  ->  k = 2 or 3
 D = 50,  W = 4096  ->  fold_cols ~ 100-200  ->  k = 4 or 5
 D = 500, W = 8192  ->  fold_cols ~ 1000-2000 ->  k = 2
@@ -486,13 +493,13 @@ D = 500, W = 8192  ->  fold_cols ~ 1000-2000 ->  k = 2
 
 ---
 
-## 7. Error Bound Analysis
+## Error Bound Analysis
 
-### 7.1 Standard CMS Error Bounds
+### Standard CMS Error Bounds
 
 For a standard Count-Min Sketch with R rows and W columns processing a stream of total volume N = ||f||_1:
 
-```
+```text
 Pr[ estimate(key) - true_count(key) > eps x N ] < delta
 
 where:
@@ -502,16 +509,18 @@ where:
 
 The estimate is always >= true_count (one-sided error), and the min across R rows gives the tightest bound.
 
-### 7.2 FoldCMS Error Bound
+### FoldCMS Error Bound
 
 **Theorem**: For any fold level k, FoldCMS produces exactly the same query results as a standard CMS with W = full_cols columns.
 
 **Proof**:
 
 **(a) Hash identity**: Both FoldCMS and standard CMS compute the same column index for each (row, key) pair:
-```
+
+```text
 full_col_r(key) = hash_r(key) mod W
 ```
+
 This value depends only on the hash function and W, not on fold_cols or fold_level.
 
 **(b) Counter isolation**: In a standard CMS, cell `[r][full_col]` accumulates counts from all keys whose row-r hash maps to `full_col`. In FoldCMS, the entry `(full_col, count)` in physical cell `fold_col = full_col mod fold_cols` tracks exactly the same set of keys and accumulates the same count. Entries with different `full_col` values in the same physical cell are stored separately and do not interfere.
@@ -520,14 +529,14 @@ This value depends only on the hash function and W, not on fold_cols or fold_lev
 
 **Corollary**: Folding introduces **zero additional approximation error**. The error bound is unchanged:
 
-```
+```text
 Pr[ estimate(key) - true_count(key) <= eps x ||f||_1 ] >= 1 - delta
 
 where  eps = e / W       (depends on full_cols, not fold_cols)
        delta = e^(-R)
 ```
 
-### 7.3 Merge Correctness
+### Merge Correctness
 
 **Same-level merge**: For two FoldCMS sketches A and B at the same fold level, `merge_same_level(A, B)` produces a sketch whose `to_flat_counters()` output equals the element-wise sum of A's and B's flat counters. This is identical to merging two standard CMS sketches.
 
@@ -535,38 +544,39 @@ where  eps = e / W       (depends on full_cols, not fold_cols)
 
 **Hierarchical merge**: By induction on the merge tree, the final result at level 0 has the same flat counters as a standard CMS that processed the concatenation of all input streams.
 
-### 7.4 Verified Empirically
+### Verified Empirically
 
 The implementation includes tests that:
+
 1. Compare FoldCMS query results against standard `CountMin<Vector2D<i64>>` for identical input streams -- **exact match** for every key
 2. Compare flat counter arrays extracted via `to_flat_counters()` against standard CMS storage -- **byte-for-byte identical**
 3. Validate error bounds under Zipf(1.1) workloads with 200K samples
 
 ---
 
-## 8. FoldCS: Folding Count Sketch
+## FoldCS: Folding Count Sketch
 
 **File:** [`src/sketches/fold_cs.rs`](../src/sketches/fold_cs.rs)
 
-### 8.1 Count Sketch Background
+### Count Sketch Background
 
 Count Sketch (CS) is a linear sketch that supports both positive and negative frequency updates. Each row uses two hash functions: one for column selection and one for a +/-1 sign. The estimate for a key is the **median** across rows rather than the minimum.
 
-```
+```text
 CS insert:   cell[r][h_r(key)] += sign_r(key) x delta
 CS query:    median over r of (cell[r][h_r(key)] x sign_r(key))
 ```
 
 The Count Sketch error bound uses the L2 norm rather than the L1 norm:
 
-```
+```text
 Pr[ |estimate(key) - true_count(key)| > eps x ||f||_2 ] < delta
 
 where  eps = 1/sqrt(W)
        delta = 2^(-Omega(R))
 ```
 
-### 8.2 Why Folding Applies to Count Sketch
+### Why Folding Applies to Count Sketch
 
 The FoldSketch technique applies identically to Count Sketch because:
 
@@ -574,7 +584,7 @@ The FoldSketch technique applies identically to Count Sketch because:
 2. **Sign is per-entry**: The sign `sign_r(key)` is applied to the count when inserting and querying. It does not affect which physical cell stores the entry.
 3. **Counter isolation still holds**: Tagged entries with different `full_col` values never interact.
 
-### 8.3 FoldCS Implementation
+### FoldCS Implementation
 
 FoldCS **reuses** `FoldCell`, `FoldEntry`, and `FoldCellIter` from `fold_cms.rs`. The cell storage is identical — only the insert and query behavior differs.
 
@@ -582,7 +592,7 @@ FoldCS **reuses** `FoldCell`, `FoldEntry`, and `FoldCellIter` from `fold_cms.rs`
 
 FoldCS uses a single `hash64_seeded` call per (row, key) to derive both the column and the sign:
 
-```
+```rust
 hash_for(row, key) -> (full_col, sign):
     hashed = hash64_seeded(row, key)
     full_col = (hashed & LOWER_32_MASK) % W     // lower 32 bits -> column
@@ -591,9 +601,9 @@ hash_for(row, key) -> (full_col, sign):
 
 This matches the sign convention in `count.rs` (standard Count Sketch).
 
-#### Insert
+#### FoldCSInsert
 
-```
+```pseudo
 FOLDCS_INSERT(sketch, key, delta):
     for each row r:
         (full_col, sign) <- hash_for(r, key)
@@ -610,7 +620,7 @@ The stored cell values are signed: a key inserted with `delta = 1` will produce 
 
 #### Query
 
-```
+```pseudo
 FOLDCS_QUERY(sketch, key) -> i64:
     values <- []
     for each row r:
@@ -631,11 +641,11 @@ All merge operations (same-level, unfold, hierarchical, unfold_to, unfold_full) 
 
 Heap reconciliation re-queries heap items using FoldCS's median-based query, ensuring correct estimates.
 
-### 8.4 FoldCS Error Bound
+### FoldCS Error Bound
 
 Since folding preserves per-cell counter isolation, the Count Sketch error bound is unchanged:
 
-```
+```text
 Pr[ |estimate(key) - true_count(key)| > eps x ||f||_2 ] < delta
 
 where  eps = 1/sqrt(W)        (depends on full_cols)
@@ -644,19 +654,20 @@ where  eps = 1/sqrt(W)        (depends on full_cols)
 
 The sign flipping ensures unbiased estimation, and the median amplification across R rows provides the concentration bound. Folding does not affect either property.
 
-### 8.5 Verified Empirically
+### Fold CS Verified Empirically
 
 The FoldCS implementation includes tests that:
+
 1. Compare FoldCS query results against standard `Count<Vector2D<i64>, RegularPath>` for identical input streams -- **exact match** for every key
 2. Compare flat counter arrays extracted via `to_flat_counters()` against standard CS storage -- **byte-for-byte identical**
 3. Verify sign application: raw cell values contain both positive and negative entries
 4. Validate error bounds under Zipf(1.1) workloads with 200K samples (CS bound: `|est - truth| < eps x ||f||_2`)
 5. Large-window merge benchmark: 16 sub-windows, 500K Zipf samples, hierarchical merge with printed memory/error stats
 
-### 8.6 FoldCMS vs FoldCS: When to Use Which
+### FoldCMS vs FoldCS: When to Use Which
 
 | Criterion | FoldCMS | FoldCS |
-|-----------|---------|--------|
+| ----------- | --------- | -------- |
 | **Error type** | One-sided (overestimates only) | Two-sided (unbiased) |
 | **Aggregation** | min across rows | median across rows |
 | **Error bound** | `eps x \|\|f\|\|_1` (L1 norm) | `eps x \|\|f\|\|_2` (L2 norm) |
@@ -666,15 +677,15 @@ The FoldCS implementation includes tests that:
 
 ---
 
-## 9. Top-K Heavy Hitter Integration
+## Top-K Heavy Hitter Integration
 
-### 9.1 Design
+### Design
 
 Each FoldCMS and FoldCS maintains an `HHHeap` -- a bounded min-heap of `(key, estimated_count)` items for heavy hitter tracking. The heap has a fixed capacity K.
 
 **On insert**: After updating the tagged cells, the current query estimate for the key is computed and the heap is updated. If the key's count exceeds the heap's minimum, it enters (or updates in) the heap.
 
-```
+```pseudo
 INSERT(sketch, key, delta):
     ... update cells ...
     est <- QUERY(sketch, key)
@@ -683,7 +694,7 @@ INSERT(sketch, key, delta):
 
 **On merge**: After merging cells, all heap items from the other sketch are re-queried against the merged sketch and reconciled.
 
-```
+```pseudo
 MERGE(self, other):
     ... merge cells ...
     for item in other.heap:
@@ -691,11 +702,11 @@ MERGE(self, other):
         self.heap.update(item.key, est)
 ```
 
-### 9.2 Heap Reconciliation During Unfold Merge
+### Heap Reconciliation During Unfold Merge
 
 During unfold merge, a fresh heap is created and populated by re-querying all heap items from both source sketches against the merged result:
 
-```
+```pseudo
 UNFOLD_MERGE(a, b):
     result <- ... merge cells into wider grid ...
     for source in [a, b]:
@@ -707,26 +718,27 @@ UNFOLD_MERGE(a, b):
 
 This ensures the heap reflects the combined counts from both sources, correctly handling cases where a key appears in one source's heap but not the other's.
 
-### 9.3 Correctness
+### Correctness
 
 The heap's counts are always derived from the underlying sketch query (which is exact w.r.t. the standard sketch). Therefore, the top-K heavy hitters reported by a merged FoldCMS/FoldCS are identical to those a standard CMS/CS with the same heap would report.
 
 ---
 
-## 10. Windowing Integration
+## Windowing Integration
 
-### 10.1 Exponential Histogram (EH) Integration
+### Exponential Histogram (EH) Integration
 
-FoldCMS and FoldCS are designed to work with window frameworks such as tumbling window, and Exponential Histogram framework. 
+FoldCMS and FoldCS are designed to work with window frameworks such as tumbling window, and Exponential Histogram framework.
 
 In Exponential Histogram framework:
+
 - Each arriving sub-window creates a new FoldCMS/FoldCS at a high fold level k
 - The EH maintains a sequence of "buckets" of geometrically increasing size
 - When two buckets of equal size are merged, their sketches are **unfold-merged**, reducing the fold level by 1
 - Older (larger) buckets have lower fold levels and more physical columns
 - The oldest/largest bucket at level 0 is a standard sketch
 
-```
+```text
 Time ->  [newest]                                                  [oldest]
          Level k    Level k    Level k-1   Level k-2   ...   Level 0
          W/2^k cols W/2^k cols W/2^(k-1)   W/2^(k-2)         W cols
@@ -734,11 +746,11 @@ Time ->  [newest]                                                  [oldest]
          tiny       tiny       small       medium             full
 ```
 
-### 10.2 EH Merge Schedule Example
+### EH Merge Schedule Example
 
 Consider W = 4096, k = 4 (fold_cols = 256), with sub-windows arriving over time:
 
-```
+```text
 Step 1: Sub-window 1 arrives -> level-4 sketch (256 cols)
 Step 2: Sub-window 2 arrives -> level-4 sketch (256 cols)
   EH merge: unfold_merge(sub1, sub2) -> level-3 sketch (512 cols)
@@ -751,18 +763,20 @@ Step 4: Sub-window 4 arrives -> level-4 sketch (256 cols)
 ...and so on, following the EH merge policy
 ```
 
-### 10.3 Memory Savings in Windowed Setting
+### Memory Savings in Windowed Setting
 
 Consider a 10-minute window with 1-minute sub-windows, W = 4096, R = 3:
 
 **Standard EH + CMS**:
-```
+
+```text
 Each bucket stores a full 3 x 4096 x 8 = 96 KB CMS
 With ~2 x log2(10) ~ 7 buckets: 672 KB total sketch memory
 ```
 
 **EH + FoldCMS** (k = 4, D ~ 200 per sub-window):
-```
+
+```text
 Newest buckets (level 4): 256 cols x ~30 KB each
 Mid-age buckets (level 2-3): 512-1024 cols x 40-60 KB each
 Oldest bucket (level 0): 4096 cols x 96 KB
@@ -771,11 +785,12 @@ Estimated total: ~300 KB (2.2x savings)
 ```
 
 The savings are greater when:
+
 - Sub-window cardinality D is much smaller than W
 - More sub-windows are active (more small buckets benefit from folding)
 - Higher initial fold level k is used
 
-### 10.4 Query Over Merged Window
+### Query Over Merged Window
 
 To answer a frequency query over the full sliding window:
 
@@ -785,7 +800,7 @@ To answer a frequency query over the full sliding window:
 
 Alternatively, for a simple sum query, each bucket can be queried independently:
 
-```
+```pseudo
 WINDOW_QUERY(eh_buckets, key) -> i64:
     total <- 0
     for bucket in eh_buckets:
@@ -797,13 +812,13 @@ This avoids materializing the merged sketch, but sacrifices the min-across-rows 
 
 ---
 
-## 11. API Reference
+## API Reference
 
-### 11.1 FoldCMS API
+### FoldCMS API
 
 **File:** [`src/sketches/fold_cms.rs`](../src/sketches/fold_cms.rs)
 
-#### Constructor
+#### FoldCMS Constructor
 
 ```rust
 // Create a folded sketch
@@ -814,7 +829,7 @@ fn new(rows: usize, full_cols: usize, fold_level: u32, top_k: usize) -> FoldCMS
 fn new_full(rows: usize, full_cols: usize, top_k: usize) -> FoldCMS
 ```
 
-#### Insert & Query
+#### FoldCMS Insert & Query
 
 ```rust
 fn insert(&mut self, key: &SketchInput, delta: i64)
@@ -822,7 +837,7 @@ fn insert_one(&mut self, key: &SketchInput)           // delta = 1
 fn query(&self, key: &SketchInput) -> i64              // min across rows
 ```
 
-#### Merge
+#### FoldCMS Merge
 
 ```rust
 // Combine two same-level sketches (no unfolding)
@@ -841,7 +856,7 @@ fn unfold_full(&self) -> FoldCMS
 fn hierarchical_merge(sketches: &[FoldCMS]) -> FoldCMS
 ```
 
-#### Conversion & Inspection
+#### FoldCMS Conversion & Inspection
 
 ```rust
 fn to_flat_counters(&self) -> Vec<i64>     // R x W row-major counter array
@@ -854,11 +869,11 @@ fn collided_cells(&self) -> usize          // cells with 2+ entries
 fn heap(&self) -> &HHHeap
 ```
 
-### 11.2 FoldCS API
+### FoldCS API
 
 **File:** [`src/sketches/fold_cs.rs`](../src/sketches/fold_cs.rs)
 
-#### Constructor
+#### FoldCS Constructor
 
 ```rust
 // Create a folded Count Sketch
@@ -869,7 +884,7 @@ fn new(rows: usize, full_cols: usize, fold_level: u32, top_k: usize) -> FoldCS
 fn new_full(rows: usize, full_cols: usize, top_k: usize) -> FoldCS
 ```
 
-#### Insert & Query
+#### FoldCS Insert & Query
 
 ```rust
 fn insert(&mut self, key: &SketchInput, delta: i64)    // stores sign * delta
@@ -877,7 +892,7 @@ fn insert_one(&mut self, key: &SketchInput)            // delta = 1
 fn query(&self, key: &SketchInput) -> i64              // median across rows (sign-corrected)
 ```
 
-#### Merge
+#### FoldCS Merge
 
 ```rust
 // Combine two same-level sketches (no unfolding)
@@ -896,7 +911,7 @@ fn unfold_full(&self) -> FoldCS
 fn hierarchical_merge(sketches: &[FoldCS]) -> FoldCS
 ```
 
-#### Conversion & Inspection
+#### FoldCS Conversion & Inspection
 
 ```rust
 fn to_flat_counters(&self) -> Vec<i64>     // R x W row-major signed counter array
@@ -911,12 +926,12 @@ fn heap(&self) -> &HHHeap
 
 ---
 
-## 12. Examples
+## Examples
 
 ### Rate Limiting (Per-User Request Counting) -- FoldCMS
 
 ```rust
-use sketchlib_rust::{FoldCMS, SketchInput};
+use asap_sketchlib::{FoldCMS, SketchInput};
 
 let rows = 3;
 let full_cols = 4096;
@@ -944,7 +959,7 @@ assert_eq!(epoch1.query(&SketchInput::Str("user_003")), 1300);
 ### DDoS Detection with Hierarchical Merge -- FoldCMS
 
 ```rust
-use sketchlib_rust::{FoldCMS, SketchInput};
+use asap_sketchlib::{FoldCMS, SketchInput};
 
 let rows = 3;
 let full_cols = 4096;
@@ -969,7 +984,7 @@ assert_eq!(total, 37_000);
 ### Heavy Hitter Detection -- FoldCS
 
 ```rust
-use sketchlib_rust::{FoldCS, SketchInput};
+use asap_sketchlib::{FoldCS, SketchInput};
 
 let rows = 3;
 let full_cols = 4096;
@@ -994,7 +1009,7 @@ assert_eq!(merged.query(&SketchInput::Str("rare_endpoint")), 5);
 
 ### Choosing Fold Level
 
-```
+```text
 Given:
   W = 4096     (target accuracy)
   R = 3        (failure probability)
@@ -1016,12 +1031,12 @@ Recommended: fold_cols ~ 2xD to 4xD for a good balance.
 
 ---
 
-## 13. Summary
+## Summary
 
 ### Properties at a Glance
 
 | Property | FoldCMS | FoldCS |
-|----------|---------|--------|
+| ---------- | --------- | -------- |
 | **Error bound** | eps = e/W, delta = e^(-R) | eps = 1/sqrt(W), delta = 2^(-Omega(R)) |
 | **Error norm** | L1 (one-sided) | L2 (two-sided, unbiased) |
 | **Additional error from folding** | Zero | Zero |
@@ -1038,7 +1053,7 @@ Recommended: fold_cols ~ 2xD to 4xD for a good balance.
 ### Design Decisions
 
 | Decision | Choice | Rationale |
-|----------|--------|-----------|
+| ---------- | -------- | ----------- |
 | Cell representation | Enum (Empty/Single/Collided) | Zero heap allocation for the common case (sparse cells) |
 | Column index type | u16 | Supports W up to 65536; saves 6 bytes per entry vs u64 |
 | Counter type | i64 | Signed to support Count Sketch |
@@ -1050,7 +1065,7 @@ Recommended: fold_cols ~ 2xD to 4xD for a good balance.
 ### When to Use
 
 | Condition | Recommendation |
-|-----------|---------------|
+| ----------- | --------------- |
 | D << W, sub-windows are sparse | Use FoldCMS/FoldCS with k >= 3 |
 | D ~ W, sub-windows are dense | Use standard CMS/CS (no benefit from folding) |
 | Need exact CMS/CS accuracy | FoldCMS/FoldCS provides identical accuracy at any fold level |

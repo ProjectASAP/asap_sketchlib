@@ -256,7 +256,7 @@ impl<T> Vector2D<T> {
     ///
     /// Simple increment (row-independent):
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let mut sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -266,7 +266,7 @@ impl<T> Vector2D<T> {
     ///
     /// Row-dependent operation (e.g., Count sketch with sign bits):
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let mut sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -334,7 +334,7 @@ impl<T> Vector2D<T> {
     ///
     /// Simple min (row-independent):
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -345,7 +345,7 @@ impl<T> Vector2D<T> {
     ///
     /// Row-dependent with transformation:
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -383,7 +383,7 @@ impl<T> Vector2D<T> {
     ///
     /// Simple median (row-independent):
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -394,7 +394,7 @@ impl<T> Vector2D<T> {
     ///
     /// Row-dependent (e.g., Count sketch with sign bits):
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -431,7 +431,7 @@ impl<T> Vector2D<T> {
     ///
     /// Simple max (row-independent):
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -442,7 +442,7 @@ impl<T> Vector2D<T> {
     ///
     /// Row-dependent with transformation:
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -478,7 +478,7 @@ impl<T> Vector2D<T> {
     ///
     /// With complex counter type:
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -520,7 +520,7 @@ impl<T> Vector2D<T> {
     ///
     /// With complex counter type:
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -563,7 +563,7 @@ impl<T> Vector2D<T> {
     ///
     /// With complex counter type:
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -606,7 +606,7 @@ impl<T> Vector2D<T> {
     ///
     /// Custom sum with row-dependent weights:
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
@@ -619,7 +619,7 @@ impl<T> Vector2D<T> {
     ///
     /// Count sketch estimation (sign-based sum then median):
     /// ```no_run
-    /// use sketchlib_rust::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHashType, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);

@@ -3,6 +3,7 @@
 //! This module provides an implementation of the UnivMon algorithm as described in:
 //! "Universal Sketches for the Next Generation of Real-time Network Data Analytics"
 //! by Liu et al. (ACM SIGCOMM 2016).
+//! https://dl.acm.org/doi/10.1145/2934872.2934906
 //!
 //! UnivMon is a universal sketch framework that enables the estimation of multiple
 //! network flow metrics—such as L1/L2 norms, Shannon entropy, and cardinality—using
@@ -20,7 +21,7 @@
 //! * **Cardinality**: Estimation of the number of distinct elements.
 //! * **Heavy Hitters**: Tracking top flows across different sampling granularities.
 //!
-//! This implementation is part of the `sketchlib-rust` library.
+//! This implementation is part of the `ASAPSketchLib` library.
 
 use crate::common::heap::HHHeap;
 use crate::common::{BOTTOM_LAYER_FINDER, SketchInput, hash_item64_seeded, hash64_seeded};

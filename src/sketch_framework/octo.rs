@@ -4,6 +4,9 @@
 //! Worker threads maintain lightweight child sketches with small counters and emit
 //! compact delta entries via an MPSC channel when counters overflow a promotion
 //! threshold. An aggregator thread applies deltas to a full-precision parent sketch.
+//!
+//! Reference:
+//! - https://www.usenix.org/conference/nsdi24/presentation/zhang-yinda
 
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

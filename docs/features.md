@@ -1,6 +1,6 @@
 # Feature Status
 
-This document provides a high-level overview of implemented and planned features in sketchlib-rust. For detailed API documentation, see [sketch_api.md](sketch_api.md) and [common_api.md](common_api.md).
+This document provides a high-level overview of implemented and planned features in ASAPSketchLib. For detailed API documentation, see [apis.md](apis.md) and [api_common.md](./api/api_common.md).
 
 ---
 
@@ -17,7 +17,7 @@ This document provides a high-level overview of implemented and planned features
 
 ### Core Infrastructure
 
-✅ **Common API** ([common_api.md](common_api.md))
+✅ **Common API** ([api_common.md](./api/api_common.md))
 
 - `SketchInput` - Unified type system for all sketches
 - `Vector1D`, `Vector2D`, `Vector3D` - High-performance storage structures
@@ -27,7 +27,7 @@ This document provides a high-level overview of implemented and planned features
 - `SketchHasher` trait with `DefaultXxHasher` for pluggable hash implementations
 - `RegularPath` / `FastPath` modes - Type-level pairing of insert/estimate paths
 
-✅ **Recommended Sketches** ([sketch_api.md](sketch_api.md))
+✅ **Ready Sketch APIs** ([apis.md](apis.md))
 
 - **CountMin** - Frequency estimation with fast paths (2-3x speedup)
 - **Count & CountL2HH** - Count sketch with L2 heavy hitter support
@@ -38,10 +38,11 @@ This document provides a high-level overview of implemented and planned features
 
 ### Frameworks
 
-✅ **Hydra** - Hierarchical heavy hitters for multi-dimensional queries ([sketch_api.md](sketch_api.md))
-  - Includes `MultiHeadHydra` for per-dimension counter sets
+✅ **Hydra** - Hierarchical heavy hitters for multi-dimensional queries ([apis.md](apis.md))
 
-✅ **UnivMon** - Universal monitoring (L1, L2, entropy, cardinality from single structure) ([sketch_api.md](sketch_api.md))
+- Includes `MultiHeadHydra` for per-dimension counter sets
+
+✅ **UnivMon** - Universal monitoring (L1, L2, entropy, cardinality from single structure) ([apis.md](apis.md))
 
 ✅ **HashLayer** - Hash-once-use-many pattern for coordinating multiple sketches with single hash computation
 
@@ -51,7 +52,7 @@ This document provides a high-level overview of implemented and planned features
 
 ✅ **ExponentialHistogram** - Sliding window coordinator for mergeable sketches
 
-✅ **EHUnivOptimized** - Hybrid two-tier ExponentialHistogram for UnivMon with sketch memory reuse
+⚠️ **EHUnivOptimized** - Hybrid two-tier ExponentialHistogram for UnivMon with sketch memory reuse (currently `Unstable` in [apis.md](apis.md))
 
 ✅ **UnivMonPyramid** - Two-tier sketch dimensions with `UnivSketchPool` for optimized insert and memory management
 
@@ -107,8 +108,8 @@ This document provides a high-level overview of implemented and planned features
 
 🚧 **API documentation expansion**
 
-- ✅ `sketch_api.md` - Complete
-- ✅ `common_api.md` - Complete
+- ✅ `apis.md` - Canonical API index
+- ✅ `api/api_common.md` - Complete
 - ⚠️ Inline code comments - Partial
 
 ### Serialization

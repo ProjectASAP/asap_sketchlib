@@ -1,3 +1,9 @@
+//! KMV distinct-count sketch.
+//!
+//! Reference:
+//! - "On synopses for distinct-value estimation under multiset operations"
+//!   https://dl.acm.org/doi/10.1145/1247480.1247504
+
 use crate::{
     CANONICAL_HASH_SEED, CommonHeap, DefaultXxHasher, KeepLargest, SketchHasher, SketchInput,
 };
@@ -12,9 +18,6 @@ use rmp_serde::{
 // expect error bound to be less than 2%
 const KMV_DEFAULT_LENGTH: usize = 4096_usize;
 
-// another sketch for cardinality
-// "On synopses for distinct-value estimation under multiset operations"
-// https://dl.acm.org/doi/10.1145/1247480.1247504
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct KMV<H: SketchHasher = DefaultXxHasher> {
