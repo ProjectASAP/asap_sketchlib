@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use asap_sketch_lib::{SketchInput, hash128_seeded};
+use asap_sketchlib::{SketchInput, hash128_seeded};
 
 const OUTPUT_PATH: &str = "src/common/precompute_hash.rs";
 const MAX_VALUE: u64 = 0x3fff;

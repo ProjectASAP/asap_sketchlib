@@ -415,10 +415,10 @@ impl HydraCounter {
     /// # Examples
     /// ```
     /// // For CountMin, only Frequency queries are valid
-    /// use asap_sketch_lib::input::HydraCounter;
-    /// use asap_sketch_lib::input::HydraQuery;
-    /// use asap_sketch_lib::{CountMin, FastPath, Vector2D};
-    /// use asap_sketch_lib::SketchInput;
+    /// use asap_sketchlib::input::HydraCounter;
+    /// use asap_sketchlib::input::HydraQuery;
+    /// use asap_sketchlib::{CountMin, FastPath, Vector2D};
+    /// use asap_sketchlib::SketchInput;
     /// let counter = HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::default());
     /// let result = counter.query(&HydraQuery::Frequency(SketchInput::I64(42)));
     ///

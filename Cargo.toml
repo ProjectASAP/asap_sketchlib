@@ -1,5 +1,5 @@
 [package]
-name = "ASAPSketchLib"
+name = "asap-sketchlib"
 version = "0.1.0"
 edition = "2024"
 
@@ -22,7 +22,7 @@ prost-build = "0.13"
 
 [lib]
 crate-type = ["rlib"]
-name = "asap_sketch_lib"
+name = "asap_sketchlib"
 path = "src/lib.rs"
 bench = false
 

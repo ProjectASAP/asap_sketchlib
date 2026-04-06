@@ -18,7 +18,7 @@
 //! Usage:
 //!   XTEST_DIR=<path> cargo test --test xtest_consumer -- --nocapture
 
-use asap_sketch_lib::proto::sketchlib::*;
+use asap_sketchlib::proto::sketchlib::*;
 use prost::Message;
 use std::{
     env, fs,
