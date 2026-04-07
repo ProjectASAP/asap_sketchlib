@@ -13,7 +13,7 @@ enum EHSketchList {
     CM(CountMin<Vector2D<i32>, FastPath>),
     CS(Count<Vector2D<i32>, FastPath>),
     COUNTL2HH(CountL2HH),
-    HLL(HyperLogLog<DataFusion>),
+    HLL(HyperLogLog<ErtlMLE>),
     KLL(KLL),
     DDS(DDSketch),
     COCO(Coco),

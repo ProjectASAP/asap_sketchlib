@@ -14,7 +14,7 @@ multiple precision levels.
 ### Algorithm Variants
 
 - `HyperLogLog<Regular, H>` — classic HyperLogLog (Flajolet et al.).
-- `HyperLogLog<DataFusion, H>` — improved estimator (Ertl, arXiv:1702.01284).
+- `HyperLogLog<ErtlMLE, H>` — improved estimator (Ertl, arXiv:1702.01284).
 - `HyperLogLogHIP` — Historic Inverse Probability estimator (Lang, arXiv:1708.06839). Not mergeable.
 
 ### Precision Aliases
@@ -69,7 +69,7 @@ fn indicator(&self) -> f64
 fn merge(&mut self, other: &Self)
 ```
 
-Available on `Regular` and `DataFusion` variants. **Not available on HIP.**
+Available on `Regular` and `ErtlMLE` variants. **Not available on HIP.**
 
 ## Serialization
 
@@ -81,9 +81,9 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use asap_sketchlib::{DataFusion, HyperLogLog, SketchInput};
+use asap_sketchlib::{ErtlMLE, HyperLogLog, SketchInput};
 
-let mut hll = HyperLogLog::<DataFusion>::default();
+let mut hll = HyperLogLog::<ErtlMLE>::default();
 for i in 0..1000u64 {
     hll.insert(&SketchInput::U64(i));
 }

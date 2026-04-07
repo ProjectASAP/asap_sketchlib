@@ -352,7 +352,7 @@ mod tests {
         let mut eh = ExponentialHistogram::new(
             2,
             1000,
-            EHSketchList::HLL(crate::HyperLogLog::<crate::DataFusion>::default()),
+            EHSketchList::HLL(crate::HyperLogLog::<crate::ErtlMLE>::default()),
         );
 
         eh.update(100, &SketchInput::I64(1));

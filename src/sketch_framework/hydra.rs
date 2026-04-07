@@ -336,7 +336,7 @@ impl MultiHeadHydra {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Count, CountMin, DataFusion, FastPath, HyperLogLog, KLL, UnivMon, Vector2D};
+    use crate::{Count, CountMin, ErtlMLE, FastPath, HyperLogLog, KLL, UnivMon, Vector2D};
 
     const EPSILON: f64 = 1e-6;
 
@@ -608,11 +608,11 @@ mod tests {
 
     #[test]
     fn hydra_subpopulation_cardinality_test() {
-        use crate::sketches::hll::{DataFusion, HyperLogLog};
+        use crate::sketches::hll::{ErtlMLE, HyperLogLog};
 
         // Build test dataset using HyperLogLog for cardinality queries
         let mut hydra =
-            Hydra::with_dimensions(5, 128, HydraCounter::HLL(HyperLogLog::<DataFusion>::new()));
+            Hydra::with_dimensions(5, 128, HydraCounter::HLL(HyperLogLog::<ErtlMLE>::new()));
 
         let dataset = [
             ("key1;key2;key3", 10.0),
@@ -806,7 +806,7 @@ mod tests {
 
     #[test]
     fn test_hll_cardinality_query() {
-        let mut counter = HydraCounter::HLL(HyperLogLog::<DataFusion>::default());
+        let mut counter = HydraCounter::HLL(HyperLogLog::<ErtlMLE>::default());
 
         // 1. Insert unique items
         for i in 0..100 {
@@ -902,7 +902,7 @@ mod tests {
         assert_eq!(count, 2.0, "Merge should sum the counts");
 
         // Invalid merge (Different types)
-        let hll = HydraCounter::HLL(HyperLogLog::<DataFusion>::default());
+        let hll = HydraCounter::HLL(HyperLogLog::<ErtlMLE>::default());
         assert!(c1.merge(&hll).is_err());
     }
 

@@ -8,7 +8,7 @@
 //!   countmin.pb    — CountMinState with float64 counters
 //!   kll.pb         — KLLState with quantile items and coin RNG state
 //!   ddsketch.pb    — DDSketchState with alpha + bucket array
-//!   hll.pb         — HyperLogLogState (DataFusion variant)
+//!   hll.pb         — HyperLogLogState (ErtlMLE variant)
 //!   countsketch.pb — CountSketchState with float64 signed counters
 //!   coco.pb        — CocoSketchState (hash+val+hasKey buckets)
 //!   elastic.pb     — ElasticState (heavy buckets + light CountMin)
@@ -210,7 +210,7 @@ fn cross_language_proto() {
     }
 
     // -----------------------------------------------------------------------
-    // HLL (DataFusion estimator)
+    // HLL (ErtlMLE estimator)
     // -----------------------------------------------------------------------
     println!();
     println!("[HLL] Step 1/3 — Read hll.pb");
@@ -235,7 +235,7 @@ fn cross_language_proto() {
         hll_state.registers.len()
     );
 
-    let hll_card = hll_datafusion_estimate(&hll_state);
+    let hll_card = hll_ertl_mle_estimate(&hll_state);
     println!(
         "[HLL] Step 3/3 — cardinality ≈ {} (expect ~50000)",
         hll_card
@@ -636,7 +636,7 @@ fn xxh3_64_seeded(seed: u64, data: &[u8]) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// HLL DataFusion estimator (Ertl 2017)
+// HLL ErtlMLE estimator (Ertl 2017)
 // ---------------------------------------------------------------------------
 // Mirrors Go's HyperLogLog.Estimate() which uses HLLRegisterBits = 50,
 // HLLPrecision = 14, HLLRegisterCount = 16384.
@@ -677,7 +677,7 @@ fn hll_tau(mut x: f64) -> f64 {
     z / 3.0
 }
 
-fn hll_datafusion_estimate(state: &HyperLogLogState) -> u64 {
+fn hll_ertl_mle_estimate(state: &HyperLogLogState) -> u64 {
     let precision = state.precision as usize;
     let register_bits = 64 - precision; // Q = 50
     let m = (1usize << precision) as f64; // 16384

@@ -14,7 +14,7 @@
 //!
 //! * `CountMin<_, FastPath, _>` — Count-Min Sketch (fast path)
 //! * `Count<_, FastPath, _>` — Count Sketch (fast path)
-//! * `HyperLogLog<DataFusion>` / `HyperLogLog<Regular>` / `HyperLogLogHIP`
+//! * `HyperLogLog<ErtlMLE>` / `HyperLogLog<Regular>` / `HyperLogLogHIP`
 //!
 //! All matrix-backed sketches (CMS / Count) in one layer must agree on the
 //! same hash layout (determined by rows × cols dimensions).  HLL sketches can
@@ -31,7 +31,7 @@
 //! * [`HashSketchEnsemble::cardinality`] — distinct-count estimate (HLL only).
 
 use crate::{
-    Count, CountMin, DataFusion, DefaultXxHasher, FastPath, HyperLogLog, HyperLogLogHIP,
+    Count, CountMin, ErtlMLE, DefaultXxHasher, FastPath, HyperLogLog, HyperLogLogHIP,
     MatrixHashMode, MatrixHashType, Regular, SketchHasher, SketchInput, Vector1D,
     hash_for_matrix_seeded_with_mode_generic, hash_mode_for_matrix,
     sketch_framework::sketch_catalog::{CountFastOps, CountMinFastOps},
@@ -65,7 +65,7 @@ impl HashConfig {
 pub enum EnsembleSketch {
     CountMinFast(Box<dyn CountMinFastOps>),
     CountFast(Box<dyn CountFastOps>),
-    HllDf(HyperLogLog<DataFusion>),
+    HllErtl(HyperLogLog<ErtlMLE>),
     HllRegular(HyperLogLog<Regular>),
     HllHip(HyperLogLogHIP),
 }
@@ -75,7 +75,7 @@ impl EnsembleSketch {
         match self {
             EnsembleSketch::CountMinFast(_) => "CountMin",
             EnsembleSketch::CountFast(_) => "Count",
-            EnsembleSketch::HllDf(_)
+            EnsembleSketch::HllErtl(_)
             | EnsembleSketch::HllRegular(_)
             | EnsembleSketch::HllHip(_) => "HLL",
         }
@@ -87,7 +87,7 @@ impl EnsembleSketch {
                 Some(HashConfig::from_dimensions(s.rows(), s.cols()))
             }
             EnsembleSketch::CountFast(s) => Some(HashConfig::from_dimensions(s.rows(), s.cols())),
-            EnsembleSketch::HllDf(_)
+            EnsembleSketch::HllErtl(_)
             | EnsembleSketch::HllRegular(_)
             | EnsembleSketch::HllHip(_) => None,
         }
@@ -97,7 +97,7 @@ impl EnsembleSketch {
         match self {
             EnsembleSketch::CountMinFast(sketch) => sketch.fast_insert(hash),
             EnsembleSketch::CountFast(sketch) => sketch.fast_insert(hash),
-            EnsembleSketch::HllDf(hll) => hll.insert_with_hash(hash.lower_64()),
+            EnsembleSketch::HllErtl(hll) => hll.insert_with_hash(hash.lower_64()),
             EnsembleSketch::HllRegular(hll) => hll.insert_with_hash(hash.lower_64()),
             EnsembleSketch::HllHip(hll) => hll.insert_with_hash(hash.lower_64()),
         }
@@ -109,7 +109,7 @@ impl EnsembleSketch {
         match self {
             EnsembleSketch::CountMinFast(sketch) => Some(sketch.fast_estimate(hash)),
             EnsembleSketch::CountFast(sketch) => Some(sketch.fast_estimate(hash)),
-            EnsembleSketch::HllDf(_)
+            EnsembleSketch::HllErtl(_)
             | EnsembleSketch::HllRegular(_)
             | EnsembleSketch::HllHip(_) => None,
         }
@@ -119,7 +119,7 @@ impl EnsembleSketch {
     /// `Some(f64)` for HLL, `None` for CMS / Count.
     pub fn cardinality(&self) -> Option<f64> {
         match self {
-            EnsembleSketch::HllDf(hll) => Some(hll.estimate() as f64),
+            EnsembleSketch::HllErtl(hll) => Some(hll.estimate() as f64),
             EnsembleSketch::HllRegular(hll) => Some(hll.estimate() as f64),
             EnsembleSketch::HllHip(hll) => Some(hll.estimate() as f64),
             EnsembleSketch::CountMinFast(_) | EnsembleSketch::CountFast(_) => None,
@@ -154,9 +154,9 @@ where
     }
 }
 
-impl From<HyperLogLog<DataFusion>> for EnsembleSketch {
-    fn from(value: HyperLogLog<DataFusion>) -> Self {
-        EnsembleSketch::HllDf(value)
+impl From<HyperLogLog<ErtlMLE>> for EnsembleSketch {
+    fn from(value: HyperLogLog<ErtlMLE>) -> Self {
+        EnsembleSketch::HllErtl(value)
     }
 }
 
@@ -381,7 +381,7 @@ where
 mod tests {
     use super::*;
     use crate::test_utils::sample_zipf_u64;
-    use crate::{DataFusion, HyperLogLog, Vector2D};
+    use crate::{ErtlMLE, HyperLogLog, Vector2D};
     use std::collections::HashMap;
 
     const SAMPLE_SIZE: usize = 10_000;
@@ -497,7 +497,7 @@ mod tests {
         let true_cardinality = baseline.len();
 
         let mut layer: HashSketchEnsemble<DefaultXxHasher> =
-            HashSketchEnsemble::new(vec![HyperLogLog::<DataFusion>::default().into()])
+            HashSketchEnsemble::new(vec![HyperLogLog::<ErtlMLE>::default().into()])
                 .expect("HLL-only layer");
 
         for &value in &data {
@@ -517,7 +517,7 @@ mod tests {
     #[test]
     fn test_estimate_on_hll_returns_error() {
         let layer: HashSketchEnsemble<DefaultXxHasher> =
-            HashSketchEnsemble::new(vec![HyperLogLog::<DataFusion>::default().into()])
+            HashSketchEnsemble::new(vec![HyperLogLog::<ErtlMLE>::default().into()])
                 .expect("HLL-only layer");
 
         let result = layer.estimate(0, &SketchInput::U64(42));
@@ -578,7 +578,7 @@ mod tests {
     fn test_mixed_matrix_and_hll() {
         let mut layer = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
             CountMin::<Vector2D<i32>, FastPath>::default().into(),
-            HyperLogLog::<DataFusion>::default().into(),
+            HyperLogLog::<ErtlMLE>::default().into(),
         ])
         .expect("CMS + HLL layer");
 

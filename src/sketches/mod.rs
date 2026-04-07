@@ -20,7 +20,7 @@ pub use elastic::HeavyBucket;
 
 pub mod hll;
 pub use hll::{
-    DataFusion, HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogHIPP14,
+    ErtlMLE, HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogHIPP14,
     HyperLogLogHIPP16, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, Regular,
 };
 

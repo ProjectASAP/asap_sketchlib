@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    Count, CountL2HH, CountMin, DataFusion, FastPath, HyperLogLog, KLL, MatrixHashType, UnivMon,
+    Count, CountL2HH, CountMin, ErtlMLE, FastPath, HyperLogLog, KLL, MatrixHashType, UnivMon,
     Vector2D, hash_for_matrix,
 };
 
@@ -328,7 +328,7 @@ impl<'a> fmt::Display for HydraQuery<'a> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum HydraCounter {
     CM(CountMin<Vector2D<i32>, FastPath>),
-    HLL(HyperLogLog<DataFusion>),
+    HLL(HyperLogLog<ErtlMLE>),
     CS(Count<Vector2D<i32>, FastPath>),
     KLL(KLL),
     UNIVERSAL(UnivMon),

@@ -10,7 +10,7 @@ This is the canonical API entry point for `asap_sketchlib`.
   - Reference: Charikar, Chen & Farach-Colton, "Finding Frequent Items in Data Streams," ICALP 2002. [https://dl.acm.org/doi/10.1007/3-540-45465-9_59](https://dl.acm.org/doi/10.1007/3-540-45465-9_59)
 - [HyperLogLog](./api/api_hyperloglog.md) - `Ready`
   - `Regular` variant: Flajolet, Fusy, Gandouet & Meunier, "HyperLogLog: the analysis of a near-optimal cardinality estimation algorithm," AOFA 2007. [https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf](https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf)
-  - `DataFusion` variant (improved estimator): Ertl, "New cardinality estimation algorithms for HyperLogLog sketches," arXiv:1702.01284. [https://arxiv.org/abs/1702.01284](https://arxiv.org/abs/1702.01284)
+  - `ErtlMLE` variant (improved estimator): Ertl, "New cardinality estimation algorithms for HyperLogLog sketches," arXiv:1702.01284. [https://arxiv.org/abs/1702.01284](https://arxiv.org/abs/1702.01284)
   - `HIP` variant: Lang, "Back to the Future: an Even More Nearly Optimal Cardinality Estimation Algorithm," arXiv:1708.06839. [https://arxiv.org/abs/1708.06839](https://arxiv.org/abs/1708.06839)
 - [KLL](./api/api_kll.md) - `Ready`
   - Reference: Karnin, Lang & Liberty, "Optimal Quantile Approximation in Streams," FOCS 2016. [https://arxiv.org/abs/1603.05346](https://arxiv.org/abs/1603.05346)

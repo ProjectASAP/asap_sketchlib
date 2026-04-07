@@ -17,10 +17,10 @@
 // ----------------------------------------------------------------
 // This file contains code derived from multiple Apache Software Foundation projects.
 //
-// 1. HyperLogLog<DataFusion> Implementation:
-//    - Derived from: Apache DataFusion
-//    - Source: https://github.com/apache/datafusion
-//    - Algorithm: Otmar Ertl (arXiv:1702.01284)
+// 1. HyperLogLog<ErtlMLE> Implementation:
+//    - Originally derived from Apache DataFusion's HyperLogLog component
+//    - Source: https://github.com/apache/datafusion/blob/main/datafusion/functions-aggregate/src/hyperloglog.rs
+//    - Algorithm: Otmar Ertl's MLE estimator (arXiv:1702.01284)
 //
 // 2. HyperLogLogHIP Implementation:
 //    - Ported from: Apache DataSketches (Java)
@@ -60,7 +60,7 @@ pub struct HyperLogLogImpl<
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Regular;
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
-pub struct DataFusion;
+pub struct ErtlMLE;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -203,14 +203,14 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Regular, Re
     }
 }
 
-impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<DataFusion, Registers, H> {
+impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<ErtlMLE, Registers, H> {
     pub fn new() -> Self {
         Self::new_base()
     }
     /// "New cardinality estimation algorithms for HyperLogLog sketches"
     /// Otmar Ertl, arXiv:1702.01284
     #[inline]
-    fn hlldf_sigma(&self, x: f64) -> f64 {
+    fn hll_ertl_sigma(&self, x: f64) -> f64 {
         if x == 1. {
             f64::INFINITY
         } else {
@@ -232,7 +232,7 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<DataFusion,
     /// "New cardinality estimation algorithms for HyperLogLog sketches"
     /// Otmar Ertl, arXiv:1702.01284
     #[inline]
-    fn hlldf_tau(&self, x: f64) -> f64 {
+    fn hll_ertl_tau(&self, x: f64) -> f64 {
         if x == 0.0 || x == 1.0 {
             0.0
         } else {
@@ -253,9 +253,9 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<DataFusion,
     }
 }
 
-macro_rules! impl_datafusion_estimate {
+macro_rules! impl_ertl_mle_estimate {
     ($storage:ty) => {
-        impl<H: SketchHasher> HyperLogLogImpl<DataFusion, $storage, H> {
+        impl<H: SketchHasher> HyperLogLogImpl<ErtlMLE, $storage, H> {
             /// "New cardinality estimation algorithms for HyperLogLog sketches"
             /// Otmar Ertl, arXiv:1702.01284
             #[inline]
@@ -271,21 +271,21 @@ macro_rules! impl_datafusion_estimate {
                 let histogram = self.get_histogram();
                 let m: f64 = <$storage>::NUM_REGISTERS as f64;
                 let mut z =
-                    m * self.hlldf_tau((m - histogram[<$storage>::REGISTER_BITS + 1] as f64) / m);
+                    m * self.hll_ertl_tau((m - histogram[<$storage>::REGISTER_BITS + 1] as f64) / m);
                 for i in histogram[1..=<$storage>::REGISTER_BITS].iter().rev() {
                     z += *i as f64;
                     z *= 0.5;
                 }
-                z += m * self.hlldf_sigma(histogram[0] as f64 / m);
+                z += m * self.hll_ertl_sigma(histogram[0] as f64 / m);
                 (0.5 / 2_f64.ln() * m * m / z).round() as usize
             }
         }
     };
 }
 
-impl_datafusion_estimate!(HllBucketListP12);
-impl_datafusion_estimate!(HllBucketListP14);
-impl_datafusion_estimate!(HllBucketListP16);
+impl_ertl_mle_estimate!(HllBucketListP12);
+impl_ertl_mle_estimate!(HllBucketListP14);
+impl_ertl_mle_estimate!(HllBucketListP16);
 
 impl<Registers: HllRegisterStorage> Default for HyperLogLogHIPImpl<Registers> {
     fn default() -> Self {
@@ -489,19 +489,19 @@ mod tests {
         }
     }
 
-    macro_rules! impl_datafusion_test_traits {
+    macro_rules! impl_ertl_mle_test_traits {
         ($storage:ty) => {
-            impl<H: SketchHasher> HllEstimator for HyperLogLogImpl<DataFusion, $storage, H> {
+            impl<H: SketchHasher> HllEstimator for HyperLogLogImpl<ErtlMLE, $storage, H> {
                 fn push(&mut self, input: &SketchInput) {
                     self.insert(input);
                 }
 
                 fn insert_with_hash(&mut self, hashed: u64) {
-                    HyperLogLogImpl::<DataFusion, $storage, H>::insert_with_hash(self, hashed);
+                    HyperLogLogImpl::<ErtlMLE, $storage, H>::insert_with_hash(self, hashed);
                 }
 
                 fn estimate(&self) -> f64 {
-                    HyperLogLogImpl::<DataFusion, $storage, H>::estimate(self) as f64
+                    HyperLogLogImpl::<ErtlMLE, $storage, H>::estimate(self) as f64
                 }
 
                 fn index(&self, i: usize) -> u8 {
@@ -509,27 +509,27 @@ mod tests {
                 }
             }
 
-            impl<H: SketchHasher> HllMerge for HyperLogLogImpl<DataFusion, $storage, H> {
+            impl<H: SketchHasher> HllMerge for HyperLogLogImpl<ErtlMLE, $storage, H> {
                 fn merge_into(&mut self, other: &Self) {
                     self.merge(other);
                 }
             }
 
-            impl<H: SketchHasher> HllSerializable for HyperLogLogImpl<DataFusion, $storage, H> {
+            impl<H: SketchHasher> HllSerializable for HyperLogLogImpl<ErtlMLE, $storage, H> {
                 fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-                    HyperLogLogImpl::<DataFusion, $storage, H>::serialize_to_bytes(self)
+                    HyperLogLogImpl::<ErtlMLE, $storage, H>::serialize_to_bytes(self)
                 }
 
                 fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-                    HyperLogLogImpl::<DataFusion, $storage, H>::deserialize_from_bytes(bytes)
+                    HyperLogLogImpl::<ErtlMLE, $storage, H>::deserialize_from_bytes(bytes)
                 }
             }
         };
     }
 
-    impl_datafusion_test_traits!(HllBucketListP12);
-    impl_datafusion_test_traits!(HllBucketListP14);
-    impl_datafusion_test_traits!(HllBucketListP16);
+    impl_ertl_mle_test_traits!(HllBucketListP12);
+    impl_ertl_mle_test_traits!(HllBucketListP14);
+    impl_ertl_mle_test_traits!(HllBucketListP16);
 
     impl<Registers: HllRegisterStorage> HllEstimator for HyperLogLogHIPImpl<Registers> {
         fn push(&mut self, input: &SketchInput) {
@@ -564,8 +564,8 @@ mod tests {
     }
 
     #[test]
-    fn hlldf_accuracy_within_two_percent() {
-        assert_accuracy::<HyperLogLog<DataFusion>>("HllDf");
+    fn hll_ertl_accuracy_within_two_percent() {
+        assert_accuracy::<HyperLogLog<ErtlMLE>>("HllErtl");
     }
 
     #[test]
@@ -579,8 +579,8 @@ mod tests {
     }
 
     #[test]
-    fn hlldf_p12_accuracy_within_two_percent() {
-        assert_accuracy_within::<HyperLogLogP12<DataFusion>>("HllDfP12", P12_ERROR_TOLERANCE);
+    fn hll_ertl_p12_accuracy_within_two_percent() {
+        assert_accuracy_within::<HyperLogLogP12<ErtlMLE>>("HllErtlP12", P12_ERROR_TOLERANCE);
     }
 
     #[test]
@@ -594,8 +594,8 @@ mod tests {
     }
 
     #[test]
-    fn hlldf_merge_within_two_percent() {
-        assert_merge_accuracy::<HyperLogLog<DataFusion>>("HllDf");
+    fn hll_ertl_merge_within_two_percent() {
+        assert_merge_accuracy::<HyperLogLog<ErtlMLE>>("HllErtl");
     }
 
     #[test]
@@ -607,8 +607,8 @@ mod tests {
     }
 
     #[test]
-    fn hlldf_p12_merge_within_two_percent() {
-        assert_merge_accuracy_within::<HyperLogLogP12<DataFusion>>("HllDfP12", P12_ERROR_TOLERANCE);
+    fn hll_ertl_p12_merge_within_two_percent() {
+        assert_merge_accuracy_within::<HyperLogLogP12<ErtlMLE>>("HllErtlP12", P12_ERROR_TOLERANCE);
     }
 
     #[test]
@@ -617,8 +617,8 @@ mod tests {
     }
 
     #[test]
-    fn hlldf_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLog<DataFusion>>("HllDf");
+    fn hll_ertl_round_trip_serialization() {
+        assert_serialization_round_trip::<HyperLogLog<ErtlMLE>>("HllErtl");
     }
 
     #[test]
@@ -632,8 +632,8 @@ mod tests {
     }
 
     #[test]
-    fn hlldf_p12_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLogP12<DataFusion>>("HllDfP12");
+    fn hll_ertl_p12_round_trip_serialization() {
+        assert_serialization_round_trip::<HyperLogLogP12<ErtlMLE>>("HllErtlP12");
     }
 
     #[test]
@@ -646,8 +646,8 @@ mod tests {
     fn hll_correctness_test() {
         let mut hll = HyperLogLog::<Regular>::default();
         hll_correctness_test_helper::<HyperLogLog<Regular>>(&mut hll);
-        let mut hlldf = HyperLogLog::<DataFusion>::default();
-        hll_correctness_test_helper::<HyperLogLog<DataFusion>>(&mut hlldf);
+        let mut hll_ertl = HyperLogLog::<ErtlMLE>::default();
+        hll_correctness_test_helper::<HyperLogLog<ErtlMLE>>(&mut hll_ertl);
         let mut hllds = HyperLogLogHIP::default();
         hll_correctness_test_helper(&mut hllds);
     }

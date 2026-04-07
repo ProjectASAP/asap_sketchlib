@@ -16,7 +16,7 @@ option go_package = "github.com/ProjectASAP/sketchlib-go/proto/hll;hllpb";
 // Both libraries default to precision = 14 (16 384 registers).
 //
 // The variant field is required because the three estimator algorithms are
-// not interchangeable: loading a DataFusion state into a Regular estimator
+// not interchangeable: loading an ErtlMLE state into a Regular estimator
 // (or vice versa) produces incorrect cardinality estimates.
 message HyperLogLogState {
   // HLL estimator variant. Required.
@@ -52,9 +52,10 @@ enum HLLVariant {
   // Classic HLL with bias-correction tables (Flajolet et al. 2007).
   HLL_VARIANT_REGULAR = 1;
 
-  // Otmar Ertl's improved estimator used by Apache DataFusion.
+  // Otmar Ertl's MLE estimator (arXiv:1702.01284).
+  // Originally derived from Apache DataFusion's HLL implementation.
   // Not compatible with REGULAR registers.
-  HLL_VARIANT_DATAFUSION = 2;
+  HLL_VARIANT_ERTL_MLE = 2;
 
   // Kevin Lang's HyperLogLog++ Improved Proposal (HIP).
   // Requires hip_kxq0, hip_kxq1, hip_est to be populated.

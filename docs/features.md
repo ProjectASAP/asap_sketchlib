@@ -31,7 +31,7 @@ This document provides a high-level overview of implemented and planned features
 
 - **CountMin** - Frequency estimation with fast paths (2-3x speedup)
 - **Count & CountL2HH** - Count sketch with L2 heavy hitter support
-- **HyperLogLog** - Three variants (Regular, DataFusion, HIP) for cardinality estimation
+- **HyperLogLog** - Three variants (Regular, ErtlMLE, HIP) for cardinality estimation
 - **DDSketch** - Quantile estimation with relative error guarantees
 - **KLL** - Quantile estimation with mergeable compactors
 - All built on optimized common structures

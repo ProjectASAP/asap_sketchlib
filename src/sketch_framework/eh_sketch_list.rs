@@ -18,7 +18,7 @@ pub enum EHSketchList {
     CS(Count<Vector2D<i32>, FastPath>),
     DDS(DDSketch),
     ELASTIC(Elastic),
-    HLL(HyperLogLog<DataFusion>),
+    HLL(HyperLogLog<ErtlMLE>),
     KLL(KLL),
     UNIFORM(UniformSampling),
     // LOCHER(LocherSketch),

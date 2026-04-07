@@ -115,7 +115,7 @@ child.insert_emit_delta(&key, &mut |delta: CountDelta| {
 ## HyperLogLog Delta API
 
 Available on all `HyperLogLogImpl<Variant, Registers, H>` variants
-(Regular, DataFusion, and any precision level).
+(Regular, ErtlMLE, and any precision level).
 
 ```rust
 fn insert_emit_delta(&mut self, obj: &SketchInput, emit: &mut impl FnMut(HllDelta))

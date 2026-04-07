@@ -19,7 +19,7 @@ use asap_sketchlib::HashSketchEnsemble;
 let mut ensemble = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
     CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
     CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
-    HyperLogLog::<DataFusion>::default().into(),
+    HyperLogLog::<ErtlMLE>::default().into(),
 ]).unwrap();
 
 // Insert — hashes once, updates all 3 sketches
@@ -56,7 +56,7 @@ uniform insert/query API.
 ## Types
 
 - `HashSketchEnsemble<H = DefaultXxHasher>` — the ensemble container, generic over the hasher.
-- `EnsembleSketch` — enum wrapping the sketch variants that can live inside an ensemble: `CountMinFast`, `CountFast`, `HllDf`, `HllRegular`, `HllHip`.
+- `EnsembleSketch` — enum wrapping the sketch variants that can live inside an ensemble: `CountMinFast`, `CountFast`, `HllErtl`, `HllRegular`, `HllHip`.
 
 ## Compatible Sketches
 
@@ -64,7 +64,7 @@ Only sketches with a prehashed insertion path are accepted:
 
 - `CountMin<_, FastPath, _>` — Count-Min Sketch (fast path)
 - `Count<_, FastPath, _>` — Count Sketch (fast path)
-- `HyperLogLog<DataFusion>` / `HyperLogLog<Regular>` / `HyperLogLogHIP`
+- `HyperLogLog<ErtlMLE>` / `HyperLogLog<Regular>` / `HyperLogLogHIP`
 
 All matrix-backed sketches (CMS / Count) in one ensemble must share the same hash layout (rows × cols dimensions). HLL sketches can coexist with them because they only consume the lower 64 bits of the shared hash.
 
@@ -80,14 +80,14 @@ Sketches are converted into `EnsembleSketch` via `From` impls, so you can use `.
 ```rust
 use asap_sketchlib::{
     CountMin, Count, FastPath, Vector2D, DefaultXxHasher,
-    HyperLogLog, DataFusion,
+    HyperLogLog, ErtlMLE,
 };
 use asap_sketchlib::sketch_framework::hashlayer::{EnsembleSketch, HashSketchEnsemble};
 
 let ensemble = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
     CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
     Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
-    HyperLogLog::<DataFusion>::default().into(),
+    HyperLogLog::<ErtlMLE>::default().into(),
 ]).expect("compatible sketches");
 ```
 
