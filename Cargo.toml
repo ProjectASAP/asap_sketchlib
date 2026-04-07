@@ -12,8 +12,12 @@ twox-hash = "2.1.2"
 smallvec = "1.13.2"
 prost = "0.13"
 bytes = "1"
-core_affinity = "0.8"
-crossbeam-channel = "0.5"
+core_affinity = { version = "0.8", optional = true }
+crossbeam-channel = { version = "0.5", optional = true }
+
+[features]
+default = []
+octo-runtime = ["core_affinity", "crossbeam-channel"]
 
 [build-dependencies]
 prost-build = "0.13"
