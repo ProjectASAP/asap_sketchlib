@@ -1,8 +1,8 @@
-# ASAPSketchLib
+# asap_sketchlib
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-`ASAPSketchLib` is a Rust sketch library with reusable sketch building blocks, sketch implementations, and orchestration frameworks.
+`asap_sketchlib` is a Rust sketch library with reusable sketch building blocks, sketch implementations, and orchestration frameworks.
 
 ## Supported Sketches
 
@@ -48,7 +48,7 @@ cargo test --all-features
 cargo bench
 ```
 
-## Why ASAPSketchLib (vs Apache DataSketches)
+## Why asap_sketchlib (vs Apache DataSketches)
 
 Performance is the primary motivation for this library:
 

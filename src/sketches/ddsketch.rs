@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Provenance:
 /// This file was adapted from earlier DDSketch work in the private
-/// `approx-telemetry/ASAPSketchLib` repository. Original contributor for that
+/// `approx-telemetry/asap_sketchlib` repository. Original contributor for that
 /// implementation: Srinath Ramachandran. It was later migrated and modified in
 /// this repository.
 

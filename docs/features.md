@@ -1,6 +1,6 @@
 # Feature Status
 
-This document provides a high-level overview of implemented and planned features in ASAPSketchLib. For detailed API documentation, see [apis.md](apis.md) and [api_common.md](./api/api_common.md).
+This document provides a high-level overview of implemented and planned features in asap_sketchlib. For detailed API documentation, see [apis.md](apis.md) and [api_common.md](./api/api_common.md).
 
 ---
 

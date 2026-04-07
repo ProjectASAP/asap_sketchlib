@@ -1,6 +1,6 @@
 # Documentation Index
 
-This page is the docs home for `ASAPSketchLib`.
+This page is the docs home for `asap_sketchlib`.
 
 ## Start Here
 

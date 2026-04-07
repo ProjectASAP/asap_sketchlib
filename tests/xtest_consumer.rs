@@ -40,7 +40,7 @@ fn cross_language_proto() {
     let in_dir = xtest_dir.path();
 
     println!("=======================================================");
-    println!("  ASAPSketchLib ← xtest_consumer");
+    println!("  asap_sketchlib ← xtest_consumer");
     println!("=======================================================");
 
     let mut all_ok = true;

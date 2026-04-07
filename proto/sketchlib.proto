@@ -13,7 +13,7 @@
 //   hydra/hydra.proto                — HydraState, HydraCounterType, HydraCell
 //
 // Design goals:
-//   - Cross-language: Go (sketchlib-go) ↔ Rust (ASAPSketchLib) round-trips.
+//   - Cross-language: Go (sketchlib-go) ↔ Rust (asap_sketchlib) round-trips.
 //   - Forward-compatible: new fields use reserved numbers; old readers skip them.
 //   - Logical state only: no pointers, no runtime caches, no gob/msgpack artefacts.
 //   - Derived values (gamma, L2 norms, capacity caches) are always recomputed on load.

@@ -1,6 +1,6 @@
 # Advanced Use Cases (Frameworks)
 
-This page covers three distinct categories of advanced usage in `ASAPSketchLib`. These are separate problems that happen to share a common answer: composing multiple sketches together.
+This page covers three distinct categories of advanced usage in `asap_sketchlib`. These are separate problems that happen to share a common answer: composing multiple sketches together.
 
 ---
 

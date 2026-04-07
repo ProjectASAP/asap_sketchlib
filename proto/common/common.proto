@@ -15,7 +15,7 @@ option go_package = "github.com/ProjectASAP/sketchlib-go/proto/common;commonpb";
 
 // ProducerInfo records which library version created this envelope.
 message ProducerInfo {
-  // One of "sketchlib-go" or "ASAPSketchLib".
+  // One of "sketchlib-go" or "asap_sketchlib".
   string library = 1;
 
   // Semantic version string of the producing library, e.g. "0.1.0".

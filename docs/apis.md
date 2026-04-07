@@ -1,6 +1,6 @@
 # APIs Index
 
-This is the canonical API entry point for `ASAPSketchLib`.
+This is the canonical API entry point for `asap_sketchlib`.
 
 ## Core Sketch APIs
 
