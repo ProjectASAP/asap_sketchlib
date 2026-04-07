@@ -31,7 +31,7 @@
 //! * [`HashSketchEnsemble::cardinality`] — distinct-count estimate (HLL only).
 
 use crate::{
-    Count, CountMin, ErtlMLE, DefaultXxHasher, FastPath, HyperLogLog, HyperLogLogHIP,
+    Count, CountMin, DefaultXxHasher, ErtlMLE, FastPath, HyperLogLog, HyperLogLogHIP,
     MatrixHashMode, MatrixHashType, Regular, SketchHasher, SketchInput, Vector1D,
     hash_for_matrix_seeded_with_mode_generic, hash_mode_for_matrix,
     sketch_framework::sketch_catalog::{CountFastOps, CountMinFastOps},

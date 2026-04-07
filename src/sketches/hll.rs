@@ -270,8 +270,8 @@ macro_rules! impl_ertl_mle_estimate {
             pub fn estimate(&self) -> usize {
                 let histogram = self.get_histogram();
                 let m: f64 = <$storage>::NUM_REGISTERS as f64;
-                let mut z =
-                    m * self.hll_ertl_tau((m - histogram[<$storage>::REGISTER_BITS + 1] as f64) / m);
+                let mut z = m * self
+                    .hll_ertl_tau((m - histogram[<$storage>::REGISTER_BITS + 1] as f64) / m);
                 for i in histogram[1..=<$storage>::REGISTER_BITS].iter().rev() {
                     z += *i as f64;
                     z *= 0.5;
