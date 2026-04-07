@@ -148,6 +148,10 @@ child.insert_emit_delta(&SketchInput::U64(1), &mut |delta: HllDelta| {
 
 ## Runtime API
 
+> **Feature gate:** The runtime API below requires the `octo-runtime` Cargo feature.
+> Enable it with `features = ["octo-runtime"]` in your `Cargo.toml`.
+> This pulls in `core_affinity` and `crossbeam-channel` as dependencies.
+
 For users who want a turnkey multi-threaded pipeline without managing
 threads directly.
 
