@@ -27,6 +27,9 @@ pub use hll::{
 pub mod kll;
 pub use kll::KLL;
 
+pub mod kll_dynamic;
+pub use kll_dynamic::KLLDynamic;
+
 pub mod kmv;
 pub use kmv::KMV;
 
