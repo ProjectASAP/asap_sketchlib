@@ -8,11 +8,16 @@
 //! Reference:
 //! - https://www.usenix.org/conference/nsdi24/presentation/zhang-yinda
 
+#[cfg(feature = "octo-runtime")]
 use std::marker::PhantomData;
+#[cfg(feature = "octo-runtime")]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(feature = "octo-runtime")]
 use std::sync::{Arc, RwLock, Weak};
+#[cfg(feature = "octo-runtime")]
 use std::thread;
 
+#[cfg(feature = "octo-runtime")]
 use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 
 use crate::{
@@ -20,6 +25,7 @@ use crate::{
     Vector2D,
 };
 
+#[cfg(feature = "octo-runtime")]
 /// Legacy queue capacity default retained for config compatibility.
 const DEFAULT_QUEUE_CAPACITY: usize = 65536;
 
@@ -46,9 +52,10 @@ pub trait OctoAggregator: Send {
 }
 
 // ---------------------------------------------------------------------------
-// Configuration
+// Configuration & Runtime (requires "octo-runtime" feature)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "octo-runtime")]
 /// Configuration for `run_octo`.
 pub struct OctoConfig {
     /// Number of worker threads (default: 4).
@@ -61,6 +68,7 @@ pub struct OctoConfig {
     pub queue_capacity: usize,
 }
 
+#[cfg(feature = "octo-runtime")]
 impl Default for OctoConfig {
     fn default() -> Self {
         Self {
@@ -71,16 +79,19 @@ impl Default for OctoConfig {
     }
 }
 
+#[cfg(feature = "octo-runtime")]
 /// Result of an `run_octo` execution.
 pub struct OctoResult<P> {
     pub parent: P,
 }
 
+#[cfg(feature = "octo-runtime")]
 enum WorkerMsg {
     Data(SketchInput<'static>),
     End,
 }
 
+#[cfg(feature = "octo-runtime")]
 /// Extends a `SketchInput` lifetime to `'static` for cross-thread transport in
 /// streaming mode. Caller must ensure all borrowed data outlives worker processing.
 #[inline(always)]
@@ -89,6 +100,7 @@ unsafe fn assume_input_static(input: SketchInput<'_>) -> SketchInput<'static> {
     unsafe { std::mem::transmute::<SketchInput<'_>, SketchInput<'static>>(input) }
 }
 
+#[cfg(feature = "octo-runtime")]
 /// Streaming Octo runtime that accepts incremental inserts and finalizes into a parent sketch.
 pub struct OctoRuntime<W, P>
 where
@@ -99,11 +111,13 @@ where
     _worker_marker: PhantomData<W>,
 }
 
+#[cfg(feature = "octo-runtime")]
 /// Read-only handle for querying the live aggregator state while runtime is active.
 pub struct OctoReadHandle<P> {
     parent: Weak<RwLock<P>>,
 }
 
+#[cfg(feature = "octo-runtime")]
 impl<P> Clone for OctoReadHandle<P> {
     fn clone(&self) -> Self {
         Self {
@@ -112,6 +126,7 @@ impl<P> Clone for OctoReadHandle<P> {
     }
 }
 
+#[cfg(feature = "octo-runtime")]
 impl<P> OctoReadHandle<P> {
     /// Executes a read-only closure over the live parent state.
     pub fn with_parent<R>(&self, f: impl FnOnce(&P) -> R) -> R {
@@ -124,6 +139,7 @@ impl<P> OctoReadHandle<P> {
     }
 }
 
+#[cfg(feature = "octo-runtime")]
 struct OctoCore<P> {
     worker_input_txs: Vec<Sender<WorkerMsg>>,
     next_worker: AtomicUsize,
@@ -133,6 +149,7 @@ struct OctoCore<P> {
     closed: AtomicBool,
 }
 
+#[cfg(feature = "octo-runtime")]
 impl<P> OctoCore<P> {
     fn read_handle(&self) -> OctoReadHandle<P> {
         OctoReadHandle {
@@ -150,6 +167,7 @@ impl<P> OctoCore<P> {
     }
 }
 
+#[cfg(feature = "octo-runtime")]
 impl<P> OctoCore<P> {
     fn into_parent(mut self) -> P {
         self.close();
@@ -172,6 +190,7 @@ impl<P> OctoCore<P> {
     }
 }
 
+#[cfg(feature = "octo-runtime")]
 impl<P> OctoCore<P>
 where
     P: Send + Sync + 'static,
@@ -269,6 +288,7 @@ where
     }
 }
 
+#[cfg(feature = "octo-runtime")]
 impl<W, P> OctoRuntime<W, P>
 where
     W: OctoWorker + 'static,
@@ -476,6 +496,7 @@ impl OctoAggregator for HllOctoAggregator {
 // Core execution engine
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "octo-runtime")]
 /// Runs the OctoSketch multi-threaded insert protocol.
 ///
 /// 1. Dispatches `inputs` across workers round-robin through per-worker channels.
@@ -499,7 +520,7 @@ where
     runtime.finish()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "octo-runtime"))]
 mod tests {
     use super::*;
     use crate::SketchInput;

@@ -28,9 +28,11 @@ pub use eh_univ_optimized::{EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUni
 
 pub mod octo;
 pub use octo::{
-    CountOctoAggregator, CountOctoWorker, HllOctoAggregator, HllOctoWorker, OctoAggregator,
-    OctoConfig, OctoReadHandle, OctoResult, OctoRuntime, OctoWorker, run_octo,
+    CmOctoWorker, CountOctoAggregator, CountOctoWorker, HllOctoAggregator, HllOctoWorker,
+    OctoAggregator, OctoWorker,
 };
+#[cfg(feature = "octo-runtime")]
+pub use octo::{OctoConfig, OctoReadHandle, OctoResult, OctoRuntime, run_octo};
 
 pub mod tumbling;
 pub use tumbling::{

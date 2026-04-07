@@ -22,7 +22,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --all-features --verbose
 
       - name: Check Format
         run: cargo fmt -- --check
