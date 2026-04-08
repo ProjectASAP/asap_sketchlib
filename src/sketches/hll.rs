@@ -171,7 +171,7 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Regular, Re
         Self::new_base()
     }
     /// indicator function in the original HyperLogLog paper
-    /// https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf
+    /// <https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf>
     pub fn indicator(&self) -> f64 {
         let mut z = 0.0;
         for &reg_val in self.registers.as_slice() {
@@ -355,7 +355,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
 // self-contained struct. It uses the free-function wrapper (DefaultXxHasher).
 impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
     /// "Back to the Future: an Even More Nearly Optimal Cardinality Estimation Algorithm"
-    /// Kevin J. Lang, https://arxiv.org/pdf/1708.06839
+    /// Kevin J. Lang, <https://arxiv.org/pdf/1708.06839>
     pub fn insert(&mut self, obj: &SketchInput) {
         let hashed_val = hash64_seeded(CANONICAL_HASH_SEED, obj);
         self.insert_with_hash(hashed_val);

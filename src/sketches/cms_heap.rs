@@ -2,7 +2,7 @@
 //! [`HHHeap`] for automatic top-k heavy-hitter tracking.
 //!
 //! Every insertion updates both the frequency sketch and the heap, mirroring
-//! the pattern used by [`FoldCMS`] but without folding complexity.
+//! the pattern used by `FoldCMS` but without folding complexity.
 
 use crate::{
     CountMin, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,

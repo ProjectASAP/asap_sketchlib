@@ -2,7 +2,7 @@
 //! [`HHHeap`] for automatic top-k heavy-hitter tracking.
 //!
 //! Every insertion updates both the frequency sketch and the heap, mirroring
-//! the pattern used by [`CMSHeap`] but with Count Sketch (median estimator).
+//! the pattern used by `CMSHeap` but with Count Sketch (median estimator).
 
 use crate::sketches::count::CountSketchCounter;
 use crate::{

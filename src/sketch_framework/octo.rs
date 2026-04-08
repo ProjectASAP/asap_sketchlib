@@ -6,7 +6,7 @@
 //! threshold. An aggregator thread applies deltas to a full-precision parent sketch.
 //!
 //! Reference:
-//! - https://www.usenix.org/conference/nsdi24/presentation/zhang-yinda
+//! - <https://www.usenix.org/conference/nsdi24/presentation/zhang-yinda>
 
 #[cfg(feature = "octo-runtime")]
 use std::marker::PhantomData;

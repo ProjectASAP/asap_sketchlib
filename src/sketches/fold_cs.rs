@@ -4,8 +4,8 @@
 //! of allocating the full W columns required by the final merged query, each
 //! sub-window uses only W/2^k physical columns (where k is the fold level).
 //!
-//! Cells lazily expand using the same [`FoldCell`] / [`FoldEntry`] types as
-//! [`FoldCMS`]. The key difference from FoldCMS is that FoldCS uses **signed
+//! Cells lazily expand using the same [`FoldCell`] / `FoldEntry` types as
+//! `FoldCMS`. The key difference from FoldCMS is that FoldCS uses **signed
 //! counters** (each row has a random ±1 sign per key) and the point-query
 //! aggregation is the **median** across rows, not the minimum.
 //!
@@ -36,7 +36,7 @@ const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 /// expanding only on real collisions. When sub-windows are merged the columns
 /// are "unfolded" back towards the full-width CS.
 ///
-/// Unlike [`FoldCMS`], insert applies a random ±1 sign per (row, key), and
+/// Unlike `FoldCMS`, insert applies a random ±1 sign per (row, key), and
 /// query returns the **median** of sign-corrected row estimates.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]

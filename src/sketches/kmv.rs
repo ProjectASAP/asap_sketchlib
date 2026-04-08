@@ -2,7 +2,7 @@
 //!
 //! Reference:
 //! - "On synopses for distinct-value estimation under multiset operations"
-//!   https://dl.acm.org/doi/10.1145/1247480.1247504
+//!   <https://dl.acm.org/doi/10.1145/1247480.1247504>
 
 use crate::{
     CANONICAL_HASH_SEED, CommonHeap, DefaultXxHasher, KeepLargest, SketchHasher, SketchInput,

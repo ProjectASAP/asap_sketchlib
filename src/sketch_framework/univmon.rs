@@ -3,7 +3,7 @@
 //! This module provides an implementation of the UnivMon algorithm as described in:
 //! "Universal Sketches for the Next Generation of Real-time Network Data Analytics"
 //! by Liu et al. (ACM SIGCOMM 2016).
-//! https://dl.acm.org/doi/10.1145/2934872.2934906
+//! <https://dl.acm.org/doi/10.1145/2934872.2934906>
 //!
 //! UnivMon is a universal sketch framework that enables the estimation of multiple
 //! network flow metrics—such as L1/L2 norms, Shannon entropy, and cardinality—using

@@ -2,7 +2,7 @@
 //!
 //! Reference:
 //! - Manousis et al., VLDB 2022.
-//!   https://vldb.org/pvldb/vol15/p3249-manousis.pdf
+//!   <https://vldb.org/pvldb/vol15/p3249-manousis.pdf>
 
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,

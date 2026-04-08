@@ -7,8 +7,8 @@
 //!
 //! References:
 //! - Karnin, Lang & Liberty, "Optimal Quantile Approximation in Streams," FOCS 2016.
-//!   https://arxiv.org/abs/1603.05346
-//! - https://www.amazon.science/publications/insert-optimized-implementation-of-streaming-data-sketches
+//!   <https://arxiv.org/abs/1603.05346>
+//! - <https://www.amazon.science/publications/insert-optimized-implementation-of-streaming-data-sketches>
 
 use rand::{Rng, rng};
 use rmp_serde::decode::Error as RmpDecodeError;

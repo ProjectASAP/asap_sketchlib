@@ -4,7 +4,7 @@
 //!
 //! Reference:
 //! - NitroSketch paper.
-//!   https://dl.acm.org/doi/10.1145/3341302.3342076
+//!   <https://dl.acm.org/doi/10.1145/3341302.3342076>
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng, rng};
