@@ -1,3 +1,13 @@
+//! Count-Min Sketch implementation.
+//!
+//! A sub-linear space data structure for estimating frequencies of items in a
+//! stream, with one-sided error bounded by the L1 norm of the stream.
+//!
+//! Reference:
+//! - Cormode & Muthukrishnan, "An Improved Data Stream Summary: The Count-Min
+//!   Sketch and its Applications," J. Algorithms 55(1), 2005.
+//!   <https://www.cs.rutgers.edu/~muthu/cm-jal.pdf>
+
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };

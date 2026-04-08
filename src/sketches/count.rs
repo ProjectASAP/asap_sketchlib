@@ -1,3 +1,12 @@
+//! Count Sketch implementation.
+//!
+//! A frequency-estimation sketch that uses random sign projections to estimate
+//! item counts with bounded error in the L2 norm.
+//!
+//! Reference:
+//! - Charikar, Chen & Farach-Colton, "Finding Frequent Items in Data Streams,"
+//!   ICALP 2002. <https://www.cs.rutgers.edu/~farach/pubs/FrequentStream.pdf>
+
 use crate::{
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,

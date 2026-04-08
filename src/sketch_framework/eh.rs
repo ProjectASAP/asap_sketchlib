@@ -1,3 +1,9 @@
+//! Exponential Histogram (EH) framework for sliding-window sketch queries.
+//!
+//! Maintains a sequence of sketch-bearing buckets that are merged according to
+//! either an L1 (size-based) or L2 (mass-based) invariant, enabling approximate
+//! queries over time-windowed streams with bounded memory.
+
 use super::EHSketchList;
 use super::eh_sketch_list::SketchNorm;
 use crate::SketchInput;

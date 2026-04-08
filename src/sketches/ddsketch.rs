@@ -1,3 +1,20 @@
+//! DDSketch quantile sketch implementation.
+//!
+//! A mergeable, relative-error quantile sketch that maps values into
+//! logarithmically-spaced buckets, guaranteeing a relative accuracy of alpha
+//! for every quantile query.
+//!
+//! Provenance:
+//! This file was adapted from earlier DDSketch work in the private
+//! `approx-telemetry/asap_sketchlib` repository. Original contributor for that
+//! implementation: Srinath Ramachandran. It was later migrated and modified in
+//! this repository.
+//!
+//! Reference:
+//! - Masson, Rim & Lee, "DDSketch: A Fast and Fully-Mergeable Quantile Sketch
+//!   with Relative-Error Guarantees," PVLDB 12(12), 2019.
+//!   <https://www.vldb.org/pvldb/vol12/p2195-masson.pdf>
+
 use crate::SketchInput;
 use crate::common::input::sketch_input_to_f64;
 use crate::common::structures::Vector1D;
@@ -5,15 +22,6 @@ use rmp_serde::decode::Error as RmpDecodeError;
 use rmp_serde::encode::Error as RmpEncodeError;
 use rmp_serde::{from_slice, to_vec_named};
 use serde::{Deserialize, Serialize};
-
-/// DDSketch implementation based on:
-/// https://www.vldb.org/pvldb/vol12/p2195-masson.pdf
-///
-/// Provenance:
-/// This file was adapted from earlier DDSketch work in the private
-/// `approx-telemetry/asap_sketchlib` repository. Original contributor for that
-/// implementation: Srinath Ramachandran. It was later migrated and modified in
-/// this repository.
 
 // Number of buckets to grow by when expanding.
 const GROW_CHUNK: usize = 128;
