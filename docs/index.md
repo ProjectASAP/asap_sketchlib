@@ -16,7 +16,7 @@ This page is the docs home for `asap_sketchlib`.
 - [Advanced Use Cases](./advanced_use_cases.md)
 - [Test Coverage Map](./tests.md)
 - [Feature Status](./features.md)
-- [Fold Sketch Design](./fold_sketch_design.md)
+
 
 ## Project Info
 

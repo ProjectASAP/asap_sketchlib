@@ -16,10 +16,6 @@ This is the canonical API entry point for `asap_sketchlib`.
   - Reference: Karnin, Lang & Liberty, "Optimal Quantile Approximation in Streams," FOCS 2016. [https://arxiv.org/abs/1603.05346](https://arxiv.org/abs/1603.05346)
 - [DDSketch](./api/api_ddsketch.md) - `Ready`
   - Reference: Masson, Rim & Lee, "DDSketch: A Fast and Fully-Mergeable Quantile Sketch with Relative-Error Guarantees," VLDB 2019. [https://arxiv.org/abs/1908.10693](https://arxiv.org/abs/1908.10693)
-- [FoldCMS](./api/api_fold_cms.md) - `Ready`
-  - Original technique: memory-efficient column-folding for Count-Min Sketch in windowed aggregation. See [Fold Sketch Design](./fold_sketch_design.md).
-- [FoldCS](./api/api_fold_cs.md) - `Ready`
-  - Original technique: memory-efficient column-folding for Count Sketch in windowed aggregation. See [Fold Sketch Design](./fold_sketch_design.md).
 - [CMSHeap](./api/api_cms_heap.md) - `Ready`
 - [CSHeap](./api/api_cs_heap.md) - `Ready`
 - [Elastic](./api/api_elastic.md) - `Unstable`
@@ -47,8 +43,6 @@ This is the canonical API entry point for `asap_sketchlib`.
 - [EHUnivOptimized](./api/api_ehunivoptimized.md) - `Unstable (update soon)`
 - [OctoSketch](./api/api_octo.md) - `Ready`
   - Reference: OctoSketch paper. [https://www.usenix.org/conference/nsdi24/presentation/zhang-yinda](https://www.usenix.org/conference/nsdi24/presentation/zhang-yinda)
-- [TumblingWindow](./api/api_tumbling_window.md) - `Ready`
-
 ## Common Utility APIs
 
 - [Common Module API (Canonical)](./api/api_common.md) - `Shared`

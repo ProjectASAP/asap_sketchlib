@@ -10,11 +10,11 @@
   - `mode.rs` is under `src/sketches/` and provides `RegularPath` / `FastPath` type-level insert/estimate path selection
 
 - **`src/sketches/`** - Sketch implementations (status source: [apis.md](./apis.md))
-  - `Ready` in API index: `countmin.rs`, `count.rs`, `hll.rs`, `kll.rs`, `ddsketch.rs`, `fold_cms.rs`, `fold_cs.rs`, `cms_heap.rs`, `cs_heap.rs`
+  - `Ready` in API index: `countmin.rs`, `count.rs`, `hll.rs`, `kll.rs`, `ddsketch.rs`, `cms_heap.rs`, `cs_heap.rs`
   - `Unstable` in API index: `coco.rs`, `elastic.rs`, `uniform.rs`, `kmv.rs`
 
 - **`src/sketch_framework/`** - Orchestration and serving layers (status source: [apis.md](./apis.md))
-  - `Ready` in API index: `hydra.rs`, `hashlayer.rs`, `univmon.rs`, `univmon_optimized.rs`, `nitro.rs`, `eh.rs`, `eh_sketch_list.rs`, `tumbling.rs`
+  - `Ready` in API index: `hydra.rs`, `hashlayer.rs`, `univmon.rs`, `univmon_optimized.rs`, `nitro.rs`, `eh.rs`, `eh_sketch_list.rs`
   - `Unstable` in API index: `eh_univ_optimized.rs`
   - Infrastructure module: `orchestrator/` (node-level manager used by framework APIs)
 

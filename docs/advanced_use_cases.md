@@ -44,7 +44,7 @@ API reference: [`docs/api/api_hydra.md`](./api/api_hydra.md)
 
 `HashSketchEnsemble` (also referred to as `HashLayer` in the API) computes the element hash once and distributes the pre-computed hash value to all member sketches. This enables correlated multi-sketch inserts with a single hash call.
 
-`UnivMon` goes further: it implements the Universal Monitoring framework (Liu et al., SIGCOMM 2016), which answers L1, L2, entropy, and cardinality queries from a single data structure by organizing CMS sketches in a geometric sampling hierarchy.
+`UnivMon` goes further: it implements the Universal Monitoring framework (Liu et al., SIGCOMM 2016), which answers L1, L2, entropy, and cardinality queries from a single data structure by organizing Count Sketches in a geometric sampling hierarchy.
 
 `NitroBatch` wraps a CMS or Count Sketch in a batch-sampling mode: elements are Nitro-sampled before insertion, reducing the effective insertion rate while preserving accuracy guarantees.
 
@@ -54,19 +54,15 @@ API references: [`docs/api/api_hashlayer.md`](./api/api_hashlayer.md), [`docs/ap
 
 ---
 
-## 3. Sliding and Tumbling Windows
+## 3. Sliding Windows
 
 **Goal**: Answer frequency or quantile queries over a recent time window (e.g., "top-K IPs in the last 5 minutes") rather than over the entire stream.
 
 **The problem**: A single sketch accumulates all history. To answer windowed queries, you need to expire old data without replaying the stream.
 
-**Solution: `ExponentialHistogram`, `TumblingWindow`, and `FoldCMS`/`FoldCS`**
-
-`TumblingWindow` divides time into fixed-length non-overlapping epochs. Each epoch gets its own sketch; when an epoch expires, its sketch is dropped.
+**Solution: `ExponentialHistogram`**
 
 `ExponentialHistogram` (EH) provides sliding-window semantics. It maintains a sequence of sketch "buckets" of geometrically increasing age. When two same-size buckets accumulate, they are merged pairwise. This keeps the total number of buckets logarithmic in the window size. `EHSketchList` provides a unified enum for inserting into and querying across heterogeneous bucket types.
-
-`FoldCMS` and `FoldCS` are memory-efficient sub-window sketches designed specifically for EH integration. Instead of allocating a full W-column CMS per sub-window, they "fold" the column space to use far fewer physical columns when sub-window cardinality D is much smaller than W. Sub-windows at fold level k use W/2^k physical columns. When two buckets merge in the EH, an unfold-merge step doubles the physical column count, restoring accuracy. See [`docs/fold_sketch_design.md`](./fold_sketch_design.md) for the full algorithm.
 
 `EHUnivOptimized` is an experimental two-tier EH that integrates `UnivMon` with sketch memory reuse (currently `Unstable`).
 
@@ -74,9 +70,7 @@ API references: [`docs/api/api_hashlayer.md`](./api/api_hashlayer.md), [`docs/ap
 
 | Use Case | Recommended |
 | --- | --- |
-| Fixed non-overlapping epochs | `TumblingWindow` |
 | Sliding window, standard memory | `ExponentialHistogram` + any mergeable sketch |
-| Sliding window, sparse sub-windows (D << W) | `ExponentialHistogram` + `FoldCMS` or `FoldCS` |
 | Sliding window + universal monitoring | `EHUnivOptimized` (Unstable) |
 
-API references: [`docs/api/api_exponential_histogram.md`](./api/api_exponential_histogram.md), [`docs/api/api_tumbling_window.md`](./api/api_tumbling_window.md), [`docs/api/api_ehsketchlist.md`](./api/api_ehsketchlist.md), [`docs/api/api_fold_cms.md`](./api/api_fold_cms.md), [`docs/api/api_fold_cs.md`](./api/api_fold_cs.md)
+API references: [`docs/api/api_exponential_histogram.md`](./api/api_exponential_histogram.md), [`docs/api/api_ehsketchlist.md`](./api/api_ehsketchlist.md)

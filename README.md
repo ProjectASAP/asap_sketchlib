@@ -8,8 +8,8 @@ A Rust library for **streaming data sketches** — fixed-memory data structures 
 
 - **Native Rust, no JNI/FFI bridge.** Memory layout, allocation, and hashing stay within Rust — no overhead from crossing language boundaries.
 - **Consistent API across sketches.** Typed inputs (`SketchInput`) and uniform `insert`/`estimate`/`merge` patterns, with pluggable hashing via `SketchHasher`.
-- **Algorithms not found elsewhere.** Includes `UnivMon` (universal monitoring), `Hydra` (hierarchical subpopulation sketching), `FoldCMS`/`FoldCS` (memory-efficient windowed sketching), and `NitroBatch`.
-- **Built-in orchestration frameworks** — coordinate multiple sketches with shared hashing (`HashLayer`), manage sliding windows (`TumblingWindow`), or run hierarchical queries (`Hydra`).
+- **Algorithms not found elsewhere.** Includes `UnivMon` (universal monitoring), `Hydra` (hierarchical subpopulation sketching), and `NitroBatch`.
+- **Built-in orchestration frameworks** — coordinate multiple sketches with shared hashing (`HashLayer`), manage sliding windows (`ExponentialHistogram`), or run hierarchical queries (`Hydra`).
 
 When Apache DataSketches may be a better fit:
 
@@ -24,7 +24,6 @@ When Apache DataSketches may be a better fit:
 | Frequency estimation | `CountMin`, `Count Sketch` | Fast approximate counts for high-volume keys | `df.groupby("key").size()` / `df.group_by("key").agg(pl.len())` |
 | Cardinality estimation | `HyperLogLog` (`Regular`, `ErtlMLE`, `HIP`) | Approximate distinct counts with bounded memory | `df["col"].nunique()` / `df["col"].n_unique()` |
 | Quantiles / distribution | `KLL`, `DDSketch` | Percentile / latency summaries over streams | `df["col"].quantile(0.99)` |
-| Windowed frequency | `FoldCMS`, `FoldCS` | Sliding-window frequency estimation with reduced per-window memory | No direct equivalent |
 | Advanced frameworks | `Hydra`, `UnivMon`, `NitroBatch` | Hierarchical queries, universal monitoring, batch sampling | No direct equivalent |
 
 Full sketch status and API details: [APIs Index](./docs/apis.md).
@@ -38,24 +37,17 @@ Add to your `Cargo.toml`:
 asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib" }
 ```
 
-To enable the multi-threaded OctoSketch runtime (`OctoRuntime`, `run_octo`):
-
-```toml
-[dependencies]
-asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", features = ["octo-runtime"] }
-```
-
-The delta types and traits (`OctoWorker`, `OctoAggregator`, `insert_emit_delta`, `apply_delta`) are always available without this feature.
-
 ### Count distinct users with HyperLogLog
 
 ```rust
 use asap_sketchlib::{ErtlMLE, HyperLogLog, SketchInput};
 
-// ErtlMLE: Ertl's maximum-likelihood HLL estimator (arXiv:1702.01284)
-// — better accuracy than classic HLL at low and high cardinalities
+// HyperLogLog estimates the number of distinct items in a stream using fixed memory.
+// ErtlMLE is one of the HLL variants we offer — it tends to be more accurate than
+// the classic ("Regular") version, especially at very low or very high cardinalities.
 let mut hll = HyperLogLog::<ErtlMLE>::default();
 
+// Insert some user IDs — duplicates are fine, HLL handles them.
 for user_id in [101, 202, 303, 101, 404, 202, 505, 101] {
     hll.insert(&SketchInput::U64(user_id));
 }
@@ -69,7 +61,12 @@ println!("estimated unique users: {unique_users}"); // ≈ 5
 ```rust
 use asap_sketchlib::{CountMin, FastPath, Vector2D, SketchInput};
 
-// 3 rows × 2048 columns, using FastPath (single hash, bit-masked row indices)
+// Count-Min Sketch estimates how often each item appears in a stream.
+// It may over-count but never under-counts.
+//
+// Vector2D<i32> is the backing storage (a 2D array of 32-bit counters).
+// FastPath uses a single hash with bit-masking to pick row indices — faster
+// than the default RegularPath which hashes once per row.
 let mut cms = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 2048);
 
 // Simulate an event stream
@@ -81,20 +78,24 @@ let purchases  = cms.estimate(&SketchInput::Str("purchase"));
 println!("page_view ≈ {page_views}, purchase ≈ {purchases}");
 ```
 
-### Track p99 latency with KLL
+### Track latency percentiles with KLL
 
 ```rust
 use asap_sketchlib::{KLL, SketchInput};
 
+// KLL is a quantile sketch — it tracks the distribution of values so you can
+// ask questions like "what is the median?" without storing every data point.
 let mut sketch = KLL::new();
 
-// Simulate latencies in milliseconds
-for &ms in &[12.0, 15.0, 14.5, 200.0, 13.0, 16.0, 11.0, 210.0, 14.0, 13.5] {
+// Simulate 1000 latency samples in milliseconds
+for i in 0..1000 {
+    let ms = (i as f64) * 0.5 + 1.0;
     sketch.update(&SketchInput::F64(ms)).unwrap();
 }
 
+let p50 = sketch.quantile(0.50);
 let p99 = sketch.quantile(0.99);
-println!("p99 latency ≈ {p99:.1} ms");
+println!("median ≈ {p50:.1} ms, p99 ≈ {p99:.1} ms");
 ```
 
 ### Merge sketches from distributed nodes
@@ -102,6 +103,8 @@ println!("p99 latency ≈ {p99:.1} ms");
 ```rust
 use asap_sketchlib::{ErtlMLE, HyperLogLog, SketchInput};
 
+// Sketches are mergeable — you can build one per node and combine them later
+// to get a global answer without shipping raw data.
 let mut node_a = HyperLogLog::<ErtlMLE>::default();
 let mut node_b = HyperLogLog::<ErtlMLE>::default();
 
@@ -129,7 +132,6 @@ Performance details including cache-friendly layouts, `FastPath` single-hash mod
 | --- | --- |
 | [APIs Index](./docs/apis.md) | Per-sketch API reference with status and error guarantees |
 | [Advanced Use Cases](./docs/advanced_use_cases.md) | Hierarchical queries, windowed sketching, multi-sketch coordination |
-| [Fold Sketch Design](./docs/fold_sketch_design.md) | Design and analysis of FoldCMS / FoldCS |
 | [Docs Index](./docs/index.md) | Full documentation index |
 
 ## Dev Commands
