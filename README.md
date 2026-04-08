@@ -6,6 +6,7 @@ A Rust library for **streaming data sketches** — fixed-memory data structures 
 
 ## Why asap_sketchlib
 
+- **Fast.** Up to 8–14× higher insertion throughput than comparable libraries on frequency sketches, and 2–3× on cardinality sketches. See [benchmarks](#performance).
 - **Native Rust, no JNI/FFI bridge.** Memory layout, allocation, and hashing stay within Rust — no overhead from crossing language boundaries.
 - **Consistent API across sketches.** Typed inputs (`SketchInput`) and uniform `insert`/`estimate`/`merge` patterns, with pluggable hashing via `SketchHasher`.
 - **Algorithms not found elsewhere.** Includes `UnivMon` (universal monitoring), `Hydra` (hierarchical subpopulation sketching), and `NitroBatch`.
@@ -124,7 +125,13 @@ The best approach is to **profile against a representative sample of your data**
 
 ## Performance
 
-Performance details including cache-friendly layouts, `FastPath` single-hash mode, and benchmark methodology are documented in [Performance Notes](./docs/features.md).
+Insertion throughput on 10M Zipf-distributed values, averaged over 10 runs:
+
+![CMS Insertion Throughput](./docs/benchmark_plots/plots/cms/cms_throughput_insertion.png)
+
+![HLL Insertion Throughput](./docs/benchmark_plots/plots/hll/hll_throughput_insertion.png)
+
+More benchmark results and performance details (cache-friendly layouts, `FastPath` single-hash mode) are in [Performance Notes](./docs/features.md).
 
 ## Documentation
 
