@@ -2,6 +2,11 @@
 name = "asap_sketchlib"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "A high-performance sketching library for approximate stream processing"
+homepage = "https://projectasap.github.io/"
+repository = "https://github.com/ProjectASAP/asap_sketchlib"
+readme = "README.md"
 
 [dependencies]
 rand = "0.9.1"

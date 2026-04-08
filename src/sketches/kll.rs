@@ -2,11 +2,13 @@
 //!
 //! Insertion and compaction follow the compact KLL layout from:
 //! "Insert-optimized implementation of streaming data sketches" (Pfeil et al., 2025).
-//! CDF construction is adapted from dgryski's Go implementation.
+//! CDF construction follows the pattern described in dgryski/go-kll, based on the
+//! weighted CDF approach from the original KLL paper (Karnin, Lang & Liberty, FOCS 2016).
 //!
 //! References:
+//! - Karnin, Lang & Liberty, "Optimal Quantile Approximation in Streams," FOCS 2016.
+//!   https://arxiv.org/abs/1603.05346
 //! - https://www.amazon.science/publications/insert-optimized-implementation-of-streaming-data-sketches
-//! - https://github.com/dgryski/go-kll
 
 use rand::{Rng, rng};
 use rmp_serde::decode::Error as RmpDecodeError;

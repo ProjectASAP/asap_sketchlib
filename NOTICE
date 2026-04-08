@@ -10,9 +10,13 @@ This NOTICE file is provided for attribution and informational purposes only.
 
 This product includes algorithms and ideas from:
 
+Apache DataFusion
+Copyright 2019-2024 The Apache Software Foundation
+(HyperLogLog ErtlMLE estimator)
+
 Apache DataSketches
 Copyright 2015-2024 The Apache Software Foundation
-(HyperLogLog, KLL quantile sketch)
+(HyperLogLog HIP variant, KLL quantile sketch)
 
 DDSketch
 Copyright 2019 DataDog, Inc.
@@ -24,8 +28,13 @@ This product depends on the following Rust crates:
 
 rand - Copyright (c) 2018 Rust Project Developers (MIT/Apache-2.0)
 serde - Copyright (c) 2014 David Tolnay (MIT/Apache-2.0)
+serde-big-array - Copyright (c) 2019 est31 (MIT/Apache-2.0)
 rmp-serde - Copyright (c) 2017 Nikolai Vazquez (MIT)
 twox-hash - Copyright (c) 2015 Jake Goulding (MIT)
 smallvec - Copyright (c) 2018 The Servo Project Developers (MIT/Apache-2.0)
-pcap - Copyright (c) 2015 Sean Bowe (MIT/Apache-2.0)
-clap - Copyright (c) 2015 Kevin B. Knapp (MIT/Apache-2.0)
+prost - Copyright (c) 2022 Dan Burkert and Tokio Contributors (Apache-2.0)
+bytes - Copyright (c) 2022 Carl Lerche and Tokio Contributors (MIT)
+
+Optional (behind "octo-runtime" feature):
+core_affinity - Copyright (c) 2016 Eliot Courtney (MIT/Apache-2.0)
+crossbeam-channel - Copyright (c) 2019 The Crossbeam Project Developers (MIT/Apache-2.0)
