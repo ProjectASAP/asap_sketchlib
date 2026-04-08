@@ -43,6 +43,7 @@ use rmp_serde::{
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+/// Generic HyperLogLog sketch parameterized by estimation variant, register storage, and hasher.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct HyperLogLogImpl<
@@ -57,11 +58,14 @@ pub struct HyperLogLogImpl<
     _hasher: PhantomData<H>,
 }
 
+/// Marker type selecting the classic HyperLogLog estimation algorithm.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Regular;
+/// Marker type selecting the Ertl MLE estimation algorithm (arXiv:1702.01284).
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct ErtlMLE;
 
+/// HyperLogLog variant using the Historic Inverse Probability (HIP) estimator for improved accuracy.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct HyperLogLogHIPImpl<Registers: HllRegisterStorage> {
@@ -114,6 +118,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         from_slice(bytes)
     }
 
+    /// Inserts a pre-hashed value into the sketch.
     #[inline(always)]
     pub fn insert_with_hash(&mut self, hashed_val: u64) {
         let bucket_num = ((hashed_val >> Registers::REGISTER_BITS) & Registers::P_MASK) as usize;
@@ -125,6 +130,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         }
     }
 
+    /// Inserts multiple pre-hashed values into the sketch.
     #[inline(always)]
     pub fn insert_many_with_hashes(&mut self, hashes: &[u64]) {
         for &hashed in hashes {
@@ -132,6 +138,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         }
     }
 
+    /// Merges another sketch into this one by taking the element-wise max of registers.
     pub fn merge(&mut self, other: &Self) {
         assert!(
             self.registers.len() == other.registers.len(),
@@ -154,11 +161,13 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     HyperLogLogImpl<Variant, Registers, H>
 {
+    /// Hashes and inserts a single input value into the sketch.
     pub fn insert(&mut self, obj: &SketchInput) {
         let hashed_val = H::hash64_seeded(CANONICAL_HASH_SEED, obj);
         self.insert_with_hash(hashed_val);
     }
 
+    /// Hashes and inserts multiple input values into the sketch.
     pub fn insert_many(&mut self, items: &[SketchInput]) {
         for item in items {
             self.insert(item);
@@ -167,6 +176,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 }
 
 impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Regular, Registers, H> {
+    /// Creates a new HyperLogLog sketch with the classic (Regular) estimator.
     pub fn new() -> Self {
         Self::new_base()
     }
@@ -181,6 +191,7 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Regular, Re
         1.0 / z
     }
 
+    /// Returns the estimated cardinality using the classic HyperLogLog algorithm with small/large range corrections.
     pub fn estimate(&self) -> usize {
         let m = Registers::NUM_REGISTERS as f64;
         let alpha_m = 0.7213 / (1.0 + 1.079 / m);
@@ -204,6 +215,7 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Regular, Re
 }
 
 impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<ErtlMLE, Registers, H> {
+    /// Creates a new HyperLogLog sketch with the Ertl MLE estimator.
     pub fn new() -> Self {
         Self::new_base()
     }
@@ -267,6 +279,7 @@ macro_rules! impl_ertl_mle_estimate {
                 histogram
             }
 
+            /// Returns the estimated cardinality using the Ertl MLE algorithm.
             pub fn estimate(&self) -> usize {
                 let histogram = self.get_histogram();
                 let m: f64 = <$storage>::NUM_REGISTERS as f64;
@@ -295,6 +308,7 @@ impl<Registers: HllRegisterStorage> Default for HyperLogLogHIPImpl<Registers> {
 
 // Core HIP logic (hash-based operations + serialization).
 impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
+    /// Creates a new HyperLogLog HIP sketch.
     pub fn new() -> Self {
         Self {
             registers: Registers::default(),
@@ -303,6 +317,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
             est: 0.0,
         }
     }
+    /// Inserts a pre-hashed value, updating both the register and the HIP running estimate.
     #[inline(always)]
     pub fn insert_with_hash(&mut self, hashed: u64) {
         let hashed_val = hashed as u64;
@@ -328,6 +343,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
         }
     }
 
+    /// Inserts multiple pre-hashed values into the HIP sketch.
     #[inline(always)]
     pub fn insert_many_with_hashes(&mut self, hashes: &[u64]) {
         for &hashed in hashes {
@@ -335,6 +351,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
         }
     }
 
+    /// Returns the estimated cardinality from the HIP running estimate.
     pub fn estimate(&self) -> usize {
         self.est as usize
     }
@@ -361,6 +378,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
         self.insert_with_hash(hashed_val);
     }
 
+    /// Hashes and inserts multiple input values into the HIP sketch.
     pub fn insert_many(&mut self, items: &[SketchInput]) {
         for item in items {
             self.insert(item);

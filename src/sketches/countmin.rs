@@ -27,6 +27,7 @@ pub const QUICKSTART_ROW_NUM: usize = 5;
 pub const QUICKSTART_COL_NUM: usize = 2048;
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
+/// A Count-Min Sketch for estimating item frequencies in a data stream.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
 pub struct CountMin<
@@ -203,6 +204,7 @@ where
 
 // Core CountMin API for any storage.
 impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
+    /// Creates a sketch from an existing matrix storage instance.
     pub fn from_storage(counts: S) -> Self {
         let row = counts.rows();
         let col = counts.cols();
@@ -339,6 +341,7 @@ where
 pub type CountMinF64<H = DefaultXxHasher> = CountMin<Vector2D<f64>, RegularPath, H>;
 
 impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMin<S, RegularPath, H> {
+    /// Inserts an observation and emits a delta when the counter crosses a threshold.
     #[inline(always)]
     pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CmDelta)) {
         let rows = self.counts.rows();
@@ -363,6 +366,7 @@ impl<S, H: SketchHasher> CountMin<S, FastPath, H>
 where
     S: MatrixStorage<Counter = i32> + FastPathHasher<H>,
 {
+    /// Inserts an observation via fast-path and emits a delta at threshold crossings.
     #[inline(always)]
     pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CmDelta)) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
@@ -387,6 +391,7 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H>
 where
     S::Counter: Copy + std::ops::AddAssign + From<i32>,
 {
+    /// Applies a delta update to the sketch counters.
     pub fn apply_delta(&mut self, delta: CmDelta) {
         self.counts.increment_by_row(
             delta.row as usize,
@@ -411,6 +416,7 @@ where
             .fast_insert(|a, b, _| *a += *b, S::Counter::from(1), &hashed_val);
     }
 
+    /// Inserts observations with the given count using the fast-path hash.
     #[inline(always)]
     pub fn insert_many(&mut self, value: &SketchInput, many: S::Counter) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);

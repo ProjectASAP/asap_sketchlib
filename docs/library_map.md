@@ -18,11 +18,6 @@
   - `Unstable` in API index: `eh_univ_optimized.rs`
   - Infrastructure module: `orchestrator/` (node-level manager used by framework APIs)
 
-## Testing & Benchmarking
-
-- **`benches/`** - Criterion-based performance benchmarks
-  - Run with: `cargo bench`
-
 ## Documentation
 
 - **`docs/`** - API and feature documentation

@@ -24,7 +24,7 @@ const DEFAULT_ROW_NUM: usize = 3;
 const DEFAULT_COL_NUM: usize = 4096;
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
-/// Count Sketch based on Common structure
+/// A frequency-estimation sketch using random sign projections (Count Sketch).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
 pub struct Count<
@@ -217,6 +217,7 @@ where
     S: MatrixStorage<Counter = C>,
     C: CountSketchCounter,
 {
+    /// Wraps an existing matrix storage as a Count Sketch.
     pub fn from_storage(counts: S) -> Self {
         let row = counts.rows();
         let col = counts.cols();
@@ -321,6 +322,7 @@ where
         }
     }
 
+    /// Inserts an observation with the given count (weight).
     pub fn insert_many(&mut self, value: &SketchInput, many: C) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
@@ -386,6 +388,7 @@ where
         );
     }
 
+    /// Inserts an observation with the given count using the combined hash optimization.
     #[inline(always)]
     pub fn insert_many(&mut self, value: &SketchInput, many: S::Counter) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
@@ -430,6 +433,7 @@ where
         );
     }
 
+    /// Inserts an observation with the given count using a pre-computed hash value.
     #[inline(always)]
     pub fn fast_insert_many_with_hash_value(&mut self, hashed_val: &H::HashType, many: S::Counter) {
         self.counts.fast_insert(
@@ -474,6 +478,7 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
         self.counts.enable_nitro(sampling_rate);
     }
 
+    /// Inserts an observation using Nitro geometric-sampling acceleration.
     #[inline(always)]
     pub fn fast_insert_nitro(&mut self, value: &SketchInput) {
         let rows = self.counts.rows();
@@ -516,6 +521,7 @@ impl<H: SketchHasher> NitroTarget for Count<Vector2D<i32>, FastPath, H> {
     }
 }
 
+/// Count Sketch augmented with per-row L2 norm tracking for heavy-hitter detection.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "")]
 pub struct CountL2HH<H: SketchHasher = DefaultXxHasher> {
@@ -537,10 +543,12 @@ impl Default for CountL2HH {
 
 // CountL2HH constructors and operations.
 impl<H: SketchHasher> CountL2HH<H> {
+    /// Creates a sketch with the requested number of rows and columns.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
         Self::with_dimensions_and_seed(rows, cols, 0)
     }
 
+    /// Creates a sketch with the requested dimensions and a custom seed offset.
     pub fn with_dimensions_and_seed(rows: usize, cols: usize, seed_idx: usize) -> Self {
         let mut sk = CountL2HH {
             counts: Vector2D::init(rows, cols),
@@ -574,6 +582,7 @@ impl<H: SketchHasher> CountL2HH<H> {
         &mut self.counts
     }
 
+    /// Merges another sketch while asserting compatible dimensions.
     pub fn merge(&mut self, other: &Self) {
         assert_eq!(
             (self.row, self.col),
@@ -671,6 +680,7 @@ impl<H: SketchHasher> CountL2HH<H> {
         self.fast_get_est_with_hash(hashed_val)
     }
 
+    /// Returns the median estimate of the squared L2 norm across rows.
     pub fn get_l2_sqr(&self) -> f64 {
         let mut values: Vec<f64> = self.l2.as_slice()[..self.row]
             .iter()
@@ -679,6 +689,7 @@ impl<H: SketchHasher> CountL2HH<H> {
         compute_median_inline_f64(&mut values)
     }
 
+    /// Returns the estimated L2 norm (square root of `get_l2_sqr`).
     pub fn get_l2(&self) -> f64 {
         let l2 = self.get_l2_sqr();
         l2.sqrt()
@@ -728,6 +739,7 @@ impl<H: SketchHasher> CountL2HH<H> {
 use crate::octo_delta::{COUNT_PROMASK, CountDelta};
 
 impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> {
+    /// Inserts a value and emits a delta when any counter exceeds the promotion threshold.
     #[inline(always)]
     pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta)) {
         let rows = self.counts.rows();
@@ -754,6 +766,7 @@ impl<S, H: SketchHasher> Count<S, FastPath, H>
 where
     S: MatrixStorage<Counter = i32> + FastPathHasher<H>,
 {
+    /// Inserts a value using the fast path and emits a delta on counter overflow.
     #[inline(always)]
     pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta)) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
@@ -780,6 +793,7 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> Count<S, Mode, H>
 where
     S::Counter: Copy + std::ops::AddAssign + From<i32>,
 {
+    /// Applies a previously emitted delta to this sketch.
     pub fn apply_delta(&mut self, delta: CountDelta) {
         self.counts.increment_by_row(
             delta.row as usize,

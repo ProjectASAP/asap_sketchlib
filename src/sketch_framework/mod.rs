@@ -23,7 +23,9 @@ pub use univmon_optimized::{UnivMonPyramid, UnivSketchPool};
 pub mod nitro;
 pub use nitro::{NitroBatch, NitroEstimate, NitroTarget};
 
+#[cfg(feature = "experimental")]
 pub mod eh_univ_optimized;
+#[cfg(feature = "experimental")]
 pub use eh_univ_optimized::{EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUnivQueryResult};
 
 pub mod octo;

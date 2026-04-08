@@ -115,6 +115,7 @@ impl Buckets {
     }
 }
 
+/// Mergeable, relative-error quantile sketch using logarithmically-spaced buckets.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DDSketch {
     alpha: f64,
@@ -130,6 +131,7 @@ pub struct DDSketch {
 }
 
 impl DDSketch {
+    /// Creates a new DDSketch with relative accuracy guarantee `alpha` (must be in `(0, 1)`).
     pub fn new(alpha: f64) -> Self {
         assert!((0.0..1.0).contains(&alpha), "alpha must be in (0,1)");
         let gamma = (1.0 + alpha) / (1.0 - alpha);
@@ -149,15 +151,17 @@ impl DDSketch {
         }
     }
 
+    /// Serializes the sketch to a MessagePack byte vector.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         to_vec_named(self)
     }
 
+    /// Deserializes a DDSketch from a MessagePack byte slice.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         from_slice(bytes)
     }
 
-    /// Add a sample.
+    /// Adds a positive finite `f64` sample to the sketch; non-positive or non-finite values are ignored.
     #[inline(always)]
     pub fn add(&mut self, v: f64) {
         if !(v.is_finite() && v > 0.0) {
@@ -177,7 +181,7 @@ impl DDSketch {
         self.store.add_one(k);
     }
 
-    /// Add a sample from SketchInput.
+    /// Adds a sample converted from a [`SketchInput`]; returns an error for non-numeric inputs.
     #[inline(always)]
     pub fn add_input(&mut self, v: &SketchInput) -> Result<(), &'static str> {
         let value = sketch_input_to_f64(v).map_err(|_| "DDSketch only accepts numeric inputs")?;
@@ -185,7 +189,7 @@ impl DDSketch {
         Ok(())
     }
 
-    /// Quantile estimate for quantile q in [0, 1].
+    /// Returns the estimated value at quantile `q` (in `[0, 1]`), or `None` if the sketch is empty.
     pub fn get_value_at_quantile(&self, q: f64) -> Option<f64> {
         if self.count == 0 || q.is_nan() {
             return None;
@@ -225,10 +229,12 @@ impl DDSketch {
         Some(self.max)
     }
 
+    /// Returns the total number of samples inserted so far.
     pub fn get_count(&self) -> u64 {
         self.count
     }
 
+    /// Returns the minimum sample seen, or `None` if the sketch is empty.
     pub fn min(&self) -> Option<f64> {
         if self.count == 0 {
             None
@@ -237,6 +243,7 @@ impl DDSketch {
         }
     }
 
+    /// Returns the maximum sample seen, or `None` if the sketch is empty.
     pub fn max(&self) -> Option<f64> {
         if self.count == 0 {
             None
@@ -245,7 +252,7 @@ impl DDSketch {
         }
     }
 
-    /// Merge another DDSketch into this one.
+    /// Merges another DDSketch (with the same `alpha`) into this one.
     pub fn merge(&mut self, other: &DDSketch) {
         debug_assert!((self.alpha - other.alpha).abs() < 1e-12);
         debug_assert!((self.gamma - other.gamma).abs() < 1e-12);

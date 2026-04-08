@@ -80,7 +80,7 @@ impl Coin {
     }
 }
 
-/// One entry in the cumulative distribution, storing a value and its mass.
+/// A single (value, cumulative-quantile) pair in a CDF table.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CdfEntry {
     value: f64,
@@ -172,7 +172,7 @@ fn merge_sorted_runs(slice: &mut [f64], left_len: usize, buf: &mut Vec<f64>) {
 // KLL sketch
 // ---------------------------------------------------------------------------
 
-/// KLL quantile sketch using a compact, insert-optimized, grow-downward layout.
+/// Compact, insert-optimized KLL quantile sketch.
 ///
 /// Memory layout (grows leftward):
 /// ```text
@@ -203,7 +203,7 @@ impl Default for KLL {
 }
 
 impl KLL {
-    /// Creates a KLL sketch with the given `k` and `m` parameters.
+    /// Creates a new KLL sketch with accuracy parameter `k` and minimum level capacity `m`.
     pub fn init(k: usize, m: usize) -> Self {
         let mut norm_m = m.min(MAX_CACHEABLE_K);
         norm_m = norm_m.max(2);
@@ -234,7 +234,7 @@ impl KLL {
         s
     }
 
-    /// Creates a KLL sketch with default `m` and the provided `k`.
+    /// Creates a new KLL sketch with the given `k` and a default minimum level capacity of 8.
     pub fn init_kll(k: i32) -> Self {
         Self::init(k as usize, 8)
     }
@@ -253,6 +253,7 @@ impl KLL {
         }
     }
 
+    /// Inserts a value from a [`SketchInput`] into the sketch.
     pub fn update(&mut self, val: &SketchInput) -> Result<(), &'static str> {
         let value = sketch_input_to_f64(val)?;
         self.push_value(value);
@@ -353,6 +354,7 @@ impl KLL {
 
     // -- Query-side ----------------------------------------------------------
 
+    /// Builds and returns the cumulative distribution function (CDF) from the current sketch state.
     pub fn cdf(&self) -> Cdf {
         let mut cdf = Cdf {
             entries: Vector1D::init(self.buffer_size()),
@@ -389,6 +391,7 @@ impl KLL {
         cdf
     }
 
+    /// Merges all items from another KLL sketch into this one.
     pub fn merge(&mut self, other: &KLL) {
         let used_start = other.levels[0];
         let used_end = other.levels[other.num_levels];
@@ -397,11 +400,13 @@ impl KLL {
         }
     }
 
+    /// Returns the estimated value at quantile `q` (in `[0, 1]`).
     pub fn quantile(&self, q: f64) -> f64 {
         let cdf = self.cdf();
         cdf.query(q)
     }
 
+    /// Returns the estimated (weighted) rank of value `x`.
     pub fn rank(&self, x: f64) -> usize {
         let mut r = 0;
         for h in 0..self.num_levels {
@@ -417,6 +422,7 @@ impl KLL {
         r
     }
 
+    /// Returns the total (weighted) number of items ingested by the sketch.
     pub fn count(&self) -> usize {
         let mut total = 0;
         for h in 0..self.num_levels {
@@ -431,6 +437,7 @@ impl KLL {
 
     // -- Lifecycle -----------------------------------------------------------
 
+    /// Resets the sketch to its empty initial state, keeping the same `k` and `m` parameters.
     pub fn clear(&mut self) {
         let mc = self.max_capacity;
         self.levels[0] = mc;
@@ -456,10 +463,12 @@ impl KLL {
 
     // -- Serialization -------------------------------------------------------
 
+    /// Serializes the sketch to a MessagePack byte vector.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         rmp_serde::to_vec(self)
     }
 
+    /// Deserializes a KLL sketch from a MessagePack byte slice.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         rmp_serde::from_slice(bytes)
     }

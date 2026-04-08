@@ -1,5 +1,8 @@
+#[cfg(feature = "experimental")]
 pub mod coco;
+#[cfg(feature = "experimental")]
 pub use coco::Coco;
+#[cfg(feature = "experimental")]
 pub use coco::CocoBucket;
 
 pub mod count;
@@ -12,10 +15,12 @@ pub use mode::{FastPath, RegularPath};
 pub mod countmin;
 pub use crate::MatrixStorage;
 pub use countmin::{CountMin, QUICKSTART_COL_NUM, QUICKSTART_ROW_NUM};
-// pub use countmin::MicroScopeCM;
 
+#[cfg(feature = "experimental")]
 pub mod elastic;
+#[cfg(feature = "experimental")]
 pub use elastic::Elastic;
+#[cfg(feature = "experimental")]
 pub use elastic::HeavyBucket;
 
 pub mod hll;
@@ -30,10 +35,14 @@ pub use kll::KLL;
 pub mod kll_dynamic;
 pub use kll_dynamic::KLLDynamic;
 
+#[cfg(feature = "experimental")]
 pub mod kmv;
+#[cfg(feature = "experimental")]
 pub use kmv::KMV;
 
+#[cfg(feature = "experimental")]
 pub mod uniform;
+#[cfg(feature = "experimental")]
 pub use uniform::UniformSampling;
 
 pub mod ddsketch;

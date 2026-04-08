@@ -2,11 +2,13 @@
 name = "asap_sketchlib"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 description = "A high-performance sketching library for approximate stream processing"
 homepage = "https://projectasap.github.io/"
 repository = "https://github.com/ProjectASAP/asap_sketchlib"
 readme = "README.md"
+autobins = false
 
 [dependencies]
 rand = "0.9.1"
@@ -22,7 +24,9 @@ crossbeam-channel = { version = "0.5", optional = true }
 
 [features]
 default = []
+experimental = []
 octo-runtime = ["core_affinity", "crossbeam-channel"]
+internal-bins = []
 
 [build-dependencies]
 prost-build = "0.13"
@@ -38,6 +42,21 @@ bench = false
 #strip = false
 #frame-pointer = "can-use"
 #lto = false
+[[bin]]
+name = "generate_precomputed_hash"
+path = "src/bin/generate_precomputed_hash.rs"
+required-features = ["internal-bins"]
+
+[[bin]]
+name = "generate_precomputed_sample"
+path = "src/bin/generate_precomputed_sample.rs"
+required-features = ["internal-bins"]
+
+[[bin]]
+name = "generate_precomputed_sample2"
+path = "src/bin/generate_precomputed_sample2.rs"
+required-features = ["internal-bins"]
+
 [profile.release]
 opt-level = 3
 lto = true

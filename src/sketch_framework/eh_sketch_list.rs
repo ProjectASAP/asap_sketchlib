@@ -13,13 +13,16 @@ pub enum SketchNorm {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum EHSketchList {
     CM(CountMin<Vector2D<i32>, FastPath>),
+    #[cfg(feature = "experimental")]
     COCO(Coco),
     COUNTL2HH(CountL2HH),
     CS(Count<Vector2D<i32>, FastPath>),
     DDS(DDSketch),
+    #[cfg(feature = "experimental")]
     ELASTIC(Elastic),
     HLL(HyperLogLog<ErtlMLE>),
     KLL(KLL),
+    #[cfg(feature = "experimental")]
     UNIFORM(UniformSampling),
     // LOCHER(LocherSketch),
     UNIVMON(UnivMon),
@@ -32,11 +35,12 @@ impl EHSketchList {
             EHSketchList::CM(_)
             | EHSketchList::CS(_)
             | EHSketchList::DDS(_)
-            | EHSketchList::COCO(_)
-            | EHSketchList::ELASTIC(_)
             | EHSketchList::HLL(_)
-            | EHSketchList::KLL(_)
-            | EHSketchList::UNIFORM(_) => norm == SketchNorm::L1,
+            | EHSketchList::KLL(_) => norm == SketchNorm::L1,
+            #[cfg(feature = "experimental")]
+            EHSketchList::COCO(_) | EHSketchList::ELASTIC(_) | EHSketchList::UNIFORM(_) => {
+                norm == SketchNorm::L1
+            }
         }
     }
 
@@ -55,6 +59,7 @@ impl EHSketchList {
     pub fn insert(&mut self, val: &SketchInput) {
         match self {
             EHSketchList::CM(sketch) => sketch.insert(val),
+            #[cfg(feature = "experimental")]
             EHSketchList::COCO(sketch) => match val {
                 SketchInput::Str(s) => sketch.insert(s, 1),
                 SketchInput::String(s) => sketch.insert(s.as_str(), 1),
@@ -65,6 +70,7 @@ impl EHSketchList {
             EHSketchList::DDS(sketch) => {
                 let _ = sketch.add_input(val);
             }
+            #[cfg(feature = "experimental")]
             EHSketchList::ELASTIC(sketch) => match val {
                 SketchInput::String(s) => sketch.insert(s.to_string()),
                 SketchInput::I32(i) => sketch.insert(i.to_string()),
@@ -91,16 +97,11 @@ impl EHSketchList {
             EHSketchList::KLL(sketch) => {
                 let _ = sketch.update(val);
             }
+            #[cfg(feature = "experimental")]
             EHSketchList::UNIFORM(sketch) => {
                 let _ = sketch.update_input(val);
             }
             EHSketchList::UNIVMON(sketch) => sketch.insert(val, 1),
-            // EHSketchList::LOCHER(sketch) => {
-            //     // Locher requires a String
-            //     if let SketchInput::String(s) = val {
-            //         sketch.insert(s, 1);
-            //     }
-            // }
         }
     }
 
@@ -111,6 +112,7 @@ impl EHSketchList {
                 s.merge(o);
                 Ok(())
             }
+            #[cfg(feature = "experimental")]
             (EHSketchList::COCO(s), EHSketchList::COCO(o)) => {
                 s.merge(o);
                 Ok(())
@@ -127,10 +129,6 @@ impl EHSketchList {
                 s.merge(o);
                 Ok(())
             }
-            // (Bucket::ELASTIC(s), Bucket::ELASTIC(o)) => {
-            //     s.merge(o);
-            //     Ok(())
-            // }, // not yet
             (EHSketchList::HLL(s), EHSketchList::HLL(o)) => {
                 s.merge(o);
                 Ok(())
@@ -139,15 +137,12 @@ impl EHSketchList {
                 s.merge(o);
                 Ok(())
             }
+            #[cfg(feature = "experimental")]
             (EHSketchList::UNIFORM(s), EHSketchList::UNIFORM(o)) => s.merge(o),
             (EHSketchList::UNIVMON(s), EHSketchList::UNIVMON(o)) => {
                 s.merge(o);
                 Ok(())
             }
-            // (Bucket::LOCHER(s), Bucket::LOCHER(o)) => {
-            //     s.merge(o);
-            //     Ok(())
-            // }, // not yet
             _ => Err("Cannot merge sketches of different types"),
         }
     }
@@ -155,7 +150,9 @@ impl EHSketchList {
     pub fn query(&self, key: &SketchInput) -> Result<f64, &'static str> {
         match (self, key) {
             (EHSketchList::CM(count_min), _) => Ok(count_min.estimate(key) as f64),
+            #[cfg(feature = "experimental")]
             (EHSketchList::COCO(coco), SketchInput::Str(s)) => Ok(coco.clone().estimate(s) as f64),
+            #[cfg(feature = "experimental")]
             (EHSketchList::COCO(coco), SketchInput::String(s)) => {
                 Ok(coco.clone().estimate(s.as_str()) as f64)
             }
@@ -191,6 +188,7 @@ impl EHSketchList {
                 "max" => dd.max().ok_or("DDSketch has no samples"),
                 _ => Err("Unsupported command for DDSketch"),
             },
+            #[cfg(feature = "experimental")]
             (EHSketchList::ELASTIC(elastic), SketchInput::String(s)) => {
                 Ok(elastic.clone().query(s.clone()) as f64)
             }
@@ -201,23 +199,29 @@ impl EHSketchList {
             (EHSketchList::KLL(kll), SketchInput::U64(u)) => Ok(kll.quantile(*u as f64)),
             (EHSketchList::KLL(kll), SketchInput::F32(f)) => Ok(kll.quantile(*f as f64)),
             (EHSketchList::KLL(kll), SketchInput::F64(f)) => Ok(kll.quantile(*f)),
+            #[cfg(feature = "experimental")]
             (EHSketchList::UNIFORM(sampler), SketchInput::U64(idx)) => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
+            #[cfg(feature = "experimental")]
             (EHSketchList::UNIFORM(sampler), SketchInput::U32(idx)) => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
+            #[cfg(feature = "experimental")]
             (EHSketchList::UNIFORM(sampler), SketchInput::I64(idx)) if *idx >= 0 => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
+            #[cfg(feature = "experimental")]
             (EHSketchList::UNIFORM(sampler), SketchInput::I32(idx)) if *idx >= 0 => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
+            #[cfg(feature = "experimental")]
             (EHSketchList::UNIFORM(sampler), SketchInput::Str(cmd)) => match *cmd {
                 "len" => Ok(sampler.len() as f64),
                 "total_seen" => Ok(sampler.total_seen() as f64),
                 _ => Err("Unsupported command for UniformSampling"),
             },
+            #[cfg(feature = "experimental")]
             (EHSketchList::UNIFORM(sampler), SketchInput::String(cmd)) => match cmd.as_str() {
                 "len" => Ok(sampler.len() as f64),
                 "total_seen" => Ok(sampler.total_seen() as f64),
@@ -237,7 +241,6 @@ impl EHSketchList {
                 "entropy" => Ok(um.calc_entropy()),
                 _ => Err("Unsupported command for UnivMon"),
             },
-            // (EHSketchList::LOCHER(locher_sketch), SketchInput::Str(s)) => Ok(locher_sketch.estimate(*s)),
             _ => Err("Parameter type and Sketch Type Mismatched"),
         }
     }
@@ -246,16 +249,18 @@ impl EHSketchList {
     pub fn sketch_type(&self) -> &'static str {
         match self {
             EHSketchList::CM(_) => "CountMin",
+            #[cfg(feature = "experimental")]
             EHSketchList::COCO(_) => "Coco",
             EHSketchList::COUNTL2HH(_) => "CountL2HH",
             EHSketchList::CS(_) => "CountSketch",
             EHSketchList::DDS(_) => "DDSketch",
+            #[cfg(feature = "experimental")]
             EHSketchList::ELASTIC(_) => "Elastic",
             EHSketchList::HLL(_) => "HLL",
             EHSketchList::KLL(_) => "KLL",
+            #[cfg(feature = "experimental")]
             EHSketchList::UNIFORM(_) => "UniformSampling",
             EHSketchList::UNIVMON(_) => "UnivMon",
-            // EHSketchList::LOCHER(_) => "Locher",
         }
     }
 }

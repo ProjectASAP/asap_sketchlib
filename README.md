@@ -1,6 +1,7 @@
 # asap_sketchlib
 
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/ProjectASAP/asap_sketchlib/blob/main/LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.85-blue.svg)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
 
 A Rust library for **streaming data sketches** — fixed-memory data structures that give approximate answers (counts, distinct counts, percentiles) over data streams too large to store exactly.
 
@@ -30,6 +31,8 @@ When Apache DataSketches may be a better fit:
 Full sketch status and API details: [APIs Index](./docs/apis.md).
 
 ## Quick Start
+
+**Minimum Supported Rust Version (MSRV): 1.85** (Rust 2024 edition)
 
 Add to your `Cargo.toml`:
 
@@ -86,7 +89,7 @@ use asap_sketchlib::{KLL, SketchInput};
 
 // KLL is a quantile sketch — it tracks the distribution of values so you can
 // ask questions like "what is the median?" without storing every data point.
-let mut sketch = KLL::new();
+let mut sketch = KLL::default();
 
 // Simulate 1000 latency samples in milliseconds
 for i in 0..1000 {
@@ -146,7 +149,6 @@ More benchmark results and performance details (cache-friendly layouts, `FastPat
 ```bash
 cargo build --all-targets
 cargo test --all-features
-cargo bench
 ```
 
 ## Contributors
@@ -165,4 +167,4 @@ cargo bench
 
 Copyright 2025 ProjectASAP
 
-Licensed under the MIT License. See [LICENSE](LICENSE).
+Licensed under the MIT License. See [LICENSE](https://github.com/ProjectASAP/asap_sketchlib/blob/main/LICENSE).
