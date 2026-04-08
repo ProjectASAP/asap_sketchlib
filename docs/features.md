@@ -9,7 +9,6 @@ This document provides a high-level overview of implemented and planned features
 1. [Completed Features](#completed-features)
 2. [In Progress](#in-progress)
 3. [Planned Features](#planned-features)
-4. [Research & Experimental](#research--experimental)
 
 ---
 
@@ -17,112 +16,95 @@ This document provides a high-level overview of implemented and planned features
 
 ### Core Infrastructure
 
-✅ **Common API** ([api_common.md](./api/api_common.md))
+**Common API** ([api_common.md](./api/api_common.md))
 
 - `SketchInput` - Unified type system for all sketches
-- `Vector1D`, `Vector2D`, `Vector3D` - High-performance storage structures
-- `MatrixStorage` + `FixedMatrix` - Fixed 5 × 2048 backing for quickstart CMS/CS
+- `Vector1D`, `Vector2D` - Flat storage structures for sketch counters
+- `impl_fixed_matrix!` macro - Define compile-time fixed-size matrix types with any counter type and dimensions
 - `CommonHeap` & `HHHeap` - Generic and specialized heaps for heavy hitter tracking
 - Deterministic hashing with seed management
-- `SketchHasher` trait with `DefaultXxHasher` for pluggable hash implementations
+- Pluggable hash via the `SketchHasher` trait — swap the hash function without changing sketch code
 - `RegularPath` / `FastPath` modes - Type-level pairing of insert/estimate paths
 
-✅ **Ready Sketch APIs** ([apis.md](apis.md))
-
-- **CountMin** - Frequency estimation with fast paths (2-3x speedup)
-- **Count & CountL2HH** - Count sketch with L2 heavy hitter support
-- **HyperLogLog** - Three variants (Regular, ErtlMLE, HIP) for cardinality estimation
-- **DDSketch** - Quantile estimation with relative error guarantees
-- **KLL** - Quantile estimation with mergeable compactors
-- All built on optimized common structures
+**Sketch APIs** — Frequency estimation, cardinality, quantiles, heavy hitters, sampling, and more. See [apis.md](apis.md) for the full list with per-sketch status, error guarantees, and references.
 
 ### Frameworks
 
-✅ **Hydra** - Hierarchical heavy hitters for multi-dimensional queries ([apis.md](apis.md))
+**Hydra** - Hierarchical heavy hitters for multi-dimensional queries ([apis.md](apis.md))
 
-- Includes `MultiHeadHydra` for per-dimension counter sets
+**UnivMon** - Universal monitoring (L1, L2, entropy, cardinality from single structure) ([apis.md](apis.md))
 
-✅ **UnivMon** - Universal monitoring (L1, L2, entropy, cardinality from single structure) ([apis.md](apis.md))
+**UnivMonPyramid** - Optimized two-tier UnivMon with `UnivSketchPool` for insert and memory management ([apis.md](apis.md))
 
-✅ **HashLayer** - Hash-once-use-many pattern for coordinating multiple sketches with single hash computation
+**HashSketchEnsemble** - Hash-once-use-many pattern for coordinating multiple sketches with single hash computation
 
-✅ **NitroBatch** - Batch-mode sampling wrapper for CMS/Count FastPath
+**NitroBatch** - Batch-mode sampling wrapper for CMS/Count FastPath
 
-✅ **EHSketchList** - Unified sketch enum for insert/merge/query across sketch types
+**EHSketchList** - Unified sketch enum for insert/merge/query across sketch types, that can be integrated into `ExponentialHistogram`
 
-✅ **ExponentialHistogram** - Sliding window coordinator for mergeable sketches
+**ExponentialHistogram** - Sliding window coordinator for mergeable sketches
 
-⚠️ **EHUnivOptimized** - Hybrid two-tier ExponentialHistogram for UnivMon with sketch memory reuse (currently `Unstable` in [apis.md](apis.md))
+**EHUnivOptimized** - Hybrid two-tier ExponentialHistogram for UnivMon with sketch memory reuse (currently `Unstable`)
 
-✅ **UnivMonPyramid** - Two-tier sketch dimensions with `UnivSketchPool` for optimized insert and memory management
-
-✅ **Orchestrator** - Node-level manager for sketches and frameworks (EH/HashLayer/Nitro)
+**OctoSketch** - Multi-threaded sketch-serving framework with worker/aggregator architecture ([apis.md](apis.md))
 
 ### Performance Optimizations
 
-✅ **Fast-path methods** - Hash reuse with bit-masking
+**Reduced hashing overhead** — Hashing is often the bottleneck when updating sketches at high throughput. `FastPath` mode computes a single hash per insert and derives all row indices from it via bit-masking, avoiding redundant hash calls. `HashSketchEnsemble` extends this across multiple sketches, so inserting one item into several sketches still costs only one hash.
 
-- `FastPath` mode uses a single hash across rows
-- `Vector2D::fast_query_*` uses bit-sliced row selection
-- `_with_hash_value` helpers enable cross-sketch hash reuse
-- `HashLayer` + `OrchestratedSketch` reuse hashes across sketch collections
+**Cache-friendly memory layout** — Sketch counters are stored in flat, row-major arrays (`Vector1D`, `Vector2D`) so that sequential access patterns hit L1/L2 cache instead of chasing pointers.
 
-✅ **Flat memory layouts** - Cache-friendly row-major storage
+**Zero-copy access** — Query and merge operations work directly on borrowed slices, avoiding unnecessary allocation and copying on the hot path.
 
-✅ **Zero-copy operations** - Direct slice access, borrowed lifetimes
+**Fixed-size storage and monomorphization** — The `impl_fixed_matrix!` macro generates matrix types with compile-time-known dimensions and counter types. This lets the compiler inline size computations, eliminate bounds checks, and fully monomorphize hot loops — removing the overhead of dynamically-sized storage on the critical path.
 
-- **TODO**: requires more benchmark
+### Serialization
+
+**MessagePack (rmp-serde) and Protobuf (prost)** - Dual serialization support across most sketch types
 
 ### Sampling
 
-✅ **Nitro sampling** - Streaming Nitro (`Vector2D`) and batch Nitro (`NitroBatch`)
+**Nitro sampling** - Streaming Nitro (`Vector2D`) and batch Nitro (`NitroBatch`)
 
 ---
 
 ## In Progress
 
-### Infrastructure
-
-🚧 **Serialization** - MessagePack (serde) support for most sketches
-
-- **TODO**: requires further testing and need better integrated support
-
 ### Performance
 
-🚧 **Performance parity for structured sketches**
-
-- Requires more benchmark on different architectures / machines
+- Benchmarking is ongoing across different architectures. Preliminary results will be added here: <!-- TODO: add benchmark figures -->
 
 ### Testing
 
-🚧 **Automated test coverage**
-
-- Needs more unit test
-- Needs strict **correctness** test
-
-### Documentation
-
-🚧 **API documentation expansion**
-
-- ✅ `apis.md` - Canonical API index
-- ✅ `api/api_common.md` - Complete
-- ⚠️ Inline code comments - Partial
+- Current test coverage is documented in [tests.md](tests.md). Additional unit tests and strict correctness tests are in progress.
 
 ### Serialization
 
-🚧 **Full serialization coverage**
+MessagePack (`rmp-serde`) support. **serde support** means the type derives `Serialize`/`Deserialize` and can be used with any serde-compatible serializer. **Built-in helpers** (`serialize_to_bytes` / `deserialize_from_bytes`) provide one-call MessagePack round-tripping without requiring users to depend on `rmp-serde` directly.
 
-- Most sketches supported
-- Missing: Some structured variants, Elastic merge states
-- Built-in serialization / deserialization function wanted
+| Component | serde support | Built-in helpers |
+| --- | --- | --- |
+| CountMin | Yes | Yes |
+| Count / CountL2HH | Yes | Yes |
+| HyperLogLog (all variants) | Yes | Yes |
+| DDSketch | Yes | Yes |
+| KLL / KLLDynamic | Yes | Yes |
+| KMV | Yes | Yes |
+| Elastic | Yes | In Progress |
+| Coco | Yes | In Progress |
+| UniformSampling | Yes | In Progress |
+| FoldCMS / FoldCS | Yes | In Progress |
+| CMSHeap / CSHeap | In Progress | In Progress |
+| Hydra | Yes | Yes |
+| UnivMon | Yes | Yes |
+| NitroBatch | Yes | In Progress |
+| EHSketchList | Yes | In Progress |
+
+Protobuf (prost): `.proto` definitions exist for CountMin, Count, HLL, DDSketch, KLL, Elastic, Coco, Hydra, and UnivMon. Rust conversion code is in progress.
 
 ### API Stability
 
-🚧 **Sketchbook ergonomics**
-
-- Public APIs still evolving
-- Naming and structure may change
-- EHSketchList/Hydra/UnivMon interfaces stabilizing
+- Public APIs are stabilizing but may still change in naming and structure
 
 ---
 
@@ -130,100 +112,12 @@ This document provides a high-level overview of implemented and planned features
 
 ### Performance Optimization
 
-📋 **SIMD support**
+**SIMD support**
 
 - Vector operations for counter updates (AVX2/NEON)
-- [TODO: Investigate Rust SIMD support and sketch compatibility]
-
-📋 **Custom hash functions**
-
-- Native xxhash algorithm implementation
-- Bit-selective hashing: Generate only required bits (e.g., 32-bit instead of 128-bit)
-- Goal: Faster hashing when full 128-bit output isn't needed
-
-📋 **Hash reuse extensions**
-
-- Broader hash-domain reuse across more sketch families
-- Optional shared hash caches for Hydra/MultiHeadHydra updates
-
-📋 **Prefetching hints**
-
-- Explicit memory prefetch for large sketches
-- Improve cache hit rates
 
 ### Algorithm Improvements
 
-📋 **Custom RNG for KLL**
+**Custom RNG for KLL**
 
-- Fast coin-flipping random number generator
-- Optimized for KLL compactor operations
-- [TODO: Define performance requirements]
-
-📋 **Generic type support for SketchInput**
-
-- Allow custom types `T` to implement `SketchInput`
-- Challenges: Trait requirements, lifetime management
-
-📋 **KLL generalization**
-
-- Broader accuracy/space trade-offs
-- Enhanced quantile query capabilities
-
-### Framework Enhancements
-
-📋 **OctoSketch coordinator**
-
-- Alternative sketch-serving framework
-- [TODO: Define use cases and differences from Hydra/UnivMon]
-
-📋 **Nitro sampling refinements**
-
-- Tighter accuracy/throughput tuning
-- Additional sampling tables beyond the 1% preset
-
-### Testing & Quality
-
-📋 **Comprehensive test suite**
-
-- Property tests for all sketches
-- Accuracy validation tests
-- Heavy hitter detection tests
-- Quantile accuracy sweeps
-
-📋 **Benchmark expansion**
-
-- Zipfian distribution workloads
-- Heavy hitter mix scenarios
-- Cardinality estimation speed
-- Query latency percentiles
-
-### Cross Languages support
-
-📋 **Cross Language Usage**
-
-- Serialization needs cross language support
-
-### Migration & Cleanup
-
-📋 **Structured sketch migration**
-
-- Complete migration of legacy sketches to common structures
-- Deprecate or remove old implementations
-- Achieve API parity (merge, debug, etc.)
-
----
-
-## Research & Experimental
-
-### Explored But Not Implemented
-
-💡 **Extra hash layer location**
-
-- Where to inject hash value coordination?
-- **Data plane** vs **control plane** separation unclear
-- Needs design iteration
-
-💡 **Data/control plane separation**
-
-- Current API doesn't clearly separate concerns
-- May impact performance optimization opportunities
+- Fast coin-flipping random number generator optimized for KLL compactor operations
