@@ -53,7 +53,7 @@ use asap_sketchlib::{ErtlMLE, HyperLogLog, SketchInput};
 // the `Classic` variant, especially at very low or very high cardinalities.
 let mut hll = HyperLogLog::<ErtlMLE>::default();
 
-// Insert some user IDs — duplicates are fine, HLL handles them.
+// Insert some user IDs — HLL handles distinct counting and deduplicates items.
 for user_id in [101, 202, 303, 101, 404, 202, 505, 101] {
     hll.insert(&SketchInput::U64(user_id));
 }
@@ -75,13 +75,24 @@ use asap_sketchlib::{CountMin, FastPath, Vector2D, SketchInput};
 // than the default RegularPath which hashes once per row.
 let mut cms = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 2048);
 
-// Simulate an event stream
-for _ in 0..1000 { cms.insert(&SketchInput::Str("page_view")); }
-for _ in 0..50  { cms.insert(&SketchInput::Str("purchase")); }
+// Simulate an event stream with known frequencies.
+let events = [
+    ("page_view", 1000),
+    ("click",      500),
+    ("signup",     100),
+    ("purchase",    50),
+];
+for &(event, count) in &events {
+    for _ in 0..count {
+        cms.insert(&SketchInput::Str(event));
+    }
+}
 
-let page_views = cms.estimate(&SketchInput::Str("page_view"));
-let purchases  = cms.estimate(&SketchInput::Str("purchase"));
-println!("page_view ≈ {page_views}, purchase ≈ {purchases}");
+// Estimates are close to the true counts (CMS may over-count, but never under-counts).
+for &(event, true_count) in &events {
+    let est = cms.estimate(&SketchInput::Str(event));
+    println!("{event:>10}: estimate = {est}, true = {true_count}");
+}
 ```
 
 ### Track latency percentiles with KLL
