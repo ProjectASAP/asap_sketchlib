@@ -151,6 +151,18 @@ cargo build --all-targets
 cargo test --all-features
 ```
 
+- `--all-targets` builds everything: the library, binaries, and tests.
+- `--all-features` enables every Cargo feature, so all feature-gated code is compiled and tested. The features include:
+  - `experimental` — enables sketches and APIs that are still under development and may change without notice.
+  - `octo-runtime` — enables the Octo multi-threaded runtime (pulls in `core_affinity` and `crossbeam-channel`).
+
+To build or test with a specific feature:
+
+```bash
+cargo build --features experimental
+cargo test --features "experimental octo-runtime"
+```
+
 ## Contributors
 
 ### Major Contributors
