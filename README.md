@@ -192,6 +192,6 @@ cargo test --features "experimental octo-runtime"
 
 ## License
 
-Copyright 2025 ProjectASAP
+Copyright 2025 - present ProjectASAP
 
 Licensed under the MIT License. See [LICENSE](https://github.com/ProjectASAP/asap_sketchlib/blob/main/LICENSE).
