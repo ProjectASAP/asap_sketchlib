@@ -14,7 +14,7 @@
 //!
 //! * `CountMin<_, FastPath, _>` — Count-Min Sketch (fast path)
 //! * `Count<_, FastPath, _>` — Count Sketch (fast path)
-//! * `HyperLogLog<ErtlMLE>` / `HyperLogLog<Regular>` / `HyperLogLogHIP`
+//! * `HyperLogLog<ErtlMLE>` / `HyperLogLog<Classic>` / `HyperLogLogHIP`
 //!
 //! All matrix-backed sketches (CMS / Count) in one layer must agree on the
 //! same hash layout (determined by rows × cols dimensions).  HLL sketches can
@@ -32,7 +32,7 @@
 
 use crate::{
     Count, CountMin, DefaultXxHasher, ErtlMLE, FastPath, HyperLogLog, HyperLogLogHIP,
-    MatrixHashMode, MatrixHashType, Regular, SketchHasher, SketchInput, Vector1D,
+    MatrixHashMode, MatrixHashType, Classic, SketchHasher, SketchInput, Vector1D,
     hash_for_matrix_seeded_with_mode_generic, hash_mode_for_matrix,
     sketch_framework::sketch_catalog::{CountFastOps, CountMinFastOps},
 };
@@ -66,7 +66,7 @@ pub enum EnsembleSketch {
     CountMinFast(Box<dyn CountMinFastOps>),
     CountFast(Box<dyn CountFastOps>),
     HllErtl(HyperLogLog<ErtlMLE>),
-    HllRegular(HyperLogLog<Regular>),
+    HllClassic(HyperLogLog<Classic>),
     HllHip(HyperLogLogHIP),
 }
 
@@ -76,7 +76,7 @@ impl EnsembleSketch {
             EnsembleSketch::CountMinFast(_) => "CountMin",
             EnsembleSketch::CountFast(_) => "Count",
             EnsembleSketch::HllErtl(_)
-            | EnsembleSketch::HllRegular(_)
+            | EnsembleSketch::HllClassic(_)
             | EnsembleSketch::HllHip(_) => "HLL",
         }
     }
@@ -88,7 +88,7 @@ impl EnsembleSketch {
             }
             EnsembleSketch::CountFast(s) => Some(HashConfig::from_dimensions(s.rows(), s.cols())),
             EnsembleSketch::HllErtl(_)
-            | EnsembleSketch::HllRegular(_)
+            | EnsembleSketch::HllClassic(_)
             | EnsembleSketch::HllHip(_) => None,
         }
     }
@@ -98,7 +98,7 @@ impl EnsembleSketch {
             EnsembleSketch::CountMinFast(sketch) => sketch.fast_insert(hash),
             EnsembleSketch::CountFast(sketch) => sketch.fast_insert(hash),
             EnsembleSketch::HllErtl(hll) => hll.insert_with_hash(hash.lower_64()),
-            EnsembleSketch::HllRegular(hll) => hll.insert_with_hash(hash.lower_64()),
+            EnsembleSketch::HllClassic(hll) => hll.insert_with_hash(hash.lower_64()),
             EnsembleSketch::HllHip(hll) => hll.insert_with_hash(hash.lower_64()),
         }
     }
@@ -110,7 +110,7 @@ impl EnsembleSketch {
             EnsembleSketch::CountMinFast(sketch) => Some(sketch.fast_estimate(hash)),
             EnsembleSketch::CountFast(sketch) => Some(sketch.fast_estimate(hash)),
             EnsembleSketch::HllErtl(_)
-            | EnsembleSketch::HllRegular(_)
+            | EnsembleSketch::HllClassic(_)
             | EnsembleSketch::HllHip(_) => None,
         }
     }
@@ -120,7 +120,7 @@ impl EnsembleSketch {
     pub fn cardinality(&self) -> Option<f64> {
         match self {
             EnsembleSketch::HllErtl(hll) => Some(hll.estimate() as f64),
-            EnsembleSketch::HllRegular(hll) => Some(hll.estimate() as f64),
+            EnsembleSketch::HllClassic(hll) => Some(hll.estimate() as f64),
             EnsembleSketch::HllHip(hll) => Some(hll.estimate() as f64),
             EnsembleSketch::CountMinFast(_) | EnsembleSketch::CountFast(_) => None,
         }
@@ -160,9 +160,9 @@ impl From<HyperLogLog<ErtlMLE>> for EnsembleSketch {
     }
 }
 
-impl From<HyperLogLog<Regular>> for EnsembleSketch {
-    fn from(value: HyperLogLog<Regular>) -> Self {
-        EnsembleSketch::HllRegular(value)
+impl From<HyperLogLog<Classic>> for EnsembleSketch {
+    fn from(value: HyperLogLog<Classic>) -> Self {
+        EnsembleSketch::HllClassic(value)
     }
 }
 

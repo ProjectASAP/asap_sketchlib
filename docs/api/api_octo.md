@@ -115,7 +115,7 @@ child.insert_emit_delta(&key, &mut |delta: CountDelta| {
 ## HyperLogLog Delta API
 
 Available on all `HyperLogLogImpl<Variant, Registers, H>` variants
-(Regular, ErtlMLE, and any precision level).
+(Classic, ErtlMLE, and any precision level).
 
 ```rust
 fn insert_emit_delta(&mut self, obj: &SketchInput, emit: &mut impl FnMut(HllDelta))
@@ -133,11 +133,11 @@ every improvement is emitted immediately.
 ### HyperLogLog Example
 
 ```rust
-use asap_sketchlib::{HyperLogLog, Regular, SketchInput};
+use asap_sketchlib::{HyperLogLog, Classic, SketchInput};
 use asap_sketchlib::sketches::octo_delta::HllDelta;
 
-let mut child = HyperLogLog::<Regular>::default();
-let mut parent = HyperLogLog::<Regular>::default();
+let mut child = HyperLogLog::<Classic>::default();
+let mut parent = HyperLogLog::<Classic>::default();
 
 child.insert_emit_delta(&SketchInput::U64(1), &mut |delta: HllDelta| {
     parent.apply_delta(delta);

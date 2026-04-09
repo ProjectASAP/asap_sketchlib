@@ -21,7 +21,7 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 
 use crate::{
-    CmDelta, Count, CountDelta, CountMin, HllDelta, HyperLogLog, Regular, RegularPath, SketchInput,
+    CmDelta, Count, CountDelta, CountMin, HllDelta, HyperLogLog, Classic, RegularPath, SketchInput,
     Vector2D,
 };
 
@@ -449,7 +449,7 @@ impl OctoAggregator for CountOctoAggregator {
 
 /// OctoSketch worker backed by `HyperLogLog`.
 pub struct HllOctoWorker {
-    child: HyperLogLog<Regular>,
+    child: HyperLogLog<Classic>,
 }
 
 impl HllOctoWorker {
@@ -478,9 +478,9 @@ impl OctoWorker for HllOctoWorker {
     }
 }
 
-/// OctoSketch parent wrapping a full-precision `HyperLogLog<Regular>`.
+/// OctoSketch parent wrapping a full-precision `HyperLogLog<Classic>`.
 pub struct HllOctoAggregator {
-    pub sketch: HyperLogLog<Regular>,
+    pub sketch: HyperLogLog<Classic>,
 }
 
 impl OctoAggregator for HllOctoAggregator {
@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn hll_child_emits_delta_on_improvement() {
-        let mut child = HyperLogLog::<Regular>::default();
+        let mut child = HyperLogLog::<Classic>::default();
         let mut deltas: Vec<HllDelta> = Vec::new();
 
         // First insert should always emit (register goes from 0 to something > 0).
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn hll_apply_delta_updates_register() {
-        let mut parent = HyperLogLog::<Regular>::default();
+        let mut parent = HyperLogLog::<Classic>::default();
         let delta = HllDelta {
             pos: 100,
             value: 10,
@@ -697,7 +697,7 @@ mod tests {
             &config,
             |_| HllOctoWorker::new(),
             || HllOctoAggregator {
-                sketch: HyperLogLog::<Regular>::default(),
+                sketch: HyperLogLog::<Classic>::default(),
             },
         );
 
@@ -761,7 +761,7 @@ mod tests {
             &config,
             |_| HllOctoWorker::new(),
             || HllOctoAggregator {
-                sketch: HyperLogLog::<Regular>::default(),
+                sketch: HyperLogLog::<Classic>::default(),
             },
         );
 
@@ -824,7 +824,7 @@ mod tests {
             &config,
             |_| HllOctoWorker::new(),
             || HllOctoAggregator {
-                sketch: HyperLogLog::<Regular>::default(),
+                sketch: HyperLogLog::<Classic>::default(),
             },
         );
 
@@ -886,7 +886,7 @@ mod tests {
             &config,
             |_| HllOctoWorker::new(),
             || HllOctoAggregator {
-                sketch: HyperLogLog::<Regular>::default(),
+                sketch: HyperLogLog::<Classic>::default(),
             },
         );
         runtime.close();
@@ -907,7 +907,7 @@ mod tests {
             &config,
             |_| HllOctoWorker::new(),
             || HllOctoAggregator {
-                sketch: HyperLogLog::<Regular>::default(),
+                sketch: HyperLogLog::<Classic>::default(),
             },
         );
         runtime.close();
@@ -925,7 +925,7 @@ mod tests {
             &config,
             |_| HllOctoWorker::new(),
             || HllOctoAggregator {
-                sketch: HyperLogLog::<Regular>::default(),
+                sketch: HyperLogLog::<Classic>::default(),
             },
         );
         let result = runtime.finish();

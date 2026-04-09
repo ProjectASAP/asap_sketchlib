@@ -64,7 +64,7 @@ Only sketches with a prehashed insertion path are accepted:
 
 - `CountMin<_, FastPath, _>` — Count-Min Sketch (fast path)
 - `Count<_, FastPath, _>` — Count Sketch (fast path)
-- `HyperLogLog<ErtlMLE>` / `HyperLogLog<Regular>` / `HyperLogLogHIP`
+- `HyperLogLog<ErtlMLE>` / `HyperLogLog<Classic>` / `HyperLogLogHIP`
 
 All matrix-backed sketches (CMS / Count) in one ensemble must share the same hash layout (rows × cols dimensions). HLL sketches can coexist with them because they only consume the lower 64 bits of the shared hash.
 

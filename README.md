@@ -24,7 +24,7 @@ When Apache DataSketches may be a better fit:
 | Goal | Sketch | When to pick it | What it does | Pandas equivalent | Polars equivalent |
 | --- | --- | --- | --- | --- | --- |
 | Frequency estimation | `CountMin`, `Count Sketch` | Fast approximate counts for high-volume keys | Estimates how often each key appears in a stream | `df.groupby("key").size()` | `df.group_by("key").agg(pl.len())` |
-| Cardinality estimation | `HyperLogLog` (`Regular`, `ErtlMLE`, `HIP`) | Approximate distinct counts with bounded memory | Estimates the number of unique elements | `df["col"].nunique()` | `df["col"].n_unique()` |
+| Cardinality estimation | `HyperLogLog` (`Classic`, `ErtlMLE`, `HIP`) | Approximate distinct counts with bounded memory | Estimates the number of unique elements | `df["col"].nunique()` | `df["col"].n_unique()` |
 | Quantiles / distribution | `KLL`, `DDSketch` | Percentile / latency summaries over streams | Approximates arbitrary quantiles (e.g. p50, p99) of a value distribution | `df["col"].quantile(0.99)` | `df["col"].quantile(0.99)` |
 | Subpopulation queries | `Hydra` | Hierarchical / filtered sketch queries | Answers sketch queries over arbitrary subpopulations without maintaining per-group sketches | No direct equivalent — requires per-group aggregation | No direct equivalent — requires per-group aggregation |
 | Universal monitoring | `UnivMon` | G-sum queries (L1/L2 norms, cardinality, entropy) | Estimates a broad class of streaming statistics in a single pass | No direct equivalent — requires custom multi-pass pipelines | No direct equivalent — requires custom multi-pass pipelines |
@@ -50,7 +50,7 @@ use asap_sketchlib::{ErtlMLE, HyperLogLog, SketchInput};
 
 // HyperLogLog estimates the number of distinct items in a stream using fixed memory.
 // ErtlMLE is one of the HLL variants we offer — it tends to be more accurate than
-// the classic ("Regular") version, especially at very low or very high cardinalities.
+// the `Classic` variant, especially at very low or very high cardinalities.
 let mut hll = HyperLogLog::<ErtlMLE>::default();
 
 // Insert some user IDs — duplicates are fine, HLL handles them.

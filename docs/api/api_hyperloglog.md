@@ -13,7 +13,7 @@ multiple precision levels.
 
 ### Algorithm Variants
 
-- `HyperLogLog<Regular, H>` — classic HyperLogLog (Flajolet et al.).
+- `HyperLogLog<Classic, H>` — classic HyperLogLog (Flajolet et al.).
 - `HyperLogLog<ErtlMLE, H>` — improved estimator (Ertl, arXiv:1702.01284).
 - `HyperLogLogHIP` — Historic Inverse Probability estimator (Lang, arXiv:1708.06839). Not mergeable.
 
@@ -57,7 +57,7 @@ fn insert_many_with_hashes(&mut self, hashes: &[u64])
 fn estimate(&self) -> usize
 ```
 
-`Regular` also exposes:
+`Classic` also exposes:
 
 ```rust
 fn indicator(&self) -> f64
@@ -69,7 +69,7 @@ fn indicator(&self) -> f64
 fn merge(&mut self, other: &Self)
 ```
 
-Available on `Regular` and `ErtlMLE` variants. **Not available on HIP.**
+Available on `Classic` and `ErtlMLE` variants. **Not available on HIP.**
 
 ## Serialization
 

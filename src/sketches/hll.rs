@@ -60,7 +60,7 @@ pub struct HyperLogLogImpl<
 
 /// Marker type selecting the classic HyperLogLog estimation algorithm.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
-pub struct Regular;
+pub struct Classic;
 /// Marker type selecting the Ertl MLE estimation algorithm (arXiv:1702.01284).
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct ErtlMLE;
@@ -175,8 +175,8 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     }
 }
 
-impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Regular, Registers, H> {
-    /// Creates a new HyperLogLog sketch with the classic (Regular) estimator.
+impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Classic, Registers, H> {
+    /// Creates a new HyperLogLog sketch with the Classic estimator.
     pub fn new() -> Self {
         Self::new_base()
     }
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn hll_child_insert_emits_on_improvement() {
-        let mut child = HyperLogLog::<Regular>::default();
+        let mut child = HyperLogLog::<Classic>::default();
         let mut deltas: Vec<HllDelta> = Vec::new();
 
         child.insert_emit_delta(&SketchInput::U64(1), &mut |d| deltas.push(d));
@@ -468,18 +468,18 @@ mod tests {
     }
 
     impl<Registers: HllRegisterStorage, H: SketchHasher> HllEstimator
-        for HyperLogLogImpl<Regular, Registers, H>
+        for HyperLogLogImpl<Classic, Registers, H>
     {
         fn push(&mut self, input: &SketchInput) {
             self.insert(input);
         }
 
         fn insert_with_hash(&mut self, hashed: u64) {
-            HyperLogLogImpl::<Regular, Registers, H>::insert_with_hash(self, hashed);
+            HyperLogLogImpl::<Classic, Registers, H>::insert_with_hash(self, hashed);
         }
 
         fn estimate(&self) -> f64 {
-            HyperLogLogImpl::<Regular, Registers, H>::estimate(self) as f64
+            HyperLogLogImpl::<Classic, Registers, H>::estimate(self) as f64
         }
 
         fn index(&self, i: usize) -> u8 {
@@ -488,7 +488,7 @@ mod tests {
     }
 
     impl<Registers: HllRegisterStorage, H: SketchHasher> HllMerge
-        for HyperLogLogImpl<Regular, Registers, H>
+        for HyperLogLogImpl<Classic, Registers, H>
     {
         fn merge_into(&mut self, other: &Self) {
             self.merge(other);
@@ -496,14 +496,14 @@ mod tests {
     }
 
     impl<Registers: HllRegisterStorage, H: SketchHasher> HllSerializable
-        for HyperLogLogImpl<Regular, Registers, H>
+        for HyperLogLogImpl<Classic, Registers, H>
     {
         fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-            HyperLogLogImpl::<Regular, Registers, H>::serialize_to_bytes(self)
+            HyperLogLogImpl::<Classic, Registers, H>::serialize_to_bytes(self)
         }
 
         fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-            HyperLogLogImpl::<Regular, Registers, H>::deserialize_from_bytes(bytes)
+            HyperLogLogImpl::<Classic, Registers, H>::deserialize_from_bytes(bytes)
         }
     }
 
@@ -578,7 +578,7 @@ mod tests {
 
     #[test]
     fn hyperloglog_accuracy_within_two_percent() {
-        assert_accuracy::<HyperLogLog<Regular>>("HyperLogLog");
+        assert_accuracy::<HyperLogLog<Classic>>("HyperLogLog");
     }
 
     #[test]
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn hyperloglog_p12_accuracy_within_two_percent() {
-        assert_accuracy_within::<HyperLogLogP12<Regular>>("HyperLogLogP12", P12_ERROR_TOLERANCE);
+        assert_accuracy_within::<HyperLogLogP12<Classic>>("HyperLogLogP12", P12_ERROR_TOLERANCE);
     }
 
     #[test]
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn hyperloglog_merge_within_two_percent() {
-        assert_merge_accuracy::<HyperLogLog<Regular>>("HyperLogLog");
+        assert_merge_accuracy::<HyperLogLog<Classic>>("HyperLogLog");
     }
 
     #[test]
@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn hyperloglog_p12_merge_within_two_percent() {
-        assert_merge_accuracy_within::<HyperLogLogP12<Regular>>(
+        assert_merge_accuracy_within::<HyperLogLogP12<Classic>>(
             "HyperLogLogP12",
             P12_ERROR_TOLERANCE,
         );
@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn hyperloglog_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLog<Regular>>("HyperLogLog");
+        assert_serialization_round_trip::<HyperLogLog<Classic>>("HyperLogLog");
     }
 
     #[test]
@@ -646,7 +646,7 @@ mod tests {
 
     #[test]
     fn hyperloglog_p12_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLogP12<Regular>>("HyperLogLogP12");
+        assert_serialization_round_trip::<HyperLogLogP12<Classic>>("HyperLogLogP12");
     }
 
     #[test]
@@ -662,8 +662,8 @@ mod tests {
     // insert 10 values and check corresponding counter is updated
     #[test]
     fn hll_correctness_test() {
-        let mut hll = HyperLogLog::<Regular>::default();
-        hll_correctness_test_helper::<HyperLogLog<Regular>>(&mut hll);
+        let mut hll = HyperLogLog::<Classic>::default();
+        hll_correctness_test_helper::<HyperLogLog<Classic>>(&mut hll);
         let mut hll_ertl = HyperLogLog::<ErtlMLE>::default();
         hll_correctness_test_helper::<HyperLogLog<ErtlMLE>>(&mut hll_ertl);
         let mut hllds = HyperLogLogHIP::default();
