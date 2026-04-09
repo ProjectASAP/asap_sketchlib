@@ -13,12 +13,6 @@ A Rust library for **streaming data sketches** — fixed-memory data structures 
 - **Algorithms not found elsewhere.** Includes `UnivMon` (universal monitoring), `Hydra` (hierarchical subpopulation sketching), and `NitroBatch`.
 - **Built-in orchestration frameworks** — coordinate multiple sketches with shared hashing (`HashLayer`), manage sliding windows (`ExponentialHistogram`), or run hierarchical queries (`Hydra`).
 
-When Apache DataSketches may be a better fit:
-
-- You need its broader algorithm catalog (CPC, Theta/Tuple with set operators, REQ, VarOpt/Reservoir, FM85).
-- You need cross-language binary compatibility with existing DataSketches deployments in Java, C++, or Python.
-- You need long-running production maturity and an Apache-governed release cycle.
-
 ## Supported Sketches
 
 | Goal | Sketch | When to pick it | What it does | Pandas equivalent | Polars equivalent |
@@ -137,7 +131,7 @@ println!("total unique users ≈ {}", node_a.estimate()); // ≈ 8
 
 Several sketches address the same goal with different trade-offs — for example, `CountMin` vs `Count Sketch` for frequency, or `KLL` vs `DDSketch` for quantiles.
 
-The best approach is to **profile against a representative sample of your data** and compare error, memory, and throughput. The [APIs Index](./docs/apis.md) lists guarantees and caveats for each sketch.
+We are building **SketchPlan**, a profiler that analyzes a representative sample of your data and recommends the best sketch configuration (algorithm, memory budget, error tolerance) for your workload. Until SketchPlan is ready, the [APIs Index](./docs/apis.md) lists guarantees, error bounds, and caveats for each sketch to help you decide.
 
 ## Performance
 
@@ -175,6 +169,14 @@ To build or test with a specific feature:
 cargo build --features experimental
 cargo test --features "experimental octo-runtime"
 ```
+
+## FAQ
+
+### When is Apache DataSketches a better fit?
+
+- You need its broader algorithm catalog (CPC, Theta/Tuple with set operators, REQ, VarOpt/Reservoir, FM85).
+- You need cross-language binary compatibility with existing DataSketches deployments in Java, C++, or Python.
+- You need long-running production maturity and an Apache-governed release cycle.
 
 ## Contributors
 
