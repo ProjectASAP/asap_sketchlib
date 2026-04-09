@@ -3,15 +3,13 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/ProjectASAP/asap_sketchlib/blob/main/LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue.svg)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
 
-A Rust library for **streaming data sketches** — fixed-memory data structures that give approximate answers (counts, distinct counts, percentiles) over data streams too large to store exactly.
+A Rust library for **streaming data sketches** — compact data structures that give approximate answers (counts, distinct counts, percentiles) over data streams too large to store exactly.
 
 ## Why asap_sketchlib
 
-- **Fast.** Up to 8–14× higher insertion throughput than comparable libraries on frequency sketches, and 2–3× on cardinality sketches. See [benchmarks](#performance).
-- **Native Rust, no JNI/FFI bridge.** Memory layout, allocation, and hashing stay within Rust — no overhead from crossing language boundaries.
-- **Consistent API across sketches.** Typed inputs (`SketchInput`) and uniform `insert`/`estimate`/`merge` patterns, with pluggable hashing via `SketchHasher`.
-- **Algorithms not found elsewhere.** Includes `UnivMon` (universal monitoring), `Hydra` (hierarchical subpopulation sketching), and `NitroBatch`.
-- **Built-in orchestration frameworks** — coordinate multiple sketches with shared hashing (`HashLayer`), manage sliding windows (`ExponentialHistogram`), or run hierarchical queries (`Hydra`).
+- **Fast.** Up to 8–14× higher insertion throughput than comparable libraries on frequency sketches, 2–3× on cardinality sketches, and 2–4× on quantile sketches. Rust-native with no language-boundary overhead. See [benchmarks](#performance).
+- **High coverage.** Supports frequency, cardinality, quantile, and distribution sketches (`CountMin`, `Count Sketch`, `HyperLogLog`, `KLL`, `DDSketch`). Also includes algorithms not found in other libraries: `UnivMon` for estimating a broad class of streaming statistics (L1/L2 norms, entropy) in a single pass, `Hydra` for answering sketch queries over arbitrary subpopulations without per-group sketches, and `NitroBatch` for accelerating sketch updates through batching. Unique sketch frameworks for sliding windows (`ExponentialHistogram`) and subpopulation queries (`Hydra`).
+- **Easy to use.** Uniform `insert`/`estimate`/`merge` API across all sketches, input data type (`SketchInput`) for typed inputs, and pluggable hashing input to sketches via `SketchHasher`. Composite multiple sketches with shared hashing (`HashLayer`).
 
 ## Supported Sketches
 
@@ -140,6 +138,8 @@ Insertion throughput on 10M Zipf-distributed values, averaged over 10 runs:
 ![CMS Insertion Throughput](./docs/benchmark_plots/plots/cms/cms_throughput_insertion.png)
 
 ![HLL Insertion Throughput](./docs/benchmark_plots/plots/hll/hll_throughput_insertion.png)
+
+![KLL Insertion Throughput](./docs/benchmark_plots/plots/kll/kll_throughput_insertion.png)
 
 More benchmark results and performance details (cache-friendly layouts, `FastPath` single-hash mode) are in [Performance Notes](./docs/features.md).
 
