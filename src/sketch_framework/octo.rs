@@ -21,7 +21,7 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 
 use crate::{
-    CmDelta, Count, CountDelta, CountMin, HllDelta, HyperLogLog, Classic, RegularPath, SketchInput,
+    Classic, CmDelta, Count, CountDelta, CountMin, HllDelta, HyperLogLog, RegularPath, SketchInput,
     Vector2D,
 };
 

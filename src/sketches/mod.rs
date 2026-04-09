@@ -25,8 +25,8 @@ pub use elastic::HeavyBucket;
 
 pub mod hll;
 pub use hll::{
-    ErtlMLE, HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogHIPP16,
-    HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, Classic,
+    Classic, ErtlMLE, HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogHIPP14,
+    HyperLogLogHIPP16, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16,
 };
 
 pub mod kll;
