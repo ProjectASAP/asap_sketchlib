@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::common::input::{heap_item_to_sketch_input, input_to_owned};
 use crate::sketch_framework::univmon_optimized::UnivSketchPool;
-use crate::{HeapItem, SketchInput, UnivMon};
+use crate::{DataInput, HeapItem, UnivMon};
 
 const MASS_EPSILON: f64 = 1e-9;
 const DEFAULT_HEAP_SIZE: usize = 32;
@@ -175,7 +175,7 @@ impl EHUnivOptimized {
         )
     }
 
-    pub fn update(&mut self, time: u64, key: &SketchInput, value: i64) {
+    pub fn update(&mut self, time: u64, key: &DataInput, value: i64) {
         // 1. Expire old sketch buckets, recycling sketches to pool
         let cutoff = time.saturating_sub(self.window);
         let expired_count = self
@@ -531,9 +531,9 @@ mod tests {
     fn basic_insertion_and_query() {
         let mut eh = EHUnivOptimized::with_defaults(4, 1000);
 
-        eh.update(100, &SketchInput::I64(1), 5);
-        eh.update(101, &SketchInput::I64(2), 3);
-        eh.update(102, &SketchInput::I64(1), 2);
+        eh.update(100, &DataInput::I64(1), 5);
+        eh.update(101, &DataInput::I64(2), 3);
+        eh.update(102, &DataInput::I64(1), 2);
 
         assert!(eh.um_buckets.is_empty());
         assert!(!eh.map_buckets.is_empty());
@@ -563,7 +563,7 @@ mod tests {
         let mut eh = EHUnivOptimized::with_defaults(1, 10000);
 
         for i in 0..50u64 {
-            eh.update(i, &SketchInput::I64(i as i64), 1);
+            eh.update(i, &DataInput::I64(i as i64), 1);
         }
 
         // With k=1 and L2 merging, bucket count should stay bounded
@@ -585,7 +585,7 @@ mod tests {
 
         // Insert many distinct keys to grow the oldest map bucket
         for i in 0..200u64 {
-            eh.update(i, &SketchInput::I64(i as i64), 1);
+            eh.update(i, &DataInput::I64(i as i64), 1);
         }
 
         assert!(
@@ -598,14 +598,14 @@ mod tests {
     fn window_expiration() {
         let mut eh = EHUnivOptimized::with_defaults(4, 100);
 
-        eh.update(10, &SketchInput::I64(1), 1);
-        eh.update(20, &SketchInput::I64(2), 1);
-        eh.update(30, &SketchInput::I64(3), 1);
+        eh.update(10, &DataInput::I64(1), 1);
+        eh.update(20, &DataInput::I64(2), 1);
+        eh.update(30, &DataInput::I64(3), 1);
 
         assert_eq!(eh.get_min_time(), Some(10));
 
         // This update at time=200 should expire buckets with max_time < 200-100=100
-        eh.update(200, &SketchInput::I64(4), 1);
+        eh.update(200, &DataInput::I64(4), 1);
 
         // All buckets with max_time < 100 should be gone
         assert!(
@@ -623,7 +623,7 @@ mod tests {
 
         // Insert enough distinct keys to force promotion
         for i in 0..200u64 {
-            eh.update(i, &SketchInput::I64(i as i64), 1);
+            eh.update(i, &DataInput::I64(i as i64), 1);
         }
 
         assert!(!eh.um_buckets.is_empty(), "Need sketch buckets");
@@ -643,8 +643,8 @@ mod tests {
 
         assert!(!eh.cover(0, 100));
 
-        eh.update(50, &SketchInput::I64(1), 1);
-        eh.update(100, &SketchInput::I64(2), 1);
+        eh.update(50, &DataInput::I64(1), 1);
+        eh.update(100, &DataInput::I64(2), 1);
 
         assert!(eh.cover(50, 100));
         assert!(eh.cover(60, 90));
@@ -662,7 +662,7 @@ mod tests {
         let mut time = 0u64;
         for &(key, count) in &data {
             for _ in 0..count {
-                eh.update(time, &SketchInput::I64(key), 1);
+                eh.update(time, &DataInput::I64(key), 1);
                 time += 1;
             }
         }
@@ -736,7 +736,7 @@ mod tests {
 
         // Insert enough to trigger promotions
         for i in 0..200u64 {
-            eh.update(i, &SketchInput::I64(i as i64), 1);
+            eh.update(i, &DataInput::I64(i as i64), 1);
         }
 
         assert!(!eh.um_buckets.is_empty());
@@ -808,7 +808,7 @@ mod tests {
         let mut time = 0u64;
         for &(key, count) in &data {
             for _ in 0..count {
-                eh.update(time, &SketchInput::I64(key), 1);
+                eh.update(time, &DataInput::I64(key), 1);
                 time += 1;
             }
         }
@@ -835,11 +835,11 @@ mod tests {
 
         // Phase 1: t=0..99, key=1
         for t in 0..100u64 {
-            eh.update(t, &SketchInput::I64(1), 1);
+            eh.update(t, &DataInput::I64(1), 1);
         }
         // Phase 2: t=100..199, key=2
         for t in 100..200u64 {
-            eh.update(t, &SketchInput::I64(2), 1);
+            eh.update(t, &DataInput::I64(2), 1);
         }
 
         // Full interval
@@ -857,11 +857,11 @@ mod tests {
 
         // Insert key=1 at times 0..49
         for t in 0..50u64 {
-            eh.update(t, &SketchInput::I64(1), 1);
+            eh.update(t, &DataInput::I64(1), 1);
         }
         // Insert key=2 at times 50..249 (push well past the window)
         for t in 50..250u64 {
-            eh.update(t, &SketchInput::I64(2), 1);
+            eh.update(t, &DataInput::I64(2), 1);
         }
 
         // At time 249, cutoff = 249 - 100 = 149. Buckets with max_time < 149 are expired.
@@ -883,7 +883,7 @@ mod tests {
 
         let mut max_bucket = 0;
         for t in 0..20000u64 {
-            eh.update(t, &SketchInput::I64((t % 100) as i64), 1);
+            eh.update(t, &DataInput::I64((t % 100) as i64), 1);
             max_bucket = max_bucket.max(eh.bucket_count());
         }
 
@@ -905,7 +905,7 @@ mod tests {
 
         // Run a long stream with sliding window to exercise expiration and reuse
         for t in 0..2000u64 {
-            eh.update(t, &SketchInput::I64((t % 50) as i64), 1);
+            eh.update(t, &DataInput::I64((t % 50) as i64), 1);
         }
 
         // The system should still be functional and pool should not have grown unboundedly
@@ -932,7 +932,7 @@ mod tests {
 
         // Insert enough distinct keys to trigger multiple promotions and merges
         for t in 0..1000u64 {
-            eh.update(t, &SketchInput::I64((t % 200) as i64), 1);
+            eh.update(t, &DataInput::I64((t % 200) as i64), 1);
         }
 
         // After merging, each sketch bucket should have a valid L2 mass
@@ -970,21 +970,21 @@ mod tests {
 
         // Heavy hitter: key=0, count=5000
         for _ in 0..5000 {
-            eh.update(time, &SketchInput::I64(0), 1);
+            eh.update(time, &DataInput::I64(0), 1);
             samples.push((time, 0));
             time += 1;
         }
         // Medium flows: keys 1..=20, count=200 each
         for key in 1..=20i64 {
             for _ in 0..200 {
-                eh.update(time, &SketchInput::I64(key), 1);
+                eh.update(time, &DataInput::I64(key), 1);
                 samples.push((time, key));
                 time += 1;
             }
         }
         // Light flows: keys 21..=1020, count=1 each
         for key in 21..=1020i64 {
-            eh.update(time, &SketchInput::I64(key), 1);
+            eh.update(time, &DataInput::I64(key), 1);
             samples.push((time, key));
             time += 1;
         }
@@ -1013,7 +1013,7 @@ mod tests {
 
         for _ in 0..count_per_key {
             for key in 0..num_keys {
-                eh.update(time, &SketchInput::I64(key), 1);
+                eh.update(time, &DataInput::I64(key), 1);
                 samples.push((time, key));
                 time += 1;
             }
@@ -1048,7 +1048,7 @@ mod tests {
         let mut all_samples: Vec<(u64, i64)> = Vec::new();
         for t in 0..total_length {
             let key = (rng.random::<u32>() % 500) as i64;
-            eh.update(t, &SketchInput::I64(key), 1);
+            eh.update(t, &DataInput::I64(key), 1);
             all_samples.push((t, key));
         }
 
@@ -1092,7 +1092,7 @@ mod tests {
         for query_t in (window..total_length).step_by(query_interval as usize) {
             let mut eh2 = EHUnivOptimized::with_defaults(8, window);
             for t in 0..=query_t {
-                eh2.update(t, &SketchInput::I64(all_samples[t as usize].1), 1);
+                eh2.update(t, &DataInput::I64(all_samples[t as usize].1), 1);
             }
 
             let t1 = query_t.saturating_sub(window - 1);
@@ -1173,7 +1173,7 @@ mod tests {
         for &k in &[2, 8, 32] {
             let mut eh = EHUnivOptimized::with_defaults(k, window);
             for (t, &key) in stream.iter().enumerate() {
-                eh.update(t as u64, &SketchInput::I64(key), 1);
+                eh.update(t as u64, &DataInput::I64(key), 1);
             }
 
             let t1 = stream_len - window;
@@ -1219,7 +1219,7 @@ mod tests {
 
         for t in 0..total_length {
             let key = (rng.random::<u32>() % 300) as i64;
-            eh.update(t, &SketchInput::I64(key), 1);
+            eh.update(t, &DataInput::I64(key), 1);
             all_samples.push((t, key));
         }
 
@@ -1262,14 +1262,14 @@ mod tests {
         // Phase 1 (t=0..1999): highly skewed, key=0 is heavy
         for t in 0..2000u64 {
             let key = if t % 5 == 0 { 0 } else { (t % 10 + 1) as i64 };
-            eh.update(t, &SketchInput::I64(key), 1);
+            eh.update(t, &DataInput::I64(key), 1);
             all_samples.push((t, key));
         }
 
         // Phase 2 (t=2000..3999): uniform-ish, 50 distinct keys
         for t in 2000..4000u64 {
             let key = (t % 50) as i64;
-            eh.update(t, &SketchInput::I64(key), 1);
+            eh.update(t, &DataInput::I64(key), 1);
             all_samples.push((t, key));
         }
 

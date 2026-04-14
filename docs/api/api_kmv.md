@@ -22,7 +22,7 @@ fn new(k: usize) -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, item: &SketchInput)
+fn insert(&mut self, item: &DataInput)
 fn insert_by_hash(&mut self, hash_value: u64)
 ```
 
@@ -48,10 +48,10 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use asap_sketchlib::{KMV, SketchInput};
+use asap_sketchlib::{KMV, DataInput};
 
 let mut kmv = KMV::new(1024);
-kmv.insert(&SketchInput::U64(1));
+kmv.insert(&DataInput::U64(1));
 let _ = kmv.estimate();
 ```
 

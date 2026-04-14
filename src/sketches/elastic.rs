@@ -5,7 +5,7 @@
 //!   SIGCOMM 2018.
 //!   <https://dl.acm.org/doi/10.1145/3230543.3230544>
 
-use crate::{CANONICAL_HASH_SEED, DefaultXxHasher, SketchHasher, SketchInput};
+use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, SketchHasher};
 
 use super::{CountMin, RegularPath};
 use crate::Vector2D;
@@ -88,7 +88,7 @@ impl<H: SketchHasher> Elastic<H> {
     }
 
     pub fn insert(&mut self, id: String) {
-        let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::String(id.clone()));
+        let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &DataInput::String(id.clone()));
         let idx = hash as usize % self.bktlen as usize;
         let heavy_bkt = &mut self.heavy[idx];
         if heavy_bkt.flow_id.is_empty() && heavy_bkt.vote_neg == 0 && heavy_bkt.vote_pos == 0 {
@@ -102,27 +102,27 @@ impl<H: SketchHasher> Elastic<H> {
             heavy_bkt.vote_neg += 1;
             if heavy_bkt.vote_neg / heavy_bkt.vote_pos < 8 {
                 // self.light.insert_cm(&id);
-                self.light.insert(&SketchInput::String(id));
+                self.light.insert(&DataInput::String(id));
             } else {
                 let vote = heavy_bkt.vote_pos;
                 heavy_bkt.evict(id);
                 for _ in 0..vote {
                     // self.light. insert_cm(&to_evict);
                     self.light
-                        .insert(&SketchInput::String(heavy_bkt.flow_id.clone()));
+                        .insert(&DataInput::String(heavy_bkt.flow_id.clone()));
                 }
             }
         }
     }
 
     pub fn query(&mut self, id: String) -> i32 {
-        let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::String(id.clone()));
+        let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &DataInput::String(id.clone()));
         let idx = hash as usize % self.bktlen as usize;
         let heavy_bkt = &self.heavy[idx];
         if id == heavy_bkt.flow_id {
             if heavy_bkt.eviction {
                 // let light_result = self.light.get_est(&id) as i32;
-                let light_result = self.light.estimate(&SketchInput::String(id)) as i32;
+                let light_result = self.light.estimate(&DataInput::String(id)) as i32;
                 let heavy_result = heavy_bkt.vote_pos;
                 light_result + heavy_result
             } else {
@@ -130,7 +130,7 @@ impl<H: SketchHasher> Elastic<H> {
             }
         } else {
             // return self.light.get_est(&id) as i32;
-            self.light.estimate(&SketchInput::String(id)) as i32
+            self.light.estimate(&DataInput::String(id)) as i32
         }
     }
 
@@ -155,7 +155,7 @@ impl<H: SketchHasher> Elastic<H> {
         }
         let flow_id = bucket.flow_id.clone();
         for _ in 0..bucket.vote_pos {
-            self.light.insert(&SketchInput::String(flow_id.clone()));
+            self.light.insert(&DataInput::String(flow_id.clone()));
         }
     }
 
@@ -176,10 +176,10 @@ impl<H: SketchHasher> Elastic<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, SketchInput, hash64_seeded};
+    use crate::{CANONICAL_HASH_SEED, DataInput, hash64_seeded};
 
     fn bucket_for(id: &str, sketch: &Elastic) -> usize {
-        let hash = hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::String(id.to_string()));
+        let hash = hash64_seeded(CANONICAL_HASH_SEED, &DataInput::String(id.to_string()));
         hash as usize % sketch.bktlen as usize
     }
 

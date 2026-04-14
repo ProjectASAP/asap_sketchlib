@@ -16,7 +16,7 @@ use rmp_serde::encode::Error as RmpEncodeError;
 use serde::{Deserialize, Serialize};
 
 use crate::common::input::sketch_input_to_f64;
-use crate::{SketchInput, Vector1D};
+use crate::{DataInput, Vector1D};
 
 const MAX_LEVELS: usize = 61;
 
@@ -253,8 +253,8 @@ impl KLL {
         }
     }
 
-    /// Inserts a value from a [`SketchInput`] into the sketch.
-    pub fn update(&mut self, val: &SketchInput) -> Result<(), &'static str> {
+    /// Inserts a value from a [`DataInput`] into the sketch.
+    pub fn update(&mut self, val: &DataInput) -> Result<(), &'static str> {
         let value = sketch_input_to_f64(val)?;
         self.push_value(value);
         Ok(())
@@ -718,7 +718,7 @@ mod tests {
         };
 
         for &value in &values {
-            sketch.update(&SketchInput::F64(value)).unwrap();
+            sketch.update(&DataInput::F64(value)).unwrap();
         }
 
         (sketch, values)
@@ -825,15 +825,15 @@ mod tests {
     }
 
     #[test]
-    fn test_sketch_input_api() {
+    fn test_data_input_api() {
         let mut kll = KLL::init_kll(128);
 
         // Test with different numeric types
-        kll.update(&SketchInput::I32(10)).unwrap();
-        kll.update(&SketchInput::I64(20)).unwrap();
-        kll.update(&SketchInput::F64(30.5)).unwrap();
-        kll.update(&SketchInput::F32(40.2)).unwrap();
-        kll.update(&SketchInput::U32(50)).unwrap();
+        kll.update(&DataInput::I32(10)).unwrap();
+        kll.update(&DataInput::I64(20)).unwrap();
+        kll.update(&DataInput::F64(30.5)).unwrap();
+        kll.update(&DataInput::F32(40.2)).unwrap();
+        kll.update(&DataInput::U32(50)).unwrap();
 
         // Query quantiles
         let cdf = kll.cdf();
@@ -844,7 +844,7 @@ mod tests {
         assert!(median > 20.0 && median < 40.2, "Median = {}", median);
 
         // Test error handling for non-numeric input
-        let result = kll.update(&SketchInput::String("not a number".to_string()));
+        let result = kll.update(&DataInput::String("not a number".to_string()));
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -857,15 +857,15 @@ mod tests {
         // force compaction to happen with small k/m
         let mut kll = KLL::init(3, 3);
         // kll.print_compactors();
-        kll.update(&SketchInput::F64(10.0)).unwrap();
+        kll.update(&DataInput::F64(10.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&SketchInput::F64(20.0)).unwrap();
+        kll.update(&DataInput::F64(20.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&SketchInput::F64(30.0)).unwrap();
+        kll.update(&DataInput::F64(30.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&SketchInput::F64(40.0)).unwrap();
+        kll.update(&DataInput::F64(40.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&SketchInput::F64(50.0)).unwrap();
+        kll.update(&DataInput::F64(50.0)).unwrap();
         // kll.print_compactors();
         let cdf = kll.cdf();
         // cdf.print_entries();
@@ -879,15 +879,15 @@ mod tests {
         // no compaction should happen
         let mut kll = KLL::init_kll(8);
         // kll.print_compactors();
-        kll.update(&SketchInput::F64(10.0)).unwrap();
+        kll.update(&DataInput::F64(10.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&SketchInput::F64(20.0)).unwrap();
+        kll.update(&DataInput::F64(20.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&SketchInput::F64(30.0)).unwrap();
+        kll.update(&DataInput::F64(30.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&SketchInput::F64(40.0)).unwrap();
+        kll.update(&DataInput::F64(40.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&SketchInput::F64(50.0)).unwrap();
+        kll.update(&DataInput::F64(50.0)).unwrap();
         // kll.print_compactors();
 
         // Query quantiles
@@ -918,9 +918,9 @@ mod tests {
 
         for (idx, value) in values.iter().copied().enumerate() {
             if idx % 2 == 0 {
-                sketch_a.update(&SketchInput::F64(value)).unwrap();
+                sketch_a.update(&DataInput::F64(value)).unwrap();
             } else {
-                sketch_b.update(&SketchInput::F64(value)).unwrap();
+                sketch_b.update(&DataInput::F64(value)).unwrap();
             }
         }
 
@@ -953,7 +953,7 @@ mod tests {
         let mut sketch = KLL::init_kll(256);
         let samples = sample_uniform_f64(0.0, 1_000_000.0, 5_000, 0xDEAD_BEEF);
         for value in &samples {
-            sketch.update(&SketchInput::F64(*value)).unwrap();
+            sketch.update(&DataInput::F64(*value)).unwrap();
         }
 
         let bytes = sketch.serialize_to_bytes().expect("serialize KLL with rmp");

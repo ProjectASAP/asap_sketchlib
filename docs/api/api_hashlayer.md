@@ -23,16 +23,16 @@ let mut ensemble = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
 ]).unwrap();
 
 // Insert — hashes once, updates all 3 sketches
-ensemble.insert(&SketchInput::U64(42));
+ensemble.insert(&DataInput::U64(42));
 
 // Query frequency (CMS at index 0)
-let freq = ensemble.estimate(0, &SketchInput::U64(42)).unwrap();
+let freq = ensemble.estimate(0, &DataInput::U64(42)).unwrap();
 
 // Query cardinality (HLL at index 2)
 let card = ensemble.cardinality(2).unwrap();
 
 // Pre-computed hash path for hot loops
-let hash = ensemble.hash_input(&SketchInput::U64(42));
+let hash = ensemble.hash_input(&DataInput::U64(42));
 ensemble.insert_with_hash(&hash);
 let freq = ensemble.estimate_with_hash(0, &hash).unwrap();
 ```
@@ -94,7 +94,7 @@ let ensemble = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
 ## Hashing
 
 ```rust
-fn hash_input(&self, input: &SketchInput) -> H::HashType
+fn hash_input(&self, input: &DataInput) -> H::HashType
 ```
 
 Computes the shared hash for an input using the ensemble's hash configuration and hasher `H`.
@@ -102,13 +102,13 @@ Computes the shared hash for an input using the ensemble's hash configuration an
 ## Insertion
 
 ```rust
-fn insert(&mut self, val: &SketchInput)
+fn insert(&mut self, val: &DataInput)
 fn insert_with_hash(&mut self, hash: &H::HashType)
-fn insert_at(&mut self, indices: &[usize], val: &SketchInput)
+fn insert_at(&mut self, indices: &[usize], val: &DataInput)
 fn insert_at_with_hash(&mut self, indices: &[usize], hash: &H::HashType)
-fn bulk_insert(&mut self, values: &[SketchInput])
+fn bulk_insert(&mut self, values: &[DataInput])
 fn bulk_insert_with_hashes(&mut self, hashes: &[H::HashType])
-fn bulk_insert_at(&mut self, indices: &[usize], values: &[SketchInput])
+fn bulk_insert_at(&mut self, indices: &[usize], values: &[DataInput])
 fn bulk_insert_at_with_hashes(&mut self, indices: &[usize], hashes: &[H::HashType])
 ```
 
@@ -121,7 +121,7 @@ Frequency and cardinality queries are split because CMS/Count and HLL answer fun
 ### Frequency (CMS / Count only)
 
 ```rust
-fn estimate(&self, index: usize, val: &SketchInput) -> Result<f64, &'static str>
+fn estimate(&self, index: usize, val: &DataInput) -> Result<f64, &'static str>
 fn estimate_with_hash(&self, index: usize, hash: &H::HashType) -> Result<f64, &'static str>
 ```
 

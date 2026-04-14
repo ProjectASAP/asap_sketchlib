@@ -21,7 +21,7 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 
 use crate::{
-    Classic, CmDelta, Count, CountDelta, CountMin, HllDelta, HyperLogLog, RegularPath, SketchInput,
+    Classic, CmDelta, Count, CountDelta, CountMin, DataInput, HllDelta, HyperLogLog, RegularPath,
     Vector2D,
 };
 
@@ -38,7 +38,7 @@ pub trait OctoWorker: Send {
     type Delta: Copy + Send + 'static;
 
     /// Process one input and emit zero or more deltas.
-    fn process<F>(&mut self, input: &SketchInput, emit: &mut F)
+    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
     where
         F: FnMut(Self::Delta);
 }
@@ -87,17 +87,17 @@ pub struct OctoResult<P> {
 
 #[cfg(feature = "octo-runtime")]
 enum WorkerMsg {
-    Data(SketchInput<'static>),
+    Data(DataInput<'static>),
     End,
 }
 
 #[cfg(feature = "octo-runtime")]
-/// Extends a `SketchInput` lifetime to `'static` for cross-thread transport in
+/// Extends a `DataInput` lifetime to `'static` for cross-thread transport in
 /// streaming mode. Caller must ensure all borrowed data outlives worker processing.
 #[inline(always)]
-unsafe fn assume_input_static(input: SketchInput<'_>) -> SketchInput<'static> {
+unsafe fn assume_input_static(input: DataInput<'_>) -> DataInput<'static> {
     // SAFETY: enforced by caller contract described above.
-    unsafe { std::mem::transmute::<SketchInput<'_>, SketchInput<'static>>(input) }
+    unsafe { std::mem::transmute::<DataInput<'_>, DataInput<'static>>(input) }
 }
 
 #[cfg(feature = "octo-runtime")]
@@ -327,7 +327,7 @@ where
         self.core.as_ref().expect("runtime core missing").close();
     }
 
-    pub fn insert(&mut self, input: SketchInput<'_>) {
+    pub fn insert(&mut self, input: DataInput<'_>) {
         let core = self.core.as_ref().expect("runtime core missing");
         if core.closed.load(Ordering::Acquire) {
             panic!("cannot insert after runtime has been closed");
@@ -342,7 +342,7 @@ where
             .expect("worker receiver dropped while runtime is active");
     }
 
-    pub fn insert_batch(&mut self, inputs: &[SketchInput<'_>]) {
+    pub fn insert_batch(&mut self, inputs: &[DataInput<'_>]) {
         for input in inputs {
             self.insert(input.clone());
         }
@@ -382,7 +382,7 @@ impl OctoWorker for CmOctoWorker {
     type Delta = CmDelta;
 
     #[inline(always)]
-    fn process<F>(&mut self, input: &SketchInput, emit: &mut F)
+    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
     where
         F: FnMut(Self::Delta),
     {
@@ -423,7 +423,7 @@ impl OctoWorker for CountOctoWorker {
     type Delta = CountDelta;
 
     #[inline(always)]
-    fn process<F>(&mut self, input: &SketchInput, emit: &mut F)
+    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
     where
         F: FnMut(Self::Delta),
     {
@@ -470,7 +470,7 @@ impl OctoWorker for HllOctoWorker {
     type Delta = HllDelta;
 
     #[inline(always)]
-    fn process<F>(&mut self, input: &SketchInput, emit: &mut F)
+    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
     where
         F: FnMut(Self::Delta),
     {
@@ -504,7 +504,7 @@ impl OctoAggregator for HllOctoAggregator {
 /// 3. The aggregator blocks on the channel and applies deltas to the parent.
 /// 4. Returns the fully-merged parent sketch.
 pub fn run_octo<W, P>(
-    inputs: &[SketchInput<'_>],
+    inputs: &[DataInput<'_>],
     config: &OctoConfig,
     worker_factory: impl Fn(usize) -> W,
     parent_factory: impl FnOnce() -> P,
@@ -523,7 +523,7 @@ where
 #[cfg(all(test, feature = "octo-runtime"))]
 mod tests {
     use super::*;
-    use crate::SketchInput;
+    use crate::DataInput;
 
     // -----------------------------------------------------------------------
     // Layer 2 unit tests: child sketches + apply_delta
@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn cm_insert_emit_delta_emits_at_threshold() {
         let mut worker_sketch = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
-        let key = SketchInput::U64(42);
+        let key = DataInput::U64(42);
         let mut deltas: Vec<CmDelta> = Vec::new();
 
         // Insert CM_PROMASK-1 times: no delta yet.
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn count_child_emits_delta_at_threshold() {
         let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
-        let key = SketchInput::U64(99);
+        let key = DataInput::U64(99);
         let mut deltas: Vec<CountDelta> = Vec::new();
 
         // Insert enough times to trigger at least one delta.
@@ -601,12 +601,12 @@ mod tests {
         let mut deltas: Vec<HllDelta> = Vec::new();
 
         // First insert should always emit (register goes from 0 to something > 0).
-        child.insert_emit_delta(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        child.insert_emit_delta(&DataInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 1, "first insert should emit a delta");
 
         // Inserting the same value again should NOT emit (register unchanged).
         let len_before = deltas.len();
-        child.insert_emit_delta(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        child.insert_emit_delta(&DataInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), len_before, "duplicate should not emit");
     }
 
@@ -641,7 +641,7 @@ mod tests {
         let cols = 4096;
         let n = 100_000u64;
 
-        let inputs: Vec<SketchInput<'_>> = (0..n).map(|i| SketchInput::U64(i % 1024)).collect();
+        let inputs: Vec<DataInput<'_>> = (0..n).map(|i| DataInput::U64(i % 1024)).collect();
 
         // Single-threaded reference.
         let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
@@ -668,7 +668,7 @@ mod tests {
         // OctoSketch child uses u8 counters, so there may be slight differences
         // due to the promotion threshold batching, but the total counts should match.
         for key_val in 0u64..1024 {
-            let key = SketchInput::U64(key_val);
+            let key = DataInput::U64(key_val);
             let ref_est = reference.estimate(&key);
             let octo_est = result.parent.sketch.estimate(&key);
             // The octo estimate should be <= reference (some counts may be
@@ -684,7 +684,7 @@ mod tests {
     #[test]
     fn run_octo_hll_cardinality() {
         let n = 50_000u64;
-        let inputs: Vec<SketchInput<'_>> = (0..n).map(SketchInput::U64).collect();
+        let inputs: Vec<DataInput<'_>> = (0..n).map(DataInput::U64).collect();
 
         let config = OctoConfig {
             num_workers: 4,
@@ -716,7 +716,7 @@ mod tests {
         let cols = 4096;
         let n = 50_000u64;
 
-        let inputs: Vec<SketchInput<'_>> = (0..n).map(|i| SketchInput::U64(i % 512)).collect();
+        let inputs: Vec<DataInput<'_>> = (0..n).map(|i| DataInput::U64(i % 512)).collect();
 
         let config = OctoConfig {
             num_workers: 2,
@@ -736,7 +736,7 @@ mod tests {
         // Each key appears ~97 times. Check a sample of keys.
         let expected_per_key = (n / 512) as f64;
         for key_val in [0u64, 100, 255, 511] {
-            let key = SketchInput::U64(key_val);
+            let key = DataInput::U64(key_val);
             let est = result.parent.sketch.estimate(&key);
             assert!(
                 (est - expected_per_key).abs() < expected_per_key * 0.5,
@@ -748,7 +748,7 @@ mod tests {
     #[test]
     fn run_octo_single_worker() {
         // Edge case: single worker should still work.
-        let inputs: Vec<SketchInput<'_>> = (0..1000u64).map(SketchInput::U64).collect();
+        let inputs: Vec<DataInput<'_>> = (0..1000u64).map(DataInput::U64).collect();
 
         let config = OctoConfig {
             num_workers: 1,
@@ -777,7 +777,7 @@ mod tests {
         let rows = 3;
         let cols = 4096;
         let n = 30_000u64;
-        let inputs: Vec<SketchInput<'_>> = (0..n).map(|i| SketchInput::U64(i % 1024)).collect();
+        let inputs: Vec<DataInput<'_>> = (0..n).map(|i| DataInput::U64(i % 1024)).collect();
         let config = OctoConfig {
             num_workers: 4,
             pin_cores: false,
@@ -806,7 +806,7 @@ mod tests {
         let streaming_result = runtime.finish();
 
         for key_val in 0u64..128 {
-            let key = SketchInput::U64(key_val);
+            let key = DataInput::U64(key_val);
             let batch_est = batch_result.parent.sketch.estimate(&key);
             let stream_est = streaming_result.parent.sketch.estimate(&key);
             assert_eq!(batch_est, stream_est, "key {key_val} mismatch");
@@ -828,9 +828,9 @@ mod tests {
             },
         );
 
-        runtime.insert(SketchInput::U64(1));
-        runtime.insert(SketchInput::U64(2));
-        let batch: Vec<SketchInput<'_>> = (3..2000).map(SketchInput::U64).collect();
+        runtime.insert(DataInput::U64(1));
+        runtime.insert(DataInput::U64(2));
+        let batch: Vec<DataInput<'_>> = (3..2000).map(DataInput::U64).collect();
         runtime.insert_batch(&batch);
         let result = runtime.finish();
         let estimate = result.parent.sketch.estimate();
@@ -855,7 +855,7 @@ mod tests {
         let reader = runtime.read_handle();
 
         for i in 0..64u64 {
-            runtime.insert(SketchInput::U64(i));
+            runtime.insert(DataInput::U64(i));
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
         let observed = reader.with_parent(|p| p.total);
@@ -911,7 +911,7 @@ mod tests {
             },
         );
         runtime.close();
-        runtime.insert(SketchInput::U64(1));
+        runtime.insert(DataInput::U64(1));
     }
 
     #[test]
@@ -941,7 +941,7 @@ mod tests {
     impl OctoWorker for CountingWorker {
         type Delta = u64;
 
-        fn process<F>(&mut self, _input: &SketchInput, emit: &mut F)
+        fn process<F>(&mut self, _input: &DataInput, emit: &mut F)
         where
             F: FnMut(Self::Delta),
         {
@@ -976,7 +976,7 @@ mod tests {
         );
 
         for i in 0..n as u64 {
-            runtime.insert(SketchInput::U64(i + 42));
+            runtime.insert(DataInput::U64(i + 42));
         }
         runtime.close();
         let result = runtime.finish();
@@ -993,7 +993,7 @@ mod tests {
     impl OctoWorker for WorkerIdEmitter {
         type Delta = usize;
 
-        fn process<F>(&mut self, _input: &SketchInput, emit: &mut F)
+        fn process<F>(&mut self, _input: &DataInput, emit: &mut F)
         where
             F: FnMut(Self::Delta),
         {
@@ -1031,7 +1031,7 @@ mod tests {
         );
 
         for i in 0..inserts {
-            runtime.insert(SketchInput::U64(i));
+            runtime.insert(DataInput::U64(i));
         }
         let result = runtime.finish();
 

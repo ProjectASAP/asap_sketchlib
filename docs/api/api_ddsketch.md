@@ -20,7 +20,7 @@ fn new(alpha: f64) -> Self
 
 ```rust
 fn add(&mut self, v: f64)
-fn add_input(&mut self, v: &SketchInput) -> Result<(), &'static str>
+fn add_input(&mut self, v: &DataInput) -> Result<(), &'static str>
 ```
 
 ## Query

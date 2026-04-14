@@ -34,8 +34,8 @@ fn with_defaults() -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &SketchInput, value: i64)
-fn fast_insert(&mut self, key: &SketchInput, value: i64)
+fn insert(&mut self, key: &DataInput, value: i64)
+fn fast_insert(&mut self, key: &DataInput, value: i64)
 fn free(&mut self)
 ```
 
@@ -66,10 +66,10 @@ No dedicated serialization API.
 ## Examples
 
 ```rust
-use asap_sketchlib::{SketchInput, UnivMonPyramid};
+use asap_sketchlib::{DataInput, UnivMonPyramid};
 
 let mut um = UnivMonPyramid::with_defaults();
-um.insert(&SketchInput::U64(1), 1);
+um.insert(&DataInput::U64(1), 1);
 assert!(um.calc_l1() >= 1.0);
 ```
 

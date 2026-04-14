@@ -30,13 +30,13 @@ Enum-based; construct by variant.
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, val: &SketchInput)
+fn insert(&mut self, val: &DataInput)
 ```
 
 ## Query
 
 ```rust
-fn query(&self, key: &SketchInput) -> Result<f64, &'static str>
+fn query(&self, key: &DataInput) -> Result<f64, &'static str>
 fn supports_norm(&self, norm: SketchNorm) -> bool
 fn sketch_type(&self) -> &'static str
 ```
@@ -54,11 +54,11 @@ Serialized through serde as part of parent structures.
 ## Examples
 
 ```rust
-use asap_sketchlib::{CountMin, EHSketchList, FastPath, SketchInput, Vector2D};
+use asap_sketchlib::{CountMin, EHSketchList, FastPath, DataInput, Vector2D};
 
 let mut sk = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::default());
-sk.insert(&SketchInput::U64(1));
-let _ = sk.query(&SketchInput::U64(1));
+sk.insert(&DataInput::U64(1));
+let _ = sk.query(&DataInput::U64(1));
 ```
 
 ## Caveats

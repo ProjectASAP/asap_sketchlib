@@ -23,7 +23,7 @@ fn with_seed(sample_rate: f64, seed: u64) -> Self
 
 ```rust
 fn update(&mut self, value: f64)
-fn update_input(&mut self, value: &SketchInput) -> Result<(), &'static str>
+fn update_input(&mut self, value: &DataInput) -> Result<(), &'static str>
 ```
 
 ## Query

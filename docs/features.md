@@ -18,7 +18,7 @@ This document provides a high-level overview of implemented and planned features
 
 **Common API** ([api_common.md](./api/api_common.md))
 
-- `SketchInput` - Unified type system for all sketches
+- `DataInput` - Unified type system for all sketches
 - `Vector1D`, `Vector2D` - Flat storage structures for sketch counters
 - `impl_fixed_matrix!` macro - Define compile-time fixed-size matrix types with any counter type and dimensions
 - `CommonHeap` & `HHHeap` - Generic and specialized heaps for heavy hitter tracking

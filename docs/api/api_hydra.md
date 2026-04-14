@@ -24,17 +24,17 @@ fn with_dimensions(r: usize, c: usize, dimensions: Vec<(String, HydraCounter)>) 
 ## Insert/Update
 
 ```rust
-fn update(&mut self, key: &str, value: &SketchInput, count: Option<i32>)
+fn update(&mut self, key: &str, value: &DataInput, count: Option<i32>)
 
 // MultiHeadHydra
-fn update(&mut self, key: &str, values: &[(&SketchInput, &[&str])], count: Option<i32>)
+fn update(&mut self, key: &str, values: &[(&DataInput, &[&str])], count: Option<i32>)
 ```
 
 ## Query
 
 ```rust
 fn query_key(&self, key: Vec<&str>, query: &HydraQuery) -> f64
-fn query_frequency(&self, key: Vec<&str>, value: &SketchInput) -> f64
+fn query_frequency(&self, key: Vec<&str>, value: &DataInput) -> f64
 fn query_quantile(&self, key: Vec<&str>, threshold: f64) -> f64
 
 // MultiHeadHydra
@@ -59,11 +59,11 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use asap_sketchlib::{Hydra, SketchInput};
+use asap_sketchlib::{Hydra, DataInput};
 
 let mut hydra = Hydra::default();
-hydra.update("region=us;service=api", &SketchInput::Str("err"), None);
-let est = hydra.query_frequency(vec!["region=us"], &SketchInput::Str("err"));
+hydra.update("region=us;service=api", &DataInput::Str("err"), None);
+let est = hydra.query_frequency(vec!["region=us"], &DataInput::Str("err"));
 assert!(est >= 1.0);
 ```
 

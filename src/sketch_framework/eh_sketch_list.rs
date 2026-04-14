@@ -1,4 +1,4 @@
-use crate::{SketchInput, Vector2D};
+use crate::{DataInput, Vector2D};
 use serde::{Deserialize, Serialize};
 
 use super::super::sketches::*;
@@ -56,13 +56,13 @@ impl EHSketchList {
     }
 
     /// Insert a value into the sketch
-    pub fn insert(&mut self, val: &SketchInput) {
+    pub fn insert(&mut self, val: &DataInput) {
         match self {
             EHSketchList::CM(sketch) => sketch.insert(val),
             #[cfg(feature = "experimental")]
             EHSketchList::COCO(sketch) => match val {
-                SketchInput::Str(s) => sketch.insert(s, 1),
-                SketchInput::String(s) => sketch.insert(s.as_str(), 1),
+                DataInput::Str(s) => sketch.insert(s, 1),
+                DataInput::String(s) => sketch.insert(s.as_str(), 1),
                 _ => {}
             },
             EHSketchList::COUNTL2HH(sketch) => sketch.fast_insert_with_count(val, 1),
@@ -72,26 +72,26 @@ impl EHSketchList {
             }
             #[cfg(feature = "experimental")]
             EHSketchList::ELASTIC(sketch) => match val {
-                SketchInput::String(s) => sketch.insert(s.to_string()),
-                SketchInput::I32(i) => sketch.insert(i.to_string()),
-                SketchInput::I64(i) => sketch.insert(i.to_string()),
-                SketchInput::U32(u) => sketch.insert(u.to_string()),
-                SketchInput::U64(u) => sketch.insert(u.to_string()),
-                SketchInput::F32(f) => sketch.insert(f.to_string()),
-                SketchInput::F64(f) => sketch.insert(f.to_string()),
-                SketchInput::Str(s) => sketch.insert(s.to_string()),
-                SketchInput::Bytes(items) => {
+                DataInput::String(s) => sketch.insert(s.to_string()),
+                DataInput::I32(i) => sketch.insert(i.to_string()),
+                DataInput::I64(i) => sketch.insert(i.to_string()),
+                DataInput::U32(u) => sketch.insert(u.to_string()),
+                DataInput::U64(u) => sketch.insert(u.to_string()),
+                DataInput::F32(f) => sketch.insert(f.to_string()),
+                DataInput::F64(f) => sketch.insert(f.to_string()),
+                DataInput::Str(s) => sketch.insert(s.to_string()),
+                DataInput::Bytes(items) => {
                     let s = String::from_utf8_lossy(items).to_string();
                     sketch.insert(s)
                 }
-                SketchInput::I8(i) => sketch.insert(i.to_string()),
-                SketchInput::I16(i) => sketch.insert(i.to_string()),
-                SketchInput::I128(i) => sketch.insert(i.to_string()),
-                SketchInput::ISIZE(i) => sketch.insert(i.to_string()),
-                SketchInput::U8(u) => sketch.insert(u.to_string()),
-                SketchInput::U16(u) => sketch.insert(u.to_string()),
-                SketchInput::U128(u) => sketch.insert(u.to_string()),
-                SketchInput::USIZE(u) => sketch.insert(u.to_string()),
+                DataInput::I8(i) => sketch.insert(i.to_string()),
+                DataInput::I16(i) => sketch.insert(i.to_string()),
+                DataInput::I128(i) => sketch.insert(i.to_string()),
+                DataInput::ISIZE(i) => sketch.insert(i.to_string()),
+                DataInput::U8(u) => sketch.insert(u.to_string()),
+                DataInput::U16(u) => sketch.insert(u.to_string()),
+                DataInput::U128(u) => sketch.insert(u.to_string()),
+                DataInput::USIZE(u) => sketch.insert(u.to_string()),
             },
             EHSketchList::HLL(sketch) => sketch.insert(val),
             EHSketchList::KLL(sketch) => {
@@ -147,94 +147,94 @@ impl EHSketchList {
         }
     }
 
-    pub fn query(&self, key: &SketchInput) -> Result<f64, &'static str> {
+    pub fn query(&self, key: &DataInput) -> Result<f64, &'static str> {
         match (self, key) {
             (EHSketchList::CM(count_min), _) => Ok(count_min.estimate(key) as f64),
             #[cfg(feature = "experimental")]
-            (EHSketchList::COCO(coco), SketchInput::Str(s)) => Ok(coco.clone().estimate(s) as f64),
+            (EHSketchList::COCO(coco), DataInput::Str(s)) => Ok(coco.clone().estimate(s) as f64),
             #[cfg(feature = "experimental")]
-            (EHSketchList::COCO(coco), SketchInput::String(s)) => {
+            (EHSketchList::COCO(coco), DataInput::String(s)) => {
                 Ok(coco.clone().estimate(s.as_str()) as f64)
             }
             (EHSketchList::COUNTL2HH(count_univ), _) => Ok(count_univ.fast_get_est(key)),
             (EHSketchList::CS(count_sketch), _) => Ok(count_sketch.estimate(key)),
-            (EHSketchList::DDS(dd), SketchInput::I32(i)) => dd
+            (EHSketchList::DDS(dd), DataInput::I32(i)) => dd
                 .get_value_at_quantile(*i as f64)
                 .ok_or("DDSketch has no samples"),
-            (EHSketchList::DDS(dd), SketchInput::I64(i)) => dd
+            (EHSketchList::DDS(dd), DataInput::I64(i)) => dd
                 .get_value_at_quantile(*i as f64)
                 .ok_or("DDSketch has no samples"),
-            (EHSketchList::DDS(dd), SketchInput::U32(u)) => dd
+            (EHSketchList::DDS(dd), DataInput::U32(u)) => dd
                 .get_value_at_quantile(*u as f64)
                 .ok_or("DDSketch has no samples"),
-            (EHSketchList::DDS(dd), SketchInput::U64(u)) => dd
+            (EHSketchList::DDS(dd), DataInput::U64(u)) => dd
                 .get_value_at_quantile(*u as f64)
                 .ok_or("DDSketch has no samples"),
-            (EHSketchList::DDS(dd), SketchInput::F32(f)) => dd
+            (EHSketchList::DDS(dd), DataInput::F32(f)) => dd
                 .get_value_at_quantile(*f as f64)
                 .ok_or("DDSketch has no samples"),
-            (EHSketchList::DDS(dd), SketchInput::F64(f)) => dd
+            (EHSketchList::DDS(dd), DataInput::F64(f)) => dd
                 .get_value_at_quantile(*f)
                 .ok_or("DDSketch has no samples"),
-            (EHSketchList::DDS(dd), SketchInput::Str(cmd)) => match *cmd {
+            (EHSketchList::DDS(dd), DataInput::Str(cmd)) => match *cmd {
                 "count" => Ok(dd.get_count() as f64),
                 "min" => dd.min().ok_or("DDSketch has no samples"),
                 "max" => dd.max().ok_or("DDSketch has no samples"),
                 _ => Err("Unsupported command for DDSketch"),
             },
-            (EHSketchList::DDS(dd), SketchInput::String(cmd)) => match cmd.as_str() {
+            (EHSketchList::DDS(dd), DataInput::String(cmd)) => match cmd.as_str() {
                 "count" => Ok(dd.get_count() as f64),
                 "min" => dd.min().ok_or("DDSketch has no samples"),
                 "max" => dd.max().ok_or("DDSketch has no samples"),
                 _ => Err("Unsupported command for DDSketch"),
             },
             #[cfg(feature = "experimental")]
-            (EHSketchList::ELASTIC(elastic), SketchInput::String(s)) => {
+            (EHSketchList::ELASTIC(elastic), DataInput::String(s)) => {
                 Ok(elastic.clone().query(s.clone()) as f64)
             }
             (EHSketchList::HLL(hll_df_modified), _) => Ok(hll_df_modified.estimate() as f64),
-            (EHSketchList::KLL(kll), SketchInput::I32(i)) => Ok(kll.quantile(*i as f64)),
-            (EHSketchList::KLL(kll), SketchInput::I64(i)) => Ok(kll.quantile(*i as f64)),
-            (EHSketchList::KLL(kll), SketchInput::U32(u)) => Ok(kll.quantile(*u as f64)),
-            (EHSketchList::KLL(kll), SketchInput::U64(u)) => Ok(kll.quantile(*u as f64)),
-            (EHSketchList::KLL(kll), SketchInput::F32(f)) => Ok(kll.quantile(*f as f64)),
-            (EHSketchList::KLL(kll), SketchInput::F64(f)) => Ok(kll.quantile(*f)),
+            (EHSketchList::KLL(kll), DataInput::I32(i)) => Ok(kll.quantile(*i as f64)),
+            (EHSketchList::KLL(kll), DataInput::I64(i)) => Ok(kll.quantile(*i as f64)),
+            (EHSketchList::KLL(kll), DataInput::U32(u)) => Ok(kll.quantile(*u as f64)),
+            (EHSketchList::KLL(kll), DataInput::U64(u)) => Ok(kll.quantile(*u as f64)),
+            (EHSketchList::KLL(kll), DataInput::F32(f)) => Ok(kll.quantile(*f as f64)),
+            (EHSketchList::KLL(kll), DataInput::F64(f)) => Ok(kll.quantile(*f)),
             #[cfg(feature = "experimental")]
-            (EHSketchList::UNIFORM(sampler), SketchInput::U64(idx)) => sampler
+            (EHSketchList::UNIFORM(sampler), DataInput::U64(idx)) => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
             #[cfg(feature = "experimental")]
-            (EHSketchList::UNIFORM(sampler), SketchInput::U32(idx)) => sampler
+            (EHSketchList::UNIFORM(sampler), DataInput::U32(idx)) => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
             #[cfg(feature = "experimental")]
-            (EHSketchList::UNIFORM(sampler), SketchInput::I64(idx)) if *idx >= 0 => sampler
+            (EHSketchList::UNIFORM(sampler), DataInput::I64(idx)) if *idx >= 0 => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
             #[cfg(feature = "experimental")]
-            (EHSketchList::UNIFORM(sampler), SketchInput::I32(idx)) if *idx >= 0 => sampler
+            (EHSketchList::UNIFORM(sampler), DataInput::I32(idx)) if *idx >= 0 => sampler
                 .sample_at(*idx as usize)
                 .ok_or("Sample index out of bounds"),
             #[cfg(feature = "experimental")]
-            (EHSketchList::UNIFORM(sampler), SketchInput::Str(cmd)) => match *cmd {
+            (EHSketchList::UNIFORM(sampler), DataInput::Str(cmd)) => match *cmd {
                 "len" => Ok(sampler.len() as f64),
                 "total_seen" => Ok(sampler.total_seen() as f64),
                 _ => Err("Unsupported command for UniformSampling"),
             },
             #[cfg(feature = "experimental")]
-            (EHSketchList::UNIFORM(sampler), SketchInput::String(cmd)) => match cmd.as_str() {
+            (EHSketchList::UNIFORM(sampler), DataInput::String(cmd)) => match cmd.as_str() {
                 "len" => Ok(sampler.len() as f64),
                 "total_seen" => Ok(sampler.total_seen() as f64),
                 _ => Err("Unsupported command for UniformSampling"),
             },
-            (EHSketchList::UNIVMON(um), SketchInput::Str(cmd)) => match *cmd {
+            (EHSketchList::UNIVMON(um), DataInput::Str(cmd)) => match *cmd {
                 "cardinality" | "card" => Ok(um.calc_card()),
                 "l1" => Ok(um.calc_l1()),
                 "l2" => Ok(um.calc_l2()),
                 "entropy" => Ok(um.calc_entropy()),
                 _ => Err("Unsupported command for UnivMon"),
             },
-            (EHSketchList::UNIVMON(um), SketchInput::String(cmd)) => match cmd.as_str() {
+            (EHSketchList::UNIVMON(um), DataInput::String(cmd)) => match cmd.as_str() {
                 "cardinality" | "card" => Ok(um.calc_card()),
                 "l1" => Ok(um.calc_l1()),
                 "l2" => Ok(um.calc_l2()),
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn insert_routes_to_countl2hh_and_univmon() {
-        let key = SketchInput::I64(7);
+        let key = DataInput::I64(7);
 
         let mut count_l2hh = EHSketchList::COUNTL2HH(CountL2HH::with_dimensions(5, 1024));
         for _ in 0..9 {
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn count_sketch_insert_and_query_round_trip() {
         let mut cs = EHSketchList::CS(Count::<Vector2D<i32>, FastPath>::default());
-        let key = SketchInput::I64(11);
+        let key = DataInput::I64(11);
         cs.insert(&key);
         let est = cs.query(&key).expect("query CountSketch");
         assert!(est >= 1.0, "expected CountSketch estimate >= 1, got {est}");
@@ -305,13 +305,11 @@ mod tests {
     #[test]
     fn ddsketch_insert_and_quantile_query_round_trip() {
         let mut dd = EHSketchList::DDS(DDSketch::new(0.01));
-        dd.insert(&SketchInput::F64(10.0));
-        dd.insert(&SketchInput::F64(20.0));
-        dd.insert(&SketchInput::F64(30.0));
+        dd.insert(&DataInput::F64(10.0));
+        dd.insert(&DataInput::F64(20.0));
+        dd.insert(&DataInput::F64(30.0));
 
-        let q50 = dd
-            .query(&SketchInput::F64(0.5))
-            .expect("query DDSketch q50");
+        let q50 = dd.query(&DataInput::F64(0.5)).expect("query DDSketch q50");
         assert!(q50 >= 10.0 && q50 <= 30.0, "unexpected q50 {q50}");
     }
 

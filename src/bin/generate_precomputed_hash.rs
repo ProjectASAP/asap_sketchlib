@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use asap_sketchlib::{SketchInput, hash128_seeded};
+use asap_sketchlib::{DataInput, hash128_seeded};
 
 const OUTPUT_PATH: &str = "src/common/precompute_hash.rs";
 const MAX_VALUE: u64 = 0x3fff;
@@ -21,12 +21,12 @@ fn main() -> std::io::Result<()> {
     )?;
     writeln!(
         writer,
-        "//! Precomputes hash128_seeded for SketchInput::U64(0)..=SketchInput::U64(0x3fff)."
+        "//! Precomputes hash128_seeded for DataInput::U64(0)..=DataInput::U64(0x3fff)."
     )?;
     writeln!(writer, "pub static PRECOMPUTED_HASH: [u128; 0x4000] = [")?;
 
     for value in 0..=MAX_VALUE {
-        let hash = hash128_seeded(SEED_INDEX, &SketchInput::U64(value));
+        let hash = hash128_seeded(SEED_INDEX, &DataInput::U64(value));
         writeln!(writer, "    0x{hash:032x}, // {value:#06x}")?;
     }
 

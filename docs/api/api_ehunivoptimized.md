@@ -39,7 +39,7 @@ fn with_defaults(k: usize, window: u64) -> Self
 ## Insert/Update
 
 ```rust
-fn update(&mut self, time: u64, key: &SketchInput, value: i64)
+fn update(&mut self, time: u64, key: &DataInput, value: i64)
 fn update_window(&mut self, window: u64)
 ```
 
@@ -72,10 +72,10 @@ No dedicated serialization API.
 ## Examples
 
 ```rust
-use asap_sketchlib::{EHUnivOptimized, SketchInput};
+use asap_sketchlib::{EHUnivOptimized, DataInput};
 
 let mut eh = EHUnivOptimized::with_defaults(2, 120);
-eh.update(1, &SketchInput::U64(10), 1);
+eh.update(1, &DataInput::U64(10), 1);
 let _ = eh.query_interval(0, 120);
 ```
 

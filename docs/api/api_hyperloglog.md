@@ -45,8 +45,8 @@ fn default() -> Self
 ## Insert / Update
 
 ```rust
-fn insert(&mut self, obj: &SketchInput)
-fn insert_many(&mut self, items: &[SketchInput])
+fn insert(&mut self, obj: &DataInput)
+fn insert_many(&mut self, items: &[DataInput])
 fn insert_with_hash(&mut self, hashed: u64)
 fn insert_many_with_hashes(&mut self, hashes: &[u64])
 ```
@@ -81,11 +81,11 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use asap_sketchlib::{ErtlMLE, HyperLogLog, SketchInput};
+use asap_sketchlib::{ErtlMLE, HyperLogLog, DataInput};
 
 let mut hll = HyperLogLog::<ErtlMLE>::default();
 for i in 0..1000u64 {
-    hll.insert(&SketchInput::U64(i));
+    hll.insert(&DataInput::U64(i));
 }
 let card = hll.estimate();
 assert!(card > 900);

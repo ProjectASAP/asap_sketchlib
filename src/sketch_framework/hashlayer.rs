@@ -31,8 +31,8 @@
 //! * [`HashSketchEnsemble::cardinality`] — distinct-count estimate (HLL only).
 
 use crate::{
-    Classic, Count, CountMin, DefaultXxHasher, ErtlMLE, FastPath, HyperLogLog, HyperLogLogHIP,
-    MatrixHashMode, MatrixHashType, SketchHasher, SketchInput, Vector1D,
+    Classic, Count, CountMin, DataInput, DefaultXxHasher, ErtlMLE, FastPath, HyperLogLog,
+    HyperLogLogHIP, MatrixHashMode, MatrixHashType, SketchHasher, Vector1D,
     hash_for_matrix_seeded_with_mode_generic, hash_mode_for_matrix,
     sketch_framework::sketch_catalog::{CountFastOps, CountMinFastOps},
 };
@@ -54,7 +54,7 @@ impl HashConfig {
         }
     }
 
-    fn hash_for_input<H>(&self, input: &SketchInput) -> MatrixHashType
+    fn hash_for_input<H>(&self, input: &DataInput) -> MatrixHashType
     where
         H: SketchHasher<HashType = MatrixHashType>,
     {
@@ -233,7 +233,7 @@ where
 
     /// Compute the shared hash for an input using this layer's hash
     /// configuration and hasher `H`.
-    pub fn hash_input(&self, input: &SketchInput) -> H::HashType {
+    pub fn hash_input(&self, input: &DataInput) -> H::HashType {
         if let Some(cfg) = self.hash_config {
             cfg.hash_for_input::<H>(input)
         } else {
@@ -244,7 +244,7 @@ where
     // -- Insertion -------------------------------------------------------------
 
     /// Hash `val` once and insert into every sketch in the layer.
-    pub fn insert(&mut self, val: &SketchInput) {
+    pub fn insert(&mut self, val: &DataInput) {
         let hash = self.hash_input(val);
         for i in 0..self.sketches.len() {
             self.sketches[i].insert_with_hash(&hash);
@@ -259,7 +259,7 @@ where
     }
 
     /// Hash `val` once and insert into the sketches at `indices` only.
-    pub fn insert_at(&mut self, indices: &[usize], val: &SketchInput) {
+    pub fn insert_at(&mut self, indices: &[usize], val: &DataInput) {
         let hash = self.hash_input(val);
         for &idx in indices {
             if idx < self.sketches.len() {
@@ -278,7 +278,7 @@ where
     }
 
     /// Insert a batch of inputs into every sketch in the layer.
-    pub fn bulk_insert(&mut self, values: &[SketchInput]) {
+    pub fn bulk_insert(&mut self, values: &[DataInput]) {
         for value in values {
             self.insert(value);
         }
@@ -292,7 +292,7 @@ where
     }
 
     /// Insert a batch of inputs into the sketches at `indices` only.
-    pub fn bulk_insert_at(&mut self, indices: &[usize], values: &[SketchInput]) {
+    pub fn bulk_insert_at(&mut self, indices: &[usize], values: &[DataInput]) {
         for value in values {
             self.insert_at(indices, value);
         }
@@ -311,7 +311,7 @@ where
     ///
     /// Returns an error if the index is out of bounds or the sketch is not a
     /// frequency sketch (CMS / Count).
-    pub fn estimate(&self, index: usize, val: &SketchInput) -> Result<f64, &'static str> {
+    pub fn estimate(&self, index: usize, val: &DataInput) -> Result<f64, &'static str> {
         if index >= self.sketches.len() {
             return Err("index out of bounds");
         }
@@ -423,14 +423,14 @@ mod tests {
         assert_eq!(layer.len(), 2);
 
         for &value in &data {
-            layer.insert(&SketchInput::U64(value));
+            layer.insert(&DataInput::U64(value));
         }
 
         let mut cms_errors = Vec::new();
         let mut cs_errors = Vec::new();
 
         for (&key, &true_count) in baseline.iter().take(100) {
-            let input = SketchInput::U64(key);
+            let input = DataInput::U64(key);
 
             let cms_est = layer.estimate(0, &input).expect("CMS estimate");
             cms_errors.push(relative_error(cms_est, true_count));
@@ -454,11 +454,11 @@ mod tests {
         let mut layer = default_layer();
 
         for &value in &data {
-            layer.insert_at(&[0], &SketchInput::U64(value));
+            layer.insert_at(&[0], &DataInput::U64(value));
         }
 
         let sample_key = *baseline.keys().next().unwrap();
-        let input = SketchInput::U64(sample_key);
+        let input = DataInput::U64(sample_key);
 
         let cms_est = layer.estimate(0, &input).expect("CMS estimate");
         assert!(cms_est > 0.0, "CMS at index 0 should have data");
@@ -475,14 +475,14 @@ mod tests {
         let mut layer_b = default_layer();
 
         for &value in &data {
-            let input = SketchInput::U64(value);
+            let input = DataInput::U64(value);
             layer_a.insert(&input);
 
             let hash = layer_b.hash_input(&input);
             layer_b.insert_with_hash(&hash);
         }
 
-        let probe = SketchInput::U64(data[0]);
+        let probe = DataInput::U64(data[0]);
         let hash = layer_a.hash_input(&probe);
 
         let est_a = layer_a.estimate(0, &probe).unwrap();
@@ -501,7 +501,7 @@ mod tests {
                 .expect("HLL-only layer");
 
         for &value in &data {
-            layer.insert(&SketchInput::U64(value));
+            layer.insert(&DataInput::U64(value));
         }
 
         let hll_est = layer.cardinality(0).expect("HLL cardinality");
@@ -520,7 +520,7 @@ mod tests {
             HashSketchEnsemble::new(vec![HyperLogLog::<ErtlMLE>::default().into()])
                 .expect("HLL-only layer");
 
-        let result = layer.estimate(0, &SketchInput::U64(42));
+        let result = layer.estimate(0, &DataInput::U64(42));
         assert!(result.is_err());
     }
 
@@ -547,10 +547,10 @@ mod tests {
     fn test_bounds_checking() {
         let layer = default_layer();
 
-        assert!(layer.estimate(999, &SketchInput::U64(0)).is_err());
+        assert!(layer.estimate(999, &DataInput::U64(0)).is_err());
         assert!(layer.cardinality(999).is_err());
 
-        let hash = layer.hash_input(&SketchInput::U64(0));
+        let hash = layer.hash_input(&DataInput::U64(0));
         assert!(layer.estimate_with_hash(999, &hash).is_err());
     }
 
@@ -566,10 +566,10 @@ mod tests {
 
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
         for &value in &data {
-            layer.insert(&SketchInput::U64(value));
+            layer.insert(&DataInput::U64(value));
         }
 
-        let input = SketchInput::U64(data[0]);
+        let input = DataInput::U64(data[0]);
         assert!(layer.estimate(0, &input).unwrap() > 0.0);
         assert!(layer.estimate(1, &input).unwrap() > 0.0);
     }
@@ -586,11 +586,11 @@ mod tests {
         let baseline = create_baseline(&data);
 
         for &value in &data {
-            layer.insert(&SketchInput::U64(value));
+            layer.insert(&DataInput::U64(value));
         }
 
         let cms_est = layer
-            .estimate(0, &SketchInput::U64(data[0]))
+            .estimate(0, &DataInput::U64(data[0]))
             .expect("CMS estimate");
         assert!(cms_est > 0.0);
 

@@ -24,7 +24,7 @@
 //! This implementation is part of the `asap_sketchlib` library.
 
 use crate::common::heap::HHHeap;
-use crate::common::{BOTTOM_LAYER_FINDER, SketchInput, hash_item64_seeded, hash64_seeded};
+use crate::common::{BOTTOM_LAYER_FINDER, DataInput, hash_item64_seeded, hash64_seeded};
 use crate::common::{L2HH, Vector1D};
 use crate::sketches::count::CountL2HH;
 use rmp_serde::{
@@ -98,7 +98,7 @@ impl UnivMon {
     }
 
     #[inline(always)]
-    fn update(&mut self, key: &SketchInput, value: i64, bottom_layer_num: usize) {
+    fn update(&mut self, key: &DataInput, value: i64, bottom_layer_num: usize) {
         for i in 0..=bottom_layer_num {
             let count = if i == 0 {
                 self.l2_sketch_layers[i].update_and_est(key, value)
@@ -110,18 +110,18 @@ impl UnivMon {
     }
 
     #[inline(always)]
-    fn process_univmon(&mut self, key: &SketchInput, value: i64, bottom_layer_num: usize) {
+    fn process_univmon(&mut self, key: &DataInput, value: i64, bottom_layer_num: usize) {
         self.bucket_size += value as usize;
         self.update(key, value, bottom_layer_num);
     }
 
-    pub fn insert(&mut self, key: &SketchInput, value: i64) {
+    pub fn insert(&mut self, key: &DataInput, value: i64) {
         let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
         let bottom_layer_num = self.find_bottom_layer_num(h, self.layer_size);
         self.process_univmon(key, value, bottom_layer_num)
     }
 
-    pub fn fast_insert(&mut self, key: &SketchInput, value: i64) {
+    pub fn fast_insert(&mut self, key: &DataInput, value: i64) {
         self.bucket_size += value as usize;
         let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
         let bottom_layer_num = self.find_bottom_layer_num(h, self.layer_size);
@@ -171,7 +171,7 @@ impl UnivMon {
             for item in self.hh_layers[i].heap() {
                 if item.count > threshold {
                     // let hash = (hash64_seeded(CANONICAL_HASH_SEED, &item.key) >> (i+1)) & 1;
-                    // let hash = (hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::Str(&item.key)) >> (i + 1)) & 1;
+                    // let hash = (hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(&item.key)) >> (i + 1)) & 1;
                     let hash = (hash_item64_seeded(BOTTOM_LAYER_FINDER, &item.key) >> (i + 1)) & 1;
                     let coe = 1.0 - 2.0 * (hash as f64);
                     tmp += coe * g(item.count as f64);
@@ -259,7 +259,7 @@ impl UnivMon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{HeapItem, SketchInput};
+    use crate::{DataInput, HeapItem};
     use core::f64;
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use std::collections::HashMap;
@@ -276,7 +276,7 @@ mod tests {
         ];
 
         for (key, count) in flows {
-            um.insert(&SketchInput::String(key.to_string()), count);
+            um.insert(&DataInput::String(key.to_string()), count);
         }
 
         let bucket_size_before = um.bucket_size;
@@ -318,7 +318,7 @@ mod tests {
     }
 
     // fn bottom_layer_for(um: &UnivMon, key: &str) -> usize {
-    //     let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &SketchInput::Str(key));
+    //     let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &DataInput::Str(key));
     //     um.find_bottom_layer_num(hash, um.layer)
     // }
 
@@ -332,7 +332,7 @@ mod tests {
 
         for _ in 0..40 {
             // um.univmon_processing(key, 1, bottom);
-            um.insert(&SketchInput::Str(key), 1);
+            um.insert(&DataInput::Str(key), 1);
         }
 
         assert_eq!(um.bucket_size, 40);
@@ -371,11 +371,11 @@ mod tests {
 
         for _ in 0..25 {
             // left.univmon_processing(key_left, 1, bottom_left);
-            left.insert(&SketchInput::Str(key_left), 1);
+            left.insert(&DataInput::Str(key_left), 1);
         }
         for _ in 0..30 {
             // right.univmon_processing(key_right, 1, bottom_right);
-            right.insert(&SketchInput::Str(key_right), 1);
+            right.insert(&DataInput::Str(key_right), 1);
         }
 
         left.merge(&right);
@@ -419,7 +419,7 @@ mod tests {
         let _um = UnivMon::init_univmon(20, 3, 1024, 4);
 
         // Hash the same key with different seed indices (as used by different layers)
-        let test_key = SketchInput::Str("test_flow");
+        let test_key = DataInput::Str("test_flow");
 
         // Hash the same key with different seed indices (as used by different layers)
         let hash_0 = hash128_seeded(0, &test_key);
@@ -445,7 +445,7 @@ mod tests {
             let key = format!("flow_{i}");
             // let bottom = bottom_layer_for(&um, &key);
             // um.univmon_processing(&key, 10, bottom);
-            um.insert(&SketchInput::String(key), 1);
+            um.insert(&DataInput::String(key), 1);
         }
 
         let card = um.calc_card();
@@ -466,7 +466,7 @@ mod tests {
         for (key, count) in &flows {
             // let bottom = bottom_layer_for(&um, key);
             // um.univmon_processing(key, *count, bottom);
-            um.insert(&SketchInput::Str(*key), *count);
+            um.insert(&DataInput::Str(*key), *count);
         }
 
         assert_eq!(
@@ -501,10 +501,10 @@ mod tests {
 
         let mut um = UnivMon::init_univmon(100, 3, 2048, 16);
         for case in cases {
-            // let h = hash64_seeded(BOTTOM_LAYER_FINDER, &SketchInput::Str(&case.0));
+            // let h = hash64_seeded(BOTTOM_LAYER_FINDER, &DataInput::Str(&case.0));
             // let bln = um.find_bottom_layer_num(h, 16);
             // um.univmon_processing(&case.0, case.1, bln);
-            um.insert(&SketchInput::String(case.0), case.1);
+            um.insert(&DataInput::String(case.0), case.1);
         }
 
         assert_eq!(um.calc_card(), 10.0, "Cardinality estimation incorrect");
@@ -570,7 +570,7 @@ mod tests {
 
     //     // 2. Pre-calculate the expected bottom layer for this key
     //     // We use the same hasher the struct uses internally
-    //     let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &SketchInput::Str(key));
+    //     let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &DataInput::Str(key));
     //     let expected_bottom = um.find_bottom_layer_num(hash, layers);
 
     //     // 3. Perform Update
@@ -583,7 +583,7 @@ mod tests {
 
     //         // Check Sketch Estimate
     //         // We use estimate() to see if the counter was incremented
-    //         let count_est = um.cs_layers[i].get_estimate(&SketchInput::Str(key));
+    //         let count_est = um.cs_layers[i].get_estimate(&DataInput::Str(key));
 
     //         if i <= expected_bottom {
     //             // Case A: Layers the item SHOULD exist in
@@ -625,10 +625,10 @@ mod tests {
                 total_count += val_f;
 
                 // Update Sketch
-                // let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &SketchInput::Str(&key));
+                // let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &DataInput::Str(&key));
                 // let bln = um.find_bottom_layer_num(hash, 10);
                 // um.univmon_processing(&key, val, bln);
-                um.insert(&SketchInput::String(key), val);
+                um.insert(&DataInput::String(key), val);
             }
         }
 
@@ -679,7 +679,7 @@ mod tests {
             let key = format!("key_{key_id}");
             let value = (rng.random::<u32>() % 100 + 1) as i64;
             *truth.entry(key.clone()).or_insert(0) += value;
-            um.insert(&SketchInput::String(key), value);
+            um.insert(&DataInput::String(key), value);
         }
 
         let total_mass: f64 = truth.values().map(|&v| v as f64).sum();
@@ -837,9 +837,9 @@ mod tests {
 //     pub fn update(&mut self, key: &str, value: i64, bottom_layer_num: usize) {
 //         for i in 0..=bottom_layer_num {
 //             let count = if i == 0 {
-//                 self.cs_layers[i].update_and_est(&SketchInput::Str(key), value)
+//                 self.cs_layers[i].update_and_est(&DataInput::Str(key), value)
 //             } else {
-//                 self.cs_layers[i].update_and_est_without_l2(&SketchInput::Str(key), value)
+//                 self.cs_layers[i].update_and_est_without_l2(&DataInput::Str(key), value)
 //             };
 //             self.hh_layers[i].update(key, count as i64);
 //         }
@@ -851,27 +851,27 @@ mod tests {
 //             if bottom_layer_num > 0 {
 //                 // let mut median = self.cs_layers[bottom_layer_num].update_and_est_without_l2(key, value);
 //                 let mut median = self.cs_layers[bottom_layer_num]
-//                     .update_and_est_without_l2(&SketchInput::Str(key), value);
+//                     .update_and_est_without_l2(&DataInput::Str(key), value);
 //                 for l in (1..=bottom_layer_num).rev() {
 //                     self.hh_layers[l].update(key, median as i64);
 //                 }
 //                 // median = self.cs_layers[0].update_and_est(key, value);
-//                 median = self.cs_layers[0].update_and_est(&SketchInput::Str(key), value);
+//                 median = self.cs_layers[0].update_and_est(&DataInput::Str(key), value);
 //                 self.hh_layers[0].update(key, median as i64);
 //             } else {
 //                 // let median = self.cs_layers[0].update_and_est(key, value);
-//                 let median = self.cs_layers[0].update_and_est(&SketchInput::Str(key), value);
+//                 let median = self.cs_layers[0].update_and_est(&DataInput::Str(key), value);
 //                 self.hh_layers[0].update(key, median as i64);
 //             }
 //         } else {
 //             // let mut median = self.cs_layers[bottom_layer_num].update_and_est_without_l2(key, value);
 //             let mut median = self.cs_layers[bottom_layer_num]
-//                 .update_and_est_without_l2(&SketchInput::Str(key), value);
+//                 .update_and_est_without_l2(&DataInput::Str(key), value);
 //             for l in (1..=bottom_layer_num).rev() {
 //                 self.hh_layers[l].update(key, median as i64);
 //             }
 //             // median = self.cs_layers[0].update_and_est(key, value);
-//             median = self.cs_layers[0].update_and_est(&SketchInput::Str(key), value);
+//             median = self.cs_layers[0].update_and_est(&DataInput::Str(key), value);
 //             self.hh_layers[0].update(key, median as i64);
 //         }
 //     }
@@ -881,9 +881,9 @@ mod tests {
 //         if bottom_layer_num < 8 {
 //             for l in (0..=bottom_layer_num).rev() {
 //                 let median = if l == 0 {
-//                     self.cs_layers[l].update_and_est(&SketchInput::Str(key), value)
+//                     self.cs_layers[l].update_and_est(&DataInput::Str(key), value)
 //                 } else {
-//                     self.cs_layers[l].update_and_est_without_l2(&SketchInput::Str(key), value)
+//                     self.cs_layers[l].update_and_est_without_l2(&DataInput::Str(key), value)
 //                 };
 //                 self.hh_layers[l].update(key, median as i64);
 //             }
@@ -892,17 +892,17 @@ mod tests {
 //             for l in (0..=7).rev() {
 //                 if l == 0 {
 //                     // median = self.cs_layers[l].update_and_est(key, value);
-//                     median = self.cs_layers[l].update_and_est(&SketchInput::Str(key), value);
+//                     median = self.cs_layers[l].update_and_est(&DataInput::Str(key), value);
 //                 } else {
 //                     // median = self.cs_layers[l].update_and_est_without_l2(key, value);
 //                     median =
-//                         self.cs_layers[l].update_and_est_without_l2(&SketchInput::Str(key), value);
+//                         self.cs_layers[l].update_and_est_without_l2(&DataInput::Str(key), value);
 //                 }
 //                 self.hh_layers[l].update(key, median as i64);
 //             }
 //             for l in (8..=bottom_layer_num).rev() {
 //                 // median = self.cs_layers[l].update_and_est_without_l2(key, value);
-//                 median = self.cs_layers[l].update_and_est_without_l2(&SketchInput::Str(key), value);
+//                 median = self.cs_layers[l].update_and_est_without_l2(&DataInput::Str(key), value);
 //                 self.hh_layers[l].update(key, median as i64);
 //             }
 //         }
@@ -958,9 +958,9 @@ mod tests {
 //             for item in self.hh_layers[i].heap() {
 //                 if item.count > threshold {
 //                     // let hash = (hash64_seeded(CANONICAL_HASH_SEED, &item.key) >> (i+1)) & 1;
-//                     // let hash = (hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::Str(&item.key)) >> (i + 1)) & 1;
+//                     // let hash = (hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(&item.key)) >> (i + 1)) & 1;
 //                     let hash =
-//                         (hash64_seeded(BOTTOM_LAYER_FINDER, &SketchInput::Str(&item.key)) >> (i + 1)) & 1;
+//                         (hash64_seeded(BOTTOM_LAYER_FINDER, &DataInput::Str(&item.key)) >> (i + 1)) & 1;
 //                     let coe = 1.0 - 2.0 * (hash as f64);
 //                     tmp += coe * g(item.count as f64);
 //                 }

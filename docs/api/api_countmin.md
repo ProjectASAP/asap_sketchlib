@@ -21,10 +21,10 @@ fn from_storage(counts: S) -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, value: &SketchInput)
-fn insert_many(&mut self, value: &SketchInput, many: S::Counter)
-fn bulk_insert(&mut self, values: &[SketchInput])
-fn bulk_insert_many(&mut self, values: &[(SketchInput, S::Counter)])
+fn insert(&mut self, value: &DataInput)
+fn insert_many(&mut self, value: &DataInput, many: S::Counter)
+fn bulk_insert(&mut self, values: &[DataInput])
+fn bulk_insert_many(&mut self, values: &[(DataInput, S::Counter)])
 fn fast_insert_with_hash_value(&mut self, hashed_val: &S::HashValueType)
 fn fast_insert_many_with_hash_value(&mut self, hashed_val: &S::HashValueType, many: S::Counter)
 ```
@@ -32,7 +32,7 @@ fn fast_insert_many_with_hash_value(&mut self, hashed_val: &S::HashValueType, ma
 ## Query
 
 ```rust
-fn estimate(&self, value: &SketchInput) -> S::Counter
+fn estimate(&self, value: &DataInput) -> S::Counter
 fn fast_estimate_with_hash(&self, hashed_val: &S::HashValueType) -> S::Counter
 fn rows(&self) -> usize
 fn cols(&self) -> usize
@@ -56,11 +56,11 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use asap_sketchlib::{CountMin, SketchInput};
+use asap_sketchlib::{CountMin, DataInput};
 
 let mut cm = CountMin::with_dimensions(3, 1024);
-cm.insert(&SketchInput::U64(42));
-let est = cm.estimate(&SketchInput::U64(42));
+cm.insert(&DataInput::U64(42));
+let est = cm.estimate(&DataInput::U64(42));
 assert!(est >= 1);
 ```
 

@@ -6,9 +6,9 @@
 
 use crate::sketches::count::CountSketchCounter;
 use crate::{
-    Count, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
-    FixedMatrix, HHHeap, MatrixStorage, QuickMatrixI64, QuickMatrixI128, RegularPath, SketchHasher,
-    SketchInput, Vector2D, heap_item_to_sketch_input,
+    Count, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher,
+    FastPath, FixedMatrix, HHHeap, MatrixStorage, QuickMatrixI64, QuickMatrixI128, RegularPath,
+    SketchHasher, Vector2D, heap_item_to_sketch_input,
 };
 
 const DEFAULT_TOP_K: usize = 32;
@@ -209,7 +209,7 @@ where
 {
     /// Inserts a single observation and updates the top-k heap.
     #[inline]
-    pub fn insert(&mut self, key: &SketchInput) {
+    pub fn insert(&mut self, key: &DataInput) {
         self.cs.insert(key);
         let est = self.cs.estimate(key);
         self.heap.update(key, est as i64);
@@ -217,14 +217,14 @@ where
 
     /// Inserts an observation with the given count and updates the top-k heap.
     #[inline]
-    pub fn insert_many(&mut self, key: &SketchInput, many: S::Counter) {
+    pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
         self.cs.insert_many(key, many);
         let est = self.cs.estimate(key);
         self.heap.update(key, est as i64);
     }
 
     /// Inserts a batch of observations, updating the heap after each.
-    pub fn bulk_insert(&mut self, values: &[SketchInput]) {
+    pub fn bulk_insert(&mut self, values: &[DataInput]) {
         for value in values {
             self.insert(value);
         }
@@ -232,7 +232,7 @@ where
 
     /// Returns the CS frequency estimate (median) for the given key.
     #[inline]
-    pub fn estimate(&self, key: &SketchInput) -> f64 {
+    pub fn estimate(&self, key: &DataInput) -> f64 {
         self.cs.estimate(key)
     }
 
@@ -267,7 +267,7 @@ where
 {
     /// Inserts a single observation using fast-path hashing and updates the heap.
     #[inline]
-    pub fn insert(&mut self, key: &SketchInput) {
+    pub fn insert(&mut self, key: &DataInput) {
         self.cs.insert(key);
         let est = self.cs.estimate(key);
         self.heap.update(key, est as i64);
@@ -275,14 +275,14 @@ where
 
     /// Inserts an observation with the given count using fast-path hashing.
     #[inline]
-    pub fn insert_many(&mut self, key: &SketchInput, many: S::Counter) {
+    pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
         self.cs.insert_many(key, many);
         let est = self.cs.estimate(key);
         self.heap.update(key, est as i64);
     }
 
     /// Inserts a batch of observations using fast-path hashing.
-    pub fn bulk_insert(&mut self, values: &[SketchInput]) {
+    pub fn bulk_insert(&mut self, values: &[DataInput]) {
         for value in values {
             self.insert(value);
         }
@@ -290,7 +290,7 @@ where
 
     /// Returns the CS frequency estimate (median) using fast-path hashing.
     #[inline]
-    pub fn estimate(&self, key: &SketchInput) -> f64 {
+    pub fn estimate(&self, key: &DataInput) -> f64 {
         self.cs.estimate(key)
     }
 
@@ -316,11 +316,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SketchInput;
+    use crate::DataInput;
     use crate::test_utils::sample_zipf_u64;
     use std::collections::{HashMap, HashSet};
 
-    fn heap_count_for_key(heap: &HHHeap, key: &SketchInput) -> Option<i64> {
+    fn heap_count_for_key(heap: &HHHeap, key: &DataInput) -> Option<i64> {
         heap.heap()
             .iter()
             .find(|item| heap_item_to_sketch_input(&item.key) == *key)
@@ -339,7 +339,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
         let mut sketch = CSHeap::<Vector2D<i64>, RegularPath>::new(rows, cols, top_k);
         for value in sample_zipf_u64(domain, exponent, samples, seed) {
-            let key = SketchInput::U64(value);
+            let key = DataInput::U64(value);
             sketch.insert(&key);
             *truth.entry(value).or_insert(0) += 1;
         }
@@ -358,7 +358,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
         let mut sketch = CSHeap::<Vector2D<i64>, FastPath>::new(rows, cols, top_k);
         for value in sample_zipf_u64(domain, exponent, samples, seed) {
-            let key = SketchInput::U64(value);
+            let key = DataInput::U64(value);
             sketch.insert(&key);
             *truth.entry(value).or_insert(0) += 1;
         }
@@ -376,7 +376,7 @@ mod tests {
         heap.heap()
             .iter()
             .map(|item| match heap_item_to_sketch_input(&item.key) {
-                SketchInput::U64(v) => v,
+                DataInput::U64(v) => v,
                 other => panic!("expected U64 key in zipf tests, got {other:?}"),
             })
             .collect()
@@ -386,7 +386,7 @@ mod tests {
     fn insert_and_estimate() {
         // Verifies single-key inserts update both CS estimate and wrapper behavior.
         let mut sh = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 256, 10);
-        let key = SketchInput::Str("hello");
+        let key = DataInput::Str("hello");
         for _ in 0..5 {
             sh.insert(&key);
         }
@@ -400,7 +400,7 @@ mod tests {
 
         // Insert 5 distinct keys with different frequencies.
         for i in 1..=5u64 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             for _ in 0..(i * 100) {
                 sh.insert(&key);
             }
@@ -421,7 +421,7 @@ mod tests {
         let mut a = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 256, 5);
         let mut b = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 256, 5);
 
-        let key = SketchInput::Str("merge_key");
+        let key = DataInput::Str("merge_key");
         for _ in 0..10 {
             a.insert(&key);
         }
@@ -451,7 +451,7 @@ mod tests {
     fn insert_many_updates_estimate_and_heap() {
         // Verifies insert_many updates estimate and heap count consistently.
         let mut sh = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 2048, 4);
-        let key = SketchInput::Str("many");
+        let key = DataInput::Str("many");
         sh.insert_many(&key, 17);
 
         let estimate = sh.estimate(&key);
@@ -464,15 +464,15 @@ mod tests {
         // Verifies bulk stream ingestion updates multiple keys and heap tracking.
         let mut sh = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 2048, 4);
         let values = vec![
-            SketchInput::U64(7),
-            SketchInput::U64(8),
-            SketchInput::U64(7),
-            SketchInput::U64(9),
-            SketchInput::U64(7),
+            DataInput::U64(7),
+            DataInput::U64(8),
+            DataInput::U64(7),
+            DataInput::U64(9),
+            DataInput::U64(7),
         ];
         sh.bulk_insert(&values);
 
-        let key = SketchInput::U64(7);
+        let key = DataInput::U64(7);
         assert!((sh.estimate(&key) - 3.0).abs() < 1e-9);
         assert_eq!(
             heap_count_for_key(sh.heap(), &key),
@@ -484,7 +484,7 @@ mod tests {
     fn clear_heap_keeps_cs_counters() {
         // Verifies clearing heap preserves sketch counters for future updates.
         let mut sh = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 2048, 2);
-        let key = SketchInput::Str("persist");
+        let key = DataInput::Str("persist");
         sh.insert_many(&key, 5);
 
         sh.clear_heap();
@@ -514,9 +514,9 @@ mod tests {
         // Verifies merge refreshes pre-existing self heap keys to merged estimates.
         let mut a = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 4096, 2);
         let mut b = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 4096, 1);
-        let a_key = SketchInput::Str("a-key");
-        let c_key = SketchInput::Str("c-key");
-        let b_key = SketchInput::Str("b-key");
+        let a_key = DataInput::Str("a-key");
+        let c_key = DataInput::Str("c-key");
+        let b_key = DataInput::Str("b-key");
 
         a.insert_many(&a_key, 120);
         a.insert_many(&c_key, 10);
@@ -534,7 +534,7 @@ mod tests {
     fn fast_path_insert_and_estimate() {
         // Verifies FastPath insert and estimate stay coherent for repeated keys.
         let mut sh = CSHeap::<Vector2D<i64>, FastPath>::new(5, 256, 10);
-        let key = SketchInput::Str("fast");
+        let key = DataInput::Str("fast");
         for _ in 0..7 {
             sh.insert(&key);
         }
@@ -545,12 +545,12 @@ mod tests {
     fn fast_path_insert_many_and_bulk_insert() {
         // Verifies FastPath batched APIs maintain estimate/heap consistency.
         let mut sh = CSHeap::<Vector2D<i64>, FastPath>::new(5, 2048, 4);
-        let key = SketchInput::Str("fast-many");
+        let key = DataInput::Str("fast-many");
         sh.insert_many(&key, 6);
         sh.bulk_insert(&[
-            SketchInput::Str("fast-many"),
-            SketchInput::Str("another"),
-            SketchInput::Str("fast-many"),
+            DataInput::Str("fast-many"),
+            DataInput::Str("another"),
+            DataInput::Str("fast-many"),
         ]);
 
         let estimate = sh.estimate(&key);
@@ -564,7 +564,7 @@ mod tests {
         let mut sh = CSHeap::<Vector2D<i64>, FastPath>::new(5, 4096, 3);
 
         for i in 1..=5u64 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             sh.insert_many(&key, (i as i64) * 100);
         }
 
@@ -578,9 +578,9 @@ mod tests {
         // Verifies FastPath merge refreshes self heap counts from merged sketch.
         let mut a = CSHeap::<Vector2D<i64>, FastPath>::new(5, 4096, 2);
         let mut b = CSHeap::<Vector2D<i64>, FastPath>::new(5, 4096, 1);
-        let a_key = SketchInput::Str("a-fast");
-        let c_key = SketchInput::Str("c-fast");
-        let b_key = SketchInput::Str("b-fast");
+        let a_key = DataInput::Str("a-fast");
+        let c_key = DataInput::Str("c-fast");
+        let b_key = DataInput::Str("b-fast");
 
         a.insert_many(&a_key, 120);
         a.insert_many(&c_key, 10);
@@ -680,13 +680,13 @@ mod tests {
     fn heap_entries_match_cs_estimates_after_mutations() {
         // Verifies heap entries always match current sketch estimates after mutations.
         let mut sh = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 4096, 4);
-        sh.insert_many(&SketchInput::Str("a"), 100);
-        sh.insert_many(&SketchInput::Str("b"), 70);
+        sh.insert_many(&DataInput::Str("a"), 100);
+        sh.insert_many(&DataInput::Str("b"), 70);
         sh.bulk_insert(&[
-            SketchInput::Str("a"),
-            SketchInput::Str("c"),
-            SketchInput::Str("a"),
-            SketchInput::Str("d"),
+            DataInput::Str("a"),
+            DataInput::Str("c"),
+            DataInput::Str("a"),
+            DataInput::Str("d"),
         ]);
 
         for item in sh.heap().heap() {
@@ -695,8 +695,8 @@ mod tests {
         }
 
         let mut other = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 4096, 4);
-        other.insert_many(&SketchInput::Str("b"), 90);
-        other.insert_many(&SketchInput::Str("e"), 200);
+        other.insert_many(&DataInput::Str("b"), 90);
+        other.insert_many(&DataInput::Str("e"), 200);
         sh.merge(&other);
 
         for item in sh.heap().heap() {
@@ -709,15 +709,15 @@ mod tests {
     fn bulk_insert_equivalent_to_repeated_insert() {
         // Verifies bulk_insert behavior matches repeated insert behavior.
         let values = vec![
-            SketchInput::U64(1),
-            SketchInput::U64(2),
-            SketchInput::U64(1),
-            SketchInput::U64(3),
-            SketchInput::U64(2),
-            SketchInput::U64(1),
-            SketchInput::U64(4),
-            SketchInput::U64(2),
-            SketchInput::U64(5),
+            DataInput::U64(1),
+            DataInput::U64(2),
+            DataInput::U64(1),
+            DataInput::U64(3),
+            DataInput::U64(2),
+            DataInput::U64(1),
+            DataInput::U64(4),
+            DataInput::U64(2),
+            DataInput::U64(5),
         ];
 
         let mut via_bulk = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 4096, 3);
@@ -729,7 +729,7 @@ mod tests {
         }
 
         for key in [1_u64, 2, 3, 4, 5] {
-            let k = SketchInput::U64(key);
+            let k = DataInput::U64(key);
             assert!((via_bulk.estimate(&k) - via_repeat.estimate(&k)).abs() < 1e-9);
             assert_eq!(
                 heap_count_for_key(via_bulk.heap(), &k),
@@ -742,16 +742,16 @@ mod tests {
     fn regular_vs_fast_equivalence_on_same_stream() {
         // Verifies regular and fast wrapper paths match on a short deterministic stream.
         let values = vec![
-            SketchInput::Str("alpha"),
-            SketchInput::Str("beta"),
-            SketchInput::Str("alpha"),
-            SketchInput::Str("gamma"),
-            SketchInput::Str("beta"),
-            SketchInput::Str("alpha"),
-            SketchInput::Str("delta"),
-            SketchInput::Str("gamma"),
-            SketchInput::Str("epsilon"),
-            SketchInput::Str("alpha"),
+            DataInput::Str("alpha"),
+            DataInput::Str("beta"),
+            DataInput::Str("alpha"),
+            DataInput::Str("gamma"),
+            DataInput::Str("beta"),
+            DataInput::Str("alpha"),
+            DataInput::Str("delta"),
+            DataInput::Str("gamma"),
+            DataInput::Str("epsilon"),
+            DataInput::Str("alpha"),
         ];
 
         let mut regular = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 4096, 3);
@@ -762,7 +762,7 @@ mod tests {
         }
 
         for key in ["alpha", "beta", "gamma", "delta", "epsilon"] {
-            let k = SketchInput::Str(key);
+            let k = DataInput::Str(key);
             assert!((regular.estimate(&k) - fast.estimate(&k)).abs() < 1e-9);
             assert_eq!(
                 heap_count_for_key(regular.heap(), &k),
@@ -775,20 +775,20 @@ mod tests {
     fn merge_with_empty_other_and_empty_self() {
         // Verifies merge behavior is stable when one side is empty.
         let mut non_empty = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 2048, 3);
-        non_empty.insert_many(&SketchInput::Str("x"), 110);
-        non_empty.insert_many(&SketchInput::Str("y"), 50);
+        non_empty.insert_many(&DataInput::Str("x"), 110);
+        non_empty.insert_many(&DataInput::Str("y"), 50);
 
         let empty = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 2048, 3);
         let before_len = non_empty.heap().len();
-        let before_x = non_empty.estimate(&SketchInput::Str("x"));
+        let before_x = non_empty.estimate(&DataInput::Str("x"));
         non_empty.merge(&empty);
         assert_eq!(non_empty.heap().len(), before_len);
-        assert!((non_empty.estimate(&SketchInput::Str("x")) - before_x).abs() < 1e-9);
+        assert!((non_empty.estimate(&DataInput::Str("x")) - before_x).abs() < 1e-9);
 
         let mut empty_self = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 2048, 3);
         empty_self.merge(&non_empty);
-        assert!((empty_self.estimate(&SketchInput::Str("x")) - before_x).abs() < 1e-9);
-        assert!(heap_count_for_key(empty_self.heap(), &SketchInput::Str("x")).is_some());
+        assert!((empty_self.estimate(&DataInput::Str("x")) - before_x).abs() < 1e-9);
+        assert!(heap_count_for_key(empty_self.heap(), &DataInput::Str("x")).is_some());
     }
 
     #[test]
@@ -797,16 +797,16 @@ mod tests {
         let mut left = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 4096, 4);
         let mut right = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 4096, 4);
 
-        left.insert_many(&SketchInput::Str("dup"), 100);
-        left.insert_many(&SketchInput::Str("left-only"), 70);
+        left.insert_many(&DataInput::Str("dup"), 100);
+        left.insert_many(&DataInput::Str("left-only"), 70);
 
-        right.insert_many(&SketchInput::Str("dup"), 90);
-        right.insert_many(&SketchInput::Str("right-only"), 60);
+        right.insert_many(&DataInput::Str("dup"), 90);
+        right.insert_many(&DataInput::Str("right-only"), 60);
 
         left.merge(&right);
 
-        let merged_estimate = left.estimate(&SketchInput::Str("dup")) as i64;
-        let dup_count = heap_count_for_key(left.heap(), &SketchInput::Str("dup"));
+        let merged_estimate = left.estimate(&DataInput::Str("dup")) as i64;
+        let dup_count = heap_count_for_key(left.heap(), &DataInput::Str("dup"));
         assert_eq!(dup_count, Some(merged_estimate));
         assert!(left.heap().len() <= left.heap().capacity());
 
@@ -814,7 +814,7 @@ mod tests {
             .heap()
             .heap()
             .iter()
-            .filter(|item| heap_item_to_sketch_input(&item.key) == SketchInput::Str("dup"))
+            .filter(|item| heap_item_to_sketch_input(&item.key) == DataInput::Str("dup"))
             .count();
         assert_eq!(dup_entries, 1);
     }
@@ -878,7 +878,7 @@ mod tests {
         let mut regular = CSHeap::<Vector2D<i64>, RegularPath>::new(rows, cols, top_k);
         let mut fast = CSHeap::<Vector2D<i64>, FastPath>::new(rows, cols, top_k);
         for value in &stream {
-            let key = SketchInput::U64(*value);
+            let key = DataInput::U64(*value);
             regular.insert(&key);
             fast.insert(&key);
         }

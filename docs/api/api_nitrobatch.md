@@ -35,7 +35,7 @@ fn target_mut(&mut self) -> &mut S
 fn into_target(self) -> S
 fn get_sampling_rate(&self) -> f64
 fn get_ctx(&self) -> (usize, f64, usize, usize)
-fn estimate_median(&self, value: &SketchInput) -> f64
+fn estimate_median(&self, value: &DataInput) -> f64
 ```
 
 ## Merge

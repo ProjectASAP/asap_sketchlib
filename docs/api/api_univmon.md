@@ -20,8 +20,8 @@ fn init_univmon(heap_size: usize, sketch_row: usize, sketch_col: usize, layer_si
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &SketchInput, value: i64)
-fn fast_insert(&mut self, key: &SketchInput, value: i64)
+fn insert(&mut self, key: &DataInput, value: i64)
+fn fast_insert(&mut self, key: &DataInput, value: i64)
 fn free(&mut self)
 ```
 
@@ -51,10 +51,10 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use asap_sketchlib::{SketchInput, UnivMon};
+use asap_sketchlib::{DataInput, UnivMon};
 
 let mut um = UnivMon::init_univmon(32, 3, 1024, 4);
-um.insert(&SketchInput::Str("flow"), 1);
+um.insert(&DataInput::Str("flow"), 1);
 assert!(um.calc_l1() >= 1.0);
 ```
 

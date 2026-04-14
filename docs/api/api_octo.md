@@ -54,7 +54,7 @@ Available on `CountMin<S, RegularPath, H>` and `CountMin<S, FastPath, H>`
 where `S::Counter = i32`.
 
 ```rust
-fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CmDelta))
+fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CmDelta))
 fn apply_delta(&mut self, delta: CmDelta)
 ```
 
@@ -68,13 +68,13 @@ counter keeps running; the delta carries the threshold value.
 ### CountMin Delta Example
 
 ```rust
-use asap_sketchlib::{CountMin, RegularPath, SketchInput, Vector2D};
+use asap_sketchlib::{CountMin, RegularPath, DataInput, Vector2D};
 use asap_sketchlib::sketches::octo_delta::CmDelta;
 
 let mut child = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
 let mut parent = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
 
-let key = SketchInput::U64(42);
+let key = DataInput::U64(42);
 child.insert_emit_delta(&key, &mut |delta: CmDelta| {
     parent.apply_delta(delta);
 });
@@ -86,7 +86,7 @@ Available on `Count<S, RegularPath, H>` and `Count<S, FastPath, H>`
 where `S::Counter = i32`.
 
 ```rust
-fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta))
+fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta))
 fn apply_delta(&mut self, delta: CountDelta)
 ```
 
@@ -100,13 +100,13 @@ value. After emission, the child counter resets to zero.
 ### Count Sketch Delta Example
 
 ```rust
-use asap_sketchlib::{Count, RegularPath, SketchInput, Vector2D};
+use asap_sketchlib::{Count, RegularPath, DataInput, Vector2D};
 use asap_sketchlib::sketches::octo_delta::CountDelta;
 
 let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
 let mut parent = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
 
-let key = SketchInput::U64(99);
+let key = DataInput::U64(99);
 child.insert_emit_delta(&key, &mut |delta: CountDelta| {
     parent.apply_delta(delta);
 });
@@ -118,7 +118,7 @@ Available on all `HyperLogLogImpl<Variant, Registers, H>` variants
 (Classic, ErtlMLE, and any precision level).
 
 ```rust
-fn insert_emit_delta(&mut self, obj: &SketchInput, emit: &mut impl FnMut(HllDelta))
+fn insert_emit_delta(&mut self, obj: &DataInput, emit: &mut impl FnMut(HllDelta))
 fn insert_emit_delta_with_hash(&mut self, hashed_val: u64, emit: &mut impl FnMut(HllDelta))
 fn apply_delta(&mut self, delta: HllDelta)
 ```
@@ -133,13 +133,13 @@ every improvement is emitted immediately.
 ### HyperLogLog Example
 
 ```rust
-use asap_sketchlib::{HyperLogLog, Classic, SketchInput};
+use asap_sketchlib::{HyperLogLog, Classic, DataInput};
 use asap_sketchlib::sketches::octo_delta::HllDelta;
 
 let mut child = HyperLogLog::<Classic>::default();
 let mut parent = HyperLogLog::<Classic>::default();
 
-child.insert_emit_delta(&SketchInput::U64(1), &mut |delta: HllDelta| {
+child.insert_emit_delta(&DataInput::U64(1), &mut |delta: HllDelta| {
     parent.apply_delta(delta);
 });
 ```
@@ -169,8 +169,8 @@ pub struct OctoConfig {
 
 ```rust
 fn new<F, PF>(config: &OctoConfig, worker_factory: F, parent_factory: PF) -> Self
-fn insert(&mut self, input: SketchInput<'_>)
-fn insert_batch(&mut self, inputs: &[SketchInput<'_>])
+fn insert(&mut self, input: DataInput<'_>)
+fn insert_batch(&mut self, inputs: &[DataInput<'_>])
 fn read_handle(&self) -> OctoReadHandle<P>
 fn close(&self)
 fn finish(self) -> OctoResult<P>
@@ -180,7 +180,7 @@ fn finish(self) -> OctoResult<P>
 
 ```rust
 pub fn run_octo<W, P>(
-    inputs: &[SketchInput<'_>],
+    inputs: &[DataInput<'_>],
     config: &OctoConfig,
     worker_factory: impl Fn(usize) -> W,
     parent_factory: impl FnOnce() -> P,

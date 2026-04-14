@@ -10,7 +10,7 @@
 //! Any type implementing [`TumblingWindowSketch`] can be used. Built-in
 //! implementations are provided for [`FoldCMS`], [`FoldCS`], and [`KLL`].
 
-use crate::SketchInput;
+use crate::DataInput;
 use crate::fold_cms::FoldCMS;
 use crate::fold_cs::FoldCS;
 use crate::kll::KLL;
@@ -32,7 +32,7 @@ pub trait TumblingWindowSketch: Clone + Sized {
     fn from_config(config: &Self::Config) -> Self;
 
     /// Insert one observation.
-    fn tumbling_insert(&mut self, key: &SketchInput, value: i64);
+    fn tumbling_insert(&mut self, key: &DataInput, value: i64);
 
     /// Merge `other` into `self`.
     fn tumbling_merge(&mut self, other: &Self);
@@ -86,7 +86,7 @@ impl TumblingWindowSketch for FoldCMS {
         )
     }
 
-    fn tumbling_insert(&mut self, key: &SketchInput, value: i64) {
+    fn tumbling_insert(&mut self, key: &DataInput, value: i64) {
         self.insert(key, value);
     }
 
@@ -111,7 +111,7 @@ impl TumblingWindowSketch for FoldCS {
         )
     }
 
-    fn tumbling_insert(&mut self, key: &SketchInput, value: i64) {
+    fn tumbling_insert(&mut self, key: &DataInput, value: i64) {
         self.insert(key, value);
     }
 
@@ -131,7 +131,7 @@ impl TumblingWindowSketch for KLL {
         KLL::init(config.k, config.m)
     }
 
-    fn tumbling_insert(&mut self, key: &SketchInput, _value: i64) {
+    fn tumbling_insert(&mut self, key: &DataInput, _value: i64) {
         // KLL is a quantile sketch — each call is one observation.
         let _ = self.update(key);
     }
@@ -259,7 +259,7 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
     /// If `time` falls beyond the current window boundary, the active window
     /// is closed and new windows are opened as needed (empty intermediate
     /// windows are skipped).
-    pub fn insert(&mut self, time: u64, key: &SketchInput, value: i64) {
+    pub fn insert(&mut self, time: u64, key: &DataInput, value: i64) {
         // Advance windows as needed.
         while time >= self.active_start + self.window_size {
             self.close_active();
@@ -436,15 +436,15 @@ mod tests {
     fn fold_cms_clear_resets_to_empty() {
         let mut sk: FoldCMS = FoldCMS::new(3, 1024, 3, 10);
         for i in 0..50u64 {
-            sk.insert(&SketchInput::U64(i), 1);
+            sk.insert(&DataInput::U64(i), 1);
         }
-        assert!(sk.query(&SketchInput::U64(0)) > 0);
+        assert!(sk.query(&DataInput::U64(0)) > 0);
 
         sk.clear();
 
         for i in 0..50u64 {
             assert_eq!(
-                sk.query(&SketchInput::U64(i)),
+                sk.query(&DataInput::U64(i)),
                 0,
                 "key {i} should be 0 after clear"
             );
@@ -456,15 +456,15 @@ mod tests {
     fn fold_cs_clear_resets_to_empty() {
         let mut sk: FoldCS = FoldCS::new(3, 1024, 3, 10);
         for i in 0..50u64 {
-            sk.insert(&SketchInput::U64(i), 1);
+            sk.insert(&DataInput::U64(i), 1);
         }
-        assert_ne!(sk.query(&SketchInput::U64(0)), 0);
+        assert_ne!(sk.query(&DataInput::U64(0)), 0);
 
         sk.clear();
 
         for i in 0..50u64 {
             assert_eq!(
-                sk.query(&SketchInput::U64(i)),
+                sk.query(&DataInput::U64(i)),
                 0,
                 "key {i} should be 0 after clear"
             );
@@ -476,7 +476,7 @@ mod tests {
     fn kll_clear_resets_to_empty() {
         let mut sk = KLL::init(200, 8);
         for i in 0..1000 {
-            sk.update(&SketchInput::F64(i as f64)).unwrap();
+            sk.update(&DataInput::F64(i as f64)).unwrap();
         }
         assert!(sk.count() > 0);
 
@@ -514,16 +514,16 @@ mod tests {
         let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 10, config, 4);
 
         // Insert into window 0 (time 0..99).
-        tw.insert(0, &SketchInput::Str("a"), 1);
-        tw.insert(50, &SketchInput::Str("a"), 1);
+        tw.insert(0, &DataInput::Str("a"), 1);
+        tw.insert(50, &DataInput::Str("a"), 1);
         assert_eq!(tw.closed_count(), 0);
 
         // Time 100 → window 0 closes, window 1 opens.
-        tw.insert(100, &SketchInput::Str("b"), 1);
+        tw.insert(100, &DataInput::Str("b"), 1);
         assert_eq!(tw.closed_count(), 1);
 
         // Time 200 → window 1 closes.
-        tw.insert(200, &SketchInput::Str("c"), 1);
+        tw.insert(200, &DataInput::Str("c"), 1);
         assert_eq!(tw.closed_count(), 2);
     }
 
@@ -539,7 +539,7 @@ mod tests {
 
         // Fill 4 windows (max_windows=3 closed + active).
         for w in 0..5 {
-            tw.insert(w * 100, &SketchInput::U64(w), 1);
+            tw.insert(w * 100, &DataInput::U64(w), 1);
         }
 
         // We should have exactly 3 closed windows (oldest evicted).
@@ -564,7 +564,7 @@ mod tests {
 
         // Create enough windows to trigger eviction.
         for w in 0..6 {
-            tw.insert(w * 100, &SketchInput::U64(w), 1);
+            tw.insert(w * 100, &DataInput::U64(w), 1);
         }
 
         // Pool should have recycled sketches, so available > 0.
@@ -598,7 +598,7 @@ mod tests {
             config.top_k,
         );
 
-        let keys: Vec<SketchInput> = (0..20u64).map(SketchInput::U64).collect();
+        let keys: Vec<DataInput> = (0..20u64).map(DataInput::U64).collect();
         for (i, key) in keys.iter().enumerate() {
             let time = (i as u64) * 30; // spread across windows
             tw.insert(time, key, 1);
@@ -626,18 +626,18 @@ mod tests {
         let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 10, config, 4);
 
         // Window 0: key "old"
-        tw.insert(0, &SketchInput::Str("old"), 5);
+        tw.insert(0, &DataInput::Str("old"), 5);
         // Window 1: key "new"
-        tw.insert(100, &SketchInput::Str("new"), 10);
+        tw.insert(100, &DataInput::Str("new"), 10);
         // Window 2 (active): key "active"
-        tw.insert(200, &SketchInput::Str("active"), 7);
+        tw.insert(200, &DataInput::Str("active"), 7);
 
         // query_recent(1) should include 1 most recent closed + active.
         let recent = tw.query_recent(1);
-        assert_eq!(recent.query(&SketchInput::Str("new")), 10);
-        assert_eq!(recent.query(&SketchInput::Str("active")), 7);
+        assert_eq!(recent.query(&DataInput::Str("new")), 10);
+        assert_eq!(recent.query(&DataInput::Str("active")), 7);
         // "old" is in window 0 which is not in the recent 1.
-        assert_eq!(recent.query(&SketchInput::Str("old")), 0);
+        assert_eq!(recent.query(&DataInput::Str("old")), 0);
     }
 
     // -- FoldCMS hierarchical merge via tumbling windows ----------------------
@@ -675,7 +675,7 @@ mod tests {
         );
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &SketchInput::U64(value), 1);
+            tw.insert(i as u64, &DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -688,7 +688,7 @@ mod tests {
 
         let mut within = 0usize;
         for (&key, &true_count) in &truth {
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) < error_bound {
                 within += 1;
             }
@@ -724,7 +724,7 @@ mod tests {
         );
 
         for (i, &v) in values.iter().enumerate() {
-            tw.insert(i as u64, &SketchInput::F64(v), 1);
+            tw.insert(i as u64, &DataInput::F64(v), 1);
         }
 
         let merged = tw.query_all();
@@ -758,18 +758,18 @@ mod tests {
         };
         let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 10, config, 4);
 
-        tw.insert(10, &SketchInput::Str("x"), 5);
+        tw.insert(10, &DataInput::Str("x"), 5);
         assert_eq!(tw.closed_count(), 0);
 
         tw.flush(50);
         assert_eq!(tw.closed_count(), 1);
 
         // Active should now be empty.
-        assert_eq!(tw.active_sketch().query(&SketchInput::Str("x")), 0);
+        assert_eq!(tw.active_sketch().query(&DataInput::Str("x")), 0);
 
         // But query_all should still find the data.
         let all = tw.query_all();
-        assert_eq!(all.query(&SketchInput::Str("x")), 5);
+        assert_eq!(all.query(&DataInput::Str("x")), 5);
     }
 
     // -- FoldCS tumbling test ------------------------------------------------
@@ -784,12 +784,12 @@ mod tests {
         };
         let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(100, 10, config, 4);
 
-        tw.insert(0, &SketchInput::Str("hello"), 5);
-        tw.insert(100, &SketchInput::Str("hello"), 3);
-        tw.insert(200, &SketchInput::Str("hello"), 2);
+        tw.insert(0, &DataInput::Str("hello"), 5);
+        tw.insert(100, &DataInput::Str("hello"), 3);
+        tw.insert(200, &DataInput::Str("hello"), 2);
 
         let merged = tw.query_all();
-        assert_eq!(merged.query(&SketchInput::Str("hello")), 10);
+        assert_eq!(merged.query(&DataInput::Str("hello")), 10);
     }
 
     #[test]
@@ -804,7 +804,7 @@ mod tests {
 
         for w in 0..4u64 {
             for i in (w * 10)..((w + 1) * 10) {
-                tw.insert(w * 100 + i, &SketchInput::U64(i), 1);
+                tw.insert(w * 100 + i, &DataInput::U64(i), 1);
             }
         }
 
@@ -814,7 +814,7 @@ mod tests {
         // Count Sketch uses signed counters + median; allow small error.
         let mut errors = 0;
         for i in 0..40u64 {
-            let est = merged.query(&SketchInput::U64(i));
+            let est = merged.query(&DataInput::U64(i));
             if (est - 1).abs() > 1 {
                 errors += 1;
             }
@@ -856,7 +856,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &SketchInput::U64(value), 1);
+            tw.insert(i as u64, &DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -874,7 +874,7 @@ mod tests {
         let mut total_abs_error = 0i64;
         let mut max_abs_error = 0i64;
         for (&key, &true_count) in &truth {
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             let err = (est - true_count).abs();
             total_abs_error += err;
             max_abs_error = max_abs_error.max(err);
@@ -937,7 +937,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
         for (i, &value) in stream.iter().enumerate() {
             let t = i as u64;
-            let key = SketchInput::U64(value);
+            let key = DataInput::U64(value);
             tumbling_flat.insert(t, &key, 1);
             tumbling_hier.insert(t, &key, 1);
             *truth.entry(value).or_insert(0) += 1;
@@ -959,8 +959,8 @@ mod tests {
         let merged_flat_unfolded = merged_flat.unfold_full();
 
         for &key in truth.keys() {
-            let est_flat = merged_flat_unfolded.query(&SketchInput::U64(key));
-            let est_hier = merged_hier.query(&SketchInput::U64(key));
+            let est_flat = merged_flat_unfolded.query(&DataInput::U64(key));
+            let est_hier = merged_hier.query(&DataInput::U64(key));
             assert_eq!(
                 est_flat, est_hier,
                 "flat vs hierarchical mismatch for key {key}: flat={est_flat}, hier={est_hier}"
@@ -997,7 +997,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &SketchInput::U64(value), 1);
+            tw.insert(i as u64, &DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1018,7 +1018,7 @@ mod tests {
         let mut total_abs_error = 0i64;
         let mut max_abs_error = 0i64;
         for (&key, &true_count) in &truth {
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             let err = (est - true_count).abs();
             total_abs_error += err;
             max_abs_error = max_abs_error.max(err);
@@ -1058,7 +1058,7 @@ mod tests {
         let values = sample_uniform_f64(0.0, 10_000_000.0, total_samples, 0x411_00171);
 
         for (i, &v) in values.iter().enumerate() {
-            tw.insert(i as u64, &SketchInput::F64(v), 1);
+            tw.insert(i as u64, &DataInput::F64(v), 1);
         }
 
         let merged = tw.query_all();
@@ -1105,11 +1105,11 @@ mod tests {
         let phase2 = sample_normal_f64(500.0, 50.0, samples_per_phase, 0xFA_ACE2);
 
         for (i, &v) in phase1.iter().enumerate() {
-            tw.insert(i as u64, &SketchInput::F64(v), 1);
+            tw.insert(i as u64, &DataInput::F64(v), 1);
         }
         for (i, &v) in phase2.iter().enumerate() {
             let t = (samples_per_phase + i) as u64;
-            tw.insert(t, &SketchInput::F64(v), 1);
+            tw.insert(t, &DataInput::F64(v), 1);
         }
 
         let merged = tw.query_all();
@@ -1184,7 +1184,7 @@ mod tests {
             let end = start + samples_per_window;
             for i in start..end {
                 let value = stream[i];
-                tw.insert(i as u64, &SketchInput::U64(value), 1);
+                tw.insert(i as u64, &DataInput::U64(value), 1);
                 *window_truth.entry(value).or_insert(0) += 1;
             }
             per_window_truth.push(window_truth);
@@ -1229,7 +1229,7 @@ mod tests {
         // Retained keys: estimates should be close to retained truth.
         let mut within = 0usize;
         for (&key, &true_count) in &retained_truth {
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) <= error_bound {
                 within += 1;
             }
@@ -1248,7 +1248,7 @@ mod tests {
             if retained_truth.contains_key(&key) {
                 continue; // key also appears in retained windows
             }
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             assert!(
                 (est as f64) <= error_bound,
                 "evicted-only key {key} estimate {est} exceeds error bound {error_bound:.2}"
@@ -1295,7 +1295,7 @@ mod tests {
             let end = start + samples_per_window;
             for i in start..end {
                 let value = stream[i];
-                tw.insert(i as u64, &SketchInput::U64(value), 1);
+                tw.insert(i as u64, &DataInput::U64(value), 1);
                 *window_truth.entry(value).or_insert(0) += 1;
             }
             per_window_truth.push(window_truth);
@@ -1320,7 +1320,7 @@ mod tests {
 
         let mut within = 0usize;
         for (&key, &true_count) in &recent_truth {
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) <= error_bound {
                 within += 1;
             }
@@ -1344,7 +1344,7 @@ mod tests {
             if recent_truth.contains_key(&key) {
                 continue;
             }
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             assert!(
                 (est as f64) <= error_bound,
                 "excluded key {key} estimate {est} exceeds error bound {error_bound:.2}"
@@ -1381,7 +1381,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &SketchInput::U64(value), 1);
+            tw.insert(i as u64, &DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1465,7 +1465,7 @@ mod tests {
             let end = start + samples_per_window;
             for i in start..end {
                 let value = stream[i];
-                tw.insert(i as u64, &SketchInput::U64(value), 1);
+                tw.insert(i as u64, &DataInput::U64(value), 1);
                 *window_truth.entry(value).or_insert(0) += 1;
             }
             per_window_truth.push(window_truth);
@@ -1495,7 +1495,7 @@ mod tests {
 
         let mut within = 0usize;
         for (&key, &true_count) in &recent_truth {
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) <= error_bound {
                 within += 1;
             }
@@ -1521,7 +1521,7 @@ mod tests {
             if recent_truth.contains_key(&key) {
                 continue;
             }
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             assert!(
                 (est.abs() as f64) <= error_bound,
                 "excluded key {key} estimate {est} exceeds error bound {error_bound:.2}"
@@ -1554,7 +1554,7 @@ mod tests {
             let end = start + samples_per_window;
             let window_values: Vec<f64> = values[start..end].to_vec();
             for (j, &v) in window_values.iter().enumerate() {
-                tw.insert((start + j) as u64, &SketchInput::F64(v), 1);
+                tw.insert((start + j) as u64, &DataInput::F64(v), 1);
             }
             per_window.push(window_values);
         }
@@ -1620,7 +1620,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &SketchInput::U64(value), 1);
+            tw.insert(i as u64, &DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1690,7 +1690,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for (i, &value) in stream.iter().enumerate() {
-            let key = SketchInput::U64(value);
+            let key = DataInput::U64(value);
             tw.insert(i as u64, &key, 1);
             mono.insert(&key, 1);
             *truth.entry(value).or_insert(0) += 1;
@@ -1701,7 +1701,7 @@ mod tests {
         let mut tumbling_total_err = 0i64;
         let mut mono_total_err = 0i64;
         for (&key, &true_count) in &truth {
-            let sk = SketchInput::U64(key);
+            let sk = DataInput::U64(key);
             tumbling_total_err += (merged.query(&sk) - true_count).abs();
             mono_total_err += (mono.query(&sk) - true_count).abs();
         }
@@ -1749,7 +1749,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for (i, &value) in stream.iter().enumerate() {
-            let key = SketchInput::U64(value);
+            let key = DataInput::U64(value);
             tw.insert(i as u64, &key, 1);
             mono.insert(&key, 1);
             *truth.entry(value).or_insert(0) += 1;
@@ -1760,7 +1760,7 @@ mod tests {
         let mut tumbling_total_err = 0i64;
         let mut mono_total_err = 0i64;
         for (&key, &true_count) in &truth {
-            let sk = SketchInput::U64(key);
+            let sk = DataInput::U64(key);
             tumbling_total_err += (merged.query(&sk) - true_count).abs();
             mono_total_err += (mono.query(&sk) - true_count).abs();
         }
@@ -1796,8 +1796,8 @@ mod tests {
         let values = sample_uniform_f64(0.0, 10_000_000.0, total_samples, 0xDE_AD03);
 
         for (i, &v) in values.iter().enumerate() {
-            tw.insert(i as u64, &SketchInput::F64(v), 1);
-            mono.update(&SketchInput::F64(v)).unwrap();
+            tw.insert(i as u64, &DataInput::F64(v), 1);
+            mono.update(&DataInput::F64(v)).unwrap();
         }
 
         let merged = tw.query_all();
@@ -1859,7 +1859,7 @@ mod tests {
             let stream = sample_zipf_u64(5000, 1.1, total_samples, 0x51_0001);
             let mut truth = HashMap::<u64, i64>::new();
             for (i, &value) in stream.iter().enumerate() {
-                tw.insert(i as u64, &SketchInput::U64(value), 1);
+                tw.insert(i as u64, &DataInput::U64(value), 1);
                 *truth.entry(value).or_insert(0) += 1;
             }
 
@@ -1872,7 +1872,7 @@ mod tests {
 
             let mut within = 0usize;
             for (&key, &true_count) in &truth {
-                let est = merged.query(&SketchInput::U64(key));
+                let est = merged.query(&DataInput::U64(key));
                 if ((est - true_count).abs() as f64) <= bound {
                     within += 1;
                 }
@@ -1898,7 +1898,7 @@ mod tests {
             let stream = sample_zipf_u64(5000, 1.1, total_samples, 0x51_0002);
             let mut truth = HashMap::<u64, i64>::new();
             for (i, &value) in stream.iter().enumerate() {
-                tw.insert(i as u64, &SketchInput::U64(value), 1);
+                tw.insert(i as u64, &DataInput::U64(value), 1);
                 *truth.entry(value).or_insert(0) += 1;
             }
 
@@ -1915,7 +1915,7 @@ mod tests {
 
             let mut within = 0usize;
             for (&key, &true_count) in &truth {
-                let est = merged.query(&SketchInput::U64(key));
+                let est = merged.query(&DataInput::U64(key));
                 if ((est - true_count).abs() as f64) <= bound {
                     within += 1;
                 }
@@ -1935,7 +1935,7 @@ mod tests {
 
             let values = sample_uniform_f64(0.0, 1_000_000.0, total_samples, 0x51_0003);
             for (i, &v) in values.iter().enumerate() {
-                tw.insert(i as u64, &SketchInput::F64(v), 1);
+                tw.insert(i as u64, &DataInput::F64(v), 1);
             }
 
             assert_eq!(tw.closed_count(), 0, "no windows should have closed");
@@ -1980,7 +1980,7 @@ mod tests {
         let stream = sample_zipf_u64(500, 1.2, total_samples, 0x77_1100);
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &SketchInput::U64(value), 1);
+            tw.insert(i as u64, &DataInput::U64(value), 1);
         }
 
         // With 5000 samples and window_size=10, there are 500 windows total.
@@ -2005,7 +2005,7 @@ mod tests {
 
         let mut within = 0usize;
         for (&key, &true_count) in &retained_truth {
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) <= bound {
                 within += 1;
             }
@@ -2055,7 +2055,7 @@ mod tests {
             let n_samples = if w == 2 { heavy_samples } else { light_samples };
             let stream = sample_zipf_u64(domain, exponent, n_samples, 0xBE_EF00 + w as u64);
             for &value in &stream {
-                tw.insert(time, &SketchInput::U64(value), 1);
+                tw.insert(time, &DataInput::U64(value), 1);
                 *truth.entry(value).or_insert(0) += 1;
                 time += 1;
             }
@@ -2073,7 +2073,7 @@ mod tests {
 
         let mut within = 0usize;
         for (&key, &true_count) in &truth {
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) <= bound {
                 within += 1;
             }

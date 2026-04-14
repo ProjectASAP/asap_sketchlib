@@ -7,7 +7,7 @@
 
 use crate::UnivMon;
 use crate::common::heap::HHHeap;
-use crate::common::{BOTTOM_LAYER_FINDER, SketchInput, hash_item64_seeded, hash64_seeded};
+use crate::common::{BOTTOM_LAYER_FINDER, DataInput, hash_item64_seeded, hash64_seeded};
 use crate::common::{L2HH, Vector1D};
 use crate::sketches::count::CountL2HH;
 
@@ -189,7 +189,7 @@ impl UnivMonPyramid {
     }
 
     /// Standard insert: updates sketch + heap at every layer 0..=bottom.
-    pub fn insert(&mut self, key: &SketchInput, value: i64) {
+    pub fn insert(&mut self, key: &DataInput, value: i64) {
         self.bucket_size += value as usize;
         let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
         let bottom = self.find_bottom_layer_num(h);
@@ -212,7 +212,7 @@ impl UnivMonPyramid {
     ///
     /// Mirrors the Go PromSketch `update_optimized` function with explicit
     /// elephant / mouse branching.
-    pub fn fast_insert(&mut self, key: &SketchInput, value: i64) {
+    pub fn fast_insert(&mut self, key: &DataInput, value: i64) {
         self.bucket_size += value as usize;
         let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
         let bottom = self.find_bottom_layer_num(h);
@@ -334,7 +334,7 @@ impl UnivMonPyramid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SketchInput;
+    use crate::DataInput;
 
     #[test]
     fn pool_basic_take_put() {
@@ -375,7 +375,7 @@ mod tests {
 
         // Take a sketch, insert some data
         let mut sketch = pool.take();
-        sketch.insert(&SketchInput::I64(42), 100);
+        sketch.insert(&DataInput::I64(42), 100);
         assert!(sketch.bucket_size > 0);
 
         // Return it — should reset
@@ -398,7 +398,7 @@ mod tests {
         let cases: Vec<(&str, i64)> = vec![("hello", 10), ("world", 20), ("hello", 5), ("foo", 30)];
 
         for (key, val) in &cases {
-            um.insert(&SketchInput::Str(key), *val);
+            um.insert(&DataInput::Str(key), *val);
         }
 
         assert_eq!(um.bucket_size, 65);
@@ -413,7 +413,7 @@ mod tests {
         let mut fast = UnivMonPyramid::new(32, 8, 3, 2048, 3, 512, 16);
 
         for i in 0..500i64 {
-            let key = SketchInput::I64(i % 100);
+            let key = DataInput::I64(i % 100);
             standard.insert(&key, 1);
             fast.fast_insert(&key, 1);
         }
@@ -453,7 +453,7 @@ mod tests {
     fn pyramid_free_resets_state() {
         let mut um = UnivMonPyramid::with_defaults();
         for i in 0..100i64 {
-            um.insert(&SketchInput::I64(i), 10);
+            um.insert(&DataInput::I64(i), 10);
         }
         assert!(um.bucket_size > 0);
 
@@ -468,10 +468,10 @@ mod tests {
         let mut right = UnivMonPyramid::with_defaults();
 
         for i in 0..50i64 {
-            left.insert(&SketchInput::I64(i), 10);
+            left.insert(&DataInput::I64(i), 10);
         }
         for i in 50..100i64 {
-            right.insert(&SketchInput::I64(i), 10);
+            right.insert(&DataInput::I64(i), 10);
         }
 
         let left_l1 = left.calc_l1();
@@ -522,19 +522,19 @@ mod tests {
 
         // Heavy hitter
         for _ in 0..5000 {
-            um.insert(&SketchInput::I64(0), 1);
+            um.insert(&DataInput::I64(0), 1);
             *freq.entry(0).or_insert(0) += 1;
         }
         // Medium flows
         for key in 1..=20i64 {
             for _ in 0..200 {
-                um.insert(&SketchInput::I64(key), 1);
+                um.insert(&DataInput::I64(key), 1);
                 *freq.entry(key).or_insert(0) += 1;
             }
         }
         // Light flows
         for key in 21..=500i64 {
-            um.insert(&SketchInput::I64(key), 1);
+            um.insert(&DataInput::I64(key), 1);
             *freq.entry(key).or_insert(0) += 1;
         }
 
@@ -564,12 +564,12 @@ mod tests {
 
         // Use fast_insert for everything.
         for _ in 0..3000 {
-            um.fast_insert(&SketchInput::I64(0), 1);
+            um.fast_insert(&DataInput::I64(0), 1);
             *freq.entry(0).or_insert(0) += 1;
         }
         for key in 1..=50i64 {
             for _ in 0..100 {
-                um.fast_insert(&SketchInput::I64(key), 1);
+                um.fast_insert(&DataInput::I64(key), 1);
                 *freq.entry(key).or_insert(0) += 1;
             }
         }

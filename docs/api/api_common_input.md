@@ -10,7 +10,7 @@ Canonical input and ownership model shared across sketches/frameworks.
 
 ## Type/Struct
 
-- `SketchInput<'a>`
+- `DataInput<'a>`
 - `HeapItem`
 - `HHItem`
 - `HydraQuery<'a>`
@@ -22,28 +22,28 @@ Canonical input and ownership model shared across sketches/frameworks.
 ## Constructors / Conversions
 
 ```rust
-fn heap_item_to_sketch_input(item: &HeapItem) -> SketchInput<'_>
-fn input_to_owned(input: &SketchInput<'_>) -> HeapItem
+fn heap_item_to_sketch_input(item: &HeapItem) -> DataInput<'_>
+fn input_to_owned(input: &DataInput<'_>) -> HeapItem
 
 // HHItem
-fn new(k: SketchInput, count: i64) -> Self
+fn new(k: DataInput, count: i64) -> Self
 fn create_item(k: HeapItem, count: i64) -> Self
-fn init_item(k: SketchInput, count: i64) -> Self
+fn init_item(k: DataInput, count: i64) -> Self
 ```
 
 ## Insert/Update
 
 ```rust
 // L2HH
-fn update_and_est(&mut self, key: &SketchInput, value: i64) -> f64
-fn update_and_est_without_l2(&mut self, key: &SketchInput, value: i64) -> f64
+fn update_and_est(&mut self, key: &DataInput, value: i64) -> f64
+fn update_and_est_without_l2(&mut self, key: &DataInput, value: i64) -> f64
 fn clear(&mut self)
 
 // HydraCounter
-fn insert(&mut self, value: &SketchInput, count: Option<i32>)
+fn insert(&mut self, value: &DataInput, count: Option<i32>)
 fn insert_with_hash(
     &mut self,
-    value: &SketchInput,
+    value: &DataInput,
     hashed_val: &MatrixHashType,
     count: Option<i32>,
 )
@@ -71,13 +71,13 @@ fn merge(&mut self, other: &HydraCounter) -> Result<(), String>
 
 ## Serialization
 
-- `SketchInput`, `HeapItem`, `HHItem`, `HydraCounter`, and `L2HH` derive serde traits.
+- `DataInput`, `HeapItem`, `HHItem`, `HydraCounter`, and `L2HH` derive serde traits.
 - `HydraQuery` is query-only and does not derive serde in current code.
 
 ## Variants (Core)
 
 ```rust
-enum SketchInput<'a> {
+enum DataInput<'a> {
     I8(i8), I16(i16), I32(i32), I64(i64), I128(i128), ISIZE(isize),
     U8(u8), U16(u16), U32(u32), U64(u64), U128(u128), USIZE(usize),
     F32(f32), F64(f64),
@@ -95,13 +95,13 @@ enum HeapItem {
 ## Examples
 
 ```rust
-use asap_sketchlib::{SketchInput, input_to_owned};
+use asap_sketchlib::{DataInput, input_to_owned};
 use asap_sketchlib::common::input::HydraQuery;
 
-let q = HydraQuery::Frequency(SketchInput::Str("key"));
+let q = HydraQuery::Frequency(DataInput::Str("key"));
 let _ = q;
 
-let key = SketchInput::String("flow".to_string());
+let key = DataInput::String("flow".to_string());
 let _owned = input_to_owned(&key);
 ```
 

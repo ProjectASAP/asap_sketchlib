@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::SketchInput;
+use crate::DataInput;
 
 const DEFAULT_SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 const GAMMA: u64 = 0xBF58_476D_1CE4_E5B9;
@@ -69,29 +69,29 @@ impl UniformSampling {
         self.entries.get(idx).map(|entry| entry.value)
     }
 
-    pub fn update_input(&mut self, value: &SketchInput<'_>) -> Result<(), &'static str> {
+    pub fn update_input(&mut self, value: &DataInput<'_>) -> Result<(), &'static str> {
         match value {
-            SketchInput::I32(v) => {
+            DataInput::I32(v) => {
                 self.update(*v as f64);
                 Ok(())
             }
-            SketchInput::I64(v) => {
+            DataInput::I64(v) => {
                 self.update(*v as f64);
                 Ok(())
             }
-            SketchInput::U32(v) => {
+            DataInput::U32(v) => {
                 self.update(*v as f64);
                 Ok(())
             }
-            SketchInput::U64(v) => {
+            DataInput::U64(v) => {
                 self.update(*v as f64);
                 Ok(())
             }
-            SketchInput::F32(v) => {
+            DataInput::F32(v) => {
                 self.update(*v as f64);
                 Ok(())
             }
-            SketchInput::F64(v) => {
+            DataInput::F64(v) => {
                 self.update(*v);
                 Ok(())
             }

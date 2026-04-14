@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 
 use crate::{
-    FastPathHasher, MatrixFastHash, MatrixHashType, MatrixStorage, Nitro, SketchHasher,
-    SketchInput, compute_median_inline_f64,
+    DataInput, FastPathHasher, MatrixFastHash, MatrixHashType, MatrixStorage, Nitro, SketchHasher,
+    compute_median_inline_f64,
 };
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
 #[derive(Clone, Debug, Serialize)]
@@ -752,7 +752,7 @@ where
     H: SketchHasher,
 {
     #[inline(always)]
-    fn hash_for_matrix(&self, value: &SketchInput) -> H::HashType {
+    fn hash_for_matrix(&self, value: &DataInput) -> H::HashType {
         H::HashType::assert_compatible(self.rows, self.cols);
         H::hash_for_matrix_seeded(0, self.rows, self.cols, value)
     }

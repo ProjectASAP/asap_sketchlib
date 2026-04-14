@@ -15,7 +15,7 @@ and frameworks.
 ```text
 src/common/
 ├── mod.rs                  # Public exports
-├── input.rs                # SketchInput/HeapItem/HHItem + Hydra enums
+├── input.rs                # DataInput/HeapItem/HHItem + Hydra enums
 ├── hash.rs                 # Hash traits, constants, and matrix hash helpers
 ├── heap.rs                 # HHHeap
 ├── structure_utils.rs      # Nitro and median utility
@@ -36,7 +36,7 @@ src/common/
 ```rust
 use asap_sketchlib::common::{
     // Input layer
-    SketchInput, HeapItem, HHItem, L2HH,
+    DataInput, HeapItem, HHItem, L2HH,
     input_to_owned, heap_item_to_sketch_input,
 
     // Hash layer
@@ -79,7 +79,7 @@ use asap_sketchlib::common::{
 
 ## Cross-Cutting Notes
 
-- `SketchInput`/`HeapItem` define borrowed-vs-owned key semantics used across all
+- `DataInput`/`HeapItem` define borrowed-vs-owned key semantics used across all
   sketches and heaps.
 - `SketchHasher` enables custom hash injection for sketches that support hasher
   generics.
@@ -90,9 +90,9 @@ use asap_sketchlib::common::{
 ## Quick Example
 
 ```rust
-use asap_sketchlib::{hash64_seeded, SketchInput, Vector2D, CANONICAL_HASH_SEED};
+use asap_sketchlib::{hash64_seeded, DataInput, Vector2D, CANONICAL_HASH_SEED};
 
-let _h = hash64_seeded(CANONICAL_HASH_SEED, &SketchInput::U64(42));
+let _h = hash64_seeded(CANONICAL_HASH_SEED, &DataInput::U64(42));
 let matrix = Vector2D::<i32>::init(3, 16);
 assert_eq!(matrix.rows(), 3);
 ```

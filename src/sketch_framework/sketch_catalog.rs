@@ -5,17 +5,17 @@
 
 use crate::common::structure_utils::ToF64;
 use crate::sketches::count::CountSketchCounter;
-use crate::{Count, CountMin, FastPath, MatrixHashType, RegularPath, SketchHasher, SketchInput};
+use crate::{Count, CountMin, DataInput, FastPath, MatrixHashType, RegularPath, SketchHasher};
 use std::ops::AddAssign;
 
 pub trait CountMinRegularOps {
-    fn insert(&mut self, val: &SketchInput);
-    fn estimate_f64(&self, val: &SketchInput) -> f64;
+    fn insert(&mut self, val: &DataInput);
+    fn estimate_f64(&self, val: &DataInput) -> f64;
 }
 
 pub trait CountMinFastOps {
-    fn insert(&mut self, val: &SketchInput);
-    fn estimate_f64(&self, val: &SketchInput) -> f64;
+    fn insert(&mut self, val: &DataInput);
+    fn estimate_f64(&self, val: &DataInput) -> f64;
     fn rows(&self) -> usize;
     fn cols(&self) -> usize;
     fn fast_insert(&mut self, hash: &MatrixHashType);
@@ -23,13 +23,13 @@ pub trait CountMinFastOps {
 }
 
 pub trait CountRegularOps {
-    fn insert(&mut self, val: &SketchInput);
-    fn estimate_f64(&self, val: &SketchInput) -> f64;
+    fn insert(&mut self, val: &DataInput);
+    fn estimate_f64(&self, val: &DataInput) -> f64;
 }
 
 pub trait CountFastOps {
-    fn insert(&mut self, val: &SketchInput);
-    fn estimate_f64(&self, val: &SketchInput) -> f64;
+    fn insert(&mut self, val: &DataInput);
+    fn estimate_f64(&self, val: &DataInput) -> f64;
     fn rows(&self) -> usize;
     fn cols(&self) -> usize;
     fn fast_insert(&mut self, hash: &MatrixHashType);
@@ -41,11 +41,11 @@ where
     S: crate::MatrixStorage + 'static,
     S::Counter: Copy + PartialOrd + From<i32> + AddAssign + ToF64 + 'static,
 {
-    fn insert(&mut self, val: &SketchInput) {
+    fn insert(&mut self, val: &DataInput) {
         self.insert(val);
     }
 
-    fn estimate_f64(&self, val: &SketchInput) -> f64 {
+    fn estimate_f64(&self, val: &DataInput) -> f64 {
         self.estimate(val).to_f64()
     }
 }
@@ -56,11 +56,11 @@ where
     S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
     S::Counter: Copy + PartialOrd + From<i32> + AddAssign + ToF64 + 'static,
 {
-    fn insert(&mut self, val: &SketchInput) {
+    fn insert(&mut self, val: &DataInput) {
         self.insert(val);
     }
 
-    fn estimate_f64(&self, val: &SketchInput) -> f64 {
+    fn estimate_f64(&self, val: &DataInput) -> f64 {
         self.estimate(val).to_f64()
     }
 
@@ -86,11 +86,11 @@ where
     S: crate::MatrixStorage + 'static,
     S::Counter: CountSketchCounter + 'static,
 {
-    fn insert(&mut self, val: &SketchInput) {
+    fn insert(&mut self, val: &DataInput) {
         self.insert(val);
     }
 
-    fn estimate_f64(&self, val: &SketchInput) -> f64 {
+    fn estimate_f64(&self, val: &DataInput) -> f64 {
         self.estimate(val)
     }
 }
@@ -101,11 +101,11 @@ where
     S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
     S::Counter: CountSketchCounter + 'static,
 {
-    fn insert(&mut self, val: &SketchInput) {
+    fn insert(&mut self, val: &DataInput) {
         self.insert(val);
     }
 
-    fn estimate_f64(&self, val: &SketchInput) -> f64 {
+    fn estimate_f64(&self, val: &DataInput) -> f64 {
         self.estimate(val)
     }
 

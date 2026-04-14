@@ -268,7 +268,7 @@ macro_rules! impl_fixed_matrix {
             H: $crate::SketchHasher,
         {
             #[inline(always)]
-            fn hash_for_matrix(&self, value: &$crate::SketchInput) -> H::HashType {
+            fn hash_for_matrix(&self, value: &$crate::DataInput) -> H::HashType {
                 <H::HashType as $crate::MatrixFastHash>::assert_compatible(Self::ROWS, Self::COLS);
                 H::hash_for_matrix_seeded(0, Self::ROWS, Self::COLS, value)
             }

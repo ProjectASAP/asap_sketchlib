@@ -21,16 +21,16 @@ fn default() -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &SketchInput)
-fn insert_many(&mut self, key: &SketchInput, many: S::Counter)
-fn bulk_insert(&mut self, values: &[SketchInput])
+fn insert(&mut self, key: &DataInput)
+fn insert_many(&mut self, key: &DataInput, many: S::Counter)
+fn bulk_insert(&mut self, values: &[DataInput])
 fn clear_heap(&mut self)
 ```
 
 ## Query
 
 ```rust
-fn estimate(&self, key: &SketchInput) -> S::Counter
+fn estimate(&self, key: &DataInput) -> S::Counter
 fn rows(&self) -> usize
 fn cols(&self) -> usize
 fn cms(&self) -> &CountMin<S, M, H>
@@ -50,11 +50,11 @@ Not currently provided as a dedicated public API.
 ## Examples
 
 ```rust
-use asap_sketchlib::{CMSHeap, SketchInput, Vector2D, RegularPath};
+use asap_sketchlib::{CMSHeap, DataInput, Vector2D, RegularPath};
 
 let mut sk = CMSHeap::<Vector2D<i64>, RegularPath>::new(3, 256, 8);
-sk.insert(&SketchInput::Str("flow"));
-assert!(sk.estimate(&SketchInput::Str("flow")) >= 1);
+sk.insert(&DataInput::Str("flow"));
+assert!(sk.estimate(&DataInput::Str("flow")) >= 1);
 ```
 
 ## Caveats

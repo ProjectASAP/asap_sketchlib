@@ -15,20 +15,20 @@ This page covers three distinct categories of advanced usage in `asap_sketchlib`
 `Hydra` maintains a hierarchy of sketches keyed by semicolon-separated dimension prefixes. A single `update` call fans out into the appropriate dimension nodes. Queries can then target any prefix subtree.
 
 ```rust
-use asap_sketchlib::{Hydra, SketchInput};
+use asap_sketchlib::{Hydra, DataInput};
 
 let mut hydra = Hydra::default();
-hydra.update("region=us;service=api", &SketchInput::Str("err"), None);
-hydra.update("region=eu;service=db",  &SketchInput::Str("err"), None);
+hydra.update("region=us;service=api", &DataInput::Str("err"), None);
+hydra.update("region=eu;service=db",  &DataInput::Str("err"), None);
 
 // Query frequency within just the "region=us" subtree
-let est = hydra.query_frequency(vec!["region=us"], &SketchInput::Str("err"));
+let est = hydra.query_frequency(vec!["region=us"], &DataInput::Str("err"));
 assert!(est >= 1.0);
 ```
 
 `MultiHeadHydra` extends this to multiple independent dimension hierarchies in parallel (e.g., one head for `region`, another for `service`), each backed by a configurable `HydraCounter` (CMS or Count Sketch variant).
 
-**`HydraCounter`** selects which inner sketch backs each Hydra node. **`HydraQuery`** selects the query type: `Frequency(SketchInput)` or `Quantile(threshold)`.
+**`HydraCounter`** selects which inner sketch backs each Hydra node. **`HydraQuery`** selects the query type: `Frequency(DataInput)` or `Quantile(threshold)`.
 
 API reference: [`docs/api/api_hydra.md`](./api/api_hydra.md)
 

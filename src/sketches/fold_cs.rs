@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::fold_cms::FoldCell;
 use crate::{
-    DefaultXxHasher, HHHeap, SketchHasher, SketchInput, compute_median_inline_f64,
+    DataInput, DefaultXxHasher, HHHeap, SketchHasher, compute_median_inline_f64,
     heap_item_to_sketch_input,
 };
 use std::marker::PhantomData;
@@ -160,7 +160,7 @@ impl<H: SketchHasher> FoldCS<H> {
     /// Uses a single `hash64_seeded` call: lower 32 bits → column, bit 63 → sign.
     /// Sign convention matches `count.rs`: bit63==1 → +1, bit63==0 → -1.
     #[inline(always)]
-    fn hash_for(&self, row: usize, key: &SketchInput) -> (u16, i64) {
+    fn hash_for(&self, row: usize, key: &DataInput) -> (u16, i64) {
         let hashed = H::hash64_seeded(row, key);
         let full_col = ((hashed & LOWER_32_MASK) as usize % self.full_cols) as u16;
         let sign = if (hashed >> 63) & 1 == 1 { 1i64 } else { -1i64 };
@@ -179,7 +179,7 @@ impl<H: SketchHasher> FoldCS<H> {
     ///
     /// For each row, the stored value is `sign * delta` where `sign` is ±1
     /// determined by the hash function.
-    pub fn insert(&mut self, key: &SketchInput, delta: i64) {
+    pub fn insert(&mut self, key: &DataInput, delta: i64) {
         for r in 0..self.rows {
             let (full_col, sign) = self.hash_for(r, key);
             let fc = self.fold_col_of(full_col);
@@ -192,7 +192,7 @@ impl<H: SketchHasher> FoldCS<H> {
 
     /// Insert `key` once (delta = 1).
     #[inline]
-    pub fn insert_one(&mut self, key: &SketchInput) {
+    pub fn insert_one(&mut self, key: &DataInput) {
         self.insert(key, 1);
     }
 
@@ -200,7 +200,7 @@ impl<H: SketchHasher> FoldCS<H> {
 
     /// Returns the Count Sketch frequency estimate for `key` (median of
     /// sign-corrected row estimates).
-    pub fn query(&self, key: &SketchInput) -> i64 {
+    pub fn query(&self, key: &DataInput) -> i64 {
         let mut estimates = Vec::with_capacity(self.rows);
         for r in 0..self.rows {
             let (full_col, sign) = self.hash_for(r, key);
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn fold_cs_insert_query_single_key() {
         let mut sketch: FoldCS = FoldCS::new(3, 1024, 4, 10);
-        let key = SketchInput::Str("hello");
+        let key = DataInput::Str("hello");
         sketch.insert(&key, 7);
         assert_eq!(sketch.query(&key), 7);
     }
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn fold_cs_insert_accumulates() {
         let mut sketch: FoldCS = FoldCS::new(3, 1024, 4, 10);
-        let key = SketchInput::Str("hello");
+        let key = DataInput::Str("hello");
         sketch.insert(&key, 3);
         sketch.insert(&key, 4);
         assert_eq!(sketch.query(&key), 7);
@@ -491,19 +491,19 @@ mod tests {
     #[test]
     fn fold_cs_absent_key_returns_zero() {
         let mut sketch: FoldCS = FoldCS::new(3, 1024, 4, 10);
-        sketch.insert(&SketchInput::Str("present"), 10);
-        assert_eq!(sketch.query(&SketchInput::Str("absent")), 0);
+        sketch.insert(&DataInput::Str("present"), 10);
+        assert_eq!(sketch.query(&DataInput::Str("absent")), 0);
     }
 
     #[test]
     fn fold_cs_multiple_keys() {
         let mut sketch: FoldCS = FoldCS::new(3, 4096, 4, 10);
         for i in 0..100u64 {
-            sketch.insert(&SketchInput::U64(i), i as i64);
+            sketch.insert(&DataInput::U64(i), i as i64);
         }
         // Count Sketch estimates can be negative; check they are roughly correct.
         for i in 0..100u64 {
-            let est = sketch.query(&SketchInput::U64(i));
+            let est = sketch.query(&DataInput::U64(i));
             // With a wide enough sketch, error should be small.
             let err = (est - i as i64).abs();
             assert!(
@@ -521,7 +521,7 @@ mod tests {
         // confirming sign is being applied on insert.
         let mut sketch: FoldCS = FoldCS::new(5, 1024, 4, 10);
         for i in 0..50u64 {
-            sketch.insert(&SketchInput::U64(i), 1);
+            sketch.insert(&DataInput::U64(i), 1);
         }
 
         let mut has_positive = false;
@@ -553,7 +553,7 @@ mod tests {
         let mut fold: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
-        let keys: Vec<SketchInput> = (0..50).map(|i| SketchInput::I32(i)).collect();
+        let keys: Vec<DataInput> = (0..50).map(|i| DataInput::I32(i)).collect();
         for key in &keys {
             fold.insert(key, 1);
             standard.insert(key);
@@ -579,7 +579,7 @@ mod tests {
         let mut fold: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
-        let keys: Vec<SketchInput> = (0..50).map(|i| SketchInput::I32(i)).collect();
+        let keys: Vec<DataInput> = (0..50).map(|i| DataInput::I32(i)).collect();
         for key in &keys {
             fold.insert(key, 1);
             standard.insert(key);
@@ -607,14 +607,14 @@ mod tests {
         let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..30 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             let count = (i + 1) as i64;
             fold.insert(&key, count);
             standard.insert_many(&key, count);
         }
 
         for i in 0..30 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             assert_eq!(fold.query(&key), standard.estimate(&key) as i64);
         }
     }
@@ -630,7 +630,7 @@ mod tests {
         let mut a: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut b: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
 
-        let key = SketchInput::Str("user_001");
+        let key = DataInput::Str("user_001");
         a.insert(&key, 100);
         b.insert(&key, 200);
 
@@ -650,12 +650,12 @@ mod tests {
         let mut sb = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..20 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             fa.insert(&key, 1);
             sa.insert(&key);
         }
         for i in 10..30 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             fb.insert(&key, 1);
             sb.insert(&key);
         }
@@ -664,7 +664,7 @@ mod tests {
         sa.merge(&sb);
 
         for i in 0..30 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             assert_eq!(
                 fa.query(&key),
                 sa.estimate(&key) as i64,
@@ -698,8 +698,8 @@ mod tests {
         let mut a: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut b: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
 
-        let key_a = SketchInput::Str("alpha");
-        let key_b = SketchInput::Str("beta");
+        let key_a = DataInput::Str("alpha");
+        let key_b = DataInput::Str("beta");
         a.insert(&key_a, 10);
         b.insert(&key_b, 20);
 
@@ -721,12 +721,12 @@ mod tests {
         let mut sb = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..40 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             fa.insert(&key, (i + 1) as i64);
             sa.insert_many(&key, (i + 1) as i64);
         }
         for i in 20..60 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             fb.insert(&key, (i + 1) as i64);
             sb.insert_many(&key, (i + 1) as i64);
         }
@@ -735,7 +735,7 @@ mod tests {
         sa.merge(&sb);
 
         for i in 0..60 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             assert_eq!(
                 merged_fold.query(&key),
                 sa.estimate(&key) as i64,
@@ -758,7 +758,7 @@ mod tests {
         for epoch in 0..4u64 {
             let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
             for i in (epoch * 10)..((epoch + 1) * 10) {
-                let key = SketchInput::U64(i);
+                let key = DataInput::U64(i);
                 sk.insert(&key, 1);
                 standard.insert(&key);
             }
@@ -769,7 +769,7 @@ mod tests {
         assert_eq!(merged.fold_level(), 0);
 
         for i in 0..40u64 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             assert_eq!(
                 merged.query(&key),
                 standard.estimate(&key) as i64,
@@ -788,7 +788,7 @@ mod tests {
 
         let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         for i in 0..30 {
-            sk.insert(&SketchInput::I32(i), 1);
+            sk.insert(&DataInput::I32(i), 1);
         }
 
         let flat_before = sk.to_flat_counters();
@@ -812,7 +812,7 @@ mod tests {
         let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..20 {
-            let key = SketchInput::I32(i);
+            let key = DataInput::I32(i);
             fold.insert(&key, 1);
             standard.insert(&key);
         }
@@ -834,7 +834,7 @@ mod tests {
 
         let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         for i in 0..50u64 {
-            sk.insert(&SketchInput::U64(i), 1);
+            sk.insert(&DataInput::U64(i), 1);
         }
 
         let total_entries = sk.total_entries();
@@ -859,12 +859,12 @@ mod tests {
         let mut sk: FoldCS = FoldCS::new(3, 1024, 3, 5);
 
         for _ in 0..100 {
-            sk.insert(&SketchInput::Str("heavy"), 1);
+            sk.insert(&DataInput::Str("heavy"), 1);
         }
         for _ in 0..10 {
-            sk.insert(&SketchInput::Str("medium"), 1);
+            sk.insert(&DataInput::Str("medium"), 1);
         }
-        sk.insert(&SketchInput::Str("light"), 1);
+        sk.insert(&DataInput::Str("light"), 1);
 
         let heap_items = sk.heap().heap();
         assert!(!heap_items.is_empty());
@@ -882,10 +882,10 @@ mod tests {
         let mut b: FoldCS = FoldCS::new(3, 1024, 3, 5);
 
         for _ in 0..50 {
-            a.insert(&SketchInput::Str("user_x"), 1);
+            a.insert(&DataInput::Str("user_x"), 1);
         }
         for _ in 0..70 {
-            b.insert(&SketchInput::Str("user_x"), 1);
+            b.insert(&DataInput::Str("user_x"), 1);
         }
 
         a.merge_same_level(&b);
@@ -905,10 +905,10 @@ mod tests {
         let mut b: FoldCS = FoldCS::new(3, 512, 2, 5);
 
         for _ in 0..40 {
-            a.insert(&SketchInput::Str("endpoint_a"), 1);
+            a.insert(&DataInput::Str("endpoint_a"), 1);
         }
         for _ in 0..60 {
-            b.insert(&SketchInput::Str("endpoint_a"), 1);
+            b.insert(&DataInput::Str("endpoint_a"), 1);
         }
 
         let merged = FoldCS::unfold_merge(&a, &b);
@@ -936,7 +936,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for value in sample_zipf_u64(domain, exponent, samples, 0x5eed_c0de) {
-            fold.insert(&SketchInput::U64(value), 1);
+            fold.insert(&DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -954,7 +954,7 @@ mod tests {
 
         let mut within_count = 0;
         for (key, true_count) in &truth {
-            let est = fold.query(&SketchInput::U64(*key));
+            let est = fold.query(&DataInput::U64(*key));
             if ((est - true_count).abs() as f64) < error_bound {
                 within_count += 1;
             }
@@ -992,7 +992,7 @@ mod tests {
             let mut sk: FoldCS = FoldCS::new(rows, full_cols, fold_level, top_k);
 
             for &value in &stream[start..end] {
-                sk.insert(&SketchInput::U64(value), 1);
+                sk.insert(&DataInput::U64(value), 1);
                 *truth.entry(value).or_insert(0) += 1;
             }
             subwindow_sketches.push(sk);
@@ -1045,7 +1045,7 @@ mod tests {
         let mut within_bound = 0usize;
 
         for (&key, &true_count) in &truth {
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             let abs_err = (est - true_count).abs();
             total_abs_error += abs_err as f64;
             if abs_err > max_abs_error {
@@ -1095,7 +1095,7 @@ mod tests {
             for epoch in 0..n {
                 let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
                 for i in (epoch * 10)..((epoch + 1) * 10) {
-                    let key = SketchInput::U64(i);
+                    let key = DataInput::U64(i);
                     sk.insert(&key, 1);
                     standard.insert(&key);
                 }
@@ -1106,7 +1106,7 @@ mod tests {
             assert_eq!(merged.fold_level(), 0, "N={n}: should reach level 0");
 
             for i in 0..(n * 10) {
-                let key = SketchInput::U64(i);
+                let key = DataInput::U64(i);
                 assert_eq!(
                     merged.query(&key),
                     standard.estimate(&key) as i64,
@@ -1126,7 +1126,7 @@ mod tests {
 
         let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         for i in 0..40 {
-            sk.insert(&SketchInput::U64(i), (i + 1) as i64);
+            sk.insert(&DataInput::U64(i), (i + 1) as i64);
         }
 
         let expected = sk.to_flat_counters();
@@ -1146,11 +1146,11 @@ mod tests {
     #[test]
     fn unfold_to_same_level_returns_clone() {
         let mut sk: FoldCS = FoldCS::new(3, 256, 3, 10);
-        sk.insert(&SketchInput::Str("x"), 42);
+        sk.insert(&DataInput::Str("x"), 42);
 
         let result = sk.unfold_to(3);
         assert_eq!(result.fold_level(), 3);
-        assert_eq!(result.query(&SketchInput::Str("x")), 42);
+        assert_eq!(result.query(&DataInput::Str("x")), 42);
     }
 
     #[test]
@@ -1163,10 +1163,10 @@ mod tests {
         let mut sk_low: FoldCS = FoldCS::new(rows, cols, 2, 10);
 
         for i in 0..20u64 {
-            sk_high.insert(&SketchInput::U64(i), 1);
+            sk_high.insert(&DataInput::U64(i), 1);
         }
         for i in 10..30u64 {
-            sk_low.insert(&SketchInput::U64(i), 1);
+            sk_low.insert(&DataInput::U64(i), 1);
         }
 
         let merged = FoldCS::hierarchical_merge(&[sk_high.clone(), sk_low.clone()]);
@@ -1179,7 +1179,7 @@ mod tests {
         reference.merge_same_level(&b);
 
         for i in 0..30u64 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             assert_eq!(
                 merged.query(&key),
                 reference.query(&key),

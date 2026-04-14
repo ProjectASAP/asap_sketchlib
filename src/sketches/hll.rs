@@ -36,7 +36,7 @@
 use crate::structures::fixed_structure::{
     HllBucketListP12, HllBucketListP14, HllBucketListP16, HllRegisterStorage,
 };
-use crate::{CANONICAL_HASH_SEED, DefaultXxHasher, SketchHasher, SketchInput, hash64_seeded};
+use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, SketchHasher, hash64_seeded};
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
@@ -157,18 +157,18 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     }
 }
 
-// SketchInput adapters (hashing + batch helpers).
+// DataInput adapters (hashing + batch helpers).
 impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     HyperLogLogImpl<Variant, Registers, H>
 {
     /// Hashes and inserts a single input value into the sketch.
-    pub fn insert(&mut self, obj: &SketchInput) {
+    pub fn insert(&mut self, obj: &DataInput) {
         let hashed_val = H::hash64_seeded(CANONICAL_HASH_SEED, obj);
         self.insert_with_hash(hashed_val);
     }
 
     /// Hashes and inserts multiple input values into the sketch.
-    pub fn insert_many(&mut self, items: &[SketchInput]) {
+    pub fn insert_many(&mut self, items: &[DataInput]) {
         for item in items {
             self.insert(item);
         }
@@ -367,19 +367,19 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
     }
 }
 
-// SketchInput adapters for HIP (hashing + batch helpers).
+// DataInput adapters for HIP (hashing + batch helpers).
 // Note: HyperLogLogHIP is not parameterized by H since it is a separate,
 // self-contained struct. It uses the free-function wrapper (DefaultXxHasher).
 impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
     /// "Back to the Future: an Even More Nearly Optimal Cardinality Estimation Algorithm"
     /// Kevin J. Lang, <https://arxiv.org/pdf/1708.06839>
-    pub fn insert(&mut self, obj: &SketchInput) {
+    pub fn insert(&mut self, obj: &DataInput) {
         let hashed_val = hash64_seeded(CANONICAL_HASH_SEED, obj);
         self.insert_with_hash(hashed_val);
     }
 
     /// Hashes and inserts multiple input values into the HIP sketch.
-    pub fn insert_many(&mut self, items: &[SketchInput]) {
+    pub fn insert_many(&mut self, items: &[DataInput]) {
         for item in items {
             self.insert(item);
         }
@@ -411,7 +411,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     }
 
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, obj: &SketchInput, emit: &mut impl FnMut(HllDelta)) {
+    pub fn insert_emit_delta(&mut self, obj: &DataInput, emit: &mut impl FnMut(HllDelta)) {
         let hashed_val = H::hash64_seeded(CANONICAL_HASH_SEED, obj);
         self.insert_emit_delta_with_hash(hashed_val, emit);
     }
@@ -429,7 +429,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 mod tests {
 
     use super::*;
-    use crate::{HllBucketList, SketchInput};
+    use crate::{DataInput, HllBucketList};
 
     const TARGETS: [usize; 7] = [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000];
     const ERROR_TOLERANCE: f64 = 0.02;
@@ -441,16 +441,16 @@ mod tests {
         let mut child = HyperLogLog::<Classic>::default();
         let mut deltas: Vec<HllDelta> = Vec::new();
 
-        child.insert_emit_delta(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        child.insert_emit_delta(&DataInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 1, "first insert should improve one register");
 
         let before = deltas.len();
-        child.insert_emit_delta(&SketchInput::U64(1), &mut |d| deltas.push(d));
+        child.insert_emit_delta(&DataInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), before, "duplicate should not emit");
     }
 
     trait HllEstimator: Default {
-        fn push(&mut self, input: &SketchInput);
+        fn push(&mut self, input: &DataInput);
         fn insert_with_hash(&mut self, hashed: u64);
         fn estimate(&self) -> f64;
         fn index(&self, i: usize) -> u8;
@@ -470,7 +470,7 @@ mod tests {
     impl<Registers: HllRegisterStorage, H: SketchHasher> HllEstimator
         for HyperLogLogImpl<Classic, Registers, H>
     {
-        fn push(&mut self, input: &SketchInput) {
+        fn push(&mut self, input: &DataInput) {
             self.insert(input);
         }
 
@@ -510,7 +510,7 @@ mod tests {
     macro_rules! impl_ertl_mle_test_traits {
         ($storage:ty) => {
             impl<H: SketchHasher> HllEstimator for HyperLogLogImpl<ErtlMLE, $storage, H> {
-                fn push(&mut self, input: &SketchInput) {
+                fn push(&mut self, input: &DataInput) {
                     self.insert(input);
                 }
 
@@ -550,7 +550,7 @@ mod tests {
     impl_ertl_mle_test_traits!(HllBucketListP16);
 
     impl<Registers: HllRegisterStorage> HllEstimator for HyperLogLogHIPImpl<Registers> {
-        fn push(&mut self, input: &SketchInput) {
+        fn push(&mut self, input: &DataInput) {
             self.insert(input);
         }
 
@@ -769,7 +769,7 @@ mod tests {
 
         for &target in TARGETS.iter() {
             while inserted < target {
-                let input = SketchInput::U64(inserted as u64);
+                let input = DataInput::U64(inserted as u64);
                 sketch.push(&input);
                 inserted += 1;
             }
@@ -806,13 +806,13 @@ mod tests {
 
         for &target in TARGETS.iter() {
             while next_even < target {
-                let input = SketchInput::U64(next_even as u64);
+                let input = DataInput::U64(next_even as u64);
                 left.push(&input);
                 next_even += 2;
             }
 
             while next_odd < target {
-                let input = SketchInput::U64(next_odd as u64);
+                let input = DataInput::U64(next_odd as u64);
                 right.push(&input);
                 next_odd += 2;
             }
@@ -840,7 +840,7 @@ mod tests {
     {
         let mut sketch = S::default();
         for value in 0..SERDE_SAMPLE {
-            let input = SketchInput::U64(value as u64);
+            let input = DataInput::U64(value as u64);
             sketch.push(&input);
         }
 

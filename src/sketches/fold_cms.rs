@@ -17,7 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DefaultXxHasher, HHHeap, SketchHasher, SketchInput, heap_item_to_sketch_input};
+use crate::{DataInput, DefaultXxHasher, HHHeap, SketchHasher, heap_item_to_sketch_input};
 use std::marker::PhantomData;
 
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
@@ -313,7 +313,7 @@ impl<H: SketchHasher> FoldCMS<H> {
 
     /// Compute the full-width column for `(row, key)`.
     #[inline(always)]
-    fn full_col_for(&self, row: usize, key: &SketchInput) -> u16 {
+    fn full_col_for(&self, row: usize, key: &DataInput) -> u16 {
         let hashed = H::hash64_seeded(row, key);
         ((hashed & LOWER_32_MASK) as usize % self.full_cols) as u16
     }
@@ -327,7 +327,7 @@ impl<H: SketchHasher> FoldCMS<H> {
     // -- Insert -------------------------------------------------------------
 
     /// Insert `key` with count `delta`.
-    pub fn insert(&mut self, key: &SketchInput, delta: i64) {
+    pub fn insert(&mut self, key: &DataInput, delta: i64) {
         for r in 0..self.rows {
             let full_col = self.full_col_for(r, key);
             let fc = self.fold_col_of(full_col);
@@ -340,14 +340,14 @@ impl<H: SketchHasher> FoldCMS<H> {
 
     /// Insert `key` once (delta = 1).
     #[inline]
-    pub fn insert_one(&mut self, key: &SketchInput) {
+    pub fn insert_one(&mut self, key: &DataInput) {
         self.insert(key, 1);
     }
 
     // -- Point Query --------------------------------------------------------
 
     /// Returns the CMS frequency estimate for `key` (minimum across rows).
-    pub fn query(&self, key: &SketchInput) -> i64 {
+    pub fn query(&self, key: &DataInput) -> i64 {
         let mut min_count = i64::MAX;
         for r in 0..self.rows {
             let full_col = self.full_col_for(r, key);
@@ -753,7 +753,7 @@ mod tests {
     #[test]
     fn fold_cms_insert_query_single_key() {
         let mut sketch: FoldCMS = FoldCMS::new(3, 1024, 4, 10);
-        let key = SketchInput::Str("hello");
+        let key = DataInput::Str("hello");
         sketch.insert(&key, 7);
         assert_eq!(sketch.query(&key), 7);
     }
@@ -761,7 +761,7 @@ mod tests {
     #[test]
     fn fold_cms_insert_accumulates() {
         let mut sketch: FoldCMS = FoldCMS::new(3, 1024, 4, 10);
-        let key = SketchInput::Str("hello");
+        let key = DataInput::Str("hello");
         sketch.insert(&key, 3);
         sketch.insert(&key, 4);
         assert_eq!(sketch.query(&key), 7);
@@ -770,18 +770,18 @@ mod tests {
     #[test]
     fn fold_cms_absent_key_returns_zero() {
         let mut sketch: FoldCMS = FoldCMS::new(3, 1024, 4, 10);
-        sketch.insert(&SketchInput::Str("present"), 10);
-        assert_eq!(sketch.query(&SketchInput::Str("absent")), 0);
+        sketch.insert(&DataInput::Str("present"), 10);
+        assert_eq!(sketch.query(&DataInput::Str("absent")), 0);
     }
 
     #[test]
     fn fold_cms_multiple_keys() {
         let mut sketch: FoldCMS = FoldCMS::new(3, 4096, 4, 10);
         for i in 0..100u64 {
-            sketch.insert(&SketchInput::U64(i), i as i64);
+            sketch.insert(&DataInput::U64(i), i as i64);
         }
         for i in 0..100u64 {
-            let est = sketch.query(&SketchInput::U64(i));
+            let est = sketch.query(&DataInput::U64(i));
             // CMS only over-estimates, and FoldCMS is exact w.r.t. the full CMS.
             assert!(
                 est >= i as i64,
@@ -801,7 +801,7 @@ mod tests {
         let mut fold: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         let mut standard = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
-        let keys: Vec<SketchInput> = (0..50).map(|i| SketchInput::I32(i)).collect();
+        let keys: Vec<DataInput> = (0..50).map(|i| DataInput::I32(i)).collect();
         for key in &keys {
             fold.insert(key, 1);
             standard.insert(key);
@@ -840,14 +840,14 @@ mod tests {
 
         // Insert keys with varying counts.
         for i in 0..30 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             let count = (i + 1) as i64;
             fold.insert(&key, count);
             standard.insert_many(&key, count);
         }
 
         for i in 0..30 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             assert_eq!(fold.query(&key), standard.estimate(&key) as i64);
         }
     }
@@ -863,7 +863,7 @@ mod tests {
         let mut a: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         let mut b: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
 
-        let key = SketchInput::Str("user_001");
+        let key = DataInput::Str("user_001");
         a.insert(&key, 100);
         b.insert(&key, 200);
 
@@ -883,12 +883,12 @@ mod tests {
         let mut sb = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..20 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             fa.insert(&key, 1);
             sa.insert(&key);
         }
         for i in 10..30 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             fb.insert(&key, 1);
             sb.insert(&key);
         }
@@ -897,7 +897,7 @@ mod tests {
         sa.merge(&sb);
 
         for i in 0..30 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             assert_eq!(
                 fa.query(&key),
                 sa.estimate(&key) as i64,
@@ -931,8 +931,8 @@ mod tests {
         let mut a: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         let mut b: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
 
-        let key_a = SketchInput::Str("alpha");
-        let key_b = SketchInput::Str("beta");
+        let key_a = DataInput::Str("alpha");
+        let key_b = DataInput::Str("beta");
         a.insert(&key_a, 10);
         b.insert(&key_b, 20);
 
@@ -954,12 +954,12 @@ mod tests {
         let mut sb = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..40 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             fa.insert(&key, (i + 1) as i64);
             sa.insert_many(&key, (i + 1) as i64);
         }
         for i in 20..60 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             fb.insert(&key, (i + 1) as i64);
             sb.insert_many(&key, (i + 1) as i64);
         }
@@ -968,7 +968,7 @@ mod tests {
         sa.merge(&sb);
 
         for i in 0..60 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             assert_eq!(
                 merged_fold.query(&key),
                 sa.estimate(&key) as i64,
@@ -991,7 +991,7 @@ mod tests {
         for epoch in 0..4u64 {
             let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
             for i in (epoch * 10)..((epoch + 1) * 10) {
-                let key = SketchInput::U64(i);
+                let key = DataInput::U64(i);
                 sk.insert(&key, 1);
                 standard.insert(&key);
             }
@@ -1002,7 +1002,7 @@ mod tests {
         assert_eq!(merged.fold_level(), 0);
 
         for i in 0..40u64 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             assert_eq!(
                 merged.query(&key),
                 standard.estimate(&key) as i64,
@@ -1021,7 +1021,7 @@ mod tests {
 
         let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         for i in 0..30 {
-            sk.insert(&SketchInput::I32(i), 1);
+            sk.insert(&DataInput::I32(i), 1);
         }
 
         let flat_before = sk.to_flat_counters();
@@ -1045,7 +1045,7 @@ mod tests {
         let mut standard = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..20 {
-            let key = SketchInput::I32(i);
+            let key = DataInput::I32(i);
             fold.insert(&key, 1);
             standard.insert(&key);
         }
@@ -1071,7 +1071,7 @@ mod tests {
         let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         // Insert only 50 distinct keys into a 256-column folded sketch.
         for i in 0..50u64 {
-            sk.insert(&SketchInput::U64(i), 1);
+            sk.insert(&DataInput::U64(i), 1);
         }
 
         let total_entries = sk.total_entries();
@@ -1101,12 +1101,12 @@ mod tests {
 
         // Insert keys with different frequencies.
         for _ in 0..100 {
-            sk.insert(&SketchInput::Str("heavy"), 1);
+            sk.insert(&DataInput::Str("heavy"), 1);
         }
         for _ in 0..10 {
-            sk.insert(&SketchInput::Str("medium"), 1);
+            sk.insert(&DataInput::Str("medium"), 1);
         }
-        sk.insert(&SketchInput::Str("light"), 1);
+        sk.insert(&DataInput::Str("light"), 1);
 
         let heap_items = sk.heap().heap();
         assert!(!heap_items.is_empty());
@@ -1125,10 +1125,10 @@ mod tests {
         let mut b: FoldCMS = FoldCMS::new(3, 1024, 3, 5);
 
         for _ in 0..50 {
-            a.insert(&SketchInput::Str("user_x"), 1);
+            a.insert(&DataInput::Str("user_x"), 1);
         }
         for _ in 0..70 {
-            b.insert(&SketchInput::Str("user_x"), 1);
+            b.insert(&DataInput::Str("user_x"), 1);
         }
 
         a.merge_same_level(&b);
@@ -1148,10 +1148,10 @@ mod tests {
         let mut b: FoldCMS = FoldCMS::new(3, 512, 2, 5);
 
         for _ in 0..40 {
-            a.insert(&SketchInput::Str("endpoint_a"), 1);
+            a.insert(&DataInput::Str("endpoint_a"), 1);
         }
         for _ in 0..60 {
-            b.insert(&SketchInput::Str("endpoint_a"), 1);
+            b.insert(&DataInput::Str("endpoint_a"), 1);
         }
 
         let merged = FoldCMS::unfold_merge(&a, &b);
@@ -1179,7 +1179,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for value in sample_zipf_u64(domain, exponent, samples, 0x5eed_c0de) {
-            fold.insert(&SketchInput::U64(value), 1);
+            fold.insert(&DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1190,7 +1190,7 @@ mod tests {
 
         let mut within_count = 0;
         for (key, true_count) in &truth {
-            let est = fold.query(&SketchInput::U64(*key));
+            let est = fold.query(&DataInput::U64(*key));
             if ((est - true_count).unsigned_abs() as f64) < error_bound {
                 within_count += 1;
             }
@@ -1213,22 +1213,22 @@ mod tests {
 
         // Epoch 1: 10:00-10:01
         let mut epoch1: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch1.insert(&SketchInput::Str("user_001"), 350);
-        epoch1.insert(&SketchInput::Str("user_002"), 10);
-        epoch1.insert(&SketchInput::Str("user_003"), 600);
+        epoch1.insert(&DataInput::Str("user_001"), 350);
+        epoch1.insert(&DataInput::Str("user_002"), 10);
+        epoch1.insert(&DataInput::Str("user_003"), 600);
 
         // Epoch 2: 10:01-10:02
         let mut epoch2: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch2.insert(&SketchInput::Str("user_001"), 350);
-        epoch2.insert(&SketchInput::Str("user_002"), 5);
-        epoch2.insert(&SketchInput::Str("user_003"), 700);
+        epoch2.insert(&DataInput::Str("user_001"), 350);
+        epoch2.insert(&DataInput::Str("user_002"), 5);
+        epoch2.insert(&DataInput::Str("user_003"), 700);
 
         // Merge via same-level (both at fold_level 4)
         epoch1.merge_same_level(&epoch2);
 
-        assert_eq!(epoch1.query(&SketchInput::Str("user_001")), 700);
-        assert_eq!(epoch1.query(&SketchInput::Str("user_002")), 15);
-        assert_eq!(epoch1.query(&SketchInput::Str("user_003")), 1300);
+        assert_eq!(epoch1.query(&DataInput::Str("user_001")), 700);
+        assert_eq!(epoch1.query(&DataInput::Str("user_002")), 15);
+        assert_eq!(epoch1.query(&DataInput::Str("user_003")), 1300);
     }
 
     #[test]
@@ -1239,23 +1239,23 @@ mod tests {
         let fold_level = 4;
 
         let mut epoch1: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch1.insert(&SketchInput::Str("/api/v1/search"), 300);
-        epoch1.insert(&SketchInput::Str("/api/v1/checkout"), 5);
-        epoch1.insert(&SketchInput::Str("/api/v1/login"), 200);
-        epoch1.insert(&SketchInput::Str("/api/v2/recommend"), 1);
+        epoch1.insert(&DataInput::Str("/api/v1/search"), 300);
+        epoch1.insert(&DataInput::Str("/api/v1/checkout"), 5);
+        epoch1.insert(&DataInput::Str("/api/v1/login"), 200);
+        epoch1.insert(&DataInput::Str("/api/v2/recommend"), 1);
 
         let mut epoch2: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch2.insert(&SketchInput::Str("/api/v1/search"), 50);
-        epoch2.insert(&SketchInput::Str("/api/v1/checkout"), 5);
-        epoch2.insert(&SketchInput::Str("/api/v1/login"), 10);
-        epoch2.insert(&SketchInput::Str("/api/v2/recommend"), 100);
+        epoch2.insert(&DataInput::Str("/api/v1/search"), 50);
+        epoch2.insert(&DataInput::Str("/api/v1/checkout"), 5);
+        epoch2.insert(&DataInput::Str("/api/v1/login"), 10);
+        epoch2.insert(&DataInput::Str("/api/v2/recommend"), 100);
 
         epoch1.merge_same_level(&epoch2);
 
-        assert_eq!(epoch1.query(&SketchInput::Str("/api/v1/search")), 350);
-        assert_eq!(epoch1.query(&SketchInput::Str("/api/v1/login")), 210);
-        assert_eq!(epoch1.query(&SketchInput::Str("/api/v2/recommend")), 101);
-        assert_eq!(epoch1.query(&SketchInput::Str("/api/v1/checkout")), 10);
+        assert_eq!(epoch1.query(&DataInput::Str("/api/v1/search")), 350);
+        assert_eq!(epoch1.query(&DataInput::Str("/api/v1/login")), 210);
+        assert_eq!(epoch1.query(&DataInput::Str("/api/v2/recommend")), 101);
+        assert_eq!(epoch1.query(&DataInput::Str("/api/v1/checkout")), 10);
     }
 
     // -- Large-window merge benchmark ---------------------------------------
@@ -1284,7 +1284,7 @@ mod tests {
             let mut sk: FoldCMS = FoldCMS::new(rows, full_cols, fold_level, top_k);
 
             for &value in &stream[start..end] {
-                sk.insert(&SketchInput::U64(value), 1);
+                sk.insert(&DataInput::U64(value), 1);
                 *truth.entry(value).or_insert(0) += 1;
             }
             subwindow_sketches.push(sk);
@@ -1332,7 +1332,7 @@ mod tests {
         let mut within_bound = 0usize;
 
         for (&key, &true_count) in &truth {
-            let est = merged.query(&SketchInput::U64(key));
+            let est = merged.query(&DataInput::U64(key));
             let abs_err = (est - true_count).abs();
             total_abs_error += abs_err as f64;
             if abs_err > max_abs_error {
@@ -1375,30 +1375,30 @@ mod tests {
         let fold_level = 4;
 
         let mut epoch1: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch1.insert(&SketchInput::Str("192.168.1.1"), 50);
-        epoch1.insert(&SketchInput::Str("10.0.0.42"), 10_000);
-        epoch1.insert(&SketchInput::Str("172.16.5.99"), 30);
-        epoch1.insert(&SketchInput::Str("10.0.0.43"), 8_000);
+        epoch1.insert(&DataInput::Str("192.168.1.1"), 50);
+        epoch1.insert(&DataInput::Str("10.0.0.42"), 10_000);
+        epoch1.insert(&DataInput::Str("172.16.5.99"), 30);
+        epoch1.insert(&DataInput::Str("10.0.0.43"), 8_000);
 
         let mut epoch2: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch2.insert(&SketchInput::Str("192.168.1.1"), 45);
-        epoch2.insert(&SketchInput::Str("10.0.0.42"), 15_000);
-        epoch2.insert(&SketchInput::Str("172.16.5.99"), 25);
-        epoch2.insert(&SketchInput::Str("10.0.0.43"), 200);
+        epoch2.insert(&DataInput::Str("192.168.1.1"), 45);
+        epoch2.insert(&DataInput::Str("10.0.0.42"), 15_000);
+        epoch2.insert(&DataInput::Str("172.16.5.99"), 25);
+        epoch2.insert(&DataInput::Str("10.0.0.43"), 200);
 
         let mut epoch3: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch3.insert(&SketchInput::Str("192.168.1.1"), 60);
-        epoch3.insert(&SketchInput::Str("10.0.0.42"), 12_000);
-        epoch3.insert(&SketchInput::Str("172.16.5.99"), 9_000);
-        epoch3.insert(&SketchInput::Str("10.0.0.43"), 100);
+        epoch3.insert(&DataInput::Str("192.168.1.1"), 60);
+        epoch3.insert(&DataInput::Str("10.0.0.42"), 12_000);
+        epoch3.insert(&DataInput::Str("172.16.5.99"), 9_000);
+        epoch3.insert(&DataInput::Str("10.0.0.43"), 100);
 
         // Hierarchical merge of 3 epochs (not a power of 2, tests carry-forward).
         let merged = FoldCMS::hierarchical_merge(&[epoch1, epoch2, epoch3]);
 
         let threshold = 15_000;
-        let ip_42 = merged.query(&SketchInput::Str("10.0.0.42"));
-        let ip_99 = merged.query(&SketchInput::Str("172.16.5.99"));
-        let ip_43 = merged.query(&SketchInput::Str("10.0.0.43"));
+        let ip_42 = merged.query(&DataInput::Str("10.0.0.42"));
+        let ip_99 = merged.query(&DataInput::Str("172.16.5.99"));
+        let ip_43 = merged.query(&DataInput::Str("10.0.0.43"));
 
         assert_eq!(ip_42, 37_000);
         assert!(ip_42 > threshold, "10.0.0.42 should exceed threshold");
@@ -1425,7 +1425,7 @@ mod tests {
             for epoch in 0..n {
                 let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
                 for i in (epoch * 10)..((epoch + 1) * 10) {
-                    let key = SketchInput::U64(i);
+                    let key = DataInput::U64(i);
                     sk.insert(&key, 1);
                     standard.insert(&key);
                 }
@@ -1436,7 +1436,7 @@ mod tests {
             assert_eq!(merged.fold_level(), 0, "N={n}: should reach level 0");
 
             for i in 0..(n * 10) {
-                let key = SketchInput::U64(i);
+                let key = DataInput::U64(i);
                 assert_eq!(
                     merged.query(&key),
                     standard.estimate(&key) as i64,
@@ -1457,7 +1457,7 @@ mod tests {
         // let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         let mut sk = FoldCMS::<DefaultXxHasher>::new(rows, cols, fold_level, 10);
         for i in 0..40 {
-            sk.insert(&SketchInput::U64(i), (i + 1) as i64);
+            sk.insert(&DataInput::U64(i), (i + 1) as i64);
         }
 
         let expected = sk.to_flat_counters();
@@ -1477,11 +1477,11 @@ mod tests {
     #[test]
     fn unfold_to_same_level_returns_clone() {
         let mut sk: FoldCMS = FoldCMS::new(3, 256, 3, 10);
-        sk.insert(&SketchInput::Str("x"), 42);
+        sk.insert(&DataInput::Str("x"), 42);
 
         let result = sk.unfold_to(3);
         assert_eq!(result.fold_level(), 3);
-        assert_eq!(result.query(&SketchInput::Str("x")), 42);
+        assert_eq!(result.query(&DataInput::Str("x")), 42);
     }
 
     #[test]
@@ -1494,10 +1494,10 @@ mod tests {
         let mut sk_low: FoldCMS = FoldCMS::new(rows, cols, 2, 10);
 
         for i in 0..20u64 {
-            sk_high.insert(&SketchInput::U64(i), 1);
+            sk_high.insert(&DataInput::U64(i), 1);
         }
         for i in 10..30u64 {
-            sk_low.insert(&SketchInput::U64(i), 1);
+            sk_low.insert(&DataInput::U64(i), 1);
         }
 
         let merged = FoldCMS::hierarchical_merge(&[sk_high.clone(), sk_low.clone()]);
@@ -1510,7 +1510,7 @@ mod tests {
         reference.merge_same_level(&b);
 
         for i in 0..30u64 {
-            let key = SketchInput::U64(i);
+            let key = DataInput::U64(i);
             assert_eq!(
                 merged.query(&key),
                 reference.query(&key),

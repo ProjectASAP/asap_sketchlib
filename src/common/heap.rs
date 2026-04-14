@@ -6,7 +6,7 @@
 
 use crate::common::input::HHItem;
 use crate::common::{CommonHeap, KeepSmallest};
-use crate::{HeapItem, SketchInput, hash_item64_seeded, hash64_seeded, input_to_owned};
+use crate::{DataInput, HeapItem, hash_item64_seeded, hash64_seeded, input_to_owned};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -30,7 +30,7 @@ impl HHHeap {
     }
 
     /// Finds an item by key, returns the index if found.
-    pub fn find(&self, key: &SketchInput) -> Option<usize> {
+    pub fn find(&self, key: &DataInput) -> Option<usize> {
         let slot = self.slot_for_input(key);
         self.positions.get(&slot).and_then(|bucket| {
             bucket
@@ -49,7 +49,7 @@ impl HHHeap {
     }
 
     /// Updates an existing item's count or inserts a new item.
-    pub fn update<'k>(&mut self, key: &SketchInput, count: i64) -> bool {
+    pub fn update<'k>(&mut self, key: &DataInput, count: i64) -> bool {
         if let Some(idx) = self.find(key) {
             self.heap[idx].count = count;
             self.heap.update_at(idx);
@@ -157,7 +157,7 @@ impl HHHeap {
     }
 
     #[inline]
-    fn slot_for_input(&self, key: &SketchInput) -> u64 {
+    fn slot_for_input(&self, key: &DataInput) -> u64 {
         hash64_seeded(0, key)
     }
 
@@ -171,7 +171,7 @@ impl HHHeap {
 mod tests {
     use super::*;
     use crate::{
-        CommonHeap, CommonHeapOrder, HeapItem, KeepLargest, KeepSmallest, SketchInput,
+        CommonHeap, CommonHeapOrder, DataInput, HeapItem, KeepLargest, KeepSmallest,
         common::input::HHItem,
     };
 
@@ -299,9 +299,9 @@ mod tests {
     #[test]
     fn test_custom_struct_with_ord() {
         let mut heap = CommonHeap::<HHItem, KeepSmallest>::new_min(3);
-        heap.push(HHItem::new(SketchInput::String("five".to_owned()), 5));
-        heap.push(HHItem::new(SketchInput::String("three".to_owned()), 3));
-        heap.push(HHItem::new(SketchInput::String("seven".to_owned()), 7));
+        heap.push(HHItem::new(DataInput::String("five".to_owned()), 5));
+        heap.push(HHItem::new(DataInput::String("three".to_owned()), 3));
+        heap.push(HHItem::new(DataInput::String("seven".to_owned()), 7));
 
         assert_eq!(heap.peek().map(|item| item.count), Some(3));
     }
@@ -317,7 +317,7 @@ mod tests {
         // Insert items (simulating TopKHeap behavior)
         for i in 1..=5 {
             heap.push(HHItem::new(
-                SketchInput::String(format!("key-{i}").to_owned()),
+                DataInput::String(format!("key-{i}").to_owned()),
                 i,
             ));
         }
@@ -375,11 +375,11 @@ mod tests {
 
         let mut heap = CommonHeap::<HHItem, CompareByCount>::with_capacity(3, CompareByCount);
 
-        heap.push(HHItem::new(SketchInput::String("a".to_owned()), 5));
-        heap.push(HHItem::new(SketchInput::String("b".to_owned()), 3));
-        heap.push(HHItem::new(SketchInput::String("c".to_owned()), 7));
-        heap.push(HHItem::new(SketchInput::String("d".to_owned()), 1)); // Won't be added
-        heap.push(HHItem::new(SketchInput::String("e".to_owned()), 10)); // Will replace min
+        heap.push(HHItem::new(DataInput::String("a".to_owned()), 5));
+        heap.push(HHItem::new(DataInput::String("b".to_owned()), 3));
+        heap.push(HHItem::new(DataInput::String("c".to_owned()), 7));
+        heap.push(HHItem::new(DataInput::String("d".to_owned()), 1)); // Won't be added
+        heap.push(HHItem::new(DataInput::String("e".to_owned()), 10)); // Will replace min
 
         assert_eq!(heap.len(), 3);
         let min_count = heap.peek().map(|item| item.count);
@@ -407,7 +407,7 @@ mod tests {
                     heap.update_at(idx);
                 } else {
                     // Not found: insert (TopKHeap::insert equivalent)
-                    heap.push(HHItem::new(SketchInput::Str(key), count));
+                    heap.push(HHItem::new(DataInput::Str(key), count));
                 }
             };
 

@@ -22,7 +22,7 @@ fn init(k: usize, m: usize) -> Self
 ## Insert/Update
 
 ```rust
-fn update(&mut self, val: &SketchInput) -> Result<(), &'static str>
+fn update(&mut self, val: &DataInput) -> Result<(), &'static str>
 fn clear(&mut self)
 ```
 
@@ -57,18 +57,18 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ## Examples
 
 ```rust
-use asap_sketchlib::{KLL, SketchInput};
+use asap_sketchlib::{KLL, DataInput};
 
 let mut kll = KLL::init_kll(200);
-kll.update(&SketchInput::F64(10.0)).unwrap();
-kll.update(&SketchInput::F64(20.0)).unwrap();
+kll.update(&DataInput::F64(10.0)).unwrap();
+kll.update(&DataInput::F64(20.0)).unwrap();
 let q50 = kll.quantile(0.5);
 assert!(q50 >= 10.0);
 ```
 
 ## Caveats
 
-- Numeric inputs only through `SketchInput`.
+- Numeric inputs only through `DataInput`.
 
 ## Status
 

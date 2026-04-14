@@ -12,7 +12,7 @@
 //! * "CocoSketch: High-Performance Sketch-based Measurement over Arbitrary Key Spaces"
 //! * <https://dl.acm.org/doi/10.1145/3452296.3472892>
 
-use crate::{DefaultXxHasher, SketchHasher, SketchInput, Vector2D};
+use crate::{DataInput, DefaultXxHasher, SketchHasher, Vector2D};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -121,7 +121,7 @@ impl<H: SketchHasher> Coco<H> {
         if self.d == 0 || self.w == 0 {
             return;
         }
-        let key_input = SketchInput::Str(key);
+        let key_input = DataInput::Str(key);
         let mut min_val_row = usize::MAX;
         let mut min_val = u64::MAX;
         for i in 0..self.d {

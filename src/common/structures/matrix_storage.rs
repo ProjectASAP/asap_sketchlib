@@ -2,7 +2,7 @@
 
 use smallvec::SmallVec;
 
-use crate::SketchInput;
+use crate::DataInput;
 
 /// Fast-path hash container for matrix-backed sketches.
 #[derive(Clone, Debug)]
@@ -181,5 +181,5 @@ pub trait FastPathHasher<H>: MatrixStorage
 where
     H: crate::SketchHasher,
 {
-    fn hash_for_matrix(&self, value: &SketchInput) -> H::HashType;
+    fn hash_for_matrix(&self, value: &DataInput) -> H::HashType;
 }

@@ -14,7 +14,7 @@ use crate::{
 
 /// Input wrapper for sketch APIs (supports primitive and borrowed values).
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum SketchInput<'a> {
+pub enum DataInput<'a> {
     I8(i8),
     I16(i16),
     I32(i32),
@@ -34,7 +34,7 @@ pub enum SketchInput<'a> {
     Bytes(&'a [u8]),
 }
 
-/// Owned counterpart to `SketchInput` for heap storage.
+/// Owned counterpart to `DataInput` for heap storage.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub enum HeapItem {
     I8(i8),
@@ -54,45 +54,45 @@ pub enum HeapItem {
     String(String),
 }
 
-pub fn heap_item_to_sketch_input(item: &HeapItem) -> SketchInput<'_> {
+pub fn heap_item_to_sketch_input(item: &HeapItem) -> DataInput<'_> {
     match item {
-        HeapItem::I8(v) => SketchInput::I8(*v),
-        HeapItem::I16(v) => SketchInput::I16(*v),
-        HeapItem::I32(v) => SketchInput::I32(*v),
-        HeapItem::I64(v) => SketchInput::I64(*v),
-        HeapItem::I128(v) => SketchInput::I128(*v),
-        HeapItem::ISIZE(v) => SketchInput::ISIZE(*v),
-        HeapItem::U8(v) => SketchInput::U8(*v),
-        HeapItem::U16(v) => SketchInput::U16(*v),
-        HeapItem::U32(v) => SketchInput::U32(*v),
-        HeapItem::U64(v) => SketchInput::U64(*v),
-        HeapItem::U128(v) => SketchInput::U128(*v),
-        HeapItem::USIZE(v) => SketchInput::USIZE(*v),
-        HeapItem::F32(v) => SketchInput::F32(*v),
-        HeapItem::F64(v) => SketchInput::F64(*v),
-        HeapItem::String(s) => SketchInput::Str(s),
+        HeapItem::I8(v) => DataInput::I8(*v),
+        HeapItem::I16(v) => DataInput::I16(*v),
+        HeapItem::I32(v) => DataInput::I32(*v),
+        HeapItem::I64(v) => DataInput::I64(*v),
+        HeapItem::I128(v) => DataInput::I128(*v),
+        HeapItem::ISIZE(v) => DataInput::ISIZE(*v),
+        HeapItem::U8(v) => DataInput::U8(*v),
+        HeapItem::U16(v) => DataInput::U16(*v),
+        HeapItem::U32(v) => DataInput::U32(*v),
+        HeapItem::U64(v) => DataInput::U64(*v),
+        HeapItem::U128(v) => DataInput::U128(*v),
+        HeapItem::USIZE(v) => DataInput::USIZE(*v),
+        HeapItem::F32(v) => DataInput::F32(*v),
+        HeapItem::F64(v) => DataInput::F64(*v),
+        HeapItem::String(s) => DataInput::Str(s),
     }
 }
 
-pub fn input_to_owned<'a>(input: &SketchInput<'a>) -> HeapItem {
+pub fn input_to_owned<'a>(input: &DataInput<'a>) -> HeapItem {
     match input {
-        SketchInput::I8(i) => HeapItem::I8(*i),
-        SketchInput::I16(i) => HeapItem::I16(*i),
-        SketchInput::I32(i) => HeapItem::I32(*i),
-        SketchInput::I64(i) => HeapItem::I64(*i),
-        SketchInput::I128(i) => HeapItem::I128(*i),
-        SketchInput::ISIZE(i) => HeapItem::ISIZE(*i),
-        SketchInput::U8(u) => HeapItem::U8(*u),
-        SketchInput::U16(u) => HeapItem::U16(*u),
-        SketchInput::U32(u) => HeapItem::U32(*u),
-        SketchInput::U64(u) => HeapItem::U64(*u),
-        SketchInput::U128(u) => HeapItem::U128(*u),
-        SketchInput::USIZE(u) => HeapItem::USIZE(*u),
-        SketchInput::F32(f) => HeapItem::F32(*f),
-        SketchInput::F64(f) => HeapItem::F64(*f),
-        SketchInput::Str(s) => HeapItem::String((*s).to_owned()),
-        SketchInput::String(s) => HeapItem::String((*s).to_owned()),
-        SketchInput::Bytes(items) => {
+        DataInput::I8(i) => HeapItem::I8(*i),
+        DataInput::I16(i) => HeapItem::I16(*i),
+        DataInput::I32(i) => HeapItem::I32(*i),
+        DataInput::I64(i) => HeapItem::I64(*i),
+        DataInput::I128(i) => HeapItem::I128(*i),
+        DataInput::ISIZE(i) => HeapItem::ISIZE(*i),
+        DataInput::U8(u) => HeapItem::U8(*u),
+        DataInput::U16(u) => HeapItem::U16(*u),
+        DataInput::U32(u) => HeapItem::U32(*u),
+        DataInput::U64(u) => HeapItem::U64(*u),
+        DataInput::U128(u) => HeapItem::U128(*u),
+        DataInput::USIZE(u) => HeapItem::USIZE(*u),
+        DataInput::F32(f) => HeapItem::F32(*f),
+        DataInput::F64(f) => HeapItem::F64(*f),
+        DataInput::Str(s) => HeapItem::String((*s).to_owned()),
+        DataInput::String(s) => HeapItem::String((*s).to_owned()),
+        DataInput::Bytes(items) => {
             let byte_array = (*items).to_owned();
             let s = String::from_utf8(byte_array).unwrap();
             HeapItem::String(s)
@@ -100,32 +100,32 @@ pub fn input_to_owned<'a>(input: &SketchInput<'a>) -> HeapItem {
     }
 }
 
-/// Converts SketchInput to f64 for numeric-only sketches.
+/// Converts DataInput to f64 for numeric-only sketches.
 /// Returns an error when the input is not numeric.
 #[inline(always)]
-pub(crate) fn sketch_input_to_f64(input: &SketchInput) -> Result<f64, &'static str> {
+pub(crate) fn sketch_input_to_f64(input: &DataInput) -> Result<f64, &'static str> {
     match input {
-        SketchInput::I8(v) => Ok(*v as f64),
-        SketchInput::I16(v) => Ok(*v as f64),
-        SketchInput::I32(v) => Ok(*v as f64),
-        SketchInput::I64(v) => Ok(*v as f64),
-        SketchInput::I128(v) => Ok(*v as f64),
-        SketchInput::ISIZE(v) => Ok(*v as f64),
-        SketchInput::U8(v) => Ok(*v as f64),
-        SketchInput::U16(v) => Ok(*v as f64),
-        SketchInput::U32(v) => Ok(*v as f64),
-        SketchInput::U64(v) => Ok(*v as f64),
-        SketchInput::U128(v) => Ok(*v as f64),
-        SketchInput::USIZE(v) => Ok(*v as f64),
-        SketchInput::F32(v) => Ok(*v as f64),
-        SketchInput::F64(v) => Ok(*v),
-        SketchInput::Str(_) | SketchInput::String(_) | SketchInput::Bytes(_) => {
+        DataInput::I8(v) => Ok(*v as f64),
+        DataInput::I16(v) => Ok(*v as f64),
+        DataInput::I32(v) => Ok(*v as f64),
+        DataInput::I64(v) => Ok(*v as f64),
+        DataInput::I128(v) => Ok(*v as f64),
+        DataInput::ISIZE(v) => Ok(*v as f64),
+        DataInput::U8(v) => Ok(*v as f64),
+        DataInput::U16(v) => Ok(*v as f64),
+        DataInput::U32(v) => Ok(*v as f64),
+        DataInput::U64(v) => Ok(*v as f64),
+        DataInput::U128(v) => Ok(*v as f64),
+        DataInput::USIZE(v) => Ok(*v as f64),
+        DataInput::F32(v) => Ok(*v as f64),
+        DataInput::F64(v) => Ok(*v),
+        DataInput::Str(_) | DataInput::String(_) | DataInput::Bytes(_) => {
             Err("KLL sketch only accepts numeric inputs")
         }
     }
 }
 
-impl<'a> PartialEq for SketchInput<'a> {
+impl<'a> PartialEq for DataInput<'a> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::I8(l0), Self::I8(r0)) => l0 == r0,
@@ -150,29 +150,29 @@ impl<'a> PartialEq for SketchInput<'a> {
     }
 }
 
-impl<'a> Eq for SketchInput<'a> {}
+impl<'a> Eq for DataInput<'a> {}
 
-impl Hash for SketchInput<'_> {
+impl Hash for DataInput<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         match self {
-            SketchInput::I8(v) => v.hash(state),
-            SketchInput::I16(v) => v.hash(state),
-            SketchInput::I32(v) => v.hash(state),
-            SketchInput::I64(v) => v.hash(state),
-            SketchInput::I128(v) => v.hash(state),
-            SketchInput::ISIZE(v) => v.hash(state),
-            SketchInput::U8(v) => v.hash(state),
-            SketchInput::U16(v) => v.hash(state),
-            SketchInput::U32(v) => v.hash(state),
-            SketchInput::U64(v) => v.hash(state),
-            SketchInput::U128(v) => v.hash(state),
-            SketchInput::USIZE(v) => v.hash(state),
-            SketchInput::F32(v) => state.write_u32(v.to_bits()),
-            SketchInput::F64(v) => state.write_u64(v.to_bits()),
-            SketchInput::Str(s) => s.hash(state),
-            SketchInput::String(s) => s.hash(state),
-            SketchInput::Bytes(bytes) => {
+            DataInput::I8(v) => v.hash(state),
+            DataInput::I16(v) => v.hash(state),
+            DataInput::I32(v) => v.hash(state),
+            DataInput::I64(v) => v.hash(state),
+            DataInput::I128(v) => v.hash(state),
+            DataInput::ISIZE(v) => v.hash(state),
+            DataInput::U8(v) => v.hash(state),
+            DataInput::U16(v) => v.hash(state),
+            DataInput::U32(v) => v.hash(state),
+            DataInput::U64(v) => v.hash(state),
+            DataInput::U128(v) => v.hash(state),
+            DataInput::USIZE(v) => v.hash(state),
+            DataInput::F32(v) => state.write_u32(v.to_bits()),
+            DataInput::F64(v) => state.write_u64(v.to_bits()),
+            DataInput::Str(s) => s.hash(state),
+            DataInput::String(s) => s.hash(state),
+            DataInput::Bytes(bytes) => {
                 let str_repr = std::str::from_utf8(bytes)
                     .expect("HeapItem only supports UTF-8 bytes for hashing");
                 str_repr.hash(state);
@@ -181,26 +181,26 @@ impl Hash for SketchInput<'_> {
     }
 }
 
-impl PartialEq<SketchInput<'_>> for HeapItem {
-    fn eq(&self, other: &SketchInput<'_>) -> bool {
+impl PartialEq<DataInput<'_>> for HeapItem {
+    fn eq(&self, other: &DataInput<'_>) -> bool {
         match (self, other) {
-            (HeapItem::I8(l), SketchInput::I8(r)) => l == r,
-            (HeapItem::I16(l), SketchInput::I16(r)) => l == r,
-            (HeapItem::I32(l), SketchInput::I32(r)) => l == r,
-            (HeapItem::I64(l), SketchInput::I64(r)) => l == r,
-            (HeapItem::I128(l), SketchInput::I128(r)) => l == r,
-            (HeapItem::ISIZE(l), SketchInput::ISIZE(r)) => l == r,
-            (HeapItem::U8(l), SketchInput::U8(r)) => l == r,
-            (HeapItem::U16(l), SketchInput::U16(r)) => l == r,
-            (HeapItem::U32(l), SketchInput::U32(r)) => l == r,
-            (HeapItem::U64(l), SketchInput::U64(r)) => l == r,
-            (HeapItem::U128(l), SketchInput::U128(r)) => l == r,
-            (HeapItem::USIZE(l), SketchInput::USIZE(r)) => l == r,
-            (HeapItem::F32(l), SketchInput::F32(r)) => l == r,
-            (HeapItem::F64(l), SketchInput::F64(r)) => l == r,
-            (HeapItem::String(l), SketchInput::Str(r)) => l == r,
-            (HeapItem::String(l), SketchInput::String(r)) => l == r,
-            (HeapItem::String(l), SketchInput::Bytes(bytes)) => {
+            (HeapItem::I8(l), DataInput::I8(r)) => l == r,
+            (HeapItem::I16(l), DataInput::I16(r)) => l == r,
+            (HeapItem::I32(l), DataInput::I32(r)) => l == r,
+            (HeapItem::I64(l), DataInput::I64(r)) => l == r,
+            (HeapItem::I128(l), DataInput::I128(r)) => l == r,
+            (HeapItem::ISIZE(l), DataInput::ISIZE(r)) => l == r,
+            (HeapItem::U8(l), DataInput::U8(r)) => l == r,
+            (HeapItem::U16(l), DataInput::U16(r)) => l == r,
+            (HeapItem::U32(l), DataInput::U32(r)) => l == r,
+            (HeapItem::U64(l), DataInput::U64(r)) => l == r,
+            (HeapItem::U128(l), DataInput::U128(r)) => l == r,
+            (HeapItem::USIZE(l), DataInput::USIZE(r)) => l == r,
+            (HeapItem::F32(l), DataInput::F32(r)) => l == r,
+            (HeapItem::F64(l), DataInput::F64(r)) => l == r,
+            (HeapItem::String(l), DataInput::Str(r)) => l == r,
+            (HeapItem::String(l), DataInput::String(r)) => l == r,
+            (HeapItem::String(l), DataInput::Bytes(bytes)) => {
                 std::str::from_utf8(bytes).map(|s| l == s).unwrap_or(false)
             }
             _ => false,
@@ -208,19 +208,19 @@ impl PartialEq<SketchInput<'_>> for HeapItem {
     }
 }
 
-impl PartialEq<&SketchInput<'_>> for HeapItem {
-    fn eq(&self, other: &&SketchInput<'_>) -> bool {
+impl PartialEq<&DataInput<'_>> for HeapItem {
+    fn eq(&self, other: &&DataInput<'_>) -> bool {
         self == *other
     }
 }
 
-impl<'a> PartialEq<HeapItem> for SketchInput<'a> {
+impl<'a> PartialEq<HeapItem> for DataInput<'a> {
     fn eq(&self, other: &HeapItem) -> bool {
         other == self
     }
 }
 
-impl<'a> PartialEq<&HeapItem> for SketchInput<'a> {
+impl<'a> PartialEq<&HeapItem> for DataInput<'a> {
     fn eq(&self, other: &&HeapItem) -> bool {
         self == *other
     }
@@ -258,13 +258,13 @@ pub enum L2HH {
 }
 
 impl L2HH {
-    pub fn update_and_est(&mut self, key: &SketchInput, value: i64) -> f64 {
+    pub fn update_and_est(&mut self, key: &DataInput, value: i64) -> f64 {
         match self {
             L2HH::COUNT(count_l2hh) => count_l2hh.fast_update_and_est(key, value),
         }
     }
 
-    pub fn update_and_est_without_l2(&mut self, key: &SketchInput, value: i64) -> f64 {
+    pub fn update_and_est_without_l2(&mut self, key: &DataInput, value: i64) -> f64 {
         match self {
             L2HH::COUNT(count_l2hh) => count_l2hh.fast_update_and_est_without_l2(key, value),
         }
@@ -296,7 +296,7 @@ impl L2HH {
 #[derive(Clone, Debug)]
 pub enum HydraQuery<'a> {
     /// Query for frequency of a specific item (for CountMin, Count, etc.)
-    Frequency(SketchInput<'a>),
+    Frequency(DataInput<'a>),
     /// Query for quantile/CDF at a threshold (for KLL, DDSketch, etc.)
     Quantile(f64),
     /// Query cumulative distribution up to a threshold value
@@ -347,7 +347,7 @@ impl fmt::Display for HydraCounter {
 }
 
 impl HydraCounter {
-    pub(crate) fn hash_for_value(&self, value: &SketchInput) -> Option<MatrixHashType> {
+    pub(crate) fn hash_for_value(&self, value: &DataInput) -> Option<MatrixHashType> {
         match self {
             HydraCounter::CM(cm) => Some(hash_for_matrix(cm.rows(), cm.cols(), value)),
             HydraCounter::CS(count) => Some(hash_for_matrix(count.rows(), count.cols(), value)),
@@ -357,7 +357,7 @@ impl HydraCounter {
 
     /// Insert a value into the counter sketch
     /// This updates the underlying sketch with the given value
-    pub fn insert(&mut self, value: &SketchInput, count: Option<i32>) {
+    pub fn insert(&mut self, value: &DataInput, count: Option<i32>) {
         match (self, count) {
             (HydraCounter::CM(cm), None) => cm.insert(value),
             (HydraCounter::CM(cm), Some(i)) => cm.insert_many(value, i),
@@ -379,7 +379,7 @@ impl HydraCounter {
     /// For sketches that require full values (e.g., KLL, UnivMon), this falls back to `insert`.
     pub fn insert_with_hash(
         &mut self,
-        value: &SketchInput,
+        value: &DataInput,
         hashed_val: &MatrixHashType,
         count: Option<i32>,
     ) {
@@ -418,9 +418,9 @@ impl HydraCounter {
     /// use asap_sketchlib::input::HydraCounter;
     /// use asap_sketchlib::input::HydraQuery;
     /// use asap_sketchlib::{CountMin, FastPath, Vector2D};
-    /// use asap_sketchlib::SketchInput;
+    /// use asap_sketchlib::DataInput;
     /// let counter = HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::default());
-    /// let result = counter.query(&HydraQuery::Frequency(SketchInput::I64(42)));
+    /// let result = counter.query(&HydraQuery::Frequency(DataInput::I64(42)));
     ///
     /// // For KLL, only Quantile queries would be valid
     /// let result = counter.query(&HydraQuery::Quantile(0.5)); // median
@@ -484,7 +484,7 @@ pub struct HHItem {
 
 impl HHItem {
     /// Creates a new Item with the given key and count.
-    pub fn new(k: SketchInput, count: i64) -> Self {
+    pub fn new(k: DataInput, count: i64) -> Self {
         HHItem {
             key: input_to_owned(&k),
             count,
@@ -496,7 +496,7 @@ impl HHItem {
     }
 
     /// Legacy constructor for compatibility.
-    pub fn init_item(k: SketchInput, count: i64) -> Self {
+    pub fn init_item(k: DataInput, count: i64) -> Self {
         HHItem {
             key: input_to_owned(&k),
             count,

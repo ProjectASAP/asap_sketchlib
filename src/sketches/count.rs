@@ -8,10 +8,10 @@
 //!   ICALP 2002. <https://www.cs.rutgers.edu/~farach/pubs/FrequentStream.pdf>
 
 use crate::{
-    DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
+    DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, SketchInput, Vector1D, Vector2D,
-    compute_median_inline_f64, hash64_seeded,
+    QuickMatrixI128, RegularPath, SketchHasher, Vector1D, Vector2D, compute_median_inline_f64,
+    hash64_seeded,
 };
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
@@ -304,7 +304,7 @@ where
     C: CountSketchCounter,
 {
     /// Inserts an observation with standard Count Sketch updating algorithm.
-    pub fn insert(&mut self, value: &SketchInput) {
+    pub fn insert(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -323,7 +323,7 @@ where
     }
 
     /// Inserts an observation with the given count (weight).
-    pub fn insert_many(&mut self, value: &SketchInput, many: C) {
+    pub fn insert_many(&mut self, value: &DataInput, many: C) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -338,7 +338,7 @@ where
     }
 
     /// Returns the frequency estimate for the provided value.
-    pub fn estimate(&self, value: &SketchInput) -> f64 {
+    pub fn estimate(&self, value: &DataInput) -> f64 {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         let mut estimates = Vec::with_capacity(rows);
@@ -375,7 +375,7 @@ where
 {
     /// Inserts an observation using the combined hash optimization.
     #[inline(always)]
-    pub fn insert(&mut self, value: &SketchInput) {
+    pub fn insert(&mut self, value: &DataInput) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts.fast_insert(
             |counter, value, row| {
@@ -390,7 +390,7 @@ where
 
     /// Inserts an observation with the given count using the combined hash optimization.
     #[inline(always)]
-    pub fn insert_many(&mut self, value: &SketchInput, many: S::Counter) {
+    pub fn insert_many(&mut self, value: &DataInput, many: S::Counter) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts.fast_insert(
             |counter, value, row| {
@@ -405,7 +405,7 @@ where
 
     /// Returns the frequency estimate for the provided value.
     #[inline(always)]
-    pub fn estimate(&self, value: &SketchInput) -> f64 {
+    pub fn estimate(&self, value: &DataInput) -> f64 {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts
             .fast_query_median(&hashed_val, |val, row, hash| {
@@ -480,7 +480,7 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
 
     /// Inserts an observation using Nitro geometric-sampling acceleration.
     #[inline(always)]
-    pub fn fast_insert_nitro(&mut self, value: &SketchInput) {
+    pub fn fast_insert_nitro(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
         let delta = self.counts.nitro().delta;
         if self.counts.nitro().to_skip >= rows {
@@ -606,7 +606,7 @@ impl<H: SketchHasher> CountL2HH<H> {
 
     /// Inserts with hash optimization - computes hash once and reuses it.
     /// due to the limitation of seeds, use fast_insert only
-    pub fn fast_insert_with_count(&mut self, val: &SketchInput, c: i64) {
+    pub fn fast_insert_with_count(&mut self, val: &DataInput, c: i64) {
         let hashed_val = H::hash128_seeded(self.seed_idx, val);
         self.fast_insert_with_count_and_hash(hashed_val, c);
     }
@@ -639,7 +639,7 @@ impl<H: SketchHasher> CountL2HH<H> {
 
     // /// Inserts without L2 update using hash optimization.
     // /// due to the limitation of seeds, use fast_insert only
-    // pub fn fast_insert_with_count_without_l2(&mut self, val: &SketchInput, c: i64) {
+    // pub fn fast_insert_with_count_without_l2(&mut self, val: &DataInput, c: i64) {
     //     let hashed_val = hash128_seeded(self.seed_idx, val);
     //     self.fast_insert_with_count_without_l2_and_hash(hashed_val, c);
     // }
@@ -666,7 +666,7 @@ impl<H: SketchHasher> CountL2HH<H> {
 
     /// Update and estimate with hash optimization.
     /// due to the limitation of seeds, use fast_insert only
-    pub fn fast_update_and_est(&mut self, val: &SketchInput, c: i64) -> f64 {
+    pub fn fast_update_and_est(&mut self, val: &DataInput, c: i64) -> f64 {
         let hashed_val = H::hash128_seeded(self.seed_idx, val);
         self.fast_insert_with_count_and_hash(hashed_val, c);
         self.fast_get_est_with_hash(hashed_val)
@@ -674,7 +674,7 @@ impl<H: SketchHasher> CountL2HH<H> {
 
     /// Update and estimate without L2 with hash optimization.
     /// due to the limitation of seeds, use fast_insert only
-    pub fn fast_update_and_est_without_l2(&mut self, val: &SketchInput, c: i64) -> f64 {
+    pub fn fast_update_and_est_without_l2(&mut self, val: &DataInput, c: i64) -> f64 {
         let hashed_val = H::hash128_seeded(self.seed_idx, val);
         self.fast_insert_with_count_without_l2_and_hash(hashed_val, c);
         self.fast_get_est_with_hash(hashed_val)
@@ -697,7 +697,7 @@ impl<H: SketchHasher> CountL2HH<H> {
 
     /// Returns the frequency estimate with hash optimization.
     /// due to the limitation of seeds, use fast_insert only
-    pub fn fast_get_est(&self, val: &SketchInput) -> f64 {
+    pub fn fast_get_est(&self, val: &DataInput) -> f64 {
         let hashed_val = H::hash128_seeded(self.seed_idx, val);
         self.fast_get_est_with_hash(hashed_val)
     }
@@ -741,7 +741,7 @@ use crate::octo_delta::{COUNT_PROMASK, CountDelta};
 impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> {
     /// Inserts a value and emits a delta when any counter exceeds the promotion threshold.
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta)) {
+    pub fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -768,7 +768,7 @@ where
 {
     /// Inserts a value using the fast path and emits a delta on counter overflow.
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, value: &SketchInput, emit: &mut impl FnMut(CountDelta)) {
+    pub fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         let rows = self.counts.rows();
         let cols = self.counts.cols();
@@ -809,13 +809,13 @@ mod tests {
     use crate::test_utils::{
         all_counter_zero_i32, counter_index, sample_uniform_f64, sample_zipf_u64,
     };
-    use crate::{SketchInput, hash64_seeded};
+    use crate::{DataInput, hash64_seeded};
     use std::collections::HashMap;
 
     #[test]
     fn count_child_insert_emits_at_threshold() {
         let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
-        let key = SketchInput::U64(99);
+        let key = DataInput::U64(99);
         let mut deltas: Vec<CountDelta> = Vec::new();
 
         for _ in 0..200 {
@@ -827,7 +827,7 @@ mod tests {
         );
     }
 
-    fn counter_sign(row: usize, key: &SketchInput) -> i32 {
+    fn counter_sign(row: usize, key: &DataInput) -> i32 {
         let hash = hash64_seeded(row, key);
         if (hash >> 63) & 1 == 1 { 1 } else { -1 }
     }
@@ -844,7 +844,7 @@ mod tests {
         let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
 
         for value in sample_zipf_u64(domain, exponent, samples, seed) {
-            let key = SketchInput::U64(value);
+            let key = DataInput::U64(value);
             sketch.insert(&key);
             *truth.entry(value).or_insert(0) += 1;
         }
@@ -864,7 +864,7 @@ mod tests {
         let mut sketch = Count::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
 
         for value in sample_zipf_u64(domain, exponent, samples, seed) {
-            let key = SketchInput::U64(value);
+            let key = DataInput::U64(value);
             sketch.insert(&key);
             *truth.entry(value).or_insert(0) += 1;
         }
@@ -884,7 +884,7 @@ mod tests {
         let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
 
         for value in sample_uniform_f64(min, max, samples, seed) {
-            let key = SketchInput::F64(value);
+            let key = DataInput::F64(value);
             sketch.insert(&key);
             *truth.entry(value.to_bits() as u64).or_insert(0) += 1;
         }
@@ -904,7 +904,7 @@ mod tests {
         let mut sketch = Count::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
 
         for value in sample_uniform_f64(min, max, samples, seed) {
-            let key = SketchInput::F64(value);
+            let key = DataInput::F64(value);
             sketch.insert(&key);
             *truth.entry(value.to_bits() as u64).or_insert(0) += 1;
         }
@@ -940,7 +940,7 @@ mod tests {
     #[test]
     fn insert_updates_signed_counters_per_row() {
         let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
-        let key = SketchInput::Str("alpha");
+        let key = DataInput::Str("alpha");
 
         sketch.insert(&key);
 
@@ -960,11 +960,11 @@ mod tests {
         let mut fast = Count::<Vector2D<i32>, FastPath>::with_dimensions(4, 128);
 
         let keys = vec![
-            SketchInput::Str("alpha"),
-            SketchInput::Str("beta"),
-            SketchInput::Str("gamma"),
-            SketchInput::Str("delta"),
-            SketchInput::Str("epsilon"),
+            DataInput::Str("alpha"),
+            DataInput::Str("beta"),
+            DataInput::Str("gamma"),
+            DataInput::Str("delta"),
+            DataInput::Str("epsilon"),
         ];
 
         for key in &keys {
@@ -985,11 +985,11 @@ mod tests {
         let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
 
         let keys = vec![
-            SketchInput::Str("alpha"),
-            SketchInput::Str("beta"),
-            SketchInput::Str("gamma"),
-            SketchInput::Str("delta"),
-            SketchInput::Str("epsilon"),
+            DataInput::Str("alpha"),
+            DataInput::Str("beta"),
+            DataInput::Str("gamma"),
+            DataInput::Str("delta"),
+            DataInput::Str("epsilon"),
         ];
 
         for key in &keys {
@@ -1008,7 +1008,7 @@ mod tests {
     #[test]
     fn estimate_recovers_frequency_for_repeated_key() {
         let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
-        let key = SketchInput::Str("theta");
+        let key = DataInput::Str("theta");
 
         let repeats = 37;
         for _ in 0..repeats {
@@ -1026,11 +1026,11 @@ mod tests {
     fn fast_path_recovers_repeated_insertions() {
         let mut sketch = Count::<Vector2D<i32>, FastPath>::with_dimensions(4, 256);
         let keys = vec![
-            SketchInput::Str("alpha"),
-            SketchInput::Str("beta"),
-            SketchInput::Str("gamma"),
-            SketchInput::Str("delta"),
-            SketchInput::Str("epsilon"),
+            DataInput::Str("alpha"),
+            DataInput::Str("beta"),
+            DataInput::Str("gamma"),
+            DataInput::Str("delta"),
+            DataInput::Str("epsilon"),
         ];
 
         for _ in 0..5 {
@@ -1052,7 +1052,7 @@ mod tests {
     fn merge_adds_counters_element_wise() {
         let mut left = Count::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
         let mut right = Count::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
-        let key = SketchInput::Str("delta");
+        let key = DataInput::Str("delta");
 
         left.insert(&key);
         right.insert(&key);
@@ -1083,7 +1083,7 @@ mod tests {
         let (sketch, truth) = run_zipf_stream(5, 8192, 8192, 1.1, 200_000, 0x5eed_c0de);
         let mut within_tolerance = 0usize;
         for (&value, &count) in &truth {
-            let estimate = sketch.estimate(&SketchInput::U64(value));
+            let estimate = sketch.estimate(&DataInput::U64(value));
             let rel_error = ((estimate - count as f64).abs()) / (count as f64);
             if rel_error < 0.20 {
                 within_tolerance += 1;
@@ -1106,7 +1106,7 @@ mod tests {
         let mut sk = Count::<Vector2D<i32>, RegularPath>::default();
         // Insert values 0..9 once using the regular path.
         for i in 0..10 {
-            sk.insert(&SketchInput::I32(i));
+            sk.insert(&DataInput::I32(i));
         }
 
         // Build the expected counter array by mirroring the regular-path hashing logic.
@@ -1115,7 +1115,7 @@ mod tests {
         let cols = storage.cols();
         let mut expected_once = vec![0_i32; rows * cols];
         for i in 0..10 {
-            let value = SketchInput::I32(i);
+            let value = DataInput::I32(i);
             for r in 0..rows {
                 let hashed = hash64_seeded(r, &value);
                 let col = ((hashed & LOWER_32_MASK) as usize) % cols;
@@ -1130,14 +1130,14 @@ mod tests {
 
         // Insert the same values again; counters should double.
         for i in 0..10 {
-            sk.insert(&SketchInput::I32(i));
+            sk.insert(&DataInput::I32(i));
         }
         let expected_twice: Vec<i32> = expected_once.iter().map(|v| v * 2).collect();
         assert_eq!(sk.as_storage().as_slice(), expected_twice.as_slice());
 
         // Estimates for inserted keys should be exactly 2.
         for i in 0..10 {
-            let estimate = sk.estimate(&SketchInput::I32(i));
+            let estimate = sk.estimate(&DataInput::I32(i));
             assert!(
                 (estimate - 2.0).abs() < f64::EPSILON,
                 "estimate for {i} should be 2.0, but get {estimate}"
@@ -1150,7 +1150,7 @@ mod tests {
         let mut sk = Count::<Vector2D<i32>, FastPath>::default();
         // Insert values 0..9 once using the fast path.
         for i in 0..10 {
-            sk.insert(&SketchInput::I32(i));
+            sk.insert(&DataInput::I32(i));
         }
 
         // Build the expected counter array by mirroring the fast-path hashing logic.
@@ -1162,7 +1162,7 @@ mod tests {
         let mut expected_once = vec![0_i32; rows * cols];
 
         for i in 0..10 {
-            let value = SketchInput::I32(i);
+            let value = DataInput::I32(i);
             let hash = <Vector2D<i32> as FastPathHasher<DefaultXxHasher>>::hash_for_matrix(
                 storage, &value,
             );
@@ -1197,7 +1197,7 @@ mod tests {
         let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
         let mut within_count = 0;
         for key in keys {
-            let est = sk.estimate(&SketchInput::U64(*key));
+            let est = sk.estimate(&DataInput::U64(*key));
             if (est - (*truth.get(key).unwrap() as f64)).abs() < error_bound {
                 within_count += 1;
             }
@@ -1222,7 +1222,7 @@ mod tests {
         let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
         let mut within_count = 0;
         for key in keys {
-            let est = sk.estimate(&SketchInput::U64(*key));
+            let est = sk.estimate(&DataInput::U64(*key));
             if (est - (*truth.get(key).unwrap() as f64)).abs() < error_bound {
                 within_count += 1;
             }
@@ -1258,7 +1258,7 @@ mod tests {
         let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
         let mut within_count = 0;
         for key in keys {
-            let est = sk.estimate(&SketchInput::U64(*key));
+            let est = sk.estimate(&DataInput::U64(*key));
             if (est - (*truth.get(key).unwrap() as f64)).abs() < error_bound {
                 within_count += 1;
             }
@@ -1283,7 +1283,7 @@ mod tests {
         let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
         let mut within_count = 0;
         for key in keys {
-            let est = sk.estimate(&SketchInput::U64(*key));
+            let est = sk.estimate(&DataInput::U64(*key));
             if (est - (*truth.get(key).unwrap() as f64)).abs() < error_bound {
                 within_count += 1;
             }
@@ -1297,8 +1297,8 @@ mod tests {
     #[test]
     fn count_sketch_round_trip_serialization() {
         let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 8);
-        sketch.insert(&SketchInput::U64(42));
-        sketch.insert(&SketchInput::U64(7));
+        sketch.insert(&DataInput::U64(42));
+        sketch.insert(&DataInput::U64(7));
 
         let encoded = sketch.serialize_to_bytes().expect("serialize Count");
         assert!(!encoded.is_empty());
@@ -1318,7 +1318,7 @@ mod tests {
     #[test]
     fn countl2hh_estimates_and_l2_are_consistent() {
         let mut sketch: CountL2HH = CountL2HH::with_dimensions(3, 32);
-        let key = SketchInput::Str("gamma");
+        let key = DataInput::Str("gamma");
 
         let est_after_first = sketch.fast_update_and_est(&key, 5);
         assert_eq!(est_after_first, 5.0);
@@ -1334,7 +1334,7 @@ mod tests {
     fn countl2hh_merge_combines_frequency_vectors() {
         let mut left: CountL2HH = CountL2HH::with_dimensions(3, 32);
         let mut right: CountL2HH = CountL2HH::with_dimensions(3, 32);
-        let key = SketchInput::U32(42);
+        let key = DataInput::U32(42);
 
         left.fast_insert_with_count(&key, 4);
         assert_eq!(left.fast_get_est(&key), 4.0);
@@ -1348,7 +1348,7 @@ mod tests {
     #[test]
     fn countl2hh_round_trip_serialization() {
         let mut sketch: CountL2HH = CountL2HH::with_dimensions_and_seed(3, 32, 7);
-        let key = SketchInput::Str("serialize");
+        let key = DataInput::Str("serialize");
 
         sketch.fast_insert_with_count(&key, 11);
         sketch.fast_insert_with_count(&key, -3);

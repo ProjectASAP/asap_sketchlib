@@ -5,7 +5,7 @@
 //!   <https://dl.acm.org/doi/10.1145/1247480.1247504>
 
 use crate::{
-    CANONICAL_HASH_SEED, CommonHeap, DefaultXxHasher, KeepLargest, SketchHasher, SketchInput,
+    CANONICAL_HASH_SEED, CommonHeap, DataInput, DefaultXxHasher, KeepLargest, SketchHasher,
 };
 
 use serde::{Deserialize, Serialize};
@@ -42,7 +42,7 @@ impl<H: SketchHasher> KMV<H> {
         }
     }
 
-    pub fn insert(&mut self, item: &SketchInput) {
+    pub fn insert(&mut self, item: &DataInput) {
         let hashed = H::hash64_seeded(CANONICAL_HASH_SEED, item);
         self.insert_by_hash(hashed);
     }
@@ -92,7 +92,7 @@ impl<H: SketchHasher> KMV<H> {
 mod tests {
 
     use super::*;
-    use crate::SketchInput;
+    use crate::DataInput;
 
     // takes too long for 10_000_000
     // const TARGETS: [usize; 7] = [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000];
@@ -107,7 +107,7 @@ mod tests {
 
         for &target in TARGETS.iter() {
             while inserted < target {
-                let input = SketchInput::U64(inserted as u64);
+                let input = DataInput::U64(inserted as u64);
                 sketch.insert(&input);
                 inserted += 1;
             }
@@ -135,13 +135,13 @@ mod tests {
 
         for &target in TARGETS.iter() {
             while next_even < target {
-                let input = SketchInput::U64(next_even as u64);
+                let input = DataInput::U64(next_even as u64);
                 left.insert(&input);
                 next_even += 2;
             }
 
             while next_odd < target {
-                let input = SketchInput::U64(next_odd as u64);
+                let input = DataInput::U64(next_odd as u64);
                 right.insert(&input);
                 next_odd += 2;
             }
@@ -167,7 +167,7 @@ mod tests {
     fn assert_serialization_round_trip() {
         let mut sketch: KMV = KMV::default();
         for value in 0..SERDE_SAMPLE {
-            let input = SketchInput::U64(value as u64);
+            let input = DataInput::U64(value as u64);
             sketch.insert(&input);
         }
 

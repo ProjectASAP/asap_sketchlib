@@ -9,7 +9,7 @@ A Rust library for **streaming data sketches** — compact data structures that 
 
 - **Fast.** Up to 8–14× higher insertion throughput than comparable libraries on frequency sketches, 2–3× on cardinality sketches, and 2–4× on quantile sketches. Rust-native with no language-boundary overhead. See [benchmarks](#performance).
 - **High coverage.** Supports frequency, cardinality, quantile, and distribution sketches (`CountMin`, `Count Sketch`, `HyperLogLog`, `KLL`, `DDSketch`). Also includes algorithms not found in other libraries: `UnivMon` for estimating a broad class of streaming statistics (L1/L2 norms, entropy) in a single pass, `Hydra` for answering sketch queries over arbitrary subpopulations without per-group sketches, and `NitroBatch` for accelerating sketch updates through batching. Unique sketch frameworks for sliding windows (`ExponentialHistogram`) and subpopulation queries (`Hydra`).
-- **Easy to use.** Uniform `insert`/`estimate`/`merge` API across all sketches, input data type (`SketchInput`) for typed inputs, and pluggable hashing input to sketches via `SketchHasher`. Composite multiple sketches with shared hashing (`HashLayer`).
+- **Easy to use.** Uniform `insert`/`estimate`/`merge` API across all sketches, input data type (`DataInput`) for typed inputs, and pluggable hashing input to sketches via `SketchHasher`. Composite multiple sketches with shared hashing (`HashLayer`).
 
 ## Supported Sketches
 
@@ -38,7 +38,7 @@ asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib" }
 ### Count distinct users with HyperLogLog
 
 ```rust
-use asap_sketchlib::{ErtlMLE, HyperLogLog, SketchInput};
+use asap_sketchlib::{ErtlMLE, HyperLogLog, DataInput};
 
 // HyperLogLog estimates the number of distinct items in a stream using fixed memory.
 // ErtlMLE is one of the HLL variants we offer — it tends to be more accurate than
@@ -47,7 +47,7 @@ let mut hll = HyperLogLog::<ErtlMLE>::default();
 
 // Insert some user IDs — HLL handles distinct counting and deduplicates items.
 for user_id in [101, 202, 303, 101, 404, 202, 505, 101] {
-    hll.insert(&SketchInput::U64(user_id));
+    hll.insert(&DataInput::U64(user_id));
 }
 
 let unique_users = hll.estimate();
@@ -57,7 +57,7 @@ println!("estimated unique users: {unique_users}"); // ≈ 5
 ### Estimate frequency of items with Count-Min Sketch
 
 ```rust
-use asap_sketchlib::{CountMin, FastPath, Vector2D, SketchInput};
+use asap_sketchlib::{CountMin, FastPath, Vector2D, DataInput};
 
 // Count-Min Sketch estimates how often each item appears in a stream.
 // It may over-count but never under-counts.
@@ -76,13 +76,13 @@ let events = [
 ];
 for &(event, count) in &events {
     for _ in 0..count {
-        cms.insert(&SketchInput::Str(event));
+        cms.insert(&DataInput::Str(event));
     }
 }
 
 // Estimates are close to the true counts (CMS may over-count, but never under-counts).
 for &(event, true_count) in &events {
-    let est = cms.estimate(&SketchInput::Str(event));
+    let est = cms.estimate(&DataInput::Str(event));
     println!("{event:>10}: estimate = {est}, true = {true_count}");
 }
 ```
@@ -90,7 +90,7 @@ for &(event, true_count) in &events {
 ### Track latency percentiles with KLL
 
 ```rust
-use asap_sketchlib::{KLL, SketchInput};
+use asap_sketchlib::{KLL, DataInput};
 
 // KLL is a quantile sketch — it tracks the distribution of values so you can
 // ask questions like "what is the median?" without storing every data point.
@@ -99,7 +99,7 @@ let mut sketch = KLL::default();
 // Simulate 1000 latency samples in milliseconds
 for i in 0..1000 {
     let ms = (i as f64) * 0.5 + 1.0;
-    sketch.update(&SketchInput::F64(ms)).unwrap();
+    sketch.update(&DataInput::F64(ms)).unwrap();
 }
 
 let p50 = sketch.quantile(0.50);
@@ -110,7 +110,7 @@ println!("median ≈ {p50:.1} ms, p99 ≈ {p99:.1} ms");
 ### Merge multiple sketch instances
 
 ```rust
-use asap_sketchlib::{ErtlMLE, HyperLogLog, SketchInput};
+use asap_sketchlib::{ErtlMLE, HyperLogLog, DataInput};
 
 // Sketches are mergeable — you can build one per node and combine them later
 // to get a global answer without shipping raw data.
@@ -118,8 +118,8 @@ let mut node_a = HyperLogLog::<ErtlMLE>::default();
 let mut node_b = HyperLogLog::<ErtlMLE>::default();
 
 // Each node sees different (and some overlapping) users
-for id in [1, 2, 3, 4, 5]  { node_a.insert(&SketchInput::U64(id)); }
-for id in [4, 5, 6, 7, 8]  { node_b.insert(&SketchInput::U64(id)); }
+for id in [1, 2, 3, 4, 5]  { node_a.insert(&DataInput::U64(id)); }
+for id in [4, 5, 6, 7, 8]  { node_b.insert(&DataInput::U64(id)); }
 
 node_a.merge(&node_b);
 println!("total unique users ≈ {}", node_a.estimate()); // ≈ 8

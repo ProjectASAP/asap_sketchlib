@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use crate::input::{HydraCounter, HydraQuery};
 use crate::{CountMin, FastPath, Vector2D};
-use crate::{HYDRA_SEED, SketchInput, hash_for_matrix_seeded};
+use crate::{DataInput, HYDRA_SEED, hash_for_matrix_seeded};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Hydra {
@@ -46,7 +46,7 @@ impl Hydra {
 
     /// Assume key is a string that aggregate different keys
     /// with ";" for now
-    pub fn update(&mut self, key: &str, value: &SketchInput, count: Option<i32>) {
+    pub fn update(&mut self, key: &str, value: &DataInput, count: Option<i32>) {
         let parts: Vec<&str> = key.split(';').filter(|s| !s.is_empty()).collect();
         let n = parts.len();
 
@@ -72,7 +72,7 @@ impl Hydra {
                 HYDRA_SEED,
                 self.row_num,
                 self.col_num,
-                &SketchInput::Str(&buffer),
+                &DataInput::Str(&buffer),
             );
             self.sketches
                 .fast_insert(|a, b, _| a.insert(b, count), value, &hash);
@@ -92,7 +92,7 @@ impl Hydra {
         // }
         //
         // for subkey in &result {
-        //     let hash = hash128_seeded(HYDRA_SEED, &SketchInput::String(subkey.to_string()));
+        //     let hash = hash128_seeded(HYDRA_SEED, &DataInput::String(subkey.to_string()));
         //     self.sketches
         //         .fast_insert(|a, b, _| a.insert(b, count), value, hash);
         // }
@@ -134,7 +134,7 @@ impl Hydra {
             HYDRA_SEED,
             self.row_num,
             self.col_num,
-            &SketchInput::String(key_string.to_string()),
+            &DataInput::String(key_string.to_string()),
         );
         self.sketches
             .fast_query_median_with_key(&hashed_val, query, |counter, q, _, _| {
@@ -144,7 +144,7 @@ impl Hydra {
 
     /// Convenience method for querying frequency (for CountMin-based Hydra)
     /// This is a wrapper around query_key with HydraQuery::Frequency
-    pub fn query_frequency(&self, key: Vec<&str>, value: &SketchInput) -> f64 {
+    pub fn query_frequency(&self, key: Vec<&str>, value: &DataInput) -> f64 {
         self.query_key(key, &HydraQuery::Frequency(value.clone()))
     }
 
@@ -195,7 +195,7 @@ impl MultiHeadHydra {
     }
 
     /// Single fan-out, insert multiple values to different dimension sets
-    pub fn update(&mut self, key: &str, values: &[(&SketchInput, &[&str])], count: Option<i32>) {
+    pub fn update(&mut self, key: &str, values: &[(&DataInput, &[&str])], count: Option<i32>) {
         let parts: Vec<&str> = key.split(';').filter(|s| !s.is_empty()).collect();
         let n = parts.len();
 
@@ -236,7 +236,7 @@ impl MultiHeadHydra {
                 HYDRA_SEED,
                 self.row_num,
                 self.col_num,
-                &SketchInput::Str(&buffer),
+                &DataInput::Str(&buffer),
             );
             self.sketches.fast_insert(
                 |cell_vec, dim_values, _| {
@@ -316,7 +316,7 @@ impl MultiHeadHydra {
             HYDRA_SEED,
             self.row_num,
             self.col_num,
-            &SketchInput::String(key_string),
+            &DataInput::String(key_string),
         );
 
         let dim_idx = match self.dimension_index(dimension) {
@@ -361,7 +361,7 @@ mod tests {
         ];
 
         for (key, value) in dataset {
-            let input = SketchInput::F64(value);
+            let input = DataInput::F64(value);
             hydra.update(key, &input, None);
         }
 
@@ -375,7 +375,7 @@ mod tests {
             32,
             HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::default()),
         );
-        let value = SketchInput::String("event".to_string());
+        let value = DataInput::String("event".to_string());
 
         for _ in 0..5 {
             hydra.update("user;session", &value, None);
@@ -401,13 +401,13 @@ mod tests {
 
         for i in 0..5 {
             for _ in 0..i {
-                let value = SketchInput::I64(i as i64);
+                let value = DataInput::I64(i as i64);
                 hydra.update("key1;key2;key3", &value, None);
             }
         }
 
         for i in 0..5 {
-            let query_value = SketchInput::I64(i as i64);
+            let query_value = DataInput::I64(i as i64);
             let combined = hydra.query_frequency(vec!["key1", "key3"], &query_value);
             assert!(
                 combined >= i as f64,
@@ -415,7 +415,7 @@ mod tests {
             );
         }
 
-        let unrelated_value = SketchInput::I64(0);
+        let unrelated_value = DataInput::I64(0);
         let unrelated = hydra.query_frequency(vec!["other"], &unrelated_value);
         assert_eq!(unrelated, 0.0);
     }
@@ -435,11 +435,11 @@ mod tests {
         ];
 
         for (key, value) in dataset {
-            hydra.update(key, &SketchInput::String(value.to_string()), None);
+            hydra.update(key, &DataInput::String(value.to_string()), None);
         }
 
-        let hot_value = SketchInput::String("event_a".to_string());
-        let cold_value = SketchInput::String("event_c".to_string());
+        let hot_value = DataInput::String("event_a".to_string());
+        let cold_value = DataInput::String("event_c".to_string());
 
         let freq_before = hydra.query_frequency(vec!["city", "device"], &hot_value);
         let region_before = hydra.query_frequency(vec!["region"], &cold_value);
@@ -486,8 +486,8 @@ mod tests {
         ];
         let mut hydra = MultiHeadHydra::with_dimensions(3, 32, dimensions);
 
-        let event_value = SketchInput::String("event_a".to_string());
-        let latency_value = SketchInput::I64(120);
+        let event_value = DataInput::String("event_a".to_string());
+        let latency_value = DataInput::I64(120);
 
         for _ in 0..3 {
             hydra.update(
@@ -552,54 +552,53 @@ mod tests {
 
         // Insert all data points
         for (key, value) in dataset {
-            let input = SketchInput::F64(value);
+            let input = DataInput::F64(value);
             hydra.update(key, &input, None);
         }
 
         // Test single label subpopulation queries
         // key1 appears in 3 entries with values 10.0, 20.0, 30.0
-        let freq_10 = hydra.query_frequency(vec!["key1"], &SketchInput::F64(10.0));
+        let freq_10 = hydra.query_frequency(vec!["key1"], &DataInput::F64(10.0));
         assert_eq!(
             freq_10, 2.0,
             "expected frequency of 10.0 for key1 to be 2, got {freq_10}"
         );
 
-        let freq_20 = hydra.query_frequency(vec!["key1"], &SketchInput::F64(20.0));
+        let freq_20 = hydra.query_frequency(vec!["key1"], &DataInput::F64(20.0));
         assert_eq!(
             freq_20, 1.0,
             "expected frequency of 20.0 for key1 to be 1, got {freq_20}"
         );
 
-        let freq_30 = hydra.query_frequency(vec!["key1"], &SketchInput::F64(30.0));
+        let freq_30 = hydra.query_frequency(vec!["key1"], &DataInput::F64(30.0));
         assert_eq!(
             freq_30, 1.0,
             "expected frequency of 30.0 for key1 to be 1, got {freq_30}"
         );
 
         // key4 appears in 3 entries with values 40.0, 50.0, 60.0
-        let freq_40 = hydra.query_frequency(vec!["key4"], &SketchInput::F64(40.0));
+        let freq_40 = hydra.query_frequency(vec!["key4"], &DataInput::F64(40.0));
         assert_eq!(
             freq_40, 1.0,
             "expected frequency of 40.0 for key4 to be 1, got {freq_40}"
         );
 
         // Test multi-label subpopulation queries
-        let freq_multi = hydra.query_frequency(vec!["key1", "key3"], &SketchInput::F64(10.0));
+        let freq_multi = hydra.query_frequency(vec!["key1", "key3"], &DataInput::F64(10.0));
         assert_eq!(
             freq_multi, 1.0,
             "expected frequency of 10.0 for key1;key to be 1, got {freq_multi}"
         );
 
         // key1;key2;key3 is the full key appearing 3 times
-        let freq_full =
-            hydra.query_frequency(vec!["key1", "key2", "key3"], &SketchInput::F64(20.0));
+        let freq_full = hydra.query_frequency(vec!["key1", "key2", "key3"], &DataInput::F64(20.0));
         assert_eq!(
             freq_full, 1.0,
             "expected frequency of 20.0 for key1;key2;key3 to be 1, got {freq_full}"
         );
 
         // Test cross-population queries (should be 0 as key1 and key8 never appear together)
-        let freq_cross = hydra.query_frequency(vec!["key1", "key8"], &SketchInput::F64(10.0));
+        let freq_cross = hydra.query_frequency(vec!["key1", "key8"], &DataInput::F64(10.0));
         assert_eq!(
             freq_cross, 0.0,
             "expected frequency of 10.0 for key1;key8 to be 0/empty, got {freq_cross}"
@@ -628,7 +627,7 @@ mod tests {
 
         // Insert all data points (HLL tracks distinct values)
         for (key, value) in dataset {
-            let input = SketchInput::F64(value);
+            let input = DataInput::F64(value);
             hydra.update(key, &input, None);
         }
 
@@ -688,18 +687,18 @@ mod tests {
     fn hydra_tracks_kll_quantiles() {
         let mut hydra = Hydra::with_dimensions(3, 64, HydraCounter::KLL(KLL::default()));
         let samples = [
-            SketchInput::F64(10.0),
-            SketchInput::F64(20.0),
-            SketchInput::F64(30.0),
-            SketchInput::F64(40.0),
-            SketchInput::F64(50.0),
+            DataInput::F64(10.0),
+            DataInput::F64(20.0),
+            DataInput::F64(30.0),
+            DataInput::F64(40.0),
+            DataInput::F64(50.0),
         ];
 
         for sample in &samples {
             hydra.update("metrics;latency", sample, None);
         }
 
-        // let query_value = SketchInput::F64(35.0);
+        // let query_value = DataInput::F64(35.0);
         let quantile = hydra.query_key(vec!["metrics", "latency"], &HydraQuery::Cdf(30.0));
         assert!(
             (quantile - 0.6).abs() < 1e-9,
@@ -771,7 +770,7 @@ mod tests {
     #[test]
     fn test_count_min_frequency_query() {
         let mut counter = cm_counter();
-        let key = SketchInput::I64(42);
+        let key = DataInput::I64(42);
 
         // 1. Insert data
         counter.insert(&key, None);
@@ -810,10 +809,10 @@ mod tests {
 
         // 1. Insert unique items
         for i in 0..100 {
-            counter.insert(&SketchInput::I64(i), None);
+            counter.insert(&DataInput::I64(i), None);
         }
         // Duplicate insertions shouldn't affect cardinality
-        counter.insert(&SketchInput::I64(0), None);
+        counter.insert(&DataInput::I64(0), None);
 
         // 2. Query Cardinality (Valid)
         let result = counter.query(&HydraQuery::Cardinality);
@@ -835,7 +834,7 @@ mod tests {
 
         // Insert numbers 1 to 100
         for i in 1..=100 {
-            counter.insert(&SketchInput::F64(i as f64), None);
+            counter.insert(&DataInput::F64(i as f64), None);
         }
 
         // Query Median (0.5)
@@ -858,8 +857,8 @@ mod tests {
         // Insert distribution:
         // Item "A": 10 times
         // Item "B": 20 times
-        let key_a = SketchInput::Str("A");
-        let key_b = SketchInput::Str("B");
+        let key_a = DataInput::Str("A");
+        let key_b = DataInput::Str("B");
 
         for _ in 0..10 {
             counter.insert(&key_a, None);
@@ -890,15 +889,13 @@ mod tests {
         let mut c1 = cm_counter();
         let mut c2 = cm_counter();
 
-        c1.insert(&SketchInput::I64(1), None);
-        c2.insert(&SketchInput::I64(1), None);
+        c1.insert(&DataInput::I64(1), None);
+        c2.insert(&DataInput::I64(1), None);
 
         // Valid merge
         assert!(c1.merge(&c2).is_ok());
 
-        let count = c1
-            .query(&HydraQuery::Frequency(SketchInput::I64(1)))
-            .unwrap();
+        let count = c1.query(&HydraQuery::Frequency(DataInput::I64(1))).unwrap();
         assert_eq!(count, 2.0, "Merge should sum the counts");
 
         // Invalid merge (Different types)
@@ -909,7 +906,7 @@ mod tests {
     #[test]
     fn test_count_frequency_query() {
         let mut counter = count_counter();
-        let key = SketchInput::I64(7);
+        let key = DataInput::I64(7);
 
         for _ in 0..4 {
             counter.insert(&key, None);

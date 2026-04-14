@@ -3,7 +3,7 @@
 ## Core Modules
 
 - **`src/common/`** - Foundation for all sketches ([api_common.md](./api/api_common.md))
-  - `input.rs` - `SketchInput` enum, `HeapItem`, `HHItem`, framework enums (`HydraCounter`, `L2HH`, `HydraQuery`)
+  - `input.rs` - `DataInput` enum, `HeapItem`, `HHItem`, framework enums (`HydraCounter`, `L2HH`, `HydraQuery`)
   - `structures/` - High-performance data structures (`Vector1D`, `Vector2D`, `Vector3D`, `CommonHeap`, `MatrixStorage`, `FixedMatrix`)
   - `heap.rs` - `HHHeap` convenience wrapper for heavy hitter tracking
   - `hash.rs` - Hashing utilities (`hash_for_matrix`, `hash64_seeded`, `SEEDLIST`, `BOTTOM_LAYER_FINDER`) plus `SketchHasher` for custom hasher injection

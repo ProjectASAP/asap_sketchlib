@@ -6,7 +6,7 @@
 
 use super::EHSketchList;
 use super::eh_sketch_list::SketchNorm;
-use crate::SketchInput;
+use crate::DataInput;
 
 const MASS_EPSILON: f64 = 1e-9;
 
@@ -66,7 +66,7 @@ impl ExponentialHistogram {
         self.window = window;
     }
 
-    pub fn update(&mut self, time: u64, val: &SketchInput) {
+    pub fn update(&mut self, time: u64, val: &DataInput) {
         self.update_with(time, |sketch| {
             sketch.insert(val);
         });
@@ -291,7 +291,7 @@ mod tests {
         );
 
         for i in 0..10 {
-            eh.update(i * 10, &SketchInput::I64(1));
+            eh.update(i * 10, &DataInput::I64(1));
         }
 
         assert!(eh.bucket_count() < 10);
@@ -307,17 +307,17 @@ mod tests {
 
         eh.update_with(1, |chapter| {
             if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&SketchInput::I64(1), 1);
+                sketch.fast_insert_with_count(&DataInput::I64(1), 1);
             }
         });
         eh.update_with(2, |chapter| {
             if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&SketchInput::I64(2), 1);
+                sketch.fast_insert_with_count(&DataInput::I64(2), 1);
             }
         });
         eh.update_with(3, |chapter| {
             if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&SketchInput::I64(3), 20);
+                sketch.fast_insert_with_count(&DataInput::I64(3), 20);
             }
         });
 
@@ -335,17 +335,17 @@ mod tests {
 
         eh.update_with(1, |chapter| {
             if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&SketchInput::I64(7), 2);
+                sketch.fast_insert_with_count(&DataInput::I64(7), 2);
             }
         });
         eh.update_with(2, |chapter| {
             if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&SketchInput::I64(8), 2);
+                sketch.fast_insert_with_count(&DataInput::I64(8), 2);
             }
         });
         eh.update_with(3, |chapter| {
             if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&SketchInput::I64(9), 16);
+                sketch.fast_insert_with_count(&DataInput::I64(9), 16);
             }
         });
 
@@ -361,7 +361,7 @@ mod tests {
             EHSketchList::HLL(crate::HyperLogLog::<crate::ErtlMLE>::default()),
         );
 
-        eh.update(100, &SketchInput::I64(1));
+        eh.update(100, &DataInput::I64(1));
 
         assert_eq!(eh.bucket_count(), 1);
         assert_eq!(eh.get_min_time(), Some(100));
