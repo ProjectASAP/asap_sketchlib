@@ -19,9 +19,14 @@ fn new(alpha: f64) -> Self
 ## Insert/Update
 
 ```rust
-fn add(&mut self, v: f64)
+fn add<T: NumericalValue>(&mut self, val: &T)
 fn add_input(&mut self, v: &DataInput) -> Result<(), &'static str>
 ```
+
+`add` accepts any type implementing `NumericalValue` (all standard integer and
+float primitives). Values are internally converted to `f64`; non-positive or
+non-finite values are ignored. `add_input` is the `DataInput` adapter used by
+the type-erased dispatch path.
 
 ## Query
 
@@ -51,8 +56,8 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 use asap_sketchlib::DDSketch;
 
 let mut dds = DDSketch::new(0.01);
-dds.add(1.0);
-dds.add(2.0);
+dds.add(&1.0_f64);
+dds.add(&2_i32);
 let p50 = dds.get_value_at_quantile(0.5).unwrap();
 assert!(p50 >= 1.0);
 ```

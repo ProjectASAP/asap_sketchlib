@@ -17,6 +17,7 @@
 
 use crate::DataInput;
 use crate::common::input::data_input_to_f64;
+use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
 use rmp_serde::decode::Error as RmpDecodeError;
 use rmp_serde::encode::Error as RmpEncodeError;
@@ -161,9 +162,10 @@ impl DDSketch {
         from_slice(bytes)
     }
 
-    /// Adds a positive finite `f64` sample to the sketch; non-positive or non-finite values are ignored.
+    /// Adds a positive finite numeric sample to the sketch; non-positive or non-finite values are ignored.
     #[inline(always)]
-    pub fn add(&mut self, v: f64) {
+    pub fn add<T: NumericalValue>(&mut self, val: &T) {
+        let v = val.to_f64();
         if !(v.is_finite() && v > 0.0) {
             return;
         }
@@ -179,14 +181,6 @@ impl DDSketch {
 
         let k = self.key_for(v);
         self.store.add_one(k);
-    }
-
-    /// Adds a sample converted from a [`DataInput`]; returns an error for non-numeric inputs.
-    #[inline(always)]
-    pub fn add_input(&mut self, v: &DataInput) -> Result<(), &'static str> {
-        let value = data_input_to_f64(v).map_err(|_| "DDSketch only accepts numeric inputs")?;
-        self.add(value);
-        Ok(())
     }
 
     /// Returns the estimated value at quantile `q` (in `[0, 1]`), or `None` if the sketch is empty.
@@ -340,6 +334,16 @@ impl Clone for DDSketch {
     }
 }
 
+impl DDSketch {
+    /// Adds a sample converted from a [`DataInput`]; returns an error for non-numeric inputs.
+    #[inline(always)]
+    pub fn add_input(&mut self, v: &DataInput) -> Result<(), &'static str> {
+        let value = data_input_to_f64(v).map_err(|_| "DDSketch only accepts numeric inputs")?;
+        self.add(&value);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,7 +381,7 @@ mod tests {
         let mut s = DDSketch::new(0.01);
         let vals = [0.0, -5.0, 1.0, 2.0, 3.0, 10.0, 50.0, 100.0, 1000.0];
         for &v in &vals {
-            s.add(v);
+            s.add(&v);
         }
 
         // Non-positives ignored
@@ -432,7 +436,7 @@ mod tests {
             // build DDSketch
             let mut sk = DDSketch::new(alpha);
             for &x in &vals {
-                sk.add(x);
+                sk.add(&x);
             }
             (sk, vals)
         }
@@ -499,7 +503,7 @@ mod tests {
             vals.retain(|v| v.is_finite() && *v > 0.0);
             let mut sk = DDSketch::new(alpha);
             for &x in &vals {
-                sk.add(x);
+                sk.add(&x);
             }
             (sk, vals)
         }
@@ -568,7 +572,7 @@ mod tests {
 
             let mut sk = DDSketch::new(alpha);
             for &x in &vals {
-                sk.add(x);
+                sk.add(&x);
             }
             (sk, vals)
         }
@@ -634,7 +638,7 @@ mod tests {
             let vals = sample_exponential_f64(lambda, n, seed);
             let mut sk = DDSketch::new(alpha);
             for &x in &vals {
-                sk.add(x);
+                sk.add(&x);
             }
             (sk, vals)
         }
@@ -685,10 +689,10 @@ mod tests {
         let vals2 = [5.0, 10.0, 20.0];
 
         for v in vals1 {
-            s1.add(v);
+            s1.add(&v);
         }
         for v in vals2 {
-            s2.add(v);
+            s2.add(&v);
         }
 
         s1.merge(&s2);
@@ -713,7 +717,7 @@ mod tests {
         let vals = [1.0, 2.0, 3.0, 10.0, 50.0, 100.0, 1000.0]; // sample values
 
         for v in vals {
-            s.add(v);
+            s.add(&v);
         }
 
         let encoded = s.serialize_to_bytes().expect("DDSketch serialization fail"); // serialize to bytes
