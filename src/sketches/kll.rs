@@ -15,7 +15,8 @@ use rmp_serde::decode::Error as RmpDecodeError;
 use rmp_serde::encode::Error as RmpEncodeError;
 use serde::{Deserialize, Serialize};
 
-use crate::common::input::sketch_input_to_f64;
+use crate::common::input::data_input_to_f64;
+use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};
 
 const MAX_LEVELS: usize = 61;
@@ -104,7 +105,7 @@ fn compute_max_capacity(k: usize, m: usize) -> usize {
 /// `items[begin..begin+pop]` so they are contiguous with the level above.
 /// Traverses backwards to avoid overwriting unread source elements.
 #[inline]
-fn randomly_halve_up(items: &mut [f64], begin: usize, pop: usize, offset: usize) -> usize {
+fn randomly_halve_up<T: Copy>(items: &mut [T], begin: usize, pop: usize, offset: usize) -> usize {
     let num_survivors = (pop - offset + 1) / 2;
     let dest = begin + pop - num_survivors;
     for d in (0..num_survivors).rev() {
@@ -113,11 +114,11 @@ fn randomly_halve_up(items: &mut [f64], begin: usize, pop: usize, offset: usize)
     num_survivors
 }
 
-/// Merges two contiguous sorted runs in `slice` using `f64::total_cmp`.
+/// Merges two contiguous sorted runs in `slice` using `NumericalValue::total_cmp`.
 /// `slice[..left_len]` is the first sorted run, `slice[left_len..]` is the
 /// second.  `buf` is a reusable scratch buffer.
 #[inline]
-fn merge_sorted_runs(slice: &mut [f64], left_len: usize, buf: &mut Vec<f64>) {
+fn merge_sorted_runs<T: NumericalValue>(slice: &mut [T], left_len: usize, buf: &mut Vec<T>) {
     let total = slice.len();
     if left_len == 0 || left_len >= total {
         return;
@@ -182,8 +183,8 @@ fn merge_sorted_runs(slice: &mut [f64], left_len: usize, buf: &mut Vec<f64>) {
 ///
 /// `levels[h]` = start of level h.  `levels[h+1] - levels[h]` = size of level h.
 #[derive(Clone, Debug)]
-pub struct KLL {
-    items: Box<[f64]>,
+pub struct KLL<T: NumericalValue = f64> {
+    items: Box<[T]>,
     levels: Box<[usize]>,
     k: usize,
     m: usize,
@@ -193,16 +194,16 @@ pub struct KLL {
     capacity_cache: [u32; CAPACITY_CACHE_LEN],
     top_height: usize,
     level0_capacity: usize,
-    merge_buf: Vec<f64>,
+    merge_buf: Vec<T>,
 }
 
-impl Default for KLL {
+impl<T: NumericalValue> Default for KLL<T> {
     fn default() -> Self {
         Self::init_kll(DEFAULT_K)
     }
 }
 
-impl KLL {
+impl<T: NumericalValue> KLL<T> {
     /// Creates a new KLL sketch with accuracy parameter `k` and minimum level capacity `m`.
     pub fn init(k: usize, m: usize) -> Self {
         let mut norm_m = m.min(MAX_CACHEABLE_K);
@@ -213,7 +214,7 @@ impl KLL {
         }
         let max_cap = compute_max_capacity(norm_k, norm_m);
         let mut s = Self {
-            items: vec![0.0_f64; max_cap].into_boxed_slice(),
+            items: vec![T::default(); max_cap].into_boxed_slice(),
             levels: {
                 let mut v = vec![0usize; MAX_LEVELS + 1];
                 v[0] = max_cap;
@@ -241,7 +242,7 @@ impl KLL {
 
     /// Hot-path insert: decrement `levels[0]`, write item, check capacity.
     #[inline]
-    fn push_value(&mut self, value: f64) {
+    fn push_value(&mut self, value: T) {
         if self.levels[0] == 0 {
             self.compress_while_updating();
         }
@@ -253,11 +254,9 @@ impl KLL {
         }
     }
 
-    /// Inserts a value from a [`DataInput`] into the sketch.
-    pub fn update(&mut self, val: &DataInput) -> Result<(), &'static str> {
-        let value = sketch_input_to_f64(val)?;
-        self.push_value(value);
-        Ok(())
+    /// Inserts a typed numeric value into the sketch.
+    pub fn update(&mut self, val: &T) {
+        self.push_value(*val);
     }
 
     // -- Compaction ----------------------------------------------------------
@@ -284,7 +283,7 @@ impl KLL {
         let pop = end - beg;
 
         if h == 0 {
-            self.items[beg..end].sort_unstable_by(f64::total_cmp);
+            self.items[beg..end].sort_unstable_by(T::total_cmp);
         }
 
         let offset = usize::from(self.co.toss());
@@ -367,7 +366,7 @@ impl KLL {
             let weight = 1 << h;
             for &value in &self.items[start..end] {
                 cdf.entries.push(CdfEntry {
-                    value,
+                    value: value.to_f64(),
                     quantile: weight as f64,
                 });
             }
@@ -392,7 +391,7 @@ impl KLL {
     }
 
     /// Merges all items from another KLL sketch into this one.
-    pub fn merge(&mut self, other: &KLL) {
+    pub fn merge(&mut self, other: &KLL<T>) {
         let used_start = other.levels[0];
         let used_end = other.levels[other.num_levels];
         for &value in &other.items[used_start..used_end] {
@@ -414,7 +413,7 @@ impl KLL {
             let end = self.levels[h + 1];
             let weight = 1 << h;
             for &val in &self.items[start..end] {
-                if val <= x {
+                if val.to_f64() <= x {
                     r += weight;
                 }
             }
@@ -447,7 +446,10 @@ impl KLL {
         self.rebuild_capacity_cache();
     }
 
-    pub fn print_compactors(&self) {
+    pub fn print_compactors(&self)
+    where
+        T: std::fmt::Debug,
+    {
         println!(
             "KLL Packed (k={}, levels={}, items={})",
             self.k,
@@ -464,12 +466,18 @@ impl KLL {
     // -- Serialization -------------------------------------------------------
 
     /// Serializes the sketch to a MessagePack byte vector.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+    where
+        T: Serialize,
+    {
         rmp_serde::to_vec(self)
     }
 
     /// Deserializes a KLL sketch from a MessagePack byte slice.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
         rmp_serde::from_slice(bytes)
     }
 
@@ -481,7 +489,7 @@ impl KLL {
             let s = self.levels[h];
             let e = self.levels[h + 1];
             if s < e {
-                self.items[s..e].sort_unstable_by(f64::total_cmp);
+                self.items[s..e].sort_unstable_by(T::total_cmp);
             }
         }
     }
@@ -489,8 +497,8 @@ impl KLL {
 
 /// Wire format for serialization (only the used portion of the buffer).
 #[derive(Serialize, Deserialize)]
-struct KLLWire {
-    items: Vec<f64>,
+struct KLLWire<T> {
+    items: Vec<T>,
     levels: Vec<usize>,
     k: usize,
     m: usize,
@@ -498,7 +506,7 @@ struct KLLWire {
     co: Coin,
 }
 
-impl Serialize for KLL {
+impl<T: NumericalValue + Serialize> Serialize for KLL<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let used_start = self.levels[0];
         let used_end = self.levels[self.num_levels];
@@ -517,14 +525,26 @@ impl Serialize for KLL {
     }
 }
 
-impl<'de> Deserialize<'de> for KLL {
+impl KLL<f64> {
+    /// Inserts a value from a [`DataInput`] into a `KLL<f64>` sketch.
+    ///
+    /// This adapter exists for the `HydraCounter` dispatch path, which stores a
+    /// type-erased `DataInput`. Non-numeric variants return an error.
+    pub fn update_data_input(&mut self, val: &DataInput) -> Result<(), &'static str> {
+        let value = data_input_to_f64(val)?;
+        self.push_value(value);
+        Ok(())
+    }
+}
+
+impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for KLL<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let wire = KLLWire::deserialize(deserializer)?;
+        let wire = KLLWire::<T>::deserialize(deserializer)?;
         let max_cap = compute_max_capacity(wire.k, wire.m);
         let used_len = wire.items.len();
         let offset = max_cap - used_len;
 
-        let mut items = vec![0.0_f64; max_cap].into_boxed_slice();
+        let mut items = vec![T::default(); max_cap].into_boxed_slice();
         items[offset..offset + used_len].copy_from_slice(&wire.items);
 
         let mut levels = vec![0usize; MAX_LEVELS + 1].into_boxed_slice();
@@ -718,7 +738,7 @@ mod tests {
         };
 
         for &value in &values {
-            sketch.update(&DataInput::F64(value)).unwrap();
+            sketch.update_data_input(&DataInput::F64(value)).unwrap();
         }
 
         (sketch, values)
@@ -829,11 +849,11 @@ mod tests {
         let mut kll = KLL::init_kll(128);
 
         // Test with different numeric types
-        kll.update(&DataInput::I32(10)).unwrap();
-        kll.update(&DataInput::I64(20)).unwrap();
-        kll.update(&DataInput::F64(30.5)).unwrap();
-        kll.update(&DataInput::F32(40.2)).unwrap();
-        kll.update(&DataInput::U32(50)).unwrap();
+        kll.update_data_input(&DataInput::I32(10)).unwrap();
+        kll.update_data_input(&DataInput::I64(20)).unwrap();
+        kll.update_data_input(&DataInput::F64(30.5)).unwrap();
+        kll.update_data_input(&DataInput::F32(40.2)).unwrap();
+        kll.update_data_input(&DataInput::U32(50)).unwrap();
 
         // Query quantiles
         let cdf = kll.cdf();
@@ -844,7 +864,7 @@ mod tests {
         assert!(median > 20.0 && median < 40.2, "Median = {}", median);
 
         // Test error handling for non-numeric input
-        let result = kll.update(&DataInput::String("not a number".to_string()));
+        let result = kll.update_data_input(&DataInput::String("not a number".to_string()));
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -857,15 +877,15 @@ mod tests {
         // force compaction to happen with small k/m
         let mut kll = KLL::init(3, 3);
         // kll.print_compactors();
-        kll.update(&DataInput::F64(10.0)).unwrap();
+        kll.update_data_input(&DataInput::F64(10.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&DataInput::F64(20.0)).unwrap();
+        kll.update_data_input(&DataInput::F64(20.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&DataInput::F64(30.0)).unwrap();
+        kll.update_data_input(&DataInput::F64(30.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&DataInput::F64(40.0)).unwrap();
+        kll.update_data_input(&DataInput::F64(40.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&DataInput::F64(50.0)).unwrap();
+        kll.update_data_input(&DataInput::F64(50.0)).unwrap();
         // kll.print_compactors();
         let cdf = kll.cdf();
         // cdf.print_entries();
@@ -879,15 +899,15 @@ mod tests {
         // no compaction should happen
         let mut kll = KLL::init_kll(8);
         // kll.print_compactors();
-        kll.update(&DataInput::F64(10.0)).unwrap();
+        kll.update_data_input(&DataInput::F64(10.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&DataInput::F64(20.0)).unwrap();
+        kll.update_data_input(&DataInput::F64(20.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&DataInput::F64(30.0)).unwrap();
+        kll.update_data_input(&DataInput::F64(30.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&DataInput::F64(40.0)).unwrap();
+        kll.update_data_input(&DataInput::F64(40.0)).unwrap();
         // kll.print_compactors();
-        kll.update(&DataInput::F64(50.0)).unwrap();
+        kll.update_data_input(&DataInput::F64(50.0)).unwrap();
         // kll.print_compactors();
 
         // Query quantiles
@@ -918,9 +938,9 @@ mod tests {
 
         for (idx, value) in values.iter().copied().enumerate() {
             if idx % 2 == 0 {
-                sketch_a.update(&DataInput::F64(value)).unwrap();
+                sketch_a.update_data_input(&DataInput::F64(value)).unwrap();
             } else {
-                sketch_b.update(&DataInput::F64(value)).unwrap();
+                sketch_b.update_data_input(&DataInput::F64(value)).unwrap();
             }
         }
 
@@ -941,7 +961,7 @@ mod tests {
 
     #[test]
     fn cdf_handles_empty_sketch() {
-        let sketch = KLL::init_kll(64);
+        let sketch = KLL::<f64>::init_kll(64);
         let cdf = sketch.cdf();
         assert_eq!(cdf.quantile(123.0), 0.0);
         assert_eq!(cdf.query(0.5), 0.0);
@@ -953,7 +973,7 @@ mod tests {
         let mut sketch = KLL::init_kll(256);
         let samples = sample_uniform_f64(0.0, 1_000_000.0, 5_000, 0xDEAD_BEEF);
         for value in &samples {
-            sketch.update(&DataInput::F64(*value)).unwrap();
+            sketch.update_data_input(&DataInput::F64(*value)).unwrap();
         }
 
         let bytes = sketch.serialize_to_bytes().expect("serialize KLL with rmp");
@@ -991,5 +1011,60 @@ mod tests {
                 restored_cdf.query(q)
             );
         }
+    }
+
+    // Sanity pass for the generic KLL<T> specialization: exercise update/cdf/merge
+    // on KLL<i64> to confirm the non-default T path compiles and produces sensible
+    // quantiles. Tolerance is loose — this is a smoke test, not an accuracy bound.
+    #[test]
+    fn generic_kll_i64_sanity() {
+        let mut sketch = KLL::<i64>::init_kll(200);
+        let n: i64 = 20_000;
+        for v in 1..=n {
+            sketch.update(&v);
+        }
+
+        // Weighted count after random compactions is approximately n but not exact.
+        let count = sketch.count() as f64;
+        assert!(
+            (count - n as f64).abs() / (n as f64) < 0.05,
+            "count={count} diverged from n={n}"
+        );
+
+        let cdf = sketch.cdf();
+        let p50 = cdf.query(0.5);
+        let p90 = cdf.query(0.9);
+        let tol = n as f64 * 0.02;
+        assert!(
+            (p50 - (n as f64 * 0.5)).abs() < tol,
+            "p50={p50} out of range for n={n}"
+        );
+        assert!(
+            (p90 - (n as f64 * 0.9)).abs() < tol,
+            "p90={p90} out of range for n={n}"
+        );
+
+        // Merge between KLL<i64> sketches should work and preserve roughly the
+        // same quantiles.
+        let mut a = KLL::<i64>::init_kll(200);
+        let mut b = KLL::<i64>::init_kll(200);
+        for v in 1..=n {
+            if v % 2 == 0 {
+                a.update(&v);
+            } else {
+                b.update(&v);
+            }
+        }
+        a.merge(&b);
+        let merged_p50 = a.cdf().query(0.5);
+        assert!(
+            (merged_p50 - (n as f64 * 0.5)).abs() < tol,
+            "merged p50={merged_p50} out of range"
+        );
+
+        // Serialization round-trip for the generic specialization.
+        let bytes = a.serialize_to_bytes().expect("serialize KLL<i64>");
+        let restored = KLL::<i64>::deserialize_from_bytes(&bytes).expect("deserialize KLL<i64>");
+        assert_eq!(a.count(), restored.count());
     }
 }

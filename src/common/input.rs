@@ -103,7 +103,7 @@ pub fn input_to_owned<'a>(input: &DataInput<'a>) -> HeapItem {
 /// Converts DataInput to f64 for numeric-only sketches.
 /// Returns an error when the input is not numeric.
 #[inline(always)]
-pub(crate) fn sketch_input_to_f64(input: &DataInput) -> Result<f64, &'static str> {
+pub(crate) fn data_input_to_f64(input: &DataInput) -> Result<f64, &'static str> {
     match input {
         DataInput::I8(v) => Ok(*v as f64),
         DataInput::I16(v) => Ok(*v as f64),
@@ -364,10 +364,10 @@ impl HydraCounter {
             (HydraCounter::HLL(hll), _) => hll.insert(value), // for cardinality, insert once or many times make no difference
             (HydraCounter::CS(count), None) => count.insert(value),
             (HydraCounter::CS(count), Some(i)) => count.insert_many(value, i),
-            (HydraCounter::KLL(kll), None) => kll.update(value).unwrap(),
+            (HydraCounter::KLL(kll), None) => kll.update_data_input(value).unwrap(),
             (HydraCounter::KLL(kll), Some(i)) => {
                 for _ in 0..i as usize {
-                    kll.update(value).unwrap()
+                    kll.update_data_input(value).unwrap()
                 }
             }
             (HydraCounter::UNIVERSAL(u), None) => u.insert(value, 1),
@@ -391,10 +391,10 @@ impl HydraCounter {
             (HydraCounter::CS(count), Some(i)) => {
                 count.fast_insert_many_with_hash_value(hashed_val, i)
             }
-            (HydraCounter::KLL(kll), None) => kll.update(value).unwrap(),
+            (HydraCounter::KLL(kll), None) => kll.update_data_input(value).unwrap(),
             (HydraCounter::KLL(kll), Some(i)) => {
                 for _ in 0..i as usize {
-                    kll.update(value).unwrap()
+                    kll.update_data_input(value).unwrap()
                 }
             }
             (HydraCounter::UNIVERSAL(u), None) => u.insert(value, 1),

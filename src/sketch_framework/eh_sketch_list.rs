@@ -95,7 +95,7 @@ impl EHSketchList {
             },
             EHSketchList::HLL(sketch) => sketch.insert(val),
             EHSketchList::KLL(sketch) => {
-                let _ = sketch.update(val);
+                let _ = sketch.update_data_input(val);
             }
             #[cfg(feature = "experimental")]
             EHSketchList::UNIFORM(sketch) => {

@@ -16,7 +16,8 @@ use rmp_serde::decode::Error as RmpDecodeError;
 use rmp_serde::encode::Error as RmpEncodeError;
 use serde::{Deserialize, Serialize};
 
-use crate::common::input::sketch_input_to_f64;
+use crate::common::input::data_input_to_f64;
+use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};
 
 use super::kll::Coin;
@@ -39,8 +40,8 @@ pub struct DynamicCdfEntry {
 /// grows downward, `KLLDynamic` appends items to a growable `Vector1D` and
 /// shifts elements during compaction.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct KLLDynamic {
-    items: Vector1D<f64>, // compactors, packed
+pub struct KLLDynamic<T: NumericalValue = f64> {
+    items: Vector1D<T>, // compactors, packed
     /// Stores the START index of each level in `items`.
     levels: Vector1D<usize>,
     k: usize,
@@ -58,13 +59,13 @@ pub struct KLLDynamic {
     level0_capacity: usize,
 }
 
-impl Default for KLLDynamic {
+impl<T: NumericalValue> Default for KLLDynamic<T> {
     fn default() -> Self {
         Self::init_kll(DEFAULT_K)
     }
 }
 
-impl KLLDynamic {
+impl<T: NumericalValue> KLLDynamic<T> {
     /// Creates a KLLDynamic sketch with the given `k` and `m` parameters.
     pub fn init(k: usize, m: usize) -> Self {
         let mut norm_m = m.min(MAX_CACHEABLE_K);
@@ -93,7 +94,7 @@ impl KLLDynamic {
         Self::init(k as usize, 8)
     }
 
-    fn push_value(&mut self, value: f64) {
+    fn push_value(&mut self, value: T) {
         self.items.push(value);
 
         if let Some(last) = self.levels.last_mut() {
@@ -110,10 +111,8 @@ impl KLLDynamic {
     }
 
     /// The hot path: O(1) insertion at the end of the vector.
-    pub fn update(&mut self, val: &DataInput) -> Result<(), &'static str> {
-        let value = sketch_input_to_f64(val)?;
-        self.push_value(value);
-        Ok(())
+    pub fn update(&mut self, val: &T) {
+        self.push_value(*val);
     }
 
     /// Loops to maintain the KLL invariant.
@@ -188,7 +187,7 @@ impl KLLDynamic {
 
         let items = self.items.as_mut_slice();
 
-        items[start..end].sort_unstable_by(f64::total_cmp);
+        items[start..end].sort_unstable_by(T::total_cmp);
 
         let offset = usize::from(self.co.toss());
         let mut survivors = 0;
@@ -245,7 +244,10 @@ impl KLLDynamic {
     }
 
     /// Prints the compactors for debugging.
-    pub fn print_compactors(&self) {
+    pub fn print_compactors(&self)
+    where
+        T: std::fmt::Debug,
+    {
         println!(
             "KLLDynamic Packed (k={}, levels={}, items={})",
             self.k,
@@ -279,7 +281,7 @@ impl KLLDynamic {
             let weight = 1 << h;
             for &value in &items[start..end] {
                 cdf.entries.push(DynamicCdfEntry {
-                    value,
+                    value: value.to_f64(),
                     quantile: weight as f64,
                 });
             }
@@ -304,7 +306,7 @@ impl KLLDynamic {
     }
 
     /// Merges another sketch into this one.
-    pub fn merge(&mut self, other: &KLLDynamic) {
+    pub fn merge(&mut self, other: &KLLDynamic<T>) {
         for &value in other.items.as_slice() {
             self.push_value(value);
         }
@@ -329,7 +331,7 @@ impl KLLDynamic {
             let weight = 1 << h;
 
             for &val in &items[start..end] {
-                if val <= x {
+                if val.to_f64() <= x {
                     r += weight;
                 }
             }
@@ -352,16 +354,31 @@ impl KLLDynamic {
     }
 
     /// Serialize the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+    where
+        T: Serialize,
+    {
         rmp_serde::to_vec(self)
     }
 
     /// Deserialize a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        rmp_serde::from_slice(bytes).map(|mut sketch: KLLDynamic| {
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        rmp_serde::from_slice(bytes).map(|mut sketch: KLLDynamic<T>| {
             sketch.rebuild_capacity_cache();
             sketch
         })
+    }
+}
+
+impl KLLDynamic<f64> {
+    /// Inserts a value from a [`DataInput`] into a `KLLDynamic<f64>` sketch.
+    pub fn update_data_input(&mut self, val: &DataInput) -> Result<(), &'static str> {
+        let value = data_input_to_f64(val)?;
+        self.push_value(value);
+        Ok(())
     }
 }
 
@@ -490,7 +507,7 @@ mod tests {
         };
 
         for &value in &values {
-            sketch.update(&DataInput::F64(value)).unwrap();
+            sketch.update(&value);
         }
 
         (sketch, values)
@@ -601,11 +618,11 @@ mod tests {
         let mut kll = KLLDynamic::init_kll(128);
 
         // Test with different numeric types
-        kll.update(&DataInput::I32(10)).unwrap();
-        kll.update(&DataInput::I64(20)).unwrap();
-        kll.update(&DataInput::F64(30.5)).unwrap();
-        kll.update(&DataInput::F32(40.2)).unwrap();
-        kll.update(&DataInput::U32(50)).unwrap();
+        kll.update_data_input(&DataInput::I32(10)).unwrap();
+        kll.update_data_input(&DataInput::I64(20)).unwrap();
+        kll.update_data_input(&DataInput::F64(30.5)).unwrap();
+        kll.update_data_input(&DataInput::F32(40.2)).unwrap();
+        kll.update_data_input(&DataInput::U32(50)).unwrap();
 
         // Query quantiles
         let cdf = kll.cdf();
@@ -615,7 +632,7 @@ mod tests {
         assert!(median > 20.0 && median < 40.2, "Median = {}", median);
 
         // Test error handling for non-numeric input
-        let result = kll.update(&DataInput::String("not a number".to_string()));
+        let result = kll.update_data_input(&DataInput::String("not a number".to_string()));
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -627,11 +644,11 @@ mod tests {
     fn test_forced_compact() {
         // force compaction to happen with small k/m
         let mut kll = KLLDynamic::init(3, 3);
-        kll.update(&DataInput::F64(10.0)).unwrap();
-        kll.update(&DataInput::F64(20.0)).unwrap();
-        kll.update(&DataInput::F64(30.0)).unwrap();
-        kll.update(&DataInput::F64(40.0)).unwrap();
-        kll.update(&DataInput::F64(50.0)).unwrap();
+        kll.update(&10.0);
+        kll.update(&20.0);
+        kll.update(&30.0);
+        kll.update(&40.0);
+        kll.update(&50.0);
         let cdf = kll.cdf();
         let median = cdf.query(0.5);
         // only 30 and 40 is possible
@@ -642,11 +659,11 @@ mod tests {
     fn test_no_compact() {
         // no compaction should happen
         let mut kll = KLLDynamic::init_kll(8);
-        kll.update(&DataInput::F64(10.0)).unwrap();
-        kll.update(&DataInput::F64(20.0)).unwrap();
-        kll.update(&DataInput::F64(30.0)).unwrap();
-        kll.update(&DataInput::F64(40.0)).unwrap();
-        kll.update(&DataInput::F64(50.0)).unwrap();
+        kll.update(&10.0);
+        kll.update(&20.0);
+        kll.update(&30.0);
+        kll.update(&40.0);
+        kll.update(&50.0);
 
         // Query quantiles
         let cdf = kll.cdf();
@@ -674,9 +691,9 @@ mod tests {
 
         for (idx, value) in values.iter().copied().enumerate() {
             if idx % 2 == 0 {
-                sketch_a.update(&DataInput::F64(value)).unwrap();
+                sketch_a.update(&value);
             } else {
-                sketch_b.update(&DataInput::F64(value)).unwrap();
+                sketch_b.update(&value);
             }
         }
 
@@ -697,7 +714,7 @@ mod tests {
 
     #[test]
     fn cdf_handles_empty_sketch() {
-        let sketch = KLLDynamic::init_kll(64);
+        let sketch = KLLDynamic::<f64>::init_kll(64);
         let cdf = sketch.cdf();
         assert_eq!(cdf.quantile(123.0), 0.0);
         assert_eq!(cdf.query(0.5), 0.0);
@@ -709,7 +726,7 @@ mod tests {
         let mut sketch = KLLDynamic::init_kll(256);
         let samples = sample_uniform_f64(0.0, 1_000_000.0, 5_000, 0xDEAD_BEEF);
         for value in &samples {
-            sketch.update(&DataInput::F64(*value)).unwrap();
+            sketch.update(value);
         }
 
         let bytes = sketch
@@ -746,5 +763,40 @@ mod tests {
                 restored_cdf.query(q)
             );
         }
+    }
+
+    #[test]
+    fn generic_kll_dynamic_i64_sanity() {
+        let mut sketch = KLLDynamic::<i64>::init_kll(200);
+        let n: i64 = 20_000;
+        for v in 1..=n {
+            sketch.update(&v);
+        }
+
+        let count = sketch.count() as f64;
+        assert!(
+            (count - n as f64).abs() / (n as f64) < 0.05,
+            "count={count} diverged from n={n}"
+        );
+
+        let cdf = sketch.cdf();
+        let p50 = cdf.query(0.5);
+        let p90 = cdf.query(0.9);
+        let tol = n as f64 * 0.02;
+        assert!(
+            (p50 - (n as f64 * 0.5)).abs() < tol,
+            "p50={p50} out of range for n={n}"
+        );
+        assert!(
+            (p90 - (n as f64 * 0.9)).abs() < tol,
+            "p90={p90} out of range for n={n}"
+        );
+
+        let bytes = sketch
+            .serialize_to_bytes()
+            .expect("serialize KLLDynamic<i64>");
+        let restored =
+            KLLDynamic::<i64>::deserialize_from_bytes(&bytes).expect("deserialize KLLDynamic<i64>");
+        assert_eq!(sketch.count(), restored.count());
     }
 }

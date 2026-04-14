@@ -16,7 +16,7 @@
 //!   <https://www.vldb.org/pvldb/vol12/p2195-masson.pdf>
 
 use crate::DataInput;
-use crate::common::input::sketch_input_to_f64;
+use crate::common::input::data_input_to_f64;
 use crate::common::structures::Vector1D;
 use rmp_serde::decode::Error as RmpDecodeError;
 use rmp_serde::encode::Error as RmpEncodeError;
@@ -184,7 +184,7 @@ impl DDSketch {
     /// Adds a sample converted from a [`DataInput`]; returns an error for non-numeric inputs.
     #[inline(always)]
     pub fn add_input(&mut self, v: &DataInput) -> Result<(), &'static str> {
-        let value = sketch_input_to_f64(v).map_err(|_| "DDSketch only accepts numeric inputs")?;
+        let value = data_input_to_f64(v).map_err(|_| "DDSketch only accepts numeric inputs")?;
         self.add(value);
         Ok(())
     }

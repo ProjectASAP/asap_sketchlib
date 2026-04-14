@@ -133,7 +133,7 @@ impl TumblingWindowSketch for KLL {
 
     fn tumbling_insert(&mut self, key: &DataInput, _value: i64) {
         // KLL is a quantile sketch — each call is one observation.
-        let _ = self.update(key);
+        let _ = self.update_data_input(key);
     }
 
     fn tumbling_merge(&mut self, other: &Self) {
@@ -476,7 +476,7 @@ mod tests {
     fn kll_clear_resets_to_empty() {
         let mut sk = KLL::init(200, 8);
         for i in 0..1000 {
-            sk.update(&DataInput::F64(i as f64)).unwrap();
+            sk.update_data_input(&DataInput::F64(i as f64)).unwrap();
         }
         assert!(sk.count() > 0);
 
@@ -1797,7 +1797,7 @@ mod tests {
 
         for (i, &v) in values.iter().enumerate() {
             tw.insert(i as u64, &DataInput::F64(v), 1);
-            mono.update(&DataInput::F64(v)).unwrap();
+            mono.update_data_input(&DataInput::F64(v)).unwrap();
         }
 
         let merged = tw.query_all();

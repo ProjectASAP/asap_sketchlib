@@ -92,6 +92,22 @@ Test file: [`src/sketches/kll.rs`](../src/sketches/kll.rs)
 | `merge_preserves_quantiles_within_tolerance` | Merging two KLL sketches preserves quantiles within 2% rank tolerance. | Splits 10,000 uniform samples (`1,000,000..10,000,000`, seed `0xC0FFEE`) across two `k=200` sketches by index parity, merges, and checks quantiles `{0,0.1,0.25,0.5,0.75,0.9,1}` remain within `q +/- 0.02` truth bounds. |
 | `cdf_handles_empty_sketch` | Empty KLL CDF queries return zero-valued defaults. | For empty `KLL::init_kll(64)`, asserts `cdf.quantile(123.0) == 0.0`, `cdf.query(0.5) == 0.0`, and `cdf.query_li(0.5) == 0.0`. |
 | `kll_round_trip_rmp` | RMP round trip preserves KLL structure, packed data, and queried quantiles. | Serializes/deserializes `KLL::init_kll(256)` after 5,000 uniform updates (`0..1,000,000`, seed `0xDEAD_BEEF`), verifies non-empty bytes, core fields and packed arrays (`levels`, `items`) are identical, and CDF queries at `{0,0.1,0.25,0.5,0.75,0.9,1}` match within `f64::EPSILON`. |
+| `generic_kll_i64_sanity` | Generic `KLL<T>` path works for non-`f64` numeric types. | Builds `KLL<i64>`, inserts `1..=20_000` through the typed `update(&T)` API, checks approximate count and p50/p90 quantiles, verifies merge on two `KLL<i64>` instances, and confirms MessagePack round-trip preserves weighted count. |
+
+### KLLDynamic
+
+Test file: [`src/sketches/kll_dynamic.rs`](../src/sketches/kll_dynamic.rs)
+
+| test_name | test_description | what_is_tested |
+| --- | --- | --- |
+| `distributions_quantiles_stay_within_rank_error` | KLLDynamic quantiles stay within 2% rank tolerance across distributions and scales. | For `k=200`, checks quantiles `{0,0.1,0.25,0.5,0.75,0.9,1}` on Uniform (`0..100,000,000`) and Zipf (`1,000,000..10,000,000`, domain `8192`, exponent `1.1`) streams at sizes `[1_000, 5_000, 20_000, 100_000, 1_000_000, 5_000_000]`; each estimate must fall within truth interval defined by `q +/- 0.02`. |
+| `test_data_input_api` | `KLLDynamic<f64>` accepts numeric `DataInput` and rejects non-numeric input. | Inserts `I32`, `I64`, `F64`, `F32`, and `U32` values through `update_data_input`, checks median query lies between `20.0` and `40.2`, and verifies string input returns error `KLL sketch only accepts numeric inputs`. |
+| `test_forced_compact` | Small-capacity KLLDynamic triggers compaction and keeps median in valid compacted outcomes. | With `KLLDynamic::init(3,3)` and typed inserts `[10,20,30,40,50]`, asserts median query is one of `{30.0, 40.0}` under forced compaction. |
+| `test_no_compact` | Larger-capacity KLLDynamic avoids compaction for small stream and returns exact median. | With `KLLDynamic::init_kll(8)` and typed inserts `[10,20,30,40,50]`, asserts median query equals `30.0`. |
+| `merge_preserves_quantiles_within_tolerance` | Merging two KLLDynamic sketches preserves quantiles within 2% rank tolerance. | Splits 10,000 uniform samples (`1,000,000..10,000,000`, seed `0xC0FFEE`) across two `k=200` sketches by index parity, merges, and checks quantiles `{0,0.1,0.25,0.5,0.75,0.9,1}` remain within `q +/- 0.02` truth bounds. |
+| `cdf_handles_empty_sketch` | Empty KLLDynamic CDF queries return zero-valued defaults. | For empty `KLLDynamic::<f64>::init_kll(64)`, asserts `cdf.quantile(123.0) == 0.0`, `cdf.query(0.5) == 0.0`, and `cdf.query_li(0.5) == 0.0`. |
+| `kll_dynamic_round_trip_rmp` | RMP round trip preserves KLLDynamic structure, packed data, and queried quantiles. | Serializes/deserializes `KLLDynamic::init_kll(256)` after 5,000 uniform updates (`0..1,000,000`, seed `0xDEAD_BEEF`), verifies non-empty bytes, core fields and packed arrays (`levels`, `items`) are identical, and CDF queries at `{0,0.1,0.25,0.5,0.75,0.9,1}` match within `f64::EPSILON`. |
+| `generic_kll_dynamic_i64_sanity` | Generic `KLLDynamic<T>` path works for non-`f64` numeric types. | Builds `KLLDynamic<i64>`, inserts `1..=20_000` through the typed `update(&T)` API, checks approximate count and p50/p90 quantiles, and confirms MessagePack round-trip preserves weighted count. |
 
 ### DDSketch
 

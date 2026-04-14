@@ -90,16 +90,16 @@ for &(event, true_count) in &events {
 ### Track latency percentiles with KLL
 
 ```rust
-use asap_sketchlib::{KLL, DataInput};
+use asap_sketchlib::KLL;
 
 // KLL is a quantile sketch — it tracks the distribution of values so you can
 // ask questions like "what is the median?" without storing every data point.
-let mut sketch = KLL::default();
+let mut sketch = KLL::<f64>::default();
 
 // Simulate 1000 latency samples in milliseconds
 for i in 0..1000 {
     let ms = (i as f64) * 0.5 + 1.0;
-    sketch.update(&DataInput::F64(ms)).unwrap();
+    sketch.update(&ms);
 }
 
 let p50 = sketch.quantile(0.50);
