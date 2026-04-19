@@ -170,6 +170,32 @@ cargo build --features experimental
 cargo test --features "experimental octo-runtime"
 ```
 
+## Protobuf Requirements
+
+This project currently compiles `.proto` files at build time via `prost-build` in `build.rs`.
+That means the Protocol Buffers compiler (`protoc`) must be installed on your system before running `cargo build` or `cargo test`.
+
+Install `protoc`:
+
+```bash
+# macOS (Homebrew)
+brew install protobuf
+
+# Ubuntu / Debian
+sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+# Windows (Chocolatey)
+choco install protoc
+```
+
+Verify installation:
+
+```bash
+protoc --version
+```
+
+If `protoc` is missing, the build will fail with a `prost_build` compile error.
+
 ## FAQ
 
 ### When is Apache DataSketches a better fit?
