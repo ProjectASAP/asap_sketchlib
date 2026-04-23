@@ -28,11 +28,24 @@ Full sketch status and API details: [APIs Index](./docs/apis.md).
 
 **Minimum Supported Rust Version (MSRV): 1.85** (Rust 2024 edition)
 
-Add to your `Cargo.toml`:
+This crate is not published on crates.io yet.
+
+For now, install it from GitHub:
 
 ```toml
 [dependencies]
 asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib" }
+```
+
+After the first crates.io release, installation will be:
+
+```bash
+cargo add asap_sketchlib
+```
+
+```toml
+[dependencies]
+asap_sketchlib = "0.1"
 ```
 
 ### Count distinct users with HyperLogLog
@@ -135,13 +148,11 @@ We are building **SketchPlan**, a profiler that analyzes a representative sample
 
 Insertion throughput on 10M Zipf-distributed values, averaged over 10 runs:
 
-![CMS Insertion Throughput](./docs/benchmark_plots/plots/cms/cms_throughput_insertion.png)
+- Frequency sketches: up to 8-14x higher insertion throughput than comparable libraries
+- Cardinality sketches: roughly 2-3x higher insertion throughput
+- Quantile sketches: roughly 2-4x higher insertion throughput
 
-![HLL Insertion Throughput](./docs/benchmark_plots/plots/hll/hll_throughput_insertion.png)
-
-![KLL Insertion Throughput](./docs/benchmark_plots/plots/kll/kll_throughput_insertion.png)
-
-More benchmark results and performance details (cache-friendly layouts, `FastPath` single-hash mode) are in [Performance Notes](./docs/features.md).
+Benchmark methodology, tuning notes, and performance details (including cache-friendly layouts and `FastPath` single-hash mode) are in [Performance Notes](./docs/features.md).
 
 ## Documentation
 
@@ -150,6 +161,8 @@ More benchmark results and performance details (cache-friendly layouts, `FastPat
 | [APIs Index](./docs/apis.md) | Per-sketch API reference with status and error guarantees |
 | [Advanced Use Cases](./docs/advanced_use_cases.md) | Hierarchical queries, windowed sketching, multi-sketch coordination |
 | [Docs Index](./docs/index.md) | Full documentation index |
+
+If you are evaluating the crate for production use, start with the API index first. It calls out which APIs are stable today and which are still feature-gated or experimental.
 
 ## Dev Commands
 

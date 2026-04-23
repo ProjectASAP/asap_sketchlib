@@ -7,7 +7,10 @@ license = "MIT"
 description = "A high-performance sketching library for approximate stream processing"
 homepage = "https://projectasap.github.io/"
 repository = "https://github.com/ProjectASAP/asap_sketchlib"
+documentation = "https://docs.rs/asap_sketchlib"
 readme = "README.md"
+keywords = ["sketch", "streaming", "approximate", "quantiles", "cardinality"]
+categories = ["algorithms", "data-structures"]
 autobins = false
 
 [dependencies]

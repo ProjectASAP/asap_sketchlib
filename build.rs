@@ -1,6 +1,6 @@
 fn main() {
-    let protoc = protoc_bin_vendored::protoc_bin_path()
-        .expect("failed to locate vendored protoc binary");
+    let protoc =
+        protoc_bin_vendored::protoc_bin_path().expect("failed to locate vendored protoc binary");
     unsafe {
         std::env::set_var("PROTOC", protoc);
     }
