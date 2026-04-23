@@ -7,8 +7,11 @@
 
 use std::cmp::Ordering;
 
+/// Minimal numeric trait used by generic sketch implementations.
 pub trait NumericalValue: Copy + Default + Send + Sync + 'static {
+    /// Compares two values using a total ordering.
     fn total_cmp(&self, other: &Self) -> Ordering;
+    /// Converts the value into `f64` for sketch math.
     fn to_f64(self) -> f64;
 }
 

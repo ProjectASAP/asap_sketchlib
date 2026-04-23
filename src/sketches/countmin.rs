@@ -23,7 +23,9 @@ use crate::{
 
 const DEFAULT_ROW_NUM: usize = 3;
 const DEFAULT_COL_NUM: usize = 4096;
+/// Recommended row count for quick-start examples.
 pub const QUICKSTART_ROW_NUM: usize = 5;
+/// Recommended column count for quick-start examples.
 pub const QUICKSTART_COL_NUM: usize = 2048;
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 

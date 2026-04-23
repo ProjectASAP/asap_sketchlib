@@ -75,17 +75,25 @@ pub struct HyperLogLogHIPImpl<Registers: HllRegisterStorage> {
     est: f64,
 }
 
+/// HyperLogLog with 12-bit precision.
 pub type HyperLogLogP12<Variant, H = DefaultXxHasher> =
     HyperLogLogImpl<Variant, HllBucketListP12, H>;
+/// HyperLogLog with 14-bit precision.
 pub type HyperLogLogP14<Variant, H = DefaultXxHasher> =
     HyperLogLogImpl<Variant, HllBucketListP14, H>;
+/// HyperLogLog with 16-bit precision.
 pub type HyperLogLogP16<Variant, H = DefaultXxHasher> =
     HyperLogLogImpl<Variant, HllBucketListP16, H>;
+/// Default HyperLogLog alias using 14-bit precision.
 pub type HyperLogLog<Variant, H = DefaultXxHasher> = HyperLogLogP14<Variant, H>;
 
+/// HIP HyperLogLog with 12-bit precision.
 pub type HyperLogLogHIPP12 = HyperLogLogHIPImpl<HllBucketListP12>;
+/// HIP HyperLogLog with 14-bit precision.
 pub type HyperLogLogHIPP14 = HyperLogLogHIPImpl<HllBucketListP14>;
+/// HIP HyperLogLog with 16-bit precision.
 pub type HyperLogLogHIPP16 = HyperLogLogHIPImpl<HllBucketListP16>;
+/// Default HIP HyperLogLog alias using 14-bit precision.
 pub type HyperLogLogHIP = HyperLogLogHIPP14;
 
 impl<Variant, Registers: HllRegisterStorage, H: SketchHasher> Default
