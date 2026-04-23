@@ -9,7 +9,7 @@ A Rust library for **streaming data sketches** — compact data structures that 
 
 - **Fast.** Up to 8–14× higher insertion throughput than comparable libraries on frequency sketches, 2–3× on cardinality sketches, and 2–4× on quantile sketches. Rust-native with no language-boundary overhead. See [benchmarks](#performance).
 - **High coverage.** Supports frequency, cardinality, quantile, and distribution sketches (`CountMin`, `Count Sketch`, `HyperLogLog`, `KLL`, `DDSketch`). Also includes algorithms not found in other libraries: `UnivMon` for estimating a broad class of streaming statistics (L1/L2 norms, entropy) in a single pass, `Hydra` for answering sketch queries over arbitrary subpopulations without per-group sketches, and `NitroBatch` for accelerating sketch updates through batching. Unique sketch frameworks for sliding windows (`ExponentialHistogram`) and subpopulation queries (`Hydra`).
-- **Easy to use.** Uniform `insert`/`estimate`/`merge` API across all sketches, input data type (`DataInput`) for typed inputs, and pluggable hashing input to sketches via `SketchHasher`. Composite multiple sketches with shared hashing (`HashLayer`).
+- **Easy to use.** Most sketches provide a unified API style, while some (such as `KLL`) use `update`/`quantile`; the crate also offers typed inputs via `DataInput`, pluggable hashing via `SketchHasher`, and multi-sketch composition with shared hashing (`HashLayer`).
 
 ## Supported Sketches
 

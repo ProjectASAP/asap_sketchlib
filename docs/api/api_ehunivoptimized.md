@@ -85,4 +85,4 @@ let _ = eh.query_interval(0, 120);
 
 ## Status
 
-Unstable (update soon); optimized sliding-window universal monitoring path.
+Unstable; API may change in upcoming minor releases as the optimized sliding-window universal monitoring path evolves.

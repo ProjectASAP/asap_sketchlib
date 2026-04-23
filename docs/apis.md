@@ -40,7 +40,7 @@ This is the canonical API entry point for `asap_sketchlib`.
   - Reference: Datar, Gionis, Indyk & Motwani, "Maintaining Stream Statistics over Sliding Windows," SIAM J. Computing 2002. [https://dl.acm.org/doi/10.1137/S0097539701398363](https://dl.acm.org/doi/10.1137/S0097539701398363)
   - Related implementation context: PromSketch paper. [https://dl.acm.org/doi/pdf/10.14778/3742728.3742732](https://dl.acm.org/doi/pdf/10.14778/3742728.3742732)
 - [EHSketchList](./api/api_ehsketchlist.md) - `Ready`
-- [EHUnivOptimized](./api/api_ehunivoptimized.md) - `Unstable (update soon)`
+- [EHUnivOptimized](./api/api_ehunivoptimized.md) - `Unstable`
 - [OctoSketch](./api/api_octo.md) - `Ready`
   - Reference: OctoSketch paper. [https://www.usenix.org/conference/nsdi24/presentation/zhang-yinda](https://www.usenix.org/conference/nsdi24/presentation/zhang-yinda)
 ## Common Utility APIs
@@ -55,3 +55,4 @@ This is the canonical API entry point for `asap_sketchlib`.
 
 - Shared enums and foundational types are canonical in [Common Module API](./api/api_common.md).
 - Unstable APIs remain visible with explicit caveats until migration completes.
+- `Unstable` means the API is available but may change in upcoming minor releases; release notes will include migration guidance for breaking changes.
