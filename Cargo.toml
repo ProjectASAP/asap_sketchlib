@@ -30,6 +30,7 @@ internal-bins = []
 
 [build-dependencies]
 prost-build = "0.13"
+protoc-bin-vendored = "3"
 
 [lib]
 crate-type = ["rlib"]

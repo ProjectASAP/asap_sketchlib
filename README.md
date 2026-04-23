@@ -172,10 +172,13 @@ cargo test --features "experimental octo-runtime"
 
 ## Protobuf Requirements
 
-This project currently compiles `.proto` files at build time via `prost-build` in `build.rs`.
-That means the Protocol Buffers compiler (`protoc`) must be installed on your system before running `cargo build` or `cargo test`.
+This project compiles `.proto` files at build time via `prost-build` in `build.rs`.
+The required Protocol Buffers compiler (`protoc`) is provided through the vendored
+`protoc-bin-vendored` build dependency, so a separate system installation is usually
+not needed on common development platforms.
 
-Install `protoc`:
+If you prefer to use a system-installed compiler instead, that works too. Install
+`protoc` with your platform package manager:
 
 ```bash
 # macOS (Homebrew)
@@ -194,7 +197,9 @@ Verify installation:
 protoc --version
 ```
 
-If `protoc` is missing, the build will fail with a `prost_build` compile error.
+If you need to override the compiler for a custom environment, set the `PROTOC`
+environment variable to the path of your preferred `protoc` binary before running
+`cargo build` or `cargo test`.
 
 ## FAQ
 
