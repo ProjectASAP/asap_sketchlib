@@ -8,31 +8,51 @@ use crate::sketches::count::CountSketchCounter;
 use crate::{Count, CountMin, DataInput, FastPath, MatrixHashType, RegularPath, SketchHasher};
 use std::ops::AddAssign;
 
+/// Type-erased adapter for regular-path Count-Min sketches.
 pub trait CountMinRegularOps {
+    /// Inserts one value into the sketch.
     fn insert(&mut self, val: &DataInput);
+    /// Returns the estimate as `f64`.
     fn estimate_f64(&self, val: &DataInput) -> f64;
 }
 
+/// Type-erased adapter for fast-path Count-Min sketches.
 pub trait CountMinFastOps {
+    /// Inserts one value into the sketch.
     fn insert(&mut self, val: &DataInput);
+    /// Returns the estimate as `f64`.
     fn estimate_f64(&self, val: &DataInput) -> f64;
+    /// Returns the row count.
     fn rows(&self) -> usize;
+    /// Returns the column count.
     fn cols(&self) -> usize;
+    /// Inserts one precomputed hash.
     fn fast_insert(&mut self, hash: &MatrixHashType);
+    /// Returns the estimate for one precomputed hash.
     fn fast_estimate(&self, hash: &MatrixHashType) -> f64;
 }
 
+/// Type-erased adapter for regular-path Count Sketches.
 pub trait CountRegularOps {
+    /// Inserts one value into the sketch.
     fn insert(&mut self, val: &DataInput);
+    /// Returns the estimate as `f64`.
     fn estimate_f64(&self, val: &DataInput) -> f64;
 }
 
+/// Type-erased adapter for fast-path Count Sketches.
 pub trait CountFastOps {
+    /// Inserts one value into the sketch.
     fn insert(&mut self, val: &DataInput);
+    /// Returns the estimate as `f64`.
     fn estimate_f64(&self, val: &DataInput) -> f64;
+    /// Returns the row count.
     fn rows(&self) -> usize;
+    /// Returns the column count.
     fn cols(&self) -> usize;
+    /// Inserts one precomputed hash.
     fn fast_insert(&mut self, hash: &MatrixHashType);
+    /// Returns the estimate for one precomputed hash.
     fn fast_estimate(&self, hash: &MatrixHashType) -> f64;
 }
 

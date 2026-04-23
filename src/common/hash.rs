@@ -189,6 +189,7 @@ pub fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
 }
 
 #[inline(always)]
+/// Hashes an input into a 128-bit value with the selected seed.
 pub fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
     DefaultXxHasher::hash128_seeded(d, key)
 }
@@ -221,6 +222,7 @@ fn mask_bits_for_cols(cols: usize) -> u32 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Layout used to store per-row fast-path hashes.
 pub enum MatrixHashMode {
     /// Packs row hashes into one 64-bit value.
     Packed64,

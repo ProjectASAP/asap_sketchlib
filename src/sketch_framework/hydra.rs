@@ -15,10 +15,15 @@ use crate::{CountMin, FastPath, Vector2D};
 use crate::{DataInput, HYDRA_SEED, hash_for_matrix_seeded};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Hierarchical sketch grid for subpopulation queries.
 pub struct Hydra {
+    /// Number of rows in the sketch grid.
     pub row_num: usize,
+    /// Number of columns in the sketch grid.
     pub col_num: usize,
+    /// Backing grid of per-cell sketches.
     pub sketches: Vector2D<HydraCounter>,
+    /// Prototype sketch cloned for new cells.
     pub type_to_clone: HydraCounter,
 }
 
@@ -33,6 +38,7 @@ impl Default for Hydra {
 }
 
 impl Hydra {
+    /// Creates a Hydra grid with the given dimensions and sketch type.
     pub fn with_dimensions(r: usize, c: usize, sketch_type: HydraCounter) -> Self {
         let mut h = Hydra {
             row_num: r,
@@ -166,20 +172,27 @@ impl Hydra {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Multi-head Hydra with one sketch family per named dimension.
 pub struct MultiHeadHydra {
+    /// Number of rows in the sketch grid.
     pub row_num: usize,
+    /// Number of columns in the sketch grid.
     pub col_num: usize,
+    /// Backing grid of per-cell sketch vectors.
     pub sketches: Vector2D<Vec<HydraCounter>>,
+    /// Named dimensions and their prototype sketches.
     pub dimensions: Vec<(String, HydraCounter)>,
 }
 
 impl MultiHeadHydra {
+    /// Returns the index of a named dimension.
     pub fn dimension_index(&self, dimension: &str) -> Option<usize> {
         self.dimensions
             .iter()
             .position(|(name, _)| name == dimension)
     }
 
+    /// Creates a multi-head Hydra with named dimensions.
     pub fn with_dimensions(r: usize, c: usize, dimensions: Vec<(String, HydraCounter)>) -> Self {
         let template: Vec<HydraCounter> = dimensions
             .iter()

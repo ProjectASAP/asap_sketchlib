@@ -7,13 +7,17 @@ use crate::DataInput;
 /// Fast-path hash container for matrix-backed sketches.
 #[derive(Clone, Debug)]
 pub enum MatrixHashType {
+    /// Packed per-row hashes stored in one `u64`.
     Packed64(u64),
+    /// Packed per-row hashes stored in one `u128`.
     Packed128(u128),
+    /// One hash value per row.
     Rows(SmallVec<[u64; 8]>),
 }
 
 impl MatrixHashType {
     #[inline(always)]
+    /// Extracts the row-local hash bits for one row.
     pub fn row_hash(&self, row: usize, mask_bits: u32, mask: u128) -> u128 {
         match self {
             MatrixHashType::Packed64(value) => {
@@ -29,6 +33,7 @@ impl MatrixHashType {
     }
 
     #[inline(always)]
+    /// Returns the Count-Sketch sign for one row.
     pub fn sign_for_row(&self, row: usize) -> i32 {
         let bit = match self {
             MatrixHashType::Packed64(value) => (value >> (63 - row)) & 1,
@@ -42,6 +47,7 @@ impl MatrixHashType {
     }
 
     #[inline(always)]
+    /// Returns the lower 64 bits of the stored hash.
     pub fn lower_64(&self) -> u64 {
         match self {
             MatrixHashType::Packed64(value) => *value,
@@ -51,9 +57,13 @@ impl MatrixHashType {
     }
 }
 
+/// Trait for hash values that support fast row/column decoding.
 pub trait MatrixFastHash: Clone {
+    /// Verifies that the hash type can encode the given dimensions.
     fn assert_compatible(rows: usize, cols: usize);
+    /// Returns the column index for one row.
     fn col_for_row(&self, row: usize, cols: usize) -> usize;
+    /// Returns the Count-Sketch sign for one row.
     fn sign_for_row(&self, row: usize) -> i32;
 }
 
@@ -146,40 +156,52 @@ impl MatrixFastHash for u128 {
     }
 }
 
+/// Storage interface implemented by matrix-backed sketch backends.
 pub trait MatrixStorage {
+    /// Counter type stored in each cell.
     type Counter: Clone;
+    /// Returns the number of rows.
     fn rows(&self) -> usize;
+    /// Returns the number of columns.
     fn cols(&self) -> usize;
 
+    /// Updates a single counter at `(row, col)`.
     fn update_one_counter<F, V>(&mut self, row: usize, col: usize, op: F, value: V)
     where
         F: Fn(&mut Self::Counter, V);
 
+    /// Increments one counter by a typed value.
     fn increment_by_row(&mut self, row: usize, col: usize, value: Self::Counter);
 
+    /// Inserts one value into all rows using a precomputed hash.
     fn fast_insert<Hash, F, V>(&mut self, op: F, value: V, hashed_val: &Hash)
     where
         Hash: MatrixFastHash,
         F: Fn(&mut Self::Counter, &V, usize),
         V: Clone;
 
+    /// Queries the minimum across rows using a precomputed hash.
     fn fast_query_min<Hash, F, R>(&self, hashed_val: &Hash, op: F) -> R
     where
         Hash: MatrixFastHash,
         F: Fn(&Self::Counter, usize, &Hash) -> R,
         R: PartialOrd;
 
+    /// Queries the median across rows using a precomputed hash.
     fn fast_query_median<Hash, F>(&self, hashed_val: &Hash, op: F) -> f64
     where
         Hash: MatrixFastHash,
         F: Fn(&Self::Counter, usize, &Hash) -> f64;
 
+    /// Reads one counter at `(row, col)`.
     fn query_one_counter(&self, row: usize, col: usize) -> Self::Counter;
 }
 
+/// Trait for storages that can derive fast-path hashes for their dimensions.
 pub trait FastPathHasher<H>: MatrixStorage
 where
     H: crate::SketchHasher,
 {
+    /// Computes a compatible fast-path hash for `value`.
     fn hash_for_matrix(&self, value: &DataInput) -> H::HashType;
 }

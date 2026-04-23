@@ -1,3 +1,5 @@
+//! Build script that compiles the crate's protobuf definitions.
+
 fn main() {
     let protoc =
         protoc_bin_vendored::protoc_bin_path().expect("failed to locate vendored protoc binary");

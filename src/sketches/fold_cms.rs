@@ -46,7 +46,12 @@ pub enum FoldCell {
     /// Cell with no stored entries.
     Empty,
     /// Cell holding one `(full_col, count)` pair inline.
-    Single { full_col: u16, count: i64 },
+    Single {
+        /// Full-width column stored inline.
+        full_col: u16,
+        /// Counter value stored inline.
+        count: i64,
+    },
     /// Cell holding multiple colliding entries.
     Collided(Vec<FoldEntry>),
 }

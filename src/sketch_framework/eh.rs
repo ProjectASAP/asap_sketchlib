@@ -11,20 +11,32 @@ use crate::DataInput;
 const MASS_EPSILON: f64 = 1e-9;
 
 #[derive(Clone, Debug)]
+/// One EH bucket with its sketch payload and time range.
 pub struct EHBucket {
+    /// Sketch stored in the bucket.
     pub bucket: EHSketchList,
+    /// Aggregate size represented by the bucket.
     pub size: usize,
+    /// Cached L2 mass for L2-based merging.
     pub l2_mass: f64,
+    /// Earliest timestamp covered by the bucket.
     pub min_time: u64,
+    /// Latest timestamp covered by the bucket.
     pub max_time: u64,
 }
 
 #[derive(Clone, Debug)]
+/// Sliding-window exponential histogram over sketch buckets.
 pub struct ExponentialHistogram {
+    /// Buckets ordered from oldest to newest.
     pub payload: Vec<EHBucket>,
+    /// Sliding window width in time units.
     pub window: u64,
+    /// EH merge parameter controlling bucket count.
     pub k: usize,
+    /// Merge rule used for bucket consolidation.
     pub merge_norm: SketchNorm,
+    /// Prototype sketch cloned for new buckets.
     pub type_to_clone: EHSketchList,
 }
 
@@ -41,6 +53,7 @@ fn compute_l2_mass(eh_sketch: &EHSketchList) -> f64 {
 }
 
 impl EHBucket {
+    /// Merges another bucket into this one.
     pub fn to_merge(&mut self, other: EHBucket) {
         let _ = self.bucket.merge(&other.bucket);
         self.size += other.size;
@@ -51,6 +64,7 @@ impl EHBucket {
 }
 
 impl ExponentialHistogram {
+    /// Creates a new exponential histogram.
     pub fn new(k: usize, window: u64, eh_type: EHSketchList) -> Self {
         let k_eff = k.max(1);
         ExponentialHistogram {
@@ -62,16 +76,19 @@ impl ExponentialHistogram {
         }
     }
 
+    /// Updates the retained window length.
     pub fn update_window(&mut self, window: u64) {
         self.window = window;
     }
 
+    /// Inserts one value at timestamp `time`.
     pub fn update(&mut self, time: u64, val: &DataInput) {
         self.update_with(time, |sketch| {
             sketch.insert(val);
         });
     }
 
+    /// Inserts one timestamped update using a custom bucket updater.
     pub fn update_with<F>(&mut self, time: u64, update_fn: F)
     where
         F: FnOnce(&mut EHSketchList),
@@ -175,6 +192,7 @@ impl ExponentialHistogram {
         self.payload.remove(index + 1);
     }
 
+    /// Returns `true` if the payload covers `[mint, maxt]`.
     pub fn cover(&self, mint: u64, maxt: u64) -> bool {
         if self.payload.is_empty() {
             return false;
@@ -186,18 +204,22 @@ impl ExponentialHistogram {
         last.max_time >= maxt && first.min_time <= mint
     }
 
+    /// Returns the latest timestamp currently retained.
     pub fn get_max_time(&self) -> Option<u64> {
         self.payload.last().map(|b| b.max_time)
     }
 
+    /// Returns the earliest timestamp currently retained.
     pub fn get_min_time(&self) -> Option<u64> {
         self.payload.first().map(|b| b.min_time)
     }
 
+    /// Returns the current number of buckets.
     pub fn bucket_count(&self) -> usize {
         self.payload.len()
     }
 
+    /// Merges buckets overlapping the requested interval.
     pub fn query_interval_merge(&self, t1: u64, t2: u64) -> Option<EHSketchList> {
         if self.payload.is_empty() {
             return None;

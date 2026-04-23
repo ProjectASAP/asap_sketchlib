@@ -47,6 +47,7 @@ impl<T: Ord> CommonHeapOrder<T> for KeepLargest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Capacity-bounded binary heap with pluggable ordering.
 pub struct CommonHeap<T, O: CommonHeapOrder<T>> {
     data: Vec<T>,
     size: usize,

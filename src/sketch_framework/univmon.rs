@@ -38,13 +38,21 @@ const DEFAULT_HEAP_SIZE: usize = 32;
 const DEFAULT_LAYER_SIZE: usize = 8;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+/// UnivMon sketch pyramid for multi-metric stream estimation.
 pub struct UnivMon {
+    /// Per-layer L2/heavy-hitter sketches.
     pub l2_sketch_layers: Vector1D<L2HH>,
+    /// Per-layer heavy-hitter heaps.
     pub hh_layers: Vector1D<HHHeap>,
+    /// Number of pyramid layers.
     pub layer_size: usize,
+    /// Row count of each underlying sketch.
     pub sketch_row: usize,
+    /// Column count of each underlying sketch.
     pub sketch_col: usize,
+    /// Heap capacity per layer.
     pub heap_size: usize,
+    /// Bucket size used for hashing decisions.
     pub bucket_size: usize,
 }
 
@@ -60,6 +68,7 @@ impl Default for UnivMon {
 }
 
 impl UnivMon {
+    /// Creates a UnivMon instance with explicit dimensions.
     pub fn init_univmon(
         heap_size: usize,
         sketch_row: usize,
@@ -115,12 +124,14 @@ impl UnivMon {
         self.update(key, value, bottom_layer_num);
     }
 
+    /// Inserts one weighted update.
     pub fn insert(&mut self, key: &DataInput, value: i64) {
         let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
         let bottom_layer_num = self.find_bottom_layer_num(h, self.layer_size);
         self.process_univmon(key, value, bottom_layer_num)
     }
 
+    /// Inserts one weighted update using fast-path hashing.
     pub fn fast_insert(&mut self, key: &DataInput, value: i64) {
         self.bucket_size += value as usize;
         let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
@@ -131,6 +142,7 @@ impl UnivMon {
         }
     }
 
+    /// Prints all heavy-hitter layers for debugging.
     pub fn print_hh_layer(&self) {
         print!("Print HH_Layer: ");
         for i in 0..self.layer_size {
@@ -139,6 +151,7 @@ impl UnivMon {
         }
     }
 
+    /// Computes a g-sum estimate using the heuristic recurrence.
     pub fn calc_g_sum_heuristic<F>(&self, g: F, is_card: bool) -> f64
     where
         F: Fn(f64) -> f64,
@@ -183,6 +196,7 @@ impl UnivMon {
         y[0]
     }
 
+    /// Computes a g-sum estimate.
     pub fn calc_g_sum<F>(&self, g: F, is_card: bool) -> f64
     where
         F: Fn(f64) -> f64,
@@ -190,15 +204,18 @@ impl UnivMon {
         self.calc_g_sum_heuristic(g, is_card)
     }
 
+    /// Returns the estimated L1 norm.
     pub fn calc_l1(&self) -> f64 {
         self.calc_g_sum(|x| x, false)
     }
 
+    /// Returns the estimated L2 norm.
     pub fn calc_l2(&self) -> f64 {
         let tmp = self.calc_g_sum(|x| x * x, false);
         tmp.sqrt()
     }
 
+    /// Returns the estimated entropy.
     pub fn calc_entropy(&self) -> f64 {
         let tmp = self.calc_g_sum(
             |x| {
@@ -209,6 +226,7 @@ impl UnivMon {
         (self.bucket_size as f64).log2() - tmp / (self.bucket_size as f64)
     }
 
+    /// Returns the estimated cardinality.
     pub fn calc_card(&self) -> f64 {
         self.calc_g_sum(|_| 1.0, true)
     }
@@ -223,6 +241,7 @@ impl UnivMon {
         }
     }
 
+    /// Merges another UnivMon into this one.
     pub fn merge(&mut self, other: &UnivMon) {
         assert_eq!(
             self.layer_size, other.layer_size,
@@ -241,6 +260,7 @@ impl UnivMon {
         }
     }
 
+    /// Returns the heap for one layer.
     pub fn heap_at_layer(&mut self, layer: usize) -> &mut HHHeap {
         &mut self.hh_layers[layer]
     }

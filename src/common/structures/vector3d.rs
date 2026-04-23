@@ -10,6 +10,7 @@ pub struct Vector3D<T> {
 }
 
 impl<T> Vector3D<T> {
+    /// Creates an empty 3D container with reserved capacity.
     pub fn init(layer: usize, row: usize, col: usize) -> Self {
         Self {
             data: Vec::with_capacity(layer * row * col),

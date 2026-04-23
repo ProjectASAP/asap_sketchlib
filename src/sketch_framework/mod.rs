@@ -23,6 +23,7 @@ pub mod eh;
 pub use eh::EHBucket;
 pub use eh::ExponentialHistogram;
 
+/// Sketch-type adapters used by exponential histograms.
 pub mod eh_sketch_list;
 pub use eh_sketch_list::EHSketchList;
 pub use eh_sketch_list::SketchNorm;

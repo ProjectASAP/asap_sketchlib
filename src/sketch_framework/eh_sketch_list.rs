@@ -1,3 +1,5 @@
+//! Sketch enums used by the exponential histogram framework.
+
 use crate::{DataInput, Vector2D};
 use serde::{Deserialize, Serialize};
 
@@ -5,30 +7,42 @@ use super::super::sketches::*;
 use super::UnivMon;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Norm choices used by EH merge policies.
 pub enum SketchNorm {
+    /// L1-based merge policy.
     L1,
+    /// L2-based merge policy.
     L2,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Erased sketch variants supported by exponential histograms.
 pub enum EHSketchList {
+    /// Count-Min sketch.
     CM(CountMin<Vector2D<i32>, FastPath>),
     #[cfg(feature = "experimental")]
     COCO(Coco),
+    /// CountL2HH sketch.
     COUNTL2HH(CountL2HH),
+    /// Count Sketch.
     CS(Count<Vector2D<i32>, FastPath>),
+    /// DDSketch.
     DDS(DDSketch),
     #[cfg(feature = "experimental")]
     ELASTIC(Elastic),
+    /// HyperLogLog.
     HLL(HyperLogLog<ErtlMLE>),
+    /// KLL sketch.
     KLL(KLL),
     #[cfg(feature = "experimental")]
     UNIFORM(UniformSampling),
     // LOCHER(LocherSketch),
+    /// UnivMon sketch.
     UNIVMON(UnivMon),
 }
 
 impl EHSketchList {
+    /// Returns whether this sketch supports the requested merge norm.
     pub fn supports_norm(&self, norm: SketchNorm) -> bool {
         match self {
             EHSketchList::COUNTL2HH(_) | EHSketchList::UNIVMON(_) => norm == SketchNorm::L2,
@@ -147,6 +161,7 @@ impl EHSketchList {
         }
     }
 
+    /// Queries the sketch using a sketch-specific interpretation of `key`.
     pub fn query(&self, key: &DataInput) -> Result<f64, &'static str> {
         match (self, key) {
             (EHSketchList::CM(count_min), _) => Ok(count_min.estimate(key) as f64),

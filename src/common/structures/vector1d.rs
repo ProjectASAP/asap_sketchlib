@@ -45,6 +45,7 @@ impl<T> Vector1D<T> {
         self.data.len()
     }
 
+    /// Inserts `val` at `pos`, shifting later elements right.
     pub fn insert(&mut self, pos: usize, val: T) {
         self.data.insert(pos, val);
     }
@@ -64,6 +65,7 @@ impl<T> Vector1D<T> {
         &mut self.data
     }
 
+    /// Returns the last element mutably, if present.
     pub fn last_mut(&mut self) -> Option<&mut T> {
         self.data.last_mut()
     }

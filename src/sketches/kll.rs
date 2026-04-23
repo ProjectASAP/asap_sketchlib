@@ -446,6 +446,7 @@ impl<T: NumericalValue> KLL<T> {
         self.rebuild_capacity_cache();
     }
 
+    /// Prints compactor contents for debugging.
     pub fn print_compactors(&self)
     where
         T: std::fmt::Debug,

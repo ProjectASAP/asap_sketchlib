@@ -17,6 +17,7 @@
 //! transparency and advanced use cases, but they are not required for ordinary
 //! sketch usage.
 
+/// Hashing utilities and seed definitions shared across sketches.
 pub mod hash;
 pub mod heap;
 pub mod input;
@@ -25,6 +26,7 @@ pub mod precompute_hash;
 pub mod precompute_sample;
 pub mod precompute_sample2;
 pub mod structure_utils;
+/// Reusable storage backends and low-level containers.
 pub mod structures;
 
 pub use hash::{

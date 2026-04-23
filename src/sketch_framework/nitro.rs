@@ -76,6 +76,7 @@ impl NitroEstimate for Count<Vector2D<i32>, FastPath> {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Batch-oriented Nitro wrapper around a sketch target.
 pub struct NitroBatch<S: NitroTarget> {
     sampling_rate: f64,
     /// Remaining items to skip before the next sampled update.

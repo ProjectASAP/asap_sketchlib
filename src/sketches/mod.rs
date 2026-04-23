@@ -33,6 +33,7 @@ pub mod count;
 pub use count::Count;
 pub use count::CountL2HH;
 
+/// Hashing path markers for matrix-backed sketches.
 pub mod mode;
 pub use mode::{FastPath, RegularPath};
 
@@ -47,6 +48,7 @@ pub use elastic::Elastic;
 #[cfg(feature = "experimental")]
 pub use elastic::HeavyBucket;
 
+/// HyperLogLog implementations and aliases.
 pub mod hll;
 pub use hll::{
     Classic, ErtlMLE, HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogHIPP14,

@@ -41,7 +41,9 @@ pub struct Count<
     _hasher: PhantomData<H>,
 }
 
+/// Counter trait required by Count Sketch backends.
 pub trait CountSketchCounter: Copy + std::ops::AddAssign + Neg<Output = Self> + From<i32> {
+    /// Converts the counter into `f64`.
     fn to_f64(self) -> f64;
 }
 

@@ -114,6 +114,7 @@ impl<T> Vector2D<T> {
     }
 
     #[inline(always)]
+    /// Decrements the Nitro skip counter by one.
     pub fn reduce_to_skip(&mut self) {
         self.nitro.reduce_to_skip();
     }
@@ -125,6 +126,7 @@ impl<T> Vector2D<T> {
     }
 
     #[inline(always)]
+    /// Returns the current Nitro delta weight.
     pub fn get_delta(&self) -> u64 {
         self.nitro.delta
     }
@@ -162,7 +164,7 @@ impl<T> Vector2D<T> {
         self.cols
     }
 
-    /// Allocate a new row with default value at the end
+    /// Allocates one extra row initialized with `value`.
     pub fn allocate_extra_row(&mut self, value: T)
     where
         T: Clone,
@@ -178,6 +180,7 @@ impl<T> Vector2D<T> {
     }
 
     #[inline(always)]
+    /// Returns `true` when the matrix stores no elements.
     pub fn is_empty(&self) -> bool {
         self.data.len() == 0
     }
@@ -227,6 +230,7 @@ impl<T> Vector2D<T> {
 
     /// get the number of bits required to cover the col size
     #[inline(always)]
+    /// Returns the bit width needed to represent a column index.
     pub fn get_mask_bits(&self) -> u32 {
         if self.cols.is_power_of_two() {
             self.cols.ilog2()
@@ -238,6 +242,7 @@ impl<T> Vector2D<T> {
     /// get the number of bits required for hashed value
     /// only three case possible: 32, 64, 128
     #[inline]
+    /// Returns the packed hash width needed for all rows.
     pub fn get_required_bits(&self) -> usize {
         let mut bits_required = self.get_mask_bits() as usize;
         bits_required *= self.rows;
@@ -291,6 +296,7 @@ impl<T> Vector2D<T> {
     }
 
     #[inline(always)]
+    /// Updates one row using a packed hash value.
     pub fn update_by_row<F, V>(&mut self, row: usize, hashed: u128, op: F, value: V)
     where
         F: Fn(&mut T, V),
@@ -301,16 +307,19 @@ impl<T> Vector2D<T> {
     }
 
     #[inline(always)]
+    /// Decrements the Nitro skip counter by `c`.
     pub fn reduce_nitro_skip(&mut self, c: usize) {
         self.nitro.reduce_to_skip_by_count(c)
     }
 
     #[inline(always)]
+    /// Sets the Nitro skip counter to `c`.
     pub fn update_nitro_skip(&mut self, c: usize) {
         self.nitro.to_skip = c
     }
 
     #[inline(always)]
+    /// Returns the current Nitro skip counter.
     pub fn get_nitro_skip(&mut self) -> usize {
         self.nitro.to_skip
     }

@@ -4,24 +4,37 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::{Index, IndexMut, Range};
 
+/// Quick-start row count for fixed matrix aliases.
 pub const QUICKSTART_ROW_NUM: usize = 5;
+/// Quick-start column count for fixed matrix aliases.
 pub const QUICKSTART_COL_NUM: usize = 2048;
+/// Total cell count for quick-start fixed matrices.
 pub const QUICKSTART_SIZE: usize = QUICKSTART_ROW_NUM * QUICKSTART_COL_NUM;
+/// Default row count for fixed matrix aliases.
 pub const DEFAULT_ROW_NUM: usize = 3;
+/// Default column count for fixed matrix aliases.
 pub const DEFAULT_COL_NUM: usize = 4096;
 
+/// Register storage interface used by HyperLogLog implementations.
 pub trait HllRegisterStorage:
     Clone + std::fmt::Debug + Default + Serialize + for<'de> Deserialize<'de>
 {
+    /// HLL precision parameter.
     const PRECISION: usize;
+    /// Number of hash bits reserved for register-rank computation.
     const REGISTER_BITS: usize;
+    /// Total number of registers.
     const NUM_REGISTERS: usize;
+    /// Bitmask for register selection.
     const P_MASK: u64;
 
+    /// Returns the register slice.
     fn as_slice(&self) -> &[u8];
+    /// Returns the register slice mutably.
     fn as_mut_slice(&mut self) -> &mut [u8];
 
     #[inline(always)]
+    /// Returns the number of registers.
     fn len(&self) -> usize {
         Self::NUM_REGISTERS
     }
@@ -30,14 +43,20 @@ pub trait HllRegisterStorage:
 macro_rules! impl_hll_bucket_list {
     ($name:ident, $precision:literal, $num_registers:expr) => {
         #[derive(Clone, Debug)]
+        /// Fixed-size HLL register storage.
         pub struct $name {
+            /// Backing register array.
             pub registers: Box<[u8; $num_registers]>,
         }
 
         impl $name {
+            /// HLL precision parameter.
             pub const PRECISION: usize = $precision;
+            /// Number of bits used to derive the rank value.
             pub const REGISTER_BITS: usize = 64_usize - $precision;
+            /// Total number of registers.
             pub const NUM_REGISTERS: usize = $num_registers;
+            /// Bitmask for selecting a register.
             pub const P_MASK: u64 = ($num_registers as u64) - 1;
         }
 
@@ -135,13 +154,17 @@ impl_hll_bucket_list!(HllBucketListP12, 12, 1_usize << 12);
 impl_hll_bucket_list!(HllBucketListP14, 14, 1_usize << 14);
 impl_hll_bucket_list!(HllBucketListP16, 16, 1_usize << 16);
 
+/// Default HLL register storage alias using 14-bit precision.
 pub type HllBucketList = HllBucketListP14;
 
 #[macro_export]
+/// Generates a fixed-size matrix storage type.
 macro_rules! impl_fixed_matrix {
     ($name:ident, $counter:ty, $rows:literal, $cols:literal) => {
         #[derive(Clone, Debug)]
+        /// Fixed-size matrix storage with compile-time dimensions.
         pub struct $name {
+            /// Flat row-major counter storage.
             pub data: Box<[$counter; $rows * $cols]>,
         }
 

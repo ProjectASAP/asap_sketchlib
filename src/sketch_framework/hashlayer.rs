@@ -62,15 +62,22 @@ impl HashConfig {
     }
 }
 
+/// Type-erased sketch variants that can share one hash computation.
 pub enum EnsembleSketch {
+    /// Fast-path Count-Min sketch.
     CountMinFast(Box<dyn CountMinFastOps>),
+    /// Fast-path Count Sketch.
     CountFast(Box<dyn CountFastOps>),
+    /// Ertl-MLE HyperLogLog.
     HllErtl(HyperLogLog<ErtlMLE>),
+    /// Classic HyperLogLog.
     HllClassic(HyperLogLog<Classic>),
+    /// HIP HyperLogLog.
     HllHip(HyperLogLogHIP),
 }
 
 impl EnsembleSketch {
+    /// Returns a short sketch family label.
     pub fn sketch_type(&self) -> &'static str {
         match self {
             EnsembleSketch::CountMinFast(_) => "CountMin",
@@ -93,6 +100,7 @@ impl EnsembleSketch {
         }
     }
 
+    /// Inserts a precomputed hash into the sketch.
     pub fn insert_with_hash(&mut self, hash: &MatrixHashType) {
         match self {
             EnsembleSketch::CountMinFast(sketch) => sketch.fast_insert(hash),
@@ -172,6 +180,7 @@ impl From<HyperLogLogHIP> for EnsembleSketch {
     }
 }
 
+/// A group of sketches that reuse one shared hash per insert.
 pub struct HashSketchEnsemble<H = DefaultXxHasher>
 where
     H: SketchHasher<HashType = MatrixHashType> + 'static,
@@ -185,6 +194,7 @@ impl<H> HashSketchEnsemble<H>
 where
     H: SketchHasher<HashType = MatrixHashType> + 'static,
 {
+    /// Creates an ensemble from a list of compatible sketches.
     pub fn new(sketches: Vec<EnsembleSketch>) -> Result<Self, &'static str> {
         let hash_config = Self::validate_sketches(&sketches)?;
         Ok(HashSketchEnsemble {
@@ -194,6 +204,7 @@ where
         })
     }
 
+    /// Adds one compatible sketch to the ensemble.
     pub fn push(&mut self, sketch: EnsembleSketch) -> Result<(), &'static str> {
         let sketch_cfg = sketch.hash_config();
         match (self.hash_config, sketch_cfg) {
@@ -352,14 +363,17 @@ where
 
     // -- Accessors ------------------------------------------------------------
 
+    /// Returns the number of sketches in the ensemble.
     pub fn len(&self) -> usize {
         self.sketches.len()
     }
 
+    /// Returns `true` when the ensemble is empty.
     pub fn is_empty(&self) -> bool {
         self.sketches.is_empty()
     }
 
+    /// Returns one sketch by index.
     pub fn get(&self, index: usize) -> Option<&EnsembleSketch> {
         if index < self.sketches.len() {
             Some(&self.sketches[index])
@@ -368,6 +382,7 @@ where
         }
     }
 
+    /// Returns one sketch by index mutably.
     pub fn get_mut(&mut self, index: usize) -> Option<&mut EnsembleSketch> {
         if index < self.sketches.len() {
             Some(&mut self.sketches[index])

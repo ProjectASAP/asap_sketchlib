@@ -102,20 +102,32 @@ const DEFAULT_PYRAMID_LAYERS: usize = 16;
 /// smaller sketches, saving memory since deeper layers sample exponentially
 /// fewer items.
 #[derive(Clone, Debug)]
+/// Optimized UnivMon variant with separate elephant and mouse layers.
 pub struct UnivMonPyramid {
+    /// Per-layer L2/heavy-hitter sketches.
     pub l2_sketch_layers: Vector1D<L2HH>,
+    /// Per-layer heavy-hitter heaps.
     pub hh_layers: Vector1D<HHHeap>,
+    /// Total number of layers.
     pub layer_size: usize,
+    /// Number of elephant layers.
     pub elephant_layers: usize,
+    /// Row count for elephant layers.
     pub elephant_row: usize,
+    /// Column count for elephant layers.
     pub elephant_col: usize,
+    /// Row count for mouse layers.
     pub mouse_row: usize,
+    /// Column count for mouse layers.
     pub mouse_col: usize,
+    /// Heap capacity per layer.
     pub heap_size: usize,
+    /// Bucket size used for hashing decisions.
     pub bucket_size: usize,
 }
 
 impl UnivMonPyramid {
+    /// Creates an optimized UnivMon pyramid.
     pub fn new(
         heap_size: usize,
         elephant_layers: usize,
@@ -166,6 +178,7 @@ impl UnivMonPyramid {
         }
     }
 
+    /// Creates a pyramid using built-in default dimensions.
     pub fn with_defaults() -> Self {
         Self::new(
             DEFAULT_PYRAMID_HEAP,
@@ -245,6 +258,7 @@ impl UnivMonPyramid {
 
     // -- Query methods (identical to UnivMon) --------------------------------
 
+    /// Computes a g-sum estimate.
     pub fn calc_g_sum<F>(&self, g: F, is_card: bool) -> f64
     where
         F: Fn(f64) -> f64,
@@ -279,19 +293,23 @@ impl UnivMonPyramid {
         y[0]
     }
 
+    /// Returns the estimated L1 norm.
     pub fn calc_l1(&self) -> f64 {
         self.calc_g_sum(|x| x, false)
     }
 
+    /// Returns the estimated L2 norm.
     pub fn calc_l2(&self) -> f64 {
         self.calc_g_sum(|x| x * x, false).sqrt()
     }
 
+    /// Returns the estimated entropy.
     pub fn calc_entropy(&self) -> f64 {
         let tmp = self.calc_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 }, false);
         (self.bucket_size as f64).log2() - tmp / (self.bucket_size as f64)
     }
 
+    /// Returns the estimated cardinality.
     pub fn calc_card(&self) -> f64 {
         self.calc_g_sum(|_| 1.0, true)
     }
@@ -326,6 +344,7 @@ impl UnivMonPyramid {
         }
     }
 
+    /// Returns the heap for one layer.
     pub fn heap_at_layer(&mut self, layer: usize) -> &mut HHHeap {
         &mut self.hh_layers[layer]
     }

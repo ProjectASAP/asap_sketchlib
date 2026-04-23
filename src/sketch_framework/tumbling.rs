@@ -350,7 +350,7 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
 // ---------------------------------------------------------------------------
 
 impl TumblingWindow<FoldCMS> {
-    /// Merge all windows (closed + active) via hierarchical pairwise unfolding.
+    /// Hierarchically merges all windows into one FoldCMS.
     ///
     /// This produces a progressively unfolded result — more accurate than
     /// repeated `merge_same_level` when the fold level is > 0.
@@ -366,7 +366,7 @@ impl TumblingWindow<FoldCMS> {
 }
 
 impl TumblingWindow<FoldCS> {
-    /// Merge all windows (closed + active) via hierarchical pairwise unfolding.
+    /// Hierarchically merges all windows into one FoldCS.
     pub fn query_all_hierarchical(&self) -> FoldCS {
         let sketches: Vec<FoldCS> = self
             .closed
