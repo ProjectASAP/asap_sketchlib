@@ -30,14 +30,21 @@ Full sketch status and API details: [APIs Index](./docs/apis.md).
 
 This crate is not published on crates.io yet.
 
-For now, install it from GitHub:
+For now, install it from GitHub and pin a tag for a stable revision:
 
 ```toml
 [dependencies]
-asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib" }
+asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", tag = "v0.1.0" }
 ```
 
-After the first crates.io release, installation will be:
+If you want the latest repository state instead, you can depend on the default branch:
+
+```toml
+[dependencies]
+asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", branch = "main" }
+```
+
+After the first crates.io release, installation will instead be:
 
 ```bash
 cargo add asap_sketchlib
