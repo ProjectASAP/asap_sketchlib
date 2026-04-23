@@ -5,11 +5,14 @@ use twox_hash::{XxHash3_64, XxHash3_128};
 use super::{DataInput, HeapItem, MatrixFastHash, MatrixHashType};
 use smallvec::SmallVec;
 
+/// Default seed index used by single-hash sketch operations.
 pub const CANONICAL_HASH_SEED: usize = 5; // 18 and 19 will cause hll test to fail...? is 5 faster...?
-// Seed index used for UnivMon bottom-layer selection (binary partitioning).
+/// Seed index used for UnivMon bottom-layer selection.
 pub const BOTTOM_LAYER_FINDER: usize = 19;
+/// Seed index reserved for Hydra hashing.
 pub const HYDRA_SEED: usize = 6;
 
+/// Built-in seed values used by the default hasher.
 pub const SEEDLIST: [u64; 20] = [
     0xcafe3553,
     0xade3415118,

@@ -39,6 +39,7 @@ impl HHHeap {
         })
     }
 
+    /// Finds an owned heap item by key, returning its index if present.
     pub fn find_heap_item(&self, key: &HeapItem) -> Option<usize> {
         let slot = self.slot_for_item(key);
         self.positions.get(&slot).and_then(|bucket| {
@@ -67,6 +68,7 @@ impl HHHeap {
         true
     }
 
+    /// Updates an existing owned item or inserts it if needed.
     pub fn update_heap_item(&mut self, key: &HeapItem, count: i64) -> bool {
         if let Some(idx) = self.find_heap_item(key) {
             self.heap[idx].count = count;

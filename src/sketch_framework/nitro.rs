@@ -15,16 +15,23 @@ use crate::{
     hash128_seeded,
 };
 
+/// Trait for sketch backends that support Nitro row updates.
 pub trait NitroTarget {
+    /// Returns the number of rows in the target sketch.
     fn rows(&self) -> usize;
+    /// Applies a sampled update to one row.
     fn update_row(&mut self, row: usize, hashed: u128, delta: u64);
 }
 
+/// Trait for Nitro targets that can be merged.
 pub trait NitroMerge {
+    /// Merges another target into this one.
     fn merge(&mut self, other: &Self);
 }
 
+/// Trait for Nitro targets that support median-style estimation.
 pub trait NitroEstimate {
+    /// Returns the target's estimate for `value`.
     fn estimate_median(&self, value: &DataInput) -> f64;
 }
 
@@ -71,8 +78,10 @@ impl NitroEstimate for Count<Vector2D<i32>, FastPath> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NitroBatch<S: NitroTarget> {
     sampling_rate: f64,
+    /// Remaining items to skip before the next sampled update.
     pub to_skip: usize,
     inv_ln_one_minus_p: f64,
+    /// Weight applied to each sampled update.
     pub delta: u64,
     #[serde(skip)]
     #[serde(default = "new_small_rng")]
@@ -105,6 +114,7 @@ impl Default for NitroBatch<Vector2D<u32>> {
 }
 
 impl NitroBatch<Vector2D<u32>> {
+    /// Creates a Nitro sketch with the given sampling rate.
     pub fn init_nitro(rate: f64) -> Self {
         assert!(
             !rate.is_nan() && rate > 0.0 && rate <= 1.0,
@@ -132,18 +142,22 @@ impl NitroBatch<Vector2D<u32>> {
 }
 
 impl<S: NitroTarget> NitroBatch<S> {
+    /// Returns the wrapped target sketch.
     pub fn target(&self) -> &S {
         &self.sk
     }
 
+    /// Returns the wrapped target sketch mutably.
     pub fn target_mut(&mut self) -> &mut S {
         &mut self.sk
     }
 
+    /// Consumes the wrapper and returns the target sketch.
     pub fn into_target(self) -> S {
         self.sk
     }
 
+    /// Wraps an existing target sketch with Nitro sampling.
     pub fn with_target(rate: f64, sk: S) -> Self {
         assert!(
             !rate.is_nan() && rate > 0.0 && rate <= 1.0,
@@ -170,6 +184,7 @@ impl<S: NitroTarget> NitroBatch<S> {
 
     // for profiling
     #[inline(always)]
+    /// Draws the next geometric skip distance.
     pub fn draw_geometric(&mut self) {
         if self.is_full_sampling() {
             self.to_skip = 0;
@@ -186,22 +201,26 @@ impl<S: NitroTarget> NitroBatch<S> {
     }
 
     #[inline(always)]
+    /// Decrements the current skip counter by one.
     pub fn reduce_to_skip(&mut self) {
         self.to_skip -= 1;
     }
 
     #[inline(always)]
+    /// Decrements the current skip counter by `c`.
     pub fn reduce_to_skip_by_count(&mut self, c: usize) {
         self.to_skip -= c;
     }
 
     #[inline(always)]
+    /// Returns the configured sampling rate.
     pub fn get_sampling_rate(&self) -> f64 {
         self.sampling_rate
     }
 
     // #[inline]
     #[inline(always)]
+    /// Scales an update weight by the sampling rate.
     pub fn scaled_increment(&self, weight: u64) -> u64 {
         if self.is_full_sampling() {
             weight
@@ -217,16 +236,19 @@ impl<S: NitroTarget> NitroBatch<S> {
     }
 
     #[inline(always)]
+    /// Returns the current cached Nitro sampling state.
     pub fn get_ctx(&self) -> (usize, f64, usize, usize) {
         (self.idx, self.inv_ln_one_minus_p, self.to_skip, self.mask)
     }
 
     #[inline(always)]
+    /// Restores the cached Nitro sampling state.
     pub fn commit_ctx(&mut self, idx: usize, to_skip: usize) {
         self.idx = idx;
         self.to_skip = to_skip;
     }
 
+    /// Inserts a batch of values using geometric skipping.
     pub fn insert(&mut self, data: &[i64]) {
         let rows = self.sk.rows();
         self.draw_geometric();
@@ -240,6 +262,7 @@ impl<S: NitroTarget> NitroBatch<S> {
         }
     }
 
+    /// Inserts a batch using the precomputed skip table.
     pub fn insert_cached_step(&mut self, data: &[i64]) {
         let rows = self.sk.rows();
         self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].ceil() as usize;
@@ -257,6 +280,7 @@ impl<S: NitroTarget> NitroBatch<S> {
 }
 
 impl<S: NitroTarget + NitroMerge> NitroBatch<S> {
+    /// Merges another Nitro sketch with the same sampling rate.
     pub fn merge(&mut self, other: &Self) {
         assert!(
             (self.sampling_rate - other.sampling_rate).abs() <= f64::EPSILON,
@@ -267,6 +291,7 @@ impl<S: NitroTarget + NitroMerge> NitroBatch<S> {
 }
 
 impl<S: NitroTarget + NitroEstimate> NitroBatch<S> {
+    /// Returns the wrapped sketch's estimate for `value`.
     pub fn estimate_median(&self, value: &DataInput) -> f64 {
         self.sk.estimate_median(value)
     }

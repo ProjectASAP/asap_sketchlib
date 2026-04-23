@@ -48,25 +48,35 @@ pub trait TumblingWindowSketch: Clone + Sized {
 /// Configuration for constructing a [`FoldCMS`] via [`TumblingWindowSketch`].
 #[derive(Clone, Debug)]
 pub struct FoldCMSConfig {
+    /// Number of sketch rows.
     pub rows: usize,
+    /// Full-width column count before folding.
     pub full_cols: usize,
+    /// Folding depth applied to the sketch.
     pub fold_level: u32,
+    /// Capacity of the heavy-hitter heap.
     pub top_k: usize,
 }
 
 /// Configuration for constructing a [`FoldCS`] via [`TumblingWindowSketch`].
 #[derive(Clone, Debug)]
 pub struct FoldCSConfig {
+    /// Number of sketch rows.
     pub rows: usize,
+    /// Full-width column count before folding.
     pub full_cols: usize,
+    /// Folding depth applied to the sketch.
     pub fold_level: u32,
+    /// Capacity of the heavy-hitter heap.
     pub top_k: usize,
 }
 
 /// Configuration for constructing a [`KLL`] via [`TumblingWindowSketch`].
 #[derive(Clone, Debug)]
 pub struct KLLConfig {
+    /// Main KLL capacity parameter.
     pub k: usize,
+    /// Minimum compactor size parameter.
     pub m: usize,
 }
 

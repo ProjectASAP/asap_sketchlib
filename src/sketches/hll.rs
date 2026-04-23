@@ -400,6 +400,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     HyperLogLogImpl<Variant, Registers, H>
 {
     #[inline(always)]
+    /// Inserts a hashed value and emits a delta when a register increases.
     pub fn insert_emit_delta_with_hash(
         &mut self,
         hashed_val: u64,
@@ -419,11 +420,13 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     }
 
     #[inline(always)]
+    /// Hashes an input, inserts it, and emits a delta when needed.
     pub fn insert_emit_delta(&mut self, obj: &DataInput, emit: &mut impl FnMut(HllDelta)) {
         let hashed_val = H::hash64_seeded(CANONICAL_HASH_SEED, obj);
         self.insert_emit_delta_with_hash(hashed_val, emit);
     }
 
+    /// Applies one externally emitted HLL delta.
     pub fn apply_delta(&mut self, delta: HllDelta) {
         let pos = delta.pos as usize;
         let regs = self.registers.as_mut_slice();

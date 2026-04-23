@@ -35,6 +35,7 @@ const DEFAULT_QUEUE_CAPACITY: usize = 65536;
 
 /// Worker-side trait: processes inputs and emits deltas.
 pub trait OctoWorker: Send {
+    /// Delta type emitted by the worker.
     type Delta: Copy + Send + 'static;
 
     /// Process one input and emit zero or more deltas.
@@ -45,6 +46,7 @@ pub trait OctoWorker: Send {
 
 /// Aggregator-side trait: absorbs deltas into a full-precision sketch.
 pub trait OctoAggregator: Send {
+    /// Delta type consumed by the aggregator.
     type Delta: Copy + Send + 'static;
 
     /// Apply a single delta to the parent sketch.
@@ -82,6 +84,7 @@ impl Default for OctoConfig {
 #[cfg(feature = "octo-runtime")]
 /// Result of an `run_octo` execution.
 pub struct OctoResult<P> {
+    /// Final parent sketch after all deltas are applied.
     pub parent: P,
 }
 
@@ -371,6 +374,7 @@ pub struct CmOctoWorker {
 }
 
 impl CmOctoWorker {
+    /// Creates a Count-Min-backed Octo worker.
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
             sketch: CountMin::with_dimensions(rows, cols),
@@ -392,6 +396,7 @@ impl OctoWorker for CmOctoWorker {
 
 /// OctoSketch parent wrapping a full-precision `CountMin`.
 pub struct CmOctoAggregator {
+    /// Parent Count-Min sketch updated by worker deltas.
     pub sketch: CountMin<Vector2D<i32>, RegularPath>,
 }
 
@@ -412,6 +417,7 @@ pub struct CountOctoWorker {
 }
 
 impl CountOctoWorker {
+    /// Creates a Count-Sketch-backed Octo worker.
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
             child: Count::with_dimensions(rows, cols),
@@ -433,6 +439,7 @@ impl OctoWorker for CountOctoWorker {
 
 /// OctoSketch parent wrapping a full-precision `Count`.
 pub struct CountOctoAggregator {
+    /// Parent Count Sketch updated by worker deltas.
     pub sketch: Count<Vector2D<i32>, RegularPath>,
 }
 
@@ -453,6 +460,7 @@ pub struct HllOctoWorker {
 }
 
 impl HllOctoWorker {
+    /// Creates a HyperLogLog-backed Octo worker.
     pub fn new() -> Self {
         Self {
             child: HyperLogLog::default(),
@@ -480,6 +488,7 @@ impl OctoWorker for HllOctoWorker {
 
 /// OctoSketch parent wrapping a full-precision `HyperLogLog<Classic>`.
 pub struct HllOctoAggregator {
+    /// Parent HyperLogLog sketch updated by worker deltas.
     pub sketch: HyperLogLog<Classic>,
 }
 

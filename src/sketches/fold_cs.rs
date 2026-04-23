@@ -103,21 +103,25 @@ impl<H: SketchHasher> FoldCS<H> {
     // -- Accessors ----------------------------------------------------------
 
     #[inline(always)]
+    /// Returns the number of sketch rows.
     pub fn rows(&self) -> usize {
         self.rows
     }
 
     #[inline(always)]
+    /// Returns the number of physical folded columns.
     pub fn fold_cols(&self) -> usize {
         self.fold_cols
     }
 
     #[inline(always)]
+    /// Returns the target full-width column count.
     pub fn full_cols(&self) -> usize {
         self.full_cols
     }
 
     #[inline(always)]
+    /// Returns the current folding depth.
     pub fn fold_level(&self) -> u32 {
         self.fold_level
     }

@@ -43,8 +43,11 @@ pub struct FoldEntry {
 ///                column; entries are stored in a `Vec`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FoldCell {
+    /// Cell with no stored entries.
     Empty,
+    /// Cell holding one `(full_col, count)` pair inline.
     Single { full_col: u16, count: i64 },
+    /// Cell holding multiple colliding entries.
     Collided(Vec<FoldEntry>),
 }
 
@@ -167,8 +170,11 @@ impl FoldCell {
 
 /// Iterator over `(full_col, count)` pairs in a [`FoldCell`].
 pub enum FoldCellIter<'a> {
+    /// Iterator over an empty cell.
     Empty,
+    /// Iterator over a single inline entry.
     Single(Option<(u16, i64)>),
+    /// Iterator over multiple stored entries.
     Multi(std::slice::Iter<'a, FoldEntry>),
 }
 
@@ -259,21 +265,25 @@ impl<H: SketchHasher> FoldCMS<H> {
     // -- Accessors ----------------------------------------------------------
 
     #[inline(always)]
+    /// Returns the number of sketch rows.
     pub fn rows(&self) -> usize {
         self.rows
     }
 
     #[inline(always)]
+    /// Returns the number of physical folded columns.
     pub fn fold_cols(&self) -> usize {
         self.fold_cols
     }
 
     #[inline(always)]
+    /// Returns the target full-width column count.
     pub fn full_cols(&self) -> usize {
         self.full_cols
     }
 
     #[inline(always)]
+    /// Returns the current folding depth.
     pub fn fold_level(&self) -> u32 {
         self.fold_level
     }

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::PRECOMPUTED_SAMPLE_RATE_1PERCENT;
 /// Helper trait for converting sketch counter types to f64 for median calculation.
 pub trait ToF64 {
+    /// Converts the value into `f64`.
     fn to_f64(self) -> f64;
 }
 
@@ -44,14 +45,17 @@ impl ToF64 for i32 {
 /// Default to be off (i.e., not Nitro Mode)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Nitro {
+    /// Whether Nitro sampling is enabled.
     pub is_nitro_mode: bool,
     sampling_rate: f64,
+    /// Remaining items to skip before the next sampled update.
     pub to_skip: usize,
     /// Precomputed: 1.0 / ln(1 - sampling_rate) for geometric sampling
     inv_ln_one_minus_p: f64,
     // #[serde(skip)]
     // #[serde(default = "new_small_rng")]
     // // generator: SmallRng,
+    /// Weight applied to each sampled update.
     pub delta: u64,
     idx: usize,
     mask: usize,
@@ -78,6 +82,7 @@ impl Default for Nitro {
 }
 
 impl Nitro {
+    /// Creates a Nitro state with the given sampling rate.
     pub fn init_nitro(rate: f64) -> Self {
         assert!(
             !rate.is_nan() && rate > 0.0 && rate <= 1.0,
@@ -104,6 +109,7 @@ impl Nitro {
 
     // for profiling
     #[inline(always)]
+    /// Draws the next geometric skip distance.
     pub fn draw_geometric(&mut self) {
         if self.is_full_sampling() {
             self.to_skip = 0;
@@ -124,22 +130,26 @@ impl Nitro {
     }
 
     #[inline(always)]
+    /// Decrements the current skip counter by one.
     pub fn reduce_to_skip(&mut self) {
         self.to_skip -= 1;
     }
 
     #[inline(always)]
+    /// Decrements the current skip counter by `c`.
     pub fn reduce_to_skip_by_count(&mut self, c: usize) {
         self.to_skip -= c;
     }
 
     #[inline(always)]
+    /// Returns the configured sampling rate.
     pub fn get_sampling_rate(&self) -> f64 {
         self.sampling_rate
     }
 
     // #[inline]
     #[inline(always)]
+    /// Scales an update weight by the sampling rate.
     pub fn scaled_increment(&self, weight: u64) -> u64 {
         if self.is_full_sampling() {
             weight
@@ -155,11 +165,13 @@ impl Nitro {
     }
 
     #[inline(always)]
+    /// Returns the cached Nitro sampling state.
     pub fn get_ctx(&self) -> (usize, f64, usize, usize) {
         (self.idx, self.inv_ln_one_minus_p, self.to_skip, self.mask)
     }
 
     #[inline(always)]
+    /// Restores the cached Nitro sampling state.
     pub fn commit_ctx(&mut self, idx: usize, to_skip: usize) {
         self.idx = idx;
         self.to_skip = to_skip;

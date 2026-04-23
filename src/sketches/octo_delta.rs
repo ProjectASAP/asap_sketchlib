@@ -16,8 +16,11 @@ pub const HLL_PROMASK: u8 = 0;
 /// Represents an accumulated unsigned count for a single cell.
 #[derive(Clone, Copy, Debug)]
 pub struct CmDelta {
+    /// Row index of the updated cell.
     pub row: u16,
+    /// Column index of the updated cell.
     pub col: u16,
+    /// Accumulated delta for the cell.
     pub value: u8,
 }
 
@@ -25,8 +28,11 @@ pub struct CmDelta {
 /// Represents a signed accumulated count for a single cell.
 #[derive(Clone, Copy, Debug)]
 pub struct CountDelta {
+    /// Row index of the updated cell.
     pub row: u16,
+    /// Column index of the updated cell.
     pub col: u16,
+    /// Signed accumulated delta for the cell.
     pub value: i8,
 }
 
@@ -34,6 +40,8 @@ pub struct CountDelta {
 /// Represents a register improvement (max-register semantics).
 #[derive(Clone, Copy, Debug)]
 pub struct HllDelta {
+    /// Register position to update.
     pub pos: u16,
+    /// New register value.
     pub value: u8,
 }
