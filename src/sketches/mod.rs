@@ -1,3 +1,27 @@
+//! Core sketch implementations.
+//!
+//! This module is the main entry point for the library's sketch algorithms.
+//! Broadly, the sketches fall into a few common use cases:
+//!
+//! - frequency estimation: [`CountMin`], [`Count`]
+//! - cardinality estimation: [`HyperLogLog`]
+//! - quantiles and distributions: [`KLL`], [`DDSketch`]
+//! - specialized or composite structures: heap-backed, folded, and
+//!   runtime-oriented variants such as [`CMSHeap`], [`CSHeap`], [`FoldCMS`], and
+//!   [`FoldCS`]
+//!
+//! For most users:
+//!
+//! - choose [`CountMin`] for fast approximate non-negative frequency queries
+//! - choose [`Count`] for count-sketch style frequency estimation
+//! - choose [`HyperLogLog`] for distinct counts
+//! - choose [`KLL`] for general quantile estimation
+//! - choose [`DDSketch`] when relative-error quantiles are important
+//!
+//! [`FastPath`] and [`RegularPath`] control how some matrix-backed frequency
+//! sketches map values to rows and columns. Several specialized sketches in
+//! this module are feature-gated behind `experimental`.
+
 #[cfg(feature = "experimental")]
 pub mod coco;
 #[cfg(feature = "experimental")]

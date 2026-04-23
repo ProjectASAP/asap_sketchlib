@@ -1,3 +1,22 @@
+//! Shared building blocks used across the library.
+//!
+//! This module groups the reusable primitives that power multiple sketch
+//! implementations:
+//!
+//! - input and key types such as [`DataInput`], [`HeapItem`], and [`HHItem`]
+//! - hashing abstractions such as [`SketchHasher`] and [`DefaultXxHasher`]
+//! - storage backends such as [`Vector2D`] and [`MatrixStorage`]
+//! - shared utilities such as heaps, numerical traits, and sampling helpers
+//!
+//! Most users only need [`DataInput`] and, for matrix-backed frequency
+//! sketches, [`Vector2D`]. Advanced users can use this module to customize
+//! hashing and storage layout or to integrate directly with lower-level shared
+//! infrastructure.
+//!
+//! The precomputed tables and low-level helpers exposed here are public for
+//! transparency and advanced use cases, but they are not required for ordinary
+//! sketch usage.
+
 pub mod hash;
 pub mod heap;
 pub mod input;

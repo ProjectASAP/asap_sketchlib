@@ -1,3 +1,24 @@
+//! Higher-level frameworks built on top of the core sketches.
+//!
+//! These APIs compose, extend, or orchestrate sketches for more advanced
+//! workflows:
+//!
+//! - windowed analytics: [`ExponentialHistogram`], [`TumblingWindow`]
+//! - subpopulation and hierarchical queries: [`Hydra`]
+//! - universal multi-metric monitoring: [`UnivMon`]
+//! - batch update acceleration: [`NitroBatch`]
+//! - shared-hash or multi-sketch coordination: [`HashSketchEnsemble`]
+//! - runtime and parallel execution helpers: the `octo` family
+//!
+//! Most users can begin with the core algorithms in [`crate::sketches`]. Reach
+//! for this module when you need to add windows, grouped queries, coordinated
+//! execution, or higher-level sketch composition.
+//!
+//! Some parts of this module are feature-gated:
+//!
+//! - `eh_univ_optimized` requires `experimental`
+//! - the `OctoRuntime` execution runtime requires `octo-runtime`
+
 pub mod eh;
 pub use eh::EHBucket;
 pub use eh::ExponentialHistogram;
