@@ -15,45 +15,78 @@ use crate::{
 /// Input wrapper for sketch APIs (supports primitive and borrowed values).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataInput<'a> {
+    /// A signed 8-bit integer.
     I8(i8),
+    /// A signed 16-bit integer.
     I16(i16),
+    /// A signed 32-bit integer.
     I32(i32),
+    /// A signed 64-bit integer.
     I64(i64),
+    /// A signed 128-bit integer.
     I128(i128),
+    /// A signed pointer-sized integer.
     ISIZE(isize),
+    /// An unsigned 8-bit integer.
     U8(u8),
+    /// An unsigned 16-bit integer.
     U16(u16),
+    /// An unsigned 32-bit integer.
     U32(u32),
+    /// An unsigned 64-bit integer.
     U64(u64),
+    /// An unsigned 128-bit integer.
     U128(u128),
+    /// An unsigned pointer-sized integer.
     USIZE(usize),
+    /// A 32-bit floating-point value.
     F32(f32),
+    /// A 64-bit floating-point value.
     F64(f64),
+    /// A borrowed UTF-8 string slice.
     Str(&'a str),
+    /// An owned UTF-8 string.
     String(String),
+    /// Borrowed raw bytes.
     Bytes(&'a [u8]),
 }
 
 /// Owned counterpart to `DataInput` for heap storage.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub enum HeapItem {
+    /// A signed 8-bit integer.
     I8(i8),
+    /// A signed 16-bit integer.
     I16(i16),
+    /// A signed 32-bit integer.
     I32(i32),
+    /// A signed 64-bit integer.
     I64(i64),
+    /// A signed 128-bit integer.
     I128(i128),
+    /// A signed pointer-sized integer.
     ISIZE(isize),
+    /// An unsigned 8-bit integer.
     U8(u8),
+    /// An unsigned 16-bit integer.
     U16(u16),
+    /// An unsigned 32-bit integer.
     U32(u32),
+    /// An unsigned 64-bit integer.
     U64(u64),
+    /// An unsigned 128-bit integer.
     U128(u128),
+    /// An unsigned pointer-sized integer.
     USIZE(usize),
+    /// A 32-bit floating-point value.
     F32(f32),
+    /// A 64-bit floating-point value.
     F64(f64),
+    /// An owned UTF-8 string.
     String(String),
 }
 
+/// Converts a heap-owned key into a borrowed sketch input.
 pub fn heap_item_to_sketch_input(item: &HeapItem) -> DataInput<'_> {
     match item {
         HeapItem::I8(v) => DataInput::I8(*v),
@@ -74,6 +107,7 @@ pub fn heap_item_to_sketch_input(item: &HeapItem) -> DataInput<'_> {
     }
 }
 
+/// Converts a sketch input into an owned heap item.
 pub fn input_to_owned<'a>(input: &DataInput<'a>) -> HeapItem {
     match input {
         DataInput::I8(i) => HeapItem::I8(*i),
@@ -254,28 +288,33 @@ impl Hash for HeapItem {
 /// Counter wrapper for UnivMon (currently backed by CountL2HH).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum L2HH {
+    /// Count-sketch-based heavy-hitter tracker with L2 support.
     COUNT(CountL2HH),
 }
 
 impl L2HH {
+    /// Updates the counter and returns the current estimate.
     pub fn update_and_est(&mut self, key: &DataInput, value: i64) -> f64 {
         match self {
             L2HH::COUNT(count_l2hh) => count_l2hh.fast_update_and_est(key, value),
         }
     }
 
+    /// Updates the counter without refreshing the cached L2 value.
     pub fn update_and_est_without_l2(&mut self, key: &DataInput, value: i64) -> f64 {
         match self {
             L2HH::COUNT(count_l2hh) => count_l2hh.fast_update_and_est_without_l2(key, value),
         }
     }
 
+    /// Returns the current L2 estimate.
     pub fn get_l2(&self) -> f64 {
         match self {
             L2HH::COUNT(count_l2hh) => count_l2hh.get_l2(),
         }
     }
 
+    /// Merges another counter of the same kind into this one.
     pub fn merge(&mut self, other: &L2HH) {
         match (self, other) {
             (L2HH::COUNT(self_count), L2HH::COUNT(other_count)) => {
@@ -303,8 +342,11 @@ pub enum HydraQuery<'a> {
     Cdf(f64),
     /// Query for cardinality (for HyperLogLog, etc.)
     Cardinality,
+    /// Query for the first frequency moment.
     L1Norm,
+    /// Query for the second frequency moment.
     L2Norm,
+    /// Query for Shannon entropy.
     Entropy,
     // whether adding rank needs more consideration
     // Rank(f64),
@@ -327,10 +369,15 @@ impl<'a> fmt::Display for HydraQuery<'a> {
 /// Counter variants supported by Hydra.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum HydraCounter {
+    /// Count-Min-backed counter.
     CM(CountMin<Vector2D<i32>, FastPath>),
+    /// HyperLogLog-backed counter.
     HLL(HyperLogLog<ErtlMLE>),
+    /// Count Sketch-backed counter.
     CS(Count<Vector2D<i32>, FastPath>),
+    /// KLL-backed counter.
     KLL(KLL),
+    /// UnivMon-backed counter.
     UNIVERSAL(UnivMon),
 }
 
@@ -478,7 +525,9 @@ impl HydraCounter {
 /// A key-count pair used in heap-based sketches for tracking heavy hitters.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct HHItem {
+    /// Stored key.
     pub key: HeapItem,
+    /// Estimated count associated with `key`.
     pub count: i64,
 }
 
@@ -491,6 +540,7 @@ impl HHItem {
         }
     }
 
+    /// Creates an item from an already-owned key.
     pub fn create_item(k: HeapItem, count: i64) -> Self {
         HHItem { key: k, count }
     }

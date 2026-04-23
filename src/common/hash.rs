@@ -43,13 +43,19 @@ fn normalized_seed_idx(d: usize) -> usize {
 /// All methods are static (no `&self`) to enable zero-cost monomorphization.
 /// Implement this trait to inject a custom hash algorithm into any sketch struct.
 pub trait SketchHasher: Clone + Debug {
+    /// Hash representation used by matrix-backed sketches.
     type HashType: MatrixFastHash + Clone + Debug;
 
+    /// Hashes an input into a 64-bit value with the selected seed.
     fn hash64_seeded(d: usize, key: &DataInput) -> u64;
+    /// Hashes an input into a 128-bit value with the selected seed.
     fn hash128_seeded(d: usize, key: &DataInput) -> u128;
+    /// Hashes a heap-owned key into a 64-bit value with the selected seed.
     fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64;
+    /// Hashes a heap-owned key into a 128-bit value with the selected seed.
     fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128;
 
+    /// Produces the matrix hash form used by matrix-backed sketches.
     fn hash_for_matrix_seeded(
         seed_idx: usize,
         rows: usize,
@@ -185,12 +191,14 @@ pub fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
 }
 
 // for speed, add separate function
+/// Hashes a heap-owned key into a 128-bit value with the selected seed.
 #[inline(always)]
 pub fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
     DefaultXxHasher::hash_item128_seeded(d, key)
 }
 
 // for speed, add separate function
+/// Hashes a heap-owned key into a 64-bit value with the selected seed.
 #[inline(always)]
 pub fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
     DefaultXxHasher::hash_item64_seeded(d, key)
@@ -211,11 +219,15 @@ fn mask_bits_for_cols(cols: usize) -> u32 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum MatrixHashMode {
+    /// Packs row hashes into one 64-bit value.
     Packed64,
+    /// Packs row hashes into one 128-bit value.
     Packed128,
+    /// Stores one row hash per row.
     Rows,
 }
 
+/// Chooses a matrix hash layout for the given sketch dimensions.
 #[inline(always)]
 pub fn hash_mode_for_matrix(rows: usize, cols: usize) -> MatrixHashMode {
     let mask_bits = mask_bits_for_cols(cols) as usize;
