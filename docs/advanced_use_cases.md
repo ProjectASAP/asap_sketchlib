@@ -42,7 +42,7 @@ API reference: [`docs/api/api_hydra.md`](./api/api_hydra.md)
 
 **Solution: `HashSketchEnsemble` and `UnivMon`**
 
-`HashSketchEnsemble` (also referred to as `HashLayer` in the API) computes the element hash once and distributes the pre-computed hash value to all member sketches. This enables correlated multi-sketch inserts with a single hash call.
+`HashSketchEnsemble` computes the element hash once and distributes the pre-computed hash value to all member sketches. This enables correlated multi-sketch inserts with a single hash call.
 
 `UnivMon` goes further: it implements the Universal Monitoring framework (Liu et al., SIGCOMM 2016), which answers L1, L2, entropy, and cardinality queries from a single data structure by organizing Count Sketches in a geometric sampling hierarchy.
 

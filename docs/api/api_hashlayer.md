@@ -63,10 +63,10 @@ uniform insert/query API.
 Only sketches with a prehashed insertion path are accepted:
 
 - `CountMin<_, FastPath, _>` — Count-Min Sketch (fast path)
-- `Count<_, FastPath, _>` — Count Sketch (fast path)
+- `Count<_, FastPath, _>` — Count (Count Sketch, fast path)
 - `HyperLogLog<ErtlMLE>` / `HyperLogLog<Classic>` / `HyperLogLogHIP`
 
-All matrix-backed sketches (CMS / Count) in one ensemble must share the same hash layout (rows × cols dimensions). HLL sketches can coexist with them because they only consume the lower 64 bits of the shared hash.
+All matrix-backed sketches (CMS / `Count`) in one ensemble must share the same hash layout (rows × cols dimensions). HLL sketches can coexist with them because they only consume the lower 64 bits of the shared hash.
 
 ## Construction
 
@@ -116,7 +116,7 @@ fn bulk_insert_at_with_hashes(&mut self, indices: &[usize], hashes: &[H::HashTyp
 
 ## Query
 
-Frequency and cardinality queries are split because CMS/Count and HLL answer fundamentally different questions.
+Frequency and cardinality queries are split because CMS/`Count` and HLL answer fundamentally different questions.
 
 ### Frequency (CMS / Count only)
 

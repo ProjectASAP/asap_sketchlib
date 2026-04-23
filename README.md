@@ -8,14 +8,14 @@ A Rust library for **streaming data sketches** — compact data structures that 
 ## Why asap_sketchlib
 
 - **Fast.** Up to 8–14× higher insertion throughput than comparable libraries on frequency sketches, 2–3× on cardinality sketches, and 2–4× on quantile sketches. Rust-native with no language-boundary overhead. See [benchmarks](#performance).
-- **High coverage.** Supports frequency, cardinality, quantile, and distribution sketches (`CountMin`, `Count Sketch`, `HyperLogLog`, `KLL`, `DDSketch`). Also includes algorithms not found in other libraries: `UnivMon` for estimating a broad class of streaming statistics (L1/L2 norms, entropy) in a single pass, `Hydra` for answering sketch queries over arbitrary subpopulations without per-group sketches, and `NitroBatch` for accelerating sketch updates through batching. Unique sketch frameworks for sliding windows (`ExponentialHistogram`) and subpopulation queries (`Hydra`).
-- **Easy to use.** Most sketches provide a unified API style, while some (such as `KLL`) use `update`/`quantile`; the crate also offers typed inputs via `DataInput`, pluggable hashing via `SketchHasher`, and multi-sketch composition with shared hashing (`HashLayer`).
+- **High coverage.** Supports frequency, cardinality, quantile, and distribution sketches (`CountMin`, `Count`, `HyperLogLog`, `KLL`, `DDSketch`). Also includes algorithms not found in other libraries: `UnivMon` for estimating a broad class of streaming statistics (L1/L2 norms, entropy) in a single pass, `Hydra` for answering sketch queries over arbitrary subpopulations without per-group sketches, and `NitroBatch` for accelerating sketch updates through batching. Unique sketch frameworks for sliding windows (`ExponentialHistogram`) and subpopulation queries (`Hydra`).
+- **Easy to use.** Most sketches provide a unified API style, while some (such as `KLL`) use `update`/`quantile`; the crate also offers typed inputs via `DataInput`, pluggable hashing via `SketchHasher`, and multi-sketch composition with shared hashing (`HashSketchEnsemble`).
 
 ## Supported Sketches
 
 | Goal | Sketch | When to pick it | What it does | Polars equivalent |
 | --- | --- | --- | --- | --- |
-| Frequency estimation | `CountMin`, `Count Sketch` | Fast approximate counts for high-volume keys | Estimates how often each key appears in a stream | `df.group_by("key").agg(pl.len())` |
+| Frequency estimation | `CountMin`, `Count` | Fast approximate counts for high-volume keys | Estimates how often each key appears in a stream | `df.group_by("key").agg(pl.len())` |
 | Cardinality estimation | `HyperLogLog` (`Classic`, `ErtlMLE`, `HIP`) | Approximate distinct counts with bounded memory | Estimates the number of unique elements | `df["col"].n_unique()` |
 | Quantiles / distribution | `KLL`, `DDSketch` | Percentile / latency summaries over streams | Approximates arbitrary quantiles (e.g. p50, p99) of a value distribution | `df["col"].quantile(0.99)` |
 | Subpopulation queries | `Hydra` | Hierarchical / filtered sketch queries | Answers sketch queries over arbitrary subpopulations without maintaining per-group sketches | No direct equivalent — requires per-group aggregation |
@@ -140,7 +140,7 @@ println!("total unique users ≈ {}", node_a.estimate()); // ≈ 8
 
 ## Choosing Between Sketches
 
-Several sketches address the same goal with different trade-offs — for example, `CountMin` vs `Count Sketch` for frequency, or `KLL` vs `DDSketch` for quantiles.
+Several sketches address the same goal with different trade-offs — for example, `CountMin` vs `Count` for frequency, or `KLL` vs `DDSketch` for quantiles.
 
 We are building **SketchPlan**, a profiler that analyzes a representative sample of your data and recommends the best sketch configuration (algorithm, memory budget, error tolerance) for your workload. Until SketchPlan is ready, the [APIs Index](./docs/apis.md) lists guarantees, error bounds, and caveats for each sketch to help you decide.
 

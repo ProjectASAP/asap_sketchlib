@@ -80,11 +80,11 @@ Insertion throughput measured on 10,000,000 Zipf-distributed `int64` values (s=1
 
 ![CMS Insertion Throughput (5×32768)](./benchmark_plots/plots/cms32k/cms32k_throughput_insertion.png)
 
-#### Count Sketch
+#### Count
 
-![Count Sketch Insertion Throughput (5×2048)](./benchmark_plots/plots/cs/cs_throughput_insertion.png)
+![Count Insertion Throughput (5×2048)](./benchmark_plots/plots/cs/cs_throughput_insertion.png)
 
-![Count Sketch Insertion Throughput (5×32768)](./benchmark_plots/plots/cs32k/cs32k_throughput_insertion.png)
+![Count Insertion Throughput (5×32768)](./benchmark_plots/plots/cs32k/cs32k_throughput_insertion.png)
 
 #### HyperLogLog
 

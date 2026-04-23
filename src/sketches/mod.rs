@@ -13,7 +13,7 @@
 //! For most users:
 //!
 //! - choose [`CountMin`] for fast approximate non-negative frequency queries
-//! - choose [`Count`] for count-sketch style frequency estimation
+//! - choose [`Count`] for Count Sketch style frequency estimation
 //! - choose [`HyperLogLog`] for distinct counts
 //! - choose [`KLL`] for general quantile estimation
 //! - choose [`DDSketch`] when relative-error quantiles are important

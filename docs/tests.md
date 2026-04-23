@@ -27,13 +27,13 @@ Test file: [`src/sketches/countmin.rs`](../src/sketches/countmin.rs)
 | `cm_error_bound_uniform` | Uniform-stream error bound holds for regular and fast paths. | On `200_000` uniform samples in `[100.0, 1000.0]`, checks both paths satisfy: number of distinct queried keys with `\|estimate - true\| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
 | `count_min_round_trip_serialization` | Serialization round trip preserves full sketch state. | Serializes/deserializes a populated `3x8` regular-path sketch and verifies dimensions plus the full counter array are unchanged. |
 
-### Count Sketch
+### Count
 
 Test file: [`src/sketches/count.rs`](../src/sketches/count.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
-| `default_initializes_expected_dimensions` | Default dimensions initialize zeroed counters. | Verifies default Count Sketch dimensions (`rows=3`, `cols=4096`) and that all counters are zero after construction. |
+| `default_initializes_expected_dimensions` | Default dimensions initialize zeroed counters. | Verifies default `Count` dimensions (`rows=3`, `cols=4096`) and that all counters are zero after construction. |
 | `with_dimensions_uses_custom_sizes` | Custom dimensions initialize zeroed rows. | Verifies `with_dimensions(3, 17)` applies requested shape and each row slice is zero-initialized. |
 | `insert_updates_signed_counters_per_row` | Regular insert applies per-row signed updates. | After one insert of key `"alpha"` into a `3x64` sketch, checks each row’s hashed counter equals that row’s expected sign (`+1` or `-1`). |
 | `fast_insert_produces_consistent_estimates` | Fast-path single inserts return unit estimates. | Inserts five string keys once into a fast-path sketch (`4x128`) and asserts estimate `== 1.0` for each key. |
@@ -41,13 +41,13 @@ Test file: [`src/sketches/count.rs`](../src/sketches/count.rs)
 | `estimate_recovers_frequency_for_repeated_key` | Regular path recovers repeated-key frequency. | Inserts key `"theta"` 37 times into a regular-path sketch (`3x64`) and asserts estimate `== 37.0`. |
 | `fast_path_recovers_repeated_insertions` | Fast path recovers repeated insertions across keys. | Inserts five keys for 5 rounds into a fast-path sketch (`4x256`) and asserts estimate `== 5.0` for each key. |
 | `merge_adds_counters_element_wise` | Merge sums signed counters for matching dimensions. | Merges two regular-path `2x32` sketches after inserting the same key (`1` on left, `2` on right) and checks per-row target counters equal `sign(row,key) * 3`. |
-| `count_child_insert_emits_at_threshold` | Worker-path delta emission fires after sufficient inserts. | Inserts key into `3x64` Count Sketch via `insert_emit_delta` for `200` iterations and verifies at least `3` deltas (one per row) are emitted. |
+| `count_child_insert_emits_at_threshold` | Worker-path delta emission fires after sufficient inserts. | Inserts key into `3x64` `Count` via `insert_emit_delta` for `200` iterations and verifies at least `3` deltas (one per row) are emitted. |
 | `zipf_stream_stays_within_twenty_percent_for_most_keys` | Zipf stream keeps relative error under 20% for most keys. | On Zipf stream (`rows=5`, `cols=8192`, `domain=8192`, `exponent=1.1`, `N=200_000`), computes per-key relative error and requires at least 70% of keys with error `< 0.20`. |
 | `cs_regular_path_correctness` | Regular-path counter/sign mapping and estimates are exact on deterministic inserts. | Recomputes expected signed counter updates for `I32(0..9)` using regular hashing/sign logic, asserts exact matrix match after one pass, doubled counters after second pass, and estimate `== 2.0` for each inserted key. |
 | `cs_fast_path_correctness` | Fast-path row-hash/sign mapping matches expected counters. | Recomputes expected fast-path updates for `I32(0..9)` using matrix hash row slices and row signs, then asserts exact full-matrix equality. |
 | `cs_error_bound_zipf` | Zipf-stream error bound check passes for regular and fast paths. | On Zipf samples (`domain=8192`, `exponent=1.1`, `N=200_000`) with default dimensions, both paths require: count of distinct queried keys with `\|estimate - true\| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
 | `cs_error_bound_uniform` | Uniform-stream error bound check passes for regular and fast paths. | On uniform samples in `[100.0, 1000.0]` with `N=200_000` and default dimensions, requires for both paths that in-bound distinct keys exceed `(1-delta)` fraction (`delta = e^-rows`); regular path uses `epsilon = sqrt(e / cols)` and bound `epsilon * L2_norm`, fast path uses `epsilon = e / cols` and bound `epsilon * N`. |
-| `count_sketch_round_trip_serialization` | Serialization round trip preserves full Count Sketch state. | Serializes/deserializes a populated regular-path `3x8` sketch and verifies dimensions plus full counter array are unchanged. |
+| `count_sketch_round_trip_serialization` | Serialization round trip preserves full `Count` state. | Serializes/deserializes a populated regular-path `3x8` sketch and verifies dimensions plus full counter array are unchanged. |
 | `countl2hh_estimates_and_l2_are_consistent` | CountL2HH updates keep estimate and L2 consistent. | For `CountL2HH(3x32)`, applies `+5` then `-2` to one key, verifies estimates `5.0` then `3.0`, and asserts non-trivial L2 (`>= 3.0`). |
 | `countl2hh_merge_combines_frequency_vectors` | CountL2HH merge combines per-key frequencies. | Merges two `CountL2HH(3x32)` sketches with same key counts `4` and `9`, then verifies merged estimate `== 13.0`. |
 | `countl2hh_round_trip_serialization` | CountL2HH serialization round trip preserves estimate and L2. | Serializes/deserializes `CountL2HH::with_dimensions_and_seed(3,32,7)` after updates, verifying rows/cols and that both estimate and L2 remain unchanged (within `f64::EPSILON`). |
@@ -160,12 +160,12 @@ Test file: [`src/sketches/cs_heap.rs`](../src/sketches/cs_heap.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
-| `insert_and_estimate` | Repeated inserts increment Count Sketch estimate for one key. | Inserts `"hello"` 5 times into `CSHeap::new(5,256,10)` and verifies estimate is `5.0` within `1e-9`. |
+| `insert_and_estimate` | Repeated inserts increment `Count` estimate for one key. | Inserts `"hello"` 5 times into `CSHeap::new(5,256,10)` and verifies estimate is `5.0` within `1e-9`. |
 | `heap_tracks_top_k` | Heap keeps highest-frequency keys within top-k capacity. | Inserts keys `1..5` with frequencies `100,200,300,400,500` into `top_k=3` sketch and verifies heap counts are exactly `[300,400,500]`. |
 | `merge_reconciles_heaps` | Merge combines counters and refreshes heap counts from merged sketch. | Merges two sketches containing `"merge_key"` counts `10` and `20`, then verifies estimate is `30.0` and heap count is `30`. |
 | `insert_many_updates_estimate_and_heap` | `insert_many` updates estimate and heap entry consistently. | Calls `insert_many("many", 17)` and verifies estimate `17.0` plus heap entry count equals estimated count. |
 | `bulk_insert_updates_multiple_keys` | `bulk_insert` updates multiple keys and heavy-hitter counts correctly. | Inserts stream `[7,8,7,9,7]`, verifies estimate for key `7` is `3.0`, and heap count for key `7` matches estimate cast to integer. |
-| `clear_heap_keeps_cs_counters` | Clearing heap does not clear Count Sketch counters. | After `insert_many("persist",5)`, calls `clear_heap()`, verifies estimate remains `5.0`, then one more insert repopulates heap with updated estimate count. |
+| `clear_heap_keeps_cs_counters` | Clearing heap does not clear `Count` counters. | After `insert_many("persist",5)`, calls `clear_heap()`, verifies estimate remains `5.0`, then one more insert repopulates heap with updated estimate count. |
 | `from_storage_uses_storage_dimensions` | `from_storage` preserves backend dimensions and requested heap capacity. | Builds from `Vector2D::init(4,128)` with `top_k=9` and verifies `rows=4`, `cols=128`, `heap.capacity=9`. |
 | `merge_refreshes_existing_self_heap_entries` | Merge refreshes pre-existing self heap keys to merged estimates. | Merges sketches where `"a-key"` is updated on both sides (`120` and `40`), then verifies heap count for `"a-key"` equals merged estimate. |
 | `fast_path_insert_and_estimate` | Fast path repeated inserts keep estimate exact for single key. | Inserts `"fast"` 7 times into fast-path sketch and verifies estimate is `7.0` within `1e-9`. |
@@ -249,8 +249,8 @@ Test file: [`src/sketch_framework/hydra.rs`](../src/sketch_framework/hydra.rs)
 | `test_kll_quantile_query` | Test KLL quantile query. | Inserts values `1..=100` and verifies median query succeeds with estimate within `+/-5` of `50.0`. |
 | `test_univmon_universal_queries` | Test univmon universal queries. | Inserts `A` 10 times and `B` 20 times, then checks `L1=30.0`, cardinality is approximately `2.0` (`abs err < 0.5`), and entropy is positive. |
 | `test_merge_counters` | Test merge counters. | Merges two CM counters and verifies frequency sum (`2.0`) for shared key, then confirms merging with mismatched counter type (`HLL`) returns error. |
-| `test_count_frequency_query` | Test count frequency query. | Inserts one Count Sketch key four times and verifies `Frequency` query succeeds with exact result `4.0`. |
-| `test_count_invalid_query_types` | Test count invalid query types. | Verifies unsupported Count Sketch queries fail, including exact `Quantile` error message and error on `Cardinality`. |
+| `test_count_frequency_query` | Test count frequency query. | Inserts one `Count` key four times and verifies `Frequency` query succeeds with exact result `4.0`. |
+| `test_count_invalid_query_types` | Test count invalid query types. | Verifies unsupported `Count` queries fail, including exact `Quantile` error message and error on `Cardinality`. |
 
 ### HashSketchEnsemble
 
@@ -311,7 +311,7 @@ Test file: [`src/sketch_framework/nitro.rs`](../src/sketch_framework/nitro.rs)
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
 | `nitro_batch_countmin_error_bound_zipf` | Nitro batch countmin error bound Zipf. | On Zipf stream (`rows=3`, `cols=4096`, `N=200_000`), verifies CountMin estimates satisfy in-bound key count `> (1-delta)*distinct` using `epsilon=e/cols`, `delta=e^-rows`, and bound `epsilon*N`. |
-| `nitro_batch_count_error_bound_zipf` | Nitro batch count error bound Zipf. | Applies the same probabilistic in-bound criterion to Count Sketch median estimates with `epsilon=e/cols`, `delta=e^-rows`, and bound `epsilon*N`. |
+| `nitro_batch_count_error_bound_zipf` | Nitro batch count error bound Zipf. | Applies the same probabilistic in-bound criterion to `Count` median estimates with `epsilon=e/cols`, `delta=e^-rows`, and bound `epsilon*N`. |
 
 ### ExponentialHistogram
 
@@ -332,7 +332,7 @@ Test file: [`src/sketch_framework/eh_sketch_list.rs`](../src/sketch_framework/eh
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
 | `insert_routes_to_countl2hh_and_univmon` | Insert routes to countl2hh and univmon. | Verifies variant routing by checking `COUNTL2HH` estimate `>=9` after 9 inserts and `UNIVMON` `bucket_size=6` after 6 inserts. |
-| `count_sketch_insert_and_query_round_trip` | Count sketch insert and query round trip. | Confirms Count Sketch variant updates/query path by inserting one key and verifying returned estimate is at least `1.0`. |
+| `count_sketch_insert_and_query_round_trip` | Count insert and query round trip. | Confirms the `Count` variant updates/query path by inserting one key and verifying returned estimate is at least `1.0`. |
 | `ddsketch_insert_and_quantile_query_round_trip` | DDSketch insert and quantile query round trip. | Inserts `10,20,30` into DDSketch variant and verifies queried median (`q=0.5`) lies within `[10.0, 30.0]`. |
 | `supports_norm_whitelist_is_enforced` | Supports norm whitelist is enforced. | Validates norm capability matrix: `CM/CS/DDS` support `L1` only, while `COUNTL2HH/UNIVMON` support `L2` only. |
 

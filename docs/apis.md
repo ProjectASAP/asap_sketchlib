@@ -6,7 +6,7 @@ This is the canonical API entry point for `asap_sketchlib`.
 
 - [CountMin Sketch](./api/api_countmin.md) - `Ready`
   - Reference: Cormode & Muthukrishnan, "An Improved Data Stream Summary: The Count-Min Sketch and its Applications," PODS 2003. [https://dl.acm.org/doi/10.1145/762471.762473](https://dl.acm.org/doi/10.1145/762471.762473)
-- [Count Sketch](./api/api_count_sketch.md) - `Ready`
+- [Count (`Count Sketch`)](./api/api_count_sketch.md) - `Ready`
   - Reference: Charikar, Chen & Farach-Colton, "Finding Frequent Items in Data Streams," ICALP 2002. [https://dl.acm.org/doi/10.1007/3-540-45465-9_59](https://dl.acm.org/doi/10.1007/3-540-45465-9_59)
 - [HyperLogLog](./api/api_hyperloglog.md) - `Ready`
   - `Classic` variant: Flajolet, Fusy, Gandouet & Meunier, "HyperLogLog: the analysis of a near-optimal cardinality estimation algorithm," AOFA 2007. [https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf](https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf)

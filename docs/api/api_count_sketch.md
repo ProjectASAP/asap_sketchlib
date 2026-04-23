@@ -1,10 +1,10 @@
-# API: Count Sketch
+# API: Count
 
 Status: `Ready`
 
 ## Purpose
 
-Approximate frequency estimation with signed counters and median aggregation.
+`Count` is this crate's Count Sketch implementation for approximate frequency estimation with signed counters and median aggregation.
 
 ## Type/Struct
 
@@ -83,4 +83,4 @@ assert!(est >= 1.0);
 
 ## Status
 
-Core frequency primitive; widely used by framework layers.
+Core frequency primitive; this crate exposes it as `Count` and uses it widely in framework layers.
