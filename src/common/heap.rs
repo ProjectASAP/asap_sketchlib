@@ -50,7 +50,7 @@ impl HHHeap {
     }
 
     /// Updates an existing item's count or inserts a new item.
-    pub fn update<'k>(&mut self, key: &DataInput, count: i64) -> bool {
+    pub fn update(&mut self, key: &DataInput, count: i64) -> bool {
         if let Some(idx) = self.find(key) {
             self.heap[idx].count = count;
             self.heap.update_at(idx);
@@ -100,15 +100,6 @@ impl HHHeap {
         }
         println!("============ Heap Ends ============");
     }
-
-    /// Returns the memory used by the heap in bytes.
-    // pub fn get_memory_bytes(&self) -> f64 {
-    //     let mut total = 0.0;
-    //     for item in self.heap.iter() {
-    //         total += item.key.len() as f64 + 8.0; // key length + i64 count
-    //     }
-    //     total
-    // }
 
     /// Clears the heap.
     pub fn clear(&mut self) {

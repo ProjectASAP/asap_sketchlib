@@ -88,10 +88,10 @@ impl UnivMon {
         UnivMon {
             l2_sketch_layers: Vector1D::from_vec(sk_vec),
             hh_layers: Vector1D::from_vec(hh_vec),
-            layer_size: layer_size,
-            sketch_row: sketch_row,
-            sketch_col: sketch_col,
-            heap_size: heap_size,
+            layer_size,
+            sketch_row,
+            sketch_col,
+            heap_size,
             bucket_size: 0,
         }
     }

@@ -13,30 +13,24 @@ on:
       - "docs/**"
 
 jobs:
-  test:
-    name: Cargo Test
+  checks:
+    name: Format and Test
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Cache Cargo dependencies and build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Run tests
-        run: cargo test --all-features --verbose
-
       - name: Check Format
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
 
-      - name: Check Documentation
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --no-deps --all-features
+      - name: Run tests
+        run: cargo test --all-features --locked --verbose

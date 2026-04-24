@@ -1,0 +1,45 @@
+name: Rust Docs
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src/**"
+      - "proto/**"
+      - "build.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "README.md"
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "src/**"
+      - "proto/**"
+      - "build.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "README.md"
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+
+jobs:
+  docs:
+    name: Cargo Doc
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check documentation build
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --all-features --locked

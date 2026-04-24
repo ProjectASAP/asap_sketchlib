@@ -476,20 +476,14 @@ impl HydraCounter {
         match (self, query) {
             (HydraCounter::CM(cm), HydraQuery::Frequency(value)) => Ok(cm.estimate(value) as f64),
             (HydraCounter::HLL(hll_df), HydraQuery::Cardinality) => Ok(hll_df.estimate() as f64),
-            (HydraCounter::CS(count), HydraQuery::Frequency(value)) => {
-                Ok(count.estimate(value) as f64)
-            }
+            (HydraCounter::CS(count), HydraQuery::Frequency(value)) => Ok(count.estimate(value)),
             (HydraCounter::KLL(kll), HydraQuery::Quantile(q)) => Ok(kll.quantile(*q)),
             (HydraCounter::KLL(kll), HydraQuery::Cdf(value)) => Ok(kll.cdf().quantile(*value)),
             (HydraCounter::UNIVERSAL(um), HydraQuery::Cardinality) => Ok(um.calc_card()),
             (HydraCounter::UNIVERSAL(um), HydraQuery::L1Norm) => Ok(um.calc_l1()),
             (HydraCounter::UNIVERSAL(um), HydraQuery::L2Norm) => Ok(um.calc_l2()),
             (HydraCounter::UNIVERSAL(um), HydraQuery::Entropy) => Ok(um.calc_entropy()),
-            (c, q) => Err(format!(
-                "{} does not support {}",
-                c.to_string(),
-                q.to_string()
-            )),
+            (c, q) => Err(format!("{} does not support {}", c, q)),
         }
     }
 
