@@ -655,7 +655,7 @@ mod tests {
         for value in sample_uniform_f64(min, max, samples, seed) {
             let key = DataInput::F64(value);
             sketch.insert(&key);
-            *truth.entry(value.to_bits() as u64).or_insert(0) += 1;
+            *truth.entry(value.to_bits()).or_insert(0) += 1;
         }
 
         (sketch, truth)
@@ -675,7 +675,7 @@ mod tests {
         for value in sample_uniform_f64(min, max, samples, seed) {
             let key = DataInput::F64(value);
             sketch.insert(&key);
-            *truth.entry(value.to_bits() as u64).or_insert(0) += 1;
+            *truth.entry(value.to_bits()).or_insert(0) += 1;
         }
 
         (sketch, truth)
@@ -842,7 +842,7 @@ mod tests {
         );
         let epsilon = std::f64::consts::E / DEFAULT_COL_NUM as f64;
         let delta = 1.0 / std::f64::consts::E.powi(DEFAULT_ROW_NUM as i32);
-        let error_bound = epsilon * 200_000 as f64;
+        let error_bound = epsilon * 200_000_f64;
         let keys = truth.keys();
         let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
         let mut within_count = 0;
@@ -867,7 +867,7 @@ mod tests {
         );
         let epsilon = std::f64::consts::E / DEFAULT_COL_NUM as f64;
         let delta = 1.0 / std::f64::consts::E.powi(DEFAULT_ROW_NUM as i32);
-        let error_bound = epsilon * 200_000 as f64;
+        let error_bound = epsilon * 200_000_f64;
         let keys = truth.keys();
         let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
         let mut within_count = 0;
@@ -898,7 +898,7 @@ mod tests {
         );
         let epsilon = std::f64::consts::E / DEFAULT_COL_NUM as f64;
         let delta = 1.0 / std::f64::consts::E.powi(DEFAULT_ROW_NUM as i32);
-        let error_bound = epsilon * 200_000 as f64;
+        let error_bound = epsilon * 200_000_f64;
         let keys = truth.keys();
         let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
         let mut within_count = 0;
@@ -923,7 +923,7 @@ mod tests {
         );
         let epsilon = std::f64::consts::E / DEFAULT_COL_NUM as f64;
         let delta = 1.0 / std::f64::consts::E.powi(DEFAULT_ROW_NUM as i32);
-        let error_bound = epsilon * 200_000 as f64;
+        let error_bound = epsilon * 200_000_f64;
         let keys = truth.keys();
         let correct_lower_bound = keys.len() as f64 * (1.0 - delta);
         let mut within_count = 0;

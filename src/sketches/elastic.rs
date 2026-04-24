@@ -122,7 +122,7 @@ impl<H: SketchHasher> Elastic<H> {
         if id == heavy_bkt.flow_id {
             if heavy_bkt.eviction {
                 // let light_result = self.light.get_est(&id) as i32;
-                let light_result = self.light.estimate(&DataInput::String(id)) as i32;
+                let light_result = self.light.estimate(&DataInput::String(id));
                 let heavy_result = heavy_bkt.vote_pos;
                 light_result + heavy_result
             } else {
@@ -130,7 +130,7 @@ impl<H: SketchHasher> Elastic<H> {
             }
         } else {
             // return self.light.get_est(&id) as i32;
-            self.light.estimate(&DataInput::String(id)) as i32
+            self.light.estimate(&DataInput::String(id))
         }
     }
 

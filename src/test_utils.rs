@@ -67,7 +67,7 @@ pub fn sample_normal_f64(mean: f64, std: f64, sample_size: usize, seed: u64) -> 
     let eps = 1e-12;
 
     // need an even count of uniforms - just using uniform sampler
-    let need = ((sample_size + 1) / 2) * 2;
+    let need = sample_size.div_ceil(2) * 2;
     let us = sample_uniform_f64(eps, 1.0 - eps, need, seed);
 
     let mut vals = Vec::with_capacity(sample_size);
@@ -216,5 +216,5 @@ where
 
 pub fn counter_index(row: usize, key: &DataInput, columns: usize) -> usize {
     let hash = hash64_seeded(row, key);
-    ((hash as u64 & LOWER_32_MASK) as usize) % columns
+    ((hash & LOWER_32_MASK) as usize) % columns
 }

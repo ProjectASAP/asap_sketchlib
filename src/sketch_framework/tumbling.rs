@@ -877,7 +877,7 @@ mod tests {
         let l1_norm: f64 = truth.values().map(|&c| c as f64).sum();
         let error_bound = epsilon * l1_norm;
         // delta = 1 / e^rows → expected fraction within bound = 1 - delta
-        let delta = (-1.0 * rows as f64).exp();
+        let delta = (-(rows as f64)).exp();
         let required_pct = (1.0 - delta) * 100.0;
 
         let mut within = 0usize;
@@ -1021,7 +1021,7 @@ mod tests {
             .sum::<f64>()
             .sqrt();
         let error_bound = epsilon * l2_norm;
-        let delta = (-1.0 * rows as f64).exp();
+        let delta = (-(rows as f64)).exp();
         let required_pct = (1.0 - delta) * 100.0;
 
         let mut within = 0usize;
@@ -1192,8 +1192,8 @@ mod tests {
             let mut window_truth = HashMap::<u64, i64>::new();
             let start = w * samples_per_window;
             let end = start + samples_per_window;
-            for i in start..end {
-                let value = stream[i];
+            for (i, &value) in stream.iter().enumerate().take(end).skip(start) {
+                // let value = stream[i];
                 tw.insert(i as u64, &DataInput::U64(value), 1);
                 *window_truth.entry(value).or_insert(0) += 1;
             }
@@ -1215,16 +1215,20 @@ mod tests {
 
         // Build ground truth for retained windows only.
         let mut retained_truth = HashMap::<u64, i64>::new();
-        for w in retained_start..total_windows {
-            for (&key, &count) in &per_window_truth[w] {
+        for w in per_window_truth
+            .iter()
+            .take(total_windows)
+            .skip(retained_start)
+        {
+            for (&key, &count) in w {
                 *retained_truth.entry(key).or_insert(0) += count;
             }
         }
 
         // Build ground truth for evicted windows only.
         let mut evicted_only = HashMap::<u64, i64>::new();
-        for w in 0..retained_start {
-            for (&key, &count) in &per_window_truth[w] {
+        for w in per_window_truth.iter().take(retained_start) {
+            for (&key, &count) in w {
                 *evicted_only.entry(key).or_insert(0) += count;
             }
         }
@@ -1303,8 +1307,8 @@ mod tests {
             let mut window_truth = HashMap::<u64, i64>::new();
             let start = w * samples_per_window;
             let end = start + samples_per_window;
-            for i in start..end {
-                let value = stream[i];
+            for (i, &value) in stream.iter().enumerate().take(end).skip(start) {
+                // let value = stream[i];
                 tw.insert(i as u64, &DataInput::U64(value), 1);
                 *window_truth.entry(value).or_insert(0) += 1;
             }
@@ -1316,8 +1320,12 @@ mod tests {
         // recent(3) → closed[2,3,4] + active(5) = windows 2,3,4,5.
         let recent_start = total_windows - recent_n - 1;
         let mut recent_truth = HashMap::<u64, i64>::new();
-        for w in recent_start..total_windows {
-            for (&key, &count) in &per_window_truth[w] {
+        for w in per_window_truth
+            .iter()
+            .take(total_windows)
+            .skip(recent_start)
+        {
+            for (&key, &count) in w {
                 *recent_truth.entry(key).or_insert(0) += count;
             }
         }
@@ -1345,8 +1353,8 @@ mod tests {
         // CMS has inherent false positives from hash collisions, so we check
         // estimates are within the error bound rather than demanding exact zero.
         let mut excluded_truth = HashMap::<u64, i64>::new();
-        for w in 0..recent_start {
-            for (&key, &count) in &per_window_truth[w] {
+        for w in per_window_truth.iter().take(recent_start) {
+            for (&key, &count) in w {
                 *excluded_truth.entry(key).or_insert(0) += count;
             }
         }
@@ -1399,7 +1407,7 @@ mod tests {
 
         // Ground truth top-k sorted by frequency (descending).
         let mut truth_sorted: Vec<(u64, i64)> = truth.into_iter().collect();
-        truth_sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        truth_sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
         let true_top_k: Vec<u64> = truth_sorted.iter().take(top_k).map(|&(k, _)| k).collect();
 
         // Heap entries from merged sketch.
@@ -1473,8 +1481,8 @@ mod tests {
             let mut window_truth = HashMap::<u64, i64>::new();
             let start = w * samples_per_window;
             let end = start + samples_per_window;
-            for i in start..end {
-                let value = stream[i];
+            for (i, &value) in stream.iter().enumerate().take(end).skip(start) {
+                // let value = stream[i];
                 tw.insert(i as u64, &DataInput::U64(value), 1);
                 *window_truth.entry(value).or_insert(0) += 1;
             }
@@ -1486,8 +1494,12 @@ mod tests {
         // recent(3) → closed[2,3,4] + active(5) = windows 2,3,4,5.
         let recent_start = total_windows - recent_n - 1;
         let mut recent_truth = HashMap::<u64, i64>::new();
-        for w in recent_start..total_windows {
-            for (&key, &count) in &per_window_truth[w] {
+        for w in per_window_truth
+            .iter()
+            .take(total_windows)
+            .skip(recent_start)
+        {
+            for (&key, &count) in w {
                 *recent_truth.entry(key).or_insert(0) += count;
             }
         }
@@ -1522,8 +1534,8 @@ mod tests {
 
         // Keys only in excluded windows should have small estimates.
         let mut excluded_truth = HashMap::<u64, i64>::new();
-        for w in 0..recent_start {
-            for (&key, &count) in &per_window_truth[w] {
+        for w in per_window_truth.iter().take(recent_start) {
+            for (&key, &count) in w {
                 *excluded_truth.entry(key).or_insert(0) += count;
             }
         }
@@ -1574,8 +1586,8 @@ mod tests {
         // recent(3) → closed[4,5,6] + active(7) = windows 4,5,6,7.
         let recent_start = num_windows - recent_n - 1;
         let mut recent_values: Vec<f64> = Vec::new();
-        for w in recent_start..num_windows {
-            recent_values.extend_from_slice(&per_window[w]);
+        for w in per_window.iter().take(num_windows).skip(recent_start) {
+            recent_values.extend_from_slice(w);
         }
         recent_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let n = recent_values.len();
@@ -1637,7 +1649,7 @@ mod tests {
         let merged = tw.query_all();
 
         let mut truth_sorted: Vec<(u64, i64)> = truth.into_iter().collect();
-        truth_sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        truth_sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
         let true_top_k: Vec<u64> = truth_sorted.iter().take(top_k).map(|&(k, _)| k).collect();
 
         let heap_entries = merged.heap().heap();
@@ -2005,8 +2017,12 @@ mod tests {
         let retained_start_sample = retained_start_window * window_size as usize;
 
         let mut retained_truth = HashMap::<u64, i64>::new();
-        for i in retained_start_sample..total_samples {
-            *retained_truth.entry(stream[i]).or_insert(0) += 1;
+        for &k in stream
+            .iter()
+            .take(total_samples)
+            .skip(retained_start_sample)
+        {
+            *retained_truth.entry(k).or_insert(0) += 1;
         }
 
         let epsilon = std::f64::consts::E / 1024.0;

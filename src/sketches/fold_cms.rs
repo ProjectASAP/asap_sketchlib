@@ -40,7 +40,7 @@ pub struct FoldEntry {
 /// - `Empty`    — no key has hashed to this physical column yet (zero memory).
 /// - `Single`   — exactly one `full_col` present (no heap allocation).
 /// - `Collided` — two or more distinct `full_col` values share this physical
-///                column; entries are stored in a `Vec`.
+///   column; entries are stored in a `Vec`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FoldCell {
     /// Cell with no stored entries.
@@ -816,7 +816,7 @@ mod tests {
         let mut fold: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         let mut standard = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
-        let keys: Vec<DataInput> = (0..50).map(|i| DataInput::I32(i)).collect();
+        let keys: Vec<DataInput> = (0..50).map(DataInput::I32).collect();
         for key in &keys {
             fold.insert(key, 1);
             standard.insert(key);
@@ -825,7 +825,7 @@ mod tests {
         // Every single query must match exactly.
         for key in &keys {
             let fold_est = fold.query(key);
-            let std_est = standard.estimate(key) as i64;
+            let std_est = standard.estimate(key);
             assert_eq!(
                 fold_est, std_est,
                 "mismatch for {key:?}: fold={fold_est}, std={std_est}"
@@ -838,7 +838,7 @@ mod tests {
         assert_eq!(flat.len(), std_flat.len());
         for (i, (f, s)) in flat.iter().zip(std_flat.iter()).enumerate() {
             assert_eq!(
-                *f, *s as i64,
+                *f, *s,
                 "flat counter mismatch at index {i}: fold={f}, std={s}"
             );
         }
@@ -863,7 +863,7 @@ mod tests {
 
         for i in 0..30 {
             let key = DataInput::U64(i);
-            assert_eq!(fold.query(&key), standard.estimate(&key) as i64);
+            assert_eq!(fold.query(&key), standard.estimate(&key));
         }
     }
 
@@ -915,7 +915,7 @@ mod tests {
             let key = DataInput::U64(i);
             assert_eq!(
                 fa.query(&key),
-                sa.estimate(&key) as i64,
+                sa.estimate(&key),
                 "mismatch after same-level merge for key {i}"
             );
         }
@@ -986,7 +986,7 @@ mod tests {
             let key = DataInput::U64(i);
             assert_eq!(
                 merged_fold.query(&key),
-                sa.estimate(&key) as i64,
+                sa.estimate(&key),
                 "unfold merge mismatch for key {i}"
             );
         }
@@ -1020,7 +1020,7 @@ mod tests {
             let key = DataInput::U64(i);
             assert_eq!(
                 merged.query(&key),
-                standard.estimate(&key) as i64,
+                standard.estimate(&key),
                 "hierarchical merge mismatch for key {i}"
             );
         }
@@ -1068,10 +1068,7 @@ mod tests {
         let flat = fold.to_flat_counters();
         let std_flat = standard.as_storage().as_slice();
         for (i, (f, s)) in flat.iter().zip(std_flat.iter()).enumerate() {
-            assert_eq!(
-                *f, *s as i64,
-                "flat counter mismatch at [{i}]: fold={f}, std={s}"
-            );
+            assert_eq!(*f, *s, "flat counter mismatch at [{i}]: fold={f}, std={s}");
         }
     }
 
@@ -1454,7 +1451,7 @@ mod tests {
                 let key = DataInput::U64(i);
                 assert_eq!(
                     merged.query(&key),
-                    standard.estimate(&key) as i64,
+                    standard.estimate(&key),
                     "N={n}: mismatch for key {i}"
                 );
             }

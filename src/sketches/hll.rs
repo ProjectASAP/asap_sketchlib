@@ -328,7 +328,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
     /// Inserts a pre-hashed value, updating both the register and the HIP running estimate.
     #[inline(always)]
     pub fn insert_with_hash(&mut self, hashed: u64) {
-        let hashed_val = hashed as u64;
+        let hashed_val = hashed;
         let bucket_num = ((hashed_val >> Registers::REGISTER_BITS) & Registers::P_MASK) as usize;
         let leading_zero =
             ((hashed_val << Registers::PRECISION) + Registers::P_MASK).leading_zeros() as u8 + 1;

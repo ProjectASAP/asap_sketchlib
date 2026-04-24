@@ -557,7 +557,7 @@ mod tests {
         let mut fold: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
-        let keys: Vec<DataInput> = (0..50).map(|i| DataInput::I32(i)).collect();
+        let keys: Vec<DataInput> = (0..50).map(DataInput::I32).collect();
         for key in &keys {
             fold.insert(key, 1);
             standard.insert(key);
@@ -583,7 +583,7 @@ mod tests {
         let mut fold: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
-        let keys: Vec<DataInput> = (0..50).map(|i| DataInput::I32(i)).collect();
+        let keys: Vec<DataInput> = (0..50).map(DataInput::I32).collect();
         for key in &keys {
             fold.insert(key, 1);
             standard.insert(key);

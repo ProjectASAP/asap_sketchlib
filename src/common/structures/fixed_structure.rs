@@ -38,6 +38,12 @@ pub trait HllRegisterStorage:
     fn len(&self) -> usize {
         Self::NUM_REGISTERS
     }
+
+    #[inline(always)]
+    /// Returns true when the storage contains no registers.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 macro_rules! impl_hll_bucket_list {

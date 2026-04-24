@@ -115,7 +115,7 @@ impl UniformSampling {
         let mut merged = Vec::with_capacity(self.entries.len() + other.entries.len());
         merged.extend(self.entries.iter().cloned());
         merged.extend(other.entries.iter().cloned());
-        merged.sort_by(|a, b| a.priority.cmp(&b.priority));
+        merged.sort_by_key(|a| a.priority);
         let target_size = Self::target_size(combined_seen, self.sample_rate);
         merged.truncate(target_size);
         self.entries = merged;

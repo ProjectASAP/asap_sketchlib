@@ -325,7 +325,7 @@ mod tests {
         dd.insert(&DataInput::F64(30.0));
 
         let q50 = dd.query(&DataInput::F64(0.5)).expect("query DDSketch q50");
-        assert!(q50 >= 10.0 && q50 <= 30.0, "unexpected q50 {q50}");
+        assert!((10.0..=30.0).contains(&q50), "unexpected q50 {q50}");
     }
 
     #[test]

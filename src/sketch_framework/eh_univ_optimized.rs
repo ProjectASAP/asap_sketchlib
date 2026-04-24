@@ -1181,8 +1181,8 @@ mod tests {
 
             // Compute ground truth for the window
             let mut freq: HashMap<i64, i64> = HashMap::new();
-            for t in (t1 as usize)..=(t2 as usize) {
-                *freq.entry(stream[t]).or_insert(0) += 1;
+            for &t in stream.iter().take(t2 as usize + 1).skip(t1 as usize) {
+                *freq.entry(t).or_insert(0) += 1;
             }
             let (true_l1, true_l2, _, _) = ground_truth_from_freq(&freq);
 

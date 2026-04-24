@@ -106,7 +106,7 @@ fn compute_max_capacity(k: usize, m: usize) -> usize {
 /// Traverses backwards to avoid overwriting unread source elements.
 #[inline]
 fn randomly_halve_up<T: Copy>(items: &mut [T], begin: usize, pop: usize, offset: usize) -> usize {
-    let num_survivors = (pop - offset + 1) / 2;
+    let num_survivors = (pop - offset).div_ceil(2);
     let dest = begin + pop - num_survivors;
     for d in (0..num_survivors).rev() {
         items[dest + d] = items[begin + offset + 2 * d];

@@ -201,8 +201,8 @@ impl DDSketch {
         let slice = self.store.counts.as_slice();
         let offset = self.store.offset;
 
-        for i in 0..slice.len() {
-            let c = slice[i];
+        for (i, &c) in slice.iter().enumerate() {
+            // let c = slice[i];
             if c == 0 {
                 continue;
             }
@@ -708,7 +708,7 @@ mod tests {
 
         // sanity: middle quantile is within [min, max]
         let mid = s1.get_value_at_quantile(0.5).unwrap();
-        assert!(mid >= 1.0 && mid <= 20.0);
+        assert!((1.0..=20.0).contains(&mid));
     }
 
     #[test]

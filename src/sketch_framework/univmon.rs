@@ -114,7 +114,7 @@ impl UnivMon {
             } else {
                 self.l2_sketch_layers[i].update_and_est_without_l2(key, value)
             };
-            self.hh_layers[i].update(&key, count as i64);
+            self.hh_layers[i].update(key, count as i64);
         }
     }
 
@@ -138,7 +138,7 @@ impl UnivMon {
         let bottom_layer_num = self.find_bottom_layer_num(h, self.layer_size);
         let count = self.l2_sketch_layers[bottom_layer_num].update_and_est(key, value);
         for i in 0..=bottom_layer_num {
-            self.hh_layers[i].update(&key, count as i64);
+            self.hh_layers[i].update(key, count as i64);
         }
     }
 
@@ -486,7 +486,7 @@ mod tests {
         for (key, count) in &flows {
             // let bottom = bottom_layer_for(&um, key);
             // um.univmon_processing(key, *count, bottom);
-            um.insert(&DataInput::Str(*key), *count);
+            um.insert(&DataInput::Str(key), *count);
         }
 
         assert_eq!(
