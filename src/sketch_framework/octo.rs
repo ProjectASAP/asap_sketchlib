@@ -258,11 +258,10 @@ where
         let mut worker_input_txs = Vec::with_capacity(num_workers);
         let mut worker_handles = Vec::with_capacity(num_workers);
         for (worker_id, (mut worker, delta_tx_worker)) in
-            workers.into_iter().zip(delta_txs.into_iter()).enumerate()
+            workers.into_iter().zip(delta_txs).enumerate()
         {
             let (worker_tx, worker_rx) = bounded::<WorkerMsg>(queue_capacity);
             worker_input_txs.push(worker_tx);
-            let pin_cores = pin_cores;
             worker_handles.push(thread::spawn(move || {
                 if pin_cores {
                     let _ = core_affinity::set_for_current(core_affinity::CoreId { id: worker_id });

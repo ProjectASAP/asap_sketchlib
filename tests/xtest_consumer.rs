@@ -240,7 +240,7 @@ fn cross_language_proto() {
         "[HLL] Step 3/3 — cardinality ≈ {} (expect ~50000)",
         hll_card
     );
-    if hll_card >= 40_000 && hll_card <= 65_000 {
+    if (40_000..=65_000).contains(&hll_card) {
         println!("[HLL]   PASS");
     } else {
         eprintln!("[HLL] FAIL: cardinality {} not in [40000, 65000]", hll_card);
@@ -402,7 +402,7 @@ fn cross_language_proto() {
         "[UnivMon] Step 3/3 — cardinality ≈ {:.0} (g-sum heuristic, Go also ~4250)",
         um_card
     );
-    if um_card >= 1_000.0 && um_card <= 15_000.0 {
+    if (1_000.0..=15_000.0).contains(&um_card) {
         println!("[UnivMon]   PASS");
     } else {
         eprintln!(
@@ -502,9 +502,7 @@ impl XtestDir {
             });
         }
 
-        let Some(go_dir) = find_go_dir() else {
-            return None;
-        };
+        let go_dir = find_go_dir()?;
         let out_dir = new_xtest_temp_dir();
         if !generate_xtest_fixtures(&go_dir, &out_dir) {
             let _ = fs::remove_dir_all(&out_dir);
@@ -732,7 +730,7 @@ fn count_sketch_query_float(state: &CountSketchState, hash: u64) -> f64 {
     median_f64(&mut estimates)
 }
 
-fn median_f64(v: &mut Vec<f64>) -> f64 {
+fn median_f64(v: &mut [f64]) -> f64 {
     if v.is_empty() {
         return 0.0;
     }
@@ -965,8 +963,8 @@ fn hydra_query_cm(state: &HydraState, subkey_hash: u64, value_hash: u64) -> f64 
     let pos = hydra_fill_positions(subkey_hash, d, w);
 
     let mut estimates = Vec::with_capacity(d);
-    for r in 0..d {
-        let cell_idx = r * w + pos[r];
+    for (r, &p) in pos.iter().enumerate().take(d) {
+        let cell_idx = r * w + p;
         if cell_idx >= cells.len() {
             estimates.push(0.0f64);
             continue;

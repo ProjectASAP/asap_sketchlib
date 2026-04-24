@@ -41,9 +41,10 @@ pub struct FoldEntry {
 /// - `Single`   — exactly one `full_col` present (no heap allocation).
 /// - `Collided` — two or more distinct `full_col` values share this physical
 ///   column; entries are stored in a `Vec`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub enum FoldCell {
     /// Cell with no stored entries.
+    #[default]
     Empty,
     /// Cell holding one `(full_col, count)` pair inline.
     Single {
@@ -54,12 +55,6 @@ pub enum FoldCell {
     },
     /// Cell holding multiple colliding entries.
     Collided(Vec<FoldEntry>),
-}
-
-impl Default for FoldCell {
-    fn default() -> Self {
-        FoldCell::Empty
-    }
 }
 
 impl FoldCell {

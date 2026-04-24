@@ -350,9 +350,9 @@ impl EHUnivOptimized {
         if m_count > 0 && t2 > self.map_buckets[m_count - 1].max_time {
             to_bucket = m_count - 1 + s_count;
         }
-        if s_count > 0 && t1 < self.um_buckets[0].min_time {
-            from_bucket = 0;
-        } else if s_count == 0 && m_count > 0 && t1 < self.map_buckets[0].min_time {
+        if (s_count > 0 && t1 < self.um_buckets[0].min_time)
+            || (s_count == 0 && m_count > 0 && t1 < self.map_buckets[0].min_time)
+        {
             from_bucket = 0;
         }
 
