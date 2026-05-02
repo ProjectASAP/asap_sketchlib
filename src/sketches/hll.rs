@@ -1040,9 +1040,10 @@ impl HllSketch {
     /// a base snapshot + subsequent delta-transmission frames (paper
     /// §6.2 B3 / B4 baselines).
     ///
-    /// Returns `Err` if any delta index is out of range for the
-    /// sketch's precision — indicating a precision mismatch between
-    /// the snapshot this sketch was built from and the delta sender.
+    /// Out-of-range indices are silently skipped to match Go's
+    /// `if int(u.Index) < len(regs)` guard. The `Result` return is
+    /// retained for signature stability with earlier revisions; this
+    /// implementation never returns `Err`.
     pub fn apply_delta(
         &mut self,
         delta: &HllSketchDelta,
@@ -1051,11 +1052,11 @@ impl HllSketch {
         for (idx, new_val) in &delta.updates {
             let i = *idx as usize;
             if i >= n {
-                return Err(format!(
-                    "HllSketchDelta index {i} out of range (precision={} → {n} registers)",
-                    self.precision
-                )
-                .into());
+                // Silent-skip: aligns with sketchlib-go semantics; an
+                // out-of-range index indicates a precision mismatch
+                // between the snapshot and the delta sender, but the
+                // remaining in-range updates are still valid.
+                continue;
             }
             if *new_val > self.registers[i] {
                 self.registers[i] = *new_val;
@@ -1180,12 +1181,16 @@ mod tests_wire_hll {
     }
 
     #[test]
-    fn test_apply_delta_out_of_range() {
+    fn test_apply_delta_out_of_range_silently_skipped() {
+        // Aligns with sketchlib-go's `if int(u.Index) < len(regs)`
+        // pre-guard: out-of-range indices are dropped, in-range
+        // updates still apply.
         let mut h = HllSketch::new(HllVariant::Regular, 2); // 4 registers
         let delta = HllSketchDelta {
-            updates: vec![(7, 3)],
+            updates: vec![(7, 3), (1, 4)],
         };
-        assert!(h.apply_delta(&delta).is_err());
+        h.apply_delta(&delta).expect("silent-skip never errors");
+        assert_eq!(h.registers, vec![0, 4, 0, 0]);
     }
 
     #[test]

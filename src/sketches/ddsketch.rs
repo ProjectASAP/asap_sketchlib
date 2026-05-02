@@ -782,7 +782,12 @@ mod tests {
 pub struct DdSketchDelta {
     /// `(absolute_bucket_index, Δcount)` pairs, additive.
     pub buckets: Vec<(i32, u64)>,
-    /// Δ total count. May be negative (signed on the wire).
+    /// Δ total count. **Ignored on the apply path**: to match
+    /// `sketchlib-go/sketches/DDSketch/delta.go::ApplyDelta`, the
+    /// total count is reconstructed by summing per-bucket `Δcount`
+    /// values inside the bucket loop. Kept on the struct because the
+    /// wire `DDSketchDelta` proto still carries it (field 2); future
+    /// codecs may reuse it for cross-checks.
     pub d_count: i64,
     /// Δ sum.
     pub d_sum: f64,
@@ -910,10 +915,13 @@ impl DdSketch {
 
     /// Apply a sparse delta to this sketch in place. Matches the
     /// `ApplyDelta` logic in `sketchlib-go/sketches/DDSketch/delta.go`:
-    /// bucket counts add, total count + sum add, min can only decrease
-    /// and max can only increase. Used by the backend ingest path to
-    /// reconstitute a full sketch from a base snapshot + subsequent
-    /// delta-transmission frames (paper §6.2 B3 / B4 baselines).
+    /// bucket counts add (wrapping `u64`), total count is reconstructed
+    /// from the per-bucket `Δcount` sum (the wire-level `delta.d_count`
+    /// is ignored on apply — see `DdSketchDelta::d_count`), sum adds,
+    /// and min/max apply with min/max semantics. Used by the backend
+    /// ingest path to reconstitute a full sketch from a base snapshot
+    /// + subsequent delta-transmission frames (paper §6.2 B3 / B4
+    ///   baselines).
     pub fn apply_delta(&mut self, delta: &DdSketchDelta) {
         for (abs_idx, d_count) in &delta.buckets {
             if self.store_counts.is_empty() {
@@ -935,12 +943,14 @@ impl DdSketch {
                 self.store_counts.extend(std::iter::repeat_n(0u64, pad));
             }
             let arr_idx = (k - self.store_offset as i64) as usize;
-            self.store_counts[arr_idx] = self.store_counts[arr_idx].saturating_add(*d_count);
-        }
-        if delta.d_count >= 0 {
-            self.count = self.count.saturating_add(delta.d_count as u64);
-        } else {
-            self.count = self.count.saturating_sub((-delta.d_count) as u64);
+            // Wrapping `u64` add to match Go's
+            // `target.store.counts.AsMutSlice()[idx] += b.DCount`
+            // (Go uint64 += is wrapping by spec).
+            self.store_counts[arr_idx] = self.store_counts[arr_idx].wrapping_add(*d_count);
+            // Reconstruct total count from per-bucket DCount sum, also
+            // wrapping. `delta.d_count` is intentionally NOT used here
+            // — see field doc on `DdSketchDelta::d_count`.
+            self.count = self.count.wrapping_add(*d_count);
         }
         self.sum += delta.d_sum;
         if delta.min_changed && delta.new_min < self.min {
@@ -1105,7 +1115,11 @@ mod tests_wire_ddsketch {
         let mut base = DdSketch::from_raw(0.01, vec![1, 2, 3], -1, 6, 30.0, 1.0, 5.0);
         let delta = DdSketchDelta {
             buckets: vec![(-1, 4), (0, 8), (1, 12)],
-            d_count: 24,
+            // d_count is intentionally inconsistent with the bucket
+            // sum (4+8+12=24); apply_delta must IGNORE this value and
+            // reconstruct the count from per-bucket DCounts to match
+            // sketchlib-go's `target.count += b.DCount` semantics.
+            d_count: 999_999,
             d_sum: 120.0,
             min_changed: false,
             new_min: 0.0,
@@ -1114,10 +1128,56 @@ mod tests_wire_ddsketch {
         };
         base.apply_delta(&delta);
         assert_eq!(base.store_counts, vec![5, 10, 15]);
-        assert_eq!(base.count, 30);
+        assert_eq!(base.count, 30, "count must come from per-bucket DCount sum");
         assert_eq!(base.sum, 150.0);
         assert_eq!(base.min, 1.0);
         assert_eq!(base.max, 9.0);
+    }
+
+    #[test]
+    fn test_apply_delta_count_reconstructed_from_buckets() {
+        // d_count on the wire is ignored. Even if it's set to zero,
+        // the per-bucket DCount sum must be applied to `count`.
+        let mut base = DdSketch::from_raw(
+            0.01,
+            vec![0, 0, 0],
+            0,
+            0,
+            0.0,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        let delta = DdSketchDelta {
+            buckets: vec![(0, 5), (1, 7), (2, 11)],
+            d_count: 0, // wrong on purpose: must be ignored
+            d_sum: 23.0,
+            min_changed: true,
+            new_min: 1.0,
+            max_changed: true,
+            new_max: 3.0,
+        };
+        base.apply_delta(&delta);
+        assert_eq!(base.store_counts, vec![5, 7, 11]);
+        assert_eq!(base.count, 23, "count = sum of per-bucket DCounts");
+    }
+
+    #[test]
+    fn test_apply_delta_bucket_overflow_wraps() {
+        // Match sketchlib-go's wrapping uint64 add. Saturating would
+        // pin to u64::MAX; wrapping rolls over to a small value.
+        let mut base = DdSketch::from_raw(0.01, vec![u64::MAX], 0, 0, 0.0, 1.0, 1.0);
+        let delta = DdSketchDelta {
+            buckets: vec![(0, 5)],
+            d_count: 0,
+            d_sum: 0.0,
+            min_changed: false,
+            new_min: 0.0,
+            max_changed: false,
+            new_max: 0.0,
+        };
+        base.apply_delta(&delta);
+        // u64::MAX + 5 wraps to 4 (since MAX = 2^64 - 1).
+        assert_eq!(base.store_counts[0], 4);
     }
 
     #[test]
