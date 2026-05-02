@@ -49,7 +49,7 @@ impl Coin {
         x.wrapping_mul(2685821657736338717)
     }
 
-    fn from_seed(seed: u64) -> Self {
+    pub(crate) fn from_seed(seed: u64) -> Self {
         Self {
             state: Self::normalize_seed(seed),
             bit_cache: 0,
@@ -191,6 +191,11 @@ pub struct KLL<T: NumericalValue = f64> {
     num_levels: usize,
     max_capacity: usize,
     co: Coin,
+    /// Explicit seed for the compaction RNG, when present. When `Some`, the
+    /// sketch's bytes are reproducible across runs and `clear()` re-seeds
+    /// from this value. When `None`, the legacy time-based path is used and
+    /// `clear()` re-seeds from the wall clock.
+    seed: Option<u64>,
     capacity_cache: [u32; CAPACITY_CACHE_LEN],
     top_height: usize,
     level0_capacity: usize,
@@ -206,6 +211,33 @@ impl<T: NumericalValue> Default for KLL<T> {
 impl<T: NumericalValue> KLL<T> {
     /// Creates a new KLL sketch with accuracy parameter `k` and minimum level capacity `m`.
     pub fn init(k: usize, m: usize) -> Self {
+        Self::init_internal(k, m, Coin::new(), None)
+    }
+
+    /// Creates a new KLL sketch with an explicit RNG seed for the compaction
+    /// coin. Two sketches built with the same seed and fed the same input
+    /// sequence produce byte-identical serialized state — required for
+    /// reproducible-replay scenarios and cross-process parity tests. The seed
+    /// is also stored so `clear()` re-seeds deterministically across window
+    /// rotations rather than silently jumping back to the wall clock.
+    ///
+    /// Callers that don't care about determinism should keep using `init` /
+    /// `init_kll`.
+    pub fn init_with_seed(k: usize, m: usize, seed: u64) -> Self {
+        Self::init_internal(k, m, Coin::from_seed(seed), Some(seed))
+    }
+
+    /// Creates a new KLL sketch with the given `k` and a default minimum level capacity of 8.
+    pub fn init_kll(k: i32) -> Self {
+        Self::init(k as usize, 8)
+    }
+
+    /// `init_kll` with an explicit RNG seed. See `init_with_seed`.
+    pub fn init_kll_with_seed(k: i32, seed: u64) -> Self {
+        Self::init_with_seed(k as usize, 8, seed)
+    }
+
+    fn init_internal(k: usize, m: usize, coin: Coin, seed: Option<u64>) -> Self {
         let mut norm_m = m.min(MAX_CACHEABLE_K);
         norm_m = norm_m.max(2);
         let mut norm_k = k.max(norm_m);
@@ -225,7 +257,8 @@ impl<T: NumericalValue> KLL<T> {
             m: norm_m,
             num_levels: 1,
             max_capacity: max_cap,
-            co: Coin::new(),
+            co: coin,
+            seed,
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
             level0_capacity: 0,
@@ -233,11 +266,6 @@ impl<T: NumericalValue> KLL<T> {
         };
         s.rebuild_capacity_cache();
         s
-    }
-
-    /// Creates a new KLL sketch with the given `k` and a default minimum level capacity of 8.
-    pub fn init_kll(k: i32) -> Self {
-        Self::init(k as usize, 8)
     }
 
     /// Hot-path insert: decrement `levels[0]`, write item, check capacity.
@@ -437,12 +465,20 @@ impl<T: NumericalValue> KLL<T> {
     // -- Lifecycle -----------------------------------------------------------
 
     /// Resets the sketch to its empty initial state, keeping the same `k` and `m` parameters.
+    /// If the sketch was constructed with an explicit seed (`init_with_seed` /
+    /// `init_kll_with_seed`), the coin is re-seeded from that seed so determinism
+    /// survives `clear()` (and therefore window rotation in stateful aggregators).
+    /// Otherwise the coin is re-seeded from the wall clock — the historical
+    /// behavior.
     pub fn clear(&mut self) {
         let mc = self.max_capacity;
         self.levels[0] = mc;
         self.levels[1] = mc;
         self.num_levels = 1;
-        self.co = Coin::new();
+        self.co = match self.seed {
+            Some(s) => Coin::from_seed(s),
+            None => Coin::new(),
+        };
         self.rebuild_capacity_cache();
     }
 
@@ -561,6 +597,12 @@ impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for KLL<T> {
             num_levels: wire.num_levels,
             max_capacity: max_cap,
             co: wire.co,
+            // Wire format does not carry the explicit-seed flag — a
+            // round-tripped sketch keeps its current coin state but
+            // would re-randomize from time on a subsequent clear().
+            // Callers that need clear()-determinism after a deserialize
+            // should rebuild via init_with_seed.
+            seed: None,
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
             level0_capacity: 0,
@@ -701,6 +743,80 @@ mod tests {
             coin.toss();
             assert_ne!(coin.state, 0);
         }
+    }
+
+    // Two sketches built with the same seed and fed the same input
+    // sequence must produce byte-identical serialized state. Without
+    // the seedable constructor this is impossible because Coin::new()
+    // pulls from a non-deterministic source.
+    #[test]
+    fn seeded_sketches_are_byte_identical() {
+        const SEED: u64 = 42;
+        let values = sample_uniform_f64(0.0, 1_000_000.0, 5000, 7);
+
+        let mut a: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, SEED);
+        let mut b: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, SEED);
+        for v in &values {
+            a.update(v);
+            b.update(v);
+        }
+        let bytes_a = a.serialize_to_bytes().expect("serialize a");
+        let bytes_b = b.serialize_to_bytes().expect("serialize b");
+        assert_eq!(
+            bytes_a, bytes_b,
+            "seeded KLL sketches with identical inputs produced different bytes"
+        );
+    }
+
+    // Different seeds must (with high probability) drive different
+    // compaction outcomes — proves the seed actually propagates into
+    // toss() rather than being a no-op stored on the struct.
+    #[test]
+    fn different_seeds_produce_different_bytes() {
+        let values = sample_uniform_f64(0.0, 1_000_000.0, 5000, 11);
+
+        let mut a: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, 1);
+        let mut b: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, 2);
+        for v in &values {
+            a.update(v);
+            b.update(v);
+        }
+        let bytes_a = a.serialize_to_bytes().expect("serialize a");
+        let bytes_b = b.serialize_to_bytes().expect("serialize b");
+        assert_ne!(
+            bytes_a, bytes_b,
+            "seeds 1 and 2 should not produce identical sketch bytes"
+        );
+    }
+
+    // clear() on a seeded sketch must re-seed from the stored seed,
+    // not from the wall clock. Otherwise determinism evaporates after
+    // the first window rotation in stateful aggregators that reuse a
+    // KLL across windows.
+    #[test]
+    fn clear_preserves_seed_determinism() {
+        const SEED: u64 = 1234;
+        let values = sample_uniform_f64(0.0, 1_000_000.0, 3000, 13);
+
+        let mut a: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, SEED);
+        // Burn a partial window with unrelated data, then clear.
+        let noise = sample_uniform_f64(0.0, 1_000_000.0, 1500, 99);
+        for v in &noise {
+            a.update(v);
+        }
+        a.clear();
+
+        let mut b: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, SEED);
+        for v in &values {
+            a.update(v);
+            b.update(v);
+        }
+        let bytes_a = a.serialize_to_bytes().expect("serialize a");
+        let bytes_b = b.serialize_to_bytes().expect("serialize b");
+        assert_eq!(
+            bytes_a, bytes_b,
+            "clear() lost determinism: post-clear sketch diverges from a fresh seeded sketch"
+        );
     }
 
     #[derive(Clone, Copy)]
