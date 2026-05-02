@@ -1035,6 +1035,9 @@ pub fn sketchlib_cms_query(inner: &SketchlibCms, key: &str) -> f64 {
     inner.estimate(&input)
 }
 
+/// Internal msgpack-wire shape. `#[serde(default)]` on the Go-side
+/// auxiliary matrices/norms keeps deserialization back-compatible
+/// with older payloads that only carried `sketch`/`rows`/`cols`.
 #[derive(Serialize, Deserialize)]
 struct WireFormat {
     sketch: Vec<Vec<f64>>,
@@ -1042,34 +1045,76 @@ struct WireFormat {
     rows: usize,
     #[serde(rename = "col_num")]
     cols: usize,
+    #[serde(default)]
+    sum: Vec<Vec<f64>>,
+    #[serde(default)]
+    sum2: Vec<Vec<f64>>,
+    #[serde(default)]
+    l1: Vec<f64>,
+    #[serde(default)]
+    l2: Vec<f64>,
 }
 
 /// Sparse delta between two consecutive CountMinSketch snapshots —
 /// the input shape for [`CountMinSketch::apply_delta`]. Mirrors the
 /// `CountMinSketchDelta` proto in
-/// `sketchlib-go/proto/countminsketch/countminsketch.proto` (packed
-/// encoding only).
+/// `sketchlib-go/proto/countminsketch/countminsketch.proto` and the
+/// native Go `Delta` in `sketchlib-go/sketches/CountMinSketch/delta.go`.
 ///
-/// Cells apply additively: `matrix[row][col] += d_count`. Per-row
-/// L1 and L2 norm deltas are carried for downstream error-accounting
-/// but are not consumed by `apply_delta` itself.
+/// Cells apply additively: `matrix[row][col] += d_count`. To match
+/// sketchlib-go's `ApplyDelta`, the same `d_count` is also added to
+/// the `sum` and `sum2` matrices on apply (assumes unit-weight
+/// streams — see `delta.go` lines 70-72). Per-row `l1`/`l2` norm
+/// deltas are full per-row arrays, additive on the corresponding
+/// matrices' L1/L2 fields.
+///
+/// Note: Go's `Delta` does NOT carry separate `Sum`/`Sum2` cell
+/// arrays. The receiver reconstructs Sum/Sum2 from the DCount
+/// arrays, which is exact for unit-weight streams (the only stream
+/// shape sketchlib-go's apply path supports).
 #[derive(Debug, Clone, Default)]
 pub struct CountMinSketchDelta {
     pub rows: u32,
     pub cols: u32,
+    /// `(row, col, d_count)` updates. Applied to `count`, `sum`, and
+    /// `sum2` matrices simultaneously.
     pub cells: Vec<(u32, u32, i64)>,
+    /// Per-row L1 norm deltas, length = `rows` (when present).
     pub l1: Vec<f64>,
+    /// Per-row L2 norm deltas, length = `rows` (when present).
     pub l2: Vec<f64>,
 }
 
 /// Provides approximate frequency counts with error bounds.
 /// The msgpack wire format is the contract between sketch producers and
 /// the query engine consumer.
+///
+/// In addition to the count matrix (held inside the high-throughput
+/// `backend`), this type carries the auxiliary `sum` and `sum2`
+/// matrices and per-row `l1`/`l2` norms produced by sketchlib-go's
+/// `CountMinSketch.Add` family. These are populated via `update`
+/// and merged/applied in lockstep with the count matrix; older
+/// (Rust-only) payloads with these arrays absent deserialize fine
+/// thanks to `#[serde(default)]` on `WireFormat`.
 #[derive(Debug, Clone)]
 pub struct CountMinSketch {
     pub rows: usize,
     pub cols: usize,
     pub(crate) backend: SketchlibCms,
+    /// Per-cell weighted sum matrix; `sum[r][c] += weight` per insert.
+    /// Mirrors sketchlib-go `CountMinSketch.Sum`.
+    pub sum: Vec<Vec<f64>>,
+    /// Per-cell sum-of-weights matrix; `sum2[r][c] += weight` per insert.
+    /// (Note: matches Go's `sum2Row[c] += many`, which is **linear**
+    /// in `many`, not `many*many`. Equal to `sum` and `count` for
+    /// unit-weight streams.)
+    pub sum2: Vec<Vec<f64>>,
+    /// Per-row L1 norm; sketchlib-go `CountMinSketch.L1`.
+    pub l1: Vec<f64>,
+    /// Per-row L2 norm (sum of squared counts), sketchlib-go
+    /// `CountMinSketch.L2`. Updated incrementally via the
+    /// `curr*curr - prev*prev` rule.
+    pub l2: Vec<f64>,
 }
 
 impl CountMinSketch {
@@ -1078,6 +1123,10 @@ impl CountMinSketch {
             rows,
             cols,
             backend: new_sketchlib_cms(rows, cols),
+            sum: vec![vec![0.0; cols]; rows],
+            sum2: vec![vec![0.0; cols]; rows],
+            l1: vec![0.0; rows],
+            l2: vec![0.0; rows],
         }
     }
 
@@ -1097,16 +1146,62 @@ impl CountMinSketch {
     }
 
     /// Construct from a `Vec<Vec<f64>>` matrix (used by deserialization and query engine).
+    /// `sum`/`sum2`/`l1`/`l2` are zero-initialised; callers that need
+    /// non-zero auxiliary state should use the msgpack/proto path.
     pub fn from_legacy_matrix(sketch: Vec<Vec<f64>>, rows: usize, cols: usize) -> Self {
         Self {
             rows,
             cols,
             backend: sketchlib_cms_from_matrix(rows, cols, &sketch),
+            sum: vec![vec![0.0; cols]; rows],
+            sum2: vec![vec![0.0; cols]; rows],
+            l1: vec![0.0; rows],
+            l2: vec![0.0; rows],
         }
     }
 
+    /// Insert a weighted observation. Mirrors sketchlib-go's
+    /// `FastInsertWeightWithHashValue` semantics: per row r, locate
+    /// the column via the backend's hash, then update count, sum,
+    /// sum2, L1, and L2 in lockstep. `sum2` is **linear** in `value`
+    /// (matches Go's `sum2Row[c] += many`), not quadratic.
     pub fn update(&mut self, key: &str, value: f64) {
+        if value == 0.0 || self.rows == 0 || self.cols == 0 {
+            // Still propagate the count update even when our auxiliary
+            // tracking can't run (zero-weight is silently ignored by
+            // the backend either way; preserve that behaviour).
+            sketchlib_cms_update(&mut self.backend, key, value);
+            return;
+        }
+        // Snapshot the count matrix, perform the backend update, then
+        // diff to find the (one) cell each row touched. The backend's
+        // hash layout is opaque from this side; the diff is the
+        // simplest correctness-preserving way to mirror Go's
+        // per-cell Sum/Sum2/L1/L2 update without re-implementing the
+        // hash. Cost: O(rows * cols) per insert. Acceptable: the
+        // wire-format CountMinSketch is the ingest-side type, not a
+        // hot inner loop; the high-throughput
+        // `CountMin<S, M, H>` (above this section) is untouched.
+        let prev_matrix = matrix_from_sketchlib_cms(&self.backend);
         sketchlib_cms_update(&mut self.backend, key, value);
+        let new_matrix = matrix_from_sketchlib_cms(&self.backend);
+        for r in 0..self.rows {
+            let prev_row = &prev_matrix[r];
+            let new_row = &new_matrix[r];
+            for c in 0..self.cols {
+                let prev = prev_row[c];
+                let curr = new_row[c];
+                if (curr - prev).abs() <= f64::EPSILON * curr.abs().max(1.0) {
+                    continue;
+                }
+                self.sum[r][c] += value;
+                self.sum2[r][c] += value;
+                self.l2[r] += curr * curr - prev * prev;
+                self.l1[r] += value;
+                // CountMin chooses exactly one cell per row.
+                break;
+            }
+        }
     }
 
     /// Estimate the frequency of `key` (CountMin point query).
@@ -1115,7 +1210,9 @@ impl CountMinSketch {
     }
 
     /// Merge another CountMinSketch into self in place. Both operands
-    /// must have identical dimensions.
+    /// must have identical dimensions. Mirrors sketchlib-go
+    /// `CountMinSketch.Merge`: count, sum, sum2, L1, L2 all add
+    /// element-wise.
     pub fn merge(
         &mut self,
         other: &CountMinSketch,
@@ -1128,6 +1225,29 @@ impl CountMinSketch {
             .into());
         }
         self.backend.merge(&other.backend);
+        for r in 0..self.rows {
+            // Sum / Sum2 may have been left at default zero by callers
+            // that constructed via `from_legacy_matrix`; defensive
+            // length check tolerates that case.
+            if r < other.sum.len() && r < self.sum.len() {
+                let cols = self.sum[r].len().min(other.sum[r].len());
+                for c in 0..cols {
+                    self.sum[r][c] += other.sum[r][c];
+                }
+            }
+            if r < other.sum2.len() && r < self.sum2.len() {
+                let cols = self.sum2[r].len().min(other.sum2[r].len());
+                for c in 0..cols {
+                    self.sum2[r][c] += other.sum2[r][c];
+                }
+            }
+            if r < other.l1.len() && r < self.l1.len() {
+                self.l1[r] += other.l1[r];
+            }
+            if r < other.l2.len() && r < self.l2.len() {
+                self.l2[r] += other.l2[r];
+            }
+        }
         Ok(())
     }
 
@@ -1159,33 +1279,53 @@ impl CountMinSketch {
 
     /// Apply a sparse delta in place. Matches the `ApplyDelta`
     /// semantics in `sketchlib-go/sketches/CountMinSketch/delta.go`:
-    /// `matrix[row][col] += d_count` for each cell in the delta.
+    /// for each `(row, col, d_count)` cell, `count[r][c] += d_count`
+    /// and additionally `sum[r][c] += d_count`, `sum2[r][c] += d_count`
+    /// (Go's unit-weight reconstruction — see `delta.go::ApplyDelta`
+    /// lines 70-72). Per-row L1 and L2 deltas are applied additively
+    /// to the corresponding norm arrays.
     ///
-    /// The FFI handle is opaque, so we snapshot the matrix, apply
-    /// cell updates, and rebuild the backend. The rebuild is
-    /// O(rows × cols) per delta and is acceptable for ingest-side
-    /// reconstitution — no delta should fire more than once per
-    /// window (10s–300s in the paper's B3 / B4 configs).
+    /// **Out-of-range cells are silently skipped** to match Go's
+    /// `if r >= rows || col >= cols { continue }` (delta.go line 67-69).
+    /// In-range cells in the same delta still apply.
+    ///
+    /// The FFI handle is opaque, so we snapshot the count matrix,
+    /// apply cell updates, and rebuild the backend. The rebuild is
+    /// O(rows × cols) per delta — acceptable for ingest-side
+    /// reconstitution (deltas fire at most once per window: 10s–300s
+    /// in the paper's B3 / B4 configs). The Result return is kept
+    /// for signature stability; this implementation never returns
+    /// `Err`.
     pub fn apply_delta(
         &mut self,
         delta: &CountMinSketchDelta,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        for (row, col, _) in &delta.cells {
+        let mut matrix = self.sketch();
+        for (row, col, d_count) in &delta.cells {
             let r = *row as usize;
             let c = *col as usize;
             if r >= self.rows || c >= self.cols {
-                return Err(format!(
-                    "CountMinSketchDelta cell ({r},{c}) out of range (matrix={}x{})",
-                    self.rows, self.cols
-                )
-                .into());
+                // Silent-skip per sketchlib-go semantics.
+                continue;
             }
-        }
-        let mut matrix = self.sketch();
-        for (row, col, d_count) in &delta.cells {
-            matrix[*row as usize][*col as usize] += *d_count as f64;
+            let dc = *d_count as f64;
+            matrix[r][c] += dc;
+            self.sum[r][c] += dc;
+            self.sum2[r][c] += dc;
         }
         self.backend = sketchlib_cms_from_matrix(self.rows, self.cols, &matrix);
+        // Per-row norm deltas; mirror Go's bounds check
+        // (`if r < target.Rows`).
+        for (r, v) in delta.l1.iter().enumerate() {
+            if r < self.rows {
+                self.l1[r] += *v;
+            }
+        }
+        for (r, v) in delta.l2.iter().enumerate() {
+            if r < self.rows {
+                self.l2[r] += *v;
+            }
+        }
         Ok(())
     }
 
@@ -1196,6 +1336,10 @@ impl CountMinSketch {
             sketch,
             rows: self.rows,
             cols: self.cols,
+            sum: self.sum.clone(),
+            sum2: self.sum2.clone(),
+            l1: self.l1.clone(),
+            l2: self.l2.clone(),
         };
 
         let mut buf = Vec::new();
@@ -1203,7 +1347,9 @@ impl CountMinSketch {
         Ok(buf)
     }
 
-    /// Deserialize from MessagePack.
+    /// Deserialize from MessagePack. `sum`/`sum2`/`l1`/`l2` default to
+    /// zero-shape vectors when absent (back-compat for older payloads
+    /// produced before these auxiliary fields were added).
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -1214,11 +1360,38 @@ impl CountMinSketch {
         )?;
 
         let backend = sketchlib_cms_from_matrix(wire.rows, wire.cols, &wire.sketch);
+        // Back-fill auxiliary state to the matrix shape. Older
+        // payloads without these fields land here as zero-shape
+        // vectors; resize them to the matrix dimensions so all
+        // downstream operations (merge / apply_delta) see a
+        // well-shaped state.
+        let mut sum = wire.sum;
+        let mut sum2 = wire.sum2;
+        if sum.len() != wire.rows {
+            sum = vec![vec![0.0; wire.cols]; wire.rows];
+        }
+        if sum2.len() != wire.rows {
+            sum2 = vec![vec![0.0; wire.cols]; wire.rows];
+        }
+        let l1 = if wire.l1.len() == wire.rows {
+            wire.l1
+        } else {
+            vec![0.0; wire.rows]
+        };
+        let l2 = if wire.l2.len() == wire.rows {
+            wire.l2
+        } else {
+            vec![0.0; wire.rows]
+        };
 
         Ok(Self {
             rows: wire.rows,
             cols: wire.cols,
             backend,
+            sum,
+            sum2,
+            l1,
+            l2,
         })
     }
 
@@ -1389,15 +1562,79 @@ mod tests_wire_countmin {
     }
 
     #[test]
-    fn test_apply_delta_out_of_range() {
-        let mut cms = CountMinSketch::new(2, 3);
+    fn test_apply_delta_out_of_range_silently_skipped() {
+        // Aligns with sketchlib-go's `if r >= rows || col >= cols { continue }`.
+        // Out-of-range cells are dropped; in-range cells in the same
+        // delta still apply.
+        let mut cms = CountMinSketch::from_legacy_matrix(vec![vec![0.0; 3]; 2], 2, 3);
         let delta = CountMinSketchDelta {
             rows: 2,
             cols: 3,
-            cells: vec![(5, 0, 1)],
+            cells: vec![(5, 0, 1), (1, 7, 1), (0, 1, 9)],
             l1: vec![],
             l2: vec![],
         };
-        assert!(cms.apply_delta(&delta).is_err());
+        cms.apply_delta(&delta).expect("silent-skip never errors");
+        // Only the (0, 1, 9) cell is in range; it lands at matrix[0][1].
+        let m = cms.sketch();
+        assert_eq!(m[0][1], 9.0);
+        assert_eq!(m[0][0], 0.0);
+        assert_eq!(m[1][2], 0.0);
+    }
+
+    #[test]
+    fn test_apply_delta_updates_sum_sum2() {
+        // Matches Go's CountMinSketch/delta.go::ApplyDelta:
+        // `target.Sum[r][c] += float64(c.DCount)` (and same for Sum2).
+        let mut cms = CountMinSketch::from_legacy_matrix(
+            vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]],
+            2,
+            3,
+        );
+        let delta = CountMinSketchDelta {
+            rows: 2,
+            cols: 3,
+            cells: vec![(0, 0, 10), (1, 2, 5)],
+            l1: vec![100.0, 50.0],
+            l2: vec![1000.0, 500.0],
+        };
+        cms.apply_delta(&delta).unwrap();
+        assert_eq!(cms.sum[0][0], 10.0);
+        assert_eq!(cms.sum[1][2], 5.0);
+        assert_eq!(cms.sum2[0][0], 10.0);
+        assert_eq!(cms.sum2[1][2], 5.0);
+        assert_eq!(cms.l1, vec![100.0, 50.0]);
+        assert_eq!(cms.l2, vec![1000.0, 500.0]);
+    }
+
+    #[test]
+    fn test_msgpack_back_compat_without_aux_fields() {
+        // Older payloads carrying only sketch/rows/cols must still
+        // deserialize. We simulate this by hand-rolling a minimal
+        // legacy WireFormat-compatible struct.
+        #[derive(Serialize)]
+        struct LegacyWire {
+            sketch: Vec<Vec<f64>>,
+            #[serde(rename = "row_num")]
+            rows: usize,
+            #[serde(rename = "col_num")]
+            cols: usize,
+        }
+        let legacy = LegacyWire {
+            sketch: vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+            rows: 2,
+            cols: 2,
+        };
+        let mut buf = Vec::new();
+        legacy
+            .serialize(&mut rmp_serde::Serializer::new(&mut buf))
+            .unwrap();
+        let cms = CountMinSketch::deserialize_msgpack(&buf).unwrap();
+        assert_eq!(cms.rows, 2);
+        assert_eq!(cms.cols, 2);
+        assert_eq!(cms.sum.len(), 2);
+        assert_eq!(cms.sum[0], vec![0.0, 0.0]);
+        assert_eq!(cms.l1, vec![0.0, 0.0]);
+        assert_eq!(cms.l2, vec![0.0, 0.0]);
     }
 }
