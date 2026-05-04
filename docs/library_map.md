@@ -10,7 +10,7 @@
   - `mode.rs` is under `src/sketches/` and provides `RegularPath` / `FastPath` type-level insert/estimate path selection
 
 - **`src/sketches/`** - Sketch implementations (status source: [apis.md](./apis.md))
-  - `Ready` in API index: `countmin.rs`, `count.rs`, `hll.rs`, `kll.rs`, `ddsketch.rs`, `cms_heap.rs`, `cs_heap.rs`
+  - `Ready` in API index: `countminsketch.rs`, `countsketch.rs`, `hll.rs`, `kll.rs`, `ddsketch.rs`, `countminsketch_topk.rs`, `countsketch_topk.rs`
   - `Unstable` in API index: `coco.rs`, `elastic.rs`, `uniform.rs`, `kmv.rs`
 
 - **`src/sketch_framework/`** - Orchestration and serving layers (status source: [apis.md](./apis.md))

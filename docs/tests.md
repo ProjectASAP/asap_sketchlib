@@ -12,7 +12,7 @@ cargo test
 
 ### CountMin
 
-Test file: [`src/sketches/countmin.rs`](../src/sketches/countmin.rs)
+Test file: [`src/sketches/countminsketch.rs`](../src/sketches/countminsketch.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -29,7 +29,7 @@ Test file: [`src/sketches/countmin.rs`](../src/sketches/countmin.rs)
 
 ### Count
 
-Test file: [`src/sketches/count.rs`](../src/sketches/count.rs)
+Test file: [`src/sketches/countsketch.rs`](../src/sketches/countsketch.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -126,7 +126,7 @@ Test file: [`src/sketches/ddsketch.rs`](../src/sketches/ddsketch.rs)
 
 ### CMSHeap
 
-Test file: [`src/sketches/cms_heap.rs`](../src/sketches/cms_heap.rs)
+Test file: [`src/sketches/countminsketch_topk.rs`](../src/sketches/countminsketch_topk.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -156,7 +156,7 @@ Test file: [`src/sketches/cms_heap.rs`](../src/sketches/cms_heap.rs)
 
 ### CSHeap
 
-Test file: [`src/sketches/cs_heap.rs`](../src/sketches/cs_heap.rs)
+Test file: [`src/sketches/countsketch_topk.rs`](../src/sketches/countsketch_topk.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |

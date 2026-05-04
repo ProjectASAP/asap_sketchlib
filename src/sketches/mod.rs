@@ -21,6 +21,23 @@
 //! [`FastPath`] and [`RegularPath`] control how some matrix-backed frequency
 //! sketches map values to rows and columns. Several specialized sketches in
 //! this module are feature-gated behind `experimental`.
+//!
+//! ## `*sketch` vs `*sketch_topk` files
+//!
+//! For each Count-Min / Count Sketch style algorithm we ship two files:
+//!
+//! - [`countminsketch`] / [`countsketch`] — the core sketch (matrix of
+//!   counters only). Answers point-frequency queries: "how often did key `k`
+//!   appear?" These do not track which keys are heavy hitters.
+//! - [`countminsketch_topk`] / [`countsketch_topk`] — the same sketch paired
+//!   with a min-heap that tracks the top-`k` heavy hitters as items stream in
+//!   ([`CMSHeap`], [`CSHeap`] / [`CountL2HH`]). Use these when the question is
+//!   "which keys are the most frequent?" rather than "how often did this
+//!   specific key appear?"
+//!
+//! The split keeps the core sketch lean for callers that only need point
+//! queries, while the `_topk` variants compose the sketch with heap
+//! bookkeeping for heavy-hitter workloads.
 
 #[cfg(feature = "experimental")]
 pub mod coco;
@@ -29,17 +46,17 @@ pub use coco::Coco;
 #[cfg(feature = "experimental")]
 pub use coco::CocoBucket;
 
-pub mod count;
-pub use count::Count;
-pub use count::{CountSketch, CountSketchDelta};
+pub mod countsketch;
+pub use countsketch::Count;
+pub use countsketch::{CountSketch, CountSketchDelta};
 
 /// Hashing path markers for matrix-backed sketches.
 pub mod mode;
 pub use mode::{FastPath, RegularPath};
 
-pub mod countmin;
+pub mod countminsketch;
 pub use crate::MatrixStorage;
-pub use countmin::{
+pub use countminsketch::{
     CountMin, CountMinSketch, CountMinSketchDelta, QUICKSTART_COL_NUM, QUICKSTART_ROW_NUM,
 };
 
@@ -79,13 +96,13 @@ pub mod ddsketch;
 pub use ddsketch::DDSketch;
 pub use ddsketch::{DdSketch, DdSketchDelta};
 
-pub mod countmin_topk;
-pub use countmin_topk::CMSHeap;
-pub use countmin_topk::CountMinSketchWithHeap;
+pub mod countminsketch_topk;
+pub use countminsketch_topk::CMSHeap;
+pub use countminsketch_topk::CountMinSketchWithHeap;
 
-pub mod count_topk;
-pub use count_topk::CSHeap;
-pub use count_topk::CountL2HH;
+pub mod countsketch_topk;
+pub use countsketch_topk::CSHeap;
+pub use countsketch_topk::CountL2HH;
 
 pub mod octo_delta;
 pub use octo_delta::{CM_PROMASK, COUNT_PROMASK, CmDelta, CountDelta, HLL_PROMASK, HllDelta};

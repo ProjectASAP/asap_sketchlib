@@ -4,7 +4,7 @@
 //! and `Box<dyn CountFastOps>` without knowing the concrete storage or hasher.
 
 use crate::common::structure_utils::ToF64;
-use crate::sketches::count::CountSketchCounter;
+use crate::sketches::countsketch::CountSketchCounter;
 use crate::{Count, CountMin, DataInput, FastPath, MatrixHashType, RegularPath, SketchHasher};
 use std::ops::AddAssign;
 

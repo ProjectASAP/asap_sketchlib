@@ -12,7 +12,7 @@ use rmp_serde::{
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use crate::sketches::count::CountSketchCounter;
+use crate::sketches::countsketch::CountSketchCounter;
 use crate::{
     Count, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher,
     FastPath, FixedMatrix, HHHeap, MatrixStorage, QuickMatrixI64, QuickMatrixI128, RegularPath,
