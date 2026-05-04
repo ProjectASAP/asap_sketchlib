@@ -31,7 +31,6 @@ pub use coco::CocoBucket;
 
 pub mod count;
 pub use count::Count;
-pub use count::CountL2HH;
 pub use count::{CountSketch, CountSketchDelta};
 
 /// Hashing path markers for matrix-backed sketches.
@@ -80,12 +79,13 @@ pub mod ddsketch;
 pub use ddsketch::DDSketch;
 pub use ddsketch::{DdSketch, DdSketchDelta};
 
-pub mod cms_heap;
-pub use cms_heap::CMSHeap;
-pub use cms_heap::CountMinSketchWithHeap;
+pub mod countmin_topk;
+pub use countmin_topk::CMSHeap;
+pub use countmin_topk::CountMinSketchWithHeap;
 
-pub mod cs_heap;
-pub use cs_heap::CSHeap;
+pub mod count_topk;
+pub use count_topk::CSHeap;
+pub use count_topk::CountL2HH;
 
 pub mod octo_delta;
 pub use octo_delta::{CM_PROMASK, COUNT_PROMASK, CmDelta, CountDelta, HLL_PROMASK, HllDelta};

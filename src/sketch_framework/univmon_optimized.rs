@@ -9,7 +9,7 @@ use crate::UnivMon;
 use crate::common::heap::HHHeap;
 use crate::common::{BOTTOM_LAYER_FINDER, DataInput, hash_item64_seeded, hash64_seeded};
 use crate::common::{L2HH, Vector1D};
-use crate::sketches::count::CountL2HH;
+use crate::sketches::count_topk::CountL2HH;
 
 /// Object pool for `UnivMon` sketches.
 ///
