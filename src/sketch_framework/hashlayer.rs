@@ -155,7 +155,7 @@ impl<S, H> From<Count<S, FastPath, H>> for EnsembleSketch
 where
     H: SketchHasher<HashType = MatrixHashType> + 'static,
     S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
-    S::Counter: crate::sketches::count::CountSketchCounter + 'static,
+    S::Counter: crate::sketches::countsketch::CountSketchCounter + 'static,
 {
     fn from(value: Count<S, FastPath, H>) -> Self {
         EnsembleSketch::CountFast(Box::new(value))
