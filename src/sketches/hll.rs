@@ -1134,6 +1134,32 @@ impl HllSketch {
         est
     }
 
+    /// Return the proto enum value Go's `HyperLogLog.SerializePortable`
+    /// emits on the wire for this sketch's [`HllVariant`]. Mirrors the
+    /// `sketchlib-go::sketches/HLL/portable.go::SerializePortable` mapping
+    /// (`HyperLogLog -> HLL_VARIANT_DATAFUSION`,
+    /// `HyperLogLogVariant{Regular} -> HLL_VARIANT_REGULAR`,
+    /// `HyperLogLogHIP -> HLL_VARIANT_HIP`). The returned `i32` is byte-
+    /// identical to Go's emitted `HyperLogLogState.variant` field, so a
+    /// wire-format-aligned producer can encode a `HyperLogLogState`
+    /// matching `sketchlib-go::HyperLogLog.SerializePortable` byte-for-
+    /// byte. Closes part of ProjectASAP/ASAPCollector#243.
+    #[inline]
+    pub fn wire_proto_variant(&self) -> i32 {
+        // Numeric values match the proto enum (sketchlib.v1.HLLVariant in
+        // both repos): UNSPECIFIED=0, REGULAR=1, ERTL_MLE/DATAFUSION=2,
+        // HIP=3. Go's `HyperLogLog.SerializePortable` (the high-throughput
+        // DataFusion-style sketch) emits value 2; we mirror it here so a
+        // Rust producer fed the same input stream lands the same variant
+        // byte on the wire.
+        match self.variant {
+            HllVariant::Unspecified => 0,
+            HllVariant::Regular => 1,
+            HllVariant::Datafusion => 2,
+            HllVariant::Hip => 3,
+        }
+    }
+
     /// Serialize to MessagePack bytes (used by the legacy wire path
     /// and by PR I's `_ENCODING_MSGPACK` variant when that lands).
     pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
@@ -1265,5 +1291,102 @@ mod tests_wire_hll {
         assert_eq!(decoded.registers, original.registers);
         assert_eq!(decoded.precision, original.precision);
         assert_eq!(decoded.hip_kxq0, 1.0);
+    }
+
+    /// Cross-language byte-parity guard against
+    /// `sketchlib-go::HyperLogLog.SerializePortable` for the
+    /// deterministic input stream `(1..=50i32).map(|i| (i as f64).
+    /// to_le_bytes())`. The hex blob below was captured from a
+    /// `proto.Marshal` of the Go envelope (with `Producer` and
+    /// `HashSpec` cleared, matching the
+    /// `integration/parity/golden_test.go::TestGenerateGoldenFixtures`
+    /// recipe).
+    ///
+    /// Hash alignment: both producers reach `InsertWithHash` /
+    /// `insert_with_hash` with the same `u64` because
+    /// `sketchlib-go::common.FromBytes` does
+    /// `HashIt(CanonicalHashSeed=5, key)` and
+    /// `asap_sketchlib::HllSketch::update` does
+    /// `hash64_seeded(CANONICAL_HASH_SEED=5, &DataInput::Bytes(key))`,
+    /// both of which call `xxh3_64(seed=seedList[5]=0x6a09e667, key)`.
+    ///
+    /// Variant alignment: Go's free-`HyperLogLog`
+    /// `SerializePortable` emits `HLL_VARIANT_DATAFUSION = 2`. Mirror
+    /// it via [`HllVariant::Datafusion`] (the Rust proto enum value
+    /// `ErtlMle = 2` is the same wire byte). Any future change to
+    /// [`HllSketch::update`]'s hash path or to
+    /// [`HllSketch::wire_proto_variant`] that breaks parity will
+    /// surface here. Closes part of ProjectASAP/ASAPCollector#243.
+    #[test]
+    fn test_update_then_envelope_matches_sketchlib_go_bytes() {
+        use crate::proto::sketchlib::{
+            HyperLogLogState, SketchEnvelope, sketch_envelope::SketchState,
+        };
+        use prost::Message;
+
+        let mut sk = HllSketch::new(HllVariant::Datafusion, 14);
+        for i in 1..=50i32 {
+            let v = i as f64;
+            sk.update(&v.to_le_bytes());
+        }
+
+        let state = HyperLogLogState {
+            variant: sk.wire_proto_variant(),
+            precision: sk.precision,
+            registers: sk.registers.clone(),
+            hip_kxq0: sk.hip_kxq0,
+            hip_kxq1: sk.hip_kxq1,
+            hip_est: sk.hip_est,
+        };
+        let envelope = SketchEnvelope {
+            format_version: 1,
+            producer: None,
+            hash_spec: None,
+            sketch_state: Some(SketchState::Hll(state)),
+        };
+        let mut got = Vec::with_capacity(envelope.encoded_len());
+        envelope.encode(&mut got).expect("prost encode");
+
+        // Hex blob captured from `sketchlib-go::HyperLogLog.SerializePortable`
+        // for the (1..=50) IEEE-754-LE byte-key input — see
+        // `integration/parity/golden_test.go` and
+        // `cross_language_parity::hll_byte_parity_with_go` in
+        // ASAPCollector. 16 398 bytes total: a `SketchEnvelope` proto
+        // wrapping a `HyperLogLogState{variant=DATAFUSION,
+        // precision=14, registers=<16 384 bytes, 50 nonzero>}`.
+        const GOLDEN_HEX: &str = include_str!("testdata/hll_envelope_golden.hex");
+        let want = decode_hex(GOLDEN_HEX);
+        assert_eq!(
+            got.len(),
+            want.len(),
+            "HLL envelope length differs: got {} bytes, want {} bytes",
+            got.len(),
+            want.len(),
+        );
+        assert_eq!(
+            got, want,
+            "HLL envelope bytes diverge from sketchlib-go golden"
+        );
+    }
+
+    fn decode_hex(s: &str) -> Vec<u8> {
+        let s = s.trim();
+        s.as_bytes()
+            .chunks(2)
+            .map(|pair| {
+                let high = hex_nibble(pair[0]);
+                let low = hex_nibble(pair[1]);
+                (high << 4) | low
+            })
+            .collect()
+    }
+
+    fn hex_nibble(c: u8) -> u8 {
+        match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            b'A'..=b'F' => c - b'A' + 10,
+            _ => panic!("non-hex byte {}", c as char),
+        }
     }
 }
