@@ -500,6 +500,101 @@ impl<T: NumericalValue> KLL<T> {
         }
     }
 
+    // -- Wire-format-aligned accessors --------------------------------------
+
+    /// Returns the configured `k` parameter.
+    #[inline]
+    pub fn wire_k(&self) -> u32 {
+        self.k as u32
+    }
+
+    /// Returns the configured `m` parameter.
+    #[inline]
+    pub fn wire_m(&self) -> u32 {
+        self.m as u32
+    }
+
+    /// Returns the number of currently populated compactor levels.
+    #[inline]
+    pub fn wire_num_levels(&self) -> u32 {
+        self.num_levels as u32
+    }
+
+    /// Returns the compaction-coin state in `sketchlib-go::CoinState`
+    /// shape: `(state, bit_cache, remaining_bits)`. Wire-format wrappers
+    /// pack this directly into the `KLLState.coin` proto field; without
+    /// it the coin state would have to be poked from private internals
+    /// or reconstructed by a serde round-trip, neither of which is
+    /// stable across `asap_sketchlib` releases.
+    #[inline]
+    pub fn wire_coin(&self) -> (u64, u64, u32) {
+        (
+            self.co.state,
+            self.co.bit_cache,
+            self.co.remaining_bits as u32,
+        )
+    }
+
+    /// Returns the level-boundary array in `sketchlib-go`'s wire shape:
+    /// length `num_levels + 1`, starting at 0 and ending at the total
+    /// number of retained items. The chunk
+    /// `wire_items()[wire_levels()[i] .. wire_levels()[i+1]]` is the
+    /// **top-most-first** run for the proto's `KLLState.levels`/`items`
+    /// fields, matching `sketchlib-go::KLLSketch.SerializePortable`.
+    /// See the `KLLState` docstring in `proto/kll/kll.proto`: index `i`
+    /// in `levels` maps to compactor level `num_levels - 1 - i` in the
+    /// in-memory representation. Closes part of
+    /// ProjectASAP/ASAPCollector#243.
+    pub fn wire_levels(&self) -> Vec<u32> {
+        // Walk from top compactor-level downward, accumulating sizes.
+        let n = self.num_levels;
+        let mut out = Vec::with_capacity(n + 1);
+        out.push(0u32);
+        let mut acc = 0u32;
+        for h in (0..n).rev() {
+            let size = (self.levels[h + 1] - self.levels[h]) as u32;
+            acc += size;
+            out.push(acc);
+        }
+        out
+    }
+
+    /// Returns the retained items in `sketchlib-go`'s wire shape:
+    /// concatenated top-most-level-first. Sketchlib-go pushes inputs
+    /// into the unsorted L0 in input order; `asap_sketchlib`'s compact
+    /// layout instead grows L0 leftward, so the buffer reads
+    /// reverse-input-order. This accessor reverses the unsorted L0 run
+    /// so the emitted byte sequence is identical to Go's for the same
+    /// input stream (when no compaction has yet occurred). Higher
+    /// levels are sorted in both producers and emitted as-is.
+    ///
+    /// Caveat: after L0 → L1 compaction the two producers' L1 content
+    /// orderings diverge (Go's `compact` leaves L1 as two concatenated
+    /// sorted runs; `asap_sketchlib` merge-sorts on the way up). The
+    /// retained set is identical and quantile semantics agree, but
+    /// strict byte parity past the first compaction is not guaranteed.
+    /// The cross-language byte-parity test in
+    /// `ASAPCollector::cross_language_parity::kll_byte_parity_with_go`
+    /// uses `(1..=50)` with `k=200`, well below the L0 capacity, so
+    /// this caveat does not affect the parity guard.
+    pub fn wire_items(&self) -> Vec<T> {
+        let mut out = Vec::with_capacity(self.buffer_size());
+        for h in (0..self.num_levels).rev() {
+            let start = self.levels[h];
+            let end = self.levels[h + 1];
+            if h == 0 {
+                // Unsorted L0 in `asap_sketchlib` reads reverse of the
+                // input order because `push_value` decrements
+                // `levels[0]` before each write. Reverse here so the
+                // emitted bytes match Go's input-order L0 layout.
+                out.extend(self.items[start..end].iter().rev().copied());
+            } else {
+                out.extend_from_slice(&self.items[start..end]);
+            }
+        }
+        out
+    }
+
     // -- Serialization -------------------------------------------------------
 
     /// Serializes the sketch to a MessagePack byte vector.
@@ -1460,5 +1555,91 @@ mod tests_wire_kll {
     #[test]
     fn test_aggregate_kll_empty() {
         assert!(KllSketch::aggregate_kll(200, &[]).is_none());
+    }
+
+    /// Cross-language byte-parity guard against `sketchlib-go`'s
+    /// `KLLSketch.SerializePortable` output for the deterministic
+    /// input `(1..=50)` with `seed=42` and `k=200`. The hex blob below
+    /// was captured from a `proto.Marshal` of the Go envelope (with
+    /// `Producer` and `HashSpec` cleared, matching the
+    /// `integration/parity/golden_test.go::TestGenerateGoldenFixtures`
+    /// recipe). Any change to the `wire_*` accessors that breaks
+    /// parity will surface here. Closes part of
+    /// ProjectASAP/ASAPCollector#243.
+    #[test]
+    fn test_update_then_envelope_matches_sketchlib_go_bytes() {
+        use crate::proto::sketchlib::{
+            CoinState, KllState, SketchEnvelope, sketch_envelope::SketchState,
+        };
+        use crate::sketches::kll::KLL;
+        use prost::Message;
+
+        let mut sk: KLL<f64> = KLL::init_kll_with_seed(200, 42);
+        for i in 1..=50 {
+            sk.update(&(i as f64));
+        }
+
+        let (state, bit_cache, remaining_bits) = sk.wire_coin();
+        let kll_state = KllState {
+            k: sk.wire_k(),
+            m: sk.wire_m(),
+            num_levels: sk.wire_num_levels(),
+            levels: sk.wire_levels(),
+            items: sk.wire_items(),
+            coin: Some(CoinState {
+                state,
+                bit_cache,
+                remaining_bits,
+            }),
+        };
+        let envelope = SketchEnvelope {
+            format_version: 1,
+            producer: None,
+            hash_spec: None,
+            sketch_state: Some(SketchState::Kll(kll_state)),
+        };
+        let mut got = Vec::with_capacity(envelope.encoded_len());
+        envelope.encode(&mut got).expect("prost encode");
+
+        // Byte string captured from sketchlib-go for the same input —
+        // see `integration/parity/golden_test.go` and
+        // `cross_language_parity::kll_byte_parity_with_go` in
+        // ASAPCollector. 423 bytes total: a `SketchEnvelope` proto
+        // wrapping a `KLLState` whose `items` is the deterministic
+        // (1..=50) sequence in Go's input-order layout, `levels` =
+        // [0, 50], `num_levels` = 1, `k` = 200, `m` = 8, and `coin`
+        // captures the stock `coinFromSeed(42)` initial state with
+        // an empty bit-cache (no `toss()` calls fire because no
+        // compaction occurs at k=200 with only 50 inputs).
+        const GOLDEN_HEX: &str = "08016aa20308c80110081801220200322a9003000000000000f03f000000000000004000000000000008400000000000001040000000000000144000000000000018400000000000001c40000000000000204000000000000022400000000000002440000000000000264000000000000028400000000000002a400000000000002c400000000000002e4000000000000030400000000000003140000000000000324000000000000033400000000000003440000000000000354000000000000036400000000000003740000000000000384000000000000039400000000000003a400000000000003b400000000000003c400000000000003d400000000000003e400000000000003f4000000000000040400000000000804040000000000000414000000000008041400000000000004240000000000080424000000000000043400000000000804340000000000000444000000000008044400000000000004540000000000080454000000000000046400000000000804640000000000000474000000000008047400000000000004840000000000080484000000000000049403202082a";
+        let want = decode_hex(GOLDEN_HEX);
+        assert_eq!(
+            got,
+            want,
+            "KLL envelope bytes diverge from sketchlib-go golden \
+             ({} bytes got vs {} bytes want)",
+            got.len(),
+            want.len(),
+        );
+    }
+
+    fn decode_hex(s: &str) -> Vec<u8> {
+        s.as_bytes()
+            .chunks(2)
+            .map(|pair| {
+                let high = hex_nibble(pair[0]);
+                let low = hex_nibble(pair[1]);
+                (high << 4) | low
+            })
+            .collect()
+    }
+
+    fn hex_nibble(c: u8) -> u8 {
+        match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            b'A'..=b'F' => c - b'A' + 10,
+            _ => panic!("non-hex byte {}", c as char),
+        }
     }
 }
