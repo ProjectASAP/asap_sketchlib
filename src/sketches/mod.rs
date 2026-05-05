@@ -48,7 +48,7 @@ pub use coco::CocoBucket;
 
 pub mod countsketch;
 pub use countsketch::Count;
-pub use countsketch::{CountSketch, CountSketchDelta};
+pub use countsketch::{COUNT_SKETCH_TOPK_CAPACITY, CountSketch, CountSketchDelta};
 
 /// Hashing path markers for matrix-backed sketches.
 pub mod mode;
