@@ -1105,13 +1105,70 @@ impl CountMinSketch {
         }
     }
 
+    /// Insert a single weighted observation. Routes the key through the
+    /// shared [`crate::common::hashspec`] pipeline so the matrix-cell
+    /// layout matches `sketchlib-go::CountMinSketch.InsertWithHash`
+    /// bit-for-bit:
+    ///
+    /// 1. `hash = Hash64(key) = XXH3-64-with-seed(seed_list[0], key)`
+    ///    (Go's `common.Hash64`, mirrored by
+    ///    [`hash_with_spec`](crate::common::hashspec::hash_with_spec))
+    /// 2. for each row `r`:
+    ///    - `col_raw = derive_index(spec, r, hash, mask_width)` — Go's
+    ///      `MatrixHashType.RowHash` slice on the packed `u64`, where
+    ///      `mask_width = next_power_of_two(cols)` (mirrors Go's
+    ///      `hashLayoutForCols`)
+    ///    - `col = col_raw % cols` — fold for non-pow2 widths,
+    ///      mirroring Go's `if c >= s.Cols { c %= s.Cols }`
+    /// 3. `matrix[r][col] += value`
+    ///
+    /// Constraints inherited from Go's Packed64 mode (the only mode
+    /// the wire-format CountMinSketch exercises today):
+    /// - `rows * log2(next_pow2(cols)) ≤ 64` so the packed hash holds
+    ///   all row indices. The
+    ///   `asap-precompute-rs::CMSWrapper` default (4×2048 → 4×11 = 44
+    ///   bits) and Go's `DefaultRowNum=3, DefaultColNum=4096` (3×12 =
+    ///   36 bits) both fit comfortably.
+    ///
+    /// Negative or zero values are skipped, mirroring the prior helper
+    /// behavior (Go's `UpdateWeight` no-ops on `many == 0`).
     pub fn update(&mut self, key: &str, value: f64) {
-        sketchlib_cms_update(&mut self.backend, key, value);
+        if value <= 0.0 || self.rows == 0 || self.cols == 0 {
+            return;
+        }
+        let spec = crate::common::hashspec::HashSpec::default();
+        let hash = crate::common::hashspec::hash_with_spec(&spec, key.as_bytes());
+        let mask_width = (self.cols as u32).next_power_of_two();
+        let storage = self.backend.as_storage_mut();
+        for r in 0..self.rows {
+            let col_raw = crate::common::hashspec::derive_index(&spec, r, hash, mask_width);
+            let col = col_raw % self.cols;
+            storage.increment_by_row(r, col, value);
+        }
     }
 
-    /// Estimate the frequency of `key` (CountMin point query).
+    /// Estimate the frequency of `key` (CountMin point query). Mirrors
+    /// `sketchlib-go::CountMinSketch.estimateMatrixHash` /
+    /// `queryFrequencyFast`: derives the same per-row column index that
+    /// [`Self::update`] used and returns the minimum cell across rows.
     pub fn estimate(&self, key: &str) -> f64 {
-        sketchlib_cms_query(&self.backend, key)
+        if self.rows == 0 || self.cols == 0 {
+            return 0.0;
+        }
+        let spec = crate::common::hashspec::HashSpec::default();
+        let hash = crate::common::hashspec::hash_with_spec(&spec, key.as_bytes());
+        let mask_width = (self.cols as u32).next_power_of_two();
+        let storage = self.backend.as_storage();
+        let mut min = f64::INFINITY;
+        for r in 0..self.rows {
+            let col_raw = crate::common::hashspec::derive_index(&spec, r, hash, mask_width);
+            let col = col_raw % self.cols;
+            let v = storage.query_one_counter(r, col);
+            if v < min {
+                min = v;
+            }
+        }
+        if min.is_infinite() { 0.0 } else { min }
     }
 
     /// Merge another CountMinSketch into self in place. Both operands
@@ -1399,5 +1456,135 @@ mod tests_wire_countmin {
             l2: vec![],
         };
         assert!(cms.apply_delta(&delta).is_err());
+    }
+
+    /// Cross-language byte-parity guard against `sketchlib-go`'s
+    /// `CountMinSketch.SerializeProtoBytesFO` output for the
+    /// deterministic input `goldenCmsKeys()` (10 keys "flow-0"..."flow-9",
+    /// each repeated 5×, 50 unweighted updates total) at dimensions
+    /// `(rows=4, cols=2048)` — the
+    /// `asap-precompute-rs::CMSWrapper::new(4, 2048)` default. The hex
+    /// blob below was captured from `proto.Marshal` of the Go envelope
+    /// with `Producer` and `HashSpec` cleared, matching the
+    /// `integration/parity/golden_test.go::TestGenerateGoldenFixtures`
+    /// recipe (and the byte-payload that the Rust wrapper's
+    /// `CMSWrapper::encode_envelope` emits to satisfy
+    /// `cross_language_parity::cms_byte_parity_with_go`).
+    ///
+    /// Frequency-Only payload structure (matches Go's
+    /// `SerializePortableFO`):
+    /// - `rows = 4`, `cols = 2048`, `counter_type = INT64`
+    /// - `counts_int` = packed sint64 row-major, `4*2048 = 8192` cells
+    /// - `sum_counts` and `sum2_counts` deliberately omitted
+    /// - `l1[r] = 50` (each row sees 50 unweighted inserts)
+    /// - `l2[r] = 250` (10 unique cells per row each holding count 5,
+    ///   so `Σ count^2 = 10 * 25 = 250`)
+    ///
+    /// Any drift in [`CountMinSketch::update`]'s hash → column-index
+    /// derivation breaks this test cell-for-cell; that is the contract
+    /// `cross_language_parity::cms_byte_parity_with_go` in ASAPCollector
+    /// relies on. Closes part of ProjectASAP/ASAPCollector#243.
+    #[test]
+    fn test_update_then_envelope_matches_sketchlib_go_bytes() {
+        use crate::proto::sketchlib::{
+            CountMinState, CounterType, SketchEnvelope, sketch_envelope::SketchState,
+        };
+        use prost::Message;
+
+        let rows = 4usize;
+        let cols = 2048usize;
+        let mut sk = CountMinSketch::new(rows, cols);
+        for i in 0..50u64 {
+            let key = format!("flow-{}", i % 10);
+            sk.update(&key, 1.0);
+        }
+
+        // Build the Frequency-Only envelope mirroring sketchlib-go's
+        // `CountMinSketch.SerializePortableFO`:
+        //   - counter_type = INT64
+        //   - counts_int = packed sint64 row-major, len = rows * cols
+        //   - sum_counts / sum2_counts deliberately omitted
+        //   - l1[r] = Σ_c count[r][c]   (Go maintains this incrementally
+        //     in InsertWithHash; equals `weight * Σ inserts in row r`,
+        //     which collapses to 50 for an unweighted 50-insert stream)
+        //   - l2[r] = Σ_c count[r][c]^2 (Go maintains this as
+        //     `L2[r] += curr*curr - prev*prev`, telescoping to the same
+        //     sum-of-squares for unweighted streams)
+        let matrix = sk.sketch();
+        let mut counts_int: Vec<i64> = Vec::with_capacity(rows * cols);
+        let mut l1: Vec<f64> = Vec::with_capacity(rows);
+        let mut l2: Vec<f64> = Vec::with_capacity(rows);
+        for row in matrix.iter().take(rows) {
+            let mut row_l1 = 0.0f64;
+            let mut row_l2 = 0.0f64;
+            for &cell in row.iter().take(cols) {
+                counts_int.push(cell as i64);
+                row_l1 += cell;
+                row_l2 += cell * cell;
+            }
+            l1.push(row_l1);
+            l2.push(row_l2);
+        }
+
+        let state = CountMinState {
+            rows: rows as u32,
+            cols: cols as u32,
+            counter_type: CounterType::Int64 as i32,
+            counts_int,
+            counts_float: Vec::new(),
+            sum_counts: Vec::new(),
+            sum2_counts: Vec::new(),
+            l1,
+            l2,
+        };
+        let envelope = SketchEnvelope {
+            format_version: 1,
+            producer: None,
+            hash_spec: None,
+            sketch_state: Some(SketchState::CountMin(state)),
+        };
+        let mut got = Vec::with_capacity(envelope.encoded_len());
+        envelope.encode(&mut got).expect("prost encode");
+
+        // 8275-byte hex blob captured from
+        // `sketchlib-go::CountMinSketch.SerializeProtoBytesFO` for the
+        // same `(4, 2048) × goldenCmsKeys()` input — see
+        // `integration/parity/golden_test.go` and
+        // `cross_language_parity::cms_byte_parity_with_go` in
+        // ASAPCollector.
+        const GOLDEN_HEX: &str = include_str!("testdata/cms_envelope_golden.hex");
+        let want = decode_hex_cms(GOLDEN_HEX);
+        assert_eq!(
+            got.len(),
+            want.len(),
+            "CMS envelope length differs: got {} bytes, want {} bytes",
+            got.len(),
+            want.len(),
+        );
+        assert_eq!(
+            got, want,
+            "CMS envelope bytes diverge from sketchlib-go golden"
+        );
+    }
+
+    fn decode_hex_cms(s: &str) -> Vec<u8> {
+        let s = s.trim();
+        s.as_bytes()
+            .chunks(2)
+            .map(|pair| {
+                let high = hex_nibble_cms(pair[0]);
+                let low = hex_nibble_cms(pair[1]);
+                (high << 4) | low
+            })
+            .collect()
+    }
+
+    fn hex_nibble_cms(c: u8) -> u8 {
+        match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            b'A'..=b'F' => c - b'A' + 10,
+            _ => panic!("non-hex byte {}", c as char),
+        }
     }
 }
