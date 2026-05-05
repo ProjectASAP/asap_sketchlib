@@ -1249,40 +1249,62 @@ impl CountSketch {
         }
     }
 
-    /// Insert a single weighted observation. Each row uses an independent
-    /// hash seed and a sign bit to update the matrix in place — the
-    /// standard CountSketch update primitive. The wire format here uses
-    /// xxh64 with per-row seeding; this matches sketchlib-go's
-    /// `DeriveIndex`/`DeriveSign` decomposition for matrix-backed
-    /// sketches and is intended for in-process tests / ground-truth
-    /// builds, not cross-language replay.
+    /// Insert a single weighted observation. Routes the key through the
+    /// shared [`crate::common::hashspec`] pipeline so the matrix-cell
+    /// layout matches `sketchlib-go::CountSketch.UpdateString`
+    /// bit-for-bit:
+    ///
+    /// 1. `hash = Hash64(key) = XXH3-64-with-seed(seed_list[0], key)`
+    ///    (Go's `common.Hash64`, mirrored by
+    ///    [`hash_with_spec`](crate::common::hashspec::hash_with_spec))
+    /// 2. for each row `r`:
+    ///    - `col = derive_index(spec, r, hash, cols)` — Go's
+    ///      `MatrixHashType.RowHash` slice on the packed `u64`
+    ///    - `sign = derive_sign(spec, r, hash)` — Go's
+    ///      `MatrixHashType.SignForRow` high-bit-minus-row extraction
+    /// 3. `matrix[r][col] += sign * value`
+    ///
+    /// Constraints inherited from Go's Packed64 mode (the only mode
+    /// the wire-format CountSketch exercises today):
+    /// - `cols` must be a power of two; the column mask is `cols - 1`.
+    /// - `rows * (log2(cols) + 1) ≤ 64` so the packed hash holds all
+    ///   row indices and sign bits.
+    ///
+    /// Both constraints are honored by the
+    /// `asap-precompute-rs::CountSketchWrapper` defaults (3×512 → 30
+    /// bits) and by `sketchlib-go`'s
+    /// `RustDefaultRows = 3, RustDefaultCols = 4096` (39 bits).
     pub fn update(&mut self, key: &str, value: f64) {
         if self.rows == 0 || self.cols == 0 {
             return;
         }
-        let key_bytes = key.as_bytes();
+        let spec = crate::common::hashspec::HashSpec::default();
+        let hash = crate::common::hashspec::hash_with_spec(&spec, key.as_bytes());
+        let cols_u32 = self.cols as u32;
         for r in 0..self.rows {
-            let h = twox_hash::XxHash64::oneshot(r as u64, key_bytes);
-            let col = (h as usize) % self.cols;
-            // Sign derived from the high bit, matching the in-process
-            // Count Sketch implementation above.
-            let sign = if (h >> 63) & 1 == 1 { 1.0 } else { -1.0 };
+            let col = crate::common::hashspec::derive_index(&spec, r, hash, cols_u32);
+            let sign = crate::common::hashspec::derive_sign(&spec, r, hash) as f64;
             self.matrix[r][col] += sign * value;
         }
     }
 
     /// Estimate the frequency of `key` via the standard median-of-rows
-    /// CountSketch query. Returns 0 for an empty sketch.
+    /// CountSketch query. Returns 0 for an empty sketch. Mirrors
+    /// `sketchlib-go::CountSketch.QueryWithHash(QueryFrequency)`: the
+    /// per-row column index and sign are derived from the same single
+    /// hash that [`Self::update`] used, so the estimator inverts the
+    /// signed-counter projection in lockstep with the update.
     pub fn estimate(&self, key: &str) -> f64 {
         if self.rows == 0 || self.cols == 0 {
             return 0.0;
         }
-        let key_bytes = key.as_bytes();
+        let spec = crate::common::hashspec::HashSpec::default();
+        let hash = crate::common::hashspec::hash_with_spec(&spec, key.as_bytes());
+        let cols_u32 = self.cols as u32;
         let mut estimates: Vec<f64> = Vec::with_capacity(self.rows);
         for r in 0..self.rows {
-            let h = twox_hash::XxHash64::oneshot(r as u64, key_bytes);
-            let col = (h as usize) % self.cols;
-            let sign = if (h >> 63) & 1 == 1 { 1.0 } else { -1.0 };
+            let col = crate::common::hashspec::derive_index(&spec, r, hash, cols_u32);
+            let sign = crate::common::hashspec::derive_sign(&spec, r, hash) as f64;
             estimates.push(sign * self.matrix[r][col]);
         }
         estimates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -1559,5 +1581,106 @@ mod tests_wire_count {
         assert_eq!(decoded.sketch(), original.sketch());
         assert_eq!(decoded.rows, original.rows);
         assert_eq!(decoded.cols, original.cols);
+    }
+
+    /// Cross-language byte-parity guard against `sketchlib-go`'s
+    /// `CountSketch.SerializeProtoBytes` output for the deterministic
+    /// input `goldenCsKeys()` (25 keys "k-a"..."k-e", each repeated 5×)
+    /// at dimensions `(rows=3, cols=512)`. The hex blob below was
+    /// captured from a `proto.Marshal` of the Go envelope with
+    /// `Producer` and `HashSpec` cleared (matching the
+    /// `integration/parity/golden_test.go::TestGenerateGoldenFixtures`
+    /// recipe used for DDSketch and KLL).
+    ///
+    /// Any drift in [`CountSketch::update`]'s hash → (col, sign)
+    /// derivation breaks this test cell-for-cell; that is the contract
+    /// `cross_language_parity::countsketch_byte_parity_with_go` in
+    /// ASAPCollector relies on. Closes part of
+    /// ProjectASAP/ASAPCollector#243.
+    #[test]
+    fn test_update_then_envelope_matches_sketchlib_go_bytes() {
+        use crate::proto::sketchlib::{
+            CountSketchState, CounterType, SketchEnvelope, sketch_envelope::SketchState,
+        };
+        use prost::Message;
+
+        let rows = 3usize;
+        let cols = 512usize;
+        let mut sk = CountSketch::new(rows, cols);
+        for i in 0..25 {
+            let key = format!("k-{}", (b'a' + (i % 5) as u8) as char);
+            sk.update(&key, 1.0);
+        }
+
+        // Build envelope mirroring sketchlib-go's CountSketch.SerializePortable:
+        //   counter_type = INT64, counts packed sint64 in row-major
+        //   order, l2 = per-row sum of squared cells, no TopK.
+        let mut counts_int: Vec<i64> = Vec::with_capacity(rows * cols);
+        let mut l2: Vec<f64> = Vec::with_capacity(rows);
+        for row in sk.matrix.iter().take(rows) {
+            let mut row_l2 = 0.0f64;
+            for &cell in row.iter().take(cols) {
+                counts_int.push(cell as i64);
+                row_l2 += cell * cell;
+            }
+            l2.push(row_l2);
+        }
+
+        let state = CountSketchState {
+            rows: rows as u32,
+            cols: cols as u32,
+            counter_type: CounterType::Int64 as i32,
+            counts_int,
+            counts_float: Vec::new(),
+            l2,
+            topk: None,
+        };
+        let envelope = SketchEnvelope {
+            format_version: 1,
+            producer: None,
+            hash_spec: None,
+            sketch_state: Some(SketchState::CountSketch(state)),
+        };
+        let mut got = Vec::with_capacity(envelope.encoded_len());
+        envelope.encode(&mut got).expect("prost encode");
+
+        // Byte string captured from sketchlib-go for the same
+        // (3,512) × `goldenCsKeys()` input — see
+        // `integration/parity/golden_test.go` and
+        // `cross_language_parity::countsketch_byte_parity_with_go`
+        // in ASAPCollector. 1577 bytes total: a `SketchEnvelope` proto
+        // wrapping a `CountSketchState` whose `counts_int` is a packed
+        // sint64 (zigzag) row-major matrix and `l2` is `[125.0;3]`
+        // (each row's 5 hot cells hold ±5 → l2 = 5·25 = 125).
+        const GOLDEN_HEX: &str = "08015aa40c0803108004180222800c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000090000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000090000000000000a000000000000000900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000900000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000090000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000032180000000000405f400000000000405f400000000000405f40";
+        let want = decode_hex(GOLDEN_HEX);
+        assert_eq!(
+            got,
+            want,
+            "CountSketch envelope bytes diverge from sketchlib-go golden \
+             ({} bytes got vs {} bytes want)",
+            got.len(),
+            want.len(),
+        );
+    }
+
+    fn decode_hex(s: &str) -> Vec<u8> {
+        s.as_bytes()
+            .chunks(2)
+            .map(|pair| {
+                let high = hex_nibble(pair[0]);
+                let low = hex_nibble(pair[1]);
+                (high << 4) | low
+            })
+            .collect()
+    }
+
+    fn hex_nibble(c: u8) -> u8 {
+        match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            b'A'..=b'F' => c - b'A' + 10,
+            _ => panic!("non-hex byte {}", c as char),
+        }
     }
 }
