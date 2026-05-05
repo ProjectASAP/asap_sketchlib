@@ -27,6 +27,13 @@ use serde::{Deserialize, Serialize};
 // Number of buckets to grow by when expanding.
 const GROW_CHUNK: usize = 128;
 
+/// Bucket-store growth chunk for the wire-format-aligned [`DdSketch`]
+/// variant. Matches `sketchlib-go/sketches/DDSketch.GrowChunk` so the
+/// `store_counts` / `store_offset` layout written by
+/// [`DdSketch::update`] is byte-identical to Go's `SerializePortable`
+/// output for the same input stream.
+pub const DDSKETCH_GROW_CHUNK: usize = 128;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Buckets {
     counts: Vector1D<u64>,
@@ -971,6 +978,16 @@ impl DdSketch {
     /// where `gamma = (1+α)/(1-α)`. Provided primarily so tests can
     /// build a ground-truth sketch to compare delta-apply output
     /// against.
+    ///
+    /// Bucket-store growth mirrors `sketchlib-go`'s `Buckets.ensure`:
+    /// the first allocation is a half-chunk-centered `GROW_CHUNK` of
+    /// zeros, and subsequent expansions extend by `max(needed,
+    /// GROW_CHUNK)` so the on-the-wire `store_counts` / `store_offset`
+    /// layout is byte-identical to Go's `SerializePortable` output.
+    /// Without this chunked layout the `DDSketchState` proto bytes
+    /// emitted by `asap-precompute-rs::DDSketchWrapper` diverge from
+    /// the legacy OTel `ddsketchprocessor` payload (see
+    /// ProjectASAP/ASAPCollector#243).
     pub fn update(&mut self, value: f64) {
         if value <= 0.0 {
             // DDSketch is defined for positive reals; the paper's
@@ -980,26 +997,9 @@ impl DdSketch {
         let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
         let ln_gamma = gamma.ln();
         let idx = (value.ln() / ln_gamma).floor() as i32;
-        if self.store_counts.is_empty() {
-            self.store_counts = vec![1];
-            self.store_offset = idx;
-        } else {
-            let cur_start = self.store_offset as i64;
-            let cur_end = cur_start + self.store_counts.len() as i64;
-            let k = idx as i64;
-            if k < cur_start {
-                let pad = (cur_start - k) as usize;
-                let mut buf = vec![0u64; pad];
-                buf.append(&mut self.store_counts);
-                self.store_counts = buf;
-                self.store_offset = idx;
-            } else if k >= cur_end {
-                let pad = (k - cur_end + 1) as usize;
-                self.store_counts.extend(std::iter::repeat_n(0u64, pad));
-            }
-            let arr_idx = (k - self.store_offset as i64) as usize;
-            self.store_counts[arr_idx] = self.store_counts[arr_idx].saturating_add(1);
-        }
+        self.ensure_bucket(idx);
+        let arr_idx = (idx as i64 - self.store_offset as i64) as usize;
+        self.store_counts[arr_idx] = self.store_counts[arr_idx].saturating_add(1);
         self.count = self.count.saturating_add(1);
         self.sum += value;
         if value < self.min {
@@ -1007,6 +1007,38 @@ impl DdSketch {
         }
         if value > self.max {
             self.max = value;
+        }
+    }
+
+    /// Ensure bucket `k` is addressable in `store_counts`, growing in
+    /// chunks of [`DDSKETCH_GROW_CHUNK`] to match `sketchlib-go`'s
+    /// `Buckets.ensure`. Empty stores are seeded with a half-chunk
+    /// of zeros centered on `k` (`store_offset = k - GROW_CHUNK/2`);
+    /// out-of-range expansions extend by `max(needed, GROW_CHUNK)`
+    /// on either side. The on-the-wire byte layout is therefore
+    /// identical between Go and Rust producers fed the same input
+    /// stream — required for the cross-language byte-parity test
+    /// in `ASAPCollector::cross_language_parity::ddsketch_byte_parity_with_go`.
+    fn ensure_bucket(&mut self, k: i32) {
+        if self.store_counts.is_empty() {
+            self.store_counts = vec![0u64; DDSKETCH_GROW_CHUNK];
+            self.store_offset = k - (DDSKETCH_GROW_CHUNK as i32 / 2);
+            return;
+        }
+        let cur_start = self.store_offset as i64;
+        let cur_end = cur_start + self.store_counts.len() as i64;
+        let kk = k as i64;
+        if kk < cur_start {
+            let needed = (cur_start - kk) as usize;
+            let grow = needed.max(DDSKETCH_GROW_CHUNK);
+            let mut buf = vec![0u64; grow];
+            buf.extend_from_slice(&self.store_counts);
+            self.store_counts = buf;
+            self.store_offset -= grow as i32;
+        } else if kk >= cur_end {
+            let needed = (kk - cur_end + 1) as usize;
+            let grow = needed.max(DDSKETCH_GROW_CHUNK);
+            self.store_counts.extend(std::iter::repeat_n(0u64, grow));
         }
     }
 
@@ -1049,6 +1081,21 @@ impl DdSketch {
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Ok(rmp_serde::from_slice(buffer)?)
+    }
+
+    /// Return the alpha value as it appears on the wire — round-tripped
+    /// through gamma exactly the way `sketchlib-go::DDSketch.SerializePortable`
+    /// does it (`alpha = (gamma - 1) / (gamma + 1)`, where
+    /// `gamma = (1+α)/(1-α)`). The roundtrip introduces a small
+    /// floating-point drift; without applying it the Rust producer's
+    /// `DDSketchState.alpha` field bytes diverge from the Go
+    /// producer's, and the cross-language byte-parity test fails on
+    /// the very first proto field. Closes part of
+    /// ProjectASAP/ASAPCollector#243.
+    #[inline]
+    pub fn wire_alpha(&self) -> f64 {
+        let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
+        (gamma - 1.0) / (gamma + 1.0)
     }
 }
 
@@ -1345,6 +1392,89 @@ mod tests_wire_ddsketch {
             new_min: current.min,
             max_changed,
             new_max: current.max,
+        }
+    }
+
+    /// Cross-language byte-parity guard against `sketchlib-go`'s
+    /// `DDSketch.SerializePortable` output for the deterministic input
+    /// `(1..=50)` with `α = 0.01`. The hex blob below was captured
+    /// from a `proto.Marshal` of the Go envelope (with `Producer` and
+    /// `HashSpec` cleared, matching the
+    /// `integration/parity/golden_test.go::TestGenerateGoldenFixtures`
+    /// recipe). Any change to [`DdSketch::update`]'s bucket-store
+    /// growth that breaks parity will surface here. Closes part of
+    /// ProjectASAP/ASAPCollector#243.
+    #[test]
+    fn test_update_then_envelope_matches_sketchlib_go_bytes() {
+        use crate::proto::sketchlib::{
+            DdSketchState, SketchEnvelope, sketch_envelope::SketchState,
+        };
+        use prost::Message;
+
+        let mut sk = DdSketch::new(0.01);
+        for i in 1..=50 {
+            sk.update(i as f64);
+        }
+
+        let state = DdSketchState {
+            alpha: sk.wire_alpha(),
+            store_counts: sk.store_counts.clone(),
+            store_offset: sk.store_offset,
+            count: sk.count,
+            sum: sk.sum,
+            min: if sk.count == 0 { f64::INFINITY } else { sk.min },
+            max: if sk.count == 0 {
+                f64::NEG_INFINITY
+            } else {
+                sk.max
+            },
+        };
+        let envelope = SketchEnvelope {
+            format_version: 1,
+            producer: None,
+            hash_spec: None,
+            sketch_state: Some(SketchState::Ddsketch(state)),
+        };
+        let mut got = Vec::with_capacity(envelope.encoded_len());
+        envelope.encode(&mut got).expect("prost encode");
+
+        // Byte string captured from sketchlib-go for the same input —
+        // see `integration/parity/golden_test.go` and
+        // `cross_language_parity::ddsketch_byte_parity_with_go` in
+        // ASAPCollector. 432 bytes total: a `SketchEnvelope` proto
+        // wrapping a `DDSketchState` whose `store_counts` is the Go
+        // chunk-128 padded layout (offset = -64, len = 384).
+        const GOLDEN_HEX: &str = "080172ab03096214ae47e17a843f128003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000100000000000000000000000000000100000000000000000000010000000000000000010000000000000001000000000001000000000001000000000001000000010000000001000000010000010000000100000100000100000100000100010000010001000100010001000100010001000100010100010100010100010101000101010100010101010101010100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000187f2032290000000000ec934031000000000000f03f390000000000004940";
+        let want = decode_hex(GOLDEN_HEX);
+        assert_eq!(
+            got,
+            want,
+            "DDSketch envelope bytes diverge from sketchlib-go golden \
+             ({} bytes got vs {} bytes want)",
+            got.len(),
+            want.len(),
+        );
+    }
+
+    fn decode_hex(s: &str) -> Vec<u8> {
+        let bytes: Vec<u8> = s
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| {
+                let high = hex_nibble(pair[0]);
+                let low = hex_nibble(pair[1]);
+                (high << 4) | low
+            })
+            .collect();
+        bytes
+    }
+
+    fn hex_nibble(c: u8) -> u8 {
+        match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            b'A'..=b'F' => c - b'A' + 10,
+            _ => panic!("non-hex byte {}", c as char),
         }
     }
 }
