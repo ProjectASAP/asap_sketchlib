@@ -1,5 +1,7 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+
+use crate::message_pack_format::dto::{StringSetOwned, StringSetRef};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 
 /// Set aggregator for tracking a set of unique string keys.
 /// Wire format: `StringSet { values: HashSet<String> }` in MessagePack.
@@ -46,32 +48,31 @@ impl SetAggregator {
     }
 
     /// Serialize to MessagePack: `StringSet { values: HashSet<String> }` as a msgpack map.
+    /// Thin shim over [`MessagePackCodec::to_msgpack`].
     pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
-        #[derive(Serialize)]
-        struct StringSet<'a> {
-            values: &'a HashSet<String>,
-        }
-        let wrapper = StringSet {
-            values: &self.values,
-        };
-        let mut buf = Vec::new();
-        rmp_serde::encode::write(&mut buf, &wrapper)?;
-        Ok(buf)
+        self.to_msgpack().map_err(MsgPackError::into_encode)
     }
 
-    /// Deserialize from MessagePack.
+    /// Thin shim over [`MessagePackCodec::from_msgpack`].
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        #[derive(Deserialize)]
-        struct StringSet {
-            values: HashSet<String>,
-        }
-        let wrapper: StringSet = rmp_serde::from_slice(buffer).map_err(
-            |e| -> Box<dyn std::error::Error + Send + Sync> {
-                format!("Failed to deserialize SetAggregator from MessagePack: {e}").into()
-            },
-        )?;
+        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            format!("Failed to deserialize SetAggregator from MessagePack: {e}").into()
+        })
+    }
+}
+
+impl MessagePackCodec for SetAggregator {
+    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
+        let wrapper = StringSetRef {
+            values: &self.values,
+        };
+        Ok(rmp_serde::to_vec(&wrapper)?)
+    }
+
+    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
+        let wrapper: StringSetOwned = rmp_serde::from_slice(bytes)?;
         Ok(Self {
             values: wrapper.values,
         })
@@ -87,6 +88,7 @@ impl Default for SetAggregator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     #[test]
     fn test_creation() {

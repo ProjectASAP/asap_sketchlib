@@ -1,8 +1,9 @@
 //! Wire-format-aligned DDSketch types.
 
 use rmp_serde::encode::Error as RmpEncodeError;
-use rmp_serde::from_slice;
 use serde::{Deserialize, Serialize};
+
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 
 /// Bucket-store growth chunk for the wire-format-aligned [`DdSketch`]
 /// variant. Matches `sketchlib-go/sketches/DDSketch.GrowChunk` so the
@@ -332,16 +333,19 @@ impl DdSketch {
         Some(self.max)
     }
 
-    /// Serialize to MessagePack bytes.
+    /// Serialize to MessagePack bytes. Thin shim over
+    /// [`MessagePackCodec::to_msgpack`].
     pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        rmp_serde::to_vec(self)
+        self.to_msgpack().map_err(MsgPackError::into_encode)
     }
 
-    /// Deserialize from MessagePack bytes.
+    /// Thin shim over [`MessagePackCodec::from_msgpack`].
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(from_slice(buffer)?)
+        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            format!("Failed to deserialize DdSketch from MessagePack: {e}").into()
+        })
     }
 
     /// Return the alpha value as it appears on the wire — round-tripped
@@ -357,6 +361,16 @@ impl DdSketch {
     pub fn wire_alpha(&self) -> f64 {
         let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
         (gamma - 1.0) / (gamma + 1.0)
+    }
+}
+
+impl MessagePackCodec for DdSketch {
+    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
+        Ok(rmp_serde::to_vec(self)?)
+    }
+
+    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
+        Ok(rmp_serde::from_slice(bytes)?)
     }
 }
 

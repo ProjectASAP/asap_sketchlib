@@ -1,9 +1,14 @@
 //! Wire-format-aligned KLL sketch types.
 
 use rmp_serde::encode::Error as RmpEncodeError;
-use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::sketches::kll::KLL;
+
+/// Re-export of the wire DTO for [`KllSketch`]. The canonical definition
+/// lives in [`crate::message_pack_format::dto::KllSketchData`]; this
+/// alias is preserved for backwards compatibility.
+pub use crate::message_pack_format::dto::KllSketchData;
 
 // =====================================================================
 // ASAP runtime wire-format-aligned variant .
@@ -50,13 +55,6 @@ pub fn bytes_from_sketchlib_kll(inner: &SketchlibKll) -> Vec<u8> {
 /// Deserializes a sketchlib KLL from MessagePack bytes.
 pub fn sketchlib_kll_from_bytes(bytes: &[u8]) -> Result<SketchlibKll, Box<dyn std::error::Error>> {
     Ok(KLL::deserialize_from_bytes(bytes)?)
-}
-
-/// Wire format used in MessagePack serialization.
-#[derive(Deserialize, Serialize)]
-pub struct KllSketchData {
-    pub k: u16,
-    pub sketch_bytes: Vec<u8>,
 }
 
 pub struct KllSketch {
@@ -111,33 +109,19 @@ impl KllSketch {
         Ok(())
     }
 
-    /// Serialize to MessagePack — matches the wire format exactly.
+    /// Serialize to MessagePack — thin shim over
+    /// [`MessagePackCodec::to_msgpack`].
     pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let sketch_bytes = self.sketch_bytes();
-        let serialized = KllSketchData {
-            k: self.k,
-            sketch_bytes,
-        };
-
-        let mut buf = Vec::new();
-        rmp_serde::encode::write(&mut buf, &serialized)?;
-        Ok(buf)
+        self.to_msgpack().map_err(MsgPackError::into_encode)
     }
 
-    /// Deserialize from MessagePack.
+    /// Thin shim over [`MessagePackCodec::from_msgpack`].
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let wire: KllSketchData = rmp_serde::from_slice(buffer).map_err(
-            |e| -> Box<dyn std::error::Error + Send + Sync> {
-                format!("Failed to deserialize KllSketchData from MessagePack: {e}").into()
-            },
-        )?;
-
-        let backend = sketchlib_kll_from_bytes(&wire.sketch_bytes)
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
-
-        Ok(Self { k: wire.k, backend })
+        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            format!("Failed to deserialize KllSketchData from MessagePack: {e}").into()
+        })
     }
 
     /// Merge from references without cloning.
@@ -170,6 +154,25 @@ impl KllSketch {
             sketch.update(value);
         }
         sketch.serialize_msgpack().ok()
+    }
+}
+
+impl MessagePackCodec for KllSketch {
+    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
+        let wire = KllSketchData {
+            k: self.k,
+            sketch_bytes: self.sketch_bytes(),
+        };
+        Ok(rmp_serde::to_vec(&wire)?)
+    }
+
+    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
+        let wire: KllSketchData = rmp_serde::from_slice(bytes)?;
+        // Decode the nested KLL payload via the typed `rmp_serde::decode::Error`
+        // path so that the surfaced `MsgPackError::Decode` carries the real
+        // underlying error rather than a stringified box.
+        let backend = KLL::deserialize_from_bytes(&wire.sketch_bytes)?;
+        Ok(Self { k: wire.k, backend })
     }
 }
 
