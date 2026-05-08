@@ -48,7 +48,6 @@ pub use coco::CocoBucket;
 
 pub mod countsketch;
 pub use countsketch::Count;
-pub use countsketch::{COUNT_SKETCH_TOPK_CAPACITY, CountSketch, CountSketchDelta};
 
 /// Hashing path markers for matrix-backed sketches.
 pub mod mode;
@@ -56,9 +55,7 @@ pub use mode::{FastPath, RegularPath};
 
 pub mod countminsketch;
 pub use crate::MatrixStorage;
-pub use countminsketch::{
-    CountMin, CountMinSketch, CountMinSketchDelta, QUICKSTART_COL_NUM, QUICKSTART_ROW_NUM,
-};
+pub use countminsketch::{CountMin, QUICKSTART_COL_NUM, QUICKSTART_ROW_NUM};
 
 #[cfg(feature = "experimental")]
 pub mod elastic;
@@ -70,14 +67,12 @@ pub use elastic::HeavyBucket;
 /// HyperLogLog implementations and aliases.
 pub mod hll;
 pub use hll::{
-    Classic, ErtlMLE, HllSketch, HllSketchDelta, HllVariant, HyperLogLog, HyperLogLogHIP,
-    HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogHIPP16, HyperLogLogP12, HyperLogLogP14,
-    HyperLogLogP16,
+    Classic, ErtlMLE, HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogHIPP14,
+    HyperLogLogHIPP16, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16,
 };
 
 pub mod kll;
 pub use kll::KLL;
-pub use kll::{KllSketch, KllSketchData};
 
 pub mod kll_dynamic;
 pub use kll_dynamic::KLLDynamic;
@@ -94,11 +89,9 @@ pub use uniform::UniformSampling;
 
 pub mod ddsketch;
 pub use ddsketch::DDSketch;
-pub use ddsketch::{DdSketch, DdSketchDelta};
 
 pub mod countminsketch_topk;
 pub use countminsketch_topk::CMSHeap;
-pub use countminsketch_topk::CountMinSketchWithHeap;
 
 pub mod countsketch_topk;
 pub use countsketch_topk::CSHeap;
@@ -113,14 +106,3 @@ pub use fold_cms::{FoldCMS, FoldCell, FoldEntry};
 pub mod fold_cs;
 pub use fold_cs::FoldCS;
 
-/// Hydra-style row-by-column matrix of KLL sketches for per-key
-/// approximate quantile estimation in the ASAP query engine.
-pub mod hydra_kll;
-pub use hydra_kll::HydraKllSketch;
-
-/// String-set aggregator wire format.
-pub mod set_aggregator;
-pub use set_aggregator::SetAggregator;
-
-/// Delta set aggregator wire format.
-pub mod delta_set_aggregator;

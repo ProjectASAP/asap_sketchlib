@@ -1,4 +1,4 @@
-use crate::sketches::kll::{KllSketch, KllSketchData};
+use crate::wrapper::kll::{KllSketch, KllSketchData};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use xxhash_rust::xxh32::xxh32;
