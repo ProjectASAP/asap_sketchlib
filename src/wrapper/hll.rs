@@ -1,7 +1,8 @@
 //! Wire-format-aligned HyperLogLog types.
 
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::{CANONICAL_HASH_SEED, DataInput, hash64_seeded};
-use rmp_serde::{encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::encode::Error as RmpEncodeError;
 use serde::{Deserialize, Serialize};
 
 // =====================================================================
@@ -280,17 +281,29 @@ impl HllSketch {
         }
     }
 
-    /// Serialize to MessagePack bytes (used by the legacy wire path
-    /// and by PR I's `_ENCODING_MSGPACK` variant when that lands).
+    /// Serialize to MessagePack bytes. Thin shim over
+    /// [`MessagePackCodec::to_msgpack`].
     pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        rmp_serde::to_vec(self)
+        self.to_msgpack().map_err(MsgPackError::into_encode)
     }
 
-    /// Deserialize from MessagePack bytes.
+    /// Thin shim over [`MessagePackCodec::from_msgpack`].
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(from_slice(buffer)?)
+        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            format!("Failed to deserialize HllSketch from MessagePack: {e}").into()
+        })
+    }
+}
+
+impl MessagePackCodec for HllSketch {
+    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
+        Ok(rmp_serde::to_vec(self)?)
+    }
+
+    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
+        Ok(rmp_serde::from_slice(bytes)?)
     }
 }
 

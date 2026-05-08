@@ -20,6 +20,9 @@ use crate::{DataInput, RegularPath, Vector2D};
 
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::dto::{CountMinSketchInnerWire, CountMinSketchWithHeapWire};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+
 // ----- asap_sketchlib-backed CMSHeap helpers -----
 // Used below by `CountMinSketchWithHeap`. Lives in this file so the
 // wire-format type and its backend share a single home.
@@ -131,24 +134,6 @@ pub fn sketchlib_cms_heap_query(cms_heap: &SketchlibCMSHeap, key: &str) -> f64 {
 pub struct CmsHeapItem {
     pub key: String,
     pub value: f64,
-}
-
-/// Helper struct matching the nested wire serialization format (inner CMS).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CmsData {
-    sketch: Vec<Vec<f64>>,
-    #[serde(rename = "row_num")]
-    rows: usize,
-    #[serde(rename = "col_num")]
-    cols: usize,
-}
-
-/// Helper struct matching the wire serialization format (outer wrapper).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CountMinSketchWithHeapSerialized {
-    sketch: CmsData,
-    topk_heap: Vec<CmsHeapItem>,
-    heap_size: usize,
 }
 
 /// Count-Min Sketch with Heap for top-k tracking.
@@ -294,56 +279,17 @@ impl CountMinSketchWithHeap {
         Ok(merged)
     }
 
+    /// Thin shim over [`MessagePackCodec::to_msgpack`].
     pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
-        let (sketch, topk_heap) = (self.sketch_matrix(), self.topk_heap_items());
-
-        let serialized = CountMinSketchWithHeapSerialized {
-            sketch: CmsData {
-                sketch,
-                rows: self.rows,
-                cols: self.cols,
-            },
-            topk_heap,
-            heap_size: self.heap_size,
-        };
-
-        let mut buf = Vec::new();
-        serialized.serialize(&mut rmp_serde::Serializer::new(&mut buf))?;
-        Ok(buf)
+        self.to_msgpack().map_err(MsgPackError::into_encode)
     }
 
+    /// Thin shim over [`MessagePackCodec::from_msgpack`].
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let serialized: CountMinSketchWithHeapSerialized = rmp_serde::from_slice(buffer).map_err(
-            |e| -> Box<dyn std::error::Error + Send + Sync> {
-                format!("Failed to deserialize CountMinSketchWithHeap from MessagePack: {e}").into()
-            },
-        )?;
-
-        let mut sorted_topk_heap = serialized.topk_heap;
-        sorted_topk_heap.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap());
-
-        let wire_heap: Vec<WireHeapItem> = sorted_topk_heap
-            .iter()
-            .map(|h| WireHeapItem {
-                key: h.key.clone(),
-                value: h.value,
-            })
-            .collect();
-        let backend = sketchlib_cms_heap_from_matrix_and_heap(
-            serialized.sketch.rows,
-            serialized.sketch.cols,
-            serialized.heap_size,
-            &serialized.sketch.sketch,
-            &wire_heap,
-        );
-
-        Ok(Self {
-            rows: serialized.sketch.rows,
-            cols: serialized.sketch.cols,
-            heap_size: serialized.heap_size,
-            backend,
+        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            format!("Failed to deserialize CountMinSketchWithHeap from MessagePack: {e}").into()
         })
     }
 
@@ -362,6 +308,50 @@ impl CountMinSketchWithHeap {
             sketch.update(key, value);
         }
         sketch.serialize_msgpack().ok()
+    }
+}
+
+impl MessagePackCodec for CountMinSketchWithHeap {
+    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
+        let wire = CountMinSketchWithHeapWire {
+            sketch: CountMinSketchInnerWire {
+                sketch: self.sketch_matrix(),
+                rows: self.rows,
+                cols: self.cols,
+            },
+            topk_heap: self.topk_heap_items(),
+            heap_size: self.heap_size,
+        };
+        Ok(rmp_serde::to_vec(&wire)?)
+    }
+
+    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
+        let wire: CountMinSketchWithHeapWire = rmp_serde::from_slice(bytes)?;
+
+        let mut sorted_topk_heap = wire.topk_heap;
+        sorted_topk_heap.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap());
+
+        let wire_heap: Vec<WireHeapItem> = sorted_topk_heap
+            .iter()
+            .map(|h| WireHeapItem {
+                key: h.key.clone(),
+                value: h.value,
+            })
+            .collect();
+        let backend = sketchlib_cms_heap_from_matrix_and_heap(
+            wire.sketch.rows,
+            wire.sketch.cols,
+            wire.heap_size,
+            &wire.sketch.sketch,
+            &wire_heap,
+        );
+
+        Ok(Self {
+            rows: wire.sketch.rows,
+            cols: wire.sketch.cols,
+            heap_size: wire.heap_size,
+            backend,
+        })
     }
 }
 

@@ -1,8 +1,9 @@
 //! Wire-format-aligned Count-Min sketch types.
 
-use rmp_serde::{encode::Error as RmpEncodeError, from_slice};
-use serde::{Deserialize, Serialize};
+use rmp_serde::encode::Error as RmpEncodeError;
 
+use crate::message_pack_format::dto::CountMinSketchWire;
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::sketches::countminsketch::CountMin;
 use crate::{DataInput, MatrixStorage, RegularPath, Vector2D};
 
@@ -78,15 +79,6 @@ pub fn sketchlib_cms_update(inner: &mut SketchlibCms, key: &str, value: f64) {
 pub fn sketchlib_cms_query(inner: &SketchlibCms, key: &str) -> f64 {
     let input = DataInput::String(key.to_owned());
     inner.estimate(&input)
-}
-
-#[derive(Serialize, Deserialize)]
-struct WireFormat {
-    sketch: Vec<Vec<f64>>,
-    #[serde(rename = "row_num")]
-    rows: usize,
-    #[serde(rename = "col_num")]
-    cols: usize,
 }
 
 /// Sparse delta between two consecutive CountMinSketch snapshots —
@@ -292,34 +284,19 @@ impl CountMinSketch {
     }
 
     /// Serialize to MessagePack — matches the wire format exactly.
+    /// Thin shim over [`MessagePackCodec::to_msgpack`] kept for
+    /// backwards compatibility.
     pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let sketch = self.sketch();
-        let wire = WireFormat {
-            sketch,
-            rows: self.rows,
-            cols: self.cols,
-        };
-
-        let mut buf = Vec::new();
-        wire.serialize(&mut rmp_serde::Serializer::new(&mut buf))?;
-        Ok(buf)
+        self.to_msgpack().map_err(MsgPackError::into_encode)
     }
 
-    /// Deserialize from MessagePack.
+    /// Deserialize from MessagePack. Thin shim over
+    /// [`MessagePackCodec::from_msgpack`].
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let wire: WireFormat =
-            from_slice(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-                format!("Failed to deserialize CountMinSketch from MessagePack: {e}").into()
-            })?;
-
-        let backend = sketchlib_cms_from_matrix(wire.rows, wire.cols, &wire.sketch);
-
-        Ok(Self {
-            rows: wire.rows,
-            cols: wire.cols,
-            backend,
+        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            format!("Failed to deserialize CountMinSketch from MessagePack: {e}").into()
         })
     }
 
@@ -349,6 +326,27 @@ impl CountMinSketch {
         values: &[f64],
     ) -> Option<Vec<u8>> {
         Self::aggregate_count(depth, width, keys, values)
+    }
+}
+
+impl MessagePackCodec for CountMinSketch {
+    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
+        let wire = CountMinSketchWire {
+            sketch: self.sketch(),
+            rows: self.rows,
+            cols: self.cols,
+        };
+        Ok(rmp_serde::to_vec(&wire)?)
+    }
+
+    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
+        let wire: CountMinSketchWire = rmp_serde::from_slice(bytes)?;
+        let backend = sketchlib_cms_from_matrix(wire.rows, wire.cols, &wire.sketch);
+        Ok(Self {
+            rows: wire.rows,
+            cols: wire.cols,
+            backend,
+        })
     }
 }
 

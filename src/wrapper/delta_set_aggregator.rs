@@ -3,18 +3,27 @@
 // logic (window tracking, stateful accumulation) stays upstream — only the
 // over-the-wire shape lives here.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// Wire format for the delta set aggregator — shared between producer and consumer.
-/// Both sides agree on `{ added: HashSet<String>, removed: HashSet<String> }` in msgpack.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct DeltaResult {
-    pub added: HashSet<String>,
-    pub removed: HashSet<String>,
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+
+/// Re-export of the wire DTO — canonical definition lives in
+/// [`crate::message_pack_format::dto::DeltaResult`]. Preserved here for
+/// backwards compatibility.
+pub use crate::message_pack_format::dto::DeltaResult;
+
+impl MessagePackCodec for DeltaResult {
+    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
+        Ok(rmp_serde::to_vec(self)?)
+    }
+
+    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
+        Ok(rmp_serde::from_slice(bytes)?)
+    }
 }
 
-/// Serialize a delta result to MessagePack.
+/// Serialize a delta result to MessagePack. Thin shim over
+/// [`MessagePackCodec::to_msgpack`] preserved for backwards compatibility.
 pub fn serialize_msgpack(
     added: &HashSet<String>,
     removed: &HashSet<String>,
@@ -23,16 +32,15 @@ pub fn serialize_msgpack(
         added: added.clone(),
         removed: removed.clone(),
     };
-    let mut buf = Vec::new();
-    rmp_serde::encode::write(&mut buf, &result)?;
-    Ok(buf)
+    result.to_msgpack().map_err(MsgPackError::into_encode)
 }
 
-/// Deserialize a delta result from MessagePack.
+/// Deserialize a delta result from MessagePack. Thin shim over
+/// [`MessagePackCodec::from_msgpack`].
 pub fn deserialize_msgpack(
     buffer: &[u8],
 ) -> Result<DeltaResult, Box<dyn std::error::Error + Send + Sync>> {
-    rmp_serde::from_slice(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+    DeltaResult::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
         format!("Failed to deserialize DeltaResult from MessagePack: {e}").into()
     })
 }

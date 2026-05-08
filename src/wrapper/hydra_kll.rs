@@ -1,16 +1,10 @@
-use crate::wrapper::kll::{KllSketch, KllSketchData};
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+
 use xxhash_rust::xxh32::xxh32;
 
-#[derive(Serialize, Deserialize)]
-struct HydraKllSketchData {
-    #[serde(rename = "row_num")]
-    rows: usize,
-    #[serde(rename = "col_num")]
-    cols: usize,
-    sketches: Vec<Vec<KllSketchData>>,
-}
+use crate::message_pack_format::dto::{HydraKllSketchWire, KllSketchData};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::wrapper::kll::KllSketch;
 
 #[derive(Debug, Clone)]
 pub struct HydraKllSketch {
@@ -111,84 +105,18 @@ impl HydraKllSketch {
         Ok(merged)
     }
 
-    /// Serialize to MessagePack — matches the wire format exactly.
+    /// Serialize to MessagePack — thin shim over
+    /// [`MessagePackCodec::to_msgpack`].
     pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
-        let mut sketches = Vec::with_capacity(self.rows);
-        for row in &self.sketch {
-            let mut row_data = Vec::with_capacity(self.cols);
-            for cell in row {
-                // Serialize each KllSketch to KllSketchData. We can
-                // avoid the round-trip by reading directly via the
-                // public sketch_bytes accessor.
-                row_data.push(KllSketchData {
-                    k: cell.k,
-                    sketch_bytes: cell.sketch_bytes(),
-                });
-            }
-            sketches.push(row_data);
-        }
-
-        let serialized = HydraKllSketchData {
-            rows: self.rows,
-            cols: self.cols,
-            sketches,
-        };
-
-        let mut buf = Vec::new();
-        rmp_serde::encode::write(&mut buf, &serialized)?;
-        Ok(buf)
+        self.to_msgpack().map_err(MsgPackError::into_encode)
     }
 
-    /// Deserialize from MessagePack.
+    /// Thin shim over [`MessagePackCodec::from_msgpack`].
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let deserialized_sketch_data: HydraKllSketchData = rmp_serde::from_slice(buffer).map_err(
-            |e| -> Box<dyn std::error::Error + Send + Sync> {
-                format!("Failed to deserialize HydraKLL from MessagePack: {e}").into()
-            },
-        )?;
-
-        if deserialized_sketch_data.sketches.len() != deserialized_sketch_data.rows {
-            return Err(format!(
-                "HydraKLL row count mismatch: expected {}, got {}",
-                deserialized_sketch_data.rows,
-                deserialized_sketch_data.sketches.len()
-            )
-            .into());
-        }
-
-        let mut sketch: Vec<Vec<KllSketch>> = Vec::with_capacity(deserialized_sketch_data.rows);
-
-        for (row_idx, row) in deserialized_sketch_data.sketches.into_iter().enumerate() {
-            if row.len() != deserialized_sketch_data.cols {
-                return Err(format!(
-                    "HydraKLL column count mismatch in row {}: expected {}, got {}",
-                    row_idx,
-                    deserialized_sketch_data.cols,
-                    row.len()
-                )
-                .into());
-            }
-
-            let mut accum_row: Vec<KllSketch> = Vec::with_capacity(deserialized_sketch_data.cols);
-            for cell in row {
-                let cell_bytes = rmp_serde::to_vec(&cell).map_err(
-                    |e| -> Box<dyn std::error::Error + Send + Sync> {
-                        format!("Failed to serialize nested KLL sketch: {e}").into()
-                    },
-                )?;
-                let kll = KllSketch::deserialize_msgpack(&cell_bytes)?;
-                accum_row.push(kll);
-            }
-
-            sketch.push(accum_row);
-        }
-
-        Ok(Self {
-            sketch,
-            rows: deserialized_sketch_data.rows,
-            cols: deserialized_sketch_data.cols,
+        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            format!("Failed to deserialize HydraKLL from MessagePack: {e}").into()
         })
     }
 
@@ -208,6 +136,71 @@ impl HydraKllSketch {
             sketch.update(key, value);
         }
         sketch.serialize_msgpack().ok()
+    }
+}
+
+impl MessagePackCodec for HydraKllSketch {
+    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
+        let mut sketches = Vec::with_capacity(self.rows);
+        for row in &self.sketch {
+            let mut row_data = Vec::with_capacity(self.cols);
+            for cell in row {
+                row_data.push(KllSketchData {
+                    k: cell.k,
+                    sketch_bytes: cell.sketch_bytes(),
+                });
+            }
+            sketches.push(row_data);
+        }
+        let wire = HydraKllSketchWire {
+            rows: self.rows,
+            cols: self.cols,
+            sketches,
+        };
+        Ok(rmp_serde::to_vec(&wire)?)
+    }
+
+    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
+        use crate::sketches::kll::KLL;
+        use rmp_serde::decode::Error as RmpDecodeError;
+
+        let wire: HydraKllSketchWire = rmp_serde::from_slice(bytes)?;
+
+        if wire.sketches.len() != wire.rows {
+            return Err(MsgPackError::Decode(RmpDecodeError::Uncategorized(
+                format!(
+                    "HydraKLL row count mismatch: expected {}, got {}",
+                    wire.rows,
+                    wire.sketches.len()
+                ),
+            )));
+        }
+
+        let mut sketch: Vec<Vec<KllSketch>> = Vec::with_capacity(wire.rows);
+        for (row_idx, row) in wire.sketches.into_iter().enumerate() {
+            if row.len() != wire.cols {
+                return Err(MsgPackError::Decode(RmpDecodeError::Uncategorized(
+                    format!(
+                        "HydraKLL column count mismatch in row {}: expected {}, got {}",
+                        row_idx,
+                        wire.cols,
+                        row.len()
+                    ),
+                )));
+            }
+            let mut accum_row: Vec<KllSketch> = Vec::with_capacity(wire.cols);
+            for cell in row {
+                let backend = KLL::deserialize_from_bytes(&cell.sketch_bytes)?;
+                accum_row.push(KllSketch { k: cell.k, backend });
+            }
+            sketch.push(accum_row);
+        }
+
+        Ok(Self {
+            sketch,
+            rows: wire.rows,
+            cols: wire.cols,
+        })
     }
 }
 
