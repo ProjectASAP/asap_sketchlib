@@ -1,12 +1,7 @@
 //! Wire-format-aligned HyperLogLog types.
 
-use crate::octo_delta::HllDelta;
-use crate::sketches::hll::{HyperLogLog, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16};
-use crate::structures::fixed_structure::HllRegisterStorage;
-use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, SketchHasher, hash64_seeded};
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
+use crate::{CANONICAL_HASH_SEED, DataInput, hash64_seeded};
+use rmp_serde::{encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 
 // =====================================================================
@@ -213,7 +208,7 @@ impl HllSketch {
     /// 131) — re-stated here so the wire-format type doesn't need
     /// to construct a parameterized typed sketch on every insert.
     pub fn update(&mut self, value: &[u8]) {
-        let hashed_val = crate::hash64_seeded(crate::CANONICAL_HASH_SEED, &DataInput::Bytes(value));
+        let hashed_val = hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Bytes(value));
         let p = self.precision as usize;
         let register_bits = (u64::BITS as usize) - p;
         let p_mask: u64 = (1u64 << p) - 1;
@@ -287,7 +282,7 @@ impl HllSketch {
 
     /// Serialize to MessagePack bytes (used by the legacy wire path
     /// and by PR I's `_ENCODING_MSGPACK` variant when that lands).
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
         rmp_serde::to_vec(self)
     }
 
@@ -295,7 +290,7 @@ impl HllSketch {
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(rmp_serde::from_slice(buffer)?)
+        Ok(from_slice(buffer)?)
     }
 }
 

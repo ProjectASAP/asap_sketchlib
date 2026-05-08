@@ -1,13 +1,6 @@
 //! Wire-format-aligned Count Sketch types.
 
-use crate::octo_delta::{COUNT_PROMASK, CountDelta};
-use crate::sketches::countsketch::Count;
-use crate::{
-    DataInput, MatrixStorage, RegularPath, SketchHasher, Vector2D, hash64_seeded,
-};
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
+use rmp_serde::{encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 
 // =====================================================================
@@ -303,7 +296,7 @@ impl CountSketch {
 
     /// Serialize to MessagePack bytes (used by the legacy wire path
     /// and by PR I's `_ENCODING_MSGPACK` variant when that lands).
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
         rmp_serde::to_vec(self)
     }
 
@@ -311,7 +304,7 @@ impl CountSketch {
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(rmp_serde::from_slice(buffer)?)
+        Ok(from_slice(buffer)?)
     }
 }
 

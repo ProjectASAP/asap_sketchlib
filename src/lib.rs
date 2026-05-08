@@ -21,6 +21,8 @@
 /// Shared primitives used across sketches, including input wrappers, hashers,
 /// storage backends, and reusable utilities.
 pub mod common;
+/// MessagePack format description shared with `sketchlib-go`.
+pub mod message_pack_format;
 /// Portable protobuf message types for sketch interchange.
 pub mod proto;
 /// Higher-level composition layers such as Hydra, UnivMon, tumbling windows,
@@ -28,13 +30,11 @@ pub mod proto;
 pub mod sketch_framework;
 /// Core sketch implementations such as Count-Min, HyperLogLog, KLL, and DDSketch.
 pub mod sketches;
+#[cfg(test)]
+pub mod test_utils;
 /// Wire-format-aligned variants of the sketches, byte-compatible with
 /// `sketchlib-go` and consumed by the ASAP query engine.
 pub mod wrapper;
-/// MessagePack format description shared with `sketchlib-go`.
-pub mod message_pack_format;
-#[cfg(test)]
-pub mod test_utils;
 
 #[doc(hidden)]
 pub mod __private {

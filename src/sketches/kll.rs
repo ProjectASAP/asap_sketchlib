@@ -1280,4 +1280,3 @@ mod tests {
         assert_eq!(a.count(), restored.count());
     }
 }
-

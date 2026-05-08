@@ -1,15 +1,10 @@
 //! Wire-format-aligned Count-Min sketch types.
 
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
+use rmp_serde::{encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 
-use crate::octo_delta::{CM_PROMASK, CmDelta};
 use crate::sketches::countminsketch::CountMin;
-use crate::{
-    DataInput, MatrixStorage, RegularPath, SketchHasher, Vector2D, hash64_seeded,
-};
+use crate::{DataInput, MatrixStorage, RegularPath, Vector2D};
 
 // =====================================================================
 // asap_sketchlib wire-format-aligned variant.
@@ -297,7 +292,7 @@ impl CountMinSketch {
     }
 
     /// Serialize to MessagePack — matches the wire format exactly.
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let sketch = self.sketch();
         let wire = WireFormat {
             sketch,
@@ -314,11 +309,10 @@ impl CountMinSketch {
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let wire: WireFormat = rmp_serde::from_slice(buffer).map_err(
-            |e| -> Box<dyn std::error::Error + Send + Sync> {
+        let wire: WireFormat =
+            from_slice(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                 format!("Failed to deserialize CountMinSketch from MessagePack: {e}").into()
-            },
-        )?;
+            })?;
 
         let backend = sketchlib_cms_from_matrix(wire.rows, wire.cols, &wire.sketch);
 

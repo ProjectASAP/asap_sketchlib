@@ -1,9 +1,7 @@
 //! Wire-format-aligned CMSHeap types.
 
 use crate::sketches::countminsketch_topk::CMSHeap;
-use crate::{
-    DataInput, RegularPath, Vector2D,
-};
+use crate::{DataInput, RegularPath, Vector2D};
 
 // =====================================================================
 // asap_sketchlib wire-format-aligned variant.

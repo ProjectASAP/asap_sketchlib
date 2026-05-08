@@ -1,12 +1,9 @@
 //! Wire-format-aligned KLL sketch types.
 
-use rmp_serde::decode::Error as RmpDecodeError;
 use rmp_serde::encode::Error as RmpEncodeError;
 use serde::{Deserialize, Serialize};
 
-use crate::common::input::data_input_to_f64;
 use crate::sketches::kll::KLL;
-use crate::{DataInput};
 
 // =====================================================================
 // ASAP runtime wire-format-aligned variant .
@@ -115,7 +112,7 @@ impl KllSketch {
     }
 
     /// Serialize to MessagePack — matches the wire format exactly.
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let sketch_bytes = self.sketch_bytes();
         let serialized = KllSketchData {
             k: self.k,

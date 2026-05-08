@@ -1,12 +1,7 @@
 //! Wire-format-aligned DDSketch types.
 
-use crate::DataInput;
-use crate::common::input::data_input_to_f64;
-use crate::common::numerical::NumericalValue;
-use crate::common::structures::Vector1D;
-use rmp_serde::decode::Error as RmpDecodeError;
 use rmp_serde::encode::Error as RmpEncodeError;
-use rmp_serde::{from_slice, to_vec_named};
+use rmp_serde::from_slice;
 use serde::{Deserialize, Serialize};
 
 /// Bucket-store growth chunk for the wire-format-aligned [`DdSketch`]
@@ -338,7 +333,7 @@ impl DdSketch {
     }
 
     /// Serialize to MessagePack bytes.
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
         rmp_serde::to_vec(self)
     }
 
@@ -346,7 +341,7 @@ impl DdSketch {
     pub fn deserialize_msgpack(
         buffer: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(rmp_serde::from_slice(buffer)?)
+        Ok(from_slice(buffer)?)
     }
 
     /// Return the alpha value as it appears on the wire — round-tripped
