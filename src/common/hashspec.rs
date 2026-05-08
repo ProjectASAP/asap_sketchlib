@@ -5,9 +5,9 @@
 //! `sketchlib-go` and `asap_sketchlib` share three building blocks for
 //! these sketches:
 //!
-//!   1. A 20-entry seed table ([`CANONICAL_HASH_SEED_TABLE`], identical
+//!   1. A 20-entry seed table (`CANONICAL_HASH_SEED_TABLE`, identical
 //!      bit-for-bit to Go's `seedList`).
-//!   2. A canonical seed index ([`CANONICAL_HASH_SEED`] = 5).
+//!   2. A canonical seed index (`CANONICAL_HASH_SEED` = 5).
 //!   3. A single XXH3-64-with-seed call per (key, seed) pair, with the
 //!      resulting `u64` then bit-sliced into per-row column indices and
 //!      ±1 signs.
