@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use xxhash_rust::xxh32::xxh32;
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::MessagePackCodec;
 use crate::wrapper::kll::KllSketch;
 
 #[derive(Debug, Clone)]
@@ -104,21 +104,6 @@ impl HydraKllSketch {
         Ok(merged)
     }
 
-    /// Serialize to MessagePack — thin shim over
-    /// [`MessagePackCodec::to_msgpack`].
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
-        self.to_msgpack().map_err(MsgPackError::into_encode)
-    }
-
-    /// Thin shim over [`MessagePackCodec::from_msgpack`].
-    pub fn deserialize_msgpack(
-        buffer: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("Failed to deserialize HydraKLL from MessagePack: {e}").into()
-        })
-    }
-
     /// One-shot aggregation: build a sketch from parallel keys/values.
     pub fn aggregate_hydrakll(
         rows: usize,
@@ -134,7 +119,7 @@ impl HydraKllSketch {
         for (key, &value) in keys.iter().zip(values.iter()) {
             sketch.update(key, value);
         }
-        sketch.serialize_msgpack().ok()
+        sketch.to_msgpack().ok()
     }
 }
 
@@ -191,8 +176,8 @@ mod tests {
         h.update("key1", 5.0);
         h.update("key2", 10.0);
 
-        let bytes = h.serialize_msgpack().unwrap();
-        let deserialized = HydraKllSketch::deserialize_msgpack(&bytes).unwrap();
+        let bytes = h.to_msgpack().unwrap();
+        let deserialized = HydraKllSketch::from_msgpack(&bytes).unwrap();
 
         assert_eq!(deserialized.rows, 2);
         assert_eq!(deserialized.cols, 3);
@@ -203,7 +188,7 @@ mod tests {
         let keys = ["a", "b", "a"];
         let values = [1.0, 2.0, 3.0];
         let bytes = HydraKllSketch::aggregate_hydrakll(2, 5, 200, &keys, &values).unwrap();
-        let h = HydraKllSketch::deserialize_msgpack(&bytes).unwrap();
+        let h = HydraKllSketch::from_msgpack(&bytes).unwrap();
         assert_eq!(h.rows, 2);
         assert_eq!(h.cols, 5);
     }

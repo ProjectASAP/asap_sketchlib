@@ -1,8 +1,6 @@
 //! Wire-format-aligned KLL sketch types.
 
-use rmp_serde::encode::Error as RmpEncodeError;
-
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::MessagePackCodec;
 use crate::sketches::kll::KLL;
 
 /// Re-export of the wire DTO for [`KllSketch`]. The canonical definition
@@ -109,21 +107,6 @@ impl KllSketch {
         Ok(())
     }
 
-    /// Serialize to MessagePack — thin shim over
-    /// [`MessagePackCodec::to_msgpack`].
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        self.to_msgpack().map_err(MsgPackError::into_encode)
-    }
-
-    /// Thin shim over [`MessagePackCodec::from_msgpack`].
-    pub fn deserialize_msgpack(
-        buffer: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("Failed to deserialize KllSketchData from MessagePack: {e}").into()
-        })
-    }
-
     /// Merge from references without cloning.
     pub fn merge_refs(
         sketches: &[&Self],
@@ -153,7 +136,7 @@ impl KllSketch {
         for &value in values {
             sketch.update(value);
         }
-        sketch.serialize_msgpack().ok()
+        sketch.to_msgpack().ok()
     }
 }
 
@@ -241,8 +224,8 @@ mod tests_wire_kll {
             kll.update(i as f64);
         }
 
-        let bytes = kll.serialize_msgpack().unwrap();
-        let deserialized = KllSketch::deserialize_msgpack(&bytes).unwrap();
+        let bytes = kll.to_msgpack().unwrap();
+        let deserialized = KllSketch::from_msgpack(&bytes).unwrap();
 
         assert_eq!(deserialized.k, 200);
         assert_eq!(deserialized.count(), 5);
@@ -254,7 +237,7 @@ mod tests_wire_kll {
     fn test_aggregate_kll() {
         let values = [1.0, 2.0, 3.0, 4.0, 5.0];
         let bytes = KllSketch::aggregate_kll(200, &values).unwrap();
-        let kll = KllSketch::deserialize_msgpack(&bytes).unwrap();
+        let kll = KllSketch::from_msgpack(&bytes).unwrap();
         assert_eq!(kll.count(), 5);
         assert_eq!(kll.quantile(0.0), 1.0);
         assert_eq!(kll.quantile(1.0), 5.0);

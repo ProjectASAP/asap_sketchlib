@@ -1,7 +1,5 @@
 use std::collections::HashSet;
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
-
 /// Set aggregator for tracking a set of unique string keys.
 /// Wire format: `StringSet { values: HashSet<String> }` in MessagePack.
 #[derive(Debug, Clone)]
@@ -45,21 +43,6 @@ impl SetAggregator {
         }
         Ok(merged)
     }
-
-    /// Serialize to MessagePack: `StringSet { values: HashSet<String> }` as a msgpack map.
-    /// Thin shim over [`MessagePackCodec::to_msgpack`].
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
-        self.to_msgpack().map_err(MsgPackError::into_encode)
-    }
-
-    /// Thin shim over [`MessagePackCodec::from_msgpack`].
-    pub fn deserialize_msgpack(
-        buffer: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("Failed to deserialize SetAggregator from MessagePack: {e}").into()
-        })
-    }
 }
 
 impl Default for SetAggregator {
@@ -71,6 +54,7 @@ impl Default for SetAggregator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message_pack_format::MessagePackCodec;
     use serde::Deserialize;
 
     #[test]
@@ -113,8 +97,8 @@ mod tests {
         sa.update("web");
         sa.update("api");
 
-        let bytes = sa.serialize_msgpack().unwrap();
-        let deserialized = SetAggregator::deserialize_msgpack(&bytes).unwrap();
+        let bytes = sa.to_msgpack().unwrap();
+        let deserialized = SetAggregator::from_msgpack(&bytes).unwrap();
 
         assert_eq!(deserialized.values.len(), 2);
         assert!(deserialized.values.contains("web"));
@@ -130,7 +114,7 @@ mod tests {
         }
         let mut sa = SetAggregator::new();
         sa.update("a");
-        let bytes = sa.serialize_msgpack().unwrap();
+        let bytes = sa.to_msgpack().unwrap();
         let decoded: StringSet =
             rmp_serde::from_slice(&bytes).expect("should decode as StringSet { values: ... }");
         assert!(decoded.values.contains("a"));

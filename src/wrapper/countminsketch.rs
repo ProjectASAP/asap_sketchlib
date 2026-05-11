@@ -1,8 +1,6 @@
 //! Wire-format-aligned Count-Min sketch types.
 
-use rmp_serde::encode::Error as RmpEncodeError;
-
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::MessagePackCodec;
 use crate::sketches::countminsketch::CountMin;
 use crate::{DataInput, MatrixStorage, RegularPath, Vector2D};
 
@@ -282,23 +280,6 @@ impl CountMinSketch {
         Ok(())
     }
 
-    /// Serialize to MessagePack — matches the wire format exactly.
-    /// Thin shim over [`MessagePackCodec::to_msgpack`] kept for
-    /// backwards compatibility.
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        self.to_msgpack().map_err(MsgPackError::into_encode)
-    }
-
-    /// Deserialize from MessagePack. Thin shim over
-    /// [`MessagePackCodec::from_msgpack`].
-    pub fn deserialize_msgpack(
-        buffer: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("Failed to deserialize CountMinSketch from MessagePack: {e}").into()
-        })
-    }
-
     /// One-shot aggregation: build a sketch from parallel key/value slices
     /// and return the msgpack bytes.
     pub fn aggregate_count(
@@ -314,7 +295,7 @@ impl CountMinSketch {
         for (key, &value) in keys.iter().zip(values.iter()) {
             sketch.update(key, value);
         }
-        sketch.serialize_msgpack().ok()
+        sketch.to_msgpack().ok()
     }
 
     /// Same as aggregate_count — CMS accumulates sums by construction.
@@ -399,8 +380,8 @@ mod tests_wire_countmin {
         cms.update("banana", 3.0);
         cms.update("apple", 2.0); // total "apple" = 7
 
-        let bytes = cms.serialize_msgpack().unwrap();
-        let deserialized = CountMinSketch::deserialize_msgpack(&bytes).unwrap();
+        let bytes = cms.to_msgpack().unwrap();
+        let deserialized = CountMinSketch::from_msgpack(&bytes).unwrap();
 
         assert_eq!(deserialized.rows, 4);
         assert_eq!(deserialized.cols, 256);
@@ -413,7 +394,7 @@ mod tests_wire_countmin {
         let keys = ["a", "b", "a"];
         let values = [1.0, 2.0, 3.0];
         let bytes = CountMinSketch::aggregate_count(4, 100, &keys, &values).unwrap();
-        let cms = CountMinSketch::deserialize_msgpack(&bytes).unwrap();
+        let cms = CountMinSketch::from_msgpack(&bytes).unwrap();
         // "a" was updated twice (1.0 + 3.0 = 4.0), "b" once (2.0)
         assert!(cms.estimate("a") >= 4.0);
         assert!(cms.estimate("b") >= 2.0);

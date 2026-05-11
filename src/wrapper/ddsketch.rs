@@ -1,9 +1,6 @@
 //! Wire-format-aligned DDSketch types.
 
-use rmp_serde::encode::Error as RmpEncodeError;
 use serde::{Deserialize, Serialize};
-
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 
 /// Bucket-store growth chunk for the wire-format-aligned [`DdSketch`]
 /// variant. Matches `sketchlib-go/sketches/DDSketch.GrowChunk` so the
@@ -333,21 +330,6 @@ impl DdSketch {
         Some(self.max)
     }
 
-    /// Serialize to MessagePack bytes. Thin shim over
-    /// [`MessagePackCodec::to_msgpack`].
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        self.to_msgpack().map_err(MsgPackError::into_encode)
-    }
-
-    /// Thin shim over [`MessagePackCodec::from_msgpack`].
-    pub fn deserialize_msgpack(
-        buffer: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("Failed to deserialize DdSketch from MessagePack: {e}").into()
-        })
-    }
-
     /// Return the alpha value as it appears on the wire — round-tripped
     /// through gamma exactly the way `sketchlib-go::DDSketch.SerializePortable`
     /// does it (`alpha = (gamma - 1) / (gamma + 1)`, where
@@ -367,6 +349,7 @@ impl DdSketch {
 #[cfg(test)]
 mod tests_wire_ddsketch {
     use super::*;
+    use crate::message_pack_format::MessagePackCodec;
 
     #[test]
     fn test_new_empty() {
@@ -490,8 +473,8 @@ mod tests_wire_ddsketch {
     #[test]
     fn test_msgpack_round_trip() {
         let original = DdSketch::from_raw(0.01, vec![1, 2, 3], -2, 6, 30.0, 1.0, 5.0);
-        let bytes = original.serialize_msgpack().unwrap();
-        let decoded = DdSketch::deserialize_msgpack(&bytes).unwrap();
+        let bytes = original.to_msgpack().unwrap();
+        let decoded = DdSketch::from_msgpack(&bytes).unwrap();
         assert_eq!(decoded.store_counts, original.store_counts);
         assert_eq!(decoded.store_offset, original.store_offset);
         assert_eq!(decoded.count, original.count);

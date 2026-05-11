@@ -1,8 +1,6 @@
 //! Wire-format-aligned HyperLogLog types.
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::{CANONICAL_HASH_SEED, DataInput, hash64_seeded};
-use rmp_serde::encode::Error as RmpEncodeError;
 use serde::{Deserialize, Serialize};
 
 // =====================================================================
@@ -280,26 +278,12 @@ impl HllSketch {
             HllVariant::Hip => 3,
         }
     }
-
-    /// Serialize to MessagePack bytes. Thin shim over
-    /// [`MessagePackCodec::to_msgpack`].
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        self.to_msgpack().map_err(MsgPackError::into_encode)
-    }
-
-    /// Thin shim over [`MessagePackCodec::from_msgpack`].
-    pub fn deserialize_msgpack(
-        buffer: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("Failed to deserialize HllSketch from MessagePack: {e}").into()
-        })
-    }
 }
 
 #[cfg(test)]
 mod tests_wire_hll {
     use super::*;
+    use crate::message_pack_format::MessagePackCodec;
 
     #[test]
     fn test_new_empty() {
@@ -409,8 +393,8 @@ mod tests_wire_hll {
             2.0,
             3.0,
         );
-        let bytes = original.serialize_msgpack().unwrap();
-        let decoded = HllSketch::deserialize_msgpack(&bytes).unwrap();
+        let bytes = original.to_msgpack().unwrap();
+        let decoded = HllSketch::from_msgpack(&bytes).unwrap();
         assert_eq!(decoded.registers, original.registers);
         assert_eq!(decoded.precision, original.precision);
         assert_eq!(decoded.hip_kxq0, 1.0);

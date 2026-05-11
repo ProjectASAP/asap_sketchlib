@@ -29,10 +29,10 @@ in-process implementation:
 ## Serialization
 
 Each wrapper type implements
-[`MessagePackCodec`](./message_pack_format.md) and exposes thin
-inherent shims (`serialize_msgpack` / `deserialize_msgpack`) for
-backwards compatibility. The on-the-wire shape is described
-per-algorithm in [`src/message_pack_format/`](./message_pack_format.md).
+[`MessagePackCodec`](./message_pack_format.md), which is the single
+entry point for encode/decode (`to_msgpack` / `from_msgpack`). The
+on-the-wire shape is described per-algorithm in
+[`src/message_pack_format/`](./message_pack_format.md).
 
 ## In-Process vs Wrapper
 

@@ -5,10 +5,8 @@ use super::Error;
 
 /// Round-trippable MessagePack codec.
 ///
-/// All [`crate::wrapper`] sketch / aggregator types implement this trait.
-/// The trait is the canonical entry point; the legacy inherent methods
-/// `serialize_msgpack` / `deserialize_msgpack` on each wrapper are kept
-/// as thin shims for backwards compatibility.
+/// All [`crate::wrapper`] sketch / aggregator types implement this trait;
+/// it is the single entry point for encode/decode against the wire format.
 ///
 /// There is no `dyn`-safe usage — callers always know the concrete
 /// type — so impls are dispatched statically (zero-cost) via

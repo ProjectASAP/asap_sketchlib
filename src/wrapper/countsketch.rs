@@ -1,9 +1,6 @@
 //! Wire-format-aligned Count Sketch types.
 
-use rmp_serde::encode::Error as RmpEncodeError;
 use serde::{Deserialize, Serialize};
-
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 
 // =====================================================================
 // ASAP runtime wire-format-aligned variant .
@@ -295,27 +292,12 @@ impl CountSketch {
         }
         Ok(merged)
     }
-
-    /// Serialize to MessagePack bytes (used by the legacy wire path
-    /// and by PR I's `_ENCODING_MSGPACK` variant when that lands).
-    /// Thin shim over [`MessagePackCodec::to_msgpack`].
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        self.to_msgpack().map_err(MsgPackError::into_encode)
-    }
-
-    /// Thin shim over [`MessagePackCodec::from_msgpack`].
-    pub fn deserialize_msgpack(
-        buffer: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("Failed to deserialize CountSketch from MessagePack: {e}").into()
-        })
-    }
 }
 
 #[cfg(test)]
 mod tests_wire_count {
     use super::*;
+    use crate::message_pack_format::MessagePackCodec;
 
     #[test]
     fn test_new_empty() {
@@ -482,8 +464,8 @@ mod tests_wire_count {
     fn test_msgpack_round_trip() {
         let original =
             CountSketch::from_legacy_matrix(vec![vec![1.5, -2.5], vec![3.5, -4.5]], 2, 2);
-        let bytes = original.serialize_msgpack().unwrap();
-        let decoded = CountSketch::deserialize_msgpack(&bytes).unwrap();
+        let bytes = original.to_msgpack().unwrap();
+        let decoded = CountSketch::from_msgpack(&bytes).unwrap();
         assert_eq!(decoded.sketch(), original.sketch());
         assert_eq!(decoded.rows, original.rows);
         assert_eq!(decoded.cols, original.cols);

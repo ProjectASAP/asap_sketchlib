@@ -20,7 +20,7 @@ use crate::{DataInput, RegularPath, Vector2D};
 
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::MessagePackCodec;
 
 // ----- asap_sketchlib-backed CMSHeap helpers -----
 // Used below by `CountMinSketchWithHeap`. Lives in this file so the
@@ -278,20 +278,6 @@ impl CountMinSketchWithHeap {
         Ok(merged)
     }
 
-    /// Thin shim over [`MessagePackCodec::to_msgpack`].
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
-        self.to_msgpack().map_err(MsgPackError::into_encode)
-    }
-
-    /// Thin shim over [`MessagePackCodec::from_msgpack`].
-    pub fn deserialize_msgpack(
-        buffer: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("Failed to deserialize CountMinSketchWithHeap from MessagePack: {e}").into()
-        })
-    }
-
     pub fn aggregate_topk(
         rows: usize,
         cols: usize,
@@ -306,7 +292,7 @@ impl CountMinSketchWithHeap {
         for (key, &value) in keys.iter().zip(values.iter()) {
             sketch.update(key, value);
         }
-        sketch.serialize_msgpack().ok()
+        sketch.to_msgpack().ok()
     }
 }
 
@@ -393,8 +379,8 @@ mod tests_wire_cms_heap {
         cms.update("hot", 100.0);
         cms.update("cold", 1.0);
 
-        let bytes = cms.serialize_msgpack().unwrap();
-        let deserialized = CountMinSketchWithHeap::deserialize_msgpack(&bytes).unwrap();
+        let bytes = cms.to_msgpack().unwrap();
+        let deserialized = CountMinSketchWithHeap::from_msgpack(&bytes).unwrap();
 
         assert_eq!(deserialized.rows, 4);
         assert_eq!(deserialized.cols, 128);
@@ -415,7 +401,7 @@ mod tests_wire_cms_heap {
         let keys = ["a", "b", "a", "c"];
         let values = [1.0, 2.0, 3.0, 0.5];
         let bytes = CountMinSketchWithHeap::aggregate_topk(4, 100, 2, &keys, &values).unwrap();
-        let cms = CountMinSketchWithHeap::deserialize_msgpack(&bytes).unwrap();
+        let cms = CountMinSketchWithHeap::from_msgpack(&bytes).unwrap();
         assert_eq!(cms.heap_size, 2);
         assert!(cms.topk_heap_items().len() <= 2);
     }

@@ -46,10 +46,10 @@ impl From<rmp_serde::decode::Error> for Error {
 
 impl Error {
     /// Extracts the underlying `rmp_serde::encode::Error`. Used by the
-    /// inherent `serialize_msgpack` shims in the wrapper modules that
-    /// preserve the pre-trait return type. The decode arm is unreachable
-    /// because callers only invoke this on values produced by an encode
-    /// path.
+    /// `delta_set_aggregator` free function whose public signature
+    /// predates [`MessagePackCodec`] and still returns the raw rmp_serde
+    /// error type. The decode arm is unreachable because callers only
+    /// invoke this on values produced by an encode path.
     pub(crate) fn into_encode(self) -> rmp_serde::encode::Error {
         match self {
             Error::Encode(e) => e,
