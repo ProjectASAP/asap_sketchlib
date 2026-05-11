@@ -2,7 +2,7 @@
 
 use crate::message_pack_format::MessagePackCodec;
 use crate::sketches::countminsketch::CountMin;
-use crate::{DataInput, MatrixStorage, RegularPath, Vector2D};
+use crate::{DataInput, FastPath, Vector2D};
 
 // =====================================================================
 // asap_sketchlib wire-format-aligned variant.
@@ -21,8 +21,11 @@ use crate::{DataInput, MatrixStorage, RegularPath, Vector2D};
 // type and its backend share a single home.
 
 /// Concrete Count-Min type backing the wire-format `CountMinSketch`.
-/// Uses f64 counters (`Vector2D<f64>`) for weighted updates without integer rounding.
-pub type SketchlibCms = CountMin<Vector2D<f64>, RegularPath>;
+/// Uses f64 counters (`Vector2D<f64>`) for weighted updates without
+/// integer rounding, and the `FastPath` packed-hash strategy so the
+/// matrix-cell layout is byte-parity with `sketchlib-go`. Locked in by
+/// `tests/sketches_go_parity_probe.rs`.
+pub type SketchlibCms = CountMin<Vector2D<f64>, FastPath>;
 
 /// Creates a fresh sketchlib Count-Min sketch with the given dimensions.
 pub fn new_sketchlib_cms(row_num: usize, col_num: usize) -> SketchlibCms {
@@ -68,14 +71,12 @@ pub fn sketchlib_cms_update(inner: &mut SketchlibCms, key: &str, value: f64) {
     if value <= 0.0 {
         return;
     }
-    let input = DataInput::String(key.to_owned());
-    inner.insert_many(&input, value);
+    inner.insert_many(&DataInput::String(key.to_owned()), value);
 }
 
 /// Helper to query a sketchlib Count-Min for a key, returning f64.
 pub fn sketchlib_cms_query(inner: &SketchlibCms, key: &str) -> f64 {
-    let input = DataInput::String(key.to_owned());
-    inner.estimate(&input)
+    inner.estimate(&DataInput::String(key.to_owned()))
 }
 
 /// Sparse delta between two consecutive CountMinSketch snapshots —
@@ -139,70 +140,30 @@ impl CountMinSketch {
         }
     }
 
-    /// Insert a single weighted observation. Routes the key through the
-    /// shared [`crate::common::hashspec`] pipeline so the matrix-cell
-    /// layout matches `sketchlib-go::CountMinSketch.InsertWithHash`
-    /// bit-for-bit:
+    /// Insert a single weighted observation. Delegates to the
+    /// `FastPath` backend so the matrix-cell layout matches
+    /// `sketchlib-go::CountMinSketch.InsertWithHash` bit-for-bit; the
+    /// parity is locked in by `tests/sketches_go_parity_probe.rs`.
     ///
-    /// 1. `hash = Hash64(key) = XXH3-64-with-seed(seed_list[0], key)`
-    ///    (Go's `common.Hash64`, mirrored by
-    ///    [`hash_with_spec`](crate::common::hashspec::hash_with_spec))
-    /// 2. for each row `r`:
-    ///    - `col_raw = derive_index(spec, r, hash, mask_width)` — Go's
-    ///      `MatrixHashType.RowHash` slice on the packed `u64`, where
-    ///      `mask_width = next_power_of_two(cols)` (mirrors Go's
-    ///      `hashLayoutForCols`)
-    ///    - `col = col_raw % cols` — fold for non-pow2 widths,
-    ///      mirroring Go's `if c >= s.Cols { c %= s.Cols }`
-    /// 3. `matrix[r][col] += value`
-    ///
-    /// Constraints inherited from Go's Packed64 mode (the only mode
-    /// the wire-format CountMinSketch exercises today):
-    /// - `rows * log2(next_pow2(cols)) ≤ 64` so the packed hash holds
-    ///   all row indices. The
-    ///   `asap-precompute-rs::CMSWrapper` default (4×2048 → 4×11 = 44
-    ///   bits) and Go's `DefaultRowNum=3, DefaultColNum=4096` (3×12 =
-    ///   36 bits) both fit comfortably.
-    ///
-    /// Negative or zero values are skipped, mirroring the prior helper
-    /// behavior (Go's `UpdateWeight` no-ops on `many == 0`).
+    /// Negative or zero values are skipped, mirroring Go's
+    /// `UpdateWeight` behavior on `many == 0`.
     pub fn update(&mut self, key: &str, value: f64) {
         if value <= 0.0 || self.rows == 0 || self.cols == 0 {
             return;
         }
-        let spec = crate::common::hashspec::HashSpec::default();
-        let hash = crate::common::hashspec::hash_with_spec(&spec, key.as_bytes());
-        let mask_width = (self.cols as u32).next_power_of_two();
-        let storage = self.backend.as_storage_mut();
-        for r in 0..self.rows {
-            let col_raw = crate::common::hashspec::derive_index(&spec, r, hash, mask_width);
-            let col = col_raw % self.cols;
-            storage.increment_by_row(r, col, value);
-        }
+        self.backend
+            .insert_many(&DataInput::String(key.to_owned()), value);
     }
 
-    /// Estimate the frequency of `key` (CountMin point query). Mirrors
-    /// `sketchlib-go::CountMinSketch.estimateMatrixHash` /
-    /// `queryFrequencyFast`: derives the same per-row column index that
-    /// [`Self::update`] used and returns the minimum cell across rows.
+    /// Estimate the frequency of `key` (CountMin point query).
+    /// Delegates to the `FastPath` backend, which derives the same
+    /// per-row column index that [`Self::update`] used.
     pub fn estimate(&self, key: &str) -> f64 {
         if self.rows == 0 || self.cols == 0 {
             return 0.0;
         }
-        let spec = crate::common::hashspec::HashSpec::default();
-        let hash = crate::common::hashspec::hash_with_spec(&spec, key.as_bytes());
-        let mask_width = (self.cols as u32).next_power_of_two();
-        let storage = self.backend.as_storage();
-        let mut min = f64::INFINITY;
-        for r in 0..self.rows {
-            let col_raw = crate::common::hashspec::derive_index(&spec, r, hash, mask_width);
-            let col = col_raw % self.cols;
-            let v = storage.query_one_counter(r, col);
-            if v < min {
-                min = v;
-            }
-        }
-        if min.is_infinite() { 0.0 } else { min }
+        self.backend
+            .estimate(&DataInput::String(key.to_owned()))
     }
 
     /// Merge another CountMinSketch into self in place. Both operands

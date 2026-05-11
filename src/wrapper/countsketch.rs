@@ -149,62 +149,56 @@ impl CountSketch {
         }
     }
 
-    /// Insert a single weighted observation. Routes the key through the
-    /// shared [`crate::common::hashspec`] pipeline so the matrix-cell
+    /// Insert a single weighted observation. Uses the shared
+    /// [`MatrixHashType::Packed64`] fast-path hash so the matrix-cell
     /// layout matches `sketchlib-go::CountSketch.UpdateString`
-    /// bit-for-bit:
+    /// bit-for-bit. Locked in by
+    /// `tests/sketches_go_parity_probe.rs`.
     ///
-    /// 1. `hash = Hash64(key) = XXH3-64-with-seed(seed_list[0], key)`
-    ///    (Go's `common.Hash64`, mirrored by
-    ///    [`hash_with_spec`](crate::common::hashspec::hash_with_spec))
-    /// 2. for each row `r`:
-    ///    - `col = derive_index(spec, r, hash, cols)` — Go's
-    ///      `MatrixHashType.RowHash` slice on the packed `u64`
-    ///    - `sign = derive_sign(spec, r, hash)` — Go's
-    ///      `MatrixHashType.SignForRow` high-bit-minus-row extraction
-    /// 3. `matrix[r][col] += sign * value`
-    ///
-    /// Constraints inherited from Go's Packed64 mode (the only mode
-    /// the wire-format CountSketch exercises today):
+    /// Constraints inherited from Go's Packed64 mode:
     /// - `cols` must be a power of two; the column mask is `cols - 1`.
     /// - `rows * (log2(cols) + 1) ≤ 64` so the packed hash holds all
     ///   row indices and sign bits.
-    ///
-    /// Both constraints are honored by the
-    /// `asap-precompute-rs::CountSketchWrapper` defaults (3×512 → 30
-    /// bits) and by `sketchlib-go`'s
-    /// `RustDefaultRows = 3, RustDefaultCols = 4096` (39 bits).
     pub fn update(&mut self, key: &str, value: f64) {
         if self.rows == 0 || self.cols == 0 {
             return;
         }
-        let spec = crate::common::hashspec::HashSpec::default();
-        let hash = crate::common::hashspec::hash_with_spec(&spec, key.as_bytes());
-        let cols_u32 = self.cols as u32;
+        let input = crate::common::DataInput::String(key.to_owned());
+        let hashed = crate::common::MatrixHashType::Packed64(
+            <crate::DefaultXxHasher as crate::common::SketchHasher>::hash64_seeded(0, &input),
+        );
         for r in 0..self.rows {
-            let col = crate::common::hashspec::derive_index(&spec, r, hash, cols_u32);
-            let sign = crate::common::hashspec::derive_sign(&spec, r, hash) as f64;
+            let col = <crate::common::MatrixHashType as crate::common::MatrixFastHash>::col_for_row(
+                &hashed, r, self.cols,
+            );
+            let sign =
+                <crate::common::MatrixHashType as crate::common::MatrixFastHash>::sign_for_row(
+                    &hashed, r,
+                ) as f64;
             self.matrix[r][col] += sign * value;
         }
     }
 
     /// Estimate the frequency of `key` via the standard median-of-rows
-    /// CountSketch query. Returns 0 for an empty sketch. Mirrors
-    /// `sketchlib-go::CountSketch.QueryWithHash(QueryFrequency)`: the
-    /// per-row column index and sign are derived from the same single
-    /// hash that [`Self::update`] used, so the estimator inverts the
-    /// signed-counter projection in lockstep with the update.
+    /// CountSketch query. Returns 0 for an empty sketch. Inverts the
+    /// signed-counter projection that [`Self::update`] applied.
     pub fn estimate(&self, key: &str) -> f64 {
         if self.rows == 0 || self.cols == 0 {
             return 0.0;
         }
-        let spec = crate::common::hashspec::HashSpec::default();
-        let hash = crate::common::hashspec::hash_with_spec(&spec, key.as_bytes());
-        let cols_u32 = self.cols as u32;
+        let input = crate::common::DataInput::String(key.to_owned());
+        let hashed = crate::common::MatrixHashType::Packed64(
+            <crate::DefaultXxHasher as crate::common::SketchHasher>::hash64_seeded(0, &input),
+        );
         let mut estimates: Vec<f64> = Vec::with_capacity(self.rows);
         for r in 0..self.rows {
-            let col = crate::common::hashspec::derive_index(&spec, r, hash, cols_u32);
-            let sign = crate::common::hashspec::derive_sign(&spec, r, hash) as f64;
+            let col = <crate::common::MatrixHashType as crate::common::MatrixFastHash>::col_for_row(
+                &hashed, r, self.cols,
+            );
+            let sign =
+                <crate::common::MatrixHashType as crate::common::MatrixFastHash>::sign_for_row(
+                    &hashed, r,
+                ) as f64;
             estimates.push(sign * self.matrix[r][col]);
         }
         estimates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
