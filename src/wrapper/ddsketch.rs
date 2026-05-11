@@ -364,16 +364,6 @@ impl DdSketch {
     }
 }
 
-impl MessagePackCodec for DdSketch {
-    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        Ok(rmp_serde::to_vec(self)?)
-    }
-
-    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        Ok(rmp_serde::from_slice(bytes)?)
-    }
-}
-
 #[cfg(test)]
 mod tests_wire_ddsketch {
     use super::*;

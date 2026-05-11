@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use crate::message_pack_format::dto::{StringSetOwned, StringSetRef};
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 
 /// Set aggregator for tracking a set of unique string keys.
@@ -59,22 +58,6 @@ impl SetAggregator {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Self::from_msgpack(buffer).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
             format!("Failed to deserialize SetAggregator from MessagePack: {e}").into()
-        })
-    }
-}
-
-impl MessagePackCodec for SetAggregator {
-    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        let wrapper = StringSetRef {
-            values: &self.values,
-        };
-        Ok(rmp_serde::to_vec(&wrapper)?)
-    }
-
-    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let wrapper: StringSetOwned = rmp_serde::from_slice(bytes)?;
-        Ok(Self {
-            values: wrapper.values,
         })
     }
 }

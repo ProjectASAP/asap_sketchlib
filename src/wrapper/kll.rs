@@ -6,9 +6,9 @@ use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::sketches::kll::KLL;
 
 /// Re-export of the wire DTO for [`KllSketch`]. The canonical definition
-/// lives in [`crate::message_pack_format::dto::KllSketchData`]; this
+/// lives in [`crate::message_pack_format::kll::KllSketchData`]; this
 /// alias is preserved for backwards compatibility.
-pub use crate::message_pack_format::dto::KllSketchData;
+pub use crate::message_pack_format::kll::KllSketchData;
 
 // =====================================================================
 // ASAP runtime wire-format-aligned variant .
@@ -154,25 +154,6 @@ impl KllSketch {
             sketch.update(value);
         }
         sketch.serialize_msgpack().ok()
-    }
-}
-
-impl MessagePackCodec for KllSketch {
-    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        let wire = KllSketchData {
-            k: self.k,
-            sketch_bytes: self.sketch_bytes(),
-        };
-        Ok(rmp_serde::to_vec(&wire)?)
-    }
-
-    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let wire: KllSketchData = rmp_serde::from_slice(bytes)?;
-        // Decode the nested KLL payload via the typed `rmp_serde::decode::Error`
-        // path so that the surfaced `MsgPackError::Decode` carries the real
-        // underlying error rather than a stringified box.
-        let backend = KLL::deserialize_from_bytes(&wire.sketch_bytes)?;
-        Ok(Self { k: wire.k, backend })
     }
 }
 

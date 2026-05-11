@@ -2,7 +2,6 @@
 
 use rmp_serde::encode::Error as RmpEncodeError;
 
-use crate::message_pack_format::dto::CountMinSketchWire;
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::sketches::countminsketch::CountMin;
 use crate::{DataInput, MatrixStorage, RegularPath, Vector2D};
@@ -326,27 +325,6 @@ impl CountMinSketch {
         values: &[f64],
     ) -> Option<Vec<u8>> {
         Self::aggregate_count(depth, width, keys, values)
-    }
-}
-
-impl MessagePackCodec for CountMinSketch {
-    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        let wire = CountMinSketchWire {
-            sketch: self.sketch(),
-            rows: self.rows,
-            cols: self.cols,
-        };
-        Ok(rmp_serde::to_vec(&wire)?)
-    }
-
-    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let wire: CountMinSketchWire = rmp_serde::from_slice(bytes)?;
-        let backend = sketchlib_cms_from_matrix(wire.rows, wire.cols, &wire.sketch);
-        Ok(Self {
-            rows: wire.rows,
-            cols: wire.cols,
-            backend,
-        })
     }
 }
 
