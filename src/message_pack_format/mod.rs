@@ -10,8 +10,8 @@
 //!
 //! # Layout
 //!
-//! - [`Error`]: unified encode/decode error type
-//! - [`MessagePackCodec`]: trait implemented by every wire type — the
+//! - `Error`: unified encode/decode error type
+//! - `MessagePackCodec`: trait implemented by every wire type — the
 //!   canonical encode/decode entry point
 //! - One submodule per wrapper file under [`crate::wrapper`]
 //!   (`countminsketch`, `countminsketch_topk`, `countsketch`,
