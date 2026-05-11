@@ -21,7 +21,6 @@
 /// Shared primitives used across sketches, including input wrappers, hashers,
 /// storage backends, and reusable utilities.
 pub mod common;
-/// MessagePack format description shared with `sketchlib-go`.
 pub mod message_pack_format;
 /// Portable protobuf message types for sketch interchange.
 pub mod proto;

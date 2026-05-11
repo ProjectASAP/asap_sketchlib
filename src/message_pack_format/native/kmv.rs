@@ -1,8 +1,8 @@
 //! Native MessagePack codec impl for [`crate::sketches::kmv::KMV`].
 
+use crate::SketchHasher;
 use crate::message_pack_format::{Error, MessagePackCodec};
 use crate::sketches::kmv::KMV;
-use crate::SketchHasher;
 
 impl<H: SketchHasher> MessagePackCodec for KMV<H> {
     fn to_msgpack(&self) -> Result<Vec<u8>, Error> {
