@@ -449,6 +449,11 @@ impl<T: NumericalValue> KLL<T> {
         r
     }
 
+    /// Returns the configured compactor capacity `k`.
+    pub fn k(&self) -> usize {
+        self.k
+    }
+
     /// Returns the total (weighted) number of items ingested by the sketch.
     pub fn count(&self) -> usize {
         let mut total = 0;
