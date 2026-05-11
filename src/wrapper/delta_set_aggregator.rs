@@ -8,9 +8,9 @@ use std::collections::HashSet;
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 
 /// Re-export of the wire DTO — canonical definition lives in
-/// [`crate::message_pack_format::delta_set_aggregator::DeltaResult`].
+/// [`crate::message_pack_format::portable::delta_set_aggregator::DeltaResult`].
 /// Preserved here for backwards compatibility.
-pub use crate::message_pack_format::delta_set_aggregator::DeltaResult;
+pub use crate::message_pack_format::portable::delta_set_aggregator::DeltaResult;
 
 /// Serialize a delta result to MessagePack. Thin shim over
 /// [`MessagePackCodec::to_msgpack`] preserved for backwards compatibility.

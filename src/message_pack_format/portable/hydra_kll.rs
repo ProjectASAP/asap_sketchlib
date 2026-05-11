@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::kll::KllSketchData;
-use super::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::portable::kll::KllSketchData;
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::wrapper::hydra_kll::HydraKllSketch;
 use crate::wrapper::kll::KllSketch;
 

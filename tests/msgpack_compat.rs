@@ -22,13 +22,13 @@
 use std::collections::HashSet;
 
 use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::message_pack_format::countminsketch::CountMinSketchWire;
-use asap_sketchlib::message_pack_format::countminsketch_topk::{
+use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketchWire;
+use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
     CountMinSketchInnerWire, CountMinSketchWithHeapWire,
 };
-use asap_sketchlib::message_pack_format::delta_set_aggregator::DeltaResult;
-use asap_sketchlib::message_pack_format::hydra_kll::HydraKllSketchWire;
-use asap_sketchlib::message_pack_format::kll::KllSketchData;
+use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaResult;
+use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
+use asap_sketchlib::message_pack_format::portable::kll::KllSketchData;
 use asap_sketchlib::wrapper::countminsketch_topk::CmsHeapItem;
 use asap_sketchlib::{
     CountMinSketch, CountMinSketchWithHeap, CountSketch, DdSketch, HllSketch, HllVariant,

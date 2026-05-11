@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::wrapper::countminsketch::{CountMinSketch, sketchlib_cms_from_matrix};
 
 /// Wire DTO for [`crate::wrapper::CountMinSketch`].

@@ -6,9 +6,9 @@ use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::sketches::kll::KLL;
 
 /// Re-export of the wire DTO for [`KllSketch`]. The canonical definition
-/// lives in [`crate::message_pack_format::kll::KllSketchData`]; this
+/// lives in [`crate::message_pack_format::portable::kll::KllSketchData`]; this
 /// alias is preserved for backwards compatibility.
-pub use crate::message_pack_format::kll::KllSketchData;
+pub use crate::message_pack_format::portable::kll::KllSketchData;
 
 // =====================================================================
 // ASAP runtime wire-format-aligned variant .

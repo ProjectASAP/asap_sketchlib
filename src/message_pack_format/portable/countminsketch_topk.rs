@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::wrapper::countminsketch_topk::{
     CmsHeapItem, CountMinSketchWithHeap, WireHeapItem, sketchlib_cms_heap_from_matrix_and_heap,
 };

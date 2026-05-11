@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::wrapper::set_aggregator::SetAggregator;
 
 /// Borrowed serialize-side wire DTO for [`crate::wrapper::SetAggregator`].

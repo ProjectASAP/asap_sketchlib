@@ -1,15 +1,15 @@
-//! MessagePack wire-format for [`crate::wrapper::HllSketch`].
+//! MessagePack wire-format for [`crate::wrapper::CountSketch`].
 //!
-//! `HllSketch` has no independent DTO: the wrapper derives
+//! `CountSketch` has no independent DTO: the wrapper derives
 //! `Serialize` / `Deserialize` and IS the wire format. Its public field
 //! layout matches the on-the-wire shape exactly, so this module only
 //! provides the [`MessagePackCodec`] impl that serializes the wrapper
 //! struct directly.
 
-use super::{Error as MsgPackError, MessagePackCodec};
-use crate::wrapper::hll::HllSketch;
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::wrapper::countsketch::CountSketch;
 
-impl MessagePackCodec for HllSketch {
+impl MessagePackCodec for CountSketch {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
         Ok(rmp_serde::to_vec(self)?)
     }

@@ -1,44 +1,25 @@
-//! MessagePack wire-format definitions shared with `sketchlib-go`.
+//! MessagePack codecs — split into two sub-modules by audience.
 //!
-//! `asap_sketchlib` and the Go counterpart `sketchlib-go` each maintain
-//! their own MessagePack representation. This module is the Rust-side
-//! source of truth: every type that crosses the wire is described here
-//! in a per-algorithm submodule whose filename mirrors the corresponding
-//! file in [`crate::wrapper`]. Both representations are kept byte-
-//! compatible at the envelope level even though the in-language struct
-//! shapes differ.
+//! - [`portable`]: cross-language wire format shared with `sketchlib-go`.
+//!   Every type that crosses the wire lives here in a per-algorithm
+//!   submodule whose filename mirrors the corresponding file in
+//!   [`crate::wrapper`] and in `sketchlib-go`. Touching this module is
+//!   a protocol change and requires the Go side to be kept in lock-step
+//!   (golden-byte tests catch drift).
 //!
-//! # Layout
+//! - [`native`]: thin trait shims over the existing `serialize_to_bytes`
+//!   / `deserialize_from_bytes` methods on the pure-Rust generic sketch
+//!   types in [`crate::sketches`]. The byte format is internal to Rust
+//!   — Go never reads it. Free to evolve without cross-language
+//!   coordination.
 //!
-//! - `Error`: unified encode/decode error type
-//! - `MessagePackCodec`: trait implemented by every wire type — the
-//!   canonical encode/decode entry point
-//! - One submodule per wrapper file under [`crate::wrapper`]
-//!   (`countminsketch`, `countminsketch_topk`, `countsketch`,
-//!   `ddsketch`, `hll`, `kll`, `hydra_kll`, `set_aggregator`,
-//!   `delta_set_aggregator`). Each owns its wire DTO struct(s) (when
-//!   the wrapper needs a separate over-the-wire shape) and the
-//!   `MessagePackCodec` impl for the matching wrapper type.
-//!
-//! # Wrappers that act as their own DTO
-//!
-//! [`crate::wrapper::CountSketch`], [`crate::wrapper::DdSketch`], and
-//! [`crate::wrapper::HllSketch`] derive `Serialize` / `Deserialize`
-//! directly — their public field layout matches the wire shape exactly,
-//! so no separate DTO is required. Their `MessagePackCodec` impls
-//! serialize the wrapper struct verbatim.
+//! The [`MessagePackCodec`] trait and unified [`Error`] type live at
+//! this top level so both worlds share the same encode/decode contract.
 
 pub mod codec;
-pub mod countminsketch;
-pub mod countminsketch_topk;
-pub mod countsketch;
-pub mod ddsketch;
-pub mod delta_set_aggregator;
 pub mod error;
-pub mod hll;
-pub mod hydra_kll;
-pub mod kll;
-pub mod set_aggregator;
+pub mod native;
+pub mod portable;
 
 pub use codec::MessagePackCodec;
 pub use error::Error;

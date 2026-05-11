@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::sketches::kll::KLL;
 use crate::wrapper::kll::KllSketch;
 
