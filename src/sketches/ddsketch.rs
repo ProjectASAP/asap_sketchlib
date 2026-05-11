@@ -246,6 +246,28 @@ impl DDSketch {
         }
     }
 
+    /// Returns the relative-accuracy parameter `alpha`.
+    pub fn alpha(&self) -> f64 {
+        self.alpha
+    }
+
+    /// Returns the running sum of all positive samples ingested.
+    pub fn sum(&self) -> f64 {
+        self.sum
+    }
+
+    /// Returns the raw bucket-count slice. Each entry is the number of
+    /// samples in the bucket whose absolute index is `store_offset() + i`.
+    pub fn store_counts(&self) -> &[u64] {
+        self.store.counts.as_slice()
+    }
+
+    /// Returns the absolute bucket index corresponding to
+    /// `store_counts()[0]`.
+    pub fn store_offset(&self) -> i32 {
+        self.store.offset
+    }
+
     /// Merges another DDSketch (with the same `alpha`) into this one.
     pub fn merge(&mut self, other: &DDSketch) {
         debug_assert!((self.alpha - other.alpha).abs() < 1e-12);

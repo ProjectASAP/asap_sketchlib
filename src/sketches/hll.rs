@@ -126,6 +126,11 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         from_slice(bytes)
     }
 
+    /// Borrow the raw register byte slice (one byte per register).
+    pub fn registers_as_slice(&self) -> &[u8] {
+        self.registers.as_slice()
+    }
+
     /// Inserts a pre-hashed value into the sketch.
     #[inline(always)]
     pub fn insert_with_hash(&mut self, hashed_val: u64) {

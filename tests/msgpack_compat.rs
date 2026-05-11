@@ -29,7 +29,7 @@ use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
 use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaResult;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketchData;
-use asap_sketchlib::wrapper::countminsketch_topk::CmsHeapItem;
+use asap_sketchlib::CmsHeapItem;
 use asap_sketchlib::{
     CountMinSketch, CountMinSketchWithHeap, CountSketch, DdSketch, HllSketch, HllVariant,
     HydraKllSketch, KllSketch, SetAggregator,

@@ -8,10 +8,11 @@
 //! - [`proto`]: portable protobuf message types for sketch interchange.
 //! - [`sketch_framework`]: higher-level composition layers such as Hydra,
 //!   UnivMon, tumbling windows, and batch/parallel execution helpers.
-//! - [`wrapper`]: wire-format-aligned variants of the sketches consumed by the
-//!   ASAP query engine.
-//! - [`message_pack_format`]: description of the MessagePack envelope shared
-//!   with `sketchlib-go`.
+//! - [`message_pack_format`]: MessagePack/proto wire format shared with
+//!   `sketchlib-go`. Owns the wire-DTO sketch types consumed by the ASAP
+//!   query engine (`CountMinSketch`, `CountSketch`, `KllSketch`, `HllSketch`,
+//!   `DdSketch`, `HydraKllSketch`, `CountMinSketchWithHeap`,
+//!   `SetAggregator`, `DeltaResult`).
 //!
 //! Most users can start with the crate-root re-exports such as [`DataInput`],
 //! [`CountMin`], [`HyperLogLog`], [`KLL`], and [`DDSketch`]. Reach for the
@@ -31,9 +32,6 @@ pub mod sketch_framework;
 pub mod sketches;
 #[cfg(test)]
 pub mod test_utils;
-/// Wire-format-aligned variants of the sketches, byte-compatible with
-/// `sketchlib-go` and consumed by the ASAP query engine.
-pub mod wrapper;
 
 #[doc(hidden)]
 pub mod __private {
@@ -42,11 +40,18 @@ pub mod __private {
 }
 
 pub use common::*;
+pub use message_pack_format::portable::countminsketch::{CountMinSketch, CountMinSketchDelta};
+pub use message_pack_format::portable::countminsketch_topk::{
+    CmsHeapItem, CountMinSketchWithHeap,
+};
+pub use message_pack_format::portable::countsketch::{
+    COUNT_SKETCH_TOPK_CAPACITY, CountSketch, CountSketchDelta,
+};
+pub use message_pack_format::portable::ddsketch::{DDSKETCH_GROW_CHUNK, DdSketch, DdSketchDelta};
+pub use message_pack_format::portable::delta_set_aggregator::DeltaResult;
+pub use message_pack_format::portable::hll::{HllSketch, HllSketchDelta, HllVariant};
+pub use message_pack_format::portable::hydra_kll::HydraKllSketch;
+pub use message_pack_format::portable::kll::{KllSketch, KllSketchData};
+pub use message_pack_format::portable::set_aggregator::SetAggregator;
 pub use sketch_framework::*;
 pub use sketches::*;
-pub use wrapper::{
-    COUNT_SKETCH_TOPK_CAPACITY, CmsHeapItem, CountMinSketch, CountMinSketchDelta,
-    CountMinSketchWithHeap, CountSketch, CountSketchDelta, DDSKETCH_GROW_CHUNK, DdSketch,
-    DdSketchDelta, DeltaResult, HllSketch, HllSketchDelta, HllVariant, HydraKllSketch, KllSketch,
-    KllSketchData, SetAggregator,
-};
