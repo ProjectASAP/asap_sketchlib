@@ -1,6 +1,6 @@
 [package]
 name = "asap_sketchlib"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -12,6 +12,9 @@ readme = "README.md"
 keywords = ["sketch", "streaming", "approximate", "quantiles", "cardinality"]
 categories = ["algorithms", "data-structures"]
 autobins = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 rand = "0.9.3"
