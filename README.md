@@ -1,5 +1,7 @@
 # asap_sketchlib
 
+[![Crates.io](https://img.shields.io/crates/v/asap_sketchlib.svg)](https://crates.io/crates/asap_sketchlib)
+[![docs.rs](https://docs.rs/asap_sketchlib/badge.svg)](https://docs.rs/asap_sketchlib)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/ProjectASAP/asap_sketchlib/blob/main/LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue.svg)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
 
@@ -28,23 +30,7 @@ Full sketch status and API details: [APIs Index](./docs/apis.md).
 
 **Minimum Supported Rust Version (MSRV): 1.85** (Rust 2024 edition)
 
-This crate is not published on crates.io yet.
-
-For now, install it from GitHub and pin a tag for a stable revision:
-
-```toml
-[dependencies]
-asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", tag = "v0.1.0" }
-```
-
-If you want the latest repository state instead, you can depend on the default branch:
-
-```toml
-[dependencies]
-asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", branch = "main" }
-```
-
-After the first crates.io release, installation will instead be:
+Install from [crates.io](https://crates.io/crates/asap_sketchlib):
 
 ```bash
 cargo add asap_sketchlib
@@ -52,7 +38,16 @@ cargo add asap_sketchlib
 
 ```toml
 [dependencies]
-asap_sketchlib = "0.1"
+asap_sketchlib = "0.2"
+```
+
+API docs are hosted on [docs.rs](https://docs.rs/asap_sketchlib).
+
+Alternatively, pin to a tagged revision from GitHub:
+
+```toml
+[dependencies]
+asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", tag = "v0.2.0" }
 ```
 
 ### Count distinct users with HyperLogLog
