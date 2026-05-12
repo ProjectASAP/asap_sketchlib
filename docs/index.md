@@ -13,8 +13,7 @@ This page is the docs home for `asap_sketchlib`.
 - [APIs Index](./apis.md)
 - [API Pages Directory](./api/)
 - [Common API](./api/api_common.md)
-- [Wire-Format-Aligned Sketches](./wrapper.md) - DTO-bearing sketch variants byte-compatible with `sketchlib-go`
-- [Message Pack Format](./message_pack_format.md) - wire envelope shared with `sketchlib-go`
+- [Message Pack Format](./message_pack_format.md) - wire envelope and wire-format-aligned sketch variants shared with `sketchlib-go`
 - [Advanced Use Cases](./advanced_use_cases.md)
 - [Test Coverage Map](./tests.md)
 - [Feature Status](./features.md)

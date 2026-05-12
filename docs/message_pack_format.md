@@ -44,12 +44,33 @@ Each submodule owns:
 
 1. The wire-format-aligned runtime type and its delta companion (e.g.
    `CountMinSketch`, `CountMinSketchDelta`) — these are the types
-   re-exported at the crate root (see [Wire-Format-Aligned
-   Sketches](./wrapper.md)).
+   re-exported at the crate root.
 2. The wire DTO struct(s), when the runtime type needs a separate
    over-the-wire shape (e.g. borrow / owned pairs, byte-compatible
    field reordering with `sketchlib-go`).
 3. The `MessagePackCodec` impl for the runtime type.
+
+The full list of re-exported wire-format-aligned types:
+
+- `countminsketch.rs` — `CountMinSketch`, `CountMinSketchDelta`
+- `countminsketch_topk.rs` — `CountMinSketchWithHeap`, `CmsHeapItem`
+- `countsketch.rs` — `CountSketch`, `CountSketchDelta`
+- `ddsketch.rs` — `DdSketch`, `DdSketchDelta`
+- `hll.rs` — `HllSketch`, `HllSketchDelta`, `HllVariant`
+- `kll.rs` — `KllSketch`, `KllSketchData`
+- `hydra_kll.rs` — `HydraKllSketch`
+- `set_aggregator.rs` — `SetAggregator`
+- `delta_set_aggregator.rs` — `DeltaResult`
+
+Use these for sketches that must cross a process / language boundary.
+For high-throughput local ingest, custom hashers, and framework
+composition, reach for the generic sketches in
+[`src/sketches/`](./apis.md) instead:
+
+| Need | Use |
+| --- | --- |
+| Local high-throughput ingest, custom hashers, framework composition | [`src/sketches/`](./apis.md) |
+| Cross-process / cross-language transfer matching `sketchlib-go` bytes | `src/message_pack_format/portable/` |
 
 ### Types that act as their own DTO
 
@@ -90,15 +111,13 @@ without going through a wire-format-aligned wrapper.
 
 | Need | Use |
 |------|-----|
-| Send a sketch to Go (`sketchlib-go`) or any non-Rust consumer | `portable` (the wire-format-aligned types re-exported at the crate root — see [Wire-Format-Aligned Sketches](./wrapper.md)) |
+| Send a sketch to Go (`sketchlib-go`) or any non-Rust consumer | `portable` (the wire-format-aligned types re-exported at the crate root) |
 | Persist or transport a sketch within an all-Rust pipeline | `native` (works directly on the generic [`sketches`](./api/) types) |
 | New sketch crossing the wire | Add a `portable/<name>.rs`, mirror the filename in `sketchlib-go`, and add a golden-byte test |
 | New internal-only sketch serialization | Add a `native/<name>.rs` shim and you are done |
 
 ## Cross-Reference
 
-- Wire-format-aligned sketch types and how to choose between in-process vs
-  wire variants: [Wire-Format-Aligned Sketches](./wrapper.md)
 - Generated rustdoc for the trait and per-algorithm wire DTOs is the
   most up-to-date reference; build it with
   `cargo doc --no-deps --all-features --open`.
