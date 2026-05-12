@@ -18,6 +18,10 @@
   - `Unstable` in API index: `eh_univ_optimized.rs`
   - Infrastructure module: `orchestrator/` (node-level manager used by framework APIs)
 
+- **`src/message_pack_format/`** - MessagePack wire-format definitions, the `MessagePackCodec` trait, and the wire-format-aligned sketch types shared with `sketchlib-go` ([message_pack_format.md](./message_pack_format.md))
+  - `portable/` — wire-format-aligned sketch types (`CountMinSketch`, `CountSketch`, `DdSketch`, `HllSketch`, `KllSketch`, `HydraKllSketch`, `CountMinSketchWithHeap`, `SetAggregator`, `DeltaResult`) consumed by the ASAP query engine, byte-compatible with `sketchlib-go`
+  - `native/` — Rust-internal codec shims over `src/sketches/` byte serialization
+
 ## Documentation
 
 - **`docs/`** - API and feature documentation

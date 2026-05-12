@@ -1,8 +1,17 @@
-use serde::{Deserialize, Serialize};
+//! Set aggregator: wire-format type for tracking a set of unique string keys.
+//!
+//! `SetAggregator` is not a sketch — it's a plain `HashSet<String>` wrapped
+//! for cross-language interop. Wire format: `StringSet { values:
+//! HashSet<String> }` in MessagePack. No `sketches::*` equivalent exists,
+//! so both the wire shape and the runtime API live here.
+
 use std::collections::HashSet;
 
+use serde::{Deserialize, Serialize};
+
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+
 /// Set aggregator for tracking a set of unique string keys.
-/// Wire format: `StringSet { values: HashSet<String> }` in MessagePack.
 #[derive(Debug, Clone)]
 pub struct SetAggregator {
     pub values: HashSet<String>,
@@ -44,38 +53,6 @@ impl SetAggregator {
         }
         Ok(merged)
     }
-
-    /// Serialize to MessagePack: `StringSet { values: HashSet<String> }` as a msgpack map.
-    pub fn serialize_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
-        #[derive(Serialize)]
-        struct StringSet<'a> {
-            values: &'a HashSet<String>,
-        }
-        let wrapper = StringSet {
-            values: &self.values,
-        };
-        let mut buf = Vec::new();
-        rmp_serde::encode::write(&mut buf, &wrapper)?;
-        Ok(buf)
-    }
-
-    /// Deserialize from MessagePack.
-    pub fn deserialize_msgpack(
-        buffer: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        #[derive(Deserialize)]
-        struct StringSet {
-            values: HashSet<String>,
-        }
-        let wrapper: StringSet = rmp_serde::from_slice(buffer).map_err(
-            |e| -> Box<dyn std::error::Error + Send + Sync> {
-                format!("Failed to deserialize SetAggregator from MessagePack: {e}").into()
-            },
-        )?;
-        Ok(Self {
-            values: wrapper.values,
-        })
-    }
 }
 
 impl Default for SetAggregator {
@@ -84,9 +61,41 @@ impl Default for SetAggregator {
     }
 }
 
+// ----- Wire format -----
+
+/// Borrowed serialize-side wire DTO. Avoids cloning the underlying set
+/// on the encode path.
+#[derive(Serialize)]
+pub(crate) struct StringSetRef<'a> {
+    pub values: &'a HashSet<String>,
+}
+
+/// Owned deserialize-side wire DTO.
+#[derive(Deserialize)]
+pub(crate) struct StringSetOwned {
+    pub values: HashSet<String>,
+}
+
+impl MessagePackCodec for SetAggregator {
+    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
+        let wrapper = StringSetRef {
+            values: &self.values,
+        };
+        Ok(rmp_serde::to_vec(&wrapper)?)
+    }
+
+    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
+        let wrapper: StringSetOwned = rmp_serde::from_slice(bytes)?;
+        Ok(Self {
+            values: wrapper.values,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     #[test]
     fn test_creation() {
@@ -128,8 +137,8 @@ mod tests {
         sa.update("web");
         sa.update("api");
 
-        let bytes = sa.serialize_msgpack().unwrap();
-        let deserialized = SetAggregator::deserialize_msgpack(&bytes).unwrap();
+        let bytes = sa.to_msgpack().unwrap();
+        let deserialized = SetAggregator::from_msgpack(&bytes).unwrap();
 
         assert_eq!(deserialized.values.len(), 2);
         assert!(deserialized.values.contains("web"));
@@ -138,14 +147,13 @@ mod tests {
 
     #[test]
     fn test_msgpack_matches_wire_format() {
-        // Verify wire format is StringSet { values: [...] } not a plain array.
         #[derive(Deserialize)]
         struct StringSet {
             values: HashSet<String>,
         }
         let mut sa = SetAggregator::new();
         sa.update("a");
-        let bytes = sa.serialize_msgpack().unwrap();
+        let bytes = sa.to_msgpack().unwrap();
         let decoded: StringSet =
             rmp_serde::from_slice(&bytes).expect("should decode as StringSet { values: ... }");
         assert!(decoded.values.contains("a"));

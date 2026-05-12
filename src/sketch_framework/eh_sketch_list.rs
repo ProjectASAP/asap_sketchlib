@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::sketches::*;
 use super::UnivMon;
+use crate::sketches::countsketch_topk::CountL2HH;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 /// Norm choices used by EH merge policies.
