@@ -33,8 +33,8 @@ through the module root:
 
 ## `portable/` — Cross-Language Wire Format
 
-One submodule per wrapper file in [`src/wrapper/`](./wrapper.md), with
-the filenames mirrored on the Go side:
+One submodule per algorithm, with the filenames mirrored on the Go
+side:
 
 - `countminsketch.rs`, `countminsketch_topk.rs`, `countsketch.rs`,
   `ddsketch.rs`, `hll.rs`, `kll.rs`, `hydra_kll.rs`,
@@ -42,18 +42,21 @@ the filenames mirrored on the Go side:
 
 Each submodule owns:
 
-1. The wire DTO struct(s), when the wrapper needs a separate
+1. The wire-format-aligned runtime type and its delta companion (e.g.
+   `CountMinSketch`, `CountMinSketchDelta`) — these are the types
+   re-exported at the crate root (see [Wire-Format-Aligned
+   Sketches](./wrapper.md)).
+2. The wire DTO struct(s), when the runtime type needs a separate
    over-the-wire shape (e.g. borrow / owned pairs, byte-compatible
    field reordering with `sketchlib-go`).
-2. The `MessagePackCodec` impl for the matching wrapper type from
-   [`src/wrapper/`](./wrapper.md).
+3. The `MessagePackCodec` impl for the runtime type.
 
-### Wrappers that act as their own DTO
+### Types that act as their own DTO
 
 `CountSketch`, `DdSketch`, and `HllSketch` derive `Serialize` /
 `Deserialize` directly because their public field layout already
 matches the wire shape. Their `MessagePackCodec` impls serialize the
-wrapper verbatim — no separate DTO is required.
+struct verbatim — no separate DTO is required.
 
 ### Protocol invariants
 
@@ -87,15 +90,15 @@ without going through a wire-format-aligned wrapper.
 
 | Need | Use |
 |------|-----|
-| Send a sketch to Go (`sketchlib-go`) or any non-Rust consumer | `portable` (via the matching [`wrapper`](./wrapper.md) type) |
+| Send a sketch to Go (`sketchlib-go`) or any non-Rust consumer | `portable` (the wire-format-aligned types re-exported at the crate root — see [Wire-Format-Aligned Sketches](./wrapper.md)) |
 | Persist or transport a sketch within an all-Rust pipeline | `native` (works directly on the generic [`sketches`](./api/) types) |
 | New sketch crossing the wire | Add a `portable/<name>.rs`, mirror the filename in `sketchlib-go`, and add a golden-byte test |
 | New internal-only sketch serialization | Add a `native/<name>.rs` shim and you are done |
 
 ## Cross-Reference
 
-- Wrapper types and how to choose between in-process vs wire variants:
-  [Wrapper Module](./wrapper.md)
+- Wire-format-aligned sketch types and how to choose between in-process vs
+  wire variants: [Wire-Format-Aligned Sketches](./wrapper.md)
 - Generated rustdoc for the trait and per-algorithm wire DTOs is the
   most up-to-date reference; build it with
   `cargo doc --no-deps --all-features --open`.

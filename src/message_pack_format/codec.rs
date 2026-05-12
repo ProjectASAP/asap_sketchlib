@@ -1,11 +1,11 @@
 //! `MessagePackCodec` trait — unified encode/decode contract for the
-//! wire-format-aligned types in [`crate::wrapper`].
+//! wire-format-aligned types in [`crate::message_pack_format::portable`].
 
 use super::Error;
 
 /// Round-trippable MessagePack codec.
 ///
-/// All [`crate::wrapper`] sketch / aggregator types implement this trait;
+/// All [`crate::message_pack_format::portable`] sketch / aggregator types implement this trait;
 /// it is the single entry point for encode/decode against the wire format.
 ///
 /// There is no `dyn`-safe usage — callers always know the concrete

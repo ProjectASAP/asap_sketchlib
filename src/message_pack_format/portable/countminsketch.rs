@@ -1,6 +1,4 @@
-//! Wire-format-aligned Count-Min sketch types.
-//!
-//! Moved from `crate::wrapper::countminsketch`; the wire DTO and
+//! Wire-format-aligned Count-Min sketch types. The wire DTO and
 //! runtime ops live together here.
 
 use serde::{Deserialize, Serialize};
@@ -167,8 +165,7 @@ impl CountMinSketch {
         if self.rows == 0 || self.cols == 0 {
             return 0.0;
         }
-        self.backend
-            .estimate(&DataInput::String(key.to_owned()))
+        self.backend.estimate(&DataInput::String(key.to_owned()))
     }
 
     /// Merge another CountMinSketch into self in place. Both operands

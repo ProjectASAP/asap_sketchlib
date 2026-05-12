@@ -41,9 +41,7 @@ pub mod __private {
 
 pub use common::*;
 pub use message_pack_format::portable::countminsketch::{CountMinSketch, CountMinSketchDelta};
-pub use message_pack_format::portable::countminsketch_topk::{
-    CmsHeapItem, CountMinSketchWithHeap,
-};
+pub use message_pack_format::portable::countminsketch_topk::{CmsHeapItem, CountMinSketchWithHeap};
 pub use message_pack_format::portable::countsketch::{
     COUNT_SKETCH_TOPK_CAPACITY, CountSketch, CountSketchDelta,
 };

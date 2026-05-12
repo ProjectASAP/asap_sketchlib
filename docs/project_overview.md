@@ -16,7 +16,7 @@ implementations, and orchestration/windowing frameworks in one crate.
 - [APIs Index](./apis.md) - Canonical API entry point, including paper references for each sketch.
 - [Advanced Use Cases](./advanced_use_cases.md) - Hierarchical queries, sketch coordination, and sliding-window frameworks explained separately.
 - [Common Module API](./api/api_common.md) - Shared types, hashing, and structures.
-- [Wrapper Module](./wrapper.md) - Wire-format-aligned sketch variants byte-compatible with `sketchlib-go`.
+- [Wire-Format-Aligned Sketches](./wrapper.md) - Sketch variants byte-compatible with `sketchlib-go`, living under `src/message_pack_format/portable/`.
 - [Message Pack Format](./message_pack_format.md) - On-the-wire envelope shared with `sketchlib-go`.
 - [Library Map](./library_map.md) - Source-tree module breakdown.
 - [Feature Status](./features.md) - Implemented, in-progress, and planned work.

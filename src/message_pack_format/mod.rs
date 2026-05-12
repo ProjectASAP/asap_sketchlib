@@ -5,7 +5,7 @@
 //! - [`portable`] — cross-language wire format shared with `sketchlib-go`.
 //!   Every type that crosses the wire lives here in a per-algorithm
 //!   submodule whose filename mirrors the corresponding file in
-//!   [`crate::wrapper`] and in `sketchlib-go`. Touching this module is
+//!   `sketchlib-go`. Touching this module is
 //!   a protocol change and requires the Go side to be kept in lock-step
 //!   (golden-byte tests catch drift).
 //!

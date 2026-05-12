@@ -5,7 +5,7 @@
 //!
 //! # Coverage today (round-trip only)
 //!
-//! For every wire-format-aligned wrapper, encode a populated instance,
+//! For every wire-format-aligned type, encode a populated instance,
 //! decode the bytes back, and assert structural equality. This catches
 //! Rust-side encoder/decoder regressions but does NOT verify byte-level
 //! parity with the Go implementation.
@@ -21,6 +21,7 @@
 
 use std::collections::HashSet;
 
+use asap_sketchlib::CmsHeapItem;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketchWire;
 use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
@@ -29,13 +30,12 @@ use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
 use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaResult;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketchData;
-use asap_sketchlib::CmsHeapItem;
 use asap_sketchlib::{
     CountMinSketch, CountMinSketchWithHeap, CountSketch, DdSketch, HllSketch, HllVariant,
     HydraKllSketch, KllSketch, SetAggregator,
 };
 
-// ===== round-trip: every wrapper =====
+// ===== round-trip: every wire-format-aligned type =====
 
 #[test]
 fn count_min_sketch_round_trip() {

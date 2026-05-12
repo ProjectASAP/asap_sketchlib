@@ -1,6 +1,4 @@
-//! Wire-format-aligned Count Sketch types.
-//!
-//! Moved from `crate::wrapper::countsketch`; the wire DTO and runtime
+//! Wire-format-aligned Count Sketch types. The wire DTO and runtime
 //! ops live together here.
 
 use serde::{Deserialize, Serialize};
@@ -155,7 +153,7 @@ impl CountSketch {
     }
 
     /// Insert a single weighted observation. Uses the shared
-    /// [`MatrixHashType::Packed64`] fast-path hash so the matrix-cell
+    /// [`crate::MatrixHashType::Packed64`] fast-path hash so the matrix-cell
     /// layout matches `sketchlib-go::CountSketch.UpdateString`
     /// bit-for-bit. Locked in by
     /// `tests/sketches_go_parity_probe.rs`.

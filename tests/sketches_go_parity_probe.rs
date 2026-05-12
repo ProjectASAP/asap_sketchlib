@@ -1,11 +1,12 @@
 //! Probe: do `sketches::*` defaults already produce Go-byte-parity output,
-//! making the parallel `wrapper::*` implementations redundant?
+//! making a separate hashspec-direct path inside the wire-format-aligned
+//! types unnecessary?
 //!
-//! Approach: reuse the exact same Go-golden envelopes that the wrapper
-//! parity tests use, but build the matrix via `sketches::Count` /
-//! `sketches::CountMin` with `FastPath` + `DefaultXxHasher` instead of
-//! the wrapper's hashspec-direct path. Identical bytes → wrapper is
-//! redundant.
+//! Approach: reuse the exact same Go-golden envelopes that the
+//! `message_pack_format::portable` parity tests use, but build the
+//! matrix via `sketches::Count` / `sketches::CountMin` with `FastPath`
+//! and `DefaultXxHasher`. Identical bytes confirm the shared FastPath
+//! math is sufficient — no hashspec bypass needed.
 
 use asap_sketchlib::common::DataInput;
 use asap_sketchlib::common::hash::CANONICAL_HASH_SEED;
@@ -24,7 +25,7 @@ use prost::Message;
 /// 1577-byte envelope captured from `sketchlib-go::CountSketch.SerializeProtoBytes`
 /// for `(rows=3, cols=512)` × `goldenCsKeys()` (25 keys "k-a".."k-e", each
 /// repeated 5×). Identical to the constant in
-/// `src/wrapper/countsketch.rs::test_update_then_envelope_matches_sketchlib_go_bytes`.
+/// `src/message_pack_format/portable/countsketch.rs::test_update_then_envelope_matches_sketchlib_go_bytes`.
 const COUNTSKETCH_GOLDEN_HEX: &str = include_str!("cs_envelope_golden.hex");
 
 /// 8275-byte CMS Frequency-Only golden, captured from
@@ -88,7 +89,8 @@ fn sketches_count_fastpath_matches_go_count_sketch_envelope() {
 
     let want = decode_hex(COUNTSKETCH_GOLDEN_HEX);
     assert_eq!(
-        got, want,
+        got,
+        want,
         "sketches::Count<Vector2D<i64>, FastPath> envelope diverges from Go golden \
          ({} bytes got vs {} bytes want)",
         got.len(),

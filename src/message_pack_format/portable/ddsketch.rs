@@ -1,6 +1,4 @@
-//! Wire-format-aligned DDSketch types.
-//!
-//! Moved from `crate::wrapper::ddsketch`; the wire DTO + runtime ops
+//! Wire-format-aligned DDSketch types. The wire DTO + runtime ops
 //! live together here.
 
 use serde::{Deserialize, Serialize};

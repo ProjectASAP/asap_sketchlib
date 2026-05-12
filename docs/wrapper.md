@@ -1,20 +1,26 @@
-# Wrapper Module
+# Wire-Format-Aligned Sketches
 
-`src/wrapper/` holds wire-format-aligned sketch types consumed by the
-ASAP query engine. They mirror the in-process sketches in
-[`src/sketches/`](./library_map.md) but expose public-field,
-proto-decode-friendly shapes that are byte-compatible with the Go
-counterpart `sketchlib-go`.
+> **Note:** The standalone `src/wrapper/` module has been removed. The
+> wire-format-aligned sketch types it used to expose now live alongside
+> their wire DTOs in
+> [`src/message_pack_format/portable/`](./message_pack_format.md). The
+> top-level re-exports (`CountMinSketch`, `CountSketch`, `DdSketch`,
+> `HllSketch`, `KllSketch`, `HydraKllSketch`, `CountMinSketchWithHeap`,
+> `SetAggregator`, `DeltaResult`, …) are unchanged — only the source
+> location moved.
 
-Use the in-process sketches under `src/sketches/` for high-throughput
-local ingest, and the wrapper variants when a sketch must cross a
-process / language boundary.
+These types are byte-compatible with the Go counterpart `sketchlib-go`
+and are intended for sketches that must cross a process / language
+boundary. For high-throughput local ingest, custom hashers, and
+framework composition, use the generic sketches in
+[`src/sketches/`](./apis.md) instead.
 
 ## Layout
 
-One file per algorithm. Each file owns the wrapper struct, its delta
-companion (where applicable), and any helpers needed to bridge to the
-in-process implementation:
+One file per algorithm, under `src/message_pack_format/portable/`. Each
+file owns the runtime type, its delta companion (where applicable), the
+wire DTO (when a separate over-the-wire shape is needed), and the
+`MessagePackCodec` impl:
 
 - `countminsketch.rs` — `CountMinSketch`, `CountMinSketchDelta`
 - `countminsketch_topk.rs` — `CountMinSketchWithHeap`, `CmsHeapItem`
@@ -28,19 +34,19 @@ in-process implementation:
 
 ## Serialization
 
-Each wrapper type implements
-[`MessagePackCodec`](./message_pack_format.md), which is the single
-entry point for encode/decode (`to_msgpack` / `from_msgpack`). The
-on-the-wire shape is described per-algorithm in
-[`src/message_pack_format/`](./message_pack_format.md).
+Each type implements
+[`MessagePackCodec`](./message_pack_format.md), the single entry point
+for encode/decode (`to_msgpack` / `from_msgpack`). The on-the-wire
+shape is described per-algorithm in
+[`src/message_pack_format/portable/`](./message_pack_format.md).
 
-## In-Process vs Wrapper
+## Generic In-Process vs Wire-Aligned
 
 | Need | Use |
 | --- | --- |
 | Local high-throughput ingest, custom hashers, framework composition | [`src/sketches/`](./apis.md) |
-| Cross-process / cross-language transfer matching `sketchlib-go` bytes | `src/wrapper/` |
+| Cross-process / cross-language transfer matching `sketchlib-go` bytes | `src/message_pack_format/portable/` |
 
 For the underlying algorithms and per-sketch APIs, see the dedicated
-pages under [APIs Index](./apis.md). For the wire envelope itself,
-see [Message Pack Format](./message_pack_format.md).
+pages under [APIs Index](./apis.md). For the wire envelope itself, see
+[Message Pack Format](./message_pack_format.md).

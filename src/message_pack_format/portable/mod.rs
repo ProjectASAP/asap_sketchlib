@@ -2,9 +2,8 @@
 //!
 //! Every type that crosses the wire is described here in a per-algorithm
 //! submodule whose filename mirrors the corresponding file in
-//! [`crate::wrapper`] and in `sketchlib-go`. Both representations are
-//! kept byte-compatible at the envelope level even though the in-language
-//! struct shapes differ.
+//! `sketchlib-go`. Both representations are kept byte-compatible at the
+//! envelope level even though the in-language struct shapes differ.
 //!
 //! Touching anything in this module is a protocol change: the Go side
 //! must be kept in lock-step, and the cross-language golden-byte tests
