@@ -1,0 +1,15 @@
+[package]
+name = "gen-proto"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Internal maintainer tool that regenerates src/proto/generated/ from proto/*.proto."
+
+[dependencies]
+prost-build = "0.13"
+protoc-bin-vendored = "3"
+
+# Standalone workspace so this crate is fully isolated from the parent
+# `asap_sketchlib` package. It must not appear in the published crate's
+# build graph or Cargo.lock.
+[workspace]

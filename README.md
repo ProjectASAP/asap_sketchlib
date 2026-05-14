@@ -185,36 +185,30 @@ cargo build --features experimental
 cargo test --features "experimental octo-runtime"
 ```
 
-## Protobuf Requirements
+## Protobuf code generation
 
-This project compiles `.proto` files at build time via `prost-build` in `build.rs`.
-The required Protocol Buffers compiler (`protoc`) is provided through the vendored
-`protoc-bin-vendored` build dependency, so a separate system installation is usually
-not needed on common development platforms.
+`asap_sketchlib` is a pure-Rust crate: building it does **not** require
+`protoc` or any build script. The Rust types generated from
+`proto/**/*.proto` are vendored into `src/proto/generated/` and refreshed
+manually by maintainers using the in-repo tool at `tools/gen-proto/`.
 
-If you prefer to use a system-installed compiler instead, that works too. Install
-`protoc` with your platform package manager:
+Downstream users can therefore simply add the crate to their `Cargo.toml` and
+build it like any other pure-Rust dependency.
 
-```bash
-# macOS (Homebrew)
-brew install protobuf
+### For maintainers
 
-# Ubuntu / Debian
-sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-# Windows (Chocolatey)
-choco install protoc
-```
-
-Verify installation:
+After editing any `.proto` file, regenerate the vendored output and commit
+the result:
 
 ```bash
-protoc --version
+cargo run --manifest-path tools/gen-proto/Cargo.toml
+git add src/proto/generated
 ```
 
-If you need to override the compiler for a custom environment, set the `PROTOC`
-environment variable to the path of your preferred `protoc` binary before running
-`cargo build` or `cargo test`.
+The tool uses `prost-build` together with the `protoc-bin-vendored` binary,
+so no system `protoc` is required to regenerate either. CI rejects any pull
+request whose committed `src/proto/generated/` does not match the result of
+running this command on its current `.proto` sources.
 
 ## FAQ
 

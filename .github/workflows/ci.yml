@@ -37,3 +37,31 @@ jobs:
 
       - name: Run tests
         run: cargo test --all-features --locked --verbose
+
+  proto-vendored-up-to-date:
+    name: Vendored proto code is up to date
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/gen-proto -> tools/gen-proto/target
+
+      - name: Regenerate vendored proto code
+        run: cargo run --manifest-path tools/gen-proto/Cargo.toml --locked
+
+      - name: Verify src/proto/generated/ has no drift
+        run: |
+          if ! git diff --exit-code -- src/proto/generated; then
+            echo "::error::src/proto/generated/ is out of date. Run:" >&2
+            echo "  cargo run --manifest-path tools/gen-proto/Cargo.toml" >&2
+            echo "and commit the result." >&2
+            exit 1
+          fi

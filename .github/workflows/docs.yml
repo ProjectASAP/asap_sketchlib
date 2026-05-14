@@ -6,7 +6,7 @@ on:
     paths:
       - "src/**"
       - "proto/**"
-      - "build.rs"
+      - "tools/gen-proto/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "README.md"
@@ -17,7 +17,7 @@ on:
     paths:
       - "src/**"
       - "proto/**"
-      - "build.rs"
+      - "tools/gen-proto/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "README.md"

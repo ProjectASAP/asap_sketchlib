@@ -34,9 +34,10 @@ default = []
 experimental = []
 octo-runtime = ["core_affinity", "crossbeam-channel"]
 
-[build-dependencies]
-prost-build = "0.13"
-protoc-bin-vendored = "3"
+# Note: there are intentionally no `[build-dependencies]`. The prost output
+# under `src/proto/generated/` is checked in and refreshed by the maintainer
+# tool at `tools/gen-proto/`. This keeps the published crate pure-Rust with
+# no requirement on `protoc` for downstream consumers.
 
 [lib]
 crate-type = ["rlib"]
