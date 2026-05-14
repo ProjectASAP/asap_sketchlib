@@ -31,4 +31,7 @@
 
 ## Utilities
 
-- **`src/bin/`** - Helper binaries for generating precomputed fixtures (`generate_precomputed_hash`, `generate_precomputed_sample`, `generate_precomputed_sample2`)
+- The large precomputed hash/sample tables are no longer checked-in arrays;
+  they are built lazily at runtime via `std::sync::LazyLock` in
+  `src/common/precompute_hash.rs`, `src/common/precompute_sample.rs`, and
+  `src/common/precompute_sample2.rs`.
