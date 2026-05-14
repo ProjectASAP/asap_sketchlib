@@ -35,3 +35,19 @@
   they are built lazily at runtime via `std::sync::LazyLock` in
   `src/common/precompute_hash.rs`, `src/common/precompute_sample.rs`, and
   `src/common/precompute_sample2.rs`.
+
+## Proto code generation
+
+- `proto/**/*.proto` is the cross-language wire-format source of truth shared
+  with `sketchlib-go`.
+- The corresponding Rust types are **vendored** under
+  `src/proto/generated/sketchlib.v1.rs` and re-exported by `src/proto.rs` as
+  `crate::proto::sketchlib`. Downstream users therefore build the crate as
+  pure Rust without needing `protoc` or any build script.
+- To regenerate after editing any `.proto` file, run from the repository root:
+
+  ```bash
+  cargo run --manifest-path tools/gen-proto/Cargo.toml
+  ```
+
+  CI enforces that the committed file matches the result of regeneration.
