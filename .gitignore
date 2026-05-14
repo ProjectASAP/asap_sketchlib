@@ -13,3 +13,7 @@ profile.json.gz
 binary
 
 Cargo.lock
+# Track the lockfile for the maintainer-only `tools/gen-proto` so that CI's
+# vendored-proto drift check uses the same `prost-build` version the
+# maintainer used when committing `src/proto/generated/`.
+!/tools/gen-proto/Cargo.lock
