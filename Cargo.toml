@@ -33,7 +33,6 @@ crossbeam-channel = { version = "0.5", optional = true }
 default = []
 experimental = []
 octo-runtime = ["core_affinity", "crossbeam-channel"]
-internal-bins = []
 
 [build-dependencies]
 prost-build = "0.13"
@@ -50,20 +49,6 @@ bench = false
 #strip = false
 #frame-pointer = "can-use"
 #lto = false
-[[bin]]
-name = "generate_precomputed_hash"
-path = "src/bin/generate_precomputed_hash.rs"
-required-features = ["internal-bins"]
-
-[[bin]]
-name = "generate_precomputed_sample"
-path = "src/bin/generate_precomputed_sample.rs"
-required-features = ["internal-bins"]
-
-[[bin]]
-name = "generate_precomputed_sample2"
-path = "src/bin/generate_precomputed_sample2.rs"
-required-features = ["internal-bins"]
 
 [profile.release]
 opt-level = 3

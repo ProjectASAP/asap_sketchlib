@@ -1,4 +1,9 @@
 //! Build script that compiles the crate's protobuf definitions.
+//!
+//! The large precomputed sampling and hash tables that used to live next to
+//! this file as multi-megabyte literal arrays are now built lazily at runtime
+//! via [`std::sync::LazyLock`] (see `src/common/precompute_*.rs`), so this
+//! script no longer needs to do any code generation beyond `prost`.
 
 fn main() {
     let protoc =
