@@ -47,7 +47,7 @@ Alternatively, pin to a tagged revision from GitHub:
 
 ```toml
 [dependencies]
-asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", tag = "v0.2.0" }
+asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", tag = "v0.2.1" }
 ```
 
 ### Count distinct users with HyperLogLog
