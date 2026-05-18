@@ -10,6 +10,26 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-18
+
+Performance patch release. No API changes; all public sketch APIs behave
+identically to `0.2.1`.
+
+### Performance
+- **Restore `FixedMatrix` fast-path specialization in non-PGO builds**
+  ([#50](https://github.com/ProjectASAP/asap_sketchlib/pull/50)). Added
+  `#[inline(always)]` to `hash_for_matrix_seeded` and
+  `hash_for_matrix_seeded_generic` in `src/common/hash.rs` so LLVM can
+  propagate compile-time `rows` / `cols` literals from `FixedMatrix` call
+  sites, fold the matrix-hash-mode dispatch, and unroll the inner loop.
+  Measured on 1M `i64` inserts, single-threaded:
+  - `CountMin<QuickMatrixI32, FastPath>` 5×2048: 89.7 → 173.9 M/s (+94%)
+  - `Count<QuickMatrixI32, FastPath>` 5×2048: 71.5 → 115.1 M/s (+61%)
+
+  Both within 3% of a PGO build. Downstream benchmarks no longer need PGO
+  machinery or `-C llvm-args=-inline-threshold=...` overrides to hit the
+  specialized path. KLL / HLL throughput unchanged.
+
 ## [0.2.1] - 2026-05-14
 
 Maintenance release. No source-level changes to sketch algorithms; all public
