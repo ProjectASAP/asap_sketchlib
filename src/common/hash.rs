@@ -255,6 +255,7 @@ pub fn hash_for_matrix(rows: usize, cols: usize, key: &DataInput) -> MatrixHashT
 
 /// Creates a fast-path hash for a matrix-backed sketch with a custom seed.
 /// Chooses a packed hash when the required bits fit in 128; otherwise uses per-row hashes.
+#[inline(always)]
 pub fn hash_for_matrix_seeded(
     seed_idx: usize,
     rows: usize,
@@ -312,6 +313,7 @@ pub fn hash_for_matrix_generic<H: SketchHasher>(
 }
 
 /// Generic version of hash_for_matrix_seeded that uses a custom hasher.
+#[inline(always)]
 pub fn hash_for_matrix_seeded_generic<H: SketchHasher>(
     seed_idx: usize,
     rows: usize,
