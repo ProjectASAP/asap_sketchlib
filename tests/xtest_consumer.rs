@@ -19,6 +19,7 @@
 //!   XTEST_DIR=<path> cargo test --test xtest_consumer -- --nocapture
 
 use asap_sketchlib::proto::sketchlib::*;
+use asap_sketchlib::{effective_sample_p, rescale_count};
 use prost::Message;
 use std::{
     env, fs,
@@ -464,6 +465,103 @@ fn cross_language_proto() {
     }
 
     // -----------------------------------------------------------------------
+    // Sampled CountMin (geometric skip-sampling, p=0.1) — exercises the
+    // sample_p envelope field + the backend ×1/p rescale at query.
+    // -----------------------------------------------------------------------
+    let sampled_cms_path = in_dir.join("countmin_sampled.pb");
+    if sampled_cms_path.exists() {
+        println!();
+        println!("[CountMin/sampled] Step 1/3 — Read countmin_sampled.pb");
+        let bytes = read_file(&sampled_cms_path);
+        let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode sampled countmin");
+
+        // Dual-read: 0.0/unset means 1.0; a sampled producer stamps the real p.
+        let p = effective_sample_p(&env);
+        println!("[CountMin/sampled] Step 2/3 — envelope sample_p = {p}");
+        if (p - 0.1).abs() > 1e-9 {
+            eprintln!("[CountMin/sampled] FAIL: sample_p {p} != 0.1");
+            all_ok = false;
+        }
+
+        let cm_state = match env.sketch_state {
+            Some(sketch_envelope::SketchState::CountMin(ref s)) => s.clone(),
+            other => panic!("expected CountMin sketch_state, got {:?}", other),
+        };
+        let rows = cm_state.rows as usize;
+        let cols = cm_state.cols as usize;
+        let counts: Vec<f64> = if !cm_state.counts_float.is_empty() {
+            cm_state.counts_float.clone()
+        } else {
+            cm_state.counts_int.iter().map(|&v| v as f64).collect()
+        };
+
+        // Raw min-frequency point query for "item:hot".
+        let hot_hash = xxh3_64_seeded(SEED_0, b"item:hot");
+        let bits_per_row = col_bits(cols);
+        let mask = (cols as u64) - 1;
+        let mut raw = f64::MAX;
+        for r in 0..rows {
+            let shift = (r as u64) * bits_per_row;
+            let c = ((hot_hash >> shift) & mask) as usize;
+            raw = raw.min(counts[r * cols + c]);
+        }
+        // Backend rescale: ×1/p recovers the full-stream frequency.
+        let rescaled = rescale_count(raw, p);
+        let rel_err = (rescaled - 100_000.0).abs() / 100_000.0;
+        println!(
+            "[CountMin/sampled] Step 3/3 — raw={raw:.0} rescaled(×1/p)={rescaled:.0} truth=100000 relErr={rel_err:.4}"
+        );
+        if rel_err <= 0.05 {
+            println!("[CountMin/sampled]   PASS");
+        } else {
+            eprintln!("[CountMin/sampled] FAIL: rescaled rel err {rel_err:.4} > 0.05");
+            all_ok = false;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Sampled HLL (hash-threshold sampling, p=0.1) — cardinality ×1/p rescale.
+    // -----------------------------------------------------------------------
+    let sampled_hll_path = in_dir.join("hll_sampled.pb");
+    if sampled_hll_path.exists() {
+        println!();
+        println!("[HLL/sampled] Step 1/3 — Read hll_sampled.pb");
+        let bytes = read_file(&sampled_hll_path);
+        let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode sampled hll");
+
+        let p = effective_sample_p(&env);
+        println!("[HLL/sampled] Step 2/3 — envelope sample_p = {p}");
+        if (p - 0.1).abs() > 1e-9 {
+            eprintln!("[HLL/sampled] FAIL: sample_p {p} != 0.1");
+            all_ok = false;
+        }
+
+        let mut hll_state = match env.sketch_state {
+            Some(sketch_envelope::SketchState::Hll(ref s)) => s.clone(),
+            other => panic!("expected HLL sketch_state, got {:?}", other),
+        };
+        // Dual-read the registers (sampling thins them → may be sparse-encoded).
+        let regs =
+            asap_sketchlib::message_pack_format::portable::hll::registers_from_state(&hll_state)
+                .expect("decode sampled hll registers");
+        hll_state.registers = regs;
+        hll_state.registers_sparse = None;
+
+        let raw = hll_ertl_mle_estimate(&hll_state) as f64;
+        let rescaled = rescale_count(raw, p);
+        let rel_err = (rescaled - 200_000.0).abs() / 200_000.0;
+        println!(
+            "[HLL/sampled] Step 3/3 — raw≈{raw:.0} rescaled(×1/p)≈{rescaled:.0} truth=200000 relErr={rel_err:.4}"
+        );
+        if rel_err <= 0.06 {
+            println!("[HLL/sampled]   PASS");
+        } else {
+            eprintln!("[HLL/sampled] FAIL: rescaled rel err {rel_err:.4} > 0.06");
+            all_ok = false;
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Final summary
     // -----------------------------------------------------------------------
     println!();
@@ -538,7 +636,12 @@ fn generate_xtest_fixtures(go_dir: &Path, out_dir: &Path) -> bool {
     // The producer is a `go test` target (TestXtestProducer) under
     // tests/cross_language/; it writes the .pb fixtures into $XTEST_DIR.
     let output = match Command::new("go")
-        .args(["test", "-run", "TestXtestProducer", "./tests/cross_language/"])
+        .args([
+            "test",
+            "-run",
+            "TestXtestProducer",
+            "./tests/cross_language/",
+        ])
         .env("XTEST_DIR", out_dir)
         .current_dir(go_dir)
         .output()
@@ -586,7 +689,8 @@ fn find_go_dir() -> Option<PathBuf> {
 }
 
 fn has_xtest_producer(dir: &Path) -> bool {
-    dir.join("tests/cross_language/xtest_producer_test.go").is_file()
+    dir.join("tests/cross_language/xtest_producer_test.go")
+        .is_file()
 }
 
 fn new_xtest_temp_dir() -> PathBuf {

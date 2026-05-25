@@ -533,6 +533,7 @@ mod tests {
             format_version: 1,
             producer: None,
             hash_spec: None,
+            sample_p: 0.0,
             sketch_state: Some(SketchState::CountSketch(state)),
         };
         let mut got = Vec::with_capacity(envelope.encoded_len());

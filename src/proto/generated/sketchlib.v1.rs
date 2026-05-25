@@ -677,6 +677,25 @@ pub struct SketchEnvelope {
     /// Mismatches do not prevent loading but will cause diverging results.
     #[prost(message, optional, tag = "3")]
     pub hash_spec: ::core::option::Option<HashSpec>,
+    /// Geometric / NitroSketch sampling probability for the producing sketch.
+    ///
+    /// The producer admits each stream update with probability `sample_p` (using
+    /// geometric skip-sampling, statistically identical to per-update Bernoulli(p))
+    /// and stores the RAW SAMPLED sketch state — never the rescaled state. The
+    /// consumer applies the `× 1/sample_p` rescale at QUERY time on the count-like
+    /// estimators (HLL cardinality, CountMin / CountSketch frequency, SUM / COUNT);
+    /// quantile estimators (KLL, DDSketch) are scale-invariant under uniform
+    /// sampling so they carry `sample_p` but need no rescale.
+    ///
+    /// Lives on the envelope (not per-sketch state) so downstream consumers that
+    /// construct per-sketch state structs by literal are unaffected.
+    ///
+    /// Dual-read default: a value of 0.0 (the proto3 default for an unset field)
+    /// is interpreted as 1.0 (exact, no sampling) for backward compatibility with
+    /// producers that predate this field. With sample_p = 1.0 a 0.0/unset envelope
+    /// is byte-identical to the pre-sampling format.
+    #[prost(double, tag = "4")]
+    pub sample_p: f64,
     /// The sketch payload. Exactly one field must be set.
     #[prost(
         oneof = "sketch_envelope::SketchState",

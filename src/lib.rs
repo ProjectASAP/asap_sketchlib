@@ -51,6 +51,10 @@ pub use message_pack_format::portable::delta_set_aggregator::DeltaResult;
 pub use message_pack_format::portable::hll::{HllSketch, HllSketchDelta, HllVariant};
 pub use message_pack_format::portable::hydra_kll::HydraKllSketch;
 pub use message_pack_format::portable::kll::{KllSketch, KllSketchData};
+pub use message_pack_format::portable::sampling::{
+    effective_sample_p, is_quantile_scale_invariant, rescale_count, rescale_count_with_env,
+    sample_p_or_default,
+};
 pub use message_pack_format::portable::set_aggregator::SetAggregator;
 pub use sketch_framework::*;
 pub use sketches::*;
