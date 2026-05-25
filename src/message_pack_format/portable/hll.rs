@@ -200,6 +200,124 @@ impl HllSketch {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Proto dual-read decode (DENSE tag 3 + SPARSE tag 7)
+// ---------------------------------------------------------------------------
+
+use crate::proto::sketchlib::{HllSparseRegisters, HyperLogLogState};
+
+/// Decode the full dense register array from a `HyperLogLogState`, accepting
+/// BOTH wire encodings emitted by sketchlib-go:
+///   - DENSE (`registers`, tag 3): raw 1-byte-per-register array, or
+///   - SPARSE (`registers_sparse`, tag 7): HLL++ style varint-packed
+///     (index_delta, value) pairs for non-zero registers only.
+///
+/// The SPARSE field takes priority when present; otherwise the DENSE field is
+/// used. Both reconstruct the identical `2^precision`-byte register array, so
+/// downstream estimation / merge is encoding-agnostic. This is the Rust half of
+/// the backend-decode-first rollout: it must ship before any producer emits
+/// sparse. Mirrors the Go decoder in
+/// `sketchlib-go/sketches/HLL/portable.go::registersFromState` +
+/// `sparse.go::decodeSparseRegisters`.
+pub fn registers_from_state(
+    state: &HyperLogLogState,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(sp) = &state.registers_sparse {
+        return decode_sparse_registers(sp);
+    }
+    Ok(state.registers.clone())
+}
+
+/// Reconstruct the dense register array from a sparse message. Inverse of the
+/// Go encoder `sparse.go::encodeSparseRegisters`.
+pub fn decode_sparse_registers(
+    sp: &HllSparseRegisters,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    let n = sp.num_registers as usize;
+    let mut regs = vec![0u8; n];
+
+    let packed = &sp.packed;
+    let mut off = 0usize;
+    let mut prev: usize = 0;
+    let mut first = true;
+    while off < packed.len() {
+        let (delta, used) =
+            read_uvarint(&packed[off..]).ok_or("hll: sparse index-delta varint corrupt")?;
+        off += used;
+        let (val, used) = read_uvarint(&packed[off..]).ok_or("hll: sparse value varint corrupt")?;
+        off += used;
+
+        let idx = prev + delta as usize;
+        // First delta is an absolute index (prev=0); later deltas must be > 0
+        // so indices stay strictly increasing and unique.
+        if !first && delta == 0 {
+            return Err(format!("hll: sparse non-increasing index at idx {idx}").into());
+        }
+        first = false;
+        if idx >= n {
+            return Err(format!("hll: sparse index {idx} out of range [0,{n})").into());
+        }
+        if val > 0xff {
+            return Err(format!("hll: sparse value {val} exceeds u8 at idx {idx}").into());
+        }
+        regs[idx] = val as u8;
+        prev = idx;
+    }
+    Ok(regs)
+}
+
+/// Encode the non-zero registers of `regs` into an [`HllSparseRegisters`]
+/// message, byte-identical to the Go encoder `sparse.go::encodeSparseRegisters`.
+/// Provided so a Rust producer (or the reverse-direction golden test) can emit
+/// the same sparse wire form Go does.
+pub fn encode_sparse_registers(regs: &[u8]) -> HllSparseRegisters {
+    let mut packed: Vec<u8> = Vec::new();
+    let mut prev: usize = 0;
+    for (i, &v) in regs.iter().enumerate() {
+        if v == 0 {
+            continue;
+        }
+        write_uvarint(&mut packed, (i - prev) as u64);
+        write_uvarint(&mut packed, v as u64);
+        prev = i;
+    }
+    HllSparseRegisters {
+        num_registers: regs.len() as u32,
+        packed,
+    }
+}
+
+/// Append one unsigned LEB128 varint to `out`. Matches Go's
+/// `encoding/binary.PutUvarint`.
+fn write_uvarint(out: &mut Vec<u8>, mut v: u64) {
+    while v >= 0x80 {
+        out.push((v as u8) | 0x80);
+        v >>= 7;
+    }
+    out.push(v as u8);
+}
+
+/// Read one unsigned LEB128 varint, returning (value, bytes_consumed). Matches
+/// Go's `encoding/binary.Uvarint`. Returns None on truncation / overflow.
+fn read_uvarint(buf: &[u8]) -> Option<(u64, usize)> {
+    let mut result: u64 = 0;
+    let mut shift = 0u32;
+    for (i, &b) in buf.iter().enumerate() {
+        if i >= 10 {
+            return None; // varint too long for u64
+        }
+        if shift == 63 && b > 1 {
+            return None; // overflow
+        }
+        result |= ((b & 0x7f) as u64) << shift;
+        if b < 0x80 {
+            return Some((result, i + 1));
+        }
+        shift += 7;
+    }
+    None
+}
+
 impl MessagePackCodec for HllSketch {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
         Ok(rmp_serde::to_vec(self)?)
@@ -349,6 +467,9 @@ mod tests {
             hip_kxq0: sk.hip_kxq0,
             hip_kxq1: sk.hip_kxq1,
             hip_est: sk.hip_est,
+            // This parity golden predates the sparse field and intentionally
+            // pins the DENSE wire form, so leave the sparse field unset.
+            registers_sparse: None,
         };
         let envelope = SketchEnvelope {
             format_version: 1,
@@ -393,5 +514,77 @@ mod tests {
             b'A'..=b'F' => c - b'A' + 10,
             _ => panic!("non-hex byte {}", c as char),
         }
+    }
+
+    // ----- sparse full-state encoding -----
+
+    use crate::proto::sketchlib::HyperLogLogState;
+
+    /// A handful of (index, value) pairs that exercise small and large index
+    /// deltas plus the maximum register value.
+    fn sample_regs(n: usize) -> Vec<u8> {
+        let mut regs = vec![0u8; n];
+        regs[0] = 1; // first delta is absolute index 0
+        regs[1] = 7; // adjacent index (delta 1)
+        regs[300] = 51; // max p=14 register value (Q+1)
+        regs[8191] = 12; // mid-range, multi-byte index delta
+        regs[n - 1] = 3; // last register
+        regs
+    }
+
+    #[test]
+    fn sparse_round_trip_exact() {
+        let regs = sample_regs(16384);
+        let sp = encode_sparse_registers(&regs);
+        assert_eq!(sp.num_registers, 16384);
+        let decoded = decode_sparse_registers(&sp).unwrap();
+        assert_eq!(decoded, regs, "sparse round trip must be exact");
+    }
+
+    #[test]
+    fn registers_from_state_reads_both() {
+        let regs = sample_regs(16384);
+
+        // SPARSE: registers_sparse set, registers empty.
+        let sparse_state = HyperLogLogState {
+            variant: 2,
+            precision: 14,
+            registers: Vec::new(),
+            hip_kxq0: 0.0,
+            hip_kxq1: 0.0,
+            hip_est: 0.0,
+            registers_sparse: Some(encode_sparse_registers(&regs)),
+        };
+        assert_eq!(registers_from_state(&sparse_state).unwrap(), regs);
+
+        // DENSE: registers set, registers_sparse None.
+        let dense_state = HyperLogLogState {
+            variant: 2,
+            precision: 14,
+            registers: regs.clone(),
+            hip_kxq0: 0.0,
+            hip_kxq1: 0.0,
+            hip_est: 0.0,
+            registers_sparse: None,
+        };
+        assert_eq!(registers_from_state(&dense_state).unwrap(), regs);
+    }
+
+    #[test]
+    fn sparse_empty_is_all_zero() {
+        let regs = vec![0u8; 16384];
+        let sp = encode_sparse_registers(&regs);
+        assert!(sp.packed.is_empty());
+        assert_eq!(decode_sparse_registers(&sp).unwrap(), regs);
+    }
+
+    #[test]
+    fn sparse_rejects_out_of_range_index() {
+        // packed = uvarint(delta=5) , uvarint(value=3) but num_registers=4.
+        let sp = HllSparseRegisters {
+            num_registers: 4,
+            packed: vec![5, 3],
+        };
+        assert!(decode_sparse_registers(&sp).is_err());
     }
 }
