@@ -1,7 +1,7 @@
 //! Query-time rescaling for NitroSketch / geometric-sampled sketches.
 //!
 //! Sampling lives on the wire as a single `sample_p` field on the
-//! [`SketchEnvelope`](crate::proto::sketchlib::SketchEnvelope) (NOT inside any
+//! [`SketchEnvelope`] (NOT inside any
 //! per-sketch state struct — so downstream code that builds state structs by
 //! literal is unaffected). The producer admits each stream update with
 //! probability `p` and stores the RAW SAMPLED state. The backend reads `p` here
