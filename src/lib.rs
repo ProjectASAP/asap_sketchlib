@@ -40,6 +40,7 @@ pub mod __private {
 }
 
 pub use common::*;
+pub use message_pack_format::MessagePackCodec;
 pub use message_pack_format::portable::countminsketch::{CountMinSketch, CountMinSketchDelta};
 pub use message_pack_format::portable::countminsketch_topk::{CmsHeapItem, CountMinSketchWithHeap};
 pub use message_pack_format::portable::countsketch::{
