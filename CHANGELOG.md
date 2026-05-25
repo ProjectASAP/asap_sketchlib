@@ -103,7 +103,8 @@ Initial crates.io release.
 
 Pre-release tag. Not published to crates.io.
 
-[Unreleased]: https://github.com/ProjectASAP/asap_sketchlib/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/ProjectASAP/asap_sketchlib/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/ProjectASAP/asap_sketchlib/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/ProjectASAP/asap_sketchlib/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ProjectASAP/asap_sketchlib/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ProjectASAP/asap_sketchlib/releases/tag/v0.1.0
