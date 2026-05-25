@@ -71,10 +71,17 @@ fn cross_language_proto() {
         CounterType::try_from(cm_state.counter_type)
     );
 
-    // Reconstruct the row-major float matrix.
+    // Reconstruct the row-major matrix as f64. The producer populates EITHER
+    // counts_int (counter_type ∈ {INT32,INT64}) OR counts_float (FLOAT64),
+    // discriminated by counter_type — read whichever is present.
     let rows = cm_state.rows as usize;
     let cols = cm_state.cols as usize;
-    let counts = &cm_state.counts_float;
+    let counts: Vec<f64> = if !cm_state.counts_float.is_empty() {
+        cm_state.counts_float.clone()
+    } else {
+        cm_state.counts_int.iter().map(|&v| v as f64).collect()
+    };
+    let counts = &counts;
     if counts.len() != rows * cols {
         eprintln!(
             "[CountMin] FAIL: counts length {} != rows*cols {}",
@@ -528,9 +535,11 @@ impl Drop for XtestDir {
 }
 
 fn generate_xtest_fixtures(go_dir: &Path, out_dir: &Path) -> bool {
+    // The producer is a `go test` target (TestXtestProducer) under
+    // tests/cross_language/; it writes the .pb fixtures into $XTEST_DIR.
     let output = match Command::new("go")
-        .args(["run", "./cmd/xtest_producer"])
-        .arg(out_dir)
+        .args(["test", "-run", "TestXtestProducer", "./tests/cross_language/"])
+        .env("XTEST_DIR", out_dir)
         .current_dir(go_dir)
         .output()
     {
@@ -577,7 +586,7 @@ fn find_go_dir() -> Option<PathBuf> {
 }
 
 fn has_xtest_producer(dir: &Path) -> bool {
-    dir.join("cmd/xtest_producer/main.go").is_file()
+    dir.join("tests/cross_language/xtest_producer_test.go").is_file()
 }
 
 fn new_xtest_temp_dir() -> PathBuf {
@@ -716,7 +725,14 @@ fn count_sketch_query_float(state: &CountSketchState, hash: u64) -> f64 {
     let cols = state.cols as usize;
     let bits_per_row = col_bits(cols);
     let mask = (cols as u64) - 1;
-    let counts = &state.counts_float;
+    // Read whichever counter field the producer populated (int vs float),
+    // discriminated by counter_type — same as CountMin.
+    let counts: Vec<f64> = if !state.counts_float.is_empty() {
+        state.counts_float.clone()
+    } else {
+        state.counts_int.iter().map(|&v| v as f64).collect()
+    };
+    let counts = &counts;
 
     let mut estimates: Vec<f64> = Vec::with_capacity(rows);
     for r in 0..rows {
@@ -986,7 +1002,12 @@ fn cm_query_min(cm: &CountMinState, hash: u64) -> f64 {
     let cols = cm.cols as usize;
     let bits_per_row = col_bits(cols);
     let mask = (cols as u64) - 1;
-    let counts = &cm.counts_float;
+    let counts: Vec<f64> = if !cm.counts_float.is_empty() {
+        cm.counts_float.clone()
+    } else {
+        cm.counts_int.iter().map(|&v| v as f64).collect()
+    };
+    let counts = &counts;
 
     let mut min_val = f64::MAX;
     for r in 0..rows {
