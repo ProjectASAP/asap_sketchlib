@@ -82,6 +82,7 @@ fn sketches_count_fastpath_matches_go_count_sketch_envelope() {
         format_version: 1,
         producer: None,
         hash_spec: None,
+        sample_p: 0.0,
         sketch_state: Some(SketchState::CountSketch(state)),
     };
     let mut got = Vec::with_capacity(envelope.encoded_len());
@@ -142,6 +143,7 @@ fn sketches_countmin_fastpath_matches_go_count_min_envelope() {
         format_version: 1,
         producer: None,
         hash_spec: None,
+        sample_p: 0.0,
         sketch_state: Some(SketchState::CountMin(state)),
     };
     let mut got = Vec::with_capacity(envelope.encoded_len());
@@ -192,6 +194,7 @@ fn sketches_hll_classic_matches_go_envelope() {
         format_version: 1,
         producer: None,
         hash_spec: None,
+        sample_p: 0.0,
         sketch_state: Some(SketchState::Hll(state)),
     };
     let mut got = Vec::with_capacity(envelope.encoded_len());
@@ -246,6 +249,7 @@ fn sketches_ddsketch_matches_go_envelope() {
         format_version: 1,
         producer: None,
         hash_spec: None,
+        sample_p: 0.0,
         sketch_state: Some(SketchState::Ddsketch(state)),
     };
     let mut got = Vec::with_capacity(envelope.encoded_len());

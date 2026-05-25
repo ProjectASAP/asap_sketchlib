@@ -458,6 +458,7 @@ mod tests {
             format_version: 1,
             producer: None,
             hash_spec: None,
+            sample_p: 0.0,
             sketch_state: Some(SketchState::Kll(kll_state)),
         };
         let mut got = Vec::with_capacity(envelope.encoded_len());
@@ -678,6 +679,7 @@ mod tests {
             format_version: 1,
             producer: None,
             hash_spec: None,
+            sample_p: 0.0,
             sketch_state: Some(SketchState::Kll(state)),
         };
         let mut got = Vec::with_capacity(envelope.encoded_len());

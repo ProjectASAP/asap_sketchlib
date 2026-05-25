@@ -475,6 +475,9 @@ mod tests {
             format_version: 1,
             producer: None,
             hash_spec: None,
+            // Golden pins the pre-sampling wire form; 0.0 is the proto3 default
+            // (dual-read as 1.0) so the encoded bytes are unchanged.
+            sample_p: 0.0,
             sketch_state: Some(SketchState::Hll(state)),
         };
         let mut got = Vec::with_capacity(envelope.encoded_len());
