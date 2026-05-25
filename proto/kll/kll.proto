@@ -34,6 +34,13 @@ message KLLState {
   repeated uint32 levels = 4 [packed = true];
 
   // All retained samples in level order, length = levels[num_levels].
+  //
+  // RAW-F64 representation. Populated when the value-offset fixed-point
+  // representation (offset/value_scale/residuals, fields 7–9) is NOT used —
+  // i.e. when the producer could not represent the retained set exactly at
+  // any candidate decimal scale and fell back to raw f64. When residuals
+  // (field 9) is non-empty, items MUST be empty and decoders MUST reconstruct
+  // from the fixed-point fields instead.
   repeated double items = 5 [packed = true];
 
   // Random bit generator state for deterministic compaction continuation.
@@ -41,7 +48,47 @@ message KLLState {
   // Consumers that only query may ignore this field.
   CoinState coin = 6;
 
-  reserved 7 to 15;
+  // ---- Value-offset fixed-point representation (additive, optional) -------
+  //
+  // KLL retained samples are typically integer-ish or low-cardinality decimal
+  // values whose raw f64 encoding (8 bytes/item) dominates the wire size.
+  // When every retained value is exactly representable as
+  //
+  //     value = residual * 10^value_scale + offset
+  //
+  // the producer stores the per-sample residual integers (field 9, zigzag
+  // varint) plus a single per-sketch `offset` (field 7) and decimal exponent
+  // `value_scale` (field 8) instead of raw f64 items. This is exact for the
+  // stored sample SET (the producer applies an exactness guard and falls back
+  // to raw `items` when any value is not exactly representable), and quantiles
+  // are shift-equivariant (q(X - c) = q(X) - c) so query results are
+  // unchanged. residuals[] is in the SAME level order as items[].
+  //
+  // Backward compatibility: when residuals (field 9) is absent/empty, decoders
+  // read raw f64 from items (field 5) — the original v1 behavior. Decoders on
+  // BOTH languages read both forms; producers gate emission of the fixed-point
+  // form behind the exactness guard.
+  //
+  // NOTE: this is the self-contained per-SKETCH offset carried in the sketch
+  // header. The epoch-bound offset for the delta-transmission path is a
+  // separate, later concern and is intentionally NOT modeled here.
+
+  // Per-sketch subtraction constant. value = residual * 10^value_scale + offset.
+  double offset = 7;
+
+  // Decimal scale exponent. A value v maps to residual = round((v - offset) *
+  // 10^(-value_scale)); reconstruction multiplies by 10^value_scale. scale 0
+  // means residuals are integers; negative scales carry fractional precision
+  // (e.g. value_scale = -3 -> millis). sint32 so negative scales varint-pack.
+  sint32 value_scale = 8;
+
+  // Per-sample residual integers, same level order and length as a raw items[]
+  // would have. Zigzag varint (sint64) keeps small magnitudes compact. When
+  // present and non-empty, this is the authoritative item source and items[]
+  // (field 5) MUST be empty.
+  repeated sint64 residuals = 9 [packed = true];
+
+  reserved 10 to 15;
 }
 
 // CoinState is the RNG used by KLL's probabilistic compaction.
