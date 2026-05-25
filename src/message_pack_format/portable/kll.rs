@@ -157,6 +157,160 @@ impl std::fmt::Debug for KllSketch {
 unsafe impl Send for KllSketch {}
 unsafe impl Sync for KllSketch {}
 
+// ----- Value-offset fixed-point representation (cross-language) -----
+//
+// KLL `KLLState` (proto/kll/kll.proto) carries the retained samples in one of
+// two forms:
+//
+//   * RAW F64       — `items` (field 5), 8 bytes/sample. The original v1 form.
+//   * VALUE-OFFSET  — `offset` (7) + `value_scale` (8) + `residuals` (9),
+//                     where `value = residual * 10^value_scale + offset`.
+//
+// PR2 makes BOTH languages read both forms (this is the decode-first half of
+// the rollout). `sketchlib-go` gates emission of the value-offset form behind
+// an exactness guard; this crate currently only reads it but the
+// encode/decode helpers below are symmetric so the Rust side can produce it
+// too (used by the cross-language golden test and any future Rust producer).
+
+/// Per-sketch scale exponents tried by [`encode_value_offset`], in priority
+/// order. Mirrors `kllScaleSweep` in `sketchlib-go`.
+pub const KLL_SCALE_SWEEP: [i32; 7] = [0, -1, -2, -3, -4, -5, -6];
+
+/// Reconstructs retained samples from the value-offset fixed-point fields:
+/// `value = residual * 10^value_scale + offset`. Caller invokes this only when
+/// `residuals` is non-empty.
+pub fn decode_value_offset(offset: f64, value_scale: i32, residuals: &[i64]) -> Vec<f64> {
+    let mul = 10f64.powi(value_scale);
+    residuals.iter().map(|&r| r as f64 * mul + offset).collect()
+}
+
+/// Attempts to represent `items` exactly as `residual * 10^scale + offset`
+/// using the finite [`KLL_SCALE_SWEEP`]. `offset` is the minimum value. Returns
+/// `None` (the exactness-guard fallback) when no candidate scale round-trips
+/// every sample bit-exactly, or when the slice is empty / contains a non-finite
+/// value. Symmetric with `sketchlib-go::encodeValueOffset`.
+pub fn encode_value_offset(items: &[f64]) -> Option<(f64, i32, Vec<i64>)> {
+    if items.is_empty() {
+        return None;
+    }
+    let mut offset = items[0];
+    for &v in items {
+        if !v.is_finite() {
+            return None;
+        }
+        if v < offset {
+            offset = v;
+        }
+    }
+    for &sc in &KLL_SCALE_SWEEP {
+        let mul = 10f64.powi(-sc);
+        let mut out = Vec::with_capacity(items.len());
+        let mut good = true;
+        for &v in items {
+            let r = ((v - offset) * mul).round();
+            if !r.is_finite() || r > i64::MAX as f64 || r < i64::MIN as f64 {
+                good = false;
+                break;
+            }
+            let ri = r as i64;
+            // Exactness guard: reconstruct and require bit-identical recovery.
+            let recon = ri as f64 * 10f64.powi(sc) + offset;
+            if recon != v {
+                good = false;
+                break;
+            }
+            out.push(ri);
+        }
+        if good {
+            return Some((offset, sc, out));
+        }
+    }
+    None
+}
+
+/// Materialized retained samples + level layout decoded from a proto
+/// `KLLState`, dual-reading the raw-f64 and value-offset forms.
+#[derive(Debug, Clone)]
+pub struct KllProtoItems {
+    /// Retained samples in level order (length == `levels[num_levels]`).
+    pub items: Vec<f64>,
+    /// Level boundary indices, length == `num_levels + 1`.
+    pub levels: Vec<usize>,
+    pub num_levels: usize,
+    pub k: u32,
+    pub m: u32,
+}
+
+impl KllProtoItems {
+    /// Decodes a proto `KLLState`, dual-reading: when `residuals` is non-empty
+    /// it reconstructs from (offset, value_scale, residuals); otherwise it
+    /// reads raw f64 `items`. Returns an error if both forms are populated or
+    /// the level layout is inconsistent.
+    pub fn from_state(
+        s: &crate::proto::sketchlib::KllState,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let items = if !s.residuals.is_empty() {
+            if !s.items.is_empty() {
+                return Err("kll: both residuals and raw items[] set".into());
+            }
+            decode_value_offset(s.offset, s.value_scale, &s.residuals)
+        } else {
+            s.items.clone()
+        };
+        let levels: Vec<usize> = s.levels.iter().map(|&v| v as usize).collect();
+        if levels.len() < 2 {
+            return Err(format!("kll: invalid levels length {}", levels.len()).into());
+        }
+        if *levels.last().unwrap() != items.len() {
+            return Err("kll: invalid item layout".into());
+        }
+        Ok(Self {
+            items,
+            levels,
+            num_levels: s.num_levels as usize,
+            k: s.k,
+            m: s.m,
+        })
+    }
+
+    /// Weighted (value, weight) pairs across all levels.
+    pub fn weighted_samples(&self) -> Vec<(f64, u64)> {
+        let mut out = Vec::with_capacity(self.items.len());
+        for h in 0..self.num_levels {
+            let weight: u64 = 1 << h;
+            let idx = self.num_levels - 1 - h;
+            if idx + 1 >= self.levels.len() {
+                continue;
+            }
+            let start = self.levels[idx];
+            let end = self.levels[idx + 1];
+            for &v in &self.items[start..end] {
+                out.push((v, weight));
+            }
+        }
+        out
+    }
+
+    /// Estimated value at quantile `q ∈ [0, 1]` from the weighted samples.
+    pub fn quantile(&self, q: f64) -> f64 {
+        let mut samples = self.weighted_samples();
+        if samples.is_empty() {
+            return 0.0;
+        }
+        samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let total: u64 = samples.iter().map(|(_, w)| w).sum();
+        let target = (q * total as f64).ceil() as u64;
+        let mut acc = 0u64;
+        for (v, w) in &samples {
+            acc += w;
+            if acc >= target {
+                return *v;
+            }
+        }
+        samples.last().unwrap().0
+    }
+}
+
 // ----- Wire format -----
 
 /// Wire DTO for [`KllSketch`]. Also referenced as a nested field by
@@ -288,12 +442,17 @@ mod tests {
             m: sk.wire_m(),
             num_levels: sk.wire_num_levels(),
             levels: sk.wire_levels(),
+            // This golden pins the RAW-F64 wire form; the value-offset fields
+            // stay at their proto defaults so the bytes are unchanged.
             items: sk.wire_items(),
             coin: Some(CoinState {
                 state,
                 bit_cache,
                 remaining_bits,
             }),
+            offset: 0.0,
+            value_scale: 0,
+            residuals: vec![],
         };
         let envelope = SketchEnvelope {
             format_version: 1,
@@ -335,4 +494,221 @@ mod tests {
             _ => panic!("non-hex byte {}", c as char),
         }
     }
+
+    // ----- Value-offset fixed-point representation -----
+
+    use crate::proto::sketchlib::{KllState, SketchEnvelope, sketch_envelope::SketchState};
+    use prost::Message;
+
+    /// Round-trip exactness for the value-offset (fixed-point) form: integer
+    /// and fixed-decimal series must encode then decode back bit-exactly.
+    #[test]
+    fn value_offset_round_trip_exact_fixed_point() {
+        // Integer-ish series (scale 0).
+        let ints: Vec<f64> = (0..200).map(|i| (1_000_000 + i * 7) as f64).collect();
+        let (offset, scale, residuals) =
+            encode_value_offset(&ints).expect("integer series must be representable");
+        assert_eq!(scale, 0, "integer series should pick scale 0");
+        let back = decode_value_offset(offset, scale, &residuals);
+        assert_eq!(ints, back, "fixed-point round-trip changed integer items");
+
+        // Fixed-decimal series (milli resolution → scale -3).
+        let decis: Vec<f64> = (0..128).map(|i| 100.0 + (i as f64) * 0.001).collect();
+        let (o2, s2, r2) =
+            encode_value_offset(&decis).expect("milli-decimal series must be representable");
+        assert!(
+            (-3..=0).contains(&s2),
+            "expected a small negative scale, got {s2}"
+        );
+        let back2 = decode_value_offset(o2, s2, &r2);
+        assert_eq!(decis, back2, "fixed-point round-trip changed decimal items");
+    }
+
+    /// The exactness guard must reject a value not representable at any
+    /// candidate scale, so the caller falls back to raw f64.
+    #[test]
+    fn value_offset_guard_rejects_irrational() {
+        let items = vec![0.0, 1.0, std::f64::consts::PI, 3.0];
+        assert!(
+            encode_value_offset(&items).is_none(),
+            "pi is not exactly representable at any decimal scale; guard must reject"
+        );
+        // Empty slice falls back too.
+        assert!(encode_value_offset(&[]).is_none());
+        // Non-finite values are rejected.
+        assert!(encode_value_offset(&[1.0, f64::NAN]).is_none());
+        assert!(encode_value_offset(&[1.0, f64::INFINITY]).is_none());
+    }
+
+    /// `KllProtoItems::from_state` must dual-read both the raw-f64 and the
+    /// value-offset forms and yield identical items + quantiles.
+    #[test]
+    fn proto_dual_read_round_trip_both_forms() {
+        let mut sk: KLL<f64> = KLL::init_kll_with_seed(200, 7);
+        for i in 1..=5000 {
+            sk.update(&(i as f64));
+        }
+        let raw_items = sk.wire_items();
+        let levels = sk.wire_levels();
+        let num_levels = sk.wire_num_levels();
+
+        // Raw-f64 form.
+        let raw_state = KllState {
+            k: sk.wire_k(),
+            m: sk.wire_m(),
+            num_levels,
+            levels: levels.clone(),
+            items: raw_items.clone(),
+            coin: None,
+            offset: 0.0,
+            value_scale: 0,
+            residuals: vec![],
+        };
+        let from_raw = KllProtoItems::from_state(&raw_state).expect("decode raw-f64");
+
+        // Value-offset form (items empty, residuals populated).
+        let (offset, scale, residuals) =
+            encode_value_offset(&raw_items).expect("integer items representable");
+        let fp_state = KllState {
+            k: sk.wire_k(),
+            m: sk.wire_m(),
+            num_levels,
+            levels,
+            items: vec![],
+            coin: None,
+            offset,
+            value_scale: scale,
+            residuals,
+        };
+        let from_fp = KllProtoItems::from_state(&fp_state).expect("decode value-offset");
+
+        assert_eq!(
+            from_raw.items, from_fp.items,
+            "raw-f64 and value-offset decode to different items"
+        );
+        for &q in &[0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0] {
+            assert_eq!(
+                from_raw.quantile(q),
+                from_fp.quantile(q),
+                "quantile mismatch at p={q} between the two decode paths"
+            );
+        }
+    }
+
+    /// Decoding must error if a malformed state sets BOTH raw items and
+    /// residuals.
+    #[test]
+    fn proto_rejects_both_forms_populated() {
+        let state = KllState {
+            k: 200,
+            m: 8,
+            num_levels: 1,
+            levels: vec![0, 2],
+            items: vec![1.0, 2.0],
+            coin: None,
+            offset: 0.0,
+            value_scale: 0,
+            residuals: vec![1, 2],
+        };
+        assert!(KllProtoItems::from_state(&state).is_err());
+    }
+
+    /// Cross-language golden: decode the exact envelope bytes that
+    /// `sketchlib-go` emits for the deterministic `(1..=50)` integer input via
+    /// its value-offset encoder, and confirm the retained samples + quantiles
+    /// match. The Go side produces this with `SerializePortable` (fixed-point,
+    /// scale 0, offset = 1.0). See `sketches/KLL/portable_test.go::
+    /// TestGoldenValueOffsetEnvelopeForRust` in sketchlib-go, which prints this
+    /// hex and asserts the identical bytes.
+    #[test]
+    fn golden_value_offset_envelope_from_go() {
+        // SketchEnvelope { format_version: 1, kll: KLLState { k: 200, m: 8,
+        //   num_levels: 1, levels: [0, 50], offset: 1.0, value_scale: 0,
+        //   residuals: [0..=49] } }, producer/hash_spec cleared.
+        const GOLDEN_HEX: &str = GO_VALUE_OFFSET_GOLDEN_HEX;
+        let bytes = decode_hex(GOLDEN_HEX);
+        let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode envelope");
+        let state = match env.sketch_state {
+            Some(SketchState::Kll(s)) => s,
+            _ => panic!("envelope did not contain a KLLState"),
+        };
+        assert!(
+            state.items.is_empty(),
+            "value-offset form must leave items[] empty"
+        );
+        assert_eq!(state.value_scale, 0);
+        assert_eq!(state.offset, 1.0);
+        assert_eq!(state.residuals.len(), 50);
+
+        let decoded = KllProtoItems::from_state(&state).expect("dual-read decode");
+        let expected: Vec<f64> = (1..=50).map(|i| i as f64).collect();
+        assert_eq!(decoded.items, expected, "value-offset decode != (1..=50)");
+        // Quantile sanity: with k=200 and 50 inputs, no compaction occurred so
+        // these are exact order statistics.
+        assert_eq!(decoded.quantile(0.0), 1.0);
+        assert_eq!(decoded.quantile(1.0), 50.0);
+    }
+
+    /// Reverse-direction cross-language golden: build the value-offset envelope
+    /// for (1..=50) with the Rust encoder and assert exact bytes. The hex
+    /// printed here is consumed by sketchlib-go `TestRustGoldenDecodesInGo`.
+    /// Run with `-- --nocapture` to (re)print when regenerating.
+    #[test]
+    fn golden_value_offset_envelope_for_go() {
+        let items: Vec<f64> = (1..=50).map(|i| i as f64).collect();
+        let (offset, value_scale, residuals) =
+            encode_value_offset(&items).expect("integers representable");
+        assert_eq!(offset, 1.0);
+        assert_eq!(value_scale, 0);
+
+        let state = KllState {
+            k: 200,
+            m: 8,
+            num_levels: 1,
+            levels: vec![0, 50],
+            items: vec![],
+            // No coin: the reverse-decode in Go only checks the retained set,
+            // and an absent coin keeps the fixture minimal/stable.
+            coin: None,
+            offset,
+            value_scale,
+            residuals,
+        };
+        let envelope = SketchEnvelope {
+            format_version: 1,
+            producer: None,
+            hash_spec: None,
+            sketch_state: Some(SketchState::Kll(state)),
+        };
+        let mut got = Vec::with_capacity(envelope.encoded_len());
+        envelope.encode(&mut got).expect("prost encode");
+        let got_hex: String = got.iter().map(|b| format!("{b:02x}")).collect();
+        println!(
+            "RUST_VALUE_OFFSET_GOLDEN_HEX ({} bytes):\n{got_hex}",
+            got.len()
+        );
+
+        const RUST_GOLDEN_HEX: &str = "08016a4808c801100818012202003239000000000000f03f4a3200020406080a0c0e10121416181a1c1e20222426282a2c2e30323436383a3c3e40424446484a4c4e50525456585a5c5e6062";
+        assert_eq!(
+            got_hex, RUST_GOLDEN_HEX,
+            "Rust value-offset envelope bytes drifted; update both this constant \
+             and sketchlib-go's RustValueOffsetGoldenHex"
+        );
+
+        // Self-consistency: our own dual-reader recovers (1..=50).
+        let decoded = KllProtoItems::from_state(match &envelope.sketch_state {
+            Some(SketchState::Kll(s)) => s,
+            _ => unreachable!(),
+        })
+        .expect("decode");
+        assert_eq!(decoded.items, items);
+    }
+
+    // Captured from sketchlib-go's value-offset `SerializePortable` for input
+    // (1..=50), k=200, producer/hash_spec cleared. Generated and asserted by
+    // sketchlib-go `TestGoldenValueOffsetEnvelopeForRust` (run with `-v` to
+    // re-print). 80 bytes: SketchEnvelope{ format_version:1, kll: KLLState{
+    // k:200, m:8, num_levels:1, levels:[0,50], coin:{state:42}, offset:1.0,
+    // value_scale:0, residuals:[0..=49] } }.
+    const GO_VALUE_OFFSET_GOLDEN_HEX: &str = "08016a4c08c80110081801220200323202082a39000000000000f03f4a3200020406080a0c0e10121416181a1c1e20222426282a2c2e30323436383a3c3e40424446484a4c4e50525456585a5c5e6062";
 }

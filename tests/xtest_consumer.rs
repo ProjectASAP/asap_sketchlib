@@ -1012,7 +1012,17 @@ struct KllFromProto {
 
 impl KllFromProto {
     fn from_state(s: &KllState) -> Self {
-        let items: Vec<f64> = s.items.clone();
+        // Dual-read: prefer the value-offset fixed-point representation when
+        // residuals are present, else fall back to raw f64 items[] (v1).
+        let items: Vec<f64> = if !s.residuals.is_empty() {
+            asap_sketchlib::message_pack_format::portable::kll::decode_value_offset(
+                s.offset,
+                s.value_scale,
+                &s.residuals,
+            )
+        } else {
+            s.items.clone()
+        };
         let levels: Vec<usize> = s.levels.iter().map(|&v| v as usize).collect();
         let num_levels = s.num_levels as usize;
         Self {

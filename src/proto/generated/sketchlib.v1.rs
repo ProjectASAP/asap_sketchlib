@@ -350,6 +350,13 @@ pub struct KllState {
     #[prost(uint32, repeated, tag = "4")]
     pub levels: ::prost::alloc::vec::Vec<u32>,
     /// All retained samples in level order, length = levels\[num_levels\].
+    ///
+    /// RAW-F64 representation. Populated when the value-offset fixed-point
+    /// representation (offset/value_scale/residuals, fields 7–9) is NOT used —
+    /// i.e. when the producer could not represent the retained set exactly at
+    /// any candidate decimal scale and fell back to raw f64. When residuals
+    /// (field 9) is non-empty, items MUST be empty and decoders MUST reconstruct
+    /// from the fixed-point fields instead.
     #[prost(double, repeated, tag = "5")]
     pub items: ::prost::alloc::vec::Vec<f64>,
     /// Random bit generator state for deterministic compaction continuation.
@@ -357,6 +364,21 @@ pub struct KllState {
     /// Consumers that only query may ignore this field.
     #[prost(message, optional, tag = "6")]
     pub coin: ::core::option::Option<CoinState>,
+    /// Per-sketch subtraction constant. value = residual * 10^value_scale + offset.
+    #[prost(double, tag = "7")]
+    pub offset: f64,
+    /// Decimal scale exponent. A value v maps to residual = round((v - offset) *
+    /// 10^(-value_scale)); reconstruction multiplies by 10^value_scale. scale 0
+    /// means residuals are integers; negative scales carry fractional precision
+    /// (e.g. value_scale = -3 -> millis). sint32 so negative scales varint-pack.
+    #[prost(sint32, tag = "8")]
+    pub value_scale: i32,
+    /// Per-sample residual integers, same level order and length as a raw items\[\]
+    /// would have. Zigzag varint (sint64) keeps small magnitudes compact. When
+    /// present and non-empty, this is the authoritative item source and items\[\]
+    /// (field 5) MUST be empty.
+    #[prost(sint64, repeated, tag = "9")]
+    pub residuals: ::prost::alloc::vec::Vec<i64>,
 }
 /// CoinState is the RNG used by KLL's probabilistic compaction.
 /// Both Go and Rust use an identical xorshift-based generator.
