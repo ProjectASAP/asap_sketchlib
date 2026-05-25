@@ -271,9 +271,14 @@ pub struct HyperLogLogState {
     /// Default = 14 → 16 384 registers.
     #[prost(uint32, tag = "2")]
     pub precision: u32,
-    /// Raw register values, length = 2^precision.
+    /// DENSE register encoding: raw register values, length = 2^precision.
     /// Each byte stores the maximum (leading-zeros + 1) seen for that bucket.
     /// Stored as a raw byte string for compact encoding (1 byte per register).
+    ///
+    /// Exactly one of `registers` (dense) or `registers_sparse` (sparse) is
+    /// populated by a producer. A decoder MUST read whichever is present; if
+    /// both are empty the sketch is all-zero. This field stays at tag 3 so old
+    /// dense-only readers keep working unchanged.
     #[prost(bytes = "vec", tag = "3")]
     pub registers: ::prost::alloc::vec::Vec<u8>,
     /// HIP accumulator component kxq0.
@@ -285,6 +290,38 @@ pub struct HyperLogLogState {
     /// HIP running cardinality estimate.
     #[prost(double, tag = "6")]
     pub hip_est: f64,
+    /// SPARSE register encoding (additive, tag 7). Populated instead of
+    /// `registers` (tag 3) when the number of non-zero registers is below the
+    /// producer's dense/sparse crossover. Old readers that predate this field
+    /// ignore tag 7 (proto skips unknown fields), so adding it is wire-backward-
+    /// compatible. New readers decode BOTH representations — see
+    /// HLLSparseRegisters. Reconstruction yields the identical 2^precision-byte
+    /// dense register array, so cardinality estimation is unaffected.
+    #[prost(message, optional, tag = "7")]
+    pub registers_sparse: ::core::option::Option<HllSparseRegisters>,
+}
+/// HLLSparseRegisters is the sparse (HLL++ style) full-state encoding of the
+/// register array. Only non-zero registers are stored, sorted by ascending
+/// index and varint-packed as (index_delta, value) pairs:
+///
+///    for each non-zero register, in ascending index order:
+///      uvarint(index - prev_index)   // prev_index starts at 0; deltas are >= 0
+///      uvarint(value)                // 1..=Q+1, always 1 byte in practice
+///
+/// For low/medium cardinality (most registers zero) this is far smaller than
+/// the dense 2^precision-byte array. Decoding allocates a zero-filled dense
+/// array of length `num_registers` and writes each decoded (index, value).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HllSparseRegisters {
+    /// Total number of registers in the reconstructed dense array (= 2^precision).
+    /// Carried explicitly so the decoder can size the dense buffer without
+    /// re-deriving it from precision.
+    #[prost(uint32, tag = "1")]
+    pub num_registers: u32,
+    /// Varint-packed (index_delta, value) pairs for non-zero registers, in
+    /// ascending index order. See message-level comment for the exact layout.
+    #[prost(bytes = "vec", tag = "2")]
+    pub packed: ::prost::alloc::vec::Vec<u8>,
 }
 /// HLLVariant identifies which HLL estimator algorithm the registers belong to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]

@@ -185,6 +185,8 @@ fn sketches_hll_classic_matches_go_envelope() {
         hip_kxq0: 0.0,
         hip_kxq1: 0.0,
         hip_est: 0.0,
+        // This parity probe pins the DENSE wire form; leave sparse unset.
+        registers_sparse: None,
     };
     let envelope = SketchEnvelope {
         format_version: 1,
