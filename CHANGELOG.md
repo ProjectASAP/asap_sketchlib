@@ -10,6 +10,21 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+### Changed (breaking — wire format)
+- **Drop the DataPoint-level METRIC scalars from `DDSketchState`.** Removed
+  `count` (4), `sum` (5), `min` (6) and `max` (7) from
+  `proto/ddsketch/ddsketch.proto` (tags now `reserved`), regenerated the prost
+  bindings, and dropped the matching `count`/`sum`/`min`/`max` fields from the
+  portable msgpack DTO (`message_pack_format::portable::ddsketch::DdSketch`) so
+  its rmp-compact array shrinks from 7 to 3 elements
+  (`[alpha, store_counts, store_offset]`). The total count is recovered by
+  summing `store_counts` (`DdSketch::total_count()`); quantile estimation now
+  derives the high-end estimate from the highest non-empty bucket instead of the
+  removed `max`. The in-memory `sketches::DDSketch` keeps these as runtime-only
+  state (`#[serde(skip)]`) and rebuilds them from the bucket store on decode.
+  Byte-parity twin of the parallel `sketchlib-go` change
+  (ProjectASAP/sketchlib-go#243).
+
 ## [0.2.2] - 2026-05-18
 
 Performance patch release. No API changes; all public sketch APIs behave

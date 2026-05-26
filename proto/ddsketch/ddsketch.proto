@@ -32,17 +32,11 @@ message DDSketchState {
   // May be negative (values < 1.0 map to negative bucket indices).
   sint32 store_offset = 3;
 
-  // Total number of values added.
-  uint64 count = 4;
-
-  // Sum of all values added (for mean computation).
-  double sum = 5;
-
-  // Minimum value observed. +Inf when the sketch is empty.
-  double min = 6;
-
-  // Maximum value observed. -Inf when the sketch is empty.
-  double max = 7;
+  // Tags 4-7 previously carried the DataPoint-level METRIC scalars
+  // (count, sum, min, max). They were dropped from the wire format
+  // (ProjectASAP/sketchlib-go#243): the count is recoverable by summing
+  // store_counts and the remaining aggregates are carried elsewhere.
+  reserved 4, 5, 6, 7;
 
   reserved 8 to 15;
 }

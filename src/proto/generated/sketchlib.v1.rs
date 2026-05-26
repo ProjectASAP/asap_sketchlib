@@ -454,18 +454,6 @@ pub struct DdSketchState {
     /// May be negative (values < 1.0 map to negative bucket indices).
     #[prost(sint32, tag = "3")]
     pub store_offset: i32,
-    /// Total number of values added.
-    #[prost(uint64, tag = "4")]
-    pub count: u64,
-    /// Sum of all values added (for mean computation).
-    #[prost(double, tag = "5")]
-    pub sum: f64,
-    /// Minimum value observed. +Inf when the sketch is empty.
-    #[prost(double, tag = "6")]
-    pub min: f64,
-    /// Maximum value observed. -Inf when the sketch is empty.
-    #[prost(double, tag = "7")]
-    pub max: f64,
 }
 /// UnivMonState is the portable state of a Universal Monitoring (UnivMon) sketch.
 ///

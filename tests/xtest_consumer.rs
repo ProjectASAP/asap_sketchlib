@@ -187,10 +187,13 @@ fn cross_language_proto() {
         other => panic!("expected DDSketch sketch_state, got {:?}", other),
     };
 
+    // `count` was dropped from the wire (ProjectASAP/sketchlib-go#243);
+    // recover it by summing the bucket counts.
+    let dd_total_count: u64 = dd_state.store_counts.iter().copied().sum();
     println!(
         "[DDSketch]   alpha={:.4} count={} buckets={} offset={}",
         dd_state.alpha,
-        dd_state.count,
+        dd_total_count,
         dd_state.store_counts.len(),
         dd_state.store_offset
     );
@@ -1203,9 +1206,10 @@ struct DdFromProto {
     inv_log_gamma: f64,
     store_counts: Vec<u64>,
     store_offset: i32,
+    // Total count is recovered by summing the bucket array; the
+    // DataPoint-level count/min/max scalars were dropped from the wire
+    // (ProjectASAP/sketchlib-go#243).
     count: u64,
-    min: f64,
-    max: f64,
 }
 
 impl DdFromProto {
@@ -1219,9 +1223,7 @@ impl DdFromProto {
             inv_log_gamma,
             store_counts: s.store_counts.clone(),
             store_offset: s.store_offset,
-            count: s.count,
-            min: s.min,
-            max: s.max,
+            count: s.store_counts.iter().copied().sum(),
         }
     }
 
@@ -1229,15 +1231,34 @@ impl DdFromProto {
         self.gamma.powf(k as f64 + 0.5)
     }
 
+    /// Representative value of the lowest non-empty bucket — the
+    /// α-bounded estimate of the minimum now that the `min` scalar is
+    /// gone from the wire.
+    fn min_estimate(&self) -> Option<f64> {
+        self.store_counts
+            .iter()
+            .position(|&c| c > 0)
+            .map(|i| self.bin_representative(self.store_offset + i as i32))
+    }
+
+    /// Representative value of the highest non-empty bucket — the
+    /// α-bounded estimate of the maximum.
+    fn max_estimate(&self) -> Option<f64> {
+        self.store_counts
+            .iter()
+            .rposition(|&c| c > 0)
+            .map(|i| self.bin_representative(self.store_offset + i as i32))
+    }
+
     fn quantile(&self, q: f64) -> Option<f64> {
         if self.count == 0 {
             return None;
         }
         if q <= 0.0 {
-            return Some(self.min);
+            return self.min_estimate();
         }
         if q >= 1.0 {
-            return Some(self.max);
+            return self.max_estimate();
         }
         let rank = (q * self.count as f64).ceil() as u64;
         let mut seen = 0u64;
@@ -1248,16 +1269,9 @@ impl DdFromProto {
             seen += c;
             if seen >= rank {
                 let bin = self.store_offset + i as i32;
-                let mut v = self.bin_representative(bin);
-                if v < self.min {
-                    v = self.min;
-                }
-                if v > self.max {
-                    v = self.max;
-                }
-                return Some(v);
+                return Some(self.bin_representative(bin));
             }
         }
-        Some(self.max)
+        self.max_estimate()
     }
 }
