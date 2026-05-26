@@ -33,10 +33,37 @@ message DDSketchState {
   sint32 store_offset = 3;
 
   // Tags 4-7 previously carried the DataPoint-level METRIC scalars
-  // (count, sum, min, max). They were dropped from the wire format
-  // (ProjectASAP/sketchlib-go#243): the count is recoverable by summing
-  // store_counts and the remaining aggregates are carried elsewhere.
+  // (count, sum, min, max). They were dropped from the wire format:
+  // the count is recoverable by summing store_counts and the remaining
+  // aggregates are carried elsewhere.
   reserved 4, 5, 6, 7;
 
   reserved 8 to 15;
+}
+
+// ============================================================================
+// DDSketch Delta
+// ============================================================================
+
+// DDSketchDelta carries only the buckets that changed above threshold T.
+//
+// DataPoint-level metric scalars (d_count/d_sum/new_min/new_max/min_changed/
+// max_changed) are intentionally NOT carried on the wire: the count delta is
+// recoverable by summing bucket deltas, and min/max/quantiles are derived from
+// the bucket distribution within the relative-accuracy guarantee. This message
+// is byte-identical to the Go reference implementation's DDSketchDelta so the
+// Go and Rust runtimes emit byte-identical delta frames for identical window
+// state (cross-language byte parity).
+message DDSketchDelta {
+  repeated DDSketchBucketDelta buckets = 1;
+
+  // Fields 2-7 (d_count/d_sum/new_min/new_max/min_changed/max_changed)
+  // removed: DataPoint-level metric scalars are no longer carried on the wire.
+  reserved 2, 3, 4, 5, 6, 7;
+}
+
+// DDSketchBucketDelta is the delta for one log-scale bucket.
+message DDSketchBucketDelta {
+  sint32 index   = 1;  // signed bucket index (negative for values < 1)
+  uint64 d_count = 2;  // Δcount ≥ threshold T
 }

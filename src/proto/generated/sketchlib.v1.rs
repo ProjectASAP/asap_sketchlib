@@ -455,6 +455,30 @@ pub struct DdSketchState {
     #[prost(sint32, tag = "3")]
     pub store_offset: i32,
 }
+/// DDSketchDelta carries only the buckets that changed above threshold T.
+///
+/// DataPoint-level metric scalars (d_count/d_sum/new_min/new_max/min_changed/
+/// max_changed) are intentionally NOT carried on the wire: the count delta is
+/// recoverable by summing bucket deltas, and min/max/quantiles are derived from
+/// the bucket distribution within the relative-accuracy guarantee. This message
+/// is byte-identical to the Go reference implementation's DDSketchDelta so the
+/// Go and Rust runtimes emit byte-identical delta frames for identical window
+/// state (cross-language byte parity).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DdSketchDelta {
+    #[prost(message, repeated, tag = "1")]
+    pub buckets: ::prost::alloc::vec::Vec<DdSketchBucketDelta>,
+}
+/// DDSketchBucketDelta is the delta for one log-scale bucket.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct DdSketchBucketDelta {
+    /// signed bucket index (negative for values < 1)
+    #[prost(sint32, tag = "1")]
+    pub index: i32,
+    /// Δcount ≥ threshold T
+    #[prost(uint64, tag = "2")]
+    pub d_count: u64,
+}
 /// UnivMonState is the portable state of a Universal Monitoring (UnivMon) sketch.
 ///
 /// UnivMon is a hierarchy of L Count Sketches paired with L heavy-hitter heaps.

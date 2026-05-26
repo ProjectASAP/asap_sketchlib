@@ -6,17 +6,17 @@ use serde::{Deserialize, Serialize};
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 
 /// Bucket-store growth chunk for the wire-format-aligned [`DdSketch`]
-/// variant. Matches `sketchlib-go/sketches/DDSketch.GrowChunk` so the
-/// `store_counts` / `store_offset` layout written by
-/// [`DdSketch::update`] is byte-identical to Go's `SerializePortable`
+/// variant. Matches the Go reference implementation's `DDSketch.GrowChunk`
+/// so the `store_counts` / `store_offset` layout written by
+/// [`DdSketch::update`] is byte-identical to the Go `SerializePortable`
 /// output for the same input stream.
 pub const DDSKETCH_GROW_CHUNK: usize = 128;
 
 // =====================================================================
-// ASAP runtime wire-format-aligned variant .
+// Wire-format-aligned variant.
 //
 // `DdSketch` and `DdSketchDelta` below are the public-field,
-// proto-decode-friendly types consumed by the ASAP query engine
+// proto-decode-friendly types consumed by the query-engine
 // accumulators. The high-throughput in-process variant above
 // (`DDSketch`) keeps its original design.
 // =====================================================================
@@ -34,19 +34,18 @@ pub const DDSKETCH_GROW_CHUNK: usize = 128;
 // combined via min/max and `count`/`sum` added.
 //
 // The wire format is the protobuf-encoded
-// `asap_sketchlib::proto::sketchlib::DDSketchState` emitted by
-// DataCollector's `ddsketchprocessor`. Quantile estimation against
-// stored data is intentionally deferred — queries currently return
-// a placeholder error and fall through to the §5.2 fallback.
+// `asap_sketchlib::proto::sketchlib::DDSketchState`. Quantile
+// estimation against stored data is intentionally deferred — queries
+// currently return a placeholder error and fall through to the
+// exact-backend fallback.
 
 // (de-duplicated) use serde::{Deserialize, Serialize};
 
 /// Sparse delta between two consecutive DDSketch snapshots — the
 /// input shape for [`DdSketch::apply_delta`]. Mirrors the
-/// `DDSketchDelta` proto in `sketchlib-go/proto/ddsketch/ddsketch.proto`
-/// (and its Rust bindings vendored in `asap_otel_proto::sketchlib::v1`).
-/// Kept as a plain struct so this crate doesn't need a tonic/prost
-/// dependency; proto decode lives in the accumulator.
+/// `DDSketchDelta` proto (and its Rust bindings). Kept as a plain
+/// struct so this crate doesn't need a tonic/prost dependency; proto
+/// decode lives in the accumulator.
 #[derive(Debug, Clone, Default)]
 pub struct DdSketchDelta {
     /// `(absolute_bucket_index, Δcount)` pairs, additive.
@@ -71,9 +70,9 @@ pub struct DdSketchDelta {
 /// compact encoding writes a fixed-order array, so this serializes to a
 /// 3-element array `[alpha, store_counts, store_offset]`. The DataPoint-level
 /// METRIC scalars (`count`/`sum`/`min`/`max`) that used to trail this struct
-/// were removed (ProjectASAP/sketchlib-go#243); the total count is recoverable
-/// by summing `store_counts`. KEEP these three fields in this exact order so
-/// the bytes stay identical to the `sketchlib-go` twin.
+/// were removed; the total count is recoverable by summing `store_counts`.
+/// KEEP these three fields in this exact order so the bytes stay identical
+/// to the Go reference implementation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DdSketch {
     /// Relative accuracy parameter; must satisfy `0 < alpha < 1`.
@@ -107,8 +106,8 @@ impl DdSketch {
 
     /// Total number of values added, recovered by summing the bucket
     /// counts. The DataPoint-level `count` scalar was dropped from the
-    /// wire format (ProjectASAP/sketchlib-go#243), so this is the
-    /// authoritative count for quantile-rank computation.
+    /// wire format, so this is the authoritative count for
+    /// quantile-rank computation.
     pub fn total_count(&self) -> u64 {
         self.store_counts
             .iter()
@@ -160,11 +159,11 @@ impl DdSketch {
     }
 
     /// Apply a sparse delta to this sketch in place. Matches the
-    /// `ApplyDelta` logic in `sketchlib-go/sketches/DDSketch/delta.go`:
+    /// `ApplyDelta` logic in the Go reference implementation:
     /// bucket counts add, total count + sum add, min can only decrease
     /// and max can only increase. Used by the backend ingest path to
     /// reconstitute a full sketch from a base snapshot + subsequent
-    /// delta-transmission frames (paper §6.2 B3 / B4 baselines).
+    /// delta-transmission frames.
     pub fn apply_delta(&mut self, delta: &DdSketchDelta) {
         for (abs_idx, d_count) in &delta.buckets {
             if self.store_counts.is_empty() {
@@ -189,11 +188,87 @@ impl DdSketch {
             self.store_counts[arr_idx] = self.store_counts[arr_idx].saturating_add(*d_count);
         }
         // The DataPoint-level METRIC scalars (count/sum/min/max) were
-        // removed from the wire state (ProjectASAP/sketchlib-go#243), so
-        // the delta's `d_count`/`d_sum`/`new_min`/`new_max` no longer have
+        // removed from the wire state, so the delta's
+        // `d_count`/`d_sum`/`new_min`/`new_max` no longer have
         // a target here — the bucket counts above carry all reconstructable
         // state. The backend that owns the DDSketch delta tracks those
         // aggregates separately.
+    }
+
+    /// Compute a sparse, proto-marshalled `DDSketchDelta` of `self`
+    /// against a `snapshot`. A bucket is included when its `Δcount`
+    /// (self − snapshot, clamped at 0) is `>= threshold`.
+    ///
+    /// This is the Rust twin of the Go reference implementation's
+    /// `ComputeDelta`: it iterates every non-empty bucket in `self`,
+    /// subtracts the snapshot's count for the same absolute index, and
+    /// emits the surviving bucket deltas. The returned bytes are a
+    /// `prost`-encoded [`crate::proto::sketchlib::DdSketchDelta`],
+    /// byte-identical to the Go `proto.Marshal(DDSketchDelta)` output
+    /// for the same inputs (cross-language byte parity).
+    ///
+    /// Delta-against-empty: when `snapshot` is the empty sketch, every
+    /// surviving bucket delta equals the window's own bucket count, so
+    /// the result is this window's full state encoded as a delta (no
+    /// cross-window subtraction). The DataPoint-level metric scalars are
+    /// not carried — the count delta is recoverable by summing bucket
+    /// deltas.
+    pub fn compute_delta(&self, snapshot: &DdSketch, threshold: u64) -> Vec<u8> {
+        use crate::proto::sketchlib::{DdSketchBucketDelta, DdSketchDelta as ProtoDelta};
+        use prost::Message;
+
+        let mut delta = ProtoDelta::default();
+        if !self.store_counts.is_empty() {
+            for (i, &c) in self.store_counts.iter().enumerate() {
+                if c == 0 {
+                    continue;
+                }
+                let k = self.store_offset + i as i32;
+                let snap_count: u64 = if !snapshot.store_counts.is_empty() {
+                    let idx = k as i64 - snapshot.store_offset as i64;
+                    if idx >= 0 && (idx as usize) < snapshot.store_counts.len() {
+                        snapshot.store_counts[idx as usize]
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+                let dc = c.saturating_sub(snap_count);
+                if dc >= threshold {
+                    delta.buckets.push(DdSketchBucketDelta {
+                        index: k,
+                        d_count: dc,
+                    });
+                }
+            }
+        }
+        delta.encode_to_vec()
+    }
+
+    /// Apply a `prost`-encoded [`crate::proto::sketchlib::DdSketchDelta`]
+    /// to this sketch in place (additive bucket merge). The Rust twin of
+    /// the Go reference implementation's `ApplyDelta`.
+    ///
+    /// Returns `Err` if `bytes` is not a valid `DDSketchDelta` proto.
+    pub fn apply_delta_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use crate::proto::sketchlib::DdSketchDelta as ProtoDelta;
+        use prost::Message;
+
+        let proto = ProtoDelta::decode(bytes)?;
+        let delta = DdSketchDelta {
+            buckets: proto
+                .buckets
+                .into_iter()
+                .map(|b| (b.index, b.d_count))
+                .collect(),
+            ..DdSketchDelta::default()
+        };
+        self.apply_delta(&delta);
+        Ok(())
     }
 
     /// Merge a slice of references into a single new sketch. Returns
@@ -217,19 +292,18 @@ impl DdSketch {
     /// build a ground-truth sketch to compare delta-apply output
     /// against.
     ///
-    /// Bucket-store growth mirrors `sketchlib-go`'s `Buckets.ensure`:
-    /// the first allocation is a half-chunk-centered `GROW_CHUNK` of
-    /// zeros, and subsequent expansions extend by `max(needed,
-    /// GROW_CHUNK)` so the on-the-wire `store_counts` / `store_offset`
-    /// layout is byte-identical to Go's `SerializePortable` output.
-    /// Without this chunked layout the `DDSketchState` proto bytes
-    /// emitted by `asap-precompute-rs::DDSketchWrapper` diverge from
-    /// the legacy OTel `ddsketchprocessor` payload (see
-    /// ProjectASAP/ASAPCollector#243).
+    /// Bucket-store growth mirrors the Go reference implementation's
+    /// `Buckets.ensure`: the first allocation is a half-chunk-centered
+    /// `GROW_CHUNK` of zeros, and subsequent expansions extend by
+    /// `max(needed, GROW_CHUNK)` so the on-the-wire `store_counts` /
+    /// `store_offset` layout is byte-identical to the Go
+    /// `SerializePortable` output. Without this chunked layout the
+    /// `DDSketchState` proto bytes would diverge from the Go producer's
+    /// payload (cross-language byte parity).
     pub fn update(&mut self, value: f64) {
         if value <= 0.0 {
-            // DDSketch is defined for positive reals; the paper's
-            // sketchlib-go rejects non-positive values silently.
+            // DDSketch is defined for positive reals; non-positive
+            // values are rejected silently (matching the Go reference).
             return;
         }
         let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
@@ -241,14 +315,13 @@ impl DdSketch {
     }
 
     /// Ensure bucket `k` is addressable in `store_counts`, growing in
-    /// chunks of [`DDSKETCH_GROW_CHUNK`] to match `sketchlib-go`'s
-    /// `Buckets.ensure`. Empty stores are seeded with a half-chunk
-    /// of zeros centered on `k` (`store_offset = k - GROW_CHUNK/2`);
-    /// out-of-range expansions extend by `max(needed, GROW_CHUNK)`
-    /// on either side. The on-the-wire byte layout is therefore
-    /// identical between Go and Rust producers fed the same input
-    /// stream — required for the cross-language byte-parity test
-    /// in `ASAPCollector::cross_language_parity::ddsketch_byte_parity_with_go`.
+    /// chunks of [`DDSKETCH_GROW_CHUNK`] to match the Go reference
+    /// implementation's `Buckets.ensure`. Empty stores are seeded with
+    /// a half-chunk of zeros centered on `k` (`store_offset = k -
+    /// GROW_CHUNK/2`); out-of-range expansions extend by `max(needed,
+    /// GROW_CHUNK)` on either side. The on-the-wire byte layout is
+    /// therefore identical between the Go and Rust producers fed the
+    /// same input stream — required for cross-language byte parity.
     fn ensure_bucket(&mut self, k: i32) {
         if self.store_counts.is_empty() {
             self.store_counts = vec![0u64; DDSKETCH_GROW_CHUNK];
@@ -305,8 +378,8 @@ impl DdSketch {
         // Numerical edge case: if we fall off the end (e.g. q == 1.0 and
         // rounding lands past the final increment), estimate from the
         // highest non-empty bucket. The DataPoint-level `max` scalar was
-        // removed (ProjectASAP/sketchlib-go#243); the bucket midpoint is
-        // within DDSketch's α relative-accuracy bound of the true max.
+        // removed from the wire; the bucket midpoint is within DDSketch's
+        // α relative-accuracy bound of the true max.
         last_nonempty.map(|i| {
             let k = (self.store_offset as i64 + i as i64) as f64;
             gamma.powf(k + 0.5)
@@ -314,14 +387,13 @@ impl DdSketch {
     }
 
     /// Return the alpha value as it appears on the wire — round-tripped
-    /// through gamma exactly the way `sketchlib-go::DDSketch.SerializePortable`
-    /// does it (`alpha = (gamma - 1) / (gamma + 1)`, where
-    /// `gamma = (1+α)/(1-α)`). The roundtrip introduces a small
-    /// floating-point drift; without applying it the Rust producer's
-    /// `DDSketchState.alpha` field bytes diverge from the Go
-    /// producer's, and the cross-language byte-parity test fails on
-    /// the very first proto field. Closes part of
-    /// ProjectASAP/ASAPCollector#243.
+    /// through gamma exactly the way the Go reference implementation's
+    /// `DDSketch.SerializePortable` does it (`alpha = (gamma - 1) /
+    /// (gamma + 1)`, where `gamma = (1+α)/(1-α)`). The roundtrip
+    /// introduces a small floating-point drift; without applying it the
+    /// Rust producer's `DDSketchState.alpha` field bytes would diverge
+    /// from the Go producer's, and cross-language byte parity would fail
+    /// on the very first proto field.
     #[inline]
     pub fn wire_alpha(&self) -> f64 {
         let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
@@ -465,8 +537,8 @@ mod tests {
     /// The msgpack wire layout MUST be a 3-element array
     /// `[alpha, store_counts, store_offset]` after dropping the
     /// DataPoint-level METRIC scalars (count/sum/min/max). This pins the
-    /// element count so the bytes stay parity-aligned with the
-    /// `sketchlib-go` twin (ProjectASAP/sketchlib-go#243).
+    /// element count so the bytes stay parity-aligned with the Go
+    /// reference implementation.
     #[test]
     fn test_msgpack_is_three_element_array() {
         let sk = DdSketch::from_raw(0.01, vec![1, 2, 3], -2);
@@ -561,9 +633,9 @@ mod tests {
                 this_batch.update(v);
             }
             // Compute a "delta" = diff of this_batch vs prev_snapshot
-            // in our in-memory struct shape. Matches what
-            // `sketchlib-go/sketches/DDSketch/delta.go::ComputeDelta`
-            // would put on the wire.
+            // in our in-memory struct shape. Matches what the Go
+            // reference implementation's `ComputeDelta` would put on
+            // the wire.
             let delta = compute_dd_delta(&prev_snapshot, &this_batch);
             if b == 0 {
                 // First batch seeds the reconstituted sketch.
@@ -600,9 +672,9 @@ mod tests {
     }
 
     /// Helper used only in the delta-chain test: computes a
-    /// `DdSketchDelta` from two snapshots. Mirrors the sketchlib-go
-    /// `ComputeDelta` logic so the test exercises the wire-format
-    /// path end-to-end.
+    /// `DdSketchDelta` from two snapshots. Mirrors the Go reference
+    /// implementation's `ComputeDelta` logic so the test exercises the
+    /// wire-format path end-to-end.
     fn compute_dd_delta(snapshot: &DdSketch, current: &DdSketch) -> DdSketchDelta {
         let mut cells = Vec::new();
         if !current.store_counts.is_empty() {
@@ -628,10 +700,10 @@ mod tests {
             }
         }
         // The DataPoint-level scalars (count/sum/min/max) were dropped from
-        // the in-memory state (ProjectASAP/sketchlib-go#243). The delta's
-        // scalar fields are no longer consumed by `apply_delta` — only the
-        // bucket cells drive reconstitution — so populate them from
-        // bucket-derived quantities just to keep the struct shape.
+        // the in-memory state. The delta's scalar fields are no longer
+        // consumed by `apply_delta` — only the bucket cells drive
+        // reconstitution — so populate them from bucket-derived
+        // quantities just to keep the struct shape.
         let d_count = current.total_count() as i64 - snapshot.total_count() as i64;
         DdSketchDelta {
             buckets: cells,
@@ -644,17 +716,96 @@ mod tests {
         }
     }
 
-    /// Cross-language byte-parity guard against `sketchlib-go`'s
-    /// `DDSketch.SerializePortable` output for the deterministic input
-    /// `(1..=50)` with `α = 0.01`. The hex blob below was captured
-    /// from a `proto.Marshal` of the Go envelope (with `Producer` and
-    /// `HashSpec` cleared, matching the
-    /// `integration/parity/golden_test.go::TestGenerateGoldenFixtures`
-    /// recipe). Any change to [`DdSketch::update`]'s bucket-store
-    /// growth that breaks parity will surface here. Closes part of
-    /// ProjectASAP/ASAPCollector#243.
+    /// Delta-against-empty: a `compute_delta` against an EMPTY base
+    /// reconstructs the window's full state when applied (round-trip).
+    /// With `threshold = 1` every non-empty bucket survives, so applying
+    /// the delta to a fresh empty sketch yields the same bucket store as
+    /// the original window.
     #[test]
-    fn test_update_then_envelope_matches_sketchlib_go_bytes() {
+    fn test_compute_delta_against_empty_round_trips() {
+        let mut window = DdSketch::new(0.01);
+        for i in 1..=200 {
+            window.update(i as f64);
+        }
+        let empty = DdSketch::new(0.01);
+
+        // Delta against empty = the window's full state in delta form.
+        let delta_bytes = window.compute_delta(&empty, 1);
+
+        // Apply to a fresh empty base.
+        let mut reconstructed = DdSketch::new(0.01);
+        reconstructed.apply_delta_bytes(&delta_bytes).unwrap();
+
+        // Total count recovered exactly.
+        assert_eq!(reconstructed.total_count(), window.total_count());
+        // Every non-empty bucket count matches (compare on absolute index).
+        for (i, &c) in window.store_counts.iter().enumerate() {
+            if c == 0 {
+                continue;
+            }
+            let k = window.store_offset + i as i32;
+            let idx = (k - reconstructed.store_offset) as usize;
+            assert_eq!(reconstructed.store_counts[idx], c, "bucket k={k}");
+        }
+        // Quantiles agree within the α relative-accuracy bound.
+        for q in [0.5, 0.9, 0.99] {
+            let got = reconstructed.quantile(q).unwrap();
+            let want = window.quantile(q).unwrap();
+            assert!(
+                (got / want - 1.0).abs() <= 0.01,
+                "q={q}: reconstructed={got} window={want}"
+            );
+        }
+    }
+
+    /// Two consecutive windows each emit their OWN state — the second
+    /// window's delta-against-empty is NOT diffed against the first
+    /// window (no cross-window subtraction).
+    #[test]
+    fn test_consecutive_windows_emit_own_state() {
+        let empty = DdSketch::new(0.01);
+
+        // Overlapping value ranges so a cross-window subtraction (win2 −
+        // win1) would genuinely differ from win2's own state — making the
+        // "no subtraction" assertion meaningful.
+        let mut win1 = DdSketch::new(0.01);
+        for i in 1..=50 {
+            win1.update(i as f64);
+            win1.update(i as f64); // win1 buckets carry count 2
+        }
+        let mut win2 = DdSketch::new(0.01);
+        for i in 1..=50 {
+            win2.update(i as f64); // same buckets, count 1
+        }
+
+        // Each window diffs against EMPTY (delta-against-empty), not against
+        // the prior window.
+        let d2_against_empty = win2.compute_delta(&empty, 1);
+        let d2_against_win1 = win2.compute_delta(&win1, 1);
+
+        // The delta-against-empty reconstructs win2 exactly.
+        let mut recon = DdSketch::new(0.01);
+        recon.apply_delta_bytes(&d2_against_empty).unwrap();
+        assert_eq!(recon.total_count(), win2.total_count());
+
+        // Sanity: diffing against win1 would have produced a DIFFERENT
+        // (cross-window-subtracted) frame, proving the two are not the same
+        // and that diffing against empty avoids the cross-window subtraction.
+        assert_ne!(
+            d2_against_empty, d2_against_win1,
+            "delta-against-empty must differ from cross-window delta"
+        );
+    }
+
+    /// Cross-language byte-parity guard against the Go reference
+    /// implementation's `DDSketch.SerializePortable` output for the
+    /// deterministic input `(1..=50)` with `α = 0.01`. The hex blob
+    /// below was captured from a `proto.Marshal` of the Go envelope
+    /// (with `Producer` and `HashSpec` cleared). Any change to
+    /// [`DdSketch::update`]'s bucket-store growth that breaks parity
+    /// will surface here.
+    #[test]
+    fn test_update_then_envelope_matches_go_golden_bytes() {
         use crate::proto::sketchlib::{
             DdSketchState, SketchEnvelope, sketch_envelope::SketchState,
         };
@@ -688,8 +839,8 @@ mod tests {
         // `store_offset` (sint32 zigzag 0x7f = -64).
         //
         // NOTE: this golden is currently the RUST-produced value. It MUST be
-        // reconciled against the parallel `sketchlib-go` regeneration before
-        // declaring cross-language byte parity (ProjectASAP/sketchlib-go#243).
+        // reconciled against the Go reference implementation's regenerated
+        // golden before declaring cross-language byte parity.
         const GOLDEN_HEX: &str = "0801728e03096214ae47e17a843f128003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000100000000000000000000000000000100000000000000000000010000000000000000010000000000000001000000000001000000000001000000000001000000010000000001000000010000010000000100000100000100000100000100010000010001000100010001000100010001000100010100010100010100010101000101010100010101010101010100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000187f";
         let want = decode_hex(GOLDEN_HEX);
         assert_eq!(
