@@ -76,6 +76,12 @@ message CountMinState {
 // to the Go reference implementation's CountMinDelta so the two runtimes emit
 // byte-identical delta frames for identical window state (cross-language byte
 // parity).
+//
+// CountMinDelta is structurally identical to CountSketchDelta: rows, cols, the
+// packed cell encoding, per-row norm deltas, and an optional repeated hh_keys
+// at the SAME tag number (6). Both sketches can track heavy hitters; whether
+// hh_keys is populated is a control-plane decision (it is empty/omitted when
+// heavy-hitter tracking is not enabled for this sketch).
 message CountMinDelta {
   uint32                rows         = 1;
   uint32                cols         = 2;
@@ -86,6 +92,12 @@ message CountMinDelta {
   repeated double       l1           = 4 [packed = true];
   // Per-row L2 norm deltas, length = rows.
   repeated double       l2           = 5 [packed = true];
+  // Heavy-hitter candidate keys from an upstream tracker, mirroring
+  // CountSketchDelta.hh_keys (same tag number 6, same wire shape). Downstream
+  // queries the merged Count-Min matrix for each key to (re)build its Top-K
+  // with globally-merged estimates. Empty/omitted when heavy-hitter tracking
+  // is not enabled.
+  repeated string       hh_keys      = 6;
   // Packed cell encoding (canonical form):
   repeated uint32       cell_rows    = 9  [packed = true];  // row index of each changed cell
   repeated uint32       cell_cols    = 10 [packed = true];  // col index of each changed cell
