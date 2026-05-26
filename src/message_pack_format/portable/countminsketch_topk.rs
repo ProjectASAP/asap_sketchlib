@@ -138,19 +138,14 @@ impl std::fmt::Debug for CountMinSketchWithHeap {
 
 impl Clone for CountMinSketchWithHeap {
     fn clone(&self) -> Self {
-        let sketch = matrix_from_sketchlib_cms_heap(&self.backend);
-        let wire_heap: Vec<WireHeapItem> = heap_to_wire(&self.backend);
+        // Structural clone: `CMSHeap` derives `Clone` (its `CountMin` + `HHHeap`
+        // fields are `Clone`), so copy the backend directly instead of
+        // extracting the matrix + heap to wire form and rebuilding it.
         Self {
             rows: self.rows,
             cols: self.cols,
             heap_size: self.heap_size,
-            backend: sketchlib_cms_heap_from_matrix_and_heap(
-                self.rows,
-                self.cols,
-                self.heap_size,
-                &sketch,
-                &wire_heap,
-            ),
+            backend: self.backend.clone(),
         }
     }
 }
