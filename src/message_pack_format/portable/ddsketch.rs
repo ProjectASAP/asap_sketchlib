@@ -65,7 +65,15 @@ pub struct DdSketchDelta {
     pub new_max: f64,
 }
 
-/// Minimal DDSketch state — bucket counts + alpha + aggregates.
+/// Minimal DDSketch state — bucket counts + alpha.
+///
+/// The serde field order below IS the msgpack wire layout: `rmp_serde`'s
+/// compact encoding writes a fixed-order array, so this serializes to a
+/// 3-element array `[alpha, store_counts, store_offset]`. The DataPoint-level
+/// METRIC scalars (`count`/`sum`/`min`/`max`) that used to trail this struct
+/// were removed (ProjectASAP/sketchlib-go#243); the total count is recoverable
+/// by summing `store_counts`. KEEP these three fields in this exact order so
+/// the bytes stay identical to the `sketchlib-go` twin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DdSketch {
     /// Relative accuracy parameter; must satisfy `0 < alpha < 1`.
@@ -76,10 +84,6 @@ pub struct DdSketch {
     /// Absolute bucket index corresponding to `store_counts[0]`. May
     /// be negative.
     pub store_offset: i32,
-    pub count: u64,
-    pub sum: f64,
-    pub min: f64,
-    pub max: f64,
 }
 
 impl DdSketch {
@@ -89,33 +93,27 @@ impl DdSketch {
             alpha,
             store_counts: Vec::new(),
             store_offset: 0,
-            count: 0,
-            sum: 0.0,
-            min: f64::INFINITY,
-            max: f64::NEG_INFINITY,
         }
     }
 
     /// Construct from the decoded wire fields.
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_raw(
-        alpha: f64,
-        store_counts: Vec<u64>,
-        store_offset: i32,
-        count: u64,
-        sum: f64,
-        min: f64,
-        max: f64,
-    ) -> Self {
+    pub fn from_raw(alpha: f64, store_counts: Vec<u64>, store_offset: i32) -> Self {
         Self {
             alpha,
             store_counts,
             store_offset,
-            count,
-            sum,
-            min,
-            max,
         }
+    }
+
+    /// Total number of values added, recovered by summing the bucket
+    /// counts. The DataPoint-level `count` scalar was dropped from the
+    /// wire format (ProjectASAP/sketchlib-go#243), so this is the
+    /// authoritative count for quantile-rank computation.
+    pub fn total_count(&self) -> u64 {
+        self.store_counts
+            .iter()
+            .copied()
+            .fold(0u64, u64::saturating_add)
     }
 
     /// Merge one other sketch into self by aligning bucket arrays on
@@ -133,14 +131,6 @@ impl DdSketch {
         }
 
         if other.store_counts.is_empty() {
-            self.count += other.count;
-            self.sum += other.sum;
-            if other.min < self.min {
-                self.min = other.min;
-            }
-            if other.max > self.max {
-                self.max = other.max;
-            }
             return Ok(());
         }
         if self.store_counts.is_empty() {
@@ -165,14 +155,6 @@ impl DdSketch {
             }
             self.store_counts = merged;
             self.store_offset = new_start as i32;
-        }
-        self.count += other.count;
-        self.sum += other.sum;
-        if other.min < self.min {
-            self.min = other.min;
-        }
-        if other.max > self.max {
-            self.max = other.max;
         }
         Ok(())
     }
@@ -206,18 +188,12 @@ impl DdSketch {
             let arr_idx = (k - self.store_offset as i64) as usize;
             self.store_counts[arr_idx] = self.store_counts[arr_idx].saturating_add(*d_count);
         }
-        if delta.d_count >= 0 {
-            self.count = self.count.saturating_add(delta.d_count as u64);
-        } else {
-            self.count = self.count.saturating_sub((-delta.d_count) as u64);
-        }
-        self.sum += delta.d_sum;
-        if delta.min_changed && delta.new_min < self.min {
-            self.min = delta.new_min;
-        }
-        if delta.max_changed && delta.new_max > self.max {
-            self.max = delta.new_max;
-        }
+        // The DataPoint-level METRIC scalars (count/sum/min/max) were
+        // removed from the wire state (ProjectASAP/sketchlib-go#243), so
+        // the delta's `d_count`/`d_sum`/`new_min`/`new_max` no longer have
+        // a target here — the bucket counts above carry all reconstructable
+        // state. The backend that owns the DDSketch delta tracks those
+        // aggregates separately.
     }
 
     /// Merge a slice of references into a single new sketch. Returns
@@ -262,14 +238,6 @@ impl DdSketch {
         self.ensure_bucket(idx);
         let arr_idx = (idx as i64 - self.store_offset as i64) as usize;
         self.store_counts[arr_idx] = self.store_counts[arr_idx].saturating_add(1);
-        self.count = self.count.saturating_add(1);
-        self.sum += value;
-        if value < self.min {
-            self.min = value;
-        }
-        if value > self.max {
-            self.max = value;
-        }
     }
 
     /// Ensure bucket `k` is addressable in `store_counts`, growing in
@@ -314,13 +282,18 @@ impl DdSketch {
     /// quantile value is within `(1+α)/(1-α)` relative error of the
     /// true quantile.
     pub fn quantile(&self, q: f64) -> Option<f64> {
-        if self.count == 0 || self.store_counts.is_empty() {
+        let count = self.total_count();
+        if count == 0 || self.store_counts.is_empty() {
             return None;
         }
-        let target = (q * (self.count.saturating_sub(1)) as f64).floor() as u64;
+        let target = (q * (count.saturating_sub(1)) as f64).floor() as u64;
         let mut cumulative: u64 = 0;
         let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
+        let mut last_nonempty: Option<usize> = None;
         for (i, &c) in self.store_counts.iter().enumerate() {
+            if c > 0 {
+                last_nonempty = Some(i);
+            }
             cumulative = cumulative.saturating_add(c);
             if cumulative > target {
                 let k = (self.store_offset as i64 + i as i64) as f64;
@@ -329,8 +302,15 @@ impl DdSketch {
                 return Some(gamma.powf(k + 0.5));
             }
         }
-        // Numerical edge case: if we fall off the end, return max.
-        Some(self.max)
+        // Numerical edge case: if we fall off the end (e.g. q == 1.0 and
+        // rounding lands past the final increment), estimate from the
+        // highest non-empty bucket. The DataPoint-level `max` scalar was
+        // removed (ProjectASAP/sketchlib-go#243); the bucket midpoint is
+        // within DDSketch's α relative-accuracy bound of the true max.
+        last_nonempty.map(|i| {
+            let k = (self.store_offset as i64 + i as i64) as f64;
+            gamma.powf(k + 0.5)
+        })
     }
 
     /// Return the alpha value as it appears on the wire — round-tripped
@@ -367,41 +347,36 @@ mod tests {
     #[test]
     fn test_new_empty() {
         let d = DdSketch::new(0.01);
-        assert_eq!(d.count, 0);
+        assert_eq!(d.total_count(), 0);
         assert!(d.store_counts.is_empty());
-        assert_eq!(d.min, f64::INFINITY);
-        assert_eq!(d.max, f64::NEG_INFINITY);
     }
 
     #[test]
     fn test_merge_aligned_same_offset() {
-        let mut a = DdSketch::from_raw(0.01, vec![1, 2, 3], -1, 6, 30.0, 1.0, 5.0);
-        let b = DdSketch::from_raw(0.01, vec![10, 20, 30], -1, 60, 300.0, 0.5, 6.0);
+        let mut a = DdSketch::from_raw(0.01, vec![1, 2, 3], -1);
+        let b = DdSketch::from_raw(0.01, vec![10, 20, 30], -1);
         a.merge(&b).unwrap();
         assert_eq!(a.store_counts, vec![11, 22, 33]);
         assert_eq!(a.store_offset, -1);
-        assert_eq!(a.count, 66);
-        assert_eq!(a.sum, 330.0);
-        assert_eq!(a.min, 0.5);
-        assert_eq!(a.max, 6.0);
+        assert_eq!(a.total_count(), 66);
     }
 
     #[test]
     fn test_merge_overlapping_offsets() {
         // a covers indices [-1, 0, 1]; b covers indices [0, 1, 2]
-        let mut a = DdSketch::from_raw(0.01, vec![1, 1, 1], -1, 3, 3.0, 1.0, 3.0);
-        let b = DdSketch::from_raw(0.01, vec![10, 10, 10], 0, 30, 30.0, 1.0, 3.0);
+        let mut a = DdSketch::from_raw(0.01, vec![1, 1, 1], -1);
+        let b = DdSketch::from_raw(0.01, vec![10, 10, 10], 0);
         a.merge(&b).unwrap();
         // Merged window is [-1, 0, 1, 2] → [1, 11, 11, 10]
         assert_eq!(a.store_counts, vec![1, 11, 11, 10]);
         assert_eq!(a.store_offset, -1);
-        assert_eq!(a.count, 33);
+        assert_eq!(a.total_count(), 33);
     }
 
     #[test]
     fn test_merge_disjoint_offsets() {
-        let mut a = DdSketch::from_raw(0.01, vec![1, 2], 0, 3, 3.0, 1.0, 2.0);
-        let b = DdSketch::from_raw(0.01, vec![3, 4], 5, 7, 7.0, 5.0, 6.0);
+        let mut a = DdSketch::from_raw(0.01, vec![1, 2], 0);
+        let b = DdSketch::from_raw(0.01, vec![3, 4], 5);
         a.merge(&b).unwrap();
         // Window [0..7) → [1,2,0,0,0,3,4]
         assert_eq!(a.store_counts, vec![1, 2, 0, 0, 0, 3, 4]);
@@ -410,7 +385,7 @@ mod tests {
 
     #[test]
     fn test_apply_delta_additive_inside_store() {
-        let mut base = DdSketch::from_raw(0.01, vec![1, 2, 3], -1, 6, 30.0, 1.0, 5.0);
+        let mut base = DdSketch::from_raw(0.01, vec![1, 2, 3], -1);
         let delta = DdSketchDelta {
             buckets: vec![(-1, 4), (0, 8), (1, 12)],
             d_count: 24,
@@ -422,16 +397,13 @@ mod tests {
         };
         base.apply_delta(&delta);
         assert_eq!(base.store_counts, vec![5, 10, 15]);
-        assert_eq!(base.count, 30);
-        assert_eq!(base.sum, 150.0);
-        assert_eq!(base.min, 1.0);
-        assert_eq!(base.max, 9.0);
+        assert_eq!(base.total_count(), 30);
     }
 
     #[test]
     fn test_apply_delta_expands_store_on_new_bucket() {
         // Base covers [0..2]; delta adds a bucket at absolute index 4.
-        let mut base = DdSketch::from_raw(0.01, vec![1, 2], 0, 3, 3.0, 1.0, 2.0);
+        let mut base = DdSketch::from_raw(0.01, vec![1, 2], 0);
         let delta = DdSketchDelta {
             buckets: vec![(4, 7)],
             d_count: 7,
@@ -444,16 +416,15 @@ mod tests {
         base.apply_delta(&delta);
         assert_eq!(base.store_counts, vec![1, 2, 0, 0, 7]);
         assert_eq!(base.store_offset, 0);
-        assert_eq!(base.count, 10);
-        assert_eq!(base.max, 6.0);
+        assert_eq!(base.total_count(), 10);
     }
 
     #[test]
     fn test_apply_delta_matches_full_merge() {
         // Snapshot the sketch, add more samples via a merge, and confirm
         // the delta+apply path lands at the same state.
-        let base = DdSketch::from_raw(0.01, vec![1, 2, 3], 0, 6, 12.0, 1.0, 3.0);
-        let addition = DdSketch::from_raw(0.01, vec![10, 0, 20], 0, 30, 70.0, 0.5, 5.0);
+        let base = DdSketch::from_raw(0.01, vec![1, 2, 3], 0);
+        let addition = DdSketch::from_raw(0.01, vec![10, 0, 20], 0);
         let mut via_merge = base.clone();
         via_merge.merge(&addition).unwrap();
 
@@ -470,10 +441,7 @@ mod tests {
         via_delta.apply_delta(&delta);
 
         assert_eq!(via_delta.store_counts, via_merge.store_counts);
-        assert_eq!(via_delta.count, via_merge.count);
-        assert_eq!(via_delta.sum, via_merge.sum);
-        assert_eq!(via_delta.min, via_merge.min);
-        assert_eq!(via_delta.max, via_merge.max);
+        assert_eq!(via_delta.total_count(), via_merge.total_count());
     }
 
     #[test]
@@ -485,12 +453,31 @@ mod tests {
 
     #[test]
     fn test_msgpack_round_trip() {
-        let original = DdSketch::from_raw(0.01, vec![1, 2, 3], -2, 6, 30.0, 1.0, 5.0);
+        let original = DdSketch::from_raw(0.01, vec![1, 2, 3], -2);
         let bytes = original.to_msgpack().unwrap();
         let decoded = DdSketch::from_msgpack(&bytes).unwrap();
+        assert_eq!(decoded.alpha, original.alpha);
         assert_eq!(decoded.store_counts, original.store_counts);
         assert_eq!(decoded.store_offset, original.store_offset);
-        assert_eq!(decoded.count, original.count);
+        assert_eq!(decoded.total_count(), original.total_count());
+    }
+
+    /// The msgpack wire layout MUST be a 3-element array
+    /// `[alpha, store_counts, store_offset]` after dropping the
+    /// DataPoint-level METRIC scalars (count/sum/min/max). This pins the
+    /// element count so the bytes stay parity-aligned with the
+    /// `sketchlib-go` twin (ProjectASAP/sketchlib-go#243).
+    #[test]
+    fn test_msgpack_is_three_element_array() {
+        let sk = DdSketch::from_raw(0.01, vec![1, 2, 3], -2);
+        let bytes = sk.to_msgpack().unwrap();
+        // rmp compact encoding leads with an array marker. A fixarray of
+        // length 3 is the single byte 0x93 (0b1001_0011).
+        assert_eq!(
+            bytes[0], 0x93,
+            "expected a 3-element msgpack fixarray (0x93), got {:#04x}",
+            bytes[0]
+        );
     }
 
     #[test]
@@ -587,13 +574,12 @@ mod tests {
             prev_snapshot = this_batch;
         }
 
-        // Both paths should see the same total count + sum (exact).
-        assert_eq!(reconstituted.count, full.count, "count diverged");
-        assert!(
-            (reconstituted.sum - full.sum).abs() < 1e-6,
-            "sum diverged: recon={} full={}",
-            reconstituted.sum,
-            full.sum
+        // Both paths should see the same total count (exact), recovered
+        // by summing bucket counts now that the `count` scalar is gone.
+        assert_eq!(
+            reconstituted.total_count(),
+            full.total_count(),
+            "count diverged"
         );
 
         // And P50 / P90 / P99 should agree within α bound.
@@ -641,18 +627,20 @@ mod tests {
                 }
             }
         }
-        let d_count = current.count as i64 - snapshot.count as i64;
-        let d_sum = current.sum - snapshot.sum;
-        let min_changed = current.count > 0 && (snapshot.count == 0 || current.min < snapshot.min);
-        let max_changed = current.count > 0 && (snapshot.count == 0 || current.max > snapshot.max);
+        // The DataPoint-level scalars (count/sum/min/max) were dropped from
+        // the in-memory state (ProjectASAP/sketchlib-go#243). The delta's
+        // scalar fields are no longer consumed by `apply_delta` — only the
+        // bucket cells drive reconstitution — so populate them from
+        // bucket-derived quantities just to keep the struct shape.
+        let d_count = current.total_count() as i64 - snapshot.total_count() as i64;
         DdSketchDelta {
             buckets: cells,
             d_count,
-            d_sum,
-            min_changed,
-            new_min: current.min,
-            max_changed,
-            new_max: current.max,
+            d_sum: 0.0,
+            min_changed: false,
+            new_min: 0.0,
+            max_changed: false,
+            new_max: 0.0,
         }
     }
 
@@ -681,14 +669,6 @@ mod tests {
             alpha: sk.wire_alpha(),
             store_counts: sk.store_counts.clone(),
             store_offset: sk.store_offset,
-            count: sk.count,
-            sum: sk.sum,
-            min: if sk.count == 0 { f64::INFINITY } else { sk.min },
-            max: if sk.count == 0 {
-                f64::NEG_INFINITY
-            } else {
-                sk.max
-            },
         };
         let envelope = SketchEnvelope {
             format_version: 1,
@@ -700,18 +680,22 @@ mod tests {
         let mut got = Vec::with_capacity(envelope.encoded_len());
         envelope.encode(&mut got).expect("prost encode");
 
-        // Byte string captured from sketchlib-go for the same input —
-        // see `integration/parity/golden_test.go` and
-        // `cross_language_parity::ddsketch_byte_parity_with_go` in
-        // ASAPCollector. 432 bytes total: a `SketchEnvelope` proto
-        // wrapping a `DDSketchState` whose `store_counts` is the Go
-        // chunk-128 padded layout (offset = -64, len = 384).
-        const GOLDEN_HEX: &str = "080172ab03096214ae47e17a843f128003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000100000000000000000000000000000100000000000000000000010000000000000000010000000000000001000000000001000000000001000000000001000000010000000001000000010000010000000100000100000100000100000100010000010001000100010001000100010001000100010100010100010100010101000101010100010101010101010100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000187f2032290000000000ec934031000000000000f03f390000000000004940";
+        // Byte string for the same `(1..=50)`, α=0.01 input AFTER dropping
+        // the DataPoint-level METRIC scalars (count/sum/min/max → proto
+        // tags 4-7 reserved). 403 bytes total: a `SketchEnvelope` proto
+        // wrapping a `DDSketchState` carrying only `alpha`, `store_counts`
+        // (Go chunk-128 padded layout, offset = -64, len = 384) and
+        // `store_offset` (sint32 zigzag 0x7f = -64).
+        //
+        // NOTE: this golden is currently the RUST-produced value. It MUST be
+        // reconciled against the parallel `sketchlib-go` regeneration before
+        // declaring cross-language byte parity (ProjectASAP/sketchlib-go#243).
+        const GOLDEN_HEX: &str = "0801728e03096214ae47e17a843f128003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000100000000000000000000000000000100000000000000000000010000000000000000010000000000000001000000000001000000000001000000000001000000010000000001000000010000010000000100000100000100000100000100010000010001000100010001000100010001000100010100010100010100010101000101010100010101010101010100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000187f";
         let want = decode_hex(GOLDEN_HEX);
         assert_eq!(
             got,
             want,
-            "DDSketch envelope bytes diverge from sketchlib-go golden \
+            "DDSketch envelope bytes diverge from golden \
              ({} bytes got vs {} bytes want)",
             got.len(),
             want.len(),
