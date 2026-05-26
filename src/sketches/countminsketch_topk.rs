@@ -15,6 +15,7 @@ const DEFAULT_TOP_K: usize = 32;
 /// A Count-Min Sketch paired with a top-k heavy-hitter heap.
 ///
 /// Generic over the same type parameters as [`CountMin`].
+#[derive(Clone)]
 pub struct CMSHeap<
     S: MatrixStorage = Vector2D<i64>,
     Mode = RegularPath,
