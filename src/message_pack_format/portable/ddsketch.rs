@@ -196,6 +196,83 @@ impl DdSketch {
         // aggregates separately.
     }
 
+    /// Compute a sparse, proto-marshalled `DDSketchDelta` of `self`
+    /// against a `snapshot`. A bucket is included when its `Δcount`
+    /// (self − snapshot, clamped at 0) is `>= threshold`.
+    ///
+    /// This is the Rust twin of `sketchlib-go`'s
+    /// `sketches/DDSketch/delta.go::ComputeDelta`: it iterates every
+    /// non-empty bucket in `self`, subtracts the snapshot's count for
+    /// the same absolute index, and emits the surviving bucket deltas.
+    /// The returned bytes are a `prost`-encoded
+    /// [`crate::proto::sketchlib::DdSketchDelta`], byte-identical to the
+    /// Go `proto.Marshal(DDSketchDelta)` output for the same inputs
+    /// (ProjectASAP/ASAPCollector#243).
+    ///
+    /// Option-A delta-against-empty: when `snapshot` is the empty
+    /// sketch, every surviving bucket delta equals the window's own
+    /// bucket count, so the result is this window's full state encoded
+    /// as a delta (no cross-window subtraction). The DataPoint-level
+    /// metric scalars are not carried — the count delta is recoverable
+    /// by summing bucket deltas (ProjectASAP/sketchlib-go#243).
+    pub fn compute_delta(&self, snapshot: &DdSketch, threshold: u64) -> Vec<u8> {
+        use crate::proto::sketchlib::{DdSketchBucketDelta, DdSketchDelta as ProtoDelta};
+        use prost::Message;
+
+        let mut delta = ProtoDelta::default();
+        if !self.store_counts.is_empty() {
+            for (i, &c) in self.store_counts.iter().enumerate() {
+                if c == 0 {
+                    continue;
+                }
+                let k = self.store_offset + i as i32;
+                let snap_count: u64 = if !snapshot.store_counts.is_empty() {
+                    let idx = k as i64 - snapshot.store_offset as i64;
+                    if idx >= 0 && (idx as usize) < snapshot.store_counts.len() {
+                        snapshot.store_counts[idx as usize]
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+                let dc = c.saturating_sub(snap_count);
+                if dc >= threshold {
+                    delta.buckets.push(DdSketchBucketDelta {
+                        index: k,
+                        d_count: dc,
+                    });
+                }
+            }
+        }
+        delta.encode_to_vec()
+    }
+
+    /// Apply a `prost`-encoded [`crate::proto::sketchlib::DdSketchDelta`]
+    /// to this sketch in place (additive bucket merge). The Rust twin of
+    /// `sketchlib-go`'s `sketches/DDSketch/delta.go::ApplyDelta`.
+    ///
+    /// Returns `Err` if `bytes` is not a valid `DDSketchDelta` proto.
+    pub fn apply_delta_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use crate::proto::sketchlib::DdSketchDelta as ProtoDelta;
+        use prost::Message;
+
+        let proto = ProtoDelta::decode(bytes)?;
+        let delta = DdSketchDelta {
+            buckets: proto
+                .buckets
+                .into_iter()
+                .map(|b| (b.index, b.d_count))
+                .collect(),
+            ..DdSketchDelta::default()
+        };
+        self.apply_delta(&delta);
+        Ok(())
+    }
+
     /// Merge a slice of references into a single new sketch. Returns
     /// `Err` on alpha mismatch or an empty input.
     pub fn merge_refs(
@@ -642,6 +719,87 @@ mod tests {
             max_changed: false,
             new_max: 0.0,
         }
+    }
+
+    /// Option-A: a `compute_delta` against an EMPTY base reconstructs the
+    /// window's full state when applied (delta-against-empty round-trip).
+    /// With `threshold = 1` every non-empty bucket survives, so applying
+    /// the delta to a fresh empty sketch yields the same bucket store as
+    /// the original window.
+    #[test]
+    fn test_compute_delta_against_empty_round_trips() {
+        let mut window = DdSketch::new(0.01);
+        for i in 1..=200 {
+            window.update(i as f64);
+        }
+        let empty = DdSketch::new(0.01);
+
+        // Delta against empty = the window's full state in delta form.
+        let delta_bytes = window.compute_delta(&empty, 1);
+
+        // Apply to a fresh empty base.
+        let mut reconstructed = DdSketch::new(0.01);
+        reconstructed.apply_delta_bytes(&delta_bytes).unwrap();
+
+        // Total count recovered exactly.
+        assert_eq!(reconstructed.total_count(), window.total_count());
+        // Every non-empty bucket count matches (compare on absolute index).
+        for (i, &c) in window.store_counts.iter().enumerate() {
+            if c == 0 {
+                continue;
+            }
+            let k = window.store_offset + i as i32;
+            let idx = (k - reconstructed.store_offset) as usize;
+            assert_eq!(reconstructed.store_counts[idx], c, "bucket k={k}");
+        }
+        // Quantiles agree within the α relative-accuracy bound.
+        for q in [0.5, 0.9, 0.99] {
+            let got = reconstructed.quantile(q).unwrap();
+            let want = window.quantile(q).unwrap();
+            assert!(
+                (got / want - 1.0).abs() <= 0.01,
+                "q={q}: reconstructed={got} window={want}"
+            );
+        }
+    }
+
+    /// Option-A: two consecutive windows each emit their OWN state — the
+    /// second window's delta-against-empty is NOT diffed against the
+    /// first window (no cross-window subtraction).
+    #[test]
+    fn test_consecutive_windows_emit_own_state() {
+        let empty = DdSketch::new(0.01);
+
+        // Overlapping value ranges so a cross-window subtraction (win2 −
+        // win1) would genuinely differ from win2's own state — making the
+        // "no subtraction" assertion meaningful.
+        let mut win1 = DdSketch::new(0.01);
+        for i in 1..=50 {
+            win1.update(i as f64);
+            win1.update(i as f64); // win1 buckets carry count 2
+        }
+        let mut win2 = DdSketch::new(0.01);
+        for i in 1..=50 {
+            win2.update(i as f64); // same buckets, count 1
+        }
+
+        // Each window diffs against EMPTY (Option A), not against the prior
+        // window.
+        let d2_against_empty = win2.compute_delta(&empty, 1);
+        let d2_against_win1 = win2.compute_delta(&win1, 1);
+
+        // The Option-A delta reconstructs win2 exactly.
+        let mut recon = DdSketch::new(0.01);
+        recon.apply_delta_bytes(&d2_against_empty).unwrap();
+        assert_eq!(recon.total_count(), win2.total_count());
+
+        // Sanity: diffing against win1 would have produced a DIFFERENT
+        // (cross-window-subtracted) frame, proving the two are not the same
+        // and that Option A avoids the subtraction.
+        assert_ne!(
+            d2_against_empty, d2_against_win1,
+            "delta-against-empty must differ from cross-window delta"
+        );
     }
 
     /// Cross-language byte-parity guard against `sketchlib-go`'s
