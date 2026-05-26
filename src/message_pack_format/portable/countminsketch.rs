@@ -612,7 +612,7 @@ mod tests {
     #[test]
     fn test_update_then_envelope_matches_sketchlib_go_bytes() {
         use crate::proto::sketchlib::{
-            sketch_envelope::SketchState, CountMinState, CounterType, SketchEnvelope,
+            CountMinState, CounterType, SketchEnvelope, sketch_envelope::SketchState,
         };
         use prost::Message;
 

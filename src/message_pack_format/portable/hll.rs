@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
-use crate::{hash64_seeded, DataInput, CANONICAL_HASH_SEED};
+use crate::{CANONICAL_HASH_SEED, DataInput, hash64_seeded};
 
 /// HLL estimator variant. Mirrors `asap_sketchlib::proto::sketchlib::HllVariant`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -529,7 +529,7 @@ mod tests {
     #[test]
     fn test_update_then_envelope_matches_sketchlib_go_bytes() {
         use crate::proto::sketchlib::{
-            sketch_envelope::SketchState, HyperLogLogState, SketchEnvelope,
+            HyperLogLogState, SketchEnvelope, sketch_envelope::SketchState,
         };
         use prost::Message;
 

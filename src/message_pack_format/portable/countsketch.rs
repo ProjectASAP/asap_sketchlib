@@ -140,8 +140,8 @@ impl CountSketch {
             .iter()
             .enumerate()
             .min_by(|a, b| {
-                a.1 .1
-                    .partial_cmp(&b.1 .1)
+                a.1.1
+                    .partial_cmp(&b.1.1)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(i, e)| (i, e.1))
@@ -635,7 +635,7 @@ mod tests {
     #[test]
     fn test_update_then_envelope_matches_sketchlib_go_bytes() {
         use crate::proto::sketchlib::{
-            sketch_envelope::SketchState, CountSketchState, CounterType, SketchEnvelope,
+            CountSketchState, CounterType, SketchEnvelope, sketch_envelope::SketchState,
         };
         use prost::Message;
 
