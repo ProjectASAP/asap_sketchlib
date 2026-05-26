@@ -57,3 +57,48 @@ message CountMinState {
 
   reserved 10 to 15;
 }
+
+// ============================================================================
+// Count-Min Sketch Delta
+// ============================================================================
+
+// CountMinDelta carries only the matrix cells that changed by at least the
+// threshold between two consecutive snapshots, plus the full per-row L1/L2
+// norm deltas (one entry per row, negligible size).
+//
+// Cells apply additively on the receiver: matrix[row][col] += d_count. CMS
+// counters only ever grow, but the delta encodes a signed count (sint64) so
+// the same wire form covers weighted/decay variants.
+//
+// The packed cell encoding (cell_rows / cell_cols / d_counts, tags 9-11) is
+// the canonical form; the legacy per-cell message (tag 3) is retained only so
+// payloads from older producers still decode. This message is byte-identical
+// to the Go reference implementation's CountMinDelta so the two runtimes emit
+// byte-identical delta frames for identical window state (cross-language byte
+// parity).
+message CountMinDelta {
+  uint32                rows         = 1;
+  uint32                cols         = 2;
+  // Deprecated: use cell_rows/cell_cols/d_counts (tags 9-11). Retained for
+  // backward-compatible decode of payloads from older producers.
+  repeated CountMinCell cells_legacy = 3;
+  // Per-row L1 norm deltas, length = rows.
+  repeated double       l1           = 4 [packed = true];
+  // Per-row L2 norm deltas, length = rows.
+  repeated double       l2           = 5 [packed = true];
+  // Packed cell encoding (canonical form):
+  repeated uint32       cell_rows    = 9  [packed = true];  // row index of each changed cell
+  repeated uint32       cell_cols    = 10 [packed = true];  // col index of each changed cell
+  repeated sint64       d_counts     = 11 [packed = true];  // signed integer count delta
+}
+
+// CountMinCell is the deprecated per-cell delta record. Producers emit the
+// packed cell arrays on CountMinDelta instead; this message exists only to
+// decode payloads from older producers.
+message CountMinCell {
+  uint32 row     = 1;
+  uint32 col     = 2;
+  double d_count = 3;  // deprecated: use CountMinDelta.d_counts
+  double d_sum   = 4;  // deprecated: omitted in the packed encoding
+  double d_sum2  = 5;  // deprecated: omitted in the packed encoding
+}

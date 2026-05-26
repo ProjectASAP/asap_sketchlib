@@ -131,6 +131,85 @@ impl HllSketch {
         Ok(())
     }
 
+    /// Compute a sparse, proto-marshalled `HLLDelta` of `self` against a
+    /// `snapshot`. A register update is included when `self`'s register
+    /// value increased over the snapshot's (`self[i] > snapshot[i]`); its
+    /// carried value is the new (larger) register value.
+    ///
+    /// This is the Rust twin of the Go reference implementation's
+    /// `ComputeRegisterDelta` + `SerializeRegisterDelta`. HLL uses max
+    /// semantics, so only increases are meaningful and the delta is
+    /// **lossless** — every increased register is carried, regardless of
+    /// `threshold` (the parameter is accepted for a uniform delta API and
+    /// has no effect here; an HLL register update is never dropped). The
+    /// returned bytes are a `prost`-encoded
+    /// [`crate::proto::sketchlib::HllDelta`], byte-identical to the Go
+    /// `proto.Marshal(HLLDelta)` output for the same inputs (cross-language
+    /// byte parity).
+    ///
+    /// Delta-against-empty: when `snapshot` is the all-zero sketch, every
+    /// non-zero register of `self` is carried, so the result is this
+    /// window's full register state encoded as a delta (no cross-window
+    /// subtraction). HLL deltas carry only register max-updates — there are
+    /// no DataPoint-level metric scalars to drop.
+    pub fn compute_delta(&self, snapshot: &HllSketch, _threshold: u64) -> Vec<u8> {
+        use crate::proto::sketchlib::{HllDelta as ProtoDelta, HllRegisterUpdate};
+        use prost::Message;
+
+        let cur = &self.registers;
+        let snap = &snapshot.registers;
+        let n = cur.len().min(snap.len());
+
+        let mut updates: Vec<HllRegisterUpdate> = Vec::new();
+        for i in 0..n {
+            if cur[i] > snap[i] {
+                updates.push(HllRegisterUpdate {
+                    index: i as u32,
+                    value: cur[i] as u32,
+                });
+            }
+        }
+        // Guard: if `self` has more registers than the snapshot (should not
+        // happen at a fixed precision), carry all non-zero extras. Matches
+        // the Go reference's trailing-register guard.
+        for (i, &v) in cur.iter().enumerate().take(cur.len()).skip(n) {
+            if v > 0 {
+                updates.push(HllRegisterUpdate {
+                    index: i as u32,
+                    value: v as u32,
+                });
+            }
+        }
+
+        ProtoDelta { updates }.encode_to_vec()
+    }
+
+    /// Apply a `prost`-encoded [`crate::proto::sketchlib::HllDelta`] to this
+    /// sketch in place (register max-merge). The Rust twin of the Go
+    /// reference implementation's `DeserializeRegisterDelta` +
+    /// `ApplyRegisterDelta`: each update sets
+    /// `register[index] = max(register[index], value)`.
+    ///
+    /// Returns `Err` if `bytes` is not a valid `HLLDelta` proto or a
+    /// register index is out of range for this sketch's precision.
+    pub fn apply_delta_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use crate::proto::sketchlib::HllDelta as ProtoDelta;
+        use prost::Message;
+
+        let proto = ProtoDelta::decode(bytes)?;
+        let delta = HllSketchDelta {
+            updates: proto
+                .updates
+                .into_iter()
+                .map(|u| (u.index, u.value as u8))
+                .collect(),
+        };
+        self.apply_delta(&delta)
+    }
+
     pub fn merge_refs(
         inputs: &[&HllSketch],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -589,5 +668,77 @@ mod tests {
             packed: vec![5, 3],
         };
         assert!(decode_sparse_registers(&sp).is_err());
+    }
+
+    /// `compute_delta` against an EMPTY snapshot reconstructs the window's
+    /// full register state when its bytes are applied to a fresh empty
+    /// sketch (register max-merge round-trip). HLL deltas are lossless —
+    /// every increased register is carried.
+    #[test]
+    fn test_compute_delta_against_empty_round_trips() {
+        let mut window = HllSketch::new(HllVariant::Datafusion, 14);
+        for i in 0..5000u64 {
+            window.update(&i.to_le_bytes());
+        }
+        let empty = HllSketch::new(HllVariant::Datafusion, 14);
+
+        let delta_bytes = window.compute_delta(&empty, 0);
+
+        let mut reconstructed = HllSketch::new(HllVariant::Datafusion, 14);
+        reconstructed.apply_delta_bytes(&delta_bytes).unwrap();
+
+        assert_eq!(reconstructed.registers, window.registers);
+    }
+
+    /// A delta computed between two non-empty snapshots reconstructs the
+    /// current sketch when applied to the base (max-merge of the registers
+    /// that increased).
+    #[test]
+    fn test_compute_delta_then_apply_matches_current() {
+        let mut base = HllSketch::new(HllVariant::Datafusion, 12);
+        for i in 0..2000u64 {
+            base.update(&i.to_le_bytes());
+        }
+        let mut current = base.clone();
+        for i in 2000..5000u64 {
+            current.update(&i.to_le_bytes());
+        }
+
+        let delta_bytes = current.compute_delta(&base, 0);
+        let mut reconstructed = base.clone();
+        reconstructed.apply_delta_bytes(&delta_bytes).unwrap();
+        assert_eq!(reconstructed.registers, current.registers);
+    }
+
+    /// Cross-language byte-parity guard: `compute_delta` against an empty
+    /// snapshot must emit bytes identical to the Go reference
+    /// implementation's `SerializeRegisterDelta(ComputeRegisterDelta(empty,
+    /// current))` for the same precision-14 sketch fed `(1..=50)` as f64
+    /// little-endian byte values. A delta-against-empty carries every
+    /// non-zero register as an `(index, value)` update; the golden hex was
+    /// captured from a `proto.Marshal` of the Go reference's `HLLDelta`.
+    #[test]
+    fn test_compute_delta_matches_go_golden_bytes() {
+        let mut current = HllSketch::new(HllVariant::Datafusion, 14);
+        for i in 1..=50i32 {
+            let v = i as f64;
+            current.update(&v.to_le_bytes());
+        }
+        let empty = HllSketch::new(HllVariant::Datafusion, 14);
+        let got = current.compute_delta(&empty, 0);
+
+        // Captured from the Go reference implementation's
+        // SerializeRegisterDelta(ComputeRegisterDelta(empty, current)) for the
+        // same input.
+        const GOLDEN_HEX: &str = "0a04085810010a0508930510020a0508931110010a0508e31110010a0508fa1510010a0508d71910010a0508881b10010a0508ba2310010a0508ec2310010a0508d62410010a0508ff2510020a0508ae2610010a0508b22810020a0508bb2810020a0508dc3210020a0508f63510020a0508eb3610010a0508b23910040a0508da3910040a0508853a10050a0508f14110020a0508974310020a05089c4510050a0508de4810020a0508b64910020a0508c74910010a0508c54d10010a0508ed4d10020a05088d4e10020a0508b35210030a0508805410020a0508e75a10020a0508f85a10060a0508835b10030a0508b75b10020a0508c25b10060a0508de5c10010a0508dd6310010a0508876410010a0508e56410050a0508e66610010a0508d66710040a0508e86710010a0508e06c10010a0508877110040a0508ad7210010a0508e97510010a0508877710030a0508d37910010a0508db7b1003";
+        let want = decode_hex(GOLDEN_HEX);
+        assert_eq!(
+            got,
+            want,
+            "HLL delta bytes diverge from the Go reference golden \
+             ({} bytes got vs {} bytes want)",
+            got.len(),
+            want.len(),
+        );
     }
 }

@@ -72,3 +72,52 @@ message HeapEntry {
 
   reserved 3;  // Reserved for bytes_key alternative.
 }
+
+// ============================================================================
+// Count Sketch Delta
+// ============================================================================
+
+// CountSketchDelta carries only the matrix cells that changed by at least the
+// threshold between two consecutive snapshots, plus the full per-row L2 norm
+// deltas and any heavy-hitter candidate keys.
+//
+// Cells apply additively on the receiver: matrix[row][col] += d_count. Count
+// Sketch counters are signed (±1 increments), so d_count is a signed integer
+// (sint64). Heavy-hitter candidate keys (hh_keys) are re-queried against the
+// merged matrix downstream to rebuild the receiver's Top-K with accurate,
+// globally-merged estimates.
+//
+// The packed cell encoding (cell_rows / cell_cols / d_counts, tags 9-11) plus
+// l2 (tag 12) is the canonical form; the legacy per-cell message (tag 3),
+// l2_legacy (tag 4) and topk (tag 5) are retained only so payloads from older
+// producers still decode. This message is byte-identical to the Go reference
+// implementation's CountSketchDelta so the two runtimes emit byte-identical
+// delta frames for identical window state (cross-language byte parity).
+message CountSketchDelta {
+  uint32                   rows         = 1;
+  uint32                   cols         = 2;
+  // Deprecated: use cell_rows/cell_cols/d_counts (tags 9-11). Retained for
+  // backward-compatible decode of payloads from older producers.
+  repeated CountSketchCell cells_legacy = 3;
+  // Deprecated: use l2 (tag 12) instead.
+  repeated double          l2_legacy    = 4 [packed = true];
+  // Deprecated: use hh_keys (tag 6) instead.
+  TopKState                topk         = 5;
+  // Heavy-hitter candidate keys from the upstream tracker. Downstream queries
+  // the merged Count Sketch matrix for each key to build its Top-K.
+  repeated string          hh_keys      = 6;
+  // Packed cell encoding (canonical form):
+  repeated uint32          cell_rows    = 9  [packed = true];  // row index of each changed cell
+  repeated uint32          cell_cols    = 10 [packed = true];  // col index of each changed cell
+  repeated sint64          d_counts     = 11 [packed = true];  // signed integer count delta
+  repeated double          l2           = 12 [packed = true];  // per-row L2 norm deltas
+}
+
+// CountSketchCell is the deprecated per-cell delta record. Producers emit the
+// packed cell arrays on CountSketchDelta instead; this message exists only to
+// decode payloads from older producers.
+message CountSketchCell {
+  uint32 row     = 1;
+  uint32 col     = 2;
+  double d_count = 3;  // deprecated: use CountSketchDelta.d_counts
+}

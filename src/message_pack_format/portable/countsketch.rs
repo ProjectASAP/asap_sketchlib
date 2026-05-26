@@ -274,6 +274,147 @@ impl CountSketch {
         Ok(())
     }
 
+    /// Compute a sparse, proto-marshalled `CountSketchDelta` of `self`
+    /// against a `snapshot`. A cell is included when its signed count
+    /// delta `Δcount` (self − snapshot) is non-zero and its magnitude is
+    /// `>= threshold` (the threshold is truncated to an integer, matching
+    /// the Go reference). The full per-row L2 norm deltas are always
+    /// carried (one entry per row).
+    ///
+    /// This is the Rust twin of the Go reference implementation's
+    /// `ComputeDelta` + `SerializeDelta`: it iterates the matrix in
+    /// row-major order, subtracts the snapshot's value for each cell, and
+    /// emits the surviving signed cell deltas using the packed-array proto
+    /// encoding (`cell_rows`/`cell_cols`/`d_counts`). L2 row deltas are
+    /// derived from the matrices — `l2[r] = Σ_c count[r][c]^2` — matching
+    /// the Go producer's incrementally-maintained norm. Heavy-hitter
+    /// candidate keys (`hh_keys`) are sourced from an upstream Space-Saving
+    /// tracker that this minimal wrapper does not maintain, so the field is
+    /// left empty (an empty repeated field encodes to nothing on the wire).
+    /// The returned bytes are a `prost`-encoded
+    /// [`crate::proto::sketchlib::CountSketchDelta`], byte-identical to the
+    /// Go `proto.Marshal(CountSketchDelta)` output for the same inputs when
+    /// no heavy-hitter keys are forwarded (cross-language byte parity).
+    ///
+    /// Delta-against-empty: when `snapshot` is the all-zero sketch, every
+    /// surviving cell delta equals this window's own (signed) cell count,
+    /// so the result is this window's full state encoded as a delta (no
+    /// cross-window subtraction). CountSketch deltas carry only
+    /// sketch-internal cells/norms — there are no DataPoint-level metric
+    /// scalars to drop.
+    pub fn compute_delta(
+        &self,
+        snapshot: &CountSketch,
+        threshold: f64,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        use crate::proto::sketchlib::CountSketchDelta as ProtoDelta;
+        use prost::Message;
+
+        if self.rows != snapshot.rows || self.cols != snapshot.cols {
+            return Err(format!(
+                "CountSketch dimension mismatch: self={}x{}, snapshot={}x{}",
+                self.rows, self.cols, snapshot.rows, snapshot.cols
+            )
+            .into());
+        }
+
+        // Threshold is compared against |Δ| after truncation to an
+        // integer, mirroring the Go reference's `int64(threshold)` cast.
+        let thresh = threshold as i64;
+
+        let mut cell_rows: Vec<u32> = Vec::new();
+        let mut cell_cols: Vec<u32> = Vec::new();
+        let mut d_counts: Vec<i64> = Vec::new();
+        let mut l2: Vec<f64> = Vec::with_capacity(self.rows);
+
+        for r in 0..self.rows {
+            let mut cur_l2 = 0.0f64;
+            let mut snap_l2 = 0.0f64;
+            for c in 0..self.cols {
+                let cv = self.matrix[r][c];
+                let sv = snapshot.matrix[r][c];
+                cur_l2 += cv * cv;
+                snap_l2 += sv * sv;
+                let dc = (cv - sv) as i64;
+                if dc != 0 && (dc <= -thresh || dc >= thresh) {
+                    cell_rows.push(r as u32);
+                    cell_cols.push(c as u32);
+                    d_counts.push(dc);
+                }
+            }
+            l2.push(cur_l2 - snap_l2);
+        }
+
+        let delta = ProtoDelta {
+            rows: self.rows as u32,
+            cols: self.cols as u32,
+            cells_legacy: Vec::new(),
+            l2_legacy: Vec::new(),
+            topk: None,
+            hh_keys: Vec::new(),
+            cell_rows,
+            cell_cols,
+            d_counts,
+            l2,
+        };
+        Ok(delta.encode_to_vec())
+    }
+
+    /// Apply a `prost`-encoded [`crate::proto::sketchlib::CountSketchDelta`]
+    /// to this sketch in place (additive signed-cell merge + heavy-hitter
+    /// rebuild). The Rust twin of the Go reference implementation's
+    /// `DeserializeDelta` + `ApplyDelta`. Reads the packed cell arrays
+    /// (`cell_rows`/`cell_cols`/`d_counts`) and the heavy-hitter keys
+    /// (`hh_keys`), falling back to the legacy per-cell records and TopK
+    /// entries for payloads from older producers.
+    ///
+    /// Returns `Err` if `bytes` is not a valid `CountSketchDelta` proto or
+    /// a cell is out of range for this sketch's dimensions.
+    pub fn apply_delta_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use crate::proto::sketchlib::CountSketchDelta as ProtoDelta;
+        use prost::Message;
+
+        let proto = ProtoDelta::decode(bytes)?;
+        let cells: Vec<(u32, u32, i64)> = if !proto.cell_rows.is_empty() {
+            proto
+                .cell_rows
+                .iter()
+                .zip(proto.cell_cols.iter())
+                .zip(proto.d_counts.iter())
+                .map(|((&r, &c), &d)| (r, c, d))
+                .collect()
+        } else {
+            proto
+                .cells_legacy
+                .iter()
+                .map(|c| (c.row, c.col, c.d_count as i64))
+                .collect()
+        };
+        let l2 = if !proto.l2.is_empty() {
+            proto.l2
+        } else {
+            proto.l2_legacy
+        };
+        let hh_keys = if !proto.hh_keys.is_empty() {
+            proto.hh_keys
+        } else if let Some(topk) = proto.topk {
+            topk.entries.into_iter().map(|e| e.key).collect()
+        } else {
+            Vec::new()
+        };
+        let delta = CountSketchDelta {
+            rows: proto.rows,
+            cols: proto.cols,
+            cells,
+            l2,
+            hh_keys,
+        };
+        self.apply_delta(&delta)
+    }
+
     /// Merge a slice of references into a single new sketch. All inputs
     /// must share the same dimensions; returns `Err` on mismatch or an
     /// empty input.
@@ -577,5 +718,81 @@ mod tests {
             b'A'..=b'F' => c - b'A' + 10,
             _ => panic!("non-hex byte {}", c as char),
         }
+    }
+
+    /// `compute_delta` against an EMPTY snapshot reconstructs the window's
+    /// full (signed) state when its bytes are applied to a fresh empty
+    /// sketch (round-trip). With `threshold = 1.0` every changed cell
+    /// survives.
+    #[test]
+    fn test_compute_delta_against_empty_round_trips() {
+        let rows = 3usize;
+        let cols = 512usize;
+        let mut window = CountSketch::new(rows, cols);
+        for i in 0..200u64 {
+            window.update(&format!("k-{}", i % 23), 1.0);
+        }
+        let empty = CountSketch::new(rows, cols);
+
+        let delta_bytes = window.compute_delta(&empty, 1.0).unwrap();
+
+        let mut reconstructed = CountSketch::new(rows, cols);
+        reconstructed.apply_delta_bytes(&delta_bytes).unwrap();
+
+        assert_eq!(reconstructed.sketch(), window.sketch());
+    }
+
+    /// A delta computed between two non-empty snapshots reconstructs the
+    /// current sketch when applied to the base.
+    #[test]
+    fn test_compute_delta_then_apply_matches_current() {
+        let mut base = CountSketch::new(3, 64);
+        for i in 0..40u64 {
+            base.update(&format!("x{}", i % 8), 1.0);
+        }
+        let mut current = base.clone();
+        for i in 0..30u64 {
+            current.update(&format!("x{}", i % 8), 1.0);
+        }
+
+        let delta_bytes = current.compute_delta(&base, 1.0).unwrap();
+        let mut reconstructed = base.clone();
+        reconstructed.apply_delta_bytes(&delta_bytes).unwrap();
+        assert_eq!(reconstructed.sketch(), current.sketch());
+    }
+
+    /// Cross-language byte-parity guard: `compute_delta` against an empty
+    /// snapshot must emit bytes identical to the Go reference
+    /// implementation's `SerializeDelta(ComputeDelta(empty, current, 1.0))`
+    /// for the same `(rows=3, cols=512)` × "k-a".."k-e" (each 5×, 25
+    /// unweighted updates) input. The golden hex was captured from a
+    /// `proto.Marshal` of the Go reference's `CountSketchDelta`
+    /// (packed-array encoding). No heavy-hitter keys are forwarded by this
+    /// minimal wrapper, so `hh_keys` is empty in both producers; the golden
+    /// pins the packed cell arrays and the per-row L2 (=125) norm deltas.
+    #[test]
+    fn test_compute_delta_matches_go_golden_bytes() {
+        let rows = 3usize;
+        let cols = 512usize;
+        let mut current = CountSketch::new(rows, cols);
+        for i in 0..25 {
+            let key = format!("k-{}", (b'a' + (i % 5) as u8) as char);
+            current.update(&key, 1.0);
+        }
+        let empty = CountSketch::new(rows, cols);
+        let got = current.compute_delta(&empty, 1.0).unwrap();
+
+        // Captured from the Go reference implementation's
+        // SerializeDelta(ComputeDelta(empty, current, 1.0)) for the same input.
+        const GOLDEN_HEX: &str = "08031080044a0f000000000001010101010202020202521a3d7fd9019402d3034eb9019602f703fe0306a501c601d201ba025a0f090a0909090a090a090a09090a090962180000000000405f400000000000405f400000000000405f40";
+        let want = decode_hex(GOLDEN_HEX);
+        assert_eq!(
+            got,
+            want,
+            "CountSketch delta bytes diverge from the Go reference golden \
+             ({} bytes got vs {} bytes want)",
+            got.len(),
+            want.len(),
+        );
     }
 }
