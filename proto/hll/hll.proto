@@ -108,15 +108,27 @@ enum HLLVariant {
 // losslessly on the receiver via register[index] = max(register[index], value)
 // — no register update is ever dropped (there is no threshold to apply).
 //
+// The increased registers are varint-packed exactly like
+// HLLSparseRegisters.packed: sorted ascending by index, each register emitted
+// as (index_delta, value) where index_delta = index - prev_index (prev_index
+// starts at 0) and value is the new (larger) register value:
+//
+//   for each increased register, in ascending index order:
+//     uvarint(index - prev_index)   // prev_index starts at 0; deltas are >= 0
+//     uvarint(value)                // 1..=Q+1, always 1 byte in practice
+//
+// A single-emit delta against the all-zero snapshot is therefore the same size
+// as the full sparse frame, and a sub-window delta is strictly smaller (it
+// packs only the registers that actually grew). This replaces the previous
+// per-register sub-message encoding, eliminating ~6–8 bytes of tag/length
+// overhead per register.
+//
 // This message is byte-identical to the Go reference implementation's HLLDelta
 // so the two runtimes emit byte-identical delta frames for identical window
 // state (cross-language byte parity).
 message HLLDelta {
-  repeated HLLRegisterUpdate updates = 1;
-}
-
-// HLLRegisterUpdate is one register whose value increased.
-message HLLRegisterUpdate {
-  uint32 index = 1;  // register index, 0 – 2^precision-1
-  uint32 value = 2;  // new value (only sent when > snapshot value)
+  // Varint-packed (index_delta, value) pairs for the registers that increased,
+  // in ascending index order. Same layout as HLLSparseRegisters.packed. Empty
+  // when no register changed.
+  bytes packed_updates = 1;
 }

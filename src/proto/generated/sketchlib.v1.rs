@@ -212,6 +212,12 @@ pub struct CountMinState {
 /// to the Go reference implementation's CountMinDelta so the two runtimes emit
 /// byte-identical delta frames for identical window state (cross-language byte
 /// parity).
+///
+/// CountMinDelta is structurally identical to CountSketchDelta: rows, cols, the
+/// packed cell encoding, per-row norm deltas, and an optional repeated hh_keys
+/// at the SAME tag number (6). Both sketches can track heavy hitters; whether
+/// hh_keys is populated is a control-plane decision (it is empty/omitted when
+/// heavy-hitter tracking is not enabled for this sketch).
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CountMinDelta {
     #[prost(uint32, tag = "1")]
@@ -228,6 +234,13 @@ pub struct CountMinDelta {
     /// Per-row L2 norm deltas, length = rows.
     #[prost(double, repeated, tag = "5")]
     pub l2: ::prost::alloc::vec::Vec<f64>,
+    /// Heavy-hitter candidate keys from an upstream tracker, mirroring
+    /// CountSketchDelta.hh_keys (same tag number 6, same wire shape). Downstream
+    /// queries the merged Count-Min matrix for each key to (re)build its Top-K
+    /// with globally-merged estimates. Empty/omitted when heavy-hitter tracking
+    /// is not enabled.
+    #[prost(string, repeated, tag = "6")]
+    pub hh_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Packed cell encoding (canonical form):
     ///
     /// row index of each changed cell
@@ -454,23 +467,31 @@ pub struct HllSparseRegisters {
 /// losslessly on the receiver via register\[index\] = max(register\[index\], value)
 /// — no register update is ever dropped (there is no threshold to apply).
 ///
+/// The increased registers are varint-packed exactly like
+/// HLLSparseRegisters.packed: sorted ascending by index, each register emitted
+/// as (index_delta, value) where index_delta = index - prev_index (prev_index
+/// starts at 0) and value is the new (larger) register value:
+///
+///    for each increased register, in ascending index order:
+///      uvarint(index - prev_index)   // prev_index starts at 0; deltas are >= 0
+///      uvarint(value)                // 1..=Q+1, always 1 byte in practice
+///
+/// A single-emit delta against the all-zero snapshot is therefore the same size
+/// as the full sparse frame, and a sub-window delta is strictly smaller (it
+/// packs only the registers that actually grew). This replaces the previous
+/// per-register sub-message encoding, eliminating ~6–8 bytes of tag/length
+/// overhead per register.
+///
 /// This message is byte-identical to the Go reference implementation's HLLDelta
 /// so the two runtimes emit byte-identical delta frames for identical window
 /// state (cross-language byte parity).
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HllDelta {
-    #[prost(message, repeated, tag = "1")]
-    pub updates: ::prost::alloc::vec::Vec<HllRegisterUpdate>,
-}
-/// HLLRegisterUpdate is one register whose value increased.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct HllRegisterUpdate {
-    /// register index, 0 – 2^precision-1
-    #[prost(uint32, tag = "1")]
-    pub index: u32,
-    /// new value (only sent when > snapshot value)
-    #[prost(uint32, tag = "2")]
-    pub value: u32,
+    /// Varint-packed (index_delta, value) pairs for the registers that increased,
+    /// in ascending index order. Same layout as HLLSparseRegisters.packed. Empty
+    /// when no register changed.
+    #[prost(bytes = "vec", tag = "1")]
+    pub packed_updates: ::prost::alloc::vec::Vec<u8>,
 }
 /// HLLVariant identifies which HLL estimator algorithm the registers belong to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]

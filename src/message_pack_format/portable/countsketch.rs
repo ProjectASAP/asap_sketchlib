@@ -700,6 +700,45 @@ mod tests {
         );
     }
 
+    /// Cross-language byte-parity guard for CountSketchDelta hh_keys: encoding
+    /// the canonical packed delta with heavy-hitter keys at tag 6 must be
+    /// byte-identical to the Go reference's `SerializeDelta` output for the same
+    /// state and keys. The empty-`hh_keys` path is already covered by
+    /// `test_compute_delta_matches_go_golden_bytes`.
+    #[test]
+    fn test_hh_keys_matches_go_golden_bytes() {
+        use crate::proto::sketchlib::CountSketchDelta as ProtoDelta;
+        use prost::Message;
+
+        let rows = 3usize;
+        let cols = 512usize;
+        let mut current = CountSketch::new(rows, cols);
+        for i in 0..25 {
+            let key = format!("k-{}", (b'a' + (i % 5) as u8) as char);
+            current.update(&key, 1.0);
+        }
+        let empty = CountSketch::new(rows, cols);
+
+        // Inject heavy-hitter keys onto the canonical packed delta at tag 6.
+        let no_hh = current.compute_delta(&empty, 1.0).unwrap();
+        let mut proto = ProtoDelta::decode(no_hh.as_slice()).unwrap();
+        proto.hh_keys = vec!["flow-0".into(), "flow-3".into(), "flow-7".into()];
+        let got = proto.encode_to_vec();
+
+        // Captured from the Go reference implementation's SerializeDelta for the
+        // same input with HHKeys = ["flow-0","flow-3","flow-7"].
+        const GOLDEN_HEX: &str = "08031080043206666c6f772d303206666c6f772d333206666c6f772d374a0f000000000001010101010202020202521a3d7fd9019402d3034eb9019602f703fe0306a501c601d201ba025a0f090a0909090a090a090a09090a090962180000000000405f400000000000405f400000000000405f40";
+        let want = decode_hex(GOLDEN_HEX);
+        assert_eq!(
+            got,
+            want,
+            "CountSketch delta hh_keys bytes diverge from the Go reference golden \
+             ({} bytes got vs {} bytes want)",
+            got.len(),
+            want.len(),
+        );
+    }
+
     fn decode_hex(s: &str) -> Vec<u8> {
         s.as_bytes()
             .chunks(2)
