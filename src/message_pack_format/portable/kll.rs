@@ -135,11 +135,31 @@ impl KllSketch {
 
 impl Clone for KllSketch {
     fn clone(&self) -> Self {
-        let bytes = bytes_from_sketchlib_kll(&self.backend);
+        // Structural clone: the backing `KLL<f64>` derives `Clone` (its fields
+        // are `Box<[..]>`/`Vec`/scalars), so copy it directly instead of a full
+        // msgpack serialize -> deserialize -> rebuild round-trip. Produces an
+        // identical sketch far more cheaply (no rmp encode/decode, far fewer
+        // allocations).
         Self {
             k: self.k,
-            backend: sketchlib_kll_from_bytes(&bytes).unwrap(),
+            backend: self.backend.clone(),
         }
+    }
+}
+
+impl KllSketch {
+    /// Reconstruct directly from portable wire state (k + level-ordered items +
+    /// level boundaries) without replaying items through `update()`. Bit-exact.
+    pub fn from_portable_state(
+        k: u16,
+        items: &[f64],
+        levels: &[usize],
+        num_levels: usize,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            k,
+            backend: SketchlibKll::from_portable_state(k as usize, items, levels, num_levels)?,
+        })
     }
 }
 
