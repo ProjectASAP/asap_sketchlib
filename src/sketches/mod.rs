@@ -49,6 +49,10 @@ pub use coco::CocoBucket;
 pub mod countsketch;
 pub use countsketch::Count;
 
+/// Count Sketch grid with a per-bucket HyperLogLog (distinct-count) sketch.
+pub mod countsketch_hll;
+pub use countsketch_hll::CountHll;
+
 /// Hashing path markers for matrix-backed sketches.
 pub mod mode;
 pub use mode::{FastPath, RegularPath};
