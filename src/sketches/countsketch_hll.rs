@@ -12,7 +12,7 @@
 //!   exploiting the fact that, within a row, items are partitioned across
 //!   columns, so the per-bucket distinct counts sum to the total.
 //!
-//! Storage is a [`Vector3D<u8>`] of shape `rows x cols x (2^precision)`: the
+//! Storage is a [`Vector3D<u8>`](crate::Vector3D) of shape `rows x cols x (2^precision)`: the
 //! third dimension is the HLL register array for each bucket.
 //!
 //! The HyperLogLog register/rank math mirrors [`crate::sketches::hll`] (classic
