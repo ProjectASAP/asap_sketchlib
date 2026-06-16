@@ -29,9 +29,9 @@
 //!   avoiding unpredictable branches on dense streams.
 //! - **Single-pass bucket estimator**: `estimate_bucket` fuses the harmonic sum
 //!   and zero-count into one loop traversal.
-//! - **Stack-allocated median**: uses [`crate::compute_median_inline_f64`] which
-//!   applies branchless sorting networks for the common small-row counts (≤ 8),
-//!   avoiding heap allocation and sort overhead.
+//! - **Fast median**: uses [`crate::compute_median_inline_f64`] which applies
+//!   branchless sorting networks for row counts ≤ 5, and falls back to
+//!   `sort_unstable` for larger counts.
 //!
 //! References:
 //! - Charikar, Chen & Farach-Colton, "Finding Frequent Items in Data Streams,"
@@ -56,21 +56,63 @@ const DEFAULT_PRECISION: u32 = 8;
 /// selected `(row, col)` bucket holds a `2^precision`-register HyperLogLog that
 /// records the item. See the [module docs](crate::sketches::countsketch_hll) for
 /// the supported queries and the performance notes for the optimization strategy.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(bound = "")]
 pub struct CountHll<H: SketchHasher = DefaultXxHasher> {
     buckets: Vector3D<u8>,
     precision: u32,
-    /// Pre-computed mask: `(1u64 << precision) - 1`, used to extract the HLL
-    /// register index from the high bits of the HLL hash.
+    #[serde(skip)]
     p_mask: u64,
-    /// Number of bits consumed per row from the packed column hash.
+    #[serde(skip)]
     col_mask_bits: u32,
-    /// Pre-computed column mask when `cols` is a power of two (`cols - 1`),
-    /// or `0` when `cols` is not a power of two (falls back to `% cols`).
+    #[serde(skip)]
     col_mask: Option<usize>,
     #[serde(skip)]
     _hasher: PhantomData<H>,
+}
+
+// Seed struct: only the two authoritative fields are read from the wire.
+// Derived fields (p_mask, col_mask_bits, col_mask) are recomputed on load,
+// so stale or tampered bytes can never produce internally inconsistent routing.
+#[derive(Deserialize)]
+struct CountHllSeed {
+    buckets: Vector3D<u8>,
+    precision: u32,
+}
+
+impl<'de, H: SketchHasher> Deserialize<'de> for CountHll<H> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let CountHllSeed { buckets, precision } = CountHllSeed::deserialize(deserializer)?;
+        let rows = buckets.rows();
+        let cols = buckets.cols();
+        if !(1..=18).contains(&precision) {
+            return Err(serde::de::Error::custom(format!(
+                "precision {precision} out of range 1..=18"
+            )));
+        }
+        if rows == 0 || cols == 0 {
+            return Err(serde::de::Error::custom("rows and cols must be non-zero"));
+        }
+        let p_mask = (1u64 << precision) - 1;
+        let col_mask_bits = if cols.is_power_of_two() {
+            cols.ilog2()
+        } else {
+            cols.ilog2() + 1
+        };
+        let col_mask = if cols.is_power_of_two() {
+            Some(cols - 1)
+        } else {
+            None
+        };
+        Ok(Self {
+            buckets,
+            precision,
+            p_mask,
+            col_mask_bits,
+            col_mask,
+            _hasher: PhantomData,
+        })
+    }
 }
 
 impl Default for CountHll<DefaultXxHasher> {
@@ -99,6 +141,12 @@ impl<H: SketchHasher> CountHll<H> {
         } else {
             cols.ilog2() + 1
         };
+        assert!(
+            rows.saturating_mul(col_mask_bits as usize) <= 128,
+            "rows ({rows}) × col_mask_bits ({col_mask_bits}) = {} exceeds the 128-bit packed \
+             column hash; reduce rows or cols",
+            rows * col_mask_bits as usize
+        );
         let col_mask = if cols.is_power_of_two() {
             Some(cols - 1)
         } else {
@@ -205,13 +253,10 @@ impl<H: SketchHasher> CountHll<H> {
     pub fn estimate(&self, value: &DataInput) -> f64 {
         let rows = self.buckets.rows();
         let col_hash = H::hash128_seeded(0, value);
-        let mut estimates = [0.0f64; 16];
-        let count = rows.min(estimates.len());
-        for (r, slot) in estimates[..count].iter_mut().enumerate() {
-            let col = self.col_from_packed(col_hash, r);
-            *slot = estimate_bucket(self.buckets.bucket_slice(r, col));
-        }
-        compute_median_inline_f64(&mut estimates[..count])
+        let mut estimates: Vec<f64> = (0..rows)
+            .map(|r| estimate_bucket(self.buckets.bucket_slice(r, self.col_from_packed(col_hash, r))))
+            .collect();
+        compute_median_inline_f64(&mut estimates)
     }
 
     /// Estimates the total number of distinct items in the stream.
@@ -223,16 +268,10 @@ impl<H: SketchHasher> CountHll<H> {
     pub fn estimate_total_cardinality(&self) -> f64 {
         let rows = self.buckets.rows();
         let cols = self.buckets.cols();
-        let mut per_row = [0.0f64; 16];
-        let count = rows.min(per_row.len());
-        for (r, slot) in per_row[..count].iter_mut().enumerate() {
-            let mut row_sum = 0.0;
-            for c in 0..cols {
-                row_sum += estimate_bucket(self.buckets.bucket_slice(r, c));
-            }
-            *slot = row_sum;
-        }
-        compute_median_inline_f64(&mut per_row[..count])
+        let mut per_row: Vec<f64> = (0..rows)
+            .map(|r| (0..cols).map(|c| estimate_bucket(self.buckets.bucket_slice(r, c))).sum())
+            .collect();
+        compute_median_inline_f64(&mut per_row)
     }
 
     /// Merges another sketch by taking the element-wise register maximum.
@@ -433,5 +472,49 @@ mod tests {
             sk_batch.as_storage().as_slice(),
             "insert_many must produce identical state to sequential inserts"
         );
+    }
+
+    // Finding 1: rows × col_mask_bits must fit in 128 bits.
+    #[test]
+    #[should_panic(expected = "exceeds the 128-bit packed column hash")]
+    fn too_many_rows_for_col_bits_panics() {
+        // cols=64 → col_mask_bits=6 → 22×6=132 > 128
+        CountHll::<DefaultXxHasher>::with_dimensions(22, 64, 8);
+    }
+
+    #[test]
+    fn max_rows_within_bit_capacity_is_accepted() {
+        // cols=64 → col_mask_bits=6 → 21×6=126 ≤ 128
+        let sk = CountHll::<DefaultXxHasher>::with_dimensions(21, 64, 6);
+        assert_eq!(sk.rows(), 21);
+    }
+
+    // Finding 2: all rows must contribute to estimates, not just the first 16.
+    #[test]
+    fn rows_beyond_16_contribute_to_estimates() {
+        // cols=2 → col_mask_bits=1 → 20×1=20 ≤ 128, so this is legal.
+        let mut sk = CountHll::<DefaultXxHasher>::with_dimensions(20, 2, 6);
+        let n = 500u64;
+        for key in (0..n).map(DataInput::U64) {
+            sk.insert(&key);
+        }
+        let est = sk.estimate_total_cardinality();
+        let rel_err = (est - n as f64).abs() / n as f64;
+        assert!(
+            rel_err < 0.35,
+            "estimate {est} too far from {n} with 20 rows (rel_err {rel_err})"
+        );
+    }
+
+    // Finding 3: deserialization must recompute derived fields, not trust wire bytes.
+    #[test]
+    fn deserialize_recomputes_derived_fields() {
+        let sk = CountHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
+        let bytes = sk.serialize_to_bytes().expect("serialize");
+        let restored = CountHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        // Derived fields must match what with_dimensions would compute.
+        assert_eq!(restored.p_mask, (1u64 << 8) - 1);
+        assert_eq!(restored.col_mask_bits, 5); // 32.ilog2() = 5
+        assert_eq!(restored.col_mask, Some(31)); // 32 - 1
     }
 }
