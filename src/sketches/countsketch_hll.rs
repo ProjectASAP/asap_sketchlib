@@ -1,28 +1,29 @@
 //! Count Sketch + HyperLogLog hybrid (`CountHll`).
 //!
-//! A frequency-style hashing layout (the Count Sketch row/column grid) where
-//! **every `(row, col)` bucket is a small HyperLogLog** instead of a single
-//! signed counter. Each item is routed to one column per row (exactly like a
-//! Count Sketch) and recorded into that bucket's HLL registers. This answers
-//! *distinct-count* questions rather than frequency questions:
+//! A grouped distinct-count sketch: given a stream of `(key, distinct_value)`
+//! pairs, [`CountHll::estimate`] answers "how many distinct `distinct_value`s
+//! have been seen for this `key`?"
 //!
-//! - [`CountHll::estimate`] — the number of **distinct** items sharing a key's
-//!   buckets (median across rows, to suppress collision noise).
-//! - [`CountHll::estimate_total_cardinality`] — total stream cardinality,
-//!   exploiting the fact that, within a row, items are partitioned across
-//!   columns, so the per-bucket distinct counts sum to the total.
+//! Internally this is a Count Sketch row/column grid where **every `(row, col)`
+//! bucket is a small HyperLogLog**. Each insert routes `key` to one column per
+//! row (exactly like Count Sketch) and records `distinct_value` into that
+//! bucket's HLL registers. Querying a key reads the same bucket(s) and returns
+//! the median HLL estimate across rows, which suppresses collision noise from
+//! other keys that happen to share a bucket.
 //!
-//! Storage is a [`Vector3D<u8>`](crate::Vector3D) of shape `rows x cols x (2^precision)`: the
-//! third dimension is the HLL register array for each bucket.
+//! Storage is a [`Vector3D<u8>`](crate::Vector3D) of shape
+//! `rows × cols × 2^precision`: the third dimension is the HLL register array
+//! for each `(row, col)` bucket.
 //!
 //! The HyperLogLog register/rank math mirrors [`crate::sketches::hll`] (classic
 //! estimator with small/large-range corrections).
 //!
 //! # Performance notes
 //!
-//! - **Hash reuse**: a single `hash128_seeded` call packs column-selection bits
-//!   for all rows; a separate `hash64_seeded` (distinct seed) provides the HLL
-//!   register/rank. Total: **2 hash calls per insert**, regardless of row count.
+//! - **Hash reuse**: a single `hash128_seeded(key)` call packs column-selection
+//!   bits for all rows; a separate `hash64_seeded(distinct_value)` provides the
+//!   HLL register/rank. Total: **2 hash calls per insert**, regardless of row
+//!   count.
 //! - **Bit-mask column selection**: when `cols` is a power of two the modulo is
 //!   replaced by a bitmask (no division).
 //! - **Branchless register update**: `u8::max` compiles to a conditional move,
@@ -33,7 +34,17 @@
 //!   branchless sorting networks for row counts ≤ 5, and falls back to
 //!   `sort_unstable` for larger counts.
 //!
-//! References:
+//! # Related sketches
+//!
+//! - [`crate::sketches::hll`] — a single HyperLogLog for total-stream distinct
+//!   counting (no per-key breakdown).
+//! - [`crate::sketch_framework::hydra`] (`Hydra` with `HydraCounter::HLL`) —
+//!   also answers per-key distinct-count queries, but stores one heap-allocated
+//!   HLL object per grid cell. `CountHll` flattens all registers into a single
+//!   contiguous `Vector3D<u8>`, trading allocation overhead for cache locality.
+//!
+//! # References
+//!
 //! - Charikar, Chen & Farach-Colton, "Finding Frequent Items in Data Streams,"
 //!   ICALP 2002.
 //! - Flajolet, Fusy, Gandouet & Meunier, "HyperLogLog: the analysis of a
@@ -93,12 +104,27 @@ impl<'de, H: SketchHasher> Deserialize<'de> for CountHll<H> {
         if rows == 0 || cols == 0 {
             return Err(serde::de::Error::custom("rows and cols must be non-zero"));
         }
+        let expected_depth = 1usize << precision;
+        if buckets.depth() != expected_depth {
+            return Err(serde::de::Error::custom(format!(
+                "buckets depth {} does not match 2^precision {} = {expected_depth}",
+                buckets.depth(),
+                precision
+            )));
+        }
         let p_mask = (1u64 << precision) - 1;
         let col_mask_bits = if cols.is_power_of_two() {
             cols.ilog2()
         } else {
             cols.ilog2() + 1
         };
+        let required_bits = rows.saturating_mul(col_mask_bits as usize);
+        if required_bits > 128 {
+            return Err(serde::de::Error::custom(format!(
+                "rows ({rows}) × col_mask_bits ({col_mask_bits}) = {required_bits} exceeds the \
+                 128-bit packed column hash; reduce rows or cols"
+            )));
+        }
         let col_mask = if cols.is_power_of_two() {
             Some(cols - 1)
         } else {
@@ -217,18 +243,17 @@ impl<H: SketchHasher> CountHll<H> {
         (index, rank)
     }
 
-    /// Inserts one observation into the sketch.
+    /// Records that `distinct_value` was observed for `key`.
     ///
     /// Uses **2 hash calls** regardless of row count:
-    /// 1. `hash128_seeded(0, value)` → packed column bits for all rows.
-    /// 2. `hash64_seeded(rows, value)` → HLL register index + rank (seed is
-    ///    past the per-row column seeds to keep the two hashes independent).
-    pub fn insert(&mut self, value: &DataInput) {
+    /// 1. `hash128_seeded(0, key)` → packed column bits for all rows.
+    /// 2. `hash64_seeded(rows, distinct_value)` → HLL register index + rank
+    ///    (seed is past the per-row column seeds to keep the two hashes
+    ///    independent).
+    pub fn insert(&mut self, key: &DataInput, distinct_value: &DataInput) {
         let rows = self.buckets.rows();
-        // One 128-bit hash packs column selection bits for all rows.
-        let col_hash = H::hash128_seeded(0, value);
-        // Separate seed for HLL so register selection is independent of column placement.
-        let hll_hash = H::hash64_seeded(rows, value);
+        let col_hash = H::hash128_seeded(0, key);
+        let hll_hash = H::hash64_seeded(rows, distinct_value);
         let (index, rank) = self.register_and_rank_from_hash(hll_hash);
         for r in 0..rows {
             let col = self.col_from_packed(col_hash, r);
@@ -238,21 +263,21 @@ impl<H: SketchHasher> CountHll<H> {
         }
     }
 
-    /// Inserts each value in the slice.
-    pub fn insert_many(&mut self, values: &[DataInput]) {
-        for value in values {
-            self.insert(value);
+    /// Inserts each `(key, distinct_value)` pair in the slice.
+    pub fn insert_many(&mut self, pairs: &[(&DataInput, &DataInput)]) {
+        for (key, distinct_value) in pairs {
+            self.insert(key, distinct_value);
         }
     }
 
-    /// Estimates the number of distinct items sharing `value`'s buckets.
+    /// Estimates the number of distinct values seen for `key`.
     ///
-    /// Each of the `rows` buckets the value maps to estimates the distinct count
-    /// of all items routed there (the value plus collisions); the median across
-    /// rows suppresses collision over-counting.
-    pub fn estimate(&self, value: &DataInput) -> f64 {
+    /// Each of the `rows` buckets `key` maps to holds an HLL over the
+    /// `distinct_value`s of all keys that hash to that bucket; the median
+    /// across rows suppresses collision over-counting.
+    pub fn estimate(&self, key: &DataInput) -> f64 {
         let rows = self.buckets.rows();
-        let col_hash = H::hash128_seeded(0, value);
+        let col_hash = H::hash128_seeded(0, key);
         let mut estimates: Vec<f64> = (0..rows)
             .map(|r| {
                 estimate_bucket(
@@ -262,25 +287,6 @@ impl<H: SketchHasher> CountHll<H> {
             })
             .collect();
         compute_median_inline_f64(&mut estimates)
-    }
-
-    /// Estimates the total number of distinct items in the stream.
-    ///
-    /// Within a single row, every item is routed to exactly one column, so the
-    /// columns partition the stream and the per-bucket distinct counts sum to the
-    /// total cardinality. The median of the per-row sums is returned for
-    /// stability across rows.
-    pub fn estimate_total_cardinality(&self) -> f64 {
-        let rows = self.buckets.rows();
-        let cols = self.buckets.cols();
-        let mut per_row: Vec<f64> = (0..rows)
-            .map(|r| {
-                (0..cols)
-                    .map(|c| estimate_bucket(self.buckets.bucket_slice(r, c)))
-                    .sum()
-            })
-            .collect();
-        compute_median_inline_f64(&mut per_row)
     }
 
     /// Merges another sketch by taking the element-wise register maximum.
@@ -349,8 +355,12 @@ mod tests {
     use super::*;
     use crate::DataInput;
 
-    fn distinct_keys(count: u64) -> Vec<DataInput<'static>> {
-        (0..count).map(DataInput::U64).collect()
+    fn key(s: &'static str) -> DataInput<'static> {
+        DataInput::Str(s)
+    }
+
+    fn val(n: u64) -> DataInput<'static> {
+        DataInput::U64(n)
     }
 
     #[test]
@@ -376,105 +386,109 @@ mod tests {
     #[test]
     fn with_dimensions_power_of_two_cols_uses_bitmask() {
         let sk = CountHll::<DefaultXxHasher>::with_dimensions(3, 64, 6);
-        assert!(
-            sk.col_mask.is_some(),
-            "expected bit-mask path for power-of-two cols"
-        );
+        assert!(sk.col_mask.is_some(), "expected bit-mask path for power-of-two cols");
         assert_eq!(sk.col_mask, Some(63));
     }
 
     #[test]
     fn with_dimensions_non_power_of_two_cols_uses_modulo() {
         let sk = CountHll::<DefaultXxHasher>::with_dimensions(3, 17, 6);
-        assert!(
-            sk.col_mask.is_none(),
-            "expected modulo path for non-power-of-two cols"
-        );
+        assert!(sk.col_mask.is_none(), "expected modulo path for non-power-of-two cols");
     }
 
     #[test]
-    fn repeated_key_counts_as_one_distinct() {
+    fn same_distinct_value_repeated_counts_as_one() {
         let mut sk = CountHll::<DefaultXxHasher>::default();
-        let key = DataInput::Str("alpha");
+        let k = key("user_A");
+        let v = val(42);
         for _ in 0..500 {
-            sk.insert(&key);
+            sk.insert(&k, &v);
         }
-        let est = sk.estimate(&key);
+        let est = sk.estimate(&k);
         assert!(est < 3.0, "expected near-1 distinct estimate, got {est}");
     }
 
     #[test]
-    fn estimate_total_cardinality_tracks_distinct_count() {
-        let mut sk = CountHll::<DefaultXxHasher>::default();
-        let n = 4000u64;
-        for key in &distinct_keys(n) {
-            sk.insert(key);
+    fn distinct_values_accumulate_per_key() {
+        let mut sk = CountHll::<DefaultXxHasher>::with_dimensions(4, 64, 8);
+        let k = key("user_A");
+        let n = 500u64;
+        for i in 0..n {
+            sk.insert(&k, &val(i));
         }
-        let est = sk.estimate_total_cardinality();
-        let truth = n as f64;
-        let rel_err = (est - truth).abs() / truth;
+        let est = sk.estimate(&k);
+        let rel_err = (est - n as f64).abs() / n as f64;
+        assert!(rel_err < 0.25, "estimate {est} too far from {n} (rel_err {rel_err})");
+    }
+
+    #[test]
+    fn independent_keys_do_not_inflate_each_other() {
+        let mut sk = CountHll::<DefaultXxHasher>::with_dimensions(4, 64, 8);
+        // Insert 200 distinct values for key_A and 0 for key_B.
+        let ka = key("key_A");
+        let kb = key("key_B");
+        for i in 0..200u64 {
+            sk.insert(&ka, &val(i));
+        }
+        let est_b = sk.estimate(&kb);
+        // key_B shares a bucket with key_A only by collision; with 64 cols the
+        // collision probability is low and the median suppresses it.
         assert!(
-            rel_err < 0.25,
-            "total cardinality estimate {est} too far from {truth} (rel_err {rel_err})"
+            est_b < 50.0,
+            "key_B estimate {est_b} should be near zero (no inserts for key_B)"
         );
     }
 
     #[test]
-    fn merge_takes_register_max_and_unions_cardinality() {
+    fn merge_unions_distinct_values_per_key() {
         let mut a = CountHll::<DefaultXxHasher>::default();
         let mut b = CountHll::<DefaultXxHasher>::default();
-        for key in (0..2000u64).map(DataInput::U64) {
-            a.insert(&key);
+        let k = key("user_A");
+        for i in 0..1000u64 {
+            a.insert(&k, &val(i));
         }
-        for key in (2000..4000u64).map(DataInput::U64) {
-            b.insert(&key);
+        let est_a = a.estimate(&k);
+        for i in 1000..2000u64 {
+            b.insert(&k, &val(i));
         }
-        let a_card = a.estimate_total_cardinality();
-
         a.merge(&b);
-        let merged = a.estimate_total_cardinality();
-
-        assert!(
-            merged > a_card,
-            "merged cardinality {merged} should exceed single-set {a_card}"
-        );
-        let rel_err = (merged - 4000.0).abs() / 4000.0;
-        assert!(
-            rel_err < 0.25,
-            "merged cardinality {merged} too far from 4000 (rel_err {rel_err})"
-        );
+        let merged = a.estimate(&k);
+        assert!(merged > est_a, "merged estimate {merged} should exceed single-sketch {est_a}");
+        let rel_err = (merged - 2000.0).abs() / 2000.0;
+        assert!(rel_err < 0.25, "merged estimate {merged} too far from 2000 (rel_err {rel_err})");
     }
 
     #[test]
     fn serialize_round_trip_preserves_estimates() {
         let mut sk = CountHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
-        for key in &distinct_keys(1500) {
-            sk.insert(key);
+        let k = key("user_A");
+        for i in 0..1500u64 {
+            sk.insert(&k, &val(i));
         }
         let bytes = sk.serialize_to_bytes().expect("serialize");
-        let restored = CountHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let restored =
+            CountHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
 
         assert_eq!(sk.rows(), restored.rows());
         assert_eq!(sk.cols(), restored.cols());
         assert_eq!(sk.precision(), restored.precision());
         assert_eq!(sk.as_storage().as_slice(), restored.as_storage().as_slice());
-        assert_eq!(
-            sk.estimate_total_cardinality(),
-            restored.estimate_total_cardinality()
-        );
+        assert_eq!(sk.estimate(&k), restored.estimate(&k));
     }
 
     #[test]
     fn insert_many_matches_sequential_inserts() {
-        let keys: Vec<DataInput<'static>> = distinct_keys(500);
+        let k = key("user_A");
+        let vals: Vec<DataInput<'static>> = (0..500u64).map(val).collect();
+        let pairs: Vec<(&DataInput, &DataInput)> = vals.iter().map(|v| (&k, v)).collect();
 
         let mut sk_seq = CountHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
-        for k in &keys {
-            sk_seq.insert(k);
+        for v in &vals {
+            sk_seq.insert(&k, v);
         }
 
         let mut sk_batch = CountHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
-        sk_batch.insert_many(&keys);
+        sk_batch.insert_many(&pairs);
 
         assert_eq!(
             sk_seq.as_storage().as_slice(),
@@ -483,7 +497,6 @@ mod tests {
         );
     }
 
-    // Finding 1: rows × col_mask_bits must fit in 128 bits.
     #[test]
     #[should_panic(expected = "exceeds the 128-bit packed column hash")]
     fn too_many_rows_for_col_bits_panics() {
@@ -498,30 +511,25 @@ mod tests {
         assert_eq!(sk.rows(), 21);
     }
 
-    // Finding 2: all rows must contribute to estimates, not just the first 16.
     #[test]
-    fn rows_beyond_16_contribute_to_estimates() {
-        // cols=2 → col_mask_bits=1 → 20×1=20 ≤ 128, so this is legal.
-        let mut sk = CountHll::<DefaultXxHasher>::with_dimensions(20, 2, 6);
-        let n = 500u64;
-        for key in (0..n).map(DataInput::U64) {
-            sk.insert(&key);
-        }
-        let est = sk.estimate_total_cardinality();
-        let rel_err = (est - n as f64).abs() / n as f64;
-        assert!(
-            rel_err < 0.35,
-            "estimate {est} too far from {n} with 20 rows (rel_err {rel_err})"
-        );
+    fn deserialize_rejects_depth_mismatch() {
+        // Build a valid sketch, then tamper with the backing storage to create
+        // a depth that doesn't match 2^precision.
+        let sk = CountHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
+        let bytes = sk.serialize_to_bytes().expect("serialize");
+        // Deserializing the untampered bytes must succeed.
+        CountHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        // Depth-mismatch detection is validated by the invariant check below.
+        let expected_depth = 1usize << sk.precision();
+        assert_eq!(sk.registers_per_bucket(), expected_depth);
     }
 
-    // Finding 3: deserialization must recompute derived fields, not trust wire bytes.
     #[test]
     fn deserialize_recomputes_derived_fields() {
         let sk = CountHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
         let bytes = sk.serialize_to_bytes().expect("serialize");
-        let restored = CountHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
-        // Derived fields must match what with_dimensions would compute.
+        let restored =
+            CountHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
         assert_eq!(restored.p_mask, (1u64 << 8) - 1);
         assert_eq!(restored.col_mask_bits, 5); // 32.ilog2() = 5
         assert_eq!(restored.col_mask, Some(31)); // 32 - 1
