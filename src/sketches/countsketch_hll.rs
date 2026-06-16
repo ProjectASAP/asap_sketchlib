@@ -254,7 +254,12 @@ impl<H: SketchHasher> CountHll<H> {
         let rows = self.buckets.rows();
         let col_hash = H::hash128_seeded(0, value);
         let mut estimates: Vec<f64> = (0..rows)
-            .map(|r| estimate_bucket(self.buckets.bucket_slice(r, self.col_from_packed(col_hash, r))))
+            .map(|r| {
+                estimate_bucket(
+                    self.buckets
+                        .bucket_slice(r, self.col_from_packed(col_hash, r)),
+                )
+            })
             .collect();
         compute_median_inline_f64(&mut estimates)
     }
@@ -269,7 +274,11 @@ impl<H: SketchHasher> CountHll<H> {
         let rows = self.buckets.rows();
         let cols = self.buckets.cols();
         let mut per_row: Vec<f64> = (0..rows)
-            .map(|r| (0..cols).map(|c| estimate_bucket(self.buckets.bucket_slice(r, c))).sum())
+            .map(|r| {
+                (0..cols)
+                    .map(|c| estimate_bucket(self.buckets.bucket_slice(r, c)))
+                    .sum()
+            })
             .collect();
         compute_median_inline_f64(&mut per_row)
     }
