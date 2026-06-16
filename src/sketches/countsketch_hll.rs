@@ -386,14 +386,20 @@ mod tests {
     #[test]
     fn with_dimensions_power_of_two_cols_uses_bitmask() {
         let sk = CountHll::<DefaultXxHasher>::with_dimensions(3, 64, 6);
-        assert!(sk.col_mask.is_some(), "expected bit-mask path for power-of-two cols");
+        assert!(
+            sk.col_mask.is_some(),
+            "expected bit-mask path for power-of-two cols"
+        );
         assert_eq!(sk.col_mask, Some(63));
     }
 
     #[test]
     fn with_dimensions_non_power_of_two_cols_uses_modulo() {
         let sk = CountHll::<DefaultXxHasher>::with_dimensions(3, 17, 6);
-        assert!(sk.col_mask.is_none(), "expected modulo path for non-power-of-two cols");
+        assert!(
+            sk.col_mask.is_none(),
+            "expected modulo path for non-power-of-two cols"
+        );
     }
 
     #[test]
@@ -418,7 +424,10 @@ mod tests {
         }
         let est = sk.estimate(&k);
         let rel_err = (est - n as f64).abs() / n as f64;
-        assert!(rel_err < 0.25, "estimate {est} too far from {n} (rel_err {rel_err})");
+        assert!(
+            rel_err < 0.25,
+            "estimate {est} too far from {n} (rel_err {rel_err})"
+        );
     }
 
     #[test]
@@ -453,9 +462,15 @@ mod tests {
         }
         a.merge(&b);
         let merged = a.estimate(&k);
-        assert!(merged > est_a, "merged estimate {merged} should exceed single-sketch {est_a}");
+        assert!(
+            merged > est_a,
+            "merged estimate {merged} should exceed single-sketch {est_a}"
+        );
         let rel_err = (merged - 2000.0).abs() / 2000.0;
-        assert!(rel_err < 0.25, "merged estimate {merged} too far from 2000 (rel_err {rel_err})");
+        assert!(
+            rel_err < 0.25,
+            "merged estimate {merged} too far from 2000 (rel_err {rel_err})"
+        );
     }
 
     #[test]
@@ -466,8 +481,7 @@ mod tests {
             sk.insert(&k, &val(i));
         }
         let bytes = sk.serialize_to_bytes().expect("serialize");
-        let restored =
-            CountHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let restored = CountHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
 
         assert_eq!(sk.rows(), restored.rows());
         assert_eq!(sk.cols(), restored.cols());
@@ -528,8 +542,7 @@ mod tests {
     fn deserialize_recomputes_derived_fields() {
         let sk = CountHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
         let bytes = sk.serialize_to_bytes().expect("serialize");
-        let restored =
-            CountHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let restored = CountHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
         assert_eq!(restored.p_mask, (1u64 << 8) - 1);
         assert_eq!(restored.col_mask_bits, 5); // 32.ilog2() = 5
         assert_eq!(restored.col_mask, Some(31)); // 32 - 1
