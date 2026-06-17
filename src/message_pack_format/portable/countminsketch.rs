@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec, magic_ids};
 use crate::sketches::countminsketch::CountMin;
 use crate::{DataInput, FastPath, Vector2D};
 
@@ -442,17 +442,27 @@ impl MessagePackCodec for CountMinSketch {
             rows: self.rows,
             cols: self.cols,
         };
-        Ok(rmp_serde::to_vec(&wire)?)
+        let mut out = vec![magic_ids::COUNT_MIN_SKETCH];
+        out.extend(rmp_serde::to_vec(&wire)?);
+        Ok(out)
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let wire: CountMinSketchWire = rmp_serde::from_slice(bytes)?;
-        let backend = sketchlib_cms_from_matrix(wire.rows, wire.cols, &wire.sketch);
-        Ok(Self {
-            rows: wire.rows,
-            cols: wire.cols,
-            backend,
-        })
+        match bytes.first() {
+            Some(&magic_ids::COUNT_MIN_SKETCH) => {
+                let wire: CountMinSketchWire = rmp_serde::from_slice(&bytes[1..])?;
+                let backend = sketchlib_cms_from_matrix(wire.rows, wire.cols, &wire.sketch);
+                Ok(Self {
+                    rows: wire.rows,
+                    cols: wire.cols,
+                    backend,
+                })
+            }
+            other => Err(MsgPackError::BadMagicId {
+                expected: magic_ids::COUNT_MIN_SKETCH,
+                got: other.copied(),
+            }),
+        }
     }
 }
 

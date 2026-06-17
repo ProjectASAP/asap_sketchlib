@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec, magic_ids};
 
 /// Bucket-store growth chunk for the wire-format-aligned [`DdSketch`]
 /// variant. Matches the Go reference implementation's `DDSketch.GrowChunk`
@@ -403,11 +403,19 @@ impl DdSketch {
 
 impl MessagePackCodec for DdSketch {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        Ok(rmp_serde::to_vec(self)?)
+        let mut out = vec![magic_ids::DD_SKETCH];
+        out.extend(rmp_serde::to_vec(self)?);
+        Ok(out)
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        Ok(rmp_serde::from_slice(bytes)?)
+        match bytes.first() {
+            Some(&magic_ids::DD_SKETCH) => Ok(rmp_serde::from_slice(&bytes[1..])?),
+            other => Err(MsgPackError::BadMagicId {
+                expected: magic_ids::DD_SKETCH,
+                got: other.copied(),
+            }),
+        }
     }
 }
 
@@ -539,16 +547,21 @@ mod tests {
     /// DataPoint-level METRIC scalars (count/sum/min/max). This pins the
     /// element count so the bytes stay parity-aligned with the Go
     /// reference implementation.
+    ///
+    /// bytes[0] is now the magic-ID prefix (0x05 = DD_SKETCH); the msgpack
+    /// payload starts at bytes[1].
     #[test]
     fn test_msgpack_is_three_element_array() {
+        use crate::message_pack_format::magic_ids;
         let sk = DdSketch::from_raw(0.01, vec![1, 2, 3], -2);
         let bytes = sk.to_msgpack().unwrap();
-        // rmp compact encoding leads with an array marker. A fixarray of
-        // length 3 is the single byte 0x93 (0b1001_0011).
+        assert_eq!(bytes[0], magic_ids::DD_SKETCH, "expected magic-ID byte");
+        // rmp compact encoding of the payload leads with an array marker.
+        // A fixarray of length 3 is the single byte 0x93 (0b1001_0011).
         assert_eq!(
-            bytes[0], 0x93,
-            "expected a 3-element msgpack fixarray (0x93), got {:#04x}",
-            bytes[0]
+            bytes[1], 0x93,
+            "expected a 3-element msgpack fixarray (0x93) at bytes[1], got {:#04x}",
+            bytes[1]
         );
     }
 

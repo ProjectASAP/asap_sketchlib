@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec, magic_ids};
 
 // =====================================================================
 // ASAP runtime wire-format-aligned variant .
@@ -434,11 +434,19 @@ impl CountSketch {
 
 impl MessagePackCodec for CountSketch {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        Ok(rmp_serde::to_vec(self)?)
+        let mut out = vec![magic_ids::COUNT_SKETCH];
+        out.extend(rmp_serde::to_vec(self)?);
+        Ok(out)
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        Ok(rmp_serde::from_slice(bytes)?)
+        match bytes.first() {
+            Some(&magic_ids::COUNT_SKETCH) => Ok(rmp_serde::from_slice(&bytes[1..])?),
+            other => Err(MsgPackError::BadMagicId {
+                expected: magic_ids::COUNT_SKETCH,
+                got: other.copied(),
+            }),
+        }
     }
 }
 

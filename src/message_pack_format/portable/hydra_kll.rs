@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh32::xxh32;
 
 use crate::message_pack_format::portable::kll::{KllSketch, KllSketchData};
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec, magic_ids};
 
 #[derive(Debug, Clone)]
 pub struct HydraKllSketch {
@@ -157,14 +157,25 @@ impl MessagePackCodec for HydraKllSketch {
             cols: self.cols,
             sketches,
         };
-        Ok(rmp_serde::to_vec(&wire)?)
+        let mut out = vec![magic_ids::HYDRA_KLL_SKETCH];
+        out.extend(rmp_serde::to_vec(&wire)?);
+        Ok(out)
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
         use crate::sketches::kll::KLL;
         use rmp_serde::decode::Error as RmpDecodeError;
 
-        let wire: HydraKllSketchWire = rmp_serde::from_slice(bytes)?;
+        let payload = match bytes.first() {
+            Some(&magic_ids::HYDRA_KLL_SKETCH) => &bytes[1..],
+            other => {
+                return Err(MsgPackError::BadMagicId {
+                    expected: magic_ids::HYDRA_KLL_SKETCH,
+                    got: other.copied(),
+                })
+            }
+        };
+        let wire: HydraKllSketchWire = rmp_serde::from_slice(payload)?;
 
         if wire.sketches.len() != wire.rows {
             return Err(MsgPackError::Decode(RmpDecodeError::Uncategorized(

@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec, magic_ids};
 use crate::sketches::kll::KLL;
 
 /// Concrete KLL type backing the wire-format `KllSketch`.
@@ -347,11 +347,22 @@ impl MessagePackCodec for KllSketch {
             k: self.k,
             sketch_bytes: self.sketch_bytes(),
         };
-        Ok(rmp_serde::to_vec(&wire)?)
+        let mut out = vec![magic_ids::KLL_SKETCH];
+        out.extend(rmp_serde::to_vec(&wire)?);
+        Ok(out)
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let wire: KllSketchData = rmp_serde::from_slice(bytes)?;
+        let payload = match bytes.first() {
+            Some(&magic_ids::KLL_SKETCH) => &bytes[1..],
+            other => {
+                return Err(MsgPackError::BadMagicId {
+                    expected: magic_ids::KLL_SKETCH,
+                    got: other.copied(),
+                })
+            }
+        };
+        let wire: KllSketchData = rmp_serde::from_slice(payload)?;
         let backend = KLL::deserialize_from_bytes(&wire.sketch_bytes)?;
         Ok(Self { k: wire.k, backend })
     }

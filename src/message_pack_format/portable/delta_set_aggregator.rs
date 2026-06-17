@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec, magic_ids};
 
 /// Wire DTO for the delta set aggregator: a snapshot of added/removed
 /// string keys between two consecutive observations.
@@ -20,11 +20,19 @@ pub struct DeltaResult {
 
 impl MessagePackCodec for DeltaResult {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        Ok(rmp_serde::to_vec(self)?)
+        let mut out = vec![magic_ids::DELTA_RESULT];
+        out.extend(rmp_serde::to_vec(self)?);
+        Ok(out)
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        Ok(rmp_serde::from_slice(bytes)?)
+        match bytes.first() {
+            Some(&magic_ids::DELTA_RESULT) => Ok(rmp_serde::from_slice(&bytes[1..])?),
+            other => Err(MsgPackError::BadMagicId {
+                expected: magic_ids::DELTA_RESULT,
+                got: other.copied(),
+            }),
+        }
     }
 }
 

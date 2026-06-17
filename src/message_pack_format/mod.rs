@@ -20,6 +20,7 @@
 
 pub mod codec;
 pub mod error;
+pub mod magic_ids;
 pub mod native;
 pub mod portable;
 
