@@ -359,7 +359,7 @@ impl MessagePackCodec for KllSketch {
                 return Err(MsgPackError::BadMagicId {
                     expected: magic_ids::KLL_SKETCH,
                     got: other.copied(),
-                })
+                });
             }
         };
         let wire: KllSketchData = rmp_serde::from_slice(payload)?;

@@ -131,7 +131,8 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
             other => Err(RmpDecodeError::Uncategorized(format!(
                 "HyperLogLogImpl magic-ID mismatch: expected 0x{:02x}, got {:?}",
                 crate::message_pack_format::magic_ids::NATIVE_HLL,
-                other.map(|b| format!("0x{b:02x}"))
+                other
+                    .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),
         }
@@ -391,13 +392,12 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
     /// Deserializes a sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         match bytes.first() {
-            Some(&crate::message_pack_format::magic_ids::NATIVE_HLL_HIP) => {
-                from_slice(&bytes[1..])
-            }
+            Some(&crate::message_pack_format::magic_ids::NATIVE_HLL_HIP) => from_slice(&bytes[1..]),
             other => Err(RmpDecodeError::Uncategorized(format!(
                 "HyperLogLogHIPImpl magic-ID mismatch: expected 0x{:02x}, got {:?}",
                 crate::message_pack_format::magic_ids::NATIVE_HLL_HIP,
-                other.map(|b| format!("0x{b:02x}"))
+                other
+                    .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),
         }

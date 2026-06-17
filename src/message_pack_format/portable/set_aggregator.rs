@@ -93,7 +93,7 @@ impl MessagePackCodec for SetAggregator {
                 return Err(MsgPackError::BadMagicId {
                     expected: magic_ids::SET_AGGREGATOR,
                     got: other.copied(),
-                })
+                });
             }
         };
         let wrapper: StringSetOwned = rmp_serde::from_slice(payload)?;

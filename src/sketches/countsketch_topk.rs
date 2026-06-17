@@ -1123,7 +1123,8 @@ impl<H: SketchHasher> CountL2HH<H> {
             other => Err(RmpDecodeError::Uncategorized(format!(
                 "CountL2HH magic-ID mismatch: expected 0x{:02x}, got {:?}",
                 crate::message_pack_format::magic_ids::NATIVE_CMS_HEAP,
-                other.map(|b| format!("0x{b:02x}"))
+                other
+                    .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),
         }

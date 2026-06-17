@@ -192,7 +192,8 @@ impl DDSketch {
             other => Err(RmpDecodeError::Uncategorized(format!(
                 "DDSketch magic-ID mismatch: expected 0x{:02x}, got {:?}",
                 crate::message_pack_format::magic_ids::NATIVE_DD_SKETCH,
-                other.map(|b| format!("0x{b:02x}"))
+                other
+                    .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),
         }

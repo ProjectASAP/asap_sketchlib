@@ -686,7 +686,8 @@ impl<T: NumericalValue> KLL<T> {
             other => Err(rmp_serde::decode::Error::Uncategorized(format!(
                 "KLL magic-ID mismatch: expected 0x{:02x}, got {:?}",
                 crate::message_pack_format::magic_ids::NATIVE_KLL,
-                other.map(|b| format!("0x{b:02x}"))
+                other
+                    .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),
         }

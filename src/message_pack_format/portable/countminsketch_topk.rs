@@ -309,7 +309,7 @@ impl MessagePackCodec for CountMinSketchWithHeap {
                 return Err(MsgPackError::BadMagicId {
                     expected: magic_ids::COUNT_MIN_SKETCH_WITH_HEAP,
                     got: other.copied(),
-                })
+                });
             }
         };
         let wire: CountMinSketchWithHeapWire = rmp_serde::from_slice(payload)?;

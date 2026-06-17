@@ -379,7 +379,8 @@ impl<T: NumericalValue> KLLDynamic<T> {
             other => Err(rmp_serde::decode::Error::Uncategorized(format!(
                 "KLLDynamic magic-ID mismatch: expected 0x{:02x}, got {:?}",
                 crate::message_pack_format::magic_ids::NATIVE_KLL_DYNAMIC,
-                other.map(|b| format!("0x{b:02x}"))
+                other
+                    .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),
         }

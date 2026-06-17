@@ -172,7 +172,7 @@ impl MessagePackCodec for HydraKllSketch {
                 return Err(MsgPackError::BadMagicId {
                     expected: magic_ids::HYDRA_KLL_SKETCH,
                     got: other.copied(),
-                })
+                });
             }
         };
         let wire: HydraKllSketchWire = rmp_serde::from_slice(payload)?;
