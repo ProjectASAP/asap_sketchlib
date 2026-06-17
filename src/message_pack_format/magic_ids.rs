@@ -42,44 +42,88 @@ pub const SET_AGGREGATOR: u8 = 0x08;
 /// Delta-set aggregator result (added / removed string sets).
 pub const DELTA_RESULT: u8 = 0x09;
 
+// ── Hasher discriminants ─────────────────────────────────────────────────────
+//
+// Embedded as the second header byte in every native sketch binary so the
+// reader can verify that it uses the same hash function as the writer.
+// Custom hashers that do not register an ID are stored as HASHER_UNKNOWN,
+// which suppresses the mismatch check on both sides.
+
+/// Default XxHash3-64 hasher (`DefaultXxHasher`).
+pub const HASHER_DEFAULT_XX: u8 = 0x01;
+
+/// Sentinel for custom hashers with no registered ID — mismatch check is
+/// skipped when either the stored value or the expected value is this byte.
+pub const HASHER_UNKNOWN: u8 = 0xff;
+
+/// Validates the stored hasher byte against the expected hasher `H`.
+///
+/// The check is skipped (returns `Ok`) when either side is `HASHER_UNKNOWN`,
+/// allowing custom hashers to interoperate without requiring a registered ID.
+pub(crate) fn check_hasher_id<H: crate::SketchHasher>(
+    stored: u8,
+) -> Result<(), rmp_serde::decode::Error> {
+    let expected = H::hasher_magic_id();
+    if stored == HASHER_UNKNOWN || expected == HASHER_UNKNOWN || stored == expected {
+        return Ok(());
+    }
+    Err(rmp_serde::decode::Error::Uncategorized(format!(
+        "hasher mismatch: stored 0x{stored:02x}, expected 0x{expected:02x}"
+    )))
+}
+
 // ── Native (Rust-internal) sketch types ─────────────────────────────────────
 //
 // These are the generic sketch types in `crate::sketches`. Their wire format
 // is produced by `serialize_to_bytes` / `deserialize_from_bytes` and is
 // internal to Rust — Go (`sketchlib-go`) never reads these bytes directly.
 //
-// They use a separate range (0x81+) to make it visually clear that the byte
-// refers to an internal format distinct from the portable cross-language ones.
+// The first header byte encodes both the sketch family AND the phantom-type
+// parameters (Mode, Variant) that are invisible in the msgpack payload.
+// The second header byte encodes the hasher (see HASHER_* above).
+//
+// Layout: [ family+mode byte | hasher byte | <rmp_serde named payload> ]
+//
+// ID range 0x81–0x8f is reserved for native types.
 
-/// Generic Count-Min sketch (`sketches::CountMin<_, _>`).
-pub const NATIVE_COUNT_MIN: u8 = 0x81;
+/// Count-Min sketch with `RegularPath` hashing mode.
+pub const NATIVE_COUNT_MIN_REGULAR: u8 = 0x81;
 
-/// Generic Count Sketch (`sketches::Count<_, _, _>`).
-pub const NATIVE_COUNT_SKETCH: u8 = 0x82;
+/// Count-Min sketch with `FastPath` hashing mode.
+pub const NATIVE_COUNT_MIN_FAST: u8 = 0x82;
 
-/// Count-Min + heavy-hitter heap (`sketches::CMSHeap` / `CountL2HH`).
-pub const NATIVE_CMS_HEAP: u8 = 0x83;
+/// Count Sketch with `RegularPath` hashing mode.
+pub const NATIVE_COUNT_SKETCH_REGULAR: u8 = 0x83;
 
-/// Generic HyperLogLog (`sketches::HyperLogLogImpl<_, _, _>` — Classic and ErtlMLE variants).
-pub const NATIVE_HLL: u8 = 0x84;
+/// Count Sketch with `FastPath` hashing mode.
+pub const NATIVE_COUNT_SKETCH_FAST: u8 = 0x84;
 
-/// HyperLogLog HIP variant (`sketches::HyperLogLogHIPImpl<_>`).
-pub const NATIVE_HLL_HIP: u8 = 0x85;
+/// Count-Min + heavy-hitter heap (`CountL2HH`).
+pub const NATIVE_CMS_HEAP: u8 = 0x85;
+
+/// HyperLogLog Classic (HLL++) estimator (`HyperLogLogImpl<Classic, _, _>`).
+pub const NATIVE_HLL_CLASSIC: u8 = 0x86;
+
+/// HyperLogLog ErtlMLE estimator (`HyperLogLogImpl<ErtlMLE, _, _>`).
+pub const NATIVE_HLL_ERTL_MLE: u8 = 0x87;
+
+/// HyperLogLog HIP variant (`HyperLogLogHIPImpl<_>`).
+pub const NATIVE_HLL_HIP: u8 = 0x88;
 
 /// DDSketch (`sketches::DDSketch`).
-pub const NATIVE_DD_SKETCH: u8 = 0x86;
+pub const NATIVE_DD_SKETCH: u8 = 0x89;
 
 /// KLL quantile sketch (`sketches::kll::KLL<T>`).
-pub const NATIVE_KLL: u8 = 0x87;
+pub const NATIVE_KLL: u8 = 0x8a;
 
 /// Dynamic KLL quantile sketch (`sketches::kll_dynamic::KLLDynamic<T>`).
-pub const NATIVE_KLL_DYNAMIC: u8 = 0x88;
+pub const NATIVE_KLL_DYNAMIC: u8 = 0x8b;
 
 /// KMV (K-Minimum Values) sketch (`sketches::KMV`).
-pub const NATIVE_KMV: u8 = 0x89;
+pub const NATIVE_KMV: u8 = 0x8c;
 
 /// Hydra composite sketch (`sketch_framework::hydra`).
-pub const NATIVE_HYDRA: u8 = 0x8a;
+pub const NATIVE_HYDRA: u8 = 0x8d;
 
 /// UnivMon sketch (`sketch_framework::univmon`).
-pub const NATIVE_UNIVMON: u8 = 0x8b;
+pub const NATIVE_UNIVMON: u8 = 0x8e;

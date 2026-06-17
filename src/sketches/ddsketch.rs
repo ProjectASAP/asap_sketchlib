@@ -168,7 +168,8 @@ impl DDSketch {
     /// Serializes the sketch to a MessagePack byte vector, prefixed with the
     /// [`crate::message_pack_format::magic_ids::NATIVE_DD_SKETCH`] magic byte.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_DD_SKETCH];
+        use crate::message_pack_format::magic_ids;
+        let mut out = vec![magic_ids::NATIVE_DD_SKETCH, magic_ids::HASHER_UNKNOWN];
         out.extend(to_vec_named(self)?);
         Ok(out)
     }
@@ -183,16 +184,18 @@ impl DDSketch {
     /// reconstructed from the per-bucket representative values, accurate
     /// to within the sketch's α relative-accuracy bound.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        match bytes.first() {
-            Some(&crate::message_pack_format::magic_ids::NATIVE_DD_SKETCH) => {
-                let mut sk: Self = from_slice(&bytes[1..])?;
+        use crate::message_pack_format::magic_ids;
+        match bytes {
+            [id, _hasher, rest @ ..] if *id == magic_ids::NATIVE_DD_SKETCH => {
+                let mut sk: Self = from_slice(rest)?;
                 sk.recompute_scalars_from_store();
                 Ok(sk)
             }
-            other => Err(RmpDecodeError::Uncategorized(format!(
+            _ => Err(RmpDecodeError::Uncategorized(format!(
                 "DDSketch magic-ID mismatch: expected 0x{:02x}, got {:?}",
-                crate::message_pack_format::magic_ids::NATIVE_DD_SKETCH,
-                other
+                magic_ids::NATIVE_DD_SKETCH,
+                bytes
+                    .first()
                     .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),

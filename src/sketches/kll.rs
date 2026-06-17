@@ -668,7 +668,8 @@ impl<T: NumericalValue> KLL<T> {
     where
         T: Serialize,
     {
-        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_KLL];
+        use crate::message_pack_format::magic_ids;
+        let mut out = vec![magic_ids::NATIVE_KLL, magic_ids::HASHER_UNKNOWN];
         out.extend(rmp_serde::to_vec(self)?);
         Ok(out)
     }
@@ -679,14 +680,14 @@ impl<T: NumericalValue> KLL<T> {
     where
         T: for<'de> Deserialize<'de>,
     {
-        match bytes.first() {
-            Some(&crate::message_pack_format::magic_ids::NATIVE_KLL) => {
-                rmp_serde::from_slice(&bytes[1..])
-            }
-            other => Err(rmp_serde::decode::Error::Uncategorized(format!(
+        use crate::message_pack_format::magic_ids;
+        match bytes {
+            [id, _hasher, rest @ ..] if *id == magic_ids::NATIVE_KLL => rmp_serde::from_slice(rest),
+            _ => Err(rmp_serde::decode::Error::Uncategorized(format!(
                 "KLL magic-ID mismatch: expected 0x{:02x}, got {:?}",
-                crate::message_pack_format::magic_ids::NATIVE_KLL,
-                other
+                magic_ids::NATIVE_KLL,
+                bytes
+                    .first()
                     .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),

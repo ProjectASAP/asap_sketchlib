@@ -5,11 +5,23 @@ type-discriminant byte called the **magic ID**. Reading the first byte of any
 blob is enough to identify what sketch type it contains — no full decode
 required.
 
+**Portable** (cross-language):
 ```
 ┌─────────────┬───────────────────────────────────────┐
 │ magic_id: u8 │  rmp_serde / msgpack payload …        │
 └─────────────┴───────────────────────────────────────┘
 ```
+
+**Native** (Rust-internal):
+```
+┌─────────────┬──────────────┬───────────────────────────────────┐
+│ magic_id: u8 │ hasher_id: u8 │  rmp_serde / msgpack payload …   │
+└─────────────┴──────────────┴───────────────────────────────────┘
+```
+
+The `hasher_id` byte is `0xFF` (`HASHER_UNKNOWN`) for types without an `H` parameter.
+Custom hashers that do not register an ID also store `0xFF` — the mismatch check
+is skipped on both sides when either value is `0xFF`.
 
 Magic IDs are **stable** — once assigned, a value is never reused or
 reassigned. Adding a new sketch type requires a new constant; removing or
@@ -60,17 +72,20 @@ encoding. The two are not interchangeable even for logically equivalent types
 
 | ID     | Rust type / method                              | Notes |
 |--------|--------------------------------------------------|-------|
-| `0x81` | `sketches::CountMin::serialize_to_bytes`         | Named map format; all `Mode` and `H` variants |
-| `0x82` | `sketches::Count::serialize_to_bytes`            | Named map format; all `Mode` and `H` variants |
-| `0x83` | `sketches::CountL2HH::serialize_to_bytes`        | Named map format (CMSHeap / heavy-hitter) |
-| `0x84` | `sketches::HyperLogLogImpl::serialize_to_bytes`  | Named map; Classic and ErtlMLE variants share one ID |
-| `0x85` | `sketches::HyperLogLogHIPImpl::serialize_to_bytes` | Named map; HIP-specific accumulators |
-| `0x86` | `sketches::DDSketch::serialize_to_bytes`         | Named map; distinct from portable `0x05` |
-| `0x87` | `sketches::KLL::serialize_to_bytes`              | Compact array format (not named) |
-| `0x88` | `sketches::KLLDynamic::serialize_to_bytes`       | Compact array format (not named) |
-| `0x89` | `sketches::KMV::serialize_to_bytes`              | Named map format (experimental feature) |
-| `0x8a` | `sketch_framework::hydra::Hydra::serialize_to_bytes`    | Named map format |
-| `0x8b` | `sketch_framework::univmon::UnivMon::serialize_to_bytes` | Named map format |
+| `0x81` | `CountMin<_, RegularPath, _>::serialize_to_bytes` | Named map format |
+| `0x82` | `CountMin<_, FastPath, _>::serialize_to_bytes`   | Named map format |
+| `0x83` | `Count<_, RegularPath, _>::serialize_to_bytes`   | Named map format |
+| `0x84` | `Count<_, FastPath, _>::serialize_to_bytes`      | Named map format |
+| `0x85` | `CountL2HH::serialize_to_bytes`                  | Named map format (CMSHeap / heavy-hitter) |
+| `0x86` | `HyperLogLogImpl<Classic, _, _>::serialize_to_bytes`   | Named map format |
+| `0x87` | `HyperLogLogImpl<ErtlMLE, _, _>::serialize_to_bytes`   | Named map format |
+| `0x88` | `HyperLogLogHIPImpl<_>::serialize_to_bytes`      | Named map; always `HASHER_DEFAULT_XX` as second byte |
+| `0x89` | `sketches::DDSketch::serialize_to_bytes`         | Named map; distinct from portable `0x05` |
+| `0x8a` | `sketches::KLL::serialize_to_bytes`              | Compact array format |
+| `0x8b` | `sketches::KLLDynamic::serialize_to_bytes`       | Compact array format |
+| `0x8c` | `sketches::KMV::serialize_to_bytes`              | Named map format (experimental feature) |
+| `0x8d` | `sketch_framework::Hydra::serialize_to_bytes`    | Named map format |
+| `0x8e` | `sketch_framework::UnivMon::serialize_to_bytes`  | Named map format |
 
 ### Relationship between native and portable KLL
 

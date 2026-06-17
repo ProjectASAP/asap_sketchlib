@@ -274,37 +274,84 @@ where
     }
 }
 
-// Serialization helpers for Count.
-impl<S, C, Mode, H: SketchHasher> Count<S, Mode, H>
+// Serialization helpers for Count — one impl per Mode so the magic byte
+// encodes both the sketch family and the hashing strategy.
+//
+// Wire layout: [ mode_id: u8 | hasher_id: u8 | <rmp_serde named payload> ]
+
+impl<S, C, H: SketchHasher> Count<S, RegularPath, H>
 where
     S: MatrixStorage<Counter = C> + Serialize,
     C: CountSketchCounter,
 {
-    /// Serializes the sketch into MessagePack bytes, prefixed with the
-    /// [`crate::message_pack_format::magic_ids::NATIVE_COUNT_SKETCH`] magic byte.
+    /// Serializes the sketch into MessagePack bytes.
+    /// Header: `[NATIVE_COUNT_SKETCH_REGULAR, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_COUNT_SKETCH];
+        use crate::message_pack_format::magic_ids;
+        let mut out = vec![magic_ids::NATIVE_COUNT_SKETCH_REGULAR, H::hasher_magic_id()];
         out.extend(to_vec_named(self)?);
         Ok(out)
     }
 }
 
-// Deserialization helpers for Count.
-impl<S, C, Mode, H: SketchHasher> Count<S, Mode, H>
+impl<S, C, H: SketchHasher> Count<S, RegularPath, H>
 where
     S: MatrixStorage<Counter = C> + for<'de> Deserialize<'de>,
     C: CountSketchCounter,
 {
-    /// Deserializes a sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
+    /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        match bytes.first() {
-            Some(&crate::message_pack_format::magic_ids::NATIVE_COUNT_SKETCH) => {
-                from_slice(&bytes[1..])
+        use crate::message_pack_format::magic_ids;
+        match bytes {
+            [id, hasher, rest @ ..] if *id == magic_ids::NATIVE_COUNT_SKETCH_REGULAR => {
+                magic_ids::check_hasher_id::<H>(*hasher)?;
+                from_slice(rest)
             }
-            other => Err(RmpDecodeError::Uncategorized(format!(
-                "Count magic-ID mismatch: expected 0x{:02x}, got {:?}",
-                crate::message_pack_format::magic_ids::NATIVE_COUNT_SKETCH,
-                other
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "Count<RegularPath> magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                magic_ids::NATIVE_COUNT_SKETCH_REGULAR,
+                bytes
+                    .first()
+                    .map(|b| format!("0x{b:02x}"))
+                    .unwrap_or_else(|| "empty buffer".to_string())
+            ))),
+        }
+    }
+}
+
+impl<S, C, H: SketchHasher> Count<S, FastPath, H>
+where
+    S: MatrixStorage<Counter = C> + Serialize,
+    C: CountSketchCounter,
+{
+    /// Serializes the sketch into MessagePack bytes.
+    /// Header: `[NATIVE_COUNT_SKETCH_FAST, hasher_id]`.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        use crate::message_pack_format::magic_ids;
+        let mut out = vec![magic_ids::NATIVE_COUNT_SKETCH_FAST, H::hasher_magic_id()];
+        out.extend(to_vec_named(self)?);
+        Ok(out)
+    }
+}
+
+impl<S, C, H: SketchHasher> Count<S, FastPath, H>
+where
+    S: MatrixStorage<Counter = C> + for<'de> Deserialize<'de>,
+    C: CountSketchCounter,
+{
+    /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        use crate::message_pack_format::magic_ids;
+        match bytes {
+            [id, hasher, rest @ ..] if *id == magic_ids::NATIVE_COUNT_SKETCH_FAST => {
+                magic_ids::check_hasher_id::<H>(*hasher)?;
+                from_slice(rest)
+            }
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "Count<FastPath> magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                magic_ids::NATIVE_COUNT_SKETCH_FAST,
+                bytes
+                    .first()
                     .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),

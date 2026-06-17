@@ -260,28 +260,68 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
     }
 }
 
-// Serialization helpers for CountMin.
-impl<S: MatrixStorage + Serialize, Mode, H: SketchHasher> CountMin<S, Mode, H> {
-    /// Serializes the sketch into MessagePack bytes, prefixed with the
-    /// [`crate::message_pack_format::magic_ids::NATIVE_COUNT_MIN`] magic byte.
+// Serialization helpers for CountMin — one impl per Mode so the magic byte
+// encodes both the sketch family and the hashing strategy.
+//
+// Wire layout: [ mode_id: u8 | hasher_id: u8 | <rmp_serde named payload> ]
+
+impl<S: MatrixStorage + Serialize, H: SketchHasher> CountMin<S, RegularPath, H> {
+    /// Serializes the sketch into MessagePack bytes.
+    /// Header: `[NATIVE_COUNT_MIN_REGULAR, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_COUNT_MIN];
+        use crate::message_pack_format::magic_ids;
+        let mut out = vec![magic_ids::NATIVE_COUNT_MIN_REGULAR, H::hasher_magic_id()];
         out.extend(to_vec_named(self)?);
         Ok(out)
     }
 }
 
-impl<S: MatrixStorage + for<'de> Deserialize<'de>, Mode, H: SketchHasher> CountMin<S, Mode, H> {
-    /// Deserializes a sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
+impl<S: MatrixStorage + for<'de> Deserialize<'de>, H: SketchHasher> CountMin<S, RegularPath, H> {
+    /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        match bytes.first() {
-            Some(&crate::message_pack_format::magic_ids::NATIVE_COUNT_MIN) => {
-                from_slice(&bytes[1..])
+        use crate::message_pack_format::magic_ids;
+        match bytes {
+            [id, hasher, rest @ ..] if *id == magic_ids::NATIVE_COUNT_MIN_REGULAR => {
+                magic_ids::check_hasher_id::<H>(*hasher)?;
+                from_slice(rest)
             }
-            other => Err(RmpDecodeError::Uncategorized(format!(
-                "CountMin magic-ID mismatch: expected 0x{:02x}, got {:?}",
-                crate::message_pack_format::magic_ids::NATIVE_COUNT_MIN,
-                other
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "CountMin<RegularPath> magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                magic_ids::NATIVE_COUNT_MIN_REGULAR,
+                bytes
+                    .first()
+                    .map(|b| format!("0x{b:02x}"))
+                    .unwrap_or_else(|| "empty buffer".to_string())
+            ))),
+        }
+    }
+}
+
+impl<S: MatrixStorage + Serialize, H: SketchHasher> CountMin<S, FastPath, H> {
+    /// Serializes the sketch into MessagePack bytes.
+    /// Header: `[NATIVE_COUNT_MIN_FAST, hasher_id]`.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        use crate::message_pack_format::magic_ids;
+        let mut out = vec![magic_ids::NATIVE_COUNT_MIN_FAST, H::hasher_magic_id()];
+        out.extend(to_vec_named(self)?);
+        Ok(out)
+    }
+}
+
+impl<S: MatrixStorage + for<'de> Deserialize<'de>, H: SketchHasher> CountMin<S, FastPath, H> {
+    /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        use crate::message_pack_format::magic_ids;
+        match bytes {
+            [id, hasher, rest @ ..] if *id == magic_ids::NATIVE_COUNT_MIN_FAST => {
+                magic_ids::check_hasher_id::<H>(*hasher)?;
+                from_slice(rest)
+            }
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "CountMin<FastPath> magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                magic_ids::NATIVE_COUNT_MIN_FAST,
+                bytes
+                    .first()
                     .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),

@@ -163,19 +163,22 @@ impl Hydra {
     /// Serializes the Hydra sketch (including all counters) into MessagePack bytes,
     /// prefixed with the [`crate::message_pack_format::magic_ids::NATIVE_HYDRA`] magic byte.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_HYDRA];
+        use crate::message_pack_format::magic_ids;
+        let mut out = vec![magic_ids::NATIVE_HYDRA, magic_ids::HASHER_UNKNOWN];
         out.extend(to_vec_named(self)?);
         Ok(out)
     }
 
     /// Deserializes a Hydra sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        match bytes.first() {
-            Some(&crate::message_pack_format::magic_ids::NATIVE_HYDRA) => from_slice(&bytes[1..]),
-            other => Err(RmpDecodeError::Uncategorized(format!(
+        use crate::message_pack_format::magic_ids;
+        match bytes {
+            [id, _hasher, rest @ ..] if *id == magic_ids::NATIVE_HYDRA => from_slice(rest),
+            _ => Err(RmpDecodeError::Uncategorized(format!(
                 "Hydra magic-ID mismatch: expected 0x{:02x}, got {:?}",
-                crate::message_pack_format::magic_ids::NATIVE_HYDRA,
-                other
+                magic_ids::NATIVE_HYDRA,
+                bytes
+                    .first()
                     .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),

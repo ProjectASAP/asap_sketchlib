@@ -268,19 +268,22 @@ impl UnivMon {
     /// Serializes the UnivMon sketch into MessagePack bytes, prefixed with the
     /// [`crate::message_pack_format::magic_ids::NATIVE_UNIVMON`] magic byte.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_UNIVMON];
+        use crate::message_pack_format::magic_ids;
+        let mut out = vec![magic_ids::NATIVE_UNIVMON, magic_ids::HASHER_UNKNOWN];
         out.extend(to_vec_named(self)?);
         Ok(out)
     }
 
     /// Deserializes a UnivMon sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        match bytes.first() {
-            Some(&crate::message_pack_format::magic_ids::NATIVE_UNIVMON) => from_slice(&bytes[1..]),
-            other => Err(RmpDecodeError::Uncategorized(format!(
+        use crate::message_pack_format::magic_ids;
+        match bytes {
+            [id, _hasher, rest @ ..] if *id == magic_ids::NATIVE_UNIVMON => from_slice(rest),
+            _ => Err(RmpDecodeError::Uncategorized(format!(
                 "UnivMon magic-ID mismatch: expected 0x{:02x}, got {:?}",
-                crate::message_pack_format::magic_ids::NATIVE_UNIVMON,
-                other
+                magic_ids::NATIVE_UNIVMON,
+                bytes
+                    .first()
                     .map(|b| format!("0x{b:02x}"))
                     .unwrap_or_else(|| "empty buffer".to_string())
             ))),
