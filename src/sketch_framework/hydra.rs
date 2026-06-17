@@ -160,14 +160,26 @@ impl Hydra {
         self.query_key(key, &HydraQuery::Cdf(threshold))
     }
 
-    /// Serializes the Hydra sketch (including all counters) into MessagePack bytes.
+    /// Serializes the Hydra sketch (including all counters) into MessagePack bytes,
+    /// prefixed with the [`crate::message_pack_format::magic_ids::NATIVE_HYDRA`] magic byte.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_HYDRA];
+        out.extend(to_vec_named(self)?);
+        Ok(out)
     }
 
-    /// Deserializes a Hydra sketch from MessagePack bytes.
+    /// Deserializes a Hydra sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+        match bytes.first() {
+            Some(&crate::message_pack_format::magic_ids::NATIVE_HYDRA) => from_slice(&bytes[1..]),
+            other => Err(RmpDecodeError::Uncategorized(format!(
+                "Hydra magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                crate::message_pack_format::magic_ids::NATIVE_HYDRA,
+                other
+                    .map(|b| format!("0x{b:02x}"))
+                    .unwrap_or_else(|| "empty buffer".to_string())
+            ))),
+        }
     }
 }
 

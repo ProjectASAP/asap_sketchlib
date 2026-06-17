@@ -69,6 +69,8 @@ encoding. The two are not interchangeable even for logically equivalent types
 | `0x87` | `sketches::KLL::serialize_to_bytes`              | Compact array format (not named) |
 | `0x88` | `sketches::KLLDynamic::serialize_to_bytes`       | Compact array format (not named) |
 | `0x89` | `sketches::KMV::serialize_to_bytes`              | Named map format (experimental feature) |
+| `0x8a` | `sketch_framework::hydra::Hydra::serialize_to_bytes`    | Named map format |
+| `0x8b` | `sketch_framework::univmon::UnivMon::serialize_to_bytes` | Named map format |
 
 ### Relationship between native and portable KLL
 

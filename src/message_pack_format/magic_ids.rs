@@ -77,3 +77,9 @@ pub const NATIVE_KLL_DYNAMIC: u8 = 0x88;
 
 /// KMV (K-Minimum Values) sketch (`sketches::KMV`).
 pub const NATIVE_KMV: u8 = 0x89;
+
+/// Hydra composite sketch (`sketch_framework::hydra`).
+pub const NATIVE_HYDRA: u8 = 0x8a;
+
+/// UnivMon sketch (`sketch_framework::univmon`).
+pub const NATIVE_UNIVMON: u8 = 0x8b;
