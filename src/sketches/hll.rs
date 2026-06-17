@@ -755,6 +755,36 @@ mod tests {
         assert_serialization_round_trip::<HyperLogLogHIPP12>("HllDsP12");
     }
 
+    #[test]
+    fn hll_magic_bytes_are_variant_specific() {
+        use crate::message_pack_format::magic_ids;
+
+        let classic_bytes = HyperLogLog::<Classic>::default()
+            .serialize_to_bytes()
+            .unwrap();
+        let ertl_bytes = HyperLogLog::<ErtlMLE>::default()
+            .serialize_to_bytes()
+            .unwrap();
+
+        assert_eq!(classic_bytes[0], magic_ids::NATIVE_HLL_CLASSIC);
+        assert_eq!(ertl_bytes[0], magic_ids::NATIVE_HLL_ERTL_MLE);
+        // Sanity: they are different.
+        assert_ne!(classic_bytes[0], ertl_bytes[0]);
+    }
+
+    #[test]
+    fn hll_variant_mismatch_is_rejected() {
+        let ertl_bytes = HyperLogLog::<ErtlMLE>::default()
+            .serialize_to_bytes()
+            .unwrap();
+        // Feeding ErtlMLE bytes to a Classic decoder must error.
+        let result = HyperLogLog::<Classic>::deserialize_from_bytes(&ertl_bytes);
+        assert!(
+            result.is_err(),
+            "expected error decoding ErtlMLE bytes as Classic"
+        );
+    }
+
     // insert 10 values and check corresponding counter is updated
     #[test]
     fn hll_correctness_test() {

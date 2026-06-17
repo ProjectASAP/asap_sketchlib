@@ -1013,4 +1013,47 @@ mod tests {
             decoded.as_storage().as_slice()
         );
     }
+
+    #[test]
+    fn count_min_fast_path_round_trip_serialization() {
+        use crate::message_pack_format::magic_ids;
+
+        let mut sketch = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8);
+        sketch.insert(&DataInput::U64(42));
+        sketch.insert(&DataInput::U64(7));
+
+        let encoded = sketch
+            .serialize_to_bytes()
+            .expect("serialize CountMin FastPath");
+        assert_eq!(
+            encoded[0],
+            magic_ids::NATIVE_COUNT_MIN_FAST,
+            "wrong magic id"
+        );
+        assert_eq!(encoded[1], magic_ids::HASHER_DEFAULT_XX, "wrong hasher id");
+
+        let decoded = CountMin::<Vector2D<i32>, FastPath>::deserialize_from_bytes(&encoded)
+            .expect("deserialize CountMin FastPath");
+
+        assert_eq!(sketch.rows(), decoded.rows());
+        assert_eq!(sketch.cols(), decoded.cols());
+        assert_eq!(
+            sketch.as_storage().as_slice(),
+            decoded.as_storage().as_slice()
+        );
+    }
+
+    #[test]
+    fn count_min_mode_mismatch_is_rejected() {
+        let mut sketch = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8);
+        sketch.insert(&DataInput::U64(1));
+
+        let fast_bytes = sketch.serialize_to_bytes().unwrap();
+        // Feeding FastPath bytes to a RegularPath decoder must error.
+        let result = CountMin::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&fast_bytes);
+        assert!(
+            result.is_err(),
+            "expected error decoding FastPath bytes as RegularPath"
+        );
+    }
 }
