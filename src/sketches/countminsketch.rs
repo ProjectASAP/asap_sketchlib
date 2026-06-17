@@ -262,16 +262,29 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
 
 // Serialization helpers for CountMin.
 impl<S: MatrixStorage + Serialize, Mode, H: SketchHasher> CountMin<S, Mode, H> {
-    /// Serializes the sketch into MessagePack bytes.
+    /// Serializes the sketch into MessagePack bytes, prefixed with the
+    /// [`crate::message_pack_format::magic_ids::NATIVE_COUNT_MIN`] magic byte.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_COUNT_MIN];
+        out.extend(to_vec_named(self)?);
+        Ok(out)
     }
 }
 
 impl<S: MatrixStorage + for<'de> Deserialize<'de>, Mode, H: SketchHasher> CountMin<S, Mode, H> {
-    /// Deserializes a sketch from MessagePack bytes.
+    /// Deserializes a sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+        match bytes.first() {
+            Some(&crate::message_pack_format::magic_ids::NATIVE_COUNT_MIN) => {
+                from_slice(&bytes[1..])
+            }
+            other => Err(RmpDecodeError::Uncategorized(format!(
+                "CountMin magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                crate::message_pack_format::magic_ids::NATIVE_COUNT_MIN,
+                other.map(|b| format!("0x{b:02x}"))
+                    .unwrap_or_else(|| "empty buffer".to_string())
+            ))),
+        }
     }
 }
 

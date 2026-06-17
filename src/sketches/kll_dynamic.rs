@@ -353,23 +353,36 @@ impl<T: NumericalValue> KLLDynamic<T> {
         self.items.len()
     }
 
-    /// Serialize the sketch into MessagePack bytes.
+    /// Serialize the sketch into MessagePack bytes, prefixed with the
+    /// [`crate::message_pack_format::magic_ids::NATIVE_KLL_DYNAMIC`] magic byte.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
     where
         T: Serialize,
     {
-        rmp_serde::to_vec(self)
+        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_KLL_DYNAMIC];
+        out.extend(rmp_serde::to_vec(self)?);
+        Ok(out)
     }
 
-    /// Deserialize a sketch from MessagePack bytes.
+    /// Deserialize a sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
     where
         T: for<'de> Deserialize<'de>,
     {
-        rmp_serde::from_slice(bytes).map(|mut sketch: KLLDynamic<T>| {
-            sketch.rebuild_capacity_cache();
-            sketch
-        })
+        match bytes.first() {
+            Some(&crate::message_pack_format::magic_ids::NATIVE_KLL_DYNAMIC) => {
+                rmp_serde::from_slice(&bytes[1..]).map(|mut sketch: KLLDynamic<T>| {
+                    sketch.rebuild_capacity_cache();
+                    sketch
+                })
+            }
+            other => Err(rmp_serde::decode::Error::Uncategorized(format!(
+                "KLLDynamic magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                crate::message_pack_format::magic_ids::NATIVE_KLL_DYNAMIC,
+                other.map(|b| format!("0x{b:02x}"))
+                    .unwrap_or_else(|| "empty buffer".to_string())
+            ))),
+        }
     }
 }
 

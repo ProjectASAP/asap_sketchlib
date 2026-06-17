@@ -41,3 +41,39 @@ pub const SET_AGGREGATOR: u8 = 0x08;
 
 /// Delta-set aggregator result (added / removed string sets).
 pub const DELTA_RESULT: u8 = 0x09;
+
+// ── Native (Rust-internal) sketch types ─────────────────────────────────────
+//
+// These are the generic sketch types in `crate::sketches`. Their wire format
+// is produced by `serialize_to_bytes` / `deserialize_from_bytes` and is
+// internal to Rust — Go (`sketchlib-go`) never reads these bytes directly.
+//
+// They use a separate range (0x81+) to make it visually clear that the byte
+// refers to an internal format distinct from the portable cross-language ones.
+
+/// Generic Count-Min sketch (`sketches::CountMin<_, _>`).
+pub const NATIVE_COUNT_MIN: u8 = 0x81;
+
+/// Generic Count Sketch (`sketches::Count<_, _, _>`).
+pub const NATIVE_COUNT_SKETCH: u8 = 0x82;
+
+/// Count-Min + heavy-hitter heap (`sketches::CMSHeap` / `CountL2HH`).
+pub const NATIVE_CMS_HEAP: u8 = 0x83;
+
+/// Generic HyperLogLog (`sketches::HyperLogLogImpl<_, _, _>` — Classic and ErtlMLE variants).
+pub const NATIVE_HLL: u8 = 0x84;
+
+/// HyperLogLog HIP variant (`sketches::HyperLogLogHIPImpl<_>`).
+pub const NATIVE_HLL_HIP: u8 = 0x85;
+
+/// DDSketch (`sketches::DDSketch`).
+pub const NATIVE_DD_SKETCH: u8 = 0x86;
+
+/// KLL quantile sketch (`sketches::kll::KLL<T>`).
+pub const NATIVE_KLL: u8 = 0x87;
+
+/// Dynamic KLL quantile sketch (`sketches::kll_dynamic::KLLDynamic<T>`).
+pub const NATIVE_KLL_DYNAMIC: u8 = 0x88;
+
+/// KMV (K-Minimum Values) sketch (`sketches::KMV`).
+pub const NATIVE_KMV: u8 = 0x89;

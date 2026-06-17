@@ -662,20 +662,34 @@ impl<T: NumericalValue> KLL<T> {
 
     // -- Serialization -------------------------------------------------------
 
-    /// Serializes the sketch to a MessagePack byte vector.
+    /// Serializes the sketch to a MessagePack byte vector, prefixed with the
+    /// [`crate::message_pack_format::magic_ids::NATIVE_KLL`] magic byte.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
     where
         T: Serialize,
     {
-        rmp_serde::to_vec(self)
+        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_KLL];
+        out.extend(rmp_serde::to_vec(self)?);
+        Ok(out)
     }
 
-    /// Deserializes a KLL sketch from a MessagePack byte slice.
+    /// Deserializes a KLL sketch from a MessagePack byte slice produced by
+    /// [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
     where
         T: for<'de> Deserialize<'de>,
     {
-        rmp_serde::from_slice(bytes)
+        match bytes.first() {
+            Some(&crate::message_pack_format::magic_ids::NATIVE_KLL) => {
+                rmp_serde::from_slice(&bytes[1..])
+            }
+            other => Err(rmp_serde::decode::Error::Uncategorized(format!(
+                "KLL magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                crate::message_pack_format::magic_ids::NATIVE_KLL,
+                other.map(|b| format!("0x{b:02x}"))
+                    .unwrap_or_else(|| "empty buffer".to_string())
+            ))),
+        }
     }
 
     fn ensure_levels_sorted(&mut self) {

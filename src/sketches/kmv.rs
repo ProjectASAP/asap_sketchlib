@@ -77,14 +77,25 @@ impl<H: SketchHasher> KMV<H> {
         }
     }
 
-    /// Serializes the sketch into MessagePack bytes.
+    /// Serializes the sketch into MessagePack bytes, prefixed with the
+    /// [`crate::message_pack_format::magic_ids::NATIVE_KMV`] magic byte.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_KMV];
+        out.extend(to_vec_named(self)?);
+        Ok(out)
     }
 
-    /// Deserializes a sketch from MessagePack bytes.
+    /// Deserializes a sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+        match bytes.first() {
+            Some(&crate::message_pack_format::magic_ids::NATIVE_KMV) => from_slice(&bytes[1..]),
+            other => Err(RmpDecodeError::Uncategorized(format!(
+                "KMV magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                crate::message_pack_format::magic_ids::NATIVE_KMV,
+                other.map(|b| format!("0x{b:02x}"))
+                    .unwrap_or_else(|| "empty buffer".to_string())
+            ))),
+        }
     }
 }
 

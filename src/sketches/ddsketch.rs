@@ -165,12 +165,16 @@ impl DDSketch {
         }
     }
 
-    /// Serializes the sketch to a MessagePack byte vector.
+    /// Serializes the sketch to a MessagePack byte vector, prefixed with the
+    /// [`crate::message_pack_format::magic_ids::NATIVE_DD_SKETCH`] magic byte.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_DD_SKETCH];
+        out.extend(to_vec_named(self)?);
+        Ok(out)
     }
 
-    /// Deserializes a DDSketch from a MessagePack byte slice.
+    /// Deserializes a DDSketch from a MessagePack byte slice produced by
+    /// [`Self::serialize_to_bytes`].
     ///
     /// The `count`/`sum`/`min`/`max` scalars are `#[serde(skip)]` (dropped
     /// from the wire, ProjectASAP/sketchlib-go#243), so they default to
@@ -179,9 +183,19 @@ impl DDSketch {
     /// reconstructed from the per-bucket representative values, accurate
     /// to within the sketch's α relative-accuracy bound.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let mut sk: Self = from_slice(bytes)?;
-        sk.recompute_scalars_from_store();
-        Ok(sk)
+        match bytes.first() {
+            Some(&crate::message_pack_format::magic_ids::NATIVE_DD_SKETCH) => {
+                let mut sk: Self = from_slice(&bytes[1..])?;
+                sk.recompute_scalars_from_store();
+                Ok(sk)
+            }
+            other => Err(RmpDecodeError::Uncategorized(format!(
+                "DDSketch magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                crate::message_pack_format::magic_ids::NATIVE_DD_SKETCH,
+                other.map(|b| format!("0x{b:02x}"))
+                    .unwrap_or_else(|| "empty buffer".to_string())
+            ))),
+        }
     }
 
     /// Rebuild the in-memory `count`/`sum`/`min`/`max` aggregates from the

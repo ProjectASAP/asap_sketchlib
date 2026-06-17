@@ -1106,14 +1106,27 @@ impl<H: SketchHasher> CountL2HH<H> {
         compute_median_inline_f64(&mut lst[..])
     }
 
-    /// Serializes the CountL2HH sketch into MessagePack bytes.
+    /// Serializes the CountL2HH sketch into MessagePack bytes, prefixed with the
+    /// [`crate::message_pack_format::magic_ids::NATIVE_CMS_HEAP`] magic byte.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_CMS_HEAP];
+        out.extend(to_vec_named(self)?);
+        Ok(out)
     }
 
-    /// Deserializes a CountL2HH sketch from MessagePack bytes.
+    /// Deserializes a CountL2HH sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+        match bytes.first() {
+            Some(&crate::message_pack_format::magic_ids::NATIVE_CMS_HEAP) => {
+                from_slice(&bytes[1..])
+            }
+            other => Err(RmpDecodeError::Uncategorized(format!(
+                "CountL2HH magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                crate::message_pack_format::magic_ids::NATIVE_CMS_HEAP,
+                other.map(|b| format!("0x{b:02x}"))
+                    .unwrap_or_else(|| "empty buffer".to_string())
+            ))),
+        }
     }
 }
 

@@ -280,9 +280,12 @@ where
     S: MatrixStorage<Counter = C> + Serialize,
     C: CountSketchCounter,
 {
-    /// Serializes the sketch into MessagePack bytes.
+    /// Serializes the sketch into MessagePack bytes, prefixed with the
+    /// [`crate::message_pack_format::magic_ids::NATIVE_COUNT_SKETCH`] magic byte.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        let mut out = vec![crate::message_pack_format::magic_ids::NATIVE_COUNT_SKETCH];
+        out.extend(to_vec_named(self)?);
+        Ok(out)
     }
 }
 
@@ -292,9 +295,19 @@ where
     S: MatrixStorage<Counter = C> + for<'de> Deserialize<'de>,
     C: CountSketchCounter,
 {
-    /// Deserializes a sketch from MessagePack bytes.
+    /// Deserializes a sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+        match bytes.first() {
+            Some(&crate::message_pack_format::magic_ids::NATIVE_COUNT_SKETCH) => {
+                from_slice(&bytes[1..])
+            }
+            other => Err(RmpDecodeError::Uncategorized(format!(
+                "Count magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                crate::message_pack_format::magic_ids::NATIVE_COUNT_SKETCH,
+                other.map(|b| format!("0x{b:02x}"))
+                    .unwrap_or_else(|| "empty buffer".to_string())
+            ))),
+        }
     }
 }
 
