@@ -347,21 +347,25 @@ impl MessagePackCodec for KllSketch {
             k: self.k,
             sketch_bytes: self.sketch_bytes(),
         };
-        let mut out = vec![magic_ids::KLL_SKETCH];
-        out.extend(rmp_serde::to_vec(&wire)?);
-        Ok(out)
+        let payload = rmp_serde::to_vec(&wire)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::KLL_SKETCH],
+            &payload,
+        ))
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let payload = match bytes.first() {
-            Some(&magic_ids::KLL_SKETCH) => &bytes[1..],
-            other => {
-                return Err(MsgPackError::BadMagicId {
-                    expected: magic_ids::KLL_SKETCH,
-                    got: other.copied(),
-                });
-            }
-        };
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(|_| MsgPackError::BadMagicId {
+                expected: magic_ids::KLL_SKETCH,
+                got: bytes.first().copied(),
+            })?;
+        if kind_id != [magic_ids::KLL_SKETCH] {
+            return Err(MsgPackError::BadMagicId {
+                expected: magic_ids::KLL_SKETCH,
+                got: kind_id.first().copied(),
+            });
+        }
         let wire: KllSketchData = rmp_serde::from_slice(payload)?;
         let backend = KLL::deserialize_from_bytes(&wire.sketch_bytes)?;
         Ok(Self { k: wire.k, backend })

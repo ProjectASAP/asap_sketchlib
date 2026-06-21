@@ -166,13 +166,15 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 impl<Registers: HllRegisterStorage + Serialize, H: SketchHasher>
     HyperLogLogImpl<Classic, Registers, H>
 {
-    /// Serializes the sketch into MessagePack bytes.
-    /// Header: `[NATIVE_HLL_CLASSIC, hasher_id]`.
+    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_HLL_CLASSIC, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
-        let mut out = vec![magic_ids::NATIVE_HLL_CLASSIC, H::hasher_magic_id()];
-        out.extend(to_vec_named(self)?);
-        Ok(out)
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_HLL_CLASSIC, H::hasher_magic_id()],
+            &payload,
+        ))
     }
 }
 
@@ -182,18 +184,17 @@ impl<Registers: HllRegisterStorage + for<'de> Deserialize<'de>, H: SketchHasher>
     /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         use crate::message_pack_format::magic_ids;
-        match bytes {
-            [id, hasher, rest @ ..] if *id == magic_ids::NATIVE_HLL_CLASSIC => {
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, hasher] if *id == magic_ids::NATIVE_HLL_CLASSIC => {
                 magic_ids::check_hasher_id::<H>(*hasher)?;
-                from_slice(rest)
+                from_slice(payload)
             }
             _ => Err(RmpDecodeError::Uncategorized(format!(
-                "HyperLogLogImpl<Classic> magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                "HyperLogLogImpl<Classic> kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
                 magic_ids::NATIVE_HLL_CLASSIC,
-                bytes
-                    .first()
-                    .map(|b| format!("0x{b:02x}"))
-                    .unwrap_or_else(|| "empty buffer".to_string())
+                kind_id
             ))),
         }
     }
@@ -202,13 +203,15 @@ impl<Registers: HllRegisterStorage + for<'de> Deserialize<'de>, H: SketchHasher>
 impl<Registers: HllRegisterStorage + Serialize, H: SketchHasher>
     HyperLogLogImpl<ErtlMLE, Registers, H>
 {
-    /// Serializes the sketch into MessagePack bytes.
-    /// Header: `[NATIVE_HLL_ERTL_MLE, hasher_id]`.
+    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_HLL_ERTL_MLE, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
-        let mut out = vec![magic_ids::NATIVE_HLL_ERTL_MLE, H::hasher_magic_id()];
-        out.extend(to_vec_named(self)?);
-        Ok(out)
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_HLL_ERTL_MLE, H::hasher_magic_id()],
+            &payload,
+        ))
     }
 }
 
@@ -218,18 +221,17 @@ impl<Registers: HllRegisterStorage + for<'de> Deserialize<'de>, H: SketchHasher>
     /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         use crate::message_pack_format::magic_ids;
-        match bytes {
-            [id, hasher, rest @ ..] if *id == magic_ids::NATIVE_HLL_ERTL_MLE => {
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, hasher] if *id == magic_ids::NATIVE_HLL_ERTL_MLE => {
                 magic_ids::check_hasher_id::<H>(*hasher)?;
-                from_slice(rest)
+                from_slice(payload)
             }
             _ => Err(RmpDecodeError::Uncategorized(format!(
-                "HyperLogLogImpl<ErtlMLE> magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                "HyperLogLogImpl<ErtlMLE> kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
                 magic_ids::NATIVE_HLL_ERTL_MLE,
-                bytes
-                    .first()
-                    .map(|b| format!("0x{b:02x}"))
-                    .unwrap_or_else(|| "empty buffer".to_string())
+                kind_id
             ))),
         }
     }
@@ -434,27 +436,28 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
         self.est as usize
     }
 
-    /// Serializes the sketch into MessagePack bytes.
-    /// Header: `[NATIVE_HLL_HIP, HASHER_DEFAULT_XX]` — HIP always uses DefaultXxHasher.
+    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_HLL_HIP, HASHER_DEFAULT_XX]` — HIP always uses DefaultXxHasher.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
-        let mut out = vec![magic_ids::NATIVE_HLL_HIP, magic_ids::HASHER_DEFAULT_XX];
-        out.extend(to_vec_named(self)?);
-        Ok(out)
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_HLL_HIP, magic_ids::HASHER_DEFAULT_XX],
+            &payload,
+        ))
     }
 
     /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         use crate::message_pack_format::magic_ids;
-        match bytes {
-            [id, _hasher, rest @ ..] if *id == magic_ids::NATIVE_HLL_HIP => from_slice(rest),
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, _hasher] if *id == magic_ids::NATIVE_HLL_HIP => from_slice(payload),
             _ => Err(RmpDecodeError::Uncategorized(format!(
-                "HyperLogLogHIPImpl magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                "HyperLogLogHIPImpl kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
                 magic_ids::NATIVE_HLL_HIP,
-                bytes
-                    .first()
-                    .map(|b| format!("0x{b:02x}"))
-                    .unwrap_or_else(|| "empty buffer".to_string())
+                kind_id
             ))),
         }
     }
@@ -766,10 +769,13 @@ mod tests {
             .serialize_to_bytes()
             .unwrap();
 
-        assert_eq!(classic_bytes[0], magic_ids::NATIVE_HLL_CLASSIC);
-        assert_eq!(ertl_bytes[0], magic_ids::NATIVE_HLL_ERTL_MLE);
+        let (classic_kind_id, _) = magic_ids::decode_wrapper(&classic_bytes).expect("ASK1 header");
+        let (ertl_kind_id, _) = magic_ids::decode_wrapper(&ertl_bytes).expect("ASK1 header");
+
+        assert_eq!(classic_kind_id[0], magic_ids::NATIVE_HLL_CLASSIC);
+        assert_eq!(ertl_kind_id[0], magic_ids::NATIVE_HLL_ERTL_MLE);
         // Sanity: they are different.
-        assert_ne!(classic_bytes[0], ertl_bytes[0]);
+        assert_ne!(classic_kind_id[0], ertl_kind_id[0]);
     }
 
     #[test]

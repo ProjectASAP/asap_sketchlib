@@ -662,16 +662,18 @@ impl<T: NumericalValue> KLL<T> {
 
     // -- Serialization -------------------------------------------------------
 
-    /// Serializes the sketch to a MessagePack byte vector, prefixed with the
-    /// [`crate::message_pack_format::magic_ids::NATIVE_KLL`] magic byte.
+    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_KLL, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
     where
         T: Serialize,
     {
         use crate::message_pack_format::magic_ids;
-        let mut out = vec![magic_ids::NATIVE_KLL, magic_ids::HASHER_UNKNOWN];
-        out.extend(rmp_serde::to_vec(self)?);
-        Ok(out)
+        let payload = rmp_serde::to_vec(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_KLL, magic_ids::HASHER_UNKNOWN],
+            &payload,
+        ))
     }
 
     /// Deserializes a KLL sketch from a MessagePack byte slice produced by
@@ -681,15 +683,14 @@ impl<T: NumericalValue> KLL<T> {
         T: for<'de> Deserialize<'de>,
     {
         use crate::message_pack_format::magic_ids;
-        match bytes {
-            [id, _hasher, rest @ ..] if *id == magic_ids::NATIVE_KLL => rmp_serde::from_slice(rest),
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(rmp_serde::decode::Error::Uncategorized)?;
+        match kind_id {
+            [id, _hasher] if *id == magic_ids::NATIVE_KLL => rmp_serde::from_slice(payload),
             _ => Err(rmp_serde::decode::Error::Uncategorized(format!(
-                "KLL magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                "KLL kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
                 magic_ids::NATIVE_KLL,
-                bytes
-                    .first()
-                    .map(|b| format!("0x{b:02x}"))
-                    .unwrap_or_else(|| "empty buffer".to_string())
+                kind_id
             ))),
         }
     }

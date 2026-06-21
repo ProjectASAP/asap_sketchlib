@@ -403,19 +403,23 @@ impl DdSketch {
 
 impl MessagePackCodec for DdSketch {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        let mut out = vec![magic_ids::DD_SKETCH];
-        out.extend(rmp_serde::to_vec(self)?);
-        Ok(out)
+        let payload = rmp_serde::to_vec(self)?;
+        Ok(magic_ids::encode_wrapper(&[magic_ids::DD_SKETCH], &payload))
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        match bytes.first() {
-            Some(&magic_ids::DD_SKETCH) => Ok(rmp_serde::from_slice(&bytes[1..])?),
-            other => Err(MsgPackError::BadMagicId {
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(|_| MsgPackError::BadMagicId {
                 expected: magic_ids::DD_SKETCH,
-                got: other.copied(),
-            }),
+                got: bytes.first().copied(),
+            })?;
+        if kind_id != [magic_ids::DD_SKETCH] {
+            return Err(MsgPackError::BadMagicId {
+                expected: magic_ids::DD_SKETCH,
+                got: kind_id.first().copied(),
+            });
         }
+        Ok(rmp_serde::from_slice(payload)?)
     }
 }
 
@@ -548,20 +552,25 @@ mod tests {
     /// element count so the bytes stay parity-aligned with the Go
     /// reference implementation.
     ///
-    /// bytes[0] is now the magic-ID prefix (0x05 = DD_SKETCH); the msgpack
-    /// payload starts at bytes[1].
+    /// The binary is wrapped in the ASK1 envelope; the payload starts after
+    /// the header (b"ASK1" + version + kind_id_len + kind_id).
     #[test]
     fn test_msgpack_is_three_element_array() {
         use crate::message_pack_format::magic_ids;
         let sk = DdSketch::from_raw(0.01, vec![1, 2, 3], -2);
         let bytes = sk.to_msgpack().unwrap();
-        assert_eq!(bytes[0], magic_ids::DD_SKETCH, "expected magic-ID byte");
+        let (kind_id, payload) = magic_ids::decode_wrapper(&bytes).expect("ASK1 header");
+        assert_eq!(
+            kind_id,
+            [magic_ids::DD_SKETCH],
+            "expected DD_SKETCH kind_id"
+        );
         // rmp compact encoding of the payload leads with an array marker.
         // A fixarray of length 3 is the single byte 0x93 (0b1001_0011).
         assert_eq!(
-            bytes[1], 0x93,
-            "expected a 3-element msgpack fixarray (0x93) at bytes[1], got {:#04x}",
-            bytes[1]
+            payload[0], 0x93,
+            "expected a 3-element msgpack fixarray (0x93) at payload[0], got {:#04x}",
+            payload[0]
         );
     }
 

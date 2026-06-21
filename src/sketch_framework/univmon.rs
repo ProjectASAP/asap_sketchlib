@@ -265,27 +265,28 @@ impl UnivMon {
         &mut self.hh_layers[layer]
     }
 
-    /// Serializes the UnivMon sketch into MessagePack bytes, prefixed with the
-    /// [`crate::message_pack_format::magic_ids::NATIVE_UNIVMON`] magic byte.
+    /// Serializes the UnivMon sketch into ASK1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_UNIVMON, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
-        let mut out = vec![magic_ids::NATIVE_UNIVMON, magic_ids::HASHER_UNKNOWN];
-        out.extend(to_vec_named(self)?);
-        Ok(out)
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_UNIVMON, magic_ids::HASHER_UNKNOWN],
+            &payload,
+        ))
     }
 
     /// Deserializes a UnivMon sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         use crate::message_pack_format::magic_ids;
-        match bytes {
-            [id, _hasher, rest @ ..] if *id == magic_ids::NATIVE_UNIVMON => from_slice(rest),
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, _hasher] if *id == magic_ids::NATIVE_UNIVMON => from_slice(payload),
             _ => Err(RmpDecodeError::Uncategorized(format!(
-                "UnivMon magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                "UnivMon kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
                 magic_ids::NATIVE_UNIVMON,
-                bytes
-                    .first()
-                    .map(|b| format!("0x{b:02x}"))
-                    .unwrap_or_else(|| "empty buffer".to_string())
+                kind_id
             ))),
         }
     }

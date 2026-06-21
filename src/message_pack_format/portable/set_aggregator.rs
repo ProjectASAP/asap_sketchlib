@@ -81,21 +81,25 @@ impl MessagePackCodec for SetAggregator {
         let wrapper = StringSetRef {
             values: &self.values,
         };
-        let mut out = vec![magic_ids::SET_AGGREGATOR];
-        out.extend(rmp_serde::to_vec(&wrapper)?);
-        Ok(out)
+        let payload = rmp_serde::to_vec(&wrapper)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::SET_AGGREGATOR],
+            &payload,
+        ))
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let payload = match bytes.first() {
-            Some(&magic_ids::SET_AGGREGATOR) => &bytes[1..],
-            other => {
-                return Err(MsgPackError::BadMagicId {
-                    expected: magic_ids::SET_AGGREGATOR,
-                    got: other.copied(),
-                });
-            }
-        };
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(|_| MsgPackError::BadMagicId {
+                expected: magic_ids::SET_AGGREGATOR,
+                got: bytes.first().copied(),
+            })?;
+        if kind_id != [magic_ids::SET_AGGREGATOR] {
+            return Err(MsgPackError::BadMagicId {
+                expected: magic_ids::SET_AGGREGATOR,
+                got: kind_id.first().copied(),
+            });
+        }
         let wrapper: StringSetOwned = rmp_serde::from_slice(payload)?;
         Ok(Self {
             values: wrapper.values,
@@ -165,9 +169,9 @@ mod tests {
         let mut sa = SetAggregator::new();
         sa.update("a");
         let bytes = sa.to_msgpack().unwrap();
-        // Strip the leading magic byte before raw-decoding the payload.
+        let (_, payload) = magic_ids::decode_wrapper(&bytes).expect("ASK1 header");
         let decoded: StringSet =
-            rmp_serde::from_slice(&bytes[1..]).expect("should decode as StringSet { values: ... }");
+            rmp_serde::from_slice(payload).expect("should decode as StringSet { values: ... }");
         assert!(decoded.values.contains("a"));
     }
 }

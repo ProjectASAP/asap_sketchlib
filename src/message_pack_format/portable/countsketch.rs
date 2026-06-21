@@ -434,19 +434,26 @@ impl CountSketch {
 
 impl MessagePackCodec for CountSketch {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        let mut out = vec![magic_ids::COUNT_SKETCH];
-        out.extend(rmp_serde::to_vec(self)?);
-        Ok(out)
+        let payload = rmp_serde::to_vec(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::COUNT_SKETCH],
+            &payload,
+        ))
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        match bytes.first() {
-            Some(&magic_ids::COUNT_SKETCH) => Ok(rmp_serde::from_slice(&bytes[1..])?),
-            other => Err(MsgPackError::BadMagicId {
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(|_| MsgPackError::BadMagicId {
                 expected: magic_ids::COUNT_SKETCH,
-                got: other.copied(),
-            }),
+                got: bytes.first().copied(),
+            })?;
+        if kind_id != [magic_ids::COUNT_SKETCH] {
+            return Err(MsgPackError::BadMagicId {
+                expected: magic_ids::COUNT_SKETCH,
+                got: kind_id.first().copied(),
+            });
         }
+        Ok(rmp_serde::from_slice(payload)?)
     }
 }
 

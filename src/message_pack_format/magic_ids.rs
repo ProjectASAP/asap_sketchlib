@@ -1,19 +1,84 @@
-//! Magic-ID constants for the portable MessagePack wire format.
+//! Magic-ID constants and wrapper encoding for the ASAP sketch wire format.
 //!
-//! Every serialized binary produced by [`crate::message_pack_format::MessagePackCodec`]
-//! is prefixed with a single byte that identifies the sketch type, analogous to
-//! how Prometheus uses magic bytes to discriminate metric types.
-//!
-//! The prefix layout is:
+//! Every serialized binary produced by this library is wrapped in the **ASK1
+//! envelope**, a self-describing header that identifies the sketch type and
+//! reserves space for future metadata without a fixed-size ceiling:
 //!
 //! ```text
-//! [ magic_id: u8 | <rmp_serde msgpack payload> ]
+//! [ b"ASK1" | version: u8 | kind_id_len: u8 | kind_id: [u8; kind_id_len] | <msgpack payload> ]
 //! ```
 //!
-//! Magic IDs are stable across versions. Adding a new sketch type requires a
-//! new constant here; removing or repurposing an existing constant is a
-//! breaking protocol change. The Go mirror of this table lives in
-//! `sketchlib-go/wire/asapmsgpack/magic_ids.go`.
+//! * `b"ASK1"` — 4-byte ASCII sentinel; unambiguously not a msgpack value.
+//! * `version` — envelope layout version; currently `0x01`.
+//! * `kind_id_len + kind_id` — variable-length sketch discriminant encoded as
+//!   canonical unsigned big-endian with no leading zero bytes.  For current
+//!   sketch types this is 1–2 bytes; future additions can use more without a
+//!   protocol change.
+//!
+//! **Portable** sketches (cross-language, shared with `sketchlib-go`) use a
+//! 1-byte `kind_id` drawn from the `0x01–0x09` range.
+//!
+//! **Native** Rust sketches use a 2-byte `kind_id`: first byte is the family /
+//! mode discriminant (`0x81–0x8e`); second byte is the hasher ID (`HASHER_*`).
+//!
+//! Magic IDs are **stable** — once assigned, a value is never reused.  Adding
+//! a new sketch type requires a new constant here; removing or repurposing an
+//! existing constant is a **breaking protocol change**.  The Go mirror of this
+//! table lives in `sketchlib-go/wire/asapmsgpack/magic_ids.go`.
+
+// ── Envelope constants ────────────────────────────────────────────────────────
+
+/// 4-byte ASCII sentinel that opens every ASAP sketch binary.
+pub const WRAPPER_MAGIC: &[u8; 4] = b"ASK1";
+
+/// Envelope layout version stored in byte 4.  Increment if the header
+/// structure (field order, field semantics) ever changes.
+pub const WRAPPER_VERSION: u8 = 0x01;
+
+/// Prepend the ASK1 envelope to `payload` and return the complete binary.
+///
+/// `kind_id` identifies the sketch type (1–2 bytes for all current types).
+pub fn encode_wrapper(kind_id: &[u8], payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + 1 + 1 + kind_id.len() + payload.len());
+    out.extend_from_slice(WRAPPER_MAGIC);
+    out.push(WRAPPER_VERSION);
+    out.push(kind_id.len() as u8);
+    out.extend_from_slice(kind_id);
+    out.extend_from_slice(payload);
+    out
+}
+
+/// Strip the ASK1 envelope from `bytes` and return `(kind_id, payload)`.
+///
+/// Returns `Err(String)` on any structural mismatch so callers can convert to
+/// their own error type.
+pub fn decode_wrapper(bytes: &[u8]) -> Result<(&[u8], &[u8]), String> {
+    if bytes.len() < 7 {
+        return Err(format!(
+            "ASK1 wrapper: too short ({} bytes, need ≥7)",
+            bytes.len()
+        ));
+    }
+    if &bytes[0..4] != WRAPPER_MAGIC {
+        return Err(format!(
+            "ASK1 wrapper: bad magic {:?}, expected b\"ASK1\"",
+            &bytes[0..4]
+        ));
+    }
+    let version = bytes[4];
+    if version != WRAPPER_VERSION {
+        return Err(format!("ASK1 wrapper: unsupported version 0x{version:02x}"));
+    }
+    let kind_id_len = bytes[5] as usize;
+    let header_end = 6 + kind_id_len;
+    if bytes.len() < header_end {
+        return Err(format!(
+            "ASK1 wrapper: kind_id_len={kind_id_len} but only {} bytes available after offset 6",
+            bytes.len().saturating_sub(6)
+        ));
+    }
+    Ok((&bytes[6..header_end], &bytes[header_end..]))
+}
 
 /// HLL sketch (all variants: Regular, Datafusion, Hip).
 pub const HLL: u8 = 0x01;

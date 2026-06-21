@@ -77,27 +77,28 @@ impl<H: SketchHasher> KMV<H> {
         }
     }
 
-    /// Serializes the sketch into MessagePack bytes, prefixed with the
-    /// [`crate::message_pack_format::magic_ids::NATIVE_KMV`] magic byte.
+    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_KMV, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
-        let mut out = vec![magic_ids::NATIVE_KMV, magic_ids::HASHER_UNKNOWN];
-        out.extend(to_vec_named(self)?);
-        Ok(out)
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_KMV, magic_ids::HASHER_UNKNOWN],
+            &payload,
+        ))
     }
 
     /// Deserializes a sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         use crate::message_pack_format::magic_ids;
-        match bytes {
-            [id, _hasher, rest @ ..] if *id == magic_ids::NATIVE_KMV => from_slice(rest),
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, _hasher] if *id == magic_ids::NATIVE_KMV => from_slice(payload),
             _ => Err(RmpDecodeError::Uncategorized(format!(
-                "KMV magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                "KMV kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
                 magic_ids::NATIVE_KMV,
-                bytes
-                    .first()
-                    .map(|b| format!("0x{b:02x}"))
-                    .unwrap_or_else(|| "empty buffer".to_string())
+                kind_id
             ))),
         }
     }

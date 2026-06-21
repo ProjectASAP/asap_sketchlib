@@ -353,16 +353,18 @@ impl<T: NumericalValue> KLLDynamic<T> {
         self.items.len()
     }
 
-    /// Serialize the sketch into MessagePack bytes, prefixed with the
-    /// [`crate::message_pack_format::magic_ids::NATIVE_KLL_DYNAMIC`] magic byte.
+    /// Serialize the sketch into ASK1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_KLL_DYNAMIC, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
     where
         T: Serialize,
     {
         use crate::message_pack_format::magic_ids;
-        let mut out = vec![magic_ids::NATIVE_KLL_DYNAMIC, magic_ids::HASHER_UNKNOWN];
-        out.extend(rmp_serde::to_vec(self)?);
-        Ok(out)
+        let payload = rmp_serde::to_vec(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_KLL_DYNAMIC, magic_ids::HASHER_UNKNOWN],
+            &payload,
+        ))
     }
 
     /// Deserialize a sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
@@ -371,20 +373,18 @@ impl<T: NumericalValue> KLLDynamic<T> {
         T: for<'de> Deserialize<'de>,
     {
         use crate::message_pack_format::magic_ids;
-        match bytes {
-            [id, _hasher, rest @ ..] if *id == magic_ids::NATIVE_KLL_DYNAMIC => {
-                rmp_serde::from_slice(rest).map(|mut sketch: KLLDynamic<T>| {
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(rmp_serde::decode::Error::Uncategorized)?;
+        match kind_id {
+            [id, _hasher] if *id == magic_ids::NATIVE_KLL_DYNAMIC => rmp_serde::from_slice(payload)
+                .map(|mut sketch: KLLDynamic<T>| {
                     sketch.rebuild_capacity_cache();
                     sketch
-                })
-            }
+                }),
             _ => Err(rmp_serde::decode::Error::Uncategorized(format!(
-                "KLLDynamic magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                "KLLDynamic kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
                 magic_ids::NATIVE_KLL_DYNAMIC,
-                bytes
-                    .first()
-                    .map(|b| format!("0x{b:02x}"))
-                    .unwrap_or_else(|| "empty buffer".to_string())
+                kind_id
             ))),
         }
     }

@@ -165,13 +165,15 @@ impl DDSketch {
         }
     }
 
-    /// Serializes the sketch to a MessagePack byte vector, prefixed with the
-    /// [`crate::message_pack_format::magic_ids::NATIVE_DD_SKETCH`] magic byte.
+    /// Serializes the sketch to ASK1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_DD_SKETCH, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
-        let mut out = vec![magic_ids::NATIVE_DD_SKETCH, magic_ids::HASHER_UNKNOWN];
-        out.extend(to_vec_named(self)?);
-        Ok(out)
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_DD_SKETCH, magic_ids::HASHER_UNKNOWN],
+            &payload,
+        ))
     }
 
     /// Deserializes a DDSketch from a MessagePack byte slice produced by
@@ -185,19 +187,18 @@ impl DDSketch {
     /// to within the sketch's α relative-accuracy bound.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         use crate::message_pack_format::magic_ids;
-        match bytes {
-            [id, _hasher, rest @ ..] if *id == magic_ids::NATIVE_DD_SKETCH => {
-                let mut sk: Self = from_slice(rest)?;
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, _hasher] if *id == magic_ids::NATIVE_DD_SKETCH => {
+                let mut sk: Self = from_slice(payload)?;
                 sk.recompute_scalars_from_store();
                 Ok(sk)
             }
             _ => Err(RmpDecodeError::Uncategorized(format!(
-                "DDSketch magic-ID mismatch: expected 0x{:02x}, got {:?}",
+                "DDSketch kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
                 magic_ids::NATIVE_DD_SKETCH,
-                bytes
-                    .first()
-                    .map(|b| format!("0x{b:02x}"))
-                    .unwrap_or_else(|| "empty buffer".to_string())
+                kind_id
             ))),
         }
     }
