@@ -5,6 +5,7 @@ This page is the docs home for `asap_sketchlib`.
 ## Start Here
 
 - [Project Overview](./project_overview.md)
+- [Examples](./examples.md) — HyperLogLog, Count-Min Sketch, and KLL end-to-end
 - [Library Map](./library_map.md)
 - [Development Guide](./development_guide.md)
 
