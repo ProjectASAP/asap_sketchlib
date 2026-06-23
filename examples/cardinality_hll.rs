@@ -1,9 +1,9 @@
-/// Cardinality estimation with HyperLogLog.
-///
-/// Shows the exact HashSet baseline alongside the HLL sketch so the
-/// accuracy/memory tradeoff is explicit. Run with:
-///
-///   cargo run --example cardinality_hll
+// Cardinality estimation with HyperLogLog.
+//
+// Shows the exact HashSet baseline alongside the HLL sketch so the
+// accuracy/memory tradeoff is explicit. Run with:
+//
+//   cargo run --example cardinality_hll
 use std::collections::HashSet;
 
 use asap_sketchlib::{DataInput, ErtlMLE, HyperLogLog};
@@ -27,6 +27,7 @@ fn main() {
     println!("distinct user IDs (exact):     {exact_count}");
     println!("distinct user IDs (HLL est.):  {estimated_count}");
 
-    let error_pct = (estimated_count as f64 - exact_count as f64).abs() / exact_count as f64 * 100.0;
+    let error_pct =
+        (estimated_count as f64 - exact_count as f64).abs() / exact_count as f64 * 100.0;
     println!("relative error: {error_pct:.2}%");
 }

@@ -1,9 +1,9 @@
-/// Frequency estimation with Count-Min Sketch.
-///
-/// Shows the exact HashMap baseline alongside the CMS sketch so the
-/// accuracy/memory tradeoff is explicit. Run with:
-///
-///   cargo run --example frequency_cms
+// Frequency estimation with Count-Min Sketch.
+//
+// Shows the exact HashMap baseline alongside the CMS sketch so the
+// accuracy/memory tradeoff is explicit. Run with:
+//
+//   cargo run --example frequency_cms
 use std::collections::HashMap;
 
 use asap_sketchlib::{CountMin, DataInput, FastPath, FixedMatrix};
@@ -13,7 +13,7 @@ fn main() {
     // except user 42 who gets 500 extra occurrences.
     let target: u64 = 42;
     let mut user_ids: Vec<u64> = (0..10_000).map(|i| i % 100).collect();
-    user_ids.extend(std::iter::repeat(target).take(500));
+    user_ids.extend(std::iter::repeat_n(target, 500));
 
     // Exact baseline: HashMap stores one counter per distinct key.
     let mut counts: HashMap<u64, u64> = HashMap::new();

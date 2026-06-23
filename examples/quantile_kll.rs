@@ -1,14 +1,14 @@
-/// Quantile estimation with KLL.
-///
-/// Inserts 10_000 sequential integers and queries the p50, p90, and p99
-/// quantiles. On a streaming workload the sketch avoids the sort-over-buffer
-/// phase that exact engines (e.g., Polars) must pay at query time.
-///
-/// Run with:
-///
-///   cargo run --example quantile_kll
-use asap_sketchlib::sketches::kll::Cdf;
+// Quantile estimation with KLL.
+//
+// Inserts 10_000 sequential integers and queries the p50, p90, and p99
+// quantiles. On a streaming workload the sketch avoids the sort-over-buffer
+// phase that exact engines (e.g., Polars) must pay at query time.
+//
+// Run with:
+//
+//   cargo run --example quantile_kll
 use asap_sketchlib::KLL;
+use asap_sketchlib::sketches::kll::Cdf;
 
 fn main() {
     // Insert 1..=10_000 as i64 values (exact p50 ≈ 5000, p90 ≈ 9000, p99 ≈ 9900).

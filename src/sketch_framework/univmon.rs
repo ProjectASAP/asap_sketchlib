@@ -146,7 +146,7 @@ impl UnivMon {
     pub fn print_hh_layer(&self) {
         print!("Print HH_Layer: ");
         for i in 0..self.layer_size {
-            println!("layer {}: ", i);
+            println!("layer {i}: ");
             self.hh_layers[i].print_heap();
         }
     }
@@ -635,7 +635,7 @@ mod tests {
 
         for (prefix, count, repeat) in scenarios {
             for i in 0..repeat {
-                let key = format!("{}_{}", prefix, i);
+                let key = format!("{prefix}_{i}");
                 let val = count as i64;
                 let val_f = val as f64;
 
