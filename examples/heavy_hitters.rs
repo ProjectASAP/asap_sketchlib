@@ -22,7 +22,7 @@ fn main() {
 
     println!("top-{top_k} heavy hitters:");
     let mut heap_items: Vec<_> = sketch.heap().heap().to_vec();
-    heap_items.sort_by(|a, b| b.count.cmp(&a.count));
+    heap_items.sort_by_key(|b| std::cmp::Reverse(b.count));
     for item in &heap_items {
         println!("  {:?}  count ≈ {}", item.key, item.count);
     }

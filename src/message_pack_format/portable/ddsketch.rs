@@ -581,11 +581,13 @@ mod tests {
         // P99 ≈ exp(mu + sigma * Φ⁻¹(0.99)) = e^(3 + 0.7×2.326) ≈ 102.4.
         assert!(
             (p50 / 20.09).ln().abs() < 0.05,
-            "P50 {p50} not close to 20.09"
+            "P50 {} not close to 20.09",
+            p50
         );
         assert!(
             (p99 / 102.4).ln().abs() < 0.05,
-            "P99 {p99} not close to 102.4"
+            "P99 {} not close to 102.4",
+            p99
         );
     }
 
@@ -659,7 +661,12 @@ mod tests {
             let rel_err = (got / want - 1.0).abs();
             assert!(
                 rel_err <= alpha,
-                "q={q} rel_err={rel_err:.4} exceeds α={alpha}: reconstituted={got}, full={want}",
+                "q={} rel_err={:.4} exceeds α={}: reconstituted={}, full={}",
+                q,
+                rel_err,
+                alpha,
+                got,
+                want,
             );
         }
     }

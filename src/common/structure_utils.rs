@@ -365,7 +365,8 @@ mod tests {
             let sort_median = median_three_sort(v);
             assert_eq!(
                 fast_median, sort_median,
-                "median for sort is {sort_median} but fast gives {fast_median}, input is {v:?}"
+                "median for sort is {sort_median} but fast gives {fast_median}, input is {:?}",
+                v
             );
         }
         for v in &mut four_vec {
@@ -373,7 +374,8 @@ mod tests {
             let sort_median = median_four_sort(v);
             assert_eq!(
                 fast_median, sort_median,
-                "median for sort is {sort_median} but fast gives {fast_median}, input is {v:?}"
+                "median for sort is {sort_median} but fast gives {fast_median}, input is {:?}",
+                v
             );
         }
         for v in &mut five_vec {
@@ -381,7 +383,8 @@ mod tests {
             let sort_median = median_five_sort(v);
             assert_eq!(
                 fast_median, sort_median,
-                "median for sort is {sort_median} but fast gives {fast_median}, input is {v:?}"
+                "median for sort is {sort_median} but fast gives {fast_median}, input is {:?}",
+                v
             );
         }
     }

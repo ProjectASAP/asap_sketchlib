@@ -1171,7 +1171,7 @@ mod tests {
         let median = cdf.query(0.5);
 
         // Median should be 30.5
-        assert!(median > 20.0 && median < 40.2, "Median = {median}");
+        assert!(median > 20.0 && median < 40.2, "Median = {}", median);
 
         // Test error handling for non-numeric input
         let result = kll.update_data_input(&DataInput::String("not a number".to_string()));
@@ -1201,7 +1201,7 @@ mod tests {
         // cdf.print_entries();
         let median = cdf.query(0.5);
         // only 30 and 40 is possible
-        assert!(median == 30.0 || median == 40.0, "Median = {median}");
+        assert!(median == 30.0 || median == 40.0, "Median = {}", median);
     }
 
     #[test]
@@ -1226,7 +1226,7 @@ mod tests {
         // kll.print_compactors();
         let median = cdf.query(0.5);
         // Median should be 30
-        assert!(median == 30.0, "Median = {median}");
+        assert!(median == 30.0, "Median = {}", median);
     }
 
     #[test]
