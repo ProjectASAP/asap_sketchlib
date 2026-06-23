@@ -1,12 +1,18 @@
 # Examples
 
-Practical end-to-end examples showing common use cases. Each example starts with the exact-data-structure baseline to make the sketch's tradeoff explicit.
+Runnable end-to-end examples live in [`examples/`](../examples/). Each one pairs an exact-data-structure baseline with its sketch equivalent so the accuracy/memory tradeoff is explicit.
+
+```
+cargo run --example cardinality_hll
+cargo run --example frequency_cms
+cargo run --example quantile_kll
+```
 
 ---
 
-## Cardinality estimation with HyperLogLog
+## Cardinality estimation — [`examples/cardinality_hll.rs`](../examples/cardinality_hll.rs)
 
-Count how many distinct user IDs appear in a large stream.
+Count how many distinct user IDs appear in a stream.
 
 **Exact baseline** — `HashSet` stores every unique ID; memory grows with cardinality.
 
@@ -19,12 +25,10 @@ let mut unique_user_ids = HashSet::new();
 for &user_id in &user_ids {
     unique_user_ids.insert(user_id);
 }
-
 let unique_users = unique_user_ids.len();
-println!("unique users: {unique_users}");
 ```
 
-**Sketch version** — `HyperLogLog<ErtlMLE>` estimates the count using fixed, bounded memory.
+**Sketch version** — `HyperLogLog<ErtlMLE>` estimates the count in fixed, bounded memory.
 
 ```rust
 use asap_sketchlib::{ErtlMLE, HyperLogLog, DataInput};
@@ -36,20 +40,18 @@ let mut hll = HyperLogLog::<ErtlMLE>::default();
 for &user_id in &user_ids {
     hll.insert(&DataInput::U64(user_id));
 }
-
 let unique_users = hll.estimate();
-println!("estimated unique users: {unique_users}");
 ```
 
 API reference: [`docs/api/api_hyperloglog.md`](./api/api_hyperloglog.md)
 
 ---
 
-## Frequency estimation with Count-Min Sketch
+## Frequency estimation — [`examples/frequency_cms.rs`](../examples/frequency_cms.rs)
 
-Count how many times a specific user ID appears in a large stream.
+Count how many times a specific user ID appears in a stream.
 
-**Exact baseline** — `HashMap` stores one counter per distinct key; memory grows with the number of distinct items.
+**Exact baseline** — `HashMap` stores one counter per distinct key; memory grows with distinct items.
 
 ```rust
 use std::collections::HashMap;
@@ -60,70 +62,36 @@ let mut user_counts: HashMap<u64, u64> = HashMap::new();
 for &user_id in &user_ids {
     *user_counts.entry(user_id).or_insert(0) += 1;
 }
-
-let target_user_id = 101;
-let exact_count = user_counts.get(&target_user_id).copied().unwrap_or(0);
-println!("exact count for user {target_user_id}: {exact_count}");
+let exact_count = user_counts.get(&101).copied().unwrap_or(0);
 ```
 
-**Sketch version** — `CountMin<FixedMatrix, FastPath>` estimates frequencies using a compact, fixed-size matrix.
+**Sketch version** — `CountMin<FixedMatrix, FastPath>` estimates frequencies in a compact, fixed-size matrix.
 
 ```rust
 use asap_sketchlib::{CountMin, DataInput, FixedMatrix, FastPath};
 
 let user_ids: Vec<u64> = get_user_ids();
 
-// FixedMatrix uses a statically-sized backing array; FastPath selects an
-// optimized hashing path for throughput-sensitive workloads.
+// FixedMatrix: statically-sized backing array.
+// FastPath: optimized hashing route for throughput-critical workloads.
 let mut cms = CountMin::<FixedMatrix, FastPath>::default();
 for &user_id in &user_ids {
     cms.insert(&DataInput::U64(user_id));
 }
-
-let target_user_id = 101;
-let estimated_count = cms.estimate(&DataInput::U64(target_user_id));
-println!("estimated count for user {target_user_id}: {estimated_count}");
+let estimated_count = cms.estimate(&DataInput::U64(101));
 ```
 
 API reference: [`docs/api/api_countmin.md`](./api/api_countmin.md)
 
 ---
 
-## Quantile estimation with KLL
+## Quantile estimation — [`examples/quantile_kll.rs`](../examples/quantile_kll.rs)
 
-Compute quantiles (e.g., p50, p99) over a large stream of values.
+Compute quantiles (p50, p90, p99, …) over a large stream of values.
 
-**Exact baseline** — Polars buffers all values and sorts them to compute quantiles exactly; the sort dominates latency at large scale.
+On a 10M-item Zipf workload (101 quantiles), KLL completes in ~214 ms versus ~7,980 ms for Polars. The difference is the sort phase: Polars must sort all buffered values at query time, while KLL does the maintenance work incrementally during insertion.
 
-```rust
-use polars::prelude::*;
-
-let df = DataFrame::new(vec![Column::new("v".into(), &buf)]).unwrap();
-
-let exprs: Vec<Expr> = (0..=100)
-    .map(|i| {
-        let p = i as f64 / 100.0;
-        col("v")
-            .quantile(lit(p), QuantileMethod::Linear)
-            .alias(format!("q{i}"))
-    })
-    .collect();
-
-// Expensive: resolves quantiles over all buffered values.
-let result = df.lazy().select(exprs).collect().unwrap();
-
-let mut quantiles = [0.0_f64; 101];
-for i in 0..=100 {
-    let col = result
-        .column(&format!("q{i}"))
-        .unwrap()
-        .cast(&DataType::Float64)
-        .unwrap();
-    quantiles[i] = col.f64().unwrap().get(0).unwrap_or(0.0);
-}
-```
-
-**Sketch version** — `KLL` maintains a compact sketch during insertion; the expensive work happens online rather than in a final sort phase.
+**Sketch version** — `KLL` maintains a compact sketch during insertion; the CDF is built once and queries are O(log n).
 
 ```rust
 use asap_sketchlib::sketches::kll::Cdf;
@@ -132,7 +100,7 @@ use asap_sketchlib::KLL;
 let values: Vec<i64> = get_values();
 
 let mut sketch = KLL::<i64>::init_kll(200);
-for v in values.iter() {
+for v in &values {
     sketch.update(v);
 }
 
@@ -140,13 +108,8 @@ for v in values.iter() {
 let cdf: Cdf = sketch.cdf();
 
 // Query any quantile in O(log n) against the cached CDF.
-let mut estimates = [0.0_f64; 101];
-for i in 0..=100 {
-    let p = i as f64 / 100.0;
-    estimates[i] = cdf.query(p);
-}
+let p50 = cdf.query(0.50);
+let p99 = cdf.query(0.99);
 ```
-
-On a 10M-item Zipf workload (101 quantiles), KLL completes in ~214 ms versus ~7,980 ms for Polars, with the difference dominated by Polars' sort phase.
 
 API reference: [`docs/api/api_kll.md`](./api/api_kll.md)
