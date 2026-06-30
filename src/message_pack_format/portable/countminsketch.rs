@@ -450,10 +450,8 @@ impl MessagePackCodec for CountMinSketch {
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let (kind_id, payload) =
-            magic_ids::decode_wrapper(bytes).map_err(|msg| {
-                MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg))
-            })?;
+        let (kind_id, payload) = magic_ids::decode_wrapper(bytes)
+            .map_err(|msg| MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg)))?;
         if kind_id != [magic_ids::COUNT_MIN_SKETCH] {
             return Err(MsgPackError::BadMagicId {
                 expected: magic_ids::COUNT_MIN_SKETCH,

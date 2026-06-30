@@ -435,10 +435,8 @@ impl MessagePackCodec for HllSketch {
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let (kind_id, payload) =
-            magic_ids::decode_wrapper(bytes).map_err(|msg| {
-                MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg))
-            })?;
+        let (kind_id, payload) = magic_ids::decode_wrapper(bytes)
+            .map_err(|msg| MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg)))?;
         if kind_id != [magic_ids::HLL] {
             return Err(MsgPackError::BadMagicId {
                 expected: magic_ids::HLL,

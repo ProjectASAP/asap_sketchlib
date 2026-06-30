@@ -307,8 +307,7 @@ impl MultiHeadHydra {
             }
             if std::mem::discriminant(counter) != std::mem::discriminant(other_counter) {
                 return Err(format!(
-                    "MultiHeadHydra counter type mismatch for dimension '{}'",
-                    name
+                    "MultiHeadHydra counter type mismatch for dimension '{name}'"
                 ));
             }
         }
@@ -731,8 +730,7 @@ mod tests {
         let quantile = hydra.query_key(vec!["metrics", "latency"], &HydraQuery::Cdf(30.0));
         assert!(
             (quantile - 0.6).abs() < 1e-9,
-            "expected CDF near 0.6, got {}",
-            quantile
+            "expected CDF near 0.6, got {quantile}"
         );
 
         let empty_bucket = hydra.query_key(vec!["other", "key"], &HydraQuery::Cdf(50.0));
@@ -851,8 +849,7 @@ mod tests {
         let card = result.unwrap();
         assert!(
             card > 90.0 && card < 110.0,
-            "Expected approx 100, got {}",
-            card
+            "Expected approx 100, got {card}"
         );
     }
 
@@ -874,8 +871,7 @@ mod tests {
         let median = result.unwrap();
         assert!(
             (median - 50.0).abs() < 5.0,
-            "Expected approx 50, got {}",
-            median
+            "Expected approx 50, got {median}"
         );
     }
 

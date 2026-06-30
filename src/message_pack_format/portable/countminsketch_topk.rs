@@ -86,7 +86,7 @@ pub fn heap_to_wire(cms_heap: &SketchlibCMSHeap) -> Vec<WireHeapItem> {
         .map(|hh_item| {
             let key = match &hh_item.key {
                 crate::HeapItem::String(s) => s.clone(),
-                other => format!("{:?}", other),
+                other => format!("{other:?}"),
             };
             WireHeapItem {
                 key,
@@ -305,10 +305,8 @@ impl MessagePackCodec for CountMinSketchWithHeap {
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let (kind_id, payload) =
-            magic_ids::decode_wrapper(bytes).map_err(|msg| {
-                MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg))
-            })?;
+        let (kind_id, payload) = magic_ids::decode_wrapper(bytes)
+            .map_err(|msg| MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg)))?;
         if kind_id != [magic_ids::COUNT_MIN_SKETCH_WITH_HEAP] {
             return Err(MsgPackError::BadMagicId {
                 expected: magic_ids::COUNT_MIN_SKETCH_WITH_HEAP,
