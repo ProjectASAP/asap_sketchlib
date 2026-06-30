@@ -169,9 +169,8 @@ impl MessagePackCodec for HydraKllSketch {
         use rmp_serde::decode::Error as RmpDecodeError;
 
         let (kind_id, payload) =
-            magic_ids::decode_wrapper(bytes).map_err(|_| MsgPackError::BadMagicId {
-                expected: magic_ids::HYDRA_KLL_SKETCH,
-                got: bytes.first().copied(),
+            magic_ids::decode_wrapper(bytes).map_err(|msg| {
+                MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg))
             })?;
         if kind_id != [magic_ids::HYDRA_KLL_SKETCH] {
             return Err(MsgPackError::BadMagicId {

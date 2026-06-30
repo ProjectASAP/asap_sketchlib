@@ -90,9 +90,8 @@ impl MessagePackCodec for SetAggregator {
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
         let (kind_id, payload) =
-            magic_ids::decode_wrapper(bytes).map_err(|_| MsgPackError::BadMagicId {
-                expected: magic_ids::SET_AGGREGATOR,
-                got: bytes.first().copied(),
+            magic_ids::decode_wrapper(bytes).map_err(|msg| {
+                MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg))
             })?;
         if kind_id != [magic_ids::SET_AGGREGATOR] {
             return Err(MsgPackError::BadMagicId {

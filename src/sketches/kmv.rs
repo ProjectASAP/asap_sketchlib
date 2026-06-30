@@ -78,12 +78,12 @@ impl<H: SketchHasher> KMV<H> {
     }
 
     /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
-    /// kind_id: `[NATIVE_KMV, HASHER_UNKNOWN]`.
+    /// kind_id: `[NATIVE_KMV, H::hasher_magic_id()]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
         let payload = to_vec_named(self)?;
         Ok(magic_ids::encode_wrapper(
-            &[magic_ids::NATIVE_KMV, magic_ids::HASHER_UNKNOWN],
+            &[magic_ids::NATIVE_KMV, H::hasher_magic_id()],
             &payload,
         ))
     }
@@ -94,7 +94,10 @@ impl<H: SketchHasher> KMV<H> {
         let (kind_id, payload) =
             magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
         match kind_id {
-            [id, _hasher] if *id == magic_ids::NATIVE_KMV => from_slice(payload),
+            [id, hasher] if *id == magic_ids::NATIVE_KMV => {
+                magic_ids::check_hasher_id::<H>(*hasher)?;
+                from_slice(payload)
+            }
             _ => Err(RmpDecodeError::Uncategorized(format!(
                 "KMV kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
                 magic_ids::NATIVE_KMV,

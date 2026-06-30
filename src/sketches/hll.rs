@@ -453,7 +453,16 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
         let (kind_id, payload) =
             magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
         match kind_id {
-            [id, _hasher] if *id == magic_ids::NATIVE_HLL_HIP => from_slice(payload),
+            [id, hasher] if *id == magic_ids::NATIVE_HLL_HIP => {
+                if *hasher != magic_ids::HASHER_DEFAULT_XX && *hasher != magic_ids::HASHER_UNKNOWN {
+                    return Err(RmpDecodeError::Uncategorized(format!(
+                        "HyperLogLogHIPImpl hasher mismatch: expected 0x{:02x}, got 0x{:02x}",
+                        magic_ids::HASHER_DEFAULT_XX,
+                        hasher
+                    )));
+                }
+                from_slice(payload)
+            }
             _ => Err(RmpDecodeError::Uncategorized(format!(
                 "HyperLogLogHIPImpl kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
                 magic_ids::NATIVE_HLL_HIP,

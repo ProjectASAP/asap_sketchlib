@@ -95,7 +95,7 @@ encoding. The two are not interchangeable even for logically equivalent types
 `portable::KllSketch::to_msgpack` (`0x06`) embeds the raw KLL cell bytes
 inside a `KllSketchData { k, sketch_bytes }` msgpack struct. Those embedded
 bytes are produced by `KLL::serialize_to_bytes` and therefore carry the native
-`0x87` prefix. The portable round-trip is:
+`0x8a` prefix. The portable round-trip is:
 
 ```
 KllSketch::to_msgpack()    → [ ASK1 | v=1 | len=1 | 0x06 | msgpack([k, [ASK1|v=1|len=2|0x8a|0xff|raw_kll]]) ]
