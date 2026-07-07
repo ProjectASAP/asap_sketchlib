@@ -160,7 +160,7 @@ impl Hydra {
         self.query_key(key, &HydraQuery::Cdf(threshold))
     }
 
-    /// Serializes the Hydra sketch into ASK1-wrapped MessagePack bytes.
+    /// Serializes the Hydra sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_HYDRA, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;

@@ -1106,7 +1106,7 @@ impl<H: SketchHasher> CountL2HH<H> {
         compute_median_inline_f64(&mut lst[..])
     }
 
-    /// Serializes the CountL2HH sketch into ASK1-wrapped MessagePack bytes.
+    /// Serializes the CountL2HH sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_CMS_HEAP, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;

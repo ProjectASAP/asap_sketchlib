@@ -1,14 +1,14 @@
 //! Magic-ID constants and wrapper encoding for the ASAP sketch wire format.
 //!
-//! Every serialized binary produced by this library is wrapped in the **ASK1
+//! Every serialized binary produced by this library is wrapped in the **ASAPv1
 //! envelope**, a self-describing header that identifies the sketch type and
 //! reserves space for future metadata without a fixed-size ceiling:
 //!
 //! ```text
-//! [ b"ASK1" | version: u8 | kind_id_len: u8 | kind_id: [u8; kind_id_len] | <msgpack payload> ]
+//! [ b"ASAPv1" | version: u8 | kind_id_len: u8 | kind_id: [u8; kind_id_len] | <msgpack payload> ]
 //! ```
 //!
-//! * `b"ASK1"` — 4-byte ASCII sentinel; unambiguously not a msgpack value.
+//! * `b"ASAPv1"` — 6-byte ASCII sentinel; unambiguously not a msgpack value.
 //! * `version` — envelope layout version; currently `0x01`.
 //! * `kind_id_len + kind_id` — variable-length sketch discriminant encoded as
 //!   canonical unsigned big-endian with no leading zero bytes.  For current
@@ -28,18 +28,18 @@
 
 // ── Envelope constants ────────────────────────────────────────────────────────
 
-/// 4-byte ASCII sentinel that opens every ASAP sketch binary.
-pub const WRAPPER_MAGIC: &[u8; 4] = b"ASK1";
+/// 6-byte ASCII sentinel that opens every ASAP sketch binary.
+pub const WRAPPER_MAGIC: &[u8; 6] = b"ASAPv1";
 
-/// Envelope layout version stored in byte 4.  Increment if the header
-/// structure (field order, field semantics) ever changes.
+/// Envelope layout version stored immediately after `WRAPPER_MAGIC`. Increment
+/// if the header structure (field order, field semantics) ever changes.
 pub const WRAPPER_VERSION: u8 = 0x01;
 
-/// Prepend the ASK1 envelope to `payload` and return the complete binary.
+/// Prepend the ASAPv1 envelope to `payload` and return the complete binary.
 ///
 /// `kind_id` identifies the sketch type (1–2 bytes for all current types).
 pub fn encode_wrapper(kind_id: &[u8], payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(4 + 1 + 1 + kind_id.len() + payload.len());
+    let mut out = Vec::with_capacity(WRAPPER_MAGIC.len() + 1 + 1 + kind_id.len() + payload.len());
     out.extend_from_slice(WRAPPER_MAGIC);
     out.push(WRAPPER_VERSION);
     out.push(kind_id.len() as u8);
@@ -48,36 +48,44 @@ pub fn encode_wrapper(kind_id: &[u8], payload: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Strip the ASK1 envelope from `bytes` and return `(kind_id, payload)`.
+/// Strip the ASAPv1 envelope from `bytes` and return `(kind_id, payload)`.
 ///
 /// Returns `Err(String)` on any structural mismatch so callers can convert to
 /// their own error type.
 pub fn decode_wrapper(bytes: &[u8]) -> Result<(&[u8], &[u8]), String> {
-    if bytes.len() < 7 {
+    let magic_len = WRAPPER_MAGIC.len();
+    let version_offset = magic_len;
+    let kind_id_len_offset = magic_len + 1;
+    let kind_id_offset = magic_len + 2;
+    let min_len = kind_id_offset + 1;
+
+    if bytes.len() < min_len {
         return Err(format!(
-            "ASK1 wrapper: too short ({} bytes, need ≥7)",
+            "ASAPv1 wrapper: too short ({} bytes, need ≥{min_len})",
             bytes.len()
         ));
     }
-    if &bytes[0..4] != WRAPPER_MAGIC {
+    if &bytes[..magic_len] != WRAPPER_MAGIC {
         return Err(format!(
-            "ASK1 wrapper: bad magic {:?}, expected b\"ASK1\"",
-            &bytes[0..4]
+            "ASAPv1 wrapper: bad magic {:?}, expected b\"ASAPv1\"",
+            &bytes[..magic_len]
         ));
     }
-    let version = bytes[4];
+    let version = bytes[version_offset];
     if version != WRAPPER_VERSION {
-        return Err(format!("ASK1 wrapper: unsupported version 0x{version:02x}"));
+        return Err(format!(
+            "ASAPv1 wrapper: unsupported version 0x{version:02x}"
+        ));
     }
-    let kind_id_len = bytes[5] as usize;
-    let header_end = 6 + kind_id_len;
+    let kind_id_len = bytes[kind_id_len_offset] as usize;
+    let header_end = kind_id_offset + kind_id_len;
     if bytes.len() < header_end {
         return Err(format!(
-            "ASK1 wrapper: kind_id_len={kind_id_len} but only {} bytes available after offset 6",
-            bytes.len().saturating_sub(6)
+            "ASAPv1 wrapper: kind_id_len={kind_id_len} but only {} bytes available after offset {kind_id_offset}",
+            bytes.len().saturating_sub(kind_id_offset)
         ));
     }
-    Ok((&bytes[6..header_end], &bytes[header_end..]))
+    Ok((&bytes[kind_id_offset..header_end], &bytes[header_end..]))
 }
 
 /// HLL sketch (all variants: Regular, Datafusion, Hip).

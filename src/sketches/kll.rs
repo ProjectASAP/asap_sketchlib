@@ -662,7 +662,7 @@ impl<T: NumericalValue> KLL<T> {
 
     // -- Serialization -------------------------------------------------------
 
-    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_KLL, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
     where

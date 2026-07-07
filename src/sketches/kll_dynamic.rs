@@ -353,7 +353,7 @@ impl<T: NumericalValue> KLLDynamic<T> {
         self.items.len()
     }
 
-    /// Serialize the sketch into ASK1-wrapped MessagePack bytes.
+    /// Serialize the sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_KLL_DYNAMIC, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
     where

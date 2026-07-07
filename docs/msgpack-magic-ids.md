@@ -1,18 +1,18 @@
-# ASK1 Sketch Wire Format
+# ASAPv1 Sketch Wire Format
 
 Every serialised sketch binary produced by this library is wrapped in the
-**ASK1 envelope**, a self-describing header that carries the sketch's
+**ASAPv1 envelope**, a self-describing header that carries the sketch's
 type discriminant without a fixed-size ceiling on the number of types.
 
 ```
-┌────────────┬────────────┬──────────────────┬───────────────────────┬──────────────────────┐
-│ b"ASK1": 4B │ version: u8 │ kind_id_len: u8  │ kind_id: [kind_id_len] │ msgpack payload …    │
-└────────────┴────────────┴──────────────────┴───────────────────────┴──────────────────────┘
+┌───────────────┬────────────┬──────────────────┬───────────────────────┬──────────────────────┐
+│ b"ASAPv1": 6B │ version: u8 │ kind_id_len: u8  │ kind_id: [kind_id_len] │ msgpack payload …    │
+└───────────────┴────────────┴──────────────────┴───────────────────────┴──────────────────────┘
 ```
 
 | Field | Value | Notes |
 |-------|-------|-------|
-| `b"ASK1"` | `0x41 0x53 0x4B 0x31` | 4-byte ASCII sentinel, not a valid msgpack prefix |
+| `b"ASAPv1"` | `0x41 0x53 0x41 0x50 0x76 0x31` | 6-byte ASCII sentinel, not a valid msgpack prefix |
 | `version` | `0x01` | Increment only if the envelope layout changes |
 | `kind_id_len` | 1 or 2 | Number of `kind_id` bytes (1 for portable, 2 for native) |
 | `kind_id` | see tables below | Canonical big-endian, no leading zero bytes |
@@ -98,7 +98,7 @@ bytes are produced by `KLL::serialize_to_bytes` and therefore carry the native
 `0x8a` prefix. The portable round-trip is:
 
 ```
-KllSketch::to_msgpack()    → [ ASK1 | v=1 | len=1 | 0x06 | msgpack([k, [ASK1|v=1|len=2|0x8a|0xff|raw_kll]]) ]
+KllSketch::to_msgpack()    → [ ASAPv1 | v=1 | len=1 | 0x06 | msgpack([k, [ASAPv1|v=1|len=2|0x8a|0xff|raw_kll]]) ]
 KllSketch::from_msgpack()  → decode_wrapper → kind_id=[0x06], payload=msgpack struct
                              → decode struct: k + sketch_bytes
                              → KLL::deserialize_from_bytes(sketch_bytes)

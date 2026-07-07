@@ -265,7 +265,7 @@ impl UnivMon {
         &mut self.hh_layers[layer]
     }
 
-    /// Serializes the UnivMon sketch into ASK1-wrapped MessagePack bytes.
+    /// Serializes the UnivMon sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_UNIVMON, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;

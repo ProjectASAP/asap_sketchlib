@@ -266,7 +266,7 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
 // Wire layout: [ mode_id: u8 | hasher_id: u8 | <rmp_serde named payload> ]
 
 impl<S: MatrixStorage + Serialize, H: SketchHasher> CountMin<S, RegularPath, H> {
-    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_COUNT_MIN_REGULAR, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
@@ -299,7 +299,7 @@ impl<S: MatrixStorage + for<'de> Deserialize<'de>, H: SketchHasher> CountMin<S, 
 }
 
 impl<S: MatrixStorage + Serialize, H: SketchHasher> CountMin<S, FastPath, H> {
-    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_COUNT_MIN_FAST, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
@@ -1027,7 +1027,7 @@ mod tests {
         let encoded = sketch
             .serialize_to_bytes()
             .expect("serialize CountMin FastPath");
-        let (kind_id, _) = magic_ids::decode_wrapper(&encoded).expect("ASK1 header");
+        let (kind_id, _) = magic_ids::decode_wrapper(&encoded).expect("ASAPv1 header");
         assert_eq!(
             kind_id,
             [

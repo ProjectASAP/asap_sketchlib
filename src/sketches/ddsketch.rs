@@ -165,7 +165,7 @@ impl DDSketch {
         }
     }
 
-    /// Serializes the sketch to ASK1-wrapped MessagePack bytes.
+    /// Serializes the sketch to ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_DD_SKETCH, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;

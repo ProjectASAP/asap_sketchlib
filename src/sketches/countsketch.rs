@@ -284,7 +284,7 @@ where
     S: MatrixStorage<Counter = C> + Serialize,
     C: CountSketchCounter,
 {
-    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_COUNT_SKETCH_REGULAR, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
@@ -325,7 +325,7 @@ where
     S: MatrixStorage<Counter = C> + Serialize,
     C: CountSketchCounter,
 {
-    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_COUNT_SKETCH_FAST, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
@@ -1175,7 +1175,7 @@ mod tests {
         let encoded = sketch
             .serialize_to_bytes()
             .expect("serialize Count FastPath");
-        let (kind_id, _) = magic_ids::decode_wrapper(&encoded).expect("ASK1 header");
+        let (kind_id, _) = magic_ids::decode_wrapper(&encoded).expect("ASAPv1 header");
         assert_eq!(
             kind_id,
             [

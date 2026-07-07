@@ -166,7 +166,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 impl<Registers: HllRegisterStorage + Serialize, H: SketchHasher>
     HyperLogLogImpl<Classic, Registers, H>
 {
-    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_HLL_CLASSIC, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
@@ -203,7 +203,7 @@ impl<Registers: HllRegisterStorage + for<'de> Deserialize<'de>, H: SketchHasher>
 impl<Registers: HllRegisterStorage + Serialize, H: SketchHasher>
     HyperLogLogImpl<ErtlMLE, Registers, H>
 {
-    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_HLL_ERTL_MLE, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
@@ -436,7 +436,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
         self.est as usize
     }
 
-    /// Serializes the sketch into ASK1-wrapped MessagePack bytes.
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
     /// kind_id: `[NATIVE_HLL_HIP, HASHER_DEFAULT_XX]` — HIP always uses DefaultXxHasher.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         use crate::message_pack_format::magic_ids;
@@ -778,8 +778,9 @@ mod tests {
             .serialize_to_bytes()
             .unwrap();
 
-        let (classic_kind_id, _) = magic_ids::decode_wrapper(&classic_bytes).expect("ASK1 header");
-        let (ertl_kind_id, _) = magic_ids::decode_wrapper(&ertl_bytes).expect("ASK1 header");
+        let (classic_kind_id, _) =
+            magic_ids::decode_wrapper(&classic_bytes).expect("ASAPv1 header");
+        let (ertl_kind_id, _) = magic_ids::decode_wrapper(&ertl_bytes).expect("ASAPv1 header");
 
         assert_eq!(classic_kind_id[0], magic_ids::NATIVE_HLL_CLASSIC);
         assert_eq!(ertl_kind_id[0], magic_ids::NATIVE_HLL_ERTL_MLE);

@@ -166,7 +166,7 @@ mod tests {
         let mut sa = SetAggregator::new();
         sa.update("a");
         let bytes = sa.to_msgpack().unwrap();
-        let (_, payload) = magic_ids::decode_wrapper(&bytes).expect("ASK1 header");
+        let (_, payload) = magic_ids::decode_wrapper(&bytes).expect("ASAPv1 header");
         let decoded: StringSet =
             rmp_serde::from_slice(payload).expect("should decode as StringSet { values: ... }");
         assert!(decoded.values.contains("a"));

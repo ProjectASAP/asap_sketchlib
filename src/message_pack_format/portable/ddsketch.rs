@@ -549,14 +549,14 @@ mod tests {
     /// element count so the bytes stay parity-aligned with the Go
     /// reference implementation.
     ///
-    /// The binary is wrapped in the ASK1 envelope; the payload starts after
-    /// the header (b"ASK1" + version + kind_id_len + kind_id).
+    /// The binary is wrapped in the ASAPv1 envelope; the payload starts after
+    /// the header (b"ASAPv1" + version + kind_id_len + kind_id).
     #[test]
     fn test_msgpack_is_three_element_array() {
         use crate::message_pack_format::magic_ids;
         let sk = DdSketch::from_raw(0.01, vec![1, 2, 3], -2);
         let bytes = sk.to_msgpack().unwrap();
-        let (kind_id, payload) = magic_ids::decode_wrapper(&bytes).expect("ASK1 header");
+        let (kind_id, payload) = magic_ids::decode_wrapper(&bytes).expect("ASAPv1 header");
         assert_eq!(
             kind_id,
             [magic_ids::DD_SKETCH],
