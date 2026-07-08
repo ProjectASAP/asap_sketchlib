@@ -2,21 +2,44 @@
 
 Every serialised sketch binary produced by this library is wrapped in the
 **ASAPv1 envelope**, a self-describing header that carries the sketch's
-type discriminant without a fixed-size ceiling on the number of types.
+type discriminant plus wrapper-level metadata needed by consumers that update
+or query sketches outside the original process.
 
 ```
-┌───────────────┬────────────┬──────────────────┬───────────────────────┬──────────────────────┐
-│ b"ASAPv1": 6B │ version: u8 │ kind_id_len: u8  │ kind_id: [kind_id_len] │ msgpack payload …    │
-└───────────────┴────────────┴──────────────────┴───────────────────────┴──────────────────────┘
+┌───────────────┬────────────┬──────────────────┬───────────────────────┬───────────────────┬────────────────────┬──────────────────────┐
+│ b"ASAPv1": 6B │ version: u8 │ kind_id_len: u8  │ kind_id: [kind_id_len] │ metadata_len: u32 │ metadata: msgpack  │ msgpack payload …    │
+└───────────────┴────────────┴──────────────────┴───────────────────────┴───────────────────┴────────────────────┴──────────────────────┘
 ```
 
 | Field | Value | Notes |
 |-------|-------|-------|
 | `b"ASAPv1"` | `0x41 0x53 0x41 0x50 0x76 0x31` | 6-byte ASCII sentinel, not a valid msgpack prefix |
-| `version` | `0x01` | Increment only if the envelope layout changes |
+| `version` | `0x02` | Increment only if the envelope layout changes |
 | `kind_id_len` | 1 or 2 | Number of `kind_id` bytes (1 for portable, 2 for native) |
 | `kind_id` | see tables below | Canonical big-endian, no leading zero bytes |
+| `metadata_len` | big-endian `u32` | Number of bytes in the metadata MessagePack block |
+| `metadata` | compact msgpack array | Wrapper metadata; currently records the hash profile |
 | payload | msgpack bytes | Compact (array) or named (map) depending on sketch type |
+
+Current metadata fields, in compact MessagePack array order:
+
+| Index | Field | Standard hash value |
+|-------|-------|---------------------|
+| 0 | `metadata_version` | `1` |
+| 1 | `hash_spec_present` | `true` for portable IDs and registered `DefaultXxHasher` native IDs |
+| 2 | `hash_profile_id` | `projectasap.xxh3.seedlist.v1` |
+| 3 | `hash_algorithm` | `xxh3_64_128` |
+| 4 | `seed_list` | `[0xcafe3553, 0xade3415118, 0x8cc70208, 0x2f024b2b, 0x451a3df5, 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19, 0xcbbb9d5d, 0x629a292a, 0x9159015a, 0x152fecd8, 0x67332667, 0x8eb44a87, 0xdb0c2e0d]` |
+| 5 | `canonical_seed_index` | `5` |
+| 6 | `matrix_seed_index` | `0` |
+| 7 | `hydra_seed_index` | `6` |
+| 8 | `univmon_bottom_layer_seed_index` | `19` |
+| 9 | `seed_derivation` | `seed_list_index_wrap` |
+| 10 | `input_encoding` | `projectasap.input.v1` |
+
+If a wrapper cannot declare a complete registered hash profile, it still carries
+metadata version `1` with `hash_spec_present = false` and empty/default hash
+fields. Readers validate known hash metadata before exposing the payload.
 
 **Portable** sketches use a 1-byte `kind_id` (`kind_id_len = 1`).
 **Native** Rust sketches use a 2-byte `kind_id` (`kind_id_len = 2`): first byte
@@ -98,7 +121,7 @@ bytes are produced by `KLL::serialize_to_bytes` and therefore carry the native
 `0x8a` prefix. The portable round-trip is:
 
 ```
-KllSketch::to_msgpack()    → [ ASAPv1 | v=1 | len=1 | 0x06 | msgpack([k, [ASAPv1|v=1|len=2|0x8a|0xff|raw_kll]]) ]
+KllSketch::to_msgpack()    → [ ASAPv1 | v=1 | len=1 | 0x06 | metadata | msgpack([k, [ASAPv1|v=1|len=2|0x8a|0xff|metadata|raw_kll]]) ]
 KllSketch::from_msgpack()  → decode_wrapper → kind_id=[0x06], payload=msgpack struct
                              → decode struct: k + sketch_bytes
                              → KLL::deserialize_from_bytes(sketch_bytes)
