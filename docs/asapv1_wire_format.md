@@ -362,7 +362,88 @@ mode (Regular↔Fast) — that would need re-inserting the original data.
 
 ---
 
-## Section 4 — Wire encoding rules (byte-level)
+## Section 4 — Wire coverage
+
+The in-memory sketch types are deliberately **freer** than what the wire
+serializes. That is the same framing as §3.2 — *in-memory is free; the wire is a
+small fixed set* — stated once, in full, so the coverage decision is explicit and
+so a user knows exactly **what to implement (or convert)** when they want
+something the wire does not cover out of the box.
+
+A config is **wire-eligible** iff `serialize_to_bytes` is defined for it. That is
+enforced by the trait bounds on each sketch's serialization impl — nothing else
+is a wire type, and the compiler says so.
+
+### 4.1 — HLL coverage
+
+HLL has three degrees of freedom, and the wire covers the full cross product:
+
+| Freedom | In-memory choices | Wire-eligible |
+| --------- | ------------------- | --------------- |
+| estimator variant | `Classic`, `ErtlMLE`, HIP | **all three** — each maps to its own `kind_id` via `HllWireVariant` (`Classic` → `0x01 0x01`, `ErtlMLE` → `0x01 0x02`) or `HLL_KIND_HIP` (`0x01 0x03`) |
+| precision | `HllBucketListP12` / `P14` / `P16` | **all three** — carried as `precision` (`12`/`14`/`16`) in the metadata |
+| hasher `H` | any `H: SketchHasher` | **any `H: HashProfile`** — the metadata is `hll_metadata::<H>` (profile-derived, self-describing) |
+
+`HyperLogLogImpl<Variant, Registers, H>::serialize_to_bytes` is bounded on
+`Variant: HllWireVariant, H: HashProfile`, so every (variant × precision × hasher)
+combination serializes. **HLL is fully covered** — there is no in-memory HLL shape
+that the wire cannot represent.
+
+One nuance for accuracy: the HIP estimator is a standalone struct
+(`HyperLogLogHIPImpl<Registers>`) that is **not** parameterized by a hasher — it
+hashes through the `DefaultXxHasher` free functions and its
+`serialize_to_bytes` uses `standard_hll_metadata`. So HIP is wire-eligible only
+under the **standard profile**; the custom-hasher freedom above applies to the
+`Classic` / `ErtlMLE` family.
+
+### 4.2 — Count-Min coverage
+
+`CountMin<S, Mode, H>` is generic in memory over counter type, storage, mode, and
+hasher, and also supports Nitro sampling and delta emission. The wire supports a
+**fixed subset** — the serialization impl exists only for
+`CountMin<Vector2D<T>, Mode, H>` where `T: CmsWireCounter`, `Mode: CmsWireMode`,
+`H: HashProfile`:
+
+| Freedom | In-memory choices | Wire-eligible? |
+| --------- | ------------------- | ---------------- |
+| counter type | `i32`, `i64`, `i128`, `f64`, … | `i64` ✓, `f64` ✓ (`CmsWireCounter`); `i32` / `i128` / other ✗ — convert first |
+| mode | `RegularPath`, `FastPath` | `RegularPath` ✓ (`"regular"`), `FastPath` ✓ (`"fast"`) (`CmsWireMode`) |
+| storage `S` | `Vector2D<T>`, `FixedMatrix`, `DefaultMatrixI32/I64/I128`, `QuickMatrixI64/I128` | `Vector2D<i64>` / `Vector2D<f64>` ✓; `FixedMatrix` / `DefaultMatrix*` / `QuickMatrix*` ✗ — rebuild into `Vector2D` |
+| hasher `H` | any `H: SketchHasher` | any `H: HashProfile` ✓; a hasher without `HashProfile` ✗ (compile error, by design) |
+| Nitro / delta emission | `enable_nitro`, `insert_emit_delta` (i32-only) | **n/a** — in-memory-only machinery, never part of the sketch wire payload |
+
+Note the **default** `CountMin` storage is `Vector2D<i32>` (see the struct
+default), which is **not** wire-eligible: a `CountMin::default()` must be built as
+(or converted to) `Vector2D<i64>` / `Vector2D<f64>` before it can serialize. Two
+sketches that differ only in `mode` place a key in different columns (compare
+`cm_regular_path_correctness` vs `cm_fast_path_correctness`), which is why `mode`
+is recorded rather than assumed.
+
+### 4.3 — "If you want X, do Y"
+
+The actionable part. Each row is a config the wire does not cover directly and the
+concrete step that makes it serializable.
+
+| You have | Do this |
+| ---------- | --------- |
+| An **exotic counter type** (e.g. `u64`, `i128`) | Convert cell-by-cell to `i64` or `f64` and serialize the result — the exact `Vector2D::from_fn` + `CountMin::from_storage` recipe in §3.2. Only you know if the mapping is lossless. **Or**, if it deserves to be a first-class wire type, implement `CmsWireCounter` for it (giving its `COUNTER_TYPE` string) **and** add the matching Go decode support **and** check in a golden byte-vector — do all three, not just the Rust trait. |
+| **Non-`Vector2D` storage** (`FixedMatrix` / `DefaultMatrix*` / `QuickMatrix*`) | Rebuild it into a `Vector2D<i64>` / `Vector2D<f64>` via `CountMin::from_storage(Vector2D::from_fn(rows, cols, |r, c| src.as_storage().query_one_counter(r, c) as i64))`, then serialize. |
+| A **custom hash function** | Implement `HashProfile` for the hasher (a distinct `PROFILE_ID`, its own `seed_list()` and seed index). It then serializes **truthfully** and, because `seed_list` is inlined, **self-describes** on the wire — no registry needed to read it (see §2, "Custom hash profiles"). |
+| An **unprofiled hasher** (impls `SketchHasher` but not `HashProfile`) | Nothing — it **cannot** serialize, and that is a **compile error by design** (`serialize_to_bytes` is bounded on `H: HashProfile`). This is the intended fail-closed behavior — mislabeled bytes are impossible by construction — not a bug to work around. |
+| A **brand-new sketch algorithm** | Allocate a fresh `kind_id` in the registry (§1 — allocated once, never recycled), define its metadata fields (§2), and author its payload (§3). Mirror the `kind_id` and add goldens on the Go side. |
+
+### 4.4 — Why the wire is a small fixed set
+
+Every wire-eligible config is a **cross-language surface** (Go must decode it
+bit-for-bit) plus a **golden byte-vector** to maintain forever. Keeping that set
+small and fixed keeps both bounded — a handful of counter types and modes instead
+of the open-ended in-memory matrix. The in-memory types stay maximally free for
+performance and experimentation; serialization is the deliberately narrow gate
+where that freedom is pinned down to a canonical, portable form.
+
+---
+
+## Section 5 — Wire encoding rules (byte-level)
 
 This is what makes two languages emit **identical bytes**. msgpack fixes
 endianness and float format; these rules fix the family/width choices that
@@ -441,7 +522,7 @@ through the transition, retire `portable` once goldens are in place.
 - **kind_id = algorithm identity**, not parameters. Structural params (HLL
   precision, CMS counter type + mode) live in metadata, which is read before the
   payload. Payload structure = kind_id + metadata.
-- **Q-META** — metadata is a msgpack **map**; canonical key order per Section 4;
+- **Q-META** — metadata is a msgpack **map**; canonical key order per Section 5;
   optional fields are omitted keys.
 - **Q-SEEDS** — `seed_list` is **inlined** in v1 so the bytes self-describe the
   hash (a consumer needs no registry to read the seeds). Resolving seeds from
@@ -460,4 +541,4 @@ through the transition, retire `portable` once goldens are in place.
 - **Q-VER** — no payload version field. A new incompatible encoding gets a **new
   `kind_id`**; retired ids are reserved forever and never recycled.
 - **Encoding** — metadata + payload are both msgpack; payload is a positional
-  array. Byte-level rules in Section 4.
+  array. Byte-level rules in Section 5.
