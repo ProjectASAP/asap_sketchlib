@@ -587,13 +587,7 @@ mod tests {
                 let err = rel_err(got, want);
                 assert!(
                     err <= tol,
-                    "quantile {} (p={:.2}) relerr={:.4} got={} want={} tol={}",
-                    name,
-                    p,
-                    err,
-                    got,
-                    want,
-                    tol
+                    "quantile {name} (p={p:.2}) relerr={err:.4} got={got} want={want} tol={tol}"
                 );
             }
         }
@@ -654,13 +648,7 @@ mod tests {
                 let err = rel_err(got, want);
                 assert!(
                     err <= tol,
-                    "quantile {} (p={:.2}) relerr={:.4} got={} want={} tol={}",
-                    name,
-                    p,
-                    err,
-                    got,
-                    want,
-                    tol
+                    "quantile {name} (p={p:.2}) relerr={err:.4} got={got} want={want} tol={tol}"
                 );
             }
         }
@@ -724,13 +712,7 @@ mod tests {
                 let err = rel_err(got, want);
                 assert!(
                     err <= tol,
-                    "quantile {} (p={:.2}) relerr={:.4} got={} want={} tol={}",
-                    name,
-                    p,
-                    err,
-                    got,
-                    want,
-                    tol
+                    "quantile {name} (p={p:.2}) relerr={err:.4} got={got} want={want} tol={tol}"
                 );
             }
         }
@@ -791,13 +773,7 @@ mod tests {
                 let err = rel_err(got, want);
                 assert!(
                     err <= tol + 1e-9,
-                    "quantile {} (p={:.2}) relerr={:.4} got={} want={} tol={}",
-                    name,
-                    p,
-                    err,
-                    got,
-                    want,
-                    tol
+                    "quantile {name} (p={p:.2}) relerr={err:.4} got={got} want={want} tol={tol}"
                 );
             }
         }

@@ -11,14 +11,14 @@ use asap_sketchlib::{CountMin, DataInput, ErtlMLE, HyperLogLog, KLL, RegularPath
 
 fn main() {
     // --- Count-Min Sketch ---
-    let mut cms: CountMin<Vector2D<i32>, RegularPath> = CountMin::with_dimensions(5, 1024);
+    let mut cms: CountMin<Vector2D<i64>, RegularPath> = CountMin::with_dimensions(5, 1024);
     for id in 0u64..1_000 {
         cms.insert(&DataInput::U64(id % 100)); // 100 distinct IDs
     }
     let before = cms.estimate(&DataInput::U64(42));
 
     let bytes = cms.serialize_to_bytes().expect("CMS serialize");
-    let cms2 = CountMin::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&bytes)
+    let cms2 = CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes)
         .expect("CMS deserialize");
     let after = cms2.estimate(&DataInput::U64(42));
 
