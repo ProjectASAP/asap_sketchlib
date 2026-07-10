@@ -95,21 +95,68 @@ design payloads for**.
 
 ### kind_id registry (single source of truth — mirrored verbatim in `sketchlib-go`)
 
-| kind_id | Sketch | Algorithm | Payload | Status |
+The **family** bytes below now match `sketchlib-go`'s
+`wire/asapmsgpack/magic_ids.go` verbatim. An earlier draft of this doc used
+*speculative* family bytes (`0x03` KLL, `0x04` DDSketch, `0x05` KMV, `0x06`
+CountSketch) that conflicted with the ids Go had already committed to; those have
+been **corrected to align with Go** (`0x03` = Count-Min-with-heap, `0x04` =
+Count-Sketch, `0x05` = DDSketch, `0x06` = KLL). Family bytes `0x0a`+ are new
+allocations for the remaining sketches in [`apis.md`](./apis.md) that Go has not
+assigned yet.
+
+Only the HLL variants and Count-Min have designed payloads today; every other row
+lists the family byte with variant `0x00` reserved and payload **TBD**. Variant
+sub-ids are **not** invented ahead of a payload design — a family that later needs
+several algorithms allocates its variants when it is designed (as HLL did).
+
+| kind_id | Sketch | Algorithm / variant | Payload | Status |
 | --------- | -------- | --------- | --------- | -------- |
 | `0x01 0x00` | HLL | Unspecified | — | reserved |
 | `0x01 0x01` | HLL | Classic ("Regular") | §3.1 | implemented |
 | `0x01 0x02` | HLL | Ertl-MLE ("Datafusion") | §3.1 | implemented |
 | `0x01 0x03` | HLL | HIP | §3.1 | implemented |
 | `0x02 0x00` | Count-Min | Count-Min | §3.2 | implemented |
-| `0x03 ..` | KLL | — | TBD | not designed |
-| `0x04 ..` | DDSketch | — | TBD | not designed |
-| `0x05 ..` | KMV | — | TBD | not designed |
-| `0x06 ..` | CountSketch | — | TBD | not designed |
+| `0x03 0x00` | Count-Min-with-heap (CMSHeap) | — | TBD | assigned in Go / payload not designed |
+| `0x04 0x00` | Count Sketch | — | TBD | assigned in Go / payload not designed |
+| `0x05 0x00` | DDSketch | — | TBD | assigned in Go / payload not designed |
+| `0x06 0x00` | KLL | — | TBD | assigned in Go / payload not designed |
+| `0x07 0x00` | Hydra-KLL | — | TBD | assigned in Go / payload not designed |
+| `0x08 0x00` | SetAggregator | — | TBD | assigned in Go / payload not designed |
+| `0x09 0x00` | DeltaResult | — | TBD | assigned in Go / payload not designed |
+| `0x0a 0x00` | Count-Sketch-with-heap (CSHeap) | — | TBD | reserved / not designed |
+| `0x0b 0x00` | Elastic (`Unstable`) | — | TBD | reserved / not designed |
+| `0x0c 0x00` | Coco (`Unstable`) | — | TBD | reserved / not designed |
+| `0x0d 0x00` | UniformSampling (`Unstable`) | — | TBD | reserved / not designed |
+| `0x0e 0x00` | KMV (`Unstable`) | — | TBD | reserved / not designed |
+| `0x0f 0x00` | HashSketchEnsemble | — | TBD | reserved / not designed |
+| `0x10 0x00` | UnivMon | — | TBD | reserved / not designed |
+| `0x11 0x00` | UnivMon Optimized | — | TBD | reserved / not designed |
+| `0x12 0x00` | NitroBatch | — | TBD | reserved / not designed |
+| `0x13 0x00` | ExponentialHistogram | — | TBD | reserved / not designed |
+| `0x14 0x00` | EHSketchList | — | TBD | reserved / not designed |
+| `0x15 0x00` | EHUnivOptimized (`Unstable`) | — | TBD | reserved / not designed |
+| `0x16 0x00` | OctoSketch | — | TBD | reserved / not designed |
 
 Count-Min is **one** kind_id: its counter type (i64/f64) and mode (fast/regular)
 are metadata, not separate ids. Classic and Ertl-MLE have byte-identical payloads
 but are separate ids because `kind_id` also selects the *estimator* to apply.
+
+**Mapping notes** (where `apis.md` and Go's `magic_ids.go` don't line up 1:1):
+
+- **CMSHeap vs CSHeap.** Go's `MagicCountMinSketchWithHeap` (`0x03`) is the
+  Count-*Min*-with-heap sketch (`apis.md` → CMSHeap). The Count-*Sketch*-with-heap
+  sketch (`apis.md` → CSHeap) is a distinct family and gets a fresh byte (`0x0a`);
+  it is **not** a variant of `0x03`.
+- **Hydra.** `apis.md` lists the "Hydra" framework; Go's only Hydra id is
+  `MagicHydraKLLSketch` (`0x07`), so Hydra maps here to the Hydra-KLL id. If Hydra
+  is later wrapped around a non-KLL base sketch, that combination gets its own id.
+- **SetAggregator / DeltaResult** (`0x08` / `0x09`) come from Go's `magic_ids.go`
+  and are **not** listed as sketches in `apis.md` (they are aggregation / delta
+  result envelopes, not stand-alone sketches). They are kept here so the family
+  space stays mirrored verbatim with Go.
+- **`Unstable`** rows mirror the `Unstable` status those sketches carry in
+  `apis.md`; their kind_id is reserved but the payload (and the sketch API) may
+  still change.
 
 **Allocation rules:**
 
