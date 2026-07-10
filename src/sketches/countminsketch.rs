@@ -16,8 +16,8 @@ use crate::message_pack_format::envelope;
 use crate::octo_delta::{CM_PROMASK, CmDelta};
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
-    FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded,
+    FastPathHasher, FixedMatrix, HashProfile, MatrixFastHash, MatrixStorage, NitroTarget,
+    QuickMatrixI64, QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded,
 };
 
 const DEFAULT_ROW_NUM: usize = 3;
@@ -272,8 +272,6 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
 
 /// CMS kind_id: family `0x02`, single algorithm variant `0x00`.
 const CMS_KIND: &[u8] = &[0x02, 0x00];
-/// The seed-list index Count-Min hashes its matrix rows from.
-const CMS_MATRIX_SEED_INDEX: u32 = 0;
 
 /// Names the wire counter type carried in the metadata (`counter_type`).
 /// Implemented only for the two wire-eligible counter types.
@@ -317,15 +315,19 @@ struct CmsMetadata {
     mode: String,
 }
 
-fn standard_cms_metadata(counter_type: &str, mode: &str) -> CmsMetadata {
+/// Builds the CMS descriptor metadata from the hasher's [`HashProfile`], so the
+/// wire bytes truthfully describe how the sketch was hashed (rather than
+/// hardcoding the standard profile). `matrix_seed_index` is the profile's own
+/// row seed index.
+fn cms_metadata<H: HashProfile>(counter_type: &str, mode: &str) -> CmsMetadata {
     CmsMetadata {
         metadata_version: 1,
-        hash_profile_id: envelope::HASH_PROFILE_PROJECTASAP_XXH3_V1.to_string(),
-        hash_algorithm: envelope::HASH_ALGORITHM_XXH3_64_128.to_string(),
-        seed_derivation: envelope::HASH_SEED_DERIVATION_INDEX_WRAP.to_string(),
-        input_encoding: envelope::HASH_INPUT_ENCODING_PROJECTASAP_V1.to_string(),
-        seed_list: crate::SEEDLIST.to_vec(),
-        matrix_seed_index: CMS_MATRIX_SEED_INDEX,
+        hash_profile_id: H::PROFILE_ID.to_string(),
+        hash_algorithm: H::ALGORITHM.to_string(),
+        seed_derivation: H::SEED_DERIVATION.to_string(),
+        input_encoding: H::INPUT_ENCODING.to_string(),
+        seed_list: H::seed_list(),
+        matrix_seed_index: H::MATRIX_SEED_INDEX,
         counter_type: counter_type.to_string(),
         mode: mode.to_string(),
     }
@@ -348,14 +350,15 @@ where
     // bound), not by the bodies below.
     T: CmsWireCounter + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
     Mode: CmsWireMode,
-    H: SketchHasher,
+    H: SketchHasher + HashProfile,
 {
-    /// Serializes the sketch into an ASAPv1 MessagePack envelope.
+    /// Serializes the sketch into an ASAPv1 MessagePack envelope. The metadata is
+    /// derived from the hasher's [`HashProfile`], so it truthfully describes how
+    /// the sketch was hashed.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
-        let metadata =
-            rmp_serde::to_vec_named(&standard_cms_metadata(T::COUNTER_TYPE, Mode::MODE))?;
+        let metadata = rmp_serde::to_vec_named(&cms_metadata::<H>(T::COUNTER_TYPE, Mode::MODE))?;
         let payload = rmp_serde::to_vec(&CmsPayload::<T> {
             rows: rows as u32,
             cols: cols as u32,
@@ -374,7 +377,7 @@ where
             )));
         }
         let meta: CmsMetadata = from_slice(metadata)?;
-        if meta != standard_cms_metadata(T::COUNTER_TYPE, Mode::MODE) {
+        if meta != cms_metadata::<H>(T::COUNTER_TYPE, Mode::MODE) {
             return Err(RmpDecodeError::Uncategorized(
                 "ASAPv1 CMS envelope: metadata mismatch".to_string(),
             ));
@@ -1076,6 +1079,79 @@ mod tests {
         assert_eq!(
             sketch.as_storage().as_slice(),
             decoded.as_storage().as_slice()
+        );
+    }
+
+    // A test-only custom hasher: hashes exactly like `DefaultXxHasher` but
+    // declares a DIFFERENT `HashProfile`. CMS metadata is derived from the
+    // profile, so an `AltHasher` sketch serializes truthfully. (An *unprofiled*
+    // hasher cannot serialize at all — that is a compile-time guarantee, since
+    // the wire methods are bounded on `H: HashProfile`.)
+    #[derive(Clone, Debug)]
+    struct AltHasher;
+
+    impl SketchHasher for AltHasher {
+        type HashType = <DefaultXxHasher as SketchHasher>::HashType;
+
+        fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded(d, key)
+        }
+        fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded(d, key)
+        }
+        fn hash_item64_seeded(d: usize, key: &crate::HeapItem) -> u64 {
+            DefaultXxHasher::hash_item64_seeded(d, key)
+        }
+        fn hash_item128_seeded(d: usize, key: &crate::HeapItem) -> u128 {
+            DefaultXxHasher::hash_item128_seeded(d, key)
+        }
+        fn hash_for_matrix_seeded(
+            seed_idx: usize,
+            rows: usize,
+            cols: usize,
+            key: &DataInput,
+        ) -> Self::HashType {
+            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+        }
+    }
+
+    impl HashProfile for AltHasher {
+        const PROFILE_ID: &'static str = "test.alt.profile.v1";
+        const ALGORITHM: &'static str = "xxh3_64_128";
+        const SEED_DERIVATION: &'static str = "seed_list_index_wrap";
+        const INPUT_ENCODING: &'static str = "projectasap.input.v1";
+        fn seed_list() -> Vec<u64> {
+            vec![1, 2, 3, 4, 5]
+        }
+        const CANONICAL_SEED_INDEX: u32 = crate::CANONICAL_HASH_SEED as u32;
+        const MATRIX_SEED_INDEX: u32 = 0;
+    }
+
+    #[test]
+    fn count_min_custom_hasher_profile_round_trips_and_is_self_describing() {
+        // (a) A CMS built with a custom-profile hasher round-trips.
+        let mut alt = CountMin::<Vector2D<i64>, RegularPath, AltHasher>::with_dimensions(3, 8);
+        let mut std = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
+        alt.insert(&DataInput::U64(42));
+        alt.insert(&DataInput::U64(7));
+        std.insert(&DataInput::U64(42));
+        std.insert(&DataInput::U64(7));
+
+        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
+        let decoded =
+            CountMin::<Vector2D<i64>, RegularPath, AltHasher>::deserialize_from_bytes(&alt_bytes)
+                .expect("alt decode");
+        assert_eq!(alt.as_storage().as_slice(), decoded.as_storage().as_slice());
+
+        // (b) Bytes differ from the standard-profile sketch (metadata derived
+        // from the different profile).
+        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        assert_ne!(alt_bytes, std_bytes);
+
+        // (c) Standard-profile decode fails closed on custom-profile bytes.
+        assert!(
+            CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&alt_bytes).is_err(),
+            "standard-profile decode must reject custom-profile bytes"
         );
     }
 

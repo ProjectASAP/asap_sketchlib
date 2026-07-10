@@ -8,14 +8,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::{Error, MessagePackCodec};
 use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode, CountMin};
-use crate::{SketchHasher, Vector2D};
+use crate::{HashProfile, SketchHasher, Vector2D};
 
 impl<T, Mode, H> MessagePackCodec for CountMin<Vector2D<T>, Mode, H>
 where
     // `AddAssign` is required for `Vector2D<T>: MatrixStorage`.
     T: CmsWireCounter + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
     Mode: CmsWireMode,
-    H: SketchHasher,
+    H: SketchHasher + HashProfile,
 {
     fn to_msgpack(&self) -> Result<Vec<u8>, Error> {
         Ok(self.serialize_to_bytes()?)

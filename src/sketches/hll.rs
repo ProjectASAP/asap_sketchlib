@@ -37,7 +37,9 @@ use crate::message_pack_format::envelope;
 use crate::structures::fixed_structure::{
     HllBucketListP12, HllBucketListP14, HllBucketListP16, HllRegisterStorage,
 };
-use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, SketchHasher, hash64_seeded};
+use crate::{
+    CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, HashProfile, SketchHasher, hash64_seeded,
+};
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -152,21 +154,32 @@ pub(crate) struct HllMetadata {
     pub(crate) precision: u32,
 }
 
-pub(crate) fn standard_hll_metadata(precision: u32) -> HllMetadata {
+/// Builds the HLL descriptor metadata from the hasher's [`HashProfile`], so the
+/// wire bytes truthfully describe how the sketch was hashed (rather than
+/// hardcoding the standard profile).
+pub(crate) fn hll_metadata<H: HashProfile>(precision: u32) -> HllMetadata {
     HllMetadata {
         metadata_version: 1,
-        hash_profile_id: envelope::HASH_PROFILE_PROJECTASAP_XXH3_V1.to_string(),
-        hash_algorithm: envelope::HASH_ALGORITHM_XXH3_64_128.to_string(),
-        seed_derivation: envelope::HASH_SEED_DERIVATION_INDEX_WRAP.to_string(),
-        input_encoding: envelope::HASH_INPUT_ENCODING_PROJECTASAP_V1.to_string(),
-        seed_list: crate::SEEDLIST.to_vec(),
-        canonical_seed_index: crate::CANONICAL_HASH_SEED as u32,
+        hash_profile_id: H::PROFILE_ID.to_string(),
+        hash_algorithm: H::ALGORITHM.to_string(),
+        seed_derivation: H::SEED_DERIVATION.to_string(),
+        input_encoding: H::INPUT_ENCODING.to_string(),
+        seed_list: H::seed_list(),
+        canonical_seed_index: H::CANONICAL_SEED_INDEX,
         precision,
     }
 }
 
+/// The standard ProjectASAP profile metadata (the [`DefaultXxHasher`] profile).
+/// Used by the portable path, which only represents standard-profile sketches.
+pub(crate) fn standard_hll_metadata(precision: u32) -> HllMetadata {
+    hll_metadata::<DefaultXxHasher>(precision)
+}
+
 /// Validate the envelope for a known target and return the raw payload bytes.
-fn validated_hll_payload<'a>(
+/// The metadata is checked against the profile of `H`, so bytes hashed under a
+/// different profile are rejected (fail closed).
+fn validated_hll_payload<'a, H: HashProfile>(
     bytes: &'a [u8],
     expected_kind_id: &[u8],
     expected_precision: u32,
@@ -179,7 +192,7 @@ fn validated_hll_payload<'a>(
         )));
     }
     let meta: HllMetadata = from_slice(metadata)?;
-    if meta != standard_hll_metadata(expected_precision) {
+    if meta != hll_metadata::<H>(expected_precision) {
         return Err(RmpDecodeError::Uncategorized(
             "ASAPv1 HLL envelope: metadata mismatch".to_string(),
         ));
@@ -223,26 +236,30 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         }
     }
 
-    /// Serializes the sketch into an ASAPv1 MessagePack envelope.
+    /// Serializes the sketch into an ASAPv1 MessagePack envelope. The metadata is
+    /// derived from the hasher's [`HashProfile`], so it truthfully describes how
+    /// the sketch was hashed.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
     where
         Variant: HllWireVariant,
+        H: HashProfile,
     {
-        let metadata =
-            rmp_serde::to_vec_named(&standard_hll_metadata(Registers::PRECISION as u32))?;
+        let metadata = rmp_serde::to_vec_named(&hll_metadata::<H>(Registers::PRECISION as u32))?;
         let payload = rmp_serde::to_vec(&HllPayloadPlain {
             registers: self.registers.as_slice().to_vec(),
         })?;
         Ok(envelope::encode(Variant::WIRE_KIND_ID, &metadata, &payload))
     }
 
-    /// Deserializes a sketch from an ASAPv1 MessagePack envelope.
+    /// Deserializes a sketch from an ASAPv1 MessagePack envelope. Bytes whose
+    /// metadata does not match this hasher's [`HashProfile`] are rejected.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
     where
         Variant: HllWireVariant,
+        H: HashProfile,
     {
         let payload =
-            validated_hll_payload(bytes, Variant::WIRE_KIND_ID, Registers::PRECISION as u32)?;
+            validated_hll_payload::<H>(bytes, Variant::WIRE_KIND_ID, Registers::PRECISION as u32)?;
         let payload: HllPayloadPlain = from_slice(payload)?;
         let registers = registers_from_bytes::<Registers>(&payload.registers)?;
         Ok(Self {
@@ -510,7 +527,11 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let payload = validated_hll_payload(bytes, HLL_KIND_HIP, Registers::PRECISION as u32)?;
+        let payload = validated_hll_payload::<DefaultXxHasher>(
+            bytes,
+            HLL_KIND_HIP,
+            Registers::PRECISION as u32,
+        )?;
         let payload: HllPayloadHip = from_slice(payload)?;
         let registers = registers_from_bytes::<Registers>(&payload.registers)?;
         Ok(Self {
@@ -653,7 +674,7 @@ mod tests {
         }
     }
 
-    impl<Registers: HllRegisterStorage, H: SketchHasher> HllSerializable
+    impl<Registers: HllRegisterStorage, H: SketchHasher + HashProfile> HllSerializable
         for HyperLogLogImpl<Classic, Registers, H>
     {
         fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
@@ -691,7 +712,9 @@ mod tests {
                 }
             }
 
-            impl<H: SketchHasher> HllSerializable for HyperLogLogImpl<ErtlMLE, $storage, H> {
+            impl<H: SketchHasher + HashProfile> HllSerializable
+                for HyperLogLogImpl<ErtlMLE, $storage, H>
+            {
                 fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
                     HyperLogLogImpl::<ErtlMLE, $storage, H>::serialize_to_bytes(self)
                 }
@@ -1112,6 +1135,90 @@ mod tests {
         assert_eq!(
             hip_bytes,
             portable_hip.to_msgpack().expect("portable serialize")
+        );
+    }
+
+    // A test-only custom hasher: it hashes exactly like `DefaultXxHasher`
+    // (delegation) but declares a DIFFERENT `HashProfile` (distinct profile id
+    // and seed list). Serialization is derived from the profile, so an
+    // `AltHasher` sketch serializes truthfully and its metadata differs from the
+    // standard profile on the wire.
+    //
+    // Note: that an *unprofiled* hasher cannot be serialized is a compile-time
+    // guarantee — `serialize_to_bytes`/`deserialize_from_bytes` are bounded on
+    // `H: HashProfile`, so a hasher that impls only `SketchHasher` fails to
+    // compile. There is nothing to assert at runtime.
+    #[derive(Clone, Debug)]
+    struct AltHasher;
+
+    impl SketchHasher for AltHasher {
+        type HashType = <DefaultXxHasher as SketchHasher>::HashType;
+
+        fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded(d, key)
+        }
+        fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded(d, key)
+        }
+        fn hash_item64_seeded(d: usize, key: &crate::HeapItem) -> u64 {
+            DefaultXxHasher::hash_item64_seeded(d, key)
+        }
+        fn hash_item128_seeded(d: usize, key: &crate::HeapItem) -> u128 {
+            DefaultXxHasher::hash_item128_seeded(d, key)
+        }
+        fn hash_for_matrix_seeded(
+            seed_idx: usize,
+            rows: usize,
+            cols: usize,
+            key: &DataInput,
+        ) -> Self::HashType {
+            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+        }
+    }
+
+    impl HashProfile for AltHasher {
+        const PROFILE_ID: &'static str = "test.alt.profile.v1";
+        const ALGORITHM: &'static str = "xxh3_64_128";
+        const SEED_DERIVATION: &'static str = "seed_list_index_wrap";
+        const INPUT_ENCODING: &'static str = "projectasap.input.v1";
+        fn seed_list() -> Vec<u64> {
+            // A deliberately different seed list so the wire bytes differ.
+            vec![1, 2, 3, 4, 5]
+        }
+        const CANONICAL_SEED_INDEX: u32 = crate::CANONICAL_HASH_SEED as u32;
+        const MATRIX_SEED_INDEX: u32 = 0;
+    }
+
+    #[test]
+    fn hll_custom_hasher_profile_round_trips_and_is_self_describing() {
+        // (a) An HLL built with a custom-profile hasher round-trips.
+        let mut alt = HyperLogLogImpl::<ErtlMLE, HllBucketListP14, AltHasher>::default();
+        let mut std = HyperLogLog::<ErtlMLE>::default();
+        for v in 0..1000 {
+            alt.insert(&DataInput::U64(v));
+            std.insert(&DataInput::U64(v));
+        }
+        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
+        let decoded =
+            HyperLogLogImpl::<ErtlMLE, HllBucketListP14, AltHasher>::deserialize_from_bytes(
+                &alt_bytes,
+            )
+            .expect("alt decode");
+        assert_eq!(decoded.registers_as_slice(), alt.registers_as_slice());
+
+        // (b) Its bytes differ from the DefaultXxHasher sketch's bytes: the
+        // metadata is derived from the (different) profile, so it is not a lie.
+        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        assert_ne!(
+            alt_bytes, std_bytes,
+            "a custom profile must serialize different metadata than the standard profile"
+        );
+
+        // (c) Decoding AltHasher bytes into a DefaultXxHasher-typed HLL fails
+        // closed (profile mismatch), never silently accepted.
+        assert!(
+            HyperLogLog::<ErtlMLE>::deserialize_from_bytes(&alt_bytes).is_err(),
+            "standard-profile decode must reject custom-profile bytes"
         );
     }
 

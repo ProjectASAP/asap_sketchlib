@@ -2,10 +2,10 @@
 
 use crate::message_pack_format::{Error, MessagePackCodec};
 use crate::sketches::hll::{HllWireVariant, HyperLogLogHIPImpl, HyperLogLogImpl};
-use crate::{HllRegisterStorage, SketchHasher};
+use crate::{HashProfile, HllRegisterStorage, SketchHasher};
 
-impl<Variant: HllWireVariant, Registers: HllRegisterStorage, H: SketchHasher> MessagePackCodec
-    for HyperLogLogImpl<Variant, Registers, H>
+impl<Variant: HllWireVariant, Registers: HllRegisterStorage, H: SketchHasher + HashProfile>
+    MessagePackCodec for HyperLogLogImpl<Variant, Registers, H>
 {
     fn to_msgpack(&self) -> Result<Vec<u8>, Error> {
         Ok(self.serialize_to_bytes()?)

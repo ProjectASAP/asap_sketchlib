@@ -9,11 +9,11 @@
 //! ```
 //!
 //! This module owns only the parts that are identical for every sketch: the
-//! magic sentinel, the layout version, the byte framing ([`encode`] / [`split`]),
-//! and the shared hash-profile string constants that each sketch's metadata is
-//! built from. The `kind_id`, the metadata *contents*, and the payload are
-//! per-sketch and defined alongside each sketch — see
-//! `docs/asapv1_wire_format.md`.
+//! magic sentinel, the layout version, and the byte framing ([`encode`] /
+//! [`split`]). The hash-profile values each sketch's metadata is built from live
+//! with the hasher itself (see [`crate::HashProfile`]). The `kind_id`, the
+//! metadata *contents*, and the payload are per-sketch and defined alongside
+//! each sketch — see `docs/asapv1_wire_format.md`.
 //!
 //! [`split`] validates only the magic, version, and framing; it does **not**
 //! check `kind_id` against a registry. Each sketch decoder checks that the
@@ -24,14 +24,6 @@ pub(crate) const MAGIC: &[u8; 6] = b"ASAPv1";
 
 /// Envelope layout version. Bumped only when the framing itself changes.
 pub(crate) const VERSION: u8 = 0x01;
-
-// Shared hash-profile constants. Every sketch built under the standard
-// ProjectASAP profile carries these same values in its metadata (Section 2 of
-// the wire-format doc).
-pub(crate) const HASH_PROFILE_PROJECTASAP_XXH3_V1: &str = "projectasap.xxh3.seedlist.v1";
-pub(crate) const HASH_ALGORITHM_XXH3_64_128: &str = "xxh3_64_128";
-pub(crate) const HASH_SEED_DERIVATION_INDEX_WRAP: &str = "seed_list_index_wrap";
-pub(crate) const HASH_INPUT_ENCODING_PROJECTASAP_V1: &str = "projectasap.input.v1";
 
 /// Assemble the envelope around an already-encoded metadata block and payload.
 pub(crate) fn encode(kind_id: &[u8], metadata: &[u8], payload: &[u8]) -> Vec<u8> {
