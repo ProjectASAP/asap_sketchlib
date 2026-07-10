@@ -304,6 +304,7 @@ impl CmsWireMode for FastPath {
 /// keys in this declaration order — the canonical order the wire spec fixes.
 /// Hash-spec fields first, then the structural params `counter_type` / `mode`.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CmsMetadata {
     metadata_version: u8,
     hash_profile_id: String,
@@ -341,7 +342,9 @@ struct CmsPayload<T> {
 // Wire serialization for the canonical Count-Min configs only.
 impl<T, Mode, H> CountMin<Vector2D<T>, Mode, H>
 where
-    T: CmsWireCounter + Default + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
+    // `AddAssign` is required for `Vector2D<T>: MatrixStorage` (the struct's
+    // bound), not by the bodies below.
+    T: CmsWireCounter + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
     Mode: CmsWireMode,
     H: SketchHasher,
 {

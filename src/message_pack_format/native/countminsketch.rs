@@ -12,7 +12,8 @@ use crate::{SketchHasher, Vector2D};
 
 impl<T, Mode, H> MessagePackCodec for CountMin<Vector2D<T>, Mode, H>
 where
-    T: CmsWireCounter + Default + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
+    // `AddAssign` is required for `Vector2D<T>: MatrixStorage`.
+    T: CmsWireCounter + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
     Mode: CmsWireMode,
     H: SketchHasher,
 {

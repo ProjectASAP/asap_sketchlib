@@ -159,10 +159,13 @@ That "omit the key" property is what lets each sketch carry only what it uses.
 
 Two consequences:
 
-1. **`seed_list` is optional (v1).** The 20 seeds are fully determined by
-   `hash_profile_id`, so the producer may omit `seed_list` and the decoder
-   resolves it from the profile registry. A custom/unregistered profile MUST
-   inline it.
+1. **`seed_list` is omitted (v1).** The 20 seeds are fully determined by
+   `hash_profile_id`, so the producer omits `seed_list` and the decoder resolves
+   it from the profile registry. **v1 accepts only the standard registered
+   profile**: decoders reject unknown keys (`deny_unknown_fields`), so an *inlined*
+   `seed_list` — or any other extra key — is rejected, not silently dropped.
+   Carrying an inline `seed_list` for a custom/unregistered profile is a future
+   extension (it will need its own metadata schema / `metadata_version`).
 2. **Each sketch carries only the fields it uses.** HLL includes
    `canonical_seed_index` and `precision`; Count-Min includes `matrix_seed_index`,
    `counter_type`, `mode`. Nobody carries fields for seed roles or params they
@@ -179,7 +182,7 @@ Two consequences:
 | `hash_algorithm` | string | yes | `"xxh3_64_128"` |
 | `seed_derivation` | string | yes | `"seed_list_index_wrap"` |
 | `input_encoding` | string | yes | `"projectasap.input.v1"` |
-| `seed_list` | `array<u64>` | **optional** | the 20 seeds; omit for a registered profile |
+| `seed_list` | `array<u64>` | **omitted (v1)** | the 20 seeds; resolved from `hash_profile_id`, not carried |
 | `canonical_seed_index` | u32 | **per-sketch** | index into `seed_list` (`5`); HLL uses it |
 | `matrix_seed_index` | u32 | **per-sketch** | `0`; Count-Min uses it |
 | `hydra_seed_index` | u32 | **per-sketch** | `6`; include only if used |
@@ -332,27 +335,41 @@ mode (Regular↔Fast) — that would need re-inserting the original data.
 ## Section 4 — Wire encoding rules (byte-level)
 
 This is what makes two languages emit **identical bytes**. msgpack fixes
-endianness, int width, and float format; these rules fix the rest.
+endianness and float format; these rules fix the family/width choices that
+libraries otherwise make differently.
+
+**Integer family + width rule (applies to every integer below).** This is the
+single biggest cross-language trap — some Go msgpack libraries emit a *signed*
+`int` family for a positive `int64` while Rust's `rmp_serde` narrows it to the
+`uint` family. Pin it:
+
+- A **non-negative** integer is encoded in the msgpack **uint** family, at the
+  **minimal width** for its value (e.g. `300` → `cd 01 2c`, uint16; `1` →
+  positive fixint `01`).
+- A **negative** integer is encoded in the msgpack **int** family, minimal width.
+- `f64` is always full **float64** (`0xcb`), never narrowed to float32.
+
+The Go side MUST configure its encoder to match (uint-narrowing on, minimal
+width). Golden byte-vectors lock it.
 
 **Metadata (msgpack map)**
 
 - Keys are the exact ASCII strings in Section 2.
 - **Canonical key order** = the order fields are listed in Section 2 (hash-spec
-  group, then structural-params group). Encoders MUST write in this order;
-  absent/optional keys are skipped in place. (Order is irrelevant to decoding but
-  required for byte-identical output / goldens.)
-- Values: strings as msgpack `str`; `metadata_version` and `precision` as msgpack
-  positive fixint; seed indices as minimal-width msgpack uint; `seed_list` as a
-  msgpack array of minimal-width uint.
+  group, then structural-params group). Encoders MUST write in this order.
+  (Order is irrelevant to decoding but required for byte-identical output.)
+- Decoders reject **unknown keys** (Rust uses `#[serde(deny_unknown_fields)]`) —
+  v1 carries exactly the fixed field set for the standard registered profile.
+- Values: strings as msgpack `str`; all integers per the family/width rule above.
 
 **Payload (msgpack array)**
 
 - A msgpack **array**, elements in the Section 3 position order.
-- `registers` → msgpack `bin` (one byte per register).
-- `rows` / `cols` → minimal-width msgpack uint.
-- `counts` → msgpack array; each element is a msgpack **int** when
-  `counter_type == "i64"`, a msgpack **float64** when `"f64"`.
-- HLL HIP `hip_*` → msgpack **float64**.
+- `registers` → msgpack `bin` (one byte per register; matches Go's `[]byte`).
+- `rows` / `cols` → integers per the family/width rule.
+- `counts` → msgpack array; each element is an integer (per the family/width
+  rule) when `counter_type == "i64"`, a **float64** when `"f64"`.
+- HLL HIP `hip_*` → **float64**.
 
 Golden byte-vectors lock all of the above; any encoder that deviates fails them.
 

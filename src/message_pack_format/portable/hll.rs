@@ -559,21 +559,35 @@ impl MessagePackCodec for HllSketch {
             ));
         };
 
-        let sketch = if variant == HllVariant::Hip {
+        let (registers, hip_kxq0, hip_kxq1, hip_est) = if variant == HllVariant::Hip {
             let p: HllPayloadHip = rmp_serde::from_slice(payload)?;
-            HllSketch::from_raw(
-                variant,
-                meta.precision,
-                p.registers,
-                p.hip_kxq0,
-                p.hip_kxq1,
-                p.hip_est,
-            )
+            (p.registers, p.hip_kxq0, p.hip_kxq1, p.hip_est)
         } else {
             let p: HllPayloadPlain = rmp_serde::from_slice(payload)?;
-            HllSketch::from_raw(variant, meta.precision, p.registers, 0.0, 0.0, 0.0)
+            (p.registers, 0.0, 0.0, 0.0)
         };
-        Ok(sketch)
+
+        // Fail closed if the register bin does not match `2^precision`
+        // (doc §2 validation rule 3).
+        let expected = 1usize << meta.precision;
+        if registers.len() != expected {
+            return Err(MsgPackError::Decode(
+                rmp_serde::decode::Error::Uncategorized(format!(
+                    "ASAPv1 HLL envelope: {} registers, expected 2^{} = {expected}",
+                    registers.len(),
+                    meta.precision
+                )),
+            ));
+        }
+
+        Ok(HllSketch::from_raw(
+            variant,
+            meta.precision,
+            registers,
+            hip_kxq0,
+            hip_kxq1,
+            hip_est,
+        ))
     }
 }
 

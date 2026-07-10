@@ -35,6 +35,7 @@ pub(crate) const HASH_INPUT_ENCODING_PROJECTASAP_V1: &str = "projectasap.input.v
 
 /// Assemble the envelope around an already-encoded metadata block and payload.
 pub(crate) fn encode(kind_id: &[u8], metadata: &[u8], payload: &[u8]) -> Vec<u8> {
+    let kind_id_len = u8::try_from(kind_id.len()).expect("ASAPv1 kind_id too long (>255 bytes)");
     let metadata_len = u32::try_from(metadata.len()).expect("ASAPv1 metadata too large");
     let payload_len = u32::try_from(payload.len()).expect("ASAPv1 payload too large");
     let mut out = Vec::with_capacity(
@@ -42,7 +43,7 @@ pub(crate) fn encode(kind_id: &[u8], metadata: &[u8], payload: &[u8]) -> Vec<u8>
     );
     out.extend_from_slice(MAGIC);
     out.push(VERSION);
-    out.push(kind_id.len() as u8);
+    out.push(kind_id_len);
     out.extend_from_slice(kind_id);
     out.extend_from_slice(&metadata_len.to_be_bytes());
     out.extend_from_slice(&payload_len.to_be_bytes());
@@ -96,8 +97,15 @@ pub(crate) fn split(bytes: &[u8]) -> Result<Parts<'_>, String> {
             .expect("four-byte length slice"),
     ) as usize;
     let metadata_start = lengths_offset + 8;
-    let payload_start = metadata_start + metadata_len;
-    let payload_end = payload_start + payload_len;
+    // Use checked arithmetic so crafted lengths near usize::MAX (reachable on
+    // 32-bit targets) fail closed with an error instead of overflowing the
+    // bounds check and panicking on the slice index.
+    let payload_start = metadata_start
+        .checked_add(metadata_len)
+        .ok_or_else(|| "ASAPv1 envelope: length overflow".to_string())?;
+    let payload_end = payload_start
+        .checked_add(payload_len)
+        .ok_or_else(|| "ASAPv1 envelope: length overflow".to_string())?;
     if bytes.len() < payload_end {
         return Err("ASAPv1 envelope: truncated metadata / payload".to_string());
     }

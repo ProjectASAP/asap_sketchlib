@@ -137,8 +137,11 @@ pub(crate) const HLL_KIND_HIP: &[u8] = &[HLL_KIND_FAMILY, 0x03];
 /// **map** (`to_vec_named`) with keys in this declaration order — the canonical
 /// order the wire spec fixes. HLL carries the hash spec (minus the registered
 /// profile's `seed_list`, resolved from `hash_profile_id`) plus its one
-/// structural param, `precision`.
+/// structural param, `precision`. `deny_unknown_fields` makes decode fail closed
+/// on any unexpected key (e.g. an inlined `seed_list`) rather than silently
+/// dropping it — v1 accepts only the standard registered profile.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct HllMetadata {
     pub(crate) metadata_version: u8,
     pub(crate) hash_profile_id: String,
@@ -1108,6 +1111,39 @@ mod tests {
         assert_eq!(
             hip_bytes,
             portable_hip.to_msgpack().expect("portable serialize")
+        );
+    }
+
+    /// Fail closed: metadata carrying an extra key (e.g. an inlined `seed_list`)
+    /// must be rejected, not silently dropped (`deny_unknown_fields`).
+    #[test]
+    fn hll_metadata_rejects_unknown_keys() {
+        #[derive(Serialize)]
+        struct WithExtra {
+            metadata_version: u8,
+            hash_profile_id: String,
+            hash_algorithm: String,
+            seed_derivation: String,
+            input_encoding: String,
+            canonical_seed_index: u32,
+            precision: u32,
+            seed_list: Vec<u64>, // extra key not in HllMetadata
+        }
+        let std = standard_hll_metadata(14);
+        let extra = WithExtra {
+            metadata_version: std.metadata_version,
+            hash_profile_id: std.hash_profile_id.clone(),
+            hash_algorithm: std.hash_algorithm.clone(),
+            seed_derivation: std.seed_derivation.clone(),
+            input_encoding: std.input_encoding.clone(),
+            canonical_seed_index: std.canonical_seed_index,
+            precision: std.precision,
+            seed_list: vec![1, 2, 3],
+        };
+        let bytes = rmp_serde::to_vec_named(&extra).expect("encode");
+        assert!(
+            rmp_serde::from_slice::<HllMetadata>(&bytes).is_err(),
+            "an inlined seed_list (unknown key) must be rejected"
         );
     }
 }
