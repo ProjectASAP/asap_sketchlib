@@ -467,7 +467,7 @@ impl<M, H: SketchHasher> Count<Vector2D<i32>, M, H> {
     /// Human-friendly helper used by the serializer demo binaries.
     pub fn debug(&self) {
         for row in 0..self.counts.rows() {
-            println!("row {}: {:?}", row, self.counts.row_slice(row));
+            println!("row {row}: {:?}", self.counts.row_slice(row));
         }
     }
 }
