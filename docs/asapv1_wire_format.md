@@ -45,6 +45,68 @@ code duplicates the envelope into each sketch file; this doc exists to undo that
 └───────────────────────────────┘
 ```
 
+### Structure (entity view)
+
+This is the same idea as OpenTelemetry's [Arrow Metrics
+records](https://github.com/open-telemetry/otel-arrow/blob/main/docs/data_model.md#metrics-arrow-records),
+drawn as an entity–relationship diagram — but with the **opposite** shape, and
+that contrast is the point. OTel-Arrow *normalizes*: one metric **fans out** into
+many attribute / data-point records joined by `parent_id` (`||--o{`, one-to-many),
+which is great for columnar compression across many rows. ASAPv1 deliberately does
+**not** normalize: a sketch is **self-contained** — exactly one metadata and
+exactly one payload, no external records to join (`||--||`, one-to-one). The
+`kind_id` selects which single payload structure is present.
+
+```mermaid
+erDiagram
+    ENVELOPE ||--|| METADATA : carries-one
+    ENVELOPE ||--|| PAYLOAD : carries-one
+    PAYLOAD ||--o| HLL_PAYLOAD : kind-0x0101-0x0102
+    PAYLOAD ||--o| HLL_HIP_PAYLOAD : kind-0x0103
+    PAYLOAD ||--o| COUNTMIN_PAYLOAD : kind-0x0200
+    ENVELOPE {
+        bytes magic
+        u8 version
+        u8 kind_id_len
+        bytes kind_id
+        u32be metadata_len
+        u32be payload_len
+    }
+    METADATA {
+        u8 metadata_version
+        string hash_profile_id
+        string hash_algorithm
+        string seed_derivation
+        string input_encoding
+        array seed_list
+        u32 seed_index
+        mixed structural_params
+    }
+    PAYLOAD {
+        msgpack_array raw_state
+    }
+    HLL_PAYLOAD {
+        bin registers
+    }
+    HLL_HIP_PAYLOAD {
+        bin registers
+        f64 hip_kxq0
+        f64 hip_kxq1
+        f64 hip_est
+    }
+    COUNTMIN_PAYLOAD {
+        u32 rows
+        u32 cols
+        array counts
+    }
+```
+
+Read it as: every `ENVELOPE` carries exactly one `METADATA` and exactly one
+`PAYLOAD`; the `PAYLOAD` is exactly one of the per-`kind_id` shapes below it
+(`o|` = at most one of each — the `kind_id` picks which). No `parent_id`, no
+cross-record joins — everything needed to interpret the bytes is inside this one
+envelope.
+
 ---
 
 ## Section 1 — Envelope
@@ -120,6 +182,7 @@ several algorithms allocates its variants when it is designed (as HLL did).
 | `0x04 0x00` | Count Sketch | — | TBD | assigned in Go / payload not designed |
 | `0x05 0x00` | DDSketch | — | TBD | assigned in Go / payload not designed |
 | `0x06 0x00` | KLL | — | TBD | assigned in Go / payload not designed |
+| `0x06 0x01` | KLL dynamic | — | TBD | assigned in Go / payload not designed |
 | `0x07 0x00` | Hydra-KLL | — | TBD | assigned in Go / payload not designed |
 | `0x08 0x00` | SetAggregator | — | TBD | assigned in Go / payload not designed |
 | `0x09 0x00` | DeltaResult | — | TBD | assigned in Go / payload not designed |
@@ -137,6 +200,7 @@ several algorithms allocates its variants when it is designed (as HLL did).
 | `0x15 0x00` | EHUnivOptimized (`Unstable`) | — | TBD | reserved / not designed |
 | `0x16 0x00` | OctoSketch | — | TBD | reserved / not designed |
 
+Design choice: `kind_id` refers to **algorithm level**
 Count-Min is **one** kind_id: its counter type (i64/f64) and mode (fast/regular)
 are metadata, not separate ids. Classic and Ertl-MLE have byte-identical payloads
 but are separate ids because `kind_id` also selects the *estimator* to apply.
@@ -157,6 +221,7 @@ but are separate ids because `kind_id` also selects the *estimator* to apply.
 - **`Unstable`** rows mirror the `Unstable` status those sketches carry in
   `apis.md`; their kind_id is reserved but the payload (and the sketch API) may
   still change.
+- other mismatch?
 
 **Allocation rules:**
 
@@ -407,7 +472,114 @@ mode (Regular↔Fast) — that would need re-inserting the original data.
   precision-vs-simplicity tradeoff.
 - No need for i128 / Nitro — not wire types.
 
+The remaining `kind_id`s in the registry (§1) each get a payload subsection below.
+They are **placeholders** — the `kind_id` is allocated but the payload is not
+designed yet. Fill each in when its wire payload is designed, following the
+"brand-new sketch algorithm" steps in §4.3 (define metadata fields in §2, author
+the positional payload here, mirror the `kind_id` and add goldens on the Go side).
+
+### 3.3 — Count-Min-with-heap / CMSHeap (`0x03 0x00`)
+
+*Payload TBD — not yet designed.* Family `0x03` assigned in Go.
+Expected to be similar to current CMS.
+
+### 3.4 — Count Sketch (`0x04 0x00`)
+
+*Payload TBD — not yet designed.* Family `0x04` assigned in Go.
+Expected to be similar to current CMS.
+
+### 3.5 — DDSketch (`0x05 0x00`)
+
+*Payload TBD — not yet designed.* Family `0x05` assigned in Go.
+The bucket is expected to be straightforward.
+
+### 3.6 — KLL (`0x06 0x00`)
+
+*Payload TBD — not yet designed.* Family `0x06` assigned in Go.
+The coin can be a challenge.
+Whether CDF needs to be serialized is another design decision.
+
+### 3.7 — Hydra-KLL (`0x07 0x00`)
+
+*Payload TBD — not yet designed.* Family `0x07` assigned in Go.
+Same challenge to KLL.
+
+### 3.8 — SetAggregator (`0x08 0x00`)
+
+*Payload TBD — not yet designed.* Family `0x08` assigned in Go (aggregation
+envelope, not a stand-alone sketch — see §1 mapping notes).
+
+### 3.9 — DeltaResult (`0x09 0x00`)
+
+*Payload TBD — not yet designed.* Family `0x09` assigned in Go (delta-result
+envelope, not a stand-alone sketch — see §1 mapping notes).
+
+### 3.10 — Count-Sketch-with-heap / CSHeap (`0x0a 0x00`)
+
+*Payload TBD — not yet designed.*
+Expected to be similar to current CMS.
+
+### 3.11 — Elastic (`0x0b 0x00`)
+
+*Payload TBD — not yet designed.* (`Unstable` — API may still change.)
+The "key" may needs consideration, otherwise expected to be similar to current CMS.
+The sketch itself needs optimization. Worth to combine optimization and serialization into one PR.
+
+### 3.12 — Coco (`0x0c 0x00`)
+
+*Payload TBD — not yet designed.* (`Unstable` — API may still change.)
+The "key" may needs consideration, otherwise expected to be similar to current CMS.
+
+### 3.13 — UniformSampling (`0x0d 0x00`)
+
+*Payload TBD — not yet designed.* (`Unstable` — API may still change.)
+Should be straightforward.
+
+### 3.14 — KMV (`0x0e 0x00`)
+
+*Payload TBD — not yet designed.* (`Unstable` — API may still change.)
+Should be straightforward.
+
+### 3.15 — HashSketchEnsemble (`0x0f 0x00`)
+
+*Payload TBD — not yet designed.*
+This actually may not need serialization?
+
+### 3.16 — UnivMon (`0x10 0x00`)
+
+*Payload TBD — not yet designed.*
+More complex but should be doable.
+
+### 3.17 — UnivMon Optimized (`0x11 0x00`)
+
+*Payload TBD — not yet designed.*
+
+### 3.18 — NitroBatch (`0x12 0x00`)
+
+*Payload TBD — not yet designed.*
+To do this, maybe it worth to add another abstraction of serialization in Storage.
+
+### 3.19 — ExponentialHistogram (`0x13 0x00`)
+
+*Payload TBD — not yet designed.*
+Needs to find a way to decently re-use the serialization of other sketches.
+
+### 3.20 — EHSketchList (`0x14 0x00`)
+
+*Payload TBD — not yet designed.*
+
+### 3.21 — EHUnivOptimized (`0x15 0x00`)
+
+*Payload TBD — not yet designed.* (`Unstable` — API may still change.)
+
+### 3.22 — OctoSketch (`0x16 0x00`)
+
+*Payload TBD — not yet designed.*
+
 ---
+
+Anything starting here are notes taken by Claude. Not removing at this moment as they might be helpful.
+Feel free to ignore anything after here.
 
 ## Section 4 — Wire coverage
 
