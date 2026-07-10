@@ -384,6 +384,14 @@ where
         }
         let p: CmsPayload<T> = from_slice(payload)?;
         let (rows, cols) = (p.rows as usize, p.cols as usize);
+        // Reject zero dimensions before building the matrix: `Vector2D::from_fn`
+        // derives its mask via `cols.ilog2()`, which panics on `cols == 0`. Fail
+        // closed with an error rather than panicking on crafted bytes.
+        if rows == 0 || cols == 0 {
+            return Err(RmpDecodeError::Uncategorized(format!(
+                "CMS dimensions must be non-zero: rows={rows}, cols={cols}"
+            )));
+        }
         if p.counts.len() != rows.saturating_mul(cols) {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "CMS counts length {} != rows*cols {}",
@@ -1173,5 +1181,58 @@ mod tests {
         // Counter type + mode are pinned by the target: an f64/fast payload must
         // not decode into an i64/regular sketch (metadata mismatch).
         assert!(CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded).is_err());
+    }
+
+    /// Fail closed (not panic) on a crafted payload with a zero dimension: valid
+    /// envelope + valid metadata, but `[rows, 0, []]`. Before the guard this
+    /// panicked in `Vector2D::from_fn` via `0.ilog2()`.
+    #[test]
+    fn count_min_rejects_zero_dimension_payload() {
+        let metadata =
+            rmp_serde::to_vec_named(&cms_metadata::<DefaultXxHasher>("i64", "regular")).unwrap();
+        let payload = rmp_serde::to_vec(&CmsPayload::<i64> {
+            rows: 4,
+            cols: 0,
+            counts: Vec::new(),
+        })
+        .unwrap();
+        let bytes = envelope::encode(CMS_KIND, &metadata, &payload);
+        assert!(
+            CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes).is_err(),
+            "zero-dimension payload must be rejected, not panic"
+        );
+    }
+
+    /// Fail closed on an unexpected metadata key (mirrors the HLL test).
+    #[test]
+    fn cms_metadata_rejects_unknown_keys() {
+        #[derive(Serialize)]
+        struct WithExtra {
+            metadata_version: u8,
+            hash_profile_id: String,
+            hash_algorithm: String,
+            seed_derivation: String,
+            input_encoding: String,
+            seed_list: Vec<u64>,
+            matrix_seed_index: u32,
+            counter_type: String,
+            mode: String,
+            bogus_field: u8, // key not in CmsMetadata
+        }
+        let m = cms_metadata::<DefaultXxHasher>("i64", "regular");
+        let extra = WithExtra {
+            metadata_version: m.metadata_version,
+            hash_profile_id: m.hash_profile_id.clone(),
+            hash_algorithm: m.hash_algorithm.clone(),
+            seed_derivation: m.seed_derivation.clone(),
+            input_encoding: m.input_encoding.clone(),
+            seed_list: m.seed_list.clone(),
+            matrix_seed_index: m.matrix_seed_index,
+            counter_type: m.counter_type.clone(),
+            mode: m.mode.clone(),
+            bogus_field: 7,
+        };
+        let bytes = rmp_serde::to_vec_named(&extra).unwrap();
+        assert!(rmp_serde::from_slice::<CmsMetadata>(&bytes).is_err());
     }
 }

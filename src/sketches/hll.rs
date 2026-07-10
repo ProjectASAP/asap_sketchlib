@@ -1256,4 +1256,33 @@ mod tests {
             "an unexpected metadata key must be rejected"
         );
     }
+
+    /// A decoder rejects bytes whose precision differs from the target storage:
+    /// P12 bytes must not decode into a P14-typed sketch (metadata mismatch).
+    #[test]
+    fn hll_precision_cross_rejection() {
+        let mut p12 = HyperLogLogP12::<Classic>::default();
+        for v in 0..100 {
+            p12.insert(&DataInput::U64(v));
+        }
+        let bytes = p12.serialize_to_bytes().expect("serialize");
+        assert!(
+            HyperLogLog::<Classic>::deserialize_from_bytes(&bytes).is_err(),
+            "P12 bytes must be rejected by a P14 decoder"
+        );
+    }
+
+    /// A Classic decoder rejects HIP bytes (kind_id mismatch).
+    #[test]
+    fn hll_hip_kind_id_rejected_by_classic() {
+        let mut hip = HyperLogLogHIP::default();
+        for v in 0..100 {
+            hip.insert(&DataInput::U64(v));
+        }
+        let bytes = hip.serialize_to_bytes().expect("serialize");
+        assert!(
+            HyperLogLog::<Classic>::deserialize_from_bytes(&bytes).is_err(),
+            "HIP bytes must be rejected by a Classic decoder"
+        );
+    }
 }

@@ -568,8 +568,14 @@ impl MessagePackCodec for HllSketch {
         };
 
         // Fail closed if the register bin does not match `2^precision`
-        // (doc §2 validation rule 3).
-        let expected = 1usize << meta.precision;
+        // (doc §2 validation rule 3). `checked_shl` avoids a shift-overflow
+        // panic on a crafted out-of-range `precision`.
+        let expected = 1usize.checked_shl(meta.precision).ok_or_else(|| {
+            MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(format!(
+                "ASAPv1 HLL envelope: precision {} out of range",
+                meta.precision
+            )))
+        })?;
         if registers.len() != expected {
             return Err(MsgPackError::Decode(
                 rmp_serde::decode::Error::Uncategorized(format!(
