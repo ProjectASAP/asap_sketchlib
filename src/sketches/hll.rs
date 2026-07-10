@@ -135,11 +135,10 @@ pub(crate) const HLL_KIND_HIP: &[u8] = &[HLL_KIND_FAMILY, 0x03];
 
 /// Descriptor metadata for an HLL sketch (ASAPv1 §2), serialized as a msgpack
 /// **map** (`to_vec_named`) with keys in this declaration order — the canonical
-/// order the wire spec fixes. HLL carries the hash spec (minus the registered
-/// profile's `seed_list`, resolved from `hash_profile_id`) plus its one
-/// structural param, `precision`. `deny_unknown_fields` makes decode fail closed
-/// on any unexpected key (e.g. an inlined `seed_list`) rather than silently
-/// dropping it — v1 accepts only the standard registered profile.
+/// order the wire spec fixes. HLL carries the full hash spec (including the
+/// inlined `seed_list`, so the bytes are self-describing) plus the seed index it
+/// uses and its one structural param, `precision`. `deny_unknown_fields` makes
+/// decode fail closed on any unexpected key rather than silently dropping it.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HllMetadata {
@@ -148,6 +147,7 @@ pub(crate) struct HllMetadata {
     pub(crate) hash_algorithm: String,
     pub(crate) seed_derivation: String,
     pub(crate) input_encoding: String,
+    pub(crate) seed_list: Vec<u64>,
     pub(crate) canonical_seed_index: u32,
     pub(crate) precision: u32,
 }
@@ -159,6 +159,7 @@ pub(crate) fn standard_hll_metadata(precision: u32) -> HllMetadata {
         hash_algorithm: envelope::HASH_ALGORITHM_XXH3_64_128.to_string(),
         seed_derivation: envelope::HASH_SEED_DERIVATION_INDEX_WRAP.to_string(),
         input_encoding: envelope::HASH_INPUT_ENCODING_PROJECTASAP_V1.to_string(),
+        seed_list: crate::SEEDLIST.to_vec(),
         canonical_seed_index: crate::CANONICAL_HASH_SEED as u32,
         precision,
     }
@@ -1114,8 +1115,8 @@ mod tests {
         );
     }
 
-    /// Fail closed: metadata carrying an extra key (e.g. an inlined `seed_list`)
-    /// must be rejected, not silently dropped (`deny_unknown_fields`).
+    /// Fail closed: metadata carrying an unexpected key must be rejected, not
+    /// silently dropped (`deny_unknown_fields`).
     #[test]
     fn hll_metadata_rejects_unknown_keys() {
         #[derive(Serialize)]
@@ -1125,9 +1126,10 @@ mod tests {
             hash_algorithm: String,
             seed_derivation: String,
             input_encoding: String,
+            seed_list: Vec<u64>,
             canonical_seed_index: u32,
             precision: u32,
-            seed_list: Vec<u64>, // extra key not in HllMetadata
+            bogus_field: u8, // key not in HllMetadata
         }
         let std = standard_hll_metadata(14);
         let extra = WithExtra {
@@ -1136,14 +1138,15 @@ mod tests {
             hash_algorithm: std.hash_algorithm.clone(),
             seed_derivation: std.seed_derivation.clone(),
             input_encoding: std.input_encoding.clone(),
+            seed_list: std.seed_list.clone(),
             canonical_seed_index: std.canonical_seed_index,
             precision: std.precision,
-            seed_list: vec![1, 2, 3],
+            bogus_field: 7,
         };
         let bytes = rmp_serde::to_vec_named(&extra).expect("encode");
         assert!(
             rmp_serde::from_slice::<HllMetadata>(&bytes).is_err(),
-            "an inlined seed_list (unknown key) must be rejected"
+            "an unexpected metadata key must be rejected"
         );
     }
 }

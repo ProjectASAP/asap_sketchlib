@@ -159,13 +159,13 @@ That "omit the key" property is what lets each sketch carry only what it uses.
 
 Two consequences:
 
-1. **`seed_list` is omitted (v1).** The 20 seeds are fully determined by
-   `hash_profile_id`, so the producer omits `seed_list` and the decoder resolves
-   it from the profile registry. **v1 accepts only the standard registered
-   profile**: decoders reject unknown keys (`deny_unknown_fields`), so an *inlined*
-   `seed_list` — or any other extra key — is rejected, not silently dropped.
-   Carrying an inline `seed_list` for a custom/unregistered profile is a future
-   extension (it will need its own metadata schema / `metadata_version`).
+1. **`seed_list` is inlined.** The full 20-seed list is carried in every sketch's
+   metadata, so the bytes are **self-describing** — a consumer can read the exact
+   seeds (and algorithm) straight from the binary without any registry. It costs
+   ~130 bytes; the alternative (carry only `hash_profile_id` and resolve the seeds
+   from a registry) is a v2 space optimization once many sketches share one spec.
+   `deny_unknown_fields` still rejects any key beyond the fixed set, so v1 accepts
+   exactly the standard registered profile.
 2. **Each sketch carries only the fields it uses.** HLL includes
    `canonical_seed_index` and `precision`; Count-Min includes `matrix_seed_index`,
    `counter_type`, `mode`. Nobody carries fields for seed roles or params they
@@ -182,7 +182,7 @@ Two consequences:
 | `hash_algorithm` | string | yes | `"xxh3_64_128"` |
 | `seed_derivation` | string | yes | `"seed_list_index_wrap"` |
 | `input_encoding` | string | yes | `"projectasap.input.v1"` |
-| `seed_list` | `array<u64>` | **omitted (v1)** | the 20 seeds; resolved from `hash_profile_id`, not carried |
+| `seed_list` | `array<u64>` | **yes (inlined)** | the 20 seeds, carried inline so the bytes self-describe the hash |
 | `canonical_seed_index` | u32 | **per-sketch** | index into `seed_list` (`5`); HLL uses it |
 | `matrix_seed_index` | u32 | **per-sketch** | `0`; Count-Min uses it |
 | `hydra_seed_index` | u32 | **per-sketch** | `6`; include only if used |
@@ -360,7 +360,8 @@ width). Golden byte-vectors lock it.
   (Order is irrelevant to decoding but required for byte-identical output.)
 - Decoders reject **unknown keys** (Rust uses `#[serde(deny_unknown_fields)]`) —
   v1 carries exactly the fixed field set for the standard registered profile.
-- Values: strings as msgpack `str`; all integers per the family/width rule above.
+- Values: strings as msgpack `str`; `seed_list` as a msgpack array of integers
+  (each per the family/width rule); all other integers per the family/width rule.
 
 **Payload (msgpack array)**
 
@@ -401,9 +402,10 @@ through the transition, retire `portable` once goldens are in place.
   payload. Payload structure = kind_id + metadata.
 - **Q-META** — metadata is a msgpack **map**; canonical key order per Section 4;
   optional fields are omitted keys.
-- **Q-SEEDS** — `seed_list` is **optional in v1**: omit for a registered profile
-  (resolve from `hash_profile_id`), inline for a custom profile. Each sketch
-  carries only the fields it uses.
+- **Q-SEEDS** — `seed_list` is **inlined** in v1 so the bytes self-describe the
+  hash (a consumer needs no registry to read the seeds). Resolving seeds from
+  `hash_profile_id` alone is a v2 space optimization. Each sketch still carries
+  only the seed *index* it uses.
 - **Q-CMS** — Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode are
   metadata, not the id.
 - **Q-VER** — no payload version field. A new incompatible encoding gets a **new
