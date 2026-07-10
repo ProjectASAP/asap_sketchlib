@@ -19,6 +19,7 @@
 //! top level so both worlds share the same encode/decode contract.
 
 pub mod codec;
+pub(crate) mod envelope;
 pub mod error;
 pub mod native;
 pub mod portable;

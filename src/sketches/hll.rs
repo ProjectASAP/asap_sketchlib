@@ -33,13 +33,12 @@
 // - Refactored into a generic `HyperLogLog<Variant>` structure.
 // ----------------------------------------------------------------
 
+use crate::message_pack_format::envelope;
 use crate::structures::fixed_structure::{
     HllBucketListP12, HllBucketListP14, HllBucketListP16, HllRegisterStorage,
 };
 use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, SketchHasher, hash64_seeded};
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -96,6 +95,110 @@ pub type HyperLogLogHIPP16 = HyperLogLogHIPImpl<HllBucketListP16>;
 /// Default HIP HyperLogLog alias using 14-bit precision.
 pub type HyperLogLogHIP = HyperLogLogHIPP14;
 
+/// Maps an in-memory HLL estimator variant to its ASAPv1 `kind_id`.
+pub trait HllWireVariant {
+    /// The `[family, variant]` kind_id for this estimator.
+    const WIRE_KIND_ID: &'static [u8];
+}
+
+impl HllWireVariant for Classic {
+    const WIRE_KIND_ID: &'static [u8] = HLL_KIND_CLASSIC;
+}
+
+impl HllWireVariant for ErtlMLE {
+    const WIRE_KIND_ID: &'static [u8] = HLL_KIND_ERTL_MLE;
+}
+
+/// HLL payload (ASAPv1 §3.1), serialized as a msgpack **array** (`to_vec`,
+/// positional). `registers` is a msgpack `bin` (one byte per register, matching
+/// Go's `[]byte`) via `serde_bytes` rather than serde's default `array<u8>`.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct HllPayloadPlain {
+    #[serde(with = "serde_bytes")]
+    pub(crate) registers: Vec<u8>,
+}
+
+/// HIP payload: the register bin plus the three HIP running scalars.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct HllPayloadHip {
+    #[serde(with = "serde_bytes")]
+    pub(crate) registers: Vec<u8>,
+    pub(crate) hip_kxq0: f64,
+    pub(crate) hip_kxq1: f64,
+    pub(crate) hip_est: f64,
+}
+
+const HLL_KIND_FAMILY: u8 = 0x01;
+pub(crate) const HLL_KIND_CLASSIC: &[u8] = &[HLL_KIND_FAMILY, 0x01];
+pub(crate) const HLL_KIND_ERTL_MLE: &[u8] = &[HLL_KIND_FAMILY, 0x02];
+pub(crate) const HLL_KIND_HIP: &[u8] = &[HLL_KIND_FAMILY, 0x03];
+
+/// Descriptor metadata for an HLL sketch (ASAPv1 §2), serialized as a msgpack
+/// **map** (`to_vec_named`) with keys in this declaration order — the canonical
+/// order the wire spec fixes. HLL carries the hash spec (minus the registered
+/// profile's `seed_list`, resolved from `hash_profile_id`) plus its one
+/// structural param, `precision`.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct HllMetadata {
+    pub(crate) metadata_version: u8,
+    pub(crate) hash_profile_id: String,
+    pub(crate) hash_algorithm: String,
+    pub(crate) seed_derivation: String,
+    pub(crate) input_encoding: String,
+    pub(crate) canonical_seed_index: u32,
+    pub(crate) precision: u32,
+}
+
+pub(crate) fn standard_hll_metadata(precision: u32) -> HllMetadata {
+    HllMetadata {
+        metadata_version: 1,
+        hash_profile_id: envelope::HASH_PROFILE_PROJECTASAP_XXH3_V1.to_string(),
+        hash_algorithm: envelope::HASH_ALGORITHM_XXH3_64_128.to_string(),
+        seed_derivation: envelope::HASH_SEED_DERIVATION_INDEX_WRAP.to_string(),
+        input_encoding: envelope::HASH_INPUT_ENCODING_PROJECTASAP_V1.to_string(),
+        canonical_seed_index: crate::CANONICAL_HASH_SEED as u32,
+        precision,
+    }
+}
+
+/// Validate the envelope for a known target and return the raw payload bytes.
+fn validated_hll_payload<'a>(
+    bytes: &'a [u8],
+    expected_kind_id: &[u8],
+    expected_precision: u32,
+) -> Result<&'a [u8], RmpDecodeError> {
+    let (kind_id, metadata, payload) =
+        envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
+    if kind_id != expected_kind_id {
+        return Err(RmpDecodeError::Uncategorized(format!(
+            "HLL kind_id mismatch: stored {kind_id:?}, expected {expected_kind_id:?}"
+        )));
+    }
+    let meta: HllMetadata = from_slice(metadata)?;
+    if meta != standard_hll_metadata(expected_precision) {
+        return Err(RmpDecodeError::Uncategorized(
+            "ASAPv1 HLL envelope: metadata mismatch".to_string(),
+        ));
+    }
+    Ok(payload)
+}
+
+/// Rebuild register storage from the payload's register bin.
+fn registers_from_bytes<Registers: HllRegisterStorage>(
+    registers: &[u8],
+) -> Result<Registers, RmpDecodeError> {
+    if registers.len() != Registers::NUM_REGISTERS {
+        return Err(RmpDecodeError::Uncategorized(format!(
+            "HLL register length mismatch: stored {}, expected {}",
+            registers.len(),
+            Registers::NUM_REGISTERS
+        )));
+    }
+    let mut out = Registers::default();
+    out.as_mut_slice().copy_from_slice(registers);
+    Ok(out)
+}
+
 impl<Variant, Registers: HllRegisterStorage, H: SketchHasher> Default
     for HyperLogLogImpl<Variant, Registers, H>
 {
@@ -116,14 +219,33 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         }
     }
 
-    /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+    /// Serializes the sketch into an ASAPv1 MessagePack envelope.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+    where
+        Variant: HllWireVariant,
+    {
+        let metadata =
+            rmp_serde::to_vec_named(&standard_hll_metadata(Registers::PRECISION as u32))?;
+        let payload = rmp_serde::to_vec(&HllPayloadPlain {
+            registers: self.registers.as_slice().to_vec(),
+        })?;
+        Ok(envelope::encode(Variant::WIRE_KIND_ID, &metadata, &payload))
     }
 
-    /// Deserializes a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+    /// Deserializes a sketch from an ASAPv1 MessagePack envelope.
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+    where
+        Variant: HllWireVariant,
+    {
+        let payload =
+            validated_hll_payload(bytes, Variant::WIRE_KIND_ID, Registers::PRECISION as u32)?;
+        let payload: HllPayloadPlain = from_slice(payload)?;
+        let registers = registers_from_bytes::<Registers>(&payload.registers)?;
+        Ok(Self {
+            registers,
+            _marker: PhantomData,
+            _hasher: PhantomData,
+        })
     }
 
     /// Borrow the raw register byte slice (one byte per register).
@@ -369,14 +491,30 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
         self.est as usize
     }
 
-    /// Serializes the sketch into MessagePack bytes.
+    /// Serializes the sketch into an ASAPv1 MessagePack envelope.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        let metadata =
+            rmp_serde::to_vec_named(&standard_hll_metadata(Registers::PRECISION as u32))?;
+        let payload = rmp_serde::to_vec(&HllPayloadHip {
+            registers: self.registers.as_slice().to_vec(),
+            hip_kxq0: self.kxq0,
+            hip_kxq1: self.kxq1,
+            hip_est: self.est,
+        })?;
+        Ok(envelope::encode(HLL_KIND_HIP, &metadata, &payload))
     }
 
-    /// Deserializes a sketch from MessagePack bytes.
+    /// Deserializes a sketch from an ASAPv1 MessagePack envelope.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+        let payload = validated_hll_payload(bytes, HLL_KIND_HIP, Registers::PRECISION as u32)?;
+        let payload: HllPayloadHip = from_slice(payload)?;
+        let registers = registers_from_bytes::<Registers>(&payload.registers)?;
+        Ok(Self {
+            registers,
+            kxq0: payload.hip_kxq0,
+            kxq1: payload.hip_kxq1,
+            est: payload.hip_est,
+        })
     }
 }
 
@@ -885,6 +1023,91 @@ mod tests {
         assert!(
             (original_est - decoded_est).abs() <= ERROR_TOLERANCE * original_est.max(1.0),
             "{name} estimate mismatch after round trip: before {original_est}, after {decoded_est}"
+        );
+    }
+
+    #[test]
+    fn hll_envelope_structure_and_kind_id_guard() {
+        // ASAPv1 envelope header for an Ertl-MLE sketch: magic, version 0x01,
+        // kind_id_len 2, kind_id [0x01, 0x02].
+        let mut sketch = HyperLogLog::<ErtlMLE>::default();
+        for value in 0..1000 {
+            sketch.insert(&DataInput::U64(value));
+        }
+        let bytes = sketch.serialize_to_bytes().expect("serialize");
+
+        assert!(bytes.starts_with(envelope::MAGIC));
+        assert_eq!(bytes[6], envelope::VERSION);
+        assert_eq!(bytes[7], 2, "kind_id_len");
+        assert_eq!(&bytes[8..10], HLL_KIND_ERTL_MLE);
+
+        let decoded = HyperLogLog::<ErtlMLE>::deserialize_from_bytes(&bytes).expect("decode");
+        assert_eq!(decoded.registers_as_slice(), sketch.registers_as_slice());
+
+        // A Classic decoder must reject Ertl-MLE bytes (kind_id mismatch).
+        assert!(HyperLogLog::<Classic>::deserialize_from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn hll_hip_round_trip_preserves_state() {
+        let mut sketch = HyperLogLogHIP::default();
+        for value in 0..1000 {
+            sketch.insert(&DataInput::U64(value));
+        }
+        let bytes = sketch.serialize_to_bytes().expect("serialize");
+        assert!(bytes.starts_with(envelope::MAGIC));
+        assert_eq!(&bytes[8..10], HLL_KIND_HIP);
+
+        let decoded = HyperLogLogHIP::deserialize_from_bytes(&bytes).expect("decode");
+        assert_eq!(decoded.registers.as_slice(), sketch.registers.as_slice());
+        assert_eq!(decoded.kxq0, sketch.kxq0);
+        assert_eq!(decoded.kxq1, sketch.kxq1);
+        assert_eq!(decoded.est, sketch.est);
+    }
+
+    /// Drift guard: the native path and the (deprecated) portable path must emit
+    /// byte-identical ASAPv1 envelopes. Keep until golden byte-vectors exist.
+    #[test]
+    fn native_and_portable_hll_bytes_match() {
+        use crate::message_pack_format::MessagePackCodec;
+        use crate::message_pack_format::portable::hll::{HllSketch, HllVariant};
+
+        // Ertl-MLE / Datafusion: registers-only payload.
+        let mut native = HyperLogLog::<ErtlMLE>::default();
+        for v in 0..1000 {
+            native.insert(&DataInput::U64(v));
+        }
+        let native_bytes = native.serialize_to_bytes().expect("native serialize");
+        let portable = HllSketch::from_raw(
+            HllVariant::Datafusion,
+            HllBucketList::PRECISION as u32,
+            native.registers_as_slice().to_vec(),
+            0.0,
+            0.0,
+            0.0,
+        );
+        assert_eq!(
+            native_bytes,
+            portable.to_msgpack().expect("portable serialize")
+        );
+
+        // HIP: registers + three running scalars.
+        let mut hip = HyperLogLogHIP::default();
+        for v in 0..1000 {
+            hip.insert(&DataInput::U64(v));
+        }
+        let hip_bytes = hip.serialize_to_bytes().expect("native serialize");
+        let portable_hip = HllSketch::from_raw(
+            HllVariant::Hip,
+            HllBucketList::PRECISION as u32,
+            hip.registers.as_slice().to_vec(),
+            hip.kxq0,
+            hip.kxq1,
+            hip.est,
+        );
+        assert_eq!(
+            hip_bytes,
+            portable_hip.to_msgpack().expect("portable serialize")
         );
     }
 }

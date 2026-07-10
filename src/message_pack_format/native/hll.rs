@@ -1,10 +1,10 @@
 //! Native MessagePack codec impls for [`crate::sketches::hll`].
 
 use crate::message_pack_format::{Error, MessagePackCodec};
-use crate::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};
+use crate::sketches::hll::{HllWireVariant, HyperLogLogHIPImpl, HyperLogLogImpl};
 use crate::{HllRegisterStorage, SketchHasher};
 
-impl<Variant, Registers: HllRegisterStorage, H: SketchHasher> MessagePackCodec
+impl<Variant: HllWireVariant, Registers: HllRegisterStorage, H: SketchHasher> MessagePackCodec
     for HyperLogLogImpl<Variant, Registers, H>
 {
     fn to_msgpack(&self) -> Result<Vec<u8>, Error> {
