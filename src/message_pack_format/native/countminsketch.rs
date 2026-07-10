@@ -1,14 +1,20 @@
 //! Native MessagePack codec impl for [`crate::sketches::countminsketch::CountMin`].
+//!
+//! Only the canonical wire configs — i64/f64 counters (`CmsWireCounter`) with a
+//! fast/regular mode (`CmsWireMode`) — are serializable. Exotic in-memory
+//! counters (i32/i128/…) must be converted to a wire type first.
 
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::{Error, MessagePackCodec};
-use crate::sketches::countminsketch::CountMin;
-use crate::{MatrixStorage, SketchHasher};
+use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode, CountMin};
+use crate::{SketchHasher, Vector2D};
 
-impl<S, Mode, H: SketchHasher> MessagePackCodec for CountMin<S, Mode, H>
+impl<T, Mode, H> MessagePackCodec for CountMin<Vector2D<T>, Mode, H>
 where
-    S: MatrixStorage + Serialize + for<'de> Deserialize<'de>,
+    T: CmsWireCounter + Default + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
+    Mode: CmsWireMode,
+    H: SketchHasher,
 {
     fn to_msgpack(&self) -> Result<Vec<u8>, Error> {
         Ok(self.serialize_to_bytes()?)

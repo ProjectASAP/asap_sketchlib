@@ -8,12 +8,11 @@
 //!   Sketch and its Applications," J. Algorithms 55(1), 2005.
 //!   <https://www.cs.rutgers.edu/~muthu/cm-jal.pdf>
 
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::message_pack_format::envelope;
 use crate::octo_delta::{CM_PROMASK, CmDelta};
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
@@ -260,18 +259,132 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
     }
 }
 
-// Serialization helpers for CountMin.
-impl<S: MatrixStorage + Serialize, Mode, H: SketchHasher> CountMin<S, Mode, H> {
-    /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+// ===================================================================
+// ASAPv1 wire serialization (see docs/asapv1_wire_format.md §3.2).
+//
+// Count-Min is one algorithm — a single kind_id `0x02 0x00`. The two
+// parameters that shape the payload, the **counter type** (i64/f64) and the
+// column-derivation **mode** (fast/regular), live in the metadata, so the
+// payload itself is just `[rows, cols, counts]`. Only the canonical wire
+// configs (i64/f64 counters × fast/regular) get a serialization; exotic
+// in-memory counters (i32/i128/…) must be converted to a wire type first.
+// ===================================================================
+
+/// CMS kind_id: family `0x02`, single algorithm variant `0x00`.
+const CMS_KIND: &[u8] = &[0x02, 0x00];
+/// The seed-list index Count-Min hashes its matrix rows from.
+const CMS_MATRIX_SEED_INDEX: u32 = 0;
+
+/// Names the wire counter type carried in the metadata (`counter_type`).
+/// Implemented only for the two wire-eligible counter types.
+pub trait CmsWireCounter: Copy {
+    /// Metadata `counter_type` string — `"i64"` or `"f64"`.
+    const COUNTER_TYPE: &'static str;
+}
+impl CmsWireCounter for i64 {
+    const COUNTER_TYPE: &'static str = "i64";
+}
+impl CmsWireCounter for f64 {
+    const COUNTER_TYPE: &'static str = "f64";
+}
+
+/// Names the wire column-derivation mode carried in the metadata (`mode`).
+pub trait CmsWireMode {
+    /// Metadata `mode` string — `"fast"` or `"regular"`.
+    const MODE: &'static str;
+}
+impl CmsWireMode for RegularPath {
+    const MODE: &'static str = "regular";
+}
+impl CmsWireMode for FastPath {
+    const MODE: &'static str = "fast";
+}
+
+/// CMS descriptor metadata (ASAPv1 §2), a msgpack **map** (`to_vec_named`) with
+/// keys in this declaration order — the canonical order the wire spec fixes.
+/// Hash-spec fields first, then the structural params `counter_type` / `mode`.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct CmsMetadata {
+    metadata_version: u8,
+    hash_profile_id: String,
+    hash_algorithm: String,
+    seed_derivation: String,
+    input_encoding: String,
+    matrix_seed_index: u32,
+    counter_type: String,
+    mode: String,
+}
+
+fn standard_cms_metadata(counter_type: &str, mode: &str) -> CmsMetadata {
+    CmsMetadata {
+        metadata_version: 1,
+        hash_profile_id: envelope::HASH_PROFILE_PROJECTASAP_XXH3_V1.to_string(),
+        hash_algorithm: envelope::HASH_ALGORITHM_XXH3_64_128.to_string(),
+        seed_derivation: envelope::HASH_SEED_DERIVATION_INDEX_WRAP.to_string(),
+        input_encoding: envelope::HASH_INPUT_ENCODING_PROJECTASAP_V1.to_string(),
+        matrix_seed_index: CMS_MATRIX_SEED_INDEX,
+        counter_type: counter_type.to_string(),
+        mode: mode.to_string(),
     }
 }
 
-impl<S: MatrixStorage + for<'de> Deserialize<'de>, Mode, H: SketchHasher> CountMin<S, Mode, H> {
-    /// Deserializes a sketch from MessagePack bytes.
+/// CMS payload (ASAPv1 §3.2), a msgpack **array** (`to_vec`, positional):
+/// `[rows, cols, counts]`. `counts` is packed row-major; its element type is
+/// fixed by the metadata `counter_type`.
+#[derive(Debug, Serialize, Deserialize)]
+struct CmsPayload<T> {
+    rows: u32,
+    cols: u32,
+    counts: Vec<T>,
+}
+
+// Wire serialization for the canonical Count-Min configs only.
+impl<T, Mode, H> CountMin<Vector2D<T>, Mode, H>
+where
+    T: CmsWireCounter + Default + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
+    Mode: CmsWireMode,
+    H: SketchHasher,
+{
+    /// Serializes the sketch into an ASAPv1 MessagePack envelope.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        let rows = self.counts.rows();
+        let cols = self.counts.cols();
+        let metadata =
+            rmp_serde::to_vec_named(&standard_cms_metadata(T::COUNTER_TYPE, Mode::MODE))?;
+        let payload = rmp_serde::to_vec(&CmsPayload::<T> {
+            rows: rows as u32,
+            cols: cols as u32,
+            counts: self.counts.as_slice().to_vec(),
+        })?;
+        Ok(envelope::encode(CMS_KIND, &metadata, &payload))
+    }
+
+    /// Deserializes a sketch from an ASAPv1 MessagePack envelope.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+        let (kind_id, metadata, payload) =
+            envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        if kind_id != CMS_KIND {
+            return Err(RmpDecodeError::Uncategorized(format!(
+                "CMS kind_id mismatch: stored {kind_id:?}, expected {CMS_KIND:?}"
+            )));
+        }
+        let meta: CmsMetadata = from_slice(metadata)?;
+        if meta != standard_cms_metadata(T::COUNTER_TYPE, Mode::MODE) {
+            return Err(RmpDecodeError::Uncategorized(
+                "ASAPv1 CMS envelope: metadata mismatch".to_string(),
+            ));
+        }
+        let p: CmsPayload<T> = from_slice(payload)?;
+        let (rows, cols) = (p.rows as usize, p.cols as usize);
+        if p.counts.len() != rows.saturating_mul(cols) {
+            return Err(RmpDecodeError::Uncategorized(format!(
+                "CMS counts length {} != rows*cols {}",
+                p.counts.len(),
+                rows.saturating_mul(cols)
+            )));
+        }
+        let storage = Vector2D::from_fn(rows, cols, |r, c| p.counts[r * cols + c]);
+        Ok(CountMin::from_storage(storage))
     }
 }
 
@@ -941,15 +1054,16 @@ mod tests {
 
     #[test]
     fn count_min_round_trip_serialization() {
-        let mut sketch = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 8);
+        // i64 counters are a wire-eligible config; the ASAPv1 envelope round-trips.
+        let mut sketch = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
         sketch.insert(&DataInput::U64(42));
         sketch.insert(&DataInput::U64(7));
 
         let encoded = sketch.serialize_to_bytes().expect("serialize CountMin");
-        assert!(!encoded.is_empty());
-        let data_copied = encoded.clone();
+        assert!(encoded.starts_with(b"ASAPv1"));
+        assert_eq!(&encoded[7..10], &[2u8, 0x02, 0x00]); // kind_id_len=2, kind_id=[0x02,0x00]
 
-        let decoded = CountMin::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&data_copied)
+        let decoded = CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded)
             .expect("deserialize CountMin");
 
         assert_eq!(sketch.rows(), decoded.rows());
@@ -958,5 +1072,25 @@ mod tests {
             sketch.as_storage().as_slice(),
             decoded.as_storage().as_slice()
         );
+    }
+
+    #[test]
+    fn count_min_f64_and_mode_in_metadata_round_trip() {
+        // f64 counters (fractional weights) are the other wire-eligible config.
+        let mut sketch = CountMin::<Vector2D<f64>, FastPath>::with_dimensions(4, 16);
+        sketch.insert_many(&DataInput::U64(1), 2.5);
+        sketch.insert_many(&DataInput::U64(2), 1.25);
+
+        let encoded = sketch.serialize_to_bytes().expect("serialize");
+        let decoded = CountMin::<Vector2D<f64>, FastPath>::deserialize_from_bytes(&encoded)
+            .expect("deserialize");
+        assert_eq!(
+            sketch.as_storage().as_slice(),
+            decoded.as_storage().as_slice()
+        );
+
+        // Counter type + mode are pinned by the target: an f64/fast payload must
+        // not decode into an i64/regular sketch (metadata mismatch).
+        assert!(CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded).is_err());
     }
 }
