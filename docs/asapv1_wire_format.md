@@ -3,7 +3,10 @@
 Status: **implemented (Rust)**. HLL and Count-Min serialization use the shared
 `message_pack_format::envelope` module per this spec; the byte-level encoding is
 pinned in "Wire encoding rules" and decisions are summarized at the bottom. The
-`sketchlib-go` side is not yet updated (see Cross-language contract).
+hash-spec metadata is **derived from the hasher's `HashProfile`** (not hardcoded),
+so the bytes truthfully describe how the sketch was hashed and custom hash
+profiles are supported (see Section 2). The `sketchlib-go` side is not yet updated
+(see Cross-language contract).
 
 ## Guiding principle
 
@@ -165,7 +168,8 @@ Two consequences:
    ~130 bytes; the alternative (carry only `hash_profile_id` and resolve the seeds
    from a registry) is a v2 space optimization once many sketches share one spec.
    `deny_unknown_fields` still rejects any key beyond the fixed set, so v1 accepts
-   exactly the standard registered profile.
+   exactly that field set (the values may be the standard profile or a custom
+   `HashProfile` — see "Custom hash profiles").
 2. **Each sketch carries only the fields it uses.** HLL includes
    `canonical_seed_index` and `precision`; Count-Min includes `matrix_seed_index`,
    `counter_type`, `mode`. Nobody carries fields for seed roles or params they
@@ -198,8 +202,13 @@ Two consequences:
 
 ### Standard ProjectASAP profile (reference values)
 
-The full profile the registry resolves `hash_profile_id` to. A single sketch's
-metadata carries `hash_profile_id` plus only the subset of indices/params it uses.
+The hash-spec field *values* are sourced from the hasher's `HashProfile`, not
+hardcoded — `hll_metadata::<H>` / `cms_metadata::<H>` read `PROFILE_ID`,
+`ALGORITHM`, `SEED_DERIVATION`, `INPUT_ENCODING`, `seed_list()`, and the seed
+index straight off `H`. The block below is the **standard profile**, the one
+`DefaultXxHasher` declares (the single source of truth for these values); it is
+also what the registry resolves `hash_profile_id` to. A single sketch's metadata
+carries `hash_profile_id` plus only the subset of indices/params it uses.
 
 ```md
 metadata_version = 1
@@ -217,15 +226,36 @@ seed_derivation  = "seed_list_index_wrap"
 input_encoding   = "projectasap.input.v1"
 ```
 
+### Custom hash profiles
+
+Because the metadata is `HashProfile`-derived, a hasher that declares its own
+profile (a different `PROFILE_ID` / `seed_list()` / seed index) serializes
+**truthfully** — its own values land in the metadata. Since `seed_list` is
+inlined, those bytes are **fully self-describing**: a consumer reads the exact
+seeds and algorithm straight from the binary, with no registry, even for a hash
+it has never seen. This is safe on both ends because serialization **fails
+closed**:
+
+- **Encode side (compile-time).** `serialize_to_bytes` is bounded on
+  `H: HashProfile`, so a hasher that does *not* declare a profile simply cannot
+  serialize — mislabeled bytes are impossible by construction.
+- **Decode side (runtime).** Decode validates the metadata against the *target*
+  type's `HashProfile` (`meta == hll_metadata::<H>(precision)` /
+  `cms_metadata::<H>(..)`), so bytes hashed under profile A cannot be decoded into
+  a profile-B–typed sketch — they are rejected.
+- **Merge.** Merge compatibility is hash-spec equality (same `hash_profile_id` +
+  seeds). A custom-profile sketch is **not** mergeable with a standard-profile one.
+
 ### Validation
 
 Fail **closed** on any mismatch (a wrong hash spec produces silently-wrong merges,
 worse than a hard error):
 
 1. `kind_id` is in the registry.
-2. Every hash-spec field present matches the profile named by `hash_profile_id`
-   (exact equality for the fields that appear; `seed_list` resolved from the
-   profile when omitted).
+2. Every hash-spec field matches the **target hasher's** `HashProfile` (exact
+   equality — decode compares the read metadata against `hll_metadata::<H>` /
+   `cms_metadata::<H>` for the type being decoded into, not merely "the standard
+   profile"). Bytes carrying a different profile are rejected.
 3. Structural params are consistent with `kind_id` and the payload:
    - HLL: `registers.len() == 2^precision ==` the target storage's register count.
    - Count-Min: `counts` element type matches `counter_type`; `counts.len() == rows*cols`.
@@ -359,7 +389,8 @@ width). Golden byte-vectors lock it.
   group, then structural-params group). Encoders MUST write in this order.
   (Order is irrelevant to decoding but required for byte-identical output.)
 - Decoders reject **unknown keys** (Rust uses `#[serde(deny_unknown_fields)]`) —
-  v1 carries exactly the fixed field set for the standard registered profile.
+  v1 carries exactly the fixed field set (its values are the hasher's
+  `HashProfile`: the standard profile or a custom one).
 - Values: strings as msgpack `str`; `seed_list` as a msgpack array of integers
   (each per the family/width rule); all other integers per the family/width rule.
 
@@ -389,6 +420,16 @@ code to discipline. To keep it safe:
    round-trip test that guards drift today.
 3. **This registry**, mirrored, never independently allocated.
 
+**Hash profile on the Go side.** Rust derives the hash spec from a generic
+`HashProfile` bound on the hasher type; Go has no generic hasher type, so there is
+nothing to derive from. On the Go side the profile is simply **written into** the
+metadata on encode and **read from** it on decode. Go MUST validate the profile it
+reads (same fail-closed intent as Rust): a sketch is only mergeable/queryable if
+its `hash_profile_id` + seeds match the profile Go is prepared to reproduce.
+Because `seed_list` is inlined, Go can read a custom profile's seeds without any
+registry, but it must still reject a profile it cannot reproduce rather than
+merge/query under the wrong hash.
+
 Sequencing: do **not** delete `portable` until (2) exists — the current
 `native bytes == portable bytes` test is the only drift guard right now. Keep it
 through the transition, retire `portable` once goldens are in place.
@@ -406,6 +447,14 @@ through the transition, retire `portable` once goldens are in place.
   hash (a consumer needs no registry to read the seeds). Resolving seeds from
   `hash_profile_id` alone is a v2 space optimization. Each sketch still carries
   only the seed *index* it uses.
+- **Q-PROFILE** — the hash-spec metadata is **derived from the hasher's
+  `HashProfile`** (`hll_metadata::<H>` / `cms_metadata::<H>`), not hardcoded, so it
+  is always truthful to the hasher. Custom hash profiles are **supported and
+  self-describing**. Fail-closed on both ends: `serialize_to_bytes` requires
+  `H: HashProfile` (an unprofiled hasher can't serialize — compile-time), and
+  decode validates the metadata against the *target* type's profile (profile-A
+  bytes won't decode into a profile-B sketch). Merge compatibility is hash-spec
+  equality, so a custom-profile sketch is not mergeable with a standard one.
 - **Q-CMS** — Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode are
   metadata, not the id.
 - **Q-VER** — no payload version field. A new incompatible encoding gets a **new
