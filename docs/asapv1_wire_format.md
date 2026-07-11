@@ -1,31 +1,11 @@
 # ASAPv1 Wire Format — Design Doc
 
-Status: **implemented (Rust)**. HLL and Count-Min serialization use the shared
-`message_pack_format::envelope` module per this spec; the byte-level encoding is
-pinned in "Wire encoding rules" and decisions are summarized at the bottom. The
-hash-spec metadata is **derived from the hasher's `HashProfile`** (not hardcoded),
-so the bytes truthfully describe how the sketch was hashed and custom hash
-profiles are supported (see Section 2). The `sketchlib-go` side is not yet updated
-(see Cross-language contract).
+Status:
 
-## Guiding principle
-
-The envelope carries `kind_id` and `metadata` **before** the payload, so by the
-time the decoder reaches the payload it already knows both — and together they
-fix the payload's structure completely. That gives a clean three-way split:
-
-- **kind_id** = the sketch's **algorithm identity** (which decoder + which
-  estimator): HLL-Classic, HLL-Ertl-MLE, HLL-HIP, Count-Min. The coarse dispatch
-  key. It does *not* carry parameters.
-- **Metadata** = the **descriptor**: how it was hashed (seeds / algorithm) *plus*
-  the structural parameters needed to interpret the payload (HLL precision, CMS
-  counter type, CMS column-derivation mode). Self-describing (msgpack map).
-- **Payload** = the **raw state** only (registers, matrix): a positional msgpack
-  array parameterized by kind_id + metadata. No field names, no tag the kind_id
-  or metadata already carries, no derived quantities.
-
-If a payload looks complicated, either the sketch genuinely has that much state,
-or something derivable/redundant leaked in and should be removed.
+- **Implementing (Rust).** HLL and Count-Min serialize through the shared `message_pack_format::envelope` module per this spec.
+- **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (not hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (§2).
+- **Byte-level encoding** is pinned in §4; the resolved decisions are summarized at the end.
+- **`sketchlib-go`** is aligned separately (see Cross-language contract).
 
 ## Layering
 
@@ -35,9 +15,9 @@ or something derivable/redundant leaked in and should be removed.
 | **Metadata** | descriptor (hash spec + structural params) | yes | one shared module | the hash profile or a sketch's params change |
 | **Payload** | one per sketch | **no** | each sketch | that sketch's raw encoding changes |
 
-Envelope and Metadata are **not** per-sketch — they live in one shared module
-every sketch calls into. Only the **Payload** is authored per sketch. Today's
-code duplicates the envelope into each sketch file; this doc exists to undo that.
+Envelope and Metadata are **not** per-sketch — they live in one shared module every sketch calls into.
+Only the **Payload** is authored per sketch.
+Today's code duplicates the envelope into each sketch file; this doc exists to undo that.
 
 ```md
 ┌───────────────────────────────┐
@@ -45,38 +25,19 @@ code duplicates the envelope into each sketch file; this doc exists to undo that
 └───────────────────────────────┘
 ```
 
-### Code organization
+Terminology: **Envelope** means the sketch-agnostic **framing** — the `magic | version | kind_id | length-prefixes` header that wraps the metadata and payload blocks (Section 1).
+It is *not* the whole binary and *not* one of the kind_id / metadata / payload concepts; the whole serialized sketch = envelope framing + metadata + payload.
 
-Each sketch is a **directory module** with two files, splitting the algorithm
-from the wire format:
+### Guiding principle
 
-- `src/sketches/<sketch>.rs` — the **algorithm**: the struct(s), marker types,
-  aliases, and the insert/estimate/merge/`new`/`from_storage`/accessor impls plus
-  the algorithm's own tests. It declares `mod wire;`.
-- `src/sketches/<sketch>/wire.rs` — the **serialization**: the metadata/payload
-  DTOs, `kind_id` consts, wire-variant/counter/mode marker traits, the
-  `serialize_to_bytes`/`deserialize_from_bytes` impls, and the serialization
-  tests. Because `wire` is a **child submodule** of the sketch, it reads the
-  struct's **private** fields (e.g. `self.registers`, `self.counts`) directly —
-  no field is widened to `pub(crate)` for serialization.
-
-Shared framing (`kind_id` + length prefixes, `encode`/`split`) lives in the one
-shared `message_pack_format::envelope` module every sketch calls into — it is
-sketch-agnostic and knows nothing of the registry. The older `portable` /
-`native` shims are being **phased out** in favor of this per-sketch `wire.rs`
-plus the shared envelope (see Cross-language contract).
+In the byte stream, `kind_id` and `metadata` come **before** the `payload`.
+By the time the decoder reaches the payload it already knows both, and together they fix the payload's structure completely.
+So the payload carries **raw state only** — no field names, no tag that `kind_id` or the metadata already carries, no derived quantities.
+If a payload looks complicated, either the sketch genuinely has that much state, or something derivable/redundant leaked in and should be removed.
 
 ### Structure (entity view)
 
-This is the same idea as OpenTelemetry's [Arrow Metrics
-records](https://github.com/open-telemetry/otel-arrow/blob/main/docs/data_model.md#metrics-arrow-records),
-drawn as an entity–relationship diagram — but with the **opposite** shape, and
-that contrast is the point. OTel-Arrow *normalizes*: one metric **fans out** into
-many attribute / data-point records joined by `parent_id` (`||--o{`, one-to-many),
-which is great for columnar compression across many rows. ASAPv1 deliberately does
-**not** normalize: a sketch is **self-contained** — exactly one metadata and
-exactly one payload, no external records to join (`||--||`, one-to-one). The
-`kind_id` selects which single payload structure is present.
+A visualization of the layering: one envelope carries exactly one metadata and exactly one payload, and `kind_id` selects which payload shape is present.
 
 ```mermaid
 erDiagram
@@ -120,20 +81,16 @@ erDiagram
     }
 ```
 
-Read it as: every `ENVELOPE` carries exactly one `METADATA` and exactly one
-`PAYLOAD`; the `PAYLOAD` is exactly one of the per-`kind_id` shapes below it
-(`o|` = at most one of each — the `kind_id` picks which). No `parent_id`, no
-cross-record joins — everything needed to interpret the bytes is inside this one
-envelope.
+Read it as: every `ENVELOPE` carries exactly one `METADATA` and exactly one `PAYLOAD`; the `PAYLOAD` is exactly one of the per-`kind_id` shapes (`o|` = at most one of each — the `kind_id` picks which).
+No `parent_id`, no cross-record joins — everything needed to interpret the bytes is inside this one serialized sketch.
 
 ---
 
 ## Section 1 — Envelope
 
-A flat, sketch-agnostic frame. It answers, with zero knowledge of the sketch:
-*is this ours?* (magic), *how do I parse the frame?* (version), *what algorithm?*
-(kind_id). The envelope is essentially **constant** across sketches — only
-`kind_id` and the two length fields differ.
+A flat, sketch-agnostic frame.
+It answers, with zero knowledge of the sketch: *is this ours?* (magic), *how do I parse the frame?* (version), *what algorithm?* (kind_id).
+The envelope is essentially **constant** across sketches — only `kind_id` and the two length fields differ.
 
 ### Layout
 
@@ -154,41 +111,40 @@ A flat, sketch-agnostic frame. It answers, with zero knowledge of the sketch:
 | `metadata` | msgpack map | — | Section 2 |
 | `payload` | msgpack array | — | Section 3 |
 
-**`payload_len`** makes the envelope a self-delimiting record (needed to ever
-place a sketch inside a larger container). `metadata_len` is variable only because
-the metadata is a variable-length msgpack map (Section 2), not because it depends
-on the sketch — the length fields are pure framing.
+**`payload_len`** makes the envelope a self-delimiting record (needed to ever place a sketch inside a larger container).
+`metadata_len` is variable only because the metadata is a variable-length msgpack map (Section 2), not because it depends on the sketch — the length fields are pure framing.
 
 ### The `kind_id` scheme
 
-`kind_id` is `[family, variant]` and names the sketch's **algorithm**, not its
-parameters:
+#### Design choice: `kind_id` refers to **algorithm level**
+
+Count-Min is **one** kind_id: its counter type (i64/f64) and mode (fast/regular) are metadata, not separate ids.
+Classic and Ertl-MLE have byte-identical payloads but are separate ids because `kind_id` also selects the *estimator* to apply.
+
+#### Design choice: numeric `kind_id`, not a string (for now)
+
+The wire carries the compact 2-byte `kind_id` and resolves the algorithm name through the registry below — it does **not** encode a raw string like `"HyperLogLog-Classic"`.
+The registry is the single place that maps id → name; the door is left open to switch to a string scheme later if it ever earns its keep.
+
+#### `kind_id` structure
+
+`kind_id` is `[family, variant]` and names the sketch's **algorithm**, not its parameters:
 
 - **family** (byte 1) picks the sketch type — `0x01` = HLL, `0x02` = Count-Min, …
-- **variant** (byte 2) picks the algorithm within that family — for HLL, Classic
-  vs Ertl-MLE vs HIP.
+- **variant** (byte 2) picks the algorithm within that family — for HLL, Classic vs Ertl-MLE vs HIP.
 
-Structural parameters (HLL precision, CMS counter type, CMS mode) are **not** in
-`kind_id` — they live in the metadata, which the decoder has already read before
-it reaches the payload. So the payload structure is fixed by `kind_id` + metadata
-together. The registry below is our **master list of algorithms we still have to
-design payloads for**.
+**Allocation rules:**
+
+- `kind_id` is **variable-length** (`kind_id_len` is a u8), so the id space is effectively unbounded — it can keep growing forever; we will never run out.
+- A `kind_id` is **allocated once and never recycled.** When an algorithm is retired, its id stays reserved permanently — reusing a retired number would make a new decoder silently misread old bytes.
+- A **new incompatible payload encoding gets a new `kind_id`**, not a version field inside the payload (Q-VER — versioning lives in the id, keeping payloads minimal).
 
 ### kind_id registry (single source of truth — mirrored verbatim in `sketchlib-go`)
 
-The **family** bytes below now match `sketchlib-go`'s
-`wire/asapmsgpack/magic_ids.go` verbatim. An earlier draft of this doc used
-*speculative* family bytes (`0x03` KLL, `0x04` DDSketch, `0x05` KMV, `0x06`
-CountSketch) that conflicted with the ids Go had already committed to; those have
-been **corrected to align with Go** (`0x03` = Count-Min-with-heap, `0x04` =
-Count-Sketch, `0x05` = DDSketch, `0x06` = KLL). Family bytes `0x0a`+ are new
-allocations for the remaining sketches in [`apis.md`](./apis.md) that Go has not
-assigned yet.
-
-Only the HLL variants and Count-Min have designed payloads today; every other row
-lists the family byte with variant `0x00` reserved and payload **TBD**. Variant
-sub-ids are **not** invented ahead of a payload design — a family that later needs
-several algorithms allocates its variants when it is designed (as HLL did).
+The **family** bytes match `sketchlib-go`'s `wire/asapmsgpack/magic_ids.go` verbatim; `0x0a`+ are new allocations for sketches in [`apis.md`](./apis.md) that Go has not assigned yet.
+Only the HLL variants and Count-Min have designed payloads today; every other row reserves its family byte with variant `0x00` and payload **TBD**.
+Variant sub-ids are not invented ahead of a payload design — a family that later needs several algorithms allocates its variants when it is designed (as HLL did).
+This registry is the master list of algorithms still to design payloads for.
 
 | kind_id | Sketch | Algorithm / variant | Payload | Status |
 | --------- | -------- | --------- | --------- | -------- |
@@ -219,39 +175,12 @@ several algorithms allocates its variants when it is designed (as HLL did).
 | `0x15 0x00` | EHUnivOptimized (`Unstable`) | — | TBD | reserved / not designed |
 | `0x16 0x00` | OctoSketch | — | TBD | reserved / not designed |
 
-Design choice: `kind_id` refers to **algorithm level**
-Count-Min is **one** kind_id: its counter type (i64/f64) and mode (fast/regular)
-are metadata, not separate ids. Classic and Ertl-MLE have byte-identical payloads
-but are separate ids because `kind_id` also selects the *estimator* to apply.
+**Mapping notes** (mismatches between `apis.md` and Go's `magic_ids.go`):
 
-**Mapping notes** (where `apis.md` and Go's `magic_ids.go` don't line up 1:1):
-
-- **CMSHeap vs CSHeap.** Go's `MagicCountMinSketchWithHeap` (`0x03`) is the
-  Count-*Min*-with-heap sketch (`apis.md` → CMSHeap). The Count-*Sketch*-with-heap
-  sketch (`apis.md` → CSHeap) is a distinct family and gets a fresh byte (`0x0a`);
-  it is **not** a variant of `0x03`.
-- **Hydra.** `apis.md` lists the "Hydra" framework; Go's only Hydra id is
-  `MagicHydraKLLSketch` (`0x07`), so Hydra maps here to the Hydra-KLL id. If Hydra
-  is later wrapped around a non-KLL base sketch, that combination gets its own id.
-- **SetAggregator / DeltaResult** (`0x08` / `0x09`) come from Go's `magic_ids.go`
-  and are **not** listed as sketches in `apis.md` (they are aggregation / delta
-  result envelopes, not stand-alone sketches). They are kept here so the family
-  space stays mirrored verbatim with Go.
-- **`Unstable`** rows mirror the `Unstable` status those sketches carry in
-  `apis.md`; their kind_id is reserved but the payload (and the sketch API) may
-  still change.
-- other mismatch?
-
-**Allocation rules:**
-
-- `kind_id` is **variable-length** (`kind_id_len` is a u8), so the id space is
-  effectively unbounded — it can keep growing forever; we will never run out.
-- A `kind_id` is **allocated once and never recycled.** When an algorithm is
-  retired, its id stays reserved permanently — reusing a retired number would
-  make a new decoder silently misread old bytes.
-- A **new incompatible payload encoding gets a new `kind_id`**, not a version
-  field inside the payload (Q-VER — versioning lives in the id, keeping payloads
-  minimal).
+- **CMSHeap vs CSHeap.** Go's `MagicCountMinSketchWithHeap` (`0x03`) is the Count-*Min*-with-heap sketch (`apis.md` → CMSHeap). The Count-*Sketch*-with-heap sketch (`apis.md` → CSHeap) is a distinct family and gets a fresh byte (`0x0a`); it is **not** a variant of `0x03`.
+- **Hydra.** `apis.md` lists the "Hydra" framework; Go's only Hydra id is `MagicHydraKLLSketch` (`0x07`), so Hydra maps here to the Hydra-KLL id. If Hydra is later wrapped around a non-KLL base sketch, that combination gets its own id.
+- **SetAggregator / DeltaResult** (`0x08` / `0x09`) come from Go's `magic_ids.go` and are **not** listed as sketches in `apis.md` (they are aggregation / delta result envelopes, not stand-alone sketches). They are kept here so the family space stays mirrored verbatim with Go.
+- **`Unstable`** rows mirror the `Unstable` status those sketches carry in `apis.md`; their kind_id is reserved but the payload (and the sketch API) may still change.
 
 ### Decoder rules
 
@@ -259,53 +188,37 @@ but are separate ids because `kind_id` also selects the *estimator* to apply.
 2. `magic` matches, else reject.
 3. `version` is known, else reject (no best-effort parse).
 4. Read `kind_id`; the per-sketch decoder rejects any `kind_id` it does not own.
-5. Read `metadata`, validate per Section 2.
-6. Cross-check metadata against `kind_id` and the payload (structural params
-   consistent — see Section 2 validation).
+5. Read `metadata`; validate it against the target type's profile (§5, Validation).
+6. Cross-check metadata against `kind_id` and the payload — structural params consistent (§5, Validation).
 7. Read exactly `payload_len` bytes; hand to the per-sketch payload decoder.
-8. Fail **closed** on any inconsistency — never merge/query a sketch whose hash
-   spec did not validate.
+8. Fail **closed** on any inconsistency — never merge/query a sketch whose hash spec did not validate.
 
-> Implementation note: the shared envelope module
-> (`src/message_pack_format/envelope.rs`) owns rules 1–3 and the byte framing
-> (`encode` / `split`); it is sketch-agnostic and does **not** know the registry.
-> Rule 4 (and metadata/kind_id validation) happens in each sketch's decoder,
-> which checks the `kind_id` against the ones it owns.
+> Implementation note: the shared envelope module (`src/message_pack_format/envelope.rs`) owns rules 1–3 and the byte framing (`encode` / `split`); it is sketch-agnostic and does **not** know the registry.
+> Rule 4 (and metadata/kind_id validation) happens in each sketch's decoder, which checks the `kind_id` against the ones it owns.
 
 ---
 
 ## Section 2 — Metadata
 
-The **descriptor**: everything the decoder needs to interpret and merge the
-payload beyond the algorithm named by `kind_id`. Two groups of fields:
+The **descriptor**: the configuration of a sketch algorithm.
+Two groups of fields:
 
-- **Hash spec** — how keys were hashed (so two sketches can be checked
-  mergeable and a query key hashed the same way). Profile-derived.
-- **Structural params** — parameters that shape the payload (HLL precision, CMS
-  counter type, CMS mode). Per-sketch, per-algorithm.
+- **Hash spec** — how keys were hashed (so two sketches can be checked mergeable and a query key hashed the same way). Profile-derived.
+- **Structural params** — parameters that shape the payload (HLL precision, CMS counter type, CMS mode). Per-sketch, per-algorithm.
+
+**Simple rule:** anything you configure when creating a sketch goes in the metadata.
 
 ### Encoding: msgpack **map** keyed by field name
 
-Metadata is a **msgpack map**, so a consumer reads fields by name
-(`"hash_profile_id"`) with no positional guesswork. It is **not** an open/loose
-schema, though: **each sketch has its own fixed metadata schema** (in Rust, one
-struct per sketch with `#[serde(deny_unknown_fields)]`). The field *set* differs
-per sketch — HLL carries `precision` + `canonical_seed_index`; Count-Min carries
-`rows`, `cols`, `counter_type`, `mode` + `matrix_seed_index` — but within a given
-sketch **every field is required**: a missing key, or an unexpected extra key, is
-**rejected (fail closed)**, never silently defaulted or skipped.
-
-**`seed_list` is inlined** in every sketch's metadata, so the bytes are
-**self-describing** — a consumer reads the exact seeds (and algorithm) straight
-from the binary, no registry. It costs ~130 bytes; resolving the seeds from
-`hash_profile_id` via a registry instead is a v2 space optimization (once many
-sketches share one spec). The values may be the standard profile or a custom
-`HashProfile` (see "Custom hash profiles").
+- Metadata is a **msgpack map**, so a consumer reads fields by name (`"hash_profile_id"`) with no positional guesswork.
+- It is **not** an open/loose schema: **each sketch has its own fixed metadata schema** (in Rust, one struct per sketch with `#[serde(deny_unknown_fields)]`).
+- The field *set* differs per sketch — HLL carries `precision` + `canonical_seed_index`; Count-Min carries `rows`, `cols`, `counter_type`, `mode` + `matrix_seed_index`.
+- Within a given sketch **every field is required**: a missing key, or an unexpected extra key, is **rejected (fail closed)**, never silently defaulted or skipped.
+- **`seed_list` is inlined**, so the bytes self-describe the hash — a consumer reads the exact seeds straight from the binary, no registry. (It costs ~130 bytes; resolving seeds from `hash_profile_id` via a registry is a v2 space optimization.)
 
 ### Fields
 
-The metadata map is **two groups** of fields, written on the wire in this order —
-Hash spec first, then Structural params:
+The metadata map is **two groups** of fields, written on the wire in this order — Hash spec first, then Structural params:
 
 | Group | Role | Fields |
 | ----- | ---- | ------ |
@@ -339,21 +252,14 @@ The two tables below are the field-by-field detail of each group.
 | `counter_type` | string | Count-Min | `"i64"` or `"f64"` — element type of `counts` |
 | `mode` | string | Count-Min | `"fast"` or `"regular"` — key→column derivation |
 
-Count-Min's matrix dimensions are **configuration** (they shape the payload,
-like HLL's `precision`), so per the config→metadata rule they live here, not in
-the payload. Count-Min's canonical structural-param order is
-`… matrix_seed_index, rows, cols, counter_type, mode` — this is the wire
-contract and Go must mirror it verbatim.
+Count-Min's matrix dimensions are **configuration** (they shape the payload, like HLL's `precision`), so per the config→metadata rule they live here.
+Count-Min's canonical structural-param order is `… matrix_seed_index, rows, cols, counter_type, mode` — this is the wire contract and Go must mirror it verbatim.
 
 ### Standard ProjectASAP profile (reference values)
 
-The hash-spec field *values* are sourced from the hasher's `HashProfile`, not
-hardcoded — `hll_metadata::<H>` / `cms_metadata::<H>` read `PROFILE_ID`,
-`ALGORITHM`, `SEED_DERIVATION`, `INPUT_ENCODING`, `seed_list()`, and the seed
-index straight off `H`. The block below is the **standard profile**, the one
-`DefaultXxHasher` declares (the single source of truth for these values); it is
-also what the registry resolves `hash_profile_id` to. A single sketch's metadata
-carries `hash_profile_id` plus only the subset of indices/params it uses.
+The hash-spec field *values* are sourced from the hasher's `HashProfile`, not hardcoded — `hll_metadata::<H>` / `cms_metadata::<H>` read `PROFILE_ID`, `ALGORITHM`, `SEED_DERIVATION`, `INPUT_ENCODING`, `seed_list()`, and the seed index straight off `H`.
+The block below is the **standard profile**, the one `DefaultXxHasher` declares (the single source of truth for these values); it is also what the registry resolves `hash_profile_id` to.
+A single sketch's metadata carries `hash_profile_id` plus only the subset of indices/params it uses.
 
 ```md
 metadata_version = 1
@@ -373,61 +279,30 @@ input_encoding   = "projectasap.input.v1"
 
 ### Custom hash profiles
 
-Because the metadata is `HashProfile`-derived, a hasher that declares its own
-profile (a different `PROFILE_ID` / `seed_list()` / seed index) serializes
-**truthfully** — its own values land in the metadata. Since `seed_list` is
-inlined, those bytes are **fully self-describing**: a consumer reads the exact
-seeds and algorithm straight from the binary, with no registry, even for a hash
-it has never seen. This is safe on both ends because serialization **fails
-closed**:
+Because the metadata is `HashProfile`-derived, a hasher that declares its own profile (a different `PROFILE_ID` / `seed_list()` / seed index) serializes **truthfully** — its own values land in the metadata.
+Since `seed_list` is inlined, those bytes are **fully self-describing**: a consumer reads the exact seeds and algorithm straight from the binary, with no registry, even for a hash it has never seen.
+This is safe on both ends because serialization **fails closed**:
 
-- **Encode side (compile-time).** `serialize_to_bytes` is bounded on
-  `H: HashProfile`, so a hasher that does *not* declare a profile simply cannot
-  serialize — mislabeled bytes are impossible by construction.
-- **Decode side (runtime).** Decode validates the metadata against the *target*
-  type's `HashProfile` (`meta == hll_metadata::<H>(precision)` /
-  `cms_metadata::<H>(..)`), so bytes hashed under profile A cannot be decoded into
-  a profile-B–typed sketch — they are rejected.
-- **Merge.** Merge compatibility is hash-spec equality (same `hash_profile_id` +
-  seeds). A custom-profile sketch is **not** mergeable with a standard-profile one.
-
-### Validation
-
-Fail **closed** on any mismatch (a wrong hash spec produces silently-wrong merges,
-worse than a hard error):
-
-1. `kind_id` is in the registry.
-2. Every hash-spec field matches the **target hasher's** `HashProfile` (exact
-   equality — decode compares the read metadata against `hll_metadata::<H>` /
-   `cms_metadata::<H>` for the type being decoded into, not merely "the standard
-   profile"). Bytes carrying a different profile are rejected.
-3. Structural params are consistent with `kind_id` and the payload:
-   - HLL: `registers.len() == 2^precision ==` the target storage's register count.
-   - Count-Min: `counts` element type matches `counter_type`; `counts.len() == rows*cols`.
+- **Encode side (compile-time).** `serialize_to_bytes` is bounded on `H: HashProfile`, so a hasher that does *not* declare a profile simply cannot serialize — mislabeled bytes are impossible by construction.
+- **Decode side (runtime).** Decode validates the metadata against the *target* type's `HashProfile`, so bytes hashed under profile A cannot be decoded into a profile-B–typed sketch — they are rejected (see §5, Validation).
+- **Merge.** Merge compatibility is hash-spec equality (same `hash_profile_id` + seeds). A custom-profile sketch is **not** mergeable with a standard-profile one.
 
 ---
 
 ## Section 3 — Payload
 
-Per sketch. **Raw state only**, a **positional msgpack array** in the order its
-kind_id implies. Rules:
+Per sketch. **Raw state only**, a **positional msgpack array** in the order its kind_id implies. Rules:
 
-- No field that `kind_id` or the metadata already determines (no variant tag, no
-  precision, no counter type, no mode).
-- No field derivable from another (no HLL `precision`; no CMS `l1`/`l2` — those
-  are `Σ count` / `Σ count²`, recomputed on decode).
-- msgpack array (positional), never a keyed map. The exact msgpack types are in
-  "Wire encoding rules".
+- No field that `kind_id` or the metadata already determines (no variant tag, no precision, no counter type, no mode).
+- No field derivable from another (no HLL `precision`; no CMS `l1`/`l2` — those are `Σ count` / `Σ count²`, recomputed on decode).
+- msgpack array (positional), never a keyed map. The exact msgpack types are in "Wire encoding rules".
 
-> Note: derived summaries like CMS `l1`/`l2` and `sum_counts`/`sum2_counts` live
-> in the **delta / error-accounting** format (proto `CountMinState`), a separate
-> wire format. They do **not** belong in the self-contained sketch payload.
+> Note: derived summaries like CMS `l1`/`l2` and `sum_counts`/`sum2_counts` live in the **delta / error-accounting** format (proto `CountMinState`), a separate wire format.
+> They do **not** belong in the self-contained sketch payload.
 
 ### 3.1 — HLL payload (`0x01 0x01` / `0x01 0x02` / `0x01 0x03`)
 
-The variant is in `kind_id`, precision is in the metadata (and equals
-`log2(register count)`), so the only real state is the register bytes — plus, for
-HIP, three running scalars.
+The variant is in `kind_id`, precision is in the metadata (and equals `log2(register count)`), so the only real state is the register bytes — plus, for HIP, three running scalars.
 
 **Classic / Ertl-MLE** (`0x01 0x01`, `0x01 0x02`) — identical layout:
 
@@ -446,73 +321,21 @@ HIP, three running scalars.
 
 ### 3.2 — Count-Min payload (`0x02 0x00`)
 
-The `CountMin` struct is generic in memory (counter `i32`/`i64`/`i128`/`f64`,
-`RegularPath`/`FastPath`, Nitro, …). **That freedom is kept in memory; nothing is
-forbidden.** The wire supports a fixed set, and the two parameters that shape it —
-**counter type** (`"i64"`/`"f64"`) and **mode** (`"fast"`/`"regular"`) — live in
-the metadata, so the payload itself is just shape + counters:
+The `CountMin` struct is generic in memory (counter `i32`/`i64`/`i128`/`f64`, `RegularPath`/`FastPath`, Nitro, …).
+**That freedom is kept in memory; nothing is forbidden.**
+The wire supports a fixed set, and the two parameters that shape it — **counter type** (`"i64"`/`"f64"`) and **mode** (`"fast"`/`"regular"`) — live in the metadata, so the payload itself is just shape + counters:
 
 | Pos | Field | Type | Notes |
 | ----- | ------- | ------ | ------- |
 | 0 | `counts` | array | packed **row-major**, `rows*cols` cells; element type = `counter_type` |
 
-`rows` and `cols` are **not** in the payload — they are structural params in the
-metadata (§2). The payload is a **1-element positional array `[counts]`**,
-mirroring HLL Classic's `[registers]`.
+`rows` and `cols` are **not** in the payload — they are structural params in the metadata (§2).
+The payload is a **1-element positional array `[counts]`**, mirroring HLL Classic's `[registers]`.
 
-Wire counter types are `i64` and `f64` only (`i32` widens to `i64`; `i128` and
-exotic counters are not wire types). `mode` records `RegularPath` vs `FastPath`
-because they place a key in different columns (compare `cm_regular_path_correctness`
-vs `cm_fast_path_correctness`), so a reader must know which to reproduce a query.
-
-#### Converting an exotic in-memory sketch to a wire form (user-side)
-
-The library provides no free wire serialization for exotic counters — only the
-owner knows if the mapping is lossless. Convert to a canonical counter type, then
-serialize. Doable **today** with existing public API (the pattern `SketchlibCms`
-already uses):
-
-```rust
-// e.g. a u64-counter FastPath CMS → the i64 wire form
-let (rows, cols) = (src.rows(), src.cols());
-let converted: CountMin<Vector2D<i64>, FastPath> = CountMin::from_storage(
-    Vector2D::from_fn(rows, cols, |r, c| src.as_storage().query_one_counter(r, c) as i64),
-);
-let bytes = converted.serialize_to_bytes()?; // wire-eligible type
-```
-
-Converts the **counter type** only (cell-for-cell). It does **not** convert the
-mode (Regular↔Fast) — that would need re-inserting the original data.
-
-#### Rust-side changes (as implemented)
-
-- Removed `serialize_to_bytes`/`deserialize_from_bytes` from the blanket
-  `impl<S: MatrixStorage + Serialize>` — no "serialize anything" surface. They now
-  exist only on `CountMin<Vector2D<T>, Mode, H>` for wire-eligible `T`/`Mode`.
-- Two marker traits carry the structural params into the metadata:
-  `CmsWireCounter` (`i64` → `"i64"`, `f64` → `"f64"`) and `CmsWireMode`
-  (`FastPath` → `"fast"`, `RegularPath` → `"regular"`). The native
-  `MessagePackCodec` impl is narrowed to the same bounds.
-- The payload is a `CmsPayload<T>` struct holding only `counts`, serialized with
-  `rmp_serde::to_vec` (a 1-element positional array `[counts]`). `rows`/`cols`
-  come from the storage at encode time and are written into the **metadata**
-  (§2), then read back from the validated metadata at decode time.
-- The envelope framing + hash-profile constants are the shared
-  `message_pack_format::envelope` module (same one HLL uses).
-
-#### Go-side TODOs (tradeoffs)
-
-- Implement whichever `mode` derivations it must read (FastPath at least),
-  bit-for-bit with Rust.
-- Support i64 and f64 wire counter types. int64-only vs adding f64 is the
-  precision-vs-simplicity tradeoff.
-- No need for i128 / Nitro — not wire types.
-
-The remaining `kind_id`s in the registry (§1) each get a payload subsection below.
-They are **placeholders** — the `kind_id` is allocated but the payload is not
-designed yet. Fill each in when its wire payload is designed, following the
-"brand-new sketch algorithm" steps in §4.3 (define metadata fields in §2, author
-the positional payload here, mirror the `kind_id` and add goldens on the Go side).
+Wire counter types are `i64` and `f64` only (`i32` widens to `i64`; `i128` and exotic counters are not wire types).
+`mode` records `RegularPath` vs `FastPath` because they place a key in different columns (compare `cm_regular_path_correctness` vs `cm_fast_path_correctness`), so a reader must know which to reproduce a query.
+A counter type other than i64/f64, or non-`Vector2D` storage, must be converted first — see §5, "Converting an exotic in-memory sketch".
+Both modes, `FastPath` and `RegularPath`, serialize directly (you'd only "convert" a mode to *change* it, which needs re-inserting the data).
 
 ### 3.3 — Count-Min-with-heap / CMSHeap (`0x03 0x00`)
 
@@ -531,9 +354,8 @@ The bucket is expected to be straightforward.
 
 ### 3.6 — KLL (`0x06 0x00`)
 
-*Payload TBD — not yet designed.* Family `0x06` assigned in Go.
-The coin can be a challenge.
-Whether CDF needs to be serialized is another design decision. maybe not
+*Payload TBD — next on the list.* Family `0x06` assigned in Go.
+Plan: no CDF serialization.
 
 ### 3.7 — Hydra-KLL (`0x07 0x00`)
 
@@ -542,13 +364,11 @@ Same challenge to KLL.
 
 ### 3.8 — SetAggregator (`0x08 0x00`)
 
-*Payload TBD — not yet designed.* Family `0x08` assigned in Go (aggregation
-envelope, not a stand-alone sketch — see §1 mapping notes).
+*Payload TBD — not yet designed.* Family `0x08` assigned in Go (aggregation envelope, not a stand-alone sketch — see §1 mapping notes).
 
 ### 3.9 — DeltaResult (`0x09 0x00`)
 
-*Payload TBD — not yet designed.* Family `0x09` assigned in Go (delta-result
-envelope, not a stand-alone sketch — see §1 mapping notes).
+*Payload TBD — not yet designed.* Family `0x09` assigned in Go (delta-result envelope, not a stand-alone sketch — see §1 mapping notes).
 
 ### 3.10 — Count-Sketch-with-heap / CSHeap (`0x0a 0x00`)
 
@@ -558,13 +378,13 @@ Expected to be similar to current CMS.
 ### 3.11 — Elastic (`0x0b 0x00`)
 
 *Payload TBD — not yet designed.* (`Unstable` — API may still change.)
-The "key" may needs consideration, otherwise expected to be similar to current CMS.
-The sketch itself needs optimization. Worth to combine optimization and serialization into one PR.
+The "key" may need consideration, otherwise expected to be similar to current CMS.
+The sketch itself needs optimization; worth combining optimization and serialization into one PR.
 
 ### 3.12 — Coco (`0x0c 0x00`)
 
 *Payload TBD — not yet designed.* (`Unstable` — API may still change.)
-The "key" may needs consideration, otherwise expected to be similar to current CMS.
+The "key" may need consideration, otherwise expected to be similar to current CMS.
 
 ### 3.13 — UniformSampling (`0x0d 0x00`)
 
@@ -593,12 +413,12 @@ More complex but should be doable.
 ### 3.18 — NitroBatch (`0x12 0x00`)
 
 *Payload TBD — not yet designed.*
-To do this, maybe it worth to add another abstraction of serialization in Storage.
+To do this, it may be worth adding another serialization abstraction in Storage.
 
 ### 3.19 — ExponentialHistogram (`0x13 0x00`)
 
 *Payload TBD — not yet designed.*
-Needs to find a way to decently re-use the serialization of other sketches.
+Needs a way to decently re-use the serialization of other sketches.
 
 ### 3.20 — EHSketchList (`0x14 0x00`)
 
@@ -612,12 +432,10 @@ Needs to find a way to decently re-use the serialization of other sketches.
 
 *Payload TBD — not yet designed.*
 
----
+<!-- Deferred — "Wire coverage" (which in-memory Rust configs are wire-eligible).
+Not rendered for now; wire-eligibility is noted in the per-sketch API docs instead.
 
-Anything starting here are notes taken by Claude. Not removing at this moment as they might be helpful.
-Feel free to ignore anything after here.
-
-## Section 4 — Wire coverage
+## Wire coverage (deferred)
 
 The in-memory sketch types are deliberately **freer** than what the wire
 serializes. That is the same framing as §3.2 — *in-memory is free; the wire is a
@@ -681,7 +499,7 @@ concrete step that makes it serializable.
 
 | You have | Do this |
 | ---------- | --------- |
-| An **exotic counter type** (e.g. `u64`, `i128`) | Convert cell-by-cell to `i64` or `f64` and serialize the result — the exact `Vector2D::from_fn` + `CountMin::from_storage` recipe in §3.2. Only you know if the mapping is lossless. **Or**, if it deserves to be a first-class wire type, implement `CmsWireCounter` for it (giving its `COUNTER_TYPE` string) **and** add the matching Go decode support **and** check in a golden byte-vector — do all three, not just the Rust trait. |
+| An **exotic counter type** (e.g. `u64`, `i128`) | Convert cell-by-cell to `i64` or `f64` and serialize the result — the exact `Vector2D::from_fn` + `CountMin::from_storage` recipe in §5. Only you know if the mapping is lossless. **Or**, if it deserves to be a first-class wire type, implement `CmsWireCounter` for it (giving its `COUNTER_TYPE` string) **and** add the matching Go decode support **and** check in a golden byte-vector — do all three, not just the Rust trait. |
 | **Non-`Vector2D` storage** (`FixedMatrix` / `DefaultMatrix*` / `QuickMatrix*`) | Rebuild it into a `Vector2D<i64>` / `Vector2D<f64>` via `CountMin::from_storage(Vector2D::from_fn(rows, cols, |r, c| src.as_storage().query_one_counter(r, c) as i64))`, then serialize. |
 | A **custom hash function** | Implement `HashProfile` for the hasher (a distinct `PROFILE_ID`, its own `seed_list()` and seed index). It then serializes **truthfully** and, because `seed_list` is inlined, **self-describes** on the wire — no registry needed to read it (see §2, "Custom hash profiles"). |
 | An **unprofiled hasher** (impls `SketchHasher` but not `HashProfile`) | Nothing — it **cannot** serialize, and that is a **compile error by design** (`serialize_to_bytes` is bounded on `H: HashProfile`). This is the intended fail-closed behavior — mislabeled bytes are impossible by construction — not a bug to work around. |
@@ -694,113 +512,106 @@ bit-for-bit) plus a **golden byte-vector** to maintain forever. Keeping that set
 small and fixed keeps both bounded — a handful of counter types and modes instead
 of the open-ended in-memory matrix. The in-memory types stay maximally free for
 performance and experimentation; serialization is the deliberately narrow gate
-where that freedom is pinned down to a canonical, portable form.
+where that freedom is pinned down to a canonical, portable form. -->
 
 ---
 
-## Section 5 — Wire encoding rules (byte-level)
+## Section 4 — Wire encoding rules (byte-level)
 
-This is what makes two languages emit **identical bytes**. msgpack fixes
-endianness and float format; these rules fix the family/width choices that
-libraries otherwise make differently.
+This is what makes two languages emit **identical bytes**.
+msgpack fixes endianness and float format; these rules fix the family/width choices that libraries otherwise make differently.
 
-**Integer family + width rule (applies to every integer below).** This is the
-single biggest cross-language trap — some Go msgpack libraries emit a *signed*
-`int` family for a positive `int64` while Rust's `rmp_serde` narrows it to the
-`uint` family. Pin it:
+**Integer family + width rule (applies to every integer below).**
+This is the single biggest cross-language trap — some Go msgpack libraries emit a *signed* `int` family for a positive `int64` while Rust's `rmp_serde` narrows it to the `uint` family. Pin it:
 
-- A **non-negative** integer is encoded in the msgpack **uint** family, at the
-  **minimal width** for its value (e.g. `300` → `cd 01 2c`, uint16; `1` →
-  positive fixint `01`).
+- A **non-negative** integer is encoded in the msgpack **uint** family, at the **minimal width** for its value (e.g. `300` → `cd 01 2c`, uint16; `1` → positive fixint `01`).
 - A **negative** integer is encoded in the msgpack **int** family, minimal width.
 - `f64` is always full **float64** (`0xcb`), never narrowed to float32.
 
-The Go side MUST configure its encoder to match (uint-narrowing on, minimal
-width). Golden byte-vectors lock it.
+The Go side MUST configure its encoder to match (uint-narrowing on, minimal width).
+Golden byte-vectors lock it.
 
 **Metadata (msgpack map)**
 
 - Keys are the exact ASCII strings in Section 2.
-- **Canonical key order** = the order fields are listed in Section 2 (hash-spec
-  group, then structural-params group). Encoders MUST write in this order.
-  (Order is irrelevant to decoding but required for byte-identical output.)
-- Decoders reject **unknown keys** (Rust uses `#[serde(deny_unknown_fields)]`) —
-  v1 carries exactly the fixed field set (its values are the hasher's
-  `HashProfile`: the standard profile or a custom one).
-- Values: strings as msgpack `str`; `seed_list` as a msgpack array of integers
-  (each per the family/width rule); all other integers per the family/width rule.
+- **Canonical key order** = the order fields are listed in Section 2 (hash-spec group, then structural-params group). Encoders MUST write in this order. (Order is irrelevant to decoding but required for byte-identical output.)
+- Decoders reject **unknown keys** (Rust uses `#[serde(deny_unknown_fields)]`) — v1 carries exactly the fixed field set (its values are the hasher's `HashProfile`: the standard profile or a custom one).
+- Values: strings as msgpack `str`; `seed_list` as a msgpack array of integers (each per the family/width rule); all other integers per the family/width rule.
 
 **Payload (msgpack array)**
 
 - A msgpack **array**, elements in the Section 3 position order.
 - `registers` → msgpack `bin` (one byte per register; matches Go's `[]byte`).
-- `counts` → msgpack array; each element is an integer (per the family/width
-  rule) when `counter_type == "i64"`, a **float64** when `"f64"`.
-
-Count-Min `rows` / `cols` are metadata integers (per the family/width rule),
-not payload fields — see Section 2.
+- `counts` → msgpack array; each element is an integer (per the family/width rule) when `counter_type == "i64"`, a **float64** when `"f64"`.
 - HLL HIP `hip_*` → **float64**.
+
+(Count-Min `rows` / `cols` are metadata integers per the family/width rule, not payload fields — see Section 2.)
 
 Golden byte-vectors lock all of the above; any encoder that deviates fails them.
 
 ---
 
+## Section 5 — Implementation detail
+
+Guidance for future development, not part of the byte contract: how a Rust decoder validates the bytes, and how to bring an in-memory config the wire doesn't cover directly onto the wire.
+
+### Validation (decode side)
+
+Fail **closed** on any mismatch (a wrong hash spec produces silently-wrong merges, worse than a hard error):
+
+1. `kind_id` is in the registry.
+2. Every hash-spec field matches the **target hasher's** `HashProfile` — decode compares the read metadata against `hll_metadata::<H>` / `cms_metadata::<H>` for the type being decoded into, not merely "the standard profile". Bytes carrying a different profile are rejected.
+3. Structural params are consistent with `kind_id` and the payload:
+   - HLL: `registers.len() == 2^precision ==` the target storage's register count.
+   - Count-Min: `counts` element type matches `counter_type`; `counts.len() == rows*cols`.
+
+### Converting an exotic in-memory sketch to a wire form
+
+The library provides no free wire serialization for exotic counters — only the owner knows if the mapping is lossless.
+Convert to a canonical counter type, then serialize.
+Doable **today** with existing public API (the pattern `SketchlibCms` already uses):
+
+```rust
+// e.g. a u64-counter FastPath CMS → the i64 wire form
+let (rows, cols) = (src.rows(), src.cols());
+let converted: CountMin<Vector2D<i64>, FastPath> = CountMin::from_storage(
+    Vector2D::from_fn(rows, cols, |r, c| src.as_storage().query_one_counter(r, c) as i64),
+);
+let bytes = converted.serialize_to_bytes()?; // wire-eligible type
+```
+
+Converts the **counter type** only (cell-for-cell).
+It does **not** convert the mode (Regular↔Fast) — that would need re-inserting the original data.
+
+---
+
 ## Cross-language contract
 
-Direction: **custom per-sketch payload replaces the `portable` types, and
-`sketchlib-go` mirrors each payload.** Good direction (more compact, higher
-fidelity, less Rust-internal duplication), but it moves the contract from shared
-code to discipline. To keep it safe:
+Direction: **custom per-sketch payload replaces the `portable` types, and `sketchlib-go` mirrors each payload.**
+Good direction (more compact, higher fidelity, less Rust-internal duplication), but it moves the contract from shared code to discipline. To keep it safe:
 
 1. **This spec** — byte-level, language-neutral, per sketch.
-2. **Golden byte-vector fixtures** checked into both repos; both languages
-   decode→re-encode them byte-identically. These replace the `portable`-as-oracle
-   round-trip test that guards drift today.
+2. **Golden byte-vector fixtures** checked into both repos; both languages decode→re-encode them byte-identically. These replace the `portable`-as-oracle round-trip test that guards drift today.
 3. **This registry**, mirrored, never independently allocated.
 
-**Hash profile on the Go side.** Rust derives the hash spec from a generic
-`HashProfile` bound on the hasher type; Go has no generic hasher type, so there is
-nothing to derive from. On the Go side the profile is simply **written into** the
-metadata on encode and **read from** it on decode. Go MUST validate the profile it
-reads (same fail-closed intent as Rust): a sketch is only mergeable/queryable if
-its `hash_profile_id` + seeds match the profile Go is prepared to reproduce.
-Because `seed_list` is inlined, Go can read a custom profile's seeds without any
-registry, but it must still reject a profile it cannot reproduce rather than
-merge/query under the wrong hash.
+**Hash profile on the Go side.**
+Rust derives the hash spec from a generic `HashProfile` bound on the hasher type; Go has no generic hasher type, so there is nothing to derive from.
+On the Go side the profile is simply **written into** the metadata on encode and **read from** it on decode.
+Go MUST validate the profile it reads (same fail-closed intent as Rust): a sketch is only mergeable/queryable if its `hash_profile_id` + seeds match the profile Go is prepared to reproduce.
+Because `seed_list` is inlined, Go can read a custom profile's seeds without any registry, but it must still reject a profile it cannot reproduce rather than merge/query under the wrong hash.
 
-Sequencing: do **not** delete `portable` until (2) exists — the current
-`native bytes == portable bytes` test is the only drift guard right now. Keep it
-through the transition, retire `portable` once goldens are in place.
+Sequencing: do **not** delete `portable` until (2) exists — the current `native bytes == portable bytes` test is the only drift guard right now.
+Keep it through the transition, retire `portable` once goldens are in place.
 
 ---
 
 ## Decisions (resolved)
 
-- **kind_id = algorithm identity**, not parameters. Structural params (HLL
-  precision, CMS counter type + mode) live in metadata, which is read before the
-  payload. Payload structure = kind_id + metadata.
-- **Q-META** — metadata is a msgpack **map**; canonical key order per Section 5;
-  optional fields are omitted keys.
-- **Q-SEEDS** — `seed_list` is **inlined** in v1 so the bytes self-describe the
-  hash (a consumer needs no registry to read the seeds). Resolving seeds from
-  `hash_profile_id` alone is a v2 space optimization. Each sketch still carries
-  only the seed *index* it uses.
-- **Q-PROFILE** — the hash-spec metadata is **derived from the hasher's
-  `HashProfile`** (`hll_metadata::<H>` / `cms_metadata::<H>`), not hardcoded, so it
-  is always truthful to the hasher. Custom hash profiles are **supported and
-  self-describing**. Fail-closed on both ends: `serialize_to_bytes` requires
-  `H: HashProfile` (an unprofiled hasher can't serialize — compile-time), and
-  decode validates the metadata against the *target* type's profile (profile-A
-  bytes won't decode into a profile-B sketch). Merge compatibility is hash-spec
-  equality, so a custom-profile sketch is not mergeable with a standard one.
-- **Q-CMS** — Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode are
-  metadata, not the id.
-- **Q-CMS-DIMS** — Count-Min `rows`/`cols` are **metadata**, not payload. They
-  are configuration that shapes the payload (like HLL's `precision`), so per the
-  config→metadata rule they belong in the descriptor. The payload is then just
-  `[counts]`. Canonical structural-param order: `… matrix_seed_index, rows, cols,
-  counter_type, mode`.
-- **Q-VER** — no payload version field. A new incompatible encoding gets a **new
-  `kind_id`**; retired ids are reserved forever and never recycled.
-- **Encoding** — metadata + payload are both msgpack; payload is a positional
-  array. Byte-level rules in Section 5.
+- **kind_id = algorithm identity**, not parameters. Structural params (HLL precision, CMS counter type + mode) live in metadata, which is read before the payload. Payload structure = kind_id + metadata.
+- **Q-META** — metadata is a msgpack **map**; canonical key order per Section 4; optional fields are omitted keys.
+- **Q-SEEDS** — `seed_list` is **inlined** in v1 so the bytes self-describe the hash (a consumer needs no registry to read the seeds). Resolving seeds from `hash_profile_id` alone is a v2 space optimization. Each sketch still carries only the seed *index* it uses.
+- **Q-PROFILE** — the hash-spec metadata is **derived from the hasher's `HashProfile`** (`hll_metadata::<H>` / `cms_metadata::<H>`), not hardcoded, so it is always truthful to the hasher. Custom hash profiles are **supported and self-describing**. Fail-closed on both ends: `serialize_to_bytes` requires `H: HashProfile` (an unprofiled hasher can't serialize — compile-time), and decode validates the metadata against the *target* type's profile (profile-A bytes won't decode into a profile-B sketch). Merge compatibility is hash-spec equality, so a custom-profile sketch is not mergeable with a standard one.
+- **Q-CMS** — Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode are metadata, not the id.
+- **Q-CMS-DIMS** — Count-Min `rows`/`cols` are **metadata**, not payload. They are configuration that shapes the payload (like HLL's `precision`), so per the config→metadata rule they belong in the descriptor. The payload is then just `[counts]`. Canonical structural-param order: `… matrix_seed_index, rows, cols, counter_type, mode`.
+- **Q-VER** — no payload version field. A new incompatible encoding gets a **new `kind_id`**; retired ids are reserved forever and never recycled.
+- **Encoding** — metadata + payload are both msgpack; payload is a positional array. Byte-level rules in Section 4.
