@@ -100,8 +100,8 @@ erDiagram
         string seed_derivation
         string input_encoding
         array seed_list
-        u32 seed_index
-        mixed structural_params
+        u32 seed_index "hash-spec group, per-sketch"
+        mixed structural_params "structural group, per-sketch: precision(HLL) or rows+cols+counter_type+mode(CMS)"
     }
     PAYLOAD {
         msgpack_array raw_state
@@ -286,27 +286,33 @@ payload beyond the algorithm named by `kind_id`. Two groups of fields:
 
 ### Encoding: msgpack **map** keyed by field name
 
-Metadata is a **msgpack map**. A map is self-describing — a consumer reads
-`"hash_profile_id"` without knowing the schema, unknown keys are skippable, and
-**optional / not-applicable fields are just omitted keys** (no null placeholders).
-That "omit the key" property is what lets each sketch carry only what it uses.
+Metadata is a **msgpack map**, so a consumer reads fields by name
+(`"hash_profile_id"`) with no positional guesswork. It is **not** an open/loose
+schema, though: **each sketch has its own fixed metadata schema** (in Rust, one
+struct per sketch with `#[serde(deny_unknown_fields)]`). The field *set* differs
+per sketch — HLL carries `precision` + `canonical_seed_index`; Count-Min carries
+`rows`, `cols`, `counter_type`, `mode` + `matrix_seed_index` — but within a given
+sketch **every field is required**: a missing key, or an unexpected extra key, is
+**rejected (fail closed)**, never silently defaulted or skipped.
 
-Two consequences:
-
-1. **`seed_list` is inlined.** The full 20-seed list is carried in every sketch's
-   metadata, so the bytes are **self-describing** — a consumer can read the exact
-   seeds (and algorithm) straight from the binary without any registry. It costs
-   ~130 bytes; the alternative (carry only `hash_profile_id` and resolve the seeds
-   from a registry) is a v2 space optimization once many sketches share one spec.
-   `deny_unknown_fields` still rejects any key beyond the fixed set, so v1 accepts
-   exactly that field set (the values may be the standard profile or a custom
-   `HashProfile` — see "Custom hash profiles").
-2. **Each sketch carries only the fields it uses.** HLL includes
-   `canonical_seed_index` and `precision`; Count-Min includes `matrix_seed_index`,
-   `counter_type`, `mode`. Nobody carries fields for seed roles or params they
-   don't use.
+**`seed_list` is inlined** in every sketch's metadata, so the bytes are
+**self-describing** — a consumer reads the exact seeds (and algorithm) straight
+from the binary, no registry. It costs ~130 bytes; resolving the seeds from
+`hash_profile_id` via a registry instead is a v2 space optimization (once many
+sketches share one spec). The values may be the standard profile or a custom
+`HashProfile` (see "Custom hash profiles").
 
 ### Fields
+
+The metadata map is **two groups** of fields, written on the wire in this order —
+Hash spec first, then Structural params:
+
+| Group | Role | Fields |
+| ----- | ---- | ------ |
+| **Hash spec** | how keys were hashed (check mergeability + re-hash a query key) | `metadata_version`, `hash_profile_id`, `hash_algorithm`, `seed_derivation`, `input_encoding`, `seed_list`, + the seed index(es) it uses |
+| **Structural params** | parameters that shape the payload | `precision` (HLL); `rows`, `cols`, `counter_type`, `mode` (Count-Min) |
+
+The two tables below are the field-by-field detail of each group.
 
 **Hash spec**
 
