@@ -8,12 +8,13 @@
 //! sketch's private `counts` field directly without widening any field
 //! visibility. See `docs/asapv1_wire_format.md` §3.2.
 //!
-//! Count-Min is one algorithm — a single kind_id `0x02 0x00`. The two
-//! parameters that shape the payload, the **counter type** (i64/f64) and the
-//! column-derivation **mode** (fast/regular), live in the metadata, so the
-//! payload itself is just `[rows, cols, counts]`. Only the canonical wire
-//! configs (i64/f64 counters × fast/regular) get a serialization; exotic
-//! in-memory counters (i32/i128/…) must be converted to a wire type first.
+//! Count-Min is one algorithm — a single kind_id `0x02 0x00`. The structural
+//! parameters — the matrix dimensions (`rows` / `cols`), the **counter type**
+//! (i64/f64) and the column-derivation **mode** (fast/regular) — all live in the
+//! metadata, so the payload itself is just `[counts]` (a 1-element array
+//! mirroring HLL Classic's `[registers]`). Only the canonical wire configs
+//! (i64/f64 counters × fast/regular) get a serialization; exotic in-memory
+//! counters (i32/i128/…) must be converted to a wire type first.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
@@ -52,8 +53,11 @@ impl CmsWireMode for FastPath {
 }
 
 /// CMS descriptor metadata (ASAPv1 §2), a msgpack **map** (`to_vec_named`) with
-/// keys in this declaration order — the canonical order the wire spec fixes.
-/// Hash-spec fields first, then the structural params `counter_type` / `mode`.
+/// keys in this declaration order — the canonical order the wire spec fixes
+/// (Go must mirror it). Hash-spec fields first, then the structural params
+/// `rows` / `cols` / `counter_type` / `mode`. Per the spec's config→metadata
+/// rule, the matrix dimensions are configuration (like HLL's `precision`) and so
+/// live here rather than in the payload.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CmsMetadata {
@@ -64,6 +68,8 @@ struct CmsMetadata {
     input_encoding: String,
     seed_list: Vec<u64>,
     matrix_seed_index: u32,
+    rows: u32,
+    cols: u32,
     counter_type: String,
     mode: String,
 }
@@ -71,8 +77,13 @@ struct CmsMetadata {
 /// Builds the CMS descriptor metadata from the hasher's [`HashProfile`], so the
 /// wire bytes truthfully describe how the sketch was hashed (rather than
 /// hardcoding the standard profile). `matrix_seed_index` is the profile's own
-/// row seed index.
-fn cms_metadata<H: HashProfile>(counter_type: &str, mode: &str) -> CmsMetadata {
+/// row seed index; `rows` / `cols` are the sketch's structural dimensions.
+fn cms_metadata<H: HashProfile>(
+    rows: u32,
+    cols: u32,
+    counter_type: &str,
+    mode: &str,
+) -> CmsMetadata {
     CmsMetadata {
         metadata_version: 1,
         hash_profile_id: H::PROFILE_ID.to_string(),
@@ -81,18 +92,19 @@ fn cms_metadata<H: HashProfile>(counter_type: &str, mode: &str) -> CmsMetadata {
         input_encoding: H::INPUT_ENCODING.to_string(),
         seed_list: H::seed_list(),
         matrix_seed_index: H::MATRIX_SEED_INDEX,
+        rows,
+        cols,
         counter_type: counter_type.to_string(),
         mode: mode.to_string(),
     }
 }
 
 /// CMS payload (ASAPv1 §3.2), a msgpack **array** (`to_vec`, positional):
-/// `[rows, cols, counts]`. `counts` is packed row-major; its element type is
-/// fixed by the metadata `counter_type`.
+/// `[counts]` — a 1-element array (mirroring HLL Classic's `[registers]`). The
+/// dimensions live in the metadata; `counts` is packed row-major and its element
+/// type is fixed by the metadata `counter_type`.
 #[derive(Debug, Serialize, Deserialize)]
 struct CmsPayload<T> {
-    rows: u32,
-    cols: u32,
     counts: Vec<T>,
 }
 
@@ -113,16 +125,21 @@ where
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
-        let metadata = rmp_serde::to_vec_named(&cms_metadata::<H>(T::COUNTER_TYPE, Mode::MODE))?;
+        let metadata = rmp_serde::to_vec_named(&cms_metadata::<H>(
+            rows as u32,
+            cols as u32,
+            T::COUNTER_TYPE,
+            Mode::MODE,
+        ))?;
         let payload = rmp_serde::to_vec(&CmsPayload::<T> {
-            rows: rows as u32,
-            cols: cols as u32,
             counts: self.counts.as_slice().to_vec(),
         })?;
         Ok(envelope::encode(CMS_KIND, &metadata, &payload))
     }
 
-    /// Deserializes a sketch from an ASAPv1 MessagePack envelope.
+    /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The matrix
+    /// dimensions are read from the (validated) metadata; the payload carries
+    /// only the counts.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
@@ -132,13 +149,16 @@ where
             )));
         }
         let meta: CmsMetadata = from_slice(metadata)?;
-        if meta != cms_metadata::<H>(T::COUNTER_TYPE, Mode::MODE) {
+        // Validate the hash spec + counter type + mode against this target;
+        // `rows`/`cols` are structural (the sketch is dynamically sized), so they
+        // are echoed back into the expected block rather than known a priori.
+        if meta != cms_metadata::<H>(meta.rows, meta.cols, T::COUNTER_TYPE, Mode::MODE) {
             return Err(RmpDecodeError::Uncategorized(
                 "ASAPv1 CMS envelope: metadata mismatch".to_string(),
             ));
         }
+        let (rows, cols) = (meta.rows as usize, meta.cols as usize);
         let p: CmsPayload<T> = from_slice(payload)?;
-        let (rows, cols) = (p.rows as usize, p.cols as usize);
         // Reject zero dimensions before building the matrix: `Vector2D::from_fn`
         // derives its mask via `cols.ilog2()`, which panics on `cols == 0`. Fail
         // closed with an error rather than panicking on crafted bytes.
@@ -279,23 +299,20 @@ mod tests {
         assert!(CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded).is_err());
     }
 
-    /// Fail closed (not panic) on a crafted payload with a zero dimension: valid
-    /// envelope + valid metadata, but `[rows, 0, []]`. Before the guard this
-    /// panicked in `Vector2D::from_fn` via `0.ilog2()`.
+    /// Fail closed (not panic) on a crafted envelope with a zero dimension:
+    /// valid envelope + valid metadata that carries `cols == 0`, with an empty
+    /// `[counts]` payload. Before the guard this panicked in `Vector2D::from_fn`
+    /// via `0.ilog2()`.
     #[test]
     fn count_min_rejects_zero_dimension_payload() {
         let metadata =
-            rmp_serde::to_vec_named(&cms_metadata::<DefaultXxHasher>("i64", "regular")).unwrap();
-        let payload = rmp_serde::to_vec(&CmsPayload::<i64> {
-            rows: 4,
-            cols: 0,
-            counts: Vec::new(),
-        })
-        .unwrap();
+            rmp_serde::to_vec_named(&cms_metadata::<DefaultXxHasher>(4, 0, "i64", "regular"))
+                .unwrap();
+        let payload = rmp_serde::to_vec(&CmsPayload::<i64> { counts: Vec::new() }).unwrap();
         let bytes = envelope::encode(CMS_KIND, &metadata, &payload);
         assert!(
             CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes).is_err(),
-            "zero-dimension payload must be rejected, not panic"
+            "zero-dimension metadata must be rejected, not panic"
         );
     }
 
@@ -311,11 +328,13 @@ mod tests {
             input_encoding: String,
             seed_list: Vec<u64>,
             matrix_seed_index: u32,
+            rows: u32,
+            cols: u32,
             counter_type: String,
             mode: String,
             bogus_field: u8, // key not in CmsMetadata
         }
-        let m = cms_metadata::<DefaultXxHasher>("i64", "regular");
+        let m = cms_metadata::<DefaultXxHasher>(2, 3, "i64", "regular");
         let extra = WithExtra {
             metadata_version: m.metadata_version,
             hash_profile_id: m.hash_profile_id.clone(),
@@ -324,6 +343,8 @@ mod tests {
             input_encoding: m.input_encoding.clone(),
             seed_list: m.seed_list.clone(),
             matrix_seed_index: m.matrix_seed_index,
+            rows: m.rows,
+            cols: m.cols,
             counter_type: m.counter_type.clone(),
             mode: m.mode.clone(),
             bogus_field: 7,

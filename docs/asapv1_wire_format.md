@@ -45,6 +45,27 @@ code duplicates the envelope into each sketch file; this doc exists to undo that
 └───────────────────────────────┘
 ```
 
+### Code organization
+
+Each sketch is a **directory module** with two files, splitting the algorithm
+from the wire format:
+
+- `src/sketches/<sketch>.rs` — the **algorithm**: the struct(s), marker types,
+  aliases, and the insert/estimate/merge/`new`/`from_storage`/accessor impls plus
+  the algorithm's own tests. It declares `mod wire;`.
+- `src/sketches/<sketch>/wire.rs` — the **serialization**: the metadata/payload
+  DTOs, `kind_id` consts, wire-variant/counter/mode marker traits, the
+  `serialize_to_bytes`/`deserialize_from_bytes` impls, and the serialization
+  tests. Because `wire` is a **child submodule** of the sketch, it reads the
+  struct's **private** fields (e.g. `self.registers`, `self.counts`) directly —
+  no field is widened to `pub(crate)` for serialization.
+
+Shared framing (`kind_id` + length prefixes, `encode`/`split`) lives in the one
+shared `message_pack_format::envelope` module every sketch calls into — it is
+sketch-agnostic and knows nothing of the registry. The older `portable` /
+`native` shims are being **phased out** in favor of this per-sketch `wire.rs`
+plus the shared envelope (see Cross-language contract).
+
 ### Structure (entity view)
 
 This is the same idea as OpenTelemetry's [Arrow Metrics
@@ -95,8 +116,6 @@ erDiagram
         f64 hip_est
     }
     COUNTMIN_PAYLOAD {
-        u32 rows
-        u32 cols
         array counts
     }
 ```
@@ -309,8 +328,16 @@ Two consequences:
 | Key | Type | Applies to | Meaning |
 | ------- | ------ | -------- | --------- |
 | `precision` | u8 | HLL | `12` / `14` / `16`; register count = `2^precision` |
+| `rows` | u32 | Count-Min | matrix depth (number of hash rows) |
+| `cols` | u32 | Count-Min | matrix width (number of columns) |
 | `counter_type` | string | Count-Min | `"i64"` or `"f64"` — element type of `counts` |
 | `mode` | string | Count-Min | `"fast"` or `"regular"` — key→column derivation |
+
+Count-Min's matrix dimensions are **configuration** (they shape the payload,
+like HLL's `precision`), so per the config→metadata rule they live here, not in
+the payload. Count-Min's canonical structural-param order is
+`… matrix_seed_index, rows, cols, counter_type, mode` — this is the wire
+contract and Go must mirror it verbatim.
 
 ### Standard ProjectASAP profile (reference values)
 
@@ -421,9 +448,11 @@ the metadata, so the payload itself is just shape + counters:
 
 | Pos | Field | Type | Notes |
 | ----- | ------- | ------ | ------- |
-| 0 | `rows` | u32 | matrix depth |
-| 1 | `cols` | u32 | matrix width |
-| 2 | `counts` | array | packed **row-major**, `rows*cols` cells; element type = `counter_type` |
+| 0 | `counts` | array | packed **row-major**, `rows*cols` cells; element type = `counter_type` |
+
+`rows` and `cols` are **not** in the payload — they are structural params in the
+metadata (§2). The payload is a **1-element positional array `[counts]`**,
+mirroring HLL Classic's `[registers]`.
 
 Wire counter types are `i64` and `f64` only (`i32` widens to `i64`; `i128` and
 exotic counters are not wire types). `mode` records `RegularPath` vs `FastPath`
@@ -458,9 +487,10 @@ mode (Regular↔Fast) — that would need re-inserting the original data.
   `CmsWireCounter` (`i64` → `"i64"`, `f64` → `"f64"`) and `CmsWireMode`
   (`FastPath` → `"fast"`, `RegularPath` → `"regular"`). The native
   `MessagePackCodec` impl is narrowed to the same bounds.
-- The `(rows, cols, counts)` payload is a `CmsPayload<T>` struct serialized with
-  `rmp_serde::to_vec` (positional array); `rows`/`cols` come from the storage at
-  encode time (the struct's redundant `row`/`col` fields are not serialized).
+- The payload is a `CmsPayload<T>` struct holding only `counts`, serialized with
+  `rmp_serde::to_vec` (a 1-element positional array `[counts]`). `rows`/`cols`
+  come from the storage at encode time and are written into the **metadata**
+  (§2), then read back from the validated metadata at decode time.
 - The envelope framing + hash-profile constants are the shared
   `message_pack_format::envelope` module (same one HLL uses).
 
@@ -497,7 +527,7 @@ The bucket is expected to be straightforward.
 
 *Payload TBD — not yet designed.* Family `0x06` assigned in Go.
 The coin can be a challenge.
-Whether CDF needs to be serialized is another design decision.
+Whether CDF needs to be serialized is another design decision. maybe not
 
 ### 3.7 — Hydra-KLL (`0x07 0x00`)
 
@@ -698,9 +728,11 @@ width). Golden byte-vectors lock it.
 
 - A msgpack **array**, elements in the Section 3 position order.
 - `registers` → msgpack `bin` (one byte per register; matches Go's `[]byte`).
-- `rows` / `cols` → integers per the family/width rule.
 - `counts` → msgpack array; each element is an integer (per the family/width
   rule) when `counter_type == "i64"`, a **float64** when `"f64"`.
+
+Count-Min `rows` / `cols` are metadata integers (per the family/width rule),
+not payload fields — see Section 2.
 - HLL HIP `hip_*` → **float64**.
 
 Golden byte-vectors lock all of the above; any encoder that deviates fails them.
@@ -757,6 +789,11 @@ through the transition, retire `portable` once goldens are in place.
   equality, so a custom-profile sketch is not mergeable with a standard one.
 - **Q-CMS** — Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode are
   metadata, not the id.
+- **Q-CMS-DIMS** — Count-Min `rows`/`cols` are **metadata**, not payload. They
+  are configuration that shapes the payload (like HLL's `precision`), so per the
+  config→metadata rule they belong in the descriptor. The payload is then just
+  `[counts]`. Canonical structural-param order: `… matrix_seed_index, rows, cols,
+  counter_type, mode`.
 - **Q-VER** — no payload version field. A new incompatible encoding gets a **new
   `kind_id`**; retired ids are reserved forever and never recycled.
 - **Encoding** — metadata + payload are both msgpack; payload is a positional
