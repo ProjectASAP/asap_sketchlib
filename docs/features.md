@@ -100,7 +100,7 @@ Insertion throughput measured on 10,000,000 Zipf-distributed `int64` values (s=1
 
 ### Serialization
 
-MessagePack (`rmp-serde`) support. **serde support** means the type derives `Serialize`/`Deserialize` and can be used with any serde-compatible serializer. **Built-in helpers** (`serialize_to_bytes` / `deserialize_from_bytes`) provide one-call MessagePack round-tripping without requiring users to depend on `rmp-serde` directly.
+MessagePack (`rmp-serde`) support. **serde support** means the type derives `Serialize`/`Deserialize` and can be used with any serde-compatible serializer. **Built-in helpers** (`serialize_to_bytes` / `deserialize_from_bytes`) provide one-call round-tripping without requiring users to depend on `rmp-serde` directly. For HyperLogLog and Count-Min these helpers emit the self-describing **ASAPv1** wire envelope (see the [ASAPv1 wire format spec](./asapv1_wire_format.md)); other sketches are not yet converted.
 
 | Component | serde support | Built-in helpers |
 | --- | --- | --- |

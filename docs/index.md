@@ -14,7 +14,8 @@ This page is the docs home for `asap_sketchlib`.
 - [APIs Index](./apis.md)
 - [API Pages Directory](./api/)
 - [Common API](./api/api_common.md)
-- [Message Pack Format](./message_pack_format.md) - wire envelope and wire-format-aligned sketch variants shared with `sketchlib-go`
+- [ASAPv1 Wire Format](./asapv1_wire_format.md) - authoritative byte-level spec for the self-describing sketch envelope mirrored by `sketchlib-go`
+- [Message Pack Format](./message_pack_format.md) - how the serialization code is organized (shared envelope + per-sketch `wire.rs`; `portable`/`native` retiring)
 - [Advanced Use Cases](./advanced_use_cases.md)
 - [Test Coverage Map](./tests.md)
 - [Feature Status](./features.md)
