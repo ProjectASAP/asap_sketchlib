@@ -10,9 +10,9 @@ This doc describes that byte layout at a high level; the byte-exact encoding rul
 
 If the doc feels long, these sections carry the key points:
 
-- **Section 1, Envelope**: the Layout table.
-- **Section 2, Metadata**: the fields table, the hash-spec table, the structural-params table.
-- **Section 3, Payload**: the HLL payload and the Count-Min payload.
+- [**Section 1, Envelope**](#section-1-envelope): the Layout table.
+- [**Section 2, Metadata**](#section-2-metadata): the fields table, the hash-spec table, the structural-params table.
+- [**Section 3, Payload**](#section-3-payload): the HLL payload and the Count-Min payload.
 
 ## Terms
 
@@ -361,182 +361,32 @@ Wire counter types are `i64` and `f64` only (`i32` widens to `i64`; `i128` and e
 A counter type other than i64/f64, or non-`Vector2D` storage, must be converted first; see Section 5, "Converting an exotic in-memory sketch".
 Both modes, `FastPath` and `RegularPath`, serialize directly (you'd only "convert" a mode to *change* it, which needs re-inserting the data).
 
-### 3.3: Count-Min-with-heap / CMSHeap (`0x03 0x00`)
+### 3.3 onward: payloads not yet designed
 
-*Payload TBD, not yet designed.* Family `0x03` assigned in Go.
-Expected to be similar to current CMS.
+The remaining `kind_id`s reserve a family byte with payload TBD (Section 1 registry has their "assigned in Go" status). Likely shape when designed:
 
-### 3.4: Count Sketch (`0x04 0x00`)
-
-*Payload TBD, not yet designed.* Family `0x04` assigned in Go.
-Expected to be similar to current CMS.
-
-### 3.5: DDSketch (`0x05 0x00`)
-
-*Payload TBD, not yet designed.* Family `0x05` assigned in Go.
-The bucket is expected to be straightforward.
-
-### 3.6: KLL (`0x06 0x00`)
-
-*Payload TBD, next on the list.* Family `0x06` assigned in Go.
-Plan: no CDF serialization.
-
-### 3.7: Hydra-KLL (`0x07 0x00`)
-
-*Payload TBD, not yet designed.* Family `0x07` assigned in Go.
-Same challenge to KLL.
-
-### 3.8: SetAggregator (`0x08 0x00`)
-
-*Payload TBD, not yet designed.* Family `0x08` assigned in Go (aggregation envelope, distinct from a stand-alone sketch; see Section 1 mapping notes).
-
-### 3.9: DeltaResult (`0x09 0x00`)
-
-*Payload TBD, not yet designed.* Family `0x09` assigned in Go (delta-result envelope, distinct from a stand-alone sketch; see Section 1 mapping notes).
-
-### 3.10: Count-Sketch-with-heap / CSHeap (`0x0a 0x00`)
-
-*Payload TBD, not yet designed.*
-Expected to be similar to current CMS.
-
-### 3.11: Elastic (`0x0b 0x00`)
-
-*Payload TBD, not yet designed.* (`Unstable`; API may still change.)
-The "key" may need consideration, otherwise expected to be similar to current CMS.
-The sketch itself needs optimization; worth combining optimization and serialization into one PR.
-
-### 3.12: Coco (`0x0c 0x00`)
-
-*Payload TBD, not yet designed.* (`Unstable`; API may still change.)
-The "key" may need consideration, otherwise expected to be similar to current CMS.
-
-### 3.13: UniformSampling (`0x0d 0x00`)
-
-*Payload TBD, not yet designed.* (`Unstable`; API may still change.)
-Should be straightforward.
-
-### 3.14: KMV (`0x0e 0x00`)
-
-*Payload TBD, not yet designed.* (`Unstable`; API may still change.)
-Should be straightforward.
-
-### 3.15: HashSketchEnsemble (`0x0f 0x00`)
-
-*Payload TBD, not yet designed.*
-This actually may not need serialization?
-
-### 3.16: UnivMon (`0x10 0x00`)
-
-*Payload TBD, not yet designed.*
-More complex but should be doable.
-
-### 3.17: UnivMon Optimized (`0x11 0x00`)
-
-*Payload TBD, not yet designed.*
-
-### 3.18: NitroBatch (`0x12 0x00`)
-
-*Payload TBD, not yet designed.*
-To do this, it may be worth adding another serialization abstraction in Storage.
-
-### 3.19: ExponentialHistogram (`0x13 0x00`)
-
-*Payload TBD, not yet designed.*
-Needs a way to decently re-use the serialization of other sketches.
-
-### 3.20: EHSketchList (`0x14 0x00`)
-
-*Payload TBD, not yet designed.*
-
-### 3.21: EHUnivOptimized (`0x15 0x00`)
-
-*Payload TBD, not yet designed.* (`Unstable`; API may still change.)
-
-### 3.22: OctoSketch (`0x16 0x00`)
-
-*Payload TBD, not yet designed.*
-
-<!-- Deferred: "Wire coverage" (which in-memory Rust configs are wire-eligible).
-Not rendered for now; wire-eligibility is noted in the per-sketch API docs instead.
-
-## Wire coverage (deferred)
-
-The in-memory sketch types are deliberately **freer** than what the wire
-serializes. That is the same framing as Section 3.2: *in-memory is free; the wire is a
-small fixed set*, stated once, in full, so the coverage decision is explicit and
-so a user knows exactly **what to implement (or convert)** when they want
-something the wire does not cover out of the box.
-
-A config is **wire-eligible** iff `serialize_to_bytes` is defined for it. That is
-enforced by the trait bounds on each sketch's serialization impl; nothing else
-is a wire type, and the compiler says so.
-
-### 4.1: HLL coverage
-
-HLL has three degrees of freedom, and the wire covers the full cross product:
-
-| Freedom | In-memory choices | Wire-eligible |
-| --------- | ------------------- | --------------- |
-| estimator variant | `Classic`, `ErtlMLE`, HIP | **all three**: each maps to its own `kind_id` via `HllWireVariant` (`Classic` to `0x01 0x01`, `ErtlMLE` to `0x01 0x02`) or `HLL_KIND_HIP` (`0x01 0x03`) |
-| precision | `HllBucketListP12` / `P14` / `P16` | **all three**: carried as `precision` (`12`/`14`/`16`) in the metadata |
-| hasher `H` | any `H: SketchHasher` | **any `H: HashProfile`**: the metadata is `hll_metadata::<H>` (profile-derived, self-describing) |
-
-`HyperLogLogImpl<Variant, Registers, H>::serialize_to_bytes` is bounded on
-`Variant: HllWireVariant, H: HashProfile`, so every (variant x precision x hasher)
-combination serializes. **HLL is fully covered**; there is no in-memory HLL shape
-that the wire cannot represent.
-
-One nuance for accuracy: the HIP estimator is a standalone struct
-(`HyperLogLogHIPImpl<Registers>`) that is not parameterized by a hasher; it
-hashes through the `DefaultXxHasher` free functions and its
-`serialize_to_bytes` uses `standard_hll_metadata`. So HIP is wire-eligible only
-under the **standard profile**; the custom-hasher freedom above applies to the
-`Classic` / `ErtlMLE` family.
-
-### 4.2: Count-Min coverage
-
-`CountMin<S, Mode, H>` is generic in memory over counter type, storage, mode, and
-hasher, and also supports Nitro sampling and delta emission. The wire supports a
-**fixed subset**: the serialization impl exists only for
-`CountMin<Vector2D<T>, Mode, H>` where `T: CmsWireCounter`, `Mode: CmsWireMode`,
-`H: HashProfile`:
-
-| Freedom | In-memory choices | Wire-eligible? |
-| --------- | ------------------- | ---------------- |
-| counter type | `i32`, `i64`, `i128`, `f64`, ... | `i64` yes, `f64` yes (`CmsWireCounter`); `i32` / `i128` / other no, convert first |
-| mode | `RegularPath`, `FastPath` | `RegularPath` yes (`"regular"`), `FastPath` yes (`"fast"`) (`CmsWireMode`) |
-| storage `S` | `Vector2D<T>`, `FixedMatrix`, `DefaultMatrixI32/I64/I128`, `QuickMatrixI64/I128` | `Vector2D<i64>` / `Vector2D<f64>` yes; `FixedMatrix` / `DefaultMatrix*` / `QuickMatrix*` no, rebuild into `Vector2D` |
-| hasher `H` | any `H: SketchHasher` | any `H: HashProfile` yes; a hasher without `HashProfile` no (compile error, by design) |
-| Nitro / delta emission | `enable_nitro`, `insert_emit_delta` (i32-only) | **n/a**: in-memory-only machinery, never part of the sketch wire payload |
-
-Note the **default** `CountMin` storage is `Vector2D<i32>` (see the struct
-default), which is not wire-eligible: a `CountMin::default()` must be built as
-(or converted to) `Vector2D<i64>` / `Vector2D<f64>` before it can serialize. Two
-sketches that differ only in `mode` place a key in different columns (compare
-`cm_regular_path_correctness` vs `cm_fast_path_correctness`), which is why the
-format records `mode` explicitly.
-
-### 4.3: "If you want X, do Y"
-
-The actionable part. Each row is a config the wire does not cover directly and the
-concrete step that makes it serializable.
-
-| You have | Do this |
-| ---------- | --------- |
-| An **exotic counter type** (e.g. `u64`, `i128`) | Convert cell-by-cell to `i64` or `f64` and serialize the result; the exact `Vector2D::from_fn` + `CountMin::from_storage` recipe is in Section 5. Only you know if the mapping is lossless. **Or**, if it deserves to be a first-class wire type, implement `CmsWireCounter` for it (giving its `COUNTER_TYPE` string) **and** add the matching Go decode support **and** check in a golden byte-vector; all three steps are required together (the Rust trait alone does nothing on the wire). |
-| **Non-`Vector2D` storage** (`FixedMatrix` / `DefaultMatrix*` / `QuickMatrix*`) | Rebuild it into a `Vector2D<i64>` / `Vector2D<f64>` via `CountMin::from_storage(Vector2D::from_fn(rows, cols, |r, c| src.as_storage().query_one_counter(r, c) as i64))`, then serialize. |
-| A **custom hash function** | Implement `HashProfile` for the hasher (a distinct `PROFILE_ID`, its own `seed_list()` and seed index). It then serializes **truthfully** and, because `seed_list` is inlined, **self-describes** on the wire, with no registry needed to read it (see Section 2, "Custom hash profiles"). |
-| An **unprofiled hasher** (impls `SketchHasher` but not `HashProfile`) | Nothing: it **cannot** serialize, and that is a **compile error by design** (`serialize_to_bytes` is bounded on `H: HashProfile`). This is the intended fail-closed behavior, since mislabeled bytes are impossible by construction; it is not a bug to work around. |
-| A **brand-new sketch algorithm** | Allocate a fresh `kind_id` in the registry (Section 1, allocated once, never recycled), define its metadata fields (Section 2), and author its payload (Section 3). Mirror the `kind_id` and add goldens on the Go side. |
-
-### 4.4: Why the wire is a small fixed set
-
-Every wire-eligible config is a **cross-language surface** (Go must decode it
-bit-for-bit) plus a **golden byte-vector** to maintain forever. Keeping that set
-small and fixed keeps both bounded: a handful of counter types and modes instead
-of the open-ended in-memory matrix. The in-memory types stay maximally free for
-performance and experimentation; serialization is the deliberately narrow gate
-where that freedom is pinned down to a canonical, portable form. -->
+| kind_id | Sketch | Likely payload |
+| --------- | -------- | --------- |
+| `0x03 0x00` | Count-Min-with-heap (CMSHeap) | similar to current CMS |
+| `0x04 0x00` | Count Sketch | similar to current CMS |
+| `0x05 0x00` | DDSketch | straightforward bucket |
+| `0x06 0x00` | KLL | next on the list; no CDF serialization |
+| `0x07 0x00` | Hydra-KLL | same challenge as KLL |
+| `0x08 0x00` | SetAggregator | aggregation envelope, distinct from a stand-alone sketch (Section 1 mapping notes) |
+| `0x09 0x00` | DeltaResult | delta-result envelope, distinct from a stand-alone sketch (Section 1 mapping notes) |
+| `0x0a 0x00` | Count-Sketch-with-heap (CSHeap) | similar to current CMS |
+| `0x0b 0x00` | Elastic (`Unstable`) | "key" needs thought, else similar to CMS; sketch needs optimization first, worth one combined PR |
+| `0x0c 0x00` | Coco (`Unstable`) | "key" needs thought, else similar to CMS |
+| `0x0d 0x00` | UniformSampling (`Unstable`) | straightforward |
+| `0x0e 0x00` | KMV (`Unstable`) | straightforward |
+| `0x0f 0x00` | HashSketchEnsemble | may not need serialization |
+| `0x10 0x00` | UnivMon | more complex but doable |
+| `0x11 0x00` | UnivMon Optimized | TBD |
+| `0x12 0x00` | NitroBatch | may want another serialization abstraction in Storage |
+| `0x13 0x00` | ExponentialHistogram | needs to re-use other sketches' serialization |
+| `0x14 0x00` | EHSketchList | TBD |
+| `0x15 0x00` | EHUnivOptimized (`Unstable`) | TBD |
+| `0x16 0x00` | OctoSketch | TBD |
 
 ---
 
@@ -571,8 +421,6 @@ Golden byte-vectors lock it.
 
 (Count-Min `rows` / `cols` are carried as metadata integers per the family/width rule; see Section 2.)
 
-Golden byte-vectors lock all of the above; any encoder that deviates fails them.
-
 ---
 
 ## Section 5: Implementation detail
@@ -581,7 +429,7 @@ Guidance for future development; this is outside the byte contract. It covers ho
 
 ### Validation (decode side)
 
-Fail **closed** on any mismatch (a wrong hash spec produces silently-wrong merges, worse than a hard error):
+Fail **closed** on any mismatch:
 
 1. `kind_id` is in the registry.
 2. Every hash-spec field matches the **target hasher's** `HashProfile`: decode compares the read metadata against `hll_metadata::<H>` / `cms_metadata::<H>` for the exact type being decoded into, so it does not merely accept the standard profile. Bytes carrying a different profile are rejected.
@@ -622,7 +470,6 @@ Good direction (more compact, higher fidelity, less Rust-internal duplication), 
 Rust derives the hash spec from a generic `HashProfile` bound on the hasher type; Go has no generic hasher type, so there is nothing to derive from.
 On the Go side the profile is simply **written into** the metadata on encode and **read from** it on decode.
 Go MUST validate the profile it reads (same fail-closed intent as Rust): a sketch is only mergeable/queryable if its `hash_profile_id` + seeds match the profile Go is prepared to reproduce.
-Because `seed_list` is inlined, Go can read a custom profile's seeds without any registry, but it must still reject a profile it cannot reproduce, so it never merges or queries under the wrong hash.
 
 Sequencing: do not delete `portable` until (2) exists; the current `native bytes == portable bytes` test is the only drift guard right now.
 Keep it through the transition, retire `portable` once goldens are in place.
@@ -633,8 +480,8 @@ Keep it through the transition, retire `portable` once goldens are in place.
 
 - **kind_id = algorithm identity** (parameters live in the metadata). Structural params (HLL precision, CMS counter type + mode) live in metadata, which is read before the payload. Payload structure = kind_id + metadata.
 - **Q-META**: metadata is a msgpack **map**; canonical key order per Section 4; optional fields are omitted keys.
-- **Q-SEEDS**: `seed_list` is **inlined** in v1 so the bytes self-describe the hash (a consumer needs no registry to read the seeds). Resolving seeds from `hash_profile_id` alone is a v2 space optimization. Each sketch still carries only the seed *index* it uses.
-- **Q-PROFILE**: the hash-spec metadata is **derived from the hasher's `HashProfile`** (`hll_metadata::<H>` / `cms_metadata::<H>`) and never hardcoded, so it is always truthful to the hasher. Custom hash profiles are **supported and self-describing**. Fail-closed on both ends: `serialize_to_bytes` requires `H: HashProfile` (an unprofiled hasher cannot serialize, a compile-time error), and decode validates the metadata against the *target* type's profile (profile-A bytes will not decode into a profile-B sketch). Merge compatibility is hash-spec equality, so a custom-profile sketch is not mergeable with a standard one.
+- **Q-SEEDS**: `seed_list` is **inlined** in v1 so the bytes self-describe the hash. Resolving seeds from `hash_profile_id` alone is a v2 space optimization. Each sketch still carries only the seed *index* it uses.
+- **Q-PROFILE**: the hash-spec metadata is **derived from the hasher's `HashProfile`** (`hll_metadata::<H>` / `cms_metadata::<H>`) and never hardcoded, so it is always truthful to the hasher. Custom hash profiles are **supported and self-describing**. Merge compatibility is hash-spec equality, so a custom-profile sketch is not mergeable with a standard one.
 - **Q-CMS**: Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode live in the metadata, so the id stays single.
 - **Q-CMS-DIMS**: Count-Min `rows`/`cols` are **metadata** and the payload omits them. They are configuration that shapes the payload (like HLL's `precision`), so per the config-to-metadata rule they belong in the descriptor. The payload is then just `[counts]`. Canonical structural-param order: `... matrix_seed_index, rows, cols, counter_type, mode`.
 - **Q-VER**: no payload version field. A new incompatible encoding gets a **new `kind_id`**; retired ids are reserved forever and never recycled.
