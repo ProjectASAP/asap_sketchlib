@@ -1,6 +1,30 @@
 # ASAPv1 Wire Format — Design Doc
 
-Status:
+## What this is
+
+ASAPv1 is ProjectASAP's self-describing binary format to serialize sketches in `asap_sketchlib`.
+It fixes the exact bytes written when a sketch (HyperLogLog, Count-Min, and so on) is saved or shipped, so any process or language (Rust today, Go next) can decode it, confirm it was hashed compatibly, and merge or query it.
+This doc describes that byte layout at a high level; the byte-exact encoding rules live in Section 4, and the implementation notes (decoder validation, converting an in-memory sketch) live in Section 5.
+
+## Which parts to read
+
+If the doc feels long, these sections carry the key points:
+
+- **Section 1, Envelope** — the Layout table.
+- **Section 2, Metadata** — the fields table, the hash-spec table, the structural-params table.
+- **Section 3, Payload** — the HLL payload and the Count-Min payload.
+
+## Terms
+
+- **Envelope** — the header that wraps the metadata and payload: `magic | version | kind_id | length-prefixes`. Sketch-agnostic, and not the whole binary.
+- **Metadata** — the descriptor (msgpack map): the hash spec (how the sketch was hashed) plus the structural params needed to read the payload.
+- **Payload** — the sketch's raw state (registers, counters, and so on), a positional msgpack array. The per-sketch-authored part.
+- **kind / kind_id** — an id naming the algorithm (e.g. `0x02 0x00` = Count-Min); 2 bytes today, extendable to more since `kind_id_len` is a byte. The registry maps id to name to payload shape.
+- **Hash profile** — the identified set of hash constants (algorithm, seeds, seed indices) a sketch was built with, carried in the metadata so the bytes are truthful (`HashProfile` trait in Rust).
+- **seed_list** — the array of hash seeds, carried inline in every sketch's metadata so the bytes self-describe the hash with no registry lookup.
+- **wire-eligible** — a sketch config the format can serialize. The wire covers a fixed subset of the freer in-memory types; a config outside that subset is converted to a covered one first (Section 3.2, Section 5).
+
+## Status
 
 - **Implementing (Rust).** HLL and Count-Min serialize through the shared `message_pack_format::envelope` module per this spec.
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (not hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (§2).
@@ -15,18 +39,15 @@ Status:
 | **Metadata** | descriptor (hash spec + structural params) | yes | one shared module | the hash profile or a sketch's params change |
 | **Payload** | one per sketch | **no** | each sketch | that sketch's raw encoding changes |
 
-Envelope and Metadata are **not** per-sketch — they live in one shared module every sketch calls into.
-Only the **Payload** is authored per sketch.
-Today's code duplicates the envelope into each sketch file; this doc exists to undo that.
+Every serialized sketch carries its own envelope, metadata, and payload.
+What differs is **who authors each part**: the envelope framing and the metadata schema are shared and sketch-agnostic (one module, identical across all sketches), while the payload layout is defined per sketch.
+Values still vary per sketch — each blob carries its own precision, rows/cols, register bytes, etc.
 
-```md
-┌───────────────────────────────┐
-│ Envelope | Metadata | Payload │
-└───────────────────────────────┘
+```text
++-------------------------------+
+| Envelope | Metadata | Payload |
++-------------------------------+
 ```
-
-Terminology: **Envelope** means the sketch-agnostic **framing** — the `magic | version | kind_id | length-prefixes` header that wraps the metadata and payload blocks (Section 1).
-It is *not* the whole binary and *not* one of the kind_id / metadata / payload concepts; the whole serialized sketch = envelope framing + metadata + payload.
 
 ### Guiding principle
 
@@ -35,14 +56,20 @@ By the time the decoder reaches the payload it already knows both, and together 
 So the payload carries **raw state only** — no field names, no tag that `kind_id` or the metadata already carries, no derived quantities.
 If a payload looks complicated, either the sketch genuinely has that much state, or something derivable/redundant leaked in and should be removed.
 
-### Structure (entity view)
+### Structure
 
-A visualization of the layering: one envelope carries exactly one metadata and exactly one payload, and `kind_id` selects which payload shape is present.
+A serialized sketch is one envelope, then one metadata, then one payload.
 
 ```mermaid
 erDiagram
-    ENVELOPE ||--|| METADATA : carries-one
-    ENVELOPE ||--|| PAYLOAD : carries-one
+    SerializedSketch {
+        bytes envelope "1st, framing"
+        msgpack_map metadata "2nd, descriptor"
+        msgpack_array payload "3rd, raw state"
+    }
+    SerializedSketch ||--|| ENVELOPE : carries-one
+    SerializedSketch ||--|| METADATA : carries-one
+    SerializedSketch ||--|| PAYLOAD : carries-one
     PAYLOAD ||--o| HLL_PAYLOAD : kind-0x0101-0x0102
     PAYLOAD ||--o| HLL_HIP_PAYLOAD : kind-0x0103
     PAYLOAD ||--o| COUNTMIN_PAYLOAD : kind-0x0200
@@ -80,9 +107,6 @@ erDiagram
         array counts
     }
 ```
-
-Read it as: every `ENVELOPE` carries exactly one `METADATA` and exactly one `PAYLOAD`; the `PAYLOAD` is exactly one of the per-`kind_id` shapes (`o|` = at most one of each — the `kind_id` picks which).
-No `parent_id`, no cross-record joins — everything needed to interpret the bytes is inside this one serialized sketch.
 
 ---
 
