@@ -571,9 +571,9 @@ mod tests {
         let cur = w.sketch();
         let (mut ri, mut ci, mut dc): (Vec<u32>, Vec<u32>, Vec<i64>) =
             (Vec::new(), Vec::new(), Vec::new());
-        for r in 0..rows {
-            for c in 0..cols {
-                let d = cur[r][c] as i64;
+        for (r, row) in cur.iter().enumerate() {
+            for (c, &cell) in row.iter().enumerate() {
+                let d = cell as i64;
                 if d != 0 {
                     ri.push(r as u32);
                     ci.push(c as u32);
