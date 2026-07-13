@@ -271,6 +271,57 @@ impl DdSketch {
         Ok(())
     }
 
+    /// MessagePack twin of [`Self::compute_delta`]. Computes the same
+    /// sparse bucket delta of `self` against `snapshot` (a bucket is
+    /// carried when its `Δcount = self − snapshot` clamped at 0 is
+    /// `>= threshold`), but serializes it as the parallel-array
+    /// MessagePack layout via [`DdSketchDelta`]'s [`MessagePackCodec`]
+    /// instead of proto. Same delta-against-empty semantics: against the
+    /// empty sketch every surviving delta equals this window's own bucket
+    /// count.
+    pub fn compute_delta_msgpack(&self, snapshot: &DdSketch, threshold: u64) -> Vec<u8> {
+        let mut delta = DdSketchDelta::default();
+        if !self.store_counts.is_empty() {
+            for (i, &c) in self.store_counts.iter().enumerate() {
+                if c == 0 {
+                    continue;
+                }
+                let k = self.store_offset + i as i32;
+                let snap_count: u64 = if !snapshot.store_counts.is_empty() {
+                    let idx = k as i64 - snapshot.store_offset as i64;
+                    if idx >= 0 && (idx as usize) < snapshot.store_counts.len() {
+                        snapshot.store_counts[idx as usize]
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+                let dc = c.saturating_sub(snap_count);
+                if dc >= threshold {
+                    delta.buckets.push((k, dc));
+                }
+            }
+        }
+        delta
+            .to_msgpack()
+            .expect("DdSketchDelta msgpack encode is infallible for owned bucket arrays")
+    }
+
+    /// MessagePack twin of [`Self::apply_delta_bytes`]. Decodes the
+    /// parallel-array MessagePack [`DdSketchDelta`] and applies it in
+    /// place (additive bucket merge).
+    ///
+    /// Returns `Err` if `bytes` is not a valid MessagePack `DdSketchDelta`.
+    pub fn apply_delta_msgpack_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let delta = DdSketchDelta::from_msgpack(bytes)?;
+        self.apply_delta(&delta);
+        Ok(())
+    }
+
     /// Merge a slice of references into a single new sketch. Returns
     /// `Err` on alpha mismatch or an empty input.
     pub fn merge_refs(
@@ -411,10 +462,80 @@ impl MessagePackCodec for DdSketch {
     }
 }
 
+impl MessagePackCodec for DdSketchDelta {
+    /// Encodes the sparse bucket delta as the 2-element MessagePack array
+    /// `[ idx:[]i32, d_count:[]u64 ]` — parallel arrays of absolute bucket
+    /// index → Δcount — byte-identical to Rust
+    /// `rmp_serde::to_vec(&(Vec<i32>, Vec<u64>))` (compact mode), the layout
+    /// the `sketchlib-go` `asapmsgpack` DDSketch delta encoder mirrors. Only
+    /// the bucket cells cross the wire; the DataPoint-level metric scalars
+    /// (`d_count`/`d_sum`/`new_min`/`new_max`) are reconstructable and are
+    /// not carried, matching the proto delta.
+    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
+        let idx: Vec<i32> = self.buckets.iter().map(|(i, _)| *i).collect();
+        let d_count: Vec<u64> = self.buckets.iter().map(|(_, c)| *c).collect();
+        Ok(rmp_serde::to_vec(&(idx, d_count))?)
+    }
+
+    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
+        let (idx, d_count): (Vec<i32>, Vec<u64>) = rmp_serde::from_slice(bytes)?;
+        Ok(DdSketchDelta {
+            buckets: idx.into_iter().zip(d_count).collect(),
+            ..DdSketchDelta::default()
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::message_pack_format::MessagePackCodec;
+
+    #[test]
+    fn msgpack_delta_against_empty_round_trips() {
+        let mut w = DdSketch::new(0.01);
+        for i in 1..=200 {
+            w.update(i as f64);
+        }
+        let empty = DdSketch::new(0.01);
+        let bytes = w.compute_delta_msgpack(&empty, 1);
+        let mut recon = DdSketch::new(0.01);
+        recon.apply_delta_msgpack_bytes(&bytes).unwrap();
+        assert_eq!(recon.total_count(), w.total_count());
+        for q in [0.5, 0.9, 0.99] {
+            let got = recon.quantile(q).unwrap();
+            let want = w.quantile(q).unwrap();
+            assert!(
+                (got / want - 1.0).abs() <= 0.01,
+                "q={q}: got={got} want={want}"
+            );
+        }
+    }
+
+    #[test]
+    fn msgpack_delta_wire_layout_is_parallel_arrays() {
+        // Lock the cross-language wire shape: a 2-element array of parallel
+        // (idx, d_count) arrays, byte-identical to the tuple encoding the Go
+        // asapmsgpack DDSketch delta mirrors.
+        let mut w = DdSketch::new(0.01);
+        w.update(1.0);
+        w.update(1.0);
+        w.update(1000.0);
+        let empty = DdSketch::new(0.01);
+        let bytes = w.compute_delta_msgpack(&empty, 1);
+        let mut idx: Vec<i32> = Vec::new();
+        let mut d_count: Vec<u64> = Vec::new();
+        for (i, &c) in w.store_counts.iter().enumerate() {
+            if c != 0 {
+                idx.push(w.store_offset + i as i32);
+                d_count.push(c);
+            }
+        }
+        let expected = rmp_serde::to_vec(&(idx, d_count)).unwrap();
+        assert_eq!(bytes, expected);
+        let d = DdSketchDelta::from_msgpack(&bytes).unwrap();
+        assert_eq!(d.buckets.len(), 2, "two distinct buckets expected");
+    }
 
     #[test]
     fn test_new_empty() {

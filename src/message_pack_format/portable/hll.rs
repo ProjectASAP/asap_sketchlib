@@ -241,6 +241,51 @@ impl HllSketch {
         self.apply_delta(&delta)
     }
 
+    /// MessagePack twin of [`Self::compute_delta`]. Carries every register
+    /// that increased over `snapshot` (`self[i] > snapshot[i]`) as an
+    /// `(index, new_value)` pair, serialized as the parallel-array
+    /// MessagePack layout via [`HllSketchDelta`]'s [`MessagePackCodec`]
+    /// instead of proto. HLL uses max semantics, so the delta is lossless
+    /// regardless of `_threshold` (accepted for a uniform delta API).
+    /// Delta-against-empty carries every non-zero register — this window's
+    /// full register state encoded as a delta.
+    pub fn compute_delta_msgpack(&self, snapshot: &HllSketch, _threshold: u64) -> Vec<u8> {
+        let cur = &self.registers;
+        let snap = &snapshot.registers;
+        let n = cur.len().min(snap.len());
+        let mut updates: Vec<(u32, u8)> = Vec::new();
+        for i in 0..n {
+            if cur[i] > snap[i] {
+                updates.push((i as u32, cur[i]));
+            }
+        }
+        // Guard: registers present in `self` beyond the snapshot length
+        // (should not happen at a fixed precision) carry their non-zero
+        // values. Matches the proto path's trailing-register guard.
+        for (i, &v) in cur.iter().enumerate().skip(n) {
+            if v > 0 {
+                updates.push((i as u32, v));
+            }
+        }
+        HllSketchDelta { updates }
+            .to_msgpack()
+            .expect("HllSketchDelta msgpack encode is infallible for owned update arrays")
+    }
+
+    /// MessagePack twin of [`Self::apply_delta_bytes`]. Decodes the
+    /// parallel-array MessagePack [`HllSketchDelta`] and applies it in
+    /// place (register max-merge).
+    ///
+    /// Returns `Err` if `bytes` is not a valid MessagePack `HllSketchDelta`
+    /// or a register index is out of range for this sketch's precision.
+    pub fn apply_delta_msgpack_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let delta = HllSketchDelta::from_msgpack(bytes)?;
+        self.apply_delta(&delta)
+    }
+
     pub fn merge_refs(
         inputs: &[&HllSketch],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -438,9 +483,72 @@ impl MessagePackCodec for HllSketch {
     }
 }
 
+impl MessagePackCodec for HllSketchDelta {
+    /// Encodes the register delta as the 2-element MessagePack array
+    /// `[ reg_idx:[]u32, reg_val:[]u8 ]` — parallel arrays of register
+    /// index → new (max) value — byte-identical to Rust
+    /// `rmp_serde::to_vec(&(Vec<u32>, Vec<u8>))` (compact mode). The
+    /// `Vec<u8>` serializes as a msgpack array-of-int (not `bin`), matching
+    /// the Go `asapmsgpack` register-array convention.
+    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
+        let reg_idx: Vec<u32> = self.updates.iter().map(|(i, _)| *i).collect();
+        let reg_val: Vec<u8> = self.updates.iter().map(|(_, v)| *v).collect();
+        Ok(rmp_serde::to_vec(&(reg_idx, reg_val))?)
+    }
+
+    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
+        let (reg_idx, reg_val): (Vec<u32>, Vec<u8>) = rmp_serde::from_slice(bytes)?;
+        Ok(HllSketchDelta {
+            updates: reg_idx.into_iter().zip(reg_val).collect(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn msgpack_delta_against_empty_round_trips() {
+        let mut w = HllSketch::new(HllVariant::Regular, 12);
+        for i in 0..2000u64 {
+            w.update(&i.to_le_bytes());
+        }
+        let empty = HllSketch::new(HllVariant::Regular, 12);
+        let bytes = w.compute_delta_msgpack(&empty, 1);
+        let mut recon = HllSketch::new(HllVariant::Regular, 12);
+        recon.apply_delta_msgpack_bytes(&bytes).unwrap();
+        // Register delta over an empty base carries every non-zero register,
+        // so reconstructed registers are identical.
+        assert_eq!(recon.registers, w.registers);
+        let (got, want) = (recon.estimate(), w.estimate());
+        assert!((got - want).abs() <= want * 0.001, "got={got} want={want}");
+    }
+
+    #[test]
+    fn msgpack_delta_wire_layout_is_parallel_arrays() {
+        use crate::message_pack_format::MessagePackCodec;
+        let mut w = HllSketch::new(HllVariant::Regular, 4);
+        w.update(b"a");
+        w.update(b"b");
+        let empty = HllSketch::new(HllVariant::Regular, 4);
+        let bytes = w.compute_delta_msgpack(&empty, 1);
+        let mut reg_idx: Vec<u32> = Vec::new();
+        let mut reg_val: Vec<u8> = Vec::new();
+        for (i, &v) in w.registers.iter().enumerate() {
+            if v > 0 {
+                reg_idx.push(i as u32);
+                reg_val.push(v);
+            }
+        }
+        let expected = rmp_serde::to_vec(&(reg_idx, reg_val)).unwrap();
+        assert_eq!(bytes, expected);
+        let d = HllSketchDelta::from_msgpack(&bytes).unwrap();
+        assert_eq!(
+            d.updates.len(),
+            w.registers.iter().filter(|&&v| v > 0).count()
+        );
+    }
 
     #[test]
     fn test_new_empty() {
