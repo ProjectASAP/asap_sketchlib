@@ -20,7 +20,7 @@ use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};
 
-use super::kll::Coin;
+use super::kll::{Coin, merge_sorted_runs, randomly_halve_up};
 
 const CAPACITY_CACHE_LEN: usize = 20;
 const MAX_CACHEABLE_K: usize = 26_602;
@@ -305,11 +305,102 @@ impl<T: NumericalValue> KLLDynamic<T> {
         cdf
     }
 
-    /// Merges another sketch into this one.
+    /// Merges another sketch's retained items into this one, preserving
+    /// each retained item's level weight (`2^level`) instead of discarding
+    /// it. See [`KLL::merge`](super::kll::KLL::merge) for the full
+    /// rationale — this is the same weight-preserving, level-by-level
+    /// interleave-and-recompact merge (concatenate each level's retained
+    /// items, then re-run the same randomized halve-and-promote compaction
+    /// ordinary inserts use), adapted to `KLLDynamic`'s growable (rather
+    /// than fixed-capacity) backing storage.
+    ///
+    /// The previous implementation replayed *every* item of `other` —
+    /// across all of its levels — through `push_value`, i.e. at weight 1,
+    /// silently discarding the level weight of everything `other` had
+    /// retained above level 0 (the same class of bug as `KLL::merge`, see
+    /// asap_sketchlib issue #68).
     pub fn merge(&mut self, other: &KLLDynamic<T>) {
-        for &value in other.items.as_slice() {
-            self.push_value(value);
+        if other.items.is_empty() {
+            return; // `other` is empty: nothing to merge.
         }
+
+        let target_num_levels = self.num_levels.max(other.num_levels);
+        // work[h] holds level h's combined (not-yet-compacted) retained
+        // items. +1 slack so `work[h + 1]` is always valid while cascading.
+        let mut work: Vec<Vec<T>> = vec![Vec::new(); target_num_levels + 1];
+
+        // Absolute level `h` lives at array index `num_levels - 1 - h`.
+        #[allow(clippy::needless_range_loop)] // `h` also indexes self.levels/self.items
+        for h in 0..self.num_levels {
+            let idx = self.num_levels - 1 - h;
+            let levels = self.levels.as_slice();
+            let (s, e) = (levels[idx], levels[idx + 1]);
+            work[h].extend_from_slice(&self.items.as_slice()[s..e]);
+        }
+        let mut merge_buf: Vec<T> = Vec::new();
+        #[allow(clippy::needless_range_loop)] // `h` also indexes other.levels/other.items
+        for h in 0..other.num_levels {
+            let idx = other.num_levels - 1 - h;
+            let levels = other.levels.as_slice();
+            let (s, e) = (levels[idx], levels[idx + 1]);
+            let self_len = work[h].len();
+            work[h].extend_from_slice(&other.items.as_slice()[s..e]);
+            // Levels >= 1 are individually sorted in both operands
+            // already; normalize the concatenation into one sorted run up
+            // front, same as the invariant a settled sketch maintains.
+            if h > 0 {
+                merge_sorted_runs(work[h].as_mut_slice(), self_len, &mut merge_buf);
+            }
+        }
+
+        // Grow self's level bookkeeping to cover the merged height.
+        self.num_levels = target_num_levels;
+        self.rebuild_capacity_cache();
+
+        // Cascade-compact exactly like `compress_while_needed`/`compact`,
+        // except a level may need more than one halving pass here (a merge
+        // can leave a level far over capacity, not just one element over).
+        let mut h = 0;
+        while h < self.num_levels {
+            if h == 0 {
+                work[0].sort_unstable_by(T::total_cmp);
+            }
+            while work[h].len() > self.capacity_for_level(h) {
+                if h + 1 == self.num_levels {
+                    self.num_levels += 1;
+                    self.rebuild_capacity_cache();
+                    work.resize(self.num_levels + 1, Vec::new());
+                }
+                let pop = work[h].len();
+                let offset = usize::from(self.co.toss());
+                let num_survivors = randomly_halve_up(work[h].as_mut_slice(), 0, pop, offset);
+                let discard = pop - num_survivors;
+                work[h].drain(0..discard);
+
+                // Promote the (sorted) survivors into level h+1, merging
+                // with its existing (already-sorted) content.
+                let mut promoted = std::mem::take(&mut work[h]);
+                let left_len = promoted.len();
+                promoted.append(&mut work[h + 1]);
+                merge_sorted_runs(promoted.as_mut_slice(), left_len, &mut merge_buf);
+                work[h + 1] = promoted;
+            }
+            h += 1;
+        }
+
+        // Rebuild `items`/`levels` from the compacted per-level vectors,
+        // top level first, matching this type's storage order (array
+        // index 0 == top level, growing toward level 0 at the tail).
+        let total: usize = work[..self.num_levels].iter().map(Vec::len).sum();
+        let mut items = Vec::with_capacity(total);
+        let mut levels = Vec::with_capacity(self.num_levels + 1);
+        levels.push(0usize);
+        for h in (0..self.num_levels).rev() {
+            items.extend_from_slice(&work[h]);
+            levels.push(items.len());
+        }
+        self.items = Vector1D::from_vec(items);
+        self.levels = Vector1D::from_vec(levels);
     }
 
     /// Returns the estimated value at quantile `q`.
@@ -709,6 +800,118 @@ mod tests {
             "merge",
             values.len(),
             0x00C0_FFEE,
+        );
+    }
+
+    // Exact repro from asap_sketchlib issue #68 (KLLDynamic variant):
+    // merging a KLL(k=200) over 1..=1000 into an empty sketch used to
+    // rescale N down to `other`'s retained-item count and drift the
+    // median, because the old `merge` replayed every retained item
+    // through `push_value` at weight 1 regardless of which level it was
+    // retained at. Merging into an empty target is a pure structural
+    // no-op (interleaving with nothing) with the fix, so `dst.count()`
+    // must come out EXACTLY equal to `src.count()` — no further
+    // compaction is triggered since `other`'s levels already each satisfy
+    // their own capacity. (`count()` itself is only approximately N even
+    // for plain inserts, per KLL's randomized-halving rounding — see
+    // `generic_kll_dynamic_i64_sanity` above — so we compare src vs. dst,
+    // not against a literal 1000.)
+    #[test]
+    fn merge_into_empty_target_preserves_weight_issue_68_repro() {
+        let mut src = KLLDynamic::<f64>::init_kll(SKETCH_K);
+        for i in 1..=1000u32 {
+            src.update(&(i as f64));
+        }
+        let src_count = src.count();
+        assert!(
+            (980..=1020).contains(&src_count),
+            "source sketch count before merge should track N=1000 closely, got {src_count}"
+        );
+
+        let mut dst = KLLDynamic::<f64>::init_kll(SKETCH_K);
+        assert_eq!(dst.count(), 0, "target must start empty for this repro");
+
+        dst.merge(&src);
+
+        assert_eq!(
+            dst.count(),
+            src_count,
+            "merge into an empty target must preserve total weight EXACTLY \
+             (the old item-replay merge rescaled this down to src's \
+             retained-item count)"
+        );
+
+        let median = dst.quantile(0.5);
+        assert!(
+            (475.0..=525.0).contains(&median),
+            "merged median drifted outside tolerance: median={median}"
+        );
+    }
+
+    // General case: merging two NON-empty KLLDynamic sketches must still
+    // preserve total count (within the same inherent rounding budget as
+    // ordinary inserts) and produce quantile estimates consistent with a
+    // reference built from the union of both inputs' raw data. Guards
+    // against a fix that only special-cases the empty-target repro above.
+    #[test]
+    fn merge_two_nonempty_sketches_preserves_weight_and_quantiles() {
+        const TOLERANCE: f64 = 0.03;
+        const QUANTILES: &[(f64, &str)] = &[
+            (0.0, "min"),
+            (0.10, "p10"),
+            (0.25, "p25"),
+            (0.50, "p50"),
+            (0.75, "p75"),
+            (0.90, "p90"),
+            (1.0, "max"),
+        ];
+
+        let values_a = sample_uniform_f64(0.0, 1_000_000.0, 50_000, 0xA11CE);
+        let values_b = sample_zipf_f64(0.0, 1_000_000.0, 8_192, 1.1, 50_000, 0xB0B);
+
+        let mut a = KLLDynamic::<f64>::init_kll(SKETCH_K);
+        for v in &values_a {
+            a.update(v);
+        }
+        let mut b = KLLDynamic::<f64>::init_kll(SKETCH_K);
+        for v in &values_b {
+            b.update(v);
+        }
+
+        let count_a = a.count();
+        let count_b = b.count();
+        assert!(
+            (count_a as f64 - values_a.len() as f64).abs() / (values_a.len() as f64) < 0.03,
+            "sketch a count before merge diverged from N: count={count_a}, n={}",
+            values_a.len()
+        );
+        assert!(
+            (count_b as f64 - values_b.len() as f64).abs() / (values_b.len() as f64) < 0.03,
+            "sketch b count before merge diverged from N: count={count_b}, n={}",
+            values_b.len()
+        );
+
+        a.merge(&b);
+
+        let merged_count = a.count() as f64;
+        let expected_count = (count_a + count_b) as f64;
+        assert!(
+            (merged_count - expected_count).abs() / expected_count < 0.03,
+            "merging two non-empty sketches must preserve total weight (within the \
+             same rounding budget as ordinary inserts): merged={merged_count}, \
+             expected~={expected_count} (count_a={count_a}, count_b={count_b})"
+        );
+
+        let mut union: Vec<f64> = values_a.iter().chain(values_b.iter()).copied().collect();
+        union.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        assert_quantiles_within_error(
+            &a,
+            &union,
+            QUANTILES,
+            TOLERANCE,
+            "merge_two_nonempty",
+            union.len(),
+            0xA11C_E0B0,
         );
     }
 
