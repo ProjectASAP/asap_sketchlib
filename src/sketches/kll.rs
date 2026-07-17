@@ -496,10 +496,10 @@ impl<T: NumericalValue> KLL<T> {
     /// retained items at that level are combined (level 0 is unsorted, so
     /// it's concatenated and re-sorted; levels ≥ 1 are each already sorted
     /// in a valid KLL, so the two runs are combined in place with
-    /// [`merge_sorted_runs`]). Any level left over its own capacity by the
+    /// `merge_sorted_runs`). Any level left over its own capacity by the
     /// merge is then compacted with the exact same randomized
-    /// halve-and-promote step ordinary inserts use, via [`randomly_halve_up`]
-    /// and [`merge_sorted_runs`] again, looping at that level until it
+    /// halve-and-promote step ordinary inserts use, via `randomly_halve_up`
+    /// and `merge_sorted_runs` again, looping at that level until it
     /// settles back within bounds. A merge can leave a level arbitrarily far
     /// over capacity, unlike a single `push_value`, which can only overshoot
     /// by one element, so unlike `compress_while_updating` this cascade can
