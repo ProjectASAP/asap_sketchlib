@@ -140,10 +140,9 @@ impl EHSketchList {
                 s.merge(o);
                 Ok(())
             }
-            (EHSketchList::DDS(s), EHSketchList::DDS(o)) => {
-                s.merge(o);
-                Ok(())
-            }
+            (EHSketchList::DDS(s), EHSketchList::DDS(o)) => s
+                .merge(o)
+                .map_err(|_| "Cannot merge DDSketches with different index mappings"),
             (EHSketchList::HLL(s), EHSketchList::HLL(o)) => {
                 s.merge(o);
                 Ok(())

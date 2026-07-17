@@ -210,12 +210,23 @@ impl DDSketch {
         }
     }
 
-    /// Adds a positive finite numeric sample to the sketch; non-positive or non-finite values are ignored.
+    /// Adds a positive finite numeric sample to the sketch; non-positive or
+    /// non-finite values are ignored.
+    ///
+    /// Values outside `[min_indexable_value, max_indexable_value]` are also
+    /// dropped rather than mapped to an arbitrarily distant bucket index — that
+    /// guards the dense store against a single finite-but-extreme outlier
+    /// forcing an allocation spanning the whole index gap (asap_sketchlib#70
+    /// item 4 / sketchlib-go#72). Dropped silently, like the non-positive case,
+    /// since `add` has no error channel.
     #[inline(always)]
     pub fn add<T: NumericalValue>(&mut self, val: &T) {
         let v = val.to_f64();
         if !(v.is_finite() && v > 0.0) {
             return;
+        }
+        if v < self.min_indexable_value() || v > self.max_indexable_value() {
+            return; // untrackable extreme: would blow up the dense bucket span
         }
 
         self.count += 1;
@@ -316,17 +327,31 @@ impl DDSketch {
         self.store.offset
     }
 
-    /// Merges another DDSketch (with the same `alpha`) into this one.
-    pub fn merge(&mut self, other: &DDSketch) {
-        debug_assert!((self.alpha - other.alpha).abs() < 1e-12);
-        debug_assert!((self.gamma - other.gamma).abs() < 1e-12);
+    /// Merges another DDSketch into this one. Returns `Err` if the two sketches
+    /// use different index mappings (different `alpha`/`gamma`): merging under a
+    /// mismatched mapping would reinterpret one sketch's bucket indices under
+    /// the other's γ and silently corrupt every quantile.
+    ///
+    /// This is a REAL runtime check, not a `debug_assert!` — the previous
+    /// assert was compiled out in release builds, so a release-mode
+    /// mismatched merge corrupted results with no signal at all
+    /// (asap_sketchlib#70 item 2). DataDog's `MergeWith` and sketchlib-go's Go
+    /// `Merge` both return an error here; the portable `DdSketch::merge` in this
+    /// same crate already does too.
+    pub fn merge(&mut self, other: &DDSketch) -> Result<(), String> {
+        if (self.alpha - other.alpha).abs() >= 1e-12 || (self.gamma - other.gamma).abs() >= 1e-12 {
+            return Err(format!(
+                "cannot merge DDSketches with different index mappings: alpha {} vs {}",
+                self.alpha, other.alpha
+            ));
+        }
 
         if other.count == 0 {
-            return;
+            return Ok(());
         }
         if self.count == 0 {
             *self = other.clone();
-            return;
+            return Ok(());
         }
 
         self.count += other.count;
@@ -340,6 +365,7 @@ impl DDSketch {
 
         // Merge bucket vectors
         self.merge_buckets_from(other);
+        Ok(())
     }
 
     #[inline(always)]
@@ -348,9 +374,47 @@ impl DDSketch {
         (v.ln() * self.inv_log_gamma).floor() as i32
     }
 
+    /// Lower edge γ^k of bucket k.
+    #[inline]
+    fn lower_bound(&self, k: i32) -> f64 {
+        self.gamma.powf(k as f64)
+    }
+
+    /// Representative of bucket k: the lower bound γ^k scaled by (1+α), matching
+    /// DataDog's logarithmic_mapping.go `Value = LowerBound(index) * (1 +
+    /// RelativeAccuracy())`. This makes the relative error EXACTLY α at both
+    /// bucket edges — the log-midpoint γ^(k+0.5) used previously gave edge error
+    /// √γ−1 (≈ α + α²/2 > α), silently violating the advertised α-accuracy
+    /// guarantee near a bucket edge (asap_sketchlib#70 / sketchlib-go#73 item 1).
     #[inline]
     fn bin_representative(&self, k: i32) -> f64 {
-        self.gamma.powf(k as f64 + 0.5)
+        self.lower_bound(k) * (1.0 + self.alpha)
+    }
+
+    /// Smallest finite positive value whose bucket index is representable
+    /// without integer overflow (index ≥ i32::MIN) or float underflow, mirroring
+    /// DataDog's logarithmic_mapping.go minIndexableValue.
+    #[inline]
+    fn min_indexable_value(&self) -> f64 {
+        // f64::MIN_POSITIVE is the smallest positive normal (2^-1022).
+        ((f64::from(i32::MIN)) / self.inv_log_gamma + 1.0)
+            .exp()
+            .max(f64::MIN_POSITIVE * self.gamma)
+    }
+
+    /// Largest finite positive value whose bucket index is representable without
+    /// integer overflow (index ≤ i32::MAX) or `exp`/`powf` overflow, mirroring
+    /// DataDog's logarithmic_mapping.go maxIndexableValue. A value beyond this
+    /// would otherwise map to an arbitrarily distant index and force the dense
+    /// bucket store to grow across the whole gap (asap_sketchlib#70 item 4 /
+    /// sketchlib-go#72's single-outlier memory blowup).
+    #[inline]
+    fn max_indexable_value(&self) -> f64 {
+        // 709.0 is just under ln(f64::MAX) so exp() stays finite.
+        const EXP_OVERFLOW: f64 = 709.0;
+        ((f64::from(i32::MAX)) / self.inv_log_gamma - 1.0)
+            .exp()
+            .min(EXP_OVERFLOW.exp() / (2.0 * self.gamma) * (self.gamma + 1.0))
     }
 
     fn merge_buckets_from(&mut self, other: &DDSketch) {
@@ -765,7 +829,7 @@ mod tests {
             s2.add(&v);
         }
 
-        s1.merge(&s2);
+        s1.merge(&s2).unwrap();
 
         // counts and bounds
         assert_eq!(s1.get_count(), (vals1.len() + vals2.len()) as u64);
@@ -802,13 +866,14 @@ mod tests {
         // `count` survives exactly (recomputed by summing buckets). The
         // `min`/`max`/`sum` scalars are no longer serialized
         // (ProjectASAP/sketchlib-go#243) — they're reconstructed from the
-        // bucket midpoint `gamma^(k+0.5)`. A true value sitting at a bucket
-        // edge is at most `sqrt(gamma) - 1` away from that midpoint, which
-        // is marginally larger than α; use that as the tolerance.
+        // per-bucket representative `gamma^k*(1+alpha)`. With that DataDog
+        // representative a value sitting anywhere in a bucket (including the
+        // edges) is within EXACTLY alpha of the representative, so alpha is the
+        // correct tolerance — the old `sqrt(gamma)-1` slack was only needed for
+        // the midpoint `gamma^(k+0.5)` representative.
         assert_eq!(decoded.get_count(), s.get_count()); // counts should match
         let alpha = s.alpha();
-        let gamma = (1.0 + alpha) / (1.0 - alpha);
-        let bucket_tol = gamma.sqrt() - 1.0;
+        let bucket_tol = alpha + 1e-9;
         let min_rel = (decoded.min().unwrap() - s.min().unwrap()).abs() / s.min().unwrap();
         let max_rel = (decoded.max().unwrap() - s.max().unwrap()).abs() / s.max().unwrap();
         assert!(
@@ -834,5 +899,73 @@ mod tests {
                 "quantile p={q} rel err {rel} exceeds bucket tol {bucket_tol} (a={a}, b={b})"
             );
         }
+    }
+
+    // DataDog-parity tests (asap_sketchlib#70 / sketchlib-go#73, #72).
+
+    #[test]
+    fn representative_within_alpha_at_bucket_edges() {
+        // Value(k) = gamma^k*(1+alpha) puts the relative error at EXACTLY alpha
+        // at both bucket edges — the old midpoint gamma^(k+0.5) exceeded alpha.
+        for &alpha in &[0.001, 0.01, 0.05, 0.1] {
+            let d = DDSketch::new(alpha);
+            for &k in &[-100i32, -1, 0, 1, 7, 500] {
+                let lo = d.lower_bound(k);
+                let hi = d.lower_bound(k + 1);
+                let rep = d.bin_representative(k);
+                assert!(rep >= lo && rep <= hi, "rep {rep} outside [{lo},{hi}]");
+                assert!(
+                    (rep - lo).abs() / lo <= alpha + 1e-9,
+                    "alpha={alpha} k={k}: lower-edge relerr exceeds alpha"
+                );
+                assert!(
+                    (rep - hi).abs() / hi <= alpha + 1e-9,
+                    "alpha={alpha} k={k}: upper-edge relerr exceeds alpha"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn merge_alpha_mismatch_is_a_real_runtime_error() {
+        // Was a debug_assert!, compiled out in release; now a real Result even
+        // in release builds (asap_sketchlib#70 item 2).
+        let mut a = DDSketch::new(0.01);
+        let b = DDSketch::new(0.02);
+        a.add(&5.0);
+        assert!(a.merge(&b).is_err(), "mismatched-mapping merge must Err");
+
+        let mut c = DDSketch::new(0.01);
+        let mut d = DDSketch::new(0.01);
+        c.add(&3.0);
+        d.add(&7.0);
+        assert!(c.merge(&d).is_ok(), "matched-mapping merge must succeed");
+        assert_eq!(c.get_count(), 2);
+    }
+
+    #[test]
+    fn untrackable_extreme_is_dropped() {
+        // A single finite-but-extreme outlier outside the indexable range must
+        // not be recorded, so the dense bucket store never spans the whole gap
+        // (asap_sketchlib#70 item 4 / sketchlib-go#72).
+        let mut d = DDSketch::new(0.01);
+        for i in 1..=2000 {
+            d.add(&(f64::from(i)));
+        }
+        let count_before = d.get_count();
+        let span_before = d.store.counts.as_slice().len();
+
+        d.add(&(d.max_indexable_value() * 10.0));
+        d.add(&(d.min_indexable_value() / 10.0));
+        assert_eq!(d.get_count(), count_before, "extreme values were recorded");
+        assert_eq!(
+            d.store.counts.as_slice().len(),
+            span_before,
+            "store span grew from an untrackable extreme"
+        );
+
+        // A large-but-trackable value is still recorded.
+        d.add(&(d.max_indexable_value() / 2.0));
+        assert_eq!(d.get_count(), count_before + 1);
     }
 }
