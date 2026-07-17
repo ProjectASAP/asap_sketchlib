@@ -31,6 +31,21 @@ const GROW_CHUNK: usize = 128;
 struct Buckets {
     counts: Vector1D<u64>,
     offset: i32,
+
+    /// Caps the number of bins this store will ever hold. 0 (the default,
+    /// and what plain `DDSketch::new` uses) means unbounded — pre-existing
+    /// behavior, unchanged. When >0, `ensure` COLLAPSES the LOWEST bins
+    /// (folding their mass into the new floor bucket) instead of growing
+    /// past `max_bins` bins total, bounding the contiguous allocation a
+    /// single finite-but-extreme outlier can force (asap_sketchlib#70 item
+    /// 4 / sketchlib-go#72). Mirrors DataDog's `CollapsingLowestDenseStore`:
+    /// precision is lost only at the low end; the high end (and hence
+    /// high-quantile accuracy, e.g. p99 latency) is never affected.
+    ///
+    /// NOT serialized — purely a local, in-memory bound (see
+    /// `DDSketch::with_max_bins`); a decoded sketch is always unbounded.
+    #[serde(skip)]
+    max_bins: i32,
 }
 
 impl Buckets {
@@ -38,6 +53,7 @@ impl Buckets {
         Self {
             counts: Vector1D::from_vec(Vec::new()),
             offset: 0,
+            max_bins: 0,
         }
     }
 
@@ -63,55 +79,134 @@ impl Buckets {
         }
     }
 
-    /// Ensure bucket k exists, using growth in chunks.
+    /// Ensure bucket k exists — growing the store, or (when `max_bins` caps
+    /// it) collapsing the lowest bins — and return the ARRAY INDEX to write
+    /// k's contribution to. Ordinarily that's `k - offset` (k gets its own
+    /// bucket); once `max_bins` caps the store and k falls below the
+    /// collapsed floor, it's 0 (the floor bucket). Callers MUST use the
+    /// returned index rather than recomputing `k - offset`, since the two
+    /// can differ once collapsing has occurred.
     #[inline(always)]
-    fn ensure(&mut self, k: i32) {
+    fn ensure(&mut self, k: i32) -> usize {
         if self.counts.is_empty() {
-            self.counts = Vector1D::from_vec(vec![0u64; GROW_CHUNK]);
-            self.offset = k - (GROW_CHUNK as i32 / 2);
-            return;
+            let mut init_len = GROW_CHUNK as i32;
+            if self.max_bins > 0 && init_len > self.max_bins {
+                init_len = self.max_bins;
+            }
+            let init_len = init_len.max(1);
+            self.counts = Vector1D::from_vec(vec![0u64; init_len as usize]);
+            self.offset = k - init_len / 2;
+            return (k - self.offset) as usize;
         }
 
         let (left, right) = self.range().unwrap();
+        if k >= left && k <= right {
+            return (k - self.offset) as usize;
+        }
+
+        // The TRUE minimal range needed to cover k alongside the existing
+        // data — used (not the buffered grow target below) to decide
+        // whether a collapse is unavoidable, so a small necessary
+        // extension never triggers one.
+        let (true_left, true_right) = if k < left { (k, right) } else { (left, k) };
+        if self.max_bins > 0 && true_right - true_left + 1 > self.max_bins {
+            let new_left = true_right - self.max_bins + 1;
+            return self.collapse_to(new_left, true_right, k);
+        }
 
         if k < left {
             let needed = (left - k) as usize;
             let grow = needed.max(GROW_CHUNK);
+            let mut new_left = left - grow as i32;
+            if self.max_bins > 0 && right - new_left + 1 > self.max_bins {
+                new_left = right - self.max_bins + 1; // clamp the overshoot buffer to the cap
+            }
+            let grow = (left - new_left) as usize;
 
             let mut v = vec![0u64; grow];
             v.extend_from_slice(self.counts.as_slice());
-
             self.counts = Vector1D::from_vec(v);
-            self.offset -= grow as i32;
-        } else if k > right {
+            self.offset = new_left;
+            (k - self.offset) as usize
+        } else {
+            // k > right
             let needed = (k - right) as usize;
             let grow = needed.max(GROW_CHUNK);
+            let mut new_right = right + grow as i32;
+            if self.max_bins > 0 && new_right - left + 1 > self.max_bins {
+                new_right = left + self.max_bins - 1; // clamp the overshoot buffer to the cap
+            }
+            let new_len = (new_right - left + 1) as usize;
 
             let mut v = self.counts.clone().into_vec();
-            v.resize(v.len() + grow, 0);
+            v.resize(new_len, 0);
             self.counts = Vector1D::from_vec(v);
+            (k - self.offset) as usize
+        }
+    }
+
+    /// Rebuild the store to exactly cover `[new_left, new_right]` (a span of
+    /// at most `max_bins` bins), folding the count of every existing bucket
+    /// below `new_left` into the new floor bucket (index `new_left`) rather
+    /// than discarding it — total count is always conserved across a
+    /// collapse, only the LOW-end bucket resolution degrades. Returns the
+    /// array index to write k's own contribution to: the floor bucket if k
+    /// itself falls below `new_left` (k may be collapsed away too, on the
+    /// very insert that triggered this), otherwise k's own bucket.
+    fn collapse_to(&mut self, new_left: i32, new_right: i32, k: i32) -> usize {
+        let new_len = (new_right - new_left + 1) as usize;
+        let mut new_counts = vec![0u64; new_len];
+
+        if !self.is_empty() {
+            let old_offset = self.offset;
+            let mut carry: u64 = 0;
+            for (i, &c) in self.counts.as_slice().iter().enumerate() {
+                if c == 0 {
+                    continue;
+                }
+                let idx = old_offset + i as i32;
+                if idx < new_left {
+                    carry += c;
+                } else {
+                    // idx is always <= new_right here: new_right is always
+                    // the max of the old right edge and k, so no existing
+                    // data can exceed it.
+                    new_counts[(idx - new_left) as usize] += c;
+                }
+            }
+            new_counts[0] += carry;
+        }
+
+        self.counts = Vector1D::from_vec(new_counts);
+        self.offset = new_left;
+
+        if k < new_left {
+            0
+        } else {
+            (k - new_left) as usize
         }
     }
 
     #[inline(always)]
     fn add_one(&mut self, k: i32) {
         // this is the method that gets called on every sample insertion
-        let idx_i32 = k - self.offset;
-
-        if idx_i32 >= 0 {
-            let idx = idx_i32 as usize;
-            let slice = self.counts.as_mut_slice();
-            if idx < slice.len() {
-                unsafe {
-                    *slice.as_mut_ptr().add(idx) += 1;
+        if !self.counts.is_empty() {
+            let idx_i32 = k - self.offset;
+            if idx_i32 >= 0 {
+                let idx = idx_i32 as usize;
+                let slice = self.counts.as_mut_slice();
+                if idx < slice.len() {
+                    unsafe {
+                        *slice.as_mut_ptr().add(idx) += 1;
+                    }
+                    return;
                 }
-                return;
             }
         }
 
-        // This is the method that gets called only on rare expansions
-        self.ensure(k);
-        let idx = (k - self.offset) as usize;
+        // This is the method that gets called only on rare expansions (or,
+        // when max_bins caps the store, collapses).
+        let idx = self.ensure(k);
         self.counts.as_mut_slice()[idx] += 1;
     }
 }
@@ -163,6 +258,26 @@ impl DDSketch {
             min: f64::INFINITY,
             max: f64::NEG_INFINITY,
         }
+    }
+
+    /// `DDSketch::new` with the bucket store capped at `max_bins` bins,
+    /// matching DataDog's `LogCollapsingLowestDenseDDSketch`: once growth
+    /// would need more than `max_bins` bins, the LOWEST bins collapse
+    /// (folding their mass into the new floor bucket) instead of growing
+    /// further, bounding the memory a single finite-but-extreme outlier can
+    /// force (asap_sketchlib#70 item 4 / sketchlib-go#72). Opt-in — plain
+    /// `DDSketch::new` stays unbounded (`max_bins=0`), matching today's
+    /// behavior exactly. `max_bins` must be positive.
+    ///
+    /// The cap is a purely LOCAL, in-memory bound: it is not carried on the
+    /// wire (`Buckets::max_bins` is `#[serde(skip)]`) and a decoded sketch
+    /// (`deserialize_from_bytes`) is always unbounded — only the live,
+    /// actively-inserted-into sketch needs the cap.
+    pub fn with_max_bins(alpha: f64, max_bins: i32) -> Self {
+        assert!(max_bins > 0, "max_bins must be positive");
+        let mut sk = Self::new(alpha);
+        sk.store.max_bins = max_bins;
+        sk
     }
 
     /// Serializes the sketch to a MessagePack byte vector.
@@ -338,6 +453,14 @@ impl DDSketch {
     /// (asap_sketchlib#70 item 2). DataDog's `MergeWith` and sketchlib-go's Go
     /// `Merge` both return an error here; the portable `DdSketch::merge` in this
     /// same crate already does too.
+    ///
+    /// NOTE: does not enforce `self`'s `max_bins` cap (sketchlib-go#72
+    /// collapsing store, see `with_max_bins`) on the merged result — the
+    /// result's span can exceed `max_bins` if the two operands' ranges are
+    /// far apart. Merging is a bulk, already-bounded-input operation
+    /// (unlike `add`'s single untrusted sample), so it doesn't carry the
+    /// same single-outlier memory-blowup risk; enforcing the cap here is
+    /// tracked separately if it turns out to matter in practice.
     pub fn merge(&mut self, other: &DDSketch) -> Result<(), String> {
         if (self.alpha - other.alpha).abs() >= 1e-12 || (self.gamma - other.gamma).abs() >= 1e-12 {
             return Err(format!(
@@ -967,5 +1090,177 @@ mod tests {
         // A large-but-trackable value is still recorded.
         d.add(&(d.max_indexable_value() / 2.0));
         assert_eq!(d.get_count(), count_before + 1);
+    }
+
+    // Collapsing-store tests (sketchlib-go#72's Rust counterpart).
+
+    /// A single finite-but-extreme outlier must not force the store past
+    /// max_bins, no matter how far its bucket index is from the current
+    /// window.
+    #[test]
+    fn collapsing_store_caps_memory() {
+        const ALPHA: f64 = 0.01;
+        const MAX_BINS: i32 = 100;
+        let mut d = DDSketch::with_max_bins(ALPHA, MAX_BINS);
+
+        for v in sample_uniform_f64(1.0, 1001.0, 5000, 1) {
+            d.add(&v);
+        }
+        assert!(
+            d.store.counts.as_slice().len() <= MAX_BINS as usize,
+            "store span exceeds max_bins after normal inserts"
+        );
+
+        // A genuinely adversarial single outlier.
+        d.add(&1e15);
+        assert!(
+            d.store.counts.as_slice().len() <= MAX_BINS as usize,
+            "store span exceeds max_bins after the outlier — collapse did not cap growth"
+        );
+
+        // Another extreme outlier on the other side — growing RIGHT must
+        // also stay capped.
+        for v in sample_uniform_f64(1.0, 1001.0, 100, 2) {
+            d.add(&v);
+        }
+        d.add(&1e18);
+        assert!(
+            d.store.counts.as_slice().len() <= MAX_BINS as usize,
+            "store span exceeds max_bins after a second outlier"
+        );
+    }
+
+    /// A collapse never loses mass: total count always equals the number of
+    /// add() calls, even across repeated collapses.
+    #[test]
+    fn collapsing_store_preserves_count() {
+        const ALPHA: f64 = 0.01;
+        const MAX_BINS: i32 = 50;
+        let mut d = DDSketch::with_max_bins(ALPHA, MAX_BINS);
+
+        let mut n = 0u64;
+        for exp in -20..=20 {
+            let v = 1.5f64.powi(exp);
+            for _ in 0..10 {
+                d.add(&v);
+                n += 1;
+            }
+        }
+        assert_eq!(d.get_count(), n, "mass lost across repeated collapses");
+
+        let summed: u64 = d.store.counts.as_slice().iter().sum();
+        assert_eq!(summed, n, "summed bucket counts diverge from count");
+    }
+
+    /// The defining property of CollapsingLOWEST: once a collapse has
+    /// occurred, the HIGH end of the distribution keeps its full per-bucket
+    /// resolution — only the low end degrades. Matters for ASAPCollector's
+    /// typical use (p95/p99 latency tail).
+    #[test]
+    fn collapsing_store_high_end_stays_exact() {
+        const ALPHA: f64 = 0.01;
+        const MAX_BINS: i32 = 20;
+        let mut d = DDSketch::with_max_bins(ALPHA, MAX_BINS);
+        let mut d_uncapped = DDSketch::new(ALPHA);
+
+        for exp in -50..=-10 {
+            let v = 1.2f64.powi(exp);
+            d.add(&v);
+            d_uncapped.add(&v);
+        }
+        for &v in &[9000.0, 9500.0, 9900.0, 9990.0, 9999.0] {
+            d.add(&v);
+            d_uncapped.add(&v);
+        }
+
+        let got_p99 = d.get_value_at_quantile(0.99).expect("capped p99");
+        let want_p99 = d_uncapped.get_value_at_quantile(0.99).expect("uncapped p99");
+        let re = (got_p99 - want_p99).abs() / want_p99;
+        assert!(
+            re <= ALPHA + 1e-6,
+            "p99 diverged from uncapped: got {got_p99} want {want_p99} relErr {re} > alpha {ALPHA}"
+        );
+    }
+
+    /// Behavior-preservation guard: DDSketch::new (max_bins=0, the default)
+    /// must be unaffected by the ensure()/add_one() refactor.
+    #[test]
+    fn collapsing_store_does_not_affect_uncapped_sketch() {
+        const ALPHA: f64 = 0.01;
+        let mut d = DDSketch::new(ALPHA);
+        for v in sample_uniform_f64(1.0, 100001.0, 3000, 3) {
+            d.add(&v);
+        }
+        assert_eq!(d.get_count(), 3000);
+        assert!(!d.store.counts.as_slice().is_empty());
+    }
+
+    /// The tightest possible cap: every insert collapses into a single
+    /// bucket, degenerating the sketch into an exact counter. Must never
+    /// exceed 1 bin and never lose count.
+    #[test]
+    fn collapsing_store_max_bins_one() {
+        let mut d = DDSketch::with_max_bins(0.01, 1);
+        let vals = [1.0, 1000.0, 1e-3, 1e9, 5.0, 5_000_000.0];
+        for &v in &vals {
+            d.add(&v);
+            assert!(d.store.counts.as_slice().len() <= 1, "max_bins=1 exceeded after add({v})");
+        }
+        assert_eq!(d.get_count(), vals.len() as u64);
+    }
+
+    /// A large, randomly-ordered mix of tightly-clustered and wildly-extreme
+    /// values against a small cap, checking the span-cap and
+    /// count-conservation invariants hold THROUGHOUT — not just at the end.
+    #[test]
+    fn collapsing_store_random_stress() {
+        const ALPHA: f64 = 0.02;
+        const MAX_BINS: i32 = 30;
+        const PER_KIND: usize = 5000;
+        let mut d = DDSketch::with_max_bins(ALPHA, MAX_BINS);
+
+        // Four independently-sampled kinds, interleaved round-robin so the
+        // insertion order mixes tightly-clustered and wildly-extreme values
+        // rather than arriving in big contiguous blocks — exercises
+        // collapses triggered from both directions repeatedly.
+        let normal_cluster = sample_uniform_f64(1.0, 101.0, PER_KIND, 10);
+        let wide_log_spread: Vec<f64> = sample_uniform_f64(-15.0, 15.0, PER_KIND, 11)
+            .into_iter()
+            .map(|e| 10f64.powf(e))
+            .collect();
+        let extreme_low: Vec<f64> = sample_uniform_f64(0.0, 1.0, PER_KIND, 12)
+            .into_iter()
+            .map(|f| 1e-100 * (1.0 + f))
+            .collect();
+        let extreme_high: Vec<f64> = sample_uniform_f64(0.0, 1.0, PER_KIND, 13)
+            .into_iter()
+            .map(|f| 1e100 * (1.0 + f))
+            .collect();
+
+        let mut n = 0u64;
+        for i in 0..PER_KIND {
+            for v in [normal_cluster[i], wide_log_spread[i], extreme_low[i], extreme_high[i]] {
+                d.add(&v);
+                n += 1;
+                assert!(
+                    d.store.counts.as_slice().len() <= MAX_BINS as usize,
+                    "iter {i}: store span exceeds max_bins (v={v})"
+                );
+            }
+        }
+        assert_eq!(d.get_count(), n);
+        let summed: u64 = d.store.counts.as_slice().iter().sum();
+        assert_eq!(summed, n);
+    }
+
+    /// merge() with a capped operand must not panic (the cap simply isn't
+    /// enforced on the merged result — documented limitation).
+    #[test]
+    fn merge_with_capped_sketch_does_not_panic() {
+        let mut a = DDSketch::with_max_bins(0.01, 10);
+        let mut b = DDSketch::with_max_bins(0.01, 10);
+        a.add(&1.0);
+        b.add(&1e10);
+        assert!(a.merge(&b).is_ok());
     }
 }
