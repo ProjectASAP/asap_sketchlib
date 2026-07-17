@@ -116,16 +116,6 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         }
     }
 
-    /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-
-    /// Deserializes a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
-    }
-
     /// Borrow the raw register byte slice (one byte per register).
     pub fn registers_as_slice(&self) -> &[u8] {
         self.registers.as_slice()
@@ -166,6 +156,83 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
             if other_val > *reg {
                 *reg = other_val;
             }
+        }
+    }
+}
+
+// Serialization — split by Variant so the magic byte encodes the estimator.
+// Wire layout: [ variant_id: u8 | hasher_id: u8 | <rmp_serde named payload> ]
+
+impl<Registers: HllRegisterStorage + Serialize, H: SketchHasher>
+    HyperLogLogImpl<Classic, Registers, H>
+{
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_HLL_CLASSIC, hasher_id]`.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        use crate::message_pack_format::magic_ids;
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_HLL_CLASSIC, H::hasher_magic_id()],
+            &payload,
+        ))
+    }
+}
+
+impl<Registers: HllRegisterStorage + for<'de> Deserialize<'de>, H: SketchHasher>
+    HyperLogLogImpl<Classic, Registers, H>
+{
+    /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        use crate::message_pack_format::magic_ids;
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, hasher] if *id == magic_ids::NATIVE_HLL_CLASSIC => {
+                magic_ids::check_hasher_id::<H>(*hasher)?;
+                from_slice(payload)
+            }
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "HyperLogLogImpl<Classic> kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
+                magic_ids::NATIVE_HLL_CLASSIC,
+                kind_id
+            ))),
+        }
+    }
+}
+
+impl<Registers: HllRegisterStorage + Serialize, H: SketchHasher>
+    HyperLogLogImpl<ErtlMLE, Registers, H>
+{
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_HLL_ERTL_MLE, hasher_id]`.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        use crate::message_pack_format::magic_ids;
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_HLL_ERTL_MLE, H::hasher_magic_id()],
+            &payload,
+        ))
+    }
+}
+
+impl<Registers: HllRegisterStorage + for<'de> Deserialize<'de>, H: SketchHasher>
+    HyperLogLogImpl<ErtlMLE, Registers, H>
+{
+    /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        use crate::message_pack_format::magic_ids;
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, hasher] if *id == magic_ids::NATIVE_HLL_ERTL_MLE => {
+                magic_ids::check_hasher_id::<H>(*hasher)?;
+                from_slice(payload)
+            }
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "HyperLogLogImpl<ErtlMLE> kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
+                magic_ids::NATIVE_HLL_ERTL_MLE,
+                kind_id
+            ))),
         }
     }
 }
@@ -369,14 +436,39 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
         self.est as usize
     }
 
-    /// Serializes the sketch into MessagePack bytes.
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_HLL_HIP, HASHER_DEFAULT_XX]` — HIP always uses DefaultXxHasher.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        use crate::message_pack_format::magic_ids;
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_HLL_HIP, magic_ids::HASHER_DEFAULT_XX],
+            &payload,
+        ))
     }
 
-    /// Deserializes a sketch from MessagePack bytes.
+    /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+        use crate::message_pack_format::magic_ids;
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, hasher] if *id == magic_ids::NATIVE_HLL_HIP => {
+                if *hasher != magic_ids::HASHER_DEFAULT_XX && *hasher != magic_ids::HASHER_UNKNOWN {
+                    return Err(RmpDecodeError::Uncategorized(format!(
+                        "HyperLogLogHIPImpl hasher mismatch: expected 0x{:02x}, got 0x{:02x}",
+                        magic_ids::HASHER_DEFAULT_XX,
+                        hasher
+                    )));
+                }
+                from_slice(payload)
+            }
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "HyperLogLogHIPImpl kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
+                magic_ids::NATIVE_HLL_HIP,
+                kind_id
+            ))),
+        }
     }
 }
 
@@ -673,6 +765,40 @@ mod tests {
     #[test]
     fn hllds_p12_round_trip_serialization() {
         assert_serialization_round_trip::<HyperLogLogHIPP12>("HllDsP12");
+    }
+
+    #[test]
+    fn hll_magic_bytes_are_variant_specific() {
+        use crate::message_pack_format::magic_ids;
+
+        let classic_bytes = HyperLogLog::<Classic>::default()
+            .serialize_to_bytes()
+            .unwrap();
+        let ertl_bytes = HyperLogLog::<ErtlMLE>::default()
+            .serialize_to_bytes()
+            .unwrap();
+
+        let (classic_kind_id, _) =
+            magic_ids::decode_wrapper(&classic_bytes).expect("ASAPv1 header");
+        let (ertl_kind_id, _) = magic_ids::decode_wrapper(&ertl_bytes).expect("ASAPv1 header");
+
+        assert_eq!(classic_kind_id[0], magic_ids::NATIVE_HLL_CLASSIC);
+        assert_eq!(ertl_kind_id[0], magic_ids::NATIVE_HLL_ERTL_MLE);
+        // Sanity: they are different.
+        assert_ne!(classic_kind_id[0], ertl_kind_id[0]);
+    }
+
+    #[test]
+    fn hll_variant_mismatch_is_rejected() {
+        let ertl_bytes = HyperLogLog::<ErtlMLE>::default()
+            .serialize_to_bytes()
+            .unwrap();
+        // Feeding ErtlMLE bytes to a Classic decoder must error.
+        let result = HyperLogLog::<Classic>::deserialize_from_bytes(&ertl_bytes);
+        assert!(
+            result.is_err(),
+            "expected error decoding ErtlMLE bytes as Classic"
+        );
     }
 
     // insert 10 values and check corresponding counter is updated

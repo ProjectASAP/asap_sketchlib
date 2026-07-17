@@ -274,27 +274,90 @@ where
     }
 }
 
-// Serialization helpers for Count.
-impl<S, C, Mode, H: SketchHasher> Count<S, Mode, H>
+// Serialization helpers for Count — one impl per Mode so the magic byte
+// encodes both the sketch family and the hashing strategy.
+//
+// Wire layout: [ mode_id: u8 | hasher_id: u8 | <rmp_serde named payload> ]
+
+impl<S, C, H: SketchHasher> Count<S, RegularPath, H>
 where
     S: MatrixStorage<Counter = C> + Serialize,
     C: CountSketchCounter,
 {
-    /// Serializes the sketch into MessagePack bytes.
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_COUNT_SKETCH_REGULAR, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        use crate::message_pack_format::magic_ids;
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_COUNT_SKETCH_REGULAR, H::hasher_magic_id()],
+            &payload,
+        ))
     }
 }
 
-// Deserialization helpers for Count.
-impl<S, C, Mode, H: SketchHasher> Count<S, Mode, H>
+impl<S, C, H: SketchHasher> Count<S, RegularPath, H>
 where
     S: MatrixStorage<Counter = C> + for<'de> Deserialize<'de>,
     C: CountSketchCounter,
 {
-    /// Deserializes a sketch from MessagePack bytes.
+    /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+        use crate::message_pack_format::magic_ids;
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, hasher] if *id == magic_ids::NATIVE_COUNT_SKETCH_REGULAR => {
+                magic_ids::check_hasher_id::<H>(*hasher)?;
+                from_slice(payload)
+            }
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "Count<RegularPath> kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
+                magic_ids::NATIVE_COUNT_SKETCH_REGULAR,
+                kind_id
+            ))),
+        }
+    }
+}
+
+impl<S, C, H: SketchHasher> Count<S, FastPath, H>
+where
+    S: MatrixStorage<Counter = C> + Serialize,
+    C: CountSketchCounter,
+{
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_COUNT_SKETCH_FAST, hasher_id]`.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        use crate::message_pack_format::magic_ids;
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_COUNT_SKETCH_FAST, H::hasher_magic_id()],
+            &payload,
+        ))
+    }
+}
+
+impl<S, C, H: SketchHasher> Count<S, FastPath, H>
+where
+    S: MatrixStorage<Counter = C> + for<'de> Deserialize<'de>,
+    C: CountSketchCounter,
+{
+    /// Deserializes a sketch from bytes produced by [`Self::serialize_to_bytes`].
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        use crate::message_pack_format::magic_ids;
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, hasher] if *id == magic_ids::NATIVE_COUNT_SKETCH_FAST => {
+                magic_ids::check_hasher_id::<H>(*hasher)?;
+                from_slice(payload)
+            }
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "Count<FastPath> kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
+                magic_ids::NATIVE_COUNT_SKETCH_FAST,
+                kind_id
+            ))),
+        }
     }
 }
 
@@ -1098,6 +1161,51 @@ mod tests {
         assert_eq!(
             sketch.as_storage().as_slice(),
             decoded.as_storage().as_slice()
+        );
+    }
+
+    #[test]
+    fn count_sketch_fast_path_round_trip_serialization() {
+        use crate::message_pack_format::magic_ids;
+
+        let mut sketch = Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 8);
+        sketch.insert(&DataInput::U64(42));
+        sketch.insert(&DataInput::U64(7));
+
+        let encoded = sketch
+            .serialize_to_bytes()
+            .expect("serialize Count FastPath");
+        let (kind_id, _) = magic_ids::decode_wrapper(&encoded).expect("ASAPv1 header");
+        assert_eq!(
+            kind_id,
+            [
+                magic_ids::NATIVE_COUNT_SKETCH_FAST,
+                magic_ids::HASHER_DEFAULT_XX
+            ],
+            "wrong kind_id"
+        );
+
+        let decoded = Count::<Vector2D<i32>, FastPath>::deserialize_from_bytes(&encoded)
+            .expect("deserialize Count FastPath");
+
+        assert_eq!(sketch.rows(), decoded.rows());
+        assert_eq!(sketch.cols(), decoded.cols());
+        assert_eq!(
+            sketch.as_storage().as_slice(),
+            decoded.as_storage().as_slice()
+        );
+    }
+
+    #[test]
+    fn count_sketch_mode_mismatch_is_rejected() {
+        let mut sketch = Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 8);
+        sketch.insert(&DataInput::U64(1));
+
+        let fast_bytes = sketch.serialize_to_bytes().unwrap();
+        let result = Count::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&fast_bytes);
+        assert!(
+            result.is_err(),
+            "expected error decoding FastPath bytes as RegularPath"
         );
     }
 }

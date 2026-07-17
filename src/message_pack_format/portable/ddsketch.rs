@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec, magic_ids};
 
 /// Bucket-store growth chunk for the wire-format-aligned [`DdSketch`]
 /// variant. Matches the Go reference implementation's `DDSketch.GrowChunk`
@@ -454,11 +454,20 @@ impl DdSketch {
 
 impl MessagePackCodec for DdSketch {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        Ok(rmp_serde::to_vec(self)?)
+        let payload = rmp_serde::to_vec(self)?;
+        Ok(magic_ids::encode_wrapper(&[magic_ids::DD_SKETCH], &payload))
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        Ok(rmp_serde::from_slice(bytes)?)
+        let (kind_id, payload) = magic_ids::decode_wrapper(bytes)
+            .map_err(|msg| MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg)))?;
+        if kind_id != [magic_ids::DD_SKETCH] {
+            return Err(MsgPackError::BadMagicId {
+                expected: magic_ids::DD_SKETCH,
+                got: kind_id.first().copied(),
+            });
+        }
+        Ok(rmp_serde::from_slice(payload)?)
     }
 }
 
@@ -660,16 +669,26 @@ mod tests {
     /// DataPoint-level METRIC scalars (count/sum/min/max). This pins the
     /// element count so the bytes stay parity-aligned with the Go
     /// reference implementation.
+    ///
+    /// The binary is wrapped in the ASAPv1 envelope; the payload starts after
+    /// the header (b"ASAPv1" + version + kind_id_len + kind_id).
     #[test]
     fn test_msgpack_is_three_element_array() {
+        use crate::message_pack_format::magic_ids;
         let sk = DdSketch::from_raw(0.01, vec![1, 2, 3], -2);
         let bytes = sk.to_msgpack().unwrap();
-        // rmp compact encoding leads with an array marker. A fixarray of
-        // length 3 is the single byte 0x93 (0b1001_0011).
+        let (kind_id, payload) = magic_ids::decode_wrapper(&bytes).expect("ASAPv1 header");
         assert_eq!(
-            bytes[0], 0x93,
-            "expected a 3-element msgpack fixarray (0x93), got {:#04x}",
-            bytes[0]
+            kind_id,
+            [magic_ids::DD_SKETCH],
+            "expected DD_SKETCH kind_id"
+        );
+        // rmp compact encoding of the payload leads with an array marker.
+        // A fixarray of length 3 is the single byte 0x93 (0b1001_0011).
+        assert_eq!(
+            payload[0], 0x93,
+            "expected a 3-element msgpack fixarray (0x93) at payload[0], got {:#04x}",
+            payload[0]
         );
     }
 
@@ -702,13 +721,11 @@ mod tests {
         // P99 ≈ exp(mu + sigma * Φ⁻¹(0.99)) = e^(3 + 0.7×2.326) ≈ 102.4.
         assert!(
             (p50 / 20.09).ln().abs() < 0.05,
-            "P50 {} not close to 20.09",
-            p50
+            "P50 {p50} not close to 20.09"
         );
         assert!(
             (p99 / 102.4).ln().abs() < 0.05,
-            "P99 {} not close to 102.4",
-            p99
+            "P99 {p99} not close to 102.4"
         );
     }
 
@@ -782,12 +799,7 @@ mod tests {
             let rel_err = (got / want - 1.0).abs();
             assert!(
                 rel_err <= alpha,
-                "q={} rel_err={:.4} exceeds α={}: reconstituted={}, full={}",
-                q,
-                rel_err,
-                alpha,
-                got,
-                want,
+                "q={q} rel_err={rel_err:.4} exceeds α={alpha}: reconstituted={got}, full={want}",
             );
         }
     }

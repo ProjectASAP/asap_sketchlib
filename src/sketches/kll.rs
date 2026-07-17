@@ -787,20 +787,37 @@ impl<T: NumericalValue> KLL<T> {
 
     // -- Serialization -------------------------------------------------------
 
-    /// Serializes the sketch to a MessagePack byte vector.
+    /// Serializes the sketch into ASAPv1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_KLL, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
     where
         T: Serialize,
     {
-        rmp_serde::to_vec(self)
+        use crate::message_pack_format::magic_ids;
+        let payload = rmp_serde::to_vec(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_KLL, magic_ids::HASHER_UNKNOWN],
+            &payload,
+        ))
     }
 
-    /// Deserializes a KLL sketch from a MessagePack byte slice.
+    /// Deserializes a KLL sketch from a MessagePack byte slice produced by
+    /// [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
     where
         T: for<'de> Deserialize<'de>,
     {
-        rmp_serde::from_slice(bytes)
+        use crate::message_pack_format::magic_ids;
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(rmp_serde::decode::Error::Uncategorized)?;
+        match kind_id {
+            [id, _hasher] if *id == magic_ids::NATIVE_KLL => rmp_serde::from_slice(payload),
+            _ => Err(rmp_serde::decode::Error::Uncategorized(format!(
+                "KLL kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
+                magic_ids::NATIVE_KLL,
+                kind_id
+            ))),
+        }
     }
 
     fn ensure_levels_sorted(&mut self) {
@@ -1296,7 +1313,7 @@ mod tests {
         let median = cdf.query(0.5);
 
         // Median should be 30.5
-        assert!(median > 20.0 && median < 40.2, "Median = {}", median);
+        assert!(median > 20.0 && median < 40.2, "Median = {median}");
 
         // Test error handling for non-numeric input
         let result = kll.update_data_input(&DataInput::String("not a number".to_string()));
@@ -1326,7 +1343,7 @@ mod tests {
         // cdf.print_entries();
         let median = cdf.query(0.5);
         // only 30 and 40 is possible
-        assert!(median == 30.0 || median == 40.0, "Median = {}", median);
+        assert!(median == 30.0 || median == 40.0, "Median = {median}");
     }
 
     #[test]
@@ -1351,7 +1368,7 @@ mod tests {
         // kll.print_compactors();
         let median = cdf.query(0.5);
         // Median should be 30
-        assert!(median == 30.0, "Median = {}", median);
+        assert!(median == 30.0, "Median = {median}");
     }
 
     #[test]

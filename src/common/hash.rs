@@ -65,6 +65,17 @@ pub trait SketchHasher: Clone + Debug {
         cols: usize,
         key: &DataInput,
     ) -> Self::HashType;
+
+    /// Returns a stable byte discriminant for this hasher, embedded as the
+    /// second byte of every native serialized header so readers can verify
+    /// the hash function matches.
+    ///
+    /// The default is [`crate::message_pack_format::magic_ids::HASHER_UNKNOWN`]
+    /// (`0xff`), which disables the mismatch check on both sides. Override
+    /// this for any hasher that should be verified across process boundaries.
+    fn hasher_magic_id() -> u8 {
+        crate::message_pack_format::magic_ids::HASHER_UNKNOWN
+    }
 }
 
 /// Default hasher using twox_hash (XxHash3). This is the built-in implementation
@@ -74,6 +85,10 @@ pub struct DefaultXxHasher;
 
 impl SketchHasher for DefaultXxHasher {
     type HashType = MatrixHashType;
+
+    fn hasher_magic_id() -> u8 {
+        crate::message_pack_format::magic_ids::HASHER_DEFAULT_XX
+    }
 
     #[inline(always)]
     fn hash64_seeded(d: usize, key: &DataInput) -> u64 {

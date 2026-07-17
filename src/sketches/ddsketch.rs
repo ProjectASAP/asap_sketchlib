@@ -165,12 +165,19 @@ impl DDSketch {
         }
     }
 
-    /// Serializes the sketch to a MessagePack byte vector.
+    /// Serializes the sketch to ASAPv1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_DD_SKETCH, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        use crate::message_pack_format::magic_ids;
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_DD_SKETCH, magic_ids::HASHER_UNKNOWN],
+            &payload,
+        ))
     }
 
-    /// Deserializes a DDSketch from a MessagePack byte slice.
+    /// Deserializes a DDSketch from a MessagePack byte slice produced by
+    /// [`Self::serialize_to_bytes`].
     ///
     /// The `count`/`sum`/`min`/`max` scalars are `#[serde(skip)]` (dropped
     /// from the wire, ProjectASAP/sketchlib-go#243), so they default to
@@ -179,9 +186,21 @@ impl DDSketch {
     /// reconstructed from the per-bucket representative values, accurate
     /// to within the sketch's α relative-accuracy bound.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let mut sk: Self = from_slice(bytes)?;
-        sk.recompute_scalars_from_store();
-        Ok(sk)
+        use crate::message_pack_format::magic_ids;
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, _hasher] if *id == magic_ids::NATIVE_DD_SKETCH => {
+                let mut sk: Self = from_slice(payload)?;
+                sk.recompute_scalars_from_store();
+                Ok(sk)
+            }
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "DDSketch kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
+                magic_ids::NATIVE_DD_SKETCH,
+                kind_id
+            ))),
+        }
     }
 
     /// Rebuild the in-memory `count`/`sum`/`min`/`max` aggregates from the
@@ -587,13 +606,7 @@ mod tests {
                 let err = rel_err(got, want);
                 assert!(
                     err <= tol,
-                    "quantile {} (p={:.2}) relerr={:.4} got={} want={} tol={}",
-                    name,
-                    p,
-                    err,
-                    got,
-                    want,
-                    tol
+                    "quantile {name} (p={p:.2}) relerr={err:.4} got={got} want={want} tol={tol}"
                 );
             }
         }
@@ -654,13 +667,7 @@ mod tests {
                 let err = rel_err(got, want);
                 assert!(
                     err <= tol,
-                    "quantile {} (p={:.2}) relerr={:.4} got={} want={} tol={}",
-                    name,
-                    p,
-                    err,
-                    got,
-                    want,
-                    tol
+                    "quantile {name} (p={p:.2}) relerr={err:.4} got={got} want={want} tol={tol}"
                 );
             }
         }
@@ -724,13 +731,7 @@ mod tests {
                 let err = rel_err(got, want);
                 assert!(
                     err <= tol,
-                    "quantile {} (p={:.2}) relerr={:.4} got={} want={} tol={}",
-                    name,
-                    p,
-                    err,
-                    got,
-                    want,
-                    tol
+                    "quantile {name} (p={p:.2}) relerr={err:.4} got={got} want={want} tol={tol}"
                 );
             }
         }
@@ -791,13 +792,7 @@ mod tests {
                 let err = rel_err(got, want);
                 assert!(
                     err <= tol + 1e-9,
-                    "quantile {} (p={:.2}) relerr={:.4} got={} want={} tol={}",
-                    name,
-                    p,
-                    err,
-                    got,
-                    want,
-                    tol
+                    "quantile {name} (p={p:.2}) relerr={err:.4} got={got} want={want} tol={tol}"
                 );
             }
         }

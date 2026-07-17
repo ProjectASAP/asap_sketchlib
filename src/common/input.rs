@@ -483,7 +483,7 @@ impl HydraCounter {
             (HydraCounter::UNIVERSAL(um), HydraQuery::L1Norm) => Ok(um.calc_l1()),
             (HydraCounter::UNIVERSAL(um), HydraQuery::L2Norm) => Ok(um.calc_l2()),
             (HydraCounter::UNIVERSAL(um), HydraQuery::Entropy) => Ok(um.calc_entropy()),
-            (c, q) => Err(format!("{} does not support {}", c, q)),
+            (c, q) => Err(format!("{c} does not support {q}")),
         }
     }
 

@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec, magic_ids};
 use crate::{CANONICAL_HASH_SEED, DataInput, hash64_seeded};
 
 /// HLL estimator variant. Mirrors `asap_sketchlib::proto::sketchlib::HllVariant`.
@@ -475,11 +475,20 @@ fn read_uvarint(buf: &[u8]) -> Option<(u64, usize)> {
 
 impl MessagePackCodec for HllSketch {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        Ok(rmp_serde::to_vec(self)?)
+        let payload = rmp_serde::to_vec(self)?;
+        Ok(magic_ids::encode_wrapper(&[magic_ids::HLL], &payload))
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        Ok(rmp_serde::from_slice(bytes)?)
+        let (kind_id, payload) = magic_ids::decode_wrapper(bytes)
+            .map_err(|msg| MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg)))?;
+        if kind_id != [magic_ids::HLL] {
+            return Err(MsgPackError::BadMagicId {
+                expected: magic_ids::HLL,
+                got: kind_id.first().copied(),
+            });
+        }
+        Ok(rmp_serde::from_slice(payload)?)
     }
 }
 

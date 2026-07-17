@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec, magic_ids};
 
 /// Set aggregator for tracking a set of unique string keys.
 #[derive(Debug, Clone)]
@@ -81,11 +81,23 @@ impl MessagePackCodec for SetAggregator {
         let wrapper = StringSetRef {
             values: &self.values,
         };
-        Ok(rmp_serde::to_vec(&wrapper)?)
+        let payload = rmp_serde::to_vec(&wrapper)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::SET_AGGREGATOR],
+            &payload,
+        ))
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let wrapper: StringSetOwned = rmp_serde::from_slice(bytes)?;
+        let (kind_id, payload) = magic_ids::decode_wrapper(bytes)
+            .map_err(|msg| MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg)))?;
+        if kind_id != [magic_ids::SET_AGGREGATOR] {
+            return Err(MsgPackError::BadMagicId {
+                expected: magic_ids::SET_AGGREGATOR,
+                got: kind_id.first().copied(),
+            });
+        }
+        let wrapper: StringSetOwned = rmp_serde::from_slice(payload)?;
         Ok(Self {
             values: wrapper.values,
         })
@@ -154,8 +166,9 @@ mod tests {
         let mut sa = SetAggregator::new();
         sa.update("a");
         let bytes = sa.to_msgpack().unwrap();
+        let (_, payload) = magic_ids::decode_wrapper(&bytes).expect("ASAPv1 header");
         let decoded: StringSet =
-            rmp_serde::from_slice(&bytes).expect("should decode as StringSet { values: ... }");
+            rmp_serde::from_slice(payload).expect("should decode as StringSet { values: ... }");
         assert!(decoded.values.contains("a"));
     }
 }

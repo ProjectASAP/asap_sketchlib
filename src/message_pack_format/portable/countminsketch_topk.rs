@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec, magic_ids};
 use crate::sketches::countminsketch_topk::CMSHeap;
 use crate::{DataInput, RegularPath, Vector2D};
 
@@ -86,7 +86,7 @@ pub fn heap_to_wire(cms_heap: &SketchlibCMSHeap) -> Vec<WireHeapItem> {
         .map(|hh_item| {
             let key = match &hh_item.key {
                 crate::HeapItem::String(s) => s.clone(),
-                other => format!("{:?}", other),
+                other => format!("{other:?}"),
             };
             WireHeapItem {
                 key,
@@ -297,11 +297,23 @@ impl MessagePackCodec for CountMinSketchWithHeap {
             topk_heap: self.topk_heap_items(),
             heap_size: self.heap_size,
         };
-        Ok(rmp_serde::to_vec(&wire)?)
+        let payload = rmp_serde::to_vec(&wire)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::COUNT_MIN_SKETCH_WITH_HEAP],
+            &payload,
+        ))
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let wire: CountMinSketchWithHeapWire = rmp_serde::from_slice(bytes)?;
+        let (kind_id, payload) = magic_ids::decode_wrapper(bytes)
+            .map_err(|msg| MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg)))?;
+        if kind_id != [magic_ids::COUNT_MIN_SKETCH_WITH_HEAP] {
+            return Err(MsgPackError::BadMagicId {
+                expected: magic_ids::COUNT_MIN_SKETCH_WITH_HEAP,
+                got: kind_id.first().copied(),
+            });
+        }
+        let wire: CountMinSketchWithHeapWire = rmp_serde::from_slice(payload)?;
 
         let mut sorted_topk_heap = wire.topk_heap;
         sorted_topk_heap.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap());

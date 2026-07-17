@@ -1106,14 +1106,33 @@ impl<H: SketchHasher> CountL2HH<H> {
         compute_median_inline_f64(&mut lst[..])
     }
 
-    /// Serializes the CountL2HH sketch into MessagePack bytes.
+    /// Serializes the CountL2HH sketch into ASAPv1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_CMS_HEAP, hasher_id]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        use crate::message_pack_format::magic_ids;
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_CMS_HEAP, H::hasher_magic_id()],
+            &payload,
+        ))
     }
 
-    /// Deserializes a CountL2HH sketch from MessagePack bytes.
+    /// Deserializes a CountL2HH sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+        use crate::message_pack_format::magic_ids;
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, hasher] if *id == magic_ids::NATIVE_CMS_HEAP => {
+                magic_ids::check_hasher_id::<H>(*hasher)?;
+                from_slice(payload)
+            }
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "CountL2HH kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
+                magic_ids::NATIVE_CMS_HEAP,
+                kind_id
+            ))),
+        }
     }
 }
 

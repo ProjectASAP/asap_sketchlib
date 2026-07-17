@@ -146,7 +146,7 @@ impl UnivMon {
     pub fn print_hh_layer(&self) {
         print!("Print HH_Layer: ");
         for i in 0..self.layer_size {
-            println!("layer {}: ", i);
+            println!("layer {i}: ");
             self.hh_layers[i].print_heap();
         }
     }
@@ -265,14 +265,30 @@ impl UnivMon {
         &mut self.hh_layers[layer]
     }
 
-    /// Serializes the UnivMon sketch into MessagePack bytes.
+    /// Serializes the UnivMon sketch into ASAPv1-wrapped MessagePack bytes.
+    /// kind_id: `[NATIVE_UNIVMON, HASHER_UNKNOWN]`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
+        use crate::message_pack_format::magic_ids;
+        let payload = to_vec_named(self)?;
+        Ok(magic_ids::encode_wrapper(
+            &[magic_ids::NATIVE_UNIVMON, magic_ids::HASHER_UNKNOWN],
+            &payload,
+        ))
     }
 
-    /// Deserializes a UnivMon sketch from MessagePack bytes.
+    /// Deserializes a UnivMon sketch from MessagePack bytes produced by [`Self::serialize_to_bytes`].
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
+        use crate::message_pack_format::magic_ids;
+        let (kind_id, payload) =
+            magic_ids::decode_wrapper(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        match kind_id {
+            [id, _hasher] if *id == magic_ids::NATIVE_UNIVMON => from_slice(payload),
+            _ => Err(RmpDecodeError::Uncategorized(format!(
+                "UnivMon kind_id mismatch: expected [0x{:02x}, hasher], got {:?}",
+                magic_ids::NATIVE_UNIVMON,
+                kind_id
+            ))),
+        }
     }
 }
 
@@ -635,7 +651,7 @@ mod tests {
 
         for (prefix, count, repeat) in scenarios {
             for i in 0..repeat {
-                let key = format!("{}_{}", prefix, i);
+                let key = format!("{prefix}_{i}");
                 let val = count as i64;
                 let val_f = val as f64;
 
