@@ -329,6 +329,21 @@ impl<T: NumericalValue> KLLDynamic<T> {
         // items. +1 slack so `work[h + 1]` is always valid while cascading.
         let mut work: Vec<Vec<T>> = vec![Vec::new(); target_num_levels + 1];
 
+        // Unlike `KLL` (fixed-capacity), whose `compact` only ever sorts
+        // level 0 and otherwise maintains sortedness of levels >= 1 as a
+        // standing invariant via merge-promotion, `KLLDynamic::compact`
+        // re-sorts a level's *entire* current contents from scratch on
+        // every call. So a level here is only guaranteed sorted right
+        // after its own last compaction — one that has since received a
+        // promotion from below is a concatenation of separately-sorted
+        // runs, not one sorted run as a whole. Neither operand's levels
+        // (including >= 1) can be assumed pre-sorted, so sort each
+        // operand's own contribution to a level before combining. That's
+        // also cheaper than concatenating first and sorting the combined
+        // (up to 2x larger) run: O(a log a + b log b) beats O((a+b)
+        // log(a+b)), and the two now-genuinely-sorted runs merge in
+        // linear time via the existing `merge_sorted_runs`.
+        //
         // Absolute level `h` lives at array index `num_levels - 1 - h`.
         #[allow(clippy::needless_range_loop)] // `h` also indexes self.levels/self.items
         for h in 0..self.num_levels {
@@ -336,6 +351,7 @@ impl<T: NumericalValue> KLLDynamic<T> {
             let levels = self.levels.as_slice();
             let (s, e) = (levels[idx], levels[idx + 1]);
             work[h].extend_from_slice(&self.items.as_slice()[s..e]);
+            work[h].sort_unstable_by(T::total_cmp);
         }
         let mut merge_buf: Vec<T> = Vec::new();
         #[allow(clippy::needless_range_loop)] // `h` also indexes other.levels/other.items
@@ -345,12 +361,8 @@ impl<T: NumericalValue> KLLDynamic<T> {
             let (s, e) = (levels[idx], levels[idx + 1]);
             let self_len = work[h].len();
             work[h].extend_from_slice(&other.items.as_slice()[s..e]);
-            // Levels >= 1 are individually sorted in both operands
-            // already; normalize the concatenation into one sorted run up
-            // front, same as the invariant a settled sketch maintains.
-            if h > 0 {
-                merge_sorted_runs(work[h].as_mut_slice(), self_len, &mut merge_buf);
-            }
+            work[h][self_len..].sort_unstable_by(T::total_cmp);
+            merge_sorted_runs(work[h].as_mut_slice(), self_len, &mut merge_buf);
         }
 
         // Grow self's level bookkeeping to cover the merged height.
@@ -360,11 +372,11 @@ impl<T: NumericalValue> KLLDynamic<T> {
         // Cascade-compact exactly like `compress_while_needed`/`compact`,
         // except a level may need more than one halving pass here (a merge
         // can leave a level far over capacity, not just one element over).
+        // Every level was sorted up front (above), and each promotion
+        // below keeps its target level sorted via `merge_sorted_runs`, so
+        // no level needs re-sorting once the cascade begins.
         let mut h = 0;
         while h < self.num_levels {
-            if h == 0 {
-                work[0].sort_unstable_by(T::total_cmp);
-            }
             while work[h].len() > self.capacity_for_level(h) {
                 if h + 1 == self.num_levels {
                     self.num_levels += 1;
@@ -913,6 +925,54 @@ mod tests {
             union.len(),
             0xA11C_E0B0,
         );
+    }
+
+    // Deterministic regression for a PR #71 review comment: `merge`
+    // assumed level h (h >= 1) is always a single sorted run in both
+    // operands. That holds for `KLL` (fixed-capacity), whose `compact`
+    // maintains it as a standing invariant via merge-promotion — but
+    // `KLLDynamic::compact` re-sorts a level's *entire* contents from
+    // scratch on every call instead, so a level that received a
+    // promotion since its last compaction can be a concatenation of
+    // separately-sorted chunks, not one sorted run. `randomly_halve_up`'s
+    // alternating-position subsampling is only value-order-correct on
+    // truly sorted input, and doesn't sort its input itself — so feeding
+    // it an unsorted level silently produces an unsorted (and thus not
+    // rank-error-bounded) survivor set.
+    //
+    // Hand-build `other`'s level 1 in exactly that legitimate-but-unsorted
+    // shape (two independently-ascending chunks concatenated out of
+    // order), small enough to stay well under capacity so level 1 is
+    // never itself compacted during the merge — the output then reflects
+    // the construction phase's ordering assumption directly, with no
+    // randomized (`Coin`) compaction able to mask the bug, keeping this
+    // test deterministic.
+    #[test]
+    fn merge_handles_operand_level_that_is_not_a_single_sorted_run() {
+        let mut other = KLLDynamic::<f64>::init(50, 4);
+        other.items = Vector1D::from_vec(vec![30.0, 40.0, 10.0, 20.0, 5.0]);
+        other.levels = Vector1D::from_vec(vec![0, 4, 5]);
+        other.num_levels = 2;
+        other.rebuild_capacity_cache();
+        assert!(
+            other.capacity_for_level(1) >= 4,
+            "test setup needs level 1 to stay under capacity, uncompacted"
+        );
+
+        let mut dst = KLLDynamic::<f64>::init(50, 4);
+        dst.merge(&other);
+
+        let levels = dst.levels.as_slice();
+        let items = dst.items.as_slice();
+        for h in 1..dst.num_levels {
+            let level_idx = dst.num_levels - 1 - h;
+            let (s, e) = (levels[level_idx], levels[level_idx + 1]);
+            assert!(
+                items[s..e].windows(2).all(|w| w[0] <= w[1]),
+                "level {h} is not a single ascending sorted run after merge: {:?}",
+                &items[s..e]
+            );
+        }
     }
 
     #[test]
