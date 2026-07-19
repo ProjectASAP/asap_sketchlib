@@ -11,13 +11,17 @@
 //! - <https://www.amazon.science/publications/insert-optimized-implementation-of-streaming-data-sketches>
 
 use rand::{Rng, rng};
-use rmp_serde::decode::Error as RmpDecodeError;
-use rmp_serde::encode::Error as RmpEncodeError;
 use serde::{Deserialize, Serialize};
 
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};
+
+mod wire;
+pub(crate) use wire::{
+    KLL_KIND_DYNAMIC, KllCoinWire, KllPayload, KllWireItem, kll_metadata, split_and_validate_meta,
+    validate_kll_payload,
+};
 
 const MAX_LEVELS: usize = 61;
 
@@ -78,6 +82,27 @@ impl Coin {
         self.bit_cache >>= 1;
         self.remaining_bits -= 1;
         bit
+    }
+
+    /// The coin's raw state in `sketchlib-go::CoinState` shape:
+    /// `(state, bit_cache, remaining_bits)`. Used by the ASAPv1 wire payload
+    /// (both KLL variants) to carry the compaction RNG so a decoded sketch can
+    /// continue compacting deterministically.
+    #[inline]
+    pub(crate) fn to_wire(&self) -> (u64, u64, u32) {
+        (self.state, self.bit_cache, self.remaining_bits as u32)
+    }
+
+    /// Rebuilds a coin from its raw wire state. `remaining_bits` is validated by
+    /// the caller (it must be `<= 64`) so decode fails closed on crafted bytes
+    /// rather than silently truncating into the `u8` field.
+    #[inline]
+    pub(crate) fn from_wire(state: u64, bit_cache: u64, remaining_bits: u8) -> Self {
+        Self {
+            state,
+            bit_cache,
+            remaining_bits,
+        }
     }
 }
 
@@ -786,22 +811,13 @@ impl<T: NumericalValue> KLL<T> {
     }
 
     // -- Serialization -------------------------------------------------------
-
-    /// Serializes the sketch to a MessagePack byte vector.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-    where
-        T: Serialize,
-    {
-        rmp_serde::to_vec(self)
-    }
-
-    /// Deserializes a KLL sketch from a MessagePack byte slice.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        rmp_serde::from_slice(bytes)
-    }
+    //
+    // The ASAPv1 wire methods (`serialize_to_bytes` / `deserialize_from_bytes`)
+    // live in the `wire` submodule, which authors the envelope + metadata +
+    // payload. The `serde::{Serialize, Deserialize}` impls below stay: they are
+    // the *nested* codec used when a `KLL` is embedded in a larger serde value
+    // (e.g. `HydraCounter::KLL`), which is a different concern from the
+    // standalone ASAPv1 envelope.
 
     fn ensure_levels_sorted(&mut self) {
         if self.num_levels <= 1 {

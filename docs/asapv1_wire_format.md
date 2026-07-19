@@ -12,7 +12,7 @@ If the doc feels long, these sections carry the key points:
 
 - [**Section 1, Envelope**](#section-1-envelope): the Layout table.
 - [**Section 2, Metadata**](#section-2-metadata): the fields table, the hash-spec table, the structural-params table.
-- [**Section 3, Payload**](#section-3-payload): the HLL payload and the Count-Min payload.
+- [**Section 3, Payload**](#section-3-payload): the HLL payload, the Count-Min payload, and the KLL payload.
 
 ## Terms
 
@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implementing (Rust).** HLL and Count-Min serialize through the shared `message_pack_format::envelope` module per this spec.
+- **Implementing (Rust).** HLL, Count-Min, and KLL (compact + dynamic) serialize through the shared `message_pack_format::envelope` module per this spec.
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -73,6 +73,7 @@ erDiagram
     PAYLOAD ||--o| HLL_PAYLOAD : kind-0x0101-0x0102
     PAYLOAD ||--o| HLL_HIP_PAYLOAD : kind-0x0103
     PAYLOAD ||--o| COUNTMIN_PAYLOAD : kind-0x0200
+    PAYLOAD ||--o| KLL_PAYLOAD : kind-0x0600-0x0601
     ENVELOPE {
         bytes magic
         u8 version
@@ -88,8 +89,8 @@ erDiagram
         string seed_derivation
         string input_encoding
         array seed_list
-        u32 seed_index "hash-spec group, per-sketch"
-        mixed structural_params "structural group, per-sketch: precision(HLL) or rows+cols+counter_type+mode(CMS)"
+        u32 seed_index "hash-spec group, per-sketch; absent for non-hashing sketches (KLL)"
+        mixed structural_params "structural group, per-sketch: precision(HLL); rows+cols+counter_type+mode(CMS); k+m+item_type(KLL)"
     }
     PAYLOAD {
         msgpack_array raw_state
@@ -105,6 +106,11 @@ erDiagram
     }
     COUNTMIN_PAYLOAD {
         array counts
+    }
+    KLL_PAYLOAD {
+        array levels
+        array items
+        array coin
     }
 ```
 
@@ -166,7 +172,7 @@ Today `kind_id` is `[family, variant]` and names the sketch's **algorithm** (its
 ### kind_id registry (single source of truth, mirrored verbatim in `sketchlib-go`)
 
 The **family** bytes match `sketchlib-go`'s `wire/asapmsgpack/magic_ids.go` verbatim; `0x0a`+ are new allocations for sketches in [`apis.md`](./apis.md) that Go has not assigned yet.
-Only the HLL variants and Count-Min have designed payloads today; every other row reserves its family byte with variant `0x00` and payload **TBD**.
+The HLL variants, Count-Min, and both KLL variants have designed payloads today; every other row reserves its family byte with variant `0x00` and payload **TBD**.
 Variant sub-ids are not invented ahead of a payload design; a family that later needs several algorithms allocates its variants when it is designed (as HLL did).
 This registry is the master list of algorithms still to design payloads for.
 
@@ -180,8 +186,8 @@ This registry is the master list of algorithms still to design payloads for.
 | `0x03 0x00` | Count-Min-with-heap (CMSHeap) | - | TBD | assigned in Go / payload not designed |
 | `0x04 0x00` | Count Sketch | - | TBD | assigned in Go / payload not designed |
 | `0x05 0x00` | DDSketch | - | TBD | assigned in Go / payload not designed |
-| `0x06 0x00` | KLL | - | TBD | assigned in Go / payload not designed |
-| `0x06 0x01` | KLL dynamic | - | TBD | assigned in Go / payload not designed |
+| `0x06 0x00` | KLL | Compact | Section 3.3 | implemented |
+| `0x06 0x01` | KLL dynamic | Dynamic | Section 3.3 | implemented |
 | `0x07 0x00` | Hydra-KLL | - | TBD | assigned in Go / payload not designed |
 | `0x08 0x00` | SetAggregator | - | TBD | assigned in Go / payload not designed |
 | `0x09 0x00` | DeltaResult | - | TBD | assigned in Go / payload not designed |
@@ -247,9 +253,11 @@ The metadata map is **two groups** of fields, written on the wire in this order:
 | Group | Role | Fields |
 | ----- | ---- | ------ |
 | **Hash spec** | how keys were hashed (check mergeability + re-hash a query key) | `metadata_version`, `hash_profile_id`, `hash_algorithm`, `seed_derivation`, `input_encoding`, `seed_list`, + the seed index(es) it uses |
-| **Structural params** | parameters that shape the payload | `precision` (HLL); `rows`, `cols`, `counter_type`, `mode` (Count-Min) |
+| **Structural params** | parameters that shape the payload | `precision` (HLL); `rows`, `cols`, `counter_type`, `mode` (Count-Min); `k`, `m`, `item_type` (KLL) |
 
 The two tables below are the field-by-field detail of each group.
+
+> **Non-hashing sketches omit the hash-spec group entirely** (Q-KLL). The hash spec answers "how were keys hashed"; a sketch that does not hash its inputs has no truthful answer. KLL is comparison-based — it orders raw numeric values with `total_cmp` and never invokes a hasher — so its metadata carries **only** structural params (`metadata_version`, `k`, `m`, `item_type`). This keeps the bytes honest (no meaningless `seed_list`) and is the reason KLL's metadata schema is not built from a `HashProfile` the way HLL's / Count-Min's are.
 
 **Hash spec**
 
@@ -275,6 +283,9 @@ The two tables below are the field-by-field detail of each group.
 | `cols` | u32 | Count-Min | matrix width (number of columns) |
 | `counter_type` | string | Count-Min | `"i64"` or `"f64"`; element type of `counts` |
 | `mode` | string | Count-Min | `"fast"` or `"regular"`; key-to-column derivation |
+| `k` | u32 | KLL | compactor capacity (accuracy parameter) |
+| `m` | u32 | KLL | minimum level capacity |
+| `item_type` | string | KLL | `"f64"` or `"i64"`; element type of `items` |
 
 Count-Min's matrix dimensions are **configuration** (they shape the payload, like HLL's `precision`), so per the config-to-metadata rule they live here.
 Count-Min's canonical structural-param order is `... matrix_seed_index, rows, cols, counter_type, mode`; this is the wire contract and Go must mirror it verbatim.
@@ -361,7 +372,23 @@ Wire counter types are `i64` and `f64` only (`i32` widens to `i64`; `i128` and e
 A counter type other than i64/f64, or non-`Vector2D` storage, must be converted first; see Section 5, "Converting an exotic in-memory sketch".
 Both modes, `FastPath` and `RegularPath`, serialize directly (you'd only "convert" a mode to *change* it, which needs re-inserting the data).
 
-### 3.3 onward: payloads not yet designed
+### 3.3: KLL payload (`0x06 0x00` compact / `0x06 0x01` dynamic)
+
+Both KLL variants (the compact fixed-buffer `KLL` and the growable `KLLDynamic`) share **one payload shape**; they differ only by `kind_id` (like HLL's Classic vs Ertl-MLE), because their in-memory buffers differ but the serialized quantile state is the same. The accuracy params `k` / `m` and the `item_type` live in the metadata (§2), so the payload is just the retained state:
+
+| Pos | Field | Type | Notes |
+| ----- | ------- | ------ | ------- |
+| 0 | `levels` | array | level boundary indices, length `num_levels + 1`; `levels[0] == 0`, `levels[last] == len(items)` |
+| 1 | `items` | array | retained samples in level order; element type = `item_type` |
+| 2 | `coin` | array | compaction RNG state `[state:u64, bit_cache:u64, remaining_bits:u32]` |
+
+`num_levels` is `levels.len() - 1` (derived, so not stored). The `coin` is the randomized-compaction RNG; it is carried so a decoded sketch can keep compacting deterministically (a query-only consumer may ignore it). It is a nested 3-element array mirroring `sketchlib-go`'s `CoinState`.
+
+**Item order (cross-language contract).** `levels` / `items` use the **top-most-level-first** layout, byte-for-byte matching `sketchlib-go`'s `KLLState`: index `i` in `levels` maps to compactor level `num_levels - 1 - i`, and level 0's run is in **input order**. The compact `KLL` grows its buffer leftward and stores level 0 reverse-input, so its encoder reverses level 0 back to input order (and its decoder reverses it in); `KLLDynamic` already stores this layout natively. Within a level, order past the first compaction is not guaranteed byte-identical across the two Rust variants (or across languages), but the retained set and quantiles agree — see the caveat on `KLL::wire_items`.
+
+> Note: this is a distinct wire format from the proto `KLLState` (`proto/kll/kll.proto`), which is the delta-transmission / cross-language *protobuf* path and carries extra machinery (the value-offset fixed-point item encoding). The two share the top-most-first item layout but are separate formats; the ASAPv1 KLL payload above is self-contained and carries no fixed-point form.
+
+### 3.4 onward: payloads not yet designed
 
 The remaining `kind_id`s reserve a family byte with payload TBD (Section 1 registry has their "assigned in Go" status). Likely shape when designed:
 
@@ -370,8 +397,7 @@ The remaining `kind_id`s reserve a family byte with payload TBD (Section 1 regis
 | `0x03 0x00` | Count-Min-with-heap (CMSHeap) | similar to current CMS |
 | `0x04 0x00` | Count Sketch | similar to current CMS |
 | `0x05 0x00` | DDSketch | straightforward bucket |
-| `0x06 0x00` | KLL | next on the list; no CDF serialization |
-| `0x07 0x00` | Hydra-KLL | same challenge as KLL |
+| `0x07 0x00` | Hydra-KLL | wraps KLL payloads (§3.3); nest one per counter |
 | `0x08 0x00` | SetAggregator | aggregation envelope, distinct from a stand-alone sketch (Section 1 mapping notes) |
 | `0x09 0x00` | DeltaResult | delta-result envelope, distinct from a stand-alone sketch (Section 1 mapping notes) |
 | `0x0a 0x00` | Count-Sketch-with-heap (CSHeap) | similar to current CMS |
@@ -483,6 +509,7 @@ Keep it through the transition, retire `portable` once goldens are in place.
 - **Q-SEEDS**: `seed_list` is **inlined** in v1 so the bytes self-describe the hash. Resolving seeds from `hash_profile_id` alone is a v2 space optimization. Each sketch still carries only the seed *index* it uses.
 - **Q-PROFILE**: the hash-spec metadata is **derived from the hasher's `HashProfile`** (`hll_metadata::<H>` / `cms_metadata::<H>`) and never hardcoded, so it is always truthful to the hasher. Custom hash profiles are **supported and self-describing**. Merge compatibility is hash-spec equality, so a custom-profile sketch is not mergeable with a standard one.
 - **Q-CMS**: Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode live in the metadata, so the id stays single.
+- **Q-KLL**: KLL metadata carries **no hash-spec group** — KLL is comparison-based and never hashes, so those fields have no truthful value. Its metadata is structural-only (`metadata_version`, `k`, `m`, `item_type`) and is *not* `HashProfile`-derived. The two KLL variants (compact `0x06 0x00`, dynamic `0x06 0x01`) share one payload `[levels, items, coin]` and differ only by `kind_id`. `item_type` (`"f64"`/`"i64"`) is a metadata param, not a separate `kind_id` (mirrors Q-CMS's `counter_type`). Retained samples use the top-most-level-first layout that matches `sketchlib-go`'s `KLLState`.
 - **Q-CMS-DIMS**: Count-Min `rows`/`cols` are **metadata** and the payload omits them. They are configuration that shapes the payload (like HLL's `precision`), so per the config-to-metadata rule they belong in the descriptor. The payload is then just `[counts]`. Canonical structural-param order: `... matrix_seed_index, rows, cols, counter_type, mode`.
 - **Q-VER**: no payload version field. A new incompatible encoding gets a **new `kind_id`**; retired ids are reserved forever and never recycled.
 - **Encoding**: metadata + payload are both msgpack; payload is a positional array. Byte-level rules in Section 4.
