@@ -37,11 +37,15 @@ use crate::structures::fixed_structure::{
     HllBucketListP12, HllBucketListP14, HllBucketListP16, HllRegisterStorage,
 };
 use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, SketchHasher, hash64_seeded};
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
+
+mod wire;
+pub use wire::HllWireVariant;
+pub(crate) use wire::{
+    HLL_KIND_CLASSIC, HLL_KIND_ERTL_MLE, HLL_KIND_HIP, HllMetadata, HllPayloadHip, HllPayloadPlain,
+    standard_hll_metadata,
+};
 
 /// Generic HyperLogLog sketch parameterized by estimation variant, register storage, and hasher.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -114,16 +118,6 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
             _marker: PhantomData,
             _hasher: PhantomData,
         }
-    }
-
-    /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-
-    /// Deserializes a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
     }
 
     /// Borrow the raw register byte slice (one byte per register).
@@ -368,16 +362,6 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
     pub fn estimate(&self) -> usize {
         self.est as usize
     }
-
-    /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-
-    /// Deserializes a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
-    }
 }
 
 // DataInput adapters for HIP (hashing + batch helpers).
@@ -450,7 +434,6 @@ mod tests {
     const TARGETS: [usize; 7] = [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000];
     const ERROR_TOLERANCE: f64 = 0.02;
     const P12_ERROR_TOLERANCE: f64 = 0.03;
-    const SERDE_SAMPLE: usize = 100_000;
 
     #[test]
     fn hll_child_insert_emits_on_improvement() {
@@ -474,13 +457,6 @@ mod tests {
 
     trait HllMerge: HllEstimator + Clone {
         fn merge_into(&mut self, other: &Self);
-    }
-
-    trait HllSerializable: HllEstimator {
-        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>;
-        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
-        where
-            Self: Sized;
     }
 
     impl<Registers: HllRegisterStorage, H: SketchHasher> HllEstimator
@@ -511,18 +487,6 @@ mod tests {
         }
     }
 
-    impl<Registers: HllRegisterStorage, H: SketchHasher> HllSerializable
-        for HyperLogLogImpl<Classic, Registers, H>
-    {
-        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-            HyperLogLogImpl::<Classic, Registers, H>::serialize_to_bytes(self)
-        }
-
-        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-            HyperLogLogImpl::<Classic, Registers, H>::deserialize_from_bytes(bytes)
-        }
-    }
-
     macro_rules! impl_ertl_mle_test_traits {
         ($storage:ty) => {
             impl<H: SketchHasher> HllEstimator for HyperLogLogImpl<ErtlMLE, $storage, H> {
@@ -548,16 +512,6 @@ mod tests {
                     self.merge(other);
                 }
             }
-
-            impl<H: SketchHasher> HllSerializable for HyperLogLogImpl<ErtlMLE, $storage, H> {
-                fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-                    HyperLogLogImpl::<ErtlMLE, $storage, H>::serialize_to_bytes(self)
-                }
-
-                fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-                    HyperLogLogImpl::<ErtlMLE, $storage, H>::deserialize_from_bytes(bytes)
-                }
-            }
         };
     }
 
@@ -579,16 +533,6 @@ mod tests {
         }
         fn index(&self, i: usize) -> u8 {
             self.registers.as_slice()[i]
-        }
-    }
-
-    impl<Registers: HllRegisterStorage> HllSerializable for HyperLogLogHIPImpl<Registers> {
-        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-            HyperLogLogHIPImpl::<Registers>::serialize_to_bytes(self)
-        }
-
-        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-            HyperLogLogHIPImpl::<Registers>::deserialize_from_bytes(bytes)
         }
     }
 
@@ -643,36 +587,6 @@ mod tests {
     #[test]
     fn hll_ertl_p12_merge_within_two_percent() {
         assert_merge_accuracy_within::<HyperLogLogP12<ErtlMLE>>("HllErtlP12", P12_ERROR_TOLERANCE);
-    }
-
-    #[test]
-    fn hyperloglog_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLog<Classic>>("HyperLogLog");
-    }
-
-    #[test]
-    fn hll_ertl_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLog<ErtlMLE>>("HllErtl");
-    }
-
-    #[test]
-    fn hllds_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLogHIP>("HllDs");
-    }
-
-    #[test]
-    fn hyperloglog_p12_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLogP12<Classic>>("HyperLogLogP12");
-    }
-
-    #[test]
-    fn hll_ertl_p12_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLogP12<ErtlMLE>>("HllErtlP12");
-    }
-
-    #[test]
-    fn hllds_p12_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLogHIPP12>("HllDsP12");
     }
 
     // insert 10 values and check corresponding counter is updated
@@ -848,43 +762,5 @@ mod tests {
                 "{name} merge error {error:.4} exceeded {tolerance} (truth {truth}, estimate {estimate})"
             );
         }
-    }
-
-    fn assert_serialization_round_trip<S>(name: &str)
-    where
-        S: HllSerializable,
-    {
-        let mut sketch = S::default();
-        for value in 0..SERDE_SAMPLE {
-            let input = DataInput::U64(value as u64);
-            sketch.push(&input);
-        }
-
-        let encoded = sketch
-            .serialize_to_bytes()
-            .unwrap_or_else(|err| panic!("{name} serialize_to_bytes failed: {err}"));
-        assert!(
-            !encoded.is_empty(),
-            "{name} serialization output should not be empty"
-        );
-
-        let decoded = S::deserialize_from_bytes(&encoded)
-            .unwrap_or_else(|err| panic!("{name} deserialize_from_bytes failed: {err}"));
-
-        let reencoded = decoded
-            .serialize_to_bytes()
-            .unwrap_or_else(|err| panic!("{name} re-serialize failed: {err}"));
-
-        assert_eq!(
-            encoded, reencoded,
-            "{name} serialized bytes differed after round trip"
-        );
-
-        let original_est = sketch.estimate();
-        let decoded_est = decoded.estimate();
-        assert!(
-            (original_est - decoded_est).abs() <= ERROR_TOLERANCE * original_est.max(1.0),
-            "{name} estimate mismatch after round trip: before {original_est}, after {decoded_est}"
-        );
     }
 }

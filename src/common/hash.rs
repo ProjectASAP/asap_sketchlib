@@ -67,10 +67,49 @@ pub trait SketchHasher: Clone + Debug {
     ) -> Self::HashType;
 }
 
+/// Describes, in ASAPv1 wire terms, *how* a [`SketchHasher`] hashes — the hash
+/// spec that a serialized sketch carries in its metadata (see
+/// `docs/asapv1_wire_format.md` §2). Serialization is bounded on this trait so
+/// the metadata is **derived from the hasher** rather than hardcoded: an
+/// unprofiled hasher simply cannot be serialized (a compile-time guarantee that
+/// fails closed), and a custom hasher that declares a profile serializes
+/// truthfully — because `seed_list()` is inlined, its bytes are fully
+/// self-describing on the wire.
+pub trait HashProfile {
+    /// Stable global id, e.g. `"projectasap.xxh3.seedlist.v1"` (authoritative).
+    const PROFILE_ID: &'static str;
+    /// Hash algorithm identifier, e.g. `"xxh3_64_128"`.
+    const ALGORITHM: &'static str;
+    /// Seed-derivation scheme, e.g. `"seed_list_index_wrap"`.
+    const SEED_DERIVATION: &'static str;
+    /// Input-encoding identifier, e.g. `"projectasap.input.v1"`.
+    const INPUT_ENCODING: &'static str;
+    /// The full seed list, inlined into the metadata so the bytes self-describe.
+    fn seed_list() -> Vec<u64>;
+    /// Seed-list index a single-hash sketch (HLL) hashes with.
+    const CANONICAL_SEED_INDEX: u32;
+    /// Seed-list index a matrix-backed sketch (Count-Min) hashes rows with.
+    const MATRIX_SEED_INDEX: u32;
+}
+
 /// Default hasher using twox_hash (XxHash3). This is the built-in implementation
 /// used when no custom hasher is specified.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DefaultXxHasher;
+
+/// The standard ProjectASAP hash profile (`docs/asapv1_wire_format.md` §2).
+/// This is the single source of truth for the profile's wire values.
+impl HashProfile for DefaultXxHasher {
+    const PROFILE_ID: &'static str = "projectasap.xxh3.seedlist.v1";
+    const ALGORITHM: &'static str = "xxh3_64_128";
+    const SEED_DERIVATION: &'static str = "seed_list_index_wrap";
+    const INPUT_ENCODING: &'static str = "projectasap.input.v1";
+    fn seed_list() -> Vec<u64> {
+        SEEDLIST.to_vec()
+    }
+    const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+    const MATRIX_SEED_INDEX: u32 = 0;
+}
 
 impl SketchHasher for DefaultXxHasher {
     type HashType = MatrixHashType;

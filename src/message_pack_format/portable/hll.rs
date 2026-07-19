@@ -11,6 +11,44 @@ use serde::{Deserialize, Serialize};
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::{CANONICAL_HASH_SEED, DataInput, hash64_seeded};
 
+// ---------------------------------------------------------------------------
+// DEPRECATED — temporary compatibility shim, slated for removal.
+//
+// A few call sites still depend on this portable `HllSketch`. Its ASAPv1 codec
+// now reuses the shared `envelope` framing plus the HLL metadata/payload types
+// in `crate::sketches::hll`, so it stays byte-identical with the native
+// `HyperLogLogImpl` / `HyperLogLogHIPImpl` serialization. Do NOT add new callers.
+//
+// Prefer instead the native path:
+// `sketches::hll::HyperLogLogImpl::serialize_to_bytes` /
+// `HyperLogLogHIPImpl::serialize_to_bytes` (+ `deserialize_from_bytes`).
+// ---------------------------------------------------------------------------
+
+use crate::message_pack_format::envelope;
+use crate::sketches::hll::{
+    HLL_KIND_CLASSIC, HLL_KIND_ERTL_MLE, HLL_KIND_HIP, HllMetadata, HllPayloadHip, HllPayloadPlain,
+    standard_hll_metadata,
+};
+
+/// Retained only for `test_msgpack_round_trip`'s magic-prefix assertion.
+#[cfg(test)]
+const HLL_WRAPPER_MAGIC: &[u8; 6] = b"ASAPv1";
+
+/// Map a portable [`HllVariant`] to its ASAPv1 wire `kind_id`. `Unspecified` is
+/// a placeholder with no wire form.
+fn wire_kind_id(variant: HllVariant) -> Result<&'static [u8], MsgPackError> {
+    match variant {
+        HllVariant::Regular => Ok(HLL_KIND_CLASSIC),
+        HllVariant::Datafusion => Ok(HLL_KIND_ERTL_MLE),
+        HllVariant::Hip => Ok(HLL_KIND_HIP),
+        HllVariant::Unspecified => Err(MsgPackError::Decode(
+            rmp_serde::decode::Error::Uncategorized(
+                "ASAPv1 HLL: the Unspecified variant is not serializable".to_string(),
+            ),
+        )),
+    }
+}
+
 /// HLL estimator variant. Mirrors `asap_sketchlib::proto::sketchlib::HllVariant`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HllVariant {
@@ -475,11 +513,87 @@ fn read_uvarint(buf: &[u8]) -> Option<(u64, usize)> {
 
 impl MessagePackCodec for HllSketch {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        Ok(rmp_serde::to_vec(self)?)
+        let kind_id = wire_kind_id(self.variant)?;
+        let metadata = rmp_serde::to_vec_named(&standard_hll_metadata(self.precision))?;
+        let payload = if self.variant == HllVariant::Hip {
+            rmp_serde::to_vec(&HllPayloadHip {
+                registers: self.registers.clone(),
+                hip_kxq0: self.hip_kxq0,
+                hip_kxq1: self.hip_kxq1,
+                hip_est: self.hip_est,
+            })?
+        } else {
+            rmp_serde::to_vec(&HllPayloadPlain {
+                registers: self.registers.clone(),
+            })?
+        };
+        Ok(envelope::encode(kind_id, &metadata, &payload))
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        Ok(rmp_serde::from_slice(bytes)?)
+        let (kind_id, metadata, payload) = envelope::split(bytes)
+            .map_err(|msg| MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(msg)))?;
+
+        // Validate the hash spec is the standard profile (precision is read from
+        // the metadata, so compare against a standard block built with it).
+        let meta: HllMetadata = rmp_serde::from_slice(metadata)?;
+        if meta != standard_hll_metadata(meta.precision) {
+            return Err(MsgPackError::Decode(
+                rmp_serde::decode::Error::Uncategorized(
+                    "ASAPv1 HLL envelope: hash metadata mismatch".to_string(),
+                ),
+            ));
+        }
+
+        let variant = if kind_id == HLL_KIND_CLASSIC {
+            HllVariant::Regular
+        } else if kind_id == HLL_KIND_ERTL_MLE {
+            HllVariant::Datafusion
+        } else if kind_id == HLL_KIND_HIP {
+            HllVariant::Hip
+        } else {
+            return Err(MsgPackError::Decode(
+                rmp_serde::decode::Error::Uncategorized(format!(
+                    "ASAPv1 HLL envelope: unsupported kind_id {kind_id:?}"
+                )),
+            ));
+        };
+
+        let (registers, hip_kxq0, hip_kxq1, hip_est) = if variant == HllVariant::Hip {
+            let p: HllPayloadHip = rmp_serde::from_slice(payload)?;
+            (p.registers, p.hip_kxq0, p.hip_kxq1, p.hip_est)
+        } else {
+            let p: HllPayloadPlain = rmp_serde::from_slice(payload)?;
+            (p.registers, 0.0, 0.0, 0.0)
+        };
+
+        // Fail closed if the register bin does not match `2^precision`
+        // (doc §2 validation rule 3). `checked_shl` avoids a shift-overflow
+        // panic on a crafted out-of-range `precision`.
+        let expected = 1usize.checked_shl(meta.precision).ok_or_else(|| {
+            MsgPackError::Decode(rmp_serde::decode::Error::Uncategorized(format!(
+                "ASAPv1 HLL envelope: precision {} out of range",
+                meta.precision
+            )))
+        })?;
+        if registers.len() != expected {
+            return Err(MsgPackError::Decode(
+                rmp_serde::decode::Error::Uncategorized(format!(
+                    "ASAPv1 HLL envelope: {} registers, expected 2^{} = {expected}",
+                    registers.len(),
+                    meta.precision
+                )),
+            ));
+        }
+
+        Ok(HllSketch::from_raw(
+            variant,
+            meta.precision,
+            registers,
+            hip_kxq0,
+            hip_kxq1,
+            hip_est,
+        ))
     }
 }
 
@@ -655,6 +769,7 @@ mod tests {
             3.0,
         );
         let bytes = original.to_msgpack().unwrap();
+        assert!(bytes.starts_with(HLL_WRAPPER_MAGIC));
         let decoded = HllSketch::from_msgpack(&bytes).unwrap();
         assert_eq!(decoded.registers, original.registers);
         assert_eq!(decoded.precision, original.precision);

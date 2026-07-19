@@ -8,9 +8,6 @@
 //!   Sketch and its Applications," J. Algorithms 55(1), 2005.
 //!   <https://www.cs.rutgers.edu/~muthu/cm-jal.pdf>
 
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -20,6 +17,9 @@ use crate::{
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
     QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded,
 };
+
+mod wire;
+pub(crate) use wire::{CmsWireCounter, CmsWireMode};
 
 const DEFAULT_ROW_NUM: usize = 3;
 const DEFAULT_COL_NUM: usize = 4096;
@@ -257,21 +257,6 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
                 self.counts.increment_by_row(i, j, value);
             }
         }
-    }
-}
-
-// Serialization helpers for CountMin.
-impl<S: MatrixStorage + Serialize, Mode, H: SketchHasher> CountMin<S, Mode, H> {
-    /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-}
-
-impl<S: MatrixStorage + for<'de> Deserialize<'de>, Mode, H: SketchHasher> CountMin<S, Mode, H> {
-    /// Deserializes a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
     }
 }
 
@@ -936,27 +921,6 @@ mod tests {
         assert!(
             within_count as f64 > correct_lower_bound,
             "in-bound items number {within_count} not greater than expected amount {correct_lower_bound}"
-        );
-    }
-
-    #[test]
-    fn count_min_round_trip_serialization() {
-        let mut sketch = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 8);
-        sketch.insert(&DataInput::U64(42));
-        sketch.insert(&DataInput::U64(7));
-
-        let encoded = sketch.serialize_to_bytes().expect("serialize CountMin");
-        assert!(!encoded.is_empty());
-        let data_copied = encoded.clone();
-
-        let decoded = CountMin::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&data_copied)
-            .expect("deserialize CountMin");
-
-        assert_eq!(sketch.rows(), decoded.rows());
-        assert_eq!(sketch.cols(), decoded.cols());
-        assert_eq!(
-            sketch.as_storage().as_slice(),
-            decoded.as_storage().as_slice()
         );
     }
 }
