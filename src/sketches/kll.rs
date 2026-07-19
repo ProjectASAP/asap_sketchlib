@@ -126,6 +126,25 @@ fn compute_max_capacity(k: usize, m: usize) -> usize {
     total
 }
 
+/// Checked total weighted item count for compactor-level sizes given
+/// **bottom-first** (`sizes[h]` is the item count at compactor level `h`, whose
+/// weight is `2^h`). Returns `None` on `usize` overflow.
+///
+/// A live sketch's weighted count equals the number of ingested items, so it
+/// always fits. Decoders use this to reject a crafted-but-structurally-valid
+/// level layout (e.g. many items parked at a high level) that would otherwise
+/// overflow `count()` / `rank()` / `cdf()` at query time — a fail-closed guard
+/// so decode never yields a sketch that panics on a later query.
+pub(crate) fn checked_weighted_count(sizes_bottom_first: &[usize]) -> Option<usize> {
+    let mut total = 0usize;
+    for (h, &size) in sizes_bottom_first.iter().enumerate() {
+        // `h < MAX_LEVELS (61) < 64`, so the shift amount is always valid.
+        let weight = 1usize.checked_shl(h as u32)?;
+        total = total.checked_add(size.checked_mul(weight)?)?;
+    }
+    Some(total)
+}
+
 /// Halves a sorted run, placing survivors in the **upper** (right) half of
 /// `items[begin..begin+pop]` so they are contiguous with the level above.
 /// Traverses backwards to avoid overwriting unread source elements.
@@ -877,9 +896,45 @@ impl KLL<f64> {
 
 impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for KLL<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
         let wire = KLLWire::<T>::deserialize(deserializer)?;
+
+        // Fail closed on crafted bytes. This nested serde path is reachable with
+        // untrusted input via `HydraCounter::KLL` (`Hydra::deserialize_from_bytes`)
+        // and direct `rmp_serde::from_slice::<KLL<_>>`, so it must guard the same
+        // way the ASAPv1 decoder does: bound `k`/`m` to the range the constructor
+        // clamps to (else `compute_max_capacity` / `Vec::with_capacity` blow up),
+        // and validate the level layout (else the buffer math below underflows or
+        // indexes out of bounds, and `count()` overflows on a later query).
+        if wire.m < 2 || wire.m > wire.k || wire.k > MAX_CACHEABLE_K {
+            return Err(D::Error::custom(format!(
+                "KLL: k={}, m={} outside valid range (2 <= m <= k <= {MAX_CACHEABLE_K})",
+                wire.k, wire.m
+            )));
+        }
+        if wire.num_levels == 0
+            || wire.num_levels > MAX_LEVELS
+            || wire.levels.len() != wire.num_levels + 1
+            || wire.levels.first() != Some(&0)
+            || wire.levels.windows(2).any(|w| w[0] > w[1])
+            || wire.levels.last() != Some(&wire.items.len())
+        {
+            return Err(D::Error::custom("KLL: inconsistent level layout"));
+        }
+        let sizes: Vec<usize> = wire.levels.windows(2).map(|w| w[1] - w[0]).collect();
+        if checked_weighted_count(&sizes).is_none() {
+            return Err(D::Error::custom(
+                "KLL: level layout overflows weighted count",
+            ));
+        }
+
         let max_cap = compute_max_capacity(wire.k, wire.m);
         let used_len = wire.items.len();
+        if used_len > max_cap {
+            return Err(D::Error::custom(format!(
+                "KLL: {used_len} items exceed max_capacity {max_cap}"
+            )));
+        }
         let offset = max_cap - used_len;
 
         let mut items = vec![T::default(); max_cap].into_boxed_slice();
@@ -1013,6 +1068,26 @@ impl Cdf {
 mod tests {
     use super::*;
     use crate::test_utils::{sample_uniform_f64, sample_zipf_f64};
+
+    // Crafted nested-serde bytes (the `HydraCounter::KLL` path, reachable with
+    // untrusted input) with an out-of-range `k` must fail closed, not overflow
+    // `compute_max_capacity` / drive a huge allocation.
+    #[test]
+    fn kllwire_serde_rejects_crafted_dimensions() {
+        let wire = KLLWire::<f64> {
+            items: vec![],
+            levels: vec![0, 0],
+            k: usize::MAX,
+            m: 8,
+            num_levels: 1,
+            co: Coin::from_seed(1),
+        };
+        let bytes = rmp_serde::to_vec(&wire).expect("encode crafted wire");
+        assert!(
+            rmp_serde::from_slice::<KLL<f64>>(&bytes).is_err(),
+            "an out-of-range k must be rejected by the nested serde decoder"
+        );
+    }
 
     // Direct reconstruction from portable wire state must be BIT-EXACT:
     // identical quantiles to the source sketch (unlike a lossy

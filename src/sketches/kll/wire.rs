@@ -32,7 +32,10 @@ use serde::{Deserialize, Serialize};
 use crate::common::numerical::NumericalValue;
 use crate::message_pack_format::envelope;
 
-use super::{CAPACITY_CACHE_LEN, Coin, KLL, MAX_CACHEABLE_K, MAX_LEVELS, compute_max_capacity};
+use super::{
+    CAPACITY_CACHE_LEN, Coin, KLL, MAX_CACHEABLE_K, MAX_LEVELS, checked_weighted_count,
+    compute_max_capacity,
+};
 
 const KLL_KIND_FAMILY: u8 = 0x06;
 /// kind_id for the compact, fixed-buffer [`KLL`] (`0x06 0x00`).
@@ -146,6 +149,22 @@ pub(crate) fn validate_kll_payload<T>(
             "KLL payload: coin remaining_bits {} exceeds 64",
             coin.remaining_bits
         )));
+    }
+    // Reject a structurally-valid but adversarial level distribution (e.g. many
+    // items parked at a high compactor level) that would overflow the weighted
+    // `count()` / `rank()` / `cdf()` at query time. `levels` is top-most-first,
+    // so map slot `i` to compactor level `num_levels - 1 - i` to get sizes
+    // bottom-first for the weight check.
+    let sizes: Vec<usize> = (0..num_levels)
+        .map(|h| {
+            let i = num_levels - 1 - h;
+            (levels[i + 1] - levels[i]) as usize
+        })
+        .collect();
+    if checked_weighted_count(&sizes).is_none() {
+        return Err(RmpDecodeError::Uncategorized(
+            "KLL payload: level layout overflows weighted count".to_string(),
+        ));
     }
     Ok(num_levels)
 }
@@ -451,6 +470,35 @@ mod tests {
                 "k={k}, m={m} must be rejected, not allocated"
             );
         }
+    }
+
+    #[test]
+    fn kll_rejects_weighted_count_overflow() {
+        // Structurally valid (monotonic levels, levels[last]==items.len()) but
+        // adversarial: 16 items parked at compactor level 60 makes 16 * 2^60
+        // overflow usize in count(). Decode must reject, not hand back a sketch
+        // that panics on the first query.
+        let num_levels = 61usize;
+        // Top-most-first cumulative levels: the top level (slot 0) holds all 16
+        // items, every lower level is empty.
+        let mut levels = vec![16u32; num_levels + 1];
+        levels[0] = 0;
+        let metadata = rmp_serde::to_vec_named(&kll_metadata::<f64>(200, 8)).unwrap();
+        let payload = rmp_serde::to_vec(&KllPayload::<f64> {
+            levels,
+            items: vec![1.0; 16],
+            coin: KllCoinWire {
+                state: 1,
+                bit_cache: 0,
+                remaining_bits: 0,
+            },
+        })
+        .unwrap();
+        let bytes = envelope::encode(KLL_KIND_COMPACT, &metadata, &payload);
+        assert!(
+            KLL::<f64>::deserialize_from_bytes(&bytes).is_err(),
+            "a level layout that overflows the weighted count must be rejected"
+        );
     }
 
     #[test]
