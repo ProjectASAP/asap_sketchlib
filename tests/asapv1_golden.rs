@@ -11,7 +11,7 @@
 
 use asap_sketchlib::{
     Classic, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12, HyperLogLogP12,
-    MessagePackCodec, RegularPath, Vector2D,
+    KLL, MessagePackCodec, RegularPath, Vector2D,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -28,6 +28,8 @@ const GOLDEN_ERTL: &str = include_str!("../asapv1_golden/hll_ertl_mle_p12.hex");
 const GOLDEN_HIP: &str = include_str!("../asapv1_golden/hll_hip_p12.hex");
 const GOLDEN_CMS_I64: &str = include_str!("../asapv1_golden/cms_i64_regular_2x3.hex");
 const GOLDEN_CMS_F64: &str = include_str!("../asapv1_golden/cms_f64_fast_2x3.hex");
+const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
+const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -150,4 +152,50 @@ fn cms_f64_fast_2x3_matches_golden() {
     let flat: Vec<f64> = F64_VALS.iter().flatten().copied().collect();
     assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// KLL: build known state (k=200, seed 42, integers 1..=50 — below the level-0
+// capacity, so no compaction fires and the retained set is deterministic) ->
+// serialize == golden, and golden round-trips. Matches the deterministic
+// scenario the proto parity test uses (sketchlib-go's KLLSketch over the same
+// input), so the coin state (42) lines up cross-language.
+// ---------------------------------------------------------------------------
+
+/// A k=200 KLL over `1..=50` with a fixed compaction seed: fully deterministic.
+fn kll_1to50<T: From<u8> + asap_sketchlib::NumericalValue>(seed: u64) -> KLL<T> {
+    let mut sketch = KLL::<T>::init_kll_with_seed(200, seed);
+    for v in 1..=50u8 {
+        sketch.update(&T::from(v));
+    }
+    sketch
+}
+
+#[test]
+fn kll_f64_k200_matches_golden() {
+    let want = decode_hex(GOLDEN_KLL_F64);
+
+    let sketch = kll_1to50::<f64>(42);
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "KLL f64 bytes diverge from golden");
+
+    // Golden round-trips: decode, and re-encode is byte-identical.
+    let decoded = KLL::<f64>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+    assert_eq!(decoded.quantile(0.0), 1.0);
+    assert_eq!(decoded.quantile(1.0), 50.0);
+}
+
+#[test]
+fn kll_i64_k200_matches_golden() {
+    let want = decode_hex(GOLDEN_KLL_I64);
+
+    let sketch = kll_1to50::<i64>(42);
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "KLL i64 bytes diverge from golden");
+
+    let decoded = KLL::<i64>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+    assert_eq!(decoded.quantile(0.0), 1.0);
+    assert_eq!(decoded.quantile(1.0), 50.0);
 }

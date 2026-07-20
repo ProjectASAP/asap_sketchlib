@@ -29,10 +29,21 @@ golden tests the **wire encoding**, isolated from the hash functions.
 | `hll_hip_p12` | HLL HIP, P12 | `01 03` | same registers + `hip_kxq0=1.5, hip_kxq1=2.5, hip_est=3.0` |
 | `cms_i64_regular_2x3` | Count-Min i64, RegularPath | `02 00` | 2×3 row-major `[[0,1,127],[128,300,65536]]` |
 | `cms_f64_fast_2x3` | Count-Min f64, FastPath | `02 00` | 2×3 row-major `[[0.0,1.5,2.25],[3.75,4.125,5.0625]]` |
+| `kll_f64_k200` | KLL f64, k=200 | `06 00` | integers `1..=50`, compaction seed 42 (recorded in metadata as `seed`) |
+| `kll_i64_k200` | KLL i64, k=200 | `06 00` | integers `1..=50`, compaction seed 42 (recorded in metadata as `seed`) |
 
 The i64 fixture deliberately spans the msgpack integer width boundaries
 (positive fixint / uint8 / uint16 / uint32) to lock the "non-negative integer →
 uint family, minimal width" rule (`docs/asapv1_wire_format.md` §5).
+
+The KLL fixtures are a special case of "state is fixed, not hashed": KLL never
+hashes — it orders raw numeric values — so inserting `1..=50` places exactly
+those retained samples. `k=200` keeps the input below the level-0 capacity, so no
+compaction fires (`num_levels = 1`, one level `[1..50]`) and the state is fully
+deterministic. The fixed compaction seed (42) pins the carried coin state, which
+must match `sketchlib-go`'s coin for the same input. Only the compact KLL
+(`06 00`) has a golden; the dynamic variant (`06 01`) shares the payload shape but
+lacks a seeded constructor, so its cross-language golden is deferred.
 
 ## Tests that consume these
 
