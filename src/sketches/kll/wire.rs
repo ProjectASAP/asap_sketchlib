@@ -14,8 +14,8 @@
 //! Unlike HLL and Count-Min, KLL never hashes its inputs — it orders raw numeric
 //! values with `total_cmp`. So the hash-spec metadata group (profile id,
 //! algorithm, inlined `seed_list`, …) that HLL/CMS carry does not apply, and KLL
-//! metadata is **structural params only** (`k`, `m`, `item_type`). See the wire
-//! doc's KLL section for the recorded decision.
+//! metadata is **structural params only** (`k`, `m`, `item_type`, and an optional
+//! `seed`). See the wire doc's KLL section for the recorded decision.
 //!
 //! ## Payload item order (cross-language contract)
 //!
@@ -63,6 +63,13 @@ impl KllWireItem for i64 {
 /// must mirror it). KLL does not hash, so there is **no hash-spec group**: the
 /// fields are structural params only. `deny_unknown_fields` makes decode fail
 /// closed on any unexpected key.
+///
+/// `seed` is the **only optional** field: it is the compaction RNG's reproducible
+/// seed (see [`crate::sketches::kll::KLL::init_with_seed`]). It is present only
+/// when the sketch carries one (`Some`), and the key is **omitted** otherwise
+/// (`skip_serializing_if` + `default`), so an unseeded sketch's bytes are
+/// unchanged. It is echoed on decode, never pinned. The compact `KLL` populates
+/// it; `KLLDynamic` has no seed and always omits it.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KllMetadata {
@@ -70,15 +77,20 @@ pub(crate) struct KllMetadata {
     pub(crate) k: u32,
     pub(crate) m: u32,
     pub(crate) item_type: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) seed: Option<u64>,
 }
 
-/// Builds the KLL descriptor metadata for a wire-eligible item type `T`.
-pub(crate) fn kll_metadata<T: KllWireItem>(k: u32, m: u32) -> KllMetadata {
+/// Builds the KLL descriptor metadata for a wire-eligible item type `T`. `seed`
+/// is the sketch's reproducible compaction seed when it has one (`Some`),
+/// otherwise `None` (the key is then omitted from the wire).
+pub(crate) fn kll_metadata<T: KllWireItem>(k: u32, m: u32, seed: Option<u64>) -> KllMetadata {
     KllMetadata {
         metadata_version: 1,
         k,
         m,
         item_type: T::ITEM_TYPE.to_string(),
+        seed,
     }
 }
 
@@ -187,7 +199,7 @@ pub(crate) fn split_and_validate_meta<'a, T: KllWireItem>(
         )));
     }
     let meta: KllMetadata = from_slice(metadata)?;
-    if meta != kll_metadata::<T>(meta.k, meta.m) {
+    if meta != kll_metadata::<T>(meta.k, meta.m, meta.seed) {
         return Err(RmpDecodeError::Uncategorized(
             "ASAPv1 KLL envelope: metadata mismatch".to_string(),
         ));
@@ -219,7 +231,8 @@ where
     /// (kind_id `0x06 0x00`). The retained samples use the top-most-level-first
     /// layout that matches `sketchlib-go`'s `KLLState`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let metadata = rmp_serde::to_vec_named(&kll_metadata::<T>(self.k as u32, self.m as u32))?;
+        let metadata =
+            rmp_serde::to_vec_named(&kll_metadata::<T>(self.k as u32, self.m as u32, self.seed))?;
         let (state, bit_cache, remaining_bits) = self.co.to_wire();
         let payload = rmp_serde::to_vec(&KllPayload {
             levels: self.wire_levels(),
@@ -240,7 +253,13 @@ where
         let (meta, payload_bytes) = split_and_validate_meta::<T>(bytes, KLL_KIND_COMPACT)?;
         let payload: KllPayload<T> = from_slice(payload_bytes)?;
         let num_levels = validate_kll_payload(&payload.levels, &payload.items, &payload.coin)?;
-        Self::from_wire_top_first(meta.k as usize, meta.m as usize, num_levels, payload)
+        Self::from_wire_top_first(
+            meta.k as usize,
+            meta.m as usize,
+            meta.seed,
+            num_levels,
+            payload,
+        )
     }
 
     /// Rebuilds the compact leftward-grown buffer from the top-most-first wire
@@ -251,6 +270,7 @@ where
     fn from_wire_top_first(
         k: usize,
         m: usize,
+        seed: Option<u64>,
         num_levels: usize,
         payload: KllPayload<T>,
     ) -> Result<Self, RmpDecodeError> {
@@ -306,11 +326,10 @@ where
             num_levels,
             max_capacity: max_cap,
             co: Coin::from_wire(coin.state, coin.bit_cache, coin.remaining_bits as u8),
-            // The wire form does not carry the explicit-seed flag; a
-            // round-tripped sketch keeps its coin state but re-randomizes on a
-            // later clear(). Callers needing clear()-determinism rebuild via
-            // init_with_seed.
-            seed: None,
+            // The reproducible compaction seed is restored from the metadata (it
+            // is `None` for a sketch that never carried one), so a decoded sketch
+            // keeps clear()-determinism when the producer had it.
+            seed,
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
             level0_capacity: 0,
@@ -423,7 +442,7 @@ mod tests {
     #[test]
     fn kll_rejects_inconsistent_levels() {
         // Valid envelope + metadata, but levels[last] != items.len().
-        let metadata = rmp_serde::to_vec_named(&kll_metadata::<f64>(200, 8)).unwrap();
+        let metadata = rmp_serde::to_vec_named(&kll_metadata::<f64>(200, 8, None)).unwrap();
         let payload = rmp_serde::to_vec(&KllPayload::<f64> {
             levels: vec![0, 3],
             items: vec![1.0, 2.0], // len 2, but levels claim 3
@@ -463,13 +482,56 @@ mod tests {
             (MAX_CACHEABLE_K as u32 + 1, 8),
             (200, 1),
         ] {
-            let metadata = rmp_serde::to_vec_named(&kll_metadata::<f64>(k, m)).unwrap();
+            let metadata = rmp_serde::to_vec_named(&kll_metadata::<f64>(k, m, None)).unwrap();
             let bytes = envelope::encode(KLL_KIND_COMPACT, &metadata, &empty_payload());
             assert!(
                 KLL::<f64>::deserialize_from_bytes(&bytes).is_err(),
                 "k={k}, m={m} must be rejected, not allocated"
             );
         }
+    }
+
+    #[test]
+    fn kll_seed_present_when_seeded_omitted_when_unseeded() {
+        // A seeded sketch records its seed in the metadata; an unseeded one omits
+        // the key entirely (so its bytes are unaffected by the optional field).
+        let seeded = KLL::<f64>::init_kll_with_seed(200, 42);
+        let bytes = seeded.serialize_to_bytes().expect("serialize");
+        let (_k, meta_bytes, _p) = envelope::split(&bytes).expect("split");
+        let meta: KllMetadata = rmp_serde::from_slice(meta_bytes).expect("meta");
+        assert_eq!(meta.seed, Some(42), "seeded KLL must record its seed");
+
+        let mut unseeded = KLL::<f64>::init_kll(200); // Coin::new(); seed = None
+        unseeded.update(&1.0);
+        let bytes = unseeded.serialize_to_bytes().expect("serialize");
+        let (_k, meta_bytes, _p) = envelope::split(&bytes).expect("split");
+        let meta: KllMetadata = rmp_serde::from_slice(meta_bytes).expect("meta");
+        assert_eq!(meta.seed, None, "unseeded KLL must omit the seed key");
+    }
+
+    #[test]
+    fn kll_seed_survives_round_trip_so_clear_stays_deterministic() {
+        // The point of carrying seed: a decoded seeded sketch must re-seed clear()
+        // from the original seed (not wall-clock). If seed were dropped on decode,
+        // `a` below would re-randomize on clear() and diverge from `b`.
+        let mut src = KLL::<f64>::init_kll_with_seed(200, 42);
+        for v in 1..=5000u64 {
+            src.update(&(v as f64));
+        }
+        let mut a = KLL::<f64>::deserialize_from_bytes(&src.serialize_to_bytes().unwrap()).unwrap();
+        let mut b = KLL::<f64>::init_kll_with_seed(200, 42);
+
+        a.clear();
+        b.clear();
+        for v in 1..=3000u64 {
+            a.update(&(v as f64));
+            b.update(&(v as f64));
+        }
+        assert_eq!(
+            a.serialize_to_bytes().unwrap(),
+            b.serialize_to_bytes().unwrap(),
+            "decoded sketch lost its seed: clear() diverged from a fresh seeded sketch"
+        );
     }
 
     #[test]
@@ -483,7 +545,7 @@ mod tests {
         // items, every lower level is empty.
         let mut levels = vec![16u32; num_levels + 1];
         levels[0] = 0;
-        let metadata = rmp_serde::to_vec_named(&kll_metadata::<f64>(200, 8)).unwrap();
+        let metadata = rmp_serde::to_vec_named(&kll_metadata::<f64>(200, 8, None)).unwrap();
         let payload = rmp_serde::to_vec(&KllPayload::<f64> {
             levels,
             items: vec![1.0; 16],
@@ -504,7 +566,7 @@ mod tests {
     #[test]
     fn kll_dynamic_kind_id_rejected_by_compact() {
         // A compact decoder must reject the dynamic kind_id.
-        let metadata = rmp_serde::to_vec_named(&kll_metadata::<f64>(200, 8)).unwrap();
+        let metadata = rmp_serde::to_vec_named(&kll_metadata::<f64>(200, 8, None)).unwrap();
         let payload = rmp_serde::to_vec(&KllPayload::<f64> {
             levels: vec![0, 0],
             items: Vec::<f64>::new(),
