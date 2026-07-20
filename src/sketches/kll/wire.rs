@@ -510,6 +510,25 @@ mod tests {
     }
 
     #[test]
+    fn kll_unseeded_round_trip_byte_stable() {
+        // An unseeded compact KLL (seed = None, so the metadata key is omitted)
+        // must decode end-to-end and re-serialize byte-identically — exercises the
+        // optional-key-absent path through decode, not just encode.
+        let mut s = KLL::<f64>::init_kll(200); // Coin::new(); seed = None
+        for v in 1..=2000u64 {
+            s.update(&(v as f64));
+        }
+        let bytes = s.serialize_to_bytes().expect("serialize");
+        let decoded = KLL::<f64>::deserialize_from_bytes(&bytes).expect("decode");
+        assert_eq!(
+            decoded.serialize_to_bytes().expect("re-serialize"),
+            bytes,
+            "unseeded KLL round trip not byte-stable"
+        );
+        assert_eq!(decoded.count(), s.count());
+    }
+
+    #[test]
     fn kll_seed_survives_round_trip_so_clear_stays_deterministic() {
         // The point of carrying seed: a decoded seeded sketch must re-seed clear()
         // from the original seed (not wall-clock). If seed were dropped on decode,
