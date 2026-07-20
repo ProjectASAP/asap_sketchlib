@@ -311,8 +311,11 @@ where
     pub fn estimate(&self, value: &DataInput) -> S::Counter {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
-        let mut min = S::Counter::from(i32::MAX);
-        for r in 0..rows {
+        // Seed the running minimum from row 0's probed cell, then fold in the
+        // rest. Mirrors the fast path's `fast_query_min`.
+        let col0 = ((H::hash64_seeded(0, value) & LOWER_32_MASK) as usize) % cols;
+        let mut min = self.counts.query_one_counter(0, col0);
+        for r in 1..rows {
             let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             let v = self.counts.query_one_counter(r, col);
@@ -710,6 +713,25 @@ mod tests {
                 "fast path should match standard insert for key {key:?}"
             );
         }
+    }
+
+    #[test]
+    fn estimate_does_not_clamp_i64_counts_above_i32_max() {
+        // Regression: the running minimum used to be seeded with `i32::MAX`,
+        // which clamped i64 estimates whenever every probed cell exceeded
+        // 2147483647, capping large counts at 2147483647.
+        let mut sk = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, 64);
+        let key = DataInput::Str("pkt_len");
+        let count: i64 = 35_000_000_000; // ~35 billion, well past i32::MAX
+
+        sk.insert_many(&key, count);
+
+        let est = sk.estimate(&key);
+        assert!(
+            est >= count,
+            "estimate {est} should be at least the true count {count}, not clamped"
+        );
+        assert_ne!(est, i32::MAX as i64, "estimate must not clamp to i32::MAX");
     }
 
     #[test]
