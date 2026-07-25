@@ -26,6 +26,7 @@ const DEFAULT_COL_NUM: usize = 4096;
 /// A Count Sketch paired with a top-k heavy-hitter heap.
 ///
 /// Generic over the same type parameters as [`Count`].
+#[derive(Clone)]
 pub struct CSHeap<
     S: MatrixStorage = Vector2D<i64>,
     Mode = RegularPath,
