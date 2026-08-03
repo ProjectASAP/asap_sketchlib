@@ -65,6 +65,19 @@ fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
+These produce/consume the **ASAPv1** wire envelope (kind `0x04 0x00`) — see the
+[ASAPv1 wire format spec](../asapv1_wire_format.md). They are **not** available
+on every `Count`: the impl exists only for wire-eligible configs
+`Count<Vector2D<i64>, Mode, H>` where `Mode` is `FastPath` or `RegularPath`
+(`CsWireMode`) and `H: HashProfile`. Count Sketch counters must be signed and
+negatable, so `i64` is the only wire counter type and the envelope carries no
+`counter_type` key — the one metadata difference from Count-Min. The default
+storage is `Vector2D<i32>`, which is **not** wire-eligible: an `i32` / `i128` /
+other exotic-counter or non-`Vector2D` sketch must be converted to a
+`Vector2D<i64>` first (only you know if the mapping is lossless). `rows`/`cols`
+and the `mode` are carried in the envelope metadata; the payload is just
+`[counts]`, packed row-major with signed cells.
+
 ## Examples
 
 ```rust

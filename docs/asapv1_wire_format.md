@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implementing (Rust).** HLL, Count-Min, KLL (compact + dynamic), Bloom, and Space-Saving serialize through the shared `message_pack_format::envelope` module per this spec.
+- **Implementing (Rust).** HLL, Count-Min, Count Sketch, KLL (compact + dynamic), Bloom, and Space-Saving serialize through the shared `message_pack_format::envelope` module per this spec.
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -184,7 +184,7 @@ This registry is the master list of algorithms still to design payloads for.
 | `0x01 0x03` | HLL | HIP | Section 3.1 | implemented |
 | `0x02 0x00` | Count-Min | Count-Min | Section 3.2 | implemented |
 | `0x03 0x00` | Count-Min-with-heap (CMSHeap) | - | TBD | assigned in Go / payload not designed |
-| `0x04 0x00` | Count Sketch | - | TBD | assigned in Go / payload not designed |
+| `0x04 0x00` | Count Sketch | Count Sketch | Section 3.6 | implemented |
 | `0x05 0x00` | DDSketch | - | TBD | assigned in Go / payload not designed |
 | `0x06 0x00` | KLL | Compact | Section 3.3 | implemented |
 | `0x06 0x01` | KLL dynamic | Dynamic | Section 3.3 | implemented |
@@ -478,14 +478,34 @@ Two summaries have no encoding and **fail to serialize** rather than being coerc
 
 `min_count`, the bucket list, the counter arena and the key index are then recomputed from the validated triples; nothing about them is trusted from the wire.
 
-### 3.6 onward: payloads not yet designed
+### 3.6: Count Sketch payload (`0x04 0x00`)
+
+Same shape as Count-Min (§3.2): the matrix dimensions (`rows` / `cols`) and the column-derivation **mode** (`"fast"`/`"regular"`) live in the metadata, so the payload is just the counters.
+
+| Pos | Field | Type | Notes |
+| ----- | ------- | ------ | ------- |
+| 0 | `counts` | array | packed **row-major**, `rows*cols` cells; `i64` elements, **signed** |
+
+The payload is a **1-element positional array `[counts]`**.
+
+There is **no `counter_type` metadata key**. Count Sketch counters must be signed and negatable, which leaves `i64` as the only wire type, so `kind_id` `0x04 0x00` already implies it (`i32` widens to `i64`; `i128` and exotic counters are not wire types — see Section 5, "Converting an exotic in-memory sketch"). This is the one metadata difference from Count-Min, whose counters may be `i64` or `f64`.
+
+Cells carry a sign: Count Sketch adds `±weight`, so a counter may be negative and a decoder must not assume monotonicity.
+
+**Decode rules** (all fail closed, per Section 1's decoder rules):
+
+1. `kind_id` is `0x04 0x00`; any other id is rejected.
+2. The metadata's hash spec and `mode` must equal the target type's own, with `rows` / `cols` echoed back since those are structural and the matrix is sized from them. A `counter_type` key is not part of this metadata, so a payload carrying one is rejected as an unknown key.
+3. `rows` and `cols` are both non-zero. Checked before the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
+4. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
+
+### 3.7 onward: payloads not yet designed
 
 The remaining `kind_id`s reserve a family byte with payload TBD (Section 1 registry has their "assigned in Go" status). Likely shape when designed:
 
 | kind_id | Sketch | Likely payload |
 | --------- | -------- | --------- |
 | `0x03 0x00` | Count-Min-with-heap (CMSHeap) | similar to current CMS |
-| `0x04 0x00` | Count Sketch | similar to current CMS |
 | `0x05 0x00` | DDSketch | straightforward bucket |
 | `0x07 0x00` | Hydra-KLL | wraps KLL payloads (§3.3); nest one per counter |
 | `0x08 0x00` | SetAggregator | aggregation envelope, distinct from a stand-alone sketch (Section 1 mapping notes) |
@@ -601,6 +621,7 @@ Keep it through the transition, retire `portable` once goldens are in place.
 - **Q-CMS**: Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode live in the metadata, so the id stays single.
 - **Q-KLL**: KLL metadata carries **no hash-spec group** — KLL is comparison-based and never hashes, so those fields have no truthful value. Its metadata is structural-only (`metadata_version`, `k`, `m`, `item_type`, optional `seed`) and is *not* `HashProfile`-derived. The two KLL variants (compact `0x06 0x00`, dynamic `0x06 0x01`) share one payload `[levels, items, coin]` and differ only by `kind_id`. `item_type` (`"f64"`/`"i64"`) is a metadata param, not a separate `kind_id` (mirrors Q-CMS's `counter_type`). Retained samples use the top-most-level-first layout that matches `sketchlib-go`'s `KLLState`.
 - **Q-KLL-SEED**: KLL records its reproducible compaction `seed` as an **optional** metadata key. It is construction config (so metadata, not payload, per the config→metadata rule), and it is the first optional key in v1: present only when the sketch carries a seed, omitted otherwise. Rationale: the payload's `coin` already carries the RNG's *current* position (enough to resume compaction), but `seed` is what a later `clear()` re-seeds from — so serializing it lets a decoded sketch keep `clear()`-reproducibility instead of falling back to wall-clock. Cost of omitting it is bounded (only a decoded-then-`clear()`ed sketch loses cross-run byte reproducibility — never correctness), but it is cheap to carry and future-proofs the checkpoint/restore path. `KLLDynamic` has no seed concept and never emits the key; the two variants are deliberately **not** forced to be symmetric here. Go carries and preserves the key without interpreting it.
+- **Q-CS**: Count Sketch is one `kind_id` (`0x04 0x00`) and mirrors Count-Min's metadata and `[counts]` payload with **one key removed: no `counter_type`**. Count Sketch counters must be signed and negatable, so `i64` is the only wire type and the `kind_id` already implies it — a key with a single legal value describes nothing. The variance from Q-CMS is deliberate: the two sketches are not forced symmetric where their type domains differ. Structural-param order: `... matrix_seed_index, rows, cols, mode`. Cells are signed, so a decoder must not assume monotonicity.
 - **Q-CMS-DIMS**: Count-Min `rows`/`cols` are **metadata** and the payload omits them. They are configuration that shapes the payload (like HLL's `precision`), so per the config-to-metadata rule they belong in the descriptor. The payload is then just `[counts]`. Canonical structural-param order: `... matrix_seed_index, rows, cols, counter_type, mode`.
 - **Q-VER**: no payload version field. A new incompatible encoding gets a **new `kind_id`**; retired ids are reserved forever and never recycled.
 - **Encoding**: metadata + payload are both msgpack; payload is a positional array. Byte-level rules in Section 4.

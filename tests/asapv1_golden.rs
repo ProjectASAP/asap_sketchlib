@@ -10,8 +10,8 @@
 //! See `asapv1_golden/README.md`.
 
 use asap_sketchlib::{
-    Classic, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12, HyperLogLogP12,
-    KLL, MessagePackCodec, RegularPath, Vector2D,
+    Classic, Count, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12,
+    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -28,6 +28,8 @@ const GOLDEN_ERTL: &str = include_str!("../asapv1_golden/hll_ertl_mle_p12.hex");
 const GOLDEN_HIP: &str = include_str!("../asapv1_golden/hll_hip_p12.hex");
 const GOLDEN_CMS_I64: &str = include_str!("../asapv1_golden/cms_i64_regular_2x3.hex");
 const GOLDEN_CMS_F64: &str = include_str!("../asapv1_golden/cms_f64_fast_2x3.hex");
+const GOLDEN_CS_REGULAR: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4.hex");
+const GOLDEN_CS_FAST: &str = include_str!("../asapv1_golden/cs_i64_fast_2x4.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
 
@@ -43,6 +45,12 @@ fn p12_registers() -> Vec<u8> {
 
 const I64_VALS: [[i64; 3]; 2] = [[0, 1, 127], [128, 300, 65536]];
 const F64_VALS: [[f64; 3]; 2] = [[0.0, 1.5, 2.25], [3.75, 4.125, 5.0625]];
+
+/// Count Sketch cells are **signed** (the sketch adds `±weight`), so this
+/// fixture sweeps the msgpack integer widths in both directions: row 0 is
+/// positive fixint / positive fixint max / uint8 / uint32, row 1 is negative
+/// fixint / int8 / int16 / int32.
+const CS_VALS: [[i64; 4]; 2] = [[0, 127, 128, 65536], [-1, -33, -32768, -2147483648]];
 
 // ---------------------------------------------------------------------------
 // HLL: build known state -> serialize == golden, and golden round-trips.
@@ -152,6 +160,54 @@ fn cms_f64_fast_2x3_matches_golden() {
     let flat: Vec<f64> = F64_VALS.iter().flatten().copied().collect();
     assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// Count Sketch: build known matrix state -> serialize == golden, round-trips.
+// Both fixtures hold the SAME matrix and differ only by `mode`, so the pair
+// also pins that the mode string reaches the bytes.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cs_i64_regular_2x4_matches_golden() {
+    let want = decode_hex(GOLDEN_CS_REGULAR);
+
+    let sketch =
+        Count::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
+            CS_VALS[r][c]
+        }));
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(
+        got, want,
+        "Count Sketch i64/regular bytes diverge from golden"
+    );
+
+    let decoded =
+        Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.rows(), 2);
+    assert_eq!(decoded.cols(), 4);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn cs_i64_fast_2x4_matches_golden() {
+    let want = decode_hex(GOLDEN_CS_FAST);
+
+    let sketch = Count::<Vector2D<i64>, FastPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
+        CS_VALS[r][c]
+    }));
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "Count Sketch i64/fast bytes diverge from golden");
+
+    let decoded = Count::<Vector2D<i64>, FastPath>::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    // Same matrix, different mode -> different bytes.
+    assert_ne!(want, decode_hex(GOLDEN_CS_REGULAR));
 }
 
 // ---------------------------------------------------------------------------
