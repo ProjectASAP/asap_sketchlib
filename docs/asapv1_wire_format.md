@@ -387,8 +387,6 @@ Both KLL variants (the compact fixed-buffer `KLL` and the growable `KLLDynamic`)
 
 **Item order (cross-language contract).** `levels` / `items` use the **top-most-level-first** layout, byte-for-byte matching `sketchlib-go`'s `KLLState`: index `i` in `levels` maps to compactor level `num_levels - 1 - i`, and level 0's run is in **input order**. The compact `KLL` grows its buffer leftward and stores level 0 reverse-input, so its encoder reverses level 0 back to input order (and its decoder reverses it in); `KLLDynamic` already stores this layout natively. Within a level, order past the first compaction is not guaranteed byte-identical across the two Rust variants (or across languages), but the retained set and quantiles agree — see the caveat on `KLL::wire_items`.
 
-> Note: this is a distinct wire format from the proto `KLLState` (`proto/kll/kll.proto`), which is the delta-transmission / cross-language *protobuf* path and carries extra machinery (the value-offset fixed-point item encoding). The two share the top-most-first item layout but are separate formats; the ASAPv1 KLL payload above is self-contained and carries no fixed-point form.
-
 ### 3.4 onward: payloads not yet designed
 
 The remaining `kind_id`s reserve a family byte with payload TBD (Section 1 registry has their "assigned in Go" status). Likely shape when designed:
