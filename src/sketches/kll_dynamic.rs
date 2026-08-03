@@ -12,8 +12,6 @@
 //!   <https://arxiv.org/abs/1603.05346>
 //! - <https://www.amazon.science/publications/insert-optimized-implementation-of-streaming-data-sketches>
 
-use rmp_serde::decode::Error as RmpDecodeError;
-use rmp_serde::encode::Error as RmpEncodeError;
 use serde::{Deserialize, Serialize};
 
 use crate::common::input::data_input_to_f64;
@@ -21,6 +19,8 @@ use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};
 
 use super::kll::{Coin, merge_sorted_runs, randomly_halve_up};
+
+mod wire;
 
 const CAPACITY_CACHE_LEN: usize = 20;
 const MAX_CACHEABLE_K: usize = 26_602;
@@ -454,25 +454,6 @@ impl<T: NumericalValue> KLLDynamic<T> {
     /// Number of stored samples across all levels.
     fn buffer_size(&self) -> usize {
         self.items.len()
-    }
-
-    /// Serialize the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-    where
-        T: Serialize,
-    {
-        rmp_serde::to_vec(self)
-    }
-
-    /// Deserialize a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        rmp_serde::from_slice(bytes).map(|mut sketch: KLLDynamic<T>| {
-            sketch.rebuild_capacity_cache();
-            sketch
-        })
     }
 }
 
