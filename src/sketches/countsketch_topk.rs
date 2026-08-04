@@ -978,12 +978,19 @@ impl<H: SketchHasher> CountL2HH<H> {
             (other.row, other.col),
             "dimension mismatch while merging CountL2HH sketches"
         );
+        assert_eq!(
+            self.seed_idx, other.seed_idx,
+            "seed mismatch while merging CountL2HH sketches"
+        );
 
         for i in 0..self.row {
+            let mut row_l2 = 0_i128;
             for j in 0..self.col {
                 self.counts[i][j] += other.counts[i][j];
+                let counter = self.counts[i][j] as i128;
+                row_l2 = row_l2.saturating_add(counter.saturating_mul(counter));
             }
-            self.l2[i] = other.l2[i];
+            self.l2[i] = row_l2.min(i64::MAX as i128) as i64;
         }
     }
 
@@ -1150,6 +1157,7 @@ mod tests_count_l2_hh {
 
         left.merge(&right);
         assert_eq!(left.fast_get_est(&key), 13.0);
+        assert_eq!(left.get_l2(), 13.0);
     }
 
     #[test]

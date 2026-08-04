@@ -6,6 +6,7 @@ Runnable end-to-end examples live in [`examples/`](../examples/). Each one pairs
 cargo run --example cardinality_hll
 cargo run --example frequency_cms
 cargo run --example quantile_kll
+cargo run --example quantile_univmon_q
 ```
 
 ---
@@ -113,3 +114,31 @@ let p99 = cdf.query(0.99);
 ```
 
 API reference: [`docs/api/api_kll.md`](./api/api_kll.md)
+
+---
+
+## Universal quantiles — [`examples/quantile_univmon_q.rs`](../examples/quantile_univmon_q.rs)
+
+Use `UnivMonQ` when quantiles are required together with frequency, distinct
+count, F2/F3, generic g-sums, entropy, or heavy-hitter queries. It shares a terminal-stratum
+CountSketch pyramid across the universal metrics and adds a coordinated
+bottom-k sample for ordered ranks.
+
+```rust
+use asap_sketchlib::{UnivMonQ, UnivMonQConfig};
+
+let config = UnivMonQConfig::default()
+    .with_window_bound(100_000, 1e-6)?;
+let mut sketch = UnivMonQ::new(config)?;
+for value in 1..=100_000 {
+    sketch.add(&value);
+}
+
+let query = sketch.prepare_queries();
+let percentiles = query.quantiles(&[0.50, 0.90, 0.99]);
+let distinct = query.estimate_distinct();
+let f3 = query.estimate_f3();
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+API reference: [`docs/api/api_univmon_q.md`](./api/api_univmon_q.md)

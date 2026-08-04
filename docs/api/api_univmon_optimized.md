@@ -75,7 +75,10 @@ assert!(um.calc_l1() >= 1.0);
 
 ## Caveats
 
-- Merge expects compatible layout/configuration.
+- Updates must have non-negative weights.
+- `insert` and `fast_insert` use different physical layouts and cannot be mixed
+  within one sketch.
+- Merge expects compatible layout/configuration and update strategy.
 
 ## Status
 

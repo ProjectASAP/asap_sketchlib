@@ -8,12 +8,14 @@
 //! # Supported sketch types
 //!
 //! Any type implementing [`TumblingWindowSketch`] can be used. Built-in
-//! implementations are provided for [`FoldCMS`], [`FoldCS`], and [`KLL`].
+//! implementations are provided for [`FoldCMS`], [`FoldCS`], [`KLL`], and
+//! [`UnivMonQ`].
 
 use crate::DataInput;
 use crate::fold_cms::FoldCMS;
 use crate::fold_cs::FoldCS;
 use crate::kll::KLL;
+use crate::{UnivMonQ, UnivMonQConfig};
 
 // ---------------------------------------------------------------------------
 // TumblingWindowSketch trait
@@ -148,6 +150,27 @@ impl TumblingWindowSketch for KLL {
 
     fn tumbling_merge(&mut self, other: &Self) {
         self.merge(other);
+    }
+
+    fn tumbling_clear(&mut self) {
+        self.clear();
+    }
+}
+
+impl TumblingWindowSketch for UnivMonQ {
+    type Config = UnivMonQConfig;
+
+    fn from_config(config: &Self::Config) -> Self {
+        UnivMonQ::new(*config).expect("TumblingWindow received an invalid UnivMon-Q config")
+    }
+
+    fn tumbling_insert(&mut self, key: &DataInput, _value: i64) {
+        let _ = self.update_data_input(key);
+    }
+
+    fn tumbling_merge(&mut self, other: &Self) {
+        self.merge(other)
+            .expect("TumblingWindow UnivMon-Q configurations must match");
     }
 
     fn tumbling_clear(&mut self) {
@@ -495,6 +518,28 @@ mod tests {
         assert_eq!(sk.count(), 0, "count should be 0 after clear");
         let cdf = sk.cdf();
         assert_eq!(cdf.query(0.5), 0.0, "empty sketch should return 0.0");
+    }
+
+    #[test]
+    fn univmon_q_tumbling_merges_quantiles_and_universal_metrics() {
+        let config = UnivMonQConfig {
+            levels: 8,
+            width: 256,
+            width_halving_period: 0,
+            depth: 5,
+            counter_bits: 64,
+            candidates: 64,
+            ordered_samples: 64,
+            hash_seed: 5,
+        };
+        let mut windows: TumblingWindow<UnivMonQ> = TumblingWindow::new(100, 4, config, 2);
+        for value in 0..300_u64 {
+            windows.insert(value, &DataInput::F64((value % 50) as f64), 1);
+        }
+        let merged = windows.query_all();
+        assert_eq!(merged.count(), 300);
+        assert_eq!(merged.quantile(0.5), Some(24.0));
+        assert_eq!(merged.estimate_distinct(), 50.0);
     }
 
     // -- Construction guard tests --------------------------------------------
