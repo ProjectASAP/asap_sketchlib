@@ -15,7 +15,7 @@ use crate::octo_delta::{CM_PROMASK, CmDelta};
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded,
+    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, compute_median_inline_f64, hash64_seeded,
 };
 
 mod wire;
@@ -482,7 +482,7 @@ where
     }
 }
 
-// Nitro sampling helpers for fast-path CountMin.
+// Nitro sampling helpers for fast-path CountMin (Vector2D<i32> storage).
 impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
     /// Enables Nitro sampling with the provided rate.
     pub fn enable_nitro(&mut self, sampling_rate: f64) {
@@ -494,7 +494,20 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
         self.counts.disable_nitro();
     }
 
-    /// Inserts an observation using Nitro-aware sampling logic.
+    /// Inserts one occurrence of `value` using Nitro-aware sampling logic.
+    #[inline(always)]
+    pub fn fast_insert_nitro(&mut self, value: &DataInput) {
+        self.fast_insert_nitro_many(value, 1);
+    }
+
+    /// Inserts `many` occurrences of `value` at once using Nitro-aware
+    /// sampling logic, compensating the touched row(s) by `many /
+    /// sampling_rate` (via `Nitro::scaled_increment`) instead of the
+    /// fixed per-occurrence `nitro().delta` -- so a single call can stand
+    /// in for a weighted observation (e.g. a metric sample's value)
+    /// without looping the caller's own insert `many` times, which would
+    /// make cost scale with the observation's magnitude instead of with
+    /// event count.
     ///
     /// Loops until the drawn skip carries past the end of this item's
     /// `rows` row-slots (matching `Count::fast_insert_nitro`'s pattern):
@@ -506,9 +519,9 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
     /// underflows for `rows > 1` and silently disables all further
     /// row-touches for the lifetime of the sketch.
     #[inline(always)]
-    pub fn fast_insert_nitro(&mut self, value: &DataInput) {
+    pub fn fast_insert_nitro_many(&mut self, value: &DataInput, many: i32) {
         let rows = self.counts.rows();
-        let delta = self.counts.nitro().delta as i32;
+        let delta = self.counts.nitro().scaled_increment(many as u64) as i32;
         if self.counts.nitro().to_skip >= rows {
             self.counts.reduce_nitro_skip(rows);
         } else {
@@ -527,11 +540,79 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
         }
     }
 
-    /// Returns the median estimate using a fast-path matrix hash.
+    /// Returns the median estimate for `value`, hashed the same way
+    /// `fast_insert_nitro`/`fast_insert_nitro_many` hash at insert time
+    /// (`H::hash128_seeded(0, value)` + `Vector2D::query_by_row`'s raw
+    /// shift-based column extraction) -- *not* `hash_for_matrix`, which
+    /// for some `(rows, cols)` picks a `Packed64` layout hashed with a
+    /// different algorithm (`hash64_seeded`) entirely, silently reading
+    /// the wrong cells for any Nitro-inserted data at those dimensions
+    /// (see `Vector2D::query_by_row`'s doc comment).
     pub fn nitro_estimate(&self, value: &DataInput) -> f64 {
-        let hashed_val = <Vector2D<i32> as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
-        self.counts
-            .fast_query_median(&hashed_val, |val, _, _| (*val) as f64)
+        let hashed = H::hash128_seeded(0, value);
+        let rows = self.counts.rows();
+        let mut vals: Vec<f64> = (0..rows)
+            .map(|r| *self.counts.query_by_row(r, hashed) as f64)
+            .collect();
+        compute_median_inline_f64(&mut vals)
+    }
+}
+
+// Nitro sampling helpers for fast-path CountMin (Vector2D<i64> storage) --
+// mirrors the `Vector2D<i32>` impl above verbatim (Nitro's row-cycling
+// mechanics don't depend on the counter width), for callers whose summed
+// weights can exceed `i32::MAX` (e.g. a heavy-tailed per-key weight
+// multiplied into every observation before insertion).
+impl<H: SketchHasher> CountMin<Vector2D<i64>, FastPath, H> {
+    /// Enables Nitro sampling with the provided rate.
+    pub fn enable_nitro(&mut self, sampling_rate: f64) {
+        self.counts.enable_nitro(sampling_rate);
+    }
+
+    /// Disables Nitro sampling and resets its internal state.
+    pub fn disable_nitro(&mut self) {
+        self.counts.disable_nitro();
+    }
+
+    /// Inserts one occurrence of `value` using Nitro-aware sampling logic.
+    #[inline(always)]
+    pub fn fast_insert_nitro(&mut self, value: &DataInput) {
+        self.fast_insert_nitro_many(value, 1);
+    }
+
+    /// Inserts `many` occurrences of `value` at once -- see the
+    /// `Vector2D<i32>` overload's doc comment for the full rationale.
+    #[inline(always)]
+    pub fn fast_insert_nitro_many(&mut self, value: &DataInput, many: i64) {
+        let rows = self.counts.rows();
+        let delta = self.counts.nitro().scaled_increment(many as u64) as i64;
+        if self.counts.nitro().to_skip >= rows {
+            self.counts.reduce_nitro_skip(rows);
+        } else {
+            let hashed = H::hash128_seeded(0, value);
+            let mut r = self.counts.nitro().to_skip;
+            loop {
+                self.counts.update_by_row(r, hashed, |a, b| *a += b, delta);
+                self.counts.nitro_mut().draw_geometric();
+                if r + self.counts.nitro_mut().to_skip + 1 >= rows {
+                    break;
+                }
+                r += self.counts.nitro_mut().to_skip + 1;
+            }
+            let temp = self.counts.get_nitro_skip();
+            self.counts.update_nitro_skip((r + temp + 1) - rows);
+        }
+    }
+
+    /// Returns the median estimate for `value` -- see the `Vector2D<i32>`
+    /// overload's doc comment for why this doesn't use `hash_for_matrix`.
+    pub fn nitro_estimate(&self, value: &DataInput) -> f64 {
+        let hashed = H::hash128_seeded(0, value);
+        let rows = self.counts.rows();
+        let mut vals: Vec<f64> = (0..rows)
+            .map(|r| *self.counts.query_by_row(r, hashed) as f64)
+            .collect();
+        compute_median_inline_f64(&mut vals)
     }
 }
 

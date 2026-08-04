@@ -307,6 +307,28 @@ impl<T> Vector2D<T> {
     }
 
     #[inline(always)]
+    /// Reads one row's counter using a packed hash value, with the exact
+    /// same column extraction as `update_by_row`.
+    ///
+    /// Nitro inserts (`fast_insert_nitro`) write via `update_by_row` using a
+    /// raw `H::hash128_seeded(0, value)`. Querying that data must extract
+    /// the same column from the same raw hash -- `hash_for_matrix`
+    /// (`common::hash::hash_for_matrix_seeded_with_mode_generic`) is *not*
+    /// equivalent: for dimensions where `hash_mode_for_matrix` selects
+    /// `Packed64`, it hashes with `hash64_seeded` instead of
+    /// `hash128_seeded` entirely (a different algorithm, not just a
+    /// truncation), so a query built on `hash_for_matrix` silently reads
+    /// the wrong cells for any Nitro sketch narrow/shallow enough to hit
+    /// that mode (only coincides for dimensions landing in `Packed128`
+    /// mode, where the seed-0 case matches `hash128_seeded(0, key)`
+    /// exactly). Use this for any query path that must round-trip with a
+    /// `fast_insert_nitro`/`update_by_row`-based insert.
+    pub fn query_by_row(&self, row: usize, hashed: u128) -> &T {
+        let col = (hashed >> (self.mask_bits as usize * row)) as usize & (self.mask as usize);
+        &self.data[row * self.cols + col]
+    }
+
+    #[inline(always)]
     /// Decrements the Nitro skip counter by `c`.
     pub fn reduce_nitro_skip(&mut self, c: usize) {
         self.nitro.reduce_to_skip_by_count(c)
