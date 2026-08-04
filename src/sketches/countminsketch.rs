@@ -495,6 +495,16 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
     }
 
     /// Inserts an observation using Nitro-aware sampling logic.
+    ///
+    /// Loops until the drawn skip carries past the end of this item's
+    /// `rows` row-slots (matching `Count::fast_insert_nitro`'s pattern):
+    /// a single geometric draw can legitimately land more than one touch
+    /// within the same item when the sampling rate is high, and the final
+    /// `(r + temp + 1) - rows` is only guaranteed non-negative once that
+    /// invariant holds. Without the loop, full sampling (`rate == 1.0`)
+    /// always draws `r = 0, temp = 0`, so `(r + temp + 1) - rows`
+    /// underflows for `rows > 1` and silently disables all further
+    /// row-touches for the lifetime of the sketch.
     #[inline(always)]
     pub fn fast_insert_nitro(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
@@ -503,9 +513,15 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
             self.counts.reduce_nitro_skip(rows);
         } else {
             let hashed = H::hash128_seeded(0, value);
-            let r = self.counts.nitro().to_skip;
-            self.counts.update_by_row(r, hashed, |a, b| *a += b, delta);
-            self.counts.nitro_mut().draw_geometric();
+            let mut r = self.counts.nitro().to_skip;
+            loop {
+                self.counts.update_by_row(r, hashed, |a, b| *a += b, delta);
+                self.counts.nitro_mut().draw_geometric();
+                if r + self.counts.nitro_mut().to_skip + 1 >= rows {
+                    break;
+                }
+                r += self.counts.nitro_mut().to_skip + 1;
+            }
             let temp = self.counts.get_nitro_skip();
             self.counts.update_nitro_skip((r + temp + 1) - rows);
         }

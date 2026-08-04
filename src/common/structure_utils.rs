@@ -3,12 +3,9 @@
 //! Vector2D:
 //! Vector3D:
 //! CommonHeap:
-// use rand::rngs::SmallRng;
-// use rand::{Rng, SeedableRng, rng};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng, rng};
 use serde::{Deserialize, Serialize};
-
-// use crate::PRECOMPUTED_SAMPLE;
-use crate::PRECOMPUTED_SAMPLE_RATE_1PERCENT;
 /// Helper trait for converting sketch counter types to f64 for median calculation.
 pub trait ToF64 {
     /// Converts the value into `f64`.
@@ -52,19 +49,19 @@ pub struct Nitro {
     pub to_skip: usize,
     /// Precomputed: 1.0 / ln(1 - sampling_rate) for geometric sampling
     inv_ln_one_minus_p: f64,
-    // #[serde(skip)]
-    // #[serde(default = "new_small_rng")]
-    // // generator: SmallRng,
+    #[serde(skip)]
+    #[serde(default = "new_small_rng")]
+    generator: SmallRng,
     /// Weight applied to each sampled update.
     pub delta: u64,
     idx: usize,
     mask: usize,
 }
 
-// fn new_small_rng() -> SmallRng {
-//     let mut seed_rng = rng();
-//     SmallRng::from_rng(&mut seed_rng)
-// }
+fn new_small_rng() -> SmallRng {
+    let mut seed_rng = rng();
+    SmallRng::from_rng(&mut seed_rng)
+}
 
 impl Default for Nitro {
     fn default() -> Self {
@@ -73,7 +70,7 @@ impl Default for Nitro {
             sampling_rate: 0.0,
             to_skip: 0,
             inv_ln_one_minus_p: 0.0, // not used unless Nitro mode is enabled
-            // generator: new_small_rng(), // not used unless Nitro mode is enabled
+            generator: new_small_rng(), // not used unless Nitro mode is enabled
             delta: 0,
             idx: 0,
             mask: 0x10000,
@@ -98,7 +95,7 @@ impl Nitro {
             sampling_rate: rate,
             to_skip: 0,
             inv_ln_one_minus_p: inv_ln,
-            // generator: new_small_rng(),
+            generator: new_small_rng(),
             delta: 0,
             idx: 0,
             mask: 0x10000,
@@ -107,25 +104,49 @@ impl Nitro {
         nitro
     }
 
-    // for profiling
     #[inline(always)]
     /// Draws the next geometric skip distance.
+    ///
+    /// Uses a live geometric draw from `self.generator`, matching
+    /// `NitroBatch::draw_geometric` in `sketch_framework/nitro.rs` (the
+    /// same formula, kept consistent between the two Nitro
+    /// implementations in this crate). Previously this used a fixed,
+    /// precomputed ~1%-rate lookup table regardless of the configured
+    /// `sampling_rate` (`idx` cycling through `PRECOMPUTED_SAMPLE_RATE_1PERCENT`),
+    /// which only coincidentally matched the requested rate at ~0.01 --
+    /// at every other configured rate, the actual skip distances (and
+    /// thus how often a row was genuinely touched) never tracked
+    /// `sampling_rate` at all, only the `delta` compensation did,
+    /// silently miscalibrating every estimate. Verified empirically: at
+    /// `sampling_rate=0.5` the true touch count is exactly the touch
+    /// count observed at `sampling_rate=0.01`, `0.02`, `0.05`, `0.1`, in
+    /// a Count-Min sketch with the table-driven version.
+    ///
+    /// The `- 1` matches NitroSketch paper Algorithm 1's `Update(p)`:
+    /// `r += Geo(p)` advances the row cursor by the raw geometric draw
+    /// (support `{1,2,...}`, mean `1/p`) with no extra offset. Callers
+    /// here (`fast_insert_nitro`, `NitroBatch::insert`) advance the
+    /// cursor via `r += to_skip + 1` -- treating `to_skip` as "positions
+    /// to skip *before* the touch" (support `{0,1,...}`, mean `1/p - 1`)
+    /// and adding the `+1` back for the touch itself. Without the `- 1`
+    /// here, that `+1` is double-counted: the true step mean becomes
+    /// `1/p + 1` instead of `1/p`, so the achieved sampling density is
+    /// `p/(1+p)` rather than `p` -- e.g. at `p=0.5` the sketch actually
+    /// samples at ~33%, not 50%, systematically undercounting every
+    /// estimate. Verified empirically via a standalone row-cycling
+    /// simulation matching this exact stepping logic.
     pub fn draw_geometric(&mut self) {
         if self.is_full_sampling() {
             self.to_skip = 0;
             return;
         }
-        // let k = loop {
-        //     let r = self.generator.random::<f64>();
-        //     if r != 0.0_f64 && r != 1.0_f64 {
-        //         break r;
-        //     }
-        // };
-        // self.to_skip = ((1.0 - k).ln() * self.inv_ln_one_minus_p).ceil() as usize;
-
-        // self.to_skip = (PRECOMPUTED_SAMPLE[self.idx] * self.inv_ln_one_minus_p).ceil() as usize;
-
-        self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].ceil() as usize;
+        let k = loop {
+            let r = self.generator.random::<f64>();
+            if r != 0.0_f64 && r != 1.0_f64 {
+                break r;
+            }
+        };
+        self.to_skip = ((1.0 - k).ln() * self.inv_ln_one_minus_p).ceil() as usize - 1;
         self.idx = (self.idx + 1) & self.mask;
     }
 
