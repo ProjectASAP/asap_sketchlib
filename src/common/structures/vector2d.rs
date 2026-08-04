@@ -108,6 +108,12 @@ impl<T> Vector2D<T> {
         self.nitro = Nitro::init_nitro(sampling_rate);
     }
 
+    /// Enables Nitro sampling with the provided rate and a reproducible
+    /// RNG seed -- see `Nitro::init_nitro_seeded`'s doc comment.
+    pub fn enable_nitro_seeded(&mut self, sampling_rate: f64, seed: u64) {
+        self.nitro = Nitro::init_nitro_seeded(sampling_rate, seed);
+    }
+
     /// Disables Nitro sampling and resets the internal state.
     pub fn disable_nitro(&mut self) {
         self.nitro = Nitro::default();

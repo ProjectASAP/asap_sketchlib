@@ -81,6 +81,23 @@ impl Default for Nitro {
 impl Nitro {
     /// Creates a Nitro state with the given sampling rate.
     pub fn init_nitro(rate: f64) -> Self {
+        Self::init_nitro_with(rate, new_small_rng())
+    }
+
+    /// Creates a Nitro state with the given sampling rate, whose sampling
+    /// decisions are reproducible: the geometric-skip RNG is seeded from
+    /// `seed` (via `SmallRng::seed_from_u64`) instead of OS entropy.
+    /// `init_nitro`'s default is intentionally non-reproducible (a fresh
+    /// `new_small_rng()` draws from OS entropy every call, and the
+    /// generator field itself is `#[serde(skip)]`, so it never survives a
+    /// save/restore either) -- appropriate for production sampling, but
+    /// not for a caller that needs deterministic runs (e.g. a benchmark
+    /// harness driven by its own `--seed` flag).
+    pub fn init_nitro_seeded(rate: f64, seed: u64) -> Self {
+        Self::init_nitro_with(rate, SmallRng::seed_from_u64(seed))
+    }
+
+    fn init_nitro_with(rate: f64, generator: SmallRng) -> Self {
         assert!(
             !rate.is_nan() && rate > 0.0 && rate <= 1.0,
             "sample_rate must be within (0.0, 1.0]"
@@ -95,7 +112,7 @@ impl Nitro {
             sampling_rate: rate,
             to_skip: 0,
             inv_ln_one_minus_p: inv_ln,
-            generator: new_small_rng(),
+            generator,
             delta: 0,
             idx: 0,
             mask: 0x10000,

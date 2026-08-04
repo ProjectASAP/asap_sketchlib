@@ -489,6 +489,12 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
         self.counts.enable_nitro(sampling_rate);
     }
 
+    /// Enables Nitro sampling with a reproducible RNG seed -- see
+    /// `Nitro::init_nitro_seeded`'s doc comment.
+    pub fn enable_nitro_seeded(&mut self, sampling_rate: f64, seed: u64) {
+        self.counts.enable_nitro_seeded(sampling_rate, seed);
+    }
+
     /// Disables Nitro sampling and resets its internal state.
     pub fn disable_nitro(&mut self) {
         self.counts.disable_nitro();
@@ -567,6 +573,12 @@ impl<H: SketchHasher> CountMin<Vector2D<i64>, FastPath, H> {
     /// Enables Nitro sampling with the provided rate.
     pub fn enable_nitro(&mut self, sampling_rate: f64) {
         self.counts.enable_nitro(sampling_rate);
+    }
+
+    /// Enables Nitro sampling with a reproducible RNG seed -- see
+    /// `Nitro::init_nitro_seeded`'s doc comment.
+    pub fn enable_nitro_seeded(&mut self, sampling_rate: f64, seed: u64) {
+        self.counts.enable_nitro_seeded(sampling_rate, seed);
     }
 
     /// Disables Nitro sampling and resets its internal state.
