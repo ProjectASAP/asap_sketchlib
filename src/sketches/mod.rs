@@ -90,9 +90,6 @@ pub use uniform::UniformSampling;
 pub mod ddsketch;
 pub use ddsketch::DDSketch;
 
-pub mod univmon_q;
-pub use univmon_q::{UnivMonQ, UnivMonQConfig, UnivMonQError, UnivMonQPoint, UnivMonQQuery};
-
 pub mod countminsketch_topk;
 pub use countminsketch_topk::CMSHeap;
 

@@ -25,8 +25,8 @@ implementations, and orchestration/windowing frameworks in one crate.
 ## Current State
 
 - **Ready**: Core sketch APIs marked `Ready` in [apis.md](./apis.md): `CountMin`, `Count`, `HyperLogLog`, `KLL`, `DDSketch`, `CMSHeap`, `CSHeap`
-- **Notice**: Core sketch APIs currently marked `Unstable`: `Elastic`, `Coco`, `UniformSampling`, `KMV`, `UnivMonQ`
+- **Notice**: Core sketch APIs currently marked `Unstable`: `Elastic`, `Coco`, `UniformSampling`, `KMV`
 - Framework APIs marked `Ready`: `Hydra`, `HashSketchEnsemble`, `UnivMon`, `UnivMon Optimized`, `NitroBatch`, `ExponentialHistogram`, `EHSketchList`
-- Framework APIs currently marked `Unstable`: `EHUnivOptimized`
+- Framework APIs currently marked `Unstable`: `EHUnivOptimized`, `UnivMonQ`
 - Shared common-layer APIs are available under [Common Utility APIs](./apis.md#common-utility-apis)
 - **Ongoing** work focuses on API stabilization, broader tests, and benchmark depth (see [Feature Status](./features.md))
