@@ -5,7 +5,7 @@
 //!
 //! - windowed analytics: [`ExponentialHistogram`], [`TumblingWindow`]
 //! - subpopulation and hierarchical queries: [`Hydra`]
-//! - universal multi-metric monitoring: [`UnivMon`]
+//! - universal multi-metric monitoring: [`UnivMon`], [`UnivMonQ`]
 //! - batch update acceleration: [`NitroBatch`]
 //! - shared-hash or multi-sketch coordination: [`HashSketchEnsemble`]
 //! - runtime and parallel execution helpers: the `octo` family
@@ -38,6 +38,9 @@ pub use hydra::Hydra;
 
 pub mod univmon;
 pub use univmon::UnivMon;
+
+pub mod univmon_q;
+pub use univmon_q::{UnivMonQ, UnivMonQConfig, UnivMonQError, UnivMonQPoint, UnivMonQQuery};
 
 pub mod univmon_optimized;
 pub use univmon_optimized::{UnivMonPyramid, UnivSketchPool};

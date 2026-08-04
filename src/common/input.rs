@@ -314,6 +314,13 @@ impl L2HH {
         }
     }
 
+    /// Returns the current frequency estimate without changing the sketch.
+    pub fn estimate(&self, key: &DataInput) -> f64 {
+        match self {
+            L2HH::COUNT(count_l2hh) => count_l2hh.fast_get_est(key),
+        }
+    }
+
     /// Merges another counter of the same kind into this one.
     pub fn merge(&mut self, other: &L2HH) {
         match (self, other) {

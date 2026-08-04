@@ -50,6 +50,10 @@ impl HHHeap {
     }
 
     /// Updates an existing item's count or inserts a new item.
+    ///
+    /// Returns `false` when this bounded heap has encountered a new identity
+    /// after reaching capacity, so callers can distinguish complete candidate
+    /// sets from truncated ones.
     pub fn update(&mut self, key: &DataInput, count: i64) -> bool {
         if let Some(idx) = self.find(key) {
             self.heap[idx].count = count;
@@ -58,17 +62,21 @@ impl HHHeap {
             return true;
         }
 
+        let retained_every_key = self.heap.len() < self.k;
+
         if !self.should_accept_new(count) {
-            return true;
+            return retained_every_key;
         }
 
         let owned = input_to_owned(key);
         self.heap.push(HHItem::create_item(owned, count));
         self.refresh_positions();
-        true
+        retained_every_key
     }
 
     /// Updates an existing owned item or inserts it if needed.
+    ///
+    /// The return value has the same completeness meaning as [`Self::update`].
     pub fn update_heap_item(&mut self, key: &HeapItem, count: i64) -> bool {
         if let Some(idx) = self.find_heap_item(key) {
             self.heap[idx].count = count;
@@ -77,13 +85,15 @@ impl HHHeap {
             return true;
         }
 
+        let retained_every_key = self.heap.len() < self.k;
+
         if !self.should_accept_new(count) {
-            return true;
+            return retained_every_key;
         }
 
         self.heap.push(HHItem::create_item(key.to_owned(), count));
         self.refresh_positions();
-        true
+        retained_every_key
     }
 
     /// Provides access to the underlying data as a slice.

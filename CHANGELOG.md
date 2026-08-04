@@ -10,6 +10,28 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+### Fixed
+
+- Corrected UnivMon and UnivMonPyramid merge semantics: aggregate stream
+  weight, recomputed CountL2HH row norms, and merged-counter candidate
+  re-estimation.
+- Restored per-layer L2 maintenance for standard UnivMon updates and completed
+  Joltik-style terminal-only updates with query-time logical reconstruction.
+- Replaced UnivMon's fixed cardinality cutoff with a heap-sized L2-heavy-hitter
+  threshold, tracked whether bounded candidate sets are complete, and made
+  queries refresh candidate frequencies from current CountSketch counters.
+- Removed duplicate stream-weight accounting in experimental UnivMon windows.
+
+### Added
+- **UnivMon-Q core sketch.** Adds `UnivMonQ<H>`, a Joltik-style terminal-stratum
+  UnivMon implementation extended with a coordinated ordered sample for rank,
+  CDF, and quantile estimates. The sketch supports pluggable `SketchHasher`,
+  compatible merges, native MessagePack round-trips, exact extrema, point
+  frequency, F0, F2, F3, generic g-sums, entropy, and recovered heavy-hitter
+  queries. Reusable prepared query views share logical-hierarchy and CDF
+  reconstruction across a metric batch. The API is initially marked
+  `Unstable`; an ASAPv1 cross-language kind is not yet assigned.
+
 ### Changed (breaking — wire format)
 - **Drop the DataPoint-level METRIC scalars from `DDSketchState`.** Removed
   `count` (4), `sum` (5), `min` (6) and `max` (7) from

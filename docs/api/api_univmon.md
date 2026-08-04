@@ -25,6 +25,11 @@ fn fast_insert(&mut self, key: &DataInput, value: i64)
 fn free(&mut self)
 ```
 
+`insert` maintains the cumulative sampled substream at every selected layer.
+`fast_insert` uses the Joltik update-last-layer layout and reconstructs logical
+layers during queries. Choose one update method for the lifetime of a sketch;
+mixing the two physical layouts is rejected.
+
 ## Query
 
 ```rust
@@ -60,7 +65,10 @@ assert!(um.calc_l1() >= 1.0);
 
 ## Caveats
 
-- Structure parameters should match before merge.
+- Updates must have non-negative weights.
+- Structure parameters and update strategies must match before merge.
+- Merge combines total weight, recomputes cached L2 state, and re-estimates the
+  union of bounded heavy-hitter candidates from merged counters.
 
 ## Status
 
