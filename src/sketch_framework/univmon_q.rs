@@ -1,21 +1,23 @@
-//! UnivMon-Q: universal frequency measurements with ordered quantile queries.
+//! Experimental UnivMon-Q: universal frequency measurements with ordered quantile queries.
 //!
 //! Each numeric value is encoded into an order-preserving `u64` key. One
-//! 128-bit hash is split into independent fields for CountSketch rows, the
-//! Joltik terminal stratum, and a coordinated bottom-k priority. Updates touch
-//! one physical CountSketch layer. Query-time recursion reconstructs the
-//! logical UnivMon hierarchy, while a frequency-weighted bottom-k sample of
-//! the non-heavy residual supplies rank and quantile estimates.
+//! 128-bit key hash is split into independent fields for CountSketch rows and
+//! the Joltik terminal stratum. Updates touch one physical CountSketch layer.
+//! A separate coordinated bottom-k sample of stream occurrences is keyed by
+//! `(source_id, local_sequence)`. Query-time recursion reconstructs the
+//! logical UnivMon hierarchy; reliable heavy frequencies are combined with
+//! the residual occurrence sample for rank and quantile estimates.
 //!
 //! Provenance: adapted from the experimental `zaoxing/univmon-quantile`
 //! implementation and integrated with Sketchlib's numeric input, pluggable
 //! hashing, merge, and native MessagePack APIs.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use rmp_serde::decode::Error as RmpDecodeError;
 use rmp_serde::encode::Error as RmpEncodeError;
@@ -25,7 +27,9 @@ use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, DefaultXxHasher, SketchHasher};
 
-const WIRE_VERSION: u8 = 1;
+const WIRE_VERSION: u8 = 2;
+const OCCURRENCE_HASH_SEED_DOMAIN: usize = usize::MAX / 3;
+static NEXT_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Memory, accuracy, and hashing controls for [`UnivMonQ`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -42,7 +46,7 @@ pub struct UnivMonQConfig {
     pub counter_bits: u8,
     /// Maximum candidate identities retained at each terminal stratum.
     pub candidates: usize,
-    /// Coordinated distinct-value samples retained for ordered queries.
+    /// Coordinated stream-occurrence samples retained for ordered queries.
     /// Set to zero when rank/CDF/quantile queries are not required.
     pub ordered_samples: usize,
     /// Seed index passed to [`SketchHasher::hash128_seeded`].
@@ -135,6 +139,16 @@ struct CandidateRecovery {
     by_terminal: Vec<Vec<RecoveredCandidate>>,
 }
 
+/// One retained stream occurrence. Splitting the 128-bit priority into two
+/// words keeps the record at 24 bytes instead of introducing `u128` alignment
+/// padding on common 64-bit targets.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+struct OrderedOccurrence {
+    priority_high: u64,
+    priority_low: u64,
+    key: u64,
+}
+
 /// Reusable, immutable query state prepared from a [`UnivMonQ`] sketch.
 ///
 /// Preparing the view reconstructs the logical UnivMon hierarchy and ordered
@@ -145,6 +159,7 @@ struct CandidateRecovery {
 pub struct UnivMonQQuery<'a, H: SketchHasher = DefaultXxHasher> {
     sketch: &'a UnivMonQ<H>,
     logical_heavy: Vec<Vec<RecoveredCandidate>>,
+    heavy_hitters: Vec<RecoveredCandidate>,
     cdf: Vec<UnivMonQPoint>,
 }
 
@@ -153,8 +168,6 @@ struct HashLayout {
     bucket_bits: u32,
     terminal_offset: u32,
     terminal_bits: u32,
-    priority_offset: u32,
-    priority_bits: u32,
 }
 
 impl HashLayout {
@@ -163,18 +176,16 @@ impl HashLayout {
         let row_bits = bucket_bits + 1;
         let terminal_offset = row_bits * config.depth as u32;
         let terminal_bits = config.levels as u32 - 1;
-        let priority_offset = terminal_offset + terminal_bits;
-        if config.depth > 64 || priority_offset > 96 {
+        let used_bits = terminal_offset + terminal_bits;
+        if config.depth > 64 || used_bits > 128 {
             return Err(UnivMonQError::new(
-                "hash layout needs at most 96 of 128 bits before sample priority",
+                "hash layout needs more than the available 128 hash bits",
             ));
         }
         Ok(Self {
             bucket_bits,
             terminal_offset,
             terminal_bits,
-            priority_offset,
-            priority_bits: 128 - priority_offset,
         })
     }
 
@@ -183,18 +194,6 @@ impl HashLayout {
         let mask = (1_u128 << self.terminal_bits) - 1;
         let field = (hash >> self.terminal_offset) & mask;
         (field.trailing_zeros() as usize).min(self.terminal_bits as usize)
-    }
-
-    #[inline(always)]
-    fn priority(self, hash: u128) -> u64 {
-        let bits = self.priority_bits.min(64);
-        let mask = if bits == 64 {
-            u128::from(u64::MAX)
-        } else {
-            (1_u128 << bits) - 1
-        };
-        let value = ((hash >> self.priority_offset) & mask) as u64;
-        value << (64 - bits)
     }
 }
 
@@ -414,6 +413,7 @@ struct Level {
     candidate_scores: HashMap<u64, u64>,
     candidate_heap: BinaryHeap<Reverse<(u64, u64)>>,
     candidate_capacity: usize,
+    ever_evicted: bool,
 }
 
 impl Level {
@@ -423,25 +423,31 @@ impl Level {
             candidate_scores: HashMap::with_capacity(candidates),
             candidate_heap: BinaryHeap::with_capacity(candidates),
             candidate_capacity: candidates,
+            ever_evicted: false,
         }
     }
 
     fn update(&mut self, key: u64, hash: u128, bucket_bits: u32) {
         self.sketch.update(hash, bucket_bits);
-        if let Some(score) = self.candidate_scores.get_mut(&key) {
-            *score = score.saturating_add(1);
+        let score = self.sketch.estimate(hash, bucket_bits).max(0) as u64;
+        if let Some(stored_score) = self.candidate_scores.get_mut(&key) {
+            *stored_score = score;
             return;
         }
         if self.candidate_scores.len() < self.candidate_capacity {
-            self.candidate_scores.insert(key, 1);
-            self.candidate_heap.push(Reverse((1, key)));
+            self.candidate_scores.insert(key, score);
+            self.candidate_heap.push(Reverse((score, key)));
             return;
         }
         if let Some((minimum, evicted)) = self.lightest_candidate() {
-            self.candidate_scores.remove(&evicted);
-            let score = minimum.saturating_add(1);
-            self.candidate_scores.insert(key, score);
-            self.candidate_heap.push(Reverse((score, key)));
+            self.ever_evicted = true;
+            if score > minimum {
+                self.candidate_scores.remove(&evicted);
+                self.candidate_scores.insert(key, score);
+                self.candidate_heap.push(Reverse((score, key)));
+            } else {
+                self.candidate_heap.push(Reverse((minimum, evicted)));
+            }
         }
     }
 
@@ -462,40 +468,25 @@ impl Level {
         }
     }
 
-    fn merge(&mut self, other: &Self) {
+    fn merge(&mut self, other: &Self, bucket_bits: u32, hash_key: impl Fn(u64) -> u128) {
         self.sketch.merge(&other.sketch);
-        let left_minimum = if self.candidate_scores.len() == self.candidate_capacity {
-            self.candidate_scores.values().copied().min().unwrap_or(0)
-        } else {
-            0
-        };
-        let right_minimum = if other.candidate_scores.len() == other.candidate_capacity {
-            other.candidate_scores.values().copied().min().unwrap_or(0)
-        } else {
-            0
-        };
-        let mut combined = HashMap::with_capacity(
-            (self.candidate_scores.len() + other.candidate_scores.len())
-                .min(2 * self.candidate_capacity),
-        );
-        for (&key, &left_count) in &self.candidate_scores {
-            let right_count = other
-                .candidate_scores
-                .get(&key)
-                .copied()
-                .unwrap_or(right_minimum);
-            combined.insert(key, left_count.saturating_add(right_count));
-        }
-        for (&key, &right_count) in &other.candidate_scores {
-            combined
-                .entry(key)
-                .or_insert_with(|| right_count.saturating_add(left_minimum));
-        }
-        let mut retained: Vec<(u64, u64)> = combined.into_iter().collect();
+        let mut combined: HashSet<u64> = self.candidate_scores.keys().copied().collect();
+        combined.extend(other.candidate_scores.keys().copied());
+        let combined_len = combined.len();
+        let mut retained: Vec<(u64, u64)> = combined
+            .into_iter()
+            .map(|key| {
+                let hash = hash_key(key);
+                let score = self.sketch.estimate(hash, bucket_bits).max(0) as u64;
+                (key, score)
+            })
+            .collect();
         retained.sort_unstable_by(|left, right| {
             right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
         });
         retained.truncate(self.candidate_capacity);
+        self.ever_evicted =
+            self.ever_evicted || other.ever_evicted || combined_len > self.candidate_capacity;
         self.candidate_scores.clear();
         self.candidate_heap.clear();
         for (key, count) in retained {
@@ -508,10 +499,11 @@ impl Level {
         self.sketch.clear();
         self.candidate_scores.clear();
         self.candidate_heap.clear();
+        self.ever_evicted = false;
     }
 }
 
-/// Mergeable universal sketch extended with rank, CDF, and quantile queries.
+/// Experimental mergeable universal sketch extended with rank, CDF, and quantile queries.
 ///
 /// `H` is the same pluggable hash abstraction used throughout Sketchlib. The
 /// default uses [`DefaultXxHasher`]. Values use `f64::total_cmp` ordering,
@@ -524,8 +516,9 @@ pub struct UnivMonQ<H: SketchHasher = DefaultXxHasher> {
     count: u64,
     min: Option<u64>,
     max: Option<u64>,
-    ordered_frequencies: HashMap<u64, u64>,
-    ordered_heap: BinaryHeap<(u64, u64)>,
+    source_id: u64,
+    next_sequence: u64,
+    ordered_heap: BinaryHeap<OrderedOccurrence>,
     hasher: PhantomData<H>,
 }
 
@@ -550,11 +543,39 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
         self.sketch.estimate_frequency(value)
     }
 
+    /// Experimental fixed-threshold rank estimate from the UnivMon recurrence.
+    ///
+    /// Unlike [`Self::rank`], this does not use or require the ordered sample.
+    /// It evaluates the separable subset function
+    /// `g_x(key, frequency) = frequency * I[key <= x]` over the recovered
+    /// hierarchy. Individual thresholds inherit UnivMon's candidate-recovery
+    /// assumptions; estimates at different thresholds are not jointly forced
+    /// to be monotone.
+    pub fn estimate_rank_universal(&self, value: f64) -> Option<u64> {
+        if self.count() == 0 {
+            return None;
+        }
+        let key = float_to_ordered(value);
+        if key < self.sketch.min? {
+            return Some(0);
+        }
+        if key >= self.sketch.max? {
+            return Some(self.count());
+        }
+        Some(
+            estimate_keyed_sum_from(&self.logical_heavy, |candidate_key, frequency| {
+                if candidate_key <= key { frequency } else { 0.0 }
+            })
+            .round()
+            .clamp(0.0, self.count() as f64) as u64,
+        )
+    }
+
     /// Estimates `sum_x g(f_x)` using the prepared logical hierarchy.
     ///
     /// As with UnivMon's generic estimator, useful accuracy requires a
     /// frequency function compatible with the retained-heavy-item recurrence;
-    /// callers should normally use the provided F0/F2/F3/entropy methods.
+    /// callers should normally use the provided F0/F2/entropy methods.
     pub fn estimate_g_sum<F>(&self, g: F) -> f64
     where
         F: Fn(f64) -> f64,
@@ -570,12 +591,6 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
     /// UnivMon estimate of the frequency vector's second moment.
     pub fn estimate_f2(&self) -> f64 {
         self.estimate_g_sum(|frequency| frequency * frequency)
-            .max(0.0)
-    }
-
-    /// UnivMon estimate of the frequency vector's third moment.
-    pub fn estimate_f3(&self) -> f64 {
-        self.estimate_g_sum(|frequency| frequency * frequency * frequency)
             .max(0.0)
     }
 
@@ -599,10 +614,8 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
         if k == 0 || self.count() == 0 {
             return Vec::new();
         }
-        self.logical_heavy
-            .first()
-            .into_iter()
-            .flatten()
+        self.heavy_hitters
+            .iter()
             .take(k)
             .map(|candidate| {
                 (
@@ -679,6 +692,17 @@ impl<H: SketchHasher> Default for UnivMonQ<H> {
 impl<H: SketchHasher> UnivMonQ<H> {
     /// Creates an empty sketch using `H` and the supplied configuration.
     pub fn with_hasher(config: UnivMonQConfig) -> Result<Self, UnivMonQError> {
+        Self::with_hasher_and_source_id(config, allocate_source_id())
+    }
+
+    /// Creates an empty sketch with an explicit distributed source identity.
+    ///
+    /// Every concurrently mergeable source must use a different ID. Ordered
+    /// occurrence priorities are derived from `(source_id, local_sequence)`.
+    pub fn with_hasher_and_source_id(
+        config: UnivMonQConfig,
+        source_id: u64,
+    ) -> Result<Self, UnivMonQError> {
         validate_config(config)?;
         let hash_layout = HashLayout::new(config)?;
         let levels = (0..config.levels)
@@ -698,7 +722,8 @@ impl<H: SketchHasher> UnivMonQ<H> {
             count: 0,
             min: None,
             max: None,
-            ordered_frequencies: HashMap::with_capacity(config.ordered_samples),
+            source_id,
+            next_sequence: 0,
             ordered_heap: BinaryHeap::with_capacity(config.ordered_samples),
             hasher: PhantomData,
         })
@@ -707,6 +732,11 @@ impl<H: SketchHasher> UnivMonQ<H> {
     /// Returns the immutable configuration required by compatible merges.
     pub fn config(&self) -> UnivMonQConfig {
         self.config
+    }
+
+    /// Identity used to coordinate occurrence priorities from this source.
+    pub fn source_id(&self) -> u64 {
+        self.source_id
     }
 
     /// Adds one numeric value.
@@ -733,12 +763,20 @@ impl<H: SketchHasher> UnivMonQ<H> {
     fn update_value(&mut self, value: f64) {
         let key = float_to_ordered(value);
         let hash = self.hash_key(key);
+        let sequence = self.next_sequence;
+        self.next_sequence = self
+            .next_sequence
+            .checked_add(1)
+            .expect("UnivMon-Q source sequence exhausted");
         self.count = self.count.saturating_add(1);
         self.min = Some(self.min.map_or(key, |old| old.min(key)));
         self.max = Some(self.max.map_or(key, |old| old.max(key)));
         let terminal = self.hash_layout.terminal_level(hash);
         self.levels[terminal].update(key, hash, self.hash_layout.bucket_bits);
-        self.update_ordered_sample(key, self.hash_layout.priority(hash));
+        if self.config.ordered_samples > 0 {
+            let occurrence = self.occurrence(key, sequence);
+            self.update_ordered_sample(occurrence);
+        }
     }
 
     /// Merges a shard built with the identical configuration and hash profile.
@@ -757,8 +795,12 @@ impl<H: SketchHasher> UnivMonQ<H> {
             (Some(left), Some(right)) => Some(left.max(right)),
             (left, right) => left.or(right),
         };
+        let hash_seed = self.config.hash_seed;
+        let bucket_bits = self.hash_layout.bucket_bits;
         for (left, right) in self.levels.iter_mut().zip(&other.levels) {
-            left.merge(right);
+            left.merge(right, bucket_bits, |key| {
+                H::hash128_seeded(hash_seed, &DataInput::U64(key))
+            });
         }
         self.merge_ordered_samples(other);
         Ok(())
@@ -769,7 +811,6 @@ impl<H: SketchHasher> UnivMonQ<H> {
         self.count = 0;
         self.min = None;
         self.max = None;
-        self.ordered_frequencies.clear();
         self.ordered_heap.clear();
         for level in &mut self.levels {
             level.clear();
@@ -810,6 +851,17 @@ impl<H: SketchHasher> UnivMonQ<H> {
         self.frequency_key(key).max(0) as u64
     }
 
+    /// Experimental fixed-threshold rank estimate from the UnivMon recurrence.
+    ///
+    /// This path is independent of `ordered_samples`. Prefer
+    /// [`Self::prepare_queries`] when evaluating more than one threshold.
+    pub fn estimate_rank_universal(&self, value: f64) -> Option<u64> {
+        if self.is_empty() {
+            return None;
+        }
+        self.prepare_queries().estimate_rank_universal(value)
+    }
+
     /// Reconstructs a reusable query snapshot.
     ///
     /// Use this when answering multiple universal metrics or ordered queries
@@ -818,9 +870,10 @@ impl<H: SketchHasher> UnivMonQ<H> {
     pub fn prepare_queries(&self) -> UnivMonQQuery<'_, H> {
         let recovery = self.recover_candidates();
         let logical_heavy = self.logical_heavy_sets_from(&recovery);
-        let global_heavy = self.global_heavy_candidates_from(&recovery);
+        let heavy_hitters = self.top_candidates_from(&recovery);
+        let ordered_heavy = self.assisted_ordered_heavy(&logical_heavy, &heavy_hitters);
         let cdf = self
-            .cdf_keys_from(&global_heavy)
+            .cdf_keys_from(&ordered_heavy)
             .into_iter()
             .map(|(value, rank)| UnivMonQPoint {
                 value: ordered_to_float(value),
@@ -830,6 +883,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
         UnivMonQQuery {
             sketch: self,
             logical_heavy,
+            heavy_hitters,
             cdf,
         }
     }
@@ -861,12 +915,6 @@ impl<H: SketchHasher> UnivMonQ<H> {
             .max(0.0)
     }
 
-    /// UnivMon estimate of the frequency vector's third moment.
-    pub fn estimate_f3(&self) -> f64 {
-        self.estimate_g_sum(|frequency| frequency * frequency * frequency)
-            .max(0.0)
-    }
-
     /// Estimated Shannon entropy in nats.
     pub fn estimate_entropy(&self) -> f64 {
         if self.is_empty() {
@@ -888,10 +936,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
             return Vec::new();
         }
         let recovery = self.recover_candidates();
-        self.logical_heavy_sets_from(&recovery)
-            .into_iter()
-            .next()
-            .unwrap_or_default()
+        self.top_candidates_from(&recovery)
             .into_iter()
             .take(k)
             .map(|candidate| {
@@ -980,9 +1025,9 @@ impl<H: SketchHasher> UnivMonQ<H> {
             * self.config.candidates
             * (size_of::<(u64, u64)>() + 2 * size_of::<usize>());
         let candidate_heaps = self.config.levels * self.config.candidates * size_of::<(u64, u64)>();
-        let ordered =
-            self.config.ordered_samples * (size_of::<(u64, u64)>() + size_of::<(u64, u64)>());
-        counters + candidates + candidate_heaps + ordered
+        let eviction_history = self.config.levels * size_of::<bool>();
+        let ordered = self.config.ordered_samples * size_of::<OrderedOccurrence>();
+        counters + candidates + candidate_heaps + eviction_history + ordered
     }
 
     fn cdf_keys(&self) -> Vec<(u64, f64)> {
@@ -990,7 +1035,9 @@ impl<H: SketchHasher> UnivMonQ<H> {
             return Vec::new();
         }
         let recovery = self.recover_candidates();
-        let heavy = self.global_heavy_candidates_from(&recovery);
+        let logical_heavy = self.logical_heavy_sets_from(&recovery);
+        let heavy_hitters = self.top_candidates_from(&recovery);
+        let heavy = self.assisted_ordered_heavy(&logical_heavy, &heavy_hitters);
         self.cdf_keys_from(&heavy)
     }
 
@@ -1008,19 +1055,33 @@ impl<H: SketchHasher> UnivMonQ<H> {
         }
         let heavy_total: f64 = heavy.values().sum();
         let residual_total = (self.count as f64 - heavy_total).max(0.0);
-        let sampled_residual_total: f64 = self
-            .ordered_frequencies
+        let mut residual_keys: Vec<u64> = self
+            .ordered_heap
             .iter()
-            .filter(|(key, _)| !heavy.contains_key(key))
-            .map(|(_, frequency)| *frequency as f64)
-            .sum();
+            .filter(|occurrence| !heavy.contains_key(&occurrence.key))
+            .map(|occurrence| occurrence.key)
+            .collect();
+        if residual_keys.is_empty() && residual_total > 0.0 {
+            heavy.clear();
+            residual_keys = self
+                .ordered_heap
+                .iter()
+                .map(|occurrence| occurrence.key)
+                .collect();
+        }
+        let residual_total = if heavy.is_empty() {
+            self.count as f64
+        } else {
+            (self.count as f64 - heavy.values().sum::<f64>()).max(0.0)
+        };
+        let residual_weight = if residual_keys.is_empty() {
+            0.0
+        } else {
+            residual_total / residual_keys.len() as f64
+        };
         let mut weights = heavy;
-        if sampled_residual_total > 0.0 {
-            for (&key, &frequency) in &self.ordered_frequencies {
-                weights
-                    .entry(key)
-                    .or_insert(residual_total * frequency as f64 / sampled_residual_total);
-            }
+        for key in residual_keys {
+            *weights.entry(key).or_insert(0.0) += residual_weight;
         }
         weights.entry(self.min.unwrap()).or_insert(0.0);
         weights.entry(self.max.unwrap()).or_insert(0.0);
@@ -1072,29 +1133,38 @@ impl<H: SketchHasher> UnivMonQ<H> {
         }
     }
 
-    fn global_heavy_candidates_from(&self, recovery: &CandidateRecovery) -> Vec<(u64, f64)> {
-        let mut candidates = Vec::with_capacity(self.config.levels * self.config.candidates);
-        for (terminal, level) in self.levels.iter().enumerate() {
-            let threshold = if level.candidate_scores.len() < self.config.candidates {
-                0.0
-            } else {
-                2.0 * (recovery.physical_f2[terminal] / self.config.candidates as f64).sqrt()
-            };
-            candidates.extend(
-                recovery.by_terminal[terminal]
-                    .iter()
-                    .filter(|candidate| candidate.frequency >= threshold)
-                    .map(|candidate| (candidate.key, candidate.frequency)),
-            );
-        }
+    fn top_candidates_from(&self, recovery: &CandidateRecovery) -> Vec<RecoveredCandidate> {
+        let mut candidates: Vec<_> = recovery.by_terminal.iter().flatten().copied().collect();
         candidates.sort_unstable_by(|left, right| {
             right
-                .1
-                .total_cmp(&left.1)
-                .then_with(|| left.0.cmp(&right.0))
+                .frequency
+                .total_cmp(&left.frequency)
+                .then_with(|| left.key.cmp(&right.key))
         });
         candidates.truncate(self.config.candidates);
         candidates
+    }
+
+    fn assisted_ordered_heavy(
+        &self,
+        logical_heavy: &[Vec<RecoveredCandidate>],
+        heavy_hitters: &[RecoveredCandidate],
+    ) -> Vec<(u64, f64)> {
+        if self.count == 0 || self.config.ordered_samples == 0 {
+            return Vec::new();
+        }
+        let f2 = estimate_g_sum_from(logical_heavy, |frequency| frequency * frequency).max(0.0);
+        let concentration = f2 / (self.count as f64).powi(2);
+        if concentration < 1.0 / self.config.ordered_samples as f64 {
+            return Vec::new();
+        }
+        let threshold = (f2 / self.config.width as f64).sqrt();
+        heavy_hitters
+            .iter()
+            .take(64)
+            .filter(|candidate| candidate.frequency >= threshold)
+            .map(|candidate| (candidate.key, candidate.frequency))
+            .collect()
     }
 
     fn logical_heavy_sets_from(
@@ -1105,12 +1175,11 @@ impl<H: SketchHasher> UnivMonQ<H> {
         let mut suffix = Vec::with_capacity(self.config.candidates * 2);
         let mut suffix_f2 = 0.0;
         let mut suffix_candidates = 0_usize;
-        let mut suffix_may_have_evicted = false;
+        let mut suffix_ever_evicted = false;
         for terminal in (0..self.levels.len()).rev() {
             suffix_f2 += recovery.physical_f2[terminal];
             suffix_candidates += recovery.by_terminal[terminal].len();
-            suffix_may_have_evicted |=
-                self.levels[terminal].candidate_scores.len() == self.config.candidates;
+            suffix_ever_evicted |= self.levels[terminal].ever_evicted;
             suffix.extend(recovery.by_terminal[terminal].iter().copied());
             suffix.sort_unstable_by(|left, right| {
                 right
@@ -1120,9 +1189,9 @@ impl<H: SketchHasher> UnivMonQ<H> {
             });
             suffix.truncate(self.config.candidates);
             let mut recovered = suffix.clone();
-            let complete = !suffix_may_have_evicted && suffix_candidates <= self.config.candidates;
+            let complete = !suffix_ever_evicted && suffix_candidates <= self.config.candidates;
             if !complete {
-                let threshold = (suffix_f2 / self.config.candidates as f64).sqrt();
+                let threshold = 2.0 * (suffix_f2 / self.config.candidates as f64).sqrt();
                 recovered.retain(|candidate| candidate.frequency >= threshold);
             }
             logical[terminal] = recovered;
@@ -1149,39 +1218,22 @@ impl<H: SketchHasher> UnivMonQ<H> {
             .map(|point| ordered_to_float(point.0))
     }
 
-    fn update_ordered_sample(&mut self, key: u64, priority: u64) {
+    fn update_ordered_sample(&mut self, occurrence: OrderedOccurrence) {
         let capacity = self.config.ordered_samples;
         if capacity == 0 {
             return;
         }
-        if self.ordered_frequencies.len() == capacity
-            && self
-                .ordered_heap
-                .peek()
-                .is_some_and(|largest| (priority, key) > *largest)
-        {
+        if self.ordered_heap.len() < capacity {
+            self.ordered_heap.push(occurrence);
             return;
         }
-        if let Some(count) = self.ordered_frequencies.get_mut(&key) {
-            *count = count.saturating_add(1);
-            return;
-        }
-        if self.ordered_frequencies.len() < capacity {
-            self.ordered_frequencies.insert(key, 1);
-            self.ordered_heap.push((priority, key));
-            return;
-        }
-        let replacement = self
+        if self
             .ordered_heap
             .peek()
-            .copied()
-            .filter(|largest| (priority, key) < *largest);
-        if let Some(largest) = replacement {
+            .is_some_and(|largest| occurrence < *largest)
+        {
             self.ordered_heap.pop();
-            let (_, evicted) = largest;
-            self.ordered_frequencies.remove(&evicted);
-            self.ordered_frequencies.insert(key, 1);
-            self.ordered_heap.push((priority, key));
+            self.ordered_heap.push(occurrence);
         }
     }
 
@@ -1190,27 +1242,22 @@ impl<H: SketchHasher> UnivMonQ<H> {
         if capacity == 0 {
             return;
         }
-        let mut combined = std::mem::take(&mut self.ordered_frequencies);
-        for (&key, &frequency) in &other.ordered_frequencies {
-            combined
-                .entry(key)
-                .and_modify(|left| *left = left.saturating_add(frequency))
-                .or_insert(frequency);
+        for &occurrence in &other.ordered_heap {
+            self.update_ordered_sample(occurrence);
         }
-        let mut retained: Vec<(u64, u64, u64)> = combined
-            .into_iter()
-            .map(|(key, frequency)| {
-                let priority = self.hash_layout.priority(self.hash_key(key));
-                (key, frequency, priority)
-            })
-            .collect();
-        retained.sort_unstable_by_key(|&(key, _, priority)| (priority, key));
-        retained.truncate(capacity);
-        self.ordered_frequencies = HashMap::with_capacity(capacity);
-        self.ordered_heap.clear();
-        for (key, frequency, priority) in retained {
-            self.ordered_frequencies.insert(key, frequency);
-            self.ordered_heap.push((priority, key));
+    }
+
+    #[inline(always)]
+    fn occurrence(&self, key: u64, sequence: u64) -> OrderedOccurrence {
+        let identity = (u128::from(self.source_id) << 64) | u128::from(sequence);
+        let priority = H::hash128_seeded(
+            self.config.hash_seed ^ OCCURRENCE_HASH_SEED_DOMAIN,
+            &DataInput::U128(identity),
+        );
+        OrderedOccurrence {
+            priority_high: (priority >> 64) as u64,
+            priority_low: priority as u64,
+            key,
         }
     }
 
@@ -1237,6 +1284,8 @@ impl<H: SketchHasher> UnivMonQ<H> {
 struct LevelWire {
     sketch: PackedCountSketch,
     candidates: Vec<(u64, u64)>,
+    #[serde(default)]
+    ever_evicted: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1247,6 +1296,15 @@ struct UnivMonQWire {
     count: u64,
     min: Option<u64>,
     max: Option<u64>,
+    #[serde(default)]
+    source_id: u64,
+    #[serde(default)]
+    next_sequence: u64,
+    #[serde(default)]
+    ordered_occurrences: Vec<OrderedOccurrence>,
+    /// Version-1 distinct-key sample. It cannot be upgraded to an occurrence
+    /// sample without the discarded occurrence identities.
+    #[serde(default)]
     ordered_frequencies: Vec<(u64, u64)>,
 }
 
@@ -1254,6 +1312,17 @@ impl UnivMonQ<DefaultXxHasher> {
     /// Creates an empty sketch using Sketchlib's default XXH3 hasher.
     pub fn new(config: UnivMonQConfig) -> Result<Self, UnivMonQError> {
         Self::with_hasher(config)
+    }
+
+    /// Creates a sketch with an explicit ID for its update source.
+    ///
+    /// Use a stable, globally unique partition or shard ID when sketches may
+    /// be serialized or merged across processes.
+    pub fn new_with_source_id(
+        config: UnivMonQConfig,
+        source_id: u64,
+    ) -> Result<Self, UnivMonQError> {
+        Self::with_hasher_and_source_id(config, source_id)
     }
 
     /// Serializes the default-hasher sketch to native MessagePack bytes.
@@ -1270,14 +1339,11 @@ impl UnivMonQ<DefaultXxHasher> {
             levels.push(LevelWire {
                 sketch: level.sketch.clone(),
                 candidates,
+                ever_evicted: Some(level.ever_evicted),
             });
         }
-        let mut ordered_frequencies: Vec<(u64, u64)> = self
-            .ordered_frequencies
-            .iter()
-            .map(|(&key, &count)| (key, count))
-            .collect();
-        ordered_frequencies.sort_unstable();
+        let mut ordered_occurrences = self.ordered_heap.clone().into_vec();
+        ordered_occurrences.sort_unstable();
         let wire = UnivMonQWire {
             version: WIRE_VERSION,
             config: self.config,
@@ -1285,7 +1351,10 @@ impl UnivMonQ<DefaultXxHasher> {
             count: self.count,
             min: self.min,
             max: self.max,
-            ordered_frequencies,
+            source_id: self.source_id,
+            next_sequence: self.next_sequence,
+            ordered_occurrences,
+            ordered_frequencies: Vec::new(),
         };
         rmp_serde::to_vec_named(&wire)
     }
@@ -1293,13 +1362,19 @@ impl UnivMonQ<DefaultXxHasher> {
     /// Deserializes and validates native UnivMon-Q MessagePack state.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let wire: UnivMonQWire = rmp_serde::from_slice(bytes)?;
-        if wire.version != WIRE_VERSION {
+        if wire.version != 1 && wire.version != WIRE_VERSION {
             return Err(decode_error(format!(
                 "unsupported UnivMon-Q wire version {}",
                 wire.version
             )));
         }
-        let mut result = Self::new(wire.config).map_err(|error| decode_error(error.to_string()))?;
+        if !wire.ordered_frequencies.is_empty() {
+            return Err(decode_error(
+                "version-1 distinct ordered samples cannot be upgraded to occurrence samples",
+            ));
+        }
+        let mut result = Self::new_with_source_id(wire.config, wire.source_id)
+            .map_err(|error| decode_error(error.to_string()))?;
         if wire.levels.len() != result.config.levels {
             return Err(decode_error("UnivMon-Q level count does not match config"));
         }
@@ -1332,12 +1407,16 @@ impl UnivMonQ<DefaultXxHasher> {
                 )));
             }
             let candidate_len = source.candidates.len();
+            let ever_evicted = source
+                .ever_evicted
+                .unwrap_or(candidate_len == result.config.candidates);
             let candidates: HashMap<u64, u64> = source.candidates.into_iter().collect();
             if candidates.len() != candidate_len {
                 return Err(decode_error("duplicate UnivMon-Q candidate keys"));
             }
             target.sketch = source.sketch;
             target.candidate_scores = candidates;
+            target.ever_evicted = ever_evicted;
             target.candidate_heap.clear();
             for (&key, &count) in &target.candidate_scores {
                 target.candidate_heap.push(Reverse((count, key)));
@@ -1354,24 +1433,34 @@ impl UnivMonQ<DefaultXxHasher> {
                 )));
             }
         }
-        if wire.ordered_frequencies.len() > result.config.ordered_samples {
+        if wire.ordered_occurrences.len() > result.config.ordered_samples {
             return Err(decode_error("UnivMon-Q ordered sample capacity exceeded"));
         }
-        let ordered_len = wire.ordered_frequencies.len();
-        let ordered: HashMap<u64, u64> = wire.ordered_frequencies.into_iter().collect();
-        if ordered.len() != ordered_len {
-            return Err(decode_error("duplicate UnivMon-Q ordered sample keys"));
+        let occurrence_len = wire.ordered_occurrences.len();
+        let unique_occurrences: HashSet<_> = wire.ordered_occurrences.iter().copied().collect();
+        if unique_occurrences.len() != occurrence_len {
+            return Err(decode_error("duplicate UnivMon-Q ordered occurrences"));
+        }
+        if result.config.ordered_samples == 0 && !wire.ordered_occurrences.is_empty() {
+            return Err(decode_error(
+                "UnivMon-Q has ordered state while ordered sampling is disabled",
+            ));
         }
         result.count = wire.count;
         result.min = wire.min;
         result.max = wire.max;
-        result.ordered_frequencies = ordered;
-        for &key in result.ordered_frequencies.keys() {
-            let priority = result.hash_layout.priority(result.hash_key(key));
-            result.ordered_heap.push((priority, key));
-        }
+        result.next_sequence = wire.next_sequence;
+        result.ordered_heap = BinaryHeap::from(wire.ordered_occurrences);
         Ok(result)
     }
+}
+
+fn allocate_source_id() -> u64 {
+    NEXT_SOURCE_ID
+        .fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .expect("UnivMon-Q automatic source IDs exhausted")
 }
 
 fn validate_config(config: UnivMonQConfig) -> Result<(), UnivMonQError> {
@@ -1431,12 +1520,19 @@ fn estimate_g_sum_from<F>(heavy: &[Vec<RecoveredCandidate>], g: F) -> f64
 where
     F: Fn(f64) -> f64,
 {
+    estimate_keyed_sum_from(heavy, |_, frequency| g(frequency))
+}
+
+fn estimate_keyed_sum_from<F>(heavy: &[Vec<RecoveredCandidate>], g: F) -> f64
+where
+    F: Fn(u64, f64) -> f64,
+{
     let Some(last) = heavy.len().checked_sub(1) else {
         return 0.0;
     };
     let mut estimate: f64 = heavy[last]
         .iter()
-        .map(|candidate| g(candidate.frequency))
+        .map(|candidate| g(candidate.key, candidate.frequency))
         .sum();
     for level in (0..last).rev() {
         let correction: f64 = heavy[level]
@@ -1447,7 +1543,7 @@ where
                 } else {
                     -1.0
                 };
-                sign * g(candidate.frequency)
+                sign * g(candidate.key, candidate.frequency)
             })
             .sum();
         estimate = 2.0 * estimate + correction;
@@ -1503,6 +1599,23 @@ fn decode_error(message: impl Into<String>) -> RmpDecodeError {
 mod tests {
     use super::*;
 
+    #[derive(Serialize)]
+    struct LegacyLevelWire {
+        sketch: PackedCountSketch,
+        candidates: Vec<(u64, u64)>,
+    }
+
+    #[derive(Serialize)]
+    struct LegacyUnivMonQWire {
+        version: u8,
+        config: UnivMonQConfig,
+        levels: Vec<LegacyLevelWire>,
+        count: u64,
+        min: Option<u64>,
+        max: Option<u64>,
+        ordered_frequencies: Vec<(u64, u64)>,
+    }
+
     fn tiny_config() -> UnivMonQConfig {
         UnivMonQConfig {
             levels: 8,
@@ -1517,12 +1630,166 @@ mod tests {
     }
 
     #[test]
+    fn candidate_eviction_history_distinguishes_full_from_truncated() {
+        let mut level = Level::new(32, 1, 64, 2);
+        level.update(1, 1, 5);
+        level.update(2, 2, 5);
+        assert!(!level.ever_evicted, "filling the table is not an eviction");
+
+        level.update(3, 3, 5);
+        assert!(level.ever_evicted);
+        level.clear();
+        assert!(!level.ever_evicted);
+    }
+
+    #[test]
+    fn candidate_merge_uses_zero_error_for_full_complete_summary() {
+        let mut left = Level::new(32, 1, 64, 2);
+        for _ in 0..100 {
+            left.update(1, 1, 5);
+        }
+        left.update(2, 2, 5);
+        assert!(!left.ever_evicted);
+
+        let mut right = Level::new(32, 1, 64, 2);
+        right.update(3, 3, 5);
+        right.update(3, 3, 5);
+        left.merge(&right, 5, u128::from);
+
+        assert!(left.ever_evicted, "the merged union exceeded capacity");
+        assert_eq!(left.candidate_scores.get(&1), Some(&100));
+        assert_eq!(left.candidate_scores.get(&3), Some(&2));
+        assert!(!left.candidate_scores.contains_key(&2));
+    }
+
+    #[test]
+    fn native_messagepack_preserves_candidate_eviction_history() {
+        let config = UnivMonQConfig {
+            levels: 2,
+            candidates: 1,
+            ..tiny_config()
+        };
+        let mut sketch = UnivMonQ::new(config).unwrap();
+        for value in [1.0, 2.0, 3.0] {
+            sketch.update(&value);
+        }
+        assert!(sketch.levels.iter().any(|level| level.ever_evicted));
+
+        let bytes = sketch.serialize_to_bytes().unwrap();
+        let decoded = UnivMonQ::deserialize_from_bytes(&bytes).unwrap();
+        let original: Vec<bool> = sketch
+            .levels
+            .iter()
+            .map(|level| level.ever_evicted)
+            .collect();
+        let restored: Vec<bool> = decoded
+            .levels
+            .iter()
+            .map(|level| level.ever_evicted)
+            .collect();
+        assert_eq!(restored, original);
+    }
+
+    #[test]
+    fn legacy_full_candidate_table_decodes_as_possibly_evicted() {
+        let config = UnivMonQConfig {
+            levels: 2,
+            candidates: 1,
+            ordered_samples: 0,
+            ..tiny_config()
+        };
+        let mut sketch = UnivMonQ::new(config).unwrap();
+        sketch.update(&7.0);
+        let full_level = sketch
+            .levels
+            .iter()
+            .position(|level| level.candidate_scores.len() == config.candidates)
+            .unwrap();
+        assert!(!sketch.levels[full_level].ever_evicted);
+
+        let legacy = LegacyUnivMonQWire {
+            version: WIRE_VERSION,
+            config,
+            levels: sketch
+                .levels
+                .iter()
+                .map(|level| LegacyLevelWire {
+                    sketch: level.sketch.clone(),
+                    candidates: level
+                        .candidate_scores
+                        .iter()
+                        .map(|(&key, &score)| (key, score))
+                        .collect(),
+                })
+                .collect(),
+            count: sketch.count,
+            min: sketch.min,
+            max: sketch.max,
+            ordered_frequencies: Vec::new(),
+        };
+        let bytes = rmp_serde::to_vec_named(&legacy).unwrap();
+        let decoded = UnivMonQ::deserialize_from_bytes(&bytes).unwrap();
+        assert!(decoded.levels[full_level].ever_evicted);
+    }
+
+    #[test]
+    fn l2_heavy_candidate_survives_a_diffuse_tail() {
+        let config = UnivMonQConfig {
+            levels: 2,
+            width: 4096,
+            depth: 5,
+            counter_bits: 64,
+            candidates: 32,
+            ordered_samples: 0,
+            ..tiny_config()
+        };
+        let mut sketch = UnivMonQ::new(config).unwrap();
+        let terminal = 0;
+        let target = (0_u64..)
+            .find(|value| sketch.sample_level(float_to_ordered(*value as f64)) == terminal)
+            .unwrap();
+        for _ in 0..200 {
+            sketch.add(&target);
+        }
+
+        let mut distinct_tail = 0_usize;
+        for value in 1_u64.. {
+            if value != target && sketch.sample_level(float_to_ordered(value as f64)) == terminal {
+                sketch.add(&value);
+                distinct_tail += 1;
+                if distinct_tail == 50_000 {
+                    break;
+                }
+            }
+        }
+
+        let exact_f2 = 200_f64.powi(2) + distinct_tail as f64;
+        let l2_threshold = (exact_f2 / config.candidates as f64).sqrt();
+        assert!(200.0 > 2.0 * l2_threshold);
+        let target_key = float_to_ordered(target as f64);
+        assert!(sketch.levels[terminal].ever_evicted);
+        assert!(
+            sketch.levels[terminal]
+                .candidate_scores
+                .contains_key(&target_key),
+            "an item above twice the L2 threshold must remain recoverable"
+        );
+        let recovery = sketch.recover_candidates();
+        assert!(
+            sketch.logical_heavy_sets_from(&recovery)[terminal]
+                .iter()
+                .any(|candidate| candidate.key == target_key)
+        );
+    }
+
+    #[test]
     fn exact_for_tiny_frequency_vector() {
         let mut sketch = UnivMonQ::new(tiny_config()).unwrap();
         for value in [5.0, 1.0, 2.0, 2.0, 9.0, 5.0, 5.0] {
             sketch.update(&value);
         }
         assert_eq!(sketch.rank(2.0), Some(3));
+        assert_eq!(sketch.estimate_rank_universal(2.0), Some(3));
         assert_eq!(sketch.rank(5.0), Some(6));
         assert_eq!(sketch.quantile(0.5), Some(5.0));
         assert_eq!(sketch.quantile(0.0), Some(1.0));
@@ -1530,8 +1797,7 @@ mod tests {
         assert_eq!(sketch.estimate_frequency(5.0), 3);
         assert_eq!(sketch.estimate_distinct(), 4.0);
         assert_eq!(sketch.estimate_f2(), 15.0);
-        assert_eq!(sketch.estimate_f3(), 37.0);
-        assert_eq!(sketch.estimate_g_sum(|frequency| frequency.powi(4)), 99.0);
+        assert_eq!(sketch.estimate_g_sum(|frequency| frequency), 7.0);
         assert_eq!(sketch.heavy_hitters(1), vec![(5.0, 3)]);
 
         let query = sketch.prepare_queries();
@@ -1539,10 +1805,10 @@ mod tests {
         assert_eq!(query.estimate_frequency(5.0), 3);
         assert_eq!(query.estimate_distinct(), 4.0);
         assert_eq!(query.estimate_f2(), 15.0);
-        assert_eq!(query.estimate_f3(), 37.0);
-        assert_eq!(query.estimate_g_sum(|frequency| frequency.powi(4)), 99.0);
+        assert_eq!(query.estimate_g_sum(|frequency| frequency), 7.0);
         assert_eq!(query.heavy_hitters(1), vec![(5.0, 3)]);
         assert_eq!(query.rank(2.0), Some(3));
+        assert_eq!(query.estimate_rank_universal(2.0), Some(3));
         assert_eq!(
             query.quantiles(&[0.0, 0.5, 1.0]),
             vec![Some(1.0), Some(5.0), Some(9.0)]
@@ -1623,25 +1889,22 @@ mod tests {
 
         let direct_f0 = sketch.estimate_distinct();
         let direct_f2 = sketch.estimate_f2();
-        let direct_f3 = sketch.estimate_f3();
-        let direct_g4 = sketch.estimate_g_sum(|frequency| frequency.powi(4));
+        let direct_l1 = sketch.estimate_g_sum(|frequency| frequency);
         let direct_entropy = sketch.estimate_entropy();
         let direct_heavy = sketch.heavy_hitters(5);
         let direct_rank = sketch.rank(500.0);
+        let direct_universal_rank = sketch.estimate_rank_universal(500.0);
         let direct_quantiles = sketch.quantiles(&[0.1, 0.5, 0.9, 0.99]);
         let direct_cdf = sketch.cdf();
 
         let query = sketch.prepare_queries();
         assert_eq!(query.estimate_distinct(), direct_f0);
         assert_eq!(query.estimate_f2(), direct_f2);
-        assert_eq!(query.estimate_f3(), direct_f3);
-        assert_eq!(
-            query.estimate_g_sum(|frequency| frequency.powi(4)),
-            direct_g4
-        );
+        assert_eq!(query.estimate_g_sum(|frequency| frequency), direct_l1);
         assert_eq!(query.estimate_entropy(), direct_entropy);
         assert_eq!(query.heavy_hitters(5), direct_heavy);
         assert_eq!(query.rank(500.0), direct_rank);
+        assert_eq!(query.estimate_rank_universal(500.0), direct_universal_rank);
         assert_eq!(query.quantiles(&[0.1, 0.5, 0.9, 0.99]), direct_quantiles);
         assert_eq!(query.cdf(), direct_cdf);
     }
@@ -1655,9 +1918,53 @@ mod tests {
         let bytes = sketch.serialize_to_bytes().unwrap();
         let decoded = UnivMonQ::deserialize_from_bytes(&bytes).unwrap();
         assert_eq!(decoded.config(), sketch.config());
+        assert_eq!(decoded.source_id(), sketch.source_id());
         assert_eq!(decoded.count(), sketch.count());
         assert_eq!(decoded.cdf(), sketch.cdf());
         assert_eq!(decoded.estimate_f2(), sketch.estimate_f2());
+    }
+
+    #[test]
+    fn occurrence_sample_merge_is_associative() {
+        fn shard(source_id: u64, offset: u64) -> UnivMonQ {
+            let mut sketch = UnivMonQ::new_with_source_id(tiny_config(), source_id).unwrap();
+            for index in 0..1_000_u64 {
+                sketch.add(&((index.wrapping_mul(17) + offset) % 991));
+            }
+            sketch
+        }
+
+        let (a, b, c) = (shard(10, 0), shard(20, 1), shard(30, 2));
+        let mut left_associative = a.clone();
+        left_associative.merge(&b).unwrap();
+        left_associative.merge(&c).unwrap();
+
+        let mut right_branch = b;
+        right_branch.merge(&c).unwrap();
+        let mut right_associative = a;
+        right_associative.merge(&right_branch).unwrap();
+
+        let mut left_sample = left_associative.ordered_heap.clone().into_sorted_vec();
+        let mut right_sample = right_associative.ordered_heap.clone().into_sorted_vec();
+        left_sample.sort_unstable();
+        right_sample.sort_unstable();
+        assert_eq!(left_sample, right_sample);
+        assert_eq!(left_associative.cdf(), right_associative.cdf());
+    }
+
+    #[test]
+    fn legacy_distinct_ordered_sample_is_rejected() {
+        let legacy = LegacyUnivMonQWire {
+            version: 1,
+            config: tiny_config(),
+            levels: Vec::new(),
+            count: 1,
+            min: Some(float_to_ordered(1.0)),
+            max: Some(float_to_ordered(1.0)),
+            ordered_frequencies: vec![(float_to_ordered(1.0), 1)],
+        };
+        let bytes = rmp_serde::to_vec_named(&legacy).unwrap();
+        assert!(UnivMonQ::deserialize_from_bytes(&bytes).is_err());
     }
 
     #[test]

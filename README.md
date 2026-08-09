@@ -19,10 +19,10 @@ A Rust library for **streaming data sketches** — compact data structures that 
 | --- | --- | --- | --- | --- |
 | Frequency estimation | `CountMin`, `Count` | Fast approximate counts for high-volume keys | Estimates how often each key appears in a stream | `df.group_by("key").agg(pl.len())` |
 | Cardinality estimation | `HyperLogLog` (`Classic`, `ErtlMLE`, `HIP`) | Approximate distinct counts with bounded memory | Estimates the number of unique elements | `df["col"].n_unique()` |
-| Quantiles / distribution | `KLL`, `DDSketch`, `UnivMonQ` | Percentiles alone, or percentiles sharing state with universal frequency metrics | Approximates arbitrary quantiles (e.g. p50, p99) of a value distribution | `df["col"].quantile(0.99)` |
+| Quantiles / distribution | `KLL`, `DDSketch`, `UnivMonQ` (experimental) | Percentiles alone, or percentiles sharing state with universal frequency metrics | Approximates arbitrary quantiles (e.g. p50, p99) of a value distribution | `df["col"].quantile(0.99)` |
 | Subpopulation queries | `Hydra` | Hierarchical / filtered sketch queries | Answers sketch queries over arbitrary subpopulations without maintaining per-group sketches | No direct equivalent — requires per-group aggregation |
 | Universal monitoring | `UnivMon` | G-sum queries (L1/L2 norms, cardinality, entropy) | Estimates a broad class of streaming statistics in a single pass | No direct equivalent — requires custom multi-pass pipelines |
-| Universal monitoring + quantiles | `UnivMonQ` | One mergeable structure for frequencies, F0/F2/F3/g-sums, entropy, heavy hitters, ranks, and quantiles | Extends a terminal-stratum UnivMon core with an ordered residual sample | No direct equivalent — requires multiple aggregations |
+| Universal monitoring + quantiles | `UnivMonQ` (experimental) | One mergeable structure for frequencies, F0/F2/compatible g-sums, entropy, heavy hitters, ranks, and quantiles | Extends a terminal-stratum UnivMon core with an adaptively assisted occurrence sample | No direct equivalent — requires multiple aggregations |
 | Update acceleration | `NitroBatch` | Batch-accelerated sketch updates | Speeds up sketch insertions by batching updates | No direct equivalent |
 
 Full sketch status and API details: [APIs Index](./docs/apis.md).
@@ -123,7 +123,11 @@ let p99 = sketch.quantile(0.99);
 println!("median ≈ {p50:.1} ms, p99 ≈ {p99:.1} ms");
 ```
 
-### Share one sketch across universal metrics and quantiles
+### Experiment with one sketch for universal metrics and quantiles
+
+`UnivMonQ` is experimental: its API, estimators, and guarantees may change as
+the construction is evaluated further. See the
+[large synthetic comparison with UnivMon](./docs/univmon_q_evaluation.md).
 
 ```rust
 use asap_sketchlib::{UnivMonQ, UnivMonQConfig};
@@ -140,7 +144,6 @@ let query = sketch.prepare_queries();
 println!("p50 ≈ {:?}", query.quantile(0.5));
 println!("distinct ≈ {}", query.estimate_distinct());
 println!("F2 ≈ {}", query.estimate_f2());
-println!("F3 ≈ {}", query.estimate_f3());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

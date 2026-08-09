@@ -23,14 +23,15 @@ signals a backwards-compatible change.
 - Removed duplicate stream-weight accounting in experimental UnivMon windows.
 
 ### Added
-- **UnivMon-Q core sketch.** Adds `UnivMonQ<H>`, a Joltik-style terminal-stratum
-  UnivMon implementation extended with a coordinated ordered sample for rank,
-  CDF, and quantile estimates. The sketch supports pluggable `SketchHasher`,
-  compatible merges, native MessagePack round-trips, exact extrema, point
-  frequency, F0, F2, F3, generic g-sums, entropy, and recovered heavy-hitter
-  queries. Reusable prepared query views share logical-hierarchy and CDF
-  reconstruction across a metric batch. The API is initially marked
-  `Unstable`; an ASAPv1 cross-language kind is not yet assigned.
+- **Experimental UnivMon-Q core sketch.** Adds `UnivMonQ<H>`, a Joltik-style
+  terminal-stratum UnivMon implementation extended with an adaptively assisted
+  occurrence sample for rank, CDF, and quantile estimates. The sketch supports
+  pluggable `SketchHasher`, compatible merges, native MessagePack round-trips,
+  exact extrema, point frequency, F0, F2, compatible generic g-sums, entropy,
+  and recovered heavy-hitter queries. Reusable prepared query views share
+  logical-hierarchy and CDF reconstruction across a metric batch. The API,
+  estimators, and guarantees are experimental; an ASAPv1 cross-language kind
+  is not yet assigned.
 
 ### Changed (breaking — wire format)
 - **Drop the DataPoint-level METRIC scalars from `DDSketchState`.** Removed

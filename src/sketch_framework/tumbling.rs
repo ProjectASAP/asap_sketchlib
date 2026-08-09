@@ -9,7 +9,7 @@
 //!
 //! Any type implementing [`TumblingWindowSketch`] can be used. Built-in
 //! implementations are provided for [`FoldCMS`], [`FoldCS`], [`KLL`], and
-//! [`UnivMonQ`].
+//! experimental [`UnivMonQ`].
 
 use crate::DataInput;
 use crate::fold_cms::FoldCMS;

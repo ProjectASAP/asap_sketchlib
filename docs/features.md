@@ -36,7 +36,7 @@ This document provides a high-level overview of implemented and planned features
 
 **UnivMonPyramid** - Optimized two-tier UnivMon with `UnivSketchPool` for insert and memory management ([apis.md](apis.md))
 
-**UnivMonQ** - Terminal-stratum UnivMon with F0/F2/F3/g-sum queries, a coordinated ordered residual sample for ranks and quantiles, and reusable prepared query views (currently `Unstable`)
+**UnivMonQ (Experimental)** - Terminal-stratum UnivMon with F0/F2/compatible g-sum queries, an adaptively assisted occurrence sample for ranks and quantiles, and reusable prepared query views. Its API, estimators, and guarantees may change.
 
 **HashSketchEnsemble** - Hash-once-use-many pattern for coordinating multiple sketches with single hash computation
 
@@ -46,7 +46,7 @@ This document provides a high-level overview of implemented and planned features
 
 **ExponentialHistogram** - Sliding window coordinator for mergeable sketches
 
-**TumblingWindow** - Non-overlapping windows with built-in UnivMon-Q support
+**TumblingWindow** - Non-overlapping windows with built-in support for the experimental UnivMon-Q sketch
 
 **EHUnivOptimized** - Hybrid two-tier ExponentialHistogram for UnivMon with sketch memory reuse (currently `Unstable`)
 
@@ -121,7 +121,7 @@ MessagePack (`rmp-serde`) support. **serde support** means the type derives `Ser
 | CMSHeap / CSHeap | In Progress | In Progress |
 | Hydra | Yes | Yes |
 | UnivMon | Yes | Yes |
-| UnivMonQ | Internal wire DTO | Yes (native MessagePack) |
+| UnivMonQ (experimental) | Internal wire DTO | Yes (native MessagePack) |
 | NitroBatch | Yes | In Progress |
 | EHSketchList | Yes | In Progress |
 
