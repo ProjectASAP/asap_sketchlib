@@ -396,9 +396,9 @@ impl UnivMonPyramid {
         }
     }
 
-    /// Returns the estimated L1 norm.
+    /// Returns the exact L1 norm for the supported non-negative update stream.
     pub fn calc_l1(&self) -> f64 {
-        self.calc_g_sum(|x| x, false)
+        self.bucket_size as f64
     }
 
     /// Returns the estimated L2 norm.

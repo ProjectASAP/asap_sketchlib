@@ -6,7 +6,8 @@
 //! A separate coordinated bottom-k sample of stream occurrences is keyed by
 //! `(source_id, local_sequence)`. Query-time recursion reconstructs the
 //! logical UnivMon hierarchy; reliable heavy frequencies are combined with
-//! the residual occurrence sample for rank and quantile estimates.
+//! the residual occurrence sample for rank and quantile estimates. The same
+//! sample assists entropy when candidate recovery is incomplete.
 //!
 //! Provenance: adapted from the experimental `zaoxing/univmon-quantile`
 //! implementation and integrated with Sketchlib's numeric input, pluggable
@@ -160,6 +161,8 @@ pub struct UnivMonQQuery<'a, H: SketchHasher = DefaultXxHasher> {
     sketch: &'a UnivMonQ<H>,
     logical_heavy: Vec<Vec<RecoveredCandidate>>,
     heavy_hitters: Vec<RecoveredCandidate>,
+    occurrence_entropy: Option<f64>,
+    candidate_recovery_complete: bool,
     cdf: Vec<UnivMonQPoint>,
 }
 
@@ -594,8 +597,13 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
             .max(0.0)
     }
 
-    /// Estimated Shannon entropy in nats.
-    pub fn estimate_entropy(&self) -> f64 {
+    /// Exact L1 norm for the insertion-only frequency vector.
+    pub fn estimate_l1(&self) -> f64 {
+        self.count() as f64
+    }
+
+    /// Shannon entropy estimate from the original UnivMon recurrence, in nats.
+    pub fn estimate_entropy_universal(&self) -> f64 {
         if self.count() == 0 {
             return 0.0;
         }
@@ -607,6 +615,37 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
             }
         });
         ((self.count() as f64).ln() - frequency_log_frequency / self.count() as f64).max(0.0)
+    }
+
+    /// Assisted Shannon entropy estimate in nats.
+    ///
+    /// The universal recurrence is retained for diffuse streams and complete
+    /// candidate recovery. Concentrated streams with incomplete recovery use
+    /// the coordinated occurrence sample instead.
+    pub fn estimate_entropy(&self) -> f64 {
+        let universal = self.estimate_entropy_universal();
+        if self.count() == 0
+            || self.occurrence_entropy.is_none()
+            || self.candidate_recovery_complete
+        {
+            return universal;
+        }
+        let concentration = self.estimate_f2() / (self.count() as f64).powi(2);
+        if concentration < 1.0 / self.sketch.ordered_heap.len() as f64 {
+            universal
+        } else {
+            self.estimate_entropy_occurrence().unwrap_or(universal)
+        }
+    }
+
+    /// Experimental occurrence-sample entropy estimate in nats.
+    ///
+    /// This uses `H = E[ln(N / f_X)]` for an occurrence-uniform value `X`,
+    /// with frequencies supplied by the terminal CountSketch. It requires the
+    /// coordinated ordered sample and is primarily useful as an assisted
+    /// alternative to the universal recurrence.
+    pub fn estimate_entropy_occurrence(&self) -> Option<f64> {
+        self.occurrence_entropy
     }
 
     /// Recovered heavy values and estimated frequencies in descending order.
@@ -871,7 +910,10 @@ impl<H: SketchHasher> UnivMonQ<H> {
         let recovery = self.recover_candidates();
         let logical_heavy = self.logical_heavy_sets_from(&recovery);
         let heavy_hitters = self.top_candidates_from(&recovery);
+        let candidate_recovery_complete = self.candidate_recovery_complete();
         let ordered_heavy = self.assisted_ordered_heavy(&logical_heavy, &heavy_hitters);
+        let entropy_heavy = Self::assisted_entropy_heavy(&logical_heavy);
+        let occurrence_entropy = self.entropy_from_occurrences(&entropy_heavy);
         let cdf = self
             .cdf_keys_from(&ordered_heavy)
             .into_iter()
@@ -884,6 +926,8 @@ impl<H: SketchHasher> UnivMonQ<H> {
             sketch: self,
             logical_heavy,
             heavy_hitters,
+            occurrence_entropy,
+            candidate_recovery_complete,
             cdf,
         }
     }
@@ -915,8 +959,13 @@ impl<H: SketchHasher> UnivMonQ<H> {
             .max(0.0)
     }
 
-    /// Estimated Shannon entropy in nats.
-    pub fn estimate_entropy(&self) -> f64 {
+    /// Exact L1 norm for the insertion-only frequency vector.
+    pub fn estimate_l1(&self) -> f64 {
+        self.count as f64
+    }
+
+    /// Shannon entropy estimate from the original UnivMon recurrence, in nats.
+    pub fn estimate_entropy_universal(&self) -> f64 {
         if self.is_empty() {
             return 0.0;
         }
@@ -928,6 +977,105 @@ impl<H: SketchHasher> UnivMonQ<H> {
             }
         });
         ((self.count as f64).ln() - frequency_log_frequency / self.count as f64).max(0.0)
+    }
+
+    /// Assisted Shannon entropy estimate in nats.
+    pub fn estimate_entropy(&self) -> f64 {
+        if self.is_empty() {
+            return 0.0;
+        }
+        let recovery = self.recover_candidates();
+        let logical_heavy = self.logical_heavy_sets_from(&recovery);
+        let frequency_log_frequency = estimate_g_sum_from(&logical_heavy, |frequency| {
+            if frequency > 0.0 {
+                frequency * frequency.ln()
+            } else {
+                0.0
+            }
+        });
+        let universal =
+            ((self.count as f64).ln() - frequency_log_frequency / self.count as f64).max(0.0);
+        if self.ordered_heap.is_empty() || self.candidate_recovery_complete() {
+            return universal;
+        }
+        let f2 = estimate_g_sum_from(&logical_heavy, |frequency| frequency * frequency).max(0.0);
+        let concentration = f2 / (self.count as f64).powi(2);
+        if concentration < 1.0 / self.ordered_heap.len() as f64 {
+            universal
+        } else {
+            let assisted_heavy = Self::assisted_entropy_heavy(&logical_heavy);
+            self.entropy_from_occurrences(&assisted_heavy)
+                .unwrap_or(universal)
+        }
+    }
+
+    /// Experimental occurrence-sample entropy estimate in nats.
+    pub fn estimate_entropy_occurrence(&self) -> Option<f64> {
+        if self.is_empty() {
+            return Some(0.0);
+        }
+        let recovery = self.recover_candidates();
+        let logical_heavy = self.logical_heavy_sets_from(&recovery);
+        let assisted_heavy = Self::assisted_entropy_heavy(&logical_heavy);
+        self.entropy_from_occurrences(&assisted_heavy)
+    }
+
+    fn assisted_entropy_heavy(logical_heavy: &[Vec<RecoveredCandidate>]) -> Vec<(u64, f64)> {
+        logical_heavy
+            .first()
+            .into_iter()
+            .flatten()
+            .take(64)
+            .map(|candidate| (candidate.key, candidate.frequency))
+            .collect()
+    }
+
+    fn entropy_from_occurrences(&self, assisted_heavy: &[(u64, f64)]) -> Option<f64> {
+        if self.is_empty() {
+            return Some(0.0);
+        }
+        if self.ordered_heap.is_empty() {
+            return None;
+        }
+        let total = self.count as f64;
+        let mut heavy: BTreeMap<u64, f64> = assisted_heavy.iter().copied().collect();
+        let heavy_total = heavy.values().sum::<f64>();
+        if heavy_total > total {
+            let scale = total / heavy_total;
+            for frequency in heavy.values_mut() {
+                *frequency *= scale;
+            }
+        }
+        let heavy_entropy = heavy
+            .values()
+            .map(|frequency| {
+                let probability = frequency / total;
+                if probability > 0.0 {
+                    -probability * probability.ln()
+                } else {
+                    0.0
+                }
+            })
+            .sum::<f64>();
+        let residual_mass = (1.0 - heavy.values().sum::<f64>() / total).max(0.0);
+        let mut sampled_keys = BTreeMap::<u64, usize>::new();
+        for occurrence in &self.ordered_heap {
+            if !heavy.contains_key(&occurrence.key) {
+                *sampled_keys.entry(occurrence.key).or_default() += 1;
+            }
+        }
+        let residual_samples = sampled_keys.values().sum::<usize>();
+        if residual_samples == 0 {
+            return (residual_mass == 0.0).then_some(heavy_entropy);
+        }
+        let residual_entropy = sampled_keys
+            .into_iter()
+            .map(|(key, multiplicity)| {
+                let frequency = (self.frequency_key(key).max(1) as f64).min(total);
+                multiplicity as f64 * (total / frequency).ln()
+            })
+            .sum::<f64>();
+        Some((heavy_entropy + residual_mass * residual_entropy / residual_samples as f64).max(0.0))
     }
 
     /// Recovered heavy values and estimated frequencies in descending order.
@@ -1277,6 +1425,16 @@ impl<H: SketchHasher> UnivMonQ<H> {
         self.levels[terminal]
             .sketch
             .estimate(hash, self.hash_layout.bucket_bits)
+    }
+
+    fn candidate_recovery_complete(&self) -> bool {
+        self.levels.iter().all(|level| !level.ever_evicted)
+            && self
+                .levels
+                .iter()
+                .map(|level| level.candidate_scores.len())
+                .sum::<usize>()
+                <= self.config.candidates
     }
 }
 
@@ -1630,6 +1788,36 @@ mod tests {
     }
 
     #[test]
+    fn exact_l1_and_occurrence_entropy_for_known_distribution() {
+        let config = UnivMonQConfig {
+            levels: 8,
+            width: 4_096,
+            width_halving_period: 0,
+            depth: 5,
+            counter_bits: 64,
+            candidates: 1,
+            ordered_samples: 100,
+            hash_seed: 17,
+        };
+        let mut sketch = UnivMonQ::new(config).unwrap();
+        for _ in 0..80 {
+            sketch.update(&0.0);
+        }
+        for _ in 0..20 {
+            sketch.update(&1.0);
+        }
+
+        let expected_entropy = -(0.8_f64 * 0.8_f64.ln() + 0.2_f64 * 0.2_f64.ln());
+        assert_eq!(sketch.estimate_l1(), 100.0);
+        assert!((sketch.estimate_entropy_occurrence().unwrap() - expected_entropy).abs() < 1e-12);
+        assert!((sketch.estimate_entropy() - expected_entropy).abs() < 1e-12);
+
+        let query = sketch.prepare_queries();
+        assert_eq!(query.estimate_l1(), 100.0);
+        assert!((query.estimate_entropy() - expected_entropy).abs() < 1e-12);
+    }
+
+    #[test]
     fn candidate_eviction_history_distinguishes_full_from_truncated() {
         let mut level = Level::new(32, 1, 64, 2);
         level.update(1, 1, 5);
@@ -1889,8 +2077,10 @@ mod tests {
 
         let direct_f0 = sketch.estimate_distinct();
         let direct_f2 = sketch.estimate_f2();
-        let direct_l1 = sketch.estimate_g_sum(|frequency| frequency);
+        let direct_l1 = sketch.estimate_l1();
+        let direct_linear_g_sum = sketch.estimate_g_sum(|frequency| frequency);
         let direct_entropy = sketch.estimate_entropy();
+        let direct_universal_entropy = sketch.estimate_entropy_universal();
         let direct_heavy = sketch.heavy_hitters(5);
         let direct_rank = sketch.rank(500.0);
         let direct_universal_rank = sketch.estimate_rank_universal(500.0);
@@ -1900,8 +2090,13 @@ mod tests {
         let query = sketch.prepare_queries();
         assert_eq!(query.estimate_distinct(), direct_f0);
         assert_eq!(query.estimate_f2(), direct_f2);
-        assert_eq!(query.estimate_g_sum(|frequency| frequency), direct_l1);
+        assert_eq!(query.estimate_l1(), direct_l1);
+        assert_eq!(
+            query.estimate_g_sum(|frequency| frequency),
+            direct_linear_g_sum
+        );
         assert_eq!(query.estimate_entropy(), direct_entropy);
+        assert_eq!(query.estimate_entropy_universal(), direct_universal_entropy);
         assert_eq!(query.heavy_hitters(5), direct_heavy);
         assert_eq!(query.rank(500.0), direct_rank);
         assert_eq!(query.estimate_rank_universal(500.0), direct_universal_rank);

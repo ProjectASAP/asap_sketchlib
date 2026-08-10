@@ -81,8 +81,11 @@ fn source_id(&self) -> u64
 fn estimate_frequency(&self, value: f64) -> u64
 fn estimate_distinct(&self) -> f64
 fn estimate_f2(&self) -> f64
+fn estimate_l1(&self) -> f64
 fn estimate_g_sum<F>(&self, g: F) -> f64 where F: Fn(f64) -> f64
 fn estimate_entropy(&self) -> f64
+fn estimate_entropy_universal(&self) -> f64
+fn estimate_entropy_occurrence(&self) -> Option<f64>
 fn heavy_hitters(&self, k: usize) -> Vec<(f64, u64)>
 
 fn estimate_rank_universal(&self, value: f64) -> Option<u64>
@@ -99,6 +102,13 @@ The public generic g-sum API preserves UnivMon's ability to evaluate compatible
 frequency functions. Super-quadratic moments such as F3 are deliberately not
 advertised: the current memory profile does not provide their stronger space
 guarantees.
+
+`estimate_l1()` returns the exact observation count for the supported
+insertion-only stream. `estimate_entropy()` adaptively selects between the
+original UnivMon recurrence and the coordinated occurrence-sample identity
+`H = E[ln(N/f_X)]`. The recurrence is used for diffuse streams and complete
+candidate recovery; concentrated streams with incomplete recovery use the
+occurrence path. The two component estimators remain exposed for experiments.
 
 `prepare_queries` reconstructs candidate frequencies, logical sampled levels,
 F2 thresholds, and the ordered CDF once. Its returned immutable view exposes
@@ -126,7 +136,37 @@ set of fixed thresholds. Separate calls are not constrained to be monotone, so
 this experimental method is not used to implement `quantile` or `cdf`.
 
 Setting `ordered_samples = 0` removes ordered-sample memory and disables
-non-endpoint rank/quantile/CDF queries while retaining the universal metrics.
+non-endpoint rank/quantile/CDF queries. Entropy then always uses the universal
+recurrence; the other universal metrics are unchanged.
+
+### Entropy guarantee boundary
+
+For recovered heavy set `A`, residual mass `P_R`, and an occurrence-uniform
+residual value `X_R`, Shannon entropy decomposes as
+
+```text
+H = sum_(h in A) (f_h/N) ln(N/f_h) + P_R E[ln(N/f_X_R)].
+```
+
+If retained residual occurrences used exact frequencies, Hoeffding's
+inequality gives residual sampling error at most
+
+```text
+P_R ln(N) * sqrt(ln(2 / delta) / (2 m_R))
+```
+
+with probability `1 - delta`, where `m_R` is the number of retained residual
+occurrences. Replacing `f_X` by CountSketch estimate `f_hat_X` adds
+`P_R mean |ln(f_X/f_hat_X)|`; if every sampled residual frequency has relative
+error at most `rho < 1`, that term is at most `-P_R ln(1-rho)`. Heavy-frequency
+and residual-mass estimation add their corresponding plug-in error. UnivMon-Q's
+occurrence priorities use a separate hash domain from its key-frequency hashes.
+
+The adaptive selector keeps the original recurrence when recovery is complete
+or estimated concentration is below `1/k`; otherwise it uses this occurrence
+identity. The component bounds explain the estimator, but selection at that
+empirical gate is not yet a new end-to-end theorem. UnivMon-Q remains
+experimental.
 
 ### Ordered-query guarantee boundary
 

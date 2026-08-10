@@ -40,6 +40,10 @@ fn calc_card(&self) -> f64
 fn calc_g_sum<F>(&self, g: F, is_card: bool) -> f64
 ```
 
+Because UnivMon accepts only non-negative updates, `calc_l1()` returns the
+exact tracked total weight. The generic recurrence remains available through
+`calc_g_sum` for compatible frequency functions.
+
 ## Merge
 
 ```rust

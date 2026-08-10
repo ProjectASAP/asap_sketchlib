@@ -53,6 +53,10 @@ fn available(&self) -> usize
 fn total_allocated(&self) -> usize
 ```
 
+For the supported non-negative update stream, `calc_l1()` returns the exact
+tracked total weight rather than estimating the linear sum through the
+hierarchy.
+
 ## Merge
 
 ```rust

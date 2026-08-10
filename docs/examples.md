@@ -123,7 +123,7 @@ The experimental `UnivMonQ` sketch is intended for cases where quantiles are
 required together with frequency, distinct count, F2, compatible generic
 g-sums, entropy, or heavy-hitter queries. It shares a terminal-stratum
 CountSketch pyramid across the universal metrics and adds an adaptively
-assisted bottom-k occurrence sample for ordered ranks.
+assisted bottom-k occurrence sample for entropy and ordered ranks.
 
 ```rust
 use asap_sketchlib::{UnivMonQ, UnivMonQConfig};

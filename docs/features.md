@@ -36,7 +36,7 @@ This document provides a high-level overview of implemented and planned features
 
 **UnivMonPyramid** - Optimized two-tier UnivMon with `UnivSketchPool` for insert and memory management ([apis.md](apis.md))
 
-**UnivMonQ (Experimental)** - Terminal-stratum UnivMon with F0/F2/compatible g-sum queries, an adaptively assisted occurrence sample for ranks and quantiles, and reusable prepared query views. Its API, estimators, and guarantees may change.
+**UnivMonQ (Experimental)** - Terminal-stratum UnivMon with exact insertion-only L1, F0/F2/compatible g-sum queries, an adaptively assisted occurrence sample for entropy, ranks, and quantiles, and reusable prepared query views. Its API, estimators, and guarantees may change.
 
 **HashSketchEnsemble** - Hash-once-use-many pattern for coordinating multiple sketches with single hash computation
 

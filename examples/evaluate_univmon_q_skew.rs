@@ -7,6 +7,7 @@
 //! Run with:
 //!
 //!   cargo run --release --example evaluate_univmon_q_skew -- 1000000 5 100000 256
+//!   cargo run --release --example evaluate_univmon_q_skew -- 1000000 5 100000 256 all equal-memory
 
 use std::collections::HashSet;
 use std::hint::black_box;
@@ -32,13 +33,24 @@ fn main() {
     let trials: usize = argument(2, 5, "trials");
     let domain: usize = argument(3, 100_000, "domain");
     let candidates: usize = argument(4, 256, "candidates");
-    let skew_filter = std::env::args()
-        .nth(5)
-        .map(|value| value.parse::<usize>().expect("skew index must be 0..6"));
+    let skew_filter = std::env::args().nth(5).and_then(|value| {
+        (value != "all").then(|| {
+            value
+                .parse::<usize>()
+                .expect("skew index must be 0..6 or `all`")
+        })
+    });
+    let profile = std::env::args()
+        .nth(6)
+        .unwrap_or_else(|| "compact".to_string());
     assert!(n > 0 && trials > 0 && domain > 1 && candidates > 0);
     assert!(skew_filter.is_none_or(|index| index < SKEWS.len()));
+    assert!(
+        matches!(profile.as_str(), "compact" | "equal-memory"),
+        "profile must be `compact` or `equal-memory`"
+    );
 
-    let base_config = UnivMonQConfig {
+    let mut base_config = UnivMonQConfig {
         levels: 12,
         width: 4_096,
         width_halving_period: 3,
@@ -50,9 +62,20 @@ fn main() {
     }
     .with_window_bound(n as u64, 1e-9)
     .expect("the evaluation window must fit within 63 levels");
+    let um_candidates = candidates;
+    let um_counter_bytes =
+        base_config.levels * base_config.depth * base_config.width * size_of::<i64>();
+    if profile == "equal-memory" {
+        base_config.width_halving_period = 0;
+        base_config.candidates = largest_candidate_budget(base_config, um_counter_bytes);
+    }
+    let q_reserved_bytes = UnivMonQ::new(base_config)
+        .expect("evaluation config must be valid")
+        .estimated_memory_bytes();
 
     println!("UnivMon versus UnivMon-Q large synthetic skew evaluation");
     println!("n={n}, trials={trials}, domain={domain}, shards={SHARDS}");
+    println!("profile={profile}");
     println!(
         "config: levels={}, width={}, halve/{} levels, depth={}, candidates={}, ordered_samples={}",
         base_config.levels,
@@ -61,6 +84,11 @@ fn main() {
         base_config.depth,
         base_config.candidates,
         base_config.ordered_samples,
+    );
+    println!(
+        "memory budget: Q reserved={:.3} MiB; UM counters={:.3} MiB before heap metadata (UM candidates={um_candidates})",
+        q_reserved_bytes as f64 / (1024.0 * 1024.0),
+        um_counter_bytes as f64 / (1024.0 * 1024.0),
     );
     println!("errors are relative except point nRMSE and normalized rank errors");
 
@@ -76,7 +104,7 @@ fn main() {
             let seed = trial_seed(skew_index, trial);
             let data = sampler.generate(n, seed);
             let truth = Truth::new(&data, domain);
-            let result = evaluate_trial(&data, &truth, base_config, seed);
+            let result = evaluate_trial(&data, &truth, base_config, um_candidates, seed);
             eprintln!(
                 "completed alpha={skew:.1} trial={}/{}: UM/Q {:.1}/{:.1} ns/update, Q CDF max={:.5}",
                 trial + 1,
@@ -224,13 +252,48 @@ fn argument(index: usize, default: usize, name: &str) -> usize {
         .unwrap_or(default)
 }
 
-fn evaluate_trial(data: &[i64], truth: &Truth, config: UnivMonQConfig, seed: u64) -> TrialResult {
+fn largest_candidate_budget(config: UnivMonQConfig, target_bytes: usize) -> usize {
+    let mut low = config.candidates;
+    let mut high = config.candidates;
+    assert!(
+        estimated_q_memory(config, low) <= target_bytes,
+        "initial UnivMon-Q configuration exceeds the equal-memory target"
+    );
+    while estimated_q_memory(config, high) <= target_bytes {
+        low = high;
+        high = high.checked_mul(2).expect("candidate search overflowed");
+    }
+    while low + 1 < high {
+        let middle = low + (high - low) / 2;
+        if estimated_q_memory(config, middle) <= target_bytes {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    low
+}
+
+fn estimated_q_memory(mut config: UnivMonQConfig, candidates: usize) -> usize {
+    config.candidates = candidates;
+    UnivMonQ::new(config)
+        .expect("candidate search must preserve a valid config")
+        .estimated_memory_bytes()
+}
+
+fn evaluate_trial(
+    data: &[i64],
+    truth: &Truth,
+    config: UnivMonQConfig,
+    um_candidates: usize,
+    seed: u64,
+) -> TrialResult {
     let update_start = Instant::now();
     let q_shards = build_shards(data, config, seed);
     let q_update_time = update_start.elapsed();
 
     let update_start = Instant::now();
-    let um_shards = build_um_shards(data, config);
+    let um_shards = build_um_shards(data, config, um_candidates);
     let um_update_time = update_start.elapsed();
 
     let mut q_tree_input = q_shards.clone();
@@ -303,8 +366,8 @@ fn evaluate_trial(data: &[i64], truth: &Truth, config: UnivMonQConfig, seed: u64
     }
 }
 
-fn new_univmon(config: UnivMonQConfig) -> UnivMon {
-    UnivMon::init_univmon(config.candidates, config.depth, config.width, config.levels)
+fn new_univmon(config: UnivMonQConfig, candidates: usize) -> UnivMon {
+    UnivMon::init_univmon(candidates, config.depth, config.width, config.levels)
 }
 
 fn build_shards(data: &[i64], config: UnivMonQConfig, seed: u64) -> Vec<UnivMonQ> {
@@ -345,12 +408,12 @@ fn merge_left(mut sketches: Vec<UnivMonQ>) -> UnivMonQ {
     result
 }
 
-fn build_um_shards(data: &[i64], config: UnivMonQConfig) -> Vec<UnivMon> {
+fn build_um_shards(data: &[i64], config: UnivMonQConfig, candidates: usize) -> Vec<UnivMon> {
     (0..SHARDS)
         .map(|shard| {
             let start = shard * data.len() / SHARDS;
             let end = (shard + 1) * data.len() / SHARDS;
-            let mut sketch = new_univmon(config);
+            let mut sketch = new_univmon(config, candidates);
             for &value in &data[start..end] {
                 sketch.fast_insert(&DataInput::U64(value as u64), 1);
             }
@@ -476,7 +539,7 @@ fn score(sketch: &UnivMonQ, truth: &Truth) -> Accuracy {
         .iter()
         .filter_map(|key| truth.counts.get(*key))
         .sum();
-    let l1 = query.estimate_g_sum(|frequency| frequency);
+    let l1 = query.estimate_l1();
 
     let estimated_entropy = query.estimate_entropy();
     Accuracy {
