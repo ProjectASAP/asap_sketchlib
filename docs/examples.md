@@ -117,12 +117,13 @@ API reference: [`docs/api/api_kll.md`](./api/api_kll.md)
 
 ---
 
-## Universal quantiles — [`examples/quantile_univmon_q.rs`](../examples/quantile_univmon_q.rs)
+## Experimental universal quantiles — [`examples/quantile_univmon_q.rs`](../examples/quantile_univmon_q.rs)
 
-Use `UnivMonQ` when quantiles are required together with frequency, distinct
-count, F2/F3, generic g-sums, entropy, or heavy-hitter queries. It shares a terminal-stratum
-CountSketch pyramid across the universal metrics and adds a coordinated
-bottom-k sample for ordered ranks.
+The experimental `UnivMonQ` sketch is intended for cases where quantiles are
+required together with frequency, distinct count, F2, compatible generic
+g-sums, entropy, or heavy-hitter queries. It shares a terminal-stratum
+CountSketch pyramid across the universal metrics and adds an adaptively
+assisted bottom-k occurrence sample for entropy and ordered ranks.
 
 ```rust
 use asap_sketchlib::{UnivMonQ, UnivMonQConfig};
@@ -137,7 +138,7 @@ for value in 1..=100_000 {
 let query = sketch.prepare_queries();
 let percentiles = query.quantiles(&[0.50, 0.90, 0.99]);
 let distinct = query.estimate_distinct();
-let f3 = query.estimate_f3();
+let f2 = query.estimate_f2();
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

@@ -16,8 +16,9 @@ This is the canonical API entry point for `asap_sketchlib`.
   - Reference: Karnin, Lang & Liberty, "Optimal Quantile Approximation in Streams," FOCS 2016. [https://arxiv.org/abs/1603.05346](https://arxiv.org/abs/1603.05346)
 - [DDSketch](./api/api_ddsketch.md) - `Ready`
   - Reference: Masson, Rim & Lee, "DDSketch: A Fast and Fully-Mergeable Quantile Sketch with Relative-Error Guarantees," VLDB 2019. [https://arxiv.org/abs/1908.10693](https://arxiv.org/abs/1908.10693)
-- [UnivMon-Q](./api/api_univmon_q.md) - `Unstable`
-  - Universal F0/F2/F3/g-sum/entropy/heavy-hitter measurements plus additive-rank quantiles in one mergeable sketch.
+- [UnivMon-Q](./api/api_univmon_q.md) - `Experimental`
+  - Universal F0/F2/compatible g-sum/entropy/heavy-hitter measurements plus additive-rank quantiles in one mergeable sketch. Its API, estimators, and guarantees may change.
+  - Evaluation: [large synthetic comparison with UnivMon](./univmon_q_evaluation.md).
   - References: UnivMon (SIGCOMM 2016), Joltik (MobiCom 2020), and universal subset-norm sampling.
 - [CMSHeap](./api/api_cms_heap.md) - `Ready`
 - [CSHeap](./api/api_cs_heap.md) - `Ready`

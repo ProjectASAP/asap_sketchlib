@@ -139,7 +139,6 @@ fn main() {
     let exact_l1 = N as f64;
     let exact_f0 = exact.len() as f64;
     let exact_f2 = exact.values().map(|&f| (f as f64).powi(2)).sum::<f64>();
-    let exact_f3 = exact.values().map(|&f| (f as f64).powi(3)).sum::<f64>();
     let exact_entropy_bits = exact
         .values()
         .map(|&f| {
@@ -259,21 +258,18 @@ fn main() {
     let regular_l1 = regular.calc_l1();
     let regular_card = regular.calc_card();
     let regular_f2 = regular.calc_l2().powi(2);
-    let regular_f3 = regular.calc_g_sum(|frequency| frequency.powi(3), false);
     let regular_entropy = regular.calc_entropy();
     let regular_frequency = univmon_frequency(&regular, 0, false);
     let regular_hh = univmon_heavy_hitters(&regular, false, TOP_K);
     let fast_l1 = fast.calc_l1();
     let fast_card = fast.calc_card();
     let fast_f2 = fast.calc_l2().powi(2);
-    let fast_f3 = fast.calc_g_sum(|frequency| frequency.powi(3), false);
     let fast_entropy = fast.calc_entropy();
     let fast_frequency = univmon_frequency(&fast, 0, true);
     let fast_hh = univmon_heavy_hitters(&fast, true, TOP_K);
     let q_l1 = q_ordered_sketch.count() as f64;
     let q_card = q_base_sketch.estimate_distinct();
     let q_f2 = q_base_sketch.estimate_f2();
-    let q_f3 = q_base_sketch.estimate_f3();
     let q_entropy_bits = q_base_sketch.estimate_entropy() / std::f64::consts::LN_2;
     let q_frequency = q_ordered_sketch.estimate_frequency(0.0) as f64;
     let q_hh: Vec<_> = q_ordered_sketch
@@ -288,7 +284,6 @@ fn main() {
         .into_iter()
         .map(|(key, count)| (key as u64, count))
         .collect();
-    let q_memory_f3 = q_memory_matched_sketch.estimate_f3();
 
     let q_prepare_query = average_query(|| q_ordered_sketch.prepare_queries(), QUERY_REPEATS);
     let q_memory_prepare_query =
@@ -327,16 +322,6 @@ fn main() {
     let fast_f2_query = average_query(|| fast.calc_l2(), QUERY_REPEATS);
     let q_f2_query = average_query(|| q_ordered_sketch.estimate_f2(), QUERY_REPEATS);
     let q_memory_f2_query = average_query(|| q_memory_matched_sketch.estimate_f2(), QUERY_REPEATS);
-    let regular_f3_query = average_query(
-        || regular.calc_g_sum(|frequency| frequency.powi(3), false),
-        QUERY_REPEATS,
-    );
-    let fast_f3_query = average_query(
-        || fast.calc_g_sum(|frequency| frequency.powi(3), false),
-        QUERY_REPEATS,
-    );
-    let q_f3_query = average_query(|| q_ordered_sketch.estimate_f3(), QUERY_REPEATS);
-    let q_memory_f3_query = average_query(|| q_memory_matched_sketch.estimate_f3(), QUERY_REPEATS);
     let regular_entropy_query = average_query(|| regular.calc_entropy(), QUERY_REPEATS);
     let fast_entropy_query = average_query(|| fast.calc_entropy(), QUERY_REPEATS);
     let q_entropy_query = average_query(|| q_ordered_sketch.estimate_entropy(), QUERY_REPEATS);
@@ -385,9 +370,6 @@ fn main() {
     let q_prepared_f2_query = average_query(|| q_prepared.estimate_f2(), QUERY_REPEATS);
     let q_memory_prepared_f2_query =
         average_query(|| q_memory_prepared.estimate_f2(), QUERY_REPEATS);
-    let q_prepared_f3_query = average_query(|| q_prepared.estimate_f3(), QUERY_REPEATS);
-    let q_memory_prepared_f3_query =
-        average_query(|| q_memory_prepared.estimate_f3(), QUERY_REPEATS);
     let q_prepared_entropy_query = average_query(|| q_prepared.estimate_entropy(), QUERY_REPEATS);
     let q_memory_prepared_entropy_query =
         average_query(|| q_memory_prepared.estimate_entropy(), QUERY_REPEATS);
@@ -415,7 +397,7 @@ fn main() {
         "workload: n={N}, domain={DOMAIN}, levels={LEVELS}, width={WIDTH}, depth={DEPTH}, candidates={CANDIDATES}"
     );
     println!(
-        "exact: L1={exact_l1:.0}, freq(0)={}, F0={exact_f0:.0}, F2={exact_f2:.0}, F3={exact_f3:.0}, entropy={exact_entropy_bits:.6} bits",
+        "exact: L1={exact_l1:.0}, freq(0)={}, F0={exact_f0:.0}, F2={exact_f2:.0}, entropy={exact_entropy_bits:.6} bits",
         exact[&0]
     );
     println!(
@@ -504,13 +486,6 @@ fn main() {
         latency(q_memory_f2_query)
     );
     println!(
-        "  F3/custom-g     {:>11}  {:>16}  {:>18}  {:>16}",
-        latency(regular_f3_query),
-        latency(fast_f3_query),
-        latency(q_f3_query),
-        latency(q_memory_f3_query)
-    );
-    println!(
         "  entropy         {:>11}  {:>16}  {:>18}  {:>16}",
         latency(regular_entropy_query),
         latency(fast_entropy_query),
@@ -571,11 +546,6 @@ fn main() {
         latency(q_memory_prepared_f2_query)
     );
     println!(
-        "  F3/custom-g                    {:>11}        {:>11}",
-        latency(q_prepared_f3_query),
-        latency(q_memory_prepared_f3_query)
-    );
-    println!(
         "  entropy                        {:>11}        {:>11}",
         latency(q_prepared_entropy_query),
         latency(q_memory_prepared_entropy_query)
@@ -603,42 +573,38 @@ fn main() {
     println!();
     println!("accuracy (relative error):");
     println!(
-        "  UnivMon insert       L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, F3={:.4}, H={:.4}, HH-recall={:.2}",
+        "  UnivMon insert       L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, H={:.4}, HH-recall={:.2}",
         relative_error(regular_l1, exact_l1),
         relative_error(regular_frequency, exact[&0] as f64),
         relative_error(regular_card, exact_f0),
         relative_error(regular_f2, exact_f2),
-        relative_error(regular_f3, exact_f3),
         relative_error(regular_entropy, exact_entropy_bits),
         heavy_hitter_recall(&regular_hh, &exact_top),
     );
     println!(
-        "  UnivMon fast_insert  L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, F3={:.4}, H={:.4}, HH-recall={:.2}",
+        "  UnivMon fast_insert  L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, H={:.4}, HH-recall={:.2}",
         relative_error(fast_l1, exact_l1),
         relative_error(fast_frequency, exact[&0] as f64),
         relative_error(fast_card, exact_f0),
         relative_error(fast_f2, exact_f2),
-        relative_error(fast_f3, exact_f3),
         relative_error(fast_entropy, exact_entropy_bits),
         heavy_hitter_recall(&fast_hh, &exact_top),
     );
     println!(
-        "  UnivMon-Q universal  L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, F3={:.4}, H={:.4}, HH-recall={:.2}",
+        "  UnivMon-Q universal  L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, H={:.4}, HH-recall={:.2}",
         relative_error(q_l1, exact_l1),
         relative_error(q_frequency, exact[&0] as f64),
         relative_error(q_card, exact_f0),
         relative_error(q_f2, exact_f2),
-        relative_error(q_f3, exact_f3),
         relative_error(q_entropy_bits, exact_entropy_bits),
         heavy_hitter_recall(&q_hh, &exact_top),
     );
     println!(
-        "  UnivMon-Q mem-match L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, F3={:.4}, H={:.4}, HH-recall={:.2}",
+        "  UnivMon-Q mem-match L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, H={:.4}, HH-recall={:.2}",
         relative_error(q_memory_l1, exact_l1),
         relative_error(q_memory_frequency, exact[&0] as f64),
         relative_error(q_memory_matched_sketch.estimate_distinct(), exact_f0),
         relative_error(q_memory_matched_sketch.estimate_f2(), exact_f2),
-        relative_error(q_memory_f3, exact_f3),
         relative_error(
             q_memory_matched_sketch.estimate_entropy() / std::f64::consts::LN_2,
             exact_entropy_bits

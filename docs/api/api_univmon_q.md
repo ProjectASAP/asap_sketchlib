@@ -1,18 +1,25 @@
 # API: UnivMon-Q
 
-Status: `Unstable`
+Status: `Experimental`
 
 ## Purpose
 
-`UnivMonQ` combines universal frequency-vector measurements with additive-rank
+The experimental `UnivMonQ` API combines universal frequency-vector measurements with additive-rank
 quantile estimation. Choose it when one stream must answer point frequency,
 distinct count, F2, entropy, heavy-hitter, rank, CDF, and quantile queries from
 shared mergeable state. For quantiles alone, KLL or DDSketch is normally much
-smaller.
+smaller. Its API, estimators, and guarantees may change as the construction is
+evaluated further.
 
-The update path uses one 128-bit hash and one physical CountSketch layer per
-observation. Disjoint hash fields select each row's bucket/sign, the Joltik
-terminal stratum, and the coordinated bottom-k sample priority.
+The update path uses one key hash and one physical CountSketch layer per
+observation. A second hash of `(source_id, local_sequence)` supplies an
+independent coordinated bottom-k priority for occurrence sampling.
+
+Each terminal stratum keeps the identities with the largest observed
+CountSketch frequency estimates. A separate `ever_evicted` bit records whether
+that bounded identity set has ever become incomplete; merely filling the table
+does not count as eviction. Query reconstruction applies the L2 threshold only
+to incomplete logical candidate sets.
 
 ## Types
 
@@ -27,11 +34,17 @@ terminal stratum, and the coordinated bottom-k sample priority.
 ```rust
 fn default() -> Self
 fn new(config: UnivMonQConfig) -> Result<Self, UnivMonQError>
+fn new_with_source_id(config: UnivMonQConfig, source_id: u64)
+    -> Result<Self, UnivMonQError>
 fn with_hasher(config: UnivMonQConfig) -> Result<Self, UnivMonQError>
+fn with_hasher_and_source_id(config: UnivMonQConfig, source_id: u64)
+    -> Result<Self, UnivMonQError>
 ```
 
-`new` selects `DefaultXxHasher`. Use `UnivMonQ::<CustomHasher>::with_hasher`
-for the pluggable hash API.
+`new` selects `DefaultXxHasher` and allocates a process-local source ID. Use
+`new_with_source_id` with a stable, globally unique partition or shard ID for
+distributed or cross-process merging. The `with_hasher` variants provide the
+same choices for a custom hash implementation.
 
 `UnivMonQConfig::with_window_bound(max_updates, failure_probability)` chooses
 the smallest level count whose deepest sample fits the candidate table under a
@@ -63,15 +76,19 @@ fn len(&self) -> u64
 fn is_empty(&self) -> bool
 fn min(&self) -> Option<f64>
 fn max(&self) -> Option<f64>
+fn source_id(&self) -> u64
 
 fn estimate_frequency(&self, value: f64) -> u64
 fn estimate_distinct(&self) -> f64
 fn estimate_f2(&self) -> f64
-fn estimate_f3(&self) -> f64
+fn estimate_l1(&self) -> f64
 fn estimate_g_sum<F>(&self, g: F) -> f64 where F: Fn(f64) -> f64
 fn estimate_entropy(&self) -> f64
+fn estimate_entropy_universal(&self) -> f64
+fn estimate_entropy_occurrence(&self) -> Option<f64>
 fn heavy_hitters(&self, k: usize) -> Vec<(f64, u64)>
 
+fn estimate_rank_universal(&self, value: f64) -> Option<u64>
 fn rank(&self, value: f64) -> Option<u64>
 fn quantile(&self, q: f64) -> Option<f64>
 fn quantiles(&self, quantiles: &[f64]) -> Vec<Option<f64>>
@@ -81,13 +98,21 @@ fn prepare_queries(&self) -> UnivMonQQuery<'_, H>
 fn estimated_memory_bytes(&self) -> usize
 ```
 
-F3 uses the same universal recurrence with `g(f) = f^3`. The public generic
-g-sum API preserves UnivMon's ability to evaluate other compatible frequency
-functions.
+The public generic g-sum API preserves UnivMon's ability to evaluate compatible
+frequency functions. Super-quadratic moments such as F3 are deliberately not
+advertised: the current memory profile does not provide their stronger space
+guarantees.
+
+`estimate_l1()` returns the exact observation count for the supported
+insertion-only stream. `estimate_entropy()` adaptively selects between the
+original UnivMon recurrence and the coordinated occurrence-sample identity
+`H = E[ln(N/f_X)]`. The recurrence is used for diffuse streams and complete
+candidate recovery; concentrated streams with incomplete recovery use the
+occurrence path. The two component estimators remain exposed for experiments.
 
 `prepare_queries` reconstructs candidate frequencies, logical sampled levels,
 F2 thresholds, and the ordered CDF once. Its returned immutable view exposes
-count/min/max/frequency, F0/F2/F3/g-sum/entropy/heavy hitters, rank, batched
+count/min/max/frequency, F0/F2/g-sum/entropy/heavy hitters, rank, batched
 quantiles, and a borrowed CDF slice. Prefer it when a scrape or report asks for
 multiple metrics from one snapshot:
 
@@ -95,7 +120,6 @@ multiple metrics from one snapshot:
 let query = sketch.prepare_queries();
 let f0 = query.estimate_distinct();
 let f2 = query.estimate_f2();
-let f3 = query.estimate_f3();
 let entropy = query.estimate_entropy();
 let percentiles = query.quantiles(&[0.5, 0.9, 0.99]);
 let cdf = query.cdf();
@@ -104,8 +128,88 @@ let cdf = query.cdf();
 The direct methods remain convenient for isolated queries. `quantiles` is the
 batched alternative to repeated `quantile` calls and constructs the CDF once.
 
+`estimate_rank_universal(x)` is the most direct extension of the original
+UnivMon construction. It evaluates the key-dependent separable function
+`g_x(v, f_v) = f_v * I[v <= x]` through the usual sampled-level recurrence and
+does not require `ordered_samples`. It is intended for a small, predetermined
+set of fixed thresholds. Separate calls are not constrained to be monotone, so
+this experimental method is not used to implement `quantile` or `cdf`.
+
 Setting `ordered_samples = 0` removes ordered-sample memory and disables
-non-endpoint rank/quantile/CDF queries while retaining the universal metrics.
+non-endpoint rank/quantile/CDF queries. Entropy then always uses the universal
+recurrence; the other universal metrics are unchanged.
+
+### Entropy guarantee boundary
+
+For recovered heavy set `A`, residual mass `P_R`, and an occurrence-uniform
+residual value `X_R`, Shannon entropy decomposes as
+
+```text
+H = sum_(h in A) (f_h/N) ln(N/f_h) + P_R E[ln(N/f_X_R)].
+```
+
+If retained residual occurrences used exact frequencies, Hoeffding's
+inequality gives residual sampling error at most
+
+```text
+P_R ln(N) * sqrt(ln(2 / delta) / (2 m_R))
+```
+
+with probability `1 - delta`, where `m_R` is the number of retained residual
+occurrences. Replacing `f_X` by CountSketch estimate `f_hat_X` adds
+`P_R mean |ln(f_X/f_hat_X)|`; if every sampled residual frequency has relative
+error at most `rho < 1`, that term is at most `-P_R ln(1-rho)`. Heavy-frequency
+and residual-mass estimation add their corresponding plug-in error. UnivMon-Q's
+occurrence priorities use a separate hash domain from its key-frequency hashes.
+
+The adaptive selector keeps the original recurrence when recovery is complete
+or estimated concentration is below `1/k`; otherwise it uses this occurrence
+identity. The component bounds explain the estimator, but selection at that
+empirical gate is not yet a new end-to-end theorem. UnivMon-Q remains
+experimental.
+
+### Ordered-query guarantee boundary
+
+There are two rank mechanisms with different guarantee boundaries:
+
+1. `estimate_rank_universal(x)` stays within the original UnivMon hierarchy.
+   Subject to the standard L2-heavy recovery assumptions, it estimates one
+   fixed threshold using the same recurrence as other separable sums. In a
+   diffuse stream its additive error has the sampling scale `N / sqrt(k)`, so
+   obtaining normalized rank error `epsilon` requires `k` on the order of
+   `1 / epsilon^2` (before confidence amplification). A uniform guarantee over
+   the full CDF also needs simultaneous control over all thresholds.
+2. `rank`, `cdf`, and `quantile` expose one adaptive assisted estimator. The
+   implementation always retains a uniform bottom-k sample of occurrences. It
+   uses UnivMon's F2 estimate to detect concentration and, only then, replaces
+   reliable heavy-value sample mass with recovered CountSketch frequencies.
+   The occurrence sample estimates the remaining residual distribution. When
+   no heavy value qualifies, the same algorithm has an empty heavy set and
+   reduces internally to the ordinary empirical occurrence CDF; this is not a
+   separate public mode.
+
+Let `H` be the recovered heavy set, `f_h` and `f_hat_h` its exact and estimated
+frequencies, `P_hat_R = 1 - sum_h f_hat_h/N` the estimated residual mass, and
+`m_R` the retained occurrences outside `H`. Define
+
+```text
+E_H = sum_h |f_hat_h - f_h| / N
+epsilon_R = sqrt(log(2 / delta) / (2 m_R)).
+```
+
+Conditioned on the recovered heavy set and sufficiently independent occurrence
+priorities, the monotone assisted CDF obeys
+
+```text
+sup_x |F_hat(x) - F(x)| <= 2 E_H + P_hat_R * epsilon_R.
+```
+
+The adaptive gate is `F2_hat / N^2 >= 1 / ordered_samples`; admitted heavy
+values also satisfy `f_hat_h >= sqrt(F2_hat / width)`. Thus diffuse streams use
+the distribution-independent occurrence bound directly, while concentrated
+streams can reduce residual sampling error at the cost of the explicit
+UnivMon heavy-frequency error term. This remains `O(1/epsilon^2)` sample space;
+use KLL when optimal quantile-only space is the primary requirement.
 
 ## Merge
 
@@ -113,11 +217,14 @@ non-endpoint rank/quantile/CDF queries while retaining the universal metrics.
 fn merge(&mut self, other: &Self) -> Result<(), UnivMonQError>
 ```
 
-Merges require identical dimensions and `hash_seed`, as well as the same
-compile-time hasher type. Terminal counters add, SpaceSaving candidate
-summaries use a parallel merge, and coordinated samples are unioned and pruned
-by their common priority. With 32-bit counters, callers must size the aggregate
-window so no signed cell saturates; use `counter_bits = 64` otherwise.
+Merges require identical dimensions and `hash_seed`, the same compile-time
+hasher type, and globally unique occurrence source IDs. Terminal counters add,
+candidate identities are unioned and rescored from the merged CountSketch,
+eviction history is ORed with any merge-time truncation, and occurrence samples
+are unioned and pruned by their common priorities. Source-ID uniqueness is a
+caller contract rather than an unbounded registry stored in the sketch. With
+32-bit counters, callers must size the aggregate window so no signed cell
+saturates; use `counter_bits = 64` otherwise.
 
 `UnivMonQ` also implements `TumblingWindowSketch`, so it can be used directly
 with `TumblingWindow<UnivMonQ>`. The window adapter treats the `DataInput` key
@@ -131,8 +238,10 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 These helpers exist for `UnivMonQ<DefaultXxHasher>` and use a validated native
-MessagePack DTO. No ASAPv1 kind id or cross-language protobuf contract has been
-assigned yet.
+MessagePack v2 DTO containing occurrence and source metadata. A v1 state with
+a nonempty distinct-key ordered sample is rejected because discarded
+occurrence identities cannot be reconstructed. No ASAPv1 kind id or
+cross-language protobuf contract has been assigned yet.
 
 ## Example
 
@@ -141,8 +250,8 @@ use asap_sketchlib::{UnivMonQ, UnivMonQConfig};
 
 let config = UnivMonQConfig::default()
     .with_window_bound(100_000, 1e-6)?;
-let mut left = UnivMonQ::new(config)?;
-let mut right = UnivMonQ::new(config)?;
+let mut left = UnivMonQ::new_with_source_id(config, 10)?;
+let mut right = UnivMonQ::new_with_source_id(config, 20)?;
 
 for value in 0..50_000 {
     left.add(&value);
@@ -160,9 +269,19 @@ assert!(left.estimate_distinct() > 0.0);
 ## Accuracy caveat
 
 This is an empirically validated UnivMon extension, not a replacement for
-KLL's formal `O(1/epsilon)` additive-rank guarantee. Its ordered residual sample
-has the natural subset-sampling `O(1/epsilon^2)` space behavior, and the joint
-CountSketch recovery/residual-ratio analysis remains research work.
+KLL's formal `O(1/epsilon)` additive-rank guarantee. Its occurrence sample has
+the natural `O(1/epsilon^2)` space behavior, and the assisted theorem includes
+the recovered-heavy frequency error explicitly.
+
+## Empirical comparison with UnivMon
+
+The reproducible [large synthetic evaluation](../univmon_q_evaluation.md)
+compares UnivMon-Q with terminal-only UnivMon over seven skew levels and five
+trials. At the tested compact candidate budget, UnivMon was generally more
+accurate for shared universal metrics, while UnivMon-Q added ordered queries
+and used substantially less update time, merge time, query time, and memory.
+The document also separates construction differences from the current
+UnivMon heavy-hitter metadata bottleneck.
 
 ## References
 
