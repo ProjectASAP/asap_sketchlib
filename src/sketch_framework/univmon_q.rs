@@ -1468,6 +1468,10 @@ struct UnivMonQWire {
 
 impl UnivMonQ<DefaultXxHasher> {
     /// Creates an empty sketch using Sketchlib's default XXH3 hasher.
+    ///
+    /// The generated occurrence-sampling source ID is unique only within the
+    /// current process. Use [`Self::new_with_source_id`] with a globally unique
+    /// shard ID when sketches may be merged across processes.
     pub fn new(config: UnivMonQConfig) -> Result<Self, UnivMonQError> {
         Self::with_hasher(config)
     }
@@ -1787,6 +1791,90 @@ mod tests {
         }
     }
 
+    fn quantile_rank_error(sorted: &[f64], quantile: f64, estimate: f64) -> f64 {
+        let lower = sorted.partition_point(|value| value.total_cmp(&estimate).is_lt()) as f64
+            / sorted.len() as f64;
+        let upper = sorted.partition_point(|value| value.total_cmp(&estimate).is_le()) as f64
+            / sorted.len() as f64;
+        if quantile < lower {
+            lower - quantile
+        } else if quantile > upper {
+            quantile - upper
+        } else {
+            0.0
+        }
+    }
+
+    fn worst_quantile_rank_error(sketch: &UnivMonQ, sorted: &[f64]) -> f64 {
+        [0.01, 0.1, 0.5, 0.9, 0.99]
+            .into_iter()
+            .map(|quantile| {
+                let estimate = sketch.quantile(quantile).unwrap();
+                quantile_rank_error(sorted, quantile, estimate)
+            })
+            .fold(0.0, f64::max)
+    }
+
+    fn maximum_cdf_error(sketch: &UnivMonQ, sorted: &[f64]) -> f64 {
+        let cdf = sketch.cdf();
+        let mut cdf_index = 0;
+        let mut estimated = 0.0;
+        let mut maximum: f64 = 0.0;
+        let mut truth_index = 0;
+        while truth_index < sorted.len() {
+            let value = sorted[truth_index];
+            let mut truth_end = truth_index + 1;
+            while truth_end < sorted.len() && sorted[truth_end].total_cmp(&value).is_eq() {
+                truth_end += 1;
+            }
+            while cdf_index < cdf.len() && !cdf[cdf_index].value.total_cmp(&value).is_gt() {
+                estimated = cdf[cdf_index].rank;
+                cdf_index += 1;
+            }
+            let exact = truth_end as f64 / sorted.len() as f64;
+            maximum = maximum.max((estimated - exact).abs());
+            truth_index = truth_end;
+        }
+        maximum
+    }
+
+    fn raw_occurrence_sample_cdf_error(sketch: &UnivMonQ, sorted: &[f64]) -> f64 {
+        let mut sample: Vec<u64> = sketch
+            .ordered_heap
+            .iter()
+            .map(|occurrence| occurrence.key)
+            .collect();
+        sample.sort_unstable();
+        let mut maximum: f64 = 0.0;
+        let mut truth_index = 0;
+        while truth_index < sorted.len() {
+            let value = sorted[truth_index];
+            let key = float_to_ordered(value);
+            let mut truth_end = truth_index + 1;
+            while truth_end < sorted.len() && sorted[truth_end].total_cmp(&value).is_eq() {
+                truth_end += 1;
+            }
+            let sample_end = sample.partition_point(|candidate| *candidate <= key);
+            let exact = truth_end as f64 / sorted.len() as f64;
+            let estimated = sample_end as f64 / sample.len() as f64;
+            maximum = maximum.max((estimated - exact).abs());
+            truth_index = truth_end;
+        }
+        maximum
+    }
+
+    fn percentile(values: &mut [f64], probability: f64) -> f64 {
+        values.sort_unstable_by(f64::total_cmp);
+        let index = ((probability * values.len() as f64).ceil() as usize)
+            .saturating_sub(1)
+            .min(values.len() - 1);
+        values[index]
+    }
+
+    fn mean(values: &[f64]) -> f64 {
+        values.iter().sum::<f64>() / values.len() as f64
+    }
+
     #[test]
     fn exact_l1_and_occurrence_entropy_for_known_distribution() {
         let config = UnivMonQConfig {
@@ -2005,6 +2093,61 @@ mod tests {
     }
 
     #[test]
+    fn ordered_queries_match_the_exact_oracle_when_every_occurrence_is_retained() {
+        let values = [
+            f64::NEG_INFINITY,
+            -100.0,
+            -0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            50.0,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        let config = UnivMonQConfig {
+            width: 512,
+            candidates: 64,
+            ordered_samples: values.len(),
+            ..tiny_config()
+        };
+        let mut sketch = UnivMonQ::new_with_source_id(config, 0xfeed).unwrap();
+        for value in values {
+            sketch.update(&value);
+        }
+        let mut truth = values.to_vec();
+        truth.sort_unstable_by(f64::total_cmp);
+
+        for index in 0..=100 {
+            let quantile = index as f64 / 100.0;
+            let expected_index = if index == 0 {
+                0
+            } else {
+                ((quantile * truth.len() as f64).ceil() as usize - 1).min(truth.len() - 1)
+            };
+            assert_eq!(
+                sketch.quantile(quantile).unwrap().to_bits(),
+                truth[expected_index].to_bits(),
+                "quantile={quantile}"
+            );
+        }
+
+        let mut truth_index = 0;
+        while truth_index < truth.len() {
+            let value = truth[truth_index];
+            let mut truth_end = truth_index + 1;
+            while truth_end < truth.len() && truth[truth_end].total_cmp(&value).is_eq() {
+                truth_end += 1;
+            }
+            assert_eq!(sketch.rank(value), Some(truth_end as u64));
+            truth_index = truth_end;
+        }
+        assert_eq!(maximum_cdf_error(&sketch, &truth), 0.0);
+    }
+
+    #[test]
     fn data_input_api_rejects_non_numeric_values() {
         let mut sketch = UnivMonQ::new(tiny_config()).unwrap();
         sketch.update_data_input(&DataInput::I64(-10)).unwrap();
@@ -2105,6 +2248,49 @@ mod tests {
     }
 
     #[test]
+    fn approximate_ordered_queries_remain_monotone_and_dual_after_eviction() {
+        let config = UnivMonQConfig {
+            candidates: 8,
+            ordered_samples: 64,
+            ..tiny_config()
+        };
+        let mut sketch = UnivMonQ::new_with_source_id(config, 787).unwrap();
+        for index in 0..5_000_u64 {
+            let value = if index % 4 == 0 {
+                42.0
+            } else {
+                (index.wrapping_mul(6364136223846793005) % 2_003) as f64
+            };
+            sketch.update(&value);
+        }
+        assert!(sketch.levels.iter().any(|level| level.ever_evicted));
+        let query = sketch.prepare_queries();
+        assert!(query.cdf().windows(2).all(|points| {
+            points[0].value.total_cmp(&points[1].value).is_lt() && points[0].rank <= points[1].rank
+        }));
+        assert_eq!(query.cdf().last().unwrap().rank, 1.0);
+
+        let quantiles: Vec<f64> = (0..=100).map(|index| index as f64 / 100.0).collect();
+        let estimates: Vec<f64> = query
+            .quantiles(&quantiles)
+            .into_iter()
+            .map(Option::unwrap)
+            .collect();
+        assert!(
+            estimates
+                .windows(2)
+                .all(|values| !values[0].total_cmp(&values[1]).is_gt())
+        );
+        for (quantile, estimate) in quantiles.into_iter().zip(estimates) {
+            let estimated_rank = query.rank(estimate).unwrap() as f64 / query.count() as f64;
+            assert!(
+                estimated_rank + 1.0 / query.count() as f64 >= quantile,
+                "q={quantile}, value={estimate}, estimated rank={estimated_rank}"
+            );
+        }
+    }
+
+    #[test]
     fn native_messagepack_round_trip_preserves_queries() {
         let mut sketch = UnivMonQ::new(tiny_config()).unwrap();
         for value in (0..1000).map(|value| (value % 97) as f64) {
@@ -2117,6 +2303,73 @@ mod tests {
         assert_eq!(decoded.count(), sketch.count());
         assert_eq!(decoded.cdf(), sketch.cdf());
         assert_eq!(decoded.estimate_f2(), sketch.estimate_f2());
+    }
+
+    #[test]
+    fn messagepack_checkpoint_resume_preserves_occurrence_priorities() {
+        let config = UnivMonQConfig {
+            candidates: 16,
+            ordered_samples: 64,
+            ..tiny_config()
+        };
+        let values: Vec<f64> = (0..5_000_u64)
+            .map(|index| {
+                if index % 7 == 0 {
+                    42.0
+                } else {
+                    (index.wrapping_mul(6364136223846793005) % 997) as f64
+                }
+            })
+            .collect();
+        let mut uninterrupted = UnivMonQ::new_with_source_id(config, 991).unwrap();
+        let mut checkpointed = UnivMonQ::new_with_source_id(config, 991).unwrap();
+        for value in &values[..1_337] {
+            uninterrupted.update(value);
+            checkpointed.update(value);
+        }
+        let bytes = checkpointed.serialize_to_bytes().unwrap();
+        let mut resumed = UnivMonQ::deserialize_from_bytes(&bytes).unwrap();
+        for value in &values[1_337..] {
+            uninterrupted.update(value);
+            resumed.update(value);
+        }
+
+        let mut expected_sample = uninterrupted.ordered_heap.clone().into_sorted_vec();
+        let mut actual_sample = resumed.ordered_heap.clone().into_sorted_vec();
+        expected_sample.sort_unstable();
+        actual_sample.sort_unstable();
+        assert_eq!(resumed.next_sequence, values.len() as u64);
+        assert_eq!(actual_sample, expected_sample);
+        assert_eq!(resumed.cdf(), uninterrupted.cdf());
+        assert_eq!(resumed.estimate_f2(), uninterrupted.estimate_f2());
+    }
+
+    #[test]
+    fn clear_does_not_reuse_occurrence_identities() {
+        let config = UnivMonQConfig {
+            ordered_samples: 128,
+            ..tiny_config()
+        };
+        let mut sketch = UnivMonQ::new_with_source_id(config, 31337).unwrap();
+        for value in 0..100_u64 {
+            sketch.update(&(value as f64));
+        }
+        let first_priorities: HashSet<(u64, u64)> = sketch
+            .ordered_heap
+            .iter()
+            .map(|occurrence| (occurrence.priority_high, occurrence.priority_low))
+            .collect();
+        assert_eq!(sketch.next_sequence, 100);
+
+        sketch.clear();
+        assert_eq!(sketch.next_sequence, 100);
+        for value in 0..100_u64 {
+            sketch.update(&(value as f64));
+        }
+        assert_eq!(sketch.next_sequence, 200);
+        assert!(sketch.ordered_heap.iter().all(|occurrence| {
+            !first_priorities.contains(&(occurrence.priority_high, occurrence.priority_low))
+        }));
     }
 
     #[test]
@@ -2148,6 +2401,72 @@ mod tests {
     }
 
     #[test]
+    fn occurrence_sample_merge_retains_the_exact_global_bottom_k() {
+        let config = UnivMonQConfig {
+            ordered_samples: 64,
+            ..tiny_config()
+        };
+        let mut shards = Vec::new();
+        let mut expected = Vec::new();
+        for source_id in [101, 202, 303, 404] {
+            let mut shard = UnivMonQ::new_with_source_id(config, source_id).unwrap();
+            for sequence in 0..500_u64 {
+                let value = ((sequence.wrapping_mul(37) + source_id) % 251) as f64;
+                let key = float_to_ordered(value);
+                expected.push(shard.occurrence(key, sequence));
+                shard.update(&value);
+            }
+            shards.push(shard);
+        }
+        expected.sort_unstable();
+        expected.truncate(config.ordered_samples);
+
+        let mut merged = shards.remove(0);
+        for shard in shards {
+            merged.merge(&shard).unwrap();
+        }
+        let mut actual = merged.ordered_heap.clone().into_vec();
+        actual.sort_unstable();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn bottom_k_sampling_is_uniform_over_stream_positions() {
+        let stream_length = 256_usize;
+        let sample_size = 32_usize;
+        let source_trials = 256_u64;
+        let config = UnivMonQConfig {
+            ordered_samples: sample_size,
+            ..tiny_config()
+        };
+        let mut inclusion_counts = vec![0_u64; stream_length];
+        for source_id in 1..=source_trials {
+            let mut sketch = UnivMonQ::new_with_source_id(config, source_id).unwrap();
+            for position in 0..stream_length {
+                sketch.update(&(position as f64));
+            }
+            for occurrence in &sketch.ordered_heap {
+                let position = ordered_to_float(occurrence.key) as usize;
+                inclusion_counts[position] += 1;
+            }
+        }
+
+        let expected = source_trials as f64 * sample_size as f64 / stream_length as f64;
+        let chi_squared: f64 = inclusion_counts
+            .iter()
+            .map(|observed| (*observed as f64 - expected).powi(2) / expected)
+            .sum();
+        assert_eq!(
+            inclusion_counts.iter().sum::<u64>(),
+            source_trials * sample_size as u64
+        );
+        assert!(
+            chi_squared < 400.0,
+            "position-inclusion chi-squared={chi_squared}"
+        );
+    }
+
+    #[test]
     fn legacy_distinct_ordered_sample_is_rejected() {
         let legacy = LegacyUnivMonQWire {
             version: 1,
@@ -2163,7 +2482,7 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_uniform_quantiles_have_small_rank_error() {
+    fn synthetic_uniform_quantiles_have_dkw_bounded_rank_error() {
         let config = UnivMonQConfig {
             levels: 10,
             width: 2048,
@@ -2174,19 +2493,197 @@ mod tests {
             ordered_samples: 512,
             hash_seed: 5,
         };
-        let mut sketch = UnivMonQ::new(config).unwrap();
+        // A fixed source identity makes this regression independent of the
+        // number and order of tests that allocated automatic source IDs.
+        let mut sketch = UnivMonQ::new_with_source_id(config, 1).unwrap();
         let n = 100_000_u64;
+        let mut truth = Vec::with_capacity(n as usize);
         for value in 0..n {
-            sketch.update(&(value as f64));
+            let value = value as f64;
+            sketch.update(&value);
+            truth.push(value);
         }
         for q in [0.01, 0.1, 0.5, 0.9, 0.99] {
             let estimate = sketch.quantile(q).unwrap();
-            let normalized_rank_error = ((estimate + 1.0) / n as f64 - q).abs();
+            let normalized_rank_error = quantile_rank_error(&truth, q, estimate);
             assert!(
-                normalized_rank_error < 0.03,
+                normalized_rank_error < 0.06,
                 "q={q}, estimate={estimate}, error={normalized_rank_error}"
             );
         }
+        assert!(maximum_cdf_error(&sketch, &truth) < 0.06);
+    }
+
+    #[test]
+    fn ordered_queries_are_accurate_across_sources_and_distributions() {
+        let config = UnivMonQConfig {
+            levels: 10,
+            width: 2048,
+            width_halving_period: 5,
+            depth: 3,
+            counter_bits: 32,
+            candidates: 256,
+            ordered_samples: 512,
+            hash_seed: 5,
+        };
+        let n = 50_000_u64;
+        let distributions: [Vec<f64>; 3] = [
+            // Diffuse, unique values.
+            (0..n).map(|value| value as f64).collect(),
+            // Two separated modes with repeated values.
+            (0..n)
+                .map(|index| {
+                    let mode = if index % 2 == 0 { 0 } else { 100_000 };
+                    (mode + (index.wrapping_mul(17) % 5_000)) as f64
+                })
+                .collect(),
+            // One heavy value plus a large diffuse residual distribution.
+            (0..n)
+                .map(|index| {
+                    if index % 10 < 6 {
+                        42.0
+                    } else {
+                        1_000.0 + (index.wrapping_mul(6364136223846793005) % 20_000) as f64
+                    }
+                })
+                .collect(),
+        ];
+
+        for (distribution_index, values) in distributions.into_iter().enumerate() {
+            let mut truth = values.clone();
+            truth.sort_unstable_by(f64::total_cmp);
+            let mut rank_errors = Vec::new();
+            let mut cdf_errors = Vec::new();
+            for source_id in 1..=32 {
+                let mut sketch = UnivMonQ::new_with_source_id(config, source_id).unwrap();
+                for value in &values {
+                    sketch.update(value);
+                }
+                rank_errors.push(worst_quantile_rank_error(&sketch, &truth));
+                cdf_errors.push(maximum_cdf_error(&sketch, &truth));
+            }
+
+            let median_rank = percentile(&mut rank_errors.clone(), 0.5);
+            let p95_rank = percentile(&mut rank_errors, 0.95);
+            let median_cdf = percentile(&mut cdf_errors.clone(), 0.5);
+            let p95_cdf = percentile(&mut cdf_errors, 0.95);
+            assert!(
+                median_rank < 0.035 && p95_rank < 0.06,
+                "distribution={distribution_index}, median rank error={median_rank}, p95 rank error={p95_rank}"
+            );
+            assert!(
+                median_cdf < 0.04 && p95_cdf < 0.07,
+                "distribution={distribution_index}, median CDF error={median_cdf}, p95 CDF error={p95_cdf}"
+            );
+        }
+    }
+
+    #[test]
+    fn cdf_error_decreases_at_the_expected_rate_with_sample_memory() {
+        let n = 20_000_u64;
+        let values: Vec<f64> = (0..n).map(|value| value as f64).collect();
+        let mut mean_errors = Vec::new();
+        for ordered_samples in [128, 512, 2_048] {
+            let config = UnivMonQConfig {
+                levels: 10,
+                width: 1_024,
+                width_halving_period: 5,
+                depth: 3,
+                counter_bits: 32,
+                candidates: 128,
+                ordered_samples,
+                hash_seed: 5,
+            };
+            let mut errors = Vec::new();
+            for source_id in 1..=24 {
+                let mut sketch = UnivMonQ::new_with_source_id(config, source_id).unwrap();
+                for value in &values {
+                    sketch.update(value);
+                }
+                errors.push(maximum_cdf_error(&sketch, &values));
+            }
+            let average = mean(&errors);
+            // The expected Kolmogorov error of an occurrence sample is
+            // Theta(1/sqrt(k)); this also guards against accidentally sampling
+            // distinct keys instead of occurrences.
+            assert!(
+                average * (ordered_samples as f64).sqrt() < 1.5,
+                "k={ordered_samples}, mean CDF error={average}"
+            );
+            mean_errors.push(average);
+        }
+        assert!(
+            mean_errors[1] < 0.75 * mean_errors[0],
+            "mean errors={mean_errors:?}"
+        );
+        assert!(
+            mean_errors[2] < 0.75 * mean_errors[1],
+            "mean errors={mean_errors:?}"
+        );
+    }
+
+    #[test]
+    fn recovered_heavy_item_improves_residual_cdf_accuracy() {
+        let n = 20_000_u64;
+        let values: Vec<f64> = (0..n)
+            .map(|index| {
+                if index % 10 < 9 {
+                    42.0
+                } else {
+                    1_000.0 + (index.wrapping_mul(6364136223846793005) % 10_000) as f64
+                }
+            })
+            .collect();
+        let mut truth = values.clone();
+        truth.sort_unstable_by(f64::total_cmp);
+        let config = UnivMonQConfig {
+            levels: 10,
+            width: 1_024,
+            width_halving_period: 5,
+            depth: 3,
+            counter_bits: 64,
+            candidates: 128,
+            ordered_samples: 256,
+            hash_seed: 5,
+        };
+        let mut assisted_errors = Vec::new();
+        let mut raw_errors = Vec::new();
+        let mut assisted_heavy_boundary_errors = Vec::new();
+        let mut raw_heavy_boundary_errors = Vec::new();
+        for source_id in 1..=32 {
+            let mut sketch = UnivMonQ::new_with_source_id(config, source_id).unwrap();
+            for value in &values {
+                sketch.update(value);
+            }
+            assert_eq!(sketch.heavy_hitters(1)[0].0, 42.0);
+            assisted_errors.push(maximum_cdf_error(&sketch, &truth));
+            raw_errors.push(raw_occurrence_sample_cdf_error(&sketch, &truth));
+            let exact_heavy_rank = 0.9;
+            assisted_heavy_boundary_errors
+                .push((sketch.rank(42.0).unwrap() as f64 / n as f64 - exact_heavy_rank).abs());
+            let heavy_key = float_to_ordered(42.0);
+            let raw_heavy_rank = sketch
+                .ordered_heap
+                .iter()
+                .filter(|occurrence| occurrence.key <= heavy_key)
+                .count() as f64
+                / sketch.ordered_heap.len() as f64;
+            raw_heavy_boundary_errors.push((raw_heavy_rank - exact_heavy_rank).abs());
+        }
+        let assisted_mean = mean(&assisted_errors);
+        let raw_mean = mean(&raw_errors);
+        assert!(
+            assisted_mean < 0.85 * raw_mean,
+            "assisted mean={assisted_mean}, raw occurrence mean={raw_mean}"
+        );
+        assert!(
+            mean(&assisted_heavy_boundary_errors) < 0.25 * mean(&raw_heavy_boundary_errors),
+            "assisted heavy-boundary errors={assisted_heavy_boundary_errors:?}, raw errors={raw_heavy_boundary_errors:?}"
+        );
+        assert!(
+            percentile(&mut assisted_errors, 0.95) < 0.025,
+            "assisted errors={assisted_errors:?}"
+        );
     }
 
     #[test]
