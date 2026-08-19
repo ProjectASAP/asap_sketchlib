@@ -1,8 +1,7 @@
 //! A fixed integer matrix.
 //! Size fixed at compile time and heap-backed via Box.
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::ops::{Index, IndexMut, Range};
+use serde::{Deserialize, Serialize};
 
 /// Quick-start row count for fixed matrix aliases.
 pub const QUICKSTART_ROW_NUM: usize = 5;
@@ -46,6 +45,25 @@ pub trait HllRegisterStorage:
     }
 }
 
+#[macro_export]
+/// Generates a fixed-size HLL register storage type for a given precision.
+///
+/// Use this to instantiate a precision the crate does not ship a type for
+/// (the built-ins are [`HllBucketListP12`], [`HllBucketListP14`], and
+/// [`HllBucketListP16`]). The generated type implements
+/// [`HllRegisterStorage`], so it plugs straight into `HyperLogLogImpl` and
+/// `HyperLogLogHIPImpl` and keeps the same monomorphized fast path.
+///
+/// ```
+/// use asap_sketchlib::sketches::hll::HyperLogLogImpl;
+/// use asap_sketchlib::{Classic, DataInput};
+///
+/// asap_sketchlib::impl_hll_bucket_list!(HllBucketListP18, 18, 1_usize << 18);
+///
+/// let mut hll = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
+/// hll.insert(&DataInput::Str("hello"));
+/// assert_eq!(HllBucketListP18::NUM_REGISTERS, 1 << 18);
+/// ```
 macro_rules! impl_hll_bucket_list {
     ($name:ident, $precision:literal, $num_registers:expr) => {
         #[derive(Clone, Debug)]
@@ -74,29 +92,32 @@ macro_rules! impl_hll_bucket_list {
             }
         }
 
-        impl Serialize for $name {
+        impl $crate::__private::serde::Serialize for $name {
             fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
             where
-                S: Serializer,
+                S: $crate::__private::serde::Serializer,
             {
-                serde_big_array::BigArray::serialize(&*self.registers, serializer)
+                $crate::__private::serde_big_array::BigArray::serialize(
+                    &*self.registers,
+                    serializer,
+                )
             }
         }
 
-        impl<'de> Deserialize<'de> for $name {
+        impl<'de> $crate::__private::serde::Deserialize<'de> for $name {
             fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
             where
-                D: Deserializer<'de>,
+                D: $crate::__private::serde::Deserializer<'de>,
             {
                 let data: [u8; $num_registers] =
-                    serde_big_array::BigArray::deserialize(deserializer)?;
+                    $crate::__private::serde_big_array::BigArray::deserialize(deserializer)?;
                 Ok(Self {
                     registers: Box::new(data),
                 })
             }
         }
 
-        impl Index<usize> for $name {
+        impl ::std::ops::Index<usize> for $name {
             type Output = u8;
 
             fn index(&self, index: usize) -> &Self::Output {
@@ -105,39 +126,39 @@ macro_rules! impl_hll_bucket_list {
             }
         }
 
-        impl IndexMut<usize> for $name {
+        impl ::std::ops::IndexMut<usize> for $name {
             fn index_mut(&mut self, index: usize) -> &mut Self::Output {
                 debug_assert!(index < $num_registers, "index out of bounds");
                 &mut self.registers[index]
             }
         }
 
-        impl Index<Range<usize>> for $name {
+        impl ::std::ops::Index<::std::ops::Range<usize>> for $name {
             type Output = [u8];
 
-            fn index(&self, range: Range<usize>) -> &Self::Output {
+            fn index(&self, range: ::std::ops::Range<usize>) -> &Self::Output {
                 debug_assert!(range.end <= $num_registers, "range end out of bounds");
                 &self.registers[range]
             }
         }
 
-        impl IndexMut<Range<usize>> for $name {
-            fn index_mut(&mut self, range: Range<usize>) -> &mut Self::Output {
+        impl ::std::ops::IndexMut<::std::ops::Range<usize>> for $name {
+            fn index_mut(&mut self, range: ::std::ops::Range<usize>) -> &mut Self::Output {
                 debug_assert!(range.end <= $num_registers, "range end out of bounds");
                 &mut self.registers[range]
             }
         }
 
-        impl<'a> IntoIterator for &'a $name {
+        impl<'a> ::std::iter::IntoIterator for &'a $name {
             type Item = &'a u8;
-            type IntoIter = std::slice::Iter<'a, u8>;
+            type IntoIter = ::std::slice::Iter<'a, u8>;
 
             fn into_iter(self) -> Self::IntoIter {
                 self.registers.iter()
             }
         }
 
-        impl HllRegisterStorage for $name {
+        impl $crate::HllRegisterStorage for $name {
             const PRECISION: usize = Self::PRECISION;
             const REGISTER_BITS: usize = Self::REGISTER_BITS;
             const NUM_REGISTERS: usize = Self::NUM_REGISTERS;
