@@ -1,9 +1,10 @@
 //! Exercises `impl_hll_bucket_list!` from outside the crate.
 //!
 //! This is an integration test, so it compiles as a separate crate: it only
-//! sees `asap_sketchlib`'s public surface and does not depend on `serde` or
-//! `serde-big-array` itself. That makes it a real check that the exported
-//! macro is usable downstream — see issue #94.
+//! sees `asap_sketchlib`'s public surface, and it never imports `serde`,
+//! `serde-big-array`, or any of the other names the macro expansion needs.
+//! That makes it a real check that the exported macro is usable downstream —
+//! see issue #94.
 //!
 //! The precisions here are deliberately outside the built-in
 //! {12, 14, 16} set, including `lg_k = 18` (needed by sketch-bench's
@@ -97,8 +98,10 @@ fn check_precision<R: HllRegisterStorage>(lg_k: usize, cardinality: usize, toler
 fn custom_precisions_estimate_correctly() {
     // Tolerances are ~4x the 1.04/sqrt(m) standard error for the precision,
     // which is comfortably loose for these fixed inputs (the inputs are
-    // deterministic, so these assertions cannot flake).
-    check_precision::<HllBucketListP4>(4, 100, 1.10);
+    // deterministic, so these assertions cannot flake). They are all well
+    // under 1.0, so an estimator that returned zero would fail rather than
+    // pass on a slack bound.
+    check_precision::<HllBucketListP4>(4, 100, 0.60);
     check_precision::<HllBucketListP8>(8, 1_000, 0.30);
     check_precision::<HllBucketListP10>(10, 10_000, 0.15);
     check_precision::<HllBucketListP13>(13, 50_000, 0.06);
@@ -180,4 +183,50 @@ fn large_precision_allocates_on_the_heap() {
     let restored: HyperLogLogImpl<Classic, HllBucketListP18> =
         rmp_serde::from_slice(&bytes).expect("deserialize");
     assert_eq!(restored.registers_as_slice(), big.registers_as_slice());
+}
+
+/// The ASAPv1 envelope is the cross-language format, and it is a different
+/// code path from the derive-based serde impls above: it writes `precision`
+/// into the metadata and validates the register length on the way back in.
+/// Covers all three variants, including HIP's extra running scalars.
+#[test]
+fn custom_precision_round_trips_through_the_asapv1_wire_format() {
+    let mut classic = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
+    let mut ertl = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::new();
+    let mut hip = HyperLogLogHIPImpl::<HllBucketListP13>::new();
+    for i in 0..5_000 {
+        let value = DataInput::String(item(i));
+        classic.insert(&value);
+        ertl.insert(&value);
+        hip.insert(&value);
+    }
+
+    let bytes = classic.serialize_to_bytes().expect("classic encode");
+    let restored = HyperLogLogImpl::<Classic, HllBucketListP13>::deserialize_from_bytes(&bytes)
+        .expect("classic decode");
+    assert_eq!(restored.registers_as_slice(), classic.registers_as_slice());
+    assert_eq!(restored.estimate(), classic.estimate());
+
+    let bytes = ertl.serialize_to_bytes().expect("ertl_mle encode");
+    let restored = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::deserialize_from_bytes(&bytes)
+        .expect("ertl_mle decode");
+    assert_eq!(restored.registers_as_slice(), ertl.registers_as_slice());
+    assert_eq!(restored.estimate(), ertl.estimate());
+
+    let bytes = hip.serialize_to_bytes().expect("hip encode");
+    let restored =
+        HyperLogLogHIPImpl::<HllBucketListP13>::deserialize_from_bytes(&bytes).expect("hip decode");
+    // HIP's estimate is a running scalar, so this also checks that kxq0/kxq1/est
+    // survived the round-trip rather than being recomputed from registers.
+    assert_eq!(restored.estimate(), hip.estimate());
+
+    // A payload whose register count does not match the target precision is
+    // rejected rather than silently accepted at the wrong precision.
+    let p18 = HyperLogLogImpl::<Classic, HllBucketListP18>::new()
+        .serialize_to_bytes()
+        .expect("p18 encode");
+    assert!(
+        HyperLogLogImpl::<Classic, HllBucketListP13>::deserialize_from_bytes(&p18).is_err(),
+        "decoding lg_k=18 bytes as lg_k=13 should fail"
+    );
 }
