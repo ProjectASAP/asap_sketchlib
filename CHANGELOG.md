@@ -29,6 +29,10 @@ signals a backwards-compatible change.
 - **Export the `impl_hll_bucket_list!` macro.** Downstream crates can now
   generate an `HllRegisterStorage` type at any precision (e.g. `lg_k = 18`)
   instead of being limited to the built-in `HllBucketListP12/P14/P16`.
+- **`ErtlMLE` estimation at any precision.** `HyperLogLogImpl::<ErtlMLE, _>::estimate`
+  is now a generic impl instead of one generated per storage type, so it works
+  with custom `impl_hll_bucket_list!` precisions rather than only
+  `HllBucketListP12/P14/P16`.
 - **Experimental UnivMon-Q core sketch.** Adds `UnivMonQ<H>`, a Joltik-style
   terminal-stratum UnivMon implementation extended with an adaptively assisted
   occurrence sample for entropy, rank, CDF, and quantile estimates. The sketch

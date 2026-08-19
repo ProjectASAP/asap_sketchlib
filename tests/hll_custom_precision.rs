@@ -10,7 +10,7 @@
 //! `lkarger` search space).
 
 use asap_sketchlib::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};
-use asap_sketchlib::{Classic, DataInput, HllRegisterStorage};
+use asap_sketchlib::{Classic, DataInput, ErtlMLE, HllRegisterStorage};
 
 asap_sketchlib::impl_hll_bucket_list!(HllBucketListP4, 4, 1_usize << 4);
 asap_sketchlib::impl_hll_bucket_list!(HllBucketListP8, 8, 1_usize << 8);
@@ -23,9 +23,9 @@ fn item(i: usize) -> String {
     format!("key-{i:08}")
 }
 
-/// Checks the storage constants, then builds Classic and HIP sketches over
-/// `cardinality` distinct items and asserts both land within `tolerance`
-/// relative error.
+/// Checks the storage constants, then builds Classic, ErtlMLE, and HIP
+/// sketches over `cardinality` distinct items and asserts all three land
+/// within `tolerance` relative error.
 fn check_precision<R: HllRegisterStorage>(lg_k: usize, cardinality: usize, tolerance: f64) {
     let num_registers = 1_usize << lg_k;
     assert_eq!(R::PRECISION, lg_k, "PRECISION for lg_k={lg_k}");
@@ -51,10 +51,12 @@ fn check_precision<R: HllRegisterStorage>(lg_k: usize, cardinality: usize, toler
     );
 
     let mut classic = HyperLogLogImpl::<Classic, R>::new();
+    let mut ertl = HyperLogLogImpl::<ErtlMLE, R>::new();
     let mut hip = HyperLogLogHIPImpl::<R>::new();
     for i in 0..cardinality {
         let value = DataInput::String(item(i));
         classic.insert(&value);
+        ertl.insert(&value);
         hip.insert(&value);
     }
 
@@ -76,7 +78,11 @@ fn check_precision<R: HllRegisterStorage>(lg_k: usize, cardinality: usize, toler
         "register rank out of range for lg_k={lg_k}"
     );
 
-    for (name, estimate) in [("classic", classic.estimate()), ("hip", hip.estimate())] {
+    for (name, estimate) in [
+        ("classic", classic.estimate()),
+        ("ertl_mle", ertl.estimate()),
+        ("hip", hip.estimate()),
+    ] {
         let error = (estimate as f64 - cardinality as f64).abs() / cardinality as f64;
         assert!(
             error < tolerance,
