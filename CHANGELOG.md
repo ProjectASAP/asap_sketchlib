@@ -29,6 +29,10 @@ signals a backwards-compatible change.
 - **Export the `impl_hll_bucket_list!` macro.** Downstream crates can now
   generate an `HllRegisterStorage` type at any precision (e.g. `lg_k = 18`)
   instead of being limited to the built-in `HllBucketListP12/P14/P16`.
+- **Heap-allocate HLL register storage.** `impl_hll_bucket_list!`'s `Default`
+  and `Deserialize` no longer build an `[u8; NUM_REGISTERS]` value on the
+  stack before boxing it, which overflowed the stack in debug builds at
+  larger precisions. The MessagePack encoding is unchanged.
 - **`ErtlMLE` estimation at any precision.** `HyperLogLogImpl::<ErtlMLE, _>::estimate`
   is now a generic impl instead of one generated per storage type, so it works
   with custom `impl_hll_bucket_list!` precisions rather than only

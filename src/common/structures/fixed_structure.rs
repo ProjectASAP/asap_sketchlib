@@ -84,10 +84,30 @@ macro_rules! impl_hll_bucket_list {
             pub const P_MASK: u64 = ($num_registers as u64) - 1;
         }
 
+        impl $name {
+            /// Allocates a zeroed register array directly on the heap.
+            ///
+            /// `Box::new([0_u8; N])` would build the array as a stack value
+            /// first and copy it into the box; release builds elide that
+            /// temporary, but debug builds do not and overflow the stack at
+            /// larger precisions. Going through a boxed slice never
+            /// materializes an `[u8; N]` value, so stack use is constant in
+            /// every profile.
+            fn zeroed_registers() -> Box<[u8; $num_registers]> {
+                let registers: Box<[u8]> = ::std::vec![0_u8; $num_registers].into_boxed_slice();
+                match <Box<[u8; $num_registers]> as ::std::convert::TryFrom<Box<[u8]>>>::try_from(
+                    registers,
+                ) {
+                    Ok(registers) => registers,
+                    Err(_) => unreachable!("boxed slice length is the register count"),
+                }
+            }
+        }
+
         impl Default for $name {
             fn default() -> Self {
                 Self {
-                    registers: Box::new([0_u8; $num_registers]),
+                    registers: Self::zeroed_registers(),
                 }
             }
         }
@@ -109,11 +129,44 @@ macro_rules! impl_hll_bucket_list {
             where
                 D: $crate::__private::serde::Deserializer<'de>,
             {
-                let data: [u8; $num_registers] =
-                    $crate::__private::serde_big_array::BigArray::deserialize(deserializer)?;
-                Ok(Self {
-                    registers: Box::new(data),
-                })
+                // Fills a heap-allocated array element by element. The
+                // encoding is the same fixed-length sequence `BigArray`
+                // writes, but decoding never builds an `[u8; N]` on the
+                // stack -- see `zeroed_registers`.
+                struct RegisterVisitor;
+
+                impl<'de> $crate::__private::serde::de::Visitor<'de> for RegisterVisitor {
+                    type Value = $name;
+
+                    fn expecting(
+                        &self,
+                        formatter: &mut ::std::fmt::Formatter,
+                    ) -> ::std::fmt::Result {
+                        ::std::write!(formatter, "an array of {} bytes", $num_registers)
+                    }
+
+                    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                    where
+                        A: $crate::__private::serde::de::SeqAccess<'de>,
+                    {
+                        let mut out = <$name as ::std::default::Default>::default();
+                        for i in 0..$num_registers {
+                            match seq.next_element::<u8>()? {
+                                Some(byte) => out.registers[i] = byte,
+                                None => {
+                                    return Err(
+                                        <A::Error as $crate::__private::serde::de::Error>::invalid_length(
+                                            i, &self,
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                        Ok(out)
+                    }
+                }
+
+                deserializer.deserialize_tuple($num_registers, RegisterVisitor)
             }
         }
 

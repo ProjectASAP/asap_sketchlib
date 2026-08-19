@@ -17,6 +17,7 @@ asap_sketchlib::impl_hll_bucket_list!(HllBucketListP8, 8, 1_usize << 8);
 asap_sketchlib::impl_hll_bucket_list!(HllBucketListP10, 10, 1_usize << 10);
 asap_sketchlib::impl_hll_bucket_list!(HllBucketListP13, 13, 1_usize << 13);
 asap_sketchlib::impl_hll_bucket_list!(HllBucketListP18, 18, 1_usize << 18);
+asap_sketchlib::impl_hll_bucket_list!(HllBucketListP22, 22, 1_usize << 22);
 
 /// Distinct, deterministic inputs so every assertion below is reproducible.
 fn item(i: usize) -> String {
@@ -154,4 +155,29 @@ fn custom_precision_round_trips_through_serde() {
 
     assert_eq!(restored.registers_as_slice(), sketch.registers_as_slice());
     assert_eq!(restored.estimate(), sketch.estimate());
+}
+
+/// Regression: register storage must be allocated on the heap, never built as
+/// an `[u8; N]` value and copied into the box. Both operations below aborted
+/// with `fatal runtime error: stack overflow` in debug builds before that
+/// change -- test threads get a 2 MiB stack, and lg_k=22 is a 4 MiB array.
+/// Release builds happened to survive because the optimizer elided the
+/// temporary, which is exactly the profile dependence this pins down.
+#[test]
+fn large_precision_allocates_on_the_heap() {
+    let sketch = HyperLogLogImpl::<Classic, HllBucketListP22>::new();
+    assert_eq!(
+        sketch.registers_as_slice().len(),
+        HllBucketListP22::NUM_REGISTERS
+    );
+    assert!(sketch.registers_as_slice().iter().all(|&r| r == 0));
+
+    let mut big = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
+    for i in 0..1_000 {
+        big.insert(&DataInput::String(item(i)));
+    }
+    let bytes = rmp_serde::to_vec(&big).expect("serialize");
+    let restored: HyperLogLogImpl<Classic, HllBucketListP18> =
+        rmp_serde::from_slice(&bytes).expect("deserialize");
+    assert_eq!(restored.registers_as_slice(), big.registers_as_slice());
 }
