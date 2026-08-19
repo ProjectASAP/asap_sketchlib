@@ -15,6 +15,14 @@ pub const DEFAULT_ROW_NUM: usize = 3;
 pub const DEFAULT_COL_NUM: usize = 4096;
 
 /// Register storage interface used by HyperLogLog implementations.
+///
+/// Implementations must keep the constants consistent:
+/// `NUM_REGISTERS == 1 << PRECISION`, `REGISTER_BITS == 64 - PRECISION`, and
+/// `P_MASK == NUM_REGISTERS - 1`, with `PRECISION >= 1`. The estimators rely
+/// on these relations (a register rank never exceeds `REGISTER_BITS + 1`), so
+/// an inconsistent hand-written impl silently produces wrong estimates.
+/// [`impl_hll_bucket_list!`](crate::impl_hll_bucket_list) enforces them at
+/// compile time.
 pub trait HllRegisterStorage:
     Clone + std::fmt::Debug + Default + Serialize + for<'de> Deserialize<'de>
 {
@@ -54,6 +62,12 @@ pub trait HllRegisterStorage:
 /// [`HllRegisterStorage`], so it plugs straight into `HyperLogLogImpl` and
 /// `HyperLogLogHIPImpl` and keeps the same monomorphized fast path.
 ///
+/// `num_registers` must be exactly `1 << precision`, and `precision` must be
+/// at least 1; both are checked at compile time. The register index is
+/// `(hash >> REGISTER_BITS) & P_MASK`, so a mismatched pair would address only
+/// `1 << precision` registers while dividing by `num_registers`, silently
+/// biasing every estimate.
+///
 /// ```
 /// use asap_sketchlib::sketches::hll::HyperLogLogImpl;
 /// use asap_sketchlib::{Classic, DataInput};
@@ -66,11 +80,22 @@ pub trait HllRegisterStorage:
 /// ```
 macro_rules! impl_hll_bucket_list {
     ($name:ident, $precision:literal, $num_registers:expr) => {
-        #[derive(Clone, Debug)]
+        const _: () = {
+            ::std::assert!(
+                $num_registers == 1_usize << $precision,
+                "impl_hll_bucket_list!: num_registers must equal 1 << precision",
+            );
+            ::std::assert!(
+                $precision >= 1,
+                "impl_hll_bucket_list!: precision must be at least 1",
+            );
+        };
+
+        #[derive(::std::clone::Clone, ::std::fmt::Debug)]
         /// Fixed-size HLL register storage.
         pub struct $name {
             /// Backing register array.
-            pub registers: Box<[u8; $num_registers]>,
+            pub registers: ::std::boxed::Box<[u8; $num_registers]>,
         }
 
         impl $name {
@@ -93,18 +118,20 @@ macro_rules! impl_hll_bucket_list {
             /// larger precisions. Going through a boxed slice never
             /// materializes an `[u8; N]` value, so stack use is constant in
             /// every profile.
-            fn zeroed_registers() -> Box<[u8; $num_registers]> {
-                let registers: Box<[u8]> = ::std::vec![0_u8; $num_registers].into_boxed_slice();
-                match <Box<[u8; $num_registers]> as ::std::convert::TryFrom<Box<[u8]>>>::try_from(
-                    registers,
-                ) {
+            fn zeroed_registers() -> ::std::boxed::Box<[u8; $num_registers]> {
+                let registers: ::std::boxed::Box<[u8]> =
+                    ::std::vec![0_u8; $num_registers].into_boxed_slice();
+                match <::std::boxed::Box<[u8; $num_registers]> as ::std::convert::TryFrom<
+                    ::std::boxed::Box<[u8]>,
+                >>::try_from(registers)
+                {
                     Ok(registers) => registers,
-                    Err(_) => unreachable!("boxed slice length is the register count"),
+                    Err(_) => ::std::unreachable!("boxed slice length is the register count"),
                 }
             }
         }
 
-        impl Default for $name {
+        impl ::std::default::Default for $name {
             fn default() -> Self {
                 Self {
                     registers: Self::zeroed_registers(),
@@ -113,7 +140,7 @@ macro_rules! impl_hll_bucket_list {
         }
 
         impl $crate::__private::serde::Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
             where
                 S: $crate::__private::serde::Serializer,
             {
@@ -125,7 +152,7 @@ macro_rules! impl_hll_bucket_list {
         }
 
         impl<'de> $crate::__private::serde::Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
             where
                 D: $crate::__private::serde::Deserializer<'de>,
             {
@@ -145,7 +172,10 @@ macro_rules! impl_hll_bucket_list {
                         ::std::write!(formatter, "an array of {} bytes", $num_registers)
                     }
 
-                    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                    fn visit_seq<A>(
+                        self,
+                        mut seq: A,
+                    ) -> ::std::result::Result<Self::Value, A::Error>
                     where
                         A: $crate::__private::serde::de::SeqAccess<'de>,
                     {
