@@ -355,7 +355,7 @@ impl Hydra {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Multi-head Hydra with one sketch family per named measure head.
 ///
-/// Note the two distinct naming concepts: [`key_schema`](MultiHeadHydra::key_schema)
+/// Note the two distinct naming concepts: `key_schema`
 /// names the *key columns* that define a subpopulation, while `heads` names the
 /// *measures* tracked per cell. They are unrelated.
 pub struct MultiHeadHydra {
