@@ -416,9 +416,7 @@ impl<H: SketchHasher> FoldCS<H> {
     /// The outer `Vec<FoldCell>` allocation is preserved; inner `Collided(Vec)`
     /// data is dropped.
     pub fn clear(&mut self) {
-        for cell in &mut self.cells {
-            *cell = FoldCell::Empty;
-        }
+        self.cells.fill(FoldCell::Empty);
         self.heap.clear();
     }
 

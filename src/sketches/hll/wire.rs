@@ -214,7 +214,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
 mod tests {
     use super::*;
     use crate::sketches::hll::{HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogP12};
-    use crate::structures::fixed_structure::{HllBucketListP12, HllBucketListP14};
+    use crate::structures::fixed_structure::HllBucketListP14;
     use crate::{DataInput, HllBucketList};
 
     const ERROR_TOLERANCE: f64 = 0.02;
@@ -259,34 +259,29 @@ mod tests {
         }
     }
 
-    macro_rules! impl_ertl_mle_wire_test_traits {
-        ($storage:ty) => {
-            impl<H: SketchHasher> HllEstimator for HyperLogLogImpl<ErtlMLE, $storage, H> {
-                fn push(&mut self, input: &DataInput) {
-                    self.insert(input);
-                }
+    impl<Registers: HllRegisterStorage, H: SketchHasher> HllEstimator
+        for HyperLogLogImpl<ErtlMLE, Registers, H>
+    {
+        fn push(&mut self, input: &DataInput) {
+            self.insert(input);
+        }
 
-                fn estimate(&self) -> f64 {
-                    HyperLogLogImpl::<ErtlMLE, $storage, H>::estimate(self) as f64
-                }
-            }
-
-            impl<H: SketchHasher + HashProfile> HllSerializable
-                for HyperLogLogImpl<ErtlMLE, $storage, H>
-            {
-                fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-                    HyperLogLogImpl::<ErtlMLE, $storage, H>::serialize_to_bytes(self)
-                }
-
-                fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-                    HyperLogLogImpl::<ErtlMLE, $storage, H>::deserialize_from_bytes(bytes)
-                }
-            }
-        };
+        fn estimate(&self) -> f64 {
+            HyperLogLogImpl::<ErtlMLE, Registers, H>::estimate(self) as f64
+        }
     }
 
-    impl_ertl_mle_wire_test_traits!(HllBucketListP12);
-    impl_ertl_mle_wire_test_traits!(HllBucketListP14);
+    impl<Registers: HllRegisterStorage, H: SketchHasher + HashProfile> HllSerializable
+        for HyperLogLogImpl<ErtlMLE, Registers, H>
+    {
+        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+            HyperLogLogImpl::<ErtlMLE, Registers, H>::serialize_to_bytes(self)
+        }
+
+        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+            HyperLogLogImpl::<ErtlMLE, Registers, H>::deserialize_from_bytes(bytes)
+        }
+    }
 
     impl<Registers: HllRegisterStorage> HllEstimator for HyperLogLogHIPImpl<Registers> {
         fn push(&mut self, input: &DataInput) {

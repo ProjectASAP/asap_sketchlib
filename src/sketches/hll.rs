@@ -272,40 +272,36 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<ErtlMLE, Re
     }
 }
 
-macro_rules! impl_ertl_mle_estimate {
-    ($storage:ty) => {
-        impl<H: SketchHasher> HyperLogLogImpl<ErtlMLE, $storage, H> {
-            /// "New cardinality estimation algorithms for HyperLogLog sketches"
-            /// Otmar Ertl, arXiv:1702.01284
-            #[inline]
-            fn get_histogram(&self) -> [u32; { <$storage>::REGISTER_BITS + 2 }] {
-                let mut histogram = [0; { <$storage>::REGISTER_BITS + 2 }];
-                for &register in self.registers.as_slice() {
-                    histogram[register as usize] += 1;
-                }
-                histogram
-            }
+/// Upper bound on the Ertl histogram length. `REGISTER_BITS + 2` peaks at
+/// `64 + 2` for `precision = 0`, so one array covers every precision and the
+/// per-precision `[u32; REGISTER_BITS + 2]` sizing is not needed.
+const ERTL_HISTOGRAM_CAP: usize = 66;
 
-            /// Returns the estimated cardinality using the Ertl MLE algorithm.
-            pub fn estimate(&self) -> usize {
-                let histogram = self.get_histogram();
-                let m: f64 = <$storage>::NUM_REGISTERS as f64;
-                let mut z = m * self
-                    .hll_ertl_tau((m - histogram[<$storage>::REGISTER_BITS + 1] as f64) / m);
-                for i in histogram[1..=<$storage>::REGISTER_BITS].iter().rev() {
-                    z += *i as f64;
-                    z *= 0.5;
-                }
-                z += m * self.hll_ertl_sigma(histogram[0] as f64 / m);
-                (0.5 / 2_f64.ln() * m * m / z).round() as usize
-            }
+impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<ErtlMLE, Registers, H> {
+    /// "New cardinality estimation algorithms for HyperLogLog sketches"
+    /// Otmar Ertl, arXiv:1702.01284
+    #[inline]
+    fn get_histogram(&self) -> [u32; ERTL_HISTOGRAM_CAP] {
+        let mut histogram = [0; ERTL_HISTOGRAM_CAP];
+        for &register in self.registers.as_slice() {
+            histogram[register as usize] += 1;
         }
-    };
-}
+        histogram
+    }
 
-impl_ertl_mle_estimate!(HllBucketListP12);
-impl_ertl_mle_estimate!(HllBucketListP14);
-impl_ertl_mle_estimate!(HllBucketListP16);
+    /// Returns the estimated cardinality using the Ertl MLE algorithm.
+    pub fn estimate(&self) -> usize {
+        let histogram = self.get_histogram();
+        let m: f64 = Registers::NUM_REGISTERS as f64;
+        let mut z = m * self.hll_ertl_tau((m - histogram[Registers::REGISTER_BITS + 1] as f64) / m);
+        for i in histogram[1..=Registers::REGISTER_BITS].iter().rev() {
+            z += *i as f64;
+            z *= 0.5;
+        }
+        z += m * self.hll_ertl_sigma(histogram[0] as f64 / m);
+        (0.5 / 2_f64.ln() * m * m / z).round() as usize
+    }
+}
 
 impl<Registers: HllRegisterStorage> Default for HyperLogLogHIPImpl<Registers> {
     fn default() -> Self {
@@ -487,37 +483,33 @@ mod tests {
         }
     }
 
-    macro_rules! impl_ertl_mle_test_traits {
-        ($storage:ty) => {
-            impl<H: SketchHasher> HllEstimator for HyperLogLogImpl<ErtlMLE, $storage, H> {
-                fn push(&mut self, input: &DataInput) {
-                    self.insert(input);
-                }
+    impl<Registers: HllRegisterStorage, H: SketchHasher> HllEstimator
+        for HyperLogLogImpl<ErtlMLE, Registers, H>
+    {
+        fn push(&mut self, input: &DataInput) {
+            self.insert(input);
+        }
 
-                fn insert_with_hash(&mut self, hashed: u64) {
-                    HyperLogLogImpl::<ErtlMLE, $storage, H>::insert_with_hash(self, hashed);
-                }
+        fn insert_with_hash(&mut self, hashed: u64) {
+            HyperLogLogImpl::<ErtlMLE, Registers, H>::insert_with_hash(self, hashed);
+        }
 
-                fn estimate(&self) -> f64 {
-                    HyperLogLogImpl::<ErtlMLE, $storage, H>::estimate(self) as f64
-                }
+        fn estimate(&self) -> f64 {
+            HyperLogLogImpl::<ErtlMLE, Registers, H>::estimate(self) as f64
+        }
 
-                fn index(&self, i: usize) -> u8 {
-                    self.registers.as_slice()[i]
-                }
-            }
-
-            impl<H: SketchHasher> HllMerge for HyperLogLogImpl<ErtlMLE, $storage, H> {
-                fn merge_into(&mut self, other: &Self) {
-                    self.merge(other);
-                }
-            }
-        };
+        fn index(&self, i: usize) -> u8 {
+            self.registers.as_slice()[i]
+        }
     }
 
-    impl_ertl_mle_test_traits!(HllBucketListP12);
-    impl_ertl_mle_test_traits!(HllBucketListP14);
-    impl_ertl_mle_test_traits!(HllBucketListP16);
+    impl<Registers: HllRegisterStorage, H: SketchHasher> HllMerge
+        for HyperLogLogImpl<ErtlMLE, Registers, H>
+    {
+        fn merge_into(&mut self, other: &Self) {
+            self.merge(other);
+        }
+    }
 
     impl<Registers: HllRegisterStorage> HllEstimator for HyperLogLogHIPImpl<Registers> {
         fn push(&mut self, input: &DataInput) {
