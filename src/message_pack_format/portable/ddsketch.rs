@@ -399,7 +399,7 @@ impl DdSketch {
     /// Estimate the quantile at rank `q` ∈ [0, 1]. Walks the bucket
     /// array in ascending absolute-index order, accumulating counts
     /// until the target rank; returns the bucket's representative
-    /// value `gamma^(k + 0.5)` where `k` is the bucket's absolute
+    /// value `gamma^k * (1 + alpha)` where `k` is the bucket's absolute
     /// index. Returns `None` if the sketch is empty.
     ///
     /// Accuracy: bounded by DDSketch's α parameter — the estimated
@@ -420,20 +420,22 @@ impl DdSketch {
             }
             cumulative = cumulative.saturating_add(c);
             if cumulative > target {
-                let k = (self.store_offset as i64 + i as i64) as f64;
-                // Bucket midpoint: gamma^(k + 0.5) — centers the
-                // estimate in the logarithmic bucket.
-                return Some(gamma.powf(k + 0.5));
+                let k = self.store_offset as i64 + i as i64;
+                // Representative: lower edge γ^k scaled by (1+α) — matches the
+                // core DDSketch and DataDog's logarithmic_mapping.go. The old
+                // log-midpoint γ^(k+0.5) gave edge error √γ−1 > α, silently
+                // violating the α guarantee near a bucket edge (#70/#73).
+                return Some(gamma.powf(k as f64) * (1.0 + self.alpha));
             }
         }
         // Numerical edge case: if we fall off the end (e.g. q == 1.0 and
         // rounding lands past the final increment), estimate from the
         // highest non-empty bucket. The DataPoint-level `max` scalar was
-        // removed from the wire; the bucket midpoint is within DDSketch's
+        // removed from the wire; the representative is within DDSketch's
         // α relative-accuracy bound of the true max.
         last_nonempty.map(|i| {
             let k = (self.store_offset as i64 + i as i64) as f64;
-            gamma.powf(k + 0.5)
+            gamma.powf(k) * (1.0 + self.alpha)
         })
     }
 
