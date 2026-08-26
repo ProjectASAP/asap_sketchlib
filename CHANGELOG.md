@@ -45,13 +45,18 @@ signals a backwards-compatible change.
   noisy generic recurrence.
 
 ### Added
-- **Synthetic-data E2E testing harness.** A shared `tests/common` module
-  (seeded stream generators, exact ground-truth trackers, tolerance-based
-  assertion helpers) plus themed integration suites covering frequency,
-  cardinality, quantile, framework/composition, and experimental sketches —
-  every public sketch family is exercised end to end against exact ground
-  truth. Includes `tests/bug_verification.rs` regression tests for the fixes
-  above and `examples/accuracy_probe.rs`, a release-mode ground-truth probe.
+- **Synthetic-data E2E testing harness with a reusable conformance kit.** A
+  shared `tests/common` module (seeded stream generators, exact ground-truth
+  trackers, tolerance-based assertion helpers) plus themed integration suites
+  covering frequency, cardinality, quantile, framework/composition, and
+  experimental sketches — every public sketch family is exercised end to end
+  against exact ground truth. `tests/common/conformance.rs` defines standard
+  batteries (`frequency`, `turnstile`, `cardinality`, `quantile`,
+  `merge_equivalence`) that new sketches must pass via small adapter impls;
+  `tests/README.md` documents the onboarding recipe and
+  `tests/conformance_kit.rs` shows reference adapters. Also includes
+  `tests/bug_verification.rs` regression tests for the fixes above and
+  `examples/accuracy_probe.rs`, a release-mode ground-truth probe.
 - **Export the `impl_hll_bucket_list!` macro.** Downstream crates can now
   generate an `HllRegisterStorage` type at any precision (e.g. `lg_k = 18`)
   instead of being limited to the built-in `HllBucketListP12/P14/P16`.

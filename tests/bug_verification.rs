@@ -2,8 +2,9 @@
 //! ground-truth accuracy probe (examples/accuracy_probe.rs).
 //!
 //! Each test feeds fully deterministic synthetic data with an exactly known
-//! answer and asserts the theory-correct behavior. These tests FAIL against
-//! the current implementation; each documents one confirmed defect.
+//! answer and asserts the theory-correct behavior. All four bugs below were
+//! fixed in this PR; these tests pin the fixed behavior so the defects
+//! cannot silently return.
 
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::{

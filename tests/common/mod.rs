@@ -8,6 +8,8 @@
 // Which helpers are "used" varies by feature flags and per-suite coverage.
 #![allow(dead_code)]
 
+pub mod conformance;
+
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashMap;
