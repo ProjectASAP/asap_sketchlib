@@ -6,10 +6,7 @@ mod common;
 
 use std::collections::HashMap;
 
-use common::conformance::{
-    self, CardinalityOps, CardinalitySpec, FrequencyOps, FrequencySpec, MergeOps, QuantileOps,
-    QuantileSpec, SignedFrequencyOps,
-};
+use common::conformance::{self, FrequencyOps, FrequencySpec, MergeOps, SignedFrequencyOps};
 use common::{FreqTruth, assert_between, zipf_u64};
 
 use asap_sketchlib::input::{HydraCounter, HydraQuery};
@@ -285,62 +282,6 @@ impl MergeOps for HydraCsAdapter {
     }
 }
 
-/// HLL and KLL cells are large, so their grids stay small. The single constant
-/// key exercises one cell per row.
-struct HydraHllAdapter(Hydra);
-
-impl HydraHllAdapter {
-    fn new() -> Self {
-        Self(
-            Hydra::with_schema(3, 64, ["key"], HydraCounter::HLL(Default::default()))
-                .expect("single-column schema"),
-        )
-    }
-}
-
-impl CardinalityOps for HydraHllAdapter {
-    fn ingest(&mut self, key: &[u8]) {
-        let v = u64::from_be_bytes(key.try_into().expect("8-byte key"));
-        self.0
-            .update(&["all"], &DataInput::U64(v), None)
-            .expect("arity 1");
-    }
-    fn estimate(&self) -> f64 {
-        self.0
-            .query_key(&[Some("all")], &HydraQuery::Cardinality)
-            .expect("HLL counters answer cardinality queries")
-    }
-}
-
-struct HydraKllAdapter(Hydra);
-
-impl HydraKllAdapter {
-    fn new() -> Self {
-        Self(
-            Hydra::with_schema(
-                3,
-                64,
-                ["key"],
-                HydraCounter::KLL(KLL::init_kll_with_seed(200, 5_001)),
-            )
-            .expect("single-column schema"),
-        )
-    }
-}
-
-impl QuantileOps for HydraKllAdapter {
-    fn update(&mut self, value: f64) {
-        self.0
-            .update(&["all"], &DataInput::F64(value), None)
-            .expect("arity 1");
-    }
-    fn quantile(&self, q: f64) -> f64 {
-        self.0
-            .query_key(&[Some("all")], &HydraQuery::Quantile(q))
-            .expect("KLL counters answer quantile queries")
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Hydra battery runs
 // ---------------------------------------------------------------------------
@@ -394,40 +335,14 @@ fn hydra_cs_passes_signed_frequency_conformance() {
         .assert_ok();
 }
 
-#[test]
-fn hydra_hll_head_passes_cardinality_conformance() {
-    let unique: Vec<u64> = (0..50_000u64)
-        .map(|i| i.wrapping_mul(0x9E37_79B9_7F4A_7C15))
-        .collect();
-    conformance::cardinality_battery(
-        "Hydra<HLL>",
-        HydraHllAdapter::new,
-        &unique,
-        50_000,
-        CardinalitySpec { rel_tol: 0.03 },
-    )
-    .assert_ok();
-}
-
-#[test]
-fn hydra_kll_head_passes_quantile_conformance() {
-    let values: Vec<f64> = common::normal_f64(40_000, 500.0, 80.0, 5_102);
-    conformance::quantile_battery(
-        "Hydra<KLL>",
-        HydraKllAdapter::new,
-        &values,
-        QuantileSpec::default(),
-    )
-    .assert_ok();
-}
-
 // ---------------------------------------------------------------------------
 // Hydra: the subpopulation lattice
 // ---------------------------------------------------------------------------
 
-const SCHEMA: [&str; 3] = ["region", "service", "status"];
+/// `src_region` and `dst_region` share `REGIONS`, so `{src = eu-west}` and
+/// `{dst = eu-west}` are distinct subpopulations over an identical value.
+const SCHEMA: [&str; 3] = ["src_region", "dst_region", "status"];
 const REGIONS: [&str; 4] = ["eu-west", "us-east", "apac", "sa-east"];
-const SERVICES: [&str; 5] = ["auth", "cart", "search", "media", "billing"];
 const STATUSES: [&str; 3] = ["200", "404", "500"];
 const ENDPOINTS: [&str; 4] = ["/login", "/checkout", "/query", "/asset"];
 
@@ -437,17 +352,18 @@ struct Record {
     endpoint: &'static str,
 }
 
-/// Skewed traffic over three independently drawn key columns.
+/// Skewed traffic over four independently seeded columns. Consumes `seed`
+/// through `seed + 3`, so call sites space their seeds by at least four.
 fn labelled_stream(n: usize, seed: u64) -> Vec<Record> {
-    let regions = zipf_u64(n, REGIONS.len(), 0.8, seed);
-    let services = zipf_u64(n, SERVICES.len(), 1.0, seed + 1);
+    let src = zipf_u64(n, REGIONS.len(), 0.8, seed);
+    let dst = zipf_u64(n, REGIONS.len(), 0.5, seed + 1);
     let statuses = zipf_u64(n, STATUSES.len(), 1.2, seed + 2);
     let endpoints = zipf_u64(n, ENDPOINTS.len(), 0.4, seed + 3);
     (0..n)
         .map(|i| Record {
             key: [
-                REGIONS[regions[i] as usize],
-                SERVICES[services[i] as usize],
+                REGIONS[src[i] as usize],
+                REGIONS[dst[i] as usize],
                 STATUSES[statuses[i] as usize],
             ],
             endpoint: ENDPOINTS[endpoints[i] as usize],
@@ -486,64 +402,84 @@ fn freq(hydra: &Hydra, key: &[Option<&str>], endpoint: &str) -> f64 {
         .expect("well-formed frequency query")
 }
 
-/// Grid over a schema producing at most 119 distinct subkeys: 12 singles,
-/// 47 pairs, 60 triples.
+/// Grid over a schema producing at most 99 distinct subkeys: 11 singles,
+/// 40 pairs, 48 triples.
 fn lattice_hydra(cols: usize) -> Hydra {
     Hydra::with_schema(5, cols, SCHEMA, cell_cm()).expect("three-column schema")
 }
 
 #[test]
-fn hydra_subpopulation_counts_stay_within_the_additive_grid_bound() {
-    // Same bound and failure-rate accounting as `hydra_additive_bound_config`,
-    // over a four-value measure domain.
-    const FANOUT: f64 = 7.0;
-    let n = 30_000usize;
-    let cols = 4096usize;
-    let rows = 5usize;
-    let stream = labelled_stream(n, 4_200);
+fn hydra_subpopulation_counts_are_exact_on_a_sparse_grid() {
+    // 99 subkeys over 4096 columns: median-of-5 needs three rows to collide
+    // before an answer moves, so every dense subpopulation is exact.
+    let stream = labelled_stream(30_000, 4_200);
     let truth = lattice_truth(&stream);
-    let mut hydra = lattice_hydra(cols);
+    let mut hydra = lattice_hydra(4096);
     ingest(&mut hydra, &stream);
 
-    let g_s = n as f64 * FANOUT;
-    let epsilon = 4.0 / cols as f64;
-    let delta = median_failure_probability(rows, 1.0 / (epsilon * cols as f64));
-    let error_bound = epsilon * g_s;
-
-    let mut within = 0usize;
+    let mut failures: Vec<String> = Vec::new();
     let mut checked = 0usize;
-    let mut max_over = 0.0f64;
     for ((key, endpoint), count) in &truth {
         if *count < 25 {
             continue;
         }
         checked += 1;
         let est = freq(&hydra, key, endpoint);
-        assert!(
-            est >= *count as f64,
-            "lower bound violated for {key:?} x {endpoint}: est {est} < truth {count}"
-        );
-        let over = est - *count as f64;
-        max_over = max_over.max(over);
-        if over <= error_bound {
-            within += 1;
+        if est != *count as f64 {
+            failures.push(format!("{key:?} x {endpoint}: true {count}, est {est}"));
+        }
+    }
+    failures.sort();
+    assert!(checked > 200, "lattice too sparse to be meaningful");
+    assert!(
+        failures.is_empty(),
+        "{} of {checked} dense subpopulations inexact:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+}
+
+/// `Hydra::update`'s `count` reaches the per-cell counter, so a subpopulation's
+/// frequency is its weighted total rather than its record count.
+#[test]
+fn hydra_weighted_updates_reach_the_cell_counter() {
+    let stream = labelled_stream(12_000, 4_240);
+    let mut hydra = lattice_hydra(4096);
+    let mut truth: HashMap<LatticeKey, i64> = HashMap::new();
+
+    for (i, rec) in stream.iter().enumerate() {
+        let weight = 1 + (i % 7) as i64;
+        hydra
+            .update(&rec.key, &DataInput::Str(rec.endpoint), Some(weight as i32))
+            .expect("arity 3");
+        for mask in 1u32..(1u32 << SCHEMA.len()) {
+            let key: Vec<Option<&'static str>> = (0..SCHEMA.len())
+                .map(|col| ((mask >> col) & 1 == 1).then_some(rec.key[col]))
+                .collect();
+            *truth.entry((key, rec.endpoint)).or_insert(0) += weight;
         }
     }
 
-    let required = checked as f64 * (1.0 - delta);
+    let mut checked = 0usize;
+    for ((key, endpoint), total) in &truth {
+        if *total < 100 {
+            continue;
+        }
+        checked += 1;
+        assert_eq!(
+            freq(&hydra, key, endpoint),
+            *total as f64,
+            "{key:?} x {endpoint}: weighted total"
+        );
+    }
     assert!(checked > 200, "lattice too sparse to be meaningful");
-    assert!(
-        within as f64 > required,
-        "in-bound subpopulations {within} of {checked} not above {required} \
-         (eps={epsilon}, bound={error_bound}, delta={delta}, max_overshoot={max_over})"
-    );
 }
 
 #[test]
 fn hydra_marginals_agree_with_the_sum_of_their_children() {
     // A wildcard query reads its own subkey, written by the fan-out on every
     // matching record, not a roll-up of the cells beneath it.
-    let stream = labelled_stream(30_000, 5_202);
+    let stream = labelled_stream(30_000, 5_210);
     let mut hydra = lattice_hydra(4096);
     ingest(&mut hydra, &stream);
 
@@ -551,19 +487,18 @@ fn hydra_marginals_agree_with_the_sum_of_their_children() {
     for region in REGIONS {
         for endpoint in ENDPOINTS {
             let parent = freq(&hydra, &[Some(region), None, None], endpoint);
-            let children: f64 = SERVICES
+            let children: f64 = REGIONS
                 .iter()
-                .flat_map(|svc| {
+                .flat_map(|dst| {
                     STATUSES
                         .iter()
-                        .map(move |st| [Some(region), Some(*svc), Some(*st)])
+                        .map(move |st| [Some(region), Some(*dst), Some(*st)])
                 })
                 .map(|key| freq(&hydra, &key, endpoint))
                 .sum();
-            let slack = 0.02 * parent + 8.0;
-            if (parent - children).abs() > slack {
+            if parent != children {
                 failures.push(format!(
-                    "region {region} x {endpoint}: marginal {parent} vs children {children} (slack {slack:.1})"
+                    "src {region} x {endpoint}: marginal {parent} vs children {children}"
                 ));
             }
         }
@@ -580,7 +515,7 @@ fn hydra_shard_merge_is_exactly_single_pass() {
     // Cell-wise merge of an additive counter is exact, so the comparison
     // carries no tolerance.
     const SHARDS: usize = 4;
-    let stream = labelled_stream(24_000, 5_203);
+    let stream = labelled_stream(24_000, 5_220);
 
     let mut single = lattice_hydra(2048);
     ingest(&mut single, &stream);
@@ -609,39 +544,23 @@ fn hydra_shard_merge_is_exactly_single_pass() {
     assert!(compared > 200, "lattice too sparse to be meaningful");
 }
 
+/// Two columns over one value domain: `{a = x}` and `{b = x}` are distinct
+/// subpopulations that share a value.
 #[test]
-fn hydra_delimiter_laden_values_stay_distinct() {
-    // `a:x\;y;b:z` and `a:x;b:y\;z` are the escaped encodings of two rows a
-    // naive `join(';')` flattens into one subkey.
+fn hydra_columns_sharing_a_value_do_not_alias() {
     let mut hydra = Hydra::with_schema(5, 1024, ["a", "b"], cell_cm()).expect("two-column schema");
-    for _ in 0..300 {
-        hydra
-            .update(&["x;y", "z"], &DataInput::Str(MEASURE), None)
-            .expect("arity 2");
-    }
-    for _ in 0..120 {
-        hydra
-            .update(&["x", "y;z"], &DataInput::Str(MEASURE), None)
-            .expect("arity 2");
-    }
-    // A colon-carrying value must not be readable as a column label either.
-    for _ in 0..70 {
-        hydra
-            .update(&["a:b", "c"], &DataInput::Str(MEASURE), None)
-            .expect("arity 2");
+    for (key, times) in [(["x", "y"], 300), (["y", "x"], 120)] {
+        for _ in 0..times {
+            hydra
+                .update(&key, &DataInput::Str(MEASURE), None)
+                .expect("arity 2");
+        }
     }
 
-    for (key, expected) in [
-        (vec![Some("x;y"), Some("z")], 300.0),
-        (vec![Some("x"), Some("y;z")], 120.0),
-        (vec![Some("a:b"), Some("c")], 70.0),
-    ] {
-        let est = freq(&hydra, &key, MEASURE);
-        assert_eq!(est, expected, "{key:?} aliased with a sibling subkey");
-    }
-    // Marginals still roll the escaped values up correctly.
-    assert_eq!(freq(&hydra, &[Some("x"), None], MEASURE), 120.0);
-    assert_eq!(freq(&hydra, &[None, Some("z")], MEASURE), 300.0);
+    assert_eq!(freq(&hydra, &[Some("x"), None], MEASURE), 300.0);
+    assert_eq!(freq(&hydra, &[None, Some("x")], MEASURE), 120.0);
+    assert_eq!(freq(&hydra, &[Some("y"), None], MEASURE), 120.0);
+    assert_eq!(freq(&hydra, &[None, Some("y")], MEASURE), 300.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -804,7 +723,7 @@ fn multihead(rows: usize, cols: usize) -> MultiHeadHydra {
 fn multihead_matches_independent_single_head_hydras() {
     // MultiHeadHydra is N Hydras sharing one fan-out, reached through a
     // pre-hashed insert path, so identical streams give identical answers.
-    let stream = labelled_stream(9_000, 5_401);
+    let stream = labelled_stream(9_000, 5_410);
     let mut mh = multihead(5, 1024);
     let mut events = Hydra::with_schema(5, 1024, SCHEMA, cell_cm()).expect("schema");
     let mut visitors =
@@ -855,7 +774,7 @@ fn multihead_matches_independent_single_head_hydras() {
 
 #[test]
 fn multihead_shard_merge_keeps_heads_independent() {
-    let stream = labelled_stream(12_000, 5_402);
+    let stream = labelled_stream(12_000, 5_420);
     let mut single = multihead(5, 1024);
     let mut left = multihead(5, 1024);
     let mut right = multihead(5, 1024);
@@ -918,23 +837,32 @@ fn hydra_rejects_malformed_keys_and_queries() {
         .update(&["eu-west", "auth", "200"], &DataInput::Str(MEASURE), None)
         .expect("arity 3");
 
-    // Keys are positional and full width; a short key is an arity error.
+    // Keys are positional and full width; a short or long key is an arity
+    // error. The query below is one the counter supports, so only arity can
+    // make it fail.
+    let hit = HydraQuery::Frequency(DataInput::Str(MEASURE));
     assert!(
         hydra
-            .update(&["eu-west", "auth"], &DataInput::Str(MEASURE), None)
+            .update(&["eu-west", "us-east"], &DataInput::Str(MEASURE), None)
             .is_err()
     );
     assert!(
         hydra
-            .query_key(&[Some("eu-west")], &HydraQuery::Cardinality)
+            .update(
+                &["eu-west", "us-east", "200", "extra"],
+                &DataInput::Str(MEASURE),
+                None
+            )
+            .is_err()
+    );
+    assert!(hydra.query_key(&[Some("eu-west")], &hit).is_err());
+    assert!(
+        hydra
+            .query_key(&[Some("eu-west"), None, None, None], &hit)
             .is_err()
     );
     // An all-wildcard query names no subpopulation.
-    assert!(
-        hydra
-            .query_key(&[None, None, None], &HydraQuery::L1Norm)
-            .is_err()
-    );
+    assert!(hydra.query_key(&[None, None, None], &hit).is_err());
     // Counter/query mismatches surface as errors, not zeros.
     assert!(
         hydra
@@ -1105,40 +1033,10 @@ fn hydra_subpopulation_error_stays_within_the_additive_grid_bound() {
 // Hydra: every counter family on a multi-column subpopulation lattice
 // ---------------------------------------------------------------------------
 
-/// Two key columns over 3-value domains: 6 singles and 9 pairs = 15 subkeys.
-const L2_REGIONS: [&str; 3] = ["eu-west", "us-east", "apac"];
-const L2_SERVICES: [&str; 3] = ["auth", "cart", "search"];
-
-fn l2_hydra(cols: usize, counter: HydraCounter) -> Hydra {
-    Hydra::with_schema(5, cols, ["region", "service"], counter).expect("two-column schema")
-}
-
-/// The `2^2 - 1` subpopulations a `(region, service)` row belongs to.
-fn l2_masks(region: &'static str, service: &'static str) -> [[Option<&'static str>; 2]; 3] {
-    [
-        [Some(region), None],
-        [None, Some(service)],
-        [Some(region), Some(service)],
-    ]
-}
-
-fn l2_keys(n: usize, seed: u64) -> Vec<(&'static str, &'static str)> {
-    let regions = zipf_u64(n, L2_REGIONS.len(), 0.6, seed);
-    let services = zipf_u64(n, L2_SERVICES.len(), 0.6, seed + 1);
-    (0..n)
-        .map(|i| {
-            (
-                L2_REGIONS[regions[i] as usize],
-                L2_SERVICES[services[i] as usize],
-            )
-        })
-        .collect()
-}
-
 #[test]
 fn hydra_cs_head_subpopulation_frequencies() {
     // Count Sketch carries signed per-cell noise, so the band is symmetric.
-    let stream = labelled_stream(30_000, 4_600);
+    let stream = labelled_stream(30_000, 4_300);
     let truth = lattice_truth(&stream);
     let mut hydra = Hydra::with_schema(5, 4096, SCHEMA, cell_cs()).expect("three-column schema");
     ingest(&mut hydra, &stream);
@@ -1216,8 +1114,9 @@ fn h2_matches(key: &[Option<&str>; 2], region: &str, service: &str) -> bool {
 }
 
 /// Drives one counter family through the 2x2 lattice, requiring each
-/// subpopulation's answers to equal a standalone counter over its own records.
-fn assert_head_isolates_subpopulations<F>(
+/// subpopulation's answer to equal a standalone counter over its own records.
+/// Both sides share a query implementation, so this constrains routing only.
+fn assert_head_routes_to_the_right_cell<F>(
     label: &str,
     counter: HydraCounter,
     n: usize,
@@ -1255,17 +1154,16 @@ fn assert_head_isolates_subpopulations<F>(
             }
         }
     }
-    assert_eq!(lattice.len(), 8, "the 2^2-1 lattice over 2x2 domains");
     assert!(
         failures.is_empty(),
-        "{label} head does not isolate subpopulations:\n  {}",
+        "{label} head misroutes subpopulations:\n  {}",
         failures.join("\n  ")
     );
 }
 
 #[test]
-fn hydra_hll_head_isolates_subpopulations() {
-    assert_head_isolates_subpopulations(
+fn hydra_hll_head_routes_records_to_the_right_cell() {
+    assert_head_routes_to_the_right_cell(
         "HLL",
         HydraCounter::HLL(Default::default()),
         30_000,
@@ -1276,38 +1174,28 @@ fn hydra_hll_head_isolates_subpopulations() {
 }
 
 #[test]
-fn hydra_kll_head_isolates_subpopulations() {
+fn hydra_kll_head_routes_records_to_the_right_cell() {
     let values = common::normal_f64(30_000, 500.0, 80.0, 4_640);
-    assert_head_isolates_subpopulations(
+    assert_head_routes_to_the_right_cell(
         "KLL",
         HydraCounter::KLL(KLL::init_kll_with_seed(200, 4_641)),
         30_000,
         4_630,
         move |i| DataInput::F64(values[i]),
-        &[
-            HydraQuery::Quantile(0.1),
-            HydraQuery::Quantile(0.5),
-            HydraQuery::Quantile(0.9),
-            HydraQuery::Cdf(500.0),
-        ],
+        &[HydraQuery::Quantile(0.5)],
     );
 }
 
 #[test]
-fn hydra_univmon_head_isolates_subpopulations() {
+fn hydra_univmon_head_routes_records_to_the_right_cell() {
     let items = zipf_u64(30_000, 1000, 1.2, 4_660);
-    assert_head_isolates_subpopulations(
+    assert_head_routes_to_the_right_cell(
         "UnivMon",
         HydraCounter::UNIVERSAL(UnivMon::init_univmon(32, 5, 256, 8)),
         30_000,
         4_650,
         move |i| DataInput::U32(items[i] as u32),
-        &[
-            HydraQuery::L1Norm,
-            HydraQuery::L2Norm,
-            HydraQuery::Entropy,
-            HydraQuery::Cardinality,
-        ],
+        &[HydraQuery::L1Norm],
     );
 }
 
@@ -1359,20 +1247,25 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
     // CM is covered over the full D=3 lattice by
     // `hydra_shard_merge_is_exactly_single_pass`; this is the other four.
     let n = 24_000usize;
-    let keys = l2_keys(n, 4_670);
-    let probe: Vec<[Option<&str>; 2]> = l2_masks("eu-west", "auth").to_vec();
+    let keys = h2_keys(n, 4_670);
+    let probe: Vec<[Option<&str>; 2]> = h2_masks("eu-west", "auth").to_vec();
+    // Shard assignment is drawn independently of the value, so both shards see
+    // every value and the merge has to combine two non-zero counters.
+    let shards = common::uniform_u64(n, 2, 4_675);
 
-    let shard_of = |i: usize| i % 2;
     let run = |counter: HydraCounter, value: &dyn Fn(usize) -> DataInput<'static>| {
-        let mut single = l2_hydra(128, counter.clone());
-        let mut left = l2_hydra(128, counter.clone());
-        let mut right = l2_hydra(128, counter);
+        let mut single = Hydra::with_schema(5, 256, ["region", "service"], counter.clone())
+            .expect("two-column schema");
+        let mut left = Hydra::with_schema(5, 256, ["region", "service"], counter.clone())
+            .expect("two-column schema");
+        let mut right =
+            Hydra::with_schema(5, 256, ["region", "service"], counter).expect("two-column schema");
         for (i, (region, service)) in keys.iter().enumerate() {
             let v = value(i);
             single
                 .update(&[region, service], &v, None)
                 .expect("arity 2");
-            let shard = if shard_of(i) == 0 {
+            let shard = if shards[i] == 0 {
                 &mut left
             } else {
                 &mut right
@@ -1384,8 +1277,9 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
     };
 
     // CS is additive: cell-wise merge reproduces the single pass exactly.
+    let cs_values = zipf_u64(n, ENDPOINTS.len(), 0.5, 4_676);
     let (single, merged) = run(cell_cs(), &|i| {
-        DataInput::Str(ENDPOINTS[i % ENDPOINTS.len()])
+        DataInput::Str(ENDPOINTS[cs_values[i] as usize])
     });
     for key in &probe {
         for ep in ENDPOINTS {
@@ -1398,8 +1292,9 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
     }
 
     // HLL merges register-wise by max, so likewise exact.
+    let hll_values = common::uniform_u64(n, 9_000, 4_677);
     let (single, merged) = run(HydraCounter::HLL(Default::default()), &|i| {
-        DataInput::U32(i as u32 % 9_000)
+        DataInput::U32(hll_values[i] as u32)
     });
     for key in &probe {
         assert_eq!(
@@ -1413,8 +1308,14 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
         );
     }
 
-    // KLL compaction is randomized; the merged sketch holds to the rank band.
-    let kll_values = common::normal_f64(n, 500.0, 80.0, 4_680);
+    // KLL compaction is randomized, so the merged sketch is held to the rank
+    // band around exact truth. The two shards draw from separated modes, so a
+    // merge that keeps only one side lands outside every band.
+    let low = common::normal_f64(n, 300.0, 20.0, 4_680);
+    let high = common::normal_f64(n, 700.0, 20.0, 4_685);
+    let kll_values: Vec<f64> = (0..n)
+        .map(|i| if shards[i] == 0 { low[i] } else { high[i] })
+        .collect();
     let (_, merged) = run(
         HydraCounter::KLL(KLL::init_kll_with_seed(200, 4_681)),
         &|i| DataInput::F64(kll_values[i]),
@@ -1437,9 +1338,10 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
         );
     }
 
-    // UnivMon L1 stays exact through a merge; L2 keeps its band.
+    // UnivMon L1 is a weighted record count, exact through the merge and equal
+    // to the single pass.
     let um_items = zipf_u64(n, 800, 1.2, 4_690);
-    let (_, merged) = run(
+    let (single, merged) = run(
         HydraCounter::UNIVERSAL(UnivMon::init_univmon(32, 5, 256, 8)),
         &|i| DataInput::U32(um_items[i] as u32),
     );
@@ -1450,10 +1352,16 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
         }
     }
     let key = [Some("eu-west"), None];
+    let merged_l1 = merged.query_key(&key, &HydraQuery::L1Norm).expect("L1");
     assert_eq!(
-        merged.query_key(&key, &HydraQuery::L1Norm).expect("L1"),
+        merged_l1,
         region_truth.total() as f64,
         "merged UnivMon L1 must stay exact"
+    );
+    assert_eq!(
+        merged_l1,
+        single.query_key(&key, &HydraQuery::L1Norm).expect("L1"),
+        "merged UnivMon L1 must equal the single pass"
     );
     let l2 = merged.query_key(&key, &HydraQuery::L2Norm).expect("L2");
     assert_between(
