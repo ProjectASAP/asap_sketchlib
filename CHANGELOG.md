@@ -12,6 +12,21 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- **Made `NitroBatch` frequency estimates unbiased.** Inserts hashed keys with
+  raw `hash128_seeded` while the public estimator derived cells from the
+  packed matrix hash (Packed64 mode), so estimates read cells inserts never
+  wrote and returned ~0; each sampled record now updates every row using the
+  sketch's own fast-path hash derivation, and the geometric skip draw uses
+  `floor` instead of `ceil` (the extra +1 per skip halved-ish the effective
+  sampling rate). Estimates now converge to true frequencies at any rate.
+- **Restored the α relative-accuracy guarantee in portable `DdSketch`.**
+  Quantile representatives changed from the log-midpoint γ^(k+0.5), whose edge
+  error √γ−1 exceeds α, to γ^k·(1+α) — matching core `DDSketch` and DataDog's
+  mapping. No wire/state migration; query outputs shift by at most α.
+- **CountL2HH hot-path L2 accumulation saturates instead of wrapping.**
+  Per-row Σcount² updates run through a saturating i128 intermediate, so
+  extreme turnstile counts no longer wrap silently in release builds (or
+  panic on overflow in debug builds).
 - **Heap-allocate HLL register storage.** `impl_hll_bucket_list!`'s `Default`
   and `Deserialize` no longer build an `[u8; NUM_REGISTERS]` value on the
   stack before boxing it, which overflowed the stack in debug builds at
@@ -30,6 +45,13 @@ signals a backwards-compatible change.
   noisy generic recurrence.
 
 ### Added
+- **Synthetic-data E2E testing harness.** A shared `tests/common` module
+  (seeded stream generators, exact ground-truth trackers, tolerance-based
+  assertion helpers) plus themed integration suites covering frequency,
+  cardinality, quantile, framework/composition, and experimental sketches —
+  every public sketch family is exercised end to end against exact ground
+  truth. Includes `tests/bug_verification.rs` regression tests for the fixes
+  above and `examples/accuracy_probe.rs`, a release-mode ground-truth probe.
 - **Export the `impl_hll_bucket_list!` macro.** Downstream crates can now
   generate an `HllRegisterStorage` type at any precision (e.g. `lg_k = 18`)
   instead of being limited to the built-in `HllBucketListP12/P14/P16`.
