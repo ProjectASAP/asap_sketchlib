@@ -380,6 +380,50 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
         "store stays compact",
     );
 
+    // Boundary acceptance: values just INSIDE the indexable range must still
+    // be tracked, so the guards reject only genuinely unmappable extremes.
+    // Replicate the mapping formulas here (they are private) for alpha=0.01.
+    let gamma = (1.0 + alpha) / (1.0 - alpha);
+    let inv_log_gamma = 1.0 / gamma.ln();
+    let min_idx = ((i32::MIN as f64) * inv_log_gamma + 1.0)
+        .exp()
+        .max(f64::MIN_POSITIVE * gamma);
+    const EXP_OVERFLOW: f64 = 709.0;
+    let max_idx = ((i32::MAX as f64) * inv_log_gamma - 1.0)
+        .exp()
+        .min(EXP_OVERFLOW.exp() / (2.0 * gamma) * (gamma + 1.0));
+
+    let mut port_boundary = PortableDds::new(alpha);
+    let mut core_boundary = DDSketch::new(alpha);
+    let just_inside_min = min_idx * (1.0 + 1e-9); // a hair above the floor
+    let just_inside_max = max_idx * (1.0 - 1e-9); // a hair below the ceiling
+    port_boundary.update(just_inside_min);
+    port_boundary.update(just_inside_max);
+    core_boundary.add(&just_inside_min);
+    core_boundary.add(&just_inside_max);
+    assert_eq!(
+        port_boundary.total_count(),
+        2,
+        "in-range extremes near boundaries must be kept"
+    );
+    assert_eq!(core_boundary.get_count(), 2, "core boundary agreement");
+    assert_eq!(port_boundary.total_count(), core_boundary.get_count());
+
+    // And one step past each boundary must be rejected by both.
+    port_boundary.update(min_idx * 0.5);
+    port_boundary.update(max_idx * (1.0 + 1e-6));
+    core_boundary.add(&(min_idx * 0.5));
+    assert_eq!(
+        port_boundary.total_count(),
+        2,
+        "out-of-range neighbors rejected"
+    );
+    assert_eq!(
+        core_boundary.get_count(),
+        2,
+        "core rejects out-of-range neighbor"
+    );
+
     // Item 2 contract: mismatched mappings are a runtime error in BOTH types,
     // not a debug-only assertion.
     let other_alpha = 0.05;
