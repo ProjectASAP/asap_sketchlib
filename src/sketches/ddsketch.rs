@@ -142,6 +142,31 @@ pub struct DDSketch {
     max: f64,
 }
 
+/// Smallest and largest finite positive values whose bucket index is
+/// representable without integer overflow (index within `i32`) or
+/// `exp`/`powf` overflow, mirroring DataDog's logarithmic_mapping.go
+/// `minIndexableValue`/`maxIndexableValue`. Values outside this range are
+/// dropped rather than mapped to an arbitrarily distant bucket index — that
+/// guards the dense bucket store against a single finite-but-extreme outlier
+/// forcing an allocation spanning the whole index gap (asap_sketchlib#70
+/// item 4 / sketchlib-go#72).
+///
+/// Single source of truth shared by core `DDSketch`, the portable wire twin,
+/// and tests, so the two implementations cannot drift algebraically again.
+pub fn ddsketch_indexable_bounds(alpha: f64) -> (f64, f64) {
+    let gamma = (1.0 + alpha) / (1.0 - alpha);
+    let inv_log_gamma = 1.0 / gamma.ln();
+    // 709.0 is just under ln(f64::MAX) so exp() stays finite.
+    const EXP_OVERFLOW: f64 = 709.0;
+    let min = ((f64::from(i32::MIN)) / inv_log_gamma + 1.0)
+        .exp()
+        .max(f64::MIN_POSITIVE * gamma);
+    let max = ((f64::from(i32::MAX)) / inv_log_gamma - 1.0)
+        .exp()
+        .min(EXP_OVERFLOW.exp() / (2.0 * gamma) * (gamma + 1.0));
+    (min, max)
+}
+
 impl DDSketch {
     /// Creates a new DDSketch with relative accuracy guarantee `alpha` (must be in `(0, 1)`).
     pub fn new(alpha: f64) -> Self {
@@ -394,10 +419,7 @@ impl DDSketch {
     /// DataDog's logarithmic_mapping.go minIndexableValue.
     #[inline]
     fn min_indexable_value(&self) -> f64 {
-        // f64::MIN_POSITIVE is the smallest positive normal (2^-1022).
-        ((f64::from(i32::MIN)) / self.inv_log_gamma + 1.0)
-            .exp()
-            .max(f64::MIN_POSITIVE * self.gamma)
+        ddsketch_indexable_bounds(self.alpha).0
     }
 
     /// Largest finite positive value whose bucket index is representable without
@@ -408,11 +430,7 @@ impl DDSketch {
     /// sketchlib-go#72's single-outlier memory blowup).
     #[inline]
     fn max_indexable_value(&self) -> f64 {
-        // 709.0 is just under ln(f64::MAX) so exp() stays finite.
-        const EXP_OVERFLOW: f64 = 709.0;
-        ((f64::from(i32::MAX)) / self.inv_log_gamma - 1.0)
-            .exp()
-            .min(EXP_OVERFLOW.exp() / (2.0 * self.gamma) * (self.gamma + 1.0))
+        ddsketch_indexable_bounds(self.alpha).1
     }
 
     fn merge_buckets_from(&mut self, other: &DDSketch) {

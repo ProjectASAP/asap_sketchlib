@@ -95,6 +95,10 @@ pub struct DdSketch {
 impl DdSketch {
     /// Construct an empty sketch.
     pub fn new(alpha: f64) -> Self {
+        assert!(
+            (0.0..1.0).contains(&alpha),
+            "alpha must be in (0,1); alpha=0 makes ln(gamma)=0 and every guard degenerate"
+        );
         Self {
             alpha,
             store_counts: Vec::new(),
@@ -124,6 +128,14 @@ impl DdSketch {
 
     /// Merge one other sketch into self by aligning bucket arrays on
     /// absolute indices. Both operands must share the same `alpha`.
+    ///
+    /// Like [`Self::apply_delta`], the operand is treated as untrusted wire
+    /// state: if the union span would exceed
+    /// [`MAX_APPLY_DELTA_SPAN_BUCKETS`] *and* grow beyond both operands'
+    /// existing stores, `Err` is returned before any allocation. Stores that
+    /// already legitimately span more than the cap (exotic small-α
+    /// configurations) merge normally as long as the union stays within
+    /// what either side already holds.
     pub fn merge(
         &mut self,
         other: &DdSketch,
@@ -149,7 +161,22 @@ impl DdSketch {
             let other_end = other_start + other.store_counts.len() as i64;
             let new_start = self_start.min(other_start);
             let new_end = self_end.max(other_end);
-            let new_len = (new_end - new_start) as usize;
+            let new_len = new_end - new_start;
+            // Hostile-span guard: a decoded snapshot with store_offset near
+            // i32::MIN and a short count vector must not allocate a union
+            // spanning ~2^31 buckets (~17 GiB) in one call. Growth beyond
+            // both operands' existing spans is capped; stores that already
+            // legitimately exceed the cap pass through untouched.
+            let max_existing =
+                (self.store_counts.len() as i64).max(other.store_counts.len() as i64);
+            if new_len > MAX_APPLY_DELTA_SPAN_BUCKETS && new_len > max_existing {
+                return Err(format!(
+                    "DdSketch merge spans {} buckets, exceeding the {}-bucket safety limit",
+                    new_len, MAX_APPLY_DELTA_SPAN_BUCKETS
+                )
+                .into());
+            }
+            let new_len = new_len as usize;
             let mut merged = vec![0u64; new_len];
             for (i, c) in self.store_counts.iter().enumerate() {
                 let idx = (self_start + i as i64 - new_start) as usize;
@@ -405,42 +432,18 @@ impl DdSketch {
         }
         let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
         let ln_gamma = gamma.ln();
-        let inv_log_gamma = 1.0 / ln_gamma;
         // Reject finite-but-extreme values whose bucket index would be
         // unrepresentable or force an arbitrarily distant allocation
-        // (asap_sketchlib#70 item 4; mirrors core DDSketch's
-        // min/max_indexable_value guards).
-        if value < Self::min_indexable_value(inv_log_gamma, gamma)
-            || value > Self::max_indexable_value(inv_log_gamma, gamma)
-        {
+        // (asap_sketchlib#70 item 4). Uses the SHARED bounds helper so core
+        // and portable can never drift algebraically.
+        let (min_v, max_v) = crate::sketches::ddsketch::ddsketch_indexable_bounds(self.alpha);
+        if value < min_v || value > max_v {
             return;
         }
         let idx = (value.ln() / ln_gamma).floor() as i32;
         self.ensure_bucket(idx);
         let arr_idx = (idx as i64 - self.store_offset as i64) as usize;
         self.store_counts[arr_idx] = self.store_counts[arr_idx].saturating_add(1);
-    }
-
-    /// Smallest positive value whose bucket index is representable without
-    /// integer overflow (index ≥ i32::MIN) or float underflow. Identical
-    /// formula to core DDSketch's `min_indexable_value`.
-    #[inline]
-    fn min_indexable_value(inv_log_gamma: f64, gamma: f64) -> f64 {
-        ((f64::from(i32::MIN)) * inv_log_gamma + 1.0)
-            .exp()
-            .max(f64::MIN_POSITIVE * gamma)
-    }
-
-    /// Largest finite positive value whose bucket index is representable
-    /// without integer overflow (index ≤ i32::MAX) or `exp`/`powf` overflow.
-    /// Identical formula to core DDSketch's `max_indexable_value`.
-    #[inline]
-    fn max_indexable_value(inv_log_gamma: f64, gamma: f64) -> f64 {
-        // 709.0 is just under ln(f64::MAX) so exp() stays finite.
-        const EXP_OVERFLOW: f64 = 709.0;
-        ((f64::from(i32::MAX)) * inv_log_gamma - 1.0)
-            .exp()
-            .min(EXP_OVERFLOW.exp() / (2.0 * gamma) * (gamma + 1.0))
     }
 
     /// Ensure bucket `k` is addressable in `store_counts`, growing in

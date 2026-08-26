@@ -16,9 +16,12 @@ signals a backwards-compatible change.
   raw `hash128_seeded` while the public estimator derived cells from the
   packed matrix hash (Packed64 mode), so estimates read cells inserts never
   wrote and returned ~0; each sampled record now updates every row using the
-  sketch's own fast-path hash derivation, and the geometric skip draw uses
-  `floor` instead of `ceil` (the extra +1 per skip halved-ish the effective
-  sampling rate). Estimates now converge to true frequencies at any rate.
+  sketch's own fast-path hash derivation, and both batch and streaming skip
+  draws use `floor` instead of `ceil` (the extra +1 per skip halved-ish the
+  effective sampling rate). Estimates now converge to true frequencies at any
+  rate. Update weights saturate at the `i32` counter domain instead of
+  wrapping (reachable via rates below ~4.7e-10 or by writing the public
+  `delta` field directly).
 - **Restored the α relative-accuracy guarantee in portable `DdSketch`.**
   Quantile representatives changed from the log-midpoint γ^(k+0.5), whose edge
   error √γ−1 exceeds α, to γ^k·(1+α) — matching core `DDSketch` and DataDog's
@@ -34,7 +37,12 @@ signals a backwards-compatible change.
   dense store: a corrupt delta carrying an index near `i32::MAX` would
   previously have attempted a ~2·10⁹-bucket (~17 GiB) allocation in one call.
   The limit (4M buckets) dwarfs any legitimate span; the `apply_delta*`
-  family propagates the error.
+  family propagates the error. `merge`/`merge_refs` apply the same span cap
+  to decoded snapshots, with a pass-through for stores that already
+  legitimately exceed it. Portable `DdSketch::new` now asserts α ∈ (0,1)
+  like core, and the indexable-range formulas live in one shared helper
+  (`ddsketch_indexable_bounds`) used by both implementations, so their input
+  guards cannot drift apart.
 - Removed the raw-pointer write from `DDSketch`'s per-sample insertion path;
   bucket increments now go through safe indexing with the same bounds check
   they already performed (#70 item 6).

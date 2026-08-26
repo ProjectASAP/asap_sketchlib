@@ -543,7 +543,7 @@ fn probe_ddsketch() {
     );
     p.check(
         "portable DdSketch honors alpha=0.05 at bucket edges",
-        format!("max rel err {worst_port:.5} (gamma^(k+0.5) midpoint rep)"),
+        format!("max rel err {worst_port:.5} (shared gamma^k*(1+alpha) representative)"),
         worst_port <= alpha * (1.0 + 1e-6),
     );
 

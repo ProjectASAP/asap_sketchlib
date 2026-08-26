@@ -175,6 +175,23 @@ where
         sk.ingest(k);
     }
 
+    // Cold-key probe: an absent key must not carry meaningful mass. For
+    // one-sided sketches (Count-Min family) absence is exact — the estimate
+    // is structurally 0. Two-sided sketches may show signed noise, so they
+    // are exempt here; their accuracy is covered by the dense-key band.
+    if spec.one_sided {
+        let absent = K::from(i64::MIN); // sentinel outside typical key domains
+        let est_absent = sk.estimate(&absent);
+        report.record(
+            "absent key ~0",
+            est_absent >= -spec.abs_tol && est_absent <= spec.abs_tol,
+            format!(
+                "absent key estimated {est_absent} (allowed |e| <= {})",
+                spec.abs_tol
+            ),
+        );
+    }
+
     for (k_int, count) in truth.pairs() {
         if count < 25 {
             continue; // only dense keys carry statistical meaning

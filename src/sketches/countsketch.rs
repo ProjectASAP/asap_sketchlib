@@ -10,7 +10,7 @@
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded,
+    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded, nitro_delta_saturated_i32,
 };
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
@@ -492,8 +492,12 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
             loop {
                 let bit = (hashed >> (127 - r)) & 1;
                 let sign = (bit << 1) as i32 - 1;
-                self.counts
-                    .update_by_row(r, hashed, |a, b| *a += b, sign * (delta as i32));
+                self.counts.update_by_row(
+                    r,
+                    hashed,
+                    |a, b| *a += b,
+                    sign * nitro_delta_saturated_i32(delta),
+                );
                 self.counts.nitro_mut().draw_geometric();
                 if r + self.counts.nitro_mut().to_skip + 1 >= rows {
                     break;
@@ -517,8 +521,12 @@ impl<H: SketchHasher> NitroTarget for Count<Vector2D<i32>, FastPath, H> {
     fn update_row(&mut self, row: usize, hashed: u128, delta: u64) {
         let bit = (hashed >> (127 - row)) & 1;
         let sign = (bit << 1) as i32 - 1;
-        self.counts
-            .update_by_row(row, hashed, |a, b| *a += b, sign * (delta as i32));
+        self.counts.update_by_row(
+            row,
+            hashed,
+            |a, b| *a += b,
+            sign * nitro_delta_saturated_i32(delta),
+        );
     }
 
     #[inline(always)]
@@ -530,8 +538,12 @@ impl<H: SketchHasher> NitroTarget for Count<Vector2D<i32>, FastPath, H> {
         for row in 0..self.counts.rows() {
             let col = <H::HashType as MatrixFastHash>::col_for_row(&hashed, row, cols);
             let sign = <H::HashType as MatrixFastHash>::sign_for_row(&hashed, row);
-            self.counts
-                .update_one_counter(row, col, |a, b| *a += b, sign * (delta as i32));
+            self.counts.update_one_counter(
+                row,
+                col,
+                |a, b| *a += b,
+                sign * nitro_delta_saturated_i32(delta),
+            );
         }
     }
 }

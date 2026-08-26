@@ -125,7 +125,11 @@ impl Nitro {
 
         // self.to_skip = (PRECOMPUTED_SAMPLE[self.idx] * self.inv_ln_one_minus_p).ceil() as usize;
 
-        self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].ceil() as usize;
+        // floor, not ceil: the caller's `+1` stride supplies the sampled item
+        // itself, so ceil adds +1 to every skip distance and roughly halves
+        // the effective sampling rate (same bug fixed in NitroBatch's
+        // draw_geometric; see the NitroSketch inverse-CDF derivation there).
+        self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].floor() as usize;
         self.idx = (self.idx + 1) & self.mask;
     }
 

@@ -31,6 +31,22 @@ pub trait NitroTarget {
     fn update_sample(&mut self, value: &DataInput, delta: u64);
 }
 
+/// Saturates a Nitro update weight into the `i32` counter domain. Counter
+/// storage is `i32`, so a weight beyond `i32::MAX` (reachable via rates below
+/// ~4.7e-10, or by writing the public `delta` field directly) must saturate
+/// rather than wrap — a wrapped negative weight would silently turn Count-Min
+/// counters into decrements.
+#[inline]
+pub fn nitro_delta_saturated_i32(delta: u64) -> i32 {
+    delta.min(i32::MAX as u64) as i32
+}
+
+/// [`nitro_delta_saturated_i32`] twin for `u32`-backed bare-storage targets.
+#[inline]
+pub fn nitro_delta_saturated_u32(delta: u64) -> u32 {
+    delta.min(u32::MAX as u64) as u32
+}
+
 /// Trait for Nitro targets that can be merged.
 pub trait NitroMerge {
     /// Merges another target into this one.
@@ -51,7 +67,12 @@ impl NitroTarget for Vector2D<u32> {
 
     #[inline(always)]
     fn update_row(&mut self, row: usize, hashed: u128, delta: u64) {
-        self.update_by_row(row, hashed, |a, b| *a += b as u32, delta);
+        self.update_by_row(
+            row,
+            hashed,
+            |a, b| *a += b,
+            nitro_delta_saturated_u32(delta),
+        );
     }
 
     #[inline(always)]
@@ -60,7 +81,12 @@ impl NitroTarget for Vector2D<u32> {
         let cols = self.cols();
         for row in 0..self.rows() {
             let col = MatrixFastHash::col_for_row(&hashed, row, cols);
-            self.update_one_counter(row, col, |a: &mut u32, b: u64| *a += b as u32, delta);
+            self.update_one_counter(
+                row,
+                col,
+                |a: &mut u32, b: u32| *a += b,
+                nitro_delta_saturated_u32(delta),
+            );
         }
     }
 }

@@ -15,7 +15,7 @@ use crate::octo_delta::{CM_PROMASK, CmDelta};
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded,
+    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded, nitro_delta_saturated_i32,
 };
 
 mod wire;
@@ -498,7 +498,8 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
     #[inline(always)]
     pub fn fast_insert_nitro(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
-        let delta = self.counts.nitro().delta as i32;
+        let delta =
+            crate::sketch_framework::nitro::nitro_delta_saturated_i32(self.counts.nitro().delta);
         if self.counts.nitro().to_skip >= rows {
             self.counts.reduce_nitro_skip(rows);
         } else {
@@ -529,8 +530,12 @@ impl<H: SketchHasher> NitroTarget for CountMin<Vector2D<i32>, FastPath, H> {
 
     #[inline(always)]
     fn update_row(&mut self, row: usize, hashed: u128, delta: u64) {
-        self.counts
-            .update_by_row(row, hashed, |a, b| *a += b, delta as i32);
+        self.counts.update_by_row(
+            row,
+            hashed,
+            |a, b| *a += b,
+            nitro_delta_saturated_i32(delta),
+        );
     }
 
     #[inline(always)]
@@ -541,8 +546,12 @@ impl<H: SketchHasher> NitroTarget for CountMin<Vector2D<i32>, FastPath, H> {
         let cols = self.counts.cols();
         for row in 0..self.counts.rows() {
             let col = <H::HashType as MatrixFastHash>::col_for_row(&hashed, row, cols);
-            self.counts
-                .update_one_counter(row, col, |a, b| *a += b, delta as i32);
+            self.counts.update_one_counter(
+                row,
+                col,
+                |a, b| *a += b,
+                nitro_delta_saturated_i32(delta),
+            );
         }
     }
 }

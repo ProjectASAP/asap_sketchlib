@@ -46,7 +46,9 @@ pub mod univmon_optimized;
 pub use univmon_optimized::{UnivMonPyramid, UnivSketchPool};
 
 pub mod nitro;
-pub use nitro::{NitroBatch, NitroEstimate, NitroTarget};
+pub use nitro::{
+    NitroBatch, NitroEstimate, NitroTarget, nitro_delta_saturated_i32, nitro_delta_saturated_u32,
+};
 
 #[cfg(feature = "experimental")]
 pub mod eh_univ_optimized;

@@ -383,16 +383,9 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
 
     // Boundary acceptance: values just INSIDE the indexable range must still
     // be tracked, so the guards reject only genuinely unmappable extremes.
-    // Replicate the mapping formulas here (they are private) for alpha=0.01.
-    let gamma = (1.0 + alpha) / (1.0 - alpha);
-    let inv_log_gamma = 1.0 / gamma.ln();
-    let min_idx = ((i32::MIN as f64) * inv_log_gamma + 1.0)
-        .exp()
-        .max(f64::MIN_POSITIVE * gamma);
-    const EXP_OVERFLOW: f64 = 709.0;
-    let max_idx = ((i32::MAX as f64) * inv_log_gamma - 1.0)
-        .exp()
-        .min(EXP_OVERFLOW.exp() / (2.0 * gamma) * (gamma + 1.0));
+    // Bounds come from the shared production helper — core and portable MUST
+    // agree because they compute from the same function.
+    let (min_idx, max_idx) = asap_sketchlib::sketches::ddsketch::ddsketch_indexable_bounds(alpha);
 
     let mut port_boundary = PortableDds::new(alpha);
     let mut core_boundary = DDSketch::new(alpha);
@@ -439,6 +432,30 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
     assert!(
         port.merge(&port_other).is_err(),
         "portable merge must reject alpha mismatch"
+    );
+
+    // Tiny-alpha regression: at alpha=1e-9 ln(gamma) ~ 2e-9, and naive
+    // reciprocal-multiplied guard formulas diverge from core's — admitting
+    // v=1e-300 whose bucket index saturates i32 and overflows ensure_bucket.
+    // Both implementations must drop it identically via the shared helper.
+    let mut tiny = PortableDds::new(1e-9);
+    let mut tiny_core = DDSketch::new(1e-9);
+    tiny.update(1e-300);
+    tiny_core.add(&1e-300);
+    assert_eq!(
+        tiny.total_count(),
+        0,
+        "portable drops sub-indexable value at tiny alpha"
+    );
+    assert_eq!(
+        tiny_core.get_count(),
+        0,
+        "core drops sub-indexable value at tiny alpha"
+    );
+    assert_eq!(
+        tiny.store_counts.len(),
+        0,
+        "no allocation may occur for rejected values"
     );
 }
 

@@ -139,7 +139,10 @@ fn ensemble_layer_mixed_cms_and_hll() {
         truth_hot0 += 1;
     }
 
-    // CMS cell: one-sided frequency estimate for the dominant key.
+    // CMS cell: one-sided frequency estimate for the dominant key. Upper
+    // slack is generous (3x) because the shared-hash fan-out across the
+    // ensemble's 15k-tail stream can collide into key 0's cells; the lower
+    // bound carries the real one-sided guarantee.
     let cm_est = ens.estimate(0, &DataInput::I64(0)).expect("cms estimate");
     assert!(
         cm_est >= truth_hot0 as f64 && cm_est <= truth_hot0 as f64 * 3.0,
