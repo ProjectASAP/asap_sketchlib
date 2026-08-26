@@ -149,7 +149,16 @@ impl<T> Vector2D<T> {
 
     #[inline(always)]
     fn col_for_row<Hash: MatrixFastHash>(&self, hashed_val: &Hash, row: usize) -> usize {
-        hashed_val.col_for_row(row, self.cols)
+        // Decode with the (mask_bits, mask) pair cached at construction —
+        // identical result to recomputing them from `self.cols`, without the
+        // per-row ilog2/shift. For power-of-two `cols` the mask already
+        // reduces to `[0, cols)`, so the `% cols` is skipped entirely.
+        let raw = hashed_val.row_hash(row, self.mask_bits, self.mask);
+        if self.cols.is_power_of_two() {
+            raw as usize
+        } else {
+            raw as usize % self.cols
+        }
     }
 
     /// Returns the number of rows.
