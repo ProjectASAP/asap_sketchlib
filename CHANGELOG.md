@@ -12,6 +12,44 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- **Made `NitroBatch` frequency estimates unbiased.** Inserts hashed keys with
+  raw `hash128_seeded` while the public estimator derived cells from the
+  packed matrix hash (Packed64 mode), so estimates read cells inserts never
+  wrote and returned ~0; each sampled record now updates every row using the
+  sketch's own fast-path hash derivation, and both batch and streaming skip
+  draws use `floor` instead of `ceil` (the extra +1 per skip halved-ish the
+  effective sampling rate). Estimates now converge to true frequencies at any
+  rate. Update weights saturate at the `i32` counter domain instead of
+  wrapping (reachable via rates below ~4.7e-10 or by writing the public
+  `delta` field directly).
+- **Restored the α relative-accuracy guarantee in portable `DdSketch`.**
+  Quantile representatives changed from the log-midpoint γ^(k+0.5), whose edge
+  error √γ−1 exceeds α, to γ^k·(1+α) — matching core `DDSketch` and DataDog's
+  mapping. No wire/state migration; query outputs shift by at most α.
+- **Portable `DdSketch` now rejects untrackable inputs like core.** Non-finite
+  values (a NaN previously floor-cast into bucket 0) and finite-but-extreme
+  values beyond the indexable range are dropped silently, mirroring core
+  `DDSketch`'s min/max-indexable guards and DataDog's mapping (#70). Unguarded,
+  one `f64::MAX` sample mapped ~35k buckets away at α=0.01 (~277 KiB of dense
+  store per sample), scaling with 1/ln γ.
+- **Portable `DdSketch::apply_delta` bounds hostile wire input.** Deltas now
+  pre-validate their bucket span and return `Err` instead of padding the
+  dense store: a corrupt delta carrying an index near `i32::MAX` would
+  previously have attempted a ~2·10⁹-bucket (~17 GiB) allocation in one call.
+  The limit (4M buckets) dwarfs any legitimate span; the `apply_delta*`
+  family propagates the error. `merge`/`merge_refs` apply the same span cap
+  to decoded snapshots, with a pass-through for stores that already
+  legitimately exceed it. Portable `DdSketch::new` now asserts α ∈ (0,1)
+  like core, and the indexable-range formulas live in one shared helper
+  (`ddsketch_indexable_bounds`) used by both implementations, so their input
+  guards cannot drift apart.
+- Removed the raw-pointer write from `DDSketch`'s per-sample insertion path;
+  bucket increments now go through safe indexing with the same bounds check
+  they already performed (#70 item 6).
+- **CountL2HH hot-path L2 accumulation saturates instead of wrapping.**
+  Per-row Σcount² updates run through a saturating i128 intermediate, so
+  extreme turnstile counts no longer wrap silently in release builds (or
+  panic on overflow in debug builds).
 - **Heap-allocate HLL register storage.** `impl_hll_bucket_list!`'s `Default`
   and `Deserialize` no longer build an `[u8; NUM_REGISTERS]` value on the
   stack before boxing it, which overflowed the stack in debug builds at
@@ -30,6 +68,18 @@ signals a backwards-compatible change.
   noisy generic recurrence.
 
 ### Added
+- **Synthetic-data E2E testing harness with a reusable conformance kit.** A
+  shared `tests/common` module (seeded stream generators, exact ground-truth
+  trackers, tolerance-based assertion helpers) plus themed integration suites
+  covering frequency, cardinality, quantile, framework/composition, and
+  experimental sketches — every public sketch family is exercised end to end
+  against exact ground truth. `tests/common/conformance.rs` defines standard
+  batteries (`frequency`, `turnstile`, `cardinality`, `quantile`,
+  `merge_equivalence`) that new sketches must pass via small adapter impls;
+  `tests/README.md` documents the onboarding recipe and
+  `tests/conformance_kit.rs` shows reference adapters. Also includes
+  `tests/bug_verification.rs` regression tests for the fixes above and
+  `examples/accuracy_probe.rs`, a release-mode ground-truth probe.
 - **Export the `impl_hll_bucket_list!` macro.** Downstream crates can now
   generate an `HllRegisterStorage` type at any precision (e.g. `lg_k = 18`)
   instead of being limited to the built-in `HllBucketListP12/P14/P16`.

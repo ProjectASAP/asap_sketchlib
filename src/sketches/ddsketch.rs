@@ -102,9 +102,7 @@ impl Buckets {
             let idx = idx_i32 as usize;
             let slice = self.counts.as_mut_slice();
             if idx < slice.len() {
-                unsafe {
-                    *slice.as_mut_ptr().add(idx) += 1;
-                }
+                slice[idx] += 1;
                 return;
             }
         }
@@ -142,6 +140,31 @@ pub struct DDSketch {
     min: f64,
     #[serde(skip)]
     max: f64,
+}
+
+/// Smallest and largest finite positive values whose bucket index is
+/// representable without integer overflow (index within `i32`) or
+/// `exp`/`powf` overflow, mirroring DataDog's logarithmic_mapping.go
+/// `minIndexableValue`/`maxIndexableValue`. Values outside this range are
+/// dropped rather than mapped to an arbitrarily distant bucket index — that
+/// guards the dense bucket store against a single finite-but-extreme outlier
+/// forcing an allocation spanning the whole index gap (asap_sketchlib#70
+/// item 4 / sketchlib-go#72).
+///
+/// Single source of truth shared by core `DDSketch`, the portable wire twin,
+/// and tests, so the two implementations cannot drift algebraically again.
+pub fn ddsketch_indexable_bounds(alpha: f64) -> (f64, f64) {
+    let gamma = (1.0 + alpha) / (1.0 - alpha);
+    let inv_log_gamma = 1.0 / gamma.ln();
+    // 709.0 is just under ln(f64::MAX) so exp() stays finite.
+    const EXP_OVERFLOW: f64 = 709.0;
+    let min = ((f64::from(i32::MIN)) / inv_log_gamma + 1.0)
+        .exp()
+        .max(f64::MIN_POSITIVE * gamma);
+    let max = ((f64::from(i32::MAX)) / inv_log_gamma - 1.0)
+        .exp()
+        .min(EXP_OVERFLOW.exp() / (2.0 * gamma) * (gamma + 1.0));
+    (min, max)
 }
 
 impl DDSketch {
@@ -225,7 +248,8 @@ impl DDSketch {
         if !(v.is_finite() && v > 0.0) {
             return;
         }
-        if v < self.min_indexable_value() || v > self.max_indexable_value() {
+        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(self.alpha);
+        if v < min_indexable || v > max_indexable {
             return; // untrackable extreme: would blow up the dense bucket span
         }
 
@@ -389,32 +413,6 @@ impl DDSketch {
     #[inline]
     fn bin_representative(&self, k: i32) -> f64 {
         self.lower_bound(k) * (1.0 + self.alpha)
-    }
-
-    /// Smallest finite positive value whose bucket index is representable
-    /// without integer overflow (index ≥ i32::MIN) or float underflow, mirroring
-    /// DataDog's logarithmic_mapping.go minIndexableValue.
-    #[inline]
-    fn min_indexable_value(&self) -> f64 {
-        // f64::MIN_POSITIVE is the smallest positive normal (2^-1022).
-        ((f64::from(i32::MIN)) / self.inv_log_gamma + 1.0)
-            .exp()
-            .max(f64::MIN_POSITIVE * self.gamma)
-    }
-
-    /// Largest finite positive value whose bucket index is representable without
-    /// integer overflow (index ≤ i32::MAX) or `exp`/`powf` overflow, mirroring
-    /// DataDog's logarithmic_mapping.go maxIndexableValue. A value beyond this
-    /// would otherwise map to an arbitrarily distant index and force the dense
-    /// bucket store to grow across the whole gap (asap_sketchlib#70 item 4 /
-    /// sketchlib-go#72's single-outlier memory blowup).
-    #[inline]
-    fn max_indexable_value(&self) -> f64 {
-        // 709.0 is just under ln(f64::MAX) so exp() stays finite.
-        const EXP_OVERFLOW: f64 = 709.0;
-        ((f64::from(i32::MAX)) / self.inv_log_gamma - 1.0)
-            .exp()
-            .min(EXP_OVERFLOW.exp() / (2.0 * self.gamma) * (self.gamma + 1.0))
     }
 
     fn merge_buckets_from(&mut self, other: &DDSketch) {
@@ -931,8 +929,9 @@ mod tests {
         let count_before = d.get_count();
         let span_before = d.store.counts.as_slice().len();
 
-        d.add(&(d.max_indexable_value() * 10.0));
-        d.add(&(d.min_indexable_value() / 10.0));
+        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(0.01);
+        d.add(&(max_indexable * 10.0));
+        d.add(&(min_indexable / 10.0));
         assert_eq!(d.get_count(), count_before, "extreme values were recorded");
         assert_eq!(
             d.store.counts.as_slice().len(),
@@ -941,7 +940,7 @@ mod tests {
         );
 
         // A large-but-trackable value is still recorded.
-        d.add(&(d.max_indexable_value() / 2.0));
+        d.add(&(max_indexable / 2.0));
         assert_eq!(d.get_count(), count_before + 1);
     }
 }

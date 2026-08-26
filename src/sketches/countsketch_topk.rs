@@ -1024,9 +1024,14 @@ impl<H: SketchHasher> CountL2HH<H> {
             let new_value = old_value + sign_bit * c;
             self.counts[i][idx] = new_value;
 
-            let old_l2 = self.l2.as_slice()[i];
-            let new_l2 = old_l2 + new_value * new_value - old_value * old_value;
-            self.l2[i] = new_l2;
+            // Saturating i128 intermediate so extreme counts degrade
+            // gracefully instead of wrapping (matches merge-path semantics,
+            // which also clamps to [0, i64::MAX]: L2^2 can never go negative,
+            // even when a decrement follows prior saturation).
+            let old_l2 = self.l2.as_slice()[i] as i128;
+            let new_l2 = old_l2 + (new_value as i128) * (new_value as i128)
+                - (old_value as i128) * (old_value as i128);
+            self.l2[i] = new_l2.clamp(0, i64::MAX as i128) as i64;
 
             shift_amount += mask_bits;
             sign_bit_pos -= 1;

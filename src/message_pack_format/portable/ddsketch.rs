@@ -12,6 +12,13 @@ use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 /// output for the same input stream.
 pub const DDSKETCH_GROW_CHUNK: usize = 128;
 
+/// Safety limit for a single [`DdSketchDelta`] application: deltas arrive
+/// over the wire untrusted, so a span beyond this many buckets is rejected
+/// with an error instead of padding the dense store toward a multi-gigabyte
+/// allocation. Generous relative to any legitimate producer: at α = 0.01 the
+/// entire indexable range spans ~35k buckets.
+pub const MAX_APPLY_DELTA_SPAN_BUCKETS: i64 = 1 << 22;
+
 // =====================================================================
 // Wire-format-aligned variant.
 //
@@ -88,6 +95,10 @@ pub struct DdSketch {
 impl DdSketch {
     /// Construct an empty sketch.
     pub fn new(alpha: f64) -> Self {
+        assert!(
+            (0.0..1.0).contains(&alpha),
+            "alpha must be in (0,1); alpha=0 makes ln(gamma)=0 and every guard degenerate"
+        );
         Self {
             alpha,
             store_counts: Vec::new(),
@@ -117,6 +128,14 @@ impl DdSketch {
 
     /// Merge one other sketch into self by aligning bucket arrays on
     /// absolute indices. Both operands must share the same `alpha`.
+    ///
+    /// Like [`Self::apply_delta`], the operand is treated as untrusted wire
+    /// state: if the union span would exceed
+    /// [`MAX_APPLY_DELTA_SPAN_BUCKETS`] *and* grow beyond both operands'
+    /// existing stores, `Err` is returned before any allocation. Stores that
+    /// already legitimately span more than the cap (exotic small-α
+    /// configurations) merge normally as long as the union stays within
+    /// what either side already holds.
     pub fn merge(
         &mut self,
         other: &DdSketch,
@@ -142,15 +161,31 @@ impl DdSketch {
             let other_end = other_start + other.store_counts.len() as i64;
             let new_start = self_start.min(other_start);
             let new_end = self_end.max(other_end);
-            let new_len = (new_end - new_start) as usize;
-            let mut merged = vec![0u64; new_len];
-            for (i, c) in self.store_counts.iter().enumerate() {
-                let idx = (self_start + i as i64 - new_start) as usize;
-                merged[idx] = merged[idx].saturating_add(*c);
+            let new_len = new_end - new_start;
+            // Hostile-span guard: a decoded snapshot with store_offset near
+            // i32::MIN and a short count vector must not allocate a union
+            // spanning ~2^31 buckets (~17 GiB) in one call. Growth beyond
+            // both operands' existing spans is capped; stores that already
+            // legitimately exceed the cap pass through untouched.
+            let max_existing =
+                (self.store_counts.len() as i64).max(other.store_counts.len() as i64);
+            if new_len > MAX_APPLY_DELTA_SPAN_BUCKETS && new_len > max_existing {
+                return Err(format!(
+                    "DdSketch merge spans {} buckets, exceeding the {}-bucket safety limit",
+                    new_len, MAX_APPLY_DELTA_SPAN_BUCKETS
+                )
+                .into());
             }
-            for (i, c) in other.store_counts.iter().enumerate() {
-                let idx = (other_start + i as i64 - new_start) as usize;
-                merged[idx] = merged[idx].saturating_add(*c);
+            let new_len = new_len as usize;
+            let mut merged = vec![0u64; new_len];
+            for (start, counts) in [
+                (self_start, &self.store_counts),
+                (other_start, &other.store_counts),
+            ] {
+                for (i, &c) in counts.iter().enumerate() {
+                    let idx = (start + i as i64 - new_start) as usize;
+                    merged[idx] = merged[idx].saturating_add(c);
+                }
             }
             self.store_counts = merged;
             self.store_offset = new_start as i32;
@@ -164,7 +199,45 @@ impl DdSketch {
     /// and max can only increase. Used by the backend ingest path to
     /// reconstitute a full sketch from a base snapshot + subsequent
     /// delta-transmission frames.
-    pub fn apply_delta(&mut self, delta: &DdSketchDelta) {
+    ///
+    /// Deltas arrive over the wire and are treated as untrusted: before
+    /// mutating anything, the union span the delta would require is
+    /// checked against [`MAX_APPLY_DELTA_SPAN_BUCKETS`]. A hostile or
+    /// corrupt delta carrying an index near `i32::MAX` would otherwise
+    /// pad the dense store by ~2·10⁹ buckets (~17 GiB) in one call —
+    /// independent of α, unlike the `update()` path whose worst case is
+    /// bounded by the indexable-range guard.
+    pub fn apply_delta(
+        &mut self,
+        delta: &DdSketchDelta,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Pre-validate span before any mutation so a rejected delta
+        // leaves state untouched.
+        if !delta.buckets.is_empty() {
+            let mut min_d = i64::MAX;
+            let mut max_d = i64::MIN;
+            for (abs_idx, _) in &delta.buckets {
+                min_d = min_d.min(*abs_idx as i64);
+                max_d = max_d.max(*abs_idx as i64);
+            }
+            let cur_start = if self.store_counts.is_empty() {
+                min_d
+            } else {
+                self.store_offset as i64
+            };
+            let cur_end = cur_start + self.store_counts.len() as i64;
+            let new_start = cur_start.min(min_d);
+            let new_end = cur_end.max(max_d + 1);
+            if new_end - new_start > MAX_APPLY_DELTA_SPAN_BUCKETS {
+                return Err(format!(
+                    "DdSketch delta spans {} buckets, exceeding the {}-bucket safety limit",
+                    new_end - new_start,
+                    MAX_APPLY_DELTA_SPAN_BUCKETS
+                )
+                .into());
+            }
+        }
+
         for (abs_idx, d_count) in &delta.buckets {
             if self.store_counts.is_empty() {
                 self.store_counts = vec![0u64; 1];
@@ -193,6 +266,7 @@ impl DdSketch {
         // a target here — the bucket counts above carry all reconstructable
         // state. The backend that owns the DDSketch delta tracks those
         // aggregates separately.
+        Ok(())
     }
 
     /// Compute a sparse, proto-marshalled `DDSketchDelta` of `self`
@@ -267,8 +341,7 @@ impl DdSketch {
                 .collect(),
             ..DdSketchDelta::default()
         };
-        self.apply_delta(&delta);
-        Ok(())
+        self.apply_delta(&delta)
     }
 
     /// MessagePack twin of [`Self::compute_delta`]. Computes the same
@@ -318,8 +391,7 @@ impl DdSketch {
         bytes: &[u8],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let delta = DdSketchDelta::from_msgpack(bytes)?;
-        self.apply_delta(&delta);
-        Ok(())
+        self.apply_delta(&delta)
     }
 
     /// Merge a slice of references into a single new sketch. Returns
@@ -352,13 +424,23 @@ impl DdSketch {
     /// `DDSketchState` proto bytes would diverge from the Go producer's
     /// payload (cross-language byte parity).
     pub fn update(&mut self, value: f64) {
-        if value <= 0.0 {
-            // DDSketch is defined for positive reals; non-positive
-            // values are rejected silently (matching the Go reference).
+        if !(value.is_finite() && value > 0.0) {
+            // DDSketch is defined for positive reals; non-positive and
+            // non-finite values are rejected silently (matching the Go
+            // reference and the core DDSketch). NaN in particular would
+            // otherwise floor-cast to bucket 0 and corrupt it.
             return;
         }
         let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
         let ln_gamma = gamma.ln();
+        // Reject finite-but-extreme values whose bucket index would be
+        // unrepresentable or force an arbitrarily distant allocation
+        // (asap_sketchlib#70 item 4). Uses the SHARED bounds helper so core
+        // and portable can never drift algebraically.
+        let (min_v, max_v) = crate::sketches::ddsketch::ddsketch_indexable_bounds(self.alpha);
+        if value < min_v || value > max_v {
+            return;
+        }
         let idx = (value.ln() / ln_gamma).floor() as i32;
         self.ensure_bucket(idx);
         let arr_idx = (idx as i64 - self.store_offset as i64) as usize;
@@ -399,7 +481,7 @@ impl DdSketch {
     /// Estimate the quantile at rank `q` ∈ [0, 1]. Walks the bucket
     /// array in ascending absolute-index order, accumulating counts
     /// until the target rank; returns the bucket's representative
-    /// value `gamma^(k + 0.5)` where `k` is the bucket's absolute
+    /// value `gamma^k * (1 + alpha)` where `k` is the bucket's absolute
     /// index. Returns `None` if the sketch is empty.
     ///
     /// Accuracy: bounded by DDSketch's α parameter — the estimated
@@ -420,20 +502,22 @@ impl DdSketch {
             }
             cumulative = cumulative.saturating_add(c);
             if cumulative > target {
-                let k = (self.store_offset as i64 + i as i64) as f64;
-                // Bucket midpoint: gamma^(k + 0.5) — centers the
-                // estimate in the logarithmic bucket.
-                return Some(gamma.powf(k + 0.5));
+                let k = self.store_offset as i64 + i as i64;
+                // Representative: lower edge γ^k scaled by (1+α) — matches the
+                // core DDSketch and DataDog's logarithmic_mapping.go. The old
+                // log-midpoint γ^(k+0.5) gave edge error √γ−1 > α, silently
+                // violating the α guarantee near a bucket edge (#70/#73).
+                return Some(gamma.powf(k as f64) * (1.0 + self.alpha));
             }
         }
         // Numerical edge case: if we fall off the end (e.g. q == 1.0 and
         // rounding lands past the final increment), estimate from the
         // highest non-empty bucket. The DataPoint-level `max` scalar was
-        // removed from the wire; the bucket midpoint is within DDSketch's
+        // removed from the wire; the representative is within DDSketch's
         // α relative-accuracy bound of the true max.
         last_nonempty.map(|i| {
             let k = (self.store_offset as i64 + i as i64) as f64;
-            gamma.powf(k + 0.5)
+            gamma.powf(k) * (1.0 + self.alpha)
         })
     }
 
@@ -588,7 +672,7 @@ mod tests {
             max_changed: true,
             new_max: 9.0,
         };
-        base.apply_delta(&delta);
+        base.apply_delta(&delta).unwrap();
         assert_eq!(base.store_counts, vec![5, 10, 15]);
         assert_eq!(base.total_count(), 30);
     }
@@ -606,7 +690,7 @@ mod tests {
             max_changed: true,
             new_max: 6.0,
         };
-        base.apply_delta(&delta);
+        base.apply_delta(&delta).unwrap();
         assert_eq!(base.store_counts, vec![1, 2, 0, 0, 7]);
         assert_eq!(base.store_offset, 0);
         assert_eq!(base.total_count(), 10);
@@ -631,7 +715,7 @@ mod tests {
             new_max: 5.0,
         };
         let mut via_delta = base;
-        via_delta.apply_delta(&delta);
+        via_delta.apply_delta(&delta).unwrap();
 
         assert_eq!(via_delta.store_counts, via_merge.store_counts);
         assert_eq!(via_delta.total_count(), via_merge.total_count());
@@ -760,7 +844,7 @@ mod tests {
                 // First batch seeds the reconstituted sketch.
                 reconstituted = this_batch.clone();
             } else {
-                reconstituted.apply_delta(&delta);
+                reconstituted.apply_delta(&delta).unwrap();
             }
             prev_snapshot = this_batch;
         }
