@@ -213,6 +213,12 @@ pub trait MatrixStorage {
     fn increment_by_row(&mut self, row: usize, col: usize, value: Self::Counter);
 
     /// Inserts one value into all rows using a precomputed hash.
+    ///
+    /// NOTE (perf finding, 2026-08): a row-major batch-transposed variant of
+    /// this loop was prototyped and measured ~25-40% SLOWER than key-major
+    /// across matrix sizes from 96KB to 128MB on M1 Max — the packed hash
+    /// staying register-resident across a key's rows beats any multi-stream
+    /// store reordering. Do not revisit without new hardware evidence.
     fn fast_insert<Hash, F, V>(&mut self, op: F, value: V, hashed_val: &Hash)
     where
         Hash: MatrixFastHash,
