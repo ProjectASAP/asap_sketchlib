@@ -272,11 +272,7 @@ fn univmonq_full_metric_suite() {
 
 #[test]
 fn tumbling_kll_window_queries() {
-    let cfg = KLLConfig {
-        k: 200,
-        m: 8,
-        seed: None,
-    };
+    let cfg = KLLConfig { k: 200, m: 8 };
     let mut tw: TumblingWindow<KLL> = TumblingWindow::new(100, 16, cfg, 4);
 
     let all: Vec<f64> = uniform_u64(1000, 1_000_000, 3009)

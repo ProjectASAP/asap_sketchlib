@@ -987,11 +987,7 @@ fn probe_tumbling() {
 
     // KLL tumbling: the numeric `value` arg is IGNORED; the KEY doubles as the
     // observation (tumbling.rs:146-149). Feed values via the key.
-    let kcfg = asap_sketchlib::KLLConfig {
-        k: 200,
-        m: 8,
-        seed: None,
-    };
+    let kcfg = asap_sketchlib::KLLConfig { k: 200, m: 8 };
     let mut tkw: TumblingWindow<KLL> = TumblingWindow::new(100, 4, kcfg, 2);
     let mut rng = StdRng::seed_from_u64(53);
     let mut all_vals: Vec<f64> = Vec::new();
