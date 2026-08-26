@@ -439,12 +439,11 @@ fn hydra_subpopulation_counts_are_exact_on_a_sparse_grid() {
     );
 }
 
-/// `Hydra::update`'s `count` reaches the per-cell counter, so a subpopulation's
-/// frequency is its weighted total rather than its record count.
-#[test]
-fn hydra_weighted_updates_reach_the_cell_counter() {
+/// `Hydra::update`'s `count` reaches the per-cell counter, so a
+/// subpopulation's frequency is its weighted total, not its record count.
+fn assert_weighted_updates_reach_the_cell(counter: HydraCounter, slack: impl Fn(i64) -> f64) {
     let stream = labelled_stream(12_000, 4_240);
-    let mut hydra = lattice_hydra(4096);
+    let mut hydra = Hydra::with_schema(5, 4096, SCHEMA, counter).expect("three-column schema");
     let mut truth: HashMap<LatticeKey, i64> = HashMap::new();
 
     for (i, rec) in stream.iter().enumerate() {
@@ -461,18 +460,186 @@ fn hydra_weighted_updates_reach_the_cell_counter() {
     }
 
     let mut checked = 0usize;
+    let mut failures: Vec<String> = Vec::new();
     for ((key, endpoint), total) in &truth {
         if *total < 100 {
             continue;
         }
         checked += 1;
-        assert_eq!(
-            freq(&hydra, key, endpoint),
-            *total as f64,
-            "{key:?} x {endpoint}: weighted total"
-        );
+        let est = freq(&hydra, key, endpoint);
+        if (est - *total as f64).abs() > slack(*total) {
+            failures.push(format!(
+                "{key:?} x {endpoint}: weighted total {total}, est {est}"
+            ));
+        }
     }
+    failures.sort();
     assert!(checked > 200, "lattice too sparse to be meaningful");
+    assert!(
+        failures.is_empty(),
+        "{} of {checked} weighted subpopulations wrong:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+}
+
+#[test]
+fn hydra_cm_weighted_updates_reach_the_cell_counter() {
+    assert_weighted_updates_reach_the_cell(cell_cm(), |_| 0.0);
+}
+
+#[test]
+fn hydra_cs_weighted_updates_reach_the_cell_counter() {
+    // The kit's Count spec.
+    assert_weighted_updates_reach_the_cell(cell_cs(), |t| t as f64 * 0.06 + 25.0);
+}
+
+/// KLL treats `count` as multiplicity, so a weighted stream must answer the
+/// quantiles of the stream with each value repeated `count` times.
+#[test]
+fn hydra_kll_weighted_updates_repeat_the_value() {
+    let n = 20_000usize;
+    let keys = h2_keys(n, 4_760);
+    let values = common::normal_f64(n, 500.0, 80.0, 4_765);
+    let mut hydra = Hydra::with_schema(
+        5,
+        128,
+        ["region", "service"],
+        HydraCounter::KLL(KLL::init_kll_with_seed(200, 4_766)),
+    )
+    .expect("two-column schema");
+    let mut truth: HashMap<Vec<Option<&str>>, Vec<f64>> = HashMap::new();
+
+    for (i, (region, service)) in keys.iter().enumerate() {
+        let weight = 1 + (i % 4) as i64;
+        hydra
+            .update(
+                &[region, service],
+                &DataInput::F64(values[i]),
+                Some(weight as i32),
+            )
+            .expect("arity 2");
+        for key in h2_masks(region, service) {
+            let slot = truth.entry(key.to_vec()).or_default();
+            for _ in 0..weight {
+                slot.push(values[i]);
+            }
+        }
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    for (key, vals) in truth {
+        let exact = common::NumericTruth::new(vals);
+        for q in conformance::DEFAULT_QUANTILE_QS {
+            let est = hydra
+                .query_key(&key, &HydraQuery::Quantile(q))
+                .expect("quantile");
+            let (lo, hi) = exact.quantile_band(q, 0.03);
+            if est < lo || est > hi {
+                failures.push(format!(
+                    "{key:?} q={q}: {est:.3} outside [{lo:.3}, {hi:.3}]"
+                ));
+            }
+        }
+    }
+    failures.sort();
+    assert!(
+        failures.is_empty(),
+        "weighted KLL quantiles out of rank band:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
+/// HLL cells answer per-subpopulation distinct counts across the lattice.
+#[test]
+fn hydra_hll_head_subpopulation_cardinalities() {
+    let n = 40_000usize;
+    let keys = h2_keys(n, 4_730);
+    let ids = zipf_u64(n, 20_000, 0.2, 4_735);
+    let mut hydra = Hydra::with_schema(
+        5,
+        128,
+        ["region", "service"],
+        HydraCounter::HLL(Default::default()),
+    )
+    .expect("two-column schema");
+    let mut truth: HashMap<Vec<Option<&str>>, std::collections::HashSet<u64>> = HashMap::new();
+
+    for (i, (region, service)) in keys.iter().enumerate() {
+        hydra
+            .update(&[region, service], &DataInput::U32(ids[i] as u32), None)
+            .expect("arity 2");
+        for key in h2_masks(region, service) {
+            truth.entry(key.to_vec()).or_default().insert(ids[i]);
+        }
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    for (key, distinct) in &truth {
+        let t = distinct.len() as f64;
+        let est = hydra
+            .query_key(key, &HydraQuery::Cardinality)
+            .expect("cardinality");
+        // CardinalitySpec::default() from the conformance kit.
+        if est < t * 0.97 || est > t * 1.03 {
+            failures.push(format!("{key:?}: distinct {t}, est {est:.0}"));
+        }
+    }
+    failures.sort();
+    assert_eq!(truth.len(), 8, "the 2^2-1 lattice over 2x2 domains");
+    assert!(
+        failures.is_empty(),
+        "HLL subpopulation cardinalities out of band:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
+/// KLL cells answer per-subpopulation quantiles across the lattice.
+#[test]
+fn hydra_kll_head_subpopulation_quantiles() {
+    let n = 40_000usize;
+    let keys = h2_keys(n, 4_740);
+    let values = common::normal_f64(n, 500.0, 80.0, 4_745);
+    let mut hydra = Hydra::with_schema(
+        5,
+        128,
+        ["region", "service"],
+        HydraCounter::KLL(KLL::init_kll_with_seed(200, 4_746)),
+    )
+    .expect("two-column schema");
+    let mut truth: HashMap<Vec<Option<&str>>, Vec<f64>> = HashMap::new();
+
+    for (i, (region, service)) in keys.iter().enumerate() {
+        hydra
+            .update(&[region, service], &DataInput::F64(values[i]), None)
+            .expect("arity 2");
+        for key in h2_masks(region, service) {
+            truth.entry(key.to_vec()).or_default().push(values[i]);
+        }
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    for (key, vals) in truth {
+        let exact = common::NumericTruth::new(vals);
+        for q in conformance::DEFAULT_QUANTILE_QS {
+            let est = hydra
+                .query_key(&key, &HydraQuery::Quantile(q))
+                .expect("quantile");
+            // QuantileSpec::default() from the conformance kit.
+            let (lo, hi) = exact.quantile_band(q, 0.03);
+            if est < lo || est > hi {
+                failures.push(format!(
+                    "{key:?} q={q}: {est:.3} outside [{lo:.3}, {hi:.3}]"
+                ));
+            }
+        }
+    }
+    failures.sort();
+    assert!(
+        failures.is_empty(),
+        "KLL subpopulation quantiles out of rank band:\n  {}",
+        failures.join("\n  ")
+    );
 }
 
 #[test]
@@ -1162,6 +1329,19 @@ fn assert_head_routes_to_the_right_cell<F>(
 }
 
 #[test]
+fn hydra_cs_head_routes_records_to_the_right_cell() {
+    let values = zipf_u64(30_000, ENDPOINTS.len(), 0.5, 4_615);
+    assert_head_routes_to_the_right_cell(
+        "CS",
+        cell_cs(),
+        30_000,
+        4_612,
+        move |i| DataInput::Str(ENDPOINTS[values[i] as usize]),
+        &[HydraQuery::Frequency(DataInput::Str(ENDPOINTS[0]))],
+    );
+}
+
+#[test]
 fn hydra_hll_head_routes_records_to_the_right_cell() {
     assert_head_routes_to_the_right_cell(
         "HLL",
@@ -1195,12 +1375,83 @@ fn hydra_univmon_head_routes_records_to_the_right_cell() {
         30_000,
         4_650,
         move |i| DataInput::U32(items[i] as u32),
-        &[HydraQuery::L1Norm],
+        &[HydraQuery::L1Norm, HydraQuery::Cardinality],
     );
 }
 
 /// L1 is a weighted record count, preserved exactly by the fan-out and the
 /// per-cell UnivMon.
+/// UnivMon cells answer L1, L2 and entropy per subpopulation across the
+/// lattice, over a weighted stream.
+#[test]
+fn hydra_univmon_head_subpopulation_metrics() {
+    let n = 40_000usize;
+    let keys = h2_keys(n, 4_770);
+    let items = zipf_u64(n, 1000, 1.2, 4_775);
+    let mut hydra = Hydra::with_schema(
+        5,
+        128,
+        ["region", "service"],
+        HydraCounter::UNIVERSAL(UnivMon::init_univmon(32, 5, 256, 8)),
+    )
+    .expect("two-column schema");
+    let mut truth: HashMap<Vec<Option<&str>>, FreqTruth> = HashMap::new();
+
+    for (i, (region, service)) in keys.iter().enumerate() {
+        let weight = 1 + (i % 7) as i64;
+        hydra
+            .update(
+                &[region, service],
+                &DataInput::U32(items[i] as u32),
+                Some(weight as i32),
+            )
+            .expect("arity 2");
+        for key in h2_masks(region, service) {
+            truth
+                .entry(key.to_vec())
+                .or_default()
+                .observe_weighted(items[i] as i64, weight);
+        }
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    for (key, exact) in &truth {
+        let l1 = hydra.query_key(key, &HydraQuery::L1Norm).expect("L1");
+        if l1 != exact.total() as f64 {
+            failures.push(format!("{key:?}: L1 {l1} != exact {}", exact.total()));
+        }
+        // Bands from `univmon_weighted_metrics_and_fast_insert_parity`.
+        for (label, est, want, tol) in [
+            (
+                "L2",
+                hydra.query_key(key, &HydraQuery::L2Norm).expect("L2"),
+                exact.l2_norm(),
+                0.05,
+            ),
+            (
+                "entropy",
+                hydra.query_key(key, &HydraQuery::Entropy).expect("entropy"),
+                exact.entropy(true),
+                0.12,
+            ),
+        ] {
+            if est < want * (1.0 - tol) || est > want * (1.0 + tol) {
+                failures.push(format!(
+                    "{key:?}: {label} {est:.3} vs exact {want:.3} (tol {:.0}%)",
+                    tol * 100.0
+                ));
+            }
+        }
+    }
+    failures.sort();
+    assert_eq!(truth.len(), 8, "the 2^2-1 lattice over 2x2 domains");
+    assert!(
+        failures.is_empty(),
+        "UnivMon subpopulation metrics out of band:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
 #[test]
 fn hydra_univmon_head_l1_is_exact_per_subpopulation() {
     let n = 30_000usize;
@@ -1565,7 +1816,7 @@ fn tumbling_foldcms_weighted_windows_exact_counts() {
 
 #[test]
 fn ensemble_layer_mixed_cms_and_hll() {
-    let cms = CountMin::<Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(3, 4096);
+    let cms = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096);
     let ertl = HyperLogLog::<asap_sketchlib::ErtlMLE>::new();
     let mut ens: HashSketchEnsemble =
         HashSketchEnsemble::new(vec![EnsembleSketch::from(cms), EnsembleSketch::from(ertl)])
