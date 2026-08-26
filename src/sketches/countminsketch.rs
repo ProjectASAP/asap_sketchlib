@@ -498,8 +498,7 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
     #[inline(always)]
     pub fn fast_insert_nitro(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
-        let delta =
-            crate::sketch_framework::nitro::nitro_delta_saturated_i32(self.counts.nitro().delta);
+        let delta = nitro_delta_saturated_i32(self.counts.nitro().delta);
         if self.counts.nitro().to_skip >= rows {
             self.counts.reduce_nitro_skip(rows);
         } else {

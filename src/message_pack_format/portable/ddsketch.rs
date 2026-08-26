@@ -178,13 +178,14 @@ impl DdSketch {
             }
             let new_len = new_len as usize;
             let mut merged = vec![0u64; new_len];
-            for (i, c) in self.store_counts.iter().enumerate() {
-                let idx = (self_start + i as i64 - new_start) as usize;
-                merged[idx] = merged[idx].saturating_add(*c);
-            }
-            for (i, c) in other.store_counts.iter().enumerate() {
-                let idx = (other_start + i as i64 - new_start) as usize;
-                merged[idx] = merged[idx].saturating_add(*c);
+            for (start, counts) in [
+                (self_start, &self.store_counts),
+                (other_start, &other.store_counts),
+            ] {
+                for (i, &c) in counts.iter().enumerate() {
+                    let idx = (start + i as i64 - new_start) as usize;
+                    merged[idx] = merged[idx].saturating_add(c);
+                }
             }
             self.store_counts = merged;
             self.store_offset = new_start as i32;

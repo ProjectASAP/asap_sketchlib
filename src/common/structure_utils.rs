@@ -115,16 +115,6 @@ impl Nitro {
             self.to_skip = 0;
             return;
         }
-        // let k = loop {
-        //     let r = self.generator.random::<f64>();
-        //     if r != 0.0_f64 && r != 1.0_f64 {
-        //         break r;
-        //     }
-        // };
-        // self.to_skip = ((1.0 - k).ln() * self.inv_ln_one_minus_p).ceil() as usize;
-
-        // self.to_skip = (PRECOMPUTED_SAMPLE[self.idx] * self.inv_ln_one_minus_p).ceil() as usize;
-
         // floor, not ceil: the caller's `+1` stride supplies the sampled item
         // itself, so ceil adds +1 to every skip distance and roughly halves
         // the effective sampling rate (same bug fixed in NitroBatch's
