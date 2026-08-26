@@ -12,6 +12,13 @@ use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 /// output for the same input stream.
 pub const DDSKETCH_GROW_CHUNK: usize = 128;
 
+/// Safety limit for a single [`DdSketchDelta`] application: deltas arrive
+/// over the wire untrusted, so a span beyond this many buckets is rejected
+/// with an error instead of padding the dense store toward a multi-gigabyte
+/// allocation. Generous relative to any legitimate producer: at α = 0.01 the
+/// entire indexable range spans ~35k buckets.
+pub const MAX_APPLY_DELTA_SPAN_BUCKETS: i64 = 1 << 22;
+
 // =====================================================================
 // Wire-format-aligned variant.
 //
@@ -164,7 +171,45 @@ impl DdSketch {
     /// and max can only increase. Used by the backend ingest path to
     /// reconstitute a full sketch from a base snapshot + subsequent
     /// delta-transmission frames.
-    pub fn apply_delta(&mut self, delta: &DdSketchDelta) {
+    ///
+    /// Deltas arrive over the wire and are treated as untrusted: before
+    /// mutating anything, the union span the delta would require is
+    /// checked against [`MAX_APPLY_DELTA_SPAN_BUCKETS`]. A hostile or
+    /// corrupt delta carrying an index near `i32::MAX` would otherwise
+    /// pad the dense store by ~2·10⁹ buckets (~17 GiB) in one call —
+    /// independent of α, unlike the `update()` path whose worst case is
+    /// bounded by the indexable-range guard.
+    pub fn apply_delta(
+        &mut self,
+        delta: &DdSketchDelta,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Pre-validate span before any mutation so a rejected delta
+        // leaves state untouched.
+        if !delta.buckets.is_empty() {
+            let mut min_d = i64::MAX;
+            let mut max_d = i64::MIN;
+            for (abs_idx, _) in &delta.buckets {
+                min_d = min_d.min(*abs_idx as i64);
+                max_d = max_d.max(*abs_idx as i64);
+            }
+            let cur_start = if self.store_counts.is_empty() {
+                min_d
+            } else {
+                self.store_offset as i64
+            };
+            let cur_end = cur_start + self.store_counts.len() as i64;
+            let new_start = cur_start.min(min_d);
+            let new_end = cur_end.max(max_d + 1);
+            if new_end - new_start > MAX_APPLY_DELTA_SPAN_BUCKETS {
+                return Err(format!(
+                    "DdSketch delta spans {} buckets, exceeding the {}-bucket safety limit",
+                    new_end - new_start,
+                    MAX_APPLY_DELTA_SPAN_BUCKETS
+                )
+                .into());
+            }
+        }
+
         for (abs_idx, d_count) in &delta.buckets {
             if self.store_counts.is_empty() {
                 self.store_counts = vec![0u64; 1];
@@ -193,6 +238,7 @@ impl DdSketch {
         // a target here — the bucket counts above carry all reconstructable
         // state. The backend that owns the DDSketch delta tracks those
         // aggregates separately.
+        Ok(())
     }
 
     /// Compute a sparse, proto-marshalled `DDSketchDelta` of `self`
@@ -267,8 +313,7 @@ impl DdSketch {
                 .collect(),
             ..DdSketchDelta::default()
         };
-        self.apply_delta(&delta);
-        Ok(())
+        self.apply_delta(&delta)
     }
 
     /// MessagePack twin of [`Self::compute_delta`]. Computes the same
@@ -318,8 +363,7 @@ impl DdSketch {
         bytes: &[u8],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let delta = DdSketchDelta::from_msgpack(bytes)?;
-        self.apply_delta(&delta);
-        Ok(())
+        self.apply_delta(&delta)
     }
 
     /// Merge a slice of references into a single new sketch. Returns
@@ -624,7 +668,7 @@ mod tests {
             max_changed: true,
             new_max: 9.0,
         };
-        base.apply_delta(&delta);
+        base.apply_delta(&delta).unwrap();
         assert_eq!(base.store_counts, vec![5, 10, 15]);
         assert_eq!(base.total_count(), 30);
     }
@@ -642,7 +686,7 @@ mod tests {
             max_changed: true,
             new_max: 6.0,
         };
-        base.apply_delta(&delta);
+        base.apply_delta(&delta).unwrap();
         assert_eq!(base.store_counts, vec![1, 2, 0, 0, 7]);
         assert_eq!(base.store_offset, 0);
         assert_eq!(base.total_count(), 10);
@@ -667,7 +711,7 @@ mod tests {
             new_max: 5.0,
         };
         let mut via_delta = base;
-        via_delta.apply_delta(&delta);
+        via_delta.apply_delta(&delta).unwrap();
 
         assert_eq!(via_delta.store_counts, via_merge.store_counts);
         assert_eq!(via_delta.total_count(), via_merge.total_count());
@@ -796,7 +840,7 @@ mod tests {
                 // First batch seeds the reconstituted sketch.
                 reconstituted = this_batch.clone();
             } else {
-                reconstituted.apply_delta(&delta);
+                reconstituted.apply_delta(&delta).unwrap();
             }
             prev_snapshot = this_batch;
         }

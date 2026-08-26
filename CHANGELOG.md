@@ -25,9 +25,16 @@ signals a backwards-compatible change.
   mapping. No wire/state migration; query outputs shift by at most α.
 - **Portable `DdSketch` now rejects untrackable inputs like core.** Non-finite
   values (a NaN previously floor-cast into bucket 0) and finite-but-extreme
-  values beyond the indexable range (which mapped near i32::MAX and forced an
-  arbitrarily large dense-store allocation) are dropped silently, mirroring
-  core `DDSketch`'s min/max-indexable guards and DataDog's mapping (#70).
+  values beyond the indexable range are dropped silently, mirroring core
+  `DDSketch`'s min/max-indexable guards and DataDog's mapping (#70). Unguarded,
+  one `f64::MAX` sample mapped ~35k buckets away at α=0.01 (~277 KiB of dense
+  store per sample), scaling with 1/ln γ.
+- **Portable `DdSketch::apply_delta` bounds hostile wire input.** Deltas now
+  pre-validate their bucket span and return `Err` instead of padding the
+  dense store: a corrupt delta carrying an index near `i32::MAX` would
+  previously have attempted a ~2·10⁹-bucket (~17 GiB) allocation in one call.
+  The limit (4M buckets) dwarfs any legitimate span; the `apply_delta*`
+  family propagates the error.
 - Removed the raw-pointer write from `DDSketch`'s per-sample insertion path;
   bucket increments now go through safe indexing with the same bounds check
   they already performed (#70 item 6).
