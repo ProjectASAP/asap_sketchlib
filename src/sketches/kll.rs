@@ -253,6 +253,13 @@ pub struct KLL<T: NumericalValue = f64> {
     top_height: usize,
     level0_capacity: usize,
     merge_buf: Vec<T>,
+    /// Memoized CDF, valid only while no mutation has occurred since it was
+    /// built. Every mutating entry point (`push_value`, `merge`, `clear`,
+    /// `ensure_levels_sorted`) drops it; query-side accessors never touch it.
+    /// Rebuilding the CDF sorts every retained item, which made repeated
+    /// quantile queries O(n log n) each — the dashboard fill-then-query
+    /// pattern paid that cost per query.
+    cdf_cache: Option<Cdf>,
 }
 
 impl<T: NumericalValue> Default for KLL<T> {
@@ -316,6 +323,7 @@ impl<T: NumericalValue> KLL<T> {
             top_height: 0,
             level0_capacity: 0,
             merge_buf: Vec::with_capacity(norm_k),
+            cdf_cache: None,
         };
         s.rebuild_capacity_cache();
         s
@@ -384,6 +392,7 @@ impl<T: NumericalValue> KLL<T> {
     /// Hot-path insert: decrement `levels[0]`, write item, check capacity.
     #[inline]
     fn push_value(&mut self, value: T) {
+        self.cdf_cache = None;
         if self.levels[0] == 0 {
             self.compress_while_updating();
         }
@@ -518,9 +527,12 @@ impl<T: NumericalValue> KLL<T> {
             return cdf;
         }
 
+        // Stability is irrelevant: entries sharing a value contribute the same
+        // weight either way, so the unstable sort's reordering cannot change
+        // any prefix sum. `total_cmp` also avoids `partial_cmp`'s NaN branch.
         cdf.entries
             .as_mut_slice()
-            .sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap());
+            .sort_unstable_by(|a, b| a.value.total_cmp(&b.value));
 
         let mut cur_w = 0.0;
         for entry in cdf.entries.as_mut_slice() {
@@ -529,6 +541,25 @@ impl<T: NumericalValue> KLL<T> {
         }
 
         cdf
+    }
+
+    /// Returns the CDF, rebuilding it only if the sketch changed since the
+    /// last call. Identical result to [`Self::cdf`]; the point is that the
+    /// O(n log n) sort is paid once per mutation instead of once per query.
+    ///
+    /// Takes `&mut self` so the cache can live in the sketch without
+    /// interior mutability (keeping `KLL: Send`). The uncached [`Self::cdf`]
+    /// stays available for shared-reference call sites.
+    pub fn cdf_cached(&mut self) -> &Cdf {
+        if self.cdf_cache.is_none() {
+            self.cdf_cache = Some(self.cdf());
+        }
+        self.cdf_cache.as_ref().expect("cache just populated")
+    }
+
+    /// Cached variant of [`Self::quantile`]: see [`Self::cdf_cached`].
+    pub fn quantile_cached(&mut self, q: f64) -> f64 {
+        self.cdf_cached().query(q)
     }
 
     /// Merges another KLL sketch's retained items into this one,
@@ -573,6 +604,7 @@ impl<T: NumericalValue> KLL<T> {
         if other_end == other_start {
             return; // `other` is empty: nothing to merge.
         }
+        self.cdf_cache = None;
 
         let target_num_levels = self.num_levels.max(other.num_levels);
 
@@ -706,6 +738,7 @@ impl<T: NumericalValue> KLL<T> {
     /// behavior.
     pub fn clear(&mut self) {
         let mc = self.max_capacity;
+        self.cdf_cache = None;
         self.levels[0] = mc;
         self.levels[1] = mc;
         self.num_levels = 1;
@@ -842,6 +875,7 @@ impl<T: NumericalValue> KLL<T> {
         if self.num_levels <= 1 {
             return;
         }
+        self.cdf_cache = None;
         for h in 1..self.num_levels {
             let s = self.levels[h];
             let e = self.levels[h + 1];
@@ -963,6 +997,7 @@ impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for KLL<T> {
             top_height: 0,
             level0_capacity: 0,
             merge_buf: Vec::with_capacity(wire.k),
+            cdf_cache: None,
         };
         sketch.rebuild_capacity_cache();
         sketch.ensure_levels_sorted();
@@ -971,6 +1006,7 @@ impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for KLL<T> {
 }
 
 /// The CDF for quantile queries.
+#[derive(Clone, Debug)]
 pub struct Cdf {
     entries: Vector1D<CdfEntry>,
 }
@@ -1068,6 +1104,66 @@ impl Cdf {
 mod tests {
     use super::*;
     use crate::test_utils::{sample_uniform_f64, sample_zipf_f64};
+
+    /// The memoized CDF must agree with the from-scratch rebuild at every
+    /// lifecycle stage: fresh, mid-stream, post-merge, and post-clear.
+    #[test]
+    fn cdf_cached_matches_uncached_across_lifecycle() {
+        let mut sk = KLL::<f64>::init_with_seed(200, 8, 42);
+
+        // Empty sketch.
+        for q in [0.1f64, 0.5, 0.9] {
+            assert_eq!(sk.quantile_cached(q), sk.quantile(q), "empty q={q}");
+        }
+
+        // Mid-stream.
+        let values = sample_uniform_f64(0.0, 1000.0, 20_000, 0xACAC_0001);
+        for &v in &values {
+            sk.update(&v);
+        }
+        for q in [0.01f64, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99] {
+            let cached = sk.quantile_cached(q);
+            let uncached = sk.quantile(q);
+            assert_eq!(cached, uncached, "mid-stream q={q}");
+        }
+
+        // Post-merge (merge must invalidate).
+        let mut other = KLL::<f64>::init_with_seed(200, 8, 43);
+        for &v in &sample_uniform_f64(-5000.0, -4000.0, 5_000, 0xACAC_0002) {
+            other.update(&v);
+        }
+        sk.merge(&other);
+        for q in [0.1f64, 0.5, 0.9] {
+            assert_eq!(sk.quantile_cached(q), sk.quantile(q), "post-merge q={q}");
+        }
+
+        // Post-clear.
+        sk.clear();
+        assert_eq!(sk.quantile_cached(0.5), 0.0, "cleared sketch is empty");
+        assert_eq!(sk.count(), 0);
+    }
+
+    /// A cached query followed by more inserts must NOT serve the stale CDF:
+    /// after pushing a heavy batch of large values, the cached median has to
+    /// move up.
+    #[test]
+    fn cdf_cache_invalidated_by_subsequent_updates() {
+        let mut sk = KLL::<f64>::init_with_seed(200, 8, 42);
+        for &v in &sample_uniform_f64(0.0, 100.0, 10_000, 0xACAC_0003) {
+            sk.update(&v);
+        }
+        let before = sk.quantile_cached(0.5);
+
+        for _ in 0..10_000 {
+            sk.update(&999_999.0);
+        }
+        let after = sk.quantile_cached(0.5);
+
+        assert!(
+            after > before + 50.0,
+            "median {before} barely moved after 10k huge inserts -> stale cache served"
+        );
+    }
 
     // Crafted nested-serde bytes (the `HydraCounter::KLL` path, reachable with
     // untrusted input) with an out-of-range `k` must fail closed, not overflow

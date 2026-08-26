@@ -183,4 +183,21 @@ fn main() {
         std::hint::black_box(acc);
         elapsed
     });
+
+    // Same workload through the memoized CDF: rebuild cost paid once, then
+    // binary search per query.
+    let mut kll_cached = KLL::<f64>::init_with_seed(200, 8, 42);
+    for &v in &kll_values {
+        kll_cached.update_data_input(&DataInput::F64(v)).unwrap();
+    }
+    bench("kll_quantile_cached", QUANTILE_N, || {
+        let start = Instant::now();
+        let mut acc = 0.0f64;
+        for i in 0..QUANTILE_N {
+            acc += kll_cached.quantile_cached((i + 1) as f64 / (QUANTILE_N + 1) as f64);
+        }
+        let elapsed = start.elapsed();
+        std::hint::black_box(acc);
+        elapsed
+    });
 }
