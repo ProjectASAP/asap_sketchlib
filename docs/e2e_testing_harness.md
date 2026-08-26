@@ -36,7 +36,7 @@ None of these were caught by the existing unit tests.
 
 ## Architecture
 
-```
+```sh
 tests/
 ├── common/
 │   ├── mod.rs           # generators + truth trackers + assertion helpers
@@ -93,6 +93,18 @@ adapters. The `e2e_*.rs` suites add depth the kit deliberately does not
 attempt: serialization round trips, window semantics, framework composition
 (Hydra fan-out, tumbling windows, sliding histograms), and cross-implementation
 parity between core types and their portable wire twins.
+
+A composition framework can also *be* a battery subject, in the same suite that
+already covers it. `e2e_frameworks.rs` runs a single-column Hydra — where the
+grid does the keying and each cell holds one counter — through the standard
+batteries once per counter family it can host (CM, Count Sketch, HLL, KLL),
+alongside the depth no battery models: the `2^D - 1` fan-out across the
+subpopulation lattice checked against exact per-subpopulation truth, wildcard
+marginals reconciled against the cells beneath them, exact shard-merge
+equality, wire round trips for every counter variant, subkey injectivity for
+delimiter-laden values, and MultiHeadHydra's equivalence to independent
+single-head Hydras. Suites grow with their family; a framework that outgrows a
+smoke test deepens in place rather than splitting off.
 
 ## Onboarding a new sketch
 

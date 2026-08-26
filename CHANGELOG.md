@@ -80,6 +80,21 @@ signals a backwards-compatible change.
   `tests/conformance_kit.rs` shows reference adapters. Also includes
   `tests/bug_verification.rs` regression tests for the fixes above and
   `examples/accuracy_probe.rs`, a release-mode ground-truth probe.
+- **Deep Hydra coverage in `tests/e2e_frameworks.rs`.** A single-column Hydra —
+  where the grid does the keying and each cell holds one counter — now runs the
+  standard conformance batteries once per counter family it can host (CM,
+  Count Sketch, HLL, KLL), joined by what no battery models: the `2^D - 1`
+  fan-out across the subpopulation lattice checked against exact
+  per-subpopulation truth, wildcard marginals reconciled against the cells
+  beneath them, exact shard-merge equality, MessagePack round trips for every
+  counter variant, subkey injectivity for delimiter-laden key values, and
+  `MultiHeadHydra`'s equivalence to independent single-head Hydras. A Theorem 2
+  check (Manousis et al., VLDB 2022) asserts the additive `eps * G_s` bound
+  against the exact binomial median-failure rate over 314 subpopulations at
+  `G_s = 840k`, in both the sparse deployment regime (5x4096) and a
+  deliberately overloaded grid (5x256) where the in-bound fraction is actually
+  exercised. The mixed `HashSketchEnsemble` test moved here from
+  `tests/e2e_cardinality.rs`.
 - **Export the `impl_hll_bucket_list!` macro.** Downstream crates can now
   generate an `HllRegisterStorage` type at any precision (e.g. `lg_k = 18`)
   instead of being limited to the built-in `HllBucketListP12/P14/P16`.

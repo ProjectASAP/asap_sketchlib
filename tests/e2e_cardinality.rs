@@ -1,16 +1,12 @@
 //! E2E cardinality pipelines on synthetic unique streams: core HLL variants
-//! (+ shard merge), the portable wire HLL, SetAggregator exactness, and a
-//! mixed HashSketchEnsemble layer.
+//! (+ shard merge), the portable wire HLL, and SetAggregator exactness.
 
 mod common;
 
 use common::{assert_between, uniform_u64};
 
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
-use asap_sketchlib::{
-    CountMin, DataInput, EnsembleSketch, FastPath, HashSketchEnsemble, HyperLogLog, HyperLogLogHIP,
-    SetAggregator, Vector2D,
-};
+use asap_sketchlib::{DataInput, HyperLogLog, HyperLogLogHIP, SetAggregator};
 
 #[test]
 fn hll_variants_checkpoints_and_shard_merge() {
@@ -116,41 +112,4 @@ fn set_aggregator_union_is_exact() {
     for k in &expected {
         assert!(agg.values.contains(k), "missing member {k}");
     }
-}
-
-#[test]
-fn ensemble_layer_mixed_cms_and_hll() {
-    let cms = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096);
-    let ertl = HyperLogLog::<asap_sketchlib::ErtlMLE>::new();
-    let mut ens: HashSketchEnsemble =
-        HashSketchEnsemble::new(vec![EnsembleSketch::from(cms), EnsembleSketch::from(ertl)])
-            .expect("ensemble");
-
-    // Dominant head: 6000 copies of key 0; tail: 15k uniform over 3000 keys.
-    let mut distinct = std::collections::HashSet::new();
-    let mut truth_hot0 = 0i64;
-    for k in common::uniform_u64(15_000, 3000, 2103) {
-        ens.insert(&DataInput::I64(k as i64));
-        distinct.insert(k as i64);
-    }
-    for _ in 0..6000 {
-        ens.insert(&DataInput::I64(0));
-        distinct.insert(0);
-        truth_hot0 += 1;
-    }
-
-    // CMS cell: one-sided frequency estimate for the dominant key. Upper
-    // slack is generous (3x) because the shared-hash fan-out across the
-    // ensemble's 15k-tail stream can collide into key 0's cells; the lower
-    // bound carries the real one-sided guarantee.
-    let cm_est = ens.estimate(0, &DataInput::I64(0)).expect("cms estimate");
-    assert!(
-        cm_est >= truth_hot0 as f64 && cm_est <= truth_hot0 as f64 * 3.0,
-        "ensemble CMS estimate {cm_est} vs true {truth_hot0} (must be one-sided)"
-    );
-
-    // HLL cell: shared-hash cardinality within 3%.
-    let card = ens.cardinality(1).expect("hll cardinality");
-    let t = distinct.len() as f64;
-    assert_between(card, t * 0.97, t * 1.03, "ensemble HLL cardinality");
 }
