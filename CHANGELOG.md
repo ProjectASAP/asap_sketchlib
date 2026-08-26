@@ -10,6 +10,16 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (external implementors of `MatrixFastHash`):** the trait gained a
+  required `row_hash(row, mask_bits, mask)` method, split out of
+  `col_for_row` so storages can decode against precomputed parameters and
+  skip `% cols` for power-of-two column counts. The three in-crate impls
+  (`MatrixHashType`, `u64`, `u128`) are updated; downstream code implementing
+  this trait directly must add the method. Ship in the next `0.y` bump
+  (Cargo convention: `y` is the major component pre-1.0).
+
 ### Fixed
 
 - **Made `NitroBatch` frequency estimates unbiased.** Inserts hashed keys with

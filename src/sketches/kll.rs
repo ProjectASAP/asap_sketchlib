@@ -428,6 +428,10 @@ impl<T: NumericalValue> KLL<T> {
     }
 
     fn compact(&mut self, h: usize) {
+        // Redundant today (compact is only reachable via push_value, which
+        // already drops the cache) but cheap insurance against future
+        // call-graph drift silently serving stale quantiles.
+        self.cdf_cache = None;
         let beg = self.levels[h];
         let end = self.levels[h + 1];
         let pop = end - beg;

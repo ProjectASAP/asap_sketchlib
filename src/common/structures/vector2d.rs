@@ -151,14 +151,9 @@ impl<T> Vector2D<T> {
     fn col_for_row<Hash: MatrixFastHash>(&self, hashed_val: &Hash, row: usize) -> usize {
         // Decode with the (mask_bits, mask) pair cached at construction —
         // identical result to recomputing them from `self.cols`, without the
-        // per-row ilog2/shift. For power-of-two `cols` the mask already
-        // reduces to `[0, cols)`, so the `% cols` is skipped entirely.
+        // per-row ilog2/shift. `fold_to_col` owns the pow2-skip invariant.
         let raw = hashed_val.row_hash(row, self.mask_bits, self.mask);
-        if self.cols.is_power_of_two() {
-            raw as usize
-        } else {
-            raw as usize % self.cols
-        }
+        super::matrix_storage::fold_to_col(raw, self.cols)
     }
 
     /// Returns the number of rows.
@@ -805,5 +800,56 @@ mod tests {
 
         let larger_shape: Vector2D<u64> = Vector2D::init(5, 1_048_576);
         assert_eq!(larger_shape.get_required_bits(), 128);
+    }
+
+    /// End-to-end coverage of `Vector2D::col_for_row` — the cached-field
+    /// decode path — with NON-power-of-two column counts. Every in-tree
+    /// FastPath caller uses pow2 cols, so without this test the non-pow2
+    /// branch of the rewritten decode is never executed at all.
+    ///
+    /// Each insert is mirrored into a reference matrix whose placements are
+    /// computed independently (`shift → mask → % cols`), then both full
+    /// matrices are compared.
+    #[test]
+    fn fast_insert_non_pow2_and_degenerate_cols_match_reference() {
+        let mut lcg = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next_hash = move || {
+            lcg ^= lcg << 13;
+            lcg ^= lcg >> 7;
+            lcg ^= lcg << 17;
+            lcg
+        };
+        let reference_col = |hash: u64, row: usize, cols: usize| -> usize {
+            let mask_bits = if cols.is_power_of_two() {
+                cols.ilog2()
+            } else {
+                cols.ilog2() + 1
+            } as usize;
+            (((hash >> (mask_bits * row)) & ((1u64 << mask_bits) - 1)) % cols as u64) as usize
+        };
+
+        for &cols in &[1usize, 17, 100, 1000] {
+            const ROWS: usize = 3;
+            let mut m: Vector2D<i64> = Vector2D::from_fn(ROWS, cols, |_, _| 0);
+            let mut reference = vec![0i64; ROWS * cols];
+
+            for _ in 0..500 {
+                let h = next_hash();
+                m.fast_insert(
+                    |c: &mut i64, _: &i64, _| *c += 1,
+                    1i64,
+                    &MatrixHashType::Packed64(h),
+                );
+                for row in 0..ROWS {
+                    reference[row * cols + reference_col(h, row, cols)] += 1;
+                }
+            }
+
+            assert_eq!(
+                m.as_slice(),
+                &reference[..],
+                "cols={cols}: cached-field decode diverged from reference"
+            );
+        }
     }
 }

@@ -83,7 +83,7 @@ pub trait MatrixFastHash: Clone {
 /// executed on every row of every insert/query. The branch below compiles to
 /// a single AND+compare.
 #[inline(always)]
-fn fold_to_col(raw: u128, cols: usize) -> usize {
+pub(crate) fn fold_to_col(raw: u128, cols: usize) -> usize {
     if cols.is_power_of_two() {
         raw as usize
     } else {
