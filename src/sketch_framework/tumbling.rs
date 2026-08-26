@@ -80,6 +80,13 @@ pub struct KLLConfig {
     pub k: usize,
     /// Minimum compactor size parameter.
     pub m: usize,
+    /// Optional seed for the compaction coin. When `Some`, every pool sketch
+    /// is built with [`KLL::init_with_seed`], so two processes running the
+    /// same tumbling pipeline produce byte-identical sketches — including
+    /// across window rotations, because `tumbling_clear` re-seeds from the
+    /// stored seed. When `None`, the legacy wall-clock-seeded [`KLL::init`]
+    /// path is used and cross-process agreement is not achievable.
+    pub seed: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +147,10 @@ impl TumblingWindowSketch for KLL {
     type Config = KLLConfig;
 
     fn from_config(config: &Self::Config) -> Self {
-        KLL::init(config.k, config.m)
+        match config.seed {
+            Some(seed) => KLL::init_with_seed(config.k, config.m, seed),
+            None => KLL::init(config.k, config.m),
+        }
     }
 
     fn tumbling_insert(&mut self, key: &DataInput, _value: i64) {
@@ -760,7 +770,11 @@ mod tests {
 
     #[test]
     fn kll_tumbling_quantile_accuracy() {
-        let config = KLLConfig { k: 200, m: 8 };
+        let config = KLLConfig {
+            k: 200,
+            m: 8,
+            seed: None,
+        };
         let samples_per_window = 5000;
         let num_windows = 4;
 
@@ -1098,7 +1112,11 @@ mod tests {
 
     #[test]
     fn kll_tumbling_multi_quantile_accuracy() {
-        let config = KLLConfig { k: 200, m: 8 };
+        let config = KLLConfig {
+            k: 200,
+            m: 8,
+            seed: None,
+        };
         let total_samples = 100_000;
         let num_windows = 8;
         let samples_per_window = total_samples / num_windows;
@@ -1141,7 +1159,11 @@ mod tests {
 
     #[test]
     fn kll_tumbling_distribution_shift() {
-        let config = KLLConfig { k: 400, m: 8 };
+        let config = KLLConfig {
+            k: 400,
+            m: 8,
+            seed: None,
+        };
         let samples_per_phase = 50_000;
         let windows_per_phase = 4;
         let samples_per_window = samples_per_phase / windows_per_phase;
@@ -1197,6 +1219,64 @@ mod tests {
         // Verify ordering is monotonic.
         assert!(p10 < p50, "p10 ({p10:.1}) should be < p50 ({p50:.1})");
         assert!(p50 < p90, "p50 ({p50:.1}) should be < p90 ({p90:.1})");
+    }
+
+    // -- Seeded determinism (issue #77) ---------------------------------------
+
+    #[test]
+    fn kll_tumbling_seeded_is_byte_identical_across_instances() {
+        let make = || {
+            TumblingWindow::<KLL>::new(
+                1000,
+                4,
+                KLLConfig {
+                    k: 200,
+                    m: 8,
+                    seed: Some(0x5EED_CAFE),
+                },
+                6,
+            )
+        };
+        // Two independent managers, as if on two hosts/processes.
+        let mut tw_a = make();
+        let mut tw_b = make();
+
+        // Spanning many windows exercises close_active → pool.put →
+        // tumbling_clear → re-seed, which is where the unseeded path used to
+        // re-randomize the coin on every rotation.
+        let values = sample_uniform_f64(0.0, 1_000_000.0, 20_000, 0x5EED_0001);
+        for (i, &v) in values.iter().enumerate() {
+            let t = i as u64;
+            tw_a.insert(t, &DataInput::F64(v), 1);
+            tw_b.insert(t, &DataInput::F64(v), 1);
+        }
+
+        let bytes_a = tw_a.query_all().serialize_to_bytes().unwrap();
+        let bytes_b = tw_b.query_all().serialize_to_bytes().unwrap();
+        assert_eq!(
+            bytes_a, bytes_b,
+            "same KLLConfig seed must give byte-identical tumbling state"
+        );
+
+        // A different seed must not silently alias onto the same coin stream.
+        let mut tw_c: TumblingWindow<KLL> = TumblingWindow::new(
+            1000,
+            4,
+            KLLConfig {
+                k: 200,
+                m: 8,
+                seed: Some(0x5EED_CAFE + 1),
+            },
+            6,
+        );
+        for (i, &v) in values.iter().enumerate() {
+            tw_c.insert(i as u64, &DataInput::F64(v), 1);
+        }
+        let bytes_c = tw_c.query_all().serialize_to_bytes().unwrap();
+        assert_ne!(
+            bytes_a, bytes_c,
+            "different KLLConfig seeds must produce different state"
+        );
     }
 
     #[test]
@@ -1600,7 +1680,11 @@ mod tests {
 
     #[test]
     fn kll_tumbling_query_recent_accuracy() {
-        let config = KLLConfig { k: 200, m: 8 };
+        let config = KLLConfig {
+            k: 200,
+            m: 8,
+            seed: None,
+        };
         let total_samples = 100_000;
         let num_windows = 8;
         let recent_n = 3;
@@ -1847,7 +1931,11 @@ mod tests {
 
     #[test]
     fn kll_tumbling_vs_monolithic() {
-        let config = KLLConfig { k: 200, m: 8 };
+        let config = KLLConfig {
+            k: 200,
+            m: 8,
+            seed: None,
+        };
         let total_samples = 100_000;
         let num_windows = 8;
         let samples_per_window = total_samples / num_windows;
@@ -1996,7 +2084,11 @@ mod tests {
 
         // --- KLL subsection ---
         {
-            let config = KLLConfig { k: 200, m: 8 };
+            let config = KLLConfig {
+                k: 200,
+                m: 8,
+                seed: None,
+            };
             let mut tw: TumblingWindow<KLL> =
                 TumblingWindow::new(total_samples as u64 + 1, 10, config, 4);
 

@@ -272,7 +272,11 @@ fn univmonq_full_metric_suite() {
 
 #[test]
 fn tumbling_kll_window_queries() {
-    let cfg = KLLConfig { k: 200, m: 8 };
+    let cfg = KLLConfig {
+        k: 200,
+        m: 8,
+        seed: None,
+    };
     let mut tw: TumblingWindow<KLL> = TumblingWindow::new(100, 16, cfg, 4);
 
     let all: Vec<f64> = uniform_u64(1000, 1_000_000, 3009)
@@ -335,9 +339,10 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
 
     // Non-finite / non-positive / beyond-indexable-range values must be
     // dropped by BOTH implementations: silently, without corrupting bucket 0
-    // (NaN floor-casts to 0) and without forcing a distant-bucket allocation
-    // (1e308 maps to an index near i32::MAX; the portable dense store would
-    // previously have attempted a multi-gigabyte grow). #70 items 3/4.
+    // (NaN floor-casts to 0) and without letting one sample force a distant-
+    // bucket allocation (unguarded, f64::MAX mapped ~35k buckets away at
+    // alpha=0.01 — ~277 KiB of amplification per sample, scaling with 1/lnγ;
+    // #70 item 4).
     for v in [
         f64::NAN,
         f64::NEG_INFINITY,
@@ -465,4 +470,48 @@ fn portable_hydra_kll_per_key_medians() {
             assert_in_rank_band(est, &truth, qq, 0.04, &format!("HydraKll {name}"));
         }
     }
+}
+
+#[test]
+fn portable_ddsketch_rejects_hostile_delta_spans() {
+    use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketchDelta;
+
+    let alpha = 0.01;
+    let mut base = PortableDds::new(alpha);
+    base.update(1.0);
+    let (len_before, offset_before) = (base.store_counts.len(), base.store_offset);
+
+    // A corrupt/hostile delta pointing near i32::MAX must be rejected with an
+    // error BEFORE any allocation: the naive pad would be ~2e9 buckets.
+    let hostile = DdSketchDelta {
+        buckets: vec![(i32::MAX - 1, 1), (7, 3)],
+        ..DdSketchDelta::default()
+    };
+    assert!(
+        base.apply_delta(&hostile).is_err(),
+        "hostile far-span delta must be rejected"
+    );
+    assert_eq!(
+        base.store_counts.len(),
+        len_before,
+        "state untouched on rejection"
+    );
+    assert_eq!(
+        base.store_offset, offset_before,
+        "offset untouched on rejection"
+    );
+
+    // Benign deltas still apply: bucket index 6 carries count 5 afterward,
+    // and its representative gamma^6*(1+alpha) becomes visible in queries.
+    let benign = DdSketchDelta {
+        buckets: vec![(6, 5)],
+        ..DdSketchDelta::default()
+    };
+    base.apply_delta(&benign).expect("benign delta");
+    let gamma = (1.0 + alpha) / (1.0 - alpha);
+    assert_eq!(
+        base.quantile(0.9),
+        Some(gamma.powf(6.0) * (1.0 + alpha)),
+        "applied delta count visible through queries"
+    );
 }
