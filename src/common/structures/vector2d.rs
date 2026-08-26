@@ -108,6 +108,12 @@ impl<T> Vector2D<T> {
         self.nitro = Nitro::init_nitro(sampling_rate);
     }
 
+    /// Enables Nitro sampling with the provided rate and a reproducible
+    /// RNG seed -- see `Nitro::init_nitro_seeded`'s doc comment.
+    pub fn enable_nitro_seeded(&mut self, sampling_rate: f64, seed: u64) {
+        self.nitro = Nitro::init_nitro_seeded(sampling_rate, seed);
+    }
+
     /// Disables Nitro sampling and resets the internal state.
     pub fn disable_nitro(&mut self) {
         self.nitro = Nitro::default();
@@ -304,6 +310,28 @@ impl<T> Vector2D<T> {
     {
         let col = (hashed >> (self.mask_bits as usize * row)) as usize & (self.mask as usize);
         self.update_one_counter(row, col, op, value);
+    }
+
+    #[inline(always)]
+    /// Reads one row's counter using a packed hash value, with the exact
+    /// same column extraction as `update_by_row`.
+    ///
+    /// Nitro inserts (`fast_insert_nitro`) write via `update_by_row` using a
+    /// raw `H::hash128_seeded(0, value)`. Querying that data must extract
+    /// the same column from the same raw hash -- `hash_for_matrix`
+    /// (`common::hash::hash_for_matrix_seeded_with_mode_generic`) is *not*
+    /// equivalent: for dimensions where `hash_mode_for_matrix` selects
+    /// `Packed64`, it hashes with `hash64_seeded` instead of
+    /// `hash128_seeded` entirely (a different algorithm, not just a
+    /// truncation), so a query built on `hash_for_matrix` silently reads
+    /// the wrong cells for any Nitro sketch narrow/shallow enough to hit
+    /// that mode (only coincides for dimensions landing in `Packed128`
+    /// mode, where the seed-0 case matches `hash128_seeded(0, key)`
+    /// exactly). Use this for any query path that must round-trip with a
+    /// `fast_insert_nitro`/`update_by_row`-based insert.
+    pub fn query_by_row(&self, row: usize, hashed: u128) -> &T {
+        let col = (hashed >> (self.mask_bits as usize * row)) as usize & (self.mask as usize);
+        &self.data[row * self.cols + col]
     }
 
     #[inline(always)]

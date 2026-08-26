@@ -183,9 +183,21 @@ impl<S: NitroTarget> NitroBatch<S> {
         nitro
     }
 
-    // for profiling
     #[inline(always)]
     /// Draws the next geometric skip distance.
+    ///
+    /// The `- 1` matches NitroSketch paper Algorithm 1's `Update(p)`:
+    /// `r += Geo(p)` advances the row cursor by the raw geometric draw
+    /// (support `{1,2,...}`, mean `1/p`) with no extra offset. `insert`
+    /// below advances the cursor via `position += self.to_skip + 1` --
+    /// treating `to_skip` as "positions to skip *before* the touch"
+    /// (support `{0,1,...}`, mean `1/p - 1`) and adding the `+1` back for
+    /// the touch itself. Without the `- 1` here, that `+1` is
+    /// double-counted: the true step mean becomes `1/p + 1` instead of
+    /// `1/p`, so the achieved sampling density is `p/(1+p)` rather than
+    /// `p`, systematically undercounting every estimate. See the
+    /// identical fix and derivation on `Nitro::draw_geometric` in
+    /// `common/structure_utils.rs`.
     pub fn draw_geometric(&mut self) {
         if self.is_full_sampling() {
             self.to_skip = 0;
@@ -197,7 +209,7 @@ impl<S: NitroTarget> NitroBatch<S> {
                 break r;
             }
         };
-        self.to_skip = ((1.0 - k).ln() * self.inv_ln_one_minus_p).ceil() as usize;
+        self.to_skip = ((1.0 - k).ln() * self.inv_ln_one_minus_p).ceil() as usize - 1;
         self.idx = (self.idx + 1) & self.mask;
     }
 

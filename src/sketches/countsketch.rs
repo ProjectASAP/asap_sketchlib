@@ -10,7 +10,7 @@
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded,
+    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, compute_median_inline_f64, hash64_seeded,
 };
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
@@ -472,18 +472,39 @@ impl<M, H: SketchHasher> Count<Vector2D<i32>, M, H> {
     }
 }
 
-// Nitro sampling helpers for fast-path Count.
+// Nitro sampling helpers for fast-path Count (Vector2D<i32> storage).
 impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
     /// Enables Nitro sampling with the provided rate.
     pub fn enable_nitro(&mut self, sampling_rate: f64) {
         self.counts.enable_nitro(sampling_rate);
     }
 
-    /// Inserts an observation using Nitro geometric-sampling acceleration.
+    /// Enables Nitro sampling with a reproducible RNG seed -- see
+    /// `Nitro::init_nitro_seeded`'s doc comment.
+    pub fn enable_nitro_seeded(&mut self, sampling_rate: f64, seed: u64) {
+        self.counts.enable_nitro_seeded(sampling_rate, seed);
+    }
+
+    /// Disables Nitro sampling and resets its internal state.
+    pub fn disable_nitro(&mut self) {
+        self.counts.disable_nitro();
+    }
+
+    /// Inserts one occurrence of `value` using Nitro geometric-sampling
+    /// acceleration.
     #[inline(always)]
     pub fn fast_insert_nitro(&mut self, value: &DataInput) {
+        self.fast_insert_nitro_many(value, 1);
+    }
+
+    /// Inserts `many` occurrences of `value` at once, compensating the
+    /// touched row(s) by `many / sampling_rate` instead of the fixed
+    /// per-occurrence `nitro().delta` -- see `CountMin::fast_insert_nitro_many`'s
+    /// doc comment for the full rationale (same reasoning applies here).
+    #[inline(always)]
+    pub fn fast_insert_nitro_many(&mut self, value: &DataInput, many: i32) {
         let rows = self.counts.rows();
-        let delta = self.counts.nitro().delta;
+        let delta = self.counts.nitro().scaled_increment(many as u64) as i32;
         if self.counts.nitro().to_skip >= rows {
             self.counts.reduce_nitro_skip(rows);
         } else {
@@ -493,7 +514,7 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
                 let bit = (hashed >> (127 - r)) & 1;
                 let sign = (bit << 1) as i32 - 1;
                 self.counts
-                    .update_by_row(r, hashed, |a, b| *a += b, sign * (delta as i32));
+                    .update_by_row(r, hashed, |a, b| *a += b, sign * delta);
                 self.counts.nitro_mut().draw_geometric();
                 if r + self.counts.nitro_mut().to_skip + 1 >= rows {
                     break;
@@ -503,6 +524,97 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
             let temp = self.counts.get_nitro_skip();
             self.counts.update_nitro_skip((r + temp + 1) - rows);
         }
+    }
+
+    /// Returns the median estimate for `value`, hashed and sign-extracted
+    /// the same way `fast_insert_nitro`/`fast_insert_nitro_many` do at
+    /// insert time (`H::hash128_seeded(0, value)`, `Vector2D::query_by_row`
+    /// for the column, `(hashed >> (127 - row)) & 1` for the sign) --
+    /// *not* `hash_for_matrix`, which for some `(rows, cols)` picks a
+    /// `Packed64` layout hashed with a different algorithm entirely (see
+    /// `Vector2D::query_by_row`'s doc comment / `CountMin::nitro_estimate`).
+    pub fn nitro_estimate(&self, value: &DataInput) -> f64 {
+        let hashed = H::hash128_seeded(0, value);
+        let rows = self.counts.rows();
+        let mut vals: Vec<f64> = (0..rows)
+            .map(|r| {
+                let bit = (hashed >> (127 - r)) & 1;
+                let sign = (bit << 1) as i64 - 1;
+                (sign * (*self.counts.query_by_row(r, hashed) as i64)) as f64
+            })
+            .collect();
+        compute_median_inline_f64(&mut vals)
+    }
+}
+
+// Nitro sampling helpers for fast-path Count (Vector2D<i64> storage) --
+// mirrors the `Vector2D<i32>` impl above verbatim; see
+// `CountMin<Vector2D<i64>, FastPath, H>`'s equivalent block for why this
+// exists as a separate, non-generic mirror.
+impl<H: SketchHasher> Count<Vector2D<i64>, FastPath, H> {
+    /// Enables Nitro sampling with the provided rate.
+    pub fn enable_nitro(&mut self, sampling_rate: f64) {
+        self.counts.enable_nitro(sampling_rate);
+    }
+
+    /// Enables Nitro sampling with a reproducible RNG seed -- see
+    /// `Nitro::init_nitro_seeded`'s doc comment.
+    pub fn enable_nitro_seeded(&mut self, sampling_rate: f64, seed: u64) {
+        self.counts.enable_nitro_seeded(sampling_rate, seed);
+    }
+
+    /// Disables Nitro sampling and resets its internal state.
+    pub fn disable_nitro(&mut self) {
+        self.counts.disable_nitro();
+    }
+
+    /// Inserts one occurrence of `value` using Nitro geometric-sampling
+    /// acceleration.
+    #[inline(always)]
+    pub fn fast_insert_nitro(&mut self, value: &DataInput) {
+        self.fast_insert_nitro_many(value, 1);
+    }
+
+    /// Inserts `many` occurrences of `value` at once -- see the
+    /// `Vector2D<i32>` overload's doc comment for the full rationale.
+    #[inline(always)]
+    pub fn fast_insert_nitro_many(&mut self, value: &DataInput, many: i64) {
+        let rows = self.counts.rows();
+        let delta = self.counts.nitro().scaled_increment(many as u64) as i64;
+        if self.counts.nitro().to_skip >= rows {
+            self.counts.reduce_nitro_skip(rows);
+        } else {
+            let hashed = H::hash128_seeded(0, value);
+            let mut r = self.counts.nitro().to_skip;
+            loop {
+                let bit = (hashed >> (127 - r)) & 1;
+                let sign = (bit << 1) as i64 - 1;
+                self.counts
+                    .update_by_row(r, hashed, |a, b| *a += b, sign * delta);
+                self.counts.nitro_mut().draw_geometric();
+                if r + self.counts.nitro_mut().to_skip + 1 >= rows {
+                    break;
+                }
+                r += self.counts.nitro_mut().to_skip + 1;
+            }
+            let temp = self.counts.get_nitro_skip();
+            self.counts.update_nitro_skip((r + temp + 1) - rows);
+        }
+    }
+
+    /// Returns the median estimate for `value` -- see the `Vector2D<i32>`
+    /// overload's doc comment for why this doesn't use `hash_for_matrix`.
+    pub fn nitro_estimate(&self, value: &DataInput) -> f64 {
+        let hashed = H::hash128_seeded(0, value);
+        let rows = self.counts.rows();
+        let mut vals: Vec<f64> = (0..rows)
+            .map(|r| {
+                let bit = (hashed >> (127 - r)) & 1;
+                let sign = (bit << 1) as i64 - 1;
+                (sign * (*self.counts.query_by_row(r, hashed))) as f64
+            })
+            .collect();
+        compute_median_inline_f64(&mut vals)
     }
 }
 
