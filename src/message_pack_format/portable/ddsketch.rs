@@ -352,17 +352,51 @@ impl DdSketch {
     /// `DDSketchState` proto bytes would diverge from the Go producer's
     /// payload (cross-language byte parity).
     pub fn update(&mut self, value: f64) {
-        if value <= 0.0 {
-            // DDSketch is defined for positive reals; non-positive
-            // values are rejected silently (matching the Go reference).
+        if !(value.is_finite() && value > 0.0) {
+            // DDSketch is defined for positive reals; non-positive and
+            // non-finite values are rejected silently (matching the Go
+            // reference and the core DDSketch). NaN in particular would
+            // otherwise floor-cast to bucket 0 and corrupt it.
             return;
         }
         let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
         let ln_gamma = gamma.ln();
+        let inv_log_gamma = 1.0 / ln_gamma;
+        // Reject finite-but-extreme values whose bucket index would be
+        // unrepresentable or force an arbitrarily distant allocation
+        // (asap_sketchlib#70 item 4; mirrors core DDSketch's
+        // min/max_indexable_value guards).
+        if value < Self::min_indexable_value(inv_log_gamma, gamma)
+            || value > Self::max_indexable_value(inv_log_gamma, gamma)
+        {
+            return;
+        }
         let idx = (value.ln() / ln_gamma).floor() as i32;
         self.ensure_bucket(idx);
         let arr_idx = (idx as i64 - self.store_offset as i64) as usize;
         self.store_counts[arr_idx] = self.store_counts[arr_idx].saturating_add(1);
+    }
+
+    /// Smallest positive value whose bucket index is representable without
+    /// integer overflow (index ≥ i32::MIN) or float underflow. Identical
+    /// formula to core DDSketch's `min_indexable_value`.
+    #[inline]
+    fn min_indexable_value(inv_log_gamma: f64, gamma: f64) -> f64 {
+        ((f64::from(i32::MIN)) * inv_log_gamma + 1.0)
+            .exp()
+            .max(f64::MIN_POSITIVE * gamma)
+    }
+
+    /// Largest finite positive value whose bucket index is representable
+    /// without integer overflow (index ≤ i32::MAX) or `exp`/`powf` overflow.
+    /// Identical formula to core DDSketch's `max_indexable_value`.
+    #[inline]
+    fn max_indexable_value(inv_log_gamma: f64, gamma: f64) -> f64 {
+        // 709.0 is just under ln(f64::MAX) so exp() stays finite.
+        const EXP_OVERFLOW: f64 = 709.0;
+        ((f64::from(i32::MAX)) * inv_log_gamma - 1.0)
+            .exp()
+            .min(EXP_OVERFLOW.exp() / (2.0 * gamma) * (gamma + 1.0))
     }
 
     /// Ensure bucket `k` is addressable in `store_counts`, growing in

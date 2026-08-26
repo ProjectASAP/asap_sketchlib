@@ -327,6 +327,76 @@ fn tumbling_kll_window_queries() {
     );
 }
 
+#[test]
+fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
+    let alpha = 0.01;
+    let mut core = DDSketch::new(alpha);
+    let mut port = PortableDds::new(alpha);
+
+    // Non-finite / non-positive / beyond-indexable-range values must be
+    // dropped by BOTH implementations: silently, without corrupting bucket 0
+    // (NaN floor-casts to 0) and without forcing a distant-bucket allocation
+    // (1e308 maps to an index near i32::MAX; the portable dense store would
+    // previously have attempted a multi-gigabyte grow). #70 items 3/4.
+    for v in [
+        f64::NAN,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        -5.0,
+        0.0,
+        f64::MIN_POSITIVE, // below min-indexable
+        5e-324,            // smallest subnormal
+        f64::MAX,          // above max-indexable
+        1e308,
+    ] {
+        core.add(&v);
+        port.update(v);
+    }
+    assert_eq!(core.get_count(), 0, "core must drop untrackable extremes");
+    assert_eq!(
+        port.total_count(),
+        0,
+        "portable must drop untrackable extremes"
+    );
+    assert!(
+        port.store_counts.len() < 10_000,
+        "portable store grew to {} buckets from untrackable input",
+        port.store_counts.len()
+    );
+    assert_eq!(port.quantile(0.5), None, "nothing trackable was added");
+
+    // Normal samples still work after the rejected inputs.
+    let good = [1.0f64, 2.0, 4.0, 8.0, 16.0];
+    for v in good {
+        core.add(&v);
+        port.update(v);
+    }
+    assert_eq!(core.get_count(), 5);
+    assert_eq!(port.total_count(), 5);
+    assert_between(
+        port.store_counts.len() as f64,
+        1.0,
+        2.0 * 256.0, // initial GROW_CHUNK seed + at most one more
+        "store stays compact",
+    );
+
+    // Item 2 contract: mismatched mappings are a runtime error in BOTH types,
+    // not a debug-only assertion.
+    let other_alpha = 0.05;
+    let mut core_other = DDSketch::new(other_alpha);
+    core_other.add(&1.0);
+    assert!(
+        core.merge(&core_other).is_err(),
+        "core merge must reject alpha mismatch"
+    );
+    let mut port_other = PortableDds::new(other_alpha);
+    port_other.update(1.0);
+    assert!(
+        port.merge(&port_other).is_err(),
+        "portable merge must reject alpha mismatch"
+    );
+}
+
 // --------------------------------------------- Portable HydraKll per-key
 
 #[test]

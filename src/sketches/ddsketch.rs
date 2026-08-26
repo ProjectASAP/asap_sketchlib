@@ -102,9 +102,7 @@ impl Buckets {
             let idx = idx_i32 as usize;
             let slice = self.counts.as_mut_slice();
             if idx < slice.len() {
-                unsafe {
-                    *slice.as_mut_ptr().add(idx) += 1;
-                }
+                slice[idx] += 1;
                 return;
             }
         }

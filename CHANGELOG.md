@@ -23,6 +23,14 @@ signals a backwards-compatible change.
   Quantile representatives changed from the log-midpoint γ^(k+0.5), whose edge
   error √γ−1 exceeds α, to γ^k·(1+α) — matching core `DDSketch` and DataDog's
   mapping. No wire/state migration; query outputs shift by at most α.
+- **Portable `DdSketch` now rejects untrackable inputs like core.** Non-finite
+  values (a NaN previously floor-cast into bucket 0) and finite-but-extreme
+  values beyond the indexable range (which mapped near i32::MAX and forced an
+  arbitrarily large dense-store allocation) are dropped silently, mirroring
+  core `DDSketch`'s min/max-indexable guards and DataDog's mapping (#70).
+- Removed the raw-pointer write from `DDSketch`'s per-sample insertion path;
+  bucket increments now go through safe indexing with the same bounds check
+  they already performed (#70 item 6).
 - **CountL2HH hot-path L2 accumulation saturates instead of wrapping.**
   Per-row Σcount² updates run through a saturating i128 intermediate, so
   extreme turnstile counts no longer wrap silently in release builds (or
