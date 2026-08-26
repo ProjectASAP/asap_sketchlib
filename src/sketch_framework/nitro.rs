@@ -11,8 +11,8 @@ use rand::{Rng, SeedableRng, rng};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Count, CountMin, DataInput, FastPath, PRECOMPUTED_SAMPLE_RATE_1PERCENT, Vector2D,
-    hash128_seeded,
+    Count, CountMin, DataInput, DefaultXxHasher, FastPath, FastPathHasher, MatrixFastHash,
+    PRECOMPUTED_SAMPLE_RATE_1PERCENT, Vector2D,
 };
 
 /// Trait for sketch backends that support Nitro row updates.
@@ -21,6 +21,14 @@ pub trait NitroTarget {
     fn rows(&self) -> usize;
     /// Applies a sampled update to one row.
     fn update_row(&mut self, row: usize, hashed: u128, delta: u64);
+    /// Applies a sampled record to EVERY row using the target's own fast-path
+    /// hash derivation. Insert and estimation must share a single hash domain,
+    /// otherwise estimates read cells the inserts never wrote.
+    ///
+    /// Updating all rows is what makes estimates unbiased: each sampled item
+    /// contributes weight ×(1/rate) to every row, so per-row counters converge
+    /// to the true frequency (NitroSketch §4, estimator = min/median ÷ rate).
+    fn update_sample(&mut self, value: &DataInput, delta: u64);
 }
 
 /// Trait for Nitro targets that can be merged.
@@ -44,6 +52,16 @@ impl NitroTarget for Vector2D<u32> {
     #[inline(always)]
     fn update_row(&mut self, row: usize, hashed: u128, delta: u64) {
         self.update_by_row(row, hashed, |a, b| *a += b as u32, delta);
+    }
+
+    #[inline(always)]
+    fn update_sample(&mut self, value: &DataInput, delta: u64) {
+        let hashed = <Self as FastPathHasher<DefaultXxHasher>>::hash_for_matrix(self, value);
+        let cols = self.cols();
+        for row in 0..self.rows() {
+            let col = MatrixFastHash::col_for_row(&hashed, row, cols);
+            self.update_one_counter(row, col, |a: &mut u32, b: u64| *a += b as u32, delta);
+        }
     }
 }
 
@@ -197,7 +215,11 @@ impl<S: NitroTarget> NitroBatch<S> {
                 break r;
             }
         };
-        self.to_skip = ((1.0 - k).ln() * self.inv_ln_one_minus_p).ceil() as usize;
+        // Inverse-CDF draw of Geometric(p) on {0, 1, ...}: floor of an
+        // Exp(1) variate. ceil() here would add +1 to every skip distance,
+        // halving-ish the effective sampling rate (E[skip] = (1-p)/p only
+        // under floor); the caller's `+1` supplies the sampled item itself.
+        self.to_skip = ((1.0 - k).ln() * self.inv_ln_one_minus_p).floor() as usize;
         self.idx = (self.idx + 1) & self.mask;
     }
 
@@ -251,13 +273,11 @@ impl<S: NitroTarget> NitroBatch<S> {
 
     /// Inserts a batch of values using geometric skipping.
     pub fn insert(&mut self, data: &[i64]) {
-        let rows = self.sk.rows();
         self.draw_geometric();
         let mut position = self.to_skip;
         while position < data.len() {
-            let row_to_update = position % rows;
-            let hashed = hash128_seeded(0, &DataInput::I64(data[position]));
-            self.sk.update_row(row_to_update, hashed, self.delta);
+            let key = DataInput::I64(data[position]);
+            self.sk.update_sample(&key, self.delta);
             self.draw_geometric();
             position += self.to_skip + 1;
         }
@@ -265,15 +285,13 @@ impl<S: NitroTarget> NitroBatch<S> {
 
     /// Inserts a batch using the precomputed skip table.
     pub fn insert_cached_step(&mut self, data: &[i64]) {
-        let rows = self.sk.rows();
-        self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].ceil() as usize;
+        self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].floor() as usize;
         self.idx = (self.idx + 1) & self.mask;
         let mut position = self.to_skip;
         while position < data.len() {
-            let row_to_update = position % rows;
-            let hashed = hash128_seeded(0, &DataInput::I64(data[position]));
-            self.sk.update_row(row_to_update, hashed, self.delta);
-            self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].ceil() as usize;
+            let key = DataInput::I64(data[position]);
+            self.sk.update_sample(&key, self.delta);
+            self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].floor() as usize;
             self.idx = (self.idx + 1) & self.mask;
             position += self.to_skip + 1;
         }
@@ -301,41 +319,9 @@ impl<S: NitroTarget + NitroEstimate> NitroBatch<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DataInput;
     use crate::test_utils::sample_zipf_u64;
-    use crate::{DataInput, compute_median_inline_f64};
     use std::collections::HashMap;
-
-    fn nitro_countmin_estimate(storage: &Vector2D<i32>, key: &DataInput) -> f64 {
-        let rows = storage.rows();
-        let mask_bits = storage.get_mask_bits() as usize;
-        let mask = (1u128 << mask_bits) - 1;
-        let hashed = hash128_seeded(0, key);
-        let mut min = i32::MAX;
-        for row in 0..rows {
-            let col = ((hashed >> (mask_bits * row)) & mask) as usize;
-            let val = storage.query_one_counter(row, col);
-            if val < min {
-                min = val;
-            }
-        }
-        min as f64
-    }
-
-    fn nitro_count_estimate(storage: &Vector2D<i32>, key: &DataInput) -> f64 {
-        let rows = storage.rows();
-        let mask_bits = storage.get_mask_bits() as usize;
-        let mask = (1u128 << mask_bits) - 1;
-        let hashed = hash128_seeded(0, key);
-        let mut estimates = Vec::with_capacity(rows);
-        for row in 0..rows {
-            let col = ((hashed >> (mask_bits * row)) & mask) as usize;
-            let val = storage.query_one_counter(row, col) as f64;
-            let bit = (hashed >> (127 - row)) & 1;
-            let sign = (bit as i32 * 2 - 1) as f64;
-            estimates.push(sign * val);
-        }
-        compute_median_inline_f64(&mut estimates)
-    }
 
     #[test]
     fn nitro_batch_countmin_error_bound_zipf() {
@@ -364,10 +350,9 @@ mod tests {
         let delta = 1.0 / std::f64::consts::E.powi(rows as i32);
         let error_bound = epsilon * samples as f64;
         let correct_lower_bound = truth.len() as f64 * (1.0 - delta);
-        let storage = batch.target().as_storage();
         let mut within_count = 0;
         for key in truth.keys() {
-            let est = nitro_countmin_estimate(storage, &DataInput::I64(*key));
+            let est = batch.estimate_median(&DataInput::I64(*key));
             if (est - (*truth.get(key).unwrap() as f64)).abs() < error_bound {
                 within_count += 1;
             }
@@ -405,10 +390,9 @@ mod tests {
         let delta = 1.0 / std::f64::consts::E.powi(rows as i32);
         let error_bound = epsilon * samples as f64;
         let correct_lower_bound = truth.len() as f64 * (1.0 - delta);
-        let storage = batch.target().as_storage();
         let mut within_count = 0;
         for key in truth.keys() {
-            let est = nitro_count_estimate(storage, &DataInput::I64(*key));
+            let est = batch.estimate_median(&DataInput::I64(*key));
             if (est - (*truth.get(key).unwrap() as f64)).abs() < error_bound {
                 within_count += 1;
             }

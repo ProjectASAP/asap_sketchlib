@@ -532,6 +532,19 @@ impl<H: SketchHasher> NitroTarget for CountMin<Vector2D<i32>, FastPath, H> {
         self.counts
             .update_by_row(row, hashed, |a, b| *a += b, delta as i32);
     }
+
+    #[inline(always)]
+    fn update_sample(&mut self, value: &DataInput, delta: u64) {
+        // Hash with the SAME derivation the estimator uses so both share one
+        // hash domain (raw hash128_seeded bit-slicing diverges in Packed64 mode).
+        let hashed = <Vector2D<i32> as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
+        let cols = self.counts.cols();
+        for row in 0..self.counts.rows() {
+            let col = <H::HashType as MatrixFastHash>::col_for_row(&hashed, row, cols);
+            self.counts
+                .update_one_counter(row, col, |a, b| *a += b, delta as i32);
+        }
+    }
 }
 
 #[cfg(test)]
