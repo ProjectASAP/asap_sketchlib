@@ -58,11 +58,18 @@ fn main() {
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(0),
-        match core_affinity::get_core_ids().and_then(|ids| ids.into_iter().next()) {
-            Some(id) if core_affinity::set_for_current(id) => "available",
-            Some(_) => "REJECTED by this platform (measurements are unpinned)",
-            None => "no core ids reported",
-        }
+        // Probe from a throwaway thread: `set_for_current` pins whoever calls
+        // it, and pinning the thread about to run the measurements would be a
+        // side effect of reporting.
+        std::thread::spawn(|| {
+            match core_affinity::get_core_ids().and_then(|ids| ids.into_iter().next()) {
+                Some(id) if core_affinity::set_for_current(id) => "available",
+                Some(_) => "REJECTED by this platform (measurements are unpinned)",
+                None => "no core ids reported",
+            }
+        })
+        .join()
+        .unwrap_or("could not probe")
     );
     println!(
         "profile: {}",

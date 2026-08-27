@@ -229,8 +229,9 @@ deep layers outright — and those are exactly the layers the recursive
 estimator leans on for cardinality. `univmon_layer_threshold(base, layer)`
 halves τ per layer with a floor of 1; measured on a 60k Zipf stream with
 12 layers, a flat τ=31 emptied layers 10 and 11 and collapsed the
-cardinality estimate from 3387 to 187, while the scaled rule tracks the
-single-core answer to 0.6%.
+cardinality estimate from 3387 to 187, while the scaled rule reproduced
+the single-core estimate of 3387. Measured by
+`a_flat_threshold_starves_the_deep_univmon_layers`.
 
 Three pieces of state a delta stream would otherwise lose are handled
 explicitly:
@@ -302,7 +303,7 @@ skewed key distribution, at the cost of `k' = k`.
 
 Note that either way a *counter* is shared by whatever flows hash into
 it, and each worker may hold back up to τ of its own share, so the
-provable per-counter gap to a single-threaded sketch is `k·τ`. `k'τ`
+provable per-counter gap to a single-threaded sketch is `workers · (τ - 1)`. `k'τ`
 bounds only the queried flow's own held-back count.
 
 ### OctoAdaptiveThreshold
@@ -365,8 +366,14 @@ Each takes the same dimensions its worker did, plus an optional shared
 
 ```rust
 let plan = CmOctoPlan::new(4, 4096);
-let result = run_octo(&inputs, &config, plan, || CmOctoAggregator::new(4, 4096));
+let result = run_octo(&inputs, &config, plan.clone(), || plan.aggregator());
 ```
+
+Build the parent from the plan. Worker and parent geometry are two
+independent arguments and a mismatch is silent: every delta names a row
+the parent has, the rows past the worker's stay zero, and Count-Min's
+min-over-rows estimate is zero for every key. Every plan has an
+`aggregator()`.
 
 ### OctoRuntime (Streaming)
 
@@ -383,7 +390,8 @@ fn finish(self) -> OctoResult<P>
 ### Flushing before a query
 
 Between promotions a worker holds every counter still under τ. For
-Count-Min and Count that only leaves the parent low by under τ per cell.
+Count-Min and Count that only leaves the parent low - by up to
+`workers · (τ - 1)` per cell, since each worker holds its own residue.
 For DDSketch, or a HyperLogLog running a positive threshold, an
 un-promoted cell is *absent* from the parent rather than lagging — and a
 quantile or a cardinality is exactly a statement about which cells
@@ -397,13 +405,20 @@ a flushed Count-Min parent equals a single-threaded pass cell for cell.
 
 It costs one message per non-empty cell, which is as much as shipping the
 sketch, so call it when a query needs to be right rather than on a timer.
-Inserting afterwards is fine; a flush does not seal the runtime.
+Inserting afterwards is fine; a flush does not seal the runtime. After
+`close` it returns immediately without draining — `close` has already
+asked every worker to flush, but nothing waits for that to land, so read
+the result through `finish` rather than a live handle.
 
 `OctoWorker::flush` defaults to doing nothing. The `*TopK*` and UnivMon
 workers keep that default on purpose: every delta they send carries the
 key that produced it, and a worker keeps no key storage, so a residual
 cell cannot be attributed back to a key. Their parents stay low by under
-τ per cell, and their heavy-hitter heaps do not depend on the residue.
+`workers · (τ - 1)` per cell, and - the sharper consequence - a key that
+has never promoted is absent from the heap entirely rather than merely
+undercounted. A key promotes the first time an increment it caused takes
+some row to τ on its worker, which is its τ-th occurrence only while its
+cells are collision-free; collisions move it either way.
 
 At the low level, `CmWorkerSketch`, `CountWorkerSketch`, `DdWorkerSketch`
 and `L2hhWorkerSketch` each expose `flush` directly.
@@ -459,16 +474,15 @@ let result = run_octo(&inputs, &config, plan, || CmOctoAggregator::new(4, 4096))
   `held_back()`; measured on a skewed 200k stream, τ=2 costs 7x the
   ideal quantile error, τ=4 costs 19x and τ=8 costs 41x, while periodic
   sketch-merge stays at ideal for 3x the traffic.
-- Core pinning is a silent no-op on Apple Silicon: macOS exposes
-  `thread_policy_set(THREAD_AFFINITY_POLICY)` but arm64 rejects it, and
-  `core_affinity::get_core_ids` reports a count without testing whether
-  pinning works. `pin_cores: true` costs nothing there but buys nothing
-  either.
+- Core pinning silently falls back when the platform has fewer cores than
+  `num_workers + 1`, and is a no-op outright on Apple Silicon: macOS
+  exposes `thread_policy_set(THREAD_AFFINITY_POLICY)` but arm64 rejects
+  it, while `core_affinity::get_core_ids` reports a count without testing
+  whether pinning works. The throughput probe prints which case you are
+  in.
 - The runtime's `insert` dispatches from the calling thread, so that
   thread is a serialization point. The paper instead has each worker pull
   from its own NIC queue.
-- Core pinning silently falls back if the platform has fewer cores than
-  `num_workers + 1`, and is unavailable outright on Apple Silicon.
 - `insert` after `close` panics.
 - A UnivMon layer that thresholds cannot call its candidate set complete,
   so `candidates_complete()` reads false on exactly those layers. Queries

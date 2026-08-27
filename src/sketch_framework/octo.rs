@@ -993,6 +993,11 @@ where
     /// so call it when a query needs to be right rather than on a timer.
     ///
     /// Inserting afterwards is fine; the runtime is not sealed.
+    ///
+    /// After `close` this returns immediately without draining anything.
+    /// `close` has already asked every worker to flush, but nothing here waits
+    /// for that to land, so read the result through `finish` rather than
+    /// through a live handle.
     pub fn flush(&mut self) {
         let core = self.core.as_ref().expect("runtime core missing");
         if core.closed.load(Ordering::Acquire) {
@@ -1197,12 +1202,17 @@ impl OctoWorker for CmTopKOctoWorker {
     // cannot be attributed back to a key and has to stay where it is.
     //
     // The consequence is not just a low counter. The aggregator only ever
-    // learns a key exists from a delta, so under HashByKey a key is invisible
-    // to it until that key occurs tau times on its worker. Below that the
-    // heap does not contain it at all, and its estimate is zero - see
-    // `a_key_below_the_threshold_never_reaches_the_topk_aggregator`. Size tau
-    // well under the frequency you care about, or use the unkeyed pair and
-    // track keys yourself.
+    // learns a key exists from a delta, so a key that has never promoted is
+    // absent from the heap entirely and estimates zero.
+    //
+    // A key promotes the first time an increment *it* caused takes some row's
+    // counter to tau on its worker. Under HashByKey and collision-free cells
+    // that is exactly its tau-th occurrence, but collisions move it either
+    // way: another key sharing the cell can carry it over early, or can cross
+    // first and clear the cell, discarding the partial count - so a key with
+    // far more than tau occurrences can still be missing. Size tau well under
+    // the frequency you care about, or use the unkeyed pair and track keys
+    // yourself. See `a_key_below_the_threshold_never_reaches_the_topk_aggregator`.
 }
 
 /// Count-Min parent that also maintains the only heavy-hitter heap in the
@@ -1950,6 +1960,66 @@ macro_rules! counter_plan {
     };
 }
 
+impl CmOctoPlan {
+    /// Builds the parent this plan's workers feed.
+    ///
+    /// Worker and parent geometry are two independent arguments to `run_octo`,
+    /// and a mismatch is silent: deltas name rows the parent has, the rows
+    /// beyond them stay zero, and Count-Min's min-over-rows estimate is zero
+    /// for every key. Building the parent from the plan removes the chance.
+    pub fn aggregator(&self) -> CmOctoAggregator {
+        CmOctoAggregator::new(self.rows, self.cols)
+    }
+}
+
+impl CountOctoPlan {
+    /// Builds the parent this plan's workers feed. See `CmOctoPlan::aggregator`.
+    pub fn aggregator(&self) -> CountOctoAggregator {
+        CountOctoAggregator::new(self.rows, self.cols)
+    }
+}
+
+impl CmTopKOctoPlan {
+    /// Builds the parent this plan's workers feed, tracking `top_k` keys.
+    pub fn aggregator(&self, top_k: usize) -> CmTopKOctoAggregator {
+        CmTopKOctoAggregator::new(self.rows, self.cols, top_k)
+    }
+}
+
+impl CountTopKOctoPlan {
+    /// Builds the parent this plan's workers feed, tracking `top_k` keys.
+    pub fn aggregator(&self, top_k: usize) -> CountTopKOctoAggregator {
+        CountTopKOctoAggregator::new(self.rows, self.cols, top_k)
+    }
+}
+
+impl DdOctoPlan {
+    /// Builds the parent this plan's workers feed, over the same bucket space.
+    pub fn aggregator(&self) -> DdOctoAggregator {
+        DdOctoAggregator::new(self.alpha)
+    }
+}
+
+impl HllOctoPlan {
+    /// Builds the parent this plan's workers feed.
+    pub fn aggregator(&self) -> HllOctoAggregator {
+        HllOctoAggregator::new()
+    }
+}
+
+impl UnivMonOctoPlan {
+    /// Builds the parent this plan's workers feed, sharing their threshold.
+    pub fn aggregator(&self, heap_size: usize) -> UnivMonOctoAggregator {
+        UnivMonOctoAggregator::with_threshold(
+            heap_size,
+            self.rows,
+            self.cols,
+            self.layers,
+            self.threshold.clone(),
+        )
+    }
+}
+
 counter_plan!(CmOctoPlan, CmOctoWorker, CM_PROMASK);
 counter_plan!(CountOctoPlan, CountOctoWorker, COUNT_PROMASK);
 counter_plan!(CmTopKOctoPlan, CmTopKOctoWorker, CM_PROMASK);
@@ -2462,6 +2532,14 @@ mod worker_tests {
 
     #[test]
     #[should_panic(expected = "one hash per row")]
+    fn a_count_worker_refuses_hashes_built_for_a_different_geometry() {
+        let mut worker = CountWorkerSketch::new(4, 16);
+        let hashes = CmWorkerSketch::hashes(2, &DataInput::U64(1));
+        worker.insert_hashes_emit_delta(&hashes, COUNT_PROMASK, &mut |_| {});
+    }
+
+    #[test]
+    #[should_panic(expected = "one hash per row")]
     fn a_worker_refuses_hashes_built_for_a_different_geometry() {
         // The hashes are a public entry point, so a plan/worker mismatch has to
         // fail loudly. Silently using the rows it was given would leave the rest
@@ -2906,25 +2984,70 @@ mod runtime_tests {
     }
 
     #[test]
+    fn a_parent_wider_than_its_workers_estimates_zero() {
+        // Worker and parent geometry are separate arguments and a mismatch is
+        // silent: every delta names a row the parent has, the rows past the
+        // worker's never receive one, and min-over-rows is zero for every key.
+        // `CmOctoPlan::aggregator` is the way not to hit this; this pins the
+        // hazard so a future check has to update the test rather than pass
+        // quietly.
+        let inputs: Vec<DataInput<'_>> = (0..40_000u64).map(|i| DataInput::U64(i % 64)).collect();
+        let plan = CmOctoPlan::new(3, 1024);
+
+        let mismatched = run_octo(&inputs, &config(4), plan.clone(), || {
+            CmOctoAggregator::new(5, 1024)
+        });
+        assert_eq!(
+            mismatched.parent.sketch.estimate(&DataInput::U64(0)),
+            0,
+            "a wider parent has rows no worker ever writes"
+        );
+
+        let matched = run_octo(&inputs, &config(4), plan.clone(), || plan.aggregator());
+        assert!(
+            matched.parent.sketch.estimate(&DataInput::U64(0)) >= 600,
+            "building the parent from the plan keeps the geometries together"
+        );
+    }
+
+    #[test]
     fn a_key_below_the_threshold_never_reaches_the_topk_aggregator() {
         // The keyed workers keep no key storage and so cannot flush, and the
-        // aggregator only learns a key exists from a delta. Under HashByKey a
-        // key lands on one worker, so it becomes visible exactly when it occurs
-        // tau times. This is the boundary, in both directions.
+        // aggregator only learns a key exists from a delta. A key promotes the
+        // first time an increment it caused takes some row to tau on its
+        // worker - which is exactly its tau-th occurrence only while its cells
+        // are collision-free, so the geometry is checked here rather than
+        // assumed.
         let (rows, cols, top_k) = (3usize, 1024usize, 32usize);
         let tau = CM_PROMASK;
+        let keys: Vec<u64> = (0..20).collect();
+
+        let mut occupied: std::collections::HashSet<(usize, usize, usize)> =
+            std::collections::HashSet::new();
+        for key in &keys {
+            let input = DataInput::U64(*key);
+            let worker = (hash64_seeded(0, &input) % 4) as usize;
+            for (row, hashed) in CmWorkerSketch::hashes(rows, &input).iter().enumerate() {
+                let col = ((hashed & LOWER_32_MASK) as usize) % cols;
+                assert!(
+                    occupied.insert((worker, row, col)),
+                    "key {key} shares a cell with another; the tau-th-occurrence \
+                     boundary only holds for collision-free cells"
+                );
+            }
+        }
+
         let run = |occurrences: u32| {
             let mut inputs: Vec<DataInput<'_>> = Vec::new();
-            for key in 0..20u64 {
+            for key in &keys {
                 for _ in 0..occurrences {
-                    inputs.push(DataInput::U64(key));
+                    inputs.push(DataInput::U64(*key));
                 }
             }
-            run_octo(&inputs, &config(4), CmTopKOctoPlan::new(rows, cols), || {
-                CmTopKOctoAggregator::new(rows, cols, top_k)
-            })
-            .parent
-            .sketch
+            let plan = CmTopKOctoPlan::new(rows, cols);
+            run_octo(&inputs, &config(4), plan.clone(), || plan.aggregator(top_k))
+                .parent
+                .sketch
         };
 
         let below = run(tau - 1);
@@ -2942,10 +3065,75 @@ mod runtime_tests {
         let at = run(tau);
         assert_eq!(
             at.heap().len(),
-            20,
+            keys.len(),
             "one more occurrence per key makes every one of them a candidate"
         );
         assert!(at.estimate(&DataInput::U64(0)) >= tau as i32);
+    }
+
+    #[test]
+    fn zz_probe_starvation() {
+        // Interleaved order, tight columns: can a key need MORE than tau?
+        let tau = CM_PROMASK;
+        for &(rows, cols, nkeys) in &[(3usize, 16usize, 20u64), (3, 8, 20), (1, 32, 20), (3, 4, 8)]
+        {
+            for off in [0u64, 1000, 7777] {
+                let mut inputs: Vec<DataInput<'_>> = Vec::new();
+                for _ in 0..tau {
+                    for key in off..off + nkeys {
+                        inputs.push(DataInput::U64(key));
+                    }
+                }
+                let sk = run_octo(&inputs, &config(1), CmTopKOctoPlan::new(rows, cols), || {
+                    CmTopKOctoAggregator::new(rows, cols, 1024)
+                })
+                .parent
+                .sketch;
+                println!(
+                    "interleaved rows={rows} cols={cols} keys={nkeys} off={off}: heap={} (want {nkeys})",
+                    sk.heap().len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn zz_probe_collision_fragility() {
+        let tau = CM_PROMASK;
+        for &(rows, cols, nkeys, workers) in &[
+            (3usize, 1024usize, 20u64, 4usize),
+            (3, 1024, 20, 1),
+            (3, 256, 20, 4),
+            (3, 128, 20, 4),
+            (3, 64, 20, 4),
+            (3, 1024, 60, 4),
+            (3, 1024, 100, 4),
+            (3, 1024, 200, 4),
+        ] {
+            let run = |occ: u32, off: u64| {
+                let mut inputs: Vec<DataInput<'_>> = Vec::new();
+                for key in off..off + nkeys {
+                    for _ in 0..occ {
+                        inputs.push(DataInput::U64(key));
+                    }
+                }
+                run_octo(
+                    &inputs,
+                    &config(workers),
+                    CmTopKOctoPlan::new(rows, cols),
+                    || CmTopKOctoAggregator::new(rows, cols, 1024),
+                )
+                .parent
+                .sketch
+            };
+            for off in [0u64, 1000, 7777, 123456] {
+                let b = run(tau - 1, off).heap().len();
+                let a = run(tau, off).heap().len();
+                println!(
+                    "rows={rows} cols={cols} keys={nkeys} workers={workers} off={off}: below={b} at={a} (want 0/{nkeys})"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3020,6 +3208,30 @@ mod runtime_tests {
                 "q={q}: {got} outside [{lo}, {hi}] at rank slack {rank_slack:.3}"
             );
         }
+    }
+
+    #[test]
+    fn run_octo_univmon_reaches_the_deepest_layer() {
+        use crate::L2HH;
+        // The structural half of `a_flat_threshold_starves_the_deep_univmon_layers`,
+        // checked against the shipped pipeline rather than the replica that
+        // test needs in order to run the flat counterfactual at all.
+        let (heap, rows, cols, layers) = (64usize, 5usize, 1_024usize, 12usize);
+        let inputs: Vec<DataInput<'_>> =
+            (0..60_000u64).map(|i| DataInput::U64(i % 4_096)).collect();
+        let plan = UnivMonOctoPlan::new(rows, cols, layers);
+        let result = run_octo(&inputs, &config(1), plan.clone(), || plan.aggregator(heap));
+
+        let deepest = layers - 1;
+        let L2HH::COUNT(inner) = &result.parent.sketch.l2_sketch_layers[deepest];
+        let nonzero = (0..inner.rows())
+            .flat_map(|r| (0..inner.cols()).map(move |c| (r, c)))
+            .filter(|(r, c)| inner.as_storage().query_one_counter(*r, *c) != 0)
+            .count();
+        assert!(
+            nonzero > 0,
+            "the scaled per-layer threshold must let the deepest layer through"
+        );
     }
 
     #[test]

@@ -2704,6 +2704,15 @@ fn univmon_heavy_hitter_recall_beats_sketch_merge() {
 /// Drives a UnivMon pyramid through the delta path with a caller-chosen
 /// per-layer threshold, so a flat threshold can be compared against the scaled
 /// one the shipped worker uses.
+///
+/// Deliberately a replica rather than `UnivMonOctoWorker`: the shipped worker
+/// applies the scaled rule unconditionally, so the flat counterfactual cannot
+/// be run through it. Layer selection, the per-layer seeds and the fidelity
+/// choice mirror the shipped code; the weight bookkeeping does not - this sets
+/// the exact total on every insert where the aggregator sums lagging per-worker
+/// reports - so the scaled arm here is a slightly better case than the pipeline
+/// delivers. `run_octo_univmon_reaches_the_deepest_layer` checks the structural
+/// half against the real pipeline.
 fn univmon_through_deltas(
     stream: &[u64],
     heap: usize,
