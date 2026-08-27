@@ -16,6 +16,7 @@ use crate::{DataInput, DefaultXxHasher, SketchHasher, Vector2D};
 use rand::Rng;
 use rand::rngs::ThreadRng;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 /// One table slot: the key it currently represents and the mass attributed to it.
@@ -192,20 +193,40 @@ impl<H: SketchHasher> Coco<H> {
         total
     }
 
+    /// Every recorded flow as a `(full key, estimated size)` pair, which is the
+    /// paper's query front-end table. An insert leaves a key in at most one
+    /// bucket, so no key is yielded twice.
+    pub fn recorded_flows(&self) -> impl Iterator<Item = (&str, u64)> {
+        (0..self.d).flat_map(move |i| {
+            (0..self.w).filter_map(move |j| {
+                let bucket = &self.table[i][j];
+                bucket.full_key.as_deref().map(|key| (key, bucket.val))
+            })
+        })
+    }
+
+    /// The paper's `SELECT g(k_F), SUM(Size) ... GROUP BY g(k_F)`: every
+    /// recorded flow folded onto its partial key in one pass over the table.
+    pub fn group_by<F>(&self, project: F) -> HashMap<String, u64>
+    where
+        F: for<'a> Fn(&'a str) -> &'a str,
+    {
+        let mut groups: HashMap<String, u64> = HashMap::new();
+        for (full, val) in self.recorded_flows() {
+            *groups.entry(project(full).to_string()).or_insert(0) += val;
+        }
+        groups
+    }
+
     /// the udf parameter takes in full key first, and then partial key
     pub fn estimate_with_udf<F>(&self, partial_key: &str, udf: F) -> u64
     where
         F: Fn(&str, &str) -> bool,
     {
-        let mut total = 0;
-        for i in 0..self.d {
-            for j in 0..self.w {
-                if self.table[i][j].is_partial_key_with_udf(partial_key, &udf) {
-                    total += self.table[i][j].val;
-                }
-            }
-        }
-        total
+        self.recorded_flows()
+            .filter(|&(full, _)| udf(full, partial_key))
+            .map(|(_, val)| val)
+            .sum()
     }
 
     /// Partial-key query in the shape of the paper's `GROUP BY g(k_F)`: sums
@@ -214,32 +235,20 @@ impl<H: SketchHasher> Coco<H> {
     where
         F: for<'a> Fn(&'a str) -> &'a str,
     {
-        let mut total = 0;
-        for i in 0..self.d {
-            for j in 0..self.w {
-                if let Some(full) = &self.table[i][j].full_key {
-                    if project(full.as_str()) == partial_key {
-                        total += self.table[i][j].val;
-                    }
-                }
-            }
-        }
-        total
+        self.recorded_flows()
+            .filter(|&(full, _)| project(full) == partial_key)
+            .map(|(_, val)| val)
+            .sum()
     }
 
     /// Sums every bucket whose stored key contains `partial_key` anywhere.
     /// Containment is not a key projection: `"k1"` also collects `k10` and
     /// `k100`. Use [`Self::estimate_projected`] or [`Self::estimate_key`].
     pub fn estimate_substring(&self, partial_key: &str) -> u64 {
-        let mut total = 0;
-        for i in 0..self.d {
-            for j in 0..self.w {
-                if self.table[i][j].is_partial_key(partial_key) {
-                    total += self.table[i][j].val;
-                }
-            }
-        }
-        total
+        self.recorded_flows()
+            .filter(|&(full, _)| full.contains(partial_key))
+            .map(|(_, val)| val)
+            .sum()
     }
 
     pub fn merge(&mut self, other: &Coco<H>) {
@@ -258,9 +267,15 @@ impl<H: SketchHasher> Coco<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     const TEST_W: usize = 32;
     const TEST_D: usize = 4;
+
+    /// Projection used by the grouping tests: the field before the `|`.
+    fn before_pipe(full: &str) -> &str {
+        full.split('|').next().unwrap_or(full)
+    }
 
     #[test]
     fn insert_then_estimate_matches_full_value_for_partial_key() {
@@ -347,6 +362,71 @@ mod tests {
 
         assert_eq!(coco.estimate_projected("19.98.10.26", srcip), 1041);
         assert_eq!(coco.estimate_projected("34.52.73.17", srcip), 856);
+    }
+
+    #[test]
+    fn recorded_flows_yields_each_occupied_bucket_once() {
+        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        for i in 0..20u64 {
+            coco.insert(&format!("flow::{i}"), i + 1);
+        }
+
+        let occupied = (0..TEST_D)
+            .flat_map(|i| (0..TEST_W).map(move |j| (i, j)))
+            .filter(|(i, j)| coco.table[*i][*j].full_key.is_some())
+            .count();
+
+        let listed: Vec<(&str, u64)> = coco.recorded_flows().collect();
+        assert_eq!(listed.len(), occupied, "one entry per occupied bucket");
+
+        let unique: HashSet<&str> = listed.iter().map(|(key, _)| *key).collect();
+        assert_eq!(unique.len(), listed.len(), "no key may be listed twice");
+    }
+
+    #[test]
+    fn group_by_agrees_with_per_key_projected_queries() {
+        // the one-pass grouping and the per-key scan must never disagree
+        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        for i in 0..60u64 {
+            coco.insert(&format!("fam{}|item{i}", i % 5), i % 7 + 1);
+        }
+
+        let grouped = coco.group_by(before_pipe);
+        assert!(!grouped.is_empty(), "the workload must record something");
+        for (partial, total) in &grouped {
+            assert_eq!(
+                *total,
+                coco.estimate_projected(partial, before_pipe),
+                "group_by and estimate_projected disagree on {partial}"
+            );
+        }
+    }
+
+    #[test]
+    fn group_by_preserves_the_inserted_mass() {
+        // an 8x2 table against far more keys forces eviction; mass still holds
+        let mut coco: Coco = Coco::init_with_size(8, 2);
+        let mut total = 0u64;
+        for i in 0..400u64 {
+            coco.insert(&format!("fam{}|item{}", i % 6, i % 37), 3);
+            total += 3;
+        }
+
+        assert_eq!(total, 1_200);
+        assert_eq!(coco.group_by(before_pipe).values().sum::<u64>(), total);
+    }
+
+    #[test]
+    fn group_by_reproduces_the_papers_figure_seven() {
+        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        coco.insert("19.98.10.26|80", 521);
+        coco.insert("19.98.10.26|443", 520);
+        coco.insert("34.52.73.17|118", 856);
+
+        let grouped = coco.group_by(before_pipe);
+        assert_eq!(grouped.len(), 2, "two distinct srcips");
+        assert_eq!(grouped["19.98.10.26"], 1_041);
+        assert_eq!(grouped["34.52.73.17"], 856);
     }
 
     #[test]

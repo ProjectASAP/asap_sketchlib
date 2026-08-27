@@ -47,11 +47,26 @@ bucket still holds `0`.
 ## Query
 
 ```rust
+fn recorded_flows(&self) -> impl Iterator<Item = (&str, u64)>
+fn group_by<F>(&self, project: F) -> HashMap<String, u64>
+
 fn estimate_key(&self, key: &str) -> u64
 fn estimate_projected<F>(&self, partial_key: &str, project: F) -> u64
 fn estimate_with_udf<F>(&self, partial_key: &str, udf: F) -> u64
 fn estimate_substring(&self, partial_key: &str) -> u64
 ```
+
+Section 4.3 answers a partial-key query in two steps, and `recorded_flows` plus
+`group_by` are those two steps. Step 3 builds a `(Full Key, Size)` table over
+the recorded full-key flows, which is what `recorded_flows` yields; an insert
+leaves a key in at most one bucket, so no key comes back twice. Step 4 is
+`SELECT g(k_F), SUM(Size) ... GROUP BY g(k_F)`, which is `group_by(g)`.
+
+Reach for `group_by` when you want the whole result table: it folds every
+recorded flow onto its partial key in one `O(w * d)` pass, where asking
+`estimate_projected` for each partial key separately costs one such pass per
+group. A single known partial key is still cheaper through `estimate_projected`,
+which allocates nothing.
 
 `estimate_key` is the paper's point query: the sum of the `d` mapped buckets
 that currently hold `key`, in `O(d)`. Because every increment is attributed to
