@@ -321,6 +321,13 @@ impl L2HH {
         }
     }
 
+    /// Applies a counter delta promoted by an OctoSketch worker.
+    pub fn apply_delta(&mut self, delta: crate::octo_delta::CountDelta) {
+        match self {
+            L2HH::COUNT(count_l2hh) => count_l2hh.apply_delta(delta),
+        }
+    }
+
     /// Merges another counter of the same kind into this one.
     pub fn merge(&mut self, other: &L2HH) {
         match (self, other) {

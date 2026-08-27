@@ -29,6 +29,7 @@ use crate::common::{
     heap_item_to_sketch_input,
 };
 use crate::common::{L2HH, Vector1D};
+use crate::octo_delta::LayeredCountDelta;
 use crate::sketches::countsketch_topk::CountL2HH;
 use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
@@ -83,6 +84,28 @@ impl Default for UnivMon {
     }
 }
 
+/// Deepest pyramid layer the given key hash reaches.
+#[inline(always)]
+pub fn bottom_layer_for_hash(hash: u64, layer_size: usize) -> usize {
+    for l in 1..layer_size {
+        if ((hash >> l) & 1) == 0 {
+            return l - 1;
+        }
+    }
+    layer_size - 1
+}
+
+/// How much of the stream reached an aggregator being fed `LayeredCountDelta`s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnivMonDeltaFidelity {
+    /// Every insert was promoted, so candidate sets can still be complete.
+    /// Only true at a promotion threshold of 1.
+    EveryInsert,
+    /// Only counters that crossed the threshold arrived; candidate sets are
+    /// partial by construction.
+    PromotedOnly,
+}
+
 impl UnivMon {
     /// Creates a UnivMon instance with explicit dimensions.
     pub fn init_univmon(
@@ -134,12 +157,93 @@ impl UnivMon {
 
     #[inline(always)]
     fn find_bottom_layer_num(&self, hash: u64, layer: usize) -> usize {
-        for l in 1..layer {
-            if ((hash >> l) & 1) == 0 {
-                return l - 1;
-            }
+        bottom_layer_for_hash(hash, layer)
+    }
+
+    /// Deepest pyramid layer an insert of `key` reaches; it touches `0..=this`.
+    ///
+    /// A pure function of the key's hash, so an OctoSketch worker picks exactly
+    /// the same layers as a single-threaded insert would.
+    pub fn bottom_layer_for(&self, key: &DataInput) -> usize {
+        bottom_layer_for_hash(hash64_seeded(BOTTOM_LAYER_FINDER, key), self.layer_size)
+    }
+
+    /// Whether each layer's heavy-hitter heap still holds every key that layer
+    /// received. Queries widen their threshold on the layers where it does not.
+    pub fn candidates_complete(&self) -> &[bool] {
+        &self.candidate_complete
+    }
+
+    /// Marks every layer's candidate set as partial.
+    ///
+    /// An OctoSketch aggregator calls this up front whenever its workers
+    /// promote above a threshold of 1: a layer that received traffic but never
+    /// promoted any of it sends the aggregator nothing at all, so waiting for a
+    /// delta to arrive before lowering the flag would leave exactly those
+    /// layers claiming a completeness they cannot have.
+    pub fn mark_candidates_incomplete(&mut self) {
+        self.candidate_complete.fill(false);
+    }
+
+    /// Marks one layer's candidate set as partial.
+    pub fn mark_layer_candidates_incomplete(&mut self, layer: usize) {
+        self.candidate_complete[layer] = false;
+    }
+
+    /// Overwrites the total weight the sketch believes it has seen.
+    ///
+    /// An OctoSketch aggregator never observes the raw stream, so it restores
+    /// this from the running totals its workers report. This *assigns* where
+    /// `insert` and `merge` accumulate, so a sketch fed by deltas must not also
+    /// be inserted into or merged with: the next delta would erase whatever
+    /// those added. Feeding one exclusively through `apply_layered_delta` and
+    /// this method is the supported arrangement.
+    pub fn set_total_weight(&mut self, weight: usize) {
+        debug_assert_ne!(
+            self.update_mode,
+            UnivMonUpdateMode::Terminal,
+            "a terminal-mode UnivMon cannot be fed by the delta path"
+        );
+        self.bucket_size = weight;
+        if self.update_mode == UnivMonUpdateMode::Unset {
+            self.update_mode = UnivMonUpdateMode::Standard;
         }
-        layer - 1
+    }
+
+    /// Applies one delta promoted by an OctoSketch worker.
+    ///
+    /// Mirrors `update` for a single layer: the counter lands, the layer's
+    /// estimate is re-read, and the layer's heavy-hitter heap follows - which
+    /// is Algorithm 2 of the OctoSketch paper.
+    pub fn apply_layered_delta(
+        &mut self,
+        delta: &LayeredCountDelta,
+        fidelity: UnivMonDeltaFidelity,
+    ) {
+        if self.update_mode == UnivMonUpdateMode::Unset {
+            self.update_mode = UnivMonUpdateMode::Standard;
+        }
+        let layer = delta.layer as usize;
+        assert!(
+            layer < self.layer_size,
+            "delta names layer {layer} but this pyramid has {} layers",
+            self.layer_size
+        );
+
+        self.l2_sketch_layers[layer].apply_delta(delta.delta);
+        let key = heap_item_to_sketch_input(&delta.key);
+        let count = self.l2_sketch_layers[layer].estimate(&key);
+        let heap_kept_everything = self.hh_layers[layer].update(&key, count as i64);
+
+        // A worker holds back every counter that has not reached the promotion
+        // threshold, so unless the threshold is 1 the aggregator has provably
+        // not seen every key this layer received and its candidate set cannot
+        // be called complete. Claiming otherwise would send `heavy_threshold`
+        // down the permissive branch and overcount.
+        let complete = heap_kept_everything && fidelity == UnivMonDeltaFidelity::EveryInsert;
+        if !complete {
+            self.candidate_complete[layer] = false;
+        }
     }
 
     #[inline(always)]
@@ -808,94 +912,6 @@ mod tests {
         assert_eq!(um.calc_l1(), 131.0, "L1 estimation incorrect");
     }
 
-    // #[test]
-    // fn univmon_different_seeds_maintain_accuracy() {
-    //     // Verify that using different seed indices doesn't break basic accuracy
-    //     // Create two UnivMons with same config but verify both maintain accuracy
-
-    //     let mut um1 = UnivMon::new_univmon_pyramid(20, 3, 2048, 10, 0);
-    //     let mut um2 = UnivMon::new_univmon_pyramid(20, 3, 2048, 10, 1); // Different pool_idx
-
-    //     // Insert same data into both with more flows for better stability
-    //     let flows = [
-    //         ("flow_a", 150),
-    //         ("flow_b", 200),
-    //         ("flow_c", 100),
-    //         ("flow_d", 180),
-    //         ("flow_e", 120),
-    //     ];
-
-    //     let true_l1 = 750f64;
-
-    //     for (key, count) in &flows {
-    //         let bottom1 = bottom_layer_for(&um1, key);
-    //         let bottom2 = bottom_layer_for(&um2, key);
-    //         um1.univmon_processing(key, *count, bottom1);
-    //         um2.univmon_processing(key, *count, bottom2);
-    //     }
-
-    //     // Both should estimate L1 with reasonable accuracy
-    //     let est_l1_1 = um1.calc_l1();
-    //     let est_l1_2 = um2.calc_l1();
-
-    //     let error_1 = ((est_l1_1 - true_l1).abs()) / true_l1;
-    //     let error_2 = ((est_l1_2 - true_l1).abs()) / true_l1;
-
-    //     assert!(
-    //         est_l1_1 == true_l1,
-    //         "UnivMon 1 L1 estimate {} should be reasonably accurate (error: {:.2}%)",
-    //         est_l1_1,
-    //         error_1 * 100.0
-    //     );
-    //     assert!(
-    //         est_l1_1 == true_l1,
-    //         "UnivMon 2 L1 estimate {} should be reasonably accurate (error: {:.2}%)",
-    //         est_l1_2,
-    //         error_2 * 100.0
-    //     );
-    // }
-
-    // #[test]
-    // fn test_layer_update_correctness() {
-    //     // 1. Initialize UnivMon with enough layers
-    //     let layers = 8;
-    //     // Small dimensions to make debugging easier, but enough to avoid collisions in this simple test
-    //     let mut um = UnivMon::init_univmon(10, 5, 128, layers, 0);
-
-    //     let key = "test_key_layer_logic";
-    //     let value = 10;
-
-    //     // 2. Pre-calculate the expected bottom layer for this key
-    //     // We use the same hasher the struct uses internally
-    //     let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &DataInput::Str(key));
-    //     let expected_bottom = um.find_bottom_layer_num(hash, layers);
-
-    //     // 3. Perform Update
-    //     um.univmon_processing(key, value, expected_bottom);
-
-    //     // 4. Verification Loop
-    //     for i in 0..layers {
-    //         // Check Heap Presence
-    //         let in_heap = um.hh_layers[i].find(key).is_some();
-
-    //         // Check Sketch Estimate
-    //         // We use estimate() to see if the counter was incremented
-    //         let count_est = um.cs_layers[i].get_estimate(&DataInput::Str(key));
-
-    //         if i <= expected_bottom {
-    //             // Case A: Layers the item SHOULD exist in
-    //             assert!(in_heap, "Key should be in heap for layer {}", i);
-    //             assert_eq!(count_est, value, "Sketch at layer {} should track count", i);
-    //         } else {
-    //             // Case B: Layers the item should NOT exist in (it was sampled out)
-    //             assert!(!in_heap, "Key should NOT be in heap for layer {}", i);
-    //             // Ideally 0, but technically collisions could occur.
-    //             // With 'value=10' and empty sketch, it should be 0.
-    //             assert_eq!(count_est, 0, "Sketch at layer {} should be empty", i);
-    //         }
-    //     }
-    // }
-
     #[test]
     fn test_statistical_accuracy() {
         // 1. Setup: Larger sketch for statistical significance
@@ -1017,307 +1033,3 @@ mod tests {
         }
     }
 }
-
-// following out-dated code contains pyramid optimization that is potentially useful
-// #[derive(Serialize, Deserialize, Clone, Debug)]
-// pub struct UnivMon {
-//     pub k: usize,
-//     pub row: usize,
-//     pub col: usize,
-//     pub layer: usize,
-//     pub cs_layers: Vector1D<L2HH>,
-//     pub hh_layers: Vector1D<HHHeap>,
-//     pub pool_idx: i64,
-//     pub heap_update: i32,
-//     pub bucket_size: usize,
-// }
-//
-// impl UnivMon {
-//     pub fn init_univmon(k: usize, r: usize, c: usize, l: usize, p_idx: i64) -> Self {
-//         // Create cs_layers - each layer needs different seeds
-//         // Layer i uses SEEDLIST[i] for hashing
-//         let cs_vec: Vec<L2HH> = (0..l)
-//             .map(|i| L2HH::COUNT(CountL2HH::with_dimensions_and_seed(r, c, i)))
-//             .collect();
-//         // Create hh_layers
-//         let hh_vec: Vec<HHHeap> = (0..l).map(|_| HHHeap::new(k)).collect();
-//
-//         UnivMon {
-//             k,
-//             row: r,
-//             col: c,
-//             layer: l,
-//             cs_layers: Vector1D::from_vec(cs_vec),
-//             hh_layers: Vector1D::from_vec(hh_vec),
-//             pool_idx: p_idx,
-//             heap_update: 0,
-//             bucket_size: 0,
-//         }
-//     }
-//
-//     pub fn get_bucket_size(&self) -> usize {
-//         self.bucket_size
-//     }
-//
-//     pub fn new_univmon_pyramid(k: usize, r: usize, c: usize, l: usize, p_idx: i64) -> Self {
-//         // 8 is ELEPHANT_LAYER in PromSketch
-//         // Each layer i uses SEEDLIST[i] for hashing
-//         let cs_vec: Vec<L2HH> = if l <= 8 {
-//             (0..l)
-//                 .map(|i| L2HH::COUNT(CountL2HH::with_dimensions_and_seed(3, 2048, i)))
-//                 .collect()
-//         } else {
-//             (0..8)
-//                 .map(|i| L2HH::COUNT(CountL2HH::with_dimensions_and_seed(3, 2048, i)))
-//                 .chain((8..l).map(|i| L2HH::COUNT(CountL2HH::with_dimensions_and_seed(3, 512, i))))
-//                 .collect()
-//         };
-//
-//         let hh_vec: Vec<HHHeap> = if l <= 8 {
-//             (0..l).map(|_| HHHeap::new(k)).collect()
-//         } else {
-//             (0..l).map(|_| HHHeap::new(100)).collect()
-//         };
-//
-//         UnivMon {
-//             k,
-//             row: r,
-//             col: c,
-//             layer: l,
-//             cs_layers: Vector1D::from_vec(cs_vec),
-//             hh_layers: Vector1D::from_vec(hh_vec),
-//             pool_idx: p_idx,
-//             heap_update: 0,
-//             bucket_size: 0,
-//         }
-//     }
-//
-//     // pub fn free(&mut self) {
-//     //     self.bucket_size = 0;
-//
-//     //     self.cs_layers.clear();
-//     //     self.hh_layers.clear();
-//     // }
-//
-//     // well... I'm not confident about this function
-//     // pub fn get_memory_kb(&self) -> f64 {
-//     //     let mut total = 0.0;
-//     //     for i in 0..self.layer {
-//     //         total += self.hh_layers[i].get_memory_bytes();
-//     //     }
-//     //     return (2048.0 * 3.0 * (self.layer as f64) * 8.0 + total) / 1024.0;
-//     // }
-//
-//     // pub fn get_memory_kb_pyramid(&self) -> f64 {
-//     //     let mut total = 0.0;
-//     //     for i in 0..self.layer {
-//     //         total += self.hh_layers[i].get_memory_bytes();
-//     //     }
-//     //     // again, hard code the ELEPHANT_LAYER for now
-//     //     if self.layer <= 8 {
-//     //         return (2048.0 * 3.0 * (self.layer as f64) * 8.0 + total) / 1024.0;
-//     //     } else {
-//     //         return ((2048.0 * 3.0 * 8.0 + 512.0 * 3.0 * (self.layer as f64 - 8.0)) * 8.0 + total)
-//     //             / 1024.0;
-//     //     }
-//     // }
-//
-//     // update univmon
-//     pub fn find_bottom_layer_num(&self, hash: u64, layer: usize) -> usize {
-//         for l in 1..layer {
-//             if ((hash >> l) & 1) == 0 {
-//                 return l - 1;
-//             }
-//         }
-//         layer - 1
-//     }
-//
-//     pub fn update(&mut self, key: &str, value: i64, bottom_layer_num: usize) {
-//         for i in 0..=bottom_layer_num {
-//             let count = if i == 0 {
-//                 self.cs_layers[i].update_and_est(&DataInput::Str(key), value)
-//             } else {
-//                 self.cs_layers[i].update_and_est_without_l2(&DataInput::Str(key), value)
-//             };
-//             self.hh_layers[i].update(key, count as i64);
-//         }
-//     }
-//
-//     pub fn update_optimized(&mut self, key: &str, value: i64, bottom_layer_num: usize) {
-//         // hardcode again
-//         if bottom_layer_num < 8 {
-//             if bottom_layer_num > 0 {
-//                 // let mut median = self.cs_layers[bottom_layer_num].update_and_est_without_l2(key, value);
-//                 let mut median = self.cs_layers[bottom_layer_num]
-//                     .update_and_est_without_l2(&DataInput::Str(key), value);
-//                 for l in (1..=bottom_layer_num).rev() {
-//                     self.hh_layers[l].update(key, median as i64);
-//                 }
-//                 // median = self.cs_layers[0].update_and_est(key, value);
-//                 median = self.cs_layers[0].update_and_est(&DataInput::Str(key), value);
-//                 self.hh_layers[0].update(key, median as i64);
-//             } else {
-//                 // let median = self.cs_layers[0].update_and_est(key, value);
-//                 let median = self.cs_layers[0].update_and_est(&DataInput::Str(key), value);
-//                 self.hh_layers[0].update(key, median as i64);
-//             }
-//         } else {
-//             // let mut median = self.cs_layers[bottom_layer_num].update_and_est_without_l2(key, value);
-//             let mut median = self.cs_layers[bottom_layer_num]
-//                 .update_and_est_without_l2(&DataInput::Str(key), value);
-//             for l in (1..=bottom_layer_num).rev() {
-//                 self.hh_layers[l].update(key, median as i64);
-//             }
-//             // median = self.cs_layers[0].update_and_est(key, value);
-//             median = self.cs_layers[0].update_and_est(&DataInput::Str(key), value);
-//             self.hh_layers[0].update(key, median as i64);
-//         }
-//     }
-//
-//     pub fn update_pyramid(&mut self, key: &str, value: i64, bottom_layer_num: usize) {
-//         // hardcode one more time
-//         if bottom_layer_num < 8 {
-//             for l in (0..=bottom_layer_num).rev() {
-//                 let median = if l == 0 {
-//                     self.cs_layers[l].update_and_est(&DataInput::Str(key), value)
-//                 } else {
-//                     self.cs_layers[l].update_and_est_without_l2(&DataInput::Str(key), value)
-//                 };
-//                 self.hh_layers[l].update(key, median as i64);
-//             }
-//         } else {
-//             let mut median;
-//             for l in (0..=7).rev() {
-//                 if l == 0 {
-//                     // median = self.cs_layers[l].update_and_est(key, value);
-//                     median = self.cs_layers[l].update_and_est(&DataInput::Str(key), value);
-//                 } else {
-//                     // median = self.cs_layers[l].update_and_est_without_l2(key, value);
-//                     median =
-//                         self.cs_layers[l].update_and_est_without_l2(&DataInput::Str(key), value);
-//                 }
-//                 self.hh_layers[l].update(key, median as i64);
-//             }
-//             for l in (8..=bottom_layer_num).rev() {
-//                 // median = self.cs_layers[l].update_and_est_without_l2(key, value);
-//                 median = self.cs_layers[l].update_and_est_without_l2(&DataInput::Str(key), value);
-//                 self.hh_layers[l].update(key, median as i64);
-//             }
-//         }
-//     }
-//
-//     pub fn univmon_processing(&mut self, key: &str, value: i64, bottom_layer_num: usize) {
-//         self.bucket_size += value as usize;
-//         self.update(key, value, bottom_layer_num);
-//     }
-//
-//     pub fn univmon_processing_optimized(&mut self, key: &str, value: i64, bottom_layer_num: usize) {
-//         self.bucket_size += value as usize;
-//         self.update_optimized(key, value, bottom_layer_num);
-//     }
-//
-//     // pub fn print_hh_layer(&self) {
-//     //     print!("Print HH_Layer: ");
-//     //     for i in 0..self.layer {
-//     //         println!("layer {}: ", i);
-//     //         self.hh_layers[i].print_heap();
-//     //     }
-//     // }
-//
-//     pub fn calc_g_sum_heuristic<F>(&self, g: F, is_card: bool) -> f64
-//     where
-//         F: Fn(f64) -> f64,
-//     {
-//         let mut y = vec![0.0; self.layer];
-//         let mut tmp: f64;
-//
-//         let l2_value = self.cs_layers[self.layer - 1].get_l2();
-//         let mut threshold = (l2_value * 0.01) as i64;
-//         if !is_card {
-//             threshold = 0;
-//         }
-//
-//         tmp = 0.0;
-//         for item in self.hh_layers[self.layer - 1].heap() {
-//             if item.count > threshold {
-//                 tmp += g(item.count as f64);
-//             }
-//         }
-//         y[self.layer - 1] = tmp;
-//
-//         for i in (0..(self.layer - 1)).rev() {
-//             tmp = 0.0;
-//             let l2_value = self.cs_layers[i].get_l2();
-//             let mut threshold = (l2_value * 0.01) as i64;
-//             if !is_card {
-//                 threshold = 0;
-//             }
-//
-//             for item in self.hh_layers[i].heap() {
-//                 if item.count > threshold {
-//                     // let hash = (hash64_seeded(CANONICAL_HASH_SEED, &item.key) >> (i+1)) & 1;
-//                     // let hash = (hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(&item.key)) >> (i + 1)) & 1;
-//                     let hash =
-//                         (hash64_seeded(BOTTOM_LAYER_FINDER, &DataInput::Str(&item.key)) >> (i + 1)) & 1;
-//                     let coe = 1.0 - 2.0 * (hash as f64);
-//                     tmp += coe * g(item.count as f64);
-//                 }
-//             }
-//             y[i] = 2.0 * y[i + 1] + tmp;
-//         }
-//
-//         y[0]
-//     }
-//
-//     pub fn calc_g_sum<F>(&self, g: F, is_card: bool) -> f64
-//     where
-//         F: Fn(f64) -> f64,
-//     {
-//         self.calc_g_sum_heuristic(g, is_card)
-//     }
-//
-//     pub fn calc_l1(&self) -> f64 {
-//         self.calc_g_sum(|x| x, false)
-//     }
-//
-//     pub fn calc_l2(&self) -> f64 {
-//         let tmp = self.calc_g_sum(|x| x * x, false);
-//         tmp.sqrt()
-//     }
-//
-//     pub fn calc_entropy(&self) -> f64 {
-//         let tmp = self.calc_g_sum(
-//             |x| {
-//                 if x > 0.0 { x * x.log2() } else { 0.0 }
-//             },
-//             false,
-//         );
-//         (self.bucket_size as f64).log2() - tmp / (self.bucket_size as f64)
-//     }
-//
-//     pub fn calc_card(&self) -> f64 {
-//         self.calc_g_sum(|_| 1.0, true)
-//     }
-//
-//     pub fn merge_with(&mut self, other: &UnivMon) {
-//         for i in 0..self.layer {
-//             self.cs_layers[i].merge(&other.cs_layers[i]);
-//
-//             let mut topk = HHHeap::new(self.k);
-//             for item in self.hh_layers[i].heap() {
-//                 topk.update(&item.key, item.count);
-//             }
-//
-//             for item in other.hh_layers[i].heap() {
-//                 let count = if let Some(index) = topk.find(&item.key) {
-//                     topk.heap()[index].count + item.count
-//                 } else {
-//                     item.count
-//                 };
-//                 topk.update(&item.key, count);
-//             }
-//
-//             self.hh_layers[i] = topk;
-//         }
-//     }
-// }

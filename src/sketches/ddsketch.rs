@@ -19,6 +19,7 @@ use crate::DataInput;
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
+use crate::octo_delta::DdDelta;
 use rmp_serde::decode::Error as RmpDecodeError;
 use rmp_serde::encode::Error as RmpEncodeError;
 use rmp_serde::{from_slice, to_vec_named};
@@ -264,6 +265,57 @@ impl DDSketch {
 
         let k = self.key_for(v);
         self.store.add_one(k);
+    }
+
+    /// Bucket index a value maps to, or `None` if `add` would have dropped it.
+    ///
+    /// Exposed so an OctoSketch worker can hold one-byte counters over the same
+    /// bucket space without duplicating the logarithmic mapping.
+    pub fn bucket_index_for(&self, value: f64) -> Option<i32> {
+        if !(value.is_finite() && value > 0.0) {
+            return None;
+        }
+        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(self.alpha);
+        if value < min_indexable || value > max_indexable {
+            return None;
+        }
+        Some(self.key_for(value))
+    }
+
+    /// Adds a promoted bucket count from an OctoSketch worker.
+    ///
+    /// A delta carries only a bucket and a count, so `sum`, `min` and `max` are
+    /// advanced with the bucket's representative value - the same α-bounded
+    /// estimate a deserialize-and-recompute produces. Quantiles and `count`
+    /// stay exact with respect to the bucket store.
+    pub fn apply_delta(&mut self, delta: DdDelta) {
+        if delta.value == 0 {
+            return;
+        }
+        // `merge` checks that the two sketches share an alpha; a delta carries
+        // no alpha to check, so bound the index by what this sketch's own
+        // mapping can produce. A worker built with a much finer alpha would
+        // otherwise hand over an index near i32::MAX and grow the dense store
+        // across the whole gap. Out-of-range values are dropped, which is what
+        // `add` already does with values it cannot index.
+        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(self.alpha);
+        let (lowest, highest) = (self.key_for(min_indexable), self.key_for(max_indexable));
+        if delta.index < lowest || delta.index > highest {
+            return;
+        }
+        self.store.ensure(delta.index);
+        let slot = (delta.index - self.store.offset) as usize;
+        self.store.counts.as_mut_slice()[slot] += delta.value;
+
+        let representative = self.bin_representative(delta.index);
+        self.count += delta.value;
+        self.sum += representative * delta.value as f64;
+        if representative < self.min {
+            self.min = representative;
+        }
+        if representative > self.max {
+            self.max = representative;
+        }
     }
 
     /// Returns the estimated value at quantile `q` (in `[0, 1]`), or `None` if the sketch is empty.

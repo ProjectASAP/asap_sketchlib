@@ -95,10 +95,13 @@ pub use countminsketch_topk::CMSHeap;
 
 pub mod countsketch_topk;
 pub use countsketch_topk::CSHeap;
-pub use countsketch_topk::CountL2HH;
+pub use countsketch_topk::{CountL2HH, l2hh_cell_for_row};
 
 pub mod octo_delta;
-pub use octo_delta::{CM_PROMASK, COUNT_PROMASK, CmDelta, CountDelta, HLL_PROMASK, HllDelta};
+pub use octo_delta::{
+    CM_PROMASK, COUNT_PROMASK, CmDelta, CountDelta, DD_PROMASK, DdDelta, HLL_PROMASK, HllDelta,
+    KeyedCmDelta, KeyedCountDelta, LayeredCountDelta, MAX_PROMASK, OctoThreshold, UNIVMON_PROMASK,
+};
 
 pub mod fold_cms;
 pub use fold_cms::{FoldCMS, FoldCell, FoldEntry};
