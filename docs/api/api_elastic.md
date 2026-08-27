@@ -154,11 +154,12 @@ Measured on 80 disjoint flows totalling 275 through an 8-bucket heavy table and
 a 2x64 light layer: `merge` estimates 434 in total, `merge_max` 359, roughly
 halving the over-estimate.
 
-## Growing the heavy part
+## Growing and shrinking the heavy part
 
 ```rust
 fn expand_heavy(&mut self)
 fn full_bucket_count(&self, t2: i32) -> usize
+fn compress_heavy(&mut self, ratio: i32)
 ```
 
 Section 3.4 starts the heavy part small and doubles it when elephants fill it:
@@ -186,6 +187,31 @@ sketches expanded a different number of times have different bucket counts, so
 
 The reference implementation does not include this operation; its `HeavyPart`
 is a fixed-size `template<int bucket_num>`. This follows the paper text.
+
+`compress_heavy(ratio)` is the reverse, and gives the sketch section 3.4's
+"ability to actively release memory when needed". New bucket `j` absorbs old
+buckets `j`, `j + w'`, `j + 2w'`, … — the same equal-division grouping as the
+Maximum Compression of section 3.2.1, and sound for the same reason, Lemma 3.2.
+What differs is what gets merged: "for the heavy part, we merge buckets (key,
+vote+, flag, vote−) rather than counters". Each group is resolved by querying
+every resident's whole size and keeping the largest; the rest spill their
+`vote_pos` into the light layer, where they read back as ordinary non-resident
+flows.
+
+`ratio` must divide the bucket count — Lemma 3.2 needs `w' | w` — and
+`compress_heavy` asserts rather than quietly misplacing flows.
+
+The paper does not say what happens to the votes of the buckets that lose.
+The winner's bucket is carried over untouched, votes included: the pair records
+the contests that flow actually fought, and folding in a stranger's negative
+votes would distort `vote_neg / vote_pos` and so the timing of its next
+eviction. The losers' votes go with them into the light layer as size.
+
+Compressing a table that was expanded first drops the stale copies before
+grouping. Without that, a copy whose live twin falls in a different group wins
+its own group and becomes a second live entry for the same flow — reachable
+whenever the bucket count is not a power of two, for instance 12 buckets
+doubled to 24 and compressed by 3.
 
 ## Serialization
 

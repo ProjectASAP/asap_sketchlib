@@ -306,6 +306,102 @@ impl<H: SketchHasher> Elastic<H> {
             .count()
     }
 
+    /// Shrinks the heavy table by `ratio`, the paper's active compression.
+    /// New bucket `j` absorbs old buckets `j`, `j + w'`, `j + 2w'`, ...; the
+    /// largest resident of each group keeps its bucket, the rest spill.
+    ///
+    /// `ratio` must divide the bucket count. That is what lemma 3.2 needs for
+    /// `(i % w) % w' == i % w'`, so every resident still hashes to the group
+    /// that holds it.
+    ///
+    /// A loser is queried for its whole size but spills only its `vote_pos`;
+    /// whatever the light layer already held for it is still there. The
+    /// winner's bucket carries over untouched -- the paper does not say what
+    /// becomes of the votes, and keeping its own pair leaves
+    /// `vote_neg / vote_pos` a record of the contests it actually fought.
+    pub fn compress_heavy(&mut self, ratio: i32) {
+        assert!(
+            ratio >= 1,
+            "Elastic compression ratio must be at least 1, got {ratio}"
+        );
+        assert!(
+            self.bktlen % ratio == 0,
+            "Elastic compression ratio {ratio} must divide the bucket count {}",
+            self.bktlen
+        );
+        if ratio == 1 {
+            return;
+        }
+
+        self.drop_stale_copies();
+
+        let width = (self.bktlen / ratio) as usize;
+        let mut winner: Vec<Option<usize>> = vec![None; width];
+        let mut best: Vec<i32> = vec![0; width];
+        let mut flagged: Vec<bool> = vec![false; width];
+
+        for idx in 0..self.heavy.len() {
+            let group = idx % width;
+            if self.heavy[idx].is_vacant() {
+                flagged[group] |= self.heavy[idx].eviction;
+                continue;
+            }
+            let size = self.query(self.heavy[idx].flow_id.clone());
+            if winner[group].is_none() || size > best[group] {
+                best[group] = size;
+                winner[group] = Some(idx);
+            }
+        }
+
+        let old = std::mem::take(&mut self.heavy);
+        let mut compressed: Vec<HeavyBucket> = (0..width).map(|_| HeavyBucket::new()).collect();
+        let mut losers: Vec<(String, i32)> = Vec::new();
+
+        for (idx, bucket) in old.into_iter().enumerate() {
+            let group = idx % width;
+            if bucket.is_vacant() {
+                continue;
+            }
+            if winner[group] == Some(idx) {
+                compressed[group] = bucket;
+            } else {
+                losers.push((bucket.flow_id, bucket.vote_pos));
+            }
+        }
+
+        for (group, bucket) in compressed.iter_mut().enumerate() {
+            if bucket.is_vacant() && flagged[group] {
+                bucket.eviction = true;
+            }
+        }
+
+        self.heavy = compressed;
+        self.bktlen = width as i32;
+
+        for (flow_id, votes) in losers {
+            self.light.insert_many(&DataInput::String(flow_id), votes);
+        }
+    }
+
+    /// Empties every bucket holding a copy left behind by an expansion. The
+    /// copy is not spilled: its live twin still carries the flow. The flag is
+    /// kept so a later resident of the slot still reads the light layer.
+    fn drop_stale_copies(&mut self) {
+        if !self.stale_copies {
+            return;
+        }
+        for idx in 0..self.heavy.len() {
+            if self.stale_at(idx) {
+                let bucket = &mut self.heavy[idx];
+                bucket.flow_id = String::new();
+                bucket.vote_pos = 0;
+                bucket.vote_neg = 0;
+                bucket.eviction = true;
+            }
+        }
+        self.stale_copies = false;
+    }
+
     /// Whether the bucket at `idx` holds a copy left behind by an expansion,
     /// meaning its resident hashes somewhere else now.
     #[inline]
@@ -945,5 +1041,135 @@ mod tests {
 
         assert_eq!(sk.full_bucket_count(9), 6);
         assert_eq!(sk.full_bucket_count(10), 0);
+    }
+
+    /// Sums every flow's estimate, for checking mass is neither lost nor doubled.
+    fn total_estimate(sk: &Elastic, truth: &[(String, i32)]) -> i32 {
+        truth.iter().map(|(k, _)| sk.query(k.clone())).sum()
+    }
+
+    #[test]
+    fn compression_shrinks_the_heavy_table() {
+        let (mut sk, _) = seeded_sketch(16, 24);
+
+        sk.compress_heavy(4);
+
+        assert_eq!(sk.bktlen, 4);
+        assert_eq!(sk.heavy.len(), 4);
+    }
+
+    #[test]
+    fn compression_keeps_the_larger_flow_and_spills_the_smaller() {
+        let mut sk: Elastic = Elastic::init_with_length(8);
+        // after halving, buckets j and j+4 merge, so pick a pair four apart
+        let big = (0..10_000)
+            .map(|i| format!("big::{i}"))
+            .find(|key| sk.bucket_index(key) == 0)
+            .expect("no key for bucket 0");
+        let small = (0..10_000)
+            .map(|i| format!("small::{i}"))
+            .find(|key| sk.bucket_index(key) == 4)
+            .expect("no key for bucket 4");
+
+        for _ in 0..30 {
+            sk.insert(big.clone());
+        }
+        for _ in 0..3 {
+            sk.insert(small.clone());
+        }
+
+        sk.compress_heavy(2);
+
+        assert_eq!(sk.heavy[0].flow_id, big, "the larger flow keeps the bucket");
+        assert_eq!(sk.query(big.clone()), 30);
+        assert!(
+            sk.heavy.iter().all(|b| b.flow_id != small),
+            "the smaller flow must leave the heavy part"
+        );
+        assert!(
+            sk.query(small.clone()) >= 3,
+            "the spilled flow underestimated: {}",
+            sk.query(small.clone())
+        );
+    }
+
+    #[test]
+    fn compression_neither_loses_nor_doubles_mass() {
+        let (mut sk, truth) = seeded_sketch(16, 40);
+        let before = total_estimate(&sk, &truth);
+
+        sk.compress_heavy(4);
+
+        for (key, count) in &truth {
+            assert!(
+                sk.query(key.clone()) >= *count,
+                "{key} underestimated after compression"
+            );
+        }
+        let after = total_estimate(&sk, &truth);
+        assert!(
+            after >= before,
+            "compression may only add error, went {before} -> {after}"
+        );
+        assert!(
+            after < before * 2,
+            "compression doubled the mass, went {before} -> {after}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must divide the bucket count")]
+    fn a_ratio_that_does_not_divide_the_table_is_rejected() {
+        let mut sk: Elastic = Elastic::init_with_length(8);
+        sk.compress_heavy(3);
+    }
+
+    #[test]
+    fn compression_after_expansion_does_not_double_count() {
+        // 12 -> 24 puts a flow's twin 12 buckets away; compressing to 8 lands
+        // the two in different groups, where the copy would win its own group
+        let (mut sk, truth) = seeded_sketch(12, 40);
+        sk.expand_heavy();
+        assert!(sk.stale_copies);
+
+        sk.compress_heavy(3);
+
+        assert!(!sk.stale_copies);
+        assert_eq!(sk.bktlen, 8);
+        let twice: Vec<&String> = truth
+            .iter()
+            .map(|(k, _)| k)
+            .filter(|k| sk.heavy.iter().filter(|b| &&b.flow_id == k).count() > 1)
+            .collect();
+        assert!(twice.is_empty(), "flows resident twice: {twice:?}");
+
+        // merging reads every flow back through the light layer, where a
+        // spurious spill of the copy's votes would show up as doubled mass
+        let empty: Elastic = Elastic::init_with_length(8);
+        sk.merge(&empty);
+        for (key, count) in &truth {
+            assert_eq!(
+                sk.query(key.clone()),
+                *count,
+                "{key} came back doubled or short after expand then compress"
+            );
+        }
+    }
+
+    #[test]
+    fn expand_then_compress_returns_to_the_original_size() {
+        let (mut sk, truth) = seeded_sketch(8, 24);
+
+        sk.expand_heavy();
+        sk.compress_heavy(2);
+
+        assert_eq!(sk.bktlen, 8);
+        assert_eq!(sk.heavy.len(), 8);
+        for (key, count) in &truth {
+            assert!(
+                sk.query(key.clone()) >= *count,
+                "{key} underestimated after a round trip"
+            );
+        }
     }
 }
