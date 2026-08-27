@@ -174,9 +174,12 @@ impl<H: SketchHasher> Elastic<H> {
         }
     }
 
-    /// Folds both heavy parts into their light layers and sums the light
-    /// layers. The merged sketch answers every flow from the light layer, and
-    /// its vacated buckets stay flagged so later residents keep reading it.
+    /// The paper's Sum merging: folds both heavy parts into their light layers
+    /// and adds the layers counter by counter. Correct whatever the two
+    /// sketches saw, including flows that appear on both sides.
+    ///
+    /// The merged sketch answers every flow from the light layer, and its
+    /// vacated buckets stay flagged so later residents keep reading it.
     pub fn merge(&mut self, other: &Elastic<H>) {
         assert_eq!(
             self.bktlen, other.bktlen,
@@ -192,6 +195,34 @@ impl<H: SketchHasher> Elastic<H> {
             self.light
                 .insert_many(&DataInput::Str(&bucket.flow_id), bucket.vote_pos);
         }
+    }
+
+    /// The paper's Maximum merging: folds both heavy parts into their light
+    /// layers and keeps the larger of each counter pair, which is tighter than
+    /// [`Self::merge`] and still never underestimates.
+    ///
+    /// Requires the two sketches to have observed **disjoint flow sets**. A
+    /// flow both sides saw reads back as the larger side rather than the sum,
+    /// which underestimates it; use [`Self::merge`] whenever flows can repeat
+    /// across sketches.
+    pub fn merge_max(&mut self, other: &Elastic<H>) {
+        assert_eq!(
+            self.bktlen, other.bktlen,
+            "bucket length mismatch while merging Elastic sketches"
+        );
+
+        self.flush_heavy_to_light();
+
+        // max does not commute with the peer's pending heavy mass the way sum
+        // does, so the peer's light layer is completed before the comparison
+        let mut other_light = other.light.clone();
+        for bucket in &other.heavy {
+            if bucket.is_vacant() {
+                continue;
+            }
+            other_light.insert_many(&DataInput::Str(&bucket.flow_id), bucket.vote_pos);
+        }
+        self.light.merge_max(&other_light);
     }
 
     #[inline]
@@ -413,5 +444,98 @@ mod tests {
             31,
             "a post-merge resident must keep the mass flushed into the light layer"
         );
+    }
+
+    /// Builds two sketches over disjoint flow sets, plus the truth table.
+    fn disjoint_pair() -> (Elastic, Elastic, Vec<(String, i32)>) {
+        let mut left: Elastic = Elastic::init_with_dimensions(8, 2, 64);
+        let mut right: Elastic = Elastic::init_with_dimensions(8, 2, 64);
+        let mut truth = Vec::new();
+
+        for i in 0..40i32 {
+            let key = format!("left::{i}");
+            let count = (i % 7) + 1;
+            for _ in 0..count {
+                left.insert(key.clone());
+            }
+            truth.push((key, count));
+        }
+        for i in 0..40i32 {
+            let key = format!("right::{i}");
+            let count = (i % 5) + 1;
+            for _ in 0..count {
+                right.insert(key.clone());
+            }
+            truth.push((key, count));
+        }
+        (left, right, truth)
+    }
+
+    #[test]
+    fn maximum_merging_never_underestimates_disjoint_flows() {
+        let (mut left, right, truth) = disjoint_pair();
+        left.merge_max(&right);
+
+        for (key, count) in &truth {
+            let est = left.query(key.clone());
+            assert!(
+                est >= *count,
+                "maximum merging underestimated {key}: {est} < {count}"
+            );
+        }
+    }
+
+    #[test]
+    fn maximum_merging_is_tighter_than_sum_merging() {
+        let (mut summed, right, truth) = disjoint_pair();
+        summed.merge(&right);
+        let (mut maxed, right, _) = disjoint_pair();
+        maxed.merge_max(&right);
+
+        let mut strictly_tighter = 0;
+        for (key, _) in &truth {
+            let sum_est = summed.query(key.clone());
+            let max_est = maxed.query(key.clone());
+            assert!(
+                max_est <= sum_est,
+                "maximum merging must not be looser on {key}: {max_est} > {sum_est}"
+            );
+            if max_est < sum_est {
+                strictly_tighter += 1;
+            }
+        }
+        assert!(
+            strictly_tighter > 0,
+            "no flow got a tighter estimate, so this input cannot tell the merges apart"
+        );
+    }
+
+    #[test]
+    fn maximum_merging_underestimates_a_flow_both_sides_saw() {
+        // the paper's precondition, pinned: MM is for disjoint flow sets, and a
+        // shared flow reads back as the larger side instead of the sum
+        let mut left: Elastic = Elastic::init_with_length(8);
+        let mut right: Elastic = Elastic::init_with_length(8);
+        for _ in 0..30 {
+            left.insert("flow::shared".to_string());
+        }
+        for _ in 0..20 {
+            right.insert("flow::shared".to_string());
+        }
+
+        left.merge_max(&right);
+
+        assert_eq!(left.query("flow::shared".to_string()), 30);
+
+        let mut summed: Elastic = Elastic::init_with_length(8);
+        let mut right: Elastic = Elastic::init_with_length(8);
+        for _ in 0..30 {
+            summed.insert("flow::shared".to_string());
+        }
+        for _ in 0..20 {
+            right.insert("flow::shared".to_string());
+        }
+        summed.merge(&right);
+        assert_eq!(summed.query("flow::shared".to_string()), 50);
     }
 }

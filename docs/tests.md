@@ -202,6 +202,9 @@ Test file: [`src/sketches/elastic.rs`](../src/sketches/elastic.rs)
 | `merge_flushes_heavy_and_sum_merges_light` | Merge folds both heavy parts into the summed light layer. | Verifies post-merge `query` returns exactly `30` and `18` for the two flows and that every bucket is vacant with the eviction flag set. |
 | `merge_preserves_colliding_flow_mass` | Merge preserves mass for bucket-colliding flows. | Merges two sketches whose flows share a heavy bucket and verifies both estimates stay at or above their true counts. |
 | `a_bucket_reoccupied_after_merge_still_reads_the_light_layer` | A post-merge resident keeps its flushed mass. | After merging a 30-count flow away and re-inserting it once, verifies `query` returns `31` rather than `1`. |
+| `maximum_merging_never_underestimates_disjoint_flows` | Maximum merging keeps Elastic's one-sided guarantee. | Merges two sketches over 80 disjoint flows through a `2x64` light layer and verifies every per-flow estimate is at or above its true count. |
+| `maximum_merging_is_tighter_than_sum_merging` | Maximum merging beats sum merging on disjoint flows. | Runs the same 80-flow disjoint input through `merge` and `merge_max` and verifies no flow is looser under max and at least one is strictly tighter; measured totals are 434 against 359 for a truth of 275. |
+| `maximum_merging_underestimates_a_flow_both_sides_saw` | Maximum merging's precondition, pinned as behavior. | A flow inserted 30 times left and 20 times right reads back as `30` after `merge_max` and `50` after `merge`, fixing the disjointness requirement as tested behavior rather than prose. |
 
 ### Coco
 

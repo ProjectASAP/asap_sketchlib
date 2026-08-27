@@ -82,11 +82,34 @@ The estimator is one-sided: it never returns less than the true count.
 
 ```rust
 fn merge(&mut self, other: &Elastic<H>)
+fn merge_max(&mut self, other: &Elastic<H>)
 ```
 
-Folds both heavy parts into their light layers and sums the light layers. The
-merged sketch answers every flow from the light layer; its vacated buckets keep
-the eviction flag so a later resident still reads its pre-merge mass.
+Both fold the two heavy parts into their light layers first. The merged sketch
+then answers every flow from the light layer; its vacated buckets keep the
+eviction flag so a later resident still reads its pre-merge mass. Both require
+the same heavy bucket count, and `merge_max` additionally requires the same
+light dimensions — SIGCOMM '18 §3.2.2 gives merging across different widths
+only in its technical report, and that is not implemented.
+
+`merge` is the paper's **Sum merging**: it adds the light layers counter by
+counter. It is correct whatever the two sketches saw, including flows that
+appear on both sides, and the paper calls it "simple and fast, but not
+accurate".
+
+`merge_max` is the paper's **Maximum merging**: it keeps the larger of each
+counter pair. It is tighter than `merge` and still never underestimates, but
+**only when the two sketches observed disjoint flow sets** — one flow per
+measurement point, never the same flow at two of them.
+
+> Using `merge_max` on sketches that share a flow underestimates that flow: it
+> reads back as the larger side rather than the sum. Underestimation is exactly
+> what Elastic's one-sided guarantee otherwise rules out, so reach for `merge`
+> whenever a flow can repeat across sketches.
+
+Measured on 80 disjoint flows totalling 275 through an 8-bucket heavy table and
+a 2x64 light layer: `merge` estimates 434 in total, `merge_max` 359, roughly
+halving the over-estimate.
 
 ## Serialization
 
