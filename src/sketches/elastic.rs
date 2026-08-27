@@ -296,6 +296,59 @@ impl<H: SketchHasher> Elastic<H> {
         self.stale_copies = true;
     }
 
+    /// Flows the heavy part holds, each with its whole estimate. Stale copies
+    /// left by an expansion are skipped, so no flow is reported twice.
+    fn resident_flows(&self) -> Vec<(String, i32)> {
+        let mut flows: Vec<(String, i32)> = (0..self.heavy.len())
+            .filter(|idx| !self.heavy[*idx].is_vacant() && !self.stale_at(*idx))
+            .map(|idx| {
+                let id = self.heavy[idx].flow_id.clone();
+                let size = self.query(id.clone());
+                (id, size)
+            })
+            .collect();
+        flows.sort_unstable();
+        flows
+    }
+
+    /// Section 5's heavy hitter detection: every flow in the heavy part whose
+    /// estimate reaches `threshold`, sorted by flow id.
+    ///
+    /// The paper queries the size of each flow in the heavy part rather than
+    /// reading `vote_pos`, so a flow that was evicted and came back reads
+    /// through the light layer too.
+    pub fn heavy_hitters(&self, threshold: i32) -> Vec<(String, i32)> {
+        self.resident_flows()
+            .into_iter()
+            .filter(|(_, size)| *size >= threshold)
+            .collect()
+    }
+
+    /// Section 5's heavy change detection over two adjacent windows: every flow
+    /// held by either heavy part whose size moved by more than `threshold`.
+    ///
+    /// Each entry is `(flow, size in self, size in other)`; a flow absent from
+    /// one window reads whatever that window's light layer holds for it.
+    pub fn heavy_changes(&self, other: &Elastic<H>, threshold: i32) -> Vec<(String, i32, i32)> {
+        let mut ids: Vec<String> = self
+            .resident_flows()
+            .into_iter()
+            .map(|(id, _)| id)
+            .chain(other.resident_flows().into_iter().map(|(id, _)| id))
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+
+        ids.into_iter()
+            .map(|id| {
+                let before = self.query(id.clone());
+                let after = other.query(id.clone());
+                (id, before, after)
+            })
+            .filter(|(_, before, after)| (after - before).abs() > threshold)
+            .collect()
+    }
+
     /// Buckets whose resident flow is larger than `t2`, the paper's count of
     /// full buckets. Compare against a `T1` of your own to decide when to call
     /// [`Self::expand_heavy`].
@@ -1171,5 +1224,168 @@ mod tests {
                 "{key} underestimated after a round trip"
             );
         }
+    }
+    /// Seats each `(flow, count)` in its own sketch and asserts every one of
+    /// them really is resident, so a hash collision fails the fixture loudly
+    /// rather than quietly changing what the test covers.
+    fn sketch_with_resident_flows(buckets: i32, flows: &[(&str, i32)]) -> Elastic {
+        let mut sk: Elastic = Elastic::init_with_length(buckets);
+        for (id, count) in flows {
+            for _ in 0..*count {
+                sk.insert((*id).to_string());
+            }
+        }
+        for (id, count) in flows {
+            let idx = bucket_for(id, &sk);
+            assert_eq!(
+                sk.heavy[idx].flow_id, *id,
+                "fixture flow {id} is not resident; pick different keys"
+            );
+            assert_eq!(sk.query((*id).to_string()), *count, "fixture flow {id}");
+        }
+        sk
+    }
+
+    #[test]
+    fn heavy_hitters_reports_every_resident_above_the_threshold() {
+        let sk = sketch_with_resident_flows(
+            256,
+            &[
+                ("flow::alpha", 50),
+                ("flow::beta", 30),
+                ("flow::gamma", 12),
+                ("flow::delta", 3),
+            ],
+        );
+
+        assert_eq!(
+            sk.heavy_hitters(20),
+            vec![
+                ("flow::alpha".to_string(), 50),
+                ("flow::beta".to_string(), 30),
+            ]
+        );
+        assert_eq!(sk.heavy_hitters(100), vec![]);
+        assert_eq!(sk.heavy_hitters(1).len(), 4);
+    }
+
+    #[test]
+    fn heavy_hitters_size_a_flagged_resident_through_the_light_layer() {
+        // a resident that took its bucket over carries most of its size in the
+        // light layer, so vote_pos alone would not clear the threshold
+        let mut sketch: Elastic = Elastic::init_with_length(8);
+        let primary = "flow::primary";
+        let secondary = colliding_key(primary, &sketch);
+
+        for _ in 0..10 {
+            sketch.insert(primary.to_string());
+        }
+        for _ in 0..(LAMBDA * 10) {
+            sketch.insert(secondary.clone());
+        }
+
+        let idx = bucket_for(primary, &sketch);
+        assert_eq!(
+            sketch.heavy[idx].vote_pos, 1,
+            "the takeover leaves one vote"
+        );
+        assert!(sketch.heavy[idx].eviction);
+
+        assert_eq!(
+            sketch.heavy_hitters(50),
+            vec![(secondary, LAMBDA * 10)],
+            "a flagged resident is sized by query, not by vote_pos"
+        );
+    }
+
+    #[test]
+    fn heavy_hitters_includes_a_flow_sitting_exactly_on_the_threshold() {
+        // the reference reports on `val >= threshold`
+        let sk = sketch_with_resident_flows(256, &[("flow::on", 20), ("flow::under", 19)]);
+
+        assert_eq!(
+            sk.heavy_hitters(20),
+            vec![("flow::on".to_string(), 20)],
+            "a flow equal to the threshold is a heavy hitter"
+        );
+    }
+
+    #[test]
+    fn heavy_hitters_does_not_report_a_flow_twice_after_expansion() {
+        let mut sk = sketch_with_resident_flows(
+            8,
+            &[("flow::alpha", 50), ("flow::beta", 30), ("flow::gamma", 25)],
+        );
+        sk.expand_heavy();
+
+        // every resident now has a copy in the half it no longer hashes to
+        assert!(sk.stale_copies);
+        assert_eq!(
+            sk.heavy_hitters(20),
+            vec![
+                ("flow::alpha".to_string(), 50),
+                ("flow::beta".to_string(), 30),
+                ("flow::gamma".to_string(), 25),
+            ]
+        );
+    }
+
+    #[test]
+    fn heavy_changes_reports_only_moves_past_the_threshold() {
+        let before = sketch_with_resident_flows(
+            256,
+            &[
+                ("flow::rising", 10),
+                ("flow::falling", 60),
+                ("flow::steady", 40),
+            ],
+        );
+        let after = sketch_with_resident_flows(
+            256,
+            &[
+                ("flow::rising", 55),
+                ("flow::falling", 8),
+                ("flow::steady", 42),
+            ],
+        );
+
+        assert_eq!(
+            before.heavy_changes(&after, 20),
+            vec![
+                ("flow::falling".to_string(), 60, 8),
+                ("flow::rising".to_string(), 10, 55),
+            ],
+            "steady moved by 2 and must not be reported"
+        );
+    }
+
+    #[test]
+    fn heavy_changes_covers_a_flow_present_in_only_one_window() {
+        let before = sketch_with_resident_flows(256, &[("flow::gone", 40), ("flow::kept", 30)]);
+        let after = sketch_with_resident_flows(256, &[("flow::kept", 31), ("flow::new", 45)]);
+
+        assert_eq!(
+            before.heavy_changes(&after, 20),
+            vec![
+                ("flow::gone".to_string(), 40, 0),
+                ("flow::new".to_string(), 0, 45),
+            ],
+            "a flow in one window only is a change against zero"
+        );
+    }
+
+    #[test]
+    fn heavy_changes_reports_each_flow_once() {
+        // the flow is resident in both windows and each expansion leaves it a
+        // stale copy, so it reaches the id list four times
+        let mut before = sketch_with_resident_flows(8, &[("flow::rising", 10)]);
+        let mut after = sketch_with_resident_flows(8, &[("flow::rising", 55)]);
+        before.expand_heavy();
+        after.expand_heavy();
+
+        assert_eq!(
+            before.heavy_changes(&after, 20),
+            vec![("flow::rising".to_string(), 10, 55)]
+        );
     }
 }

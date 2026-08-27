@@ -224,6 +224,12 @@ Test file: [`src/sketches/elastic.rs`](../src/sketches/elastic.rs)
 | `maximum_merging_never_underestimates_disjoint_flows` | Maximum merging keeps Elastic's one-sided guarantee. | Merges two sketches over 80 disjoint flows through a `2x64` light layer and verifies every per-flow estimate is at or above its true count. |
 | `maximum_merging_is_tighter_than_sum_merging` | Maximum merging beats sum merging on disjoint flows. | Runs the same 80-flow disjoint input through `merge` and `merge_max` and verifies no flow is looser under max and at least one is strictly tighter; measured totals are 434 against 359 for a truth of 275. |
 | `maximum_merging_underestimates_a_flow_both_sides_saw` | Maximum merging's precondition, pinned as behavior. | A flow inserted 30 times left and 20 times right reads back as `30` after `merge_max` and `50` after `merge`, fixing the disjointness requirement as tested behavior rather than prose. |
+| `heavy_hitters_reports_every_resident_above_the_threshold` | Heavy hitter detection reports the right set. | Over four residents of a 256-bucket table (50/30/12/3), verifies `heavy_hitters(20)` is exactly the 50 and 30 flows, `heavy_hitters(100)` is empty, and `heavy_hitters(1)` has all four. |
+| `heavy_hitters_includes_a_flow_sitting_exactly_on_the_threshold` | The threshold is inclusive. | A flow of exactly 20 is reported at `threshold = 20` and one of 19 is not, matching the reference's `val >= threshold`. |
+| `heavy_hitters_does_not_report_a_flow_twice_after_expansion` | Expansion does not duplicate hitters. | After `expand_heavy()` leaves every resident a stale copy, verifies three flows come back once each rather than twice. |
+| `heavy_changes_reports_only_moves_past_the_threshold` | Heavy change detection filters by size of move. | Over rising (10->55), falling (60->8), and steady (40->42) flows, verifies only the first two are reported at `threshold = 20`. |
+| `heavy_changes_covers_a_flow_present_in_only_one_window` | A flow in one window only is a change. | Verifies a flow of 40 that vanishes reports `(40, 0)` and one of 45 that appears reports `(0, 45)`. |
+| `heavy_changes_reports_each_flow_once` | Each flow appears once in the change list. | A flow resident in both windows, each expanded so it also has a stale copy, reaches the id list four times and is reported once. |
 
 ### Coco
 

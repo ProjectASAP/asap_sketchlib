@@ -213,6 +213,43 @@ its own group and becomes a second live entry for the same flow — reachable
 whenever the bucket count is not a power of two, for instance 12 buckets
 doubled to 24 and compressed by 3.
 
+## Measurement tasks
+
+```rust
+fn heavy_hitters(&self, threshold: i32) -> Vec<(String, i32)>
+fn heavy_changes(&self, other: &Elastic<H>, threshold: i32) -> Vec<(String, i32, i32)>
+```
+
+Section 5 lists six tasks the sketch is meant to serve. Two are implemented
+here, both sorted by flow id and both skipping the stale copies an expansion
+leaves behind, so no flow is reported twice.
+
+**Heavy hitter detection.** "For this task, we query the size of each flow in
+the heavy part. If one's size is larger than the predefined threshold, then we
+report this flow as a heavy hitter." Every resident is put through `query`
+rather than read straight off `vote_pos`, so a flow that was once evicted picks
+up its light-layer remainder. The reference reports on `>=`, and so does this.
+
+**Heavy change detection.** "For two adjacent time windows, we build two
+Elastic sketches, respectively... we check all flows in the heavy parts of the
+two sketches, and if the size difference of a flow in the two windows is larger
+than T, we report it as a heavy change." Residents of both heavy parts are
+taken together, so a flow that appears in only one window is still a change,
+measured against whatever the other window's light layer holds for it. Each
+entry is `(flow, size in self, size in other)`.
+
+### The other four tasks
+
+- **Flow size estimation** is `query`.
+- **Cardinality**, **entropy**, and **flow size distribution** are not
+  implemented. The paper's estimators for these read the light layer's counter
+  value distribution, and the reference builds them on a `d = 1` flat array of
+  8-bit counters: `get_cardinality` is linear counting over that array,
+  `get_entropy` accumulates `mice_dist[i] * i * log2(i)`, and
+  `get_distribution` runs ten EM epochs over the raw counters. This crate's
+  light layer is a `rows x cols` Count-Min of `i32`, so none of the three
+  carries over without picking a different estimator.
+
 ## Serialization
 
 Derives serde; no dedicated byte API helpers.
