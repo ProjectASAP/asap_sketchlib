@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{FreqTruth, zipf_u64};
+use common::{FreqTruth, uniform_u64, zipf_u64};
 use std::collections::HashMap;
 
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
@@ -87,6 +87,69 @@ fn countmin_regular_fast_paths_agree_on_stream() {
     }
 }
 
+/// Counts keys whose estimate sits within `bound` of the exact count.
+fn keys_within_bound<F>(truth: &FreqTruth, estimate: F, bound: f64) -> usize
+where
+    F: Fn(i64) -> f64,
+{
+    truth
+        .pairs()
+        .into_iter()
+        .filter(|(k, c)| (estimate(*k) - *c as f64).abs() < bound)
+        .count()
+}
+
+/// Probabilistic bound with `eps = e / cols` and `delta = e^-rows`: at least a
+/// `1 - delta` fraction of keys estimate within `eps * N`, on both insert paths.
+#[test]
+fn countmin_error_bound_covers_most_keys_on_both_paths() {
+    const ROWS: usize = 3;
+    const COLS: usize = 4096;
+    const N: usize = 200_000;
+
+    for (name, stream) in [
+        ("zipf", zipf_u64(N, 8192, 1.1, 1005)),
+        ("uniform", uniform_u64(N, 4096, 1006)),
+    ] {
+        let mut truth = FreqTruth::default();
+        let mut regular = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(ROWS, COLS);
+        let mut fast = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+        for k in &stream {
+            let d = DataInput::U64(*k);
+            truth.observe(*k as i64);
+            regular.insert(&d);
+            fast.insert(&d);
+        }
+
+        let eps_n = std::f64::consts::E / COLS as f64 * N as f64;
+        let floor = truth.distinct() as f64 * (1.0 - 1.0 / std::f64::consts::E.powi(ROWS as i32));
+        for (path, within) in [
+            (
+                "regular",
+                keys_within_bound(
+                    &truth,
+                    |k| regular.estimate(&DataInput::U64(k as u64)) as f64,
+                    eps_n,
+                ),
+            ),
+            (
+                "fast",
+                keys_within_bound(
+                    &truth,
+                    |k| fast.estimate(&DataInput::U64(k as u64)) as f64,
+                    eps_n,
+                ),
+            ),
+        ] {
+            assert!(
+                within as f64 > floor,
+                "CountMin {name}/{path}: {within} of {} keys within eps*N={eps_n:.0}, need > {floor:.1}",
+                truth.distinct()
+            );
+        }
+    }
+}
+
 // -------------------------------------------------------------- CountSketch
 
 #[test]
@@ -118,6 +181,54 @@ fn countsketch_turnstile_net_zero_and_median_bound() {
             "key {k}: |{est:.0} - {c}| > 1.5 * median bound {:.0}",
             1.5 * bound
         );
+    }
+}
+
+/// The same `1 - delta` coverage bound as CountMin, for the signed sketch.
+#[test]
+fn countsketch_error_bound_covers_most_keys_on_both_paths() {
+    const ROWS: usize = 3;
+    const COLS: usize = 4096;
+    const N: usize = 200_000;
+
+    for (name, stream) in [
+        ("zipf", zipf_u64(N, 8192, 1.1, 1007)),
+        ("uniform", uniform_u64(N, 4096, 1008)),
+    ] {
+        let mut truth = FreqTruth::default();
+        let mut regular =
+            asap_sketchlib::Count::<Vector2D<i32>, RegularPath>::with_dimensions(ROWS, COLS);
+        let mut fast =
+            asap_sketchlib::Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+        for k in &stream {
+            let d = DataInput::U64(*k);
+            truth.observe(*k as i64);
+            regular.insert(&d);
+            fast.insert(&d);
+        }
+
+        let eps_n = std::f64::consts::E / COLS as f64 * N as f64;
+        let floor = truth.distinct() as f64 * (1.0 - 1.0 / std::f64::consts::E.powi(ROWS as i32));
+        for (path, within) in [
+            (
+                "regular",
+                keys_within_bound(
+                    &truth,
+                    |k| regular.estimate(&DataInput::U64(k as u64)),
+                    eps_n,
+                ),
+            ),
+            (
+                "fast",
+                keys_within_bound(&truth, |k| fast.estimate(&DataInput::U64(k as u64)), eps_n),
+            ),
+        ] {
+            assert!(
+                within as f64 > floor,
+                "CountSketch {name}/{path}: {within} of {} keys within eps*N={eps_n:.0}, need > {floor:.1}",
+                truth.distinct()
+            );
+        }
     }
 }
 

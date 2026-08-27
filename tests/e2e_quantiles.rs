@@ -166,6 +166,7 @@ fn kll_family_rank_error_across_distributions_and_lengths() {
 #[test]
 fn ddsketch_alpha_across_distributions_core_and_portable() {
     let alpha = 0.01;
+    const DDS_QS: [f64; 7] = [0.0, 0.10, 0.25, 0.50, 0.75, 0.90, 1.0];
 
     // Adversarial log-uniform stream straddling bucket edges.
     let gamma = (1.0 + alpha) / (1.0 - alpha);
@@ -176,10 +177,23 @@ fn ddsketch_alpha_across_distributions_core_and_portable() {
         .filter(|v| *v > 0.0);
     let exponential = exponential_f64(20_000, 1e-3, 3007);
 
+    // Uniform and Zipf(1.1) streams over the same [1e6, 1e7] span.
+    let uniform: Vec<f64> = uniform_u64(20_000, 9_000_000, 3009)
+        .into_iter()
+        .map(|v| 1_000_000.0 + v as f64)
+        .collect();
+    let zipf_step = (10_000_000.0 - 1_000_000.0) / 8_191.0;
+    let zipf: Vec<f64> = zipf_u64(20_000, 8_192, 1.1, 3010)
+        .into_iter()
+        .map(|i| 1_000_000.0 + zipf_step * i as f64)
+        .collect();
+
     for (label, values) in [
         ("adversarial", adversarial),
         ("normal", normal.collect()),
         ("exponential", exponential),
+        ("uniform", uniform),
+        ("zipf", zipf),
     ] {
         let truth = NumericTruth::new(values.clone());
         let mut core = DDSketch::new(alpha);
@@ -194,7 +208,7 @@ fn ddsketch_alpha_across_distributions_core_and_portable() {
             "{label}: dropped samples"
         );
 
-        for &q in &QS {
+        for &q in &DDS_QS {
             // Contract: relative error <= alpha vs the TRUE order statistic.
             let t = truth.quantile(q);
             if t <= 0.0 {

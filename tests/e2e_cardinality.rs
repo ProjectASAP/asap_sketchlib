@@ -10,13 +10,17 @@ use asap_sketchlib::{DataInput, HyperLogLog, HyperLogLogHIP, SetAggregator};
 
 #[test]
 fn hll_variants_checkpoints_and_shard_merge() {
-    let checkpoints = [10_000u64, 100_000, 1_000_000];
+    // Checkpoints span the linear-counting regime (below the register count)
+    // and the estimator regime above it.
+    let checkpoints = [10u64, 100, 1_000, 10_000, 100_000, 1_000_000];
     let mut classic = HyperLogLog::<asap_sketchlib::Classic>::new();
     let mut ertl = HyperLogLog::<asap_sketchlib::ErtlMLE>::new();
     let mut hip = HyperLogLogHIP::new();
     // Even/odd shard split for the merge leg of the test.
     let mut classic_even = HyperLogLog::<asap_sketchlib::Classic>::new();
     let mut classic_odd = HyperLogLog::<asap_sketchlib::Classic>::new();
+    let mut ertl_even = HyperLogLog::<asap_sketchlib::ErtlMLE>::new();
+    let mut ertl_odd = HyperLogLog::<asap_sketchlib::ErtlMLE>::new();
 
     let mut seen = 0u64;
     for &target in &checkpoints {
@@ -27,8 +31,10 @@ fn hll_variants_checkpoints_and_shard_merge() {
             hip.insert(&d);
             if seen % 2 == 0 {
                 classic_even.insert(&d);
+                ertl_even.insert(&d);
             } else {
                 classic_odd.insert(&d);
+                ertl_odd.insert(&d);
             }
             seen += 1;
         }
@@ -40,16 +46,25 @@ fn hll_variants_checkpoints_and_shard_merge() {
         ] {
             assert_between(est, t * 0.98, t * 1.02, &format!("{label} @ {target}"));
         }
-    }
 
-    classic_even.merge(&classic_odd);
-    let merged = classic_even.estimate() as f64;
-    assert_between(
-        merged,
-        1_000_000.0 * 0.98,
-        1_000_000.0 * 1.02,
-        "Classic shard-merge @ 1e6",
-    );
+        let mut classic_merged = classic_even.clone();
+        classic_merged.merge(&classic_odd);
+        assert_between(
+            classic_merged.estimate() as f64,
+            t * 0.98,
+            t * 1.02,
+            &format!("Classic shard-merge @ {target}"),
+        );
+
+        let mut ertl_merged = ertl_even.clone();
+        ertl_merged.merge(&ertl_odd);
+        assert_between(
+            ertl_merged.estimate() as f64,
+            t * 0.98,
+            t * 1.02,
+            &format!("ErtlMLE shard-merge @ {target}"),
+        );
+    }
 }
 
 #[test]
