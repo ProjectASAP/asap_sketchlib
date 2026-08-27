@@ -21,6 +21,16 @@ fn new() -> Self
 fn init_with_size(w: usize, d: usize) -> Self
 ```
 
+`new()` builds a `1024 x 4` table: 4096 buckets, 128 KiB, plus a heap allocation
+per occupied bucket for its stored key.
+
+Sizing: `d` is the number of arrays an insert scans, and the paper recommends
+2 to 4 — larger `d` spreads small flows better at the cost of a longer scan per
+packet. `w` is the buckets per array, and it is the parameter to raise: bucket
+count drives the collision rate, and the sketch can attribute mass to at most
+`w * d` distinct keys at once, so size it against the number of heavy flows you
+expect to resolve.
+
 ## Insert/Update
 
 ```rust

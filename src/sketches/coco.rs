@@ -35,8 +35,13 @@ pub struct Coco<H: SketchHasher = DefaultXxHasher> {
     _hasher: PhantomData<H>,
 }
 
-const DEFAULT_WIDTH: usize = 64;
-const DEFAULT_DEPTH: usize = 5;
+/// Buckets per array in a default `Coco`. Width sets the collision rate, and
+/// `w * d` buckets at 32 bytes each set the table footprint.
+const DEFAULT_WIDTH: usize = 1024;
+
+/// Arrays in a default `Coco`, inside the paper's recommended 2..=4. Every
+/// insert scans the `d` buckets its key maps to.
+const DEFAULT_DEPTH: usize = 4;
 
 impl Default for CocoBucket {
     fn default() -> Self {
