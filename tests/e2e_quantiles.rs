@@ -7,7 +7,7 @@ mod common;
 
 use common::{
     NumericTruth, assert_between, assert_in_rank_band, exponential_f64, log_uniform_f64,
-    normal_f64, uniform_u64,
+    normal_f64, uniform_u64, zipf_u64,
 };
 
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
@@ -102,6 +102,62 @@ fn kll_dynamic_parity_with_kll() {
     for &q in &QS {
         assert_in_rank_band(a.quantile(q), &truth, q, 0.03, "KLL normal");
         assert_in_rank_band(b.quantile(q), &truth, q, 0.03, "KLLDynamic normal");
+    }
+}
+
+/// Rank-error contract for both KLL implementations across distributions and
+/// stream lengths: every quantile estimate lands inside the true rank band.
+#[test]
+fn kll_family_rank_error_across_distributions_and_lengths() {
+    const TOL: f64 = 0.02;
+    const QUANTILES: [f64; 7] = [0.0, 0.10, 0.25, 0.50, 0.75, 0.90, 1.0];
+    const SAMPLE_SIZES: [usize; 4] = [1_000, 5_000, 20_000, 200_000];
+    // Zipf indices are spread over a fixed grid spanning [1e6, 1e7].
+    const ZIPF_DOMAIN: usize = 8_192;
+    const ZIPF_LO: f64 = 1_000_000.0;
+    const ZIPF_HI: f64 = 10_000_000.0;
+
+    for (name, seed_base) in [("uniform", 0xA5A5_0000u64), ("zipf", 0xB4B4_0000u64)] {
+        for (i, &n) in SAMPLE_SIZES.iter().enumerate() {
+            let seed = seed_base + i as u64;
+            let values: Vec<f64> = if name == "uniform" {
+                uniform_u64(n, 100_000_000, seed)
+                    .into_iter()
+                    .map(|v| v as f64)
+                    .collect()
+            } else {
+                let step = (ZIPF_HI - ZIPF_LO) / (ZIPF_DOMAIN - 1) as f64;
+                zipf_u64(n, ZIPF_DOMAIN, 1.1, seed)
+                    .into_iter()
+                    .map(|idx| ZIPF_LO + step * idx as f64)
+                    .collect()
+            };
+            let truth = NumericTruth::new(values.clone());
+
+            let mut kll = KLL::init_kll(200);
+            let mut dynamic = asap_sketchlib::KLLDynamic::<f64>::init_kll(200);
+            for v in &values {
+                kll.update(v);
+                dynamic.update(v);
+            }
+
+            for &q in &QUANTILES {
+                assert_in_rank_band(
+                    kll.quantile(q),
+                    &truth,
+                    q,
+                    TOL,
+                    &format!("KLL {name} n={n} seed=0x{seed:08x}"),
+                );
+                assert_in_rank_band(
+                    dynamic.quantile(q),
+                    &truth,
+                    q,
+                    TOL,
+                    &format!("KLLDynamic {name} n={n} seed=0x{seed:08x}"),
+                );
+            }
+        }
     }
 }
 
