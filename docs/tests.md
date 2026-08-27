@@ -190,8 +190,53 @@ Test file: [`src/sketches/elastic.rs`](../src/sketches/elastic.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
+| `init_with_dimensions_sizes_both_parts` | Both parts take the requested dimensions. | `init_with_dimensions(12, 2, 256)` is verified to yield 12 heavy buckets and a 2x256 light layer. |
+| `init_with_length_keeps_the_default_light_layer` | The old constructor is unchanged. | `init_with_length(8)` is verified to yield 8 heavy buckets over `DEFAULT_LIGHT_ROWS` x `DEFAULT_LIGHT_COLS`. |
+| `an_empty_heavy_table_is_rejected` | A zero bucket count panics. | `init_with_length(0)` is verified to panic with "at least one heavy bucket" rather than divide by zero in the bucket index. |
+| `a_negative_heavy_table_is_rejected` | A negative bucket count panics. | `init_with_length(-1)` is verified to panic rather than widen to a huge `usize`. |
+| `an_empty_light_layer_is_rejected` | A zero-row light layer panics. | `init_with_dimensions(8, 0, 4096)` is verified to panic with "non-empty light layer". |
+| `a_zero_width_light_layer_is_rejected` | A zero-column light layer panics. | `init_with_dimensions(8, 3, 0)` is verified to panic with "non-empty light layer". |
 | `heavy_bucket_tracks_repeated_flow_exactly` | Heavy bucket tracks repeated flow exactly. | Top-K/heavy-hitter tracking and updates behave as expected. |
 | `light_sketch_counts_colliding_flows` | Light sketch counts colliding flows. | Core functional behavior for this component path is validated. |
+| `eviction_moves_the_resident_flow_into_the_light_layer` | Takeover evicts the resident flow, not the arriving one. | After 10 inserts of a resident and `LAMBDA * 10` inserts of a colliding flow, verifies the bucket holds the arrival with `(vote_pos, vote_neg, eviction) = (1, 1, true)`, `query(resident) == 10`, and `query(arrival) == 80`. |
+| `expansion_doubles_the_heavy_table` | Copy operation doubles bucket count. | After `expand_heavy()` on an 8-bucket table, verifies `bktlen` and `heavy.len()` are both `16`. |
+| `expansion_preserves_every_existing_estimate` | Lemma 3.2 keeps estimates put across a doubling. | Records `query` for 24 flows over 8 buckets, doubles, and verifies every estimate is unchanged. |
+| `repeated_expansion_keeps_estimates_intact` | Two doublings in a row stay correct. | Same 24 flows through two `expand_heavy()` calls to `bktlen = 32`, all estimates unchanged. |
+| `an_insert_onto_a_stale_copy_replaces_it` | Incremental cleanup drops stale copies. | Finds a stale bucket after a doubling, inserts a key that hashes to it, and verifies the arrival takes the slot at `vote_pos = 1` while the displaced flow keeps its mass elsewhere. |
+| `merge_after_expansion_does_not_double_count` | Flushing an expanded table spills each flow once. | Doubles a 24-flow table, merges an empty peer, and verifies every estimate equals its true count rather than twice it. |
+| `merge_does_not_double_count_an_expanded_peer` | The peer's stale copies are skipped too. | Merges an expanded 24-flow peer into an unexpanded sketch and verifies no estimate doubles. |
+| `maximum_merging_does_not_double_count_an_expanded_peer` | Same for max merging. | As above through `merge_max`. |
+| `full_bucket_count_counts_residents_above_the_threshold` | Full-bucket count matches the threshold. | With 6 flows at 10 votes each, verifies `full_bucket_count(9) == 6` and `full_bucket_count(10) == 0`. |
+| `compression_shrinks_the_heavy_table` | Active compression divides the bucket count. | After `compress_heavy(4)` on a 16-bucket table, verifies `bktlen` and `heavy.len()` are both `4`. |
+| `compression_keeps_the_larger_flow_and_spills_the_smaller` | The bigger resident wins its group. | Puts a 30-vote flow in bucket 0 and a 3-vote flow in bucket 4, halves the table, and verifies the big flow still reads `30` from the heavy part while the small one has left it and reads back at least `3` from the light layer. |
+| `compression_neither_loses_nor_doubles_mass` | Compression only ever adds error. | Compresses 40 flows over 16 buckets by 4 and verifies no flow underestimates and the summed estimate rises without doubling. |
+| `a_ratio_that_does_not_divide_the_table_is_rejected` | Lemma 3.2 needs `w' \| w`. | `compress_heavy(3)` on an 8-bucket table panics with "must divide the bucket count". |
+| `compression_after_expansion_does_not_double_count` | Stale copies are dropped before grouping. | Expands 12 buckets to 24 — putting each twin 12 apart — compresses by 3 so twins land in different groups, verifies no flow is resident twice, then merges an empty peer and verifies every estimate equals its true count. |
+| `expand_then_compress_returns_to_the_original_size` | Doubling and halving round-trips. | `expand_heavy()` then `compress_heavy(2)` returns an 8-bucket table to 8 buckets with no flow underestimated. |
+| `heavy_only_insert_never_touches_the_light_layer` | Overload mode leaves every light counter alone. | Seeds the light layer through `insert`, snapshots all `2x64` counters, then runs `insert_heavy_only` across a vacant seat, a match, discarded arrivals, and a takeover, and verifies the snapshot is unchanged. |
+| `heavy_only_takeover_inherits_the_evicted_flow_size` | Takeover carries the evicted flow's size to the arrival. | After 10 resident votes and `LAMBDA * 10` colliding arrivals, verifies the bucket becomes `(arrival, vote_pos=10, vote_neg=0)` rather than starting at `1`. |
+| `heavy_only_takeover_inherits_the_eviction_flag` | Takeover carries the bucket's flag to the arrival. | Seeds a resident bucket's `eviction` to `false` and to `true` in turn, drives a takeover through `insert_heavy_only`, and verifies the arrival reads back the seeded value rather than a forced `true`. |
+| `heavy_only_takeover_discards_the_evicted_flow_as_designed` | The evicted flow's size is dropped, not spilled. | In the same scenario, verifies `query` on the evicted flow returns `0` against a true count of `10`. |
+| `heavy_only_matches_insert_while_buckets_seat_and_match` | Seating and matching agree with the normal path. | Feeds 6 flows into a 16-bucket table through both paths and verifies every bucket field and every `query` result matches. |
+| `merge_keeps_uncontested_flows_in_the_heavy_part` | Merge leaves elephants in the heavy part. | Verifies post-merge `query` returns exactly `30` and `18`, that both flows are still resident with those vote counts, and that every bucket carries the eviction flag. |
+| `merge_keeps_the_larger_flow_on_a_contested_bucket` | A contested bucket goes to the larger flow. | With a 20-count and a 9-count flow on one bucket, verifies the 20 keeps the bucket and the loser reads back at `>= 9` from the light layer. |
+| `merge_keeps_the_peers_flow_when_it_is_the_larger` | Each side is sized against its own sketch. | A 3-count local flow loses its bucket to the peer's 50-count flow; querying the peer's flow against the local sketch would read near 0 and flip the outcome. |
+| `merge_sums_the_votes_of_a_flow_both_sides_held` | A shared elephant is summed, not replaced. | A flow with 30 left and 20 right comes back resident with `vote_pos == 50`. |
+| `merge_never_underestimates_across_a_large_flow_set` | Merging preserves the one-sided guarantee. | 60 flows, half of them shared, through a `2x64` light layer; every flow reads back at or above its true count. |
+| `merge_does_not_leave_a_stale_copy_as_a_resident` | Expansion copies do not survive a merge. | After a doubling and a merge, `heavy_hitters` reports each flow exactly once; the merge clears the stale flag, so a kept copy would look live. |
+| `merge_preserves_colliding_flow_mass` | Merge preserves mass for bucket-colliding flows. | Merges two sketches whose flows share a heavy bucket and verifies both estimates stay at or above their true counts. |
+| `a_bucket_reoccupied_after_merge_still_reads_the_light_layer` | A post-merge resident keeps its flushed mass. | After merging a 30-count flow away and re-inserting it once, verifies `query` returns `31` rather than `1`. |
+| `maximum_merging_never_underestimates_disjoint_flows` | Maximum merging keeps Elastic's one-sided guarantee. | Merges two sketches over 80 disjoint flows through a `2x64` light layer and verifies every per-flow estimate is at or above its true count. |
+| `maximum_merging_is_tighter_than_sum_merging` | Maximum merging beats sum merging on disjoint flows. | Runs the same 80-flow disjoint input through `merge` and `merge_max` and verifies no flow is looser under max and at least one is strictly tighter; measured totals are 434 against 359 for a truth of 275. |
+| `maximum_merging_underestimates_a_mouse_flow_both_sides_saw` | Maximum merging's precondition, pinned as behavior. | A mouse flow kept out of the heavy part by a hot flow, inserted 30 times left and 20 times right, reads back as `30` after `merge_max` and `50` after `merge`. |
+| `maximum_merging_sums_a_flow_both_heavy_parts_held` | The restriction is on the light half only. | A shared flow resident on both sides comes back with `vote_pos == 50` under `merge_max`, since the heavy parts are combined bucket by bucket either way. |
+| `maximum_merging_keeps_the_larger_flow_on_a_contested_bucket` | Maximum merging contests buckets the same way. | The 20-count flow keeps the bucket against a 9-count peer, and the loser reads back at `>= 9`. |
+| `heavy_hitters_reports_every_resident_above_the_threshold` | Heavy hitter detection reports the right set. | Over four residents of a 256-bucket table (50/30/12/3), verifies `heavy_hitters(20)` is exactly the 50 and 30 flows, `heavy_hitters(100)` is empty, and `heavy_hitters(1)` has all four. |
+| `heavy_hitters_includes_a_flow_sitting_exactly_on_the_threshold` | The threshold is inclusive. | A flow of exactly 20 is reported at `threshold = 20` and one of 19 is not, matching the reference's `val >= threshold`. |
+| `heavy_hitters_does_not_report_a_flow_twice_after_expansion` | Expansion does not duplicate hitters. | After `expand_heavy()` leaves every resident a stale copy, verifies three flows come back once each rather than twice. |
+| `heavy_changes_reports_only_moves_past_the_threshold` | Heavy change detection filters by size of move. | Over rising (10->55), falling (60->8), and steady (40->42) flows, verifies only the first two are reported at `threshold = 20`. |
+| `heavy_changes_covers_a_flow_present_in_only_one_window` | A flow in one window only is a change. | Verifies a flow of 40 that vanishes reports `(40, 0)` and one of 45 that appears reports `(0, 45)`. |
+| `heavy_changes_reports_each_flow_once` | Each flow appears once in the change list. | A flow resident in both windows, each expanded so it also has a stale copy, reaches the id list four times and is reported once. |
 
 ### Coco
 
@@ -199,8 +244,17 @@ Test file: [`src/sketches/coco.rs`](../src/sketches/coco.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
-| `insert_then_estimate_matches_full_value_for_partial_key` | Insert then estimate matches full value for partial key. | Core behavior for insert/query/update and deterministic semantics is validated. |
+| `insert_then_estimate_matches_full_value_for_partial_key` | Insert then estimate matches full value for partial key. | Core behavior for insert/query/update and deterministic semantics is validated; the substring query and `estimate_key` both return `5`. |
 | `estimate_with_udf_allows_custom_partial_matching` | Estimate with udf allows custom partial matching. | Core behavior for insert/query/update and deterministic semantics is validated. |
+| `tied_minimum_buckets_are_chosen_uniformly_at_random` | Buckets tied at the smallest value are picked uniformly. | Inserts one key into 2,000 fresh `32x4` tables, where all four mapped buckets tie at `0`, and verifies each row takes between 200 and 800 of the landings rather than row 0 taking all of them. |
+| `the_three_queries_disagree_on_a_key_that_prefixes_another` | The three query shapes are distinguished on prefixing keys. | With `k1=7` and `k10=5` inserted, verifies `estimate_substring("k1")` returns `12` while `estimate_key` and `estimate_projected` both return `7`. |
+| `estimate_projected_aggregates_full_keys_sharing_a_partial_key` | Projection aggregates full keys onto one partial key. | Reproduces the paper's figure 7: two full keys on srcip `19.98.10.26` sum to `1041`, and the lone `34.52.73.17` key returns `856`. |
+| `recorded_flows_yields_each_occupied_bucket_once` | The query front-end lists every recorded flow exactly once. | After 20 weighted inserts into a `32x4` table, verifies the iterator yields one entry per occupied bucket and that no key appears twice. |
+| `group_by_agrees_with_per_key_projected_queries` | One-pass grouping matches the per-key scan. | Over 60 inserts across 5 families, verifies every `group_by` entry equals `estimate_projected` for the same partial key. |
+| `group_by_preserves_the_inserted_mass` | Grouping conserves the inserted mass under eviction. | Drives 400 inserts of weight 3 through an `8x2` table and verifies the grouped totals still sum to `1200`. |
+| `group_by_reproduces_the_papers_figure_seven` | Grouping reproduces the paper's worked example. | Groups `19.98.10.26\|80=521`, `19.98.10.26\|443=520`, and `34.52.73.17\|118=856` by srcip and verifies exactly two entries, `1041` and `856`. |
+| `a_key_occupies_at_most_one_bucket_per_row` | A key never gains a second home in the table. | After 64 inserts of one key into a `32x4` table, verifies exactly one bucket holds it and `estimate_key` returns `64`. |
+| `estimate_key_never_exceeds_the_inserted_mass` | Point queries stay inside the table mass. | Over 500 weighted inserts across 40 keys in an `8x2` table, verifies the table mass equals the inserted mass and no per-key estimate exceeds it. |
 | `merge_combines_tables_without_losing_counts` | Merge combines tables without losing counts. | Merge behavior preserves expected aggregate semantics and internal invariants. |
 
 ### KMV

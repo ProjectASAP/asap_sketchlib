@@ -44,7 +44,13 @@ fn as_storage_mut(&mut self) -> &mut S
 
 ```rust
 fn merge(&mut self, other: &Self)
+fn merge_max(&mut self, other: &Self)
 ```
+
+`merge` adds each counter pair. `merge_max` keeps the larger of each pair,
+which is tighter but correct only when the two sketches observed disjoint key
+sets — a key both sides counted reads back as the larger side, not the sum.
+Both assert matching dimensions.
 
 ## Serialization
 
