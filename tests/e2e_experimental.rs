@@ -146,7 +146,7 @@ fn coco_over_attribution_bounds_with_disjoint_prefixes() {
     }
 
     // Substring matching: "aaa" only matches aaa* buckets, never zzz*.
-    let got_aaa = coco.estimate("aaa");
+    let got_aaa = coco.estimate_substring("aaa");
     let true_aaa = truth["aaa"];
     assert!(
         got_aaa >= true_aaa * 3 / 4 && got_aaa <= total,

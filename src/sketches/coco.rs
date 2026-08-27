@@ -208,9 +208,29 @@ impl<H: SketchHasher> Coco<H> {
         total
     }
 
-    /// Subset query: sums every bucket whose stored key contains `partial_key`.
-    /// Use [`Self::estimate_key`] for the paper's point query.
-    pub fn estimate(&self, partial_key: &str) -> u64 {
+    /// Partial-key query in the shape of the paper's `GROUP BY g(k_F)`: sums
+    /// every occupied bucket whose stored full key projects to `partial_key`.
+    pub fn estimate_projected<F>(&self, partial_key: &str, project: F) -> u64
+    where
+        F: for<'a> Fn(&'a str) -> &'a str,
+    {
+        let mut total = 0;
+        for i in 0..self.d {
+            for j in 0..self.w {
+                if let Some(full) = &self.table[i][j].full_key {
+                    if project(full.as_str()) == partial_key {
+                        total += self.table[i][j].val;
+                    }
+                }
+            }
+        }
+        total
+    }
+
+    /// Sums every bucket whose stored key contains `partial_key` anywhere.
+    /// Containment is not a key projection: `"k1"` also collects `k10` and
+    /// `k100`. Use [`Self::estimate_projected`] or [`Self::estimate_key`].
+    pub fn estimate_substring(&self, partial_key: &str) -> u64 {
         let mut total = 0;
         for i in 0..self.d {
             for j in 0..self.w {
@@ -251,7 +271,7 @@ mod tests {
         coco.insert(key, 3);
         coco.insert(key, 2);
 
-        let estimate = coco.estimate("user");
+        let estimate = coco.estimate_substring("user");
         assert_eq!(estimate, 5);
         assert_eq!(coco.estimate_key(key), 5);
     }
@@ -299,6 +319,34 @@ mod tests {
                 "row {row} took {count} of {TRIALS} landings, expected 200..800"
             );
         }
+    }
+
+    #[test]
+    fn the_three_queries_disagree_on_a_key_that_prefixes_another() {
+        // substring containment is not a key projection: "k1" also matches "k10"
+        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        coco.insert("k1", 7);
+        coco.insert("k10", 5);
+
+        assert_eq!(coco.estimate_substring("k1"), 12);
+        assert_eq!(coco.estimate_key("k1"), 7);
+        assert_eq!(coco.estimate_projected("k1", |full| full), 7);
+    }
+
+    #[test]
+    fn estimate_projected_aggregates_full_keys_sharing_a_partial_key() {
+        // the paper's figure 7: two full keys on one srcip sum to that srcip
+        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        coco.insert("19.98.10.26|80", 521);
+        coco.insert("19.98.10.26|443", 520);
+        coco.insert("34.52.73.17|118", 856);
+
+        fn srcip(full: &str) -> &str {
+            full.split('|').next().unwrap_or(full)
+        }
+
+        assert_eq!(coco.estimate_projected("19.98.10.26", srcip), 1041);
+        assert_eq!(coco.estimate_projected("34.52.73.17", srcip), 856);
     }
 
     #[test]
@@ -352,7 +400,7 @@ mod tests {
 
         left.merge(&right);
 
-        assert_eq!(left.estimate("alpha"), 7);
-        assert_eq!(left.estimate("beta"), 11);
+        assert_eq!(left.estimate_substring("alpha"), 7);
+        assert_eq!(left.estimate_substring("beta"), 11);
     }
 }
