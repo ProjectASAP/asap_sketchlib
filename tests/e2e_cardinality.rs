@@ -12,7 +12,7 @@ use asap_sketchlib::{DataInput, HyperLogLog, HyperLogLogHIP, SetAggregator};
 fn hll_variants_checkpoints_and_shard_merge() {
     // Checkpoints span the linear-counting regime (below the register count)
     // and the estimator regime above it.
-    let checkpoints = [10u64, 100, 1_000, 10_000, 100_000, 1_000_000];
+    let checkpoints = [10u64, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000];
     let mut classic = HyperLogLog::<asap_sketchlib::Classic>::new();
     let mut ertl = HyperLogLog::<asap_sketchlib::ErtlMLE>::new();
     let mut hip = HyperLogLogHIP::new();

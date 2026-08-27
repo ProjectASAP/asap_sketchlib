@@ -388,7 +388,7 @@ fn fold_sketches_survive_a_sixteen_way_hierarchical_merge() {
     const FOLD_LEVEL: u32 = 4;
     const TOP_K: usize = 20;
     const WINDOWS: usize = 16;
-    const N: usize = 200_000;
+    const N: usize = 500_000;
 
     let stream = zipf_u64(N, 10_000, 1.1, 1009);
     let per_window = N / WINDOWS;

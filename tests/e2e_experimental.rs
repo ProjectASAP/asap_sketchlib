@@ -45,7 +45,7 @@ fn kmv_cardinality_and_shard_merge() {
 /// shard merge.
 #[test]
 fn kmv_accuracy_across_cardinality_checkpoints() {
-    const CHECKPOINTS: [usize; 5] = [10, 100, 1_000, 10_000, 100_000];
+    const CHECKPOINTS: [usize; 6] = [10, 100, 1_000, 10_000, 100_000, 1_000_000];
     const TOL: f64 = 0.02;
 
     let mut single = KMV::<asap_sketchlib::DefaultXxHasher>::new(4096);
