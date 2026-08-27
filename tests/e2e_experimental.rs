@@ -1,6 +1,7 @@
 //! E2E suites for feature-gated (`experimental`) sketches: KMV cardinality,
-//! UniformSampling, CocoSketch over-attribution bounds, Elastic heavy-flow
-//! tracking, and the EHUnivOptimized exact map tier.
+//! UniformSampling, CocoSketch over-attribution bounds and its unbiasedness and
+//! recall properties, Elastic heavy-flow tracking, and the EHUnivOptimized
+//! exact map tier.
 //!
 //! Compiled only under `--features experimental`.
 
@@ -312,4 +313,117 @@ fn coco_point_queries_partition_the_inserted_mass() {
             &format!("coco heavy key {key}"),
         );
     }
+}
+
+// CocoSketch's accuracy theorems (Theorem 3 error bound, Theorem 4 recall) are
+// stated for the hardware-friendly variant of section 4.2, which this crate does
+// not implement, and neither transfers to the basic sketch as a floor. Recall
+// runs the other way: the hardware variant updates each of the d mapped buckets
+// independently, so a flow gets d chances to be recorded, while the basic sketch
+// updates only the smallest and records the flow in at most one bucket. Measured
+// at l=8, d=2, the basic sketch recalls 0.1350 against a Theorem 4 bound of
+// 0.1440. So the test below asserts the paper's own worked 99% figure at the
+// paper's own configuration, not a bound recomputed from the table.
+
+/// Section 3.2 claims stochastic variance minimization "yields unbiased size
+/// estimation", and Theorem 1 gives the per-bucket update distribution that
+/// makes it so. Unbiasedness is a statement about the mean, not any one run.
+#[test]
+fn coco_point_estimates_are_unbiased_under_heavy_eviction() {
+    const TRIALS: usize = 800;
+    const BG_KEYS: usize = 200;
+    const BG_WEIGHT: u64 = 10;
+    const TARGET: u64 = 20;
+
+    // 201 flows over 64 buckets: the target is evicted outright in roughly a
+    // third of the runs, and the surviving runs must overshoot to compensate.
+    let keys: Vec<String> = (0..BG_KEYS).map(|i| format!("bg::{i}")).collect();
+    let mut estimates: Vec<u64> = Vec::with_capacity(TRIALS);
+
+    for _ in 0..TRIALS {
+        let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size(32, 2);
+        let mut sent = 0u64;
+        for (i, key) in keys.iter().enumerate() {
+            for _ in 0..BG_WEIGHT {
+                coco.insert(key, 1);
+            }
+            // spread the target's packets evenly through the background stream
+            while sent * (BG_KEYS as u64) < TARGET * (i as u64 + 1) {
+                coco.insert("flow::target", 1);
+                sent += 1;
+            }
+        }
+        while sent < TARGET {
+            coco.insert("flow::target", 1);
+            sent += 1;
+        }
+        estimates.push(coco.estimate_key("flow::target"));
+    }
+
+    let dropped = estimates.iter().filter(|est| **est == 0).count();
+    assert!(
+        dropped > TRIALS / 10,
+        "the table must actually evict the target sometimes, dropped {dropped}/{TRIALS}"
+    );
+
+    let mean = estimates.iter().map(|est| *est as f64).sum::<f64>() / TRIALS as f64;
+    // the mean's standard error here is ~0.55, so this band is over 5 sigma
+    assert_between(
+        mean,
+        TARGET as f64 - 3.0,
+        TARGET as f64 + 3.0,
+        "coco mean point estimate over independent runs",
+    );
+}
+
+/// Theorem 4 bounds how often a flow is recorded at all. Section 5.3 works the
+/// bound at d=2, l=900 for a heavy hitter holding 1% of the traffic and reads
+/// off a 99% recall target; this reproduces that operating point.
+#[test]
+fn coco_recall_meets_the_papers_heavy_hitter_target() {
+    const TRIALS: usize = 200;
+    const BG_KEYS: usize = 5_000;
+    const HEAVY: u64 = 51;
+    const WIDTH: usize = 900;
+    const DEPTH: usize = 2;
+
+    // Theorem 4: P[Z(e) = 1] >= 1 - (1 + l * f(e) / f_bar(e))^-d. The bound is
+    // read off the configuration, so it cannot be the assertion target -- it
+    // would sink with the table. It only confirms the setup reaches section
+    // 5.3's worked case, and TARGET_RECALL is what the run must clear.
+    const TARGET_RECALL: f64 = 0.99;
+    let ratio = HEAVY as f64 / BG_KEYS as f64;
+    let bound = 1.0 - (1.0 + WIDTH as f64 * ratio).powi(-(DEPTH as i32));
+    assert!(
+        bound >= TARGET_RECALL,
+        "this configuration does not reach the paper's 99% case: bound {bound:.4}"
+    );
+
+    let keys: Vec<String> = (0..BG_KEYS).map(|i| format!("bg::{i}")).collect();
+    let mut recorded = 0usize;
+
+    for _ in 0..TRIALS {
+        let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size(WIDTH, DEPTH);
+        let mut sent = 0u64;
+        for (i, key) in keys.iter().enumerate() {
+            coco.insert(key, 1);
+            while sent * (BG_KEYS as u64) < HEAVY * (i as u64 + 1) {
+                coco.insert("flow::heavy", 1);
+                sent += 1;
+            }
+        }
+        while sent < HEAVY {
+            coco.insert("flow::heavy", 1);
+            sent += 1;
+        }
+        if coco.recorded_flows().any(|(key, _)| key == "flow::heavy") {
+            recorded += 1;
+        }
+    }
+
+    let recall = recorded as f64 / TRIALS as f64;
+    assert!(
+        recall >= TARGET_RECALL,
+        "coco recall {recall:.4} below the paper's {TARGET_RECALL} target ({recorded}/{TRIALS})"
+    );
 }
