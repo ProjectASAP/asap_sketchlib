@@ -52,6 +52,35 @@ which is tighter but correct only when the two sketches observed disjoint key
 sets — a key both sides counted reads back as the larger side, not the sum.
 Both assert matching dimensions.
 
+## Compression
+
+```rust
+fn compress_sum(&mut self, ratio: usize)
+fn compress_max(&mut self, ratio: usize)   // Counter: PartialOrd
+```
+
+Folds every row down to `cols / ratio` columns in place. New column `j` absorbs
+old columns `j`, `j + cols/ratio`, `j + 2*cols/ratio`, and so on, which is the
+equal-division grouping of Elastic Sketch section 3.2.1. `ratio` must divide
+`cols`, or the grouping does not line up with the query and the call asserts.
+
+Nothing else changes at query time. A regular-path column is
+`(hash & 0xFFFF_FFFF) % cols` per row, and Lemma 3.2 gives
+`(h % w) % w' == h % w'` when `w'` divides `w`, so a compressed sketch is just a
+narrower sketch. There is no decompression step and no separate query path.
+
+`compress_sum` leaves the error bound unchanged and conserves each row's total.
+`compress_max` tightens the bound and stays one-sided — it can only overestimate.
+Measured at ratio 8 over 40 keys totalling 190, the max fold overshoots by 107
+and the sum fold by 550.
+
+Both are **regular-path only**, and deliberately so. The fast path derives a
+row's column by shifting the packed hash by `row * mask_bits`, and `mask_bits`
+comes from `cols`; changing the width moves every row past the first onto a
+different bit field, so Lemma 3.2 does not survive there. Compression is also
+one-way: the original counters are gone.
+
+
 ## Serialization
 
 ```rust

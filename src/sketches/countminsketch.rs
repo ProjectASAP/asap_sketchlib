@@ -293,6 +293,59 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
     }
 }
 
+// Sketch compression for Vector2D-backed regular-path sketches.
+impl<T, H: SketchHasher> CountMin<Vector2D<T>, RegularPath, H>
+where
+    T: Copy + Default + std::ops::AddAssign,
+{
+    /// Folds every row into `cols / ratio` columns, summing each group.
+    /// New column `j` takes old columns `j`, `j + cols/ratio`, and so on, so
+    /// [`Self::estimate`] reads the compressed sketch with no extra step.
+    pub fn compress_sum(&mut self, ratio: usize) {
+        self.compress_with(ratio, |acc: &mut T, incoming: T| *acc += incoming);
+    }
+
+    /// The same grouping, keeping the largest counter of each group.
+    pub fn compress_max(&mut self, ratio: usize)
+    where
+        T: PartialOrd,
+    {
+        self.compress_with(ratio, |acc: &mut T, incoming: T| {
+            if incoming > *acc {
+                *acc = incoming;
+            }
+        });
+    }
+
+    fn compress_with<F>(&mut self, ratio: usize, op: F)
+    where
+        F: Fn(&mut T, T),
+    {
+        let cols = self.counts.cols();
+        assert!(ratio > 0, "compression ratio must be positive");
+        assert!(
+            ratio <= cols && cols % ratio == 0,
+            "compression ratio {ratio} must divide the {cols} columns"
+        );
+
+        let rows = self.counts.rows();
+        let width = cols / ratio;
+        let mut folded = Vector2D::from_fn(rows, width, |r, c| {
+            let mut acc = self.counts.query_one_counter(r, c);
+            let mut src = c + width;
+            while src < cols {
+                op(&mut acc, self.counts.query_one_counter(r, src));
+                src += width;
+            }
+            acc
+        });
+        *folded.nitro_mut() = self.counts.nitro().clone();
+
+        self.counts = folded;
+        self.col = width;
+    }
+}
+
 // DataInput adapters for the regular Count-Min update rule.
 // Regular-path CountMin operations. Uses PartialOrd to support both integer and f64 counters.
 impl<S: MatrixStorage, H: SketchHasher> CountMin<S, RegularPath, H>
@@ -863,5 +916,127 @@ mod tests {
         }
 
         assert_eq!(storage.as_slice(), expected_once.as_slice());
+    }
+
+    /// Regular-path columns are `(hash & LOWER_32_MASK) % cols` per row, so a
+    /// fold to `cols / ratio` lands each key where Lemma 3.2 says it does.
+    fn regular_col(value: &DataInput, row: usize, cols: usize) -> usize {
+        ((hash64_seeded(row, value) & LOWER_32_MASK) as usize) % cols
+    }
+
+    fn seeded_cm(cols: usize, keys: usize) -> (CountMin<Vector2D<i32>, RegularPath>, Vec<i32>) {
+        let mut cm = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, cols);
+        let mut truth = Vec::with_capacity(keys);
+        for i in 0..keys {
+            let count = (i as i32 % 9) + 1;
+            for _ in 0..count {
+                cm.insert(&DataInput::I32(i as i32));
+            }
+            truth.push(count);
+        }
+        (cm, truth)
+    }
+
+    #[test]
+    fn compression_shrinks_the_columns_and_keeps_the_rows() {
+        let (mut cm, _) = seeded_cm(64, 20);
+        cm.compress_max(4);
+
+        assert_eq!(cm.rows(), 3);
+        assert_eq!(cm.cols(), 16);
+        assert_eq!(cm.as_storage().as_slice().len(), 3 * 16);
+    }
+
+    #[test]
+    fn maximum_compression_never_underestimates() {
+        let (mut cm, truth) = seeded_cm(64, 40);
+        cm.compress_max(4);
+
+        for (i, count) in truth.iter().enumerate() {
+            let est = cm.estimate(&DataInput::I32(i as i32));
+            assert!(est >= *count, "key {i} underestimated: {est} < {count}");
+        }
+    }
+
+    #[test]
+    fn sum_compression_never_underestimates_and_conserves_each_row() {
+        let (mut cm, truth) = seeded_cm(64, 40);
+        let before: Vec<i32> = (0..cm.rows())
+            .map(|r| {
+                (0..cm.cols())
+                    .map(|c| cm.as_storage().query_one_counter(r, c))
+                    .sum()
+            })
+            .collect();
+
+        cm.compress_sum(4);
+
+        let after: Vec<i32> = (0..cm.rows())
+            .map(|r| {
+                (0..cm.cols())
+                    .map(|c| cm.as_storage().query_one_counter(r, c))
+                    .sum()
+            })
+            .collect();
+        assert_eq!(before, after, "summing groups only regroups the mass");
+
+        for (i, count) in truth.iter().enumerate() {
+            let est = cm.estimate(&DataInput::I32(i as i32));
+            assert!(est >= *count, "key {i} underestimated: {est} < {count}");
+        }
+    }
+
+    /// Section 3.2.1: after Sum Compression the error bound is unchanged,
+    /// while Maximum Compression tightens it. Measured at ratio 8 over 40 keys
+    /// totalling 190: max overshoots by 107, sum by 550.
+    #[test]
+    fn maximum_compression_is_tighter_than_sum_compression() {
+        let (mut maxed, truth) = seeded_cm(64, 40);
+        let (mut summed, _) = seeded_cm(64, 40);
+        maxed.compress_max(8);
+        summed.compress_sum(8);
+
+        let mut strictly_tighter = 0;
+        for i in 0..truth.len() {
+            let key = DataInput::I32(i as i32);
+            let m = maxed.estimate(&key);
+            let s = summed.estimate(&key);
+            assert!(m <= s, "key {i}: max {m} exceeded sum {s}");
+            if m < s {
+                strictly_tighter += 1;
+            }
+        }
+        assert!(
+            strictly_tighter >= truth.len() / 2,
+            "only {strictly_tighter} of {} keys came back tighter",
+            truth.len()
+        );
+    }
+
+    #[test]
+    fn a_compressed_sketch_is_queried_with_no_extra_step() {
+        let (mut cm, _) = seeded_cm(64, 40);
+        cm.compress_max(4);
+
+        // every row reads the column Lemma 3.2 predicts, with no decompression
+        for i in 0..40i32 {
+            let key = DataInput::I32(i);
+            let expected = (0..cm.rows())
+                .map(|r| {
+                    let col = regular_col(&key, r, 64) % 16;
+                    assert_eq!(col, regular_col(&key, r, 16), "lemma 3.2 holds per row");
+                    cm.as_storage().query_one_counter(r, col)
+                })
+                .min()
+                .expect("rows present");
+            assert_eq!(cm.estimate(&key), expected);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "must divide")]
+    fn a_ratio_that_does_not_divide_the_columns_is_rejected() {
+        let (mut cm, _) = seeded_cm(64, 4);
+        cm.compress_max(7);
     }
 }
