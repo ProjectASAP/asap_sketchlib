@@ -37,6 +37,23 @@ pub const UNIVMON_PROMASK: u32 = 64;
 /// Default HLL promotion threshold τ: 0 promotes every register improvement.
 pub const HLL_PROMASK: u8 = 0;
 
+/// Default promotion threshold τ for CocoSketch workers.
+///
+/// A Coco bucket counter is exactly as dense as a Count-Min cell - every
+/// insert lands on one of them and increments it by one - so it takes the same
+/// τ, which is also the `PROMASK` of `CPU/Coco/config.h` in the authors'
+/// implementation.
+#[cfg(feature = "experimental")]
+pub const COCO_PROMASK: u32 = 0x1f;
+
+/// Default promotion threshold τ for Elastic sketch workers.
+///
+/// One τ covers both halves: a heavy-part vote counter and a light-part
+/// Count-Min counter each advance by one per insert, and `CPU/Elastic/config.h`
+/// likewise gives them a single `PROMASK`.
+#[cfg(feature = "experimental")]
+pub const ELASTIC_PROMASK: u32 = 0x1f;
+
 /// Largest threshold a worker may be configured with.
 ///
 /// Counter storage in the compact worker sketches is one byte wide, and the
@@ -110,6 +127,41 @@ pub struct KeyedCountDelta {
     pub key: HeapItem,
     /// The promoted cell update.
     pub delta: CountDelta,
+}
+
+/// Delta emitted by a CocoSketch child worker: a whole bucket.
+///
+/// §4.4, "Handling counters with flow keys": a sketch that keeps a flow key
+/// beside every counter ships the key together with the counter, and the
+/// aggregator replays the pair through the parent's own insertion logic. There
+/// is no cell index because the parent re-derives one - its victim choice
+/// depends on what its own buckets hold, not on the worker's.
+#[cfg(feature = "experimental")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CocoDelta {
+    /// Key the promoted bucket holds.
+    pub key: String,
+    /// Mass attributed to that key since the bucket last promoted.
+    pub value: u64,
+}
+
+/// Delta emitted by an Elastic sketch child worker.
+///
+/// Appendix C keeps both halves in the worker and promotes them differently:
+/// the heavy part ships `<key, votes>` the way CocoSketch does, while the light
+/// part is a Count-Min and ships the ordinary cell delta.
+#[cfg(feature = "experimental")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ElasticDelta {
+    /// Heavy-part bucket: the resident flow and the votes it accumulated.
+    Heavy {
+        /// Flow the promoted bucket holds.
+        key: String,
+        /// Votes recorded for it since the bucket last promoted.
+        value: u32,
+    },
+    /// Light-part cell, promoted exactly as a Count-Min worker's would be.
+    Light(CmDelta),
 }
 
 /// A `CountDelta` tagged with the UnivMon pyramid layer it belongs to.

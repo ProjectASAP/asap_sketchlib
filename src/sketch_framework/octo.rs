@@ -39,14 +39,24 @@ use crate::octo_delta::{
     DD_PROMASK, DdDelta, KeyedCmDelta, KeyedCountDelta, MAX_PROMASK, OctoThreshold, UNIVMON_PROMASK,
 };
 use crate::sketch_framework::univmon::{UnivMonDeltaFidelity, bottom_layer_for_hash};
+#[cfg(feature = "experimental")]
+use crate::sketches::coco::Coco;
 use crate::sketches::countminsketch_topk::CMSHeap;
 use crate::sketches::countsketch_topk::{CSHeap, l2hh_cell_for_row};
+#[cfg(feature = "experimental")]
+use crate::sketches::elastic::{Elastic, LAMBDA};
 use crate::{
     BOTTOM_LAYER_FINDER, CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin,
     DDSketch, DataInput, HLL_PROMASK, HeapItem, HllDelta, HyperLogLog, LayeredCountDelta,
     RegularPath, UnivMon, Vector2D, hash64_seeded, hash128_seeded, heap_item_to_sketch_input,
     input_to_owned,
 };
+#[cfg(feature = "experimental")]
+use crate::{CANONICAL_HASH_SEED, COCO_PROMASK, CocoDelta, ELASTIC_PROMASK, ElasticDelta};
+#[cfg(feature = "experimental")]
+use rand::Rng;
+#[cfg(feature = "experimental")]
+use rand::rngs::ThreadRng;
 use smallvec::SmallVec;
 
 #[cfg(feature = "octo-runtime")]
@@ -226,6 +236,44 @@ impl CmWorkerSketch {
                     value: *cell as u32,
                 });
                 *cell = 0;
+            }
+        }
+    }
+
+    /// Adds `count` to each mapped cell, emitting and clearing every one that
+    /// reaches `threshold`.
+    ///
+    /// The weighted form of `insert_hashes_emit_delta`, for an insertion that
+    /// moves a counter by more than one: Elastic's eviction spills a resident's
+    /// whole vote into the light layer in a single step.
+    #[inline(always)]
+    pub fn add_hashes_emit_delta(
+        &mut self,
+        hashes: &[u64],
+        count: u32,
+        threshold: u32,
+        emit: &mut impl FnMut(CmDelta),
+    ) {
+        assert_eq!(
+            hashes.len(),
+            self.rows,
+            "one hash per row; a plan built for a different geometry would \
+             leave the untouched rows at zero and every estimate at zero"
+        );
+        let threshold = threshold.clamp(1, MAX_PROMASK);
+        for (r, hashed) in hashes.iter().copied().enumerate() {
+            let col = ((hashed & LOWER_32_MASK) as usize) % self.cols;
+            let cell = &mut self.counters[r * self.cols + col];
+            let total = *cell as u32 + count;
+            if total >= threshold {
+                emit(CmDelta {
+                    row: r as u32,
+                    col: col as u32,
+                    value: total,
+                });
+                *cell = 0;
+            } else {
+                *cell = total as u8;
             }
         }
     }
@@ -492,6 +540,285 @@ impl L2hhWorkerSketch {
                 *cell = 0;
             }
         }
+    }
+}
+
+/// CocoSketch worker sketch: the parent's table with one-byte counters.
+///
+/// §3.2 Idea 3 strips flow-key storage out of a worker, but CocoSketch *is*
+/// key storage - a bucket's key is the only record of what its counter counts -
+/// so this worker keeps the keys and shrinks only the counters. Every step of
+/// `insert_emit_delta` mirrors `Coco::insert`, down to the uniform draw among
+/// tied minima and the `v / val` election, so the two cannot drift apart.
+#[cfg(feature = "experimental")]
+#[derive(Clone, Debug)]
+pub struct CocoWorkerSketch {
+    keys: Vec<Option<String>>,
+    counters: Vec<u8>,
+    w: usize,
+    d: usize,
+}
+
+#[cfg(feature = "experimental")]
+impl CocoWorkerSketch {
+    /// Creates a `d` x `w` worker table, empty and cleared. The argument order
+    /// is `Coco::init_with_size`'s.
+    pub fn new(w: usize, d: usize) -> Self {
+        Self {
+            keys: vec![None; w * d],
+            counters: vec![0u8; w * d],
+            w,
+            d,
+        }
+    }
+
+    /// Buckets per array.
+    pub fn width(&self) -> usize {
+        self.w
+    }
+
+    /// Number of arrays.
+    pub fn depth(&self) -> usize {
+        self.d
+    }
+
+    /// Bytes held by the counter array, excluding the keys.
+    pub fn counter_bytes(&self) -> usize {
+        self.counters.len()
+    }
+
+    /// Counters still held back from the aggregator, one per bucket.
+    pub fn residual(&self) -> &[u8] {
+        &self.counters
+    }
+
+    /// Inserts `key`, emitting and clearing the bucket that reaches `threshold`.
+    ///
+    /// The promoted message carries whichever key the bucket holds *after* the
+    /// election, which is the arriving key when it won the bucket and the
+    /// incumbent when it did not - the two branches of `insert_child` in
+    /// `CPU/Coco/Ours.h`.
+    pub fn insert_emit_delta(
+        &mut self,
+        key: &str,
+        threshold: u32,
+        emit: &mut impl FnMut(CocoDelta),
+    ) {
+        if self.d == 0 || self.w == 0 {
+            return;
+        }
+        let threshold = threshold.clamp(1, MAX_PROMASK) as u8;
+        let key_input = DataInput::Str(key);
+        let mut rng: Option<ThreadRng> = None;
+        let mut victim = 0usize;
+        let mut victim_val = u8::MAX;
+        let mut tied = 0u32;
+
+        for i in 0..self.d {
+            let cell = i * self.w + hash64_seeded(i, &key_input) as usize % self.w;
+            if self.keys[cell].as_deref() == Some(key) {
+                self.counters[cell] += 1;
+                if self.counters[cell] >= threshold {
+                    emit(CocoDelta {
+                        key: key.to_string(),
+                        value: self.counters[cell] as u64,
+                    });
+                    self.counters[cell] = 0;
+                }
+                return;
+            }
+            if self.counters[cell] < victim_val {
+                victim_val = self.counters[cell];
+                victim = cell;
+                tied = 1;
+            } else if self.counters[cell] == victim_val {
+                tied += 1;
+                if rng.get_or_insert_with(rand::rng).random_range(0..tied) == 0 {
+                    victim = cell;
+                }
+            }
+        }
+
+        self.counters[victim] += 1;
+        let elected = match self.keys[victim] {
+            None => true,
+            Some(_) => {
+                let draw = rng
+                    .get_or_insert_with(rand::rng)
+                    .random_range(0.0..=1.0_f64);
+                1.0 > draw * self.counters[victim] as f64
+            }
+        };
+        if elected {
+            self.keys[victim] = Some(key.to_string());
+        }
+        if self.counters[victim] >= threshold {
+            if let Some(resident) = self.keys[victim].clone() {
+                emit(CocoDelta {
+                    key: resident,
+                    value: self.counters[victim] as u64,
+                });
+            }
+            self.counters[victim] = 0;
+        }
+    }
+
+    /// Promotes and clears every bucket still holding a partial count, leaving
+    /// the keys resident.
+    pub fn flush(&mut self, emit: &mut impl FnMut(CocoDelta)) {
+        for cell in 0..self.counters.len() {
+            if self.counters[cell] == 0 {
+                continue;
+            }
+            if let Some(resident) = self.keys[cell].clone() {
+                emit(CocoDelta {
+                    key: resident,
+                    value: self.counters[cell] as u64,
+                });
+            }
+            self.counters[cell] = 0;
+        }
+    }
+}
+
+/// One heavy-part slot of an [`ElasticWorkerSketch`].
+///
+/// Occupancy is `flow_id`, not `vote_pos` as in the parent's
+/// `HeavyBucket::is_vacant`: a promotion clears the votes and the flow stays
+/// resident, exactly as a promoted slot in `CPU/Elastic/Ours.h` keeps its `ID`.
+#[cfg(feature = "experimental")]
+#[derive(Clone, Debug, Default)]
+struct ElasticWorkerBucket {
+    flow_id: Option<String>,
+    vote_pos: u8,
+    vote_neg: i32,
+}
+
+/// Elastic sketch worker: a heavy part with one-byte vote counters over a
+/// compact Count-Min light layer.
+///
+/// Appendix C keeps both halves in the worker. The heavy part promotes the
+/// resident flow and its votes; the light part is an ordinary
+/// [`CmWorkerSketch`], promoting cell deltas with no key attached, and takes
+/// both the arrivals that lose a bucket contest and the votes of an evicted
+/// resident.
+#[cfg(feature = "experimental")]
+#[derive(Clone, Debug)]
+pub struct ElasticWorkerSketch {
+    heavy: Vec<ElasticWorkerBucket>,
+    light: CmWorkerSketch,
+}
+
+#[cfg(feature = "experimental")]
+impl ElasticWorkerSketch {
+    /// Creates a worker mirroring an `Elastic` of these dimensions.
+    pub fn new(bucket_count: usize, light_rows: usize, light_cols: usize) -> Self {
+        Self {
+            heavy: vec![ElasticWorkerBucket::default(); bucket_count.max(1)],
+            light: CmWorkerSketch::new(light_rows, light_cols),
+        }
+    }
+
+    /// Number of heavy buckets.
+    pub fn bucket_count(&self) -> usize {
+        self.heavy.len()
+    }
+
+    /// Borrows the light layer's counter array.
+    pub fn light(&self) -> &CmWorkerSketch {
+        &self.light
+    }
+
+    /// Records one occurrence of `id`, promoting whichever half crosses
+    /// `threshold`.
+    ///
+    /// Every branch is `Elastic::insert`'s: a vacant bucket seats the flow, a
+    /// matching one takes a positive vote, and otherwise the bucket takes a
+    /// negative vote and either the arrival goes to the light layer or, once
+    /// `vote_neg >= LAMBDA * vote_pos`, the resident is evicted into it with
+    /// its whole positive vote.
+    pub fn insert_emit_delta(
+        &mut self,
+        id: &str,
+        threshold: u32,
+        emit: &mut impl FnMut(ElasticDelta),
+    ) {
+        let threshold = threshold.clamp(1, MAX_PROMASK);
+        let idx =
+            hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(id)) as usize % self.heavy.len();
+
+        if self.heavy[idx].flow_id.is_none() {
+            self.heavy[idx].flow_id = Some(id.to_string());
+            self.heavy[idx].vote_pos = 1;
+            self.heavy[idx].vote_neg = 0;
+            self.promote_heavy(idx, threshold, emit);
+            return;
+        }
+        if self.heavy[idx].flow_id.as_deref() == Some(id) {
+            self.heavy[idx].vote_pos += 1;
+            self.promote_heavy(idx, threshold, emit);
+            return;
+        }
+
+        self.heavy[idx].vote_neg += 1;
+        if self.heavy[idx].vote_neg < LAMBDA * self.heavy[idx].vote_pos as i32 {
+            self.spill(id, 1, threshold, emit);
+            return;
+        }
+
+        let evicted_votes = self.heavy[idx].vote_pos;
+        let evicted_id = self.heavy[idx].flow_id.replace(id.to_string());
+        self.heavy[idx].vote_pos = 1;
+        self.heavy[idx].vote_neg = 1;
+        // A resident whose votes were just promoted spills nothing: its mass is
+        // already at the aggregator.
+        if let Some(evicted_id) = evicted_id.filter(|_| evicted_votes > 0) {
+            self.spill(&evicted_id, evicted_votes as u32, threshold, emit);
+        }
+        self.promote_heavy(idx, threshold, emit);
+    }
+
+    /// Promotes and clears every counter still holding a partial count, in both
+    /// halves. Heavy flows stay resident, having only their votes taken.
+    pub fn flush(&mut self, emit: &mut impl FnMut(ElasticDelta)) {
+        for bucket in &mut self.heavy {
+            if bucket.vote_pos == 0 {
+                continue;
+            }
+            if let Some(resident) = bucket.flow_id.clone() {
+                emit(ElasticDelta::Heavy {
+                    key: resident,
+                    value: bucket.vote_pos as u32,
+                });
+            }
+            bucket.vote_pos = 0;
+        }
+        self.light
+            .flush(&mut |delta| emit(ElasticDelta::Light(delta)));
+    }
+
+    /// Adds `count` to the light layer's cells for `id`.
+    fn spill(&mut self, id: &str, count: u32, threshold: u32, emit: &mut impl FnMut(ElasticDelta)) {
+        let hashes = CmWorkerSketch::hashes(self.light.rows(), &DataInput::Str(id));
+        self.light
+            .add_hashes_emit_delta(&hashes, count, threshold, &mut |delta| {
+                emit(ElasticDelta::Light(delta))
+            });
+    }
+
+    /// Ships the bucket's votes and clears them if they reached `threshold`.
+    fn promote_heavy(&mut self, idx: usize, threshold: u32, emit: &mut impl FnMut(ElasticDelta)) {
+        let bucket = &mut self.heavy[idx];
+        if (bucket.vote_pos as u32) < threshold {
+            return;
+        }
+        if let Some(resident) = bucket.flow_id.clone() {
+            emit(ElasticDelta::Heavy {
+                key: resident,
+                value: bucket.vote_pos as u32,
+            });
+        }
+        bucket.vote_pos = 0;
     }
 }
 
@@ -1875,6 +2202,227 @@ impl OctoAggregator for UnivMonOctoAggregator {
     }
 }
 
+// -- CocoSketch --
+
+/// Renders an input as the `String` flow key `Coco` and `Elastic` are defined
+/// over, matching the conversion `EHSketchList` uses for the same two sketches.
+///
+/// Both sketches key on a `String`, so a plan has to settle on one rendering:
+/// this is what the aggregator will hold, and what `Coco::estimate_key` or
+/// `Elastic::query` must be asked for.
+#[cfg(feature = "experimental")]
+pub fn flow_key_string(input: &DataInput<'_>) -> String {
+    match input {
+        DataInput::I8(v) => v.to_string(),
+        DataInput::I16(v) => v.to_string(),
+        DataInput::I32(v) => v.to_string(),
+        DataInput::I64(v) => v.to_string(),
+        DataInput::I128(v) => v.to_string(),
+        DataInput::ISIZE(v) => v.to_string(),
+        DataInput::U8(v) => v.to_string(),
+        DataInput::U16(v) => v.to_string(),
+        DataInput::U32(v) => v.to_string(),
+        DataInput::U64(v) => v.to_string(),
+        DataInput::U128(v) => v.to_string(),
+        DataInput::USIZE(v) => v.to_string(),
+        DataInput::F32(v) => v.to_string(),
+        DataInput::F64(v) => v.to_string(),
+        DataInput::Str(s) => (*s).to_string(),
+        DataInput::String(s) => s.clone(),
+        DataInput::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
+    }
+}
+
+/// OctoSketch worker backed by a compact CocoSketch table.
+#[cfg(feature = "experimental")]
+pub struct CocoOctoWorker {
+    sketch: CocoWorkerSketch,
+    threshold: OctoThreshold,
+}
+
+#[cfg(feature = "experimental")]
+impl CocoOctoWorker {
+    /// Creates a worker with a private threshold fixed at `COCO_PROMASK`.
+    pub fn new(w: usize, d: usize) -> Self {
+        Self::with_threshold(w, d, OctoThreshold::new(COCO_PROMASK))
+    }
+
+    /// Creates a worker sharing `threshold` with its peers and the aggregator.
+    pub fn with_threshold(w: usize, d: usize, threshold: OctoThreshold) -> Self {
+        Self {
+            sketch: CocoWorkerSketch::new(w, d),
+            threshold,
+        }
+    }
+
+    /// Borrows the worker's table.
+    pub fn sketch(&self) -> &CocoWorkerSketch {
+        &self.sketch
+    }
+}
+
+#[cfg(feature = "experimental")]
+impl OctoWorker for CocoOctoWorker {
+    type Delta = CocoDelta;
+    /// The rendered flow key; a Coco bucket is nothing without one.
+    type Payload = String;
+
+    #[inline(always)]
+    fn process<F>(&mut self, payload: &Self::Payload, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
+        self.sketch
+            .insert_emit_delta(payload, self.threshold.get(), emit);
+    }
+
+    /// Ships every bucket still holding a partial count. Unlike the `*TopK*`
+    /// workers, a Coco worker keeps the key beside every counter, so a residual
+    /// bucket can be attributed and flushed.
+    fn flush<F>(&mut self, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
+        self.sketch.flush(emit);
+    }
+}
+
+/// OctoSketch parent wrapping a full-precision `Coco`.
+///
+/// §4.4: each `<key, counter>` message is replayed through the parent's own
+/// insertion logic, which for CocoSketch is the weighted `Coco::insert` - the
+/// aggregator picks its own victim bucket and runs its own election, so a key
+/// the worker held lands wherever the *parent's* table would have put it.
+#[cfg(feature = "experimental")]
+pub struct CocoOctoAggregator {
+    /// Parent CocoSketch updated by worker deltas.
+    pub sketch: Coco,
+}
+
+#[cfg(feature = "experimental")]
+impl CocoOctoAggregator {
+    /// Creates an aggregator with a `d` x `w` parent table.
+    pub fn new(w: usize, d: usize) -> Self {
+        Self {
+            sketch: Coco::init_with_size(w, d),
+        }
+    }
+}
+
+#[cfg(feature = "experimental")]
+impl OctoAggregator for CocoOctoAggregator {
+    type Delta = CocoDelta;
+
+    #[inline(always)]
+    fn apply(&mut self, delta: CocoDelta) {
+        self.sketch.insert(&delta.key, delta.value);
+    }
+}
+
+// -- Elastic sketch --
+
+/// OctoSketch worker backed by a compact Elastic sketch, both halves.
+#[cfg(feature = "experimental")]
+pub struct ElasticOctoWorker {
+    sketch: ElasticWorkerSketch,
+    threshold: OctoThreshold,
+}
+
+#[cfg(feature = "experimental")]
+impl ElasticOctoWorker {
+    /// Creates a worker with a private threshold fixed at `ELASTIC_PROMASK`.
+    pub fn new(bucket_count: usize, light_rows: usize, light_cols: usize) -> Self {
+        Self::with_threshold(
+            bucket_count,
+            light_rows,
+            light_cols,
+            OctoThreshold::new(ELASTIC_PROMASK),
+        )
+    }
+
+    /// Creates a worker sharing `threshold` with its peers and the aggregator.
+    pub fn with_threshold(
+        bucket_count: usize,
+        light_rows: usize,
+        light_cols: usize,
+        threshold: OctoThreshold,
+    ) -> Self {
+        Self {
+            sketch: ElasticWorkerSketch::new(bucket_count, light_rows, light_cols),
+            threshold,
+        }
+    }
+
+    /// Borrows the worker's heavy and light parts.
+    pub fn sketch(&self) -> &ElasticWorkerSketch {
+        &self.sketch
+    }
+}
+
+#[cfg(feature = "experimental")]
+impl OctoWorker for ElasticOctoWorker {
+    type Delta = ElasticDelta;
+    /// The rendered flow key. The light half could travel as hashes alone, but
+    /// the heavy half stores the key and an eviction spills a key the caller
+    /// never sent, so the worker hashes for both.
+    type Payload = String;
+
+    #[inline(always)]
+    fn process<F>(&mut self, payload: &Self::Payload, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
+        self.sketch
+            .insert_emit_delta(payload, self.threshold.get(), emit);
+    }
+
+    /// Ships both halves: residual votes with their resident flow, and every
+    /// light-layer counter still under τ.
+    fn flush<F>(&mut self, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
+        self.sketch.flush(emit);
+    }
+}
+
+/// OctoSketch parent wrapping a full-precision `Elastic`.
+///
+/// Appendix C splits the two halves: a heavy message is replayed through the
+/// parent's own insertion logic as `Elastic::merge_heavy`, so the arrival
+/// contests the *parent's* bucket and may evict a different flow than it did on
+/// the worker; a light message is an ordinary Count-Min cell delta and is added
+/// to the light layer as-is.
+#[cfg(feature = "experimental")]
+pub struct ElasticOctoAggregator {
+    /// Parent Elastic sketch updated by worker deltas.
+    pub sketch: Elastic,
+}
+
+#[cfg(feature = "experimental")]
+impl ElasticOctoAggregator {
+    /// Creates an aggregator with a `bucket_count` heavy table over a
+    /// `light_rows` by `light_cols` light layer.
+    pub fn new(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self {
+        Self {
+            sketch: Elastic::init_with_dimensions(bucket_count, light_rows, light_cols),
+        }
+    }
+}
+
+#[cfg(feature = "experimental")]
+impl OctoAggregator for ElasticOctoAggregator {
+    type Delta = ElasticDelta;
+
+    #[inline(always)]
+    fn apply(&mut self, delta: ElasticDelta) {
+        match delta {
+            ElasticDelta::Heavy { key, value } => self.sketch.merge_heavy(key, value as i32),
+            ElasticDelta::Light(delta) => self.sketch.light.apply_delta(delta),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Plans: geometry plus the preparation that strips the borrow
 // ---------------------------------------------------------------------------
@@ -2144,6 +2692,121 @@ impl OctoPlan for DdOctoPlan {
 
     fn prepare(&self, input: &DataInput<'_>) -> Option<f64> {
         data_input_to_f64(input).ok()
+    }
+}
+
+/// Builds `CocoOctoWorker`s; payloads are the rendered flow key.
+#[cfg(feature = "experimental")]
+#[derive(Clone, Debug)]
+pub struct CocoOctoPlan {
+    w: usize,
+    d: usize,
+    threshold: OctoThreshold,
+}
+
+#[cfg(feature = "experimental")]
+impl CocoOctoPlan {
+    /// Creates a plan at the CocoSketch default threshold.
+    pub fn new(w: usize, d: usize) -> Self {
+        Self::with_threshold(w, d, OctoThreshold::new(COCO_PROMASK))
+    }
+
+    /// Creates a plan whose workers share `threshold`.
+    pub fn with_threshold(w: usize, d: usize, threshold: OctoThreshold) -> Self {
+        Self { w, d, threshold }
+    }
+
+    /// The threshold this plan's workers read.
+    pub fn threshold(&self) -> &OctoThreshold {
+        &self.threshold
+    }
+
+    /// Builds the parent this plan's workers feed. See `CmOctoPlan::aggregator`.
+    pub fn aggregator(&self) -> CocoOctoAggregator {
+        CocoOctoAggregator::new(self.w, self.d)
+    }
+}
+
+#[cfg(feature = "experimental")]
+impl OctoPlan for CocoOctoPlan {
+    type Worker = CocoOctoWorker;
+
+    fn worker(&self, _worker_id: usize) -> Self::Worker {
+        CocoOctoWorker::with_threshold(self.w, self.d, self.threshold.clone())
+    }
+
+    fn prepare(&self, input: &DataInput<'_>) -> String {
+        flow_key_string(input)
+    }
+}
+
+/// Builds `ElasticOctoWorker`s; payloads are the rendered flow key.
+#[cfg(feature = "experimental")]
+#[derive(Clone, Debug)]
+pub struct ElasticOctoPlan {
+    bucket_count: i32,
+    light_rows: usize,
+    light_cols: usize,
+    threshold: OctoThreshold,
+}
+
+#[cfg(feature = "experimental")]
+impl ElasticOctoPlan {
+    /// Creates a plan at the Elastic sketch default threshold.
+    pub fn new(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self {
+        Self::with_threshold(
+            bucket_count,
+            light_rows,
+            light_cols,
+            OctoThreshold::new(ELASTIC_PROMASK),
+        )
+    }
+
+    /// Creates a plan whose workers share `threshold`.
+    pub fn with_threshold(
+        bucket_count: i32,
+        light_rows: usize,
+        light_cols: usize,
+        threshold: OctoThreshold,
+    ) -> Self {
+        Self {
+            bucket_count,
+            light_rows,
+            light_cols,
+            threshold,
+        }
+    }
+
+    /// The threshold this plan's workers read.
+    pub fn threshold(&self) -> &OctoThreshold {
+        &self.threshold
+    }
+
+    /// Builds the parent this plan's workers feed.
+    ///
+    /// Both halves have to match: a light delta names a cell by index, and a
+    /// heavy delta lands in the bucket the parent hashes the key to, so a
+    /// parent of different dimensions silently misplaces every message.
+    pub fn aggregator(&self) -> ElasticOctoAggregator {
+        ElasticOctoAggregator::new(self.bucket_count, self.light_rows, self.light_cols)
+    }
+}
+
+#[cfg(feature = "experimental")]
+impl OctoPlan for ElasticOctoPlan {
+    type Worker = ElasticOctoWorker;
+
+    fn worker(&self, _worker_id: usize) -> Self::Worker {
+        ElasticOctoWorker::with_threshold(
+            self.bucket_count.max(1) as usize,
+            self.light_rows,
+            self.light_cols,
+            self.threshold.clone(),
+        )
+    }
+
+    fn prepare(&self, input: &DataInput<'_>) -> String {
+        flow_key_string(input)
     }
 }
 
@@ -2548,6 +3211,72 @@ mod worker_tests {
         let mut worker = CmWorkerSketch::new(4, 16);
         let hashes = CmWorkerSketch::hashes(2, &DataInput::U64(1));
         worker.insert_hashes_emit_delta(&hashes, CM_PROMASK, &mut |_| {});
+    }
+
+    #[cfg(feature = "experimental")]
+    #[test]
+    fn coco_worker_promotes_the_key_its_bucket_holds_and_clears_it() {
+        let mut worker = CocoWorkerSketch::new(64, 2);
+        let key = "flow::coco";
+        let mut deltas: Vec<CocoDelta> = Vec::new();
+
+        for _ in 0..(COCO_PROMASK - 1) {
+            worker.insert_emit_delta(key, COCO_PROMASK, &mut |d| deltas.push(d));
+        }
+        assert!(deltas.is_empty(), "should not promote before the threshold");
+
+        worker.insert_emit_delta(key, COCO_PROMASK, &mut |d| deltas.push(d));
+        assert_eq!(deltas.len(), 1, "one bucket, one promotion");
+        assert_eq!(deltas[0].key, key, "the message carries the bucket's key");
+        assert_eq!(deltas[0].value as u32, COCO_PROMASK);
+        assert!(
+            worker.residual().iter().all(|&c| c == 0),
+            "§4.4 clears the bucket it promotes"
+        );
+    }
+
+    #[cfg(feature = "experimental")]
+    #[test]
+    fn coco_promotion_conserves_the_inserted_mass() {
+        // Every insert lands in exactly one bucket, so what the parent received
+        // plus what the worker still holds is the whole stream.
+        let mut worker = CocoWorkerSketch::new(16, 2);
+        let mut parent = CocoOctoAggregator::new(16, 2);
+        let inserted = 5_000u64;
+        for i in 0..inserted {
+            worker.insert_emit_delta(&format!("flow::{}", i % 200), COCO_PROMASK, &mut |d| {
+                parent.apply(d)
+            });
+        }
+        let held: u64 = worker.residual().iter().map(|&c| c as u64).sum();
+        let promoted: u64 = parent.sketch.recorded_flows().map(|(_, v)| v).sum();
+        assert_eq!(promoted + held, inserted);
+
+        worker.flush(&mut |d| parent.apply(d));
+        assert_eq!(
+            parent.sketch.recorded_flows().map(|(_, v)| v).sum::<u64>(),
+            inserted,
+            "a flush hands over the rest"
+        );
+    }
+
+    #[cfg(feature = "experimental")]
+    #[test]
+    fn elastic_worker_promotes_each_half_on_its_own_terms() {
+        let mut worker = ElasticWorkerSketch::new(1, 2, 64);
+        let mut heavy = 0usize;
+        let mut light = 0usize;
+        // One heavy bucket and two flows: the resident promotes its votes, the
+        // loser goes to the light layer and promotes cell deltas.
+        for i in 0..1_000u32 {
+            let key = if i % 2 == 0 { "flow::a" } else { "flow::b" };
+            worker.insert_emit_delta(key, ELASTIC_PROMASK, &mut |d| match d {
+                ElasticDelta::Heavy { .. } => heavy += 1,
+                ElasticDelta::Light(_) => light += 1,
+            });
+        }
+        assert!(heavy > 0, "the heavy part must promote");
+        assert!(light > 0, "the light part must promote");
     }
 
     #[test]

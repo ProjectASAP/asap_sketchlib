@@ -37,12 +37,27 @@ pub struct DdDelta    { pub index: i32, pub value: u64 }
 
 pub struct KeyedCmDelta    { pub key: HeapItem, pub delta: CmDelta }
 pub struct KeyedCountDelta { pub key: HeapItem, pub delta: CountDelta }
+
+// experimental feature
+pub struct CocoDelta { pub key: String, pub value: u64 }
+pub enum ElasticDelta {
+    Heavy { key: String, value: u32 },
+    Light(CmDelta),
+}
 ```
 
 Indices are `u32`, so any geometry the sketch itself supports can be
 addressed. The keyed forms carry the flow key the paper's 4-tuple
 message includes, which is what lets an aggregator keep a heavy-hitter
 heap the workers no longer maintain.
+
+`CocoDelta` and `ElasticDelta::Heavy` are §4.4's *"Handling counters with
+flow keys"* message: a sketch that stores a flow key beside every counter
+ships the pair, and the aggregator replays it through the parent's own
+insertion logic. They carry no cell index, unlike every other delta here,
+because the parent re-derives one — CocoSketch's victim choice and
+Elastic's bucket contest depend on what the *parent's* buckets hold, not
+on where the worker put the key.
 
 ### Promotion Thresholds
 
@@ -56,6 +71,8 @@ defaults used when a worker is built without an explicit threshold.
 | DDSketch | `DD_PROMASK` = 4 | Emit and clear when a bucket reaches τ |
 | HyperLogLog | `HLL_PROMASK` = 0 | Emit when `\|2^C' - 2^C\| >= 2^τ`; never cleared |
 | UnivMon | `UNIVMON_PROMASK` = 64 | As Count, with τ halved per layer |
+| CocoSketch | `COCO_PROMASK` = 31 | Emit the bucket's `<key, counter>` and clear when the counter reaches τ |
+| Elastic | `ELASTIC_PROMASK` = 31 | One τ for both halves: heavy votes and light counters alike |
 
 `DD_PROMASK` is much lower on purpose: a bucket that never reaches τ
 never reaches the aggregator at all, so DDSketch loses its sparse tail
@@ -259,6 +276,10 @@ pub struct CmWorkerSketch { /* Vec<u8> */ }
 pub struct CountWorkerSketch { /* Vec<i8> */ }
 pub struct DdWorkerSketch { /* HashMap<i32, u8> */ }
 pub struct L2hhWorkerSketch { /* Vec<i8>, one per UnivMon layer */ }
+
+// experimental feature
+pub struct CocoWorkerSketch { /* Vec<Option<String>> + Vec<u8> */ }
+pub struct ElasticWorkerSketch { /* heavy buckets + a CmWorkerSketch light layer */ }
 ```
 
 A worker counter is cleared the moment it reaches τ, so it never exceeds
@@ -266,6 +287,14 @@ one byte. Against the 32-bit counters a full `CountMin` uses that is the
 paper's 4× memory saving, and the workers keep no flow-key storage at
 all. Use these when you drive the protocol yourself; `CmOctoWorker` and
 friends already do.
+
+The two keyed-bucket workers are the exception to "no flow-key storage".
+Idea 3 removes a *redundant* key store — a heap the aggregator can rebuild
+— but a Coco bucket or an Elastic heavy bucket *is* the key store, and its
+key is the only record of what its counter counts. Both workers keep the
+keys and shrink only the counters, which is what `Child_Coco` and
+`Child_Elastic` do in the authors' `CPU/` tree. Because they hold the key,
+both can also flush, which the `*TopK*` workers cannot.
 
 ---
 
@@ -355,12 +384,22 @@ copy, made once at the hand-off.
 | DDSketch | `Option<f64>` | no |
 | CountMin/Count top-k | `KeyedHashes` | yes, unavoidably |
 | UnivMon | `UnivMonInput` | yes, unavoidably |
+| CocoSketch, Elastic | `String` | yes, unavoidably |
+
+CocoSketch and Elastic key on a `String`, so their plans render the input
+with `flow_key_string` — the same conversion `EHSketchList` uses for these
+two sketches. That rendering is what the aggregator stores, so it is what
+`Coco::estimate_key` or `Elastic::query` must be asked for. Their payloads
+carry no hashes: the heavy half of an Elastic insert can evict a key the
+caller never sent, so the worker has to be able to hash for itself anyway,
+and hashing there keeps the work off the dispatching thread.
 
 `UnivMonInput` hashes only the layers a key actually reaches. Layer depth
 is geometric, so that is nearly always one or two.
 
 The shipped plans are `CmOctoPlan`, `CountOctoPlan`, `CmTopKOctoPlan`,
-`CountTopKOctoPlan`, `HllOctoPlan`, `DdOctoPlan` and `UnivMonOctoPlan`.
+`CountTopKOctoPlan`, `HllOctoPlan`, `DdOctoPlan`, `UnivMonOctoPlan` and,
+behind `experimental`, `CocoOctoPlan` and `ElasticOctoPlan`.
 Each takes the same dimensions its worker did, plus an optional shared
 `OctoThreshold`:
 
@@ -445,10 +484,26 @@ pub fn run_octo<L, P>(
 | DDSketch | `DdOctoWorker` | `DdOctoAggregator` | `DdDelta` |
 | UnivMon | `UnivMonOctoWorker` | `UnivMonOctoAggregator` | `LayeredCountDelta` |
 | HyperLogLog | `HllOctoWorker` | `HllOctoAggregator` | `HllDelta` |
+| CocoSketch † | `CocoOctoWorker` | `CocoOctoAggregator` | `CocoDelta` |
+| Elastic † | `ElasticOctoWorker` | `ElasticOctoAggregator` | `ElasticDelta` |
+
+† requires the `experimental` feature, which is what gates `Coco` and
+`Elastic` themselves.
 
 The `*TopK*` pairs hold the pipeline's only heavy-hitter heap, in the
 aggregator: each keyed delta updates the parent counter and then the
 heap, which is Algorithm 2.
+
+The two keyed-bucket pairs instead replay the key, per §4.4.
+`CocoOctoAggregator` calls the weighted `Coco::insert`, so the promoted
+mass contests the parent's own buckets and runs the parent's own `v/val`
+election. `ElasticOctoAggregator` splits the halves: a `Heavy` message
+goes through `Elastic::merge_heavy` — `insert_many` plus the eviction flag
+— and a `Light` message is an ordinary Count-Min cell delta applied to
+`sketch.light`. Neither aggregator keeps a heap: Appendix C notes both
+sketches already carry their own heavy-key storage, which is also why
+Table 1 gives them a throughput ratio near 1 (1.01× and 0.93×) while
+still reporting 37.25× and 14.03× better accuracy.
 
 ### Sharing a threshold across the fleet
 
@@ -498,9 +553,23 @@ let result = run_octo(&inputs, &config, plan, || CmOctoAggregator::new(4, 4096))
   τ=1 → exact at 200k messages, τ=2 → 7x ideal error, τ=4 → 19x, τ=8 →
   41x, while periodic merge stays at ideal for 3x the traffic. Prefer
   merge for DDSketch unless τ can be 1.
-- Not yet wired up: CocoSketch and Elastic sketch. Both replace a whole
-  `(key, counter)` bucket rather than incrementing a cell, so they need a
-  bucket-valued delta rather than the cell-valued ones here.
+- The Elastic aggregator flags every heavy bucket it seats or feeds. The
+  sending worker may have evicted that flow into *its* light layer, and
+  nothing short of trusting the worker's Count-Min can rule that out, so
+  the flag is set and the estimate reads through — the same call
+  `Elastic::merge` already makes for the same reason. Without it a heavy
+  flow whose parent bucket happened never to evict anyone reads back low.
+- A Coco or Elastic worker promotes a key it may not currently hold. Coco's
+  losing arrival promotes the *incumbent* of the bucket it hit, and an
+  Elastic eviction spills the *evicted* resident, so a message can name a
+  key that never appeared in this batch. That is `CPU/Coco/Ours.h` and
+  `CPU/Elastic/Ours.h`, and it is why their payload is the key rather than
+  a set of hashes.
+- Coco promotion moves mass in batches of τ rather than one at a time, and
+  the parent's replacement probability is `v/val`, so a batch is that much
+  likelier to take a bucket from its resident. Mass is conserved exactly,
+  but which key holds it churns faster than in a single-threaded pass.
+  Lower τ if a specific flow's residency matters more than message count.
 
 ## Status
 

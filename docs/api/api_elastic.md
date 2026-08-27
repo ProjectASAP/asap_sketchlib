@@ -68,6 +68,24 @@ vote, and either the arriving flow goes to the light layer, or — once
 light layer with its whole positive vote and the arrival takes the bucket with
 `(vote_pos, vote_neg, eviction) = (1, 1, true)`.
 
+### Weighted and merge-time insertion
+
+```rust
+fn insert_many(&mut self, id: String, count: i32)
+fn merge_heavy(&mut self, id: String, votes: i32)
+```
+
+`insert_many` is `insert` with a weight: a matching bucket takes `count`
+positive votes, a non-matching one takes `count` negative votes, and a takeover
+seats the arrival with `count` of each. `count` of 1 is `insert` exactly.
+
+`merge_heavy` is `insert_many` plus the eviction flag, for absorbing a
+`<flow, votes>` message from another sketch's heavy part. The flag is set for
+the same reason `merge` flags every surviving bucket: the sender's light layer
+may hold part of this flow, and nothing short of trusting the sender's Count-Min
+can rule that out, so the estimate reads through. That overestimates rather than
+underestimates.
+
 ### Overload mode
 
 ```rust
@@ -316,6 +334,27 @@ let _ = sk.query("flow".to_string());
   guarantee the rest of the API holds.
 - String-centric API (`String` in insert/query).
 - Lifecycle and parity differ from structured sketches.
+
+## Multi-core (OctoSketch)
+
+> **Feature gate:** also requires `octo-runtime` for the runtime itself.
+
+```rust
+let plan = ElasticOctoPlan::new(256, 3, 4096);
+let config = OctoConfig { threshold: plan.threshold().clone(), ..OctoConfig::default() };
+let out = run_octo(&inputs, &config, plan.clone(), || plan.aggregator());
+out.parent.sketch.query("flow::7".to_string());
+```
+
+Appendix C of the OctoSketch paper keeps both halves in the worker and promotes
+them differently. `ElasticOctoWorker` holds a heavy table with one-byte vote
+counters and a one-byte Count-Min light layer: the heavy part ships
+`<flow, votes>` and the light part ships an ordinary cell delta, so an eviction
+promotes the *evicted* flow rather than the arriving one. `ElasticOctoAggregator`
+routes a heavy message through `merge_heavy` — the parent runs its own bucket
+contest, and may evict a different flow than the worker did — and applies a light
+message straight to `sketch.light`. Keys are rendered with `flow_key_string`, and
+that rendering is what `query` must be asked for. See `docs/api/api_octo.md`.
 
 ## Departures from the reference implementation
 
