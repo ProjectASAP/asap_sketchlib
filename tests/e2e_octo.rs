@@ -22,12 +22,14 @@
 
 mod common;
 
+use asap_sketchlib::common::BOTTOM_LAYER_FINDER;
 use asap_sketchlib::{
     CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin, DD_PROMASK, DDSketch,
     DataInput, DdWorkerSketch, ErtlMLE, FastPath, HLL_PROMASK, HllDelta, HyperLogLog,
-    HyperLogLogP12, HyperLogLogP16, OctoAggregator, OctoPlan, OctoThreshold, OctoWorker,
-    RegularPath, UnivMon, UnivMonOctoAggregator, UnivMonOctoPlan, UnivMonOctoWorker, Vector2D,
-    hash64_seeded,
+    HyperLogLogP12, HyperLogLogP16, L2HH, L2hhWorkerSketch, LayeredCountDelta, OctoAggregator,
+    OctoPlan, OctoThreshold, OctoWorker, RegularPath, UnivMon, UnivMonDeltaFidelity,
+    UnivMonOctoAggregator, UnivMonOctoPlan, UnivMonOctoWorker, Vector2D, bottom_layer_for_hash,
+    hash64_seeded, hash128_seeded, input_to_owned, univmon_layer_threshold,
 };
 use common::{FreqTruth, zipf_u64};
 use rand::SeedableRng;
@@ -2692,5 +2694,130 @@ fn univmon_heavy_hitter_recall_beats_sketch_merge() {
     assert!(
         octo_recall > 0.9,
         "heavy hitters should be found nearly always, got {octo_recall:.3}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Why UnivMon scales its threshold per layer
+// ---------------------------------------------------------------------------
+
+/// Drives a UnivMon pyramid through the delta path with a caller-chosen
+/// per-layer threshold, so a flat threshold can be compared against the scaled
+/// one the shipped worker uses.
+fn univmon_through_deltas(
+    stream: &[u64],
+    heap: usize,
+    rows: usize,
+    cols: usize,
+    layers: usize,
+    layer_threshold: impl Fn(usize) -> u32,
+) -> UnivMon {
+    let mut workers: Vec<L2hhWorkerSketch> = (0..layers)
+        .map(|layer| L2hhWorkerSketch::new(rows, cols, layer))
+        .collect();
+    let mut parent = UnivMon::init_univmon(heap, rows, cols, layers);
+    let mut weight = 0u64;
+
+    for key in stream {
+        let input = DataInput::U64(*key);
+        weight += 1;
+        let bottom = bottom_layer_for_hash(hash64_seeded(BOTTOM_LAYER_FINDER, &input), layers);
+        let owned = input_to_owned(&input);
+        for (layer, worker) in workers.iter_mut().enumerate().take(bottom + 1) {
+            let hashed = hash128_seeded(layer, &input);
+            let mut promoted = Vec::new();
+            worker
+                .insert_hash_emit_delta(hashed, layer_threshold(layer), &mut |d| promoted.push(d));
+            for delta in promoted {
+                parent.apply_layered_delta(
+                    &LayeredCountDelta {
+                        layer: layer as u32,
+                        key: owned.clone(),
+                        delta,
+                        worker_id: 0,
+                        weight_total: weight,
+                    },
+                    if layer_threshold(layer) <= 1 {
+                        UnivMonDeltaFidelity::EveryInsert
+                    } else {
+                        UnivMonDeltaFidelity::PromotedOnly
+                    },
+                );
+            }
+        }
+        parent.set_total_weight(weight as usize);
+    }
+    parent
+}
+
+#[test]
+fn a_flat_threshold_starves_the_deep_univmon_layers() {
+    // A UnivMon layer only receives the keys that survive L coin flips, so
+    // layer L carries about n / 2^L of the stream. One threshold across the
+    // whole pyramid is sized for layer 0 and leaves the deep layers - the ones
+    // the recursive estimator leans on for cardinality - with nothing. This is
+    // the measurement `univmon_layer_threshold` exists for.
+    let (heap, rows, cols, layers) = (64usize, 5usize, 1_024usize, 12usize);
+    let base = 31u32;
+    let stream = zipf_u64(60_000, 4_096, 1.1, 12_201);
+
+    let mut ideal = UnivMon::init_univmon(heap, rows, cols, layers);
+    for key in &stream {
+        ideal.insert(&DataInput::U64(*key), 1);
+    }
+
+    let flat = univmon_through_deltas(&stream, heap, rows, cols, layers, |_| base);
+    let scaled = univmon_through_deltas(&stream, heap, rows, cols, layers, |layer| {
+        univmon_layer_threshold(base, layer)
+    });
+
+    let nonzero = |sketch: &UnivMon, layer: usize| -> usize {
+        let L2HH::COUNT(inner) = &sketch.l2_sketch_layers[layer];
+        (0..inner.rows())
+            .flat_map(|r| (0..inner.cols()).map(move |c| (r, c)))
+            .filter(|(r, c)| inner.as_storage().query_one_counter(*r, *c) != 0)
+            .count()
+    };
+    let deepest = layers - 1;
+    println!(
+        "UnivMon card: ideal={:.0} flat-tau={:.0} scaled-tau={:.0} | deepest layer non-zero cells: \
+         ideal={} flat={} scaled={}",
+        ideal.calc_card(),
+        flat.calc_card(),
+        scaled.calc_card(),
+        nonzero(&ideal, deepest),
+        nonzero(&flat, deepest),
+        nonzero(&scaled, deepest),
+    );
+
+    // The deep layers are what a flat threshold empties.
+    assert!(
+        nonzero(&ideal, deepest) > 0,
+        "the ideal sketch reaches this layer"
+    );
+    assert_eq!(
+        nonzero(&flat, deepest),
+        0,
+        "a flat threshold leaves the deepest layer empty"
+    );
+    assert_eq!(
+        nonzero(&scaled, deepest),
+        nonzero(&ideal, deepest),
+        "scaling the threshold per layer keeps the deep layers exact"
+    );
+
+    // And that is what wrecks the estimate the deep layers feed.
+    let relative = |sketch: &UnivMon| {
+        (sketch.calc_card() - ideal.calc_card()).abs() / ideal.calc_card().abs().max(1.0)
+    };
+    assert!(
+        relative(&flat) > 0.5,
+        "a flat threshold should lose most of the cardinality, got {:.3}",
+        relative(&flat)
+    );
+    assert!(
+        relative(&scaled) < 0.1,
+        "the scaled threshold should track it, got {:.3}",
+        relative(&scaled)
     );
 }

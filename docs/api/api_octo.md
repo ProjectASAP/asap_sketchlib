@@ -204,29 +204,23 @@ re-reads the layer's estimate and updates that layer's heap — Algorithm
 work is a hash and a few one-byte increments; the L2 accumulator, the
 median estimate and the heavy-hitter heap all move to the aggregator,
 which touches them once per *promotion* rather than once per insert.
-Measured with `cargo run --release --example octo_throughput_probe` on a
-2M-insert Zipf stream (heap 64, 5x1024, 12 layers):
 
-| τ | worker | vs single-threaded | deltas/insert | aggregator | sustainable | gap to ideal |
-| --- | --- | --- | --- | --- | --- | --- |
-| 16 | 16.5 M/s | 62x | 1.435 | 0.43 M/s | 0.30 M/s | 0.0000 |
-| 31 | 18.4 M/s | 69x | 1.000 | 0.43 M/s | 0.43 M/s | 0.0002 |
-| 64 | 20.2 M/s | 76x | 0.441 | 0.40 M/s | 0.90 M/s | 0.0002 |
-| 96 | 21.1 M/s | 80x | 0.322 | 0.42 M/s | 1.32 M/s | 0.0004 |
-| 127 | 20.6 M/s | 78x | 0.278 | 0.45 M/s | 1.64 M/s | 0.0005 |
+One aggregator serves every worker, so the pipeline's ceiling is the
+aggregator's rate divided by how many deltas each insert produces — which
+makes τ the parameter that decides throughput, and is why §4.3 has the
+aggregator drive it. At a low τ an insert produces several deltas, the
+aggregator does more heap work than a single-threaded `UnivMon::insert`
+would, and the pipeline is slower than one core; the accuracy cost of
+raising τ stays negligible well past the default, so the trade is
+throughput against messages rather than against error.
 
-Single-threaded `UnivMon::insert` runs at 0.26 M/s on the same stream, so
-the worker is 65-86x faster per insert — but one aggregator serves every
-worker, so the pipeline's ceiling is the aggregator's rate divided by
-deltas per insert. That is why τ decides everything and why the
-aggregator drives it (§4.3).
+`cargo run --release --example octo_throughput_probe` measures the three
+stages separately on your hardware and prints the host it ran on.
 
 The aggregator's own ceiling is `HHHeap`, not the delta protocol: its
-rate falls off as `1/heap_size` (6.84, 1.88, 0.44, 0.13 Mdelta/s at
-capacities 4, 16, 64, 256) because the heap rebuilds its whole position
-index on every accepted update. Single-threaded UnivMon pays the same
-cost on every insert rather than every promotion, which is most of the
-gap between 0.26 M/s and 22 M/s.
+rate falls off as `1/heap_size`, because the heap rebuilds its whole
+position index on every accepted update. Single-threaded UnivMon pays the
+same cost on every insert rather than every promotion.
 
 **The threshold is scaled per layer.** Layer L only receives the keys that
 survive L coin flips, so it carries roughly `n / 2^L` of the stream. One

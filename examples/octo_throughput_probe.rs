@@ -49,6 +49,30 @@ fn main() {
     let keys = zipf(n, 4_096, 1.1, 13_001);
     let inputs: Vec<DataInput<'static>> = keys.iter().map(|k| DataInput::U64(*k)).collect();
 
+    // Absolute rates below belong to this host. Record it, or the numbers are
+    // not comparable with anyone else's - or with the same box under load.
+    println!(
+        "host: {} {} | {} logical cores | core pinning: {}",
+        std::env::consts::ARCH,
+        std::env::consts::OS,
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0),
+        match core_affinity::get_core_ids().and_then(|ids| ids.into_iter().next()) {
+            Some(id) if core_affinity::set_for_current(id) => "available",
+            Some(_) => "REJECTED by this platform (measurements are unpinned)",
+            None => "no core ids reported",
+        }
+    );
+    println!(
+        "profile: {}",
+        if cfg!(debug_assertions) {
+            "debug - rates are meaningless, rebuild with --release"
+        } else {
+            "release"
+        }
+    );
+
     let mut ideal = UnivMon::init_univmon(heap, rows, cols, layers);
     let started = Instant::now();
     for input in &inputs {
@@ -115,9 +139,9 @@ fn main() {
     }
 
     println!(
-        "\nper-layer tau at base 128: {:?}",
+        "\nper-layer tau at base {MAX_PROMASK}: {:?}",
         (0..layers)
-            .map(|l| univmon_layer_threshold(128, l))
+            .map(|l| univmon_layer_threshold(MAX_PROMASK, l))
             .collect::<Vec<_>>()
     );
 

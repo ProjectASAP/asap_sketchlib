@@ -30,6 +30,9 @@ xxhash-rust = { version = "0.8", features = ["xxh32"] }
 core_affinity = { version = "0.8", optional = true }
 crossbeam-channel = { version = "0.5", optional = true }
 
+[dev-dependencies]
+core_affinity = "0.8"
+
 [features]
 default = []
 experimental = []

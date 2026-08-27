@@ -90,13 +90,14 @@ pub trait OctoWorker: Send {
     /// Promote everything still held back, so the aggregator can be queried
     /// against the whole stream so far.
     ///
-    /// A worker holds any counter that has not reached τ. For Count-Min and
-    /// Count that only makes the parent low by under τ per cell, but for a
-    /// bucket histogram or a max-register sketch an un-promoted cell is
-    /// *absent* from the parent rather than merely lagging, which is a
-    /// different kind of wrong. Flushing costs one message per non-empty cell -
-    /// as much as shipping the sketch - so it belongs at the point a stream is
-    /// handed over for querying, not on a timer.
+    /// A worker holds any counter that has not reached τ, and every worker
+    /// holds its own, so a shared cell trails by up to `workers · (τ - 1)`.
+    /// For Count-Min and Count that is only a low counter, but for a bucket
+    /// histogram or a max-register sketch an un-promoted cell is *absent* from
+    /// the parent rather than lagging, which is a different kind of wrong.
+    /// Flushing costs one message per non-empty cell - as much as shipping the
+    /// sketch - so it belongs at the point a stream is handed over for
+    /// querying, not on a timer.
     ///
     /// The default does nothing, for workers that hold nothing back.
     fn flush<F>(&mut self, emit: &mut F)
@@ -207,7 +208,12 @@ impl CmWorkerSketch {
         threshold: u32,
         emit: &mut impl FnMut(CmDelta),
     ) {
-        debug_assert_eq!(hashes.len(), self.rows, "one hash per row");
+        assert_eq!(
+            hashes.len(),
+            self.rows,
+            "one hash per row; a plan built for a different geometry would \
+             leave the untouched rows at zero and every estimate at zero"
+        );
         let threshold = threshold.clamp(1, MAX_PROMASK) as u8;
         for (r, hashed) in hashes.iter().copied().enumerate() {
             let col = ((hashed & LOWER_32_MASK) as usize) % self.cols;
@@ -321,7 +327,12 @@ impl CountWorkerSketch {
         threshold: u32,
         emit: &mut impl FnMut(CountDelta),
     ) {
-        debug_assert_eq!(hashes.len(), self.rows, "one hash per row");
+        assert_eq!(
+            hashes.len(),
+            self.rows,
+            "one hash per row; a plan built for a different geometry would \
+             leave the untouched rows at zero and every estimate at zero"
+        );
         let threshold = threshold.clamp(1, MAX_PROMASK) as i8;
         for (r, hashed) in hashes.iter().copied().enumerate() {
             let col = ((hashed & LOWER_32_MASK) as usize) % self.cols;
@@ -996,6 +1007,10 @@ where
             tx.send(WorkerMsg::Flush(ack_tx.clone()))
                 .expect("worker receiver dropped while runtime is active");
         }
+        // Drop the local sender, or `recv` can never report `Disconnected` and a
+        // worker that dies mid-flush - the aggregator panicking behind it, say -
+        // leaves this waiting forever instead of failing.
+        drop(ack_tx);
         for _ in 0..core.worker_input_txs.len() {
             ack_rx.recv().expect("worker dropped during flush");
         }
@@ -1178,11 +1193,16 @@ impl OctoWorker for CmTopKOctoWorker {
     }
 
     // No flush: every delta carries the key that produced it, and a worker
-    // keeps no key storage - that is the point of Idea 3. A residual cell
-    // cannot be attributed back to a key, so it stays where it is. The parent's
-    // counters are low by under tau per cell, which is the same bound the
-    // unkeyed workers carry between flushes, and the heavy-hitter heap does not
-    // depend on the residue.
+    // keeps no key storage - that is the point of Idea 3 - so a residual cell
+    // cannot be attributed back to a key and has to stay where it is.
+    //
+    // The consequence is not just a low counter. The aggregator only ever
+    // learns a key exists from a delta, so under HashByKey a key is invisible
+    // to it until that key occurs tau times on its worker. Below that the
+    // heap does not contain it at all, and its estimate is zero - see
+    // `a_key_below_the_threshold_never_reaches_the_topk_aggregator`. Size tau
+    // well under the frequency you care about, or use the unkeyed pair and
+    // track keys yourself.
 }
 
 /// Count-Min parent that also maintains the only heavy-hitter heap in the
@@ -1326,12 +1346,8 @@ impl OctoWorker for CountTopKOctoWorker {
         );
     }
 
-    // No flush: every delta carries the key that produced it, and a worker
-    // keeps no key storage - that is the point of Idea 3. A residual cell
-    // cannot be attributed back to a key, so it stays where it is. The parent's
-    // counters are low by under tau per cell, which is the same bound the
-    // unkeyed workers carry between flushes, and the heavy-hitter heap does not
-    // depend on the residue.
+    // No flush, for the same reason as CmTopKOctoWorker: a key the aggregator
+    // has never been sent is absent from the heap, not merely undercounted.
 }
 
 /// Count-sketch parent holding the pipeline's only heavy-hitter heap.
@@ -2445,6 +2461,18 @@ mod worker_tests {
     }
 
     #[test]
+    #[should_panic(expected = "one hash per row")]
+    fn a_worker_refuses_hashes_built_for_a_different_geometry() {
+        // The hashes are a public entry point, so a plan/worker mismatch has to
+        // fail loudly. Silently using the rows it was given would leave the rest
+        // at zero, and Count-Min's min-over-rows estimate is then zero for
+        // every key.
+        let mut worker = CmWorkerSketch::new(4, 16);
+        let hashes = CmWorkerSketch::hashes(2, &DataInput::U64(1));
+        worker.insert_hashes_emit_delta(&hashes, CM_PROMASK, &mut |_| {});
+    }
+
+    #[test]
     fn threshold_for_error_follows_equation_four() {
         // tau = eps * L1 / k'
         assert_eq!(threshold_for_error(0.0004, 1_000_000.0, 4), 100);
@@ -2878,6 +2906,49 @@ mod runtime_tests {
     }
 
     #[test]
+    fn a_key_below_the_threshold_never_reaches_the_topk_aggregator() {
+        // The keyed workers keep no key storage and so cannot flush, and the
+        // aggregator only learns a key exists from a delta. Under HashByKey a
+        // key lands on one worker, so it becomes visible exactly when it occurs
+        // tau times. This is the boundary, in both directions.
+        let (rows, cols, top_k) = (3usize, 1024usize, 32usize);
+        let tau = CM_PROMASK;
+        let run = |occurrences: u32| {
+            let mut inputs: Vec<DataInput<'_>> = Vec::new();
+            for key in 0..20u64 {
+                for _ in 0..occurrences {
+                    inputs.push(DataInput::U64(key));
+                }
+            }
+            run_octo(&inputs, &config(4), CmTopKOctoPlan::new(rows, cols), || {
+                CmTopKOctoAggregator::new(rows, cols, top_k)
+            })
+            .parent
+            .sketch
+        };
+
+        let below = run(tau - 1);
+        assert_eq!(
+            below.heap().len(),
+            0,
+            "a key that never reaches tau is absent from the heap entirely"
+        );
+        assert_eq!(
+            below.estimate(&DataInput::U64(0)),
+            0,
+            "and its counter never left the worker"
+        );
+
+        let at = run(tau);
+        assert_eq!(
+            at.heap().len(),
+            20,
+            "one more occurrence per key makes every one of them a candidate"
+        );
+        assert!(at.estimate(&DataInput::U64(0)) >= tau as i32);
+    }
+
+    #[test]
     fn the_count_topk_aggregator_also_tracks_heavy_hitters() {
         let (rows, cols, top_k) = (5usize, 2048usize, 8usize);
         let mut inputs: Vec<DataInput<'_>> = Vec::new();
@@ -3108,6 +3179,52 @@ mod runtime_tests {
             runtime.finish().parent.sketch.get_count(),
             values.len() as u64
         );
+    }
+
+    struct PanicOnFlushWorker;
+
+    impl OctoWorker for PanicOnFlushWorker {
+        type Delta = u64;
+        type Payload = ();
+
+        fn process<F>(&mut self, _payload: &(), emit: &mut F)
+        where
+            F: FnMut(Self::Delta),
+        {
+            emit(1);
+        }
+
+        fn flush<F>(&mut self, _emit: &mut F)
+        where
+            F: FnMut(Self::Delta),
+        {
+            panic!("worker died during flush");
+        }
+    }
+
+    struct PanicOnFlushPlan;
+
+    impl OctoPlan for PanicOnFlushPlan {
+        type Worker = PanicOnFlushWorker;
+
+        fn worker(&self, _worker_id: usize) -> Self::Worker {
+            PanicOnFlushWorker
+        }
+
+        fn prepare(&self, _input: &DataInput<'_>) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "worker dropped during flush")]
+    fn a_worker_that_dies_mid_flush_fails_the_flush_rather_than_hanging_it() {
+        // The acknowledgement channel has to observe every sender going away,
+        // which means the caller's own copy must be dropped first. Otherwise
+        // this waits forever instead of reporting.
+        let mut runtime = OctoRuntime::new(&config(2), PanicOnFlushPlan, || CountingAggregator {
+            total: 0,
+        });
+        runtime.insert(DataInput::U64(1));
+        runtime.flush();
     }
 
     #[test]
