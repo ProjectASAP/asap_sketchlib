@@ -9,7 +9,8 @@
 //! * **Biased Replacement**: Uses a probabilistic strategy to retain Heavy Hitters.
 //!
 //! ## Reference
-//! * "CocoSketch: High-Performance Sketch-based Measurement over Arbitrary Key Spaces"
+//! * "CocoSketch: High-Performance Sketch-based Measurement over Arbitrary
+//!   Partial Key Query"
 //! * <https://dl.acm.org/doi/10.1145/3452296.3472892>
 
 use crate::{DataInput, DefaultXxHasher, SketchHasher, Vector2D};
@@ -152,7 +153,8 @@ impl<H: SketchHasher> Coco<H> {
                 victim = (i, idx);
                 tied = 1;
             } else if bucket.val == victim_val {
-                // reservoir sampling: the n-th tie takes the slot with probability 1/n
+                // reservoir sampling: the n-th tie takes the slot with probability 1/n.
+                // The paper randomizes ties; yindazhang/CocoSketch keeps the first.
                 tied += 1;
                 if rng.get_or_insert_with(rand::rng).random_range(0..tied) == 0 {
                     victim = (i, idx);

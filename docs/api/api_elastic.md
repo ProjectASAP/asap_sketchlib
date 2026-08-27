@@ -177,6 +177,23 @@ let _ = sk.query("flow".to_string());
 - String-centric API (`String` in insert/query).
 - Lifecycle and parity differ from structured sketches.
 
+## Departures from the reference implementation
+
+The authors' code is at [BlockLiu/ElasticSketchCode](https://github.com/BlockLiu/ElasticSketchCode);
+`src/CPU/ElasticSketch/` holds the sketch.
+
+- **Eviction threshold.** Section 3.1.1 evicts once `vote-/vote+ >= lambda`,
+  and this module does. `param.h` defines
+  `JUDGE_IF_SWAP(min_val, guard_val) ((guard_val) > ((min_val) << 3))`, a strict
+  `>`, so the reference swaps one packet later.
+- **Bucket shape.** The reference is the software version of section 4.3: eight
+  counters per bucket, seven flows sharing one guard counter, the smallest flow
+  evicted, and the flag packed into the counter's top bit. This module is the
+  basic version of section 3.1, one flow per bucket.
+
+The takeover itself matches the paper and the reference: `HeavyPart.cpp` writes
+`0x80000001` on a normal-path swap, which is the paper's `(f, 1, T, 1)`.
+
 ## Status
 
 Unstable; migration work is tracked in `features.md`.

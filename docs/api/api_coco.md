@@ -114,6 +114,23 @@ let _ = sk.estimate_projected("region=us", |full| {
 - `estimate_substring` matches by containment, which over-attributes across keys that prefix one another.
 - Replacement behavior is probabilistic.
 
+## Departures from the reference implementation
+
+The authors' code is at [yindazhang/CocoSketch](https://github.com/yindazhang/CocoSketch);
+`CPU/Multiple/OurSoft.h` is the basic sketch this module implements.
+
+- **Tie-breaking.** Section 4.1 ends the victim rule with "If multiple buckets
+  share the same smallest size value, randomly select one to update", and this
+  module does. `OurSoft.h` compares with a strict `<` and keeps the first
+  minimum instead, which biases occupancy toward the earlier arrays while ties
+  last -- on a fresh table, every mapped bucket holds 0 and they all tie.
+- **Depth.** The reference defaults to `HASH_NUM = 2`; this module defaults to
+  4, the top of the range section 3.2 recommends.
+
+Everything else matches: the match-then-victim scan, the whole increment landing
+in one bucket, and the replacement probability taken against the post-increment
+value (`randomGenerator() % count == 0`).
+
 ## Status
 
 Unstable.
