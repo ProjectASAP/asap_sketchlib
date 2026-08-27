@@ -26,12 +26,6 @@ Test file: [`src/sketches/countminsketch.rs`](../src/sketches/countminsketch.rs)
 | `cm_error_bound_zipf` | Zipf-stream error bound holds for regular and fast paths. | On `200_000` Zipf samples with domain `8192` and exponent `1.1`, checks both paths satisfy: number of distinct queried keys with `\|estimate - true\| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
 | `cm_error_bound_uniform` | Uniform-stream error bound holds for regular and fast paths. | On `200_000` uniform samples in `[100.0, 1000.0]`, checks both paths satisfy: number of distinct queried keys with `\|estimate - true\| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
 | `count_min_round_trip_serialization` | Serialization round trip preserves full sketch state. | Serializes/deserializes a populated `3x8` regular-path sketch and verifies dimensions plus the full counter array are unchanged. |
-| `compression_shrinks_the_columns_and_keeps_the_rows` | Compression narrows the table. | `compress_max(4)` on a `3x64` sketch is verified to leave 3 rows, 16 columns, and 48 backing counters. |
-| `maximum_compression_never_underestimates` | Maximum Compression is one-sided. | After `compress_max(4)` over 40 keys, every estimate is verified to be at or above its true count. |
-| `sum_compression_never_underestimates_and_conserves_each_row` | Sum Compression regroups without losing mass. | After `compress_sum(4)`, each row's counter total is verified unchanged and no estimate falls below truth. |
-| `maximum_compression_is_tighter_than_sum_compression` | Maximum beats Sum on error. | At ratio 8 over 40 keys totalling 190, verifies every max estimate is at most its sum counterpart and at least half are strictly tighter (measured: max overshoots by 107, sum by 550). |
-| `a_compressed_sketch_is_queried_with_no_extra_step` | No decompression is needed. | Verifies `estimate` on the folded sketch equals the row minimum read at `(h % 64) % 16`, and that this equals `h % 16` per Lemma 3.2. |
-| `a_ratio_that_does_not_divide_the_columns_is_rejected` | Ratios must divide the width. | `compress_max(7)` on 64 columns is verified to panic. |
 
 ### Count
 
@@ -230,7 +224,6 @@ Test file: [`src/sketches/elastic.rs`](../src/sketches/elastic.rs)
 | `maximum_merging_never_underestimates_disjoint_flows` | Maximum merging keeps Elastic's one-sided guarantee. | Merges two sketches over 80 disjoint flows through a `2x64` light layer and verifies every per-flow estimate is at or above its true count. |
 | `maximum_merging_is_tighter_than_sum_merging` | Maximum merging beats sum merging on disjoint flows. | Runs the same 80-flow disjoint input through `merge` and `merge_max` and verifies no flow is looser under max and at least one is strictly tighter; measured totals are 434 against 359 for a truth of 275. |
 | `maximum_merging_underestimates_a_flow_both_sides_saw` | Maximum merging's precondition, pinned as behavior. | A flow inserted 30 times left and 20 times right reads back as `30` after `merge_max` and `50` after `merge`, fixing the disjointness requirement as tested behavior rather than prose. |
-| `light_compression_keeps_every_flow_one_sided` | Light-layer compression stays one-sided. | Folds the default light layer 4x with `compress_light_max` on a 8-bucket sketch holding 60 flows; verifies the new shape is `3x1024` and no flow estimate falls below its true count. |
 
 ### Coco
 

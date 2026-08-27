@@ -213,33 +213,6 @@ its own group and becomes a second live entry for the same flow — reachable
 whenever the bucket count is not a power of two, for instance 12 buckets
 doubled to 24 and compressed by 3.
 
-## Compressing the light layer
-
-```rust
-fn compress_light_sum(&mut self, ratio: usize)
-fn compress_light_max(&mut self, ratio: usize)
-```
-
-Section 3.2 adapts the sketch to the available bandwidth by shrinking it before
-it is sent to a collector, and section 3.2.1 gives the two ways: Sum Compression
-and Maximum Compression. Both fold the light layer's columns into
-`cols / ratio` groups — new column `j` takes old columns `j`, `j + cols/ratio`,
-and so on — and `ratio` must divide `cols`.
-
-Prefer `compress_light_max`. The paper proves the sum leaves the Count-Min error
-bound unchanged while the max tightens it, and that the max fold overestimates
-but never underestimates, so the sketch keeps its one-sided guarantee. The
-authors' `LightPart::compress` implements only the max fold.
-
-Compression is one-way and needs no decompression: the folded layer is queried
-exactly as before, because Lemma 3.2 makes `(h % w) % w'` equal `h % w'`. See
-the Count-Min page for the mechanics and the fast-path restriction.
-
-This is not [`compress_heavy`](#growing-and-shrinking-the-heavy-part), which
-merges heavy buckets and spills losers into the light layer. This one folds the
-light layer's counters and touches no flow ids.
-
-
 ## Serialization
 
 Derives serde; no dedicated byte API helpers.

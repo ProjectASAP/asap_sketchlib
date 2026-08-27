@@ -425,19 +425,6 @@ impl<H: SketchHasher> Elastic<H> {
         bucket.eviction = true;
     }
 
-    /// Folds the light layer into `cols / ratio` columns, summing each group.
-    /// Section 3.2.1's Sum Compression: the error bound is unchanged, and the
-    /// layer is queried afterwards with no decompression step.
-    pub fn compress_light_sum(&mut self, ratio: usize) {
-        self.light.compress_sum(ratio);
-    }
-
-    /// The same fold keeping each group's largest counter, section 3.2.1's
-    /// Maximum Compression. Tighter than the sum, and still one-sided.
-    pub fn compress_light_max(&mut self, ratio: usize) {
-        self.light.compress_max(ratio);
-    }
-
     #[inline]
     fn bucket_index(&self, id: &str) -> usize {
         let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(id));
@@ -1059,24 +1046,6 @@ mod tests {
     /// Sums every flow's estimate, for checking mass is neither lost nor doubled.
     fn total_estimate(sk: &Elastic, truth: &[(String, i32)]) -> i32 {
         truth.iter().map(|(k, _)| sk.query(k.clone())).sum()
-    }
-
-    #[test]
-    fn light_compression_keeps_every_flow_one_sided() {
-        // 8 heavy buckets against 60 flows pushes most of them into the light
-        // layer, so compressing it is what the estimates are read through
-        let (mut sk, truth) = seeded_sketch(8, 60);
-        sk.compress_light_max(4);
-
-        assert_eq!(sk.light.cols(), DEFAULT_LIGHT_COLS / 4);
-        assert_eq!(sk.light.rows(), DEFAULT_LIGHT_ROWS);
-        for (id, count) in &truth {
-            let est = sk.query(id.clone());
-            assert!(
-                est >= *count,
-                "{id} underestimated after compression: {est} < {count}"
-            );
-        }
     }
 
     #[test]
