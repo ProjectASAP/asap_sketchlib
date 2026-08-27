@@ -22,10 +22,12 @@
 //!
 //! The last section covers the two families that keep a flow key beside every
 //! counter - CocoSketch and the Elastic sketch, section 4.4 and appendix C -
-//! behind the `experimental` feature. Neither is covered by a theorem, and
-//! Coco's aggregator elects from an unseeded RNG, so those tests split: exact
-//! mass identities that hold under any interleaving, and the paper's own
-//! measured comparison against sketch-merge for everything else.
+//! behind the `experimental` feature. Only the Octo variants are here; the
+//! single-threaded sketches are `tests/e2e_keyed_buckets.rs`. Neither family is
+//! covered by a theorem, and Coco's aggregator elects from an unseeded RNG, so
+//! those tests split: exact mass identities that hold under any interleaving,
+//! and the paper's own measured comparison against sketch-merge for everything
+//! else.
 
 mod common;
 

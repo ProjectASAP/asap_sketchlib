@@ -46,7 +46,9 @@ tests/
 ├── e2e_cardinality.rs
 ├── e2e_quantiles.rs
 ├── e2e_frameworks.rs
-├── e2e_experimental.rs  # …feature-gated variants
+├── e2e_octo.rs          # …the OctoSketch promotion protocol
+├── e2e_keyed_buckets.rs # …CocoSketch and Elastic, feature-gated
+├── e2e_experimental.rs  # …the remaining feature-gated sketches
 └── bug_verification.rs  # regression tests for fixed defects
 ```
 
@@ -105,6 +107,15 @@ equality, wire round trips for every counter variant, subkey injectivity for
 delimiter-laden values, and MultiHeadHydra's equivalence to independent
 single-head Hydras. Suites grow with their family; a framework that outgrows a
 smoke test deepens in place rather than splitting off.
+
+What does split is a suite held together by something other than its subject.
+`e2e_experimental.rs` grouped sketches by cargo feature, and once CocoSketch and
+the Elastic sketch had a family's worth of coverage between them they moved to
+`e2e_keyed_buckets.rs` — still feature-gated, now organised by what they are:
+the two families that keep a flow key beside every counter and answer
+heavy-hitter questions off it. `e2e_octo.rs` holds the multi-threaded Octo
+variants of those same two, in its own `keyed_buckets` module, beside the rest
+of the promotion protocol.
 
 ## Onboarding a new sketch
 
