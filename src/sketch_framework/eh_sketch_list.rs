@@ -166,10 +166,10 @@ impl EHSketchList {
         match (self, key) {
             (EHSketchList::CM(count_min), _) => Ok(count_min.estimate(key) as f64),
             #[cfg(feature = "experimental")]
-            (EHSketchList::COCO(coco), DataInput::Str(s)) => Ok(coco.clone().estimate(s) as f64),
+            (EHSketchList::COCO(coco), DataInput::Str(s)) => Ok(coco.estimate_key(s) as f64),
             #[cfg(feature = "experimental")]
             (EHSketchList::COCO(coco), DataInput::String(s)) => {
-                Ok(coco.clone().estimate(s.as_str()) as f64)
+                Ok(coco.estimate_key(s.as_str()) as f64)
             }
             (EHSketchList::COUNTL2HH(count_univ), _) => Ok(count_univ.fast_get_est(key)),
             (EHSketchList::CS(count_sketch), _) => Ok(count_sketch.estimate(key)),
@@ -205,7 +205,7 @@ impl EHSketchList {
             },
             #[cfg(feature = "experimental")]
             (EHSketchList::ELASTIC(elastic), DataInput::String(s)) => {
-                Ok(elastic.clone().query(s.clone()) as f64)
+                Ok(elastic.query(s.clone()) as f64)
             }
             (EHSketchList::HLL(hll_df_modified), _) => Ok(hll_df_modified.estimate() as f64),
             (EHSketchList::KLL(kll), DataInput::I32(i)) => Ok(kll.quantile(*i as f64)),

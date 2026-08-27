@@ -259,6 +259,38 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
             }
         }
     }
+
+    /// Merges another sketch by keeping the larger of each counter pair.
+    /// Correct only when the two sketches observed disjoint key sets; a shared
+    /// key reads back as the larger side rather than the sum.
+    pub fn merge_max(&mut self, other: &Self)
+    where
+        S::Counter: PartialOrd,
+    {
+        let self_rows = self.counts.rows();
+        let self_cols = self.counts.cols();
+        assert_eq!(
+            (self_rows, self_cols),
+            (other.counts.rows(), other.counts.cols()),
+            "dimension mismatch while merging CountMin sketches"
+        );
+
+        for i in 0..self_rows {
+            for j in 0..self_cols {
+                let value = other.counts.query_one_counter(i, j);
+                self.counts.update_one_counter(
+                    i,
+                    j,
+                    |cell: &mut S::Counter, incoming: S::Counter| {
+                        if incoming > *cell {
+                            *cell = incoming;
+                        }
+                    },
+                    value,
+                );
+            }
+        }
+    }
 }
 
 // DataInput adapters for the regular Count-Min update rule.
