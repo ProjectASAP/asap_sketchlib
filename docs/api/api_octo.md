@@ -335,10 +335,39 @@ by one per Equation 2: down when the prediction falls below
 fn new<F, PF>(config: &OctoConfig, worker_factory: F, parent_factory: PF) -> Self
 fn insert(&mut self, input: DataInput<'_>)
 fn insert_batch(&mut self, inputs: &[DataInput<'_>])
+fn flush(&mut self)
 fn read_handle(&self) -> OctoReadHandle<P>
 fn close(&self)
 fn finish(self) -> OctoResult<P>
 ```
+
+### Flushing before a query
+
+Between promotions a worker holds every counter still under τ. For
+Count-Min and Count that only leaves the parent low by under τ per cell.
+For DDSketch, or a HyperLogLog running a positive threshold, an
+un-promoted cell is *absent* from the parent rather than lagging — and a
+quantile or a cardinality is exactly a statement about which cells
+exist, so those queries are wrong without bound rather than within α.
+
+`flush` hands over every residual counter and waits for the aggregator to
+apply it, so the parent answers against every input accepted so far. It
+is the point at which a stream is handed over for querying. `finish`
+flushes too, so a completed run always answers against the whole stream —
+a flushed Count-Min parent equals a single-threaded pass cell for cell.
+
+It costs one message per non-empty cell, which is as much as shipping the
+sketch, so call it when a query needs to be right rather than on a timer.
+Inserting afterwards is fine; a flush does not seal the runtime.
+
+`OctoWorker::flush` defaults to doing nothing. The `*TopK*` and UnivMon
+workers keep that default on purpose: every delta they send carries the
+key that produced it, and a worker keeps no key storage, so a residual
+cell cannot be attributed back to a key. Their parents stay low by under
+τ per cell, and their heavy-hitter heaps do not depend on the residue.
+
+At the low level, `CmWorkerSketch`, `CountWorkerSketch`, `DdWorkerSketch`
+and `L2hhWorkerSketch` each expose `flush` directly.
 
 ### run_octo (Batch)
 
@@ -387,16 +416,25 @@ let result = run_octo(
 
 ## Caveats
 
-- Counts below τ are lost when a worker is dropped: at most τ per cell
-  per worker for CMS/Count, at most `held_back()` samples for DDSketch,
-  nothing for HLL at the default threshold.
-- DDSketch loses whole buckets rather than lagging on them. Keep τ small
-  and check `held_back()`.
+- Counts below τ reach the parent only at a flush. `finish` flushes, and
+  `OctoRuntime::flush` does it mid-stream; a worker driven directly at the
+  low level must be flushed by its caller. The keyed workers cannot flush
+  at all — see above.
+- DDSketch loses whole buckets rather than lagging on them, so read it
+  only after a flush. Between flushes, keep τ small and check
+  `held_back()`; measured on a skewed 200k stream, τ=2 costs 7x the
+  ideal quantile error, τ=4 costs 19x and τ=8 costs 41x, while periodic
+  sketch-merge stays at ideal for 3x the traffic.
+- Core pinning is a silent no-op on Apple Silicon: macOS exposes
+  `thread_policy_set(THREAD_AFFINITY_POLICY)` but arm64 rejects it, and
+  `core_affinity::get_core_ids` reports a count without testing whether
+  pinning works. `pin_cores: true` costs nothing there but buys nothing
+  either.
 - The runtime's `insert` dispatches from the calling thread, so that
   thread is a serialization point. The paper instead has each worker pull
   from its own NIC queue.
 - Core pinning silently falls back if the platform has fewer cores than
-  `num_workers + 1`.
+  `num_workers + 1`, and is unavailable outright on Apple Silicon.
 - `insert` after `close` panics.
 - A UnivMon layer that thresholds cannot call its candidate set complete,
   so `candidates_complete()` reads false on exactly those layers. Queries

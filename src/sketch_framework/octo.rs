@@ -75,6 +75,25 @@ pub trait OctoWorker: Send {
     fn process<F>(&mut self, input: &DataInput, emit: &mut F)
     where
         F: FnMut(Self::Delta);
+
+    /// Promote everything still held back, so the aggregator can be queried
+    /// against the whole stream so far.
+    ///
+    /// A worker holds any counter that has not reached τ. For Count-Min and
+    /// Count that only makes the parent low by under τ per cell, but for a
+    /// bucket histogram or a max-register sketch an un-promoted cell is
+    /// *absent* from the parent rather than merely lagging, which is a
+    /// different kind of wrong. Flushing costs one message per non-empty cell -
+    /// as much as shipping the sketch - so it belongs at the point a stream is
+    /// handed over for querying, not on a timer.
+    ///
+    /// The default does nothing, for workers that hold nothing back.
+    fn flush<F>(&mut self, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
+        let _ = emit;
+    }
 }
 
 /// Aggregator-side trait: absorbs deltas into a full-precision sketch.
@@ -156,6 +175,23 @@ impl CmWorkerSketch {
                     value: *cell as u32,
                 });
                 *cell = 0;
+            }
+        }
+    }
+
+    /// Promotes and clears every counter still holding a partial count.
+    pub fn flush(&mut self, emit: &mut impl FnMut(CmDelta)) {
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                let cell = &mut self.counters[row * self.cols + col];
+                if *cell != 0 {
+                    emit(CmDelta {
+                        row: row as u32,
+                        col: col as u32,
+                        value: *cell as u32,
+                    });
+                    *cell = 0;
+                }
             }
         }
     }
@@ -247,6 +283,23 @@ impl CountWorkerSketch {
         }
     }
 
+    /// Promotes and clears every counter still holding a partial count.
+    pub fn flush(&mut self, emit: &mut impl FnMut(CountDelta)) {
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                let cell = &mut self.counters[row * self.cols + col];
+                if *cell != 0 {
+                    emit(CountDelta {
+                        row: row as u32,
+                        col: col as u32,
+                        value: *cell as i32,
+                    });
+                    *cell = 0;
+                }
+            }
+        }
+    }
+
     /// As `insert_emit_delta`, but each delta carries the flow key.
     #[inline(always)]
     pub fn insert_emit_keyed_delta(
@@ -315,6 +368,23 @@ impl L2hhWorkerSketch {
     /// Counters still held back from the aggregator, one per cell.
     pub fn residual(&self) -> &[i8] {
         &self.counters
+    }
+
+    /// Promotes and clears every counter still holding a partial count.
+    pub fn flush(&mut self, emit: &mut impl FnMut(CountDelta)) {
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                let cell = &mut self.counters[row * self.cols + col];
+                if *cell != 0 {
+                    emit(CountDelta {
+                        row: row as u32,
+                        col: col as u32,
+                        value: *cell as i32,
+                    });
+                    *cell = 0;
+                }
+            }
+        }
     }
 
     /// Inserts a key, emitting and clearing every counter whose magnitude
@@ -463,7 +533,15 @@ pub struct OctoResult<P> {
 #[cfg(feature = "octo-runtime")]
 enum WorkerMsg {
     Data(DataInput<'static>),
+    /// Promote everything held back, then acknowledge.
+    Flush(Sender<()>),
     End,
+}
+
+#[cfg(feature = "octo-runtime")]
+enum AggregatorMsg {
+    /// Apply everything already queued, then acknowledge.
+    Drain(Sender<()>),
 }
 
 #[cfg(feature = "octo-runtime")]
@@ -517,6 +595,7 @@ impl<P> OctoReadHandle<P> {
 #[cfg(feature = "octo-runtime")]
 struct OctoCore<P> {
     worker_input_txs: Vec<Sender<WorkerMsg>>,
+    control_tx: Sender<AggregatorMsg>,
     next_worker: AtomicUsize,
     partition: OctoPartition,
     worker_handles: Vec<thread::JoinHandle<()>>,
@@ -601,6 +680,7 @@ where
 
         let adaptive = config.adaptive.clone();
         let threshold = config.threshold.clone();
+        let (control_tx, control_rx) = bounded::<AggregatorMsg>(1);
         let aggregator_handle = thread::spawn(move || {
             if pin_cores {
                 let _ = core_affinity::set_for_current(core_affinity::CoreId { id: num_workers });
@@ -633,6 +713,13 @@ where
                     controller.maybe_adjust(&delta_rxs, &threshold);
                 }
                 if !made_progress {
+                    // Only answer a drain request once every queue is empty.
+                    // The caller has already collected each worker's flush
+                    // acknowledgement, so no worker is still producing and
+                    // "empty" means "applied".
+                    if let Ok(AggregatorMsg::Drain(ack)) = control_rx.try_recv() {
+                        let _ = ack.send(());
+                    }
                     std::hint::spin_loop();
                 }
             }
@@ -656,7 +743,24 @@ where
                                 .send(delta)
                                 .expect("aggregator receiver dropped while workers still running");
                         }),
-                        WorkerMsg::End => break,
+                        WorkerMsg::Flush(ack) => {
+                            worker.flush(&mut |delta| {
+                                delta_tx_worker.send(delta).expect(
+                                    "aggregator receiver dropped while workers still running",
+                                );
+                            });
+                            let _ = ack.send(());
+                        }
+                        WorkerMsg::End => {
+                            // Hand over whatever is still held back, so a
+                            // finished run answers against the whole stream.
+                            worker.flush(&mut |delta| {
+                                delta_tx_worker.send(delta).expect(
+                                    "aggregator receiver dropped while workers still running",
+                                );
+                            });
+                            break;
+                        }
                     }
                 }
             }));
@@ -664,6 +768,7 @@ where
 
         Self {
             worker_input_txs,
+            control_tx,
             next_worker: AtomicUsize::new(0),
             partition: config.partition,
             worker_handles,
@@ -792,6 +897,44 @@ where
             .expect("worker receiver dropped while runtime is active");
     }
 
+    /// Promotes everything the workers still hold and waits for the aggregator
+    /// to apply it, so the parent answers against every input accepted so far.
+    ///
+    /// This is the point at which a stream is handed over for querying. Between
+    /// flushes a worker holds any counter below τ, which for Count-Min and
+    /// Count only makes the parent low by under τ per cell, but for DDSketch or
+    /// a thresholded HyperLogLog means whole cells are missing - and a quantile
+    /// or a cardinality is exactly a statement about which cells exist. It
+    /// costs one message per non-empty cell, the same as shipping the sketch,
+    /// so call it when a query needs to be right rather than on a timer.
+    ///
+    /// Inserting afterwards is fine; the runtime is not sealed.
+    pub fn flush(&mut self) {
+        let core = self.core.as_ref().expect("runtime core missing");
+        if core.closed.load(Ordering::Acquire) {
+            return;
+        }
+
+        // Phase one: every worker hands over its residue. Taking &mut self
+        // means no insert can race this, so once each has acknowledged, the
+        // delta queues hold everything and nothing more is coming.
+        let (ack_tx, ack_rx) = bounded::<()>(core.worker_input_txs.len());
+        for tx in &core.worker_input_txs {
+            tx.send(WorkerMsg::Flush(ack_tx.clone()))
+                .expect("worker receiver dropped while runtime is active");
+        }
+        for _ in 0..core.worker_input_txs.len() {
+            ack_rx.recv().expect("worker dropped during flush");
+        }
+
+        // Phase two: the aggregator applies what is queued.
+        let (drain_tx, drain_rx) = bounded::<()>(1);
+        core.control_tx
+            .send(AggregatorMsg::Drain(drain_tx))
+            .expect("aggregator dropped during flush");
+        drain_rx.recv().expect("aggregator dropped during flush");
+    }
+
     /// Inserts a batch, one element at a time.
     pub fn insert_batch(&mut self, inputs: &[DataInput<'_>]) {
         for input in inputs {
@@ -853,6 +996,13 @@ impl OctoWorker for CmOctoWorker {
     {
         self.sketch
             .insert_emit_delta(input, self.threshold.get(), emit);
+    }
+
+    fn flush<F>(&mut self, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
+        self.sketch.flush(emit);
     }
 }
 
@@ -919,6 +1069,13 @@ impl OctoWorker for CmTopKOctoWorker {
         self.sketch
             .insert_emit_keyed_delta(input, self.threshold.get(), emit);
     }
+
+    // No flush: every delta carries the key that produced it, and a worker
+    // keeps no key storage - that is the point of Idea 3. A residual cell
+    // cannot be attributed back to a key, so it stays where it is. The parent's
+    // counters are low by under tau per cell, which is the same bound the
+    // unkeyed workers carry between flushes, and the heavy-hitter heap does not
+    // depend on the residue.
 }
 
 /// Count-Min parent that also maintains the only heavy-hitter heap in the
@@ -988,6 +1145,13 @@ impl OctoWorker for CountOctoWorker {
         self.sketch
             .insert_emit_delta(input, self.threshold.get(), emit);
     }
+
+    fn flush<F>(&mut self, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
+        self.sketch.flush(emit);
+    }
 }
 
 /// OctoSketch parent wrapping a full-precision `Count`.
@@ -1048,6 +1212,13 @@ impl OctoWorker for CountTopKOctoWorker {
         self.sketch
             .insert_emit_keyed_delta(input, self.threshold.get(), emit);
     }
+
+    // No flush: every delta carries the key that produced it, and a worker
+    // keeps no key storage - that is the point of Idea 3. A residual cell
+    // cannot be attributed back to a key, so it stays where it is. The parent's
+    // counters are low by under tau per cell, which is the same bound the
+    // unkeyed workers carry between flushes, and the heavy-hitter heap does not
+    // depend on the residue.
 }
 
 /// Count-sketch parent holding the pipeline's only heavy-hitter heap.
@@ -1119,6 +1290,22 @@ impl DdWorkerSketch {
         self.counters.values().map(|&c| c as u64).sum()
     }
 
+    /// Promotes and clears every bucket still holding a partial count.
+    ///
+    /// Until this runs, a bucket under the threshold is missing from the parent
+    /// entirely - so `count`, `min`, `max`, `sum` and the extreme quantiles are
+    /// wrong without bound, not within alpha. Flush before reading those.
+    pub fn flush(&mut self, emit: &mut impl FnMut(DdDelta)) {
+        for (index, count) in self.counters.drain() {
+            if count != 0 {
+                emit(DdDelta {
+                    index,
+                    value: count as u64,
+                });
+            }
+        }
+    }
+
     /// Adds a sample, promoting and clearing the bucket that reaches `threshold`.
     ///
     /// Values the parent sketch would itself drop - non-positive, non-finite or
@@ -1174,6 +1361,13 @@ impl OctoWorker for DdOctoWorker {
         };
         self.sketch
             .add_emit_delta(value, self.threshold.get(), emit);
+    }
+
+    fn flush<F>(&mut self, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
+        self.sketch.flush(emit);
     }
 }
 
@@ -1269,6 +1463,24 @@ impl OctoWorker for HllOctoWorker {
     {
         self.child
             .insert_emit_delta_with_threshold(input, self.threshold, emit);
+    }
+
+    /// Ships every non-empty register. At the default threshold of 0 nothing is
+    /// ever held back and this is redundant, but a worker running a positive
+    /// threshold has registers the parent has not seen, and a missing register
+    /// reads there as an empty bucket rather than a low one.
+    fn flush<F>(&mut self, emit: &mut F)
+    where
+        F: FnMut(Self::Delta),
+    {
+        for (pos, value) in self.child.registers_as_slice().iter().enumerate() {
+            if *value != 0 {
+                emit(HllDelta {
+                    pos: pos as u32,
+                    value: *value,
+                });
+            }
+        }
     }
 }
 
@@ -2010,45 +2222,81 @@ mod runtime_tests {
         assert_eq!(runtime.finish().parent.loads, vec![4, 3, 3]);
     }
 
+    /// Reports the threshold each worker is actually reading.
+    struct ThresholdReporter {
+        threshold: OctoThreshold,
+    }
+
+    impl OctoWorker for ThresholdReporter {
+        type Delta = u32;
+
+        fn process<F>(&mut self, _input: &DataInput, emit: &mut F)
+        where
+            F: FnMut(Self::Delta),
+        {
+            emit(self.threshold.get());
+        }
+    }
+
+    struct ThresholdCollector {
+        seen: Vec<u32>,
+    }
+
+    impl OctoAggregator for ThresholdCollector {
+        type Delta = u32;
+
+        fn apply(&mut self, delta: Self::Delta) {
+            self.seen.push(delta);
+        }
+    }
+
     #[test]
     fn a_shared_threshold_reaches_every_worker() {
-        let (rows, cols) = (2usize, 256usize);
-        let threshold = OctoThreshold::new(4);
+        let workers = 4usize;
+        let threshold = OctoThreshold::new(37);
         let cfg = OctoConfig {
             threshold: threshold.clone(),
-            ..config(2)
+            ..config(workers)
         };
-        let inputs: Vec<DataInput<'_>> = (0..400u64).map(|i| DataInput::U64(i % 8)).collect();
+        let inputs: Vec<DataInput<'_>> = (0..2_000u64).map(DataInput::U64).collect();
 
-        let low = run_octo(
+        let result = run_octo(
             &inputs,
             &cfg,
             {
                 let threshold = threshold.clone();
-                move |_| CmOctoWorker::with_threshold(rows, cols, threshold.clone())
+                move |_| ThresholdReporter {
+                    threshold: threshold.clone(),
+                }
             },
-            || CmOctoAggregator::new(rows, cols),
+            || ThresholdCollector { seen: Vec::new() },
         );
 
-        let high_threshold = OctoThreshold::new(64);
-        let high_cfg = OctoConfig {
-            threshold: high_threshold.clone(),
-            ..config(2)
-        };
-        let high = run_octo(
-            &inputs,
-            &high_cfg,
-            {
-                let threshold = high_threshold.clone();
-                move |_| CmOctoWorker::with_threshold(rows, cols, threshold.clone())
-            },
-            || CmOctoAggregator::new(rows, cols),
-        );
-
-        let probe = DataInput::U64(3);
+        assert_eq!(result.parent.seen.len(), inputs.len());
         assert!(
-            low.parent.sketch.estimate(&probe) > high.parent.sketch.estimate(&probe),
-            "a lower threshold must promote more of the count"
+            result.parent.seen.iter().all(|t| *t == 37),
+            "every worker must read the threshold the config was built with"
+        );
+    }
+
+    #[test]
+    fn the_threshold_still_decides_how_much_is_promoted() {
+        // Post-flush the parent is exact whatever tau was, so the threshold's
+        // effect shows up in traffic rather than in the final answer.
+        let (rows, cols) = (2usize, 256usize);
+        let stream: Vec<u64> = (0..4_000u64).map(|i| i % 8).collect();
+        let mut volumes = Vec::new();
+        for tau in [4u32, 64] {
+            let mut worker = CmWorkerSketch::new(rows, cols);
+            let mut promoted = 0usize;
+            for key in &stream {
+                worker.insert_emit_delta(&DataInput::U64(*key), tau, &mut |_| promoted += 1);
+            }
+            volumes.push((tau, promoted));
+        }
+        assert!(
+            volumes[0].1 > volumes[1].1,
+            "a lower threshold must send more: {volumes:?}"
         );
     }
 
@@ -2079,7 +2327,7 @@ mod runtime_tests {
             alpha: 0.25,
             interval: Duration::ZERO,
             min_threshold: 1,
-            max_threshold: 200,
+            max_threshold: MAX_PROMASK,
         };
         let threshold = OctoThreshold::new(31);
         adjust_against_queue_len(&settings, &threshold, 500, 8);
@@ -2097,7 +2345,7 @@ mod runtime_tests {
             alpha: 0.25,
             interval: Duration::ZERO,
             min_threshold: 4,
-            max_threshold: 200,
+            max_threshold: MAX_PROMASK,
         };
         let threshold = OctoThreshold::new(31);
         adjust_against_queue_len(&settings, &threshold, 0, 64);
@@ -2412,6 +2660,130 @@ mod runtime_tests {
                 streamed.parent.sketch.estimate(&key),
                 "key {key_val}"
             );
+        }
+    }
+
+    #[test]
+    fn finishing_a_ddsketch_run_answers_against_the_whole_stream() {
+        // Without the flush on End, a stream of near-distinct values leaves no
+        // bucket at the threshold, the parent holds nothing, and every quantile
+        // query returns None.
+        let alpha = 0.01;
+        let inputs: Vec<DataInput<'_>> = (1..=20_000u64)
+            .map(|i| DataInput::F64(1.0 + i as f64 * 0.37))
+            .collect();
+        let mut exact: Vec<f64> = inputs
+            .iter()
+            .map(|i| match i {
+                DataInput::F64(v) => *v,
+                _ => unreachable!(),
+            })
+            .collect();
+        exact.sort_by(f64::total_cmp);
+
+        let result = run_octo(
+            &inputs,
+            &config(4),
+            |_| DdOctoWorker::new(alpha),
+            || DdOctoAggregator::new(alpha),
+        );
+        let parent = &result.parent.sketch;
+
+        assert_eq!(
+            parent.get_count(),
+            inputs.len() as u64,
+            "every sample must have reached the parent"
+        );
+        for q in [0.0, 0.1, 0.5, 0.9, 1.0] {
+            let truth = exact[((exact.len() - 1) as f64 * q) as usize];
+            let got = parent
+                .get_value_at_quantile(q)
+                .expect("a flushed parent answers every quantile");
+            let relative = (got - truth).abs() / truth;
+            assert!(
+                relative <= 2.0 * alpha,
+                "q={q}: got {got}, truth {truth}, relative {relative:.4}"
+            );
+        }
+        let (min, max) = (parent.min().unwrap(), parent.max().unwrap());
+        assert!(min <= exact[0] * (1.0 + alpha) && max >= exact[exact.len() - 1] * (1.0 - alpha));
+    }
+
+    #[test]
+    fn a_mid_stream_flush_makes_the_live_parent_answerable() {
+        let alpha = 0.01;
+        let values: Vec<f64> = (1..=20_000u64).map(|i| 1.0 + i as f64 * 0.37).collect();
+        let mut runtime = OctoRuntime::new(
+            &config(4),
+            |_| DdOctoWorker::new(alpha),
+            || DdOctoAggregator::new(alpha),
+        );
+        let reader = runtime.read_handle();
+
+        let half = values.len() / 2;
+        for value in &values[..half] {
+            runtime.insert(DataInput::F64(*value));
+        }
+
+        runtime.flush();
+        let counted = reader.with_parent(|p| p.sketch.get_count());
+        assert_eq!(
+            counted, half as u64,
+            "a flush must land every input accepted so far"
+        );
+        let median = reader.with_parent(|p| p.sketch.get_value_at_quantile(0.5));
+        assert!(median.is_some(), "a flushed parent answers mid-stream");
+
+        // The runtime is not sealed by a flush.
+        for value in &values[half..] {
+            runtime.insert(DataInput::F64(*value));
+        }
+        assert_eq!(
+            runtime.finish().parent.sketch.get_count(),
+            values.len() as u64
+        );
+    }
+
+    #[test]
+    fn flushing_twice_is_harmless() {
+        let alpha = 0.01;
+        let mut runtime = OctoRuntime::new(
+            &config(2),
+            |_| DdOctoWorker::new(alpha),
+            || DdOctoAggregator::new(alpha),
+        );
+        for i in 1..=5_000u64 {
+            runtime.insert(DataInput::F64(i as f64));
+        }
+        runtime.flush();
+        runtime.flush();
+        assert_eq!(runtime.finish().parent.sketch.get_count(), 5_000);
+    }
+
+    #[test]
+    fn a_flushed_count_min_parent_matches_a_single_pass_exactly() {
+        // Flush is not DDSketch-only: it makes every unkeyed sketch exact at
+        // the point of query, where before the parent was low by under tau.
+        let (rows, cols) = (3usize, 1024usize);
+        let inputs: Vec<DataInput<'_>> = (0..40_000u64).map(|i| DataInput::U64(i % 512)).collect();
+        let got = run_octo(
+            &inputs,
+            &config(4),
+            |_| CmOctoWorker::new(rows, cols),
+            || CmOctoAggregator::new(rows, cols),
+        );
+        let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
+        for input in &inputs {
+            reference.insert(input);
+        }
+        for row in 0..rows {
+            for col in 0..cols {
+                assert_eq!(
+                    got.parent.sketch.as_storage().query_one_counter(row, col),
+                    reference.as_storage().query_one_counter(row, col),
+                    "cell ({row},{col})"
+                );
+            }
         }
     }
 

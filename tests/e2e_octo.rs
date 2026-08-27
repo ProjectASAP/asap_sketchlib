@@ -747,6 +747,8 @@ mod runtime {
         for (i, input) in inputs.iter().enumerate() {
             replay.insert(i, input);
         }
+        // `run_octo` flushes when the stream ends, so the replay must too.
+        replay.flush();
         replay.parent
     }
 
@@ -755,6 +757,7 @@ mod runtime {
         for (i, input) in inputs.iter().enumerate() {
             replay.insert(i, input);
         }
+        replay.flush();
         replay.parent
     }
 
@@ -1167,7 +1170,7 @@ mod runtime {
     // -- accuracy end to end -------------------------------------------------
 
     #[test]
-    fn run_octo_cm_zipf_error_stays_within_the_cms_bound_plus_the_residual() {
+    fn a_finished_run_carries_only_count_mins_own_one_sided_error() {
         let rows = 5;
         let cols = 4096;
         let stream = keys(200_000, 4_096, 9_501);
@@ -1180,19 +1183,18 @@ mod runtime {
 
         let parent = cm_runtime(&inputs, 4, rows, cols);
 
-        // Upper side: the usual one-sided CMS bound ε·N with ε = e/cols.
-        // Lower side: OctoSketch (NSDI '24) Theorem 1 charges the promotion
-        // protocol an additive k'·τ, where k' is the number of workers a key
-        // may reach. `run_octo` dispatches round-robin, so every key reaches
-        // every worker and k' = num_workers - the worst case of that bound.
+        // `run_octo` flushes when the stream ends, so no promotion residue
+        // survives and the protocol contributes nothing: what is left is
+        // Count-Min's own one-sided error, never below truth and at most eps*N
+        // above it with eps = e/cols. Between flushes the parent would instead
+        // sit up to k*tau low - that band is what the theorem tests measure.
         let epsilon_n = (std::f64::consts::E / cols as f64) * truth.total() as f64;
-        let floor = TAU as f64;
         for k in 0u64..4_096 {
             let exact = truth.get(k as i64) as f64;
             let est = parent.estimate(&DataInput::U64(k)) as f64;
             assert!(
-                est >= exact - floor,
-                "key {k}: octo estimate {est} fell more than {floor} below truth {exact}"
+                est >= exact,
+                "key {k}: a flushed Count-Min must never underestimate: {est} < {exact}"
             );
             assert!(
                 est <= exact + epsilon_n,
@@ -1254,9 +1256,9 @@ mod runtime {
         .parent
         .sketch;
 
-        // Count-Sketch error is ±‖f‖₂/√cols w.h.p.; per OctoSketch Theorem 1
-        // the promotion protocol adds k'·τ, and round-robin makes k' = workers.
-        let tolerance = 3.0 * truth.l2_norm() / (cols as f64).sqrt() + TAU as f64;
+        // A finished run is flushed, so the promotion protocol adds nothing
+        // and what is left is the Count-Sketch bound itself: +/- ||f||_2/sqrt(cols) w.h.p.
+        let tolerance = 3.0 * truth.l2_norm() / (cols as f64).sqrt();
         let mut violations = Vec::new();
         for (key, exact) in truth.top_k(64) {
             let est = parent.estimate(&DataInput::U64(key as u64));
@@ -1335,6 +1337,32 @@ impl OctoCm {
             self.parent.apply_delta(d);
         }
     }
+
+    /// Hands over every residual counter, mirroring what the runtime does when
+    /// a stream is finished or handed over for querying. The bound and
+    /// conservation tests deliberately do not call this: the residue is what
+    /// they are measuring.
+    fn flush(&mut self) {
+        let (rows, cols) = (self.parent.rows(), self.parent.cols());
+        for child in self.children.iter_mut() {
+            for row in 0..rows {
+                for col in 0..cols {
+                    let held = child.as_storage().query_one_counter(row, col);
+                    if held != 0 {
+                        self.parent.apply_delta(CmDelta {
+                            row: row as u32,
+                            col: col as u32,
+                            value: held as u32,
+                        });
+                        child
+                            .as_storage_mut()
+                            .update_one_counter(row, col, |c, _| *c = 0, ());
+                        self.sent_counters += 1;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Sketch-merge: each worker keeps a full sketch and ships all `rows*cols`
@@ -1405,6 +1433,28 @@ impl OctoCs {
         self.sent_counters += promoted.len();
         for d in promoted {
             self.parent.apply_delta(d);
+        }
+    }
+
+    /// See `OctoCm::flush`.
+    fn flush(&mut self) {
+        let (rows, cols) = (self.parent.rows(), self.parent.cols());
+        for child in self.children.iter_mut() {
+            for row in 0..rows {
+                for col in 0..cols {
+                    let held = child.as_storage().query_one_counter(row, col);
+                    if held != 0 {
+                        self.parent.apply_delta(CountDelta {
+                            row: row as u32,
+                            col: col as u32,
+                            value: held,
+                        });
+                        child
+                            .as_storage_mut()
+                            .update_one_counter(row, col, |c, _| *c = 0, ());
+                    }
+                }
+            }
         }
     }
 }
