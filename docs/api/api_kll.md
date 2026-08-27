@@ -23,9 +23,13 @@ fn init(k: usize, m: usize) -> Self
 
 ```rust
 fn update(&mut self, val: &T)
+fn bulk_update(&mut self, values: &[T])
 fn update_data_input(&mut self, val: &DataInput) -> Result<(), &'static str> // KLL<f64> only
+fn bulk_update_data_input(&mut self, values: &[DataInput]) -> Result<(), &'static str> // KLL<f64> only
 fn clear(&mut self)
 ```
+
+`bulk_update` / `bulk_update_data_input` are exactly equivalent to looping `update` / `update_data_input` (including coin-state and byte-identical `serialize_to_bytes` for same seed), with empty slices as a no-op. `KLLDynamic` and `HydraCounter::KLL` expose the same `bulk_update` / `bulk_insert` via delegation.
 
 ## Query
 

@@ -121,6 +121,12 @@ signals a backwards-compatible change.
   logical-hierarchy and CDF reconstruction across a metric batch. The API,
   estimators, and guarantees are experimental; an ASAPv1 cross-language kind
   is not yet assigned.
+- **KLL `bulk_update` API for batch ingestion.** Adds `KLL::bulk_update(&[T])`
+  and `KLL<f64>::bulk_update_data_input(&[DataInput])` (plus `KLLDynamic` and
+  `HydraCounter::bulk_insert` delegating) — exactly equivalent to looping
+  `update` (including `Coin` order, `count`, and byte-identical
+  `serialize_to_bytes` for same seed), with empty slices as a no-op that
+  preserves the memoized CDF. Fixes #88.
 
 ### Changed (breaking — wire format)
 - **Drop the DataPoint-level METRIC scalars from `DDSketchState`.** Removed
