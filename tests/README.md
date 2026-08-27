@@ -13,6 +13,7 @@ same conformance batteries before landing — copy an adapter from
 | `common/conformance.rs` | Capability traits + standard conformance batteries |
 | `conformance_kit.rs` | Reference adapters: established sketches running through the kit (copy these) |
 | `e2e_frequency.rs` / `e2e_cardinality.rs` / `e2e_quantiles.rs` / `e2e_frameworks.rs` | Deep per-family suites with hand-tuned tolerances |
+| `e2e_octo.rs` | OctoSketch delta-promotion invariants and the `octo-runtime` pipeline, checked against single-threaded replays |
 | `e2e_experimental.rs` | Same for `feature = "experimental"` sketches |
 | `bug_verification.rs` | Regression tests for fixed wrong-query-results bugs |
 

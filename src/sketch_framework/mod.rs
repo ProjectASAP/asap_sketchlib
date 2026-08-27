@@ -57,8 +57,8 @@ pub use eh_univ_optimized::{EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUni
 
 pub mod octo;
 pub use octo::{
-    CmOctoWorker, CountOctoAggregator, CountOctoWorker, HllOctoAggregator, HllOctoWorker,
-    OctoAggregator, OctoWorker,
+    CmOctoAggregator, CmOctoWorker, CountOctoAggregator, CountOctoWorker, HllOctoAggregator,
+    HllOctoWorker, OctoAggregator, OctoWorker,
 };
 #[cfg(feature = "octo-runtime")]
 pub use octo::{OctoConfig, OctoReadHandle, OctoResult, OctoRuntime, run_octo};
