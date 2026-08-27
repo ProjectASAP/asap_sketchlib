@@ -40,6 +40,51 @@ fn kmv_cardinality_and_shard_merge() {
     assert_between(merged, t * 0.96, t * 1.04, "KMV after shard merge");
 }
 
+/// Cardinality accuracy at checkpoints spanning the exact regime (below `k`)
+/// and the estimated regime (above `k`), single-pass and after an even/odd
+/// shard merge.
+#[test]
+fn kmv_accuracy_across_cardinality_checkpoints() {
+    const CHECKPOINTS: [usize; 6] = [10, 100, 1_000, 10_000, 100_000, 1_000_000];
+    const TOL: f64 = 0.02;
+
+    let mut single = KMV::<asap_sketchlib::DefaultXxHasher>::new(4096);
+    let mut even = KMV::<asap_sketchlib::DefaultXxHasher>::new(4096);
+    let mut odd = KMV::<asap_sketchlib::DefaultXxHasher>::new(4096);
+    let mut inserted = 0usize;
+
+    for &target in &CHECKPOINTS {
+        while inserted < target {
+            let d = DataInput::U64(inserted as u64);
+            single.insert(&d);
+            if inserted % 2 == 0 {
+                even.insert(&d);
+            } else {
+                odd.insert(&d);
+            }
+            inserted += 1;
+        }
+
+        let t = target as f64;
+        assert_between(
+            single.estimate(),
+            t * (1.0 - TOL),
+            t * (1.0 + TOL),
+            &format!("KMV cardinality @ {target}"),
+        );
+
+        let mut merged = even.clone();
+        let mut rhs = odd.clone();
+        merged.merge(&mut rhs);
+        assert_between(
+            merged.estimate(),
+            t * (1.0 - TOL),
+            t * (1.0 + TOL),
+            &format!("KMV shard merge @ {target}"),
+        );
+    }
+}
+
 #[test]
 fn uniform_sampling_rate_and_merge() {
     let rate = 0.1f64;

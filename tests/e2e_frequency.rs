@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{FreqTruth, zipf_u64};
+use common::{FreqTruth, uniform_u64, zipf_u64};
 use std::collections::HashMap;
 
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
@@ -87,6 +87,100 @@ fn countmin_regular_fast_paths_agree_on_stream() {
     }
 }
 
+/// Counts keys whose estimate sits within `bound` of the exact count.
+fn keys_within_bound<F>(truth: &FreqTruth, estimate: F, bound: f64) -> usize
+where
+    F: Fn(i64) -> f64,
+{
+    truth
+        .pairs()
+        .into_iter()
+        .filter(|(k, c)| (estimate(*k) - *c as f64).abs() < bound)
+        .count()
+}
+
+/// Bounded integer draws mapped onto distinct f64 values in `[100, 1000)`,
+/// identified by bit pattern so exact counts stay comparable.
+fn uniform_f64_key(v: u64) -> i64 {
+    (100.0 + v as f64 * (900.0 / 4096.0)).to_bits() as i64
+}
+
+fn f64_input(key: i64) -> DataInput<'static> {
+    DataInput::F64(f64::from_bits(key as u64))
+}
+
+fn u64_input(key: i64) -> DataInput<'static> {
+    DataInput::U64(key as u64)
+}
+
+/// A named key stream paired with the `DataInput` constructor for its keys.
+type BoundStream = (&'static str, Vec<i64>, fn(i64) -> DataInput<'static>);
+
+/// Zipf over `u64` keys and uniform over `f64` keys, exercising both
+/// `DataInput` hashing paths.
+fn bound_streams() -> [BoundStream; 2] {
+    [
+        (
+            "zipf/u64",
+            zipf_u64(BOUND_N, 8192, 1.1, 1005)
+                .into_iter()
+                .map(|v| v as i64)
+                .collect(),
+            u64_input as fn(i64) -> DataInput<'static>,
+        ),
+        (
+            "uniform/f64",
+            uniform_u64(BOUND_N, 4096, 1006)
+                .into_iter()
+                .map(uniform_f64_key)
+                .collect(),
+            f64_input as fn(i64) -> DataInput<'static>,
+        ),
+    ]
+}
+
+const BOUND_ROWS: usize = 3;
+const BOUND_COLS: usize = 4096;
+const BOUND_N: usize = 200_000;
+
+/// Probabilistic bound with `eps = e / cols` and `delta = e^-rows`: at least a
+/// `1 - delta` fraction of keys estimate within `eps * N`, on both insert paths.
+#[test]
+fn countmin_error_bound_covers_most_keys_on_both_paths() {
+    for (name, keys, to_input) in bound_streams() {
+        let mut truth = FreqTruth::default();
+        let mut regular =
+            CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
+        let mut fast = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
+        for k in &keys {
+            let d = to_input(*k);
+            truth.observe(*k);
+            regular.insert(&d);
+            fast.insert(&d);
+        }
+
+        let eps_n = std::f64::consts::E / BOUND_COLS as f64 * BOUND_N as f64;
+        let floor =
+            truth.distinct() as f64 * (1.0 - 1.0 / std::f64::consts::E.powi(BOUND_ROWS as i32));
+        for (path, within) in [
+            (
+                "regular",
+                keys_within_bound(&truth, |k| regular.estimate(&to_input(k)) as f64, eps_n),
+            ),
+            (
+                "fast",
+                keys_within_bound(&truth, |k| fast.estimate(&to_input(k)) as f64, eps_n),
+            ),
+        ] {
+            assert!(
+                within as f64 > floor,
+                "CountMin {name}/{path}: {within} of {} keys within eps*N={eps_n:.0}, need > {floor:.1}",
+                truth.distinct()
+            );
+        }
+    }
+}
+
 // -------------------------------------------------------------- CountSketch
 
 #[test]
@@ -118,6 +212,46 @@ fn countsketch_turnstile_net_zero_and_median_bound() {
             "key {k}: |{est:.0} - {c}| > 1.5 * median bound {:.0}",
             1.5 * bound
         );
+    }
+}
+
+/// The same `1 - delta` coverage bound as CountMin, for the signed sketch.
+#[test]
+fn countsketch_error_bound_covers_most_keys_on_both_paths() {
+    for (name, keys, to_input) in bound_streams() {
+        let mut truth = FreqTruth::default();
+        let mut regular = asap_sketchlib::Count::<Vector2D<i32>, RegularPath>::with_dimensions(
+            BOUND_ROWS, BOUND_COLS,
+        );
+        let mut fast = asap_sketchlib::Count::<Vector2D<i32>, FastPath>::with_dimensions(
+            BOUND_ROWS, BOUND_COLS,
+        );
+        for k in &keys {
+            let d = to_input(*k);
+            truth.observe(*k);
+            regular.insert(&d);
+            fast.insert(&d);
+        }
+
+        let eps_n = std::f64::consts::E / BOUND_COLS as f64 * BOUND_N as f64;
+        let floor =
+            truth.distinct() as f64 * (1.0 - 1.0 / std::f64::consts::E.powi(BOUND_ROWS as i32));
+        for (path, within) in [
+            (
+                "regular",
+                keys_within_bound(&truth, |k| regular.estimate(&to_input(k)), eps_n),
+            ),
+            (
+                "fast",
+                keys_within_bound(&truth, |k| fast.estimate(&to_input(k)), eps_n),
+            ),
+        ] {
+            assert!(
+                within as f64 > floor,
+                "CountSketch {name}/{path}: {within} of {} keys within eps*N={eps_n:.0}, need > {floor:.1}",
+                truth.distinct()
+            );
+        }
     }
 }
 
@@ -242,6 +376,67 @@ fn build_fold_cms(key: &'static str, n: usize) -> FoldCMS<DefaultXxHasher> {
         s.insert(&DataInput::Str(key), 3);
     }
     s
+}
+
+/// Sixteen sub-window sketches folded to a quarter width, then hierarchically
+/// merged: the merged answers must still satisfy the `1 - delta` coverage
+/// bound, additive `eps * N` for FoldCMS and `sqrt(eps) * L2` for FoldCS.
+#[test]
+fn fold_sketches_survive_a_sixteen_way_hierarchical_merge() {
+    const ROWS: usize = 3;
+    const FULL_COLS: usize = 4096;
+    const FOLD_LEVEL: u32 = 4;
+    const TOP_K: usize = 20;
+    const WINDOWS: usize = 16;
+    const N: usize = 500_000;
+
+    let stream = zipf_u64(N, 10_000, 1.1, 1009);
+    let per_window = N / WINDOWS;
+    let mut truth = FreqTruth::default();
+    let mut cms_windows = Vec::with_capacity(WINDOWS);
+    let mut cs_windows = Vec::with_capacity(WINDOWS);
+
+    for w in 0..WINDOWS {
+        let mut cms = FoldCMS::<DefaultXxHasher>::new(ROWS, FULL_COLS, FOLD_LEVEL, TOP_K);
+        let mut cs = FoldCS::<DefaultXxHasher>::new(ROWS, FULL_COLS, FOLD_LEVEL, TOP_K);
+        for &v in &stream[w * per_window..(w + 1) * per_window] {
+            let d = DataInput::U64(v);
+            cms.insert(&d, 1);
+            cs.insert(&d, 1);
+            truth.observe(v as i64);
+        }
+        cms_windows.push(cms);
+        cs_windows.push(cs);
+    }
+
+    let cms_merged = FoldCMS::hierarchical_merge(&cms_windows);
+    let cs_merged = FoldCS::hierarchical_merge(&cs_windows);
+
+    let floor = truth.distinct() as f64 * (1.0 - 1.0 / std::f64::consts::E.powi(ROWS as i32));
+    let cms_bound = std::f64::consts::E / FULL_COLS as f64 * truth.total() as f64;
+    let cs_bound = (std::f64::consts::E / FULL_COLS as f64).sqrt() * truth.l2_norm();
+
+    let cms_within = keys_within_bound(
+        &truth,
+        |k| cms_merged.query(&DataInput::U64(k as u64)) as f64,
+        cms_bound,
+    );
+    assert!(
+        cms_within as f64 > floor,
+        "FoldCMS 16-way merge: {cms_within} of {} keys within eps*N={cms_bound:.0}, need > {floor:.1}",
+        truth.distinct()
+    );
+
+    let cs_within = keys_within_bound(
+        &truth,
+        |k| cs_merged.query(&DataInput::U64(k as u64)) as f64,
+        cs_bound,
+    );
+    assert!(
+        cs_within as f64 > floor,
+        "FoldCS 16-way merge: {cs_within} of {} keys within sqrt(eps)*L2={cs_bound:.0}, need > {floor:.1}",
+        truth.distinct()
+    );
 }
 
 // ------------------------------------------------------ Portable wire twins

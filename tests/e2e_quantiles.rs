@@ -7,7 +7,7 @@ mod common;
 
 use common::{
     NumericTruth, assert_between, assert_in_rank_band, exponential_f64, log_uniform_f64,
-    normal_f64, uniform_u64,
+    normal_f64, uniform_u64, zipf_u64,
 };
 
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
@@ -105,55 +105,130 @@ fn kll_dynamic_parity_with_kll() {
     }
 }
 
+/// Rank-error contract for both KLL implementations across distributions and
+/// stream lengths: every quantile estimate lands inside the true rank band.
+#[test]
+fn kll_family_rank_error_across_distributions_and_lengths() {
+    const TOL: f64 = 0.02;
+    const QUANTILES: [f64; 7] = [0.0, 0.10, 0.25, 0.50, 0.75, 0.90, 1.0];
+    const SAMPLE_SIZES: [usize; 6] = [1_000, 5_000, 20_000, 100_000, 1_000_000, 5_000_000];
+    // Zipf indices are spread over a fixed grid spanning [1e6, 1e7].
+    const ZIPF_DOMAIN: usize = 8_192;
+    const ZIPF_LO: f64 = 1_000_000.0;
+    const ZIPF_HI: f64 = 10_000_000.0;
+
+    for (name, seed_base) in [("uniform", 0xA5A5_0000u64), ("zipf", 0xB4B4_0000u64)] {
+        for (i, &n) in SAMPLE_SIZES.iter().enumerate() {
+            let seed = seed_base + i as u64;
+            let values: Vec<f64> = if name == "uniform" {
+                uniform_u64(n, 100_000_000, seed)
+                    .into_iter()
+                    .map(|v| v as f64)
+                    .collect()
+            } else {
+                let step = (ZIPF_HI - ZIPF_LO) / (ZIPF_DOMAIN - 1) as f64;
+                zipf_u64(n, ZIPF_DOMAIN, 1.1, seed)
+                    .into_iter()
+                    .map(|idx| ZIPF_LO + step * idx as f64)
+                    .collect()
+            };
+
+            let mut kll = KLL::init_kll(200);
+            let mut dynamic = asap_sketchlib::KLLDynamic::<f64>::init_kll(200);
+            for v in &values {
+                kll.update(v);
+                dynamic.update(v);
+            }
+            let truth = NumericTruth::new(values);
+
+            for &q in &QUANTILES {
+                assert_in_rank_band(
+                    kll.quantile(q),
+                    &truth,
+                    q,
+                    TOL,
+                    &format!("KLL {name} n={n} seed=0x{seed:08x}"),
+                );
+                assert_in_rank_band(
+                    dynamic.quantile(q),
+                    &truth,
+                    q,
+                    TOL,
+                    &format!("KLLDynamic {name} n={n} seed=0x{seed:08x}"),
+                );
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------- DDSketch
 
 #[test]
 fn ddsketch_alpha_across_distributions_core_and_portable() {
     let alpha = 0.01;
-
-    // Adversarial log-uniform stream straddling bucket edges.
+    const DDS_QS: [f64; 7] = [0.0, 0.10, 0.25, 0.50, 0.75, 0.90, 1.0];
+    const SAMPLE_SIZES: [usize; 4] = [1_000, 5_000, 20_000, 30_000];
+    // Bucket-edge straddling ratio for the adversarial stream.
     let gamma = (1.0 + alpha) / (1.0 - alpha);
-    let adversarial = log_uniform_f64(30_000, gamma, 5..40, 3005);
-    // Smooth heavy-tail streams.
-    let normal = normal_f64(20_000, 1000.0, 250.0, 3006)
-        .into_iter()
-        .filter(|v| *v > 0.0);
-    let exponential = exponential_f64(20_000, 1e-3, 3007);
+    // Zipf indices are spread over a fixed grid spanning [1e6, 1e7].
+    let zipf_step = (10_000_000.0 - 1_000_000.0) / 8_191.0;
 
-    for (label, values) in [
-        ("adversarial", adversarial),
-        ("normal", normal.collect()),
-        ("exponential", exponential),
+    for (label, seed_base) in [
+        ("adversarial", 3_005_000u64),
+        ("normal", 3_006_000),
+        ("exponential", 3_007_000),
+        ("uniform", 3_009_000),
+        ("zipf", 3_010_000),
     ] {
-        let truth = NumericTruth::new(values.clone());
-        let mut core = DDSketch::new(alpha);
-        let mut port = PortableDds::new(alpha);
-        for v in &values {
-            core.add(v);
-            port.update(*v);
-        }
-        assert_eq!(
-            core.get_count() as usize,
-            truth.len(),
-            "{label}: dropped samples"
-        );
+        for (i, &n) in SAMPLE_SIZES.iter().enumerate() {
+            let seed = seed_base + i as u64;
+            let values: Vec<f64> = match label {
+                "adversarial" => log_uniform_f64(n, gamma, 5..40, seed),
+                "normal" => normal_f64(n, 1000.0, 250.0, seed)
+                    .into_iter()
+                    .filter(|v| *v > 0.0)
+                    .collect(),
+                "exponential" => exponential_f64(n, 1e-3, seed),
+                "uniform" => uniform_u64(n, 9_000_000, seed)
+                    .into_iter()
+                    .map(|v| 1_000_000.0 + v as f64)
+                    .collect(),
+                _ => zipf_u64(n, 8_192, 1.1, seed)
+                    .into_iter()
+                    .map(|idx| 1_000_000.0 + zipf_step * idx as f64)
+                    .collect(),
+            };
 
-        for &q in &QS {
-            // Contract: relative error <= alpha vs the TRUE order statistic.
-            let t = truth.quantile(q);
-            if t <= 0.0 {
-                continue;
+            let mut core = DDSketch::new(alpha);
+            let mut port = PortableDds::new(alpha);
+            for v in &values {
+                core.add(v);
+                port.update(*v);
             }
-            let qc = core.get_value_at_quantile(q).unwrap();
-            let qp = port.quantile(q).unwrap();
-            assert!(
-                ((qc - t) / t).abs() <= alpha * 1.05,
-                "core {label} q={q}: {qc} vs {t} exceeds alpha={alpha}"
+            let truth = NumericTruth::new(values);
+            assert_eq!(
+                core.get_count() as usize,
+                truth.len(),
+                "{label} n={n}: dropped samples"
             );
-            assert!(
-                ((qp - t) / t).abs() <= alpha * 1.05,
-                "portable {label} q={q}: {qp} vs {t} exceeds alpha={alpha}"
-            );
+
+            for &q in &DDS_QS {
+                // Contract: relative error <= alpha vs the TRUE order statistic.
+                let t = truth.quantile(q);
+                if t <= 0.0 {
+                    continue;
+                }
+                let qc = core.get_value_at_quantile(q).unwrap();
+                let qp = port.quantile(q).unwrap();
+                assert!(
+                    ((qc - t) / t).abs() <= alpha * 1.05,
+                    "core {label} n={n} q={q}: {qc} vs {t} exceeds alpha={alpha}"
+                );
+                assert!(
+                    ((qp - t) / t).abs() <= alpha * 1.05,
+                    "portable {label} n={n} q={q}: {qp} vs {t} exceeds alpha={alpha}"
+                );
+            }
         }
     }
 }

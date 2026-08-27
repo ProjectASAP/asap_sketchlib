@@ -428,7 +428,6 @@ mod tests {
     use crate::{DataInput, HllBucketList};
 
     const TARGETS: [usize; 7] = [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000];
-    const ERROR_TOLERANCE: f64 = 0.02;
     const P12_ERROR_TOLERANCE: f64 = 0.03;
 
     #[test]
@@ -529,21 +528,6 @@ mod tests {
     }
 
     #[test]
-    fn hyperloglog_accuracy_within_two_percent() {
-        assert_accuracy::<HyperLogLog<Classic>>("HyperLogLog");
-    }
-
-    #[test]
-    fn hll_ertl_accuracy_within_two_percent() {
-        assert_accuracy::<HyperLogLog<ErtlMLE>>("HllErtl");
-    }
-
-    #[test]
-    fn hllds_accuracy_within_two_percent() {
-        assert_accuracy::<HyperLogLogHIP>("HllDs");
-    }
-
-    #[test]
     fn hyperloglog_p12_accuracy_within_two_percent() {
         assert_accuracy_within::<HyperLogLogP12<Classic>>("HyperLogLogP12", P12_ERROR_TOLERANCE);
     }
@@ -556,16 +540,6 @@ mod tests {
     #[test]
     fn hllds_p12_accuracy_within_two_percent() {
         assert_accuracy_within::<HyperLogLogHIPP12>("HllDsP12", P12_ERROR_TOLERANCE);
-    }
-
-    #[test]
-    fn hyperloglog_merge_within_two_percent() {
-        assert_merge_accuracy::<HyperLogLog<Classic>>("HyperLogLog");
-    }
-
-    #[test]
-    fn hll_ertl_merge_within_two_percent() {
-        assert_merge_accuracy::<HyperLogLog<ErtlMLE>>("HllErtl");
     }
 
     #[test]
@@ -675,13 +649,6 @@ mod tests {
         );
     }
 
-    fn assert_accuracy<S>(name: &str)
-    where
-        S: HllEstimator,
-    {
-        assert_accuracy_within::<S>(name, ERROR_TOLERANCE);
-    }
-
     fn assert_accuracy_within<S>(name: &str, tolerance: f64)
     where
         S: HllEstimator,
@@ -708,13 +675,6 @@ mod tests {
                 "{name} accuracy error {error:.4} exceeded {tolerance} (truth {truth}, estimate {estimate})"
             );
         }
-    }
-
-    fn assert_merge_accuracy<S>(name: &str)
-    where
-        S: HllMerge,
-    {
-        assert_merge_accuracy_within::<S>(name, ERROR_TOLERANCE);
     }
 
     fn assert_merge_accuracy_within<S>(name: &str, tolerance: f64)

@@ -1228,47 +1228,7 @@ mod tests {
         );
     }
 
-    #[derive(Clone, Copy)]
-    enum TestDistribution {
-        Uniform {
-            min: f64,
-            max: f64,
-        },
-        Zipf {
-            min: f64,
-            max: f64,
-            domain: usize,
-            exponent: f64,
-        },
-    }
-
     const SKETCH_K: i32 = 200;
-
-    fn build_kll_with_distribution(
-        k: i32,
-        sample_size: usize,
-        distribution: TestDistribution,
-        seed: u64,
-    ) -> (KLL, Vec<f64>) {
-        let mut sketch = KLL::init_kll(k);
-        let values = match distribution {
-            TestDistribution::Uniform { min, max } => {
-                sample_uniform_f64(min, max, sample_size, seed)
-            }
-            TestDistribution::Zipf {
-                min,
-                max,
-                domain,
-                exponent,
-            } => sample_zipf_f64(min, max, domain, exponent, sample_size, seed),
-        };
-
-        for &value in &values {
-            sketch.update_data_input(&DataInput::F64(value)).unwrap();
-        }
-
-        (sketch, values)
-    }
 
     // return element from input with given quantile
     fn quantile_from_sorted(data: &[f64], quantile: f64) -> f64 {
@@ -1307,66 +1267,6 @@ mod tests {
                 estimate={estimate:.4}, tolerance={tolerance:.4}, total_length={}",
                 sorted_truth.len()
             );
-        }
-    }
-
-    #[test]
-    fn distributions_quantiles_stay_within_rank_error() {
-        const TOLERANCE: f64 = 0.02;
-        const SAMPLE_SIZES: &[usize] = &[1_000, 5_000, 20_000, 100_000, 1_000_000, 5_000_000];
-        const QUANTILES: &[(f64, &str)] = &[
-            (0.0, "min"),
-            (0.10, "p10"),
-            (0.25, "p25"),
-            (0.50, "p50"),
-            (0.75, "p75"),
-            (0.90, "p90"),
-            (1.0, "max"),
-        ];
-
-        struct Case {
-            name: &'static str,
-            distribution: TestDistribution,
-            seed_base: u64,
-        }
-
-        let cases = [
-            Case {
-                name: "uniform",
-                distribution: TestDistribution::Uniform {
-                    min: 0.0,
-                    max: 100_000_000.0,
-                },
-                seed_base: 0xA5A5_0000,
-            },
-            Case {
-                name: "zipf",
-                distribution: TestDistribution::Zipf {
-                    min: 1_000_000.0,
-                    max: 10_000_000.0,
-                    domain: 8_192,
-                    exponent: 1.1,
-                },
-                seed_base: 0xB4B4_0000,
-            },
-        ];
-
-        for case in cases {
-            for (idx, &sample_size) in SAMPLE_SIZES.iter().enumerate() {
-                let seed = case.seed_base + idx as u64;
-                let (sketch, mut values) =
-                    build_kll_with_distribution(SKETCH_K, sample_size, case.distribution, seed);
-                values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                assert_quantiles_within_error(
-                    &sketch,
-                    &values,
-                    QUANTILES,
-                    TOLERANCE,
-                    case.name,
-                    sample_size,
-                    seed,
-                );
-            }
         }
     }
 
