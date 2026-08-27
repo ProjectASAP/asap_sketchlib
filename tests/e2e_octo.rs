@@ -23,10 +23,11 @@
 mod common;
 
 use asap_sketchlib::{
-    CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin, DDSketch, DataInput,
-    DdWorkerSketch, ErtlMLE, FastPath, HLL_PROMASK, HllDelta, HyperLogLog, HyperLogLogP12,
-    HyperLogLogP16, OctoAggregator, OctoThreshold, OctoWorker, RegularPath, UnivMon,
-    UnivMonOctoAggregator, UnivMonOctoWorker, Vector2D, hash64_seeded,
+    CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin, DD_PROMASK, DDSketch,
+    DataInput, DdWorkerSketch, ErtlMLE, FastPath, HLL_PROMASK, HllDelta, HyperLogLog,
+    HyperLogLogP12, HyperLogLogP16, OctoAggregator, OctoPlan, OctoThreshold, OctoWorker,
+    RegularPath, UnivMon, UnivMonOctoAggregator, UnivMonOctoPlan, UnivMonOctoWorker, Vector2D,
+    hash64_seeded,
 };
 use common::{FreqTruth, zipf_u64};
 use rand::SeedableRng;
@@ -714,9 +715,9 @@ fn hll_cardinality_survives_the_delta_round_trip_exactly() {
 mod runtime {
     use super::*;
     use asap_sketchlib::{
-        CmOctoAggregator, CmOctoWorker, CountOctoAggregator, CountOctoWorker, HllOctoAggregator,
-        HllOctoWorker, OctoAggregator, OctoConfig, OctoPartition, OctoRuntime, OctoWorker,
-        run_octo,
+        CmOctoAggregator, CmOctoPlan, CmTopKOctoAggregator, CmTopKOctoPlan, CountOctoAggregator,
+        CountOctoPlan, DdOctoAggregator, DdOctoPlan, HllOctoAggregator, HllOctoPlan,
+        OctoAggregator, OctoConfig, OctoPartition, OctoPlan, OctoRuntime, OctoWorker, run_octo,
     };
 
     fn config(num_workers: usize) -> OctoConfig {
@@ -733,7 +734,7 @@ mod runtime {
         run_octo(
             inputs,
             &config(workers),
-            |_| CmOctoWorker::new(rows, cols),
+            CmOctoPlan::new(rows, cols),
             || CmOctoAggregator {
                 sketch: Cm::with_dimensions(rows, cols),
             },
@@ -780,7 +781,7 @@ mod runtime {
             let got = run_octo(
                 &inputs,
                 &config(workers),
-                |_| CountOctoWorker::new(ROWS, COLS),
+                CountOctoPlan::new(ROWS, COLS),
                 || CountOctoAggregator {
                     sketch: Cs::with_dimensions(ROWS, COLS),
                 },
@@ -804,14 +805,11 @@ mod runtime {
         }
 
         for workers in [1usize, 2, 3, 4, 8] {
-            let got = run_octo(
-                &inputs,
-                &config(workers),
-                |_| HllOctoWorker::new(),
-                || HllOctoAggregator {
+            let got = run_octo(&inputs, &config(workers), HllOctoPlan::new(), || {
+                HllOctoAggregator {
                     sketch: HyperLogLog::<Classic>::default(),
-                },
-            )
+                }
+            })
             .parent
             .sketch;
             assert_eq!(
@@ -820,6 +818,49 @@ mod runtime {
                 "{workers} workers: HLL promotion must carry no partition penalty"
             );
         }
+    }
+
+    #[test]
+    fn run_octo_ddsketch_matches_a_single_threaded_replay() {
+        // Bucket deltas are additive, so the parent is a pure function of the
+        // partition and thread interleaving cannot change it.
+        let alpha = 0.01;
+        let values: Vec<f64> = (1..=40_000u64)
+            .map(|i| 1.0 + (i as f64 * 7.0) % 999.0)
+            .collect();
+        let inputs: Vec<DataInput<'_>> = values.iter().map(|v| DataInput::F64(*v)).collect();
+        let workers = 4usize;
+
+        let got = run_octo(&inputs, &config(workers), DdOctoPlan::new(alpha), || {
+            DdOctoAggregator::new(alpha)
+        })
+        .parent
+        .sketch;
+
+        let mut replay = OctoDd::new(workers, alpha);
+        for (i, value) in values.iter().enumerate() {
+            replay.insert(i, *value, DD_PROMASK);
+        }
+        // `run_octo` flushes when the stream ends, so the replay must too.
+        let mut children = std::mem::take(&mut replay.children);
+        for child in children.iter_mut() {
+            child.flush(&mut |d| replay.parent.apply_delta(d));
+        }
+
+        // The dense store grows in chunks anchored on whichever bucket is
+        // touched first, so its offset and array length depend on delta arrival
+        // order. What must match is the logical bucket-to-count mapping.
+        let buckets = |sketch: &DDSketch| -> Vec<(i32, u64)> {
+            sketch
+                .store_counts()
+                .iter()
+                .enumerate()
+                .filter(|(_, count)| **count != 0)
+                .map(|(i, count)| (sketch.store_offset() + i as i32, *count))
+                .collect()
+        };
+        assert_eq!(got.get_count(), replay.parent.get_count());
+        assert_eq!(buckets(&got), buckets(&replay.parent));
     }
 
     #[test]
@@ -839,13 +880,11 @@ mod runtime {
         let inputs = inputs_from(&keys(30_000, 512, 9_404));
         let batch = cm_runtime(&inputs, 4, ROWS, COLS);
 
-        let mut runtime = OctoRuntime::new(
-            &config(4),
-            |_| CmOctoWorker::new(ROWS, COLS),
-            || CmOctoAggregator {
+        let mut runtime = OctoRuntime::new(&config(4), CmOctoPlan::new(ROWS, COLS), || {
+            CmOctoAggregator {
                 sketch: Cm::with_dimensions(ROWS, COLS),
-            },
-        );
+            }
+        });
         for input in &inputs {
             runtime.insert(input.clone());
         }
@@ -858,24 +897,20 @@ mod runtime {
     fn insert_batch_matches_element_wise_inserts() {
         let inputs = inputs_from(&keys(20_000, 512, 9_405));
 
-        let mut one_by_one = OctoRuntime::new(
-            &config(3),
-            |_| CmOctoWorker::new(ROWS, COLS),
-            || CmOctoAggregator {
+        let mut one_by_one = OctoRuntime::new(&config(3), CmOctoPlan::new(ROWS, COLS), || {
+            CmOctoAggregator {
                 sketch: Cm::with_dimensions(ROWS, COLS),
-            },
-        );
+            }
+        });
         for input in &inputs {
             one_by_one.insert(input.clone());
         }
 
-        let mut batched = OctoRuntime::new(
-            &config(3),
-            |_| CmOctoWorker::new(ROWS, COLS),
-            || CmOctoAggregator {
+        let mut batched = OctoRuntime::new(&config(3), CmOctoPlan::new(ROWS, COLS), || {
+            CmOctoAggregator {
                 sketch: Cm::with_dimensions(ROWS, COLS),
-            },
-        );
+            }
+        });
         batched.insert_batch(&inputs);
 
         assert_eq!(
@@ -893,14 +928,9 @@ mod runtime {
             queue_capacity: 0,
             ..OctoConfig::default()
         };
-        let got = run_octo(
-            &inputs,
-            &cfg,
-            |_| HllOctoWorker::new(),
-            || HllOctoAggregator {
-                sketch: HyperLogLog::<Classic>::default(),
-            },
-        )
+        let got = run_octo(&inputs, &cfg, HllOctoPlan::new(), || HllOctoAggregator {
+            sketch: HyperLogLog::<Classic>::default(),
+        })
         .parent
         .sketch;
 
@@ -924,14 +954,9 @@ mod runtime {
             queue_capacity: 1,
             ..OctoConfig::default()
         };
-        let got = run_octo(
-            &inputs,
-            &cfg,
-            |_| HllOctoWorker::new(),
-            || HllOctoAggregator {
-                sketch: HyperLogLog::<Classic>::default(),
-            },
-        )
+        let got = run_octo(&inputs, &cfg, HllOctoPlan::new(), || HllOctoAggregator {
+            sketch: HyperLogLog::<Classic>::default(),
+        })
         .parent
         .sketch;
 
@@ -943,42 +968,72 @@ mod runtime {
     }
 
     #[test]
-    fn borrowed_string_inputs_survive_the_cross_thread_transport() {
-        let owned: Vec<String> = (0..5_000).map(|i| format!("session-{i:05}")).collect();
-        let inputs: Vec<DataInput<'_>> = owned.iter().map(|s| DataInput::Str(s)).collect();
-
-        let got = run_octo(
-            &inputs,
-            &config(4),
-            |_| HllOctoWorker::new(),
-            || HllOctoAggregator {
-                sketch: HyperLogLog::<Classic>::default(),
-            },
-        )
-        .parent
-        .sketch;
+    fn a_borrowed_key_may_be_dropped_the_moment_insert_returns() {
+        // The point of a borrowed key is that its owner does not have to
+        // outlive the sketch. `insert` hashes for partitioning and prepares the
+        // payload on this thread, so nothing borrowed crosses to a worker and
+        // the string below is free the instant the call returns.
+        //
+        // This used to be a use-after-free: `insert` transmuted the input to
+        // 'static and queued it, so workers hashed freed heap.
+        let n = 20_000u64;
+        let mut runtime = OctoRuntime::new(&config(4), HllOctoPlan::new(), HllOctoAggregator::new);
+        for i in 0..n {
+            let owned = format!("session-{i:020}");
+            runtime.insert(DataInput::Str(&owned));
+            drop(owned);
+        }
+        let got = runtime.finish().parent.sketch;
 
         let mut reference = HyperLogLog::<Classic>::default();
-        for input in &inputs {
-            reference.insert(input);
+        for i in 0..n {
+            reference.insert(&DataInput::Str(&format!("session-{i:020}")));
         }
         assert_eq!(
             got.registers_as_slice(),
             reference.registers_as_slice(),
-            "borrowed &str payloads must reach the workers intact"
+            "a key freed right after insert must still have been hashed correctly"
         );
     }
 
     #[test]
+    fn a_borrowed_key_reaches_a_keyed_aggregator_by_value() {
+        // A worker that stores keys copies at preparation, which is the one
+        // place a copy is unavoidable - and it happens on this thread, so the
+        // borrow still ends at the call.
+        let (rows, cols, top_k) = (4usize, 2048usize, 8usize);
+        let mut runtime = OctoRuntime::new(&config(4), CmTopKOctoPlan::new(rows, cols), || {
+            CmTopKOctoAggregator::new(rows, cols, top_k)
+        });
+        for _ in 0..4_000 {
+            for hot in 0..3usize {
+                let owned = format!("hot-{hot}");
+                runtime.insert(DataInput::Str(&owned));
+                drop(owned);
+            }
+        }
+        let result = runtime.finish();
+        for hot in 0..3usize {
+            let key = format!("hot-{hot}");
+            assert!(
+                result
+                    .parent
+                    .sketch
+                    .heap()
+                    .find(&DataInput::Str(&key))
+                    .is_some(),
+                "heavy hitter {key} missing from the aggregator heap"
+            );
+        }
+    }
+
+    #[test]
     fn an_empty_stream_finishes_with_a_pristine_parent() {
-        let got = run_octo(
-            &[],
-            &config(4),
-            |_| CmOctoWorker::new(ROWS, COLS),
-            || CmOctoAggregator {
+        let got = run_octo(&[], &config(4), CmOctoPlan::new(ROWS, COLS), || {
+            CmOctoAggregator {
                 sketch: Cm::with_dimensions(ROWS, COLS),
-            },
-        )
+            }
+        })
         .parent
         .sketch;
         assert!(cm_cells(&got).iter().all(|&c| c == 0));
@@ -1000,8 +1055,9 @@ mod runtime {
 
     impl OctoWorker for SumWorker {
         type Delta = SumDelta;
+        type Payload = ();
 
-        fn process<F>(&mut self, _input: &DataInput, emit: &mut F)
+        fn process<F>(&mut self, _payload: &(), emit: &mut F)
         where
             F: FnMut(Self::Delta),
         {
@@ -1011,6 +1067,18 @@ mod runtime {
                 keys_seen: 1,
             });
         }
+    }
+
+    struct SumPlan;
+
+    impl OctoPlan for SumPlan {
+        type Worker = SumWorker;
+
+        fn worker(&self, worker_id: usize) -> Self::Worker {
+            SumWorker { worker_id, seen: 0 }
+        }
+
+        fn prepare(&self, _input: &DataInput<'_>) {}
     }
 
     struct SumAggregator {
@@ -1035,14 +1103,9 @@ mod runtime {
             partition: OctoPartition::RoundRobin,
             ..config(workers)
         };
-        let result = run_octo(
-            &inputs,
-            &cfg,
-            |worker_id| SumWorker { worker_id, seen: 0 },
-            || SumAggregator {
-                per_worker: vec![0; workers],
-            },
-        );
+        let result = run_octo(&inputs, &cfg, SumPlan, || SumAggregator {
+            per_worker: vec![0; workers],
+        });
 
         assert_eq!(
             result.parent.per_worker.iter().sum::<u64>(),
@@ -1061,13 +1124,9 @@ mod runtime {
     fn the_read_handle_observes_a_monotone_prefix_of_the_final_state() {
         let workers = 2;
         let n = 4_000u64;
-        let mut runtime = OctoRuntime::new(
-            &config(workers),
-            |worker_id| SumWorker { worker_id, seen: 0 },
-            || SumAggregator {
-                per_worker: vec![0; workers],
-            },
-        );
+        let mut runtime = OctoRuntime::new(&config(workers), SumPlan, || SumAggregator {
+            per_worker: vec![0; workers],
+        });
         let reader = runtime.read_handle();
 
         assert_eq!(
@@ -1115,13 +1174,9 @@ mod runtime {
     #[should_panic(expected = "Octo runtime has been finished")]
     fn reading_through_a_stale_handle_panics() {
         let workers = 2;
-        let runtime = OctoRuntime::new(
-            &config(workers),
-            |worker_id| SumWorker { worker_id, seen: 0 },
-            || SumAggregator {
-                per_worker: vec![0; workers],
-            },
-        );
+        let runtime = OctoRuntime::new(&config(workers), SumPlan, || SumAggregator {
+            per_worker: vec![0; workers],
+        });
         let reader = runtime.read_handle();
         let _ = runtime.finish();
         reader.with_parent(|p| p.per_worker.len());
@@ -1131,13 +1186,9 @@ mod runtime {
     fn close_is_idempotent_and_preserves_already_queued_work() {
         let workers = 4;
         let n = 3_001u64;
-        let mut runtime = OctoRuntime::new(
-            &config(workers),
-            |worker_id| SumWorker { worker_id, seen: 0 },
-            || SumAggregator {
-                per_worker: vec![0; workers],
-            },
-        );
+        let mut runtime = OctoRuntime::new(&config(workers), SumPlan, || SumAggregator {
+            per_worker: vec![0; workers],
+        });
         for i in 0..n {
             runtime.insert(DataInput::U64(i));
         }
@@ -1156,13 +1207,9 @@ mod runtime {
     #[should_panic(expected = "cannot insert after runtime has been closed")]
     fn inserting_after_close_panics() {
         let workers = 2;
-        let mut runtime = OctoRuntime::new(
-            &config(workers),
-            |worker_id| SumWorker { worker_id, seen: 0 },
-            || SumAggregator {
-                per_worker: vec![0; workers],
-            },
-        );
+        let mut runtime = OctoRuntime::new(&config(workers), SumPlan, || SumAggregator {
+            per_worker: vec![0; workers],
+        });
         runtime.close();
         runtime.insert(DataInput::U64(1));
     }
@@ -1207,14 +1254,11 @@ mod runtime {
     fn run_octo_hll_cardinality_error_stays_within_three_sigma() {
         let truth = 200_000u64;
         let inputs = inputs_from(&(0..truth).collect::<Vec<_>>());
-        let got = run_octo(
-            &inputs,
-            &config(4),
-            |_| HllOctoWorker::new(),
-            || HllOctoAggregator {
+        let got = run_octo(&inputs, &config(4), HllOctoPlan::new(), || {
+            HllOctoAggregator {
                 sketch: HyperLogLog::<Classic>::default(),
-            },
-        )
+            }
+        })
         .parent
         .sketch;
 
@@ -1245,14 +1289,11 @@ mod runtime {
             truth.observe(*k as i64);
         }
 
-        let parent = run_octo(
-            &inputs,
-            &config(4),
-            |_| CountOctoWorker::new(rows, cols),
-            || CountOctoAggregator {
+        let parent = run_octo(&inputs, &config(4), CountOctoPlan::new(rows, cols), || {
+            CountOctoAggregator {
                 sketch: Cs::with_dimensions(rows, cols),
-            },
-        )
+            }
+        })
         .parent
         .sketch;
 
@@ -2422,6 +2463,7 @@ fn ddsketch_delta_promotion_trades_quantile_accuracy_for_messages() {
 // --------------------------------------------------------------------- UnivMon
 
 struct OctoUniv {
+    plan: UnivMonOctoPlan,
     workers: Vec<UnivMonOctoWorker>,
     aggregator: UnivMonOctoAggregator,
     sent_counters: usize,
@@ -2430,21 +2472,20 @@ struct OctoUniv {
 impl OctoUniv {
     fn new(workers: usize, heap: usize, rows: usize, cols: usize, layers: usize, tau: u32) -> Self {
         let threshold = OctoThreshold::new(tau);
+        let plan = UnivMonOctoPlan::with_threshold(rows, cols, layers, threshold.clone());
         Self {
-            workers: (0..workers)
-                .map(|id| {
-                    UnivMonOctoWorker::with_threshold(id, rows, cols, layers, threshold.clone())
-                })
-                .collect(),
-            aggregator: UnivMonOctoAggregator::new(heap, rows, cols, layers, tau),
+            workers: (0..workers).map(|id| plan.worker(id)).collect(),
+            plan,
+            aggregator: UnivMonOctoAggregator::with_threshold(heap, rows, cols, layers, threshold),
             sent_counters: 0,
         }
     }
 
     fn insert(&mut self, index: usize, key: &DataInput) {
         let worker = Route::HashByKey.worker(index, key, self.workers.len());
+        let payload = self.plan.prepare(key);
         let mut promoted = Vec::new();
-        self.workers[worker].process(key, &mut |d| promoted.push(d));
+        self.workers[worker].process(&payload, &mut |d| promoted.push(d));
         self.sent_counters += promoted.len();
         for delta in promoted {
             self.aggregator.apply(delta);

@@ -20,8 +20,6 @@
 //! - <https://www.usenix.org/conference/nsdi24/presentation/zhang-yinda>
 
 #[cfg(feature = "octo-runtime")]
-use std::marker::PhantomData;
-#[cfg(feature = "octo-runtime")]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(feature = "octo-runtime")]
 use std::sync::{Arc, RwLock, Weak};
@@ -49,6 +47,7 @@ use crate::{
     RegularPath, UnivMon, Vector2D, hash64_seeded, hash128_seeded, heap_item_to_sketch_input,
     input_to_owned,
 };
+use smallvec::SmallVec;
 
 #[cfg(feature = "octo-runtime")]
 /// Legacy queue capacity default retained for config compatibility.
@@ -63,7 +62,10 @@ const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 // Traits
 // ---------------------------------------------------------------------------
 
-/// Worker-side trait: processes inputs and emits deltas.
+/// Per-row hashes for a worker sketch, inline for any realistic row count.
+pub type RowHashes = SmallVec<[u64; 8]>;
+
+/// Worker-side trait: processes prepared inputs and emits deltas.
 pub trait OctoWorker: Send {
     /// Delta type emitted by the worker.
     ///
@@ -71,8 +73,17 @@ pub trait OctoWorker: Send {
     /// than `Copy`.
     type Delta: Send + 'static;
 
-    /// Process one input and emit zero or more deltas.
-    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
+    /// What actually crosses to the worker thread.
+    ///
+    /// A `DataInput` can borrow, and a worker runs on another thread, so the
+    /// borrow has to end before the hand-off. [`OctoPlan::prepare`] turns the
+    /// input into this on the calling thread: hashes for a worker that only
+    /// hashes, an owned key for one that must store it. The caller is then free
+    /// to drop the key immediately - it never has to outlive the runtime.
+    type Payload: Send + 'static;
+
+    /// Process one prepared input and emit zero or more deltas.
+    fn process<F>(&mut self, payload: &Self::Payload, emit: &mut F)
     where
         F: FnMut(Self::Delta);
 
@@ -94,6 +105,24 @@ pub trait OctoWorker: Send {
     {
         let _ = emit;
     }
+}
+
+/// Builds a fleet of workers and prepares inputs for them.
+///
+/// One object holds the geometry, because both jobs need it: `worker` needs the
+/// dimensions to allocate counters, and `prepare` needs them to know how many
+/// hashes to compute. `prepare` runs on the calling thread, which is what lets
+/// the borrow in a `DataInput` end at the call rather than having to outlive
+/// the runtime.
+pub trait OctoPlan: Send + 'static {
+    /// Worker type this plan builds.
+    type Worker: OctoWorker;
+
+    /// Builds worker `worker_id`. Called once per worker at startup.
+    fn worker(&self, worker_id: usize) -> Self::Worker;
+
+    /// Converts one input into the worker's transport form.
+    fn prepare(&self, input: &DataInput<'_>) -> <Self::Worker as OctoWorker>::Payload;
 }
 
 /// Aggregator-side trait: absorbs deltas into a full-precision sketch.
@@ -153,6 +182,11 @@ impl CmWorkerSketch {
         &self.counters
     }
 
+    /// Per-row hashes this geometry needs for `value`.
+    pub fn hashes(rows: usize, value: &DataInput) -> RowHashes {
+        (0..rows.max(1)).map(|r| hash64_seeded(r, value)).collect()
+    }
+
     /// Inserts a key, emitting and clearing every counter that reaches
     /// `threshold` (Algorithm 1).
     #[inline(always)]
@@ -162,9 +196,20 @@ impl CmWorkerSketch {
         threshold: u32,
         emit: &mut impl FnMut(CmDelta),
     ) {
+        self.insert_hashes_emit_delta(&Self::hashes(self.rows, value), threshold, emit);
+    }
+
+    /// As `insert_emit_delta`, from hashes already computed by `hashes`.
+    #[inline(always)]
+    pub fn insert_hashes_emit_delta(
+        &mut self,
+        hashes: &[u64],
+        threshold: u32,
+        emit: &mut impl FnMut(CmDelta),
+    ) {
+        debug_assert_eq!(hashes.len(), self.rows, "one hash per row");
         let threshold = threshold.clamp(1, MAX_PROMASK) as u8;
-        for r in 0..self.rows {
-            let hashed = hash64_seeded(r, value);
+        for (r, hashed) in hashes.iter().copied().enumerate() {
             let col = ((hashed & LOWER_32_MASK) as usize) % self.cols;
             let cell = &mut self.counters[r * self.cols + col];
             *cell += 1;
@@ -196,18 +241,17 @@ impl CmWorkerSketch {
         }
     }
 
-    /// As `insert_emit_delta`, but each delta carries the flow key so the
-    /// aggregator can maintain the heavy-hitter heap.
+    /// As `insert_hashes_emit_delta`, but each delta carries the flow key so
+    /// the aggregator can maintain the heavy-hitter heap.
     #[inline(always)]
-    pub fn insert_emit_keyed_delta(
+    pub fn insert_hashes_emit_keyed_delta(
         &mut self,
-        value: &DataInput,
+        hashes: &[u64],
+        key: &HeapItem,
         threshold: u32,
         emit: &mut impl FnMut(KeyedCmDelta),
     ) {
-        let mut key: Option<HeapItem> = None;
-        self.insert_emit_delta(value, threshold, &mut |delta| {
-            let key = key.get_or_insert_with(|| input_to_owned(value));
+        self.insert_hashes_emit_delta(hashes, threshold, &mut |delta| {
             emit(KeyedCmDelta {
                 key: key.clone(),
                 delta,
@@ -265,9 +309,21 @@ impl CountWorkerSketch {
         threshold: u32,
         emit: &mut impl FnMut(CountDelta),
     ) {
+        self.insert_hashes_emit_delta(&CmWorkerSketch::hashes(self.rows, value), threshold, emit);
+    }
+
+    /// As `insert_emit_delta`, from hashes already computed by
+    /// `CmWorkerSketch::hashes` - the two share a per-row hashing scheme.
+    #[inline(always)]
+    pub fn insert_hashes_emit_delta(
+        &mut self,
+        hashes: &[u64],
+        threshold: u32,
+        emit: &mut impl FnMut(CountDelta),
+    ) {
+        debug_assert_eq!(hashes.len(), self.rows, "one hash per row");
         let threshold = threshold.clamp(1, MAX_PROMASK) as i8;
-        for r in 0..self.rows {
-            let hashed = hash64_seeded(r, value);
+        for (r, hashed) in hashes.iter().copied().enumerate() {
             let col = ((hashed & LOWER_32_MASK) as usize) % self.cols;
             let sign: i8 = if ((hashed >> 63) & 1) == 1 { 1 } else { -1 };
             let cell = &mut self.counters[r * self.cols + col];
@@ -300,17 +356,16 @@ impl CountWorkerSketch {
         }
     }
 
-    /// As `insert_emit_delta`, but each delta carries the flow key.
+    /// As `insert_hashes_emit_delta`, but each delta carries the flow key.
     #[inline(always)]
-    pub fn insert_emit_keyed_delta(
+    pub fn insert_hashes_emit_keyed_delta(
         &mut self,
-        value: &DataInput,
+        hashes: &[u64],
+        key: &HeapItem,
         threshold: u32,
         emit: &mut impl FnMut(KeyedCountDelta),
     ) {
-        let mut key: Option<HeapItem> = None;
-        self.insert_emit_delta(value, threshold, &mut |delta| {
-            let key = key.get_or_insert_with(|| input_to_owned(value));
+        self.insert_hashes_emit_delta(hashes, threshold, &mut |delta| {
             emit(KeyedCountDelta {
                 key: key.clone(),
                 delta,
@@ -396,8 +451,23 @@ impl L2hhWorkerSketch {
         threshold: u32,
         emit: &mut impl FnMut(CountDelta),
     ) {
+        self.insert_hash_emit_delta(hash128_seeded(self.seed_idx, value), threshold, emit);
+    }
+
+    /// Seed this layer hashes under.
+    pub fn seed_idx(&self) -> usize {
+        self.seed_idx
+    }
+
+    /// As `insert_emit_delta`, from a hash already computed under `seed_idx`.
+    #[inline(always)]
+    pub fn insert_hash_emit_delta(
+        &mut self,
+        hashed: u128,
+        threshold: u32,
+        emit: &mut impl FnMut(CountDelta),
+    ) {
         let threshold = threshold.clamp(1, MAX_PROMASK) as u8;
-        let hashed = hash128_seeded(self.seed_idx, value);
         for row in 0..self.rows {
             let (col, sign) = l2hh_cell_for_row(hashed, row, self.cols, self.mask_bits);
             let cell = &mut self.counters[row * self.cols + col];
@@ -531,8 +601,8 @@ pub struct OctoResult<P> {
 }
 
 #[cfg(feature = "octo-runtime")]
-enum WorkerMsg {
-    Data(DataInput<'static>),
+enum WorkerMsg<T> {
+    Data(T),
     /// Promote everything held back, then acknowledge.
     Flush(Sender<()>),
     End,
@@ -545,23 +615,18 @@ enum AggregatorMsg {
 }
 
 #[cfg(feature = "octo-runtime")]
-/// Extends a `DataInput` lifetime to `'static` for cross-thread transport in
-/// streaming mode. Caller must ensure all borrowed data outlives worker processing.
-#[inline(always)]
-unsafe fn assume_input_static(input: DataInput<'_>) -> DataInput<'static> {
-    // SAFETY: enforced by caller contract described above.
-    unsafe { std::mem::transmute::<DataInput<'_>, DataInput<'static>>(input) }
-}
-
-#[cfg(feature = "octo-runtime")]
 /// Streaming Octo runtime that accepts incremental inserts and finalizes into a parent sketch.
-pub struct OctoRuntime<W, P>
+///
+/// Nothing borrowed crosses a thread: [`OctoPlan::prepare`] turns each input
+/// into the worker's payload on the calling thread, so a borrowed key is
+/// finished with by the time `insert` returns.
+pub struct OctoRuntime<L, P>
 where
-    W: OctoWorker + 'static,
-    P: OctoAggregator<Delta = W::Delta> + Send + Sync + 'static,
+    L: OctoPlan,
+    P: OctoAggregator<Delta = <L::Worker as OctoWorker>::Delta> + Send + Sync + 'static,
 {
-    core: Option<OctoCore<P>>,
-    _worker_marker: PhantomData<W>,
+    core: Option<OctoCore<<L::Worker as OctoWorker>::Payload, P>>,
+    plan: L,
 }
 
 #[cfg(feature = "octo-runtime")]
@@ -593,8 +658,8 @@ impl<P> OctoReadHandle<P> {
 }
 
 #[cfg(feature = "octo-runtime")]
-struct OctoCore<P> {
-    worker_input_txs: Vec<Sender<WorkerMsg>>,
+struct OctoCore<T, P> {
+    worker_input_txs: Vec<Sender<WorkerMsg<T>>>,
     control_tx: Sender<AggregatorMsg>,
     next_worker: AtomicUsize,
     partition: OctoPartition,
@@ -605,7 +670,7 @@ struct OctoCore<P> {
 }
 
 #[cfg(feature = "octo-runtime")]
-impl<P> OctoCore<P> {
+impl<T, P> OctoCore<T, P> {
     fn read_handle(&self) -> OctoReadHandle<P> {
         OctoReadHandle {
             parent: Arc::downgrade(&self.parent),
@@ -631,7 +696,7 @@ impl<P> OctoCore<P> {
 }
 
 #[cfg(feature = "octo-runtime")]
-impl<P> OctoCore<P> {
+impl<T, P> OctoCore<T, P> {
     fn into_parent(mut self) -> P {
         self.close();
 
@@ -654,13 +719,14 @@ impl<P> OctoCore<P> {
 }
 
 #[cfg(feature = "octo-runtime")]
-impl<P> OctoCore<P>
+impl<T, P> OctoCore<T, P>
 where
+    T: Send + 'static,
     P: Send + Sync + 'static,
 {
     fn start<W>(workers: Vec<W>, parent: P, config: &OctoConfig) -> Self
     where
-        W: OctoWorker + 'static,
+        W: OctoWorker<Payload = T> + 'static,
         P: OctoAggregator<Delta = W::Delta>,
     {
         let num_workers = config.num_workers.max(1);
@@ -730,7 +796,7 @@ where
         for (worker_id, (mut worker, delta_tx_worker)) in
             workers.into_iter().zip(delta_txs).enumerate()
         {
-            let (worker_tx, worker_rx) = bounded::<WorkerMsg>(queue_capacity);
+            let (worker_tx, worker_rx) = bounded::<WorkerMsg<T>>(queue_capacity);
             worker_input_txs.push(worker_tx);
             worker_handles.push(thread::spawn(move || {
                 if pin_cores {
@@ -738,7 +804,7 @@ where
                 }
                 while let Ok(msg) = worker_rx.recv() {
                     match msg {
-                        WorkerMsg::Data(input) => worker.process(&input, &mut |delta| {
+                        WorkerMsg::Data(payload) => worker.process(&payload, &mut |delta| {
                             delta_tx_worker
                                 .send(delta)
                                 .expect("aggregator receiver dropped while workers still running");
@@ -847,26 +913,30 @@ impl ThresholdController {
 }
 
 #[cfg(feature = "octo-runtime")]
-impl<W, P> OctoRuntime<W, P>
+impl<L, P> OctoRuntime<L, P>
 where
-    W: OctoWorker + 'static,
-    P: OctoAggregator<Delta = W::Delta> + Send + Sync + 'static,
+    L: OctoPlan,
+    P: OctoAggregator<Delta = <L::Worker as OctoWorker>::Delta> + Send + Sync + 'static,
 {
     /// Starts the worker and aggregator threads described by `config`.
-    pub fn new<F, PF>(config: &OctoConfig, worker_factory: F, parent_factory: PF) -> Self
+    pub fn new<PF>(config: &OctoConfig, plan: L, parent_factory: PF) -> Self
     where
-        F: Fn(usize) -> W,
         PF: FnOnce() -> P,
     {
         let num_workers = config.num_workers.max(1);
-        let workers: Vec<W> = (0..num_workers).map(worker_factory).collect();
+        let workers: Vec<L::Worker> = (0..num_workers).map(|id| plan.worker(id)).collect();
         let parent = parent_factory();
         let core = OctoCore::start(workers, parent, config);
 
         Self {
             core: Some(core),
-            _worker_marker: PhantomData,
+            plan,
         }
+    }
+
+    /// Borrows the plan the runtime was built with.
+    pub fn plan(&self) -> &L {
+        &self.plan
     }
 
     /// Returns a handle for reading the parent while the runtime is live.
@@ -883,6 +953,10 @@ where
     }
 
     /// Routes one input to a worker according to the configured partition.
+    ///
+    /// The input is hashed for partitioning and converted to the worker's
+    /// payload here, on the calling thread, so `input` may borrow from storage
+    /// that is dropped as soon as this returns.
     pub fn insert(&mut self, input: DataInput<'_>) {
         let core = self.core.as_ref().expect("runtime core missing");
         if core.closed.load(Ordering::Acquire) {
@@ -890,10 +964,9 @@ where
         }
 
         let worker_id = core.worker_for(&input);
-        // SAFETY: caller explicitly guarantees borrowed data lives long enough.
-        let static_input = unsafe { assume_input_static(input) };
+        let payload = self.plan.prepare(&input);
         core.worker_input_txs[worker_id]
-            .send(WorkerMsg::Data(static_input))
+            .send(WorkerMsg::Data(payload))
             .expect("worker receiver dropped while runtime is active");
     }
 
@@ -955,6 +1028,34 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// Prepared inputs
+// ---------------------------------------------------------------------------
+
+/// Per-row hashes plus the key, for a worker whose deltas carry the key.
+///
+/// The key is owned: a worker that must store it has to copy it, and copying
+/// once at the hand-off is what lets the caller drop the original immediately.
+#[derive(Clone, Debug)]
+pub struct KeyedHashes {
+    /// Per-row hashes, as `CmWorkerSketch::hashes` computes them.
+    pub hashes: RowHashes,
+    /// The flow key.
+    pub key: HeapItem,
+}
+
+/// A prepared UnivMon insert.
+#[derive(Clone, Debug)]
+pub struct UnivMonInput {
+    /// Deepest layer this key reaches; it touches `0..=bottom`.
+    pub bottom: usize,
+    /// One 128-bit hash per touched layer, under that layer's seed. Layer depth
+    /// is geometric, so this is nearly always one or two entries.
+    pub layer_hashes: SmallVec<[u128; 4]>,
+    /// The flow key.
+    pub key: HeapItem,
+}
+
+// ---------------------------------------------------------------------------
 // Concrete worker/parent implementations
 // ---------------------------------------------------------------------------
 
@@ -988,14 +1089,15 @@ impl CmOctoWorker {
 
 impl OctoWorker for CmOctoWorker {
     type Delta = CmDelta;
+    type Payload = RowHashes;
 
     #[inline(always)]
-    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
+    fn process<F>(&mut self, payload: &Self::Payload, emit: &mut F)
     where
         F: FnMut(Self::Delta),
     {
         self.sketch
-            .insert_emit_delta(input, self.threshold.get(), emit);
+            .insert_hashes_emit_delta(payload, self.threshold.get(), emit);
     }
 
     fn flush<F>(&mut self, emit: &mut F)
@@ -1060,14 +1162,19 @@ impl CmTopKOctoWorker {
 
 impl OctoWorker for CmTopKOctoWorker {
     type Delta = KeyedCmDelta;
+    type Payload = KeyedHashes;
 
     #[inline(always)]
-    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
+    fn process<F>(&mut self, payload: &Self::Payload, emit: &mut F)
     where
         F: FnMut(Self::Delta),
     {
-        self.sketch
-            .insert_emit_keyed_delta(input, self.threshold.get(), emit);
+        self.sketch.insert_hashes_emit_keyed_delta(
+            &payload.hashes,
+            &payload.key,
+            self.threshold.get(),
+            emit,
+        );
     }
 
     // No flush: every delta carries the key that produced it, and a worker
@@ -1136,14 +1243,15 @@ impl CountOctoWorker {
 
 impl OctoWorker for CountOctoWorker {
     type Delta = CountDelta;
+    type Payload = RowHashes;
 
     #[inline(always)]
-    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
+    fn process<F>(&mut self, payload: &Self::Payload, emit: &mut F)
     where
         F: FnMut(Self::Delta),
     {
         self.sketch
-            .insert_emit_delta(input, self.threshold.get(), emit);
+            .insert_hashes_emit_delta(payload, self.threshold.get(), emit);
     }
 
     fn flush<F>(&mut self, emit: &mut F)
@@ -1203,14 +1311,19 @@ impl CountTopKOctoWorker {
 
 impl OctoWorker for CountTopKOctoWorker {
     type Delta = KeyedCountDelta;
+    type Payload = KeyedHashes;
 
     #[inline(always)]
-    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
+    fn process<F>(&mut self, payload: &Self::Payload, emit: &mut F)
     where
         F: FnMut(Self::Delta),
     {
-        self.sketch
-            .insert_emit_keyed_delta(input, self.threshold.get(), emit);
+        self.sketch.insert_hashes_emit_keyed_delta(
+            &payload.hashes,
+            &payload.key,
+            self.threshold.get(),
+            emit,
+        );
     }
 
     // No flush: every delta carries the key that produced it, and a worker
@@ -1350,17 +1463,20 @@ impl DdOctoWorker {
 
 impl OctoWorker for DdOctoWorker {
     type Delta = DdDelta;
+    /// `None` for an input DDSketch cannot index; the conversion happens at
+    /// preparation so a non-numeric key never crosses a thread.
+    type Payload = Option<f64>;
 
     #[inline(always)]
-    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
+    fn process<F>(&mut self, payload: &Self::Payload, emit: &mut F)
     where
         F: FnMut(Self::Delta),
     {
-        let Ok(value) = data_input_to_f64(input) else {
+        let Some(value) = payload else {
             return;
         };
         self.sketch
-            .add_emit_delta(value, self.threshold.get(), emit);
+            .add_emit_delta(*value, self.threshold.get(), emit);
     }
 
     fn flush<F>(&mut self, emit: &mut F)
@@ -1455,14 +1571,16 @@ impl Default for HllOctoWorker {
 
 impl OctoWorker for HllOctoWorker {
     type Delta = HllDelta;
+    /// The single canonical-seed hash; HLL never needs the key itself.
+    type Payload = u64;
 
     #[inline(always)]
-    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
+    fn process<F>(&mut self, payload: &Self::Payload, emit: &mut F)
     where
         F: FnMut(Self::Delta),
     {
         self.child
-            .insert_emit_delta_with_threshold(input, self.threshold, emit);
+            .insert_emit_delta_with_hash_and_threshold(*payload, self.threshold, emit);
     }
 
     /// Ships every non-empty register. At the default threshold of 0 nothing is
@@ -1585,22 +1703,27 @@ impl UnivMonOctoWorker {
 
 impl OctoWorker for UnivMonOctoWorker {
     type Delta = LayeredCountDelta;
+    type Payload = UnivMonInput;
 
     #[inline(always)]
-    fn process<F>(&mut self, input: &DataInput, emit: &mut F)
+    fn process<F>(&mut self, payload: &Self::Payload, emit: &mut F)
     where
         F: FnMut(Self::Delta),
     {
         self.weight_total += 1;
-        let bottom =
-            bottom_layer_for_hash(hash64_seeded(BOTTOM_LAYER_FINDER, input), self.layers.len());
         let threshold = self.threshold.get();
         let (worker_id, weight_total) = (self.worker_id, self.weight_total);
-        let mut key: Option<HeapItem> = None;
-        for layer in 0..=bottom {
+        let bottom = payload.bottom.min(self.layers.len() - 1);
+        for (layer, hashed) in payload
+            .layer_hashes
+            .iter()
+            .copied()
+            .enumerate()
+            .take(bottom + 1)
+        {
             let layer_threshold = univmon_layer_threshold(threshold, layer);
-            self.layers[layer].insert_emit_delta(input, layer_threshold, &mut |delta| {
-                let key = key.get_or_insert_with(|| input_to_owned(input));
+            let key = &payload.key;
+            self.layers[layer].insert_hash_emit_delta(hashed, layer_threshold, &mut |delta| {
                 emit(LayeredCountDelta {
                     layer: layer as u32,
                     key: key.clone(),
@@ -1727,6 +1850,270 @@ impl OctoAggregator for UnivMonOctoAggregator {
 }
 
 // ---------------------------------------------------------------------------
+// Plans: geometry plus the preparation that strips the borrow
+// ---------------------------------------------------------------------------
+
+/// Builds `CmOctoWorker`s and prepares their per-row hashes.
+#[derive(Clone, Debug)]
+pub struct CmOctoPlan {
+    rows: usize,
+    cols: usize,
+    threshold: OctoThreshold,
+}
+
+/// Builds `CountOctoWorker`s and prepares their per-row hashes.
+#[derive(Clone, Debug)]
+pub struct CountOctoPlan {
+    rows: usize,
+    cols: usize,
+    threshold: OctoThreshold,
+}
+
+/// Builds `CmTopKOctoWorker`s; payloads carry the key as well as the hashes.
+#[derive(Clone, Debug)]
+pub struct CmTopKOctoPlan {
+    rows: usize,
+    cols: usize,
+    threshold: OctoThreshold,
+}
+
+/// Builds `CountTopKOctoWorker`s; payloads carry the key as well as the hashes.
+#[derive(Clone, Debug)]
+pub struct CountTopKOctoPlan {
+    rows: usize,
+    cols: usize,
+    threshold: OctoThreshold,
+}
+
+/// Builds `HllOctoWorker`s; payloads are the single canonical-seed hash.
+#[derive(Clone, Debug)]
+pub struct HllOctoPlan {
+    threshold: u8,
+}
+
+/// Builds `DdOctoWorker`s; payloads are the numeric value.
+#[derive(Clone, Debug)]
+pub struct DdOctoPlan {
+    alpha: f64,
+    threshold: OctoThreshold,
+}
+
+/// Builds `UnivMonOctoWorker`s; payloads carry one hash per touched layer plus
+/// the key, since the aggregator's heaps need it.
+#[derive(Clone, Debug)]
+pub struct UnivMonOctoPlan {
+    rows: usize,
+    cols: usize,
+    layers: usize,
+    threshold: OctoThreshold,
+}
+
+macro_rules! counter_plan {
+    ($plan:ident, $worker:ident, $default:expr) => {
+        impl $plan {
+            /// Creates a plan at the sketch's default threshold.
+            pub fn new(rows: usize, cols: usize) -> Self {
+                Self::with_threshold(rows, cols, OctoThreshold::new($default))
+            }
+
+            /// Creates a plan whose workers share `threshold`.
+            pub fn with_threshold(rows: usize, cols: usize, threshold: OctoThreshold) -> Self {
+                Self {
+                    rows,
+                    cols,
+                    threshold,
+                }
+            }
+
+            /// The threshold this plan's workers read. Clone it into
+            /// `OctoConfig::threshold` so the controller drives the same value.
+            pub fn threshold(&self) -> &OctoThreshold {
+                &self.threshold
+            }
+        }
+    };
+}
+
+counter_plan!(CmOctoPlan, CmOctoWorker, CM_PROMASK);
+counter_plan!(CountOctoPlan, CountOctoWorker, COUNT_PROMASK);
+counter_plan!(CmTopKOctoPlan, CmTopKOctoWorker, CM_PROMASK);
+counter_plan!(CountTopKOctoPlan, CountTopKOctoWorker, COUNT_PROMASK);
+
+impl OctoPlan for CmOctoPlan {
+    type Worker = CmOctoWorker;
+
+    fn worker(&self, _worker_id: usize) -> Self::Worker {
+        CmOctoWorker::with_threshold(self.rows, self.cols, self.threshold.clone())
+    }
+
+    fn prepare(&self, input: &DataInput<'_>) -> RowHashes {
+        CmWorkerSketch::hashes(self.rows, input)
+    }
+}
+
+impl OctoPlan for CountOctoPlan {
+    type Worker = CountOctoWorker;
+
+    fn worker(&self, _worker_id: usize) -> Self::Worker {
+        CountOctoWorker::with_threshold(self.rows, self.cols, self.threshold.clone())
+    }
+
+    fn prepare(&self, input: &DataInput<'_>) -> RowHashes {
+        CmWorkerSketch::hashes(self.rows, input)
+    }
+}
+
+impl OctoPlan for CmTopKOctoPlan {
+    type Worker = CmTopKOctoWorker;
+
+    fn worker(&self, _worker_id: usize) -> Self::Worker {
+        CmTopKOctoWorker::with_threshold(self.rows, self.cols, self.threshold.clone())
+    }
+
+    fn prepare(&self, input: &DataInput<'_>) -> KeyedHashes {
+        KeyedHashes {
+            hashes: CmWorkerSketch::hashes(self.rows, input),
+            key: input_to_owned(input),
+        }
+    }
+}
+
+impl OctoPlan for CountTopKOctoPlan {
+    type Worker = CountTopKOctoWorker;
+
+    fn worker(&self, _worker_id: usize) -> Self::Worker {
+        CountTopKOctoWorker::with_threshold(self.rows, self.cols, self.threshold.clone())
+    }
+
+    fn prepare(&self, input: &DataInput<'_>) -> KeyedHashes {
+        KeyedHashes {
+            hashes: CmWorkerSketch::hashes(self.rows, input),
+            key: input_to_owned(input),
+        }
+    }
+}
+
+impl HllOctoPlan {
+    /// Creates a plan at the default threshold, which promotes every register
+    /// improvement and leaves the parent exact.
+    pub fn new() -> Self {
+        Self::with_threshold(HLL_PROMASK)
+    }
+
+    /// Creates a plan at a custom threshold exponent.
+    pub fn with_threshold(threshold: u8) -> Self {
+        // Fail here rather than at the first worker, where it would surface on
+        // a background thread.
+        let _ = HllOctoWorker::with_threshold(threshold);
+        Self { threshold }
+    }
+}
+
+impl Default for HllOctoPlan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OctoPlan for HllOctoPlan {
+    type Worker = HllOctoWorker;
+
+    fn worker(&self, _worker_id: usize) -> Self::Worker {
+        HllOctoWorker::with_threshold(self.threshold)
+    }
+
+    fn prepare(&self, input: &DataInput<'_>) -> u64 {
+        HyperLogLog::<Classic>::canonical_hash(input)
+    }
+}
+
+impl DdOctoPlan {
+    /// Creates a plan at the DDSketch default threshold.
+    pub fn new(alpha: f64) -> Self {
+        Self::with_threshold(alpha, OctoThreshold::new(DD_PROMASK))
+    }
+
+    /// Creates a plan whose workers share `threshold`.
+    pub fn with_threshold(alpha: f64, threshold: OctoThreshold) -> Self {
+        Self { alpha, threshold }
+    }
+
+    /// Relative accuracy of the bucket space.
+    pub fn alpha(&self) -> f64 {
+        self.alpha
+    }
+
+    /// The threshold this plan's workers read.
+    pub fn threshold(&self) -> &OctoThreshold {
+        &self.threshold
+    }
+}
+
+impl OctoPlan for DdOctoPlan {
+    type Worker = DdOctoWorker;
+
+    fn worker(&self, _worker_id: usize) -> Self::Worker {
+        DdOctoWorker::with_threshold(self.alpha, self.threshold.clone())
+    }
+
+    fn prepare(&self, input: &DataInput<'_>) -> Option<f64> {
+        data_input_to_f64(input).ok()
+    }
+}
+
+impl UnivMonOctoPlan {
+    /// Creates a plan at the UnivMon default threshold.
+    pub fn new(rows: usize, cols: usize, layers: usize) -> Self {
+        Self::with_threshold(rows, cols, layers, OctoThreshold::new(UNIVMON_PROMASK))
+    }
+
+    /// Creates a plan whose workers share `threshold`.
+    pub fn with_threshold(
+        rows: usize,
+        cols: usize,
+        layers: usize,
+        threshold: OctoThreshold,
+    ) -> Self {
+        Self {
+            rows,
+            cols,
+            layers: layers.max(1),
+            threshold,
+        }
+    }
+
+    /// The threshold this plan's workers read.
+    pub fn threshold(&self) -> &OctoThreshold {
+        &self.threshold
+    }
+}
+
+impl OctoPlan for UnivMonOctoPlan {
+    type Worker = UnivMonOctoWorker;
+
+    fn worker(&self, worker_id: usize) -> Self::Worker {
+        UnivMonOctoWorker::with_threshold(
+            worker_id,
+            self.rows,
+            self.cols,
+            self.layers,
+            self.threshold.clone(),
+        )
+    }
+
+    fn prepare(&self, input: &DataInput<'_>) -> UnivMonInput {
+        // Only the layers this key actually reaches get hashed. Layer depth is
+        // geometric, so that is nearly always one or two.
+        let bottom = bottom_layer_for_hash(hash64_seeded(BOTTOM_LAYER_FINDER, input), self.layers);
+        UnivMonInput {
+            bottom,
+            layer_hashes: (0..=bottom).map(|l| hash128_seeded(l, input)).collect(),
+            key: input_to_owned(input),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Core execution engine
 // ---------------------------------------------------------------------------
 
@@ -1737,17 +2124,17 @@ impl OctoAggregator for UnivMonOctoAggregator {
 /// 2. Each worker maintains a compact child sketch, emitting deltas on its own channel.
 /// 3. The aggregator applies deltas to the parent and, if configured, adjusts τ.
 /// 4. Returns the fully-merged parent sketch.
-pub fn run_octo<W, P>(
+pub fn run_octo<L, P>(
     inputs: &[DataInput<'_>],
     config: &OctoConfig,
-    worker_factory: impl Fn(usize) -> W,
+    plan: L,
     parent_factory: impl FnOnce() -> P,
 ) -> OctoResult<P>
 where
-    W: OctoWorker + 'static,
-    P: OctoAggregator<Delta = W::Delta> + Send + Sync + 'static,
+    L: OctoPlan,
+    P: OctoAggregator<Delta = <L::Worker as OctoWorker>::Delta> + Send + Sync + 'static,
 {
-    let mut runtime = OctoRuntime::new(config, worker_factory, parent_factory);
+    let mut runtime = OctoRuntime::new(config, plan, parent_factory);
     for input in inputs {
         runtime.insert(input.clone());
     }
@@ -1823,7 +2210,12 @@ mod worker_tests {
         let key = DataInput::Str("flow-a");
         let mut keyed: Vec<KeyedCmDelta> = Vec::new();
         for _ in 0..CM_PROMASK {
-            worker.insert_emit_keyed_delta(&key, CM_PROMASK, &mut |d| keyed.push(d));
+            worker.insert_hashes_emit_keyed_delta(
+                &CmWorkerSketch::hashes(2, &key),
+                &input_to_owned(&key),
+                CM_PROMASK,
+                &mut |d| keyed.push(d),
+            );
         }
         assert!(!keyed.is_empty());
         for d in &keyed {
@@ -2136,12 +2528,9 @@ mod runtime_tests {
             reference.insert(input);
         }
 
-        let result = run_octo(
-            &inputs,
-            &config(4),
-            |_| CmOctoWorker::new(rows, cols),
-            || CmOctoAggregator::new(rows, cols),
-        );
+        let result = run_octo(&inputs, &config(4), CmOctoPlan::new(rows, cols), || {
+            CmOctoAggregator::new(rows, cols)
+        });
 
         // A counter is shared by whatever flows hash into it, and each worker
         // may hold back up to tau of its own share, so the provable ceiling is
@@ -2170,7 +2559,7 @@ mod runtime_tests {
         let result = run_octo(
             &inputs,
             &config(4),
-            |_| HllOctoWorker::new(),
+            HllOctoPlan::new(),
             HllOctoAggregator::new,
         );
         assert_eq!(
@@ -2186,13 +2575,9 @@ mod runtime_tests {
             partition: OctoPartition::HashByKey,
             ..config(workers)
         };
-        let mut runtime = OctoRuntime::new(
-            &cfg,
-            |worker_id| WorkerIdEmitter { worker_id },
-            || WorkerLoadAggregator {
-                loads: vec![0; workers],
-            },
-        );
+        let mut runtime = OctoRuntime::new(&cfg, WorkerIdPlan, || WorkerLoadAggregator {
+            loads: vec![0; workers],
+        });
         // One key, many inserts: a hash partition must pile them all on one worker.
         for _ in 0..1_000 {
             runtime.insert(DataInput::U64(4_242));
@@ -2209,13 +2594,9 @@ mod runtime_tests {
             partition: OctoPartition::RoundRobin,
             ..config(workers)
         };
-        let mut runtime = OctoRuntime::new(
-            &cfg,
-            |worker_id| WorkerIdEmitter { worker_id },
-            || WorkerLoadAggregator {
-                loads: vec![0; workers],
-            },
-        );
+        let mut runtime = OctoRuntime::new(&cfg, WorkerIdPlan, || WorkerLoadAggregator {
+            loads: vec![0; workers],
+        });
         for i in 0..10u64 {
             runtime.insert(DataInput::U64(i));
         }
@@ -2229,13 +2610,31 @@ mod runtime_tests {
 
     impl OctoWorker for ThresholdReporter {
         type Delta = u32;
+        type Payload = ();
 
-        fn process<F>(&mut self, _input: &DataInput, emit: &mut F)
+        fn process<F>(&mut self, _payload: &(), emit: &mut F)
         where
             F: FnMut(Self::Delta),
         {
             emit(self.threshold.get());
         }
+    }
+
+    #[derive(Clone)]
+    struct ThresholdReporterPlan {
+        threshold: OctoThreshold,
+    }
+
+    impl OctoPlan for ThresholdReporterPlan {
+        type Worker = ThresholdReporter;
+
+        fn worker(&self, _worker_id: usize) -> Self::Worker {
+            ThresholdReporter {
+                threshold: self.threshold.clone(),
+            }
+        }
+
+        fn prepare(&self, _input: &DataInput<'_>) {}
     }
 
     struct ThresholdCollector {
@@ -2263,11 +2662,8 @@ mod runtime_tests {
         let result = run_octo(
             &inputs,
             &cfg,
-            {
-                let threshold = threshold.clone();
-                move |_| ThresholdReporter {
-                    threshold: threshold.clone(),
-                }
+            ThresholdReporterPlan {
+                threshold: threshold.clone(),
             },
             || ThresholdCollector { seen: Vec::new() },
         );
@@ -2423,10 +2819,7 @@ mod runtime_tests {
         let result = run_octo(
             &inputs,
             &cfg,
-            {
-                let threshold = threshold.clone();
-                move |_| CmOctoWorker::with_threshold(rows, cols, threshold.clone())
-            },
+            CmOctoPlan::with_threshold(rows, cols, threshold.clone()),
             || CmOctoAggregator::new(rows, cols),
         );
 
@@ -2465,12 +2858,9 @@ mod runtime_tests {
             inputs.push(DataInput::U64(i));
         }
 
-        let result = run_octo(
-            &inputs,
-            &config(4),
-            |_| CmTopKOctoWorker::new(rows, cols),
-            || CmTopKOctoAggregator::new(rows, cols, top_k),
-        );
+        let result = run_octo(&inputs, &config(4), CmTopKOctoPlan::new(rows, cols), || {
+            CmTopKOctoAggregator::new(rows, cols, top_k)
+        });
 
         let heap = result.parent.sketch.heap();
         assert!(!heap.is_empty(), "the aggregator must have built a heap");
@@ -2503,7 +2893,7 @@ mod runtime_tests {
         let result = run_octo(
             &inputs,
             &config(4),
-            |_| CountTopKOctoWorker::new(rows, cols),
+            CountTopKOctoPlan::new(rows, cols),
             || CountTopKOctoAggregator::new(rows, cols, top_k),
         );
         for hot in 0..3u64 {
@@ -2534,12 +2924,9 @@ mod runtime_tests {
             .collect();
         exact.sort_by(f64::total_cmp);
 
-        let result = run_octo(
-            &inputs,
-            &config(4),
-            |_| DdOctoWorker::new(alpha),
-            || DdOctoAggregator::new(alpha),
-        );
+        let result = run_octo(&inputs, &config(4), DdOctoPlan::new(alpha), || {
+            DdOctoAggregator::new(alpha)
+        });
 
         // Four workers each hold back their own partial buckets, so the rank
         // slack is what the whole fleet has yet to promote.
@@ -2587,18 +2974,7 @@ mod runtime_tests {
         let result = run_octo(
             &inputs,
             &cfg,
-            {
-                let threshold = threshold.clone();
-                move |worker_id| {
-                    UnivMonOctoWorker::with_threshold(
-                        worker_id,
-                        rows,
-                        cols,
-                        layers,
-                        threshold.clone(),
-                    )
-                }
-            },
+            UnivMonOctoPlan::with_threshold(rows, cols, layers, threshold.clone()),
             || UnivMonOctoAggregator::new(heap, rows, cols, layers, tau),
         );
         let univmon = &result.parent.sketch;
@@ -2636,18 +3012,13 @@ mod runtime_tests {
         let inputs: Vec<DataInput<'_>> = (0..30_000u64).map(|i| DataInput::U64(i % 1024)).collect();
         let cfg = config(4);
 
-        let batch = run_octo(
-            &inputs,
-            &cfg,
-            |_| CmOctoWorker::new(rows, cols),
-            || CmOctoAggregator::new(rows, cols),
-        );
+        let batch = run_octo(&inputs, &cfg, CmOctoPlan::new(rows, cols), || {
+            CmOctoAggregator::new(rows, cols)
+        });
 
-        let mut runtime = OctoRuntime::new(
-            &cfg,
-            move |_| CmOctoWorker::new(rows, cols),
-            move || CmOctoAggregator::new(rows, cols),
-        );
+        let mut runtime = OctoRuntime::new(&cfg, CmOctoPlan::new(rows, cols), move || {
+            CmOctoAggregator::new(rows, cols)
+        });
         for input in &inputs {
             runtime.insert(input.clone());
         }
@@ -2681,12 +3052,9 @@ mod runtime_tests {
             .collect();
         exact.sort_by(f64::total_cmp);
 
-        let result = run_octo(
-            &inputs,
-            &config(4),
-            |_| DdOctoWorker::new(alpha),
-            || DdOctoAggregator::new(alpha),
-        );
+        let result = run_octo(&inputs, &config(4), DdOctoPlan::new(alpha), || {
+            DdOctoAggregator::new(alpha)
+        });
         let parent = &result.parent.sketch;
 
         assert_eq!(
@@ -2713,11 +3081,9 @@ mod runtime_tests {
     fn a_mid_stream_flush_makes_the_live_parent_answerable() {
         let alpha = 0.01;
         let values: Vec<f64> = (1..=20_000u64).map(|i| 1.0 + i as f64 * 0.37).collect();
-        let mut runtime = OctoRuntime::new(
-            &config(4),
-            |_| DdOctoWorker::new(alpha),
-            || DdOctoAggregator::new(alpha),
-        );
+        let mut runtime = OctoRuntime::new(&config(4), DdOctoPlan::new(alpha), || {
+            DdOctoAggregator::new(alpha)
+        });
         let reader = runtime.read_handle();
 
         let half = values.len() / 2;
@@ -2747,11 +3113,9 @@ mod runtime_tests {
     #[test]
     fn flushing_twice_is_harmless() {
         let alpha = 0.01;
-        let mut runtime = OctoRuntime::new(
-            &config(2),
-            |_| DdOctoWorker::new(alpha),
-            || DdOctoAggregator::new(alpha),
-        );
+        let mut runtime = OctoRuntime::new(&config(2), DdOctoPlan::new(alpha), || {
+            DdOctoAggregator::new(alpha)
+        });
         for i in 1..=5_000u64 {
             runtime.insert(DataInput::F64(i as f64));
         }
@@ -2766,12 +3130,9 @@ mod runtime_tests {
         // the point of query, where before the parent was low by under tau.
         let (rows, cols) = (3usize, 1024usize);
         let inputs: Vec<DataInput<'_>> = (0..40_000u64).map(|i| DataInput::U64(i % 512)).collect();
-        let got = run_octo(
-            &inputs,
-            &config(4),
-            |_| CmOctoWorker::new(rows, cols),
-            || CmOctoAggregator::new(rows, cols),
-        );
+        let got = run_octo(&inputs, &config(4), CmOctoPlan::new(rows, cols), || {
+            CmOctoAggregator::new(rows, cols)
+        });
         let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
         for input in &inputs {
             reference.insert(input);
@@ -2789,8 +3150,7 @@ mod runtime_tests {
 
     #[test]
     fn octo_runtime_close_is_idempotent() {
-        let runtime =
-            OctoRuntime::new(&config(2), |_| HllOctoWorker::new(), HllOctoAggregator::new);
+        let runtime = OctoRuntime::new(&config(2), HllOctoPlan::new(), HllOctoAggregator::new);
         runtime.close();
         runtime.close();
         assert_eq!(runtime.finish().parent.sketch.estimate(), 0);
@@ -2799,27 +3159,22 @@ mod runtime_tests {
     #[test]
     #[should_panic(expected = "cannot insert after runtime has been closed")]
     fn octo_runtime_insert_after_close_panics() {
-        let mut runtime =
-            OctoRuntime::new(&config(2), |_| HllOctoWorker::new(), HllOctoAggregator::new);
+        let mut runtime = OctoRuntime::new(&config(2), HllOctoPlan::new(), HllOctoAggregator::new);
         runtime.close();
         runtime.insert(DataInput::U64(1));
     }
 
     #[test]
     fn octo_runtime_empty_stream_finishes() {
-        let runtime =
-            OctoRuntime::new(&config(4), |_| HllOctoWorker::new(), HllOctoAggregator::new);
+        let runtime = OctoRuntime::new(&config(4), HllOctoPlan::new(), HllOctoAggregator::new);
         assert_eq!(runtime.finish().parent.sketch.estimate(), 0);
     }
 
     #[test]
     fn octo_runtime_live_read_handle_tracks_the_aggregator() {
         let n = 64u64;
-        let mut runtime = OctoRuntime::new(
-            &config(2),
-            |_| CountingWorker,
-            || CountingAggregator { total: 0 },
-        );
+        let mut runtime =
+            OctoRuntime::new(&config(2), CountingPlan, || CountingAggregator { total: 0 });
         let reader = runtime.read_handle();
         assert_eq!(reader.with_parent(|p| p.total), 0, "nothing inserted yet");
 
@@ -2856,11 +3211,8 @@ mod runtime_tests {
     #[test]
     fn octo_runtime_close_preserves_queued_items() {
         let n = 257u64;
-        let mut runtime = OctoRuntime::new(
-            &config(4),
-            |_| CountingWorker,
-            || CountingAggregator { total: 0 },
-        );
+        let mut runtime =
+            OctoRuntime::new(&config(4), CountingPlan, || CountingAggregator { total: 0 });
         for i in 0..n {
             runtime.insert(DataInput::U64(i + 42));
         }
@@ -2872,13 +3224,26 @@ mod runtime_tests {
 
     impl OctoWorker for CountingWorker {
         type Delta = u64;
+        type Payload = ();
 
-        fn process<F>(&mut self, _input: &DataInput, emit: &mut F)
+        fn process<F>(&mut self, _payload: &(), emit: &mut F)
         where
             F: FnMut(Self::Delta),
         {
             emit(1);
         }
+    }
+
+    struct CountingPlan;
+
+    impl OctoPlan for CountingPlan {
+        type Worker = CountingWorker;
+
+        fn worker(&self, _worker_id: usize) -> Self::Worker {
+            CountingWorker
+        }
+
+        fn prepare(&self, _input: &DataInput<'_>) {}
     }
 
     struct CountingAggregator {
@@ -2899,13 +3264,26 @@ mod runtime_tests {
 
     impl OctoWorker for WorkerIdEmitter {
         type Delta = usize;
+        type Payload = ();
 
-        fn process<F>(&mut self, _input: &DataInput, emit: &mut F)
+        fn process<F>(&mut self, _payload: &(), emit: &mut F)
         where
             F: FnMut(Self::Delta),
         {
             emit(self.worker_id);
         }
+    }
+
+    struct WorkerIdPlan;
+
+    impl OctoPlan for WorkerIdPlan {
+        type Worker = WorkerIdEmitter;
+
+        fn worker(&self, worker_id: usize) -> Self::Worker {
+            WorkerIdEmitter { worker_id }
+        }
+
+        fn prepare(&self, _input: &DataInput<'_>) {}
     }
 
     struct WorkerLoadAggregator {
@@ -2994,12 +3372,13 @@ mod univmon_tests {
             reference.insert(input, 1);
         }
 
+        let preparer = UnivMonOctoPlan::with_threshold(ROWS, COLS, LAYERS, OctoThreshold::new(1));
         let mut worker =
             UnivMonOctoWorker::with_threshold(0, ROWS, COLS, LAYERS, OctoThreshold::new(1));
         let mut aggregator = UnivMonOctoAggregator::new(HEAP, ROWS, COLS, LAYERS, 1);
         for input in &inputs {
             let mut promoted = Vec::new();
-            worker.process(input, &mut |d| promoted.push(d));
+            worker.process(&preparer.prepare(input), &mut |d| promoted.push(d));
             for delta in promoted {
                 aggregator.apply(delta);
             }
@@ -3046,12 +3425,14 @@ mod univmon_tests {
             reference.insert(input, 1);
         }
 
+        let preparer =
+            UnivMonOctoPlan::with_threshold(ROWS, COLS, LAYERS, OctoThreshold::new(threshold));
         let mut worker =
             UnivMonOctoWorker::with_threshold(0, ROWS, COLS, LAYERS, OctoThreshold::new(threshold));
         let mut aggregator = UnivMonOctoAggregator::new(HEAP, ROWS, COLS, LAYERS, threshold);
         for input in &inputs {
             let mut promoted = Vec::new();
-            worker.process(input, &mut |d| promoted.push(d));
+            worker.process(&preparer.prepare(input), &mut |d| promoted.push(d));
             for delta in promoted {
                 aggregator.apply(delta);
             }
@@ -3081,12 +3462,14 @@ mod univmon_tests {
     fn completeness_is_withdrawn_exactly_where_the_layer_thresholds() {
         let base = 8u32;
         let inputs = stream(5_000);
+        let preparer =
+            UnivMonOctoPlan::with_threshold(ROWS, COLS, LAYERS, OctoThreshold::new(base));
         let mut worker =
             UnivMonOctoWorker::with_threshold(0, ROWS, COLS, LAYERS, OctoThreshold::new(base));
         let mut aggregator = UnivMonOctoAggregator::new(HEAP, ROWS, COLS, LAYERS, base);
         for input in &inputs {
             let mut promoted = Vec::new();
-            worker.process(input, &mut |d| promoted.push(d));
+            worker.process(&preparer.prepare(input), &mut |d| promoted.push(d));
             for delta in promoted {
                 aggregator.apply(delta);
             }
@@ -3119,15 +3502,20 @@ mod univmon_tests {
         assert!(thresholding > 0 && exact > 0, "{thresholding} / {exact}");
     }
 
+    fn plan(threshold: &OctoThreshold) -> UnivMonOctoPlan {
+        UnivMonOctoPlan::with_threshold(ROWS, COLS, LAYERS, threshold.clone())
+    }
+
     /// Drives one worker/aggregator pair over `inputs`.
     fn drive(
+        plan: &UnivMonOctoPlan,
         worker: &mut UnivMonOctoWorker,
         aggregator: &mut UnivMonOctoAggregator,
         inputs: &[DataInput<'_>],
     ) {
         for input in inputs {
             let mut promoted = Vec::new();
-            worker.process(input, &mut |d| promoted.push(d));
+            worker.process(&plan.prepare(input), &mut |d| promoted.push(d));
             for delta in promoted {
                 aggregator.apply(delta);
             }
@@ -3145,15 +3533,16 @@ mod univmon_tests {
             UnivMonOctoWorker::with_threshold(0, ROWS, COLS, LAYERS, threshold.clone());
         let mut aggregator =
             UnivMonOctoAggregator::with_threshold(HEAP, ROWS, COLS, LAYERS, threshold.clone());
+        let pl = plan(&threshold);
         let inputs = stream(4_000);
-        drive(&mut worker, &mut aggregator, &inputs);
+        drive(&pl, &mut worker, &mut aggregator, &inputs);
         assert!(
             aggregator.sketch.candidates_complete().iter().any(|c| *c),
             "at tau = 1 the aggregator sees every insert, so some layer should still be complete"
         );
 
         threshold.set(64);
-        drive(&mut worker, &mut aggregator, &inputs);
+        drive(&pl, &mut worker, &mut aggregator, &inputs);
         for (layer, complete) in aggregator.sketch.candidates_complete().iter().enumerate() {
             if univmon_layer_threshold(64, layer) > 1 {
                 assert!(
@@ -3173,11 +3562,12 @@ mod univmon_tests {
         let mut first = UnivMonOctoWorker::with_threshold(0, ROWS, COLS, LAYERS, threshold.clone());
         let mut second =
             UnivMonOctoWorker::with_threshold(0, ROWS, COLS, LAYERS, threshold.clone());
+        let pl = plan(&threshold);
         let mut aggregator =
             UnivMonOctoAggregator::with_threshold(HEAP, ROWS, COLS, LAYERS, threshold);
         let inputs = stream(200);
-        drive(&mut first, &mut aggregator, &inputs);
-        drive(&mut second, &mut aggregator, &inputs);
+        drive(&pl, &mut first, &mut aggregator, &inputs);
+        drive(&pl, &mut second, &mut aggregator, &inputs);
     }
 
     #[test]
@@ -3204,9 +3594,10 @@ mod univmon_tests {
         // And no key storage: a worker's footprint must not grow with the
         // number of distinct keys it has seen, however long the strings are.
         let before = worker.counter_bytes();
+        let preparer = UnivMonOctoPlan::new(ROWS, COLS, LAYERS);
         let keys: Vec<String> = (0..5_000).map(|i| format!("flow-{i:040}")).collect();
         for key in &keys {
-            worker.process(&DataInput::Str(key), &mut |_| {});
+            worker.process(&preparer.prepare(&DataInput::Str(key)), &mut |_| {});
         }
         assert_eq!(
             worker.counter_bytes(),

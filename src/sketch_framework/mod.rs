@@ -57,12 +57,13 @@ pub use eh_univ_optimized::{EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUni
 
 pub mod octo;
 pub use octo::{
-    CmOctoAggregator, CmOctoWorker, CmTopKOctoAggregator, CmTopKOctoWorker, CmWorkerSketch,
-    CountOctoAggregator, CountOctoWorker, CountTopKOctoAggregator, CountTopKOctoWorker,
-    CountWorkerSketch, DEFAULT_OCTO_TOP_K, DdOctoAggregator, DdOctoWorker, DdWorkerSketch,
-    HllOctoAggregator, HllOctoWorker, L2hhWorkerSketch, OctoAggregator, OctoWorker,
-    UnivMonOctoAggregator, UnivMonOctoWorker, max_hll_threshold, threshold_for_error,
-    univmon_layer_threshold,
+    CmOctoAggregator, CmOctoPlan, CmOctoWorker, CmTopKOctoAggregator, CmTopKOctoPlan,
+    CmTopKOctoWorker, CmWorkerSketch, CountOctoAggregator, CountOctoPlan, CountOctoWorker,
+    CountTopKOctoAggregator, CountTopKOctoPlan, CountTopKOctoWorker, CountWorkerSketch,
+    DEFAULT_OCTO_TOP_K, DdOctoAggregator, DdOctoPlan, DdOctoWorker, DdWorkerSketch,
+    HllOctoAggregator, HllOctoPlan, HllOctoWorker, KeyedHashes, L2hhWorkerSketch, OctoAggregator,
+    OctoPlan, OctoWorker, RowHashes, UnivMonInput, UnivMonOctoAggregator, UnivMonOctoPlan,
+    UnivMonOctoWorker, max_hll_threshold, threshold_for_error, univmon_layer_threshold,
 };
 #[cfg(feature = "octo-runtime")]
 pub use octo::{

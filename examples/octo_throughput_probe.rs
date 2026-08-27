@@ -13,8 +13,8 @@
 use std::time::Instant;
 
 use asap_sketchlib::{
-    DataInput, MAX_PROMASK, OctoAggregator, OctoThreshold, OctoWorker, UNIVMON_PROMASK, UnivMon,
-    UnivMonOctoAggregator, UnivMonOctoWorker, univmon_layer_threshold,
+    DataInput, MAX_PROMASK, OctoAggregator, OctoPlan, OctoThreshold, OctoWorker, UNIVMON_PROMASK,
+    UnivMon, UnivMonOctoAggregator, UnivMonOctoPlan, UnivMonOctoWorker, univmon_layer_threshold,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -70,20 +70,24 @@ fn main() {
     // 2^k walks down to 1 exactly at layer k. 127 is MAX_PROMASK, the widest a
     // signed one-byte worker counter holds; 64 is UNIVMON_PROMASK.
     for tau in [1u32, 2, 4, 8, 16, 32, 64, 127] {
+        let plan = UnivMonOctoPlan::with_threshold(rows, cols, layers, OctoThreshold::new(tau));
+        // Preparation runs on the dispatching thread in the real pipeline, so
+        // it is measured with the worker rather than folded into it.
+        let payloads: Vec<_> = inputs.iter().map(|i| plan.prepare(i)).collect();
         let mut worker =
             UnivMonOctoWorker::with_threshold(0, rows, cols, layers, OctoThreshold::new(tau));
         let mut emitted = 0usize;
         let started = Instant::now();
-        for input in &inputs {
-            worker.process(input, &mut |_| emitted += 1);
+        for payload in &payloads {
+            worker.process(payload, &mut |_| emitted += 1);
         }
         let worker_rate = n as f64 / started.elapsed().as_secs_f64() / 1e6;
 
         let mut replay =
             UnivMonOctoWorker::with_threshold(0, rows, cols, layers, OctoThreshold::new(tau));
         let mut deltas = Vec::with_capacity(emitted);
-        for input in &inputs {
-            replay.process(input, &mut |d| deltas.push(d));
+        for payload in &payloads {
+            replay.process(payload, &mut |d| deltas.push(d));
         }
         let mut aggregator = UnivMonOctoAggregator::new(heap, rows, cols, layers, tau);
         let started = Instant::now();
@@ -122,11 +126,12 @@ fn main() {
     // update, so the rate falls off as 1/heap_size.
     println!("\naggregator rate vs heap capacity (tau=64):");
     for capacity in [4usize, 16, 64, 256] {
+        let plan = UnivMonOctoPlan::with_threshold(rows, cols, layers, OctoThreshold::new(64));
         let mut worker =
             UnivMonOctoWorker::with_threshold(0, rows, cols, layers, OctoThreshold::new(64));
         let mut deltas = Vec::new();
         for input in &inputs {
-            worker.process(input, &mut |d| deltas.push(d));
+            worker.process(&plan.prepare(input), &mut |d| deltas.push(d));
         }
         let count = deltas.len();
         let mut aggregator = UnivMonOctoAggregator::new(capacity, rows, cols, layers, 64);

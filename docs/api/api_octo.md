@@ -329,10 +329,55 @@ by one per Equation 2: down when the prediction falls below
 `(1−α)·Q`, up when it rises above `(1+α)·Q`, unchanged in between. Set
 `min_threshold` from `threshold_for_error` to hold an accuracy floor.
 
+### Plans: nothing borrowed crosses a thread
+
+A `DataInput` may borrow, and a worker runs on another thread, so the
+borrow has to end before the hand-off. An `OctoPlan` is the object that
+makes that possible: it stays on the dispatching thread and holds the
+geometry, which both of its jobs need — building workers, and converting
+an input into the borrow-free payload that actually crosses.
+
+```rust
+pub trait OctoPlan: Send + 'static {
+    type Worker: OctoWorker;
+    fn worker(&self, worker_id: usize) -> Self::Worker;
+    fn prepare(&self, input: &DataInput<'_>) -> <Self::Worker as OctoWorker>::Payload;
+}
+```
+
+`insert` hashes for partitioning and calls `prepare`, both on the calling
+thread, so a borrowed key is finished with by the time it returns — the
+key's owner never has to outlive the runtime.
+
+What crosses follows from what the worker needs. A worker that only
+hashes gets hashes and no copy; one that must store the key gets an owned
+copy, made once at the hand-off.
+
+| Worker | Payload | Copies the key |
+| --- | --- | --- |
+| CountMin, Count | `RowHashes` (`SmallVec<[u64; 8]>`) | no — inline for any realistic row count |
+| HyperLogLog | `u64` | no |
+| DDSketch | `Option<f64>` | no |
+| CountMin/Count top-k | `KeyedHashes` | yes, unavoidably |
+| UnivMon | `UnivMonInput` | yes, unavoidably |
+
+`UnivMonInput` hashes only the layers a key actually reaches. Layer depth
+is geometric, so that is nearly always one or two.
+
+The shipped plans are `CmOctoPlan`, `CountOctoPlan`, `CmTopKOctoPlan`,
+`CountTopKOctoPlan`, `HllOctoPlan`, `DdOctoPlan` and `UnivMonOctoPlan`.
+Each takes the same dimensions its worker did, plus an optional shared
+`OctoThreshold`:
+
+```rust
+let plan = CmOctoPlan::new(4, 4096);
+let result = run_octo(&inputs, &config, plan, || CmOctoAggregator::new(4, 4096));
+```
+
 ### OctoRuntime (Streaming)
 
 ```rust
-fn new<F, PF>(config: &OctoConfig, worker_factory: F, parent_factory: PF) -> Self
+fn new<PF>(config: &OctoConfig, plan: L, parent_factory: PF) -> Self
 fn insert(&mut self, input: DataInput<'_>)
 fn insert_batch(&mut self, inputs: &[DataInput<'_>])
 fn flush(&mut self)
@@ -372,10 +417,10 @@ and `L2hhWorkerSketch` each expose `flush` directly.
 ### run_octo (Batch)
 
 ```rust
-pub fn run_octo<W, P>(
+pub fn run_octo<L, P>(
     inputs: &[DataInput<'_>],
     config: &OctoConfig,
-    worker_factory: impl Fn(usize) -> W,
+    plan: L,
     parent_factory: impl FnOnce() -> P,
 ) -> OctoResult<P>
 ```
@@ -399,19 +444,14 @@ heap, which is Algorithm 2.
 ### Sharing a threshold across the fleet
 
 ```rust
-let tau = OctoThreshold::new(31);
+let plan = CmOctoPlan::with_threshold(4, 4096, OctoThreshold::new(31));
 let config = OctoConfig {
     num_workers: 8,
-    threshold: tau.clone(),
+    threshold: plan.threshold().clone(),
     adaptive: Some(OctoAdaptiveThreshold::default()),
     ..OctoConfig::default()
 };
-let result = run_octo(
-    &inputs,
-    &config,
-    { let tau = tau.clone(); move |_| CmOctoWorker::with_threshold(4, 4096, tau.clone()) },
-    || CmOctoAggregator::new(4, 4096),
-);
+let result = run_octo(&inputs, &config, plan, || CmOctoAggregator::new(4, 4096));
 ```
 
 ## Caveats

@@ -168,10 +168,18 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     HyperLogLogImpl<Variant, Registers, H>
 {
+    /// The hash this sketch indexes `obj` by.
+    ///
+    /// Exposed so a caller can hash on its own thread and hand a worker the
+    /// result, leaving nothing borrowed to cross the boundary.
+    #[inline(always)]
+    pub fn canonical_hash(obj: &DataInput) -> u64 {
+        H::hash64_seeded(CANONICAL_HASH_SEED, obj)
+    }
+
     /// Hashes and inserts a single input value into the sketch.
     pub fn insert(&mut self, obj: &DataInput) {
-        let hashed_val = H::hash64_seeded(CANONICAL_HASH_SEED, obj);
-        self.insert_with_hash(hashed_val);
+        self.insert_with_hash(Self::canonical_hash(obj));
     }
 
     /// Hashes and inserts multiple input values into the sketch.
