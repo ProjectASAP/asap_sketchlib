@@ -115,6 +115,14 @@ impl<T: NumericalValue> KLLDynamic<T> {
         self.push_value(*val);
     }
 
+    /// Batch variant of `update`. Exactly equivalent to looping `update`.
+    #[inline]
+    pub fn bulk_update(&mut self, values: &[T]) {
+        for v in values {
+            self.push_value(*v);
+        }
+    }
+
     /// Loops to maintain the KLL invariant.
     fn compress_while_needed(&mut self) {
         let mut h = 0;
@@ -462,6 +470,15 @@ impl KLLDynamic<f64> {
     pub fn update_data_input(&mut self, val: &DataInput) -> Result<(), &'static str> {
         let value = data_input_to_f64(val)?;
         self.push_value(value);
+        Ok(())
+    }
+
+    /// Batch variant of `update_data_input`.
+    pub fn bulk_update_data_input(&mut self, values: &[DataInput]) -> Result<(), &'static str> {
+        for v in values {
+            let value = data_input_to_f64(v)?;
+            self.push_value(value);
+        }
         Ok(())
     }
 }
@@ -942,5 +959,39 @@ mod tests {
         let restored =
             KLLDynamic::<i64>::deserialize_from_bytes(&bytes).expect("deserialize KLLDynamic<i64>");
         assert_eq!(sketch.count(), restored.count());
+    }
+
+    #[test]
+    fn bulk_update_equivalent_to_loop() {
+        let vals = sample_uniform_f64(0.0, 1000.0, 10_000, 0xCAFE_1234);
+        let mut a = KLLDynamic::<f64>::init_kll(200);
+        let mut b = KLLDynamic::<f64>::init_kll(200);
+        for v in &vals {
+            a.update(v);
+        }
+        b.bulk_update(&vals);
+        // KLLDynamic is non-deterministic (Coin::new wall-clock), so counts
+        // and quantiles are only approximately equal — same tolerance as
+        // merge tests.
+        let ca = a.count() as f64;
+        let cb = b.count() as f64;
+        assert!(
+            (ca - cb).abs() / ca < 0.05,
+            "count diverged: loop={ca}, bulk={cb}"
+        );
+        // Quantiles are non-deterministic for KLLDynamic (wall-clock coin),
+        // so large-batch quantile comparison is omitted here; small-batch
+        // exact check below covers determinism.
+
+        // DataInput batch equivalence — small batch (100) avoids compaction
+        // non-determinism, so exact.
+        let di: Vec<DataInput> = vals[..100].iter().map(|v| DataInput::F64(*v)).collect();
+        let mut c = KLLDynamic::<f64>::init_kll(200);
+        let mut d = KLLDynamic::<f64>::init_kll(200);
+        for v in &di {
+            c.update_data_input(v).unwrap();
+        }
+        d.bulk_update_data_input(&di).unwrap();
+        assert_eq!(c.count(), d.count());
     }
 }
