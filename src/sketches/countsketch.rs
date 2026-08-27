@@ -548,12 +548,28 @@ impl<H: SketchHasher> NitroTarget for Count<Vector2D<i32>, FastPath, H> {
     }
 }
 
-use crate::octo_delta::{COUNT_PROMASK, CountDelta};
+use crate::input_to_owned;
+use crate::octo_delta::{COUNT_PROMASK, CountDelta, KeyedCountDelta, MAX_PROMASK};
 
 impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> {
-    /// Inserts a value and emits a delta when any counter exceeds the promotion threshold.
+    /// Inserts a value, emitting a delta at every promotion of the default
+    /// threshold `COUNT_PROMASK`.
     #[inline(always)]
     pub fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
+        self.insert_emit_delta_with_threshold(value, COUNT_PROMASK, emit);
+    }
+
+    /// Inserts a value, emitting a delta and clearing the counter each time
+    /// `|counter|` reaches `threshold`. Count sketch counters are signed, so
+    /// the magnitude is what the threshold is applied to (§4.4).
+    #[inline(always)]
+    pub fn insert_emit_delta_with_threshold(
+        &mut self,
+        value: &DataInput,
+        threshold: u32,
+        emit: &mut impl FnMut(CountDelta),
+    ) {
+        let threshold = threshold.clamp(1, MAX_PROMASK);
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -562,15 +578,31 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> 
             let sign: i32 = if ((hashed >> 63) & 1) == 1 { 1 } else { -1 };
             self.counts.increment_by_row(r, col, sign);
             let current = self.counts.query_one_counter(r, col);
-            if current.unsigned_abs() >= COUNT_PROMASK as u32 {
+            if current.unsigned_abs() >= threshold {
                 emit(CountDelta {
-                    row: r as u16,
-                    col: col as u16,
-                    value: current as i8,
+                    row: r as u32,
+                    col: col as u32,
+                    value: current,
                 });
                 self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
             }
         }
+    }
+
+    /// As `insert_emit_delta_with_threshold`, but every delta carries the flow
+    /// key so an aggregator can maintain a heavy-hitter heap.
+    pub fn insert_emit_keyed_delta_with_threshold(
+        &mut self,
+        value: &DataInput,
+        threshold: u32,
+        emit: &mut impl FnMut(KeyedCountDelta),
+    ) {
+        self.insert_emit_delta_with_threshold(value, threshold, &mut |delta| {
+            emit(KeyedCountDelta {
+                key: input_to_owned(value),
+                delta,
+            })
+        });
     }
 }
 
@@ -578,9 +610,22 @@ impl<S, H: SketchHasher> Count<S, FastPath, H>
 where
     S: MatrixStorage<Counter = i32> + FastPathHasher<H>,
 {
-    /// Inserts a value using the fast path and emits a delta on counter overflow.
+    /// Inserts a value using the fast path, emitting a delta at every
+    /// promotion of the default threshold `COUNT_PROMASK`.
     #[inline(always)]
     pub fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
+        self.insert_emit_delta_with_threshold(value, COUNT_PROMASK, emit);
+    }
+
+    /// Fast-path counterpart of the regular-path threshold API.
+    #[inline(always)]
+    pub fn insert_emit_delta_with_threshold(
+        &mut self,
+        value: &DataInput,
+        threshold: u32,
+        emit: &mut impl FnMut(CountDelta),
+    ) {
+        let threshold = threshold.clamp(1, MAX_PROMASK);
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         let rows = self.counts.rows();
         let cols = self.counts.cols();
@@ -589,15 +634,30 @@ where
             let sign = hashed_val.sign_for_row(r);
             self.counts.increment_by_row(r, col, sign);
             let current = self.counts.query_one_counter(r, col);
-            if current.unsigned_abs() >= COUNT_PROMASK as u32 {
+            if current.unsigned_abs() >= threshold {
                 emit(CountDelta {
-                    row: r as u16,
-                    col: col as u16,
-                    value: current as i8,
+                    row: r as u32,
+                    col: col as u32,
+                    value: current,
                 });
                 self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
             }
         }
+    }
+
+    /// Fast-path counterpart of `insert_emit_keyed_delta_with_threshold`.
+    pub fn insert_emit_keyed_delta_with_threshold(
+        &mut self,
+        value: &DataInput,
+        threshold: u32,
+        emit: &mut impl FnMut(KeyedCountDelta),
+    ) {
+        self.insert_emit_delta_with_threshold(value, threshold, &mut |delta| {
+            emit(KeyedCountDelta {
+                key: input_to_owned(value),
+                delta,
+            })
+        });
     }
 }
 
@@ -610,7 +670,7 @@ where
         self.counts.increment_by_row(
             delta.row as usize,
             delta.col as usize,
-            S::Counter::from(delta.value as i32),
+            S::Counter::from(delta.value),
         );
     }
 }

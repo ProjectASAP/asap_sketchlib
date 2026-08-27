@@ -12,6 +12,7 @@ use rmp_serde::{
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::octo_delta::CountDelta;
 use crate::sketches::countsketch::CountSketchCounter;
 use crate::{
     Count, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher,
@@ -910,6 +911,24 @@ mod tests {
 // file stays focused on plain Count Sketch.
 // =====================================================================
 
+/// Column and sign `CountL2HH` uses for `row`, given its 128-bit key hash.
+///
+/// Shared with the OctoSketch worker sketches so a worker and its parent can
+/// never disagree about which cell a key lands in.
+#[inline(always)]
+pub fn l2hh_cell_for_row(
+    hashed_val: u128,
+    row: usize,
+    cols: usize,
+    mask_bits: u32,
+) -> (usize, i64) {
+    let mask = (1u128 << mask_bits) - 1;
+    let hashed = (hashed_val >> (row * mask_bits as usize)) & mask;
+    let col = (hashed as usize) % cols;
+    let bit = ((hashed_val >> (127 - row)) & 1) as i64;
+    (col, -(1 - 2 * bit))
+}
+
 /// Count Sketch augmented with per-row L2 norm tracking for heavy-hitter detection.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "")]
@@ -1009,33 +1028,48 @@ impl<H: SketchHasher> CountL2HH<H> {
 
     /// Inserts with hash optimization using precomputed hash value.
     pub fn fast_insert_with_count_and_hash(&mut self, hashed_val: u128, c: i64) {
-        let mask_bits = self.counts.get_mask_bits() as usize;
-        let mask = (1u128 << mask_bits) - 1;
-        let mut shift_amount = 0;
-        let mut sign_bit_pos = 127;
-
+        let mask_bits = self.counts.get_mask_bits();
         for i in 0..self.row {
-            let hashed = (hashed_val >> shift_amount) & mask;
-            let idx = (hashed as usize) % self.col;
-            let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
-            let sign_bit = -(1 - 2 * bit);
-
+            let (idx, sign_bit) = l2hh_cell_for_row(hashed_val, i, self.col, mask_bits);
             let old_value = self.counts.query_one_counter(i, idx);
-            let new_value = old_value + sign_bit * c;
-            self.counts[i][idx] = new_value;
-
-            // Saturating i128 intermediate so extreme counts degrade
-            // gracefully instead of wrapping (matches merge-path semantics,
-            // which also clamps to [0, i64::MAX]: L2^2 can never go negative,
-            // even when a decrement follows prior saturation).
-            let old_l2 = self.l2.as_slice()[i] as i128;
-            let new_l2 = old_l2 + (new_value as i128) * (new_value as i128)
-                - (old_value as i128) * (old_value as i128);
-            self.l2[i] = new_l2.clamp(0, i64::MAX as i128) as i64;
-
-            shift_amount += mask_bits;
-            sign_bit_pos -= 1;
+            self.write_counter(i, idx, old_value + sign_bit * c);
         }
+    }
+
+    /// Writes one counter and carries the row's L2 accumulator with it.
+    ///
+    /// Saturating i128 intermediate so extreme counts degrade gracefully
+    /// instead of wrapping (matches merge-path semantics, which also clamps to
+    /// [0, i64::MAX]: L2^2 can never go negative, even when a decrement follows
+    /// prior saturation).
+    #[inline(always)]
+    fn write_counter(&mut self, row: usize, col: usize, new_value: i64) {
+        let old_value = self.counts.query_one_counter(row, col);
+        self.counts[row][col] = new_value;
+        let old_l2 = self.l2.as_slice()[row] as i128;
+        let new_l2 = old_l2 + (new_value as i128) * (new_value as i128)
+            - (old_value as i128) * (old_value as i128);
+        self.l2[row] = new_l2.clamp(0, i64::MAX as i128) as i64;
+    }
+
+    /// Seed offset this sketch hashes with; UnivMon gives each layer its own.
+    pub fn seed_idx(&self) -> usize {
+        self.seed_idx
+    }
+
+    /// Column-mask width used to slice the 128-bit hash into per-row indices.
+    pub fn mask_bits(&self) -> u32 {
+        self.counts.get_mask_bits()
+    }
+
+    /// Applies a counter delta promoted by an OctoSketch worker.
+    ///
+    /// The row's L2 accumulator is carried along exactly, so a parent fed only
+    /// deltas reports the same `get_l2` as one fed the raw stream.
+    pub fn apply_delta(&mut self, delta: CountDelta) {
+        let (row, col) = (delta.row as usize, delta.col as usize);
+        let new_value = self.counts.query_one_counter(row, col) + delta.value as i64;
+        self.write_counter(row, col, new_value);
     }
 
     /// Inserts without L2 update using precomputed hash value.

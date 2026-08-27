@@ -379,36 +379,72 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
     }
 }
 
-use crate::octo_delta::HllDelta;
+use crate::octo_delta::{HLL_PROMASK, HllDelta};
 
 impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     HyperLogLogImpl<Variant, Registers, H>
 {
     #[inline(always)]
-    /// Inserts a hashed value and emits a delta when a register increases.
+    /// Inserts a hashed value, promoting register improvements at the default
+    /// threshold `HLL_PROMASK`.
     pub fn insert_emit_delta_with_hash(
         &mut self,
         hashed_val: u64,
+        emit: &mut impl FnMut(HllDelta),
+    ) {
+        self.insert_emit_delta_with_hash_and_threshold(hashed_val, HLL_PROMASK, emit);
+    }
+
+    #[inline(always)]
+    /// Inserts a hashed value and promotes the register when the improvement is
+    /// large enough.
+    ///
+    /// Cardinality sketches merge by `max`, so a worker never clears a
+    /// register; it promotes one only when `|2^C' - 2^C| >= 2^threshold`, the
+    /// rule the paper gives for HyperLogLog (§4.4). A threshold of 0 promotes
+    /// every improvement and makes the aggregator exactly equal to a
+    /// single-threaded sketch.
+    pub fn insert_emit_delta_with_hash_and_threshold(
+        &mut self,
+        hashed_val: u64,
+        threshold: u8,
         emit: &mut impl FnMut(HllDelta),
     ) {
         let bucket_num = ((hashed_val >> Registers::REGISTER_BITS) & Registers::P_MASK) as usize;
         let leading_zero =
             ((hashed_val << Registers::PRECISION) + Registers::P_MASK).leading_zeros() as u8 + 1;
         let regs = self.registers.as_mut_slice();
-        if leading_zero > regs[bucket_num] {
+        let previous = regs[bucket_num];
+        if leading_zero > previous {
             regs[bucket_num] = leading_zero;
-            emit(HllDelta {
-                pos: bucket_num as u16,
-                value: leading_zero,
-            });
+            if pow2_saturating(leading_zero) - pow2_saturating(previous)
+                >= pow2_saturating(threshold)
+            {
+                emit(HllDelta {
+                    pos: bucket_num as u32,
+                    value: leading_zero,
+                });
+            }
         }
     }
 
     #[inline(always)]
-    /// Hashes an input, inserts it, and emits a delta when needed.
+    /// Hashes an input, inserts it, and emits a delta at the default threshold.
     pub fn insert_emit_delta(&mut self, obj: &DataInput, emit: &mut impl FnMut(HllDelta)) {
+        self.insert_emit_delta_with_threshold(obj, HLL_PROMASK, emit);
+    }
+
+    #[inline(always)]
+    /// Hashes an input, inserts it, and promotes the register when the
+    /// improvement clears `threshold`.
+    pub fn insert_emit_delta_with_threshold(
+        &mut self,
+        obj: &DataInput,
+        threshold: u8,
+        emit: &mut impl FnMut(HllDelta),
+    ) {
         let hashed_val = H::hash64_seeded(CANONICAL_HASH_SEED, obj);
-        self.insert_emit_delta_with_hash(hashed_val, emit);
+        self.insert_emit_delta_with_hash_and_threshold(hashed_val, threshold, emit);
     }
 
     /// Applies one externally emitted HLL delta.
@@ -419,6 +455,12 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
             regs[pos] = delta.value;
         }
     }
+}
+
+/// `2^exp`, saturating rather than overflowing for out-of-range registers.
+#[inline(always)]
+fn pow2_saturating(exp: u8) -> u128 {
+    if exp >= 127 { u128::MAX } else { 1u128 << exp }
 }
 
 #[cfg(test)]

@@ -20,9 +20,10 @@
 mod common;
 
 use asap_sketchlib::{
-    CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin, DataInput, ErtlMLE,
-    FastPath, HLL_PROMASK, HllDelta, HyperLogLog, HyperLogLogP12, HyperLogLogP16, RegularPath,
-    Vector2D,
+    CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin, DDSketch, DataInput,
+    DdWorkerSketch, ErtlMLE, FastPath, HLL_PROMASK, HllDelta, HyperLogLog, HyperLogLogP12,
+    HyperLogLogP16, OctoAggregator, OctoThreshold, OctoWorker, RegularPath, UnivMon,
+    UnivMonOctoAggregator, UnivMonOctoWorker, Vector2D, hash64_seeded,
 };
 use common::{FreqTruth, zipf_u64};
 use rand::SeedableRng;
@@ -104,20 +105,32 @@ fn cs_cells(sketch: &Cs) -> Vec<i32> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn cm_emit_path_leaves_the_child_identical_to_a_plain_insert() {
+fn cm_promotion_is_lossless_modulo_the_child_residual() {
     let stream = keys(20_000, 512, 9_101);
-    let (child, _) = cm_child_run(&stream, ROWS, COLS);
+    let (child, deltas) = cm_child_run(&stream, ROWS, COLS);
 
+    let mut parent = Cm::with_dimensions(ROWS, COLS);
+    for d in &deltas {
+        parent.apply_delta(*d);
+    }
     let mut reference = Cm::with_dimensions(ROWS, COLS);
     for k in &stream {
         reference.insert(&DataInput::U64(*k));
     }
 
-    assert_eq!(
-        cm_cells(&child),
-        cm_cells(&reference),
-        "emitting deltas must not perturb the child's own counters"
-    );
+    // Algorithm 1 clears the counter it promotes, so what the child still
+    // holds plus what the parent received must reconstruct a single pass.
+    let (child_cells, parent_cells, ref_cells) =
+        (cm_cells(&child), cm_cells(&parent), cm_cells(&reference));
+    for (i, ((&c, &p), &r)) in child_cells
+        .iter()
+        .zip(parent_cells.iter())
+        .zip(ref_cells.iter())
+        .enumerate()
+    {
+        assert_eq!(p + c, r, "cell {i}: promoted {p} plus residual {c} != {r}");
+        assert!(c <= MAX_CELL_RESIDUAL, "cell {i}: residual {c} un-promoted");
+    }
 }
 
 #[test]
@@ -134,30 +147,32 @@ fn cm_deltas_are_well_formed_and_carry_exactly_one_promotion() {
 }
 
 #[test]
-fn cm_parent_holds_the_promoted_multiple_of_every_child_cell() {
+fn cm_parent_holds_every_completed_promotion() {
     let stream = keys(30_000, 512, 9_103);
-    let (child, deltas) = cm_child_run(&stream, ROWS, COLS);
+    let (_, deltas) = cm_child_run(&stream, ROWS, COLS);
 
     let mut parent = Cm::with_dimensions(ROWS, COLS);
     for d in &deltas {
         parent.apply_delta(*d);
     }
 
-    let (child_cells, parent_cells) = (cm_cells(&child), cm_cells(&parent));
+    let mut reference = Cm::with_dimensions(ROWS, COLS);
+    for k in &stream {
+        reference.insert(&DataInput::U64(*k));
+    }
+
     let mask = CM_PROMASK as i32;
+    let (parent_cells, ref_cells) = (cm_cells(&parent), cm_cells(&reference));
     let mut worst_residual = 0;
-    for (i, (&c, &p)) in child_cells.iter().zip(parent_cells.iter()).enumerate() {
+    for (i, (&p, &r)) in parent_cells.iter().zip(ref_cells.iter()).enumerate() {
         assert_eq!(
             p,
-            mask * (c / mask),
-            "cell {i}: parent must hold every completed promotion of child count {c}"
+            mask * (r / mask),
+            "cell {i}: parent must hold every completed promotion of {r}"
         );
-        worst_residual = worst_residual.max(c - p);
+        worst_residual = worst_residual.max(r - p);
     }
-    assert!(
-        worst_residual <= MAX_CELL_RESIDUAL,
-        "residual {worst_residual} exceeds one promotion window"
-    );
+    assert!(worst_residual <= MAX_CELL_RESIDUAL);
     assert!(
         worst_residual > 0,
         "a skewed stream should leave some un-promoted remainder"
@@ -167,18 +182,22 @@ fn cm_parent_holds_the_promoted_multiple_of_every_child_cell() {
 #[test]
 fn cm_octo_estimate_trails_the_single_thread_estimate_by_under_one_promotion() {
     let stream = keys(40_000, 256, 9_104);
-    let (child, deltas) = cm_child_run(&stream, ROWS, COLS);
+    let (_, deltas) = cm_child_run(&stream, ROWS, COLS);
 
     let mut parent = Cm::with_dimensions(ROWS, COLS);
     for d in &deltas {
         parent.apply_delta(*d);
     }
+    let mut reference = Cm::with_dimensions(ROWS, COLS);
+    for k in &stream {
+        reference.insert(&DataInput::U64(*k));
+    }
 
-    // Per row the parent lags by `count mod mask`, so the row-wise minimum
+    // Per row the parent lags by `count mod tau`, so the row-wise minimum
     // lags by strictly less than one promotion window and never overshoots.
     for k in 0u64..256 {
         let key = DataInput::U64(k);
-        let single = child.estimate(&key);
+        let single = reference.estimate(&key);
         let octo = parent.estimate(&key);
         assert!(
             octo <= single,
@@ -212,22 +231,29 @@ fn cm_fast_path_promotes_on_the_same_schedule_as_the_regular_path() {
     // The fast path derives all columns from one hash, so its collision
     // pattern - and therefore its promotion count - differs from the regular
     // path. Only the per-cell promotion rule is shared.
-    let mask = CM_PROMASK as i32;
+    let mut reference = CmFast::with_dimensions(ROWS, COLS);
+    for k in &stream {
+        reference.insert(&DataInput::U64(*k));
+    }
     for r in 0..ROWS {
         for c in 0..COLS {
-            let child_cell = fast_child.as_storage().query_one_counter(r, c);
-            let parent_cell = fast_parent.as_storage().query_one_counter(r, c);
-            assert_eq!(parent_cell, mask * (child_cell / mask), "cell ({r},{c})");
+            assert_eq!(
+                fast_parent.as_storage().query_one_counter(r, c)
+                    + fast_child.as_storage().query_one_counter(r, c),
+                reference.as_storage().query_one_counter(r, c),
+                "cell ({r},{c})"
+            );
         }
     }
 }
 
 #[test]
-fn cm_delta_addressing_holds_at_the_widest_supported_geometry() {
-    // `CmDelta` addresses cells with u16 row/col, so 65_536 columns is the
-    // widest geometry the promotion protocol can carry (max index 65_535).
+fn cm_delta_addressing_survives_columns_past_the_old_u16_ceiling() {
+    // Regression: `CmDelta` used to address cells with u16 row/col, so any
+    // geometry wider than 65_536 columns silently wrapped deltas onto the
+    // wrong cell. The fields are u32, so a wider sketch must stay exact.
     let rows = 3;
-    let cols = u16::MAX as usize + 1;
+    let cols = 100_000;
     let stream = keys(60_000, 4_096, 9_108);
 
     let mut child = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
@@ -236,14 +262,17 @@ fn cm_delta_addressing_holds_at_the_widest_supported_geometry() {
         child.insert_emit_delta(&DataInput::U64(*k), &mut |d| parent.apply_delta(d));
     }
 
-    let mask = CM_PROMASK as i32;
+    let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
+    for k in &stream {
+        reference.insert(&DataInput::U64(*k));
+    }
     for r in 0..rows {
         for c in 0..cols {
-            let child_cell = child.as_storage().query_one_counter(r, c);
             assert_eq!(
-                parent.as_storage().query_one_counter(r, c),
-                mask * (child_cell / mask),
-                "cell ({r},{c}) mis-addressed at the u16 column boundary"
+                parent.as_storage().query_one_counter(r, c)
+                    + child.as_storage().query_one_counter(r, c),
+                reference.as_storage().query_one_counter(r, c),
+                "cell ({r},{c}) mis-addressed past the old u16 ceiling"
             );
         }
     }
@@ -299,10 +328,9 @@ fn cm_sharded_children_conserve_counts_against_a_single_pass() {
     for r in 0..ROWS {
         for c in 0..COLS {
             let promoted = parent.as_storage().query_one_counter(r, c);
-            let mask = CM_PROMASK as i32;
             let residual: i32 = children
                 .iter()
-                .map(|ch| ch.as_storage().query_one_counter(r, c) % mask)
+                .map(|ch| ch.as_storage().query_one_counter(r, c))
                 .sum();
             assert_eq!(
                 promoted + residual,
@@ -674,7 +702,8 @@ mod runtime {
     use super::*;
     use asap_sketchlib::{
         CmOctoAggregator, CmOctoWorker, CountOctoAggregator, CountOctoWorker, HllOctoAggregator,
-        HllOctoWorker, OctoAggregator, OctoConfig, OctoRuntime, OctoWorker, run_octo,
+        HllOctoWorker, OctoAggregator, OctoConfig, OctoPartition, OctoRuntime, OctoWorker,
+        run_octo,
     };
 
     fn config(num_workers: usize) -> OctoConfig {
@@ -683,6 +712,7 @@ mod runtime {
             // CI runners have fewer cores than the widest configuration here.
             pin_cores: false,
             queue_capacity: 4096,
+            ..OctoConfig::default()
         }
     }
 
@@ -700,7 +730,7 @@ mod runtime {
     }
 
     fn cm_replay(inputs: &[DataInput<'_>], workers: usize, rows: usize, cols: usize) -> Cm {
-        let mut replay = OctoCm::new(workers, rows, cols);
+        let mut replay = OctoCm::new(workers, rows, cols, Route::HashByKey);
         for (i, input) in inputs.iter().enumerate() {
             replay.insert(i, input);
         }
@@ -708,7 +738,7 @@ mod runtime {
     }
 
     fn cs_replay(inputs: &[DataInput<'_>], workers: usize, rows: usize, cols: usize) -> Cs {
-        let mut replay = OctoCs::new(workers, rows, cols);
+        let mut replay = OctoCs::new(workers, rows, cols, Route::HashByKey);
         for (i, input) in inputs.iter().enumerate() {
             replay.insert(i, input);
         }
@@ -845,6 +875,7 @@ mod runtime {
             num_workers: 0,
             pin_cores: false,
             queue_capacity: 0,
+            ..OctoConfig::default()
         };
         let got = run_octo(
             &inputs,
@@ -875,6 +906,7 @@ mod runtime {
             num_workers: 4,
             pin_cores: false,
             queue_capacity: 1,
+            ..OctoConfig::default()
         };
         let got = run_octo(
             &inputs,
@@ -983,9 +1015,13 @@ mod runtime {
         let n = 10_001u64;
         let inputs = inputs_from(&(0..n).collect::<Vec<_>>());
 
+        let cfg = OctoConfig {
+            partition: OctoPartition::RoundRobin,
+            ..config(workers)
+        };
         let result = run_octo(
             &inputs,
-            &config(workers),
+            &cfg,
             |worker_id| SumWorker { worker_id, seen: 0 },
             || SumAggregator {
                 per_worker: vec![0; workers],
@@ -1116,7 +1152,7 @@ mod runtime {
         // may reach. `run_octo` dispatches round-robin, so every key reaches
         // every worker and k' = num_workers - the worst case of that bound.
         let epsilon_n = (std::f64::consts::E / cols as f64) * truth.total() as f64;
-        let floor = 4.0 * MAX_CELL_RESIDUAL as f64;
+        let floor = TAU as f64;
         for k in 0u64..4_096 {
             let exact = truth.get(k as i64) as f64;
             let est = parent.estimate(&DataInput::U64(k)) as f64;
@@ -1179,8 +1215,7 @@ mod runtime {
 
         // Count-Sketch error is ±‖f‖₂/√cols w.h.p.; per OctoSketch Theorem 1
         // the promotion protocol adds k'·τ, and round-robin makes k' = workers.
-        let tolerance =
-            3.0 * truth.l2_norm() / (cols as f64).sqrt() + 4.0 * MAX_CELL_RESIDUAL as f64;
+        let tolerance = 3.0 * truth.l2_norm() / (cols as f64).sqrt() + TAU as f64;
         let mut violations = Vec::new();
         for (key, exact) in truth.top_k(64) {
             let est = parent.estimate(&DataInput::U64(key as u64));
@@ -1203,27 +1238,55 @@ mod runtime {
 // Replays: OctoSketch delta promotion vs. the periodic sketch-merge baseline
 // ---------------------------------------------------------------------------
 
+/// How a replay routes an input to a worker, mirroring `OctoPartition`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Route {
+    /// One flow, one worker: the paper's setting, k' = 1.
+    HashByKey,
+    /// Every flow reaches every worker: k' = k, the worst case of each bound.
+    RoundRobin,
+}
+
+impl Route {
+    fn worker(self, index: usize, key: &DataInput, workers: usize) -> usize {
+        match self {
+            Route::RoundRobin => index % workers,
+            Route::HashByKey => (hash64_seeded(0, key) % workers as u64) as usize,
+        }
+    }
+
+    /// k' in the paper's bounds: the number of workers one flow may reach.
+    fn k_prime(self, workers: usize) -> usize {
+        match self {
+            Route::RoundRobin => workers,
+            Route::HashByKey => 1,
+        }
+    }
+}
+
 /// OctoSketch: workers promote single counters once they cross τ.
 struct OctoCm {
     children: Vec<Cm>,
     parent: Cm,
+    route: Route,
     /// Counters shipped to the aggregator, the unit Theorem 2 counts in.
     sent_counters: usize,
 }
 
 impl OctoCm {
-    fn new(workers: usize, rows: usize, cols: usize) -> Self {
+    fn new(workers: usize, rows: usize, cols: usize, route: Route) -> Self {
         Self {
             children: (0..workers)
                 .map(|_| Cm::with_dimensions(rows, cols))
                 .collect(),
             parent: Cm::with_dimensions(rows, cols),
+            route,
             sent_counters: 0,
         }
     }
 
     fn insert(&mut self, index: usize, key: &DataInput) {
-        let worker = index % self.children.len();
+        let worker = self.route.worker(index, key, self.children.len());
         let mut promoted = Vec::new();
         self.children[worker].insert_emit_delta(key, &mut |d| promoted.push(d));
         self.sent_counters += promoted.len();
@@ -1242,11 +1305,12 @@ struct MergeCm {
     period: usize,
     rows: usize,
     cols: usize,
+    route: Route,
     sent_counters: usize,
 }
 
 impl MergeCm {
-    fn new(workers: usize, rows: usize, cols: usize, period: usize) -> Self {
+    fn new(workers: usize, rows: usize, cols: usize, period: usize, route: Route) -> Self {
         Self {
             children: (0..workers)
                 .map(|_| Cm::with_dimensions(rows, cols))
@@ -1256,12 +1320,13 @@ impl MergeCm {
             period,
             rows,
             cols,
+            route,
             sent_counters: 0,
         }
     }
 
     fn insert(&mut self, index: usize, key: &DataInput) {
-        let worker = index % self.children.len();
+        let worker = self.route.worker(index, key, self.children.len());
         self.children[worker].insert(key);
         self.seen[worker] += 1;
         if self.seen[worker] % self.period == 0 {
@@ -1272,26 +1337,31 @@ impl MergeCm {
     }
 }
 
-/// Count-sketch flavour of `OctoCm`; the worker zeroes the counter on promotion.
+/// Count-sketch flavour of `OctoCm`.
 struct OctoCs {
     children: Vec<Cs>,
     parent: Cs,
+    route: Route,
+    sent_counters: usize,
 }
 
 impl OctoCs {
-    fn new(workers: usize, rows: usize, cols: usize) -> Self {
+    fn new(workers: usize, rows: usize, cols: usize, route: Route) -> Self {
         Self {
             children: (0..workers)
                 .map(|_| Cs::with_dimensions(rows, cols))
                 .collect(),
             parent: Cs::with_dimensions(rows, cols),
+            route,
+            sent_counters: 0,
         }
     }
 
     fn insert(&mut self, index: usize, key: &DataInput) {
-        let worker = index % self.children.len();
+        let worker = self.route.worker(index, key, self.children.len());
         let mut promoted = Vec::new();
         self.children[worker].insert_emit_delta(key, &mut |d| promoted.push(d));
+        self.sent_counters += promoted.len();
         for d in promoted {
             self.parent.apply_delta(d);
         }
@@ -1311,55 +1381,76 @@ fn theorem_1_bounds_the_count_min_error() {
     let workers = 4usize;
     let epsilon = 2.0 / l as f64;
     let delta = 2f64.powi(-(d as i32));
-    let k_prime_tau = (workers as i32 * TAU) as f64;
 
     let stream = zipf_u64(400_000, 8_192, 1.1, 11_001);
     let mut truth = FreqTruth::default();
-    let mut octo = OctoCm::new(workers, d, l);
-    for (i, key) in stream.iter().enumerate() {
+    for key in &stream {
         truth.observe(*key as i64);
-        octo.insert(i, &DataInput::U64(*key));
     }
-
-    let l1 = truth.total() as f64;
-    assert!(
-        l1 > k_prime_tau / epsilon,
-        "theorem precondition L1 > ε⁻¹k'τ unmet: L1 = {l1}, ε⁻¹k'τ = {}",
-        k_prime_tau / epsilon
-    );
-
-    let band = epsilon * l1;
-    let mut violations = 0usize;
-    let mut worst_deficit = 0.0f64;
-    let mut worst_excess = 0.0f64;
-    let pairs = truth.pairs();
-    for (key, exact) in &pairs {
-        let est = octo.parent.estimate(&DataInput::U64(*key as u64)) as f64;
-        let exact = *exact as f64;
-        if (est - exact).abs() > band {
-            violations += 1;
+    let mut measured: Vec<(Route, f64)> = Vec::new();
+    for route in [Route::HashByKey, Route::RoundRobin] {
+        let k_prime_tau = (route.k_prime(workers) as i32 * TAU) as f64;
+        // A counter is shared by every flow that hashes into it, and each worker
+        // may hold back up to tau of its own share, so the provable per-counter
+        // gap is k*tau whatever the partition. The paper's k'*tau bounds only the
+        // queried flow's own held-back count.
+        let counter_ceiling = (workers as i32 * TAU) as f64;
+        let mut octo = OctoCm::new(workers, d, l, route);
+        for (i, key) in stream.iter().enumerate() {
+            octo.insert(i, &DataInput::U64(*key));
         }
-        worst_deficit = worst_deficit.max(exact - est);
-        worst_excess = worst_excess.max(est - exact);
+
+        let l1 = truth.total() as f64;
+        assert!(
+            l1 > k_prime_tau / epsilon,
+            "theorem precondition L1 > ε⁻¹k'τ unmet: L1 = {l1}, ε⁻¹k'τ = {}",
+            k_prime_tau / epsilon
+        );
+
+        let band = epsilon * l1;
+        let mut violations = 0usize;
+        let mut worst_deficit = 0.0f64;
+        let mut worst_excess = 0.0f64;
+        let pairs = truth.pairs();
+        for (key, exact) in &pairs {
+            let est = octo.parent.estimate(&DataInput::U64(*key as u64)) as f64;
+            let exact = *exact as f64;
+            if (est - exact).abs() > band {
+                violations += 1;
+            }
+            worst_deficit = worst_deficit.max(exact - est);
+            worst_excess = worst_excess.max(est - exact);
+        }
+
+        // The proof's deterministic half: f̂ ≤ f̂' and |f̂' − f̂| < k'τ, and Count-Min
+        // never underestimates, so f(e) − k'τ < f̂(e) for *every* key, not merely
+        // with probability 1 − δ.
+        assert!(
+            worst_deficit < counter_ceiling,
+            "worst underestimate {worst_deficit} reached the k*tau = {counter_ceiling} ceiling"
+        );
+        measured.push((route, worst_deficit));
+
+        let rate = violations as f64 / pairs.len() as f64;
+        println!(
+            "Theorem 1 [{route:?}]: eps={epsilon:.2e} delta={delta:.4} eps*L1={band:.1} \
+         k'tau={k_prime_tau} violations={rate:.5} worst_deficit={worst_deficit} \
+         worst_excess={worst_excess}"
+        );
+        assert!(
+            rate < delta,
+            "{route:?}: violation rate {rate:.5} exceeded δ = {delta:.5} over {} keys",
+            pairs.len()
+        );
     }
 
-    // The proof's deterministic half: f̂ ≤ f̂' and |f̂' − f̂| < k'τ, and Count-Min
-    // never underestimates, so f(e) − k'τ < f̂(e) for *every* key, not merely
-    // with probability 1 − δ.
+    // Hash partitioning keeps a flow's whole count on one worker, so it should
+    // never trail further behind than round-robin does.
+    let hashed = measured[0].1;
+    let round_robin = measured[1].1;
     assert!(
-        worst_deficit < k_prime_tau,
-        "worst underestimate {worst_deficit} reached the k'τ = {k_prime_tau} ceiling"
-    );
-
-    let rate = violations as f64 / pairs.len() as f64;
-    println!(
-        "Theorem 1: eps={epsilon:.2e} delta={delta:.4} eps*L1={band:.1} k'tau={k_prime_tau} \
-         violations={rate:.5} worst_deficit={worst_deficit} worst_excess={worst_excess}"
-    );
-    assert!(
-        rate < delta,
-        "violation rate {rate:.5} exceeded δ = {delta:.5} over {} keys",
-        pairs.len()
+        hashed <= round_robin,
+        "hash partitioning lagged more than round-robin: {hashed} vs {round_robin}"
     );
 }
 
@@ -1380,53 +1471,68 @@ fn theorem_3_bounds_the_count_sketch_error() {
     let workers = 4usize;
     let epsilon = (8.0 / l as f64).sqrt();
     let delta = 2f64.powi(-(d as i32));
-    let k_prime_tau = (workers as i32 * TAU) as f64;
 
     let stream = zipf_u64(400_000, 8_192, 1.1, 11_003);
     let mut truth = FreqTruth::default();
-    let mut octo = OctoCs::new(workers, d, l);
     let mut single_core = Cs::with_dimensions(d, l);
-    for (i, key) in stream.iter().enumerate() {
+    for key in &stream {
         truth.observe(*key as i64);
-        octo.insert(i, &DataInput::U64(*key));
         single_core.insert(&DataInput::U64(*key));
     }
-
-    let l2 = truth.l2_norm();
-    assert!(
-        l2 > 2.0 * k_prime_tau / epsilon,
-        "theorem precondition L2 > 2ε⁻¹k'τ unmet: L2 = {l2}, 2ε⁻¹k'τ = {}",
-        2.0 * k_prime_tau / epsilon
-    );
-
-    let band = epsilon * l2;
-    let mut violations = 0usize;
-    let mut worst_octo_gap = 0.0f64;
-    let pairs = truth.pairs();
-    for (key, exact) in &pairs {
-        let input = DataInput::U64(*key as u64);
-        let est = octo.parent.estimate(&input);
-        if (est - *exact as f64).abs() > band {
-            violations += 1;
+    let mut measured: Vec<(Route, f64)> = Vec::new();
+    for route in [Route::HashByKey, Route::RoundRobin] {
+        let k_prime_tau = (route.k_prime(workers) as i32 * TAU) as f64;
+        // See Theorem 1: the per-counter gap ceiling is k*tau, not k'*tau.
+        let counter_ceiling = (workers as i32 * TAU) as f64;
+        let mut octo = OctoCs::new(workers, d, l, route);
+        for (i, key) in stream.iter().enumerate() {
+            octo.insert(i, &DataInput::U64(*key));
         }
-        // The proof's deterministic half: |f̂'(e) − f̂(e)| < k'τ.
-        worst_octo_gap = worst_octo_gap.max((single_core.estimate(&input) - est).abs());
+
+        let l2 = truth.l2_norm();
+        assert!(
+            l2 > 2.0 * k_prime_tau / epsilon,
+            "theorem precondition L2 > 2ε⁻¹k'τ unmet: L2 = {l2}, 2ε⁻¹k'τ = {}",
+            2.0 * k_prime_tau / epsilon
+        );
+
+        let band = epsilon * l2;
+        let mut violations = 0usize;
+        let mut worst_octo_gap = 0.0f64;
+        let pairs = truth.pairs();
+        for (key, exact) in &pairs {
+            let input = DataInput::U64(*key as u64);
+            let est = octo.parent.estimate(&input);
+            if (est - *exact as f64).abs() > band {
+                violations += 1;
+            }
+            // The proof's deterministic half: |f̂'(e) − f̂(e)| < k'τ.
+            worst_octo_gap = worst_octo_gap.max((single_core.estimate(&input) - est).abs());
+        }
+
+        assert!(
+            worst_octo_gap < counter_ceiling,
+            "gap to the single-core sketch {worst_octo_gap} reached the k*tau = {counter_ceiling} ceiling"
+        );
+        measured.push((route, worst_octo_gap));
+
+        let rate = violations as f64 / pairs.len() as f64;
+        println!(
+            "Theorem 3 [{route:?}]: eps={epsilon:.4} delta={delta:.4} eps*L2={band:.1} \
+         k'tau={k_prime_tau} violations={rate:.5} worst_gap_to_single_core={worst_octo_gap}"
+        );
+        assert!(
+            rate < delta,
+            "{route:?}: violation rate {rate:.5} exceeded δ = {delta:.5} over {} keys",
+            pairs.len()
+        );
     }
 
+    let hashed = measured[0].1;
+    let round_robin = measured[1].1;
     assert!(
-        worst_octo_gap < k_prime_tau,
-        "gap to the single-core sketch {worst_octo_gap} reached the k'τ = {k_prime_tau} ceiling"
-    );
-
-    let rate = violations as f64 / pairs.len() as f64;
-    println!(
-        "Theorem 3: eps={epsilon:.4} delta={delta:.4} eps*L2={band:.1} k'tau={k_prime_tau} \
-         violations={rate:.5} worst_gap_to_single_core={worst_octo_gap}"
-    );
-    assert!(
-        rate < delta,
-        "violation rate {rate:.5} exceeded δ = {delta:.5} over {} keys",
-        pairs.len()
+        hashed <= round_robin,
+        "hash partitioning lagged more than round-robin: {hashed} vs {round_robin}"
     );
 }
 
@@ -1494,12 +1600,15 @@ fn theorem_2_delta_promotion_sends_l_times_fewer_counters_for_the_same_goal() {
     let d = 3usize;
     let l = 1_024usize;
     let workers = 4usize;
+    // A counter is shared across workers whatever the partition, so the goal a
+    // shipped tau solves for is k*tau, and sketch-merge must match it by
+    // shipping every tau items per worker.
     let accuracy_goal = (workers as i32 * TAU) as f64;
     let merge_period = TAU as usize;
 
     let stream = zipf_u64(40_000, 2_048, 1.1, 11_005);
-    let mut octo = OctoCm::new(workers, d, l);
-    let mut merge = MergeCm::new(workers, d, l, merge_period);
+    let mut octo = OctoCm::new(workers, d, l, Route::HashByKey);
+    let mut merge = MergeCm::new(workers, d, l, merge_period, Route::HashByKey);
     let mut single_core = Cm::with_dimensions(d, l);
     for (i, key) in stream.iter().enumerate() {
         let input = DataInput::U64(*key);
@@ -1576,22 +1685,26 @@ fn delta_promotion_beats_sketch_merge_on_online_accuracy() {
     let watched: Vec<i64> = final_truth.top_k(32).into_iter().map(|(k, _)| k).collect();
 
     // Sizing pass: what does delta promotion spend over this stream?
-    let mut probe = OctoCm::new(workers, d, l);
+    let mut probe = OctoCm::new(workers, d, l, Route::HashByKey);
     for (i, key) in stream.iter().enumerate() {
         probe.insert(i, &DataInput::U64(*key));
     }
     let mut merges: Vec<MergeCm> = budget_multiples
         .iter()
         .map(|mult| {
-            let merges_per_worker = ((mult * probe.sent_counters) / (d * l))
-                .div_ceil(workers)
-                .max(1);
-            MergeCm::new(workers, d, l, (n / workers) / merges_per_worker)
+            let merges_per_worker = ((mult * probe.sent_counters) as f64 / (d * l * workers) as f64)
+                .ceil()
+                .max(1.0) as usize;
+            // Divide by one more than the merge count so boundaries land
+            // mid-stream: a period equal to a worker's whole share would make
+            // it a coin flip whether that worker ever merges at all.
+            let period = ((n / workers) / (merges_per_worker + 1)).max(1);
+            MergeCm::new(workers, d, l, period, Route::HashByKey)
         })
         .collect();
 
     let mut truth = FreqTruth::default();
-    let mut octo = OctoCm::new(workers, d, l);
+    let mut octo = OctoCm::new(workers, d, l, Route::HashByKey);
     let mut single_core = Cm::with_dimensions(d, l);
     let mut octo_error = 0.0f64;
     let mut ideal_error = 0.0f64;
@@ -1644,8 +1757,8 @@ fn delta_promotion_beats_sketch_merge_on_online_accuracy() {
             merge.sent_counters > octo.sent_counters,
             "the baseline must not be starved of budget for this comparison to mean anything"
         );
-        // Empirical and deliberately loose: measured 9.3x at parity - within
-        // noise of the paper's 9.32x for Count-Min - and 2.8x at 10x budget.
+        // Empirical and deliberately loose: measured 14.0x at parity and 5.4x
+        // when the baseline is handed ten times the budget.
         assert!(
             merge_mae > octo_mae * 2.0,
             "delta promotion should stay well ahead at {mult}x budget: \
@@ -1655,13 +1768,13 @@ fn delta_promotion_beats_sketch_merge_on_online_accuracy() {
 
     let parity_mae = merge_error[0] / samples as f64;
     assert!(
-        parity_mae > octo_mae * 5.0,
+        parity_mae > octo_mae * 8.0,
         "at equal communication budget the gap should be large: \
          octo={octo_mae:.1} vs merge={parity_mae:.1}"
     );
     assert!(
-        octo_mae <= ideal_mae + (workers as i32 * TAU) as f64,
-        "octo online error {octo_mae:.1} drifted more than k'τ from ideal {ideal_mae:.1}"
+        octo_mae <= ideal_mae + TAU as f64,
+        "octo online error {octo_mae:.1} drifted more than tau from ideal {ideal_mae:.1}"
     );
 }
 
@@ -1689,10 +1802,10 @@ fn sketch_merge_staleness_grows_with_the_merge_period_while_promotion_does_not()
 
     let periods = [500usize, 1_000, 2_000, 4_000];
     let mut truth = FreqTruth::default();
-    let mut octo = OctoCm::new(workers, d, l);
+    let mut octo = OctoCm::new(workers, d, l, Route::HashByKey);
     let mut merges: Vec<MergeCm> = periods
         .iter()
-        .map(|p| MergeCm::new(workers, d, l, *p))
+        .map(|p| MergeCm::new(workers, d, l, *p, Route::HashByKey))
         .collect();
     let mut octo_deficit = 0.0f64;
     let mut merge_deficit = vec![0.0f64; periods.len()];
@@ -1727,8 +1840,8 @@ fn sketch_merge_staleness_grows_with_the_merge_period_while_promotion_does_not()
     );
 
     assert!(
-        octo_mean <= (workers as i32 * TAU) as f64,
-        "octo mean deficit {octo_mean:.1} exceeded k'τ"
+        octo_mean <= TAU as f64,
+        "octo mean deficit {octo_mean:.1} exceeded tau"
     );
     for (window, pair) in merge_means.windows(2).zip(periods.windows(2)) {
         assert!(
@@ -1744,5 +1857,705 @@ fn sketch_merge_staleness_grows_with_the_merge_period_while_promotion_does_not()
     assert!(
         merge_means[periods.len() - 1] > octo_mean * 3.0,
         "expected the widest merge period to be far staler than delta promotion"
+    );
+}
+
+// ===========================================================================
+// Online accuracy per sketch: delta promotion vs periodic sketch-merge
+// ===========================================================================
+//
+// Correctness is settled by the conservation identities above. What these
+// measure is the paper's actual claim: the error a query sees *while the
+// stream is still running*. Every comparison hands sketch-merge at least as
+// much communication as delta promotion spent, then queries both at points
+// that do not line up with a merge boundary.
+
+/// One row of the comparison: mean error at query time under each scheme.
+struct OnlineComparison {
+    ideal: f64,
+    octo: f64,
+    merge_at_parity: f64,
+    merge_at_ten_x: f64,
+    octo_counters: usize,
+    parity_counters: usize,
+    ten_x_counters: usize,
+}
+
+impl OnlineComparison {
+    fn report(&self, label: &str) {
+        println!(
+            "{label:<10} ideal={:.4} octo={:.4} merge@{:.1}x={:.4} merge@{:.1}x={:.4} \
+             (octo sent {} counters)",
+            self.ideal,
+            self.octo,
+            self.parity_counters as f64 / self.octo_counters.max(1) as f64,
+            self.merge_at_parity,
+            self.ten_x_counters as f64 / self.octo_counters.max(1) as f64,
+            self.merge_at_ten_x,
+            self.octo_counters,
+        );
+    }
+
+    /// Both baselines must be at least as expensive as the scheme they lose to.
+    fn assert_baselines_were_funded(&self) {
+        assert!(
+            self.parity_counters >= self.octo_counters,
+            "parity baseline was starved: {} < {}",
+            self.parity_counters,
+            self.octo_counters
+        );
+        assert!(self.ten_x_counters > self.parity_counters);
+    }
+}
+
+/// Merge periods that spend roughly `1x` and `10x` the given counter budget.
+fn merge_periods(
+    octo_counters: usize,
+    sketch_counters: usize,
+    per_worker: usize,
+) -> (usize, usize) {
+    let period_for = |budget: usize| {
+        let merges = (budget as f64 / sketch_counters as f64).ceil().max(1.0) as usize;
+        (per_worker / (merges + 1)).max(1)
+    };
+    (period_for(octo_counters), period_for(10 * octo_counters))
+}
+
+// --------------------------------------------------------------- Count sketch
+
+struct MergeCs {
+    children: Vec<Cs>,
+    seen: Vec<usize>,
+    parent: Cs,
+    period: usize,
+    rows: usize,
+    cols: usize,
+    sent_counters: usize,
+}
+
+impl MergeCs {
+    fn new(workers: usize, rows: usize, cols: usize, period: usize) -> Self {
+        Self {
+            children: (0..workers)
+                .map(|_| Cs::with_dimensions(rows, cols))
+                .collect(),
+            seen: vec![0; workers],
+            parent: Cs::with_dimensions(rows, cols),
+            period,
+            rows,
+            cols,
+            sent_counters: 0,
+        }
+    }
+
+    fn insert(&mut self, index: usize, key: &DataInput) {
+        let worker = Route::HashByKey.worker(index, key, self.children.len());
+        self.children[worker].insert(key);
+        self.seen[worker] += 1;
+        if self.seen[worker] % self.period == 0 {
+            self.parent.merge(&self.children[worker]);
+            self.children[worker] = Cs::with_dimensions(self.rows, self.cols);
+            self.sent_counters += self.rows * self.cols;
+        }
+    }
+}
+
+#[test]
+fn count_sketch_online_accuracy_beats_sketch_merge() {
+    let (d, l, workers, n) = (5usize, 1_024usize, 4usize, 60_000usize);
+    let stream = zipf_u64(n, 4_096, 1.1, 12_001);
+    let mut truth = FreqTruth::default();
+    for key in &stream {
+        truth.observe(*key as i64);
+    }
+    let watched: Vec<i64> = truth.top_k(32).into_iter().map(|(k, _)| k).collect();
+
+    // Sizing pass: what does delta promotion spend over this stream?
+    let mut probe = OctoCs::new(workers, d, l, Route::HashByKey);
+    for (i, key) in stream.iter().enumerate() {
+        probe.insert(i, &DataInput::U64(*key));
+    }
+    let octo_counters = probe.sent_counters;
+    let (parity_period, ten_x_period) = merge_periods(octo_counters, d * l, n / workers);
+
+    let mut running = FreqTruth::default();
+    let mut octo = OctoCs::new(workers, d, l, Route::HashByKey);
+    let mut ideal = Cs::with_dimensions(d, l);
+    let mut parity = MergeCs::new(workers, d, l, parity_period);
+    let mut ten_x = MergeCs::new(workers, d, l, ten_x_period);
+    let (mut e_ideal, mut e_octo, mut e_parity, mut e_ten) = (0.0, 0.0, 0.0, 0.0);
+    let mut samples = 0usize;
+    let stride = n / 8;
+
+    for (i, key) in stream.iter().enumerate() {
+        let input = DataInput::U64(*key);
+        running.observe(*key as i64);
+        octo.insert(i, &input);
+        ideal.insert(&input);
+        parity.insert(i, &input);
+        ten_x.insert(i, &input);
+        if i > 0 && i % stride == stride / 3 {
+            for probe_key in &watched {
+                let probe_input = DataInput::U64(*probe_key as u64);
+                let exact = running.get(*probe_key) as f64;
+                e_ideal += (ideal.estimate(&probe_input) - exact).abs();
+                e_octo += (octo.parent.estimate(&probe_input) - exact).abs();
+                e_parity += (parity.parent.estimate(&probe_input) - exact).abs();
+                e_ten += (ten_x.parent.estimate(&probe_input) - exact).abs();
+                samples += 1;
+            }
+        }
+    }
+
+    let scale = samples as f64;
+    let comparison = OnlineComparison {
+        ideal: e_ideal / scale,
+        octo: e_octo / scale,
+        merge_at_parity: e_parity / scale,
+        merge_at_ten_x: e_ten / scale,
+        octo_counters,
+        parity_counters: parity.sent_counters,
+        ten_x_counters: ten_x.sent_counters,
+    };
+    comparison.report("Count");
+    comparison.assert_baselines_were_funded();
+    assert!(comparison.octo < comparison.merge_at_parity / 2.0);
+    assert!(comparison.octo < comparison.merge_at_ten_x);
+}
+
+// ---------------------------------------------------------------- HyperLogLog
+
+struct OctoHll {
+    children: Vec<HyperLogLog<Classic>>,
+    parent: HyperLogLog<Classic>,
+    sent_counters: usize,
+}
+
+impl OctoHll {
+    fn new(workers: usize) -> Self {
+        Self {
+            children: (0..workers).map(|_| HyperLogLog::default()).collect(),
+            parent: HyperLogLog::default(),
+            sent_counters: 0,
+        }
+    }
+
+    fn insert(&mut self, index: usize, key: &DataInput) {
+        let worker = Route::HashByKey.worker(index, key, self.children.len());
+        let mut promoted = Vec::new();
+        self.children[worker].insert_emit_delta(key, &mut |d| promoted.push(d));
+        self.sent_counters += promoted.len();
+        for d in promoted {
+            self.parent.apply_delta(d);
+        }
+    }
+}
+
+struct MergeHll {
+    children: Vec<HyperLogLog<Classic>>,
+    seen: Vec<usize>,
+    parent: HyperLogLog<Classic>,
+    period: usize,
+    sent_counters: usize,
+}
+
+impl MergeHll {
+    fn new(workers: usize, period: usize) -> Self {
+        Self {
+            children: (0..workers).map(|_| HyperLogLog::default()).collect(),
+            seen: vec![0; workers],
+            parent: HyperLogLog::default(),
+            period,
+            sent_counters: 0,
+        }
+    }
+
+    fn insert(&mut self, index: usize, key: &DataInput) {
+        let worker = Route::HashByKey.worker(index, key, self.children.len());
+        self.children[worker].insert(key);
+        self.seen[worker] += 1;
+        if self.seen[worker] % self.period == 0 {
+            // A max-merge does not clear the worker: its registers stay valid.
+            self.parent.merge(&self.children[worker]);
+            self.sent_counters += self.children[worker].registers_as_slice().len();
+        }
+    }
+}
+
+#[test]
+fn hyperloglog_online_accuracy_beats_sketch_merge() {
+    let (workers, n) = (4usize, 200_000usize);
+    let stream: Vec<u64> = (0..n as u64).collect();
+    let registers = HyperLogLog::<Classic>::default().registers_as_slice().len();
+
+    let mut probe = OctoHll::new(workers);
+    for (i, key) in stream.iter().enumerate() {
+        probe.insert(i, &DataInput::U64(*key));
+    }
+    let octo_counters = probe.sent_counters;
+    let (parity_period, ten_x_period) = merge_periods(octo_counters, registers, n / workers);
+
+    let mut octo = OctoHll::new(workers);
+    let mut ideal = HyperLogLog::<Classic>::default();
+    let mut parity = MergeHll::new(workers, parity_period);
+    let mut ten_x = MergeHll::new(workers, ten_x_period);
+    let (mut e_ideal, mut e_octo, mut e_parity, mut e_ten) = (0.0, 0.0, 0.0, 0.0);
+    let mut samples = 0usize;
+    let stride = n / 8;
+
+    for (i, key) in stream.iter().enumerate() {
+        let input = DataInput::U64(*key);
+        octo.insert(i, &input);
+        ideal.insert(&input);
+        parity.insert(i, &input);
+        ten_x.insert(i, &input);
+        if i > 0 && i % stride == stride / 3 {
+            // Every key so far is distinct, so the exact cardinality is i + 1.
+            let exact = (i + 1) as f64;
+            let rel = |estimate: usize| (estimate as f64 - exact).abs() / exact;
+            e_ideal += rel(ideal.estimate());
+            e_octo += rel(octo.parent.estimate());
+            e_parity += rel(parity.parent.estimate());
+            e_ten += rel(ten_x.parent.estimate());
+            samples += 1;
+        }
+    }
+
+    let scale = samples as f64;
+    let comparison = OnlineComparison {
+        ideal: e_ideal / scale,
+        octo: e_octo / scale,
+        merge_at_parity: e_parity / scale,
+        merge_at_ten_x: e_ten / scale,
+        octo_counters,
+        parity_counters: parity.sent_counters,
+        ten_x_counters: ten_x.sent_counters,
+    };
+    comparison.report("HLL");
+    comparison.assert_baselines_were_funded();
+    // Max-register promotion loses nothing, so the parent is the ideal sketch
+    // at every query point - not merely close to it.
+    assert_eq!(
+        comparison.octo, comparison.ideal,
+        "delta promotion must leave HLL exactly ideal online"
+    );
+    assert!(comparison.octo < comparison.merge_at_parity);
+    assert!(comparison.octo < comparison.merge_at_ten_x);
+}
+
+// -------------------------------------------------------------------- DDSketch
+
+struct OctoDd {
+    children: Vec<DdWorkerSketch>,
+    parent: DDSketch,
+    sent_counters: usize,
+}
+
+impl OctoDd {
+    fn new(workers: usize, alpha: f64) -> Self {
+        Self {
+            children: (0..workers).map(|_| DdWorkerSketch::new(alpha)).collect(),
+            parent: DDSketch::new(alpha),
+            sent_counters: 0,
+        }
+    }
+
+    fn insert(&mut self, index: usize, value: f64, threshold: u32) {
+        let key = DataInput::F64(value);
+        let worker = Route::HashByKey.worker(index, &key, self.children.len());
+        let mut promoted = Vec::new();
+        self.children[worker].add_emit_delta(value, threshold, &mut |d| promoted.push(d));
+        self.sent_counters += promoted.len();
+        for d in promoted {
+            self.parent.apply_delta(d);
+        }
+    }
+}
+
+struct MergeDd {
+    children: Vec<DDSketch>,
+    seen: Vec<usize>,
+    parent: DDSketch,
+    period: usize,
+    alpha: f64,
+    sent_counters: usize,
+}
+
+impl MergeDd {
+    fn new(workers: usize, alpha: f64, period: usize) -> Self {
+        Self {
+            children: (0..workers).map(|_| DDSketch::new(alpha)).collect(),
+            seen: vec![0; workers],
+            parent: DDSketch::new(alpha),
+            period,
+            alpha,
+            sent_counters: 0,
+        }
+    }
+
+    fn insert(&mut self, index: usize, value: f64) {
+        let worker = Route::HashByKey.worker(index, &DataInput::F64(value), self.children.len());
+        self.children[worker].add(&value);
+        self.seen[worker] += 1;
+        if self.seen[worker] % self.period == 0 {
+            self.sent_counters += self.children[worker].store_counts().len();
+            self.parent
+                .merge(&self.children[worker])
+                .expect("same alpha");
+            self.children[worker] = DDSketch::new(self.alpha);
+        }
+    }
+}
+
+/// Runs the DDSketch comparison over one value stream at one threshold.
+fn ddsketch_online_comparison(
+    label: &str,
+    values: &[f64],
+    alpha: f64,
+    threshold: u32,
+) -> OnlineComparison {
+    let workers = 4usize;
+    let n = values.len();
+
+    let mut sizing = DDSketch::new(alpha);
+    for v in values {
+        sizing.add(v);
+    }
+    let sketch_counters = sizing.store_counts().len();
+
+    let mut probe = OctoDd::new(workers, alpha);
+    for (i, v) in values.iter().enumerate() {
+        probe.insert(i, *v, threshold);
+    }
+    let octo_counters = probe.sent_counters;
+    let (parity_period, ten_x_period) = merge_periods(octo_counters, sketch_counters, n / workers);
+
+    let mut octo = OctoDd::new(workers, alpha);
+    let mut ideal = DDSketch::new(alpha);
+    let mut parity = MergeDd::new(workers, alpha, parity_period);
+    let mut ten_x = MergeDd::new(workers, alpha, ten_x_period);
+    let mut seen: Vec<f64> = Vec::with_capacity(n);
+    let (mut e_ideal, mut e_octo, mut e_parity, mut e_ten) = (0.0, 0.0, 0.0, 0.0);
+    let mut samples = 0usize;
+    let stride = n / 8;
+
+    for (i, v) in values.iter().enumerate() {
+        octo.insert(i, *v, threshold);
+        ideal.add(v);
+        parity.insert(i, *v);
+        ten_x.insert(i, *v);
+        seen.push(*v);
+        if i > 0 && i % stride == stride / 3 {
+            let mut sorted = seen.clone();
+            sorted.sort_by(f64::total_cmp);
+            for q in [0.1, 0.5, 0.9] {
+                let exact = sorted[((sorted.len() - 1) as f64 * q) as usize];
+                let rel = |sketch: &DDSketch| {
+                    sketch
+                        .get_value_at_quantile(q)
+                        .map(|got| (got - exact).abs() / exact)
+                        .unwrap_or(1.0)
+                };
+                e_ideal += rel(&ideal);
+                e_octo += rel(&octo.parent);
+                e_parity += rel(&parity.parent);
+                e_ten += rel(&ten_x.parent);
+                samples += 1;
+            }
+        }
+    }
+
+    let scale = samples as f64;
+    let comparison = OnlineComparison {
+        ideal: e_ideal / scale,
+        octo: e_octo / scale,
+        merge_at_parity: e_parity / scale,
+        merge_at_ten_x: e_ten / scale,
+        octo_counters,
+        parity_counters: parity.sent_counters,
+        ten_x_counters: ten_x.sent_counters,
+    };
+    comparison.report(label);
+    comparison
+}
+
+#[test]
+fn ddsketch_delta_promotion_trades_quantile_accuracy_for_messages() {
+    // DDSketch is the one integrated sketch where delta promotion does not pay
+    // off, and this pins the reason. A Count-Min counter that lags is still
+    // counted, just low; a DDSketch bucket that never reaches the threshold is
+    // absent from the parent entirely, and a quantile is exactly a statement
+    // about where the mass sits. Sparse buckets are also the common case: a
+    // logarithmic histogram over a skewed stream has many of them.
+    let (n, alpha) = (200_000usize, 0.01f64);
+    let values = common::exponential_f64(n, 0.05, 12_101)
+        .into_iter()
+        .map(|v| v.max(1e-3))
+        .collect::<Vec<f64>>();
+
+    let mut sweep: Vec<(u32, f64, usize)> = Vec::new();
+    for threshold in [1u32, 2, 4, 8] {
+        let result =
+            ddsketch_online_comparison(&format!("DDS/tau={threshold}"), &values, alpha, threshold);
+        sweep.push((threshold, result.octo, result.octo_counters));
+    }
+
+    // A threshold of 1 promotes every sample, so the parent is the ideal
+    // sketch - at the cost of one message per sample.
+    let (_, exact_error, exact_counters) = sweep[0];
+    assert_eq!(exact_counters, n, "tau=1 must promote every sample");
+    let ideal_error = ddsketch_online_comparison("DDS/ideal-ref", &values, alpha, 1).ideal;
+    assert!(
+        (exact_error - ideal_error).abs() < 1e-12,
+        "tau=1 must leave the parent exactly ideal: {exact_error} vs {ideal_error}"
+    );
+
+    // Above that, every step up buys fewer messages and costs accuracy.
+    for pair in sweep.windows(2) {
+        let (lo_tau, lo_error, lo_counters) = pair[0];
+        let (hi_tau, hi_error, hi_counters) = pair[1];
+        assert!(
+            hi_counters < lo_counters,
+            "tau {hi_tau} should send fewer counters than {lo_tau}: {hi_counters} vs {lo_counters}"
+        );
+        assert!(
+            hi_error >= lo_error,
+            "tau {hi_tau} should not be more accurate than {lo_tau}: {hi_error} vs {lo_error}"
+        );
+    }
+}
+
+// --------------------------------------------------------------------- UnivMon
+
+struct OctoUniv {
+    workers: Vec<UnivMonOctoWorker>,
+    aggregator: UnivMonOctoAggregator,
+    sent_counters: usize,
+}
+
+impl OctoUniv {
+    fn new(workers: usize, heap: usize, rows: usize, cols: usize, layers: usize, tau: u32) -> Self {
+        let threshold = OctoThreshold::new(tau);
+        Self {
+            workers: (0..workers)
+                .map(|id| {
+                    UnivMonOctoWorker::with_threshold(id, rows, cols, layers, threshold.clone())
+                })
+                .collect(),
+            aggregator: UnivMonOctoAggregator::new(heap, rows, cols, layers, tau),
+            sent_counters: 0,
+        }
+    }
+
+    fn insert(&mut self, index: usize, key: &DataInput) {
+        let worker = Route::HashByKey.worker(index, key, self.workers.len());
+        let mut promoted = Vec::new();
+        self.workers[worker].process(key, &mut |d| promoted.push(d));
+        self.sent_counters += promoted.len();
+        for delta in promoted {
+            self.aggregator.apply(delta);
+        }
+    }
+}
+
+struct MergeUniv {
+    children: Vec<UnivMon>,
+    seen: Vec<usize>,
+    parent: UnivMon,
+    period: usize,
+    dims: (usize, usize, usize, usize),
+    sent_counters: usize,
+}
+
+impl MergeUniv {
+    fn new(
+        workers: usize,
+        heap: usize,
+        rows: usize,
+        cols: usize,
+        layers: usize,
+        period: usize,
+    ) -> Self {
+        Self {
+            children: (0..workers)
+                .map(|_| UnivMon::init_univmon(heap, rows, cols, layers))
+                .collect(),
+            seen: vec![0; workers],
+            parent: UnivMon::init_univmon(heap, rows, cols, layers),
+            period,
+            dims: (heap, rows, cols, layers),
+            sent_counters: 0,
+        }
+    }
+
+    fn insert(&mut self, index: usize, key: &DataInput) {
+        let worker = Route::HashByKey.worker(index, key, self.children.len());
+        self.children[worker].insert(key, 1);
+        self.seen[worker] += 1;
+        if self.seen[worker] % self.period == 0 {
+            let (heap, rows, cols, layers) = self.dims;
+            self.parent.merge(&self.children[worker]);
+            self.children[worker] = UnivMon::init_univmon(heap, rows, cols, layers);
+            self.sent_counters += rows * cols * layers;
+        }
+    }
+}
+
+#[test]
+fn univmon_online_accuracy_beats_sketch_merge() {
+    // UnivMon's recursive estimator needs about log2(distinct) sampling layers
+    // before the deepest sampled substream fits the heap. This stream carries
+    // ~3.5k distinct keys, so 12 layers; too few and the sketch's own error
+    // swamps anything a distribution scheme does to it.
+    let (workers, heap, rows, cols, layers) = (4usize, 64usize, 5usize, 1_024usize, 12usize);
+    let n = 60_000usize;
+    let tau = COUNT_PROMASK;
+    let stream = zipf_u64(n, 4_096, 1.1, 12_201);
+
+    let mut probe = OctoUniv::new(workers, heap, rows, cols, layers, tau);
+    for (i, key) in stream.iter().enumerate() {
+        probe.insert(i, &DataInput::U64(*key));
+    }
+    let octo_counters = probe.sent_counters;
+    let (parity_period, ten_x_period) =
+        merge_periods(octo_counters, rows * cols * layers, n / workers);
+
+    let mut truth = FreqTruth::default();
+    let mut octo = OctoUniv::new(workers, heap, rows, cols, layers, tau);
+    let mut ideal = UnivMon::init_univmon(heap, rows, cols, layers);
+    let mut parity = MergeUniv::new(workers, heap, rows, cols, layers, parity_period);
+    let mut ten_x = MergeUniv::new(workers, heap, rows, cols, layers, ten_x_period);
+
+    let (mut e_ideal, mut e_octo, mut e_parity, mut e_ten) = (0.0, 0.0, 0.0, 0.0);
+    let mut samples = 0usize;
+    let stride = n / 8;
+
+    for (i, key) in stream.iter().enumerate() {
+        let input = DataInput::U64(*key);
+        truth.observe(*key as i64);
+        octo.insert(i, &input);
+        ideal.insert(&input, 1);
+        parity.insert(i, &input);
+        ten_x.insert(i, &input);
+        if i > 0 && i % stride == stride / 3 {
+            // UnivMon's headline queries are g-sums over the whole stream:
+            // distinct-count and Shannon entropy. Both are compared against the
+            // single-core sketch rather than against exact truth, which is the
+            // paper's Definition 1: what is being measured here is the gap a
+            // distributed scheme opens up, not UnivMon's own approximation
+            // error, which at these dimensions dwarfs it.
+            let (ideal_card, ideal_entropy) = (ideal.calc_card(), ideal.calc_entropy());
+            let gap_to_ideal = |sketch: &UnivMon| {
+                let card = (sketch.calc_card() - ideal_card).abs() / ideal_card.abs().max(1.0);
+                let entropy =
+                    (sketch.calc_entropy() - ideal_entropy).abs() / ideal_entropy.abs().max(1e-9);
+                (card + entropy) / 2.0
+            };
+            let exact_card = truth.distinct() as f64;
+            let exact_entropy = truth.entropy(true);
+            e_ideal += ((ideal_card - exact_card).abs() / exact_card
+                + (ideal_entropy - exact_entropy).abs() / exact_entropy.abs())
+                / 2.0;
+            e_octo += gap_to_ideal(&octo.aggregator.sketch);
+            e_parity += gap_to_ideal(&parity.parent);
+            e_ten += gap_to_ideal(&ten_x.parent);
+            samples += 1;
+        }
+    }
+
+    let scale = samples as f64;
+    let comparison = OnlineComparison {
+        ideal: e_ideal / scale,
+        octo: e_octo / scale,
+        merge_at_parity: e_parity / scale,
+        merge_at_ten_x: e_ten / scale,
+        octo_counters,
+        parity_counters: parity.sent_counters,
+        ten_x_counters: ten_x.sent_counters,
+    };
+    // `ideal` here is UnivMon's own error against exact truth, for context;
+    // the other three are gaps to that ideal, per Definition 1.
+    comparison.report("UnivMon");
+    comparison.assert_baselines_were_funded();
+    assert!(
+        comparison.octo < comparison.merge_at_parity / 2.0,
+        "delta promotion should track the single-core answer at least twice as closely \
+         at comparable budget: octo={:.4} merge={:.4}",
+        comparison.octo,
+        comparison.merge_at_parity
+    );
+    // Sketch-merge does close the gap - it just has to buy its way there. On
+    // this workload it needs an order of magnitude more traffic before it
+    // matches delta promotion, which is Theorem 2 showing up as a measurement.
+    assert!(
+        comparison.merge_at_ten_x < comparison.merge_at_parity,
+        "more budget must help the baseline"
+    );
+    assert!(
+        comparison.ten_x_counters as f64 / comparison.octo_counters as f64 > 10.0,
+        "the catch-up budget should be an order of magnitude larger"
+    );
+}
+
+#[test]
+fn univmon_heavy_hitter_recall_beats_sketch_merge() {
+    let (workers, heap, rows, cols, layers) = (4usize, 64usize, 5usize, 1_024usize, 12usize);
+    let n = 60_000usize;
+    let tau = COUNT_PROMASK;
+    let stream = zipf_u64(n, 4_096, 1.1, 12_203);
+
+    let mut truth = FreqTruth::default();
+    for key in &stream {
+        truth.observe(*key as i64);
+    }
+    let hottest: Vec<i64> = truth.top_k(16).into_iter().map(|(k, _)| k).collect();
+
+    let mut probe = OctoUniv::new(workers, heap, rows, cols, layers, tau);
+    for (i, key) in stream.iter().enumerate() {
+        probe.insert(i, &DataInput::U64(*key));
+    }
+    let (parity_period, _) = merge_periods(probe.sent_counters, rows * cols * layers, n / workers);
+
+    let mut octo = OctoUniv::new(workers, heap, rows, cols, layers, tau);
+    let mut parity = MergeUniv::new(workers, heap, rows, cols, layers, parity_period);
+    let (mut octo_recall, mut merge_recall) = (0.0, 0.0);
+    let mut samples = 0usize;
+    let stride = n / 8;
+
+    for (i, key) in stream.iter().enumerate() {
+        let input = DataInput::U64(*key);
+        octo.insert(i, &input);
+        parity.insert(i, &input);
+        if i > 0 && i % stride == stride / 3 {
+            let found = |sketch: &UnivMon| {
+                hottest
+                    .iter()
+                    .filter(|k| {
+                        sketch.hh_layers[0]
+                            .find(&DataInput::U64(**k as u64))
+                            .is_some()
+                    })
+                    .count() as f64
+                    / hottest.len() as f64
+            };
+            octo_recall += found(&octo.aggregator.sketch);
+            merge_recall += found(&parity.parent);
+            samples += 1;
+        }
+    }
+
+    let (octo_recall, merge_recall) = (octo_recall / samples as f64, merge_recall / samples as f64);
+    println!(
+        "UnivMon top-16 recall at layer 0: octo={octo_recall:.3} merge={merge_recall:.3} \
+         (merge spent {}x octo's counters)",
+        parity.sent_counters / probe.sent_counters.max(1)
+    );
+    assert!(
+        octo_recall >= merge_recall,
+        "the aggregator's heap should not trail sketch-merge: {octo_recall:.3} vs {merge_recall:.3}"
+    );
+    assert!(
+        octo_recall > 0.9,
+        "heavy hitters should be found nearly always, got {octo_recall:.3}"
     );
 }

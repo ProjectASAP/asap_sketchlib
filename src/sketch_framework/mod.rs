@@ -37,7 +37,7 @@ pub mod hydra;
 pub use hydra::Hydra;
 
 pub mod univmon;
-pub use univmon::UnivMon;
+pub use univmon::{UnivMon, UnivMonDeltaFidelity, bottom_layer_for_hash};
 
 pub mod univmon_q;
 pub use univmon_q::{UnivMonQ, UnivMonQConfig, UnivMonQError, UnivMonQPoint, UnivMonQQuery};
@@ -57,11 +57,17 @@ pub use eh_univ_optimized::{EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUni
 
 pub mod octo;
 pub use octo::{
-    CmOctoAggregator, CmOctoWorker, CountOctoAggregator, CountOctoWorker, HllOctoAggregator,
-    HllOctoWorker, OctoAggregator, OctoWorker,
+    CmOctoAggregator, CmOctoWorker, CmTopKOctoAggregator, CmTopKOctoWorker, CmWorkerSketch,
+    CountOctoAggregator, CountOctoWorker, CountTopKOctoAggregator, CountTopKOctoWorker,
+    CountWorkerSketch, DEFAULT_OCTO_TOP_K, DdOctoAggregator, DdOctoWorker, DdWorkerSketch,
+    HllOctoAggregator, HllOctoWorker, L2hhWorkerSketch, OctoAggregator, OctoWorker,
+    UnivMonOctoAggregator, UnivMonOctoWorker, threshold_for_error, univmon_layer_threshold,
 };
 #[cfg(feature = "octo-runtime")]
-pub use octo::{OctoConfig, OctoReadHandle, OctoResult, OctoRuntime, run_octo};
+pub use octo::{
+    OctoAdaptiveThreshold, OctoConfig, OctoPartition, OctoReadHandle, OctoResult, OctoRuntime,
+    run_octo,
+};
 
 pub mod tumbling;
 pub use tumbling::{
