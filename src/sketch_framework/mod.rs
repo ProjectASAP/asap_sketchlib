@@ -61,7 +61,8 @@ pub use octo::{
     CountOctoAggregator, CountOctoWorker, CountTopKOctoAggregator, CountTopKOctoWorker,
     CountWorkerSketch, DEFAULT_OCTO_TOP_K, DdOctoAggregator, DdOctoWorker, DdWorkerSketch,
     HllOctoAggregator, HllOctoWorker, L2hhWorkerSketch, OctoAggregator, OctoWorker,
-    UnivMonOctoAggregator, UnivMonOctoWorker, threshold_for_error, univmon_layer_threshold,
+    UnivMonOctoAggregator, UnivMonOctoWorker, max_hll_threshold, threshold_for_error,
+    univmon_layer_threshold,
 };
 #[cfg(feature = "octo-runtime")]
 pub use octo::{

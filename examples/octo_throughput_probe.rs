@@ -13,8 +13,8 @@
 use std::time::Instant;
 
 use asap_sketchlib::{
-    DataInput, OctoAggregator, OctoThreshold, OctoWorker, UnivMon, UnivMonOctoAggregator,
-    UnivMonOctoWorker, univmon_layer_threshold,
+    DataInput, MAX_PROMASK, OctoAggregator, OctoThreshold, OctoWorker, UNIVMON_PROMASK, UnivMon,
+    UnivMonOctoAggregator, UnivMonOctoWorker, univmon_layer_threshold,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -65,7 +65,11 @@ fn main() {
         "tau", "worker", "speedup", "deltas/ins", "agg Mdelta/s", "pipeline", "gap"
     );
 
-    for tau in [16u32, 31, 64, 128, 255] {
+    // A geometric sweep of the usable range. Powers of two are the natural
+    // grid because `univmon_layer_threshold` halves tau per layer, so a base of
+    // 2^k walks down to 1 exactly at layer k. 127 is MAX_PROMASK, the widest a
+    // signed one-byte worker counter holds; 64 is UNIVMON_PROMASK.
+    for tau in [1u32, 2, 4, 8, 16, 32, 64, 127] {
         let mut worker =
             UnivMonOctoWorker::with_threshold(0, rows, cols, layers, OctoThreshold::new(tau));
         let mut emitted = 0usize;
@@ -93,9 +97,14 @@ fn main() {
         let gap = ((parent.calc_card() - ideal_card).abs() / ideal_card.abs().max(1.0)
             + (parent.calc_entropy() - ideal_entropy).abs() / ideal_entropy.abs().max(1e-9))
             / 2.0;
+        let note = match tau {
+            UNIVMON_PROMASK => "  <- UnivMon default",
+            MAX_PROMASK => "  <- ceiling",
+            _ => "",
+        };
         println!(
             "{tau:<6} {worker_rate:>9.1} M/s {:>8.0}x {per_insert:>12.3} {aggregator_rate:>14.2} \
-             {:>9.2} M/s {gap:>10.4}",
+             {:>9.2} M/s {gap:>10.4}{note}",
             worker_rate / single_rate,
             aggregator_rate / per_insert,
         );

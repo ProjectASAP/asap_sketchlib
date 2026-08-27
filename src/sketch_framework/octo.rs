@@ -229,9 +229,7 @@ impl CountWorkerSketch {
         threshold: u32,
         emit: &mut impl FnMut(CountDelta),
     ) {
-        // A signed one-byte counter reaches -128 before +127, so the usable
-        // magnitude is i8::MAX.
-        let threshold = threshold.clamp(1, i8::MAX as u32) as i8;
+        let threshold = threshold.clamp(1, MAX_PROMASK) as i8;
         for r in 0..self.rows {
             let hashed = hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % self.cols;
@@ -290,12 +288,22 @@ impl L2hhWorkerSketch {
     pub fn new(rows: usize, cols: usize, seed_idx: usize) -> Self {
         let rows = rows.max(1);
         let cols = cols.max(1);
+        let mask_bits = cols_mask_bits(cols);
+        // Every row slices its column out of the same 128-bit hash, so the
+        // rows collectively have 128 bits to spend. Past that the shift is
+        // undefined: debug builds panic and release builds wrap, aliasing a
+        // deep row onto a shallow one's column bits.
+        assert!(
+            rows * mask_bits as usize <= 128,
+            "{rows} rows x {mask_bits} column bits exceeds the 128-bit hash budget; \
+             reduce rows or columns"
+        );
         Self {
             counters: vec![0i8; rows * cols],
             rows,
             cols,
             seed_idx,
-            mask_bits: cols_mask_bits(cols),
+            mask_bits,
         }
     }
 
@@ -318,7 +326,7 @@ impl L2hhWorkerSketch {
         threshold: u32,
         emit: &mut impl FnMut(CountDelta),
     ) {
-        let threshold = threshold.clamp(1, i8::MAX as u32) as u8;
+        let threshold = threshold.clamp(1, MAX_PROMASK) as u8;
         let hashed = hash128_seeded(self.seed_idx, value);
         for row in 0..self.rows {
             let (col, sign) = l2hh_cell_for_row(hashed, row, self.cols, self.mask_bits);
@@ -682,10 +690,20 @@ impl ThresholdController {
     const POLLS_BETWEEN_CLOCK_READS: u32 = 256;
 
     fn new(settings: &OctoAdaptiveThreshold) -> Self {
+        let mut settings = settings.clone();
+        // `OctoAdaptiveThreshold` has public fields, and `clamp` panics on an
+        // inverted range. Normalising here keeps a misconfigured band from
+        // killing the aggregator thread and surfacing as an unrelated
+        // "worker receiver dropped" panic on the caller's thread.
+        settings.min_threshold = settings.min_threshold.clamp(1, MAX_PROMASK);
+        settings.max_threshold = settings
+            .max_threshold
+            .clamp(settings.min_threshold, MAX_PROMASK);
+        let next_check = Instant::now() + settings.interval;
         Self {
-            settings: settings.clone(),
+            settings,
             previous_queue_len: 0.0,
-            next_check: Instant::now() + settings.interval,
+            next_check,
             polls_since_check: 0,
         }
     }
@@ -1195,6 +1213,16 @@ pub struct HllOctoWorker {
     threshold: u8,
 }
 
+/// Largest HLL threshold exponent that can still fire at precision `p`.
+///
+/// A register holds a leading-zero count of at most `64 - p + 1`, so the gain
+/// `2^C' - 2^C` never reaches `2^(64 - p)`. A threshold at or above that
+/// silently promotes nothing at all, leaving the parent empty.
+#[inline(always)]
+pub const fn max_hll_threshold(precision: u8) -> u8 {
+    64 - precision
+}
+
 impl HllOctoWorker {
     /// Creates a HyperLogLog-backed Octo worker at the default threshold,
     /// which promotes every register improvement.
@@ -1204,11 +1232,24 @@ impl HllOctoWorker {
 
     /// Creates a worker that promotes a register only once the improvement in
     /// `2^register` reaches `2^threshold`.
+    ///
+    /// # Panics
+    ///
+    /// If `threshold` is large enough that no register improvement can ever
+    /// reach it. Such a worker promotes nothing at all and leaves the parent
+    /// empty, which is worse than any accuracy trade the caller was after, so
+    /// it is refused rather than silently accepted. Useful values are small -
+    /// the paper finds 2 sufficient, and 0 makes the parent exact.
     pub fn with_threshold(threshold: u8) -> Self {
-        Self {
-            child: HyperLogLog::default(),
-            threshold,
-        }
+        let child = HyperLogLog::<Classic>::default();
+        let precision = child.registers_as_slice().len().ilog2() as u8;
+        let ceiling = max_hll_threshold(precision);
+        assert!(
+            threshold < ceiling,
+            "HLL threshold {threshold} can never fire at precision {precision}; \
+             the largest register gain is below 2^{ceiling}"
+        );
+        Self { child, threshold }
     }
 }
 
@@ -1368,6 +1409,9 @@ impl OctoWorker for UnivMonOctoWorker {
 pub struct UnivMonOctoAggregator {
     /// Parent UnivMon updated by worker deltas.
     pub sketch: UnivMon,
+    threshold: OctoThreshold,
+    /// τ the per-layer fidelity was last computed from.
+    fidelity_threshold: u32,
     fidelity: Vec<UnivMonDeltaFidelity>,
     worker_weights: Vec<u64>,
     total_weight: u64,
@@ -1385,30 +1429,57 @@ impl UnivMonOctoAggregator {
         layer_size: usize,
         threshold: u32,
     ) -> Self {
-        let mut sketch = UnivMon::init_univmon(heap_size, sketch_row, sketch_col, layer_size);
-        // Each layer runs its own scaled threshold, so completeness is decided
-        // per layer: one that promotes every insert can still keep the heap's
-        // own verdict, while one that thresholds has provably missed keys and
-        // must give the flag up before any delta arrives.
-        let fidelity: Vec<UnivMonDeltaFidelity> = (0..layer_size)
-            .map(|layer| {
-                if univmon_layer_threshold(threshold, layer) <= 1 {
-                    UnivMonDeltaFidelity::EveryInsert
-                } else {
-                    UnivMonDeltaFidelity::PromotedOnly
-                }
-            })
-            .collect();
-        for (layer, mode) in fidelity.iter().enumerate() {
-            if *mode == UnivMonDeltaFidelity::PromotedOnly {
-                sketch.mark_layer_candidates_incomplete(layer);
-            }
-        }
-        Self {
-            sketch,
-            fidelity,
+        Self::with_threshold(
+            heap_size,
+            sketch_row,
+            sketch_col,
+            layer_size,
+            OctoThreshold::new(threshold),
+        )
+    }
+
+    /// Creates an aggregator that reads the same live threshold its workers do.
+    ///
+    /// Completeness has to track τ rather than a snapshot of it: with the
+    /// adaptive controller running, a layer that started at τ = 1 can be
+    /// raised above it mid-stream, and a stale `EveryInsert` verdict would let
+    /// `heavy_threshold` take its permissive branch and overcount.
+    pub fn with_threshold(
+        heap_size: usize,
+        sketch_row: usize,
+        sketch_col: usize,
+        layer_size: usize,
+        threshold: OctoThreshold,
+    ) -> Self {
+        let mut this = Self {
+            sketch: UnivMon::init_univmon(heap_size, sketch_row, sketch_col, layer_size),
+            fidelity_threshold: u32::MAX,
+            fidelity: vec![UnivMonDeltaFidelity::EveryInsert; layer_size],
+            threshold,
             worker_weights: Vec::new(),
             total_weight: 0,
+        };
+        this.refresh_fidelity();
+        this
+    }
+
+    /// Recomputes per-layer fidelity from the current τ, withdrawing
+    /// completeness wherever a layer now thresholds. Withdrawal is one-way: a
+    /// layer that has ever thresholded stays partial for the rest of the run.
+    fn refresh_fidelity(&mut self) {
+        let threshold = self.threshold.get();
+        if threshold == self.fidelity_threshold {
+            return;
+        }
+        self.fidelity_threshold = threshold;
+        for layer in 0..self.fidelity.len() {
+            if univmon_layer_threshold(threshold, layer) > 1 {
+                self.fidelity[layer] = UnivMonDeltaFidelity::PromotedOnly;
+                // A layer that receives traffic but never promotes any of it
+                // sends nothing, so the flag has to come down before a delta
+                // arrives rather than when one does.
+                self.sketch.mark_layer_candidates_incomplete(layer);
+            }
         }
     }
 }
@@ -1418,16 +1489,25 @@ impl OctoAggregator for UnivMonOctoAggregator {
 
     #[inline(always)]
     fn apply(&mut self, delta: LayeredCountDelta) {
+        self.refresh_fidelity();
+
         let worker = delta.worker_id as usize;
         if worker >= self.worker_weights.len() {
             self.worker_weights.resize(worker + 1, 0);
         }
-        // A worker's running total only grows, so the newest report wins and
-        // the fleet total is the sum of the newest report from each.
-        if delta.weight_total > self.worker_weights[worker] {
-            self.total_weight += delta.weight_total - self.worker_weights[worker];
-            self.worker_weights[worker] = delta.weight_total;
-        }
+        // A single worker's running total only grows, so a report that moves
+        // backwards means two workers were built with the same id and their
+        // totals are being folded into one slot - which would silently turn
+        // the fleet total into a maximum instead of a sum.
+        assert!(
+            delta.weight_total >= self.worker_weights[worker],
+            "worker id {worker} reported a total of {} after {}; worker ids must be distinct",
+            delta.weight_total,
+            self.worker_weights[worker]
+        );
+        self.total_weight += delta.weight_total - self.worker_weights[worker];
+        self.worker_weights[worker] = delta.weight_total;
+
         let fidelity = self.fidelity[delta.layer as usize];
         self.sketch.apply_layered_delta(&delta, fidelity);
         self.sketch.set_total_weight(self.total_weight as usize);
@@ -1632,11 +1712,143 @@ mod worker_tests {
     }
 
     #[test]
+    #[should_panic(expected = "exceeds the 128-bit hash budget")]
+    fn a_univmon_worker_refuses_a_geometry_that_outruns_the_hash() {
+        // 13 rows x 11 column bits = 143 > 128. Debug builds used to panic on
+        // the shift; release builds wrapped it and aliased row 12 onto row 1.
+        L2hhWorkerSketch::new(13, 2048, 0);
+    }
+
+    #[test]
+    fn the_widest_accepted_univmon_geometry_still_addresses_distinct_rows() {
+        // 11 rows x 11 bits = 121, just inside the budget.
+        let mut worker = L2hhWorkerSketch::new(11, 2048, 0);
+        let mut cells: Vec<(u32, u32)> = Vec::new();
+        worker.insert_emit_delta(&DataInput::U64(7), 1, &mut |d| cells.push((d.row, d.col)));
+        assert_eq!(cells.len(), 11, "every row promotes at threshold 1");
+        let rows: std::collections::HashSet<u32> = cells.iter().map(|(r, _)| *r).collect();
+        assert_eq!(rows.len(), 11, "each row must land on its own index");
+    }
+
+    #[test]
+    fn every_worker_reads_one_threshold_the_same_way() {
+        // The signed one-byte workers used to clamp to i8::MAX while the shared
+        // threshold and the full sketches clamped to 255, so a tau in 128..=255
+        // meant two different things in the same pipeline.
+        let tau = 200u32;
+        let key = DataInput::U64(9);
+
+        let mut compact = CountWorkerSketch::new(1, 64);
+        let mut compact_values: Vec<i32> = Vec::new();
+        let mut full = Count::<Vector2D<i32>, RegularPath>::with_dimensions(1, 64);
+        let mut full_values: Vec<i32> = Vec::new();
+        for _ in 0..400 {
+            compact.insert_emit_delta(&key, tau, &mut |d| compact_values.push(d.value));
+            full.insert_emit_delta_with_threshold(&key, tau, &mut |d| full_values.push(d.value));
+        }
+
+        assert!(!compact_values.is_empty(), "tau must be reachable at all");
+        assert_eq!(
+            compact_values, full_values,
+            "the compact worker and the full sketch must promote identically"
+        );
+        for value in &compact_values {
+            assert_eq!(value.unsigned_abs(), MAX_PROMASK);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "can never fire at precision")]
+    fn an_hll_worker_refuses_a_threshold_no_register_can_reach() {
+        // A register tops out at 64 - PRECISION + 1, so the gain 2^C' - 2^C
+        // never reaches 2^(64 - PRECISION). Such a worker promoted nothing at
+        // all and left the parent estimating zero.
+        HllOctoWorker::with_threshold(max_hll_threshold(14));
+    }
+
+    #[test]
+    fn any_hll_threshold_above_zero_costs_cardinality_accuracy() {
+        // HLL merges by max, so a register the worker has not promoted reads at
+        // the parent as an *empty* bucket rather than a low one, and the
+        // harmonic mean the estimator is built on collapses. Theorem 4 says the
+        // same thing from the other side: it only promises equality once
+        // Z > 2*alpha_m*m^2*2^(tau-2), which at m = 16384 is around 3.9e8 for
+        // tau = 2 - far above the 50k here. Zero is the only threshold that
+        // keeps the estimate.
+        let truth = 50_000u64;
+        let mut sweep: Vec<(u8, usize, usize)> = Vec::new();
+        for threshold in [0u8, 1, 2, 4] {
+            let mut child = HyperLogLog::<Classic>::default();
+            let mut parent = HyperLogLog::<Classic>::default();
+            let mut promoted = 0usize;
+            for i in 0..truth {
+                child.insert_emit_delta_with_threshold(&DataInput::U64(i), threshold, &mut |d| {
+                    promoted += 1;
+                    parent.apply_delta(d);
+                });
+            }
+            sweep.push((threshold, promoted, parent.estimate()));
+        }
+
+        let mut reference = HyperLogLog::<Classic>::default();
+        for i in 0..truth {
+            reference.insert(&DataInput::U64(i));
+        }
+        assert_eq!(
+            sweep[0].2,
+            reference.estimate(),
+            "threshold 0 must leave the parent exactly ideal"
+        );
+
+        for pair in sweep.windows(2) {
+            let (lo_tau, lo_msgs, lo_est) = pair[0];
+            let (hi_tau, hi_msgs, hi_est) = pair[1];
+            assert!(
+                hi_msgs < lo_msgs,
+                "tau {hi_tau} should send fewer messages than {lo_tau}: {hi_msgs} vs {lo_msgs}"
+            );
+            assert!(
+                hi_est <= lo_est,
+                "tau {hi_tau} should not estimate higher than {lo_tau}: {hi_est} vs {lo_est}"
+            );
+        }
+        assert!(
+            (sweep[3].2 as f64) < truth as f64 * 0.5,
+            "a threshold of 4 loses most of the cardinality: {:?}",
+            sweep[3]
+        );
+        assert_eq!(max_hll_threshold(14), 50);
+    }
+
+    #[test]
+    fn a_ddsketch_delta_from_a_finer_mapping_is_dropped_not_allocated() {
+        // The worker's index space is bounded by its own alpha; a delta from a
+        // much finer sketch names an index this store cannot hold, and growing
+        // the dense array across that gap would allocate gigabytes.
+        let mut parent = DDSketch::new(0.01);
+        parent.add(&50.0);
+        let before = parent.store_counts().len();
+        parent.apply_delta(DdDelta {
+            index: i32::MAX / 2,
+            value: 4,
+        });
+        parent.apply_delta(DdDelta {
+            index: i32::MIN / 2,
+            value: 4,
+        });
+        assert_eq!(parent.store_counts().len(), before, "store must not grow");
+        assert_eq!(parent.get_count(), 1, "out-of-range deltas are dropped");
+    }
+
+    #[test]
     fn threshold_for_error_follows_equation_four() {
         // tau = eps * L1 / k'
-        assert_eq!(threshold_for_error(0.001, 1_000_000.0, 4), 250);
-        assert_eq!(threshold_for_error(0.001, 1_000_000.0, 1), MAX_PROMASK);
+        assert_eq!(threshold_for_error(0.0004, 1_000_000.0, 4), 100);
+        assert_eq!(threshold_for_error(0.0001, 1_000_000.0, 1), 100);
         assert_eq!(threshold_for_error(1e-9, 1_000.0, 1), 1, "never below one");
+        // An accuracy target loose enough to want a threshold wider than a
+        // one-byte worker counter gets the widest one that fits.
+        assert_eq!(threshold_for_error(0.001, 1_000_000.0, 1), MAX_PROMASK);
     }
 
     #[test]
@@ -1648,7 +1860,11 @@ mod worker_tests {
         clone.decrease(34);
         assert_eq!(shared.get(), 1, "the floor is one");
         clone.set(u32::MAX);
-        assert_eq!(shared.get(), MAX_PROMASK, "the ceiling is one byte");
+        assert_eq!(
+            shared.get(),
+            MAX_PROMASK,
+            "the ceiling is a signed one-byte worker counter"
+        );
     }
 
     #[test]
@@ -1715,14 +1931,17 @@ mod runtime_tests {
             || CmOctoAggregator::new(rows, cols),
         );
 
-        // Hash partitioning puts each key on one worker, so at most one worker
-        // holds back up to tau of any key: k' = 1.
+        // A counter is shared by whatever flows hash into it, and each worker
+        // may hold back up to tau of its own share, so the provable ceiling is
+        // k*tau whatever the partition. Hash partitioning bounds the *queried
+        // flow's own* held-back count at tau, not the counter's.
+        let ceiling = 4 * CM_PROMASK as i32;
         for key_val in 0u64..1024 {
             let key = DataInput::U64(key_val);
             let deficit = reference.estimate(&key) - result.parent.sketch.estimate(&key);
             assert!(
-                (0..CM_PROMASK as i32).contains(&deficit),
-                "key {key_val}: deficit {deficit} outside [0, tau)"
+                (0..ceiling).contains(&deficit),
+                "key {key_val}: deficit {deficit} outside [0, k*tau)"
             );
         }
     }
@@ -1890,6 +2109,27 @@ mod runtime_tests {
     }
 
     #[test]
+    fn an_inverted_control_band_is_normalised_rather_than_fatal() {
+        // OctoAdaptiveThreshold's fields are public and clamp panics on an
+        // inverted range. That panic used to land on the aggregator thread and
+        // surface on the caller's as an unrelated "worker receiver dropped".
+        let settings = OctoAdaptiveThreshold {
+            target_queue_len: 10,
+            alpha: 0.25,
+            interval: Duration::ZERO,
+            min_threshold: 32,
+            max_threshold: 8,
+        };
+        let threshold = OctoThreshold::new(31);
+        adjust_against_queue_len(&settings, &threshold, 500, 8);
+        assert_eq!(
+            threshold.get(),
+            32,
+            "an inverted band collapses onto its floor instead of panicking"
+        );
+    }
+
+    #[test]
     fn the_controller_holds_tau_inside_the_dead_band() {
         let settings = OctoAdaptiveThreshold {
             target_queue_len: 10,
@@ -1942,14 +2182,25 @@ mod runtime_tests {
             || CmOctoAggregator::new(rows, cols),
         );
 
+        // Whether tau moves, and how far, depends on live queue occupancy, so
+        // this asserts only what holds regardless of scheduling. That the rule
+        // itself raises, lowers and holds tau is pinned deterministically by
+        // the_controller_* tests above.
         let settled = threshold.get();
         assert!(
             (settings.min_threshold..=settings.max_threshold).contains(&settled),
             "tau {settled} left the configured band"
         );
-        assert_ne!(settled, 60, "the controller should have moved tau at all");
-        // Whatever tau settled at, the parent is still a usable sketch.
-        assert!(result.parent.sketch.estimate(&DataInput::U64(0)) > 0);
+        let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
+        for input in &inputs {
+            reference.insert(input);
+        }
+        let key = DataInput::U64(0);
+        let deficit = reference.estimate(&key) - result.parent.sketch.estimate(&key);
+        assert!(
+            deficit >= 0 && deficit <= (cfg.num_workers as i32) * MAX_PROMASK as i32,
+            "a controller run must still leave the parent within k*tau: deficit {deficit}"
+        );
     }
 
     #[test]
@@ -2190,24 +2441,44 @@ mod runtime_tests {
     }
 
     #[test]
-    fn octo_runtime_live_read_handle_observes_progress() {
+    fn octo_runtime_live_read_handle_tracks_the_aggregator() {
+        let n = 64u64;
         let mut runtime = OctoRuntime::new(
             &config(2),
             |_| CountingWorker,
             || CountingAggregator { total: 0 },
         );
         let reader = runtime.read_handle();
+        assert_eq!(reader.with_parent(|p| p.total), 0, "nothing inserted yet");
 
-        for i in 0..64u64 {
+        for i in 0..n {
             runtime.insert(DataInput::U64(i));
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        let observed = reader.with_parent(|p| p.total);
-        assert!(observed <= 64);
 
-        let result = runtime.finish();
-        assert_eq!(result.parent.total, 64);
-        assert!(result.parent.total >= observed);
+        // Poll rather than sleep-and-hope: the point is that the handle reaches
+        // the live total without the runtime being finished. A handle wired to
+        // a constant would never get here.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut last = 0u64;
+        loop {
+            let observed = reader.with_parent(|p| p.total);
+            assert!(
+                observed >= last,
+                "live total went backwards: {last} -> {observed}"
+            );
+            assert!(observed <= n, "live total {observed} exceeded the stream");
+            last = observed;
+            if observed == n {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "read handle stalled at {observed}/{n}"
+            );
+            std::hint::spin_loop();
+        }
+
+        assert_eq!(runtime.finish().parent.total, n);
     }
 
     #[test]
@@ -2449,22 +2720,92 @@ mod univmon_tests {
             }
         }
 
+        let (mut thresholding, mut exact) = (0usize, 0usize);
         for (layer, complete) in aggregator.sketch.candidates_complete().iter().enumerate() {
             if univmon_layer_threshold(base, layer) > 1 {
                 // The aggregator provably never saw the keys that stayed under
                 // this layer's threshold.
+                thresholding += 1;
                 assert!(
                     !complete,
                     "layer {layer} thresholds at {} yet claims completeness",
                     univmon_layer_threshold(base, layer)
                 );
+            } else {
+                // A layer at threshold 1 promotes every insert, so its verdict
+                // must come from the heap rather than from the withdrawal - and
+                // this stream is small enough that the heap holds everything.
+                exact += 1;
+                assert!(
+                    complete,
+                    "layer {layer} promotes every insert yet lost completeness"
+                );
             }
         }
-        // The rule has to actually bite somewhere, or the test proves nothing.
+        // Both halves of "exactly where" have to be exercised, or the test
+        // passes on an aggregator that simply withdraws everything.
+        assert!(thresholding > 0 && exact > 0, "{thresholding} / {exact}");
+    }
+
+    /// Drives one worker/aggregator pair over `inputs`.
+    fn drive(
+        worker: &mut UnivMonOctoWorker,
+        aggregator: &mut UnivMonOctoAggregator,
+        inputs: &[DataInput<'_>],
+    ) {
+        for input in inputs {
+            let mut promoted = Vec::new();
+            worker.process(input, &mut |d| promoted.push(d));
+            for delta in promoted {
+                aggregator.apply(delta);
+            }
+        }
+    }
+
+    #[test]
+    fn raising_tau_mid_run_withdraws_completeness_that_was_already_granted() {
+        // With the adaptive controller live, a layer that started at tau = 1
+        // can be pushed above it. A fidelity verdict frozen at construction
+        // would leave that layer claiming a complete candidate set, sending
+        // heavy_threshold down its permissive branch.
+        let threshold = OctoThreshold::new(1);
+        let mut worker =
+            UnivMonOctoWorker::with_threshold(0, ROWS, COLS, LAYERS, threshold.clone());
+        let mut aggregator =
+            UnivMonOctoAggregator::with_threshold(HEAP, ROWS, COLS, LAYERS, threshold.clone());
+        let inputs = stream(4_000);
+        drive(&mut worker, &mut aggregator, &inputs);
         assert!(
-            (0..LAYERS).any(|layer| univmon_layer_threshold(base, layer) > 1),
-            "pick a base threshold that thresholds at least one layer"
+            aggregator.sketch.candidates_complete().iter().any(|c| *c),
+            "at tau = 1 the aggregator sees every insert, so some layer should still be complete"
         );
+
+        threshold.set(64);
+        drive(&mut worker, &mut aggregator, &inputs);
+        for (layer, complete) in aggregator.sketch.candidates_complete().iter().enumerate() {
+            if univmon_layer_threshold(64, layer) > 1 {
+                assert!(
+                    !complete,
+                    "layer {layer} kept a completeness verdict from before tau rose"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "worker ids must be distinct")]
+    fn workers_sharing_an_id_are_refused_rather_than_summed_wrongly() {
+        // Two workers in one slot would make the fleet total a maximum instead
+        // of a sum, and calc_l1 would report about N/k.
+        let threshold = OctoThreshold::new(1);
+        let mut first = UnivMonOctoWorker::with_threshold(0, ROWS, COLS, LAYERS, threshold.clone());
+        let mut second =
+            UnivMonOctoWorker::with_threshold(0, ROWS, COLS, LAYERS, threshold.clone());
+        let mut aggregator =
+            UnivMonOctoAggregator::with_threshold(HEAP, ROWS, COLS, LAYERS, threshold);
+        let inputs = stream(200);
+        drive(&mut first, &mut aggregator, &inputs);
+        drive(&mut second, &mut aggregator, &inputs);
     }
 
     #[test]
@@ -2480,10 +2821,25 @@ mod univmon_tests {
 
     #[test]
     fn the_worker_holds_one_byte_per_counter_and_no_keys() {
-        let worker = UnivMonOctoWorker::new(0, ROWS, COLS, LAYERS);
+        let mut worker = UnivMonOctoWorker::new(0, ROWS, COLS, LAYERS);
+        // One byte per cell against the i64 counters a UnivMon layer holds.
         assert_eq!(worker.counter_bytes(), ROWS * COLS * LAYERS);
-        // A UnivMon layer stores i64 counters plus a heap of owned keys.
-        let parent_counter_bytes = ROWS * COLS * LAYERS * std::mem::size_of::<i64>();
-        assert_eq!(worker.counter_bytes() * 8, parent_counter_bytes);
+        assert_eq!(
+            worker.counter_bytes(),
+            ROWS * COLS * LAYERS * std::mem::size_of::<i64>() / 8
+        );
+
+        // And no key storage: a worker's footprint must not grow with the
+        // number of distinct keys it has seen, however long the strings are.
+        let before = worker.counter_bytes();
+        let keys: Vec<String> = (0..5_000).map(|i| format!("flow-{i:040}")).collect();
+        for key in &keys {
+            worker.process(&DataInput::Str(key), &mut |_| {});
+        }
+        assert_eq!(
+            worker.counter_bytes(),
+            before,
+            "a worker that kept keys would grow here"
+        );
     }
 }

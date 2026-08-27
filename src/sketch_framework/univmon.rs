@@ -193,8 +193,17 @@ impl UnivMon {
     /// Overwrites the total weight the sketch believes it has seen.
     ///
     /// An OctoSketch aggregator never observes the raw stream, so it restores
-    /// this from the running totals its workers report.
+    /// this from the running totals its workers report. This *assigns* where
+    /// `insert` and `merge` accumulate, so a sketch fed by deltas must not also
+    /// be inserted into or merged with: the next delta would erase whatever
+    /// those added. Feeding one exclusively through `apply_layered_delta` and
+    /// this method is the supported arrangement.
     pub fn set_total_weight(&mut self, weight: usize) {
+        debug_assert_ne!(
+            self.update_mode,
+            UnivMonUpdateMode::Terminal,
+            "a terminal-mode UnivMon cannot be fed by the delta path"
+        );
         self.bucket_size = weight;
         if self.update_mode == UnivMonUpdateMode::Unset {
             self.update_mode = UnivMonUpdateMode::Standard;

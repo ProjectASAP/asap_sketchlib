@@ -54,8 +54,8 @@ defaults used when a worker is built without an explicit threshold.
 | CountMin | `CM_PROMASK` = 31 | Emit and clear when a counter reaches τ |
 | Count | `COUNT_PROMASK` = 31 | Emit and clear when `\|counter\|` reaches τ |
 | DDSketch | `DD_PROMASK` = 4 | Emit and clear when a bucket reaches τ |
-| UnivMon | `UNIVMON_PROMASK` = 64 | As Count, with τ halved per layer |
 | HyperLogLog | `HLL_PROMASK` = 0 | Emit when `\|2^C' - 2^C\| >= 2^τ`; never cleared |
+| UnivMon | `UNIVMON_PROMASK` = 64 | As Count, with τ halved per layer |
 
 `DD_PROMASK` is much lower on purpose: a bucket that never reaches τ
 never reaches the aggregator at all, so DDSketch loses its sparse tail
@@ -66,6 +66,15 @@ read `DdWorkerSketch::held_back` to bound the rank error it costs.
 single-threaded sketch at any cardinality — stronger than the paper's
 Theorem 4, which only guarantees equality above `2·α_m·m²·2^(τ-2)`. The
 cost is that every register improvement is sent.
+
+In practice 0 is the only HLL threshold worth using below that
+precondition. A register the worker has held back reads at the parent as
+an *empty* bucket rather than a low one, so the harmonic mean the
+estimator is built on collapses: over 50k distinct keys, τ=4 estimates
+about 3.2k. `HllOctoWorker::with_threshold` panics outright on a τ no
+register gain could ever reach (`>= max_hll_threshold(precision)`),
+because such a worker promotes nothing at all and leaves the parent
+empty rather than merely lagging.
 
 ### Choosing τ from an accuracy target
 
@@ -85,9 +94,12 @@ tau.get(); tau.set(64); tau.increase(1); tau.decrease(1);
 ```
 
 `OctoThreshold` is an `Arc<AtomicU32>` clamped to `1..=MAX_PROMASK`
-(255, the width of a worker counter). Clone it into every worker and
-into `OctoConfig::threshold` so the aggregator's controller and the
-workers refer to the same value.
+(127). The ceiling is a *signed* one-byte worker counter, and it is the
+same for every sketch on purpose: one shared threshold serves workers of
+different kinds, so a τ that meant 200 in one and 127 in another would
+leave the aggregator's controller a band in which raising τ changes
+nothing. Clone it into every worker and into `OctoConfig::threshold` so
+the controller and the workers refer to the same value.
 
 ## CountMin Delta API
 
@@ -197,11 +209,11 @@ Measured with `cargo run --release --example octo_throughput_probe` on a
 
 | τ | worker | vs single-threaded | deltas/insert | aggregator | sustainable | gap to ideal |
 | --- | --- | --- | --- | --- | --- | --- |
-| 16 | 16.7 M/s | 65x | 1.435 | 0.42 M/s | 0.29 M/s | 0.0000 |
-| 31 | 18.6 M/s | 72x | 1.000 | 0.43 M/s | 0.43 M/s | 0.0002 |
-| 64 | 18.7 M/s | 73x | 0.441 | 0.44 M/s | 0.99 M/s | 0.0002 |
-| 128 | 21.7 M/s | 84x | 0.244 | 0.46 M/s | 1.90 M/s | 0.0161 |
-| 255 | 22.2 M/s | 86x | 0.168 | 0.50 M/s | 2.96 M/s | 0.0195 |
+| 16 | 16.5 M/s | 62x | 1.435 | 0.43 M/s | 0.30 M/s | 0.0000 |
+| 31 | 18.4 M/s | 69x | 1.000 | 0.43 M/s | 0.43 M/s | 0.0002 |
+| 64 | 20.2 M/s | 76x | 0.441 | 0.40 M/s | 0.90 M/s | 0.0002 |
+| 96 | 21.1 M/s | 80x | 0.322 | 0.42 M/s | 1.32 M/s | 0.0004 |
+| 127 | 20.6 M/s | 78x | 0.278 | 0.45 M/s | 1.64 M/s | 0.0005 |
 
 Single-threaded `UnivMon::insert` runs at 0.26 M/s on the same stream, so
 the worker is 65-86x faster per insert — but one aggregator serves every

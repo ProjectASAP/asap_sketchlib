@@ -292,6 +292,17 @@ impl DDSketch {
         if delta.value == 0 {
             return;
         }
+        // `merge` checks that the two sketches share an alpha; a delta carries
+        // no alpha to check, so bound the index by what this sketch's own
+        // mapping can produce. A worker built with a much finer alpha would
+        // otherwise hand over an index near i32::MAX and grow the dense store
+        // across the whole gap. Out-of-range values are dropped, which is what
+        // `add` already does with values it cannot index.
+        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(self.alpha);
+        let (lowest, highest) = (self.key_for(min_indexable), self.key_for(max_indexable));
+        if delta.index < lowest || delta.index > highest {
+            return;
+        }
         self.store.ensure(delta.index);
         let slot = (delta.index - self.store.offset) as usize;
         self.store.counts.as_mut_slice()[slot] += delta.value;

@@ -39,10 +39,13 @@ pub const HLL_PROMASK: u8 = 0;
 
 /// Largest threshold a worker may be configured with.
 ///
-/// Counter storage in the compact worker sketches is one byte wide, so a
-/// counter must stay representable in `u8` right up to the promotion that
-/// clears it.
-pub const MAX_PROMASK: u32 = u8::MAX as u32;
+/// Counter storage in the compact worker sketches is one byte wide, and the
+/// Count-sketch and UnivMon workers hold *signed* counters, so a counter must
+/// stay representable in `i8` right up to the promotion that clears it. The
+/// ceiling is the same for every sketch on purpose: one shared `OctoThreshold`
+/// serves workers of different kinds, and a τ that silently meant 200 in one
+/// and 127 in another would put a dead band in the aggregator's controller.
+pub const MAX_PROMASK: u32 = i8::MAX as u32;
 
 /// Delta emitted by a CountMin child worker.
 /// Represents an accumulated unsigned count for a single cell.

@@ -380,6 +380,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
 }
 
 use crate::octo_delta::{HLL_PROMASK, HllDelta};
+use crate::sketch_framework::octo::max_hll_threshold;
 
 impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     HyperLogLogImpl<Variant, Registers, H>
@@ -410,6 +411,11 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         threshold: u8,
         emit: &mut impl FnMut(HllDelta),
     ) {
+        // A register holds a leading-zero count of at most `64 - PRECISION + 1`,
+        // so the gain `2^C' - 2^C` never reaches `2^(64 - PRECISION)`. Above
+        // that a threshold is unsatisfiable and the parent would stay empty
+        // rather than merely lag, so cap it at the largest one that can fire.
+        let threshold = threshold.min(max_hll_threshold(Registers::PRECISION as u8));
         let bucket_num = ((hashed_val >> Registers::REGISTER_BITS) & Registers::P_MASK) as usize;
         let leading_zero =
             ((hashed_val << Registers::PRECISION) + Registers::P_MASK).leading_zeros() as u8 + 1;

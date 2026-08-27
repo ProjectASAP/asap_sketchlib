@@ -13,9 +13,12 @@
 //! itself (NSDI '24, Zhang/Chen/Liu): whether estimates land inside Theorems
 //! 1, 3 and 4, and whether delta promotion actually beats the periodic
 //! sketch-merge baseline the paper measures against (Theorem 2, Figure 6).
-//! `run_octo` dispatches round-robin, so every key reaches every worker and
-//! the paper's k' - the number of workers a flow may pass by - equals k here,
-//! the worst case each of those bounds admits.
+//! The runtime defaults to `OctoPartition::HashByKey`, so a flow lands on one
+//! worker and the paper's k' - the number of workers a flow may pass by - is 1.
+//! The bound tests sweep `RoundRobin` as well, where k' = k. Note that k' is
+//! about a *flow*: a counter is shared by whatever flows hash into it, and each
+//! worker may hold back up to tau of its own share, so the provable per-counter
+//! gap is k*tau under either partition.
 
 mod common;
 
@@ -675,7 +678,7 @@ fn hll_sharded_children_match_a_single_pass_exactly() {
 }
 
 #[test]
-fn hll_cardinality_error_survives_the_delta_round_trip() {
+fn hll_cardinality_survives_the_delta_round_trip_exactly() {
     let truth = 100_000u64;
     let stream: Vec<u64> = (0..truth).collect();
     let (_, deltas) = hll_child_run(&stream);
@@ -683,14 +686,24 @@ fn hll_cardinality_error_survives_the_delta_round_trip() {
     for d in &deltas {
         parent.apply_delta(*d);
     }
+    let mut reference = HyperLogLog::<Classic>::default();
+    for k in &stream {
+        reference.insert(&DataInput::U64(*k));
+    }
 
-    // P14 standard error is 1.04/sqrt(2^14) ≈ 0.81%; allow 3σ.
-    let estimate = parent.estimate() as f64;
-    let error = (estimate - truth as f64).abs() / truth as f64;
-    assert!(
-        error < 0.025,
-        "delta-fed HLL error {error:.4} exceeds 3σ (estimate {estimate}, truth {truth})"
+    // At HLL_PROMASK = 0 every improvement is promoted, so this is an equality,
+    // not a tolerance: a band would pass on an implementation that dropped a
+    // slice of the register improvements.
+    assert_eq!(
+        parent.registers_as_slice(),
+        reference.registers_as_slice(),
+        "delta-fed registers must match a single pass byte for byte"
     );
+    assert_eq!(parent.estimate(), reference.estimate());
+    // The sketch's own accuracy, for context: P14 standard error is
+    // 1.04/sqrt(2^14) ~ 0.81%.
+    let error = (parent.estimate() as f64 - truth as f64).abs() / truth as f64;
+    assert!(error < 0.025, "P14 error {error:.4} exceeds 3 sigma");
 }
 
 // ---------------------------------------------------------------------------
@@ -1054,6 +1067,12 @@ mod runtime {
         );
         let reader = runtime.read_handle();
 
+        assert_eq!(
+            reader.with_parent(|p| p.per_worker.iter().sum::<u64>()),
+            0,
+            "nothing inserted yet"
+        );
+
         let mut last = 0u64;
         for i in 0..n {
             runtime.insert(DataInput::U64(i));
@@ -1068,10 +1087,25 @@ mod runtime {
             }
         }
 
-        let result = runtime.finish();
-        let total = result.parent.per_worker.iter().sum::<u64>();
-        assert_eq!(total, n);
-        assert!(total >= last, "final total must dominate every snapshot");
+        // Monotonicity alone is satisfied by a handle stuck at zero, so wait
+        // for it to actually reach the live total while the runtime is still
+        // open. That is the property the handle exists for.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let observed = reader.with_parent(|p| p.per_worker.iter().sum::<u64>());
+            assert!(observed >= last, "live total went backwards");
+            last = observed;
+            if observed == n {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "read handle stalled at {observed}/{n}"
+            );
+            std::hint::spin_loop();
+        }
+
+        assert_eq!(runtime.finish().parent.per_worker.iter().sum::<u64>(), n);
     }
 
     #[test]
@@ -1182,6 +1216,13 @@ mod runtime {
         .parent
         .sketch;
 
+        // Max-register promotion is lossless, so the runtime's parent must be
+        // the single-threaded sketch exactly, not merely within 3 sigma of it.
+        let mut reference = HyperLogLog::<Classic>::default();
+        for input in &inputs {
+            reference.insert(input);
+        }
+        assert_eq!(got.registers_as_slice(), reference.registers_as_slice());
         let estimate = got.estimate() as f64;
         let error = (estimate - truth as f64).abs() / truth as f64;
         assert!(
@@ -1896,7 +1937,10 @@ impl OnlineComparison {
         );
     }
 
-    /// Both baselines must be at least as expensive as the scheme they lose to.
+    /// Harness self-check, not evidence: `merge_periods` already rounds the
+    /// baseline's spend up past its budget. This catches a sizing bug that
+    /// would starve the baseline and make the comparison meaningless; the
+    /// printed spend multiples are what say how well it was funded.
     fn assert_baselines_were_funded(&self) {
         assert!(
             self.parity_counters >= self.octo_counters,
