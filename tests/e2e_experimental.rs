@@ -195,6 +195,49 @@ fn elastic_tracks_hot_flows() {
     }
 }
 
+/// The light layer carries every flow the heavy part evicted, so its
+/// dimensions set the error on those flows. Section 4.1 discusses picking the
+/// depth; this checks the choice actually reaches the estimate.
+#[test]
+fn elastic_light_dimensions_set_the_error_on_evicted_flows() {
+    const TARGET: i32 = 50;
+    const BG_KEYS: usize = 20_000;
+
+    // 8 heavy buckets against 20k distinct flows evicts the target every time.
+    let evicted_estimate = |rows: usize, cols: usize| {
+        let mut sk =
+            Elastic::<asap_sketchlib::DefaultXxHasher>::init_with_dimensions(8, rows, cols);
+        for _ in 0..TARGET {
+            sk.insert("flow::target".to_string());
+        }
+        for i in 0..BG_KEYS {
+            sk.insert(format!("bg::{i}"));
+        }
+        assert!(
+            !sk.heavy.iter().any(|b| b.flow_id == "flow::target"),
+            "the target must be evicted for this to measure the light layer"
+        );
+        sk.query("flow::target".to_string())
+    };
+
+    let narrow = evicted_estimate(1, 64);
+    let wide = evicted_estimate(3, 4096);
+
+    // Elastic never underestimates, whatever the light layer costs in error.
+    assert!(narrow >= TARGET, "narrow light underestimated: {narrow}");
+    assert!(wide >= TARGET, "wide light underestimated: {wide}");
+
+    // Measured 379 against 50: a 1x64 light collides ~7.6x worse than 3x4096.
+    assert!(
+        wide <= TARGET * 2,
+        "a 3x4096 light should stay near the truth, got {wide} for {TARGET}"
+    );
+    assert!(
+        narrow >= wide * 4,
+        "light dimensions must reach the estimate: 1x64 gave {narrow}, 3x4096 gave {wide}"
+    );
+}
+
 #[test]
 fn eh_univ_optimized_map_tier_exact_windows() {
     let window = 100u64;

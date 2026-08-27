@@ -16,6 +16,14 @@ use std::marker::PhantomData;
 /// its negative votes reach `LAMBDA` times its positive votes.
 pub const LAMBDA: i32 = 8;
 
+/// Rows in the light layer built by [`Elastic::new`] and
+/// [`Elastic::init_with_length`].
+pub const DEFAULT_LIGHT_ROWS: usize = 3;
+
+/// Columns per light-layer row built by [`Elastic::new`] and
+/// [`Elastic::init_with_length`].
+pub const DEFAULT_LIGHT_COLS: usize = 4096;
+
 /// One slot of the heavy part: the resident flow, its vote pair, and the flag
 /// marking that part of its size lives in the light layer.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -89,16 +97,31 @@ impl<H: SketchHasher> Elastic<H> {
         Elastic::init_with_length(8)
     }
 
+    /// Heavy table of `l` buckets over the default light layer.
     pub fn init_with_length(l: i32) -> Self {
-        let mut heavy = Vec::with_capacity(l as usize);
-        for _ in 0..l {
-            heavy.push(HeavyBucket::new());
-        }
-        let light = CountMin::<Vector2D<i32>, RegularPath, H>::with_dimensions(3, 4096);
+        Elastic::init_with_dimensions(l, DEFAULT_LIGHT_ROWS, DEFAULT_LIGHT_COLS)
+    }
+
+    /// Heavy table of `bucket_count` buckets over a `light_rows` by
+    /// `light_cols` Count-Min. Bucket count sets the elephant collision rate;
+    /// the light dimensions set the error carried by every non-resident flow.
+    pub fn init_with_dimensions(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self {
+        assert!(
+            bucket_count > 0,
+            "Elastic needs at least one heavy bucket, got {bucket_count}"
+        );
+        assert!(
+            light_rows > 0 && light_cols > 0,
+            "Elastic needs a non-empty light layer, got {light_rows}x{light_cols}"
+        );
+
+        let heavy = (0..bucket_count).map(|_| HeavyBucket::new()).collect();
+        let light =
+            CountMin::<Vector2D<i32>, RegularPath, H>::with_dimensions(light_rows, light_cols);
         Elastic {
             heavy,
             light,
-            bktlen: l,
+            bktlen: bucket_count,
             _hasher: PhantomData,
         }
     }
@@ -210,6 +233,49 @@ mod tests {
             .map(|idx| format!("flow::secondary::{idx}"))
             .find(|candidate| bucket_for(candidate, sketch) == target && candidate != primary)
             .expect("unable to find colliding key for test")
+    }
+
+    #[test]
+    fn init_with_dimensions_sizes_both_parts() {
+        let sketch: Elastic = Elastic::init_with_dimensions(12, 2, 256);
+
+        assert_eq!(sketch.heavy.len(), 12);
+        assert_eq!(sketch.bktlen, 12);
+        assert_eq!(sketch.light.rows(), 2);
+        assert_eq!(sketch.light.cols(), 256);
+    }
+
+    #[test]
+    fn init_with_length_keeps_the_default_light_layer() {
+        let sketch: Elastic = Elastic::init_with_length(8);
+
+        assert_eq!(sketch.heavy.len(), 8);
+        assert_eq!(sketch.light.rows(), DEFAULT_LIGHT_ROWS);
+        assert_eq!(sketch.light.cols(), DEFAULT_LIGHT_COLS);
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one heavy bucket")]
+    fn an_empty_heavy_table_is_rejected() {
+        let _: Elastic = Elastic::init_with_length(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one heavy bucket")]
+    fn a_negative_heavy_table_is_rejected() {
+        let _: Elastic = Elastic::init_with_length(-1);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-empty light layer")]
+    fn an_empty_light_layer_is_rejected() {
+        let _: Elastic = Elastic::init_with_dimensions(8, 0, 4096);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-empty light layer")]
+    fn a_zero_width_light_layer_is_rejected() {
+        let _: Elastic = Elastic::init_with_dimensions(8, 3, 0);
     }
 
     #[test]
