@@ -41,7 +41,8 @@ pub struct KeyedCountDelta { pub key: HeapItem, pub delta: CountDelta }
 // experimental feature
 pub struct CocoDelta { pub key: String, pub value: u64 }
 pub enum ElasticDelta {
-    Heavy { key: String, value: u32 },
+    Heavy { key: String, value: u32, eviction: bool },
+    Evicted { key: String, votes: u32 },
     Light(CmDelta),
 }
 ```
@@ -58,6 +59,11 @@ insertion logic. They carry no cell index, unlike every other delta here,
 because the parent re-derives one — CocoSketch's victim choice and
 Elastic's bucket contest depend on what the *parent's* buckets hold, not
 on where the worker put the key.
+
+`ElasticDelta`'s extra field and extra variant are **not** in the paper.
+See [The Elastic eviction flag](#the-elastic-eviction-flag) for what they
+are, why the paper does not reach this case, and where the mechanics come
+from.
 
 ### Promotion Thresholds
 
@@ -498,12 +504,91 @@ The two keyed-bucket pairs instead replay the key, per §4.4.
 `CocoOctoAggregator` calls the weighted `Coco::insert`, so the promoted
 mass contests the parent's own buckets and runs the parent's own `v/val`
 election. `ElasticOctoAggregator` splits the halves: a `Heavy` message
-goes through `Elastic::merge_heavy` — `insert_many` plus the eviction flag
-— and a `Light` message is an ordinary Count-Min cell delta applied to
-`sketch.light`. Neither aggregator keeps a heap: Appendix C notes both
-sketches already carry their own heavy-key storage, which is also why
-Table 1 gives them a throughput ratio near 1 (1.01× and 0.93×) while
-still reporting 37.25× and 14.03× better accuracy.
+goes through `Elastic::merge_heavy`, a `Light` message is an ordinary
+Count-Min cell delta applied to `sketch.light`, and an `Evicted` message
+goes through `Elastic::absorb_evicted`. Neither aggregator keeps a heap:
+Appendix C notes both sketches already carry their own heavy-key storage,
+which is also why Table 1 gives them a throughput ratio near 1 (1.01× and
+0.93×) while still reporting 37.25× and 14.03× better accuracy.
+
+### The Elastic eviction flag
+
+**What the paper says.** §4.4, *"Handling counters with flow keys"*: for a
+sketch with a flow key beside every counter, OctoSketch "will send both
+the key and the counter to the aggregator and set the counter to zero if
+the counter is large enough. For each `<key, counter>` pair, the
+aggregator inserts the key into the sketch using the same insertion logic
+as the original sketch." That is the whole rule. It says nothing about an
+eviction flag.
+
+**Why it says nothing.** The Elastic sketch in the OctoSketch authors'
+own repository (`sketch/Elastic.h`) is a simplified one: its bucket is
+`{int32_t vote; Key ID[]; int32_t count[]}` with no flag and a single
+`vote` rather than the paper's positive/negative pair, its light part is
+one `int32_t sketch[]` array rather than a Count-Min, and `query_all`
+returns `buckets[i].count[j] + sketch[hash(ID)]` — it adds the light part
+**unconditionally**, for every key. Their single-threaded baseline
+(`CPU/Elastic/Ideal.h`) instantiates that same `MyElastic`, so the
+OctoSketch variant loses nothing against the baseline it is measured
+against, and the question never arises.
+
+**Why it matters here.** This crate implements the Elastic Sketch of the
+original paper, where a heavy bucket carries a flag meaning *part of this
+flow's mass is in the light layer* and `Elastic::query` reads the light
+layer only when the flag is set. In the authors' reference implementation
+the flag is literally bit 31 of the counter
+(`buckets[pos].val[min_counter] = 0x80000001` in
+`src/CPU/ElasticSketch/HeavyPart.cpp`, tested by
+`if(heavy_result == 0 || HIGHEST_BIT_IS_1(heavy_result))` in
+`ElasticSketch.cpp::query`). Applying §4.4's rule literally to *that*
+sketch loses the flag: the worker's light writes arrive unkeyed, so the
+parent's bucket never learns its resident has light mass, and heavy flows
+are under-reported. Forcing the flag on instead makes every heavy flow
+read Count-Min noise it does not own, and overestimates all of them.
+Measured on a Zipf-1.2 stream (20k keys, 200k packets, 1024 heavy
+buckets, 3×4096 light, τ=31, hash-by-key, ARE over the true top-200,
+seed 7; seeds 11 and 23 rank the four rules identically):
+
+| aggregator rule | 1 worker | 4 workers | 8 workers | under-estimated of 200 |
+| --- | --- | --- | --- | --- |
+| single-threaded `Elastic` | 0.0067 | — | — | 0 |
+| flag always set | 0.0190 | 0.0146 | 0.0157 | 0, but *every* flow over-reads |
+| §4.4 literally, no flag | 0.1087 | 0.0367 | 0.0280 | 146 / 57 / 31 |
+| **shipped** | 0.0167 | 0.0071 | 0.0055 | 0 |
+
+**What we do, and where it comes from.** The extension is ours; the two
+mechanics are the Elastic authors'.
+
+1. *The flag rides with the counter.* `ElasticDelta::Heavy` carries the
+   worker bucket's flag, and the worker maintains one with the parent's
+   semantics — set on takeover by eviction, cleared when seating a
+   previously unoccupied slot, which is `val[min_counter] = 0x80000001`
+   against `val[min_counter] = f` in `HeavyPart.cpp`. The aggregator ORs
+   it into the parent bucket only when the arriving key ends up resident
+   there. This is the same coupling as `ElasticSketch.cpp`, where the
+   counter word handed between the two parts (`swap_val`) *is* the flag.
+2. *The eviction spill travels keyed.* `ElasticSketch::insert` case 1
+   hands the evicted resident to the light part under its own key:
+   `light_part.insert(swap_key, GetCounterVal(swap_val))`. A worker
+   cannot express that through an unkeyed cell delta, so it ships
+   `ElasticDelta::Evicted`. The aggregator adds `votes` to the parent's
+   light layer under that key and flags the key's bucket if it is
+   resident. The message goes out on *every* worker eviction, `votes` of
+   zero included — a promotion zeroes the counter while the flow stays
+   resident, so an eviction right after one carries nothing but is still
+   the only way the parent hears that this flow's remaining mass will now
+   arrive through the light layer. (`CPU/Elastic/Ours.h` suppresses that
+   case with `if(minVal != 0)`; it has no flag to carry and we do.)
+
+The ordinary "an arrival that loses a bucket contest spills 1" path is
+unchanged: unkeyed, batched through the light `CmWorkerSketch`, promoted
+at τ like any other Count-Min cell. Cost of the keyed spill over the
+always-flag rule: +0.1–0.6% worker→aggregator messages at 4 and 8
+workers, +7% at the degenerate 1-worker setting.
+
+The choice is made where the paper does not reach, against the paper's
+own stated goal — the parent's state should be what the original sketch
+would have reached — not against a sentence in it.
 
 ### Sharing a threshold across the fleet
 

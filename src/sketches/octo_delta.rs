@@ -150,17 +150,44 @@ pub struct CocoDelta {
 /// Appendix C keeps both halves in the worker and promotes them differently:
 /// the heavy part ships `<key, votes>` the way CocoSketch does, while the light
 /// part is a Count-Min and ships the ordinary cell delta.
+///
+/// Two of the three variants go beyond §4.4's `<key, counter>`, because this
+/// crate implements the Elastic Sketch of the original paper, whose heavy
+/// bucket carries an eviction flag that §4.4's rule has no way to move. Both
+/// mechanics are taken from the Elastic authors' implementation: the flag rides
+/// with the counter word it qualifies (`swap_val`, tested with
+/// `HIGHEST_BIT_IS_1`, in `src/CPU/ElasticSketch/ElasticSketch.cpp`), and the
+/// evicted resident travels under its own key
+/// (`light_part.insert(swap_key, GetCounterVal(swap_val))`, same file).
 #[cfg(feature = "experimental")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ElasticDelta {
-    /// Heavy-part bucket: the resident flow and the votes it accumulated.
+    /// Heavy-part bucket: the resident flow, the votes it accumulated, and the
+    /// bucket's eviction flag.
     Heavy {
         /// Flow the promoted bucket holds.
         key: String,
         /// Votes recorded for it since the bucket last promoted.
         value: u32,
+        /// Whether the worker's bucket holds this flow by eviction, so part of
+        /// the flow's mass may sit in a light layer.
+        eviction: bool,
+    },
+    /// A resident evicted from a worker's heavy bucket, handed to the light
+    /// part under its own key rather than folded into an unkeyed cell delta.
+    ///
+    /// Emitted on every worker eviction, `votes` of zero included: a promotion
+    /// zeroes the counter while the flow stays resident, so a later eviction
+    /// carries nothing but still tells the aggregator that the flow's remaining
+    /// mass will arrive through the light layer.
+    Evicted {
+        /// The evicted flow.
+        key: String,
+        /// Votes it held when it was evicted, `GetCounterVal(swap_val)`.
+        votes: u32,
     },
     /// Light-part cell, promoted exactly as a Count-Min worker's would be.
+    /// Carries the arrivals that lose a bucket contest, one at a time.
     Light(CmDelta),
 }
 

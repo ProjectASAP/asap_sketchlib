@@ -2874,9 +2874,9 @@ mod keyed_buckets {
     use asap_sketchlib::CmWorkerSketch;
     use asap_sketchlib::sketches::elastic::LAMBDA;
     use asap_sketchlib::{
-        COCO_PROMASK, Coco, CocoDelta, CocoOctoAggregator, CocoOctoPlan, CocoOctoWorker,
-        ELASTIC_PROMASK, Elastic, ElasticDelta, ElasticOctoAggregator, ElasticOctoPlan,
-        ElasticOctoWorker, flow_key_string,
+        CANONICAL_HASH_SEED, COCO_PROMASK, Coco, CocoDelta, CocoOctoAggregator, CocoOctoPlan,
+        CocoOctoWorker, ELASTIC_PROMASK, Elastic, ElasticDelta, ElasticOctoAggregator,
+        ElasticOctoPlan, ElasticOctoWorker, flow_key_string,
     };
     use std::collections::{HashMap, HashSet};
 
@@ -3468,12 +3468,13 @@ mod keyed_buckets {
     /// Appendix C splits the Elastic promotion in two: the heavy part ships
     /// `<key, votes>` the way CocoSketch does, and "the light part's insertion
     /// logic is the same as that of the OctoSketch-optimized Count-Min sketch",
-    /// so it ships an unkeyed cell delta. A heavy message therefore carries
-    /// exactly τ, while a light one carries *at least* τ: an eviction spills
-    /// the resident's whole vote into a light cell in one step, which can push
-    /// it past τ before the check runs.
+    /// so it ships an unkeyed cell delta. This crate adds the eviction flag to
+    /// the heavy message and a third, keyed message for an evicted resident,
+    /// which is the only counter that ever moved by more than one at a time.
+    /// With it gone from the light half, a light cell promotes at exactly τ,
+    /// like any other Count-Min worker's.
     #[test]
-    fn elastic_deltas_split_into_keyed_heavy_votes_and_unkeyed_light_cells() {
+    fn elastic_deltas_split_into_keyed_heavy_votes_keyed_evictions_and_unkeyed_light_cells() {
         let stream = flow_stream(40_000, 2_048, 22_001);
         let seen: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
         let (rows, cols) = (3usize, 1_024usize);
@@ -3486,33 +3487,55 @@ mod keyed_buckets {
 
         let mut heavy = 0usize;
         let mut light = 0usize;
-        let mut light_over_tau = 0usize;
+        let mut evicted = 0usize;
+        let mut evicted_empty = 0usize;
+        let mut flagged = 0usize;
         for delta in &promoted {
             match delta {
-                ElasticDelta::Heavy { key, value } => {
+                ElasticDelta::Heavy {
+                    key,
+                    value,
+                    eviction,
+                } => {
                     heavy += 1;
+                    flagged += usize::from(*eviction);
                     assert_eq!(*value, ELASTIC_TAU, "a heavy bucket promotes one window");
                     assert!(seen.contains(key), "heavy delta named an unseen flow {key}");
                 }
+                ElasticDelta::Evicted { key, votes } => {
+                    evicted += 1;
+                    evicted_empty += usize::from(*votes == 0);
+                    assert!(
+                        *votes < ELASTIC_TAU,
+                        "an evicted resident carries less than one window, got {votes}"
+                    );
+                    assert!(
+                        seen.contains(key),
+                        "eviction delta named an unseen flow {key}"
+                    );
+                }
                 ElasticDelta::Light(cell) => {
                     light += 1;
-                    assert!(
-                        cell.value >= ELASTIC_TAU,
-                        "a light cell promotes at or past τ, got {}",
-                        cell.value
+                    assert_eq!(
+                        cell.value, ELASTIC_TAU,
+                        "the light half moves one at a time, so it promotes exactly τ"
                     );
-                    if cell.value > ELASTIC_TAU {
-                        light_over_tau += 1;
-                    }
                     assert!((cell.row as usize) < rows, "row {} out of range", cell.row);
                     assert!((cell.col as usize) < cols, "col {} out of range", cell.col);
                 }
             }
         }
-        assert!(heavy > 0 && light > 0, "both halves must promote");
         assert!(
-            light_over_tau > 0,
-            "an eviction spilling a whole vote must overshoot τ at least once"
+            heavy > 0 && light > 0 && evicted > 0,
+            "all three message kinds must appear"
+        );
+        assert!(
+            flagged > 0,
+            "a bucket taken over by eviction must ship its flag"
+        );
+        assert!(
+            evicted_empty > 0,
+            "a resident evicted right after a promotion carries zero votes and must still ship"
         );
     }
 
@@ -3548,7 +3571,7 @@ mod keyed_buckets {
                 .iter()
                 .filter_map(|d| match d {
                     ElasticDelta::Heavy { value, .. } => Some(*value as i64),
-                    ElasticDelta::Light(_) => None,
+                    ElasticDelta::Evicted { .. } | ElasticDelta::Light(_) => None,
                 })
                 .sum();
 
@@ -3580,6 +3603,9 @@ mod keyed_buckets {
             let value = match delta {
                 ElasticDelta::Heavy { value, .. } => *value,
                 ElasticDelta::Light(cell) => cell.value,
+                ElasticDelta::Evicted { key, .. } => {
+                    panic!("a flush evicts nobody, but handed over {key}")
+                }
             };
             assert!(
                 value > 0 && value < ELASTIC_TAU,
@@ -3603,19 +3629,23 @@ mod keyed_buckets {
         }
     }
 
-    /// The eviction branch of `CPU/Elastic/Ours.h` hashes
-    /// `buckets[pos].ID[minPos]` - the *victim* - not the arriving packet, and
-    /// spills its whole count. Addressing the spill by the arrival instead
-    /// would put the evicted flow's mass on the wrong cells and make the light
-    /// layer answer for a flow it never received.
+    /// `ElasticSketch::insert` case 1 hands the evicted resident to the light
+    /// part under *its own* key -
+    /// `light_part.insert(swap_key, GetCounterVal(swap_val))` - not under the
+    /// arriving packet's. A worker cannot do that through an unkeyed cell
+    /// delta, so the eviction travels as `ElasticDelta::Evicted` and the
+    /// aggregator addresses the parent's light layer by the victim's key.
+    /// The losing arrivals stay unkeyed and batched.
     #[test]
-    fn elastic_eviction_spills_the_evicted_resident_under_its_own_key() {
+    fn elastic_eviction_hands_the_evicted_resident_over_under_its_own_key() {
         const RESIDENT_VOTES: usize = 3;
         let (rows, cols) = (1usize, 64usize);
         // τ above anything this workload reaches, so nothing is promoted away
-        // and the whole spill stays visible in the worker's residual.
+        // and the losing arrivals stay visible in the worker's residual.
         let quiet = OctoThreshold::new(127);
-        let mut worker = ElasticOctoPlan::with_threshold(1, rows, cols, quiet).worker(0);
+        let plan = ElasticOctoPlan::with_threshold(1, rows, cols, quiet);
+        let mut worker = plan.worker(0);
+        let mut parent = plan.aggregator();
 
         let resident = "flow::resident".to_string();
         let challenger = "flow::challenger".to_string();
@@ -3628,38 +3658,62 @@ mod keyed_buckets {
             "the two keys must land on different light cells for this to measure anything"
         );
 
-        let mut promoted = 0usize;
+        let mut shipped = Vec::new();
         for _ in 0..RESIDENT_VOTES {
-            worker.process(&resident, &mut |_| promoted += 1);
+            worker.process(&resident, &mut |d| shipped.push(d));
         }
         // vote_neg reaches LAMBDA * vote_pos on this arrival, which evicts.
         for _ in 0..(LAMBDA as usize * RESIDENT_VOTES) {
-            worker.process(&challenger, &mut |_| promoted += 1);
+            worker.process(&challenger, &mut |d| shipped.push(d));
         }
-        assert_eq!(promoted, 0, "τ = 127 must keep everything in the worker");
+        assert_eq!(
+            shipped,
+            vec![ElasticDelta::Evicted {
+                key: resident.clone(),
+                votes: RESIDENT_VOTES as u32,
+            }],
+            "τ = 127 leaves the eviction as the only message the worker must send"
+        );
 
         let residual = worker.sketch().light().residual();
         assert_eq!(
-            residual[resident_cell] as usize, RESIDENT_VOTES,
-            "the evicted resident's whole vote must land on its own cell"
+            residual[resident_cell], 0,
+            "the evicted resident never touches the worker's light layer"
         );
         assert_eq!(
             residual[challenger_cell] as usize,
             LAMBDA as usize * RESIDENT_VOTES - 1,
             "the challenger spills every losing arrival but the one that evicted"
         );
+
+        for delta in shipped {
+            parent.apply(delta);
+        }
+        let light = &parent.sketch.light;
+        assert_eq!(
+            light.as_storage().query_one_counter(0, resident_cell),
+            RESIDENT_VOTES as i32,
+            "the parent's light layer takes the vote on the victim's own cell"
+        );
+        assert_eq!(
+            light.as_storage().query_one_counter(0, challenger_cell),
+            0,
+            "and puts nothing on the arrival that displaced it"
+        );
     }
 
     /// Elastic's light part is additive and never decremented, so it never
-    /// underestimates the mass hashed into a cell; and `Elastic::merge_heavy`
-    /// flags every bucket it seats or feeds, so a resident flow's estimate
-    /// reads through to the light layer - which is what the authors' `query_all`
-    /// does unconditionally (`buckets[i].count[j] + sketch[hash(ID)]`). Together
-    /// those make a flushed OctoSketch parent one-sided: no flow, resident or
-    /// evicted, may read back below its true size.
+    /// underestimates the mass hashed into a cell. Under hash-by-key routing a
+    /// flow meets exactly one worker, so every path by which its mass can reach
+    /// the parent's light layer also flags its parent bucket: a worker bucket
+    /// held by eviction ships `eviction: true` with its votes, and a worker
+    /// eviction ships `ElasticDelta::Evicted` under the victim's key. Together
+    /// those make a flushed parent one-sided: no flow, resident or evicted, may
+    /// read back below its true size.
     ///
-    /// Without the flag a heavy flow whose parent bucket never evicted anyone
-    /// loses whatever a *worker* eviction had already put in the light layer.
+    /// Drop either mechanism and a heavy flow whose parent bucket never evicted
+    /// anyone loses whatever a *worker* eviction had already put in the light
+    /// layer.
     #[test]
     fn elastic_octo_never_underestimates_any_flow_after_a_flush() {
         let stream = flow_stream(60_000, 4_096, 22_004);
@@ -3688,6 +3742,154 @@ mod keyed_buckets {
                 "{workers} workers: a 128-bucket table must push flows into the light layer"
             );
         }
+    }
+
+    /// The property the flag exists to protect. A heavy flow that never lost a
+    /// bucket contest and was never evicted - not at its worker, not at the
+    /// parent - holds all of its mass in the parent's heavy part, so its
+    /// estimate must be *exact*. Reading through to the light layer would
+    /// charge it for Count-Min mass that belongs to other flows, which is what
+    /// flagging every heavy message unconditionally does.
+    ///
+    /// A single light column puts every other flow's spill on this flow's own
+    /// cell, so "exact" is a claim the arrangement can actually falsify.
+    #[test]
+    fn a_heavy_flow_that_never_spilled_is_estimated_exactly() {
+        const BUCKETS: i32 = 4;
+        const LONE_ARRIVALS: usize = 200;
+        const CONTESTED_ARRIVALS: usize = 400;
+        let (rows, cols) = (1usize, 1usize);
+
+        let bucket_of = |key: &str| {
+            hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(key)) as usize % BUCKETS as usize
+        };
+        let in_bucket = |bucket: usize, want: usize| -> Vec<String> {
+            (0..10_000usize)
+                .map(|i| format!("flow::{i}"))
+                .filter(|key| bucket_of(key) == bucket)
+                .take(want)
+                .collect()
+        };
+        let lone = in_bucket(0, 1).pop().expect("a key hashing to bucket 0");
+        let contenders = in_bucket(1, 2);
+        assert_eq!(contenders.len(), 2, "two keys hashing to bucket 1");
+
+        let plan = ElasticOctoPlan::new(BUCKETS, rows, cols);
+        let mut worker = plan.worker(0);
+        let mut parent = plan.aggregator();
+        let mut stream: Vec<String> = (0..LONE_ARRIVALS).map(|_| lone.clone()).collect();
+        for i in 0..CONTESTED_ARRIVALS {
+            stream.push(contenders[i % 2].clone());
+        }
+        for key in &stream {
+            let mut promoted = Vec::new();
+            worker.process(key, &mut |d: ElasticDelta| promoted.push(d));
+            for delta in promoted {
+                parent.apply(delta);
+            }
+        }
+        let mut shipped = Vec::new();
+        worker.flush(&mut |d: ElasticDelta| shipped.push(d));
+        for delta in shipped {
+            parent.apply(delta);
+        }
+
+        let noise = parent
+            .sketch
+            .light
+            .estimate(&DataInput::String(lone.clone()));
+        assert!(
+            noise > 0,
+            "the contested pair must have left mass on the lone flow's light cell"
+        );
+        let bucket = parent
+            .sketch
+            .heavy
+            .iter()
+            .find(|b| b.flow_id == lone)
+            .expect("the lone flow must be resident at the parent");
+        assert!(
+            !bucket.eviction,
+            "a flow no worker ever evicted must not be flagged"
+        );
+        assert_eq!(
+            parent.sketch.query(lone.clone()),
+            LONE_ARRIVALS as i32,
+            "an unspilled heavy flow must read back exactly, not {noise} above"
+        );
+    }
+
+    /// The other half of the same protocol. A flow that *did* acquire
+    /// light-layer mass at a worker must read through to it at the parent, even
+    /// though the parent's own bucket never evicted anyone. Here the message
+    /// that carries the news is an eviction of *zero* votes - the worker had
+    /// just promoted the counter, so the takeover found nothing left to hand
+    /// over - which is why the worker ships it anyway.
+    #[test]
+    fn a_resident_that_spilled_at_a_worker_reads_through_to_the_light_layer() {
+        // One more arrival than this and the challenger is evicted in turn.
+        const SPILLS: usize = LAMBDA as usize - 2;
+        let (rows, cols) = (1usize, 64usize);
+
+        let cell_of = |key: &str| {
+            (CmWorkerSketch::hashes(rows, &DataInput::Str(key))[0] & 0xffff_ffff) as usize % cols
+        };
+        let resident = "flow::resident".to_string();
+        let challenger = (0..10_000usize)
+            .map(|i| format!("flow::challenger::{i}"))
+            .find(|key| cell_of(key) != cell_of(&resident))
+            .expect("a challenger on a different light cell");
+
+        let plan = ElasticOctoPlan::new(1, rows, cols);
+        let mut worker = plan.worker(0);
+        let mut parent = plan.aggregator();
+        let mut shipped = Vec::new();
+        let mut stream: Vec<String> = (0..ELASTIC_TAU).map(|_| resident.clone()).collect();
+        stream.push(challenger.clone());
+        stream.extend((0..SPILLS).map(|_| resident.clone()));
+        for key in &stream {
+            worker.process(key, &mut |d: ElasticDelta| shipped.push(d));
+        }
+
+        assert_eq!(
+            shipped,
+            vec![
+                ElasticDelta::Heavy {
+                    key: resident.clone(),
+                    value: ELASTIC_TAU,
+                    eviction: false,
+                },
+                ElasticDelta::Evicted {
+                    key: resident.clone(),
+                    votes: 0,
+                },
+            ],
+            "a slot seated from vacant ships an unflagged counter, and the takeover \
+             right after it hands the just-promoted resident over empty"
+        );
+
+        worker.flush(&mut |d: ElasticDelta| shipped.push(d));
+        for delta in shipped {
+            parent.apply(delta);
+        }
+
+        let exact = ELASTIC_TAU as i32 + SPILLS as i32;
+        let bucket = parent
+            .sketch
+            .heavy
+            .iter()
+            .find(|b| b.flow_id == resident)
+            .expect("the resident must still hold the parent's bucket");
+        assert!(
+            bucket.eviction,
+            "a flow evicted at a worker must be flagged at the parent"
+        );
+        assert_eq!(bucket.vote_pos, ELASTIC_TAU as i32, "the promoted window");
+        assert_eq!(
+            parent.sketch.query(resident.clone()),
+            exact,
+            "the spilled arrivals must be read back through the light layer"
+        );
     }
 
     // -----------------------------------------------------------------------

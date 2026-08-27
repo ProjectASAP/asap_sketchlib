@@ -72,19 +72,28 @@ light layer with its whole positive vote and the arrival takes the bucket with
 
 ```rust
 fn insert_many(&mut self, id: String, count: i32)
-fn merge_heavy(&mut self, id: String, votes: i32)
+fn merge_heavy(&mut self, id: String, votes: i32, eviction: bool)
+fn absorb_evicted(&mut self, id: String, votes: i32)
 ```
 
 `insert_many` is `insert` with a weight: a matching bucket takes `count`
 positive votes, a non-matching one takes `count` negative votes, and a takeover
 seats the arrival with `count` of each. `count` of 1 is `insert` exactly.
 
-`merge_heavy` is `insert_many` plus the eviction flag, for absorbing a
-`<flow, votes>` message from another sketch's heavy part. The flag is set for
-the same reason `merge` flags every surviving bucket: the sender's light layer
-may hold part of this flow, and nothing short of trusting the sender's Count-Min
-can rule that out, so the estimate reads through. That overestimates rather than
-underestimates.
+`merge_heavy` absorbs a `<flow, votes, eviction>` message from another sketch's
+heavy part: `insert_many`, plus the sender's flag OR-ed in when the arrival ends
+up resident here. The flag travels with the counter it qualifies, as `swap_val`
+does in `src/CPU/ElasticSketch/ElasticSketch.cpp`, where the counter word handed
+between the two parts *is* the flag. A sender whose bucket is unflagged holds
+that flow's whole mass in its heavy part, so flagging it here would make the
+estimate read Count-Min mass belonging to other flows.
+
+`absorb_evicted` absorbs a resident the sender's heavy part evicted, under its
+own key — `light_part.insert(swap_key, GetCounterVal(swap_val))` in
+`ElasticSketch::insert` case 1. The votes go to the light layer under `id`, and
+`id`'s bucket here is flagged if it still holds it. `votes` of zero still flags:
+the sender can no longer speak for this flow's heavy part, so whatever it sees
+of the flow next arrives through the light layer.
 
 ### Overload mode
 
@@ -349,12 +358,20 @@ out.parent.sketch.query("flow::7".to_string());
 Appendix C of the OctoSketch paper keeps both halves in the worker and promotes
 them differently. `ElasticOctoWorker` holds a heavy table with one-byte vote
 counters and a one-byte Count-Min light layer: the heavy part ships
-`<flow, votes>` and the light part ships an ordinary cell delta, so an eviction
-promotes the *evicted* flow rather than the arriving one. `ElasticOctoAggregator`
-routes a heavy message through `merge_heavy` — the parent runs its own bucket
-contest, and may evict a different flow than the worker did — and applies a light
-message straight to `sketch.light`. Keys are rendered with `flow_key_string`, and
-that rendering is what `query` must be asked for. See `docs/api/api_octo.md`.
+`<flow, votes, eviction>`, the light part ships an ordinary unkeyed cell delta
+for arrivals that lose a bucket contest, and an eviction ships the *evicted*
+flow keyed, as `ElasticDelta::Evicted`. `ElasticOctoAggregator` routes those to
+`merge_heavy` — the parent runs its own bucket contest, and may evict a different
+flow than the worker did — `sketch.light` directly, and `absorb_evicted`.
+
+The flag and the keyed eviction go beyond §4.4's `<key, counter>` rule, which
+was written against a flagless Elastic and breaks measurably on this one.
+`docs/api/api_octo.md`, "The Elastic eviction flag", states what is sourced from
+the two papers and their implementations and what is ours, with the ablation
+that decided it.
+
+Keys are rendered with `flow_key_string`, and that rendering is what `query`
+must be asked for. See `docs/api/api_octo.md`.
 
 ## Departures from the reference implementation
 

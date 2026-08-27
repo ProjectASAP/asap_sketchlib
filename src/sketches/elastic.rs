@@ -199,23 +199,44 @@ impl<H: SketchHasher> Elastic<H> {
             .insert_many(&DataInput::String(evicted_id), evicted_votes);
     }
 
-    /// Absorbs a `<flow, votes>` message from another sketch's heavy part, the
-    /// insertion an OctoSketch aggregator applies to a heavy-part delta (§4.4).
+    /// Absorbs a `<flow, votes, eviction>` message from another sketch's heavy
+    /// part, the insertion an OctoSketch aggregator applies to a heavy-part
+    /// delta (§4.4) once the flag is carried with the counter.
     ///
-    /// [`Self::insert_many`] plus the eviction flag, for the same reason
-    /// [`Self::merge`] flags every surviving bucket: the sender's light layer
-    /// may hold part of this flow -- it was evicted there once already -- and
-    /// nothing short of trusting the sender's Count-Min can rule that out. The
-    /// flag makes the estimate read through, which overestimates rather than
-    /// underestimates.
-    pub fn merge_heavy(&mut self, id: String, votes: i32) {
+    /// [`Self::insert_many`], plus the sender's flag OR-ed in when the arrival
+    /// ends up resident here. The flag travels with the counter it qualifies
+    /// exactly as `swap_val` does in the authors'
+    /// `src/CPU/ElasticSketch/ElasticSketch.cpp`, where the counter word handed
+    /// between the two parts *is* the flag. A sender whose bucket is unflagged
+    /// holds the flow's whole mass in its heavy part, so flagging it here would
+    /// make the estimate read Count-Min noise it does not own.
+    pub fn merge_heavy(&mut self, id: String, votes: i32, eviction: bool) {
         if votes <= 0 {
             return;
         }
         let idx = self.bucket_index(&id);
         let arrival = id.clone();
         self.insert_many(id, votes);
-        if self.heavy[idx].flow_id == arrival {
+        if eviction && !self.heavy[idx].is_vacant() && self.heavy[idx].flow_id == arrival {
+            self.heavy[idx].eviction = true;
+        }
+    }
+
+    /// Absorbs a resident another sketch's heavy part evicted, under its own
+    /// key: `light_part.insert(swap_key, GetCounterVal(swap_val))` in
+    /// `ElasticSketch::insert` case 1 of the authors' implementation.
+    ///
+    /// The votes go to the light layer under `id`, and `id`'s bucket here is
+    /// flagged if it still holds it. `votes` of zero still flags: the sender
+    /// has stopped being able to speak for this flow's heavy part, so whatever
+    /// it sees of it next arrives through the light layer.
+    pub fn absorb_evicted(&mut self, id: String, votes: i32) {
+        let idx = self.bucket_index(&id);
+        if votes > 0 {
+            self.light
+                .insert_many(&DataInput::String(id.clone()), votes);
+        }
+        if !self.heavy[idx].is_vacant() && self.heavy[idx].flow_id == id {
             self.heavy[idx].eviction = true;
         }
     }

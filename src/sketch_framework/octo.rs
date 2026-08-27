@@ -244,8 +244,8 @@ impl CmWorkerSketch {
     /// reaches `threshold`.
     ///
     /// The weighted form of `insert_hashes_emit_delta`, for an insertion that
-    /// moves a counter by more than one: Elastic's eviction spills a resident's
-    /// whole vote into the light layer in a single step.
+    /// moves a counter by more than one. A cell can therefore promote past
+    /// `threshold` rather than exactly at it.
     #[inline(always)]
     pub fn add_hashes_emit_delta(
         &mut self,
@@ -686,22 +686,28 @@ impl CocoWorkerSketch {
 /// Occupancy is `flow_id`, not `vote_pos` as in the parent's
 /// `HeavyBucket::is_vacant`: a promotion clears the votes and the flow stays
 /// resident, exactly as a promoted slot in `CPU/Elastic/Ours.h` keeps its `ID`.
+///
+/// `eviction` carries the parent's own semantics -- set on takeover by
+/// eviction, clear on seating a previously unoccupied slot, which is
+/// `val[min_counter] = 0x80000001` against `val[min_counter] = f` in the
+/// authors' `src/CPU/ElasticSketch/HeavyPart.cpp`.
 #[cfg(feature = "experimental")]
 #[derive(Clone, Debug, Default)]
 struct ElasticWorkerBucket {
     flow_id: Option<String>,
     vote_pos: u8,
     vote_neg: i32,
+    eviction: bool,
 }
 
 /// Elastic sketch worker: a heavy part with one-byte vote counters over a
 /// compact Count-Min light layer.
 ///
 /// Appendix C keeps both halves in the worker. The heavy part promotes the
-/// resident flow and its votes; the light part is an ordinary
-/// [`CmWorkerSketch`], promoting cell deltas with no key attached, and takes
-/// both the arrivals that lose a bucket contest and the votes of an evicted
-/// resident.
+/// resident flow, its votes and its eviction flag; the light part is an
+/// ordinary [`CmWorkerSketch`], promoting cell deltas with no key attached, and
+/// takes the arrivals that lose a bucket contest. An evicted resident does not
+/// go there: it is handed over keyed, as [`ElasticDelta::Evicted`].
 #[cfg(feature = "experimental")]
 #[derive(Clone, Debug)]
 pub struct ElasticWorkerSketch {
@@ -732,11 +738,12 @@ impl ElasticWorkerSketch {
     /// Records one occurrence of `id`, promoting whichever half crosses
     /// `threshold`.
     ///
-    /// Every branch is `Elastic::insert`'s: a vacant bucket seats the flow, a
-    /// matching one takes a positive vote, and otherwise the bucket takes a
-    /// negative vote and either the arrival goes to the light layer or, once
-    /// `vote_neg >= LAMBDA * vote_pos`, the resident is evicted into it with
-    /// its whole positive vote.
+    /// Every branch is `Elastic::insert`'s: a vacant bucket seats the flow and
+    /// clears the slot's eviction flag, a matching one takes a positive vote,
+    /// and otherwise the bucket takes a negative vote and either the arrival
+    /// goes to the light layer or, once `vote_neg >= LAMBDA * vote_pos`, the
+    /// slot is flagged and the resident is handed over as
+    /// [`ElasticDelta::Evicted`] with its whole positive vote.
     pub fn insert_emit_delta(
         &mut self,
         id: &str,
@@ -751,6 +758,7 @@ impl ElasticWorkerSketch {
             self.heavy[idx].flow_id = Some(id.to_string());
             self.heavy[idx].vote_pos = 1;
             self.heavy[idx].vote_neg = 0;
+            self.heavy[idx].eviction = false;
             self.promote_heavy(idx, threshold, emit);
             return;
         }
@@ -762,7 +770,7 @@ impl ElasticWorkerSketch {
 
         self.heavy[idx].vote_neg += 1;
         if self.heavy[idx].vote_neg < LAMBDA * self.heavy[idx].vote_pos as i32 {
-            self.spill(id, 1, threshold, emit);
+            self.spill(id, threshold, emit);
             return;
         }
 
@@ -770,10 +778,12 @@ impl ElasticWorkerSketch {
         let evicted_id = self.heavy[idx].flow_id.replace(id.to_string());
         self.heavy[idx].vote_pos = 1;
         self.heavy[idx].vote_neg = 1;
-        // A resident whose votes were just promoted spills nothing: its mass is
-        // already at the aggregator.
-        if let Some(evicted_id) = evicted_id.filter(|_| evicted_votes > 0) {
-            self.spill(&evicted_id, evicted_votes as u32, threshold, emit);
+        self.heavy[idx].eviction = true;
+        if let Some(evicted_id) = evicted_id {
+            emit(ElasticDelta::Evicted {
+                key: evicted_id,
+                votes: evicted_votes as u32,
+            });
         }
         self.promote_heavy(idx, threshold, emit);
     }
@@ -789,6 +799,7 @@ impl ElasticWorkerSketch {
                 emit(ElasticDelta::Heavy {
                     key: resident,
                     value: bucket.vote_pos as u32,
+                    eviction: bucket.eviction,
                 });
             }
             bucket.vote_pos = 0;
@@ -797,16 +808,18 @@ impl ElasticWorkerSketch {
             .flush(&mut |delta| emit(ElasticDelta::Light(delta)));
     }
 
-    /// Adds `count` to the light layer's cells for `id`.
-    fn spill(&mut self, id: &str, count: u32, threshold: u32, emit: &mut impl FnMut(ElasticDelta)) {
+    /// Adds one to the light layer's cells for `id`, the only unkeyed write
+    /// the worker makes.
+    fn spill(&mut self, id: &str, threshold: u32, emit: &mut impl FnMut(ElasticDelta)) {
         let hashes = CmWorkerSketch::hashes(self.light.rows(), &DataInput::Str(id));
         self.light
-            .add_hashes_emit_delta(&hashes, count, threshold, &mut |delta| {
+            .insert_hashes_emit_delta(&hashes, threshold, &mut |delta| {
                 emit(ElasticDelta::Light(delta))
             });
     }
 
-    /// Ships the bucket's votes and clears them if they reached `threshold`.
+    /// Ships the bucket's votes and its flag, and clears the votes, if they
+    /// reached `threshold`.
     fn promote_heavy(&mut self, idx: usize, threshold: u32, emit: &mut impl FnMut(ElasticDelta)) {
         let bucket = &mut self.heavy[idx];
         if (bucket.vote_pos as u32) < threshold {
@@ -816,6 +829,7 @@ impl ElasticWorkerSketch {
             emit(ElasticDelta::Heavy {
                 key: resident,
                 value: bucket.vote_pos as u32,
+                eviction: bucket.eviction,
             });
         }
         bucket.vote_pos = 0;
@@ -2392,7 +2406,9 @@ impl OctoWorker for ElasticOctoWorker {
 /// parent's own insertion logic as `Elastic::merge_heavy`, so the arrival
 /// contests the *parent's* bucket and may evict a different flow than it did on
 /// the worker; a light message is an ordinary Count-Min cell delta and is added
-/// to the light layer as-is.
+/// to the light layer as-is. A worker's evicted resident arrives keyed and goes
+/// through `Elastic::absorb_evicted`, which is where the parent learns that a
+/// flow it still holds has mass coming through the light layer.
 #[cfg(feature = "experimental")]
 pub struct ElasticOctoAggregator {
     /// Parent Elastic sketch updated by worker deltas.
@@ -2417,7 +2433,12 @@ impl OctoAggregator for ElasticOctoAggregator {
     #[inline(always)]
     fn apply(&mut self, delta: ElasticDelta) {
         match delta {
-            ElasticDelta::Heavy { key, value } => self.sketch.merge_heavy(key, value as i32),
+            ElasticDelta::Heavy {
+                key,
+                value,
+                eviction,
+            } => self.sketch.merge_heavy(key, value as i32, eviction),
+            ElasticDelta::Evicted { key, votes } => self.sketch.absorb_evicted(key, votes as i32),
             ElasticDelta::Light(delta) => self.sketch.light.apply_delta(delta),
         }
     }
@@ -3266,17 +3287,21 @@ mod worker_tests {
         let mut worker = ElasticWorkerSketch::new(1, 2, 64);
         let mut heavy = 0usize;
         let mut light = 0usize;
+        let mut evicted = 0usize;
         // One heavy bucket and two flows: the resident promotes its votes, the
-        // loser goes to the light layer and promotes cell deltas.
+        // loser goes to the light layer and promotes cell deltas, and a
+        // takeover hands the loser over keyed.
         for i in 0..1_000u32 {
             let key = if i % 2 == 0 { "flow::a" } else { "flow::b" };
             worker.insert_emit_delta(key, ELASTIC_PROMASK, &mut |d| match d {
                 ElasticDelta::Heavy { .. } => heavy += 1,
+                ElasticDelta::Evicted { .. } => evicted += 1,
                 ElasticDelta::Light(_) => light += 1,
             });
         }
         assert!(heavy > 0, "the heavy part must promote");
         assert!(light > 0, "the light part must promote");
+        assert!(evicted > 0, "a takeover must hand the resident over keyed");
     }
 
     #[test]
