@@ -205,6 +205,7 @@ Test file: [`src/sketches/coco.rs`](../src/sketches/coco.rs)
 | --- | --- | --- |
 | `insert_then_estimate_matches_full_value_for_partial_key` | Insert then estimate matches full value for partial key. | Core behavior for insert/query/update and deterministic semantics is validated; the substring query and `estimate_key` both return `5`. |
 | `estimate_with_udf_allows_custom_partial_matching` | Estimate with udf allows custom partial matching. | Core behavior for insert/query/update and deterministic semantics is validated. |
+| `tied_minimum_buckets_are_chosen_uniformly_at_random` | Buckets tied at the smallest value are picked uniformly. | Inserts one key into 2,000 fresh `32x4` tables, where all four mapped buckets tie at `0`, and verifies each row takes between 200 and 800 of the landings rather than row 0 taking all of them. |
 | `a_key_occupies_at_most_one_bucket_per_row` | A key never gains a second home in the table. | After 64 inserts of one key into a `32x4` table, verifies exactly one bucket holds it and `estimate_key` returns `64`. |
 | `estimate_key_never_exceeds_the_inserted_mass` | Point queries stay inside the table mass. | Over 500 weighted inserts across 40 keys in an `8x2` table, verifies the table mass equals the inserted mass and no per-key estimate exceeds it. |
 | `merge_combines_tables_without_losing_counts` | Merge combines tables without losing counts. | Merge behavior preserves expected aggregate semantics and internal invariants. |

@@ -30,6 +30,9 @@ fn insert(&mut self, key: &str, v: u64)
 The SIGCOMM '21 update: the `d` mapped buckets are scanned for `key` first and a
 match absorbs `v` directly; otherwise the whole increment lands in the smallest
 of them and that bucket's key is replaced with `key` with probability `v / val`.
+When several buckets share that smallest value the paper draws one of them
+uniformly at random, which matters most on a fresh table where every mapped
+bucket still holds `0`.
 
 ## Query
 

@@ -14,6 +14,7 @@
 
 use crate::{DataInput, DefaultXxHasher, SketchHasher, Vector2D};
 use rand::Rng;
+use rand::rngs::ThreadRng;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -120,15 +121,18 @@ impl<H: SketchHasher> Coco<H> {
     /// Adds `v` to `key` using the paper's stochastic variance-optimized update.
     ///
     /// The `d` mapped buckets are scanned for `key` first; a match absorbs `v`
-    /// directly. Otherwise the whole increment lands in the smallest of them and
+    /// directly. Otherwise the whole increment lands in the smallest of them,
+    /// drawn uniformly at random when several share that smallest value, and
     /// that bucket's key is replaced with `key` with probability `v / val`.
     pub fn insert(&mut self, key: &str, v: u64) {
         if self.d == 0 || self.w == 0 {
             return;
         }
         let key_input = DataInput::Str(key);
+        let mut rng: Option<ThreadRng> = None;
         let mut victim = (0usize, 0usize);
         let mut victim_val = u64::MAX;
+        let mut tied = 0u32;
 
         for i in 0..self.d {
             let idx = H::hash64_seeded(i, &key_input) as usize % self.w;
@@ -140,6 +144,13 @@ impl<H: SketchHasher> Coco<H> {
             if bucket.val < victim_val {
                 victim_val = bucket.val;
                 victim = (i, idx);
+                tied = 1;
+            } else if bucket.val == victim_val {
+                // reservoir sampling: the n-th tie takes the slot with probability 1/n
+                tied += 1;
+                if rng.get_or_insert_with(rand::rng).random_range(0..tied) == 0 {
+                    victim = (i, idx);
+                }
             }
         }
 
@@ -148,7 +159,9 @@ impl<H: SketchHasher> Coco<H> {
         let elected = match bucket.full_key {
             None => true,
             Some(_) => {
-                let draw = rand::rng().random_range(0.0..=1.0_f64);
+                let draw = rng
+                    .get_or_insert_with(rand::rng)
+                    .random_range(0.0..=1.0_f64);
                 v as f64 > draw * bucket.val as f64
             }
         };
@@ -254,6 +267,33 @@ mod tests {
 
         let total_all = coco.estimate_with_udf("region", matcher);
         assert_eq!(total_all, 10);
+    }
+
+    #[test]
+    fn tied_minimum_buckets_are_chosen_uniformly_at_random() {
+        // every mapped bucket of a fresh table holds 0, so all TEST_D of them tie
+        const TRIALS: usize = 2_000;
+        let mut landings = [0usize; TEST_D];
+
+        for _ in 0..TRIALS {
+            let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+            coco.insert("flow::tie-probe", 1);
+            let row = (0..TEST_D)
+                .find(|i| {
+                    (0..TEST_W)
+                        .any(|j| coco.table[*i][j].full_key.as_deref() == Some("flow::tie-probe"))
+                })
+                .expect("the probe key must land somewhere");
+            landings[row] += 1;
+        }
+
+        // uniform over 4 rows puts 500 in each; the band is ~15 sigma wide either way
+        for (row, count) in landings.iter().enumerate() {
+            assert!(
+                *count > TRIALS / 10 && *count < TRIALS * 2 / 5,
+                "row {row} took {count} of {TRIALS} landings, expected 200..800"
+            );
+        }
     }
 
     #[test]
