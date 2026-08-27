@@ -74,6 +74,20 @@ pub trait MatrixFastHash: Clone {
     fn sign_for_row(&self, row: usize) -> i32;
 }
 
+#[inline(always)]
+pub(crate) fn cols_mask_bits(cols: usize) -> u32 {
+    if cols.is_power_of_two() {
+        cols.ilog2()
+    } else {
+        cols.ilog2() + 1
+    }
+}
+
+#[inline(always)]
+pub(crate) fn cols_mask(cols: usize) -> u128 {
+    (1u128 << cols_mask_bits(cols)) - 1
+}
+
 /// Shared column-folding logic: extract the row bits, then reduce to
 /// `[0, cols)` without a division when `cols` is a power of two.
 ///
@@ -102,12 +116,8 @@ impl MatrixFastHash for MatrixHashType {
 
     #[inline(always)]
     fn col_for_row(&self, row: usize, cols: usize) -> usize {
-        let mask_bits = if cols.is_power_of_two() {
-            cols.ilog2()
-        } else {
-            cols.ilog2() + 1
-        };
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = cols_mask_bits(cols);
+        let mask = cols_mask(cols);
         fold_to_col(self.row_hash(row, mask_bits, mask), cols)
     }
 
@@ -120,11 +130,7 @@ impl MatrixFastHash for MatrixHashType {
 impl MatrixFastHash for u64 {
     #[inline(always)]
     fn assert_compatible(rows: usize, cols: usize) {
-        let mask_bits = if cols.is_power_of_two() {
-            cols.ilog2() as usize
-        } else {
-            cols.ilog2() as usize + 1
-        };
+        let mask_bits = cols_mask_bits(cols) as usize;
         let bits_per_row = mask_bits + 1;
         let bits_required = bits_per_row.saturating_mul(rows);
         assert!(
@@ -140,13 +146,9 @@ impl MatrixFastHash for u64 {
 
     #[inline(always)]
     fn col_for_row(&self, row: usize, cols: usize) -> usize {
-        let mask_bits = if cols.is_power_of_two() {
-            cols.ilog2() as usize
-        } else {
-            cols.ilog2() as usize + 1
-        };
-        let mask = ((1u64 << mask_bits) - 1) as u128;
-        fold_to_col(((*self >> (mask_bits * row)) as u128) & mask, cols)
+        let mask_bits = cols_mask_bits(cols);
+        let mask = cols_mask(cols);
+        fold_to_col(((*self >> (mask_bits as usize * row)) as u128) & mask, cols)
     }
 
     #[inline(always)]
@@ -159,11 +161,7 @@ impl MatrixFastHash for u64 {
 impl MatrixFastHash for u128 {
     #[inline(always)]
     fn assert_compatible(rows: usize, cols: usize) {
-        let mask_bits = if cols.is_power_of_two() {
-            cols.ilog2() as usize
-        } else {
-            cols.ilog2() as usize + 1
-        };
+        let mask_bits = cols_mask_bits(cols) as usize;
         let bits_per_row = mask_bits + 1;
         let bits_required = bits_per_row.saturating_mul(rows);
         assert!(
@@ -179,13 +177,9 @@ impl MatrixFastHash for u128 {
 
     #[inline(always)]
     fn col_for_row(&self, row: usize, cols: usize) -> usize {
-        let mask_bits = if cols.is_power_of_two() {
-            cols.ilog2() as usize
-        } else {
-            cols.ilog2() as usize + 1
-        };
-        let mask = (1u128 << mask_bits) - 1;
-        fold_to_col((*self >> (mask_bits * row)) & mask, cols)
+        let mask_bits = cols_mask_bits(cols);
+        let mask = cols_mask(cols);
+        fold_to_col((*self >> (mask_bits as usize * row)) & mask, cols)
     }
 
     #[inline(always)]

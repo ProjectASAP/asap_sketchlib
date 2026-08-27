@@ -36,12 +36,8 @@ where
         D: serde::Deserializer<'de>,
     {
         let input = Vector2DDeserialize::deserialize(deserializer)?;
-        let mask_bits = if input.cols.is_power_of_two() {
-            input.cols.ilog2()
-        } else {
-            input.cols.ilog2() + 1
-        };
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = super::matrix_storage::cols_mask_bits(input.cols);
+        let mask = super::matrix_storage::cols_mask(input.cols);
         Ok(Self {
             data: input.data,
             rows: input.rows,
@@ -58,12 +54,8 @@ impl<T> Vector2D<T> {
     /// The underlying storage is left uninitialized until `fill` or similar methods are called,
     /// allowing callers to decide when and how counters are populated.
     pub fn init(rows: usize, cols: usize) -> Self {
-        let mask_bits = if cols.is_power_of_two() {
-            cols.ilog2()
-        } else {
-            cols.ilog2() + 1
-        };
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = super::matrix_storage::cols_mask_bits(cols);
+        let mask = super::matrix_storage::cols_mask(cols);
         Self {
             data: Vec::with_capacity(rows * cols),
             rows,
@@ -81,12 +73,8 @@ impl<T> Vector2D<T> {
     where
         F: FnMut(usize, usize) -> T,
     {
-        let mask_bits = if cols.is_power_of_two() {
-            cols.ilog2()
-        } else {
-            cols.ilog2() + 1
-        };
-        let mask = (1u128 << mask_bits) - 1;
+        let mask_bits = super::matrix_storage::cols_mask_bits(cols);
+        let mask = super::matrix_storage::cols_mask(cols);
         let mut data = Vec::with_capacity(rows * cols);
         for r in 0..rows {
             for c in 0..cols {
@@ -236,11 +224,7 @@ impl<T> Vector2D<T> {
     #[inline(always)]
     /// Returns the bit width needed to represent a column index.
     pub fn get_mask_bits(&self) -> u32 {
-        if self.cols.is_power_of_two() {
-            self.cols.ilog2()
-        } else {
-            self.cols.ilog2() + 1
-        }
+        super::matrix_storage::cols_mask_bits(self.cols)
     }
 
     /// get the number of bits required for hashed value

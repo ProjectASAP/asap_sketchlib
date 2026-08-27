@@ -392,7 +392,7 @@ impl<T: NumericalValue> KLL<T> {
     /// Hot-path insert: decrement `levels[0]`, write item, check capacity.
     #[inline]
     fn push_value(&mut self, value: T) {
-        self.cdf_cache = None;
+        self.invalidate_cdf_cache();
         if self.levels[0] == 0 {
             self.compress_while_updating();
         }
@@ -431,7 +431,7 @@ impl<T: NumericalValue> KLL<T> {
         // Redundant today (compact is only reachable via push_value, which
         // already drops the cache) but cheap insurance against future
         // call-graph drift silently serving stale quantiles.
-        self.cdf_cache = None;
+        self.invalidate_cdf_cache();
         let beg = self.levels[h];
         let end = self.levels[h + 1];
         let pop = end - beg;
@@ -503,6 +503,11 @@ impl<T: NumericalValue> KLL<T> {
     #[inline]
     fn level_size(&self, h: usize) -> usize {
         self.levels[h + 1] - self.levels[h]
+    }
+
+    #[inline(always)]
+    fn invalidate_cdf_cache(&mut self) {
+        self.cdf_cache = None;
     }
 
     // -- Query-side ----------------------------------------------------------
@@ -608,7 +613,7 @@ impl<T: NumericalValue> KLL<T> {
         if other_end == other_start {
             return; // `other` is empty: nothing to merge.
         }
-        self.cdf_cache = None;
+        self.invalidate_cdf_cache();
 
         let target_num_levels = self.num_levels.max(other.num_levels);
 
@@ -742,7 +747,7 @@ impl<T: NumericalValue> KLL<T> {
     /// behavior.
     pub fn clear(&mut self) {
         let mc = self.max_capacity;
-        self.cdf_cache = None;
+        self.invalidate_cdf_cache();
         self.levels[0] = mc;
         self.levels[1] = mc;
         self.num_levels = 1;
@@ -879,7 +884,7 @@ impl<T: NumericalValue> KLL<T> {
         if self.num_levels <= 1 {
             return;
         }
-        self.cdf_cache = None;
+        self.invalidate_cdf_cache();
         for h in 1..self.num_levels {
             let s = self.levels[h];
             let e = self.levels[h + 1];
