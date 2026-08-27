@@ -158,6 +158,43 @@ impl<H: SketchHasher> Elastic<H> {
             .insert_many(&DataInput::String(evicted_id), evicted_votes);
     }
 
+    /// Records one occurrence of `id` against the heavy part alone, the
+    /// overload path from the paper's section 3.3. The light layer is read by
+    /// queries but never written, so an unelected flow is dropped outright.
+    ///
+    /// A vacant bucket seats the flow and a matching bucket takes a positive
+    /// vote, both as in [`Self::insert`]. A non-matching arrival takes a
+    /// negative vote and is discarded. On takeover the arrival keeps the
+    /// evicted flow's positive vote instead of starting at 1, and the evicted
+    /// flow's size is lost rather than spilled.
+    ///
+    /// The arrival also inherits the bucket's eviction flag, and the negative
+    /// vote resets to 0. Both follow `quick_insert` in the authors' reference
+    /// implementation, which leaves the counter and its flag bit untouched.
+    pub fn insert_heavy_only(&mut self, id: String) {
+        let idx = self.bucket_index(&id);
+        let bucket = &mut self.heavy[idx];
+
+        if bucket.is_vacant() {
+            bucket.occupy(id);
+            return;
+        }
+        if bucket.flow_id == id {
+            bucket.vote_pos += 1;
+            return;
+        }
+
+        bucket.vote_neg += 1;
+        if bucket.vote_neg < LAMBDA * bucket.vote_pos {
+            return;
+        }
+
+        // vote_pos and eviction are left alone: the arrival inherits the
+        // evicted flow's size and its flag
+        bucket.flow_id = id;
+        bucket.vote_neg = 0;
+    }
+
     /// Frequency estimate for `id`: the resident vote count, plus the light
     /// layer whenever the bucket carries the eviction flag.
     pub fn query(&self, id: String) -> i32 {
@@ -537,5 +574,159 @@ mod tests {
         }
         summed.merge(&right);
         assert_eq!(summed.query("flow::shared".to_string()), 50);
+    }
+
+    /// Every counter of the light layer, so a test can prove it went untouched.
+    fn light_snapshot(sketch: &Elastic) -> Vec<i32> {
+        let storage = sketch.light.as_storage();
+        (0..storage.rows())
+            .flat_map(|i| (0..storage.cols()).map(move |j| (i, j)))
+            .map(|(i, j)| storage.query_one_counter(i, j))
+            .collect()
+    }
+
+    #[test]
+    fn heavy_only_insert_never_touches_the_light_layer() {
+        // seed the light layer through the normal path so the comparison is
+        // against real counters rather than an all-zero table
+        let mut sketch: Elastic = Elastic::init_with_dimensions(8, 2, 64);
+        let primary = "flow::primary";
+        let secondary = colliding_key(primary, &sketch);
+        for _ in 0..4 {
+            sketch.insert(primary.to_string());
+        }
+        for _ in 0..3 {
+            sketch.insert(secondary.clone());
+        }
+
+        let before = light_snapshot(&sketch);
+        assert!(
+            before.iter().any(|count| *count > 0),
+            "the light layer must hold something for this test to mean anything"
+        );
+
+        // vacant bucket, then a match
+        let vacant = (0..10_000)
+            .map(|idx| format!("flow::fresh::{idx}"))
+            .find(|candidate| sketch.heavy[bucket_for(candidate, &sketch)].is_vacant())
+            .expect("a vacant bucket must exist in an 8-bucket table");
+        sketch.insert_heavy_only(vacant.clone());
+        sketch.insert_heavy_only(vacant.clone());
+
+        // non-matching arrivals: discarded first, then a takeover
+        for _ in 0..(LAMBDA * 4 + 4) {
+            sketch.insert_heavy_only(secondary.clone());
+        }
+        assert_eq!(
+            sketch.heavy[bucket_for(primary, &sketch)].flow_id,
+            secondary,
+            "the run must reach a takeover to cover that case"
+        );
+
+        assert_eq!(
+            light_snapshot(&sketch),
+            before,
+            "the heavy-only path must leave every light counter alone"
+        );
+    }
+
+    #[test]
+    fn heavy_only_takeover_inherits_the_evicted_flow_size() {
+        let mut sketch: Elastic = Elastic::init_with_length(8);
+        let primary = "flow::primary";
+        let secondary = colliding_key(primary, &sketch);
+
+        for _ in 0..10 {
+            sketch.insert_heavy_only(primary.to_string());
+        }
+        // vote_neg reaches LAMBDA * 10 on the 80th arrival, which takes over
+        for _ in 0..(LAMBDA * 10) {
+            sketch.insert_heavy_only(secondary.clone());
+        }
+
+        let bucket = &sketch.heavy[bucket_for(primary, &sketch)];
+        assert_eq!(bucket.flow_id, secondary);
+        assert_eq!(
+            bucket.vote_pos, 10,
+            "the arrival inherits the evicted flow's size, not a fresh 1"
+        );
+        assert_eq!(bucket.vote_neg, 0);
+    }
+
+    #[test]
+    fn heavy_only_takeover_inherits_the_eviction_flag() {
+        // the reference implementation's quick_insert leaves the counter and
+        // its flag bit in place, so the arrival takes over both
+        for seeded_flag in [false, true] {
+            let mut sketch: Elastic = Elastic::init_with_length(8);
+            let primary = "flow::primary";
+            let secondary = colliding_key(primary, &sketch);
+            let idx = bucket_for(primary, &sketch);
+
+            for _ in 0..10 {
+                sketch.insert_heavy_only(primary.to_string());
+            }
+            sketch.heavy[idx].eviction = seeded_flag;
+
+            for _ in 0..(LAMBDA * 10) {
+                sketch.insert_heavy_only(secondary.clone());
+            }
+
+            assert_eq!(sketch.heavy[idx].flow_id, secondary);
+            assert_eq!(
+                sketch.heavy[idx].eviction, seeded_flag,
+                "the arrival must inherit the bucket's flag, not overwrite it"
+            );
+        }
+    }
+
+    #[test]
+    fn heavy_only_takeover_discards_the_evicted_flow_as_designed() {
+        // the paper trades the evicted flow's size for one probe per packet
+        let mut sketch: Elastic = Elastic::init_with_length(8);
+        let primary = "flow::primary";
+        let secondary = colliding_key(primary, &sketch);
+
+        for _ in 0..10 {
+            sketch.insert_heavy_only(primary.to_string());
+        }
+        for _ in 0..(LAMBDA * 10) {
+            sketch.insert_heavy_only(secondary.clone());
+        }
+
+        assert_eq!(
+            sketch.query(primary.to_string()),
+            0,
+            "the evicted flow's 10 packets are gone, not spilled to the light layer"
+        );
+    }
+
+    #[test]
+    fn heavy_only_matches_insert_while_buckets_seat_and_match() {
+        let mut normal: Elastic = Elastic::init_with_length(16);
+        let mut overload: Elastic = Elastic::init_with_length(16);
+
+        for i in 0..6 {
+            let flow = format!("flow::{i}");
+            for _ in 0..(i + 3) {
+                normal.insert(flow.clone());
+                overload.insert_heavy_only(flow.clone());
+            }
+        }
+
+        for (lhs, rhs) in normal.heavy.iter().zip(overload.heavy.iter()) {
+            assert_eq!(lhs.flow_id, rhs.flow_id);
+            assert_eq!(lhs.vote_pos, rhs.vote_pos);
+            assert_eq!(lhs.vote_neg, rhs.vote_neg);
+            assert_eq!(lhs.eviction, rhs.eviction);
+        }
+        for i in 0..6 {
+            let flow = format!("flow::{i}");
+            assert_eq!(
+                normal.query(flow.clone()),
+                overload.query(flow.clone()),
+                "seating and matching must agree between the two paths"
+            );
+        }
     }
 }

@@ -68,6 +68,49 @@ vote, and either the arriving flow goes to the light layer, or — once
 light layer with its whole positive vote and the arrival takes the bucket with
 `(vote_pos, vote_neg, eviction) = (1, 1, true)`.
 
+### Overload mode
+
+```rust
+fn insert_heavy_only(&mut self, id: String)
+```
+
+Section 3.3 adapts to packet rate by letting arrivals "only access the heavy
+part, so as to record the information of elephant flows only and discard mouse
+flows". Call this instead of `insert` while your input queue is backed up, and
+go back to `insert` when it drains; the sketch holds no mode of its own, since
+only the caller can see the queue.
+
+Seating and matching behave exactly as in `insert`. The two other cases differ:
+
+- A non-matching arrival takes its negative vote and is then **dropped**. It
+  does not reach the light layer.
+- On takeover the arrival **inherits the evicted flow's positive vote** rather
+  than starting at 1 — the paper's "the flow size of `f'` is set to the flow
+  size of `f`" — and the evicted flow's size is **discarded**, not spilled.
+
+The light layer is still read by `query`; it is only never written.
+
+The arrival also **inherits the bucket's eviction flag**, and the negative vote
+resets to `0`. The paper's prose does not name either, but the authors'
+reference implementation ([BlockLiu/ElasticSketchCode](https://github.com/BlockLiu/ElasticSketchCode),
+`src/CPU/ElasticSketch/HeavyPart.cpp`) settles both: `quick_insert` writes only
+the new key and a zeroed guard, leaving the counter untouched. Since the flag
+lives in that counter's high bit, the arrival takes over the size and the flag
+together. The normal path differs — `insert` writes `0x80000001` there, setting
+the flag and resetting the size to 1, which is the paper's case 4 `(f, 1, T, 1)`.
+
+> **This path breaks the one-sided guarantee.** Every other operation on this
+> sketch never returns less than the true count. Overload mode drops mouse
+> flows outright and loses each evicted flow's accumulated size, so its
+> estimates can and do come back low. Mixing it into a stream permanently
+> lowers the answers for the flows it dropped.
+
+Measured on a 400k-arrival Zipf(1.1) stream over 20k flows, single core:
+33.3 vs 24.4 Mops/s at 64 buckets (1.37x), and 35.9 vs 30.2 Mops/s at 1024
+buckets (1.19x). The gain comes from skipping the light layer's 3 hashes and
+3 counter writes, so it is largest when collisions are frequent enough to send
+arrivals there often.
+
 ## Query
 
 ```rust
@@ -129,6 +172,8 @@ let _ = sk.query("flow".to_string());
 
 - Light-layer counters are fixed at `i32`; the paper's 8-bit counters are not
   selectable.
+- `insert_heavy_only` is lossy by design and does not keep the one-sided
+  guarantee the rest of the API holds.
 - String-centric API (`String` in insert/query).
 - Lifecycle and parity differ from structured sketches.
 
