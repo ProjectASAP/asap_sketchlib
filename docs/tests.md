@@ -192,6 +192,10 @@ Test file: [`src/sketches/elastic.rs`](../src/sketches/elastic.rs)
 | --- | --- | --- |
 | `heavy_bucket_tracks_repeated_flow_exactly` | Heavy bucket tracks repeated flow exactly. | Top-K/heavy-hitter tracking and updates behave as expected. |
 | `light_sketch_counts_colliding_flows` | Light sketch counts colliding flows. | Core functional behavior for this component path is validated. |
+| `eviction_moves_the_resident_flow_into_the_light_layer` | Takeover evicts the resident flow, not the arriving one. | After 10 inserts of a resident and `LAMBDA * 10` inserts of a colliding flow, verifies the bucket holds the arrival with `(vote_pos, vote_neg, eviction) = (1, 1, true)`, `query(resident) == 10`, and `query(arrival) == 80`. |
+| `merge_flushes_heavy_and_sum_merges_light` | Merge folds both heavy parts into the summed light layer. | Verifies post-merge `query` returns exactly `30` and `18` for the two flows and that every bucket is vacant with the eviction flag set. |
+| `merge_preserves_colliding_flow_mass` | Merge preserves mass for bucket-colliding flows. | Merges two sketches whose flows share a heavy bucket and verifies both estimates stay at or above their true counts. |
+| `a_bucket_reoccupied_after_merge_still_reads_the_light_layer` | A post-merge resident keeps its flushed mass. | After merging a 30-count flow away and re-inserting it once, verifies `query` returns `31` rather than `1`. |
 
 ### Coco
 
@@ -199,8 +203,10 @@ Test file: [`src/sketches/coco.rs`](../src/sketches/coco.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
-| `insert_then_estimate_matches_full_value_for_partial_key` | Insert then estimate matches full value for partial key. | Core behavior for insert/query/update and deterministic semantics is validated. |
+| `insert_then_estimate_matches_full_value_for_partial_key` | Insert then estimate matches full value for partial key. | Core behavior for insert/query/update and deterministic semantics is validated; the substring query and `estimate_key` both return `5`. |
 | `estimate_with_udf_allows_custom_partial_matching` | Estimate with udf allows custom partial matching. | Core behavior for insert/query/update and deterministic semantics is validated. |
+| `a_key_occupies_at_most_one_bucket_per_row` | A key never gains a second home in the table. | After 64 inserts of one key into a `32x4` table, verifies exactly one bucket holds it and `estimate_key` returns `64`. |
+| `estimate_key_never_exceeds_the_inserted_mass` | Point queries stay inside the table mass. | Over 500 weighted inserts across 40 keys in an `8x2` table, verifies the table mass equals the inserted mass and no per-key estimate exceeds it. |
 | `merge_combines_tables_without_losing_counts` | Merge combines tables without losing counts. | Merge behavior preserves expected aggregate semantics and internal invariants. |
 
 ### KMV

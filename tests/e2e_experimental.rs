@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{assert_between, uniform_u64};
+use common::{assert_between, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{Coco, DataInput, EHUnivOptimized, Elastic, KMV, UniformSampling};
 use std::collections::HashMap;
@@ -229,5 +229,87 @@ fn eh_univ_optimized_map_tier_exact_windows() {
             }
         }
         _ => panic!("expected exact Map-tier result"),
+    }
+}
+
+/// Elastic's estimator is one-sided: a resident flow reports its own votes, a
+/// displaced flow keeps its full size in the light layer, and every other flow
+/// reads a Count-Min over-estimate. No flow may come back short.
+#[test]
+fn elastic_never_underestimates_under_eviction_pressure() {
+    // A small heavy table against a wide key space forces repeated takeovers.
+    let mut sk = Elastic::<asap_sketchlib::DefaultXxHasher>::init_with_length(16);
+    let mut truth: HashMap<String, i64> = HashMap::new();
+
+    for (i, key) in zipf_u64(60_000, 4_000, 1.1, 909).into_iter().enumerate() {
+        let id = if i % 500 == 0 {
+            "flow::elephant".to_string()
+        } else {
+            format!("flow::{key}")
+        };
+        sk.insert(id.clone());
+        *truth.entry(id).or_insert(0) += 1;
+    }
+
+    let mut evicted_seen = 0usize;
+    for (id, count) in &truth {
+        let est = sk.query(id.clone()) as i64;
+        assert!(
+            est >= *count,
+            "elastic underestimated {id}: got {est}, true {count}"
+        );
+        if sk.heavy.iter().any(|b| b.flow_id == *id) {
+            continue;
+        }
+        evicted_seen += 1;
+    }
+    assert!(
+        evicted_seen > 0,
+        "the workload must actually push flows out of the heavy part"
+    );
+
+    let elephant = sk.query("flow::elephant".to_string()) as i64;
+    let true_elephant = truth["flow::elephant"];
+    assert_between(
+        elephant as f64,
+        true_elephant as f64,
+        true_elephant as f64 * 1.05,
+        "elastic elephant",
+    );
+}
+
+/// CocoSketch attributes every increment to exactly one bucket, so the paper's
+/// point query partitions the stream: summing it over the observed keys returns
+/// the total inserted mass, never more.
+#[test]
+fn coco_point_queries_partition_the_inserted_mass() {
+    let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size(128, 3);
+    let mut truth: HashMap<String, u64> = HashMap::new();
+    let mut total = 0u64;
+
+    for key in zipf_u64(40_000, 2_000, 1.2, 4242) {
+        let id = format!("key::{key}");
+        coco.insert(&id, 2);
+        *truth.entry(id).or_insert(0) += 2;
+        total += 2;
+    }
+
+    let attributed: u64 = truth.keys().map(|k| coco.estimate_key(k)).sum();
+    assert_eq!(
+        attributed, total,
+        "point queries must partition the inserted mass"
+    );
+
+    // Heavy keys hold their own bucket, so their estimates track the truth.
+    let mut ranked: Vec<(&String, &u64)> = truth.iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    for (key, count) in ranked.iter().take(10) {
+        let est = coco.estimate_key(key);
+        assert_between(
+            est as f64,
+            **count as f64 * 0.5,
+            **count as f64 * 1.5,
+            &format!("coco heavy key {key}"),
+        );
     }
 }

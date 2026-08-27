@@ -12,14 +12,12 @@ use crate::Vector2D;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct HeavyCounter {
-    pub key: String, // flow id?
-    pub vote_pos: i32,
-    pub vote_neg: i32,
-    pub flag: bool,
-}
+/// Eviction threshold `lambda` from the paper. A resident flow is replaced once
+/// its negative votes reach `LAMBDA` times its positive votes.
+pub const LAMBDA: i32 = 8;
 
+/// One slot of the heavy part: the resident flow, its vote pair, and the flag
+/// marking that part of its size lives in the light layer.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct HeavyBucket {
     pub flow_id: String,
@@ -28,6 +26,8 @@ pub struct HeavyBucket {
     pub eviction: bool,
 }
 
+/// Heavy/light frequency estimator: a heavy hash table over flow ids backed by
+/// a Count-Min light layer that absorbs evicted and unelected flows.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "")]
 pub struct Elastic<H: SketchHasher = DefaultXxHasher> {
@@ -47,18 +47,34 @@ impl Default for HeavyBucket {
 impl HeavyBucket {
     pub fn new() -> Self {
         HeavyBucket {
-            flow_id: "".to_string(),
+            flow_id: String::new(),
             vote_pos: 0,
             vote_neg: 0,
             eviction: false,
         }
     }
 
-    pub fn evict(&mut self, id: String) {
+    /// A bucket holds no flow exactly while it has no positive vote.
+    #[inline]
+    pub fn is_vacant(&self) -> bool {
+        self.vote_pos == 0
+    }
+
+    /// Seats `id` in a vacant bucket. The `eviction` flag is carried over so a
+    /// bucket vacated by [`Elastic::merge`] still reports its light-layer mass.
+    pub fn occupy(&mut self, id: String) {
         self.flow_id = id;
+        self.vote_pos = 1;
+        self.vote_neg = 0;
+    }
+
+    /// Replaces the resident flow with `id`, per the paper's takeover rule.
+    pub fn evict(&mut self, id: String) -> String {
+        let evicted = std::mem::replace(&mut self.flow_id, id);
         self.vote_pos = 1;
         self.vote_neg = 1;
         self.eviction = true;
+        evicted
     }
 }
 
@@ -87,53 +103,57 @@ impl<H: SketchHasher> Elastic<H> {
         }
     }
 
+    /// Records one occurrence of `id`.
+    ///
+    /// A vacant bucket seats the flow; a matching bucket takes a positive vote.
+    /// Otherwise the bucket takes a negative vote and either the arriving flow
+    /// goes to the light layer, or, once `vote_neg >= LAMBDA * vote_pos`, the
+    /// resident flow is evicted into the light layer with its full positive
+    /// vote and `id` takes the bucket.
     pub fn insert(&mut self, id: String) {
-        let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &DataInput::String(id.clone()));
-        let idx = hash as usize % self.bktlen as usize;
-        let heavy_bkt = &mut self.heavy[idx];
-        if heavy_bkt.flow_id.is_empty() && heavy_bkt.vote_neg == 0 && heavy_bkt.vote_pos == 0 {
-            // empty
-            heavy_bkt.flow_id = id;
-            heavy_bkt.vote_pos += 1;
-        } else if id == heavy_bkt.flow_id {
-            // matched
-            heavy_bkt.vote_pos += 1;
-        } else if id != heavy_bkt.flow_id {
-            heavy_bkt.vote_neg += 1;
-            if heavy_bkt.vote_neg / heavy_bkt.vote_pos < 8 {
-                // self.light.insert_cm(&id);
-                self.light.insert(&DataInput::String(id));
-            } else {
-                let vote = heavy_bkt.vote_pos;
-                heavy_bkt.evict(id);
-                for _ in 0..vote {
-                    // self.light. insert_cm(&to_evict);
-                    self.light
-                        .insert(&DataInput::String(heavy_bkt.flow_id.clone()));
-                }
-            }
+        let idx = self.bucket_index(&id);
+        let bucket = &mut self.heavy[idx];
+
+        if bucket.is_vacant() {
+            bucket.occupy(id);
+            return;
         }
+        if bucket.flow_id == id {
+            bucket.vote_pos += 1;
+            return;
+        }
+
+        bucket.vote_neg += 1;
+        if bucket.vote_neg < LAMBDA * bucket.vote_pos {
+            self.light.insert(&DataInput::String(id));
+            return;
+        }
+
+        let evicted_votes = bucket.vote_pos;
+        let evicted_id = bucket.evict(id);
+        self.light
+            .insert_many(&DataInput::String(evicted_id), evicted_votes);
     }
 
-    pub fn query(&mut self, id: String) -> i32 {
-        let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &DataInput::String(id.clone()));
-        let idx = hash as usize % self.bktlen as usize;
-        let heavy_bkt = &self.heavy[idx];
-        if id == heavy_bkt.flow_id {
-            if heavy_bkt.eviction {
-                // let light_result = self.light.get_est(&id) as i32;
-                let light_result = self.light.estimate(&DataInput::String(id));
-                let heavy_result = heavy_bkt.vote_pos;
-                light_result + heavy_result
+    /// Frequency estimate for `id`: the resident vote count, plus the light
+    /// layer whenever the bucket carries the eviction flag.
+    pub fn query(&self, id: String) -> i32 {
+        let idx = self.bucket_index(&id);
+        let bucket = &self.heavy[idx];
+        if !bucket.is_vacant() && bucket.flow_id == id {
+            if bucket.eviction {
+                bucket.vote_pos + self.light.estimate(&DataInput::String(id))
             } else {
-                heavy_bkt.vote_pos
+                bucket.vote_pos
             }
         } else {
-            // return self.light.get_est(&id) as i32;
             self.light.estimate(&DataInput::String(id))
         }
     }
 
+    /// Folds both heavy parts into their light layers and sums the light
+    /// layers. The merged sketch answers every flow from the light layer, and
+    /// its vacated buckets stay flagged so later residents keep reading it.
     pub fn merge(&mut self, other: &Elastic<H>) {
         assert_eq!(
             self.bktlen, other.bktlen,
@@ -141,34 +161,35 @@ impl<H: SketchHasher> Elastic<H> {
         );
 
         self.flush_heavy_to_light();
-
-        let mut other_clone = other.clone();
-        other_clone.flush_heavy_to_light();
-
-        self.light.merge(&other_clone.light);
-        self.reset_heavy();
+        self.light.merge(&other.light);
+        for bucket in &other.heavy {
+            if bucket.is_vacant() {
+                continue;
+            }
+            self.light
+                .insert_many(&DataInput::Str(&bucket.flow_id), bucket.vote_pos);
+        }
     }
 
-    fn spill_heavy_to_light(&mut self, bucket: &HeavyBucket) {
-        if bucket.flow_id.is_empty() || bucket.vote_pos <= 0 {
-            return;
-        }
-        let flow_id = bucket.flow_id.clone();
-        for _ in 0..bucket.vote_pos {
-            self.light.insert(&DataInput::String(flow_id.clone()));
-        }
+    #[inline]
+    fn bucket_index(&self, id: &str) -> usize {
+        let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(id));
+        hash as usize % self.bktlen as usize
     }
 
     fn flush_heavy_to_light(&mut self) {
-        let buckets = self.heavy.clone();
-        for bucket in &buckets {
-            self.spill_heavy_to_light(bucket);
-        }
-    }
-
-    fn reset_heavy(&mut self) {
-        for bucket in &mut self.heavy {
-            *bucket = HeavyBucket::new();
+        for idx in 0..self.heavy.len() {
+            let bucket = &mut self.heavy[idx];
+            if bucket.is_vacant() {
+                bucket.eviction = true;
+                continue;
+            }
+            let votes = bucket.vote_pos;
+            let flow_id = std::mem::take(&mut bucket.flow_id);
+            bucket.vote_pos = 0;
+            bucket.vote_neg = 0;
+            bucket.eviction = true;
+            self.light.insert_many(&DataInput::String(flow_id), votes);
         }
     }
 }
@@ -179,8 +200,16 @@ mod tests {
     use crate::{CANONICAL_HASH_SEED, DataInput, hash64_seeded};
 
     fn bucket_for(id: &str, sketch: &Elastic) -> usize {
-        let hash = hash64_seeded(CANONICAL_HASH_SEED, &DataInput::String(id.to_string()));
+        let hash = hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(id));
         hash as usize % sketch.bktlen as usize
+    }
+
+    fn colliding_key(primary: &str, sketch: &Elastic) -> String {
+        let target = bucket_for(primary, sketch);
+        (0..10_000)
+            .map(|idx| format!("flow::secondary::{idx}"))
+            .find(|candidate| bucket_for(candidate, sketch) == target && candidate != primary)
+            .expect("unable to find colliding key for test")
     }
 
     #[test]
@@ -202,17 +231,7 @@ mod tests {
         // simulate two flows mapped to the same bucket so the light CountMin tracks the second one
         let mut sketch: Elastic = Elastic::init_with_length(8);
         let primary = "flow::primary";
-        let primary_bucket = bucket_for(primary, &sketch);
-
-        let mut secondary = None;
-        for idx in 0..10_000 {
-            let candidate = format!("flow::secondary::{idx}");
-            if bucket_for(&candidate, &sketch) == primary_bucket && candidate != primary {
-                secondary = Some(candidate);
-                break;
-            }
-        }
-        let secondary = secondary.expect("unable to find colliding key for test");
+        let secondary = colliding_key(primary, &sketch);
 
         for _ in 0..10 {
             sketch.insert(primary.to_string());
@@ -235,6 +254,39 @@ mod tests {
     }
 
     #[test]
+    fn eviction_moves_the_resident_flow_into_the_light_layer() {
+        // the paper evicts the flow sitting in the bucket, not the arriving one
+        let mut sketch: Elastic = Elastic::init_with_length(8);
+        let primary = "flow::primary";
+        let secondary = colliding_key(primary, &sketch);
+
+        for _ in 0..10 {
+            sketch.insert(primary.to_string());
+        }
+        // vote_neg reaches LAMBDA * 10 on the 80th arrival, which triggers takeover
+        for _ in 0..(LAMBDA * 10) {
+            sketch.insert(secondary.clone());
+        }
+
+        let idx = bucket_for(primary, &sketch);
+        assert_eq!(sketch.heavy[idx].flow_id, secondary, "takeover must happen");
+        assert!(sketch.heavy[idx].eviction);
+        assert_eq!(sketch.heavy[idx].vote_pos, 1);
+        assert_eq!(sketch.heavy[idx].vote_neg, 1);
+
+        assert_eq!(
+            sketch.query(primary.to_string()),
+            10,
+            "evicted flow keeps its full size in the light layer"
+        );
+        assert_eq!(
+            sketch.query(secondary.clone()),
+            LAMBDA * 10,
+            "arriving flow must not absorb the evicted flow's votes"
+        );
+    }
+
+    #[test]
     fn merge_flushes_heavy_and_sum_merges_light() {
         let mut left: Elastic = Elastic::init_with_length(16);
         let mut right: Elastic = Elastic::init_with_length(16);
@@ -248,13 +300,13 @@ mod tests {
 
         left.merge(&right);
 
-        assert!(left.query("flow::left".to_string()) >= 30);
-        assert!(left.query("flow::right".to_string()) >= 18);
+        assert_eq!(left.query("flow::left".to_string()), 30);
+        assert_eq!(left.query("flow::right".to_string()), 18);
         assert!(left.heavy.iter().all(|bucket| {
             bucket.flow_id.is_empty()
-                && bucket.vote_pos == 0
+                && bucket.is_vacant()
                 && bucket.vote_neg == 0
-                && !bucket.eviction
+                && bucket.eviction
         }));
     }
 
@@ -262,17 +314,7 @@ mod tests {
     fn merge_preserves_colliding_flow_mass() {
         let mut left: Elastic = Elastic::init_with_length(8);
         let primary = "flow::primary";
-        let primary_bucket = bucket_for(primary, &left);
-
-        let mut secondary = None;
-        for idx in 0..10_000 {
-            let candidate = format!("flow::secondary::{idx}");
-            if bucket_for(&candidate, &left) == primary_bucket && candidate != primary {
-                secondary = Some(candidate);
-                break;
-            }
-        }
-        let secondary = secondary.expect("unable to find colliding key for merge test");
+        let secondary = colliding_key(primary, &left);
 
         for _ in 0..20 {
             left.insert(primary.to_string());
@@ -287,5 +329,23 @@ mod tests {
 
         assert!(left.query(primary.to_string()) >= 20);
         assert!(left.query(secondary.clone()) >= 9);
+    }
+
+    #[test]
+    fn a_bucket_reoccupied_after_merge_still_reads_the_light_layer() {
+        let mut left: Elastic = Elastic::init_with_length(8);
+        for _ in 0..30 {
+            left.insert("flow::left".to_string());
+        }
+        let right: Elastic = Elastic::init_with_length(8);
+
+        left.merge(&right);
+        left.insert("flow::left".to_string());
+
+        assert_eq!(
+            left.query("flow::left".to_string()),
+            31,
+            "a post-merge resident must keep the mass flushed into the light layer"
+        );
     }
 }

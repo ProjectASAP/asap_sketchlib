@@ -6,7 +6,8 @@ Status: `Unstable`
 
 ## Purpose
 
-Substring-based aggregation sketch for arbitrary string keys.
+Flow-size estimator over arbitrary key spaces, extended with substring-based
+subset aggregation.
 
 ## Type/Struct
 
@@ -26,12 +27,27 @@ fn init_with_size(w: usize, d: usize) -> Self
 fn insert(&mut self, key: &str, v: u64)
 ```
 
+The SIGCOMM '21 update: the `d` mapped buckets are scanned for `key` first and a
+match absorbs `v` directly; otherwise the whole increment lands in the smallest
+of them and that bucket's key is replaced with `key` with probability `v / val`.
+
 ## Query
 
 ```rust
-fn estimate(&mut self, partial_key: &str) -> u64
-fn estimate_with_udf<F>(&mut self, partial_key: &str, udf: F) -> u64
+fn estimate_key(&self, key: &str) -> u64
+fn estimate(&self, partial_key: &str) -> u64
+fn estimate_with_udf<F>(&self, partial_key: &str, udf: F) -> u64
 ```
+
+`estimate_key` is the paper's point query: the sum of the `d` mapped buckets
+that currently hold `key`, in `O(d)`. Because every increment is attributed to
+exactly one bucket, summing it over the observed keys returns the total inserted
+mass.
+
+`estimate` and `estimate_with_udf` are the subset-query extension. They scan the
+whole table in `O(w * d)` and sum every bucket whose stored key matches by
+substring or by the supplied predicate, so `estimate("k1")` also collects `k10`,
+`k11`, and so on.
 
 ## Merge
 
@@ -50,12 +66,13 @@ use asap_sketchlib::Coco;
 
 let mut sk = Coco::init_with_size(64, 4);
 sk.insert("region=us|id=1", 3);
+let _ = sk.estimate_key("region=us|id=1");
 let _ = sk.estimate("region=us");
 ```
 
 ## Caveats
 
-- Query semantics are substring/UDF based (not exact-key frequency).
+- `estimate`/`estimate_with_udf` are substring/UDF based, not point queries.
 - Replacement behavior is probabilistic.
 
 ## Status

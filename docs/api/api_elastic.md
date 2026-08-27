@@ -12,6 +12,7 @@ Heavy/light split frequency estimator with a heavy bucket plus Count-Min backing
 
 - `Elastic<H = DefaultXxHasher>`
 - `HeavyBucket`
+- `LAMBDA` — the paper's eviction threshold (8).
 
 ## Constructors
 
@@ -26,15 +27,32 @@ fn init_with_length(l: i32) -> Self
 fn insert(&mut self, id: String)
 ```
 
+Follows the SIGCOMM '18 insertion rule. A vacant bucket seats the flow. A
+matching bucket takes a positive vote. Otherwise the bucket takes a negative
+vote, and either the arriving flow goes to the light layer, or — once
+`vote_neg >= LAMBDA * vote_pos` — the **resident** flow is evicted into the
+light layer with its whole positive vote and the arrival takes the bucket with
+`(vote_pos, vote_neg, eviction) = (1, 1, true)`.
+
 ## Query
 
 ```rust
-fn query(&mut self, id: String) -> i32
+fn query(&self, id: String) -> i32
 ```
+
+Returns `vote_pos` for a resident flow whose bucket carries no eviction flag,
+`vote_pos + light.estimate(id)` when it does, and the light estimate otherwise.
+The estimator is one-sided: it never returns less than the true count.
 
 ## Merge
 
-No public merge API.
+```rust
+fn merge(&mut self, other: &Elastic<H>)
+```
+
+Folds both heavy parts into their light layers and sums the light layers. The
+merged sketch answers every flow from the light layer; its vacated buckets keep
+the eviction flag so a later resident still reads its pre-merge mass.
 
 ## Serialization
 

@@ -17,6 +17,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+/// One table slot: the key it currently represents and the mass attributed to it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CocoBucket {
     pub full_key: Option<String>,
@@ -35,7 +36,6 @@ pub struct Coco<H: SketchHasher = DefaultXxHasher> {
 
 const DEFAULT_WIDTH: usize = 64;
 const DEFAULT_DEPTH: usize = 5;
-const DEFAULT_ROW_IDX: usize = 0;
 
 impl Default for CocoBucket {
     fn default() -> Self {
@@ -56,14 +56,14 @@ impl CocoBucket {
     }
 
     /// Checks if partial_key is a substring of the stored full key.
-    pub fn is_partial_key(&mut self, partial_key: &str) -> bool {
+    pub fn is_partial_key(&self, partial_key: &str) -> bool {
         match &self.full_key {
             Some(full) => full.contains(partial_key),
             None => false,
         }
     }
     /// the function should take in full key first, then partial key
-    pub fn is_partial_key_with_udf<F>(&mut self, partial_key: &str, udf: F) -> bool
+    pub fn is_partial_key_with_udf<F>(&self, partial_key: &str, udf: F) -> bool
     where
         F: Fn(&str, &str) -> bool,
     {
@@ -73,7 +73,7 @@ impl CocoBucket {
         }
     }
 
-    pub fn debug(&mut self) {
+    pub fn debug(&self) {
         match &self.full_key {
             Some(k) => print!(" <String::{}, {}> ", k, self.val),
             None => print!(" <None, {}> ", self.val),
@@ -96,7 +96,7 @@ impl<H: SketchHasher> Coco<H> {
         Coco::init_with_size(DEFAULT_WIDTH, DEFAULT_DEPTH)
     }
 
-    pub fn debug(&mut self) {
+    pub fn debug(&self) {
         println!("w: {}", self.w);
         println!("d: {}", self.d);
         for i in 0..self.d {
@@ -117,64 +117,65 @@ impl<H: SketchHasher> Coco<H> {
         }
     }
 
+    /// Adds `v` to `key` using the paper's stochastic variance-optimized update.
+    ///
+    /// The `d` mapped buckets are scanned for `key` first; a match absorbs `v`
+    /// directly. Otherwise the whole increment lands in the smallest of them and
+    /// that bucket's key is replaced with `key` with probability `v / val`.
     pub fn insert(&mut self, key: &str, v: u64) {
         if self.d == 0 || self.w == 0 {
             return;
         }
         let key_input = DataInput::Str(key);
-        let mut min_val_row = usize::MAX;
-        let mut min_val = u64::MAX;
+        let mut victim = (0usize, 0usize);
+        let mut victim_val = u64::MAX;
+
         for i in 0..self.d {
-            // let idx = STATELIST[i].hash_one(&key) as usize % self.w;
-            // let idx = hash64_seeded(i, &key) as usize % self.w;
             let idx = H::hash64_seeded(i, &key_input) as usize % self.w;
-            match &self.table[i][idx].full_key {
-                Some(k) => {
-                    if k == key {
-                        self.table[i][idx].val += v;
-                        return;
-                    }
-                    if self.table[i][idx].val < min_val {
-                        min_val_row = i;
-                        min_val = self.table[i][idx].val;
-                    }
-                }
-                None => {
-                    // seems like if nothing there, I should just update, and return
-                    self.table[i][idx].val += v;
-                    self.table[i][idx].update_key(key);
-                    return;
-                }
+            let bucket = &self.table[i][idx];
+            if bucket.full_key.as_deref() == Some(key) {
+                self.table[i][idx].val += v;
+                return;
             }
-            // println!("i: {}", i);
+            if bucket.val < victim_val {
+                victim_val = bucket.val;
+                victim = (i, idx);
+            }
         }
-        // all empty
-        // println!("min val row: {}", min_val_row);
-        if min_val_row >= self.d {
-            min_val_row = DEFAULT_ROW_IDX;
-        }
-        // let idx = STATELIST[min_val_row].hash_one(&key) as usize % self.w;
-        // let idx = hash64_seeded(min_val_row, &key) as usize % self.w;
-        let idx = H::hash64_seeded(min_val_row, &key_input) as usize % self.w;
-        self.table[min_val_row][idx].val += v;
-        match self.table[min_val_row][idx].full_key {
+
+        let bucket = &mut self.table[victim.0][victim.1];
+        bucket.val += v;
+        let elected = match bucket.full_key {
+            None => true,
             Some(_) => {
-                let mut name_decider = rand::rng();
-                let random_float = name_decider.random_range(0.0..=1.0_f64);
-                if (v as f64 / self.table[min_val_row][idx].val as f64) > random_float {
-                    // self.table[min_val_row][idx].full_key = Some(key.clone());
-                    // to make lifetime happy
-                    self.table[min_val_row][idx].update_key(key);
-                }
+                let draw = rand::rng().random_range(0.0..=1.0_f64);
+                v as f64 > draw * bucket.val as f64
             }
-            // None => self.table[min_val_row][idx].full_key = Some(key.clone()),
-            // to make lifetime happy
-            None => self.table[min_val_row][idx].update_key(key),
+        };
+        if elected {
+            bucket.update_key(key);
         }
     }
 
+    /// Frequency estimate for `key` as defined by the paper: the sum of the `d`
+    /// mapped buckets that currently hold `key`.
+    pub fn estimate_key(&self, key: &str) -> u64 {
+        if self.d == 0 || self.w == 0 {
+            return 0;
+        }
+        let key_input = DataInput::Str(key);
+        let mut total = 0;
+        for i in 0..self.d {
+            let idx = H::hash64_seeded(i, &key_input) as usize % self.w;
+            if self.table[i][idx].full_key.as_deref() == Some(key) {
+                total += self.table[i][idx].val;
+            }
+        }
+        total
+    }
+
     /// the udf parameter takes in full key first, and then partial key
-    pub fn estimate_with_udf<F>(&mut self, partial_key: &str, udf: F) -> u64
+    pub fn estimate_with_udf<F>(&self, partial_key: &str, udf: F) -> u64
     where
         F: Fn(&str, &str) -> bool,
     {
@@ -183,14 +184,15 @@ impl<H: SketchHasher> Coco<H> {
             for j in 0..self.w {
                 if self.table[i][j].is_partial_key_with_udf(partial_key, &udf) {
                     total += self.table[i][j].val;
-                    // println!("partial: {:?}, full: {:?}, val: {}, total: {}", partial_key, self.table[i][j].full_key, self.table[i][j].val, total);
                 }
             }
         }
         total
     }
 
-    pub fn estimate(&mut self, partial_key: &str) -> u64 {
+    /// Subset query: sums every bucket whose stored key contains `partial_key`.
+    /// Use [`Self::estimate_key`] for the paper's point query.
+    pub fn estimate(&self, partial_key: &str) -> u64 {
         let mut total = 0;
         for i in 0..self.d {
             for j in 0..self.w {
@@ -233,6 +235,7 @@ mod tests {
 
         let estimate = coco.estimate("user");
         assert_eq!(estimate, 5);
+        assert_eq!(coco.estimate_key(key), 5);
     }
 
     #[test]
@@ -251,6 +254,46 @@ mod tests {
 
         let total_all = coco.estimate_with_udf("region", matcher);
         assert_eq!(total_all, 10);
+    }
+
+    #[test]
+    fn a_key_occupies_at_most_one_bucket_per_row() {
+        // the match scan covers every row before a victim is chosen, so a key
+        // already resident in a later row never gains a second home
+        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        let key = "flow::single-home";
+
+        for _ in 0..64 {
+            coco.insert(key, 1);
+        }
+
+        let homes = (0..TEST_D)
+            .flat_map(|i| (0..TEST_W).map(move |j| (i, j)))
+            .filter(|(i, j)| coco.table[*i][*j].full_key.as_deref() == Some(key))
+            .count();
+        assert_eq!(homes, 1, "key must live in exactly one bucket");
+        assert_eq!(coco.estimate_key(key), 64);
+    }
+
+    #[test]
+    fn estimate_key_never_exceeds_the_inserted_mass() {
+        // biased replacement is unbiased in expectation but never invents mass
+        // beyond what the whole table holds
+        let mut coco: Coco = Coco::init_with_size(8, 2);
+        let mut total = 0u64;
+        for i in 0..500u64 {
+            coco.insert(&format!("k{}", i % 40), 3);
+            total += 3;
+        }
+
+        let table_mass: u64 = (0..2)
+            .flat_map(|i| (0..8).map(move |j| (i, j)))
+            .map(|(i, j)| coco.table[i][j].val)
+            .sum();
+        assert_eq!(table_mass, total, "the table conserves the inserted mass");
+        for i in 0..40u64 {
+            assert!(coco.estimate_key(&format!("k{i}")) <= total);
+        }
     }
 
     #[test]
