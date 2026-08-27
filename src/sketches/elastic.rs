@@ -226,55 +226,116 @@ impl<H: SketchHasher> Elastic<H> {
         }
     }
 
-    /// The paper's Sum merging: folds both heavy parts into their light layers
-    /// and adds the layers counter by counter. Correct whatever the two
-    /// sketches saw, including flows that appear on both sides.
-    ///
-    /// The merged sketch answers every flow from the light layer, and its
-    /// vacated buckets stay flagged so later residents keep reading it.
+    /// Merges `other` in, keeping elephants in the heavy part and adding the
+    /// light layers counter by counter -- the paper's Sum merging for the
+    /// light half. Correct whatever the two sketches saw, including flows that
+    /// appear on both sides.
     pub fn merge(&mut self, other: &Elastic<H>) {
         assert_eq!(
             self.bktlen, other.bktlen,
             "bucket length mismatch while merging Elastic sketches"
         );
 
-        self.flush_heavy_to_light();
+        let losers = self.contest_heavy_against(other);
         self.light.merge(&other.light);
-        for (idx, bucket) in other.heavy.iter().enumerate() {
-            if bucket.is_vacant() || other.stale_at(idx) {
-                continue;
-            }
-            self.light
-                .insert_many(&DataInput::Str(&bucket.flow_id), bucket.vote_pos);
-        }
+        self.spill(losers);
     }
 
-    /// The paper's Maximum merging: folds both heavy parts into their light
-    /// layers and keeps the larger of each counter pair, which is tighter than
-    /// [`Self::merge`] and still never underestimates.
+    /// Merges `other` in, keeping elephants in the heavy part and keeping the
+    /// larger of each light counter pair -- the paper's Maximum merging, and
+    /// what the technical report's B.5 prescribes for combining light layers.
     ///
-    /// Requires the two sketches to have observed **disjoint flow sets**. A
-    /// flow both sides saw reads back as the larger side rather than the sum,
-    /// which underestimates it; use [`Self::merge`] whenever flows can repeat
-    /// across sketches.
+    /// The light half requires the two sketches to have observed **disjoint
+    /// flow sets**: a mouse flow both sides saw reads back as the larger side
+    /// rather than the sum. Flows held by both heavy parts are summed either
+    /// way. Use [`Self::merge`] whenever mouse flows can repeat across
+    /// sketches.
     pub fn merge_max(&mut self, other: &Elastic<H>) {
         assert_eq!(
             self.bktlen, other.bktlen,
             "bucket length mismatch while merging Elastic sketches"
         );
 
-        self.flush_heavy_to_light();
+        let losers = self.contest_heavy_against(other);
+        self.light.merge_max(&other.light);
+        self.spill(losers);
+    }
 
-        // max does not commute with the peer's pending heavy mass the way sum
-        // does, so the peer's light layer is completed before the comparison
-        let mut other_light = other.light.clone();
-        for (idx, bucket) in other.heavy.iter().enumerate() {
-            if bucket.is_vacant() || other.stale_at(idx) {
-                continue;
-            }
-            other_light.insert_many(&DataInput::Str(&bucket.flow_id), bucket.vote_pos);
+    /// Combines the two heavy parts bucket by bucket, returning the flows that
+    /// lost their bucket and owe their votes to the light layer.
+    ///
+    /// Section 3.4 merges two buckets by querying both keys and keeping the
+    /// larger, and that is the rule here, applied across sketches rather than
+    /// within one. Each side is queried against its own sketch, before
+    /// anything is written, so no decision reads a light layer this merge has
+    /// already changed. A flow both sides held keeps one bucket with the votes
+    /// summed.
+    ///
+    /// Every surviving bucket ends up flagged. The flow that keeps a bucket
+    /// may have mass in the peer's light layer -- it could have been a mouse
+    /// there -- and nothing short of trusting the peer's Count-Min can rule
+    /// that out, so the flag is set and the estimate reads through. That
+    /// overestimates rather than underestimates, which is the direction
+    /// Elastic's guarantee allows.
+    ///
+    /// `vote_neg` takes the larger of the pair. The paper does not say what
+    /// becomes of the votes, and the larger one evicts sooner.
+    fn contest_heavy_against(&mut self, other: &Elastic<H>) -> Vec<(String, i32)> {
+        let mut losers: Vec<(String, i32)> = Vec::new();
+        let mut merged: Vec<Option<HeavyBucket>> = Vec::with_capacity(self.heavy.len());
+
+        for idx in 0..self.heavy.len() {
+            let mine = (!self.heavy[idx].is_vacant() && !self.stale_at(idx))
+                .then(|| self.heavy[idx].clone());
+            let theirs = (!other.heavy[idx].is_vacant() && !other.stale_at(idx))
+                .then(|| other.heavy[idx].clone());
+
+            merged.push(match (mine, theirs) {
+                (None, None) => None,
+                (Some(kept), None) | (None, Some(kept)) => Some(kept),
+                (Some(mut kept), Some(peer)) if kept.flow_id == peer.flow_id => {
+                    kept.vote_pos += peer.vote_pos;
+                    kept.vote_neg = kept.vote_neg.max(peer.vote_neg);
+                    Some(kept)
+                }
+                (Some(mine), Some(theirs)) => {
+                    let my_size = self.query(mine.flow_id.clone());
+                    let their_size = other.query(theirs.flow_id.clone());
+                    let (kept, lost) = if my_size >= their_size {
+                        (mine, theirs)
+                    } else {
+                        (theirs, mine)
+                    };
+                    losers.push((lost.flow_id, lost.vote_pos));
+                    Some(kept)
+                }
+            });
         }
-        self.light.merge_max(&other_light);
+
+        for (idx, slot) in merged.into_iter().enumerate() {
+            let bucket = &mut self.heavy[idx];
+            match slot {
+                Some(mut kept) => {
+                    kept.eviction = true;
+                    *bucket = kept;
+                }
+                None => {
+                    bucket.flow_id = String::new();
+                    bucket.vote_pos = 0;
+                    bucket.vote_neg = 0;
+                    bucket.eviction = true;
+                }
+            }
+        }
+        self.stale_copies = false;
+        losers
+    }
+
+    /// Adds each flow's votes to the light layer.
+    fn spill(&mut self, flows: Vec<(String, i32)>) {
+        for (flow_id, votes) in flows {
+            self.light.insert_many(&DataInput::String(flow_id), votes);
+        }
     }
 
     /// Doubles the heavy table by appending a copy of itself, the paper's
@@ -483,27 +544,6 @@ impl<H: SketchHasher> Elastic<H> {
         let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(id));
         hash as usize % self.bktlen as usize
     }
-
-    fn flush_heavy_to_light(&mut self) {
-        for idx in 0..self.heavy.len() {
-            let stale = self.stale_at(idx);
-            let bucket = &mut self.heavy[idx];
-            if bucket.is_vacant() {
-                bucket.eviction = true;
-                continue;
-            }
-            let votes = bucket.vote_pos;
-            let flow_id = std::mem::take(&mut bucket.flow_id);
-            bucket.vote_pos = 0;
-            bucket.vote_neg = 0;
-            bucket.eviction = true;
-            // a stale copy's mass belongs to the twin bucket, which spills it
-            if !stale {
-                self.light.insert_many(&DataInput::String(flow_id), votes);
-            }
-        }
-        self.stale_copies = false;
-    }
 }
 
 #[cfg(test)]
@@ -642,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_flushes_heavy_and_sum_merges_light() {
+    fn merge_keeps_uncontested_flows_in_the_heavy_part() {
         let mut left: Elastic = Elastic::init_with_length(16);
         let mut right: Elastic = Elastic::init_with_length(16);
 
@@ -657,12 +697,21 @@ mod tests {
 
         assert_eq!(left.query("flow::left".to_string()), 30);
         assert_eq!(left.query("flow::right".to_string()), 18);
-        assert!(left.heavy.iter().all(|bucket| {
-            bucket.flow_id.is_empty()
-                && bucket.is_vacant()
-                && bucket.vote_neg == 0
-                && bucket.eviction
-        }));
+
+        // both keep a bucket: neither was flushed into the light layer
+        let residents: Vec<(&str, i32)> = left
+            .heavy
+            .iter()
+            .filter(|bucket| !bucket.is_vacant())
+            .map(|bucket| (bucket.flow_id.as_str(), bucket.vote_pos))
+            .collect();
+        assert_eq!(residents.len(), 2, "both flows must stay resident");
+        assert!(residents.contains(&("flow::left", 30)));
+        assert!(residents.contains(&("flow::right", 18)));
+        assert!(
+            left.heavy.iter().all(|bucket| bucket.eviction),
+            "every merged bucket reads through the light layer"
+        );
     }
 
     #[test]
@@ -700,8 +749,154 @@ mod tests {
         assert_eq!(
             left.query("flow::left".to_string()),
             31,
-            "a post-merge resident must keep the mass flushed into the light layer"
+            "a flow that kept its bucket through a merge goes on accumulating"
         );
+    }
+
+    #[test]
+    fn merge_keeps_the_larger_flow_on_a_contested_bucket() {
+        let mut left: Elastic = Elastic::init_with_length(8);
+        let primary = "flow::primary";
+        let secondary = colliding_key(primary, &left);
+
+        for _ in 0..20 {
+            left.insert(primary.to_string());
+        }
+        let mut right: Elastic = Elastic::init_with_length(8);
+        for _ in 0..9 {
+            right.insert(secondary.clone());
+        }
+
+        left.merge(&right);
+
+        let idx = bucket_for(primary, &left);
+        assert_eq!(left.heavy[idx].flow_id, primary, "the larger flow keeps it");
+        assert_eq!(left.heavy[idx].vote_pos, 20);
+        assert!(
+            left.query(secondary.clone()) >= 9,
+            "the loser's votes must reach the light layer"
+        );
+    }
+
+    #[test]
+    fn merge_sums_the_votes_of_a_flow_both_sides_held() {
+        let mut left: Elastic = Elastic::init_with_length(8);
+        let mut right: Elastic = Elastic::init_with_length(8);
+        for _ in 0..30 {
+            left.insert("flow::shared".to_string());
+        }
+        for _ in 0..20 {
+            right.insert("flow::shared".to_string());
+        }
+
+        left.merge(&right);
+
+        let idx = bucket_for("flow::shared", &left);
+        assert_eq!(left.heavy[idx].flow_id, "flow::shared");
+        assert_eq!(left.heavy[idx].vote_pos, 50);
+        assert_eq!(left.query("flow::shared".to_string()), 50);
+    }
+
+    #[test]
+    fn merge_keeps_the_peers_flow_when_it_is_the_larger() {
+        // each side must be sized against its own sketch: the peer's flow is
+        // absent from ours, so asking ours would read a light estimate near 0
+        let mut left: Elastic = Elastic::init_with_length(8);
+        let primary = "flow::primary";
+        let secondary = colliding_key(primary, &left);
+
+        for _ in 0..3 {
+            left.insert(primary.to_string());
+        }
+        let mut right: Elastic = Elastic::init_with_length(8);
+        for _ in 0..50 {
+            right.insert(secondary.clone());
+        }
+
+        left.merge(&right);
+
+        let idx = bucket_for(primary, &left);
+        assert_eq!(
+            left.heavy[idx].flow_id, secondary,
+            "the peer's larger flow takes the bucket"
+        );
+        assert_eq!(left.heavy[idx].vote_pos, 50);
+        assert!(left.query(primary.to_string()) >= 3);
+    }
+
+    #[test]
+    fn merge_does_not_leave_a_stale_copy_as_a_resident() {
+        // the merge clears the stale flag, so a copy it kept would look live
+        let (mut sk, _) = seeded_sketch(8, 24);
+        sk.expand_heavy();
+
+        let empty: Elastic = Elastic::init_with_length(16);
+        sk.merge(&empty);
+
+        let mut ids: Vec<String> = sk.heavy_hitters(1).into_iter().map(|(id, _)| id).collect();
+        let reported = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(
+            ids.len(),
+            reported,
+            "a stale copy survived the merge as a resident"
+        );
+    }
+
+    /// Two sketches sharing half their flows, over a light layer tight enough
+    /// that contested buckets and spills both happen.
+    fn overlapping_pair() -> (Elastic, Elastic, Vec<(String, i32)>) {
+        let mut left: Elastic = Elastic::init_with_dimensions(8, 2, 64);
+        let mut right: Elastic = Elastic::init_with_dimensions(8, 2, 64);
+        let mut truth: Vec<(String, i32)> = Vec::new();
+
+        for i in 0..60i32 {
+            let key = format!("flow::{i}");
+            let in_left = (i % 3) + 1;
+            let in_right = if i % 2 == 0 { (i % 4) + 1 } else { 0 };
+            for _ in 0..in_left {
+                left.insert(key.clone());
+            }
+            for _ in 0..in_right {
+                right.insert(key.clone());
+            }
+            truth.push((key, in_left + in_right));
+        }
+        (left, right, truth)
+    }
+
+    #[test]
+    fn merge_never_underestimates_across_a_large_flow_set() {
+        let (mut left, right, truth) = overlapping_pair();
+        left.merge(&right);
+
+        for (key, count) in &truth {
+            let est = left.query(key.clone());
+            assert!(est >= *count, "merge underestimated {key}: {est} < {count}");
+        }
+    }
+
+    #[test]
+    fn maximum_merging_keeps_the_larger_flow_on_a_contested_bucket() {
+        let mut left: Elastic = Elastic::init_with_length(8);
+        let primary = "flow::primary";
+        let secondary = colliding_key(primary, &left);
+
+        for _ in 0..20 {
+            left.insert(primary.to_string());
+        }
+        let mut right: Elastic = Elastic::init_with_length(8);
+        for _ in 0..9 {
+            right.insert(secondary.clone());
+        }
+
+        left.merge_max(&right);
+
+        let idx = bucket_for(primary, &left);
+        assert_eq!(left.heavy[idx].flow_id, primary);
+        assert_eq!(left.heavy[idx].vote_pos, 20);
+        assert!(left.query(secondary.clone()) >= 9);
     }
 
     /// Builds two sketches over disjoint flow sets, plus the truth table.
@@ -768,10 +963,46 @@ mod tests {
         );
     }
 
+    /// One bucket held by a hot flow, so `flow::mouse` never gets a bucket and
+    /// lives entirely in the light layer on both sides.
+    fn shared_mouse_pair(left_count: i32, right_count: i32) -> (Elastic, Elastic) {
+        let mut left: Elastic = Elastic::init_with_dimensions(1, 2, 64);
+        let mut right: Elastic = Elastic::init_with_dimensions(1, 2, 64);
+        for sketch in [&mut left, &mut right] {
+            for _ in 0..500 {
+                sketch.insert("flow::hot".to_string());
+            }
+        }
+        for _ in 0..left_count {
+            left.insert("flow::mouse".to_string());
+        }
+        for _ in 0..right_count {
+            right.insert("flow::mouse".to_string());
+        }
+        assert_eq!(
+            left.heavy[0].flow_id, "flow::hot",
+            "the mouse must not seat"
+        );
+        (left, right)
+    }
+
     #[test]
-    fn maximum_merging_underestimates_a_flow_both_sides_saw() {
+    fn maximum_merging_underestimates_a_mouse_flow_both_sides_saw() {
         // the paper's precondition, pinned: MM is for disjoint flow sets, and a
-        // shared flow reads back as the larger side instead of the sum
+        // shared mouse reads back as the larger side instead of the sum
+        let (mut maxed, right) = shared_mouse_pair(30, 20);
+        maxed.merge_max(&right);
+        assert_eq!(maxed.query("flow::mouse".to_string()), 30);
+
+        let (mut summed, right) = shared_mouse_pair(30, 20);
+        summed.merge(&right);
+        assert_eq!(summed.query("flow::mouse".to_string()), 50);
+    }
+
+    #[test]
+    fn maximum_merging_sums_a_flow_both_heavy_parts_held() {
+        // the heavy halves are combined bucket by bucket either way, so a
+        // shared elephant is summed even under maximum merging
         let mut left: Elastic = Elastic::init_with_length(8);
         let mut right: Elastic = Elastic::init_with_length(8);
         for _ in 0..30 {
@@ -783,18 +1014,9 @@ mod tests {
 
         left.merge_max(&right);
 
-        assert_eq!(left.query("flow::shared".to_string()), 30);
-
-        let mut summed: Elastic = Elastic::init_with_length(8);
-        let mut right: Elastic = Elastic::init_with_length(8);
-        for _ in 0..30 {
-            summed.insert("flow::shared".to_string());
-        }
-        for _ in 0..20 {
-            right.insert("flow::shared".to_string());
-        }
-        summed.merge(&right);
-        assert_eq!(summed.query("flow::shared".to_string()), 50);
+        let idx = bucket_for("flow::shared", &left);
+        assert_eq!(left.heavy[idx].vote_pos, 50);
+        assert_eq!(left.query("flow::shared".to_string()), 50);
     }
 
     /// Every counter of the light layer, so a test can prove it went untouched.

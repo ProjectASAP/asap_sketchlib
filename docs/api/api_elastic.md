@@ -128,31 +128,75 @@ fn merge(&mut self, other: &Elastic<H>)
 fn merge_max(&mut self, other: &Elastic<H>)
 ```
 
-Both fold the two heavy parts into their light layers first. The merged sketch
-then answers every flow from the light layer; its vacated buckets keep the
-eviction flag so a later resident still reads its pre-merge mass. Both require
-the same heavy bucket count, and `merge_max` additionally requires the same
-light dimensions — SIGCOMM '18 §3.2.2 gives merging across different widths
-only in its technical report, and that is not implemented.
+Both combine the heavy parts bucket by bucket and then combine the light
+layers. Elephants stay elephants: a flow holding a bucket on either side keeps
+one in the merged sketch, and only the flow that loses a contested bucket is
+spilled into the light layer. Both require the same heavy bucket count and the
+same light dimensions — merging across different widths appears only in the
+technical report's appendix A.8 and is not implemented.
 
-`merge` is the paper's **Sum merging**: it adds the light layers counter by
-counter. It is correct whatever the two sketches saw, including flows that
-appear on both sides, and the paper calls it "simple and fast, but not
-accurate".
+The heavy half follows two sources. The technical report's B.5 combines two
+sketches by combining their heavy parts, not by dissolving them: "The heavy
+parts are easy to combine: we combine all the heavy parts one by one... For all
+light parts, we merge them into one using the merging algorithms, by choosing
+the maximum of the corresponding counters." B.5 is describing sharded inputs,
+where each flow reaches exactly one sketch, so its heavy parts concatenate and
+the table grows. Holding the table at its original width instead needs a rule
+for two flows landing on one bucket, and §3.4 has one, stated for compression:
+"for the two keys in the buckets, we query their frequencies in the Elastic
+sketch, and keep the larger one, and evict the other one into the light part."
+Applied across sketches rather than within one, that is the merge below.
 
-`merge_max` is the paper's **Maximum merging**: it keeps the larger of each
-counter pair. It is tighter than `merge` and still never underestimates, but
-**only when the two sketches observed disjoint flow sets** — one flow per
-measurement point, never the same flow at two of them.
+Per bucket:
 
-> Using `merge_max` on sketches that share a flow underestimates that flow: it
-> reads back as the larger side rather than the sum. Underestimation is exactly
-> what Elastic's one-sided guarantee otherwise rules out, so reach for `merge`
-> whenever a flow can repeat across sketches.
+| both sides | result |
+| --- | --- |
+| both vacant | vacant |
+| one vacant | the occupied bucket carries over |
+| the same flow | one bucket, `vote_pos` summed |
+| different flows | each queried against its own sketch, larger keeps the bucket, loser's `vote_pos` spills to the light layer |
 
-Measured on 80 disjoint flows totalling 275 through an 8-bucket heavy table and
-a 2x64 light layer: `merge` estimates 434 in total, `merge_max` 359, roughly
-halving the over-estimate.
+Two choices the paper does not make. `vote_neg` takes the larger of the pair,
+which evicts sooner. And every surviving bucket ends up flagged: the flow that
+keeps a bucket may have been a mouse on the other side and left mass in that
+light layer, and nothing short of trusting the peer's Count-Min rules it out.
+Flagging overestimates rather than underestimates, the direction the guarantee
+allows.
+
+`merge` combines the light layers with the paper's **Sum merging**, adding them
+counter by counter. It is correct whatever the two sketches saw.
+
+`merge_max` uses **Maximum merging**, keeping the larger of each counter pair,
+which is what B.5 prescribes. It is tighter, but the light half is only correct
+when the two sketches observed **disjoint flow sets**.
+
+> A *mouse* flow both sides saw reads back under `merge_max` as the larger side
+> rather than the sum, which underestimates it — exactly what Elastic's
+> one-sided guarantee otherwise rules out. Elephants held by both heavy parts
+> are summed either way; it is the light half that carries the restriction.
+> Reach for `merge` whenever a mouse flow can repeat across sketches.
+
+### What keeping the heavy part buys
+
+Not exact elephants — a merged resident is flagged, so its estimate still
+carries Count-Min error. The gain is that elephant mass never enters the light
+layer at all, which lowers the collision floor for **every** flow. Measured
+over 60k Zipf(1.2) arrivals split across two 64-bucket sketches, mean relative
+error per flow, flushing everything into the light layer versus contesting
+buckets:
+
+| light layer | elephants, flush / contest | mice, flush / contest |
+| --- | --- | --- |
+| 1x64 | 70.74 / 15.72 | 447.06 / 148.53 |
+| 1x256 | 5.66 / 3.12 | 105.24 / 37.27 |
+| 1x1024 | 1.26 / 1.10 | 28.37 / 9.13 |
+| 3x1024 | 0.18 / 0.18 | 2.02 / 1.85 |
+| 3x4096 | 0.006 / 0.006 | 0.096 / 0.095 |
+
+Neither underestimates anywhere. The mice column moves most, which is the
+mechanism showing itself: the win comes from what is kept *out* of the
+Count-Min. A generously sized light layer has room for the elephant mass
+anyway, and the two converge.
 
 ## Growing and shrinking the heavy part
 
