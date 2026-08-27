@@ -16,6 +16,7 @@ use asap_sketchlib::{
     CountMin, DataInput, FastPath, HyperLogLog, HyperLogLogHIP, KLL, KLLDynamic, RegularPath,
     UnivMonQ, Vector2D,
 };
+use std::cell::RefCell;
 
 // ---------------------------------------------------------------------------
 // Adapters: one small impl block per sketch is all it takes to onboard.
@@ -116,6 +117,17 @@ impl QuantileOps for KllAdapter {
     }
     fn quantile(&self, q: f64) -> f64 {
         self.0.quantile(q)
+    }
+}
+
+struct KllCachedAdapter(RefCell<KLL>);
+
+impl QuantileOps for KllCachedAdapter {
+    fn update(&mut self, value: f64) {
+        self.0.borrow_mut().update(&value);
+    }
+    fn quantile(&self, q: f64) -> f64 {
+        self.0.borrow_mut().quantile_cached(q)
     }
 }
 
@@ -303,6 +315,14 @@ fn kll_family_passes_quantile_conformance() {
             rank_tol: 0.02,
             ..QuantileSpec::default()
         },
+    )
+    .assert_ok();
+
+    conformance::quantile_battery(
+        "KLL-cached",
+        || KllCachedAdapter(RefCell::new(KLL::init_kll(200))),
+        &values,
+        QuantileSpec::default(),
     )
     .assert_ok();
 }

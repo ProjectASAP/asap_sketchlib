@@ -334,6 +334,7 @@ where
             top_height: 0,
             level0_capacity: 0,
             merge_buf: Vec::with_capacity(k),
+            cdf_cache: None,
         };
         sketch.rebuild_capacity_cache();
         sketch.ensure_levels_sorted();
