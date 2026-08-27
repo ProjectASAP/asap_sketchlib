@@ -44,6 +44,10 @@ pub struct Elastic<H: SketchHasher = DefaultXxHasher> {
     pub heavy: Vec<HeavyBucket>,
     pub light: CountMin<Vector2D<i32>, RegularPath, H>,
     pub bktlen: i32,
+    /// Set by [`Elastic::expand_heavy`] while copies of pre-expansion
+    /// residents may still sit in the half they no longer hash to.
+    #[serde(default)]
+    stale_copies: bool,
     #[serde(skip)]
     _hasher: PhantomData<H>,
 }
@@ -124,6 +128,7 @@ impl<H: SketchHasher> Elastic<H> {
             heavy,
             light,
             bktlen: bucket_count,
+            stale_copies: false,
             _hasher: PhantomData,
         }
     }
@@ -137,6 +142,10 @@ impl<H: SketchHasher> Elastic<H> {
     /// vote and `id` takes the bucket.
     pub fn insert(&mut self, id: String) {
         let idx = self.bucket_index(&id);
+        if self.stale_at(idx) {
+            self.seat_over_stale_copy(idx, id);
+            return;
+        }
         let bucket = &mut self.heavy[idx];
 
         if bucket.is_vacant() {
@@ -175,6 +184,10 @@ impl<H: SketchHasher> Elastic<H> {
     /// implementation, which leaves the counter and its flag bit untouched.
     pub fn insert_heavy_only(&mut self, id: String) {
         let idx = self.bucket_index(&id);
+        if self.stale_at(idx) {
+            self.seat_over_stale_copy(idx, id);
+            return;
+        }
         let bucket = &mut self.heavy[idx];
 
         if bucket.is_vacant() {
@@ -227,8 +240,8 @@ impl<H: SketchHasher> Elastic<H> {
 
         self.flush_heavy_to_light();
         self.light.merge(&other.light);
-        for bucket in &other.heavy {
-            if bucket.is_vacant() {
+        for (idx, bucket) in other.heavy.iter().enumerate() {
+            if bucket.is_vacant() || other.stale_at(idx) {
                 continue;
             }
             self.light
@@ -255,13 +268,65 @@ impl<H: SketchHasher> Elastic<H> {
         // max does not commute with the peer's pending heavy mass the way sum
         // does, so the peer's light layer is completed before the comparison
         let mut other_light = other.light.clone();
-        for bucket in &other.heavy {
-            if bucket.is_vacant() {
+        for (idx, bucket) in other.heavy.iter().enumerate() {
+            if bucket.is_vacant() || other.stale_at(idx) {
                 continue;
             }
             other_light.insert_many(&DataInput::Str(&bucket.flow_id), bucket.vote_pos);
         }
         self.light.merge_max(&other_light);
+    }
+
+    /// Doubles the heavy table by appending a copy of itself, the paper's
+    /// copy operation. Bucket count goes from `w` to `2w`, and by lemma 3.2
+    /// every resident still hashes to a bucket holding it.
+    ///
+    /// Each flow now sits in both halves; the half it no longer hashes to is a
+    /// stale copy, dropped lazily as inserts land on it. Two sketches expanded
+    /// a different number of times can no longer merge -- [`Self::merge`]
+    /// asserts on the bucket count.
+    pub fn expand_heavy(&mut self) {
+        let doubled = self
+            .bktlen
+            .checked_mul(2)
+            .expect("heavy table size overflowed i32 while expanding");
+        let copy = self.heavy.clone();
+        self.heavy.extend(copy);
+        self.bktlen = doubled;
+        self.stale_copies = true;
+    }
+
+    /// Buckets whose resident flow is larger than `t2`, the paper's count of
+    /// full buckets. Compare against a `T1` of your own to decide when to call
+    /// [`Self::expand_heavy`].
+    pub fn full_bucket_count(&self, t2: i32) -> usize {
+        self.heavy
+            .iter()
+            .filter(|bucket| !bucket.is_vacant() && bucket.vote_pos > t2)
+            .count()
+    }
+
+    /// Whether the bucket at `idx` holds a copy left behind by an expansion,
+    /// meaning its resident hashes somewhere else now.
+    #[inline]
+    fn stale_at(&self, idx: usize) -> bool {
+        if !self.stale_copies {
+            return false;
+        }
+        let bucket = &self.heavy[idx];
+        !bucket.is_vacant() && self.bucket_index(&bucket.flow_id) != idx
+    }
+
+    /// Drops a stale copy and seats `id` in its place. The copy is not spilled:
+    /// the flow's live entry is in the twin bucket. The flag is set because the
+    /// arrival shared this bucket before the expansion and lost to its
+    /// resident, so the light layer already holds part of it.
+    fn seat_over_stale_copy(&mut self, idx: usize, id: String) {
+        let bucket = &mut self.heavy[idx];
+        bucket.flow_id = id;
+        bucket.vote_pos = 1;
+        bucket.vote_neg = 0;
+        bucket.eviction = true;
     }
 
     #[inline]
@@ -272,6 +337,7 @@ impl<H: SketchHasher> Elastic<H> {
 
     fn flush_heavy_to_light(&mut self) {
         for idx in 0..self.heavy.len() {
+            let stale = self.stale_at(idx);
             let bucket = &mut self.heavy[idx];
             if bucket.is_vacant() {
                 bucket.eviction = true;
@@ -282,8 +348,12 @@ impl<H: SketchHasher> Elastic<H> {
             bucket.vote_pos = 0;
             bucket.vote_neg = 0;
             bucket.eviction = true;
-            self.light.insert_many(&DataInput::String(flow_id), votes);
+            // a stale copy's mass belongs to the twin bucket, which spills it
+            if !stale {
+                self.light.insert_many(&DataInput::String(flow_id), votes);
+            }
         }
+        self.stale_copies = false;
     }
 }
 
@@ -730,5 +800,150 @@ mod tests {
                 "seating and matching must agree between the two paths"
             );
         }
+    }
+
+    /// Flows whose estimate should survive a doubling, with the truth table.
+    fn seeded_sketch(buckets: i32, flows: usize) -> (Elastic, Vec<(String, i32)>) {
+        let mut sk: Elastic = Elastic::init_with_length(buckets);
+        let mut truth = Vec::new();
+        for i in 0..flows {
+            let key = format!("flow::{i}");
+            let count = (i as i32 % 5) + 1;
+            for _ in 0..count {
+                sk.insert(key.clone());
+            }
+            truth.push((key, count));
+        }
+        (sk, truth)
+    }
+
+    #[test]
+    fn expansion_doubles_the_heavy_table() {
+        let mut sk: Elastic = Elastic::init_with_length(8);
+        sk.insert("flow::a".to_string());
+
+        sk.expand_heavy();
+
+        assert_eq!(sk.bktlen, 16);
+        assert_eq!(sk.heavy.len(), 16);
+        assert!(sk.stale_copies);
+    }
+
+    #[test]
+    fn expansion_preserves_every_existing_estimate() {
+        // lemma 3.2: h(f) % 2w lands on a half that already holds f
+        let (mut sk, truth) = seeded_sketch(8, 24);
+        let before: Vec<i32> = truth.iter().map(|(k, _)| sk.query(k.clone())).collect();
+
+        sk.expand_heavy();
+
+        for ((key, _), was) in truth.iter().zip(before) {
+            assert_eq!(sk.query(key.clone()), was, "estimate for {key} moved");
+        }
+    }
+
+    #[test]
+    fn repeated_expansion_keeps_estimates_intact() {
+        let (mut sk, truth) = seeded_sketch(8, 24);
+        let before: Vec<i32> = truth.iter().map(|(k, _)| sk.query(k.clone())).collect();
+
+        sk.expand_heavy();
+        sk.expand_heavy();
+
+        assert_eq!(sk.bktlen, 32);
+        for ((key, _), was) in truth.iter().zip(before) {
+            assert_eq!(sk.query(key.clone()), was, "estimate for {key} moved");
+        }
+    }
+
+    #[test]
+    fn an_insert_onto_a_stale_copy_replaces_it() {
+        let (mut sk, _) = seeded_sketch(8, 24);
+        sk.expand_heavy();
+
+        let stale_idx = (0..sk.heavy.len())
+            .find(|idx| sk.stale_at(*idx))
+            .expect("a doubling must leave at least one stale copy");
+        let displaced = sk.heavy[stale_idx].flow_id.clone();
+
+        let arrival = (0..10_000)
+            .map(|i| format!("late::{i}"))
+            .find(|key| sk.bucket_index(key) == stale_idx)
+            .expect("unable to find a key for the stale bucket");
+        sk.insert(arrival.clone());
+
+        assert_eq!(sk.heavy[stale_idx].flow_id, arrival);
+        assert_eq!(sk.heavy[stale_idx].vote_pos, 1);
+        assert!(!sk.stale_at(stale_idx));
+        // the displaced copy was not the flow's live entry, which still answers
+        assert!(sk.query(displaced.clone()) > 0, "{displaced} lost its mass");
+    }
+
+    #[test]
+    fn merge_after_expansion_does_not_double_count() {
+        // every flow sits in both halves after a doubling; flushing both copies
+        // would spill it twice
+        let (mut sk, truth) = seeded_sketch(8, 24);
+        sk.expand_heavy();
+
+        let empty: Elastic = Elastic::init_with_length(16);
+        sk.merge(&empty);
+
+        for (key, count) in &truth {
+            assert_eq!(
+                sk.query(key.clone()),
+                *count,
+                "{key} came back doubled or short after merging an expanded table"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_does_not_double_count_an_expanded_peer() {
+        // the peer's stale copies must be skipped too, not just our own
+        let (mut right, truth) = seeded_sketch(8, 24);
+        right.expand_heavy();
+
+        let mut left: Elastic = Elastic::init_with_length(16);
+        left.merge(&right);
+
+        for (key, count) in &truth {
+            assert_eq!(
+                left.query(key.clone()),
+                *count,
+                "{key} came back doubled or short after merging an expanded peer"
+            );
+        }
+    }
+
+    #[test]
+    fn maximum_merging_does_not_double_count_an_expanded_peer() {
+        let (mut right, truth) = seeded_sketch(8, 24);
+        right.expand_heavy();
+
+        let mut left: Elastic = Elastic::init_with_length(16);
+        left.merge_max(&right);
+
+        for (key, count) in &truth {
+            assert_eq!(
+                left.query(key.clone()),
+                *count,
+                "{key} came back doubled or short after max merging an expanded peer"
+            );
+        }
+    }
+
+    #[test]
+    fn full_bucket_count_counts_residents_above_the_threshold() {
+        let mut sk: Elastic = Elastic::init_with_length(64);
+        for i in 0..6 {
+            let key = format!("hot::{i}");
+            for _ in 0..10 {
+                sk.insert(key.clone());
+            }
+        }
+
+        assert_eq!(sk.full_bucket_count(9), 6);
+        assert_eq!(sk.full_bucket_count(10), 0);
     }
 }

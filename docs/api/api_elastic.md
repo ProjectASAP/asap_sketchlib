@@ -154,6 +154,39 @@ Measured on 80 disjoint flows totalling 275 through an 8-bucket heavy table and
 a 2x64 light layer: `merge` estimates 434 in total, `merge_max` 359, roughly
 halving the over-estimate.
 
+## Growing the heavy part
+
+```rust
+fn expand_heavy(&mut self)
+fn full_bucket_count(&self, t2: i32) -> usize
+```
+
+Section 3.4 starts the heavy part small and doubles it when elephants fill it:
+"just copy the heavy part and combine the heavy part with the copy into one",
+changing `h(.) % w` to `h(.) % 2w`. Lemma 3.2 — `(i % w) % w' = i % w'` — is
+what makes that safe: every resident still hashes to a half that holds it, so
+no estimate moves.
+
+The paper's trigger is two thresholds: a bucket is full when its flows all
+exceed `T2`, and the table is full when more than `T1` buckets are. Deciding
+that is left to the caller — `full_bucket_count(t2)` reports the numerator, and
+a library that silently doubled its own memory would be a surprise. Call
+`expand_heavy` when your own `T1` is crossed.
+
+After a doubling each flow sits in both halves, and the copy in the half it no
+longer hashes to is stale. Cleanup is incremental, as the paper describes: an
+insert landing on a stale copy drops it and seats the arrival. Buckets nobody
+lands on keep their copy, which the paper notes "does not negatively impact the
+algorithm".
+
+Stale copies are skipped when a merge flushes the heavy part, so a flow is
+spilled once rather than once per half — on both sides of the merge. Two
+sketches expanded a different number of times have different bucket counts, so
+`merge` and `merge_max` assert rather than silently misalign.
+
+The reference implementation does not include this operation; its `HeavyPart`
+is a fixed-size `template<int bucket_num>`. This follows the paper text.
+
 ## Serialization
 
 Derives serde; no dedicated byte API helpers.
