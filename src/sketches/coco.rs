@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+mod wire;
+
 /// One table slot: the key it currently represents and the mass attributed to it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CocoBucket {
