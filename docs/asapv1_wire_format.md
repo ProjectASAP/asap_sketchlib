@@ -283,7 +283,7 @@ The two tables below are the field-by-field detail of each group.
 | `precision` | u8 | HLL | `12` / `14` / `16`; register count = `2^precision` |
 | `rows` | u32 | Count-Min, Bloom | matrix depth; for Bloom the number of slices |
 | `cols` | u32 | Count-Min, Bloom | matrix width; for Bloom the bits per slice |
-| `counter_type` | string | Count-Min | `"i64"` or `"f64"`; element type of `counts` |
+| `counter_type` | string | Count-Min | `"i32"`, `"i64"` or `"f64"`; element type of `counts`, never widened |
 | `mode` | string | Count-Min, Bloom | `"fast"` or `"regular"`; key-to-column derivation |
 | `k` | u32 | KLL | compactor capacity (accuracy parameter) |
 | `m` | u32 | KLL | minimum level capacity |
@@ -363,7 +363,7 @@ The variant is in `kind_id`, precision is in the metadata (and equals `log2(regi
 
 The `CountMin` struct is generic in memory (counter `i32`/`i64`/`i128`/`f64`, `RegularPath`/`FastPath`, Nitro, and so on).
 **That freedom is kept in memory; nothing is forbidden.**
-The wire supports a fixed set. The two parameters that shape it, **counter type** (`"i64"`/`"f64"`) and **mode** (`"fast"`/`"regular"`), live in the metadata, so the payload itself is just shape and counters:
+The wire supports a fixed set. The two parameters that shape it, **counter type** (`"i32"`/`"i64"`/`"f64"`) and **mode** (`"fast"`/`"regular"`), live in the metadata, so the payload itself is just shape and counters:
 
 | Pos | Field | Type | Notes |
 | ----- | ------- | ------ | ------- |
@@ -372,9 +372,9 @@ The wire supports a fixed set. The two parameters that shape it, **counter type*
 `rows` and `cols` live in the metadata as structural params (Section 2), so the payload omits them.
 The payload is a **1-element positional array `[counts]`**, mirroring HLL Classic's `[registers]`.
 
-Wire counter types are `i64` and `f64` only (`i32` widens to `i64`; `i128` and exotic counters are not wire types).
+Wire counter types are `"i32"`, `"i64"` and `"f64"` (`i128` and exotic counters are not wire types). `i32` is carried at its own width, not widened, and the decoder pins it: `i32` bytes do not decode into an `i64` sketch, or the reverse.
 `mode` records `RegularPath` vs `FastPath` because they place a key in different columns (compare `cm_regular_path_correctness` vs `cm_fast_path_correctness`), so a reader must know which to reproduce a query.
-A counter type other than i64/f64, or non-`Vector2D` storage, must be converted first; see Section 5, "Converting an exotic in-memory sketch".
+A counter type other than i32/i64/f64, or non-`Vector2D` storage, must be converted first; see Section 5, "Converting an exotic in-memory sketch".
 Both modes, `FastPath` and `RegularPath`, serialize directly (you'd only "convert" a mode to *change* it, which needs re-inserting the data).
 
 ### 3.3: KLL payload (`0x06 0x00` compact / `0x06 0x01` dynamic)
@@ -575,7 +575,7 @@ Fail **closed** on any mismatch:
 2. Every hash-spec field matches the **target hasher's** `HashProfile`: decode compares the read metadata against `hll_metadata::<H>` / `cms_metadata::<H>` for the exact type being decoded into, so it does not merely accept the standard profile. Bytes carrying a different profile are rejected.
 3. Structural params are consistent with `kind_id` and the payload:
    - HLL: `registers.len() == 2^precision ==` the target storage's register count.
-   - Count-Min: `counts` element type matches `counter_type`; `counts.len() == rows*cols`.
+   - Count-Min: `counts` element type matches `counter_type` (`"i32"`/`"i64"`/`"f64"`, never widened); `counts.len() == rows*cols`.
    - Count Sketch: `counts` element type matches `counter_type` (`"i32"`/`"i64"`, never widened); `counts.len() == rows*cols`.
 
 ### Converting an exotic in-memory sketch to a wire form
@@ -623,7 +623,7 @@ Keep it through the transition, retire `portable` once goldens are in place.
 - **Q-META**: metadata is a msgpack **map**; canonical key order per Section 4; optional fields are omitted keys.
 - **Q-SEEDS**: `seed_list` is **inlined** in v1 so the bytes self-describe the hash. Resolving seeds from `hash_profile_id` alone is a v2 space optimization. Each sketch still carries only the seed *index* it uses.
 - **Q-PROFILE**: the hash-spec metadata is **derived from the hasher's `HashProfile`** (`hll_metadata::<H>` / `cms_metadata::<H>`) and never hardcoded, so it is always truthful to the hasher. Custom hash profiles are **supported and self-describing**. Merge compatibility is hash-spec equality, so a custom-profile sketch is not mergeable with a standard one.
-- **Q-CMS**: Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode live in the metadata, so the id stays single.
+- **Q-CMS**: Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode live in the metadata, so the id stays single. The counter-type domain is `"i32"`, `"i64"` and `"f64"`, with no `i128` (no msgpack integer form); `i32` is recorded at its own width and pinned on decode.
 - **Q-KLL**: KLL metadata carries **no hash-spec group** — KLL is comparison-based and never hashes, so those fields have no truthful value. Its metadata is structural-only (`metadata_version`, `k`, `m`, `item_type`, optional `seed`) and is *not* `HashProfile`-derived. The two KLL variants (compact `0x06 0x00`, dynamic `0x06 0x01`) share one payload `[levels, items, coin]` and differ only by `kind_id`. `item_type` (`"f64"`/`"i64"`) is a metadata param, not a separate `kind_id` (mirrors Q-CMS's `counter_type`). Retained samples use the top-most-level-first layout that matches `sketchlib-go`'s `KLLState`.
 - **Q-KLL-SEED**: KLL records its reproducible compaction `seed` as an **optional** metadata key. It is construction config (so metadata, not payload, per the config→metadata rule), and it is the first optional key in v1: present only when the sketch carries a seed, omitted otherwise. Rationale: the payload's `coin` already carries the RNG's *current* position (enough to resume compaction), but `seed` is what a later `clear()` re-seeds from — so serializing it lets a decoded sketch keep `clear()`-reproducibility instead of falling back to wall-clock. Cost of omitting it is bounded (only a decoded-then-`clear()`ed sketch loses cross-run byte reproducibility — never correctness), but it is cheap to carry and future-proofs the checkpoint/restore path. `KLLDynamic` has no seed concept and never emits the key; the two variants are deliberately **not** forced to be symmetric here. Go carries and preserves the key without interpreting it.
 - **Q-CS**: Count Sketch is one `kind_id` (`0x04 0x00`) and mirrors Count-Min's metadata and `[counts]` payload, including `counter_type`. Its type domain differs: `"i32"` and `"i64"`, with no `"f64"` (counters must be signed and negatable) and no `i128` (no msgpack integer form). Structural-param order matches Q-CMS: `... matrix_seed_index, rows, cols, counter_type, mode`. **`i32` is not widened to `i64`** — unlike Count-Min, whose counters are plain numbers, a Count Sketch appears *nested* inside `HydraCounter` and `EHSketchList` as `Vector2D<i32>` and must decode back into that variant, so the width is identity and is recorded exactly. Cells are signed, so a decoder must not assume monotonicity.

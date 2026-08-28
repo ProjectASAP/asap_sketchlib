@@ -10,11 +10,12 @@
 //!
 //! Count-Min is one algorithm — a single kind_id `0x02 0x00`. The structural
 //! parameters — the matrix dimensions (`rows` / `cols`), the **counter type**
-//! (i64/f64) and the column-derivation **mode** (fast/regular) — all live in the
-//! metadata, so the payload itself is just `[counts]` (a 1-element array
+//! (i32/i64/f64) and the column-derivation **mode** (fast/regular) — all live in
+//! the metadata, so the payload itself is just `[counts]` (a 1-element array
 //! mirroring HLL Classic's `[registers]`). Only the canonical wire configs
-//! (i64/f64 counters × fast/regular) get a serialization; exotic in-memory
-//! counters (i32/i128/…) must be converted to a wire type first.
+//! (i32/i64/f64 counters × fast/regular) get a serialization; exotic in-memory
+//! counters (i128/…) must be converted to a wire type first. `i32` is carried at
+//! its own width and is pinned on decode.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
@@ -28,10 +29,13 @@ use super::CountMin;
 const CMS_KIND: &[u8] = &[0x02, 0x00];
 
 /// Names the wire counter type carried in the metadata (`counter_type`).
-/// Implemented only for the two wire-eligible counter types.
+/// Implemented only for the wire-eligible counter types.
 pub trait CmsWireCounter: Copy {
-    /// Metadata `counter_type` string — `"i64"` or `"f64"`.
+    /// Metadata `counter_type` string — `"i32"`, `"i64"` or `"f64"`.
     const COUNTER_TYPE: &'static str;
+}
+impl CmsWireCounter for i32 {
+    const COUNTER_TYPE: &'static str = "i32";
 }
 impl CmsWireCounter for i64 {
     const COUNTER_TYPE: &'static str = "i64";
@@ -351,5 +355,71 @@ mod tests {
         };
         let bytes = rmp_serde::to_vec_named(&extra).unwrap();
         assert!(rmp_serde::from_slice::<CmsMetadata>(&bytes).is_err());
+    }
+
+    /// The `i32` wire config round-trips, and the counter type is pinned by the
+    /// target: i32 bytes must not decode into an i64 sketch or the reverse.
+    #[test]
+    fn count_min_i32_round_trips_and_is_pinned_by_counter_type() {
+        let cells = |r: usize, c: usize| (r * 4 + c) as i32;
+        let narrow =
+            CountMin::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, cells));
+        let wide = CountMin::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(
+            2,
+            4,
+            |r, c| cells(r, c) as i64,
+        ));
+
+        let narrow_bytes = narrow.serialize_to_bytes().expect("serialize i32");
+        assert_eq!(&narrow_bytes[7..10], &[2u8, 0x02, 0x00]);
+        let decoded = CountMin::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&narrow_bytes)
+            .expect("decode i32");
+        assert_eq!(
+            narrow.as_storage().as_slice(),
+            decoded.as_storage().as_slice()
+        );
+
+        // The two sketches hold numerically equal cells, so only the metadata
+        // `counter_type` separates their bytes.
+        let wide_bytes = wide.serialize_to_bytes().expect("serialize i64");
+        assert_ne!(narrow_bytes, wide_bytes);
+        assert!(
+            CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&narrow_bytes).is_err(),
+            "i32 bytes must not decode as an i64 sketch"
+        );
+        assert!(
+            CountMin::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&wide_bytes).is_err(),
+            "i64 bytes must not decode as an i32 sketch"
+        );
+    }
+
+    /// Each of the three wire counter types rejects the others' bytes.
+    #[test]
+    fn count_min_counter_types_reject_each_other() {
+        let float = CountMin::<Vector2D<f64>, RegularPath>::from_storage(Vector2D::from_fn(
+            2,
+            4,
+            |r, c| (r * 4 + c) as f64,
+        ));
+        let float_bytes = float.serialize_to_bytes().expect("serialize f64");
+        assert!(
+            CountMin::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&float_bytes).is_err(),
+            "an i32 sketch must reject f64 bytes"
+        );
+        assert!(
+            CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&float_bytes).is_err(),
+            "an i64 sketch must reject f64 bytes"
+        );
+
+        let narrow = CountMin::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(
+            2,
+            4,
+            |r, c| (r * 4 + c) as i32,
+        ));
+        let narrow_bytes = narrow.serialize_to_bytes().expect("serialize i32");
+        assert!(
+            CountMin::<Vector2D<f64>, RegularPath>::deserialize_from_bytes(&narrow_bytes).is_err(),
+            "an f64 sketch must reject i32 bytes"
+        );
     }
 }
