@@ -7,6 +7,8 @@ use super::super::sketches::*;
 use super::UnivMon;
 use crate::sketches::countsketch_topk::CountL2HH;
 
+pub(crate) mod wire;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 /// Norm choices used by EH merge policies.
 pub enum SketchNorm {
