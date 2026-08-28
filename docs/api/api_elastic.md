@@ -321,7 +321,25 @@ entry is `(flow, size in self, size in other)`.
 
 ## Serialization
 
-Derives serde; no dedicated byte API helpers.
+```rust
+fn serialize_to_bytes(&self) -> Result<Vec<u8>, rmp_serde::encode::Error>
+fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
+```
+
+ASAPv1 MessagePack, kind_id `0x0b 0x00`. The metadata carries the hash spec plus
+both geometries: `heavy_buckets`, and the inlined light layer's `light_rows`,
+`light_cols`, `light_counter_type` (`"i32"`) and `light_mode` (`"regular"`). The
+payload is `[flow_ids, vote_pos, vote_neg, evictions, stale_copies,
+light_counts]`; the four heavy arrays are dense in bucket index order and
+`light_counts` is row-major. The light Count-Min is inlined, not nested in its
+own envelope. A free bucket is msgpack `nil`, so an inserted `""` flow id stays
+distinct from a bucket that holds nothing. Both methods require
+`H: HashProfile`.
+
+A zero dimension, a `bktlen` disagreeing with the heavy table, a free bucket
+that still names a flow, a payload length that disagrees with the declared
+geometry, and a `nil` flow id whose `vote_pos` is non-zero are all rejected on
+both sides. `Elastic` also derives serde.
 
 ## Examples
 
