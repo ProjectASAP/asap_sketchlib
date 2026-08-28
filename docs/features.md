@@ -107,7 +107,7 @@ Insertion throughput measured on 10,000,000 Zipf-distributed `int64` values (s=1
 
 ### Serialization
 
-MessagePack (`rmp-serde`) support. **serde support** means the type derives `Serialize`/`Deserialize` and can be used with any serde-compatible serializer. **Built-in helpers** (`serialize_to_bytes` / `deserialize_from_bytes`) provide one-call round-tripping without requiring users to depend on `rmp-serde` directly. For HyperLogLog, Count-Min, Count Sketch, KLL, Bloom and Space-Saving these helpers emit the self-describing **ASAPv1** wire envelope (see the [ASAPv1 wire format spec](./asapv1_wire_format.md)); other sketches are not yet converted.
+MessagePack (`rmp-serde`) support. **serde support** means the type derives `Serialize`/`Deserialize` and can be used with any serde-compatible serializer. **Built-in helpers** (`serialize_to_bytes` / `deserialize_from_bytes`) provide one-call round-tripping without requiring users to depend on `rmp-serde` directly. These helpers emit the self-describing **ASAPv1** wire envelope (see the [ASAPv1 wire format spec](./asapv1_wire_format.md)) for every sketch the spec's `kind_id` registry marks *implemented*; NitroBatch, FoldCMS, FoldCS, HashSketchEnsemble, EHUnivOptimized and OctoSketch are not converted.
 
 | Component | serde support | Built-in helpers |
 | --- | --- | --- |
@@ -117,18 +117,19 @@ MessagePack (`rmp-serde`) support. **serde support** means the type derives `Ser
 | DDSketch | Yes | Yes |
 | KLL / KLLDynamic | Yes | Yes |
 | KMV | Yes | Yes |
-| Elastic | Yes | In Progress |
-| Coco | Yes | In Progress |
-| UniformSampling | Yes | In Progress |
+| Elastic | Yes | Yes |
+| Coco | Yes | Yes |
+| UniformSampling | Yes | Yes |
 | FoldCMS / FoldCS | Yes | In Progress |
-| CMSHeap / CSHeap | In Progress | In Progress |
+| CMSHeap / CSHeap | In Progress | Yes |
 | SpaceSaving | Yes | Yes |
 | Bloom | Yes | Yes |
 | Hydra | Yes | Yes |
-| UnivMon | Yes | Yes |
-| UnivMonQ (experimental) | Internal wire DTO | Yes (native MessagePack) |
+| UnivMon / UnivMon Optimized | Yes | Yes |
+| UnivMonQ (experimental) | Internal wire DTO | Yes |
 | NitroBatch | Yes | In Progress |
-| EHSketchList | Yes | In Progress |
+| EHSketchList | Yes | Yes |
+| ExponentialHistogram | Yes | Yes |
 
 Protobuf (prost): `.proto` definitions exist for CountMin, Count, HLL, DDSketch, KLL, Elastic, Coco, Hydra, and UnivMon. Rust conversion code is in progress.
 

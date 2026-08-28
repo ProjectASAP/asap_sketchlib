@@ -5,6 +5,14 @@ These `.hex` files pin the exact bytes the ASAPv1 wire format (see
 are the machine-checked proof that the Rust (`asap_sketchlib`) and Go
 (`sketchlib-go`) implementations serialize **byte-identically**.
 
+**Coverage.** The fixtures below cover six `kind_id`s: HLL's three estimators,
+Count-Min, Count Sketch and compact KLL. Every other `kind_id` the wire-format
+registry marks *implemented* — Bloom, Space-Saving, CMSHeap, CSHeap, DDSketch,
+Hydra's five counter variants, Elastic, Coco, UniformSampling, KMV, the UnivMon
+family, CountL2HH, ExponentialHistogram and EHSketchList — has **no fixture and
+therefore no cross-language drift guard**. `docs/asapv1_wire_format.md` fixes
+their bytes; nothing here checks them.
+
 **The copy here and the copy in `sketchlib-go/asapv1_golden/` MUST stay
 byte-identical.** They are the same fixtures, checked into both repos so each
 side's test suite is self-contained. The bytes are authored by the Rust side
@@ -37,16 +45,16 @@ golden tests the **wire encoding**, isolated from the hash functions.
 
 The CMS i64 fixture deliberately spans the msgpack integer width boundaries
 (positive fixint / uint8 / uint16 / uint32) to lock the "non-negative integer →
-uint family, minimal width" rule (`docs/asapv1_wire_format.md` §5).
+uint family, minimal width" rule (`docs/asapv1_wire_format.md` Section 4).
 
 The Count Sketch fixtures cover the **negative** side, which no other fixture
 reaches, because Count Sketch cells are signed — it adds `±weight`: negative
 fixint / int8 / int16 / int32, alongside positive fixint / uint8 / uint32.
 
-All three hold the same matrix, so each pair isolates one metadata key: the two
-i64 files differ only by `mode`, and `cs_i32_regular_2x4` differs from
-`cs_i64_regular_2x4` in exactly **two bytes** — the `"i64"` / `"i32"` string in
-`counter_type`. The payloads are byte-identical, because msgpack encodes an
+All three Count Sketch files hold the same matrix, so each pair isolates one
+metadata key: the two i64 files differ only by `mode`, and `cs_i32_regular_2x4`
+differs from `cs_i64_regular_2x4` only in the `counter_type` value, `"i64"`
+against `"i32"`. The payloads are byte-identical, because msgpack encodes an
 integer at its minimal width whatever the source type is. So the i32 fixture
 pins that the counter type reaches the bytes, and that nothing else does.
 
@@ -57,7 +65,7 @@ compaction fires (`num_levels = 1`, one level `[1..50]`) and the state is fully
 deterministic. The fixed compaction seed (42) pins the carried coin state, which
 must match `sketchlib-go`'s coin for the same input. Only the compact KLL
 (`06 00`) has a golden; the dynamic variant (`06 01`) shares the payload shape but
-lacks a seeded constructor, so its cross-language golden is deferred.
+lacks a seeded constructor, so its fixture waits on one.
 
 ## Tests that consume these
 
@@ -66,6 +74,9 @@ lacks a seeded constructor, so its cross-language golden is deferred.
 - Go: `wire/asapmsgpack/golden_test.go` — `Unmarshal(golden)`→re-`Marshal` ==
   golden, **and** `Marshal(equivalent known state) == golden` (the cross-language
   parity proof).
+
+A `kind_id` that gains a fixture needs one on both sides at once: a new `.hex`
+here and in `sketchlib-go/asapv1_golden/`, plus the case in each test file.
 
 ## Regenerating
 

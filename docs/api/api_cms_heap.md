@@ -53,10 +53,10 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 These produce/consume the **ASAPv1** wire envelope (kind `0x03 0x00`) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). They are **not** available
 on every `CMSHeap`: the impl exists only for wire-eligible configs
-`CMSHeap<Vector2D<T>, Mode, H>` where `T` is `i64` or `f64` (`CmsWireCounter`),
-`Mode` is `FastPath` or `RegularPath` (`CmsWireMode`), and `H: HashProfile`. An
-`i32`, `i128` or non-`Vector2D` sketch must be converted first (only you know if
-the mapping is lossless).
+`CMSHeap<Vector2D<T>, Mode, H>` where `T` is `i32`, `i64` or `f64`
+(`CmsWireCounter`), `Mode` is `FastPath` or `RegularPath` (`CmsWireMode`), and
+`H: HashProfile`. An `i128` or non-`Vector2D` sketch must be converted first
+(only you know if the mapping is lossless).
 
 A sketch travels as the base matrix plus the heap's entries: the metadata
 carries `rows`, `cols`, `counter_type`, `mode`, the heap capacity `k` and the
