@@ -12,6 +12,8 @@ use crate::Vector2D;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+mod wire;
+
 /// Eviction threshold `lambda` from the paper. A resident flow is replaced once
 /// its negative votes reach `LAMBDA` times its positive votes, which is the
 /// paper's `vote-/vote+ >= lambda`; BlockLiu/ElasticSketchCode swaps one packet
