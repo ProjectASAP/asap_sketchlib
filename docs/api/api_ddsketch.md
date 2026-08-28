@@ -50,6 +50,31 @@ fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
+These produce/consume the **ASAPv1** wire envelope (kind `0x05 0x00`) — see the
+[ASAPv1 wire format spec](../asapv1_wire_format.md). DDSketch never hashes its
+inputs, so the metadata carries **no hash-spec group**: it is `metadata_version`
+plus `alpha`, the sketch's one construction parameter. `gamma` and its logs are
+derived from `alpha` and never reach the wire.
+
+The payload is `[counts, offset, sum, min, max]`: the dense bucket store carried
+verbatim (the bucket index of `counts[i]` is `offset + i`), plus the three
+scalars the buckets do not determine. `count` is **not** carried — it is the sum
+of the bucket counts and is recovered exactly on decode. `sum`, `min` and `max`
+come back exactly rather than as α-bounded bucket estimates, so a decoded sketch
+re-serializes byte-identically.
+
+There is one positive-range store and no zero-count bucket, because `add` drops
+non-positive, non-finite and non-indexable values. Bucket indices are still
+signed, so `offset` may be negative. Decode rejects an `alpha` outside `(0, 1)`,
+a store span past `i32`, a non-zero offset on an empty store, bucket counts that
+overflow the total, and scalars inconsistent with that total; `serialize_to_bytes`
+enforces the same rules, so the format never emits bytes it would refuse to read
+back.
+
+Independently of ASAPv1, `DDSketch` is plain `Serialize`/`Deserialize` for use
+where it is nested in another type (`EHSketchList`); that form skips the four
+running scalars.
+
 ## Examples
 
 ```rust
