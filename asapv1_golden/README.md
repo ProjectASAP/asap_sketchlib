@@ -38,11 +38,11 @@ The CMS i64 fixture deliberately spans the msgpack integer width boundaries
 (positive fixint / uint8 / uint16 / uint32) to lock the "non-negative integer →
 uint family, minimal width" rule (`docs/asapv1_wire_format.md` §5).
 
-The Count Sketch fixtures span those boundaries in **both** directions
-(negative fixint / int8 / int16 / int32 alongside the positive widths), because
-Count Sketch cells are signed — it adds `±weight`. The two files hold the same
-matrix and differ only by the `mode` metadata string, so the pair also pins that
-mode reaches the bytes.
+The Count Sketch fixtures cover the **negative** side, which no other fixture
+reaches, because Count Sketch cells are signed — it adds `±weight`: negative
+fixint / int8 / int16 / int32, alongside positive fixint / uint8 / uint32. The
+two files hold the same matrix and differ only by the `mode` metadata string, so
+the pair also pins that mode reaches the bytes.
 
 The KLL fixtures are a special case of "state is fixed, not hashed": KLL never
 hashes — it orders raw numeric values — so inserting `1..=50` places exactly

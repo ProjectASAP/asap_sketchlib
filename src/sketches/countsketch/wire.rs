@@ -105,13 +105,24 @@ where
     /// Serializes the sketch into an ASAPv1 MessagePack envelope. The metadata is
     /// derived from the hasher's [`HashProfile`], so it truthfully describes how
     /// the sketch was hashed.
+    ///
+    /// A matrix whose cell count disagrees with its own dimensions is an error
+    /// rather than bytes that would be refused on decode.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
+        let counts = self.counts.as_slice();
+        if counts.len() != rows.saturating_mul(cols) {
+            return Err(RmpEncodeError::Syntax(format!(
+                "ASAPv1 Count Sketch envelope: counts length {} != rows*cols {}",
+                counts.len(),
+                rows.saturating_mul(cols)
+            )));
+        }
         let metadata =
             rmp_serde::to_vec_named(&cs_metadata::<H>(rows as u32, cols as u32, Mode::MODE))?;
         let payload = rmp_serde::to_vec(&CsPayload {
-            counts: self.counts.as_slice().to_vec(),
+            counts: counts.to_vec(),
         })?;
         Ok(envelope::encode(CS_KIND, &metadata, &payload))
     }
@@ -341,6 +352,17 @@ mod tests {
         assert!(
             Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes).is_err(),
             "counts length must match rows*cols"
+        );
+    }
+
+    /// An unpopulated matrix carries dimensions its cells do not match.
+    /// Serializing it must fail rather than emit bytes the decoder refuses.
+    #[test]
+    fn count_sketch_rejects_serializing_an_unfilled_matrix() {
+        let sketch = Count::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::<i64>::init(2, 4));
+        assert!(
+            sketch.serialize_to_bytes().is_err(),
+            "a matrix whose cell count disagrees with its dimensions must not serialize"
         );
     }
 

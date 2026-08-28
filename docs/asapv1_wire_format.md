@@ -499,6 +499,8 @@ Cells carry a sign: Count Sketch adds `±weight`, so a counter may be negative a
 3. `rows` and `cols` are both non-zero. Checked before the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
 4. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
 
+Rule 4 is enforced on the **encode** side too: a matrix whose cell count disagrees with its own dimensions (`Vector2D::init` reserves without filling) fails to serialize, so the format never emits bytes it would refuse to read back.
+
 ### 3.7 onward: payloads not yet designed
 
 The remaining `kind_id`s reserve a family byte with payload TBD (Section 1 registry has their "assigned in Go" status). Likely shape when designed:
@@ -572,6 +574,7 @@ Fail **closed** on any mismatch:
 3. Structural params are consistent with `kind_id` and the payload:
    - HLL: `registers.len() == 2^precision ==` the target storage's register count.
    - Count-Min: `counts` element type matches `counter_type`; `counts.len() == rows*cols`.
+   - Count Sketch: `counts.len() == rows*cols`; there is no `counter_type` key to match.
 
 ### Converting an exotic in-memory sketch to a wire form
 
