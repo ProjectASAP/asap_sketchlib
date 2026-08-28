@@ -480,22 +480,24 @@ Two summaries have no encoding and **fail to serialize** rather than being coerc
 
 ### 3.6: Count Sketch payload (`0x04 0x00`)
 
-Same shape as Count-Min (§3.2): the matrix dimensions (`rows` / `cols`) and the column-derivation **mode** (`"fast"`/`"regular"`) live in the metadata, so the payload is just the counters.
+Same shape as Count-Min (§3.2): the matrix dimensions (`rows` / `cols`), the **counter type** and the column-derivation **mode** (`"fast"`/`"regular"`) live in the metadata, so the payload is just the counters.
 
 | Pos | Field | Type | Notes |
 | ----- | ------- | ------ | ------- |
-| 0 | `counts` | array | packed **row-major**, `rows*cols` cells; `i64` elements, **signed** |
+| 0 | `counts` | array | packed **row-major**, `rows*cols` cells; element type = `counter_type`, **signed** |
 
 The payload is a **1-element positional array `[counts]`**.
 
-There is **no `counter_type` metadata key**. Count Sketch counters must be signed and negatable, which leaves `i64` as the only wire type, so `kind_id` `0x04 0x00` already implies it (`i32` widens to `i64`; `i128` and exotic counters are not wire types — see Section 5, "Converting an exotic in-memory sketch"). This is the one metadata difference from Count-Min, whose counters may be `i64` or `f64`.
+Wire counter types are **`"i32"` and `"i64"`**. Count Sketch counters must be signed and negatable, so Count-Min's `f64` has no counterpart here, and `i128` has no msgpack integer form (the same line Count-Min draws). Non-`Vector2D` storage must be converted first; see Section 5, "Converting an exotic in-memory sketch".
+
+**`i32` is carried at its own width, not widened to `i64`.** Count-Min widens `i32` because a Count-Min counter is a number and the caller reads it back through a type they chose. A Count Sketch is different in one respect that matters: the `Vector2D<i32>` variants of `HydraCounter` and `EHSketchList` are *nested* sketches, decoded back into the enum variant they were stored as. Widening would make `i32` unrepresentable on the wire, so a nested sketch could not round-trip. Since the narrower type must be recorded anyway, it is recorded exactly, and the decoder pins it: `i32` bytes do not decode into an `i64` sketch, or the reverse.
 
 Cells carry a sign: Count Sketch adds `±weight`, so a counter may be negative and a decoder must not assume monotonicity.
 
 **Decode rules** (all fail closed, per Section 1's decoder rules):
 
 1. `kind_id` is `0x04 0x00`; any other id is rejected.
-2. The metadata's hash spec and `mode` must equal the target type's own, with `rows` / `cols` echoed back since those are structural and the matrix is sized from them. A `counter_type` key is not part of this metadata, so a payload carrying one is rejected as an unknown key.
+2. The metadata's hash spec, `counter_type` and `mode` must equal the target type's own, with `rows` / `cols` echoed back since those are structural and the matrix is sized from them. `counter_type` is required: a map missing it does not decode, so it can never be silently defaulted.
 3. `rows` and `cols` are both non-zero. Checked before the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
 4. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
 
@@ -574,7 +576,7 @@ Fail **closed** on any mismatch:
 3. Structural params are consistent with `kind_id` and the payload:
    - HLL: `registers.len() == 2^precision ==` the target storage's register count.
    - Count-Min: `counts` element type matches `counter_type`; `counts.len() == rows*cols`.
-   - Count Sketch: `counts.len() == rows*cols`; there is no `counter_type` key to match.
+   - Count Sketch: `counts` element type matches `counter_type` (`"i32"`/`"i64"`, never widened); `counts.len() == rows*cols`.
 
 ### Converting an exotic in-memory sketch to a wire form
 
@@ -624,7 +626,7 @@ Keep it through the transition, retire `portable` once goldens are in place.
 - **Q-CMS**: Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode live in the metadata, so the id stays single.
 - **Q-KLL**: KLL metadata carries **no hash-spec group** — KLL is comparison-based and never hashes, so those fields have no truthful value. Its metadata is structural-only (`metadata_version`, `k`, `m`, `item_type`, optional `seed`) and is *not* `HashProfile`-derived. The two KLL variants (compact `0x06 0x00`, dynamic `0x06 0x01`) share one payload `[levels, items, coin]` and differ only by `kind_id`. `item_type` (`"f64"`/`"i64"`) is a metadata param, not a separate `kind_id` (mirrors Q-CMS's `counter_type`). Retained samples use the top-most-level-first layout that matches `sketchlib-go`'s `KLLState`.
 - **Q-KLL-SEED**: KLL records its reproducible compaction `seed` as an **optional** metadata key. It is construction config (so metadata, not payload, per the config→metadata rule), and it is the first optional key in v1: present only when the sketch carries a seed, omitted otherwise. Rationale: the payload's `coin` already carries the RNG's *current* position (enough to resume compaction), but `seed` is what a later `clear()` re-seeds from — so serializing it lets a decoded sketch keep `clear()`-reproducibility instead of falling back to wall-clock. Cost of omitting it is bounded (only a decoded-then-`clear()`ed sketch loses cross-run byte reproducibility — never correctness), but it is cheap to carry and future-proofs the checkpoint/restore path. `KLLDynamic` has no seed concept and never emits the key; the two variants are deliberately **not** forced to be symmetric here. Go carries and preserves the key without interpreting it.
-- **Q-CS**: Count Sketch is one `kind_id` (`0x04 0x00`) and mirrors Count-Min's metadata and `[counts]` payload with **one key removed: no `counter_type`**. Count Sketch counters must be signed and negatable, so `i64` is the only wire type and the `kind_id` already implies it — a key with a single legal value describes nothing. The variance from Q-CMS is deliberate: the two sketches are not forced symmetric where their type domains differ. Structural-param order: `... matrix_seed_index, rows, cols, mode`. Cells are signed, so a decoder must not assume monotonicity.
+- **Q-CS**: Count Sketch is one `kind_id` (`0x04 0x00`) and mirrors Count-Min's metadata and `[counts]` payload, including `counter_type`. Its type domain differs: `"i32"` and `"i64"`, with no `"f64"` (counters must be signed and negatable) and no `i128` (no msgpack integer form). Structural-param order matches Q-CMS: `... matrix_seed_index, rows, cols, counter_type, mode`. **`i32` is not widened to `i64`** — unlike Count-Min, whose counters are plain numbers, a Count Sketch appears *nested* inside `HydraCounter` and `EHSketchList` as `Vector2D<i32>` and must decode back into that variant, so the width is identity and is recorded exactly. Cells are signed, so a decoder must not assume monotonicity.
 - **Q-CMS-DIMS**: Count-Min `rows`/`cols` are **metadata** and the payload omits them. They are configuration that shapes the payload (like HLL's `precision`), so per the config-to-metadata rule they belong in the descriptor. The payload is then just `[counts]`. Canonical structural-param order: `... matrix_seed_index, rows, cols, counter_type, mode`.
 - **Q-VER**: no payload version field. A new incompatible encoding gets a **new `kind_id`**; retired ids are reserved forever and never recycled.
 - **Encoding**: metadata + payload are both msgpack; payload is a positional array. Byte-level rules in Section 4.

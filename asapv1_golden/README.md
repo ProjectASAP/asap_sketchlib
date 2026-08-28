@@ -30,7 +30,8 @@ golden tests the **wire encoding**, isolated from the hash functions.
 | `cms_i64_regular_2x3` | Count-Min i64, RegularPath | `02 00` | 2×3 row-major `[[0,1,127],[128,300,65536]]` |
 | `cms_f64_fast_2x3` | Count-Min f64, FastPath | `02 00` | 2×3 row-major `[[0.0,1.5,2.25],[3.75,4.125,5.0625]]` |
 | `cs_i64_regular_2x4` | Count Sketch i64, RegularPath | `04 00` | 2×4 row-major `[[0,127,128,65536],[-1,-33,-32768,-2147483648]]` |
-| `cs_i64_fast_2x4` | Count Sketch i64, FastPath | `04 00` | same matrix — the pair differs only by `mode` |
+| `cs_i64_fast_2x4` | Count Sketch i64, FastPath | `04 00` | same matrix — differs from the above only by `mode` |
+| `cs_i32_regular_2x4` | Count Sketch i32, RegularPath | `04 00` | same matrix — differs from the first only by `counter_type` |
 | `kll_f64_k200` | KLL f64, k=200 | `06 00` | integers `1..=50`, compaction seed 42 (recorded in metadata as `seed`) |
 | `kll_i64_k200` | KLL i64, k=200 | `06 00` | integers `1..=50`, compaction seed 42 (recorded in metadata as `seed`) |
 
@@ -40,9 +41,14 @@ uint family, minimal width" rule (`docs/asapv1_wire_format.md` §5).
 
 The Count Sketch fixtures cover the **negative** side, which no other fixture
 reaches, because Count Sketch cells are signed — it adds `±weight`: negative
-fixint / int8 / int16 / int32, alongside positive fixint / uint8 / uint32. The
-two files hold the same matrix and differ only by the `mode` metadata string, so
-the pair also pins that mode reaches the bytes.
+fixint / int8 / int16 / int32, alongside positive fixint / uint8 / uint32.
+
+All three hold the same matrix, so each pair isolates one metadata key: the two
+i64 files differ only by `mode`, and `cs_i32_regular_2x4` differs from
+`cs_i64_regular_2x4` in exactly **two bytes** — the `"i64"` / `"i32"` string in
+`counter_type`. The payloads are byte-identical, because msgpack encodes an
+integer at its minimal width whatever the source type is. So the i32 fixture
+pins that the counter type reaches the bytes, and that nothing else does.
 
 The KLL fixtures are a special case of "state is fixed, not hashed": KLL never
 hashes — it orders raw numeric values — so inserting `1..=50` places exactly

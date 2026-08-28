@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use std::ops::Neg;
 
 mod wire;
-pub(crate) use wire::CsWireMode;
+pub(crate) use wire::{CsWireCounter, CsWireMode};
 
 const DEFAULT_ROW_NUM: usize = 3;
 const DEFAULT_COL_NUM: usize = 4096;

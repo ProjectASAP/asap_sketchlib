@@ -2,22 +2,24 @@
 //!
 //! Child submodule of [`crate::sketches::countsketch`]: it holds ALL of Count
 //! Sketch's serialization (the metadata/payload DTOs, the kind_id constant, the
-//! [`CsWireMode`] marker trait, and the `serialize_to_bytes` /
-//! `deserialize_from_bytes` impls) while the algorithm lives in the parent
-//! module file. Being a descendant module, it reads the sketch's private
-//! `counts` field directly without widening any field visibility. See
-//! `docs/asapv1_wire_format.md` §3.6.
+//! [`CsWireCounter`] / [`CsWireMode`] marker traits, and the
+//! `serialize_to_bytes` / `deserialize_from_bytes` impls) while the algorithm
+//! lives in the parent module file. Being a descendant module, it reads the
+//! sketch's private `counts` field directly without widening any field
+//! visibility. See `docs/asapv1_wire_format.md` §3.6.
 //!
 //! Count Sketch is one algorithm — a single kind_id `0x04 0x00`. The structural
-//! parameters — the matrix dimensions (`rows` / `cols`) and the
-//! column-derivation **mode** (fast/regular) — live in the metadata, so the
-//! payload itself is just `[counts]` (a 1-element array mirroring Count-Min's).
+//! parameters — the matrix dimensions (`rows` / `cols`), the **counter type**
+//! (i32/i64) and the column-derivation **mode** (fast/regular) — live in the
+//! metadata, so the payload itself is just `[counts]` (a 1-element array
+//! mirroring Count-Min's).
 //!
-//! Unlike Count-Min, there is no `counter_type` metadata key: Count Sketch
-//! counters must be signed and negatable ([`CountSketchCounter`] requires
-//! `Neg` + `From<i32>`), which leaves `i64` as the only wire-eligible type, so
-//! the kind_id already implies it. Exotic in-memory counters (i32/i128/…) must
-//! be converted to `i64` first.
+//! Wire counter types are `i32` and `i64`. Count Sketch counters must be signed
+//! and negatable ([`CountSketchCounter`] requires `Neg` + `From<i32>`), so
+//! Count-Min's `f64` has no counterpart here, and `i128` has no msgpack integer
+//! form. `i32` is carried at its own width rather than widened, because a
+//! nested Count Sketch — the `Vector2D<i32>` counters `HydraCounter` and
+//! `EHSketchList` hold — must decode back into the type it was stored as.
 //!
 //! [`CountSketchCounter`]: crate::sketches::countsketch::CountSketchCounter
 
@@ -27,10 +29,23 @@ use serde::{Deserialize, Serialize};
 use crate::message_pack_format::envelope;
 use crate::{FastPath, HashProfile, RegularPath, SketchHasher, Vector2D};
 
-use super::Count;
+use super::{Count, CountSketchCounter};
 
 /// Count Sketch kind_id: family `0x04`, single algorithm variant `0x00`.
 const CS_KIND: &[u8] = &[0x04, 0x00];
+
+/// Names the wire counter type carried in the metadata (`counter_type`).
+/// Implemented only for the two wire-eligible counter types.
+pub trait CsWireCounter: Copy {
+    /// Metadata `counter_type` string — `"i32"` or `"i64"`.
+    const COUNTER_TYPE: &'static str;
+}
+impl CsWireCounter for i32 {
+    const COUNTER_TYPE: &'static str = "i32";
+}
+impl CsWireCounter for i64 {
+    const COUNTER_TYPE: &'static str = "i64";
+}
 
 /// Names the wire column-derivation mode carried in the metadata (`mode`).
 pub trait CsWireMode {
@@ -47,9 +62,10 @@ impl CsWireMode for FastPath {
 /// Count Sketch descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
 /// the wire spec fixes (Go must mirror it). Hash-spec fields first, then the
-/// structural params `rows` / `cols` / `mode`. Per the spec's config→metadata
-/// rule, the matrix dimensions are configuration (like HLL's `precision`) and so
-/// live here rather than in the payload.
+/// structural params `rows` / `cols` / `counter_type` / `mode` — the same order
+/// Count-Min uses. Per the spec's config→metadata rule, the matrix dimensions
+/// are configuration (like HLL's `precision`) and so live here rather than in
+/// the payload.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CsMetadata {
@@ -62,6 +78,7 @@ struct CsMetadata {
     matrix_seed_index: u32,
     rows: u32,
     cols: u32,
+    counter_type: String,
     mode: String,
 }
 
@@ -70,7 +87,7 @@ struct CsMetadata {
 /// hashed (rather than hardcoding the standard profile). `matrix_seed_index` is
 /// the profile's own row seed index; `rows` / `cols` are the sketch's structural
 /// dimensions.
-fn cs_metadata<H: HashProfile>(rows: u32, cols: u32, mode: &str) -> CsMetadata {
+fn cs_metadata<H: HashProfile>(rows: u32, cols: u32, counter_type: &str, mode: &str) -> CsMetadata {
     CsMetadata {
         metadata_version: 1,
         hash_profile_id: H::PROFILE_ID.to_string(),
@@ -81,24 +98,33 @@ fn cs_metadata<H: HashProfile>(rows: u32, cols: u32, mode: &str) -> CsMetadata {
         matrix_seed_index: H::MATRIX_SEED_INDEX,
         rows,
         cols,
+        counter_type: counter_type.to_string(),
         mode: mode.to_string(),
     }
 }
 
 /// Count Sketch payload (ASAPv1 §3.6), a msgpack **array** (`to_vec`,
 /// positional): `[counts]` — a 1-element array. The dimensions live in the
-/// metadata; `counts` is packed row-major and its elements are `i64`. Cells are
-/// signed: Count Sketch adds `±weight`, so a counter may be negative.
+/// metadata; `counts` is packed row-major and its element type is fixed by the
+/// metadata `counter_type`. Cells are signed: Count Sketch adds `±weight`, so a
+/// counter may be negative.
 #[derive(Debug, Serialize, Deserialize)]
-struct CsPayload {
-    counts: Vec<i64>,
+struct CsPayload<T> {
+    counts: Vec<T>,
 }
 
 // Wire serialization for the canonical Count Sketch configs only. `wire` is a
 // descendant of the sketch module, so this impl reads the private `counts`
 // field directly.
-impl<Mode, H> Count<Vector2D<i64>, Mode, H>
+impl<T, Mode, H> Count<Vector2D<T>, Mode, H>
 where
+    // `CountSketchCounter` is required by `Count::from_storage`; `AddAssign` by
+    // `Vector2D<T>: MatrixStorage`. Neither is used by the bodies below.
+    T: CsWireCounter
+        + CountSketchCounter
+        + std::ops::AddAssign
+        + Serialize
+        + for<'de> Deserialize<'de>,
     Mode: CsWireMode,
     H: SketchHasher + HashProfile,
 {
@@ -119,9 +145,13 @@ where
                 rows.saturating_mul(cols)
             )));
         }
-        let metadata =
-            rmp_serde::to_vec_named(&cs_metadata::<H>(rows as u32, cols as u32, Mode::MODE))?;
-        let payload = rmp_serde::to_vec(&CsPayload {
+        let metadata = rmp_serde::to_vec_named(&cs_metadata::<H>(
+            rows as u32,
+            cols as u32,
+            T::COUNTER_TYPE,
+            Mode::MODE,
+        ))?;
+        let payload = rmp_serde::to_vec(&CsPayload::<T> {
             counts: counts.to_vec(),
         })?;
         Ok(envelope::encode(CS_KIND, &metadata, &payload))
@@ -139,16 +169,16 @@ where
             )));
         }
         let meta: CsMetadata = from_slice(metadata)?;
-        // Validate the hash spec + mode against this target; `rows`/`cols` are
-        // structural (the sketch is dynamically sized), so they are echoed back
-        // into the expected block rather than known a priori.
-        if meta != cs_metadata::<H>(meta.rows, meta.cols, Mode::MODE) {
+        // Validate the hash spec + counter type + mode against this target;
+        // `rows`/`cols` are structural (the sketch is dynamically sized), so they
+        // are echoed back into the expected block rather than known a priori.
+        if meta != cs_metadata::<H>(meta.rows, meta.cols, T::COUNTER_TYPE, Mode::MODE) {
             return Err(RmpDecodeError::Uncategorized(
                 "ASAPv1 Count Sketch envelope: metadata mismatch".to_string(),
             ));
         }
         let (rows, cols) = (meta.rows as usize, meta.cols as usize);
-        let p: CsPayload = from_slice(payload)?;
+        let p: CsPayload<T> = from_slice(payload)?;
         // Reject zero dimensions before building the matrix: `Vector2D::from_fn`
         // derives its mask via `cols.ilog2()`, which panics on `cols == 0`. Fail
         // closed with an error rather than panicking on crafted bytes.
@@ -328,8 +358,9 @@ mod tests {
     #[test]
     fn count_sketch_rejects_zero_dimension_payload() {
         let metadata =
-            rmp_serde::to_vec_named(&cs_metadata::<DefaultXxHasher>(4, 0, "regular")).unwrap();
-        let payload = rmp_serde::to_vec(&CsPayload { counts: Vec::new() }).unwrap();
+            rmp_serde::to_vec_named(&cs_metadata::<DefaultXxHasher>(4, 0, "i64", "regular"))
+                .unwrap();
+        let payload = rmp_serde::to_vec(&CsPayload::<i64> { counts: Vec::new() }).unwrap();
         let bytes = envelope::encode(CS_KIND, &metadata, &payload);
         assert!(
             Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes).is_err(),
@@ -341,10 +372,11 @@ mod tests {
     /// runs before `Vector2D::from_fn`.
     #[test]
     fn count_sketch_rejects_dimension_length_mismatch() {
-        let metadata =
-            rmp_serde::to_vec_named(&cs_metadata::<DefaultXxHasher>(1024, 1024, "regular"))
-                .unwrap();
-        let payload = rmp_serde::to_vec(&CsPayload {
+        let metadata = rmp_serde::to_vec_named(&cs_metadata::<DefaultXxHasher>(
+            1024, 1024, "i64", "regular",
+        ))
+        .unwrap();
+        let payload = rmp_serde::to_vec(&CsPayload::<i64> {
             counts: vec![1, 2, 3],
         })
         .unwrap();
@@ -380,10 +412,11 @@ mod tests {
             matrix_seed_index: u32,
             rows: u32,
             cols: u32,
+            counter_type: String,
             mode: String,
             bogus_field: u8, // key not in CsMetadata
         }
-        let m = cs_metadata::<DefaultXxHasher>(2, 3, "regular");
+        let m = cs_metadata::<DefaultXxHasher>(2, 3, "i64", "regular");
         let extra = WithExtra {
             metadata_version: m.metadata_version,
             hash_profile_id: m.hash_profile_id.clone(),
@@ -394,6 +427,7 @@ mod tests {
             matrix_seed_index: m.matrix_seed_index,
             rows: m.rows,
             cols: m.cols,
+            counter_type: m.counter_type.clone(),
             mode: m.mode.clone(),
             bogus_field: 7,
         };
@@ -401,12 +435,12 @@ mod tests {
         assert!(rmp_serde::from_slice::<CsMetadata>(&bytes).is_err());
     }
 
-    /// A Count Sketch metadata map without the CMS-only `counter_type` key is
-    /// the contract; adding it back must be rejected.
+    /// `counter_type` is required: a Count Sketch metadata map missing it does
+    /// not decode, so the key cannot be silently defaulted.
     #[test]
-    fn cs_metadata_rejects_counter_type_key() {
+    fn cs_metadata_rejects_a_missing_counter_type_key() {
         #[derive(Serialize)]
-        struct WithCounterType {
+        struct WithoutCounterType {
             metadata_version: u8,
             hash_profile_id: String,
             hash_algorithm: String,
@@ -416,11 +450,10 @@ mod tests {
             matrix_seed_index: u32,
             rows: u32,
             cols: u32,
-            counter_type: String, // CMS-only; Count Sketch's kind_id implies i64
             mode: String,
         }
-        let m = cs_metadata::<DefaultXxHasher>(2, 3, "regular");
-        let extra = WithCounterType {
+        let m = cs_metadata::<DefaultXxHasher>(2, 3, "i64", "regular");
+        let without = WithoutCounterType {
             metadata_version: m.metadata_version,
             hash_profile_id: m.hash_profile_id.clone(),
             hash_algorithm: m.hash_algorithm.clone(),
@@ -430,10 +463,65 @@ mod tests {
             matrix_seed_index: m.matrix_seed_index,
             rows: m.rows,
             cols: m.cols,
-            counter_type: "i64".to_string(),
             mode: m.mode.clone(),
         };
-        let bytes = rmp_serde::to_vec_named(&extra).unwrap();
+        let bytes = rmp_serde::to_vec_named(&without).unwrap();
         assert!(rmp_serde::from_slice::<CsMetadata>(&bytes).is_err());
+    }
+
+    /// `f64` is a Count-Min wire counter but not a Count Sketch one, so its
+    /// name must not decode into either wire-eligible type.
+    #[test]
+    fn cs_metadata_rejects_a_foreign_counter_type_name() {
+        let bytes =
+            rmp_serde::to_vec_named(&cs_metadata::<DefaultXxHasher>(2, 4, "f64", "regular"))
+                .unwrap();
+        let payload = rmp_serde::to_vec(&CsPayload::<i64> { counts: vec![0; 8] }).unwrap();
+        let envelope_bytes = envelope::encode(CS_KIND, &bytes, &payload);
+        assert!(
+            Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&envelope_bytes).is_err(),
+            "an i64 sketch must reject an f64-labelled envelope"
+        );
+        assert!(
+            Count::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&envelope_bytes).is_err(),
+            "an i32 sketch must reject an f64-labelled envelope"
+        );
+    }
+
+    /// The `i32` wire config round-trips, and the counter type is pinned by the
+    /// target: i32 bytes must not decode into an i64 sketch or the reverse.
+    #[test]
+    fn count_sketch_i32_round_trips_and_is_pinned_by_counter_type() {
+        let cells = |r: usize, c: usize| {
+            let v = (r * 4 + c) as i32;
+            if v % 2 == 0 { v } else { -v }
+        };
+        let narrow =
+            Count::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, cells));
+        let wide =
+            Count::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
+                cells(r, c) as i64
+            }));
+
+        let narrow_bytes = narrow.serialize_to_bytes().expect("serialize i32");
+        let decoded = Count::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&narrow_bytes)
+            .expect("decode i32");
+        assert_eq!(
+            narrow.as_storage().as_slice(),
+            decoded.as_storage().as_slice()
+        );
+
+        // The two sketches hold numerically equal cells, so only the metadata
+        // `counter_type` separates their bytes.
+        let wide_bytes = wide.serialize_to_bytes().expect("serialize i64");
+        assert_ne!(narrow_bytes, wide_bytes);
+        assert!(
+            Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&narrow_bytes).is_err(),
+            "i32 bytes must not decode as an i64 sketch"
+        );
+        assert!(
+            Count::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&wide_bytes).is_err(),
+            "i64 bytes must not decode as an i32 sketch"
+        );
     }
 }

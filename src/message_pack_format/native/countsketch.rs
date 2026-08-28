@@ -1,16 +1,23 @@
 //! Native MessagePack codec impl for [`crate::sketches::countsketch::Count`].
 //!
-//! Only the canonical wire config — `i64` counters with a fast/regular mode
-//! (`CsWireMode`) — is serializable. Count Sketch counters must be signed and
-//! negatable, which leaves `i64` as the only wire-eligible type; exotic
-//! in-memory counters (i32/i128/…) must be converted first.
+//! Only the canonical wire configs — `i32` or `i64` counters (`CsWireCounter`)
+//! with a fast/regular mode (`CsWireMode`) — are serializable. Count Sketch
+//! counters must be signed and negatable, so there is no `f64` counterpart to
+//! Count-Min's; `i128` and non-`Vector2D` storage must be converted first.
+
+use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::{Error, MessagePackCodec};
-use crate::sketches::countsketch::{Count, CsWireMode};
+use crate::sketches::countsketch::{Count, CountSketchCounter, CsWireCounter, CsWireMode};
 use crate::{HashProfile, SketchHasher, Vector2D};
 
-impl<Mode, H> MessagePackCodec for Count<Vector2D<i64>, Mode, H>
+impl<T, Mode, H> MessagePackCodec for Count<Vector2D<T>, Mode, H>
 where
+    T: CsWireCounter
+        + CountSketchCounter
+        + std::ops::AddAssign
+        + Serialize
+        + for<'de> Deserialize<'de>,
     Mode: CsWireMode,
     H: SketchHasher + HashProfile,
 {

@@ -30,6 +30,7 @@ const GOLDEN_CMS_I64: &str = include_str!("../asapv1_golden/cms_i64_regular_2x3.
 const GOLDEN_CMS_F64: &str = include_str!("../asapv1_golden/cms_f64_fast_2x3.hex");
 const GOLDEN_CS_REGULAR: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4.hex");
 const GOLDEN_CS_FAST: &str = include_str!("../asapv1_golden/cs_i64_fast_2x4.hex");
+const GOLDEN_CS_I32: &str = include_str!("../asapv1_golden/cs_i32_regular_2x4.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
 
@@ -164,8 +165,9 @@ fn cms_f64_fast_2x3_matches_golden() {
 
 // ---------------------------------------------------------------------------
 // Count Sketch: build known matrix state -> serialize == golden, round-trips.
-// Both fixtures hold the SAME matrix and differ only by `mode`, so the pair
-// also pins that the mode string reaches the bytes.
+// All three fixtures hold the SAME matrix: the i64 pair differs only by `mode`
+// and the i32 fixture only by `counter_type`, so the set pins that both
+// metadata keys reach the bytes and that nothing else does.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -208,6 +210,37 @@ fn cs_i64_fast_2x4_matches_golden() {
 
     // Same matrix, different mode -> different bytes.
     assert_ne!(want, decode_hex(GOLDEN_CS_REGULAR));
+}
+
+#[test]
+fn cs_i32_regular_2x4_matches_golden() {
+    let want = decode_hex(GOLDEN_CS_I32);
+
+    let sketch =
+        Count::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
+            CS_VALS[r][c] as i32
+        }));
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(
+        got, want,
+        "Count Sketch i32/regular bytes diverge from golden"
+    );
+
+    let decoded =
+        Count::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i32> = CS_VALS.iter().flatten().map(|&v| v as i32).collect();
+    assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    // Same matrix, same mode, narrower counter: the fixtures differ only in the
+    // metadata `counter_type`, so the payload bytes are identical.
+    let wide = decode_hex(GOLDEN_CS_REGULAR);
+    assert_eq!(want.len(), wide.len());
+    assert_ne!(want, wide);
+    assert!(
+        Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&want).is_err(),
+        "the i32 golden must not decode as an i64 sketch"
+    );
 }
 
 // ---------------------------------------------------------------------------

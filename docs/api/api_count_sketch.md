@@ -68,15 +68,18 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 These produce/consume the **ASAPv1** wire envelope (kind `0x04 0x00`) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). They are **not** available
 on every `Count`: the impl exists only for wire-eligible configs
-`Count<Vector2D<i64>, Mode, H>` where `Mode` is `FastPath` or `RegularPath`
-(`CsWireMode`) and `H: HashProfile`. Count Sketch counters must be signed and
-negatable, so `i64` is the only wire counter type and the envelope carries no
-`counter_type` key — the one metadata difference from Count-Min. The default
-storage is `Vector2D<i32>`, which is **not** wire-eligible: an `i32` / `i128` /
-other exotic-counter or non-`Vector2D` sketch must be converted to a
-`Vector2D<i64>` first (only you know if the mapping is lossless). `rows`/`cols`
-and the `mode` are carried in the envelope metadata; the payload is just
-`[counts]`, packed row-major with signed cells.
+`Count<Vector2D<T>, Mode, H>` where `T` is `i32` or `i64` (`CsWireCounter`),
+`Mode` is `FastPath` or `RegularPath` (`CsWireMode`), and `H: HashProfile`.
+Count Sketch counters must be signed and negatable, so there is no `f64`
+counterpart to Count-Min's; an `i128` or non-`Vector2D` sketch must be converted
+first (only you know if the mapping is lossless).
+
+`i32` is **not** widened to `i64` on the wire. The counter type is carried in
+the metadata and pinned on decode, so `i32` bytes do not decode into an `i64`
+sketch, or the reverse — which is what lets a nested `Vector2D<i32>` Count
+Sketch (the variant `HydraCounter` and `EHSketchList` hold) round-trip back into
+its own type. `rows`/`cols` and the `mode` are carried in the metadata too; the
+payload is just `[counts]`, packed row-major with signed cells.
 
 ## Examples
 
