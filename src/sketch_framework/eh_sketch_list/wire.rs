@@ -2,12 +2,12 @@
 //! [`ExponentialHistogram`] reuses.
 //!
 //! Child submodule of [`crate::sketch_framework::eh_sketch_list`]: it holds the
-//! metadata/payload DTOs, the kind_id constant, the variant-tag table and the
-//! `serialize_to_bytes` / `deserialize_from_bytes` impls.
+//! metadata/payload DTOs, the kind_id constants and the `serialize_to_bytes` /
+//! `deserialize_from_bytes` impls.
 //!
 //! EHSketchList is one kind_id, `0x14 0x00`. It is a tagged union over ten
 //! sketch algorithms, so the encoding is the triple
-//! `[variant, descriptor, state]`.
+//! `[kind_id, descriptor, state]`.
 //!
 //! ## One encoding, used in both places
 //!
@@ -15,17 +15,17 @@
 //! read or rebuilt. The standalone `0x14 0x00` payload is one triple; an
 //! [`ExponentialHistogram`] bucket inlines the same triple.
 //!
-//! ## `descriptor` and `state` are the variant's own blocks
+//! ## A nested variant is its own envelope minus the framing
 //!
-//! `descriptor` is the variant's ASAPv1 metadata block and `state` its ASAPv1
-//! payload block, both verbatim. The variant tag stands in for the kind_id, so
-//! no magic, version or kind_id byte appears inside the triple.
+//! The triple carries the variant's own kind_id, metadata block and payload
+//! block. The magic, version and length fields are stripped, so the variant's
+//! own decoder validates the blocks it wrote.
 //!
-//! ## The tag namespace is fixed in every build
+//! ## The kind_id namespace is fixed in every build
 //!
-//! All ten names and their kind_ids exist whatever features are on. A decoder
-//! built without `experimental` rejects `Coco`, `Elastic` and `UniformSampling`
-//! with an error naming the variant, and its encoder can never emit them.
+//! All ten ids dispatch whatever features are on. A decoder built without
+//! `experimental` rejects `0x0c 0x00`, `0x0b 0x00` and `0x0d 0x00` by name with
+//! the feature named, and its encoder can never emit them.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
@@ -37,48 +37,50 @@ use super::EHSketchList;
 /// EHSketchList kind_id: family `0x14`, single algorithm variant `0x00`.
 pub(crate) const EH_SKETCH_LIST_KIND: &[u8] = &[0x14, 0x00];
 
-/// Wire name of [`EHSketchList::CM`].
-pub(crate) const CM_VARIANT: &str = "CountMin";
-/// Wire name of `EHSketchList::COCO`.
-pub(crate) const COCO_VARIANT: &str = "Coco";
-/// Wire name of [`EHSketchList::COUNTL2HH`].
-pub(crate) const COUNTL2HH_VARIANT: &str = "CountL2HH";
-/// Wire name of [`EHSketchList::CS`].
-pub(crate) const CS_VARIANT: &str = "CountSketch";
-/// Wire name of [`EHSketchList::DDS`].
-pub(crate) const DDS_VARIANT: &str = "DDSketch";
-/// Wire name of `EHSketchList::ELASTIC`.
-pub(crate) const ELASTIC_VARIANT: &str = "Elastic";
-/// Wire name of [`EHSketchList::HLL`].
-pub(crate) const HLL_VARIANT: &str = "HLL";
-/// Wire name of [`EHSketchList::KLL`].
-pub(crate) const KLL_VARIANT: &str = "KLL";
-/// Wire name of `EHSketchList::UNIFORM`.
-pub(crate) const UNIFORM_VARIANT: &str = "UniformSampling";
-/// Wire name of [`EHSketchList::UNIVMON`].
-pub(crate) const UNIVMON_VARIANT: &str = "UnivMon";
+/// Count-Min, the blocks [`EHSketchList::CM`] carries.
+pub(crate) const CM_KIND: &[u8] = &[0x02, 0x00];
+/// Coco, the blocks `EHSketchList::COCO` carries.
+pub(crate) const COCO_KIND: &[u8] = &[0x0c, 0x00];
+/// CountL2HH, the blocks [`EHSketchList::COUNTL2HH`] carries.
+pub(crate) const COUNTL2HH_KIND: &[u8] = &[0x19, 0x00];
+/// Count Sketch, the blocks [`EHSketchList::CS`] carries.
+pub(crate) const CS_KIND: &[u8] = &[0x04, 0x00];
+/// DDSketch, the blocks [`EHSketchList::DDS`] carries.
+pub(crate) const DDS_KIND: &[u8] = &[0x05, 0x00];
+/// Elastic, the blocks `EHSketchList::ELASTIC` carries.
+pub(crate) const ELASTIC_KIND: &[u8] = &[0x0b, 0x00];
+/// HLL Ertl-MLE, the blocks [`EHSketchList::HLL`] carries. Classic
+/// (`0x01 0x01`) and HIP (`0x01 0x03`) are other algorithms.
+pub(crate) const HLL_KIND: &[u8] = &[0x01, 0x02];
+/// Compact KLL, the blocks [`EHSketchList::KLL`] carries. Dynamic KLL
+/// (`0x06 0x01`) is another algorithm.
+pub(crate) const KLL_KIND: &[u8] = &[0x06, 0x00];
+/// UniformSampling, the blocks `EHSketchList::UNIFORM` carries.
+pub(crate) const UNIFORM_KIND: &[u8] = &[0x0d, 0x00];
+/// UnivMon, the blocks [`EHSketchList::UNIVMON`] carries.
+pub(crate) const UNIVMON_KIND: &[u8] = &[0x10, 0x00];
 
-/// The kind_id each variant's `descriptor` / `state` blocks belong to.
-/// Present for all ten names in every build.
-pub(crate) fn variant_kind_id(variant: &str) -> Option<&'static [u8]> {
-    match variant {
-        CM_VARIANT => Some(&[0x02, 0x00]),
-        COCO_VARIANT => Some(&[0x0c, 0x00]),
-        COUNTL2HH_VARIANT => Some(&[0x19, 0x00]),
-        CS_VARIANT => Some(&[0x04, 0x00]),
-        DDS_VARIANT => Some(&[0x05, 0x00]),
-        ELASTIC_VARIANT => Some(&[0x0b, 0x00]),
-        HLL_VARIANT => Some(&[0x01, 0x02]),
-        KLL_VARIANT => Some(&[0x06, 0x00]),
-        UNIFORM_VARIANT => Some(&[0x0d, 0x00]),
-        UNIVMON_VARIANT => Some(&[0x10, 0x00]),
+/// The registry name of a nested kind_id. Error messages only: encoding and
+/// decoding dispatch on the bytes.
+pub(crate) fn variant_name(kind_id: &[u8]) -> Option<&'static str> {
+    match kind_id {
+        CM_KIND => Some("CountMin"),
+        COCO_KIND => Some("Coco"),
+        COUNTL2HH_KIND => Some("CountL2HH"),
+        CS_KIND => Some("CountSketch"),
+        DDS_KIND => Some("DDSketch"),
+        ELASTIC_KIND => Some("Elastic"),
+        HLL_KIND => Some("HLL"),
+        KLL_KIND => Some("KLL"),
+        UNIFORM_KIND => Some("UniformSampling"),
+        UNIVMON_KIND => Some("UnivMon"),
         _ => None,
     }
 }
 
 /// EHSketchList descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`). The union has no construction config of its own: the
-/// variant belongs to the triple, which travels whole.
+/// kind_id belongs to the triple, which travels whole.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EhSketchListMetadata {
@@ -93,56 +95,54 @@ pub(crate) fn eh_sketch_list_metadata() -> EhSketchListMetadata {
 }
 
 /// One EHSketchList as a msgpack **array** (`to_vec`, positional):
-/// `[variant, descriptor, state]`. `descriptor` and `state` are the variant's
-/// own ASAPv1 metadata and payload blocks, carried as msgpack `bin`.
+/// `[kind_id, descriptor, state]`. All three are msgpack `bin`: the variant's
+/// own kind_id bytes, its ASAPv1 metadata block and its ASAPv1 payload block.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SketchState {
-    pub(crate) variant: String,
+    #[serde(with = "serde_bytes")]
+    pub(crate) kind_id: Vec<u8>,
     #[serde(with = "serde_bytes")]
     pub(crate) descriptor: Vec<u8>,
     #[serde(with = "serde_bytes")]
     pub(crate) state: Vec<u8>,
 }
 
-/// Rejects a variant name outside the ten.
-pub(crate) fn unknown_variant(variant: &str) -> RmpDecodeError {
+/// Rejects a kind_id outside the ten.
+pub(crate) fn unknown_variant(kind_id: &[u8]) -> RmpDecodeError {
     RmpDecodeError::Uncategorized(format!(
-        "ASAPv1 EHSketchList: variant {variant:?} is not a wire variant"
+        "ASAPv1 EHSketchList: kind_id {kind_id:02x?} is not a wire variant"
     ))
 }
 
 /// Rejects the three variants a build without `experimental` does not carry.
 #[cfg(not(feature = "experimental"))]
-fn check_variant_available(variant: &str) -> Result<(), RmpDecodeError> {
-    match variant {
-        COCO_VARIANT | ELASTIC_VARIANT | UNIFORM_VARIANT => Err(RmpDecodeError::Uncategorized(
-            format!("ASAPv1 EHSketchList: variant {variant:?} requires the experimental feature"),
-        )),
+fn check_variant_available(kind_id: &[u8]) -> Result<(), RmpDecodeError> {
+    match kind_id {
+        COCO_KIND | ELASTIC_KIND | UNIFORM_KIND => Err(RmpDecodeError::Uncategorized(format!(
+            "ASAPv1 EHSketchList: variant {} (kind_id {kind_id:02x?}) needs the experimental feature",
+            variant_name(kind_id).unwrap_or("unnamed")
+        ))),
         _ => Ok(()),
     }
 }
 
 /// Every variant is carried in an `experimental` build.
 #[cfg(feature = "experimental")]
-fn check_variant_available(_variant: &str) -> Result<(), RmpDecodeError> {
+fn check_variant_available(_kind_id: &[u8]) -> Result<(), RmpDecodeError> {
     Ok(())
 }
 
 /// Splits one variant's own envelope into the triple, pinning its kind_id.
-fn triple(variant: &'static str, bytes: &[u8]) -> Result<SketchState, RmpEncodeError> {
+fn triple(kind: &'static [u8], bytes: &[u8]) -> Result<SketchState, RmpEncodeError> {
     let (kind_id, descriptor, state) = envelope::split(bytes).map_err(RmpEncodeError::Syntax)?;
-    let expected = variant_kind_id(variant).ok_or_else(|| {
-        RmpEncodeError::Syntax(format!(
-            "ASAPv1 EHSketchList: variant {variant:?} is not a wire variant"
-        ))
-    })?;
-    if kind_id != expected {
+    if kind_id != kind {
         return Err(RmpEncodeError::Syntax(format!(
-            "ASAPv1 EHSketchList: variant {variant:?} produced kind_id {kind_id:?}, expected {expected:?}"
+            "ASAPv1 EHSketchList: {} produced kind_id {kind_id:02x?}, expected {kind:02x?}",
+            variant_name(kind).unwrap_or("variant")
         )));
     }
     Ok(SketchState {
-        variant: variant.to_string(),
+        kind_id: kind.to_vec(),
         descriptor: descriptor.to_vec(),
         state: state.to_vec(),
     })
@@ -152,62 +152,61 @@ fn triple(variant: &'static str, bytes: &[u8]) -> Result<SketchState, RmpEncodeE
 /// Every state the variant's own encoder refuses is refused here too.
 pub(crate) fn sketch_state(sketch: &EHSketchList) -> Result<SketchState, RmpEncodeError> {
     match sketch {
-        EHSketchList::CM(s) => triple(CM_VARIANT, &s.serialize_to_bytes()?),
+        EHSketchList::CM(s) => triple(CM_KIND, &s.serialize_to_bytes()?),
         #[cfg(feature = "experimental")]
-        EHSketchList::COCO(s) => triple(COCO_VARIANT, &s.serialize_to_bytes()?),
-        EHSketchList::COUNTL2HH(s) => triple(COUNTL2HH_VARIANT, &s.serialize_to_bytes()?),
-        EHSketchList::CS(s) => triple(CS_VARIANT, &s.serialize_to_bytes()?),
-        EHSketchList::DDS(s) => triple(DDS_VARIANT, &s.serialize_to_bytes()?),
+        EHSketchList::COCO(s) => triple(COCO_KIND, &s.serialize_to_bytes()?),
+        EHSketchList::COUNTL2HH(s) => triple(COUNTL2HH_KIND, &s.serialize_to_bytes()?),
+        EHSketchList::CS(s) => triple(CS_KIND, &s.serialize_to_bytes()?),
+        EHSketchList::DDS(s) => triple(DDS_KIND, &s.serialize_to_bytes()?),
         #[cfg(feature = "experimental")]
-        EHSketchList::ELASTIC(s) => triple(ELASTIC_VARIANT, &s.serialize_to_bytes()?),
-        EHSketchList::HLL(s) => triple(HLL_VARIANT, &s.serialize_to_bytes()?),
-        EHSketchList::KLL(s) => triple(KLL_VARIANT, &s.serialize_to_bytes()?),
+        EHSketchList::ELASTIC(s) => triple(ELASTIC_KIND, &s.serialize_to_bytes()?),
+        EHSketchList::HLL(s) => triple(HLL_KIND, &s.serialize_to_bytes()?),
+        EHSketchList::KLL(s) => triple(KLL_KIND, &s.serialize_to_bytes()?),
         #[cfg(feature = "experimental")]
-        EHSketchList::UNIFORM(s) => triple(UNIFORM_VARIANT, &s.serialize_to_bytes()?),
-        EHSketchList::UNIVMON(s) => triple(UNIVMON_VARIANT, &s.serialize_to_bytes()?),
+        EHSketchList::UNIFORM(s) => triple(UNIFORM_KIND, &s.serialize_to_bytes()?),
+        EHSketchList::UNIVMON(s) => triple(UNIVMON_KIND, &s.serialize_to_bytes()?),
     }
 }
 
 /// Rebuilds one EHSketchList from a triple, through the variant's own decoder.
-/// An unknown name, and an experimental name in a build without the feature,
-/// are rejected before any state is read.
+/// An unknown kind_id, and one this build does not carry, are rejected before
+/// any block is assembled.
 pub(crate) fn rebuild_sketch(triple: &SketchState) -> Result<EHSketchList, RmpDecodeError> {
-    let variant = triple.variant.as_str();
-    let kind_id = variant_kind_id(variant).ok_or_else(|| unknown_variant(variant))?;
-    check_variant_available(variant)?;
+    let kind_id = triple.kind_id.as_slice();
+    check_variant_available(kind_id)?;
     let bytes = envelope::encode(kind_id, &triple.descriptor, &triple.state);
-    match variant {
-        CM_VARIANT => Ok(EHSketchList::CM(crate::CountMin::deserialize_from_bytes(
+    match kind_id {
+        CM_KIND => Ok(EHSketchList::CM(crate::CountMin::deserialize_from_bytes(
             &bytes,
         )?)),
         #[cfg(feature = "experimental")]
-        COCO_VARIANT => Ok(EHSketchList::COCO(crate::Coco::deserialize_from_bytes(
+        COCO_KIND => Ok(EHSketchList::COCO(crate::Coco::deserialize_from_bytes(
             &bytes,
         )?)),
-        COUNTL2HH_VARIANT => Ok(EHSketchList::COUNTL2HH(
+        COUNTL2HH_KIND => Ok(EHSketchList::COUNTL2HH(
             crate::CountL2HH::deserialize_from_bytes(&bytes)?,
         )),
-        CS_VARIANT => Ok(EHSketchList::CS(crate::Count::deserialize_from_bytes(
+        CS_KIND => Ok(EHSketchList::CS(crate::Count::deserialize_from_bytes(
             &bytes,
         )?)),
-        DDS_VARIANT => Ok(EHSketchList::DDS(crate::DDSketch::deserialize_from_bytes(
+        DDS_KIND => Ok(EHSketchList::DDS(crate::DDSketch::deserialize_from_bytes(
             &bytes,
         )?)),
         #[cfg(feature = "experimental")]
-        ELASTIC_VARIANT => Ok(EHSketchList::ELASTIC(
+        ELASTIC_KIND => Ok(EHSketchList::ELASTIC(
             crate::Elastic::deserialize_from_bytes(&bytes)?,
         )),
-        HLL_VARIANT => Ok(EHSketchList::HLL(
+        HLL_KIND => Ok(EHSketchList::HLL(
             crate::HyperLogLog::<crate::ErtlMLE>::deserialize_from_bytes(&bytes)?,
         )),
-        KLL_VARIANT => Ok(EHSketchList::KLL(crate::KLL::deserialize_from_bytes(
+        KLL_KIND => Ok(EHSketchList::KLL(crate::KLL::deserialize_from_bytes(
             &bytes,
         )?)),
         #[cfg(feature = "experimental")]
-        UNIFORM_VARIANT => Ok(EHSketchList::UNIFORM(
+        UNIFORM_KIND => Ok(EHSketchList::UNIFORM(
             crate::UniformSampling::deserialize_from_bytes(&bytes)?,
         )),
-        UNIVMON_VARIANT => Ok(EHSketchList::UNIVMON(
+        UNIVMON_KIND => Ok(EHSketchList::UNIVMON(
             crate::UnivMon::deserialize_from_bytes(&bytes)?,
         )),
         other => Err(unknown_variant(other)),
@@ -219,7 +218,7 @@ pub(crate) fn rebuild_sketch(triple: &SketchState) -> Result<EHSketchList, RmpDe
 impl EHSketchList {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope
     /// (kind_id `0x14 0x00`). The payload is the triple
-    /// `[variant, descriptor, state]`.
+    /// `[kind_id, descriptor, state]`.
     ///
     /// A state the variant's own encoder refuses is an error rather than bytes
     /// that would be refused on decode.
@@ -229,8 +228,8 @@ impl EHSketchList {
         Ok(envelope::encode(EH_SKETCH_LIST_KIND, &metadata, &payload))
     }
 
-    /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The variant
-    /// tag selects the decoder, which validates its own descriptor and state.
+    /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The nested
+    /// kind_id selects the decoder, which validates its own blocks.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
@@ -268,7 +267,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// One populated sketch per variant this build carries, in wire-name order.
+    /// One populated sketch per variant this build carries, in kind_id order.
     pub(crate) fn populated_variants() -> Vec<EHSketchList> {
         let mut out = vec![EHSketchList::CM(
             CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
@@ -346,16 +345,16 @@ pub(crate) mod tests {
         let bytes = sketch.serialize_to_bytes().expect("serialize alt CM");
         let (_, descriptor, state) = envelope::split(&bytes).expect("split alt CM");
         SketchState {
-            variant: CM_VARIANT.to_string(),
+            kind_id: CM_KIND.to_vec(),
             descriptor: descriptor.to_vec(),
             state: state.to_vec(),
         }
     }
 
-    /// The triple a variant contributes, with the tag replaced.
-    pub(crate) fn relabelled(sketch: &EHSketchList, variant: &str) -> SketchState {
+    /// The triple a variant contributes, with the nested kind_id replaced.
+    pub(crate) fn relabelled(sketch: &EHSketchList, kind_id: &[u8]) -> SketchState {
         let mut triple = sketch_state(sketch).expect("state");
-        triple.variant = variant.to_string();
+        triple.kind_id = kind_id.to_vec();
         triple
     }
 
@@ -405,34 +404,49 @@ pub(crate) mod tests {
         }
     }
 
-    /// The ten tags and their kind_ids are the same in every build.
+    /// The ten nested kind_ids and their registry names are the same in every
+    /// build, and every variant emits the id the table gives it.
     #[test]
-    fn eh_sketch_list_variant_tags_are_build_independent() {
-        let table: [(&str, &[u8]); 10] = [
-            (CM_VARIANT, &[0x02, 0x00]),
-            (COCO_VARIANT, &[0x0c, 0x00]),
-            (COUNTL2HH_VARIANT, &[0x19, 0x00]),
-            (CS_VARIANT, &[0x04, 0x00]),
-            (DDS_VARIANT, &[0x05, 0x00]),
-            (ELASTIC_VARIANT, &[0x0b, 0x00]),
-            (HLL_VARIANT, &[0x01, 0x02]),
-            (KLL_VARIANT, &[0x06, 0x00]),
-            (UNIFORM_VARIANT, &[0x0d, 0x00]),
-            (UNIVMON_VARIANT, &[0x10, 0x00]),
+    fn eh_sketch_list_kind_ids_are_build_independent() {
+        let table: [(&[u8], &str); 10] = [
+            (CM_KIND, "CountMin"),
+            (COCO_KIND, "Coco"),
+            (COUNTL2HH_KIND, "CountL2HH"),
+            (CS_KIND, "CountSketch"),
+            (DDS_KIND, "DDSketch"),
+            (ELASTIC_KIND, "Elastic"),
+            (HLL_KIND, "HLL"),
+            (KLL_KIND, "KLL"),
+            (UNIFORM_KIND, "UniformSampling"),
+            (UNIVMON_KIND, "UnivMon"),
         ];
-        for (variant, kind_id) in table {
-            assert_eq!(variant_kind_id(variant), Some(kind_id), "{variant}");
+        for (kind_id, name) in table {
+            assert_eq!(variant_name(kind_id), Some(name), "{kind_id:02x?}");
         }
-        assert_eq!(variant_kind_id("CountMinSketch"), None);
+        assert_eq!(variant_name(&[0xff, 0xff]), None);
+
+        for sketch in populated_variants() {
+            let emitted = sketch_state(&sketch).expect("state").kind_id;
+            let expected = table
+                .iter()
+                .find(|(_, name)| *name == sketch.sketch_type())
+                .expect("variant in table")
+                .0;
+            assert_eq!(emitted, expected, "{}", sketch.sketch_type());
+        }
     }
 
-    /// An experimental tag is rejected without the feature, with an error
+    /// An experimental kind_id is rejected without the feature, with an error
     /// naming the variant. Crafted bytes, so the test runs in both builds.
     #[test]
-    fn eh_sketch_list_rejects_an_experimental_variant_tag() {
-        for variant in [COCO_VARIANT, ELASTIC_VARIANT, UNIFORM_VARIANT] {
+    fn eh_sketch_list_rejects_an_experimental_kind_id() {
+        for (kind_id, name) in [
+            (COCO_KIND, "Coco"),
+            (ELASTIC_KIND, "Elastic"),
+            (UNIFORM_KIND, "UniformSampling"),
+        ] {
             let triple = SketchState {
-                variant: variant.to_string(),
+                kind_id: kind_id.to_vec(),
                 descriptor: Vec::new(),
                 state: Vec::new(),
             };
@@ -442,28 +456,47 @@ pub(crate) mod tests {
             assert!(!message.is_empty());
             #[cfg(not(feature = "experimental"))]
             {
-                assert!(message.contains(variant), "{message}");
+                assert!(message.contains(name), "{message}");
                 assert!(message.contains("experimental"), "{message}");
             }
+            #[cfg(feature = "experimental")]
+            let _ = name;
         }
     }
 
     #[test]
-    fn eh_sketch_list_rejects_an_unknown_variant_tag() {
+    fn eh_sketch_list_rejects_an_unknown_kind_id() {
         let sketch = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
-        let triple = relabelled(&sketch, "Bogus");
+        let triple = relabelled(&sketch, &[0xff, 0xff]);
         let message = EHSketchList::deserialize_from_bytes(&envelope_for(&triple))
-            .expect_err("an unknown variant must not decode")
+            .expect_err("an unknown kind_id must not decode")
             .to_string();
-        assert!(message.contains("Bogus"), "{message}");
+        assert!(message.contains("not a wire variant"), "{message}");
     }
 
-    /// A tag that does not match the block it carries is rejected by the
+    /// The nested ids are pinned to one algorithm each: HLL is Ertl-MLE and KLL
+    /// is compact, so their siblings' ids are unknown here.
+    #[test]
+    fn eh_sketch_list_rejects_sibling_algorithm_kind_ids() {
+        let hll = EHSketchList::HLL(HyperLogLog::<ErtlMLE>::default());
+        for sibling in [[0x01u8, 0x01], [0x01, 0x03]] {
+            let triple = relabelled(&hll, &sibling);
+            assert!(
+                EHSketchList::deserialize_from_bytes(&envelope_for(&triple)).is_err(),
+                "{sibling:02x?} must not decode as the HLL arm"
+            );
+        }
+        let kll = EHSketchList::KLL(KLL::init_kll(200));
+        let triple = relabelled(&kll, &[0x06, 0x01]);
+        assert!(EHSketchList::deserialize_from_bytes(&envelope_for(&triple)).is_err());
+    }
+
+    /// A kind_id that does not match the blocks it carries is rejected by the
     /// variant's own decoder.
     #[test]
-    fn eh_sketch_list_rejects_a_mismatched_variant_and_descriptor() {
+    fn eh_sketch_list_rejects_a_mismatched_kind_id_and_descriptor() {
         let sketch = EHSketchList::HLL(HyperLogLog::<ErtlMLE>::default());
-        let triple = relabelled(&sketch, CM_VARIANT);
+        let triple = relabelled(&sketch, CM_KIND);
         assert!(EHSketchList::deserialize_from_bytes(&envelope_for(&triple)).is_err());
     }
 
@@ -516,14 +549,14 @@ pub(crate) mod tests {
         let good = sketch_state(&sketch).expect("state");
 
         let truncated = SketchState {
-            variant: CM_VARIANT.to_string(),
+            kind_id: CM_KIND.to_vec(),
             descriptor: good.descriptor[..good.descriptor.len() / 2].to_vec(),
             state: good.state.clone(),
         };
         assert!(EHSketchList::deserialize_from_bytes(&envelope_for(&truncated)).is_err());
 
         let garbage = SketchState {
-            variant: CM_VARIANT.to_string(),
+            kind_id: CM_KIND.to_vec(),
             descriptor: good.descriptor.clone(),
             state: vec![0xc1, 0xc1, 0xc1],
         };

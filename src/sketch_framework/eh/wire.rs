@@ -12,9 +12,9 @@
 //! ## Buckets are inlined
 //!
 //! Each bucket holds one [`EHSketchList`], written into this payload as the
-//! `[variant, descriptor, state]` triple
-//! [`crate::sketch_framework::eh_sketch_list::wire`] defines. No bucket carries
-//! an envelope, a magic or a kind_id of its own.
+//! `[kind_id, descriptor, state]` triple
+//! [`crate::sketch_framework::eh_sketch_list::wire`] defines: the variant's own
+//! envelope with the magic, version and length fields stripped.
 //!
 //! ## No hash-spec group
 //!
@@ -221,7 +221,7 @@ mod tests {
         alt_profile_triple, populated_variants, relabelled, sample_input,
     };
     use crate::sketch_framework::eh_sketch_list::wire::{
-        CM_VARIANT, COCO_VARIANT, ELASTIC_VARIANT, UNIFORM_VARIANT,
+        CM_KIND, COCO_KIND, ELASTIC_KIND, UNIFORM_KIND,
     };
     use crate::sketch_framework::eh_sketch_list::{EHSketchList, SketchNorm};
     use crate::{CountMin, DataInput, FastPath, Vector2D};
@@ -461,18 +461,22 @@ mod tests {
         assert!(eh.serialize_to_bytes().is_err());
     }
 
-    /// An experimental variant tag in a bucket is rejected without the feature.
+    /// An experimental kind_id in a bucket is rejected without the feature.
     /// Crafted bytes, so the test runs in both builds.
     #[test]
-    fn eh_rejects_an_experimental_variant_tag_in_a_bucket() {
+    fn eh_rejects_an_experimental_kind_id_in_a_bucket() {
         let sketch = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
-        for variant in [COCO_VARIANT, ELASTIC_VARIANT, UNIFORM_VARIANT] {
+        for (kind_id, name) in [
+            (COCO_KIND, "Coco"),
+            (ELASTIC_KIND, "Elastic"),
+            (UNIFORM_KIND, "UniformSampling"),
+        ] {
             let payload = EhPayload {
-                buckets: vec![relabelled(&sketch, variant)],
+                buckets: vec![relabelled(&sketch, kind_id)],
                 sizes: vec![1],
                 min_times: vec![0],
                 max_times: vec![0],
-                prototype: relabelled(&sketch, CM_VARIANT),
+                prototype: relabelled(&sketch, CM_KIND),
             };
             let message = ExponentialHistogram::deserialize_from_bytes(&envelope_for(&payload))
                 .expect_err("a relabelled bucket must not decode")
@@ -480,9 +484,11 @@ mod tests {
             assert!(!message.is_empty());
             #[cfg(not(feature = "experimental"))]
             {
-                assert!(message.contains(variant), "{message}");
+                assert!(message.contains(name), "{message}");
                 assert!(message.contains("experimental"), "{message}");
             }
+            #[cfg(feature = "experimental")]
+            let _ = name;
         }
     }
 
@@ -501,20 +507,20 @@ mod tests {
         assert!(ExponentialHistogram::deserialize_from_bytes(&envelope_for(&payload)).is_err());
     }
 
-    /// An unknown variant tag in a bucket is rejected by name.
+    /// An unknown kind_id in a bucket is rejected.
     #[test]
-    fn eh_rejects_an_unknown_variant_tag_in_a_bucket() {
+    fn eh_rejects_an_unknown_kind_id_in_a_bucket() {
         let sketch = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
         let payload = EhPayload {
-            buckets: vec![relabelled(&sketch, "Bogus")],
+            buckets: vec![relabelled(&sketch, &[0xff, 0xff])],
             sizes: vec![1],
             min_times: vec![0],
             max_times: vec![0],
             prototype: sketch_state(&sketch).expect("state"),
         };
         let message = ExponentialHistogram::deserialize_from_bytes(&envelope_for(&payload))
-            .expect_err("an unknown variant must not decode")
+            .expect_err("an unknown kind_id must not decode")
             .to_string();
-        assert!(message.contains("Bogus"), "{message}");
+        assert!(message.contains("not a wire variant"), "{message}");
     }
 }
