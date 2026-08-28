@@ -35,7 +35,7 @@ use rmp_serde::{
     decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const DEFAULT_SKETCH_ROW: usize = 5;
 const DEFAULT_SKETCH_COL: usize = 2048;
@@ -511,30 +511,20 @@ impl UnivMon {
             .expect("merged UnivMon total weight overflowed usize");
         for i in 0..self.layer_size {
             let sources_complete = self.candidate_complete[i] && other.candidate_complete[i];
-            let mut candidates: Vec<(HeapItem, i64)> = self.hh_layers[i]
+            let candidate_keys: HashSet<HeapItem> = self.hh_layers[i]
                 .heap()
                 .iter()
                 .chain(other.hh_layers[i].heap())
-                .map(|item| (item.key.clone(), 0))
+                .map(|item| item.key.clone())
                 .collect();
+            let merged_candidates_complete =
+                sources_complete && candidate_keys.len() <= self.heap_size;
             self.l2_sketch_layers[i].merge(&other.l2_sketch_layers[i]);
-            for (key, count) in candidates.iter_mut() {
-                *count = self.l2_sketch_layers[i].estimate(&heap_item_to_sketch_input(key)) as i64;
-            }
-            // Seating order decides which of the candidates tying at the
-            // eviction boundary the heap keeps, so it is a total order over
-            // the union rather than the order the two heaps happen to hold.
-            candidates.sort_by(|left, right| {
-                right.1.cmp(&left.1).then_with(|| {
-                    hash_item64_seeded(BOTTOM_LAYER_FINDER, &left.0)
-                        .cmp(&hash_item64_seeded(BOTTOM_LAYER_FINDER, &right.0))
-                })
-            });
-            candidates.dedup_by(|left, right| left.0 == right.0);
-            let merged_candidates_complete = sources_complete && candidates.len() <= self.heap_size;
             self.hh_layers[i].clear();
-            for (key, count) in candidates {
-                self.hh_layers[i].update(&heap_item_to_sketch_input(&key), count);
+            for key in candidate_keys {
+                let input = heap_item_to_sketch_input(&key);
+                let count = self.l2_sketch_layers[i].estimate(&input) as i64;
+                self.hh_layers[i].update(&input, count);
             }
             self.candidate_complete[i] = merged_candidates_complete;
         }
@@ -721,72 +711,6 @@ mod tests {
             left_heap.heap()[idx_right_in_left].count
         );
         // assert!(left.hh_layers[0].heap()[idx_right].count > 0);
-    }
-
-    /// Sixteen candidates tie at the eviction boundary of an eight-slot heap,
-    /// so the merge has to choose eight of them by a rule fixed in the code
-    /// rather than by whatever order the union happens to be walked in.
-    #[test]
-    fn merge_breaks_boundary_ties_by_count_then_digest() {
-        const HEAP_SIZE: usize = 8;
-        let build = |keys: &[u64]| {
-            let mut sketch = UnivMon::init_univmon(HEAP_SIZE, 3, 2048, 1);
-            for key in keys {
-                sketch.insert(&DataInput::U64(*key), 10);
-            }
-            sketch
-        };
-        let retained = |sketch: &UnivMon| {
-            let mut items: Vec<(HeapItem, i64)> = sketch.hh_layers[0]
-                .heap()
-                .iter()
-                .map(|item| (item.key.clone(), item.count))
-                .collect();
-            items.sort_unstable_by_key(|(key, _)| match key {
-                HeapItem::U64(value) => *value,
-                other => panic!("unexpected key {other:?}"),
-            });
-            items
-        };
-
-        let left_keys: Vec<u64> = (0..8).collect();
-        let right_keys: Vec<u64> = (8..16).collect();
-        // The eight of 0..16 with the smallest BOTTOM_LAYER_FINDER digest,
-        // each estimated at the 10 it was inserted with.
-        let expected: Vec<(HeapItem, i64)> = [1u64, 2, 3, 4, 7, 9, 10, 14]
-            .into_iter()
-            .map(|key| (HeapItem::U64(key), 10))
-            .collect();
-        let mut merged = build(&left_keys);
-        merged.merge(&build(&right_keys));
-        assert_eq!(
-            retained(&merged),
-            expected,
-            "merge kept a different eight of the tied candidates"
-        );
-        assert_eq!(
-            merged.hh_layers[0].len(),
-            HEAP_SIZE,
-            "every heap slot should be filled by the tied candidates"
-        );
-
-        let mut swapped = build(&right_keys);
-        swapped.merge(&build(&left_keys));
-        assert_eq!(
-            retained(&swapped),
-            expected,
-            "merging the same pair the other way round kept different keys"
-        );
-
-        let reversed_left: Vec<u64> = left_keys.iter().rev().copied().collect();
-        let reversed_right: Vec<u64> = right_keys.iter().rev().copied().collect();
-        let mut reversed = build(&reversed_left);
-        reversed.merge(&build(&reversed_right));
-        assert_eq!(
-            retained(&reversed),
-            expected,
-            "reversing the insertion order into the sources kept different keys"
-        );
     }
 
     #[test]

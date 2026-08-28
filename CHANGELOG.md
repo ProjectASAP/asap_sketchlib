@@ -103,14 +103,6 @@ signals a backwards-compatible change.
 
 ### Fixed
 
-- **Made `UnivMon::merge` deterministic.** The union of the two heaps' candidate
-  keys was collected into a `HashSet` and seated by iterating it, so at the
-  eviction boundary — where several candidates tie on count and only some fit in
-  `k` — which keys survived varied between runs of the same program on the same
-  input. Measured: six runs of one binary retained six different key sets. The
-  union is now seated in a total order over `(count, key digest)`, the order the
-  layer's own candidate selection already uses, which also makes the merge
-  independent of which side is the receiver and of insertion order into either.
 - **Made `NitroBatch` frequency estimates unbiased.** Inserts hashed keys with
   raw `hash128_seeded` while the public estimator derived cells from the
   packed matrix hash (Packed64 mode), so estimates read cells inserts never
