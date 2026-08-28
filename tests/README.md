@@ -13,8 +13,9 @@ same conformance batteries before landing — copy an adapter from
 | `common/conformance.rs` | Capability traits + standard conformance batteries |
 | `conformance_kit.rs` | Reference adapters: established sketches running through the kit (copy these) |
 | `e2e_frequency.rs` / `e2e_cardinality.rs` / `e2e_quantiles.rs` / `e2e_frameworks.rs` | Deep per-family suites with hand-tuned tolerances |
+| `e2e_heavy_hitters.rs` | CocoSketch and Elastic through the batteries, plus the heavy-hitter properties no battery models (`feature = "experimental"`) |
 | `e2e_octo.rs` | OctoSketch delta-promotion invariants, the `octo-runtime` pipeline, and conformance to the paper's Theorems 1-4 and its sketch-merge baseline |
-| `e2e_experimental.rs` | Same for `feature = "experimental"` sketches |
+| `e2e_experimental.rs` | The remaining `feature = "experimental"` sketches: KMV, UniformSampling, EHUnivOptimized |
 | `bug_verification.rs` | Regression tests for fixed wrong-query-results bugs |
 
 ## Onboarding a new sketch

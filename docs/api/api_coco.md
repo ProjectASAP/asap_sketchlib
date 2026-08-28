@@ -114,22 +114,39 @@ let _ = sk.estimate_projected("region=us", |full| {
 - `estimate_substring` matches by containment, which over-attributes across keys that prefix one another.
 - Replacement behavior is probabilistic.
 
-## Departures from the reference implementation
+## Multi-core (OctoSketch)
 
-The authors' code is at [yindazhang/CocoSketch](https://github.com/yindazhang/CocoSketch);
-`CPU/Multiple/OurSoft.h` is the basic sketch this module implements.
+> **Feature gate:** also requires `octo-runtime` for the runtime itself.
+
+```rust
+let plan = CocoOctoPlan::new(1024, 2);
+let config = OctoConfig { threshold: plan.threshold().clone(), ..OctoConfig::default() };
+let out = run_octo(&inputs, &config, plan.clone(), || plan.aggregator());
+out.parent.sketch.estimate_key("flow::7");
+```
+
+`CocoOctoWorker` keeps a table of the same shape with one-byte counters and
+ships a `<key, counter>` message when a bucket reaches τ — the bucket's key
+*after* the election, so a losing arrival promotes the incumbent instead of
+itself. `CocoOctoAggregator` replays each message through `insert(key, value)`,
+this sketch's own insertion logic, which is what appendix C of the OctoSketch
+paper prescribes. Mass is conserved exactly; residency churns faster than a
+single-threaded pass, because a promoted batch of τ takes a bucket with
+probability `τ/val` rather than `1/val`. Keys are rendered with
+`flow_key_string`, and that rendering is what `estimate_key` must be asked for.
+See `docs/api/api_octo.md`.
+
+## Relation to the paper
+
+This module is the basic sketch of section 4.1: the match-then-victim scan, the
+whole increment landing in one bucket, and the replacement probability taken
+against the post-increment value.
 
 - **Tie-breaking.** Section 4.1 ends the victim rule with "If multiple buckets
   share the same smallest size value, randomly select one to update", and this
-  module does. `OurSoft.h` compares with a strict `<` and keeps the first
-  minimum instead, which biases occupancy toward the earlier arrays while ties
-  last -- on a fresh table, every mapped bucket holds 0 and they all tie.
-- **Depth.** The reference defaults to `HASH_NUM = 2`; this module defaults to
-  4, the top of the range section 3.2 recommends.
-
-Everything else matches: the match-then-victim scan, the whole increment landing
-in one bucket, and the replacement probability taken against the post-increment
-value (`randomGenerator() % count == 0`).
+  module does.
+- **Depth.** This module defaults to 4 arrays, the top of the range section 3.2
+  recommends.
 
 ## Status
 

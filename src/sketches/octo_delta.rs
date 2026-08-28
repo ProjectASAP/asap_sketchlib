@@ -37,6 +37,21 @@ pub const UNIVMON_PROMASK: u32 = 64;
 /// Default HLL promotion threshold τ: 0 promotes every register improvement.
 pub const HLL_PROMASK: u8 = 0;
 
+/// Default promotion threshold τ for CocoSketch workers.
+///
+/// A Coco bucket counter is exactly as dense as a Count-Min cell - every
+/// insert lands on one of them and increments it by one - so it takes the same
+/// τ.
+#[cfg(feature = "experimental")]
+pub const COCO_PROMASK: u32 = 0x1f;
+
+/// Default promotion threshold τ for Elastic sketch workers.
+///
+/// One τ covers both halves: a heavy-part vote counter and a light-part
+/// Count-Min counter each advance by one per insert.
+#[cfg(feature = "experimental")]
+pub const ELASTIC_PROMASK: u32 = 0x1f;
+
 /// Largest threshold a worker may be configured with.
 ///
 /// Counter storage in the compact worker sketches is one byte wide, and the
@@ -110,6 +125,65 @@ pub struct KeyedCountDelta {
     pub key: HeapItem,
     /// The promoted cell update.
     pub delta: CountDelta,
+}
+
+/// Delta emitted by a CocoSketch child worker: a whole bucket.
+///
+/// §4.4, "Handling counters with flow keys": a sketch that keeps a flow key
+/// beside every counter ships the key together with the counter, and the
+/// aggregator replays the pair through the parent's own insertion logic. There
+/// is no cell index because the parent re-derives one - its victim choice
+/// depends on what its own buckets hold, not on the worker's.
+#[cfg(feature = "experimental")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CocoDelta {
+    /// Key the promoted bucket holds.
+    pub key: String,
+    /// Mass attributed to that key since the bucket last promoted.
+    pub value: u64,
+}
+
+/// Delta emitted by an Elastic sketch child worker.
+///
+/// Appendix C keeps both halves in the worker and promotes them differently:
+/// the heavy part ships `<key, votes>` the way CocoSketch does, while the light
+/// part is a Count-Min and ships the ordinary cell delta.
+///
+/// Two of the three variants go beyond §4.4's `<key, counter>`, because this
+/// crate implements the Elastic Sketch of the original paper, whose heavy
+/// bucket carries an eviction flag that §4.4's rule has no way to move. The
+/// flag rides with the counter word it qualifies, and the evicted resident
+/// travels under its own key.
+#[cfg(feature = "experimental")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ElasticDelta {
+    /// Heavy-part bucket: the resident flow, the votes it accumulated, and the
+    /// bucket's eviction flag.
+    Heavy {
+        /// Flow the promoted bucket holds.
+        key: String,
+        /// Votes recorded for it since the bucket last promoted.
+        value: u32,
+        /// Whether the worker's bucket holds this flow by eviction, so part of
+        /// the flow's mass may sit in a light layer.
+        eviction: bool,
+    },
+    /// A resident evicted from a worker's heavy bucket, handed to the light
+    /// part under its own key rather than folded into an unkeyed cell delta.
+    ///
+    /// Emitted on every worker eviction, `votes` of zero included: a promotion
+    /// zeroes the counter while the flow stays resident, so a later eviction
+    /// carries nothing but still tells the aggregator that the flow's remaining
+    /// mass will arrive through the light layer.
+    Evicted {
+        /// The evicted flow.
+        key: String,
+        /// Votes it held when it was evicted.
+        votes: u32,
+    },
+    /// Light-part cell, promoted exactly as a Count-Min worker's would be.
+    /// Carries the arrivals that lose a bucket contest, one at a time.
+    Light(CmDelta),
 }
 
 /// A `CountDelta` tagged with the UnivMon pyramid layer it belongs to.

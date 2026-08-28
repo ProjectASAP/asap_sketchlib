@@ -77,16 +77,28 @@ impl HeavyBucket {
     /// Seats `id` in a vacant bucket. The `eviction` flag is carried over so a
     /// bucket vacated by [`Elastic::merge`] still reports its light-layer mass.
     pub fn occupy(&mut self, id: String) {
+        self.occupy_many(id, 1);
+    }
+
+    /// Seats `id` in a vacant bucket with `count` positive votes already to its
+    /// name, for [`Elastic::insert_many`].
+    pub fn occupy_many(&mut self, id: String, count: i32) {
         self.flow_id = id;
-        self.vote_pos = 1;
+        self.vote_pos = count;
         self.vote_neg = 0;
     }
 
     /// Replaces the resident flow with `id`, per the paper's takeover rule.
     pub fn evict(&mut self, id: String) -> String {
+        self.evict_many(id, 1)
+    }
+
+    /// Replaces the resident flow with `id`, which arrives carrying `count`
+    /// votes rather than one.
+    pub fn evict_many(&mut self, id: String, count: i32) -> String {
         let evicted = std::mem::replace(&mut self.flow_id, id);
-        self.vote_pos = 1;
-        self.vote_neg = 1;
+        self.vote_pos = count;
+        self.vote_neg = count;
         self.eviction = true;
         evicted
     }
@@ -141,32 +153,88 @@ impl<H: SketchHasher> Elastic<H> {
     /// resident flow is evicted into the light layer with its full positive
     /// vote and `id` takes the bucket.
     pub fn insert(&mut self, id: String) {
+        self.insert_many(id, 1);
+    }
+
+    /// Records `count` occurrences of `id` in one step.
+    ///
+    /// The weighted form of [`Self::insert`]: a matching bucket takes `count`
+    /// positive votes, a non-matching one takes `count` negative votes, and a
+    /// takeover seats the arrival with `count` of each. `count` of 1 is
+    /// [`Self::insert`] exactly.
+    ///
+    /// This is the insertion an OctoSketch aggregator applies to a heavy-part
+    /// `<key, votes>` message; it absorbs the whole promoted counter in one
+    /// pass rather than replaying it `count` times.
+    pub fn insert_many(&mut self, id: String, count: i32) {
+        if count <= 0 {
+            return;
+        }
         let idx = self.bucket_index(&id);
         if self.stale_at(idx) {
-            self.seat_over_stale_copy(idx, id);
+            self.seat_over_stale_copy(idx, id, count);
             return;
         }
         let bucket = &mut self.heavy[idx];
 
         if bucket.is_vacant() {
-            bucket.occupy(id);
+            bucket.occupy_many(id, count);
             return;
         }
         if bucket.flow_id == id {
-            bucket.vote_pos += 1;
+            bucket.vote_pos += count;
             return;
         }
 
-        bucket.vote_neg += 1;
+        bucket.vote_neg += count;
         if bucket.vote_neg < LAMBDA * bucket.vote_pos {
-            self.light.insert(&DataInput::String(id));
+            self.light.insert_many(&DataInput::String(id), count);
             return;
         }
 
         let evicted_votes = bucket.vote_pos;
-        let evicted_id = bucket.evict(id);
+        let evicted_id = bucket.evict_many(id, count);
         self.light
             .insert_many(&DataInput::String(evicted_id), evicted_votes);
+    }
+
+    /// Absorbs a `<flow, votes, eviction>` message from another sketch's heavy
+    /// part, the insertion an OctoSketch aggregator applies to a heavy-part
+    /// delta (§4.4) once the flag is carried with the counter.
+    ///
+    /// [`Self::insert_many`], plus the sender's flag OR-ed in when the arrival
+    /// ends up resident here. The counter word handed between the two parts
+    /// *is* the flag. A sender whose bucket is unflagged holds the flow's whole
+    /// mass in its heavy part, so flagging it here would make the estimate read
+    /// Count-Min noise it does not own.
+    pub fn merge_heavy(&mut self, id: String, votes: i32, eviction: bool) {
+        if votes <= 0 {
+            return;
+        }
+        let idx = self.bucket_index(&id);
+        let arrival = id.clone();
+        self.insert_many(id, votes);
+        if eviction && !self.heavy[idx].is_vacant() && self.heavy[idx].flow_id == arrival {
+            self.heavy[idx].eviction = true;
+        }
+    }
+
+    /// Absorbs a resident another sketch's heavy part evicted, under its own
+    /// key.
+    ///
+    /// The votes go to the light layer under `id`, and `id`'s bucket here is
+    /// flagged if it still holds it. `votes` of zero still flags: the sender
+    /// has stopped being able to speak for this flow's heavy part, so whatever
+    /// it sees of it next arrives through the light layer.
+    pub fn absorb_evicted(&mut self, id: String, votes: i32) {
+        let idx = self.bucket_index(&id);
+        if votes > 0 {
+            self.light
+                .insert_many(&DataInput::String(id.clone()), votes);
+        }
+        if !self.heavy[idx].is_vacant() && self.heavy[idx].flow_id == id {
+            self.heavy[idx].eviction = true;
+        }
     }
 
     /// Records one occurrence of `id` against the heavy part alone, the
@@ -180,12 +248,12 @@ impl<H: SketchHasher> Elastic<H> {
     /// flow's size is lost rather than spilled.
     ///
     /// The arrival also inherits the bucket's eviction flag, and the negative
-    /// vote resets to 0. Both follow `quick_insert` in the authors' reference
-    /// implementation, which leaves the counter and its flag bit untouched.
+    /// vote resets to 0: this path leaves the counter and its flag bit
+    /// untouched.
     pub fn insert_heavy_only(&mut self, id: String) {
         let idx = self.bucket_index(&id);
         if self.stale_at(idx) {
-            self.seat_over_stale_copy(idx, id);
+            self.seat_over_stale_copy(idx, id, 1);
             return;
         }
         let bucket = &mut self.heavy[idx];
@@ -531,10 +599,10 @@ impl<H: SketchHasher> Elastic<H> {
     /// the flow's live entry is in the twin bucket. The flag is set because the
     /// arrival shared this bucket before the expansion and lost to its
     /// resident, so the light layer already holds part of it.
-    fn seat_over_stale_copy(&mut self, idx: usize, id: String) {
+    fn seat_over_stale_copy(&mut self, idx: usize, id: String, count: i32) {
         let bucket = &mut self.heavy[idx];
         bucket.flow_id = id;
-        bucket.vote_pos = 1;
+        bucket.vote_pos = count;
         bucket.vote_neg = 0;
         bucket.eviction = true;
     }
@@ -1098,8 +1166,8 @@ mod tests {
 
     #[test]
     fn heavy_only_takeover_inherits_the_eviction_flag() {
-        // the reference implementation's quick_insert leaves the counter and
-        // its flag bit in place, so the arrival takes over both
+        // the counter and its flag bit stay in place, so the arrival takes
+        // over both
         for seeded_flag in [false, true] {
             let mut sketch: Elastic = Elastic::init_with_length(8);
             let primary = "flow::primary";

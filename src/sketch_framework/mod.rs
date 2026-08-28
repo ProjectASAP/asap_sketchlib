@@ -65,6 +65,11 @@ pub use octo::{
     OctoPlan, OctoWorker, RowHashes, UnivMonInput, UnivMonOctoAggregator, UnivMonOctoPlan,
     UnivMonOctoWorker, max_hll_threshold, threshold_for_error, univmon_layer_threshold,
 };
+#[cfg(feature = "experimental")]
+pub use octo::{
+    CocoOctoAggregator, CocoOctoPlan, CocoOctoWorker, CocoWorkerSketch, ElasticOctoAggregator,
+    ElasticOctoPlan, ElasticOctoWorker, ElasticWorkerSketch, flow_key_string,
+};
 #[cfg(feature = "octo-runtime")]
 pub use octo::{
     OctoAdaptiveThreshold, OctoConfig, OctoPartition, OctoReadHandle, OctoResult, OctoRuntime,

@@ -68,6 +68,32 @@ vote, and either the arriving flow goes to the light layer, or — once
 light layer with its whole positive vote and the arrival takes the bucket with
 `(vote_pos, vote_neg, eviction) = (1, 1, true)`.
 
+### Weighted and merge-time insertion
+
+```rust
+fn insert_many(&mut self, id: String, count: i32)
+fn merge_heavy(&mut self, id: String, votes: i32, eviction: bool)
+fn absorb_evicted(&mut self, id: String, votes: i32)
+```
+
+`insert_many` is `insert` with a weight: a matching bucket takes `count`
+positive votes, a non-matching one takes `count` negative votes, and a takeover
+seats the arrival with `count` of each. `count` of 1 is `insert` exactly.
+
+`merge_heavy` absorbs a `<flow, votes, eviction>` message from another sketch's
+heavy part: `insert_many`, plus the sender's flag OR-ed in when the arrival ends
+up resident here. The flag travels with the counter it qualifies: the counter
+word handed between the two parts *is* the flag. A sender whose bucket is
+unflagged holds
+that flow's whole mass in its heavy part, so flagging it here would make the
+estimate read Count-Min mass belonging to other flows.
+
+`absorb_evicted` absorbs a resident the sender's heavy part evicted, under its
+own key. The votes go to the light layer under `id`, and
+`id`'s bucket here is flagged if it still holds it. `votes` of zero still flags:
+the sender can no longer speak for this flow's heavy part, so whatever it sees
+of the flow next arrives through the light layer.
+
 ### Overload mode
 
 ```rust
@@ -91,13 +117,11 @@ Seating and matching behave exactly as in `insert`. The two other cases differ:
 The light layer is still read by `query`; it is only never written.
 
 The arrival also **inherits the bucket's eviction flag**, and the negative vote
-resets to `0`. The paper's prose does not name either, but the authors'
-reference implementation ([BlockLiu/ElasticSketchCode](https://github.com/BlockLiu/ElasticSketchCode),
-`src/CPU/ElasticSketch/HeavyPart.cpp`) settles both: `quick_insert` writes only
-the new key and a zeroed guard, leaving the counter untouched. Since the flag
-lives in that counter's high bit, the arrival takes over the size and the flag
-together. The normal path differs — `insert` writes `0x80000001` there, setting
-the flag and resetting the size to 1, which is the paper's case 4 `(f, 1, T, 1)`.
+resets to `0`. The paper's prose names neither: this path writes only the new
+key and a zeroed guard, leaving the counter — and so the flag living in its high
+bit — untouched, so the arrival takes over the size and the flag together. The
+normal path instead sets the flag and resets the size to 1, which is the paper's
+case 4 `(f, 1, T, 1)`.
 
 > **This path breaks the one-sided guarantee.** Every other operation on this
 > sketch never returns less than the true count. Overload mode drops mouse
@@ -119,7 +143,9 @@ fn query(&self, id: String) -> i32
 
 Returns `vote_pos` for a resident flow whose bucket carries no eviction flag,
 `vote_pos + light.estimate(id)` when it does, and the light estimate otherwise.
-The estimator is one-sided: it never returns less than the true count.
+The estimator is one-sided: it never returns less than the true count. Under
+the OctoSketch runtime that holds for `OctoPartition::HashByKey` only — see
+Multi-core, below.
 
 ## Merge
 
@@ -214,8 +240,7 @@ no estimate moves.
 
 The paper's trigger is two thresholds: a bucket is full when its flows all
 exceed `T2`, and the table is full when more than `T1` buckets are. Deciding
-that is left to the caller — `full_bucket_count(t2)` reports the numerator, and
-a library that silently doubled its own memory would be a surprise. Call
+that is the caller's — `full_bucket_count(t2)` reports the numerator. Call
 `expand_heavy` when your own `T1` is crossed.
 
 After a doubling each flow sits in both halves, and the copy in the half it no
@@ -229,8 +254,8 @@ spilled once rather than once per half — on both sides of the merge. Two
 sketches expanded a different number of times have different bucket counts, so
 `merge` and `merge_max` assert rather than silently misalign.
 
-The reference implementation does not include this operation; its `HeavyPart`
-is a fixed-size `template<int bucket_num>`. This follows the paper text.
+Expansion follows the paper text; the heavy part of a fixed-size implementation
+has no equivalent.
 
 `compress_heavy(ratio)` is the reverse, and gives the sketch section 3.4's
 "ability to actively release memory when needed". New bucket `j` absorbs old
@@ -314,25 +339,53 @@ let _ = sk.query("flow".to_string());
   selectable.
 - `insert_heavy_only` is lossy by design and does not keep the one-sided
   guarantee the rest of the API holds.
+- Under the OctoSketch runtime the one-sided guarantee needs
+  `OctoPartition::HashByKey`, the default. `RoundRobin` breaks it; see
+  Multi-core, below.
 - String-centric API (`String` in insert/query).
 - Lifecycle and parity differ from structured sketches.
 
-## Departures from the reference implementation
+## Multi-core (OctoSketch)
 
-The authors' code is at [BlockLiu/ElasticSketchCode](https://github.com/BlockLiu/ElasticSketchCode);
-`src/CPU/ElasticSketch/` holds the sketch.
+> **Feature gate:** also requires `octo-runtime` for the runtime itself.
+
+```rust
+let plan = ElasticOctoPlan::new(256, 3, 4096);
+let config = OctoConfig { threshold: plan.threshold().clone(), ..OctoConfig::default() };
+let out = run_octo(&inputs, &config, plan.clone(), || plan.aggregator());
+out.parent.sketch.query("flow::7".to_string());
+```
+
+Appendix C of the OctoSketch paper keeps both halves in the worker and promotes
+them differently. `ElasticOctoWorker` holds a heavy table with one-byte vote
+counters and a one-byte Count-Min light layer: the heavy part ships
+`<flow, votes, eviction>`, the light part ships an ordinary unkeyed cell delta
+for arrivals that lose a bucket contest, and an eviction ships the *evicted*
+flow keyed, as `ElasticDelta::Evicted`. `ElasticOctoAggregator` routes those to
+`merge_heavy` — the parent runs its own bucket contest, and may evict a different
+flow than the worker did — `sketch.light` directly, and `absorb_evicted`.
+
+The flag and the keyed eviction go beyond §4.4's `<key, counter>` rule.
+`docs/api/api_octo.md`, "The Elastic eviction flag", describes the protocol.
+
+Route with `OctoPartition::HashByKey`, the default. The flag only reaches the
+parent alongside a heavy counter, so it closes the loop while a flow visits one
+worker. Under `RoundRobin` a flow reaches every worker, and one that is a
+stable unflagged resident on one while losing the bucket contest on another is
+seated at the parent unflagged over light-layer mass an unflagged bucket never
+reads: `query` comes back low. Measured counts are in `docs/api/api_octo.md`,
+"The Elastic eviction flag".
+
+Keys are rendered with `flow_key_string`, and that rendering is what `query`
+must be asked for. See `docs/api/api_octo.md`.
+
+## Relation to the paper
 
 - **Eviction threshold.** Section 3.1.1 evicts once `vote-/vote+ >= lambda`,
-  and this module does. `param.h` defines
-  `JUDGE_IF_SWAP(min_val, guard_val) ((guard_val) > ((min_val) << 3))`, a strict
-  `>`, so the reference swaps one packet later.
-- **Bucket shape.** The reference is the software version of section 4.3: eight
-  counters per bucket, seven flows sharing one guard counter, the smallest flow
-  evicted, and the flag packed into the counter's top bit. This module is the
-  basic version of section 3.1, one flow per bucket.
-
-The takeover itself matches the paper and the reference: `HeavyPart.cpp` writes
-`0x80000001` on a normal-path swap, which is the paper's `(f, 1, T, 1)`.
+  and this module does.
+- **Bucket shape.** This module is the basic version of section 3.1, one flow
+  per bucket, not the software version of section 4.3.
+- **Takeover.** The normal-path swap is the paper's case 4, `(f, 1, T, 1)`.
 
 ## Status
 

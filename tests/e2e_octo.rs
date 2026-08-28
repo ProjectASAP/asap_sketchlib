@@ -19,6 +19,15 @@
 //! about a *flow*: a counter is shared by whatever flows hash into it, and each
 //! worker may hold back up to tau of its own share, so the provable per-counter
 //! gap is k*tau under either partition.
+//!
+//! The last section covers the two families that keep a flow key beside every
+//! counter - CocoSketch and the Elastic sketch, section 4.4 and appendix C -
+//! behind the `experimental` feature. Only the Octo variants are here; the
+//! single-threaded sketches are `tests/e2e_heavy_hitters.rs`. Neither family is
+//! covered by a theorem, and Coco's aggregator elects from an unseeded RNG, so
+//! those tests split: exact mass identities that hold under any interleaving,
+//! and the paper's own measured comparison against sketch-merge for everything
+//! else.
 
 mod common;
 
@@ -2829,4 +2838,1413 @@ fn a_flat_threshold_starves_the_deep_univmon_layers() {
         "the scaled threshold should track it, got {:.3}",
         relative(&scaled)
     );
+}
+
+// ===========================================================================
+// Keyed-bucket families: CocoSketch and Elastic sketch (§4.4, appendix C)
+// ===========================================================================
+//
+// Neither family is covered by a theorem, so the assertions here are of two
+// kinds: exact conservation identities that hold under every interleaving, and
+// the paper's measured comparison against the sketch-merge baseline - relative
+// error (figures 21a and 21c) and F1 at the heavy-hitter threshold (figures
+// 20a and 20c).
+//
+// Coco's aggregator elects from an unseeded RNG, so a promoted batch of τ takes
+// a bucket with probability τ/val rather than 1/val: mass is conserved exactly,
+// which key holds it is not. Its tests assert the mass identities exactly and
+// everything else over enough runs to state a band in standard errors. Elastic
+// has no randomness and is asserted exactly throughout.
+
+#[cfg(feature = "experimental")]
+mod heavy_hitters {
+    use super::*;
+    use asap_sketchlib::CmWorkerSketch;
+    use asap_sketchlib::sketches::elastic::LAMBDA;
+    use asap_sketchlib::{
+        CANONICAL_HASH_SEED, COCO_PROMASK, Coco, CocoDelta, CocoOctoAggregator, CocoOctoPlan,
+        CocoOctoWorker, ELASTIC_PROMASK, Elastic, ElasticDelta, ElasticOctoAggregator,
+        ElasticOctoPlan, ElasticOctoWorker, flow_key_string,
+    };
+    use std::collections::{HashMap, HashSet};
+
+    /// τ for both families.
+    const COCO_TAU: u64 = COCO_PROMASK as u64;
+    const ELASTIC_TAU: u32 = ELASTIC_PROMASK;
+
+    /// The paper's heavy-hitter threshold: a flow is heavy when its count is
+    /// *strictly* above `ALPHA * N`.
+    const HH_ALPHA: f64 = 0.0002;
+
+    fn flow_stream(n: usize, domain: usize, seed: u64) -> Vec<u64> {
+        zipf_u64(n, domain, 1.1, seed)
+    }
+
+    /// The rendering `CocoOctoPlan` and `ElasticOctoPlan` apply to every input,
+    /// so a test queries the parent with exactly the key the plan shipped.
+    fn key_of(raw: u64) -> String {
+        flow_key_string(&DataInput::U64(raw))
+    }
+
+    fn truth_of(stream: &[u64]) -> HashMap<String, u64> {
+        let mut truth: HashMap<String, u64> = HashMap::new();
+        for raw in stream {
+            *truth.entry(key_of(*raw)).or_insert(0) += 1;
+        }
+        truth
+    }
+
+    // -- mass accessors ------------------------------------------------------
+
+    /// Every `Coco::insert` adds its whole weight to exactly one bucket, so the
+    /// table's total is the mass it has absorbed.
+    fn coco_mass(sketch: &Coco) -> u64 {
+        (0..sketch.d)
+            .flat_map(|i| (0..sketch.w).map(move |j| (i, j)))
+            .map(|(i, j)| sketch.table[i][j].val)
+            .sum()
+    }
+
+    /// Mass resident in the heavy part: one positive vote per absorbed packet.
+    fn elastic_heavy_mass(sketch: &Elastic) -> i64 {
+        sketch.heavy.iter().map(|b| b.vote_pos as i64).sum()
+    }
+
+    /// Mass in one light-layer row. An Elastic spill adds its weight to every
+    /// row, so each row independently accounts for the light half.
+    fn elastic_light_row(sketch: &Elastic, row: usize) -> i64 {
+        (0..sketch.light.cols())
+            .map(|col| sketch.light.as_storage().query_one_counter(row, col) as i64)
+            .sum()
+    }
+
+    fn worker_light_row(worker: &ElasticOctoWorker, row: usize) -> i64 {
+        let light = worker.sketch().light();
+        (0..light.cols())
+            .map(|col| light.residual()[row * light.cols() + col] as i64)
+            .sum()
+    }
+
+    // -- replay harnesses ----------------------------------------------------
+
+    /// OctoSketch over CocoSketch, driven through the shipped plan, worker and
+    /// aggregator rather than a re-implementation of them.
+    struct OctoCoco {
+        children: Vec<CocoOctoWorker>,
+        parent: CocoOctoAggregator,
+        route: Route,
+        sent_counters: usize,
+    }
+
+    impl OctoCoco {
+        fn new(workers: usize, w: usize, d: usize, route: Route) -> Self {
+            let plan = CocoOctoPlan::new(w, d);
+            Self {
+                children: (0..workers).map(|id| plan.worker(id)).collect(),
+                parent: plan.aggregator(),
+                route,
+                sent_counters: 0,
+            }
+        }
+
+        fn insert(&mut self, index: usize, raw: u64) {
+            let input = DataInput::U64(raw);
+            let worker = self.route.worker(index, &input, self.children.len());
+            let payload = key_of(raw);
+            let mut promoted = Vec::new();
+            self.children[worker].process(&payload, &mut |d: CocoDelta| promoted.push(d));
+            self.sent_counters += promoted.len();
+            for delta in promoted {
+                self.parent.apply(delta);
+            }
+        }
+
+        /// Counter mass the workers still hold back, one byte per bucket.
+        fn residual(&self) -> u64 {
+            self.children
+                .iter()
+                .map(|c| c.sketch().residual().iter().map(|v| *v as u64).sum::<u64>())
+                .sum()
+        }
+
+        fn flush(&mut self) -> Vec<CocoDelta> {
+            let mut shipped = Vec::new();
+            for child in self.children.iter_mut() {
+                child.flush(&mut |d: CocoDelta| shipped.push(d));
+            }
+            for delta in shipped.iter().cloned() {
+                self.sent_counters += 1;
+                self.parent.apply(delta);
+            }
+            shipped
+        }
+
+        fn sketch(&self) -> &Coco {
+            &self.parent.sketch
+        }
+    }
+
+    /// Sketch-merge over CocoSketch: each worker keeps a full table and replays
+    /// every occupied bucket into the parent every `period` items, then starts
+    /// over. `Coco::merge` is the paper's baseline "merge the whole sketch".
+    struct MergeCoco {
+        children: Vec<Coco>,
+        seen: Vec<usize>,
+        parent: Coco,
+        period: usize,
+        w: usize,
+        d: usize,
+        route: Route,
+        sent_counters: usize,
+    }
+
+    impl MergeCoco {
+        fn new(workers: usize, w: usize, d: usize, period: usize, route: Route) -> Self {
+            Self {
+                children: (0..workers).map(|_| Coco::init_with_size(w, d)).collect(),
+                seen: vec![0; workers],
+                parent: Coco::init_with_size(w, d),
+                period,
+                w,
+                d,
+                route,
+                sent_counters: 0,
+            }
+        }
+
+        fn insert(&mut self, index: usize, raw: u64) {
+            let input = DataInput::U64(raw);
+            let worker = self.route.worker(index, &input, self.children.len());
+            self.children[worker].insert(&key_of(raw), 1);
+            self.seen[worker] += 1;
+            if self.seen[worker] % self.period == 0 {
+                let full = std::mem::replace(
+                    &mut self.children[worker],
+                    Coco::init_with_size(self.w, self.d),
+                );
+                self.parent.merge(&full);
+                self.sent_counters += self.w * self.d;
+            }
+        }
+    }
+
+    /// OctoSketch over the Elastic sketch, through the shipped plan/worker/
+    /// aggregator. Fully deterministic: neither half draws a random number.
+    struct OctoElastic {
+        children: Vec<ElasticOctoWorker>,
+        parent: ElasticOctoAggregator,
+        route: Route,
+        sent_counters: usize,
+    }
+
+    impl OctoElastic {
+        fn new(workers: usize, buckets: i32, rows: usize, cols: usize, route: Route) -> Self {
+            let plan = ElasticOctoPlan::new(buckets, rows, cols);
+            Self {
+                children: (0..workers).map(|id| plan.worker(id)).collect(),
+                parent: plan.aggregator(),
+                route,
+                sent_counters: 0,
+            }
+        }
+
+        fn insert(&mut self, index: usize, raw: u64) {
+            let input = DataInput::U64(raw);
+            let worker = self.route.worker(index, &input, self.children.len());
+            let payload = key_of(raw);
+            let mut promoted = Vec::new();
+            self.children[worker].process(&payload, &mut |d: ElasticDelta| promoted.push(d));
+            self.sent_counters += promoted.len();
+            for delta in promoted {
+                self.parent.apply(delta);
+            }
+        }
+
+        fn flush(&mut self) -> Vec<ElasticDelta> {
+            let mut shipped = Vec::new();
+            for child in self.children.iter_mut() {
+                child.flush(&mut |d: ElasticDelta| shipped.push(d));
+            }
+            for delta in shipped.iter().cloned() {
+                self.sent_counters += 1;
+                self.parent.apply(delta);
+            }
+            shipped
+        }
+
+        fn sketch(&self) -> &Elastic {
+            &self.parent.sketch
+        }
+    }
+
+    /// Sketch-merge over the Elastic sketch, using the paper's Sum merging.
+    struct MergeElastic {
+        children: Vec<Elastic>,
+        seen: Vec<usize>,
+        parent: Elastic,
+        period: usize,
+        buckets: i32,
+        rows: usize,
+        cols: usize,
+        route: Route,
+        sent_counters: usize,
+    }
+
+    impl MergeElastic {
+        fn new(
+            workers: usize,
+            buckets: i32,
+            rows: usize,
+            cols: usize,
+            period: usize,
+            route: Route,
+        ) -> Self {
+            Self {
+                children: (0..workers)
+                    .map(|_| Elastic::init_with_dimensions(buckets, rows, cols))
+                    .collect(),
+                seen: vec![0; workers],
+                parent: Elastic::init_with_dimensions(buckets, rows, cols),
+                period,
+                buckets,
+                rows,
+                cols,
+                route,
+                sent_counters: 0,
+            }
+        }
+
+        fn insert(&mut self, index: usize, raw: u64) {
+            let input = DataInput::U64(raw);
+            let worker = self.route.worker(index, &input, self.children.len());
+            self.children[worker].insert(key_of(raw));
+            self.seen[worker] += 1;
+            if self.seen[worker] % self.period == 0 {
+                let full = std::mem::replace(
+                    &mut self.children[worker],
+                    Elastic::init_with_dimensions(self.buckets, self.rows, self.cols),
+                );
+                self.parent.merge(&full);
+                self.sent_counters += self.buckets as usize + self.rows * self.cols;
+            }
+        }
+    }
+
+    // -- heavy-hitter scoring -------------------------------------------------
+
+    /// `<flow, estimate>` for every flow the sketch currently records above
+    /// `threshold`.
+    fn coco_reported(sketch: &Coco, threshold: u64) -> HashMap<String, u64> {
+        sketch
+            .recorded_flows()
+            .filter(|(_, size)| *size > threshold)
+            .map(|(key, size)| (key.to_string(), size))
+            .collect()
+    }
+
+    /// The Elastic counterpart: `query_all` reports only heavy-part residents,
+    /// each estimated as its bucket plus the light layer.
+    fn elastic_reported(sketch: &Elastic, threshold: u64) -> HashMap<String, u64> {
+        sketch
+            .heavy
+            .iter()
+            .filter(|b| b.vote_pos > 0)
+            .map(|b| {
+                (
+                    b.flow_id.clone(),
+                    sketch.query(b.flow_id.clone()).max(0) as u64,
+                )
+            })
+            .filter(|(_, size)| *size > threshold)
+            .collect()
+    }
+
+    /// Recall and precision over the heavy-hitter sets, and relative error
+    /// averaged over the true positives alone rather than the whole query set.
+    struct HhScore {
+        recall: f64,
+        precision: f64,
+        are: f64,
+    }
+
+    impl HhScore {
+        fn f1(&self) -> f64 {
+            if self.recall + self.precision == 0.0 {
+                0.0
+            } else {
+                2.0 * self.recall * self.precision / (self.recall + self.precision)
+            }
+        }
+    }
+
+    fn score(
+        reported: &HashMap<String, u64>,
+        truth: &HashMap<String, u64>,
+        threshold: u64,
+    ) -> HhScore {
+        let real: HashSet<&String> = truth
+            .iter()
+            .filter(|(_, size)| **size > threshold)
+            .map(|(key, _)| key)
+            .collect();
+        let hits: Vec<&String> = reported.keys().filter(|k| real.contains(*k)).collect();
+        let both = hits.len() as f64;
+        let are = hits
+            .iter()
+            .map(|k| {
+                let exact = truth[*k] as f64;
+                (reported[*k] as f64 - exact).abs() / exact
+            })
+            .sum::<f64>()
+            / both.max(1.0);
+        HhScore {
+            recall: both / real.len().max(1) as f64,
+            precision: both / reported.len().max(1) as f64,
+            are,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // CocoSketch delta protocol
+    // -----------------------------------------------------------------------
+
+    /// A promotion fires the moment a bucket counter *reaches* τ and the
+    /// counter is zeroed, so every insert-driven message carries exactly τ.
+    /// And the key it names is always a key the stream actually contained: the
+    /// worker ships either the arrival or the bucket's incumbent, never a
+    /// synthesised one.
+    #[test]
+    fn coco_deltas_carry_exactly_one_promotion_window_and_a_key_the_stream_used() {
+        let stream = flow_stream(40_000, 2_048, 21_001);
+        let seen: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
+
+        let mut worker = CocoOctoPlan::new(512, 2).worker(0);
+        let mut promoted = Vec::new();
+        for raw in &stream {
+            worker.process(&key_of(*raw), &mut |d: CocoDelta| promoted.push(d));
+        }
+
+        assert!(
+            !promoted.is_empty(),
+            "a 40k stream must cross τ = {COCO_TAU} somewhere"
+        );
+        for delta in &promoted {
+            assert_eq!(
+                delta.value, COCO_TAU,
+                "CocoSketch promotes exactly one window of τ, got {}",
+                delta.value
+            );
+            assert!(
+                seen.contains(&delta.key),
+                "delta named {} which never appeared in the stream",
+                delta.key
+            );
+        }
+    }
+
+    /// The counter a worker promotes is cleared, and every increment - promoted
+    /// or held back - lands in exactly one bucket. So the parent's table plus
+    /// the workers' one-byte residuals reconstruct the stream exactly, and no
+    /// residual can have reached τ without being shipped.
+    #[test]
+    fn coco_promotion_conserves_the_stream_mass_exactly() {
+        let stream = flow_stream(60_000, 2_048, 21_002);
+        let mut octo = OctoCoco::new(4, 512, 2, Route::HashByKey);
+        for (i, raw) in stream.iter().enumerate() {
+            octo.insert(i, *raw);
+        }
+
+        let promoted = coco_mass(octo.sketch());
+        let residual = octo.residual();
+        assert_eq!(
+            promoted + residual,
+            stream.len() as u64,
+            "promoted {promoted} plus residual {residual} lost mass against {}",
+            stream.len()
+        );
+        assert!(
+            residual > 0,
+            "a skewed 60k stream must leave partial counters behind"
+        );
+        for child in &octo.children {
+            for (bucket, held) in child.sketch().residual().iter().enumerate() {
+                assert!(
+                    (*held as u64) < COCO_TAU,
+                    "bucket {bucket} holds {held}, at or past the promotion window"
+                );
+            }
+        }
+        // §7.2: "OctoSketch tends to underestimate compared to the ideal
+        // accuracy since there is some information left in each worker."
+        assert!(
+            promoted < stream.len() as u64,
+            "an unflushed parent must trail the stream, not match it"
+        );
+    }
+
+    /// `flush` ships every bucket that still holds a partial count, and only
+    /// those: each flush message carries between 1 and τ - 1, and afterwards
+    /// the parent holds the whole stream and the workers hold nothing.
+    #[test]
+    fn coco_flush_hands_over_every_residual_bucket() {
+        let stream = flow_stream(60_000, 2_048, 21_003);
+        let mut octo = OctoCoco::new(4, 512, 2, Route::HashByKey);
+        for (i, raw) in stream.iter().enumerate() {
+            octo.insert(i, *raw);
+        }
+        let expected_residual = octo.residual();
+        let shipped = octo.flush();
+
+        assert_eq!(
+            shipped.iter().map(|d| d.value).sum::<u64>(),
+            expected_residual,
+            "flush must ship exactly what the workers were holding"
+        );
+        for delta in &shipped {
+            assert!(
+                delta.value > 0 && delta.value < COCO_TAU,
+                "a flushed bucket carries a partial count, got {}",
+                delta.value
+            );
+        }
+        assert_eq!(octo.residual(), 0, "flush must leave the workers empty");
+        assert_eq!(
+            coco_mass(octo.sketch()),
+            stream.len() as u64,
+            "a flushed parent holds the whole stream"
+        );
+    }
+
+    /// The branch that makes CocoSketch's payload a key rather than a cell
+    /// index: an arrival that loses the `v/val` election still pushed the
+    /// bucket over τ, and what ships is the *incumbent*. Shipping the arrival
+    /// instead would attribute the window to the wrong flow.
+    #[test]
+    fn coco_promotes_the_bucket_incumbent_when_the_arrival_loses_the_election() {
+        // A 32-bucket table under 2k distinct flows keeps almost every arrival
+        // in the losing branch, so incumbent promotions are the common case.
+        let mut promotions = 0usize;
+        let mut incumbent = 0usize;
+        for seed in 0..4u64 {
+            let stream = flow_stream(20_000, 2_048, 21_100 + seed);
+            let mut worker = CocoOctoPlan::new(16, 2).worker(0);
+            for raw in &stream {
+                let arrival = key_of(*raw);
+                worker.process(&arrival, &mut |d: CocoDelta| {
+                    promotions += 1;
+                    if d.key != arrival {
+                        incumbent += 1;
+                    }
+                });
+            }
+        }
+
+        assert!(promotions > 1_000, "expected a busy promotion schedule");
+        // Measured 21-39% across these seeds; the assertion only has to rule
+        // out a worker that always names the arriving key.
+        let share = incumbent as f64 / promotions as f64;
+        assert!(
+            share > 0.05,
+            "only {incumbent}/{promotions} promotions named the incumbent ({share:.3})"
+        );
+    }
+
+    /// Sharding changes which worker sees a flow but not the accounting: the
+    /// parent still ends up holding the whole stream, and CocoSketch's point
+    /// query still partitions it, because an insert leaves a key in at most one
+    /// bucket and every occupied bucket holds a key the stream contained.
+    #[test]
+    fn coco_sharded_workers_conserve_mass_and_partition_the_point_queries() {
+        let stream = flow_stream(60_000, 2_048, 21_004);
+        let distinct: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
+
+        for workers in [1usize, 2, 4, 8] {
+            let mut octo = OctoCoco::new(workers, 512, 2, Route::HashByKey);
+            for (i, raw) in stream.iter().enumerate() {
+                octo.insert(i, *raw);
+            }
+            octo.flush();
+
+            assert_eq!(
+                coco_mass(octo.sketch()),
+                stream.len() as u64,
+                "{workers} workers lost mass"
+            );
+            let attributed: u64 = distinct
+                .iter()
+                .map(|key| octo.sketch().estimate_key(key))
+                .sum();
+            assert_eq!(
+                attributed,
+                stream.len() as u64,
+                "{workers} workers: point queries must partition the stream"
+            );
+        }
+    }
+
+    /// CocoSketch §3.2 claims stochastic variance minimization "yields unbiased
+    /// size estimation", and the OctoSketch aggregator only preserves that if
+    /// it replays a promoted window as a *weighted* insert, electing at
+    /// `rng() % C < value` rather than `rng() % C == 0`. An aggregator that
+    /// dropped the weight, or elected at the single-packet rate, would show up
+    /// as bias here.
+    ///
+    /// Unbiasedness is a statement about the mean, so the band is stated in
+    /// standard errors of the sample mean rather than as a fixed tolerance.
+    #[test]
+    fn coco_octo_point_estimates_stay_unbiased_across_independent_runs() {
+        const TRIALS: usize = 120;
+        let stream = flow_stream(20_000, 1_000, 21_005);
+        let truth = truth_of(&stream);
+        let mut ranked: Vec<(&String, &u64)> = truth.iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let watched: Vec<String> = ranked.iter().take(32).map(|(k, _)| (*k).clone()).collect();
+        let exact: u64 = ranked.iter().take(32).map(|(_, v)| **v).sum();
+
+        // 128 buckets under 1000 flows: the watched flows are evicted and
+        // re-elected constantly, which is where a biased replay would show.
+        let mut totals = Vec::with_capacity(TRIALS);
+        for _ in 0..TRIALS {
+            let mut octo = OctoCoco::new(1, 64, 2, Route::HashByKey);
+            for (i, raw) in stream.iter().enumerate() {
+                octo.insert(i, *raw);
+            }
+            octo.flush();
+            totals.push(
+                watched
+                    .iter()
+                    .map(|key| octo.sketch().estimate_key(key))
+                    .sum::<u64>() as f64,
+            );
+        }
+
+        let mean = totals.iter().sum::<f64>() / TRIALS as f64;
+        let variance =
+            totals.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / (TRIALS as f64 - 1.0);
+        let standard_error = (variance / TRIALS as f64).sqrt();
+        println!(
+            "Coco octo top-32 mass: truth={exact} mean={mean:.1} se={standard_error:.1} \
+             ({:.2} sigma)",
+            (mean - exact as f64) / standard_error
+        );
+
+        // The band has to be narrow to mean anything: measured at 0.19% of the
+        // watched mass per standard error, so 5 sigma is under 1%.
+        assert!(
+            standard_error * 5.0 < 0.02 * exact as f64,
+            "the estimator is too noisy for this to assert anything: 5 se = {:.1} on {exact}",
+            standard_error * 5.0
+        );
+        assert!(
+            (mean - exact as f64).abs() < 5.0 * standard_error,
+            "mean {mean:.1} is {:.2} standard errors from the exact {exact}",
+            (mean - exact as f64) / standard_error
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Elastic sketch delta protocol
+    // -----------------------------------------------------------------------
+
+    /// Appendix C splits the Elastic promotion in two: the heavy part ships
+    /// `<key, votes>` the way CocoSketch does, and "the light part's insertion
+    /// logic is the same as that of the OctoSketch-optimized Count-Min sketch",
+    /// so it ships an unkeyed cell delta. This crate adds the eviction flag to
+    /// the heavy message and a third, keyed message for an evicted resident,
+    /// which is the only counter that ever moved by more than one at a time.
+    /// With it gone from the light half, a light cell promotes at exactly τ,
+    /// like any other Count-Min worker's.
+    #[test]
+    fn elastic_deltas_split_into_keyed_heavy_votes_keyed_evictions_and_unkeyed_light_cells() {
+        let stream = flow_stream(40_000, 2_048, 22_001);
+        let seen: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
+        let (rows, cols) = (3usize, 1_024usize);
+
+        let mut worker = ElasticOctoPlan::new(64, rows, cols).worker(0);
+        let mut promoted = Vec::new();
+        for raw in &stream {
+            worker.process(&key_of(*raw), &mut |d: ElasticDelta| promoted.push(d));
+        }
+
+        let mut heavy = 0usize;
+        let mut light = 0usize;
+        let mut evicted = 0usize;
+        let mut evicted_empty = 0usize;
+        let mut flagged = 0usize;
+        for delta in &promoted {
+            match delta {
+                ElasticDelta::Heavy {
+                    key,
+                    value,
+                    eviction,
+                } => {
+                    heavy += 1;
+                    flagged += usize::from(*eviction);
+                    assert_eq!(*value, ELASTIC_TAU, "a heavy bucket promotes one window");
+                    assert!(seen.contains(key), "heavy delta named an unseen flow {key}");
+                }
+                ElasticDelta::Evicted { key, votes } => {
+                    evicted += 1;
+                    evicted_empty += usize::from(*votes == 0);
+                    assert!(
+                        *votes < ELASTIC_TAU,
+                        "an evicted resident carries less than one window, got {votes}"
+                    );
+                    assert!(
+                        seen.contains(key),
+                        "eviction delta named an unseen flow {key}"
+                    );
+                }
+                ElasticDelta::Light(cell) => {
+                    light += 1;
+                    assert_eq!(
+                        cell.value, ELASTIC_TAU,
+                        "the light half moves one at a time, so it promotes exactly τ"
+                    );
+                    assert!((cell.row as usize) < rows, "row {} out of range", cell.row);
+                    assert!((cell.col as usize) < cols, "col {} out of range", cell.col);
+                }
+            }
+        }
+        assert!(
+            heavy > 0 && light > 0 && evicted > 0,
+            "all three message kinds must appear"
+        );
+        assert!(
+            flagged > 0,
+            "a bucket taken over by eviction must ship its flag"
+        );
+        assert!(
+            evicted_empty > 0,
+            "a resident evicted right after a promotion carries zero votes and must still ship"
+        );
+    }
+
+    /// Elastic conserves mass per key, and per light-layer row: a packet
+    /// becomes one positive vote or one light increment on every row, an
+    /// eviction moves the resident's whole vote from the heavy part into every
+    /// row, and a promotion moves it to the parent unchanged. So for each row
+    /// independently, parent heavy + parent light + worker heavy + worker light
+    /// is the stream, exactly, at every worker count.
+    #[test]
+    fn elastic_promotion_conserves_the_stream_mass_row_by_row() {
+        let stream = flow_stream(60_000, 2_048, 22_002);
+        let (rows, cols) = (3usize, 2_048usize);
+
+        for workers in [1usize, 2, 4, 8] {
+            let mut octo = OctoElastic::new(workers, 256, rows, cols, Route::HashByKey);
+            for (i, raw) in stream.iter().enumerate() {
+                octo.insert(i, *raw);
+            }
+
+            let parent_heavy = elastic_heavy_mass(octo.sketch());
+            let worker_light: Vec<i64> = (0..rows)
+                .map(|r| octo.children.iter().map(|c| worker_light_row(c, r)).sum())
+                .collect();
+            let parent_light: Vec<i64> = (0..rows)
+                .map(|r| elastic_light_row(octo.sketch(), r))
+                .collect();
+
+            // The votes the workers still hold are what `flush` is about to
+            // ship, which is the only part not visible through an accessor.
+            let held: i64 = octo
+                .flush()
+                .iter()
+                .filter_map(|d| match d {
+                    ElasticDelta::Heavy { value, .. } => Some(*value as i64),
+                    ElasticDelta::Evicted { .. } | ElasticDelta::Light(_) => None,
+                })
+                .sum();
+
+            for row in 0..rows {
+                assert_eq!(
+                    parent_heavy + parent_light[row] + worker_light[row] + held,
+                    stream.len() as i64,
+                    "{workers} workers, row {row}: mass leaked out of the pipeline"
+                );
+            }
+            assert!(held > 0, "{workers} workers: some votes must still be held");
+        }
+    }
+
+    /// `flush` empties both halves: every light counter goes out as a partial
+    /// cell delta, every resident's remaining votes go out as a heavy message,
+    /// and afterwards the parent alone accounts for the stream on every row.
+    #[test]
+    fn elastic_flush_empties_both_halves_of_every_worker() {
+        let stream = flow_stream(60_000, 2_048, 22_003);
+        let (rows, cols) = (3usize, 2_048usize);
+        let mut octo = OctoElastic::new(4, 256, rows, cols, Route::HashByKey);
+        for (i, raw) in stream.iter().enumerate() {
+            octo.insert(i, *raw);
+        }
+
+        let shipped = octo.flush();
+        for delta in &shipped {
+            let value = match delta {
+                ElasticDelta::Heavy { value, .. } => *value,
+                ElasticDelta::Light(cell) => cell.value,
+                ElasticDelta::Evicted { key, .. } => {
+                    panic!("a flush evicts nobody, but handed over {key}")
+                }
+            };
+            assert!(
+                value > 0 && value < ELASTIC_TAU,
+                "a flushed counter carries a partial count, got {value}"
+            );
+        }
+        for child in &octo.children {
+            assert!(
+                child.sketch().light().residual().iter().all(|c| *c == 0),
+                "the light layer must be empty after a flush"
+            );
+        }
+
+        let heavy = elastic_heavy_mass(octo.sketch());
+        for row in 0..rows {
+            assert_eq!(
+                heavy + elastic_light_row(octo.sketch(), row),
+                stream.len() as i64,
+                "row {row}: a flushed parent holds the whole stream"
+            );
+        }
+    }
+
+    /// An eviction hands the evicted resident to the light part under *its
+    /// own* key, not under the arriving packet's. A worker cannot do that
+    /// through an unkeyed cell
+    /// delta, so the eviction travels as `ElasticDelta::Evicted` and the
+    /// aggregator addresses the parent's light layer by the victim's key.
+    /// The losing arrivals stay unkeyed and batched.
+    #[test]
+    fn elastic_eviction_hands_the_evicted_resident_over_under_its_own_key() {
+        const RESIDENT_VOTES: usize = 3;
+        let (rows, cols) = (1usize, 64usize);
+        // τ above anything this workload reaches, so nothing is promoted away
+        // and the losing arrivals stay visible in the worker's residual.
+        let quiet = OctoThreshold::new(127);
+        let plan = ElasticOctoPlan::with_threshold(1, rows, cols, quiet);
+        let mut worker = plan.worker(0);
+        let mut parent = plan.aggregator();
+
+        let resident = "flow::resident".to_string();
+        let challenger = "flow::challenger".to_string();
+        let cell_of = |key: &str| {
+            (CmWorkerSketch::hashes(rows, &DataInput::Str(key))[0] & 0xffff_ffff) as usize % cols
+        };
+        let (resident_cell, challenger_cell) = (cell_of(&resident), cell_of(&challenger));
+        assert_ne!(
+            resident_cell, challenger_cell,
+            "the two keys must land on different light cells for this to measure anything"
+        );
+
+        let mut shipped = Vec::new();
+        for _ in 0..RESIDENT_VOTES {
+            worker.process(&resident, &mut |d| shipped.push(d));
+        }
+        // vote_neg reaches LAMBDA * vote_pos on this arrival, which evicts.
+        for _ in 0..(LAMBDA as usize * RESIDENT_VOTES) {
+            worker.process(&challenger, &mut |d| shipped.push(d));
+        }
+        assert_eq!(
+            shipped,
+            vec![ElasticDelta::Evicted {
+                key: resident.clone(),
+                votes: RESIDENT_VOTES as u32,
+            }],
+            "τ = 127 leaves the eviction as the only message the worker must send"
+        );
+
+        let residual = worker.sketch().light().residual();
+        assert_eq!(
+            residual[resident_cell], 0,
+            "the evicted resident never touches the worker's light layer"
+        );
+        assert_eq!(
+            residual[challenger_cell] as usize,
+            LAMBDA as usize * RESIDENT_VOTES - 1,
+            "the challenger spills every losing arrival but the one that evicted"
+        );
+
+        for delta in shipped {
+            parent.apply(delta);
+        }
+        let light = &parent.sketch.light;
+        assert_eq!(
+            light.as_storage().query_one_counter(0, resident_cell),
+            RESIDENT_VOTES as i32,
+            "the parent's light layer takes the vote on the victim's own cell"
+        );
+        assert_eq!(
+            light.as_storage().query_one_counter(0, challenger_cell),
+            0,
+            "and puts nothing on the arrival that displaced it"
+        );
+    }
+
+    /// Elastic's light part is additive and never decremented, so it never
+    /// underestimates the mass hashed into a cell. Under hash-by-key routing a
+    /// flow meets exactly one worker, so every path by which its mass can reach
+    /// the parent's light layer also flags its parent bucket: a worker bucket
+    /// held by eviction ships `eviction: true` with its votes, and a worker
+    /// eviction ships `ElasticDelta::Evicted` under the victim's key. Together
+    /// those make a flushed parent one-sided: no flow, resident or evicted, may
+    /// read back below its true size.
+    ///
+    /// Drop either mechanism and a heavy flow whose parent bucket never evicted
+    /// anyone loses whatever a *worker* eviction had already put in the light
+    /// layer.
+    #[test]
+    fn elastic_octo_never_underestimates_any_flow_after_a_flush() {
+        let stream = flow_stream(60_000, 4_096, 22_004);
+        let truth = truth_of(&stream);
+
+        for workers in [1usize, 2, 4, 8] {
+            let mut octo = OctoElastic::new(workers, 128, 3, 2_048, Route::HashByKey);
+            for (i, raw) in stream.iter().enumerate() {
+                octo.insert(i, *raw);
+            }
+            octo.flush();
+
+            let mut evicted = 0usize;
+            for (key, exact) in &truth {
+                let estimate = octo.sketch().query(key.clone());
+                assert!(
+                    estimate >= *exact as i32,
+                    "{workers} workers: {key} read back {estimate} against a true {exact}"
+                );
+                if !octo.sketch().heavy.iter().any(|b| b.flow_id == *key) {
+                    evicted += 1;
+                }
+            }
+            assert!(
+                evicted > 0,
+                "{workers} workers: a 128-bucket table must push flows into the light layer"
+            );
+        }
+    }
+
+    /// The property the flag exists to protect. A heavy flow that never lost a
+    /// bucket contest and was never evicted - not at its worker, not at the
+    /// parent - holds all of its mass in the parent's heavy part, so its
+    /// estimate must be *exact*. Reading through to the light layer would
+    /// charge it for Count-Min mass that belongs to other flows, which is what
+    /// flagging every heavy message unconditionally does.
+    ///
+    /// A single light column puts every other flow's spill on this flow's own
+    /// cell, so "exact" is a claim the arrangement can actually falsify.
+    #[test]
+    fn a_heavy_flow_that_never_spilled_is_estimated_exactly() {
+        const BUCKETS: i32 = 4;
+        const LONE_ARRIVALS: usize = 200;
+        const CONTESTED_ARRIVALS: usize = 400;
+        let (rows, cols) = (1usize, 1usize);
+
+        let bucket_of = |key: &str| {
+            hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(key)) as usize % BUCKETS as usize
+        };
+        let in_bucket = |bucket: usize, want: usize| -> Vec<String> {
+            (0..10_000usize)
+                .map(|i| format!("flow::{i}"))
+                .filter(|key| bucket_of(key) == bucket)
+                .take(want)
+                .collect()
+        };
+        let lone = in_bucket(0, 1).pop().expect("a key hashing to bucket 0");
+        let contenders = in_bucket(1, 2);
+        assert_eq!(contenders.len(), 2, "two keys hashing to bucket 1");
+
+        let plan = ElasticOctoPlan::new(BUCKETS, rows, cols);
+        let mut worker = plan.worker(0);
+        let mut parent = plan.aggregator();
+        let mut stream: Vec<String> = (0..LONE_ARRIVALS).map(|_| lone.clone()).collect();
+        for i in 0..CONTESTED_ARRIVALS {
+            stream.push(contenders[i % 2].clone());
+        }
+        for key in &stream {
+            let mut promoted = Vec::new();
+            worker.process(key, &mut |d: ElasticDelta| promoted.push(d));
+            for delta in promoted {
+                parent.apply(delta);
+            }
+        }
+        let mut shipped = Vec::new();
+        worker.flush(&mut |d: ElasticDelta| shipped.push(d));
+        for delta in shipped {
+            parent.apply(delta);
+        }
+
+        let noise = parent
+            .sketch
+            .light
+            .estimate(&DataInput::String(lone.clone()));
+        assert!(
+            noise > 0,
+            "the contested pair must have left mass on the lone flow's light cell"
+        );
+        let bucket = parent
+            .sketch
+            .heavy
+            .iter()
+            .find(|b| b.flow_id == lone)
+            .expect("the lone flow must be resident at the parent");
+        assert!(
+            !bucket.eviction,
+            "a flow no worker ever evicted must not be flagged"
+        );
+        assert_eq!(
+            parent.sketch.query(lone.clone()),
+            LONE_ARRIVALS as i32,
+            "an unspilled heavy flow must read back exactly, not {noise} above"
+        );
+    }
+
+    /// The other half of the same protocol. A flow that *did* acquire
+    /// light-layer mass at a worker must read through to it at the parent, even
+    /// though the parent's own bucket never evicted anyone. Here the message
+    /// that carries the news is an eviction of *zero* votes - the worker had
+    /// just promoted the counter, so the takeover found nothing left to hand
+    /// over - which is why the worker ships it anyway.
+    #[test]
+    fn a_resident_that_spilled_at_a_worker_reads_through_to_the_light_layer() {
+        // One more arrival than this and the challenger is evicted in turn.
+        const SPILLS: usize = LAMBDA as usize - 2;
+        let (rows, cols) = (1usize, 64usize);
+
+        let cell_of = |key: &str| {
+            (CmWorkerSketch::hashes(rows, &DataInput::Str(key))[0] & 0xffff_ffff) as usize % cols
+        };
+        let resident = "flow::resident".to_string();
+        let challenger = (0..10_000usize)
+            .map(|i| format!("flow::challenger::{i}"))
+            .find(|key| cell_of(key) != cell_of(&resident))
+            .expect("a challenger on a different light cell");
+
+        let plan = ElasticOctoPlan::new(1, rows, cols);
+        let mut worker = plan.worker(0);
+        let mut parent = plan.aggregator();
+        let mut shipped = Vec::new();
+        let mut stream: Vec<String> = (0..ELASTIC_TAU).map(|_| resident.clone()).collect();
+        stream.push(challenger.clone());
+        stream.extend((0..SPILLS).map(|_| resident.clone()));
+        for key in &stream {
+            worker.process(key, &mut |d: ElasticDelta| shipped.push(d));
+        }
+
+        assert_eq!(
+            shipped,
+            vec![
+                ElasticDelta::Heavy {
+                    key: resident.clone(),
+                    value: ELASTIC_TAU,
+                    eviction: false,
+                },
+                ElasticDelta::Evicted {
+                    key: resident.clone(),
+                    votes: 0,
+                },
+            ],
+            "a slot seated from vacant ships an unflagged counter, and the takeover \
+             right after it hands the just-promoted resident over empty"
+        );
+
+        worker.flush(&mut |d: ElasticDelta| shipped.push(d));
+        for delta in shipped {
+            parent.apply(delta);
+        }
+
+        let exact = ELASTIC_TAU as i32 + SPILLS as i32;
+        let bucket = parent
+            .sketch
+            .heavy
+            .iter()
+            .find(|b| b.flow_id == resident)
+            .expect("the resident must still hold the parent's bucket");
+        assert!(
+            bucket.eviction,
+            "a flow evicted at a worker must be flagged at the parent"
+        );
+        assert_eq!(bucket.vote_pos, ELASTIC_TAU as i32, "the promoted window");
+        assert_eq!(
+            parent.sketch.query(resident.clone()),
+            exact,
+            "the spilled arrivals must be read back through the light layer"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Runtime: the multi-threaded pipeline over both families
+    // -----------------------------------------------------------------------
+
+    #[cfg(feature = "octo-runtime")]
+    mod runtime {
+        use super::*;
+        use asap_sketchlib::{OctoConfig, run_octo};
+
+        fn config(num_workers: usize) -> OctoConfig {
+            OctoConfig {
+                num_workers,
+                pin_cores: false,
+                queue_capacity: 4096,
+                ..OctoConfig::default()
+            }
+        }
+
+        /// Neither Coco's election nor Elastic's contest is commutative, so the
+        /// parent these produce is *not* a function of the partition alone -
+        /// unlike every other family in this file, a runtime run cannot be
+        /// compared to a replay. What survives every interleaving is the mass:
+        /// a promoted window is cleared exactly once and absorbed exactly once,
+        /// whichever bucket the parent chooses for it. `run_octo` flushes at the
+        /// end of the stream, so the parent holds all of it.
+        #[test]
+        fn run_octo_coco_conserves_the_stream_mass_at_every_worker_count() {
+            let stream = flow_stream(60_000, 2_048, 23_001);
+            let inputs = inputs_from(&stream);
+            let distinct: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
+
+            for workers in [1usize, 2, 3, 4, 8] {
+                let parent = run_octo(&inputs, &config(workers), CocoOctoPlan::new(512, 2), || {
+                    CocoOctoAggregator::new(512, 2)
+                })
+                .parent
+                .sketch;
+
+                assert_eq!(
+                    coco_mass(&parent),
+                    stream.len() as u64,
+                    "{workers} workers: the parent table lost mass"
+                );
+                let attributed: u64 = distinct.iter().map(|k| parent.estimate_key(k)).sum();
+                assert_eq!(
+                    attributed,
+                    stream.len() as u64,
+                    "{workers} workers: point queries must partition the stream"
+                );
+            }
+        }
+
+        /// The Elastic identity, run through real threads: for every light row
+        /// the parent's heavy votes plus that row account for the whole stream,
+        /// and the sketch is still one-sided for every flow in it.
+        #[test]
+        fn run_octo_elastic_conserves_the_stream_mass_whatever_the_interleaving() {
+            let stream = flow_stream(60_000, 4_096, 23_002);
+            let inputs = inputs_from(&stream);
+            let truth = truth_of(&stream);
+            let (rows, cols) = (3usize, 2_048usize);
+
+            for workers in [1usize, 2, 3, 4, 8] {
+                let parent = run_octo(
+                    &inputs,
+                    &config(workers),
+                    ElasticOctoPlan::new(128, rows, cols),
+                    || ElasticOctoAggregator::new(128, rows, cols),
+                )
+                .parent
+                .sketch;
+
+                let heavy = elastic_heavy_mass(&parent);
+                for row in 0..rows {
+                    assert_eq!(
+                        heavy + elastic_light_row(&parent, row),
+                        stream.len() as i64,
+                        "{workers} workers, row {row}: mass leaked"
+                    );
+                }
+                for (key, exact) in &truth {
+                    assert!(
+                        parent.query(key.clone()) >= *exact as i32,
+                        "{workers} workers: {key} underestimated"
+                    );
+                }
+            }
+        }
+
+        /// One worker is the only configuration where the keyed families are
+        /// reproducible: a single queue delivers in order, so the aggregator
+        /// sees the same contest sequence as a sequential replay. Elastic draws
+        /// no random numbers, so that makes it bit-exact. This pins the
+        /// plumbing - payload rendering, delta routing, end-of-stream flush -
+        /// with an equality the multi-worker cases cannot offer.
+        #[test]
+        fn run_octo_elastic_matches_a_single_threaded_replay_at_one_worker() {
+            let stream = flow_stream(40_000, 2_048, 23_003);
+            let inputs = inputs_from(&stream);
+            let (rows, cols) = (3usize, 1_024usize);
+
+            let mut replay = OctoElastic::new(1, 128, rows, cols, Route::HashByKey);
+            for (i, raw) in stream.iter().enumerate() {
+                replay.insert(i, *raw);
+            }
+            replay.flush();
+
+            for attempt in 0..3 {
+                let parent = run_octo(
+                    &inputs,
+                    &config(1),
+                    ElasticOctoPlan::new(128, rows, cols),
+                    || ElasticOctoAggregator::new(128, rows, cols),
+                )
+                .parent
+                .sketch;
+
+                for (bucket, (got, want)) in parent
+                    .heavy
+                    .iter()
+                    .zip(replay.sketch().heavy.iter())
+                    .enumerate()
+                {
+                    assert_eq!(
+                        (&got.flow_id, got.vote_pos, got.vote_neg, got.eviction),
+                        (&want.flow_id, want.vote_pos, want.vote_neg, want.eviction),
+                        "attempt {attempt}, heavy bucket {bucket} diverged"
+                    );
+                }
+                for row in 0..rows {
+                    for col in 0..cols {
+                        assert_eq!(
+                            parent.light.as_storage().query_one_counter(row, col),
+                            replay
+                                .sketch()
+                                .light
+                                .as_storage()
+                                .query_one_counter(row, col),
+                            "attempt {attempt}, light cell ({row},{col}) diverged"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Paper conformance: delta promotion vs the sketch-merge baseline
+    // -----------------------------------------------------------------------
+
+    /// Merge periods that spend roughly the given counter budget, the sizing
+    /// `merge_periods` does for the counter families.
+    fn merge_period(octo_counters: usize, sketch_counters: usize, per_worker: usize) -> usize {
+        let merges = (octo_counters as f64 / sketch_counters as f64)
+            .ceil()
+            .max(1.0) as usize;
+        (per_worker / (merges + 1)).max(1)
+    }
+
+    /// Figures 20(a) and 21(a): CocoSketch's F1 and relative error against the
+    /// same sketch queried *while the stream runs*, under OctoSketch and under
+    /// periodic sketch-merge, at a merge baseline funded past parity. Asserts
+    /// the direction the figures show, not Table 1's undefined accuracy ratio.
+    ///
+    /// The stream is sized so `ALPHA * N` sits well above τ: below that a
+    /// threshold-sized flow barely promotes and Octo's F1 trails merge's.
+    #[test]
+    fn coco_online_accuracy_beats_sketch_merge() {
+        let (w, d, workers, n) = (512usize, 2usize, 4usize, 200_000usize);
+        let mut octo_are = 0.0;
+        let mut merge_are = 0.0;
+        let mut ideal_are = 0.0;
+        let mut octo_f1 = 0.0;
+        let mut merge_f1 = 0.0;
+        let mut samples = 0.0;
+        let (mut octo_hh_are, mut merge_hh_are) = (0.0, 0.0);
+        let mut budget = (0usize, 0usize);
+
+        for seed in 0..3u64 {
+            let stream = flow_stream(n, 5_000, 24_001 + seed);
+            let truth = truth_of(&stream);
+            let mut ranked: Vec<(&String, &u64)> = truth.iter().collect();
+            ranked.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+            let watched: Vec<String> = ranked.iter().take(32).map(|(k, _)| (*k).clone()).collect();
+
+            let mut probe = OctoCoco::new(workers, w, d, Route::HashByKey);
+            for (i, raw) in stream.iter().enumerate() {
+                probe.insert(i, *raw);
+            }
+            let period = merge_period(probe.sent_counters, w * d, n / workers);
+
+            let mut octo = OctoCoco::new(workers, w, d, Route::HashByKey);
+            let mut merge = MergeCoco::new(workers, w, d, period, Route::HashByKey);
+            let mut ideal: Coco = Coco::init_with_size(w, d);
+            let mut running: HashMap<String, u64> = HashMap::new();
+            let mut seen = 0u64;
+            let stride = n / 8;
+
+            for (i, raw) in stream.iter().enumerate() {
+                *running.entry(key_of(*raw)).or_insert(0) += 1;
+                seen += 1;
+                octo.insert(i, *raw);
+                merge.insert(i, *raw);
+                ideal.insert(&key_of(*raw), 1);
+                if i > 0 && i % stride == stride / 3 {
+                    let threshold = (seen as f64 * HH_ALPHA) as u64;
+                    for key in &watched {
+                        let exact = running[key] as f64;
+                        octo_are += (octo.sketch().estimate_key(key) as f64 - exact).abs() / exact;
+                        merge_are += (merge.parent.estimate_key(key) as f64 - exact).abs() / exact;
+                        ideal_are += (ideal.estimate_key(key) as f64 - exact).abs() / exact;
+                        samples += 1.0;
+                    }
+                    let octo_hh = score(
+                        &coco_reported(octo.sketch(), threshold),
+                        &running,
+                        threshold,
+                    );
+                    let merge_hh = score(
+                        &coco_reported(&merge.parent, threshold),
+                        &running,
+                        threshold,
+                    );
+                    octo_f1 += octo_hh.f1();
+                    merge_f1 += merge_hh.f1();
+                    octo_hh_are += octo_hh.are;
+                    merge_hh_are += merge_hh.are;
+                }
+            }
+            budget = (
+                budget.0 + probe.sent_counters,
+                budget.1 + merge.sent_counters,
+            );
+        }
+
+        let (octo_are, merge_are, ideal_are) =
+            (octo_are / samples, merge_are / samples, ideal_are / samples);
+        let sweeps = samples / 32.0;
+        let (octo_f1, merge_f1) = (octo_f1 / sweeps, merge_f1 / sweeps);
+        println!(
+            "Coco online: top-32 ARE ideal={ideal_are:.4} octo={octo_are:.4} merge={merge_are:.4} | \
+             heavy hitters F1 octo={octo_f1:.4} merge={merge_f1:.4}, ARE octo={:.4} merge={:.4} \
+             (merge spent {:.1}x octo's counters)",
+            octo_hh_are / sweeps,
+            merge_hh_are / sweeps,
+            budget.1 as f64 / budget.0 as f64
+        );
+
+        assert!(
+            budget.1 >= budget.0,
+            "the baseline was starved: {} counters against {}",
+            budget.1,
+            budget.0
+        );
+        assert!(
+            octo_are < merge_are / 2.0,
+            "delta promotion should halve the online relative error: {octo_are:.4} vs {merge_are:.4}"
+        );
+        assert!(
+            octo_f1 > merge_f1,
+            "F1 should favour delta promotion: {octo_f1:.4} vs {merge_f1:.4}"
+        );
+        assert!(
+            ideal_are < octo_are,
+            "a single-threaded pass should lead: ideal {ideal_are:.4} vs octo {octo_are:.4}"
+        );
+        assert!(
+            octo_are < 0.10,
+            "octo relative error {octo_are:.4} left the measured band"
+        );
+    }
+
+    /// Figures 20(c) and 21(c), the Elastic counterparts. Deterministic end to
+    /// end: one seed is the whole population here, not a sample of it, so the
+    /// relative errors below are the numbers rather than a band around them -
+    /// 0.0000 for a single-threaded pass, 0.0466 for Octo, 0.6287 for merge.
+    /// The gap between the first two is the mass still sitting in the workers,
+    /// which §7.2 calls out as OctoSketch's systematic under-read.
+    #[test]
+    fn elastic_online_accuracy_beats_sketch_merge() {
+        let (buckets, rows, cols, workers, n) =
+            (1_024i32, 3usize, 4_096usize, 4usize, 300_000usize);
+        let stream = flow_stream(n, 5_000, 24_101);
+        let truth = truth_of(&stream);
+        let mut ranked: Vec<(&String, &u64)> = truth.iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let watched: Vec<String> = ranked.iter().take(32).map(|(k, _)| (*k).clone()).collect();
+
+        let mut probe = OctoElastic::new(workers, buckets, rows, cols, Route::HashByKey);
+        for (i, raw) in stream.iter().enumerate() {
+            probe.insert(i, *raw);
+        }
+        let sketch_counters = buckets as usize + rows * cols;
+        let period = merge_period(probe.sent_counters, sketch_counters, n / workers);
+
+        let mut octo = OctoElastic::new(workers, buckets, rows, cols, Route::HashByKey);
+        let mut merge = MergeElastic::new(workers, buckets, rows, cols, period, Route::HashByKey);
+        let mut ideal: Elastic = Elastic::init_with_dimensions(buckets, rows, cols);
+        let mut running: HashMap<String, u64> = HashMap::new();
+        let mut seen = 0u64;
+        let stride = n / 8;
+        let (mut octo_are, mut merge_are, mut ideal_are) = (0.0, 0.0, 0.0);
+        let (mut octo_f1, mut merge_f1) = (0.0, 0.0);
+        let (mut octo_hh_are, mut merge_hh_are) = (0.0, 0.0);
+        let (mut samples, mut sweeps) = (0.0, 0.0);
+
+        for (i, raw) in stream.iter().enumerate() {
+            let key = key_of(*raw);
+            *running.entry(key.clone()).or_insert(0) += 1;
+            seen += 1;
+            octo.insert(i, *raw);
+            merge.insert(i, *raw);
+            ideal.insert(key);
+            if i > 0 && i % stride == stride / 3 {
+                let threshold = (seen as f64 * HH_ALPHA) as u64;
+                for key in &watched {
+                    let exact = running[key] as f64;
+                    octo_are += (octo.sketch().query(key.clone()) as f64 - exact).abs() / exact;
+                    merge_are += (merge.parent.query(key.clone()) as f64 - exact).abs() / exact;
+                    ideal_are += (ideal.query(key.clone()) as f64 - exact).abs() / exact;
+                    samples += 1.0;
+                }
+                let octo_hh = score(
+                    &elastic_reported(octo.sketch(), threshold),
+                    &running,
+                    threshold,
+                );
+                let merge_hh = score(
+                    &elastic_reported(&merge.parent, threshold),
+                    &running,
+                    threshold,
+                );
+                octo_f1 += octo_hh.f1();
+                merge_f1 += merge_hh.f1();
+                octo_hh_are += octo_hh.are;
+                merge_hh_are += merge_hh.are;
+                sweeps += 1.0;
+            }
+        }
+
+        let (octo_are, merge_are, ideal_are) =
+            (octo_are / samples, merge_are / samples, ideal_are / samples);
+        let (octo_f1, merge_f1) = (octo_f1 / sweeps, merge_f1 / sweeps);
+        println!(
+            "Elastic online: top-32 ARE ideal={ideal_are:.4} octo={octo_are:.4} merge={merge_are:.4} \
+             | heavy hitters F1 octo={octo_f1:.4} merge={merge_f1:.4}, ARE octo={:.4} merge={:.4} \
+             (merge spent {:.1}x octo's counters)",
+            octo_hh_are / sweeps,
+            merge_hh_are / sweeps,
+            merge.sent_counters as f64 / probe.sent_counters as f64
+        );
+
+        assert!(
+            merge.sent_counters >= probe.sent_counters,
+            "the baseline was starved: {} counters against {}",
+            merge.sent_counters,
+            probe.sent_counters
+        );
+        assert!(
+            octo_are < merge_are / 2.0,
+            "delta promotion should halve the online relative error: {octo_are:.4} vs {merge_are:.4}"
+        );
+        assert!(
+            octo_f1 > merge_f1 * 1.2,
+            "F1 should favour delta promotion: {octo_f1:.4} vs {merge_f1:.4}"
+        );
+        assert!(
+            ideal_are < octo_are,
+            "a single-threaded pass should lead: ideal {ideal_are:.4} vs octo {octo_are:.4}"
+        );
+        assert!(
+            octo_are < 0.06,
+            "octo relative error {octo_are:.4} left the measured band"
+        );
+    }
 }

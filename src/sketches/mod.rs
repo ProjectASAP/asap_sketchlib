@@ -102,6 +102,8 @@ pub use octo_delta::{
     CM_PROMASK, COUNT_PROMASK, CmDelta, CountDelta, DD_PROMASK, DdDelta, HLL_PROMASK, HllDelta,
     KeyedCmDelta, KeyedCountDelta, LayeredCountDelta, MAX_PROMASK, OctoThreshold, UNIVMON_PROMASK,
 };
+#[cfg(feature = "experimental")]
+pub use octo_delta::{COCO_PROMASK, CocoDelta, ELASTIC_PROMASK, ElasticDelta};
 
 pub mod fold_cms;
 pub use fold_cms::{FoldCMS, FoldCell, FoldEntry};
