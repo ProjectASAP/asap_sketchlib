@@ -2,131 +2,95 @@
 
 `HHHeap` is the top-k structure behind `CMSHeap`, `CSHeap`, `FoldCMS`, `FoldCS`,
 `UnivMon`, and the Octo aggregator. It sits on the insert path of every one of
-them, and it is the reason those inserts get slower as the candidate capacity
-grows. This page measures that cost, names its cause, and gives the change that
-removes it.
+them, so its cost per update is theirs. This page describes what it does per
+update and what that measures at.
 
 Reproduce with `cargo run --release --example hhheap_probe`. Numbers below are
 from an Apple M-series laptop, 200k updates drawn from a Zipf(1.1) stream over
 20k distinct keys.
 
-## The cost
+## The structure
 
-`HHHeap::update` runs at a rate inversely proportional to capacity:
+A capacity-bounded min-heap of `HHItem`, and an index from key digest to heap
+position.
 
-| capacity | `HHHeap` Mups/s (string keys) | `HHHeap` Mups/s (u64 keys) |
-| --- | --- | --- |
-| 8 | 4.63 | 8.26 |
-| 32 | 1.14 | 1.63 |
-| 128 | 0.22 | 0.33 |
-| 512 | 0.05 | 0.07 |
-| 2048 | 0.01 | 0.02 |
+- `positions: HashMap<u64, SmallVec<[usize; 2]>>` holds heap indices only.
+  Identity is re-checked against `heap[idx].key`, so no key is cloned into the
+  index. Two residents colliding on a 64-bit digest is rare enough that the
+  inline pair is effectively never spilled.
+- `slots: Vec<u64>` runs parallel to the heap array and holds each resident's
+  digest, so a sift that moves an element needs no re-hash of its key.
+- The map is keyed by a value that is already an xxh3 digest, so it uses
+  `DigestHasher` rather than running SipHash over it again.
 
-Every doubling of `k` halves the rate. At the sketch level this is not a rounding
-error — it is essentially all of the insert:
-
-| `CMSHeap` top_k | Minsert/s | share of time spent in the heap |
-| --- | --- | --- |
-| 8 | 5.32 | 97.3% |
-| 32 | 1.14 | 99.4% |
-| 128 | 0.23 | 99.9% |
-| 512 | 0.05 | 100.0% |
-| 2048 | 0.01 | 100.0% |
-
-The same `CountMin` without a heap runs at 200.6 Minsert/s.
-
-## The cause
-
-The heap itself is fine: `CommonHeap` sifts in `O(log k)`. The cost is
-`refresh_positions`, which every accepted update calls:
-
-```rust
-fn refresh_positions(&mut self) {
-    self.positions.clear();
-    for (idx, item) in self.heap.iter().enumerate() {
-        let slot = self.slot_for_item(&item.key);
-        self.positions.entry(slot).or_default().push((item.key.clone(), idx));
-    }
-}
-```
-
-Per update that is `k` xxh3 digests over full keys, `k` `HeapItem` clones (a
-heap allocation each for string keys), `k` SipHash probes into `positions`, and
-`k` `Vec` pushes — to repair the `O(log k)` positions a sift actually moved.
-It runs from all four mutation paths (`update`, `update_heap_item`, and both
-insert branches).
-
-## The change
-
-Maintain the index incrementally instead of rebuilding it.
-
-1. `positions: HashMap<u64, SmallVec<[usize; 2]>>` — store heap indices only.
-   Identity is re-checked against `heap[idx].key`, so no key is ever cloned.
-   `smallvec` is already a dependency.
-2. `slots: Vec<u64>` parallel to the heap array, holding each resident's slot
-   hash. A sift that moves an element then needs no re-hash of its key.
-3. `CommonHeap` grows movement-reporting entry points — `push_with`,
-   `update_at_with`, taking `&mut impl FnMut(usize, usize)` — so `HHHeap`
-   patches only the slots a sift touched. The existing `push`/`update_at`
-   delegate with a no-op closure, so no other caller changes.
-4. `refresh_positions` survives for `clear` and for rebuilding after
-   deserialization.
+`CommonHeap` reports movement through `push_back_with`, `replace_root_with` and
+`update_at_with`, each taking `&mut impl FnMut(usize, usize)` called once per
+swap the sift performs. `HHHeap` patches only the entries a sift touched;
+residents sharing a digest sit in the same bucket, so exchanging their two
+positions leaves that bucket unchanged and writes nothing.
 
 Per update this is one key hash, one map probe, and `O(log k)` index patches.
 
-The probe implements this design as `IndexedHeap` and asserts, at every
-capacity, that it retains the same top-k key set and the same counts as
-`HHHeap`:
+The index is derived, so it is not serialized. A decoded heap rebuilds it before
+first use.
 
-| capacity | `HHHeap` | indexed | speedup |
-| --- | --- | --- | --- |
-| 8 | 4.63 | 71.37 | 15.4x |
-| 32 | 1.14 | 54.84 | 48.2x |
-| 128 | 0.22 | 57.20 | 255.1x |
-| 512 | 0.05 | 60.02 | 1218.1x |
-| 2048 | 0.01 | 53.84 | 5815.8x |
+## What it measures at
 
-The rate is flat in `k`, which is the point: capacity stops being a throughput
-parameter. Folding 71 Mups/s into a 200 Minsert/s `CountMin` puts `CMSHeap`
-around 50 Minsert/s at any top-k, against 5.3 today at top_k=8.
+`HHHeap::update`, string keys and `u64` keys:
 
-## Smaller wins, in the same change
+| capacity | string Mups/s | u64 Mups/s |
+| --- | --- | --- |
+| 8 | 45.0 | 76.0 |
+| 32 | 43.6 | 54.5 |
+| 128 | 53.0 | 57.4 |
+| 512 | 55.5 | 70.0 |
+| 2048 | 52.9 | 71.2 |
 
-- **Identity-hash the index.** `positions` is keyed by a u64 that is already an
-  xxh3 digest; running SipHash over it again buys nothing. A
-  `BuildHasherDefault<IdentityHasher>` removes that from every `find`.
-- **Keep the index out of the serialized state.** `positions` is derived data
-  and is serialized today. `#[serde(skip)]` on both `positions` and `slots`,
-  with a rebuild on first use after deserialization, shrinks `UnivMon` state by
-  the whole candidate index.
-- **Counts only ever rise**, since they come from the sketch estimate. In a
-  min-heap that means a resident update only ever sinks, so `update_at`'s
-  "try `bubble_down`, else `bubble_up`" order is already the right one.
+The rate is flat in `k`, which is the property that matters: capacity is an
+accuracy parameter, not a throughput one.
 
-## The option that is not worth taking
+At the sketch level, against a bare `CountMin` at 210.1 Minsert/s:
 
-Dropping the index entirely and scanning the `k` residents linearly is simpler
-and still beats today's code by 5-30x, because it allocates and hashes nothing:
+| `CMSHeap` top_k | Minsert/s | share of time spent in the heap |
+| --- | --- | --- |
+| 8 | 31.2 | 85.1% |
+| 32 | 28.4 | 86.5% |
+| 128 | 28.1 | 86.6% |
+| 512 | 29.1 | 86.1% |
+| 2048 | 27.0 | 87.2% |
 
-| capacity | `HHHeap` | linear scan | indexed |
-| --- | --- | --- | --- |
-| 8 | 4.63 | 24.47 | 71.37 |
-| 32 | 1.14 | 7.54 | 54.84 |
-| 128 | 0.22 | 2.05 | 57.20 |
-| 512 | 0.05 | 0.57 | 60.02 |
-| 2048 | 0.01 | 0.16 | 53.84 |
+The heap dominates the insert - it does a hash, a map probe and a sift against
+the sketch's four counter writes - but its share is flat in capacity.
 
-But it is `O(k)` per update, so it reintroduces the same falloff one order of
-magnitude up. The indexed design costs one `Vec<u64>` and a movement callback
-and is flat.
+## Why not Space-Saving
 
-A Space-Saving / Stream-Summary structure would give `O(1)` amortized updates,
-but it owns its own counters and its own eviction rule. `HHHeap` takes counts
-from the sketch it is attached to, so that would be a different algorithm rather
-than a faster index, and it would change which keys are retained.
+A `SpaceSaving` summary gives `O(1)` amortized updates, and this crate ships
+one. It is not a substitute here. Its `O(1)` rests on an arrival moving a
+counter to the *neighbouring* count bucket, while `HHHeap` takes its counts from
+the sketch it is attached to, where an estimate can jump by any amount. The two
+also retain different keys: Space-Saving owns its counters and its eviction
+rule, so it answers a different question. See
+[SpaceSaving](./api/api_space_saving.md).
+
+## Equivalence
+
+`HHHeap` is compared element for element against a reference that rebuilds the
+whole index after every accepted update, at capacities 0 through 257, over 30k
+updates, on both key forms, and with counts that fall as well as rise - see
+`differential` in `src/common/heap.rs`. Which key is seated, which is evicted,
+and where either lands are identical. `index_invariants` in the same file pins
+the index itself: every resident is reachable at its own position and the index
+carries nothing else.
+
+The map is keyed by `DigestHasher` rather than the randomly seeded default, so
+the structure carries no run-to-run state at all.
 
 ## Compatibility
 
-`HHHeap`'s field layout is internal. The portable MessagePack wire for the
-top-k sketches carries a `(key, value)` list, not the heap's serde layout, and
-no golden pins `HHHeap` bytes, so the field changes above are wire-safe.
+`HHHeap`'s serialized form is the heap and its capacity. The key index is
+derived rather than carried, and a decoded heap rebuilds it before first use.
+A named-map encoding that carries an index field still decodes, since the extra
+key is skipped; a positional encoding of the three-field form does not. Nothing
+in-crate writes the positional form: the portable MessagePack wire for the top-k
+sketches carries a `(key, value)` list and rebuilds through `update`, and the
+goldens cover CMS and HLL envelopes only.

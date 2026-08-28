@@ -4,13 +4,13 @@
 
 - **`src/common/`** - Foundation for all sketches ([api_common.md](./api/api_common.md))
   - `input.rs` - `DataInput` enum, `HeapItem`, `HHItem`, framework enums (`HydraCounter`, `L2HH`, `HydraQuery`)
-  - `structures/` - High-performance data structures (`Vector1D`, `Vector2D`, `Vector3D`, `CommonHeap`, `MatrixStorage`, `FixedMatrix`)
+  - `structures/` - High-performance data structures (`Vector1D`, `Vector2D`, `Vector3D`, `BitMatrix`, `CommonHeap`, `MatrixStorage`, `FixedMatrix`)
   - `heap.rs` - `HHHeap` convenience wrapper for heavy hitter tracking
-  - `hash.rs` - Hashing utilities (`hash_for_matrix`, `hash64_seeded`, `SEEDLIST`, `BOTTOM_LAYER_FINDER`) plus `SketchHasher` for custom hasher injection
+  - `hash.rs` - Hashing utilities (`hash_for_matrix`, `hash64_seeded`, `SEEDLIST`, `BOTTOM_LAYER_FINDER`) plus `SketchHasher` for custom hasher injection and `DigestHasher` / `DigestBuildHasher` for maps keyed by an already-hashed digest
   - `mode.rs` is under `src/sketches/` and provides `RegularPath` / `FastPath` type-level insert/estimate path selection
 
 - **`src/sketches/`** - Sketch implementations (status source: [apis.md](./apis.md))
-  - `Ready` in API index: `countminsketch.rs`, `countsketch.rs`, `hll.rs`, `kll.rs`, `ddsketch.rs`, `countminsketch_topk.rs`, `countsketch_topk.rs`
+  - `Ready` in API index: `countminsketch.rs`, `countsketch.rs`, `hll.rs`, `kll.rs`, `ddsketch.rs`, `countminsketch_topk.rs`, `countsketch_topk.rs`, `space_saving.rs`, `bloom.rs`
   - `Unstable` in API index: `coco.rs`, `elastic.rs`, `uniform.rs`, `kmv.rs`
   - Sketches converted to the ASAPv1 wire format use a `<sketch>.rs` (algorithm) + `<sketch>/wire.rs` (serialization) split: `hll.rs` + `hll/wire.rs` and `countminsketch.rs` + `countminsketch/wire.rs` today (see [asapv1_wire_format.md](./asapv1_wire_format.md))
 

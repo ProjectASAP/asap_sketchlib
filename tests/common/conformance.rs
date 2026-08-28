@@ -2,7 +2,8 @@
 //!
 //! New sketches plug into this kit by implementing one or more capability
 //! traits (`FrequencyOps`, `SignedFrequencyOps`, `CardinalityOps`,
-//! `QuantileOps`, `MergeOps`) and calling the matching `*_battery` functions.
+//! `QuantileOps`, `MembershipOps`, `MergeOps`) and calling the matching
+//! `*_battery` functions.
 //! Every battery is deterministic (seeded streams) and reports structured
 //! failures; call [`BatteryReport::assert_ok`] to turn them into test
 //! failures with expected-vs-actual context.
@@ -63,6 +64,12 @@ impl BatteryReport {
 // Capability traits (implement these on an adapter for your sketch)
 // ---------------------------------------------------------------------------
 
+/// Set-membership queries over copyable keys.
+pub trait MembershipOps<K> {
+    fn add(&mut self, key: &K);
+    fn contains(&self, key: &K) -> bool;
+}
+
 /// Point-frequency queries over copyable keys.
 pub trait FrequencyOps<K> {
     fn ingest(&mut self, key: &K);
@@ -111,6 +118,29 @@ impl Default for FrequencySpec {
             one_sided: false,
             rel_tol: 0.05,
             abs_tol: 2.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct MembershipSpec {
+    /// Ceiling on the measured false-positive rate.
+    pub max_fpp: f64,
+    /// Rate the sketch's own sizing predicts for this member count. The
+    /// ceiling is the sizing *target*, roughly an order of magnitude looser
+    /// than what a correctly sized filter delivers, so a wrong implementation
+    /// clears it; the prediction is the number to hold the sketch to.
+    pub predicted_fpp: Option<f64>,
+    /// Relative half-width allowed around `predicted_fpp`.
+    pub fpp_band: f64,
+}
+
+impl Default for MembershipSpec {
+    fn default() -> Self {
+        Self {
+            max_fpp: 0.01,
+            predicted_fpp: None,
+            fpp_band: 0.25,
         }
     }
 }
@@ -375,5 +405,98 @@ where
             format!("q={q} est {est:.3} outside [{lo:.3}, {hi:.3}]"),
         );
     }
+    report
+}
+
+/// Set-membership battery: no false negatives, and a false-positive rate the
+/// sketch's own sizing predicts.
+///
+/// - A fresh sketch rejects every probe.
+/// - After ingesting `members`, every member reports present. This is exact for
+///   a Bloom-style filter and a failure is a bug, not a tolerance miss.
+/// - Over `non_members`, disjoint from `members`, the measured false-positive
+///   rate stays at or under `spec.max_fpp` and, when the sketch reports a
+///   predicted rate, lands within `spec.fpp_band` of it either way.
+pub fn membership_battery<S, F, K>(
+    sketch: &str,
+    new_sketch: F,
+    members: &[K],
+    non_members: &[K],
+    spec: MembershipSpec,
+) -> BatteryReport
+where
+    S: MembershipOps<K>,
+    F: Fn() -> S,
+    K: Copy + Eq + Hash + Debug,
+{
+    let mut report = BatteryReport {
+        sketch: sketch.to_string(),
+        battery: "membership",
+        failures: vec![],
+    };
+
+    let member_set: std::collections::HashSet<K> = members.iter().copied().collect();
+    let probes: Vec<K> = non_members
+        .iter()
+        .copied()
+        .filter(|k| !member_set.contains(k))
+        .collect();
+
+    let empty = new_sketch();
+    let seen_when_empty = probes.iter().filter(|k| empty.contains(k)).count();
+    report.record(
+        "empty-rejects",
+        seen_when_empty == 0,
+        format!(
+            "a fresh sketch reported {seen_when_empty} of {} probes present",
+            probes.len()
+        ),
+    );
+
+    let mut filled = new_sketch();
+    for key in members {
+        filled.add(key);
+    }
+
+    let missing: Vec<&K> = members.iter().filter(|k| !filled.contains(k)).collect();
+    report.record(
+        "no-false-negatives",
+        missing.is_empty(),
+        format!(
+            "{} of {} members reported absent, first {:?}",
+            missing.len(),
+            members.len(),
+            missing.first()
+        ),
+    );
+
+    if !probes.is_empty() {
+        let hits = probes.iter().filter(|k| filled.contains(k)).count();
+        let rate = hits as f64 / probes.len() as f64;
+        report.record(
+            "false-positive-rate",
+            rate <= spec.max_fpp,
+            format!(
+                "measured {rate:.5} over {} probes, budget {:.5}",
+                probes.len(),
+                spec.max_fpp
+            ),
+        );
+
+        if let Some(predicted) = spec.predicted_fpp {
+            let (low, high) = (
+                predicted * (1.0 - spec.fpp_band),
+                predicted * (1.0 + spec.fpp_band),
+            );
+            report.record(
+                "predicted-false-positive-rate",
+                rate >= low && rate <= high,
+                format!(
+                    "measured {rate:.6} outside [{low:.6}, {high:.6}] around the predicted {predicted:.6}"
+                ),
+            );
+        }
+    }
+
     report
 }

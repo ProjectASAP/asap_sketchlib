@@ -10,8 +10,89 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+### Added
+
+- **`Bloom`, a partitioned Bloom filter.** `rows` slices of `cols` bits, one
+  slice per hash function, over a new packed `BitMatrix` that implements
+  `MatrixStorage` — so the filter probes the same `rows x cols` shape
+  `CountMin` does and a membership query is the row-wise minimum, which over
+  single bits is their AND. `with_capacity(n, p)` caps the slice count at
+  `BLOOM_MAX_SLICES` (the seed list's length, since two slices seeded from the
+  same entry are identical) and solves the slice width for that count, so
+  `predicted_fpp` never claims a rate the filter cannot deliver; each slice is
+  rounded up to a power of two, which removes the column fold's modulo bias.
+  Total bits are capped at `BLOOM_MAX_BITS`, and a non-finite target rate is
+  rejected. Union is exact, so the filter shards without loss. The `BloomMode`
+  marker tags the hash path on the wire, so bytes written by one path do not
+  decode into the other.
+- **`SpaceSaving`, a fixed-counter heavy-hitter summary.** The paper's
+  Stream-Summary: count-ordered buckets in a doubly linked list, each owning a
+  doubly linked list of its counters, plus a key index — so a unit arrival moves
+  one counter to the neighbouring bucket and an eviction takes the head of the
+  lowest bucket, constant work at any capacity. Both lists are index arenas
+  rather than pointers. A monitored key is sandwiched by its own error, and
+  `upper_bound` never reads below the truth for any key in the stream: the
+  summary carries the largest count known to have left it, so the ceiling
+  survives a merge that leaves it holding fewer keys than its capacity. Counts
+  saturate rather than wrap, and `merge_from` picks the same survivors on every
+  run. Only the monitored `(key, count, error)` triples reach the wire; the
+  arena is rebuilt on load and a payload that does not describe a valid summary
+  is rejected.
+- **`BitMatrix` in `common::structures`.** A packed one-bit-per-cell grid behind
+  the `MatrixStorage` interface. It carries `words`, `rows` and `cols` on the
+  wire and recomputes the word stride and column mask on load; out-of-range
+  coordinates panic rather than aliasing into a neighbouring row.
+- **`DigestHasher` in `common::hash`.** A `Hasher` for `u64` keys that are
+  already digests: it replaces the full byte-wise hash with a finalizing mix,
+  which is what a table index still needs once the digests come from a fixed
+  seed list. `DigestBuildHasher` is its `BuildHasher`.
+- **ASAPv1 wire serialization for `Bloom` (`0x17 0x00`) and `SpaceSaving`
+  (`0x18 0x00`).** `serialize_to_bytes` / `deserialize_from_bytes` on each,
+  through the shared envelope, with the metadata derived from the hasher's
+  `HashProfile` as Count-Min's and HLL's are. Bloom's payload is the packed
+  words and the insert count; its wire covers the geometries `with_capacity`
+  produces, on both sides, so it never emits bytes it would refuse to read.
+  Space-Saving's payload is the monitored `(key, count, error)` triples plus
+  `total` and the dropped-count ceiling — the bucket list, counter arena and key
+  index are rebuilt on load, so no crafted payload can point an arena index out
+  of bounds or into a cycle. Its `key_type` names the exact `HeapItem` variant
+  and is never widened, since the variant is part of a key's identity while the
+  digest is blind to it; a mixed-variant or 128-bit-keyed summary refuses to
+  serialize. Entries are emitted in a defined order, so equal summaries encode
+  to equal bytes. Both payloads are specified in `docs/asapv1_wire_format.md`
+  §3.4 and §3.5.
+- **`membership_battery` in the conformance kit.** A new `MembershipOps`
+  capability with the exact no-false-negative check, a false-positive-rate
+  ceiling and a band around `predicted_fpp`, since the existing batteries are
+  all frequency- or numeric-shaped.
+
 ### Changed
 
+- **Made `HHHeap::update` independent of capacity.** The key index was rebuilt
+  in full after every accepted update, cloning each resident's key, so the top-k
+  structure behind `CMSHeap`, `CSHeap`, `FoldCMS`, `FoldCS`, `UnivMon` and the
+  Octo aggregator cost `O(k)` per insert. It now holds heap indices only,
+  re-checking identity against the heap, and patches them through each sift:
+  `CommonHeap` gained `push_back_with`, `replace_root_with` and
+  `update_at_with`, which report every swap to a caller-supplied closure, while
+  `push` and `update_at` delegate with a no-op and are unchanged for every other
+  caller. A parallel `slots` vector carries each resident's digest so a sift
+  re-hashes nothing, and the index is keyed by `DigestHasher` rather than
+  running SipHash over a value that is already an xxh3 digest. Measured on a
+  Zipf(1.1) stream, `HHHeap::update` goes from 4.75 to 45.0 Mups/s at capacity
+  8 and from 0.01 to 52.9 at capacity 2048 — flat in `k` rather than halving
+  with each doubling — and `CMSHeap::insert` at top_k=2048 goes from 0.009 to
+  27.0 Minsert/s. Retention is unchanged: a differential test compares the heap
+  element for element against the rebuild implementation at capacities 0 through
+  257 over 30k updates on both key forms.
+- **BREAKING (positionally encoded `HHHeap` and `UnivMon` state):** `HHHeap` no
+  longer serializes its key index, which is derived data rebuilt on load. The
+  serialized form went from `{heap, positions, k}` to `{heap, k}`. A named-map
+  encoding written by an earlier version still decodes, since the extra key is
+  skipped; a positional encoding of the three-field form does not. Nothing
+  in-crate writes the positional form — the portable MessagePack wire for the
+  top-k sketches carries a `(key, value)` list and rebuilds through `update`,
+  and the goldens cover CMS and HLL envelopes only.
 - **BREAKING (external implementors of `MatrixFastHash`):** the trait gained a
   required `row_hash(row, mask_bits, mask)` method, split out of
   `col_for_row` so storages can decode against precomputed parameters and

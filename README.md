@@ -10,7 +10,7 @@ A Rust library for **streaming data sketches** — compact data structures that 
 ## Why asap_sketchlib
 
 - **Fast.** Up to 8–14× higher insertion throughput than comparable libraries on frequency sketches, 2–3× on cardinality sketches, and 2–4× on quantile sketches. Rust-native with no language-boundary overhead. See [benchmarks](#performance).
-- **High coverage.** Supports frequency, cardinality, quantile, and distribution sketches (`CountMin`, `Count`, `HyperLogLog`, `KLL`, `DDSketch`). Also includes algorithms not found in other libraries: `UnivMon` for estimating a broad class of streaming statistics (L1/L2 norms, entropy) in a single pass, `Hydra` for answering sketch queries over arbitrary subpopulations without per-group sketches, and `NitroBatch` for accelerating sketch updates through batching. Unique sketch frameworks for sliding windows (`ExponentialHistogram`) and subpopulation queries (`Hydra`).
+- **High coverage.** Supports frequency, cardinality, quantile, distribution, heavy-hitter, and set-membership sketches (`CountMin`, `Count`, `HyperLogLog`, `KLL`, `DDSketch`, `SpaceSaving`, `Bloom`). Also includes algorithms not found in other libraries: `UnivMon` for estimating a broad class of streaming statistics (L1/L2 norms, entropy) in a single pass, `Hydra` for answering sketch queries over arbitrary subpopulations without per-group sketches, and `NitroBatch` for accelerating sketch updates through batching. Unique sketch frameworks for sliding windows (`ExponentialHistogram`) and subpopulation queries (`Hydra`).
 - **Easy to use.** Most sketches provide a unified API style, while some (such as `KLL`) use `update`/`quantile`; the crate also offers typed inputs via `DataInput`, pluggable hashing via `SketchHasher`, and multi-sketch composition with shared hashing (`HashSketchEnsemble`).
 
 ## Supported Sketches
@@ -18,6 +18,8 @@ A Rust library for **streaming data sketches** — compact data structures that 
 | Goal | Sketch | When to pick it | What it does | Polars equivalent |
 | --- | --- | --- | --- | --- |
 | Frequency estimation | `CountMin`, `Count` | Fast approximate counts for high-volume keys | Estimates how often each key appears in a stream | `df.group_by("key").agg(pl.len())` |
+| Heavy hitters / frequent items | `SpaceSaving`, `CMSHeap`, `CSHeap` | The top-k keys and their counts under a fixed memory budget | Tracks the most frequent keys of a stream, each with a per-key error bound | `df["key"].value_counts().top_k(10, by="count")` |
+| Approximate set membership | `Bloom` | Cheap "have I seen this key?" checks at a chosen false-positive rate | Answers membership with no false negatives and a bounded false-positive rate | `df["key"].is_in(seen)` — exact, but stores every key |
 | Cardinality estimation | `HyperLogLog` (`Classic`, `ErtlMLE`, `HIP`) | Approximate distinct counts with bounded memory | Estimates the number of unique elements | `df["col"].n_unique()` |
 | Quantiles / distribution | `KLL`, `DDSketch`, `UnivMonQ` (experimental) | Percentiles alone, or percentiles sharing state with universal frequency metrics | Approximates arbitrary quantiles (e.g. p50, p99) of a value distribution | `df["col"].quantile(0.99)` |
 | Subpopulation queries | `Hydra` | Hierarchical / filtered sketch queries | Answers sketch queries over arbitrary subpopulations without maintaining per-group sketches | No direct equivalent — requires per-group aggregation |

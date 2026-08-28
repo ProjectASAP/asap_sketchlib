@@ -34,11 +34,11 @@ pub mod structure_utils;
 pub mod structures;
 
 pub use hash::{
-    BOTTOM_LAYER_FINDER, CANONICAL_HASH_SEED, DefaultXxHasher, HYDRA_SEED, HashProfile,
-    MatrixHashMode, SEEDLIST, SketchHasher, hash_for_matrix, hash_for_matrix_generic,
-    hash_for_matrix_seeded, hash_for_matrix_seeded_generic, hash_for_matrix_seeded_with_mode,
-    hash_for_matrix_seeded_with_mode_generic, hash_item64_seeded, hash_item128_seeded,
-    hash_mode_for_matrix, hash64_seeded, hash128_seeded,
+    BOTTOM_LAYER_FINDER, CANONICAL_HASH_SEED, DefaultXxHasher, DigestBuildHasher, DigestHasher,
+    HYDRA_SEED, HashProfile, MatrixHashMode, SEEDLIST, SketchHasher, hash_for_matrix,
+    hash_for_matrix_generic, hash_for_matrix_seeded, hash_for_matrix_seeded_generic,
+    hash_for_matrix_seeded_with_mode, hash_for_matrix_seeded_with_mode_generic, hash_item64_seeded,
+    hash_item128_seeded, hash_mode_for_matrix, hash64_seeded, hash128_seeded,
 };
 pub use heap::HHHeap;
 pub use input::{DataInput, HHItem, HeapItem, L2HH, heap_item_to_sketch_input, input_to_owned};
@@ -48,7 +48,7 @@ pub use precompute_sample::PRECOMPUTED_SAMPLE;
 pub use precompute_sample2::PRECOMPUTED_SAMPLE_RATE_1PERCENT;
 pub use structure_utils::{Nitro, compute_median_inline_f64};
 pub use structures::{
-    CommonHeap, CommonHeapOrder, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128,
+    BitMatrix, CommonHeap, CommonHeapOrder, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128,
     FastPathHasher, FixedMatrix, HllBucketList, HllBucketListP12, HllBucketListP14,
     HllBucketListP16, HllRegisterStorage, KeepLargest, KeepSmallest, MatrixFastHash,
     MatrixHashType, MatrixStorage, QuickMatrixI32, QuickMatrixI64, QuickMatrixI128, Vector1D,

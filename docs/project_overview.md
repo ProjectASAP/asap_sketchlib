@@ -6,8 +6,8 @@ implementations, and orchestration/windowing frameworks in one crate.
 
 ## What This Repo Is
 
-- A shared common layer for input types, hashing, matrix/heap structures, and utilities.
-- A set of core sketch implementations (frequency, cardinality, quantile/distribution).
+- A shared common layer for input types, hashing, matrix/bit/heap structures, and utilities.
+- A set of core sketch implementations (frequency, cardinality, quantile/distribution, heavy hitters, set membership).
 - A framework layer for hierarchical queries, sketch coordination, and windowed analytics.
 - An actively evolving codebase focused on performance and API consistency.
 
@@ -24,7 +24,7 @@ implementations, and orchestration/windowing frameworks in one crate.
 
 ## Current State
 
-- **Ready**: Core sketch APIs marked `Ready` in [apis.md](./apis.md): `CountMin`, `Count`, `HyperLogLog`, `KLL`, `DDSketch`, `CMSHeap`, `CSHeap`
+- **Ready**: Core sketch APIs marked `Ready` in [apis.md](./apis.md): `CountMin`, `Count`, `HyperLogLog`, `KLL`, `DDSketch`, `CMSHeap`, `CSHeap`, `SpaceSaving`, `Bloom`
 - **Notice**: Core sketch APIs currently marked `Unstable`: `Elastic`, `Coco`, `UniformSampling`, `KMV`
 - Framework APIs marked `Ready`: `Hydra`, `HashSketchEnsemble`, `UnivMon`, `UnivMon Optimized`, `NitroBatch`, `ExponentialHistogram`, `EHSketchList`
 - Framework APIs currently marked `Unstable`: `EHUnivOptimized`

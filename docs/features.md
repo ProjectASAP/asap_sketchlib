@@ -20,14 +20,16 @@ This document provides a high-level overview of implemented and planned features
 
 - `DataInput` - Unified type system for all sketches
 - `Vector1D`, `Vector2D` - Flat storage structures for sketch counters
+- `BitMatrix` - Packed one-bit-per-cell grid behind the same `MatrixStorage` interface as the counter matrices, for membership sketches
 - `impl_fixed_matrix!` macro - Define compile-time fixed-size matrix types with any counter type and dimensions
 - `impl_hll_bucket_list!` macro - Define compile-time fixed-size HLL register storage types at any precision (the crate ships `lg_k` 12/14/16)
 - `CommonHeap` & `HHHeap` - Generic and specialized heaps for heavy hitter tracking
 - Deterministic hashing with seed management
 - Pluggable hash via the `SketchHasher` trait — swap the hash function without changing sketch code
+- `DigestHasher` / `DigestBuildHasher` - Single-avalanche hasher for maps keyed by a value that is already a digest
 - `RegularPath` / `FastPath` modes - Type-level pairing of insert/estimate paths
 
-**Sketch APIs** — Frequency estimation, cardinality, quantiles, heavy hitters, sampling, and more. See [apis.md](apis.md) for the full list with per-sketch status, error guarantees, and references.
+**Sketch APIs** — Frequency estimation, cardinality, quantiles, heavy hitters, set membership, sampling, and more. See [apis.md](apis.md) for the full list with per-sketch status, error guarantees, and references.
 
 ### Frameworks
 
@@ -120,6 +122,8 @@ MessagePack (`rmp-serde`) support. **serde support** means the type derives `Ser
 | UniformSampling | Yes | In Progress |
 | FoldCMS / FoldCS | Yes | In Progress |
 | CMSHeap / CSHeap | In Progress | In Progress |
+| SpaceSaving | Yes | Yes |
+| Bloom | Yes | Yes |
 | Hydra | Yes | Yes |
 | UnivMon | Yes | Yes |
 | UnivMonQ (experimental) | Internal wire DTO | Yes (native MessagePack) |

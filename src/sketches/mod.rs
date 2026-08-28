@@ -46,6 +46,16 @@ pub use coco::Coco;
 #[cfg(feature = "experimental")]
 pub use coco::CocoBucket;
 
+/// Fixed-counter heavy-hitter tracking over a Stream-Summary.
+pub mod space_saving;
+pub use space_saving::{SPACE_SAVING_DEFAULT_CAPACITY, SpaceSaving};
+
+/// Approximate set membership over a packed bit grid.
+pub mod bloom;
+pub use bloom::{
+    BLOOM_DEFAULT_COLS, BLOOM_DEFAULT_ROWS, BLOOM_MAX_BITS, BLOOM_MAX_SLICES, Bloom, BloomMode,
+};
+
 pub mod countsketch;
 pub use countsketch::Count;
 

@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implementing (Rust).** HLL, Count-Min, and KLL (compact + dynamic) serialize through the shared `message_pack_format::envelope` module per this spec.
+- **Implementing (Rust).** HLL, Count-Min, KLL (compact + dynamic), Bloom, and Space-Saving serialize through the shared `message_pack_format::envelope` module per this spec.
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -204,6 +204,8 @@ This registry is the master list of algorithms still to design payloads for.
 | `0x14 0x00` | EHSketchList | - | TBD | reserved / not designed |
 | `0x15 0x00` | EHUnivOptimized (`Unstable`) | - | TBD | reserved / not designed |
 | `0x16 0x00` | OctoSketch | - | TBD | reserved / not designed |
+| `0x17 0x00` | Bloom | Partitioned | Section 3.4 | implemented |
+| `0x18 0x00` | Space-Saving | Stream-Summary | Section 3.5 | implemented |
 
 **Mapping notes** (mismatches between `apis.md` and Go's `magic_ids.go`):
 
@@ -253,7 +255,7 @@ The metadata map is **two groups** of fields, written on the wire in this order:
 | Group | Role | Fields |
 | ----- | ---- | ------ |
 | **Hash spec** | how keys were hashed (check mergeability + re-hash a query key) | `metadata_version`, `hash_profile_id`, `hash_algorithm`, `seed_derivation`, `input_encoding`, `seed_list`, + the seed index(es) it uses |
-| **Structural params** | parameters that shape the payload | `precision` (HLL); `rows`, `cols`, `counter_type`, `mode` (Count-Min); `k`, `m`, `item_type`, optional `seed` (KLL) |
+| **Structural params** | parameters that shape the payload | `precision` (HLL); `rows`, `cols`, `counter_type`, `mode` (Count-Min); `k`, `m`, `item_type`, optional `seed` (KLL); `rows`, `cols`, `mode` (Bloom); `capacity`, `key_type` (Space-Saving) |
 
 The two tables below are the field-by-field detail of each group.
 
@@ -279,13 +281,15 @@ The two tables below are the field-by-field detail of each group.
 | Key | Type | Applies to | Meaning |
 | ------- | ------ | -------- | --------- |
 | `precision` | u8 | HLL | `12` / `14` / `16`; register count = `2^precision` |
-| `rows` | u32 | Count-Min | matrix depth (number of hash rows) |
-| `cols` | u32 | Count-Min | matrix width (number of columns) |
+| `rows` | u32 | Count-Min, Bloom | matrix depth; for Bloom the number of slices |
+| `cols` | u32 | Count-Min, Bloom | matrix width; for Bloom the bits per slice |
 | `counter_type` | string | Count-Min | `"i64"` or `"f64"`; element type of `counts` |
-| `mode` | string | Count-Min | `"fast"` or `"regular"`; key-to-column derivation |
+| `mode` | string | Count-Min, Bloom | `"fast"` or `"regular"`; key-to-column derivation |
 | `k` | u32 | KLL | compactor capacity (accuracy parameter) |
 | `m` | u32 | KLL | minimum level capacity |
 | `item_type` | string | KLL | `"f64"` or `"i64"`; element type of `items` |
+| `capacity` | u32 | Space-Saving | monitored-counter budget |
+| `key_type` | string | Space-Saving | exact `HeapItem` variant of `keys`, never widened (Section 3.5) |
 | `seed` | u64 | KLL | **optional**; the reproducible compaction seed, present only when the sketch carries one, else the key is omitted. Compact KLL only (`KLLDynamic` never emits it). The one optional key in v1. |
 
 Count-Min's matrix dimensions are **configuration** (they shape the payload, like HLL's `precision`), so per the config-to-metadata rule they live here.
@@ -387,7 +391,94 @@ Both KLL variants (the compact fixed-buffer `KLL` and the growable `KLLDynamic`)
 
 **Item order (cross-language contract).** `levels` / `items` use the **top-most-level-first** layout, byte-for-byte matching `sketchlib-go`'s `KLLState`: index `i` in `levels` maps to compactor level `num_levels - 1 - i`, and level 0's run is in **input order**. The compact `KLL` grows its buffer leftward and stores level 0 reverse-input, so its encoder reverses level 0 back to input order (and its decoder reverses it in); `KLLDynamic` already stores this layout natively. Within a level, order past the first compaction is not guaranteed byte-identical across the two Rust variants (or across languages), but the retained set and quantiles agree — see the caveat on `KLL::wire_items`.
 
-### 3.4 onward: payloads not yet designed
+### 3.4: Bloom payload (`0x17 0x00`)
+
+`Bloom` is the *partitioned* filter: `rows` slices of `cols` bits over the same `rows x cols` grid Count-Min probes, one bit set per slice.
+Its structural parameters — the grid dimensions (`rows` / `cols`) and the column-derivation **mode** (`"fast"` / `"regular"`) — live in the metadata exactly as Count-Min's do, so the payload is the packed bits plus the one counter nothing else determines:
+
+| Pos | Field | Type | Notes |
+| ----- | ------- | ------ | ------- |
+| 0 | `words` | array | the bit grid packed into `u64`s, **row-major**; each row padded out to whole words, so the stride is `ceil(cols / 64)` and the length is `rows * ceil(cols / 64)` |
+| 1 | `inserted` | u64 | `insert` calls the filter has seen, duplicates included |
+
+`rows` and `cols` are metadata structural params (Section 2), so the payload omits them and the decoder derives the word stride from `cols`.
+`mode` records `RegularPath` vs `FastPath` for the same reason Count-Min does: the two paths fold a key into different columns on most geometries, so a filter read back on the wrong path answers no about its own members.
+`inserted` is **not** derivable from `words` — re-inserting a key sets no new bit — so it is carried. Everything else the filter reports is: `fill_ratio`, `estimated_fpp` and `predicted_fpp` are all recomputed from the bits and the dimensions, and none of them appear.
+
+**Wire-eligible geometries.** The wire covers what `Bloom::with_capacity` produces: `1 <= rows <= 20` (`BLOOM_MAX_SLICES`, the seed list length), a **power-of-two** `cols`, and `rows * cols <= 2^31` (`BLOOM_MAX_BITS`).
+`Bloom::with_dimensions` is free to build a filter outside that subset — more rows than there are seeds (which duplicate an earlier slice bit for bit), or a modulo-folded width — and such a filter is rejected on **both** sides, so the format never emits bytes it would refuse to read back.
+This mirrors Count-Min, whose wire covers i64/f64 counters while the in-memory type stays freer (Section 3.2, Section 5).
+
+**Decode rules** (all fail closed, per Section 1's decoder rules):
+
+1. `kind_id` is `0x17 0x00`; any other id is rejected.
+2. The metadata's hash spec and `mode` must equal the target type's own, with `rows` / `cols` echoed back since those are structural and the filter is sized from them. Cross-profile and cross-mode bytes are rejected.
+3. `rows` and `cols` are both non-zero, `cols` is a power of two, `rows <= 20`, and `rows * cols` neither overflows nor exceeds `2^31`. Checked **before** anything is sized from the declared dimensions, so a hostile geometry never reaches an allocation.
+4. `len(words) == rows * ceil(cols / 64)` exactly, and that product must not overflow.
+5. No bit may be set in a row's **trailing padding**, positions `cols .. 64*ceil(cols/64)`. A query cannot reach those bits, but `count_ones` sums them, so a crafted payload could skew every rate the filter reports — `fill_ratio`, `estimated_fpp`, `is_empty` — while every membership answer still looked normal. No encoder can produce them, so the rule never rejects real bytes, and it makes the decoded form canonical: a round trip re-serializes byte-identically.
+
+### 3.5: Space-Saving payload (`0x18 0x00`)
+
+`SpaceSaving` monitors a fixed number of keys in a Stream-Summary: a doubly linked list of count buckets, a counter arena, and a key index into it.
+**None of that structure reaches the wire.** Every link and index is derivable from the `(key, count, error)` triples the summary answers with, so the payload carries the triples plus the two running scalars and the decoder rebuilds the arenas. The structure is also the reason to do it this way: with no arena index on the wire, no crafted payload can point one out of bounds or into a cycle.
+
+The counter budget `capacity` and the `key_type` are configuration and live in the metadata (Section 2), so the payload is:
+
+| Pos | Field | Type | Notes |
+| ----- | ------- | ------ | ------- |
+| 0 | `keys` | array | one monitored key per counter; element type = `key_type`; homogeneous |
+| 1 | `counts` | array | u64 recorded count, parallel to `keys` |
+| 2 | `errors` | array | u64 error allowance, parallel to `keys`; `errors[i] <= counts[i]` |
+| 3 | `total` | u64 | total weight recorded, monitored or displaced |
+| 4 | `floor` | u64 | the largest count known to have left the summary |
+
+The three arrays are parallel and equal-length; the number of monitored keys is `len(keys)` (derived, so not stored).
+`min_count` is **not** stored either: it is `max(floor, smallest count still held)` and is recomputed on load.
+
+`floor`, by contrast, is **not** derivable from the triples — it records what an eviction or a merge dropped, and a merged summary can hold fewer keys than its capacity and still be missing keys the other side had already discarded. A payload carrying only the triples would decode such a summary with no ceiling at all, silently reporting `upper_bound == 0` for exactly the keys the ceiling exists to bound. So it is carried.
+
+**Metadata vs payload.** `capacity` is the summary's one sizing parameter, chosen at construction, so per the config-to-metadata rule it belongs in the descriptor (like HLL's `precision` or Count-Min's `rows`/`cols`). `key_type` is a structural param in the Count-Min `counter_type` / KLL `item_type` sense: it fixes the element type of the payload's `keys` array, and the payload cannot be read without it.
+
+Space-Saving carries the hash-spec group — it hashes, and a consumer must reproduce that hash to query a key — but carries **no seed-index key**. It hashes every key at seed index `0` unconditionally: that is a fixed part of the algorithm, not a profile choice, so neither `canonical_seed_index` nor `matrix_seed_index` would describe it truthfully, and a metadata field that can be wrong is worse than none.
+
+**`key_type` names the exact key variant, and is never widened.**
+Count-Min's counter type is a Rust type parameter, fixed at compile time. A Space-Saving key's type is a **runtime** property: keys are stored as `HeapItem`, a 16-variant enum, and one summary's keys are whatever the caller inserted. So one `key_type` names the exact variant present and `keys` is homogeneous in it:
+
+| `key_type` | `HeapItem` variant | msgpack element type |
+| ------- | ------- | ------- |
+| `"i8"` / `"i16"` / `"i32"` / `"i64"` / `"isize"` | `I8` / `I16` / `I32` / `I64` / `ISIZE` | integer, family + width per Section 4 |
+| `"u8"` / `"u16"` / `"u32"` / `"u64"` / `"usize"` | `U8` / `U16` / `U32` / `U64` / `USIZE` | integer, family + width per Section 4 |
+| `"f32"` | `F32` | float32 (`0xca`) |
+| `"f64"` | `F64` | float64 (`0xcb`) |
+| `"string"` | `String` | `str` |
+
+`"f32"` is the one place a float is *not* widened to float64: the key's variant is the identity, so narrowing or widening it would change which key it is. Section 4's "always float64" rule governs *counter* and *sample* values, which have no identity to preserve.
+
+**Why not widen (e.g. `i32` to `i64`, as Count-Min does for counters).** A Count-Min counter is a number and widening it is lossless. A Space-Saving key is an *identity*, and the variant is part of it. `HeapItem`'s equality against a query `DataInput` is variant-exact — `HeapItem::I64(5)` does **not** equal `DataInput::I32(5)`. The digest, however, is variant-blind: the whole signed family hashes its value widened to `u64`, so a widened key lands in the **same index slot** and then fails the equality check. The result is not an error; it is `estimate` returning `0` for a key the summary is holding, with nothing anywhere to indicate a problem. So the wire records the variant exactly and the decoder rebuilds it exactly.
+
+Two summaries have no encoding and **fail to serialize** rather than being coerced:
+
+- **Mixed variants.** A summary whose monitored keys are of different `HeapItem` variants has no single `key_type`. Coercing them to a common type would silently break the keys that were coerced (above), so the encode fails with an error naming the mismatch.
+- **128-bit keys.** `HeapItem::I128` / `U128` have no msgpack integer form (msgpack integers stop at 64 bits), so they are not wire types — the same line Count-Min draws at `i128` counters. Convert to a wire-eligible key type first; only the owner knows whether the mapping is lossless (Section 5).
+
+**Empty summary.** A summary that monitors nothing has no variant to report. It emits `key_type = "u64"` with three empty arrays, so an empty summary has exactly one encoding rather than one per producer.
+
+**Emitted order (cross-language contract).** The payload is **order-defined**: entries are written in **descending `count`**, ties broken by a **total order over the key** (variant tag first, then the value — the same order `merge_from` uses to break its own ties, so a merge and an encode agree). This is required, not cosmetic: `entries()` order follows the counter arena and `top_k` order follows the bucket walk, and neither survives a rebuild, so an unordered payload would re-serialize to different bytes than it decoded from. With the order pinned, two summaries holding the same triples emit the same bytes whatever order they were seated in, and re-serializing a decoded summary reproduces its bytes exactly.
+
+**Decode rules.** Fail **closed** on each, with an error and never a panic:
+
+1. `kind_id` is `0x18 0x00`.
+2. The hash-spec group matches the **target hasher's** `HashProfile`. `capacity` and `key_type` are properties of the *stored* summary rather than of the target type, so they are echoed back into the expected metadata rather than pinned — the same treatment Count-Min gives `rows`/`cols`.
+3. `key_type` is one of the thirteen names above; anything else is rejected. The `keys` array is then read **as** that type, so a payload whose keys are not of the declared type is rejected by the msgpack decode itself — string-keyed bytes relabelled `"u64"` do not decode as a `u64`-keyed summary.
+4. `keys`, `counts` and `errors` have equal length.
+5. `capacity >= 1`, and `len(keys) <= capacity`.
+6. Every `counts[i] >= 1` (a counter at zero is not a state the algorithm reaches) and `errors[i] <= counts[i]`.
+7. No key appears twice.
+8. `capacity` **never sizes an allocation.** The counter arena and key index are sized from `len(keys)`, so a payload declaring `capacity = 2^32 - 1` with two counters costs two counters. A decoder must not preallocate from a declared size.
+
+`min_count`, the bucket list, the counter arena and the key index are then recomputed from the validated triples; nothing about them is trusted from the wire.
+
+### 3.6 onward: payloads not yet designed
 
 The remaining `kind_id`s reserve a family byte with payload TBD (Section 1 registry has their "assigned in Go" status). Likely shape when designed:
 
