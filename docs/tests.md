@@ -14,6 +14,8 @@ cargo test
 
 Test file: [`src/sketches/countminsketch.rs`](../src/sketches/countminsketch.rs)
 
+Wire tests: [`src/sketches/countminsketch/wire.rs`](../src/sketches/countminsketch/wire.rs)
+
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
 | `dimension_test` | Default/custom dimensions initialize zeroed counters. | Verifies default dimensions (`rows=3`, `cols=4096`), custom dimensions (`3x17`), and zero-initialized counters after construction. |
@@ -23,9 +25,13 @@ Test file: [`src/sketches/countminsketch.rs`](../src/sketches/countminsketch.rs)
 | `countmin_apply_delta_increments_parent_counter` | Apply delta increments parent counter. | Constructs a `CmDelta{row=1, col=5, value=CM_PROMASK}`, applies it to a `3x64` parent CMS, and verifies the target counter at `(1,5)` equals `CM_PROMASK`. |
 | `cm_regular_path_correctness` | Regular-path hashing, counters, and estimates are exact on a deterministic stream. | Recomputes expected counter indices for `I32(0..9)` using per-row hashing, asserts exact full-matrix equality after one pass, doubled counters after second pass, and estimate `== 2` for each inserted key. |
 | `cm_fast_path_correctness` | Fast-path counter placement matches bit-sliced hash mapping. | Recomputes expected fast-path indices for `I32(0..9)` from one hash plus row bit-slices/mask bits and asserts exact full-matrix equality. |
-| `cm_error_bound_zipf` | Zipf-stream error bound holds for regular and fast paths. | On `200_000` Zipf samples with domain `8192` and exponent `1.1`, checks both paths satisfy: number of distinct queried keys with `\|estimate - true\| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
-| `cm_error_bound_uniform` | Uniform-stream error bound holds for regular and fast paths. | On `200_000` uniform samples in `[100.0, 1000.0]`, checks both paths satisfy: number of distinct queried keys with `\|estimate - true\| < epsilon * N` is `> (1 - delta) * distinct_key_count`, with `epsilon = e / cols`, `delta = e^-rows`. |
 | `count_min_round_trip_serialization` | Serialization round trip preserves full sketch state. | Serializes/deserializes a populated `3x8` regular-path sketch and verifies dimensions plus the full counter array are unchanged. |
+| `count_min_custom_hasher_profile_round_trips_and_is_self_describing` | The metadata describes the hasher that built the sketch rather than a hardcoded profile. | For a `3x8` sketch over a hasher declaring its own `HashProfile`, verifies the counter array round-trips, the bytes differ from the standard-profile sketch's over the same inserts, and a standard-profile decode rejects them. |
+| `count_min_f64_and_mode_in_metadata_round_trip` | The `f64` counter type and the `mode` both travel in the metadata. | Round-trips a `4x16` fast-path `Vector2D<f64>` sketch fed fractional weights, verifies the counter array is preserved, then that the same bytes fail to decode as an `i64` regular-path sketch. |
+| `count_min_rejects_zero_dimension_payload` | A zero dimension is a decode error, not a `Vector2D::from_fn` panic. | Verifies a crafted `4x0` envelope with an empty `counts` payload fails rather than panicking in the `cols.ilog2()` mask derivation. |
+| `cms_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the eleven `CmsMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `CmsMetadata`. |
+| `count_min_i32_round_trips_and_is_pinned_by_counter_type` | The `i32` wire config round-trips and its width is identity, not a detail. | Round-trips a `2x4` `Vector2D<i32>` sketch, then verifies its bytes differ from the numerically equal `i64` sketch's, that `i32` bytes fail to decode as `i64`, and that `i64` bytes fail to decode as `i32`. |
+| `count_min_counter_types_reject_each_other` | Each wire counter type refuses the others' bytes. | Verifies a `2x4` `f64` envelope fails to decode as both an `i32` and an `i64` sketch, and that an `i32` envelope fails to decode as an `f64` one. |
 
 ### Count
 
@@ -54,30 +60,24 @@ Wire tests: [`src/sketches/countsketch/wire.rs`](../src/sketches/countsketch/wir
 | `count_sketch_rejects_foreign_kind_id` | Count-Min's kind_id is refused although the payload shape is identical. | Verifies a `3x8` `CountMin<Vector2D<i64>, RegularPath>` envelope fails to decode as a `Count`. |
 | `count_sketch_rejects_zero_dimension_payload` | A zero dimension is a decode error, not a `Vector2D::from_fn` panic. | Verifies a crafted `4x0` envelope with an empty `counts` payload fails rather than panicking in the `cols.ilog2()` mask derivation. |
 | `count_sketch_rejects_dimension_length_mismatch` | The length check fires from the declared dimensions, before any allocation is sized from them. | Verifies a crafted envelope declaring `1024x1024` while carrying three counters fails. |
-| `count_sketch_rejects_serializing_an_unfilled_matrix` | The encode side refuses a matrix its own decoder would reject. | Verifies `Vector2D::init(2, 4)`, which reserves four cells without filling them, fails to serialize rather than emitting a `2x4` envelope carrying an empty `counts` array. |
+| `count_sketch_rejects_serializing_an_unfilled_matrix` | The encode side refuses a matrix its own decoder would reject. | Verifies `Vector2D::init(2, 4)`, which reserves eight cells without filling them, fails to serialize rather than emitting a `2x4` envelope carrying an empty `counts` array. |
 | `cs_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the eleven `CsMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `CsMetadata`. |
 | `cs_metadata_rejects_a_missing_counter_type_key` | `counter_type` is required and can never be silently defaulted. | Encodes the other ten `CsMetadata` fields as a named map with `counter_type` omitted and verifies it does not decode as `CsMetadata`. |
 | `cs_metadata_rejects_a_foreign_counter_type_name` | A Count-Min-only counter type name is not a Count Sketch one. | Wraps metadata naming `counter_type: "f64"` around a valid 2x4 payload and verifies both the `i64` and the `i32` sketch reject it. |
 | `count_sketch_i32_round_trips_and_is_pinned_by_counter_type` | The `i32` wire config round-trips and its width is identity, not a detail. | Round-trips a `2x4` `Vector2D<i32>` sketch, then verifies its bytes differ from the numerically equal `i64` sketch's, that `i32` bytes fail to decode as `i64`, and that `i64` bytes fail to decode as `i32`. |
-| `countl2hh_estimates_and_l2_are_consistent` | CountL2HH updates keep estimate and L2 consistent. | For `CountL2HH(3x32)`, applies `+5` then `-2` to one key, verifies estimates `5.0` then `3.0`, and asserts non-trivial L2 (`>= 3.0`). |
-| `countl2hh_merge_combines_frequency_vectors` | CountL2HH merge combines per-key frequencies. | Merges two `CountL2HH(3x32)` sketches with same key counts `4` and `9`, then verifies merged estimate `== 13.0`. |
-| `countl2hh_round_trip_serialization` | CountL2HH serialization round trip preserves estimate and L2. | Serializes/deserializes `CountL2HH::with_dimensions_and_seed(3,32,7)` after updates, verifying rows/cols and that both estimate and L2 remain unchanged (within `f64::EPSILON`). |
 
 ### HyperLogLog
 
 Test file: [`src/sketches/hll.rs`](../src/sketches/hll.rs)
 
+Wire tests: [`src/sketches/hll/wire.rs`](../src/sketches/hll/wire.rs)
+
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
 | `hll_child_insert_emits_on_improvement` | Child insert emits delta only on register improvement. | Inserts a key via `insert_emit_delta` into `HyperLogLog<Classic>`; verifies exactly `1` delta emitted on the first insert and `0` additional deltas on a duplicate insert. |
-| `hyperloglog_accuracy_within_two_percent` | Classic HyperLogLog stays within 2% relative error across scale checkpoints. | Inserts sequential unique `U64` values and checks at targets `[10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000]` that relative error `\|estimate-truth\|/truth <= 0.02`. |
-| `hll_ertl_accuracy_within_two_percent` | ErtlMLE HyperLogLog stays within 2% relative error across scale checkpoints. | Applies the same checkpointed unique-stream accuracy test as classic HLL, requiring relative error `<= 0.02` at each target cardinality. |
-| `hllds_accuracy_within_two_percent` | HIP HyperLogLog stays within 2% relative error across scale checkpoints. | Applies the same checkpointed unique-stream accuracy test to `HyperLogLogHIP`, requiring relative error `<= 0.02` at each target cardinality. |
 | `hyperloglog_p12_accuracy_within_two_percent` | P12 Classic HyperLogLog stays within P12 error tolerance across scale checkpoints. | Applies the same checkpointed unique-stream accuracy test to `HyperLogLogP12<Classic>`, requiring relative error `<= P12_ERROR_TOLERANCE` at each target cardinality. |
 | `hll_ertl_p12_accuracy_within_two_percent` | P12 ErtlMLE HyperLogLog stays within P12 error tolerance across scale checkpoints. | Applies the same checkpointed accuracy test to `HyperLogLogP12<ErtlMLE>`, requiring relative error `<= P12_ERROR_TOLERANCE`. |
 | `hllds_p12_accuracy_within_two_percent` | P12 HIP HyperLogLog stays within P12 error tolerance across scale checkpoints. | Applies the same checkpointed accuracy test to `HyperLogLogHIPP12`, requiring relative error `<= P12_ERROR_TOLERANCE`. |
-| `hyperloglog_merge_within_two_percent` | Classic HyperLogLog merge remains within 2% relative error. | Splits unique stream into even keys (left) and odd keys (right), merges sketches at each target checkpoint, and requires merged relative error `<= 0.02`. |
-| `hll_ertl_merge_within_two_percent` | ErtlMLE HyperLogLog merge remains within 2% relative error. | Uses the same even/odd split merge scenario and requires merged relative error `<= 0.02` at each target checkpoint. |
 | `hyperloglog_p12_merge_within_two_percent` | P12 Classic HyperLogLog merge remains within P12 error tolerance. | Applies the same even/odd split merge scenario to `HyperLogLogP12<Classic>`, requiring merged relative error `<= P12_ERROR_TOLERANCE`. |
 | `hll_ertl_p12_merge_within_two_percent` | P12 ErtlMLE HyperLogLog merge remains within P12 error tolerance. | Applies the same even/odd split merge scenario to `HyperLogLogP12<ErtlMLE>`, requiring merged relative error `<= P12_ERROR_TOLERANCE`. |
 | `hyperloglog_round_trip_serialization` | Classic HyperLogLog round trip preserves bytes and estimate stability. | After inserting `100_000` unique values, verifies serialized payload is non-empty, `deserialize -> reserialize` bytes are identical, and estimate drift is within `0.02 * max(original_est, 1.0)`. |
@@ -87,16 +87,24 @@ Test file: [`src/sketches/hll.rs`](../src/sketches/hll.rs)
 | `hll_ertl_p12_round_trip_serialization` | P12 ErtlMLE HyperLogLog round trip preserves bytes and estimate stability. | Applies the same `100_000`-value serialization round-trip checks for `HyperLogLogP12<ErtlMLE>`: non-empty bytes, byte-for-byte reserialization equality, and bounded estimate drift. |
 | `hllds_p12_round_trip_serialization` | P12 HIP HyperLogLog round trip preserves bytes and estimate stability. | Applies the same `100_000`-value serialization round-trip checks for `HyperLogLogHIPP12`: non-empty bytes, byte-for-byte reserialization equality, and bounded estimate drift. |
 | `hll_correctness_test` | Register update logic matches expected bucket/index behavior for all HLL variants. | Runs fixed hashed inserts against Classic, ErtlMLE, and HIP variants; asserts exact expected register values at specific bucket indices and confirms an untouched bucket remains zero. |
+| `hll_envelope_structure_and_kind_id_guard` | The envelope frames an Ertl-MLE sketch under kind_id `0x01 0x02`, and a Classic decoder refuses it. | For 1,000 inserts into `HyperLogLog<ErtlMLE>`, verifies the bytes open with the ASAPv1 magic, `envelope::VERSION`, a `kind_id_len` of `2`, and `0x01 0x02`, that the decoded registers match the source, and that a `HyperLogLog<Classic>` decode fails. |
+| `hll_hip_round_trip_preserves_state` | The HIP running scalars travel beside the registers. | For 1,000 inserts into `HyperLogLogHIP`, verifies the bytes carry kind_id `0x01 0x03` and that the decoded sketch matches the source on the registers and on `kxq0`, `kxq1`, and `est`. |
+| `native_and_portable_hll_bytes_match` | The native and portable encoders emit the same envelope. | For 1,000 inserts each, verifies an `ErtlMLE` sketch's bytes equal the portable `HllSketch` `Datafusion` encoding of its registers, and a `HyperLogLogHIP` sketch's bytes equal the portable `Hip` encoding of its registers plus `kxq0`, `kxq1`, and `est`. |
+| `hll_custom_hasher_profile_round_trips_and_is_self_describing` | The metadata describes the hasher that built the sketch rather than a hardcoded profile. | For a P14 `ErtlMLE` sketch over a hasher declaring its own `HashProfile`, verifies the registers round-trip, the bytes differ from the standard-profile sketch's over the same 1,000 inserts, and a standard-profile decode rejects them. |
+| `hll_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the eight `HllMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `HllMetadata`. |
+| `hll_precision_cross_rejection` | The metadata `precision` pins the register storage the bytes belong to. | Verifies a populated `HyperLogLogP12<Classic>` envelope fails to decode as the P14 `HyperLogLog<Classic>`. |
+| `hll_hip_kind_id_rejected_by_classic` | The HIP kind_id is refused by the Classic decoder. | Verifies a populated `HyperLogLogHIP` envelope fails to decode as `HyperLogLog<Classic>`. |
 
 ### KLL
 
 Test file: [`src/sketches/kll.rs`](../src/sketches/kll.rs)
 
+Wire tests: [`src/sketches/kll/wire.rs`](../src/sketches/kll/wire.rs)
+
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
 | `coin_bit_cache_behavior` | Coin consumes cached random bits in deterministic bit order. | From a fixed seed, validates 3 successive 64-bit RNG blocks are consumed bit-by-bit (`0..63`) before refill, matching expected xorshift-derived bits exactly. |
 | `coin_state_never_zero` | Coin state is never zero, including zero-seed initialization. | Verifies `Coin::from_seed(0)` normalizes to non-zero state and remains non-zero across 128 tosses. |
-| `distributions_quantiles_stay_within_rank_error` | KLL quantiles stay within 2% rank tolerance across distributions and scales. | For `k=200`, checks quantiles `{0,0.1,0.25,0.5,0.75,0.9,1}` on Uniform (`0..100,000,000`) and Zipf (`1,000,000..10,000,000`, domain `8192`, exponent `1.1`) streams at sizes `[1_000, 5_000, 20_000, 100_000, 1_000_000, 5_000_000]`; each estimate must fall within truth interval defined by `q +/- 0.02`. |
 | `test_data_input_api` | DataInput numeric API is accepted and non-numeric input is rejected. | Inserts `I32`, `I64`, `F64`, `F32`, and `U32` values, checks median query lies between `20.0` and `40.2`, and verifies string input returns error `KLL sketch only accepts numeric inputs`. |
 | `test_forced_compact` | Small-capacity KLL triggers compaction and keeps median in valid compacted outcomes. | With `KLL::init(3,3)` and inserts `[10,20,30,40,50]`, asserts median query is one of `{30.0, 40.0}` under forced compaction. |
 | `test_no_compact` | Larger-capacity KLL avoids compaction for small stream and returns exact median. | With `KLL::init_kll(8)` and inserts `[10,20,30,40,50]`, asserts median query equals `30.0`. |
@@ -104,14 +112,27 @@ Test file: [`src/sketches/kll.rs`](../src/sketches/kll.rs)
 | `cdf_handles_empty_sketch` | Empty KLL CDF queries return zero-valued defaults. | For empty `KLL::init_kll(64)`, asserts `cdf.quantile(123.0) == 0.0`, `cdf.query(0.5) == 0.0`, and `cdf.query_li(0.5) == 0.0`. |
 | `kll_round_trip_rmp` | RMP round trip preserves KLL structure, packed data, and queried quantiles. | Serializes/deserializes `KLL::init_kll(256)` after 5,000 uniform updates (`0..1,000,000`, seed `0xDEAD_BEEF`), verifies non-empty bytes, core fields and packed arrays (`levels`, `items`) are identical, and CDF queries at `{0,0.1,0.25,0.5,0.75,0.9,1}` match within `f64::EPSILON`. |
 | `generic_kll_i64_sanity` | Generic `KLL<T>` path works for non-`f64` numeric types. | Builds `KLL<i64>`, inserts `1..=20_000` through the typed `update(&T)` API, checks approximate count and p50/p90 quantiles, verifies merge on two `KLL<i64>` instances, and confirms MessagePack round-trip preserves weighted count. |
+| `kll_envelope_structure_and_round_trip` | The envelope frames a compact sketch under kind_id `0x06 0x00`, and the bytes are stable across a round trip. | For `k=200` seeded at `42` over 200,000 updates, verifies the bytes open with the ASAPv1 magic, `envelope::VERSION`, a `kind_id_len` of `2`, and `0x06 0x00`, that the decoded sketch re-serializes to the same bytes, and that quantiles at `{0, 0.01, 0.25, 0.5, 0.75, 0.99, 1}` match exactly. |
+| `kll_empty_round_trip` | A sketch that saw nothing round-trips. | Verifies `KLL::<f64>::init_kll_with_seed(200, 7)` decodes back with a `count` of `0` and identical re-serialized bytes. |
+| `kll_i64_round_trip` | The generic `KLL<T>` path reaches the wire under the same kind_id. | For `KLL<i64>` seeded at `5` over 50,000 updates, verifies the bytes carry `0x06 0x00`, re-serialize identically after a decode, and preserve `count`. |
+| `kll_item_type_cross_rejection` | The metadata `item_type` pins the element type. | Verifies an `f64` `KLL` envelope fails to decode as a `KLL<i64>`. |
+| `kll_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the four required `KllMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `KllMetadata`. |
+| `kll_rejects_inconsistent_levels` | A level layout the items do not fill is refused rather than panicking. | Verifies a crafted envelope whose `levels` end at `3` while `items` carries two entries fails to decode. |
+| `kll_rejects_out_of_range_k_m` | A crafted `k`/`m` is refused before `compute_max_capacity` sizes anything. | Verifies crafted envelopes at `(u32::MAX, u32::MAX)`, `(MAX_CACHEABLE_K + 1, 8)`, and `(200, 1)` each fail to decode rather than driving a giant allocation. |
+| `kll_seed_present_when_seeded_omitted_when_unseeded` | The seed key is present exactly when the sketch has one. | Verifies `init_kll_with_seed(200, 42)` emits metadata carrying `seed` `Some(42)`, while an `init_kll(200)` sketch omits the key entirely. |
+| `kll_unseeded_round_trip_byte_stable` | The absent-seed key decodes as well as it encodes. | For an unseeded `k=200` sketch over 2,000 updates, verifies the decoded sketch re-serializes to the same bytes and keeps `count`. |
+| `kll_seed_survives_round_trip_so_clear_stays_deterministic` | Carrying the seed keeps `clear` deterministic after a decode. | Decodes a `k=200` sketch seeded at `42` over 5,000 updates, calls `clear` on it and on a freshly seeded twin, feeds both 3,000 updates, and verifies their bytes are identical. |
+| `kll_rejects_weighted_count_overflow` | A level layout whose weighted count overflows is refused rather than handed back. | Verifies a crafted envelope parking 16 items at compactor level 60, so that `16 * 2^60` overflows `usize` in `count()`, fails to decode. |
+| `kll_dynamic_kind_id_rejected_by_compact` | The dynamic kind_id is refused by the compact decoder. | Verifies a crafted envelope carrying valid compact metadata and payload under `0x06 0x01` fails to decode as a `KLL<f64>`. |
 
 ### KLLDynamic
 
 Test file: [`src/sketches/kll_dynamic.rs`](../src/sketches/kll_dynamic.rs)
 
+Wire tests: [`src/sketches/kll_dynamic/wire.rs`](../src/sketches/kll_dynamic/wire.rs)
+
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
-| `distributions_quantiles_stay_within_rank_error` | KLLDynamic quantiles stay within 2% rank tolerance across distributions and scales. | For `k=200`, checks quantiles `{0,0.1,0.25,0.5,0.75,0.9,1}` on Uniform (`0..100,000,000`) and Zipf (`1,000,000..10,000,000`, domain `8192`, exponent `1.1`) streams at sizes `[1_000, 5_000, 20_000, 100_000, 1_000_000, 5_000_000]`; each estimate must fall within truth interval defined by `q +/- 0.02`. |
 | `test_data_input_api` | `KLLDynamic<f64>` accepts numeric `DataInput` and rejects non-numeric input. | Inserts `I32`, `I64`, `F64`, `F32`, and `U32` values through `update_data_input`, checks median query lies between `20.0` and `40.2`, and verifies string input returns error `KLL sketch only accepts numeric inputs`. |
 | `test_forced_compact` | Small-capacity KLLDynamic triggers compaction and keeps median in valid compacted outcomes. | With `KLLDynamic::init(3,3)` and typed inserts `[10,20,30,40,50]`, asserts median query is one of `{30.0, 40.0}` under forced compaction. |
 | `test_no_compact` | Larger-capacity KLLDynamic avoids compaction for small stream and returns exact median. | With `KLLDynamic::init_kll(8)` and typed inserts `[10,20,30,40,50]`, asserts median query equals `30.0`. |
@@ -119,25 +140,46 @@ Test file: [`src/sketches/kll_dynamic.rs`](../src/sketches/kll_dynamic.rs)
 | `cdf_handles_empty_sketch` | Empty KLLDynamic CDF queries return zero-valued defaults. | For empty `KLLDynamic::<f64>::init_kll(64)`, asserts `cdf.quantile(123.0) == 0.0`, `cdf.query(0.5) == 0.0`, and `cdf.query_li(0.5) == 0.0`. |
 | `kll_dynamic_round_trip_rmp` | RMP round trip preserves KLLDynamic structure, packed data, and queried quantiles. | Serializes/deserializes `KLLDynamic::init_kll(256)` after 5,000 uniform updates (`0..1,000,000`, seed `0xDEAD_BEEF`), verifies non-empty bytes, core fields and packed arrays (`levels`, `items`) are identical, and CDF queries at `{0,0.1,0.25,0.5,0.75,0.9,1}` match within `f64::EPSILON`. |
 | `generic_kll_dynamic_i64_sanity` | Generic `KLLDynamic<T>` path works for non-`f64` numeric types. | Builds `KLLDynamic<i64>`, inserts `1..=20_000` through the typed `update(&T)` API, checks approximate count and p50/p90 quantiles, and confirms MessagePack round-trip preserves weighted count. |
+| `kll_dynamic_envelope_structure_and_round_trip` | The envelope frames a dynamic sketch under kind_id `0x06 0x01`, and the bytes are stable across a round trip. | For `k=200` over 200,000 updates, verifies the bytes open with the ASAPv1 magic, `envelope::VERSION`, a `kind_id_len` of `2`, and `0x06 0x01`, that the decoded sketch re-serializes to the same bytes, and that quantiles at `{0, 0.01, 0.25, 0.5, 0.75, 0.99, 1}` match exactly. |
+| `kll_dynamic_empty_round_trip` | A sketch that saw nothing round-trips. | Verifies `KLLDynamic::<f64>::init_kll(200)` decodes back and re-serializes to identical bytes. |
+| `kll_dynamic_i64_round_trip` | The generic `KLLDynamic<T>` path reaches the wire under the same kind_id. | For `KLLDynamic<i64>` over 50,000 updates, verifies the bytes carry `0x06 0x01` and re-serialize identically after a decode. |
+| `kll_dynamic_item_type_cross_rejection` | The metadata `item_type` pins the element type. | Verifies an `f64` `KLLDynamic` envelope fails to decode as a `KLLDynamic<i64>`. |
 
 ### DDSketch
 
 Test file: [`src/sketches/ddsketch.rs`](../src/sketches/ddsketch.rs)
 
+Wire tests: [`src/sketches/ddsketch/wire.rs`](../src/sketches/ddsketch/wire.rs)
+
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
 | `insert_and_query_basic` | Basic insert/query preserves count semantics and quantile monotonicity. | Inserts mixed values `[0.0, -5.0, 1.0, 2.0, 3.0, 10.0, 50.0, 100.0, 1000.0]`, verifies non-positive values are ignored (`count == 7`), and checks queried quantiles at `{0.0, 0.5, 0.9, 0.99, 1.0}` are monotone and bounded by sketch min/max. |
 | `empty_quantile_returns_none` | Empty sketch returns no quantiles and zero count. | For a new `DDSketch(alpha=0.01)`, asserts `get_value_at_quantile` returns `None` for `p in {0.0, 0.5, 1.0}` and `get_count() == 0`. |
-| `dds_uniform_distribution_quantiles` | Uniform-distribution quantiles stay within configured relative error. | With `alpha=0.01`, samples sizes `[1_000, 5_000, 20_000]` from uniform range `[1_000_000, 10_000_000]` (seeded), and requires relative error `<= 0.01` at quantiles `{0, 0.1, 0.25, 0.5, 0.75, 0.9, 1}` against sorted-truth quantiles. |
-| `dds_zipf_distribution_quantiles` | Zipf-distribution quantiles stay within configured relative error. | With `alpha=0.01`, samples sizes `[1_000, 5_000, 20_000]` from Zipf range `[1_000_000, 10_000_000]` (domain `8192`, exponent `1.1`, seeded), and requires relative error `<= 0.01` at quantiles `{0, 0.1, 0.25, 0.5, 0.75, 0.9, 1}`. |
-| `dds_normal_distribution_quantiles` | Normal-distribution quantiles stay within configured relative error. | With `alpha=0.01`, samples sizes `[1_000, 5_000, 20_000]` from normal distribution (`mean=1000.0`, `std=100.0`, positive finite values retained), and requires relative error `<= 0.01` at quantiles `{0, 0.1, 0.25, 0.5, 0.75, 0.9, 1}`. |
-| `dds_exponential_distribution_quantiles` | Exponential-distribution quantiles stay within near-1% relative error. | With `alpha=0.01`, `lambda=1e-3`, and sample sizes `[1_000, 5_000, 20_000]`, requires relative error `<= 0.011 + 1e-9` at quantiles `{0, 0.1, 0.25, 0.5, 0.75, 0.9, 1}`. |
 | `merge_two_sketches_combines_counts_and_bounds` | Merge combines counts and preserves quantile boundary invariants. | Merges sketches built from `[1,2,3,4]` and `[5,10,20]`, then verifies merged `count=7`, `min=1`, `max=20`, exact boundary quantiles (`q0=1`, `q1=20`), and median lies within `[1,20]`. |
-| `dds_serialization_round_trip` | Serialization round trip preserves count, bounds, and selected quantiles. | Serializes/deserializes a populated sketch (`alpha=0.01`), verifies non-empty bytes, equal `count/min/max`, and exact quantile matches at `{0.0, 0.1, 0.5, 0.9, 1.0}`. |
+| `dds_serialization_round_trip` | Serialization round trip preserves count, sum, bounds, and selected quantiles. | Serializes/deserializes a populated sketch (`alpha=0.01`), verifies non-empty bytes, equal `count/sum/min/max`, and exact quantile matches at `{0.0, 0.1, 0.5, 0.9, 1.0}`. |
+| `ddsketch_envelope_structure_and_round_trip` | The envelope frames a sketch under kind_id `0x05 0x00`, and the bytes are stable across a round trip. | For a sketch at `alpha = 0.01` over eight values, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x05 0x00`, that the metadata carries `metadata_version` `1` and that alpha, that the decoded store counts and offset match, that re-serializing reproduces the bytes, and that quantiles at `{0, 0.1, 0.5, 0.9, 1}` are unchanged. |
+| `ddsketch_scalars_survive_exactly` | `sum`, `min`, and `max` are carried, not recomputed from the buckets. | Verifies the decoded sketch reports the source's `sum` and `alpha`, a `min` of exactly `0.25`, and a `max` of exactly `1000.0`, rather than the alpha-bounded bucket representatives a recomputation would give. |
+| `ddsketch_count_is_recovered_from_the_buckets` | The payload carries no `count` field. | Verifies the payload reads back as a five-element array whose bucket counts sum to `get_count()`, that a six-element read fails, and that the decoded sketch reports the same count. |
+| `ddsketch_empty_round_trip` | A sketch that saw nothing round-trips. | Verifies a fresh `DDSketch(alpha=0.01)` decodes back with a `count` of `0`, `min` and `max` of `None`, an empty store, and identical re-serialized bytes. |
+| `ddsketch_merged_round_trip` | A store grown on both sides of a merge round-trips. | Merges 200 values against the same 200 scaled by `0.001`, then verifies the decoded sketch matches the source on `count`, `sum`, `min`, and `max` and re-serializes to the same bytes. |
+| `ddsketch_rejects_foreign_kind_id` | Another sketch's kind_id is refused even when the rest parses cleanly. | Verifies a `3x8` Count-Min envelope fails to decode as a `DDSketch`, and that well-formed DDSketch metadata and payload wrapped under kind_id `0x02 0x00` fail too. |
+| `dd_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the two `DdMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `DdMetadata`. |
+| `dd_metadata_rejects_a_missing_alpha_key` | `alpha` is required and can never be silently defaulted. | Encodes a named map holding only `metadata_version` and verifies it does not decode as `DdMetadata`. |
+| `ddsketch_rejects_alpha_outside_the_unit_interval` | An `alpha` outside `(0, 1)` makes every bucket index meaningless and is refused. | Verifies crafted envelopes at `alpha` of `0.0`, `1.0`, `-0.5`, `2.0`, `NaN`, and infinity each fail with an alpha or metadata-mismatch complaint, while the same payload at `0.01` decodes. |
+| `ddsketch_rejects_a_store_span_past_i32` | The span rule fires from the offset and the array length, before the store is rebuilt. | Verifies a crafted store of ten buckets at offset `i32::MAX - 2` fails with a "store span past i32" complaint, while the same payload three buckets long decodes. |
+| `ddsketch_rejects_a_nonzero_offset_on_an_empty_store` | An empty store has exactly one encoding. | Verifies a crafted empty store at offset `42` fails with an "empty store must be at offset 0" complaint. |
+| `ddsketch_rejects_a_total_count_overflow` | Bucket counts that overflow the recovered total are refused rather than wrapped. | Verifies a crafted payload of `[u64::MAX, 1]` fails with an "overflow the total sample count" complaint. |
+| `ddsketch_rejects_inconsistent_scalars` | The scalars the buckets do not determine are still bounded by them. | Verifies six crafted payloads each fail on a scalar rule: a populated store carrying the empty-store sentinels, `min` above `max`, a non-positive `min`, a `sum` below the smallest ingested value, an empty store carrying a non-zero `sum`, and all-zero buckets carrying populated-store scalars. |
+| `ddsketch_rejects_serializing_a_store_span_past_i32` | The encode side refuses a store its own decoder would reject. | Verifies a sketch whose store holds ten buckets at offset `i32::MAX - 2` fails to serialize. |
+| `ddsketch_rejects_serializing_an_overflowing_bucket_total` | The encode side enforces the total-count rule too. | Verifies a sketch whose store holds `[u64::MAX, 1]` fails to serialize. |
 
 ### CMSHeap
 
 Test file: [`src/sketches/countminsketch_topk.rs`](../src/sketches/countminsketch_topk.rs)
+
+Wire tests: [`src/sketches/countminsketch_topk/wire.rs`](../src/sketches/countminsketch_topk/wire.rs)
+
+Shared heap wire tests: [`src/sketches/countminsketch_topk/heap_wire.rs`](../src/sketches/countminsketch_topk/heap_wire.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -164,10 +206,33 @@ Test file: [`src/sketches/countminsketch_topk.rs`](../src/sketches/countminsketc
 | `zipf_stream_top_k_recall_regular_fast_budget` | Regular path heap achieves high top-k recall on Zipf stream. | On Zipf stream (`rows=3`, `cols=4096`, `top_k=16`, `domain=1024`, `exponent=1.1`, `N=20_000`), verifies heap size bound, entry-count consistency, and recall hits `>= 15` vs truth top-16. |
 | `zipf_stream_top_k_recall_fast_path_fast_budget` | Fast path heap achieves high top-k recall on Zipf stream. | Runs same Zipf setup in fast mode and verifies heap size bound, entry-count consistency, and recall hits `>= 15`. |
 | `zipf_stream_regular_fast_heap_overlap` | Regular and fast heaps substantially overlap on Zipf heavy hitters. | On shared Zipf stream (`top_k=16`), verifies key overlap ratio between regular and fast top-k heaps is at least `0.8`. |
+| `cms_heap_round_trip_serialization` | The envelope frames a sketch under kind_id `0x03 0x00`, and the bytes are stable across a round trip. | For a `3x8` regular-path `i64` sketch with a heap of `4` holding three weighted `u64` keys, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x03 0x00`, that the metadata carries `3x8`, `counter_type` `i64`, `mode` `regular`, `k` `4`, and `key_type` `u64`, that dimensions, counters, heap length and capacity, and per-key estimates and heap counts all match, and that re-serializing reproduces the bytes. |
+| `cms_heap_f64_counters_round_trip` | The `f64` base counter reaches the wire beside a string-keyed heap. | For a `2x4` `Vector2D<f64>` sketch holding one `Str` heap key, verifies the metadata names `counter_type` `f64` and `key_type` `string`, that the counters and the heap key survive the decode, and that the bytes re-serialize identically. |
+| `cms_heap_counter_type_is_pinned_by_the_target` | The base counter type separates two otherwise equal sketches. | For `2x4` sketches holding numerically equal `i64` and `f64` cells, verifies the bytes differ, that `i64` bytes fail to decode as `f64`, and that `f64` bytes fail to decode as `i64`. |
+| `cms_heap_mode_in_metadata_round_trips` | The metadata `mode` pins which column derivation built the sketch. | Round-trips a `4x16` fast-path sketch, verifies the metadata names `mode` `fast` and the counters are preserved, then that the same bytes fail to decode as a `RegularPath` sketch. |
+| `cms_heap_rejects_foreign_kind_ids` | The neighbouring sketches' kind_ids are refused. | Verifies `CSHeap`, `CountMin`, and `Count` envelopes at `3x8` each fail to decode as a `CMSHeap`. |
+| `cms_heap_rejects_zero_dimension_payload` | A zero dimension is a decode error, not a `Vector2D::from_fn` panic. | Verifies a crafted `4x0` envelope fails with a "must be non-zero" complaint. |
+| `cms_heap_rejects_dimension_length_mismatch` | The length check fires from the declared dimensions, before any allocation is sized from them. | Verifies a crafted envelope declaring `1024x1024` while carrying three counters fails with a "!= rows*cols" complaint. |
+| `cms_heap_rejects_serializing_an_unfilled_matrix` | The encode side refuses a matrix its own decoder would reject. | Verifies `Vector2D::<i64>::init(2, 4)`, which reserves eight cells without filling them, fails to serialize. |
+| `cms_heap_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the thirteen `TopKMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `TopKMetadata`. |
+| `cms_heap_metadata_rejects_a_missing_k_key` | `k` is required, so the heap capacity can never be silently defaulted. | Encodes the other twelve `TopKMetadata` fields as a named map with `k` omitted and verifies it does not decode as `TopKMetadata`. |
+| `cms_heap_rejects_a_foreign_counter_type_name` | A Count-Sketch-only counter type name is not a Count-Min one. | Wraps metadata naming `counter_type: "i32"` around a valid `2x4` payload and verifies an `i64` `CMSHeap` rejects it. |
+| `cms_heap_custom_hasher_profile_round_trips_and_is_self_describing` | The metadata describes the hasher that built the sketch rather than a hardcoded profile. | For a `3x8` sketch with a heap of `4` over a hasher declaring its own `HashProfile`, verifies the counters and both heap entries round-trip, the bytes differ from the standard-profile sketch's over the same keys, and a standard-profile decode rejects them. |
+| `cms_heap_refuses_a_k_the_metadata_cannot_carry` | A `k` past the metadata's `u32` field fails the encode rather than truncating. | Verifies a `2x4` sketch built at a heap capacity of `1 << 40` fails to serialize with a message naming the "exceeds the u32 metadata field" rule. |
+| `heap_every_key_type_round_trips_and_keeps_its_variant` | The `key_type` names the exact `HeapItem` variant and is never widened. | Across all 13 wire key types - `i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u64`, `usize`, `f32`, `f64`, and `string` - verifies the metadata carries the expected name, the bytes re-serialize identically, and every decoded key is still found by its original `DataInput` at the weight it was given. |
+| `heap_refuses_mixed_and_128_bit_keys` | Keys the wire cannot carry refuse to serialize rather than being coerced. | Verifies a heap holding both an `I32` and an `I64` key fails with a "keys mix variants" complaint naming `key_type is i32`, that a lone `I128` or `U128` key fails with a "128-bit" complaint, and that a 128-bit key seated behind a `U64` one fails too. |
+| `heap_empty_emits_the_pinned_key_type_and_round_trips` | A heap monitoring nothing has one encoding. | For an empty `2x8` sketch with a heap of `8`, verifies the metadata carries the pinned `EMPTY_KEY_TYPE` and a `k` of `8`, and that the decode holds no entries at capacity `8` with identical re-serialized bytes. |
+| `heap_emitted_order_is_independent_of_seat_order` | The emitted order is descending count with ties broken by the key, not the sift path. | Seats four entries carrying two count ties in one order and in reverse, verifies both serialize to the same bytes, that the payload reads `heap_counts` `[9, 9, 5, 5]` and `keys` `[1, 4, 2, 3]`, and that a decoded heap re-serializes identically. |
+| `heap_rejects_a_key_type_the_payload_does_not_carry` | A payload relabelled with another `key_type` is refused. | Re-frames a string-keyed payload under a `u64` `key_type` and a `u64`-keyed payload under `string`, and verifies neither decodes. |
+| `heap_index_is_rebuilt_so_updates_still_move_entries` | `slots` and `positions` are rebuilt on decode, so later updates land the same way. | Round-trips a four-entry heap, applies the same rescore and new-key update to the source and to the decoded copy, and verifies both serialize to the same bytes and agree on every key's count. |
+| `heap_does_not_allocate_a_declared_k` | A declared `k` is metadata, never an allocation size. | Verifies an envelope declaring `k` `u32::MAX` with two entries decodes, reports that capacity, and holds two entries. |
+| `heap_rejects_crafted_entry_sets` | Entry sets the heap could not have reached are refused. | Verifies three crafted envelopes each fail with their own complaint: two entries over a `k` of `1`, the same key twice, and two keys against one count. |
 
 ### CSHeap
 
 Test file: [`src/sketches/countsketch_topk.rs`](../src/sketches/countsketch_topk.rs)
+
+Wire tests: [`src/sketches/countsketch_topk/wire.rs`](../src/sketches/countsketch_topk/wire.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -194,6 +259,41 @@ Test file: [`src/sketches/countsketch_topk.rs`](../src/sketches/countsketch_topk
 | `zipf_stream_top_k_recall_regular_fast_budget` | Regular path heap achieves high top-k recall on Zipf stream. | On Zipf stream (`rows=5`, `cols=4096`, `top_k=16`, `domain=1024`, `exponent=1.1`, `N=20_000`), verifies heap size bound, entry-count consistency, and recall hits `>= 15` vs truth top-16. |
 | `zipf_stream_top_k_recall_fast_path_fast_budget` | Fast path heap achieves high top-k recall on Zipf stream. | Runs same Zipf setup in fast mode and verifies heap size bound, entry-count consistency, and recall hits `>= 15`. |
 | `zipf_stream_regular_fast_heap_overlap` | Regular and fast heaps substantially overlap on Zipf heavy hitters. | On shared Zipf stream (`top_k=16`), verifies key overlap ratio between regular and fast top-k heaps is at least `0.8`. |
+| `cs_heap_round_trip_serialization` | The envelope frames a sketch under kind_id `0x0a 0x00`, and the bytes are stable across a round trip. | For a `3x8` regular-path `i64` sketch with a heap of `4` holding three weighted `u64` keys, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x0a 0x00`, that the metadata carries `3x8`, `counter_type` `i64`, `mode` `regular`, `k` `4`, and `key_type` `u64`, that dimensions, counters, heap length and capacity, and per-key estimates and heap counts all match, and that re-serializing reproduces the bytes. |
+| `cs_heap_negative_counters_round_trip` | Signed cells reach the wire and come back unchanged. | Round-trips a `2x4` matrix of alternating positive and negative counters beside a `Str` heap key, and verifies the decoded slice equals the source, still holds a negative cell, keeps the heap key, and re-serializes identically. |
+| `cs_heap_i32_round_trips_and_is_pinned_by_counter_type` | The `i32` wire config round-trips and its width is identity, not a detail. | Round-trips a `2x4` `Vector2D<i32>` sketch, verifies the metadata names `counter_type` `i32`, then that its bytes differ from the numerically equal `i64` sketch's, that `i32` bytes fail to decode as `i64`, and that `i64` bytes fail to decode as `i32`. |
+| `cs_heap_mode_in_metadata_round_trips` | The metadata `mode` pins which column derivation built the sketch. | Round-trips a `4x16` fast-path sketch, verifies the metadata names `mode` `fast` and the counters are preserved, then that the same bytes fail to decode as a `RegularPath` sketch. |
+| `cs_heap_rejects_foreign_kind_ids` | The neighbouring sketches' kind_ids are refused. | Verifies `CMSHeap`, `CountMin`, and `Count` envelopes at `3x8` each fail to decode as a `CSHeap`. |
+| `cs_heap_rejects_zero_dimension_payload` | A zero dimension is a decode error, not a `Vector2D::from_fn` panic. | Verifies a crafted `4x0` envelope fails with a "must be non-zero" complaint. |
+| `cs_heap_rejects_dimension_length_mismatch` | The length check fires from the declared dimensions, before any allocation is sized from them. | Verifies a crafted envelope declaring `1024x1024` while carrying three counters fails with a "!= rows*cols" complaint. |
+| `cs_heap_rejects_serializing_an_unfilled_matrix` | The encode side refuses a matrix its own decoder would reject. | Verifies `Vector2D::<i64>::init(2, 4)`, which reserves eight cells without filling them, fails to serialize. |
+| `cs_heap_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the thirteen `TopKMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `TopKMetadata`. |
+| `cs_heap_metadata_rejects_a_missing_key_type_key` | `key_type` is required, so the heap's key variant can never be silently defaulted. | Encodes the other twelve `TopKMetadata` fields as a named map with `key_type` omitted and verifies it does not decode as `TopKMetadata`. |
+| `cs_heap_rejects_a_foreign_counter_type_name` | A Count-Min-only counter type name is not a Count Sketch one. | Wraps metadata naming `counter_type: "f64"` around a valid `2x4` payload and verifies both the `i64` and the `i32` sketch reject it. |
+| `cs_heap_custom_hasher_profile_round_trips_and_is_self_describing` | The metadata describes the hasher that built the sketch rather than a hardcoded profile. | For a `3x8` sketch with a heap of `4` over a hasher declaring its own `HashProfile`, verifies the counters and both heap entries round-trip, the bytes differ from the standard-profile sketch's over the same keys, and a standard-profile decode rejects them. |
+| `cs_heap_refuses_a_k_the_metadata_cannot_carry` | A `k` past the metadata's `u32` field fails the encode rather than truncating. | Verifies a `2x4` sketch built at a heap capacity of `1 << 40` fails to serialize with a message naming the "exceeds the u32 metadata field" rule. |
+
+### CountL2HH
+
+Test file: [`src/sketches/countsketch_topk.rs`](../src/sketches/countsketch_topk.rs)
+
+Wire tests: [`src/sketches/countsketch_topk/l2hh_wire.rs`](../src/sketches/countsketch_topk/l2hh_wire.rs)
+
+| test_name | test_description | what_is_tested |
+| --- | --- | --- |
+| `countl2hh_estimates_and_l2_are_consistent` | CountL2HH updates keep estimate and L2 consistent. | For `CountL2HH(3x32)`, applies `+5` then `-2` to one key, verifies estimates `5.0` then `3.0`, and asserts non-trivial L2 (`>= 3.0`). |
+| `countl2hh_merge_combines_frequency_vectors` | CountL2HH merge combines per-key frequencies. | Merges two `CountL2HH(3x32)` sketches with same key counts `4` and `9`, then verifies merged estimate `== 13.0`. |
+| `countl2hh_round_trip_serialization` | CountL2HH serialization round trip preserves estimate and L2. | Serializes/deserializes `CountL2HH::with_dimensions_and_seed(3,32,7)` after updates, verifying rows/cols and that both estimate and L2 remain unchanged (within `f64::EPSILON`). |
+| `count_l2hh_round_trip_serialization` | The envelope frames a sketch under kind_id `0x19 0x00`, and the state survives a round trip. | For a `3x32` sketch seeded at `7` over three signed weighted inserts, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x19 0x00`, that the metadata carries `seed_index` `7` and `3x32`, and that the decode matches on dimensions, seed index, the counter array, the `l2` accumulators, and `get_l2`. |
+| `count_l2hh_decoded_re_serializes_identically` | A decoded sketch re-serializes byte for byte. | Verifies the populated `3x32` sketch's decode re-encodes to the bytes it came from. |
+| `count_l2hh_negative_counters_round_trip` | Signed cells reach the wire and come back unchanged. | Round-trips a `2x8` sketch fed two negative weights and verifies the decoded slice equals the source, still holds a negative cell, and re-serializes identically. |
+| `count_l2hh_seed_index_travels_with_the_sketch` | The seed index is state, not a profile constant. | Verifies `2x8` sketches seeded at `0` and at `9` do not share bytes, and that the decoded seed-`9` sketch reports a `seed_idx` of `9`. |
+| `count_l2hh_custom_hasher_profile_round_trips_and_is_self_describing` | The metadata describes the hasher that built the sketch rather than a hardcoded profile. | For a `3x32` sketch over a hasher declaring its own `HashProfile`, verifies the counter array round-trips, the bytes differ from the standard-profile sketch's over the same insert, and a standard-profile decode rejects them. |
+| `count_l2hh_rejects_foreign_kind_ids` | The neighbouring universal-sketch kind_ids are refused. | Verifies `Count`, `UnivMon`, `UnivMonPyramid`, and `UnivMonQ` envelopes each fail to decode as a `CountL2HH`. |
+| `count_l2hh_rejects_crafted_geometry` | Every geometry rule fires before an allocation is sized from it. | Verifies crafted envelopes carrying a zero `cols`, a `4096x4096` declaration against three counters, a five-entry `l2` array against two rows, and a negative `l2` accumulator each fail to decode. |
+| `count_l2hh_rejects_serializing_an_unfilled_matrix` | The encode side refuses a matrix its own decoder would reject. | Verifies a `2x4` sketch whose counts are replaced by `Vector2D::init(2, 4)`, which reserves eight cells without filling them, fails to serialize. |
+| `l2hh_metadata_rejects_unknown_and_missing_keys` | An unexpected metadata key and a missing required one both fail closed. | Encodes the nine `L2hhMetadata` fields plus a `bogus_field`, and the same fields with `cols` omitted, and verifies neither decodes as `L2hhMetadata`. |
+| `count_l2hh_empty_has_one_encoding` | A sketch holding nothing has exactly one encoding. | Verifies a fresh `3x32` sketch and one cleared after an insert serialize to identical bytes. |
 
 ### SpaceSaving
 
@@ -251,6 +351,7 @@ Conformance: [`tests/conformance_kit.rs`](../tests/conformance_kit.rs) runs `spa
 | `space_saving_custom_hasher_profile_round_trips_and_is_self_describing` | The metadata describes the hasher that built the summary rather than a hardcoded profile. | For a four-counter summary over a hasher declaring its own `HashProfile`, verifies the bytes round-trip with `estimate` intact and re-serialize identically, differ from the standard-profile summary's bytes over the same keys, and are rejected by a standard-profile decode. |
 | `space_saving_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the eight `SpaceSavingMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `SpaceSavingMetadata`. |
 | `space_saving_rejects_a_crafted_envelope` | Every structural rule is pinned by the complaint it fails with. | Verifies nine crafted envelopes are each refused for their own reason: a zero capacity, more entries than the capacity, `keys` longer than `counts`, `counts` longer than `errors`, a counter at zero, an error of `4` against a count of `3`, the same key twice, an unknown `key_type` of `u256`, and a foreign kind_id. |
+| `space_saving_refuses_a_capacity_the_metadata_cannot_carry` | A capacity past the metadata's `u32` field fails the encode rather than truncating. | Rebuilds a one-counter summary declaring a capacity of `1 << 40`, verifies it reports that capacity, and that serializing fails with a message naming the "exceeds the u32 metadata field" rule. |
 | `space_saving_does_not_allocate_a_declared_capacity` | A declared capacity is metadata, never an allocation size. | Verifies an envelope declaring `u32::MAX` counters with two entries decodes, reports that capacity, holds two counters with key 7 reading `9`, a `min_count` of `0`, and a two-entry `top_k`. |
 
 ### Bloom
@@ -307,6 +408,8 @@ Conformance: [`tests/conformance_kit.rs`](../tests/conformance_kit.rs) runs the 
 
 Test file: [`src/sketches/elastic.rs`](../src/sketches/elastic.rs)
 
+Wire tests: [`src/sketches/elastic/wire.rs`](../src/sketches/elastic/wire.rs)
+
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
 | `init_with_dimensions_sizes_both_parts` | Both parts take the requested dimensions. | `init_with_dimensions(12, 2, 256)` is verified to yield 12 heavy buckets and a 2x256 light layer. |
@@ -356,10 +459,26 @@ Test file: [`src/sketches/elastic.rs`](../src/sketches/elastic.rs)
 | `heavy_changes_reports_only_moves_past_the_threshold` | Heavy change detection filters by size of move. | Over rising (10->55), falling (60->8), and steady (40->42) flows, verifies only the first two are reported at `threshold = 20`. |
 | `heavy_changes_covers_a_flow_present_in_only_one_window` | A flow in one window only is a change. | Verifies a flow of 40 that vanishes reports `(40, 0)` and one of 45 that appears reports `(0, 45)`. |
 | `heavy_changes_reports_each_flow_once` | Each flow appears once in the change list. | A flow resident in both windows, each expanded so it also has a stale copy, reaches the id list four times and is reported once. |
+| `elastic_round_trip_serialization` | The envelope frames a sketch under kind_id `0x0b 0x00`, and the state survives a round trip. | For an 8-bucket heavy table over a `2x256` light layer fed 12 hits of one flow and one of another, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x0b 0x00`, and that the decode keeps `bktlen`, the light dimensions, every heavy bucket, every light counter, and a `query` of `12`. |
+| `elastic_rejects_foreign_kind_id` | The inlined Count-Min's own envelope is not an Elastic one. | Verifies a stand-alone `2x256` `CountMin<Vector2D<i32>, RegularPath>` envelope fails to decode as an `Elastic`. |
+| `elastic_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the twelve `ElasticMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `ElasticMetadata`. |
+| `elastic_metadata_rejects_a_missing_light_cols_key` | `light_cols` is required and can never be silently defaulted. | Encodes the other eleven `ElasticMetadata` fields as a named map with `light_cols` omitted and verifies it does not decode as `ElasticMetadata`. |
+| `elastic_rejects_zero_dimension_payload` | A zero dimension in either part is a decode error, not a panic. | Verifies crafted envelopes declaring `0` heavy buckets, `0` light rows, and `0` light columns each fail rather than panicking in the `cols.ilog2()` mask derivation. |
+| `elastic_rejects_dimension_length_mismatch` | Both length checks run before the heavy table and the light matrix are built. | Verifies a crafted envelope declaring `1024` buckets over `1024x1024` while carrying two buckets and three light counters fails, and that a payload whose heavy arrays agree with each other but whose `light_counts` holds eight entries against a declared `2x256` fails too. |
+| `elastic_rejects_a_flow_and_vote_that_disagree_on_occupancy` | A free bucket is `nil` with no vote, and a payload where the two disagree is refused. | Verifies a crafted payload naming a flow whose `vote_pos` is `0`, and one carrying a vote under a `nil` flow, both fail to decode. |
+| `elastic_rejects_serializing_an_inconsistent_sketch` | The encode side refuses states its own decoder would reject. | Verifies an 8-bucket sketch whose `bktlen` is set to `16` fails to serialize, and that one whose free bucket names a flow fails too. |
+| `elastic_free_buckets_are_nil_and_never_collide_with_an_empty_flow_id` | A free bucket is `nil`, not an empty string. | For an all-free 4-bucket table, verifies the payload holds one `0xc0` per bucket and no `0xa0` and that the decode matches bucket for bucket; then that a table holding an inserted empty flow id emits an `0xa0`, decodes identically, and answers that flow's `query` with `1`. |
+| `elastic_mixed_occupancy_round_trips` | A table mixing free, occupied and evicted buckets round-trips bucket for bucket. | For a 16-bucket table over `3x512` fed a resident, a colliding flow past the `LAMBDA` threshold, and six more flows, verifies the fixture holds both vacant and flagged buckets and that the decode matches on every bucket, every light counter, and both flows' `query` results. |
+| `elastic_negative_votes_and_light_counters_round_trip` | Votes and light counters are signed on the wire. | Sets a bucket's `vote_neg` to `-300` and `vote_pos` to `-7` and inserts a light weight of `-9` into a 4-bucket `2x8` sketch, then verifies the decode matches on every bucket and every light counter. |
+| `elastic_stale_copies_round_trips_in_both_states` | `stale_copies` is carried, since the buckets do not determine it. | Verifies an 8-bucket sketch decodes with the flag `false`, then that after `expand_heavy()` it decodes with the flag `true`, a `bktlen` of `16`, matching buckets, `heavy_hitters` agreeing with the source, and exactly twice as many occupied buckets as reported flows. |
+| `elastic_decoded_sketch_reserializes_byte_identically` | The emitted order is bucket index order for the heavy table and row-major for the light layer. | For a 16-bucket `3x512` sketch fed 40 flows and then expanded, verifies the decoded sketch re-serializes to the bytes it came from. |
+| `elastic_custom_hasher_profile_round_trips_and_is_self_describing` | The metadata describes the hasher that built the sketch rather than a hardcoded profile. | For an 8-bucket `2x256` sketch over a hasher declaring its own `HashProfile`, verifies the buckets and light counters round-trip, the bytes differ from the standard-profile sketch's over the same flows, and a standard-profile decode rejects them. |
 
 ### Coco
 
 Test file: [`src/sketches/coco.rs`](../src/sketches/coco.rs)
+
+Wire tests: [`src/sketches/coco/wire.rs`](../src/sketches/coco/wire.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -375,20 +494,47 @@ Test file: [`src/sketches/coco.rs`](../src/sketches/coco.rs)
 | `a_key_occupies_at_most_one_bucket_per_row` | A key never gains a second home in the table. | After 64 inserts of one key into a `32x4` table, verifies exactly one bucket holds it and `estimate_key` returns `64`. |
 | `estimate_key_never_exceeds_the_inserted_mass` | Point queries stay inside the table mass. | Over 500 weighted inserts across 40 keys in an `8x2` table, verifies the table mass equals the inserted mass and no per-key estimate exceeds it. |
 | `merge_combines_tables_without_losing_counts` | Merge combines tables without losing counts. | Merge behavior preserves expected aggregate semantics and internal invariants. |
+| `coco_round_trip_serialization` | The envelope frames a sketch under kind_id `0x0c 0x00`, and the state survives a round trip. | For an `init_with_size(8, 4)` table holding two weighted keys, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x0c 0x00`, and that the decode keeps `w` `8`, `d` `4`, every bucket's key and value, and an `estimate_key` of `521`. |
+| `coco_rejects_foreign_kind_id` | Another sketch carrying `rows`/`cols` metadata is refused on its kind_id. | Verifies a `4x8` Count-Min envelope fails to decode as a `Coco`. |
+| `coco_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the eight `CocoMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `CocoMetadata`. |
+| `coco_metadata_rejects_a_missing_cols_key` | `cols` is required and can never be silently defaulted. | Encodes the other seven `CocoMetadata` fields as a named map with `cols` omitted and verifies it does not decode as `CocoMetadata`. |
+| `coco_rejects_zero_dimension_payload` | A zero dimension is a decode error, not a `Vector2D` panic. | Verifies a crafted `4x0` envelope with an empty payload fails rather than panicking in the `cols.ilog2()` mask derivation. |
+| `coco_rejects_dimension_length_mismatch` | The length check fires from the declared dimensions, before any allocation is sized from them. | Verifies a crafted envelope declaring `1024x1024` while carrying three buckets fails. |
+| `coco_rejects_mass_under_an_unoccupied_bucket` | An unoccupied bucket holds no mass. | Verifies a crafted `1x2` payload pairing a `nil` key with a value of `9` fails to decode. |
+| `coco_rejects_serializing_a_geometry_mismatch` | The encode side refuses geometries its own decoder would reject. | Verifies a sketch whose `w` is set to `16` against an 8-wide table fails to serialize, and that an `init_with_size(8, 0)` sketch fails too. |
+| `coco_empty_buckets_are_nil_and_never_collide_with_an_empty_key` | An unoccupied bucket is `nil`, not an empty string. | For an all-empty `init_with_size(4, 2)` table, verifies the payload holds eight `0xc0` and no `0xa0`, the decode matches cell for cell, and `recorded_flows` is empty; then that a table holding an inserted empty key emits an `0xa0`, decodes identically, lists one flow, and answers that key's `estimate_key` with `5`. |
+| `coco_mixed_occupancy_round_trips` | A table mixing occupied and free buckets round-trips bucket for bucket. | For an `init_with_size(16, 3)` table fed ten weighted keys, verifies the fixture leaves both bucket states present and that the decode matches on every cell and on `estimate_key` for all ten keys. |
+| `coco_decoded_sketch_reserializes_byte_identically` | The emitted order is the table's own index order, so a decode re-encodes exactly. | For an `init_with_size(16, 3)` table fed twelve weighted keys, verifies the decoded sketch re-serializes to the bytes it came from. |
+| `coco_custom_hasher_profile_round_trips_and_is_self_describing` | The metadata describes the hasher that built the sketch rather than a hardcoded profile. | For an `init_with_size(8, 4)` table over a hasher declaring its own `HashProfile`, verifies every cell round-trips, the bytes differ from the standard-profile sketch's over the same keys, and a standard-profile decode rejects them. |
 
 ### KMV
 
 Test file: [`src/sketches/kmv.rs`](../src/sketches/kmv.rs)
 
+Wire tests: [`src/sketches/kmv/wire.rs`](../src/sketches/kmv/wire.rs)
+
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
-| `assert_accuracy` | Assert accuracy. | Accuracy/error behavior stays within expected bounds on representative workloads. |
-| `assert_merge_accuracy` | Assert merge accuracy. | Merge behavior preserves expected aggregate semantics and internal invariants. |
 | `assert_serialization_round_trip` | Assert serialization round trip. | Serialization/deserialization preserves component state and behavior after round trip. |
+| `kmv_round_trip_serialization` | The envelope frames a sketch under kind_id `0x0e 0x00`, and the bytes are stable across a round trip. | For `k = 64` filled by 5,000 distinct keys, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x0e 0x00`, that the metadata carries `k` `64` and the canonical seed index, that the 64 emitted hashes are strictly ascending, and that the decode matches on `k`, capacity, retained hashes, heap root, and `estimate`, re-serializing identically. |
+| `kmv_emitted_order_is_independent_of_insertion_order` | The emitted order follows the hash value, not the arrival order. | Fills two `k = 32` sketches with the same 2,000 keys forward and backward, verifies their heap arrays differ, and that both serialize to the same bytes, which a decode re-encodes exactly. |
+| `kmv_empty_round_trip` | A sketch that retains nothing has exactly one encoding. | Verifies a fresh `k = 16` sketch emits `k` `16` beside an empty `hashes` array and decodes back to length `0` at capacity `16` with an `estimate` of `0.0` and identical re-serialized bytes. |
+| `kmv_carries_hashes_at_full_u64_width` | The retained digests travel at 64 bits. | Inserts `0`, `1`, `u64::MAX / 2`, and `u64::MAX` by hash into a `k = 4` sketch and verifies the payload and the decoded sketch both carry those four values, re-serializing identically. |
+| `kmv_rejects_foreign_kind_id` | Another sketch's kind_id is refused. | Verifies a `3x8` Count-Min envelope fails to decode as a `KMV` with a "kind_id mismatch" complaint. |
+| `kmv_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the eight `KmvMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `KmvMetadata`. |
+| `kmv_metadata_rejects_a_missing_k_key` | `k` is required and can never be silently defaulted. | Encodes the other seven `KmvMetadata` fields as a named map with `k` omitted and verifies it does not decode as `KmvMetadata`. |
+| `kmv_rejects_a_crafted_envelope` | Every structural rule is pinned by the complaint it fails with. | Verifies four crafted envelopes are each refused for their own reason: a `k` of `0`, three hashes over a `k` of `2`, an unsorted hash array, and one holding a duplicate. |
+| `kmv_rejects_a_payload_declaring_more_hashes_than_it_carries` | An over-declared array header is refused on the read. | Verifies a payload whose `array32` header declares `2^30` elements while carrying two of them fails rather than being allocated. |
+| `kmv_does_not_allocate_a_declared_k` | A declared `k` is metadata, never an allocation size. | Verifies an envelope declaring `k` `u32::MAX` with two hashes decodes, reports that bound and an `estimate` of `2.0`, and that a further hash is appended rather than evicting one. |
+| `kmv_refuses_a_k_the_metadata_cannot_carry` | A `k` past the metadata's `u32` field fails the encode rather than truncating. | Verifies a sketch built at `k = 1 << 40` fails to serialize with a message naming the "exceeds the u32 metadata field" rule. |
+| `kmv_refuses_to_serialize_a_state_decode_would_reject` | The encode side refuses the states decode refuses. | Verifies a `k = 0` sketch fails to serialize, and that one retaining two hashes at `k = 1` fails with a "2 hashes over a k of 1" complaint. |
+| `kmv_custom_hasher_profile_round_trips_and_is_self_describing` | The metadata describes the hasher that built the sketch rather than a hardcoded profile. | For a `k = 16` sketch over 500 keys through a hasher declaring its own `HashProfile`, verifies the retained hashes round-trip and re-serialize identically, that the two profiles retain the same hashes yet emit different bytes, and that a standard-profile decode rejects them. |
 
 ### UniformSampling
 
 Test file: [`src/sketches/uniform.rs`](../src/sketches/uniform.rs)
+
+Wire tests: [`src/sketches/uniform/wire.rs`](../src/sketches/uniform/wire.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -397,12 +543,29 @@ Test file: [`src/sketches/uniform.rs`](../src/sketches/uniform.rs)
 | `merge_combines_samples_using_rate_based_target` | Merge combines samples using rate based target. | Merge behavior preserves expected aggregate semantics and internal invariants. |
 | `merge_rejects_different_rates` | Merge rejects different rates. | Merge behavior preserves expected aggregate semantics and internal invariants. |
 | `sample_access_is_stable` | Sample access is stable. | Core behavior for insert/query/update and deterministic semantics is validated. |
+| `uniform_sampling_round_trip_serialization` | The envelope frames a sampler under kind_id `0x0d 0x00`, and the state survives a round trip. | For a sampler at rate `0.25` seeded at `0xBEEF_FACE` over 40 updates, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x0d 0x00`, and that the decode matches on `sample_rate`, `total_seen`, `len`, and the retained samples. |
+| `uniform_sampling_re_encodes_byte_identically` | The priorities are payload state, not derived. | For a sampler at rate `0.5` seeded at `0xFACE_FACE` over 33 updates, verifies the decoded sampler re-serializes to the bytes it came from. |
+| `uniform_sampling_rng_state_resumes_the_same_sequence` | The payload carries the RNG position, so a decode resumes the same draws. | Feeds the same 40 further updates to a rate-`0.3` sampler and to its decoded copy, and verifies they agree on the samples, on `total_seen`, and on their re-serialized bytes. |
+| `uniform_sampling_empty_round_trip_has_exactly_one_encoding` | An empty sampler has one encoding for a given rate and RNG position. | Verifies a rate-`0.1` sampler seeded at `0xABC1` decodes back empty with `total_seen` `0` and its rate intact, and that its bytes equal both a fresh twin's and the decoded sampler's re-serialization. |
+| `uniform_sampling_rejects_foreign_kind_id` | Another sketch's kind_id is refused. | Verifies a `3x8` Count-Min envelope fails to decode as a `UniformSampling`. |
+| `us_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the three `UsMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `UsMetadata`. |
+| `us_metadata_rejects_a_missing_item_type_key` | `item_type` is required and can never be silently defaulted. | Encodes a named map holding only `metadata_version` and `sample_rate` and verifies it does not decode as `UsMetadata`. |
+| `us_metadata_rejects_a_foreign_item_type_name` | Samples are `f64`, and no other `item_type` name decodes. | Wraps an `i64`-labelled metadata around a one-sample payload and verifies it does not decode. |
+| `uniform_sampling_rejects_an_out_of_range_sample_rate` | A rate outside `(0, 1]` is refused before it reaches `target_size`. | Verifies crafted envelopes at rates `0.0`, `-0.5`, `1.5`, `NaN`, and infinity each fail rather than panic. |
+| `uniform_sampling_huge_declared_stream_costs_two_samples` | The declared stream length never sizes an allocation. | Verifies a payload declaring `total_seen` `u64::MAX` beside two samples decodes to a sampler holding exactly those two. |
+| `uniform_sampling_rejects_more_samples_than_the_rate_allows` | Retaining more than the rate allows is not a state the algorithm reaches. | Verifies a payload of three samples at `total_seen` `2` and rate `0.5` fails to decode. |
+| `uniform_sampling_rejects_parallel_array_length_mismatch` | The two payload arrays are parallel. | Verifies a payload of three priorities against two values fails to decode. |
+| `uniform_sampling_rejects_unordered_priorities` | Entries are held in ascending priority, with ties broken by the value. | Verifies a payload of priorities `[9, 2, 5]` fails to decode, and that one with equal priorities whose values run `[8.0, 1.0]` fails too. |
+| `uniform_sampling_rejects_crafted_bytes_without_panicking` | Truncated, foreign and garbage bytes are errors, never panics. | Verifies six truncations of a valid envelope, 64 bytes of `0xff`, and a valid envelope carrying a garbage payload all fail to decode. |
+| `uniform_sampling_rejects_serializing_an_over_full_sampler` | The encode side refuses a sampler its own decoder would reject. | Verifies a sampler holding two samples whose `total_seen` is set to `1` fails to serialize. |
 
 ## Sketch Frameworks
 
 ### Hydra
 
 Test file: [`src/sketch_framework/hydra.rs`](../src/sketch_framework/hydra.rs)
+
+Wire tests: [`src/sketch_framework/hydra/wire.rs`](../src/sketch_framework/hydra/wire.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -423,6 +586,22 @@ Test file: [`src/sketch_framework/hydra.rs`](../src/sketch_framework/hydra.rs)
 | `test_merge_counters` | Test merge counters. | Merges two CM counters and verifies frequency sum (`2.0`) for shared key, then confirms merging with mismatched counter type (`HLL`) returns error. |
 | `test_count_frequency_query` | Test count frequency query. | Inserts one `Count` key four times and verifies `Frequency` query succeeds with exact result `4.0`. |
 | `test_count_invalid_query_types` | Test count invalid query types. | Verifies unsupported `Count` queries fail, including exact `Quantile` error message and error on `Cardinality`. |
+| `hydra_count_min_round_trip_serialization` | A Count-Min grid round-trips under kind_id `0x07 0x01`. | For a `3x8` grid of `2x16` fast-path Count-Min counters over a two-column schema fed 30 records, verifies the envelope names that kind_id, that the grid and counter dimensions and the schema survive, that three frequency probes answer identically, and that the decode re-serializes to the same bytes. |
+| `hydra_count_sketch_round_trip_serialization` | A Count Sketch grid round-trips under kind_id `0x07 0x02`. | Runs the same round trip over `2x16` fast-path Count Sketch counters and the same three frequency probes. |
+| `hydra_hyperloglog_round_trip_serialization` | An HLL grid round-trips under kind_id `0x07 0x03`. | Runs the same round trip over `HyperLogLog<ErtlMLE>` counters fed 300 records, probing two cardinality queries. |
+| `hydra_kll_round_trip_serialization` | A KLL grid round-trips under kind_id `0x07 0x00`. | Runs the same round trip over default `KLL` counters fed 300 records, probing two quantiles and a CDF. |
+| `hydra_univmon_round_trip_serialization` | A UnivMon grid round-trips under kind_id `0x07 0x04`. | Runs the same round trip over `UnivMon::init_univmon(4, 2, 16, 3)` counters fed 120 records, probing L1, L2, entropy, and cardinality. |
+| `hydra_count_sketch_negative_cells_round_trip` | Signed cells reach the wire and come back unchanged. | Verifies the Count Sketch grid holds a negative counter and that every cell of every counter matches after a decode. |
+| `hydra_schema_round_trips_exactly` | The key columns round-trip exactly, escaping included. | For a grid whose two labels carry a semicolon, a colon, and a backslash and whose subkeys carry a semicolon, verifies the round trip preserves both frequency probes' answers and that the decoded schema equals the labels. |
+| `hydra_variants_reject_each_others_envelopes` | Each variant's decoder owns exactly one kind_id. | Runs all five per-variant decoders against all five variants' envelopes and verifies each succeeds only on its own, and that a plain `2x16` Count-Min envelope is refused by every decoder and by `deserialize_from_bytes`. |
+| `hydra_rejects_a_mixed_variant_grid` | A grid mixing counter variants has no encoding. | Replaces one cell of a Count-Min grid with an HLL counter and verifies serialization fails with a complaint naming `cell (1, 1)` and both counter types. |
+| `hydra_rejects_serializing_an_inconsistent_grid` | The encode side refuses states its own decoder would reject. | Verifies four Count-Min grids each fail to serialize: one whose `row_num` is `4` against its storage, one whose grid is an unfilled `Vector2D::init(3, 8)`, one holding a `2x8` cell against a `2x16` prototype, and one whose `type_to_clone` holds data. |
+| `hydra_univmon_rejects_cells_mixing_key_variants` | A UnivMon grid whose cells hold different `HeapItem` variants has no single `counter_key_type`. | Seats a string-keyed UnivMon in a `u64`-keyed grid and verifies serialization fails with a "mix key variants" complaint. |
+| `hydra_rejects_crafted_geometry` | Every declared count is measured against the payload before anything is sized from it. | Verifies seven crafted Count-Min metadata shapes each fail with their own complaint - `1024x1024`, `u32::MAX` by `u32::MAX`, a zero grid row or column, a zero counter row or column, and a `4x16` counter against the payload - and that an empty schema fails too. |
+| `hydra_rejects_crafted_geometry_for_the_variable_counters` | The variable-length counters are cut by the same rule. | Verifies a `4096x4096` KLL grid declaration fails, and that a `4096x4096` UnivMon declaration and shapes carrying a zero `sketch_col`, `layer_size`, or `heap_size` each fail too. |
+| `hydra_metadata_rejects_unknown_and_missing_keys` | An unexpected metadata key and a missing required one both fail closed. | Encodes the fourteen `HydraMatrixMetadata` fields plus a `bogus_field`, and the same fields with `schema` omitted, and verifies neither decodes as `HydraMatrixMetadata`. |
+| `hydra_cell_envelopes_mirror_the_counters_own_bytes` | A cell's inlined state is exactly that counter's own payload. | Verifies the HLL, KLL, and UnivMon cell envelopes built from a cell's state equal the bytes those counters serialize to on their own. |
+| `hydra_pins_its_hash_profile` | Hydra hashes its subkeys through the crate default, so it has one truthful profile. | Verifies a Count-Min grid emits `DefaultXxHasher`'s profile id and seed list, and that the same payload re-framed under a custom profile is different bytes that fail to decode. |
 
 ### HashSketchEnsemble
 
@@ -447,6 +626,8 @@ Test file: [`src/sketch_framework/hashlayer.rs`](../src/sketch_framework/hashlay
 
 Test file: [`src/sketch_framework/univmon.rs`](../src/sketch_framework/univmon.rs)
 
+Wire tests: [`src/sketch_framework/univmon/wire.rs`](../src/sketch_framework/univmon/wire.rs)
+
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
 | `univmon_round_trip_serialization` | Univmon round trip serialization. | After weighted inserts, verifies non-empty serialization and round-trip preservation of configuration fields, `bucket_size`, `L1/L2/entropy` (`<1e-6` drift), and cardinality (`< EPSILON` drift). |
@@ -457,11 +638,21 @@ Test file: [`src/sketch_framework/univmon.rs`](../src/sketch_framework/univmon.r
 | `univmon_bucket_size_tracked_correctly` | Univmon bucket size tracked correctly. | Inserts counts `100`, `200`, `150` for three flows and verifies `bucket_size` equals total `450`. |
 | `univmon_basic_operation` | Univmon basic operation. | On fixed mixed workload, verifies exact aggregate metrics `cardinality=10.0` and `L1=131.0`. |
 | `test_statistical_accuracy` | Test statistical accuracy. | On heavy/medium/noise synthetic distribution, verifies relative error for both `L2` and `entropy` is below `0.15`. |
-| `univmon_random_data_matches_ground_truth_within_five_percent` | Univmon random data matches ground truth within five percent. | Over `10_000` random weighted updates, requires relative error `<= 0.05` for `cardinality`, `L1`, `L2`, and `entropy` against exact truth map. |
+| `univmon_random_data_matches_ground_truth_within_configured_tolerance` | Random weighted updates keep every metric inside its own tolerance. | Over `10_000` seeded random weighted updates across 5,000 keys into `init_univmon(256, 6, 8192, 16)`, requires relative error against the exact truth map at or under `0.07` for cardinality and at or under `0.05` for `L1`, `L2`, and entropy. |
+| `univmon_layers_with_different_heap_loads_round_trip` | Each layer's heap contents and emitted order survive the round trip. | For an `init_univmon(8, 2, 16, 4)` pyramid fed 40 weighted keys, verifies the layers carry different heap loads, that every layer's length, capacity of `8`, and per-key counts match after a decode, and that the bytes re-serialize identically. |
+| `univmon_carries_update_mode_and_candidate_flags` | `update_mode` and `candidate_complete` are state, not derived. | For a terminal-only `init_univmon(2, 2, 8, 3)` pyramid fed 20 keys through `fast_insert`, verifies the payload carries `update_mode` `2`, that the decode preserves the candidate flags, cardinality, and entropy and re-serializes identically, and that forcing every flag true changes what the pyramid reports. |
+| `univmon_empty_has_one_encoding` | An empty pyramid has exactly one encoding. | Verifies a fresh `init_univmon(4, 2, 16, 3)` pyramid and one freed after an insert serialize to identical bytes carrying the pinned `EMPTY_KEY_TYPE`, and that the decode holds empty heaps and re-serializes identically. |
+| `univmon_pins_its_hash_profile` | UnivMon hashes through the crate default, so it has one truthful profile. | Verifies a populated pyramid emits `DefaultXxHasher`'s profile id and seed list, and that the same payload re-framed under a custom profile is different bytes that fail to decode. |
+| `univmon_rejects_foreign_kind_ids` | The neighbouring universal-sketch kind_ids are refused. | Verifies `Count`, `CountL2HH`, `UnivMonPyramid`, and `UnivMonQ` envelopes each fail to decode as a `UnivMon`. |
+| `univmon_rejects_crafted_shapes` | Every shape rule fires before an allocation is sized from it. | Verifies six crafted metadata shapes fail - a `layer_size` of `u32::MAX` or `0`, a zero `sketch_col` or `heap_size`, a `4096x4096` sketch, and a `heap_size` of `1` - and that a short `heap_counts`, a short `candidate_complete`, and an `update_mode` of `7` each fail too. |
+| `univmon_rejects_serializing_an_inconsistent_pyramid` | The encode side refuses states its own decoder would reject. | Verifies a layer resized to `2x32` and a layer hashing at another layer's seed index each fail to serialize while the matching `2x16` layer at its own index serializes, and that a pyramid whose heap mixes key variants fails with a "keys mix variants" complaint while a 128-bit key fails outright. |
+| `univmon_metadata_rejects_unknown_and_missing_keys` | An unexpected metadata key and a missing required one both fail closed. | Encodes the eleven `UnivMonMetadata` fields plus a `bogus_field`, and the same fields with `key_type` omitted, and verifies neither decodes as `UnivMonMetadata`. |
 
 ### UnivMon Optimized
 
 Test file: [`src/sketch_framework/univmon_optimized.rs`](../src/sketch_framework/univmon_optimized.rs)
+
+Wire tests: [`src/sketch_framework/univmon_optimized/wire.rs`](../src/sketch_framework/univmon_optimized/wire.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -475,6 +666,35 @@ Test file: [`src/sketch_framework/univmon_optimized.rs`](../src/sketch_framework
 | `pyramid_accuracy_zipf` | Pyramid accuracy Zipf. | On heavy/medium/light Zipf-like workload, requires relative error `<15%` for `L1`, `L2`, cardinality, and entropy. |
 | `pyramid_fast_insert_accuracy` | Pyramid fast insert accuracy. | Using `fast_insert` only, requires relative error `<15%` for `L1`, `L2`, cardinality, and entropy versus exact frequency map. |
 | `pyramid_memory_savings_vs_uniform` | Pyramid memory savings vs uniform. | Verifies pyramid column budget is smaller than uniform baseline and computed memory savings exceed `30%`. |
+| `pyramid_round_trip_serialization` | The envelope frames a pyramid under kind_id `0x11 0x00`, and the bytes are stable across a round trip. | For `UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4)` fed four weighted string keys, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x11 0x00`, that the metadata carries that layout and `key_type` `string`, and that the decode matches on `bucket_size`, L1, L2, cardinality, entropy, and the candidate flags, re-serializing identically. |
+| `pyramid_two_tier_geometry_survives` | The two tiers are derived from the layer's position. | Verifies every decoded layer keeps its tier's dimensions - `3x16` for the two elephant layers and `2x8` for the mouse layers - its own seed index, and its counter array. |
+| `pyramid_layers_with_different_heap_loads_round_trip` | Each layer's heap contents survive the round trip. | For `UnivMonPyramid::new(8, 2, 3, 32, 2, 16, 4)` fed 40 weighted keys, verifies the layers carry different heap loads, that every layer's length and per-key counts match after a decode, and that the bytes re-serialize identically. |
+| `pyramid_without_mouse_layers_round_trips` | The one-tier case still round-trips. | For a pyramid whose four layers are all elephants, verifies the decoded layers all read `2x16` and the bytes re-serialize identically. |
+| `pyramid_empty_has_one_encoding` | An empty pyramid has exactly one encoding. | Verifies a fresh pyramid and one freed after an insert serialize to identical bytes carrying a `key_type` of `u64`, and that the decode re-serializes identically. |
+| `pyramid_carries_update_mode_and_candidate_flags` | `update_mode` and `candidate_complete` are state, not derived. | For a terminal-only `UnivMonPyramid::new(2, 1, 2, 8, 2, 8, 3)` fed 20 keys through `fast_insert`, verifies the payload carries `update_mode` `2` and that the decode preserves the candidate flags and cardinality and re-serializes identically. |
+| `pyramid_pins_its_hash_profile` | The pyramid hashes through the crate default, so it has one truthful profile. | Verifies a populated pyramid emits `DefaultXxHasher`'s profile id and seed list, and that the same payload re-framed under a custom profile is different bytes that fail to decode. |
+| `pyramid_rejects_foreign_kind_ids` | The neighbouring universal-sketch kind_ids are refused. | Verifies `Count`, `CountL2HH`, `UnivMon`, and `UnivMonQ` envelopes each fail to decode as a `UnivMonPyramid`. |
+| `pyramid_rejects_crafted_shapes` | Every layout rule fires before an allocation is sized from it. | Verifies six crafted metadata layouts fail - a `layer_size` of `u32::MAX` or `0`, a `heap_size` of `0` or `1`, a zero `elephant_col`, and a `4096x4096` mouse tier - and that a short `heap_lens` and an `update_mode` of `9` each fail too. |
+| `pyramid_rejects_serializing_an_inconsistent_layout` | The encode side refuses states its own decoder would reject. | Verifies a mouse layer holding the elephant tier's `3x16` dimensions fails to serialize, and that a layer hashing at another layer's seed index fails too. |
+| `pyramid_metadata_rejects_unknown_and_missing_keys` | An unexpected metadata key and a missing required one both fail closed. | Encodes the fourteen `PyramidMetadata` fields plus a `bogus_field`, and the same fields with `mouse_col` omitted, and verifies neither decodes as `PyramidMetadata`. |
+
+### UnivMon-Q
+
+Test file: [`src/sketch_framework/univmon_q.rs`](../src/sketch_framework/univmon_q.rs)
+
+Wire tests: [`src/sketch_framework/univmon_q/wire.rs`](../src/sketch_framework/univmon_q/wire.rs)
+
+| test_name | test_description | what_is_tested |
+| --- | --- | --- |
+| `univmon_q_round_trip_serialization` | The envelope frames a sketch under kind_id `0x1a 0x00`, and the bytes are stable across a round trip. | For a 4-level, 64-wide, depth-3 sketch seeded at `5` with source id `7` over 200 updates, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x1a 0x00`, that the metadata carries that shape, `counter_type` `i64`, and `seed_index` `5`, and that the decode matches on config, source id, `count`, `min`, `max`, `cdf`, and `estimate_f2`, re-serializing identically. |
+| `univmon_q_ordering_state_continues_after_a_round_trip` | The ordering state survives, so a decoded sketch draws the same occurrence priorities. | Feeds the same 400 further updates to a sketch built over 300 updates and to its decoded copy, and verifies they agree on `next_sequence`, on the sorted ordered heap, on `cdf`, and on their serialized bytes. |
+| `univmon_q_empty_has_one_encoding` | An empty sketch has exactly one encoding, and `min` and `max` travel as msgpack nil. | Verifies two fresh sketches at the same config and source id serialize identically with a payload `count` of `0` and no extrema, that a cleared sketch is deliberately different bytes since it keeps its occurrence sequence, and that the decode is empty and re-serializes identically. |
+| `univmon_q_counter_type_is_pinned` | The counter width is pinned by `counter_type`. | Verifies a 32-bit-counter sketch emits `counter_type` `i32` and decodes with its `estimate_f2` intact, that its bytes differ from the 64-bit sketch's over the same 50 updates, and that relabelling the metadata `f64` makes the decode fail. |
+| `univmon_q_custom_hasher_profile_round_trips_and_is_self_describing` | The metadata describes the hasher that built the sketch rather than a hardcoded profile. | For a sketch over a hasher declaring its own `HashProfile`, verifies `estimate_f2` round-trips, the bytes differ from the standard-profile sketch's over the same 100 updates, and a standard-profile decode rejects them. |
+| `univmon_q_rejects_foreign_kind_ids` | The neighbouring universal-sketch kind_ids are refused. | Verifies `Count`, `CountL2HH`, `UnivMon`, and `UnivMonPyramid` envelopes each fail to decode as a `UnivMonQ`. |
+| `univmon_q_rejects_crafted_shapes` | Every shape rule fires before an allocation is sized from it. | Verifies seven crafted configs fail - `levels` of `63` or `1`, a `width` of `u32::MAX`, a `depth` of `4`, zero `candidates` or `ordered_samples`, and another `hash_seed` - and that a short `candidate_scores`, a short `ever_evicted`, a missing `min`, swapped extrema, a short `occurrence_keys`, and reversed `candidate_keys` each fail too. |
+| `univmon_q_rejects_serializing_an_inconsistent_state` | The encode side refuses states its own decoder would reject. | Verifies a level whose `PackedCountSketch` is not the config's size, a `count`/`min`/`max` triple the algorithm cannot reach, and a candidate table over its declared capacity each fail to serialize. |
+| `univmon_q_metadata_rejects_unknown_and_missing_keys` | An unexpected metadata key and a missing required one both fail closed. | Encodes the fourteen `UnivMonQMetadata` fields plus a `bogus_field`, and the same fields with `counter_type` omitted, and verifies neither decodes as `UnivMonQMetadata`. |
 
 ### NitroBatch
 
@@ -489,6 +709,8 @@ Test file: [`src/sketch_framework/nitro.rs`](../src/sketch_framework/nitro.rs)
 
 Test file: [`src/sketch_framework/eh.rs`](../src/sketch_framework/eh.rs)
 
+Wire tests: [`src/sketch_framework/eh/wire.rs`](../src/sketch_framework/eh/wire.rs)
+
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
 | `constructor_infers_merge_norm` | Constructor infers merge norm. | Verifies constructor infers `SketchNorm::L1` for CM payload and `SketchNorm::L2` for `COUNTL2HH` payload. |
@@ -496,10 +718,27 @@ Test file: [`src/sketch_framework/eh.rs`](../src/sketch_framework/eh.rs)
 | `l2_merge_invariant_sum_l22` | L2 merge invariant sum l22. | With `k=1` and weighted updates, verifies L2 merge rule keeps bucket count bounded (`bucket_count <= 2`). |
 | `merge_recomputes_l2_mass` | Merge recomputes L2 mass. | After L2 merges, verifies bounded bucket count (`<=2`) and non-negative recomputed `l2_mass` for every payload bucket. |
 | `test_basic_insertion_and_query` | Test basic insertion and query. | After one update at `t=100`, verifies single bucket presence, exact min/max timestamps (`100`), and successful interval merge query for `[100,100]`. |
+| `eh_round_trip_serialization` | The envelope frames a histogram under kind_id `0x13 0x00`, and the state survives a round trip. | For `k = 2` over a 1,000-tick window of Count-Min buckets fed six timestamped updates, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x13 0x00`, and that the decode matches on `window`, `k`, `merge_norm`, every bucket's size, time range, and bit-exact `l2_mass`, and the bucket count. |
+| `eh_every_variant_round_trips_as_a_bucket` | Every variant this build carries round-trips as a bucket and as the prototype. | For each populated variant, builds a `k = 3` histogram over four timestamped updates and verifies the decoded prototype keeps its `sketch_type`, the bucket ranges match, and the bytes are stable across a re-serialization. |
+| `eh_empty_has_one_encoding_and_round_trips` | A histogram with no buckets has exactly one encoding. | Verifies two `k = 2` histograms over the same Count-Min prototype serialize identically and that the decode holds a bucket count of `0` and re-serializes to the same bytes. |
+| `eh_carries_a_non_empty_prototype` | A prototype carrying state keeps it, so later buckets start from it. | For a prototype fed seven inserts of one key, verifies the decoded prototype answers that key as the source does and at or above `7.0`. |
+| `eh_decoded_re_serializes_byte_identically_and_queries_agree` | A decoded histogram re-encodes exactly and answers the same interval query. | Verifies the populated histogram's decode re-serializes to the bytes it came from and that `query_interval_merge(0, 50)` answers the same key identically on both. |
+| `eh_rejects_foreign_kind_ids` | An `EHSketchList` envelope and a Count-Min envelope are not histogram envelopes. | Verifies both fail to decode as an `ExponentialHistogram`. |
+| `eh_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes the three `EhMetadata` fields plus a `bogus_field` as a named map and verifies it does not decode as `EhMetadata`. |
+| `eh_metadata_rejects_a_missing_key` | `k` is required and can never be silently defaulted. | Encodes a named map holding only `metadata_version` and `window` and verifies it does not decode as `EhMetadata`. |
+| `eh_rejects_a_zero_k` | `k` is at least `1` on both sides. | Verifies a histogram whose `k` is set to `0` fails to serialize, and that a valid payload re-framed under metadata declaring `k` `0` fails to decode. |
+| `eh_rejects_parallel_arrays_of_unequal_length` | A declared array far longer than the buckets carried is refused before anything is sized from it. | Verifies a payload of one bucket against a `sizes` array of a million entries fails to decode. |
+| `eh_rejects_impossible_bucket_state` | A zero size and an inverted time range are states the algorithm never reaches. | Verifies a crafted bucket of size `0` and one spanning `[9, 4]` each fail to decode, and that a histogram whose first bucket's size is set to `0` fails to serialize. |
+| `eh_rejects_derived_fields_that_disagree` | A cached field that disagrees with the state it derives from has no encoding. | Verifies a histogram whose first bucket's `l2_mass` is set to `42.0` fails to serialize, and that one whose `merge_norm` is switched to `L2` over Count-Min buckets fails too. |
+| `eh_rejects_an_experimental_kind_id_in_a_bucket` | An experimental variant's kind_id in a bucket is refused without the feature. | Verifies crafted buckets relabelled with the `Coco`, `Elastic`, and `UniformSampling` kind_ids each fail to decode, with a message naming the variant and "experimental" in builds without the feature. |
+| `eh_rejects_a_custom_hash_profile_bucket` | A bucket naming a custom hash profile is refused, since the variant's decoder pins the profile of the type it rebuilds. | Verifies a bucket whose descriptor comes from a custom-profile Count-Min fails to decode. |
+| `eh_rejects_an_unknown_kind_id_in_a_bucket` | An unknown kind_id in a bucket is refused. | Verifies a bucket relabelled `0xff 0xff` fails with a "not a wire variant" complaint. |
 
 ### EHSketchList
 
 Test file: [`src/sketch_framework/eh_sketch_list.rs`](../src/sketch_framework/eh_sketch_list.rs)
+
+Wire tests: [`src/sketch_framework/eh_sketch_list/wire.rs`](../src/sketch_framework/eh_sketch_list/wire.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -507,6 +746,19 @@ Test file: [`src/sketch_framework/eh_sketch_list.rs`](../src/sketch_framework/eh
 | `count_sketch_insert_and_query_round_trip` | Count insert and query round trip. | Confirms the `Count` variant updates/query path by inserting one key and verifying returned estimate is at least `1.0`. |
 | `ddsketch_insert_and_quantile_query_round_trip` | DDSketch insert and quantile query round trip. | Inserts `10,20,30` into DDSketch variant and verifies queried median (`q=0.5`) lies within `[10.0, 30.0]`. |
 | `supports_norm_whitelist_is_enforced` | Supports norm whitelist is enforced. | Validates norm capability matrix: `CM/CS/DDS` support `L1` only, while `COUNTL2HH/UNIVMON` support `L2` only. |
+| `eh_sketch_list_round_trip_serialization` | The envelope frames a union under kind_id `0x14 0x00`, and the state survives a round trip. | For a `3x8` fast-path Count-Min variant holding one key, verifies the bytes open with the ASAPv1 magic, a `kind_id_len` of `2`, and `0x14 0x00`, and that the decode keeps a `sketch_type` of `CountMin` and answers that key as the source does. |
+| `eh_sketch_list_every_variant_round_trips` | Every variant this build carries round-trips and keeps its type. | For each populated variant, verifies the decode reports the same `sketch_type` and re-serializes to the bytes it came from. |
+| `eh_sketch_list_kind_ids_are_build_independent` | The ten nested kind_ids and their registry names are the same in every build. | Verifies `variant_name` maps each of the ten ids to its name and `0xff 0xff` to `None`, and that every populated variant emits the id the table gives it. |
+| `eh_sketch_list_rejects_an_experimental_kind_id` | An experimental variant's kind_id is refused without the feature. | Verifies crafted triples carrying the `Coco`, `Elastic`, and `UniformSampling` kind_ids each fail to decode, with a message naming the variant and "experimental" in builds without the feature. |
+| `eh_sketch_list_rejects_an_unknown_kind_id` | An unknown kind_id is refused. | Verifies a Count-Min triple relabelled `0xff 0xff` fails with a "not a wire variant" complaint. |
+| `eh_sketch_list_rejects_sibling_algorithm_kind_ids` | The nested ids are pinned to one algorithm each. | Verifies an HLL triple relabelled `0x01 0x01` or `0x01 0x03` fails to decode, and that a KLL triple relabelled `0x06 0x01` fails too. |
+| `eh_sketch_list_rejects_a_mismatched_kind_id_and_descriptor` | A kind_id that does not match the blocks it carries is refused by the variant's own decoder. | Verifies an HLL triple relabelled with the Count-Min kind_id fails to decode. |
+| `eh_sketch_list_rejects_foreign_kind_ids` | A Count-Min envelope and an `ExponentialHistogram` envelope are not union envelopes. | Verifies both fail to decode as an `EHSketchList`. |
+| `eh_sketch_list_metadata_rejects_unknown_keys` | An unexpected metadata key fails closed. | Encodes `metadata_version` plus a `bogus_field` as a named map and verifies it does not decode as `EhSketchListMetadata`. |
+| `eh_sketch_list_metadata_rejects_a_missing_key` | `metadata_version` is required. | Encodes an empty named map and verifies it does not decode as `EhSketchListMetadata`. |
+| `eh_sketch_list_rejects_crafted_blocks` | Crafted blocks fail closed with an error, never a panic. | Verifies a Count-Min triple whose descriptor is cut in half, and one whose state is three `0xc1` bytes, each fail to decode. |
+| `eh_sketch_list_rejects_a_custom_hash_profile_descriptor` | A descriptor naming a custom hash profile is refused, since the variant's decoder pins the profile of the type it rebuilds. | Verifies a triple built from a custom-profile Count-Min fails to decode. |
+| `eh_sketch_list_query_agrees_after_decode` | A decoded union answers a query the way the original did. | For every populated variant, verifies the source and the decode return the same answer for that variant's sample input. |
 
 ### EHUnivOptimized
 
@@ -546,7 +798,6 @@ Test file: [`src/common/hash.rs`](../src/common/hash.rs)
 | `hash128_seeded_preserves_cardinality` | Hash128 seeded preserves cardinality. | With `SEED_IDX=0` and `SAMPLE_SIZE=5000`, verifies uniform and Zipf sample unique-input counts exactly match unique-hash counts (no observed collisions). |
 | `hash128_seeded_is_deterministic_for_repeated_inputs` | Hash128 seeded is deterministic for repeated inputs. | For fixed key `"deterministic-key"` and seed `3`, verifies 100 repeated `hash128_seeded` calls always equal the first hash value. |
 | `digest_hasher_spreads_digests_that_share_their_low_bits` | `DigestHasher` mixes rather than passing a digest through. | Hashes `0..1024` shifted left by 16, so every digest shares its ten low bits, and verifies more than 550 of the 1,024 low-bit buckets are occupied rather than the single bucket a pass-through hash would fill; the unshifted range is held to the same bound. |
-| `digest_hasher_is_deterministic` | `DigestHasher` returns the same value for the same digest. | For `0`, `1`, `u64::MAX`, and `0xdead_beef`, verifies repeated calls agree, and that `0` and `1` hash differently. |
 
 ### Common Heap Utilities
 

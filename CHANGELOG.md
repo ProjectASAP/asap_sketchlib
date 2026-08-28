@@ -65,9 +65,34 @@ signals a backwards-compatible change.
   capability with the exact no-false-negative check, a false-positive-rate
   ceiling and a band around `predicted_fpp`, since the existing batteries are
   all frequency- or numeric-shaped.
+- **ASAPv1 wire payloads for every remaining implemented sketch.** `CMSHeap`
+  (`0x03 0x00`), `DDSketch` (`0x05 0x00`), `Hydra` over each of its five
+  counters (`0x07 0x00`-`0x07 0x04`), `CSHeap` (`0x0a 0x00`), `Elastic`
+  (`0x0b 0x00`), `Coco` (`0x0c 0x00`), `UniformSampling` (`0x0d 0x00`), `KMV`
+  (`0x0e 0x00`), `UnivMon` (`0x10 0x00`), `UnivMon Optimized` (`0x11 0x00`),
+  `ExponentialHistogram` (`0x13 0x00`), `EHSketchList` (`0x14 0x00`),
+  `CountL2HH` (`0x19 0x00`) and `UnivMon-Q` (`0x1a 0x00`) each serialize through
+  the shared envelope, with a closed metadata schema and a positional payload
+  specified in `docs/asapv1_wire_format.md` Section 3. A nested sketch is
+  inlined rather than wrapped in an envelope of its own, except where the nested
+  algorithm is data rather than a type: an `EHSketchList` carries the variant's
+  own `kind_id`, metadata block and payload block with the framing stripped, so
+  that variant's own decoder validates it. Every decoder fails closed — a
+  declared capacity never sizes an allocation, every geometry is bounds- and
+  overflow-checked before anything is sized from it, and a container whose
+  order does not survive a rebuild has its emitted order pinned, so a decoded
+  sketch re-serializes byte-identically.
 
 ### Changed
 
+- **BREAKING (wire format):** `serialize_to_bytes` / `deserialize_from_bytes`
+  emit and read the ASAPv1 envelope for every sketch the `kind_id` registry
+  marks implemented. Bytes produced by the earlier serde-derived form of those
+  types **do not decode**; there is no legacy read path, since a new encoding
+  takes a new `kind_id` rather than a payload version field. Golden byte-vector
+  fixtures exist for HLL, Count-Min, Count Sketch and compact KLL only, so the
+  other kinds have no cross-language drift guard yet and `portable` stays in
+  place until they do.
 - **Made `HHHeap::update` independent of capacity.** The key index was rebuilt
   in full after every accepted update, cloning each resident's key, so the top-k
   structure behind `CMSHeap`, `CSHeap`, `FoldCMS`, `FoldCS`, `UnivMon` and the
