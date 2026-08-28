@@ -39,11 +39,8 @@
 //! queries, while the `_topk` variants compose the sketch with heap
 //! bookkeeping for heavy-hitter workloads.
 
-#[cfg(feature = "experimental")]
 pub mod coco;
-#[cfg(feature = "experimental")]
 pub use coco::Coco;
-#[cfg(feature = "experimental")]
 pub use coco::CocoBucket;
 
 /// Fixed-counter heavy-hitter tracking over a Stream-Summary.
@@ -67,11 +64,8 @@ pub mod countminsketch;
 pub use crate::MatrixStorage;
 pub use countminsketch::{CountMin, QUICKSTART_COL_NUM, QUICKSTART_ROW_NUM};
 
-#[cfg(feature = "experimental")]
 pub mod elastic;
-#[cfg(feature = "experimental")]
 pub use elastic::Elastic;
-#[cfg(feature = "experimental")]
 pub use elastic::HeavyBucket;
 
 /// HyperLogLog implementations and aliases.
@@ -109,11 +103,10 @@ pub use countsketch_topk::{CountL2HH, l2hh_cell_for_row};
 
 pub mod octo_delta;
 pub use octo_delta::{
-    CM_PROMASK, COUNT_PROMASK, CmDelta, CountDelta, DD_PROMASK, DdDelta, HLL_PROMASK, HllDelta,
-    KeyedCmDelta, KeyedCountDelta, LayeredCountDelta, MAX_PROMASK, OctoThreshold, UNIVMON_PROMASK,
+    CM_PROMASK, COCO_PROMASK, COUNT_PROMASK, CmDelta, CocoDelta, CountDelta, DD_PROMASK, DdDelta,
+    ELASTIC_PROMASK, ElasticDelta, HLL_PROMASK, HllDelta, KeyedCmDelta, KeyedCountDelta,
+    LayeredCountDelta, MAX_PROMASK, OctoThreshold, UNIVMON_PROMASK,
 };
-#[cfg(feature = "experimental")]
-pub use octo_delta::{COCO_PROMASK, CocoDelta, ELASTIC_PROMASK, ElasticDelta};
 
 pub mod fold_cms;
 pub use fold_cms::{FoldCMS, FoldCell, FoldEntry};

@@ -23,7 +23,7 @@ pub enum SketchNorm {
 pub enum EHSketchList {
     /// Count-Min sketch.
     CM(CountMin<Vector2D<i32>, FastPath>),
-    #[cfg(feature = "experimental")]
+    /// CocoSketch.
     COCO(Coco),
     /// CountL2HH sketch.
     COUNTL2HH(CountL2HH),
@@ -31,7 +31,7 @@ pub enum EHSketchList {
     CS(Count<Vector2D<i32>, FastPath>),
     /// DDSketch.
     DDS(DDSketch),
-    #[cfg(feature = "experimental")]
+    /// Elastic sketch.
     ELASTIC(Elastic),
     /// HyperLogLog.
     HLL(HyperLogLog<ErtlMLE>),
@@ -50,14 +50,14 @@ impl EHSketchList {
         match self {
             EHSketchList::COUNTL2HH(_) | EHSketchList::UNIVMON(_) => norm == SketchNorm::L2,
             EHSketchList::CM(_)
+            | EHSketchList::COCO(_)
             | EHSketchList::CS(_)
             | EHSketchList::DDS(_)
+            | EHSketchList::ELASTIC(_)
             | EHSketchList::HLL(_)
             | EHSketchList::KLL(_) => norm == SketchNorm::L1,
             #[cfg(feature = "experimental")]
-            EHSketchList::COCO(_) | EHSketchList::ELASTIC(_) | EHSketchList::UNIFORM(_) => {
-                norm == SketchNorm::L1
-            }
+            EHSketchList::UNIFORM(_) => norm == SketchNorm::L1,
         }
     }
 
@@ -76,7 +76,6 @@ impl EHSketchList {
     pub fn insert(&mut self, val: &DataInput) {
         match self {
             EHSketchList::CM(sketch) => sketch.insert(val),
-            #[cfg(feature = "experimental")]
             EHSketchList::COCO(sketch) => match val {
                 DataInput::Str(s) => sketch.insert(s, 1),
                 DataInput::String(s) => sketch.insert(s.as_str(), 1),
@@ -87,7 +86,6 @@ impl EHSketchList {
             EHSketchList::DDS(sketch) => {
                 let _ = sketch.add_input(val);
             }
-            #[cfg(feature = "experimental")]
             EHSketchList::ELASTIC(sketch) => match val {
                 DataInput::String(s) => sketch.insert(s.to_string()),
                 DataInput::I32(i) => sketch.insert(i.to_string()),
@@ -129,7 +127,6 @@ impl EHSketchList {
                 s.merge(o);
                 Ok(())
             }
-            #[cfg(feature = "experimental")]
             (EHSketchList::COCO(s), EHSketchList::COCO(o)) => {
                 s.merge(o);
                 Ok(())
@@ -167,9 +164,7 @@ impl EHSketchList {
     pub fn query(&self, key: &DataInput) -> Result<f64, &'static str> {
         match (self, key) {
             (EHSketchList::CM(count_min), _) => Ok(count_min.estimate(key) as f64),
-            #[cfg(feature = "experimental")]
             (EHSketchList::COCO(coco), DataInput::Str(s)) => Ok(coco.estimate_key(s) as f64),
-            #[cfg(feature = "experimental")]
             (EHSketchList::COCO(coco), DataInput::String(s)) => {
                 Ok(coco.estimate_key(s.as_str()) as f64)
             }
@@ -205,7 +200,6 @@ impl EHSketchList {
                 "max" => dd.max().ok_or("DDSketch has no samples"),
                 _ => Err("Unsupported command for DDSketch"),
             },
-            #[cfg(feature = "experimental")]
             (EHSketchList::ELASTIC(elastic), DataInput::String(s)) => {
                 Ok(elastic.query(s.clone()) as f64)
             }
@@ -266,12 +260,10 @@ impl EHSketchList {
     pub fn sketch_type(&self) -> &'static str {
         match self {
             EHSketchList::CM(_) => "CountMin",
-            #[cfg(feature = "experimental")]
             EHSketchList::COCO(_) => "Coco",
             EHSketchList::COUNTL2HH(_) => "CountL2HH",
             EHSketchList::CS(_) => "CountSketch",
             EHSketchList::DDS(_) => "DDSketch",
-            #[cfg(feature = "experimental")]
             EHSketchList::ELASTIC(_) => "Elastic",
             EHSketchList::HLL(_) => "HLL",
             EHSketchList::KLL(_) => "KLL",

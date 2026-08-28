@@ -220,9 +220,7 @@ mod tests {
     use crate::sketch_framework::eh_sketch_list::wire::tests::{
         alt_profile_triple, populated_variants, relabelled, sample_input,
     };
-    use crate::sketch_framework::eh_sketch_list::wire::{
-        CM_KIND, COCO_KIND, ELASTIC_KIND, UNIFORM_KIND,
-    };
+    use crate::sketch_framework::eh_sketch_list::wire::{CM_KIND, UNIFORM_KIND};
     use crate::sketch_framework::eh_sketch_list::{EHSketchList, SketchNorm};
     use crate::{CountMin, DataInput, FastPath, Vector2D};
 
@@ -461,34 +459,26 @@ mod tests {
         assert!(eh.serialize_to_bytes().is_err());
     }
 
-    /// An experimental kind_id in a bucket is rejected without the feature.
+    /// The experimental kind_id in a bucket is rejected without the feature.
     /// Crafted bytes, so the test runs in both builds.
     #[test]
     fn eh_rejects_an_experimental_kind_id_in_a_bucket() {
         let sketch = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
-        for (kind_id, name) in [
-            (COCO_KIND, "Coco"),
-            (ELASTIC_KIND, "Elastic"),
-            (UNIFORM_KIND, "UniformSampling"),
-        ] {
-            let payload = EhPayload {
-                buckets: vec![relabelled(&sketch, kind_id)],
-                sizes: vec![1],
-                min_times: vec![0],
-                max_times: vec![0],
-                prototype: relabelled(&sketch, CM_KIND),
-            };
-            let message = ExponentialHistogram::deserialize_from_bytes(&envelope_for(&payload))
-                .expect_err("a relabelled bucket must not decode")
-                .to_string();
-            assert!(!message.is_empty());
-            #[cfg(not(feature = "experimental"))]
-            {
-                assert!(message.contains(name), "{message}");
-                assert!(message.contains("experimental"), "{message}");
-            }
-            #[cfg(feature = "experimental")]
-            let _ = name;
+        let payload = EhPayload {
+            buckets: vec![relabelled(&sketch, UNIFORM_KIND)],
+            sizes: vec![1],
+            min_times: vec![0],
+            max_times: vec![0],
+            prototype: relabelled(&sketch, CM_KIND),
+        };
+        let message = ExponentialHistogram::deserialize_from_bytes(&envelope_for(&payload))
+            .expect_err("a relabelled bucket must not decode")
+            .to_string();
+        assert!(!message.is_empty());
+        #[cfg(not(feature = "experimental"))]
+        {
+            assert!(message.contains("UniformSampling"), "{message}");
+            assert!(message.contains("experimental"), "{message}");
         }
     }
 

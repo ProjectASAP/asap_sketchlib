@@ -1,6 +1,6 @@
 # API: Elastic
 
-Status: `Unstable`
+Status: `Ready`
 
 > Warning: This API is kept for backward compatibility. It does not follow the full structured API parity used by Ready sketches.
 
@@ -365,7 +365,7 @@ let _ = sk.query("flow".to_string());
 
 ## Multi-core (OctoSketch)
 
-> **Feature gate:** also requires `octo-runtime` for the runtime itself.
+> **Feature gate:** requires `octo-runtime` for the runtime itself.
 
 ```rust
 let plan = ElasticOctoPlan::new(256, 3, 4096);
@@ -407,4 +407,4 @@ must be asked for. See `docs/api/api_octo.md`.
 
 ## Status
 
-Unstable; migration work is tracked in `features.md`.
+Ready.

@@ -42,14 +42,12 @@ pub const HLL_PROMASK: u8 = 0;
 /// A Coco bucket counter is exactly as dense as a Count-Min cell - every
 /// insert lands on one of them and increments it by one - so it takes the same
 /// τ.
-#[cfg(feature = "experimental")]
 pub const COCO_PROMASK: u32 = 0x1f;
 
 /// Default promotion threshold τ for Elastic sketch workers.
 ///
 /// One τ covers both halves: a heavy-part vote counter and a light-part
 /// Count-Min counter each advance by one per insert.
-#[cfg(feature = "experimental")]
 pub const ELASTIC_PROMASK: u32 = 0x1f;
 
 /// Largest threshold a worker may be configured with.
@@ -134,7 +132,6 @@ pub struct KeyedCountDelta {
 /// aggregator replays the pair through the parent's own insertion logic. There
 /// is no cell index because the parent re-derives one - its victim choice
 /// depends on what its own buckets hold, not on the worker's.
-#[cfg(feature = "experimental")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CocoDelta {
     /// Key the promoted bucket holds.
@@ -154,7 +151,6 @@ pub struct CocoDelta {
 /// bucket carries an eviction flag that §4.4's rule has no way to move. The
 /// flag rides with the counter word it qualifies, and the evicted resident
 /// travels under its own key.
-#[cfg(feature = "experimental")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ElasticDelta {
     /// Heavy-part bucket: the resident flow, the votes it accumulated, and the

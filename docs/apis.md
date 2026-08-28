@@ -27,9 +27,9 @@ This is the canonical API entry point for `asap_sketchlib`.
 - [Bloom](./api/api_bloom.md) - `Ready`
   - Reference: Bloom, "Space/Time Trade-offs in Hash Coding with Allowable Errors," CACM 1970. [https://dl.acm.org/doi/10.1145/362686.362692](https://dl.acm.org/doi/10.1145/362686.362692)
   - Per-slice partitioning: Kirsch & Mitzenmacher, "Less Hashing, Same Performance," ESA 2006. [https://doi.org/10.1007/11841036_42](https://doi.org/10.1007/11841036_42)
-- [Elastic](./api/api_elastic.md) - `Unstable`
+- [Elastic](./api/api_elastic.md) - `Ready`
   - Reference: Chen et al., "Elastic Sketch: Adaptive and Fast Network-wide Measurements," SIGCOMM 2018. [https://dl.acm.org/doi/10.1145/3230543.3230544](https://dl.acm.org/doi/10.1145/3230543.3230544)
-- [Coco](./api/api_coco.md) - `Unstable`
+- [Coco](./api/api_coco.md) - `Ready`
   - Reference: CocoSketch paper. [https://dl.acm.org/doi/10.1145/3452296.3472892](https://dl.acm.org/doi/10.1145/3452296.3472892)
 - [UniformSampling](./api/api_uniform_sampling.md) - `Unstable`
 - [KMV](./api/api_kmv.md) - `Unstable`

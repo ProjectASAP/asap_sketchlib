@@ -24,8 +24,8 @@
 //! ## The kind_id namespace is fixed in every build
 //!
 //! All ten ids dispatch whatever features are on. A decoder built without
-//! `experimental` rejects `0x0c 0x00`, `0x0b 0x00` and `0x0d 0x00` by name with
-//! the feature named, and its encoder can never emit them.
+//! `experimental` rejects `0x0d 0x00` by name with the feature named, and its
+//! encoder can never emit it.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ pub(crate) const EH_SKETCH_LIST_KIND: &[u8] = &[0x14, 0x00];
 
 /// Count-Min, the blocks [`EHSketchList::CM`] carries.
 pub(crate) const CM_KIND: &[u8] = &[0x02, 0x00];
-/// Coco, the blocks `EHSketchList::COCO` carries.
+/// Coco, the blocks [`EHSketchList::COCO`] carries.
 pub(crate) const COCO_KIND: &[u8] = &[0x0c, 0x00];
 /// CountL2HH, the blocks [`EHSketchList::COUNTL2HH`] carries.
 pub(crate) const COUNTL2HH_KIND: &[u8] = &[0x19, 0x00];
@@ -47,7 +47,7 @@ pub(crate) const COUNTL2HH_KIND: &[u8] = &[0x19, 0x00];
 pub(crate) const CS_KIND: &[u8] = &[0x04, 0x00];
 /// DDSketch, the blocks [`EHSketchList::DDS`] carries.
 pub(crate) const DDS_KIND: &[u8] = &[0x05, 0x00];
-/// Elastic, the blocks `EHSketchList::ELASTIC` carries.
+/// Elastic, the blocks [`EHSketchList::ELASTIC`] carries.
 pub(crate) const ELASTIC_KIND: &[u8] = &[0x0b, 0x00];
 /// HLL Ertl-MLE, the blocks [`EHSketchList::HLL`] carries. Classic
 /// (`0x01 0x01`) and HIP (`0x01 0x03`) are other algorithms.
@@ -114,11 +114,11 @@ pub(crate) fn unknown_variant(kind_id: &[u8]) -> RmpDecodeError {
     ))
 }
 
-/// Rejects the three variants a build without `experimental` does not carry.
+/// Rejects the variant a build without `experimental` does not carry.
 #[cfg(not(feature = "experimental"))]
 fn check_variant_available(kind_id: &[u8]) -> Result<(), RmpDecodeError> {
     match kind_id {
-        COCO_KIND | ELASTIC_KIND | UNIFORM_KIND => Err(RmpDecodeError::Uncategorized(format!(
+        UNIFORM_KIND => Err(RmpDecodeError::Uncategorized(format!(
             "ASAPv1 EHSketchList: variant {} (kind_id {kind_id:02x?}) needs the experimental feature",
             variant_name(kind_id).unwrap_or("unnamed")
         ))),
@@ -153,12 +153,10 @@ fn triple(kind: &'static [u8], bytes: &[u8]) -> Result<SketchState, RmpEncodeErr
 pub(crate) fn sketch_state(sketch: &EHSketchList) -> Result<SketchState, RmpEncodeError> {
     match sketch {
         EHSketchList::CM(s) => triple(CM_KIND, &s.serialize_to_bytes()?),
-        #[cfg(feature = "experimental")]
         EHSketchList::COCO(s) => triple(COCO_KIND, &s.serialize_to_bytes()?),
         EHSketchList::COUNTL2HH(s) => triple(COUNTL2HH_KIND, &s.serialize_to_bytes()?),
         EHSketchList::CS(s) => triple(CS_KIND, &s.serialize_to_bytes()?),
         EHSketchList::DDS(s) => triple(DDS_KIND, &s.serialize_to_bytes()?),
-        #[cfg(feature = "experimental")]
         EHSketchList::ELASTIC(s) => triple(ELASTIC_KIND, &s.serialize_to_bytes()?),
         EHSketchList::HLL(s) => triple(HLL_KIND, &s.serialize_to_bytes()?),
         EHSketchList::KLL(s) => triple(KLL_KIND, &s.serialize_to_bytes()?),
@@ -179,7 +177,6 @@ pub(crate) fn rebuild_sketch(triple: &SketchState) -> Result<EHSketchList, RmpDe
         CM_KIND => Ok(EHSketchList::CM(crate::CountMin::deserialize_from_bytes(
             &bytes,
         )?)),
-        #[cfg(feature = "experimental")]
         COCO_KIND => Ok(EHSketchList::COCO(crate::Coco::deserialize_from_bytes(
             &bytes,
         )?)),
@@ -192,7 +189,6 @@ pub(crate) fn rebuild_sketch(triple: &SketchState) -> Result<EHSketchList, RmpDe
         DDS_KIND => Ok(EHSketchList::DDS(crate::DDSketch::deserialize_from_bytes(
             &bytes,
         )?)),
-        #[cfg(feature = "experimental")]
         ELASTIC_KIND => Ok(EHSketchList::ELASTIC(
             crate::Elastic::deserialize_from_bytes(&bytes)?,
         )),
@@ -272,14 +268,12 @@ pub(crate) mod tests {
         let mut out = vec![EHSketchList::CM(
             CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
         )];
-        #[cfg(feature = "experimental")]
         out.push(EHSketchList::COCO(crate::Coco::init_with_size(16, 2)));
         out.push(EHSketchList::COUNTL2HH(CountL2HH::with_dimensions(3, 256)));
         out.push(EHSketchList::CS(
             Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
         ));
         out.push(EHSketchList::DDS(DDSketch::new(0.01)));
-        #[cfg(feature = "experimental")]
         out.push(EHSketchList::ELASTIC(crate::Elastic::init_with_dimensions(
             8, 2, 256,
         )));
@@ -436,31 +430,23 @@ pub(crate) mod tests {
         }
     }
 
-    /// An experimental kind_id is rejected without the feature, with an error
+    /// The experimental kind_id is rejected without the feature, with an error
     /// naming the variant. Crafted bytes, so the test runs in both builds.
     #[test]
     fn eh_sketch_list_rejects_an_experimental_kind_id() {
-        for (kind_id, name) in [
-            (COCO_KIND, "Coco"),
-            (ELASTIC_KIND, "Elastic"),
-            (UNIFORM_KIND, "UniformSampling"),
-        ] {
-            let triple = SketchState {
-                kind_id: kind_id.to_vec(),
-                descriptor: Vec::new(),
-                state: Vec::new(),
-            };
-            let message = EHSketchList::deserialize_from_bytes(&envelope_for(&triple))
-                .expect_err("an empty variant state must not decode")
-                .to_string();
-            assert!(!message.is_empty());
-            #[cfg(not(feature = "experimental"))]
-            {
-                assert!(message.contains(name), "{message}");
-                assert!(message.contains("experimental"), "{message}");
-            }
-            #[cfg(feature = "experimental")]
-            let _ = name;
+        let triple = SketchState {
+            kind_id: UNIFORM_KIND.to_vec(),
+            descriptor: Vec::new(),
+            state: Vec::new(),
+        };
+        let message = EHSketchList::deserialize_from_bytes(&envelope_for(&triple))
+            .expect_err("an empty variant state must not decode")
+            .to_string();
+        assert!(!message.is_empty());
+        #[cfg(not(feature = "experimental"))]
+        {
+            assert!(message.contains("UniformSampling"), "{message}");
+            assert!(message.contains("experimental"), "{message}");
         }
     }
 

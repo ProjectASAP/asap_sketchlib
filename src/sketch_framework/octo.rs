@@ -39,11 +39,9 @@ use crate::octo_delta::{
     DD_PROMASK, DdDelta, KeyedCmDelta, KeyedCountDelta, MAX_PROMASK, OctoThreshold, UNIVMON_PROMASK,
 };
 use crate::sketch_framework::univmon::{UnivMonDeltaFidelity, bottom_layer_for_hash};
-#[cfg(feature = "experimental")]
 use crate::sketches::coco::Coco;
 use crate::sketches::countminsketch_topk::CMSHeap;
 use crate::sketches::countsketch_topk::{CSHeap, l2hh_cell_for_row};
-#[cfg(feature = "experimental")]
 use crate::sketches::elastic::{Elastic, LAMBDA};
 use crate::{
     BOTTOM_LAYER_FINDER, CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin,
@@ -51,11 +49,8 @@ use crate::{
     RegularPath, UnivMon, Vector2D, hash64_seeded, hash128_seeded, heap_item_to_sketch_input,
     input_to_owned,
 };
-#[cfg(feature = "experimental")]
 use crate::{CANONICAL_HASH_SEED, COCO_PROMASK, CocoDelta, ELASTIC_PROMASK, ElasticDelta};
-#[cfg(feature = "experimental")]
 use rand::Rng;
-#[cfg(feature = "experimental")]
 use rand::rngs::ThreadRng;
 use smallvec::SmallVec;
 
@@ -512,7 +507,6 @@ impl L2hhWorkerSketch {
 /// so this worker keeps the keys and shrinks only the counters. Every step of
 /// `insert_emit_delta` mirrors `Coco::insert`, down to the uniform draw among
 /// tied minima and the `v / val` election, so the two cannot drift apart.
-#[cfg(feature = "experimental")]
 #[derive(Clone, Debug)]
 pub struct CocoWorkerSketch {
     keys: Vec<Option<String>>,
@@ -521,7 +515,6 @@ pub struct CocoWorkerSketch {
     d: usize,
 }
 
-#[cfg(feature = "experimental")]
 impl CocoWorkerSketch {
     /// Creates a `d` x `w` worker table, empty and cleared. The argument order
     /// is `Coco::init_with_size`'s.
@@ -650,7 +643,6 @@ impl CocoWorkerSketch {
 ///
 /// `eviction` carries the parent's own semantics -- set on takeover by
 /// eviction, clear on seating a previously unoccupied slot.
-#[cfg(feature = "experimental")]
 #[derive(Clone, Debug, Default)]
 struct ElasticWorkerBucket {
     flow_id: Option<String>,
@@ -667,14 +659,12 @@ struct ElasticWorkerBucket {
 /// ordinary [`CmWorkerSketch`], promoting cell deltas with no key attached, and
 /// takes the arrivals that lose a bucket contest. An evicted resident does not
 /// go there: it is handed over keyed, as [`ElasticDelta::Evicted`].
-#[cfg(feature = "experimental")]
 #[derive(Clone, Debug)]
 pub struct ElasticWorkerSketch {
     heavy: Vec<ElasticWorkerBucket>,
     light: CmWorkerSketch,
 }
 
-#[cfg(feature = "experimental")]
 impl ElasticWorkerSketch {
     /// Creates a worker mirroring an `Elastic` of these dimensions.
     pub fn new(bucket_count: usize, light_rows: usize, light_cols: usize) -> Self {
@@ -2172,7 +2162,6 @@ impl OctoAggregator for UnivMonOctoAggregator {
 /// Both sketches key on a `String`, so a plan has to settle on one rendering:
 /// this is what the aggregator will hold, and what `Coco::estimate_key` or
 /// `Elastic::query` must be asked for.
-#[cfg(feature = "experimental")]
 pub fn flow_key_string(input: &DataInput<'_>) -> String {
     use std::fmt::Write as _;
 
@@ -2204,13 +2193,11 @@ pub fn flow_key_string(input: &DataInput<'_>) -> String {
 }
 
 /// OctoSketch worker backed by a compact CocoSketch table.
-#[cfg(feature = "experimental")]
 pub struct CocoOctoWorker {
     sketch: CocoWorkerSketch,
     threshold: OctoThreshold,
 }
 
-#[cfg(feature = "experimental")]
 impl CocoOctoWorker {
     /// Creates a worker with a private threshold fixed at `COCO_PROMASK`.
     pub fn new(w: usize, d: usize) -> Self {
@@ -2231,7 +2218,6 @@ impl CocoOctoWorker {
     }
 }
 
-#[cfg(feature = "experimental")]
 impl OctoWorker for CocoOctoWorker {
     type Delta = CocoDelta;
     /// The rendered flow key; a Coco bucket is nothing without one.
@@ -2263,13 +2249,11 @@ impl OctoWorker for CocoOctoWorker {
 /// insertion logic, which for CocoSketch is the weighted `Coco::insert` - the
 /// aggregator picks its own victim bucket and runs its own election, so a key
 /// the worker held lands wherever the *parent's* table would have put it.
-#[cfg(feature = "experimental")]
 pub struct CocoOctoAggregator {
     /// Parent CocoSketch updated by worker deltas.
     pub sketch: Coco,
 }
 
-#[cfg(feature = "experimental")]
 impl CocoOctoAggregator {
     /// Creates an aggregator with a `d` x `w` parent table.
     pub fn new(w: usize, d: usize) -> Self {
@@ -2279,7 +2263,6 @@ impl CocoOctoAggregator {
     }
 }
 
-#[cfg(feature = "experimental")]
 impl OctoAggregator for CocoOctoAggregator {
     type Delta = CocoDelta;
 
@@ -2292,13 +2275,11 @@ impl OctoAggregator for CocoOctoAggregator {
 // -- Elastic sketch --
 
 /// OctoSketch worker backed by a compact Elastic sketch, both halves.
-#[cfg(feature = "experimental")]
 pub struct ElasticOctoWorker {
     sketch: ElasticWorkerSketch,
     threshold: OctoThreshold,
 }
 
-#[cfg(feature = "experimental")]
 impl ElasticOctoWorker {
     /// Creates a worker with a private threshold fixed at `ELASTIC_PROMASK`.
     pub fn new(bucket_count: usize, light_rows: usize, light_cols: usize) -> Self {
@@ -2329,7 +2310,6 @@ impl ElasticOctoWorker {
     }
 }
 
-#[cfg(feature = "experimental")]
 impl OctoWorker for ElasticOctoWorker {
     type Delta = ElasticDelta;
     /// The rendered flow key. The light half could travel as hashes alone, but
@@ -2365,13 +2345,11 @@ impl OctoWorker for ElasticOctoWorker {
 /// to the light layer as-is. A worker's evicted resident arrives keyed and goes
 /// through `Elastic::absorb_evicted`, which is where the parent learns that a
 /// flow it still holds has mass coming through the light layer.
-#[cfg(feature = "experimental")]
 pub struct ElasticOctoAggregator {
     /// Parent Elastic sketch updated by worker deltas.
     pub sketch: Elastic,
 }
 
-#[cfg(feature = "experimental")]
 impl ElasticOctoAggregator {
     /// Creates an aggregator with a `bucket_count` heavy table over a
     /// `light_rows` by `light_cols` light layer.
@@ -2382,7 +2360,6 @@ impl ElasticOctoAggregator {
     }
 }
 
-#[cfg(feature = "experimental")]
 impl OctoAggregator for ElasticOctoAggregator {
     type Delta = ElasticDelta;
 
@@ -2673,7 +2650,6 @@ impl OctoPlan for DdOctoPlan {
 }
 
 /// Builds `CocoOctoWorker`s; payloads are the rendered flow key.
-#[cfg(feature = "experimental")]
 #[derive(Clone, Debug)]
 pub struct CocoOctoPlan {
     w: usize,
@@ -2681,7 +2657,6 @@ pub struct CocoOctoPlan {
     threshold: OctoThreshold,
 }
 
-#[cfg(feature = "experimental")]
 impl CocoOctoPlan {
     /// Creates a plan at the CocoSketch default threshold.
     pub fn new(w: usize, d: usize) -> Self {
@@ -2704,7 +2679,6 @@ impl CocoOctoPlan {
     }
 }
 
-#[cfg(feature = "experimental")]
 impl OctoPlan for CocoOctoPlan {
     type Worker = CocoOctoWorker;
 
@@ -2718,7 +2692,6 @@ impl OctoPlan for CocoOctoPlan {
 }
 
 /// Builds `ElasticOctoWorker`s; payloads are the rendered flow key.
-#[cfg(feature = "experimental")]
 #[derive(Clone, Debug)]
 pub struct ElasticOctoPlan {
     bucket_count: i32,
@@ -2727,7 +2700,6 @@ pub struct ElasticOctoPlan {
     threshold: OctoThreshold,
 }
 
-#[cfg(feature = "experimental")]
 impl ElasticOctoPlan {
     /// Creates a plan at the Elastic sketch default threshold.
     pub fn new(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self {
@@ -2769,7 +2741,6 @@ impl ElasticOctoPlan {
     }
 }
 
-#[cfg(feature = "experimental")]
 impl OctoPlan for ElasticOctoPlan {
     type Worker = ElasticOctoWorker;
 
@@ -3190,7 +3161,6 @@ mod worker_tests {
         worker.insert_hashes_emit_delta(&hashes, CM_PROMASK, &mut |_| {});
     }
 
-    #[cfg(feature = "experimental")]
     #[test]
     fn coco_worker_promotes_the_key_its_bucket_holds_and_clears_it() {
         let mut worker = CocoWorkerSketch::new(64, 2);
@@ -3212,7 +3182,6 @@ mod worker_tests {
         );
     }
 
-    #[cfg(feature = "experimental")]
     #[test]
     fn coco_promotion_conserves_the_inserted_mass() {
         // Every insert lands in exactly one bucket, so what the parent received
@@ -3237,7 +3206,6 @@ mod worker_tests {
         );
     }
 
-    #[cfg(feature = "experimental")]
     #[test]
     fn elastic_worker_promotes_each_half_on_its_own_terms() {
         let mut worker = ElasticWorkerSketch::new(1, 2, 64);

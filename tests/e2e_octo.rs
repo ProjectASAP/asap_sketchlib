@@ -21,13 +21,12 @@
 //! gap is k*tau under either partition.
 //!
 //! The last section covers the two families that keep a flow key beside every
-//! counter - CocoSketch and the Elastic sketch, section 4.4 and appendix C -
-//! behind the `experimental` feature. Only the Octo variants are here; the
-//! single-threaded sketches are `tests/e2e_heavy_hitters.rs`. Neither family is
-//! covered by a theorem, and Coco's aggregator elects from an unseeded RNG, so
-//! those tests split: exact mass identities that hold under any interleaving,
-//! and the paper's own measured comparison against sketch-merge for everything
-//! else.
+//! counter - CocoSketch and the Elastic sketch, section 4.4 and appendix C.
+//! Only the Octo variants are here; the single-threaded sketches are
+//! `tests/e2e_heavy_hitters.rs`. Neither family is covered by a theorem, and
+//! Coco's aggregator elects from an unseeded RNG, so those tests split: exact
+//! mass identities that hold under any interleaving, and the paper's own
+//! measured comparison against sketch-merge for everything else.
 
 mod common;
 
@@ -2856,7 +2855,6 @@ fn a_flat_threshold_starves_the_deep_univmon_layers() {
 // everything else over enough runs to state a band in standard errors. Elastic
 // has no randomness and is asserted exactly throughout.
 
-#[cfg(feature = "experimental")]
 mod heavy_hitters {
     use super::*;
     use asap_sketchlib::CmWorkerSketch;
