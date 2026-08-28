@@ -949,6 +949,7 @@ impl KLL<f64> {
     /// Batch variant of `update_data_input`. Stops on the first non-numeric
     /// input and returns the same error as the per-element path, so
     /// `bulk_update_data_input` is exactly equivalent to looping `update_data_input`.
+    /// On error `count()` is the successful prefix before the error.
     pub fn bulk_update_data_input(&mut self, values: &[DataInput]) -> Result<(), &'static str> {
         for v in values {
             let value = data_input_to_f64(v)?;

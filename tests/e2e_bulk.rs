@@ -75,8 +75,6 @@ fn kll_bulk_vs_loop_normal() {
 
 #[test]
 fn kll_bulk_vs_loop_uniform() {
-    let vals: Vec<f64> = (0..30_000).map(|i| i as f64 * 1.7 + 11.0).collect();
-    // Use harness uniform for non-trivial distribution
     let vals2 = {
         let mut v = Vec::new();
         for x in common::uniform_u64(20_000, 1_000_000, 7002) {
@@ -86,9 +84,8 @@ fn kll_bulk_vs_loop_uniform() {
     };
     bulk_vs_loop_seeded_impl("KLL uniform 20k", vals2, || KLL::init_with_seed(200, 8, 43));
     // Also tiny sequential edge (no compaction)
-    bulk_vs_loop_seeded_impl("KLL seq 10", vals[..10].to_vec(), || {
-        KLL::init_with_seed(200, 8, 44)
-    });
+    let seq10: Vec<f64> = (0..10).map(|i| i as f64 * 1.7 + 11.0).collect();
+    bulk_vs_loop_seeded_impl("KLL seq 10", seq10, || KLL::init_with_seed(200, 8, 44));
 }
 
 #[test]
