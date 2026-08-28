@@ -15,7 +15,8 @@ use std::mem::size_of;
 use std::time::{Duration, Instant};
 
 use asap_sketchlib::{
-    BOTTOM_LAYER_FINDER, DataInput, HeapItem, UnivMon, UnivMonQ, UnivMonQConfig, hash64_seeded,
+    BOTTOM_LAYER_FINDER, DataInput, DefaultXxHasher, HeapItem, UnivMon, UnivMonQ, UnivMonQConfig,
+    hash64_seeded,
 };
 
 const SKEWS: [f64; 7] = [0.0, 0.5, 0.9, 1.1, 1.3, 1.6, 2.0];
@@ -330,7 +331,7 @@ fn evaluate_trial(
     }
 
     let q_wire = q_merged_tree.serialize_to_bytes().unwrap();
-    let q_decoded = UnivMonQ::deserialize_from_bytes(&q_wire).unwrap();
+    let q_decoded = UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&q_wire).unwrap();
     if !equivalent_queries(&q_merged_tree, &q_decoded, truth) {
         q_violations += 1;
     }

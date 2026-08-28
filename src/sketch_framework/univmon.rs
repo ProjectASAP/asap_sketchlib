@@ -31,11 +31,10 @@ use crate::common::{
 use crate::common::{L2HH, Vector1D};
 use crate::octo_delta::LayeredCountDelta;
 use crate::sketches::countsketch_topk::CountL2HH;
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+
+pub(crate) mod wire;
 
 const DEFAULT_SKETCH_ROW: usize = 5;
 const DEFAULT_SKETCH_COL: usize = 2048;
@@ -533,29 +532,6 @@ impl UnivMon {
     /// Returns the heap for one layer.
     pub fn heap_at_layer(&mut self, layer: usize) -> &mut HHHeap {
         &mut self.hh_layers[layer]
-    }
-
-    /// Serializes the UnivMon sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-
-    /// Deserializes a UnivMon sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let mut sketch: Self = from_slice(bytes)?;
-        if sketch.bucket_size > 0 && sketch.update_mode == UnivMonUpdateMode::Unset {
-            // Named-map payloads written before update modes existed contain
-            // cumulative sampled layers, i.e. the standard UnivMon layout.
-            sketch.update_mode = UnivMonUpdateMode::Standard;
-        }
-        if sketch.candidate_complete.len() != sketch.layer_size {
-            sketch.candidate_complete = sketch
-                .hh_layers
-                .iter()
-                .map(|heap| heap.len() < sketch.heap_size)
-                .collect();
-        }
-        Ok(sketch)
     }
 }
 

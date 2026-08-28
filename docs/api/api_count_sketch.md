@@ -81,6 +81,16 @@ Sketch (the variant `HydraCounter` and `EHSketchList` hold) round-trip back into
 its own type. `rows`/`cols` and the `mode` are carried in the metadata too; the
 payload is just `[counts]`, packed row-major with signed cells.
 
+`CountL2HH` has its own ASAPv1 kind (`0x19 0x00`) and the same two methods,
+available for any `H: HashProfile`. Its counters are always `i64` and its
+column derivation is fixed by the algorithm, so the metadata carries no
+`counter_type` and no `mode` — only `seed_index`, `rows` and `cols`. The
+payload is `[counts, l2]`: the matrix packed row-major, then one L2
+accumulator per row. `l2` is carried rather than recomputed, because
+`fast_insert_with_count_without_l2_and_hash` moves counters without it and the
+accumulator saturates one way. The same `(counts, l2)` pair is what a `UnivMon`
+layer inlines into its own payload.
+
 ## Examples
 
 ```rust

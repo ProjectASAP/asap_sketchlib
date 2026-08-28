@@ -74,8 +74,8 @@ holds an `I128` / `U128` key, does not serialize. An empty heap emits
 Entries are emitted in descending count, ties broken by a total order over the
 key, so a decoded sketch re-serializes byte-identically.
 
-`CountL2HH` is a different algorithm and has no ASAPv1 payload yet; its own
-`serialize_to_bytes` is the Rust-internal `portable` form.
+`CountL2HH` is a different algorithm with its own ASAPv1 kind (`0x19 0x00`);
+see [the Count Sketch API doc](./api_count_sketch.md).
 
 ## Examples
 

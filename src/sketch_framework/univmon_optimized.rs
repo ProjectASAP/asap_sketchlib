@@ -16,6 +16,8 @@ use crate::sketch_framework::univmon::UnivMonUpdateMode;
 use crate::sketches::countsketch_topk::CountL2HH;
 use std::collections::{HashMap, HashSet};
 
+mod wire;
+
 /// Object pool for `UnivMon` sketches.
 ///
 /// Maintains a free-list of pre-allocated sketches. Callers take ownership
