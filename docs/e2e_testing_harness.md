@@ -107,10 +107,9 @@ batteries once per counter family it can host (CM, Count Sketch, HLL, KLL),
 alongside the depth no battery models: the `2^D - 1` fan-out across the
 subpopulation lattice checked against exact per-subpopulation truth, wildcard
 marginals reconciled against the cells beneath them, exact shard-merge
-equality, wire round trips for every counter variant, subkey injectivity for
-delimiter-laden values, and MultiHeadHydra's equivalence to independent
-single-head Hydras. Suites grow with their family; a framework that outgrows a
-smoke test deepens in place rather than splitting off.
+equality, wire round trips for every counter variant, and subkey injectivity
+for delimiter-laden values. Suites grow with their family; a framework that
+outgrows a smoke test deepens in place rather than splitting off.
 
 What does split is a suite held together by something other than its subject.
 `e2e_experimental.rs` groups sketches by cargo feature; Space-Saving, CocoSketch

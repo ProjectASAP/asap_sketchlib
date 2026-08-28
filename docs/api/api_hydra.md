@@ -9,25 +9,18 @@ Hierarchical subpopulation sketching over semicolon-separated keys.
 ## Type/Struct
 
 - `Hydra`
-- `MultiHeadHydra`
 
 ## Constructors
 
 ```rust
 fn default() -> Self
 fn with_dimensions(r: usize, c: usize, sketch_type: HydraCounter) -> Self
-
-// MultiHeadHydra
-fn with_dimensions(r: usize, c: usize, dimensions: Vec<(String, HydraCounter)>) -> Self
 ```
 
 ## Insert/Update
 
 ```rust
 fn update(&mut self, key: &str, value: &DataInput, count: Option<i32>)
-
-// MultiHeadHydra
-fn update(&mut self, key: &str, values: &[(&DataInput, &[&str])], count: Option<i32>)
 ```
 
 ## Query
@@ -36,17 +29,12 @@ fn update(&mut self, key: &str, values: &[(&DataInput, &[&str])], count: Option<
 fn query_key(&self, key: Vec<&str>, query: &HydraQuery) -> f64
 fn query_frequency(&self, key: Vec<&str>, value: &DataInput) -> f64
 fn query_quantile(&self, key: Vec<&str>, threshold: f64) -> f64
-
-// MultiHeadHydra
-fn query_key(&self, key: Vec<&str>, dimension: &str, query: &HydraQuery) -> f64
-fn dimension_index(&self, dimension: &str) -> Option<usize>
 ```
 
 ## Merge
 
 ```rust
 fn merge(&mut self, other: &Hydra) -> Result<(), String>
-fn merge(&mut self, other: &MultiHeadHydra) -> Result<(), String>
 ```
 
 ## Serialization
