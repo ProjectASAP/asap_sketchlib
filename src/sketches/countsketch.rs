@@ -12,12 +12,12 @@ use crate::{
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
     QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded, nitro_delta_saturated_i32,
 };
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::ops::Neg;
+
+mod wire;
+pub(crate) use wire::{CsWireCounter, CsWireMode};
 
 const DEFAULT_ROW_NUM: usize = 3;
 const DEFAULT_COL_NUM: usize = 4096;
@@ -271,30 +271,6 @@ where
     /// Mutable access used internally for testing scenarios.
     pub fn as_storage_mut(&mut self) -> &mut S {
         &mut self.counts
-    }
-}
-
-// Serialization helpers for Count.
-impl<S, C, Mode, H: SketchHasher> Count<S, Mode, H>
-where
-    S: MatrixStorage<Counter = C> + Serialize,
-    C: CountSketchCounter,
-{
-    /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-}
-
-// Deserialization helpers for Count.
-impl<S, C, Mode, H: SketchHasher> Count<S, Mode, H>
-where
-    S: MatrixStorage<Counter = C> + for<'de> Deserialize<'de>,
-    C: CountSketchCounter,
-{
-    /// Deserializes a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
     }
 }
 
@@ -985,26 +961,5 @@ mod tests {
         }
 
         assert_eq!(storage.as_slice(), expected_once.as_slice());
-    }
-
-    #[test]
-    fn count_sketch_round_trip_serialization() {
-        let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 8);
-        sketch.insert(&DataInput::U64(42));
-        sketch.insert(&DataInput::U64(7));
-
-        let encoded = sketch.serialize_to_bytes().expect("serialize Count");
-        assert!(!encoded.is_empty());
-        let data_copied = encoded.clone();
-
-        let decoded = Count::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&data_copied)
-            .expect("deserialize Count");
-
-        assert_eq!(sketch.rows(), decoded.rows());
-        assert_eq!(sketch.cols(), decoded.cols());
-        assert_eq!(
-            sketch.as_storage().as_slice(),
-            decoded.as_storage().as_slice()
-        );
     }
 }

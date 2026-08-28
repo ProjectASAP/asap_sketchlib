@@ -72,6 +72,25 @@ Converted today:
   `Mode` is `FastPath` or `RegularPath` (`CmsWireMode`), and `H: HashProfile`.
   The default `Vector2D<i32>` CMS is **not** wire-eligible; convert first. `rows`
   and `cols` live in the metadata; the payload is just `[counts]`.
+- **Count Sketch** (`src/sketches/countsketch/wire.rs`, kind `0x04 0x00`) — the
+  same shape as Count-Min: `Count<Vector2D<T>, Mode, H>` where `T` is `i32` or
+  `i64` (`CsWireCounter`), `Mode` is `FastPath` or `RegularPath` (`CsWireMode`),
+  and `H: HashProfile`. Counters must be signed and negatable, so there is no
+  `f64` counterpart; `i128` and non-`Vector2D` storage must be converted first.
+  `i32` is carried at its own width rather than widened, so a nested
+  `Vector2D<i32>` sketch decodes back into its own type. `rows`, `cols`,
+  `counter_type` and `mode` live in the metadata; the payload is just
+  `[counts]`, with signed cells.
+- **KLL** (`src/sketches/kll/wire.rs` compact → `0x06 0x00`,
+  `src/sketches/kll_dynamic/wire.rs` dynamic → `0x06 0x01`) — both variants share
+  one payload `[levels, items, coin]` and differ only by `kind_id`. KLL never
+  hashes, so its metadata carries no hash-spec group.
+- **Bloom** (`src/sketches/bloom/wire.rs`, kind `0x17 0x00`) — the payload is the
+  bit grid packed into `u64`s plus the insert count; the wire covers the
+  geometries `Bloom::with_capacity` produces.
+- **Space-Saving** (`src/sketches/space_saving/wire.rs`, kind `0x18 0x00`) — the
+  payload is the `(key, count, error)` triples plus `total` and `floor`; the
+  Stream-Summary's links and arenas are rebuilt on decode.
 
 Other sketches are **not yet converted** to `wire.rs`.
 

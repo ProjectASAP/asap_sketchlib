@@ -12,7 +12,7 @@
 - **`src/sketches/`** - Sketch implementations (status source: [apis.md](./apis.md))
   - `Ready` in API index: `countminsketch.rs`, `countsketch.rs`, `hll.rs`, `kll.rs`, `ddsketch.rs`, `countminsketch_topk.rs`, `countsketch_topk.rs`, `space_saving.rs`, `bloom.rs`
   - `Unstable` in API index: `coco.rs`, `elastic.rs`, `uniform.rs`, `kmv.rs`
-  - Sketches converted to the ASAPv1 wire format use a `<sketch>.rs` (algorithm) + `<sketch>/wire.rs` (serialization) split: `hll.rs` + `hll/wire.rs` and `countminsketch.rs` + `countminsketch/wire.rs` today (see [asapv1_wire_format.md](./asapv1_wire_format.md))
+  - Sketches converted to the ASAPv1 wire format use a `<sketch>.rs` (algorithm) + `<sketch>/wire.rs` (serialization) split: `hll.rs`, `countminsketch.rs`, `countsketch.rs`, `kll.rs`, `kll_dynamic.rs`, `bloom.rs` and `space_saving.rs` today (see [asapv1_wire_format.md](./asapv1_wire_format.md))
 
 - **`src/sketch_framework/`** - Orchestration and serving layers (status source: [apis.md](./apis.md))
   - `Ready` in API index: `hydra.rs`, `hashlayer.rs`, `univmon.rs`, `univmon_optimized.rs`, `nitro.rs`, `eh.rs`, `eh_sketch_list.rs`
