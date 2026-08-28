@@ -20,10 +20,10 @@ use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
 use crate::octo_delta::DdDelta;
-use rmp_serde::decode::Error as RmpDecodeError;
-use rmp_serde::encode::Error as RmpEncodeError;
-use rmp_serde::{from_slice, to_vec_named};
 use serde::{Deserialize, Serialize};
+
+/// ASAPv1 wire serialization (kind_id `0x05 0x00`).
+mod wire;
 
 // Number of buckets to grow by when expanding.
 const GROW_CHUNK: usize = 128;
@@ -117,14 +117,13 @@ impl Buckets {
 
 /// Mergeable, relative-error quantile sketch using logarithmically-spaced buckets.
 ///
-/// The DataPoint-level METRIC scalars (`count`, `sum`, `min`, `max`) were
-/// dropped from the portable cross-language wire format
-/// (ProjectASAP/sketchlib-go#243). They are still tracked here as pure
-/// in-memory state because [`DDSketch::get_value_at_quantile`] and
-/// [`DDSketch::merge`] use them internally, but they are NOT serialized:
-/// `count`/`sum` are recovered exactly from the bucket counts on
-/// deserialize and `min`/`max` are re-estimated from the extreme
-/// non-empty buckets (within the α relative-accuracy bound).
+/// ASAPv1 serialization lives in the `wire` submodule (kind_id `0x05 0x00`); it
+/// carries `alpha`, the bucket store, and `sum` / `min` / `max`, and recovers
+/// `count` by summing the buckets.
+///
+/// The derived `Serialize` / `Deserialize` is a separate, Rust-internal form
+/// used where a `DDSketch` is nested in another type; it skips the four running
+/// scalars.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DDSketch {
     alpha: f64,
@@ -186,51 +185,6 @@ impl DDSketch {
             sum: 0.0,
             min: f64::INFINITY,
             max: f64::NEG_INFINITY,
-        }
-    }
-
-    /// Serializes the sketch to a MessagePack byte vector.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-
-    /// Deserializes a DDSketch from a MessagePack byte slice.
-    ///
-    /// The `count`/`sum`/`min`/`max` scalars are `#[serde(skip)]` (dropped
-    /// from the wire, ProjectASAP/sketchlib-go#243), so they default to
-    /// zero on decode. Recompute them from the bucket store: `count` is
-    /// exact (the sum of all bucket counts) and `sum`/`min`/`max` are
-    /// reconstructed from the per-bucket representative values, accurate
-    /// to within the sketch's α relative-accuracy bound.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let mut sk: Self = from_slice(bytes)?;
-        sk.recompute_scalars_from_store();
-        Ok(sk)
-    }
-
-    /// Rebuild the in-memory `count`/`sum`/`min`/`max` aggregates from the
-    /// bucket store after a deserialize that dropped them. `count` is exact;
-    /// `sum`/`min`/`max` are bucket-representative estimates (α-bounded).
-    fn recompute_scalars_from_store(&mut self) {
-        self.count = 0;
-        self.sum = 0.0;
-        self.min = f64::INFINITY;
-        self.max = f64::NEG_INFINITY;
-        let offset = self.store.offset;
-        for (i, &c) in self.store.counts.as_slice().iter().enumerate() {
-            if c == 0 {
-                continue;
-            }
-            let bin = offset + i as i32;
-            let rep = self.bin_representative(bin);
-            self.count += c;
-            self.sum += rep * c as f64;
-            if rep < self.min {
-                self.min = rep;
-            }
-            if rep > self.max {
-                self.max = rep;
-            }
         }
     }
 
@@ -599,55 +553,29 @@ mod tests {
     #[test]
     fn dds_serialization_round_trip() {
         let mut s = DDSketch::new(0.01);
-        let vals = [1.0, 2.0, 3.0, 10.0, 50.0, 100.0, 1000.0]; // sample values
-
-        for v in vals {
+        for v in [1.0, 2.0, 3.0, 10.0, 50.0, 100.0, 1000.0] {
             s.add(&v);
         }
 
-        let encoded = s.serialize_to_bytes().expect("DDSketch serialization fail"); // serialize to bytes
+        let encoded = s.serialize_to_bytes().expect("DDSketch serialization fail");
         assert!(
             !encoded.is_empty(),
             "encoded bytes should not be empty for DDSketch"
         );
-
         let decoded =
-            DDSketch::deserialize_from_bytes(&encoded).expect("DDSketch deserialization fail"); // deserialize back
+            DDSketch::deserialize_from_bytes(&encoded).expect("DDSketch deserialization fail");
 
-        // `count` survives exactly (recomputed by summing buckets). The
-        // `min`/`max`/`sum` scalars are no longer serialized
-        // (ProjectASAP/sketchlib-go#243) — they're reconstructed from the
-        // per-bucket representative `gamma^k*(1+alpha)`. With that DataDog
-        // representative a value sitting anywhere in a bucket (including the
-        // edges) is within EXACTLY alpha of the representative, so alpha is the
-        // correct tolerance — the old `sqrt(gamma)-1` slack was only needed for
-        // the midpoint `gamma^(k+0.5)` representative.
-        assert_eq!(decoded.get_count(), s.get_count()); // counts should match
-        let alpha = s.alpha();
-        let bucket_tol = alpha + 1e-9;
-        let min_rel = (decoded.min().unwrap() - s.min().unwrap()).abs() / s.min().unwrap();
-        let max_rel = (decoded.max().unwrap() - s.max().unwrap()).abs() / s.max().unwrap();
-        assert!(
-            min_rel <= bucket_tol,
-            "min rel err {min_rel} exceeds bucket tol {bucket_tol}"
-        );
-        assert!(
-            max_rel <= bucket_tol,
-            "max rel err {max_rel} exceeds bucket tol {bucket_tol}"
-        );
-
-        // Quantiles are driven by the (serialized) bucket store, but the
-        // original sketch clamps results to its exact in-memory min/max
-        // while the decoded sketch clamps to the reconstructed bucket-edge
-        // estimates — so the two can differ by up to one bucket width. Both
-        // remain within the relative-accuracy guarantee.
+        // `count` is summed back from the buckets; `sum`/`min`/`max` are carried
+        // on the wire, so every scalar and every quantile comes back exact.
+        assert_eq!(decoded.get_count(), s.get_count());
+        assert_eq!(decoded.sum(), s.sum());
+        assert_eq!(decoded.min(), s.min());
+        assert_eq!(decoded.max(), s.max());
         for q in [0.0, 0.1, 0.5, 0.9, 1.0] {
-            let a = s.get_value_at_quantile(q).unwrap();
-            let b = decoded.get_value_at_quantile(q).unwrap();
-            let rel = (a - b).abs() / a.abs();
-            assert!(
-                rel <= bucket_tol,
-                "quantile p={q} rel err {rel} exceeds bucket tol {bucket_tol} (a={a}, b={b})"
+            assert_eq!(
+                decoded.get_value_at_quantile(q),
+                s.get_value_at_quantile(q),
+                "quantile p={q} diverged after a round trip"
             );
         }
     }
