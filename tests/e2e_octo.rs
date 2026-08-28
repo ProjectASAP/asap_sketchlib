@@ -2844,30 +2844,17 @@ fn a_flat_threshold_starves_the_deep_univmon_layers() {
 // Keyed-bucket families: CocoSketch and Elastic sketch (§4.4, appendix C)
 // ===========================================================================
 //
-// §4.4, "Handling counters with flow keys": "some complex sketches (e.g.,
-// CocoSketch and Elastic sketch) has a flow key corresponding to every counter.
-// For these sketches, OctoSketch will send both the key and the counter to the
-// aggregator and set the counter to zero if the counter is large enough. For
-// each <key, counter> pair, the aggregator inserts the key into the sketch
-// using the same insertion logic as the original sketch."
+// Neither family is covered by a theorem, so the assertions here are of two
+// kinds: exact conservation identities that hold under every interleaving, and
+// the paper's measured comparison against the sketch-merge baseline - relative
+// error (figures 21a and 21c) and F1 at the heavy-hitter threshold (figures
+// 20a and 20c).
 //
-// Neither family is covered by a theorem: §5 proves Count-Min (Thm 1), Count
-// sketch (Thm 3) and HyperLogLog (Thm 4), and §5.1 names Elastic only by
-// analogy - "its light part is a Count-Min". CocoSketch appears nowhere in the
-// analysis, and Table 1's 37.25x / 14.03x "Acc." ratios are against
-// sketch-merge with the metric behind them left undefined. So the assertions
-// here are of two kinds and nothing in between: exact conservation identities
-// that hold under every interleaving, and the paper's own measured comparison
-// against the sketch-merge baseline - relative error (figures 21a and 21c) and
-// F1 at the paper's heavy-hitter threshold (figures 20a and 20c).
-//
-// Coco is the one family where replay equality genuinely does not hold. Its
-// aggregator draws from an unseeded RNG, so a promoted batch of τ takes a
-// bucket with probability τ/val rather than 1/val, and bucket residency churns
-// faster than in a single-threaded pass. Mass is conserved exactly; which key
-// holds it is not. The Coco tests therefore assert the mass identities exactly
-// and everything else over enough independent runs to state a band in standard
-// errors. Elastic has no randomness at all and is asserted exactly throughout.
+// Coco's aggregator elects from an unseeded RNG, so a promoted batch of τ takes
+// a bucket with probability τ/val rather than 1/val: mass is conserved exactly,
+// which key holds it is not. Its tests assert the mass identities exactly and
+// everything else over enough runs to state a band in standard errors. Elastic
+// has no randomness and is asserted exactly throughout.
 
 #[cfg(feature = "experimental")]
 mod heavy_hitters {
@@ -4046,26 +4033,11 @@ mod heavy_hitters {
 
     /// Figures 20(a) and 21(a): CocoSketch's F1 and relative error against the
     /// same sketch queried *while the stream runs*, under OctoSketch and under
-    /// periodic sketch-merge. Table 1 puts CocoSketch's accuracy ratio over
-    /// merge at 37.25x; the metric behind that number is never defined, so what
-    /// this asserts is only the direction the figures show, at a merge baseline
-    /// funded past parity.
+    /// periodic sketch-merge, at a merge baseline funded past parity. Asserts
+    /// the direction the figures show, not Table 1's undefined accuracy ratio.
     ///
-    /// The stream has to be long enough for the promotion window to be small
-    /// against the heavy-hitter threshold. At `ALPHA * N = 40` and τ = 31 a
-    /// threshold-sized flow barely promotes at all, and OctoSketch's F1 sits
-    /// below merge's until roughly `ALPHA * N > τ` - measured F1 0.33 vs 0.41 at
-    /// N = 60k, 0.62 vs 0.49 at N = 200k, 0.69 vs 0.52 at N = 600k.
-    ///
-    /// The absolute cap on Octo's own relative error is the one tolerance here
-    /// with no theorem behind it. §7.2 fixes its direction - "OctoSketch tends
-    /// to underestimate compared to the ideal accuracy since there is some
-    /// information left in each worker" - and the τ-batched replay churns
-    /// bucket residency on top of that, so Octo has to trail a single-threaded
-    /// pass. What it may not do is blow up: a single-threaded Coco measures
-    /// 0.001-0.005 on this workload, where the watched flows each own a bucket
-    /// outright, and Octo measured 0.0546-0.0562 over five runs against the
-    /// merge baseline's 0.31. The cap holds it to that order.
+    /// The stream is sized so `ALPHA * N` sits well above τ: below that a
+    /// threshold-sized flow barely promotes and Octo's F1 trails merge's.
     #[test]
     fn coco_online_accuracy_beats_sketch_merge() {
         let (w, d, workers, n) = (512usize, 2usize, 4usize, 200_000usize);

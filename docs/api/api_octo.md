@@ -606,9 +606,8 @@ let result = run_octo(&inputs, &config, plan, || CmOctoAggregator::new(4, 4096))
   at all — see above.
 - DDSketch loses whole buckets rather than lagging on them, so read it
   only after a flush. Between flushes, keep τ small and check
-  `held_back()`; measured on a skewed 200k stream, τ=2 costs 7x the
-  ideal quantile error, τ=4 costs 19x and τ=8 costs 41x, while periodic
-  sketch-merge stays at ideal for 3x the traffic.
+  `held_back()`; the measured cost of each τ is in the DDSketch caveat
+  below.
 - Core pinning silently falls back when the platform has fewer cores than
   `num_workers + 1`, and is a no-op outright on Apple Silicon: macOS
   exposes `thread_policy_set(THREAD_AFFINITY_POLICY)` but arm64 rejects

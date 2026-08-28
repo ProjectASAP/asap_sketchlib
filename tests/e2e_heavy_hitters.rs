@@ -113,17 +113,9 @@ fn key_truth(stream: &[i64]) -> FreqTruth {
     truth
 }
 
-/// Coco is *unbiased*, not one-sided: section 3.2's stochastic variance
-/// minimization attributes a flow's mass to whichever bucket the flow held at
-/// the time, so an estimate comes back either side of the truth and
-/// `one_sided` stays false. `docs/api/api_coco.md` claims no floor either.
-///
-/// The spec is Count Sketch's two-sided reference spec from
-/// `conformance_kit.rs`, unchanged -- the tolerance policy asks for nothing
-/// looser than a comparable sketch, and Coco needs nothing wider. Coco elects
-/// from an unseeded RNG, so the band must hold over every draw rather than one
-/// seed; over 40 independent runs the widest dense-key deviation used 0.7 of
-/// the 25.0 absolute floor.
+/// Coco is *unbiased*, not one-sided: an estimate comes back either side of the
+/// truth, so `one_sided` stays false and the spec is Count Sketch's two-sided
+/// reference spec from `conformance_kit.rs`, unchanged.
 ///
 /// `turnstile_battery` does not fit: `insert` takes an unsigned weight and the
 /// sketch has no decrement path.
@@ -249,15 +241,9 @@ fn coco_point_queries_partition_the_inserted_mass() {
     }
 }
 
-// CocoSketch's accuracy theorems (Theorem 3 error bound, Theorem 4 recall) are
-// stated for the hardware-friendly variant of section 4.2, which this crate does
-// not implement, and neither transfers to the basic sketch as a floor. Recall
-// runs the other way: the hardware variant updates each of the d mapped buckets
-// independently, so a flow gets d chances to be recorded, while the basic sketch
-// updates only the smallest and records the flow in at most one bucket. Measured
-// at l=8, d=2, the basic sketch recalls 0.1350 against a Theorem 4 bound of
-// 0.1440. So the test below asserts the paper's own worked 99% figure at the
-// paper's own configuration, not a bound recomputed from the table.
+// Theorems 3 and 4 are stated for the section 4.2 hardware variant, which this
+// crate does not implement. The test below asserts the paper's own worked 99%
+// figure at the paper's own configuration.
 
 /// Section 3.2 claims stochastic variance minimization "yields unbiased size
 /// estimation", and Theorem 1 gives the per-bucket update distribution that

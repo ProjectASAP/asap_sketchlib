@@ -240,8 +240,7 @@ no estimate moves.
 
 The paper's trigger is two thresholds: a bucket is full when its flows all
 exceed `T2`, and the table is full when more than `T1` buckets are. Deciding
-that is left to the caller — `full_bucket_count(t2)` reports the numerator, and
-a library that silently doubled its own memory would be a surprise. Call
+that is the caller's — `full_bucket_count(t2)` reports the numerator. Call
 `expand_heavy` when your own `T1` is crossed.
 
 After a doubling each flow sits in both halves, and the copy in the half it no
@@ -366,11 +365,8 @@ flow keyed, as `ElasticDelta::Evicted`. `ElasticOctoAggregator` routes those to
 `merge_heavy` — the parent runs its own bucket contest, and may evict a different
 flow than the worker did — `sketch.light` directly, and `absorb_evicted`.
 
-The flag and the keyed eviction go beyond §4.4's `<key, counter>` rule, which
-was written against a flagless Elastic and breaks measurably on this one.
-`docs/api/api_octo.md`, "The Elastic eviction flag", states what is sourced from
-the two papers and their implementations and what is ours, with the ablation
-that decided it.
+The flag and the keyed eviction go beyond §4.4's `<key, counter>` rule.
+`docs/api/api_octo.md`, "The Elastic eviction flag", describes the protocol.
 
 Route with `OctoPartition::HashByKey`, the default. The flag only reaches the
 parent alongside a heavy counter, so it closes the loop while a flow visits one

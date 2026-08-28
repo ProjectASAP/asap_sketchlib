@@ -1498,21 +1498,10 @@ impl OctoWorker for CmTopKOctoWorker {
     }
 
     // No flush: every delta carries the key that produced it, and a worker
-    // keeps no key storage - that is the point of Idea 3 - so a residual cell
-    // cannot be attributed back to a key and has to stay where it is.
-    //
-    // The consequence is not just a low counter. The aggregator only ever
-    // learns a key exists from a delta, so a key that has never promoted is
-    // absent from the heap entirely and estimates zero.
-    //
-    // A key promotes the first time an increment *it* caused takes some row's
-    // counter to tau on its worker. Under HashByKey and collision-free cells
-    // that is exactly its tau-th occurrence, but collisions move it either
-    // way: another key sharing the cell can carry it over early, or can cross
-    // first and clear the cell, discarding the partial count - so a key with
-    // far more than tau occurrences can still be missing. Size tau well under
-    // the frequency you care about, or use the unkeyed pair and track keys
-    // yourself. See `a_key_below_the_threshold_never_reaches_the_topk_aggregator`.
+    // keeps no key storage, so a residual cell cannot be attributed back to a
+    // key. A key that has never promoted is absent from the aggregator's heap
+    // entirely and estimates zero. See
+    // `a_key_below_the_threshold_never_reaches_the_topk_aggregator`.
 }
 
 /// Count-Min parent that also maintains the only heavy-hitter heap in the
