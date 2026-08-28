@@ -20,14 +20,13 @@
 //! - Manousis et al., VLDB 2022.
 //!   <https://vldb.org/pvldb/vol15/p3249-manousis.pdf>
 
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
 use serde::{Deserialize, Serialize};
 
 use crate::Vector2D;
 use crate::input::{HydraCounter, HydraQuery};
 use crate::{DataInput, HYDRA_SEED, hash_for_matrix_seeded};
+
+mod wire;
 
 /// Maximum number of key columns. Each record fans out into `2^D - 1` subkeys,
 /// so `D` is small by construction.
@@ -340,16 +339,6 @@ impl Hydra {
     pub fn query_quantile(&self, key: &[Option<&str>], threshold: f64) -> Result<f64, String> {
         self.query_key(key, &HydraQuery::Cdf(threshold))
     }
-
-    /// Serializes the Hydra sketch (including all counters) into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-
-    /// Deserializes a Hydra sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
-    }
 }
 
 #[cfg(test)]
@@ -495,12 +484,13 @@ mod tests {
 
         let encoded = hydra
             .serialize_to_bytes()
-            .expect("serialize Hydra into MessagePack");
-        assert!(!encoded.is_empty(), "serialized bytes should not be empty");
+            .expect("serialize Hydra into an ASAPv1 envelope");
+        assert!(encoded.starts_with(b"ASAPv1"));
+        assert_eq!(&encoded[7..10], &[2u8, 0x07, 0x01]); // kind_id_len=2, Hydra over Count-Min
         let data = encoded.clone();
 
-        let decoded =
-            Hydra::deserialize_from_bytes(&data).expect("deserialize Hydra from MessagePack");
+        let decoded = Hydra::deserialize_from_bytes(&data)
+            .expect("deserialize Hydra from an ASAPv1 envelope");
 
         assert_eq!(hydra.row_num, decoded.row_num);
         assert_eq!(hydra.col_num, decoded.col_num);
@@ -525,6 +515,11 @@ mod tests {
         assert_eq!(
             region_before, region_after,
             "region frequency changed after serde"
+        );
+        assert_eq!(
+            decoded.serialize_to_bytes().expect("re-serialize"),
+            encoded,
+            "a decoded Hydra re-serialized to different bytes"
         );
     }
 
