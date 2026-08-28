@@ -1,8 +1,8 @@
 //! Native MessagePack codec impl for [`crate::sketches::countminsketch::CountMin`].
 //!
-//! Only the canonical wire configs — i64/f64 counters (`CmsWireCounter`) with a
-//! fast/regular mode (`CmsWireMode`) — are serializable. Exotic in-memory
-//! counters (i32/i128/…) must be converted to a wire type first.
+//! Only the canonical wire configs — i32/i64/f64 counters (`CmsWireCounter`)
+//! with a fast/regular mode (`CmsWireMode`) — are serializable. Exotic in-memory
+//! counters (i128/…) must be converted to a wire type first.
 
 use serde::{Deserialize, Serialize};
 
