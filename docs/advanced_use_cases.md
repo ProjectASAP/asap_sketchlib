@@ -10,7 +10,7 @@ This page covers three distinct categories of advanced usage in `asap_sketchlib`
 
 **The problem with plain sketches**: A single flat CMS can answer "how often does key X appear?" but it cannot answer "how often does key X appear *within region=us*?" without maintaining a separate sketch per dimension value — which blows up memory for high-cardinality dimensions.
 
-**Solution: `Hydra` and `MultiHeadHydra`**
+**Solution: `Hydra`**
 
 `Hydra` maintains a hierarchy of sketches keyed by semicolon-separated dimension prefixes. A single `update` call fans out into the appropriate dimension nodes. Queries can then target any prefix subtree.
 
@@ -25,8 +25,6 @@ hydra.update("region=eu;service=db",  &DataInput::Str("err"), None);
 let est = hydra.query_frequency(vec!["region=us"], &DataInput::Str("err"));
 assert!(est >= 1.0);
 ```
-
-`MultiHeadHydra` extends this to multiple independent dimension hierarchies in parallel (e.g., one head for `region`, another for `service`), each backed by a configurable `HydraCounter` (CMS or Count Sketch variant).
 
 **`HydraCounter`** selects which inner sketch backs each Hydra node. **`HydraQuery`** selects the query type: `Frequency(DataInput)` or `Quantile(threshold)`.
 

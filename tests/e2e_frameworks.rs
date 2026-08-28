@@ -1,6 +1,6 @@
 //! E2E composition-layer pipelines: Hydra subpopulation queries, conformance
-//! batteries and error bounds; MultiHeadHydra routing; UnivMon; Nitro;
-//! ExponentialHistogram; TumblingWindow; HashSketchEnsemble.
+//! batteries and error bounds; UnivMon; Nitro; ExponentialHistogram;
+//! TumblingWindow; HashSketchEnsemble.
 
 mod common;
 
@@ -10,7 +10,6 @@ use common::conformance::{self, FrequencyOps, FrequencySpec, MergeOps, SignedFre
 use common::{FreqTruth, assert_between, zipf_u64};
 
 use asap_sketchlib::input::{HydraCounter, HydraQuery};
-use asap_sketchlib::sketch_framework::hydra::MultiHeadHydra;
 use asap_sketchlib::{
     Count, CountMin, DataInput, EHSketchList, EnsembleSketch, ExponentialHistogram, FastPath,
     FoldCMS, FoldCMSConfig, HashSketchEnsemble, Hydra, HyperLogLog, KLL, TumblingWindow, UnivMon,
@@ -134,57 +133,6 @@ fn hydra_hll_head_cardinality() {
             .expect("card");
         assert_between(card, 450.0, 550.0, &format!("tenant {t} cardinality"));
     }
-}
-
-#[test]
-fn multihead_hydra_routes_values_to_named_heads() {
-    let heads = vec![
-        ("events".to_string(), HydraCounter::CM(Default::default())),
-        ("latency".to_string(), HydraCounter::KLL(KLL::init_kll(200))),
-    ];
-    let mut mh = MultiHeadHydra::with_schema(4, 1024, ["svc"], heads).expect("schema");
-
-    let latencies: Vec<f64> = common::uniform_u64(2000, 500, 4002)
-        .iter()
-        .map(|v| *v as f64)
-        .collect();
-    let latency_truth = common::NumericTruth::new(latencies.clone());
-    for v in &latencies {
-        mh.update(
-            &["svc-a"],
-            &[
-                (&DataInput::F64(*v), &["latency"]),
-                (&DataInput::Str("hit"), &["events"]),
-            ],
-            None,
-        )
-        .expect("update");
-    }
-
-    let freq = mh
-        .query_key(
-            &[Some("svc-a")],
-            "events",
-            &HydraQuery::Frequency(DataInput::Str("hit")),
-        )
-        .expect("freq");
-    assert_between(freq, 1998.0, 2002.0, "events head frequency");
-
-    let med = mh
-        .query_key(&[Some("svc-a")], "latency", &HydraQuery::Quantile(0.5))
-        .expect("med");
-    assert_between(
-        med,
-        latency_truth.quantile(0.46),
-        latency_truth.quantile(0.54),
-        "latency head median",
-    );
-
-    // Unknown head name is an error, not a silent zero.
-    assert!(
-        mh.query_key(&[Some("svc-a")], "nope", &HydraQuery::Cardinality)
-            .is_err()
-    );
 }
 
 /// Sole member of the measure domain, which makes each per-cell Count-Min
@@ -863,133 +811,6 @@ fn hydra_serde_round_trip_preserves_answers_for_every_counter() {
         probe_answers(&decoded_um, &um_probes),
         probe_answers(&um, &um_probes),
         "UnivMon: answers changed across the wire"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// MultiHeadHydra
-// ---------------------------------------------------------------------------
-
-fn multihead(rows: usize, cols: usize) -> MultiHeadHydra {
-    MultiHeadHydra::with_schema(
-        rows,
-        cols,
-        SCHEMA,
-        vec![
-            ("events".to_string(), cell_cm()),
-            (
-                "visitors".to_string(),
-                HydraCounter::HLL(Default::default()),
-            ),
-        ],
-    )
-    .expect("three-column schema")
-}
-
-#[test]
-fn multihead_matches_independent_single_head_hydras() {
-    // MultiHeadHydra is N Hydras sharing one fan-out, reached through a
-    // pre-hashed insert path, so identical streams give identical answers.
-    let stream = labelled_stream(9_000, 5_410);
-    let mut mh = multihead(5, 1024);
-    let mut events = Hydra::with_schema(5, 1024, SCHEMA, cell_cm()).expect("schema");
-    let mut visitors =
-        Hydra::with_schema(5, 1024, SCHEMA, HydraCounter::HLL(Default::default())).expect("schema");
-
-    for (i, rec) in stream.iter().enumerate() {
-        let visitor = DataInput::U32(i as u32 % 700);
-        mh.update(
-            &rec.key,
-            &[
-                (&DataInput::Str(rec.endpoint), &["events"]),
-                (&visitor, &["visitors"]),
-            ],
-            None,
-        )
-        .expect("arity 3");
-        events
-            .update(&rec.key, &DataInput::Str(rec.endpoint), None)
-            .expect("arity 3");
-        visitors.update(&rec.key, &visitor, None).expect("arity 3");
-    }
-
-    for region in REGIONS {
-        for endpoint in ENDPOINTS {
-            let key = [Some(region), None, None];
-            assert_eq!(
-                mh.query_key(
-                    &key,
-                    "events",
-                    &HydraQuery::Frequency(DataInput::Str(endpoint))
-                )
-                .expect("events head"),
-                freq(&events, &key, endpoint),
-                "events head diverged from its single-head twin at {region}/{endpoint}"
-            );
-        }
-        let key = [Some(region), None, None];
-        assert_eq!(
-            mh.query_key(&key, "visitors", &HydraQuery::Cardinality)
-                .expect("visitors head"),
-            visitors
-                .query_key(&key, &HydraQuery::Cardinality)
-                .expect("cardinality"),
-            "visitors head diverged from its single-head twin at {region}"
-        );
-    }
-}
-
-#[test]
-fn multihead_shard_merge_keeps_heads_independent() {
-    let stream = labelled_stream(12_000, 5_420);
-    let mut single = multihead(5, 1024);
-    let mut left = multihead(5, 1024);
-    let mut right = multihead(5, 1024);
-
-    for (i, rec) in stream.iter().enumerate() {
-        let visitor = DataInput::U32(i as u32 % 900);
-        let values: [(&DataInput, &[&str]); 2] = [
-            (&DataInput::Str(rec.endpoint), &["events"]),
-            (&visitor, &["visitors"]),
-        ];
-        single.update(&rec.key, &values, None).expect("arity 3");
-        let shard = if i % 2 == 0 { &mut left } else { &mut right };
-        shard.update(&rec.key, &values, None).expect("arity 3");
-    }
-    left.merge(&right)
-        .expect("identical dims, schema and heads");
-
-    for region in REGIONS {
-        let key = [Some(region), None, None];
-        // The CM head is additive, so the merge is exact.
-        for endpoint in ENDPOINTS {
-            let q = HydraQuery::Frequency(DataInput::Str(endpoint));
-            assert_eq!(
-                left.query_key(&key, "events", &q).expect("events head"),
-                single.query_key(&key, "events", &q).expect("events head"),
-                "events head merge diverged at {region}/{endpoint}"
-            );
-        }
-        // Register-wise max makes the HLL head merge exact too.
-        assert_eq!(
-            left.query_key(&key, "visitors", &HydraQuery::Cardinality)
-                .expect("visitors head"),
-            single
-                .query_key(&key, "visitors", &HydraQuery::Cardinality)
-                .expect("visitors head"),
-            "visitors head merge diverged at {region}"
-        );
-    }
-
-    // Heads are separate measures, so a head rejects the other's query type.
-    assert!(
-        left.query_key(
-            &[Some("eu-west"), None, None],
-            "events",
-            &HydraQuery::Cardinality
-        )
-        .is_err(),
-        "a CM head must reject cardinality queries"
     );
 }
 

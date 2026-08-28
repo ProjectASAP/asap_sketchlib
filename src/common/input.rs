@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     Count, CountL2HH, CountMin, ErtlMLE, FastPath, HyperLogLog, KLL, MatrixHashType, UnivMon,
-    Vector2D, hash_for_matrix,
+    Vector2D,
 };
 
 /// Input wrapper for sketch APIs (supports primitive and borrowed values).
@@ -408,14 +408,6 @@ impl fmt::Display for HydraCounter {
 }
 
 impl HydraCounter {
-    pub(crate) fn hash_for_value(&self, value: &DataInput) -> Option<MatrixHashType> {
-        match self {
-            HydraCounter::CM(cm) => Some(hash_for_matrix(cm.rows(), cm.cols(), value)),
-            HydraCounter::CS(count) => Some(hash_for_matrix(count.rows(), count.cols(), value)),
-            _ => None,
-        }
-    }
-
     /// Insert a value into the counter sketch
     /// This updates the underlying sketch with the given value
     pub fn insert(&mut self, value: &DataInput, count: Option<i32>) {
