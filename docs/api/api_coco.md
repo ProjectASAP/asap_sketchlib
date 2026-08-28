@@ -1,6 +1,6 @@
 # API: Coco
 
-Status: `Unstable`
+Status: `Ready`
 
 > Warning: This API is kept for backward compatibility. It uses specialized substring semantics and does not match structured sketch interfaces.
 
@@ -129,7 +129,7 @@ let _ = sk.estimate_projected("region=us", |full| {
 
 ## Multi-core (OctoSketch)
 
-> **Feature gate:** also requires `octo-runtime` for the runtime itself.
+> **Feature gate:** requires `octo-runtime` for the runtime itself.
 
 ```rust
 let plan = CocoOctoPlan::new(1024, 2);
@@ -163,4 +163,4 @@ against the post-increment value.
 
 ## Status
 
-Unstable.
+Ready.

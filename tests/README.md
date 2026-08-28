@@ -13,7 +13,7 @@ same conformance batteries before landing — copy an adapter from
 | `common/conformance.rs` | Capability traits + standard conformance batteries |
 | `conformance_kit.rs` | Reference adapters: established sketches running through the kit (copy these) |
 | `e2e_frequency.rs` / `e2e_cardinality.rs` / `e2e_quantiles.rs` / `e2e_frameworks.rs` | Deep per-family suites with hand-tuned tolerances |
-| `e2e_heavy_hitters.rs` | Space-Saving's error sandwich, `min_count` ceiling and Stream-Summary lists under sustained eviction, plus CocoSketch and Elastic (`feature = "experimental"`) through the batteries and the heavy-hitter properties no battery models |
+| `e2e_heavy_hitters.rs` | Space-Saving's error sandwich, `min_count` ceiling and Stream-Summary lists under sustained eviction, plus CocoSketch and Elastic through the batteries and the heavy-hitter properties no battery models |
 | `e2e_membership.rs` | Bloom: no false negative, exact union, and the delivered false-positive rate against its own sizing |
 | `e2e_octo.rs` | OctoSketch delta-promotion invariants, the `octo-runtime` pipeline, and conformance to the paper's Theorems 1-4 and its sketch-merge baseline |
 | `e2e_experimental.rs` | The remaining `feature = "experimental"` sketches: KMV, UniformSampling, EHUnivOptimized |

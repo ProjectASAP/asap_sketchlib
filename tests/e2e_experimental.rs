@@ -2,8 +2,8 @@
 //! and shard merge, UniformSampling's retention rate and same-rate merge, and
 //! the EHUnivOptimized exact map tier.
 //!
-//! CocoSketch and the Elastic sketch are feature-gated too, but they are a
-//! family of their own; `tests/e2e_heavy_hitters.rs` covers them.
+//! CocoSketch and the Elastic sketch are a family of their own;
+//! `tests/e2e_heavy_hitters.rs` covers them.
 //!
 //! Compiled only under `--features experimental`.
 

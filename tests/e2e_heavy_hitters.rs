@@ -18,8 +18,7 @@
 //! over-attribution under substring matching, its point-query mass partition,
 //! its unbiasedness under eviction and its recall at the paper's worked
 //! operating point; Elastic's hot-flow tracking, its one-sided estimator under
-//! eviction pressure, and the reach of the light layer's dimensions. Both
-//! compile only under `--features experimental`.
+//! eviction pressure, and the reach of the light layer's dimensions.
 //!
 //! `tests/e2e_octo.rs` covers the multi-threaded OctoSketch variants of Coco
 //! and Elastic in its `heavy_hitters` module; everything here is the
@@ -731,7 +730,6 @@ fn the_default_summary_holds_the_default_capacity() {
 // CocoSketch and Elastic: the keyed-bucket tables
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "experimental")]
 mod keyed_bucket {
     use super::common::assert_between;
     use super::common::conformance::{self, FrequencyOps, FrequencySpec, MergeOps};
