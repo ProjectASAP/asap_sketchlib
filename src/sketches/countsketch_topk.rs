@@ -20,6 +20,8 @@ use crate::{
     SketchHasher, Vector1D, Vector2D, compute_median_inline_f64, heap_item_to_sketch_input,
 };
 
+mod wire;
+
 const DEFAULT_TOP_K: usize = 32;
 const DEFAULT_ROW_NUM: usize = 3;
 const DEFAULT_COL_NUM: usize = 4096;

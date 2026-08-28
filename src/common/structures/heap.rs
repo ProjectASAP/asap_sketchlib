@@ -54,11 +54,14 @@ pub struct CommonHeap<T, O: CommonHeapOrder<T>> {
     order: O,
 }
 
+/// Slots reserved up front. A heap whose capacity is larger grows on demand.
+pub(crate) const PREALLOCATED_SLOTS: usize = 1024;
+
 impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
     /// Creates a new heap with the specified capacity and ordering.
     pub fn with_capacity(capacity: usize, order: O) -> Self {
         Self {
-            data: Vec::with_capacity(capacity),
+            data: Vec::with_capacity(capacity.min(PREALLOCATED_SLOTS)),
             size: capacity,
             order,
         }
