@@ -116,17 +116,42 @@ longer a frequency.
 
 ## Serialization
 
+```rust
+fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+```
+
+These produce/consume the **ASAPv1** wire envelope (kind `0x18 0x00`) — see the
+[ASAPv1 wire format spec](../asapv1_wire_format.md). The impl is bounded on
+`H: HashProfile`, so a summary built with an unprofiled hasher cannot serialize
+at all. `SpaceSaving` also implements `serde::Serialize` / `Deserialize` for
+in-Rust use; both forms carry the same state.
+
 A summary travels as `capacity`, `total`, the unmonitored ceiling, and one
 `(key, count, error)` triple per monitored key. The bucket and counter lists and
 the key index all follow from the triples and are rebuilt on load, so no arena
 index reaches the wire and no crafted state can point one out of bounds or into
-a loop.
+a loop. `capacity` and the key type are ASAPv1 metadata; the payload is
+`[keys, counts, errors, total, floor]`.
 
-Decoding rejects any state the algorithm could not have produced — a zero
-capacity, more entries than the capacity allows, a counter at zero, an error
-above its count, or the same key twice — with an error rather than a panic. A
-declared capacity is not allocated up front, so a large one costs nothing until
-the counters are actually filled.
+Keys are `HeapItem`s, so the key type is a runtime property: the metadata's
+`key_type` names the **exact** variant (`"i32"` stays `"i32"`, never widened to
+`"i64"`) and the payload's key array is homogeneous in it, because a decoded key
+of a different variant would stop matching the caller's `DataInput` and read
+zero. A summary whose monitored keys mix variants refuses to serialize, as does
+one holding a 128-bit key, which has no MessagePack integer form. An empty
+summary serializes with `key_type` `"u64"`.
+
+The triples are emitted in descending count, ties broken by a total order over
+the key, so the same triples always produce the same bytes and re-serializing a
+decoded summary reproduces them exactly.
+
+Decoding rejects any state the algorithm could not have produced — a foreign
+`kind_id`, a hash profile other than the target's, a `key_type` the payload does
+not carry, arrays of unequal length, a zero capacity, more entries than the
+capacity allows, a counter at zero, an error above its count, or the same key
+twice — with an error rather than a panic. A declared capacity is not allocated
+up front, so a large one costs nothing until the counters are actually filled.
 
 ## Examples
 

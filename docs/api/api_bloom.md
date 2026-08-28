@@ -104,12 +104,34 @@ makes the filter shardable without loss. Mismatched dimensions assert.
 
 ## Serialization
 
-The wire form is `{ bits, inserted, mode }`, where `mode` is `"regular"` or
-`"fast"`. Decoding into the other hash path fails rather than producing a filter
-that reports its own members absent. `BitMatrix` carries `{ words, rows, cols }`
-only — the word stride and the fold masks are recomputed on decode, and a
-payload whose word count disagrees with its dimensions is rejected there rather
-than panicking later.
+```rust
+fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+```
+
+These produce/consume the **ASAPv1** wire envelope (kind `0x17 0x00`) — see the
+[ASAPv1 wire format spec](../asapv1_wire_format.md). The impl is bounded on
+`Mode: BloomMode` and `H: SketchHasher + HashProfile`, so a hasher that declares
+no profile cannot serialize at all. `rows`, `cols` and `mode` are carried in the
+envelope metadata; the payload is just `[words, inserted]`, the packed bit words
+row-major plus the insert counter, with the word stride derived from `cols`.
+
+The wire covers the geometries `with_capacity` produces: at most
+`BLOOM_MAX_SLICES` slices, a power-of-two `cols`, and at most `BLOOM_MAX_BITS`
+bits. `with_dimensions` can build a filter outside that subset, and both
+`serialize_to_bytes` and `deserialize_from_bytes` reject it, so the format never
+emits bytes it would refuse to read back. Decode also rejects a word count that
+disagrees with the declared dimensions, and any bit set in a row's trailing
+padding past `cols` — unreachable by `contains`, but counted by `count_ones`, so
+it would skew `fill_ratio` and `estimated_fpp` alone.
+
+Independently of ASAPv1, `Bloom` is plain `Serialize`/`Deserialize`; that form is
+`{ bits, inserted, mode }`, where `mode` is `"regular"` or `"fast"`. Decoding
+into the other hash path fails rather than producing a filter that reports its
+own members absent. `BitMatrix` carries `{ words, rows, cols }` only — the word
+stride and the fold masks are recomputed on decode, and a payload whose word
+count disagrees with its dimensions is rejected there rather than panicking
+later.
 
 ## Examples
 

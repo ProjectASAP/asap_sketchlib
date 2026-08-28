@@ -46,6 +46,21 @@ signals a backwards-compatible change.
   already digests: it replaces the full byte-wise hash with a finalizing mix,
   which is what a table index still needs once the digests come from a fixed
   seed list. `DigestBuildHasher` is its `BuildHasher`.
+- **ASAPv1 wire serialization for `Bloom` (`0x17 0x00`) and `SpaceSaving`
+  (`0x18 0x00`).** `serialize_to_bytes` / `deserialize_from_bytes` on each,
+  through the shared envelope, with the metadata derived from the hasher's
+  `HashProfile` as Count-Min's and HLL's are. Bloom's payload is the packed
+  words and the insert count; its wire covers the geometries `with_capacity`
+  produces, on both sides, so it never emits bytes it would refuse to read.
+  Space-Saving's payload is the monitored `(key, count, error)` triples plus
+  `total` and the dropped-count ceiling — the bucket list, counter arena and key
+  index are rebuilt on load, so no crafted payload can point an arena index out
+  of bounds or into a cycle. Its `key_type` names the exact `HeapItem` variant
+  and is never widened, since the variant is part of a key's identity while the
+  digest is blind to it; a mixed-variant or 128-bit-keyed summary refuses to
+  serialize. Entries are emitted in a defined order, so equal summaries encode
+  to equal bytes. Both payloads are specified in `docs/asapv1_wire_format.md`
+  §3.4 and §3.5.
 - **`membership_battery` in the conformance kit.** A new `MembershipOps`
   capability with the exact no-false-negative check, a false-positive-rate
   ceiling and a band around `predicted_fpp`, since the existing batteries are

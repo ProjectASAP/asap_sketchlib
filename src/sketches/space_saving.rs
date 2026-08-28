@@ -33,6 +33,8 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+pub mod wire;
+
 const NIL: usize = usize::MAX;
 
 /// Counters in a default sketch.

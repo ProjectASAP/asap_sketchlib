@@ -22,6 +22,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+mod wire;
+
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 /// Hash functions in a default filter.

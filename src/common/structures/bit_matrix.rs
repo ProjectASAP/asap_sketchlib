@@ -56,37 +56,46 @@ impl Serialize for BitMatrix {
 impl<'de> Deserialize<'de> for BitMatrix {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let input = BitMatrixDe::deserialize(deserializer)?;
-        if input.rows == 0 || input.cols == 0 {
-            return Err(serde::de::Error::custom(format!(
-                "a bit matrix needs both dimensions, got {}x{}",
-                input.rows, input.cols
-            )));
-        }
-        let words_per_row = input.cols.div_ceil(BITS_PER_WORD);
-        let expected = input
-            .rows
-            .checked_mul(words_per_row)
-            .ok_or_else(|| serde::de::Error::custom("bit matrix dimensions overflow"))?;
-        if input.words.len() != expected {
-            return Err(serde::de::Error::custom(format!(
-                "bit matrix of {}x{} needs {expected} words, got {}",
-                input.rows,
-                input.cols,
-                input.words.len()
-            )));
-        }
-        Ok(Self {
-            words: input.words,
-            rows: input.rows,
-            cols: input.cols,
-            words_per_row,
-            mask_bits: cols_mask_bits(input.cols),
-            mask: cols_mask(input.cols),
-        })
+        Self::from_words(input.rows, input.cols, input.words).map_err(serde::de::Error::custom)
     }
 }
 
 impl BitMatrix {
+    /// The packed words, one row after another, each row padded out to a whole
+    /// number of words.
+    pub(crate) fn words(&self) -> &[u64] {
+        &self.words
+    }
+
+    /// Builds a grid from packed words, recomputing the word stride and the fold
+    /// masks from `cols`. `Err` names the mismatch when the word count does not
+    /// describe a `rows x cols` grid.
+    pub(crate) fn from_words(rows: usize, cols: usize, words: Vec<u64>) -> Result<Self, String> {
+        if rows == 0 || cols == 0 {
+            return Err(format!(
+                "a bit matrix needs both dimensions, got {rows}x{cols}"
+            ));
+        }
+        let words_per_row = cols.div_ceil(BITS_PER_WORD);
+        let expected = rows
+            .checked_mul(words_per_row)
+            .ok_or_else(|| "bit matrix dimensions overflow".to_string())?;
+        if words.len() != expected {
+            return Err(format!(
+                "bit matrix of {rows}x{cols} needs {expected} words, got {}",
+                words.len()
+            ));
+        }
+        Ok(Self {
+            words,
+            rows,
+            cols,
+            words_per_row,
+            mask_bits: cols_mask_bits(cols),
+            mask: cols_mask(cols),
+        })
+    }
+
     /// Creates a `rows x cols` grid with every bit clear.
     pub fn new(rows: usize, cols: usize) -> Self {
         assert!(rows > 0 && cols > 0, "a bit matrix needs both dimensions");
