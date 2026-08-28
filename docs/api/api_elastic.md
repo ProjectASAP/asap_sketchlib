@@ -82,15 +82,14 @@ seats the arrival with `count` of each. `count` of 1 is `insert` exactly.
 
 `merge_heavy` absorbs a `<flow, votes, eviction>` message from another sketch's
 heavy part: `insert_many`, plus the sender's flag OR-ed in when the arrival ends
-up resident here. The flag travels with the counter it qualifies, as `swap_val`
-does in `src/CPU/ElasticSketch/ElasticSketch.cpp`, where the counter word handed
-between the two parts *is* the flag. A sender whose bucket is unflagged holds
+up resident here. The flag travels with the counter it qualifies: the counter
+word handed between the two parts *is* the flag. A sender whose bucket is
+unflagged holds
 that flow's whole mass in its heavy part, so flagging it here would make the
 estimate read Count-Min mass belonging to other flows.
 
 `absorb_evicted` absorbs a resident the sender's heavy part evicted, under its
-own key — `light_part.insert(swap_key, GetCounterVal(swap_val))` in
-`ElasticSketch::insert` case 1. The votes go to the light layer under `id`, and
+own key. The votes go to the light layer under `id`, and
 `id`'s bucket here is flagged if it still holds it. `votes` of zero still flags:
 the sender can no longer speak for this flow's heavy part, so whatever it sees
 of the flow next arrives through the light layer.
@@ -118,13 +117,11 @@ Seating and matching behave exactly as in `insert`. The two other cases differ:
 The light layer is still read by `query`; it is only never written.
 
 The arrival also **inherits the bucket's eviction flag**, and the negative vote
-resets to `0`. The paper's prose does not name either, but the authors'
-reference implementation ([BlockLiu/ElasticSketchCode](https://github.com/BlockLiu/ElasticSketchCode),
-`src/CPU/ElasticSketch/HeavyPart.cpp`) settles both: `quick_insert` writes only
-the new key and a zeroed guard, leaving the counter untouched. Since the flag
-lives in that counter's high bit, the arrival takes over the size and the flag
-together. The normal path differs — `insert` writes `0x80000001` there, setting
-the flag and resetting the size to 1, which is the paper's case 4 `(f, 1, T, 1)`.
+resets to `0`. The paper's prose names neither: this path writes only the new
+key and a zeroed guard, leaving the counter — and so the flag living in its high
+bit — untouched, so the arrival takes over the size and the flag together. The
+normal path instead sets the flag and resets the size to 1, which is the paper's
+case 4 `(f, 1, T, 1)`.
 
 > **This path breaks the one-sided guarantee.** Every other operation on this
 > sketch never returns less than the true count. Overload mode drops mouse
@@ -146,7 +143,9 @@ fn query(&self, id: String) -> i32
 
 Returns `vote_pos` for a resident flow whose bucket carries no eviction flag,
 `vote_pos + light.estimate(id)` when it does, and the light estimate otherwise.
-The estimator is one-sided: it never returns less than the true count.
+The estimator is one-sided: it never returns less than the true count. Under
+the OctoSketch runtime that holds for `OctoPartition::HashByKey` only — see
+Multi-core, below.
 
 ## Merge
 
@@ -256,8 +255,8 @@ spilled once rather than once per half — on both sides of the merge. Two
 sketches expanded a different number of times have different bucket counts, so
 `merge` and `merge_max` assert rather than silently misalign.
 
-The reference implementation does not include this operation; its `HeavyPart`
-is a fixed-size `template<int bucket_num>`. This follows the paper text.
+Expansion follows the paper text; the heavy part of a fixed-size implementation
+has no equivalent.
 
 `compress_heavy(ratio)` is the reverse, and gives the sketch section 3.4's
 "ability to actively release memory when needed". New bucket `j` absorbs old
@@ -341,6 +340,9 @@ let _ = sk.query("flow".to_string());
   selectable.
 - `insert_heavy_only` is lossy by design and does not keep the one-sided
   guarantee the rest of the API holds.
+- Under the OctoSketch runtime the one-sided guarantee needs
+  `OctoPartition::HashByKey`, the default. `RoundRobin` breaks it; see
+  Multi-core, below.
 - String-centric API (`String` in insert/query).
 - Lifecycle and parity differ from structured sketches.
 
@@ -370,25 +372,24 @@ was written against a flagless Elastic and breaks measurably on this one.
 the two papers and their implementations and what is ours, with the ablation
 that decided it.
 
+Route with `OctoPartition::HashByKey`, the default. The flag only reaches the
+parent alongside a heavy counter, so it closes the loop while a flow visits one
+worker. Under `RoundRobin` a flow reaches every worker, and one that is a
+stable unflagged resident on one while losing the bucket contest on another is
+seated at the parent unflagged over light-layer mass an unflagged bucket never
+reads: `query` comes back low. Measured counts are in `docs/api/api_octo.md`,
+"The Elastic eviction flag".
+
 Keys are rendered with `flow_key_string`, and that rendering is what `query`
 must be asked for. See `docs/api/api_octo.md`.
 
-## Departures from the reference implementation
-
-The authors' code is at [BlockLiu/ElasticSketchCode](https://github.com/BlockLiu/ElasticSketchCode);
-`src/CPU/ElasticSketch/` holds the sketch.
+## Relation to the paper
 
 - **Eviction threshold.** Section 3.1.1 evicts once `vote-/vote+ >= lambda`,
-  and this module does. `param.h` defines
-  `JUDGE_IF_SWAP(min_val, guard_val) ((guard_val) > ((min_val) << 3))`, a strict
-  `>`, so the reference swaps one packet later.
-- **Bucket shape.** The reference is the software version of section 4.3: eight
-  counters per bucket, seven flows sharing one guard counter, the smallest flow
-  evicted, and the flag packed into the counter's top bit. This module is the
-  basic version of section 3.1, one flow per bucket.
-
-The takeover itself matches the paper and the reference: `HeavyPart.cpp` writes
-`0x80000001` on a normal-path swap, which is the paper's `(f, 1, T, 1)`.
+  and this module does.
+- **Bucket shape.** This module is the basic version of section 3.1, one flow
+  per bucket, not the software version of section 4.3.
+- **Takeover.** The normal-path swap is the paper's case 4, `(f, 1, T, 1)`.
 
 ## Status
 

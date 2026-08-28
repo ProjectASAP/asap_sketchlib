@@ -298,9 +298,8 @@ The two keyed-bucket workers are the exception to "no flow-key storage".
 Idea 3 removes a *redundant* key store — a heap the aggregator can rebuild
 — but a Coco bucket or an Elastic heavy bucket *is* the key store, and its
 key is the only record of what its counter counts. Both workers keep the
-keys and shrink only the counters, which is what `Child_Coco` and
-`Child_Elastic` do in the authors' `CPU/` tree. Because they hold the key,
-both can also flush, which the `*TopK*` workers cannot.
+keys and shrink only the counters. Because they hold the key, both can
+also flush, which the `*TopK*` workers cannot.
 
 ---
 
@@ -340,6 +339,13 @@ Note that either way a *counter* is shared by whatever flows hash into
 it, and each worker may hold back up to τ of its own share, so the
 provable per-counter gap to a single-threaded sketch is `workers · (τ - 1)`. `k'τ`
 bounds only the queried flow's own held-back count.
+
+`RoundRobin` also costs `Elastic` its one-sided guarantee: a flow that is
+a stable, unflagged resident on one worker while losing the bucket contest
+on another reaches the parent unflagged, over light-layer mass an
+unflagged bucket never reads, and `Elastic::query` comes back low. See
+[The Elastic eviction flag](#the-elastic-eviction-flag). The mode is a
+whole-runtime setting, so no individual plan opts out of it.
 
 ### OctoAdaptiveThreshold
 
@@ -393,8 +399,11 @@ copy, made once at the hand-off.
 | CocoSketch, Elastic | `String` | yes, unavoidably |
 
 CocoSketch and Elastic key on a `String`, so their plans render the input
-with `flow_key_string` — the same conversion `EHSketchList` uses for these
-two sketches. That rendering is what the aggregator stores, so it is what
+with `flow_key_string`, which renders every `DataInput` variant: numbers by
+`to_string`, bytes as lowercase hex. `EHSketchList` converts differently —
+its `ELASTIC` arm renders bytes with `String::from_utf8_lossy`, and its
+`COCO` arm drops every input that is not `Str` or `String`. The
+`flow_key_string` rendering is what the aggregator stores, so it is what
 `Coco::estimate_key` or `Elastic::query` must be asked for. Their payloads
 carry no hashes: the heavy half of an Elastic insert can evict a key the
 caller never sent, so the worker has to be able to hash for itself anyway,
@@ -513,82 +522,68 @@ which is also why Table 1 gives them a throughput ratio near 1 (1.01× and
 
 ### The Elastic eviction flag
 
-**What the paper says.** §4.4, *"Handling counters with flow keys"*: for a
-sketch with a flow key beside every counter, OctoSketch "will send both
-the key and the counter to the aggregator and set the counter to zero if
-the counter is large enough. For each `<key, counter>` pair, the
-aggregator inserts the key into the sketch using the same insertion logic
-as the original sketch." That is the whole rule. It says nothing about an
-eviction flag.
+§4.4, *"Handling counters with flow keys"*: for a sketch with a flow key
+beside every counter, OctoSketch "will send both the key and the counter
+to the aggregator and set the counter to zero if the counter is large
+enough. For each `<key, counter>` pair, the aggregator inserts the key
+into the sketch using the same insertion logic as the original sketch."
+That is the whole rule. It says nothing about an eviction flag, and what
+follows is this crate's.
 
-**Why it says nothing.** The Elastic sketch in the OctoSketch authors'
-own repository (`sketch/Elastic.h`) is a simplified one: its bucket is
-`{int32_t vote; Key ID[]; int32_t count[]}` with no flag and a single
-`vote` rather than the paper's positive/negative pair, its light part is
-one `int32_t sketch[]` array rather than a Count-Min, and `query_all`
-returns `buckets[i].count[j] + sketch[hash(ID)]` — it adds the light part
-**unconditionally**, for every key. Their single-threaded baseline
-(`CPU/Elastic/Ideal.h`) instantiates that same `MyElastic`, so the
-OctoSketch variant loses nothing against the baseline it is measured
-against, and the question never arises.
-
-**Why it matters here.** This crate implements the Elastic Sketch of the
-original paper, where a heavy bucket carries a flag meaning *part of this
-flow's mass is in the light layer* and `Elastic::query` reads the light
-layer only when the flag is set. In the authors' reference implementation
-the flag is literally bit 31 of the counter
-(`buckets[pos].val[min_counter] = 0x80000001` in
-`src/CPU/ElasticSketch/HeavyPart.cpp`, tested by
-`if(heavy_result == 0 || HIGHEST_BIT_IS_1(heavy_result))` in
-`ElasticSketch.cpp::query`). Applying §4.4's rule literally to *that*
-sketch loses the flag: the worker's light writes arrive unkeyed, so the
-parent's bucket never learns its resident has light mass, and heavy flows
-are under-reported. Forcing the flag on instead makes every heavy flow
-read Count-Min noise it does not own, and overestimates all of them.
-Measured on a Zipf-1.2 stream (20k keys, 200k packets, 1024 heavy
-buckets, 3×4096 light, τ=31, hash-by-key, ARE over the true top-200,
-seed 7; seeds 11 and 23 rank the four rules identically):
-
-| aggregator rule | 1 worker | 4 workers | 8 workers | under-estimated of 200 |
-| --- | --- | --- | --- | --- |
-| single-threaded `Elastic` | 0.0067 | — | — | 0 |
-| flag always set | 0.0190 | 0.0146 | 0.0157 | 0, but *every* flow over-reads |
-| §4.4 literally, no flag | 0.1087 | 0.0367 | 0.0280 | 146 / 57 / 31 |
-| **shipped** | 0.0167 | 0.0071 | 0.0055 | 0 |
-
-**What we do, and where it comes from.** The extension is ours; the two
-mechanics are the Elastic authors'.
+An `Elastic` heavy bucket carries a flag meaning *part of this flow's mass
+is in the light layer*, and `Elastic::query` reads the light layer only
+when the flag is set. The delta protocol carries it in two places.
 
 1. *The flag rides with the counter.* `ElasticDelta::Heavy` carries the
    worker bucket's flag, and the worker maintains one with the parent's
    semantics — set on takeover by eviction, cleared when seating a
-   previously unoccupied slot, which is `val[min_counter] = 0x80000001`
-   against `val[min_counter] = f` in `HeavyPart.cpp`. The aggregator ORs
-   it into the parent bucket only when the arriving key ends up resident
-   there. This is the same coupling as `ElasticSketch.cpp`, where the
-   counter word handed between the two parts (`swap_val`) *is* the flag.
-2. *The eviction spill travels keyed.* `ElasticSketch::insert` case 1
-   hands the evicted resident to the light part under its own key:
-   `light_part.insert(swap_key, GetCounterVal(swap_val))`. A worker
-   cannot express that through an unkeyed cell delta, so it ships
-   `ElasticDelta::Evicted`. The aggregator adds `votes` to the parent's
-   light layer under that key and flags the key's bucket if it is
-   resident. The message goes out on *every* worker eviction, `votes` of
-   zero included — a promotion zeroes the counter while the flow stays
-   resident, so an eviction right after one carries nothing but is still
-   the only way the parent hears that this flow's remaining mass will now
-   arrive through the light layer. (`CPU/Elastic/Ours.h` suppresses that
-   case with `if(minVal != 0)`; it has no flag to carry and we do.)
+   previously unoccupied slot. The aggregator ORs it into the parent
+   bucket only when the arriving key ends up resident there.
+2. *The eviction spill travels keyed.* An evicted resident goes to the
+   light part under its own key, which a worker cannot express through an
+   unkeyed cell delta, so it ships `ElasticDelta::Evicted`. The aggregator
+   adds `votes` to the parent's light layer under that key and flags the
+   key's bucket if it is resident. The message goes out on *every* worker
+   eviction, `votes` of zero included — a promotion zeroes the counter
+   while the flow stays resident, so an eviction right after one carries
+   nothing but is still the only way the parent hears that this flow's
+   remaining mass will now arrive through the light layer.
 
 The ordinary "an arrival that loses a bucket contest spills 1" path is
-unchanged: unkeyed, batched through the light `CmWorkerSketch`, promoted
-at τ like any other Count-Min cell. Cost of the keyed spill over the
-always-flag rule: +0.1–0.6% worker→aggregator messages at 4 and 8
-workers, +7% at the degenerate 1-worker setting.
+unkeyed, batched through the light `CmWorkerSketch`, and promoted at τ
+like any other Count-Min cell. The keyed spill costs +0.1–0.6% more
+worker→aggregator messages at 4 and 8 workers, +7% at the degenerate
+1-worker setting.
 
-The choice is made where the paper does not reach, against the paper's
-own stated goal — the parent's state should be what the original sketch
-would have reached — not against a sentence in it.
+Measured on a Zipf-1.2 stream (20k keys, 200k packets, 1024 heavy
+buckets, 3×4096 light, τ=31, hash-by-key, ARE over the true top-200,
+seed 7; seeds 11 and 23 agree): 0.0167 at 1 worker, 0.0071 at 4 and
+0.0055 at 8, against 0.0067 for a single-threaded `Elastic`, with no flow
+under-estimated at any width.
+
+**Where the flag stops closing the loop.** It closes it only while a flow
+visits one worker. Under `OctoPartition::RoundRobin` a flow can be a
+stable, unflagged resident on one worker and a perpetual loser of the
+bucket contest on another: the second worker's share of its mass goes out
+unkeyed as `ElasticDelta::Light`, the first worker's `Heavy` messages
+carry `eviction: false`, and the parent seats the flow unflagged over
+light counters it will never read. `Elastic::query` then returns less than
+the true count, which is the one thing the sketch otherwise never does.
+Same stream and geometry as above, seed 7, over all 11,144 flows it
+contains rather than the top 200:
+
+| routing | workers | flows under-estimated | worst deficit |
+| --- | --- | --- | --- |
+| `HashByKey` | 1, 4, 8 | 0 | 0 |
+| `RoundRobin` | 1 | 0 | 0 |
+| `RoundRobin` | 4 | 384 | 55 |
+| `RoundRobin` | 8 | 406 | 75 |
+
+Seeds 11 and 23 put the `RoundRobin` counts at 390 and 401, and 400 and
+402, for 4 and 8 workers, and leave `HashByKey` at zero. `HashByKey`, the
+default, sends a flow to one worker and keeps the guarantee;
+`OctoConfig::partition` is set for the whole runtime, so a plan cannot ask
+for it on its own.
 
 ### Sharing a threshold across the fleet
 
@@ -638,18 +633,17 @@ let result = run_octo(&inputs, &config, plan, || CmOctoAggregator::new(4, 4096))
   τ=1 → exact at 200k messages, τ=2 → 7x ideal error, τ=4 → 19x, τ=8 →
   41x, while periodic merge stays at ideal for 3x the traffic. Prefer
   merge for DDSketch unless τ can be 1.
-- The Elastic aggregator flags every heavy bucket it seats or feeds. The
-  sending worker may have evicted that flow into *its* light layer, and
-  nothing short of trusting the worker's Count-Min can rule that out, so
-  the flag is set and the estimate reads through — the same call
-  `Elastic::merge` already makes for the same reason. Without it a heavy
-  flow whose parent bucket happened never to evict anyone reads back low.
+- The Elastic aggregator ORs the sending worker's flag into a parent bucket
+  the arriving key ends up resident in, and flags outright the bucket a
+  keyed eviction spill names. That carries the guarantee under
+  `HashByKey`. Under `RoundRobin` it does not: a flow unflagged on the
+  worker that holds it and spilled unkeyed by the workers that do not
+  reads back low — see above.
 - A Coco or Elastic worker promotes a key it may not currently hold. Coco's
   losing arrival promotes the *incumbent* of the bucket it hit, and an
   Elastic eviction spills the *evicted* resident, so a message can name a
-  key that never appeared in this batch. That is `CPU/Coco/Ours.h` and
-  `CPU/Elastic/Ours.h`, and it is why their payload is the key rather than
-  a set of hashes.
+  key that never appeared in this batch. That is why their payload is the
+  key rather than a set of hashes.
 - Coco promotion moves mass in batches of τ rather than one at a time, and
   the parent's replacement probability is `v/val`, so a batch is that much
   likelier to take a bucket from its resident. Mass is conserved exactly,

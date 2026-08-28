@@ -136,22 +136,17 @@ probability `τ/val` rather than `1/val`. Keys are rendered with
 `flow_key_string`, and that rendering is what `estimate_key` must be asked for.
 See `docs/api/api_octo.md`.
 
-## Departures from the reference implementation
+## Relation to the paper
 
-The authors' code is at [yindazhang/CocoSketch](https://github.com/yindazhang/CocoSketch);
-`CPU/Multiple/OurSoft.h` is the basic sketch this module implements.
+This module is the basic sketch of section 4.1: the match-then-victim scan, the
+whole increment landing in one bucket, and the replacement probability taken
+against the post-increment value.
 
 - **Tie-breaking.** Section 4.1 ends the victim rule with "If multiple buckets
   share the same smallest size value, randomly select one to update", and this
-  module does. `OurSoft.h` compares with a strict `<` and keeps the first
-  minimum instead, which biases occupancy toward the earlier arrays while ties
-  last -- on a fresh table, every mapped bucket holds 0 and they all tie.
-- **Depth.** The reference defaults to `HASH_NUM = 2`; this module defaults to
-  4, the top of the range section 3.2 recommends.
-
-Everything else matches: the match-then-victim scan, the whole increment landing
-in one bucket, and the replacement probability taken against the post-increment
-value (`randomGenerator() % count == 0`).
+  module does.
+- **Depth.** This module defaults to 4 arrays, the top of the range section 3.2
+  recommends.
 
 ## Status
 

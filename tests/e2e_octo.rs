@@ -2859,11 +2859,10 @@ fn a_flat_threshold_starves_the_deep_univmon_layers() {
 // here are of two kinds and nothing in between: exact conservation identities
 // that hold under every interleaving, and the paper's own measured comparison
 // against the sketch-merge baseline - relative error (figures 21a and 21c) and
-// F1 at the authors' heavy-hitter threshold (figures 20a and 20c).
+// F1 at the paper's heavy-hitter threshold (figures 20a and 20c).
 //
 // Coco is the one family where replay equality genuinely does not hold. Its
-// aggregator draws from an unseeded RNG - `rng() % counters < temp.value` in
-// the authors' `Coco::Merge(Coco_Entry)` - so a promoted batch of τ takes a
+// aggregator draws from an unseeded RNG, so a promoted batch of τ takes a
 // bucket with probability τ/val rather than 1/val, and bucket residency churns
 // faster than in a single-threaded pass. Mass is conserved exactly; which key
 // holds it is not. The Coco tests therefore assert the mass identities exactly
@@ -2882,15 +2881,12 @@ mod heavy_hitters {
     };
     use std::collections::{HashMap, HashSet};
 
-    /// τ for both families: `PROMASK` is `0x1f` in `CPU/Coco/config.h` and in
-    /// `CPU/Elastic/config.h` alike.
+    /// τ for both families.
     const COCO_TAU: u64 = COCO_PROMASK as u64;
     const ELASTIC_TAU: u32 = ELASTIC_PROMASK;
 
-    /// The authors' heavy-hitter threshold, from
-    /// `HHCompare(ret, mp, size / sizeof(Key) * ALPHA)` in
-    /// `CPU/template/Abstract.h` with `ALPHA 0.0002` in both config.h files: a
-    /// flow is heavy when its count is *strictly* above `ALPHA * N`.
+    /// The paper's heavy-hitter threshold: a flow is heavy when its count is
+    /// *strictly* above `ALPHA * N`.
     const HH_ALPHA: f64 = 0.0002;
 
     fn flow_stream(n: usize, domain: usize, seed: u64) -> Vec<u64> {
@@ -3147,10 +3143,10 @@ mod heavy_hitters {
         }
     }
 
-    // -- heavy-hitter scoring, as the authors' HHCompare defines it -----------
+    // -- heavy-hitter scoring -------------------------------------------------
 
     /// `<flow, estimate>` for every flow the sketch currently records above
-    /// `threshold`, which is `query_all()` filtered exactly as `HHCompare` does.
+    /// `threshold`.
     fn coco_reported(sketch: &Coco, threshold: u64) -> HashMap<String, u64> {
         sketch
             .recorded_flows()
@@ -3176,9 +3172,8 @@ mod heavy_hitters {
             .collect()
     }
 
-    /// `CR`, `PR` and `ARE` of `HHCompare`: recall and precision over the
-    /// heavy-hitter sets, and relative error averaged over the true positives
-    /// alone - the authors divide by `both`, not by the whole query set.
+    /// Recall and precision over the heavy-hitter sets, and relative error
+    /// averaged over the true positives alone rather than the whole query set.
     struct HhScore {
         recall: f64,
         precision: f64,
@@ -3227,11 +3222,10 @@ mod heavy_hitters {
     // -----------------------------------------------------------------------
 
     /// A promotion fires the moment a bucket counter *reaches* τ and the
-    /// counter is zeroed, so every insert-driven message carries exactly τ -
-    /// `if(counters[..] >= PROMASK){ enqueue(...); counters[..] = 0; }` in
-    /// `CPU/Coco/Ours.h`. And the key it names is always a key the stream
-    /// actually contained: the worker ships either the arrival or the bucket's
-    /// incumbent, never a synthesised one.
+    /// counter is zeroed, so every insert-driven message carries exactly τ.
+    /// And the key it names is always a key the stream actually contained: the
+    /// worker ships either the arrival or the bucket's incumbent, never a
+    /// synthesised one.
     #[test]
     fn coco_deltas_carry_exactly_one_promotion_window_and_a_key_the_stream_used() {
         let stream = flow_stream(40_000, 2_048, 21_001);
@@ -3336,8 +3330,7 @@ mod heavy_hitters {
 
     /// The branch that makes CocoSketch's payload a key rather than a cell
     /// index: an arrival that loses the `v/val` election still pushed the
-    /// bucket over τ, and what ships is the *incumbent*, which is the
-    /// `pos_valid = false` enqueue of `CPU/Coco/Ours.h`. Shipping the arrival
+    /// bucket over τ, and what ships is the *incumbent*. Shipping the arrival
     /// instead would attribute the window to the wrong flow.
     #[test]
     fn coco_promotes_the_bucket_incumbent_when_the_arrival_loses_the_election() {
@@ -3404,9 +3397,8 @@ mod heavy_hitters {
 
     /// CocoSketch §3.2 claims stochastic variance minimization "yields unbiased
     /// size estimation", and the OctoSketch aggregator only preserves that if
-    /// it replays a promoted window as a *weighted* insert - the authors'
-    /// `Coco::Merge(Coco_Entry)` generalizes the election from `rng() % C == 0`
-    /// to `rng() % C < temp.value` for exactly that reason. An aggregator that
+    /// it replays a promoted window as a *weighted* insert, electing at
+    /// `rng() % C < value` rather than `rng() % C == 0`. An aggregator that
     /// dropped the weight, or elected at the single-packet rate, would show up
     /// as bias here.
     ///
@@ -3631,10 +3623,9 @@ mod heavy_hitters {
         }
     }
 
-    /// `ElasticSketch::insert` case 1 hands the evicted resident to the light
-    /// part under *its own* key -
-    /// `light_part.insert(swap_key, GetCounterVal(swap_val))` - not under the
-    /// arriving packet's. A worker cannot do that through an unkeyed cell
+    /// An eviction hands the evicted resident to the light part under *its
+    /// own* key, not under the arriving packet's. A worker cannot do that
+    /// through an unkeyed cell
     /// delta, so the eviction travels as `ElasticDelta::Evicted` and the
     /// aggregator addresses the parent's light layer by the victim's key.
     /// The losing arrivals stay unkeyed and batched.

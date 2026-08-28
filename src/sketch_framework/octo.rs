@@ -240,44 +240,6 @@ impl CmWorkerSketch {
         }
     }
 
-    /// Adds `count` to each mapped cell, emitting and clearing every one that
-    /// reaches `threshold`.
-    ///
-    /// The weighted form of `insert_hashes_emit_delta`, for an insertion that
-    /// moves a counter by more than one. A cell can therefore promote past
-    /// `threshold` rather than exactly at it.
-    #[inline(always)]
-    pub fn add_hashes_emit_delta(
-        &mut self,
-        hashes: &[u64],
-        count: u32,
-        threshold: u32,
-        emit: &mut impl FnMut(CmDelta),
-    ) {
-        assert_eq!(
-            hashes.len(),
-            self.rows,
-            "one hash per row; a plan built for a different geometry would \
-             leave the untouched rows at zero and every estimate at zero"
-        );
-        let threshold = threshold.clamp(1, MAX_PROMASK);
-        for (r, hashed) in hashes.iter().copied().enumerate() {
-            let col = ((hashed & LOWER_32_MASK) as usize) % self.cols;
-            let cell = &mut self.counters[r * self.cols + col];
-            let total = *cell as u32 + count;
-            if total >= threshold {
-                emit(CmDelta {
-                    row: r as u32,
-                    col: col as u32,
-                    value: total,
-                });
-                *cell = 0;
-            } else {
-                *cell = total as u8;
-            }
-        }
-    }
-
     /// Promotes and clears every counter still holding a partial count.
     pub fn flush(&mut self, emit: &mut impl FnMut(CmDelta)) {
         for row in 0..self.rows {
@@ -596,8 +558,7 @@ impl CocoWorkerSketch {
     ///
     /// The promoted message carries whichever key the bucket holds *after* the
     /// election, which is the arriving key when it won the bucket and the
-    /// incumbent when it did not - the two branches of `insert_child` in
-    /// `CPU/Coco/Ours.h`.
+    /// incumbent when it did not.
     pub fn insert_emit_delta(
         &mut self,
         key: &str,
@@ -685,12 +646,10 @@ impl CocoWorkerSketch {
 ///
 /// Occupancy is `flow_id`, not `vote_pos` as in the parent's
 /// `HeavyBucket::is_vacant`: a promotion clears the votes and the flow stays
-/// resident, exactly as a promoted slot in `CPU/Elastic/Ours.h` keeps its `ID`.
+/// resident.
 ///
 /// `eviction` carries the parent's own semantics -- set on takeover by
-/// eviction, clear on seating a previously unoccupied slot, which is
-/// `val[min_counter] = 0x80000001` against `val[min_counter] = f` in the
-/// authors' `src/CPU/ElasticSketch/HeavyPart.cpp`.
+/// eviction, clear on seating a previously unoccupied slot.
 #[cfg(feature = "experimental")]
 #[derive(Clone, Debug, Default)]
 struct ElasticWorkerBucket {
@@ -2219,13 +2178,15 @@ impl OctoAggregator for UnivMonOctoAggregator {
 // -- CocoSketch --
 
 /// Renders an input as the `String` flow key `Coco` and `Elastic` are defined
-/// over, matching the conversion `EHSketchList` uses for the same two sketches.
+/// over. Bytes render as lowercase hex, so distinct byte strings stay distinct.
 ///
 /// Both sketches key on a `String`, so a plan has to settle on one rendering:
 /// this is what the aggregator will hold, and what `Coco::estimate_key` or
 /// `Elastic::query` must be asked for.
 #[cfg(feature = "experimental")]
 pub fn flow_key_string(input: &DataInput<'_>) -> String {
+    use std::fmt::Write as _;
+
     match input {
         DataInput::I8(v) => v.to_string(),
         DataInput::I16(v) => v.to_string(),
@@ -2243,7 +2204,13 @@ pub fn flow_key_string(input: &DataInput<'_>) -> String {
         DataInput::F64(v) => v.to_string(),
         DataInput::Str(s) => (*s).to_string(),
         DataInput::String(s) => s.clone(),
-        DataInput::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
+        DataInput::Bytes(b) => {
+            let mut hex = String::with_capacity(b.len() * 2);
+            for byte in *b {
+                let _ = write!(hex, "{byte:02x}");
+            }
+            hex
+        }
     }
 }
 

@@ -41,16 +41,14 @@ pub const HLL_PROMASK: u8 = 0;
 ///
 /// A Coco bucket counter is exactly as dense as a Count-Min cell - every
 /// insert lands on one of them and increments it by one - so it takes the same
-/// τ, which is also the `PROMASK` of `CPU/Coco/config.h` in the authors'
-/// implementation.
+/// τ.
 #[cfg(feature = "experimental")]
 pub const COCO_PROMASK: u32 = 0x1f;
 
 /// Default promotion threshold τ for Elastic sketch workers.
 ///
 /// One τ covers both halves: a heavy-part vote counter and a light-part
-/// Count-Min counter each advance by one per insert, and `CPU/Elastic/config.h`
-/// likewise gives them a single `PROMASK`.
+/// Count-Min counter each advance by one per insert.
 #[cfg(feature = "experimental")]
 pub const ELASTIC_PROMASK: u32 = 0x1f;
 
@@ -153,12 +151,9 @@ pub struct CocoDelta {
 ///
 /// Two of the three variants go beyond §4.4's `<key, counter>`, because this
 /// crate implements the Elastic Sketch of the original paper, whose heavy
-/// bucket carries an eviction flag that §4.4's rule has no way to move. Both
-/// mechanics are taken from the Elastic authors' implementation: the flag rides
-/// with the counter word it qualifies (`swap_val`, tested with
-/// `HIGHEST_BIT_IS_1`, in `src/CPU/ElasticSketch/ElasticSketch.cpp`), and the
-/// evicted resident travels under its own key
-/// (`light_part.insert(swap_key, GetCounterVal(swap_val))`, same file).
+/// bucket carries an eviction flag that §4.4's rule has no way to move. The
+/// flag rides with the counter word it qualifies, and the evicted resident
+/// travels under its own key.
 #[cfg(feature = "experimental")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ElasticDelta {
@@ -183,7 +178,7 @@ pub enum ElasticDelta {
     Evicted {
         /// The evicted flow.
         key: String,
-        /// Votes it held when it was evicted, `GetCounterVal(swap_val)`.
+        /// Votes it held when it was evicted.
         votes: u32,
     },
     /// Light-part cell, promoted exactly as a Count-Min worker's would be.
