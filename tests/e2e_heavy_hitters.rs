@@ -1,9 +1,9 @@
-//! E2E suite for the keyed-bucket frequency sketches: CocoSketch (SIGCOMM '21)
-//! and the Elastic sketch (SIGCOMM '18). Both keep a flow key beside every
-//! counter, so a query is answered from the keys the table still holds rather
-//! than from an unkeyed counter array, and both are read for heavy-hitter
-//! questions -- Coco's partial-key aggregation over its recorded flows,
-//! Elastic's heavy/light split.
+//! E2E suite for the heavy-hitter sketches: CocoSketch (SIGCOMM '21) and the
+//! Elastic sketch (SIGCOMM '18). Both answer "which flows are big" by keeping a
+//! flow key beside every counter, so a query is served from the keys the table
+//! still holds rather than from an unkeyed counter array -- Coco through
+//! partial-key aggregation over its recorded flows, Elastic through its
+//! heavy/light split.
 //!
 //! Covers the standard conformance batteries their documented contracts
 //! justify, then the depth no battery models: Coco's over-attribution under
@@ -13,8 +13,10 @@
 //! reach of the light layer's dimensions.
 //!
 //! `tests/e2e_octo.rs` covers the multi-threaded OctoSketch variants of these
-//! same two families in its `keyed_buckets` module; everything here is the
-//! single-threaded sketch.
+//! same two families in its `heavy_hitters` module; everything here is the
+//! single-threaded sketch. The top-k heap sketches (`CMSHeap`, `CSHeap`) answer
+//! the same question from an unkeyed sketch plus a heap, and stay with their
+//! own family in `tests/e2e_frequency.rs`.
 //!
 //! Compiled only under `--features experimental`.
 
