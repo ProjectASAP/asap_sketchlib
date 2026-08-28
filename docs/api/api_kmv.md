@@ -45,6 +45,15 @@ fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
+These produce/consume the **ASAPv1** wire envelope (kind `0x0e 0x00`) — see the
+[ASAPv1 wire format spec](../asapv1_wire_format.md). The impl is bounded on
+`H: HashProfile`, so a sketch built with an unprofiled hasher cannot serialize
+at all. The retention bound `k` is metadata; the payload is the retained 64-bit
+hashes alone, emitted in strictly ascending order, so two sketches holding the
+same set emit the same bytes and a decoded sketch re-serializes byte-identically.
+A `k` of zero, a `k` past the metadata's `u32` field, and a retained set larger
+than `k` all fail to serialize.
+
 ## Examples
 
 ```rust

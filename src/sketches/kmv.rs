@@ -11,9 +11,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
+mod wire;
 
 // expect error bound to be less than 2%
 const KMV_DEFAULT_LENGTH: usize = 4096_usize;
@@ -75,16 +73,6 @@ impl<H: SketchHasher> KMV<H> {
         for &value in other.k_vals.iter() {
             self.insert_by_hash(value);
         }
-    }
-
-    /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-
-    /// Deserializes a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
     }
 }
 
