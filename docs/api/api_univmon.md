@@ -57,6 +57,23 @@ fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
+These produce/consume the **ASAPv1** wire envelope (kind `0x10 0x00`) — see the
+[ASAPv1 wire format spec](../asapv1_wire_format.md). UnivMon hashes through the
+crate's default hasher, so its metadata carries that profile and no seed index:
+the bottom-layer finder's seed is fixed by the algorithm, and layer `i`'s
+counter hashes at seed index `i`.
+
+The pyramid shape (`layer_size`, `sketch_row`, `sketch_col`, `heap_size`) and
+the heaps' `key_type` live in the metadata; the payload is
+`[counts, l2, heap_lens, keys, heap_counts, candidate_complete, bucket_size,
+update_mode]`. Each layer's `CountL2HH` state is inlined rather than nested in
+an envelope of its own, and the heap indexes are rebuilt on load, so no index
+reaches the wire. Heap entries are emitted layer by layer, each layer in
+descending count with ties broken by a total order over the key, so a decoded
+pyramid re-serializes byte-identically. `update_mode` and `candidate_complete`
+are carried: they are acquired from the stream, and a decoder that guessed them
+would pick the wrong query recurrence or report a widened threshold as zero.
+
 ## Examples
 
 ```rust

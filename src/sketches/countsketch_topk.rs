@@ -6,9 +6,6 @@
 //! - [`CountL2HH`]: Count Sketch augmented with per-row L2 norm tracking for
 //!   heavy-hitter detection.
 
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -20,6 +17,7 @@ use crate::{
     SketchHasher, Vector1D, Vector2D, compute_median_inline_f64, heap_item_to_sketch_input,
 };
 
+pub(crate) mod l2hh_wire;
 mod wire;
 
 const DEFAULT_TOP_K: usize = 32;
@@ -1153,16 +1151,6 @@ impl<H: SketchHasher> CountL2HH<H> {
             sign_bit_pos -= 1;
         }
         compute_median_inline_f64(&mut lst[..])
-    }
-
-    /// Serializes the CountL2HH sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-
-    /// Deserializes a CountL2HH sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
     }
 }
 

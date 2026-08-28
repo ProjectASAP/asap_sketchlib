@@ -21,14 +21,14 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use rmp_serde::decode::Error as RmpDecodeError;
-use rmp_serde::encode::Error as RmpEncodeError;
 use serde::{Deserialize, Serialize};
+
+mod wire;
 
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, DefaultXxHasher, SketchHasher};
 
-const WIRE_VERSION: u8 = 2;
 const OCCURRENCE_HASH_SEED_DOMAIN: usize = usize::MAX / 3;
 static NEXT_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -1438,34 +1438,6 @@ impl<H: SketchHasher> UnivMonQ<H> {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct LevelWire {
-    sketch: PackedCountSketch,
-    candidates: Vec<(u64, u64)>,
-    #[serde(default)]
-    ever_evicted: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct UnivMonQWire {
-    version: u8,
-    config: UnivMonQConfig,
-    levels: Vec<LevelWire>,
-    count: u64,
-    min: Option<u64>,
-    max: Option<u64>,
-    #[serde(default)]
-    source_id: u64,
-    #[serde(default)]
-    next_sequence: u64,
-    #[serde(default)]
-    ordered_occurrences: Vec<OrderedOccurrence>,
-    /// Version-1 distinct-key sample. It cannot be upgraded to an occurrence
-    /// sample without the discarded occurrence identities.
-    #[serde(default)]
-    ordered_frequencies: Vec<(u64, u64)>,
-}
-
 impl UnivMonQ<DefaultXxHasher> {
     /// Creates an empty sketch using Sketchlib's default XXH3 hasher.
     ///
@@ -1485,135 +1457,6 @@ impl UnivMonQ<DefaultXxHasher> {
         source_id: u64,
     ) -> Result<Self, UnivMonQError> {
         Self::with_hasher_and_source_id(config, source_id)
-    }
-
-    /// Serializes the default-hasher sketch to native MessagePack bytes.
-    /// This is not yet an ASAPv1 cross-language wire kind.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let mut levels = Vec::with_capacity(self.levels.len());
-        for level in &self.levels {
-            let mut candidates: Vec<(u64, u64)> = level
-                .candidate_scores
-                .iter()
-                .map(|(&key, &count)| (key, count))
-                .collect();
-            candidates.sort_unstable();
-            levels.push(LevelWire {
-                sketch: level.sketch.clone(),
-                candidates,
-                ever_evicted: Some(level.ever_evicted),
-            });
-        }
-        let mut ordered_occurrences = self.ordered_heap.clone().into_vec();
-        ordered_occurrences.sort_unstable();
-        let wire = UnivMonQWire {
-            version: WIRE_VERSION,
-            config: self.config,
-            levels,
-            count: self.count,
-            min: self.min,
-            max: self.max,
-            source_id: self.source_id,
-            next_sequence: self.next_sequence,
-            ordered_occurrences,
-            ordered_frequencies: Vec::new(),
-        };
-        rmp_serde::to_vec_named(&wire)
-    }
-
-    /// Deserializes and validates native UnivMon-Q MessagePack state.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let wire: UnivMonQWire = rmp_serde::from_slice(bytes)?;
-        if wire.version != 1 && wire.version != WIRE_VERSION {
-            return Err(decode_error(format!(
-                "unsupported UnivMon-Q wire version {}",
-                wire.version
-            )));
-        }
-        if !wire.ordered_frequencies.is_empty() {
-            return Err(decode_error(
-                "version-1 distinct ordered samples cannot be upgraded to occurrence samples",
-            ));
-        }
-        let mut result = Self::new_with_source_id(wire.config, wire.source_id)
-            .map_err(|error| decode_error(error.to_string()))?;
-        if wire.levels.len() != result.config.levels {
-            return Err(decode_error("UnivMon-Q level count does not match config"));
-        }
-        let valid_extrema = if wire.count == 0 {
-            wire.min.is_none() && wire.max.is_none()
-        } else {
-            wire.min.is_some() && wire.max.is_some()
-        };
-        if !valid_extrema {
-            return Err(decode_error(
-                "UnivMon-Q count/min/max state is inconsistent",
-            ));
-        }
-        if wire.min.zip(wire.max).is_some_and(|(min, max)| min > max) {
-            return Err(decode_error("UnivMon-Q minimum exceeds maximum"));
-        }
-        for (index, (target, source)) in result.levels.iter_mut().zip(wire.levels).enumerate() {
-            if !source.sketch.matches(
-                level_width(result.config, index),
-                result.config.depth,
-                result.config.counter_bits,
-            ) {
-                return Err(decode_error(format!(
-                    "UnivMon-Q CountSketch layout mismatch at level {index}"
-                )));
-            }
-            if source.candidates.len() > result.config.candidates {
-                return Err(decode_error(format!(
-                    "UnivMon-Q candidate capacity exceeded at level {index}"
-                )));
-            }
-            let candidate_len = source.candidates.len();
-            let ever_evicted = source
-                .ever_evicted
-                .unwrap_or(candidate_len == result.config.candidates);
-            let candidates: HashMap<u64, u64> = source.candidates.into_iter().collect();
-            if candidates.len() != candidate_len {
-                return Err(decode_error("duplicate UnivMon-Q candidate keys"));
-            }
-            target.sketch = source.sketch;
-            target.candidate_scores = candidates;
-            target.ever_evicted = ever_evicted;
-            target.candidate_heap.clear();
-            for (&key, &count) in &target.candidate_scores {
-                target.candidate_heap.push(Reverse((count, key)));
-            }
-        }
-        for (index, level) in result.levels.iter().enumerate() {
-            if level
-                .candidate_scores
-                .keys()
-                .any(|key| result.sample_level(*key) != index)
-            {
-                return Err(decode_error(format!(
-                    "UnivMon-Q candidate stored in the wrong terminal level {index}"
-                )));
-            }
-        }
-        if wire.ordered_occurrences.len() > result.config.ordered_samples {
-            return Err(decode_error("UnivMon-Q ordered sample capacity exceeded"));
-        }
-        let occurrence_len = wire.ordered_occurrences.len();
-        let unique_occurrences: HashSet<_> = wire.ordered_occurrences.iter().copied().collect();
-        if unique_occurrences.len() != occurrence_len {
-            return Err(decode_error("duplicate UnivMon-Q ordered occurrences"));
-        }
-        if result.config.ordered_samples == 0 && !wire.ordered_occurrences.is_empty() {
-            return Err(decode_error(
-                "UnivMon-Q has ordered state while ordered sampling is disabled",
-            ));
-        }
-        result.count = wire.count;
-        result.min = wire.min;
-        result.max = wire.max;
-        result.next_sequence = wire.next_sequence;
-        result.ordered_heap = BinaryHeap::from(wire.ordered_occurrences);
-        Ok(result)
     }
 }
 
@@ -1760,23 +1603,6 @@ fn decode_error(message: impl Into<String>) -> RmpDecodeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[derive(Serialize)]
-    struct LegacyLevelWire {
-        sketch: PackedCountSketch,
-        candidates: Vec<(u64, u64)>,
-    }
-
-    #[derive(Serialize)]
-    struct LegacyUnivMonQWire {
-        version: u8,
-        config: UnivMonQConfig,
-        levels: Vec<LegacyLevelWire>,
-        count: u64,
-        min: Option<u64>,
-        max: Option<u64>,
-        ordered_frequencies: Vec<(u64, u64)>,
-    }
 
     fn tiny_config() -> UnivMonQConfig {
         UnivMonQConfig {
@@ -1939,7 +1765,7 @@ mod tests {
     }
 
     #[test]
-    fn native_messagepack_preserves_candidate_eviction_history() {
+    fn asapv1_envelope_preserves_candidate_eviction_history() {
         let config = UnivMonQConfig {
             levels: 2,
             candidates: 1,
@@ -1952,7 +1778,7 @@ mod tests {
         assert!(sketch.levels.iter().any(|level| level.ever_evicted));
 
         let bytes = sketch.serialize_to_bytes().unwrap();
-        let decoded = UnivMonQ::deserialize_from_bytes(&bytes).unwrap();
+        let decoded = UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&bytes).unwrap();
         let original: Vec<bool> = sketch
             .levels
             .iter()
@@ -1964,48 +1790,6 @@ mod tests {
             .map(|level| level.ever_evicted)
             .collect();
         assert_eq!(restored, original);
-    }
-
-    #[test]
-    fn legacy_full_candidate_table_decodes_as_possibly_evicted() {
-        let config = UnivMonQConfig {
-            levels: 2,
-            candidates: 1,
-            ordered_samples: 0,
-            ..tiny_config()
-        };
-        let mut sketch = UnivMonQ::new(config).unwrap();
-        sketch.update(&7.0);
-        let full_level = sketch
-            .levels
-            .iter()
-            .position(|level| level.candidate_scores.len() == config.candidates)
-            .unwrap();
-        assert!(!sketch.levels[full_level].ever_evicted);
-
-        let legacy = LegacyUnivMonQWire {
-            version: WIRE_VERSION,
-            config,
-            levels: sketch
-                .levels
-                .iter()
-                .map(|level| LegacyLevelWire {
-                    sketch: level.sketch.clone(),
-                    candidates: level
-                        .candidate_scores
-                        .iter()
-                        .map(|(&key, &score)| (key, score))
-                        .collect(),
-                })
-                .collect(),
-            count: sketch.count,
-            min: sketch.min,
-            max: sketch.max,
-            ordered_frequencies: Vec::new(),
-        };
-        let bytes = rmp_serde::to_vec_named(&legacy).unwrap();
-        let decoded = UnivMonQ::deserialize_from_bytes(&bytes).unwrap();
-        assert!(decoded.levels[full_level].ever_evicted);
     }
 
     #[test]
@@ -2291,13 +2075,13 @@ mod tests {
     }
 
     #[test]
-    fn native_messagepack_round_trip_preserves_queries() {
+    fn asapv1_round_trip_preserves_queries() {
         let mut sketch = UnivMonQ::new(tiny_config()).unwrap();
         for value in (0..1000).map(|value| (value % 97) as f64) {
             sketch.update(&value);
         }
         let bytes = sketch.serialize_to_bytes().unwrap();
-        let decoded = UnivMonQ::deserialize_from_bytes(&bytes).unwrap();
+        let decoded = UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&bytes).unwrap();
         assert_eq!(decoded.config(), sketch.config());
         assert_eq!(decoded.source_id(), sketch.source_id());
         assert_eq!(decoded.count(), sketch.count());
@@ -2306,7 +2090,7 @@ mod tests {
     }
 
     #[test]
-    fn messagepack_checkpoint_resume_preserves_occurrence_priorities() {
+    fn asapv1_checkpoint_resume_preserves_occurrence_priorities() {
         let config = UnivMonQConfig {
             candidates: 16,
             ordered_samples: 64,
@@ -2328,7 +2112,7 @@ mod tests {
             checkpointed.update(value);
         }
         let bytes = checkpointed.serialize_to_bytes().unwrap();
-        let mut resumed = UnivMonQ::deserialize_from_bytes(&bytes).unwrap();
+        let mut resumed = UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&bytes).unwrap();
         for value in &values[1_337..] {
             uninterrupted.update(value);
             resumed.update(value);
@@ -2464,21 +2248,6 @@ mod tests {
             chi_squared < 400.0,
             "position-inclusion chi-squared={chi_squared}"
         );
-    }
-
-    #[test]
-    fn legacy_distinct_ordered_sample_is_rejected() {
-        let legacy = LegacyUnivMonQWire {
-            version: 1,
-            config: tiny_config(),
-            levels: Vec::new(),
-            count: 1,
-            min: Some(float_to_ordered(1.0)),
-            max: Some(float_to_ordered(1.0)),
-            ordered_frequencies: vec![(float_to_ordered(1.0), 1)],
-        };
-        let bytes = rmp_serde::to_vec_named(&legacy).unwrap();
-        assert!(UnivMonQ::deserialize_from_bytes(&bytes).is_err());
     }
 
     #[test]
