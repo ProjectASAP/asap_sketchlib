@@ -55,31 +55,34 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error
 ```
 
 ASAPv1 MessagePack, kind_id `0x14 0x00`. The metadata carries only
-`metadata_version`; the payload is the triple `[variant, descriptor, state]`,
-where `variant` is the wire name of the enum arm and `descriptor` / `state` are
-that sketch's own ASAPv1 metadata and payload blocks carried verbatim as
-msgpack `bin`. An `ExponentialHistogram` bucket inlines the same triple, so
-there is one EHSketchList encoding.
+`metadata_version`; the payload is the triple `[kind_id, descriptor, state]`,
+all three msgpack `bin`. A nested variant carries its **own** kind_id, metadata
+block and payload block, with the envelope framing (magic, version, lengths)
+stripped, so each variant's own validation applies unchanged. An
+`ExponentialHistogram` bucket inlines the same triple, so there is one
+EHSketchList encoding.
 
-The ten wire names and the kind_id whose blocks they carry:
+The ten nested kind_ids:
 
-| Variant | Wire name | Blocks belong to | Feature |
-| ------- | --------- | ---------------- | ------- |
-| `CM` | `"CountMin"` | `0x02 0x00` | default |
-| `COCO` | `"Coco"` | `0x0c 0x00` | `experimental` |
-| `COUNTL2HH` | `"CountL2HH"` | `0x19 0x00` | default |
-| `CS` | `"CountSketch"` | `0x04 0x00` | default |
-| `DDS` | `"DDSketch"` | `0x05 0x00` | default |
-| `ELASTIC` | `"Elastic"` | `0x0b 0x00` | `experimental` |
-| `HLL` | `"HLL"` | `0x01 0x02` | default |
-| `KLL` | `"KLL"` | `0x06 0x00` | default |
-| `UNIFORM` | `"UniformSampling"` | `0x0d 0x00` | `experimental` |
-| `UNIVMON` | `"UnivMon"` | `0x10 0x00` | default |
+| Variant | Nested kind_id | Registry name | Feature |
+| ------- | -------------- | ------------- | ------- |
+| `CM` | `0x02 0x00` | Count-Min | default |
+| `COCO` | `0x0c 0x00` | Coco | `experimental` |
+| `COUNTL2HH` | `0x19 0x00` | CountL2HH | default |
+| `CS` | `0x04 0x00` | Count Sketch | default |
+| `DDS` | `0x05 0x00` | DDSketch | default |
+| `ELASTIC` | `0x0b 0x00` | Elastic | `experimental` |
+| `HLL` | `0x01 0x02` | HLL Ertl-MLE | default |
+| `KLL` | `0x06 0x00` | KLL compact | default |
+| `UNIFORM` | `0x0d 0x00` | UniformSampling | `experimental` |
+| `UNIVMON` | `0x10 0x00` | UnivMon | default |
 
-The name table is the same in every build. A decoder built without
-`experimental` rejects `"Coco"`, `"Elastic"` and `"UniformSampling"` with an
-error naming the variant, and its encoder can never emit them. An unrecognized
-name is rejected. `EHSketchList` also derives serde.
+Each id is pinned to one algorithm: `HLL` is Ertl-MLE, so `0x01 0x01` (Classic)
+and `0x01 0x03` (HIP) are rejected, and `KLL` is compact, so `0x06 0x01`
+(dynamic) is rejected. The dispatch is the same in every build: a decoder built
+without `experimental` rejects `0x0c 0x00`, `0x0b 0x00` and `0x0d 0x00` with an
+error naming the variant and the feature, and its encoder can never emit them.
+An unrecognized kind_id is rejected. `EHSketchList` also derives serde.
 
 ## Examples
 

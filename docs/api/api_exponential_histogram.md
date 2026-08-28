@@ -49,9 +49,9 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error
 
 ASAPv1 MessagePack, kind_id `0x13 0x00`. The metadata carries `window` and `k`;
 the payload is `[buckets, sizes, min_times, max_times, prototype]`. `buckets`
-holds one inlined `EHSketchList` triple per bucket, oldest to newest, and the
-next three arrays are parallel to it; `prototype` is the `type_to_clone` triple.
-The bucket count is `len(buckets)`.
+holds one inlined `EHSketchList` triple `[kind_id, descriptor, state]` per
+bucket, oldest to newest, and the next three arrays are parallel to it;
+`prototype` is the `type_to_clone` triple. The bucket count is `len(buckets)`.
 
 There is no hash-spec group: the histogram never hashes, and each bucket's own
 `descriptor` carries whatever hash spec its sketch has. `l2_mass` and
@@ -59,7 +59,7 @@ There is no hash-spec group: the histogram never hashes, and each bucket's own
 cached values disagree with the sketches they derive from does not serialize.
 
 A `k` of zero, a bucket of size zero, an inverted bucket time range, parallel
-arrays of unequal length, an unknown or feature-gated variant name, and a
+arrays of unequal length, an unknown or feature-gated nested kind_id, and a
 bucket whose descriptor names a different hash profile are all rejected.
 
 ## Examples
