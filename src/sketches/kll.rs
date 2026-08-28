@@ -409,6 +409,16 @@ impl<T: NumericalValue> KLL<T> {
         self.push_value(*val);
     }
 
+    /// Inserts a batch of values. Exactly equivalent to `for v in values { update(v) }`
+    /// but exposed as a single call for callers that already have a slice.
+    /// Empty slices are a no-op and do not disturb the CDF cache or coin.
+    #[inline]
+    pub fn bulk_update(&mut self, values: &[T]) {
+        for v in values {
+            self.push_value(*v);
+        }
+    }
+
     // -- Compaction ----------------------------------------------------------
 
     fn compress_while_updating(&mut self) {
@@ -933,6 +943,18 @@ impl KLL<f64> {
     pub fn update_data_input(&mut self, val: &DataInput) -> Result<(), &'static str> {
         let value = data_input_to_f64(val)?;
         self.push_value(value);
+        Ok(())
+    }
+
+    /// Batch variant of `update_data_input`. Stops on the first non-numeric
+    /// input and returns the same error as the per-element path, so
+    /// `bulk_update_data_input` is exactly equivalent to looping `update_data_input`.
+    /// On error `count()` is the successful prefix before the error.
+    pub fn bulk_update_data_input(&mut self, values: &[DataInput]) -> Result<(), &'static str> {
+        for v in values {
+            let value = data_input_to_f64(v)?;
+            self.push_value(value);
+        }
         Ok(())
     }
 }
@@ -1731,5 +1753,61 @@ mod tests {
         let bytes = a.serialize_to_bytes().expect("serialize KLL<i64>");
         let restored = KLL::<i64>::deserialize_from_bytes(&bytes).expect("deserialize KLL<i64>");
         assert_eq!(a.count(), restored.count());
+    }
+
+    #[test]
+    fn bulk_update_equivalent_to_loop_and_empty_is_noop() {
+        // Empty must be no-op and keep cache/coin.
+        let mut sk = KLL::<f64>::init_with_seed(200, 8, 42);
+        for &v in &[1.0, 2.0, 3.0] {
+            sk.update(&v);
+        }
+        let cnt_before = sk.count();
+        let q_before = sk.quantile_cached(0.5);
+        let bytes_before = sk.serialize_to_bytes().unwrap();
+        sk.bulk_update(&[]);
+        assert_eq!(sk.count(), cnt_before);
+        assert_eq!(sk.quantile(0.5), q_before);
+        assert_eq!(sk.serialize_to_bytes().unwrap(), bytes_before);
+
+        // Bulk vs loop equivalence for generic and seeded determinism.
+        let vals = sample_uniform_f64(0.0, 1000.0, 20_000, 0xBEEF_1234);
+        let mut a = KLL::<f64>::init_with_seed(200, 8, 99);
+        let mut b = KLL::<f64>::init_with_seed(200, 8, 99);
+        for v in &vals {
+            a.update(v);
+        }
+        b.bulk_update(&vals);
+        assert_eq!(a.count(), b.count());
+        assert_eq!(
+            a.serialize_to_bytes().unwrap(),
+            b.serialize_to_bytes().unwrap()
+        );
+        for q in [0.1, 0.5, 0.9] {
+            assert_eq!(a.quantile(q), b.quantile(q), "q={q}");
+        }
+
+        // DataInput batch equivalence.
+        let di_vals: Vec<DataInput> = vals[..100].iter().map(|v| DataInput::F64(*v)).collect();
+        let mut c = KLL::<f64>::init_with_seed(200, 8, 77);
+        let mut d = KLL::<f64>::init_with_seed(200, 8, 77);
+        for v in &di_vals {
+            c.update_data_input(v).unwrap();
+        }
+        d.bulk_update_data_input(&di_vals).unwrap();
+        assert_eq!(
+            c.serialize_to_bytes().unwrap(),
+            d.serialize_to_bytes().unwrap()
+        );
+
+        // Non-numeric stops on first error, same as per-element.
+        let bad = vec![
+            DataInput::F64(1.0),
+            DataInput::String("x".into()),
+            DataInput::F64(2.0),
+        ];
+        let mut e = KLL::<f64>::init_with_seed(200, 8, 11);
+        assert!(e.bulk_update_data_input(&bad).is_err());
+        assert_eq!(e.count(), 1);
     }
 }

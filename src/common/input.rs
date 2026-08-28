@@ -436,6 +436,39 @@ impl HydraCounter {
         }
     }
 
+    /// Batch insert for `bulk_update` paths. For `KLL` this delegates to
+    /// the new `bulk_update_data_input` (single CDF invalidation); for
+    /// other counters it loops over the existing per-item APIs.
+    pub fn bulk_insert(&mut self, values: &[DataInput]) -> Result<(), String> {
+        match self {
+            HydraCounter::KLL(kll) => kll
+                .bulk_update_data_input(values)
+                .map_err(|e| e.to_string()),
+            HydraCounter::CM(cm) => {
+                cm.bulk_insert(values);
+                Ok(())
+            }
+            HydraCounter::HLL(hll) => {
+                for v in values {
+                    hll.insert(v);
+                }
+                Ok(())
+            }
+            HydraCounter::CS(cs) => {
+                for v in values {
+                    cs.insert(v);
+                }
+                Ok(())
+            }
+            HydraCounter::UNIVERSAL(u) => {
+                for v in values {
+                    u.insert(v, 1);
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// Insert a value using a pre-computed hash when supported.
     /// For sketches that require full values (e.g., KLL, UnivMon), this falls back to `insert`.
     pub fn insert_with_hash(
