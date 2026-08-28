@@ -16,23 +16,40 @@ signals a backwards-compatible change.
   slice per hash function, over a new packed `BitMatrix` that implements
   `MatrixStorage` — so the filter probes the same `rows x cols` shape
   `CountMin` does and a membership query is the row-wise minimum, which over
-  single bits is their AND. `with_capacity(n, p)` sizes from the standard
-  formula and rounds each slice up to a power of two, which removes the column
-  fold's modulo bias and puts the delivered rate under the target rather than
-  over it. Union is exact, so the filter shards without loss.
+  single bits is their AND. `with_capacity(n, p)` caps the slice count at
+  `BLOOM_MAX_SLICES` (the seed list's length, since two slices seeded from the
+  same entry are identical) and solves the slice width for that count, so
+  `predicted_fpp` never claims a rate the filter cannot deliver; each slice is
+  rounded up to a power of two, which removes the column fold's modulo bias.
+  Total bits are capped at `BLOOM_MAX_BITS`, and a non-finite target rate is
+  rejected. Union is exact, so the filter shards without loss. The `BloomMode`
+  marker tags the hash path on the wire, so bytes written by one path do not
+  decode into the other.
 - **`SpaceSaving`, a fixed-counter heavy-hitter summary.** The paper's
   Stream-Summary: count-ordered buckets in a doubly linked list, each owning a
-  doubly linked list of its counters, plus a key index — so an increment moves
+  doubly linked list of its counters, plus a key index — so a unit arrival moves
   one counter to the neighbouring bucket and an eviction takes the head of the
   lowest bucket, constant work at any capacity. Both lists are index arenas
-  rather than pointers. A monitored key is sandwiched by its own error;
-  `upper_bound` never reads below the truth for any key in the stream.
-- **`IdentityHasher` in `common::hash`.** A `Hasher` that passes a `u64`
-  through unchanged, for index maps keyed by values that are already digests,
-  with `IdentityBuildHasher` as its `BuildHasher`.
+  rather than pointers. A monitored key is sandwiched by its own error, and
+  `upper_bound` never reads below the truth for any key in the stream: the
+  summary carries the largest count known to have left it, so the ceiling
+  survives a merge that leaves it holding fewer keys than its capacity. Counts
+  saturate rather than wrap, and `merge_from` picks the same survivors on every
+  run. Only the monitored `(key, count, error)` triples reach the wire; the
+  arena is rebuilt on load and a payload that does not describe a valid summary
+  is rejected.
+- **`BitMatrix` in `common::structures`.** A packed one-bit-per-cell grid behind
+  the `MatrixStorage` interface. It carries `words`, `rows` and `cols` on the
+  wire and recomputes the word stride and column mask on load; out-of-range
+  coordinates panic rather than aliasing into a neighbouring row.
+- **`DigestHasher` in `common::hash`.** A `Hasher` for `u64` keys that are
+  already digests: it replaces the full byte-wise hash with a finalizing mix,
+  which is what a table index still needs once the digests come from a fixed
+  seed list. `DigestBuildHasher` is its `BuildHasher`.
 - **`membership_battery` in the conformance kit.** A new `MembershipOps`
-  capability with the exact no-false-negative check and a false-positive-rate
-  ceiling, since the existing batteries are all frequency- or numeric-shaped.
+  capability with the exact no-false-negative check, a false-positive-rate
+  ceiling and a band around `predicted_fpp`, since the existing batteries are
+  all frequency- or numeric-shaped.
 
 ### Changed
 
@@ -45,7 +62,7 @@ signals a backwards-compatible change.
   `update_at_with`, which report every swap to a caller-supplied closure, while
   `push` and `update_at` delegate with a no-op and are unchanged for every other
   caller. A parallel `slots` vector carries each resident's digest so a sift
-  re-hashes nothing, and the index is keyed by `IdentityHasher` rather than
+  re-hashes nothing, and the index is keyed by `DigestHasher` rather than
   running SipHash over a value that is already an xxh3 digest. Measured on a
   Zipf(1.1) stream, `HHHeap::update` goes from 4.75 to 45.0 Mups/s at capacity
   8 and from 0.01 to 52.9 at capacity 2048 — flat in `k` rather than halving
@@ -53,13 +70,14 @@ signals a backwards-compatible change.
   27.0 Minsert/s. Retention is unchanged: a differential test compares the heap
   element for element against the rebuild implementation at capacities 0 through
   257 over 30k updates on both key forms.
-- **BREAKING (persisted `HHHeap` and `UnivMon` state):** `HHHeap` no longer
-  serializes its key index, which is derived data rebuilt on load. The
-  serialized form went from `{heap, positions, k}` to `{heap, k}`, so state
-  written by an earlier version does not decode. Nothing in-crate pins those
-  bytes — the portable MessagePack wire for the top-k sketches carries a
-  `(key, value)` list and rebuilds through `update`, and the goldens cover CMS
-  and HLL envelopes only.
+- **BREAKING (positionally encoded `HHHeap` and `UnivMon` state):** `HHHeap` no
+  longer serializes its key index, which is derived data rebuilt on load. The
+  serialized form went from `{heap, positions, k}` to `{heap, k}`. A named-map
+  encoding written by an earlier version still decodes, since the extra key is
+  skipped; a positional encoding of the three-field form does not. Nothing
+  in-crate writes the positional form — the portable MessagePack wire for the
+  top-k sketches carries a `(key, value)` list and rebuilds through `update`,
+  and the goldens cover CMS and HLL envelopes only.
 - **BREAKING (external implementors of `MatrixFastHash`):** the trait gained a
   required `row_hash(row, mask_bits, mask)` method, split out of
   `col_for_row` so storages can decode against precomputed parameters and

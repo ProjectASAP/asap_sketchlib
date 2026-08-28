@@ -17,7 +17,7 @@
 
 use crate::{
     BitMatrix, DataInput, DefaultXxHasher, FastPath, FastPathHasher, MatrixStorage, RegularPath,
-    SketchHasher,
+    SEEDLIST, SketchHasher,
 };
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -29,15 +29,90 @@ pub const BLOOM_DEFAULT_ROWS: usize = 7;
 /// Bits per hash function in a default filter.
 pub const BLOOM_DEFAULT_COLS: usize = 1 << 16;
 
+/// Slices that can hash independently.
+///
+/// Row `r` hashes with seed index `r % SEEDLIST.len()` on both paths, so slice
+/// `r` and slice `r + BLOOM_MAX_SLICES` receive the same seed and hold the same
+/// bits. Selectivity therefore stops growing past this many rows.
+pub const BLOOM_MAX_SLICES: usize = SEEDLIST.len();
+
+/// Ceiling on the bits [`Bloom::with_capacity`] will size to, 256 MiB packed.
+///
+/// A target the ceiling cannot reach yields the widest slices that fit, and
+/// [`Bloom::predicted_fpp`] then reports the rate those slices deliver.
+pub const BLOOM_MAX_BITS: usize = 1 << 31;
+
+/// Wire tag identifying the hash path a filter was built on.
+///
+/// The two paths fold different bits for the same key on most geometries, so a
+/// filter decoded into the wrong path answers no about its own members. The tag
+/// is serialized and checked so that decode fails instead.
+pub trait BloomMode {
+    /// Tag written into the serialized form.
+    const MODE_TAG: &'static str;
+}
+
+impl BloomMode for RegularPath {
+    const MODE_TAG: &'static str = "regular";
+}
+
+impl BloomMode for FastPath {
+    const MODE_TAG: &'static str = "fast";
+}
+
 /// A partitioned Bloom filter over a packed bit grid.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Bloom<Mode = RegularPath, H: SketchHasher = DefaultXxHasher> {
     bits: BitMatrix,
     inserted: u64,
-    #[serde(skip)]
     _mode: PhantomData<Mode>,
-    #[serde(skip)]
     _hasher: PhantomData<H>,
+}
+
+#[derive(Serialize)]
+#[serde(rename = "Bloom")]
+struct BloomSer<'a> {
+    bits: &'a BitMatrix,
+    inserted: u64,
+    mode: &'static str,
+}
+
+#[derive(Deserialize)]
+#[serde(rename = "Bloom")]
+struct BloomDe {
+    bits: BitMatrix,
+    inserted: u64,
+    mode: String,
+}
+
+impl<Mode: BloomMode, H: SketchHasher> Serialize for Bloom<Mode, H> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        BloomSer {
+            bits: &self.bits,
+            inserted: self.inserted,
+            mode: Mode::MODE_TAG,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de, Mode: BloomMode, H: SketchHasher> Deserialize<'de> for Bloom<Mode, H> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let input = BloomDe::deserialize(deserializer)?;
+        if input.mode != Mode::MODE_TAG {
+            return Err(serde::de::Error::custom(format!(
+                "bloom filter was built on the {} hash path, cannot decode as {}",
+                input.mode,
+                Mode::MODE_TAG
+            )));
+        }
+        Ok(Self {
+            bits: input.bits,
+            inserted: input.inserted,
+            _mode: PhantomData,
+            _hasher: PhantomData,
+        })
+    }
 }
 
 impl<Mode, H: SketchHasher> Default for Bloom<Mode, H> {
@@ -48,6 +123,11 @@ impl<Mode, H: SketchHasher> Default for Bloom<Mode, H> {
 
 impl<Mode, H: SketchHasher> Bloom<Mode, H> {
     /// Creates a filter of `rows` hash functions over `cols` bits each.
+    ///
+    /// Rows beyond [`BLOOM_MAX_SLICES`] are allowed but repeat an earlier row's
+    /// seed and so hold identical bits: they cost storage and a hash each
+    /// without sharpening the filter. [`Self::effective_rows`] reports the
+    /// count that actually discriminates, and both rate estimates use it.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
         Self {
             bits: BitMatrix::new(rows, cols),
@@ -60,24 +140,52 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
     /// Creates a filter sized for `expected_items` at a target false-positive
     /// rate.
     ///
-    /// `m = -n ln p / (ln 2)^2` bits over `k = (m/n) ln 2` hash functions, then
-    /// split into `k` slices of `m/k` bits each, each slice rounded up to a
-    /// power of two. The rounding keeps the column fold free of modulo bias, so
-    /// the measured rate lands at or under the target rather than above it.
-    /// `target_fpp` is clamped into `(0, 1)` and both dimensions floor at 1.
+    /// See [`Self::dimensions_for`] for the sizing and its bounds.
+    ///
+    /// # Panics
+    /// If `target_fpp` is NaN or infinite.
     pub fn with_capacity(expected_items: usize, target_fpp: f64) -> Self {
         let (rows, cols) = Self::dimensions_for(expected_items, target_fpp);
         Self::with_dimensions(rows, cols)
     }
 
     /// The `(rows, cols)` [`Self::with_capacity`] would choose.
+    ///
+    /// `k = round(log2(1/p))` slices, capped at [`BLOOM_MAX_SLICES`], then the
+    /// slice width that hits `p` with exactly that many slices,
+    /// `cols = -n / ln(1 - p^(1/k))`, rounded up to a power of two. Solving for
+    /// the capped `k` rather than assuming the `k`-optimal split is what keeps
+    /// a small target reachable: the cap costs bits, not accuracy, until
+    /// [`BLOOM_MAX_BITS`] binds.
+    ///
+    /// The power-of-two rounding keeps the column fold free of modulo bias, so
+    /// the measured rate lands at or under the target rather than above it.
+    /// `target_fpp` is clamped into `(0, 1)` and both dimensions floor at 1. A
+    /// target needing more than [`BLOOM_MAX_BITS`] gets the widest slices that
+    /// fit, and [`Self::predicted_fpp`] reports the rate they deliver.
+    ///
+    /// # Panics
+    /// If `target_fpp` is NaN or infinite. Clamping cannot order those, and a
+    /// silently degenerate filter answers yes to everything.
     pub fn dimensions_for(expected_items: usize, target_fpp: f64) -> (usize, usize) {
+        assert!(
+            target_fpp.is_finite(),
+            "target false-positive rate must be finite, got {target_fpp}"
+        );
         let n = expected_items.max(1) as f64;
         let p = target_fpp.clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
         let ln2 = std::f64::consts::LN_2;
         let m = (-n * p.ln() / (ln2 * ln2)).ceil().max(1.0);
-        let rows = ((m / n) * ln2).round().max(1.0) as usize;
-        let cols = ((m / rows as f64).ceil().max(1.0) as usize).next_power_of_two();
+        let rows = ((m / n) * ln2).round().clamp(1.0, BLOOM_MAX_SLICES as f64) as usize;
+
+        let per_slice_fill = p.powf(1.0 / rows as f64);
+        let wanted = (-n / (1.0 - per_slice_fill).ln()).ceil().max(1.0);
+        let widest = 1usize << (BLOOM_MAX_BITS / rows).max(1).ilog2();
+        let cols = if wanted >= widest as f64 {
+            widest
+        } else {
+            (wanted as usize).next_power_of_two().min(widest)
+        };
         (rows, cols)
     }
 
@@ -85,6 +193,18 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
     #[inline(always)]
     pub fn rows(&self) -> usize {
         self.bits.rows()
+    }
+
+    /// Slices that hash independently: [`Self::rows`] capped at
+    /// [`BLOOM_MAX_SLICES`].
+    ///
+    /// Rows past the seed list duplicate an earlier slice bit for bit, so they
+    /// are not counted. On the fast path a packed hash layout can carry more
+    /// independent windows than the seed list has entries; the cap is applied
+    /// regardless, which under-reports rather than over-reports.
+    #[inline(always)]
+    pub fn effective_rows(&self) -> usize {
+        self.rows().min(BLOOM_MAX_SLICES)
     }
 
     /// Bits per hash function.
@@ -133,17 +253,17 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
     /// False-positive rate implied by the bits actually set.
     ///
     /// Each slice contributes its own fill, so the rate is the fill ratio
-    /// raised to the number of slices.
+    /// raised to the number of independent slices.
     pub fn estimated_fpp(&self) -> f64 {
-        self.fill_ratio().powi(self.rows() as i32)
+        self.fill_ratio().powi(self.effective_rows() as i32)
     }
 
     /// False-positive rate the sizing formula predicts for `distinct_items`
-    /// distinct keys, `(1 - e^(-n/cols))^rows`.
+    /// distinct keys, `(1 - e^(-n/cols))^effective_rows`.
     pub fn predicted_fpp(&self, distinct_items: usize) -> f64 {
         let n = distinct_items as f64;
         let per_slice = 1.0 - (-n / self.cols() as f64).exp();
-        per_slice.powi(self.rows() as i32)
+        per_slice.powi(self.effective_rows() as i32)
     }
 
     /// Unions `other` into `self`.
@@ -155,7 +275,6 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
         self.inserted = self.inserted.saturating_add(other.inserted);
     }
 }
-
 // Regular-path membership: one seeded hash per slice.
 impl<H: SketchHasher> Bloom<RegularPath, H> {
     /// Records `value` as a member.

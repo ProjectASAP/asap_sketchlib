@@ -48,6 +48,8 @@ tests/
 ├── e2e_frameworks.rs
 ├── e2e_octo.rs          # …the OctoSketch promotion protocol
 ├── e2e_heavy_hitters.rs # …CocoSketch and Elastic, feature-gated
+├── e2e_space_saving.rs  # …the Space-Saving counter guarantees
+├── e2e_membership.rs    # …the Bloom filter's membership guarantees
 ├── e2e_experimental.rs  # …the remaining feature-gated sketches
 └── bug_verification.rs  # regression tests for fixed defects
 ```
@@ -71,6 +73,7 @@ traits; batteries translate those guarantees into checks. Traits:
 | --- | --- |
 | `FrequencyOps<K>` | point frequency estimates per key |
 | `SignedFrequencyOps<K>` | weighted/turnstile ingestion (+/− updates) |
+| `MembershipOps<K>` | set membership per key |
 | `CardinalityOps` | distinct count over opaque byte keys |
 | `QuantileOps` | quantiles of a numeric stream |
 | `MergeOps` | in-place merge from a same-config instance |
@@ -83,11 +86,13 @@ into a `BatteryReport`, and report all failures at once via `.assert_ok()`:
 | `frequency_battery` | dense-key accuracy; one-sided sketches must never underestimate and stay within `(1 + rel_tol)` |
 | `merge_equivalence_battery` | shard-merged sketch ≡ single-pass sketch within slack |
 | `turnstile_battery` | `+500 / −200 → ~300`; full cancellation → 0 |
+| `membership_battery` | a fresh sketch rejects every probe; every inserted key reports present; the measured false-positive rate over disjoint probes stays at or under `max_fpp` |
 | `cardinality_battery` | unique-stream accuracy at a checkpoint; re-ingesting seen keys must not move the estimate |
 | `quantile_battery` | estimates land inside rank-tolerance value bands across the standard q grid |
 
 Specs carry the tolerances: `FrequencySpec { one_sided, rel_tol, abs_tol }`,
-`CardinalitySpec { rel_tol }`, `QuantileSpec { rank_tol, qs }`.
+`MembershipSpec { max_fpp }`, `CardinalitySpec { rel_tol }`,
+`QuantileSpec { rank_tol, qs }`.
 
 **Layer 3 — suites.**
 `conformance_kit.rs` wires established sketches through the kit as reference

@@ -23,19 +23,37 @@ AND.
 fn with_capacity(expected_items: usize, target_fpp: f64) -> Self
 fn with_dimensions(rows: usize, cols: usize) -> Self
 fn dimensions_for(expected_items: usize, target_fpp: f64) -> (usize, usize)
+
+const BLOOM_MAX_SLICES: usize   // 20, the hasher's seed count
+const BLOOM_MAX_BITS: usize     // 2^31, the sizing ceiling
 ```
 
-`with_capacity` sizes from the standard formula — `m = -n ln p / (ln 2)^2` bits
-over `k = (m/n) ln 2` hash functions — then splits `m` into `k` slices and
-rounds each slice up to a power of two. The rounding keeps the column fold free
-of modulo bias, so the delivered rate lands under the target rather than over
-it. `dimensions_for` reports the choice without allocating.
+`with_capacity` takes `k = round(log2(1/p))` slices, **capped at
+`BLOOM_MAX_SLICES`**, then solves for the slice width that hits `p` with
+exactly that many slices — `cols = -n / ln(1 - p^(1/k))` — and rounds it up to a
+power of two. The rounding keeps the column fold free of modulo bias, so the
+delivered rate lands under the target rather than over it. `dimensions_for`
+reports the choice without allocating.
+
+The cap is the reason the width is solved for `k` rather than taken as the
+`k`-optimal split `m/k`. Row `r` hashes with seed index `r % 20`, so a filter
+asking for 23 slices would get 20 distinct hash functions and 3 copies. Capping
+`k` and widening the slices to compensate costs bits — about 20% more at
+`p = 1e-12` — and delivers the target, where the `k`-optimal split would have
+delivered `2^-20` no matter what was asked for.
+
+`with_capacity` and `dimensions_for` **panic on a NaN or infinite
+`target_fpp`**; a finite value outside `(0, 1)` is clamped into it. A target
+needing more than `BLOOM_MAX_BITS` gets the widest slices that fit, and
+`predicted_fpp` then reports the rate those slices deliver.
 
 `Default` is 7 x 65536 — 56 KiB of packed bits — which holds 20k distinct keys
 at about 1 false positive in 11,500.
 
 `with_dimensions` is the escape hatch when memory is fixed. A non-power-of-two
-`cols` folds with a modulo and carries the bias the sized path avoids.
+`cols` folds with a modulo and carries the bias the sized path avoids. More than
+`BLOOM_MAX_SLICES` rows is legal but pointless: rows past the seed list repeat
+an earlier row bit for bit.
 
 ## Insert/Update
 
@@ -61,15 +79,18 @@ fn estimated_fpp(&self) -> f64
 fn fill_ratio(&self) -> f64
 fn inserted(&self) -> u64
 fn rows(&self) -> usize
+fn effective_rows(&self) -> usize
 fn cols(&self) -> usize
 fn bit_capacity(&self) -> usize
 fn size_in_bytes(&self) -> usize
 fn is_empty(&self) -> bool
 ```
 
-`predicted_fpp` is the model, `(1 - e^(-n/cols))^rows`. `estimated_fpp` reads
-the bits actually set, so it is the one to trust on a filter whose distinct
-count is unknown.
+`predicted_fpp` is the model, `(1 - e^(-n/cols))^effective_rows`.
+`estimated_fpp` reads the bits actually set, so it is the one to trust on a
+filter whose distinct count is unknown. Both raise the per-slice rate to
+`effective_rows`, not `rows`: duplicate slices agree by construction and add no
+selectivity, so counting them would report a rate the filter cannot deliver.
 
 ## Merge
 
@@ -83,8 +104,12 @@ makes the filter shardable without loss. Mismatched dimensions assert.
 
 ## Serialization
 
-Derived serde. The packed words are the state; there is no derived index to
-rebuild.
+The wire form is `{ bits, inserted, mode }`, where `mode` is `"regular"` or
+`"fast"`. Decoding into the other hash path fails rather than producing a filter
+that reports its own members absent. `BitMatrix` carries `{ words, rows, cols }`
+only — the word stride and the fold masks are recomputed on decode, and a
+payload whose word count disagrees with its dimensions is rejected there rather
+than panicking later.
 
 ## Examples
 
@@ -104,8 +129,18 @@ if !seen.contains(&DataInput::Str("10.0.0.2:443")) {
 - No deletion. Clearing a bit would erase it for every key that hashes there.
   A counting variant would need a counter matrix rather than a bit one.
 - No count and no cardinality. The filter answers membership only.
-- The two hash paths set different bits for the same key, so a `RegularPath`
-  filter and a `FastPath` filter are not interchangeable and cannot be merged.
+- Whether the two hash paths set the same bits depends on the geometry. When
+  `rows * (log2(cols) + 1)` fits in 128 bits the fast path slices one packed
+  hash into per-row windows and lands on different columns than the regular
+  path's per-row seeded hashes; past 128 bits it falls back to those same
+  per-row hashes and the two agree exactly. The default 7 x 65536 needs 119
+  bits and so **differs**; 8 x 65536 needs 136 and so **agrees**. Treat the two
+  as non-interchangeable regardless — a filter validated on an agreeing
+  geometry will lose almost every member on a packed one. The `mode` tag makes
+  a cross-path decode fail rather than fail silently.
+- Selectivity stops at `BLOOM_MAX_SLICES` (20) slices, the hasher's seed count.
+  `with_capacity` never asks for more; `with_dimensions` will, and the extra
+  rows cost memory and a hash each for nothing.
 - `with_dimensions(1, 1)` is legal and answers yes to everything after the
   first insert.
 

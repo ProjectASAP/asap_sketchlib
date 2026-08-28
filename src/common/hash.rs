@@ -217,19 +217,31 @@ impl SketchHasher for DefaultXxHasher {
     }
 }
 
-/// Passes a `u64` straight through as its own hash.
+/// Hashes a `u64` that is already a digest, with a finalizing mix instead of
+/// a full byte-wise hash.
 ///
-/// The index maps in this crate are keyed by values that are already xxh3
-/// digests; running a second hash over them buys nothing. Only `write_u64` is
-/// on the fast path - the byte fallback exists so the type is a valid
-/// [`Hasher`](std::hash::Hasher) for any key.
+/// The index maps in this crate are keyed by xxh3 digests; running SipHash over
+/// them again buys nothing. The finalizer is what a table index still needs: the
+/// digests come from a fixed seed list, so passing them through unchanged would
+/// let chosen keys share the low bits a `HashMap` buckets on and collapse a
+/// bucket into a linear scan.
+///
+/// Only `write_u64` is on the fast path. The byte fallback keeps the type a
+/// valid [`Hasher`](std::hash::Hasher), but it is a weak mixer over more than
+/// eight bytes and this type is not meant for byte-slice or `String` keys.
 #[derive(Default, Clone, Copy, Debug)]
-pub struct IdentityHasher(u64);
+pub struct DigestHasher(u64);
 
-impl std::hash::Hasher for IdentityHasher {
+impl std::hash::Hasher for DigestHasher {
     #[inline(always)]
     fn finish(&self) -> u64 {
-        self.0
+        let mut h = self.0;
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        h ^= h >> 33;
+        h
     }
 
     #[inline]
@@ -245,8 +257,8 @@ impl std::hash::Hasher for IdentityHasher {
     }
 }
 
-/// [`BuildHasher`](std::hash::BuildHasher) for [`IdentityHasher`].
-pub type IdentityBuildHasher = std::hash::BuildHasherDefault<IdentityHasher>;
+/// [`BuildHasher`](std::hash::BuildHasher) for [`DigestHasher`].
+pub type DigestBuildHasher = std::hash::BuildHasherDefault<DigestHasher>;
 
 // ---------------------------------------------------------------------------
 // Backwards-compatible free functions — delegate to DefaultXxHasher
@@ -562,5 +574,47 @@ mod tests {
     fn packed64_hasher_rejects_oversized_dimensions() {
         let key = DataInput::U64(19);
         let _ = Packed64Hasher::hash_for_matrix_seeded(0, 8, 4096, &key);
+    }
+
+    /// A `HashMap` buckets on the low bits of `finish()`. Digests that agree
+    /// there must not stay agreed, or one bucket absorbs all of them.
+    #[test]
+    fn digest_hasher_spreads_digests_that_share_their_low_bits() {
+        use std::hash::Hasher;
+
+        let spread = |shift: u32| {
+            let mut seen = std::collections::HashSet::new();
+            for i in 0..1024u64 {
+                let mut h = DigestHasher::default();
+                h.write_u64(i << shift);
+                seen.insert(h.finish() & 0x3ff);
+            }
+            seen.len()
+        };
+
+        // Every digest is a multiple of 2^16, so all 1024 share ten low bits
+        // and a pass-through hash puts every one of them in bucket 0. Well
+        // spread, 1024 draws over 1024 buckets fill about 647 of them.
+        assert!(
+            spread(16) > 550,
+            "digests sharing their low bits collapsed into {} buckets",
+            spread(16)
+        );
+        assert!(spread(0) > 550);
+    }
+
+    #[test]
+    fn digest_hasher_is_deterministic() {
+        use std::hash::Hasher;
+
+        let once = |v: u64| {
+            let mut h = DigestHasher::default();
+            h.write_u64(v);
+            h.finish()
+        };
+        for v in [0u64, 1, u64::MAX, 0xdead_beef] {
+            assert_eq!(once(v), once(v));
+        }
+        assert_ne!(once(0), once(1));
     }
 }

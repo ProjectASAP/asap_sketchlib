@@ -140,16 +140,6 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
         displaced
     }
 
-    /// True when [`Self::push`] would keep `value`: either there is room, or
-    /// it outranks the root.
-    pub fn would_accept(&self, value: &T) -> bool {
-        self.data.len() < self.size
-            || self
-                .data
-                .first()
-                .is_some_and(|root| self.order.should_replace_root(root, value))
-    }
-
     /// Removes and returns the root element (min or max depending on order).
     pub fn pop(&mut self) -> Option<T> {
         if self.data.is_empty() {

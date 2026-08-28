@@ -126,11 +126,22 @@ impl Default for FrequencySpec {
 pub struct MembershipSpec {
     /// Ceiling on the measured false-positive rate.
     pub max_fpp: f64,
+    /// Rate the sketch's own sizing predicts for this member count. The
+    /// ceiling is the sizing *target*, roughly an order of magnitude looser
+    /// than what a correctly sized filter delivers, so a wrong implementation
+    /// clears it; the prediction is the number to hold the sketch to.
+    pub predicted_fpp: Option<f64>,
+    /// Relative half-width allowed around `predicted_fpp`.
+    pub fpp_band: f64,
 }
 
 impl Default for MembershipSpec {
     fn default() -> Self {
-        Self { max_fpp: 0.01 }
+        Self {
+            max_fpp: 0.01,
+            predicted_fpp: None,
+            fpp_band: 0.25,
+        }
     }
 }
 
@@ -404,7 +415,8 @@ where
 /// - After ingesting `members`, every member reports present. This is exact for
 ///   a Bloom-style filter and a failure is a bug, not a tolerance miss.
 /// - Over `non_members`, disjoint from `members`, the measured false-positive
-///   rate stays at or under `spec.max_fpp`.
+///   rate stays at or under `spec.max_fpp` and, when the sketch reports a
+///   predicted rate, lands within `spec.fpp_band` of it either way.
 pub fn membership_battery<S, F, K>(
     sketch: &str,
     new_sketch: F,
@@ -470,6 +482,20 @@ where
                 spec.max_fpp
             ),
         );
+
+        if let Some(predicted) = spec.predicted_fpp {
+            let (low, high) = (
+                predicted * (1.0 - spec.fpp_band),
+                predicted * (1.0 + spec.fpp_band),
+            );
+            report.record(
+                "predicted-false-positive-rate",
+                rate >= low && rate <= high,
+                format!(
+                    "measured {rate:.6} outside [{low:.6}, {high:.6}] around the predicted {predicted:.6}"
+                ),
+            );
+        }
     }
 
     report

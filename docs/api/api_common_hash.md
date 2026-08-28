@@ -10,6 +10,8 @@ Shared hashing traits, constants, and helpers used by sketches/frameworks.
 
 - `SketchHasher`
 - `DefaultXxHasher`
+- `DigestHasher` — `std::hash::Hasher` for `u64` keys that are already a digest; one avalanche step, no full hash
+- `DigestBuildHasher` — `BuildHasherDefault<DigestHasher>`, the `BuildHasher` to hand a `HashMap`
 - `MatrixHashMode`
 - `MatrixHashType` (see matrix storage)
 

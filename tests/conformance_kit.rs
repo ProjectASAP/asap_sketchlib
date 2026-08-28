@@ -50,6 +50,17 @@ impl MembershipOps<i64> for BloomAdapter {
     }
 }
 
+struct RegularBloomAdapter(Bloom<RegularPath>);
+
+impl MembershipOps<i64> for RegularBloomAdapter {
+    fn add(&mut self, key: &i64) {
+        self.0.insert(&DataInput::I64(*key));
+    }
+    fn contains(&self, key: &i64) -> bool {
+        self.0.contains(&DataInput::I64(*key))
+    }
+}
+
 struct SpaceSavingAdapter(SpaceSaving);
 
 impl FrequencyOps<i64> for SpaceSavingAdapter {
@@ -374,19 +385,49 @@ fn univmonq_passes_quantile_conformance() {
 }
 
 /// A Bloom filter sized for 20k keys at 1% must show no false negative and a
-/// measured rate under its own budget. Sizing rounds each slice up to a power
-/// of two, so the delivered rate sits below the target rather than at it.
+/// measured rate that matches its own prediction. Sizing rounds each slice up
+/// to a power of two, so the delivered rate sits well below the 1% target; the
+/// target alone would pass an implementation off by 2x, so the battery is held
+/// to `predicted_fpp` instead.
 #[test]
 fn bloom_passes_membership_conformance() {
     let members: Vec<i64> = (0..20_000).collect();
     let non_members: Vec<i64> = (1_000_000..1_100_000).collect();
+    let predicted = Bloom::<FastPath>::with_capacity(20_000, 0.01).predicted_fpp(20_000);
 
     conformance::membership_battery(
         "Bloom<FastPath>",
         || BloomAdapter(Bloom::<FastPath>::with_capacity(20_000, 0.01)),
         &members,
         &non_members,
-        MembershipSpec { max_fpp: 0.01 },
+        MembershipSpec {
+            max_fpp: 0.01,
+            predicted_fpp: Some(predicted),
+            fpp_band: 0.25,
+        },
+    )
+    .assert_ok();
+}
+
+/// The regular path is sized by the same formula and must land in the same
+/// place. It is the default type parameter and the shape `predicted_fpp`
+/// models, so the kit covers it rather than only the packed-hash path.
+#[test]
+fn bloom_regular_path_passes_membership_conformance() {
+    let members: Vec<i64> = (0..20_000).collect();
+    let non_members: Vec<i64> = (1_000_000..1_100_000).collect();
+    let predicted = Bloom::<RegularPath>::with_capacity(20_000, 0.01).predicted_fpp(20_000);
+
+    conformance::membership_battery(
+        "Bloom<RegularPath>",
+        || RegularBloomAdapter(Bloom::<RegularPath>::with_capacity(20_000, 0.01)),
+        &members,
+        &non_members,
+        MembershipSpec {
+            max_fpp: 0.01,
+            predicted_fpp: Some(predicted),
+            fpp_band: 0.25,
+        },
     )
     .assert_ok();
 }

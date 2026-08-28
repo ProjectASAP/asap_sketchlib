@@ -6,7 +6,7 @@
 //! whatever the capacity.
 
 use crate::common::input::HHItem;
-use crate::common::{CommonHeap, IdentityBuildHasher, KeepSmallest};
+use crate::common::{CommonHeap, DigestBuildHasher, KeepSmallest};
 use crate::{DataInput, HeapItem, hash_item64_seeded, hash64_seeded, input_to_owned};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 /// digest is rare enough that the inline pair is effectively never spilled.
 type Slot = SmallVec<[usize; 2]>;
 
-type Index = HashMap<u64, Slot, IdentityBuildHasher>;
+type Index = HashMap<u64, Slot, DigestBuildHasher>;
 
 /// Serialized form. The index is derived from the heap, so it is rebuilt on
 /// load rather than carried.
@@ -60,7 +60,7 @@ impl HHHeap {
         HHHeap {
             heap: CommonHeap::new_min(k),
             slots: Vec::with_capacity(k),
-            positions: Index::with_capacity_and_hasher(k, IdentityBuildHasher::default()),
+            positions: Index::with_capacity_and_hasher(k, DigestBuildHasher::default()),
             k,
         }
     }
@@ -620,8 +620,7 @@ mod index_invariants {
             .collect()
     }
 
-    /// The index stays exact through eviction, promotion and re-entry - the
-    /// property that lets the rebuild go away.
+    /// The index stays exact through eviction, promotion and re-entry.
     #[test]
     fn the_index_survives_a_long_churning_stream() {
         for capacity in [1usize, 2, 7, 64, 512] {
@@ -761,16 +760,15 @@ mod index_invariants {
 
 #[cfg(test)]
 mod differential {
-    //! The index rewrite must not move a single element.
+    //! Retention does not depend on how the index is maintained.
     //!
-    //! [`Reference`] below is the pre-rewrite `HHHeap`: the same `CommonHeap`,
-    //! with the key index rebuilt in full after every accepted update. It is
-    //! compared against the shipped heap element by element, so any divergence
-    //! in which key is seated, which is evicted, or where either lands, fails.
+    //! [`Reference`] holds the same `CommonHeap` with the key index rebuilt in
+    //! full after every accepted update. It is compared against the shipped
+    //! heap element by element, so any divergence in which key is seated,
+    //! which is evicted, or where either lands, fails.
     //!
     //! `CommonHeap`'s own sift is covered by the tests above it in this file;
-    //! what is under test here is the index maintenance that replaced the
-    //! rebuild.
+    //! what is under test here is the incremental index maintenance.
 
     use super::*;
     use crate::DataInput;
@@ -971,6 +969,119 @@ mod differential {
                 None => first = Some(snapshot),
                 Some(expected) => assert_eq!(&snapshot, expected, "run-to-run divergence"),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod colliding_digests {
+    //! Index maintenance when residents share a digest.
+    //!
+    //! Real xxh3 digests do not collide across a test-sized key set, so the
+    //! multi-entry bucket path is driven here against the shipped helpers.
+
+    use super::*;
+
+    fn listed(positions: &Index, digest: u64) -> Vec<usize> {
+        let mut entries: Vec<usize> = positions
+            .get(&digest)
+            .map(|bucket| bucket.to_vec())
+            .unwrap_or_default();
+        entries.sort_unstable();
+        entries
+    }
+
+    #[test]
+    fn a_bucket_holding_both_sides_of_a_swap_is_unchanged() {
+        let mut slots = vec![7u64, 7];
+        let mut positions = Index::default();
+        positions.entry(7).or_default().extend([0, 1]);
+
+        swap_entry(&mut slots, &mut positions, 0, 1);
+
+        assert_eq!(slots, vec![7, 7]);
+        assert_eq!(listed(&positions, 7), vec![0, 1]);
+    }
+
+    #[test]
+    fn a_swap_moves_only_its_own_entry_out_of_a_shared_bucket() {
+        // Position 0 is second in its bucket, so patching the bucket head
+        // instead of the matching entry corrupts position 2.
+        let mut slots = vec![7u64, 9, 7];
+        let mut positions = Index::default();
+        positions.entry(7).or_default().extend([2, 0]);
+        positions.entry(9).or_default().push(1);
+
+        swap_entry(&mut slots, &mut positions, 0, 1);
+
+        assert_eq!(slots, vec![9, 7, 7]);
+        assert_eq!(listed(&positions, 7), vec![1, 2]);
+        assert_eq!(listed(&positions, 9), vec![0]);
+    }
+
+    #[test]
+    fn dropping_one_entry_keeps_the_rest_of_its_bucket() {
+        let mut positions = Index::default();
+        positions.entry(7).or_default().extend([0, 3, 5]);
+
+        drop_entry(&mut positions, 7, 3);
+
+        assert_eq!(listed(&positions, 7), vec![0, 5]);
+    }
+
+    #[test]
+    fn dropping_the_last_entry_removes_the_bucket() {
+        let mut positions = Index::default();
+        positions.entry(7).or_default().push(4);
+
+        drop_entry(&mut positions, 7, 4);
+
+        assert!(!positions.contains_key(&7));
+    }
+
+    /// Every position is listed in the bucket its slot names, and no bucket
+    /// lists a position twice or one the heap does not hold.
+    fn assert_buckets_track_slots(heap: &HHHeap, context: &str) {
+        for (idx, digest) in heap.slots.iter().enumerate() {
+            assert!(
+                listed(&heap.positions, *digest).contains(&idx),
+                "{context}: bucket {digest:#x} does not list position {idx}"
+            );
+        }
+        let mut all: Vec<usize> = heap
+            .positions
+            .values()
+            .flat_map(|b| b.iter().copied())
+            .collect();
+        all.sort_unstable();
+        assert_eq!(
+            all,
+            (0..heap.len()).collect::<Vec<_>>(),
+            "{context}: buckets do not name every heap position exactly once"
+        );
+    }
+
+    #[test]
+    fn two_shared_buckets_follow_the_sift() {
+        let mut heap = HHHeap::new(16);
+        for i in 0..16u64 {
+            heap.update_heap_item(&HeapItem::U64(i), i as i64 + 1);
+        }
+
+        // Two digests across sixteen residents, so a sift both exchanges two
+        // members of one bucket and moves a member between buckets.
+        let resident = heap.len();
+        heap.positions = Index::default();
+        for idx in 0..resident {
+            let digest = if idx % 2 == 0 { 0xabcu64 } else { 0xdefu64 };
+            heap.slots[idx] = digest;
+            heap.positions.entry(digest).or_default().push(idx);
+        }
+        assert_buckets_track_slots(&heap, "seeded");
+
+        for step in 0..200usize {
+            heap.rescore((step * 7) % resident, (step as i64 * 13) % 97);
+            assert_buckets_track_slots(&heap, &format!("step {step}"));
         }
     }
 }

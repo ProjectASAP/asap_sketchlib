@@ -21,7 +21,7 @@ position.
 - `slots: Vec<u64>` runs parallel to the heap array and holds each resident's
   digest, so a sift that moves an element needs no re-hash of its key.
 - The map is keyed by a value that is already an xxh3 digest, so it uses
-  `IdentityHasher` rather than running SipHash over it again.
+  `DigestHasher` rather than running SipHash over it again.
 
 `CommonHeap` reports movement through `push_back_with`, `replace_root_with` and
 `update_at_with`, each taking `&mut impl FnMut(usize, usize)` called once per
@@ -59,9 +59,8 @@ At the sketch level, against a bare `CountMin` at 210.1 Minsert/s:
 | 512 | 29.1 | 86.1% |
 | 2048 | 27.0 | 87.2% |
 
-The heap still dominates the insert - it does a hash, a map probe and a sift
-against the sketch's four counter writes - but the share no longer climbs with
-capacity.
+The heap dominates the insert - it does a hash, a map probe and a sift against
+the sketch's four counter writes - but its share is flat in capacity.
 
 ## Why not Space-Saving
 
@@ -83,13 +82,15 @@ and where either lands are identical. `index_invariants` in the same file pins
 the index itself: every resident is reachable at its own position and the index
 carries nothing else.
 
-The map is keyed by `IdentityHasher` rather than the randomly seeded default, so
+The map is keyed by `DigestHasher` rather than the randomly seeded default, so
 the structure carries no run-to-run state at all.
 
 ## Compatibility
 
 `HHHeap`'s serialized form is the heap and its capacity. The key index is
-derived and is no longer carried, so state written by a version that stored it
-does not decode. Nothing in-crate pins those bytes: the portable MessagePack
-wire for the top-k sketches carries a `(key, value)` list and rebuilds through
-`update`, and the goldens cover CMS and HLL envelopes only.
+derived rather than carried, and a decoded heap rebuilds it before first use.
+A named-map encoding that carries an index field still decodes, since the extra
+key is skipped; a positional encoding of the three-field form does not. Nothing
+in-crate writes the positional form: the portable MessagePack wire for the top-k
+sketches carries a `(key, value)` list and rebuilds through `update`, and the
+goldens cover CMS and HLL envelopes only.

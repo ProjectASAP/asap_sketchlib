@@ -153,8 +153,7 @@ fn main() {
     );
 
     // The aggregator is the pipeline's ceiling, and the heap sets the
-    // aggregator: HHHeap rebuilds its whole position index on every accepted
-    // update, so the rate falls off as 1/heap_size.
+    // aggregator.
     println!("\naggregator rate vs heap capacity (tau=64):");
     for capacity in [4usize, 16, 64, 256] {
         let plan = UnivMonOctoPlan::with_threshold(rows, cols, layers, OctoThreshold::new(64));
