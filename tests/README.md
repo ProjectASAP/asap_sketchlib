@@ -14,6 +14,8 @@ same conformance batteries before landing — copy an adapter from
 | `conformance_kit.rs` | Reference adapters: established sketches running through the kit (copy these) |
 | `e2e_frequency.rs` / `e2e_cardinality.rs` / `e2e_quantiles.rs` / `e2e_frameworks.rs` | Deep per-family suites with hand-tuned tolerances |
 | `e2e_heavy_hitters.rs` | CocoSketch and Elastic through the batteries, plus the heavy-hitter properties no battery models (`feature = "experimental"`) |
+| `e2e_membership.rs` | Bloom: no false negative, exact union, and the delivered false-positive rate against its own sizing |
+| `e2e_space_saving.rs` | Space-Saving: the error sandwich, the `min_count` ceiling, and the Stream-Summary lists under sustained eviction |
 | `e2e_octo.rs` | OctoSketch delta-promotion invariants, the `octo-runtime` pipeline, and conformance to the paper's Theorems 1-4 and its sketch-merge baseline |
 | `e2e_experimental.rs` | The remaining `feature = "experimental"` sketches: KMV, UniformSampling, EHUnivOptimized |
 | `bug_verification.rs` | Regression tests for fixed wrong-query-results bugs |
@@ -27,6 +29,7 @@ same conformance batteries before landing — copy an adapter from
    | Per-key frequency | `frequency_battery` | `FrequencyOps<K>` |
    | …never underestimates (CMS-style) | same, `one_sided: true` in `FrequencySpec` | — |
    | …with signed/turnstile updates | `turnstile_battery` | `SignedFrequencyOps<K>` |
+   | Set membership | `membership_battery` | `MembershipOps<K>` |
    | Distinct count | `cardinality_battery` | `CardinalityOps` |
    | Quantiles of a numeric stream | `quantile_battery` | `QuantileOps` |
    | Mergeable shards | `merge_equivalence_battery` | add `MergeOps` |

@@ -5,16 +5,16 @@
 mod common;
 
 use common::conformance::{
-    self, CardinalityOps, CardinalitySpec, FrequencyOps, MergeOps, QuantileOps, QuantileSpec,
-    SignedFrequencyOps,
+    self, CardinalityOps, CardinalitySpec, FrequencyOps, MembershipOps, MembershipSpec, MergeOps,
+    QuantileOps, QuantileSpec, SignedFrequencyOps,
 };
 use common::{FreqTruth, zipf_u64};
 
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::{
-    CountMin, DataInput, FastPath, HyperLogLog, HyperLogLogHIP, KLL, KLLDynamic, RegularPath,
-    UnivMonQ, Vector2D,
+    Bloom, CountMin, DataInput, FastPath, HyperLogLog, HyperLogLogHIP, KLL, KLLDynamic,
+    RegularPath, SpaceSaving, UnivMonQ, Vector2D,
 };
 use std::cell::RefCell;
 
@@ -36,6 +36,28 @@ impl FrequencyOps<i64> for CountMinAdapter {
 impl MergeOps for CountMinAdapter {
     fn merge_from(&mut self, other: &Self) {
         self.0.merge(&other.0);
+    }
+}
+
+struct BloomAdapter(Bloom<FastPath>);
+
+impl MembershipOps<i64> for BloomAdapter {
+    fn add(&mut self, key: &i64) {
+        self.0.insert(&DataInput::I64(*key));
+    }
+    fn contains(&self, key: &i64) -> bool {
+        self.0.contains(&DataInput::I64(*key))
+    }
+}
+
+struct SpaceSavingAdapter(SpaceSaving);
+
+impl FrequencyOps<i64> for SpaceSavingAdapter {
+    fn ingest(&mut self, key: &i64) {
+        self.0.insert(&DataInput::I64(*key));
+    }
+    fn estimate(&self, key: &i64) -> f64 {
+        self.0.estimate(&DataInput::I64(*key)) as f64
     }
 }
 
@@ -167,6 +189,12 @@ impl QuantileOps for UnivMonQAdapter {
 // ---------------------------------------------------------------------------
 // Battery runs
 // ---------------------------------------------------------------------------
+
+/// Space-Saving's over-estimate ceiling on `zipf_stream`. At 1024 counters the
+/// summary's minimum count settles at 12, below the battery's dense-key
+/// threshold of 25, so no dense key is ever evicted and the measured worst
+/// over-estimate is 1.
+const SPACE_SAVING_ABS_TOL: f64 = 2.0;
 
 fn zipf_stream() -> Vec<i64> {
     zipf_u64(60_000, 2048, 1.1, 9001)
@@ -341,6 +369,52 @@ fn univmonq_passes_quantile_conformance() {
             rank_tol: 0.04,
             ..QuantileSpec::default()
         },
+    )
+    .assert_ok();
+}
+
+/// A Bloom filter sized for 20k keys at 1% must show no false negative and a
+/// measured rate under its own budget. Sizing rounds each slice up to a power
+/// of two, so the delivered rate sits below the target rather than at it.
+#[test]
+fn bloom_passes_membership_conformance() {
+    let members: Vec<i64> = (0..20_000).collect();
+    let non_members: Vec<i64> = (1_000_000..1_100_000).collect();
+
+    conformance::membership_battery(
+        "Bloom<FastPath>",
+        || BloomAdapter(Bloom::<FastPath>::with_capacity(20_000, 0.01)),
+        &members,
+        &non_members,
+        MembershipSpec { max_fpp: 0.01 },
+    )
+    .assert_ok();
+}
+
+/// Space-Saving over 1024 counters holds every dense key of the shared Zipf
+/// stream, so each reports at or above its true count. The stream carries 1996
+/// distinct keys, so eviction is live rather than the summary simply fitting
+/// the domain.
+///
+/// `merge_equivalence_battery` does not fit: merging two summaries cannot
+/// recover a key both sides evicted, so the union is not the summary the
+/// concatenated stream would have built.
+#[test]
+fn space_saving_passes_frequency_conformance() {
+    let stream = zipf_stream();
+    let truth = stream_truth(&stream);
+    let spec = conformance::FrequencySpec {
+        one_sided: true,
+        rel_tol: 0.0,
+        abs_tol: SPACE_SAVING_ABS_TOL,
+    };
+
+    conformance::frequency_battery(
+        "SpaceSaving",
+        || SpaceSavingAdapter(SpaceSaving::with_capacity(1024)),
+        &stream,
+        &truth,
+        spec,
     )
     .assert_ok();
 }

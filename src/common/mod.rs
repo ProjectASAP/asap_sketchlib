@@ -48,7 +48,7 @@ pub use precompute_sample::PRECOMPUTED_SAMPLE;
 pub use precompute_sample2::PRECOMPUTED_SAMPLE_RATE_1PERCENT;
 pub use structure_utils::{Nitro, compute_median_inline_f64};
 pub use structures::{
-    CommonHeap, CommonHeapOrder, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128,
+    BitMatrix, CommonHeap, CommonHeapOrder, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128,
     FastPathHasher, FixedMatrix, HllBucketList, HllBucketListP12, HllBucketListP14,
     HllBucketListP16, HllRegisterStorage, KeepLargest, KeepSmallest, MatrixFastHash,
     MatrixHashType, MatrixStorage, QuickMatrixI32, QuickMatrixI64, QuickMatrixI128, Vector1D,

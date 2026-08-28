@@ -10,6 +10,27 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+### Added
+
+- **`Bloom`, a partitioned Bloom filter.** `rows` slices of `cols` bits, one
+  slice per hash function, over a new packed `BitMatrix` that implements
+  `MatrixStorage` — so the filter probes the same `rows x cols` shape
+  `CountMin` does and a membership query is the row-wise minimum, which over
+  single bits is their AND. `with_capacity(n, p)` sizes from the standard
+  formula and rounds each slice up to a power of two, which removes the column
+  fold's modulo bias and puts the delivered rate under the target rather than
+  over it. Union is exact, so the filter shards without loss.
+- **`SpaceSaving`, a fixed-counter heavy-hitter summary.** The paper's
+  Stream-Summary: count-ordered buckets in a doubly linked list, each owning a
+  doubly linked list of its counters, plus a key index — so an increment moves
+  one counter to the neighbouring bucket and an eviction takes the head of the
+  lowest bucket, constant work at any capacity. Both lists are index arenas
+  rather than pointers. A monitored key is sandwiched by its own error;
+  `upper_bound` never reads below the truth for any key in the stream.
+- **`membership_battery` in the conformance kit.** A new `MembershipOps`
+  capability with the exact no-false-negative check and a false-positive-rate
+  ceiling, since the existing batteries are all frequency- or numeric-shaped.
+
 ### Changed
 
 - **BREAKING (external implementors of `MatrixFastHash`):** the trait gained a
