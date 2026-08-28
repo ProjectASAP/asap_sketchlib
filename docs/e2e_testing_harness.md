@@ -47,8 +47,7 @@ tests/
 ├── e2e_quantiles.rs
 ├── e2e_frameworks.rs
 ├── e2e_octo.rs          # …the OctoSketch promotion protocol
-├── e2e_heavy_hitters.rs # …CocoSketch and Elastic, feature-gated
-├── e2e_space_saving.rs  # …the Space-Saving counter guarantees
+├── e2e_heavy_hitters.rs # …Space-Saving, CocoSketch and Elastic
 ├── e2e_membership.rs    # …the Bloom filter's membership guarantees
 ├── e2e_experimental.rs  # …the remaining feature-gated sketches
 └── bug_verification.rs  # regression tests for fixed defects
@@ -114,13 +113,14 @@ single-head Hydras. Suites grow with their family; a framework that outgrows a
 smoke test deepens in place rather than splitting off.
 
 What does split is a suite held together by something other than its subject.
-`e2e_experimental.rs` grouped sketches by cargo feature, and once CocoSketch and
-the Elastic sketch had a family's worth of coverage between them they moved to
-`e2e_heavy_hitters.rs` — still feature-gated, now organised by what they are:
-heavy-hitter sketches, which answer *which flows are big* from a flow key kept
-beside every counter. `e2e_octo.rs` holds the multi-threaded Octo variants of
-those same two, in its own `heavy_hitters` module, beside the rest of the
-promotion protocol.
+`e2e_experimental.rs` groups sketches by cargo feature; Space-Saving, CocoSketch
+and the Elastic sketch sit in `e2e_heavy_hitters.rs` instead, organised by what
+they are: heavy-hitter sketches, which answer *which flows are big* from a flow
+key kept beside every counter. The `experimental` gate rides on the two sketches
+that need it, not on the suite, so the default-feature run still gets
+Space-Saving. `e2e_octo.rs` holds the multi-threaded Octo variants of Coco and
+Elastic, in its own `heavy_hitters` module, beside the rest of the promotion
+protocol.
 
 ## Onboarding a new sketch
 

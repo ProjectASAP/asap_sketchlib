@@ -89,9 +89,6 @@ struct BloomPayload {
     inserted: u64,
 }
 
-/// Mirror of [`BitMatrix`]'s own serde shape (`[words, rows, cols]`), the route
-/// the packed words take across the module boundary: `BitMatrix` keeps `words`
-/// private and exposes no accessor for them.
 /// Checks a `(rows, cols)` pair against the wire-eligible subset: both non-zero,
 /// a power-of-two width, at most [`BLOOM_MAX_SLICES`] slices, and a bit capacity
 /// that neither overflows nor exceeds [`BLOOM_MAX_BITS`]. Applied before any
@@ -263,7 +260,15 @@ mod tests {
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
-        assert_eq!(&bytes[8..10], BLOOM_KIND);
+        // Literal, not `BLOOM_KIND`: the constant compared against itself pins
+        // nothing, and these bytes are what a Go reader dispatches on.
+        assert_eq!(&bytes[8..10], &[0x17, 0x00]);
+        let (kind_id, metadata, _) = envelope::split(&bytes).expect("split");
+        assert_eq!(kind_id, &[0x17, 0x00]);
+        let meta: BloomMetadata = from_slice(metadata).expect("metadata");
+        assert_eq!(meta.metadata_version, 1);
+        assert_eq!((meta.rows, meta.cols), (7, 1 << 14));
+        assert_eq!(meta.mode, "regular");
 
         let decoded = Bloom::<RegularPath>::deserialize_from_bytes(&bytes).expect("decode");
         assert_eq!(
@@ -584,6 +589,10 @@ mod tests {
         let clean = crafted(2, 8, "regular", vec![0xFF, 0], 0);
         let decoded = Bloom::<RegularPath>::deserialize_from_bytes(&clean).expect("clean decode");
         assert_eq!(decoded.fill_ratio(), 0.5);
+        // Eight bits set against an insert counter of zero: emptiness is a
+        // property of the bits.
+        assert_eq!(decoded.inserted(), 0);
+        assert!(!decoded.is_empty(), "a filter with bits set reported empty");
     }
 
     /// A filter sized for a realistic target still delivers it after a round

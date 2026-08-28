@@ -186,7 +186,7 @@ Test file: [`src/sketches/countsketch_topk.rs`](../src/sketches/countsketch_topk
 
 ### SpaceSaving
 
-Test file: [`tests/e2e_space_saving.rs`](../tests/e2e_space_saving.rs)
+Test file: [`tests/e2e_heavy_hitters.rs`](../tests/e2e_heavy_hitters.rs)
 
 Unit tests: [`src/sketches/space_saving.rs`](../src/sketches/space_saving.rs)
 

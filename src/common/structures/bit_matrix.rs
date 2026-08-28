@@ -385,7 +385,6 @@ mod tests {
             // Storage holds `rows * words_per_row * 64` bits; only `rows * cols`
             // of them are addressable, so a full grid leaves the rest clear.
             assert_eq!(m.count_ones(), rows * cols);
-            assert!(m.count_ones() <= m.size_in_bytes() * 8);
         }
     }
 
@@ -510,6 +509,35 @@ mod tests {
         }
     }
 
+    /// A grid whose row windows all fit in one 64-bit hash decodes each row
+    /// from its own slice of that hash. Rows sharing one window would still set
+    /// one bit per row, so only the columns tell them apart: over a stream of
+    /// keys, two rows holding identical bits are reading the same window.
+    #[test]
+    fn a_packed_64_grid_decodes_a_distinct_window_per_row() {
+        let (rows, cols) = (5, 1024);
+        assert_eq!(
+            crate::hash_mode_for_matrix(rows, cols),
+            crate::MatrixHashMode::Packed64
+        );
+        let mut m = BitMatrix::new(rows, cols);
+        for key in 0..300u64 {
+            let hashed = <BitMatrix as FastPathHasher<DefaultXxHasher>>::hash_for_matrix(
+                &m,
+                &DataInput::U64(key),
+            );
+            m.fast_insert(|c, _, _| *c = true, (), &hashed);
+        }
+        for left in 0..rows {
+            for right in left + 1..rows {
+                assert!(
+                    (0..cols).any(|col| m.get(left, col) != m.get(right, col)),
+                    "rows {left} and {right} read the same window"
+                );
+            }
+        }
+    }
+
     #[derive(serde::Serialize)]
     #[serde(rename = "BitMatrix")]
     struct CraftedMatrix {
@@ -551,6 +579,24 @@ mod tests {
         let err = rmp_serde::from_slice::<BitMatrix>(&bytes).expect_err("zero rows accepted");
         assert!(
             err.to_string().contains("needs both dimensions"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Dimensions whose word count does not fit a `usize` are named as an
+    /// overflow. Wrapping the product to zero would make an empty word list the
+    /// right length for a grid of `usize::MAX` rows.
+    #[test]
+    fn dimensions_whose_word_count_overflows_are_rejected() {
+        let overflowing = CraftedMatrix {
+            words: vec![],
+            rows: usize::MAX,
+            cols: 128,
+        };
+        let bytes = rmp_serde::to_vec(&overflowing).expect("encode");
+        let err = rmp_serde::from_slice::<BitMatrix>(&bytes).expect_err("overflow accepted");
+        assert!(
+            err.to_string().contains("dimensions overflow"),
             "unexpected error: {err}"
         );
     }

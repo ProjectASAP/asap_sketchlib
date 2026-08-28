@@ -398,7 +398,24 @@ mod tests {
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
-        assert_eq!(&bytes[8..10], SPACE_SAVING_KIND);
+        assert_eq!(&bytes[8..10], &[0x18, 0x00], "Space-Saving kind_id");
+
+        let meta = metadata_of(&bytes);
+        assert_eq!(meta.metadata_version, 1);
+        assert_eq!(meta.key_type, "i64");
+        assert_eq!(meta.capacity, 48);
+
+        let (_, _, payload) = envelope::split(&bytes).expect("split");
+        let emitted: SpaceSavingPayload<i64> = from_slice(payload).expect("payload");
+        assert_eq!(emitted.counts.len(), summary.len());
+        assert_eq!(emitted.total, summary.total());
+        for pair in emitted.counts.windows(2) {
+            assert!(pair[0] >= pair[1], "the emitted counts are not descending");
+        }
+        assert!(
+            emitted.counts[0] > emitted.counts[summary.len() - 1],
+            "the fixture cannot tell descending from ascending"
+        );
 
         let decoded =
             SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
@@ -479,7 +496,8 @@ mod tests {
     fn space_saving_empty_round_trip() {
         let summary: SpaceSaving = SpaceSaving::with_capacity(16);
         let bytes = summary.serialize_to_bytes().expect("serialize");
-        assert_eq!(metadata_of(&bytes).key_type, EMPTY_KEY_TYPE);
+        assert_eq!(metadata_of(&bytes).key_type, "u64");
+        assert_eq!(metadata_of(&bytes).metadata_version, 1);
 
         let decoded =
             SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
@@ -572,11 +590,18 @@ mod tests {
         })
         .expect("rebuild");
 
+        let bytes = seated.serialize_to_bytes().expect("serialize");
         assert_eq!(
-            seated.serialize_to_bytes().expect("serialize"),
+            bytes,
             reseated.serialize_to_bytes().expect("serialize"),
             "the emitted order followed the seat order"
         );
+
+        let (_, _, payload) = envelope::split(&bytes).expect("split");
+        let emitted: SpaceSavingPayload<u64> = from_slice(payload).expect("payload");
+        assert_eq!(emitted.counts, vec![9, 9, 5, 5], "not descending by count");
+        assert_eq!(emitted.keys, vec![1, 4, 2, 3], "ties not broken by key");
+        assert_eq!(emitted.errors, vec![0, 3, 2, 1]);
     }
 
     #[test]
@@ -814,6 +839,14 @@ mod tests {
                 "is not an ASAPv1 wire key type",
             ),
             (
+                crafted(4, vec![1], vec![3], vec![0], 3, u64::MAX),
+                "ceiling of 18446744073709551615 above its lowest count of 3",
+            ),
+            (
+                crafted(4, vec![1], vec![9], vec![0], 0, 0),
+                "total of 0 under the 9",
+            ),
+            (
                 envelope::encode(&[0x02, 0x00], &foreign_meta, &foreign_payload),
                 "kind_id mismatch",
             ),
@@ -827,6 +860,29 @@ mod tests {
                 "expected a complaint about {expected}, got {problem}"
             );
         }
+    }
+
+    /// A capacity past the metadata's `u32` field fails the encode: truncating
+    /// it would emit a capacity of zero, which no decode accepts.
+    #[test]
+    fn space_saving_refuses_a_capacity_the_metadata_cannot_carry() {
+        let summary = SpaceSaving::<DefaultXxHasher>::rebuild(SpaceSavingState {
+            capacity: 1 << 40,
+            total: 3,
+            floor: 0,
+            entries: vec![(HeapItem::U64(1), 3, 0)],
+        })
+        .expect("a sparse state");
+        assert_eq!(summary.capacity(), 1 << 40);
+
+        let problem = summary
+            .serialize_to_bytes()
+            .expect_err("an oversized capacity must not serialize")
+            .to_string();
+        assert!(
+            problem.contains("exceeds the u32 metadata field"),
+            "got {problem}"
+        );
     }
 
     /// A declared capacity is metadata, never an allocation size: `u32::MAX`

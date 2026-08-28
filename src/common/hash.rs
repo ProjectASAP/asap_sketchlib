@@ -600,21 +600,109 @@ mod tests {
             "digests sharing their low bits collapsed into {} buckets",
             spread(16)
         );
-        assert!(spread(0) > 550);
+        for shift in [10u32, 24, 32, 40, 48] {
+            assert!(
+                spread(shift) > 550,
+                "digests that are multiples of 2^{shift} collapsed into {} buckets",
+                spread(shift)
+            );
+        }
     }
 
+    /// The strict avalanche criterion: flipping one input bit must flip each
+    /// output bit about half the time. A mix that keeps some input bits away
+    /// from some output bits fails this even though it still spreads buckets.
     #[test]
-    fn digest_hasher_is_deterministic() {
+    fn digest_hasher_avalanche_flips_about_half_the_output_bits() {
         use std::hash::Hasher;
 
+        const SAMPLES: u64 = 4096;
         let once = |v: u64| {
             let mut h = DigestHasher::default();
             h.write_u64(v);
             h.finish()
         };
-        for v in [0u64, 1, u64::MAX, 0xdead_beef] {
-            assert_eq!(once(v), once(v));
+
+        for input_bit in 0..64u32 {
+            let mut flips_per_output_bit = [0u32; 64];
+            let mut total_flips = 0u64;
+            for v in 0..SAMPLES {
+                let delta = once(v) ^ once(v ^ (1u64 << input_bit));
+                total_flips += u64::from(delta.count_ones());
+                for (output_bit, flips) in flips_per_output_bit.iter_mut().enumerate() {
+                    *flips += ((delta >> output_bit) & 1) as u32;
+                }
+            }
+
+            let mean = total_flips as f64 / SAMPLES as f64;
+            assert!(
+                (31.0..=33.0).contains(&mean),
+                "flipping input bit {input_bit} flipped {mean} of 64 output bits on average"
+            );
+            for (output_bit, flips) in flips_per_output_bit.iter().enumerate() {
+                let rate = f64::from(*flips) / SAMPLES as f64;
+                assert!(
+                    (0.42..=0.58).contains(&rate),
+                    "input bit {input_bit} flipped output bit {output_bit} at rate {rate}"
+                );
+            }
         }
-        assert_ne!(once(0), once(1));
+    }
+
+    /// The mix loses none of the digest it is handed: distinct digests keep
+    /// distinct hashes, so the index maps never collide on the mix itself.
+    #[test]
+    fn digest_hasher_keeps_distinct_digests_distinct() {
+        use std::hash::BuildHasher;
+
+        let build = DigestBuildHasher::default();
+        let mut seen = HashSet::with_capacity(4096);
+        for v in 0..4096u64 {
+            assert!(
+                seen.insert(build.hash_one(v)),
+                "digest {v} collided with an earlier one"
+            );
+        }
+        assert_ne!(build.hash_one(0u64), build.hash_one(1u64));
+    }
+
+    /// The byte path a `String` or byte-slice key reaches. It is the weak half
+    /// of this hasher, but it still has to separate keys of eight bytes or
+    /// fewer, and it has to depend on the order of the bytes it is handed. It
+    /// is also the only path that can observe the starting state, which
+    /// `write_u64` overwrites, so the seed-free `Default` is pinned here.
+    #[test]
+    fn digest_hasher_write_separates_short_byte_slices() {
+        use std::hash::{BuildHasher, Hasher};
+
+        let bytes = |slices: &[&[u8]]| {
+            let mut h = DigestHasher::default();
+            for slice in slices {
+                h.write(slice);
+            }
+            h.finish()
+        };
+
+        let mut seen = HashSet::with_capacity(1024);
+        for i in 0..1024u64 {
+            let key = (i * 0x0001_0001_0001_0001).to_be_bytes();
+            assert!(
+                seen.insert(bytes(&[&key])),
+                "eight-byte key {key:?} collided with an earlier one"
+            );
+        }
+
+        assert_ne!(bytes(&[b"ab"]), bytes(&[b"ba"]), "byte order ignored");
+        assert_ne!(bytes(&[b"ab"]), bytes(&[b"abc"]), "trailing byte ignored");
+        assert_eq!(
+            bytes(&[b"ab"]),
+            bytes(&[b"a", b"b"]),
+            "split writes should hash like one write"
+        );
+        assert_eq!(
+            DigestBuildHasher::default().hash_one("seed-free"),
+            DigestBuildHasher::default().hash_one("seed-free"),
+            "independently built hashers disagreed, so `Default` carries a seed"
+        );
     }
 }

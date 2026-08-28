@@ -8,7 +8,10 @@
 //! paths, serialization, and the degenerate geometries.
 
 use asap_sketchlib::bloom::{BLOOM_MAX_BITS, BLOOM_MAX_SLICES};
-use asap_sketchlib::{BitMatrix, Bloom, DataInput, FastPath, RegularPath};
+use asap_sketchlib::{
+    BLOOM_DEFAULT_COLS, BLOOM_DEFAULT_ROWS, BitMatrix, Bloom, DataInput, FastPath, MatrixHashMode,
+    RegularPath, hash_mode_for_matrix,
+};
 
 const MEMBERS: i64 = 20_000;
 const PROBES: i64 = 200_000;
@@ -97,6 +100,8 @@ fn an_empty_filter_rejects_every_probe() {
     let fast = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
     assert!(regular.is_empty());
     assert_eq!(regular.inserted(), 0);
+    assert!(fast.is_empty());
+    assert_eq!(fast.inserted(), 0);
     for key in probes().into_iter().take(10_000) {
         assert!(!regular.contains(&DataInput::I64(key)));
         assert!(!fast.contains(&DataInput::I64(key)));
@@ -153,6 +158,20 @@ fn the_fill_based_estimate_tracks_the_measured_rate() {
     assert!(
         measured >= estimated * 0.75 && measured <= estimated * 1.25,
         "measured {measured:.5} outside 0.75-1.25x of estimated {estimated:.5}"
+    );
+
+    // The same keys once set the same bits and a third of the inserts, so an
+    // estimate that read the counter would move and this one does not.
+    let mut once = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
+    for key in members() {
+        once.insert(&DataInput::I64(key));
+    }
+    assert_eq!(all_bits(once.as_bits()), all_bits(filter.as_bits()));
+    assert_ne!(once.inserted(), filter.inserted());
+    assert_eq!(
+        once.estimated_fpp(),
+        estimated,
+        "estimated_fpp moved with the insert count"
     );
 }
 
@@ -304,6 +323,117 @@ fn sizing_stays_inside_the_allocation_ceiling() {
     }
 }
 
+/// The allocation ceiling is a documented number, and the geometry a target
+/// past it settles on is that number divided by the slice count and rounded
+/// down to a power of two.
+#[test]
+fn the_allocation_ceiling_is_the_documented_number() {
+    assert_eq!(BLOOM_MAX_BITS, 1 << 31);
+    assert_eq!(
+        Bloom::<RegularPath>::dimensions_for(1 << 40, 1e-9),
+        (20, 1 << 26)
+    );
+}
+
+/// A degenerate sizing input yields a real geometry rather than the widest
+/// slice count over one bit each, which would answer yes to everything.
+#[test]
+fn degenerate_sizing_inputs_give_a_usable_geometry() {
+    assert_eq!(Bloom::<RegularPath>::dimensions_for(0, 0.01), (7, 2));
+    assert_eq!(
+        Bloom::<RegularPath>::dimensions_for(1_000, 0.0),
+        (20, 1 << 26)
+    );
+    assert_eq!(Bloom::<RegularPath>::dimensions_for(1_000, 2.0), (1, 32));
+}
+
+/// The default filter is the documented geometry.
+#[test]
+fn the_default_filter_has_the_documented_dimensions() {
+    let filter = Bloom::<RegularPath>::default();
+    assert_eq!(
+        (filter.rows(), filter.cols()),
+        (BLOOM_DEFAULT_ROWS, BLOOM_DEFAULT_COLS)
+    );
+    assert!(filter.is_empty());
+}
+
+/// A width that is not a power of two folds through a modulo, and the two ends
+/// of a query must fold the same bits: a key inserted under one reduction and
+/// looked up under another goes missing. Every geometry here is checked on both
+/// paths, with few enough members that the slices are not saturated.
+#[test]
+fn non_power_of_two_widths_answer_membership_on_both_paths() {
+    const KEYS: i64 = 200;
+    for (rows, cols) in [
+        (1usize, 1usize),
+        (3, 65),
+        (7, 100),
+        (5, 127),
+        (9, 129),
+        (5, 1_000),
+    ] {
+        let mut regular = Bloom::<RegularPath>::with_dimensions(rows, cols);
+        let mut fast = Bloom::<FastPath>::with_dimensions(rows, cols);
+        for key in 0..KEYS {
+            regular.insert(&DataInput::I64(key));
+            fast.insert(&DataInput::I64(key));
+        }
+        let lost_regular = (0..KEYS)
+            .filter(|k| !regular.contains(&DataInput::I64(*k)))
+            .count();
+        let lost_fast = (0..KEYS)
+            .filter(|k| !fast.contains(&DataInput::I64(*k)))
+            .count();
+        assert_eq!(
+            lost_regular, 0,
+            "{rows}x{cols} regular path lost {lost_regular} of {KEYS} members"
+        );
+        assert_eq!(
+            lost_fast, 0,
+            "{rows}x{cols} fast path lost {lost_fast} of {KEYS} members"
+        );
+    }
+}
+
+/// A geometry whose row windows all fit in one 64-bit hash is the fast path's
+/// third layout, and each row must read its own window. Collapsing the rows
+/// onto one window keeps every member present and costs the whole rate, so
+/// only a measured rate catches it.
+#[test]
+fn a_packed_64_geometry_gives_each_row_its_own_window() {
+    const ROWS: usize = 5;
+    const COLS: usize = 1024;
+    const KEYS: i64 = 300;
+    assert_eq!(
+        hash_mode_for_matrix(ROWS, COLS),
+        MatrixHashMode::Packed64,
+        "{ROWS}x{COLS} no longer selects the packed 64-bit layout"
+    );
+
+    let mut filter = Bloom::<FastPath>::with_dimensions(ROWS, COLS);
+    for key in 0..KEYS {
+        filter.insert(&DataInput::I64(key));
+    }
+    for key in 0..KEYS {
+        assert!(filter.contains(&DataInput::I64(key)), "lost member {key}");
+    }
+
+    let measured = false_positive_rate(|k| filter.contains(&DataInput::I64(k)));
+    let predicted = filter.predicted_fpp(KEYS as usize);
+    let band = sampling_band(predicted);
+    assert!(
+        (measured - predicted).abs() <= band,
+        "measured {measured:e} is more than {band:e} from predicted {predicted:e}"
+    );
+    // One shared window would leave a single slice's rate, which this bound is
+    // two orders of magnitude under.
+    assert!(
+        measured <= 0.01,
+        "measured {measured:e}: the five slices are not independent"
+    );
+}
+
 #[test]
 #[should_panic(expected = "target false-positive rate must be finite")]
 fn a_nan_target_rate_is_rejected() {
@@ -378,6 +508,20 @@ fn extra_slices_past_the_seed_list_do_not_sharpen_the_filter() {
         padded.estimated_fpp() <= padded_rate * 1.5,
         "estimated {:e} promises more than the measured {padded_rate:e}",
         padded.estimated_fpp()
+    );
+    assert!(
+        padded.estimated_fpp() >= padded_rate * 0.75,
+        "estimated {:e} claims better than the measured {padded_rate:e}",
+        padded.estimated_fpp()
+    );
+    // The five duplicate slices raise neither the bits set per slice nor the
+    // slices that discriminate, so the fill-based estimate lands where the
+    // capped filter's does.
+    assert!(
+        (padded.estimated_fpp() / capped.estimated_fpp() - 1.0).abs() <= 0.05,
+        "estimated {:e} differs from the capped filter's {:e}",
+        padded.estimated_fpp(),
+        capped.estimated_fpp()
     );
 }
 

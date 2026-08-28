@@ -193,13 +193,18 @@ impl<H: SketchHasher> SpaceSaving<H> {
 
         let victim = self.buckets[self.bucket_head].head;
         let lowest = self.buckets[self.bucket_head].count;
-        self.floor = self.floor.max(lowest);
+        debug_assert!(
+            self.floor <= lowest,
+            "the ceiling {} sits above the lowest live count {lowest}",
+            self.floor
+        );
+        self.floor = lowest;
         self.unindex(self.counters[victim].digest, victim);
         self.counters[victim].key = input_to_owned(value);
         self.counters[victim].digest = digest;
-        self.counters[victim].error = self.floor;
+        self.counters[victim].error = lowest;
         self.index.entry(digest).or_default().push(victim);
-        self.raise(victim, (self.floor - lowest).saturating_add(count));
+        self.raise(victim, count);
     }
 
     /// Records every value in `values`.
@@ -499,6 +504,8 @@ impl<H: SketchHasher> SpaceSaving<H> {
         }
     }
 
+    /// Unlinks an emptied bucket into the free list. `raise` inserts the
+    /// destination bucket before detaching, so `bid` is never the tail.
     fn drop_bucket(&mut self, bid: usize) {
         let prev = self.buckets[bid].prev;
         let next = self.buckets[bid].next;
@@ -507,11 +514,8 @@ impl<H: SketchHasher> SpaceSaving<H> {
         } else {
             self.bucket_head = next;
         }
-        if next != NIL {
-            self.buckets[next].prev = prev;
-        } else {
-            self.bucket_tail = prev;
-        }
+        debug_assert_ne!(next, NIL, "the tail bucket is never emptied");
+        self.buckets[next].prev = prev;
         self.buckets[bid].head = NIL;
         self.buckets[bid].prev = NIL;
         self.buckets[bid].next = NIL;
@@ -594,7 +598,9 @@ impl<'de, H: SketchHasher> Deserialize<'de> for SpaceSaving<H> {
 
 impl<H: SketchHasher> SpaceSaving<H> {
     /// Rebuilds a summary from decoded triples, rejecting any that no run of
-    /// the algorithm could have produced.
+    /// the algorithm could have produced: a duplicate or zero-count key, an
+    /// error above its count, a ceiling above the lowest count, or a total
+    /// under the weight the counters account for.
     fn rebuild(state: SpaceSavingState) -> Result<Self, String> {
         if state.capacity == 0 {
             return Err("space-saving capacity is zero".to_string());
@@ -638,6 +644,30 @@ impl<H: SketchHasher> SpaceSaving<H> {
                 return Err("space-saving carries the same key twice".to_string());
             }
             summary.seat(digest, key, count, error);
+        }
+
+        let smallest = summary
+            .counters
+            .iter()
+            .map(|c| summary.buckets[c.bucket].count)
+            .min()
+            .unwrap_or(0);
+        if summary.floor > smallest {
+            return Err(format!(
+                "space-saving carries a ceiling of {} above its lowest count of {smallest}",
+                summary.floor
+            ));
+        }
+        let recorded = summary
+            .counters
+            .iter()
+            .map(|c| summary.buckets[c.bucket].count.saturating_sub(c.error))
+            .fold(0u64, u64::saturating_add);
+        if recorded > summary.total {
+            return Err(format!(
+                "space-saving carries a total of {} under the {recorded} its counters account for",
+                summary.total
+            ));
         }
         Ok(summary)
     }
@@ -944,6 +974,7 @@ mod tests {
     #[test]
     fn counts_saturate_and_keep_the_bucket_order() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(3);
+        summary.insert_many(&DataInput::I64(3), 7);
         summary.insert_many(&DataInput::I64(1), u64::MAX - 2);
         summary.insert_many(&DataInput::I64(2), u64::MAX);
         summary.insert_many(&DataInput::I64(1), 10);
@@ -956,10 +987,18 @@ mod tests {
 
         assert_eq!(summary.estimate(&DataInput::I64(1)), u64::MAX);
         assert_eq!(summary.estimate(&DataInput::I64(2)), u64::MAX);
+        assert_eq!(summary.estimate(&DataInput::I64(3)), 7);
         assert_eq!(summary.total(), u64::MAX);
         let walked = walk(&summary);
-        assert_eq!(walked.len(), 2);
-        assert!(walked[0].1 >= walked[1].1, "the walk is out of order");
+        assert_eq!(walked.len(), 3);
+        for pair in walked.windows(2) {
+            assert!(pair[0].1 >= pair[1].1, "the walk is out of order");
+        }
+        assert_eq!(
+            walked[2],
+            (3, 7),
+            "the small counter must be walked last, not first"
+        );
     }
 
     #[test]
@@ -998,6 +1037,243 @@ mod tests {
         for key in 1..=4i64 {
             assert_eq!(left.upper_bound(&DataInput::I64(key)), u64::MAX);
         }
+    }
+
+    /// A summary with counters to spare whose ceiling is `ceiling`, built by
+    /// merging in a single counter that displaced a count that large. `dropped`
+    /// truly reached `ceiling - 1`; `held` arrived once.
+    fn ceilinged(capacity: usize, ceiling: u64, held: i64, dropped: i64) -> SpaceSaving {
+        let mut source: SpaceSaving = SpaceSaving::with_capacity(1);
+        source.insert_many(&DataInput::I64(dropped), ceiling - 1);
+        source.insert(&DataInput::I64(held));
+        let mut summary: SpaceSaving = SpaceSaving::with_capacity(capacity);
+        summary.merge_from(&source);
+        assert_eq!(summary.min_count(), ceiling, "the fixture ceiling");
+        summary
+    }
+
+    /// Left holds key 2 at `u64::MAX` with an error of `u64::MAX`; right holds
+    /// the same key at 6 with an error of 5. Key 2 truly arrived twice.
+    fn a_saturated_overlap() -> (SpaceSaving, SpaceSaving) {
+        let mut left: SpaceSaving = SpaceSaving::with_capacity(1);
+        left.insert_many(&DataInput::I64(1), u64::MAX);
+        left.insert(&DataInput::I64(2));
+        let mut right: SpaceSaving = SpaceSaving::with_capacity(1);
+        right.insert_many(&DataInput::I64(3), 5);
+        right.insert(&DataInput::I64(2));
+        assert_eq!(left.estimate(&DataInput::I64(2)), u64::MAX);
+        assert_eq!(right.estimate(&DataInput::I64(2)), 6);
+        (left, right)
+    }
+
+    /// A key seated above an already enormous ceiling stops at `u64::MAX`
+    /// rather than wrapping under its own error.
+    #[test]
+    fn a_seat_above_the_ceiling_saturates() {
+        let mut summary = ceilinged(4, u64::MAX - 3, 8, 9);
+
+        summary.insert_many(&DataInput::I64(5), 10);
+
+        summary.validate().expect("after seating above the ceiling");
+        assert_eq!(summary.estimate(&DataInput::I64(5)), u64::MAX);
+        assert_eq!(summary.error(&DataInput::I64(5)), u64::MAX - 3);
+        assert_eq!(summary.estimate(&DataInput::I64(8)), u64::MAX - 3);
+    }
+
+    /// A shared key's counts add to `u64::MAX` rather than wrapping to a count
+    /// below the error it carries.
+    #[test]
+    fn a_merge_saturates_a_shared_keys_count() {
+        let (mut left, right) = a_saturated_overlap();
+
+        left.merge_from(&right);
+
+        left.validate().expect("after a saturating merge");
+        assert_eq!(left.len(), 1);
+        assert_eq!(
+            left.estimate(&DataInput::I64(2)),
+            u64::MAX,
+            "key 2's paired count wrapped"
+        );
+    }
+
+    /// A shared key's errors add to `u64::MAX` rather than wrapping to a small
+    /// allowance, which would claim the key is nearly as large as its count.
+    #[test]
+    fn a_merge_saturates_a_shared_keys_error() {
+        let (mut left, right) = a_saturated_overlap();
+
+        left.merge_from(&right);
+
+        left.validate().expect("after a saturating merge");
+        assert_eq!(
+            left.error(&DataInput::I64(2)),
+            u64::MAX,
+            "key 2's paired error wrapped"
+        );
+        let probe = DataInput::I64(2);
+        assert!(
+            left.estimate(&probe) - left.error(&probe) <= 2,
+            "key 2 arrived twice, but the merge claims at least {}",
+            left.estimate(&probe) - left.error(&probe)
+        );
+    }
+
+    /// A key only the other side holds picks up this side's ceiling and stops
+    /// at `u64::MAX`.
+    #[test]
+    fn a_merge_saturates_a_key_only_the_other_side_holds() {
+        let mut left = ceilinged(4, u64::MAX - 3, 8, 9);
+        let mut right: SpaceSaving = SpaceSaving::with_capacity(4);
+        right.insert_many(&DataInput::I64(3), 7);
+
+        left.merge_from(&right);
+
+        left.validate().expect("after a saturating merge");
+        assert_eq!(
+            left.estimate(&DataInput::I64(3)),
+            u64::MAX,
+            "key 3's count wrapped past the ceiling it inherited"
+        );
+        assert_eq!(left.error(&DataInput::I64(3)), u64::MAX - 3);
+        assert_eq!(left.estimate(&DataInput::I64(8)), u64::MAX - 3);
+    }
+
+    /// A key only this side holds picks up the other side's ceiling and stops
+    /// at `u64::MAX`.
+    #[test]
+    fn a_merge_saturates_a_key_only_this_side_holds() {
+        let mut left: SpaceSaving = SpaceSaving::with_capacity(4);
+        left.insert_many(&DataInput::I64(3), 7);
+        let right = ceilinged(4, u64::MAX - 3, 8, 9);
+
+        left.merge_from(&right);
+
+        left.validate().expect("after a saturating merge");
+        assert_eq!(
+            left.estimate(&DataInput::I64(3)),
+            u64::MAX,
+            "key 3's count wrapped past the ceiling it inherited"
+        );
+        assert_eq!(left.error(&DataInput::I64(3)), u64::MAX - 3);
+        assert_eq!(left.estimate(&DataInput::I64(8)), u64::MAX - 3);
+    }
+
+    /// The ceiling a merge leaves behind saturates: wrapping it would report a
+    /// tiny bound for a key that truly reached nearly `u64::MAX`.
+    #[test]
+    fn a_merge_saturates_the_ceiling() {
+        let mut left = ceilinged(4, u64::MAX - 3, 8, 9);
+        let right = ceilinged(4, 10, 5, 6);
+
+        left.merge_from(&right);
+
+        left.validate().expect("after a saturating merge");
+        assert_eq!(left.min_count(), u64::MAX, "the merged ceiling wrapped");
+        assert!(
+            left.upper_bound(&DataInput::I64(9)) >= u64::MAX - 4,
+            "key 9 truly reached {} but is capped at {}",
+            u64::MAX - 4,
+            left.upper_bound(&DataInput::I64(9))
+        );
+    }
+
+    /// The ceiling a merge leaves behind lives only in `floor`; an under-full
+    /// summary reads it from no counter, so a serde round trip that dropped it
+    /// would answer below the truth.
+    #[test]
+    fn a_serde_round_trip_carries_a_ceiling_no_counter_holds() {
+        let mut left: SpaceSaving = SpaceSaving::with_capacity(33);
+        let mut right: SpaceSaving = SpaceSaving::with_capacity(1);
+        for _ in 0..10 {
+            right.insert(&DataInput::I64(7));
+        }
+        for _ in 0..20 {
+            right.insert(&DataInput::I64(8));
+        }
+        left.merge_from(&right);
+        assert!(left.len() < left.capacity(), "the merge left room to spare");
+        assert_eq!(left.min_count(), 30);
+
+        let bytes = rmp_serde::to_vec(&left).expect("serialize");
+        let decoded: SpaceSaving = rmp_serde::from_slice(&bytes).expect("deserialize");
+
+        decoded.validate().expect("decoded summary");
+        assert_eq!(
+            decoded.min_count(),
+            30,
+            "the merged ceiling was not written"
+        );
+        assert!(
+            decoded.upper_bound(&DataInput::I64(7)) >= 10,
+            "key 7 truly reached 10 but decodes capped at {}",
+            decoded.upper_bound(&DataInput::I64(7))
+        );
+    }
+
+    /// `is_guaranteed` is strict: a key whose count less its error only reaches
+    /// the ceiling ties whatever the summary may have dropped.
+    #[test]
+    fn a_key_that_only_ties_the_ceiling_is_not_guaranteed() {
+        let mut summary: SpaceSaving = SpaceSaving::with_capacity(2);
+        for _ in 0..3 {
+            summary.insert(&DataInput::I64(1));
+        }
+        for _ in 0..3 {
+            summary.insert(&DataInput::I64(2));
+        }
+        summary.insert(&DataInput::I64(3));
+
+        summary.validate().expect("after the eviction");
+        assert_eq!(summary.estimate(&DataInput::I64(1)), 3);
+        assert_eq!(summary.error(&DataInput::I64(1)), 0);
+        assert_eq!(summary.min_count(), 3);
+        assert!(
+            !summary.is_guaranteed(&DataInput::I64(1)),
+            "key 1 only ties the 3 key 2 reached before it was dropped"
+        );
+        assert!(!summary.is_guaranteed(&DataInput::I64(3)));
+
+        for _ in 0..2 {
+            summary.insert(&DataInput::I64(1));
+        }
+        assert_eq!(summary.estimate(&DataInput::I64(1)), 5);
+        assert_eq!(summary.min_count(), 4);
+        assert!(summary.is_guaranteed(&DataInput::I64(1)));
+    }
+
+    /// `clear` leaves a summary that answers like a fresh one, ceiling and
+    /// total included.
+    #[test]
+    fn clear_resets_every_answer() {
+        let mut summary: SpaceSaving = SpaceSaving::with_capacity(2);
+        for _ in 0..5 {
+            summary.insert(&DataInput::I64(1));
+        }
+        for _ in 0..3 {
+            summary.insert(&DataInput::I64(2));
+        }
+        summary.insert(&DataInput::I64(3));
+        assert!(summary.min_count() > 0);
+        assert!(summary.total() > 0);
+
+        summary.clear();
+
+        summary.validate().expect("cleared summary");
+        assert!(summary.is_empty());
+        assert_eq!(summary.len(), 0);
+        assert_eq!(summary.capacity(), 2);
+        assert_eq!(summary.total(), 0, "clear left the recorded weight behind");
+        assert_eq!(summary.min_count(), 0, "clear left the ceiling behind");
+        assert_eq!(summary.upper_bound(&DataInput::I64(1)), 0);
+        assert_eq!(summary.error(&DataInput::I64(1)), 0);
+        assert!(summary.top_k(4).is_empty());
+        assert!(summary.entries().is_empty());
+
+        summary.insert(&DataInput::I64(4));
+        summary.validate().expect("after refilling");
+        assert_eq!(summary.estimate(&DataInput::I64(4)), 1);
+        assert_eq!(summary.total(), 1);
     }
 
     #[test]
@@ -1205,6 +1481,24 @@ mod tests {
                 },
                 "same key twice",
             ),
+            (
+                SpaceSavingState {
+                    capacity: 4,
+                    total: 3,
+                    floor: u64::MAX,
+                    entries: vec![(HeapItem::I64(1), 3, 0)],
+                },
+                "ceiling of 18446744073709551615 above its lowest count of 3",
+            ),
+            (
+                SpaceSavingState {
+                    capacity: 4,
+                    total: 0,
+                    floor: 0,
+                    entries: vec![(HeapItem::I64(1), 9, 0)],
+                },
+                "total of 0 under the 9",
+            ),
         ];
         for (state, expected) in cases {
             let problem = SpaceSaving::<DefaultXxHasher>::rebuild(state)
@@ -1228,5 +1522,176 @@ mod tests {
         summary.validate().expect("decoded summary");
         assert_eq!(summary.capacity(), 1 << 40);
         assert_eq!(summary.len(), 1);
+    }
+}
+
+/// The collision guards, which a 64-bit digest makes unreachable in practice:
+/// every key here hashes to one digest, so the key index holds a single slot
+/// and identity is decided by the key alone.
+#[cfg(test)]
+mod collisions {
+    use super::*;
+
+    /// Files every key under one digest.
+    #[derive(Clone, Debug)]
+    struct OneDigest;
+
+    const ONE: u64 = 0x5151_5151_5151_5151;
+
+    impl SketchHasher for OneDigest {
+        type HashType = <DefaultXxHasher as SketchHasher>::HashType;
+
+        fn hash64_seeded(_: usize, _: &DataInput) -> u64 {
+            ONE
+        }
+        fn hash128_seeded(_: usize, _: &DataInput) -> u128 {
+            u128::from(ONE)
+        }
+        fn hash_item64_seeded(_: usize, _: &HeapItem) -> u64 {
+            ONE
+        }
+        fn hash_item128_seeded(_: usize, _: &HeapItem) -> u128 {
+            u128::from(ONE)
+        }
+        fn hash_for_matrix_seeded(
+            seed_idx: usize,
+            rows: usize,
+            cols: usize,
+            key: &DataInput,
+        ) -> Self::HashType {
+            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+        }
+    }
+
+    type Colliding = SpaceSaving<OneDigest>;
+
+    fn keys_of(summary: &Colliding) -> Vec<i64> {
+        let mut keys: Vec<i64> = summary
+            .entries()
+            .iter()
+            .map(|(key, _, _)| match key {
+                HeapItem::I64(v) => *v,
+                other => panic!("unexpected key form {other:?}"),
+            })
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    /// Keys sharing a digest are separate counters, each answering for itself.
+    #[test]
+    fn colliding_keys_stay_distinct() {
+        let mut summary: Colliding = SpaceSaving::with_capacity(4);
+        for (key, weight) in [(10i64, 3u64), (20, 5), (30, 1)] {
+            summary.insert_many(&DataInput::I64(key), weight);
+        }
+
+        summary.validate().expect("three keys under one digest");
+        assert_eq!(summary.len(), 3);
+        assert_eq!(keys_of(&summary), vec![10, 20, 30]);
+        for (key, weight) in [(10i64, 3u64), (20, 5), (30, 1)] {
+            assert_eq!(summary.estimate(&DataInput::I64(key)), weight, "key {key}");
+        }
+        assert_eq!(summary.estimate(&DataInput::I64(40)), 0);
+    }
+
+    /// An eviction reuses the victim's counter under the victim's own digest,
+    /// so the index must lose the old key before it gains the new one.
+    #[test]
+    fn an_eviction_under_collision_keeps_the_index_straight() {
+        let mut summary: Colliding = SpaceSaving::with_capacity(2);
+        for _ in 0..3 {
+            summary.insert(&DataInput::I64(10));
+        }
+        for _ in 0..2 {
+            summary.insert(&DataInput::I64(20));
+        }
+
+        summary.insert(&DataInput::I64(30));
+
+        summary.validate().expect("after a colliding eviction");
+        assert_eq!(summary.len(), 2);
+        assert_eq!(keys_of(&summary), vec![10, 30]);
+        assert_eq!(summary.estimate(&DataInput::I64(30)), 3);
+        assert_eq!(summary.error(&DataInput::I64(30)), 2);
+        assert_eq!(summary.estimate(&DataInput::I64(10)), 3);
+        assert_eq!(summary.estimate(&DataInput::I64(20)), 0);
+    }
+
+    /// A merge pairs the two sides by key, not by the digest slot they share.
+    #[test]
+    fn a_merge_under_collision_pairs_by_key() {
+        let mut left: Colliding = SpaceSaving::with_capacity(4);
+        left.insert_many(&DataInput::I64(20), 3);
+        left.insert_many(&DataInput::I64(10), 5);
+        let mut right: Colliding = SpaceSaving::with_capacity(4);
+        right.insert_many(&DataInput::I64(10), 2);
+        right.insert_many(&DataInput::I64(30), 7);
+
+        left.merge_from(&right);
+
+        left.validate().expect("after a colliding merge");
+        assert_eq!(left.len(), 3);
+        assert_eq!(keys_of(&left), vec![10, 20, 30]);
+        assert_eq!(left.estimate(&DataInput::I64(10)), 7, "the shared key");
+        assert_eq!(left.estimate(&DataInput::I64(20)), 3);
+        assert_eq!(left.estimate(&DataInput::I64(30)), 7);
+    }
+
+    /// With one digest for everything, the key order is the only tie-break the
+    /// merge has left, so which of four equal counts survive is still fixed.
+    #[test]
+    fn a_merge_under_collision_breaks_ties_by_key() {
+        fn merged(swap: bool) -> Vec<i64> {
+            let mut left: Colliding = SpaceSaving::with_capacity(2);
+            let mut right: Colliding = SpaceSaving::with_capacity(2);
+            for key in [30i64, 40] {
+                left.insert(&DataInput::I64(key));
+            }
+            for key in [10i64, 20] {
+                right.insert(&DataInput::I64(key));
+            }
+            if swap {
+                right.merge_from(&left);
+                right.validate().expect("after a colliding merge");
+                keys_of(&right)
+            } else {
+                left.merge_from(&right);
+                left.validate().expect("after a colliding merge");
+                keys_of(&left)
+            }
+        }
+
+        assert_eq!(merged(false), vec![10, 20], "the tie was not broken by key");
+        assert_eq!(merged(true), merged(false), "the merge is order dependent");
+    }
+
+    /// A decode seats the keys one at a time and rejects a repeat, so the
+    /// duplicate check must compare keys rather than digests.
+    #[test]
+    fn a_decoded_summary_under_collision_keeps_its_keys() {
+        let mut summary: Colliding = SpaceSaving::with_capacity(4);
+        for (key, weight) in [(10i64, 5u64), (20, 3), (30, 9)] {
+            summary.insert_many(&DataInput::I64(key), weight);
+        }
+
+        let bytes = rmp_serde::to_vec(&summary).expect("serialize");
+        let decoded: Colliding = rmp_serde::from_slice(&bytes).expect("deserialize");
+
+        decoded.validate().expect("decoded summary");
+        assert_eq!(decoded.len(), 3);
+        assert_eq!(keys_of(&decoded), vec![10, 20, 30]);
+        for (key, weight) in [(10i64, 5u64), (20, 3), (30, 9)] {
+            assert_eq!(decoded.estimate(&DataInput::I64(key)), weight, "key {key}");
+        }
+
+        let repeated = SpaceSavingState {
+            capacity: 4,
+            total: 9,
+            floor: 0,
+            entries: vec![(HeapItem::I64(10), 5, 0), (HeapItem::I64(10), 4, 0)],
+        };
+        let problem = Colliding::rebuild(repeated).expect_err("a repeated key");
+        assert!(problem.contains("same key twice"), "got {problem}");
     }
 }

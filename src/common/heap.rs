@@ -234,10 +234,13 @@ impl HHHeap {
         if self.heap.len() < self.k {
             return true;
         }
+        debug_assert!(
+            !self.heap.is_empty(),
+            "a full heap of capacity k > 0 has a root"
+        );
         self.heap
             .peek()
-            .map(|min_item| count > min_item.count)
-            .unwrap_or(true)
+            .is_some_and(|min_item| count > min_item.count)
     }
 
     #[inline]
@@ -284,6 +287,19 @@ fn drop_entry(positions: &mut Index, digest: u64, idx: usize) {
         if bucket.is_empty() {
             positions.remove(&digest);
         }
+    }
+}
+
+/// Every element sits in heap order beneath the parent the array layout gives
+/// it, with the parent index computed here rather than taken from the heap.
+#[cfg(test)]
+fn assert_ordered<T, O: crate::CommonHeapOrder<T>>(items: &[T], order: &O, context: &str) {
+    for i in 1..items.len() {
+        assert!(
+            !order.should_swap(&items[(i - 1) / 2], &items[i]),
+            "{context}: position {i} breaks heap order against position {}",
+            (i - 1) / 2
+        );
     }
 }
 
@@ -358,6 +374,25 @@ mod tests {
         assert_eq!(heap.pop(), Some(5));
         assert_eq!(heap.pop(), Some(7));
         assert_eq!(heap.pop(), None);
+
+        // Past index 4, where a child's parent is no longer its own half.
+        let mut deep = CommonHeap::<i32, KeepSmallest>::new_min(16);
+        for (step, value) in [95, 55, 37, 58, 81, 67, 42, 71, 27, 97, 13, 21]
+            .into_iter()
+            .enumerate()
+        {
+            deep.push(value);
+            assert_ordered(deep.as_slice(), &KeepSmallest, &format!("min push {step}"));
+        }
+        assert_eq!(deep.len(), 12);
+        let mut drained = Vec::new();
+        while let Some(value) = deep.pop() {
+            drained.push(value);
+        }
+        assert_eq!(
+            drained,
+            vec![13, 21, 27, 37, 42, 55, 58, 67, 71, 81, 95, 97]
+        );
     }
 
     #[test]
@@ -374,6 +409,25 @@ mod tests {
         assert_eq!(heap.pop(), Some(3));
         assert_eq!(heap.pop(), Some(1));
         assert_eq!(heap.pop(), None);
+
+        // Past index 4, where a child's parent is no longer its own half.
+        let mut deep = CommonHeap::<i32, KeepLargest>::new_max(16);
+        for (step, value) in [62, 12, 38, 71, 33, 31, 43, 94, 14, 76, 80, 34]
+            .into_iter()
+            .enumerate()
+        {
+            deep.push(value);
+            assert_ordered(deep.as_slice(), &KeepLargest, &format!("max push {step}"));
+        }
+        assert_eq!(deep.len(), 12);
+        let mut drained = Vec::new();
+        while let Some(value) = deep.pop() {
+            drained.push(value);
+        }
+        assert_eq!(
+            drained,
+            vec![94, 80, 76, 71, 62, 43, 38, 34, 33, 31, 14, 12]
+        );
     }
 
     #[test]
@@ -411,8 +465,17 @@ mod tests {
 
         // Modify element and update heap
         heap[1] = 3;
-        heap.update_at(1);
+        assert!(heap.update_at(1));
 
+        assert_eq!(heap.peek(), Some(&3));
+
+        // In range and already in place.
+        assert!(heap.update_at(0));
+
+        // One past the last element, and far past it.
+        assert!(!heap.update_at(3));
+        assert!(!heap.update_at(99));
+        assert_eq!(heap.len(), 3);
         assert_eq!(heap.peek(), Some(&3));
     }
 
@@ -456,24 +519,24 @@ mod tests {
         assert_eq!(found.unwrap().count, 4);
     }
 
+    /// The shipped orderings carry no state, so a heap costs its `Vec` plus the
+    /// capacity field and nothing more.
     #[test]
     fn test_heap_size() {
-        // Verify that MinHeap/MaxHeap add zero overhead
         use std::mem::size_of;
 
+        assert_eq!(size_of::<KeepSmallest>(), 0);
+        assert_eq!(size_of::<KeepLargest>(), 0);
+
         let vec_size = size_of::<Vec<u64>>();
-        let heap_min_size = size_of::<CommonHeap<u64, KeepSmallest>>();
-        let heap_max_size = size_of::<CommonHeap<u64, KeepLargest>>();
-
-        println!("Vec<u64> size: {vec_size}");
-        println!("Heap<u64, MinHeap> size: {heap_min_size}");
-        println!("Heap<u64, MaxHeap> size: {heap_max_size}");
-
-        // Vec is (ptr, capacity, len) = 24 bytes on 64-bit
-        // Our heap is (Vec, usize, O) where O is zero-sized
-        // So it should be 24 + 8 = 32 bytes
-        assert_eq!(heap_min_size, vec_size + size_of::<usize>());
-        assert_eq!(heap_max_size, vec_size + size_of::<usize>());
+        assert_eq!(
+            size_of::<CommonHeap<u64, KeepSmallest>>(),
+            vec_size + size_of::<usize>()
+        );
+        assert_eq!(
+            size_of::<CommonHeap<u64, KeepLargest>>(),
+            vec_size + size_of::<usize>()
+        );
     }
 
     #[test]
@@ -554,6 +617,145 @@ mod tests {
         heap.clear();
         assert!(heap.is_empty());
     }
+
+    /// A value that only ties the root leaves it in place; the bounded push
+    /// replaces the root on a strict improvement.
+    #[test]
+    fn a_value_tying_the_root_does_not_displace_it() {
+        fn resident<O: CommonHeapOrder<HHItem>>(heap: &CommonHeap<HHItem, O>, name: &str) -> bool {
+            heap.iter()
+                .any(|item| item.key == HeapItem::String(name.to_owned()))
+        }
+
+        let mut smallest = CommonHeap::<HHItem, KeepSmallest>::new_min(3);
+        for (name, count) in [("a", 5i64), ("b", 7), ("c", 9)] {
+            smallest.push(HHItem::new(DataInput::Str(name), count));
+        }
+        smallest.push(HHItem::new(DataInput::Str("tie"), 5));
+        assert!(resident(&smallest, "a"), "the tied root was displaced");
+        assert!(!resident(&smallest, "tie"));
+        smallest.push(HHItem::new(DataInput::Str("larger"), 6));
+        assert!(!resident(&smallest, "a"));
+        assert!(resident(&smallest, "larger"));
+
+        let mut largest = CommonHeap::<HHItem, KeepLargest>::new_max(3);
+        for (name, count) in [("a", 9i64), ("b", 7), ("c", 5)] {
+            largest.push(HHItem::new(DataInput::Str(name), count));
+        }
+        largest.push(HHItem::new(DataInput::Str("tie"), 9));
+        assert!(resident(&largest, "a"), "the tied root was displaced");
+        assert!(!resident(&largest, "tie"));
+        largest.push(HHItem::new(DataInput::Str("smaller"), 8));
+        assert!(!resident(&largest, "a"));
+        assert!(resident(&largest, "smaller"));
+    }
+
+    /// The `(destination, source)` pairs one sift reports.
+    type Sift = Vec<(usize, usize)>;
+
+    /// A min-heap of five values whose sifts are all forced, used by the
+    /// `_with` tests below. Returns the heap holding `[10, 20, 40, 50, 30]`.
+    fn five_forced_sifts() -> (CommonHeap<i32, KeepSmallest>, Vec<Sift>) {
+        let mut heap = CommonHeap::<i32, KeepSmallest>::new_min(8);
+        let mut reported = Vec::new();
+        for value in [50, 40, 30, 20, 10] {
+            let mut swaps = Vec::new();
+            heap.push_back_with(value, &mut |i, j| swaps.push((i, j)));
+            reported.push(swaps);
+        }
+        (heap, reported)
+    }
+
+    /// `push_back_with` seats the value at `len()` and reports each swap as
+    /// `(destination, source)`, in the order the sift performs them.
+    #[test]
+    fn push_back_with_reports_every_swap_of_its_sift() {
+        let (heap, reported) = five_forced_sifts();
+
+        assert_eq!(
+            reported,
+            vec![
+                vec![],
+                vec![(0, 1)],
+                vec![(0, 2)],
+                vec![(1, 3), (0, 1)],
+                vec![(1, 4), (0, 1)],
+            ]
+        );
+        assert_eq!(heap.as_slice(), &[10, 20, 40, 50, 30]);
+
+        // Each sift starts from the index the value was appended at.
+        for (step, swaps) in reported.iter().enumerate() {
+            if let Some((_, source)) = swaps.first() {
+                assert_eq!(
+                    *source, step,
+                    "sift {step} did not start at the appended slot"
+                );
+            }
+        }
+    }
+
+    /// `replace_root_with` hands back the value it displaced and reports the
+    /// sift of the value it wrote to index 0.
+    #[test]
+    fn replace_root_with_returns_the_displaced_root() {
+        let (mut heap, _) = five_forced_sifts();
+
+        let mut swaps = Vec::new();
+        let displaced = heap.replace_root_with(60, &mut |i, j| swaps.push((i, j)));
+
+        assert_eq!(displaced, 10);
+        assert_eq!(swaps, vec![(0, 1), (1, 4)]);
+        assert_eq!(swaps[0].0, 0, "the first swap does not leave index 0");
+        assert_eq!(heap.as_slice(), &[20, 30, 40, 50, 60]);
+    }
+
+    /// `update_at_with` reports the sift in whichever direction it runs, and
+    /// reports nothing for an index it refuses.
+    #[test]
+    fn update_at_with_reports_the_sift_in_both_directions() {
+        let (mut heap, _) = five_forced_sifts();
+        heap.replace_root_with(60, &mut |_, _| {});
+        assert_eq!(heap.as_slice(), &[20, 30, 40, 50, 60]);
+
+        heap[4] = 5;
+        let mut up = Vec::new();
+        assert!(heap.update_at_with(4, &mut |i, j| up.push((i, j))));
+        assert_eq!(up, vec![(1, 4), (0, 1)]);
+        assert_eq!(heap.as_slice(), &[5, 20, 40, 50, 30]);
+
+        heap[0] = 100;
+        let mut down = Vec::new();
+        assert!(heap.update_at_with(0, &mut |i, j| down.push((i, j))));
+        assert_eq!(down, vec![(0, 1), (1, 4)]);
+        assert_eq!(heap.as_slice(), &[20, 30, 40, 50, 100]);
+
+        let mut refused = Vec::new();
+        assert!(!heap.update_at_with(5, &mut |i, j| refused.push((i, j))));
+        assert!(refused.is_empty());
+        assert_eq!(heap.as_slice(), &[20, 30, 40, 50, 100]);
+    }
+
+    /// A caller that appends to its own array and applies each reported swap
+    /// ends with that array aligned to the heap.
+    #[test]
+    fn a_parallel_array_follows_the_reported_swaps() {
+        let mut heap = CommonHeap::<i32, KeepSmallest>::new_min(8);
+        let mut tags: Vec<char> = Vec::new();
+
+        for (value, tag) in [(50, 'a'), (40, 'b'), (30, 'c'), (20, 'd'), (10, 'e')] {
+            tags.push(tag);
+            heap.push_back_with(value, &mut |i, j| tags.swap(i, j));
+        }
+
+        assert_eq!(heap.as_slice(), &[10, 20, 40, 50, 30]);
+        assert_eq!(tags, vec!['e', 'd', 'b', 'a', 'c']);
+
+        heap[0] = 100;
+        heap.update_at_with(0, &mut |i, j| tags.swap(i, j));
+        assert_eq!(heap.as_slice(), &[20, 30, 40, 50, 100]);
+        assert_eq!(tags, vec!['d', 'c', 'b', 'a', 'e']);
+    }
 }
 
 #[cfg(test)]
@@ -566,6 +768,7 @@ mod index_invariants {
         /// Every resident is reachable through the index at its own position,
         /// `slots` agrees with the keys, and the index holds nothing else.
         fn assert_index_consistent(&self, context: &str) {
+            assert_ordered(self.heap(), &KeepSmallest, context);
             assert_eq!(
                 self.slots.len(),
                 self.heap.len(),
@@ -631,6 +834,11 @@ mod index_invariants {
                 let entry = counts.entry(key).or_default();
                 *entry += 1;
                 heap.update(&DataInput::U64(key), *entry);
+                assert_ordered(
+                    heap.heap(),
+                    &KeepSmallest,
+                    &format!("cap {capacity} step {step}"),
+                );
                 if step % 97 == 0 {
                     heap.assert_index_consistent(&format!("cap {capacity} step {step}"));
                 }
@@ -652,6 +860,7 @@ mod index_invariants {
             let entry = counts.entry(key).or_default();
             *entry += 1;
             heap.update(&DataInput::U64(key), *entry);
+            assert_ordered(heap.heap(), &KeepSmallest, "ranking stream");
         }
 
         let mut ranked: Vec<(u64, i64)> = counts.iter().map(|(k, c)| (*k, *c)).collect();
@@ -756,6 +965,44 @@ mod index_invariants {
         let idx = decoded.find_heap_item(&resident).expect("still resident");
         assert_eq!(decoded.heap()[idx].count, 1_000_000);
     }
+
+    /// The shape every sketch uses after a decode: string keys reaching the
+    /// heap as [`DataInput`] through [`HHHeap::update`], which hashes by a
+    /// different entry point from the one `rebuild_index` uses. A rebuilt index
+    /// the update path cannot read seats a resident key a second time.
+    #[test]
+    fn a_decoded_heap_takes_string_keyed_updates() {
+        let mut heap = HHHeap::new(8);
+        for i in 0..8u64 {
+            heap.update(&DataInput::String(format!("flow-{i}")), i as i64 + 1);
+        }
+        assert_eq!(heap.len(), 8);
+
+        let bytes = rmp_serde::to_vec(&heap).expect("serialize");
+        let mut decoded: HHHeap = rmp_serde::from_slice(&bytes).expect("deserialize");
+
+        for i in 0..8u64 {
+            let probe = DataInput::String(format!("flow-{i}"));
+            let idx = decoded
+                .find(&probe)
+                .unwrap_or_else(|| panic!("decoded heap cannot find flow-{i}"));
+            assert_eq!(decoded.heap()[idx].count, i as i64 + 1);
+        }
+
+        decoded.update(&DataInput::String("flow-7".to_owned()), 999);
+        assert_eq!(decoded.len(), 8, "an update seated a resident key again");
+        let seated = decoded
+            .heap()
+            .iter()
+            .filter(|item| item.key == HeapItem::String("flow-7".to_owned()))
+            .count();
+        assert_eq!(seated, 1, "flow-7 is seated {seated} times");
+        let idx = decoded
+            .find(&DataInput::String("flow-7".to_owned()))
+            .expect("flow-7 is resident");
+        assert_eq!(decoded.heap()[idx].count, 999);
+        decoded.assert_index_consistent("decoded then updated by data input");
+    }
 }
 
 #[cfg(test)]
@@ -766,6 +1013,10 @@ mod differential {
     //! full after every accepted update. It is compared against the shipped
     //! heap element by element, so any divergence in which key is seated,
     //! which is evicted, or where either lands, fails.
+    //!
+    //! [`RetentionOracle`] shares nothing with either: it decides which keys
+    //! survive from a plain vector scanned for its smallest count, so it also
+    //! catches a heap whose root is not its minimum.
     //!
     //! `CommonHeap`'s own sift is covered by the tests above it in this file;
     //! what is under test here is the incremental index maintenance.
@@ -839,6 +1090,63 @@ mod differential {
         }
     }
 
+    /// Retention decided without a heap: the residents live in a plain vector
+    /// and the smallest count is found by scanning it.
+    struct RetentionOracle {
+        residents: Vec<HHItem>,
+        k: usize,
+    }
+
+    impl RetentionOracle {
+        fn new(k: usize) -> Self {
+            Self {
+                residents: Vec::new(),
+                k,
+            }
+        }
+
+        fn update(&mut self, key: &DataInput, count: i64) -> bool {
+            if let Some(item) = self.residents.iter_mut().find(|item| item.key == *key) {
+                item.count = count;
+                return true;
+            }
+
+            let retained_every_key = self.residents.len() < self.k;
+            if self.k == 0 {
+                return retained_every_key;
+            }
+            if self.residents.len() < self.k {
+                self.residents
+                    .push(HHItem::create_item(input_to_owned(key), count));
+                return retained_every_key;
+            }
+
+            let smallest = self
+                .residents
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, item)| item.count)
+                .map(|(idx, _)| idx)
+                .expect("a full heap of capacity k > 0 has residents");
+            if count > self.residents[smallest].count {
+                self.residents[smallest] = HHItem::create_item(input_to_owned(key), count);
+            }
+            retained_every_key
+        }
+    }
+
+    fn sorted_u64_residents(items: &[HHItem]) -> Vec<(u64, i64)> {
+        let mut listed: Vec<(u64, i64)> = items
+            .iter()
+            .map(|item| match item.key {
+                HeapItem::U64(value) => (value, item.count),
+                ref other => panic!("unexpected key {other:?}"),
+            })
+            .collect();
+        listed.sort_unstable();
+        listed
+    }
+
     fn skewed(n: usize, domain: u64, seed: u64) -> Vec<u64> {
         let mut state = seed | 1;
         let mut next = move || {
@@ -856,6 +1164,7 @@ mod differential {
     }
 
     fn assert_same(shipped: &HHHeap, reference: &Reference, context: &str) {
+        assert_ordered(shipped.heap(), &KeepSmallest, context);
         assert_eq!(
             shipped.len(),
             reference.heap.len(),
@@ -944,13 +1253,42 @@ mod differential {
         }
     }
 
-    /// The same stream twice gives the same heap, array position included -
-    /// the index carries no run-to-run state and the map's iteration order
-    /// never reaches the output.
+    /// Which keys survive, checked against a scan of a plain vector. Every
+    /// count in the stream is distinct, so the smallest resident is
+    /// unambiguous and the oracle needs no knowledge of the array layout.
+    #[test]
+    fn retention_matches_a_heapless_oracle() {
+        for capacity in [0usize, 1, 2, 3, 5, 8, 11, 16] {
+            let mut shipped = HHHeap::new(capacity);
+            let mut oracle = RetentionOracle::new(capacity);
+
+            for (step, raw) in skewed(4_000, 64, 0x2f2f).into_iter().enumerate() {
+                let count = ((step as i64 * 7_919) % 1_000_003) + 1;
+                let probe = DataInput::U64(raw);
+                let context = format!("cap {capacity} step {step}");
+                assert_eq!(
+                    shipped.update(&probe, count),
+                    oracle.update(&probe, count),
+                    "{context}: completeness flag differs"
+                );
+                assert_ordered(shipped.heap(), &KeepSmallest, &context);
+                assert_eq!(
+                    sorted_u64_residents(shipped.heap()),
+                    sorted_u64_residents(&oracle.residents),
+                    "{context}: a different set of keys is retained"
+                );
+            }
+        }
+    }
+
+    /// The same stream twice gives the same heap, array position included, and
+    /// the same index down to the order its buckets are laid out in - the
+    /// digest hasher is seeded by nothing the run supplies.
     #[test]
     fn the_heap_is_reproducible_across_runs() {
         let stream = skewed(20_000, 1_024, 0x5150);
         let mut first: Option<Vec<(HeapItem, i64)>> = None;
+        let mut first_index: Option<Vec<(u64, Vec<usize>)>> = None;
 
         for _ in 0..5 {
             let mut heap = HHHeap::new(64);
@@ -968,6 +1306,26 @@ mod differential {
             match &first {
                 None => first = Some(snapshot),
                 Some(expected) => assert_eq!(&snapshot, expected, "run-to-run divergence"),
+            }
+
+            let index_layout: Vec<(u64, Vec<usize>)> = heap
+                .positions
+                .iter()
+                .map(|(digest, bucket)| (*digest, bucket.to_vec()))
+                .collect();
+            assert_eq!(index_layout.len(), heap.len());
+            match &first_index {
+                None => first_index = Some(index_layout),
+                Some(expected) => {
+                    let diverged = index_layout
+                        .iter()
+                        .zip(expected.iter())
+                        .position(|(seen, want)| seen != want);
+                    assert_eq!(
+                        diverged, None,
+                        "the index is laid out differently from one run to the next"
+                    );
+                }
             }
         }
     }
@@ -991,6 +1349,14 @@ mod colliding_digests {
         entries
     }
 
+    /// The bucket as it is stored, order included.
+    fn stored(positions: &Index, digest: u64) -> Vec<usize> {
+        positions
+            .get(&digest)
+            .map(|bucket| bucket.to_vec())
+            .unwrap_or_default()
+    }
+
     #[test]
     fn a_bucket_holding_both_sides_of_a_swap_is_unchanged() {
         let mut slots = vec![7u64, 7];
@@ -1001,6 +1367,43 @@ mod colliding_digests {
 
         assert_eq!(slots, vec![7, 7]);
         assert_eq!(listed(&positions, 7), vec![0, 1]);
+        assert_eq!(stored(&positions, 7), vec![0, 1]);
+
+        // Stored order included: retargeting each end of the swap in turn
+        // would leave the same two positions listed the other way round.
+        let mut positions = Index::default();
+        positions.entry(7).or_default().extend([1, 0]);
+
+        swap_entry(&mut slots, &mut positions, 0, 1);
+
+        assert_eq!(slots, vec![7, 7]);
+        assert_eq!(stored(&positions, 7), vec![1, 0]);
+    }
+
+    /// A bucket naming two positions is answered by the key at each, not by
+    /// the first position listed. Real digests do not collide across a
+    /// test-sized key set, so the second resident is placed into the first
+    /// one's bucket by hand.
+    #[test]
+    fn a_lookup_reads_the_key_at_every_position_in_a_bucket() {
+        let mut heap = HHHeap::new(4);
+        heap.update(&DataInput::U64(11), 10);
+        heap.update(&DataInput::U64(22), 20);
+        let wanted = heap.find(&DataInput::U64(11)).expect("11 is resident");
+        let other = heap.find(&DataInput::U64(22)).expect("22 is resident");
+        assert_ne!(wanted, other);
+
+        let digest = heap.slots[wanted];
+        heap.slots[other] = digest;
+        heap.positions = Index::default();
+        heap.positions
+            .entry(digest)
+            .or_default()
+            .extend([other, wanted]);
+
+        assert_eq!(heap.find(&DataInput::U64(11)), Some(wanted));
+        assert_eq!(heap.find_heap_item(&HeapItem::U64(11)), Some(wanted));
+        assert_eq!(heap.heap()[wanted].count, 10);
     }
 
     #[test]
@@ -1061,6 +1464,11 @@ mod colliding_digests {
         );
     }
 
+    /// `swap_entry`, `retarget` and `drop_entry` read only `slots` and
+    /// `positions`, so they are driven here against an index seeded with two
+    /// synthetic digests. That index does not agree with the keys the heap
+    /// holds, so this establishes nothing about `find` or about any state the
+    /// live update path can reach.
     #[test]
     fn two_shared_buckets_follow_the_sift() {
         let mut heap = HHHeap::new(16);
@@ -1077,7 +1485,6 @@ mod colliding_digests {
             heap.slots[idx] = digest;
             heap.positions.entry(digest).or_default().push(idx);
         }
-        assert_buckets_track_slots(&heap, "seeded");
 
         for step in 0..200usize {
             heap.rescore((step * 7) % resident, (step as i64 * 13) % 97);

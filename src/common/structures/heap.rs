@@ -153,8 +153,8 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
         Some(root)
     }
 
-    /// Updates an element at the given index and maintains heap property.
-    /// Returns true if the element was moved.
+    /// Re-sifts the element at the given index to restore the heap property.
+    /// Returns false if `index` is out of range, true otherwise.
     #[inline]
     pub fn update_at(&mut self, index: usize) -> bool {
         self.update_at_with(index, &mut |_, _| {})
@@ -162,6 +162,8 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
 
     /// Re-sifts the element at `index`, reporting every index swap as in
     /// [`Self::push_back_with`].
+    ///
+    /// Returns false if `index` is out of range, true otherwise.
     #[inline]
     pub fn update_at_with(&mut self, index: usize, on_swap: &mut impl FnMut(usize, usize)) -> bool {
         if index >= self.data.len() {
