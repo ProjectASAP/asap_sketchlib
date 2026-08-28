@@ -217,6 +217,37 @@ impl SketchHasher for DefaultXxHasher {
     }
 }
 
+/// Passes a `u64` straight through as its own hash.
+///
+/// The index maps in this crate are keyed by values that are already xxh3
+/// digests; running a second hash over them buys nothing. Only `write_u64` is
+/// on the fast path - the byte fallback exists so the type is a valid
+/// [`Hasher`](std::hash::Hasher) for any key.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct IdentityHasher(u64);
+
+impl std::hash::Hasher for IdentityHasher {
+    #[inline(always)]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(*byte);
+        }
+    }
+
+    #[inline(always)]
+    fn write_u64(&mut self, value: u64) {
+        self.0 = value;
+    }
+}
+
+/// [`BuildHasher`](std::hash::BuildHasher) for [`IdentityHasher`].
+pub type IdentityBuildHasher = std::hash::BuildHasherDefault<IdentityHasher>;
+
 // ---------------------------------------------------------------------------
 // Backwards-compatible free functions — delegate to DefaultXxHasher
 // ---------------------------------------------------------------------------

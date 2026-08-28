@@ -1,8 +1,10 @@
-//! Measures `HHHeap::update` against an incrementally indexed heap.
+//! Measures `HHHeap::update` across capacities.
 //!
-//! `HHHeap` rebuilds its whole key -> position map after every accepted update,
-//! so its cost per update grows with capacity. This probe runs both designs over
-//! the same Zipf stream and prints updates per second at several capacities.
+//! `HHHeap` maintains its key -> position index through each sift, so its rate
+//! should not fall as capacity grows. This probe runs it beside a standalone
+//! indexed heap and a linear scan over the same Zipf stream, and prints updates
+//! per second at several capacities. The scan column is what an unindexed heap
+//! costs; the indexed column is the floor `HHHeap` should stay near.
 //!
 //! Run with `cargo run --release --example hhheap_probe`.
 

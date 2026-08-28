@@ -27,12 +27,39 @@ signals a backwards-compatible change.
   lowest bucket, constant work at any capacity. Both lists are index arenas
   rather than pointers. A monitored key is sandwiched by its own error;
   `upper_bound` never reads below the truth for any key in the stream.
+- **`IdentityHasher` in `common::hash`.** A `Hasher` that passes a `u64`
+  through unchanged, for index maps keyed by values that are already digests,
+  with `IdentityBuildHasher` as its `BuildHasher`.
 - **`membership_battery` in the conformance kit.** A new `MembershipOps`
   capability with the exact no-false-negative check and a false-positive-rate
   ceiling, since the existing batteries are all frequency- or numeric-shaped.
 
 ### Changed
 
+- **Made `HHHeap::update` independent of capacity.** The key index was rebuilt
+  in full after every accepted update, cloning each resident's key, so the top-k
+  structure behind `CMSHeap`, `CSHeap`, `FoldCMS`, `FoldCS`, `UnivMon` and the
+  Octo aggregator cost `O(k)` per insert. It now holds heap indices only,
+  re-checking identity against the heap, and patches them through each sift:
+  `CommonHeap` gained `push_back_with`, `replace_root_with` and
+  `update_at_with`, which report every swap to a caller-supplied closure, while
+  `push` and `update_at` delegate with a no-op and are unchanged for every other
+  caller. A parallel `slots` vector carries each resident's digest so a sift
+  re-hashes nothing, and the index is keyed by `IdentityHasher` rather than
+  running SipHash over a value that is already an xxh3 digest. Measured on a
+  Zipf(1.1) stream, `HHHeap::update` goes from 4.75 to 45.0 Mups/s at capacity
+  8 and from 0.01 to 52.9 at capacity 2048 — flat in `k` rather than halving
+  with each doubling — and `CMSHeap::insert` at top_k=2048 goes from 0.009 to
+  27.0 Minsert/s. Retention is unchanged: a differential test compares the heap
+  element for element against the rebuild implementation at capacities 0 through
+  257 over 30k updates on both key forms.
+- **BREAKING (persisted `HHHeap` and `UnivMon` state):** `HHHeap` no longer
+  serializes its key index, which is derived data rebuilt on load. The
+  serialized form went from `{heap, positions, k}` to `{heap, k}`, so state
+  written by an earlier version does not decode. Nothing in-crate pins those
+  bytes — the portable MessagePack wire for the top-k sketches carries a
+  `(key, value)` list and rebuilds through `update`, and the goldens cover CMS
+  and HLL envelopes only.
 - **BREAKING (external implementors of `MatrixFastHash`):** the trait gained a
   required `row_hash(row, mask_bits, mask)` method, split out of
   `col_for_row` so storages can decode against precomputed parameters and

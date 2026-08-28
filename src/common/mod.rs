@@ -35,10 +35,10 @@ pub mod structures;
 
 pub use hash::{
     BOTTOM_LAYER_FINDER, CANONICAL_HASH_SEED, DefaultXxHasher, HYDRA_SEED, HashProfile,
-    MatrixHashMode, SEEDLIST, SketchHasher, hash_for_matrix, hash_for_matrix_generic,
-    hash_for_matrix_seeded, hash_for_matrix_seeded_generic, hash_for_matrix_seeded_with_mode,
-    hash_for_matrix_seeded_with_mode_generic, hash_item64_seeded, hash_item128_seeded,
-    hash_mode_for_matrix, hash64_seeded, hash128_seeded,
+    IdentityBuildHasher, IdentityHasher, MatrixHashMode, SEEDLIST, SketchHasher, hash_for_matrix,
+    hash_for_matrix_generic, hash_for_matrix_seeded, hash_for_matrix_seeded_generic,
+    hash_for_matrix_seeded_with_mode, hash_for_matrix_seeded_with_mode_generic, hash_item64_seeded,
+    hash_item128_seeded, hash_mode_for_matrix, hash64_seeded, hash128_seeded,
 };
 pub use heap::HHHeap;
 pub use input::{DataInput, HHItem, HeapItem, L2HH, heap_item_to_sketch_input, input_to_owned};

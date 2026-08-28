@@ -1,22 +1,57 @@
-//! heavy hitter heap that can be used by various
-//! sketches or sketch_framework
-//! basically, the HHHeap is a wrapper around CommonHeap
-//! where the HHHeap is a Min Heap that can take in
-//! HHItem defined in crate::common::input::HHItem
+//! Heavy-hitter heap shared by the top-k sketches and the frameworks.
+//!
+//! A capacity-bounded min-heap of [`HHItem`] beside an index from key digest to
+//! heap position. The index is patched through each sift rather than rebuilt,
+//! so an update costs one hash, one map probe and `O(log k)` index writes
+//! whatever the capacity.
 
 use crate::common::input::HHItem;
-use crate::common::{CommonHeap, KeepSmallest};
+use crate::common::{CommonHeap, IdentityBuildHasher, KeepSmallest};
 use crate::{DataInput, HeapItem, hash_item64_seeded, hash64_seeded, input_to_owned};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::collections::HashMap;
 
-/// Wrapper around CommonHeap for HHItem with TopK heavy hitter tracking.
-/// Modern replacement for TopKHeap using the generic CommonHeap structure.
+/// Heap positions sharing one digest. Two residents colliding on a 64-bit
+/// digest is rare enough that the inline pair is effectively never spilled.
+type Slot = SmallVec<[usize; 2]>;
+
+type Index = HashMap<u64, Slot, IdentityBuildHasher>;
+
+/// Serialized form. The index is derived from the heap, so it is rebuilt on
+/// load rather than carried.
+#[derive(Deserialize)]
+struct HHHeapState {
+    heap: CommonHeap<HHItem, KeepSmallest>,
+    k: usize,
+}
+
+/// Bounded min-heap over [`HHItem`] with key lookup, retaining the `k` largest
+/// counts.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(from = "HHHeapState")]
 pub struct HHHeap {
     heap: CommonHeap<HHItem, KeepSmallest>,
-    positions: HashMap<u64, Vec<(HeapItem, usize)>>,
+    /// Digest of each resident, parallel to the heap array, so a sift patches
+    /// the index without re-hashing the keys it moves.
+    #[serde(skip)]
+    slots: Vec<u64>,
+    #[serde(skip)]
+    positions: Index,
     k: usize,
+}
+
+impl From<HHHeapState> for HHHeap {
+    fn from(state: HHHeapState) -> Self {
+        let mut heap = HHHeap {
+            heap: state.heap,
+            slots: Vec::new(),
+            positions: Index::default(),
+            k: state.k,
+        };
+        heap.rebuild_index();
+        heap
+    }
 }
 
 impl HHHeap {
@@ -24,7 +59,8 @@ impl HHHeap {
     pub fn new(k: usize) -> Self {
         HHHeap {
             heap: CommonHeap::new_min(k),
-            positions: HashMap::with_capacity(k),
+            slots: Vec::with_capacity(k),
+            positions: Index::with_capacity_and_hasher(k, IdentityBuildHasher::default()),
             k,
         }
     }
@@ -32,45 +68,31 @@ impl HHHeap {
     /// Finds an item by key, returns the index if found.
     pub fn find(&self, key: &DataInput) -> Option<usize> {
         let slot = self.slot_for_input(key);
-        self.positions.get(&slot).and_then(|bucket| {
-            bucket
-                .iter()
-                .find_map(|(value, idx)| if value == key { Some(*idx) } else { None })
-        })
+        self.lookup(slot, |item| item.key == *key)
     }
 
     /// Finds an owned heap item by key, returning its index if present.
     pub fn find_heap_item(&self, key: &HeapItem) -> Option<usize> {
         let slot = self.slot_for_item(key);
-        self.positions.get(&slot).and_then(|bucket| {
-            bucket
-                .iter()
-                .find_map(|(value, idx)| if value == key { Some(*idx) } else { None })
-        })
+        self.lookup(slot, |item| &item.key == key)
     }
 
-    /// Updates an existing item's count or inserts a new item.
+    /// Updates an existing key's count or inserts it if it earns a place.
     ///
-    /// Returns `false` when this bounded heap has encountered a new identity
-    /// after reaching capacity, so callers can distinguish complete candidate
-    /// sets from truncated ones.
+    /// Returns whether every key offered so far is still retained, which stops
+    /// being true once the heap has turned one away.
     pub fn update(&mut self, key: &DataInput, count: i64) -> bool {
-        if let Some(idx) = self.find(key) {
-            self.heap[idx].count = count;
-            self.heap.update_at(idx);
-            self.refresh_positions();
+        let slot = self.slot_for_input(key);
+        if let Some(idx) = self.lookup(slot, |item| item.key == *key) {
+            self.rescore(idx, count);
             return true;
         }
 
         let retained_every_key = self.heap.len() < self.k;
-
         if !self.should_accept_new(count) {
             return retained_every_key;
         }
-
-        let owned = input_to_owned(key);
-        self.heap.push(HHItem::create_item(owned, count));
-        self.refresh_positions();
+        self.seat(input_to_owned(key), slot, count);
         retained_every_key
     }
 
@@ -78,21 +100,17 @@ impl HHHeap {
     ///
     /// The return value has the same completeness meaning as [`Self::update`].
     pub fn update_heap_item(&mut self, key: &HeapItem, count: i64) -> bool {
-        if let Some(idx) = self.find_heap_item(key) {
-            self.heap[idx].count = count;
-            self.heap.update_at(idx);
-            self.refresh_positions();
+        let slot = self.slot_for_item(key);
+        if let Some(idx) = self.lookup(slot, |item| &item.key == key) {
+            self.rescore(idx, count);
             return true;
         }
 
         let retained_every_key = self.heap.len() < self.k;
-
         if !self.should_accept_new(count) {
             return retained_every_key;
         }
-
-        self.heap.push(HHItem::create_item(key.to_owned(), count));
-        self.refresh_positions();
+        self.seat(key.to_owned(), slot, count);
         retained_every_key
     }
 
@@ -114,6 +132,7 @@ impl HHHeap {
     /// Clears the heap.
     pub fn clear(&mut self) {
         self.heap.clear();
+        self.slots.clear();
         self.positions.clear();
     }
 
@@ -137,8 +156,81 @@ impl HHHeap {
         self.k
     }
 
+    // -- index maintenance ---------------------------------------------------
+
+    fn lookup(&self, slot: u64, matches: impl Fn(&HHItem) -> bool) -> Option<usize> {
+        self.positions
+            .get(&slot)?
+            .iter()
+            .copied()
+            .find(|idx| matches(&self.heap[*idx]))
+    }
+
+    /// Writes a new count onto a resident and re-sifts it.
+    fn rescore(&mut self, idx: usize, count: i64) {
+        self.heap[idx].count = count;
+        let Self {
+            heap,
+            slots,
+            positions,
+            ..
+        } = self;
+        heap.update_at_with(idx, &mut |i, j| swap_entry(slots, positions, i, j));
+    }
+
+    /// Places a key the heap has decided to accept, evicting the root when the
+    /// heap is already at capacity.
+    fn seat(&mut self, key: HeapItem, slot: u64, count: i64) {
+        let item = HHItem::create_item(key, count);
+        if self.heap.len() < self.k {
+            let idx = self.heap.len();
+            self.slots.push(slot);
+            self.positions.entry(slot).or_default().push(idx);
+            let Self {
+                heap,
+                slots,
+                positions,
+                ..
+            } = self;
+            heap.push_back_with(item, &mut |i, j| swap_entry(slots, positions, i, j));
+        } else {
+            let displaced = self.slots[0];
+            drop_entry(&mut self.positions, displaced, 0);
+            self.slots[0] = slot;
+            self.positions.entry(slot).or_default().push(0);
+            let Self {
+                heap,
+                slots,
+                positions,
+                ..
+            } = self;
+            heap.replace_root_with(item, &mut |i, j| swap_entry(slots, positions, i, j));
+        }
+    }
+
+    /// Rebuilds `slots` and `positions` from the heap array.
+    fn rebuild_index(&mut self) {
+        let Self {
+            heap,
+            slots,
+            positions,
+            ..
+        } = self;
+        slots.clear();
+        positions.clear();
+        slots.reserve(heap.len());
+        for (idx, item) in heap.iter().enumerate() {
+            let slot = hash_item64_seeded(0, &item.key);
+            slots.push(slot);
+            positions.entry(slot).or_default().push(idx);
+        }
+    }
+
     #[inline]
     fn should_accept_new(&self, count: i64) -> bool {
+        if self.k == 0 {
+            return false;
+        }
         if self.heap.len() < self.k {
             return true;
         }
@@ -146,17 +238,6 @@ impl HHHeap {
             .peek()
             .map(|min_item| count > min_item.count)
             .unwrap_or(true)
-    }
-
-    fn refresh_positions(&mut self) {
-        self.positions.clear();
-        for (idx, item) in self.heap.iter().enumerate() {
-            let slot = self.slot_for_item(&item.key);
-            self.positions
-                .entry(slot)
-                .or_default()
-                .push((item.key.clone(), idx));
-        }
     }
 
     #[inline]
@@ -167,6 +248,42 @@ impl HHHeap {
     #[inline]
     fn slot_for_item(&self, key: &HeapItem) -> u64 {
         hash_item64_seeded(0, key)
+    }
+}
+
+/// Follows one heap swap into the index.
+///
+/// Residents sharing a digest sit in the same bucket, so exchanging their two
+/// positions leaves that bucket unchanged and there is nothing to write.
+#[inline]
+fn swap_entry(slots: &mut [u64], positions: &mut Index, i: usize, j: usize) {
+    let (left, right) = (slots[i], slots[j]);
+    if left == right {
+        return;
+    }
+    retarget(positions, left, i, j);
+    retarget(positions, right, j, i);
+    slots.swap(i, j);
+}
+
+#[inline]
+fn retarget(positions: &mut Index, digest: u64, from: usize, to: usize) {
+    if let Some(bucket) = positions.get_mut(&digest)
+        && let Some(entry) = bucket.iter_mut().find(|entry| **entry == from)
+    {
+        *entry = to;
+    }
+}
+
+#[inline]
+fn drop_entry(positions: &mut Index, digest: u64, idx: usize) {
+    if let Some(bucket) = positions.get_mut(&digest) {
+        if let Some(at) = bucket.iter().position(|entry| *entry == idx) {
+            bucket.swap_remove(at);
+        }
+        if bucket.is_empty() {
+            positions.remove(&digest);
+        }
     }
 }
 
@@ -436,5 +553,424 @@ mod tests {
         // TopKHeap::clean() equivalent:
         heap.clear();
         assert!(heap.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod index_invariants {
+    use super::*;
+    use crate::DataInput;
+    use std::collections::HashMap;
+
+    impl HHHeap {
+        /// Every resident is reachable through the index at its own position,
+        /// `slots` agrees with the keys, and the index holds nothing else.
+        fn assert_index_consistent(&self, context: &str) {
+            assert_eq!(
+                self.slots.len(),
+                self.heap.len(),
+                "{context}: slots and heap disagree on length"
+            );
+
+            let mut counted = 0usize;
+            for (idx, item) in self.heap.iter().enumerate() {
+                let digest = hash_item64_seeded(0, &item.key);
+                assert_eq!(
+                    self.slots[idx], digest,
+                    "{context}: slot {idx} holds a stale digest"
+                );
+                let bucket = self
+                    .positions
+                    .get(&digest)
+                    .unwrap_or_else(|| panic!("{context}: no bucket for position {idx}"));
+                assert!(
+                    bucket.contains(&idx),
+                    "{context}: bucket for position {idx} does not list it"
+                );
+                assert_eq!(
+                    self.find_heap_item(&item.key),
+                    Some(idx),
+                    "{context}: lookup for position {idx} disagrees"
+                );
+                counted += 1;
+            }
+
+            let indexed: usize = self.positions.values().map(|b| b.len()).sum();
+            assert_eq!(
+                indexed, counted,
+                "{context}: the index carries {indexed} entries for {counted} residents"
+            );
+        }
+    }
+
+    fn zipfish(n: usize, domain: usize, seed: u64) -> Vec<u64> {
+        let mut state = seed | 1;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        (0..n)
+            .map(|_| {
+                let u = (next() >> 11) as f64 / (1u64 << 53) as f64;
+                let skewed = u.powf(3.0);
+                (skewed * domain as f64) as u64 % domain as u64
+            })
+            .collect()
+    }
+
+    /// The index stays exact through eviction, promotion and re-entry - the
+    /// property that lets the rebuild go away.
+    #[test]
+    fn the_index_survives_a_long_churning_stream() {
+        for capacity in [1usize, 2, 7, 64, 512] {
+            let mut heap = HHHeap::new(capacity);
+            let mut counts: HashMap<u64, i64> = HashMap::new();
+
+            for (step, key) in zipfish(20_000, 2_048, 0x5eed).into_iter().enumerate() {
+                let entry = counts.entry(key).or_default();
+                *entry += 1;
+                heap.update(&DataInput::U64(key), *entry);
+                if step % 97 == 0 {
+                    heap.assert_index_consistent(&format!("cap {capacity} step {step}"));
+                }
+            }
+            heap.assert_index_consistent(&format!("cap {capacity} final"));
+            assert_eq!(heap.len(), capacity.min(counts.len()));
+        }
+    }
+
+    /// The residents are exactly the `k` largest counts, which is what the
+    /// index is there to serve. Checked against a brute-force ranking.
+    #[test]
+    fn the_residents_are_the_k_largest_counts() {
+        let capacity = 32;
+        let mut heap = HHHeap::new(capacity);
+        let mut counts: HashMap<u64, i64> = HashMap::new();
+
+        for key in zipfish(20_000, 512, 0xfeed) {
+            let entry = counts.entry(key).or_default();
+            *entry += 1;
+            heap.update(&DataInput::U64(key), *entry);
+        }
+
+        let mut ranked: Vec<(u64, i64)> = counts.iter().map(|(k, c)| (*k, *c)).collect();
+        ranked.sort_by_key(|(key, count)| (-*count, *key));
+        let cutoff = ranked[capacity - 1].1;
+
+        for item in heap.heap() {
+            let key = match item.key {
+                HeapItem::U64(v) => v,
+                ref other => panic!("unexpected key {other:?}"),
+            };
+            assert_eq!(item.count, counts[&key], "resident count is stale");
+            assert!(
+                item.count >= cutoff,
+                "resident {key} at {} is below the {cutoff} cutoff",
+                item.count
+            );
+        }
+        assert_eq!(heap.len(), capacity);
+    }
+
+    /// A key already resident is re-scored in place rather than seated twice.
+    #[test]
+    fn re_scoring_a_resident_never_duplicates_it() {
+        let mut heap = HHHeap::new(4);
+        for round in 1..=50i64 {
+            heap.update(&DataInput::Str("hot"), round);
+            heap.update(&DataInput::Str("warm"), round / 2);
+        }
+        heap.assert_index_consistent("re-score");
+        assert_eq!(heap.len(), 2);
+        assert!(heap.find(&DataInput::Str("hot")).is_some());
+
+        let hot = heap
+            .heap()
+            .iter()
+            .find(|item| item.key == DataInput::Str("hot"))
+            .expect("hot is resident");
+        assert_eq!(hot.count, 50);
+    }
+
+    /// A zero-capacity heap accepts nothing and stays consistent.
+    #[test]
+    fn a_zero_capacity_heap_turns_everything_away() {
+        let mut heap = HHHeap::new(0);
+        for key in 0..32u64 {
+            assert!(!heap.update(&DataInput::U64(key), key as i64));
+        }
+        assert!(heap.is_empty());
+        assert_eq!(heap.find(&DataInput::U64(0)), None);
+        heap.assert_index_consistent("zero capacity");
+    }
+
+    /// `clear` drops the index with the heap, and the heap refills correctly.
+    #[test]
+    fn clearing_drops_the_index_with_the_heap() {
+        let mut heap = HHHeap::new(8);
+        for key in 0..32u64 {
+            heap.update(&DataInput::U64(key), key as i64);
+        }
+        heap.clear();
+        assert!(heap.is_empty());
+        assert_eq!(heap.find(&DataInput::U64(31)), None);
+        heap.assert_index_consistent("cleared");
+
+        for key in 100..140u64 {
+            heap.update(&DataInput::U64(key), key as i64);
+        }
+        heap.assert_index_consistent("refilled");
+        assert_eq!(heap.len(), 8);
+    }
+
+    /// The index is derived, so it is rebuilt on load rather than carried. A
+    /// decoded heap answers lookups and takes further updates.
+    #[test]
+    fn a_decoded_heap_rebuilds_its_index() {
+        let mut heap = HHHeap::new(16);
+        let mut counts: HashMap<u64, i64> = HashMap::new();
+        for key in zipfish(5_000, 256, 0xd00d) {
+            let entry = counts.entry(key).or_default();
+            *entry += 1;
+            heap.update(&DataInput::U64(key), *entry);
+        }
+
+        let bytes = rmp_serde::to_vec(&heap).expect("serialize");
+        let mut decoded: HHHeap = rmp_serde::from_slice(&bytes).expect("deserialize");
+
+        decoded.assert_index_consistent("decoded");
+        assert_eq!(decoded.len(), heap.len());
+        assert_eq!(decoded.capacity(), heap.capacity());
+        for item in heap.heap() {
+            assert!(
+                decoded.find_heap_item(&item.key).is_some(),
+                "decoded heap lost {:?}",
+                item.key
+            );
+        }
+
+        let resident = heap.heap()[0].key.clone();
+        decoded.update_heap_item(&resident, 1_000_000);
+        decoded.assert_index_consistent("decoded then updated");
+        let idx = decoded.find_heap_item(&resident).expect("still resident");
+        assert_eq!(decoded.heap()[idx].count, 1_000_000);
+    }
+}
+
+#[cfg(test)]
+mod differential {
+    //! The index rewrite must not move a single element.
+    //!
+    //! [`Reference`] below is the pre-rewrite `HHHeap`: the same `CommonHeap`,
+    //! with the key index rebuilt in full after every accepted update. It is
+    //! compared against the shipped heap element by element, so any divergence
+    //! in which key is seated, which is evicted, or where either lands, fails.
+    //!
+    //! `CommonHeap`'s own sift is covered by the tests above it in this file;
+    //! what is under test here is the index maintenance that replaced the
+    //! rebuild.
+
+    use super::*;
+    use crate::DataInput;
+    use std::collections::HashMap;
+
+    struct Reference {
+        heap: CommonHeap<HHItem, KeepSmallest>,
+        positions: HashMap<u64, Vec<(HeapItem, usize)>>,
+        k: usize,
+    }
+
+    impl Reference {
+        fn new(k: usize) -> Self {
+            Self {
+                heap: CommonHeap::new_min(k),
+                positions: HashMap::with_capacity(k),
+                k,
+            }
+        }
+
+        fn find(&self, key: &DataInput) -> Option<usize> {
+            let slot = hash64_seeded(0, key);
+            self.positions.get(&slot).and_then(|bucket| {
+                bucket
+                    .iter()
+                    .find_map(|(value, idx)| if value == key { Some(*idx) } else { None })
+            })
+        }
+
+        fn update(&mut self, key: &DataInput, count: i64) -> bool {
+            if let Some(idx) = self.find(key) {
+                self.heap[idx].count = count;
+                self.heap.update_at(idx);
+                self.refresh_positions();
+                return true;
+            }
+
+            let retained_every_key = self.heap.len() < self.k;
+            if !self.should_accept_new(count) {
+                return retained_every_key;
+            }
+
+            let owned = input_to_owned(key);
+            self.heap.push(HHItem::create_item(owned, count));
+            self.refresh_positions();
+            retained_every_key
+        }
+
+        fn should_accept_new(&self, count: i64) -> bool {
+            if self.heap.len() < self.k {
+                return true;
+            }
+            self.heap
+                .peek()
+                .map(|min_item| count > min_item.count)
+                .unwrap_or(true)
+        }
+
+        fn refresh_positions(&mut self) {
+            self.positions.clear();
+            for (idx, item) in self.heap.iter().enumerate() {
+                let slot = hash_item64_seeded(0, &item.key);
+                self.positions
+                    .entry(slot)
+                    .or_default()
+                    .push((item.key.clone(), idx));
+            }
+        }
+    }
+
+    fn skewed(n: usize, domain: u64, seed: u64) -> Vec<u64> {
+        let mut state = seed | 1;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        (0..n)
+            .map(|_| {
+                let u = (next() >> 11) as f64 / (1u64 << 53) as f64;
+                (u.powf(3.0) * domain as f64) as u64 % domain
+            })
+            .collect()
+    }
+
+    fn assert_same(shipped: &HHHeap, reference: &Reference, context: &str) {
+        assert_eq!(
+            shipped.len(),
+            reference.heap.len(),
+            "{context}: residency differs"
+        );
+        for (idx, (a, b)) in shipped
+            .heap()
+            .iter()
+            .zip(reference.heap.as_slice().iter())
+            .enumerate()
+        {
+            assert_eq!(
+                a.key, b.key,
+                "{context}: position {idx} holds a different key"
+            );
+            assert_eq!(a.count, b.count, "{context}: position {idx} count differs");
+        }
+    }
+
+    /// Element-for-element agreement with the rebuild implementation, over a
+    /// stream long enough to force sustained eviction at every capacity, and
+    /// on both key forms.
+    #[test]
+    fn the_indexed_heap_matches_the_rebuild_implementation() {
+        for capacity in [0usize, 1, 2, 3, 7, 8, 64, 257] {
+            let mut shipped = HHHeap::new(capacity);
+            let mut reference = Reference::new(capacity);
+            let mut counts: HashMap<u64, i64> = HashMap::new();
+
+            for (step, key) in skewed(30_000, 4_096, 0xabcd).into_iter().enumerate() {
+                let entry = counts.entry(key).or_default();
+                *entry += 1;
+
+                let probe = DataInput::U64(key);
+                let a = shipped.update(&probe, *entry);
+                let b = reference.update(&probe, *entry);
+                assert_eq!(
+                    a, b,
+                    "cap {capacity} step {step}: completeness flag differs for key {key}"
+                );
+                assert_same(&shipped, &reference, &format!("cap {capacity} step {step}"));
+            }
+        }
+    }
+
+    /// The same agreement on string keys, which take the owned-key path and a
+    /// different hash.
+    #[test]
+    fn the_indexed_heap_matches_the_rebuild_implementation_on_string_keys() {
+        let capacity = 32;
+        let mut shipped = HHHeap::new(capacity);
+        let mut reference = Reference::new(capacity);
+        let mut counts: HashMap<String, i64> = HashMap::new();
+
+        for (step, raw) in skewed(20_000, 2_048, 0x1234).into_iter().enumerate() {
+            let key = format!("flow::{raw}");
+            let entry = counts.entry(key.clone()).or_default();
+            *entry += 1;
+
+            let probe = DataInput::Str(&key);
+            let a = shipped.update(&probe, *entry);
+            let b = reference.update(&probe, *entry);
+            assert_eq!(a, b, "step {step}: completeness flag differs");
+            assert_same(&shipped, &reference, &format!("step {step}"));
+        }
+    }
+
+    /// Counts that fall as well as rise, so the resident sinks back down and
+    /// the sift runs in both directions.
+    #[test]
+    fn the_two_agree_when_counts_move_in_both_directions() {
+        let capacity = 16;
+        let mut shipped = HHHeap::new(capacity);
+        let mut reference = Reference::new(capacity);
+
+        for (step, raw) in skewed(10_000, 128, 0x99).into_iter().enumerate() {
+            // A count that oscillates rather than only climbing.
+            let count = ((step as i64 * 7) % 61) - 30;
+            let probe = DataInput::U64(raw);
+            assert_eq!(
+                shipped.update(&probe, count),
+                reference.update(&probe, count),
+                "step {step}: completeness flag differs"
+            );
+            assert_same(&shipped, &reference, &format!("step {step}"));
+        }
+    }
+
+    /// The same stream twice gives the same heap, array position included -
+    /// the index carries no run-to-run state and the map's iteration order
+    /// never reaches the output.
+    #[test]
+    fn the_heap_is_reproducible_across_runs() {
+        let stream = skewed(20_000, 1_024, 0x5150);
+        let mut first: Option<Vec<(HeapItem, i64)>> = None;
+
+        for _ in 0..5 {
+            let mut heap = HHHeap::new(64);
+            let mut counts: HashMap<u64, i64> = HashMap::new();
+            for key in &stream {
+                let entry = counts.entry(*key).or_default();
+                *entry += 1;
+                heap.update(&DataInput::U64(*key), *entry);
+            }
+            let snapshot: Vec<(HeapItem, i64)> = heap
+                .heap()
+                .iter()
+                .map(|item| (item.key.clone(), item.count))
+                .collect();
+            match &first {
+                None => first = Some(snapshot),
+                Some(expected) => assert_eq!(&snapshot, expected, "run-to-run divergence"),
+            }
+        }
     }
 }
