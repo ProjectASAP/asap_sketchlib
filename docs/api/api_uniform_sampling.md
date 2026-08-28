@@ -45,7 +45,18 @@ fn merge(&mut self, other: &UniformSampling) -> Result<(), &'static str>
 
 ## Serialization
 
-Derives serde; no dedicated byte API helpers.
+```rust
+fn serialize_to_bytes(&self) -> Result<Vec<u8>, rmp_serde::encode::Error>
+fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
+```
+
+ASAPv1 wire format, kind_id `0x0d 0x00`. Metadata carries `metadata_version`,
+`sample_rate` and `item_type`; the sampler does not hash, so there is no
+hash-spec group. The payload is `[priorities, values, total_seen, rng_state]`,
+emitted in ascending priority. `rng_state` is the SplitMix64 word the next
+priority is drawn from, so a decoded sampler continues the same draw sequence.
+
+Also derives serde for the internal Rust-only codec.
 
 ## Examples
 
