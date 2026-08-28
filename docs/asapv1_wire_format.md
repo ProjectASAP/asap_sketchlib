@@ -206,12 +206,18 @@ This registry is the master list of algorithms still to design payloads for.
 | `0x16 0x00` | OctoSketch | - | TBD | reserved / not designed |
 | `0x17 0x00` | Bloom | Partitioned | Section 3.4 | implemented |
 | `0x18 0x00` | Space-Saving | Stream-Summary | Section 3.5 | implemented |
+| `0x19 0x00` | CountL2HH | - | TBD | reserved / not designed |
+| `0x1a 0x00` | UnivMon-Q (`UnivMonQ`) | - | TBD | reserved / not designed |
+| `0x1b 0x00` | FoldCMS | - | TBD | reserved / not designed |
+| `0x1c 0x00` | FoldCS | - | TBD | reserved / not designed |
+| `0x1d 0x00` | MultiHeadHydra | - | TBD | reserved / not designed |
 
 **Mapping notes** (mismatches between `apis.md` and Go's `magic_ids.go`):
 
 - **CMSHeap vs CSHeap.** Go's `MagicCountMinSketchWithHeap` (`0x03`) is the Count-*Min*-with-heap sketch (`apis.md` to CMSHeap). The Count-*Sketch*-with-heap sketch (`apis.md` to CSHeap) is a distinct family and gets a fresh byte (`0x0a`), separate from `0x03`.
-- **Hydra.** `apis.md` lists the "Hydra" framework; Go's only Hydra id is `MagicHydraKLLSketch` (`0x07`), so Hydra maps here to the Hydra-KLL id. If Hydra is later wrapped around a non-KLL base sketch, that combination gets its own id.
+- **Hydra.** `apis.md` lists the "Hydra" framework; Go's only Hydra id is `MagicHydraKLLSketch` (`0x07`), so Hydra maps here to the Hydra-KLL id. If Hydra is later wrapped around a non-KLL base sketch, that combination gets its own id. `0x07 0x01`-`0x07 0xff` are **reserved for Hydra over non-KLL base sketches**; a concrete variant is allocated when that combination's payload is designed.
 - **SetAggregator / DeltaResult** (`0x08` / `0x09`) come from Go's `magic_ids.go` and do not appear as sketches in `apis.md` (they are aggregation and delta-result envelopes, distinct from stand-alone sketches). They are kept here so the family space stays mirrored verbatim with Go.
+- **`0x19`-`0x1d`.** CountL2HH, UnivMon-Q, FoldCMS, FoldCS and MultiHeadHydra have no counterpart in Go's `magic_ids.go`; their family bytes are allocated here first, and Go mirrors them from this registry.
 - **`Unstable`** rows mirror the `Unstable` status those sketches carry in `apis.md`; their kind_id is reserved but the payload (and the sketch API) may still change.
 
 ### Decoder rules
