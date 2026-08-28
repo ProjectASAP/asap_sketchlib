@@ -45,7 +45,37 @@ fn merge(&mut self, other: &Self)
 
 ## Serialization
 
-Not currently provided as a dedicated public API.
+```rust
+fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+```
+
+These produce/consume the **ASAPv1** wire envelope (kind `0x0a 0x00`) — see the
+[ASAPv1 wire format spec](../asapv1_wire_format.md). They are **not** available
+on every `CSHeap`: the impl exists only for wire-eligible configs
+`CSHeap<Vector2D<T>, Mode, H>` where `T` is `i32` or `i64` (`CsWireCounter`),
+`Mode` is `FastPath` or `RegularPath` (`CsWireMode`), and `H: HashProfile`. Count Sketch
+counters must be signed and negatable, so there is no `f64` counterpart to
+Count-Min's; an `i128` or non-`Vector2D` sketch must be converted first (only
+you know if the mapping is lossless).
+
+A sketch travels as the base matrix plus the heap's entries: the metadata
+carries `rows`, `cols`, `counter_type`, `mode`, the heap capacity `k` and the
+heap's `key_type`, and the payload is `[counts, keys, heap_counts]`. The heap's
+digest index is rebuilt on load, so no index reaches the wire, and `k` never
+sizes an allocation on decode.
+
+Heap keys are `HeapItem`s, so the key type is a runtime property: `key_type`
+names the **exact** variant (`"i32"` stays `"i32"`, never widened to `"i64"`)
+and the `keys` array is homogeneous in it. A heap whose keys mix variants, or
+holds an `I128` / `U128` key, does not serialize. An empty heap emits
+`key_type = "u64"`.
+
+Entries are emitted in descending count, ties broken by a total order over the
+key, so a decoded sketch re-serializes byte-identically.
+
+`CountL2HH` is a different algorithm and has no ASAPv1 payload yet; its own
+`serialize_to_bytes` is the Rust-internal `portable` form.
 
 ## Examples
 

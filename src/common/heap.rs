@@ -6,6 +6,7 @@
 //! whatever the capacity.
 
 use crate::common::input::HHItem;
+use crate::common::structures::heap::PREALLOCATED_SLOTS;
 use crate::common::{CommonHeap, DigestBuildHasher, KeepSmallest};
 use crate::{DataInput, HeapItem, hash_item64_seeded, hash64_seeded, input_to_owned};
 use serde::{Deserialize, Serialize};
@@ -59,8 +60,11 @@ impl HHHeap {
     pub fn new(k: usize) -> Self {
         HHHeap {
             heap: CommonHeap::new_min(k),
-            slots: Vec::with_capacity(k),
-            positions: Index::with_capacity_and_hasher(k, DigestBuildHasher::default()),
+            slots: Vec::with_capacity(k.min(PREALLOCATED_SLOTS)),
+            positions: Index::with_capacity_and_hasher(
+                k.min(PREALLOCATED_SLOTS),
+                DigestBuildHasher::default(),
+            ),
             k,
         }
     }
