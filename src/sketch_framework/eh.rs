@@ -8,6 +8,8 @@ use super::EHSketchList;
 use super::eh_sketch_list::SketchNorm;
 use crate::DataInput;
 
+mod wire;
+
 const MASS_EPSILON: f64 = 1e-9;
 
 #[derive(Clone, Debug)]
