@@ -232,6 +232,8 @@ impl<S: NitroTarget> NitroBatch<S> {
             mask: 0x10000,
             sk,
         };
+        // `delta` is the integer part of the per-update weight; the fractional
+        // remainder is paid per admitted update by `admitted_weight`.
         nitro.delta = nitro.scaled_increment(1);
         nitro
     }
@@ -278,13 +280,64 @@ impl<S: NitroTarget> NitroBatch<S> {
 
     // #[inline]
     #[inline(always)]
-    /// Scales an update weight by the sampling rate.
+    /// The integer part of the weight one admitted update carries.
+    ///
+    /// The exact weight is `weight / p`, which is only an integer when `1/p`
+    /// is. See [`NitroBatch::admitted_weight`] for how the remainder is paid.
     pub fn scaled_increment(&self, weight: u64) -> u64 {
         if self.is_full_sampling() {
             weight
         } else {
-            ((weight as f64) / self.sampling_rate).ceil() as u64
+            ((weight as f64) / self.sampling_rate).floor() as u64
         }
+    }
+
+    /// The weight to write for one admitted update, by **stochastic rounding**
+    /// of `weight / p`.
+    ///
+    /// Nitro admits each update with probability `p` and compensates by
+    /// writing `weight / p`. Counters are integers, so that value has to be
+    /// rounded — and rounding it the same way every time makes the estimator
+    /// biased by the rounding error:
+    ///
+    /// ```text
+    ///   ceil:  p = 0.3 -> every admitted update writes 4, so
+    ///          E[est] = f * 0.3 * 4 = 1.2 f      (20% high, for every key)
+    ///   floor: p = 0.3 -> writes 3, E[est] = 0.9 f   (10% low)
+    /// ```
+    ///
+    /// The public API accepts any `0 < p <= 1`, so this is not a corner case:
+    /// it is wrong at every rate whose reciprocal is not an integer. Stochastic
+    /// rounding fixes it exactly. With `q = floor(weight/p)` and
+    /// `r = weight/p - q`, the weight written is
+    ///
+    /// ```text
+    ///   W = q + Bernoulli(r)      E[W] = weight / p       Var[W] = r (1 - r)
+    /// ```
+    ///
+    /// so `E[est] = f * p * (weight/p) = weight * f` for **every** rate, at the
+    /// cost of `r(1-r) <= 1/4` extra variance per admitted update — bounded by
+    /// one counter unit and vanishing whenever `1/p` is an integer, where the
+    /// draw is skipped entirely and the emitted stream is bit-identical to the
+    /// unrounded one.
+    ///
+    /// The draw is per *update*, never per key, which is what keeps the
+    /// estimator unbiased for each key separately: a deterministic dither would
+    /// leave a key whose admissions happened to line up with the dither phase
+    /// biased by the full rounding error.
+    #[inline(always)]
+    pub fn admitted_weight(&mut self, weight: u64) -> u64 {
+        if self.is_full_sampling() {
+            return weight;
+        }
+        let exact = (weight as f64) / self.sampling_rate;
+        let floor = exact.floor();
+        let frac = exact - floor;
+        if frac <= 0.0 {
+            return floor as u64;
+        }
+        let u = self.generator.random::<f64>();
+        floor as u64 + u64::from(u < frac)
     }
 
     // #[inline]
@@ -312,7 +365,8 @@ impl<S: NitroTarget> NitroBatch<S> {
         let mut position = self.to_skip;
         while position < data.len() {
             let key = DataInput::I64(data[position]);
-            self.sk.update_sample(&key, self.delta);
+            let weight = self.admitted_weight(1);
+            self.sk.update_sample(&key, weight);
             self.draw_geometric();
             position += self.to_skip + 1;
         }
@@ -325,7 +379,8 @@ impl<S: NitroTarget> NitroBatch<S> {
         let mut position = self.to_skip;
         while position < data.len() {
             let key = DataInput::I64(data[position]);
-            self.sk.update_sample(&key, self.delta);
+            let weight = self.admitted_weight(1);
+            self.sk.update_sample(&key, weight);
             self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].floor() as usize;
             self.idx = (self.idx + 1) & self.mask;
             position += self.to_skip + 1;

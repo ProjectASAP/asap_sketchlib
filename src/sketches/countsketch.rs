@@ -459,7 +459,9 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
     #[inline(always)]
     pub fn fast_insert_nitro(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
-        let delta = self.counts.nitro().delta;
+        // Stochastically rounded per admitted update, so a rate whose
+        // reciprocal is not an integer stays unbiased. See `Nitro::admitted_delta`.
+        let delta = self.counts.nitro().admitted_delta();
         if self.counts.nitro().to_skip >= rows {
             self.counts.reduce_nitro_skip(rows);
         } else {

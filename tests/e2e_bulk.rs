@@ -2,19 +2,29 @@
 //! Independent from the main e2e_quantiles suite — uses the same
 //! seeded generators and NumericTruth rank bands to prove bulk is
 //! exactly equivalent to repeated update across every distribution.
+//!
+//! The load-bearing assertion here is **equality**: with a fixed compaction
+//! seed, `bulk_update` and a loop of `update` must produce byte-identical
+//! sketches and bit-identical quantiles. The rank check beside it is a sanity
+//! floor, and its tolerance is `eps(k)` from `KllRankSpec` — not a hand-picked
+//! 0.03, which would pass identically at every `k` and so could not notice `k`
+//! failing to reach the compactors.
 
 mod common;
 
 use asap_sketchlib::{DataInput, KLL, KLLDynamic};
+use common::specs::KllRankSpec;
 use common::{NumericTruth, assert_in_rank_band, exponential_f64, log_uniform_f64, normal_f64};
 
 const QS: [f64; 5] = [0.1, 0.25, 0.5, 0.75, 0.9];
-const RANK_TOL: f64 = 0.03;
+/// Every sketch in this file is built at `k = 200`.
+const K: usize = 200;
 
 fn bulk_vs_loop_seeded_impl<F>(label: &str, values: Vec<f64>, make: F)
 where
     F: Fn() -> KLL,
 {
+    let rank_tol = KllRankSpec::datasketches(K).epsilon();
     let truth = NumericTruth::new(values.clone());
 
     // Loop path
@@ -45,14 +55,14 @@ where
             via_loop.quantile(q),
             &truth,
             q,
-            RANK_TOL,
+            rank_tol,
             &format!("{label} loop"),
         );
         assert_in_rank_band(
             via_bulk.quantile(q),
             &truth,
             q,
-            RANK_TOL,
+            rank_tol,
             &format!("{label} bulk"),
         );
         // And bulk vs loop quantiles are identical (seeded determinism)
@@ -189,13 +199,14 @@ fn kll_dynamic_bulk_vs_loop_is_exact_under_a_shared_seed() {
         via_bulk.count(),
         "KLLDynamic seeded bulk vs loop: retained mass diverged          (sketch_seed={SKETCH_SEED:#x}, stream seed 9002)"
     );
+    let rank_tol = KllRankSpec::datasketches(K).epsilon();
     for &q in &QS {
         assert_eq!(
             via_loop.quantile(q).to_bits(),
             via_bulk.quantile(q).to_bits(),
             "KLLDynamic q={q}: seeded bulk vs loop quantile bits differ              (sketch_seed={SKETCH_SEED:#x})"
         );
-        assert_in_rank_band(via_loop.quantile(q), &truth, q, RANK_TOL, "KLLDynamic loop");
-        assert_in_rank_band(via_bulk.quantile(q), &truth, q, RANK_TOL, "KLLDynamic bulk");
+        assert_in_rank_band(via_loop.quantile(q), &truth, q, rank_tol, "KLLDynamic loop");
+        assert_in_rank_band(via_bulk.quantile(q), &truth, q, rank_tol, "KLLDynamic bulk");
     }
 }

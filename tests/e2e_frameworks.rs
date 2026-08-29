@@ -7,6 +7,7 @@ mod common;
 use std::collections::HashMap;
 
 use common::conformance::{self, FrequencyOps, FrequencySpec, MergeOps, SignedFrequencyOps};
+use common::specs::KllRankSpec;
 use common::{FreqTruth, assert_between, zipf_u64};
 
 use asap_sketchlib::input::{HydraCounter, HydraQuery};
@@ -16,6 +17,30 @@ use asap_sketchlib::{
 };
 
 // ------------------------------------------------------------------- Hydra
+
+/// `k` every Hydra KLL cell in this file is built at.
+const HYDRA_KLL_K: usize = 200;
+
+/// Accepted band for a UnivMon `L2Norm` reading, derived from the AMS
+/// second-moment bound rather than written down.
+///
+/// The reported value is `sqrt(F2_hat)` where `F2_hat` is the row-median AMS
+/// estimate over the sketch's own counters, so `SecondMomentSpec`'s relative
+/// bound `b = sqrt(2*kappa/w)` on `F2` becomes, on the norm,
+///
+/// ```text
+///   L2 * sqrt(1 - b)  <=  L2_hat  <=  L2 * sqrt(1 + b)
+/// ```
+///
+/// Both endpoints are computed from the sketch's own `(rows, cols)`, so a
+/// narrower sketch is held to a wider band automatically.
+fn univmon_l2_band(exact_l2: f64, rows: usize, cols: usize) -> (f64, f64) {
+    let b = common::specs::SecondMomentSpec::new(rows, cols).relative_bound();
+    (
+        exact_l2 * (1.0 - b).max(0.0).sqrt(),
+        exact_l2 * (1.0 + b).sqrt(),
+    )
+}
 
 #[test]
 fn hydra_cm_multilabel_frequencies() {
@@ -106,10 +131,14 @@ fn hydra_kll_head_quantile_and_cdf() {
     let cdf = hydra
         .query_key(&[Some("s0")], &HydraQuery::Cdf(x))
         .expect("cdf");
+    // The CDF band is KLL's own rank error at the cell's `k`, not a written
+    // constant: a Hydra cell is a KLL over that subpopulation, and `cdf(x)` is
+    // a rank read, so `eps(k)` is exactly the right half-width.
+    let kll_eps = KllRankSpec::datasketches(HYDRA_KLL_K).epsilon();
     assert_between(
         cdf,
-        truth.cdf(x) - 0.03,
-        truth.cdf(x) + 0.03,
+        truth.cdf(x) - kll_eps,
+        truth.cdf(x) + kll_eps,
         "Hydra KLL CDF",
     );
 
@@ -486,7 +515,7 @@ fn hydra_kll_weighted_updates_repeat_the_value() {
             let est = hydra
                 .query_key(&key, &HydraQuery::Quantile(q))
                 .expect("quantile");
-            let (lo, hi) = exact.quantile_band(q, 0.03);
+            let (lo, hi) = exact.quantile_band(q, KllRankSpec::datasketches(HYDRA_KLL_K).epsilon());
             if est < lo || est > hi {
                 failures.push(format!(
                     "{key:?} q={q}: {est:.3} outside [{lo:.3}, {hi:.3}]"
@@ -578,7 +607,7 @@ fn hydra_kll_head_subpopulation_quantiles() {
                 .query_key(&key, &HydraQuery::Quantile(q))
                 .expect("quantile");
             // QuantileSpec::default() from the conformance kit.
-            let (lo, hi) = exact.quantile_band(q, 0.03);
+            let (lo, hi) = exact.quantile_band(q, KllRankSpec::datasketches(HYDRA_KLL_K).epsilon());
             if est < lo || est > hi {
                 failures.push(format!(
                     "{key:?} q={q}: {est:.3} outside [{lo:.3}, {hi:.3}]"
@@ -1407,7 +1436,7 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
         let est = merged
             .query_key(&[Some("eu-west"), None], &HydraQuery::Quantile(q))
             .expect("quantile");
-        let (lo, hi) = exact.quantile_band(q, 0.03);
+        let (lo, hi) = exact.quantile_band(q, KllRankSpec::datasketches(HYDRA_KLL_K).epsilon());
         assert!(
             est >= lo && est <= hi,
             "merged KLL q={q}: {est:.3} outside [{lo:.3}, {hi:.3}]"
@@ -1439,13 +1468,14 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
         single.query_key(&key, &HydraQuery::L1Norm).expect("L1"),
         "merged UnivMon L1 must equal the single pass"
     );
+    // `L2Norm` is `sqrt(F2_hat)` over the sketch's own counters, so the band
+    // is the AMS row-median bound on F2 carried through the square root:
+    // `|F2_hat/F2 - 1| <= b` gives `|L2_hat/L2 - 1| <= sqrt(1 + b) - 1` above
+    // and `1 - sqrt(1 - b)` below. Derived from the cell's own (rows, cols),
+    // never a flat 5%.
     let l2 = merged.query_key(&key, &HydraQuery::L2Norm).expect("L2");
-    assert_between(
-        l2,
-        region_truth.l2_norm() * 0.95,
-        region_truth.l2_norm() * 1.05,
-        "merged UnivMon L2",
-    );
+    let (lo, hi) = univmon_l2_band(region_truth.l2_norm(), 5, 256);
+    assert_between(l2, lo, hi, "merged UnivMon L2");
 }
 
 // ----------------------------------------------------------------- UnivMon
@@ -1470,7 +1500,8 @@ fn univmon_weighted_metrics_and_fast_insert_parity() {
     assert_eq!(fast.calc_l1(), total as f64, "fast-insert L1 must be exact");
 
     let l2_truth = truth.l2_norm();
-    assert_between(um.calc_l2(), l2_truth * 0.95, l2_truth * 1.05, "L2");
+    let (lo, hi) = univmon_l2_band(l2_truth, 5, 2048);
+    assert_between(um.calc_l2(), lo, hi, "L2");
     let h_truth = truth.entropy(true);
     // UnivMon entropy is a ~10%-accurate estimator (repo tests allow 15%).
     assert_between(

@@ -902,7 +902,8 @@ mod keyed_bucket {
     /// the total inserted mass, never more.
     #[test]
     fn coco_point_queries_partition_the_inserted_mass() {
-        let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size(128, 3);
+        const COCO_BUCKETS: usize = 128;
+        let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size(COCO_BUCKETS, 3);
         let mut truth: HashMap<String, u64> = HashMap::new();
         let mut total = 0u64;
 
@@ -920,15 +921,36 @@ mod keyed_bucket {
         );
 
         // Heavy keys hold their own bucket, so their estimates track the truth.
+        //
+        // The **ceiling is derived**: CocoSketch's stochastic-variance-
+        // minimizing eviction attributes each increment to exactly one bucket,
+        // so a key's estimate can only exceed its count by the mass of the other
+        // keys that landed in the same bucket. With `w` buckets per array that
+        // expectation is `(total - count) / w`, and Markov at `e` — the same
+        // step Count-Min's Theorem 1 takes — gives a per-array ceiling of
+        // `count + e (total - count) / w` that holds with probability
+        // `1 - 1/e`. The union bound over the ten probed keys is what the
+        // failure message quotes.
+        //
+        // The **floor is empirical and is named as such below**: eviction can
+        // take a key's whole bucket at any moment, so nothing forbids a low
+        // read, and 0.5x is a measured regression pin (the worst of the ten on
+        // this stream and seed is 1.00x, i.e. exact) rather than a bound.
         let mut ranked: Vec<(&String, &u64)> = truth.iter().collect();
         ranked.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
         for (key, count) in ranked.iter().take(10) {
             let est = coco.estimate_key(key);
-            assert_between(
-                est as f64,
-                **count as f64 * 0.5,
-                **count as f64 * 1.5,
-                &format!("coco heavy key {key}"),
+            let ceiling = **count as f64
+                + std::f64::consts::E * (total - **count) as f64 / COCO_BUCKETS as f64;
+            assert!(
+                est as f64 <= ceiling,
+                "coco heavy key {key}: estimate {est} above count + e*(total-count)/w = \
+                 {ceiling:.1} (true {count}, total {total}, w={COCO_BUCKETS})"
+            );
+            assert!(
+                est as f64 >= **count as f64 * 0.5,
+                "coco heavy key {key}: estimate {est} below the documented empirical floor \
+                 of 0.5x its true count {count}; measured worst on this stream is 1.00x"
             );
         }
     }
@@ -1152,13 +1174,25 @@ mod keyed_bucket {
             "the workload must actually push flows out of the heavy part"
         );
 
+        // The elephant is resident in the heavy table, so its estimate is its
+        // own vote count plus whatever the light layer adds if it was ever
+        // displaced. The ceiling is Count-Min's on the light layer at its own
+        // dimensions — `e * (N - f) / cols` — not a written 5%: the light layer
+        // *is* a Count-Min, and this is the bound it promises.
         let elephant = sk.query("flow::elephant".to_string()) as i64;
         let true_elephant = truth["flow::elephant"];
-        assert_between(
-            elephant as f64,
-            true_elephant as f64,
-            true_elephant as f64 * 1.05,
-            "elastic elephant",
+        let total: i64 = truth.values().sum();
+        let light_ceiling = true_elephant as f64
+            + std::f64::consts::E * (total - true_elephant) as f64 / sk.light.cols() as f64;
+        assert!(
+            elephant >= true_elephant,
+            "elastic must never read the elephant low: got {elephant}, true {true_elephant}"
+        );
+        assert!(
+            elephant as f64 <= light_ceiling,
+            "elastic elephant {elephant} above true {true_elephant} + e*(N-f)/cols = \
+             {light_ceiling:.1} (N={total}, light cols={})",
+            sk.light.cols()
         );
     }
 }

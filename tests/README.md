@@ -19,7 +19,7 @@ and whether that bound is a theorem or a documented empirical band.
 | Path | Purpose |
 | --- | --- |
 | `common/mod.rs` | Seeded stream generators (`zipf_u64`, `uniform_u64`, `normal_f64`, `exponential_f64`, adversarial `log_uniform_f64`, `duplicate_heavy_f64`, `monotonic_f64`, `outside_in_ordering`), exact truth trackers (`FreqTruth`, `NumericTruth`), assertion helpers |
-| `common/specs.rs` | One error model per metric — `CountMinSpec`, `CountSketchSpec`, `SecondMomentSpec`, `RankErrorSpec`, `RelativeQuantileSpec`, `CardinalityConfidenceSpec`, `SamplingConfidenceSpec` — plus the binomial acceptance rules |
+| `common/specs.rs` | One error model per metric — `CountMinSpec`, `CountSketchSpec`, `SecondMomentSpec`, `KllRankSpec`, `RelativeQuantileSpec` (+ `DdRankConvention`), `CardinalityConfidenceSpec`, `SamplingConfidenceSpec`, `PrioritySampleSpec` — plus the three acceptance rules and the trial-unit rules that say which one applies |
 | `common/conformance.rs` | Capability traits + standard conformance batteries (the floor) |
 | `conformance_kit.rs` | Reference adapters: established sketches running through the kit (copy these) |
 | `e2e_frequency.rs` / `e2e_cardinality.rs` / `e2e_quantiles.rs` | Deep per-family suites, each against its own theorem |

@@ -24,7 +24,7 @@
 
 mod common;
 
-use common::specs::{RankErrorSpec, RelativeQuantileSpec, Tally};
+use common::specs::{KllRankSpec, RelativeQuantileSpec, Tally};
 use common::{NumericTruth, uniform_u64};
 
 use asap_sketchlib::{DDSketch, KLL, KLLDynamic, NumericalValue};
@@ -33,6 +33,13 @@ use asap_sketchlib::{DDSketch, KLL, KLLDynamic, NumericalValue};
 const K: i32 = 200;
 /// Compaction-coin seeds. Fixed, and separate from the stream seed.
 const SKETCH_SEEDS: [u64; 3] = [0x4E17_0001, 0x4E17_0002, 0x4E17_0003];
+
+/// A fresh compaction seed per KLL trial, so no two sketches in a battery share
+/// a coin sequence. See `tests/e2e_quantiles.rs` for why the rank batteries are
+/// binomials over seeds rather than over quantiles.
+fn kll_trial_seed(trial: u64) -> u64 {
+    0x4E17_0000_0000_0001u64.wrapping_add(trial.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+}
 const STREAM_SEED: u64 = 0x57EA_0001;
 const N: usize = 20_000;
 const QS: [f64; 7] = [0.0, 0.01, 0.1, 0.5, 0.9, 0.99, 1.0];
@@ -58,50 +65,90 @@ fn projected_truth<T: NumericalValue>(values: &[T]) -> NumericTruth {
 
 // --------------------------------------------------------------- KLL family
 
-/// One numeric type through both KLL implementations, single pass and after a
-/// shard merge, against the normalized-rank-error contract.
+/// One numeric type through both KLL implementations, in three feed modes,
+/// against the DataSketches maximum-rank-error characterization.
+///
+/// Each sketch is a **trial**: it gets its own compaction seed and is scored on
+/// its worst rank error over the whole `q` grid, because that maximum is the
+/// quantity the characterization's 1% is quoted for. Six trials per repeat per
+/// type — `KLL` and `KLLDynamic` x {single pass, two-shard merge, bulk}.
 macro_rules! kll_type_case {
-    ($tally:ident, $ty:ty, $span:expr) => {{
+    ($tally:ident, $trial:ident, $ty:ty, $span:expr) => {{
         let values = typed_stream!($ty, $span);
         let truth = projected_truth(&values);
-        let spec = RankErrorSpec::datasketches(K as usize);
+        let spec = KllRankSpec::datasketches(K as usize);
+        let type_name = stringify!($ty);
 
-        for &seed in &SKETCH_SEEDS {
-            let mut fixed = KLL::<$ty>::init_kll_with_seed(K, seed);
-            let mut dynamic = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
-            for v in &values {
-                fixed.update(v);
-                dynamic.update(v);
-            }
-            spec.tally_into(&mut $tally, truth.sorted(), &QS, |q| fixed.quantile(q));
-            spec.tally_into(&mut $tally, truth.sorted(), &QS, |q| dynamic.quantile(q));
+        macro_rules! trial {
+            ($label:expr, $build:expr) => {{
+                let seed = kll_trial_seed($trial);
+                $trial += 1;
+                let sketch = $build(seed);
+                spec.record_trial(
+                    &mut $tally,
+                    &format!("{}<{type_name}> {} seed={seed:#x}", $label.0, $label.1),
+                    truth.sorted(),
+                    &QS,
+                    |q| sketch.quantile(q),
+                );
+            }};
+        }
 
-            // Two shards merged must answer under the same contract.
-            let mut left = KLL::<$ty>::init_kll_with_seed(K, seed ^ 0xAAAA);
-            let mut right = KLL::<$ty>::init_kll_with_seed(K, seed ^ 0x5555);
-            let mut dleft = KLLDynamic::<$ty>::init_kll_with_seed(K, seed ^ 0xAAAA);
-            let mut dright = KLLDynamic::<$ty>::init_kll_with_seed(K, seed ^ 0x5555);
-            for (i, v) in values.iter().enumerate() {
-                if i % 2 == 0 {
-                    left.update(v);
-                    dleft.update(v);
-                } else {
-                    right.update(v);
-                    dright.update(v);
+        for _ in 0..SKETCH_SEEDS.len() {
+            trial!(("KLL", "single pass"), |seed| {
+                let mut s = KLL::<$ty>::init_kll_with_seed(K, seed);
+                for v in &values {
+                    s.update(v);
                 }
-            }
-            left.merge(&right);
-            dleft.merge(&dright);
-            spec.tally_into(&mut $tally, truth.sorted(), &QS, |q| left.quantile(q));
-            spec.tally_into(&mut $tally, truth.sorted(), &QS, |q| dleft.quantile(q));
+                s
+            });
+            trial!(("KLLDynamic", "single pass"), |seed| {
+                let mut s = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
+                for v in &values {
+                    s.update(v);
+                }
+                s
+            });
+
+            // Two shards merged must answer under the same characterization.
+            trial!(("KLL", "two-shard merge"), |seed: u64| {
+                let mut left = KLL::<$ty>::init_kll_with_seed(K, seed);
+                let mut right = KLL::<$ty>::init_kll_with_seed(K, seed ^ 0x5555);
+                for (i, v) in values.iter().enumerate() {
+                    if i % 2 == 0 {
+                        left.update(v);
+                    } else {
+                        right.update(v);
+                    }
+                }
+                left.merge(&right);
+                left
+            });
+            trial!(("KLLDynamic", "two-shard merge"), |seed: u64| {
+                let mut left = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
+                let mut right = KLLDynamic::<$ty>::init_kll_with_seed(K, seed ^ 0x5555);
+                for (i, v) in values.iter().enumerate() {
+                    if i % 2 == 0 {
+                        left.update(v);
+                    } else {
+                        right.update(v);
+                    }
+                }
+                left.merge(&right);
+                left
+            });
 
             // Bulk ingestion must be equivalent to the loop.
-            let mut bulk = KLL::<$ty>::init_kll_with_seed(K, seed);
-            bulk.bulk_update(&values);
-            spec.tally_into(&mut $tally, truth.sorted(), &QS, |q| bulk.quantile(q));
-            let mut dbulk = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
-            dbulk.bulk_update(&values);
-            spec.tally_into(&mut $tally, truth.sorted(), &QS, |q| dbulk.quantile(q));
+            trial!(("KLL", "bulk update"), |seed| {
+                let mut s = KLL::<$ty>::init_kll_with_seed(K, seed);
+                s.bulk_update(&values);
+                s
+            });
+            trial!(("KLLDynamic", "bulk update"), |seed| {
+                let mut s = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
+                s.bulk_update(&values);
+                s
+            });
         }
     }};
 }
@@ -113,29 +160,32 @@ macro_rules! kll_type_case {
 /// distinct values gives every value a rank interval nearly 1% wide, which the
 /// rank-interval predicate handles and a value-error check could not.
 #[test]
-fn every_numeric_type_satisfies_the_kll_rank_error_contract() {
+fn every_numeric_type_satisfies_the_kll_rank_error_characterization() {
     let mut tally = Tally::default();
-    kll_type_case!(tally, i8, 127);
-    kll_type_case!(tally, i16, 32_767);
-    kll_type_case!(tally, i32, 1_000_000_000);
-    kll_type_case!(tally, i64, 1_000_000_000_000_000);
-    kll_type_case!(tally, i128, 1_000_000_000_000_000);
-    kll_type_case!(tally, isize, 1_000_000_000_000_000);
-    kll_type_case!(tally, u8, 255);
-    kll_type_case!(tally, u16, 65_535);
-    kll_type_case!(tally, u32, 4_000_000_000);
-    kll_type_case!(tally, u64, 1_000_000_000_000_000);
-    kll_type_case!(tally, u128, 1_000_000_000_000_000);
-    kll_type_case!(tally, usize, 1_000_000_000_000_000);
-    kll_type_case!(tally, f32, 1_000_000);
-    kll_type_case!(tally, f64, 1_000_000_000_000_000);
+    let mut trial = 0u64;
+    kll_type_case!(tally, trial, i8, 127);
+    kll_type_case!(tally, trial, i16, 32_767);
+    kll_type_case!(tally, trial, i32, 1_000_000_000);
+    kll_type_case!(tally, trial, i64, 1_000_000_000_000_000);
+    kll_type_case!(tally, trial, i128, 1_000_000_000_000_000);
+    kll_type_case!(tally, trial, isize, 1_000_000_000_000_000);
+    kll_type_case!(tally, trial, u8, 255);
+    kll_type_case!(tally, trial, u16, 65_535);
+    kll_type_case!(tally, trial, u32, 4_000_000_000);
+    kll_type_case!(tally, trial, u64, 1_000_000_000_000_000);
+    kll_type_case!(tally, trial, u128, 1_000_000_000_000_000);
+    kll_type_case!(tally, trial, usize, 1_000_000_000_000_000);
+    kll_type_case!(tally, trial, f32, 1_000_000);
+    kll_type_case!(tally, trial, f64, 1_000_000_000_000_000);
 
-    tally.assert_within(
+    tally.assert_independent_binomial(
         "KLL<T> / KLLDynamic<T> across every built-in NumericalValue type",
-        RankErrorSpec::datasketches(K as usize).failure_probability,
+        KllRankSpec::datasketches(K as usize).trial_failure_probability,
         &format!(
-            "k={K} sketch seeds {SKETCH_SEEDS:02x?} stream_seed={STREAM_SEED:#x} n={N}, \
-             modes: single pass, bulk update, two-shard merge; q grid {QS:?}"
+            "one trial = one sketch with its own compaction seed, scored on its worst \
+             rank error over the q grid. k={K}, seeds kll_trial_seed(0..), \
+             stream_seed={STREAM_SEED:#x} n={N}, modes: single pass, bulk update, \
+             two-shard merge; q grid {QS:?}"
         ),
     );
 }
@@ -147,23 +197,43 @@ fn every_numeric_type_satisfies_the_kll_rank_error_contract() {
 #[test]
 fn signed_numeric_types_order_negative_values_correctly_in_kll() {
     macro_rules! signed_case {
-        ($tally:ident, $ty:ty, $span:expr) => {{
+        ($tally:ident, $trial:ident, $ty:ty, $span:expr) => {{
             let span: i64 = $span;
             let values: Vec<$ty> = uniform_u64(N, (span * 2) as u64, STREAM_SEED)
                 .into_iter()
                 .map(|v| (v as i64 - span) as $ty)
                 .collect();
             let truth = projected_truth(&values);
-            let spec = RankErrorSpec::datasketches(K as usize);
-            for &seed in &SKETCH_SEEDS {
+            let spec = KllRankSpec::datasketches(K as usize);
+            let type_name = stringify!($ty);
+            for _ in 0..SKETCH_SEEDS.len() {
+                let seed = kll_trial_seed($trial);
+                $trial += 1;
                 let mut fixed = KLL::<$ty>::init_kll_with_seed(K, seed);
-                let mut dynamic = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
                 for v in &values {
                     fixed.update(v);
+                }
+                spec.record_trial(
+                    &mut $tally,
+                    &format!("KLL<{type_name}> mixed-sign seed={seed:#x}"),
+                    truth.sorted(),
+                    &QS,
+                    |q| fixed.quantile(q),
+                );
+
+                let seed = kll_trial_seed($trial);
+                $trial += 1;
+                let mut dynamic = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
+                for v in &values {
                     dynamic.update(v);
                 }
-                spec.tally_into(&mut $tally, truth.sorted(), &QS, |q| fixed.quantile(q));
-                spec.tally_into(&mut $tally, truth.sorted(), &QS, |q| dynamic.quantile(q));
+                spec.record_trial(
+                    &mut $tally,
+                    &format!("KLLDynamic<{type_name}> mixed-sign seed={seed:#x}"),
+                    truth.sorted(),
+                    &QS,
+                    |q| dynamic.quantile(q),
+                );
             }
             // KLL answers with *retained* items, and compaction may discard
             // the actual extremes — so q=0 is not required to be the exact
@@ -172,7 +242,7 @@ fn signed_numeric_types_order_negative_values_correctly_in_kll() {
             // value: every answer must lie inside the observed range, on the
             // correct side of zero. A `total_cmp` that ordered negatives by
             // their bit pattern would break this immediately.
-            let mut probe = KLL::<$ty>::init_kll_with_seed(K, SKETCH_SEEDS[0]);
+            let mut probe = KLL::<$ty>::init_kll_with_seed(K, kll_trial_seed($trial));
             for v in &values {
                 probe.update(v);
             }
@@ -208,19 +278,24 @@ fn signed_numeric_types_order_negative_values_correctly_in_kll() {
     }
 
     let mut tally = Tally::default();
-    signed_case!(tally, i8, 100);
-    signed_case!(tally, i16, 30_000);
-    signed_case!(tally, i32, 1_000_000_000);
-    signed_case!(tally, i64, 1_000_000_000_000_000);
-    signed_case!(tally, i128, 1_000_000_000_000_000);
-    signed_case!(tally, isize, 1_000_000_000_000_000);
-    signed_case!(tally, f32, 1_000_000);
-    signed_case!(tally, f64, 1_000_000_000_000_000);
+    let mut trial = 0x5164_0000u64;
+    signed_case!(tally, trial, i8, 100);
+    signed_case!(tally, trial, i16, 30_000);
+    signed_case!(tally, trial, i32, 1_000_000_000);
+    signed_case!(tally, trial, i64, 1_000_000_000_000_000);
+    signed_case!(tally, trial, i128, 1_000_000_000_000_000);
+    signed_case!(tally, trial, isize, 1_000_000_000_000_000);
+    signed_case!(tally, trial, f32, 1_000_000);
+    signed_case!(tally, trial, f64, 1_000_000_000_000_000);
 
-    tally.assert_within(
+    tally.assert_independent_binomial(
         "KLL family over signed and mixed-sign values",
-        RankErrorSpec::datasketches(K as usize).failure_probability,
-        &format!("k={K} sketch seeds {SKETCH_SEEDS:02x?} stream_seed={STREAM_SEED:#x} n={N}"),
+        KllRankSpec::datasketches(K as usize).trial_failure_probability,
+        &format!(
+            "one trial = one sketch with its own compaction seed, scored on its worst \
+             rank error over the q grid. k={K}, seeds kll_trial_seed(0x5164_0000..), \
+             stream_seed={STREAM_SEED:#x} n={N}"
+        ),
     );
 }
 
@@ -234,7 +309,7 @@ macro_rules! dds_type_case {
     ($alpha:expr, $tally:ident, $ty:ty, $span:expr) => {{
         let values = typed_stream!($ty, $span);
         let truth = projected_truth(&values);
-        let spec = RelativeQuantileSpec::new($alpha);
+        let spec = RelativeQuantileSpec::core($alpha);
         let mut sketch = DDSketch::new($alpha);
         for v in &values {
             sketch.add(v);
@@ -329,7 +404,7 @@ fn the_f64_projection_is_exact_below_two_to_the_53() {
     }
     assert_eq!(sketch.get_count() as usize, values.len());
     let mut tally = Tally::default();
-    RelativeQuantileSpec::new(ALPHA).tally_into(&mut tally, truth.sorted(), &QS, |q| {
+    RelativeQuantileSpec::core(ALPHA).tally_into(&mut tally, truth.sorted(), &QS, |q| {
         sketch.get_value_at_quantile(q)
     });
     tally.assert_none(
@@ -337,17 +412,28 @@ fn the_f64_projection_is_exact_below_two_to_the_53() {
         &format!("alpha={ALPHA} values in [2^70, 10^6 * 2^70], stream_seed={STREAM_SEED:#x}"),
     );
 
-    // And the KLL family orders them correctly at that magnitude.
-    let mut kll = KLL::<u128>::init_kll_with_seed(K, SKETCH_SEEDS[0]);
-    for v in &values {
-        kll.update(v);
-    }
+    // And the KLL family orders them correctly at that magnitude. Sixteen
+    // independent compaction seeds, one trial each, scored on the worst rank
+    // error over the q grid.
+    let spec = KllRankSpec::datasketches(K as usize);
     let mut rank_tally = Tally::default();
-    RankErrorSpec::datasketches(K as usize)
-        .tally_into(&mut rank_tally, truth.sorted(), &QS, |q| kll.quantile(q));
-    rank_tally.assert_within(
+    for t in 0..16u64 {
+        let seed = kll_trial_seed(0x2E70_0000 + t);
+        let mut kll = KLL::<u128>::init_kll_with_seed(K, seed);
+        for v in &values {
+            kll.update(v);
+        }
+        spec.record_trial(
+            &mut rank_tally,
+            &format!("KLL<u128> above 2^70 seed={seed:#x}"),
+            truth.sorted(),
+            &QS,
+            |q| kll.quantile(q),
+        );
+    }
+    rank_tally.assert_independent_binomial(
         "KLL<u128> over values above 2^70",
-        RankErrorSpec::datasketches(K as usize).failure_probability,
-        &format!("k={K} sketch_seed={:#x}", SKETCH_SEEDS[0]),
+        spec.trial_failure_probability,
+        &format!("k={K}, 16 seeds from kll_trial_seed(0x2E70_0000..)"),
     );
 }

@@ -68,6 +68,19 @@ sk.update(1.0);
 let _ = sk.samples();
 ```
 
+## Accuracy
+
+This is **priority (bottom-k) sampling**: each update draws an independent
+uniform 64-bit priority and the list is truncated to the smallest
+`ceil(total_seen * sample_rate)` priorities. Two consequences:
+
+- the retained size is `ceil(n * rate)` **exactly** — it is computed, never
+  sampled, so it has no band around it;
+- because the priorities are independent of the values, the retained set is a
+  uniform random sample **without replacement** of that size. A sample
+  statistic therefore carries the finite-population variance
+  `Var[mean] = (sigma_N^2 / m) * (N - m) / (N - 1)`.
+
 ## Caveats
 
 - Supports numeric inputs only in `update_input`.

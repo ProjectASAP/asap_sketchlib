@@ -107,6 +107,40 @@ impl Nitro {
         nitro
     }
 
+    /// The weight one admitted row-update carries, by stochastic rounding of
+    /// `1 / p`.
+    ///
+    /// Same correction as [`crate::NitroBatch::admitted_weight`], and for the
+    /// same reason: writing `ceil(1/p)` every time biases every estimate by the
+    /// rounding error, which at `p = 0.3` is a flat +20%. Here the Bernoulli
+    /// draw is realised by hashing the skip-table cursor `idx`, which already
+    /// advances once per admitted update — that keeps the correction
+    /// deterministic and reproducible, adds no state, and leaves the serialized
+    /// form byte-identical.
+    ///
+    /// When `1 / p` is an integer the fractional part is zero and this returns
+    /// `delta` unchanged, so the common rates (1, 1/2, 1/10, 1/100) emit
+    /// exactly what they did before.
+    #[inline(always)]
+    pub fn admitted_delta(&self) -> u64 {
+        if self.is_full_sampling() {
+            return self.delta;
+        }
+        let exact = 1.0 / self.sampling_rate;
+        let frac = exact - exact.floor();
+        if frac <= 0.0 {
+            return self.delta;
+        }
+        // splitmix64 finaliser over the cursor: a counter-based PRNG, so the
+        // dither is independent of which key was admitted.
+        let mut z = (self.idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        let u = (z >> 11) as f64 / (1u64 << 53) as f64;
+        self.delta + u64::from(u < frac)
+    }
+
     // for profiling
     #[inline(always)]
     /// Draws the next geometric skip distance.
@@ -143,18 +177,19 @@ impl Nitro {
 
     // #[inline]
     #[inline(always)]
-    /// Scales an update weight by the sampling rate.
+    /// The integer part of the weight one admitted update carries. The
+    /// fractional remainder is paid per update by [`Nitro::admitted_delta`].
     pub fn scaled_increment(&self, weight: u64) -> u64 {
         if self.is_full_sampling() {
             weight
         } else {
-            ((weight as f64) / self.sampling_rate).ceil() as u64
+            ((weight as f64) / self.sampling_rate).floor() as u64
         }
     }
 
     // #[inline]
     #[inline(always)]
-    fn is_full_sampling(&self) -> bool {
+    pub fn is_full_sampling(&self) -> bool {
         (self.sampling_rate - 1.0).abs() <= f64::EPSILON
     }
 

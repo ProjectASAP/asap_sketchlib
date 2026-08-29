@@ -12,17 +12,32 @@
 //!   be within `alpha` of the exact order statistic. Its rank error is
 //!   unbounded, so a rank band tests nothing DDSketch claims.
 //!
-//! Neither may be run through the other's battery. `RankErrorSpec` and
+//! Neither may be run through the other's battery. `KllRankSpec` and
 //! `RelativeQuantileSpec` in `common::specs` keep them apart.
 //!
 //! Every sketch here is built with an explicit compaction seed. KLL's coin is
 //! the sketch's own randomness and is entirely separate from the stream seed;
 //! the wall-clock-seeded `KLL::init_kll` / `KLLDynamic::init_kll` constructors
 //! cannot be used in an accuracy test because a failure would not reproduce.
+//!
+//! # Trial units
+//!
+//! The KLL number `eps(k) = 2.446 / k^0.9433` is Apache DataSketches'
+//! characterization fit to the 99th percentile of the **maximum** rank error
+//! over a whole quantile grid — not a theorem about this implementation, and
+//! not a per-`q` failure probability. So a KLL battery reduces each sketch to
+//! one number (its worst rank error over the grid), each sketch gets its **own
+//! compaction seed**, and the binomial is taken over those independent seeds.
+//!
+//! DDSketch's guarantee is deterministic — bucket width alone, no hash and no
+//! sampling — so its batteries tolerate zero violations and no statistical
+//! model applies. The two shipped implementations answer a quantile query with
+//! **different order statistics**, so each is compared against the truth for
+//! its own convention; see `DdRankConvention`.
 
 mod common;
 
-use common::specs::{RankErrorSpec, RelativeQuantileSpec, Tally};
+use common::specs::{DdRankConvention, KllRankSpec, RelativeQuantileSpec, Tally};
 use common::{
     NumericTruth, assert_between, duplicate_heavy_f64, exponential_f64, log_uniform_f64,
     monotonic_f64, normal_f64, outside_in_ordering, uniform_u64, zipf_f64,
@@ -46,6 +61,18 @@ const RANK_QS: [f64; 7] = [0.0, 0.01, 0.1, 0.5, 0.9, 0.99, 1.0];
 /// survive compaction, and conflating the two makes a failure impossible to
 /// localise.
 const KLL_SKETCH_SEEDS: [u64; 4] = [0x5EED_0001, 0x5EED_0002, 0x5EED_0003, 0x5EED_0004];
+
+/// A distinct compaction seed per trial index, so that no two sketches in a
+/// battery share a coin sequence.
+///
+/// The rank-error batteries are binomials over these trials, which is only
+/// valid if each trial is a fresh draw of KLL's randomness. Reusing one seed
+/// across shapes or feed modes would silently correlate the outcomes; the
+/// multiplier is a large odd constant so consecutive indices land far apart in
+/// the seed space.
+fn kll_trial_seed(trial: u64) -> u64 {
+    0x5EED_0000_0000_0001u64.wrapping_add(trial.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+}
 
 /// Named stream shapes with a fixed seed each. Covers the light-tailed,
 /// heavy-tailed, tie-dense, sorted and adversarially-ordered cases a
@@ -181,57 +208,83 @@ fn feed_kll_dynamic(feed: Feed, k: i32, seed: u64, values: &[f64]) -> Option<KLL
     }
 }
 
-/// Both KLL implementations against the published normalized-rank-error
-/// contract `eps(k) = 2.446 / k^0.9433` at 99% confidence, over a fixed grid
-/// of `(k, sketch seed, distribution, feed mode, q)`.
+/// Both KLL implementations against the Apache DataSketches maximum-rank-error
+/// characterization `eps(k) = 2.446 / k^0.9433`, over a grid of
+/// `(k, distribution, feed mode)` with an independent compaction seed each.
 ///
-/// Failures are pooled per feed mode and judged by the binomial acceptance
-/// rule at the contract's own per-query failure probability of 0.01. Widening
-/// `eps` to make a failure disappear would break the tie to `k` and is exactly
-/// what this spec exists to prevent.
+/// # Why the acceptance rule looks like this
+///
+/// The constant is a least-squares fit to the 99th percentile of the
+/// **maximum** rank error DataSketches' characterization runs observed across a
+/// whole quantile grid. Two things follow.
+///
+/// First, the quantity it bounds is a per-sketch maximum, so the seven `q`
+/// values of one sketch are *one* outcome, not seven Bernoulli draws: they
+/// share a single compaction history and are strongly dependent (a compaction
+/// that displaces the median displaces its neighbours too).
+///
+/// Second, the 1% is that single outcome's failure probability, so the only
+/// legitimate battery is over **independent compaction seeds**. Every trial
+/// below therefore gets its own seed, derived from its index, and the binomial
+/// acceptance rule runs over trials.
+///
+/// This is a characterization target imported from another implementation of
+/// the same compact KLL layout — not a theorem proved about this code — and the
+/// test name says `characterization`, not `theorem`.
 #[test]
-fn kll_family_satisfies_the_datasketches_normalized_rank_error_contract() {
-    // 4 seeds x 6 shapes x 3 values of k x 4 feed modes x 7 quantiles is ~500
-    // checks per feed mode, which the binomial acceptance rule at p = 0.01
-    // makes a tight test; a longer stream would not make it tighter.
+fn kll_family_stays_within_the_datasketches_maximum_rank_error_characterization() {
     const N: usize = 30_000;
     const KS: [i32; 3] = [64, 200, 800];
+    const REPEATS: usize = 4;
 
     let mut tallies: HashMap<String, Tally> = HashMap::new();
-    for (trial, &sketch_seed) in KLL_SKETCH_SEEDS.iter().enumerate() {
-        for (shape, values) in rank_streams(trial, N) {
+    let mut trial = 0u64;
+    for repeat in 0..REPEATS {
+        for (shape, values) in rank_streams(repeat, N) {
             let truth = NumericTruth::new(values.clone());
             for &k in &KS {
-                let spec = RankErrorSpec::datasketches(k as usize);
+                let spec = KllRankSpec::datasketches(k as usize);
                 for &feed in &FEEDS {
-                    let fixed = feed_kll(feed, k, sketch_seed, &values);
-                    spec.tally_into(
+                    // One fresh compaction seed per trial: that is what makes
+                    // the trials independent draws of KLL's own randomness.
+                    let seed = kll_trial_seed(trial);
+                    trial += 1;
+                    let fixed = feed_kll(feed, k, seed, &values);
+                    spec.record_trial(
                         tallies.entry(format!("KLL/{feed:?}")).or_default(),
+                        &format!("k={k} shape={shape} seed={seed:#x} n={N}"),
                         truth.sorted(),
                         &RANK_QS,
                         |q| fixed.quantile(q),
                     );
-                    if let Some(dynamic) = feed_kll_dynamic(feed, k, sketch_seed, &values) {
-                        spec.tally_into(
+
+                    let seed = kll_trial_seed(trial);
+                    trial += 1;
+                    if let Some(dynamic) = feed_kll_dynamic(feed, k, seed, &values) {
+                        spec.record_trial(
                             tallies.entry(format!("KLLDynamic/{feed:?}")).or_default(),
+                            &format!("k={k} shape={shape} seed={seed:#x} n={N}"),
                             truth.sorted(),
                             &RANK_QS,
                             |q| dynamic.quantile(q),
                         );
                     }
-                    let _ = shape;
                 }
             }
         }
     }
 
-    for (label, tally) in tallies {
-        tally.assert_within(
-            &format!("{label} / normalized rank error"),
-            RankErrorSpec::datasketches(200).failure_probability,
+    let mut labels: Vec<String> = tallies.keys().cloned().collect();
+    labels.sort();
+    for label in labels {
+        let tally = tallies.remove(&label).expect("label just enumerated");
+        tally.assert_independent_binomial(
+            &format!("{label} / maximum normalized rank error per sketch"),
+            KllRankSpec::datasketches(200).trial_failure_probability,
             &format!(
-                "n={N} k in {KS:?}, sketch seeds {KLL_SKETCH_SEEDS:02x?}, \
-                 stream shapes {:?}, q grid {RANK_QS:?}",
+                "one trial = one sketch with its own compaction seed, scored on its \
+                 worst rank error over the whole q grid. n={N}, k in {KS:?}, \
+                 seeds kll_trial_seed(0..), stream shapes {:?}, q grid {RANK_QS:?}",
                 rank_streams(0, 1)
                     .iter()
                     .map(|(s, _)| *s)
@@ -241,12 +294,18 @@ fn kll_family_satisfies_the_datasketches_normalized_rank_error_contract() {
     }
 }
 
-/// Rank error must shrink as `k` grows, at the rate the contract states.
-/// A hard-coded tolerance cannot see this: it passes identically at `k = 64`
-/// and `k = 800`, so it would not notice a `k` that stopped being wired
-/// through to the compactor capacities at all.
+/// Rank error must shrink as `k` grows, at the rate the characterization
+/// states. A hard-coded tolerance cannot see this: it passes identically at
+/// `k = 64` and `k = 800`, so it would not notice a `k` that stopped being
+/// wired through to the compactor capacities at all.
+///
+/// This is a **structural** claim about the `k` -> accuracy wiring, checked on
+/// four fixed compaction seeds per `k`. The absolute check that each `k`'s
+/// worst-of-four stays inside `eps(k)` is a deterministic regression pin, not a
+/// tail test: with only four trials it has no power to measure a 1% per-trial
+/// failure rate, and the batteries above are where that is judged.
 #[test]
-fn kll_rank_error_shrinks_with_k_as_the_contract_predicts() {
+fn kll_rank_error_shrinks_with_k_as_the_characterization_predicts() {
     const N: usize = 100_000;
     let values: Vec<f64> = uniform_u64(N, 100_000_000, 0xC0FF_EE01)
         .into_iter()
@@ -280,7 +339,7 @@ fn kll_rank_error_shrinks_with_k_as_the_contract_predicts() {
     }
 
     for (k, w) in &worst {
-        let eps = RankErrorSpec::datasketches(*k as usize).epsilon();
+        let eps = KllRankSpec::datasketches(*k as usize).epsilon();
         assert!(
             *w <= eps,
             "KLL k={k}: worst rank error {w:.5} exceeds eps(k)={eps:.5} \
@@ -288,13 +347,13 @@ fn kll_rank_error_shrinks_with_k_as_the_contract_predicts() {
         );
     }
     // 16x more capacity must buy at least a 4x tighter rank error; the
-    // contract predicts 16^0.9433 = 13.4x.
+    // characterization predicts 16^0.9433 = 13.4x.
     let (k_lo, w_lo) = worst[0];
     let (k_hi, w_hi) = worst[2];
     assert!(
         w_lo >= w_hi * 4.0,
         "raising k from {k_lo} to {k_hi} moved the worst rank error only from \
-         {w_lo:.5} to {w_hi:.5}; the contract predicts a {:.1}x improvement, so \
+         {w_lo:.5} to {w_hi:.5}; the characterization predicts a {:.1}x improvement, so \
          k is not reaching the compactor capacities",
         (k_hi as f64 / k_lo as f64).powf(0.9433)
     );
@@ -353,18 +412,24 @@ fn dds_streams(alpha: f64, n: usize, seed: u64) -> Vec<(&'static str, Vec<f64>)>
 /// DDSketch's relative-value-error guarantee, for the core sketch and the
 /// portable wire twin, at every supported alpha.
 ///
-/// The comparison is against the **exact nearest-rank order statistic** at the
-/// same `q`, using the same ceil convention `get_value_at_quantile` uses, so
-/// the two sides answer literally the same question. The tolerance is
-/// `alpha + numerical_slack`, where the slack is a few ULP of the logarithmic
-/// mapping — never a percentage of alpha, which would license breaking the
-/// advertised guarantee by that percentage.
+/// Each implementation is compared against the exact order statistic **of its
+/// own rank convention**: `DDSketch::get_value_at_quantile` answers
+/// `sorted[ceil(q*n) - 1]`, while the portable `DdSketch::quantile` answers
+/// `sorted[floor(q*(n-1))]`. They are different questions (see
+/// `ddsketch_core_and_portable_answer_different_order_statistics`), so a single
+/// truth helper would score one of them against the other one's question and
+/// quietly absorb the difference into `alpha`.
+///
+/// The tolerance is `alpha + numerical_slack`, where the slack is a few ULP of
+/// the logarithmic mapping — never a percentage of alpha, which would license
+/// breaking the advertised guarantee by that percentage.
 #[test]
 fn ddsketch_core_and_portable_satisfy_the_relative_value_error_contract() {
     const SAMPLE_SIZES: [usize; 3] = [1_000, 20_000, 100_000];
 
     for &alpha in &DDS_ALPHAS {
-        let spec = RelativeQuantileSpec::new(alpha);
+        let core_spec = RelativeQuantileSpec::core(alpha);
+        let port_spec = RelativeQuantileSpec::portable(alpha);
         let mut core_tally = Tally::default();
         let mut port_tally = Tally::default();
         for (i, &n) in SAMPLE_SIZES.iter().enumerate() {
@@ -387,10 +452,10 @@ fn ddsketch_core_and_portable_satisfy_the_relative_value_error_contract() {
                     truth.len(),
                     "{label} alpha={alpha} n={n} seed={seed}: portable dropped samples"
                 );
-                spec.tally_into(&mut core_tally, truth.sorted(), &DDS_QS, |q| {
+                core_spec.tally_into(&mut core_tally, truth.sorted(), &DDS_QS, |q| {
                     core.get_value_at_quantile(q)
                 });
-                spec.tally_into(&mut port_tally, truth.sorted(), &DDS_QS, |q| {
+                port_spec.tally_into(&mut port_tally, truth.sorted(), &DDS_QS, |q| {
                     port.quantile(q)
                 });
             }
@@ -410,11 +475,114 @@ fn ddsketch_core_and_portable_satisfy_the_relative_value_error_contract() {
     }
 }
 
-/// `q = 0` and `q = 1` are exact min/max, not bucket representatives: both
-/// implementations track the true extremes alongside the bucket store, so the
-/// relative error at the endpoints is zero rather than merely within alpha.
+/// The two implementations answer a quantile query with **different order
+/// statistics**, and this pins the divergence rather than letting `alpha`
+/// absorb it.
+///
+/// - `DDSketch::get_value_at_quantile` uses `rank = ceil(q * n)`, 1-based.
+/// - Portable `DdSketch::quantile` uses `target = floor(q * (n - 1))`, 0-based
+///   — the lower-quantile convention of the DDSketch paper and of DataDog's
+///   reference implementation, which is also what the wire format's Go twin
+///   answers.
+///
+/// **The decision taken here is to keep both.** The portable type exists to be
+/// byte- and answer-compatible with `sketchlib-go`, so its convention is fixed
+/// by an external contract; the core type's `ceil` convention is what its own
+/// callers have been reading for the life of the API, and it is what lets `q=0`
+/// and `q=1` return the exactly retained minimum and maximum. Changing either
+/// silently moves numbers under existing callers, and the divergence is only
+/// observable at small `n` or ragged `q` — precisely the cases pinned below.
+/// What is *not* acceptable is leaving it undocumented, or scoring both against
+/// one truth helper, which is what the previous revision did.
+///
+/// The probes are chosen so the two formulas disagree: at `n = 3, q = 0.4` the
+/// core answers `sorted[1]` and the portable `sorted[0]`.
 #[test]
-fn ddsketch_endpoints_return_the_exact_min_and_max() {
+fn ddsketch_core_and_portable_answer_different_order_statistics() {
+    // (n, q, expected core 0-based index, expected portable 0-based index)
+    const PROBES: [(usize, f64, usize, usize); 8] = [
+        (3, 0.4, 1, 0),
+        (4, 0.34, 1, 1),
+        (4, 0.3, 1, 0),
+        (7, 0.2, 1, 1),
+        (7, 0.6, 4, 3),
+        (5, 0.5, 2, 2),
+        (10, 0.25, 2, 2),
+        (10, 0.15, 1, 1),
+    ];
+
+    // Values one bucket apart at the coarsest alpha, so a one-rank difference
+    // is a different bucket and therefore a different answer — not two ranks
+    // that happen to share a representative.
+    const ALPHA: f64 = 0.01;
+    let gamma = (1.0 + ALPHA) / (1.0 - ALPHA);
+
+    let mut disagreements = 0usize;
+    for &(n, q, core_idx, port_idx) in &PROBES {
+        let values: Vec<f64> = (0..n).map(|i| 100.0 * gamma.powi(3 * i as i32)).collect();
+        let sorted = values.clone();
+
+        assert_eq!(
+            DdRankConvention::CeilNearestRank.index(n, q),
+            core_idx,
+            "core convention ceil(q*n)-1 at n={n} q={q}"
+        );
+        assert_eq!(
+            DdRankConvention::LowerFloor.index(n, q),
+            port_idx,
+            "portable convention floor(q*(n-1)) at n={n} q={q}"
+        );
+
+        let mut core = DDSketch::new(ALPHA);
+        let mut port = PortableDds::new(ALPHA);
+        for v in &values {
+            core.add(v);
+            port.update(*v);
+        }
+
+        let core_spec = RelativeQuantileSpec::core(ALPHA);
+        let port_spec = RelativeQuantileSpec::portable(ALPHA);
+        let core_est = core.get_value_at_quantile(q).expect("non-empty");
+        let port_est = port.quantile(q).expect("non-empty");
+
+        if let Err(detail) = core_spec.check(q, core_est, sorted[core_idx]) {
+            panic!("core DDSketch n={n} q={q}: {detail}");
+        }
+        if let Err(detail) = port_spec.check(q, port_est, sorted[port_idx]) {
+            panic!("portable DdSketch n={n} q={q}: {detail}");
+        }
+
+        if core_idx != port_idx {
+            disagreements += 1;
+            // Each implementation must be answering *its own* order statistic,
+            // so the two answers must differ here: if they agreed, one of them
+            // would have silently changed convention.
+            assert!(
+                core_est != port_est,
+                "n={n} q={q}: the conventions pick different order statistics \
+                 ({core_idx} vs {port_idx}) but both returned {core_est}"
+            );
+        }
+    }
+    assert!(
+        disagreements >= 3,
+        "the probe set must contain cases where the two conventions genuinely \
+         disagree; only {disagreements} did"
+    );
+}
+
+/// Endpoint behaviour, which is **not** the same on the two implementations.
+///
+/// - The core sketch tracks the exact minimum and maximum beside the bucket
+///   store, and `get_value_at_quantile` short-circuits `q <= 0` and `q >= 1` to
+///   them. Its endpoints are therefore *exact*, with zero error.
+/// - The portable sketch carries no min/max scalars at all — they were removed
+///   from the wire — so its endpoints are ordinary bucket representatives and
+///   are only guaranteed within `alpha`. The previous revision of this test
+///   claimed it "clamps its bucket representative into [min, max], so its
+///   endpoints are exact too", which is not what the code does.
+#[test]
+fn ddsketch_core_endpoints_are_exact_and_portable_endpoints_are_alpha_relative() {
     for &alpha in &DDS_ALPHAS {
         let values = log_uniform_f64(5_000, (1.0 + alpha) / (1.0 - alpha), 3..30, 4_242);
         let truth = NumericTruth::new(values.clone());
@@ -444,19 +612,17 @@ fn ddsketch_endpoints_return_the_exact_min_and_max() {
             Some(truth.max()),
             "core alpha={alpha}: max() must be exact"
         );
-        // The portable twin clamps its bucket representative into
-        // [min, max], so its endpoints are exact too.
+
+        // The portable twin holds only buckets, so its endpoints get the same
+        // relative-value guarantee as any other quantile and nothing more.
+        let spec = RelativeQuantileSpec::portable(alpha);
         let (p0, p1) = (port.quantile(0.0).unwrap(), port.quantile(1.0).unwrap());
-        assert!(
-            (p0 - truth.min()).abs() <= truth.min() * alpha,
-            "portable alpha={alpha}: q=0 gave {p0}, true min {}",
-            truth.min()
-        );
-        assert!(
-            (p1 - truth.max()).abs() <= truth.max() * alpha,
-            "portable alpha={alpha}: q=1 gave {p1}, true max {}",
-            truth.max()
-        );
+        if let Err(detail) = spec.check(0.0, p0, truth.min()) {
+            panic!("portable alpha={alpha} at q=0: {detail}");
+        }
+        if let Err(detail) = spec.check(1.0, p1, truth.max()) {
+            panic!("portable alpha={alpha} at q=1: {detail}");
+        }
     }
 }
 
@@ -469,7 +635,11 @@ fn ddsketch_endpoints_return_the_exact_min_and_max() {
 fn ddsketch_satisfies_the_relative_error_contract_at_bucket_boundaries() {
     for &alpha in &DDS_ALPHAS {
         let gamma = (1.0 + alpha) / (1.0 - alpha);
-        let spec = RelativeQuantileSpec::new(alpha);
+        // A one-sample sketch answers every q with that one sample, so the two
+        // rank conventions coincide here by construction (both index 0) and the
+        // probe isolates the mapping from any rank effect.
+        let core_spec = RelativeQuantileSpec::core(alpha);
+        let port_spec = RelativeQuantileSpec::portable(alpha);
         for k in [-40i32, -7, 0, 1, 13, 60, 200] {
             let edge = gamma.powi(k);
             if edge <= 0.0 || !edge.is_finite() {
@@ -493,11 +663,11 @@ fn ddsketch_satisfies_the_relative_error_contract_at_bucket_boundaries() {
                 // A single-sample sketch answers every q with that sample's
                 // bucket, so this isolates the mapping from any rank effect.
                 let est = core.get_value_at_quantile(0.5).unwrap();
-                if let Err(detail) = spec.check(0.5, est, probe) {
+                if let Err(detail) = core_spec.check(0.5, est, probe) {
                     panic!("core DDSketch alpha={alpha} gamma^{k} boundary probe: {detail}");
                 }
                 let pest = port.quantile(0.5).unwrap();
-                if let Err(detail) = spec.check(0.5, pest, probe) {
+                if let Err(detail) = port_spec.check(0.5, pest, probe) {
                     panic!("portable DdSketch alpha={alpha} gamma^{k} boundary probe: {detail}");
                 }
             }
@@ -515,7 +685,8 @@ fn ddsketch_merge_and_delta_replay_preserve_the_relative_error_contract() {
 
     const N: usize = 40_000;
     for &alpha in &DDS_ALPHAS {
-        let spec = RelativeQuantileSpec::new(alpha);
+        let spec = RelativeQuantileSpec::core(alpha);
+        let port_spec = RelativeQuantileSpec::portable(alpha);
         let values = zipf_f64(N, 8_192, 1.1, 1e3, 1e7, 7_654_321 + (alpha * 1e5) as u64);
         let truth = NumericTruth::new(values.clone());
 
@@ -592,7 +763,7 @@ fn ddsketch_merge_and_delta_replay_preserve_the_relative_error_contract() {
         }
         pa.merge(&pb).expect("same-alpha portable merge");
         let mut port_tally = Tally::default();
-        spec.tally_into(&mut port_tally, truth.sorted(), &DDS_QS, |q| pa.quantile(q));
+        port_spec.tally_into(&mut port_tally, truth.sorted(), &DDS_QS, |q| pa.quantile(q));
         port_tally.assert_none(
             &format!("portable DdSketch alpha={alpha} after merge"),
             &format!("zipf n={N} over [1e3, 1e7]"),
@@ -612,7 +783,7 @@ fn ddsketch_merge_and_delta_replay_preserve_the_relative_error_contract() {
         };
         pr.apply_delta(&delta).expect("benign delta");
         let mut pr_tally = Tally::default();
-        spec.tally_into(&mut pr_tally, truth.sorted(), &DDS_QS[1..6], |q| {
+        port_spec.tally_into(&mut pr_tally, truth.sorted(), &DDS_QS[1..6], |q| {
             pr.quantile(q)
         });
         pr_tally.assert_none(
@@ -689,131 +860,250 @@ fn univmonq_frequency_and_f2_satisfy_the_count_sketch_bounds() {
     }
 }
 
-/// Ordered queries against the residual half of the documented bound.
+/// Ordered queries against the **full** documented bound.
 ///
-/// The full contract in `docs/api/api_univmon_q.md` is
+/// The contract in `docs/api/api_univmon_q.md` is
 ///
 /// ```text
 ///   sup_x |F_hat(x) - F(x)| <= 2 E_H + P_hat_R * epsilon_R
 /// ```
 ///
-/// `E_H` is the frequency error over the *internally recovered* heavy set, and
-/// neither that set nor `m_R` is reachable through the public API — so the
-/// complete theorem **cannot be verified from outside the crate**, and this
-/// test does not claim to.
+/// where `E_H` is the normalized frequency error over the sketch's internally
+/// recovered heavy set, `P_hat_R` is the residual's share of the mass, and
+/// `epsilon_R = sqrt(ln(2/delta) / (2 m_R))` is the DKW band over the `m_R`
+/// retained occurrence samples backing the residual.
 ///
-/// What it does verify is the strongest contract public state supports: the
-/// diffuse regime. The adaptive gate is `F2_hat / N^2 >= 1 / ordered_samples`,
-/// and both sides of that inequality are public (`estimate_f2`, `count`,
-/// `config().ordered_samples`). On a stream where the gate provably does not
-/// fire, the heavy set is empty, so `E_H = 0` and `P_hat_R = 1`, and the whole
-/// bound collapses to the distribution-free occurrence bound
-/// `epsilon_R = sqrt(ln(2/delta) / (2 m_R))` over the retained occurrence
-/// sample, whose size is observable as the number of CDF breakpoints.
+/// `E_H` and `m_R` used to be unreachable from outside the crate, so an earlier
+/// revision of this test could only cover the diffuse special case where the
+/// gate provably does not fire and the heavy set is empty. They are now
+/// reported by `UnivMonQQuery::ordered_query_diagnostics`, a read-only view of
+/// state the CDF construction already computes, so both regimes are covered
+/// here:
+///
+/// - **diffuse** — 200k observations over 200k distinct values. The adaptive
+///   gate `F2_hat / N^2 >= 1 / ordered_samples` does not fire, so the heavy set
+///   really is empty; the test asserts that premise from the diagnostics rather
+///   than assuming it, and the bound collapses to `epsilon_R`.
+/// - **concentrated** — a Zipf stream whose head is heavy enough to fire the
+///   gate, so `E_H > 0` and `P_hat_R < 1` and the full three-term bound is what
+///   is evaluated.
+///
+/// # Trial unit
+///
+/// The bound is a **supremum over x**, so one sketch answers it with one
+/// pass/fail: every breakpoint and every probed quantile of a single sketch is
+/// part of that one statement, not a separate Bernoulli draw. Independent
+/// trials come from the two places UnivMon-Q's randomness actually lives — the
+/// occurrence-priority stream, keyed by `source_id`, and the CountSketch hash,
+/// keyed by `config.hash_seed`. Both are varied per trial.
 #[test]
-fn univmonq_ordered_queries_satisfy_the_residual_occurrence_bound_when_diffuse() {
-    use common::specs::{occurrence_sample_epsilon, rank_violation};
+fn univmonq_ordered_queries_satisfy_the_full_documented_bound() {
+    use common::specs::occurrence_sample_epsilon;
 
     const DELTA: f64 = 0.01;
-    let config = UnivMonQConfig::default();
-    let mut q = UnivMonQ::new(config).expect("default config valid");
+    const TRIALS: usize = 12;
+    const QS: [f64; 7] = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99];
 
-    // Diffuse by construction: 200k observations spread over 200k distinct
-    // values, so no value carries enough mass to qualify as heavy.
-    let values: Vec<f64> = uniform_u64(200_000, 10_000_000, 0x0DDE_0001)
-        .into_iter()
-        .map(|v| v as f64)
-        .collect();
-    for v in &values {
-        q.update(v);
-    }
-    let truth = NumericTruth::new(values.clone());
-    let n = q.count() as f64;
+    // Two regimes: one where the adaptive gate cannot fire, and one where it
+    // must. Covering only the first is what left `E_H` untested.
+    for (regime, values) in [
+        (
+            "diffuse",
+            uniform_u64(200_000, 10_000_000, 0x0DDE_0001)
+                .into_iter()
+                .map(|v| v as f64)
+                .collect::<Vec<f64>>(),
+        ),
+        (
+            "concentrated",
+            zipf_f64(200_000, 4_096, 1.4, 1.0, 1e6, 0x0DDE_0002),
+        ),
+    ] {
+        let truth = NumericTruth::new(values.clone());
+        let mut exact_counts: HashMap<u64, u64> = HashMap::new();
+        for v in &values {
+            *exact_counts.entry(v.to_bits()).or_default() += 1;
+        }
 
-    // The gate condition, read entirely from public state.
-    let gate = q.estimate_f2() / (n * n);
-    let threshold = 1.0 / config.ordered_samples as f64;
-    assert!(
-        gate < threshold,
-        "test premise broken: the adaptive gate fired (F2_hat/N^2 = {gate:.3e} >= \
-         1/ordered_samples = {threshold:.3e}), so the heavy set may be non-empty and \
-         E_H is no longer provably zero"
-    );
+        let mut tally = Tally::default();
+        let mut gate_fired = 0usize;
+        let mut heavy_seen = 0usize;
+        let mut last_context = String::new();
 
-    let breakpoints = q.cdf();
-    let m_r = breakpoints.len();
-    let eps = occurrence_sample_epsilon(m_r, DELTA);
-    let context = format!(
-        "diffuse uniform stream n={} distinct={}, ordered_samples={}, \
-         retained CDF breakpoints m_R={m_r}, delta={DELTA} -> epsilon_R={eps:.5}, \
-         stream seed 0x0DDE0001",
-        values.len(),
-        truth.sorted().windows(2).filter(|w| w[0] != w[1]).count() + 1,
-        config.ordered_samples
-    );
+        for t in 0..TRIALS {
+            let config = UnivMonQConfig {
+                // Both knobs move the randomness the bound is stated over:
+                // `hash_seed` re-draws the CountSketch hash, `source_id`
+                // re-draws the occurrence priorities.
+                hash_seed: 3 + t,
+                ..UnivMonQConfig::default()
+            };
+            let mut q: UnivMonQ =
+                UnivMonQ::with_hasher_and_source_id(config, 0x0DDE_1000 + t as u64)
+                    .expect("config valid");
+            for v in &values {
+                q.update(v);
+            }
 
-    // The bound is a supremum over x, so every breakpoint must satisfy it.
-    let mut sup_tally = Tally::default();
-    for point in &breakpoints {
-        let (excl, incl) = truth.rank_interval(point.value);
-        let dist = if point.rank < excl {
-            excl - point.rank
-        } else if point.rank > incl {
-            point.rank - incl
-        } else {
-            0.0
-        };
-        sup_tally.record(dist <= eps, || {
-            format!(
-                "value {} reported rank {:.5} but occupies true ranks [{excl:.5}, {incl:.5}] \
-                 (distance {dist:.5} > epsilon_R {eps:.5})",
-                point.value, point.rank
-            )
-        });
-    }
-    sup_tally.assert_within(
-        "UnivMonQ CDF sup-error vs the residual occurrence bound",
-        DELTA,
-        &context,
-    );
+            let n = q.count() as f64;
+            let view = q.prepare_queries();
+            let diag = view.ordered_query_diagnostics();
+            let cdf = view.cdf();
 
-    // Inverting the same bound: a quantile answer's rank must land within
-    // epsilon_R of the requested q.
-    let mut quantile_tally = Tally::default();
-    for &qq in &[0.01f64, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99] {
-        let est = q.quantile(qq).expect("ordered_samples enabled");
-        let violation = rank_violation(truth.sorted(), qq, est, eps);
-        quantile_tally.record(violation.is_none(), || violation.unwrap());
-    }
-    quantile_tally.assert_within(
-        "UnivMonQ::quantile vs the residual occurrence bound",
-        DELTA,
-        &context,
-    );
+            // The gate, read from public state, and the heavy set the CDF
+            // actually used, read from the diagnostics. They must agree: a
+            // non-empty heavy set with the gate closed would mean the two
+            // disagree about which regime the sketch is in.
+            let gate = view.estimate_f2() / (n * n);
+            let threshold = 1.0 / config.ordered_samples as f64;
+            if gate >= threshold {
+                gate_fired += 1;
+            } else {
+                assert!(
+                    diag.heavy.is_empty(),
+                    "{regime} trial {t}: the adaptive gate is closed \
+                     (F2_hat/N^2 = {gate:.3e} < 1/ordered_samples = {threshold:.3e}) but the \
+                     CDF still used {} heavy values",
+                    diag.heavy.len()
+                );
+            }
+            if !diag.heavy.is_empty() {
+                heavy_seen += 1;
+            }
 
-    // `rank` and `quantile` must be a consistent inverse pair: re-ranking a
-    // quantile answer has to reproduce the requested rank to within the same
-    // epsilon, or one of the two is reading a different CDF.
-    for &qq in &[0.1f64, 0.5, 0.9] {
-        let v = q.quantile(qq).expect("quantile");
-        let r = q.rank(v).expect("rank") as f64 / n;
-        assert!(
-            (r - qq).abs() <= 2.0 * eps,
-            "rank(quantile({qq})) = {r:.5}, off by {:.5} > 2*epsilon_R = {:.5}. {context}",
-            (r - qq).abs(),
-            2.0 * eps
-        );
-    }
+            // E_H: the largest normalized frequency error over the recovered
+            // heavy set, against exact truth. Empty heavy set gives zero, which
+            // is what makes the diffuse regime collapse to epsilon_R.
+            let e_h = diag
+                .heavy
+                .iter()
+                .map(|(value, frequency)| {
+                    let exact = *exact_counts.get(&value.to_bits()).unwrap_or(&0) as f64;
+                    (frequency - exact).abs() / n
+                })
+                .fold(0.0f64, f64::max);
+            let p_hat_r = diag.residual_mass_fraction(q.count());
+            let m_r = diag.residual_samples;
+            let eps_r = if m_r == 0 {
+                0.0
+            } else {
+                occurrence_sample_epsilon(m_r, DELTA)
+            };
+            let bound = 2.0 * e_h + p_hat_r * eps_r;
 
-    // Monotonicity is structural: a CDF that decreases is malformed whatever
-    // the sampling error.
-    assert!(!breakpoints.is_empty(), "cdf must not be empty");
-    for w in breakpoints.windows(2) {
-        assert!(
-            w[0].rank <= w[1].rank + 1e-9,
-            "cdf ranks not monotone at {:?} -> {:?}. {context}",
-            w[0],
-            w[1]
+            let context = format!(
+                "{regime} trial {t}: hash_seed={} source_id={:#x}, n={n}, gate \
+                 F2_hat/N^2={gate:.3e} vs 1/ordered_samples={threshold:.3e}, heavy set \
+                 {} values, E_H={e_h:.6}, P_hat_R={p_hat_r:.6}, m_R={m_r}, \
+                 epsilon_R={eps_r:.6} at delta={DELTA} -> bound {bound:.6}",
+                config.hash_seed,
+                0x0DDE_1000 + t as u64,
+                diag.heavy.len(),
+            );
+            last_context = context.clone();
+
+            assert!(
+                m_r > 0 || !diag.heavy.is_empty(),
+                "{context}: the CDF was built from neither heavy values nor occurrence \
+                 samples, so there is nothing for the bound to cover"
+            );
+
+            // The bound is a sup over x, so a single trial is a single
+            // pass/fail over every breakpoint *and* every probed quantile.
+            let mut worst = 0.0f64;
+            let mut detail = String::new();
+            for point in cdf {
+                let (excl, incl) = truth.rank_interval(point.value);
+                let dist = (point.rank - incl).max(excl - point.rank).max(0.0);
+                if dist >= worst {
+                    worst = dist;
+                    detail = format!(
+                        "cdf breakpoint value {} reported rank {:.6}, true rank interval \
+                         [{excl:.6}, {incl:.6}]",
+                        point.value, point.rank
+                    );
+                }
+            }
+            for &qq in &QS {
+                let est = view.quantile(qq).expect("ordered_samples enabled");
+                let (excl, incl) = truth.rank_interval(est);
+                let dist = (qq - incl).max(excl - qq).max(0.0);
+                if dist >= worst {
+                    worst = dist;
+                    detail = format!(
+                        "quantile({qq}) returned {est}, whose true rank interval is \
+                         [{excl:.6}, {incl:.6}]"
+                    );
+                }
+            }
+            tally.record(worst <= bound, || {
+                format!("{context}\n      sup deviation {worst:.6} > bound; worst at {detail}")
+            });
+
+            // Monotonicity is structural: a CDF that decreases is malformed
+            // whatever the sampling error.
+            assert!(!cdf.is_empty(), "{context}: cdf must not be empty");
+            for w in cdf.windows(2) {
+                assert!(
+                    w[0].rank <= w[1].rank + 1e-9,
+                    "cdf ranks not monotone at {:?} -> {:?}. {context}",
+                    w[0],
+                    w[1]
+                );
+            }
+
+            // `rank` and `quantile` must be a consistent pair: re-ranking a
+            // quantile answer has to land on that value's own true rank, or one
+            // of the two is reading a different CDF.
+            //
+            // The comparison is against `rank_incl(v)` — the exact number of
+            // observations at or below `v`, which is what `rank` estimates — and
+            // **not** against the requested `q`. On a tie-dense stream a single
+            // value legitimately spans a wide rank band (the head of a
+            // zipf(1.4) stream covers a third of it), so `q` and
+            // `rank(quantile(q))` can differ by that whole band while both
+            // answers are correct.
+            for &qq in &[0.1f64, 0.5, 0.9] {
+                let v = view.quantile(qq).expect("quantile");
+                let r = view.rank(v).expect("rank") as f64 / n;
+                let (_, incl) = truth.rank_interval(v);
+                assert!(
+                    (r - incl).abs() <= 2.0 * bound + 1e-9,
+                    "rank(quantile({qq})) = {r:.6} but {v} truly occupies ranks up to \
+                     {incl:.6}, off by {:.6} > 2*bound = {:.6}. {context}",
+                    (r - incl).abs(),
+                    2.0 * bound
+                );
+            }
+        }
+
+        // Each regime must actually be the regime it claims to be, across every
+        // trial — otherwise the "concentrated" half would silently degenerate
+        // into a second diffuse run and `E_H` would go back to being untested.
+        match regime {
+            "diffuse" => assert_eq!(
+                gate_fired, 0,
+                "the diffuse stream fired the adaptive gate on {gate_fired} of {TRIALS} \
+                 trials; the regime premise is broken. {last_context}"
+            ),
+            _ => assert!(
+                heavy_seen > 0,
+                "the concentrated stream never produced a non-empty heavy set in {TRIALS} \
+                 trials, so E_H was zero throughout and the full bound was never \
+                 exercised. {last_context}"
+            ),
+        }
+
+        tally.assert_independent_binomial(
+            &format!(
+                "UnivMonQ ordered queries ({regime}) / sup_x |F_hat - F| <= 2 E_H + P_hat_R eps_R"
+            ),
+            DELTA,
+            &format!(
+                "one trial = one sketch with its own hash seed and source id, scored on \
+                 the supremum over every CDF breakpoint and every probed quantile; \
+                 {TRIALS} trials, q grid {QS:?}. Last: {last_context}"
+            ),
         );
     }
 }
@@ -916,36 +1206,62 @@ fn tumbling_kll_windows_are_exact_and_answers_satisfy_the_rank_contract() {
         N - 1
     );
 
-    let spec = RankErrorSpec::datasketches(K as usize);
-    let context =
-        format!("k={K} sketch_seed=0x{SKETCH_SEED:08x} stream_seed=3009 n={N} window={WINDOW}");
+    // Sixteen independent compaction seeds, one trial each. Within a seed the
+    // three window views (`query_all`, `query_recent`, the active sketch) are
+    // built from the same compactors and are strongly dependent, so they are
+    // reduced to a single worst-case rank error before the trial is scored.
+    const TRIAL_SEEDS: usize = 16;
+    let spec = KllRankSpec::datasketches(K as usize);
+    let context = format!(
+        "k={K} stream_seed=3009 n={N} window={WINDOW}, {TRIAL_SEEDS} independent \
+         compaction seeds from kll_trial_seed(0x7717_0000..)"
+    );
     let mut tally = Tally::default();
-    for (label, sketch, slice) in [
-        ("query_all", tw.query_all(), &all[..]),
-        // query_recent(1) = the active window plus the last closed one.
-        (
-            "query_recent(1)",
-            tw.query_recent(1),
-            &all[N - 2 * WINDOW as usize..],
-        ),
-        (
-            "active_sketch",
-            tw.active_sketch().clone(),
-            &all[N - WINDOW as usize..],
-        ),
-    ] {
-        let truth = NumericTruth::new(slice.to_vec());
-        spec.tally_into(
-            &mut tally,
-            truth.sorted(),
-            &[0.1, 0.25, 0.5, 0.75, 0.9],
-            |q| sketch.quantile(q),
-        );
-        let _ = label;
+    for t in 0..TRIAL_SEEDS {
+        let seed = kll_trial_seed(0x7717_0000 + t as u64);
+        let cfg = KLLConfig {
+            k: K as usize,
+            m: 8,
+            seed: Some(seed),
+        };
+        let mut w: TumblingWindow<KLL> = TumblingWindow::new(WINDOW, 16, cfg, 4);
+        for (t, v) in all.iter().enumerate() {
+            w.insert(t as u64, &DataInput::F64(*v), 0);
+        }
+        let views: [(&str, KLL<f64>, &[f64]); 3] = [
+            ("query_all", w.query_all(), &all[..]),
+            // query_recent(1) = the active window plus the last closed one.
+            (
+                "query_recent(1)",
+                w.query_recent(1),
+                &all[N - 2 * WINDOW as usize..],
+            ),
+            (
+                "active_sketch",
+                w.active_sketch().clone(),
+                &all[N - WINDOW as usize..],
+            ),
+        ];
+        let mut worst = 0.0f64;
+        let mut detail = String::new();
+        for (label, sketch, slice) in views {
+            let truth = NumericTruth::new(slice.to_vec());
+            let (e, d) = spec.max_rank_error(truth.sorted(), &[0.1, 0.25, 0.5, 0.75, 0.9], |q| {
+                sketch.quantile(q)
+            });
+            if e >= worst {
+                worst = e;
+                detail = format!("{label}: {d}");
+            }
+        }
+        let eps = spec.epsilon();
+        tally.record(worst <= eps, || {
+            format!("seed={seed:#x}: max rank error {worst:.6} > eps(k={K}) = {eps:.6}; {detail}")
+        });
     }
-    tally.assert_within(
-        "TumblingWindow<KLL> window queries / rank error",
-        spec.failure_probability,
+    tally.assert_independent_binomial(
+        "TumblingWindow<KLL> window queries / maximum rank error per compaction seed",
+        spec.trial_failure_probability,
         &context,
     );
 
@@ -971,38 +1287,59 @@ fn tumbling_kll_windows_are_exact_and_answers_satisfy_the_rank_contract() {
 // --------------------------------------------- Portable HydraKll per-key
 
 /// Hydra routes each key to its own KLL cell, so each cell answers under the
-/// same rank contract as a standalone KLL over that key's observations.
+/// same rank characterization as a standalone KLL over that key's observations.
+///
+/// Every cell of a `HydraKllSketch` is cloned from one seeded prototype, so the
+/// two keys of a single grid share a compaction seed and are **not** independent
+/// trials. Each grid is therefore reduced to its worst rank error across both
+/// keys and the whole q grid, and the binomial runs over twelve independent
+/// prototype seeds.
 #[test]
-fn portable_hydra_kll_per_key_medians_satisfy_the_rank_contract() {
+fn portable_hydra_kll_per_key_medians_satisfy_the_rank_characterization() {
     const K: usize = 200;
-    let spec = RankErrorSpec::datasketches(K);
-    let mut hk = HydraKllSketch::with_seed(3, 256, K as u16, 0x5EED_0500);
-    let mut truths: HashMap<&str, NumericTruth> = HashMap::new();
+    const TRIALS: usize = 12;
+    const QS: [f64; 5] = [0.1, 0.25, 0.5, 0.75, 0.9];
+
+    let spec = KllRankSpec::datasketches(K);
+    let mut truths: Vec<(&str, NumericTruth)> = Vec::new();
     for (name, base, seed) in [("svc-a", 100.0f64, 3010u64), ("svc-b", 900.0, 3011)] {
         let vals: Vec<f64> = normal_f64(4000, base, base * 0.05, seed)
             .into_iter()
             .map(f64::abs) // HydraKll cells are KLL: positive domain
             .collect();
-        truths.insert(name, NumericTruth::new(vals.clone()));
-        for v in vals {
-            hk.update(name, v);
-        }
+        truths.push((name, NumericTruth::new(vals)));
     }
+
     let mut tally = Tally::default();
-    for (name, truth) in &truths {
-        spec.tally_into(
-            &mut tally,
-            truth.sorted(),
-            &[0.1, 0.25, 0.5, 0.75, 0.9],
-            |q| hk.quantile(name, q),
-        );
+    for t in 0..TRIALS {
+        let seed = kll_trial_seed(0x5EED_0500 + t as u64);
+        let mut hk = HydraKllSketch::with_seed(3, 256, K as u16, seed);
+        for (name, truth) in &truths {
+            for v in truth.sorted() {
+                hk.update(name, *v);
+            }
+        }
+        let mut worst = 0.0f64;
+        let mut detail = String::new();
+        for (name, truth) in &truths {
+            let (e, d) = spec.max_rank_error(truth.sorted(), &QS, |q| hk.quantile(name, q));
+            if e >= worst {
+                worst = e;
+                detail = format!("key {name}: {d}");
+            }
+        }
+        let eps = spec.epsilon();
+        tally.record(worst <= eps, || {
+            format!("seed={seed:#x}: max rank error {worst:.6} > eps(k={K}) = {eps:.6}; {detail}")
+        });
     }
-    tally.assert_within(
-        "portable HydraKll per-key quantiles / rank error",
-        spec.failure_probability,
+    tally.assert_independent_binomial(
+        "portable HydraKll per-key quantiles / maximum rank error per prototype seed",
+        spec.trial_failure_probability,
         &format!(
-            "k={K} sketch_seed=0x5EED0500, 3x256 grid, normal(100, 5) and normal(900, 45), \
-             stream seeds 3010/3011"
+            "k={K}, 3x256 grid, normal(100, 5) and normal(900, 45), stream seeds 3010/3011, \
+             {TRIALS} independent prototype seeds from kll_trial_seed(0x5EED_0500..), \
+             q grid {QS:?}"
         ),
     );
 }

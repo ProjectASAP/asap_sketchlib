@@ -27,7 +27,7 @@ use common::{FreqTruth, zipf_u64};
 use asap_sketchlib::{
     CMSHeap, CSHeap, Count, CountMin, DataInput, DefaultMatrixI32, DefaultMatrixI64,
     DefaultMatrixI128, FastPath, FixedMatrix, HeapItem, QuickMatrixI64, QuickMatrixI128,
-    RegularPath, Vector2D,
+    RegularPath, Vector2D, cs_heap_count,
 };
 
 /// Medium stream: large enough that collisions are statistically meaningful at
@@ -418,19 +418,40 @@ macro_rules! cmsheap_instance {
             |k| left.estimate(&DataInput::U64(k as u64)).as_f64(),
             &ctx,
         );
-        assert_heap_matches_sketch(label, &ctx, single.heap().heap(), $truth, |k| {
-            single.estimate(&DataInput::U64(k as u64)).as_f64()
-        });
+        assert_heap_matches_sketch(
+            label,
+            &ctx,
+            single.heap().heap(),
+            $truth,
+            |k| single.estimate(&DataInput::U64(k as u64)).as_f64(),
+            |est| est as i64,
+        );
     }};
 }
 
 /// `CSHeap` is a Count Sketch plus the same heap, so the point estimate
 /// carries the L2 bound instead.
 macro_rules! csheap_instance {
-    ($storage:ty, $path:ty, $stream:expr, $truth:expr) => {{
-        let mut single = CSHeap::<$storage, $path>::default();
-        let mut left = CSHeap::<$storage, $path>::default();
-        let mut right = CSHeap::<$storage, $path>::default();
+    ($storage:ty, $path:ty, $stream:expr, $truth:expr) => {
+        csheap_instance!(
+            @build $storage, $path, $stream, $truth,
+            CSHeap::<$storage, $path>::default()
+        )
+    };
+    // `Vector2D<i128>` has no `Default` impl for either heap family, but it is
+    // a perfectly ordinary public instance through `CSHeap::new`; it is built
+    // at the same 3x4096 / top-32 geometry the `Default` impls use so it is
+    // judged at comparable dimensions.
+    (sized $storage:ty, $path:ty, $stream:expr, $truth:expr) => {
+        csheap_instance!(
+            @build $storage, $path, $stream, $truth,
+            CSHeap::<$storage, $path>::new(3, 4096, 32)
+        )
+    };
+    (@build $storage:ty, $path:ty, $stream:expr, $truth:expr, $ctor:expr) => {{
+        let mut single = $ctor;
+        let mut left = $ctor;
+        let mut right = $ctor;
         for (i, k) in $stream.iter().enumerate() {
             let d = DataInput::U64(*k);
             single.insert(&d);
@@ -464,22 +485,34 @@ macro_rules! csheap_instance {
             |k| left.estimate(&DataInput::U64(k as u64)),
             &ctx,
         );
-        assert_heap_matches_sketch(label, &ctx, single.heap().heap(), $truth, |k| {
-            single.estimate(&DataInput::U64(k as u64))
-        });
+        assert_heap_matches_sketch(
+            label,
+            &ctx,
+            single.heap().heap(),
+            $truth,
+            |k| single.estimate(&DataInput::U64(k as u64)),
+            cs_heap_count,
+        );
     }};
 }
 
 /// Shared heap checks: every entry agrees with the sketch's own estimate, and
 /// the heap holds keys the top-k contract guarantees.
-fn assert_heap_matches_sketch<F>(
+///
+/// `count_of` maps the sketch's estimate to the integer a heap entry holds. It
+/// is the identity for `CMSHeap`, whose estimate is already the counter type,
+/// and `cs_heap_count` for `CSHeap`, whose estimate is an `f64` median and is
+/// documented to reach the heap by a saturating, truncating conversion.
+fn assert_heap_matches_sketch<F, C>(
     label: &str,
     ctx: &str,
     items: &[asap_sketchlib::HHItem],
     truth: &FreqTruth,
     estimate: F,
+    count_of: C,
 ) where
     F: Fn(i64) -> f64,
+    C: Fn(f64) -> i64,
 {
     let mut consistency = Tally::default();
     let capacity = items.len().max(1);
@@ -491,10 +524,11 @@ fn assert_heap_matches_sketch<F>(
             ref other => panic!("{label}: unexpected heap key {other:?}"),
         };
         let est = estimate(key);
-        consistency.record(it.count as f64 == est, || {
+        consistency.record(it.count == count_of(est), || {
             format!(
-                "key {key}: heap holds {} but the sketch estimates {est}",
-                it.count
+                "key {key}: heap holds {} but the sketch estimates {est} (-> {})",
+                it.count,
+                count_of(est)
             )
         });
         if truth.get(key) >= kth {
@@ -511,69 +545,318 @@ fn assert_heap_matches_sketch<F>(
 }
 
 macro_rules! heap_matrix_test {
-    ($name:ident, $mac:ident, $path:ty, $( $storage:ty ),+ $(,)?) => {
+    ($name:ident, $mac:ident, $path:ty, $( $kind:ident $storage:ty ),+ $(,)?) => {
         #[test]
         fn $name() {
             let (stream, truth) = stream_and_truth();
-            $( $mac!($storage, $path, stream, &truth); )+
+            $( heap_matrix_test!(@one $mac, $kind, $storage, $path, stream, &truth); )+
         }
+    };
+    (@one $mac:ident, default, $storage:ty, $path:ty, $stream:expr, $truth:expr) => {
+        $mac!($storage, $path, $stream, $truth);
+    };
+    (@one $mac:ident, sized, $storage:ty, $path:ty, $stream:expr, $truth:expr) => {
+        $mac!(sized $storage, $path, $stream, $truth);
     };
 }
 
-// `CMSHeap`/`CSHeap` bound their insert paths on `S::Counter: Into<i64>` so
-// that a heap entry can hold the estimate. `i128` does not satisfy that, so
-// `CMSHeap<QuickMatrixI128>`, `CMSHeap<DefaultMatrixI128>` and their `CSHeap`
-// twins are *constructible but not insertable*: their `Default` impls exist
-// and compile, but calling `insert` on one does not. Those four instances per
-// family are therefore absent below by necessity rather than oversight; see
-// `docs/e2e_coverage_matrix.md`.
+// The two heap families do **not** have the same instance coverage, and the
+// reason is a difference in their insert bounds rather than an oversight:
+//
+// - `CMSHeap`'s insert path is bounded on `S::Counter: Copy + Ord + From<i32> +
+//   Into<i64> + AddAssign`. `i128` has no `Into<i64>` and `f64` has neither
+//   `Ord` nor `Into<i64>`, so those instances construct but have no `insert`,
+//   `estimate` or `merge` at all. They are enumerated and pinned as inert by
+//   `cmsheap_instances_without_an_insert_impl_are_inert_by_construction`.
+// - `CSHeap`'s insert path is bounded on `S::Counter: CountSketchCounter`,
+//   which `i128` *does* satisfy. All six `i128` instances are fully
+//   operational and are covered below; the previous revision of this file and
+//   of the coverage matrix wrongly claimed they were not insertable.
 heap_matrix_test!(
     cmsheap_regular_path_instances_satisfy_the_count_min_bound,
     cmsheap_instance,
     RegularPath,
-    Vector2D<i32>,
-    Vector2D<i64>,
-    FixedMatrix,
-    DefaultMatrixI32,
-    QuickMatrixI64,
-    DefaultMatrixI64,
+    default Vector2D<i32>,
+    default Vector2D<i64>,
+    default FixedMatrix,
+    default DefaultMatrixI32,
+    default QuickMatrixI64,
+    default DefaultMatrixI64,
 );
 
 heap_matrix_test!(
     cmsheap_fast_path_instances_satisfy_the_count_min_bound,
     cmsheap_instance,
     FastPath,
-    Vector2D<i32>,
-    Vector2D<i64>,
-    FixedMatrix,
-    DefaultMatrixI32,
-    QuickMatrixI64,
-    DefaultMatrixI64,
+    default Vector2D<i32>,
+    default Vector2D<i64>,
+    default FixedMatrix,
+    default DefaultMatrixI32,
+    default QuickMatrixI64,
+    default DefaultMatrixI64,
 );
 
 heap_matrix_test!(
     csheap_regular_path_instances_satisfy_the_l2_bound,
     csheap_instance,
     RegularPath,
-    Vector2D<i32>,
-    Vector2D<i64>,
-    FixedMatrix,
-    DefaultMatrixI32,
-    QuickMatrixI64,
-    DefaultMatrixI64,
+    default Vector2D<i32>,
+    default Vector2D<i64>,
+    sized Vector2D<i128>,
+    default FixedMatrix,
+    default DefaultMatrixI32,
+    default QuickMatrixI64,
+    default QuickMatrixI128,
+    default DefaultMatrixI64,
+    default DefaultMatrixI128,
 );
 
 heap_matrix_test!(
     csheap_fast_path_instances_satisfy_the_l2_bound,
     csheap_instance,
     FastPath,
-    Vector2D<i32>,
-    Vector2D<i64>,
-    FixedMatrix,
-    DefaultMatrixI32,
-    QuickMatrixI64,
-    DefaultMatrixI64,
+    default Vector2D<i32>,
+    default Vector2D<i64>,
+    sized Vector2D<i128>,
+    default FixedMatrix,
+    default DefaultMatrixI32,
+    default QuickMatrixI64,
+    default QuickMatrixI128,
+    default DefaultMatrixI64,
+    default DefaultMatrixI128,
 );
+
+// ------------------------------------------------- 128-bit heap semantics
+
+/// `CSHeap` over an `i128` counter really does accept counts past `i64::MAX`,
+/// and this pins what happens to the heap entry when it does.
+///
+/// The insert path is `heap.update(key, cs_heap_count(estimate))`, where the
+/// estimate is the row **median** as `f64`. Two lossy steps are unavoidable and
+/// both are documented API rather than accidents:
+///
+/// 1. `i128 -> f64` inside `Count::estimate`, exact only below `2^53`;
+/// 2. `f64 -> i64` in `cs_heap_count`, which **saturates** at `i64::MAX`.
+///
+/// Saturating is the chosen semantics. Wrapping would turn a huge positive
+/// count into a negative one and corrupt the heap's ordering, which is the one
+/// failure mode a top-k structure cannot survive; returning an error would put
+/// a fallible result on an infallible `insert`; and widening `HHItem::count` to
+/// `i128` would change the heap wire payload for every family that shares it.
+/// This test fails if any of that silently changes.
+#[test]
+fn csheap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
+    macro_rules! probe {
+        ($storage:ty, $path:ty, $ctor:expr) => {{
+            let label = concat!(
+                "CSHeap<",
+                stringify!($storage),
+                ", ",
+                stringify!($path),
+                ">"
+            );
+            let key = DataInput::U64(0xC0FF_EE01);
+
+            // Below 2^53 the whole pipeline is exact.
+            let mut small = $ctor;
+            let exact: i128 = 1_i128 << 40;
+            small.insert_many(&key, exact);
+            assert_eq!(
+                small.estimate(&key),
+                exact as f64,
+                "{label}: an i128 count below 2^53 must round-trip exactly"
+            );
+            assert_eq!(
+                heap_count(small.heap().heap(), &key),
+                Some(exact as i64),
+                "{label}: the heap entry must carry the same exact count"
+            );
+
+            // Past i64::MAX the heap entry saturates. It must not wrap
+            // negative, and it must not silently become a different positive
+            // number: `i64::MAX` is the documented ceiling.
+            let mut huge = $ctor;
+            let over: i128 = (i64::MAX as i128) * 4;
+            huge.insert_many(&key, over);
+            let est = huge.estimate(&key);
+            assert!(
+                est >= i64::MAX as f64,
+                "{label}: the sketch itself must still hold the i128 mass, got {est}"
+            );
+            assert_eq!(
+                cs_heap_count(est),
+                i64::MAX,
+                "{label}: cs_heap_count must saturate at i64::MAX"
+            );
+            assert_eq!(
+                heap_count(huge.heap().heap(), &key),
+                Some(i64::MAX),
+                "{label}: the heap entry must saturate, never wrap"
+            );
+
+            // Merging two saturated sketches must stay saturated and positive.
+            let mut other = $ctor;
+            other.insert_many(&key, over);
+            huge.merge(&other);
+            assert_eq!(
+                heap_count(huge.heap().heap(), &key),
+                Some(i64::MAX),
+                "{label}: a merge of two saturated sketches must stay at the ceiling"
+            );
+        }};
+    }
+
+    probe!(
+        Vector2D<i128>,
+        RegularPath,
+        CSHeap::<Vector2D<i128>, RegularPath>::new(3, 4096, 32)
+    );
+    probe!(
+        Vector2D<i128>,
+        FastPath,
+        CSHeap::<Vector2D<i128>, FastPath>::new(3, 4096, 32)
+    );
+    probe!(
+        QuickMatrixI128,
+        RegularPath,
+        CSHeap::<QuickMatrixI128, RegularPath>::default()
+    );
+    probe!(
+        QuickMatrixI128,
+        FastPath,
+        CSHeap::<QuickMatrixI128, FastPath>::default()
+    );
+    probe!(
+        DefaultMatrixI128,
+        RegularPath,
+        CSHeap::<DefaultMatrixI128, RegularPath>::default()
+    );
+    probe!(
+        DefaultMatrixI128,
+        FastPath,
+        CSHeap::<DefaultMatrixI128, FastPath>::default()
+    );
+}
+
+/// The count a heap holds for `key`, or `None` if it is not in the heap.
+fn heap_count(items: &[asap_sketchlib::HHItem], key: &DataInput) -> Option<i64> {
+    items
+        .iter()
+        .find(|it| asap_sketchlib::heap_item_to_sketch_input(&it.key) == *key)
+        .map(|it| it.count)
+}
+
+/// `CMSHeap` instances that construct but have no operations at all, pinned so
+/// the set cannot grow silently.
+///
+/// `CMSHeap::insert` / `insert_many` / `estimate` / `merge` all live in an impl
+/// bounded on `S::Counter: Copy + Ord + From<i32> + Into<i64> + AddAssign`.
+/// Four counter types reach `CMSHeap` through a public constructor and two of
+/// them fail that bound:
+///
+/// | counter | `Ord` | `Into<i64>` | operations |
+/// | --- | --- | --- | --- |
+/// | `i32`, `i64` | yes | yes | full |
+/// | `i128` | yes | **no** | none |
+/// | `f64` | **no** | **no** | none |
+///
+/// So `CMSHeap<Vector2D<i128>>`, `CMSHeap<Vector2D<f64>>`,
+/// `CMSHeap<QuickMatrixI128>` and `CMSHeap<DefaultMatrixI128>` are
+/// *constructible but inert* on both hashing paths — eight instances that
+/// allocate a sketch and a heap and can then do nothing but report their
+/// dimensions.
+///
+/// **The decision taken here is to document them rather than change the API.**
+/// The alternatives all cost more than they buy: `TryInto<i64>` would make
+/// `insert` fallible or silently lossy for exactly the counters that motivated
+/// `i128`; widening `HHItem::count` to `i128` changes the heap wire payload
+/// shared with `CSHeap`, Space-Saving and the Octo top-k plans; and removing
+/// the constructors is a breaking change to a type that composes generically.
+/// `CSHeap` already covers `i128` end to end for callers who need it. This test
+/// records the state so a later change is a deliberate one — it fails to
+/// compile if an insert impl appears, because the assertions would then be
+/// checking a type that has one.
+#[test]
+fn cmsheap_instances_without_an_insert_impl_are_inert_by_construction() {
+    macro_rules! inert {
+        ($storage:ty, $path:ty, $ctor:expr, $rows:expr, $cols:expr) => {{
+            let label = concat!(
+                "CMSHeap<",
+                stringify!($storage),
+                ", ",
+                stringify!($path),
+                ">"
+            );
+            let sketch = $ctor;
+            // Everything a caller can actually do with one of these.
+            assert_eq!(sketch.rows(), $rows, "{label}: rows()");
+            assert_eq!(sketch.cols(), $cols, "{label}: cols()");
+            assert_eq!(sketch.heap().len(), 0, "{label}: the heap starts empty");
+            assert_eq!(
+                sketch.cms().rows(),
+                $rows,
+                "{label}: the wrapped CountMin reports the same geometry"
+            );
+        }};
+    }
+
+    inert!(
+        Vector2D<i128>,
+        RegularPath,
+        CMSHeap::<Vector2D<i128>, RegularPath>::new(3, 4096, 32),
+        3,
+        4096
+    );
+    inert!(
+        Vector2D<i128>,
+        FastPath,
+        CMSHeap::<Vector2D<i128>, FastPath>::new(3, 4096, 32),
+        3,
+        4096
+    );
+    inert!(
+        Vector2D<f64>,
+        RegularPath,
+        CMSHeap::<Vector2D<f64>, RegularPath>::new(3, 4096, 32),
+        3,
+        4096
+    );
+    inert!(
+        Vector2D<f64>,
+        FastPath,
+        CMSHeap::<Vector2D<f64>, FastPath>::new(3, 4096, 32),
+        3,
+        4096
+    );
+    inert!(
+        QuickMatrixI128,
+        RegularPath,
+        CMSHeap::<QuickMatrixI128, RegularPath>::default(),
+        5,
+        2048
+    );
+    inert!(
+        QuickMatrixI128,
+        FastPath,
+        CMSHeap::<QuickMatrixI128, FastPath>::default(),
+        5,
+        2048
+    );
+    inert!(
+        DefaultMatrixI128,
+        RegularPath,
+        CMSHeap::<DefaultMatrixI128, RegularPath>::default(),
+        3,
+        4096
+    );
+    inert!(
+        DefaultMatrixI128,
+        FastPath,
+        CMSHeap::<DefaultMatrixI128, FastPath>::default(),
+        3,
+        4096
+    );
+}
 
 // ------------------------------------------------------- Counter-width edges
 

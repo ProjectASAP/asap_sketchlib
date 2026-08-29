@@ -12,6 +12,22 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **`UnivMonQQuery::ordered_query_diagnostics`**, returning
+  `OrderedQueryDiagnostics`. A read-only view of the heavy set the ordered CDF
+  actually used, the mass it credited to it, and the number of retained
+  occurrence samples backing the residual — the `E_H`, `P_hat_R` and `m_R` of
+  the documented bound `sup_x |F_hat(x) - F(x)| <= 2 E_H + P_hat_R * eps_R`.
+  None of the three was reachable from outside the crate, so the bound could
+  only be checked in the diffuse special case where the heavy set is empty; it
+  is now verified in full. Purely observational: it reports state the CDF
+  construction already computes, and changes no answer and no wire format.
+- **`cs_heap_count`**, naming the `f64 -> i64` conversion `CSHeap` uses when it
+  writes a Count Sketch estimate into its top-k heap. The conversion saturates
+  at `i64::MAX` / `i64::MIN` (and maps `NaN` to `0`) rather than wrapping, which
+  matters for the `i128`-backed instances: they accept `insert_many(key, i128)`
+  and really can hold counts past `i64::MAX`. Making it a named, documented
+  function rather than an inline cast means the choice cannot change silently.
+
 - **`Bloom`, a partitioned Bloom filter.** `rows` slices of `cols` bits, one
   slice per hash function, over a new packed `BitMatrix` that implements
   `MatrixStorage` — so the filter probes the same `rows x cols` shape
@@ -155,6 +171,24 @@ signals a backwards-compatible change.
   (Cargo convention: `y` is the major component pre-1.0).
 
 ### Fixed
+
+- **NitroSketch's compensating weight is no longer biased at rates whose
+  reciprocal is not an integer.** `NitroBatch` and the row-level `Nitro` behind
+  `CountMin::fast_insert_nitro` / `Count::fast_insert_nitro` both wrote
+  `ceil(1 / p)` into the target on every admitted update. That is only the
+  right compensation when `1 / p` is an integer: the public constructors accept
+  any `0 < p <= 1`, and at `p = 0.3` every estimate came back
+  `f * 0.3 * ceil(3.33) = 1.2 f` — a flat +20% on every key, in the shipped
+  estimator, invisible to a test grid of `{1, 1/2, 1/10, 1/100}`. The weight is
+  now rounded **stochastically**, `floor(1/p) + Bernoulli(frac(1/p))` drawn per
+  admitted update, so `E[W] = 1/p` and hence `E[est] = f` at every rate, at the
+  cost of `frac(1/p)(1 - frac(1/p)) <= 1/4` extra variance per admission.
+  `NitroBatch::admitted_weight` draws from the sampling RNG; `Nitro::
+  admitted_delta` derives its Bernoulli from the skip-table cursor, so it adds
+  no state and leaves the serialized form byte-identical. When `1 / p` is an
+  integer the fraction is zero, the draw is skipped, and the emitted weights are
+  exactly what they were before — so the common rates (1, 1/2, 1/10, 1/100) are
+  unchanged.
 
 - **`ExponentialHistogram` no longer discards its payload when the bucket
   sketch is an `Elastic`.** `EHSketchList::merge` had no `ELASTIC` arm, so the

@@ -11,8 +11,8 @@
 mod common;
 
 use common::specs::{
-    CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, RankErrorSpec,
-    SamplingConfidenceSpec, Tally,
+    CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, KllRankSpec, SamplingConfidenceSpec,
+    Tally,
 };
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
@@ -115,7 +115,12 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
     let distinct = truth.distinct();
     let register_spec = CardinalityConfidenceSpec::hll(14, 4.0);
     let hip_spec = CardinalityConfidenceSpec::hll_hip(14, 4.0);
-    let mut card_tally = Tally::default();
+    // Trial units: the three ensemble members share **one** hash (the matrix
+    // hash at seed index 0) and the three standalone references share another
+    // (the canonical seed), so this is two draws of the randomness, not six.
+    // Each draw is scored as a single pass/fail over its three estimators.
+    let mut ensemble_ok = Vec::new();
+    let mut standalone_ok = Vec::new();
     for (idx, label, reference, spec) in [
         (2usize, "HllErtl", ref_ertl.estimate() as f64, register_spec),
         (
@@ -127,8 +132,12 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
         (4, "HllHip", ref_hip.estimate() as f64, hip_spec),
     ] {
         let got = ens.cardinality(idx).expect("hll cell");
-        spec.tally_into(&mut card_tally, got, distinct);
-        spec.tally_into(&mut card_tally, reference, distinct);
+        if let Err(detail) = spec.check(got, distinct) {
+            ensemble_ok.push(format!("{label} (ensemble): {detail}"));
+        }
+        if let Err(detail) = spec.check(reference, distinct) {
+            standalone_ok.push(format!("{label} (standalone): {detail}"));
+        }
         // Both estimate the same truth, so they cannot be further apart than
         // their two bands allow.
         let gap = (got - reference).abs() / distinct as f64;
@@ -140,10 +149,17 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
             2.0 * spec.tolerance()
         );
     }
-    card_tally.assert_within(
+    let mut card_tally = Tally::default();
+    card_tally.record(ensemble_ok.is_empty(), || ensemble_ok.join("; "));
+    card_tally.record(standalone_ok.is_empty(), || standalone_ok.join("; "));
+    card_tally.assert_independent_binomial(
         "ensemble and standalone HLL members / cardinality bands",
         register_spec.per_check_failure(),
-        &format!("{context}, distinct={distinct}"),
+        &format!(
+            "{context}, distinct={distinct}; two trials — one per hash function \
+             (the ensemble's shared matrix hash, and the standalone canonical seed) — \
+             each scored over all three estimators reading it"
+        ),
     );
 }
 
@@ -189,16 +205,31 @@ fn ensemble_members_satisfy_their_own_error_bounds() {
         &context,
     );
 
-    let mut card_tally = Tally::default();
+    // All three HLL members read the *same* shared matrix hash, so their errors
+    // are one draw of the randomness seen through three estimators, not three
+    // draws. The trial is therefore "did every member land in its own band".
     let register_spec = CardinalityConfidenceSpec::hll(14, 4.0);
     let hip_spec = CardinalityConfidenceSpec::hll_hip(14, 4.0);
-    register_spec.tally_into(&mut card_tally, ens.cardinality(2).unwrap(), distinct.len());
-    register_spec.tally_into(&mut card_tally, ens.cardinality(3).unwrap(), distinct.len());
-    hip_spec.tally_into(&mut card_tally, ens.cardinality(4).unwrap(), distinct.len());
-    card_tally.assert_within(
+    let mut failures = Vec::new();
+    for (idx, label, spec) in [
+        (2usize, "HllErtl", register_spec),
+        (3, "HllClassic", register_spec),
+        (4, "HllHip", hip_spec),
+    ] {
+        if let Err(detail) = spec.check(ens.cardinality(idx).unwrap(), distinct.len()) {
+            failures.push(format!("{label}: {detail}"));
+        }
+    }
+    let mut card_tally = Tally::default();
+    card_tally.record(failures.is_empty(), || failures.join("; "));
+    card_tally.assert_independent_binomial(
         "ensemble HLL members / cardinality bands",
         register_spec.per_check_failure(),
-        &format!("{context}, distinct={}", distinct.len()),
+        &format!(
+            "{context}, distinct={}; one trial — the three members share the ensemble's \
+             single shared matrix hash",
+            distinct.len()
+        ),
     );
 }
 
@@ -331,31 +362,76 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
 
 // ------------------------------------------------------------------- Nitro
 
-/// Sampling rates covered. `1.0` is the degenerate full-sampling case, where
-/// the band collapses to zero width and the estimate must be exact.
-const NITRO_RATES: [f64; 4] = [1.0, 0.5, 0.1, 0.01];
+/// Sampling rates covered.
+///
+/// The public API accepts any `0 < p <= 1`, so the rates that matter most are
+/// the ones whose reciprocal is **not** an integer. `0.3` and `0.07` are here
+/// for exactly that reason: with the old `ceil(1/p)` weight they carried a flat
+/// +20% and +5% bias respectively (`ceil(3.33) = 4`, `ceil(14.29) = 15`), which
+/// no rate with an integral `1/p` could expose. `1.0` is the degenerate
+/// full-sampling case, where the band collapses to zero width and the estimate
+/// must be exact.
+const NITRO_RATES: [f64; 6] = [1.0, 0.5, 0.3, 0.1, 0.07, 0.01];
 /// Fixed sampling-RNG seeds. `NitroBatch::with_target` seeds from the OS, so
 /// an accuracy assertion on one would be re-rolled every run; the seeded
 /// constructor is what makes these reproducible.
-const NITRO_SEEDS: [u64; 4] = [0x0117_0001, 0x0117_0002, 0x0117_0003, 0x0117_0004];
-/// `z = 4` on the binomial sampling band: two-sided failure 6.3e-5 per check.
+///
+/// Each seed is an **independent draw of the sampling randomness**, which is
+/// the only thing Nitro's band is stated over — so a battery over seeds is a
+/// legitimate binomial, while a battery over several keys of one sketch (which
+/// share a skip sequence) is not.
+const NITRO_SEEDS: [u64; 8] = [
+    0x0117_0001,
+    0x0117_0002,
+    0x0117_0003,
+    0x0117_0004,
+    0x0117_0005,
+    0x0117_0006,
+    0x0117_0007,
+    0x0117_0008,
+];
+/// `z = 4` on the sampling band: two-sided failure 6.3e-5 per trial under the
+/// normal approximation to the admitted-mass sum.
 const NITRO_Z: f64 = 4.0;
 
-/// Nitro admits each update with probability `p` and writes weight `ceil(1/p)`,
-/// so a key of true count `f` is estimated by `Binomial(f, p) * ceil(1/p)` —
-/// unbiased, with standard deviation `sqrt(f (1-p) / p)`. The accepted band is
-/// `z` of those, computed per rate rather than a flat percentage: at `f =
-/// 100_000` it is +-0.4% at `p = 0.5` but +-12.6% at `p = 0.01`, and a single
-/// fixed +-5% would be simultaneously far too loose for one and impossible for
-/// the other.
+/// Nitro's estimator is unbiased at **every** rate the public API accepts, and
+/// the accepted band is derived from the implementation rather than written
+/// down.
+///
+/// Nitro admits each update with probability `p` and compensates with an
+/// integer weight. `1/p` is rarely an integer, so the weight has to be rounded,
+/// and rounding it the same way every time is a bias, not noise:
+/// `ceil(1/0.3) = 4` makes every estimate `f * 0.3 * 4 = 1.2 f`. The
+/// implementation therefore rounds **stochastically** — `floor(1/p)` plus a
+/// Bernoulli on the fraction, drawn per admitted update — so
+///
+/// ```text
+///   E[est]   = f
+///   Var[est] = f ( p r (1-r) + (1-p)/p ),   r = frac(1/p)
+/// ```
+///
+/// The band is `z` of that standard deviation, computed per rate: at
+/// `f = 100_000` it is +-0.4% at `p = 0.5` and +-12.6% at `p = 0.01`, and a
+/// single fixed +-5% would be simultaneously far too loose for one and
+/// impossible for the other. `Var` is re-derived here from the implemented
+/// weight law, not assumed.
+///
+/// # Trial unit
+///
+/// One `(rate, seed)` pair is one draw of the sampling randomness. The two
+/// targets built from the same seed see the *same* admitted subset, so they are
+/// one trial scored twice, not two — hence a single outcome per seed covering
+/// both.
 #[test]
-fn nitro_estimates_stay_inside_the_binomial_sampling_band_on_every_target() {
+fn nitro_estimates_are_unbiased_inside_the_sampling_band_at_every_rate() {
     const COUNT: i64 = 100_000;
     let key = 42i64;
     let data = vec![key; COUNT as usize];
 
     for &rate in &NITRO_RATES {
         let spec = SamplingConfidenceSpec::new(rate, NITRO_Z);
+        let mut tally = Tally::default();
+        let mut estimates = Vec::new();
         for &seed in &NITRO_SEEDS {
             // Count-Min target. Only one key is present, so the sketch itself
             // is exact and the whole error budget is sampling noise.
@@ -366,11 +442,9 @@ fn nitro_estimates_stay_inside_the_binomial_sampling_band_on_every_target() {
             );
             cm.insert(&data);
             let est = cm.estimate_median(&DataInput::I64(key));
-            if let Err(detail) = spec.check(est, COUNT as f64, 0.0) {
-                panic!("NitroBatch<CountMin> seed={seed:#x}: {detail}");
-            }
 
-            // Count Sketch target: same sampling model, signed estimator.
+            // Count Sketch target: same sampling model, signed estimator, and
+            // the same admitted subset because it shares the seed.
             let mut cs = NitroBatch::with_target_and_seed(
                 rate,
                 Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
@@ -378,10 +452,60 @@ fn nitro_estimates_stay_inside_the_binomial_sampling_band_on_every_target() {
             );
             cs.insert(&data);
             let cs_est = cs.estimate_median(&DataInput::I64(key));
-            if let Err(detail) = spec.check(cs_est, COUNT as f64, 0.0) {
-                panic!("NitroBatch<Count> seed={seed:#x}: {detail}");
-            }
+
+            estimates.push(est);
+            let cm_outcome = spec.check(est, COUNT as f64, 0.0);
+            let cs_outcome = spec.check(cs_est, COUNT as f64, 0.0);
+            tally.record(cm_outcome.is_ok() && cs_outcome.is_ok(), || {
+                format!(
+                    "seed={seed:#x}: CountMin target {}; Count Sketch target {}",
+                    cm_outcome
+                        .as_ref()
+                        .err()
+                        .cloned()
+                        .unwrap_or_else(|| "ok".into()),
+                    cs_outcome
+                        .as_ref()
+                        .err()
+                        .cloned()
+                        .unwrap_or_else(|| "ok".into()),
+                )
+            });
         }
+        let (q, r) = spec.weight_parts();
+        let context = format!(
+            "rate={rate}, weight = {q} + Bernoulli({r:.6}) per admitted update so \
+             E[W] = 1/p = {:.6}; f={COUNT}, sigma={:.2}, z={NITRO_Z}; one trial per \
+             sampling seed over {:?}",
+            spec.expected_weight(),
+            spec.sigma(COUNT as f64),
+            NITRO_SEEDS
+        );
+        tally.assert_independent_binomial(
+            &format!("NitroBatch rate={rate} / sampling band"),
+            spec.per_check_failure(),
+            &context,
+        );
+
+        // Unbiasedness is the property the rounding fix exists to restore, and
+        // a band on a single trial cannot see it: at p = 0.3 the old `ceil`
+        // weight put every estimate 20% high, which is 43 sigma at f = 100_000
+        // but a *consistent* 20%. Averaging the independent seeds drives the
+        // sampling noise down by sqrt(trials) and leaves any systematic
+        // rounding bias standing.
+        let mean: f64 = estimates.iter().sum::<f64>() / estimates.len() as f64;
+        let mean_sigma = spec.sigma(COUNT as f64) / (estimates.len() as f64).sqrt();
+        let allowed = NITRO_Z * mean_sigma;
+        assert!(
+            (mean - COUNT as f64).abs() <= allowed,
+            "NitroBatch rate={rate}: the mean estimate over {} independent sampling seeds \
+             is {mean:.1} against a true count of {COUNT} — a relative bias of {:.4}. \
+             The band for the mean is z*sigma/sqrt(trials) = {allowed:.1}. A systematic \
+             offset here means the admitted weight no longer has expectation 1/p. \
+             {context}",
+            estimates.len(),
+            (mean - COUNT as f64) / COUNT as f64,
+        );
     }
 }
 
@@ -442,10 +566,10 @@ fn nitro_sampling_is_reproducible_from_its_seed() {
 /// passed.
 ///
 /// What *is* publicly observable, and is what Nitro actually controls, is the
-/// total admitted mass. Every admitted update writes `ceil(1/rate)` into one
-/// cell of every row, so the sum over any single row is
-/// `admitted * ceil(1/rate)` — an unbiased estimate of the stream length with
-/// the same binomial sampling band, computed without touching a hash.
+/// total admitted mass. Every admitted update writes its stochastically rounded
+/// weight into one cell of every row, so the sum over any single row is the
+/// admitted mass — an unbiased estimate of the stream length carrying the same
+/// sampling band, computed without touching a hash.
 #[test]
 fn nitro_over_a_bare_vector2d_target_admits_mass_inside_the_sampling_band() {
     const COUNT: i64 = 100_000;
@@ -453,6 +577,8 @@ fn nitro_over_a_bare_vector2d_target_admits_mass_inside_the_sampling_band() {
 
     for &rate in &NITRO_RATES {
         let spec = SamplingConfidenceSpec::new(rate, NITRO_Z);
+        let mut tally = Tally::default();
+        let mut masses = Vec::new();
         for &seed in &NITRO_SEEDS {
             let mut nitro = NitroBatch::init_nitro_with_seed(rate, seed);
             nitro.insert(&data);
@@ -460,12 +586,15 @@ fn nitro_over_a_bare_vector2d_target_admits_mass_inside_the_sampling_band() {
             let row0_mass: f64 = (0..target.cols())
                 .map(|c| target.query_one_counter(0, c) as f64)
                 .sum();
-            if let Err(detail) = spec.check(row0_mass, COUNT as f64, 0.0) {
-                panic!(
+            masses.push(row0_mass);
+            let outcome = spec.check(row0_mass, COUNT as f64, 0.0);
+            tally.record(outcome.is_ok(), || {
+                format!(
                     "NitroBatch<Vector2D<u32>> rate={rate} seed={seed:#x}: row-0 admitted \
-                     mass out of band: {detail}"
-                );
-            }
+                     mass out of band: {}",
+                    outcome.unwrap_err()
+                )
+            });
             // Every row receives the same weight from every admitted update,
             // so all rows must carry identical total mass.
             for r in 1..target.rows() {
@@ -479,34 +608,78 @@ fn nitro_over_a_bare_vector2d_target_admits_mass_inside_the_sampling_band() {
                 );
             }
         }
+        let context = format!(
+            "rate={rate}, E[W]={:.6}, f={COUNT}, sigma={:.2}, z={NITRO_Z}; one trial per \
+             sampling seed",
+            spec.expected_weight(),
+            spec.sigma(COUNT as f64)
+        );
+        tally.assert_independent_binomial(
+            &format!("NitroBatch<Vector2D<u32>> rate={rate} / admitted mass band"),
+            spec.per_check_failure(),
+            &context,
+        );
+
+        // The admitted mass is where the weight law is most directly visible:
+        // it is exactly `sum of weights over admitted updates`, with no sketch
+        // error in the way. Averaging over independent seeds exposes any
+        // systematic rounding bias.
+        let mean: f64 = masses.iter().sum::<f64>() / masses.len() as f64;
+        let allowed = NITRO_Z * spec.sigma(COUNT as f64) / (masses.len() as f64).sqrt();
+        assert!(
+            (mean - COUNT as f64).abs() <= allowed,
+            "NitroBatch<Vector2D<u32>> rate={rate}: mean admitted mass over {} seeds is \
+             {mean:.1} for a stream of {COUNT} — relative bias {:.4}, outside the mean's \
+             band {allowed:.1}. {context}",
+            masses.len(),
+            (mean - COUNT as f64) / COUNT as f64,
+        );
     }
 }
 
 /// Merging two same-rate Nitro batches sums their admitted mass, so a key
-/// split across both must come back at the combined band.
+/// split across both must come back at the combined band — at every rate,
+/// including the ones whose reciprocal is not an integer.
 #[test]
 fn nitro_merge_sums_admitted_mass_at_the_combined_band() {
     const HALF: i64 = 50_000;
     let key = 3i64;
-    for &rate in &[0.5f64, 0.1] {
+    for &rate in &NITRO_RATES {
         let spec = SamplingConfidenceSpec::new(rate, NITRO_Z);
-        let mut a = NitroBatch::with_target_and_seed(
-            rate,
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
-            NITRO_SEEDS[0],
-        );
-        let mut b = NitroBatch::with_target_and_seed(
-            rate,
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
-            NITRO_SEEDS[1],
-        );
-        a.insert(&vec![key; HALF as usize]);
-        b.insert(&vec![key; HALF as usize]);
-        a.merge(&b);
-        let est = a.estimate_median(&DataInput::I64(key));
-        if let Err(detail) = spec.check(est, (HALF * 2) as f64, 0.0) {
-            panic!("NitroBatch merge rate={rate}: {detail}");
+        let mut tally = Tally::default();
+        for pair in NITRO_SEEDS.chunks(2) {
+            let mut a = NitroBatch::with_target_and_seed(
+                rate,
+                CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
+                pair[0],
+            );
+            let mut b = NitroBatch::with_target_and_seed(
+                rate,
+                CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
+                pair[1],
+            );
+            a.insert(&vec![key; HALF as usize]);
+            b.insert(&vec![key; HALF as usize]);
+            a.merge(&b);
+            let est = a.estimate_median(&DataInput::I64(key));
+            let outcome = spec.check(est, (HALF * 2) as f64, 0.0);
+            tally.record(outcome.is_ok(), || {
+                format!(
+                    "seeds {:#x}/{:#x}: {}",
+                    pair[0],
+                    pair[1],
+                    outcome.unwrap_err()
+                )
+            });
         }
+        tally.assert_independent_binomial(
+            &format!("NitroBatch merge rate={rate} / combined sampling band"),
+            spec.per_check_failure(),
+            &format!(
+                "two shards of {HALF} each, merged; one trial per disjoint seed pair \
+                 from {NITRO_SEEDS:?}"
+            ),
+        );
     }
 }
 
@@ -880,68 +1053,93 @@ fn portable_count_sketch_with_heap_satisfies_the_l2_bound_through_merge_and_wire
     );
 }
 
-/// The portable KLL facade under the rank-error contract, seeded so a failure
-/// reproduces. `KllSketch::new` seeds from the wall clock; `with_seed` is what
-/// an accuracy test must use.
+/// The portable KLL facade under the DataSketches maximum-rank-error
+/// characterization, seeded so a failure reproduces. `KllSketch::new` seeds
+/// from the wall clock; `with_seed` is what an accuracy test must use.
+///
+/// Trial unit is one sketch, scored on its worst rank error over the `q` grid,
+/// with an independent compaction seed per trial. The post-wire sketch is *not*
+/// a separate trial — a round trip that preserves every answer bit for bit, as
+/// asserted below, gives literally the same numbers.
 #[test]
-fn portable_kll_sketch_satisfies_the_rank_error_contract_through_merge_and_wire() {
+fn portable_kll_sketch_satisfies_the_rank_error_characterization_through_merge_and_wire() {
     const K: u16 = 200;
-    const SKETCH_SEED: u64 = 0x5EED_0400;
+    const TRIALS: u64 = 12;
     let values: Vec<f64> = uniform_u64(N, 1_000_000, STREAM_SEED)
         .into_iter()
         .map(|v| v as f64)
         .collect();
     let truth = NumericTruth::new(values.clone());
-
-    let mut single = KllSketch::with_seed(K, SKETCH_SEED);
-    let mut left = KllSketch::with_seed(K, SKETCH_SEED ^ 0xAAAA);
-    let mut right = KllSketch::with_seed(K, SKETCH_SEED ^ 0x5555);
-    for (i, v) in values.iter().enumerate() {
-        single.update(*v);
-        if i % 2 == 0 {
-            left.update(*v);
-        } else {
-            right.update(*v);
-        }
-    }
-    left.merge(&right).expect("same-k merge");
-
-    let spec = RankErrorSpec::datasketches(K as usize);
     let qs = [0.1f64, 0.25, 0.5, 0.75, 0.9];
-    let context =
-        format!("k={K} sketch_seed={SKETCH_SEED:#x} uniform n={N} stream_seed={STREAM_SEED:#x}");
+    let spec = KllRankSpec::datasketches(K as usize);
+    let context = format!(
+        "k={K} uniform n={N} stream_seed={STREAM_SEED:#x}, {TRIALS} independent \
+         compaction seeds from 0x5EED_0400"
+    );
 
     let mut tally = Tally::default();
-    spec.tally_into(&mut tally, truth.sorted(), &qs, |q| single.quantile(q));
-    spec.tally_into(&mut tally, truth.sorted(), &qs, |q| left.quantile(q));
+    for t in 0..TRIALS {
+        let seed = 0x5EED_0400u64.wrapping_add(t.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut single = KllSketch::with_seed(K, seed);
+        let mut left = KllSketch::with_seed(K, seed ^ 0xAAAA);
+        let mut right = KllSketch::with_seed(K, seed ^ 0x5555);
+        for (i, v) in values.iter().enumerate() {
+            single.update(*v);
+            if i % 2 == 0 {
+                left.update(*v);
+            } else {
+                right.update(*v);
+            }
+        }
+        left.merge(&right).expect("same-k merge");
 
-    // Wire round trip must preserve every answer bit for bit.
-    let bytes = single.to_msgpack().expect("encode");
-    let decoded = KllSketch::from_msgpack(&bytes).expect("decode");
-    assert_eq!(decoded.k(), K, "k must survive the wire");
-    assert_eq!(
-        decoded.count(),
-        single.count(),
-        "retained mass must survive the wire"
-    );
-    let mut wire_tally = Tally::default();
-    for &q in &qs {
-        let (a, b) = (single.quantile(q), decoded.quantile(q));
-        wire_tally.record(a == b, || format!("q={q}: before {a} after {b}"));
+        spec.record_trial(
+            &mut tally,
+            &format!("portable KllSketch single pass seed={seed:#x}"),
+            truth.sorted(),
+            &qs,
+            |q| single.quantile(q),
+        );
+        spec.record_trial(
+            &mut tally,
+            &format!("portable KllSketch two-shard merge seed={seed:#x}"),
+            truth.sorted(),
+            &qs,
+            |q| left.quantile(q),
+        );
+
+        // The wire round trip must preserve every answer bit for bit, which is
+        // an equality rather than a band — and is why the decoded sketch does
+        // not enter the rank battery as a second trial.
+        let bytes = single.to_msgpack().expect("encode");
+        let decoded = KllSketch::from_msgpack(&bytes).expect("decode");
+        assert_eq!(decoded.k(), K, "k must survive the wire");
+        assert_eq!(
+            decoded.count(),
+            single.count(),
+            "retained mass must survive the wire"
+        );
+        let mut wire_tally = Tally::default();
+        for &q in &qs {
+            let (a, b) = (single.quantile(q), decoded.quantile(q));
+            wire_tally.record(a == b, || format!("q={q}: before {a} after {b}"));
+        }
+        wire_tally.assert_none(
+            &format!("portable KllSketch wire round trip (seed={seed:#x})"),
+            &context,
+        );
+
+        // A mismatched `k` must be refused rather than silently merged.
+        let other_k = KllSketch::with_seed(K * 2, seed);
+        assert!(
+            single.merge(&other_k).is_err(),
+            "merging sketches with different k must fail"
+        );
     }
-    wire_tally.assert_none("portable KllSketch wire round trip", &context);
-    spec.tally_into(&mut tally, truth.sorted(), &qs, |q| decoded.quantile(q));
 
-    // A mismatched `k` must be refused rather than silently merged.
-    let other_k = KllSketch::with_seed(K * 2, SKETCH_SEED);
-    assert!(
-        single.merge(&other_k).is_err(),
-        "merging sketches with different k must fail"
-    );
-
-    tally.assert_within(
-        "portable KllSketch / normalized rank error",
-        spec.failure_probability,
-        &format!("{context}; single pass, two-shard merge, and post-wire, q grid {qs:?}"),
+    tally.assert_independent_binomial(
+        "portable KllSketch / maximum normalized rank error per compaction seed",
+        spec.trial_failure_probability,
+        &format!("{context}; single pass and two-shard merge, q grid {qs:?}"),
     );
 }

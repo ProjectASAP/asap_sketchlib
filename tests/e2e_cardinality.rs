@@ -53,16 +53,21 @@ const CHECKPOINTS: [u64; 7] = [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_00
 /// merge operation and only the first two modes apply.
 macro_rules! hll_battery {
     ($name:ident, $ty:ty, $precision:literal, $model:ident, mergeable) => {
-        hll_battery!(@body $name, $ty, $precision, $model, |even: &$ty, odd: &$ty| {
-            // Disjoint shards: registers max together, so the merge is exactly
-            // the sketch of the concatenated stream.
-            let mut merged = even.clone();
-            merged.merge(odd);
-            Some(merged.estimate() as f64)
-        });
+        hll_battery!(@body $name, $ty, $precision, $model,
+            |single: &$ty, even: &$ty, odd: &$ty| {
+                let mut merged = even.clone();
+                merged.merge(odd);
+                Some((
+                    merged.registers_as_slice() == single.registers_as_slice(),
+                    merged.estimate() == single.estimate(),
+                ))
+            });
     };
     ($name:ident, $ty:ty, $precision:literal, $model:ident, not_mergeable) => {
-        hll_battery!(@body $name, $ty, $precision, $model, |_even: &$ty, _odd: &$ty| None);
+        hll_battery!(@body $name, $ty, $precision, $model, |_s: &$ty, _e: &$ty, _o: &$ty| None);
+        // HIP has no `merge`: its estimate is maintained incrementally from the
+        // sketch's own insertion history, so two shards cannot be combined
+        // without replaying one of them.
     };
     (@body $name:ident, $ty:ty, $precision:literal, $model:ident, $merge:expr) => {
         #[test]
@@ -70,7 +75,8 @@ macro_rules! hll_battery {
             let spec = CardinalityConfidenceSpec::$model($precision, Z);
             let mut tally = Tally::default();
             let context = format!(
-                "{} p{} : m={} sigma_rel={:.5} z={Z} tolerance={:.5}, identities 0..n",
+                "{} p{} : m={} sigma_rel={:.5} z={Z} tolerance={:.5}; one trial = one \
+                 sketch over its own disjoint identity namespace, checkpoints {CHECKPOINTS:?}",
                 stringify!($ty),
                 $precision,
                 1usize << $precision,
@@ -78,45 +84,77 @@ macro_rules! hll_battery {
                 spec.tolerance()
             );
 
-            let mut single = <$ty>::new();
-            let mut even = <$ty>::new();
-            let mut odd = <$ty>::new();
-            let mut seen = 0u64;
-
-            for &target in &CHECKPOINTS {
-                while seen < target {
-                    let d = DataInput::U64(seen);
-                    single.insert(&d);
-                    if seen % 2 == 0 {
-                        even.insert(&d);
-                    } else {
-                        odd.insert(&d);
-                    }
-                    seen += 1;
+            // One fresh sketch per checkpoint, each over an identity namespace
+            // disjoint from every other. Feeding one accumulating sketch and
+            // reading it at rising `n` would produce *nested* estimates — the
+            // state at 10^6 contains the state at 10^5 — which share every
+            // register and are emphatically not independent trials.
+            let mut largest: Option<$ty> = None;
+            for (i, &target) in CHECKPOINTS.iter().enumerate() {
+                let base = IDENTITY_NAMESPACE_STRIDE * (i as u64 + 1);
+                let mut sketch = <$ty>::new();
+                for k in 0..target {
+                    sketch.insert(&DataInput::U64(base + k));
                 }
-                spec.tally_into(&mut tally, single.estimate() as f64, target as usize);
-
-                let merge_estimate: fn(&$ty, &$ty) -> Option<f64> = $merge;
-                if let Some(est) = merge_estimate(&even, &odd) {
-                    spec.tally_into(&mut tally, est, target as usize);
-                }
+                spec.tally_into(&mut tally, sketch.estimate() as f64, target as usize);
+                largest = Some(sketch);
             }
+
+            let mut biggest = largest.expect("CHECKPOINTS is non-empty");
+            let target = CHECKPOINTS[CHECKPOINTS.len() - 1];
+            let base = IDENTITY_NAMESPACE_STRIDE * (CHECKPOINTS.len() as u64);
 
             // Duplicate replay: re-inserting every identity already seen must
             // leave the estimate bit-identical, because a register only ever
-            // moves to a larger leading-zero count. This is structural, not a
-            // band.
-            let before = single.estimate();
-            for k in 0..CHECKPOINTS[CHECKPOINTS.len() - 1].min(200_000) {
-                single.insert(&DataInput::U64(k));
+            // moves to a larger leading-zero count. Structural, not a band.
+            let before = biggest.estimate();
+            for k in 0..target.min(200_000) {
+                biggest.insert(&DataInput::U64(base + k));
             }
             assert_eq!(
-                single.estimate(),
+                biggest.estimate(),
                 before,
                 "replaying seen identities moved the estimate. {context}"
             );
 
-            tally.assert_within(
+            // Shard merge over the *same* identities is an **equality**, not a
+            // band: HLL registers combine by elementwise maximum, so merging
+            // the even and odd halves reproduces the single pass register for
+            // register. Scoring it as a second confidence-band check — which is
+            // what this battery used to do — counted one number twice and
+            // tested nothing the single pass had not already tested.
+            {
+                const MERGE_N: u64 = 200_000;
+                let mbase = IDENTITY_NAMESPACE_STRIDE * (CHECKPOINTS.len() as u64 + 1);
+                let mut single = <$ty>::new();
+                let mut even = <$ty>::new();
+                let mut odd = <$ty>::new();
+                for k in 0..MERGE_N {
+                    let d = DataInput::U64(mbase + k);
+                    single.insert(&d);
+                    if k % 2 == 0 {
+                        even.insert(&d);
+                    } else {
+                        odd.insert(&d);
+                    }
+                }
+                let merge_shards: fn(&$ty, &$ty, &$ty) -> Option<(bool, bool)> = $merge;
+                if let Some((registers_match, estimate_match)) =
+                    merge_shards(&single, &even, &odd)
+                {
+                    assert!(
+                        registers_match,
+                        "a disjoint even/odd shard merge must reproduce the single pass \
+                         register for register. {context}"
+                    );
+                    assert!(
+                        estimate_match,
+                        "identical registers must give an identical estimate. {context}"
+                    );
+                }
+            }
+
+            tally.assert_independent_binomial(
                 concat!(stringify!($name), " / cardinality confidence band"),
                 spec.per_check_failure(),
                 &context,
@@ -124,6 +162,10 @@ macro_rules! hll_battery {
         }
     };
 }
+
+/// Identity namespaces are `stride * i .. stride * i + n`, far enough apart
+/// that no two trials share an identity and therefore no two share a hash.
+const IDENTITY_NAMESPACE_STRIDE: u64 = 1 << 40;
 
 // Classic and Ertl-MLE share the register error model; HIP has its own.
 hll_battery!(
@@ -203,10 +245,17 @@ fn portable_hll_variants_and_precisions_satisfy_the_register_error_model() {
     let mut tally = Tally::default();
     let mut context = Vec::new();
 
-    for variant in [HllVariant::Regular, HllVariant::Datafusion, HllVariant::Hip] {
-        for precision in [12u32, 14, 16] {
+    for (v, variant) in [HllVariant::Regular, HllVariant::Datafusion, HllVariant::Hip]
+        .into_iter()
+        .enumerate()
+    {
+        for (p, precision) in [12u32, 14, 16].into_iter().enumerate() {
             let spec = CardinalityConfidenceSpec::hll(precision, Z);
-            let seed = 2001 + precision as u64;
+            // A distinct stream per (variant, precision). Reusing one stream
+            // across the three variants would feed three estimators the *same*
+            // registers, whose errors are then near-perfectly correlated — nine
+            // readings of at most three independent experiments.
+            let seed = 2001 + (v * 3 + p) as u64;
             let stream = uniform_u64(N, u64::MAX / 4, seed);
             let truth: std::collections::HashSet<u64> = stream.iter().copied().collect();
 
@@ -230,7 +279,11 @@ fn portable_hll_variants_and_precisions_satisfy_the_register_error_model() {
                 "{variant:?} p{precision}: merging identical identities moved the estimate"
             );
 
-            // Disjoint shards must merge to the union's cardinality.
+            // Disjoint shards over the same stream merge by register-wise max,
+            // so the result is the *same* sketch as the single pass and its
+            // estimate is the *same number*. That is an equality, not a second
+            // confidence-band reading: scoring it into the tally, as this test
+            // used to, counted one experiment twice.
             let mut left = HllSketch::new(variant, precision);
             let mut right = HllSketch::new(variant, precision);
             for (i, k) in stream.iter().enumerate() {
@@ -241,7 +294,12 @@ fn portable_hll_variants_and_precisions_satisfy_the_register_error_model() {
                 }
             }
             left.merge(&right).expect("shard merge");
-            spec.tally_into(&mut tally, left.estimate(), truth.len());
+            assert_eq!(
+                left.estimate(),
+                before,
+                "{variant:?} p{precision}: an even/odd shard merge must reproduce the \
+                 single pass exactly (registers combine by maximum)"
+            );
 
             context.push(format!(
                 "{variant:?}/p{precision} sigma={:.5} tol={:.5} stream_seed={seed}",
@@ -251,10 +309,14 @@ fn portable_hll_variants_and_precisions_satisfy_the_register_error_model() {
         }
     }
 
-    tally.assert_within(
+    tally.assert_independent_binomial(
         "portable HllSketch / cardinality confidence band",
         CardinalityConfidenceSpec::hll(12, Z).per_check_failure(),
-        &format!("n={N} unique byte keys; {}", context.join("; ")),
+        &format!(
+            "n={N} unique byte keys; one trial = one (variant, precision) over its own \
+             stream seed; {}",
+            context.join("; ")
+        ),
     );
 }
 

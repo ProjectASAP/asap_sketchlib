@@ -258,15 +258,31 @@ fn countsketch_turnstile_cancels_and_satisfies_the_l2_median_bound() {
 }
 
 /// Count Sketch's L2 bound on both insert paths and both `DataInput` hash
-/// domains, with every key in every trial pooled into one binomial acceptance
-/// rule at the theorem's own post-median failure probability.
+/// domains, over several independent key populations.
+///
+/// # Two assertions, two acceptance rules
+///
+/// The library's hash is fixed by the sketch's type parameter, so every sketch
+/// here draws from the same hash function and the keys inside one sketch share
+/// it. They are therefore *not* independent Bernoulli trials, and a binomial
+/// over keys — which is what this test used to do — assumes exactly the
+/// independence that does not hold.
+///
+/// What is asserted instead:
+///
+/// 1. the **simultaneous** bound, whose `kappa` is raised until a union bound
+///    over the whole probed key set leaves `SIMULTANEOUS_LEVEL` overall. That
+///    needs no independence at all and tolerates zero violations;
+/// 2. the **marginal** bound at `kappa = 3` as a violation-*rate* pin against
+///    the theorem's own per-key failure probability — a regression pin on a
+///    fixed realisation, not a tail test.
 #[test]
 fn countsketch_satisfies_the_l2_median_bound_on_both_paths() {
     let spec = CountSketchSpec::new(BOUND_ROWS, BOUND_COLS);
-    // One tally per (shape, path): all trials pool into a single acceptance
-    // rule, so the decision is made on the whole population rather than on
-    // whichever trial happened to look worst.
-    let mut tallies: HashMap<String, Tally> = HashMap::new();
+    // One pair of tallies per (shape, path): all trials pool into a single
+    // acceptance rule, so the decision is made on the whole population rather
+    // than on whichever trial happened to look worst.
+    let mut tallies: HashMap<String, (Tally, Tally)> = HashMap::new();
     for trial in 0..BOUND_TRIALS {
         for (name, keys, to_input) in bound_streams(trial) {
             let mut truth = FreqTruth::default();
@@ -282,27 +298,31 @@ fn countsketch_satisfies_the_l2_median_bound_on_both_paths() {
                 regular.insert(&d);
                 fast.insert(&d);
             }
-            spec.tally_into(
-                tallies.entry(format!("{name}/RegularPath")).or_default(),
-                &truth,
-                |k| regular.estimate(&to_input(k)),
-            );
-            spec.tally_into(
-                tallies.entry(format!("{name}/FastPath")).or_default(),
-                &truth,
-                |k| fast.estimate(&to_input(k)),
-            );
+            {
+                let (simul, marg) = tallies.entry(format!("{name}/RegularPath")).or_default();
+                spec.tally_into(simul, marg, &truth, |k| regular.estimate(&to_input(k)));
+            }
+            {
+                let (simul, marg) = tallies.entry(format!("{name}/FastPath")).or_default();
+                spec.tally_into(simul, marg, &truth, |k| fast.estimate(&to_input(k)));
+            }
         }
     }
-    for (label, tally) in tallies {
-        tally.assert_within(
-            &format!("Count {label} / L2 median bound"),
-            spec.per_key_failure(),
-            &format!(
-                "rows={BOUND_ROWS} cols={BOUND_COLS} kappa={} n={BOUND_N} \
-                 trials={BOUND_TRIALS} (independent key populations, fixed library hash seed)",
-                spec.kappa
-            ),
+    let mut labels: Vec<String> = tallies.keys().cloned().collect();
+    labels.sort();
+    for label in labels {
+        let (simul, marg) = tallies.remove(&label).expect("label just enumerated");
+        let context = format!(
+            "rows={BOUND_ROWS} cols={BOUND_COLS} marginal kappa={} n={BOUND_N} \
+             trials={BOUND_TRIALS} (independent key populations, fixed library hash seed \
+             — the keys of one sketch share it and are not independent trials)",
+            spec.kappa
+        );
+        simul.assert_none(&format!("Count {label} / simultaneous L2 bound"), &context);
+        marg.assert_rate_at_most(
+            &format!("Count {label} / marginal L2 median bound"),
+            spec.marginal_failure(),
+            &context,
         );
     }
 }

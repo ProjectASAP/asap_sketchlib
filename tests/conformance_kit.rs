@@ -378,7 +378,7 @@ fn ddsketch_passes_relative_quantile_conformance() {
         "PortableDds",
         || PortableDdsAdapter(PortableDds::new(ALPHA)),
         &values,
-        common::specs::RelativeQuantileSpec::new(ALPHA),
+        common::specs::RelativeQuantileSpec::portable(ALPHA),
         &conformance::DEFAULT_QUANTILE_QS,
     )
     .assert_ok();

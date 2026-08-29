@@ -40,7 +40,9 @@ pub mod univmon;
 pub use univmon::{UnivMon, UnivMonDeltaFidelity, bottom_layer_for_hash};
 
 pub mod univmon_q;
-pub use univmon_q::{UnivMonQ, UnivMonQConfig, UnivMonQError, UnivMonQPoint, UnivMonQQuery};
+pub use univmon_q::{
+    OrderedQueryDiagnostics, UnivMonQ, UnivMonQConfig, UnivMonQError, UnivMonQPoint, UnivMonQQuery,
+};
 
 pub mod univmon_optimized;
 pub use univmon_optimized::{UnivMonPyramid, UnivSketchPool};

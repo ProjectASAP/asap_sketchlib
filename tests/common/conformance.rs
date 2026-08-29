@@ -427,8 +427,12 @@ where
 ///
 /// Kept separate from [`quantile_battery`] because the two guarantees are not
 /// interchangeable: a rank band says nothing about DDSketch's promise, and a
-/// relative-value band says nothing about KLL's. The nearest-rank (ceil)
-/// convention matches `DDSketch::get_value_at_quantile`.
+/// relative-value band says nothing about KLL's.
+///
+/// The order statistic compared against comes from the spec's own
+/// `DdRankConvention`, so a core `DDSketch` (`ceil(q*n)`) and the portable
+/// `DdSketch` (`floor(q*(n-1))`) are each scored on the question they actually
+/// answer.
 pub fn relative_quantile_battery<S, F>(
     sketch: &str,
     new_sketch: F,
@@ -451,10 +455,8 @@ where
     for v in values {
         sk.update(*v);
     }
-    let n = sorted.len();
     for &q in qs {
-        let idx = ((q.clamp(0.0, 1.0) * n as f64).ceil() as usize).clamp(1, n);
-        let truth = sorted[idx - 1];
+        let truth = spec.convention.order_statistic(&sorted, q);
         let est = sk.quantile(q);
         let outcome = spec.check(q, est, truth);
         report.record(
