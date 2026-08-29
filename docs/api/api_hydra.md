@@ -63,10 +63,15 @@ the matrix counters, `[registers]` for HyperLogLog, `[cells]` for KLL and
 UnivMon. Counters are inlined, not nested in their own envelopes, and every
 cell shares the prototype's geometry, so it is carried once.
 
+The grid and the matrix counters are both hashed per row, so each carries the
+same bound: `1 <= rows <= 20` and `1 <= counter_rows <= 20` (`MATRIX_MAX_ROWS`,
+the seed list length).
+
 A grid mixing counter variants, UnivMon cells mixing key variants, a cell whose
 geometry differs from the prototype's, a `type_to_clone` holding data, a
-declared grid the storage does not match, and a payload length that disagrees
-with the declared geometry are all rejected on both sides. `Hydra` also derives
+declared grid the storage does not match, a row count past `MATRIX_MAX_ROWS`,
+and a payload length that disagrees with the declared geometry are all rejected
+on both sides. `Hydra` also derives
 serde, which is the nested codec used when a Hydra is embedded in a larger
 serde value.
 

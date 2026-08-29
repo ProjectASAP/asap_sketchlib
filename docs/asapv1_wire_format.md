@@ -403,6 +403,20 @@ Wire counter types are `"i32"`, `"i64"` and `"f64"` (`i128` and exotic counters 
 A counter type other than i32/i64/f64, or non-`Vector2D` storage, must be converted first; see Section 5, "Converting an exotic in-memory sketch".
 Both modes, `FastPath` and `RegularPath`, serialize directly (you'd only "convert" a mode to *change* it, which needs re-inserting the data).
 
+**Wire-eligible geometries.** `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length) and `cols` non-zero.
+A per-row seed is `SEEDLIST[r % 20]`, so on the regular path row `r` and row `r + 20` share a seed: they fold every key into the same column and hold identical counters.
+The bound holds for both modes, so one geometry rule covers the format. `with_dimensions` is free to build a wider matrix in memory; such a sketch is rejected on **both** sides, so the format never emits bytes it would refuse to read back.
+
+The same bound applies to **every payload whose rows are seeded per row**, under whichever name that payload's rows carry: Bloom's slices (`0x17 0x00`, §3.4, as `BLOOM_MAX_SLICES`), CMSHeap (`0x03 0x00`) and CSHeap (`0x0a 0x00`) with their base matrix, CountL2HH (`0x19 0x00`), Coco's table (`0x0c 0x00`, whose row `i` hashes at seed index `i`), Elastic's light layer (`0x0b 0x00`), Hydra's grid and its matrix counters (`0x07 0x01` / `0x07 0x02`), and every UnivMon (`0x10 0x00`) and UnivMon Optimized (`0x11 0x00`) layer.
+UnivMon-Q (`0x1a 0x00`) is the exception: its rows are bit fields of one 128-bit hash rather than seed-list draws, so its `depth` is bounded by that hash budget instead.
+
+**Decode rules** (all fail closed, per Section 1's decoder rules):
+
+1. `kind_id` is `0x02 0x00`; any other id is rejected.
+2. The metadata's hash spec, `counter_type` and `mode` must equal the target type's own, with `rows` / `cols` echoed back since those are structural and the matrix is sized from them.
+3. `rows` and `cols` are both non-zero and `rows <= 20`. Checked before the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
+4. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
+
 ### 3.3: KLL payload (`0x06 0x00` compact / `0x06 0x01` dynamic)
 
 Both KLL variants (the compact fixed-buffer `KLL` and the growable `KLLDynamic`) share **one payload shape**; they differ only by `kind_id` (like HLL's Classic vs Ertl-MLE), because their in-memory buffers differ but the serialized quantile state is the same. The accuracy params `k` / `m`, the `item_type`, and the optional `seed` live in the metadata (§2), so the payload is just the retained state:
@@ -431,7 +445,7 @@ Its structural parameters — the grid dimensions (`rows` / `cols`) and the colu
 `mode` records `RegularPath` vs `FastPath` for the same reason Count-Min does: the two paths fold a key into different columns on most geometries, so a filter read back on the wrong path answers no about its own members.
 `inserted` is **not** derivable from `words` — re-inserting a key sets no new bit — so it is carried. Everything else the filter reports is: `fill_ratio`, `estimated_fpp` and `predicted_fpp` are all recomputed from the bits and the dimensions, and none of them appear.
 
-**Wire-eligible geometries.** The wire covers what `Bloom::with_capacity` produces: `1 <= rows <= 20` (`BLOOM_MAX_SLICES`, the seed list length), a **power-of-two** `cols`, and `rows * cols <= 2^31` (`BLOOM_MAX_BITS`).
+**Wire-eligible geometries.** The wire covers what `Bloom::with_capacity` produces: `1 <= rows <= 20` (`BLOOM_MAX_SLICES`, defined as `MATRIX_MAX_ROWS`, the seed list length), a **power-of-two** `cols`, and `rows * cols <= 2^31` (`BLOOM_MAX_BITS`).
 `Bloom::with_dimensions` is free to build a filter outside that subset — more rows than there are seeds (which duplicate an earlier slice bit for bit), or a modulo-folded width — and such a filter is rejected on **both** sides, so the format never emits bytes it would refuse to read back.
 This mirrors Count-Min, whose wire covers i32/i64/f64 counters while the in-memory type stays freer (Section 3.2, Section 5).
 
@@ -524,10 +538,10 @@ Cells carry a sign: Count Sketch adds `±weight`, so a counter may be negative a
 
 1. `kind_id` is `0x04 0x00`; any other id is rejected.
 2. The metadata's hash spec, `counter_type` and `mode` must equal the target type's own, with `rows` / `cols` echoed back since those are structural and the matrix is sized from them. `counter_type` is required: a map missing it does not decode, so it can never be silently defaulted.
-3. `rows` and `cols` are both non-zero. Checked before the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
+3. `rows` and `cols` are both non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length — §3.2's wire-eligible geometries, the same line Count-Min draws). Checked before the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
 4. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
 
-Rule 4 is enforced on the **encode** side too: a matrix whose cell count disagrees with its own dimensions (`Vector2D::init` reserves without filling) fails to serialize, so the format never emits bytes it would refuse to read back.
+Rules 3 and 4 are enforced on the **encode** side too: a matrix past `MATRIX_MAX_ROWS`, or one whose cell count disagrees with its own dimensions (`Vector2D::init` reserves without filling), fails to serialize, so the format never emits bytes it would refuse to read back.
 
 ### 3.7: CMSHeap payload (`0x03 0x00`)
 
@@ -560,7 +574,7 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 
 1. `kind_id` is `0x03 0x00`; any other id is rejected — including `0x02 0x00` (a plain Count-Min) and `0x0a 0x00` (a CSHeap), which carry a structurally identical metadata map.
 2. The metadata's hash spec, `counter_type` and `mode` must equal the target type's own, with `rows` / `cols` / `k` / `key_type` echoed back since those are properties of the stored sketch rather than of the target. Every key is required: a map missing one, or carrying an unknown one, does not decode.
-3. `rows` and `cols` are both non-zero, checked **before** the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
+3. `rows` and `cols` are both non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — the base matrix is seeded per row), checked **before** the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
 4. `key_type` is one of §3.5's thirteen names; anything else is rejected before the payload is read. The `keys` array is then read **as** that type, so string-keyed bytes relabelled `"u64"` do not decode.
 5. `keys` and `heap_counts` have equal length.
 6. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
@@ -658,7 +672,7 @@ The KLL counter's optional compaction `seed` is not carried, so the bounded cost
 
 1. `kind_id` is one of the five; the decoder routes on it and each variant's decoder owns exactly one id.
 2. The hash-spec group matches the target's `HashProfile` (Hydra hashes through the crate default, `DefaultXxHasher`). `counter_type` (`"i32"`), `counter_mode` (`"fast"`), `counter_item_type` (`"f64"`) and `counter_precision` are pinned, since the counter variant fixes them; `rows` / `cols` / `schema` and the remaining counter dimensions are properties of the *stored* grid, so they are echoed back and then validated on their own.
-3. `rows` and `cols` are non-zero and `rows * cols` is overflow-checked. For the tiled variants the counter dimensions are non-zero and `rows * cols * per_cell` is overflow-checked too, and for `0x07 0x04` every one of `counter_layer_size` / `counter_sketch_row` / `counter_sketch_col` / `counter_heap_size` is non-zero. All **before** anything is sized from them.
+3. `rows` and `cols` are non-zero, `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — the grid is seeded per row) and `rows * cols` is overflow-checked. For the tiled variants the counter dimensions are non-zero, `counter_rows <= 20` for the two matrix counters and `rows * cols * per_cell` is overflow-checked too, and for `0x07 0x04` every one of `counter_layer_size` / `counter_sketch_row` / `counter_sketch_col` / `counter_heap_size` is non-zero. All **before** anything is sized from them.
 4. The payload's length is measured against the declared geometry — `len(counts) == rows*cols*counter_rows*counter_cols`, `len(registers) == rows*cols*2^counter_precision`, `len(cells) == rows*cols` — before any grid or matrix is allocated. A declared grid larger than the payload carries costs nothing.
 5. `0x07 0x04` reads `cells` as `counter_key_type`, which must be one of §3.5's thirteen names; a payload whose keys are not of the declared type is rejected by the msgpack decode itself.
 6. Each cell is then rebuilt through its own counter's decoder, so every rule that decoder enforces holds for a Hydra cell too: KLL's level layout and `k` / `m` bounds, HLL's register count, UnivMon's per-layer geometry and heap runs.
@@ -730,7 +744,7 @@ The same encode-side checks apply, so the format never emits bytes it would refu
 
 1. `kind_id` is `0x0b 0x00`; any other id is rejected.
 2. The metadata's hash spec, `light_counter_type` and `light_mode` must equal the target type's own, with `heavy_buckets` / `light_rows` / `light_cols` echoed back since those are structural and both parts are sized from them. Cross-profile bytes are rejected.
-3. `heavy_buckets`, `light_rows` and `light_cols` are all non-zero, `heavy_buckets` fits an `i32` (`bktlen`'s type), and `light_rows * light_cols` does not overflow. Checked **before** anything is sized from the declared geometry, so a hostile geometry never reaches an allocation.
+3. `heavy_buckets`, `light_rows` and `light_cols` are all non-zero, `light_rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — the light Count-Min is seeded per row), `heavy_buckets` fits an `i32` (`bktlen`'s type), and `light_rows * light_cols` does not overflow. Checked **before** anything is sized from the declared geometry, so a hostile geometry never reaches an allocation.
 4. `len(flow_ids) == len(vote_pos) == len(vote_neg) == len(evictions) == heavy_buckets`, and `len(light_counts) == light_rows * light_cols`, both checked before the table and the matrix are built.
 5. `flow_ids[i]` is `nil` **exactly when** `vote_pos[i] == 0`. The two encode the same fact, occupancy, and a payload where they disagree describes a table no insert could produce.
 
@@ -763,7 +777,7 @@ Coco carries the hash-spec group — it hashes, and a consumer must reproduce th
 
 1. `kind_id` is `0x0c 0x00`; any other id is rejected.
 2. The metadata's hash spec must equal the target type's own, with `rows` / `cols` echoed back since those are structural and the table is sized from them. Cross-profile bytes are rejected.
-3. `rows` and `cols` are both non-zero. Checked **before** anything is sized from the declared geometry, so a hostile geometry never reaches an allocation and never reaches `cols.ilog2()`.
+3. `rows` and `cols` are both non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — row `i` hashes at seed index `i`). Checked **before** anything is sized from the declared geometry, so a hostile geometry never reaches an allocation and never reaches `cols.ilog2()`.
 4. `len(keys) == len(values) == rows * cols` exactly, and that product must not overflow. Checked **before** the table is built, so crafted dimensions cannot drive a huge reserve.
 5. `values[i] == 0` wherever `keys[i]` is `nil`. An unoccupied bucket holds no mass — `insert` always elects a key into the bucket it credits — so no encoder can produce such an entry, and rejecting it keeps the decoded table canonical. This mirrors Bloom's trailing-padding rule (§3.4, rule 5).
 
@@ -884,7 +898,7 @@ UnivMon carries the hash-spec group — it hashes, and a consumer must reproduce
 3. `layer_size >= 1` and `heap_size >= 1`.
 4. `key_type` is one of §3.5's thirteen names; the `keys` array is read **as** that type, so a payload whose keys are not of the declared type is rejected by the msgpack decode itself, and `keys` and `heap_counts` have equal length.
 5. `sketch_row * layer_size == len(l2)` exactly, checked **before** the layer geometry is built, so a declared `layer_size` far larger than the payload carries never reserves anything.
-6. `len(heap_lens) == len(candidate_complete) == layer_size`; every layer's `rows` and `cols` are non-zero (`cols.ilog2()` panics on zero); the layers' total cell count and total accumulator count are computed with checked arithmetic and must equal `len(counts)` and `len(l2)`; and `len(keys) == len(heap_counts) == sum(heap_lens)`.
+6. `len(heap_lens) == len(candidate_complete) == layer_size`; every layer's `rows` and `cols` are non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — a layer is a CountL2HH matrix; `cols.ilog2()` panics on zero); the layers' total cell count and total accumulator count are computed with checked arithmetic and must equal `len(counts)` and `len(l2)`; and `len(keys) == len(heap_counts) == sum(heap_lens)`.
 7. Each layer's entry count is `<= heap_size`, and no key appears twice within a layer. `heap_size` **never sizes an allocation**: each heap is seated from the entries the payload actually carries.
 8. `bucket_size` fits this target's `usize`.
 9. `update_mode` is `0`, `1` or `2`; any other value is rejected.
@@ -1040,7 +1054,7 @@ The encode side re-splits the bytes the variant produced and rejects an id that 
 
 1. `kind_id` is `0x19 0x00`; any other id is rejected.
 2. The hash-spec group matches the **target hasher's** `HashProfile`. `seed_index`, `rows` and `cols` are properties of the *stored* sketch, so they are echoed back into the expected metadata rather than pinned.
-3. `rows` and `cols` are both non-zero. Checked before the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
+3. `rows` and `cols` are both non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2). Checked before the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
 4. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
 5. `len(l2) == rows`.
 6. Every `l2[i] >= 0` — a negative accumulator is not a state a sum of squares reaches.

@@ -589,7 +589,9 @@ impl UnivMon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, RegularPath, SketchHasher, Vector2D};
+    use crate::{
+        CANONICAL_HASH_SEED, DataInput, MATRIX_MAX_ROWS, RegularPath, SketchHasher, Vector2D,
+    };
 
     fn populated() -> UnivMon {
         let mut um = UnivMon::init_univmon(4, 2, 16, 3);
@@ -613,6 +615,41 @@ mod tests {
     fn payload_of<K: for<'de> Deserialize<'de>>(bytes: &[u8]) -> PyramidPayload<K> {
         let (_, _, payload) = envelope::split(bytes).expect("split");
         from_slice(payload).expect("payload")
+    }
+
+    /// Every layer is a CountL2HH matrix, so a layer past the seed list's row
+    /// bound is refused on both sides.
+    #[test]
+    fn univmon_rejects_too_many_layer_rows() {
+        let rows = MATRIX_MAX_ROWS + 1;
+        assert!(
+            UnivMon::init_univmon(4, rows, 16, 3)
+                .serialize_to_bytes()
+                .is_err(),
+            "a layer past MATRIX_MAX_ROWS must not serialize"
+        );
+
+        let um = populated();
+        let encoded = um.serialize_to_bytes().expect("serialize");
+        let mut meta = metadata_of(&encoded);
+        meta.sketch_row = rows as u32;
+        let layers = meta.layer_size as usize;
+        let cols = meta.sketch_col as usize;
+        // Sized to the crafted geometry, so the row bound is what bites.
+        let mut payload: PyramidPayload<String> = payload_of(&encoded);
+        payload.counts = vec![0; rows * cols * layers];
+        payload.l2 = vec![0; rows * layers];
+        let problem = UnivMon::deserialize_from_bytes(&crafted(&meta, &payload))
+            .expect_err("layer rows past MATRIX_MAX_ROWS must be rejected")
+            .to_string();
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
+
+        // The boundary itself is eligible.
+        assert!(
+            UnivMon::init_univmon(4, MATRIX_MAX_ROWS, 16, 3)
+                .serialize_to_bytes()
+                .is_ok()
+        );
     }
 
     #[test]
@@ -862,7 +899,7 @@ mod tests {
             shaped(3, 2, 0, 4),
             shaped(0, 2, 16, 4),
             shaped(3, 2, 16, 0),
-            shaped(3, 4096, 4096, 4),
+            shaped(3, MATRIX_MAX_ROWS as u32, 4096, 4),
             shaped(3, 2, 16, 1),
         ];
         for meta in cases {

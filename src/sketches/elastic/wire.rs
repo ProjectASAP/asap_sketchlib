@@ -36,6 +36,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::{CountMin, HashProfile, SketchHasher, Vector2D};
 
@@ -129,6 +130,7 @@ fn check_geometry(
             "Elastic dimensions must be non-zero: heavy_buckets={heavy_buckets}, light={light_rows}x{light_cols}"
         ));
     }
+    check_matrix_rows("Elastic light layer", light_rows)?;
     if heavy_buckets > i32::MAX as usize {
         return Err(format!(
             "Elastic heavy bucket count {heavy_buckets} exceeds i32"
@@ -284,7 +286,45 @@ impl<H: SketchHasher + HashProfile> Elastic<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, RegularPath};
+    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS, RegularPath};
+
+    /// The light layer is a Count-Min matrix, so it carries the same row bound:
+    /// more rows than the seed list has seeds is refused on both sides.
+    #[test]
+    fn elastic_rejects_too_many_light_rows() {
+        let rows = MATRIX_MAX_ROWS + 1;
+        assert!(
+            Elastic::<DefaultXxHasher>::init_with_dimensions(4, rows, 256)
+                .serialize_to_bytes()
+                .is_err(),
+            "a light layer past MATRIX_MAX_ROWS must not serialize"
+        );
+
+        let metadata =
+            rmp_serde::to_vec_named(&elastic_metadata::<DefaultXxHasher>(4, rows as u32, 256))
+                .unwrap();
+        let payload = rmp_serde::to_vec(&ElasticPayload {
+            flow_ids: vec![None; 4],
+            vote_pos: vec![0; 4],
+            vote_neg: vec![0; 4],
+            evictions: vec![false; 4],
+            stale_copies: false,
+            light_counts: vec![0; rows * 256],
+        })
+        .unwrap();
+        let bytes = envelope::encode(ELASTIC_KIND, &metadata, &payload);
+        let problem = Elastic::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
+            .expect_err("light rows past MATRIX_MAX_ROWS must be rejected")
+            .to_string();
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
+
+        // The boundary itself is eligible.
+        assert!(
+            Elastic::<DefaultXxHasher>::init_with_dimensions(4, MATRIX_MAX_ROWS, 256)
+                .serialize_to_bytes()
+                .is_ok()
+        );
+    }
 
     /// The whole heavy table as `(flow_id, vote_pos, vote_neg, eviction)` in
     /// bucket index order.
@@ -449,9 +489,12 @@ mod tests {
     /// run before the heavy table and the light matrix are built.
     #[test]
     fn elastic_rejects_dimension_length_mismatch() {
-        let metadata =
-            rmp_serde::to_vec_named(&elastic_metadata::<DefaultXxHasher>(1024, 1024, 1024))
-                .unwrap();
+        let metadata = rmp_serde::to_vec_named(&elastic_metadata::<DefaultXxHasher>(
+            1024,
+            MATRIX_MAX_ROWS as u32,
+            1 << 24,
+        ))
+        .unwrap();
         let payload = rmp_serde::to_vec(&ElasticPayload {
             flow_ids: vec![None, None],
             vote_pos: vec![0, 0],

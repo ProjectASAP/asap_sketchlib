@@ -31,6 +31,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::{HashProfile, SketchHasher, Vector1D, Vector2D};
 
@@ -88,15 +89,16 @@ struct L2hhPayload {
     l2: Vec<i64>,
 }
 
-/// Rejects a zero dimension. `Vector2D` derives its column mask via
-/// `cols.ilog2()`, which panics on `cols == 0`.
+/// Rejects a zero dimension and a row count past `MATRIX_MAX_ROWS`.
+/// `Vector2D` derives its column mask via `cols.ilog2()`, which panics on
+/// `cols == 0`.
 pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
     if rows == 0 || cols == 0 {
         return Err(format!(
             "CountL2HH dimensions must be non-zero: rows={rows}, cols={cols}"
         ));
     }
-    Ok(())
+    check_matrix_rows("CountL2HH", rows)
 }
 
 /// The `(counts, l2)` sub-payload one CountL2HH contributes, in the order the
@@ -106,6 +108,7 @@ pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
 pub(crate) fn layer_state<H: SketchHasher>(
     sketch: &CountL2HH<H>,
 ) -> Result<(&[i64], &[i64]), RmpEncodeError> {
+    check_dimensions(sketch.row, sketch.col).map_err(RmpEncodeError::Syntax)?;
     let cells = sketch.row.saturating_mul(sketch.col);
     let counts = sketch.counts.as_slice();
     let l2 = sketch.l2.as_slice();
@@ -233,7 +236,9 @@ impl<H: SketchHasher + HashProfile> CountL2HH<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, HeapItem, RegularPath};
+    use crate::{
+        CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, HeapItem, MATRIX_MAX_ROWS, RegularPath,
+    };
 
     /// The standard-profile sketch, named so decode calls can pick a hasher.
     type Std = CountL2HH<DefaultXxHasher>;
@@ -255,6 +260,34 @@ mod tests {
         let metadata = rmp_serde::to_vec_named(meta).expect("metadata");
         let payload = rmp_serde::to_vec(&L2hhPayload { counts, l2 }).expect("payload");
         envelope::encode(L2HH_KIND, &metadata, &payload)
+    }
+
+    /// More rows than the seed list has seeds is outside the wire-eligible
+    /// subset, on both sides.
+    #[test]
+    fn countl2hh_rejects_too_many_rows() {
+        let rows = MATRIX_MAX_ROWS + 1;
+        assert!(
+            Std::with_dimensions(rows, 32).serialize_to_bytes().is_err(),
+            "a matrix past MATRIX_MAX_ROWS must not serialize"
+        );
+
+        let bytes = crafted(
+            &l2hh_metadata::<DefaultXxHasher>(0, rows as u32, 32),
+            vec![0; rows * 32],
+            vec![0; rows],
+        );
+        let problem = Std::deserialize_from_bytes(&bytes)
+            .expect_err("rows past MATRIX_MAX_ROWS must be rejected")
+            .to_string();
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
+
+        // The boundary itself is eligible.
+        assert!(
+            Std::with_dimensions(MATRIX_MAX_ROWS, 32)
+                .serialize_to_bytes()
+                .is_ok()
+        );
     }
 
     #[test]
@@ -432,9 +465,10 @@ mod tests {
         let meta = l2hh_metadata::<DefaultXxHasher>(0, 4, 0);
         assert!(Std::deserialize_from_bytes(&crafted(&meta, Vec::new(), vec![0; 4])).is_err());
 
-        let huge = l2hh_metadata::<DefaultXxHasher>(0, 4096, 4096);
+        let huge = l2hh_metadata::<DefaultXxHasher>(0, MATRIX_MAX_ROWS as u32, 1 << 24);
         assert!(
-            Std::deserialize_from_bytes(&crafted(&huge, vec![1, 2, 3], vec![0; 4096])).is_err(),
+            Std::deserialize_from_bytes(&crafted(&huge, vec![1, 2, 3], vec![0; MATRIX_MAX_ROWS]))
+                .is_err(),
             "counts length must match rows*cols"
         );
 

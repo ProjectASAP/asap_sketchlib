@@ -37,6 +37,7 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 
+use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::{HashProfile, SketchHasher, Vector2D};
 
@@ -102,6 +103,7 @@ fn check_geometry(rows: usize, cols: usize) -> Result<(), String> {
             "Coco table dimensions must be non-zero: rows={rows}, cols={cols}"
         ));
     }
+    check_matrix_rows("Coco table", rows)?;
     Ok(())
 }
 
@@ -207,7 +209,40 @@ impl<H: SketchHasher + HashProfile> Coco<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, Vector2D};
+    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS, Vector2D};
+
+    /// More rows than the seed list has seeds is outside the wire-eligible
+    /// subset, on both sides: row `i` hashes at seed index `i`.
+    #[test]
+    fn coco_rejects_too_many_rows() {
+        let rows = MATRIX_MAX_ROWS + 1;
+        assert!(
+            Coco::<DefaultXxHasher>::init_with_size(8, rows)
+                .serialize_to_bytes()
+                .is_err(),
+            "a table past MATRIX_MAX_ROWS must not serialize"
+        );
+
+        let metadata =
+            rmp_serde::to_vec_named(&coco_metadata::<DefaultXxHasher>(rows as u32, 8)).unwrap();
+        let payload = rmp_serde::to_vec(&CocoPayload {
+            keys: vec![None; rows * 8],
+            values: vec![0; rows * 8],
+        })
+        .unwrap();
+        let bytes = envelope::encode(COCO_KIND, &metadata, &payload);
+        let problem = Coco::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
+            .expect_err("rows past MATRIX_MAX_ROWS must be rejected")
+            .to_string();
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
+
+        // The boundary itself is eligible.
+        assert!(
+            Coco::<DefaultXxHasher>::init_with_size(8, MATRIX_MAX_ROWS)
+                .serialize_to_bytes()
+                .is_ok()
+        );
+    }
 
     /// The whole table as `(key, value)` pairs in row-major order.
     fn cells<H: SketchHasher>(sketch: &Coco<H>) -> Vec<(Option<String>, u64)> {
@@ -329,8 +364,11 @@ mod tests {
     /// runs before `Vector2D::from_fn`.
     #[test]
     fn coco_rejects_dimension_length_mismatch() {
-        let metadata =
-            rmp_serde::to_vec_named(&coco_metadata::<DefaultXxHasher>(1024, 1024)).unwrap();
+        let metadata = rmp_serde::to_vec_named(&coco_metadata::<DefaultXxHasher>(
+            MATRIX_MAX_ROWS as u32,
+            1 << 24,
+        ))
+        .unwrap();
         let payload = rmp_serde::to_vec(&CocoPayload {
             keys: vec![None, None, None],
             values: vec![0, 0, 0],

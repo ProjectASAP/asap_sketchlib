@@ -68,7 +68,10 @@ on every `CountMin`: the impl exists only for wire-eligible configs
 `i128` / other exotic-counter or non-`Vector2D` sketch must be converted to a
 wire-eligible storage first (only you know if the mapping is lossless).
 `rows`/`cols` are carried in the envelope metadata; the payload is just
-`[counts]`.
+`[counts]`. The wire covers `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed
+list length): past that, the regular path gives row `r` and row `r + 20` the
+same seed and identical counters, so a wider matrix is refused on both sides in
+either mode.
 
 ## Examples
 

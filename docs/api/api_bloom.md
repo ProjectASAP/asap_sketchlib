@@ -24,7 +24,7 @@ fn with_capacity(expected_items: usize, target_fpp: f64) -> Self
 fn with_dimensions(rows: usize, cols: usize) -> Self
 fn dimensions_for(expected_items: usize, target_fpp: f64) -> (usize, usize)
 
-const BLOOM_MAX_SLICES: usize   // 20, the hasher's seed count
+const BLOOM_MAX_SLICES: usize   // MATRIX_MAX_ROWS (20), the hasher's seed count
 const BLOOM_MAX_BITS: usize     // 2^31, the sizing ceiling
 ```
 

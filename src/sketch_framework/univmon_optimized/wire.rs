@@ -238,7 +238,8 @@ mod tests {
     use crate::sketch_framework::univmon::wire::PyramidPayload;
     use crate::sketches::countsketch_topk::CountL2HH;
     use crate::{
-        CANONICAL_HASH_SEED, DataInput, HeapItem, L2HH, RegularPath, SketchHasher, Vector2D,
+        CANONICAL_HASH_SEED, DataInput, HeapItem, L2HH, MATRIX_MAX_ROWS, RegularPath, SketchHasher,
+        Vector2D,
     };
 
     fn populated() -> UnivMonPyramid {
@@ -544,7 +545,7 @@ mod tests {
             shaped(
                 4,
                 PyramidLayout {
-                    mouse_row: 4096,
+                    mouse_row: MATRIX_MAX_ROWS as u32,
                     mouse_col: 4096,
                     ..layout()
                 },

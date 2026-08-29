@@ -77,7 +77,8 @@ two-tier layout (`layer_size`, `elephant_layers`, `elephant_row`,
 `elephant_col`, `mouse_row`, `mouse_col`, `heap_size`) plus the heaps'
 `key_type`. Layer `i` takes the elephant dimensions while `i < elephant_layers`
 and the mouse dimensions after, so every per-layer geometry is derived and none
-is stored.
+is stored. `elephant_row` and `mouse_row` carry `UnivMon`'s per-layer row bound,
+`1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length).
 
 `UnivSketchPool` is a free-list of scratch `UnivMon`s rather than a sketch, and
 has no wire kind.

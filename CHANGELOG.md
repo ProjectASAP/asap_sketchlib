@@ -93,6 +93,21 @@ signals a backwards-compatible change.
   fixtures exist for HLL, Count-Min, Count Sketch and compact KLL only, so the
   other kinds have no cross-language drift guard yet and `portable` stays in
   place until they do.
+- **BREAKING (ASAPv1 envelopes for matrix sketches past 20 rows):** every
+  payload whose rows are seeded per row now rejects a matrix with more rows than
+  `SEEDLIST` has seeds, on both the encode and the decode side. Seed indices
+  wrap at the seed list, so row `r` and row `r + 20` draw the same seed, fold
+  every key into the same column and hold identical cells — a wider matrix buys
+  storage and a hash, not independence. The new public `MATRIX_MAX_ROWS` names
+  the bound and `BLOOM_MAX_SLICES` is now defined as it, so the two names share
+  one definition. Covered: Count-Min (`0x02 0x00`), CMSHeap (`0x03 0x00`),
+  Count Sketch (`0x04 0x00`), Hydra's grid and matrix counters (`0x07 0x01` /
+  `0x07 0x02`), CSHeap (`0x0a 0x00`), Elastic's light layer (`0x0b 0x00`),
+  Coco's table (`0x0c 0x00`), UnivMon (`0x10 0x00`) and UnivMon Optimized
+  (`0x11 0x00`) layers, and CountL2HH (`0x19 0x00`) — Bloom (`0x17 0x00`)
+  already drew this line. UnivMon-Q (`0x1a 0x00`) is unaffected: its rows are
+  bit fields of one 128-bit hash, bounded by that budget instead. A wider matrix
+  is still buildable in memory; it no longer serializes.
 - **Made `HHHeap::update` independent of capacity.** The key index was rebuilt
   in full after every accepted update, cloning each resident's key, so the top-k
   structure behind `CMSHeap`, `CSHeap`, `FoldCMS`, `FoldCS`, `UnivMon` and the

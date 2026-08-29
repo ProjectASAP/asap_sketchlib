@@ -16,8 +16,8 @@
 //!   the per-slice partitioning.
 
 use crate::{
-    BitMatrix, DataInput, DefaultXxHasher, FastPath, FastPathHasher, MatrixStorage, RegularPath,
-    SEEDLIST, SketchHasher,
+    BitMatrix, DataInput, DefaultXxHasher, FastPath, FastPathHasher, MATRIX_MAX_ROWS,
+    MatrixStorage, RegularPath, SketchHasher,
 };
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -31,12 +31,12 @@ pub const BLOOM_DEFAULT_ROWS: usize = 7;
 /// Bits per hash function in a default filter.
 pub const BLOOM_DEFAULT_COLS: usize = 1 << 16;
 
-/// Slices that can hash independently.
+/// Slices that can hash independently, the matrix row bound under Bloom's name.
 ///
 /// Row `r` hashes with seed index `r % SEEDLIST.len()` on both paths, so slice
 /// `r` and slice `r + BLOOM_MAX_SLICES` receive the same seed and hold the same
 /// bits. Selectivity therefore stops growing past this many rows.
-pub const BLOOM_MAX_SLICES: usize = SEEDLIST.len();
+pub const BLOOM_MAX_SLICES: usize = MATRIX_MAX_ROWS;
 
 /// Ceiling on the bits [`Bloom::with_capacity`] will size to, 256 MiB packed.
 ///
