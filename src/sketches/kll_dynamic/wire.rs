@@ -74,6 +74,9 @@ where
             m: meta.m as usize,
             num_levels,
             co: Coin::from_wire(coin.state, coin.bit_cache, coin.remaining_bits as u8),
+            // The wire carries the coin's live state, not the construction
+            // seed, so a decoded sketch has no seed to re-derive on `clear()`.
+            seed: None,
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
             level0_capacity: 0,

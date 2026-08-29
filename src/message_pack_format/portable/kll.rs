@@ -21,6 +21,12 @@ pub fn new_sketchlib_kll(k: u16) -> SketchlibKll {
     KLL::init_kll(k as i32)
 }
 
+/// [`new_sketchlib_kll`] with an explicit compaction-coin seed, so the sketch
+/// replays identically across runs.
+pub fn new_sketchlib_kll_with_seed(k: u16, seed: u64) -> SketchlibKll {
+    KLL::init_kll_with_seed(k as i32, seed)
+}
+
 /// Updates a sketchlib KLL with one numeric observation.
 pub fn sketchlib_kll_update(inner: &mut SketchlibKll, value: f64) {
     inner.update(&value);
@@ -58,6 +64,19 @@ impl KllSketch {
         Self {
             k,
             backend: new_sketchlib_kll(k),
+        }
+    }
+
+    /// [`KllSketch::new`] with an explicit compaction-coin seed.
+    ///
+    /// `new` seeds the coin from the wall clock, so two runs over the same
+    /// input produce different sketches. Pass a seed when the result has to be
+    /// reproducible — replaying a stream, comparing two processes, or
+    /// asserting an accuracy bound in a test.
+    pub fn with_seed(k: u16, seed: u64) -> Self {
+        Self {
+            k,
+            backend: new_sketchlib_kll_with_seed(k, seed),
         }
     }
 

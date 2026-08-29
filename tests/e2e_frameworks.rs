@@ -11,9 +11,8 @@ use common::{FreqTruth, assert_between, zipf_u64};
 
 use asap_sketchlib::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::{
-    Count, CountMin, DataInput, EHSketchList, EnsembleSketch, ExponentialHistogram, FastPath,
-    FoldCMS, FoldCMSConfig, HashSketchEnsemble, Hydra, HyperLogLog, KLL, TumblingWindow, UnivMon,
-    UnivMonPyramid, Vector2D,
+    Count, CountMin, DataInput, EHSketchList, ExponentialHistogram, FastPath, FoldCMS,
+    FoldCMSConfig, Hydra, KLL, TumblingWindow, UnivMon, UnivMonPyramid, Vector2D,
 };
 
 // ------------------------------------------------------------------- Hydra
@@ -74,8 +73,13 @@ fn hydra_cm_multilabel_frequencies() {
 
 #[test]
 fn hydra_kll_head_quantile_and_cdf() {
-    let mut hydra = Hydra::with_schema(4, 512, ["shard"], HydraCounter::KLL(KLL::init_kll(200)))
-        .expect("schema");
+    let mut hydra = Hydra::with_schema(
+        4,
+        512,
+        ["shard"],
+        HydraCounter::KLL(KLL::init_kll_with_seed(200, 0x5EED_0600)),
+    )
+    .expect("schema");
     let values: Vec<f64> = common::uniform_u64(20_000, 1_000_000, 4001)
         .iter()
         .map(|v| *v as f64)
@@ -1519,40 +1523,13 @@ fn univmon_pyramid_weighted_metrics() {
 }
 
 // ------------------------------------------------------------------- Nitro
-
-#[test]
-fn nitro_unbiased_across_rates_cm_and_cs_targets() {
-    let n = 100_000i64;
-    for rate in [1.0f64, 0.5] {
-        let mut cm_batch = asap_sketchlib::NitroBatch::with_target(
-            rate,
-            CountMin::<Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(5, 2048),
-        );
-        cm_batch.insert(&vec![42i64; n as usize]);
-        let est = cm_batch.estimate_median(&DataInput::I64(42));
-        assert_between(
-            est,
-            n as f64 * 0.95,
-            n as f64 * 1.05,
-            &format!("Nitro CM rate={rate}"),
-        );
-
-        let mut cs_batch = asap_sketchlib::NitroBatch::with_target(
-            rate,
-            asap_sketchlib::Count::<Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(
-                5, 2048,
-            ),
-        );
-        cs_batch.insert(&vec![42i64; n as usize]);
-        let cs_est = cs_batch.estimate_median(&DataInput::I64(42));
-        assert_between(
-            cs_est,
-            n as f64 * 0.90,
-            n as f64 * 1.10,
-            &format!("Nitro CS rate={rate}"),
-        );
-    }
-}
+//
+// `NitroBatch` moved to `tests/e2e_composition.rs`. The version that lived
+// here built its batches with `NitroBatch::with_target`, which seeds the
+// sampling RNG from the OS — so its +-5% and +-10% bands were re-rolled on
+// every run and neither reproduced a failure nor derived from the estimator's
+// variance. The replacement uses the seeded constructor and the binomial
+// sampling band, across rates 1.0 / 0.5 / 0.1 / 0.01 and all three targets.
 
 // -------------------------------------------------- ExponentialHistogram
 
@@ -1634,40 +1611,9 @@ fn tumbling_foldcms_weighted_windows_exact_counts() {
 }
 
 // ------------------------------------------------------ HashSketchEnsemble
-
-#[test]
-fn ensemble_layer_mixed_cms_and_hll() {
-    let cms = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096);
-    let ertl = HyperLogLog::<asap_sketchlib::ErtlMLE>::new();
-    let mut ens: HashSketchEnsemble =
-        HashSketchEnsemble::new(vec![EnsembleSketch::from(cms), EnsembleSketch::from(ertl)])
-            .expect("ensemble");
-
-    // Dominant head: 6000 copies of key 0; tail: 15k uniform over 3000 keys.
-    let mut distinct = std::collections::HashSet::new();
-    let mut truth_hot0 = 0i64;
-    for k in common::uniform_u64(15_000, 3000, 2103) {
-        ens.insert(&DataInput::I64(k as i64));
-        distinct.insert(k as i64);
-    }
-    for _ in 0..6000 {
-        ens.insert(&DataInput::I64(0));
-        distinct.insert(0);
-        truth_hot0 += 1;
-    }
-
-    // CMS cell: one-sided frequency estimate for the dominant key. Upper
-    // slack is generous (3x) because the shared-hash fan-out across the
-    // ensemble's 15k-tail stream can collide into key 0's cells; the lower
-    // bound carries the real one-sided guarantee.
-    let cm_est = ens.estimate(0, &DataInput::I64(0)).expect("cms estimate");
-    assert!(
-        cm_est >= truth_hot0 as f64 && cm_est <= truth_hot0 as f64 * 3.0,
-        "ensemble CMS estimate {cm_est} vs true {truth_hot0} (must be one-sided)"
-    );
-
-    // HLL cell: shared-hash cardinality within 3%.
-    let card = ens.cardinality(1).expect("hll cardinality");
-    let t = distinct.len() as f64;
-    assert_between(card, t * 0.97, t * 1.03, "ensemble HLL cardinality");
-}
+//
+// `HashSketchEnsemble` moved to `tests/e2e_composition.rs`, where every member
+// variant (CountMinFast, CountFast, HllErtl, HllClassic, HllHip) is compared
+// against a standalone reference and held to its own family's bound. The
+// version that lived here covered two members with a hand-picked 3x upper
+// slack on the Count-Min cell.

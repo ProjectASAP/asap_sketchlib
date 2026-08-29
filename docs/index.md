@@ -19,6 +19,8 @@ This page is the docs home for `asap_sketchlib`.
 - [Advanced Use Cases](./advanced_use_cases.md)
 - [HHHeap Acceleration](./hhheap_acceleration.md) - what the top-k heap costs per update, how its digest-keyed position index is maintained through the sift, and the throughput it measures at
 - [Test Coverage Map](./tests.md)
+- [E2E Testing Harness](./e2e_testing_harness.md) - how the end-to-end suites are built and what a new sketch must satisfy
+- [E2E Coverage Matrix](./e2e_coverage_matrix.md) - which public instance is covered by which test, under which error bound, and whether that bound is a theorem or a documented empirical band
 - [Feature Status](./features.md)
 
 

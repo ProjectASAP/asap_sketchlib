@@ -21,12 +21,16 @@ use asap_sketchlib::{
 // Synthetic stream: one key inserted 100_000 times at rate 1.0.
 // Truth: 100_000. Current behavior: 0.
 // ---------------------------------------------------------------------------
+/// Fixed sampling-RNG seed so these regressions reproduce exactly.
+const NITRO_SEED: u64 = 0x8E_9101;
+
 #[test]
 fn nitro_estimate_median_matches_insert_hash_domain() {
     let n = 100_000i64;
-    let mut nb = NitroBatch::with_target(
+    let mut nb = NitroBatch::with_target_and_seed(
         1.0,
         CountMin::<Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(5, 2048),
+        NITRO_SEED,
     );
     nb.insert(&vec![7i64; n as usize]);
 
@@ -52,9 +56,10 @@ fn nitro_estimate_is_not_divided_by_rows() {
     let n = 100_000i64;
     let rows = 5usize;
     for rate in [1.0f64, 0.5, 0.25] {
-        let mut nb = NitroBatch::with_target(
+        let mut nb = NitroBatch::with_target_and_seed(
             rate,
             CountMin::<Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(rows, 2048),
+            NITRO_SEED,
         );
         nb.insert(&vec![7i64; n as usize]);
         let est = nb.estimate_median(&DataInput::I64(7));

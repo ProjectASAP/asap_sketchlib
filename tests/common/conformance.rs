@@ -158,6 +158,16 @@ impl Default for CardinalitySpec {
 
 pub const DEFAULT_QUANTILE_QS: [f64; 5] = [0.1, 0.25, 0.5, 0.75, 0.9];
 
+/// Smoke-test spec for sketches that promise **rank** error (the KLL family,
+/// UnivMon-Q's ordered queries).
+///
+/// This is deliberately not a general quantile spec. A sketch that promises
+/// *relative value* error instead — DDSketch — has no rank guarantee at all
+/// and must go through [`relative_quantile_battery`]; running it here would be
+/// asserting a property it does not claim. The tie-breaking form of the rank
+/// contract, and the `eps(k)` that ties the band to the sketch's own `k`, live
+/// in `super::specs::RankErrorSpec`; `rank_tol` here is a loose floor for
+/// catching gross breakage in a new adapter.
 #[derive(Clone, Copy)]
 pub struct QuantileSpec {
     /// Rank-tolerance band width for quantile checks.
@@ -375,7 +385,10 @@ where
     report
 }
 
-/// Quantile battery: rank-band checks across the standard q grid.
+/// Rank-error battery: rank-band checks across the standard q grid.
+///
+/// For sketches whose guarantee is on the **rank** of the returned value. See
+/// [`relative_quantile_battery`] for the value-error families.
 pub fn quantile_battery<S, F>(
     sketch: &str,
     new_sketch: F,
@@ -403,6 +416,51 @@ where
             "rank band",
             est >= lo && est <= hi,
             format!("q={q} est {est:.3} outside [{lo:.3}, {hi:.3}]"),
+        );
+    }
+    report
+}
+
+/// Relative-value-error battery: for sketches that bound
+/// `|est - true| / |true|` against the exact order statistic, such as
+/// DDSketch.
+///
+/// Kept separate from [`quantile_battery`] because the two guarantees are not
+/// interchangeable: a rank band says nothing about DDSketch's promise, and a
+/// relative-value band says nothing about KLL's. The nearest-rank (ceil)
+/// convention matches `DDSketch::get_value_at_quantile`.
+pub fn relative_quantile_battery<S, F>(
+    sketch: &str,
+    new_sketch: F,
+    values: &[f64],
+    spec: super::specs::RelativeQuantileSpec,
+    qs: &[f64],
+) -> BatteryReport
+where
+    S: QuantileOps,
+    F: Fn() -> S,
+{
+    let mut report = BatteryReport {
+        sketch: sketch.to_string(),
+        battery: "relative-quantile",
+        failures: vec![],
+    };
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mut sk = new_sketch();
+    for v in values {
+        sk.update(*v);
+    }
+    let n = sorted.len();
+    for &q in qs {
+        let idx = ((q.clamp(0.0, 1.0) * n as f64).ceil() as usize).clamp(1, n);
+        let truth = sorted[idx - 1];
+        let est = sk.quantile(q);
+        let outcome = spec.check(q, est, truth);
+        report.record(
+            "relative value error",
+            outcome.is_ok(),
+            outcome.err().unwrap_or_default(),
         );
     }
     report

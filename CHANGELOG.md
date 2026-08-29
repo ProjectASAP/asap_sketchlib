@@ -82,6 +82,19 @@ signals a backwards-compatible change.
   overflow-checked before anything is sized from it, and a container whose
   order does not survive a rebuild has its emitted order pinned, so a decoded
   sketch re-serializes byte-identically.
+- **Seeded constructors for the sketches whose randomness was wall-clock or
+  OS-drawn.** `KLLDynamic::init_with_seed` / `init_kll_with_seed`,
+  `NitroBatch::with_target_and_seed` / `init_nitro_with_seed`,
+  `KllSketch::with_seed` (and the free `new_sketchlib_kll_with_seed`) and
+  `HydraKllSketch::with_seed`, each mirroring the unseeded constructor beside
+  it. A KLL's compaction coin and a Nitro batch's geometric skip draw are the
+  only randomness those types hold, so fixing them makes the sketch a
+  deterministic function of its input — which is what reproducible replay,
+  cross-process parity and any assertion of an accuracy bound require.
+  `KLLDynamic` stores its seed so `clear()` re-seeds from it, as `KLL` already
+  did; the seed is not part of the wire format, since it describes how a sketch
+  was built rather than what it holds, so encoded bytes are unchanged.
+  `HydraKllSketch::with_seed` shares one seed across every cell.
 
 ### Changed
 
@@ -142,6 +155,16 @@ signals a backwards-compatible change.
   (Cargo convention: `y` is the major component pre-1.0).
 
 ### Fixed
+
+- **`ExponentialHistogram` no longer discards its payload when the bucket
+  sketch is an `Elastic`.** `EHSketchList::merge` had no `ELASTIC` arm, so the
+  catch-all returned `Cannot merge sketches of different types` for two Elastic
+  payloads — and `EHBucket::to_merge` drops that `Result`, so the histogram
+  went on summing bucket sizes while keeping only the counters of whichever
+  bucket it merged into. Every interval query then answered from a single
+  bucket: on a 10k-update Zipf stream each of the true top flows read 0 against
+  counts in the thousands. The arm is now present and delegates to
+  `Elastic::merge` like every other variant. No wire or API change.
 
 - **`HeapItem` now has an owned byte-array key, so `DataInput::Bytes` no longer
   goes through `String`.** `input_to_owned` decoded every byte array as UTF-8

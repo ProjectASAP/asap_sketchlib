@@ -166,28 +166,35 @@ fn kll_bulk_data_input_batch_matches_loop() {
     assert_eq!(sk2.count(), 0);
 }
 
+/// With a seeded coin, `KLLDynamic`'s bulk path must be *exactly* the loop
+/// path — same retained mass, same quantile bits. The previous version of this
+/// test built both sides with the wall-clock-seeded `init_kll`, so the two
+/// sketches had different coins and the 5% count tolerance was absorbing
+/// nondeterminism rather than measuring anything about `bulk_update`.
 #[test]
-fn kll_dynamic_bulk_vs_loop_with_tolerance() {
-    // KLLDynamic is wall-clock seeded (non-deterministic), so we only check
-    // count within 5% and rank bands, not byte-identical.
+fn kll_dynamic_bulk_vs_loop_is_exact_under_a_shared_seed() {
+    const SKETCH_SEED: u64 = 0x5EED_0700;
     let vals = normal_f64(10_000, 0.0, 100.0, 9002);
     let truth = NumericTruth::new(vals.clone());
 
-    let mut via_loop = KLLDynamic::<f64>::init_kll(200);
+    let mut via_loop = KLLDynamic::<f64>::init_kll_with_seed(200, SKETCH_SEED);
     for v in &vals {
         via_loop.update(v);
     }
-    let mut via_bulk = KLLDynamic::<f64>::init_kll(200);
+    let mut via_bulk = KLLDynamic::<f64>::init_kll_with_seed(200, SKETCH_SEED);
     via_bulk.bulk_update(&vals);
 
-    let ca = via_loop.count() as f64;
-    let cb = via_bulk.count() as f64;
-    assert!(
-        (ca - cb).abs() / ca < 0.05,
-        "KLLDynamic count loop {ca} vs bulk {cb}"
+    assert_eq!(
+        via_loop.count(),
+        via_bulk.count(),
+        "KLLDynamic seeded bulk vs loop: retained mass diverged          (sketch_seed={SKETCH_SEED:#x}, stream seed 9002)"
     );
-
     for &q in &QS {
+        assert_eq!(
+            via_loop.quantile(q).to_bits(),
+            via_bulk.quantile(q).to_bits(),
+            "KLLDynamic q={q}: seeded bulk vs loop quantile bits differ              (sketch_seed={SKETCH_SEED:#x})"
+        );
         assert_in_rank_band(via_loop.quantile(q), &truth, q, RANK_TOL, "KLLDynamic loop");
         assert_in_rank_band(via_bulk.quantile(q), &truth, q, RANK_TOL, "KLLDynamic bulk");
     }

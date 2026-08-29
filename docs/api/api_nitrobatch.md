@@ -16,7 +16,16 @@ Batch-mode geometric sampling wrapper that updates a sketch target.
 ```rust
 fn init_nitro(rate: f64) -> Self
 fn with_target(rate: f64, sk: S) -> Self
+fn init_nitro_with_seed(rate: f64, seed: u64) -> Self
+fn with_target_and_seed(rate: f64, sk: S, seed: u64) -> Self
 ```
+
+Sampling is where all of Nitro's randomness lives: which updates reach the
+target sketch is drawn from the geometric skip distribution. `init_nitro` and
+`with_target` seed that RNG from the OS, so the admitted subset — and therefore
+every estimate — differs between runs. The `*_with_seed` forms make it a
+deterministic function of the input, which is what lets an accuracy bound be
+asserted reproducibly.
 
 ## Insert/Update
 

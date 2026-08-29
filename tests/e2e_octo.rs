@@ -4246,3 +4246,429 @@ mod heavy_hitters {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The top-k plans: CmTopKOctoPlan and CountTopKOctoPlan
+// ---------------------------------------------------------------------------
+
+/// `CmTopKOctoPlan` / `CountTopKOctoPlan` are the plans in which the *aggregator*
+/// owns the pipeline's only heavy-hitter heap: workers keep no flow keys, and
+/// instead ship the key alongside every promoted counter (§3.2, Idea 3).
+///
+/// That design choice is what these tests are about. Because workers hold no
+/// key storage, they also have **no flush**: a residual counter cannot be
+/// attributed back to a key, so a flow that never crossed τ on any worker is
+/// absent from the aggregator's heap entirely and estimates zero — not merely
+/// undercounted. Every bound below is stated with that in mind.
+mod top_k_plans {
+    use super::*;
+    use asap_sketchlib::{
+        CMSHeap, CSHeap, CmTopKOctoAggregator, CmTopKOctoPlan, CountTopKOctoAggregator,
+        CountTopKOctoPlan, HeapItem, KeyedHashes,
+    };
+    use common::specs::{CountMinSpec, CountSketchSpec, Tally};
+
+    const WORKERS: usize = 4;
+    const TOP_K: usize = 32;
+    const N: usize = 200_000;
+    const DOMAIN: usize = 8_192;
+    const STREAM_SEED: u64 = 0x0C70_1101;
+
+    /// The per-counter gap the paper's deterministic half allows between the
+    /// aggregator and a single-threaded sketch: every one of the `k` workers
+    /// may hold back up to `τ` of its own share of a shared counter.
+    fn counter_ceiling() -> f64 {
+        (WORKERS as i32 * TAU) as f64
+    }
+
+    fn stream() -> Vec<u64> {
+        zipf_u64(N, DOMAIN, 1.1, STREAM_SEED)
+    }
+
+    fn truth_of(stream: &[u64]) -> FreqTruth {
+        let mut t = FreqTruth::default();
+        for k in stream {
+            t.observe(*k as i64);
+        }
+        t
+    }
+
+    /// Drives a top-k plan across `WORKERS` workers under one partition rule
+    /// and returns the aggregator.
+    fn drive_cm(route: Route, stream: &[u64]) -> CmTopKOctoAggregator {
+        let plan = CmTopKOctoPlan::new(ROWS, COLS);
+        let mut workers: Vec<_> = (0..WORKERS).map(|i| plan.worker(i)).collect();
+        let mut parent = plan.aggregator(TOP_K);
+        for (i, k) in stream.iter().enumerate() {
+            let input = DataInput::U64(*k);
+            let w = route.worker(i, &input, WORKERS);
+            let payload: KeyedHashes = plan.prepare(&input);
+            let mut shipped = Vec::new();
+            workers[w].process(&payload, &mut |d| shipped.push(d));
+            for d in shipped {
+                parent.apply(d);
+            }
+        }
+        parent
+    }
+
+    fn drive_count(route: Route, stream: &[u64]) -> CountTopKOctoAggregator {
+        let plan = CountTopKOctoPlan::new(ROWS, COLS);
+        let mut workers: Vec<_> = (0..WORKERS).map(|i| plan.worker(i)).collect();
+        let mut parent = plan.aggregator(TOP_K);
+        for (i, k) in stream.iter().enumerate() {
+            let input = DataInput::U64(*k);
+            let w = route.worker(i, &input, WORKERS);
+            let payload: KeyedHashes = plan.prepare(&input);
+            let mut shipped = Vec::new();
+            workers[w].process(&payload, &mut |d| shipped.push(d));
+            for d in shipped {
+                parent.apply(d);
+            }
+        }
+        parent
+    }
+
+    /// Single-threaded reference: the same sketch fed the same stream with no
+    /// promotion protocol in between.
+    fn reference_cm(stream: &[u64]) -> CMSHeap<Vector2D<i32>, RegularPath> {
+        let mut sk: CMSHeap<Vector2D<i32>, RegularPath> = CMSHeap::new(ROWS, COLS, TOP_K);
+        for k in stream {
+            sk.insert(&DataInput::U64(*k));
+        }
+        sk
+    }
+
+    fn reference_cs(stream: &[u64]) -> CSHeap<Vector2D<i32>, RegularPath> {
+        let mut sk: CSHeap<Vector2D<i32>, RegularPath> = CSHeap::new(ROWS, COLS, TOP_K);
+        for k in stream {
+            sk.insert(&DataInput::U64(*k));
+        }
+        sk
+    }
+
+    /// `(key, count)` pairs out of an aggregator's heap.
+    fn heap_entries(items: &[asap_sketchlib::HHItem]) -> Vec<(i64, i64)> {
+        items
+            .iter()
+            .map(|it| match it.key {
+                HeapItem::U64(v) => (v as i64, it.count),
+                ref other => panic!("unexpected heap key {other:?}"),
+            })
+            .collect()
+    }
+
+    /// Point estimates from the Count-Min top-k aggregator, against the
+    /// single-threaded reference and against exact truth.
+    ///
+    /// Two bounds apply and both are asserted:
+    ///
+    /// - **against the reference**, deterministically: Count-Min never
+    ///   underestimates and each of the `k` workers withholds at most `τ` per
+    ///   counter, so `ref - k*τ <= octo <= ref` for every key, under either
+    ///   partition;
+    /// - **against exact truth**, probabilistically: Count-Min's own additive
+    ///   bound, widened by exactly that same `k*τ` promotion residual and by
+    ///   nothing else.
+    #[test]
+    fn cm_top_k_point_estimates_trail_the_single_thread_reference_by_at_most_k_tau() {
+        let stream = stream();
+        let truth = truth_of(&stream);
+        let reference = reference_cm(&stream);
+        let ceiling = counter_ceiling();
+
+        for route in [Route::HashByKey, Route::RoundRobin] {
+            let parent = drive_cm(route, &stream);
+            let context = format!(
+                "{route:?} workers={WORKERS} rows={ROWS} cols={COLS} tau={TAU} top_k={TOP_K} \
+                 zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}"
+            );
+
+            let mut gap = Tally::default();
+            for (k, _) in truth.pairs() {
+                let d = DataInput::U64(k as u64);
+                let octo = parent.sketch.estimate(&d) as f64;
+                let single = reference.estimate(&d) as f64;
+                gap.record(octo <= single && single - octo <= ceiling, || {
+                    format!(
+                        "key {k}: octo {octo}, single-thread {single}, gap {} outside \
+                         [0, k*tau = {ceiling}]",
+                        single - octo
+                    )
+                });
+            }
+            gap.assert_none(
+                &format!("CmTopK octo vs single-thread ({route:?})"),
+                &context,
+            );
+
+            // Count-Min's own bound, widened only by the promotion residual.
+            let spec = CountMinSpec::new(ROWS, COLS);
+            let total = truth.total() as f64;
+            let mut bound = Tally::default();
+            let mut one_sided = Tally::default();
+            for (k, c) in truth.pairs() {
+                let est = parent.sketch.estimate(&DataInput::U64(k as u64)) as f64;
+                let f = c as f64;
+                // One-sided modulo the residual: the parent can only read low
+                // by what the workers are still holding.
+                one_sided.record(est >= f - ceiling, || {
+                    format!("key {k}: true {f}, octo {est}, deficit beyond k*tau = {ceiling}")
+                });
+                let hi = f + spec.excess_bound(total, f);
+                bound.record(est <= hi, || {
+                    format!("key {k}: true {f}, octo {est} above e*(N-f)/w ceiling {hi:.1}")
+                });
+            }
+            one_sided.assert_none(
+                &format!("CmTopK one-sided modulo k*tau ({route:?})"),
+                &context,
+            );
+            bound.assert_within(
+                &format!("CmTopK additive bound ({route:?})"),
+                spec.per_key_failure(),
+                &context,
+            );
+        }
+    }
+
+    /// The same two bounds for the signed plan: Count Sketch's L2 bound, and a
+    /// two-sided `k*τ` gap against the single-threaded reference (signed
+    /// counters can be withheld in either direction).
+    #[test]
+    fn count_top_k_point_estimates_satisfy_the_l2_bound_within_the_promotion_residual() {
+        let stream = stream();
+        let truth = truth_of(&stream);
+        let reference = reference_cs(&stream);
+        let ceiling = counter_ceiling();
+        let spec = CountSketchSpec::new(ROWS, COLS);
+
+        for route in [Route::HashByKey, Route::RoundRobin] {
+            let parent = drive_count(route, &stream);
+            let context = format!(
+                "{route:?} workers={WORKERS} rows={ROWS} cols={COLS} tau={TAU} top_k={TOP_K} \
+                 zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}"
+            );
+
+            let mut gap = Tally::default();
+            for (k, _) in truth.pairs() {
+                let d = DataInput::U64(k as u64);
+                let octo = parent.sketch.estimate(&d);
+                let single = reference.estimate(&d);
+                gap.record((octo - single).abs() <= ceiling, || {
+                    format!(
+                        "key {k}: octo {octo}, single-thread {single}, |gap| {} above \
+                         k*tau = {ceiling}",
+                        (octo - single).abs()
+                    )
+                });
+            }
+            gap.assert_none(
+                &format!("CountTopK octo vs single-thread ({route:?})"),
+                &context,
+            );
+
+            // The L2 bound with the promotion residual added; nothing else.
+            let f2 = truth.f2();
+            let mut bound = Tally::default();
+            for (k, c) in truth.pairs() {
+                let f = c as f64;
+                let est = parent.sketch.estimate(&DataInput::U64(k as u64));
+                let residual_l2 = (f2 - f * f).max(0.0).sqrt();
+                let allowed = spec.error_scale(residual_l2) + ceiling;
+                bound.record((est - f).abs() <= allowed, || {
+                    format!(
+                        "key {k}: true {f}, octo {est}, |error| {:.1} above \
+                         sqrt(kappa/w)*||f_-i||_2 + k*tau = {allowed:.1}",
+                        (est - f).abs()
+                    )
+                });
+            }
+            bound.assert_within(
+                &format!("CountTopK L2 bound + promotion residual ({route:?})"),
+                spec.per_key_failure(),
+                &context,
+            );
+        }
+    }
+
+    /// Heavy-hitter recall and precision for both top-k plans.
+    ///
+    /// Recall is stated over the keys the protocol can actually deliver: a
+    /// flow must cross τ on some worker before its key ever reaches the
+    /// aggregator, so the guaranteed set is the flows whose count clears the
+    /// worst-case promotion floor, `k*τ`. Precision is stated over the reported
+    /// set: every key the heap holds must genuinely be heavy, which for
+    /// Count-Min means at or above the true k-th count minus the residual.
+    ///
+    /// The `HashByKey` premise matters and is named in the assertion: under it
+    /// a flow's whole count lands on one worker, so a flow of count `f`
+    /// promotes `floor(f/τ)` times. Under `RoundRobin` the same flow is split
+    /// `k` ways and may promote less, which is why recall is measured
+    /// separately per partition instead of averaged.
+    #[test]
+    fn top_k_plans_recover_the_heavy_hitters_their_promotion_floor_guarantees() {
+        let stream = stream();
+        let truth = truth_of(&stream);
+        let floor = counter_ceiling();
+        let true_top: Vec<(i64, i64)> = truth.top_k(TOP_K);
+        let kth = true_top[TOP_K - 1].1 as f64;
+
+        for route in [Route::HashByKey, Route::RoundRobin] {
+            let context = format!(
+                "{route:?} workers={WORKERS} tau={TAU} top_k={TOP_K} promotion floor k*tau={floor} \
+                 zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}, true k-th count {kth}"
+            );
+
+            // Each entry is (key, count held in the heap, estimate the
+            // aggregator's own sketch returns for that key).
+            for (label, entries) in [
+                {
+                    let parent = drive_cm(route, &stream);
+                    let e: Vec<(i64, i64, f64)> = heap_entries(parent.sketch.heap().heap())
+                        .into_iter()
+                        .map(|(k, held)| {
+                            (
+                                k,
+                                held,
+                                parent.sketch.estimate(&DataInput::U64(k as u64)) as f64,
+                            )
+                        })
+                        .collect();
+                    ("CmTopK", e)
+                },
+                {
+                    let parent = drive_count(route, &stream);
+                    let e: Vec<(i64, i64, f64)> = heap_entries(parent.sketch.heap().heap())
+                        .into_iter()
+                        .map(|(k, held)| {
+                            (k, held, parent.sketch.estimate(&DataInput::U64(k as u64)))
+                        })
+                        .collect();
+                    ("CountTopK", e)
+                },
+            ] {
+                let keys: Vec<i64> = entries.iter().map(|(k, _, _)| *k).collect();
+                assert!(
+                    keys.len() <= TOP_K,
+                    "{label} {route:?}: heap holds {} entries, capacity {TOP_K}",
+                    keys.len()
+                );
+                let unique: std::collections::HashSet<i64> = keys.iter().copied().collect();
+                assert_eq!(
+                    unique.len(),
+                    keys.len(),
+                    "{label} {route:?}: the heap holds a duplicate key"
+                );
+
+                // Recall over the guaranteed set: every true top-k key whose
+                // count clears the promotion floor must be present.
+                let guaranteed: Vec<i64> = true_top
+                    .iter()
+                    .filter(|(_, c)| *c as f64 > floor)
+                    .map(|(k, _)| *k)
+                    .collect();
+                assert!(
+                    guaranteed.len() >= TOP_K / 2,
+                    "test premise: only {} of the true top {TOP_K} clear the promotion floor \
+                     {floor}; pick a heavier stream. {context}",
+                    guaranteed.len()
+                );
+                let found = guaranteed.iter().filter(|k| keys.contains(k)).count();
+                assert_eq!(
+                    found,
+                    guaranteed.len(),
+                    "{label} {route:?}: recovered {found} of {} keys above the promotion \
+                     floor. {context}",
+                    guaranteed.len()
+                );
+
+                // Precision over the reported set: nothing in the heap may be
+                // lighter than the true k-th count, allowing for the residual.
+                let mut precision = Tally::default();
+                for (k, _, _) in &entries {
+                    let exact = truth.get(*k) as f64;
+                    precision.record(exact >= kth - floor, || {
+                        format!(
+                            "key {k} is in the top-{TOP_K} heap with a true count of {exact}, \
+                             below the true k-th count {kth} minus the residual {floor}"
+                        )
+                    });
+                }
+                precision.assert_none(&format!("{label} {route:?} precision"), &context);
+
+                // Heap/sketch consistency is structural: the aggregator writes
+                // the estimate into the heap as it applies each delta, so an
+                // entry that disagrees with the sketch means one of the two
+                // was updated and the other was not.
+                let mut consistency = Tally::default();
+                for (k, held, est) in &entries {
+                    consistency.record(*held == *est as i64, || {
+                        format!("key {k}: heap holds {held} but the sketch estimates {est}")
+                    });
+                }
+                consistency.assert_none(&format!("{label} {route:?} heap consistency"), &context);
+            }
+        }
+    }
+
+    /// The top-k workers have no `flush`, and that is a contract, not an
+    /// omission: with no key storage a residual counter cannot be attributed
+    /// back to a flow. A key that never crosses τ therefore never reaches the
+    /// aggregator at all and estimates zero — which is what makes the `k*τ`
+    /// deficit above a *deficit* rather than an unbounded miss.
+    #[test]
+    fn a_key_below_the_promotion_threshold_never_reaches_the_top_k_aggregator() {
+        let plan = CmTopKOctoPlan::new(ROWS, COLS);
+        let mut worker = plan.worker(0);
+        let mut parent = plan.aggregator(TOP_K);
+
+        // One key, fewer arrivals than τ: nothing may be shipped.
+        let cold = DataInput::U64(0xC01D);
+        let payload = plan.prepare(&cold);
+        let mut shipped = 0usize;
+        for _ in 0..(TAU - 1) {
+            worker.process(&payload, &mut |_| shipped += 1);
+        }
+        assert_eq!(
+            shipped, 0,
+            "a flow below tau={TAU} must not promote a single counter"
+        );
+        assert_eq!(
+            parent.sketch.estimate(&cold),
+            0,
+            "an unpromoted flow must estimate zero at the aggregator, not a partial count"
+        );
+        assert!(
+            parent.sketch.heap().heap().is_empty(),
+            "an unpromoted flow must be absent from the heap entirely"
+        );
+
+        // One more arrival crosses tau and the key appears, carrying exactly
+        // the promoted window.
+        let mut promoted = Vec::new();
+        worker.process(&payload, &mut |d| promoted.push(d));
+        assert!(
+            !promoted.is_empty(),
+            "crossing tau={TAU} must promote at least one counter"
+        );
+        for d in promoted {
+            assert_eq!(
+                d.key,
+                asap_sketchlib::input_to_owned(&cold),
+                "every top-k delta must carry the flow key that produced it"
+            );
+            parent.apply(d);
+        }
+        assert_eq!(
+            parent.sketch.estimate(&cold),
+            TAU,
+            "the first promotion must hand over exactly the tau-sized window"
+        );
+        assert_eq!(
+            parent.sketch.heap().heap().len(),
+            1,
+            "the promoted key must now hold a heap slot"
+        );
+    }
+}
