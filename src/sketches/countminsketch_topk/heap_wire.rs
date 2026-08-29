@@ -21,10 +21,9 @@
 //! `HeapItem::I128` / `U128` have no msgpack integer form and are not wire
 //! types, so a heap holding one refuses to serialize — as does one whose keys
 //! mix variants, `String` and `Bytes` included. A `Bytes` key is written as
-//! msgpack `bin` through
-//! [`WireBytes`](crate::message_pack_format::wire_key::WireBytes) and read back
-//! from `bin` alone, so any byte string survives whether or not it is UTF-8 and
-//! a `str`-keyed payload relabelled `"bytes"` is refused.
+//! msgpack `bin` through `WireBytes` and read back from `bin` alone, so any
+//! byte string survives whether or not it is UTF-8 and a `str`-keyed payload
+//! relabelled `"bytes"` is refused.
 //!
 //! ## Emitted order (byte-stable round trips)
 //!
