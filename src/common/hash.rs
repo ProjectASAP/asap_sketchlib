@@ -188,6 +188,7 @@ impl SketchHasher for DefaultXxHasher {
             HeapItem::F32(f) => XxHash3_128::oneshot_with_seed(seed, &f.to_ne_bytes()),
             HeapItem::F64(f) => XxHash3_128::oneshot_with_seed(seed, &f.to_ne_bytes()),
             HeapItem::String(s) => XxHash3_128::oneshot_with_seed(seed, (*s).as_bytes()),
+            HeapItem::Bytes(b) => XxHash3_128::oneshot_with_seed(seed, b),
             HeapItem::I8(i) => XxHash3_128::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
             HeapItem::I16(i) => XxHash3_128::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
             HeapItem::I128(i) => XxHash3_128::oneshot_with_seed(seed, &(*i as u128).to_ne_bytes()),
@@ -210,6 +211,7 @@ impl SketchHasher for DefaultXxHasher {
             HeapItem::F32(f) => XxHash3_64::oneshot_with_seed(seed, &f.to_ne_bytes()),
             HeapItem::F64(f) => XxHash3_64::oneshot_with_seed(seed, &f.to_ne_bytes()),
             HeapItem::String(s) => XxHash3_64::oneshot_with_seed(seed, (*s).as_bytes()),
+            HeapItem::Bytes(b) => XxHash3_64::oneshot_with_seed(seed, b),
             HeapItem::I8(i) => XxHash3_64::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
             HeapItem::I16(i) => XxHash3_64::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
             HeapItem::I128(i) => XxHash3_64::oneshot_with_seed(seed, &(*i as u128).to_ne_bytes()),
@@ -552,6 +554,34 @@ mod tests {
             hash128_seeded(CANONICAL_HASH_SEED, &key),
             199634325175509853918794253804029959851u128
         );
+    }
+
+    /// A key stored as `HeapItem::Bytes` must hash exactly like the borrowed
+    /// `DataInput::Bytes` a caller queries with, or a sketch that hashes its
+    /// stored keys on rebuild would file them under digests no query reaches.
+    #[test]
+    fn owned_byte_keys_hash_like_the_borrowed_input() {
+        for raw in [
+            b"".as_slice(),
+            b"projectasap",
+            &[0xff, 0x00, 0xfe],
+            &[0x80; 64],
+        ] {
+            let borrowed = DataInput::Bytes(raw);
+            let owned = HeapItem::Bytes(raw.to_vec());
+            for seed in [0usize, 1, CANONICAL_HASH_SEED, SEEDLIST.len() + 3] {
+                assert_eq!(
+                    hash64_seeded(seed, &borrowed),
+                    hash_item64_seeded(seed, &owned),
+                    "64-bit digests disagree for {raw:?} at seed {seed}"
+                );
+                assert_eq!(
+                    hash128_seeded(seed, &borrowed),
+                    hash_item128_seeded(seed, &owned),
+                    "128-bit digests disagree for {raw:?} at seed {seed}"
+                );
+            }
+        }
     }
 
     #[test]

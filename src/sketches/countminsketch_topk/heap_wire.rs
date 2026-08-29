@@ -20,7 +20,11 @@
 //! in the same index slot and then silently fails equality.
 //! `HeapItem::I128` / `U128` have no msgpack integer form and are not wire
 //! types, so a heap holding one refuses to serialize — as does one whose keys
-//! mix variants.
+//! mix variants, `String` and `Bytes` included. A `Bytes` key is written as
+//! msgpack `bin` through
+//! [`WireBytes`](crate::message_pack_format::wire_key::WireBytes) and read back
+//! from `bin` alone, so any byte string survives whether or not it is UTF-8 and
+//! a `str`-keyed payload relabelled `"bytes"` is refused.
 //!
 //! ## Emitted order (byte-stable round trips)
 //!
@@ -41,6 +45,7 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::wire_key::WireBytes;
 use crate::{HHHeap, HashProfile, HeapItem};
 
 /// Metadata `key_type` of a heap that holds nothing. A heap with no entries has
@@ -64,28 +69,30 @@ pub(crate) fn key_type_of(key: &HeapItem) -> Option<&'static str> {
         HeapItem::F32(_) => "f32",
         HeapItem::F64(_) => "f64",
         HeapItem::String(_) => "string",
+        HeapItem::Bytes(_) => "bytes",
         HeapItem::I128(_) | HeapItem::U128(_) => return None,
     })
 }
 
 /// A total order over keys: variant tag first, then the value.
-fn key_order(key: &HeapItem) -> (u8, u128, &str) {
+fn key_order(key: &HeapItem) -> (u8, u128, &[u8]) {
     match key {
-        HeapItem::I8(v) => (0, *v as i128 as u128, ""),
-        HeapItem::I16(v) => (1, *v as i128 as u128, ""),
-        HeapItem::I32(v) => (2, *v as i128 as u128, ""),
-        HeapItem::I64(v) => (3, *v as i128 as u128, ""),
-        HeapItem::I128(v) => (4, *v as u128, ""),
-        HeapItem::ISIZE(v) => (5, *v as i128 as u128, ""),
-        HeapItem::U8(v) => (6, u128::from(*v), ""),
-        HeapItem::U16(v) => (7, u128::from(*v), ""),
-        HeapItem::U32(v) => (8, u128::from(*v), ""),
-        HeapItem::U64(v) => (9, u128::from(*v), ""),
-        HeapItem::U128(v) => (10, *v, ""),
-        HeapItem::USIZE(v) => (11, *v as u128, ""),
-        HeapItem::F32(v) => (12, u128::from(v.to_bits()), ""),
-        HeapItem::F64(v) => (13, u128::from(v.to_bits()), ""),
-        HeapItem::String(v) => (14, 0, v.as_str()),
+        HeapItem::I8(v) => (0, *v as i128 as u128, b""),
+        HeapItem::I16(v) => (1, *v as i128 as u128, b""),
+        HeapItem::I32(v) => (2, *v as i128 as u128, b""),
+        HeapItem::I64(v) => (3, *v as i128 as u128, b""),
+        HeapItem::I128(v) => (4, *v as u128, b""),
+        HeapItem::ISIZE(v) => (5, *v as i128 as u128, b""),
+        HeapItem::U8(v) => (6, u128::from(*v), b""),
+        HeapItem::U16(v) => (7, u128::from(*v), b""),
+        HeapItem::U32(v) => (8, u128::from(*v), b""),
+        HeapItem::U64(v) => (9, u128::from(*v), b""),
+        HeapItem::U128(v) => (10, *v, b""),
+        HeapItem::USIZE(v) => (11, *v as u128, b""),
+        HeapItem::F32(v) => (12, u128::from(v.to_bits()), b""),
+        HeapItem::F64(v) => (13, u128::from(v.to_bits()), b""),
+        HeapItem::String(v) => (14, 0, v.as_bytes()),
+        HeapItem::Bytes(v) => (15, 0, v.as_slice()),
     }
 }
 
@@ -242,6 +249,20 @@ pub(crate) fn encode_payload<C: Serialize>(
                 heap_counts,
             })
         }
+        "bytes" => {
+            let mut keys = Vec::with_capacity(entries.len());
+            for (key, _) in entries {
+                match key {
+                    HeapItem::Bytes(value) => keys.push(WireBytes(value.clone())),
+                    _ => return Err(mixed_variant_error(key_type, key)),
+                }
+            }
+            rmp_serde::to_vec(&TopKPayload {
+                counts,
+                keys,
+                heap_counts,
+            })
+        }
         other => Err(RmpEncodeError::Syntax(format!(
             "ASAPv1 top-k heap: key_type {other:?} is not a wire key type"
         ))),
@@ -291,6 +312,18 @@ where
         "f32" => unpack!(F32, f32),
         "f64" => unpack!(F64, f64),
         "string" => unpack!(String, String),
+        "bytes" => {
+            let decoded: TopKPayload<C, WireBytes> = from_slice(payload)?;
+            (
+                decoded.counts,
+                decoded
+                    .keys
+                    .into_iter()
+                    .map(|key| HeapItem::Bytes(key.into_vec()))
+                    .collect::<Vec<HeapItem>>(),
+                decoded.heap_counts,
+            )
+        }
         other => {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "ASAPv1 top-k heap: key_type {other:?} is not a wire key type"

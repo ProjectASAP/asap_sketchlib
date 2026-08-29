@@ -143,6 +143,21 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- **`HeapItem` now has an owned byte-array key, so `DataInput::Bytes` no longer
+  goes through `String`.** `input_to_owned` decoded every byte array as UTF-8
+  and panicked on any that was not, and the ones that were became
+  `HeapItem::String`, which made `Bytes(b"abc")` and `Str("abc")` the same key.
+  `HeapItem::Bytes(Vec<u8>)` carries the bytes unchanged from insert through
+  query, merge and the wire: `hash_item64_seeded` / `hash_item128_seeded` hash
+  them exactly as `hash64_seeded` / `hash128_seeded` hash the borrowed
+  `DataInput::Bytes`, equality against a `DataInput` is variant-exact so a byte
+  key and a string key stay distinct, and `key_order` orders the two families
+  apart. On the ASAPv1 wire this is a new `key_type` of `"bytes"`, written as
+  msgpack `bin` and read back from `bin` alone (Space-Saving `0x18 0x00`,
+  CMSHeap `0x03 0x00`, CSHeap `0x0a 0x00`, the UnivMon pyramids and Hydra's
+  UnivMon cells). Existing integer and `"string"` encodings are unchanged and
+  bytes written before this release still decode.
+
 - **Made `NitroBatch` frequency estimates unbiased.** Inserts hashed keys with
   raw `hash128_seeded` while the public estimator derived cells from the
   packed matrix hash (Packed64 mode), so estimates read cells inserts never
