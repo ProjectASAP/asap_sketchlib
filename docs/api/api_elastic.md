@@ -336,6 +336,10 @@ own envelope. A free bucket is msgpack `nil`, so an inserted `""` flow id stays
 distinct from a bucket that holds nothing. Both methods require
 `H: HashProfile`.
 
+The light layer is a Count-Min matrix, so it carries that sketch's row bound:
+`1 <= light_rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length), refused on
+both sides past it.
+
 A zero dimension, a `bktlen` disagreeing with the heavy table, a free bucket
 that still names a flow, a payload length that disagrees with the declared
 geometry, and a `nil` flow id whose `vote_pos` is non-zero are all rejected on

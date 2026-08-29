@@ -20,6 +20,7 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 
+use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::{FastPath, HashProfile, RegularPath, SketchHasher, Vector2D};
 
@@ -129,6 +130,8 @@ where
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
+        check_matrix_rows("CMS", rows)
+            .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CMS envelope: {e}")))?;
         let metadata = rmp_serde::to_vec_named(&cms_metadata::<H>(
             rows as u32,
             cols as u32,
@@ -171,6 +174,7 @@ where
                 "CMS dimensions must be non-zero: rows={rows}, cols={cols}"
             )));
         }
+        check_matrix_rows("CMS", rows).map_err(RmpDecodeError::Uncategorized)?;
         if p.counts.len() != rows.saturating_mul(cols) {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "CMS counts length {} != rows*cols {}",
@@ -186,7 +190,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher};
+    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS};
 
     #[test]
     fn count_min_round_trip_serialization() {
@@ -317,6 +321,42 @@ mod tests {
         assert!(
             CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes).is_err(),
             "zero-dimension metadata must be rejected, not panic"
+        );
+    }
+
+    /// More rows than the seed list has seeds is outside the wire-eligible
+    /// subset, on both sides.
+    #[test]
+    fn count_min_rejects_too_many_rows() {
+        let rows = MATRIX_MAX_ROWS + 1;
+        assert!(
+            CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, 8)
+                .serialize_to_bytes()
+                .is_err(),
+            "a matrix past MATRIX_MAX_ROWS must not serialize"
+        );
+
+        let metadata = rmp_serde::to_vec_named(&cms_metadata::<DefaultXxHasher>(
+            rows as u32,
+            8,
+            "i64",
+            "regular",
+        ))
+        .unwrap();
+        let payload = rmp_serde::to_vec(&CmsPayload::<i64> {
+            counts: vec![0; rows * 8],
+        })
+        .unwrap();
+        let bytes = envelope::encode(CMS_KIND, &metadata, &payload);
+        let err = CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes)
+            .expect_err("rows past MATRIX_MAX_ROWS must be rejected");
+        assert!(err.to_string().contains("MATRIX_MAX_ROWS"), "got {err}");
+
+        // The boundary itself is eligible.
+        assert!(
+            CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(MATRIX_MAX_ROWS, 8)
+                .serialize_to_bytes()
+                .is_ok()
         );
     }
 

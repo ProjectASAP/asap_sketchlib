@@ -74,6 +74,10 @@ pyramid re-serializes byte-identically. `update_mode` and `candidate_complete`
 are carried: they are acquired from the stream, and a decoder that guessed them
 would pick the wrong query recurrence or report a widened threshold as zero.
 
+Every layer is a `CountL2HH` matrix hashed per row, so `sketch_row` carries that
+sketch's bound: `1 <= sketch_row <= 20` (`MATRIX_MAX_ROWS`, the seed list
+length), refused on both sides past it.
+
 ## Examples
 
 ```rust

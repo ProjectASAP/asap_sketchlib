@@ -62,7 +62,11 @@ A sketch travels as the base matrix plus the heap's entries: the metadata
 carries `rows`, `cols`, `counter_type`, `mode`, the heap capacity `k` and the
 heap's `key_type`, and the payload is `[counts, keys, heap_counts]`. The heap's
 digest index is rebuilt on load, so no index reaches the wire, and `k` never
-sizes an allocation on decode.
+sizes an allocation on decode. The base matrix is bound by the same
+`1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length) the stand-alone
+sketch is: past that, the regular path gives row `r` and row `r + 20` the same
+seed and identical counters, so a wider matrix is refused on both sides in
+either mode.
 
 Heap keys are `HeapItem`s, so the key type is a runtime property: `key_type`
 names the **exact** variant (`"i32"` stays `"i32"`, never widened to `"i64"`)

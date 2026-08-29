@@ -41,6 +41,21 @@ fn normalized_seed_idx(d: usize) -> usize {
     d % SEEDLIST.len()
 }
 
+/// Rows a per-row-seeded matrix sketch hashes independently. Row `r` and row
+/// `r + MATRIX_MAX_ROWS` draw the same [`SEEDLIST`] entry.
+pub const MATRIX_MAX_ROWS: usize = SEEDLIST.len();
+
+/// Checks a matrix sketch's row count against [`MATRIX_MAX_ROWS`], naming
+/// `sketch` in the error. Shared by the ASAPv1 encoders and decoders.
+pub(crate) fn check_matrix_rows(sketch: &str, rows: usize) -> Result<(), String> {
+    if rows > MATRIX_MAX_ROWS {
+        return Err(format!(
+            "{sketch} rows {rows} exceeds MATRIX_MAX_ROWS {MATRIX_MAX_ROWS}"
+        ));
+    }
+    Ok(())
+}
+
 /// Trait abstracting hash function signatures for probabilistic data structures.
 ///
 /// All methods are static (no `&self`) to enable zero-cost monomorphization.

@@ -44,6 +44,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
+use crate::common::hash::check_matrix_rows;
 use crate::input::HydraCounter;
 use crate::message_pack_format::envelope;
 use crate::sketch_framework::univmon::wire::{PyramidPayload, UnivMonMetadata, univmon_metadata};
@@ -382,6 +383,7 @@ fn checked_cells(what: &str, rows: usize, cols: usize) -> Result<usize, String> 
             "Hydra {what} dimensions must be non-zero: rows={rows}, cols={cols}"
         ));
     }
+    check_matrix_rows(&format!("Hydra {what}"), rows)?;
     rows.checked_mul(cols)
         .ok_or_else(|| format!("Hydra {what} {rows}x{cols} overflows a cell count"))
 }
@@ -1160,7 +1162,10 @@ fn unpack_univmon_cells(key_type: &str, payload: &[u8]) -> Result<Vec<Vec<u8>>, 
 mod tests {
     use super::*;
     use crate::input::HydraQuery;
-    use crate::{CANONICAL_HASH_SEED, DataInput, HeapItem, SketchHasher};
+    use crate::{CANONICAL_HASH_SEED, DataInput, HeapItem, MATRIX_MAX_ROWS, SketchHasher};
+
+    /// The row bound as a metadata field width.
+    const MAX_ROWS: u32 = MATRIX_MAX_ROWS as u32;
 
     /// Two key columns, and the records every fixture grid is fed.
     const SCHEMA: [&str; 2] = ["region", "service"];
@@ -1509,8 +1514,10 @@ mod tests {
             ..hydra_matrix_metadata::<DefaultXxHasher>(&blank(), 0, 0)
         };
         let cases = [
-            (shaped(1024, 1024, 2, 16), "counts length"),
-            (shaped(u32::MAX, u32::MAX, 2, 16), "overflow"),
+            (shaped(MAX_ROWS, 1 << 20, 2, 16), "counts length"),
+            (shaped(MAX_ROWS, u32::MAX, MAX_ROWS, u32::MAX), "overflow"),
+            (shaped(MAX_ROWS + 1, 8, 2, 16), "MATRIX_MAX_ROWS"),
+            (shaped(3, 8, MAX_ROWS + 1, 16), "MATRIX_MAX_ROWS"),
             (shaped(0, 8, 2, 16), "grid dimensions must be non-zero"),
             (shaped(3, 0, 2, 16), "grid dimensions must be non-zero"),
             (shaped(3, 8, 0, 16), "counter dimensions must be non-zero"),
@@ -1540,6 +1547,36 @@ mod tests {
         assert!(Hydra::deserialize_from_bytes(&bytes).is_err());
     }
 
+    /// The grid and the counters are both matrices, so each carries the seed
+    /// list's row bound; the encode side refuses what the decoder would.
+    #[test]
+    fn hydra_rejects_too_many_rows() {
+        let rows = MATRIX_MAX_ROWS + 1;
+        let wide_grid = Hydra::with_schema(rows, 8, SCHEMA, cm_counter()).expect("valid schema");
+        let problem = wide_grid
+            .serialize_to_bytes()
+            .expect_err("a grid past MATRIX_MAX_ROWS must not serialize")
+            .to_string();
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
+
+        let wide_counter = HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            rows, 16,
+        ));
+        let problem = grid(wide_counter)
+            .serialize_to_bytes()
+            .expect_err("a counter past MATRIX_MAX_ROWS must not serialize")
+            .to_string();
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
+
+        // The boundary itself is eligible.
+        assert!(
+            Hydra::with_schema(MATRIX_MAX_ROWS, 8, SCHEMA, cm_counter())
+                .expect("valid schema")
+                .serialize_to_bytes()
+                .is_ok()
+        );
+    }
+
     /// The variable-length counters are cut by the same rule: a grid larger
     /// than the payload carries, and a zero counter dimension, are rejected.
     #[test]
@@ -1548,7 +1585,7 @@ mod tests {
         let (_, metadata, payload) = envelope::split(&encoded).expect("split");
         let base: HydraKllMetadata = from_slice(metadata).expect("metadata");
         let huge = HydraKllMetadata {
-            rows: 4096,
+            rows: MAX_ROWS,
             cols: 4096,
             ..hydra_kll_metadata::<DefaultXxHasher>(
                 &HydraGrid {
@@ -1590,7 +1627,7 @@ mod tests {
             heap_size: base.counter_heap_size,
         };
         let cases = [
-            shaped(4096, 4096, shape()),
+            shaped(MAX_ROWS, 4096, shape()),
             shaped(
                 3,
                 8,

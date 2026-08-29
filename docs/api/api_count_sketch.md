@@ -79,12 +79,16 @@ the metadata and pinned on decode, so `i32` bytes do not decode into an `i64`
 sketch, or the reverse — which is what lets a nested `Vector2D<i32>` Count
 Sketch (the variant `HydraCounter` and `EHSketchList` hold) round-trip back into
 its own type. `rows`/`cols` and the `mode` are carried in the metadata too; the
-payload is just `[counts]`, packed row-major with signed cells.
+payload is just `[counts]`, packed row-major with signed cells. The wire covers `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed
+list length): past that, the regular path gives row `r` and row `r + 20` the
+same seed and identical counters, so a wider matrix is refused on both sides in
+either mode.
 
 `CountL2HH` has its own ASAPv1 kind (`0x19 0x00`) and the same two methods,
 available for any `H: HashProfile`. Its counters are always `i64` and its
 column derivation is fixed by the algorithm, so the metadata carries no
-`counter_type` and no `mode` — only `seed_index`, `rows` and `cols`. The
+`counter_type` and no `mode` — only `seed_index`, `rows` and `cols`. Its rows
+are seeded per row too, so it carries the same `1 <= rows <= 20` bound. The
 payload is `[counts, l2]`: the matrix packed row-major, then one L2
 accumulator per row. `l2` is carried rather than recomputed, because
 `fast_insert_with_count_without_l2_and_hash` moves counters without it and the

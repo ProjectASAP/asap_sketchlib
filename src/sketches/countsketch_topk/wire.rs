@@ -21,6 +21,7 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 
+use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::sketches::countminsketch_topk::heap_wire::{
     TopKMetadata, decode_payload, encode_payload, heap_entries, rebuild_heap, topk_metadata,
@@ -60,6 +61,8 @@ where
         let rows = self.cs.rows();
         let cols = self.cs.cols();
         let counts = self.cs.as_storage().as_slice();
+        check_matrix_rows("CSHeap", rows)
+            .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CSHeap envelope: {e}")))?;
         if counts.len() != rows.saturating_mul(cols) {
             return Err(RmpEncodeError::Syntax(format!(
                 "ASAPv1 CSHeap envelope: counts length {} != rows*cols {}",
@@ -127,6 +130,7 @@ where
                 "CSHeap dimensions must be non-zero: rows={rows}, cols={cols}"
             )));
         }
+        check_matrix_rows("CSHeap", rows).map_err(RmpDecodeError::Uncategorized)?;
         let (counts, entries) = decode_payload::<T>(&meta.key_type, payload)?;
         // Length check precedes the allocation, so crafted dimensions cannot
         // drive `from_fn` into a huge reserve.
@@ -150,7 +154,9 @@ where
 mod tests {
     use super::*;
     use crate::sketches::countminsketch_topk::heap_wire::TopKPayload;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, FastPath, RegularPath};
+    use crate::{
+        CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, FastPath, MATRIX_MAX_ROWS, RegularPath,
+    };
 
     fn populated() -> CSHeap<Vector2D<i64>, RegularPath> {
         let mut sketch = CSHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
@@ -345,9 +351,32 @@ mod tests {
     /// runs before `Vector2D::from_fn`.
     #[test]
     fn cs_heap_rejects_dimension_length_mismatch() {
-        let bytes = crafted(1024, 1024, 4, vec![1, 2, 3]);
+        let bytes = crafted(MATRIX_MAX_ROWS as u32, 1 << 24, 4, vec![1, 2, 3]);
         let problem = decode_error(&bytes);
         assert!(problem.contains("!= rows*cols"), "got {problem}");
+    }
+
+    /// More rows than the seed list has seeds is outside the wire-eligible
+    /// subset, on both sides.
+    #[test]
+    fn cs_heap_rejects_too_many_rows() {
+        let rows = MATRIX_MAX_ROWS + 1;
+        assert!(
+            CSHeap::<Vector2D<i64>, RegularPath>::new(rows, 8, 4)
+                .serialize_to_bytes()
+                .is_err(),
+            "a matrix past MATRIX_MAX_ROWS must not serialize"
+        );
+
+        let problem = decode_error(&crafted(rows as u32, 8, 4, vec![0; rows * 8]));
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
+
+        // The boundary itself is eligible.
+        assert!(
+            CSHeap::<Vector2D<i64>, RegularPath>::new(MATRIX_MAX_ROWS, 8, 4)
+                .serialize_to_bytes()
+                .is_ok()
+        );
     }
 
     /// An unpopulated matrix carries dimensions its cells do not match.
