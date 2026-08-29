@@ -1,5 +1,16 @@
 //! Every built-in `(storage, hashing path)` instance of the four matrix-backed
-//! frequency families, held to its own family's theorem.
+//! frequency families, held to its own family's bound.
+//!
+//! The bound is the same on both hashing paths and is evaluated at each
+//! instance's own dimensions, but the two paths do not earn the same label:
+//! `RegularPath` hashes each row with its own seed from the table, so the row
+//! independence the `b^-d` / median amplification rests on is supplied by the
+//! hash family; `FastPath` slices every row index out of one 128-bit hash, so
+//! that independence is a modelling assumption about the hash's avalanche. The
+//! coverage matrix classifies the fast-path rows `asymptotic model` for this
+//! reason. Nothing is widened for them — see
+//! `countmin_fast_path_conforms_to_the_count_min_model` in `e2e_frequency.rs`
+//! for the split written out in full.
 //!
 //! The deep, production-sized accuracy runs live in `e2e_frequency.rs` on each
 //! family's headline instance. This file is about *coverage of the instance
@@ -746,8 +757,7 @@ fn heap_count(items: &[asap_sketchlib::HHItem], key: &DataInput) -> Option<i64> 
         .map(|it| it.count)
 }
 
-/// `CMSHeap` instances that construct but have no operations at all, pinned so
-/// the set cannot grow silently.
+/// The `CMSHeap` instances that construct but have no operations at all.
 ///
 /// `CMSHeap::insert` / `insert_many` / `estimate` / `merge` all live in an impl
 /// bounded on `S::Counter: Copy + Ord + From<i32> + Into<i64> + AddAssign`.
@@ -766,18 +776,33 @@ fn heap_count(items: &[asap_sketchlib::HHItem], key: &DataInput) -> Option<i64> 
 /// allocate a sketch and a heap and can then do nothing but report their
 /// dimensions.
 ///
-/// **The decision taken here is to document them rather than change the API.**
-/// The alternatives all cost more than they buy: `TryInto<i64>` would make
+/// # What this test is, and what it is not
+///
+/// It is **constructibility coverage only**. It shows that the constructors
+/// exist, that the geometry accessors answer, and that the heap starts empty.
+/// It does **not** verify that `insert` is uncallable — a Rust test cannot
+/// assert the absence of a method without a compile-fail harness such as
+/// `trybuild`, and an earlier revision of this comment wrongly claimed the test
+/// "fails to compile if an insert impl appears". It would not: adding an impl
+/// leaves every assertion below compiling and passing.
+///
+/// A `trybuild` fixture would close that hole and is the right thing if these
+/// instances ever matter; it was not added here because it means a new
+/// dev-dependency for a set of instances that, by construction, have no
+/// behaviour to protect. The coverage matrix lists all eight under **gap**, not
+/// under covered instances, and this test is filed as `structural
+/// (constructibility only)`.
+///
+/// # Why the API is not being changed
+///
+/// Every alternative costs more than it buys: `TryInto<i64>` would make
 /// `insert` fallible or silently lossy for exactly the counters that motivated
 /// `i128`; widening `HHItem::count` to `i128` changes the heap wire payload
 /// shared with `CSHeap`, Space-Saving and the Octo top-k plans; and removing
 /// the constructors is a breaking change to a type that composes generically.
-/// `CSHeap` already covers `i128` end to end for callers who need it. This test
-/// records the state so a later change is a deliberate one — it fails to
-/// compile if an insert impl appears, because the assertions would then be
-/// checking a type that has one.
+/// `CSHeap` already covers `i128` end to end for callers who need it.
 #[test]
-fn cmsheap_instances_without_an_insert_impl_are_inert_by_construction() {
+fn cmsheap_inert_instances_construct_and_report_their_geometry() {
     macro_rules! inert {
         ($storage:ty, $path:ty, $ctor:expr, $rows:expr, $cols:expr) => {{
             let label = concat!(

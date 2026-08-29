@@ -7,8 +7,8 @@
 // use rand::{Rng, SeedableRng, rng};
 use serde::{Deserialize, Serialize};
 
-// use crate::PRECOMPUTED_SAMPLE;
-use crate::PRECOMPUTED_SAMPLE_RATE_1PERCENT;
+use crate::PRECOMPUTED_SAMPLE;
+use crate::common::precompute_sample::PRECOMPUTED_SAMPLE_LEN;
 /// Helper trait for converting sketch counter types to f64 for median calculation.
 pub trait ToF64 {
     /// Converts the value into `f64`.
@@ -58,7 +58,30 @@ pub struct Nitro {
     /// Weight applied to each sampled update.
     pub delta: u64,
     idx: usize,
+    /// Retained only so the serialized shape is unchanged.
+    ///
+    /// It used to be the wrap mask for `idx`, written as `0x10000` — the skip
+    /// table's *length* rather than `length - 1`. `(idx + 1) & 0x10000` is `0`
+    /// for every `idx` below `0xFFFF`, so the cursor never left entry 0. The
+    /// cursor now wraps through [`Nitro::next_cursor`], which uses the table's
+    /// real length and cannot be desynchronised by a stale or hostile value
+    /// decoded from an old payload; this field is no longer read.
     mask: usize,
+    /// Independent state for the stochastic-rounding draw.
+    ///
+    /// `#[serde(skip)]`, exactly like [`crate::NitroBatch`]'s sampling RNG: it
+    /// describes how sampling proceeds from here, not what the sketch holds, so
+    /// it is not part of the wire form and a decoded sketch restarts the
+    /// rounding stream from the fixed seed.
+    #[serde(skip, default = "default_rounding_state")]
+    rounding_state: u64,
+}
+
+/// Seed for the rounding stream. Fixed, so a run reproduces.
+const ROUNDING_SEED: u64 = 0x2545_F491_4F6C_DD1D;
+
+fn default_rounding_state() -> u64 {
+    ROUNDING_SEED
 }
 
 // fn new_small_rng() -> SmallRng {
@@ -76,7 +99,8 @@ impl Default for Nitro {
             // generator: new_small_rng(), // not used unless Nitro mode is enabled
             delta: 0,
             idx: 0,
-            mask: 0x10000,
+            mask: PRECOMPUTED_SAMPLE_LEN - 1,
+            rounding_state: ROUNDING_SEED,
         }
     }
 }
@@ -101,28 +125,98 @@ impl Nitro {
             // generator: new_small_rng(),
             delta: 0,
             idx: 0,
-            mask: 0x10000,
+            mask: PRECOMPUTED_SAMPLE_LEN - 1,
+            rounding_state: ROUNDING_SEED,
         };
         nitro.delta = nitro.scaled_increment(1);
         nitro
     }
 
-    /// The weight one admitted row-update carries, by stochastic rounding of
+    /// Creates a Nitro state whose sampling is reproducible from `seed`.
+    ///
+    /// Both sources of randomness move with the seed:
+    ///
+    /// - the **skip schedule**, by starting the cursor at `seed % table_len`.
+    ///   The table is a fixed stream of `ln(1 - u)` draws, so two far-apart
+    ///   offsets read disjoint stretches of it and give independent admission
+    ///   patterns — the unseeded path always starts at 0, which makes every
+    ///   sketch at a given rate admit exactly the same subset;
+    /// - the **stochastic-rounding stream**.
+    ///
+    /// Without this there is no way to run a Nitro accuracy battery over
+    /// independent trials: the row-level sampler has no other entropy.
+    pub fn init_nitro_seeded(rate: f64, seed: u64) -> Self {
+        let mut nitro = Self::init_nitro(rate);
+        nitro.idx = (seed % PRECOMPUTED_SAMPLE_LEN as u64) as usize;
+        nitro.rounding_state = if seed == 0 { ROUNDING_SEED } else { seed };
+        nitro
+    }
+
+    /// The skip-table cursor, for tests that need to show it advances and
+    /// wraps rather than sticking at one entry.
+    #[inline]
+    pub fn table_cursor(&self) -> usize {
+        self.cursor()
+    }
+
+    /// Length of the shared skip table the cursor wraps at.
+    pub const fn skip_table_len() -> usize {
+        PRECOMPUTED_SAMPLE_LEN
+    }
+
+    /// The cursor actually used to index the skip table.
+    ///
+    /// Taken modulo the table length on every read, so an `idx` decoded from an
+    /// old payload — where the broken mask could leave it anywhere — can never
+    /// index out of bounds.
+    #[inline(always)]
+    fn cursor(&self) -> usize {
+        self.idx % PRECOMPUTED_SAMPLE_LEN
+    }
+
+    /// Advances the cursor by one, wrapping at the table's real length.
+    #[inline(always)]
+    fn next_cursor(&mut self) {
+        self.idx = (self.cursor() + 1) % PRECOMPUTED_SAMPLE_LEN;
+    }
+
+    /// The weight one admitted row-slot carries, by stochastic rounding of
     /// `1 / p`.
     ///
     /// Same correction as [`crate::NitroBatch::admitted_weight`], and for the
     /// same reason: writing `ceil(1/p)` every time biases every estimate by the
-    /// rounding error, which at `p = 0.3` is a flat +20%. Here the Bernoulli
-    /// draw is realised by hashing the skip-table cursor `idx`, which already
-    /// advances once per admitted update — that keeps the correction
-    /// deterministic and reproducible, adds no state, and leaves the serialized
-    /// form byte-identical.
+    /// rounding error, which at `p = 0.3` is a flat +20%. With
+    /// `q = floor(1/p)` and `r = frac(1/p)` the weight is
     ///
-    /// When `1 / p` is an integer the fractional part is zero and this returns
-    /// `delta` unchanged, so the common rates (1, 1/2, 1/10, 1/100) emit
-    /// exactly what they did before.
+    /// ```text
+    ///   W = q + Bernoulli(r)      E[W] = 1/p      Var[W] = r (1 - r)
+    /// ```
+    ///
+    /// # Where the Bernoulli comes from, and why not from the cursor
+    ///
+    /// The draw comes from `Nitro`'s own `rounding_state`, a splitmix64 stream
+    /// advanced once per admitted slot and **separate from the skip cursor**.
+    /// An earlier revision derived it by hashing the cursor instead, which was
+    /// wrong twice over: the cursor was frozen at 0 by the mask bug, so the
+    /// draw was constant (and, at `u = 0 < r`, always 1 — i.e. `ceil(1/p)`
+    /// again); and even with a working cursor the dither would be a fixed
+    /// function of the position in the skip table, so a key whose arrivals
+    /// happened to land on cursor positions with `u < r` would keep the full
+    /// rounding bias. Advancing an independent stream once per admission is
+    /// what makes `E[W] = 1/p` hold for each key separately, which is the whole
+    /// point of the correction.
+    ///
+    /// The unbiasedness is exact given a uniform draw; treating the splitmix64
+    /// stream as that uniform source is the same modelling assumption the
+    /// geometric skip table already rests on, and the coverage matrix files
+    /// Nitro as `asymptotic model` accordingly.
+    ///
+    /// When `1 / p` is an integer the fractional part is zero, **no draw is
+    /// consumed**, and this returns `delta` unchanged — so the common rates
+    /// (1, 1/2, 1/10, 1/100) emit exactly what they always did and their
+    /// rounding stream never advances.
     #[inline(always)]
-    pub fn admitted_delta(&self) -> u64 {
+    pub fn admitted_delta(&mut self) -> u64 {
         if self.is_full_sampling() {
             return self.delta;
         }
@@ -131,30 +225,89 @@ impl Nitro {
         if frac <= 0.0 {
             return self.delta;
         }
-        // splitmix64 finaliser over the cursor: a counter-based PRNG, so the
-        // dither is independent of which key was admitted.
-        let mut z = (self.idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.delta + u64::from(self.next_rounding_uniform() < frac)
+    }
+
+    /// Next uniform in `[0, 1)` from the rounding stream (splitmix64).
+    #[inline(always)]
+    fn next_rounding_uniform(&mut self) -> f64 {
+        self.rounding_state = self.rounding_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.rounding_state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^= z >> 31;
-        let u = (z >> 11) as f64 / (1u64 << 53) as f64;
-        self.delta + u64::from(u < frac)
+        (z >> 11) as f64 / (1u64 << 53) as f64
     }
 
     // for profiling
     #[inline(always)]
     /// Draws the next geometric skip distance.
+    /// Draws the next geometric skip distance **at the configured rate**.
+    ///
+    /// The table holds `ln(1 - u)` for a fixed stream of uniforms; multiplying
+    /// by `inv_ln_one_minus_p = 1 / ln(1 - p)` turns each entry into an
+    /// inverse-CDF draw of `Geometric(p)` on `{0, 1, ...}`. An earlier revision
+    /// read [`crate::PRECOMPUTED_SAMPLE_RATE_1PERCENT`], whose entries are
+    /// already divided by `ln(0.99)`, so **every** rate got the schedule for
+    /// `p = 0.01`: at `p = 0.5` the sketch skipped about 99 slots between
+    /// admissions instead of 1, admitting roughly 1% of the stream while
+    /// weighting each admission as if it were 50%.
+    ///
+    /// `floor`, not `ceil`: the caller's `+1` stride supplies the sampled slot
+    /// itself, so `ceil` adds one to every skip distance and roughly halves the
+    /// effective rate — `E[skip] = (1-p)/p` holds only under `floor`.
     pub fn draw_geometric(&mut self) {
         if self.is_full_sampling() {
             self.to_skip = 0;
             return;
         }
-        // floor, not ceil: the caller's `+1` stride supplies the sampled item
-        // itself, so ceil adds +1 to every skip distance and roughly halves
-        // the effective sampling rate (same bug fixed in NitroBatch's
-        // draw_geometric; see the NitroSketch inverse-CDF derivation there).
-        self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].floor() as usize;
-        self.idx = (self.idx + 1) & self.mask;
+        self.to_skip =
+            (PRECOMPUTED_SAMPLE[self.cursor()] * self.inv_ln_one_minus_p).floor() as usize;
+        self.next_cursor();
+    }
+
+    /// Consumes one update's worth of row slots from the sampling schedule and
+    /// returns the `(row, weight)` pairs that were admitted.
+    ///
+    /// NitroSketch samples **per row slot**, not per update: a `d`-row sketch
+    /// turns an `n`-update stream into `n * d` slots, each admitted
+    /// independently with probability `p`. `to_skip` is the number of slots
+    /// still to skip, carried across update boundaries, so this walks it
+    /// forward by `rows` and reports every landing inside the window.
+    ///
+    /// # Why this replaces the callers' own arithmetic
+    ///
+    /// `fast_insert_nitro` used to carry the cursor with
+    /// `(r + to_skip + 1) - rows` on `usize`. That expression is negative — and
+    /// so underflows — whenever the next admitted slot falls inside the same
+    /// update, which is the common case at any rate above roughly `1/d`. It
+    /// never fired before only because the skip was frozen at one large
+    /// constant by the two bugs above; making the schedule rate-correct makes
+    /// small skips normal, so the walk has to be correct rather than lucky. It
+    /// also admits *every* slot the schedule lands on within the update, where
+    /// the Count-Min path previously admitted at most one and silently dropped
+    /// the rest.
+    ///
+    /// At `p = 1` every slot is admitted with weight 1.
+    pub fn admit_rows(&mut self, rows: usize, out: &mut Vec<(usize, u64)>) {
+        out.clear();
+        if rows == 0 {
+            return;
+        }
+        if self.is_full_sampling() {
+            out.extend((0..rows).map(|r| (r, 1u64)));
+            return;
+        }
+        let mut row = self.to_skip;
+        while row < rows {
+            let weight = self.admitted_delta();
+            out.push((row, weight));
+            self.draw_geometric();
+            // `+ 1` for the admitted slot itself, then the freshly drawn skip.
+            row = row + 1 + self.to_skip;
+        }
+        // Whatever is left of the skip once this update's window is exhausted.
+        self.to_skip = row - rows;
     }
 
     #[inline(always)]

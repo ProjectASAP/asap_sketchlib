@@ -583,6 +583,15 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
         self.counts.enable_nitro(sampling_rate);
     }
 
+    /// Enables Nitro sampling with a reproducible, seed-selected schedule.
+    ///
+    /// See [`crate::Nitro::init_nitro_seeded`]: the unseeded path starts every
+    /// sketch at the same point in the skip table, so two sketches at the same
+    /// rate admit the same subset and are not independent trials.
+    pub fn enable_nitro_with_seed(&mut self, sampling_rate: f64, seed: u64) {
+        self.counts.enable_nitro_with_seed(sampling_rate, seed);
+    }
+
     /// Disables Nitro sampling and resets its internal state.
     pub fn disable_nitro(&mut self) {
         self.counts.disable_nitro();
@@ -590,20 +599,34 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
 
     /// Inserts an observation using Nitro-aware sampling logic.
     #[inline(always)]
+    /// Inserts an observation through Nitro's per-row sampling schedule.
+    ///
+    /// The cells written are the ones a plain `insert` would write — the hash
+    /// is `FastPathHasher::hash_for_matrix` and the column is
+    /// `MatrixFastHash::col_for_row`, exactly as `MatrixStorage::fast_insert`
+    /// derives them, so `nitro_estimate` reads back what this wrote.
+    ///
+    /// This used to hash with `H::hash128_seeded(0, value)` and slice columns
+    /// out of that raw `u128` by hand, while `nitro_estimate` queried through
+    /// `hash_for_matrix` / `col_for_row`. Those two disagree whenever the
+    /// matrix hash is not the identity on the raw hash — which is the normal
+    /// case, since `hash_for_matrix` picks a packing mode from `rows` and
+    /// `cols` — so every per-key estimate read a cell the insert had never
+    /// touched and came back 0.
     pub fn fast_insert_nitro(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
-        // Stochastically rounded per admitted update, so a rate whose
-        // reciprocal is not an integer stays unbiased. See `Nitro::admitted_delta`.
-        let delta = nitro_delta_saturated_i32(self.counts.nitro().admitted_delta());
-        if self.counts.nitro().to_skip >= rows {
-            self.counts.reduce_nitro_skip(rows);
-        } else {
-            let hashed = H::hash128_seeded(0, value);
-            let r = self.counts.nitro().to_skip;
-            self.counts.update_by_row(r, hashed, |a, b| *a += b, delta);
-            self.counts.nitro_mut().draw_geometric();
-            let temp = self.counts.get_nitro_skip();
-            self.counts.update_nitro_skip((r + temp + 1) - rows);
+        let mut admitted = Vec::new();
+        self.counts.nitro_mut().admit_rows(rows, &mut admitted);
+        if admitted.is_empty() {
+            return;
+        }
+        let cols = self.counts.cols();
+        let hashed = <Vector2D<i32> as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
+        for (row, weight) in admitted {
+            let col = MatrixFastHash::col_for_row(&hashed, row, cols);
+            let delta = nitro_delta_saturated_i32(weight);
+            self.counts
+                .update_one_counter(row, col, |a: &mut i32, b: i32| *a += b, delta);
         }
     }
 

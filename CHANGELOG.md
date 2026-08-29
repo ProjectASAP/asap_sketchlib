@@ -172,6 +172,54 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- **The row-level Nitro sampler never advanced its skip-table cursor, and its
+  schedule ignored the configured rate.** `Nitro::draw_geometric` advanced the
+  cursor with `(idx + 1) & mask` where `mask` was the table's *length*
+  (`0x10000`) rather than `length - 1`; `x & 0x10000` is zero for every `x`
+  below `0xFFFF`, so `idx` stayed at 0 for the life of the sketch. Every skip
+  was the same distance, and the stochastic-rounding draw derived from that
+  cursor was a constant — which meant the `p = 0.3` weight bias the previous
+  release claimed to fix was still `ceil(1/p)` on this path. The same function
+  also read a table pre-divided by `ln(0.99)`, so every sampling rate got the
+  schedule for `p = 0.01`: at `p = 0.5` it admitted about 1% of the stream while
+  weighting each admission as if it were 50%. The cursor now wraps on the
+  table's real length (and folds an out-of-range value decoded from an old
+  payload back into range), the schedule multiplies the unscaled `ln(1 - u)`
+  table by `1 / ln(1 - p)`, and the rounding draw comes from a separate
+  splitmix64 stream so it cannot phase-lock to the skip schedule.
+  `NitroBatch::insert_cached_step` had the identical mask and rate bugs and is
+  fixed the same way.
+- **The row-level Nitro insert and query derived cells from different hash
+  forms, so every per-key estimate read 0.** `CountMin::fast_insert_nitro` and
+  `Count::fast_insert_nitro` hashed with `hash128_seeded(0, value)` and sliced
+  columns out of that raw `u128`, while `nitro_estimate` and `Count::estimate`
+  query through `FastPathHasher::hash_for_matrix` and
+  `MatrixFastHash::col_for_row`. Those agree only when the matrix hash is the
+  identity on the raw hash, which it is not — the packing mode is chosen from
+  `rows` and `cols`. Both inserts now derive cell and sign exactly as a plain
+  `insert` does.
+- **The row-level Nitro admission walk underflowed once skips became small.**
+  The carry `(r + to_skip + 1) - rows` is negative on `usize` whenever the next
+  admitted slot falls inside the same update — the common case at any rate above
+  roughly `1/rows`, reachable only once the schedule above was rate-correct. The
+  Count-Min path also admitted at most one row per update and dropped any
+  further landings. Both now walk the update's slots through
+  `Nitro::admit_rows`.
+
+### Added
+
+- **`CountMin::enable_nitro_with_seed`, `Count::enable_nitro_with_seed`,
+  `Vector2D::enable_nitro_with_seed`, `Nitro::init_nitro_seeded`.** The
+  unseeded path starts every sketch at the same point in the shared skip table,
+  so two sketches at the same rate admit exactly the same subset — there was no
+  way to run a Nitro accuracy battery over independent trials. The seed moves
+  both the table cursor and the rounding stream. `NitroBatch::with_target_and_seed`
+  now seeds the cursor too, so `insert_cached_step` is seed-dependent as
+  `insert` already was.
+- **`Nitro::table_cursor` / `Nitro::skip_table_len`, and the same pair on
+  `NitroBatch`.** Read-only, so a test can show the cursor advances and wraps
+  rather than sticking on one entry.
+
 - **NitroSketch's compensating weight is no longer biased at rates whose
   reciprocal is not an integer.** `NitroBatch` and the row-level `Nitro` behind
   `CountMin::fast_insert_nitro` / `Count::fast_insert_nitro` both wrote

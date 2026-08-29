@@ -96,6 +96,16 @@ impl<T> Vector2D<T> {
         self.nitro = Nitro::init_nitro(sampling_rate);
     }
 
+    /// Enables Nitro sampling with a reproducible, seed-selected schedule.
+    ///
+    /// [`Self::enable_nitro`] always starts the skip cursor at entry 0, so
+    /// every sketch at a given rate admits the same subset. Seeding it is what
+    /// lets an accuracy battery run over genuinely independent trials while
+    /// still reproducing exactly. See [`Nitro::init_nitro_seeded`].
+    pub fn enable_nitro_with_seed(&mut self, sampling_rate: f64, seed: u64) {
+        self.nitro = Nitro::init_nitro_seeded(sampling_rate, seed);
+    }
+
     /// Disables Nitro sampling and resets the internal state.
     pub fn disable_nitro(&mut self) {
         self.nitro = Nitro::default();

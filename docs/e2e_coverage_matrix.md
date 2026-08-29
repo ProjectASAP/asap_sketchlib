@@ -84,6 +84,45 @@ simultaneous form is weak (it is what three rows actually buy over 4096 keys);
 it still catches an estimator off by a constant factor, and the rate pin is what
 catches a smaller drift.
 
+### Even depth: the threshold is `ceil(d/2)`, not `d/2 + 1`
+
+`compute_median_inline_f64` returns the **average of the two middle order
+statistics** when `d` is even, which is what every even-depth sketch here
+reports. Write `t` for the error scale and call a row *bad* if it leaves
+`[f - t, f + t]`:
+
+- with `d/2 - 1` or fewer bad rows both middle order statistics are good, and
+  their average lies in a convex interval — safe;
+- with `d/2` bad rows **all on one side**, one of the two middle order
+  statistics is bad and unbounded, so the average leaves the interval.
+
+At `d = 4` that is **two** bad rows, not three. `rows / 2 + 1` reported
+`P[Bin(4, 1/3) >= 3] = 0.111` where the estimator earns
+`P[Bin(4, 1/3) >= 2] = 0.407` — a bound advertised almost four times stronger
+than the median supports, and it made the simultaneous `kappa` search stop
+early. `CountL2HH` runs at four rows, so this was live. Pinned by
+`spec_self_tests::{bad_row_threshold_is_ceil_half_the_depth,
+marginal_failure_probabilities_match_the_hand_computed_tails,
+two_same_direction_bad_rows_move_an_averaged_four_row_median_out_of_band,
+simultaneous_kappa_reflects_the_corrected_threshold}`.
+
+### `RegularPath` is a theorem; `FastPath` is a model
+
+Both bounds rest on the `d` rows failing independently. `RegularPath` makes one
+hash call per row with a distinct seed from the table, so the rows are separate
+hash functions and the theorem applies as written — under the stated assumption
+that XXH3-with-distinct-seeds behaves as an independent family. `FastPath`
+makes a **single** call and slices each row's column index out of bit fields of
+that one 128-bit output; the rows are then deterministic functions of one hash
+value. Treating disjoint bit fields as independent is a modelling assumption
+about the hash's avalanche, not something the theorem grants.
+
+Nothing is widened for the fast path — it is evaluated at the identical bound —
+but every fast-path row below is classified `asymptotic model`, and
+`countmin_regular_path_satisfies_the_count_min_theorem` /
+`countmin_fast_path_conforms_to_the_count_min_model` are separate tests so the
+two labels attach to two different names.
+
 ## Error metrics, one per family
 
 The most common way to have a test that verifies nothing is to check a sketch
@@ -149,7 +188,8 @@ Production-sized and cross-cutting runs:
 | public_instance | e2e_test | bound | trial_unit | seeds | status |
 | --- | --- | --- | --- | --- | --- |
 | `CountMin<Vector2D<i64>, FastPath>` 5×4096 | `countmin_zipf_satisfies_the_count_min_additive_bound_and_shard_merge` | simultaneous + marginal + exact merge equality | one sketch | stream `1001` | theorem + structural + regression |
-| `CountMin<Vector2D<i32>, Regular\|Fast>` over `U64`/`F64` inputs | `countmin_satisfies_the_count_min_theorem_on_both_paths` | as above | one sketch per (shape, path, trial) | 3 stream seeds from `1005` | theorem + regression |
+| `CountMin<Vector2D<i32>, RegularPath>` over `U64`/`F64` inputs | `countmin_regular_path_satisfies_the_count_min_theorem` | as above | one sketch per (shape, trial) | 3 stream seeds from `1005` | theorem + regression |
+| `CountMin<Vector2D<i32>, FastPath>` over `U64`/`F64` inputs | `countmin_fast_path_conforms_to_the_count_min_model` | as above | one sketch per (shape, trial) | 3 stream seeds from `1005` | **asymptotic model** + regression |
 | `CountMin<Vector2D<i32>, Regular\|Fast>` | `countmin_both_paths_satisfy_the_bound_on_the_same_stream` | as above | one sketch | `1002` | theorem + regression |
 
 ### Count Sketch — 18 instances
@@ -179,13 +219,17 @@ on `S::Counter: Copy + Ord + From<i32> + Into<i64> + AddAssign`.
 | `CMSHeap<Vector2D<i32>, Regular\|Fast>` | `Default` / `new` | full | `cmsheap_{regular,fast}_path_instances_satisfy_the_count_min_bound` | simultaneous + marginal + heap/sketch equality + top-k recall | theorem + structural + regression |
 | `CMSHeap<Vector2D<i64>, Regular\|Fast>` | `Default` / `new` | full | same | same | theorem + structural + regression |
 | `CMSHeap<{FixedMatrix, DefaultMatrixI32, QuickMatrixI64, DefaultMatrixI64}, Regular\|Fast>` (8) | `Default` | full | same | same | theorem + structural + regression |
-| `CMSHeap<Vector2D<i128>, Regular\|Fast>` | `new(rows, cols, k)` | **inert** — `i128: !Into<i64>` | `cmsheap_instances_without_an_insert_impl_are_inert_by_construction` | geometry accessors only | structural |
-| `CMSHeap<Vector2D<f64>, Regular\|Fast>` | `new(rows, cols, k)` | **inert** — `f64: !Ord`, `!Into<i64>` | same | same | structural |
-| `CMSHeap<QuickMatrixI128, Regular\|Fast>` | `Default` | **inert** | same | same | structural |
-| `CMSHeap<DefaultMatrixI128, Regular\|Fast>` | `Default` | **inert** | same | same | structural |
+| `CMSHeap<Vector2D<i128>, Regular\|Fast>` | `new(rows, cols, k)` | **inert** — `i128: !Into<i64>` | `cmsheap_inert_instances_construct_and_report_their_geometry` | constructor + geometry accessors + empty heap. **No insert / query / merge behaviour is covered, because none exists** | **gap** (constructibility only) |
+| `CMSHeap<Vector2D<f64>, Regular\|Fast>` | `new(rows, cols, k)` | **inert** — `f64: !Ord`, `!Into<i64>` | same | same | **gap** (constructibility only) |
+| `CMSHeap<QuickMatrixI128, Regular\|Fast>` | `Default` | **inert** | same | same | **gap** (constructibility only) |
+| `CMSHeap<DefaultMatrixI128, Regular\|Fast>` | `Default` | **inert** | same | same | **gap** (constructibility only) |
 
-**Decision on the eight inert instances: documented, not changed.** Every
-alternative costs more than it buys — `TryInto<i64>` makes `insert` fallible or
+**Decision on the eight inert instances: documented as a gap, not changed.**
+The test above is constructibility coverage only — it does **not** prove the
+methods are uncallable, which needs a compile-fail harness (`trybuild`) that
+was not added for a set of instances with no behaviour to protect. All eight are
+listed under *Still uncovered*, not as covered instances. Every alternative
+costs more than it buys — `TryInto<i64>` makes `insert` fallible or
 silently lossy for exactly the counters that motivated `i128`; widening
 `HHItem::count` to `i128` changes the heap wire payload shared with `CSHeap`,
 Space-Saving and the Octo top-k plans; removing the constructors breaks a type
@@ -317,12 +361,22 @@ is a reciprocal Beta variate, right-skewed at small `k`.
 
 | public_instance | gate | constructor | e2e_test | ground_truth | metric | bound | trial_unit | seeds | status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `NitroBatch<CountMin<Vector2D<i32>, FastPath>>` and `NitroBatch<Count<…>>`, rates {1.0, 0.5, **0.3**, 0.1, **0.07**, 0.01} | default | `with_target_and_seed` | `nitro_estimates_are_unbiased_inside_the_sampling_band_at_every_rate` | exact count | sampling variance | `z·√(f(p·r(1−r) + (1−p)/p))`, `r = frac(1/p)` | one sampling seed (both targets share the admitted subset) | `0x01170001..8` | asymptotic model |
-| same | default | same | same test, mean over seeds | exact count | **unbiasedness** | `\|mean − f\| ≤ z·σ/√trials` | 8 independent seeds | same | asymptotic model |
-| `NitroBatch<Vector2D<u32>>` | default | `init_nitro_with_seed` | `nitro_over_a_bare_vector2d_target_admits_mass_inside_the_sampling_band` | exact stream length | admitted mass | as above; every row must carry identical mass | one sampling seed | `0x01170001..8` | asymptotic model + structural |
-| `NitroBatch` rate = 1.0 | default | same | `nitro_at_full_sampling_is_exact` | exact | — | exact | deterministic | `0x01170001` | structural |
-| `NitroBatch` seeding | default | same | `nitro_sampling_is_reproducible_from_its_seed` | — | — | same seed → same result; different seeds differ | deterministic | 8 seeds | structural |
-| `NitroBatch::merge`, all 6 rates | default | same | `nitro_merge_sums_admitted_mass_at_the_combined_band` | exact | sampling variance | as above | one disjoint seed pair | `0x01170001..8` | asymptotic model |
+| `Nitro` skip cursor | default | `init_nitro` | `the_skip_cursor_advances_and_wraps_at_the_table_length` | the table's real length | — | one draw advances one entry; 4096 draws touch 4096 distinct entries; wraps at exactly `len`; an out-of-range decoded cursor is folded back | deterministic | — | structural |
+| `Nitro` skip schedule, all 6 rates | default | `init_nitro` | `the_geometric_skip_mean_matches_the_configured_rate` | `Geometric(p)` | mean skip | `\|mean - (1-p)/p\| <= z*sqrt((1-p)/p^2/n)` over 20 000 draws | the fixed table, one realisation | — | regression at a derived threshold |
+| `Nitro::admitted_delta`, all 6 rates | default | `init_nitro` | `stochastic_rounding_only_draws_where_the_reciprocal_is_not_an_integer` | `1/p` | weight law | integral `1/p` emits exactly `1/p` and consumes **no** draw; otherwise both `floor` and `floor+1` occur and `\|mean - 1/p\| <= z*sqrt(r(1-r)/n)` | 50 000 draws | — | structural + asymptotic model |
+| `CountMin<Vector2D<i32>, FastPath>` + `enable_nitro_with_seed` + `fast_insert_nitro`, rates {1.0, 0.5, **0.3**, 0.1, **0.07**, 0.01} | default | `enable_nitro_with_seed` | `row_level_countmin_nitro_is_unbiased_at_every_rate` | exact count | sampling variance | `z*sqrt(f((1-p)/p + p r(1-r)))` per row; **plus** `\|mean over seeds - f\| <= z*sigma/sqrt(T)` | one seed; all `d` rows must pass | `trial_seed(0..12)` | asymptotic model |
+| `Count<Vector2D<i32>, FastPath>` + `enable_nitro_with_seed` + `fast_insert_nitro`, same 6 rates | default | `enable_nitro_with_seed` | `row_level_countsketch_nitro_is_unbiased_at_every_rate` | exact count | sampling variance on the signed row magnitude | as above | as above | `trial_seed(0..12)` | asymptotic model |
+| row-level Count-Min Nitro over a Zipf stream, rates {1.0, 0.3, 0.1, 0.07} | default | as above | `row_level_countmin_nitro_tracks_a_zipf_stream_within_the_combined_band` | `FreqTruth` | sampling + collision | `f - z*sigma(f) <= est <= f + b(N-f)/w + z*sigma(N)` | one sketch, union-bounded over keys | stream `0x01172199` | theorem + asymptotic model |
+| row-level Count-Min Nitro, 16 equal-frequency keys, rates {1.0, 0.5, 0.3, 0.1} | default | as above | `row_level_countmin_nitro_separates_keys_of_similar_frequency` | exact counts | as above | as above | one sketch, union-bounded | `trial_seed(1)` | theorem + asymptotic model |
+| `NitroBatch<CountMin<Vector2D<i32>, FastPath>>` via **`insert`** and via **`insert_cached_step`**, all 6 rates | default | `with_target_and_seed` | `nitro_batch_both_ingestion_paths_stay_inside_the_sampling_band` | exact count | sampling variance | `z*sqrt(f((1-p)/p + p r(1-r)))`; **plus** unbiasedness of the mean over seeds | one sampling seed | `trial_seed(0..12)` | asymptotic model |
+| `NitroBatch::insert_cached_step` cursor | default | `with_target_and_seed` | `nitro_batch_cached_step_walks_the_table_and_respects_its_seed` | — | — | the cursor advances by roughly the admission count; same seed reproduces, different seed does not | deterministic | `trial_seed(0)`, `trial_seed(5)` | structural |
+| `NitroBatch<Count<Vector2D<i32>, FastPath>>` | default | `with_target_and_seed` | `nitro_estimates_are_unbiased_inside_the_sampling_band_at_every_rate` | exact count | sampling variance | as above | one sampling seed | `0x01170001..8` | asymptotic model |
+| `NitroBatch<Vector2D<u32>>` admitted mass | default | `init_nitro_with_seed` | `nitro_over_a_bare_vector2d_target_admits_mass_inside_the_sampling_band` | exact stream length | admitted mass | as above; every row must carry identical mass | one sampling seed | `0x01170001..8` | asymptotic model + structural |
+| all four paths at `rate = 1.0` | default | — | `full_sampling_is_exact_on_every_nitro_path` | exact | — | exact, on `CountMin`/`Count` row-level and both `NitroBatch` paths | deterministic | `trial_seed(0)` | structural |
+| all four paths | default | — | `every_nitro_path_is_reproducible_from_its_seed` | — | — | same seed reproduces bit-for-bit; 11 seeds give more than one distinct result | deterministic | `trial_seed(0..12)` | structural |
+| row-level Count-Min Nitro `merge`, all 6 rates | default | `enable_nitro_with_seed` + `merge` | `row_level_nitro_merge_lands_in_the_combined_band` | exact combined count | sampling variance | `z*sqrt(2f((1-p)/p + p r(1-r)))` | one disjoint seed pair | `trial_seed(0..12)` | asymptotic model |
+| `NitroBatch::merge`, all 6 rates | default | `with_target_and_seed` | `nitro_merge_sums_admitted_mass_at_the_combined_band` | exact | sampling variance | as above | one disjoint seed pair | `0x01170001..8` | asymptotic model |
+| `NitroBatch` seeding | default | `with_target_and_seed` | `nitro_sampling_is_reproducible_from_its_seed` | — | — | same seed → same result; different seeds differ | deterministic | 8 seeds | structural |
 | weight saturation | default | — | `nitro_saturates_oversized_weights_instead_of_wrapping` | exact | — | clamp at `i32::MAX`/`u32::MAX` | deterministic | — | structural |
 | `UniformSampling`, rates {1.0, 0.5, 0.25, 0.1, 0.01} × sizes {0,1,7,1k,10k,50k} | `experimental` | `with_seed` | `uniform_sampling_retention_is_exact_at_every_rate_and_stream_size` | the input multiset | retention | `len == ⌈n·rate⌉` **exactly**; samples ⊆ stream with multiplicity | deterministic | `0x5A910100+i` | structural |
 | `UniformSampling`, rates {0.5, 0.1, 0.01} | `experimental` | `with_seed` | `uniform_sampling_is_a_uniform_sample_without_replacement` | population mean of a skewed stream | sample mean | `z·√((σ_N²/m)(N−m)/(N−1))` — SRSWOR with finite-population correction | **one seed = one draw of the whole priority sequence**; 24 seeds | `0x5A910200..` | asymptotic model |
@@ -363,7 +417,9 @@ is a reciprocal Beta variate, right-skewed at small `k`.
 | `UnivMonQConfig::with_window_bound` | default | `univmonq_with_window_bound_chooses_a_hierarchy_that_satisfies_its_own_inequality` | Bernstein bound recomputed in-test | — | chosen `levels` is the smallest with `mean + √(2·mean·ln(1/δ)) + (2/3)ln(1/δ) < candidates` | deterministic | δ = 1e-3 | theorem |
 | `UnivMonQ::with_hasher_and_source_id`, 4-shard merge | default | `univmonq_multi_shard_merge_with_distinct_source_ids_covers_the_union` | `NumericTruth` | — | merged count/min/max exact | deterministic | `0xC0905101` | structural |
 | `UnivMonQ::estimate_frequency` / `estimate_f2` | default | `univmonq_frequency_and_f2_satisfy_the_count_sketch_bounds` | `FreqTruth` | L2 + AMS F2 | `√(3/w)·‖f₋ᵢ‖₂`, `√(6/w)` | one sketch | stream `3008` | theorem |
-| `UnivMonQ::{rank, cdf, quantile}`, **both regimes** | default | `univmonq_ordered_queries_satisfy_the_full_documented_bound` | `NumericTruth` | rank, sup over x | `sup_x \|F̂−F\| ≤ 2E_H + P̂_R·ε_R`, all three terms read from `ordered_query_diagnostics` | **one sketch** (the bound is a sup, so one pass/fail over every breakpoint and every probed q); 12 trials varying `hash_seed` and `source_id` | δ = 0.01 per sketch | `hash_seed 3..14`, `source_id 0x0DDE1000+`, streams `0x0DDE0001/2` | theorem |
+| `UnivMonQ::cdf`, **three regimes** (diffuse / heavy / mixed) | default | `univmonq_ordered_queries_satisfy_the_full_documented_cdf_bound` | `NumericTruth` | **Kolmogorov distance** `sup_x \|F̂(x) − F(x)\|`, swept exactly over the union of the truth support and the estimated breakpoints | `sup_x \|F̂−F\| ≤ 2·E_H + P̂_R·ε_R` with `E_H = Σ_h \|f̂_h − f_h\|/N` (the sum the contract defines) and `ε_R = sqrt(log(2/δ)/(2 m_R))`, all read from `ordered_query_diagnostics` | **one sketch** — the bound is a supremum, so one pass/fail; 12 trials per regime varying `hash_seed` and `source_id` | δ = 0.01 per sketch | `hash_seed 3..14`, `source_id 0x0DDE1000+`, streams `0x0DDE0001..4` | theorem |
+| the CDF sweep itself | default | `cdf_sup_distance_detects_a_gap_a_breakpoint_scan_misses` | hand-built fixture | — | measurement | a breakpoint-only scan reports 0 where the true `sup` is 0.6; the sweep also catches an over-high start below the first breakpoint | deterministic | fixed | structural |
+| `UnivMonQ::{quantile, rank}`, three regimes | default | `univmonq_quantile_answers_satisfy_the_occurrence_rank_bound` | `NumericTruth` | **rank acceptance** (a different statement from the CDF sup, kept separate) | `rank_incl(v) ≥ q − ε`, `rank_excl(v) ≤ q + ε` with `ε = ε_R + 2·E_H`; and `rank(quantile(q))` within `2ε` of `rank_incl` | one sketch; 12 trials per regime | δ = 0.01 | as above | theorem |
 | `UnivMonQ::{estimate_distinct, estimate_entropy, heavy_hitters}` | default | `univmonq_distinct_entropy_and_recall_stay_within_the_documented_empirical_band` | `FreqTruth` | relative | ±10% distinct, ±10% entropy, ≥8/10 recall | one sketch | stream `3008` | **empirical** |
 | `Hydra` with CM / CS / HLL / KLL / UnivMon counters | default | `tests/e2e_frameworks.rs` (29 tests) | exact lattice truth | additive grid bound, `ε(k)` for KLL cells, AMS-derived band for UnivMon `L2Norm`, exact marginals, exact shard merge | derived per counter from the cell's own parameters | one grid | `0x5EED0600` etc. | theorem + structural |
 | `UnivMon` standalone | default | `univmon_weighted_metrics_and_fast_insert_parity`, `univmon_pyramid_weighted_metrics` | `FreqTruth` | L1 exact, L2 by the AMS bound, entropy empirical | `calc_l1 == N`; `L2 ∈ [√(1−b), √(1+b)]·L2_true`; entropy ±12% | one sketch | stream `4003` | structural + theorem + empirical |
@@ -398,7 +454,97 @@ is a reciprocal Beta variate, right-skewed at small `k`.
 
 Ordered by severity.
 
-1. **Nitro's integer weight was biased at every rate whose reciprocal is not an
+1. **The row-level Nitro sampler was inert: its cursor never moved — fixed.**
+   `Nitro::draw_geometric` advanced the skip-table cursor with
+   `(idx + 1) & self.mask` where `mask` was `0x10000` — the table's *length*
+   used as a mask instead of `length - 1`. `x & 0x10000` is zero for every `x`
+   below `0xFFFF`, so `idx` stayed at 0 for the life of the sketch. Three
+   consequences, all live:
+   - every geometric skip was the same distance, read from table entry 0;
+   - the stochastic-rounding draw, which the previous pass derived by hashing
+     that cursor, was a constant — and at `u = 0 < r` it was always 1, so the
+     weight was `floor(1/p) + 1 = ceil(1/p)` and **the +20% bias at `p = 0.3`
+     survived the fix that was supposed to remove it**;
+   - `NitroBatch::insert_cached_step` had the same mask and replayed one skip
+     distance forever.
+   The cursor now wraps through `next_cursor()` on the table's real length, and
+   reads fold through `cursor()` so a stale or hostile `idx` decoded from an old
+   payload cannot index out of bounds. Pinned by
+   `the_skip_cursor_advances_and_wraps_at_the_table_length`.
+2. **The row-level skip schedule ignored the configured rate — fixed.**
+   `draw_geometric` read `PRECOMPUTED_SAMPLE_RATE_1PERCENT`, whose entries are
+   already divided by `ln(0.99)`, so **every** rate got `p = 0.01`'s schedule:
+   at `p = 0.5` the sampler skipped about 99 slots between admissions instead of
+   1, admitting roughly 1% of the stream while weighting each admission as if it
+   were 50% — a 50× under-count. It now reads the unscaled `ln(1 - u)` table and
+   multiplies by `inv_ln_one_minus_p`. Same fix in
+   `NitroBatch::insert_cached_step`. Pinned by
+   `the_geometric_skip_mean_matches_the_configured_rate`.
+3. **The row-level Nitro insert and query hashed differently, so every per-key
+   estimate read a cell the insert had never written — fixed.**
+   `fast_insert_nitro` hashed with `H::hash128_seeded(0, value)` and sliced
+   columns out of that raw `u128` by hand, while `nitro_estimate` /
+   `Count::estimate` query through `FastPathHasher::hash_for_matrix` and
+   `MatrixFastHash::col_for_row`. Those agree only when the matrix hash happens
+   to be the identity on the raw hash, which it is not — `hash_for_matrix`
+   picks a packing mode from `rows` and `cols`. Every per-key estimate came
+   back **0**. It never showed up because no test had ever queried a
+   Nitro-accelerated sketch per key; the whole-row sums the earlier tests used
+   are independent of the column. Both paths now derive cell and sign exactly as
+   a plain `insert` does. Pinned by
+   `row_level_countmin_nitro_tracks_a_zipf_stream_within_the_combined_band`.
+4. **The per-row admission walk underflowed once skips got small — fixed.**
+   `fast_insert_nitro` carried the cursor with `(r + to_skip + 1) - rows` on
+   `usize`, which is negative whenever the next admitted slot falls inside the
+   same update. That is the common case at any rate above roughly `1/d`, and it
+   only never fired because the two bugs above froze the skip at one large
+   constant. The Count-Min path also admitted at most one row per update and
+   silently dropped any further landings. Both now go through
+   `Nitro::admit_rows`, which walks the update's `rows` slots and reports every
+   admitted `(row, weight)`.
+5. **The stochastic-rounding draw was correlated with the skip schedule —
+   fixed.** Deriving the dither by hashing the skip cursor makes it a fixed
+   function of position in the table, so a key whose arrivals happen to land on
+   positions with `u < r` keeps the full rounding bias even with a working
+   cursor. `Nitro` now carries its own splitmix64 stream, advanced once per
+   admitted slot and independent of the cursor, mirroring what `NitroBatch`
+   already did with its `SmallRng`. It is `#[serde(skip)]`, so the wire form is
+   unchanged. The unbiasedness is exact given a uniform draw; treating the
+   stream as that uniform source is the same modelling assumption the geometric
+   schedule already rests on, which is why Nitro is classified
+   `asymptotic model` rather than `theorem`.
+6. **`CountSketchSpec` used `d/2 + 1` bad rows where the estimator earns
+   `ceil(d/2)` — fixed.** Even-depth sketches report the *average* of the two
+   middle order statistics, so `d/2` bad rows on one side are enough. At `d = 4`
+   the spec claimed a per-key failure probability of 0.111 against an earned
+   0.407 — a bound advertised almost four times stronger than the median
+   supports — and the simultaneous `kappa` search stopped early as a result.
+   `CountL2HH` runs at four rows. Fixed to `ceil(d/2)` in both
+   `CountSketchSpec` and `SecondMomentSpec`, with four deterministic self-tests
+   including a concrete four-row counter-example.
+7. **The ordered-query test measured a rank-acceptance criterion, not a
+   Kolmogorov distance — fixed.** It scored each *estimated breakpoint* against
+   the true rank interval of its own value, which only ever inspects `x` values
+   the estimate itself chose: an estimate that is right wherever it has a
+   breakpoint and simply has none across a region carrying a lot of mass scores
+   zero. It also used `max_h` for `E_H` where the contract says `sum_h`, which
+   understates the right-hand side. Both fixed:
+   `common::specs::cdf_sup_distance` sweeps the ordered union of the truth
+   support and the estimated breakpoints — exact for step functions, because
+   both are constant between consecutive jump points — and `E_H` is the sum.
+   The rank-acceptance assertions survive as their own test. A hand-built
+   fixture, `cdf_sup_distance_detects_a_gap_a_breakpoint_scan_misses`, shows the
+   old measurement reporting 0 where the true `sup` is 0.6. Measured margins
+   after the fix: diffuse `sup ≈ 0.017–0.025` against a bound of `0.051`; heavy
+   `0.007–0.017` against `0.023–0.025`; mixed `0.009–0.043` against
+   `0.043–0.044` — the mixed regime comes within 2% of the bound, so the test
+   has real power.
+8. **`FastPath` was classified `theorem` — corrected to `asymptotic model`.**
+   The row independence both bounds rest on is supplied by the hash family on
+   `RegularPath` (one seeded call per row) and is a modelling assumption on
+   `FastPath` (bit fields of one 128-bit hash). The tests are now split by name
+   so the two labels attach to two different functions.
+9. **Nitro's integer weight was biased at every rate whose reciprocal is not an
    integer — fixed.** `scaled_increment` wrote `ceil(weight/p)` per admitted
    update, so at the public rate `p = 0.3` every estimate came back
    `f·0.3·4 = 1.2f` — a flat +20%, for every key, in the shipped estimator. The
@@ -414,7 +560,7 @@ Ordered by severity.
    `nitro_estimates_are_unbiased_inside_the_sampling_band_at_every_rate`, which
    also averages over independent seeds so a systematic offset cannot hide
    inside the sampling band.
-2. **The KMV spec had the wrong standard error and the wrong exact-regime
+10. **The KMV spec had the wrong standard error and the wrong exact-regime
    boundary — fixed.** The estimator `(k−1)/U_(k)` has
    `RSE = √((n−k+1)/(n(k−2))) → 1/√(k−2)`; the suite modelled `1/√(k−1)` and
    called it "marginally conservative", when it is *smaller* and therefore
@@ -423,26 +569,26 @@ Ordered by severity.
    the estimator runs and its standard deviation is about one element. The old
    grid never landed on `k`, so the mistake was invisible. Both fixed, and
    `n = k` is now a covered regime.
-3. **The DDSketch batteries scored two different questions against one truth —
+11. **The DDSketch batteries scored two different questions against one truth —
    fixed.** The core sketch answers `sorted[ceil(q·n) − 1]` and the portable one
    `sorted[floor(q·(n−1))]`. Both were compared against the core convention, so
    the difference was silently absorbed into `α`. Each is now compared against
    its own order statistic, the divergence is pinned by
    `ddsketch_core_and_portable_answer_different_order_statistics`, and the
    decision to keep both conventions is recorded above.
-4. **`ddsketch_endpoints_return_the_exact_min_and_max` asserted something false
+12. **`ddsketch_endpoints_return_the_exact_min_and_max` asserted something false
    of the portable sketch — fixed.** Its comment claimed the portable twin
    "clamps its bucket representative into [min, max], so its endpoints are exact
    too". It does not: the min/max scalars were removed from the wire, so its
    endpoints are ordinary bucket representatives. The test is split and renamed
    `ddsketch_core_endpoints_are_exact_and_portable_endpoints_are_alpha_relative`.
-5. **The `CSHeap` `i128` instances were wrongly documented as uninsertable —
+13. **The `CSHeap` `i128` instances were wrongly documented as uninsertable —
    fixed.** `CSHeap`'s insert path is bounded on `CountSketchCounter`, which
    `i128` satisfies; only `CMSHeap` requires `Into<i64>`. Six instances
    (`Vector2D<i128>`, `QuickMatrixI128`, `DefaultMatrixI128` × two paths) were
    listed as a gap and are now fully covered, including the `i128 → i64` heap
    conversion, which is documented saturation rather than silent wrapping.
-6. **Binomial acceptance was applied to dependent checks throughout — fixed.**
+14. **Binomial acceptance was applied to dependent checks throughout — fixed.**
    Quantiles of one KLL, keys of one Count Sketch, nested HLL/KMV checkpoints
    and merged twins were all pooled into `Binomial(n, p)` tails. Each battery
    now either reduces to one outcome per independent seed, uses a union-bounded
@@ -450,7 +596,7 @@ Ordered by severity.
    *exact equalities* being scored as second probabilistic draws — an HLL shard
    merge, a KMV shard merge, a portable HLL shard merge — and are now asserted
    as equalities, which is strictly stronger.
-7. **UnivMon-Q's full ordered-query bound was unverifiable — now verified.**
+15. **UnivMon-Q's full ordered-query bound was unverifiable — now verified.**
    `E_H` and `m_R` were internal, so the test could only cover the diffuse
    special case. `UnivMonQQuery::ordered_query_diagnostics` was added — a
    read-only view of state the CDF construction already computes, with no
@@ -458,7 +604,7 @@ Ordered by severity.
    `sup_x |F̂ − F| ≤ 2E_H + P̂_R·ε_R` in full, in both the diffuse and the
    concentrated regime, asserting that each regime really is the regime it
    claims to be.
-8. **`UnivMonOctoWorker` has no `flush`, so its parent's L1 lags — documented,
+16. **`UnivMonOctoWorker` has no `flush`, so its parent's L1 lags — documented,
    not fixed.** Every other shipped worker (Cm, Count, Dd, Coco, Elastic)
    implements `flush`; UnivMon's cannot, because `LayeredCountDelta` carries the
    flow key that triggered the promotion and `apply_layered_delta` needs it for
@@ -470,22 +616,22 @@ Ordered by severity.
    predicts the value from the workers' last reported totals rather than
    tolerating a band. Fixing it means making the delta's key optional, which is
    a wire change.
-9. **`EHSketchList::merge` had no `ELASTIC` arm** — fixed in the previous pass.
+17. **`EHSketchList::merge` had no `ELASTIC` arm** — fixed in the previous pass.
    `EHBucket::to_merge` discards the `Result`, so an `ExponentialHistogram` over
    the Elastic payload silently dropped every bucket merge while still counting
    bucket sizes. Every heavy key read 0.
-10. **HLL Classic's accuracy cliff at the linear-counting switchover** — not
+18. **HLL Classic's accuracy cliff at the linear-counting switchover** — not
     fixed, documented. At `n ≈ 2.5m` the 2007 estimator's two branches do not
     meet smoothly and the RSE reaches 6.3× the asymptotic `1.04/√m` at p16. A
     real fix is HLL++ bias correction, which changes shipped estimates and the
     golden bytes.
-11. **`EHUnivOptimized`'s sketch-tier cardinality is structurally
+19. **`EHUnivOptimized`'s sketch-tier cardinality is structurally
     unrecoverable** — not fixed, documented. Promotion fires only once a bucket
     holds `layer_size · rows · cols / 2` distinct keys, while UnivMon needs about
     `log2(distinct)` layers to recover `F0`; raising `layer_size` raises the
     promotion threshold in lockstep. Measured: 0–11 reported for windows holding
     16k–40k distinct.
-12. **The eight inert `CMSHeap` instances** — documented above, deliberately
+20. **The eight inert `CMSHeap` instances** — documented above, deliberately
     unchanged.
 
 ## Test-side defects corrected in this pass
@@ -508,6 +654,12 @@ Ordered by severity.
 | Coco heavy keys at `[0.5×, 1.5×]` | `coco_point_queries_partition_the_inserted_mass` | the ceiling is derivable (`count + e(total−count)/w`); only the floor is empirical, and it now says so |
 | Elastic elephant at `×1.05` | `elastic_never_underestimates_under_eviction_pressure` | the light layer is a Count-Min; its own `e(N−f)/cols` is the right ceiling |
 | `CSHeap` heap entry compared with `it.count as f64 == est` | `assert_heap_matches_sketch` | hides the documented saturating conversion; now compares through `cs_heap_count` |
+| a rank-interval scan over estimated breakpoints, presented as `sup_x \|F̂ − F\|` | `univmonq_ordered_queries_…` | it only inspects `x` values the estimate chose, so a region the estimate skips entirely scores zero. Replaced by an exact sweep over the union of both supports |
+| `E_H` computed as `max_h` | same | the contract says `sum_h`; `max` understates the right-hand side |
+| Nitro tested only by whole-row mass | previous pass's Nitro tests | row sums are independent of the column, so they could not see insert and query hashing to different cells. Per-key estimates are now checked on a Zipf stream and on equal-frequency keys |
+| `d/2 + 1` bad rows for an averaged even-depth median | `CountSketchSpec`, `SecondMomentSpec` | the estimator averages the two middle order statistics, so `ceil(d/2)` same-direction bad rows suffice |
+| `FastPath` results filed under `theorem` | coverage matrix | its rows come from bit fields of one hash, not from independent hash functions |
+| "fails to compile if an insert impl appears" | `cmsheap_…_inert_by_construction` | it would not; the assertions are geometry reads. The claim is removed and the instances are listed as a gap |
 
 Corrections from the previous pass (Count Sketch under `ε·N`, `1.5 × bound`,
 `α × 1.05`, hard-coded 0.02/0.03 KLL tolerances, wall-clock-seeded accuracy
@@ -528,13 +680,18 @@ ensemble HLL asserted equal to a standalone) remain in force.
 
 ## Still uncovered
 
+These are the only three genuinely missing things, plus the modelling limits
+below them.
+
 | Instance / claim | Reason |
 | --- | --- |
-| `CMSHeap<Vector2D<i128>>`, `CMSHeap<Vector2D<f64>>`, `CMSHeap<QuickMatrixI128>`, `CMSHeap<DefaultMatrixI128>`, both paths (8) | **inert by construction** — no insert impl exists. Their constructibility and geometry accessors *are* pinned by `cmsheap_instances_without_an_insert_impl_are_inert_by_construction`; there is no behaviour beyond that to test |
-| `NitroBatch<Vector2D<u32>>` per-key estimates | no public estimator: `NitroEstimate` is implemented only for the `Vector2D<i32>`-backed sketches, and `CountMin::estimate` cannot instantiate over `u32`. Admitted-mass coverage stands in; re-deriving the fast-path hash in a test is exactly how the Nitro estimator once shipped broken |
+| `CMSHeap<Vector2D<i128>>`, `CMSHeap<Vector2D<f64>>`, `CMSHeap<QuickMatrixI128>`, `CMSHeap<DefaultMatrixI128>`, both paths (**8 instances**) | **No insert, query or merge coverage, because no such impl exists.** `cmsheap_inert_instances_construct_and_report_their_geometry` covers the constructor, the geometry accessors and the empty heap — nothing else. It does **not** prove the methods are uncallable: that needs a compile-fail harness (`trybuild`), deliberately not added for instances with no behaviour to protect |
+| `NitroBatch<Vector2D<u32>>` per-key estimates | **No public per-key estimator exists.** `NitroEstimate` is implemented only for the `Vector2D<i32>`-backed sketches, and `CountMin::estimate` cannot instantiate over a `u32` counter because it needs `Counter: From<i32>`. Admitted-mass coverage stands in. Re-deriving the fast-path hash inside a test to fake one is exactly how the row-level Nitro estimator shipped broken — see finding 3 |
 | `count_min_decodes_go_bytes`, `dd_sketch_decodes_go_bytes`, `hll_sketch_decodes_go_bytes`, `kll_sketch_decodes_go_bytes`, `hydra_kll_decodes_go_bytes` (`tests/msgpack_compat.rs`) | **5 ignored, empty tests — a gap, not coverage.** They need a msgpack fixture produced by `sketchlib-go`; this repository has no Go toolchain and no vendored encoder, so any bytes generated here would be this crate's own output compared against itself. Fabricating them would make the tests pass while testing nothing. The ASAPv1 envelope *does* have cross-language coverage via `asapv1_golden/*.hex` |
 | UnivMon's composed `g`-sum constant | the recurrence composes per-layer Count Sketch errors across geometrically sampled substreams and the crate publishes no closed form. What is asserted is the terminal layer's own AMS bound plus the exact L1; entropy stays an empirical band |
 | `EHUnivOptimized` sketch-tier L2 / entropy | same reason, at a configuration whose promotion threshold is structurally coupled to `layer_size` (finding 11) |
 | User-supplied `SketchHasher` / `MatrixStorage` implementations | out of scope by request: only in-repo concrete and default types are enumerated |
-| Independent **hash** seeds for the matrix frequency families | the hash is fixed by the sketch's type parameter and there is no per-instance seed, so a binomial over hash draws is unavailable. The simultaneous bound (no independence needed) and the marginal rate pin are what stand in; KMV reaches genuine hash independence only because `insert_by_hash` is public |
+| Independent **hash** seeds for the matrix frequency families | the hash is fixed by the sketch's type parameter and there is no per-instance seed, so a binomial over hash draws is unavailable. The simultaneous bound (no independence needed) and the marginal rate pin are what stand in; KMV reaches genuine hash independence only because `insert_by_hash` is public, and Nitro because `enable_nitro_with_seed` / `with_target_and_seed` were added |
+| A proof that `FastPath`'s bit-sliced rows are independent | none is offered, which is why every fast-path row is classified `asymptotic model` rather than `theorem`. The bound evaluated is identical to the regular path's; only the label differs |
+| `Nitro`'s rounding stream across a serde round trip | `rounding_state` is `#[serde(skip)]`, so a decoded sketch restarts it from the fixed seed. This keeps the wire form unchanged at the cost of not reproducing a mid-stream sampler exactly through serialization — the same trade-off `NitroBatch`'s `SmallRng` already makes |
 | `octo-runtime` accuracy under thread interleaving | the runtime tests assert equality against a single-threaded replay of the same partition, which is stronger than a band; no separate accuracy battery is warranted |

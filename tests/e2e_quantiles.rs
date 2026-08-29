@@ -860,65 +860,54 @@ fn univmonq_frequency_and_f2_satisfy_the_count_sketch_bounds() {
     }
 }
 
-/// Ordered queries against the **full** documented bound.
+/// Ordered queries against the **full** documented bound, measured as a real
+/// Kolmogorov distance.
 ///
 /// The contract in `docs/api/api_univmon_q.md` is
 ///
 /// ```text
 ///   sup_x |F_hat(x) - F(x)| <= 2 E_H + P_hat_R * epsilon_R
+///   E_H       = sum_h |f_hat_h - f_h| / N        (over the recovered heavy set)
+///   epsilon_R = sqrt(log(2 / delta) / (2 m_R))
 /// ```
 ///
-/// where `E_H` is the normalized frequency error over the sketch's internally
-/// recovered heavy set, `P_hat_R` is the residual's share of the mass, and
-/// `epsilon_R = sqrt(ln(2/delta) / (2 m_R))` is the DKW band over the `m_R`
-/// retained occurrence samples backing the residual.
+/// # What this measures, and what the previous revision measured instead
 ///
-/// `E_H` and `m_R` used to be unreachable from outside the crate, so an earlier
-/// revision of this test could only cover the diffuse special case where the
-/// gate provably does not fire and the heavy set is empty. They are now
-/// reported by `UnivMonQQuery::ordered_query_diagnostics`, a read-only view of
-/// state the CDF construction already computes, so both regimes are covered
-/// here:
+/// The left-hand side is a supremum over **all** `x`, of the difference between
+/// two right-continuous step CDFs. The previous revision computed something
+/// else entirely: for each *estimated breakpoint*, the distance from its
+/// reported rank to the true rank interval of its own value. That is a quantile
+/// rank-acceptance criterion, and it only ever inspects `x` values the estimate
+/// itself chose — an estimate that is right wherever it has a breakpoint and
+/// simply has none across a region carrying a lot of mass scores zero.
+/// `cdf_sup_distance_detects_a_gap_a_breakpoint_scan_misses` below is that
+/// fixture.
 ///
-/// - **diffuse** — 200k observations over 200k distinct values. The adaptive
-///   gate `F2_hat / N^2 >= 1 / ordered_samples` does not fire, so the heavy set
-///   really is empty; the test asserts that premise from the diagnostics rather
-///   than assuming it, and the bound collapses to `epsilon_R`.
-/// - **concentrated** — a Zipf stream whose head is heavy enough to fire the
-///   gate, so `E_H > 0` and `P_hat_R < 1` and the full three-term bound is what
-///   is evaluated.
+/// It also used `max_h` for `E_H` where the contract says `sum_h`, which
+/// understates the right-hand side.
+///
+/// Both are fixed here: `common::specs::cdf_sup_distance` sweeps the ordered
+/// union of the exact truth support and the estimated breakpoints, which is
+/// exact for step functions because both are constant between consecutive jump
+/// points; and `E_H` is the sum the document defines.
 ///
 /// # Trial unit
 ///
-/// The bound is a **supremum over x**, so one sketch answers it with one
-/// pass/fail: every breakpoint and every probed quantile of a single sketch is
-/// part of that one statement, not a separate Bernoulli draw. Independent
-/// trials come from the two places UnivMon-Q's randomness actually lives — the
-/// occurrence-priority stream, keyed by `source_id`, and the CountSketch hash,
-/// keyed by `config.hash_seed`. Both are varied per trial.
+/// The bound is a supremum over `x`, so one sketch answers it with one
+/// pass/fail. Independent trials come from the two places UnivMon-Q's
+/// randomness lives — the CountSketch hash (`config.hash_seed`) and the
+/// occurrence-priority stream (`source_id`) — and both move per trial.
 #[test]
-fn univmonq_ordered_queries_satisfy_the_full_documented_bound() {
-    use common::specs::occurrence_sample_epsilon;
+fn univmonq_ordered_queries_satisfy_the_full_documented_cdf_bound() {
+    use common::specs::{cdf_sup_distance, occurrence_sample_epsilon};
 
     const DELTA: f64 = 0.01;
     const TRIALS: usize = 12;
-    const QS: [f64; 7] = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99];
 
-    // Two regimes: one where the adaptive gate cannot fire, and one where it
-    // must. Covering only the first is what left `E_H` untested.
-    for (regime, values) in [
-        (
-            "diffuse",
-            uniform_u64(200_000, 10_000_000, 0x0DDE_0001)
-                .into_iter()
-                .map(|v| v as f64)
-                .collect::<Vec<f64>>(),
-        ),
-        (
-            "concentrated",
-            zipf_f64(200_000, 4_096, 1.4, 1.0, 1e6, 0x0DDE_0002),
-        ),
-    ] {
+    let mut gate_open_seen = 0usize;
+    let mut gate_closed_seen = 0usize;
+
+    for (regime, values) in univmonq_ordered_regimes() {
         let truth = NumericTruth::new(values.clone());
         let mut exact_counts: HashMap<u64, u64> = HashMap::new();
         for v in &values {
@@ -932,9 +921,6 @@ fn univmonq_ordered_queries_satisfy_the_full_documented_bound() {
 
         for t in 0..TRIALS {
             let config = UnivMonQConfig {
-                // Both knobs move the randomness the bound is stated over:
-                // `hash_seed` re-draws the CountSketch hash, `source_id`
-                // re-draws the occurrence priorities.
                 hash_seed: 3 + t,
                 ..UnivMonQConfig::default()
             };
@@ -948,12 +934,8 @@ fn univmonq_ordered_queries_satisfy_the_full_documented_bound() {
             let n = q.count() as f64;
             let view = q.prepare_queries();
             let diag = view.ordered_query_diagnostics();
-            let cdf = view.cdf();
+            let estimated: Vec<(f64, f64)> = view.cdf().iter().map(|p| (p.value, p.rank)).collect();
 
-            // The gate, read from public state, and the heavy set the CDF
-            // actually used, read from the diagnostics. They must agree: a
-            // non-empty heavy set with the gate closed would mean the two
-            // disagree about which regime the sketch is in.
             let gate = view.estimate_f2() / (n * n);
             let threshold = 1.0 / config.ordered_samples as f64;
             if gate >= threshold {
@@ -962,8 +944,8 @@ fn univmonq_ordered_queries_satisfy_the_full_documented_bound() {
                 assert!(
                     diag.heavy.is_empty(),
                     "{regime} trial {t}: the adaptive gate is closed \
-                     (F2_hat/N^2 = {gate:.3e} < 1/ordered_samples = {threshold:.3e}) but the \
-                     CDF still used {} heavy values",
+                     (F2_hat/N^2 = {gate:.3e} < 1/ordered_samples = {threshold:.3e}) but \
+                     the CDF still used {} heavy values",
                     diag.heavy.len()
                 );
             }
@@ -971,17 +953,17 @@ fn univmonq_ordered_queries_satisfy_the_full_documented_bound() {
                 heavy_seen += 1;
             }
 
-            // E_H: the largest normalized frequency error over the recovered
-            // heavy set, against exact truth. Empty heavy set gives zero, which
-            // is what makes the diffuse regime collapse to epsilon_R.
-            let e_h = diag
+            // E_H, as the document defines it: the **sum** of absolute
+            // frequency errors over the recovered heavy set, normalized by N.
+            let e_h: f64 = diag
                 .heavy
                 .iter()
                 .map(|(value, frequency)| {
                     let exact = *exact_counts.get(&value.to_bits()).unwrap_or(&0) as f64;
-                    (frequency - exact).abs() / n
+                    (frequency - exact).abs()
                 })
-                .fold(0.0f64, f64::max);
+                .sum::<f64>()
+                / n;
             let p_hat_r = diag.residual_mass_fraction(q.count());
             let m_r = diag.residual_samples;
             let eps_r = if m_r == 0 {
@@ -991,14 +973,19 @@ fn univmonq_ordered_queries_satisfy_the_full_documented_bound() {
             };
             let bound = 2.0 * e_h + p_hat_r * eps_r;
 
+            let (sup, at) = cdf_sup_distance(&estimated, truth.sorted());
+
             let context = format!(
                 "{regime} trial {t}: hash_seed={} source_id={:#x}, n={n}, gate \
                  F2_hat/N^2={gate:.3e} vs 1/ordered_samples={threshold:.3e}, heavy set \
-                 {} values, E_H={e_h:.6}, P_hat_R={p_hat_r:.6}, m_R={m_r}, \
-                 epsilon_R={eps_r:.6} at delta={DELTA} -> bound {bound:.6}",
+                 {} values, E_H={e_h:.6} (sum form), P_hat_R={p_hat_r:.6}, m_R={m_r}, \
+                 epsilon_R={eps_r:.6} at delta={DELTA} -> bound {bound:.6}; \
+                 {} CDF breakpoints, {} distinct truth values",
                 config.hash_seed,
                 0x0DDE_1000 + t as u64,
                 diag.heavy.len(),
+                estimated.len(),
+                exact_counts.len(),
             );
             last_context = context.clone();
 
@@ -1008,91 +995,53 @@ fn univmonq_ordered_queries_satisfy_the_full_documented_bound() {
                  samples, so there is nothing for the bound to cover"
             );
 
-            // The bound is a sup over x, so a single trial is a single
-            // pass/fail over every breakpoint *and* every probed quantile.
-            let mut worst = 0.0f64;
-            let mut detail = String::new();
-            for point in cdf {
-                let (excl, incl) = truth.rank_interval(point.value);
-                let dist = (point.rank - incl).max(excl - point.rank).max(0.0);
-                if dist >= worst {
-                    worst = dist;
-                    detail = format!(
-                        "cdf breakpoint value {} reported rank {:.6}, true rank interval \
-                         [{excl:.6}, {incl:.6}]",
-                        point.value, point.rank
-                    );
-                }
-            }
-            for &qq in &QS {
-                let est = view.quantile(qq).expect("ordered_samples enabled");
-                let (excl, incl) = truth.rank_interval(est);
-                let dist = (qq - incl).max(excl - qq).max(0.0);
-                if dist >= worst {
-                    worst = dist;
-                    detail = format!(
-                        "quantile({qq}) returned {est}, whose true rank interval is \
-                         [{excl:.6}, {incl:.6}]"
-                    );
-                }
-            }
-            tally.record(worst <= bound, || {
-                format!("{context}\n      sup deviation {worst:.6} > bound; worst at {detail}")
+            tally.record(sup <= bound, || {
+                format!(
+                    "{context}\n      sup_x |F_hat - F| = {sup:.6} > bound, attained at \
+                     x = {at}"
+                )
             });
 
             // Monotonicity is structural: a CDF that decreases is malformed
             // whatever the sampling error.
-            assert!(!cdf.is_empty(), "{context}: cdf must not be empty");
-            for w in cdf.windows(2) {
+            assert!(!estimated.is_empty(), "{context}: cdf must not be empty");
+            for w in estimated.windows(2) {
                 assert!(
-                    w[0].rank <= w[1].rank + 1e-9,
+                    w[0].1 <= w[1].1 + 1e-9,
                     "cdf ranks not monotone at {:?} -> {:?}. {context}",
                     w[0],
                     w[1]
                 );
             }
-
-            // `rank` and `quantile` must be a consistent pair: re-ranking a
-            // quantile answer has to land on that value's own true rank, or one
-            // of the two is reading a different CDF.
-            //
-            // The comparison is against `rank_incl(v)` — the exact number of
-            // observations at or below `v`, which is what `rank` estimates — and
-            // **not** against the requested `q`. On a tie-dense stream a single
-            // value legitimately spans a wide rank band (the head of a
-            // zipf(1.4) stream covers a third of it), so `q` and
-            // `rank(quantile(q))` can differ by that whole band while both
-            // answers are correct.
-            for &qq in &[0.1f64, 0.5, 0.9] {
-                let v = view.quantile(qq).expect("quantile");
-                let r = view.rank(v).expect("rank") as f64 / n;
-                let (_, incl) = truth.rank_interval(v);
-                assert!(
-                    (r - incl).abs() <= 2.0 * bound + 1e-9,
-                    "rank(quantile({qq})) = {r:.6} but {v} truly occupies ranks up to \
-                     {incl:.6}, off by {:.6} > 2*bound = {:.6}. {context}",
-                    (r - incl).abs(),
-                    2.0 * bound
-                );
-            }
         }
 
-        // Each regime must actually be the regime it claims to be, across every
-        // trial — otherwise the "concentrated" half would silently degenerate
-        // into a second diffuse run and `E_H` would go back to being untested.
+        // Each regime must actually be the regime it claims to be.
         match regime {
             "diffuse" => assert_eq!(
                 gate_fired, 0,
                 "the diffuse stream fired the adaptive gate on {gate_fired} of {TRIALS} \
                  trials; the regime premise is broken. {last_context}"
             ),
+            "heavy" => {
+                assert_eq!(
+                    gate_fired, TRIALS,
+                    "the heavy stream must fire the gate on every trial, or the open-gate \
+                     path is not being exercised. {last_context}"
+                );
+                assert!(
+                    heavy_seen > 0,
+                    "the heavy stream never produced a non-empty heavy set, so E_H was \
+                     zero throughout and the full bound was never exercised. \
+                     {last_context}"
+                );
+            }
             _ => assert!(
-                heavy_seen > 0,
-                "the concentrated stream never produced a non-empty heavy set in {TRIALS} \
-                 trials, so E_H was zero throughout and the full bound was never \
-                 exercised. {last_context}"
+                gate_fired > 0,
+                "the mixed stream never fired the gate. {last_context}"
             ),
         }
+        gate_open_seen += gate_fired;
+        gate_closed_seen += TRIALS - gate_fired;
 
         tally.assert_independent_binomial(
             &format!(
@@ -1101,9 +1050,183 @@ fn univmonq_ordered_queries_satisfy_the_full_documented_bound() {
             DELTA,
             &format!(
                 "one trial = one sketch with its own hash seed and source id, scored on \
-                 the supremum over every CDF breakpoint and every probed quantile; \
-                 {TRIALS} trials, q grid {QS:?}. Last: {last_context}"
+                 the exact Kolmogorov distance over the union of the truth support and \
+                 the estimated breakpoints; {TRIALS} trials. Last: {last_context}"
             ),
+        );
+    }
+
+    // Both branches of the adaptive gate must have run somewhere in this test,
+    // or half the code path is untested whatever the individual regimes did.
+    assert!(
+        gate_open_seen > 0 && gate_closed_seen > 0,
+        "the adaptive gate must be exercised both open ({gate_open_seen} trials) and \
+         closed ({gate_closed_seen} trials)"
+    );
+}
+
+/// The three streams the ordered-query bound is checked on.
+///
+/// - **diffuse**: 200k observations over 200k distinct values. `F2/N^2` is tiny,
+///   the gate cannot fire, the heavy set is empty and the bound collapses to
+///   `epsilon_R`.
+/// - **heavy**: a sharp Zipf head. The gate fires on every trial, so `E_H > 0`
+///   and `P_hat_R < 1` and all three terms are live.
+/// - **mixed**: a heavy head over a broad diffuse tail, so the residual carries
+///   most of the mass while the heavy set is still non-empty.
+fn univmonq_ordered_regimes() -> Vec<(&'static str, Vec<f64>)> {
+    let diffuse: Vec<f64> = uniform_u64(200_000, 10_000_000, 0x0DDE_0001)
+        .into_iter()
+        .map(|v| v as f64)
+        .collect();
+    let heavy = zipf_f64(200_000, 4_096, 1.4, 1.0, 1e6, 0x0DDE_0002);
+    let mut mixed = zipf_f64(60_000, 64, 1.6, 1.0, 1e3, 0x0DDE_0003);
+    mixed.extend(
+        uniform_u64(140_000, 5_000_000, 0x0DDE_0004)
+            .into_iter()
+            .map(|v| 1e4 + v as f64),
+    );
+    vec![("diffuse", diffuse), ("heavy", heavy), ("mixed", mixed)]
+}
+
+/// The exact CDF sweep must catch an error a breakpoint scan cannot see.
+///
+/// This is a hand-built fixture, not a sketch: it isolates the *measurement*,
+/// which is what the previous revision got wrong.
+///
+/// The estimate reports two breakpoints and both are exactly right at their own
+/// values, so scoring the estimate one breakpoint at a time gives **zero**
+/// error. But it has no breakpoint anywhere across `[2, 8]`, where the truth
+/// puts 60% of its mass — so its CDF stays flat at 0.2 while the true one
+/// climbs to 0.8, and the real Kolmogorov distance is 0.6.
+#[test]
+fn cdf_sup_distance_detects_a_gap_a_breakpoint_scan_misses() {
+    use common::specs::{breakpoint_rank_interval_distance, cdf_sup_distance};
+
+    // Truth: 10 observations. Two at value 1, six at value 5, two at value 9.
+    let sorted_truth: Vec<f64> = vec![1.0, 1.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 9.0, 9.0];
+
+    // The estimate keeps only the extremes: F_hat(1) = 0.2, F_hat(9) = 1.0.
+    // Both are exactly the true CDF at those two values.
+    let estimated: Vec<(f64, f64)> = vec![(1.0, 0.2), (9.0, 1.0)];
+
+    // The old measurement: each breakpoint's reported rank against its own
+    // value's true rank interval. Value 1 occupies ranks [0.0, 0.2] and is
+    // reported at 0.2; value 9 occupies [0.8, 1.0] and is reported at 1.0.
+    // Both are inside, so the old check sees a perfect estimate.
+    let breakpoint_only = breakpoint_rank_interval_distance(&estimated, &sorted_truth);
+    assert_eq!(
+        breakpoint_only, 0.0,
+        "the fixture must be one the breakpoint scan reports as perfect, or it does \
+         not demonstrate anything"
+    );
+
+    // The real distance is attained at x = 5, where F = 0.8 and F_hat = 0.2.
+    let (sup, at) = cdf_sup_distance(&estimated, &sorted_truth);
+    assert_eq!(at, 5.0, "the supremum must be attained at the missing atom");
+    assert!(
+        (sup - 0.6).abs() < 1e-12,
+        "sup_x |F_hat - F| must be 0.6 here, got {sup}"
+    );
+
+    // Sanity in the other direction: an estimate that reproduces the truth
+    // exactly has zero distance under the sweep too.
+    let exact: Vec<(f64, f64)> = vec![(1.0, 0.2), (5.0, 0.8), (9.0, 1.0)];
+    let (zero, _) = cdf_sup_distance(&exact, &sorted_truth);
+    assert_eq!(zero, 0.0, "an exact step CDF must have zero distance");
+
+    // And the sweep must look strictly below the first breakpoint as well as
+    // between them: an estimate that starts too high is caught at the truth's
+    // own smallest value.
+    let too_high: Vec<(f64, f64)> = vec![(1.0, 0.9), (5.0, 0.9), (9.0, 1.0)];
+    let (high, at_high) = cdf_sup_distance(&too_high, &sorted_truth);
+    assert_eq!(at_high, 1.0);
+    assert!((high - 0.7).abs() < 1e-12, "expected 0.7, got {high}");
+}
+
+/// Quantile answers under the occurrence-sample rank bound, kept as its own
+/// test.
+///
+/// This is a **rank-acceptance** criterion — is the returned value's true rank
+/// interval within `eps` of the requested `q` — and it is a different statement
+/// from the CDF supremum above. It used to stand in for it; it does not, and
+/// keeping them apart is the point.
+#[test]
+fn univmonq_quantile_answers_satisfy_the_occurrence_rank_bound() {
+    use common::specs::{occurrence_sample_epsilon, rank_violation};
+
+    const DELTA: f64 = 0.01;
+    const TRIALS: usize = 12;
+    const QS: [f64; 7] = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99];
+
+    for (regime, values) in univmonq_ordered_regimes() {
+        let truth = NumericTruth::new(values.clone());
+        let mut tally = Tally::default();
+        let mut last_context = String::new();
+
+        for t in 0..TRIALS {
+            let config = UnivMonQConfig {
+                hash_seed: 3 + t,
+                ..UnivMonQConfig::default()
+            };
+            let mut q: UnivMonQ =
+                UnivMonQ::with_hasher_and_source_id(config, 0x0DDE_2000 + t as u64)
+                    .expect("config valid");
+            for v in &values {
+                q.update(v);
+            }
+            let n = q.count() as f64;
+            let view = q.prepare_queries();
+            let diag = view.ordered_query_diagnostics();
+            let m_r = diag.residual_samples.max(view.cdf().len());
+            let eps = occurrence_sample_epsilon(m_r, DELTA)
+                + 2.0
+                    * diag
+                        .heavy
+                        .iter()
+                        .map(|(value, frequency)| (frequency - truth.count_of(*value)).abs())
+                        .sum::<f64>()
+                    / n;
+
+            let context = format!(
+                "{regime} trial {t}: hash_seed={} m_R={m_r}, eps={eps:.6} at delta={DELTA}",
+                config.hash_seed
+            );
+            last_context = context.clone();
+
+            let mut worst: Option<String> = None;
+            for &qq in &QS {
+                let est = view.quantile(qq).expect("ordered_samples enabled");
+                if let Some(detail) = rank_violation(truth.sorted(), qq, est, eps) {
+                    worst.get_or_insert(detail);
+                }
+            }
+            tally.record(worst.is_none(), || {
+                format!("{context}: {}", worst.clone().unwrap())
+            });
+
+            // `rank` and `quantile` must read the same CDF. The comparison is
+            // against `rank_incl(v)` — the exact number of observations at or
+            // below `v`, which is what `rank` estimates — and not against `q`:
+            // on a tie-dense stream one value legitimately spans a wide band.
+            for &qq in &[0.1f64, 0.5, 0.9] {
+                let v = view.quantile(qq).expect("quantile");
+                let r = view.rank(v).expect("rank") as f64 / n;
+                let (_, incl) = truth.rank_interval(v);
+                assert!(
+                    (r - incl).abs() <= 2.0 * eps + 1e-9,
+                    "rank(quantile({qq})) = {r:.6} but {v} truly occupies ranks up to \
+                     {incl:.6}, off by {:.6} > 2*eps = {:.6}. {context}",
+                    (r - incl).abs(),
+                    2.0 * eps
+                );
+            }
+        }
+
+        tally.assert_independent_binomial(
+            &format!("UnivMonQ::quantile ({regime}) / occurrence rank bound"),
+            DELTA,
+            &format!("{TRIALS} trials, q grid {QS:?}. Last: {last_context}"),
         );
     }
 }
