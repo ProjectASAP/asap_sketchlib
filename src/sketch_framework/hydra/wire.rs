@@ -1118,6 +1118,7 @@ fn pack_univmon_cells(key_type: &str, payloads: &[&[u8]]) -> Result<Vec<u8>, Rmp
         "f32" => pack!(f32),
         "f64" => pack!(f64),
         "string" => pack!(String),
+        "bytes" => pack!(crate::message_pack_format::wire_key::WireBytes),
         other => Err(encode_error(format!(
             "ASAPv1 Hydra: key_type {other:?} is not a wire key type"
         ))),
@@ -1152,6 +1153,7 @@ fn unpack_univmon_cells(key_type: &str, payload: &[u8]) -> Result<Vec<Vec<u8>>, 
         "f32" => unpack!(f32),
         "f64" => unpack!(f64),
         "string" => unpack!(String),
+        "bytes" => unpack!(crate::message_pack_format::wire_key::WireBytes),
         other => Err(decode_error(format!(
             "ASAPv1 Hydra: key_type {other:?} is not a wire key type"
         ))),

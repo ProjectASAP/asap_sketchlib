@@ -35,6 +35,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::wire_key::WireBytes;
 use crate::sketches::countminsketch_topk::heap_wire::{
     EMPTY_KEY_TYPE, heap_entries, key_type_of, rebuild_heap,
 };
@@ -303,6 +304,25 @@ pub(crate) fn encode_pyramid(
                 update_mode: state.update_mode,
             })
         }
+        "bytes" => {
+            let mut keys = Vec::with_capacity(state.entries.len());
+            for (key, _) in &state.entries {
+                match key {
+                    HeapItem::Bytes(value) => keys.push(WireBytes(value.clone())),
+                    _ => return Err(mixed_variant_error(key_type, key)),
+                }
+            }
+            rmp_serde::to_vec(&PyramidPayload {
+                counts: state.counts,
+                l2: state.l2,
+                heap_lens: state.heap_lens,
+                keys,
+                heap_counts,
+                candidate_complete: state.candidate_complete,
+                bucket_size: state.bucket_size,
+                update_mode: state.update_mode,
+            })
+        }
         other => Err(RmpEncodeError::Syntax(format!(
             "ASAPv1 UnivMon: key_type {other:?} is not a wire key type"
         ))),
@@ -364,6 +384,26 @@ pub(crate) fn decode_pyramid(
         "f32" => unpack!(F32, f32),
         "f64" => unpack!(F64, f64),
         "string" => unpack!(String, String),
+        "bytes" => {
+            let decoded: PyramidPayload<WireBytes> = from_slice(payload)?;
+            (
+                decoded
+                    .keys
+                    .into_iter()
+                    .map(|key| HeapItem::Bytes(key.into_vec()))
+                    .collect::<Vec<HeapItem>>(),
+                DecodedPyramid {
+                    counts: decoded.counts,
+                    l2: decoded.l2,
+                    heap_lens: decoded.heap_lens,
+                    entries: Vec::new(),
+                    candidate_complete: decoded.candidate_complete,
+                    bucket_size: decoded.bucket_size,
+                    update_mode: decoded.update_mode,
+                },
+                decoded.heap_counts,
+            )
+        }
         other => {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "ASAPv1 UnivMon: key_type {other:?} is not a wire key type"

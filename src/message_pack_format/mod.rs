@@ -23,6 +23,7 @@ pub(crate) mod envelope;
 pub mod error;
 pub mod native;
 pub mod portable;
+pub(crate) mod wire_key;
 
 pub use codec::MessagePackCodec;
 pub use error::Error;

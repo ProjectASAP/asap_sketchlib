@@ -234,6 +234,31 @@ mod tests {
         assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), encoded);
     }
 
+    /// A heap key that is a raw byte array reaches the wire as msgpack `bin`,
+    /// so a key that is not UTF-8 round trips and still answers its own
+    /// `DataInput::Bytes`.
+    #[test]
+    fn cms_heap_byte_keys_round_trip() {
+        let raw: &[u8] = &[0xff, 0x00, 0xfe];
+        let mut sketch = CMSHeap::<Vector2D<i64>, RegularPath>::from_storage(
+            Vector2D::from_fn(2, 4, |r, c| (r * 4 + c) as i64),
+            4,
+        );
+        sketch.heap_mut().update(&DataInput::Bytes(raw), 11);
+
+        let encoded = sketch.serialize_to_bytes().expect("serialize");
+        assert_eq!(metadata_of(&encoded).key_type, "bytes");
+
+        let decoded = CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded)
+            .expect("decode");
+        let seat = decoded
+            .heap()
+            .find(&DataInput::Bytes(raw))
+            .expect("the byte key");
+        assert_eq!(decoded.heap().heap()[seat].count, 11);
+        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), encoded);
+    }
+
     /// The base counter type is pinned by the target: i64 bytes must not decode
     /// into an f64 sketch or the reverse.
     #[test]

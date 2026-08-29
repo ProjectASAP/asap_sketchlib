@@ -84,6 +84,8 @@ pub enum HeapItem {
     F64(f64),
     /// An owned UTF-8 string.
     String(String),
+    /// Owned raw bytes.
+    Bytes(Vec<u8>),
 }
 
 /// Converts a heap-owned key into a borrowed sketch input.
@@ -104,6 +106,7 @@ pub fn heap_item_to_sketch_input(item: &HeapItem) -> DataInput<'_> {
         HeapItem::F32(v) => DataInput::F32(*v),
         HeapItem::F64(v) => DataInput::F64(*v),
         HeapItem::String(s) => DataInput::Str(s),
+        HeapItem::Bytes(b) => DataInput::Bytes(b.as_slice()),
     }
 }
 
@@ -126,11 +129,7 @@ pub fn input_to_owned<'a>(input: &DataInput<'a>) -> HeapItem {
         DataInput::F64(f) => HeapItem::F64(*f),
         DataInput::Str(s) => HeapItem::String((*s).to_owned()),
         DataInput::String(s) => HeapItem::String((*s).to_owned()),
-        DataInput::Bytes(items) => {
-            let byte_array = (*items).to_owned();
-            let s = String::from_utf8(byte_array).unwrap();
-            HeapItem::String(s)
-        }
+        DataInput::Bytes(b) => HeapItem::Bytes((*b).to_vec()),
     }
 }
 
@@ -206,11 +205,7 @@ impl Hash for DataInput<'_> {
             DataInput::F64(v) => state.write_u64(v.to_bits()),
             DataInput::Str(s) => s.hash(state),
             DataInput::String(s) => s.hash(state),
-            DataInput::Bytes(bytes) => {
-                let str_repr = std::str::from_utf8(bytes)
-                    .expect("HeapItem only supports UTF-8 bytes for hashing");
-                str_repr.hash(state);
-            }
+            DataInput::Bytes(bytes) => bytes.hash(state),
         }
     }
 }
@@ -234,9 +229,7 @@ impl PartialEq<DataInput<'_>> for HeapItem {
             (HeapItem::F64(l), DataInput::F64(r)) => l == r,
             (HeapItem::String(l), DataInput::Str(r)) => l == r,
             (HeapItem::String(l), DataInput::String(r)) => l == r,
-            (HeapItem::String(l), DataInput::Bytes(bytes)) => {
-                std::str::from_utf8(bytes).map(|s| l == s).unwrap_or(false)
-            }
+            (HeapItem::Bytes(l), DataInput::Bytes(r)) => l.as_slice() == *r,
             _ => false,
         }
     }
@@ -281,6 +274,7 @@ impl Hash for HeapItem {
             HeapItem::F32(val) => state.write_u32(val.to_bits()),
             HeapItem::F64(val) => state.write_u64(val.to_bits()),
             HeapItem::String(val) => val.hash(state),
+            HeapItem::Bytes(val) => val.hash(state),
         }
     }
 }
@@ -612,3 +606,39 @@ impl PartialEq for HHItem {
 }
 
 impl Eq for HHItem {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Bytes that are not UTF-8 at all, so any conversion through `String`
+    /// would either fail or replace them.
+    const RAW: &[u8] = &[0xff, 0x00, 0xfe];
+
+    /// A borrowed byte array owns as a byte array and borrows back as the same
+    /// bytes, whatever they are.
+    #[test]
+    fn a_byte_array_owns_and_borrows_back_unchanged() {
+        let owned = input_to_owned(&DataInput::Bytes(RAW));
+        assert_eq!(owned, HeapItem::Bytes(RAW.to_vec()));
+        assert_eq!(heap_item_to_sketch_input(&owned), DataInput::Bytes(RAW));
+        assert_eq!(owned, DataInput::Bytes(RAW));
+    }
+
+    /// `Bytes` and `Str` are different keys even where the bytes are valid
+    /// UTF-8, so a sketch holding one never answers for the other.
+    #[test]
+    fn a_byte_key_is_not_the_string_of_the_same_bytes() {
+        let bytes = input_to_owned(&DataInput::Bytes(b"abc"));
+        let string = input_to_owned(&DataInput::Str("abc"));
+        assert_ne!(bytes, string);
+
+        assert_eq!(bytes, DataInput::Bytes(b"abc"));
+        assert_ne!(bytes, DataInput::Str("abc"));
+        assert_ne!(bytes, DataInput::String("abc".to_string()));
+
+        assert_eq!(string, DataInput::Str("abc"));
+        assert_eq!(string, DataInput::String("abc".to_string()));
+        assert_ne!(string, DataInput::Bytes(b"abc"));
+    }
+}

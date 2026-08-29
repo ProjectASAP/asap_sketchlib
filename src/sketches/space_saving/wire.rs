@@ -27,7 +27,10 @@
 //! equal to the caller's `DataInput`, so `estimate` would silently read zero.
 //! `HeapItem::I128` / `U128` have no msgpack integer form and are not wire
 //! types, so a summary holding one refuses to serialize — as does one whose
-//! monitored keys mix variants.
+//! monitored keys mix variants, `String` and `Bytes` included. A `Bytes` key is
+//! written as msgpack `bin` through `WireBytes` and read back from `bin` alone,
+//! so any byte string survives whether or not it is UTF-8 and a `str`-keyed
+//! payload relabelled `"bytes"` is refused.
 //!
 //! ## Emitted order (byte-stable round trips)
 //!
@@ -42,6 +45,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::wire_key::WireBytes;
 use crate::{HashProfile, HeapItem, SketchHasher};
 
 use super::{SpaceSaving, SpaceSavingState, key_order};
@@ -71,6 +75,7 @@ fn key_type_of(key: &HeapItem) -> Option<&'static str> {
         HeapItem::F32(_) => "f32",
         HeapItem::F64(_) => "f64",
         HeapItem::String(_) => "string",
+        HeapItem::Bytes(_) => "bytes",
         HeapItem::I128(_) | HeapItem::U128(_) => return None,
     })
 }
@@ -207,6 +212,22 @@ fn encode_payload(
                 floor,
             })
         }
+        "bytes" => {
+            let mut keys = Vec::with_capacity(entries.len());
+            for (key, _, _) in entries {
+                match key {
+                    HeapItem::Bytes(value) => keys.push(WireBytes(value.clone())),
+                    _ => return Err(mixed_variant_error(key_type, key)),
+                }
+            }
+            rmp_serde::to_vec(&SpaceSavingPayload {
+                keys,
+                counts,
+                errors,
+                total,
+                floor,
+            })
+        }
         other => Err(RmpEncodeError::Syntax(format!(
             "Space-Saving key_type {other:?} is not an ASAPv1 wire key type"
         ))),
@@ -253,6 +274,20 @@ fn decode_payload(
         "f32" => unpack!(F32, f32),
         "f64" => unpack!(F64, f64),
         "string" => unpack!(String, String),
+        "bytes" => {
+            let decoded: SpaceSavingPayload<WireBytes> = from_slice(payload)?;
+            (
+                decoded
+                    .keys
+                    .into_iter()
+                    .map(|key| HeapItem::Bytes(key.into_vec()))
+                    .collect::<Vec<HeapItem>>(),
+                decoded.counts,
+                decoded.errors,
+                decoded.total,
+                decoded.floor,
+            )
+        }
         other => {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "Space-Saving key_type {other:?} is not an ASAPv1 wire key type"
@@ -556,8 +591,66 @@ mod tests {
             "string",
             &[
                 DataInput::String("gamma".to_string()),
-                DataInput::Bytes(b"delta"),
+                DataInput::Str("delta"),
             ],
+        );
+        check(
+            "bytes",
+            &[
+                DataInput::Bytes(b"delta"),
+                DataInput::Bytes(&[0xff, 0x00, 0xfe]),
+            ],
+        );
+    }
+
+    /// A byte key reaches the wire as msgpack `bin`, so any byte string round
+    /// trips whether or not it is UTF-8, and the decoded key still answers the
+    /// `DataInput::Bytes` it was inserted with.
+    #[test]
+    fn space_saving_byte_keys_round_trip_arbitrary_bytes() {
+        let keys: [&[u8]; 3] = [&[0xff, 0x00, 0xfe], &[0x80; 40], b""];
+        let mut summary: SpaceSaving = SpaceSaving::with_capacity(8);
+        for (i, key) in keys.iter().enumerate() {
+            summary.insert_many(&DataInput::Bytes(key), 3 * (i as u64 + 1));
+        }
+
+        let bytes = summary.serialize_to_bytes().expect("serialize");
+        assert_eq!(metadata_of(&bytes).key_type, "bytes");
+
+        let (_, _, payload) = envelope::split(&bytes).expect("split");
+        let emitted: SpaceSavingPayload<WireBytes> = from_slice(payload).expect("payload");
+        let mut emitted_keys: Vec<Vec<u8>> = emitted.keys.iter().map(|key| key.0.clone()).collect();
+        emitted_keys.sort_unstable();
+        let mut expected: Vec<Vec<u8>> = keys.iter().map(|key| key.to_vec()).collect();
+        expected.sort_unstable();
+        assert_eq!(emitted_keys, expected, "the raw bytes did not survive");
+
+        let decoded =
+            SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        for (i, key) in keys.iter().enumerate() {
+            assert_eq!(
+                decoded.estimate(&DataInput::Bytes(key)),
+                3 * (i as u64 + 1),
+                "{key:?} no longer matches its DataInput"
+            );
+        }
+        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+    }
+
+    /// A byte key and a string key are different key types, so a summary
+    /// holding both has no single `key_type` and refuses to serialize rather
+    /// than coercing one into the other.
+    #[test]
+    fn space_saving_refuses_byte_keys_mixed_with_string_keys() {
+        let mut summary: SpaceSaving = SpaceSaving::with_capacity(4);
+        summary.insert_many(&DataInput::Bytes(b"abc"), 5);
+        summary.insert_many(&DataInput::Str("abc"), 2);
+        assert_eq!(summary.len(), 2);
+
+        let problem = summary.serialize_to_bytes().expect_err("mixed variants");
+        assert!(
+            problem.to_string().contains("mix variants"),
+            "got {problem}"
         );
     }
 
@@ -644,7 +737,19 @@ mod tests {
         let number_bytes = numbers.serialize_to_bytes().expect("serialize");
         let (_, _, number_payload) = envelope::split(&number_bytes).expect("split");
 
-        for (claimed, payload) in [("u64", string_payload), ("string", number_payload)] {
+        let mut raw: SpaceSaving = SpaceSaving::with_capacity(4);
+        raw.insert(&DataInput::Bytes(&[0xff, 0x00, 0xfe]));
+        let raw_bytes = raw.serialize_to_bytes().expect("serialize");
+        let (_, _, raw_payload) = envelope::split(&raw_bytes).expect("split");
+
+        for (claimed, payload) in [
+            ("u64", string_payload),
+            ("string", number_payload),
+            ("bytes", number_payload),
+            ("bytes", string_payload),
+            ("u64", raw_payload),
+            ("string", raw_payload),
+        ] {
             let metadata =
                 rmp_serde::to_vec_named(&space_saving_metadata::<DefaultXxHasher>(4, claimed))
                     .expect("metadata");

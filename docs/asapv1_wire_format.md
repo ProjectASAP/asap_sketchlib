@@ -491,6 +491,9 @@ Count-Min's counter type is a Rust type parameter, fixed at compile time. A Spac
 | `"f32"` | `F32` | float32 (`0xca`) |
 | `"f64"` | `F64` | float64 (`0xcb`) |
 | `"string"` | `String` | `str` |
+| `"bytes"` | `Bytes` | `bin` |
+
+`"bytes"` is written as msgpack `bin`, never `str`: a `Bytes` key is an arbitrary byte array with no encoding, so `str` would refuse the byte strings that are not UTF-8 and lose the distinction from a `String` key for the ones that are. `"string"` and `"bytes"` are different key types for the same reason a widened integer is not the key it came from — `HeapItem::Bytes(b"abc")` does **not** equal `DataInput::Str("abc")`, so a summary holding both has no single `key_type` and fails to serialize.
 
 `"f32"` is the one place a float is *not* widened to float64: the key's variant is the identity, so narrowing or widening it would change which key it is. Section 4's "always float64" rule governs *counter* and *sample* values, which have no identity to preserve.
 
@@ -509,7 +512,7 @@ Two summaries have no encoding and **fail to serialize** rather than being coerc
 
 1. `kind_id` is `0x18 0x00`.
 2. The hash-spec group matches the **target hasher's** `HashProfile`. `capacity` and `key_type` are properties of the *stored* summary rather than of the target type, so they are echoed back into the expected metadata rather than pinned — the same treatment Count-Min gives `rows`/`cols`.
-3. `key_type` is one of the thirteen names above; anything else is rejected. The `keys` array is then read **as** that type, so a payload whose keys are not of the declared type is rejected by the msgpack decode itself — string-keyed bytes relabelled `"u64"` do not decode as a `u64`-keyed summary.
+3. `key_type` is one of the fourteen names above; anything else is rejected. The `keys` array is then read **as** that type, so a payload whose keys are not of the declared type is rejected by the msgpack decode itself — string-keyed bytes relabelled `"u64"` do not decode as a `u64`-keyed summary.
 4. `keys`, `counts` and `errors` have equal length.
 5. `capacity >= 1`, and `len(keys) <= capacity`.
 6. Every `counts[i] >= 1` (a counter at zero is not a state the algorithm reaches) and `errors[i] <= counts[i]`.
@@ -566,7 +569,7 @@ seed_list, matrix_seed_index, rows, cols, counter_type, mode, k, key_type
 
 Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `mode` records `RegularPath` vs `FastPath` because they place a key in different columns. A counter type outside that set, or non-`Vector2D` storage, must be converted first (Section 5).
 
-**`key_type` names the exact key variant, and is never widened.** This is §3.5's rule, and the thirteen names and their `HeapItem` variants are the table there. A heap whose keys are of different variants has no single `key_type` and **fails to serialize** with an error naming the mismatch; `HeapItem::I128` / `U128` have no msgpack integer form and are not wire types. An empty heap has no variant to report: it emits `key_type = "u64"` with two empty arrays, so an empty heap has exactly one encoding rather than one per producer.
+**`key_type` names the exact key variant, and is never widened.** This is §3.5's rule, and the fourteen names and their `HeapItem` variants are the table there. A heap whose keys are of different variants has no single `key_type` and **fails to serialize** with an error naming the mismatch; `HeapItem::I128` / `U128` have no msgpack integer form and are not wire types. An empty heap has no variant to report: it emits `key_type = "u64"` with two empty arrays, so an empty heap has exactly one encoding rather than one per producer.
 
 **Emitted order (cross-language contract).** `counts` is row-major. Heap entries are written in **descending `heap_counts`**, ties broken by a **total order over the key**: the variant tag first, in `HeapItem`'s declaration order, so every string sorts after every numeric key; then the value. This is required, not cosmetic: the heap's in-memory array order follows the sift path taken while it filled, and that order does not survive a rebuild, so an unordered payload would re-serialize to different bytes than it decoded from. With the order pinned, two heaps holding the same entries emit the same bytes whatever order they were seated in. Go must mirror the same comparator.
 
@@ -575,7 +578,7 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 1. `kind_id` is `0x03 0x00`; any other id is rejected — including `0x02 0x00` (a plain Count-Min) and `0x0a 0x00` (a CSHeap), which carry a structurally identical metadata map.
 2. The metadata's hash spec, `counter_type` and `mode` must equal the target type's own, with `rows` / `cols` / `k` / `key_type` echoed back since those are properties of the stored sketch rather than of the target. Every key is required: a map missing one, or carrying an unknown one, does not decode.
 3. `rows` and `cols` are both non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — the base matrix is seeded per row), checked **before** the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
-4. `key_type` is one of §3.5's thirteen names; anything else is rejected before the payload is read. The `keys` array is then read **as** that type, so string-keyed bytes relabelled `"u64"` do not decode.
+4. `key_type` is one of §3.5's fourteen names; anything else is rejected before the payload is read. The `keys` array is then read **as** that type, so string-keyed bytes relabelled `"u64"` do not decode.
 5. `keys` and `heap_counts` have equal length.
 6. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
 7. `len(keys) <= k`, and no key appears twice.
@@ -674,7 +677,7 @@ The KLL counter's optional compaction `seed` is not carried, so the bounded cost
 2. The hash-spec group matches the target's `HashProfile` (Hydra hashes through the crate default, `DefaultXxHasher`). `counter_type` (`"i32"`), `counter_mode` (`"fast"`), `counter_item_type` (`"f64"`) and `counter_precision` are pinned, since the counter variant fixes them; `rows` / `cols` / `schema` and the remaining counter dimensions are properties of the *stored* grid, so they are echoed back and then validated on their own.
 3. `rows` and `cols` are non-zero, `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — the grid is seeded per row) and `rows * cols` is overflow-checked. For the tiled variants the counter dimensions are non-zero, `counter_rows <= 20` for the two matrix counters and `rows * cols * per_cell` is overflow-checked too, and for `0x07 0x04` every one of `counter_layer_size` / `counter_sketch_row` / `counter_sketch_col` / `counter_heap_size` is non-zero. All **before** anything is sized from them.
 4. The payload's length is measured against the declared geometry — `len(counts) == rows*cols*counter_rows*counter_cols`, `len(registers) == rows*cols*2^counter_precision`, `len(cells) == rows*cols` — before any grid or matrix is allocated. A declared grid larger than the payload carries costs nothing.
-5. `0x07 0x04` reads `cells` as `counter_key_type`, which must be one of §3.5's thirteen names; a payload whose keys are not of the declared type is rejected by the msgpack decode itself.
+5. `0x07 0x04` reads `cells` as `counter_key_type`, which must be one of §3.5's fourteen names; a payload whose keys are not of the declared type is rejected by the msgpack decode itself.
 6. Each cell is then rebuilt through its own counter's decoder, so every rule that decoder enforces holds for a Hydra cell too: KLL's level layout and `k` / `m` bounds, HLL's register count, UnivMon's per-layer geometry and heap runs.
 7. `schema` is re-validated through `KeySchema::try_from`: non-empty, at most `MAX_KEY_COLUMNS` labels, no duplicates.
 8. `type_to_clone` is rebuilt as a fresh counter of the declared geometry; nothing about it is read from the payload.
@@ -896,7 +899,7 @@ UnivMon carries the hash-spec group — it hashes, and a consumer must reproduce
 1. `kind_id` is `0x10 0x00`; any other id is rejected.
 2. The hash-spec group matches `DefaultXxHasher`'s `HashProfile`. `layer_size`, `sketch_row`, `sketch_col`, `heap_size` and `key_type` are properties of the stored sketch, so they are echoed back rather than pinned.
 3. `layer_size >= 1` and `heap_size >= 1`.
-4. `key_type` is one of §3.5's thirteen names; the `keys` array is read **as** that type, so a payload whose keys are not of the declared type is rejected by the msgpack decode itself, and `keys` and `heap_counts` have equal length.
+4. `key_type` is one of §3.5's fourteen names; the `keys` array is read **as** that type, so a payload whose keys are not of the declared type is rejected by the msgpack decode itself, and `keys` and `heap_counts` have equal length.
 5. `sketch_row * layer_size == len(l2)` exactly, checked **before** the layer geometry is built, so a declared `layer_size` far larger than the payload carries never reserves anything.
 6. `len(heap_lens) == len(candidate_complete) == layer_size`; every layer's `rows` and `cols` are non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — a layer is a CountL2HH matrix; `cols.ilog2()` panics on zero); the layers' total cell count and total accumulator count are computed with checked arithmetic and must equal `len(counts)` and `len(l2)`; and `len(keys) == len(heap_counts) == sum(heap_lens)`.
 7. Each layer's entry count is `<= heap_size`, and no key appears twice within a layer. `heap_size` **never sizes an allocation**: each heap is seated from the entries the payload actually carries.

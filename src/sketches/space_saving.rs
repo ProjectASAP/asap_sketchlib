@@ -535,23 +535,24 @@ struct MergeEntry {
 
 /// A total order over keys, breaking the merge ties that counts and digests
 /// leave open.
-fn key_order(key: &HeapItem) -> (u8, u128, &str) {
+fn key_order(key: &HeapItem) -> (u8, u128, &[u8]) {
     match key {
-        HeapItem::I8(v) => (0, *v as i128 as u128, ""),
-        HeapItem::I16(v) => (1, *v as i128 as u128, ""),
-        HeapItem::I32(v) => (2, *v as i128 as u128, ""),
-        HeapItem::I64(v) => (3, *v as i128 as u128, ""),
-        HeapItem::I128(v) => (4, *v as u128, ""),
-        HeapItem::ISIZE(v) => (5, *v as i128 as u128, ""),
-        HeapItem::U8(v) => (6, u128::from(*v), ""),
-        HeapItem::U16(v) => (7, u128::from(*v), ""),
-        HeapItem::U32(v) => (8, u128::from(*v), ""),
-        HeapItem::U64(v) => (9, u128::from(*v), ""),
-        HeapItem::U128(v) => (10, *v, ""),
-        HeapItem::USIZE(v) => (11, *v as u128, ""),
-        HeapItem::F32(v) => (12, u128::from(v.to_bits()), ""),
-        HeapItem::F64(v) => (13, u128::from(v.to_bits()), ""),
-        HeapItem::String(v) => (14, 0, v.as_str()),
+        HeapItem::I8(v) => (0, *v as i128 as u128, b""),
+        HeapItem::I16(v) => (1, *v as i128 as u128, b""),
+        HeapItem::I32(v) => (2, *v as i128 as u128, b""),
+        HeapItem::I64(v) => (3, *v as i128 as u128, b""),
+        HeapItem::I128(v) => (4, *v as u128, b""),
+        HeapItem::ISIZE(v) => (5, *v as i128 as u128, b""),
+        HeapItem::U8(v) => (6, u128::from(*v), b""),
+        HeapItem::U16(v) => (7, u128::from(*v), b""),
+        HeapItem::U32(v) => (8, u128::from(*v), b""),
+        HeapItem::U64(v) => (9, u128::from(*v), b""),
+        HeapItem::U128(v) => (10, *v, b""),
+        HeapItem::USIZE(v) => (11, *v as u128, b""),
+        HeapItem::F32(v) => (12, u128::from(v.to_bits()), b""),
+        HeapItem::F64(v) => (13, u128::from(v.to_bits()), b""),
+        HeapItem::String(v) => (14, 0, v.as_bytes()),
+        HeapItem::Bytes(v) => (15, 0, v.as_slice()),
     }
 }
 
@@ -1522,6 +1523,127 @@ mod tests {
         summary.validate().expect("decoded summary");
         assert_eq!(summary.capacity(), 1 << 40);
         assert_eq!(summary.len(), 1);
+    }
+
+    // -- Byte-array keys ----------------------------------------------------
+
+    /// Bytes that are not UTF-8 at all, so a summary that stored them as a
+    /// `String` could not have held them.
+    const RAW: &[u8] = &[0xff, 0x00, 0xfe];
+
+    fn bytes_of(summary: &SpaceSaving) -> Vec<Vec<u8>> {
+        let mut keys: Vec<Vec<u8>> = summary
+            .entries()
+            .iter()
+            .map(|(key, _, _)| match key {
+                HeapItem::Bytes(v) => v.clone(),
+                other => panic!("unexpected key form {other:?}"),
+            })
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    /// A byte array that is not UTF-8 is a key like any other: it seats, it
+    /// answers, and repeats of it land on the counter already holding it.
+    #[test]
+    fn a_non_utf8_byte_key_is_monitored_and_queried() {
+        let mut summary: SpaceSaving = SpaceSaving::with_capacity(4);
+        for _ in 0..3 {
+            summary.insert(&DataInput::Bytes(RAW));
+        }
+        summary.insert_many(&DataInput::Bytes(&[0x00, 0x80]), 2);
+
+        summary.validate().expect("two byte keys");
+        assert_eq!(summary.len(), 2, "a repeat took a second counter");
+        assert_eq!(bytes_of(&summary), vec![vec![0x00, 0x80], RAW.to_vec()]);
+        assert_eq!(summary.estimate(&DataInput::Bytes(RAW)), 3);
+        assert_eq!(summary.estimate(&DataInput::Bytes(&[0x00, 0x80])), 2);
+        assert_eq!(summary.estimate(&DataInput::Bytes(&[0x01])), 0);
+    }
+
+    /// `Bytes(b"abc")` and `Str("abc")` are two keys. They may share a digest,
+    /// so the counter that answers is settled by the full key.
+    #[test]
+    fn a_byte_key_and_a_string_key_are_separate_counters() {
+        let mut summary: SpaceSaving = SpaceSaving::with_capacity(4);
+        summary.insert_many(&DataInput::Bytes(b"abc"), 5);
+        summary.insert_many(&DataInput::Str("abc"), 2);
+
+        summary.validate().expect("a byte key beside a string key");
+        assert_eq!(summary.len(), 2, "the two keys shared a counter");
+        assert_eq!(summary.estimate(&DataInput::Bytes(b"abc")), 5);
+        assert_eq!(summary.estimate(&DataInput::Str("abc")), 2);
+        assert_eq!(summary.estimate(&DataInput::String("abc".to_string())), 2);
+    }
+
+    /// An evicted byte key still reads under the ceiling, and the key that took
+    /// its counter carries the displaced count as its error.
+    #[test]
+    fn an_evicted_byte_key_keeps_its_bound() {
+        let mut summary: SpaceSaving = SpaceSaving::with_capacity(2);
+        for _ in 0..3 {
+            summary.insert(&DataInput::Bytes(RAW));
+        }
+        for _ in 0..2 {
+            summary.insert(&DataInput::Bytes(b"\x00mid"));
+        }
+        summary.insert(&DataInput::Bytes(&[0xfd]));
+
+        summary.validate().expect("after a byte-key eviction");
+        assert_eq!(summary.len(), 2);
+        assert_eq!(summary.estimate(&DataInput::Bytes(b"\x00mid")), 0);
+        assert_eq!(summary.min_count(), 3);
+        assert!(
+            summary.upper_bound(&DataInput::Bytes(b"\x00mid")) >= 2,
+            "the evicted byte key truly reached 2"
+        );
+        assert_eq!(summary.estimate(&DataInput::Bytes(&[0xfd])), 3);
+        assert_eq!(summary.error(&DataInput::Bytes(&[0xfd])), 2);
+    }
+
+    /// A merge pairs byte keys by their bytes: the shared one adds, and the one
+    /// only the other side holds arrives with that side's ceiling.
+    #[test]
+    fn a_merge_pairs_byte_keys_by_their_bytes() {
+        let mut left: SpaceSaving = SpaceSaving::with_capacity(4);
+        left.insert_many(&DataInput::Bytes(RAW), 5);
+        left.insert_many(&DataInput::Bytes(&[0x01]), 3);
+        let mut right: SpaceSaving = SpaceSaving::with_capacity(4);
+        right.insert_many(&DataInput::Bytes(RAW), 2);
+        right.insert_many(&DataInput::Bytes(&[0x02]), 7);
+
+        left.merge_from(&right);
+
+        left.validate().expect("after a byte-key merge");
+        assert_eq!(left.len(), 3);
+        assert_eq!(
+            bytes_of(&left),
+            vec![vec![0x01], vec![0x02], RAW.to_vec()],
+            "the byte keys did not survive the merge"
+        );
+        assert_eq!(left.estimate(&DataInput::Bytes(RAW)), 7, "the shared key");
+        assert_eq!(left.estimate(&DataInput::Bytes(&[0x01])), 3);
+        assert_eq!(left.estimate(&DataInput::Bytes(&[0x02])), 7);
+    }
+
+    /// A serde round trip carries the raw bytes, and the decoded summary
+    /// answers the same `DataInput::Bytes` the original did — which it can only
+    /// do if the rebuild hashed the stored key to the digest a query reaches.
+    #[test]
+    fn a_serde_round_trip_keeps_a_byte_key() {
+        let mut summary: SpaceSaving = SpaceSaving::with_capacity(4);
+        summary.insert_many(&DataInput::Bytes(RAW), 9);
+        summary.insert_many(&DataInput::Bytes(&[0x00; 5]), 4);
+
+        let bytes = rmp_serde::to_vec(&summary).expect("serialize");
+        let decoded: SpaceSaving = rmp_serde::from_slice(&bytes).expect("deserialize");
+
+        decoded.validate().expect("decoded summary");
+        assert_eq!(bytes_of(&decoded), bytes_of(&summary));
+        assert_eq!(decoded.estimate(&DataInput::Bytes(RAW)), 9);
+        assert_eq!(decoded.estimate(&DataInput::Bytes(&[0x00; 5])), 4);
+        assert_eq!(decoded.total(), summary.total());
     }
 }
 
