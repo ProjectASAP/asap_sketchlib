@@ -323,6 +323,15 @@ fn hll_variants_pass_cardinality_conformance() {
     .assert_ok();
 }
 
+/// Compaction-coin seed for the KLL adapters. The unseeded `init_kll`
+/// constructors draw from the wall clock, so a failure under them would not
+/// reproduce.
+const KIT_KLL_SEED: u64 = 0x4017_0001;
+
+/// The KLL family through the **rank-error** battery.
+///
+/// DDSketch is deliberately absent: it promises relative *value* error and has
+/// no rank guarantee, so it goes through `relative_quantile_battery` below.
 #[test]
 fn kll_family_passes_quantile_conformance() {
     let values: Vec<f64> = common::normal_f64(40_000, 500.0, 80.0, 7001)
@@ -332,7 +341,7 @@ fn kll_family_passes_quantile_conformance() {
 
     conformance::quantile_battery(
         "KLL",
-        || KllAdapter(KLL::init_kll(200)),
+        || KllAdapter(KLL::init_kll_with_seed(200, KIT_KLL_SEED)),
         &values,
         QuantileSpec::default(),
     )
@@ -340,28 +349,37 @@ fn kll_family_passes_quantile_conformance() {
 
     conformance::quantile_battery(
         "KLLDynamic",
-        || KllDynamicAdapter(KLLDynamic::<f64>::init_kll(200)),
+        || KllDynamicAdapter(KLLDynamic::<f64>::init_kll_with_seed(200, KIT_KLL_SEED)),
         &values,
         QuantileSpec::default(),
-    )
-    .assert_ok();
-
-    conformance::quantile_battery(
-        "PortableDds",
-        || PortableDdsAdapter(PortableDds::new(0.01)),
-        &values,
-        QuantileSpec {
-            rank_tol: 0.02,
-            ..QuantileSpec::default()
-        },
     )
     .assert_ok();
 
     conformance::quantile_battery(
         "KLL-cached",
-        || KllCachedAdapter(RefCell::new(KLL::init_kll(200))),
+        || KllCachedAdapter(RefCell::new(KLL::init_kll_with_seed(200, KIT_KLL_SEED))),
         &values,
         QuantileSpec::default(),
+    )
+    .assert_ok();
+}
+
+/// DDSketch through the **relative-value-error** battery, against exact
+/// nearest-rank order statistics — the guarantee it actually makes.
+#[test]
+fn ddsketch_passes_relative_quantile_conformance() {
+    const ALPHA: f64 = 0.01;
+    let values: Vec<f64> = common::normal_f64(40_000, 500.0, 80.0, 7001)
+        .into_iter()
+        .filter(|v| *v > 0.0)
+        .collect();
+
+    conformance::relative_quantile_battery(
+        "PortableDds",
+        || PortableDdsAdapter(PortableDds::new(ALPHA)),
+        &values,
+        common::specs::RelativeQuantileSpec::new(ALPHA),
+        &conformance::DEFAULT_QUANTILE_QS,
     )
     .assert_ok();
 }

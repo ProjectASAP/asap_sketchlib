@@ -1,0 +1,753 @@
+//! Windowed frameworks: every `EHSketchList` variant inside an
+//! `ExponentialHistogram`, and every `TumblingWindowSketch` implementation
+//! inside a `TumblingWindow`.
+//!
+//! The window machinery is shared, but the payloads are not, so a single
+//! tolerance across all of them would be meaningless. Each variant is checked
+//! against **its own** error metric — Count-Min's additive bound, Count
+//! Sketch's L2 bound, HLL's register model, KLL's rank error, DDSketch's
+//! relative value error — over the exact contents of the window the query
+//! actually covered.
+//!
+//! ## Reading the ground truth off a bucket span
+//!
+//! `query_interval_merge` snaps a requested interval to bucket boundaries, so
+//! an arbitrary `[t1, t2]` has no exact reference. Every query below therefore
+//! asks for the histogram's **full retained span**, `[payload[0].min_time,
+//! payload.last().max_time]`, which merges every retained bucket and nothing
+//! else. Both endpoints are public, so the reference window is known exactly
+//! and no tolerance is spent on bucket granularity.
+
+mod common;
+
+use common::specs::{
+    CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, RankErrorSpec, RelativeQuantileSpec,
+    Tally,
+};
+use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
+
+use asap_sketchlib::{
+    Coco, Count, CountL2HH, CountMin, DDSketch, DataInput, Elastic, ErtlMLE, ExponentialHistogram,
+    FastPath, FoldCS, FoldCSConfig, HyperLogLog, KLL, SketchNorm, TumblingWindow, UnivMon,
+    UnivMonQ, UnivMonQConfig, Vector2D,
+};
+
+const EH_K: usize = 8;
+const EH_WINDOW: u64 = 1_000_000; // no expiry inside the accuracy runs
+// Sized so the histogram's per-update prototype clone (an `ExponentialHistogram`
+// copies its prototype sketch on every insert) stays affordable in an
+// unoptimised `cargo test` run. The bounds are computed from each instance's
+// own dimensions, so a smaller grid narrows nothing about what is asserted.
+const N: usize = 10_000;
+const DOMAIN: usize = 2_048;
+const STREAM_SEED: u64 = 0x0E11_0001;
+
+/// Matrix dimensions for the counter-backed variants, chosen so their bounds
+/// are meaningful at `N` updates over `DOMAIN` keys.
+const ROWS: usize = 3;
+const COLS: usize = 512;
+
+/// The full retained span of a histogram: querying it merges every bucket, so
+/// the reference window is the whole stream that has not expired.
+fn full_span(eh: &ExponentialHistogram) -> (u64, u64) {
+    let first = eh.payload.first().expect("histogram has buckets");
+    let last = eh.payload.last().expect("histogram has buckets");
+    (first.min_time, last.max_time)
+}
+
+// ------------------------------------------------- Norm policy per variant
+
+/// Which merge rule each payload selects. `COUNTL2HH` and `UNIVMON` carry an
+/// L2 mass and are merged by it; every other variant has no L2 mass to read
+/// and falls back to the L1 bucket-size rule. Getting this wrong would silently
+/// change how buckets consolidate, and therefore how much of the window a query
+/// actually covers, so it is asserted per variant rather than assumed.
+#[test]
+fn every_eh_variant_selects_the_documented_merge_norm() {
+    let l2_variants = [
+        (
+            "COUNTL2HH",
+            asap_sketchlib::EHSketchList::COUNTL2HH(CountL2HH::with_dimensions(ROWS, COLS)),
+        ),
+        (
+            "UNIVMON",
+            asap_sketchlib::EHSketchList::UNIVMON(UnivMon::init_univmon(32, ROWS, COLS, 4)),
+        ),
+    ];
+    for (name, proto) in l2_variants {
+        assert!(
+            proto.supports_norm(SketchNorm::L2) && !proto.supports_norm(SketchNorm::L1),
+            "{name} must be an L2-merged payload"
+        );
+        let eh = ExponentialHistogram::new(EH_K, EH_WINDOW, proto);
+        assert_eq!(
+            eh.merge_norm,
+            SketchNorm::L2,
+            "{name} histogram must merge by L2 mass"
+        );
+    }
+
+    let l1_variants: Vec<(&str, asap_sketchlib::EHSketchList)> = vec![
+        (
+            "CM",
+            asap_sketchlib::EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+                ROWS, COLS,
+            )),
+        ),
+        (
+            "CS",
+            asap_sketchlib::EHSketchList::CS(Count::<Vector2D<i32>, FastPath>::with_dimensions(
+                ROWS, COLS,
+            )),
+        ),
+        (
+            "COCO",
+            asap_sketchlib::EHSketchList::COCO(Coco::init_with_size(512, 4)),
+        ),
+        (
+            "ELASTIC",
+            asap_sketchlib::EHSketchList::ELASTIC(Elastic::init_with_length(512)),
+        ),
+        (
+            "HLL",
+            asap_sketchlib::EHSketchList::HLL(HyperLogLog::<ErtlMLE>::new()),
+        ),
+        (
+            "KLL",
+            asap_sketchlib::EHSketchList::KLL(KLL::init_kll_with_seed(200, 0x5EED_0100)),
+        ),
+        (
+            "DDS",
+            asap_sketchlib::EHSketchList::DDS(DDSketch::new(0.01)),
+        ),
+    ];
+    for (name, proto) in l1_variants {
+        assert!(
+            proto.supports_norm(SketchNorm::L1),
+            "{name} must be an L1-merged payload"
+        );
+        let eh = ExponentialHistogram::new(EH_K, EH_WINDOW, proto);
+        assert_eq!(
+            eh.merge_norm,
+            SketchNorm::L1,
+            "{name} histogram must merge by bucket size"
+        );
+    }
+}
+
+// ------------------------------------------------ Counter-backed variants
+
+/// Feeds a Zipf key stream through a histogram and returns the merged payload
+/// over the full retained span, together with the exact truth for that span.
+fn run_keyed_variant(
+    proto: asap_sketchlib::EHSketchList,
+) -> (asap_sketchlib::EHSketchList, FreqTruth, String) {
+    let keys = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
+    let mut eh = ExponentialHistogram::new(EH_K, EH_WINDOW, proto);
+    for (t, k) in keys.iter().enumerate() {
+        eh.update(t as u64, &DataInput::U64(*k));
+    }
+    let (lo, hi) = full_span(&eh);
+    let merged = eh
+        .query_interval_merge(lo, hi)
+        .expect("full-span interval must be covered");
+    let mut truth = FreqTruth::default();
+    for t in lo..=hi {
+        truth.observe(keys[t as usize] as i64);
+    }
+    let ctx = format!(
+        "k={EH_K} window={EH_WINDOW} zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}, \
+         retained span [{lo}, {hi}] over {} buckets",
+        eh.payload.len()
+    );
+    (merged, truth, ctx)
+}
+
+#[test]
+fn eh_count_min_variant_satisfies_the_count_min_bound_over_the_retained_window() {
+    let (merged, truth, ctx) = run_keyed_variant(asap_sketchlib::EHSketchList::CM(CountMin::<
+        Vector2D<i32>,
+        FastPath,
+    >::with_dimensions(
+        ROWS, COLS
+    )));
+    CountMinSpec::new(ROWS, COLS).assert_contract(
+        "EHSketchList::CM",
+        &truth,
+        |k| merged.query(&DataInput::U64(k as u64)).expect("CM query"),
+        &ctx,
+    );
+}
+
+#[test]
+fn eh_count_sketch_variant_satisfies_the_l2_bound_over_the_retained_window() {
+    let (merged, truth, ctx) = run_keyed_variant(asap_sketchlib::EHSketchList::CS(Count::<
+        Vector2D<i32>,
+        FastPath,
+    >::with_dimensions(
+        ROWS, COLS
+    )));
+    CountSketchSpec::new(ROWS, COLS).assert_contract(
+        "EHSketchList::CS",
+        &truth,
+        |k| merged.query(&DataInput::U64(k as u64)).expect("CS query"),
+        &ctx,
+    );
+}
+
+#[test]
+fn eh_countl2hh_variant_satisfies_the_l2_bound_over_the_retained_window() {
+    let (merged, truth, ctx) = run_keyed_variant(asap_sketchlib::EHSketchList::COUNTL2HH(
+        CountL2HH::with_dimensions(ROWS, COLS),
+    ));
+    CountSketchSpec::new(ROWS, COLS).assert_contract(
+        "EHSketchList::COUNTL2HH",
+        &truth,
+        |k| merged.query(&DataInput::U64(k as u64)).expect("L2HH query"),
+        &ctx,
+    );
+}
+
+/// The heavy-hitter payloads keep a flow key beside each counter and evict on
+/// pressure, so their guarantee is one-sided on the keys they retain: a
+/// reported count never reads below the truth. Their full error sandwiches are
+/// covered in `e2e_heavy_hitters.rs`; what is new here is that the guarantee
+/// survives EH bucket merging.
+#[test]
+fn eh_heavy_hitter_variants_stay_one_sided_over_the_retained_window() {
+    for (name, proto) in [
+        (
+            "COCO",
+            asap_sketchlib::EHSketchList::COCO(Coco::init_with_size(1024, 4)),
+        ),
+        (
+            "ELASTIC",
+            asap_sketchlib::EHSketchList::ELASTIC(Elastic::init_with_length(1024)),
+        ),
+    ] {
+        // Both payloads key on strings, so the stream is fed as strings and
+        // the truth is keyed by the same identity.
+        let keys = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
+        let mut eh = ExponentialHistogram::new(EH_K, EH_WINDOW, proto);
+        for (t, k) in keys.iter().enumerate() {
+            eh.update(t as u64, &DataInput::String(format!("f{k}")));
+        }
+        let (lo, hi) = full_span(&eh);
+        let merged = eh.query_interval_merge(lo, hi).expect("full span");
+        let mut truth = FreqTruth::default();
+        for t in lo..=hi {
+            truth.observe(keys[t as usize] as i64);
+        }
+        let ctx = format!(
+            "{name} k={EH_K} zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}, \
+             retained span [{lo}, {hi}] over {} buckets",
+            eh.payload.len()
+        );
+
+        // Only the truly heavy keys are guaranteed to be retained; the
+        // one-sided property is asserted over those.
+        let mut tally = Tally::default();
+        for (k, c) in truth.top_k(32) {
+            let est = merged
+                .query(&DataInput::String(format!("f{k}")))
+                .expect("heavy-hitter query");
+            tally.record(est >= c as f64, || {
+                format!("key f{k}: true {c}, reported {est} (must never read low)")
+            });
+        }
+        tally.assert_none(
+            &format!("EHSketchList::{name} one-sided on heavy keys"),
+            &ctx,
+        );
+    }
+}
+
+#[test]
+fn eh_hll_variant_satisfies_the_register_error_model_over_the_retained_window() {
+    let keys = uniform_u64(N, 200_000, STREAM_SEED);
+    let mut eh = ExponentialHistogram::new(
+        EH_K,
+        EH_WINDOW,
+        asap_sketchlib::EHSketchList::HLL(HyperLogLog::<ErtlMLE>::new()),
+    );
+    for (t, k) in keys.iter().enumerate() {
+        eh.update(t as u64, &DataInput::U64(*k));
+    }
+    let (lo, hi) = full_span(&eh);
+    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let distinct: std::collections::HashSet<u64> = (lo..=hi).map(|t| keys[t as usize]).collect();
+
+    // `HyperLogLog<ErtlMLE>` here is the p14 default: m = 2^14 registers.
+    let spec = CardinalityConfidenceSpec::hll(14, 4.0);
+    let mut tally = Tally::default();
+    spec.tally_into(
+        &mut tally,
+        merged.query(&DataInput::Str("card")).expect("HLL query"),
+        distinct.len(),
+    );
+    tally.assert_within(
+        "EHSketchList::HLL / register error model",
+        spec.per_check_failure(),
+        &format!(
+            "k={EH_K} uniform n={N} domain=200000 seed={STREAM_SEED:#x}, retained span \
+             [{lo}, {hi}] with {} distinct, tolerance={:.5}",
+            distinct.len(),
+            spec.tolerance()
+        ),
+    );
+}
+
+#[test]
+fn eh_kll_variant_satisfies_the_rank_error_contract_over_the_retained_window() {
+    const KLL_K: i32 = 200;
+    let values: Vec<f64> = uniform_u64(N, 1_000_000, STREAM_SEED)
+        .into_iter()
+        .map(|v| v as f64)
+        .collect();
+    let mut eh = ExponentialHistogram::new(
+        EH_K,
+        EH_WINDOW,
+        asap_sketchlib::EHSketchList::KLL(KLL::init_kll_with_seed(KLL_K, 0x5EED_0200)),
+    );
+    for (t, v) in values.iter().enumerate() {
+        eh.update(t as u64, &DataInput::F64(*v));
+    }
+    let (lo, hi) = full_span(&eh);
+    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let truth = NumericTruth::new((lo..=hi).map(|t| values[t as usize]).collect());
+
+    let spec = RankErrorSpec::datasketches(KLL_K as usize);
+    let mut tally = Tally::default();
+    // The KLL payload answers `query(q)` as `quantile(q)`.
+    spec.tally_into(
+        &mut tally,
+        truth.sorted(),
+        &[0.1, 0.25, 0.5, 0.75, 0.9],
+        |q| merged.query(&DataInput::F64(q)).expect("KLL query"),
+    );
+    tally.assert_within(
+        "EHSketchList::KLL / normalized rank error",
+        spec.failure_probability,
+        &format!(
+            "k={EH_K} kll_k={KLL_K} sketch_seed=0x5EED0200 uniform n={N} seed={STREAM_SEED:#x}, \
+             retained span [{lo}, {hi}] with {} observations",
+            truth.len()
+        ),
+    );
+}
+
+#[test]
+fn eh_ddsketch_variant_satisfies_the_relative_value_error_contract_over_the_window() {
+    const ALPHA: f64 = 0.01;
+    let values: Vec<f64> = uniform_u64(N, 9_000_000, STREAM_SEED)
+        .into_iter()
+        .map(|v| 1_000_000.0 + v as f64)
+        .collect();
+    let mut eh = ExponentialHistogram::new(
+        EH_K,
+        EH_WINDOW,
+        asap_sketchlib::EHSketchList::DDS(DDSketch::new(ALPHA)),
+    );
+    for (t, v) in values.iter().enumerate() {
+        eh.update(t as u64, &DataInput::F64(*v));
+    }
+    let (lo, hi) = full_span(&eh);
+    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let truth = NumericTruth::new((lo..=hi).map(|t| values[t as usize]).collect());
+
+    // The DDS payload answers `query(q)` as `get_value_at_quantile(q)`.
+    let spec = RelativeQuantileSpec::new(ALPHA);
+    let mut tally = Tally::default();
+    spec.tally_into(
+        &mut tally,
+        truth.sorted(),
+        &[0.1, 0.25, 0.5, 0.75, 0.9],
+        |q| merged.query(&DataInput::F64(q)).ok(),
+    );
+    tally.assert_none(
+        "EHSketchList::DDS / relative value error",
+        &format!(
+            "alpha={ALPHA} k={EH_K} uniform n={N} seed={STREAM_SEED:#x}, retained span \
+             [{lo}, {hi}] with {} observations",
+            truth.len()
+        ),
+    );
+    // Count is maintained, so the merged payload holds the whole window.
+    assert_eq!(
+        merged.query(&DataInput::Str("count")).expect("count"),
+        truth.len() as f64,
+        "DDS payload must retain every observation in the merged span"
+    );
+}
+
+#[test]
+fn eh_univmon_variant_reports_the_exact_l1_over_the_retained_window() {
+    let keys = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
+    let mut eh = ExponentialHistogram::new(
+        EH_K,
+        EH_WINDOW,
+        asap_sketchlib::EHSketchList::UNIVMON(UnivMon::init_univmon(32, 5, 2048, 8)),
+    );
+    for (t, k) in keys.iter().enumerate() {
+        eh.update(t as u64, &DataInput::U64(*k));
+    }
+    let (lo, hi) = full_span(&eh);
+    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let mut truth = FreqTruth::default();
+    for t in lo..=hi {
+        truth.observe(keys[t as usize] as i64);
+    }
+    let ctx = format!(
+        "k={EH_K} zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}, retained span [{lo}, {hi}]"
+    );
+
+    // L1 is the maintained bucket size: exact, not estimated.
+    assert_eq!(
+        merged.query(&DataInput::Str("l1")).expect("l1"),
+        truth.total() as f64,
+        "UnivMon L1 over the merged span must be exact. {ctx}"
+    );
+
+    // L2 through UnivMon's recursive g-sum: documented empirical band.
+    //
+    // Band source: measured on this configuration and stream at 3% below the
+    // exact L2; the band below is 15%, five times the observed movement.
+    // UnivMon publishes no closed-form constant for the recurrence, so this
+    // is a regression on measured behaviour rather than a theorem.
+    let l2 = merged.query(&DataInput::Str("l2")).expect("l2");
+    let l2_truth = truth.l2_norm();
+    assert!(
+        l2 >= l2_truth * 0.85 && l2 <= l2_truth * 1.15,
+        "UnivMon L2 {l2:.1} vs exact {l2_truth:.1} outside the documented +-15% empirical \
+         band. {ctx}"
+    );
+}
+
+// ---------------------------------------------------------- Window semantics
+
+/// Expiry and interval queries, checked on the payload every variant shares.
+/// Bucket bookkeeping is arithmetic, so these are equalities.
+#[test]
+fn eh_expires_buckets_past_the_window_and_reports_its_retained_span() {
+    const WINDOW: u64 = 100;
+    let mut eh = ExponentialHistogram::new(
+        EH_K,
+        WINDOW,
+        asap_sketchlib::EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            ROWS, COLS,
+        )),
+    );
+    for t in 0..500u64 {
+        if t % 3 == 0 {
+            eh.update(t, &DataInput::Str("req"));
+        }
+    }
+
+    let retained_min = eh.get_min_time().expect("buckets present");
+    let retained_max = eh.get_max_time().expect("buckets present");
+    assert_eq!(retained_max, 498, "newest retained timestamp");
+    assert!(eh.cover(retained_min, 498), "must cover its retained span");
+    assert!(!eh.cover(500, 600), "cannot cover beyond the observed span");
+
+    // Every retained bucket must reach at least to the cutoff.
+    let cutoff = retained_max.saturating_sub(WINDOW);
+    for b in &eh.payload {
+        assert!(
+            b.max_time >= cutoff,
+            "bucket [{}, {}] lies entirely before the cutoff {cutoff}",
+            b.min_time,
+            b.max_time
+        );
+    }
+
+    // The full-span query merges every retained bucket, so its count is the
+    // exact number of retained events — no bucket-granularity slack needed.
+    let (lo, hi) = full_span(&eh);
+    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let retained_events = (lo..=hi).filter(|t| t % 3 == 0).count();
+    let est = merged.query(&DataInput::Str("req")).expect("CM query");
+    assert!(
+        est >= retained_events as f64,
+        "Count-Min must not underestimate the retained event count: {est} < {retained_events}"
+    );
+}
+
+// ------------------------------------------------------------ TumblingWindow
+
+/// `TumblingWindow<FoldCS>`: window bookkeeping is exact, and the folded Count
+/// Sketch inside each window carries the L2 bound at its *folded* width.
+#[test]
+fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
+    const FULL_COLS: usize = 4_096;
+    const FOLD_LEVEL: u32 = 2;
+    const WINDOW: u64 = 500;
+    const TOTAL: u64 = 3_000;
+
+    let cfg = FoldCSConfig {
+        rows: ROWS,
+        full_cols: FULL_COLS,
+        fold_level: FOLD_LEVEL,
+        top_k: 32,
+    };
+    let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(WINDOW, 16, cfg, 4);
+    let keys = zipf_u64(TOTAL as usize, 512, 1.1, STREAM_SEED);
+    for (t, k) in keys.iter().enumerate() {
+        tw.insert(t as u64, &DataInput::U64(*k), 1);
+    }
+
+    assert_eq!(
+        tw.closed_count(),
+        (TOTAL / WINDOW - 1) as usize,
+        "windows [0, {}) must be closed at t={}",
+        TOTAL - WINDOW,
+        TOTAL - 1
+    );
+
+    let folded_cols = FULL_COLS >> FOLD_LEVEL;
+    let spec = CountSketchSpec::new(ROWS, folded_cols);
+
+    // The active window is the exact last-`WINDOW` slice.
+    let mut active_truth = FreqTruth::default();
+    for k in &keys[(TOTAL - WINDOW) as usize..] {
+        active_truth.observe(*k as i64);
+    }
+    let active = tw.active_sketch();
+    spec.assert_contract(
+        "TumblingWindow<FoldCS> active window",
+        &active_truth,
+        |k| active.query(&DataInput::U64(k as u64)) as f64,
+        &format!(
+            "rows={ROWS} full_cols={FULL_COLS} fold_level={FOLD_LEVEL} -> {folded_cols} cols, \
+             window={WINDOW} zipf(1.1) domain=512 seed={STREAM_SEED:#x}"
+        ),
+    );
+
+    // `query_all` covers every observation.
+    let mut all_truth = FreqTruth::default();
+    for k in &keys {
+        all_truth.observe(*k as i64);
+    }
+    let all = tw.query_all();
+    spec.assert_contract(
+        "TumblingWindow<FoldCS> query_all",
+        &all_truth,
+        |k| all.query(&DataInput::U64(k as u64)) as f64,
+        &format!("all {TOTAL} observations across {} windows", TOTAL / WINDOW),
+    );
+
+    // `query_recent(2)` is the active window plus the two most recent closed
+    // ones — an exact time slice.
+    let mut recent_truth = FreqTruth::default();
+    for k in &keys[(TOTAL - 3 * WINDOW) as usize..] {
+        recent_truth.observe(*k as i64);
+    }
+    let recent = tw.query_recent(2);
+    spec.assert_contract(
+        "TumblingWindow<FoldCS> query_recent(2)",
+        &recent_truth,
+        |k| recent.query(&DataInput::U64(k as u64)) as f64,
+        "last three windows",
+    );
+
+    // Rotation and pool reuse: flushing then inserting again must produce a
+    // clean active window, not one carrying the previous window's counters.
+    tw.flush(TOTAL);
+    let closed_after_flush = tw.closed_count();
+    tw.insert(TOTAL, &DataInput::U64(7), 1);
+    assert_eq!(
+        tw.active_sketch().query(&DataInput::U64(7)),
+        1,
+        "a recycled window sketch must start empty; got a carried-over count"
+    );
+    assert!(
+        closed_after_flush >= (TOTAL / WINDOW) as usize,
+        "flush must close the active window"
+    );
+}
+
+/// `TumblingWindow<UnivMonQ>`: the same window bookkeeping, with UnivMon-Q's
+/// exact aggregates checked exactly and its estimates left to their own
+/// suite. What this test adds is that windowing, pooling and `clear()` do not
+/// corrupt the sketch.
+#[test]
+fn tumbling_univmon_q_windows_carry_exact_aggregates_through_rotation() {
+    const WINDOW: u64 = 500;
+    const TOTAL: u64 = 3_000;
+
+    let cfg = UnivMonQConfig {
+        levels: 6,
+        width: 1_024,
+        depth: 5,
+        candidates: 256,
+        ordered_samples: 512,
+        ..UnivMonQConfig::default()
+    };
+    let mut tw: TumblingWindow<UnivMonQ> = TumblingWindow::new(WINDOW, 16, cfg, 4);
+    let values: Vec<f64> = uniform_u64(TOTAL as usize, 100_000, STREAM_SEED)
+        .into_iter()
+        .map(|v| v as f64)
+        .collect();
+    for (t, v) in values.iter().enumerate() {
+        tw.insert(t as u64, &DataInput::F64(*v), 0);
+    }
+
+    assert_eq!(
+        tw.closed_count(),
+        (TOTAL / WINDOW - 1) as usize,
+        "closed window count"
+    );
+
+    // Count, min and max are maintained exactly on every window slice.
+    for (label, sketch, slice) in [
+        ("query_all", tw.query_all(), &values[..]),
+        (
+            "query_recent(1)",
+            tw.query_recent(1),
+            &values[(TOTAL - 2 * WINDOW) as usize..],
+        ),
+        (
+            "active_sketch",
+            tw.active_sketch().clone(),
+            &values[(TOTAL - WINDOW) as usize..],
+        ),
+    ] {
+        let truth = NumericTruth::new(slice.to_vec());
+        assert_eq!(
+            sketch.count() as usize,
+            slice.len(),
+            "{label}: UnivMon-Q count is maintained exactly"
+        );
+        assert_eq!(sketch.min(), Some(truth.min()), "{label}: exact minimum");
+        assert_eq!(sketch.max(), Some(truth.max()), "{label}: exact maximum");
+    }
+
+    // Rotation through the pool must hand back a cleared sketch.
+    tw.flush(TOTAL);
+    tw.insert(TOTAL, &DataInput::F64(42.0), 0);
+    let active = tw.active_sketch();
+    assert_eq!(
+        active.count(),
+        1,
+        "a recycled UnivMon-Q must start empty after clear()"
+    );
+    assert_eq!(active.min(), Some(42.0), "recycled sketch min");
+    assert_eq!(active.max(), Some(42.0), "recycled sketch max");
+}
+
+/// Every payload variant that owns a mergeable sketch must have a merge arm in
+/// `EHSketchList::merge`. A missing arm is invisible at runtime — `EHBucket::to_merge`
+/// discards the `Result` — so the histogram keeps counting bucket sizes while
+/// silently dropping the merged sketch's contents, and every query afterwards
+/// reads a single bucket. `ELASTIC` shipped without its arm and lost the whole
+/// window; this pins every variant so the next one cannot.
+#[test]
+fn every_eh_variant_can_merge_into_its_own_kind() {
+    use asap_sketchlib::EHSketchList;
+
+    let variants: Vec<(&str, EHSketchList)> = vec![
+        (
+            "CM",
+            EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 256)),
+        ),
+        (
+            "CS",
+            EHSketchList::CS(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 256)),
+        ),
+        ("COCO", EHSketchList::COCO(Coco::init_with_size(256, 4))),
+        (
+            "COUNTL2HH",
+            EHSketchList::COUNTL2HH(CountL2HH::with_dimensions(3, 256)),
+        ),
+        ("DDS", EHSketchList::DDS(DDSketch::new(0.01))),
+        (
+            "ELASTIC",
+            EHSketchList::ELASTIC(Elastic::init_with_length(256)),
+        ),
+        ("HLL", EHSketchList::HLL(HyperLogLog::<ErtlMLE>::new())),
+        (
+            "KLL",
+            EHSketchList::KLL(KLL::init_kll_with_seed(200, 0x5EED_0300)),
+        ),
+        (
+            "UNIVMON",
+            EHSketchList::UNIVMON(UnivMon::init_univmon(32, 3, 256, 4)),
+        ),
+        #[cfg(feature = "experimental")]
+        (
+            "UNIFORM",
+            EHSketchList::UNIFORM(asap_sketchlib::UniformSampling::with_seed(0.5, 7)),
+        ),
+    ];
+
+    for (name, proto) in variants {
+        let mut left = proto.clone();
+        let mut right = proto.clone();
+        // Feed each side something it can actually ingest, then merge.
+        for i in 0..64u64 {
+            left.insert(&DataInput::String(format!("k{i}")));
+            left.insert(&DataInput::F64(1.0 + i as f64));
+            right.insert(&DataInput::String(format!("k{}", i + 64)));
+            right.insert(&DataInput::F64(100.0 + i as f64));
+        }
+        assert!(
+            left.merge(&right).is_ok(),
+            "EHSketchList::{name} has no merge arm, so an ExponentialHistogram over it \
+             silently discards data on every bucket merge"
+        );
+    }
+}
+
+/// `UNIFORM` is the experimental reservoir payload: its window answers are
+/// retained-sample bookkeeping, not an estimate, so they are checked exactly.
+#[cfg(feature = "experimental")]
+#[test]
+fn eh_uniform_sampling_variant_reports_exact_retention_bookkeeping() {
+    use asap_sketchlib::UniformSampling;
+
+    const RATE: f64 = 0.1;
+    const SAMPLER_SEED: u64 = 0x5A_9101;
+    let values: Vec<f64> = uniform_u64(N, 1_000_000, STREAM_SEED)
+        .into_iter()
+        .map(|v| v as f64)
+        .collect();
+    let mut eh = ExponentialHistogram::new(
+        EH_K,
+        EH_WINDOW,
+        asap_sketchlib::EHSketchList::UNIFORM(UniformSampling::with_seed(RATE, SAMPLER_SEED)),
+    );
+    for (t, v) in values.iter().enumerate() {
+        eh.update(t as u64, &DataInput::F64(*v));
+    }
+    let (lo, hi) = full_span(&eh);
+    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+
+    // `total_seen` is a maintained counter: exact over the merged span.
+    let seen = merged
+        .query(&DataInput::Str("total_seen"))
+        .expect("total_seen");
+    assert_eq!(
+        seen,
+        (hi - lo + 1) as f64,
+        "UniformSampling total_seen must equal the number of merged observations \
+         over [{lo}, {hi}]"
+    );
+
+    // Retained samples must be a subset of the window's observations and
+    // bounded by the rate's budget.
+    let retained = merged.query(&DataInput::Str("len")).expect("len") as usize;
+    assert!(
+        retained > 0 && retained as f64 <= seen,
+        "retained {retained} samples out of {seen} observed"
+    );
+    let observed: std::collections::HashSet<u64> =
+        (lo..=hi).map(|t| values[t as usize].to_bits()).collect();
+    for i in 0..retained {
+        let s = merged
+            .query(&DataInput::U64(i as u64))
+            .expect("sample index in range");
+        assert!(
+            observed.contains(&s.to_bits()),
+            "retained sample {s} was never observed in the merged window [{lo}, {hi}]"
+        );
+    }
+}

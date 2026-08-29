@@ -1,15 +1,28 @@
 # The E2E Testing Harness and Conformance Kit
 
 This document explains how the end-to-end testing harness is designed and how
-to use it when adding or changing a sketch. The short version: **every sketch
-must pass the same conformance batteries, driven by seeded synthetic data and
-compared against exactly-known ground truth.** Ad-hoc assertions alone are no
-longer an acceptable bar for a new sketch.
+to use it when adding or changing a sketch. The short version, in two parts:
+
+1. **Every public instance is driven by seeded synthetic data and compared
+   against exactly-known ground truth.** Which instances those are, and which
+   test covers each, is enumerated in
+   [`docs/e2e_coverage_matrix.md`](./e2e_coverage_matrix.md) — that document,
+   not this one, is the authority on what is and is not covered.
+2. **Every approximate answer is judged against its own family's bound.** The
+   conformance batteries are a shared floor for capabilities a sketch has in
+   common with others; they are not where a family's guarantee is asserted.
+   That lives in the per-metric specs in
+   [`tests/common/specs.rs`](../tests/common/specs.rs).
+
+Ad-hoc assertions alone are not an acceptable bar for a new sketch, and neither
+is a battery pass on its own.
 
 Related reading:
 
+- [`docs/e2e_coverage_matrix.md`](./e2e_coverage_matrix.md) — instance → test → bound
 - [`tests/README.md`](../tests/README.md) — quick onboarding recipe
-- [`tests/common/conformance.rs`](../tests/common/conformance.rs) — the kit itself
+- [`tests/common/specs.rs`](../tests/common/specs.rs) — the error-model specs
+- [`tests/common/conformance.rs`](../tests/common/conformance.rs) — the capability kit
 - [`tests/conformance_kit.rs`](../tests/conformance_kit.rs) — reference adapters
 
 ## Why it exists
@@ -22,10 +35,18 @@ Three properties make this harness effective where ordinary unit tests are not:
    values are never derived from another approximation.
 2. **Everything is deterministic.** All randomness flows through seeded RNGs.
    A failure today reproduces tomorrow, on any machine.
-3. **Tolerances are justified.** Where theory exists we assert against it
-   (α for DDSketch, rank error bands for KLL, one-sided ε·N bounds for
-   Count-Min). Where it does not, tolerances are documented empirical values
-   consistent across suites.
+3. **Tolerances are computed, not written down.** Where theory exists the
+   bound is evaluated from the sketch's own configuration and the exact truth —
+   never a hand-picked percentage. Where it does not, the tolerance is a
+   documented empirical band, the test is *named* as one, and the measurement
+   it came from is recorded next to it.
+
+Point 3 is the one that is easy to get wrong in a way that looks fine. Having a
+test is not the same as having an accuracy test, and an accuracy test is not
+the same as correctly verifying a theoretical guarantee. A Count Sketch checked
+against Count-Min's `ε·N` passes comfortably and verifies almost nothing,
+because on a skewed stream that bound is enormously looser than the one Count
+Sketch actually promises.
 
 The harness earned its keep immediately: its first run surfaced four real
 defects — a Nitro estimator that returned zero because inserts and queries
@@ -34,26 +55,38 @@ skip-draw rounding bug that halved the effective sampling rate, and a portable
 DDSketch representative that violated the advertised α bound at bucket edges.
 None of these were caught by the existing unit tests.
 
+Tightening the bounds to the ones each family actually promises surfaced more:
+a missing `ELASTIC` arm in `EHSketchList::merge` that silently discarded every
+bucket merge in an exponential histogram, HLL Classic's accuracy cliff at the
+linear-counting switchover, and a structural coupling in `EHUnivOptimized` that
+makes its sketch-tier cardinality unrecoverable. See the findings section of
+the coverage matrix.
+
 ## Architecture
 
 ```sh
 tests/
 ├── common/
-│   ├── mod.rs           # generators + truth trackers + assertion helpers
-│   └── conformance.rs   # capability traits + reusable batteries  ← the kit
-├── conformance_kit.rs   # reference adapters (copy these)
-├── e2e_frequency.rs     # deep per-family suites…
+│   ├── mod.rs               # generators + truth trackers + assertion helpers
+│   ├── specs.rs             # per-metric error models + acceptance rules  ← the bounds
+│   └── conformance.rs       # capability traits + reusable batteries      ← the kit
+├── conformance_kit.rs       # reference adapters (copy these)
+├── e2e_frequency.rs         # deep per-family suites…
 ├── e2e_cardinality.rs
 ├── e2e_quantiles.rs
-├── e2e_frameworks.rs
-├── e2e_octo.rs          # …the OctoSketch promotion protocol
-├── e2e_heavy_hitters.rs # …Space-Saving, CocoSketch and Elastic
-├── e2e_membership.rs    # …the Bloom filter's membership guarantees
-├── e2e_experimental.rs  # …the remaining feature-gated sketches
-└── bug_verification.rs  # regression tests for fixed defects
+├── e2e_matrix_instances.rs  # every (storage, path) instance of the matrix families
+├── e2e_numeric_types.rs     # every NumericalValue type through KLL / DDSketch
+├── e2e_windows.rs           # every EHSketchList variant + TumblingWindow payloads
+├── e2e_composition.rs       # HashSketchEnsemble, NitroBatch, UnivMonQ config, portable facade
+├── e2e_frameworks.rs        # Hydra and UnivMon composition
+├── e2e_octo.rs              # …the OctoSketch promotion protocol
+├── e2e_heavy_hitters.rs     # …Space-Saving, CocoSketch and Elastic
+├── e2e_membership.rs        # …the Bloom filter's membership guarantees
+├── e2e_experimental.rs      # …the remaining feature-gated sketches
+└── bug_verification.rs      # regression tests for fixed defects
 ```
 
-There are three layers:
+There are four layers:
 
 **Layer 1 — primitives (`common/mod.rs`).**
 Seeded generators produce streams with known shape: `zipf_u64` (heavy heads),
@@ -64,7 +97,33 @@ exact F0/F1/F2/L2/entropy/top-k) or `NumericTruth` (sorted values exposing
 nearest-rank quantiles, CDF, and rank-tolerance value bands). Assertion
 helpers turn comparisons into readable failures that print expected vs actual.
 
-**Layer 2 — the conformance kit (`common/conformance.rs`).**
+**Layer 2 — the error-model specs (`common/specs.rs`).**
+One spec per *metric*, not per sketch, because the metric is what differs:
+
+| Spec | Bounds | Formula |
+| --- | --- | --- |
+| `CountMinSpec` | one-sided additive excess | `e·(N − f) / w`, failure `e^-d` |
+| `CountSketchSpec` | two-sided L2, rank-independent | `sqrt(κ/w)·‖f₋ᵢ‖₂`, κ = 3, failure `P[Bin(d, 1/3) ≥ ⌈d/2⌉]` |
+| `SecondMomentSpec` | F2 from a Count Sketch matrix | `sqrt(2κ/w)`, same median amplification |
+| `RankErrorSpec` | KLL rank error | `ε(k) = 2.446 / k^0.9433`, 99% confidence |
+| `RelativeQuantileSpec` | DDSketch relative value error | `α + ULP slack` vs the exact order statistic |
+| `CardinalityConfidenceSpec` | HLL / KMV | `z · σ_rel`, σ from the estimator's own model |
+| `SamplingConfidenceSpec` | Nitro | `z · sqrt(f(1−p)/p)` |
+
+Each spec exposes the bound formula, the per-check failure probability the
+theorem allows, and an acceptance rule. `Tally` accumulates violations across
+checks and trials, and `assert_within` applies a binomial tail at a fixed test
+level (`TEST_LEVEL = 1e-6`) decided before the run — so the number of tolerated
+violations cannot be adjusted after seeing the result. `assert_none` is for
+structural guarantees, which tolerate nothing.
+
+Keeping these apart is deliberate. There is no shared
+`QuantileSpec { rank_tol }` that KLL and DDSketch both use, because they do not
+promise the same thing: a correct KLL can return a value 100× off on a
+heavy-tailed stream and still be within its rank guarantee, and a correct
+DDSketch has no rank guarantee at all.
+
+**Layer 3 — the conformance kit (`common/conformance.rs`).**
 A sketch describes *what it guarantees* by implementing small capability
 traits; batteries translate those guarantees into checks. Traits:
 
@@ -89,11 +148,13 @@ into a `BatteryReport`, and report all failures at once via `.assert_ok()`:
 | `cardinality_battery` | unique-stream accuracy at a checkpoint; re-ingesting seen keys must not move the estimate |
 | `quantile_battery` | estimates land inside rank-tolerance value bands across the standard q grid |
 
-Specs carry the tolerances: `FrequencySpec { one_sided, rel_tol, abs_tol }`,
-`MembershipSpec { max_fpp }`, `CardinalitySpec { rel_tol }`,
-`QuantileSpec { rank_tol, qs }`.
+The kit's own specs (`FrequencySpec`, `MembershipSpec`, `CardinalitySpec`,
+`QuantileSpec`) carry loose smoke-test tolerances. They exist so a new sketch
+can be wired up in one adapter and immediately checked for gross breakage —
+they are a floor, not the guarantee. A sketch's actual bound is asserted in its
+suite with the matching spec from Layer 2.
 
-**Layer 3 — suites.**
+**Layer 4 — suites.**
 `conformance_kit.rs` wires established sketches through the kit as reference
 adapters. The `e2e_*.rs` suites add depth the kit deliberately does not
 attempt: serialization round trips, window semantics, framework composition
@@ -198,18 +259,51 @@ portable type, heavy-hitter recall targets, and so on.
 
 ## Tolerance policy
 
-- Prefer theoretical bounds and cite them in a comment next to the spec.
-- Empirical tolerances must be no looser than comparable sketches in the same
-  suite. If your sketch needs ±30% where KLL uses ±3%, either fix the sketch
-  or document why the guarantee is genuinely weaker before widening.
-- Fixed seeds are part of the contract. If a test is flaky, do not loosen the
-  seed's randomness exposure — tighten the implementation or state the
-  statistical intent explicitly and pick a defensible band.
+**Compute the bound; do not write it down.** Evaluate it from the sketch's own
+configuration and the exact truth, through the matching spec. A tolerance that
+does not move when `k`, `w` or the precision moves is not that family's bound:
+a hard-coded 0.02 rank tolerance passes identically at `k = 64` and `k = 800`,
+so it cannot notice `k` failing to reach the compactors at all.
+
+**Name empirical bands as empirical.** Theory-backed tests are named
+`*_satisfies_<theorem_or_bound>`; measured ones are named
+`*_stays_within_the_documented_empirical_band`, and the doc comment records the
+configuration, the stream seed, and the number actually measured. An empirical
+band is never described as a theoretical bound.
+
+**Never widen a bound to make a failure go away.** If the correct bound exposes
+an implementation defect, keep the reproducing test and fix the implementation —
+or, when the behaviour is a documented limitation rather than a bug, pin it
+with *both* an upper and a lower guard so that fixing it later fails the test
+and forces the documentation to be updated instead of going stale. Two tests
+in this suite do exactly that: `hll_classic_switchover_band_stays_within_the_documented_empirical_band`
+and `eh_univ_optimized_sketch_tier_cardinality_is_documented_as_unrecoverable`.
+
+**Do not use a fudge factor.** `1.5 * bound` and `alpha * 1.05` are not bounds;
+the second one accepts results that break the advertised guarantee by 5%. If a
+looser constant is genuinely needed, change the constant *inside* the derivation
+(e.g. Chebyshev's κ) and state the failure probability it now implies.
+
+**Fixed seeds are part of the contract.** Stream seeds and sketch seeds are
+separate things and both are pinned. A sketch whose only constructor seeds from
+the wall clock cannot be used in an accuracy test — add a seeded constructor.
+Every failure message prints the seeds, the configuration, and the measured
+error against its bound.
 
 ## Rules and anti-patterns
 
-- No unseeded randomness anywhere in tests. Coco-style nondeterministic
-  implementations are tested statistically over bounded ranges instead.
+- No unseeded randomness anywhere in tests — no `rand::rng()`, no wall-clock
+  seeding, no implicit RNG inside a constructor. `KLL::init_kll_with_seed`,
+  `KLLDynamic::init_kll_with_seed`, `KllSketch::with_seed`,
+  `NitroBatch::with_target_and_seed` and `UniformSampling::with_seed` exist for
+  this. Coco-style nondeterministic implementations are tested statistically
+  over bounded ranges instead.
+- A probabilistic guarantee is about randomness the test cannot resample: the
+  library fixes its hash seed table, so counting how many keys clear a bound
+  under *one* hash is not a measurement of the theorem's failure probability.
+  Where independent trials are needed, resample the *key population* and say so;
+  where the API genuinely cannot expose the dimension, say that instead of
+  claiming the theorem was verified.
 - Never derive expected values from another approximation. Truth comes from
   `FreqTruth`/`NumericTruth`, full stop.
 - Do not bypass public APIs in tests to "fix" them. The Nitro estimator
@@ -225,8 +319,10 @@ portable type, heavy-hitter recall targets, and so on.
 ## Running
 
 ```bash
-cargo test --all-features --locked          # full matrix incl. experimental
+cargo test --all-features --locked           # full matrix incl. experimental
 cargo test --test conformance_kit            # kit + reference adapters only
+cargo test --test e2e_matrix_instances       # every storage x path instance
+cargo test --test e2e_numeric_types          # every NumericalValue type
 cargo run --release --example accuracy_probe --features experimental
                                              # heavy release-only probes
 ```

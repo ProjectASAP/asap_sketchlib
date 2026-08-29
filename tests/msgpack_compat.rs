@@ -98,7 +98,7 @@ fn hll_sketch_round_trip() {
 
 #[test]
 fn kll_sketch_round_trip() {
-    let mut s = KllSketch::new(200);
+    let mut s = KllSketch::with_seed(200, 0x5EED_0800);
     for i in 0..100 {
         s.update(i as f64);
     }
@@ -110,7 +110,7 @@ fn kll_sketch_round_trip() {
 
 #[test]
 fn hydra_kll_sketch_round_trip() {
-    let mut s = HydraKllSketch::new(2, 4, 200);
+    let mut s = HydraKllSketch::with_seed(2, 4, 200, 0x5EED_0900);
     s.update("a", 1.0);
     s.update("a", 2.0);
     s.update("b", 3.0);

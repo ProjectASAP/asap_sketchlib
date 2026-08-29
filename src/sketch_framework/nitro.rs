@@ -161,28 +161,17 @@ impl Default for NitroBatch<Vector2D<u32>> {
 impl NitroBatch<Vector2D<u32>> {
     /// Creates a Nitro sketch with the given sampling rate.
     pub fn init_nitro(rate: f64) -> Self {
-        assert!(
-            !rate.is_nan() && rate > 0.0 && rate <= 1.0,
-            "sample_rate must be within (0.0, 1.0]"
-        );
-        let inv_ln = if (rate - 1.0).abs() <= f64::EPSILON {
-            0.0 // Not used for full sampling
-        } else {
-            1.0 / (1.0 - rate).ln()
-        };
-        let mut nitro = Self {
-            sampling_rate: rate,
-            to_skip: 0,
-            inv_ln_one_minus_p: inv_ln,
-            generator: new_small_rng(),
-            delta: 0,
-            idx: 0,
-            mask: 0x10000,
-            sk: Vector2D::init(5, 2048),
-        };
-        nitro.sk.fill(0);
-        nitro.delta = nitro.scaled_increment(1);
-        nitro
+        let mut sk = Vector2D::init(5, 2048);
+        sk.fill(0);
+        Self::with_target(rate, sk)
+    }
+
+    /// [`NitroBatch::init_nitro`] with an explicit sampling-RNG seed. See
+    /// [`NitroBatch::with_target_and_seed`].
+    pub fn init_nitro_with_seed(rate: f64, seed: u64) -> Self {
+        let mut sk = Vector2D::init(5, 2048);
+        sk.fill(0);
+        Self::with_target_and_seed(rate, sk, seed)
     }
 }
 
@@ -203,7 +192,27 @@ impl<S: NitroTarget> NitroBatch<S> {
     }
 
     /// Wraps an existing target sketch with Nitro sampling.
+    ///
+    /// The sampling RNG is seeded from the OS, so two runs over the same input
+    /// admit different subsets. Use [`NitroBatch::with_target_and_seed`] when
+    /// the result has to be reproducible.
     pub fn with_target(rate: f64, sk: S) -> Self {
+        Self::build(rate, sk, new_small_rng())
+    }
+
+    /// Wraps an existing target sketch with Nitro sampling driven by an
+    /// explicitly seeded RNG.
+    ///
+    /// Sampling is where all of Nitro's randomness lives: which updates reach
+    /// the target sketch is drawn from the geometric skip distribution. With a
+    /// fixed seed the admitted subset — and therefore every estimate — is a
+    /// deterministic function of the input, which is what lets an accuracy
+    /// bound be asserted reproducibly instead of re-rolled on every run.
+    pub fn with_target_and_seed(rate: f64, sk: S, seed: u64) -> Self {
+        Self::build(rate, sk, SmallRng::seed_from_u64(seed))
+    }
+
+    fn build(rate: f64, sk: S, generator: SmallRng) -> Self {
         assert!(
             !rate.is_nan() && rate > 0.0 && rate <= 1.0,
             "sample_rate must be within (0.0, 1.0]"
@@ -217,7 +226,7 @@ impl<S: NitroTarget> NitroBatch<S> {
             sampling_rate: rate,
             to_skip: 0,
             inv_ln_one_minus_p: inv_ln,
-            generator: new_small_rng(),
+            generator,
             delta: 0,
             idx: 0,
             mask: 0x10000,
@@ -349,6 +358,10 @@ mod tests {
     use crate::test_utils::sample_zipf_u64;
     use std::collections::HashMap;
 
+    /// Fixed sampling-RNG seed. `with_target` seeds from the OS, so an
+    /// accuracy assertion built on it would be re-rolled every run.
+    const NITRO_TEST_SEED: u64 = 0x0117_5EED;
+
     #[test]
     fn nitro_batch_countmin_error_bound_zipf() {
         let rows = 3;
@@ -369,7 +382,7 @@ mod tests {
             .collect();
 
         let cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
-        let mut batch = NitroBatch::with_target(1.0, cm);
+        let mut batch = NitroBatch::with_target_and_seed(1.0, cm, NITRO_TEST_SEED);
         batch.insert(&data);
 
         let epsilon = std::f64::consts::E / cols as f64;
@@ -409,23 +422,41 @@ mod tests {
             .collect();
 
         let cs = Count::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
-        let mut batch = NitroBatch::with_target(1.0, cs);
+        let mut batch = NitroBatch::with_target_and_seed(1.0, cs, NITRO_TEST_SEED);
         batch.insert(&data);
 
-        let epsilon = std::f64::consts::E / cols as f64;
-        let delta = 1.0 / std::f64::consts::E.powi(rows as i32);
-        let error_bound = epsilon * samples as f64;
-        let correct_lower_bound = truth.len() as f64 * (1.0 - delta);
+        // Count Sketch's bound, not Count-Min's. The error is driven by the L2
+        // norm of the residual frequency vector and is rank-independent:
+        //
+        //   Var[row estimator] <= ||f_-i||_2^2 / w
+        //   Chebyshev at t = sqrt(kappa/w) * ||f_-i||_2 -> per-row failure 1/kappa
+        //   the reported value is the median of d rows, so the query fails
+        //   only when at least ceil(d/2) rows do.
+        //
+        // Reusing Count-Min's eps*N here would be checking a bound this sketch
+        // never claimed — and on a Zipf stream that bound is far looser, so it
+        // would pass almost regardless of what the sketch did.
+        const KAPPA: f64 = 3.0;
+        let f2: f64 = truth.values().map(|c| (*c as f64) * (*c as f64)).sum();
+        // P[Bin(3, 1/3) >= 2] = 7/27.
+        let median_failure = 7.0 / 27.0;
+        let correct_lower_bound = truth.len() as f64 * (1.0 - median_failure);
         let mut within_count = 0;
-        for key in truth.keys() {
+        for (key, exact) in &truth {
+            let f = *exact as f64;
+            let residual_l2 = (f2 - f * f).max(0.0).sqrt();
+            let error_bound = (KAPPA / cols as f64).sqrt() * residual_l2;
             let est = batch.estimate_median(&DataInput::I64(*key));
-            if (est - (*truth.get(key).unwrap() as f64)).abs() < error_bound {
+            if (est - f).abs() <= error_bound {
                 within_count += 1;
             }
         }
         assert!(
             within_count as f64 > correct_lower_bound,
-            "in-bound items number {within_count} not greater than expected amount {correct_lower_bound}"
+            "{within_count} of {} keys within sqrt(kappa/w)*||f_-i||_2; the median-of-{rows} \
+             bound allows a failure probability of {median_failure:.4}, so at least \
+             {correct_lower_bound:.1} must be in bound",
+            truth.len()
         );
     }
 }

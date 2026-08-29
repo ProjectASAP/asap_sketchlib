@@ -1,18 +1,33 @@
 # E2E Testing Harness & Conformance Kit
 
 Every sketch in `asap_sketchlib` is validated end-to-end against exact ground
-truth from seeded synthetic streams. New sketches **must** go through the
-same conformance batteries before landing — copy an adapter from
-`tests/conformance_kit.rs`, run the batteries, done.
+truth from seeded synthetic streams, and every approximate answer is judged
+against **its own family's** error bound.
+
+New sketches go through the conformance batteries — copy an adapter from
+`tests/conformance_kit.rs` — and then assert their actual guarantee with the
+matching spec from `tests/common/specs.rs`. The batteries are a floor, not the
+guarantee: passing them says a sketch is not grossly broken, not that it meets
+its theorem.
+
+[`docs/e2e_coverage_matrix.md`](../docs/e2e_coverage_matrix.md) is the
+authority on which public instance is covered by which test, under which bound,
+and whether that bound is a theorem or a documented empirical band.
 
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `common/mod.rs` | Seeded stream generators (`zipf_u64`, `uniform_u64`, `normal_f64`, `exponential_f64`, adversarial `log_uniform_f64`), exact truth trackers (`FreqTruth`, `NumericTruth`), assertion helpers |
-| `common/conformance.rs` | Capability traits + standard conformance batteries |
+| `common/mod.rs` | Seeded stream generators (`zipf_u64`, `uniform_u64`, `normal_f64`, `exponential_f64`, adversarial `log_uniform_f64`, `duplicate_heavy_f64`, `monotonic_f64`, `outside_in_ordering`), exact truth trackers (`FreqTruth`, `NumericTruth`), assertion helpers |
+| `common/specs.rs` | One error model per metric — `CountMinSpec`, `CountSketchSpec`, `SecondMomentSpec`, `RankErrorSpec`, `RelativeQuantileSpec`, `CardinalityConfidenceSpec`, `SamplingConfidenceSpec` — plus the binomial acceptance rules |
+| `common/conformance.rs` | Capability traits + standard conformance batteries (the floor) |
 | `conformance_kit.rs` | Reference adapters: established sketches running through the kit (copy these) |
-| `e2e_frequency.rs` / `e2e_cardinality.rs` / `e2e_quantiles.rs` / `e2e_frameworks.rs` | Deep per-family suites with hand-tuned tolerances |
+| `e2e_frequency.rs` / `e2e_cardinality.rs` / `e2e_quantiles.rs` | Deep per-family suites, each against its own theorem |
+| `e2e_matrix_instances.rs` | Every built-in `(storage, hashing path)` instance of CountMin / Count / CMSHeap / CSHeap, plus counter-width edges |
+| `e2e_numeric_types.rs` | Every `NumericalValue` type through `KLL<T>`, `KLLDynamic<T>` and `DDSketch::add<T>` |
+| `e2e_windows.rs` | Every `EHSketchList` variant in an `ExponentialHistogram`, and every `TumblingWindow` payload |
+| `e2e_composition.rs` | `HashSketchEnsemble`, `NitroBatch`, `UnivMonQ`'s config surface, and the portable sketch+heap facade |
+| `e2e_frameworks.rs` | Hydra's subpopulation lattice and UnivMon composition |
 | `e2e_heavy_hitters.rs` | Space-Saving's error sandwich, `min_count` ceiling and Stream-Summary lists under sustained eviction, plus CocoSketch and Elastic through the batteries and the heavy-hitter properties no battery models |
 | `e2e_membership.rs` | Bloom: no false negative, exact union, and the delivered false-positive rate against its own sizing |
 | `e2e_octo.rs` | OctoSketch delta-promotion invariants, the `octo-runtime` pipeline, and conformance to the paper's Theorems 1-4 and its sketch-merge baseline |
@@ -36,8 +51,7 @@ same conformance batteries before landing — copy an adapter from
 2. **Write one adapter struct** implementing the trait(s) by delegating to
    your public API. See any adapter in `tests/conformance_kit.rs`.
 
-3. **Run the battery** with production-shaped dimensions and tolerances from
-   your sketch's documentation:
+3. **Run the battery** with production-shaped dimensions, as a smoke test:
 
    ```rust
    conformance::quantile_battery(
@@ -49,17 +63,38 @@ same conformance batteries before landing — copy an adapter from
    .assert_ok();
    ```
 
-4. **Add deeper, sketch-specific checks** (merge semantics, windowing,
+4. **Assert your sketch's actual bound** with the matching spec from
+   `common/specs.rs`, evaluated at the parameters the instance reports:
+
+   ```rust
+   let spec = CountSketchSpec::new(sketch.rows(), sketch.cols());
+   spec.assert_contract("MyNewSketch", &truth, |k| sketch.estimate(k), &context);
+   ```
+
+   If no spec fits, add one — one spec per metric, with the formula, the
+   per-check failure probability, and the citation in its doc comment. Do not
+   reuse another family's.
+
+5. **Add deeper, sketch-specific checks** (merge semantics, windowing,
    serialization) as a test in the matching `e2e_*.rs` suite.
+
+6. **Add a row to `docs/e2e_coverage_matrix.md`.**
 
 ## Rules
 
-- All randomness flows through seeded generators; no `rand::rng()` in tests.
+- All randomness flows through seeded generators; no `rand::rng()` in tests,
+  and no sketch constructed by a wall-clock-seeded constructor. Stream seeds
+  and sketch seeds are separate and both are pinned.
 - Ground truth is tracked exactly while generating — never re-derived from
   another approximation.
-- Tolerances must be justified: theory bounds when they exist (α for DDS,
-  rank error for KLL, ε·N for CMS), otherwise documented empirical values
-  consistent with existing suites.
+- Tolerances are **computed from the instance's own parameters**, not written
+  down. A tolerance that does not move with `k`, `w` or the precision is not
+  that family's bound.
+- Theory-backed tests are named `*_satisfies_<theorem_or_bound>`; measured ones
+  are named `*_stays_within_the_documented_empirical_band` and record the
+  configuration, seed and measured value they came from.
+- Never widen a bound to make a failure pass. If the correct bound exposes a
+  defect, keep the reproducing test and fix the implementation.
 - Batteries accumulate failures into a `BatteryReport`; call `.assert_ok()`
   once at the end so a single run reports every violation, not just the first.
 
@@ -67,6 +102,8 @@ same conformance batteries before landing — copy an adapter from
 
 ```bash
 cargo test --test conformance_kit        # kit + reference adapters
+cargo test --test e2e_matrix_instances   # every storage x path instance
+cargo test --test e2e_numeric_types      # every NumericalValue type
 cargo test --all-features               # everything, incl. e2e_experimental
 cargo run --release --example accuracy_probe --features experimental
                                          # heavy release-only probes

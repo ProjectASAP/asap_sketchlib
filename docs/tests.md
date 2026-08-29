@@ -720,7 +720,7 @@ Test file: [`src/sketch_framework/nitro.rs`](../src/sketch_framework/nitro.rs)
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
 | `nitro_batch_countmin_error_bound_zipf` | Nitro batch countmin error bound Zipf. | On Zipf stream (`rows=3`, `cols=4096`, `N=200_000`), verifies CountMin estimates satisfy in-bound key count `> (1-delta)*distinct` using `epsilon=e/cols`, `delta=e^-rows`, and bound `epsilon*N`. |
-| `nitro_batch_count_error_bound_zipf` | Nitro batch count error bound Zipf. | Applies the same probabilistic in-bound criterion to `Count` median estimates with `epsilon=e/cols`, `delta=e^-rows`, and bound `epsilon*N`. |
+| `nitro_batch_count_error_bound_zipf` | Nitro batch Count Sketch L2 error bound on a Zipf stream. | On the same stream, checks `Count` median estimates against **Count Sketch's own** bound `sqrt(kappa/cols) * \|\|f_-i\|\|_2` (kappa = 3, residual L2 recomputed per key from the exact frequency vector), requiring the in-bound share to exceed `1 - P[Bin(rows, 1/3) >= ceil(rows/2)]`. Count-Min's `epsilon*N` does not apply to this sketch and is far looser on a skewed stream. Sampling RNG is seeded. |
 
 ### ExponentialHistogram
 

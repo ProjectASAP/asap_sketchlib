@@ -48,6 +48,13 @@ pub struct KLLDynamic<T: NumericalValue = f64> {
     m: usize, // Minimum buffer size (usually 8)
     num_levels: usize,
     co: Coin,
+    /// Explicit seed for the compaction coin, when present. Set by
+    /// [`KLLDynamic::init_with_seed`] / [`KLLDynamic::init_kll_with_seed`] so
+    /// a sketch replays identically across runs and `clear()` re-seeds from
+    /// the same value. Not part of the wire format: it describes how the
+    /// sketch was built, not what it currently holds.
+    #[serde(skip)]
+    seed: Option<u64>,
     /// Cached level capacities by height (from top to bottom)
     #[serde(skip)]
     capacity_cache: [u32; CAPACITY_CACHE_LEN],
@@ -68,6 +75,23 @@ impl<T: NumericalValue> Default for KLLDynamic<T> {
 impl<T: NumericalValue> KLLDynamic<T> {
     /// Creates a KLLDynamic sketch with the given `k` and `m` parameters.
     pub fn init(k: usize, m: usize) -> Self {
+        Self::init_internal(k, m, Coin::new(), None)
+    }
+
+    /// Creates a KLLDynamic sketch with an explicit RNG seed for the
+    /// compaction coin. Two sketches built with the same seed and fed the same
+    /// input produce identical state, which is what makes reproducible-replay
+    /// scenarios and deterministic accuracy tests possible. The seed is also
+    /// stored so `clear()` re-seeds deterministically.
+    ///
+    /// The unseeded [`KLLDynamic::init`] draws from the wall clock, so a
+    /// sketch built with it cannot be used to assert an accuracy bound
+    /// reproducibly. Mirrors [`crate::KLL::init_with_seed`].
+    pub fn init_with_seed(k: usize, m: usize, seed: u64) -> Self {
+        Self::init_internal(k, m, Coin::from_seed(seed), Some(seed))
+    }
+
+    fn init_internal(k: usize, m: usize, coin: Coin, seed: Option<u64>) -> Self {
         let mut norm_m = m.min(MAX_CACHEABLE_K);
         norm_m = norm_m.max(2);
         let mut norm_k = k.max(norm_m);
@@ -80,7 +104,8 @@ impl<T: NumericalValue> KLLDynamic<T> {
             k: norm_k,
             m: norm_m,
             num_levels: 1,
-            co: Coin::new(),
+            co: coin,
+            seed,
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
             level0_capacity: 0,
@@ -92,6 +117,11 @@ impl<T: NumericalValue> KLLDynamic<T> {
     /// Creates a KLLDynamic sketch with default `m` and the provided `k`.
     pub fn init_kll(k: i32) -> Self {
         Self::init(k as usize, 8)
+    }
+
+    /// `init_kll` with an explicit RNG seed. See [`KLLDynamic::init_with_seed`].
+    pub fn init_kll_with_seed(k: i32, seed: u64) -> Self {
+        Self::init_with_seed(k as usize, 8, seed)
     }
 
     fn push_value(&mut self, value: T) {
@@ -247,7 +277,13 @@ impl<T: NumericalValue> KLLDynamic<T> {
         self.items.clear();
         self.levels = Vector1D::filled(2, 0);
         self.num_levels = 1;
-        self.co = Coin::new();
+        // Re-seed from the construction seed when there is one, so a cleared
+        // sketch replays exactly like a fresh one; fall back to the wall clock
+        // for the unseeded constructor.
+        self.co = match self.seed {
+            Some(s) => Coin::from_seed(s),
+            None => Coin::new(),
+        };
         self.rebuild_capacity_cache();
     }
 
