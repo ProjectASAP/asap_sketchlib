@@ -206,7 +206,9 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Classic, Re
         1.0 / z
     }
 
-    /// Returns the estimated cardinality using the classic HyperLogLog algorithm with small/large range corrections.
+    /// Returns the estimated cardinality using the classic HyperLogLog
+    /// algorithm with the small-range correction. Ranks are drawn from a
+    /// 64-bit hash, so the estimate needs no large-range correction.
     pub fn estimate(&self) -> usize {
         let m = Registers::NUM_REGISTERS as f64;
         let alpha_m = 0.7213 / (1.0 + 1.079 / m);
@@ -221,9 +223,6 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Classic, Re
             if zero_count != 0 {
                 est = m * (m / zero_count as f64).ln();
             }
-        } else if est > 143165576.533 {
-            let correction_aux = i32::MAX as f64;
-            est = 1.0 * -correction_aux * (1.0 - est / correction_aux).ln();
         }
         est as usize
     }
@@ -609,6 +608,40 @@ mod tests {
     #[test]
     fn hll_ertl_p12_merge_within_two_percent() {
         assert_merge_accuracy_within::<HyperLogLogP12<ErtlMLE>>("HllErtlP12", P12_ERROR_TOLERANCE);
+    }
+
+    /// Ranks are drawn from a 64-bit hash, so a register state whose estimate
+    /// runs past the 32-bit range must still follow the HyperLogLog formula
+    /// rather than saturate or collapse to zero.
+    #[test]
+    fn classic_estimate_holds_past_the_32_bit_range() {
+        const REGISTER_BITS: usize = HllBucketList::REGISTER_BITS;
+        let m = HllBucketList::NUM_REGISTERS as f64;
+        let alpha_m = 0.7213 / (1.0 + 1.079 / m);
+
+        // A hash selecting `bucket` whose leading run gives every register the
+        // same rank, so the estimate is `alpha_m * m * 2^rank` in closed form.
+        for rank in [12u32, 16, 18, 20] {
+            let mut hll = HyperLogLog::<Classic>::default();
+            for bucket in 0..HllBucketList::NUM_REGISTERS as u64 {
+                let hashed = (bucket << REGISTER_BITS) | (1 << (REGISTER_BITS - rank as usize));
+                HyperLogLog::<Classic>::insert_with_hash(&mut hll, hashed);
+            }
+            assert!(
+                hll.registers_as_slice().iter().all(|&r| r == rank as u8),
+                "rank {rank} state was not built: got {:?}",
+                &hll.registers_as_slice()[..4]
+            );
+
+            let expected = alpha_m * m * 2f64.powi(rank as i32);
+            let estimate = hll.estimate() as f64;
+            // The only slack is `estimate`'s truncation to a whole count.
+            let error = (estimate - expected).abs() / expected;
+            assert!(
+                error <= 1e-6,
+                "rank {rank} estimate {estimate} deviates from {expected} by {error:.6}"
+            );
+        }
     }
 
     // insert 10 values and check corresponding counter is updated
