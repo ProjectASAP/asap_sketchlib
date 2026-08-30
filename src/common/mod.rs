@@ -21,7 +21,7 @@
 pub mod hash;
 /// Cross-language hash spec (`HashSpec`/`derive_index`/`derive_sign`)
 /// shared by matrix-backed sketches that need byte parity with
-/// `sketchlib-go` (CountSketch, the upcoming CMS PR, …).
+/// `sketchlib-go`.
 pub mod hashspec;
 pub mod heap;
 pub mod input;

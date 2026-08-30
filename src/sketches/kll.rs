@@ -829,8 +829,7 @@ impl<T: NumericalValue> KLL<T> {
     /// fields, matching `sketchlib-go::KLLSketch.SerializePortable`.
     /// See the `KLLState` docstring in `proto/kll/kll.proto`: index `i`
     /// in `levels` maps to compactor level `num_levels - 1 - i` in the
-    /// in-memory representation. Closes part of
-    /// ProjectASAP/ASAPCollector#243.
+    /// in-memory representation.
     pub fn wire_levels(&self) -> Vec<u32> {
         // Walk from top compactor-level downward, accumulating sizes.
         let n = self.num_levels;
@@ -1512,9 +1511,9 @@ mod tests {
         );
     }
 
-    // Exact repro from asap_sketchlib issue #68: merging a KLL(k=200) over
-    // 1..=1000 into an empty sketch used to drop N from 1000 to ~350 and
-    // drift the median from ~500 to ~700, because the old `merge` replayed
+    // Merge-weight regression: merging a KLL(k=200) over 1..=1000 into an
+    // empty sketch used to drop N from 1000 to ~350 and drift the median
+    // from ~500 to ~700, because the old `merge` replayed
     // every retained item through `update()` at weight 1 — discarding the
     // level weight of every item retained above level 0.
     //

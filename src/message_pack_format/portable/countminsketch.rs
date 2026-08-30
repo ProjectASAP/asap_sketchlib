@@ -13,11 +13,9 @@ use crate::{DataInput, FastPath, Vector2D};
 // `CountMinSketch` and `CountMinDelta` below are the public-field,
 // proto-decode-friendly types consumed by the ASAP query engine
 // accumulators, backed by `asap_sketchlib`'s in-tree CountMin. The
-// high-throughput in-process variant above (`CountMin`) keeps its
-// original design.
+// high-throughput in-process variant is
+// `crate::sketches::countminsketch::CountMin`, which keeps its own design.
 // =====================================================================
-
-// (de-duplicated) use serde::{Deserialize, Serialize};
 
 // ----- asap_sketchlib-backed Count-Min helpers -----
 // Used below by `CountMinSketch`. Lives in this file so the wire-format
@@ -775,7 +773,7 @@ mod tests {
     /// Any drift in [`CountMinSketch::update`]'s hash → column-index
     /// derivation breaks this test cell-for-cell; that is the contract
     /// `cross_language_parity::cms_byte_parity_with_go` in ASAPCollector
-    /// relies on. Closes part of ProjectASAP/ASAPCollector#243.
+    /// relies on.
     #[test]
     fn test_update_then_envelope_matches_sketchlib_go_bytes() {
         use crate::proto::sketchlib::{

@@ -190,8 +190,7 @@ impl TryFrom<DDSketchState> for DDSketch {
 /// `minIndexableValue`/`maxIndexableValue`. Values outside this range are
 /// dropped rather than mapped to an arbitrarily distant bucket index — that
 /// guards the dense bucket store against a single finite-but-extreme outlier
-/// forcing an allocation spanning the whole index gap (asap_sketchlib#70
-/// item 4 / sketchlib-go#72).
+/// forcing an allocation spanning the whole index gap.
 ///
 /// Single source of truth shared by core `DDSketch`, the portable wire twin,
 /// and tests, so the two implementations cannot drift algebraically again.
@@ -236,9 +235,8 @@ impl DDSketch {
     /// Values outside `[min_indexable_value, max_indexable_value]` are also
     /// dropped rather than mapped to an arbitrarily distant bucket index — that
     /// guards the dense store against a single finite-but-extreme outlier
-    /// forcing an allocation spanning the whole index gap (asap_sketchlib#70
-    /// item 4 / sketchlib-go#72). Dropped silently, like the non-positive case,
-    /// since `add` has no error channel.
+    /// forcing an allocation spanning the whole index gap. Dropped silently,
+    /// like the non-positive case, since `add` has no error channel.
     #[inline(always)]
     pub fn add<T: NumericalValue>(&mut self, val: &T) {
         let v = val.to_f64();
@@ -406,10 +404,9 @@ impl DDSketch {
     ///
     /// This is a REAL runtime check, not a `debug_assert!` — the previous
     /// assert was compiled out in release builds, so a release-mode
-    /// mismatched merge corrupted results with no signal at all
-    /// (asap_sketchlib#70 item 2). DataDog's `MergeWith` and sketchlib-go's Go
-    /// `Merge` both return an error here; the portable `DdSketch::merge` in this
-    /// same crate already does too.
+    /// mismatched merge corrupted results with no signal at all. DataDog's
+    /// `MergeWith` and sketchlib-go's Go `Merge` both return an error here;
+    /// the portable `DdSketch::merge` in this same crate already does too.
     pub fn merge(&mut self, other: &DDSketch) -> Result<(), String> {
         if (self.alpha - other.alpha).abs() >= 1e-12 || (self.gamma - other.gamma).abs() >= 1e-12 {
             return Err(format!(
@@ -457,7 +454,7 @@ impl DDSketch {
     /// RelativeAccuracy())`. This makes the relative error EXACTLY α at both
     /// bucket edges — the log-midpoint γ^(k+0.5) used previously gave edge error
     /// √γ−1 (≈ α + α²/2 > α), silently violating the advertised α-accuracy
-    /// guarantee near a bucket edge (asap_sketchlib#70 / sketchlib-go#73 item 1).
+    /// guarantee near a bucket edge.
     #[inline]
     fn bin_representative(&self, k: i32) -> f64 {
         self.lower_bound(k) * (1.0 + self.alpha)
@@ -622,7 +619,7 @@ mod tests {
         }
     }
 
-    // DataDog-parity tests (asap_sketchlib#70 / sketchlib-go#73, #72).
+    // DataDog-parity tests.
 
     #[test]
     fn representative_within_alpha_at_bucket_edges() {
@@ -650,7 +647,7 @@ mod tests {
     #[test]
     fn merge_alpha_mismatch_is_a_real_runtime_error() {
         // Was a debug_assert!, compiled out in release; now a real Result even
-        // in release builds (asap_sketchlib#70 item 2).
+        // in release builds.
         let mut a = DDSketch::new(0.01);
         let b = DDSketch::new(0.02);
         a.add(&5.0);
@@ -667,8 +664,7 @@ mod tests {
     #[test]
     fn untrackable_extreme_is_dropped() {
         // A single finite-but-extreme outlier outside the indexable range must
-        // not be recorded, so the dense bucket store never spans the whole gap
-        // (asap_sketchlib#70 item 4 / sketchlib-go#72).
+        // not be recorded, so the dense bucket store never spans the whole gap.
         let mut d = DDSketch::new(0.01);
         for i in 1..=2000 {
             d.add(&(f64::from(i)));

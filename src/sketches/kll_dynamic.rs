@@ -361,8 +361,7 @@ impl<T: NumericalValue> KLLDynamic<T> {
     /// The previous implementation replayed *every* item of `other` —
     /// across all of its levels — through `push_value`, i.e. at weight 1,
     /// silently discarding the level weight of everything `other` had
-    /// retained above level 0 (the same class of bug as `KLL::merge`, see
-    /// asap_sketchlib issue #68).
+    /// retained above level 0 (the same class of bug as `KLL::merge`).
     pub fn merge(&mut self, other: &KLLDynamic<T>) {
         if other.items.is_empty() {
             return; // `other` is empty: nothing to merge.
@@ -749,8 +748,8 @@ mod tests {
         );
     }
 
-    // Exact repro from asap_sketchlib issue #68 (KLLDynamic variant):
-    // merging a KLL(k=200) over 1..=1000 into an empty sketch used to
+    // Merge-weight regression, KLLDynamic variant: merging a KLL(k=200)
+    // over 1..=1000 into an empty sketch used to
     // rescale N down to `other`'s retained-item count and drift the
     // median, because the old `merge` replayed every retained item
     // through `push_value` at weight 1 regardless of which level it was
@@ -861,9 +860,9 @@ mod tests {
         );
     }
 
-    // Deterministic regression for a PR #71 review comment: `merge`
-    // assumed level h (h >= 1) is always a single sorted run in both
-    // operands. That holds for `KLL` (fixed-capacity), whose `compact`
+    // Deterministic regression: `merge` assumed level h (h >= 1) is always
+    // a single sorted run in both operands. That holds for `KLL`
+    // (fixed-capacity), whose `compact`
     // maintains it as a standing invariant via merge-promotion — but
     // `KLLDynamic::compact` re-sorts a level's *entire* contents from
     // scratch on every call instead, so a level that received a
