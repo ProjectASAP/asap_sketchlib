@@ -164,6 +164,49 @@ pub struct UnivMonQQuery<'a, H: SketchHasher = DefaultXxHasher> {
     occurrence_entropy: Option<f64>,
     candidate_recovery_complete: bool,
     cdf: Vec<UnivMonQPoint>,
+    cdf_composition: CdfComposition,
+}
+
+/// How the ordered CDF was composed, captured while it was built.
+#[derive(Clone, Debug, Default)]
+struct CdfComposition {
+    heavy: Vec<(u64, f64)>,
+    heavy_mass: f64,
+    residual_mass: f64,
+    residual_samples: usize,
+}
+
+/// Read-only view of the two quantities the ordered-query error bound
+/// `sup_x |F_hat(x) - F(x)| <= 2 E_H + P_hat_R * epsilon_R` is stated over.
+///
+/// Neither is otherwise reachable from outside the crate, which previously left
+/// the bound unverifiable: a test could only check the special case where the
+/// heavy set is empty. Nothing here changes an answer or the wire format — it
+/// reports state the CDF construction already computed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OrderedQueryDiagnostics {
+    /// The values the CDF treated as heavy, with the frequency it credited to
+    /// each. `E_H` is the error of these frequencies against the truth,
+    /// normalized by the observation count.
+    pub heavy: Vec<(f64, f64)>,
+    /// Total mass attributed to the heavy set.
+    pub heavy_mass: f64,
+    /// Mass left to the residual occurrence sample: `N - heavy_mass`.
+    pub residual_mass: f64,
+    /// `m_R` — retained occurrence samples backing the residual, the `m` in
+    /// `epsilon_R = sqrt(ln(2/delta) / (2 m))`.
+    pub residual_samples: usize,
+}
+
+impl OrderedQueryDiagnostics {
+    /// `P_hat_R` — the residual's share of the total mass.
+    pub fn residual_mass_fraction(&self, count: u64) -> f64 {
+        if count == 0 {
+            0.0
+        } else {
+            (self.residual_mass / count as f64).clamp(0.0, 1.0)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -720,6 +763,28 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
     pub fn cdf(&self) -> &[UnivMonQPoint] {
         &self.cdf
     }
+
+    /// Read-only diagnostics for the ordered-query error bound.
+    ///
+    /// Reports the heavy set the CDF actually used and the size of the residual
+    /// occurrence sample, so that
+    /// `sup_x |F_hat(x) - F(x)| <= 2 E_H + P_hat_R * epsilon_R` can be
+    /// evaluated in full rather than only in the diffuse special case where the
+    /// heavy set is empty. Purely observational: it returns state the CDF
+    /// construction already produced.
+    pub fn ordered_query_diagnostics(&self) -> OrderedQueryDiagnostics {
+        OrderedQueryDiagnostics {
+            heavy: self
+                .cdf_composition
+                .heavy
+                .iter()
+                .map(|(key, frequency)| (ordered_to_float(*key), *frequency))
+                .collect(),
+            heavy_mass: self.cdf_composition.heavy_mass,
+            residual_mass: self.cdf_composition.residual_mass,
+            residual_samples: self.cdf_composition.residual_samples,
+        }
+    }
 }
 
 impl<H: SketchHasher> Default for UnivMonQ<H> {
@@ -914,8 +979,8 @@ impl<H: SketchHasher> UnivMonQ<H> {
         let ordered_heavy = self.assisted_ordered_heavy(&logical_heavy, &heavy_hitters);
         let entropy_heavy = Self::assisted_entropy_heavy(&logical_heavy);
         let occurrence_entropy = self.entropy_from_occurrences(&entropy_heavy);
-        let cdf = self
-            .cdf_keys_from(&ordered_heavy)
+        let (points, cdf_composition) = self.cdf_keys_and_composition_from(&ordered_heavy);
+        let cdf = points
             .into_iter()
             .map(|(value, rank)| UnivMonQPoint {
                 value: ordered_to_float(value),
@@ -929,6 +994,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
             occurrence_entropy,
             candidate_recovery_complete,
             cdf,
+            cdf_composition,
         }
     }
 
@@ -1190,8 +1256,23 @@ impl<H: SketchHasher> UnivMonQ<H> {
     }
 
     fn cdf_keys_from(&self, global_heavy: &[(u64, f64)]) -> Vec<(u64, f64)> {
+        self.cdf_keys_and_composition_from(global_heavy).0
+    }
+
+    /// The CDF breakpoints, plus the composition that produced them.
+    ///
+    /// The composition is what [`UnivMonQQuery::ordered_query_diagnostics`]
+    /// reports: which values the CDF treated as heavy and at what estimated
+    /// mass, and how many retained occurrence samples formed the residual. Both
+    /// are decided inside this function — the fallback below can discard the
+    /// heavy set entirely — so they are captured here rather than recomputed by
+    /// a caller that would have to duplicate the same branch.
+    fn cdf_keys_and_composition_from(
+        &self,
+        global_heavy: &[(u64, f64)],
+    ) -> (Vec<(u64, f64)>, CdfComposition) {
         if self.is_empty() || self.config.ordered_samples == 0 {
-            return Vec::new();
+            return (Vec::new(), CdfComposition::default());
         }
         let mut heavy: BTreeMap<u64, f64> = global_heavy.iter().copied().collect();
         let raw_heavy_total: f64 = heavy.values().sum();
@@ -1227,6 +1308,12 @@ impl<H: SketchHasher> UnivMonQ<H> {
         } else {
             residual_total / residual_keys.len() as f64
         };
+        let composition = CdfComposition {
+            heavy: heavy.iter().map(|(k, f)| (*k, *f)).collect(),
+            heavy_mass: heavy.values().sum(),
+            residual_mass: residual_total,
+            residual_samples: residual_keys.len(),
+        };
         let mut weights = heavy;
         for key in residual_keys {
             *weights.entry(key).or_insert(0.0) += residual_weight;
@@ -1245,7 +1332,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
             last.1 = 1.0;
         }
         isotonicize(&mut points);
-        points
+        (points, composition)
     }
 
     fn recover_candidates(&self) -> CandidateRecovery {

@@ -67,10 +67,31 @@ let mut nitro = NitroBatch::with_target(0.1, base);
 nitro.insert(&[1, 2, 3, 4]);
 ```
 
+## Accuracy
+
+Each update is admitted with probability `p` and the admitted update writes a
+compensating weight of `1/p`. Counters are integers, so that weight is rounded
+**stochastically** — `floor(1/p)` plus a `Bernoulli(frac(1/p))` drawn per
+admitted update — which makes the estimator unbiased at *every* rate the
+constructor accepts, not only at rates whose reciprocal is an integer:
+
+```text
+  E[est]   = f
+  Var[est] = f ( p·r(1−r) + (1−p)/p ),   r = frac(1/p)
+```
+
+Rounding the same way every time would be a bias rather than noise: at
+`p = 0.3`, `ceil(1/p) = 4` puts every estimate 20% high. When `1/p` *is* an
+integer the fraction is zero, no draw is made, and the emitted weights are
+identical to the unrounded ones.
+
 ## Caveats
 
 - Works with targets implementing `NitroTarget`.
-- Sampling introduces intentional approximation.
+- Sampling introduces intentional approximation; the variance above is the
+  price, and it is on top of whatever the wrapped sketch contributes.
+- `with_target` seeds from the OS. Use `with_target_and_seed` /
+  `init_nitro_with_seed` when a result has to reproduce.
 
 ## Status
 

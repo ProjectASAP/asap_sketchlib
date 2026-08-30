@@ -247,6 +247,17 @@ impl NumericTruth {
         &self.sorted
     }
 
+    /// Exact number of observations equal to `x`.
+    pub fn count_of(&self, x: f64) -> f64 {
+        let hi = self
+            .sorted
+            .partition_point(|v| v.total_cmp(&x) != std::cmp::Ordering::Greater);
+        let lo = self
+            .sorted
+            .partition_point(|v| v.total_cmp(&x) == std::cmp::Ordering::Less);
+        (hi - lo) as f64
+    }
+
     /// The closed interval of normalized ranks the value `x` occupies:
     /// `(|{v < x}| / n, |{v <= x}| / n)`. Stating rank error on this interval
     /// is what keeps the check correct when values repeat.

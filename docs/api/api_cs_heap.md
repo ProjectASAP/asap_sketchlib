@@ -95,6 +95,17 @@ assert!(sk.estimate(&DataInput::Str("flow")) >= 1.0);
 
 - Estimate semantics follow Count Sketch and may be non-integer.
 - Merge requires matching dimensions and compatible type parameters.
+- **Heap counts are a saturating, truncating view of the estimate.** The insert
+  path stores `cs_heap_count(estimate)`, where the estimate is the row median as
+  `f64` and the heap holds `i64`. The conversion saturates at `i64::MAX` /
+  `i64::MIN` (and maps `NaN` to `0`) rather than wrapping, because a wrapped
+  negative count would corrupt the heap's ordering. An `i128`-backed sketch can
+  genuinely hold counts past `i64::MAX` — `insert_many(key, i128)` accepts them,
+  and the sketch keeps them — but its heap entry clamps. Above `2^53` the
+  estimate has already lost precision inside `Count::estimate`.
+- Every storage backend is insertable, `i128` included: the bound is
+  `S::Counter: CountSketchCounter`, which `i32`, `i64` and `i128` all satisfy.
+  This is *not* true of `CMSHeap`; see its page.
 
 ## Status
 

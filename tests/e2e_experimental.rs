@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::specs::{CardinalityConfidenceSpec, Tally};
+use common::specs::{CardinalityConfidenceSpec, PrioritySampleSpec, Tally};
 use common::{FreqTruth, assert_between, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{
@@ -20,81 +20,213 @@ use std::collections::HashMap;
 
 // ---------------------------------------------------------------------- KMV
 
-/// Gaussian quantile for KMV's bands. `z = 4` is a two-sided failure
-/// probability of 6.3e-5 per check.
+/// Gaussian quantile for KMV's bands.
+///
+/// `z = 4` is a two-sided tail of 6.3e-5 **under the normal approximation**.
+/// KMV's estimator is a reciprocal Beta variate and is only asymptotically
+/// normal, so this is an asymptotic, model-based band, not an exact tail —
+/// which is why the coverage matrix files it as `asymptotic model` rather than
+/// `theorem`. See `CardinalityConfidenceSpec` for the derivation.
 const KMV_Z: f64 = 4.0;
 
-/// KMV's `(k-1)/U_(k)` estimator has relative standard error `1/sqrt(k-2)`,
-/// modelled here as `1/sqrt(k-1)`. At `k = 4096` that is 1.56%, so a `z = 4`
-/// band is **6.25%** — the previous suite claimed "4 standard errors" while
-/// asserting 4%, which is 2.56 sigma. The band is now computed rather than
-/// written down, so the two can no longer disagree.
+/// Seed-list indices used as independent hash functions.
 ///
-/// Below `k` distinct elements the sketch retains every hash it has seen and
-/// the estimate is exact; `CardinalityConfidenceSpec` switches to an equality
-/// check there rather than applying a band that would not be testing anything.
-#[test]
-fn kmv_satisfies_its_relative_standard_error_across_both_regimes() {
-    const K: usize = 4096;
-    // Straddles k = 4096: the first three are the exact regime, the rest the
-    // estimated one.
-    const CHECKPOINTS: [usize; 6] = [10, 100, 1_000, 10_000, 100_000, 1_000_000];
+/// `KMV::insert_by_hash` is public and `DefaultXxHasher::hash64_seeded(d, ..)`
+/// selects seed `d` from the library's 20-entry table, so a trial can be run
+/// under a genuinely different hash rather than under a relabelled key set. The
+/// randomness KMV's error model quantifies over *is* the hash, so this is the
+/// only construction that makes a binomial over trials legitimate.
+const KMV_HASH_SEEDS: [usize; 8] = [0, 1, 2, 3, 7, 11, 13, 17];
 
-    let spec = CardinalityConfidenceSpec::kmv(K, KMV_Z);
-    let mut tally = Tally::default();
+/// Distinct-count regimes, expressed relative to `k`, so every `k` is probed
+/// below, exactly at, and above the point where the estimator switches on.
+#[derive(Clone, Copy, Debug)]
+enum KmvRegime {
+    /// `n < k`: every hash is retained and `estimate()` returns the count.
+    BelowK(usize),
+    /// `n == k`: the buffer is full, so `estimate()` uses `(k-1)/U_(k)`.
+    AtK,
+    /// `n = multiple * k`.
+    AboveK(usize),
+}
 
-    let mut single = KMV::<asap_sketchlib::DefaultXxHasher>::new(K);
-    let mut even = KMV::<asap_sketchlib::DefaultXxHasher>::new(K);
-    let mut odd = KMV::<asap_sketchlib::DefaultXxHasher>::new(K);
-    let mut inserted = 0usize;
-
-    for &target in &CHECKPOINTS {
-        while inserted < target {
-            let d = DataInput::U64(inserted as u64);
-            single.insert(&d);
-            if inserted % 2 == 0 {
-                even.insert(&d);
-            } else {
-                odd.insert(&d);
-            }
-            inserted += 1;
+impl KmvRegime {
+    fn n(self, k: usize) -> usize {
+        match self {
+            KmvRegime::BelowK(sub) => k.saturating_sub(sub),
+            KmvRegime::AtK => k,
+            KmvRegime::AboveK(mult) => k * mult,
         }
-        spec.tally_into(&mut tally, single.estimate(), target);
-
-        // Shard merge keeps the k smallest hashes of the union, so it must
-        // land in the same band as the single pass.
-        let mut merged = even.clone();
-        let mut rhs = odd.clone();
-        merged.merge(&mut rhs);
-        spec.tally_into(&mut tally, merged.estimate(), target);
     }
+}
 
-    tally.assert_within(
+const KMV_REGIMES: [KmvRegime; 6] = [
+    KmvRegime::BelowK(1),
+    KmvRegime::BelowK(2),
+    KmvRegime::AtK,
+    KmvRegime::AboveK(2),
+    KmvRegime::AboveK(8),
+    KmvRegime::AboveK(32),
+];
+
+/// Feeds `n` distinct identities from a private namespace under hash seed `d`.
+///
+/// The namespace makes two trials that share a hash seed still see disjoint
+/// identities, so no two trials in the battery share any randomness at all.
+fn kmv_trial(k: usize, n: usize, seed_idx: usize, namespace: u64) -> KMV {
+    let mut sketch: KMV = KMV::new(k);
+    for i in 0..n as u64 {
+        let hashed =
+            <asap_sketchlib::DefaultXxHasher as asap_sketchlib::SketchHasher>::hash64_seeded(
+                seed_idx,
+                &DataInput::U64(namespace.wrapping_add(i)),
+            );
+        sketch.insert_by_hash(hashed);
+    }
+    sketch
+}
+
+/// KMV's relative standard error across every regime, over independent hash
+/// seeds.
+///
+/// # The estimator, and the two numbers that follow from it
+///
+/// `KMV::estimate` returns `(k - 1) / U_(k)`, where `U_(k)` is the largest of
+/// the `k` smallest normalized hashes. With `n` distinct uniform hashes
+/// `U_(k) ~ Beta(k, n-k+1)`, so
+///
+/// ```text
+///   E[(k-1)/U_(k)] = n                                  (unbiased for k > 1)
+///   Var           = n (n - k + 1) / (k - 2)
+///   RSE(n, k)     = sqrt( (n - k + 1) / (n (k - 2)) )  ->  1/sqrt(k - 2)
+/// ```
+///
+/// The suite previously modelled this as `1/sqrt(k - 1)` and called that
+/// "marginally conservative". It is not: `1/sqrt(k-1) < 1/sqrt(k-2)`, so it was
+/// a *stricter* band than the estimator earns. The exact finite-`n` form is
+/// used now, which is stricter still at small `n` and correct at every `n`.
+///
+/// # Trial unit
+///
+/// One `(k, hash seed, regime)` triple is one sketch, one estimate, one trial —
+/// and no two trials share a hash function or an identity. Reading rising
+/// checkpoints off one accumulating sketch, as this suite used to, produces
+/// *nested* estimates that share every retained hash.
+#[test]
+fn kmv_estimates_stay_inside_their_relative_standard_error_band_over_independent_hash_seeds() {
+    const KS: [usize; 3] = [64, 1_024, 4_096];
+
+    let mut tally = Tally::default();
+    let mut namespace = 0u64;
+    for &k in &KS {
+        let spec = CardinalityConfidenceSpec::kmv(k, KMV_Z);
+        for (s, &seed_idx) in KMV_HASH_SEEDS.iter().enumerate() {
+            for regime in KMV_REGIMES {
+                let n = regime.n(k);
+                namespace = namespace.wrapping_add(NAMESPACE_STRIDE);
+                let mut sketch = kmv_trial(k, n, seed_idx, namespace);
+                let estimate = sketch.estimate();
+                let outcome = spec.check(estimate, n);
+                tally.record(outcome.is_ok(), || {
+                    format!(
+                        "k={k} seed_idx={seed_idx} (trial {s}) {regime:?} n={n} \
+                         namespace={namespace:#x}: {}",
+                        outcome.unwrap_err()
+                    )
+                });
+            }
+        }
+    }
+    tally.assert_independent_binomial(
         "KMV / relative standard error band",
-        spec.per_check_failure(),
+        CardinalityConfidenceSpec::kmv(4_096, KMV_Z).per_check_failure(),
         &format!(
-            "k={K} sigma_rel=1/sqrt(k-1)={:.5} z={KMV_Z} tolerance={:.5}, \
-             identities 0..n, checkpoints {CHECKPOINTS:?}",
-            spec.sigma_rel(),
-            spec.tolerance()
+            "one trial = one sketch under one of {} independent hash seeds over its own \
+             identity namespace; k in {KS:?}, regimes {KMV_REGIMES:?}, z={KMV_Z}, \
+             sigma_rel = sqrt((n-k+1)/(n(k-2)))",
+            KMV_HASH_SEEDS.len()
         ),
     );
 }
 
-/// KMV over a stream with duplicates, single pass and after an even/odd shard
-/// merge, against exact `HashSet` truth rather than the insert count.
+/// Identity namespaces are spaced far enough apart that no two trials collide.
+const NAMESPACE_STRIDE: u64 = 1 << 40;
+
+/// The exact/estimated boundary is at `n < k`, **not** `n <= k`.
+///
+/// `KMV::estimate` returns the retained count verbatim only while
+/// `k_vals.len() < k`. At `n == k` the buffer is full and the estimator runs,
+/// so the answer is `(k-1)/U_(k)` over the maximum of `k` uniforms — unbiased,
+/// but with a standard deviation of `sqrt(k / (k-2))`, about one element. A
+/// spec that treated `n == k` as exact would be demanding exactness of a
+/// genuinely random number; the earlier `n <= k` form did exactly that and only
+/// passed because its checkpoint grid never landed on `k`.
 #[test]
-fn kmv_over_a_duplicate_bearing_stream_satisfies_its_error_model() {
-    const K: usize = 4096;
+fn kmv_is_exact_below_k_and_estimates_at_k() {
+    const K: usize = 512;
+    let spec = CardinalityConfidenceSpec::kmv(K, KMV_Z);
+
+    assert!(
+        spec.is_exact_regime(K - 1),
+        "n = k-1 must be the exact regime"
+    );
+    assert!(
+        !spec.is_exact_regime(K),
+        "n = k must be the estimated regime: the buffer is full, so estimate() \
+         switches to (k-1)/U_(k)"
+    );
+
+    for n in [1usize, 2, K / 2, K - 2, K - 1] {
+        let mut sketch: KMV = kmv_trial(K, n, 0, NAMESPACE_STRIDE * 900 + n as u64 * 4096);
+        assert_eq!(
+            sketch.estimate(),
+            n as f64,
+            "n={n} < k={K}: KMV retains every hash it has seen, so the count is exact"
+        );
+    }
+
+    // At n == k the estimator runs. Averaged over independent hash seeds it is
+    // unbiased; the point of this assertion is that the answer is *not* pinned
+    // to k, so the exact-regime branch must not claim it.
+    let mut estimates = Vec::new();
+    for (i, &seed_idx) in KMV_HASH_SEEDS.iter().enumerate() {
+        let mut sketch = kmv_trial(K, K, seed_idx, NAMESPACE_STRIDE * (1_000 + i as u64));
+        let est = sketch.estimate();
+        assert!(
+            spec.check(est, K).is_ok(),
+            "n = k = {K} under seed {seed_idx}: {}",
+            spec.check(est, K).unwrap_err()
+        );
+        estimates.push(est);
+    }
+    assert!(
+        estimates.iter().any(|e| *e != K as f64),
+        "n = k = {K}: the estimator must be running here, but every seed returned \
+         exactly {K}, which would mean the exact-regime branch is still active. \
+         estimates: {estimates:?}"
+    );
+}
+
+/// Duplicates are inert and a shard merge is **exact**, not merely in-band.
+///
+/// KMV retains the `k` smallest hashes of everything it has seen. Any hash
+/// among the global `k` smallest is also among the `k` smallest of whichever
+/// shard produced it, so merging the shards recovers exactly the single pass's
+/// retained set — the estimate is the *same number*, not a second draw. Scoring
+/// it as another confidence-band check, which this suite used to do, counted
+/// one experiment twice.
+#[test]
+fn kmv_duplicates_are_inert_and_a_shard_merge_reproduces_the_single_pass_exactly() {
+    const K: usize = 4_096;
     const STREAM_SEED: u64 = 5001;
 
     let spec = CardinalityConfidenceSpec::kmv(K, KMV_Z);
     let stream = uniform_u64(60_000, 500_000, STREAM_SEED);
     let truth: std::collections::HashSet<u64> = stream.iter().copied().collect();
 
-    let mut full = KMV::<asap_sketchlib::DefaultXxHasher>::new(K);
-    let mut a = KMV::<asap_sketchlib::DefaultXxHasher>::new(K);
-    let mut b = KMV::<asap_sketchlib::DefaultXxHasher>::new(K);
+    let mut full: KMV = KMV::new(K);
+    let mut a: KMV = KMV::new(K);
+    let mut b: KMV = KMV::new(K);
     for (i, k) in stream.iter().enumerate() {
         full.insert(&DataInput::U64(*k));
         if i % 2 == 0 {
@@ -103,61 +235,288 @@ fn kmv_over_a_duplicate_bearing_stream_satisfies_its_error_model() {
             b.insert(&DataInput::U64(*k));
         }
     }
-    a.merge(&mut b);
 
-    let mut tally = Tally::default();
-    spec.tally_into(&mut tally, full.estimate(), truth.len());
-    spec.tally_into(&mut tally, a.estimate(), truth.len());
-    tally.assert_within(
-        "KMV over a duplicate-bearing stream",
-        spec.per_check_failure(),
-        &format!(
-            "k={K} stream_seed={STREAM_SEED} n=60000 over domain 500000, \
-             distinct={} tolerance={:.5}",
-            truth.len(),
-            spec.tolerance()
-        ),
+    let single = full.estimate();
+    assert!(
+        spec.check(single, truth.len()).is_ok(),
+        "single pass over a duplicate-bearing stream: {}",
+        spec.check(single, truth.len()).unwrap_err()
+    );
+
+    // Replaying the whole stream must not move the estimate at all: a hash
+    // already retained is skipped, and one that was not retained cannot
+    // displace anything smaller.
+    for k in &stream {
+        full.insert(&DataInput::U64(*k));
+    }
+    assert_eq!(
+        full.estimate(),
+        single,
+        "replaying a stream KMV has already seen must leave the estimate untouched \
+         (k={K}, stream_seed={STREAM_SEED}, distinct={})",
+        truth.len()
+    );
+
+    let mut merged = a.clone();
+    let mut rhs = b.clone();
+    merged.merge(&mut rhs);
+    assert_eq!(
+        merged.estimate(),
+        single,
+        "an even/odd shard merge must reproduce the single pass's retained set exactly \
+         (k={K}, stream_seed={STREAM_SEED}, distinct={})",
+        truth.len()
     );
 }
 
 // ------------------------------------------------------------ UniformSampling
 
+/// `UniformSampling` is **priority (bottom-k) sampling**, and that determines
+/// which of its properties are exact and which are statistical.
+///
+/// Each update draws an independent uniform 64-bit priority, the entry is
+/// inserted into a priority-ordered list, and the list is truncated to
+/// `ceil(total_seen * rate)`. So:
+///
+/// - the retained size is `ceil(n * rate)` **exactly** — it is computed, never
+///   sampled, and the old `assert_between(len, 850.0, 1150.0)` band was
+///   asserting slack around a number that has none;
+/// - because the priorities are i.i.d. and independent of the values, the
+///   retained set is a uniform sample **without replacement** of that size from
+///   the `n` values seen. That is where the statistics live.
+///
+/// This covers the exact half. The distributional half is the next test.
 #[test]
-fn uniform_sampling_rate_and_merge() {
-    let rate = 0.1f64;
-    let mut us = UniformSampling::with_seed(rate, 42);
-    let stream: Vec<f64> = uniform_u64(10_000, u32::MAX as u64, 5002)
+fn uniform_sampling_retention_is_exact_at_every_rate_and_stream_size() {
+    const RATES: [f64; 5] = [1.0, 0.5, 0.25, 0.1, 0.01];
+    const SIZES: [usize; 6] = [0, 1, 7, 1_000, 10_000, 50_000];
+
+    for &rate in &RATES {
+        let spec = PrioritySampleSpec::new(rate, 4.0);
+        for (i, &n) in SIZES.iter().enumerate() {
+            let seed = 0x5A91_0100 + i as u64;
+            let mut us = UniformSampling::with_seed(rate, seed);
+            let stream: Vec<f64> = uniform_u64(n, u32::MAX as u64, 5002 + i as u64)
+                .into_iter()
+                .map(|v| v as f64)
+                .collect();
+            for v in &stream {
+                us.update(*v);
+            }
+
+            assert_eq!(
+                us.total_seen(),
+                n as u64,
+                "rate={rate} n={n}: total_seen counts every input"
+            );
+            assert_eq!(
+                us.len(),
+                spec.retained(n as u64),
+                "rate={rate} n={n}: the retained size is ceil(n*rate) exactly, \
+                 not a band (seed={seed:#x})"
+            );
+            assert!(
+                us.len() <= n,
+                "rate={rate} n={n}: cannot retain more than was seen"
+            );
+
+            // Every retained value came from the stream, and no value is
+            // retained more often than it was fed: the sampler stores entries,
+            // it does not synthesise or duplicate them.
+            let mut budget: HashMap<u64, usize> = HashMap::new();
+            for v in &stream {
+                *budget.entry(v.to_bits()).or_default() += 1;
+            }
+            for sampled in us.samples() {
+                let slot = budget.get_mut(&sampled.to_bits()).unwrap_or_else(|| {
+                    panic!("rate={rate} n={n}: sample {sampled} was never fed in")
+                });
+                assert!(
+                    *slot > 0,
+                    "rate={rate} n={n}: sample {sampled} retained more times than it \
+                     was fed"
+                );
+                *slot -= 1;
+            }
+
+            // Full sampling keeps everything, in the sense of a multiset.
+            if rate >= 1.0 {
+                assert_eq!(
+                    us.len(),
+                    n,
+                    "rate=1.0 n={n}: full sampling must retain the whole stream"
+                );
+            }
+        }
+    }
+}
+
+/// The distributional half: the retained set really is a uniform sample without
+/// replacement, so the sample mean tracks the population mean at the variance
+/// that fact predicts.
+///
+/// ```text
+///   Var[mean_hat] = (sigma_N^2 / m) * (N - m) / (N - 1)
+/// ```
+///
+/// with `sigma_N^2` the population variance and the trailing factor the
+/// finite-population correction. The band is `z` standard deviations of that,
+/// so it is derived from the sampler's own algorithm and the stream's own
+/// spread — not a percentage.
+///
+/// # Trial unit
+///
+/// One seed is one draw of the entire priority sequence, so **one sampler is
+/// one trial**. Several statistics off one sampler are not independent, and
+/// neither are two rates run from the same seed. The binomial therefore runs
+/// over seeds, one outcome each.
+#[test]
+fn uniform_sampling_is_a_uniform_sample_without_replacement() {
+    const RATES: [f64; 3] = [0.5, 0.1, 0.01];
+    const N: usize = 20_000;
+    const Z: f64 = 4.0;
+    const TRIALS: usize = 24;
+
+    // A deliberately skewed population: a uniform sample of it still has the
+    // population mean, but a sampler biased toward early or late arrivals would
+    // not, because the value is correlated with arrival order here.
+    let stream: Vec<f64> = (0..N).map(|i| (i as f64).powf(1.7)).collect();
+    let population = stream.len();
+    let mean: f64 = stream.iter().sum::<f64>() / population as f64;
+    let variance: f64 =
+        stream.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / population as f64;
+
+    for &rate in &RATES {
+        let spec = PrioritySampleSpec::new(rate, Z);
+        let m = spec.retained(population as u64);
+        let sigma = spec.mean_sigma(population, m, variance);
+        let mut tally = Tally::default();
+        for t in 0..TRIALS {
+            let seed = 0x5A91_0200 + t as u64;
+            let mut us = UniformSampling::with_seed(rate, seed);
+            for v in &stream {
+                us.update(*v);
+            }
+            let samples = us.samples();
+            assert_eq!(
+                samples.len(),
+                m,
+                "rate={rate} seed={seed:#x}: retained size"
+            );
+            let sample_mean: f64 = samples.iter().sum::<f64>() / m as f64;
+            let deviation = (sample_mean - mean).abs();
+            tally.record(deviation <= Z * sigma, || {
+                format!(
+                    "seed={seed:#x}: sample mean {sample_mean:.3} vs population mean \
+                     {mean:.3}, |deviation| {deviation:.3} > z*sigma = {Z}*{sigma:.3} = \
+                     {:.3}",
+                    Z * sigma
+                )
+            });
+        }
+        tally.assert_independent_binomial(
+            &format!("UniformSampling rate={rate} / sample mean under SRSWOR"),
+            spec.per_check_failure(),
+            &format!(
+                "one trial = one seed; population N={population} (values i^1.7, so value \
+                 and arrival order are correlated), sample m={m}, sigma_N^2={variance:.4e}, \
+                 sigma(mean)={sigma:.4}, seeds 0x5A910200..",
+            ),
+        );
+    }
+}
+
+/// Merging two samplers keeps the combined budget and the union of the two
+/// sample pools, truncated by priority.
+///
+/// Every part of this is exact: the merged size is `ceil((n1 + n2) * rate)`
+/// capped by how many entries the two pools actually hold, the totals add, and
+/// every survivor came from one of the two inputs. Rate mismatch is rejected.
+#[test]
+fn uniform_sampling_merge_keeps_the_combined_budget_exactly() {
+    const RATES: [f64; 4] = [1.0, 0.5, 0.1, 0.01];
+
+    for &rate in &RATES {
+        let spec = PrioritySampleSpec::new(rate, 4.0);
+        let mut left = UniformSampling::with_seed(rate, 42);
+        let mut right = UniformSampling::with_seed(rate, 43);
+
+        let left_stream: Vec<f64> = uniform_u64(10_000, u32::MAX as u64, 5002)
+            .into_iter()
+            .map(|v| v as f64)
+            .collect();
+        let right_stream: Vec<f64> = uniform_u64(5_000, u32::MAX as u64, 5003)
+            .into_iter()
+            .map(|v| v as f64 + 0.5)
+            .collect();
+        for v in &left_stream {
+            left.update(*v);
+        }
+        for v in &right_stream {
+            right.update(*v);
+        }
+
+        let pooled = left.len() + right.len();
+        left.merge(&right).expect("same-rate merge");
+
+        assert_eq!(
+            left.total_seen(),
+            15_000,
+            "rate={rate}: merge must sum the totals"
+        );
+        assert_eq!(
+            left.len(),
+            spec.retained(15_000).min(pooled),
+            "rate={rate}: the merged sample is the combined budget ceil(n*rate), capped \
+             by the {pooled} entries the two pools actually held"
+        );
+
+        let allowed: std::collections::HashSet<u64> = left_stream
+            .iter()
+            .chain(right_stream.iter())
+            .map(|v| v.to_bits())
+            .collect();
+        for sampled in left.samples() {
+            assert!(
+                allowed.contains(&sampled.to_bits()),
+                "rate={rate}: merged sample {sampled} came from neither input"
+            );
+        }
+
+        let other_rate = if rate == 1.0 { 0.5 } else { 1.0 };
+        let mismatched = UniformSampling::with_seed(other_rate, 44);
+        assert!(
+            left.merge(&mismatched).is_err(),
+            "rate={rate}: merging a rate-{other_rate} sampler must be rejected"
+        );
+    }
+}
+
+/// Replaying the same stream from the same seed must reproduce the sample
+/// exactly, and a different seed must not: the priorities are the sampler's
+/// whole randomness, and they are seeded.
+#[test]
+fn uniform_sampling_is_reproducible_from_its_seed() {
+    const RATE: f64 = 0.1;
+    let stream: Vec<f64> = uniform_u64(5_000, u32::MAX as u64, 5004)
         .into_iter()
         .map(|v| v as f64)
         .collect();
-    for v in &stream {
-        us.update(*v);
-    }
 
-    assert_eq!(us.total_seen(), 10_000, "total_seen must count every input");
-    // target_size uses ceil, so retained is around n*rate within Poisson slack.
-    assert_between(us.len() as f64, 850.0, 1150.0, "retained sample count");
-    for s in us.samples().iter() {
-        assert!(
-            stream.contains(s),
-            "sample {s} not drawn from the input stream"
-        );
-    }
+    let run = |seed: u64| {
+        let mut us = UniformSampling::with_seed(RATE, seed);
+        for v in &stream {
+            us.update(*v);
+        }
+        us.samples()
+    };
 
-    // Merging two same-rate sketches unions the samples and sums totals.
-    let mut other = UniformSampling::with_seed(rate, 43);
-    let other_stream: Vec<f64> = uniform_u64(5_000, u32::MAX as u64, 5003)
-        .into_iter()
-        .map(|v| v as f64 + 0.5)
-        .collect();
-    for v in &other_stream {
-        other.update(*v);
-    }
-    us.merge(&other).expect("same-rate merge");
-    assert_eq!(us.total_seen(), 15_000, "merge must sum totals");
-    assert!(
-        us.len() <= 1500 + 160,
-        "retained samples bounded by combined budget"
+    assert_eq!(run(7), run(7), "the same seed must give the same sample");
+    assert_ne!(
+        run(7),
+        run(8),
+        "different seeds must draw different priorities, or the sample is not random \
+         at all"
     );
 }
 

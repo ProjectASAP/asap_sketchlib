@@ -47,7 +47,7 @@ pub use numerical::NumericalValue;
 pub use precompute_hash::PRECOMPUTED_HASH;
 pub use precompute_sample::PRECOMPUTED_SAMPLE;
 pub use precompute_sample2::PRECOMPUTED_SAMPLE_RATE_1PERCENT;
-pub use structure_utils::{Nitro, compute_median_inline_f64};
+pub use structure_utils::{Nitro, NitroContext, compute_median_inline_f64};
 pub use structures::{
     BitMatrix, CommonHeap, CommonHeapOrder, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128,
     FastPathHasher, FixedMatrix, HllBucketList, HllBucketListP12, HllBucketListP14,

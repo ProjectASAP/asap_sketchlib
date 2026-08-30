@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Count, CountMin, DataInput, DefaultXxHasher, FastPath, FastPathHasher, MatrixFastHash,
-    PRECOMPUTED_SAMPLE_RATE_1PERCENT, Vector2D,
+    PRECOMPUTED_SAMPLE, Vector2D,
 };
 
 /// Trait for sketch backends that support Nitro row updates.
@@ -128,13 +128,21 @@ pub struct NitroBatch<S: NitroTarget> {
     inv_ln_one_minus_p: f64,
     /// Weight applied to each sampled update.
     pub delta: u64,
+    /// Live sampling RNG for [`NitroBatch::insert`]. Not serialized: a decoded
+    /// batch restarts it from the OS, so an `insert` stream does not resume
+    /// across a round trip. The cached path's state (`idx`, `to_skip`) is
+    /// serialized and does resume.
     #[serde(skip)]
     #[serde(default = "new_small_rng")]
     generator: SmallRng,
     idx: usize,
+    /// Unused; retained so the serialized field order is unchanged.
     mask: usize,
     sk: S,
 }
+
+/// Length of the shared `ln(1 - u)` skip table.
+const SKIP_TABLE_LEN: usize = crate::common::precompute_sample::PRECOMPUTED_SAMPLE_LEN;
 
 fn new_small_rng() -> SmallRng {
     let mut seed_rng = rng();
@@ -150,7 +158,7 @@ impl Default for NitroBatch<Vector2D<u32>> {
             delta: 0,
             generator: new_small_rng(),
             idx: 0,
-            mask: 0x10000,
+            mask: SKIP_TABLE_LEN - 1,
             sk: Vector2D::init(5, 2048),
         };
         n.sk.fill(0);
@@ -209,7 +217,13 @@ impl<S: NitroTarget> NitroBatch<S> {
     /// deterministic function of the input, which is what lets an accuracy
     /// bound be asserted reproducibly instead of re-rolled on every run.
     pub fn with_target_and_seed(rate: f64, sk: S, seed: u64) -> Self {
-        Self::build(rate, sk, SmallRng::seed_from_u64(seed))
+        let mut this = Self::build(rate, sk, SmallRng::seed_from_u64(seed));
+        // `insert` draws its skips live from `generator`; `insert_cached_step`
+        // reads the shared table, so the seed has to move that cursor too. The
+        // table is a fixed stream of `ln(1 - u)` draws, so two far-apart
+        // offsets read disjoint stretches of it.
+        this.idx = (seed % SKIP_TABLE_LEN as u64) as usize;
+        this
     }
 
     fn build(rate: f64, sk: S, generator: SmallRng) -> Self {
@@ -229,9 +243,11 @@ impl<S: NitroTarget> NitroBatch<S> {
             generator,
             delta: 0,
             idx: 0,
-            mask: 0x10000,
+            mask: SKIP_TABLE_LEN - 1,
             sk,
         };
+        // `delta` is the integer part of the per-update weight; the fractional
+        // remainder is paid per admitted update by `admitted_weight`.
         nitro.delta = nitro.scaled_increment(1);
         nitro
     }
@@ -250,12 +266,42 @@ impl<S: NitroTarget> NitroBatch<S> {
                 break r;
             }
         };
-        // Inverse-CDF draw of Geometric(p) on {0, 1, ...}: floor of an
-        // Exp(1) variate. ceil() here would add +1 to every skip distance,
-        // halving-ish the effective sampling rate (E[skip] = (1-p)/p only
-        // under floor); the caller's `+1` supplies the sampled item itself.
+        // Inverse-CDF draw of Geometric(p) on {0, 1, ...}. `floor`, not
+        // `ceil`: the caller's `+1` stride supplies the sampled item itself,
+        // and `E[skip] = (1-p)/p` holds only under `floor`.
         self.to_skip = ((1.0 - k).ln() * self.inv_ln_one_minus_p).floor() as usize;
-        self.idx = (self.idx + 1) & self.mask;
+        self.next_cursor();
+    }
+
+    /// The cursor actually used to index the skip table, taken modulo its
+    /// length so a value decoded from an old payload cannot index out of
+    /// bounds.
+    #[inline(always)]
+    fn cursor(&self) -> usize {
+        self.idx % SKIP_TABLE_LEN
+    }
+
+    /// Advances the cursor by one, wrapping at the table's real length.
+    #[inline(always)]
+    fn next_cursor(&mut self) {
+        self.idx = (self.cursor() + 1) % SKIP_TABLE_LEN;
+    }
+
+    /// The next skip distance read from the precomputed table, **scaled to the
+    /// configured rate**.
+    ///
+    /// The table holds `ln(1 - u)` for a fixed stream of uniforms; multiplying
+    /// by `inv_ln_one_minus_p = 1 / ln(1 - p)` makes each entry an inverse-CDF
+    /// draw of `Geometric(p)`.
+    #[inline(always)]
+    fn cached_geometric(&mut self) {
+        if self.is_full_sampling() {
+            self.to_skip = 0;
+            return;
+        }
+        self.to_skip =
+            (PRECOMPUTED_SAMPLE[self.cursor()] * self.inv_ln_one_minus_p).floor() as usize;
+        self.next_cursor();
     }
 
     #[inline(always)]
@@ -278,13 +324,59 @@ impl<S: NitroTarget> NitroBatch<S> {
 
     // #[inline]
     #[inline(always)]
-    /// Scales an update weight by the sampling rate.
+    /// The integer part of the weight one admitted update carries.
+    ///
+    /// The exact weight is `weight / p`, which is only an integer when `1/p`
+    /// is. See [`NitroBatch::admitted_weight`] for how the remainder is paid.
     pub fn scaled_increment(&self, weight: u64) -> u64 {
         if self.is_full_sampling() {
             weight
         } else {
-            ((weight as f64) / self.sampling_rate).ceil() as u64
+            ((weight as f64) / self.sampling_rate).floor() as u64
         }
+    }
+
+    /// The weight to write for one admitted update, by **stochastic rounding**
+    /// of `weight / p`.
+    ///
+    /// Nitro admits each update with probability `p` and compensates by
+    /// writing `weight / p`. Counters are integers, so that value has to be
+    /// rounded, and rounding it the same way every time biases the estimator
+    /// by the rounding error at every rate whose reciprocal is not an integer
+    /// (`ceil` at `p = 0.3` writes 4, so `E[est] = 1.2 f`). With
+    /// `q = floor(weight/p)` and `r = weight/p - q`,
+    ///
+    /// ```text
+    ///   W = q + Bernoulli(r)      E[W] = weight / p       Var[W] = r (1 - r)
+    /// ```
+    ///
+    /// so `E[est] = weight * f` for **every** rate, at the cost of
+    /// `r(1-r) <= 1/4` extra variance per admitted update. The draw is per
+    /// *update*, never per key, which is what keeps the estimator unbiased for
+    /// each key separately.
+    ///
+    /// The rounding draw and the geometric skip draw are consecutive outputs
+    /// of the same seeded `SmallRng`. `Var[est] = f((1-p)/p + p r(1-r))` needs
+    /// the weights to be independent of the admission indicators, which holds
+    /// under the usual model that distinct generator outputs are independent
+    /// uniforms — the same assumption the geometric schedule already makes.
+    ///
+    /// When `frac == 0` **no draw is consumed**, so at a reciprocal-integer
+    /// rate the generator's stream — and therefore the admitted subset — is
+    /// identical to a build without stochastic rounding.
+    #[inline(always)]
+    pub fn admitted_weight(&mut self, weight: u64) -> u64 {
+        if self.is_full_sampling() {
+            return weight;
+        }
+        let exact = (weight as f64) / self.sampling_rate;
+        let floor = exact.floor();
+        let frac = exact - floor;
+        if frac <= 0.0 {
+            return floor as u64;
+        }
+        let u = self.generator.random::<f64>();
+        floor as u64 + u64::from(u < frac)
     }
 
     // #[inline]
@@ -294,13 +386,17 @@ impl<S: NitroTarget> NitroBatch<S> {
     }
 
     #[inline(always)]
-    /// Returns the current cached Nitro sampling state.
+    /// Legacy cached-path snapshot: `(cursor, 1/ln(1-p), to_skip, unused)`.
+    ///
+    /// This covers the **cached** schedule only. It does not carry the live
+    /// `SmallRng` that [`NitroBatch::insert`] draws from, nor the stochastic
+    /// rounding draws that share it, so it cannot resume an `insert` stream.
     pub fn get_ctx(&self) -> (usize, f64, usize, usize) {
         (self.idx, self.inv_ln_one_minus_p, self.to_skip, self.mask)
     }
 
     #[inline(always)]
-    /// Restores the cached Nitro sampling state.
+    /// Restores the cached-path state captured by [`NitroBatch::get_ctx`].
     pub fn commit_ctx(&mut self, idx: usize, to_skip: usize) {
         self.idx = idx;
         self.to_skip = to_skip;
@@ -312,7 +408,8 @@ impl<S: NitroTarget> NitroBatch<S> {
         let mut position = self.to_skip;
         while position < data.len() {
             let key = DataInput::I64(data[position]);
-            self.sk.update_sample(&key, self.delta);
+            let weight = self.admitted_weight(1);
+            self.sk.update_sample(&key, weight);
             self.draw_geometric();
             position += self.to_skip + 1;
         }
@@ -320,14 +417,13 @@ impl<S: NitroTarget> NitroBatch<S> {
 
     /// Inserts a batch using the precomputed skip table.
     pub fn insert_cached_step(&mut self, data: &[i64]) {
-        self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].floor() as usize;
-        self.idx = (self.idx + 1) & self.mask;
+        self.cached_geometric();
         let mut position = self.to_skip;
         while position < data.len() {
             let key = DataInput::I64(data[position]);
-            self.sk.update_sample(&key, self.delta);
-            self.to_skip = PRECOMPUTED_SAMPLE_RATE_1PERCENT[self.idx].floor() as usize;
-            self.idx = (self.idx + 1) & self.mask;
+            let weight = self.admitted_weight(1);
+            self.sk.update_sample(&key, weight);
+            self.cached_geometric();
             position += self.to_skip + 1;
         }
     }
@@ -361,6 +457,58 @@ mod tests {
     /// Fixed sampling-RNG seed. `with_target` seeds from the OS, so an
     /// accuracy assertion built on it would be re-rolled every run.
     const NITRO_TEST_SEED: u64 = 0x0117_5EED;
+
+    /// The cached path walks the shared skip table and wraps at its length.
+    ///
+    /// The cursor is private, so this is a unit test rather than an E2E one.
+    /// `insert_cached_step` reading one entry per admission is what makes the
+    /// seeded offset meaningful: a cursor that never advanced would replay one
+    /// skip distance forever, and every seed would admit the same subset.
+    #[test]
+    fn the_cached_path_advances_the_cursor_once_per_admission_and_wraps() {
+        const RATE: f64 = 0.1;
+        let data = vec![7i64; 10_000];
+
+        let mut nitro = NitroBatch::with_target_and_seed(
+            RATE,
+            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 1024),
+            0,
+        );
+        assert_eq!(nitro.cursor(), 0, "seed 0 starts at entry 0");
+        nitro.insert_cached_step(&data);
+        // One table entry per drawn skip: the leading draw plus one per
+        // admission, so roughly `n * p`.
+        let advanced = nitro.cursor();
+        let admissions = (data.len() as f64 * RATE) as usize;
+        assert!(
+            advanced >= admissions / 2 && advanced <= 2 * admissions,
+            "the cursor advanced {advanced} entries for about {admissions} admissions"
+        );
+
+        // Starting near the end must wrap rather than run out of table.
+        let start = SKIP_TABLE_LEN - 8;
+        let mut wrapping = NitroBatch::with_target_and_seed(
+            RATE,
+            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 1024),
+            start as u64,
+        );
+        assert_eq!(wrapping.cursor(), start);
+        wrapping.insert_cached_step(&data);
+        assert!(
+            wrapping.cursor() < start,
+            "the cursor must wrap at the table length"
+        );
+
+        // A cursor decoded from an older payload can be past the table.
+        let mut hostile = NitroBatch::with_target_and_seed(
+            RATE,
+            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 1024),
+            1,
+        );
+        hostile.commit_ctx(usize::MAX, 0);
+        assert!(hostile.cursor() < SKIP_TABLE_LEN);
+        hostile.insert_cached_step(&data); // must not panic
+    }
 
     #[test]
     fn nitro_batch_countmin_error_bound_zipf() {

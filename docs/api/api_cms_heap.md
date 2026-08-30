@@ -91,6 +91,15 @@ assert!(sk.estimate(&DataInput::Str("flow")) >= 1);
 
 - Heap can be cleared independently of sketch counters.
 - Merge requires matching dimensions and compatible type parameters.
+- **Eight built-in instances are constructible but inert.** `insert`,
+  `insert_many`, `estimate` and `merge` live in an impl bounded on
+  `S::Counter: Copy + Ord + From<i32> + Into<i64> + AddAssign`. `i128` has no
+  `Into<i64>` and `f64` has neither `Ord` nor `Into<i64>`, so
+  `CMSHeap<Vector2D<i128>>`, `CMSHeap<Vector2D<f64>>`,
+  `CMSHeap<QuickMatrixI128>` and `CMSHeap<DefaultMatrixI128>` — on both hashing
+  paths — allocate a sketch and a heap and can then do nothing but report their
+  dimensions. Use `CSHeap` when you need a 128-bit counter beside a top-k heap;
+  it supports every backend.
 
 ## Status
 

@@ -87,6 +87,24 @@ let p50 = dds.get_value_at_quantile(0.5).unwrap();
 assert!(p50 >= 1.0);
 ```
 
+## Quantile convention
+
+`get_value_at_quantile(q)` uses the **nearest-rank** convention
+`rank = ceil(q * n)` (1-based), so it answers the order statistic
+`sorted[ceil(q*n) - 1]`. `q <= 0` and `q >= 1` short-circuit to the exactly
+retained minimum and maximum rather than to a bucket representative, so the
+endpoints carry zero error.
+
+This differs from the portable wire twin
+`message_pack_format::portable::ddsketch::DdSketch::quantile`, which uses the
+lower-quantile convention `floor(q * (n - 1))` of the DDSketch paper and of the
+Go reference implementation, and which retains no min/max scalars — its
+endpoints are ordinary bucket representatives, accurate to `alpha` like any
+other rank. The two agree at most `q` and diverge at small `n` or ragged `q`
+(at `n = 3, q = 0.4` this type answers `sorted[1]` and the portable one
+`sorted[0]`). Both conventions are deliberate and are pinned by
+`ddsketch_core_and_portable_answer_different_order_statistics`.
+
 ## Caveats
 
 - Inputs must be positive values.

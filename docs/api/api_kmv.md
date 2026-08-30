@@ -64,6 +64,25 @@ kmv.insert(&DataInput::U64(1));
 let _ = kmv.estimate();
 ```
 
+## Accuracy
+
+`estimate` returns the retained count verbatim while fewer than `k` distinct
+hashes have been seen — exact, not approximate. From `k` distinct elements
+onward it returns `(k - 1) / U_(k)`, where `U_(k)` is the largest of the `k`
+smallest normalized hashes. With `n` distinct uniform hashes
+`U_(k) ~ Beta(k, n-k+1)`, so for `k > 2`:
+
+```text
+  E[(k-1)/U_(k)] = n                                 (unbiased)
+  Var            = n (n - k + 1) / (k - 2)
+  RSE(n, k)      = sqrt( (n - k + 1) / (n (k - 2)) )  ->  1 / sqrt(k - 2)
+```
+
+The switch happens at `n == k`, not after it: at exactly `k` distinct elements
+the estimator is already running, and its standard deviation there is about one
+element. The default `k = 4096` gives an asymptotic relative standard error of
+about 1.56%.
+
 ## Caveats
 
 - Not currently part of primary framework wrappers.

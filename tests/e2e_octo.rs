@@ -4403,9 +4403,19 @@ mod top_k_plans {
             );
 
             // Count-Min's own bound, widened only by the promotion residual.
+            //
+            // Two acceptance rules, because the two halves are different kinds
+            // of statement. The simultaneous bound is union-bounded over every
+            // probed key, so it needs no independence between them and
+            // tolerates zero violations; the marginal `e*(N-f)/w` is pinned as
+            // a violation *rate* against the theorem's own `e^-d`, because the
+            // keys of one sketch share one hash and are a single realisation
+            // rather than a battery of trials.
             let spec = CountMinSpec::new(ROWS, COLS);
             let total = truth.total() as f64;
-            let mut bound = Tally::default();
+            let distinct = truth.distinct();
+            let mut simultaneous = Tally::default();
+            let mut marginal = Tally::default();
             let mut one_sided = Tally::default();
             for (k, c) in truth.pairs() {
                 let est = parent.sketch.estimate(&DataInput::U64(k as u64)) as f64;
@@ -4415,18 +4425,33 @@ mod top_k_plans {
                 one_sided.record(est >= f - ceiling, || {
                     format!("key {k}: true {f}, octo {est}, deficit beyond k*tau = {ceiling}")
                 });
-                let hi = f + spec.excess_bound(total, f);
-                bound.record(est <= hi, || {
-                    format!("key {k}: true {f}, octo {est} above e*(N-f)/w ceiling {hi:.1}")
+                let hi = f + spec.simultaneous_bound(
+                    total,
+                    f,
+                    distinct,
+                    common::specs::SIMULTANEOUS_LEVEL,
+                );
+                simultaneous.record(est <= hi, || {
+                    format!("key {k}: true {f}, octo {est} above simultaneous ceiling {hi:.1}")
+                });
+                let marginal_hi = f + spec.marginal_bound(total, f);
+                marginal.record(est <= marginal_hi, || {
+                    format!(
+                        "key {k}: true {f}, octo {est} above e*(N-f)/w ceiling {marginal_hi:.1}"
+                    )
                 });
             }
             one_sided.assert_none(
                 &format!("CmTopK one-sided modulo k*tau ({route:?})"),
                 &context,
             );
-            bound.assert_within(
-                &format!("CmTopK additive bound ({route:?})"),
-                spec.per_key_failure(),
+            simultaneous.assert_none(
+                &format!("CmTopK simultaneous additive bound ({route:?})"),
+                &context,
+            );
+            marginal.assert_rate_at_most(
+                &format!("CmTopK marginal additive bound ({route:?})"),
+                spec.marginal_failure(),
                 &context,
             );
         }
@@ -4469,24 +4494,41 @@ mod top_k_plans {
             );
 
             // The L2 bound with the promotion residual added; nothing else.
+            // Simultaneous half is union-bounded over the key set and tolerates
+            // nothing; marginal half is a rate pin at kappa = 3.
             let f2 = truth.f2();
-            let mut bound = Tally::default();
+            let kappa =
+                spec.simultaneous_kappa(truth.distinct(), common::specs::SIMULTANEOUS_LEVEL);
+            let mut simultaneous = Tally::default();
+            let mut marginal = Tally::default();
             for (k, c) in truth.pairs() {
                 let f = c as f64;
                 let est = parent.sketch.estimate(&DataInput::U64(k as u64));
                 let residual_l2 = (f2 - f * f).max(0.0).sqrt();
-                let allowed = spec.error_scale(residual_l2) + ceiling;
-                bound.record((est - f).abs() <= allowed, || {
+                let simul = spec.scale_at(kappa, residual_l2) + ceiling;
+                simultaneous.record((est - f).abs() <= simul, || {
+                    format!(
+                        "key {k}: true {f}, octo {est}, |error| {:.1} above the simultaneous \
+                         sqrt(kappa/w)*||f_-i||_2 + k*tau = {simul:.1} (kappa={kappa:.1})",
+                        (est - f).abs()
+                    )
+                });
+                let marg = spec.marginal_scale(residual_l2) + ceiling;
+                marginal.record((est - f).abs() <= marg, || {
                     format!(
                         "key {k}: true {f}, octo {est}, |error| {:.1} above \
-                         sqrt(kappa/w)*||f_-i||_2 + k*tau = {allowed:.1}",
+                         sqrt(3/w)*||f_-i||_2 + k*tau = {marg:.1}",
                         (est - f).abs()
                     )
                 });
             }
-            bound.assert_within(
-                &format!("CountTopK L2 bound + promotion residual ({route:?})"),
-                spec.per_key_failure(),
+            simultaneous.assert_none(
+                &format!("CountTopK simultaneous L2 bound + promotion residual ({route:?})"),
+                &context,
+            );
+            marginal.assert_rate_at_most(
+                &format!("CountTopK marginal L2 bound + promotion residual ({route:?})"),
+                spec.marginal_failure(),
                 &context,
             );
         }
@@ -4670,5 +4712,449 @@ mod top_k_plans {
             1,
             "the promoted key must now hold a heap slot"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Partition accuracy: the five plans that were only ever driven under HashByKey
+// ---------------------------------------------------------------------------
+
+/// Accuracy — not just mass conservation — for the HLL, DDSketch, CocoSketch,
+/// Elastic and UnivMon Octo plans under **both** partitions.
+///
+/// The rest of this file drives those five plans under `HashByKey` only, and
+/// checks invariants that are partition-independent by construction (mass
+/// conservation, flush completeness, delta well-formedness). Those invariants
+/// would hold on an implementation that routed every key to worker 0, so on
+/// their own they say nothing about whether `RoundRobin` is *accurate*.
+///
+/// The difference the partition makes is real and family-specific:
+///
+/// - under `HashByKey` a flow's whole count lands on one worker, so it crosses
+///   the promotion threshold `floor(f / tau)` times and at most `tau - 1` of its
+///   mass is ever in flight;
+/// - under `RoundRobin` the same flow is split across all `k` workers, so up to
+///   `k * (tau - 1)` of its mass can be held back at once, and any structure
+///   that evicts per worker (CocoSketch, Elastic) sees `k` independent eviction
+///   contests instead of one.
+///
+/// So each test below compares the aggregator against **exact truth** under the
+/// family's own error metric, with the residual the route actually permits, and
+/// against a single-threaded reference where the protocol promises equality.
+mod partition_accuracy {
+    use super::*;
+    use asap_sketchlib::{
+        Coco, CocoDelta, CocoOctoPlan, DdOctoPlan, Elastic, ElasticDelta, ElasticOctoPlan,
+        HllOctoPlan, UNIVMON_PROMASK, flow_key_string,
+    };
+    use common::specs::{CardinalityConfidenceSpec, Tally};
+
+    const WORKERS: usize = 4;
+    const N: usize = 60_000;
+    const DOMAIN: usize = 1_024;
+    const STREAM_SEED: u64 = 0x0C70_ACC0;
+
+    fn routes() -> [Route; 2] {
+        [Route::HashByKey, Route::RoundRobin]
+    }
+
+    fn stream() -> Vec<u64> {
+        keys(N, DOMAIN, STREAM_SEED)
+    }
+
+    fn truth_of(stream: &[u64]) -> FreqTruth {
+        let mut truth = FreqTruth::default();
+        for k in stream {
+            truth.observe(*k as i64);
+        }
+        truth
+    }
+
+    /// The rendered flow key `CocoOctoPlan` and `ElasticOctoPlan` ship, so a
+    /// query uses exactly the key the plan produced.
+    fn key_of(raw: u64) -> String {
+        flow_key_string(&DataInput::U64(raw))
+    }
+
+    fn context(route: Route, extra: &str) -> String {
+        format!(
+            "{route:?} workers={WORKERS} zipf(1.1) domain={DOMAIN} n={N} \
+             seed={STREAM_SEED:#x}; {extra}"
+        )
+    }
+
+    /// HLL promotion carries **no partition penalty at all**.
+    ///
+    /// A register only ever moves to a larger leading-zero count, and
+    /// `HLL_PROMASK` promotes every improvement, so the parent's registers are
+    /// the elementwise maximum of what any worker saw — which is the
+    /// single-threaded sketch, byte for byte, under any routing. That is an
+    /// equality, and stating it as one is strictly stronger than a band: a
+    /// tolerance would pass on an implementation that dropped a slice of the
+    /// improvements under `RoundRobin`.
+    ///
+    /// The cardinality band is then checked against exact truth, so the test
+    /// also fails if the shared reference is itself wrong.
+    #[test]
+    fn hll_octo_plan_is_register_exact_and_in_band_under_both_partitions() {
+        let stream = stream();
+        let distinct: std::collections::HashSet<u64> = stream.iter().copied().collect();
+
+        let mut reference = HyperLogLog::<Classic>::default();
+        for k in &stream {
+            reference.insert(&DataInput::U64(*k));
+        }
+
+        let spec = CardinalityConfidenceSpec::hll(14, 4.0);
+        for route in routes() {
+            let plan = HllOctoPlan::new();
+            let mut workers: Vec<_> = (0..WORKERS).map(|id| plan.worker(id)).collect();
+            let mut parent = plan.aggregator();
+            for (i, k) in stream.iter().enumerate() {
+                let input = DataInput::U64(*k);
+                let w = route.worker(i, &input, WORKERS);
+                let payload = plan.prepare(&input);
+                workers[w].process(&payload, &mut |d| parent.apply(d));
+            }
+            for w in workers.iter_mut() {
+                w.flush(&mut |d| parent.apply(d));
+            }
+
+            let ctx = context(route, "HllOctoPlan, p14 Classic");
+            assert_eq!(
+                parent.sketch.registers_as_slice(),
+                reference.registers_as_slice(),
+                "HLL promotion must be register-exact under {route:?}: max-merge is \
+                 order- and partition-independent. {ctx}"
+            );
+            if let Err(detail) = spec.check(parent.sketch.estimate() as f64, distinct.len()) {
+                panic!("HllOctoPlan {route:?}: {detail}. {ctx}");
+            }
+        }
+    }
+
+    /// DDSketch promotion is **mass-exact after a flush**, under either route.
+    ///
+    /// Bucket deltas are additive `(index, count)` pairs and a flush ships every
+    /// counter a worker still holds, so the parent's store is the single-pass
+    /// store bucket for bucket however the stream was partitioned. The relative
+    /// value error against the exact order statistics is then checked with
+    /// zero tolerance, because DDSketch's guarantee is deterministic.
+    #[test]
+    fn dd_octo_plan_is_bucket_exact_after_flush_and_holds_alpha_under_both_partitions() {
+        use common::specs::RelativeQuantileSpec;
+
+        const ALPHA: f64 = 0.01;
+        const QS: [f64; 7] = [0.0, 0.01, 0.1, 0.5, 0.9, 0.99, 1.0];
+
+        // Positive values spanning three decades, so the bucket store is wide.
+        let values: Vec<f64> = stream().iter().map(|k| 1.0 + *k as f64).collect();
+        let mut sorted = values.clone();
+        sorted.sort_by(f64::total_cmp);
+
+        let mut reference = DDSketch::new(ALPHA);
+        for v in &values {
+            reference.add(v);
+        }
+
+        let spec = RelativeQuantileSpec::core(ALPHA);
+        for route in routes() {
+            let plan = DdOctoPlan::new(ALPHA);
+            let mut workers: Vec<_> = (0..WORKERS).map(|id| plan.worker(id)).collect();
+            let mut parent = plan.aggregator();
+            for (i, v) in values.iter().enumerate() {
+                let input = DataInput::F64(*v);
+                let w = route.worker(i, &input, WORKERS);
+                let payload = plan.prepare(&input);
+                workers[w].process(&payload, &mut |d| parent.apply(d));
+            }
+            for w in workers.iter_mut() {
+                w.flush(&mut |d| parent.apply(d));
+            }
+
+            let ctx = context(route, &format!("DdOctoPlan alpha={ALPHA}"));
+            assert_eq!(
+                parent.sketch.get_count(),
+                reference.get_count(),
+                "a flushed DDSketch parent must hold every observation. {ctx}"
+            );
+            // Bucket-for-bucket equality, allowing for the two stores having
+            // grown to different offsets: compare the shared index range.
+            let (p_off, r_off) = (parent.sketch.store_offset(), reference.store_offset());
+            let (p, r) = (parent.sketch.store_counts(), reference.store_counts());
+            let lo = p_off.min(r_off);
+            let hi = (p_off + p.len() as i32).max(r_off + r.len() as i32);
+            let at = |counts: &[u64], off: i32, k: i32| -> u64 {
+                let idx = k - off;
+                if idx < 0 || idx as usize >= counts.len() {
+                    0
+                } else {
+                    counts[idx as usize]
+                }
+            };
+            let mut buckets = Tally::default();
+            for k in lo..hi {
+                let (a, b) = (at(p, p_off, k), at(r, r_off, k));
+                buckets.record(a == b, || {
+                    format!("bucket {k}: octo {a}, single-thread {b}")
+                });
+            }
+            buckets.assert_none(
+                &format!("DdOctoPlan bucket equality after flush ({route:?})"),
+                &ctx,
+            );
+
+            let mut tally = Tally::default();
+            spec.tally_into(&mut tally, &sorted, &QS, |q| {
+                parent.sketch.get_value_at_quantile(q)
+            });
+            tally.assert_none(
+                &format!("DdOctoPlan relative value error ({route:?})"),
+                &ctx,
+            );
+        }
+    }
+
+    /// UnivMon promotion under both partitions, judged on the quantity the
+    /// aggregator actually reports.
+    ///
+    /// # What `calc_l1` means for the Octo plan, and why it is not `N`
+    ///
+    /// `UnivMon::calc_l1` returns the sketch's `bucket_size`, which for an Octo
+    /// parent is restored from the `weight_total` each worker stamps on the
+    /// deltas it emits. `UnivMonOctoWorker` is the one shipped worker with **no
+    /// `flush`**, and it cannot have one: `LayeredCountDelta` carries the flow
+    /// key that triggered the promotion, because `apply_layered_delta` needs it
+    /// to update the aggregator's heavy-hitter heap — and a counter flushed at
+    /// end-of-stream has no single key to name. So a worker's updates after its
+    /// last emitted delta never reach the parent, and the parent's L1 is a
+    /// **lower bound** on `N`, not an equality.
+    ///
+    /// That is asserted exactly rather than with a tolerance: the test records
+    /// what each worker last reported, and the parent must equal precisely the
+    /// sum of those. `N` minus that sum is the mass still in flight, printed in
+    /// the failure message so the size of the lag is visible. See the coverage
+    /// matrix's findings section.
+    ///
+    /// `calc_l2` returns the L2 **norm** — `sqrt(F2)` — over the delivered
+    /// counters, so it is squared before being held to the AMS second-moment
+    /// bound the estimator actually satisfies.
+    #[test]
+    fn univmon_octo_plan_reports_the_delivered_l1_and_holds_its_f2_bound_under_both_partitions() {
+        use common::specs::SecondMomentSpec;
+
+        const ROWS: usize = 5;
+        const COLS: usize = 4_096;
+        const LAYERS: usize = 8;
+        const HEAP: usize = 64;
+
+        let stream = stream();
+        let truth = truth_of(&stream);
+        let f2_spec = SecondMomentSpec::new(ROWS, COLS);
+
+        for route in routes() {
+            let plan = UnivMonOctoPlan::new(ROWS, COLS, LAYERS);
+            let mut workers: Vec<_> = (0..WORKERS).map(|id| plan.worker(id)).collect();
+            let mut parent = plan.aggregator(HEAP);
+            // The last `weight_total` each worker stamped on a delta. The
+            // parent's L1 is restored from exactly these, so this is the
+            // predicted value rather than a band around it.
+            let mut last_reported = vec![0u64; WORKERS];
+            let mut processed = vec![0u64; WORKERS];
+            for (i, k) in stream.iter().enumerate() {
+                let input = DataInput::U64(*k);
+                let w = route.worker(i, &input, WORKERS);
+                processed[w] += 1;
+                let payload = plan.prepare(&input);
+                let mut reported = last_reported[w];
+                workers[w].process(&payload, &mut |d: LayeredCountDelta| {
+                    reported = reported.max(d.weight_total);
+                    parent.apply(d);
+                });
+                last_reported[w] = reported;
+            }
+            // The default `OctoWorker::flush` is a no-op here, which is the
+            // whole point: nothing further arrives.
+            for w in workers.iter_mut() {
+                w.flush(&mut |d: LayeredCountDelta| parent.apply(d));
+            }
+
+            let delivered: u64 = last_reported.iter().sum();
+            let in_flight = truth.total() as u64 - delivered;
+            let ctx = context(
+                route,
+                &format!(
+                    "UnivMonOctoPlan rows={ROWS} cols={COLS} layers={LAYERS} heap={HEAP} \
+                     tau={UNIVMON_PROMASK}; per-worker processed {processed:?}, last \
+                     reported {last_reported:?}, so {in_flight} updates are still held by \
+                     workers that emitted no further delta"
+                ),
+            );
+
+            assert!(
+                delivered <= truth.total() as u64,
+                "a worker cannot report more weight than it processed. {ctx}"
+            );
+            assert_eq!(
+                parent.sketch.calc_l1(),
+                delivered as f64,
+                "the parent's L1 is restored from the last weight_total each worker \
+                 stamped on a delta, so it must equal their sum exactly. {ctx}"
+            );
+
+            // `calc_l2()` is the norm, so square it to get the F2 the AMS
+            // row-median bound is stated over.
+            let f2_estimate = parent.sketch.calc_l2().powi(2);
+            if let Err(detail) = f2_spec.check(f2_estimate, truth.f2()) {
+                panic!("UnivMonOctoPlan {route:?} L2/F2: {detail}. {ctx}");
+            }
+        }
+    }
+
+    /// CocoSketch and Elastic under both partitions, against exact truth.
+    ///
+    /// Both are eviction-based heavy-hitter sketches, so their guarantee is
+    /// one-sided over-attribution: an estimate may credit a key with mass that
+    /// belonged to a colliding one, but a key that survives eviction is never
+    /// read *low*. That is what the route can change — under `RoundRobin` each
+    /// of the `k` workers runs its own eviction contest, so a flow can be
+    /// evicted `k` times independently — and it is checked here rather than
+    /// assumed.
+    ///
+    /// The comparison is against exact truth for the true top flows, and
+    /// against a single-threaded sketch for the total mass the protocol
+    /// delivered.
+    #[test]
+    fn coco_and_elastic_octo_plans_stay_one_sided_on_heavy_keys_under_both_partitions() {
+        const COCO_W: usize = 4_096;
+        const COCO_D: usize = 2;
+        const ELASTIC_BUCKETS: i32 = 512;
+        const ELASTIC_ROWS: usize = 3;
+        const ELASTIC_COLS: usize = 4_096;
+        const HEAVY: usize = 32;
+
+        let stream = stream();
+        let truth = truth_of(&stream);
+        let heavy = truth.top_k(HEAVY);
+
+        for route in routes() {
+            // --- CocoSketch ------------------------------------------------
+            let plan = CocoOctoPlan::new(COCO_W, COCO_D);
+            let mut workers: Vec<_> = (0..WORKERS).map(|id| plan.worker(id)).collect();
+            let mut parent = plan.aggregator();
+            for (i, k) in stream.iter().enumerate() {
+                let input = DataInput::U64(*k);
+                let w = route.worker(i, &input, WORKERS);
+                let payload = key_of(*k);
+                workers[w].process(&payload, &mut |d: CocoDelta| parent.apply(d));
+            }
+            for w in workers.iter_mut() {
+                w.flush(&mut |d: CocoDelta| parent.apply(d));
+            }
+
+            let mut reference: Coco = Coco::init_with_size(COCO_W, COCO_D);
+            for k in &stream {
+                reference.insert(&key_of(*k), 1);
+            }
+
+            let ctx = context(route, &format!("CocoOctoPlan w={COCO_W} d={COCO_D}"));
+            let mut one_sided = Tally::default();
+            for (k, c) in &heavy {
+                let est = parent.sketch.estimate_key(&key_of(*k as u64)) as i64;
+                one_sided.record(est >= *c, || {
+                    format!(
+                        "key {k}: true {c}, octo {est} — CocoSketch must not read a \
+                         surviving heavy key low"
+                    )
+                });
+            }
+            one_sided.assert_none(
+                &format!("CocoOctoPlan one-sided on the true top {HEAVY} ({route:?})"),
+                &ctx,
+            );
+            // Over-attribution has a ceiling: no estimate may exceed the whole
+            // stream mass, because that is more than was ever inserted. The
+            // single-threaded reference is checked against the same two rules,
+            // so a failure separates "the partition broke it" from "CocoSketch
+            // at these dimensions does this anyway".
+            let mut ceiling = Tally::default();
+            for (k, c) in &heavy {
+                let key = key_of(*k as u64);
+                let est = parent.sketch.estimate_key(&key) as i64;
+                let single = reference.estimate_key(&key) as i64;
+                ceiling.record(est <= truth.total(), || {
+                    format!(
+                        "key {k}: octo {est} exceeds the whole stream mass {}",
+                        truth.total()
+                    )
+                });
+                ceiling.record(single >= *c && single <= truth.total(), || {
+                    format!(
+                        "key {k}: the single-threaded reference itself reads {single} for a \
+                         true count of {c}, so the partition is not what broke this"
+                    )
+                });
+            }
+            ceiling.assert_none(
+                &format!("CocoOctoPlan estimates stay inside the stream mass ({route:?})"),
+                &ctx,
+            );
+
+            // --- Elastic ---------------------------------------------------
+            let plan = ElasticOctoPlan::new(ELASTIC_BUCKETS, ELASTIC_ROWS, ELASTIC_COLS);
+            let mut workers: Vec<_> = (0..WORKERS).map(|id| plan.worker(id)).collect();
+            let mut parent = plan.aggregator();
+            for (i, k) in stream.iter().enumerate() {
+                let input = DataInput::U64(*k);
+                let w = route.worker(i, &input, WORKERS);
+                let payload = key_of(*k);
+                workers[w].process(&payload, &mut |d: ElasticDelta| parent.apply(d));
+            }
+            for w in workers.iter_mut() {
+                w.flush(&mut |d: ElasticDelta| parent.apply(d));
+            }
+
+            let mut reference: Elastic =
+                Elastic::init_with_dimensions(ELASTIC_BUCKETS, ELASTIC_ROWS, ELASTIC_COLS);
+            for k in &stream {
+                reference.insert(key_of(*k));
+            }
+
+            let ctx = context(
+                route,
+                &format!(
+                    "ElasticOctoPlan buckets={ELASTIC_BUCKETS} rows={ELASTIC_ROWS} \
+                     cols={ELASTIC_COLS}"
+                ),
+            );
+            // Elastic's light layer is a Count-Min, so a key evicted from the
+            // heavy table is read through a one-sided estimator: the answer can
+            // sit above the truth but never above the whole stream mass, and
+            // never below zero. As above, the single-threaded reference is held
+            // to the same rule so the two can be told apart.
+            let mut elastic_ceiling = Tally::default();
+            for (k, _) in &heavy {
+                let key = key_of(*k as u64);
+                let est = parent.sketch.query(key.clone()) as i64;
+                let single = reference.query(key) as i64;
+                elastic_ceiling.record(est >= 0 && est <= truth.total(), || {
+                    format!(
+                        "key {k}: octo {est} outside [0, stream mass {}]",
+                        truth.total()
+                    )
+                });
+                elastic_ceiling.record(single >= 0 && single <= truth.total(), || {
+                    format!(
+                        "key {k}: the single-threaded reference itself reads {single}, \
+                         outside [0, stream mass {}]",
+                        truth.total()
+                    )
+                });
+            }
+            elastic_ceiling.assert_none(
+                &format!("ElasticOctoPlan estimates stay inside the stream mass ({route:?})"),
+                &ctx,
+            );
+        }
     }
 }

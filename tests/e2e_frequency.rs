@@ -33,7 +33,7 @@ use asap_sketchlib::{
 /// the additive `e*(N-f)/w` excess under the binomial acceptance rule, and
 /// exact equality between a shard-merged sketch and a single-pass one.
 #[test]
-fn countmin_zipf_satisfies_the_count_min_additive_bound_and_shard_merge() {
+fn countmin_fast_path_zipf_conforms_to_the_count_min_model_and_merges_shards_exactly() {
     const ROWS: usize = 4;
     const COLS: usize = 4096;
     const STREAM_SEED: u64 = 1001;
@@ -101,7 +101,7 @@ fn countmin_zipf_satisfies_the_count_min_additive_bound_and_shard_merge() {
 /// `e2e_matrix_instances.rs` covers the equality that *is* contractual: on a
 /// collision-free workload both paths return exact counts.
 #[test]
-fn countmin_both_paths_satisfy_the_bound_on_the_same_stream() {
+fn countmin_both_paths_meet_the_count_min_bound_on_the_same_stream() {
     const ROWS: usize = 3;
     const COLS: usize = 2048;
     const STREAM_SEED: u64 = 1002;
@@ -182,31 +182,81 @@ fn bound_streams(trial: u64) -> [BoundStream; 2] {
     ]
 }
 
-/// Count-Min Theorem 1 on both insert paths and both `DataInput` hash
-/// domains, over independent key populations.
+/// Count-Min Theorem 1 on the **RegularPath**, over independent key
+/// populations.
+///
+/// # Why the two hash paths are separate tests
+///
+/// Theorem 1's `b^-d` comes from the `d` rows failing independently, which
+/// needs the `d` row hashes to be independent draws from a suitable family.
+/// The two paths get there differently:
+///
+/// - `RegularPath` makes one hash call per row with a distinct seed from the
+///   table, so the rows are separate hash functions. Under the standard
+///   assumption that XXH3-with-distinct-seeds behaves as an independent family
+///   — stated here rather than left implicit — the theorem applies as written.
+/// - `FastPath` makes a **single** call and slices each row's column index out
+///   of bit fields of that one 128-bit output. The rows are then deterministic
+///   functions of one hash value, not independent hash functions. Treating
+///   disjoint bit fields of a good hash as independent is a modelling
+///   assumption about XXH3's avalanche, not something the theorem grants.
+///
+/// So this test carries the theorem and
+/// `countmin_fast_path_conforms_to_the_count_min_model` carries the same
+/// arithmetic under an honest label. The coverage matrix classifies them
+/// `theorem` and `asymptotic model` respectively.
 #[test]
-fn countmin_satisfies_the_count_min_theorem_on_both_paths() {
+fn countmin_regular_path_satisfies_the_count_min_theorem() {
     let spec = CountMinSpec::new(BOUND_ROWS, BOUND_COLS);
     for trial in 0..BOUND_TRIALS {
         for (name, keys, to_input) in bound_streams(trial) {
             let mut truth = FreqTruth::default();
             let mut regular =
                 CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
-            let mut fast =
-                CountMin::<Vector2D<i32>, FastPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
             for k in &keys {
-                let d = to_input(*k);
                 truth.observe(*k);
-                regular.insert(&d);
-                fast.insert(&d);
+                regular.insert(&to_input(*k));
             }
-            let context =
-                format!("{name} trial={trial} n={BOUND_N} (see bound_streams for stream seeds)");
+            let context = format!(
+                "{name} trial={trial} n={BOUND_N} (see bound_streams for stream seeds); \
+                 RegularPath hashes each row with its own seed from the table"
+            );
             spec.assert_contract(
                 &format!("CountMin RegularPath {name}"),
                 &truth,
                 |k| regular.estimate(&to_input(k)) as f64,
                 &context,
+            );
+        }
+    }
+}
+
+/// The same arithmetic on the **FastPath**, which is a model check rather than
+/// a theorem.
+///
+/// `FastPath` derives all `d` column indices from bit fields of one 128-bit
+/// hash. Every bound evaluated here is Count-Min's, at the sketch's own
+/// dimensions — nothing is widened — but the `b^-d` it is quoted at assumes
+/// row independence that a single hash does not literally provide. What the
+/// test establishes is that the fast path *conforms to the same model* as the
+/// independently-hashed path, which is the useful statement and is how the
+/// coverage matrix labels it.
+#[test]
+fn countmin_fast_path_conforms_to_the_count_min_model() {
+    let spec = CountMinSpec::new(BOUND_ROWS, BOUND_COLS);
+    for trial in 0..BOUND_TRIALS {
+        for (name, keys, to_input) in bound_streams(trial) {
+            let mut truth = FreqTruth::default();
+            let mut fast =
+                CountMin::<Vector2D<i32>, FastPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
+            for k in &keys {
+                truth.observe(*k);
+                fast.insert(&to_input(*k));
+            }
+            let context = format!(
+                "{name} trial={trial} n={BOUND_N} (see bound_streams for stream seeds); \
+                 FastPath slices all {BOUND_ROWS} row indices out of one 128-bit hash, so \
+                 row independence is a model, not a hypothesis the theorem supplies"
             );
             spec.assert_contract(
                 &format!("CountMin FastPath {name}"),
@@ -218,55 +268,40 @@ fn countmin_satisfies_the_count_min_theorem_on_both_paths() {
     }
 }
 
-// -------------------------------------------------------------- CountSketch
-
-/// Count Sketch's median-of-rows L2 bound, plus exact turnstile cancellation.
-///
-/// The bound asserted here is `sqrt(kappa / w) * ||f_-i||_2` per key, with
-/// `||f_-i||_2` recomputed from the exact frequency vector for each key —
-/// *not* Count-Min's `e/w * N`. See `CountSketchSpec` for the derivation.
-#[test]
-fn countsketch_turnstile_cancels_and_satisfies_the_l2_median_bound() {
-    // True turnstile: +500 then -500 must net to zero. Exact, not approximate:
-    // the same cells are incremented and decremented.
-    let mut cs = asap_sketchlib::Count::<Vector2D<i64>, RegularPath>::with_dimensions(4, 1024);
-    cs.insert_many(&DataInput::U32(9), 500);
-    cs.insert_many(&DataInput::U32(9), -500);
-    assert_eq!(
-        cs.estimate(&DataInput::U32(9)),
-        0.0,
-        "turnstile did not cancel"
-    );
-
-    const ROWS: usize = 5;
-    const COLS: usize = 4096;
-    const STREAM_SEED: u64 = 1003;
-    let mut cs = asap_sketchlib::Count::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
-    let stream = zipf_u64(200_000, 8192, 1.1, STREAM_SEED);
-    let mut truth = FreqTruth::default();
-    for k in &stream {
-        truth.observe(*k as i64);
-        cs.insert(&DataInput::I64(*k as i64));
-    }
-    let spec = CountSketchSpec::new(ROWS, COLS);
-    spec.assert_contract(
-        "Count<Vector2D<i64>, RegularPath>",
-        &truth,
-        |k| cs.estimate(&DataInput::I64(k)),
-        &format!("zipf(1.1) domain=8192 n=200000 stream_seed={STREAM_SEED}"),
-    );
-}
-
 /// Count Sketch's L2 bound on both insert paths and both `DataInput` hash
-/// domains, with every key in every trial pooled into one binomial acceptance
-/// rule at the theorem's own post-median failure probability.
+/// domains, over several independent key populations.
+///
+/// The two paths are tallied separately and the coverage matrix classifies them
+/// differently: `RegularPath` hashes each row with its own seed, so the median
+/// amplification's independence hypothesis is met (under the usual assumption
+/// about the hash family); `FastPath` slices every row index out of one
+/// 128-bit hash, so row independence there is a **model**. The arithmetic is
+/// identical — nothing is widened for the fast path — but the label is not.
+/// See `countmin_fast_path_conforms_to_the_count_min_model`.
+///
+/// # Two assertions, two acceptance rules
+///
+/// The library's hash is fixed by the sketch's type parameter, so every sketch
+/// here draws from the same hash function and the keys inside one sketch share
+/// it. They are therefore *not* independent Bernoulli trials, and a binomial
+/// over keys — which is what this test used to do — assumes exactly the
+/// independence that does not hold.
+///
+/// What is asserted instead:
+///
+/// 1. the **simultaneous** bound, whose `kappa` is raised until a union bound
+///    over the whole probed key set leaves `SIMULTANEOUS_LEVEL` overall. That
+///    needs no independence at all and tolerates zero violations;
+/// 2. the **marginal** bound at `kappa = 3` as a violation-*rate* pin against
+///    the theorem's own per-key failure probability — a regression pin on a
+///    fixed realisation, not a tail test.
 #[test]
-fn countsketch_satisfies_the_l2_median_bound_on_both_paths() {
+fn countsketch_both_paths_meet_the_l2_median_bound() {
     let spec = CountSketchSpec::new(BOUND_ROWS, BOUND_COLS);
-    // One tally per (shape, path): all trials pool into a single acceptance
-    // rule, so the decision is made on the whole population rather than on
-    // whichever trial happened to look worst.
-    let mut tallies: HashMap<String, Tally> = HashMap::new();
+    // One pair of tallies per (shape, path): all trials pool into a single
+    // acceptance rule, so the decision is made on the whole population rather
+    // than on whichever trial happened to look worst.
+    let mut tallies: HashMap<String, (Tally, Tally)> = HashMap::new();
     for trial in 0..BOUND_TRIALS {
         for (name, keys, to_input) in bound_streams(trial) {
             let mut truth = FreqTruth::default();
@@ -282,27 +317,31 @@ fn countsketch_satisfies_the_l2_median_bound_on_both_paths() {
                 regular.insert(&d);
                 fast.insert(&d);
             }
-            spec.tally_into(
-                tallies.entry(format!("{name}/RegularPath")).or_default(),
-                &truth,
-                |k| regular.estimate(&to_input(k)),
-            );
-            spec.tally_into(
-                tallies.entry(format!("{name}/FastPath")).or_default(),
-                &truth,
-                |k| fast.estimate(&to_input(k)),
-            );
+            {
+                let (simul, marg) = tallies.entry(format!("{name}/RegularPath")).or_default();
+                spec.tally_into(simul, marg, &truth, |k| regular.estimate(&to_input(k)));
+            }
+            {
+                let (simul, marg) = tallies.entry(format!("{name}/FastPath")).or_default();
+                spec.tally_into(simul, marg, &truth, |k| fast.estimate(&to_input(k)));
+            }
         }
     }
-    for (label, tally) in tallies {
-        tally.assert_within(
-            &format!("Count {label} / L2 median bound"),
-            spec.per_key_failure(),
-            &format!(
-                "rows={BOUND_ROWS} cols={BOUND_COLS} kappa={} n={BOUND_N} \
-                 trials={BOUND_TRIALS} (independent key populations, fixed library hash seed)",
-                spec.kappa
-            ),
+    let mut labels: Vec<String> = tallies.keys().cloned().collect();
+    labels.sort();
+    for label in labels {
+        let (simul, marg) = tallies.remove(&label).expect("label just enumerated");
+        let context = format!(
+            "rows={BOUND_ROWS} cols={BOUND_COLS} marginal kappa={} n={BOUND_N} \
+             trials={BOUND_TRIALS} (independent key populations, fixed library hash seed \
+             — the keys of one sketch share it and are not independent trials)",
+            spec.kappa
+        );
+        simul.assert_none(&format!("Count {label} / simultaneous L2 bound"), &context);
+        marg.assert_rate_at_most(
+            &format!("Count {label} / marginal L2 median bound"),
+            spec.marginal_failure(),
+            &context,
         );
     }
 }

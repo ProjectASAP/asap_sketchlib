@@ -7,6 +7,7 @@
 //! - Charikar, Chen & Farach-Colton, "Finding Frequent Items in Data Streams,"
 //!   ICALP 2002. <https://www.cs.rutgers.edu/~farach/pubs/FrequentStream.pdf>
 
+use crate::common::structure_utils::AdmittedRows;
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
@@ -455,33 +456,41 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
         self.counts.enable_nitro(sampling_rate);
     }
 
-    /// Inserts an observation using Nitro geometric-sampling acceleration.
+    /// Enables Nitro sampling with a reproducible, seed-selected schedule.
+    ///
+    /// See [`crate::Nitro::init_nitro_seeded`]: the unseeded path starts every
+    /// sketch at the same point in the skip table, so two sketches at the same
+    /// rate admit the same subset and are not independent trials.
+    pub fn enable_nitro_with_seed(&mut self, sampling_rate: f64, seed: u64) {
+        self.counts.enable_nitro_with_seed(sampling_rate, seed);
+    }
+
+    /// Inserts an observation through Nitro's per-row sampling schedule.
+    ///
+    /// Cells and signs are derived exactly as a plain `insert` derives them —
+    /// `FastPathHasher::hash_for_matrix`, then `col_for_row` and
+    /// `sign_for_row` — so `estimate` reads back what this wrote. The hash is
+    /// computed once per observation, and the admitted rows are collected into
+    /// an inline buffer, so the hot path does not allocate.
     #[inline(always)]
     pub fn fast_insert_nitro(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
-        let delta = self.counts.nitro().delta;
-        if self.counts.nitro().to_skip >= rows {
-            self.counts.reduce_nitro_skip(rows);
-        } else {
-            let hashed = H::hash128_seeded(0, value);
-            let mut r = self.counts.nitro().to_skip;
-            loop {
-                let bit = (hashed >> (127 - r)) & 1;
-                let sign = (bit << 1) as i32 - 1;
-                self.counts.update_by_row(
-                    r,
-                    hashed,
-                    |a, b| *a += b,
-                    sign * nitro_delta_saturated_i32(delta),
-                );
-                self.counts.nitro_mut().draw_geometric();
-                if r + self.counts.nitro_mut().to_skip + 1 >= rows {
-                    break;
-                }
-                r += self.counts.nitro_mut().to_skip + 1;
-            }
-            let temp = self.counts.get_nitro_skip();
-            self.counts.update_nitro_skip((r + temp + 1) - rows);
+        let mut admitted = AdmittedRows::new();
+        self.counts.nitro_mut().admit_rows(rows, &mut admitted);
+        if admitted.is_empty() {
+            return;
+        }
+        let cols = self.counts.cols();
+        let hashed = <Vector2D<i32> as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
+        for (row, weight) in admitted {
+            let col = MatrixFastHash::col_for_row(&hashed, row, cols);
+            let signed = if hashed.sign_for_row(row) > 0 {
+                nitro_delta_saturated_i32(weight)
+            } else {
+                -nitro_delta_saturated_i32(weight)
+            };
+            self.counts
+                .update_one_counter(row, col, |a: &mut i32, b: i32| *a += b, signed);
         }
     }
 }

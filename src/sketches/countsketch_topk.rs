@@ -20,6 +20,34 @@ use crate::{
 pub(crate) mod l2hh_wire;
 mod wire;
 
+/// The count a `CSHeap` entry carries for a Count Sketch estimate.
+///
+/// `Count::estimate` returns the row **median** as `f64`, because a Count
+/// Sketch estimate is signed and is a median rather than a counter read. The
+/// heap stores `i64`, so a conversion is unavoidable and its semantics are part
+/// of the API rather than an accident of a cast:
+///
+/// - **Saturating**, not wrapping. Rust's `f64 as i64` saturates at
+///   `i64::MIN`/`i64::MAX` and maps `NaN` to `0`; this function names that
+///   choice so it cannot be silently changed. An `i128`-backed sketch really
+///   can hold counts past `i64::MAX` — `CSHeap<QuickMatrixI128>` and friends
+///   accept `insert_many(key, i128)` — and those clamp here. A wrapped negative
+///   count would corrupt the heap's ordering, which is exactly what saturation
+///   prevents.
+/// - **Truncating toward zero** on the fractional part a median of an even row
+///   count can produce.
+///
+/// Above `2^53` the estimate has already lost precision in `f64` inside
+/// `Count::estimate`, so an `i128` sketch's heap entries are exact only up to
+/// that magnitude. Both limits are asserted in
+/// `tests/e2e_matrix_instances.rs`.
+#[inline]
+pub fn cs_heap_count(estimate: f64) -> i64 {
+    // `as` on a float is a saturating cast in Rust (since 1.45); this is the
+    // documented behaviour, not a fallback.
+    estimate as i64
+}
+
 const DEFAULT_TOP_K: usize = 32;
 const DEFAULT_ROW_NUM: usize = 3;
 const DEFAULT_COL_NUM: usize = 4096;
@@ -224,7 +252,7 @@ where
     pub fn insert(&mut self, key: &DataInput) {
         self.cs.insert(key);
         let est = self.cs.estimate(key);
-        self.heap.update(key, est as i64);
+        self.heap.update(key, cs_heap_count(est));
     }
 
     /// Inserts an observation with the given count and updates the top-k heap.
@@ -232,7 +260,7 @@ where
     pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
         self.cs.insert_many(key, many);
         let est = self.cs.estimate(key);
-        self.heap.update(key, est as i64);
+        self.heap.update(key, cs_heap_count(est));
     }
 
     /// Inserts a batch of observations, updating the heap after each.
@@ -265,7 +293,7 @@ where
         for key in candidate_keys {
             let key_ref = heap_item_to_sketch_input(&key);
             let est = self.cs.estimate(&key_ref);
-            self.heap.update(&key_ref, est as i64);
+            self.heap.update(&key_ref, cs_heap_count(est));
         }
     }
 }
@@ -282,7 +310,7 @@ where
     pub fn insert(&mut self, key: &DataInput) {
         self.cs.insert(key);
         let est = self.cs.estimate(key);
-        self.heap.update(key, est as i64);
+        self.heap.update(key, cs_heap_count(est));
     }
 
     /// Inserts an observation with the given count using fast-path hashing.
@@ -290,7 +318,7 @@ where
     pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
         self.cs.insert_many(key, many);
         let est = self.cs.estimate(key);
-        self.heap.update(key, est as i64);
+        self.heap.update(key, cs_heap_count(est));
     }
 
     /// Inserts a batch of observations using fast-path hashing.
@@ -320,7 +348,7 @@ where
         for key in candidate_keys {
             let key_ref = heap_item_to_sketch_input(&key);
             let est = self.cs.estimate(&key_ref);
-            self.heap.update(&key_ref, est as i64);
+            self.heap.update(&key_ref, cs_heap_count(est));
         }
     }
 }

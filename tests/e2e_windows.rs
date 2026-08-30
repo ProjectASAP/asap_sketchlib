@@ -21,7 +21,7 @@
 mod common;
 
 use common::specs::{
-    CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, RankErrorSpec, RelativeQuantileSpec,
+    CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, KllRankSpec, RelativeQuantileSpec,
     Tally,
 };
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
@@ -44,6 +44,11 @@ const STREAM_SEED: u64 = 0x0E11_0001;
 
 /// Matrix dimensions for the counter-backed variants, chosen so their bounds
 /// are meaningful at `N` updates over `DOMAIN` keys.
+/// UnivMon layer geometry used by the `UNIVMON` payload below. Its L2 band is
+/// derived from these, so a change here moves the band with it.
+const UNIVMON_ROWS: usize = 5;
+const UNIVMON_COLS: usize = 2_048;
+
 const ROWS: usize = 3;
 const COLS: usize = 512;
 
@@ -164,7 +169,7 @@ fn run_keyed_variant(
 }
 
 #[test]
-fn eh_count_min_variant_satisfies_the_count_min_bound_over_the_retained_window() {
+fn eh_count_min_variant_conforms_to_the_count_min_model_over_the_retained_window() {
     let (merged, truth, ctx) = run_keyed_variant(asap_sketchlib::EHSketchList::CM(CountMin::<
         Vector2D<i32>,
         FastPath,
@@ -180,7 +185,7 @@ fn eh_count_min_variant_satisfies_the_count_min_bound_over_the_retained_window()
 }
 
 #[test]
-fn eh_count_sketch_variant_satisfies_the_l2_bound_over_the_retained_window() {
+fn eh_count_sketch_variant_conforms_to_the_l2_model_over_the_retained_window() {
     let (merged, truth, ctx) = run_keyed_variant(asap_sketchlib::EHSketchList::CS(Count::<
         Vector2D<i32>,
         FastPath,
@@ -285,7 +290,10 @@ fn eh_hll_variant_satisfies_the_register_error_model_over_the_retained_window() 
         merged.query(&DataInput::Str("card")).expect("HLL query"),
         distinct.len(),
     );
-    tally.assert_within(
+    // One merged HLL, one estimate: a single independent trial. The binomial
+    // acceptance rule at n = 1 is exactly "this must pass", which is the honest
+    // reading of a one-draw experiment.
+    tally.assert_independent_binomial(
         "EHSketchList::HLL / register error model",
         spec.per_check_failure(),
         &format!(
@@ -298,7 +306,7 @@ fn eh_hll_variant_satisfies_the_register_error_model_over_the_retained_window() 
 }
 
 #[test]
-fn eh_kll_variant_satisfies_the_rank_error_contract_over_the_retained_window() {
+fn eh_kll_variant_satisfies_the_rank_error_characterization_over_the_retained_window() {
     const KLL_K: i32 = 200;
     let values: Vec<f64> = uniform_u64(N, 1_000_000, STREAM_SEED)
         .into_iter()
@@ -313,24 +321,44 @@ fn eh_kll_variant_satisfies_the_rank_error_contract_over_the_retained_window() {
         eh.update(t as u64, &DataInput::F64(*v));
     }
     let (lo, hi) = full_span(&eh);
-    let merged = eh.query_interval_merge(lo, hi).expect("full span");
     let truth = NumericTruth::new((lo..=hi).map(|t| values[t as usize]).collect());
 
-    let spec = RankErrorSpec::datasketches(KLL_K as usize);
+    // Twelve independent compaction seeds, one trial each: the five quantiles
+    // of one merged KLL share a compaction history and are not five Bernoulli
+    // draws, so each seed is reduced to its worst rank error first.
+    const QS: [f64; 5] = [0.1, 0.25, 0.5, 0.75, 0.9];
+    const TRIALS: u64 = 12;
+    let spec = KllRankSpec::datasketches(KLL_K as usize);
     let mut tally = Tally::default();
-    // The KLL payload answers `query(q)` as `quantile(q)`.
-    spec.tally_into(
-        &mut tally,
-        truth.sorted(),
-        &[0.1, 0.25, 0.5, 0.75, 0.9],
-        |q| merged.query(&DataInput::F64(q)).expect("KLL query"),
-    );
-    tally.assert_within(
-        "EHSketchList::KLL / normalized rank error",
-        spec.failure_probability,
+    for t in 0..TRIALS {
+        let seed = 0x5EED_0200u64.wrapping_add(t.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut trial_eh = ExponentialHistogram::new(
+            EH_K,
+            EH_WINDOW,
+            asap_sketchlib::EHSketchList::KLL(KLL::init_kll_with_seed(KLL_K, seed)),
+        );
+        for (t, v) in values.iter().enumerate() {
+            trial_eh.update(t as u64, &DataInput::F64(*v));
+        }
+        let (tlo, thi) = full_span(&trial_eh);
+        let trial_merged = trial_eh.query_interval_merge(tlo, thi).expect("full span");
+        let trial_truth = NumericTruth::new((tlo..=thi).map(|t| values[t as usize]).collect());
+        // The KLL payload answers `query(q)` as `quantile(q)`.
+        spec.record_trial(
+            &mut tally,
+            &format!("EHSketchList::KLL seed={seed:#x} span=[{tlo}, {thi}]"),
+            trial_truth.sorted(),
+            &QS,
+            |q| trial_merged.query(&DataInput::F64(q)).expect("KLL query"),
+        );
+    }
+    tally.assert_independent_binomial(
+        "EHSketchList::KLL / maximum normalized rank error per compaction seed",
+        spec.trial_failure_probability,
         &format!(
-            "k={EH_K} kll_k={KLL_K} sketch_seed=0x5EED0200 uniform n={N} seed={STREAM_SEED:#x}, \
-             retained span [{lo}, {hi}] with {} observations",
+            "k={EH_K} kll_k={KLL_K} uniform n={N} seed={STREAM_SEED:#x}, retained span \
+             [{lo}, {hi}] with {} observations, {TRIALS} independent compaction seeds, \
+             q grid {QS:?}",
             truth.len()
         ),
     );
@@ -356,7 +384,7 @@ fn eh_ddsketch_variant_satisfies_the_relative_value_error_contract_over_the_wind
     let truth = NumericTruth::new((lo..=hi).map(|t| values[t as usize]).collect());
 
     // The DDS payload answers `query(q)` as `get_value_at_quantile(q)`.
-    let spec = RelativeQuantileSpec::new(ALPHA);
+    let spec = RelativeQuantileSpec::core(ALPHA);
     let mut tally = Tally::default();
     spec.tally_into(
         &mut tally,
@@ -386,7 +414,12 @@ fn eh_univmon_variant_reports_the_exact_l1_over_the_retained_window() {
     let mut eh = ExponentialHistogram::new(
         EH_K,
         EH_WINDOW,
-        asap_sketchlib::EHSketchList::UNIVMON(UnivMon::init_univmon(32, 5, 2048, 8)),
+        asap_sketchlib::EHSketchList::UNIVMON(UnivMon::init_univmon(
+            32,
+            UNIVMON_ROWS,
+            UNIVMON_COLS,
+            8,
+        )),
     );
     for (t, k) in keys.iter().enumerate() {
         eh.update(t as u64, &DataInput::U64(*k));
@@ -408,18 +441,34 @@ fn eh_univmon_variant_reports_the_exact_l1_over_the_retained_window() {
         "UnivMon L1 over the merged span must be exact. {ctx}"
     );
 
-    // L2 through UnivMon's recursive g-sum: documented empirical band.
+    // L2 through UnivMon's recursive g-sum, held to the AMS second-moment
+    // bound of the layer the answer comes from rather than to a written
+    // percentage.
     //
-    // Band source: measured on this configuration and stream at 3% below the
-    // exact L2; the band below is 15%, five times the observed movement.
-    // UnivMon publishes no closed-form constant for the recurrence, so this
-    // is a regression on measured behaviour rather than a theorem.
+    // `l2` is `sqrt(F2_hat)` where `F2_hat` is the row-median AMS estimate over
+    // the sketch's own 5x2048 counters, so `SecondMomentSpec`'s relative bound
+    // `b = sqrt(2*kappa/w)` on F2 becomes `[sqrt(1-b), sqrt(1+b)]` on the norm.
+    // At 5x2048 that is about -4.2%/+4.1%, three times tighter than the +-15%
+    // this used to accept, and it is tied to the configuration: halving `cols`
+    // widens the band automatically.
+    //
+    // This is the *terminal* layer's bound. UnivMon's recurrence composes
+    // per-layer estimates, and the crate publishes no closed form for the
+    // composed constant, so what is asserted here is the bound of the estimator
+    // the answer is actually read from — with the recurrence's own contribution
+    // covered by the exact L1 equality above.
     let l2 = merged.query(&DataInput::Str("l2")).expect("l2");
     let l2_truth = truth.l2_norm();
+    let b = common::specs::SecondMomentSpec::new(UNIVMON_ROWS, UNIVMON_COLS).relative_bound();
+    let (band_lo, band_hi) = (
+        l2_truth * (1.0 - b).max(0.0).sqrt(),
+        l2_truth * (1.0 + b).sqrt(),
+    );
     assert!(
-        l2 >= l2_truth * 0.85 && l2 <= l2_truth * 1.15,
-        "UnivMon L2 {l2:.1} vs exact {l2_truth:.1} outside the documented +-15% empirical \
-         band. {ctx}"
+        l2 >= band_lo && l2 <= band_hi,
+        "UnivMon L2 {l2:.1} vs exact {l2_truth:.1} outside [{band_lo:.1}, {band_hi:.1}], the \
+         AMS second-moment bound sqrt(2*kappa/w)={b:.5} at {UNIVMON_ROWS}x{UNIVMON_COLS} \
+         carried through the square root. {ctx}"
     );
 }
 

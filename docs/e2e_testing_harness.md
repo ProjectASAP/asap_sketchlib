@@ -102,26 +102,68 @@ One spec per *metric*, not per sketch, because the metric is what differs:
 
 | Spec | Bounds | Formula |
 | --- | --- | --- |
-| `CountMinSpec` | one-sided additive excess | `e·(N − f) / w`, failure `e^-d` |
-| `CountSketchSpec` | two-sided L2, rank-independent | `sqrt(κ/w)·‖f₋ᵢ‖₂`, κ = 3, failure `P[Bin(d, 1/3) ≥ ⌈d/2⌉]` |
+| `CountMinSpec` | one-sided additive excess | marginal `e·(N − f)/w` at failure `e^-d`; simultaneous `b·(N − f)/w` with `b = (D/δ)^{1/d}` |
+| `CountSketchSpec` | two-sided L2, rank-independent | marginal `sqrt(3/w)·‖f₋ᵢ‖₂` at `P[Bin(d, 1/3) ≥ ⌈d/2⌉]`; simultaneous at the smallest κ with `P[Bin(d,1/κ) ≥ ⌈d/2⌉] ≤ δ/D` |
 | `SecondMomentSpec` | F2 from a Count Sketch matrix | `sqrt(2κ/w)`, same median amplification |
-| `RankErrorSpec` | KLL rank error | `ε(k) = 2.446 / k^0.9433`, 99% confidence |
-| `RelativeQuantileSpec` | DDSketch relative value error | `α + ULP slack` vs the exact order statistic |
-| `CardinalityConfidenceSpec` | HLL / KMV | `z · σ_rel`, σ from the estimator's own model |
-| `SamplingConfidenceSpec` | Nitro | `z · sqrt(f(1−p)/p)` |
+| `KllRankSpec` | KLL **maximum** rank error over a q grid | `ε(k) = 2.446 / k^0.9433` — an Apache DataSketches *characterization fit*, not a theorem about this code |
+| `RelativeQuantileSpec` + `DdRankConvention` | DDSketch relative value error | `α + ULP slack` vs the exact order statistic **of that implementation's own rank convention** |
+| `CardinalityConfidenceSpec` | HLL / KMV | `z · σ_rel`, σ derived exactly, the tail a normal approximation |
+| `SamplingConfidenceSpec` | Nitro | `z · sqrt(f(p·r(1−r) + (1−p)/p))`, `r = frac(1/p)` |
+| `PrioritySampleSpec` | `UniformSampling` | `len = ⌈n·rate⌉` exactly; `Var[mean] = (σ_N²/m)(N−m)/(N−1)` |
 
-Each spec exposes the bound formula, the per-check failure probability the
-theorem allows, and an acceptance rule. `Tally` accumulates violations across
-checks and trials, and `assert_within` applies a binomial tail at a fixed test
-level (`TEST_LEVEL = 1e-6`) decided before the run — so the number of tolerated
-violations cannot be adjusted after seeing the result. `assert_none` is for
-structural guarantees, which tolerate nothing.
+### The statistical unit is part of the spec
+
+A bound `P[error > B] ≤ p` speaks about **one** draw of the randomness the
+estimator is built on. Turning `n` observed checks into a binomial tail at `p`
+requires `n` independent draws of *that* randomness — and most natural
+batteries are not:
+
+- several `q` off one KLL share one compaction history;
+- several keys off one Count-Min or Count Sketch share one hash;
+- rising checkpoints on one HLL or KMV are nested;
+- for HLL, KMV and counter matrices a shard merge is *exact*, so the merged
+  reading is literally the same number as the single pass.
+
+So `Tally` offers three acceptance rules and every call site must pick the one
+matching what it collected:
+
+| Rule | Valid when |
+| --- | --- |
+| `assert_none` | structural facts, and **simultaneous** bounds already union-bounded over the whole battery |
+| `assert_independent_binomial` | each recorded check is a fresh seed — sketch, hash or sampling |
+| `assert_rate_at_most` | one fixed realisation, pinned at the guarantee's own marginal probability. A regression pin, not a tail test |
+
+`TEST_LEVEL = 1e-6` and `SIMULTANEOUS_LEVEL = 1e-3` are both fixed before the
+run, so the number of tolerated violations cannot be adjusted after seeing the
+result.
+
+The usual way to make a battery over one sketch legitimate is to **reduce it to
+one outcome first**: the sketch's maximum rank error over the whole `q` grid, or
+whether any probed key broke a simultaneous bound. That single outcome, repeated
+over independent seeds, is a binomial.
 
 Keeping these apart is deliberate. There is no shared
 `QuantileSpec { rank_tol }` that KLL and DDSketch both use, because they do not
 promise the same thing: a correct KLL can return a value 100× off on a
 heavy-tailed stream and still be within its rank guarantee, and a correct
-DDSketch has no rank guarantee at all.
+DDSketch has no rank guarantee at all. For the same reason the two DDSketch
+implementations do not share a truth helper: `DDSketch::get_value_at_quantile`
+answers `sorted[ceil(q·n) − 1]` while the portable `DdSketch::quantile` answers
+`sorted[floor(q·(n−1))]`, so `DdRankConvention` carries the choice and each is
+scored on the question it actually answers.
+
+### Six statuses, not two
+
+The coverage matrix labels every row `theorem`, `asymptotic model`, `empirical`,
+`structural`, `regression`, or `gap`. Two of those distinctions are easy to
+lose:
+
+- an **exactly derived standard deviation** is not a tail bound. `z · σ` for HLL
+  or KMV becomes a failure probability only under a normal approximation, so
+  those rows are `asymptotic model`;
+- an **empirical fit imported from another implementation** is not a theorem.
+  KLL's `ε(k)` is DataSketches' characterization constant, so its tests are
+  named `..._characterization`, never `..._theorem`.
 
 **Layer 3 — the conformance kit (`common/conformance.rs`).**
 A sketch describes *what it guarantees* by implementing small capability

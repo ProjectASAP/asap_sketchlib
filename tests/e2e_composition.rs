@@ -1,6 +1,8 @@
-//! Composition layers: `HashSketchEnsemble`, `NitroBatch`, `UnivMonQ`'s
-//! configuration surface, and the portable facade types that pair a sketch
-//! with a heap.
+//! Composition layers: `HashSketchEnsemble`, `UnivMonQ`'s configuration
+//! surface, and the portable facade types that pair a sketch with a heap.
+//!
+//! Nitro is a composition layer too, but all of its behaviour lives in
+//! `tests/e2e_nitro.rs`.
 //!
 //! The common thread is that none of these change what a sketch guarantees —
 //! they change how it is fed. So each is checked against a **standalone
@@ -10,16 +12,13 @@
 
 mod common;
 
-use common::specs::{
-    CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, RankErrorSpec,
-    SamplingConfidenceSpec, Tally,
-};
+use common::specs::{CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, KllRankSpec, Tally};
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{
     Classic, Count, CountMin, CountMinSketchWithHeap, CountSketchWithHeap, DataInput,
     EnsembleSketch, ErtlMLE, FastPath, HashSketchEnsemble, HyperLogLog, HyperLogLogHIP, KllSketch,
-    MessagePackCodec, NitroBatch, UnivMonQ, UnivMonQConfig, Vector2D,
+    MessagePackCodec, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 
 const ROWS: usize = 3;
@@ -115,7 +114,12 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
     let distinct = truth.distinct();
     let register_spec = CardinalityConfidenceSpec::hll(14, 4.0);
     let hip_spec = CardinalityConfidenceSpec::hll_hip(14, 4.0);
-    let mut card_tally = Tally::default();
+    // Trial units: the three ensemble members share **one** hash (the matrix
+    // hash at seed index 0) and the three standalone references share another
+    // (the canonical seed), so this is two draws of the randomness, not six.
+    // Each draw is scored as a single pass/fail over its three estimators.
+    let mut ensemble_ok = Vec::new();
+    let mut standalone_ok = Vec::new();
     for (idx, label, reference, spec) in [
         (2usize, "HllErtl", ref_ertl.estimate() as f64, register_spec),
         (
@@ -127,8 +131,12 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
         (4, "HllHip", ref_hip.estimate() as f64, hip_spec),
     ] {
         let got = ens.cardinality(idx).expect("hll cell");
-        spec.tally_into(&mut card_tally, got, distinct);
-        spec.tally_into(&mut card_tally, reference, distinct);
+        if let Err(detail) = spec.check(got, distinct) {
+            ensemble_ok.push(format!("{label} (ensemble): {detail}"));
+        }
+        if let Err(detail) = spec.check(reference, distinct) {
+            standalone_ok.push(format!("{label} (standalone): {detail}"));
+        }
         // Both estimate the same truth, so they cannot be further apart than
         // their two bands allow.
         let gap = (got - reference).abs() / distinct as f64;
@@ -140,10 +148,17 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
             2.0 * spec.tolerance()
         );
     }
-    card_tally.assert_within(
+    let mut card_tally = Tally::default();
+    card_tally.record(ensemble_ok.is_empty(), || ensemble_ok.join("; "));
+    card_tally.record(standalone_ok.is_empty(), || standalone_ok.join("; "));
+    card_tally.assert_independent_binomial(
         "ensemble and standalone HLL members / cardinality bands",
         register_spec.per_check_failure(),
-        &format!("{context}, distinct={distinct}"),
+        &format!(
+            "{context}, distinct={distinct}; two trials — one per hash function \
+             (the ensemble's shared matrix hash, and the standalone canonical seed) — \
+             each scored over all three estimators reading it"
+        ),
     );
 }
 
@@ -151,7 +166,7 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
 /// hash path. `CountFast` gets the L2 bound, not Count-Min's; the HLL members
 /// get their register models.
 #[test]
-fn ensemble_members_satisfy_their_own_error_bounds() {
+fn ensemble_members_stay_inside_their_own_error_models() {
     let stream = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
     let mut ens: HashSketchEnsemble = HashSketchEnsemble::new(vec![
         EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
@@ -189,16 +204,31 @@ fn ensemble_members_satisfy_their_own_error_bounds() {
         &context,
     );
 
-    let mut card_tally = Tally::default();
+    // All three HLL members read the *same* shared matrix hash, so their errors
+    // are one draw of the randomness seen through three estimators, not three
+    // draws. The trial is therefore "did every member land in its own band".
     let register_spec = CardinalityConfidenceSpec::hll(14, 4.0);
     let hip_spec = CardinalityConfidenceSpec::hll_hip(14, 4.0);
-    register_spec.tally_into(&mut card_tally, ens.cardinality(2).unwrap(), distinct.len());
-    register_spec.tally_into(&mut card_tally, ens.cardinality(3).unwrap(), distinct.len());
-    hip_spec.tally_into(&mut card_tally, ens.cardinality(4).unwrap(), distinct.len());
-    card_tally.assert_within(
+    let mut failures = Vec::new();
+    for (idx, label, spec) in [
+        (2usize, "HllErtl", register_spec),
+        (3, "HllClassic", register_spec),
+        (4, "HllHip", hip_spec),
+    ] {
+        if let Err(detail) = spec.check(ens.cardinality(idx).unwrap(), distinct.len()) {
+            failures.push(format!("{label}: {detail}"));
+        }
+    }
+    let mut card_tally = Tally::default();
+    card_tally.record(failures.is_empty(), || failures.join("; "));
+    card_tally.assert_independent_binomial(
         "ensemble HLL members / cardinality bands",
         register_spec.per_check_failure(),
-        &format!("{context}, distinct={}", distinct.len()),
+        &format!(
+            "{context}, distinct={}; one trial — the three members share the ensemble's \
+             single shared matrix hash",
+            distinct.len()
+        ),
     );
 }
 
@@ -326,219 +356,6 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
             .push(EnsembleSketch::from(HyperLogLogHIP::new()))
             .is_ok(),
         "an HLL member has no dimensions to clash with"
-    );
-}
-
-// ------------------------------------------------------------------- Nitro
-
-/// Sampling rates covered. `1.0` is the degenerate full-sampling case, where
-/// the band collapses to zero width and the estimate must be exact.
-const NITRO_RATES: [f64; 4] = [1.0, 0.5, 0.1, 0.01];
-/// Fixed sampling-RNG seeds. `NitroBatch::with_target` seeds from the OS, so
-/// an accuracy assertion on one would be re-rolled every run; the seeded
-/// constructor is what makes these reproducible.
-const NITRO_SEEDS: [u64; 4] = [0x0117_0001, 0x0117_0002, 0x0117_0003, 0x0117_0004];
-/// `z = 4` on the binomial sampling band: two-sided failure 6.3e-5 per check.
-const NITRO_Z: f64 = 4.0;
-
-/// Nitro admits each update with probability `p` and writes weight `ceil(1/p)`,
-/// so a key of true count `f` is estimated by `Binomial(f, p) * ceil(1/p)` —
-/// unbiased, with standard deviation `sqrt(f (1-p) / p)`. The accepted band is
-/// `z` of those, computed per rate rather than a flat percentage: at `f =
-/// 100_000` it is +-0.4% at `p = 0.5` but +-12.6% at `p = 0.01`, and a single
-/// fixed +-5% would be simultaneously far too loose for one and impossible for
-/// the other.
-#[test]
-fn nitro_estimates_stay_inside_the_binomial_sampling_band_on_every_target() {
-    const COUNT: i64 = 100_000;
-    let key = 42i64;
-    let data = vec![key; COUNT as usize];
-
-    for &rate in &NITRO_RATES {
-        let spec = SamplingConfidenceSpec::new(rate, NITRO_Z);
-        for &seed in &NITRO_SEEDS {
-            // Count-Min target. Only one key is present, so the sketch itself
-            // is exact and the whole error budget is sampling noise.
-            let mut cm = NitroBatch::with_target_and_seed(
-                rate,
-                CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
-                seed,
-            );
-            cm.insert(&data);
-            let est = cm.estimate_median(&DataInput::I64(key));
-            if let Err(detail) = spec.check(est, COUNT as f64, 0.0) {
-                panic!("NitroBatch<CountMin> seed={seed:#x}: {detail}");
-            }
-
-            // Count Sketch target: same sampling model, signed estimator.
-            let mut cs = NitroBatch::with_target_and_seed(
-                rate,
-                Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
-                seed,
-            );
-            cs.insert(&data);
-            let cs_est = cs.estimate_median(&DataInput::I64(key));
-            if let Err(detail) = spec.check(cs_est, COUNT as f64, 0.0) {
-                panic!("NitroBatch<Count> seed={seed:#x}: {detail}");
-            }
-        }
-    }
-}
-
-/// Full sampling is not approximate: at `rate = 1.0` every update is admitted
-/// with weight 1, so a single-key stream must come back exactly.
-#[test]
-fn nitro_at_full_sampling_is_exact() {
-    let data = vec![7i64; 50_000];
-    let mut cm = NitroBatch::with_target_and_seed(
-        1.0,
-        CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
-        NITRO_SEEDS[0],
-    );
-    cm.insert(&data);
-    assert_eq!(
-        cm.estimate_median(&DataInput::I64(7)),
-        50_000.0,
-        "rate=1.0 must admit every update with unit weight"
-    );
-}
-
-/// Two runs with the same seed must be bit-identical, and two runs with
-/// different seeds must differ — otherwise the seed is not reaching the
-/// sampling RNG and the "deterministic" constructor is decorative.
-#[test]
-fn nitro_sampling_is_reproducible_from_its_seed() {
-    let data = vec![5i64; 20_000];
-    let run = |seed: u64| {
-        let mut n = NitroBatch::with_target_and_seed(
-            0.1,
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
-            seed,
-        );
-        n.insert(&data);
-        n.estimate_median(&DataInput::I64(5))
-    };
-    assert_eq!(
-        run(NITRO_SEEDS[0]),
-        run(NITRO_SEEDS[0]),
-        "the same seed must produce the same admitted subset"
-    );
-    let distinct: std::collections::HashSet<u64> =
-        NITRO_SEEDS.iter().map(|s| run(*s).to_bits()).collect();
-    assert!(
-        distinct.len() > 1,
-        "four different seeds all produced the same estimate; the seed is not \
-         reaching the sampling RNG"
-    );
-}
-
-/// `NitroBatch<Vector2D<u32>>` — the bare-storage target reached by
-/// `init_nitro` — has **no public query path**: `NitroEstimate` is implemented
-/// only for the `Vector2D<i32>`-backed Count-Min and Count Sketch, and
-/// `CountMin::estimate` cannot be instantiated over a `u32` counter because it
-/// needs `Counter: From<i32>`. So there is no per-key estimate to check here,
-/// and this test does not invent one by re-deriving the fast-path hash: doing
-/// exactly that is how the Nitro estimator once shipped broken while its tests
-/// passed.
-///
-/// What *is* publicly observable, and is what Nitro actually controls, is the
-/// total admitted mass. Every admitted update writes `ceil(1/rate)` into one
-/// cell of every row, so the sum over any single row is
-/// `admitted * ceil(1/rate)` — an unbiased estimate of the stream length with
-/// the same binomial sampling band, computed without touching a hash.
-#[test]
-fn nitro_over_a_bare_vector2d_target_admits_mass_inside_the_sampling_band() {
-    const COUNT: i64 = 100_000;
-    let data = vec![11i64; COUNT as usize];
-
-    for &rate in &NITRO_RATES {
-        let spec = SamplingConfidenceSpec::new(rate, NITRO_Z);
-        for &seed in &NITRO_SEEDS {
-            let mut nitro = NitroBatch::init_nitro_with_seed(rate, seed);
-            nitro.insert(&data);
-            let target = nitro.target();
-            let row0_mass: f64 = (0..target.cols())
-                .map(|c| target.query_one_counter(0, c) as f64)
-                .sum();
-            if let Err(detail) = spec.check(row0_mass, COUNT as f64, 0.0) {
-                panic!(
-                    "NitroBatch<Vector2D<u32>> rate={rate} seed={seed:#x}: row-0 admitted \
-                     mass out of band: {detail}"
-                );
-            }
-            // Every row receives the same weight from every admitted update,
-            // so all rows must carry identical total mass.
-            for r in 1..target.rows() {
-                let mass: f64 = (0..target.cols())
-                    .map(|c| target.query_one_counter(r, c) as f64)
-                    .sum();
-                assert_eq!(
-                    mass, row0_mass,
-                    "row {r} carries {mass} but row 0 carries {row0_mass}; every row must \
-                     receive each admitted update (rate={rate} seed={seed:#x})"
-                );
-            }
-        }
-    }
-}
-
-/// Merging two same-rate Nitro batches sums their admitted mass, so a key
-/// split across both must come back at the combined band.
-#[test]
-fn nitro_merge_sums_admitted_mass_at_the_combined_band() {
-    const HALF: i64 = 50_000;
-    let key = 3i64;
-    for &rate in &[0.5f64, 0.1] {
-        let spec = SamplingConfidenceSpec::new(rate, NITRO_Z);
-        let mut a = NitroBatch::with_target_and_seed(
-            rate,
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
-            NITRO_SEEDS[0],
-        );
-        let mut b = NitroBatch::with_target_and_seed(
-            rate,
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048),
-            NITRO_SEEDS[1],
-        );
-        a.insert(&vec![key; HALF as usize]);
-        b.insert(&vec![key; HALF as usize]);
-        a.merge(&b);
-        let est = a.estimate_median(&DataInput::I64(key));
-        if let Err(detail) = spec.check(est, (HALF * 2) as f64, 0.0) {
-            panic!("NitroBatch merge rate={rate}: {detail}");
-        }
-    }
-}
-
-/// Weight saturation: the scaled increment is clamped into the counter's
-/// domain rather than wrapping into a decrement.
-#[test]
-fn nitro_saturates_oversized_weights_instead_of_wrapping() {
-    assert_eq!(
-        asap_sketchlib::nitro_delta_saturated_i32(u64::MAX),
-        i32::MAX,
-        "an oversized weight must clamp to i32::MAX, not wrap negative"
-    );
-    assert_eq!(
-        asap_sketchlib::nitro_delta_saturated_u32(u64::MAX),
-        u32::MAX,
-        "an oversized weight must clamp to u32::MAX"
-    );
-    assert_eq!(asap_sketchlib::nitro_delta_saturated_i32(7), 7);
-    assert_eq!(asap_sketchlib::nitro_delta_saturated_u32(7), 7);
-
-    // A rate low enough to push `ceil(1/rate)` past `i32::MAX` must still
-    // leave counters non-negative.
-    let mut tiny = NitroBatch::with_target_and_seed(
-        1e-9,
-        CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 64),
-        NITRO_SEEDS[0],
-    );
-    tiny.insert(&vec![1i64; 4_000]);
-    let est = tiny.estimate_median(&DataInput::I64(1));
-    assert!(
-        est >= 0.0,
-        "a saturating weight must not turn Count-Min counters negative; got {est}"
     );
 }
 
@@ -880,68 +697,93 @@ fn portable_count_sketch_with_heap_satisfies_the_l2_bound_through_merge_and_wire
     );
 }
 
-/// The portable KLL facade under the rank-error contract, seeded so a failure
-/// reproduces. `KllSketch::new` seeds from the wall clock; `with_seed` is what
-/// an accuracy test must use.
+/// The portable KLL facade under the DataSketches maximum-rank-error
+/// characterization, seeded so a failure reproduces. `KllSketch::new` seeds
+/// from the wall clock; `with_seed` is what an accuracy test must use.
+///
+/// Trial unit is one sketch, scored on its worst rank error over the `q` grid,
+/// with an independent compaction seed per trial. The post-wire sketch is *not*
+/// a separate trial — a round trip that preserves every answer bit for bit, as
+/// asserted below, gives literally the same numbers.
 #[test]
-fn portable_kll_sketch_satisfies_the_rank_error_contract_through_merge_and_wire() {
+fn portable_kll_sketch_satisfies_the_rank_error_characterization_through_merge_and_wire() {
     const K: u16 = 200;
-    const SKETCH_SEED: u64 = 0x5EED_0400;
+    const TRIALS: u64 = 12;
     let values: Vec<f64> = uniform_u64(N, 1_000_000, STREAM_SEED)
         .into_iter()
         .map(|v| v as f64)
         .collect();
     let truth = NumericTruth::new(values.clone());
-
-    let mut single = KllSketch::with_seed(K, SKETCH_SEED);
-    let mut left = KllSketch::with_seed(K, SKETCH_SEED ^ 0xAAAA);
-    let mut right = KllSketch::with_seed(K, SKETCH_SEED ^ 0x5555);
-    for (i, v) in values.iter().enumerate() {
-        single.update(*v);
-        if i % 2 == 0 {
-            left.update(*v);
-        } else {
-            right.update(*v);
-        }
-    }
-    left.merge(&right).expect("same-k merge");
-
-    let spec = RankErrorSpec::datasketches(K as usize);
     let qs = [0.1f64, 0.25, 0.5, 0.75, 0.9];
-    let context =
-        format!("k={K} sketch_seed={SKETCH_SEED:#x} uniform n={N} stream_seed={STREAM_SEED:#x}");
+    let spec = KllRankSpec::datasketches(K as usize);
+    let context = format!(
+        "k={K} uniform n={N} stream_seed={STREAM_SEED:#x}, {TRIALS} independent \
+         compaction seeds from 0x5EED_0400"
+    );
 
     let mut tally = Tally::default();
-    spec.tally_into(&mut tally, truth.sorted(), &qs, |q| single.quantile(q));
-    spec.tally_into(&mut tally, truth.sorted(), &qs, |q| left.quantile(q));
+    for t in 0..TRIALS {
+        let seed = 0x5EED_0400u64.wrapping_add(t.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut single = KllSketch::with_seed(K, seed);
+        let mut left = KllSketch::with_seed(K, seed ^ 0xAAAA);
+        let mut right = KllSketch::with_seed(K, seed ^ 0x5555);
+        for (i, v) in values.iter().enumerate() {
+            single.update(*v);
+            if i % 2 == 0 {
+                left.update(*v);
+            } else {
+                right.update(*v);
+            }
+        }
+        left.merge(&right).expect("same-k merge");
 
-    // Wire round trip must preserve every answer bit for bit.
-    let bytes = single.to_msgpack().expect("encode");
-    let decoded = KllSketch::from_msgpack(&bytes).expect("decode");
-    assert_eq!(decoded.k(), K, "k must survive the wire");
-    assert_eq!(
-        decoded.count(),
-        single.count(),
-        "retained mass must survive the wire"
-    );
-    let mut wire_tally = Tally::default();
-    for &q in &qs {
-        let (a, b) = (single.quantile(q), decoded.quantile(q));
-        wire_tally.record(a == b, || format!("q={q}: before {a} after {b}"));
+        spec.record_trial(
+            &mut tally,
+            &format!("portable KllSketch single pass seed={seed:#x}"),
+            truth.sorted(),
+            &qs,
+            |q| single.quantile(q),
+        );
+        spec.record_trial(
+            &mut tally,
+            &format!("portable KllSketch two-shard merge seed={seed:#x}"),
+            truth.sorted(),
+            &qs,
+            |q| left.quantile(q),
+        );
+
+        // The wire round trip must preserve every answer bit for bit, which is
+        // an equality rather than a band — and is why the decoded sketch does
+        // not enter the rank battery as a second trial.
+        let bytes = single.to_msgpack().expect("encode");
+        let decoded = KllSketch::from_msgpack(&bytes).expect("decode");
+        assert_eq!(decoded.k(), K, "k must survive the wire");
+        assert_eq!(
+            decoded.count(),
+            single.count(),
+            "retained mass must survive the wire"
+        );
+        let mut wire_tally = Tally::default();
+        for &q in &qs {
+            let (a, b) = (single.quantile(q), decoded.quantile(q));
+            wire_tally.record(a == b, || format!("q={q}: before {a} after {b}"));
+        }
+        wire_tally.assert_none(
+            &format!("portable KllSketch wire round trip (seed={seed:#x})"),
+            &context,
+        );
+
+        // A mismatched `k` must be refused rather than silently merged.
+        let other_k = KllSketch::with_seed(K * 2, seed);
+        assert!(
+            single.merge(&other_k).is_err(),
+            "merging sketches with different k must fail"
+        );
     }
-    wire_tally.assert_none("portable KllSketch wire round trip", &context);
-    spec.tally_into(&mut tally, truth.sorted(), &qs, |q| decoded.quantile(q));
 
-    // A mismatched `k` must be refused rather than silently merged.
-    let other_k = KllSketch::with_seed(K * 2, SKETCH_SEED);
-    assert!(
-        single.merge(&other_k).is_err(),
-        "merging sketches with different k must fail"
-    );
-
-    tally.assert_within(
-        "portable KllSketch / normalized rank error",
-        spec.failure_probability,
-        &format!("{context}; single pass, two-shard merge, and post-wire, q grid {qs:?}"),
+    tally.assert_independent_binomial(
+        "portable KllSketch / maximum normalized rank error per compaction seed",
+        spec.trial_failure_probability,
+        &format!("{context}; single pass and two-shard merge, q grid {qs:?}"),
     );
 }
