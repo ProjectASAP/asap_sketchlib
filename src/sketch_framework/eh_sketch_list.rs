@@ -326,6 +326,33 @@ mod tests {
         assert!((10.0..=30.0).contains(&q50), "unexpected q50 {q50}");
     }
 
+    /// `EHSketchList` derives its serde form from the variants it holds, so a
+    /// round trip of a nested DDSketch must carry the sketch's whole state.
+    #[test]
+    fn nested_ddsketch_survives_a_serde_round_trip() {
+        let mut dd = EHSketchList::DDS(DDSketch::new(0.01));
+        for v in [10.0f64, 20.0, 30.0, 40.0] {
+            dd.insert(&DataInput::F64(v));
+        }
+        let before = match &dd {
+            EHSketchList::DDS(inner) => (inner.get_count(), inner.sum(), inner.min(), inner.max()),
+            _ => panic!("expected the DDSketch variant"),
+        };
+
+        let bytes = rmp_serde::to_vec(&dd).expect("encode");
+        let restored: EHSketchList = rmp_serde::from_slice(&bytes).expect("decode");
+        let after = match &restored {
+            EHSketchList::DDS(inner) => (inner.get_count(), inner.sum(), inner.min(), inner.max()),
+            _ => panic!("expected the DDSketch variant"),
+        };
+        assert_eq!(after, before, "the nested sketch lost its running state");
+
+        let q50 = restored
+            .query(&DataInput::F64(0.5))
+            .expect("query the restored DDSketch");
+        assert!((10.0..=40.0).contains(&q50), "unexpected q50 {q50}");
+    }
+
     #[test]
     fn supports_norm_whitelist_is_enforced() {
         let cm = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::default());

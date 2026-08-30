@@ -79,7 +79,7 @@ struct DdPayload {
 /// Checks a relative accuracy against the domain [`DDSketch::new`] accepts:
 /// finite and strictly inside `(0, 1)`. Outside it the `gamma` derivation is
 /// non-positive or infinite and every bucket index is meaningless.
-fn check_alpha(alpha: f64) -> Result<(), String> {
+pub(super) fn check_alpha(alpha: f64) -> Result<(), String> {
     if !alpha.is_finite() || alpha <= 0.0 || alpha >= 1.0 {
         return Err(format!("DDSketch alpha {alpha} is not in (0, 1)"));
     }
@@ -89,7 +89,7 @@ fn check_alpha(alpha: f64) -> Result<(), String> {
 /// Checks a bucket store's index span: an empty store sits at offset `0`, and
 /// a populated one's highest index `offset + len - 1` is representable as an
 /// `i32`. Applied before the store is rebuilt from the declared offset.
-fn check_store_span(offset: i32, len: usize) -> Result<(), String> {
+pub(super) fn check_store_span(offset: i32, len: usize) -> Result<(), String> {
     if len == 0 {
         if offset != 0 {
             return Err(format!(
@@ -108,7 +108,7 @@ fn check_store_span(offset: i32, len: usize) -> Result<(), String> {
 }
 
 /// Total sample count, the checked sum of every bucket. `None` on overflow.
-fn total_count(counts: &[u64]) -> Option<u64> {
+pub(super) fn total_count(counts: &[u64]) -> Option<u64> {
     counts.iter().try_fold(0u64, |acc, &c| acc.checked_add(c))
 }
 
@@ -116,7 +116,7 @@ fn total_count(counts: &[u64]) -> Option<u64> {
 /// carries `0.0` / `+inf` / `-inf`, the state [`DDSketch::new`] starts in. A
 /// populated one carries finite scalars with `0 < min <= max`, and `sum >= min`
 /// since every ingested value is at least `min`.
-fn check_scalars(count: u64, sum: f64, min: f64, max: f64) -> Result<(), String> {
+pub(super) fn check_scalars(count: u64, sum: f64, min: f64, max: f64) -> Result<(), String> {
     if count == 0 {
         if sum == 0.0 && min == f64::INFINITY && max == f64::NEG_INFINITY {
             return Ok(());
