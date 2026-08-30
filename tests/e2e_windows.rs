@@ -448,9 +448,8 @@ fn eh_univmon_variant_reports_the_exact_l1_over_the_retained_window() {
     // `l2` is `sqrt(F2_hat)` where `F2_hat` is the row-median AMS estimate over
     // the sketch's own 5x2048 counters, so `SecondMomentSpec`'s relative bound
     // `b = sqrt(2*kappa/w)` on F2 becomes `[sqrt(1-b), sqrt(1+b)]` on the norm.
-    // At 5x2048 that is about -4.2%/+4.1%, three times tighter than the +-15%
-    // this used to accept, and it is tied to the configuration: halving `cols`
-    // widens the band automatically.
+    // At 5x2048 that is about -4.2%/+4.1%, tied to the configuration: halving
+    // `cols` widens the band automatically.
     //
     // This is the *terminal* layer's bound. UnivMon's recurrence composes
     // per-layer estimates, and the crate publishes no closed form for the

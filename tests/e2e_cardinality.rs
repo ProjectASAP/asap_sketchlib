@@ -120,9 +120,7 @@ macro_rules! hll_battery {
             // Shard merge over the *same* identities is an **equality**, not a
             // band: HLL registers combine by elementwise maximum, so merging
             // the even and odd halves reproduces the single pass register for
-            // register. Scoring it as a second confidence-band check — which is
-            // what this battery used to do — counted one number twice and
-            // tested nothing the single pass had not already tested.
+            // register.
             {
                 const MERGE_N: u64 = 200_000;
                 let mbase = IDENTITY_NAMESPACE_STRIDE * (CHECKPOINTS.len() as u64 + 1);

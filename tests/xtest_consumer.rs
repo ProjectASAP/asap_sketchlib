@@ -178,8 +178,7 @@ fn cross_language_proto() {
         other => panic!("expected DDSketch sketch_state, got {other:?}"),
     };
 
-    // `count` was dropped from the wire (ProjectASAP/sketchlib-go#243);
-    // recover it by summing the bucket counts.
+    // `count` is not on the wire; recover it by summing the bucket counts.
     let dd_total_count: u64 = dd_state.store_counts.iter().copied().sum();
     println!(
         "[DDSketch]   alpha={:.4} count={} buckets={} offset={}",
@@ -1177,8 +1176,7 @@ struct DdFromProto {
     store_counts: Vec<u64>,
     store_offset: i32,
     // Total count is recovered by summing the bucket array; the
-    // DataPoint-level count/min/max scalars were dropped from the wire
-    // (ProjectASAP/sketchlib-go#243).
+    // DataPoint-level count/min/max scalars are not on the wire.
     count: u64,
 }
 

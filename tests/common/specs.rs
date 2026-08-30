@@ -885,12 +885,12 @@ pub fn occurrence_sample_epsilon(samples: usize, delta: f64) -> f64 {
 /// # Why this is not the same as a rank-interval check
 ///
 /// Scoring each *estimated breakpoint* against the true rank interval of its
-/// own value — which is what the ordered-query test used to do — only ever
-/// looks at `x` values the estimate itself chose. An estimate that is right
-/// wherever it has a breakpoint and simply *has no breakpoint* across a region
-/// carrying a lot of mass scores zero error under that check and arbitrarily
-/// large error under this one. `cdf_sup_distance_detects_a_gap_a_breakpoint_scan_misses`
-/// in `tests/e2e_quantiles.rs` is exactly that fixture.
+/// own value only ever looks at `x` values the estimate itself chose. An
+/// estimate that is right wherever it has a breakpoint and simply *has no
+/// breakpoint* across a region carrying a lot of mass scores zero error under
+/// that check and arbitrarily large error under this one.
+/// `cdf_sup_distance_detects_a_gap_a_breakpoint_scan_misses` in
+/// `tests/e2e_quantiles.rs` is exactly that fixture.
 pub fn cdf_sup_distance(estimated: &[(f64, f64)], sorted_truth: &[f64]) -> (f64, f64) {
     let n = sorted_truth.len();
     assert!(
@@ -934,9 +934,8 @@ pub fn cdf_sup_distance(estimated: &[(f64, f64)], sorted_truth: &[f64]) -> (f64,
     (worst, worst_at)
 }
 
-/// The measurement the ordered-query test used to make: for each estimated
-/// breakpoint, the distance from its reported rank to the true rank interval
-/// of its own value.
+/// For each estimated breakpoint, the distance from its reported rank to the
+/// true rank interval of its own value.
 ///
 /// Kept **only** so a fixture can show that it reports zero where
 /// [`cdf_sup_distance`] reports a large error. It is not a Kolmogorov distance

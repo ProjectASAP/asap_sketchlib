@@ -43,7 +43,7 @@ fn bad_row_threshold_is_ceil_half_the_depth() {
             assert!(
                 spec.bad_row_threshold() < rows / 2 + 1,
                 "d={rows}: for even depth ceil(d/2) must be strictly smaller than \
-                 d/2+1, which is what the old code used"
+                 d/2+1, the naive majority threshold"
             );
         }
     }
@@ -60,9 +60,9 @@ fn bad_row_threshold_is_ceil_half_the_depth() {
 /// The binomial tails the threshold selects, at the marginal `kappa = 3`.
 ///
 /// Pinned numerically so a change to either the threshold or the tail
-/// routine is visible. `d = 4` is the case the old `d/2 + 1` got wrong: it
-/// claimed 0.111 where the estimator earns 0.407, i.e. it advertised a
-/// bound almost four times stronger than the median supports.
+/// routine is visible. `d = 4` is where `d/2 + 1` diverges: it gives 0.111
+/// where the estimator earns 0.407, a bound almost four times stronger than
+/// the median supports.
 #[test]
 fn marginal_failure_probabilities_match_the_hand_computed_tails() {
     let cases = [
@@ -81,10 +81,10 @@ fn marginal_failure_probabilities_match_the_hand_computed_tails() {
             spec.marginal_failure()
         );
     }
-    // The old formula at d=4, kept as an explicit contrast.
+    // `d/2 + 1` at d=4, kept as an explicit contrast.
     assert!(
         (binomial_tail_ge(4, 3, 1.0 / 3.0) - 0.111_111_111_111).abs() < 1e-9,
-        "P[Bin(4, 1/3) >= 3] is the number the old threshold reported"
+        "P[Bin(4, 1/3) >= 3] is the number a `d/2 + 1` threshold reports"
     );
 }
 
@@ -147,8 +147,8 @@ fn two_same_direction_bad_rows_move_an_averaged_four_row_median_out_of_band() {
 }
 
 /// Raising `kappa` until the union bound over `D` keys closes must respect
-/// the corrected threshold, so an even-depth sketch now needs a wider
-/// simultaneous band than it used to be given.
+/// `ceil(d/2)`, which gives an even-depth sketch a wider simultaneous band
+/// than `d/2 + 1` would.
 #[test]
 fn simultaneous_kappa_reflects_the_corrected_threshold() {
     let spec = CountSketchSpec::new(4, 2048);
@@ -160,7 +160,7 @@ fn simultaneous_kappa_reflects_the_corrected_threshold() {
         SIMULTANEOUS_LEVEL / 512.0
     );
     // Two bad rows out of four is a `kappa^-2` tail, so the required kappa
-    // is far larger than the `kappa^-3` the old threshold implied.
+    // is far larger than the `kappa^-3` a `d/2 + 1` threshold implies.
     let old_style = {
         let mut lo = 3.0f64;
         let mut hi = lo;

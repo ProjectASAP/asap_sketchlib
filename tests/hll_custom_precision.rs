@@ -3,8 +3,7 @@
 //! This is an integration test, so it compiles as a separate crate: it only
 //! sees `asap_sketchlib`'s public surface, and it never imports `serde`,
 //! `serde-big-array`, or any of the other names the macro expansion needs.
-//! That makes it a real check that the exported macro is usable downstream —
-//! see issue #94.
+//! That makes it a real check that the exported macro is usable downstream.
 //!
 //! The precisions here are deliberately outside the built-in
 //! {12, 14, 16} set, including `lg_k = 18` (needed by sketch-bench's
