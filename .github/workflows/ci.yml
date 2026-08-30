@@ -35,6 +35,12 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
+      # `default = []`, so the step above never compiles the crate as a
+      # dependent gets it by default: everything behind `octo-runtime` is on.
+      # This one covers the default feature set.
+      - name: Run clippy (default features)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Run tests
         run: cargo test --all-features --locked --verbose
 
