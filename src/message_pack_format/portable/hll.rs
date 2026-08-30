@@ -352,7 +352,9 @@ impl HllSketch {
         }
     }
 
-    /// Estimate cardinality (Classic HLL estimator with small/large-range corrections).
+    /// Estimate cardinality (Classic HLL estimator with the small-range
+    /// correction). Ranks are drawn from a 64-bit hash, so the estimate needs
+    /// no large-range correction.
     pub fn estimate(&self) -> f64 {
         let m = self.registers.len() as f64;
         if m == 0.0 {
@@ -373,9 +375,6 @@ impl HllSketch {
 
         if est <= m * 5.0 / 2.0 && zero_count != 0 {
             est = m * (m / zero_count as f64).ln();
-        } else if est > 143_165_576.533 {
-            let aux = i32::MAX as f64;
-            est = -aux * (1.0 - est / aux).ln();
         }
         est
     }
@@ -621,6 +620,26 @@ impl MessagePackCodec for HllSketchDelta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ranks are drawn from a 64-bit hash, so a register state whose estimate
+    /// runs past the 32-bit range must still follow the HyperLogLog formula
+    /// rather than saturate or turn into a NaN.
+    #[test]
+    fn estimate_holds_past_the_32_bit_range() {
+        for rank in [12u8, 16, 18, 20] {
+            let mut sketch = HllSketch::new(HllVariant::Regular, 14);
+            sketch.registers.fill(rank);
+            let m = sketch.registers.len() as f64;
+            let alpha_m = 0.7213 / (1.0 + 1.079 / m);
+            let expected = alpha_m * m * 2f64.powi(rank as i32);
+            let estimate = sketch.estimate();
+            let error = (estimate - expected).abs() / expected;
+            assert!(
+                error <= 1e-9,
+                "rank {rank} estimate {estimate} deviates from {expected} by {error:.6}"
+            );
+        }
+    }
 
     #[test]
     fn msgpack_delta_against_empty_round_trips() {
