@@ -2,74 +2,16 @@
 //! ground-truth accuracy probe (examples/accuracy_probe.rs).
 //!
 //! Each test feeds fully deterministic synthetic data with an exactly known
-//! answer and asserts the theory-correct behavior. All four bugs below were
-//! fixed in this PR; these tests pin the fixed behavior so the defects
-//! cannot silently return.
+//! answer and asserts the theory-correct behavior.
+//!
+//! The two Nitro defects the probe found — the insert and query paths reading
+//! different hash domains, and each sampled record reaching only one row — are
+//! pinned by `full_sampling_is_exact_and_the_query_reads_the_cells_the_insert_wrote`
+//! in `tests/e2e_nitro.rs`, which names both failure modes on the same run
+//! that already exercises every ingestion path.
 
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
-use asap_sketchlib::{
-    CountL2HH, CountMin, DDSketch, DataInput, DefaultXxHasher, NitroBatch, Vector2D,
-};
-
-// ---------------------------------------------------------------------------
-// Bug 1: NitroBatch::estimate_median reads a different hash domain than the
-// insert path writes, so it returns ~0 for every key.
-//
-// Insert:  hash128_seeded(0, key), bit-sliced per row   (nitro.rs:259)
-// Estimate: CountMin fast path -> Packed64(hash64(...)) (hash.rs:329)
-//
-// Synthetic stream: one key inserted 100_000 times at rate 1.0.
-// Truth: 100_000. Current behavior: 0.
-// ---------------------------------------------------------------------------
-/// Fixed sampling-RNG seed so these regressions reproduce exactly.
-const NITRO_SEED: u64 = 0x8E_9101;
-
-#[test]
-fn nitro_estimate_median_matches_insert_hash_domain() {
-    let n = 100_000i64;
-    let mut nb = NitroBatch::with_target_and_seed(
-        1.0,
-        CountMin::<Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(5, 2048),
-        NITRO_SEED,
-    );
-    nb.insert(&vec![7i64; n as usize]);
-
-    let est = nb.estimate_median(&DataInput::I64(7));
-    assert!(
-        est > 0.5 * n as f64,
-        "public estimate_median returned {est} for a key inserted {n} times \
-         (insert and estimate use different hash derivations)"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Bug 2 (regression): NitroBatch must not assign each sampled item to a
-// single row (position % rows), which drove every per-row counter to
-// truth/rows. After the fix each sampled record updates ALL rows, so the
-// estimate converges to the true frequency at ANY sampling rate.
-//
-// Synthetic stream: one key inserted 10_000 times, 5 rows, rates {1.0, 0.5}.
-// Truth: 10_000. Pre-fix behavior: 2_000 (= n / rows) or 0 (hash mismatch).
-// ---------------------------------------------------------------------------
-#[test]
-fn nitro_estimate_is_not_divided_by_rows() {
-    let n = 100_000i64;
-    let rows = 5usize;
-    for rate in [1.0f64, 0.5, 0.25] {
-        let mut nb = NitroBatch::with_target_and_seed(
-            rate,
-            CountMin::<Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(rows, 2048),
-            NITRO_SEED,
-        );
-        nb.insert(&vec![7i64; n as usize]);
-        let est = nb.estimate_median(&DataInput::I64(7));
-        assert!(
-            (est - n as f64).abs() <= 0.05 * n as f64,
-            "rate={rate}: estimate_median returned {est} for {n} inserts \
-             across {rows} rows (expected ~{n})"
-        );
-    }
-}
+use asap_sketchlib::{CountL2HH, DDSketch, DataInput, DefaultXxHasher};
 
 // ---------------------------------------------------------------------------
 // Bug 3: portable DdSketch reports gamma^(k+0.5) (bucket log-midpoint) as the

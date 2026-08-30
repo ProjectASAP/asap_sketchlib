@@ -162,6 +162,35 @@ signals a backwards-compatible change.
   in-crate writes the positional form — the portable MessagePack wire for the
   top-k sketches carries a `(key, value)` list and rebuilds through `update`,
   and the goldens cover CMS and HLL envelopes only.
+- **BREAKING (`serde` shape of `Nitro`, and therefore of `Vector2D` and any
+  sketch embedding one):** `Nitro::rounding_state` is now a serialized field,
+  appended after `mask`, so a sketch resumed from a decode continues its weight
+  sequence instead of restarting the rounding stream from a constant. It
+  carries `#[serde(default)]`, so a payload written before this field existed
+  decodes unchanged in both map and array encodings. A *new* payload read by an
+  *older* build decodes only in a map encoding (`rmp_serde::to_vec_named`,
+  `serde_json`), where the unknown key is skipped; a positional encoding gains
+  one trailing element. **The ASAPv1 wire format is unaffected**: no ASAPv1
+  payload has ever carried Nitro state — `CountMin` and `Count` envelopes
+  serialize the counter slice and the metadata block only — so every
+  `serialize_to_bytes` / `deserialize_from_bytes` byte string and every golden
+  fixture is unchanged.
+- **BREAKING (`Nitro::admit_rows`, `Nitro::table_cursor`,
+  `Nitro::skip_table_len`, `NitroBatch::table_cursor`,
+  `NitroBatch::skip_table_len`):** removed from the public API.
+  `admit_rows` is now `pub(crate)` and takes a
+  `SmallVec<[(usize, u64); MATRIX_MAX_ROWS]>`; the cursor and table-length
+  accessors existed only so an integration test could read private state, and
+  the tests that used them are now unit tests in the modules that own it. The
+  seeded constructors — `enable_nitro_with_seed`, `init_nitro_seeded`,
+  `with_target_and_seed`, `init_nitro_with_seed` — are unaffected: they answer
+  a real need to reproduce a sampling run.
+- **`CountMin::fast_insert_nitro` and `Count::fast_insert_nitro` no longer
+  allocate per observation.** Each call built a `Vec` for the admitted rows.
+  They now collect into a `SmallVec` inlined to `MATRIX_MAX_ROWS`, so no matrix
+  the hash family supports reaches the heap, at any sampling rate. The hash is
+  computed once per observation and both paths share the one admission walk in
+  `Nitro::admit_rows`.
 - **BREAKING (external implementors of `MatrixFastHash`):** the trait gained a
   required `row_hash(row, mask_bits, mask)` method, split out of
   `col_for_row` so storages can decode against precomputed parameters and
@@ -186,25 +215,46 @@ signals a backwards-compatible change.
   table's real length (and folds an out-of-range value decoded from an old
   payload back into range), the schedule multiplies the unscaled `ln(1 - u)`
   table by `1 / ln(1 - p)`, and the rounding draw comes from a separate
-  splitmix64 stream so it cannot phase-lock to the skip schedule.
-  `NitroBatch::insert_cached_step` had the identical mask and rate bugs and is
-  fixed the same way.
-- **The row-level Nitro insert and query derived cells from different hash
-  forms, so every per-key estimate read 0.** `CountMin::fast_insert_nitro` and
-  `Count::fast_insert_nitro` hashed with `hash128_seeded(0, value)` and sliced
-  columns out of that raw `u128`, while `nitro_estimate` and `Count::estimate`
-  query through `FastPathHasher::hash_for_matrix` and
-  `MatrixFastHash::col_for_row`. Those agree only when the matrix hash is the
-  identity on the raw hash, which it is not — the packing mode is chosen from
-  `rows` and `cols`. Both inserts now derive cell and sign exactly as a plain
-  `insert` does.
+  splitmix64 stream (`Nitro::rounding_state`) so it cannot phase-lock to the
+  skip schedule. `NitroBatch::insert_cached_step` had the identical mask and
+  rate bugs and is fixed the same way.
+- **Nitro's insert and query derived cells from different hash forms, so every
+  per-key estimate read 0.** `CountMin::fast_insert_nitro`,
+  `Count::fast_insert_nitro` and `NitroBatch`'s own insert hashed with
+  `hash128_seeded(0, value)` and sliced columns out of that raw `u128`, while
+  `nitro_estimate`, `Count::estimate` and `NitroBatch::estimate_median` query
+  through `FastPathHasher::hash_for_matrix` and `MatrixFastHash::col_for_row`.
+  Those agree only when the matrix hash is the identity on the raw hash, which
+  it is not — the packing mode is chosen from `rows` and `cols`. Every insert
+  path now derives cell and sign exactly as a plain `insert` does. Separately,
+  `NitroBatch` had assigned each sampled record to a single row
+  (`position % rows`), which divided every per-row counter by the depth; a
+  sampled record now reaches every row, which is what makes the estimator
+  unbiased. Update weights saturate into the counter's domain
+  (`nitro_delta_saturated_i32` / `_u32`) instead of wrapping into a decrement,
+  reachable at rates below ~4.7e-10 or by writing the public `delta` field.
 - **The row-level Nitro admission walk underflowed once skips became small.**
   The carry `(r + to_skip + 1) - rows` is negative on `usize` whenever the next
   admitted slot falls inside the same update — the common case at any rate above
   roughly `1/rows`, reachable only once the schedule above was rate-correct. The
   Count-Min path also admitted at most one row per update and dropped any
   further landings. Both now walk the update's slots through
-  `Nitro::admit_rows`.
+  `Nitro::admit_rows`, whose arithmetic saturates so an outstanding skip near
+  `usize::MAX` — reachable from `commit_ctx` or a decoded payload — cannot
+  overflow the walk.
+- **The row-level Nitro sampler admitted its first row slot unconditionally.**
+  `Nitro` was built with `to_skip = 0`, so the first call to `admit_rows`
+  admitted row 0 at every rate. For a one-row sketch that puts the estimate at
+  `1/p` instead of 1 — 100× at `p = 0.01` — and for a `d`-row sketch it biases
+  the first `d` slots of every fresh sketch. Both constructors now draw the
+  first skip at construction; `init_nitro_seeded` places the cursor at the
+  seed's table offset first, so the initial draw is the seed's own. At `p = 1`
+  every row is still admitted with weight 1.
+- **A decoded `Nitro` restarted its stochastic-rounding stream from a fixed
+  constant.** `rounding_state` was `#[serde(skip)]`, so a sketch serialized
+  mid-stream and resumed emitted a different weight sequence than the
+  uninterrupted run at any rate whose reciprocal is not an integer. It is now
+  serialized. See *Changed* for what that does to the encoded shape.
 
 ### Added
 
@@ -216,9 +266,14 @@ signals a backwards-compatible change.
   both the table cursor and the rounding stream. `NitroBatch::with_target_and_seed`
   now seeds the cursor too, so `insert_cached_step` is seed-dependent as
   `insert` already was.
-- **`Nitro::table_cursor` / `Nitro::skip_table_len`, and the same pair on
-  `NitroBatch`.** Read-only, so a test can show the cursor advances and wraps
-  rather than sticking on one entry.
+- **`NitroContext`, `Nitro::context` and `Nitro::restore_context`.** The
+  complete row-level sampling state — table cursor, outstanding skip, and the
+  stochastic-rounding stream — so a snapshot restored onto another sketch
+  continues the admission and weight sequence exactly. The older
+  `Nitro::get_ctx` / `commit_ctx` pair carries the first two only; it is kept
+  for compatibility and its documentation now says so rather than claiming to
+  save the sampling state. `NitroBatch`'s pair covers the *cached* schedule
+  only — its live `SmallRng` is not serializable — and says that too.
 
 - **NitroSketch's compensating weight is no longer biased at rates whose
   reciprocal is not an integer.** `NitroBatch` and the row-level `Nitro` behind
@@ -232,10 +287,11 @@ signals a backwards-compatible change.
   admitted update, so `E[W] = 1/p` and hence `E[est] = f` at every rate, at the
   cost of `frac(1/p)(1 - frac(1/p)) <= 1/4` extra variance per admission.
   `NitroBatch::admitted_weight` draws from the sampling RNG; `Nitro::
-  admitted_delta` derives its Bernoulli from the skip-table cursor, so it adds
-  no state and leaves the serialized form byte-identical. When `1 / p` is an
-  integer the fraction is zero, the draw is skipped, and the emitted weights are
-  exactly what they were before — so the common rates (1, 1/2, 1/10, 1/100) are
+  admitted_delta` draws from its own splitmix64 stream, advanced once per
+  admitted slot and independent of the skip cursor, so the dither cannot become
+  a fixed function of position in the skip table. When `1 / p` is an integer the
+  fraction is zero, no draw is consumed, and the emitted weights are exactly
+  what they were before — so the common rates (1, 1/2, 1/10, 1/100) are
   unchanged.
 
 - **`ExponentialHistogram` no longer discards its payload when the bucket
@@ -263,16 +319,6 @@ signals a backwards-compatible change.
   UnivMon cells). Existing integer and `"string"` encodings are unchanged and
   bytes written before this release still decode.
 
-- **Made `NitroBatch` frequency estimates unbiased.** Inserts hashed keys with
-  raw `hash128_seeded` while the public estimator derived cells from the
-  packed matrix hash (Packed64 mode), so estimates read cells inserts never
-  wrote and returned ~0; each sampled record now updates every row using the
-  sketch's own fast-path hash derivation, and both batch and streaming skip
-  draws use `floor` instead of `ceil` (the extra +1 per skip halved-ish the
-  effective sampling rate). Estimates now converge to true frequencies at any
-  rate. Update weights saturate at the `i32` counter domain instead of
-  wrapping (reachable via rates below ~4.7e-10 or by writing the public
-  `delta` field directly).
 - **Restored the α relative-accuracy guarantee in portable `DdSketch`.**
   Quantile representatives changed from the log-midpoint γ^(k+0.5), whose edge
   error √γ−1 exceeds α, to γ^k·(1+α) — matching core `DDSketch` and DataDog's

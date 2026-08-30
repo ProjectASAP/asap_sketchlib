@@ -169,7 +169,7 @@ fn run_keyed_variant(
 }
 
 #[test]
-fn eh_count_min_variant_satisfies_the_count_min_bound_over_the_retained_window() {
+fn eh_count_min_variant_conforms_to_the_count_min_model_over_the_retained_window() {
     let (merged, truth, ctx) = run_keyed_variant(asap_sketchlib::EHSketchList::CM(CountMin::<
         Vector2D<i32>,
         FastPath,
@@ -185,7 +185,7 @@ fn eh_count_min_variant_satisfies_the_count_min_bound_over_the_retained_window()
 }
 
 #[test]
-fn eh_count_sketch_variant_satisfies_the_l2_bound_over_the_retained_window() {
+fn eh_count_sketch_variant_conforms_to_the_l2_model_over_the_retained_window() {
     let (merged, truth, ctx) = run_keyed_variant(asap_sketchlib::EHSketchList::CS(Count::<
         Vector2D<i32>,
         FastPath,

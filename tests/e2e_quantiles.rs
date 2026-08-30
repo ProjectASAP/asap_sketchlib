@@ -860,49 +860,55 @@ fn univmonq_frequency_and_f2_satisfy_the_count_sketch_bounds() {
     }
 }
 
-/// Ordered queries against the **full** documented bound, measured as a real
-/// Kolmogorov distance.
+/// Ordered queries against the full documented bound: the Kolmogorov distance
+/// of the estimated CDF, and the rank acceptance of `quantile` answers.
 ///
 /// The contract in `docs/api/api_univmon_q.md` is
 ///
 /// ```text
-///   sup_x |F_hat(x) - F(x)| <= 2 E_H + P_hat_R * epsilon_R
+///   sup_x |F_hat(x) - F(x)| <= eta = 2 E_H + P_hat_R * epsilon_R
 ///   E_H       = sum_h |f_hat_h - f_h| / N        (over the recovered heavy set)
-///   epsilon_R = sqrt(log(2 / delta) / (2 m_R))
+///   epsilon_R = sqrt(log(2 / delta) / (2 m_R))   (0 when m_R = 0 and P_hat_R = 0)
 /// ```
 ///
-/// # What this measures, and what the previous revision measured instead
+/// `m_R` is the number of retained occurrence samples backing the residual —
+/// `OrderedQueryDiagnostics::residual_samples` — and nothing else. The CDF's
+/// breakpoint count is not a sample count: it also carries the heavy values and
+/// the retained minimum and maximum, so substituting it inflates `m_R` and
+/// quietly shrinks `epsilon_R`. `m_R = 0` with `P_hat_R > 0` is an invalid
+/// estimator state — mass attributed to a residual with no sample behind it —
+/// and fails outright rather than being given a fabricated `epsilon_R`.
 ///
-/// The left-hand side is a supremum over **all** `x`, of the difference between
-/// two right-continuous step CDFs. The previous revision computed something
-/// else entirely: for each *estimated breakpoint*, the distance from its
-/// reported rank to the true rank interval of its own value. That is a quantile
-/// rank-acceptance criterion, and it only ever inspects `x` values the estimate
-/// itself chose — an estimate that is right wherever it has a breakpoint and
-/// simply has none across a region carrying a lot of mass scores zero.
-/// `cdf_sup_distance_detects_a_gap_a_breakpoint_scan_misses` below is that
-/// fixture.
+/// # Two assertions, one sketch
 ///
-/// It also used `max_h` for `E_H` where the contract says `sum_h`, which
-/// understates the right-hand side.
+/// The supremum and the rank acceptance are different statements, and each
+/// keeps its own tally and its own failure message. They are scored on the
+/// *same* seeded sketch: rebuilding an identical sketch to ask it a second
+/// question doubles the work and adds no independence.
 ///
-/// Both are fixed here: `common::specs::cdf_sup_distance` sweeps the ordered
-/// union of the exact truth support and the estimated breakpoints, which is
-/// exact for step functions because both are constant between consecutive jump
-/// points; and `E_H` is the sum the document defines.
+/// - **CDF supremum.** The left-hand side is a supremum over all `x`, so one
+///   sketch answers it with one pass/fail. `common::specs::cdf_sup_distance`
+///   sweeps the ordered union of the exact truth support and the estimated
+///   breakpoints, which is exact for step functions because both are constant
+///   between consecutive jump points.
+/// - **Quantile rank acceptance.** `quantile(q)` must return a value whose
+///   true rank interval meets `[q - eta, q + eta]`. This follows from the same
+///   `eta`: the answer `v` satisfies `F_hat(v) >= q >= F_hat(v-)`, and
+///   `|F_hat - F| <= eta` everywhere, so `F(v) >= q - eta` and
+///   `F(v-) <= q + eta`.
 ///
 /// # Trial unit
 ///
-/// The bound is a supremum over `x`, so one sketch answers it with one
-/// pass/fail. Independent trials come from the two places UnivMon-Q's
-/// randomness lives — the CountSketch hash (`config.hash_seed`) and the
-/// occurrence-priority stream (`source_id`) — and both move per trial.
+/// One trial is one sketch. Independent trials come from the two places
+/// UnivMon-Q's randomness lives — the CountSketch hash (`config.hash_seed`)
+/// and the occurrence-priority stream (`source_id`) — and both move per trial.
 #[test]
-fn univmonq_ordered_queries_satisfy_the_full_documented_cdf_bound() {
-    use common::specs::{cdf_sup_distance, occurrence_sample_epsilon};
+fn univmonq_ordered_queries_satisfy_the_documented_cdf_and_rank_bounds() {
+    use common::specs::{cdf_sup_distance, occurrence_sample_epsilon, rank_violation};
 
     const DELTA: f64 = 0.01;
     const TRIALS: usize = 12;
+    const QS: [f64; 7] = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99];
 
     let mut gate_open_seen = 0usize;
     let mut gate_closed_seen = 0usize;
@@ -914,7 +920,8 @@ fn univmonq_ordered_queries_satisfy_the_full_documented_cdf_bound() {
             *exact_counts.entry(v.to_bits()).or_default() += 1;
         }
 
-        let mut tally = Tally::default();
+        let mut cdf_tally = Tally::default();
+        let mut rank_tally = Tally::default();
         let mut gate_fired = 0usize;
         let mut heavy_seen = 0usize;
         let mut last_context = String::new();
@@ -966,20 +973,25 @@ fn univmonq_ordered_queries_satisfy_the_full_documented_cdf_bound() {
                 / n;
             let p_hat_r = diag.residual_mass_fraction(q.count());
             let m_r = diag.residual_samples;
+            assert!(
+                m_r > 0 || p_hat_r == 0.0,
+                "{regime} trial {t}: P_hat_R = {p_hat_r:.6} of the mass is attributed to \
+                 a residual backed by m_R = 0 occurrence samples. There is no valid \
+                 epsilon_R for that state and inventing one would make the bound \
+                 unfalsifiable"
+            );
             let eps_r = if m_r == 0 {
                 0.0
             } else {
                 occurrence_sample_epsilon(m_r, DELTA)
             };
-            let bound = 2.0 * e_h + p_hat_r * eps_r;
-
-            let (sup, at) = cdf_sup_distance(&estimated, truth.sorted());
+            let eta = 2.0 * e_h + p_hat_r * eps_r;
 
             let context = format!(
                 "{regime} trial {t}: hash_seed={} source_id={:#x}, n={n}, gate \
                  F2_hat/N^2={gate:.3e} vs 1/ordered_samples={threshold:.3e}, heavy set \
                  {} values, E_H={e_h:.6} (sum form), P_hat_R={p_hat_r:.6}, m_R={m_r}, \
-                 epsilon_R={eps_r:.6} at delta={DELTA} -> bound {bound:.6}; \
+                 epsilon_R={eps_r:.6} at delta={DELTA} -> eta {eta:.6}; \
                  {} CDF breakpoints, {} distinct truth values",
                 config.hash_seed,
                 0x0DDE_1000 + t as u64,
@@ -995,12 +1007,49 @@ fn univmonq_ordered_queries_satisfy_the_full_documented_cdf_bound() {
                  samples, so there is nothing for the bound to cover"
             );
 
-            tally.record(sup <= bound, || {
+            // --- Assertion 1: the Kolmogorov distance.
+            let (sup, at) = cdf_sup_distance(&estimated, truth.sorted());
+            cdf_tally.record(sup <= eta, || {
                 format!(
-                    "{context}\n      sup_x |F_hat - F| = {sup:.6} > bound, attained at \
+                    "{context}\n      sup_x |F_hat - F| = {sup:.6} > eta, attained at \
                      x = {at}"
                 )
             });
+
+            // --- Assertion 2: quantile answers under the same eta.
+            let mut worst: Option<String> = None;
+            for &qq in &QS {
+                let est = view.quantile(qq).expect("ordered_samples enabled");
+                if let Some(detail) = rank_violation(truth.sorted(), qq, est, eta) {
+                    worst.get_or_insert(detail);
+                }
+            }
+            rank_tally.record(worst.is_none(), || {
+                format!("{context}\n      {}", worst.clone().unwrap())
+            });
+
+            // `rank` and `quantile` must read the same CDF. The comparison is
+            // against `rank_incl(v)` — the exact share of observations at or
+            // below `v`, which is what `rank` estimates — and not against `q`:
+            // on a tie-dense stream one value legitimately spans a wide band.
+            //
+            // |rank(v)/n - F(v)| <= |rank(v)/n - F_hat(v)| + |F_hat(v) - F(v)|.
+            // The second term is eta. The first is zero when `rank` and
+            // `quantile` resolve to the same breakpoint and is at most one
+            // further CDF-against-CDF discrepancy when they do not, so the sum
+            // is bounded by 2*eta.
+            for &qq in &[0.1f64, 0.5, 0.9] {
+                let v = view.quantile(qq).expect("quantile");
+                let r = view.rank(v).expect("rank") as f64 / n;
+                let (_, incl) = truth.rank_interval(v);
+                assert!(
+                    (r - incl).abs() <= 2.0 * eta + 1e-9,
+                    "rank(quantile({qq})) = {r:.6} but {v} truly occupies ranks up to \
+                     {incl:.6}, off by {:.6} > 2*eta = {:.6}. {context}",
+                    (r - incl).abs(),
+                    2.0 * eta
+                );
+            }
 
             // Monotonicity is structural: a CDF that decreases is malformed
             // whatever the sampling error.
@@ -1043,15 +1092,26 @@ fn univmonq_ordered_queries_satisfy_the_full_documented_cdf_bound() {
         gate_open_seen += gate_fired;
         gate_closed_seen += TRIALS - gate_fired;
 
-        tally.assert_independent_binomial(
+        let trial_unit = format!(
+            "one trial = one sketch with its own hash seed and source id; {TRIALS} \
+             trials. Last: {last_context}"
+        );
+        cdf_tally.assert_independent_binomial(
             &format!(
                 "UnivMonQ ordered queries ({regime}) / sup_x |F_hat - F| <= 2 E_H + P_hat_R eps_R"
             ),
             DELTA,
             &format!(
-                "one trial = one sketch with its own hash seed and source id, scored on \
-                 the exact Kolmogorov distance over the union of the truth support and \
-                 the estimated breakpoints; {TRIALS} trials. Last: {last_context}"
+                "scored on the exact Kolmogorov distance over the union of the truth \
+                      support and the estimated breakpoints. {trial_unit}"
+            ),
+        );
+        rank_tally.assert_independent_binomial(
+            &format!("UnivMonQ::quantile ({regime}) / rank acceptance within eta"),
+            DELTA,
+            &format!(
+                "q grid {QS:?}, each answer's true rank interval must meet \
+                      [q - eta, q + eta]. {trial_unit}"
             ),
         );
     }
@@ -1142,93 +1202,6 @@ fn cdf_sup_distance_detects_a_gap_a_breakpoint_scan_misses() {
     let (high, at_high) = cdf_sup_distance(&too_high, &sorted_truth);
     assert_eq!(at_high, 1.0);
     assert!((high - 0.7).abs() < 1e-12, "expected 0.7, got {high}");
-}
-
-/// Quantile answers under the occurrence-sample rank bound, kept as its own
-/// test.
-///
-/// This is a **rank-acceptance** criterion — is the returned value's true rank
-/// interval within `eps` of the requested `q` — and it is a different statement
-/// from the CDF supremum above. It used to stand in for it; it does not, and
-/// keeping them apart is the point.
-#[test]
-fn univmonq_quantile_answers_satisfy_the_occurrence_rank_bound() {
-    use common::specs::{occurrence_sample_epsilon, rank_violation};
-
-    const DELTA: f64 = 0.01;
-    const TRIALS: usize = 12;
-    const QS: [f64; 7] = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99];
-
-    for (regime, values) in univmonq_ordered_regimes() {
-        let truth = NumericTruth::new(values.clone());
-        let mut tally = Tally::default();
-        let mut last_context = String::new();
-
-        for t in 0..TRIALS {
-            let config = UnivMonQConfig {
-                hash_seed: 3 + t,
-                ..UnivMonQConfig::default()
-            };
-            let mut q: UnivMonQ =
-                UnivMonQ::with_hasher_and_source_id(config, 0x0DDE_2000 + t as u64)
-                    .expect("config valid");
-            for v in &values {
-                q.update(v);
-            }
-            let n = q.count() as f64;
-            let view = q.prepare_queries();
-            let diag = view.ordered_query_diagnostics();
-            let m_r = diag.residual_samples.max(view.cdf().len());
-            let eps = occurrence_sample_epsilon(m_r, DELTA)
-                + 2.0
-                    * diag
-                        .heavy
-                        .iter()
-                        .map(|(value, frequency)| (frequency - truth.count_of(*value)).abs())
-                        .sum::<f64>()
-                    / n;
-
-            let context = format!(
-                "{regime} trial {t}: hash_seed={} m_R={m_r}, eps={eps:.6} at delta={DELTA}",
-                config.hash_seed
-            );
-            last_context = context.clone();
-
-            let mut worst: Option<String> = None;
-            for &qq in &QS {
-                let est = view.quantile(qq).expect("ordered_samples enabled");
-                if let Some(detail) = rank_violation(truth.sorted(), qq, est, eps) {
-                    worst.get_or_insert(detail);
-                }
-            }
-            tally.record(worst.is_none(), || {
-                format!("{context}: {}", worst.clone().unwrap())
-            });
-
-            // `rank` and `quantile` must read the same CDF. The comparison is
-            // against `rank_incl(v)` — the exact number of observations at or
-            // below `v`, which is what `rank` estimates — and not against `q`:
-            // on a tie-dense stream one value legitimately spans a wide band.
-            for &qq in &[0.1f64, 0.5, 0.9] {
-                let v = view.quantile(qq).expect("quantile");
-                let r = view.rank(v).expect("rank") as f64 / n;
-                let (_, incl) = truth.rank_interval(v);
-                assert!(
-                    (r - incl).abs() <= 2.0 * eps + 1e-9,
-                    "rank(quantile({qq})) = {r:.6} but {v} truly occupies ranks up to \
-                     {incl:.6}, off by {:.6} > 2*eps = {:.6}. {context}",
-                    (r - incl).abs(),
-                    2.0 * eps
-                );
-            }
-        }
-
-        tally.assert_independent_binomial(
-            &format!("UnivMonQ::quantile ({regime}) / occurrence rank bound"),
-            DELTA,
-            &format!("{TRIALS} trials, q grid {QS:?}. Last: {last_context}"),
-        );
-    }
 }
 
 /// Distinct count, entropy and heavy-hitter recall for UnivMon-Q's recursive

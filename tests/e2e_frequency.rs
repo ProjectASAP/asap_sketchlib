@@ -33,7 +33,7 @@ use asap_sketchlib::{
 /// the additive `e*(N-f)/w` excess under the binomial acceptance rule, and
 /// exact equality between a shard-merged sketch and a single-pass one.
 #[test]
-fn countmin_zipf_satisfies_the_count_min_additive_bound_and_shard_merge() {
+fn countmin_fast_path_zipf_conforms_to_the_count_min_model_and_merges_shards_exactly() {
     const ROWS: usize = 4;
     const COLS: usize = 4096;
     const STREAM_SEED: u64 = 1001;
@@ -101,7 +101,7 @@ fn countmin_zipf_satisfies_the_count_min_additive_bound_and_shard_merge() {
 /// `e2e_matrix_instances.rs` covers the equality that *is* contractual: on a
 /// collision-free workload both paths return exact counts.
 #[test]
-fn countmin_both_paths_satisfy_the_bound_on_the_same_stream() {
+fn countmin_both_paths_meet_the_count_min_bound_on_the_same_stream() {
     const ROWS: usize = 3;
     const COLS: usize = 2048;
     const STREAM_SEED: u64 = 1002;
@@ -296,7 +296,7 @@ fn countmin_fast_path_conforms_to_the_count_min_model() {
 ///    the theorem's own per-key failure probability — a regression pin on a
 ///    fixed realisation, not a tail test.
 #[test]
-fn countsketch_satisfies_the_l2_median_bound_on_both_paths() {
+fn countsketch_both_paths_meet_the_l2_median_bound() {
     let spec = CountSketchSpec::new(BOUND_ROWS, BOUND_COLS);
     // One pair of tallies per (shape, path): all trials pool into a single
     // acceptance rule, so the decision is made on the whole population rather

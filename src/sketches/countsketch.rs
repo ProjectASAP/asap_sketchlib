@@ -7,6 +7,7 @@
 //! - Charikar, Chen & Farach-Colton, "Finding Frequent Items in Data Streams,"
 //!   ICALP 2002. <https://www.cs.rutgers.edu/~farach/pubs/FrequentStream.pdf>
 
+use crate::common::structure_utils::AdmittedRows;
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
@@ -464,18 +465,17 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
         self.counts.enable_nitro_with_seed(sampling_rate, seed);
     }
 
-    /// Inserts an observation using Nitro geometric-sampling acceleration.
-    #[inline(always)]
     /// Inserts an observation through Nitro's per-row sampling schedule.
     ///
     /// Cells and signs are derived exactly as a plain `insert` derives them —
     /// `FastPathHasher::hash_for_matrix`, then `col_for_row` and
-    /// `sign_for_row` — so `estimate` reads back what this wrote. The previous
-    /// version sliced both out of a raw `H::hash128_seeded(0, value)` by hand,
-    /// which is a different hash form from the one the query uses.
+    /// `sign_for_row` — so `estimate` reads back what this wrote. The hash is
+    /// computed once per observation, and the admitted rows are collected into
+    /// an inline buffer, so the hot path does not allocate.
+    #[inline(always)]
     pub fn fast_insert_nitro(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
-        let mut admitted = Vec::new();
+        let mut admitted = AdmittedRows::new();
         self.counts.nitro_mut().admit_rows(rows, &mut admitted);
         if admitted.is_empty() {
             return;

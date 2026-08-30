@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::common::structure_utils::AdmittedRows;
 use crate::input_to_owned;
 use crate::octo_delta::{CM_PROMASK, CmDelta, KeyedCmDelta, MAX_PROMASK};
 use crate::{
@@ -597,25 +598,18 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
         self.counts.disable_nitro();
     }
 
-    /// Inserts an observation using Nitro-aware sampling logic.
-    #[inline(always)]
     /// Inserts an observation through Nitro's per-row sampling schedule.
     ///
     /// The cells written are the ones a plain `insert` would write — the hash
     /// is `FastPathHasher::hash_for_matrix` and the column is
     /// `MatrixFastHash::col_for_row`, exactly as `MatrixStorage::fast_insert`
-    /// derives them, so `nitro_estimate` reads back what this wrote.
-    ///
-    /// This used to hash with `H::hash128_seeded(0, value)` and slice columns
-    /// out of that raw `u128` by hand, while `nitro_estimate` queried through
-    /// `hash_for_matrix` / `col_for_row`. Those two disagree whenever the
-    /// matrix hash is not the identity on the raw hash — which is the normal
-    /// case, since `hash_for_matrix` picks a packing mode from `rows` and
-    /// `cols` — so every per-key estimate read a cell the insert had never
-    /// touched and came back 0.
+    /// derives them, so `nitro_estimate` reads back what this wrote. The hash
+    /// is computed once per observation, and the admitted rows are collected
+    /// into an inline buffer, so the hot path does not allocate.
+    #[inline(always)]
     pub fn fast_insert_nitro(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
-        let mut admitted = Vec::new();
+        let mut admitted = AdmittedRows::new();
         self.counts.nitro_mut().admit_rows(rows, &mut admitted);
         if admitted.is_empty() {
             return;

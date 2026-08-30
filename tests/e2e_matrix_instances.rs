@@ -228,7 +228,7 @@ countmin_matrix_test!(
 );
 
 countmin_matrix_test!(
-    countmin_fast_path_instances_satisfy_the_count_min_bound,
+    countmin_fast_path_instances_conform_to_the_count_min_model,
     FastPath,
     Vector2D<i32>,
     Vector2D<i64>,
@@ -327,7 +327,7 @@ count_matrix_test!(
 );
 
 count_matrix_test!(
-    countsketch_fast_path_instances_satisfy_the_l2_bound,
+    countsketch_fast_path_instances_conform_to_the_l2_model,
     FastPath,
     Vector2D<i32>,
     Vector2D<i64>,
@@ -596,7 +596,7 @@ heap_matrix_test!(
 );
 
 heap_matrix_test!(
-    cmsheap_fast_path_instances_satisfy_the_count_min_bound,
+    cmsheap_fast_path_instances_conform_to_the_count_min_model,
     cmsheap_instance,
     FastPath,
     default Vector2D<i32>,
@@ -623,7 +623,7 @@ heap_matrix_test!(
 );
 
 heap_matrix_test!(
-    csheap_fast_path_instances_satisfy_the_l2_bound,
+    csheap_fast_path_instances_conform_to_the_l2_model,
     csheap_instance,
     FastPath,
     default Vector2D<i32>,
