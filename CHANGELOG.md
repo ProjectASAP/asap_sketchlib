@@ -430,6 +430,20 @@ signals a backwards-compatible change.
   Byte-parity twin of the parallel `sketchlib-go` change
   (ProjectASAP/sketchlib-go#243).
 
+### Removed (breaking)
+- **`common::PRECOMPUTED_SAMPLE_RATE_1PERCENT` and the
+  `common::precompute_sample2` module.** The table's entries were pre-divided
+  by `ln(0.99)`, hard-coding a 1% sampling rate into the values themselves. No
+  code in the crate had read it since the geometric-skip samplers switched to
+  scaling `PRECOMPUTED_SAMPLE` by the caller's own `1 / ln(1 - p)`; the
+  pre-scaled table is what made every configured rate follow `p = 0.01`'s
+  schedule. It stayed on the public surface as a hazard for downstream callers,
+  so it is gone rather than deprecated. Callers wanting a rate-`p` skip
+  distance should read `PRECOMPUTED_SAMPLE` and multiply by
+  `1.0 / (1.0 - p).ln()`, matching `Nitro` and `NitroBatch`.
+  `build_ln_one_minus_u_table` loses its now-unused `scale` parameter and is
+  private again.
+
 ## [0.2.2] - 2026-05-18
 
 Performance patch release. No API changes; all public sketch APIs behave

@@ -26,16 +26,16 @@ const SEED: u64 = 0xA5A0_5A71_B11B_C0DE_u64;
 /// Indexing (`PRECOMPUTED_SAMPLE[i]`), iteration (`PRECOMPUTED_SAMPLE.iter()`),
 /// and length (`PRECOMPUTED_SAMPLE.len()`) all work via `Deref` to the
 /// underlying slice.
-pub static PRECOMPUTED_SAMPLE: LazyLock<Box<[f64]>> =
-    LazyLock::new(|| build_ln_one_minus_u_table(1.0));
+///
+/// Entries are unscaled. A caller multiplies by its own
+/// `1 / ln(1 - p)` at the point of use, so one table serves every
+/// sampling rate.
+pub static PRECOMPUTED_SAMPLE: LazyLock<Box<[f64]>> = LazyLock::new(build_ln_one_minus_u_table);
 
 /// Builds a length-`PRECOMPUTED_SAMPLE_LEN` boxed slice whose i-th entry is
-/// `ln(1 - u_i) * scale`, where `u_i ∈ (0, 1)` is drawn from a `SmallRng`
-/// seeded with [`SEED`].
-///
-/// Shared by [`PRECOMPUTED_SAMPLE`] and
-/// [`super::precompute_sample2::PRECOMPUTED_SAMPLE_RATE_1PERCENT`].
-pub(super) fn build_ln_one_minus_u_table(scale: f64) -> Box<[f64]> {
+/// `ln(1 - u_i)`, where `u_i ∈ (0, 1)` is drawn from a `SmallRng` seeded
+/// with [`SEED`].
+fn build_ln_one_minus_u_table() -> Box<[f64]> {
     let mut generator = SmallRng::seed_from_u64(SEED);
     (0..PRECOMPUTED_SAMPLE_LEN)
         .map(|_| {
@@ -45,7 +45,7 @@ pub(super) fn build_ln_one_minus_u_table(scale: f64) -> Box<[f64]> {
                     break r;
                 }
             };
-            (1.0 - k).ln() * scale
+            (1.0 - k).ln()
         })
         .collect()
 }

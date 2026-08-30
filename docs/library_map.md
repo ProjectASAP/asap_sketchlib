@@ -40,8 +40,7 @@
 
 - The large precomputed hash/sample tables are built lazily at runtime via
   `std::sync::LazyLock` in
-  `src/common/precompute_hash.rs`, `src/common/precompute_sample.rs`, and
-  `src/common/precompute_sample2.rs`.
+  `src/common/precompute_hash.rs` and `src/common/precompute_sample.rs`.
 
 ## Proto code generation
 

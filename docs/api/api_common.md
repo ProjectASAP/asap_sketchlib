@@ -21,7 +21,6 @@ src/common/
 ├── structure_utils.rs      # Nitro and median utility
 ├── precompute_hash.rs      # PRECOMPUTED_HASH
 ├── precompute_sample.rs    # PRECOMPUTED_SAMPLE
-├── precompute_sample2.rs   # PRECOMPUTED_SAMPLE_RATE_1PERCENT
 └── structures/
     ├── vector1d.rs
     ├── vector2d.rs
@@ -69,7 +68,6 @@ use asap_sketchlib::common::{
     // Precomputed assets
     PRECOMPUTED_HASH,
     PRECOMPUTED_SAMPLE,
-    PRECOMPUTED_SAMPLE_RATE_1PERCENT,
 };
 ```
 
