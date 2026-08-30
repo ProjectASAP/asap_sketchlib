@@ -697,10 +697,9 @@ fn cells(cm: &CountMin<Vector2D<i32>, FastPath>) -> Vec<i32> {
 /// identical to one that was never interrupted.
 ///
 /// This is the property the sampling state has to be *complete* for. The
-/// rounding stream is the part that used to be dropped: it was `#[serde(skip)]`
-/// with a fixed default, so a decoded sketch restarted the Bernoulli sequence
-/// from the same constant every time and drifted from the uninterrupted run at
-/// any rate whose reciprocal is not an integer.
+/// rounding stream is part of it: it is serialized, so a decoded sketch
+/// continues the Bernoulli sequence rather than restarting it from a constant,
+/// which matters at any rate whose reciprocal is not an integer.
 #[test]
 fn a_serde_round_trip_after_every_update_reproduces_the_uninterrupted_run() {
     const UPDATES: usize = 600;

@@ -24,15 +24,14 @@ pub const MAX_APPLY_DELTA_SPAN_BUCKETS: i64 = 1 << 22;
 //
 // `DdSketch` and `DdSketchDelta` below are the public-field,
 // proto-decode-friendly types consumed by the query-engine
-// accumulators. The high-throughput in-process variant above
-// (`DDSketch`) keeps its original design.
+// accumulators. The high-throughput in-process variant is
+// `crate::sketches::ddsketch::DDSketch`, which keeps its own design.
 // =====================================================================
 
 // DDSketch — log-bucketed quantile sketch, mergeable by store-index alignment.
 //
-// Parallel to `count_sketch::CountSketch`: the minimum viable surface
-// needed for the modified-OTLP `Metric.data = DDSketch{…}` hot path
-// (PR C-CountSketch follow-up). Holds the bucket counts, their
+// Parallel to `count_sketch::CountSketch`, for the modified-OTLP
+// `Metric.data = DDSketch{…}` hot path. Holds the bucket counts, their
 // absolute-index base offset, and the aggregate `{count, sum, min, max}`.
 //
 // Merge semantics: two sketches with the same relative-accuracy
@@ -42,11 +41,9 @@ pub const MAX_APPLY_DELTA_SPAN_BUCKETS: i64 = 1 << 22;
 //
 // The wire format is the protobuf-encoded
 // `asap_sketchlib::proto::sketchlib::DDSketchState`. Quantile
-// estimation against stored data is intentionally deferred — queries
-// currently return a placeholder error and fall through to the
-// exact-backend fallback.
-
-// (de-duplicated) use serde::{Deserialize, Serialize};
+// estimation against stored data is not implemented here: queries
+// return a placeholder error and fall through to the exact-backend
+// fallback.
 
 /// Sparse delta between two consecutive DDSketch snapshots — the
 /// input shape for [`DdSketch::apply_delta`]. Mirrors the
@@ -434,9 +431,9 @@ impl DdSketch {
         let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
         let ln_gamma = gamma.ln();
         // Reject finite-but-extreme values whose bucket index would be
-        // unrepresentable or force an arbitrarily distant allocation
-        // (asap_sketchlib#70 item 4). Uses the SHARED bounds helper so core
-        // and portable can never drift algebraically.
+        // unrepresentable or force an arbitrarily distant allocation. Uses
+        // the SHARED bounds helper so core and portable can never drift
+        // algebraically.
         let (min_v, max_v) = crate::sketches::ddsketch::ddsketch_indexable_bounds(self.alpha);
         if value < min_v || value > max_v {
             return;
@@ -506,7 +503,7 @@ impl DdSketch {
                 // Representative: lower edge γ^k scaled by (1+α) — matches the
                 // core DDSketch and DataDog's logarithmic_mapping.go. The old
                 // log-midpoint γ^(k+0.5) gave edge error √γ−1 > α, silently
-                // violating the α guarantee near a bucket edge (#70/#73).
+                // violating the α guarantee near a bucket edge.
                 return Some(gamma.powf(k as f64) * (1.0 + self.alpha));
             }
         }
@@ -794,11 +791,9 @@ mod tests {
         );
     }
 
-    /// Core accuracy claim for PRs #60-#63 end-to-end: building a
-    /// sketch via `base + apply_delta()` produces quantile estimates
-    /// within DDSketch's α bound of the ground-truth full-sketch
-    /// path. If this fails, the paper's delta-reconstitution story
-    /// is broken.
+    /// Building a sketch via `base + apply_delta()` produces quantile
+    /// estimates within DDSketch's α bound of the ground-truth
+    /// full-sketch path.
     #[test]
     fn test_delta_chain_preserves_quantile_accuracy() {
         let alpha = 0.01;

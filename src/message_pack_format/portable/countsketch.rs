@@ -10,8 +10,8 @@ use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 //
 // `CountSketch` and `CountSketchDelta` below are the public-field,
 // proto-decode-friendly types consumed by the ASAP query engine
-// accumulators. The high-throughput in-process variant above
-// (`Count`) keeps its original design.
+// accumulators. The high-throughput in-process variant is
+// `crate::sketches::countsketch::Count`, which keeps its own design.
 // =====================================================================
 
 // Count Sketch (a.k.a. Count-Min-style signed-counter sketch) —
@@ -22,16 +22,12 @@ use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 // format that DataCollector's `countsketchprocessor` emits via the
 // modified OTLP `Metric.data = CountSketch{…}` variant.
 //
-// This is the minimal surface needed for PR C-CountSketch in the
-// modified-OTLP hot path: construct from a decoded proto state, merge
+// The surface is: construct from a decoded proto state, merge
 // element-wise with another sketch, emit the matrix for queries and
 // serialization. The richer query semantics of Count Sketch (median-
-// of-estimators heavy-hitter tracking, `TopKState` integration, etc.)
-// are intentionally deferred to a follow-up — the wire format already
-// carries the matrix losslessly, so the merge/store round-trip works
-// with just a matrix today.
-
-// (de-duplicated) use serde::{Deserialize, Serialize};
+// of-estimators heavy-hitter tracking, `TopKState` integration) are not
+// implemented here — the wire format carries the matrix losslessly, so
+// the merge/store round-trip works with just a matrix.
 
 /// Default Top-K capacity. Mirrors sketchlib-go `TOPK_SIZE = 100`.
 pub const COUNT_SKETCH_TOPK_CAPACITY: usize = 100;
@@ -772,8 +768,7 @@ mod tests {
     /// Any drift in [`CountSketch::update`]'s hash → (col, sign)
     /// derivation breaks this test cell-for-cell; that is the contract
     /// `cross_language_parity::countsketch_byte_parity_with_go` in
-    /// ASAPCollector relies on. Closes part of
-    /// ProjectASAP/ASAPCollector#243.
+    /// ASAPCollector relies on.
     #[test]
     fn test_update_then_envelope_matches_sketchlib_go_bytes() {
         use crate::proto::sketchlib::{

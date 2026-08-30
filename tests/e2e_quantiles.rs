@@ -1170,10 +1170,10 @@ fn cdf_sup_distance_detects_a_gap_a_breakpoint_scan_misses() {
     // Both are exactly the true CDF at those two values.
     let estimated: Vec<(f64, f64)> = vec![(1.0, 0.2), (9.0, 1.0)];
 
-    // The old measurement: each breakpoint's reported rank against its own
-    // value's true rank interval. Value 1 occupies ranks [0.0, 0.2] and is
-    // reported at 0.2; value 9 occupies [0.8, 1.0] and is reported at 1.0.
-    // Both are inside, so the old check sees a perfect estimate.
+    // `breakpoint_rank_interval_distance` scores each breakpoint's reported
+    // rank against its own value's true rank interval. Value 1 occupies ranks
+    // [0.0, 0.2] and is reported at 0.2; value 9 occupies [0.8, 1.0] and is
+    // reported at 1.0. Both are inside, so it sees a perfect estimate.
     let breakpoint_only = breakpoint_rank_interval_distance(&estimated, &sorted_truth);
     assert_eq!(
         breakpoint_only, 0.0,
@@ -1454,9 +1454,8 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
     // Non-finite / non-positive / beyond-indexable-range values must be
     // dropped by BOTH implementations: silently, without corrupting bucket 0
     // (NaN floor-casts to 0) and without letting one sample force a distant-
-    // bucket allocation (unguarded, f64::MAX mapped ~35k buckets away at
-    // alpha=0.01 — ~277 KiB of amplification per sample, scaling with 1/lnγ;
-    // #70 item 4).
+    // bucket allocation (unguarded, f64::MAX maps ~35k buckets away at
+    // alpha=0.01 — ~277 KiB of amplification per sample, scaling with 1/lnγ).
     for v in [
         f64::NAN,
         f64::NEG_INFINITY,

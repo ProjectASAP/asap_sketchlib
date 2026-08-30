@@ -1221,7 +1221,7 @@ mod tests {
         assert!(p50 < p90, "p50 ({p50:.1}) should be < p90 ({p90:.1})");
     }
 
-    // -- Seeded determinism (issue #77) ---------------------------------------
+    // -- Seeded determinism ---------------------------------------------------
 
     #[test]
     fn kll_tumbling_seeded_is_byte_identical_across_instances() {

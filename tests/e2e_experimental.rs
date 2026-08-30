@@ -101,17 +101,15 @@ fn kmv_trial(k: usize, n: usize, seed_idx: usize, namespace: u64) -> KMV {
 ///   RSE(n, k)     = sqrt( (n - k + 1) / (n (k - 2)) )  ->  1/sqrt(k - 2)
 /// ```
 ///
-/// The suite previously modelled this as `1/sqrt(k - 1)` and called that
-/// "marginally conservative". It is not: `1/sqrt(k-1) < 1/sqrt(k-2)`, so it was
-/// a *stricter* band than the estimator earns. The exact finite-`n` form is
-/// used now, which is stricter still at small `n` and correct at every `n`.
+/// The bands use the exact finite-`n` form, not the `1/sqrt(k - 2)` limit: it
+/// is tighter at small `n` and correct at every `n`.
 ///
 /// # Trial unit
 ///
 /// One `(k, hash seed, regime)` triple is one sketch, one estimate, one trial —
-/// and no two trials share a hash function or an identity. Reading rising
-/// checkpoints off one accumulating sketch, as this suite used to, produces
-/// *nested* estimates that share every retained hash.
+/// and no two trials share a hash function or an identity. Rising checkpoints
+/// read off one accumulating sketch would instead be *nested* estimates
+/// sharing every retained hash.
 #[test]
 fn kmv_estimates_stay_inside_their_relative_standard_error_band_over_independent_hash_seeds() {
     const KS: [usize; 3] = [64, 1_024, 4_096];
@@ -212,9 +210,8 @@ fn kmv_is_exact_below_k_and_estimates_at_k() {
 /// KMV retains the `k` smallest hashes of everything it has seen. Any hash
 /// among the global `k` smallest is also among the `k` smallest of whichever
 /// shard produced it, so merging the shards recovers exactly the single pass's
-/// retained set — the estimate is the *same number*, not a second draw. Scoring
-/// it as another confidence-band check, which this suite used to do, counted
-/// one experiment twice.
+/// retained set — the estimate is the *same number*, not a second draw, so it
+/// is asserted as an equality rather than scored against a confidence band.
 #[test]
 fn kmv_duplicates_are_inert_and_a_shard_merge_reproduces_the_single_pass_exactly() {
     const K: usize = 4_096;
@@ -279,8 +276,7 @@ fn kmv_duplicates_are_inert_and_a_shard_merge_reproduces_the_single_pass_exactly
 /// `ceil(total_seen * rate)`. So:
 ///
 /// - the retained size is `ceil(n * rate)` **exactly** — it is computed, never
-///   sampled, and the old `assert_between(len, 850.0, 1150.0)` band was
-///   asserting slack around a number that has none;
+///   sampled, so there is no slack for a band to assert around;
 /// - because the priorities are i.i.d. and independent of the values, the
 ///   retained set is a uniform sample **without replacement** of that size from
 ///   the `n` values seen. That is where the statistics live.

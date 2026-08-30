@@ -262,10 +262,9 @@ fn cm_fast_path_promotes_on_the_same_schedule_as_the_regular_path() {
 }
 
 #[test]
-fn cm_delta_addressing_survives_columns_past_the_old_u16_ceiling() {
-    // Regression: `CmDelta` used to address cells with u16 row/col, so any
-    // geometry wider than 65_536 columns silently wrapped deltas onto the
-    // wrong cell. The fields are u32, so a wider sketch must stay exact.
+fn cm_delta_addressing_survives_columns_past_the_u16_ceiling() {
+    // `CmDelta`'s row and col fields are u32, so a geometry wider than
+    // 65_536 columns addresses every cell exactly.
     let rows = 3;
     let cols = 100_000;
     let stream = keys(60_000, 4_096, 9_108);
@@ -286,7 +285,7 @@ fn cm_delta_addressing_survives_columns_past_the_old_u16_ceiling() {
                 parent.as_storage().query_one_counter(r, c)
                     + child.as_storage().query_one_counter(r, c),
                 reference.as_storage().query_one_counter(r, c),
-                "cell ({r},{c}) mis-addressed past the old u16 ceiling"
+                "cell ({r},{c}) mis-addressed past the u16 ceiling"
             );
         }
     }
@@ -983,9 +982,6 @@ mod runtime {
         // outlive the sketch. `insert` hashes for partitioning and prepares the
         // payload on this thread, so nothing borrowed crosses to a worker and
         // the string below is free the instant the call returns.
-        //
-        // This used to be a use-after-free: `insert` transmuted the input to
-        // 'static and queued it, so workers hashed freed heap.
         let n = 20_000u64;
         let mut runtime = OctoRuntime::new(&config(4), HllOctoPlan::new(), HllOctoAggregator::new);
         for i in 0..n {

@@ -80,8 +80,7 @@ fn dd_sketch_round_trip() {
     s.update(100.0);
     let bytes = s.to_msgpack().expect("encode");
     let restored = DdSketch::from_msgpack(&bytes).expect("decode");
-    // `count` was dropped from the wire (ProjectASAP/sketchlib-go#243);
-    // recover it by summing the bucket array.
+    // `count` is not on the wire; recover it by summing the bucket array.
     assert_eq!(restored.total_count(), 3);
 }
 

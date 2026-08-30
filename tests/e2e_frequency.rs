@@ -95,8 +95,6 @@ fn countmin_fast_path_zipf_conforms_to_the_count_min_model_and_merges_shards_exa
 /// of it. Different hash functions place keys in different columns, so the two
 /// collide on different key pairs. On a 40k-update Zipf stream at 3x4096 they
 /// disagree on roughly a third of keys — every disagreement inside the bound.
-/// An earlier version of this test asserted equality on four hand-picked keys,
-/// which held by coincidence at those dimensions rather than by contract.
 ///
 /// `e2e_matrix_instances.rs` covers the equality that *is* contractual: on a
 /// collision-free workload both paths return exact counts.
@@ -284,8 +282,7 @@ fn countmin_fast_path_conforms_to_the_count_min_model() {
 /// The library's hash is fixed by the sketch's type parameter, so every sketch
 /// here draws from the same hash function and the keys inside one sketch share
 /// it. They are therefore *not* independent Bernoulli trials, and a binomial
-/// over keys — which is what this test used to do — assumes exactly the
-/// independence that does not hold.
+/// over keys assumes exactly the independence that does not hold.
 ///
 /// What is asserted instead:
 ///

@@ -6,9 +6,7 @@
 //! The load-bearing assertion here is **equality**: with a fixed compaction
 //! seed, `bulk_update` and a loop of `update` must produce byte-identical
 //! sketches and bit-identical quantiles. The rank check beside it is a sanity
-//! floor, and its tolerance is `eps(k)` from `KllRankSpec` — not a hand-picked
-//! 0.03, which would pass identically at every `k` and so could not notice `k`
-//! failing to reach the compactors.
+//! floor at `eps(k)` from `KllRankSpec`, so its tolerance tracks `k`.
 
 mod common;
 
@@ -177,10 +175,8 @@ fn kll_bulk_data_input_batch_matches_loop() {
 }
 
 /// With a seeded coin, `KLLDynamic`'s bulk path must be *exactly* the loop
-/// path — same retained mass, same quantile bits. The previous version of this
-/// test built both sides with the wall-clock-seeded `init_kll`, so the two
-/// sketches had different coins and the 5% count tolerance was absorbing
-/// nondeterminism rather than measuring anything about `bulk_update`.
+/// path — same retained mass, same quantile bits. Both sides are built with
+/// `init_kll_with_seed`, so they share a coin.
 #[test]
 fn kll_dynamic_bulk_vs_loop_is_exact_under_a_shared_seed() {
     const SKETCH_SEED: u64 = 0x5EED_0700;
