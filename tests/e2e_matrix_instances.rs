@@ -32,13 +32,13 @@
 
 mod common;
 
-use common::specs::{CountMinSpec, CountSketchSpec, Tally};
+use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, Tally};
 use common::{FreqTruth, zipf_u64};
 
 use asap_sketchlib::{
     CMSHeap, CSHeap, Count, CountMin, DataInput, DefaultMatrixI32, DefaultMatrixI64,
     DefaultMatrixI128, FastPath, FixedMatrix, HeapItem, QuickMatrixI64, QuickMatrixI128,
-    RegularPath, Vector2D, cs_heap_count,
+    RegularPath, Vector2D, cs_heap_count, hash_for_matrix,
 };
 
 /// Medium stream: large enough that collisions are statistically meaningful at
@@ -972,5 +972,481 @@ fn countsketch_counter_widths_carry_signed_mass_in_both_directions() {
         cs128.estimate(&key),
         -(huge as f64),
         "i128 Count Sketch must reach the negative side of the i64 range"
+    );
+}
+
+const DEPTH_AXIS: [usize; 4] = [1, 2, 3, 9];
+const WIDTH_AXIS: [usize; 4] = [64, 512, 4_096, 8_192];
+const COUNTSKETCH_DEPTH_AXIS: [usize; 3] = [3, 5, 9];
+const NON_POWER_OF_TWO_WIDTHS: [usize; 4] = [3, 100, 1_000, 4_095];
+const WIDTH_EXCESS_DECAY: f64 = 2.0;
+
+fn countmin_axis_contract(
+    label: &str,
+    rows: usize,
+    cols: usize,
+    truth: &FreqTruth,
+    estimate: impl Fn(i64) -> f64,
+) -> f64 {
+    let spec = CountMinSpec::new(rows, cols);
+    let total = truth.total() as f64;
+    let distinct = truth.distinct();
+    let mut one_sided = Tally::default();
+    let mut simultaneous = Tally::default();
+    let mut excess_sum = 0.0;
+    let mut keys = 0usize;
+    for (key, count) in truth.pairs() {
+        let est = estimate(key);
+        let f = count as f64;
+        one_sided.record(est >= f, || {
+            format!("key {key}: est {est} < true {f} (Count-Min must never underestimate)")
+        });
+        let bound = spec.simultaneous_bound(total, f, distinct, SIMULTANEOUS_LEVEL);
+        simultaneous.record(est - f <= bound, || {
+            format!("key {key}: excess {:.1} > b*(N-f)/w = {bound:.1}", est - f)
+        });
+        excess_sum += est - f;
+        keys += 1;
+    }
+    let ctx = context(label, rows, cols);
+    one_sided.assert_none(&format!("{label} / one-sided"), &ctx);
+    simultaneous.assert_none(&format!("{label} / simultaneous"), &ctx);
+    excess_sum / keys.max(1) as f64
+}
+
+#[test]
+fn countmin_holds_its_contract_across_the_depth_and_width_axis_on_both_paths() {
+    let (stream, truth) = stream_and_truth();
+    for &rows in &DEPTH_AXIS {
+        for &cols in &WIDTH_AXIS {
+            let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            for k in &stream {
+                regular.insert(&DataInput::U64(*k));
+                fast.insert(&DataInput::U64(*k));
+            }
+            countmin_axis_contract(
+                "CountMin<Vector2D<i64>, RegularPath> axis",
+                rows,
+                cols,
+                &truth,
+                |key| regular.estimate(&DataInput::U64(key as u64)) as f64,
+            );
+            countmin_axis_contract(
+                "CountMin<Vector2D<i64>, FastPath> axis",
+                rows,
+                cols,
+                &truth,
+                |key| fast.estimate(&DataInput::U64(key as u64)) as f64,
+            );
+        }
+    }
+}
+
+#[test]
+fn countmin_mean_excess_falls_as_the_width_axis_grows() {
+    let (stream, truth) = stream_and_truth();
+    for &rows in &DEPTH_AXIS {
+        let mut previous: Option<(usize, f64)> = None;
+        for &cols in &[64usize, 512, 4_096] {
+            let mut sketch = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            for k in &stream {
+                sketch.insert(&DataInput::U64(*k));
+            }
+            let mut excess_sum = 0.0;
+            for (key, count) in truth.pairs() {
+                excess_sum += sketch.estimate(&DataInput::U64(key as u64)) as f64 - count as f64;
+            }
+            let mean = excess_sum / truth.distinct() as f64;
+            if let Some((prev_cols, prev_mean)) = previous {
+                assert!(
+                    mean * WIDTH_EXCESS_DECAY <= prev_mean,
+                    "d={rows}: mean excess {mean:.3} at w={cols} is not at most 1/{WIDTH_EXCESS_DECAY} \
+                     of {prev_mean:.3} at w={prev_cols}"
+                );
+            }
+            previous = Some((cols, mean));
+        }
+    }
+}
+
+#[test]
+fn countsketch_holds_its_l2_contract_across_the_depth_and_width_axis() {
+    let (stream, truth) = stream_and_truth();
+    for &rows in &COUNTSKETCH_DEPTH_AXIS {
+        for &cols in &WIDTH_AXIS {
+            let spec = CountSketchSpec::new(rows, cols);
+            let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            for k in &stream {
+                regular.insert(&DataInput::U64(*k));
+                fast.insert(&DataInput::U64(*k));
+            }
+            let mut regular_simultaneous = Tally::default();
+            let mut regular_marginal = Tally::default();
+            spec.tally_into(
+                &mut regular_simultaneous,
+                &mut regular_marginal,
+                &truth,
+                |key| regular.estimate(&DataInput::U64(key as u64)),
+            );
+            regular_simultaneous.assert_none(
+                "Count<Vector2D<i64>, RegularPath> axis / simultaneous L2",
+                &context("Count<Vector2D<i64>, RegularPath> axis", rows, cols),
+            );
+            let mut fast_simultaneous = Tally::default();
+            let mut fast_marginal = Tally::default();
+            spec.tally_into(&mut fast_simultaneous, &mut fast_marginal, &truth, |key| {
+                fast.estimate(&DataInput::U64(key as u64))
+            });
+            fast_simultaneous.assert_none(
+                "Count<Vector2D<i64>, FastPath> axis / simultaneous L2",
+                &context("Count<Vector2D<i64>, FastPath> axis", rows, cols),
+            );
+        }
+    }
+}
+
+#[test]
+fn countmin_answers_a_non_power_of_two_width_on_both_paths() {
+    let (stream, truth) = stream_and_truth();
+    for &cols in &NON_POWER_OF_TWO_WIDTHS {
+        assert!(
+            !cols.is_power_of_two(),
+            "the width axis must stay off the power-of-two grid, got {cols}"
+        );
+        let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, cols);
+        let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(3, cols);
+        for k in &stream {
+            regular.insert(&DataInput::U64(*k));
+            fast.insert(&DataInput::U64(*k));
+        }
+        assert_eq!(regular.cols(), cols, "regular path reported width");
+        assert_eq!(fast.cols(), cols, "fast path reported width");
+        countmin_axis_contract(
+            "CountMin<Vector2D<i64>, RegularPath> non-power-of-two",
+            3,
+            cols,
+            &truth,
+            |key| regular.estimate(&DataInput::U64(key as u64)) as f64,
+        );
+        countmin_axis_contract(
+            "CountMin<Vector2D<i64>, FastPath> non-power-of-two",
+            3,
+            cols,
+            &truth,
+            |key| fast.estimate(&DataInput::U64(key as u64)) as f64,
+        );
+    }
+}
+
+#[test]
+fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
+    let (stream, truth) = stream_and_truth();
+    for &cols in &NON_POWER_OF_TWO_WIDTHS {
+        let spec = CountSketchSpec::new(5, cols);
+        let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, cols);
+        let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(5, cols);
+        for k in &stream {
+            regular.insert(&DataInput::U64(*k));
+            fast.insert(&DataInput::U64(*k));
+        }
+        assert_eq!(regular.cols(), cols, "regular path reported width");
+        assert_eq!(fast.cols(), cols, "fast path reported width");
+        let mut regular_simultaneous = Tally::default();
+        let mut regular_marginal = Tally::default();
+        spec.tally_into(
+            &mut regular_simultaneous,
+            &mut regular_marginal,
+            &truth,
+            |key| regular.estimate(&DataInput::U64(key as u64)),
+        );
+        regular_simultaneous.assert_none(
+            "Count<Vector2D<i64>, RegularPath> non-power-of-two / simultaneous L2",
+            &context("Count non-power-of-two regular", 5, cols),
+        );
+        let mut fast_simultaneous = Tally::default();
+        let mut fast_marginal = Tally::default();
+        spec.tally_into(&mut fast_simultaneous, &mut fast_marginal, &truth, |key| {
+            fast.estimate(&DataInput::U64(key as u64))
+        });
+        fast_simultaneous.assert_none(
+            "Count<Vector2D<i64>, FastPath> non-power-of-two / simultaneous L2",
+            &context("Count non-power-of-two fast", 5, cols),
+        );
+    }
+}
+
+#[test]
+fn a_non_power_of_two_width_keeps_every_column_index_inside_the_matrix() {
+    for &cols in &NON_POWER_OF_TWO_WIDTHS {
+        let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(3, cols);
+        for k in 0..20_000u64 {
+            fast.insert(&DataInput::U64(k.wrapping_mul(0x9E37_79B9_7F4A_7C15)));
+        }
+        let occupied = (0..fast.rows())
+            .map(|row| {
+                (0..cols)
+                    .filter(|col| fast.as_storage().query_one_counter(row, *col) > 0)
+                    .count()
+            })
+            .sum::<usize>();
+        assert!(
+            occupied > 0,
+            "w={cols}: no counter was written, so the fold never reached the matrix"
+        );
+        let total: i64 = (0..fast.rows())
+            .flat_map(|row| (0..cols).map(move |col| (row, col)))
+            .map(|(row, col)| fast.as_storage().query_one_counter(row, col))
+            .sum();
+        assert_eq!(
+            total,
+            20_000 * fast.rows() as i64,
+            "w={cols}: every insert must land in exactly one counter per row"
+        );
+    }
+}
+
+#[test]
+fn countmin_merge_max_dominates_both_sides_on_disjoint_key_sets() {
+    let (stream, _) = stream_and_truth();
+    let mut left = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
+    let mut right = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
+    let mut left_truth = FreqTruth::default();
+    let mut right_truth = FreqTruth::default();
+    for k in &stream {
+        if k % 2 == 0 {
+            left.insert(&DataInput::U64(*k));
+            left_truth.observe(*k as i64);
+        } else {
+            right.insert(&DataInput::U64(*k));
+            right_truth.observe(*k as i64);
+        }
+    }
+
+    let left_before: Vec<(i64, i64)> = left_truth
+        .pairs()
+        .into_iter()
+        .map(|(key, _)| (key, left.estimate(&DataInput::U64(key as u64))))
+        .collect();
+    let right_before: Vec<(i64, i64)> = right_truth
+        .pairs()
+        .into_iter()
+        .map(|(key, _)| (key, right.estimate(&DataInput::U64(key as u64))))
+        .collect();
+
+    let mut merged = left.clone();
+    merged.merge_max(&right);
+
+    for (key, before) in &left_before {
+        let after = merged.estimate(&DataInput::U64(*key as u64));
+        assert!(
+            after >= *before,
+            "key {key}: merge_max lowered the left estimate from {before} to {after}"
+        );
+        assert!(
+            after >= left_truth.get(*key),
+            "key {key}: merge_max underestimated the left true count {}",
+            left_truth.get(*key)
+        );
+    }
+    for (key, before) in &right_before {
+        let after = merged.estimate(&DataInput::U64(*key as u64));
+        assert!(
+            after >= *before,
+            "key {key}: merge_max lowered the right estimate from {before} to {after}"
+        );
+        assert!(
+            after >= right_truth.get(*key),
+            "key {key}: merge_max underestimated the right true count {}",
+            right_truth.get(*key)
+        );
+    }
+
+    let summed = {
+        let mut s = left.clone();
+        s.merge(&right);
+        s
+    };
+    for (key, _) in left_truth.pairs() {
+        let by_max = merged.estimate(&DataInput::U64(key as u64));
+        let by_sum = summed.estimate(&DataInput::U64(key as u64));
+        assert!(
+            by_max <= by_sum,
+            "key {key}: elementwise max {by_max} exceeded elementwise sum {by_sum}"
+        );
+    }
+}
+
+#[test]
+fn countmin_merge_max_is_idempotent_and_absorbs_an_empty_sketch() {
+    let (stream, truth) = stream_and_truth();
+    let mut sketch = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
+    for k in &stream {
+        sketch.insert(&DataInput::U64(*k));
+    }
+    let baseline: Vec<(i64, i64)> = truth
+        .pairs()
+        .into_iter()
+        .map(|(key, _)| (key, sketch.estimate(&DataInput::U64(key as u64))))
+        .collect();
+
+    let empty = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
+    let mut with_empty = sketch.clone();
+    with_empty.merge_max(&empty);
+    let mut with_self = sketch.clone();
+    let twin = sketch.clone();
+    with_self.merge_max(&twin);
+
+    for (key, before) in baseline {
+        assert_eq!(
+            with_empty.estimate(&DataInput::U64(key as u64)),
+            before,
+            "key {key}: merging an empty sketch by max moved the estimate"
+        );
+        assert_eq!(
+            with_self.estimate(&DataInput::U64(key as u64)),
+            before,
+            "key {key}: merge_max with an identical sketch is not idempotent"
+        );
+    }
+}
+
+#[test]
+fn countmin_precomputed_hash_entry_points_match_the_value_entry_points() {
+    const ROWS: usize = 4;
+    const COLS: usize = 2_048;
+    let (stream, truth) = stream_and_truth();
+
+    let mut by_value = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_hash = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_bulk_hash = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let hashes: Vec<_> = stream
+        .iter()
+        .map(|k| hash_for_matrix(ROWS, COLS, &DataInput::U64(*k)))
+        .collect();
+    for k in &stream {
+        by_value.insert(&DataInput::U64(*k));
+    }
+    for h in &hashes {
+        by_hash.fast_insert_with_hash_value(h);
+    }
+    by_bulk_hash.bulk_insert_with_hashes(&hashes);
+
+    for (key, _) in truth.pairs() {
+        let probe = DataInput::U64(key as u64);
+        let hashed = hash_for_matrix(ROWS, COLS, &probe);
+        let expected = by_value.estimate(&probe);
+        assert_eq!(
+            by_hash.estimate(&probe),
+            expected,
+            "key {key}: fast_insert_with_hash_value diverged from insert"
+        );
+        assert_eq!(
+            by_bulk_hash.estimate(&probe),
+            expected,
+            "key {key}: bulk_insert_with_hashes diverged from insert"
+        );
+        assert_eq!(
+            by_value.fast_estimate_with_hash(&hashed),
+            expected,
+            "key {key}: fast_estimate_with_hash diverged from estimate"
+        );
+    }
+}
+
+#[test]
+fn countmin_weighted_batch_entry_points_match_a_loop_of_single_inserts() {
+    const ROWS: usize = 4;
+    const COLS: usize = 2_048;
+    let (stream, truth) = stream_and_truth();
+
+    let mut by_loop = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_bulk_many = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_hashed_many = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+
+    let weighted: Vec<(DataInput, i64)> = stream
+        .iter()
+        .enumerate()
+        .map(|(i, k)| (DataInput::U64(*k), (i % 5) as i64 + 1))
+        .collect();
+    let hashed_weighted: Vec<_> = stream
+        .iter()
+        .enumerate()
+        .map(|(i, k)| {
+            (
+                hash_for_matrix(ROWS, COLS, &DataInput::U64(*k)),
+                (i % 5) as i64 + 1,
+            )
+        })
+        .collect();
+
+    for (value, many) in &weighted {
+        by_loop.insert_many(value, *many);
+    }
+    by_bulk_many.bulk_insert_many(&weighted);
+    by_hashed_many.bulk_insert_many_with_hashes(&hashed_weighted);
+
+    for (key, _) in truth.pairs() {
+        let probe = DataInput::U64(key as u64);
+        let expected = by_loop.estimate(&probe);
+        assert_eq!(
+            by_bulk_many.estimate(&probe),
+            expected,
+            "key {key}: bulk_insert_many diverged from a loop of insert_many"
+        );
+        assert_eq!(
+            by_hashed_many.estimate(&probe),
+            expected,
+            "key {key}: bulk_insert_many_with_hashes diverged from a loop of insert_many"
+        );
+    }
+
+    let mut single = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let hashed = hash_for_matrix(ROWS, COLS, &DataInput::U64(7));
+    single.fast_insert_many_with_hash_value(&hashed, 9);
+    assert_eq!(
+        single.estimate(&DataInput::U64(7)),
+        9,
+        "fast_insert_many_with_hash_value must apply the whole weight"
+    );
+}
+
+#[test]
+fn countsketch_precomputed_hash_entry_points_match_the_value_entry_points() {
+    const ROWS: usize = 5;
+    const COLS: usize = 2_048;
+    let (stream, truth) = stream_and_truth();
+
+    let mut by_value = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_hash = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    for k in &stream {
+        by_value.insert(&DataInput::U64(*k));
+        by_hash.fast_insert_with_hash_value(&hash_for_matrix(ROWS, COLS, &DataInput::U64(*k)));
+    }
+
+    for (key, _) in truth.pairs() {
+        let probe = DataInput::U64(key as u64);
+        let hashed = hash_for_matrix(ROWS, COLS, &probe);
+        let expected = by_value.estimate(&probe);
+        assert_eq!(
+            by_hash.estimate(&probe),
+            expected,
+            "key {key}: fast_insert_with_hash_value diverged from insert"
+        );
+        assert_eq!(
+            by_value.fast_estimate_with_hash(&hashed),
+            expected,
+            "key {key}: fast_estimate_with_hash diverged from estimate"
+        );
+    }
+
+    let mut weighted = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let hashed = hash_for_matrix(ROWS, COLS, &DataInput::U64(11));
+    weighted.fast_insert_many_with_hash_value(&hashed, 6);
+    assert_eq!(
+        weighted.estimate(&DataInput::U64(11)),
+        6.0,
+        "fast_insert_many_with_hash_value must apply the whole weight"
     );
 }
