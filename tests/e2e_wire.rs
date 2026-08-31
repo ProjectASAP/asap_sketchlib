@@ -216,7 +216,11 @@ fn eh_prototype() -> EHSketchList {
 #[test]
 fn an_exponential_histogram_envelope_round_trips_and_names_its_kind() {
     let mut eh = ExponentialHistogram::new(8, 1_000_000, eh_prototype());
-    for (t, k) in zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001).iter().take(3_000).enumerate() {
+    for (t, k) in zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001)
+        .iter()
+        .take(3_000)
+        .enumerate()
+    {
         eh.update(t as u64, &DataInput::U64(*k));
     }
     let bytes = eh.serialize_to_bytes().expect("encode");
@@ -244,7 +248,10 @@ fn an_exponential_histogram_envelope_round_trips_and_names_its_kind() {
 #[test]
 fn an_eh_sketch_list_envelope_round_trips_and_names_its_kind() {
     let mut payload = eh_prototype();
-    for k in zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001).iter().take(5_000) {
+    for k in zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001)
+        .iter()
+        .take(5_000)
+    {
         payload.insert(&DataInput::U64(*k));
     }
     let bytes = payload.serialize_to_bytes().expect("encode");

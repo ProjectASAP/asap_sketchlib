@@ -16,10 +16,10 @@
 
 mod common;
 
-use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, SecondMomentSpec, Tally};
-use common::variants::{VariantList, assert_count_min_bound, assert_l2_bound};
 use common::FreqTruth;
+use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, SecondMomentSpec, Tally};
 use common::streams::{bound_streams, zipf_stream_with_truth, zipf_u64};
+use common::variants::{VariantList, assert_count_min_bound, assert_l2_bound};
 use std::collections::HashMap;
 
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;

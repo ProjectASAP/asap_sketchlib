@@ -27,8 +27,8 @@
 
 mod common;
 
-use common::variants::{VariantList, assert_count_min_bound, assert_l2_bound};
 use common::streams::{HEAVY_HITTER_DOMAIN, freq_truth, heavy_hitter_stream, zipf_u64};
+use common::variants::{VariantList, assert_count_min_bound, assert_l2_bound};
 
 use asap_sketchlib::{
     CMSHeap, CSHeap, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, FastPath,

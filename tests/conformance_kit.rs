@@ -4,11 +4,11 @@
 
 mod common;
 
+use common::FreqTruth;
 use common::conformance::{
     self, CardinalityOps, CardinalitySpec, FrequencyOps, MembershipOps, MembershipSpec, MergeOps,
     QuantileOps, QuantileSpec, SignedFrequencyOps,
 };
-use common::FreqTruth;
 use common::streams::{heavy_hitter_stream, normal_f64, uniform_u64, zipf_u64};
 
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;

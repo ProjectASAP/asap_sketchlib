@@ -83,7 +83,10 @@ fn an_inserted_key_is_never_reported_absent() {
         .into_iter()
         .filter(|k| !fast.contains(&DataInput::I64(*k)))
         .count();
-    assert_eq!(absent_fast, 0, "fast path lost {absent_fast} of {BLOOM_MEMBERS}");
+    assert_eq!(
+        absent_fast, 0,
+        "fast path lost {absent_fast} of {BLOOM_MEMBERS}"
+    );
 }
 
 /// A filter with nothing in it rejects everything, on both paths.

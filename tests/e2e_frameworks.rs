@@ -759,10 +759,7 @@ fn hydra_serde_round_trip_preserves_answers_for_every_counter() {
         HydraCounter::KLL(KLL::init_kll_with_seed(200, 5_301)),
     )
     .expect("two-column schema");
-    for (i, v) in uniform_u64(6_000, 100_000, 5_302)
-        .iter()
-        .enumerate()
-    {
+    for (i, v) in uniform_u64(6_000, 100_000, 5_302).iter().enumerate() {
         kll.update(&keys[i % keys.len()], &DataInput::F64(*v as f64), None)
             .expect("arity 2");
     }

@@ -1217,15 +1217,6 @@ fn univmonq_ordered_queries_satisfy_the_documented_cdf_and_rank_bounds() {
     );
 }
 
-/// The three streams the ordered-query bound is checked on.
-///
-/// - **diffuse**: 200k observations over 200k distinct values. `F2/N^2` is tiny,
-///   the gate cannot fire, the heavy set is empty and the bound collapses to
-///   `epsilon_R`.
-/// - **heavy**: a sharp Zipf head. The gate fires on every trial, so `E_H > 0`
-///   and `P_hat_R < 1` and all three terms are live.
-/// - **mixed**: a heavy head over a broad diffuse tail, so the residual carries
-///   most of the mass while the heavy set is still non-empty.
 /// The exact CDF sweep must catch an error a breakpoint scan cannot see.
 ///
 /// This is a hand-built fixture, not a sketch: it isolates the *measurement*,

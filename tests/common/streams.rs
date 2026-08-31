@@ -336,9 +336,15 @@ pub fn dds_streams(alpha: f64, n: usize, seed: u64) -> Vec<(&'static str, Vec<f6
     ]
 }
 
-/// The three mass regimes the ordered-query bound is scored on: a diffuse
-/// stream with no heavy head, a sharp Zipf head, and a heavy head over a broad
-/// diffuse tail.
+/// The three streams the ordered-query bound is checked on.
+///
+/// - **diffuse**: 200k observations over 200k distinct values. `F2/N^2` is tiny,
+///   the gate cannot fire, the heavy set is empty and the bound collapses to
+///   `epsilon_R`.
+/// - **heavy**: a sharp Zipf head. The gate fires on every trial, so `E_H > 0`
+///   and `P_hat_R < 1` and all three terms are live.
+/// - **mixed**: a heavy head over a broad diffuse tail, so the residual carries
+///   most of the mass while the heavy set is still non-empty.
 pub fn univmonq_ordered_regimes() -> Vec<(&'static str, Vec<f64>)> {
     let diffuse = uniform_f64(200_000, 10_000_000, 0x0DDE_0001);
     let heavy = zipf_f64(200_000, 4_096, 1.4, 1.0, 1e6, 0x0DDE_0002);
