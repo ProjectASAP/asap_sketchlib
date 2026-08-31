@@ -18,7 +18,8 @@ mod common;
 
 use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, SecondMomentSpec, Tally};
 use common::variants::{VariantList, assert_count_min_bound, assert_l2_bound};
-use common::{FreqTruth, uniform_u64, zipf_u64};
+use common::FreqTruth;
+use common::streams::{bound_streams, zipf_stream_with_truth, zipf_u64};
 use std::collections::HashMap;
 
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
@@ -132,23 +133,6 @@ fn countmin_both_paths_meet_the_count_min_bound_on_the_same_stream() {
     );
 }
 
-/// Bounded integer draws mapped onto distinct f64 values in `[100, 1000)`,
-/// identified by bit pattern so exact counts stay comparable.
-fn uniform_f64_key(v: u64) -> i64 {
-    (100.0 + v as f64 * (900.0 / 4096.0)).to_bits() as i64
-}
-
-fn f64_input(key: i64) -> DataInput<'static> {
-    DataInput::F64(f64::from_bits(key as u64))
-}
-
-fn u64_input(key: i64) -> DataInput<'static> {
-    DataInput::U64(key as u64)
-}
-
-/// A named key stream paired with the `DataInput` constructor for its keys.
-type BoundStream = (&'static str, Vec<i64>, fn(i64) -> DataInput<'static>);
-
 const BOUND_ROWS: usize = 3;
 const BOUND_COLS: usize = 4096;
 const BOUND_N: usize = 120_000;
@@ -158,30 +142,6 @@ const BOUND_N: usize = 120_000;
 /// assume yields an independent collision configuration per trial. This is
 /// stated plainly rather than dressed up as seed independence.
 const BOUND_TRIALS: u64 = 3;
-
-/// Zipf over `u64` keys and uniform over `f64` keys for one trial, exercising
-/// both `DataInput` hashing paths. Each trial uses a disjoint key domain so
-/// its collisions are unrelated to the previous trial's.
-fn bound_streams(trial: u64) -> [BoundStream; 2] {
-    [
-        (
-            "zipf/u64",
-            zipf_u64(BOUND_N, 8192, 1.1, 1005 + trial * 977)
-                .into_iter()
-                .map(|v| v as i64 + (trial as i64) * 100_000)
-                .collect(),
-            u64_input as fn(i64) -> DataInput<'static>,
-        ),
-        (
-            "uniform/f64",
-            uniform_u64(BOUND_N, 4096, 1006 + trial * 977)
-                .into_iter()
-                .map(|v| uniform_f64_key(v + trial * 8192))
-                .collect(),
-            f64_input as fn(i64) -> DataInput<'static>,
-        ),
-    ]
-}
 
 /// Count-Min Theorem 1 on the **RegularPath**, over independent key
 /// populations.
@@ -210,7 +170,7 @@ fn bound_streams(trial: u64) -> [BoundStream; 2] {
 fn countmin_regular_path_satisfies_the_count_min_theorem() {
     let spec = CountMinSpec::new(BOUND_ROWS, BOUND_COLS);
     for trial in 0..BOUND_TRIALS {
-        for (name, keys, to_input) in bound_streams(trial) {
+        for (name, keys, to_input) in bound_streams(trial, BOUND_N) {
             let mut truth = FreqTruth::default();
             let mut regular =
                 CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
@@ -246,7 +206,7 @@ fn countmin_regular_path_satisfies_the_count_min_theorem() {
 fn countmin_fast_path_conforms_to_the_count_min_model() {
     let spec = CountMinSpec::new(BOUND_ROWS, BOUND_COLS);
     for trial in 0..BOUND_TRIALS {
-        for (name, keys, to_input) in bound_streams(trial) {
+        for (name, keys, to_input) in bound_streams(trial, BOUND_N) {
             let mut truth = FreqTruth::default();
             let mut fast =
                 CountMin::<Vector2D<i32>, FastPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
@@ -303,7 +263,7 @@ fn countsketch_both_paths_meet_the_l2_median_bound() {
     // than on whichever trial happened to look worst.
     let mut tallies: HashMap<String, (Tally, Tally)> = HashMap::new();
     for trial in 0..BOUND_TRIALS {
-        for (name, keys, to_input) in bound_streams(trial) {
+        for (name, keys, to_input) in bound_streams(trial, BOUND_N) {
             let mut truth = FreqTruth::default();
             let mut regular = asap_sketchlib::Count::<Vector2D<i32>, RegularPath>::with_dimensions(
                 BOUND_ROWS, BOUND_COLS,
@@ -691,15 +651,6 @@ const COUNTSKETCH_DEPTH_AXIS: [usize; 3] = [3, 5, 9];
 const NON_POWER_OF_TWO_WIDTHS: [usize; 4] = [3, 100, 1_000, 4_095];
 const WIDTH_EXCESS_DECAY: f64 = 2.0;
 
-fn axis_stream_and_truth() -> (Vec<u64>, FreqTruth) {
-    let stream = zipf_u64(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
-    let mut truth = FreqTruth::default();
-    for k in &stream {
-        truth.observe(*k as i64);
-    }
-    (stream, truth)
-}
-
 fn axis_context(label: &str, rows: usize, cols: usize) -> String {
     format!(
         "{label} rows={rows} cols={cols} zipf(1.1) domain={AXIS_DOMAIN} n={AXIS_N} \
@@ -744,7 +695,7 @@ fn countmin_axis_contract(
 
 #[test]
 fn countmin_holds_its_contract_across_the_depth_and_width_axis_on_both_paths() {
-    let (stream, truth) = axis_stream_and_truth();
+    let (stream, truth) = zipf_stream_with_truth(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
     for &rows in &DEPTH_AXIS {
         for &cols in &WIDTH_AXIS {
             let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
@@ -773,7 +724,7 @@ fn countmin_holds_its_contract_across_the_depth_and_width_axis_on_both_paths() {
 
 #[test]
 fn countmin_mean_excess_falls_as_the_width_axis_grows() {
-    let (stream, truth) = axis_stream_and_truth();
+    let (stream, truth) = zipf_stream_with_truth(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
     for &rows in &DEPTH_AXIS {
         let mut previous: Option<(usize, f64)> = None;
         for &cols in &[64usize, 512, 4_096] {
@@ -800,7 +751,7 @@ fn countmin_mean_excess_falls_as_the_width_axis_grows() {
 
 #[test]
 fn countsketch_holds_its_l2_contract_across_the_depth_and_width_axis() {
-    let (stream, truth) = axis_stream_and_truth();
+    let (stream, truth) = zipf_stream_with_truth(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
     for &rows in &COUNTSKETCH_DEPTH_AXIS {
         for &cols in &WIDTH_AXIS {
             let spec = CountSketchSpec::new(rows, cols);
@@ -842,7 +793,7 @@ fn countsketch_holds_its_l2_contract_across_the_depth_and_width_axis() {
 /// still holds once the fold is doing real work.
 #[test]
 fn countmin_answers_a_non_power_of_two_width_on_both_paths() {
-    let (stream, truth) = axis_stream_and_truth();
+    let (stream, truth) = zipf_stream_with_truth(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
     for &cols in &NON_POWER_OF_TWO_WIDTHS {
         assert!(
             !cols.is_power_of_two(),
@@ -875,7 +826,7 @@ fn countmin_answers_a_non_power_of_two_width_on_both_paths() {
 
 #[test]
 fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
-    let (stream, truth) = axis_stream_and_truth();
+    let (stream, truth) = zipf_stream_with_truth(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
     for &cols in &NON_POWER_OF_TWO_WIDTHS {
         let spec = CountSketchSpec::new(5, cols);
         let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, cols);

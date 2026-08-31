@@ -41,7 +41,8 @@ use asap_sketchlib::{
     UnivMonOctoPlan, UnivMonOctoWorker, Vector2D, bottom_layer_for_hash, hash64_seeded,
     hash128_seeded, input_to_owned, univmon_layer_threshold,
 };
-use common::{FreqTruth, zipf_u64};
+use common::FreqTruth;
+use common::streams::{exponential_f64, u64_inputs, zipf_u64};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -60,15 +61,6 @@ const TAU: i32 = CM_PROMASK as i32;
 /// Largest amount a single cell can lag its exact count: promotion fires at a
 /// multiple of τ, so at most `τ - 1` un-promoted increments remain.
 const MAX_CELL_RESIDUAL: i32 = TAU - 1;
-
-fn keys(n: usize, domain: usize, seed: u64) -> Vec<u64> {
-    zipf_u64(n, domain, 1.1, seed)
-}
-
-#[cfg(feature = "octo-runtime")]
-fn inputs_from(keys: &[u64]) -> Vec<DataInput<'static>> {
-    keys.iter().copied().map(DataInput::U64).collect()
-}
 
 // ---------------------------------------------------------------------------
 // Child-run helpers: drive one child sketch over a stream, capture its deltas
@@ -123,7 +115,7 @@ fn cs_cells(sketch: &Cs) -> Vec<i32> {
 
 #[test]
 fn cm_promotion_is_lossless_modulo_the_child_residual() {
-    let stream = keys(20_000, 512, 9_101);
+    let stream = zipf_u64(20_000, 512, 1.1, 9_101);
     let (child, deltas) = cm_child_run(&stream, ROWS, COLS);
 
     let mut parent = Cm::with_dimensions(ROWS, COLS);
@@ -152,7 +144,7 @@ fn cm_promotion_is_lossless_modulo_the_child_residual() {
 
 #[test]
 fn cm_deltas_are_well_formed_and_carry_exactly_one_promotion() {
-    let stream = keys(20_000, 512, 9_102);
+    let stream = zipf_u64(20_000, 512, 1.1, 9_102);
     let (_, deltas) = cm_child_run(&stream, ROWS, COLS);
 
     assert!(!deltas.is_empty(), "a 20k stream must promote something");
@@ -165,7 +157,7 @@ fn cm_deltas_are_well_formed_and_carry_exactly_one_promotion() {
 
 #[test]
 fn cm_parent_holds_every_completed_promotion() {
-    let stream = keys(30_000, 512, 9_103);
+    let stream = zipf_u64(30_000, 512, 1.1, 9_103);
     let (_, deltas) = cm_child_run(&stream, ROWS, COLS);
 
     let mut parent = Cm::with_dimensions(ROWS, COLS);
@@ -198,7 +190,7 @@ fn cm_parent_holds_every_completed_promotion() {
 
 #[test]
 fn cm_octo_estimate_trails_the_single_thread_estimate_by_under_one_promotion() {
-    let stream = keys(40_000, 256, 9_104);
+    let stream = zipf_u64(40_000, 256, 1.1, 9_104);
     let (_, deltas) = cm_child_run(&stream, ROWS, COLS);
 
     let mut parent = Cm::with_dimensions(ROWS, COLS);
@@ -230,7 +222,7 @@ fn cm_octo_estimate_trails_the_single_thread_estimate_by_under_one_promotion() {
 
 #[test]
 fn cm_fast_path_promotes_on_the_same_schedule_as_the_regular_path() {
-    let stream = keys(20_000, 512, 9_105);
+    let stream = zipf_u64(20_000, 512, 1.1, 9_105);
 
     let mut fast_child = CmFast::with_dimensions(ROWS, COLS);
     let mut fast_parent = CmFast::with_dimensions(ROWS, COLS);
@@ -270,7 +262,7 @@ fn cm_delta_addressing_survives_columns_past_the_u16_ceiling() {
     // 65_536 columns addresses every cell exactly.
     let rows = 3;
     let cols = 100_000;
-    let stream = keys(60_000, 4_096, 9_108);
+    let stream = zipf_u64(60_000, 4_096, 1.1, 9_108);
 
     let mut child = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
     let mut parent = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
@@ -296,7 +288,7 @@ fn cm_delta_addressing_survives_columns_past_the_u16_ceiling() {
 
 #[test]
 fn cm_delta_application_is_order_independent() {
-    let stream = keys(15_000, 512, 9_106);
+    let stream = zipf_u64(15_000, 512, 1.1, 9_106);
     let (_, deltas) = cm_child_run(&stream, ROWS, COLS);
 
     let mut in_order = Cm::with_dimensions(ROWS, COLS);
@@ -320,7 +312,7 @@ fn cm_delta_application_is_order_independent() {
 
 #[test]
 fn cm_sharded_children_conserve_counts_against_a_single_pass() {
-    let stream = keys(40_000, 512, 9_107);
+    let stream = zipf_u64(40_000, 512, 1.1, 9_107);
     let shards = 4;
 
     let mut children: Vec<Cm> = (0..shards)
@@ -367,7 +359,7 @@ fn cm_sharded_children_conserve_counts_against_a_single_pass() {
 
 #[test]
 fn count_deltas_carry_exactly_the_signed_threshold() {
-    let stream = keys(30_000, 256, 9_201);
+    let stream = zipf_u64(30_000, 256, 1.1, 9_201);
     let (_, deltas) = cs_child_run(&stream, ROWS, COLS);
 
     assert!(!deltas.is_empty(), "a 30k stream must promote something");
@@ -384,7 +376,7 @@ fn count_deltas_carry_exactly_the_signed_threshold() {
 
 #[test]
 fn count_promotion_is_lossless_modulo_the_child_residual() {
-    let stream = keys(30_000, 256, 9_202);
+    let stream = zipf_u64(30_000, 256, 1.1, 9_202);
     let (child, deltas) = cs_child_run(&stream, ROWS, COLS);
 
     let mut parent = Cs::with_dimensions(ROWS, COLS);
@@ -419,7 +411,7 @@ fn count_promotion_is_lossless_modulo_the_child_residual() {
 
 #[test]
 fn count_octo_estimate_stays_within_one_residual_of_the_single_thread_estimate() {
-    let stream = keys(40_000, 256, 9_203);
+    let stream = zipf_u64(40_000, 256, 1.1, 9_203);
     let (_, deltas) = cs_child_run(&stream, ROWS, COLS);
 
     let mut parent = Cs::with_dimensions(ROWS, COLS);
@@ -445,7 +437,7 @@ fn count_octo_estimate_stays_within_one_residual_of_the_single_thread_estimate()
 
 #[test]
 fn count_fast_path_conserves_counts_like_the_regular_path() {
-    let stream = keys(20_000, 256, 9_204);
+    let stream = zipf_u64(20_000, 256, 1.1, 9_204);
 
     let mut child = CsFast::with_dimensions(ROWS, COLS);
     let mut parent = CsFast::with_dimensions(ROWS, COLS);
@@ -475,7 +467,7 @@ fn count_fast_path_conserves_counts_like_the_regular_path() {
 
 #[test]
 fn count_delta_application_is_order_independent() {
-    let stream = keys(15_000, 256, 9_205);
+    let stream = zipf_u64(15_000, 256, 1.1, 9_205);
     let (_, deltas) = cs_child_run(&stream, ROWS, COLS);
 
     let mut in_order = Cs::with_dimensions(ROWS, COLS);
@@ -494,7 +486,7 @@ fn count_delta_application_is_order_independent() {
 
 #[test]
 fn count_sharded_children_conserve_signed_counts() {
-    let stream = keys(40_000, 256, 9_206);
+    let stream = zipf_u64(40_000, 256, 1.1, 9_206);
     let shards = 3;
 
     let mut children: Vec<Cs> = (0..shards)
@@ -776,7 +768,7 @@ mod runtime {
 
     #[test]
     fn run_octo_cm_matches_a_single_threaded_replay_of_the_same_partition() {
-        let inputs = inputs_from(&keys(40_000, 512, 9_401));
+        let inputs = u64_inputs(&zipf_u64(40_000, 512, 1.1, 9_401));
         for workers in [1usize, 2, 3, 4, 7] {
             assert_eq!(
                 cm_cells(&cm_runtime(&inputs, workers, ROWS, COLS)),
@@ -788,7 +780,7 @@ mod runtime {
 
     #[test]
     fn run_octo_count_matches_a_single_threaded_replay_of_the_same_partition() {
-        let inputs = inputs_from(&keys(40_000, 256, 9_402));
+        let inputs = u64_inputs(&zipf_u64(40_000, 256, 1.1, 9_402));
         for workers in [1usize, 2, 4] {
             let got = run_octo(
                 &inputs,
@@ -810,7 +802,7 @@ mod runtime {
 
     #[test]
     fn run_octo_hll_is_bit_exact_and_worker_count_invariant() {
-        let inputs = inputs_from(&(0..80_000u64).collect::<Vec<_>>());
+        let inputs = u64_inputs(&(0..80_000u64).collect::<Vec<_>>());
         let mut reference = HyperLogLog::<Classic>::default();
         for input in &inputs {
             reference.insert(input);
@@ -877,7 +869,7 @@ mod runtime {
 
     #[test]
     fn run_octo_is_deterministic_across_repeated_runs() {
-        let inputs = inputs_from(&keys(30_000, 512, 9_403));
+        let inputs = u64_inputs(&zipf_u64(30_000, 512, 1.1, 9_403));
         let first = cm_runtime(&inputs, 4, ROWS, COLS);
         let second = cm_runtime(&inputs, 4, ROWS, COLS);
         assert_eq!(
@@ -889,7 +881,7 @@ mod runtime {
 
     #[test]
     fn streaming_runtime_matches_the_batch_helper() {
-        let inputs = inputs_from(&keys(30_000, 512, 9_404));
+        let inputs = u64_inputs(&zipf_u64(30_000, 512, 1.1, 9_404));
         let batch = cm_runtime(&inputs, 4, ROWS, COLS);
 
         let mut runtime = OctoRuntime::new(&config(4), CmOctoPlan::new(ROWS, COLS), || {
@@ -907,7 +899,7 @@ mod runtime {
 
     #[test]
     fn insert_batch_matches_element_wise_inserts() {
-        let inputs = inputs_from(&keys(20_000, 512, 9_405));
+        let inputs = u64_inputs(&zipf_u64(20_000, 512, 1.1, 9_405));
 
         let mut one_by_one = OctoRuntime::new(&config(3), CmOctoPlan::new(ROWS, COLS), || {
             CmOctoAggregator {
@@ -933,7 +925,7 @@ mod runtime {
 
     #[test]
     fn degenerate_config_is_clamped_rather_than_rejected() {
-        let inputs = inputs_from(&(0..5_000u64).collect::<Vec<_>>());
+        let inputs = u64_inputs(&(0..5_000u64).collect::<Vec<_>>());
         let cfg = OctoConfig {
             num_workers: 0,
             pin_cores: false,
@@ -959,7 +951,7 @@ mod runtime {
 
     #[test]
     fn a_one_slot_queue_applies_backpressure_without_deadlocking() {
-        let inputs = inputs_from(&(0..20_000u64).collect::<Vec<_>>());
+        let inputs = u64_inputs(&(0..20_000u64).collect::<Vec<_>>());
         let cfg = OctoConfig {
             num_workers: 4,
             pin_cores: false,
@@ -1106,7 +1098,7 @@ mod runtime {
     fn a_user_defined_worker_and_aggregator_round_trip_every_input() {
         let workers = 3;
         let n = 10_001u64;
-        let inputs = inputs_from(&(0..n).collect::<Vec<_>>());
+        let inputs = u64_inputs(&(0..n).collect::<Vec<_>>());
 
         let cfg = OctoConfig {
             partition: OctoPartition::RoundRobin,
@@ -1229,8 +1221,8 @@ mod runtime {
     fn a_finished_run_carries_only_count_mins_own_one_sided_error() {
         let rows = 5;
         let cols = 4096;
-        let stream = keys(200_000, 4_096, 9_501);
-        let inputs = inputs_from(&stream);
+        let stream = zipf_u64(200_000, 4_096, 1.1, 9_501);
+        let inputs = u64_inputs(&stream);
 
         let mut truth = FreqTruth::default();
         for k in &stream {
@@ -1262,7 +1254,7 @@ mod runtime {
     #[test]
     fn run_octo_hll_cardinality_error_stays_within_three_sigma() {
         let truth = 200_000u64;
-        let inputs = inputs_from(&(0..truth).collect::<Vec<_>>());
+        let inputs = u64_inputs(&(0..truth).collect::<Vec<_>>());
         let got = run_octo(&inputs, &config(4), HllOctoPlan::new(), || {
             HllOctoAggregator {
                 sketch: HyperLogLog::<Classic>::default(),
@@ -1290,8 +1282,8 @@ mod runtime {
     fn run_octo_count_frequencies_track_a_zipf_stream() {
         let rows = 5;
         let cols = 4096;
-        let stream = keys(200_000, 2_048, 9_502);
-        let inputs = inputs_from(&stream);
+        let stream = zipf_u64(200_000, 2_048, 1.1, 9_502);
+        let inputs = u64_inputs(&stream);
 
         let mut truth = FreqTruth::default();
         for k in &stream {
@@ -2434,7 +2426,7 @@ fn ddsketch_delta_promotion_trades_quantile_accuracy_for_messages() {
     // about where the mass sits. Sparse buckets are also the common case: a
     // logarithmic histogram over a skewed stream has many of them.
     let (n, alpha) = (200_000usize, 0.01f64);
-    let values = common::exponential_f64(n, 0.05, 12_101)
+    let values = exponential_f64(n, 0.05, 12_101)
         .into_iter()
         .map(|v| v.max(1e-3))
         .collect::<Vec<f64>>();
@@ -3899,7 +3891,7 @@ mod heavy_hitters {
         #[test]
         fn run_octo_coco_conserves_the_stream_mass_at_every_worker_count() {
             let stream = flow_stream(60_000, 2_048, 23_001);
-            let inputs = inputs_from(&stream);
+            let inputs = u64_inputs(&stream);
             let distinct: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
 
             for workers in [1usize, 2, 3, 4, 8] {
@@ -3929,7 +3921,7 @@ mod heavy_hitters {
         #[test]
         fn run_octo_elastic_conserves_the_stream_mass_whatever_the_interleaving() {
             let stream = flow_stream(60_000, 4_096, 23_002);
-            let inputs = inputs_from(&stream);
+            let inputs = u64_inputs(&stream);
             let truth = truth_of(&stream);
             let (rows, cols) = (3usize, 2_048usize);
 
@@ -3969,7 +3961,7 @@ mod heavy_hitters {
         #[test]
         fn run_octo_elastic_matches_a_single_threaded_replay_at_one_worker() {
             let stream = flow_stream(40_000, 2_048, 23_003);
-            let inputs = inputs_from(&stream);
+            let inputs = u64_inputs(&stream);
             let (rows, cols) = (3usize, 1_024usize);
 
             let mut replay = OctoElastic::new(1, 128, rows, cols, Route::HashByKey);
@@ -4760,7 +4752,7 @@ mod partition_accuracy {
     }
 
     fn stream() -> Vec<u64> {
-        keys(N, DOMAIN, STREAM_SEED)
+        zipf_u64(N, DOMAIN, 1.1, STREAM_SEED)
     }
 
     fn truth_of(stream: &[u64]) -> FreqTruth {

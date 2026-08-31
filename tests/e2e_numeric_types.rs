@@ -25,7 +25,8 @@
 mod common;
 
 use common::specs::{KllRankSpec, RelativeQuantileSpec, Tally};
-use common::{NumericTruth, uniform_u64};
+use common::NumericTruth;
+use common::streams::uniform_u64;
 
 use asap_sketchlib::{DDSketch, KLL, KLLDynamic, NumericalValue};
 

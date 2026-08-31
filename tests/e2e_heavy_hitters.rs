@@ -28,7 +28,7 @@
 mod common;
 
 use common::variants::{VariantList, assert_count_min_bound, assert_l2_bound};
-use common::{FreqTruth, zipf_u64};
+use common::streams::{HEAVY_HITTER_DOMAIN, freq_truth, heavy_hitter_stream, zipf_u64};
 
 use asap_sketchlib::{
     CMSHeap, CSHeap, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, FastPath,
@@ -36,25 +36,6 @@ use asap_sketchlib::{
     SPACE_SAVING_DEFAULT_CAPACITY, SpaceSaving, Vector2D,
 };
 use std::collections::{HashMap, HashSet};
-
-const STREAM: usize = 60_000;
-const DOMAIN: usize = 2_048;
-const SEED: u64 = 9_001;
-
-fn stream() -> Vec<i64> {
-    zipf_u64(STREAM, DOMAIN, 1.1, SEED)
-        .iter()
-        .map(|v| *v as i64)
-        .collect()
-}
-
-fn truth_of(stream: &[i64]) -> FreqTruth {
-    let mut truth = FreqTruth::default();
-    for key in stream {
-        truth.observe(*key);
-    }
-    truth
-}
 
 fn filled(capacity: usize, stream: &[i64]) -> SpaceSaving {
     let mut summary = SpaceSaving::with_capacity(capacity);
@@ -79,8 +60,8 @@ fn key_of(item: &HeapItem) -> i64 {
 /// least its true count and at most its true count plus its own error.
 #[test]
 fn a_monitored_key_is_sandwiched_by_its_error() {
-    let stream = stream();
-    let truth = truth_of(&stream);
+    let stream = heavy_hitter_stream();
+    let truth = freq_truth(&stream);
     let summary = filled(256, &stream);
 
     let mut monitored = 0;
@@ -110,8 +91,8 @@ fn a_monitored_key_is_sandwiched_by_its_error() {
 /// every key in the stream.
 #[test]
 fn an_unmonitored_key_never_exceeds_the_minimum_count() {
-    let stream = stream();
-    let truth = truth_of(&stream);
+    let stream = heavy_hitter_stream();
+    let truth = freq_truth(&stream);
     let summary = filled(256, &stream);
     let floor = summary.min_count();
     assert!(floor > 0, "a saturated summary has a positive minimum");
@@ -133,8 +114,8 @@ fn an_unmonitored_key_never_exceeds_the_minimum_count() {
 /// The heavy keys the summary is bought for come back exactly, in order.
 #[test]
 fn the_true_heavy_hitters_are_reported_exactly_and_in_order() {
-    let stream = stream();
-    let truth = truth_of(&stream);
+    let stream = heavy_hitter_stream();
+    let truth = freq_truth(&stream);
     let summary = filled(256, &stream);
 
     let mut expected: Vec<(i64, i64)> = truth.pairs();
@@ -163,8 +144,8 @@ fn the_true_heavy_hitters_are_reported_exactly_and_in_order() {
 /// genuinely above every key the summary dropped.
 #[test]
 fn a_guaranteed_key_really_outranks_everything_dropped() {
-    let stream = stream();
-    let truth = truth_of(&stream);
+    let stream = heavy_hitter_stream();
+    let truth = freq_truth(&stream);
     let summary = filled(256, &stream);
 
     let dropped_max = truth
@@ -223,10 +204,10 @@ fn an_arrival_displaces_the_minimum_and_inherits_its_count() {
 /// walking them reaches every counter exactly once, in descending count order.
 #[test]
 fn the_stream_summary_lists_stay_well_formed_under_eviction() {
-    let stream = stream();
+    let stream = heavy_hitter_stream();
     for capacity in [1usize, 2, 17, 256, 1_024] {
         let summary = filled(capacity, &stream);
-        let expected = capacity.min(truth_of(&stream).distinct());
+        let expected = capacity.min(freq_truth(&stream).distinct());
         assert_eq!(summary.len(), expected, "capacity {capacity} residency");
 
         let walked = summary.top_k(usize::MAX);
@@ -277,7 +258,7 @@ fn the_stream_summary_lists_stay_well_formed_under_eviction() {
 /// A weighted arrival is the same as that many single arrivals.
 #[test]
 fn a_weighted_arrival_matches_repeating_it() {
-    let stream = stream();
+    let stream = heavy_hitter_stream();
     let mut singles: SpaceSaving = SpaceSaving::with_capacity(2_048);
     let mut weighted: SpaceSaving = SpaceSaving::with_capacity(2_048);
 
@@ -307,9 +288,9 @@ fn a_weighted_arrival_matches_repeating_it() {
 /// With room for every distinct key the summary is exact and carries no error.
 #[test]
 fn a_summary_larger_than_the_domain_is_exact() {
-    let stream = stream();
-    let truth = truth_of(&stream);
-    let summary = filled(DOMAIN * 2, &stream);
+    let stream = heavy_hitter_stream();
+    let truth = freq_truth(&stream);
+    let summary = filled(HEAVY_HITTER_DOMAIN * 2, &stream);
 
     assert_eq!(summary.len(), truth.distinct());
     assert_eq!(summary.min_count(), 0);
@@ -324,14 +305,14 @@ fn a_summary_larger_than_the_domain_is_exact() {
 /// below what either side saw.
 #[test]
 fn a_merge_keeps_the_total_and_never_reads_low() {
-    let stream = stream();
+    let stream = heavy_hitter_stream();
     let (left_stream, right_stream): (Vec<i64>, Vec<i64>) =
         stream.iter().partition(|key| *key % 2 == 0);
 
     let mut left = filled(256, &left_stream);
     let right = filled(256, &right_stream);
-    let left_truth = truth_of(&left_stream);
-    let right_truth = truth_of(&right_stream);
+    let left_truth = freq_truth(&left_stream);
+    let right_truth = freq_truth(&right_stream);
 
     left.merge_from(&right);
 
@@ -363,8 +344,8 @@ fn a_merge_keeps_the_total_and_never_reads_low() {
 /// the summary looks up on.
 #[test]
 fn a_serde_round_trip_preserves_every_answer() {
-    let stream = stream();
-    let truth = truth_of(&stream);
+    let stream = heavy_hitter_stream();
+    let truth = freq_truth(&stream);
     let summary = filled(256, &stream);
 
     let bytes = rmp_serde::to_vec(&summary).expect("serialize");
@@ -407,7 +388,7 @@ fn an_empty_summary_answers() {
 /// count and error as the arrivals it stands in for.
 #[test]
 fn a_weighted_arrival_matches_repeating_it_under_eviction() {
-    let stream = stream();
+    let stream = heavy_hitter_stream();
     let mut counts: HashMap<i64, u64> = HashMap::new();
     for key in &stream {
         *counts.entry(*key).or_default() += 1;
@@ -446,7 +427,7 @@ fn a_weighted_arrival_matches_repeating_it_under_eviction() {
 /// `bulk_insert` is the loop it replaces, and a zero weight records nothing.
 #[test]
 fn bulk_insert_matches_repeated_inserts_and_a_zero_weight_is_inert() {
-    let stream = stream();
+    let stream = heavy_hitter_stream();
     let values: Vec<DataInput> = stream.iter().map(|key| DataInput::I64(*key)).collect();
 
     let mut bulk: SpaceSaving = SpaceSaving::with_capacity(128);
@@ -512,12 +493,12 @@ fn a_merge_into_an_under_full_summary_keeps_the_ceiling_honest() {
 /// stream stays under its ceiling, and every guarantee holds against the truth.
 #[test]
 fn a_merge_chain_stays_one_sided_against_the_truth() {
-    let stream = stream();
+    let stream = heavy_hitter_stream();
     let mut shards: Vec<Vec<i64>> = vec![Vec::new(); 3];
     for (position, key) in stream.iter().enumerate() {
         shards[position % 3].push(*key);
     }
-    let truth = truth_of(&stream);
+    let truth = freq_truth(&stream);
 
     let mut merged = filled(64, &shards[0]);
     merged.merge_from(&filled(512, &shards[1]));
@@ -607,7 +588,7 @@ fn a_merge_picks_the_same_survivors_every_time() {
 /// The ceiling a merge established survives the wire.
 #[test]
 fn a_round_trip_carries_the_merged_ceiling() {
-    let stream = stream();
+    let stream = heavy_hitter_stream();
     let mut merged = filled(32, &stream[..stream.len() / 2]);
     merged.merge_from(&filled(4, &stream[stream.len() / 2..]));
 
@@ -617,7 +598,7 @@ fn a_round_trip_carries_the_merged_ceiling() {
     assert_eq!(decoded.min_count(), merged.min_count());
     assert_eq!(decoded.total(), merged.total());
     assert_eq!(decoded.len(), merged.len());
-    for (key, count) in truth_of(&stream).pairs() {
+    for (key, count) in freq_truth(&stream).pairs() {
         let probe = DataInput::I64(key);
         assert_eq!(decoded.estimate(&probe), merged.estimate(&probe));
         assert!(
@@ -717,7 +698,7 @@ fn the_default_summary_holds_the_default_capacity() {
     assert_eq!(summary.capacity(), SPACE_SAVING_DEFAULT_CAPACITY);
     assert!(summary.is_empty());
 
-    let stream = stream();
+    let stream = heavy_hitter_stream();
     for key in &stream {
         summary.insert(&DataInput::I64(*key));
     }
@@ -817,8 +798,8 @@ mod keyed_bucket {
     /// sketch has no decrement path.
     #[test]
     fn coco_passes_frequency_and_merge_conformance() {
-        let stream = stream();
-        let truth = truth_of(&stream);
+        let stream = heavy_hitter_stream();
+        let truth = freq_truth(&stream);
         let spec = FrequencySpec {
             one_sided: false,
             rel_tol: 0.06,
@@ -840,8 +821,8 @@ mod keyed_bucket {
     /// guarantee, so a battery holding `one_sided: true` must not reach it.
     #[test]
     fn elastic_passes_frequency_and_merge_conformance() {
-        let stream = stream();
-        let truth = truth_of(&stream);
+        let stream = heavy_hitter_stream();
+        let truth = freq_truth(&stream);
         // Count-Min's additive bound over the light layer: eps * N with
         // eps = e / cols. Measured worst dense-key excess is 8.
         let spec = FrequencySpec {

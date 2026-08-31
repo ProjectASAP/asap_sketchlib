@@ -7,22 +7,15 @@
 //! delivered false-positive rate its own sizing predicts - plus the two hash
 //! paths, serialization, and the degenerate geometries.
 
+mod common;
+
+use common::streams::{BLOOM_MEMBERS, BLOOM_PROBES, bloom_members, bloom_probes};
+
 use asap_sketchlib::bloom::{BLOOM_MAX_BITS, BLOOM_MAX_SLICES};
 use asap_sketchlib::{
     BLOOM_DEFAULT_COLS, BLOOM_DEFAULT_ROWS, BitMatrix, Bloom, DataInput, FastPath, MatrixHashMode,
     RegularPath, hash_mode_for_matrix,
 };
-
-const MEMBERS: i64 = 20_000;
-const PROBES: i64 = 200_000;
-
-fn members() -> Vec<i64> {
-    (0..MEMBERS).collect()
-}
-
-fn probes() -> Vec<i64> {
-    (10_000_000..10_000_000 + PROBES).collect()
-}
 
 fn all_bits(bits: &BitMatrix) -> Vec<bool> {
     (0..bits.rows())
@@ -45,23 +38,23 @@ fn duplicate_slice_pairs(bits: &BitMatrix) -> Vec<(usize, usize)> {
     pairs
 }
 
-/// Five standard errors of a binomial rate over `PROBES` draws. Wide enough
+/// Five standard errors of a binomial rate over `BLOOM_PROBES` draws. Wide enough
 /// that a correct filter never trips it, narrow enough that it stays under the
 /// sizing target at every rate the suite exercises.
 fn sampling_band(rate: f64) -> f64 {
-    5.0 * (rate * (1.0 - rate) / PROBES as f64).sqrt()
+    5.0 * (rate * (1.0 - rate) / BLOOM_PROBES as f64).sqrt()
 }
 
 fn filled_regular(target: f64) -> Bloom<RegularPath> {
-    let mut filter = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, target);
-    for key in members() {
+    let mut filter = Bloom::<RegularPath>::with_capacity(BLOOM_MEMBERS as usize, target);
+    for key in bloom_members() {
         filter.insert(&DataInput::I64(key));
     }
     filter
 }
 
 fn false_positive_rate<F: Fn(i64) -> bool>(contains: F) -> f64 {
-    let probes = probes();
+    let probes = bloom_probes();
     let hits = probes.iter().filter(|k| contains(**k)).count();
     hits as f64 / probes.len() as f64
 }
@@ -71,38 +64,38 @@ fn false_positive_rate<F: Fn(i64) -> bool>(contains: F) -> f64 {
 #[test]
 fn an_inserted_key_is_never_reported_absent() {
     let regular = filled_regular(0.01);
-    let absent: Vec<i64> = members()
+    let absent: Vec<i64> = bloom_members()
         .into_iter()
         .filter(|k| !regular.contains(&DataInput::I64(*k)))
         .collect();
     assert!(
         absent.is_empty(),
-        "regular path lost {} of {MEMBERS} members, first {:?}",
+        "regular path lost {} of {BLOOM_MEMBERS} members, first {:?}",
         absent.len(),
         absent.first()
     );
 
-    let mut fast = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
-    for key in members() {
+    let mut fast = Bloom::<FastPath>::with_capacity(BLOOM_MEMBERS as usize, 0.01);
+    for key in bloom_members() {
         fast.insert(&DataInput::I64(key));
     }
-    let absent_fast = members()
+    let absent_fast = bloom_members()
         .into_iter()
         .filter(|k| !fast.contains(&DataInput::I64(*k)))
         .count();
-    assert_eq!(absent_fast, 0, "fast path lost {absent_fast} of {MEMBERS}");
+    assert_eq!(absent_fast, 0, "fast path lost {absent_fast} of {BLOOM_MEMBERS}");
 }
 
 /// A filter with nothing in it rejects everything, on both paths.
 #[test]
 fn an_empty_filter_rejects_every_probe() {
-    let regular = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
-    let fast = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
+    let regular = Bloom::<RegularPath>::with_capacity(BLOOM_MEMBERS as usize, 0.01);
+    let fast = Bloom::<FastPath>::with_capacity(BLOOM_MEMBERS as usize, 0.01);
     assert!(regular.is_empty());
     assert_eq!(regular.inserted(), 0);
     assert!(fast.is_empty());
     assert_eq!(fast.inserted(), 0);
-    for key in probes().into_iter().take(10_000) {
+    for key in bloom_probes().into_iter().take(10_000) {
         assert!(!regular.contains(&DataInput::I64(key)));
         assert!(!fast.contains(&DataInput::I64(key)));
     }
@@ -116,7 +109,7 @@ fn the_measured_false_positive_rate_matches_what_the_sizing_predicts() {
     for target in [0.1, 0.01, 0.001] {
         let filter = filled_regular(target);
         let measured = false_positive_rate(|k| filter.contains(&DataInput::I64(k)));
-        let predicted = filter.predicted_fpp(MEMBERS as usize);
+        let predicted = filter.predicted_fpp(BLOOM_MEMBERS as usize);
 
         assert!(
             predicted <= target,
@@ -145,13 +138,13 @@ fn the_measured_false_positive_rate_matches_what_the_sizing_predicts() {
 /// so it tracks the measured rate on a filter that saw duplicates.
 #[test]
 fn the_fill_based_estimate_tracks_the_measured_rate() {
-    let mut filter = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
+    let mut filter = Bloom::<RegularPath>::with_capacity(BLOOM_MEMBERS as usize, 0.01);
     for _ in 0..3 {
-        for key in members() {
+        for key in bloom_members() {
             filter.insert(&DataInput::I64(key));
         }
     }
-    assert_eq!(filter.inserted(), 3 * MEMBERS as u64);
+    assert_eq!(filter.inserted(), 3 * BLOOM_MEMBERS as u64);
 
     let measured = false_positive_rate(|k| filter.contains(&DataInput::I64(k)));
     let estimated = filter.estimated_fpp();
@@ -162,8 +155,8 @@ fn the_fill_based_estimate_tracks_the_measured_rate() {
 
     // The same keys once set the same bits and a third of the inserts, so an
     // estimate that read the counter would move and this one does not.
-    let mut once = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
-    for key in members() {
+    let mut once = Bloom::<RegularPath>::with_capacity(BLOOM_MEMBERS as usize, 0.01);
+    for key in bloom_members() {
         once.insert(&DataInput::I64(key));
     }
     assert_eq!(all_bits(once.as_bits()), all_bits(filter.as_bits()));
@@ -218,7 +211,7 @@ fn a_union_equals_the_filter_of_the_concatenated_stream() {
         assert!(left.contains(&DataInput::I64(key)), "union lost key {key}");
     }
     // Same bits means the same answers on non-members too, not just members.
-    for key in probes().into_iter().take(20_000) {
+    for key in bloom_probes().into_iter().take(20_000) {
         assert_eq!(
             left.contains(&DataInput::I64(key)),
             whole.contains(&DataInput::I64(key)),
@@ -462,7 +455,7 @@ fn extra_slices_past_the_seed_list_do_not_sharpen_the_filter() {
     let capped = {
         let mut f = Bloom::<RegularPath>::with_dimensions(BLOOM_MAX_SLICES, COLS);
         f.bulk_insert(
-            &members()
+            &bloom_members()
                 .into_iter()
                 .map(DataInput::I64)
                 .collect::<Vec<_>>(),
@@ -472,7 +465,7 @@ fn extra_slices_past_the_seed_list_do_not_sharpen_the_filter() {
     let padded = {
         let mut f = Bloom::<RegularPath>::with_dimensions(BLOOM_MAX_SLICES + 5, COLS);
         f.bulk_insert(
-            &members()
+            &bloom_members()
                 .into_iter()
                 .map(DataInput::I64)
                 .collect::<Vec<_>>(),
@@ -493,12 +486,12 @@ fn extra_slices_past_the_seed_list_do_not_sharpen_the_filter() {
 
     assert_eq!(padded.effective_rows(), BLOOM_MAX_SLICES);
     assert_eq!(
-        padded.predicted_fpp(MEMBERS as usize),
-        capped.predicted_fpp(MEMBERS as usize),
+        padded.predicted_fpp(BLOOM_MEMBERS as usize),
+        capped.predicted_fpp(BLOOM_MEMBERS as usize),
         "the extra slices are claimed to sharpen a rate they cannot move"
     );
 
-    let predicted = padded.predicted_fpp(MEMBERS as usize);
+    let predicted = padded.predicted_fpp(BLOOM_MEMBERS as usize);
     let band = sampling_band(predicted);
     assert!(
         (padded_rate - predicted).abs() <= band,
@@ -571,7 +564,7 @@ fn clearing_restores_an_empty_filter() {
     assert!(filter.is_empty());
     assert_eq!(filter.inserted(), 0);
     assert_eq!((filter.rows(), filter.cols()), (rows, cols));
-    for key in members().into_iter().take(1_000) {
+    for key in bloom_members().into_iter().take(1_000) {
         assert!(!filter.contains(&DataInput::I64(key)));
     }
 }
@@ -591,10 +584,10 @@ fn a_serde_round_trip_preserves_every_answer() {
         decoded.as_bits().count_ones(),
         filter.as_bits().count_ones()
     );
-    for key in members() {
+    for key in bloom_members() {
         assert!(decoded.contains(&DataInput::I64(key)));
     }
-    for key in probes().into_iter().take(20_000) {
+    for key in bloom_probes().into_iter().take(20_000) {
         assert_eq!(
             decoded.contains(&DataInput::I64(key)),
             filter.contains(&DataInput::I64(key))
@@ -643,7 +636,7 @@ fn the_two_hash_paths_agree_only_where_the_geometry_gives_each_row_its_own_hash(
         Bloom::<RegularPath>::with_dimensions(8, 1 << 16),
         Bloom::<FastPath>::with_dimensions(8, 1 << 16),
     );
-    for key in members() {
+    for key in bloom_members() {
         regular.insert(&DataInput::I64(key));
         fast.insert(&DataInput::I64(key));
     }
@@ -659,7 +652,7 @@ fn the_two_hash_paths_agree_only_where_the_geometry_gives_each_row_its_own_hash(
         Bloom::<RegularPath>::with_dimensions(7, 1 << 16),
         Bloom::<FastPath>::with_dimensions(7, 1 << 16),
     );
-    for key in members() {
+    for key in bloom_members() {
         regular.insert(&DataInput::I64(key));
         fast.insert(&DataInput::I64(key));
     }
@@ -685,8 +678,8 @@ fn the_two_hash_paths_agree_only_where_the_geometry_gives_each_row_its_own_hash(
 #[test]
 fn a_filter_cannot_be_decoded_into_the_other_hash_path() {
     let regular = filled_regular(0.01);
-    let mut fast = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
-    for key in members() {
+    let mut fast = Bloom::<FastPath>::with_capacity(BLOOM_MEMBERS as usize, 0.01);
+    for key in bloom_members() {
         fast.insert(&DataInput::I64(key));
     }
 
@@ -705,7 +698,7 @@ fn a_filter_cannot_be_decoded_into_the_other_hash_path() {
     assert!(rmp_serde::from_slice::<Bloom>(&fast_bytes).is_err());
 
     let decoded: Bloom<FastPath> = rmp_serde::from_slice(&fast_bytes).expect("same path decodes");
-    for key in members() {
+    for key in bloom_members() {
         assert!(decoded.contains(&DataInput::I64(key)));
     }
 }
@@ -713,8 +706,8 @@ fn a_filter_cannot_be_decoded_into_the_other_hash_path() {
 /// The fast path round-trips like the regular one, tag and all.
 #[test]
 fn a_fast_path_serde_round_trip_preserves_every_answer() {
-    let mut filter = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
-    for key in members() {
+    let mut filter = Bloom::<FastPath>::with_capacity(BLOOM_MEMBERS as usize, 0.01);
+    for key in bloom_members() {
         filter.insert(&DataInput::I64(key));
     }
     let bytes = rmp_serde::to_vec(&filter).expect("serialize");
@@ -726,7 +719,7 @@ fn a_fast_path_serde_round_trip_preserves_every_answer() {
     );
     assert_eq!(decoded.inserted(), filter.inserted());
     assert_eq!(all_bits(decoded.as_bits()), all_bits(filter.as_bits()));
-    for key in probes().into_iter().take(20_000) {
+    for key in bloom_probes().into_iter().take(20_000) {
         assert_eq!(
             decoded.contains(&DataInput::I64(key)),
             filter.contains(&DataInput::I64(key))
@@ -776,22 +769,22 @@ fn merging_filters_of_different_slice_counts_panics() {
 /// `bulk_insert` is the loop, not a different filter.
 #[test]
 fn bulk_insert_matches_inserting_one_at_a_time() {
-    let batch: Vec<DataInput> = members().into_iter().map(DataInput::I64).collect();
+    let batch: Vec<DataInput> = bloom_members().into_iter().map(DataInput::I64).collect();
 
-    let mut one_by_one = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
-    for key in members() {
+    let mut one_by_one = Bloom::<RegularPath>::with_capacity(BLOOM_MEMBERS as usize, 0.01);
+    for key in bloom_members() {
         one_by_one.insert(&DataInput::I64(key));
     }
-    let mut bulk = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
+    let mut bulk = Bloom::<RegularPath>::with_capacity(BLOOM_MEMBERS as usize, 0.01);
     bulk.bulk_insert(&batch);
     assert_eq!(all_bits(bulk.as_bits()), all_bits(one_by_one.as_bits()));
     assert_eq!(bulk.inserted(), one_by_one.inserted());
 
-    let mut fast_one_by_one = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
-    for key in members() {
+    let mut fast_one_by_one = Bloom::<FastPath>::with_capacity(BLOOM_MEMBERS as usize, 0.01);
+    for key in bloom_members() {
         fast_one_by_one.insert(&DataInput::I64(key));
     }
-    let mut fast_bulk = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
+    let mut fast_bulk = Bloom::<FastPath>::with_capacity(BLOOM_MEMBERS as usize, 0.01);
     fast_bulk.bulk_insert(&batch);
     assert_eq!(
         all_bits(fast_bulk.as_bits()),

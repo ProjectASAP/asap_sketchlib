@@ -1,6 +1,6 @@
 mod common;
 
-use common::{uniform_u64, zipf_u64};
+use common::streams::{uniform_u64, zipf_u64};
 
 use asap_sketchlib::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::{
@@ -20,10 +20,6 @@ fn assert_kind(bytes: &[u8], family: u8, variant: u8, label: &str) {
         (family, variant),
         "{label}: kind_id bytes"
     );
-}
-
-fn frequency_stream() -> Vec<u64> {
-    zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001)
 }
 
 #[test]
@@ -91,7 +87,7 @@ fn a_bloom_envelope_round_trips_on_both_paths_and_names_its_kind() {
 #[test]
 fn a_coco_envelope_round_trips_and_names_its_kind() {
     let mut coco = Coco::<DefaultXxHasher>::init_with_size(512, 4);
-    for k in frequency_stream() {
+    for k in zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001) {
         coco.insert(&format!("flow-{k}"), 1);
     }
     let bytes = coco.serialize_to_bytes().expect("encode");
@@ -110,7 +106,7 @@ fn a_coco_envelope_round_trips_and_names_its_kind() {
 #[test]
 fn an_elastic_envelope_round_trips_and_names_its_kind() {
     let mut elastic = Elastic::<DefaultXxHasher>::init_with_dimensions(64, 3, 1_024);
-    for k in frequency_stream() {
+    for k in zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001) {
         elastic.insert(format!("flow-{k}"));
     }
     let bytes = elastic.serialize_to_bytes().expect("encode");
@@ -129,7 +125,7 @@ fn an_elastic_envelope_round_trips_and_names_its_kind() {
 #[test]
 fn a_space_saving_envelope_round_trips_and_names_its_kind() {
     let mut summary = SpaceSaving::<DefaultXxHasher>::with_capacity(256);
-    for k in frequency_stream() {
+    for k in zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001) {
         summary.insert(&DataInput::U64(k));
     }
     let bytes = summary.serialize_to_bytes().expect("encode");
@@ -170,7 +166,7 @@ fn a_kll_dynamic_envelope_round_trips_and_names_its_kind() {
 
 #[test]
 fn the_heap_backed_matrix_envelopes_round_trip_and_name_their_kinds() {
-    let stream = frequency_stream();
+    let stream = zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001);
 
     let mut cms = CMSHeap::<Vector2D<i64>, FastPath>::new(4, 2_048, 32);
     let mut cs = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 2_048, 32);
@@ -220,7 +216,7 @@ fn eh_prototype() -> EHSketchList {
 #[test]
 fn an_exponential_histogram_envelope_round_trips_and_names_its_kind() {
     let mut eh = ExponentialHistogram::new(8, 1_000_000, eh_prototype());
-    for (t, k) in frequency_stream().iter().take(3_000).enumerate() {
+    for (t, k) in zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001).iter().take(3_000).enumerate() {
         eh.update(t as u64, &DataInput::U64(*k));
     }
     let bytes = eh.serialize_to_bytes().expect("encode");
@@ -248,7 +244,7 @@ fn an_exponential_histogram_envelope_round_trips_and_names_its_kind() {
 #[test]
 fn an_eh_sketch_list_envelope_round_trips_and_names_its_kind() {
     let mut payload = eh_prototype();
-    for k in frequency_stream().iter().take(5_000) {
+    for k in zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001).iter().take(5_000) {
         payload.insert(&DataInput::U64(*k));
     }
     let bytes = payload.serialize_to_bytes().expect("encode");
@@ -308,7 +304,7 @@ fn a_hydra_envelope_round_trips_and_names_the_counter_it_carries() {
 
 #[test]
 fn the_univmon_family_envelopes_round_trip_and_name_their_kinds() {
-    let stream = frequency_stream();
+    let stream = zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001);
 
     let mut um = UnivMon::init_univmon(32, 5, 512, 8);
     let mut pyramid = UnivMonPyramid::with_defaults();
@@ -396,7 +392,7 @@ fn an_envelope_is_refused_by_every_decoder_but_its_own() {
 
 #[test]
 fn the_matrix_and_quantile_envelopes_carry_their_answers_unchanged() {
-    let stream = frequency_stream();
+    let stream = zipf_u64(20_000, 1_024, 1.1, 0x_C1EA_0001);
     let mut cm = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(4, 2_048);
     let mut cs = Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, 2_048);
     let mut kll: KLL<f64> = KLL::init_kll_with_seed(200, 0x5EED_9002);

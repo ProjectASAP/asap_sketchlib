@@ -13,7 +13,8 @@
 mod common;
 
 use common::specs::{CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, KllRankSpec, Tally};
-use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
+use common::streams::{uniform_u64, zipf_u64};
+use common::{FreqTruth, NumericTruth};
 
 use asap_sketchlib::{
     Classic, Count, CountMin, CountMinSketchWithHeap, CountSketchWithHeap, DataInput,

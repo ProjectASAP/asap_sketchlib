@@ -24,7 +24,8 @@ use common::specs::{
     CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, KllRankSpec, RelativeQuantileSpec,
     Tally,
 };
-use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
+use common::streams::{uniform_u64, zipf_u64};
+use common::{FreqTruth, NumericTruth};
 
 use asap_sketchlib::{
     Coco, Count, CountL2HH, CountMin, DDSketch, DataInput, EHSketchList, Elastic, ErtlMLE,

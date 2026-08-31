@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
 use super::specs::{CountMinSpec, CountSketchSpec};
-use super::{FreqTruth, zipf_u64};
+use super::FreqTruth;
+use super::streams::zipf_u64;
 
 use asap_sketchlib::sketches::countsketch::CountSketchCounter;
 use asap_sketchlib::{

@@ -54,7 +54,8 @@
 mod common;
 
 use common::specs::{CountMinSpec, SIMULTANEOUS_LEVEL, SamplingConfidenceSpec, Tally};
-use common::{FreqTruth, zipf_u64};
+use common::FreqTruth;
+use common::streams::{zipf_stream_with_truth, zipf_u64};
 
 use asap_sketchlib::{Count, CountMin, DataInput, FastPath, NitroBatch, Vector2D};
 
@@ -895,15 +896,6 @@ const INTEGRATION_N: usize = 40_000;
 const INTEGRATION_DOMAIN: usize = 2_048;
 const INTEGRATION_SEED: u64 = 0x4E17_0001;
 
-fn integration_stream() -> (Vec<u64>, FreqTruth) {
-    let stream = zipf_u64(INTEGRATION_N, INTEGRATION_DOMAIN, 1.1, INTEGRATION_SEED);
-    let mut truth = FreqTruth::default();
-    for k in &stream {
-        truth.observe(*k as i64);
-    }
-    (stream, truth)
-}
-
 fn counters(storage: &Vector2D<i32>) -> Vec<i32> {
     let mut out = Vec::with_capacity(storage.rows() * storage.cols());
     for row in 0..storage.rows() {
@@ -916,7 +908,7 @@ fn counters(storage: &Vector2D<i32>) -> Vec<i32> {
 
 #[test]
 fn count_min_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() {
-    let (stream, truth) = integration_stream();
+    let (stream, truth) = zipf_stream_with_truth(INTEGRATION_N, INTEGRATION_DOMAIN, 1.1, INTEGRATION_SEED);
     let mut plain =
         CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
     let mut sampled =
@@ -951,7 +943,7 @@ fn count_min_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() 
 
 #[test]
 fn count_min_after_disable_nitro_leaves_the_sampled_insert_path_inert() {
-    let (stream, _) = integration_stream();
+    let (stream, _) = zipf_stream_with_truth(INTEGRATION_N, INTEGRATION_DOMAIN, 1.1, INTEGRATION_SEED);
     let mut sketch =
         CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
     sketch.enable_nitro(1.0);
@@ -983,7 +975,7 @@ fn count_min_after_disable_nitro_leaves_the_sampled_insert_path_inert() {
 #[test]
 fn count_min_seeded_nitro_sampling_is_reproducible_and_admits_a_strict_subset() {
     const RATE: f64 = 0.1;
-    let (stream, _) = integration_stream();
+    let (stream, _) = zipf_stream_with_truth(INTEGRATION_N, INTEGRATION_DOMAIN, 1.1, INTEGRATION_SEED);
 
     let build = |seed: u64| {
         let mut sketch = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
@@ -1027,7 +1019,7 @@ fn count_min_seeded_nitro_sampling_is_reproducible_and_admits_a_strict_subset() 
 
 #[test]
 fn count_sketch_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() {
-    let (stream, truth) = integration_stream();
+    let (stream, truth) = zipf_stream_with_truth(INTEGRATION_N, INTEGRATION_DOMAIN, 1.1, INTEGRATION_SEED);
     let mut plain =
         Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
     let mut sampled =
@@ -1055,7 +1047,7 @@ fn count_sketch_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes
 #[test]
 fn count_sketch_seeded_nitro_sampling_is_reproducible() {
     const RATE: f64 = 0.25;
-    let (stream, _) = integration_stream();
+    let (stream, _) = zipf_stream_with_truth(INTEGRATION_N, INTEGRATION_DOMAIN, 1.1, INTEGRATION_SEED);
     let build = |seed: u64| {
         let mut sketch =
             Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);

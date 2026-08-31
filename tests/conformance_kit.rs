@@ -8,7 +8,8 @@ use common::conformance::{
     self, CardinalityOps, CardinalitySpec, FrequencyOps, MembershipOps, MembershipSpec, MergeOps,
     QuantileOps, QuantileSpec, SignedFrequencyOps,
 };
-use common::{FreqTruth, zipf_u64};
+use common::FreqTruth;
+use common::streams::{heavy_hitter_stream, normal_f64, uniform_u64, zipf_u64};
 
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
@@ -201,18 +202,11 @@ impl QuantileOps for UnivMonQAdapter {
 // Battery runs
 // ---------------------------------------------------------------------------
 
-/// Space-Saving's over-estimate ceiling on `zipf_stream`. At 1024 counters the
+/// Space-Saving's over-estimate ceiling on `heavy_hitter_stream`. At 1024 counters the
 /// summary's minimum count settles at 12, below the battery's dense-key
 /// threshold of 25, so no dense key is ever evicted and the measured worst
 /// over-estimate is 1.
 const SPACE_SAVING_ABS_TOL: f64 = 2.0;
-
-fn zipf_stream() -> Vec<i64> {
-    zipf_u64(60_000, 2048, 1.1, 9001)
-        .iter()
-        .map(|v| *v as i64)
-        .collect()
-}
 
 fn stream_truth(stream: &[i64]) -> FreqTruth {
     let mut truth = FreqTruth::default();
@@ -224,7 +218,7 @@ fn stream_truth(stream: &[i64]) -> FreqTruth {
 
 #[test]
 fn countmin_passes_frequency_and_merge_conformance() {
-    let stream = zipf_stream();
+    let stream = heavy_hitter_stream();
     let truth = stream_truth(&stream);
     let spec = conformance::FrequencySpec {
         one_sided: true,
@@ -260,7 +254,7 @@ fn countmin_passes_frequency_and_merge_conformance() {
 
 #[test]
 fn countsketch_passes_signed_frequency_conformance() {
-    let stream = zipf_stream();
+    let stream = heavy_hitter_stream();
     let truth = stream_truth(&stream);
     let spec = conformance::FrequencySpec {
         one_sided: false,
@@ -334,7 +328,7 @@ const KIT_KLL_SEED: u64 = 0x4017_0001;
 /// no rank guarantee, so it goes through `relative_quantile_battery` below.
 #[test]
 fn kll_family_passes_quantile_conformance() {
-    let values: Vec<f64> = common::normal_f64(40_000, 500.0, 80.0, 7001)
+    let values: Vec<f64> = normal_f64(40_000, 500.0, 80.0, 7001)
         .into_iter()
         .filter(|v| *v > 0.0)
         .collect();
@@ -369,7 +363,7 @@ fn kll_family_passes_quantile_conformance() {
 #[test]
 fn ddsketch_passes_relative_quantile_conformance() {
     const ALPHA: f64 = 0.01;
-    let values: Vec<f64> = common::normal_f64(40_000, 500.0, 80.0, 7001)
+    let values: Vec<f64> = normal_f64(40_000, 500.0, 80.0, 7001)
         .into_iter()
         .filter(|v| *v > 0.0)
         .collect();
@@ -386,7 +380,7 @@ fn ddsketch_passes_relative_quantile_conformance() {
 
 #[test]
 fn univmonq_passes_quantile_conformance() {
-    let values: Vec<f64> = common::uniform_u64(30_000, 50_000, 7002)
+    let values: Vec<f64> = uniform_u64(30_000, 50_000, 7002)
         .into_iter()
         .map(|v| v as f64)
         .collect();
@@ -460,7 +454,7 @@ fn bloom_regular_path_passes_membership_conformance() {
 /// concatenated stream would have built.
 #[test]
 fn space_saving_passes_frequency_conformance() {
-    let stream = zipf_stream();
+    let stream = heavy_hitter_stream();
     let truth = stream_truth(&stream);
     let spec = conformance::FrequencySpec {
         one_sided: true,
@@ -649,7 +643,7 @@ fn core_ddsketch_passes_relative_quantile_conformance() {
 
 #[test]
 fn heap_backed_frequency_sketches_pass_frequency_and_merge_conformance() {
-    let stream = zipf_stream();
+    let stream = heavy_hitter_stream();
     let truth = stream_truth(&stream);
 
     let one_sided = conformance::FrequencySpec {
@@ -677,7 +671,7 @@ fn heap_backed_frequency_sketches_pass_frequency_and_merge_conformance() {
 
 #[test]
 fn count_l2hh_passes_signed_frequency_and_merge_conformance() {
-    let stream = zipf_stream();
+    let stream = heavy_hitter_stream();
     let truth = stream_truth(&stream);
     let spec = conformance::FrequencySpec {
         one_sided: false,
@@ -693,7 +687,7 @@ fn count_l2hh_passes_signed_frequency_and_merge_conformance() {
 
 #[test]
 fn folded_frequency_sketches_pass_frequency_and_merge_conformance() {
-    let stream = zipf_stream();
+    let stream = heavy_hitter_stream();
     let truth = stream_truth(&stream);
 
     let one_sided = conformance::FrequencySpec {

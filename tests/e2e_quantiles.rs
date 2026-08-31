@@ -38,10 +38,11 @@
 mod common;
 
 use common::specs::{DdRankConvention, KllRankSpec, RelativeQuantileSpec, Tally, rank_error};
-use common::{
-    NumericTruth, assert_between, duplicate_heavy_f64, exponential_f64, log_uniform_f64,
-    monotonic_f64, normal_f64, outside_in_ordering, uniform_u64, zipf_f64,
+use common::streams::{
+    bulk_cases, dds_streams, log_uniform_f64, normal_f64, rank_streams, uniform_f64, uniform_u64,
+    univmonq_ordered_regimes, zipf_f64,
 };
+use common::{NumericTruth, assert_between};
 
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
@@ -72,38 +73,6 @@ const KLL_SKETCH_SEEDS: [u64; 4] = [0x5EED_0001, 0x5EED_0002, 0x5EED_0003, 0x5EE
 /// the seed space.
 fn kll_trial_seed(trial: u64) -> u64 {
     0x5EED_0000_0000_0001u64.wrapping_add(trial.wrapping_mul(0x9E37_79B9_7F4A_7C15))
-}
-
-/// Named stream shapes with a fixed seed each. Covers the light-tailed,
-/// heavy-tailed, tie-dense, sorted and adversarially-ordered cases a
-/// compaction scheme can behave differently on.
-fn rank_streams(trial: usize, n: usize) -> Vec<(&'static str, Vec<f64>)> {
-    let s = 0xA5A5_0000u64 + trial as u64 * 7919;
-    vec![
-        (
-            "uniform",
-            uniform_u64(n, 100_000_000, s)
-                .into_iter()
-                .map(|v| v as f64)
-                .collect(),
-        ),
-        ("normal", normal_f64(n, 1_000.0, 250.0, s + 1)),
-        ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, s + 2)),
-        // Fifty distinct values over tens of thousands of observations: a
-        // single value legitimately spans several percent of the rank space,
-        // which is exactly where a value-error check would misfire and a
-        // rank-interval check must not.
-        ("duplicate-heavy", duplicate_heavy_f64(n, 50, s + 3)),
-        // Sorted input: every compaction sees a run that is already in global
-        // order.
-        ("monotonic", monotonic_f64(n, 0.0, 1.0)),
-        // Adversarial ordering: the same multiset emitted from both ends
-        // inward, so no prefix resembles the whole.
-        (
-            "outside-in",
-            outside_in_ordering(normal_f64(n, 5_000.0, 900.0, s + 4)),
-        ),
-    ]
 }
 
 /// How a sketch was fed. Every mode must satisfy the same rank contract —
@@ -367,22 +336,6 @@ fn kll_bulk_seed(case: u64) -> u64 {
     kll_trial_seed(0x8B14_0000u64.wrapping_add(case))
 }
 
-/// The rank batteries' shapes plus three the compaction path can behave
-/// differently on: two heavy-tailed spreads, and a run short enough that no
-/// compactor ever fills.
-fn bulk_cases(trial: usize, n: usize) -> Vec<(&'static str, Vec<f64>)> {
-    let alpha = 0.01;
-    let gamma = (1.0 + alpha) / (1.0 - alpha);
-    let mut cases = rank_streams(trial, n);
-    cases.push(("exponential", exponential_f64(n, 1e-3, 3007)));
-    cases.push(("log-uniform", log_uniform_f64(n, gamma, 5..40, 3005)));
-    cases.push((
-        "sequential-10",
-        (0..10).map(|i| i as f64 * 1.7 + 11.0).collect(),
-    ));
-    cases
-}
-
 /// `bulk_update` and a loop of `update` must produce the *same sketch*, not
 /// two sketches that happen to land in the same rank band.
 ///
@@ -547,45 +500,6 @@ const DDS_ALPHAS: [f64; 4] = [0.001, 0.01, 0.05, 0.1];
 /// Same q grid as the rank battery, so the two contracts are compared on the
 /// same questions rather than on grids chosen to flatter each sketch.
 const DDS_QS: [f64; 7] = [0.0, 0.01, 0.1, 0.5, 0.9, 0.99, 1.0];
-
-/// Streams for the relative-error battery. `adversarial` places a fifth of its
-/// mass exactly on bucket lower edges, where the mapping's error is at its
-/// maximum of exactly `alpha` and one ULP of drift decides the bucket.
-fn dds_streams(alpha: f64, n: usize, seed: u64) -> Vec<(&'static str, Vec<f64>)> {
-    let gamma = (1.0 + alpha) / (1.0 - alpha);
-    vec![
-        (
-            "adversarial-bucket-edges",
-            log_uniform_f64(n, gamma, 5..40, seed),
-        ),
-        (
-            "normal",
-            normal_f64(n, 1_000.0, 250.0, seed + 1)
-                .into_iter()
-                .filter(|v| *v > 0.0)
-                .collect(),
-        ),
-        ("exponential", exponential_f64(n, 1e-3, seed + 2)),
-        (
-            "uniform",
-            uniform_u64(n, 9_000_000, seed + 3)
-                .into_iter()
-                .map(|v| 1_000_000.0 + v as f64)
-                .collect(),
-        ),
-        ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 4)),
-        // Nine decades in one stream: the bucket store spans a large index
-        // range and the mapping is exercised far from 1.0 in both directions.
-        (
-            "wide-dynamic-range",
-            uniform_u64(n, 1_000_000, seed + 5)
-                .into_iter()
-                .enumerate()
-                .map(|(i, v)| 10f64.powi((i % 10) as i32 - 4) * (1.0 + v as f64 / 1_000_000.0))
-                .collect(),
-        ),
-    ]
-}
 
 /// DDSketch's relative-value-error guarantee, for the core sketch and the
 /// portable wire twin, at every supported alpha.
@@ -1312,21 +1226,6 @@ fn univmonq_ordered_queries_satisfy_the_documented_cdf_and_rank_bounds() {
 ///   and `P_hat_R < 1` and all three terms are live.
 /// - **mixed**: a heavy head over a broad diffuse tail, so the residual carries
 ///   most of the mass while the heavy set is still non-empty.
-fn univmonq_ordered_regimes() -> Vec<(&'static str, Vec<f64>)> {
-    let diffuse: Vec<f64> = uniform_u64(200_000, 10_000_000, 0x0DDE_0001)
-        .into_iter()
-        .map(|v| v as f64)
-        .collect();
-    let heavy = zipf_f64(200_000, 4_096, 1.4, 1.0, 1e6, 0x0DDE_0002);
-    let mut mixed = zipf_f64(60_000, 64, 1.6, 1.0, 1e3, 0x0DDE_0003);
-    mixed.extend(
-        uniform_u64(140_000, 5_000_000, 0x0DDE_0004)
-            .into_iter()
-            .map(|v| 1e4 + v as f64),
-    );
-    vec![("diffuse", diffuse), ("heavy", heavy), ("mixed", mixed)]
-}
-
 /// The exact CDF sweep must catch an error a breakpoint scan cannot see.
 ///
 /// This is a hand-built fixture, not a sketch: it isolates the *measurement*,
@@ -1809,16 +1708,9 @@ fn kll_axis_seed(case: u64) -> u64 {
     kll_trial_seed(0x9C2A_0000u64.wrapping_add(case))
 }
 
-fn kll_axis_values(n: usize, seed: u64) -> Vec<f64> {
-    uniform_u64(n, 1_000_000, seed)
-        .into_iter()
-        .map(|v| v as f64)
-        .collect()
-}
-
 #[test]
 fn kll_minimum_compactor_capacity_axis_keeps_the_count_exact_and_reports_its_own_geometry() {
-    let values = kll_axis_values(20_000, 0x4B11_0001);
+    let values = uniform_f64(20_000, 1_000_000, 0x4B11_0001);
     let truth = NumericTruth::new(values.clone());
     for &m in &KLL_M_AXIS {
         let seed = kll_axis_seed(m as u64);
@@ -1858,7 +1750,7 @@ fn kll_normalizes_a_minimum_compactor_capacity_outside_its_supported_range() {
     assert_eq!(raised.wire_k(), 64, "k below m must be raised to m");
 
     let mut usable: KLL<f64> = KLL::init_with_seed(4, 64, kll_axis_seed(0x0102));
-    let values = kll_axis_values(5_000, 0x4B11_0102);
+    let values = uniform_f64(5_000, 1_000_000, 0x4B11_0102);
     for v in &values {
         usable.update(v);
     }
@@ -1979,7 +1871,7 @@ fn kll_small_k_satisfies_the_rank_characterization_at_its_own_epsilon() {
 fn a_kll_stream_shorter_than_k_is_answered_exactly() {
     for (case, &n) in KLL_EXACT_REGIME_N.iter().enumerate() {
         let seed = kll_axis_seed(0x0500 + case as u64);
-        let values = kll_axis_values(n, 0x4B11_0500 + case as u64);
+        let values = uniform_f64(n, 1_000_000, 0x4B11_0500 + case as u64);
         let mut sketch: KLL<f64> = KLL::init_kll_with_seed(200, seed);
         for v in &values {
             sketch.update(v);
@@ -2069,7 +1961,7 @@ fn ddsketch_satisfies_the_relative_value_error_contract_at_extreme_accuracy_para
 
 #[test]
 fn ddsketch_bucket_width_widens_monotonically_with_the_accuracy_parameter() {
-    let values = kll_axis_values(20_000, 0x0DDA_9001)
+    let values = uniform_f64(20_000, 1_000_000, 0x0DDA_9001)
         .into_iter()
         .map(|v| 1.0 + v)
         .collect::<Vec<f64>>();
@@ -2099,7 +1991,7 @@ fn ddsketch_bucket_width_widens_monotonically_with_the_accuracy_parameter() {
 #[test]
 fn univmonq_l1_is_exact_and_the_generic_g_sum_reproduces_the_named_estimators() {
     let mut q = UnivMonQ::new(Default::default()).expect("default config valid");
-    let values = kll_axis_values(50_000, 0x0DDE_9001);
+    let values = uniform_f64(50_000, 1_000_000, 0x0DDE_9001);
     for v in &values {
         q.update(v);
     }

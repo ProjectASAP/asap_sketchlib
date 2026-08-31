@@ -20,7 +20,7 @@
 mod common;
 
 use common::specs::{CardinalityConfidenceSpec, Tally};
-use common::uniform_u64;
+use common::streams::uniform_u64;
 
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};

@@ -8,7 +8,11 @@ use std::collections::HashMap;
 
 use common::conformance::{self, FrequencyOps, FrequencySpec, MergeOps, SignedFrequencyOps};
 use common::specs::KllRankSpec;
-use common::{FreqTruth, assert_between, zipf_u64};
+use common::streams::{
+    ENDPOINTS, H2_REGIONS, H2_SERVICES, REGIONS, Record, SCHEMA, STATUSES, freq_truth, h2_keys,
+    labelled_stream, normal_f64, uniform_u64, zipf_i64, zipf_u64,
+};
+use common::{FreqTruth, assert_between};
 
 use asap_sketchlib::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::{
@@ -105,7 +109,7 @@ fn hydra_kll_head_quantile_and_cdf() {
         HydraCounter::KLL(KLL::init_kll_with_seed(200, 0x5EED_0600)),
     )
     .expect("schema");
-    let values: Vec<f64> = common::uniform_u64(20_000, 1_000_000, 4001)
+    let values: Vec<f64> = uniform_u64(20_000, 1_000_000, 4001)
         .iter()
         .map(|v| *v as f64)
         .collect();
@@ -267,25 +271,10 @@ impl MergeOps for HydraCsAdapter {
 // Hydra battery runs
 // ---------------------------------------------------------------------------
 
-fn key_stream() -> Vec<i64> {
-    zipf_u64(40_000, 256, 1.1, 5_101)
-        .iter()
-        .map(|v| *v as i64)
-        .collect()
-}
-
-fn key_truth(stream: &[i64]) -> FreqTruth {
-    let mut truth = FreqTruth::default();
-    for k in stream {
-        truth.observe(*k);
-    }
-    truth
-}
-
 #[test]
 fn hydra_cm_passes_frequency_and_merge_conformance() {
-    let stream = key_stream();
-    let truth = key_truth(&stream);
+    let stream = zipf_i64(40_000, 256, 1.1, 5_101);
+    let truth = freq_truth(&stream);
     // Count-Min's reference spec from `conformance_kit.rs`.
     let spec = FrequencySpec {
         one_sided: true,
@@ -301,8 +290,8 @@ fn hydra_cm_passes_frequency_and_merge_conformance() {
 
 #[test]
 fn hydra_cs_passes_signed_frequency_conformance() {
-    let stream = key_stream();
-    let truth = key_truth(&stream);
+    let stream = zipf_i64(40_000, 256, 1.1, 5_101);
+    let truth = freq_truth(&stream);
     let spec = FrequencySpec {
         one_sided: false,
         rel_tol: 0.06,
@@ -319,38 +308,6 @@ fn hydra_cs_passes_signed_frequency_conformance() {
 // ---------------------------------------------------------------------------
 // Hydra: the subpopulation lattice
 // ---------------------------------------------------------------------------
-
-/// `src_region` and `dst_region` share `REGIONS`, so `{src = eu-west}` and
-/// `{dst = eu-west}` are distinct subpopulations over an identical value.
-const SCHEMA: [&str; 3] = ["src_region", "dst_region", "status"];
-const REGIONS: [&str; 4] = ["eu-west", "us-east", "apac", "sa-east"];
-const STATUSES: [&str; 3] = ["200", "404", "500"];
-const ENDPOINTS: [&str; 4] = ["/login", "/checkout", "/query", "/asset"];
-
-/// One stream row: a full-width key plus the value the counters measure.
-struct Record {
-    key: [&'static str; 3],
-    endpoint: &'static str,
-}
-
-/// Skewed traffic over four independently seeded columns. Consumes `seed`
-/// through `seed + 3`, so call sites space their seeds by at least four.
-fn labelled_stream(n: usize, seed: u64) -> Vec<Record> {
-    let src = zipf_u64(n, REGIONS.len(), 0.8, seed);
-    let dst = zipf_u64(n, REGIONS.len(), 0.5, seed + 1);
-    let statuses = zipf_u64(n, STATUSES.len(), 1.2, seed + 2);
-    let endpoints = zipf_u64(n, ENDPOINTS.len(), 0.4, seed + 3);
-    (0..n)
-        .map(|i| Record {
-            key: [
-                REGIONS[src[i] as usize],
-                REGIONS[dst[i] as usize],
-                STATUSES[statuses[i] as usize],
-            ],
-            endpoint: ENDPOINTS[endpoints[i] as usize],
-        })
-        .collect()
-}
 
 type LatticeKey = (Vec<Option<&'static str>>, &'static str);
 
@@ -481,7 +438,7 @@ fn hydra_cs_weighted_updates_reach_the_cell_counter() {
 fn hydra_kll_weighted_updates_repeat_the_value() {
     let n = 20_000usize;
     let keys = h2_keys(n, 4_760);
-    let values = common::normal_f64(n, 500.0, 80.0, 4_765);
+    let values = normal_f64(n, 500.0, 80.0, 4_765);
     let mut hydra = Hydra::with_schema(
         5,
         128,
@@ -580,7 +537,7 @@ fn hydra_hll_head_subpopulation_cardinalities() {
 fn hydra_kll_head_subpopulation_quantiles() {
     let n = 40_000usize;
     let keys = h2_keys(n, 4_740);
-    let values = common::normal_f64(n, 500.0, 80.0, 4_745);
+    let values = normal_f64(n, 500.0, 80.0, 4_745);
     let mut hydra = Hydra::with_schema(
         5,
         128,
@@ -802,7 +759,7 @@ fn hydra_serde_round_trip_preserves_answers_for_every_counter() {
         HydraCounter::KLL(KLL::init_kll_with_seed(200, 5_301)),
     )
     .expect("two-column schema");
-    for (i, v) in common::uniform_u64(6_000, 100_000, 5_302)
+    for (i, v) in uniform_u64(6_000, 100_000, 5_302)
         .iter()
         .enumerate()
     {
@@ -1087,24 +1044,6 @@ fn hydra_cs_head_subpopulation_frequencies() {
     );
 }
 
-/// Two key columns over 2-value domains: 4 singles and 4 pairs = 8 subkeys,
-/// sparse against `col_num`.
-const H2_REGIONS: [&str; 2] = ["eu-west", "us-east"];
-const H2_SERVICES: [&str; 2] = ["auth", "cart"];
-
-fn h2_keys(n: usize, seed: u64) -> Vec<(&'static str, &'static str)> {
-    let regions = zipf_u64(n, H2_REGIONS.len(), 0.6, seed);
-    let services = zipf_u64(n, H2_SERVICES.len(), 0.6, seed + 1);
-    (0..n)
-        .map(|i| {
-            (
-                H2_REGIONS[regions[i] as usize],
-                H2_SERVICES[services[i] as usize],
-            )
-        })
-        .collect()
-}
-
 fn h2_masks(region: &'static str, service: &'static str) -> [[Option<&'static str>; 2]; 3] {
     [
         [Some(region), None],
@@ -1209,7 +1148,7 @@ fn hydra_hll_head_routes_records_to_the_right_cell() {
 
 #[test]
 fn hydra_kll_head_routes_records_to_the_right_cell() {
-    let values = common::normal_f64(30_000, 500.0, 80.0, 4_640);
+    let values = normal_f64(30_000, 500.0, 80.0, 4_640);
     assert_head_routes_to_the_right_cell(
         "KLL",
         HydraCounter::KLL(KLL::init_kll_with_seed(200, 4_641)),
@@ -1356,7 +1295,7 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
     let probe: Vec<[Option<&str>; 2]> = h2_masks("eu-west", "auth").to_vec();
     // Shard assignment is drawn independently of the value, so both shards see
     // every value and the merge has to combine two non-zero counters.
-    let shards = common::uniform_u64(n, 2, 4_675);
+    let shards = uniform_u64(n, 2, 4_675);
 
     let run = |counter: HydraCounter, value: &dyn Fn(usize) -> DataInput<'static>| {
         let mut single = Hydra::with_schema(5, 256, ["region", "service"], counter.clone())
@@ -1397,7 +1336,7 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
     }
 
     // HLL merges register-wise by max, so likewise exact.
-    let hll_values = common::uniform_u64(n, 9_000, 4_677);
+    let hll_values = uniform_u64(n, 9_000, 4_677);
     let (single, merged) = run(HydraCounter::HLL(Default::default()), &|i| {
         DataInput::U32(hll_values[i] as u32)
     });
@@ -1416,8 +1355,8 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
     // KLL compaction is randomized, so the merged sketch is held to the rank
     // band around exact truth. The two shards draw from separated modes, so a
     // merge that keeps only one side lands outside every band.
-    let low = common::normal_f64(n, 300.0, 20.0, 4_680);
-    let high = common::normal_f64(n, 700.0, 20.0, 4_685);
+    let low = normal_f64(n, 300.0, 20.0, 4_680);
+    let high = normal_f64(n, 700.0, 20.0, 4_685);
     let kll_values: Vec<f64> = (0..n)
         .map(|i| if shards[i] == 0 { low[i] } else { high[i] })
         .collect();
@@ -1713,7 +1652,7 @@ fn hydra_query_quantile_is_the_cumulative_query_it_wraps() {
         HydraCounter::KLL(KLL::init_kll_with_seed(HYDRA_KLL_K as i32, 0x5EED_0700)),
     )
     .expect("schema");
-    let values: Vec<f64> = common::uniform_u64(20_000, 1_000_000, 4_101)
+    let values: Vec<f64> = uniform_u64(20_000, 1_000_000, 4_101)
         .iter()
         .map(|v| *v as f64)
         .collect();

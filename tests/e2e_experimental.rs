@@ -11,7 +11,8 @@
 mod common;
 
 use common::specs::{CardinalityConfidenceSpec, PrioritySampleSpec, Tally};
-use common::{FreqTruth, assert_between, uniform_u64, zipf_u64};
+use common::streams::{uniform_u64, zipf_u64};
+use common::{FreqTruth, assert_between};
 
 use asap_sketchlib::{
     DataInput, EHUnivOptimized, EHUnivQueryResult, HeapItem, KMV, UniformSampling,
