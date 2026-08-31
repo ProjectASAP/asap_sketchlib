@@ -1196,3 +1196,365 @@ mod keyed_bucket {
         );
     }
 }
+
+mod partial_key_and_heavy_maintenance {
+    use asap_sketchlib::{Coco, CocoBucket, DataInput, DefaultXxHasher, Elastic, HeavyBucket};
+    use std::collections::HashMap;
+
+    const TENANTS: usize = 8;
+    const FLOWS_PER_TENANT: usize = 64;
+    const REPEATS: u64 = 5;
+
+    fn tenant_of(full: &str) -> &str {
+        full.split_once('/').map(|(t, _)| t).unwrap_or(full)
+    }
+
+    fn coco_keys() -> Vec<String> {
+        let mut keys = Vec::new();
+        for t in 0..TENANTS {
+            for f in 0..FLOWS_PER_TENANT {
+                keys.push(format!("tenant-{t:02}/flow-{f:04}"));
+            }
+        }
+        keys
+    }
+
+    fn filled_coco() -> (Coco<DefaultXxHasher>, u64) {
+        let mut coco = Coco::<DefaultXxHasher>::init_with_size(2_048, 4);
+        let mut inserted = 0u64;
+        for (i, key) in coco_keys().iter().enumerate() {
+            let weight = REPEATS + (i % 3) as u64;
+            coco.insert(key, weight);
+            inserted += weight;
+        }
+        (coco, inserted)
+    }
+
+    #[test]
+    fn coco_group_by_partitions_exactly_the_mass_the_table_records() {
+        let (coco, inserted) = filled_coco();
+        let recorded: u64 = coco.recorded_flows().map(|(_, v)| v).sum();
+        let groups: HashMap<String, u64> = coco.group_by(tenant_of);
+        let grouped: u64 = groups.values().sum();
+
+        assert_eq!(
+            grouped, recorded,
+            "group_by must fold every recorded flow exactly once"
+        );
+        assert!(
+            recorded <= inserted,
+            "the table records {recorded} of {inserted} inserted units, which is more than arrived"
+        );
+        assert!(
+            !groups.is_empty(),
+            "a populated table must project onto at least one group"
+        );
+        for tenant in groups.keys() {
+            assert!(
+                tenant.starts_with("tenant-"),
+                "group key {tenant} is not a tenant projection"
+            );
+        }
+    }
+
+    #[test]
+    fn coco_projected_and_udf_partial_key_queries_agree_with_group_by() {
+        let (coco, _) = filled_coco();
+        let groups: HashMap<String, u64> = coco.group_by(tenant_of);
+
+        for t in 0..TENANTS {
+            let tenant = format!("tenant-{t:02}");
+            let expected = groups.get(&tenant).copied().unwrap_or(0);
+            assert_eq!(
+                coco.estimate_projected(&tenant, tenant_of),
+                expected,
+                "{tenant}: estimate_projected disagreed with group_by"
+            );
+            assert_eq!(
+                coco.estimate_with_udf(&tenant, |full, partial| tenant_of(full) == partial),
+                expected,
+                "{tenant}: estimate_with_udf disagreed with group_by"
+            );
+            assert!(
+                coco.estimate_substring(&tenant) >= expected,
+                "{tenant}: substring containment must collect at least the projected group"
+            );
+        }
+
+        assert_eq!(
+            coco.estimate_projected("tenant-99", tenant_of),
+            0,
+            "an absent projection carries no mass"
+        );
+    }
+
+    #[test]
+    fn coco_per_key_estimates_sum_to_their_own_group() {
+        let (coco, _) = filled_coco();
+        let mut per_group: HashMap<String, u64> = HashMap::new();
+        for (full, val) in coco.recorded_flows() {
+            *per_group.entry(tenant_of(full).to_string()).or_insert(0) += val;
+        }
+        for (tenant, total) in per_group {
+            assert_eq!(
+                coco.estimate_projected(&tenant, tenant_of),
+                total,
+                "{tenant}: projected query disagreed with the recorded flows it covers"
+            );
+        }
+    }
+
+    #[test]
+    fn a_coco_bucket_reports_its_own_partial_key_membership() {
+        let mut bucket = CocoBucket::new();
+        assert!(
+            !bucket.is_partial_key("tenant-00"),
+            "an empty bucket matches nothing"
+        );
+        assert!(
+            !bucket.is_partial_key_with_udf("tenant-00", |full, partial| full == partial),
+            "an empty bucket matches no user-defined predicate either"
+        );
+
+        bucket.update_key("tenant-00/flow-0001");
+        bucket.add_v(7);
+        bucket.add_v(5);
+
+        assert!(bucket.is_partial_key("tenant-00"), "prefix containment");
+        assert!(bucket.is_partial_key("flow-0001"), "suffix containment");
+        assert!(
+            !bucket.is_partial_key("tenant-01"),
+            "a different tenant must not match"
+        );
+        assert!(
+            bucket.is_partial_key_with_udf("tenant-00", |full, partial| full
+                .split_once('/')
+                .map(|(t, _)| t)
+                .unwrap_or(full)
+                == partial),
+            "a projection predicate must match its own tenant"
+        );
+        assert!(
+            !bucket.is_partial_key_with_udf("flow-0001", |full, partial| full
+                .split_once('/')
+                .map(|(t, _)| t)
+                .unwrap_or(full)
+                == partial),
+            "a projection predicate must reject a non-projection"
+        );
+        assert_eq!(bucket.val, 12, "add_v must accumulate");
+    }
+
+    fn elephant_stream(prefix: &str, elephants: usize, weight: usize) -> Vec<String> {
+        let mut out = Vec::new();
+        for e in 0..elephants {
+            for _ in 0..weight {
+                out.push(format!("{prefix}-elephant-{e:03}"));
+            }
+        }
+        for m in 0..2_000 {
+            out.push(format!("{prefix}-mouse-{m:04}"));
+        }
+        out
+    }
+
+    fn filled_elastic(stream: &[String]) -> Elastic<DefaultXxHasher> {
+        let mut sk = Elastic::<DefaultXxHasher>::init_with_dimensions(64, 3, 1_024);
+        for id in stream {
+            sk.insert(id.clone());
+        }
+        sk
+    }
+
+    #[test]
+    fn elastic_merge_max_never_reads_below_either_side_on_disjoint_flow_sets() {
+        let left_stream = elephant_stream("l", 16, 300);
+        let right_stream = elephant_stream("r", 16, 300);
+        let left = filled_elastic(&left_stream);
+        let right = filled_elastic(&right_stream);
+
+        let mut merged = left.clone();
+        merged.merge_max(&right);
+
+        for id in left_stream.iter().chain(right_stream.iter()) {
+            let own = if id.starts_with("l-") {
+                left.query(id.clone())
+            } else {
+                right.query(id.clone())
+            };
+            assert!(
+                merged.query(id.clone()) >= own,
+                "flow {id}: maximum merging read {} below its own side's {own}",
+                merged.query(id.clone())
+            );
+        }
+    }
+
+    #[test]
+    fn elastic_merge_max_and_sum_merging_agree_on_every_heavy_flow() {
+        let left_stream = elephant_stream("l", 16, 300);
+        let right_stream = elephant_stream("r", 16, 300);
+        let left = filled_elastic(&left_stream);
+        let right = filled_elastic(&right_stream);
+
+        let mut by_max = left.clone();
+        by_max.merge_max(&right);
+        let mut by_sum = left.clone();
+        by_sum.merge(&right);
+
+        for (id, _) in by_sum.heavy_hitters(200) {
+            let max_side = by_max.query(id.clone());
+            let sum_side = by_sum.query(id.clone());
+            assert!(
+                max_side <= sum_side,
+                "flow {id}: maximum merging read {max_side}, above summing at {sum_side}"
+            );
+            assert!(
+                max_side > 0,
+                "flow {id}: a heavy flow must survive maximum merging"
+            );
+        }
+    }
+
+    #[test]
+    fn elastic_merge_heavy_and_absorb_evicted_carry_a_transferred_resident() {
+        let mut target = Elastic::<DefaultXxHasher>::init_with_dimensions(64, 3, 1_024);
+        target.merge_heavy("transferred".to_string(), 500, false);
+        assert_eq!(
+            target.query("transferred".to_string()),
+            500,
+            "an unflagged transfer must land its whole vote count in the heavy part"
+        );
+
+        target.merge_heavy("transferred".to_string(), 0, true);
+        assert_eq!(
+            target.query("transferred".to_string()),
+            500,
+            "a zero-vote transfer must not move the estimate"
+        );
+
+        let mut flagged = Elastic::<DefaultXxHasher>::init_with_dimensions(64, 3, 1_024);
+        flagged.merge_heavy("spilled".to_string(), 400, true);
+        flagged.absorb_evicted("spilled".to_string(), 90);
+        assert!(
+            flagged.query("spilled".to_string()) >= 400,
+            "absorbing an eviction must not lose the heavy votes already held"
+        );
+
+        let mut light_only = Elastic::<DefaultXxHasher>::init_with_dimensions(64, 3, 1_024);
+        light_only.absorb_evicted("mouse".to_string(), 75);
+        assert!(
+            light_only.query("mouse".to_string()) >= 75,
+            "an absorbed flow with no heavy bucket must be readable through the light layer"
+        );
+    }
+
+    #[test]
+    fn elastic_insert_heavy_only_never_writes_the_light_layer() {
+        let mut sk = Elastic::<DefaultXxHasher>::init_with_dimensions(8, 3, 256);
+        for e in 0..64 {
+            for _ in 0..20 {
+                sk.insert_heavy_only(format!("flow-{e:03}"));
+            }
+        }
+        for e in 0..64 {
+            let id = format!("flow-{e:03}");
+            let light = sk.light.estimate(&DataInput::String(id.clone()));
+            assert_eq!(
+                light, 0,
+                "flow {id}: the heavy-only path wrote {light} into the light layer"
+            );
+        }
+    }
+
+    #[test]
+    fn elastic_expansion_keeps_every_resident_readable_and_compression_restores_the_width() {
+        let stream = elephant_stream("x", 24, 250);
+        let mut sk = filled_elastic(&stream);
+
+        let before: Vec<(String, i32)> = sk.heavy_hitters(200);
+        assert!(
+            !before.is_empty(),
+            "the fixture must seat at least one elephant before expanding"
+        );
+        let full_before = sk.full_bucket_count(100);
+
+        sk.expand_heavy();
+        for (id, size) in &before {
+            assert!(
+                sk.query(id.clone()) >= *size,
+                "flow {id}: expansion lost mass, {} < {size}",
+                sk.query(id.clone())
+            );
+        }
+        assert!(
+            sk.full_bucket_count(100) >= full_before,
+            "expansion copies the table, so it cannot reduce the full-bucket count"
+        );
+
+        sk.compress_heavy(2);
+        for (id, size) in &before {
+            assert!(
+                sk.query(id.clone()) > 0,
+                "flow {id}: compression dropped a flow that held {size}"
+            );
+        }
+    }
+
+    #[test]
+    fn elastic_heavy_changes_reports_only_flows_that_moved_past_the_threshold() {
+        let first = filled_elastic(&elephant_stream("w", 16, 200));
+        let mut second_stream = elephant_stream("w", 16, 200);
+        second_stream.extend(std::iter::repeat_n("w-elephant-000".to_string(), 600));
+        let second = filled_elastic(&second_stream);
+
+        let changes = second.heavy_changes(&first, 100);
+        assert!(
+            changes.iter().any(|(id, _, _)| id == "w-elephant-000"),
+            "the flow that gained 600 observations must be reported, got {changes:?}"
+        );
+        assert!(
+            changes
+                .iter()
+                .all(|(_, before, after)| (after - before).abs() > 100),
+            "every reported change must clear the threshold it was asked for"
+        );
+        assert!(
+            second.heavy_changes(&first, 10_000).is_empty(),
+            "no flow moved by ten thousand observations"
+        );
+        let unchanged = second.heavy_changes(&second, 0);
+        assert!(
+            unchanged.is_empty(),
+            "a window compared against itself has no heavy change, got {unchanged:?}"
+        );
+    }
+
+    #[test]
+    fn a_heavy_bucket_seats_evicts_and_reports_vacancy() {
+        let mut bucket = HeavyBucket::new();
+        assert!(bucket.is_vacant(), "a fresh bucket holds no flow");
+
+        bucket.occupy("first".to_string());
+        assert!(!bucket.is_vacant(), "an occupied bucket is not vacant");
+        assert_eq!(bucket.flow_id, "first");
+        assert_eq!(bucket.vote_pos, 1);
+        assert_eq!(bucket.vote_neg, 0);
+        assert!(!bucket.eviction, "seating a flow raises no eviction flag");
+
+        let mut weighted = HeavyBucket::new();
+        weighted.occupy_many("bulk".to_string(), 40);
+        assert_eq!(weighted.vote_pos, 40, "occupy_many seats the whole count");
+
+        let evicted = weighted.evict_many("takeover".to_string(), 12);
+        assert_eq!(evicted, "bulk", "eviction returns the displaced flow");
+        assert_eq!(weighted.flow_id, "takeover");
+        assert_eq!(weighted.vote_pos, 12);
+        assert_eq!(weighted.vote_neg, 12);
+        assert!(weighted.eviction, "a takeover raises the eviction flag");
+
+        let displaced = weighted.evict("single".to_string());
+        assert_eq!(displaced, "takeover");
+        assert_eq!(weighted.vote_pos, 1);
+    }
+}

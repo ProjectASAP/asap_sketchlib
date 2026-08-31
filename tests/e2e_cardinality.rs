@@ -23,10 +23,19 @@ use common::specs::{CardinalityConfidenceSpec, Tally};
 use common::uniform_u64;
 
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
+use asap_sketchlib::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};
 use asap_sketchlib::{
     Classic, DataInput, ErtlMLE, HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogHIPP16,
     HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, SetAggregator,
 };
+
+asap_sketchlib::impl_hll_bucket_list!(HllBucketListP10, 10, 1_usize << 10);
+asap_sketchlib::impl_hll_bucket_list!(HllBucketListP13, 13, 1_usize << 13);
+asap_sketchlib::impl_hll_bucket_list!(HllBucketListP18, 18, 1_usize << 18);
+
+const CUSTOM_CHECKPOINTS_P10: [u64; 4] = [100, 1_000, 20_000, 200_000];
+const CUSTOM_CHECKPOINTS_P13: [u64; 4] = [1_000, 10_000, 100_000, 500_000];
+const CUSTOM_CHECKPOINTS_P18: [u64; 3] = [10_000, 100_000, 1_500_000];
 
 /// Gaussian quantile for every cardinality band below. `z = 4` is a two-sided
 /// failure probability of 6.3e-5 per check; with a few dozen checks per
@@ -53,7 +62,10 @@ const CHECKPOINTS: [u64; 7] = [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_00
 /// merge operation and only the first two modes apply.
 macro_rules! hll_battery {
     ($name:ident, $ty:ty, $precision:literal, $model:ident, mergeable) => {
-        hll_battery!(@body $name, $ty, $precision, $model,
+        hll_battery!($name, $ty, $precision, $model, mergeable, CHECKPOINTS);
+    };
+    ($name:ident, $ty:ty, $precision:literal, $model:ident, mergeable, $checkpoints:expr) => {
+        hll_battery!(@body $name, $ty, $precision, $model, $checkpoints,
             |single: &$ty, even: &$ty, odd: &$ty| {
                 let mut merged = even.clone();
                 merged.merge(odd);
@@ -64,24 +76,30 @@ macro_rules! hll_battery {
             });
     };
     ($name:ident, $ty:ty, $precision:literal, $model:ident, not_mergeable) => {
-        hll_battery!(@body $name, $ty, $precision, $model, |_s: &$ty, _e: &$ty, _o: &$ty| None);
+        hll_battery!($name, $ty, $precision, $model, not_mergeable, CHECKPOINTS);
+    };
+    ($name:ident, $ty:ty, $precision:literal, $model:ident, not_mergeable, $checkpoints:expr) => {
+        hll_battery!(@body $name, $ty, $precision, $model, $checkpoints,
+            |_s: &$ty, _e: &$ty, _o: &$ty| None);
         // HIP has no `merge`: its estimate is maintained incrementally from the
         // sketch's own insertion history, so two shards cannot be combined
         // without replaying one of them.
     };
-    (@body $name:ident, $ty:ty, $precision:literal, $model:ident, $merge:expr) => {
+    (@body $name:ident, $ty:ty, $precision:literal, $model:ident, $checkpoints:expr, $merge:expr) => {
         #[test]
         fn $name() {
             let spec = CardinalityConfidenceSpec::$model($precision, Z);
             let mut tally = Tally::default();
+            let checkpoints: &[u64] = &$checkpoints;
             let context = format!(
                 "{} p{} : m={} sigma_rel={:.5} z={Z} tolerance={:.5}; one trial = one \
-                 sketch over its own disjoint identity namespace, checkpoints {CHECKPOINTS:?}",
+                 sketch over its own disjoint identity namespace, checkpoints {:?}",
                 stringify!($ty),
                 $precision,
                 1usize << $precision,
                 spec.sigma_rel(),
-                spec.tolerance()
+                spec.tolerance(),
+                checkpoints
             );
 
             // One fresh sketch per checkpoint, each over an identity namespace
@@ -90,7 +108,7 @@ macro_rules! hll_battery {
             // state at 10^6 contains the state at 10^5 — which share every
             // register and are emphatically not independent trials.
             let mut largest: Option<$ty> = None;
-            for (i, &target) in CHECKPOINTS.iter().enumerate() {
+            for (i, &target) in checkpoints.iter().enumerate() {
                 let base = IDENTITY_NAMESPACE_STRIDE * (i as u64 + 1);
                 let mut sketch = <$ty>::new();
                 for k in 0..target {
@@ -100,9 +118,9 @@ macro_rules! hll_battery {
                 largest = Some(sketch);
             }
 
-            let mut biggest = largest.expect("CHECKPOINTS is non-empty");
-            let target = CHECKPOINTS[CHECKPOINTS.len() - 1];
-            let base = IDENTITY_NAMESPACE_STRIDE * (CHECKPOINTS.len() as u64);
+            let mut biggest = largest.expect("the checkpoint list is non-empty");
+            let target = checkpoints[checkpoints.len() - 1];
+            let base = IDENTITY_NAMESPACE_STRIDE * (checkpoints.len() as u64);
 
             // Duplicate replay: re-inserting every identity already seen must
             // leave the estimate bit-identical, because a register only ever
@@ -123,7 +141,7 @@ macro_rules! hll_battery {
             // register.
             {
                 const MERGE_N: u64 = 200_000;
-                let mbase = IDENTITY_NAMESPACE_STRIDE * (CHECKPOINTS.len() as u64 + 1);
+                let mbase = IDENTITY_NAMESPACE_STRIDE * (checkpoints.len() as u64 + 1);
                 let mut single = <$ty>::new();
                 let mut even = <$ty>::new();
                 let mut odd = <$ty>::new();
@@ -465,4 +483,218 @@ fn set_aggregator_union_is_exact() {
     for k in &expected {
         assert!(agg.values.contains(k), "missing member {k}");
     }
+}
+
+hll_battery!(
+    hll_classic_custom_p10_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllBucketListP10>,
+    10,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P10
+);
+hll_battery!(
+    hll_ertl_mle_custom_p10_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllBucketListP10>,
+    10,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P10
+);
+hll_battery!(
+    hll_hip_custom_p10_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllBucketListP10>,
+    10,
+    hll_hip,
+    not_mergeable,
+    CUSTOM_CHECKPOINTS_P10
+);
+hll_battery!(
+    hll_classic_custom_p13_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllBucketListP13>,
+    13,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P13
+);
+hll_battery!(
+    hll_ertl_mle_custom_p13_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllBucketListP13>,
+    13,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P13
+);
+hll_battery!(
+    hll_hip_custom_p13_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllBucketListP13>,
+    13,
+    hll_hip,
+    not_mergeable,
+    CUSTOM_CHECKPOINTS_P13
+);
+hll_battery!(
+    hll_classic_custom_p18_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllBucketListP18>,
+    18,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P18
+);
+hll_battery!(
+    hll_ertl_mle_custom_p18_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllBucketListP18>,
+    18,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P18
+);
+hll_battery!(
+    hll_hip_custom_p18_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllBucketListP18>,
+    18,
+    hll_hip,
+    not_mergeable,
+    CUSTOM_CHECKPOINTS_P18
+);
+
+#[test]
+fn custom_precision_accuracy_improves_with_precision_as_the_error_model_predicts() {
+    const N: u64 = 200_000;
+    const BASE: u64 = IDENTITY_NAMESPACE_STRIDE * 41;
+
+    let mut p10 = HyperLogLogImpl::<Classic, HllBucketListP10>::new();
+    let mut p13 = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
+    let mut p18 = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
+    for k in 0..N {
+        let d = DataInput::U64(BASE + k);
+        p10.insert(&d);
+        p13.insert(&d);
+        p18.insert(&d);
+    }
+
+    let relative = |estimate: usize| (estimate as f64 - N as f64).abs() / N as f64;
+    let (e10, e13, e18) = (
+        relative(p10.estimate()),
+        relative(p13.estimate()),
+        relative(p18.estimate()),
+    );
+    assert!(
+        e18 <= e10,
+        "p18 relative error {e18:.5} exceeded p10 at {e10:.5} over {N} distinct identities"
+    );
+    assert!(
+        e18 <= e13,
+        "p18 relative error {e18:.5} exceeded p13 at {e13:.5} over {N} distinct identities"
+    );
+}
+
+#[test]
+fn a_custom_precision_merge_reproduces_the_single_pass_registers_for_every_estimator() {
+    const N: u64 = 120_000;
+    const BASE: u64 = IDENTITY_NAMESPACE_STRIDE * 42;
+
+    let mut classic_single = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
+    let mut classic_even = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
+    let mut classic_odd = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
+    let mut ertl_single = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::new();
+    let mut ertl_even = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::new();
+    let mut ertl_odd = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::new();
+    for k in 0..N {
+        let d = DataInput::U64(BASE + k);
+        classic_single.insert(&d);
+        ertl_single.insert(&d);
+        if k % 2 == 0 {
+            classic_even.insert(&d);
+            ertl_even.insert(&d);
+        } else {
+            classic_odd.insert(&d);
+            ertl_odd.insert(&d);
+        }
+    }
+
+    classic_even.merge(&classic_odd);
+    assert_eq!(
+        classic_even.registers_as_slice(),
+        classic_single.registers_as_slice(),
+        "Classic p13 shard merge must reproduce the single pass register for register"
+    );
+    assert_eq!(
+        classic_even.estimate(),
+        classic_single.estimate(),
+        "Classic p13 identical registers must give an identical estimate"
+    );
+
+    ertl_even.merge(&ertl_odd);
+    assert_eq!(
+        ertl_even.registers_as_slice(),
+        ertl_single.registers_as_slice(),
+        "ErtlMLE p13 shard merge must reproduce the single pass register for register"
+    );
+    assert_eq!(
+        ertl_even.estimate(),
+        ertl_single.estimate(),
+        "ErtlMLE p13 identical registers must give an identical estimate"
+    );
+}
+
+#[test]
+fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
+    use asap_sketchlib::{DeltaResult, MessagePackCodec};
+    use std::collections::HashSet;
+
+    let mut before = SetAggregator::new();
+    for key in ["web", "api", "db", "cache"] {
+        before.update(key);
+    }
+    let mut after = SetAggregator::new();
+    for key in ["web", "api", "queue"] {
+        after.update(key);
+    }
+
+    let added: HashSet<String> = after.values.difference(&before.values).cloned().collect();
+    let removed: HashSet<String> = before.values.difference(&after.values).cloned().collect();
+    let delta = DeltaResult {
+        added: added.clone(),
+        removed: removed.clone(),
+    };
+
+    assert_eq!(
+        delta.added,
+        HashSet::from(["queue".to_string()]),
+        "only the arriving key is added"
+    );
+    assert_eq!(
+        delta.removed,
+        HashSet::from(["db".to_string(), "cache".to_string()]),
+        "both departing keys are removed"
+    );
+
+    let bytes = delta.to_msgpack().expect("encode");
+    let decoded = DeltaResult::from_msgpack(&bytes).expect("decode");
+    assert_eq!(decoded.added, added, "added set survived the wire");
+    assert_eq!(decoded.removed, removed, "removed set survived the wire");
+
+    let mut replayed = before.clone();
+    for key in &decoded.removed {
+        replayed.values.remove(key);
+    }
+    for key in &decoded.added {
+        replayed.update(key);
+    }
+    assert_eq!(
+        replayed.values, after.values,
+        "applying the decoded delta must reproduce the later snapshot"
+    );
+
+    let empty = DeltaResult {
+        added: HashSet::new(),
+        removed: HashSet::new(),
+    };
+    let round_tripped = DeltaResult::from_msgpack(&empty.to_msgpack().expect("encode empty"))
+        .expect("decode empty");
+    assert!(
+        round_tripped.added.is_empty() && round_tripped.removed.is_empty(),
+        "an empty delta must stay empty across the wire"
+    );
 }

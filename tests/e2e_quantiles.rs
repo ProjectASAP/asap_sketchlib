@@ -37,7 +37,7 @@
 
 mod common;
 
-use common::specs::{DdRankConvention, KllRankSpec, RelativeQuantileSpec, Tally};
+use common::specs::{DdRankConvention, KllRankSpec, RelativeQuantileSpec, Tally, rank_error};
 use common::{
     NumericTruth, assert_between, duplicate_heavy_f64, exponential_f64, log_uniform_f64,
     monotonic_f64, normal_f64, outside_in_ordering, uniform_u64, zipf_f64,
@@ -357,6 +357,184 @@ fn kll_rank_error_shrinks_with_k_as_the_characterization_predicts() {
          k is not reaching the compactor capacities",
         (k_hi as f64 / k_lo as f64).powf(0.9433)
     );
+}
+
+// ------------------------------------------------------- KLL bulk ingestion
+
+/// A distinct compaction seed per bulk-ingestion case, kept away from the
+/// rank batteries' trial space so the two never share a coin sequence.
+fn kll_bulk_seed(case: u64) -> u64 {
+    kll_trial_seed(0x8B14_0000u64.wrapping_add(case))
+}
+
+/// The rank batteries' shapes plus three the compaction path can behave
+/// differently on: two heavy-tailed spreads, and a run short enough that no
+/// compactor ever fills.
+fn bulk_cases(trial: usize, n: usize) -> Vec<(&'static str, Vec<f64>)> {
+    let alpha = 0.01;
+    let gamma = (1.0 + alpha) / (1.0 - alpha);
+    let mut cases = rank_streams(trial, n);
+    cases.push(("exponential", exponential_f64(n, 1e-3, 3007)));
+    cases.push(("log-uniform", log_uniform_f64(n, gamma, 5..40, 3005)));
+    cases.push((
+        "sequential-10",
+        (0..10).map(|i| i as f64 * 1.7 + 11.0).collect(),
+    ));
+    cases
+}
+
+/// `bulk_update` and a loop of `update` must produce the *same sketch*, not
+/// two sketches that happen to land in the same rank band.
+///
+/// `kll_family_stays_within_the_datasketches_maximum_rank_error_characterization`
+/// already runs `Feed::BulkUpdate` against `eps(k)`. What a band cannot see is
+/// a bulk path that compacts in a different order and lands on a different —
+/// still legal — sketch, so what is asserted here is equality: serialized
+/// bytes, retained count, and quantile bits over `RANK_QS`.
+#[test]
+fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
+    const N: usize = 20_000;
+    for (case, (shape, values)) in bulk_cases(0, N).iter().enumerate() {
+        let seed = kll_bulk_seed(case as u64);
+        let mut via_loop: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+        for v in values {
+            via_loop.update(v);
+        }
+        let mut via_bulk: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+        via_bulk.bulk_update(values);
+
+        let ctx = format!("{shape} n={} sketch_seed={seed:#x}", values.len());
+        assert_eq!(
+            via_loop.count(),
+            via_bulk.count(),
+            "{ctx}: retained count diverged"
+        );
+        assert_eq!(
+            via_loop.serialize_to_bytes().unwrap(),
+            via_bulk.serialize_to_bytes().unwrap(),
+            "{ctx}: serialized bytes diverged"
+        );
+        for &q in &RANK_QS {
+            assert_eq!(
+                via_loop.quantile(q).to_bits(),
+                via_bulk.quantile(q).to_bits(),
+                "{ctx} q={q}: quantile bits differ"
+            );
+        }
+    }
+}
+
+/// `KLLDynamic` under the same equality, on its own wire form.
+#[test]
+fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
+    const N: usize = 10_000;
+    for (case, (shape, values)) in bulk_cases(1, N).iter().enumerate() {
+        let seed = kll_bulk_seed(0x0100 + case as u64);
+        let mut via_loop = KLLDynamic::<f64>::init_kll_with_seed(200, seed);
+        for v in values {
+            via_loop.update(v);
+        }
+        let mut via_bulk = KLLDynamic::<f64>::init_kll_with_seed(200, seed);
+        via_bulk.bulk_update(values);
+
+        let ctx = format!("{shape} n={} sketch_seed={seed:#x}", values.len());
+        assert_eq!(
+            via_loop.count(),
+            via_bulk.count(),
+            "{ctx}: retained mass diverged"
+        );
+        assert_eq!(
+            via_loop.serialize_to_bytes().unwrap(),
+            via_bulk.serialize_to_bytes().unwrap(),
+            "{ctx}: serialized bytes diverged"
+        );
+        for &q in &RANK_QS {
+            assert_eq!(
+                via_loop.quantile(q).to_bits(),
+                via_bulk.quantile(q).to_bits(),
+                "{ctx} q={q}: quantile bits differ"
+            );
+        }
+    }
+}
+
+/// The two degenerate slice lengths: an empty `bulk_update` leaves the sketch
+/// byte-for-byte untouched, and a one-element `bulk_update` equals a single
+/// `update`.
+#[test]
+fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
+    let seed = kll_bulk_seed(0x0200);
+    let mut sk: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    for v in &[1.0f64, 2.0, 3.0] {
+        sk.update(v);
+    }
+    let count = sk.count();
+    let median = sk.quantile(0.5);
+    let bytes = sk.serialize_to_bytes().unwrap();
+
+    sk.bulk_update(&[]);
+    assert_eq!(sk.count(), count, "an empty bulk_update changed the count");
+    assert_eq!(
+        sk.quantile(0.5).to_bits(),
+        median.to_bits(),
+        "an empty bulk_update moved the median"
+    );
+    assert_eq!(
+        sk.serialize_to_bytes().unwrap(),
+        bytes,
+        "an empty bulk_update changed the serialized state"
+    );
+
+    let mut one: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    let mut once: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    one.bulk_update(&[42.0]);
+    once.update(&42.0);
+    assert_eq!(
+        one.serialize_to_bytes().unwrap(),
+        once.serialize_to_bytes().unwrap(),
+        "a one-element bulk_update diverged from one update"
+    );
+}
+
+/// The `DataInput` batch path matches the loop, and a non-numeric element
+/// stops it at that element with the preceding prefix already applied.
+#[test]
+fn kll_bulk_update_data_input_matches_the_loop_and_stops_at_the_first_non_numeric() {
+    let seed = kll_bulk_seed(0x0300);
+    let values = normal_f64(5_000, 100.0, 20.0, 8001);
+    let inputs: Vec<DataInput> = values.iter().map(|v| DataInput::F64(*v)).collect();
+
+    let mut via_loop: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    for v in &inputs {
+        via_loop.update_data_input(v).unwrap();
+    }
+    let mut via_bulk: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    via_bulk.bulk_update_data_input(&inputs).unwrap();
+    assert_eq!(
+        via_loop.serialize_to_bytes().unwrap(),
+        via_bulk.serialize_to_bytes().unwrap(),
+        "DataInput bulk vs loop bytes diverged (sketch_seed={seed:#x}, stream seed 8001)"
+    );
+
+    let mixed = vec![
+        DataInput::F64(1.0),
+        DataInput::String("x".into()),
+        DataInput::F64(2.0),
+    ];
+    let mut stopped: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    assert!(
+        stopped.bulk_update_data_input(&mixed).is_err(),
+        "a non-numeric element must return an error"
+    );
+    assert_eq!(
+        stopped.count(),
+        1,
+        "the prefix before the non-numeric element must stay applied"
+    );
+
+    let mut empty: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    empty.bulk_update_data_input(&[]).unwrap();
+    assert_eq!(empty.count(), 0, "an empty DataInput batch must be a no-op");
 }
 
 // ---------------------------------------------------------------- DDSketch
@@ -1617,5 +1795,443 @@ fn portable_ddsketch_rejects_hostile_delta_spans() {
         base.quantile(0.9),
         Some(gamma.powf(6.0) * (1.0 + alpha)),
         "applied delta count visible through queries"
+    );
+}
+
+const KLL_M_AXIS: [usize; 5] = [2, 4, 8, 16, 64];
+const KLL_M_AT_OR_ABOVE_DEFAULT: [usize; 3] = [8, 16, 64];
+const KLL_M_BELOW_DEFAULT: [usize; 2] = [2, 4];
+const KLL_SMALL_K: [i32; 3] = [8, 16, 32];
+const KLL_EXACT_REGIME_N: [usize; 5] = [1, 2, 7, 50, 150];
+const KLL_WIDENED_EPSILON_FACTOR: f64 = 3.0;
+
+fn kll_axis_seed(case: u64) -> u64 {
+    kll_trial_seed(0x9C2A_0000u64.wrapping_add(case))
+}
+
+fn kll_axis_values(n: usize, seed: u64) -> Vec<f64> {
+    uniform_u64(n, 1_000_000, seed)
+        .into_iter()
+        .map(|v| v as f64)
+        .collect()
+}
+
+#[test]
+fn kll_minimum_compactor_capacity_axis_keeps_the_count_exact_and_reports_its_own_geometry() {
+    let values = kll_axis_values(20_000, 0x4B11_0001);
+    let truth = NumericTruth::new(values.clone());
+    for &m in &KLL_M_AXIS {
+        let seed = kll_axis_seed(m as u64);
+        let mut sketch: KLL<f64> = KLL::init_with_seed(200, m, seed);
+        for v in &values {
+            sketch.update(v);
+        }
+        let ctx = format!("m={m} k=200 n={} sketch_seed={seed:#x}", values.len());
+        assert_eq!(sketch.k(), 200, "{ctx}: k moved");
+        assert_eq!(sketch.wire_m() as usize, m, "{ctx}: reported m");
+        assert_eq!(sketch.wire_k() as usize, 200, "{ctx}: reported k");
+        assert_between(
+            sketch.count() as f64,
+            values.len() as f64 * 0.95,
+            values.len() as f64 * 1.05,
+            &format!("{ctx}: weighted retained count"),
+        );
+        for &q in &RANK_QS {
+            assert_between(
+                sketch.quantile(q),
+                truth.min(),
+                truth.max(),
+                &format!("{ctx} q={q}"),
+            );
+        }
+    }
+}
+
+#[test]
+fn kll_normalizes_a_minimum_compactor_capacity_outside_its_supported_range() {
+    let clamped: KLL<f64> = KLL::init_with_seed(200, 0, kll_axis_seed(0x0100));
+    assert_eq!(clamped.wire_m(), 2, "m=0 must normalize to 2");
+    assert_eq!(clamped.wire_k(), 200, "m=0 must leave k alone");
+
+    let raised: KLL<f64> = KLL::init_with_seed(4, 64, kll_axis_seed(0x0101));
+    assert_eq!(raised.wire_m(), 64, "m=64 must survive");
+    assert_eq!(raised.wire_k(), 64, "k below m must be raised to m");
+
+    let mut usable: KLL<f64> = KLL::init_with_seed(4, 64, kll_axis_seed(0x0102));
+    let values = kll_axis_values(5_000, 0x4B11_0102);
+    for v in &values {
+        usable.update(v);
+    }
+    assert_between(
+        usable.count() as f64,
+        values.len() as f64 * 0.85,
+        values.len() as f64 * 1.15,
+        "a normalized geometry must still account for every value it ingested",
+    );
+}
+
+#[test]
+fn kll_minimum_compactor_capacity_at_or_above_the_default_satisfies_the_rank_characterization() {
+    const N: usize = 30_000;
+    const K: usize = 200;
+    let spec = KllRankSpec::datasketches(K);
+    let mut tally = Tally::default();
+    for (case, &m) in KLL_M_AT_OR_ABOVE_DEFAULT.iter().enumerate() {
+        for (i, (shape, values)) in rank_streams(case, N).into_iter().enumerate() {
+            let seed = kll_axis_seed(0x0200 + (case * 16 + i) as u64);
+            let mut sketch: KLL<f64> = KLL::init_with_seed(K, m, seed);
+            for v in &values {
+                sketch.update(v);
+            }
+            let truth = NumericTruth::new(values);
+            spec.record_trial(
+                &mut tally,
+                &format!("m={m} {shape} sketch_seed={seed:#x}"),
+                truth.sorted(),
+                &RANK_QS,
+                |q| sketch.quantile(q),
+            );
+        }
+    }
+    let context = format!(
+        "KLL k={K}, m in {KLL_M_AT_OR_ABOVE_DEFAULT:?}, eps={:.6}, n={N}, \
+         one trial = one (m, stream) sketch with its own compaction seed",
+        spec.epsilon()
+    );
+    tally.assert_independent_binomial(
+        "KLL minimum-compactor-capacity axis / max rank error",
+        spec.trial_failure_probability,
+        &context,
+    );
+}
+
+#[test]
+fn kll_minimum_compactor_capacity_below_the_default_stays_within_a_widened_rank_band() {
+    const N: usize = 30_000;
+    const K: usize = 200;
+    let spec = KllRankSpec::datasketches(K);
+    let widened = KLL_WIDENED_EPSILON_FACTOR * spec.epsilon();
+    let mut tally = Tally::default();
+    for (case, &m) in KLL_M_BELOW_DEFAULT.iter().enumerate() {
+        for (i, (shape, values)) in rank_streams(case + 8, N).into_iter().enumerate() {
+            let seed = kll_axis_seed(0x0300 + (case * 16 + i) as u64);
+            let mut sketch: KLL<f64> = KLL::init_with_seed(K, m, seed);
+            for v in &values {
+                sketch.update(v);
+            }
+            let truth = NumericTruth::new(values);
+            let (worst, detail) =
+                spec.max_rank_error(truth.sorted(), &RANK_QS, |q| sketch.quantile(q));
+            tally.record(worst <= widened, || {
+                format!(
+                    "m={m} {shape} sketch_seed={seed:#x}: max rank error {worst:.6} > \
+                     {KLL_WIDENED_EPSILON_FACTOR} * eps(k={K}) = {widened:.6}; worst {detail}"
+                )
+            });
+        }
+    }
+    let context =
+        format!("KLL k={K}, m in {KLL_M_BELOW_DEFAULT:?}, widened band {widened:.6}, n={N}");
+    tally.assert_none(
+        "KLL sub-default minimum-compactor-capacity / widened rank band",
+        &context,
+    );
+}
+
+#[test]
+fn kll_small_k_satisfies_the_rank_characterization_at_its_own_epsilon() {
+    const N: usize = 20_000;
+    let mut tally = Tally::default();
+    let mut described = Vec::new();
+    for (case, &k) in KLL_SMALL_K.iter().enumerate() {
+        let spec = KllRankSpec::datasketches(k as usize);
+        described.push(format!("k={k} eps={:.6}", spec.epsilon()));
+        for (i, (shape, values)) in rank_streams(case + 16, N).into_iter().enumerate() {
+            let seed = kll_axis_seed(0x0400 + (case * 16 + i) as u64);
+            let mut sketch: KLL<f64> = KLL::init_kll_with_seed(k, seed);
+            for v in &values {
+                sketch.update(v);
+            }
+            assert_between(
+                sketch.count() as f64,
+                values.len() as f64 * 0.85,
+                values.len() as f64 * 1.15,
+                &format!("k={k} {shape}: weighted retained count"),
+            );
+            let truth = NumericTruth::new(values);
+            spec.record_trial(
+                &mut tally,
+                &format!("k={k} {shape} sketch_seed={seed:#x}"),
+                truth.sorted(),
+                &RANK_QS,
+                |q| sketch.quantile(q),
+            );
+        }
+    }
+    let context = format!(
+        "small-k KLL, n={N}, one trial = one (k, stream) sketch; {}",
+        described.join("; ")
+    );
+    tally.assert_independent_binomial("small-k KLL / max rank error", 0.01, &context);
+}
+
+#[test]
+fn a_kll_stream_shorter_than_k_is_answered_exactly() {
+    for (case, &n) in KLL_EXACT_REGIME_N.iter().enumerate() {
+        let seed = kll_axis_seed(0x0500 + case as u64);
+        let values = kll_axis_values(n, 0x4B11_0500 + case as u64);
+        let mut sketch: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+        for v in &values {
+            sketch.update(v);
+        }
+        let truth = NumericTruth::new(values.clone());
+        let ctx = format!("n={n} k=200 sketch_seed={seed:#x}");
+        assert_eq!(sketch.count(), n, "{ctx}: retained count");
+        for &q in &RANK_QS {
+            let est = sketch.quantile(q);
+            assert_eq!(
+                rank_error(truth.sorted(), q, est),
+                0.0,
+                "{ctx} q={q}: answer {est} is not an exact order statistic"
+            );
+            assert!(
+                values.iter().any(|v| v.to_bits() == est.to_bits()),
+                "{ctx} q={q}: answer {est} was never in the stream"
+            );
+        }
+        assert_eq!(
+            sketch.quantile(0.0).to_bits(),
+            truth.min().to_bits(),
+            "{ctx}: q=0 must be the exact minimum"
+        );
+        assert_eq!(
+            sketch.quantile(1.0).to_bits(),
+            truth.max().to_bits(),
+            "{ctx}: q=1 must be the exact maximum"
+        );
+    }
+}
+
+const DDS_EXTREME_ALPHAS: [f64; 5] = [1e-5, 1e-4, 0.3, 0.5, 0.9];
+
+#[test]
+fn ddsketch_satisfies_the_relative_value_error_contract_at_extreme_accuracy_parameters() {
+    const N: usize = 20_000;
+
+    for (i, &alpha) in DDS_EXTREME_ALPHAS.iter().enumerate() {
+        let core_spec = RelativeQuantileSpec::core(alpha);
+        let port_spec = RelativeQuantileSpec::portable(alpha);
+        let mut core_tally = Tally::default();
+        let mut port_tally = Tally::default();
+        let seed = 0x0DDA_0000u64 + i as u64 * 7919;
+        let (min_indexable, max_indexable) =
+            asap_sketchlib::sketches::ddsketch::ddsketch_indexable_bounds(alpha);
+        for (label, raw) in dds_streams(alpha, N, seed) {
+            let values: Vec<f64> = raw
+                .into_iter()
+                .filter(|v| v.is_finite() && *v >= min_indexable && *v <= max_indexable)
+                .collect();
+            if values.len() < 100 {
+                continue;
+            }
+            let mut core = DDSketch::new(alpha);
+            let mut port = PortableDds::new(alpha);
+            for v in &values {
+                core.add(v);
+                port.update(*v);
+            }
+            let truth = NumericTruth::new(values.clone());
+            assert_eq!(
+                core.get_count() as usize,
+                truth.len(),
+                "{label} alpha={alpha}: core dropped an indexable sample"
+            );
+            assert_eq!(
+                port.total_count() as usize,
+                truth.len(),
+                "{label} alpha={alpha}: portable dropped an indexable sample"
+            );
+            core_spec.tally_into(&mut core_tally, truth.sorted(), &DDS_QS, |q| {
+                core.get_value_at_quantile(q)
+            });
+            port_spec.tally_into(&mut port_tally, truth.sorted(), &DDS_QS, |q| {
+                port.quantile(q)
+            });
+        }
+        let context = format!(
+            "alpha={alpha} n={N} indexable=[{min_indexable:.3e}, {max_indexable:.3e}] \
+             q grid {DDS_QS:?}"
+        );
+        core_tally.assert_none(&format!("core DDSketch alpha={alpha}"), &context);
+        port_tally.assert_none(&format!("portable DdSketch alpha={alpha}"), &context);
+    }
+}
+
+#[test]
+fn ddsketch_bucket_width_widens_monotonically_with_the_accuracy_parameter() {
+    let values = kll_axis_values(20_000, 0x0DDA_9001)
+        .into_iter()
+        .map(|v| 1.0 + v)
+        .collect::<Vec<f64>>();
+    let mut previous: Option<(f64, usize)> = None;
+    for &alpha in &DDS_EXTREME_ALPHAS {
+        let mut sketch = DDSketch::new(alpha);
+        for v in &values {
+            sketch.add(v);
+        }
+        assert_eq!(
+            sketch.get_count() as usize,
+            values.len(),
+            "alpha={alpha}: dropped a trackable sample"
+        );
+        let buckets = sketch.store_counts().iter().filter(|c| **c > 0).count();
+        if let Some((prev_alpha, prev_buckets)) = previous {
+            assert!(
+                buckets <= prev_buckets,
+                "alpha={alpha} used {buckets} buckets, more than alpha={prev_alpha} at \
+                 {prev_buckets}, but a looser accuracy parameter cannot need finer buckets"
+            );
+        }
+        previous = Some((alpha, buckets));
+    }
+}
+
+#[test]
+fn univmonq_l1_is_exact_and_the_generic_g_sum_reproduces_the_named_estimators() {
+    let mut q = UnivMonQ::new(Default::default()).expect("default config valid");
+    let values = kll_axis_values(50_000, 0x0DDE_9001);
+    for v in &values {
+        q.update(v);
+    }
+    assert_eq!(
+        q.estimate_l1(),
+        values.len() as f64,
+        "L1 of an insertion-only stream is the observation count"
+    );
+    assert_eq!(
+        q.estimate_l1(),
+        q.count() as f64,
+        "L1 must agree with the sketch's own count"
+    );
+    assert_eq!(
+        q.estimate_g_sum(|_| 1.0).clamp(0.0, q.count() as f64),
+        q.estimate_distinct(),
+        "g(f)=1 is the distinct-count estimator"
+    );
+    assert_eq!(
+        q.estimate_g_sum(|f| f * f).max(0.0),
+        q.estimate_f2(),
+        "g(f)=f^2 is the second-moment estimator"
+    );
+    assert_eq!(
+        q.estimate_g_sum(|_| 0.0),
+        0.0,
+        "the zero function must sum to zero"
+    );
+}
+
+#[test]
+fn univmonq_universal_entropy_tracks_the_exact_entropy_on_a_diffuse_stream() {
+    use common::FreqTruth;
+
+    let mut q = UnivMonQ::new(Default::default()).expect("default config valid");
+    let mut truth = FreqTruth::default();
+    for v in uniform_u64(200_000, 50_000, 0x0DDE_9101) {
+        q.update(&(v as f64));
+        truth.observe(v as i64);
+    }
+    let exact = truth.entropy(false);
+    assert_between(
+        q.estimate_entropy_universal(),
+        exact * 0.80,
+        exact * 1.20,
+        "UnivMonQ universal entropy in nats (diffuse stream, seed 0x0DDE9101)",
+    );
+}
+
+#[test]
+fn univmonq_occurrence_entropy_is_present_only_when_ordered_samples_are_configured() {
+    let mut sampled = UnivMonQ::new(UnivMonQConfig {
+        ordered_samples: 1_024,
+        ..Default::default()
+    })
+    .expect("sampled config valid");
+    let mut unsampled = UnivMonQ::new(UnivMonQConfig {
+        ordered_samples: 0,
+        ..Default::default()
+    })
+    .expect("unsampled config valid");
+    for v in zipf_f64(120_000, 4_096, 1.2, 1.0, 1e6, 0x0DDE_9201) {
+        sampled.update(&v);
+        unsampled.update(&v);
+    }
+    assert!(
+        unsampled.estimate_entropy_occurrence().is_none(),
+        "no ordered sample means no occurrence entropy"
+    );
+    let occurrence = sampled
+        .estimate_entropy_occurrence()
+        .expect("a configured ordered sample must produce an occurrence entropy");
+    assert!(
+        occurrence.is_finite() && occurrence >= 0.0,
+        "occurrence entropy {occurrence} must be a finite non-negative number of nats"
+    );
+    assert!(
+        sampled.estimate_entropy().is_finite(),
+        "the assisted entropy estimate must stay finite"
+    );
+}
+
+#[test]
+fn univmonq_universal_rank_is_exact_outside_the_observed_range_and_banded_inside_it() {
+    let values = zipf_f64(120_000, 2_048, 1.2, 1.0, 1e6, 0x0DDE_9301);
+    let mut q = UnivMonQ::new(Default::default()).expect("default config valid");
+    for v in &values {
+        q.update(v);
+    }
+    let truth = NumericTruth::new(values.clone());
+    let n = values.len() as f64;
+
+    assert_eq!(
+        q.estimate_rank_universal(truth.min() - 1.0),
+        Some(0),
+        "a value below the observed minimum has rank 0"
+    );
+    assert_eq!(
+        q.estimate_rank_universal(truth.max()),
+        Some(values.len() as u64),
+        "the observed maximum carries the whole stream"
+    );
+    assert_eq!(
+        q.estimate_rank_universal(truth.max() + 1.0),
+        Some(values.len() as u64),
+        "a value above the observed maximum carries the whole stream"
+    );
+
+    let empty = UnivMonQ::new(Default::default()).expect("default config valid");
+    assert_eq!(
+        empty.estimate_rank_universal(1.0),
+        None,
+        "an empty sketch has no rank to report"
+    );
+
+    let mut tally = Tally::default();
+    for &probe_q in &[0.25f64, 0.5, 0.75] {
+        let probe = truth.quantile(probe_q);
+        let exact = truth.sorted().partition_point(|v| *v <= probe) as f64;
+        let estimated =
+            q.estimate_rank_universal(probe)
+                .expect("a populated sketch answers every interior rank") as f64;
+        let error = (estimated - exact).abs() / n;
+        tally.record(error <= 0.25, || {
+            format!(
+                "probe q={probe_q} value {probe}: estimated rank {estimated} vs exact {exact}, \
+                 normalized error {error:.5} > 0.25"
+            )
+        });
+    }
+    tally.assert_none(
+        "UnivMonQ universal rank / interior band",
+        "zipf(1.2) 120k observations over 2048 values, seed 0x0DDE9301, default config",
     );
 }
