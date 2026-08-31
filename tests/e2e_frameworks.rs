@@ -13,7 +13,7 @@ use common::{FreqTruth, assert_between, zipf_u64};
 use asap_sketchlib::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::{
     Count, CountMin, DataInput, EHSketchList, ExponentialHistogram, FastPath, FoldCMS,
-    FoldCMSConfig, Hydra, KLL, TumblingWindow, UnivMon, UnivMonPyramid, Vector2D,
+    FoldCMSConfig, Hydra, KLL, TumblingWindow, UnivMon, UnivMonPyramid, UnivSketchPool, Vector2D,
 };
 
 // ------------------------------------------------------------------- Hydra
@@ -1648,3 +1648,210 @@ fn tumbling_foldcms_weighted_windows_exact_counts() {
 // against a standalone reference and held to its own family's bound. The
 // version that lived here covered two members with a hand-picked 3x upper
 // slack on the Count-Min cell.
+
+#[test]
+fn hydra_query_frequency_is_the_frequency_query_it_wraps() {
+    let mut hydra = Hydra::with_schema(
+        4,
+        4_096,
+        ["region", "user"],
+        HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            4, 4_096,
+        )),
+    )
+    .expect("schema");
+
+    for r in ["eu", "us"] {
+        for u in ["alice", "bob"] {
+            for _ in 0..25 {
+                hydra
+                    .update(&[r, u], &DataInput::Str("event"), None)
+                    .expect("update");
+            }
+        }
+    }
+
+    let probe = DataInput::Str("event");
+    for key in [
+        vec![Some("eu"), Some("alice")],
+        vec![Some("us"), Some("bob")],
+        vec![Some("eu"), None],
+        vec![None, Some("bob")],
+        vec![Some("apac"), None],
+    ] {
+        let wrapper = hydra
+            .query_frequency(&key, &probe)
+            .expect("frequency convenience query");
+        let explicit = hydra
+            .query_key(&key, &HydraQuery::Frequency(probe.clone()))
+            .expect("frequency query");
+        assert_eq!(
+            wrapper, explicit,
+            "{key:?}: query_frequency disagreed with the query it wraps"
+        );
+    }
+
+    assert!(
+        hydra.query_frequency(&[Some("eu")], &probe).is_err(),
+        "a key shorter than the schema arity must be an error"
+    );
+    assert_eq!(
+        hydra
+            .query_frequency(&[Some("apac"), Some("nobody")], &probe)
+            .expect("absent cell"),
+        0.0,
+        "an unseen subpopulation carries no frequency"
+    );
+}
+
+#[test]
+fn hydra_query_quantile_is_the_cumulative_query_it_wraps() {
+    let mut hydra = Hydra::with_schema(
+        4,
+        512,
+        ["shard"],
+        HydraCounter::KLL(KLL::init_kll_with_seed(HYDRA_KLL_K as i32, 0x5EED_0700)),
+    )
+    .expect("schema");
+    let values: Vec<f64> = common::uniform_u64(20_000, 1_000_000, 4_101)
+        .iter()
+        .map(|v| *v as f64)
+        .collect();
+    let truth = common::NumericTruth::new(values.clone());
+    for v in &values {
+        hydra
+            .update(&["s0"], &DataInput::F64(*v), None)
+            .expect("update");
+    }
+
+    let kll_eps = KllRankSpec::datasketches(HYDRA_KLL_K).epsilon();
+    for x in [100_000.0f64, 250_000.0, 500_000.0, 750_000.0, 900_000.0] {
+        let wrapper = hydra
+            .query_quantile(&[Some("s0")], x)
+            .expect("quantile convenience query");
+        let explicit = hydra
+            .query_key(&[Some("s0")], &HydraQuery::Cdf(x))
+            .expect("cdf query");
+        assert_eq!(
+            wrapper, explicit,
+            "x={x}: query_quantile disagreed with the query it wraps"
+        );
+        assert_between(
+            wrapper,
+            truth.cdf(x) - kll_eps,
+            truth.cdf(x) + kll_eps,
+            &format!("Hydra query_quantile at x={x}"),
+        );
+    }
+
+    assert_eq!(
+        hydra
+            .query_quantile(&[Some("ghost")], 500_000.0)
+            .expect("absent cell"),
+        0.0,
+        "an unseen subpopulation reports no cumulative mass"
+    );
+    assert!(
+        hydra.query_quantile(&[], 500_000.0).is_err(),
+        "an empty key must be an arity error"
+    );
+}
+
+#[test]
+fn univmon_generic_g_sum_reproduces_every_named_estimator() {
+    let mut um = UnivMon::init_univmon(32, 5, 2_048, 8);
+    let stream = zipf_u64(20_000, 1_000, 1.2, 4_201);
+    let mut truth = common::FreqTruth::default();
+    for (i, k) in stream.iter().enumerate() {
+        let w = 1 + (i % 7) as i64;
+        um.insert(&DataInput::U32(*k as u32), w);
+        truth.observe_weighted(*k as i64, w);
+    }
+
+    assert_eq!(
+        um.calc_g_sum(|x| x * x, false).sqrt(),
+        um.calc_l2(),
+        "g(x)=x^2 under a square root is the L2 estimator"
+    );
+    assert_eq!(
+        um.calc_g_sum(|_| 1.0, true),
+        um.calc_card(),
+        "g(x)=1 in cardinality mode is the distinct-count estimator"
+    );
+    let x_log_x = um.calc_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 }, false);
+    assert_between(
+        um.calc_entropy(),
+        um.calc_l1().log2() - x_log_x / um.calc_l1() - 1e-9,
+        um.calc_l1().log2() - x_log_x / um.calc_l1() + 1e-9,
+        "the entropy estimator is the x*log2(x) g-sum rearranged",
+    );
+    assert_eq!(
+        um.calc_g_sum(|x| x * x, false),
+        um.calc_g_sum_heuristic(|x| x * x, false),
+        "the public g-sum must be the heuristic it delegates to"
+    );
+    assert_eq!(
+        um.calc_g_sum(|_| 0.0, false),
+        0.0,
+        "the zero function must sum to zero"
+    );
+
+    let identity = um.calc_g_sum(|x| x, false);
+    let l1 = truth.total() as f64;
+    assert_between(
+        identity,
+        l1 * 0.50,
+        l1 * 1.50,
+        "UnivMon g(x)=x tracks the exact L1",
+    );
+}
+
+#[test]
+fn univmon_g_sum_is_zero_on_an_empty_sketch() {
+    let um = UnivMon::init_univmon(32, 5, 256, 4);
+    assert_eq!(um.calc_l1(), 0.0, "an empty sketch has no mass");
+    assert_eq!(um.calc_entropy(), 0.0, "an empty sketch has no entropy");
+    assert_eq!(um.calc_g_sum(|x| x * x, false), 0.0, "no second moment");
+    assert_eq!(um.calc_card(), 0.0, "no distinct values");
+}
+
+#[test]
+fn a_univmon_pool_recycles_a_returned_sketch_and_hands_back_a_cleared_one() {
+    const CAP: usize = 2;
+    let mut pool = UnivSketchPool::new(CAP, 16, 3, 256, 4);
+    assert_eq!(pool.available(), CAP, "a fresh pool holds its capacity");
+    assert_eq!(pool.total_allocated(), CAP);
+
+    let first = pool.take();
+    let second = pool.take();
+    assert_eq!(pool.available(), 0);
+    assert_eq!(pool.total_allocated(), CAP);
+
+    let third = pool.take();
+    assert_eq!(
+        pool.total_allocated(),
+        CAP + 1,
+        "an exhausted pool allocates rather than blocking"
+    );
+
+    let mut dirty = first;
+    for k in zipf_u64(5_000, 512, 1.1, 4_202) {
+        dirty.insert(&DataInput::U32(k as u32), 1);
+    }
+    assert!(dirty.calc_l1() > 0.0, "the fixture must carry mass");
+    pool.put(dirty);
+    assert_eq!(pool.available(), 1, "a returned sketch is available again");
+
+    let recycled = pool.take();
+    assert_eq!(
+        recycled.calc_l1(),
+        0.0,
+        "a recycled sketch must come back cleared"
+    );
+    assert_eq!(
+        pool.total_allocated(),
+        CAP + 1,
+        "taking a recycled sketch must not allocate"
+    );
+    drop((second, third, recycled));
+}

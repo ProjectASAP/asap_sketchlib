@@ -27,9 +27,9 @@ use common::specs::{
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{
-    Coco, Count, CountL2HH, CountMin, DDSketch, DataInput, Elastic, ErtlMLE, ExponentialHistogram,
-    FastPath, FoldCS, FoldCSConfig, HyperLogLog, KLL, SketchNorm, TumblingWindow, UnivMon,
-    UnivMonQ, UnivMonQConfig, Vector2D,
+    Coco, Count, CountL2HH, CountMin, DDSketch, DataInput, EHSketchList, Elastic, ErtlMLE,
+    ExponentialHistogram, FastPath, FoldCMS, FoldCMSConfig, FoldCS, FoldCSConfig, HyperLogLog, KLL,
+    KLLConfig, SketchNorm, SketchPool, TumblingWindow, UnivMon, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 
 const EH_K: usize = 8;
@@ -796,6 +796,259 @@ fn eh_uniform_sampling_variant_reports_exact_retention_bookkeeping() {
         assert!(
             observed.contains(&s.to_bits()),
             "retained sample {s} was never observed in the merged window [{lo}, {hi}]"
+        );
+    }
+}
+
+#[test]
+fn tumbling_fold_cms_hierarchical_merge_covers_every_observation() {
+    const FULL_COLS: usize = 4_096;
+    const FOLD_LEVEL: u32 = 2;
+    const WINDOW: u64 = 500;
+    const TOTAL: u64 = 3_000;
+
+    let cfg = FoldCMSConfig {
+        rows: ROWS,
+        full_cols: FULL_COLS,
+        fold_level: FOLD_LEVEL,
+        top_k: 32,
+    };
+    let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(WINDOW, 16, cfg, 4);
+    let keys = zipf_u64(TOTAL as usize, 512, 1.1, STREAM_SEED);
+    let mut truth = FreqTruth::default();
+    for (t, k) in keys.iter().enumerate() {
+        tw.insert(t as u64, &DataInput::U64(*k), 1);
+        truth.observe(*k as i64);
+    }
+
+    let hierarchical = tw.query_all_hierarchical();
+    let flat = tw.query_all();
+    assert!(
+        hierarchical.fold_cols() >= flat.fold_cols(),
+        "a hierarchical merge must not narrow the sketch: {} < {}",
+        hierarchical.fold_cols(),
+        flat.fold_cols()
+    );
+
+    let spec = CountMinSpec::new(ROWS, hierarchical.fold_cols());
+    spec.assert_contract(
+        "TumblingWindow<FoldCMS> query_all_hierarchical",
+        &truth,
+        |k| hierarchical.query(&DataInput::U64(k as u64)) as f64,
+        &format!(
+            "rows={ROWS} full_cols={FULL_COLS} fold_level={FOLD_LEVEL} -> {} cols after \
+             hierarchical merge, window={WINDOW}, {TOTAL} observations",
+            hierarchical.fold_cols()
+        ),
+    );
+
+    for (key, count) in truth.pairs() {
+        let probe = DataInput::U64(key as u64);
+        let h = hierarchical.query(&probe);
+        let f = flat.query(&probe);
+        assert!(
+            h >= count,
+            "key {key}: hierarchical merge underestimated {count} as {h}"
+        );
+        assert!(
+            h <= f,
+            "key {key}: unfolding raised the estimate from {f} to {h}"
+        );
+    }
+    assert!(
+        hierarchical.total_entries() > 0,
+        "a hierarchical merge over a populated stream must retain entries"
+    );
+}
+
+#[test]
+fn tumbling_window_pool_accounting_tracks_every_recycled_sketch() {
+    const WINDOW: u64 = 100;
+    const MAX_WINDOWS: usize = 2;
+    const POOL_CAP: usize = 4;
+
+    let cfg = KLLConfig {
+        k: 200,
+        m: 8,
+        seed: Some(0x7001_0001),
+    };
+    let mut tw: TumblingWindow<KLL> = TumblingWindow::new(WINDOW, MAX_WINDOWS, cfg, POOL_CAP);
+    assert_eq!(
+        tw.pool_total_allocated(),
+        POOL_CAP,
+        "the pool must pre-allocate exactly its capacity"
+    );
+    assert_eq!(
+        tw.pool_available(),
+        POOL_CAP - 1,
+        "the initial active window must come out of the pool"
+    );
+
+    for t in 0..(WINDOW * 8) {
+        tw.insert(t, &DataInput::U64(t % 97), 1);
+    }
+    assert_eq!(
+        tw.closed_count(),
+        MAX_WINDOWS,
+        "at most {MAX_WINDOWS} closed windows are retained"
+    );
+    assert!(
+        tw.pool_available() > 0,
+        "evicted windows must return their sketches to the pool"
+    );
+    assert!(
+        tw.pool_total_allocated() >= POOL_CAP,
+        "the pool must never report fewer allocations than it started with"
+    );
+    assert_eq!(
+        tw.pool_available() + tw.closed_count() + 1,
+        tw.pool_total_allocated(),
+        "every allocated sketch is either pooled, in a retained window, or active"
+    );
+}
+
+#[test]
+fn a_sketch_pool_reuses_a_returned_sketch_before_allocating_a_new_one() {
+    const CAP: usize = 2;
+    let cfg = KLLConfig {
+        k: 200,
+        m: 8,
+        seed: Some(0x7001_0002),
+    };
+    let mut pool: SketchPool<KLL> = SketchPool::new(CAP, cfg);
+    assert_eq!(pool.available(), CAP);
+    assert_eq!(pool.total_allocated(), CAP);
+
+    let first = pool.take();
+    let second = pool.take();
+    assert_eq!(pool.available(), 0);
+    assert_eq!(pool.total_allocated(), CAP);
+
+    let third = pool.take();
+    assert_eq!(
+        pool.total_allocated(),
+        CAP + 1,
+        "an empty pool must allocate rather than block"
+    );
+
+    let mut dirty = first;
+    for v in 0..1_000u64 {
+        dirty.update(&(v as f64));
+    }
+    pool.put(dirty);
+    assert_eq!(pool.available(), 1, "a returned sketch is available again");
+
+    let recycled = pool.take();
+    assert_eq!(
+        recycled.count(),
+        0,
+        "a recycled sketch must come back cleared"
+    );
+    assert_eq!(
+        pool.total_allocated(),
+        CAP + 1,
+        "taking a recycled sketch must not allocate"
+    );
+    drop((second, third, recycled));
+}
+
+#[test]
+fn an_exponential_histogram_expires_against_the_window_length_it_was_last_given() {
+    let proto = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+        ROWS, COLS,
+    ));
+    let mut eh = ExponentialHistogram::new(EH_K, 10_000, proto);
+    for t in 0..200u64 {
+        eh.update(t * 10, &DataInput::U64(t % 32));
+    }
+    let wide_span = full_span(&eh);
+    assert_eq!(
+        wide_span.0, 0,
+        "nothing may expire while the window covers the whole stream"
+    );
+
+    eh.update_window(100);
+    eh.update(2_000, &DataInput::U64(0));
+    let narrow_span = full_span(&eh);
+    assert!(
+        narrow_span.0 > wide_span.0,
+        "shortening the window must drop the oldest buckets, span still starts at {}",
+        narrow_span.0
+    );
+    assert!(
+        eh.get_max_time() == Some(2_000),
+        "the newest bucket must carry the timestamp just inserted"
+    );
+
+    eh.update_window(10_000);
+    eh.update(2_010, &DataInput::U64(0));
+    assert!(
+        full_span(&eh).0 >= narrow_span.0,
+        "widening the window cannot resurrect an expired bucket"
+    );
+}
+
+#[test]
+fn an_exponential_histogram_custom_bucket_update_matches_repeated_inserts() {
+    let proto = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+        ROWS, COLS,
+    ));
+    let mut by_update = ExponentialHistogram::new(EH_K, EH_WINDOW, proto.clone());
+    let mut by_custom = ExponentialHistogram::new(EH_K, EH_WINDOW, proto);
+
+    for t in 0..500u64 {
+        let key = DataInput::U64(t % 64);
+        by_update.update(t, &key);
+        by_custom.update_with(t, |sketch| {
+            sketch.insert(&key);
+        });
+    }
+
+    assert_eq!(
+        by_update.bucket_count(),
+        by_custom.bucket_count(),
+        "the custom updater must produce the same bucket structure"
+    );
+    let (lo, hi) = full_span(&by_update);
+    let merged_update = by_update
+        .query_interval_merge(lo, hi)
+        .expect("update path merges its own span");
+    let merged_custom = by_custom
+        .query_interval_merge(lo, hi)
+        .expect("custom path merges its own span");
+    for k in 0..64u64 {
+        let probe = DataInput::U64(k);
+        assert_eq!(
+            merged_update.query(&probe).expect("count-min answers"),
+            merged_custom.query(&probe).expect("count-min answers"),
+            "key {k}: the custom updater diverged from update"
+        );
+    }
+
+    let mut doubled = ExponentialHistogram::new(
+        EH_K,
+        EH_WINDOW,
+        EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            ROWS, COLS,
+        )),
+    );
+    for t in 0..500u64 {
+        let key = DataInput::U64(t % 64);
+        doubled.update_with(t, |sketch| {
+            sketch.insert(&key);
+            sketch.insert(&key);
+        });
+    }
+    let (dlo, dhi) = full_span(&doubled);
+    let merged_doubled = doubled
+        .query_interval_merge(dlo, dhi)
+        .expect("doubled path merges its own span");
+    for k in 0..64u64 {
+        let probe = DataInput::U64(k);
+        assert!(
+            merged_doubled.query(&probe).expect("count-min answers")
+                >= merged_update.query(&probe).expect("count-min answers"),
+            "key {k}: a bucket updated twice must not read below one updated once"
         );
     }
 }
