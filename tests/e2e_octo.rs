@@ -30,17 +30,17 @@
 
 mod common;
 
-use asap_sketchlib::common::BOTTOM_LAYER_FINDER;
-use asap_sketchlib::{
-    CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin, DDSketch,
-    DataInput, DdWorkerSketch, ErtlMLE, FastPath, HLL_PROMASK, HllDelta, HyperLogLog,
-    HyperLogLogP12, HyperLogLogP16, L2HH, L2hhWorkerSketch, LayeredCountDelta, OctoAggregator,
-    OctoPlan, OctoThreshold, OctoWorker, RegularPath, UnivMon, UnivMonDeltaFidelity,
-    UnivMonOctoAggregator, UnivMonOctoPlan, UnivMonOctoWorker, Vector2D, bottom_layer_for_hash,
-    hash64_seeded, hash128_seeded, input_to_owned, univmon_layer_threshold,
-};
 #[cfg(feature = "octo-runtime")]
 use asap_sketchlib::DD_PROMASK;
+use asap_sketchlib::common::BOTTOM_LAYER_FINDER;
+use asap_sketchlib::{
+    CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin, DDSketch, DataInput,
+    DdWorkerSketch, ErtlMLE, FastPath, HLL_PROMASK, HllDelta, HyperLogLog, HyperLogLogP12,
+    HyperLogLogP16, L2HH, L2hhWorkerSketch, LayeredCountDelta, OctoAggregator, OctoPlan,
+    OctoThreshold, OctoWorker, RegularPath, UnivMon, UnivMonDeltaFidelity, UnivMonOctoAggregator,
+    UnivMonOctoPlan, UnivMonOctoWorker, Vector2D, bottom_layer_for_hash, hash64_seeded,
+    hash128_seeded, input_to_owned, univmon_layer_threshold,
+};
 use common::{FreqTruth, zipf_u64};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
