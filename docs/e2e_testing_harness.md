@@ -74,7 +74,6 @@ tests/
 ├── e2e_frequency.rs         # deep per-family suites…
 ├── e2e_cardinality.rs
 ├── e2e_quantiles.rs
-├── e2e_matrix_instances.rs  # every (storage, path) instance of the matrix families
 ├── e2e_numeric_types.rs     # every NumericalValue type through KLL / DDSketch
 ├── e2e_windows.rs           # every EHSketchList variant + TumblingWindow payloads
 ├── e2e_composition.rs       # HashSketchEnsemble, NitroBatch, UnivMonQ config, portable facade
@@ -363,7 +362,6 @@ error against its bound.
 ```bash
 cargo test --all-features --locked           # full matrix incl. experimental
 cargo test --test conformance_kit            # kit + reference adapters only
-cargo test --test e2e_matrix_instances       # every storage x path instance
 cargo test --test e2e_numeric_types          # every NumericalValue type
 cargo run --release --example accuracy_probe --features experimental
                                              # heavy release-only probes

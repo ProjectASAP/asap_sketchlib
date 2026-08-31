@@ -23,7 +23,6 @@ and whether that bound is a theorem or a documented empirical band.
 | `common/conformance.rs` | Capability traits + standard conformance batteries (the floor) |
 | `conformance_kit.rs` | Reference adapters: established sketches running through the kit (copy these) |
 | `e2e_frequency.rs` / `e2e_cardinality.rs` / `e2e_quantiles.rs` | Deep per-family suites, each against its own theorem |
-| `e2e_matrix_instances.rs` | Every built-in `(storage, hashing path)` instance of CountMin / Count / CMSHeap / CSHeap, plus counter-width edges |
 | `e2e_numeric_types.rs` | Every `NumericalValue` type through `KLL<T>`, `KLLDynamic<T>` and `DDSketch::add<T>` |
 | `e2e_windows.rs` | Every `EHSketchList` variant in an `ExponentialHistogram`, and every `TumblingWindow` payload |
 | `e2e_composition.rs` | `HashSketchEnsemble`, `UnivMonQ`'s config surface, and the portable sketch+heap facade |
@@ -104,7 +103,6 @@ and whether that bound is a theorem or a documented empirical band.
 
 ```bash
 cargo test --test conformance_kit        # kit + reference adapters
-cargo test --test e2e_matrix_instances   # every storage x path instance
 cargo test --test e2e_numeric_types      # every NumericalValue type
 cargo test --all-features               # everything, incl. e2e_experimental
 cargo run --release --example accuracy_probe --features experimental

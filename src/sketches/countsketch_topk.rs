@@ -39,8 +39,8 @@ mod wire;
 ///
 /// Above `2^53` the estimate has already lost precision in `f64` inside
 /// `Count::estimate`, so an `i128` sketch's heap entries are exact only up to
-/// that magnitude. Both limits are asserted in
-/// `tests/e2e_matrix_instances.rs`.
+/// that magnitude. Both limits are asserted by
+/// `i128_counters_saturate_into_the_heap_instead_of_wrapping` below.
 #[inline]
 pub fn cs_heap_count(estimate: f64) -> i64 {
     // `as` on a float is a saturating cast in Rust (since 1.45); this is the
@@ -929,6 +929,117 @@ mod tests {
         assert!(
             (overlap as f64) / (top_k as f64) >= 0.8,
             "heap overlap too low: overlap={overlap}, regular={regular_heap_keys:?}, fast={fast_heap_keys:?}"
+        );
+    }
+
+    /// `CSHeap` over an `i128` counter really does accept counts past
+    /// `i64::MAX`, and this pins what happens to the heap entry when it does.
+    ///
+    /// The insert path is `heap.update(key, cs_heap_count(estimate))`, where
+    /// the estimate is the row **median** as `f64`. Two lossy steps are
+    /// unavoidable and both are documented API rather than accidents:
+    ///
+    /// 1. `i128 -> f64` inside `Count::estimate`, exact only below `2^53`;
+    /// 2. `f64 -> i64` in `cs_heap_count`, which **saturates** at `i64::MAX`.
+    ///
+    /// Saturating is the chosen semantics. Wrapping would turn a huge positive
+    /// count into a negative one and corrupt the heap's ordering, which is the
+    /// one failure mode a top-k structure cannot survive; returning an error
+    /// would put a fallible result on an infallible `insert`; and widening
+    /// `HHItem::count` to `i128` would change the heap wire payload for every
+    /// family that shares it. This test fails if any of that silently changes.
+    #[test]
+    fn i128_counters_saturate_into_the_heap_instead_of_wrapping() {
+        macro_rules! probe {
+            ($storage:ty, $path:ty, $ctor:expr) => {{
+                let label = concat!(
+                    "CSHeap<",
+                    stringify!($storage),
+                    ", ",
+                    stringify!($path),
+                    ">"
+                );
+                let key = DataInput::U64(0xC0FF_EE01);
+
+                // Below 2^53 the whole pipeline is exact.
+                let mut small = $ctor;
+                let exact: i128 = 1_i128 << 40;
+                small.insert_many(&key, exact);
+                assert_eq!(
+                    small.estimate(&key),
+                    exact as f64,
+                    "{label}: an i128 count below 2^53 must round-trip exactly"
+                );
+                assert_eq!(
+                    heap_count_for_key(small.heap(), &key),
+                    Some(exact as i64),
+                    "{label}: the heap entry must carry the same exact count"
+                );
+
+                // Past i64::MAX the heap entry saturates. It must not wrap
+                // negative, and it must not silently become a different
+                // positive number: `i64::MAX` is the documented ceiling.
+                let mut huge = $ctor;
+                let over: i128 = (i64::MAX as i128) * 4;
+                huge.insert_many(&key, over);
+                let est = huge.estimate(&key);
+                assert!(
+                    est >= i64::MAX as f64,
+                    "{label}: the sketch itself must still hold the i128 mass, got {est}"
+                );
+                assert_eq!(
+                    cs_heap_count(est),
+                    i64::MAX,
+                    "{label}: cs_heap_count must saturate at i64::MAX"
+                );
+                assert_eq!(
+                    heap_count_for_key(huge.heap(), &key),
+                    Some(i64::MAX),
+                    "{label}: the heap entry must saturate, never wrap"
+                );
+
+                // Merging two saturated sketches must stay saturated and
+                // positive.
+                let mut other = $ctor;
+                other.insert_many(&key, over);
+                huge.merge(&other);
+                assert_eq!(
+                    heap_count_for_key(huge.heap(), &key),
+                    Some(i64::MAX),
+                    "{label}: a merge of two saturated sketches must stay at the ceiling"
+                );
+            }};
+        }
+
+        probe!(
+            Vector2D<i128>,
+            RegularPath,
+            CSHeap::<Vector2D<i128>, RegularPath>::new(3, 4096, 32)
+        );
+        probe!(
+            Vector2D<i128>,
+            FastPath,
+            CSHeap::<Vector2D<i128>, FastPath>::new(3, 4096, 32)
+        );
+        probe!(
+            QuickMatrixI128,
+            RegularPath,
+            CSHeap::<QuickMatrixI128, RegularPath>::default()
+        );
+        probe!(
+            QuickMatrixI128,
+            FastPath,
+            CSHeap::<QuickMatrixI128, FastPath>::default()
+        );
+        probe!(
+            DefaultMatrixI128,
+            RegularPath,
+            CSHeap::<DefaultMatrixI128, RegularPath>::default()
+        );
+        probe!(
+            DefaultMatrixI128,
+            FastPath,
+            CSHeap::<DefaultMatrixI128, FastPath>::default()
         );
     }
 }

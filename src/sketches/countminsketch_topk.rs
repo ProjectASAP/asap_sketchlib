@@ -881,4 +881,123 @@ mod tests {
             "heap overlap too low: overlap={overlap}, regular={regular_heap_keys:?}, fast={fast_heap_keys:?}"
         );
     }
+
+    /// The `CMSHeap` instances that construct but have no operations at all.
+    ///
+    /// `CMSHeap::insert` / `insert_many` / `estimate` / `merge` all live in an
+    /// impl bounded on `S::Counter: Copy + Ord + From<i32> + Into<i64> +
+    /// AddAssign`. Four counter types reach `CMSHeap` through a public
+    /// constructor and two of them fail that bound:
+    ///
+    /// | counter | `Ord` | `Into<i64>` | operations |
+    /// | --- | --- | --- | --- |
+    /// | `i32`, `i64` | yes | yes | full |
+    /// | `i128` | yes | **no** | none |
+    /// | `f64` | **no** | **no** | none |
+    ///
+    /// So `CMSHeap<Vector2D<i128>>`, `CMSHeap<Vector2D<f64>>`,
+    /// `CMSHeap<QuickMatrixI128>` and `CMSHeap<DefaultMatrixI128>` are
+    /// *constructible but inert* on both hashing paths — eight instances that
+    /// allocate a sketch and a heap and can then do nothing but report their
+    /// dimensions.
+    ///
+    /// # What this test is, and what it is not
+    ///
+    /// It is **constructibility coverage only**. It shows that the
+    /// constructors exist, that the geometry accessors answer, and that the
+    /// heap starts empty. It does **not** verify that `insert` is uncallable —
+    /// a Rust test cannot assert the absence of a method without a
+    /// compile-fail harness such as `trybuild`. Adding an insert impl would
+    /// leave every assertion below compiling and passing.
+    ///
+    /// # Why the API is not being changed
+    ///
+    /// Every alternative costs more than it buys: `TryInto<i64>` would make
+    /// `insert` fallible or silently lossy for exactly the counters that
+    /// motivated `i128`; widening `HHItem::count` to `i128` changes the heap
+    /// wire payload shared with `CSHeap`, Space-Saving and the Octo top-k
+    /// plans; and removing the constructors is a breaking change to a type
+    /// that composes generically. `CSHeap` already covers `i128` end to end
+    /// for callers who need it.
+    #[test]
+    fn inert_instances_construct_and_report_their_geometry() {
+        macro_rules! inert {
+            ($storage:ty, $path:ty, $ctor:expr, $rows:expr, $cols:expr) => {{
+                let label = concat!(
+                    "CMSHeap<",
+                    stringify!($storage),
+                    ", ",
+                    stringify!($path),
+                    ">"
+                );
+                let sketch = $ctor;
+                // Everything a caller can actually do with one of these.
+                assert_eq!(sketch.rows(), $rows, "{label}: rows()");
+                assert_eq!(sketch.cols(), $cols, "{label}: cols()");
+                assert_eq!(sketch.heap().len(), 0, "{label}: the heap starts empty");
+                assert_eq!(
+                    sketch.cms().rows(),
+                    $rows,
+                    "{label}: the wrapped CountMin reports the same geometry"
+                );
+            }};
+        }
+
+        inert!(
+            Vector2D<i128>,
+            RegularPath,
+            CMSHeap::<Vector2D<i128>, RegularPath>::new(3, 4096, 32),
+            3,
+            4096
+        );
+        inert!(
+            Vector2D<i128>,
+            FastPath,
+            CMSHeap::<Vector2D<i128>, FastPath>::new(3, 4096, 32),
+            3,
+            4096
+        );
+        inert!(
+            Vector2D<f64>,
+            RegularPath,
+            CMSHeap::<Vector2D<f64>, RegularPath>::new(3, 4096, 32),
+            3,
+            4096
+        );
+        inert!(
+            Vector2D<f64>,
+            FastPath,
+            CMSHeap::<Vector2D<f64>, FastPath>::new(3, 4096, 32),
+            3,
+            4096
+        );
+        inert!(
+            QuickMatrixI128,
+            RegularPath,
+            CMSHeap::<QuickMatrixI128, RegularPath>::default(),
+            5,
+            2048
+        );
+        inert!(
+            QuickMatrixI128,
+            FastPath,
+            CMSHeap::<QuickMatrixI128, FastPath>::default(),
+            5,
+            2048
+        );
+        inert!(
+            DefaultMatrixI128,
+            RegularPath,
+            CMSHeap::<DefaultMatrixI128, RegularPath>::default(),
+            3,
+            4096
+        );
+        inert!(
+            DefaultMatrixI128,
+            FastPath,
+            CMSHeap::<DefaultMatrixI128, FastPath>::default(),
+            3,
+            4096
+        );
+    }
 }

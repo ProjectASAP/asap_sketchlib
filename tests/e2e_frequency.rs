@@ -16,15 +16,15 @@
 
 mod common;
 
-use common::specs::{CountMinSpec, CountSketchSpec, SecondMomentSpec, Tally};
+use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, SecondMomentSpec, Tally};
 use common::{FreqTruth, uniform_u64, zipf_u64};
 use std::collections::HashMap;
 
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
 use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
 use asap_sketchlib::{
-    CMSHeap, CSHeap, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS, FoldCS,
-    HeapItem, RegularPath, Vector2D,
+    CMSHeap, CSHeap, Count, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS,
+    FoldCS, HeapItem, RegularPath, Vector2D,
 };
 
 // ----------------------------------------------------------------- CountMin
@@ -96,8 +96,9 @@ fn countmin_fast_path_zipf_conforms_to_the_count_min_model_and_merges_shards_exa
 /// collide on different key pairs. On a 40k-update Zipf stream at 3x4096 they
 /// disagree on roughly a third of keys — every disagreement inside the bound.
 ///
-/// `e2e_matrix_instances.rs` covers the equality that *is* contractual: on a
-/// collision-free workload both paths return exact counts.
+/// The unit tests in `src/sketches/countminsketch.rs` cover the equality that
+/// *is* contractual: on a collision-free workload both paths return exact
+/// counts.
 #[test]
 fn countmin_both_paths_meet_the_count_min_bound_on_the_same_stream() {
     const ROWS: usize = 3;
@@ -364,7 +365,7 @@ fn countsketch_error_stays_rank_independent_within_the_documented_empirical_band
 
     let stream = zipf_u64(200_000, 8192, 1.1, STREAM_SEED);
     let mut truth = FreqTruth::default();
-    let mut cs = asap_sketchlib::Count::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
+    let mut cs = Count::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
     for k in &stream {
         truth.observe(*k as i64);
         cs.insert(&DataInput::I64(*k as i64));
@@ -667,4 +668,242 @@ fn portable_cms_and_cs_string_keys_satisfy_their_own_bounds() {
         |k| pcss.estimate(&format!("k{k}")),
         &context,
     );
+}
+
+// ------------------------------------------------- Depth and width axes
+//
+// Both families' bounds are parameterised by `d` and `w`, so the sweep below
+// is part of the theorem's statement rather than a property of any one
+// storage backend: it re-evaluates each bound at its own dimensions across the
+// axis, and pins the direction the width term is supposed to move.
+
+/// Medium stream: large enough that collisions are statistically meaningful at
+/// 2048 and 4096 columns, small enough that the whole axis stays quick.
+const AXIS_N: usize = 40_000;
+const AXIS_DOMAIN: usize = 4_096;
+const AXIS_STREAM_SEED: u64 = 0x10BE_C700;
+
+const DEPTH_AXIS: [usize; 4] = [1, 2, 3, 9];
+const WIDTH_AXIS: [usize; 4] = [64, 512, 4_096, 8_192];
+const COUNTSKETCH_DEPTH_AXIS: [usize; 3] = [3, 5, 9];
+const NON_POWER_OF_TWO_WIDTHS: [usize; 4] = [3, 100, 1_000, 4_095];
+const WIDTH_EXCESS_DECAY: f64 = 2.0;
+
+fn axis_stream_and_truth() -> (Vec<u64>, FreqTruth) {
+    let stream = zipf_u64(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
+    let mut truth = FreqTruth::default();
+    for k in &stream {
+        truth.observe(*k as i64);
+    }
+    (stream, truth)
+}
+
+fn axis_context(label: &str, rows: usize, cols: usize) -> String {
+    format!(
+        "{label} rows={rows} cols={cols} zipf(1.1) domain={AXIS_DOMAIN} n={AXIS_N} \
+         seed={AXIS_STREAM_SEED:#x}"
+    )
+}
+
+/// Count-Min's one-sided and simultaneous guarantees at one point on the axis.
+/// Returns the mean excess so a caller can compare it across widths.
+fn countmin_axis_contract(
+    label: &str,
+    rows: usize,
+    cols: usize,
+    truth: &FreqTruth,
+    estimate: impl Fn(i64) -> f64,
+) -> f64 {
+    let spec = CountMinSpec::new(rows, cols);
+    let total = truth.total() as f64;
+    let distinct = truth.distinct();
+    let mut one_sided = Tally::default();
+    let mut simultaneous = Tally::default();
+    let mut excess_sum = 0.0;
+    let mut keys = 0usize;
+    for (key, count) in truth.pairs() {
+        let est = estimate(key);
+        let f = count as f64;
+        one_sided.record(est >= f, || {
+            format!("key {key}: est {est} < true {f} (Count-Min must never underestimate)")
+        });
+        let bound = spec.simultaneous_bound(total, f, distinct, SIMULTANEOUS_LEVEL);
+        simultaneous.record(est - f <= bound, || {
+            format!("key {key}: excess {:.1} > b*(N-f)/w = {bound:.1}", est - f)
+        });
+        excess_sum += est - f;
+        keys += 1;
+    }
+    let ctx = axis_context(label, rows, cols);
+    one_sided.assert_none(&format!("{label} / one-sided"), &ctx);
+    simultaneous.assert_none(&format!("{label} / simultaneous"), &ctx);
+    excess_sum / keys.max(1) as f64
+}
+
+#[test]
+fn countmin_holds_its_contract_across_the_depth_and_width_axis_on_both_paths() {
+    let (stream, truth) = axis_stream_and_truth();
+    for &rows in &DEPTH_AXIS {
+        for &cols in &WIDTH_AXIS {
+            let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            for k in &stream {
+                regular.insert(&DataInput::U64(*k));
+                fast.insert(&DataInput::U64(*k));
+            }
+            countmin_axis_contract(
+                "CountMin<Vector2D<i64>, RegularPath> axis",
+                rows,
+                cols,
+                &truth,
+                |key| regular.estimate(&DataInput::U64(key as u64)) as f64,
+            );
+            countmin_axis_contract(
+                "CountMin<Vector2D<i64>, FastPath> axis",
+                rows,
+                cols,
+                &truth,
+                |key| fast.estimate(&DataInput::U64(key as u64)) as f64,
+            );
+        }
+    }
+}
+
+#[test]
+fn countmin_mean_excess_falls_as_the_width_axis_grows() {
+    let (stream, truth) = axis_stream_and_truth();
+    for &rows in &DEPTH_AXIS {
+        let mut previous: Option<(usize, f64)> = None;
+        for &cols in &[64usize, 512, 4_096] {
+            let mut sketch = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            for k in &stream {
+                sketch.insert(&DataInput::U64(*k));
+            }
+            let mut excess_sum = 0.0;
+            for (key, count) in truth.pairs() {
+                excess_sum += sketch.estimate(&DataInput::U64(key as u64)) as f64 - count as f64;
+            }
+            let mean = excess_sum / truth.distinct() as f64;
+            if let Some((prev_cols, prev_mean)) = previous {
+                assert!(
+                    mean * WIDTH_EXCESS_DECAY <= prev_mean,
+                    "d={rows}: mean excess {mean:.3} at w={cols} is not at most 1/{WIDTH_EXCESS_DECAY} \
+                     of {prev_mean:.3} at w={prev_cols}"
+                );
+            }
+            previous = Some((cols, mean));
+        }
+    }
+}
+
+#[test]
+fn countsketch_holds_its_l2_contract_across_the_depth_and_width_axis() {
+    let (stream, truth) = axis_stream_and_truth();
+    for &rows in &COUNTSKETCH_DEPTH_AXIS {
+        for &cols in &WIDTH_AXIS {
+            let spec = CountSketchSpec::new(rows, cols);
+            let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            for k in &stream {
+                regular.insert(&DataInput::U64(*k));
+                fast.insert(&DataInput::U64(*k));
+            }
+            let mut regular_simultaneous = Tally::default();
+            let mut regular_marginal = Tally::default();
+            spec.tally_into(
+                &mut regular_simultaneous,
+                &mut regular_marginal,
+                &truth,
+                |key| regular.estimate(&DataInput::U64(key as u64)),
+            );
+            regular_simultaneous.assert_none(
+                "Count<Vector2D<i64>, RegularPath> axis / simultaneous L2",
+                &axis_context("Count<Vector2D<i64>, RegularPath> axis", rows, cols),
+            );
+            let mut fast_simultaneous = Tally::default();
+            let mut fast_marginal = Tally::default();
+            spec.tally_into(&mut fast_simultaneous, &mut fast_marginal, &truth, |key| {
+                fast.estimate(&DataInput::U64(key as u64))
+            });
+            fast_simultaneous.assert_none(
+                "Count<Vector2D<i64>, FastPath> axis / simultaneous L2",
+                &axis_context("Count<Vector2D<i64>, FastPath> axis", rows, cols),
+            );
+        }
+    }
+}
+
+/// Off the power-of-two grid the column fold is a modulo rather than a mask,
+/// which changes how evenly keys spread. That the index stays inside the
+/// matrix is a structural property and is a unit test in
+/// `src/sketches/countminsketch.rs`; what this asserts is that the *bound*
+/// still holds once the fold is doing real work.
+#[test]
+fn countmin_answers_a_non_power_of_two_width_on_both_paths() {
+    let (stream, truth) = axis_stream_and_truth();
+    for &cols in &NON_POWER_OF_TWO_WIDTHS {
+        assert!(
+            !cols.is_power_of_two(),
+            "the width axis must stay off the power-of-two grid, got {cols}"
+        );
+        let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, cols);
+        let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(3, cols);
+        for k in &stream {
+            regular.insert(&DataInput::U64(*k));
+            fast.insert(&DataInput::U64(*k));
+        }
+        assert_eq!(regular.cols(), cols, "regular path reported width");
+        assert_eq!(fast.cols(), cols, "fast path reported width");
+        countmin_axis_contract(
+            "CountMin<Vector2D<i64>, RegularPath> non-power-of-two",
+            3,
+            cols,
+            &truth,
+            |key| regular.estimate(&DataInput::U64(key as u64)) as f64,
+        );
+        countmin_axis_contract(
+            "CountMin<Vector2D<i64>, FastPath> non-power-of-two",
+            3,
+            cols,
+            &truth,
+            |key| fast.estimate(&DataInput::U64(key as u64)) as f64,
+        );
+    }
+}
+
+#[test]
+fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
+    let (stream, truth) = axis_stream_and_truth();
+    for &cols in &NON_POWER_OF_TWO_WIDTHS {
+        let spec = CountSketchSpec::new(5, cols);
+        let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, cols);
+        let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(5, cols);
+        for k in &stream {
+            regular.insert(&DataInput::U64(*k));
+            fast.insert(&DataInput::U64(*k));
+        }
+        assert_eq!(regular.cols(), cols, "regular path reported width");
+        assert_eq!(fast.cols(), cols, "fast path reported width");
+        let mut regular_simultaneous = Tally::default();
+        let mut regular_marginal = Tally::default();
+        spec.tally_into(
+            &mut regular_simultaneous,
+            &mut regular_marginal,
+            &truth,
+            |key| regular.estimate(&DataInput::U64(key as u64)),
+        );
+        regular_simultaneous.assert_none(
+            "Count<Vector2D<i64>, RegularPath> non-power-of-two / simultaneous L2",
+            &axis_context("Count non-power-of-two regular", 5, cols),
+        );
+        let mut fast_simultaneous = Tally::default();
+        let mut fast_marginal = Tally::default();
+        spec.tally_into(&mut fast_simultaneous, &mut fast_marginal, &truth, |key| {
+            fast.estimate(&DataInput::U64(key as u64))
+        });
+        fast_simultaneous.assert_none(
+            "Count<Vector2D<i64>, FastPath> non-power-of-two / simultaneous L2",
+            &axis_context("Count non-power-of-two fast", 5, cols),
+        );
+    }
 }

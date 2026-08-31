@@ -664,8 +664,8 @@ where
 mod tests {
     use super::*;
     use crate::test_utils::{all_counter_zero_i32, counter_index, sample_zipf_u64};
-    use crate::{DataInput, hash64_seeded};
-    use std::collections::HashMap;
+    use crate::{DataInput, hash_for_matrix, hash64_seeded};
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn count_child_insert_emits_at_threshold() {
@@ -970,5 +970,146 @@ mod tests {
         }
 
         assert_eq!(storage.as_slice(), expected_once.as_slice());
+    }
+
+    // ----------------------------------------------------- instance coverage
+    //
+    // Exact, stream-independent properties of the signed counter matrix and of
+    // the precomputed-hash entry points. The L2 error bound they sit under is
+    // a statistical claim about the algorithm and is asserted in the E2E
+    // frequency suites; nothing below needs it.
+
+    /// Eight well-separated keys in a 2048- or 4096-column grid: the chance
+    /// that any pair collides in every row is negligible, and with fixed seeds
+    /// the outcome is deterministic, so a failure here means a storage backend
+    /// is mis-indexing rather than that the stream was unlucky.
+    const COLLISION_FREE_KEYS: [u64; 8] = [
+        1,
+        7,
+        4_242,
+        90_210,
+        1_000_003,
+        2_147_483_647,
+        4_294_967_311,
+        9_007_199_254_740_993,
+    ];
+
+    /// With no collisions every row reports `sign * sign * f = f`, so the
+    /// median is exact on both hashing paths. The two paths use different hash
+    /// functions and would legitimately disagree on a colliding stream, so
+    /// exactness here — not estimate-for-estimate equality there — is the
+    /// cross-path contract.
+    #[test]
+    fn both_paths_are_exact_on_a_collision_free_workload() {
+        macro_rules! exact {
+            ($storage:ty) => {{
+                let mut regular = Count::<$storage, RegularPath>::default();
+                let mut fast = Count::<$storage, FastPath>::default();
+                let mut truth = HashMap::<u64, i64>::new();
+                for (i, k) in COLLISION_FREE_KEYS.iter().enumerate() {
+                    for _ in 0..(i + 1) * 10 {
+                        let d = DataInput::U64(*k);
+                        regular.insert(&d);
+                        fast.insert(&d);
+                        *truth.entry(*k).or_insert(0) += 1;
+                    }
+                }
+                let label = concat!("Count<", stringify!($storage), ">");
+                for (k, c) in &truth {
+                    let r = regular.estimate(&DataInput::U64(*k));
+                    let f = fast.estimate(&DataInput::U64(*k));
+                    assert_eq!(r, *c as f64, "{label} regular path, key {k}");
+                    assert_eq!(f, *c as f64, "{label} fast path, key {k}");
+                }
+            }};
+        }
+        exact!(Vector2D<i32>);
+        exact!(Vector2D<i64>);
+        exact!(Vector2D<i128>);
+        exact!(FixedMatrix);
+        exact!(DefaultMatrixI32);
+        exact!(QuickMatrixI64);
+        exact!(QuickMatrixI128);
+        exact!(DefaultMatrixI64);
+        exact!(DefaultMatrixI128);
+    }
+
+    /// The signed family's counter-width requirement is symmetric: a decrement
+    /// must reach the negative end of the counter's range without wrapping.
+    #[test]
+    fn counter_widths_carry_signed_mass_in_both_directions() {
+        let key = DataInput::U64(0xDEAD_BEEF);
+
+        let mut cs32 = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        cs32.insert_many(&key, i32::MAX / 2);
+        cs32.insert_many(&key, -(i32::MAX / 2));
+        assert_eq!(
+            cs32.estimate(&key),
+            0.0,
+            "i32 Count Sketch must cancel a half-range increment exactly"
+        );
+
+        let mut cs64 = Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 64);
+        let big = i32::MAX as i64 * 4;
+        cs64.insert_many(&key, big);
+        assert_eq!(cs64.estimate(&key), big as f64);
+        cs64.insert_many(&key, -big * 2);
+        assert_eq!(
+            cs64.estimate(&key),
+            -(big as f64),
+            "i64 Count Sketch must reach the negative side of the i32 range"
+        );
+
+        let mut cs128 = Count::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
+        let huge = i64::MAX as i128 * 4;
+        cs128.insert_many(&key, huge);
+        assert_eq!(cs128.estimate(&key), huge as f64);
+        cs128.insert_many(&key, -huge * 2);
+        assert_eq!(
+            cs128.estimate(&key),
+            -(huge as f64),
+            "i128 Count Sketch must reach the negative side of the i64 range"
+        );
+    }
+
+    /// The precomputed-hash entry points bypass `insert`, so they have to
+    /// reach the same cells with the same signs — exactly, on every key.
+    #[test]
+    fn precomputed_hash_entry_points_match_the_value_entry_points() {
+        const ROWS: usize = 5;
+        const COLS: usize = 2_048;
+        let stream = sample_zipf_u64(512, 1.1, 4_000, 0x10BE_C704);
+
+        let mut by_value = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+        let mut by_hash = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+        for k in &stream {
+            by_value.insert(&DataInput::U64(*k));
+            by_hash.fast_insert_with_hash_value(&hash_for_matrix(ROWS, COLS, &DataInput::U64(*k)));
+        }
+
+        for key in stream.iter().collect::<HashSet<_>>() {
+            let probe = DataInput::U64(*key);
+            let hashed = hash_for_matrix(ROWS, COLS, &probe);
+            let expected = by_value.estimate(&probe);
+            assert_eq!(
+                by_hash.estimate(&probe),
+                expected,
+                "key {key}: fast_insert_with_hash_value diverged from insert"
+            );
+            assert_eq!(
+                by_value.fast_estimate_with_hash(&hashed),
+                expected,
+                "key {key}: fast_estimate_with_hash diverged from estimate"
+            );
+        }
+
+        let mut weighted = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+        let hashed = hash_for_matrix(ROWS, COLS, &DataInput::U64(11));
+        weighted.fast_insert_many_with_hash_value(&hashed, 6);
+        assert_eq!(
+            weighted.estimate(&DataInput::U64(11)),
+            6.0,
+            "fast_insert_many_with_hash_value must apply the whole weight"
+        );
     }
 }
