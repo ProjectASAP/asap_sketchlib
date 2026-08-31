@@ -42,7 +42,9 @@ use asap_sketchlib::{
     hash128_seeded, input_to_owned, univmon_layer_threshold,
 };
 use common::FreqTruth;
-use common::streams::{exponential_f64, u64_inputs, zipf_u64};
+#[cfg(feature = "octo-runtime")]
+use common::streams::u64_inputs;
+use common::streams::{exponential_f64, zipf_u64};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
