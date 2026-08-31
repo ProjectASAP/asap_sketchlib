@@ -10,6 +10,7 @@
 
 pub mod conformance;
 pub mod specs;
+pub mod variants;
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};

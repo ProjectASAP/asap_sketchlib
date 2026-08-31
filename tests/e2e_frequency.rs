@@ -17,14 +17,16 @@
 mod common;
 
 use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, SecondMomentSpec, Tally};
+use common::variants::{VariantList, assert_count_min_bound, assert_l2_bound};
 use common::{FreqTruth, uniform_u64, zipf_u64};
 use std::collections::HashMap;
 
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
 use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
 use asap_sketchlib::{
-    CMSHeap, CSHeap, Count, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS,
-    FoldCS, HeapItem, RegularPath, Vector2D,
+    CMSHeap, CSHeap, Count, CountL2HH, CountMin, DataInput, DefaultMatrixI32, DefaultMatrixI64,
+    DefaultMatrixI128, DefaultXxHasher, FastPath, FixedMatrix, FoldCMS, FoldCS, HeapItem,
+    QuickMatrixI64, QuickMatrixI128, RegularPath, Vector2D,
 };
 
 // ----------------------------------------------------------------- CountMin
@@ -906,4 +908,176 @@ fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
             &axis_context("Count non-power-of-two fast", 5, cols),
         );
     }
+}
+
+fn countminsketch_variants() -> VariantList {
+    vec![
+        (
+            "CountMin<Vector2D<i32>, RegularPath>",
+            Box::new(CountMin::<Vector2D<i32>, RegularPath>::default()),
+        ),
+        (
+            "CountMin<Vector2D<i32>, FastPath>",
+            Box::new(CountMin::<Vector2D<i32>, FastPath>::default()),
+        ),
+        (
+            "CountMin<Vector2D<i64>, RegularPath>",
+            Box::new(CountMin::<Vector2D<i64>, RegularPath>::default()),
+        ),
+        (
+            "CountMin<Vector2D<i64>, FastPath>",
+            Box::new(CountMin::<Vector2D<i64>, FastPath>::default()),
+        ),
+        (
+            "CountMin<Vector2D<i128>, RegularPath>",
+            Box::new(CountMin::<Vector2D<i128>, RegularPath>::default()),
+        ),
+        (
+            "CountMin<Vector2D<i128>, FastPath>",
+            Box::new(CountMin::<Vector2D<i128>, FastPath>::default()),
+        ),
+        (
+            "CountMin<Vector2D<f64>, RegularPath>",
+            Box::new(CountMin::<Vector2D<f64>, RegularPath>::default()),
+        ),
+        (
+            "CountMin<Vector2D<f64>, FastPath>",
+            Box::new(CountMin::<Vector2D<f64>, FastPath>::default()),
+        ),
+        (
+            "CountMin<FixedMatrix, RegularPath>",
+            Box::new(CountMin::<FixedMatrix, RegularPath>::default()),
+        ),
+        (
+            "CountMin<FixedMatrix, FastPath>",
+            Box::new(CountMin::<FixedMatrix, FastPath>::default()),
+        ),
+        (
+            "CountMin<QuickMatrixI64, RegularPath>",
+            Box::new(CountMin::<QuickMatrixI64, RegularPath>::default()),
+        ),
+        (
+            "CountMin<QuickMatrixI64, FastPath>",
+            Box::new(CountMin::<QuickMatrixI64, FastPath>::default()),
+        ),
+        (
+            "CountMin<QuickMatrixI128, RegularPath>",
+            Box::new(CountMin::<QuickMatrixI128, RegularPath>::default()),
+        ),
+        (
+            "CountMin<QuickMatrixI128, FastPath>",
+            Box::new(CountMin::<QuickMatrixI128, FastPath>::default()),
+        ),
+        (
+            "CountMin<DefaultMatrixI32, RegularPath>",
+            Box::new(CountMin::<DefaultMatrixI32, RegularPath>::default()),
+        ),
+        (
+            "CountMin<DefaultMatrixI32, FastPath>",
+            Box::new(CountMin::<DefaultMatrixI32, FastPath>::default()),
+        ),
+        (
+            "CountMin<DefaultMatrixI64, RegularPath>",
+            Box::new(CountMin::<DefaultMatrixI64, RegularPath>::default()),
+        ),
+        (
+            "CountMin<DefaultMatrixI64, FastPath>",
+            Box::new(CountMin::<DefaultMatrixI64, FastPath>::default()),
+        ),
+        (
+            "CountMin<DefaultMatrixI128, RegularPath>",
+            Box::new(CountMin::<DefaultMatrixI128, RegularPath>::default()),
+        ),
+        (
+            "CountMin<DefaultMatrixI128, FastPath>",
+            Box::new(CountMin::<DefaultMatrixI128, FastPath>::default()),
+        ),
+    ]
+}
+
+fn countsketch_variants() -> VariantList {
+    vec![
+        (
+            "Count<Vector2D<i32>, RegularPath>",
+            Box::new(Count::<Vector2D<i32>, RegularPath>::default()),
+        ),
+        (
+            "Count<Vector2D<i32>, FastPath>",
+            Box::new(Count::<Vector2D<i32>, FastPath>::default()),
+        ),
+        (
+            "Count<Vector2D<i64>, RegularPath>",
+            Box::new(Count::<Vector2D<i64>, RegularPath>::default()),
+        ),
+        (
+            "Count<Vector2D<i64>, FastPath>",
+            Box::new(Count::<Vector2D<i64>, FastPath>::default()),
+        ),
+        (
+            "Count<Vector2D<i128>, RegularPath>",
+            Box::new(Count::<Vector2D<i128>, RegularPath>::default()),
+        ),
+        (
+            "Count<Vector2D<i128>, FastPath>",
+            Box::new(Count::<Vector2D<i128>, FastPath>::default()),
+        ),
+        (
+            "Count<FixedMatrix, RegularPath>",
+            Box::new(Count::<FixedMatrix, RegularPath>::default()),
+        ),
+        (
+            "Count<FixedMatrix, FastPath>",
+            Box::new(Count::<FixedMatrix, FastPath>::default()),
+        ),
+        (
+            "Count<QuickMatrixI64, RegularPath>",
+            Box::new(Count::<QuickMatrixI64, RegularPath>::default()),
+        ),
+        (
+            "Count<QuickMatrixI64, FastPath>",
+            Box::new(Count::<QuickMatrixI64, FastPath>::default()),
+        ),
+        (
+            "Count<QuickMatrixI128, RegularPath>",
+            Box::new(Count::<QuickMatrixI128, RegularPath>::default()),
+        ),
+        (
+            "Count<QuickMatrixI128, FastPath>",
+            Box::new(Count::<QuickMatrixI128, FastPath>::default()),
+        ),
+        (
+            "Count<DefaultMatrixI32, RegularPath>",
+            Box::new(Count::<DefaultMatrixI32, RegularPath>::default()),
+        ),
+        (
+            "Count<DefaultMatrixI32, FastPath>",
+            Box::new(Count::<DefaultMatrixI32, FastPath>::default()),
+        ),
+        (
+            "Count<DefaultMatrixI64, RegularPath>",
+            Box::new(Count::<DefaultMatrixI64, RegularPath>::default()),
+        ),
+        (
+            "Count<DefaultMatrixI64, FastPath>",
+            Box::new(Count::<DefaultMatrixI64, FastPath>::default()),
+        ),
+        (
+            "Count<DefaultMatrixI128, RegularPath>",
+            Box::new(Count::<DefaultMatrixI128, RegularPath>::default()),
+        ),
+        (
+            "Count<DefaultMatrixI128, FastPath>",
+            Box::new(Count::<DefaultMatrixI128, FastPath>::default()),
+        ),
+    ]
+}
+
+#[test]
+fn countminsketch_variants_meet_the_count_min_bound() {
+    assert_count_min_bound(countminsketch_variants());
+}
+
+#[test]
+fn countsketch_variants_meet_the_l2_bound() {
+    assert_l2_bound(countsketch_variants());
 }
