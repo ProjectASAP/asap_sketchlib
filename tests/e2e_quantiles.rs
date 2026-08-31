@@ -359,6 +359,184 @@ fn kll_rank_error_shrinks_with_k_as_the_characterization_predicts() {
     );
 }
 
+// ------------------------------------------------------- KLL bulk ingestion
+
+/// A distinct compaction seed per bulk-ingestion case, kept away from the
+/// rank batteries' trial space so the two never share a coin sequence.
+fn kll_bulk_seed(case: u64) -> u64 {
+    kll_trial_seed(0x8B14_0000u64.wrapping_add(case))
+}
+
+/// The rank batteries' shapes plus three the compaction path can behave
+/// differently on: two heavy-tailed spreads, and a run short enough that no
+/// compactor ever fills.
+fn bulk_cases(trial: usize, n: usize) -> Vec<(&'static str, Vec<f64>)> {
+    let alpha = 0.01;
+    let gamma = (1.0 + alpha) / (1.0 - alpha);
+    let mut cases = rank_streams(trial, n);
+    cases.push(("exponential", exponential_f64(n, 1e-3, 3007)));
+    cases.push(("log-uniform", log_uniform_f64(n, gamma, 5..40, 3005)));
+    cases.push((
+        "sequential-10",
+        (0..10).map(|i| i as f64 * 1.7 + 11.0).collect(),
+    ));
+    cases
+}
+
+/// `bulk_update` and a loop of `update` must produce the *same sketch*, not
+/// two sketches that happen to land in the same rank band.
+///
+/// `kll_family_stays_within_the_datasketches_maximum_rank_error_characterization`
+/// already runs `Feed::BulkUpdate` against `eps(k)`. What a band cannot see is
+/// a bulk path that compacts in a different order and lands on a different —
+/// still legal — sketch, so what is asserted here is equality: serialized
+/// bytes, retained count, and quantile bits over `RANK_QS`.
+#[test]
+fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
+    const N: usize = 20_000;
+    for (case, (shape, values)) in bulk_cases(0, N).iter().enumerate() {
+        let seed = kll_bulk_seed(case as u64);
+        let mut via_loop: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+        for v in values {
+            via_loop.update(v);
+        }
+        let mut via_bulk: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+        via_bulk.bulk_update(values);
+
+        let ctx = format!("{shape} n={} sketch_seed={seed:#x}", values.len());
+        assert_eq!(
+            via_loop.count(),
+            via_bulk.count(),
+            "{ctx}: retained count diverged"
+        );
+        assert_eq!(
+            via_loop.serialize_to_bytes().unwrap(),
+            via_bulk.serialize_to_bytes().unwrap(),
+            "{ctx}: serialized bytes diverged"
+        );
+        for &q in &RANK_QS {
+            assert_eq!(
+                via_loop.quantile(q).to_bits(),
+                via_bulk.quantile(q).to_bits(),
+                "{ctx} q={q}: quantile bits differ"
+            );
+        }
+    }
+}
+
+/// `KLLDynamic` under the same equality, on its own wire form.
+#[test]
+fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
+    const N: usize = 10_000;
+    for (case, (shape, values)) in bulk_cases(1, N).iter().enumerate() {
+        let seed = kll_bulk_seed(0x0100 + case as u64);
+        let mut via_loop = KLLDynamic::<f64>::init_kll_with_seed(200, seed);
+        for v in values {
+            via_loop.update(v);
+        }
+        let mut via_bulk = KLLDynamic::<f64>::init_kll_with_seed(200, seed);
+        via_bulk.bulk_update(values);
+
+        let ctx = format!("{shape} n={} sketch_seed={seed:#x}", values.len());
+        assert_eq!(
+            via_loop.count(),
+            via_bulk.count(),
+            "{ctx}: retained mass diverged"
+        );
+        assert_eq!(
+            via_loop.serialize_to_bytes().unwrap(),
+            via_bulk.serialize_to_bytes().unwrap(),
+            "{ctx}: serialized bytes diverged"
+        );
+        for &q in &RANK_QS {
+            assert_eq!(
+                via_loop.quantile(q).to_bits(),
+                via_bulk.quantile(q).to_bits(),
+                "{ctx} q={q}: quantile bits differ"
+            );
+        }
+    }
+}
+
+/// The two degenerate slice lengths: an empty `bulk_update` leaves the sketch
+/// byte-for-byte untouched, and a one-element `bulk_update` equals a single
+/// `update`.
+#[test]
+fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
+    let seed = kll_bulk_seed(0x0200);
+    let mut sk: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    for v in &[1.0f64, 2.0, 3.0] {
+        sk.update(v);
+    }
+    let count = sk.count();
+    let median = sk.quantile(0.5);
+    let bytes = sk.serialize_to_bytes().unwrap();
+
+    sk.bulk_update(&[]);
+    assert_eq!(sk.count(), count, "an empty bulk_update changed the count");
+    assert_eq!(
+        sk.quantile(0.5).to_bits(),
+        median.to_bits(),
+        "an empty bulk_update moved the median"
+    );
+    assert_eq!(
+        sk.serialize_to_bytes().unwrap(),
+        bytes,
+        "an empty bulk_update changed the serialized state"
+    );
+
+    let mut one: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    let mut once: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    one.bulk_update(&[42.0]);
+    once.update(&42.0);
+    assert_eq!(
+        one.serialize_to_bytes().unwrap(),
+        once.serialize_to_bytes().unwrap(),
+        "a one-element bulk_update diverged from one update"
+    );
+}
+
+/// The `DataInput` batch path matches the loop, and a non-numeric element
+/// stops it at that element with the preceding prefix already applied.
+#[test]
+fn kll_bulk_update_data_input_matches_the_loop_and_stops_at_the_first_non_numeric() {
+    let seed = kll_bulk_seed(0x0300);
+    let values = normal_f64(5_000, 100.0, 20.0, 8001);
+    let inputs: Vec<DataInput> = values.iter().map(|v| DataInput::F64(*v)).collect();
+
+    let mut via_loop: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    for v in &inputs {
+        via_loop.update_data_input(v).unwrap();
+    }
+    let mut via_bulk: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    via_bulk.bulk_update_data_input(&inputs).unwrap();
+    assert_eq!(
+        via_loop.serialize_to_bytes().unwrap(),
+        via_bulk.serialize_to_bytes().unwrap(),
+        "DataInput bulk vs loop bytes diverged (sketch_seed={seed:#x}, stream seed 8001)"
+    );
+
+    let mixed = vec![
+        DataInput::F64(1.0),
+        DataInput::String("x".into()),
+        DataInput::F64(2.0),
+    ];
+    let mut stopped: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    assert!(
+        stopped.bulk_update_data_input(&mixed).is_err(),
+        "a non-numeric element must return an error"
+    );
+    assert_eq!(
+        stopped.count(),
+        1,
+        "the prefix before the non-numeric element must stay applied"
+    );
+
+    let mut empty: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    empty.bulk_update_data_input(&[]).unwrap();
+    assert_eq!(empty.count(), 0, "an empty DataInput batch must be a no-op");
+}
+
 // ---------------------------------------------------------------- DDSketch
 
 /// Accuracy parameters spanning three orders of magnitude. The tightest is
