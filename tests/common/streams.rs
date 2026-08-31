@@ -159,6 +159,19 @@ pub fn freq_truth(stream: &[i64]) -> FreqTruth {
     truth
 }
 
+pub const VARIANT_N: usize = 40_000;
+pub const VARIANT_DOMAIN: usize = 4_096;
+pub const VARIANT_SEED: u64 = 0x10BE_C700;
+
+pub fn variant_stream() -> (Vec<u64>, FreqTruth) {
+    let stream = zipf_u64(VARIANT_N, VARIANT_DOMAIN, 1.1, VARIANT_SEED);
+    let mut truth = FreqTruth::default();
+    for k in &stream {
+        truth.observe(*k as i64);
+    }
+    (stream, truth)
+}
+
 /// A Zipf key stream and the exact counts of the keys in it.
 pub fn zipf_stream_with_truth(
     n: usize,

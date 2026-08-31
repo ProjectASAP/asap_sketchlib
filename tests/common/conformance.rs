@@ -10,6 +10,9 @@
 //!
 //! See `tests/README.md` for the onboarding recipe.
 
+use super::specs::{CountMinSpec, CountSketchSpec};
+use super::streams::{VARIANT_DOMAIN, VARIANT_N, VARIANT_SEED, variant_stream};
+use super::variants::VariantList;
 use super::{FreqTruth, NumericTruth};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -559,4 +562,58 @@ where
     }
 
     report
+}
+
+fn variant_context(label: &str, rows: usize, cols: usize) -> String {
+    format!(
+        "{label} rows={rows} cols={cols} zipf(1.1) domain={VARIANT_DOMAIN} n={VARIANT_N} \
+         seed={VARIANT_SEED:#x}"
+    )
+}
+
+fn on_large_stack(f: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(f)
+        .expect("failed to spawn variant battery thread")
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
+}
+
+pub fn assert_count_min_bound(variants: fn() -> VariantList) {
+    on_large_stack(move || {
+        let (stream, truth) = variant_stream();
+        for (label, mut sketch) in variants() {
+            for k in &stream {
+                sketch.insert(*k);
+            }
+            let (rows, cols) = sketch.dims();
+            let ctx = variant_context(label, rows, cols);
+            CountMinSpec::new(rows, cols).assert_contract(
+                label,
+                &truth,
+                |k| sketch.query(k as u64),
+                &ctx,
+            );
+        }
+    });
+}
+
+pub fn assert_l2_bound(variants: fn() -> VariantList) {
+    on_large_stack(move || {
+        let (stream, truth) = variant_stream();
+        for (label, mut sketch) in variants() {
+            for k in &stream {
+                sketch.insert(*k);
+            }
+            let (rows, cols) = sketch.dims();
+            let ctx = variant_context(label, rows, cols);
+            CountSketchSpec::new(rows, cols).assert_contract(
+                label,
+                &truth,
+                |k| sketch.query(k as u64),
+                &ctx,
+            );
+        }
+    });
 }

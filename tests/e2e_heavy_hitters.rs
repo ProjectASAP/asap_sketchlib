@@ -27,14 +27,11 @@
 
 mod common;
 
+use common::conformance::{assert_count_min_bound, assert_l2_bound};
 use common::streams::{HEAVY_HITTER_DOMAIN, freq_truth, heavy_hitter_stream, zipf_u64};
-use common::variants::{VariantList, assert_count_min_bound, assert_l2_bound};
+use common::variants::{countminsketch_topk_variants, countsketch_topk_variants};
 
-use asap_sketchlib::{
-    CMSHeap, CSHeap, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, FastPath,
-    FixedMatrix, HeapItem, QuickMatrixI64, QuickMatrixI128, RegularPath,
-    SPACE_SAVING_DEFAULT_CAPACITY, SpaceSaving, Vector2D,
-};
+use asap_sketchlib::{DataInput, HeapItem, SPACE_SAVING_DEFAULT_CAPACITY, SpaceSaving};
 use std::collections::{HashMap, HashSet};
 
 fn filled(capacity: usize, stream: &[i64]) -> SpaceSaving {
@@ -1544,142 +1541,12 @@ mod partial_key_and_heavy_maintenance {
     }
 }
 
-fn countminsketch_topk_variants() -> VariantList {
-    vec![
-        (
-            "CMSHeap<Vector2D<i32>, RegularPath>",
-            Box::new(CMSHeap::<Vector2D<i32>, RegularPath>::default()),
-        ),
-        (
-            "CMSHeap<Vector2D<i32>, FastPath>",
-            Box::new(CMSHeap::<Vector2D<i32>, FastPath>::default()),
-        ),
-        (
-            "CMSHeap<Vector2D<i64>, RegularPath>",
-            Box::new(CMSHeap::<Vector2D<i64>, RegularPath>::default()),
-        ),
-        (
-            "CMSHeap<Vector2D<i64>, FastPath>",
-            Box::new(CMSHeap::<Vector2D<i64>, FastPath>::default()),
-        ),
-        (
-            "CMSHeap<FixedMatrix, RegularPath>",
-            Box::new(CMSHeap::<FixedMatrix, RegularPath>::default()),
-        ),
-        (
-            "CMSHeap<FixedMatrix, FastPath>",
-            Box::new(CMSHeap::<FixedMatrix, FastPath>::default()),
-        ),
-        (
-            "CMSHeap<QuickMatrixI64, RegularPath>",
-            Box::new(CMSHeap::<QuickMatrixI64, RegularPath>::default()),
-        ),
-        (
-            "CMSHeap<QuickMatrixI64, FastPath>",
-            Box::new(CMSHeap::<QuickMatrixI64, FastPath>::default()),
-        ),
-        (
-            "CMSHeap<DefaultMatrixI32, RegularPath>",
-            Box::new(CMSHeap::<DefaultMatrixI32, RegularPath>::default()),
-        ),
-        (
-            "CMSHeap<DefaultMatrixI32, FastPath>",
-            Box::new(CMSHeap::<DefaultMatrixI32, FastPath>::default()),
-        ),
-        (
-            "CMSHeap<DefaultMatrixI64, RegularPath>",
-            Box::new(CMSHeap::<DefaultMatrixI64, RegularPath>::default()),
-        ),
-        (
-            "CMSHeap<DefaultMatrixI64, FastPath>",
-            Box::new(CMSHeap::<DefaultMatrixI64, FastPath>::default()),
-        ),
-    ]
-}
-
-fn countsketch_topk_variants() -> VariantList {
-    vec![
-        (
-            "CSHeap<Vector2D<i32>, RegularPath>",
-            Box::new(CSHeap::<Vector2D<i32>, RegularPath>::default()),
-        ),
-        (
-            "CSHeap<Vector2D<i32>, FastPath>",
-            Box::new(CSHeap::<Vector2D<i32>, FastPath>::default()),
-        ),
-        (
-            "CSHeap<Vector2D<i64>, RegularPath>",
-            Box::new(CSHeap::<Vector2D<i64>, RegularPath>::default()),
-        ),
-        (
-            "CSHeap<Vector2D<i64>, FastPath>",
-            Box::new(CSHeap::<Vector2D<i64>, FastPath>::default()),
-        ),
-        (
-            "CSHeap<Vector2D<i128>, RegularPath>",
-            Box::new(CSHeap::<Vector2D<i128>, RegularPath>::new(3, 4096, 32)),
-        ),
-        (
-            "CSHeap<Vector2D<i128>, FastPath>",
-            Box::new(CSHeap::<Vector2D<i128>, FastPath>::new(3, 4096, 32)),
-        ),
-        (
-            "CSHeap<FixedMatrix, RegularPath>",
-            Box::new(CSHeap::<FixedMatrix, RegularPath>::default()),
-        ),
-        (
-            "CSHeap<FixedMatrix, FastPath>",
-            Box::new(CSHeap::<FixedMatrix, FastPath>::default()),
-        ),
-        (
-            "CSHeap<QuickMatrixI64, RegularPath>",
-            Box::new(CSHeap::<QuickMatrixI64, RegularPath>::default()),
-        ),
-        (
-            "CSHeap<QuickMatrixI64, FastPath>",
-            Box::new(CSHeap::<QuickMatrixI64, FastPath>::default()),
-        ),
-        (
-            "CSHeap<QuickMatrixI128, RegularPath>",
-            Box::new(CSHeap::<QuickMatrixI128, RegularPath>::default()),
-        ),
-        (
-            "CSHeap<QuickMatrixI128, FastPath>",
-            Box::new(CSHeap::<QuickMatrixI128, FastPath>::default()),
-        ),
-        (
-            "CSHeap<DefaultMatrixI32, RegularPath>",
-            Box::new(CSHeap::<DefaultMatrixI32, RegularPath>::default()),
-        ),
-        (
-            "CSHeap<DefaultMatrixI32, FastPath>",
-            Box::new(CSHeap::<DefaultMatrixI32, FastPath>::default()),
-        ),
-        (
-            "CSHeap<DefaultMatrixI64, RegularPath>",
-            Box::new(CSHeap::<DefaultMatrixI64, RegularPath>::default()),
-        ),
-        (
-            "CSHeap<DefaultMatrixI64, FastPath>",
-            Box::new(CSHeap::<DefaultMatrixI64, FastPath>::default()),
-        ),
-        (
-            "CSHeap<DefaultMatrixI128, RegularPath>",
-            Box::new(CSHeap::<DefaultMatrixI128, RegularPath>::default()),
-        ),
-        (
-            "CSHeap<DefaultMatrixI128, FastPath>",
-            Box::new(CSHeap::<DefaultMatrixI128, FastPath>::default()),
-        ),
-    ]
-}
-
 #[test]
 fn countminsketch_topk_variants_meet_the_count_min_bound() {
-    assert_count_min_bound(countminsketch_topk_variants());
+    assert_count_min_bound(countminsketch_topk_variants);
 }
 
 #[test]
 fn countsketch_topk_variants_meet_the_l2_bound() {
-    assert_l2_bound(countsketch_topk_variants());
+    assert_l2_bound(countsketch_topk_variants);
 }
