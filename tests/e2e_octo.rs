@@ -32,13 +32,15 @@ mod common;
 
 use asap_sketchlib::common::BOTTOM_LAYER_FINDER;
 use asap_sketchlib::{
-    CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin, DD_PROMASK, DDSketch,
+    CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin, DDSketch,
     DataInput, DdWorkerSketch, ErtlMLE, FastPath, HLL_PROMASK, HllDelta, HyperLogLog,
     HyperLogLogP12, HyperLogLogP16, L2HH, L2hhWorkerSketch, LayeredCountDelta, OctoAggregator,
     OctoPlan, OctoThreshold, OctoWorker, RegularPath, UnivMon, UnivMonDeltaFidelity,
     UnivMonOctoAggregator, UnivMonOctoPlan, UnivMonOctoWorker, Vector2D, bottom_layer_for_hash,
     hash64_seeded, hash128_seeded, input_to_owned, univmon_layer_threshold,
 };
+#[cfg(feature = "octo-runtime")]
+use asap_sketchlib::DD_PROMASK;
 use common::{FreqTruth, zipf_u64};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -63,6 +65,7 @@ fn keys(n: usize, domain: usize, seed: u64) -> Vec<u64> {
     zipf_u64(n, domain, 1.1, seed)
 }
 
+#[cfg(feature = "octo-runtime")]
 fn inputs_from(keys: &[u64]) -> Vec<DataInput<'static>> {
     keys.iter().copied().map(DataInput::U64).collect()
 }
@@ -1389,6 +1392,7 @@ impl OctoCm {
     /// a stream is finished or handed over for querying. The bound and
     /// conservation tests deliberately do not call this: the residue is what
     /// they are measuring.
+    #[cfg(feature = "octo-runtime")]
     fn flush(&mut self) {
         let (rows, cols) = (self.parent.rows(), self.parent.cols());
         for child in self.children.iter_mut() {
@@ -1484,6 +1488,7 @@ impl OctoCs {
     }
 
     /// See `OctoCm::flush`.
+    #[cfg(feature = "octo-runtime")]
     fn flush(&mut self) {
         let (rows, cols) = (self.parent.rows(), self.parent.cols());
         for child in self.children.iter_mut() {
