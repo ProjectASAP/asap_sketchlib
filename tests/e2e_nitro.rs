@@ -888,3 +888,186 @@ fn a_context_snapshot_restores_the_rest_of_the_stream_exactly() {
         );
     }
 }
+
+const INTEGRATION_ROWS: usize = 4;
+const INTEGRATION_COLS: usize = 2_048;
+const INTEGRATION_N: usize = 40_000;
+const INTEGRATION_DOMAIN: usize = 2_048;
+const INTEGRATION_SEED: u64 = 0x4E17_0001;
+
+fn integration_stream() -> (Vec<u64>, FreqTruth) {
+    let stream = zipf_u64(INTEGRATION_N, INTEGRATION_DOMAIN, 1.1, INTEGRATION_SEED);
+    let mut truth = FreqTruth::default();
+    for k in &stream {
+        truth.observe(*k as i64);
+    }
+    (stream, truth)
+}
+
+fn counters(storage: &Vector2D<i32>) -> Vec<i32> {
+    let mut out = Vec::with_capacity(storage.rows() * storage.cols());
+    for row in 0..storage.rows() {
+        for col in 0..storage.cols() {
+            out.push(storage.query_one_counter(row, col));
+        }
+    }
+    out
+}
+
+#[test]
+fn count_min_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() {
+    let (stream, truth) = integration_stream();
+    let mut plain =
+        CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+    let mut sampled =
+        CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+    sampled.enable_nitro(1.0);
+    for k in &stream {
+        plain.insert(&DataInput::U64(*k));
+        sampled.fast_insert_nitro(&DataInput::U64(*k));
+    }
+    assert_eq!(
+        counters(sampled.as_storage()),
+        counters(plain.as_storage()),
+        "rate=1 Nitro insertion must write the same counters as insert"
+    );
+    for (key, count) in truth.pairs() {
+        let probe = DataInput::U64(key as u64);
+        assert_eq!(
+            sampled.estimate(&probe),
+            plain.estimate(&probe),
+            "key {key}: rate=1 Nitro estimate diverged"
+        );
+        assert!(
+            sampled.nitro_estimate(&probe) >= count as f64,
+            "key {key}: the row median must not fall below the true count {count}"
+        );
+        assert!(
+            sampled.nitro_estimate(&probe) >= plain.estimate(&probe) as f64,
+            "key {key}: the row median must not fall below the row minimum"
+        );
+    }
+}
+
+#[test]
+fn count_min_after_disable_nitro_leaves_the_sampled_insert_path_inert() {
+    let (stream, _) = integration_stream();
+    let mut sketch =
+        CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+    sketch.enable_nitro(1.0);
+    for k in &stream {
+        sketch.fast_insert_nitro(&DataInput::U64(*k));
+    }
+    let before = counters(sketch.as_storage());
+
+    sketch.disable_nitro();
+    for k in &stream {
+        sketch.fast_insert_nitro(&DataInput::U64(*k));
+    }
+    assert_eq!(
+        counters(sketch.as_storage()),
+        before,
+        "with sampling disabled the Nitro insert path must not move a counter"
+    );
+
+    for k in &stream {
+        sketch.insert(&DataInput::U64(*k));
+    }
+    assert_ne!(
+        counters(sketch.as_storage()),
+        before,
+        "disabling sampling must not disable the ordinary insert path"
+    );
+}
+
+#[test]
+fn count_min_seeded_nitro_sampling_is_reproducible_and_admits_a_strict_subset() {
+    const RATE: f64 = 0.1;
+    let (stream, _) = integration_stream();
+
+    let build = |seed: u64| {
+        let mut sketch = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            INTEGRATION_ROWS,
+            INTEGRATION_COLS,
+        );
+        sketch.enable_nitro_with_seed(RATE, seed);
+        for k in &stream {
+            sketch.fast_insert_nitro(&DataInput::U64(*k));
+        }
+        sketch
+    };
+
+    let first = build(0x5A11_0001);
+    let second = build(0x5A11_0001);
+    assert_eq!(
+        counters(first.as_storage()),
+        counters(second.as_storage()),
+        "two sketches at the same rate and seed must admit the same subset"
+    );
+
+    let mut full =
+        CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+    for k in &stream {
+        full.insert(&DataInput::U64(*k));
+    }
+    let sampled_slots = counters(first.as_storage())
+        .iter()
+        .filter(|c| **c > 0)
+        .count();
+    let full_slots = counters(full.as_storage())
+        .iter()
+        .filter(|c| **c > 0)
+        .count();
+    assert!(
+        sampled_slots < full_slots,
+        "sampling at rate {RATE} touched {sampled_slots} counters, not fewer than the \
+         {full_slots} an unsampled pass touches"
+    );
+}
+
+#[test]
+fn count_sketch_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() {
+    let (stream, truth) = integration_stream();
+    let mut plain =
+        Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+    let mut sampled =
+        Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+    sampled.enable_nitro(1.0);
+    for k in &stream {
+        plain.insert(&DataInput::U64(*k));
+        sampled.fast_insert_nitro(&DataInput::U64(*k));
+    }
+    assert_eq!(
+        counters(sampled.as_storage()),
+        counters(plain.as_storage()),
+        "rate=1 Nitro insertion must write the same signed counters as insert"
+    );
+    for (key, _) in truth.pairs() {
+        let probe = DataInput::U64(key as u64);
+        assert_eq!(
+            sampled.estimate(&probe),
+            plain.estimate(&probe),
+            "key {key}: rate=1 Nitro estimate diverged"
+        );
+    }
+}
+
+#[test]
+fn count_sketch_seeded_nitro_sampling_is_reproducible() {
+    const RATE: f64 = 0.25;
+    let (stream, _) = integration_stream();
+    let build = |seed: u64| {
+        let mut sketch =
+            Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+        sketch.enable_nitro_with_seed(RATE, seed);
+        for k in &stream {
+            sketch.fast_insert_nitro(&DataInput::U64(*k));
+        }
+        sketch
+    };
+    assert_eq!(
+        counters(build(0x5A11_0002).as_storage()),
+        counters(build(0x5A11_0002).as_storage()),
+        "two Count sketches at the same rate and seed must admit the same subset"
+    );
+}
