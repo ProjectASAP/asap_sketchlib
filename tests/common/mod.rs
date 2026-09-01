@@ -8,6 +8,7 @@
 #![allow(dead_code)]
 
 pub mod conformance;
+pub mod regimes;
 pub mod specs;
 pub mod streams;
 pub mod variants;

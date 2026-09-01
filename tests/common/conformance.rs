@@ -11,7 +11,7 @@
 //! See `tests/README.md` for the onboarding recipe.
 
 use super::specs::{CountMinSpec, CountSketchSpec};
-use super::streams::{VARIANT_DOMAIN, VARIANT_N, VARIANT_SEED, variant_stream};
+use super::regimes::frequency_regimes;
 use super::variants::VariantList;
 use super::{FreqTruth, NumericTruth};
 use std::collections::HashMap;
@@ -564,11 +564,8 @@ where
     report
 }
 
-fn variant_context(label: &str, rows: usize, cols: usize) -> String {
-    format!(
-        "{label} rows={rows} cols={cols} zipf(1.1) domain={VARIANT_DOMAIN} n={VARIANT_N} \
-         seed={VARIANT_SEED:#x}"
-    )
+fn variant_context(label: &str, rows: usize, cols: usize, regime: &str) -> String {
+    format!("{label} rows={rows} cols={cols} regime={regime}")
 }
 
 fn on_large_stack(f: impl FnOnce() + Send + 'static) {
@@ -582,38 +579,42 @@ fn on_large_stack(f: impl FnOnce() + Send + 'static) {
 
 pub fn assert_cms_bound(variants: fn() -> VariantList) {
     on_large_stack(move || {
-        let (stream, truth) = variant_stream();
-        for (label, mut sketch) in variants() {
-            for k in &stream {
-                sketch.insert(*k);
+        for regime in frequency_regimes() {
+            let (stream, truth) = regime.build();
+            for (label, mut sketch) in variants() {
+                for k in &stream {
+                    sketch.insert(*k);
+                }
+                let (rows, cols) = sketch.dims();
+                let ctx = variant_context(label, rows, cols, &regime.label);
+                CountMinSpec::new(rows, cols).assert_contract(
+                    label,
+                    &truth,
+                    |k| sketch.query(k as u64),
+                    &ctx,
+                );
             }
-            let (rows, cols) = sketch.dims();
-            let ctx = variant_context(label, rows, cols);
-            CountMinSpec::new(rows, cols).assert_contract(
-                label,
-                &truth,
-                |k| sketch.query(k as u64),
-                &ctx,
-            );
         }
     });
 }
 
 pub fn assert_cs_bound(variants: fn() -> VariantList) {
     on_large_stack(move || {
-        let (stream, truth) = variant_stream();
-        for (label, mut sketch) in variants() {
-            for k in &stream {
-                sketch.insert(*k);
+        for regime in frequency_regimes() {
+            let (stream, truth) = regime.build();
+            for (label, mut sketch) in variants() {
+                for k in &stream {
+                    sketch.insert(*k);
+                }
+                let (rows, cols) = sketch.dims();
+                let ctx = variant_context(label, rows, cols, &regime.label);
+                CountSketchSpec::new(rows, cols).assert_contract(
+                    label,
+                    &truth,
+                    |k| sketch.query(k as u64),
+                    &ctx,
+                );
             }
-            let (rows, cols) = sketch.dims();
-            let ctx = variant_context(label, rows, cols);
-            CountSketchSpec::new(rows, cols).assert_contract(
-                label,
-                &truth,
-                |k| sketch.query(k as u64),
-                &ctx,
-            );
         }
     });
 }

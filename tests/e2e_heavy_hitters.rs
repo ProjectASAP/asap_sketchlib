@@ -1542,11 +1542,11 @@ mod partial_key_and_heavy_maintenance {
 }
 
 #[test]
-fn countminsketch_topk_variants_meet_the_count_min_bound() {
+fn every_countminsketch_topk_instantiation_meets_the_count_min_bound_on_every_regime() {
     assert_cms_bound(countminsketch_topk_variants);
 }
 
 #[test]
-fn countsketch_topk_variants_meet_the_l2_bound() {
+fn every_countsketch_topk_instantiation_meets_the_l2_bound_on_every_regime() {
     assert_cs_bound(countsketch_topk_variants);
 }

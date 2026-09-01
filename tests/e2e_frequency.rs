@@ -794,11 +794,11 @@ fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
 }
 
 #[test]
-fn cms_bound_check() {
+fn every_countminsketch_instantiation_meets_the_count_min_bound_on_every_regime() {
     assert_cms_bound(countminsketch_variants);
 }
 
 #[test]
-fn cs_bound_check() {
+fn every_countsketch_instantiation_meets_the_l2_bound_on_every_regime() {
     assert_cs_bound(countsketch_variants);
 }
