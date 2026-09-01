@@ -19,8 +19,12 @@
 
 mod common;
 
-use common::specs::{CardinalityConfidenceSpec, Tally};
+use common::specs::CardinalityConfidenceSpec;
 use common::uniform_u64;
+use common::{
+    HllRegP10, HllRegP11, HllRegP12, HllRegP13, HllRegP14, HllRegP15, HllRegP16, HllRegP17,
+    HllRegP18,
+};
 
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};
@@ -29,18 +33,19 @@ use asap_sketchlib::{
     HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, SetAggregator,
 };
 
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP10, 10, 1_usize << 10);
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP13, 13, 1_usize << 13);
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP18, 18, 1_usize << 18);
-
 const CUSTOM_CHECKPOINTS_P10: [u64; 4] = [100, 1_000, 20_000, 200_000];
+const CUSTOM_CHECKPOINTS_P11: [u64; 4] = [200, 2_000, 40_000, 200_000];
+const CUSTOM_CHECKPOINTS_P12: [u64; 4] = [400, 4_000, 50_000, 300_000];
 const CUSTOM_CHECKPOINTS_P13: [u64; 4] = [1_000, 10_000, 100_000, 500_000];
+const CUSTOM_CHECKPOINTS_P14: [u64; 4] = [2_000, 16_000, 200_000, 800_000];
+const CUSTOM_CHECKPOINTS_P15: [u64; 4] = [4_000, 32_000, 300_000, 1_000_000];
+const CUSTOM_CHECKPOINTS_P16: [u64; 4] = [5_000, 60_000, 500_000, 1_200_000];
+const CUSTOM_CHECKPOINTS_P17: [u64; 4] = [10_000, 100_000, 800_000, 1_500_000];
 const CUSTOM_CHECKPOINTS_P18: [u64; 3] = [10_000, 100_000, 1_500_000];
 
 /// Gaussian quantile for every cardinality band below. `z = 4` is a two-sided
-/// failure probability of 6.3e-5 per check; with a few dozen checks per
-/// battery the binomial acceptance rule then tolerates zero failures, which is
-/// the intent — an estimator four standard errors out is broken, not unlucky.
+/// failure probability of 6.3e-5 per check, and every check is asserted
+/// directly: an estimator four standard errors out is broken, not unlucky.
 const Z: f64 = 4.0;
 
 /// Checkpoints spanning the linear-counting regime (far below the register
@@ -89,7 +94,6 @@ macro_rules! hll_battery {
         #[test]
         fn $name() {
             let spec = CardinalityConfidenceSpec::$model($precision, Z);
-            let mut tally = Tally::default();
             let checkpoints: &[u64] = &$checkpoints;
             let context = format!(
                 "{} p{} : m={} sigma_rel={:.5} z={Z} tolerance={:.5}; one trial = one \
@@ -114,7 +118,9 @@ macro_rules! hll_battery {
                 for k in 0..target {
                     sketch.insert(&DataInput::U64(base + k));
                 }
-                spec.tally_into(&mut tally, sketch.estimate() as f64, target as usize);
+                if let Err(detail) = spec.check(sketch.estimate() as f64, target as usize) {
+                    panic!("{detail}. {context}");
+                }
                 largest = Some(sketch);
             }
 
@@ -169,12 +175,6 @@ macro_rules! hll_battery {
                     );
                 }
             }
-
-            tally.assert_independent_binomial(
-                concat!(stringify!($name), " / cardinality confidence band"),
-                spec.per_check_failure(),
-                &context,
-            );
         }
     };
 }
@@ -258,8 +258,6 @@ hll_battery!(
 #[test]
 fn portable_hll_variants_and_precisions_satisfy_the_register_error_model() {
     const N: usize = 200_000;
-    let mut tally = Tally::default();
-    let mut context = Vec::new();
 
     for (v, variant) in [HllVariant::Regular, HllVariant::Datafusion, HllVariant::Hip]
         .into_iter()
@@ -279,7 +277,9 @@ fn portable_hll_variants_and_precisions_satisfy_the_register_error_model() {
             for k in &stream {
                 hll.update(k.to_be_bytes().as_slice());
             }
-            spec.tally_into(&mut tally, hll.estimate(), truth.len());
+            if let Err(detail) = spec.check(hll.estimate(), truth.len()) {
+                panic!("{variant:?}/p{precision} stream_seed={seed}: {detail}");
+            }
 
             // Merging a second sketch built over the SAME identities is a
             // register-wise max with itself: the estimate must not move at all.
@@ -298,8 +298,7 @@ fn portable_hll_variants_and_precisions_satisfy_the_register_error_model() {
             // Disjoint shards over the same stream merge by register-wise max,
             // so the result is the *same* sketch as the single pass and its
             // estimate is the *same number*. That is an equality, not a second
-            // confidence-band reading: scoring it into the tally, as this test
-            // used to, counted one experiment twice.
+            // confidence-band reading.
             let mut left = HllSketch::new(variant, precision);
             let mut right = HllSketch::new(variant, precision);
             for (i, k) in stream.iter().enumerate() {
@@ -316,24 +315,8 @@ fn portable_hll_variants_and_precisions_satisfy_the_register_error_model() {
                 "{variant:?} p{precision}: an even/odd shard merge must reproduce the \
                  single pass exactly (registers combine by maximum)"
             );
-
-            context.push(format!(
-                "{variant:?}/p{precision} sigma={:.5} tol={:.5} stream_seed={seed}",
-                spec.sigma_rel(),
-                spec.tolerance()
-            ));
         }
     }
-
-    tally.assert_independent_binomial(
-        "portable HllSketch / cardinality confidence band",
-        CardinalityConfidenceSpec::hll(12, Z).per_check_failure(),
-        &format!(
-            "n={N} unique byte keys; one trial = one (variant, precision) over its own \
-             stream seed; {}",
-            context.join("; ")
-        ),
-    );
 }
 
 /// A larger precision must actually buy accuracy. A fixed percentage band
@@ -487,7 +470,7 @@ fn set_aggregator_union_is_exact() {
 
 hll_battery!(
     hll_classic_custom_p10_satisfies_its_register_error_model,
-    HyperLogLogImpl<Classic, HllBucketListP10>,
+    HyperLogLogImpl<Classic, HllRegP10>,
     10,
     hll,
     mergeable,
@@ -495,7 +478,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p10_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllBucketListP10>,
+    HyperLogLogImpl<ErtlMLE, HllRegP10>,
     10,
     hll,
     mergeable,
@@ -503,15 +486,63 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p10_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllBucketListP10>,
+    HyperLogLogHIPImpl<HllRegP10>,
     10,
     hll_hip,
     not_mergeable,
     CUSTOM_CHECKPOINTS_P10
 );
 hll_battery!(
+    hll_classic_custom_p11_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP11>,
+    11,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P11
+);
+hll_battery!(
+    hll_ertl_mle_custom_p11_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP11>,
+    11,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P11
+);
+hll_battery!(
+    hll_hip_custom_p11_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP11>,
+    11,
+    hll_hip,
+    not_mergeable,
+    CUSTOM_CHECKPOINTS_P11
+);
+hll_battery!(
+    hll_classic_custom_p12_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP12>,
+    12,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P12
+);
+hll_battery!(
+    hll_ertl_mle_custom_p12_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP12>,
+    12,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P12
+);
+hll_battery!(
+    hll_hip_custom_p12_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP12>,
+    12,
+    hll_hip,
+    not_mergeable,
+    CUSTOM_CHECKPOINTS_P12
+);
+hll_battery!(
     hll_classic_custom_p13_satisfies_its_register_error_model,
-    HyperLogLogImpl<Classic, HllBucketListP13>,
+    HyperLogLogImpl<Classic, HllRegP13>,
     13,
     hll,
     mergeable,
@@ -519,7 +550,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p13_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllBucketListP13>,
+    HyperLogLogImpl<ErtlMLE, HllRegP13>,
     13,
     hll,
     mergeable,
@@ -527,15 +558,111 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p13_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllBucketListP13>,
+    HyperLogLogHIPImpl<HllRegP13>,
     13,
     hll_hip,
     not_mergeable,
     CUSTOM_CHECKPOINTS_P13
 );
 hll_battery!(
+    hll_classic_custom_p14_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP14>,
+    14,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P14
+);
+hll_battery!(
+    hll_ertl_mle_custom_p14_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP14>,
+    14,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P14
+);
+hll_battery!(
+    hll_hip_custom_p14_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP14>,
+    14,
+    hll_hip,
+    not_mergeable,
+    CUSTOM_CHECKPOINTS_P14
+);
+hll_battery!(
+    hll_classic_custom_p15_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP15>,
+    15,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P15
+);
+hll_battery!(
+    hll_ertl_mle_custom_p15_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP15>,
+    15,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P15
+);
+hll_battery!(
+    hll_hip_custom_p15_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP15>,
+    15,
+    hll_hip,
+    not_mergeable,
+    CUSTOM_CHECKPOINTS_P15
+);
+hll_battery!(
+    hll_classic_custom_p16_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP16>,
+    16,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P16
+);
+hll_battery!(
+    hll_ertl_mle_custom_p16_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP16>,
+    16,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P16
+);
+hll_battery!(
+    hll_hip_custom_p16_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP16>,
+    16,
+    hll_hip,
+    not_mergeable,
+    CUSTOM_CHECKPOINTS_P16
+);
+hll_battery!(
+    hll_classic_custom_p17_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP17>,
+    17,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P17
+);
+hll_battery!(
+    hll_ertl_mle_custom_p17_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP17>,
+    17,
+    hll,
+    mergeable,
+    CUSTOM_CHECKPOINTS_P17
+);
+hll_battery!(
+    hll_hip_custom_p17_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP17>,
+    17,
+    hll_hip,
+    not_mergeable,
+    CUSTOM_CHECKPOINTS_P17
+);
+hll_battery!(
     hll_classic_custom_p18_satisfies_its_register_error_model,
-    HyperLogLogImpl<Classic, HllBucketListP18>,
+    HyperLogLogImpl<Classic, HllRegP18>,
     18,
     hll,
     mergeable,
@@ -543,7 +670,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p18_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllBucketListP18>,
+    HyperLogLogImpl<ErtlMLE, HllRegP18>,
     18,
     hll,
     mergeable,
@@ -551,7 +678,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p18_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllBucketListP18>,
+    HyperLogLogHIPImpl<HllRegP18>,
     18,
     hll_hip,
     not_mergeable,
@@ -563,9 +690,9 @@ fn custom_precision_accuracy_improves_with_precision_as_the_error_model_predicts
     const N: u64 = 200_000;
     const BASE: u64 = IDENTITY_NAMESPACE_STRIDE * 41;
 
-    let mut p10 = HyperLogLogImpl::<Classic, HllBucketListP10>::new();
-    let mut p13 = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
-    let mut p18 = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
+    let mut p10 = HyperLogLogImpl::<Classic, HllRegP10>::new();
+    let mut p13 = HyperLogLogImpl::<Classic, HllRegP13>::new();
+    let mut p18 = HyperLogLogImpl::<Classic, HllRegP18>::new();
     for k in 0..N {
         let d = DataInput::U64(BASE + k);
         p10.insert(&d);
@@ -594,12 +721,12 @@ fn a_custom_precision_merge_reproduces_the_single_pass_registers_for_every_estim
     const N: u64 = 120_000;
     const BASE: u64 = IDENTITY_NAMESPACE_STRIDE * 42;
 
-    let mut classic_single = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
-    let mut classic_even = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
-    let mut classic_odd = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
-    let mut ertl_single = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::new();
-    let mut ertl_even = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::new();
-    let mut ertl_odd = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::new();
+    let mut classic_single = HyperLogLogImpl::<Classic, HllRegP13>::new();
+    let mut classic_even = HyperLogLogImpl::<Classic, HllRegP13>::new();
+    let mut classic_odd = HyperLogLogImpl::<Classic, HllRegP13>::new();
+    let mut ertl_single = HyperLogLogImpl::<ErtlMLE, HllRegP13>::new();
+    let mut ertl_even = HyperLogLogImpl::<ErtlMLE, HllRegP13>::new();
+    let mut ertl_odd = HyperLogLogImpl::<ErtlMLE, HllRegP13>::new();
     for k in 0..N {
         let d = DataInput::U64(BASE + k);
         classic_single.insert(&d);
