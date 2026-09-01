@@ -27,8 +27,7 @@ use std::collections::HashMap;
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
 use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
 use asap_sketchlib::{
-    CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS, FoldCS, RegularPath,
-    Vector2D,
+    Count, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS, FoldCS, RegularPath, Vector2D,
 };
 
 // ----------------------------------------------------------------- CountMin
@@ -126,6 +125,42 @@ fn countmin_vecbased_error_bound() {
     }
 }
 
+
+#[test]
+fn count_vecbased_error_bound() {
+    const ROWS: [usize; 3] = [3, 5, 7];
+    const COLS: [usize; 5] = [2048, 4096, 8192, 16384, 32768];
+    const STREAM_SEED: u64 = 1002;
+
+    for r in ROWS {
+        for c in COLS {
+            let mut reg = Count::<Vector2D<i64>, RegularPath>::with_dimensions(r, c);
+            let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(r, c);
+            let mut truth = FreqTruth::default();
+            let stream = zipf_u64(20_000, 512, 1.2, STREAM_SEED);
+            for k in &stream {
+                truth.observe(*k as i64);
+                reg.insert(&DataInput::I64(*k as i64));
+                fast.insert(&DataInput::I64(*k as i64));
+            }
+            let spec = CountSketchSpec::new(r, c);
+            let context = format!("zipf(1.2) domain=512 n=20000 stream_seed={STREAM_SEED}");
+            spec.assert_contract(
+                "Count<Vector2D<i64>, RegularPath>",
+                &truth,
+                |k| reg.estimate(&DataInput::I64(k)) as f64,
+                &context,
+            );
+            spec.assert_contract(
+                "Count<Vector2D<i32>, FastPath>",
+                &truth,
+                |k| fast.estimate(&DataInput::I64(k)) as f64,
+                &context,
+            );
+        }
+    }
+}
+
 #[test]
 fn countmin_matbased_error_bound() {
     const STREAM_SEED: u64 = 1002;
@@ -151,6 +186,67 @@ fn countmin_matbased_error_bound() {
                     fast.insert(&DataInput::I64(*k as i64));
                 }
                 let spec = CountMinSpec::new($rows, $cols);
+                spec.assert_contract(
+                    concat!("CountMin<", stringify!($mat), ", RegularPath>"),
+                    &truth,
+                    |k| reg.estimate(&DataInput::I64(k)) as f64,
+                    &context,
+                );
+                spec.assert_contract(
+                    concat!("CountMin<", stringify!($mat), ", FastPath>"),
+                    &truth,
+                    |k| fast.estimate(&DataInput::I64(k)) as f64,
+                    &context,
+                );
+            })*
+        };
+    }
+
+    assert_fixed_matrix! {
+        FixMat1 => (3, 2048),
+        FixMat2 => (5, 2048),
+        FixMat3 => (7, 2048),
+        FixMat4 => (3, 4096),
+        FixMat5 => (5, 4096),
+        FixMat6 => (7, 4096),
+        FixMat7 => (3, 8192),
+        FixMat8 => (5, 8192),
+        FixMat9 => (7, 8192),
+        FixMat10 => (3, 16384),
+        FixMat11 => (5, 16384),
+        FixMat12 => (7, 16384),
+        FixMat13 => (3, 32768),
+        FixMat14 => (5, 32768),
+        FixMat15 => (7, 32768),
+    }
+}
+
+
+#[test]
+fn count_matbased_error_bound() {
+    const STREAM_SEED: u64 = 1002;
+
+    let stream = zipf_u64(20_000, 512, 1.2, STREAM_SEED);
+    let mut truth = FreqTruth::default();
+    for k in &stream {
+        truth.observe(*k as i64);
+    }
+    let context = format!("zipf(1.2) domain=512 n=20000 stream_seed={STREAM_SEED}");
+
+    // Each `FixMatN` is a distinct type carrying its own compile-time
+    // dimensions, so the sweep has to be unrolled rather than looped. The
+    // spec's `(rows, cols)` must match the matrix's, or the assertions check
+    // the wrong theorem.
+    macro_rules! assert_fixed_matrix {
+        ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
+            $({
+                let mut reg = Count::<$mat, RegularPath>::from_storage($mat::default());
+                let mut fast = Count::<$mat, FastPath>::from_storage($mat::default());
+                for k in &stream {
+                    reg.insert(&DataInput::I64(*k as i64));
+                    fast.insert(&DataInput::I64(*k as i64));
+                }
+                let spec = CountSketchSpec::new($rows, $cols);
                 spec.assert_contract(
                     concat!("CountMin<", stringify!($mat), ", RegularPath>"),
                     &truth,
