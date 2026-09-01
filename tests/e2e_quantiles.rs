@@ -36,6 +36,8 @@
 //! its own convention; see `DdRankConvention`.
 
 mod common;
+#[path = "e2e_quantiles/kll_variants.rs"]
+mod kll_variants;
 
 use common::specs::{DdRankConvention, KllRankSpec, RelativeQuantileSpec, Tally, rank_error};
 use common::streams::{

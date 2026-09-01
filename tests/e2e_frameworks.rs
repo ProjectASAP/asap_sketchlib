@@ -1331,7 +1331,7 @@ fn hydra_univmon_head_subpopulation_metrics() {
         HydraCounter::UNIVERSAL(UnivMon::init_univmon(32, 5, 256, 8)),
     )
     .expect("two-column schema");
-    let mut truth: HashMap<Vec<Option<&str>>, FreqTruth> = HashMap::new();
+    let mut truth: HashMap<Vec<Option<&str>>, FreqTruth<i64>> = HashMap::new();
 
     for (i, (region, service)) in keys.iter().enumerate() {
         let weight = 1 + (i % 7) as i64;
@@ -1400,7 +1400,7 @@ fn hydra_univmon_head_l1_is_exact_per_subpopulation() {
         HydraCounter::UNIVERSAL(UnivMon::init_univmon(32, 5, 256, 8)),
     )
     .expect("two-column schema");
-    let mut truth: HashMap<Vec<Option<&str>>, FreqTruth> = HashMap::new();
+    let mut truth: HashMap<Vec<Option<&str>>, FreqTruth<i64>> = HashMap::new();
 
     for (i, (region, service)) in keys.iter().enumerate() {
         let weight = 1 + (i % 7) as i64;

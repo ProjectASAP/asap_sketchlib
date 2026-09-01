@@ -1,13 +1,20 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-#[derive(Default)]
-pub struct FreqTruth {
-    counts: HashMap<i64, i64>,
+pub struct FreqTruth<K> {
+    counts: HashMap<K, i64>,
 }
 
-impl FreqTruth {
-    pub fn from_data(data: &[i64]) -> Self {
+impl<K> Default for FreqTruth<K> {
+    fn default() -> Self {
+        Self { counts: HashMap::new() }
+    }
+}
+
+impl<K> FreqTruth<K>
+where K: Eq + Hash + Clone + Ord {
+    pub fn from_data(data: &[K]) -> Self
+    where K: Copy {
         let mut truth = Self::default();
         for &key in data {
             truth.observe(key);
@@ -15,13 +22,22 @@ impl FreqTruth {
         truth
     }
 
-    pub fn observe(&mut self, key: i64) {
+    /// `from_data` for a key that is not `Copy`, such as `String`.
+    pub fn from_data_cloned(data: &[K]) -> Self {
+        let mut truth = Self::default();
+        for key in data {
+            truth.observe(key.clone());
+        }
+        truth
+    }
+
+    pub fn observe(&mut self, key: K) {
         *self.counts.entry(key).or_insert(0) += 1;
     }
-    pub fn observe_weighted(&mut self, key: i64, weight: i64) {
+    pub fn observe_weighted(&mut self, key: K, weight: i64) {
         *self.counts.entry(key).or_insert(0) += weight;
     }
-    pub fn get(&self, key: i64) -> i64 {
+    pub fn get(&self, key: K) -> i64 {
         self.counts.get(&key).copied().unwrap_or(0)
     }
     pub fn total(&self) -> i64 {
@@ -53,26 +69,26 @@ impl FreqTruth {
             .sum::<f64>()
     }
 
-    pub fn top_k(&self, k: usize) -> Vec<(i64, i64)> {
+    pub fn top_k(&self, k: usize) -> Vec<(K, i64)> {
         let mut values: Vec<_> = self
             .counts
             .iter()
-            .map(|(key, count)| (*key, *count))
+            .map(|(key, count)| (key.clone(), *count))
             .collect();
         values.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         values.truncate(k);
         values
     }
 
-    pub fn pairs(&self) -> Vec<(i64, i64)> {
+    pub fn pairs(&self) -> Vec<(K, i64)> {
         self.counts
             .iter()
-            .map(|(key, count)| (*key, *count))
+            .map(|(key, count)| (key.clone(), *count))
             .collect()
     }
 }
 
-pub fn freq_truth(data: &[i64]) -> FreqTruth {
+pub fn freq_truth<K: Eq + Hash + Copy + Ord>(data: &[K]) -> FreqTruth<K> {
     FreqTruth::from_data(data)
 }
 

@@ -1,6 +1,35 @@
 use super::statistics::*;
 use crate::common::FreqTruth;
 
+/// What a frequency contract reads off an exact truth table: the aggregate
+/// moments, plus every key with its count as an `i64` the caller's query
+/// closure can re-encode.
+///
+/// Implemented both by a plain `FreqTruth<i64>` and by a grid `CaseTruth`,
+/// whose key type varies per case, so one contract covers both.
+pub trait ProbeTable {
+    fn total(&self) -> i64;
+    fn distinct(&self) -> usize;
+    fn f2(&self) -> f64;
+    fn pairs(&self) -> Vec<(i64, i64)>;
+}
+
+impl ProbeTable for FreqTruth<i64> {
+    fn total(&self) -> i64 {
+        FreqTruth::total(self)
+    }
+    fn distinct(&self) -> usize {
+        FreqTruth::distinct(self)
+    }
+    fn f2(&self) -> f64 {
+        FreqTruth::f2(self)
+    }
+    fn pairs(&self) -> Vec<(i64, i64)> {
+        FreqTruth::pairs(self)
+    }
+}
+
+
 // ---------------------------------------------------------------------------
 // Count-Min: one-sided additive error
 // ---------------------------------------------------------------------------
@@ -78,9 +107,10 @@ impl CountMinSpec {
     ///
     /// One-sidedness and the simultaneous additive bound are checked with
     /// ordinary fail-fast assertions.
-    pub fn assert_contract<F>(&self, label: &str, truth: &FreqTruth, estimate: F, context: &str)
+    pub fn assert_contract<F, T>(&self, label: &str, truth: &T, estimate: F, context: &str)
     where
         F: Fn(i64) -> f64,
+        T: ProbeTable + ?Sized,
     {
         let total = truth.total() as f64;
         let distinct = truth.distinct();
@@ -254,9 +284,10 @@ impl CountSketchSpec {
     /// The residual norm is recomputed per key from the exact frequency
     /// vector: `||f_{-i}||_2 = sqrt(F2 - f(i)^2)`. The simultaneous bound is
     /// asserted with an ordinary fail-fast assertion.
-    pub fn assert_contract<F>(&self, label: &str, truth: &FreqTruth, estimate: F, context: &str)
+    pub fn assert_contract<F, T>(&self, label: &str, truth: &T, estimate: F, context: &str)
     where
         F: Fn(i64) -> f64,
+        T: ProbeTable + ?Sized,
     {
         let f2 = truth.f2();
         let kappa = self.simultaneous_kappa(truth.distinct(), SIMULTANEOUS_LEVEL);

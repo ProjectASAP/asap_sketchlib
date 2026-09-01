@@ -147,7 +147,7 @@ fn every_eh_variant_selects_the_documented_merge_norm() {
 /// over the full retained span, together with the exact truth for that span.
 fn run_keyed_variant(
     proto: asap_sketchlib::EHSketchList,
-) -> (asap_sketchlib::EHSketchList, FreqTruth, String) {
+) -> (asap_sketchlib::EHSketchList, FreqTruth<i64>, String) {
     let keys = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
     let mut eh = ExponentialHistogram::new(EH_K, EH_WINDOW, proto);
     for (t, k) in keys.iter().enumerate() {

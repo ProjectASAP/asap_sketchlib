@@ -142,7 +142,7 @@ impl DataCase {
             Self::I64(l, _) | Self::U64(l, _) | Self::F64(l, _) | Self::Str(l, _) => l,
         }
     }
-    fn truth(&self) -> FreqTruth {
+    fn truth(&self) -> FreqTruth<i64> {
         match self {
             Self::I64(_, v) => FreqTruth::from_data(v),
             Self::U64(_, v) => {

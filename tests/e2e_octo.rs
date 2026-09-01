@@ -4313,7 +4313,7 @@ mod top_k_plans {
         zipf_u64(N, DOMAIN, 1.1, STREAM_SEED)
     }
 
-    fn truth_of(stream: &[u64]) -> FreqTruth {
+    fn truth_of(stream: &[u64]) -> FreqTruth<i64> {
         let mut t = FreqTruth::default();
         for k in stream {
             t.observe(*k as i64);
@@ -4790,7 +4790,7 @@ mod partition_accuracy {
         zipf_u64(N, DOMAIN, 1.1, STREAM_SEED)
     }
 
-    fn truth_of(stream: &[u64]) -> FreqTruth {
+    fn truth_of(stream: &[u64]) -> FreqTruth<i64> {
         let mut truth = FreqTruth::default();
         for k in stream {
             truth.observe(*k as i64);
