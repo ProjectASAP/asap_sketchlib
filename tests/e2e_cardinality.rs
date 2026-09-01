@@ -20,7 +20,7 @@
 mod common;
 
 use common::specs::CardinalityConfidenceSpec;
-use common::uniform_u64;
+use common::{uniform_u64, zipf_u64};
 use common::{
     HllRegP10, HllRegP11, HllRegP12, HllRegP13, HllRegP14, HllRegP15, HllRegP16, HllRegP17,
     HllRegP18,
@@ -825,3 +825,295 @@ fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
         "an empty delta must stay empty across the wire"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Duplicate-heavy Zipf streams
+// ---------------------------------------------------------------------------
+
+/// A Zipf-distributed stream of repeated identities, with its exact distinct
+/// count.
+///
+/// The batteries above feed each identity exactly once, so they can only show
+/// that a sketch counts *arrivals* correctly. They cannot distinguish a
+/// correct implementation from one that counts arrivals instead of distinct
+/// identities, because in a duplicate-free stream those two numbers are equal.
+/// A skewed stream separates them: here one identity arrives thousands of
+/// times while the tail arrives once.
+struct ZipfStream {
+    /// Every draw, in arrival order.
+    values: Vec<u64>,
+    /// The same identities in first-appearance order, each exactly once.
+    first_appearance: Vec<u64>,
+    distinct: usize,
+}
+
+fn build_zipf(domain: usize, draws: usize, exponent: f64, seed: u64, base: u64) -> ZipfStream {
+    let values: Vec<u64> = zipf_u64(draws, domain, exponent, seed)
+        .into_iter()
+        .map(|v| base + v)
+        .collect();
+    let mut seen = std::collections::HashSet::with_capacity(domain);
+    let mut first_appearance = Vec::new();
+    for &v in &values {
+        if seen.insert(v) {
+            first_appearance.push(v);
+        }
+    }
+    ZipfStream {
+        distinct: seen.len(),
+        values,
+        first_appearance,
+    }
+}
+
+/// Built once and shared: 27 batteries over a 5M-draw stream would otherwise
+/// spend most of their time regenerating identical input.
+static ZIPF_SMALL: std::sync::OnceLock<ZipfStream> = std::sync::OnceLock::new();
+static ZIPF_LARGE: std::sync::OnceLock<ZipfStream> = std::sync::OnceLock::new();
+
+/// 60k draws over 1,495 distinct identities (40x duplication, heaviest
+/// identity arriving 9,053 times). Below `2m` at every precision here, so the
+/// linear-counting branch is the one under test.
+fn zipf_small() -> &'static ZipfStream {
+    ZIPF_SMALL.get_or_init(|| build_zipf(1_500, 60_000, 1.05, 4001, IDENTITY_NAMESPACE_STRIDE * 51))
+}
+
+/// 5M draws over 1,491,155 distinct identities (3.4x duplication). Above `4m`
+/// at every precision here, so the raw-estimator branch is the one under test.
+fn zipf_large() -> &'static ZipfStream {
+    ZIPF_LARGE
+        .get_or_init(|| build_zipf(1_800_000, 5_000_000, 0.6, 4002, IDENTITY_NAMESPACE_STRIDE * 52))
+}
+
+/// Runs one HLL type over both Zipf streams.
+///
+/// Two claims per stream. The confidence band says the estimate tracks the
+/// *distinct* count and not the 5M arrivals. The first-appearance equality is
+/// stronger and is an equality rather than a band: a repeat writes a register
+/// value that is already there, so dropping every duplicate must drive the
+/// identical sequence of register changes. That holds for HIP too, whose
+/// running estimate advances only inside `if new_value > old_value`.
+macro_rules! hll_zipf_battery {
+    ($name:ident, $ty:ty, $precision:literal, $model:ident) => {
+        #[test]
+        fn $name() {
+            let spec = CardinalityConfidenceSpec::$model($precision, Z);
+            let m = 1usize << $precision;
+
+            for (label, stream) in [("small", zipf_small()), ("large", zipf_large())] {
+                let n = stream.distinct;
+                let draws = stream.values.len();
+                assert!(
+                    n < 2 * m || n > 4 * m,
+                    "{label} Zipf stream: {n} distinct identities falls in the 2m..4m \
+                     switchover band at p{} (m={m}), where the register error model this \
+                     battery asserts does not apply",
+                    $precision
+                );
+                let context = format!(
+                    "{} p{} : m={m} sigma_rel={:.5} z={Z} tolerance={:.5}; {label} Zipf \
+                     stream of {draws} draws over {n} distinct identities ({:.1}x duplication)",
+                    stringify!($ty),
+                    $precision,
+                    spec.sigma_rel(),
+                    spec.tolerance(),
+                    draws as f64 / n as f64
+                );
+
+                let mut sketch = <$ty>::new();
+                for &v in &stream.values {
+                    sketch.insert(&DataInput::U64(v));
+                }
+                if let Err(detail) = spec.check(sketch.estimate() as f64, n) {
+                    panic!("{detail}. {context}");
+                }
+
+                let mut once = <$ty>::new();
+                for &v in &stream.first_appearance {
+                    once.insert(&DataInput::U64(v));
+                }
+                assert_eq!(
+                    sketch.estimate(),
+                    once.estimate(),
+                    "dropping the {} duplicate arrivals changed the estimate, so the sketch \
+                     is responding to multiplicity rather than to distinct identities. \
+                     {context}",
+                    draws - n
+                );
+
+                let before = sketch.estimate();
+                for &v in &stream.values {
+                    sketch.insert(&DataInput::U64(v));
+                }
+                assert_eq!(
+                    sketch.estimate(),
+                    before,
+                    "replaying the whole Zipf stream moved the estimate. {context}"
+                );
+            }
+        }
+    };
+}
+
+hll_zipf_battery!(
+    hll_classic_zipf_p10_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP10>,
+    10,
+    hll
+);
+hll_zipf_battery!(
+    hll_ertl_mle_zipf_p10_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP10>,
+    10,
+    hll
+);
+hll_zipf_battery!(
+    hll_hip_zipf_p10_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP10>,
+    10,
+    hll_hip
+);
+hll_zipf_battery!(
+    hll_classic_zipf_p11_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP11>,
+    11,
+    hll
+);
+hll_zipf_battery!(
+    hll_ertl_mle_zipf_p11_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP11>,
+    11,
+    hll
+);
+hll_zipf_battery!(
+    hll_hip_zipf_p11_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP11>,
+    11,
+    hll_hip
+);
+hll_zipf_battery!(
+    hll_classic_zipf_p12_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP12>,
+    12,
+    hll
+);
+hll_zipf_battery!(
+    hll_ertl_mle_zipf_p12_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP12>,
+    12,
+    hll
+);
+hll_zipf_battery!(
+    hll_hip_zipf_p12_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP12>,
+    12,
+    hll_hip
+);
+hll_zipf_battery!(
+    hll_classic_zipf_p13_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP13>,
+    13,
+    hll
+);
+hll_zipf_battery!(
+    hll_ertl_mle_zipf_p13_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP13>,
+    13,
+    hll
+);
+hll_zipf_battery!(
+    hll_hip_zipf_p13_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP13>,
+    13,
+    hll_hip
+);
+hll_zipf_battery!(
+    hll_classic_zipf_p14_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP14>,
+    14,
+    hll
+);
+hll_zipf_battery!(
+    hll_ertl_mle_zipf_p14_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP14>,
+    14,
+    hll
+);
+hll_zipf_battery!(
+    hll_hip_zipf_p14_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP14>,
+    14,
+    hll_hip
+);
+hll_zipf_battery!(
+    hll_classic_zipf_p15_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP15>,
+    15,
+    hll
+);
+hll_zipf_battery!(
+    hll_ertl_mle_zipf_p15_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP15>,
+    15,
+    hll
+);
+hll_zipf_battery!(
+    hll_hip_zipf_p15_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP15>,
+    15,
+    hll_hip
+);
+hll_zipf_battery!(
+    hll_classic_zipf_p16_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP16>,
+    16,
+    hll
+);
+hll_zipf_battery!(
+    hll_ertl_mle_zipf_p16_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP16>,
+    16,
+    hll
+);
+hll_zipf_battery!(
+    hll_hip_zipf_p16_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP16>,
+    16,
+    hll_hip
+);
+hll_zipf_battery!(
+    hll_classic_zipf_p17_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP17>,
+    17,
+    hll
+);
+hll_zipf_battery!(
+    hll_ertl_mle_zipf_p17_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP17>,
+    17,
+    hll
+);
+hll_zipf_battery!(
+    hll_hip_zipf_p17_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP17>,
+    17,
+    hll_hip
+);
+hll_zipf_battery!(
+    hll_classic_zipf_p18_satisfies_its_register_error_model,
+    HyperLogLogImpl<Classic, HllRegP18>,
+    18,
+    hll
+);
+hll_zipf_battery!(
+    hll_ertl_mle_zipf_p18_satisfies_the_cramer_rao_error_model,
+    HyperLogLogImpl<ErtlMLE, HllRegP18>,
+    18,
+    hll
+);
+hll_zipf_battery!(
+    hll_hip_zipf_p18_satisfies_the_hip_error_model,
+    HyperLogLogHIPImpl<HllRegP18>,
+    18,
+    hll_hip
+);
