@@ -27,7 +27,7 @@
 
 mod common;
 
-use common::conformance::{assert_count_min_bound, assert_l2_bound};
+use common::conformance::{assert_cms_bound, assert_cs_bound};
 use common::streams::{HEAVY_HITTER_DOMAIN, freq_truth, heavy_hitter_stream, zipf_u64};
 use common::variants::{countminsketch_topk_variants, countsketch_topk_variants};
 
@@ -1543,10 +1543,10 @@ mod partial_key_and_heavy_maintenance {
 
 #[test]
 fn countminsketch_topk_variants_meet_the_count_min_bound() {
-    assert_count_min_bound(countminsketch_topk_variants);
+    assert_cms_bound(countminsketch_topk_variants);
 }
 
 #[test]
 fn countsketch_topk_variants_meet_the_l2_bound() {
-    assert_l2_bound(countsketch_topk_variants);
+    assert_cs_bound(countsketch_topk_variants);
 }

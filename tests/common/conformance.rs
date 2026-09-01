@@ -580,7 +580,7 @@ fn on_large_stack(f: impl FnOnce() + Send + 'static) {
         .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
 }
 
-pub fn assert_count_min_bound(variants: fn() -> VariantList) {
+pub fn assert_cms_bound(variants: fn() -> VariantList) {
     on_large_stack(move || {
         let (stream, truth) = variant_stream();
         for (label, mut sketch) in variants() {
@@ -599,7 +599,7 @@ pub fn assert_count_min_bound(variants: fn() -> VariantList) {
     });
 }
 
-pub fn assert_l2_bound(variants: fn() -> VariantList) {
+pub fn assert_cs_bound(variants: fn() -> VariantList) {
     on_large_stack(move || {
         let (stream, truth) = variant_stream();
         for (label, mut sketch) in variants() {

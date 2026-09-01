@@ -17,7 +17,7 @@
 mod common;
 
 use common::FreqTruth;
-use common::conformance::{assert_count_min_bound, assert_l2_bound};
+use common::conformance::{assert_cms_bound, assert_cs_bound};
 use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, SecondMomentSpec, Tally};
 use common::streams::{bound_streams, zipf_stream_with_truth, zipf_u64};
 use common::variants::{countminsketch_variants, countsketch_variants};
@@ -795,10 +795,10 @@ fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
 
 #[test]
 fn cms_bound_check() {
-    assert_count_min_bound(countminsketch_variants);
+    assert_cms_bound(countminsketch_variants);
 }
 
 #[test]
 fn cs_bound_check() {
-    assert_l2_bound(countsketch_variants);
+    assert_cs_bound(countsketch_variants);
 }
