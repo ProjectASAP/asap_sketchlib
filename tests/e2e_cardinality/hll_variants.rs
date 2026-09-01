@@ -175,13 +175,13 @@ impl Variant {
 }
 
 enum DataCase {
-    I64(&'static str, Vec<i64>),
-    U64(&'static str, Vec<u64>),
-    F64(&'static str, Vec<f64>),
-    Str(&'static str, Vec<String>),
+    I64(String, Vec<i64>),
+    U64(String, Vec<u64>),
+    F64(String, Vec<f64>),
+    Str(String, Vec<String>),
 }
 impl DataCase {
-    fn label(&self) -> &'static str {
+    fn label(&self) -> &str {
         match self {
             Self::I64(v, _) | Self::U64(v, _) | Self::F64(v, _) | Self::Str(v, _) => v,
         }
@@ -207,62 +207,78 @@ impl DataCase {
     }
 }
 
+/// Stream lengths. The three tiers differ by an order of magnitude each, so a
+/// precision that is comfortable at one tier is not automatically comfortable
+/// at the next.
+const COUNTS: [usize; 3] = [10_000, 100_000, 1_000_000];
+
+/// Key domains, crossed independently with `COUNTS`. Domain sets the true
+/// distinct cardinality (up to coupon-collector shortfall), `count / domain`
+/// sets the duplicate ratio, and the two together decide which estimator
+/// regime each variant is in: 1_024 keys leave a p18 sketch far down in
+/// linear counting, while 102_400 keys push a p8 sketch well past `2.5m`
+/// into the bias-corrected branch.
+const DOMAINS: [usize; 3] = [1_024, 10_240, 102_400];
+
+/// Zipf exponents plus the uniform baseline. A `None` exponent is the uniform
+/// generator; the skewed exponents matter because a heavier tail means the
+/// rare keys in the domain may never be drawn, so the realised cardinality is
+/// below `domain` and is measured rather than assumed.
+const DISTRIBUTIONS: [(&str, Option<f64>); 4] = [
+    ("zipf(0.7)", Some(0.7)),
+    ("zipf(1.1)", Some(1.1)),
+    ("zipf(1.5)", Some(1.5)),
+    ("uniform", None),
+];
+
+/// One distinct seed per (distribution, count, domain) cell, so no two cells
+/// share a draw sequence and a failure names exactly one cell.
+fn case_seed(dist_index: usize, count_index: usize, domain_index: usize) -> u64 {
+    0x10BE_C700_0001_0000
+        + (dist_index as u64) * 0x0001_0000
+        + (count_index as u64) * 0x0000_0100
+        + (domain_index as u64)
+}
+
 fn data_cases() -> Vec<DataCase> {
-    let distributions: Vec<(&'static str, Vec<u64>)> = vec![
-        (
-            "zipf(0.7)",
-            ZipfGenerator::generate(&ZipfConfig {
-                count: 10_000,
-                domain: 1_024,
-                exponent: 0.7,
-                seed: 0x10BE_C700_0001_0001,
-            }),
-        ),
-        (
-            "zipf(1.1)",
-            ZipfGenerator::generate(&ZipfConfig {
-                count: 10_000,
-                domain: 1_024,
-                exponent: 1.1,
-                seed: 0x10BE_C700_0001_0002,
-            }),
-        ),
-        (
-            "zipf(1.5)",
-            ZipfGenerator::generate(&ZipfConfig {
-                count: 10_000,
-                domain: 1_024,
-                exponent: 1.5,
-                seed: 0x10BE_C700_0001_0003,
-            }),
-        ),
-        (
-            "uniform",
-            UniformGenerator::generate(&UniformConfig {
-                count: 10_000,
-                domain: 1_024,
-                seed: 0x10BE_C700_0001_0004,
-            }),
-        ),
-    ];
     let mut cases = Vec::new();
-    for (label, values) in distributions {
-        cases.push(DataCase::I64(
-            label,
-            values.iter().map(|v| *v as i64).collect(),
-        ));
-        cases.push(DataCase::U64(label, values.clone()));
-        cases.push(DataCase::F64(
-            label,
-            values.iter().map(|v| *v as f64).collect(),
-        ));
-        cases.push(DataCase::Str(
-            label,
-            values.iter().map(|v| format!("k{v}")).collect(),
-        ));
+    for (d, (dist_label, exponent)) in DISTRIBUTIONS.iter().enumerate() {
+        for (c, &count) in COUNTS.iter().enumerate() {
+            for (m, &domain) in DOMAINS.iter().enumerate() {
+                let seed = case_seed(d, c, m);
+                let values: Vec<u64> = match exponent {
+                    Some(exponent) => ZipfGenerator::generate(&ZipfConfig {
+                        count,
+                        domain,
+                        exponent: *exponent,
+                        seed,
+                    }),
+                    None => UniformGenerator::generate(&UniformConfig {
+                        count,
+                        domain: domain as u64,
+                        seed,
+                    }),
+                };
+                let label = format!("{dist_label} n={count} domain={domain}");
+                cases.push(DataCase::I64(
+                    label.clone(),
+                    values.iter().map(|v| *v as i64).collect(),
+                ));
+                cases.push(DataCase::U64(label.clone(), values.clone()));
+                cases.push(DataCase::F64(
+                    label.clone(),
+                    values.iter().map(|v| *v as f64).collect(),
+                ));
+                cases.push(DataCase::Str(
+                    label,
+                    values.iter().map(|v| format!("k{v}")).collect(),
+                ));
+            }
+        }
     }
     cases
 }
+
 fn variant_cases() -> Vec<VariantCase> {
     vec![
         VariantCase {
