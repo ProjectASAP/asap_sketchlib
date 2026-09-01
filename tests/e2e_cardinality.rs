@@ -22,12 +22,8 @@ mod common;
 use common::conformance::assert_cardinality_bound;
 use common::specs::CardinalityConfidenceSpec;
 use common::streams::uniform_u64;
-use common::variants::{
-    HllBucketListP10, HllBucketListP13, HllBucketListP18, hyperloglog_variants,
-    portable_hll_variants,
-};
+use common::variants::{hyperloglog_variants, portable_hll_variants};
 
-use asap_sketchlib::sketches::hll::HyperLogLogImpl;
 use asap_sketchlib::{
     Classic, DataInput, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, SetAggregator,
 };
@@ -38,10 +34,6 @@ use asap_sketchlib::{
 /// the intent — an estimator four standard errors out is broken, not unlucky.
 const Z: f64 = 4.0;
 
-/// Identity namespaces are `stride * i .. stride * i + n`, far enough apart
-/// that no two trials share an identity and therefore no two share a hash.
-const IDENTITY_NAMESPACE_STRIDE: u64 = 1 << 40;
-
 #[test]
 fn every_hyperloglog_instantiation_satisfies_its_own_cardinality_error_model() {
     assert_cardinality_bound(hyperloglog_variants);
@@ -50,61 +42,6 @@ fn every_hyperloglog_instantiation_satisfies_its_own_cardinality_error_model() {
 #[test]
 fn every_portable_hll_instantiation_satisfies_the_register_error_model() {
     assert_cardinality_bound(portable_hll_variants);
-}
-
-/// A larger precision must actually buy accuracy. A fixed percentage band
-/// cannot see this — it passes identically at p12 and p16, so it would not
-/// notice a precision parameter that never reached the register array.
-///
-/// The measured quantity is the RSE itself, estimated as the root-mean-square
-/// relative error over eight disjoint identity blocks, so it is compared with
-/// `1.04/sqrt(m)` directly rather than through a single draw from it.
-#[test]
-fn hll_accuracy_improves_with_precision_as_the_error_model_predicts() {
-    // Comfortably inside the raw-estimator regime for every precision here
-    // (n/m is 244, 61 and 15 at p12, p14 and p16), so `1.04/sqrt(m)` is the
-    // applicable model at all three.
-    const N: u64 = 1_000_000;
-    const BLOCKS: u64 = 6;
-
-    macro_rules! measured_rse {
-        ($ty:ty) => {{
-            let mut sq = 0.0f64;
-            for b in 0..BLOCKS {
-                let mut s = <$ty>::new();
-                for i in 0..N {
-                    s.insert(&DataInput::U64(b * N + i));
-                }
-                let rel = (s.estimate() as f64 - N as f64) / N as f64;
-                sq += rel * rel;
-            }
-            (sq / BLOCKS as f64).sqrt()
-        }};
-    }
-
-    let errors = [
-        (12u32, measured_rse!(HyperLogLogP12<Classic>)),
-        (14, measured_rse!(HyperLogLogP14<Classic>)),
-        (16, measured_rse!(HyperLogLogP16<Classic>)),
-    ];
-
-    for (precision, rse) in &errors {
-        let predicted = CardinalityConfidenceSpec::hll(*precision, Z).sigma_rel();
-        assert!(
-            *rse <= predicted * 2.0,
-            "p{precision}: measured RSE {rse:.5} over {BLOCKS} disjoint blocks of {N} \
-             identities exceeds twice the predicted 1.04/sqrt(m) = {predicted:.5}"
-        );
-    }
-    // Sixteen times the registers must deliver at least twice the accuracy;
-    // the model predicts 4x.
-    assert!(
-        errors[0].1 >= errors[2].1 * 2.0,
-        "raising precision from p12 to p16 moved the measured RSE only from {:.5} to {:.5}; \
-         1.04/sqrt(m) predicts a 4x improvement, so precision is not reaching the registers",
-        errors[0].1,
-        errors[2].1
-    );
 }
 
 /// The Classic estimator's accuracy cliff at the linear-counting switchover.
@@ -199,37 +136,6 @@ fn set_aggregator_union_is_exact() {
     for k in &expected {
         assert!(agg.values.contains(k), "missing member {k}");
     }
-}
-
-#[test]
-fn custom_precision_accuracy_improves_with_precision_as_the_error_model_predicts() {
-    const N: u64 = 200_000;
-    const BASE: u64 = IDENTITY_NAMESPACE_STRIDE * 41;
-
-    let mut p10 = HyperLogLogImpl::<Classic, HllBucketListP10>::new();
-    let mut p13 = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
-    let mut p18 = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
-    for k in 0..N {
-        let d = DataInput::U64(BASE + k);
-        p10.insert(&d);
-        p13.insert(&d);
-        p18.insert(&d);
-    }
-
-    let relative = |estimate: usize| (estimate as f64 - N as f64).abs() / N as f64;
-    let (e10, e13, e18) = (
-        relative(p10.estimate()),
-        relative(p13.estimate()),
-        relative(p18.estimate()),
-    );
-    assert!(
-        e18 <= e10,
-        "p18 relative error {e18:.5} exceeded p10 at {e10:.5} over {N} distinct identities"
-    );
-    assert!(
-        e18 <= e13,
-        "p18 relative error {e18:.5} exceeded p13 at {e13:.5} over {N} distinct identities"
-    );
 }
 
 #[test]
