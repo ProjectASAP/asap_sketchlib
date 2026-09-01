@@ -39,8 +39,8 @@ mod common;
 
 use common::specs::{DdRankConvention, KllRankSpec, RelativeQuantileSpec, Tally, rank_error};
 use common::streams::{
-    bulk_cases, dds_streams, log_uniform_f64, normal_f64, rank_streams, uniform_f64, uniform_u64,
-    univmonq_ordered_regimes, zipf_f64,
+    duplicate_heavy_f64, exponential_f64, log_uniform_f64, monotonic_f64, normal_f64,
+    outside_in_ordering, uniform_f64, uniform_u64, zipf_f64,
 };
 use common::{NumericTruth, assert_between};
 
@@ -209,7 +209,22 @@ fn kll_family_stays_within_the_datasketches_maximum_rank_error_characterization(
     let mut tallies: HashMap<String, Tally> = HashMap::new();
     let mut trial = 0u64;
     for repeat in 0..REPEATS {
-        for (shape, values) in rank_streams(repeat, N) {
+        for (shape, values) in {
+            let trial = repeat;
+            let n = N;
+            let seed = 0xA5A5_0000u64 + trial as u64 * 7919;
+            vec![
+                ("uniform", uniform_f64(n, 100_000_000, seed)),
+                ("normal", normal_f64(n, 1_000.0, 250.0, seed + 1)),
+                ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 2)),
+                ("duplicate-heavy", duplicate_heavy_f64(n, 50, seed + 3)),
+                ("monotonic", monotonic_f64(n, 0.0, 1.0)),
+                (
+                    "outside-in",
+                    outside_in_ordering(normal_f64(n, 5_000.0, 900.0, seed + 4)),
+                ),
+            ]
+        } {
             let truth = NumericTruth::new(values.clone());
             for &k in &KS {
                 let spec = KllRankSpec::datasketches(k as usize);
@@ -254,10 +269,25 @@ fn kll_family_stays_within_the_datasketches_maximum_rank_error_characterization(
                 "one trial = one sketch with its own compaction seed, scored on its \
                  worst rank error over the whole q grid. n={N}, k in {KS:?}, \
                  seeds kll_trial_seed(0..), stream shapes {:?}, q grid {RANK_QS:?}",
-                rank_streams(0, 1)
-                    .iter()
-                    .map(|(s, _)| *s)
-                    .collect::<Vec<_>>()
+                {
+                    let trial = 0;
+                    let n = 1;
+                    let seed = 0xA5A5_0000u64 + trial as u64 * 7919;
+                    vec![
+                        ("uniform", uniform_f64(n, 100_000_000, seed)),
+                        ("normal", normal_f64(n, 1_000.0, 250.0, seed + 1)),
+                        ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 2)),
+                        ("duplicate-heavy", duplicate_heavy_f64(n, 50, seed + 3)),
+                        ("monotonic", monotonic_f64(n, 0.0, 1.0)),
+                        (
+                            "outside-in",
+                            outside_in_ordering(normal_f64(n, 5_000.0, 900.0, seed + 4)),
+                        ),
+                    ]
+                }
+                .iter()
+                .map(|(s, _)| *s)
+                .collect::<Vec<_>>()
             ),
         );
     }
@@ -347,7 +377,37 @@ fn kll_bulk_seed(case: u64) -> u64 {
 #[test]
 fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
     const N: usize = 20_000;
-    for (case, (shape, values)) in bulk_cases(0, N).iter().enumerate() {
+    for (case, (shape, values)) in {
+        let mut cases = {
+            let trial = 0;
+            let n = N;
+            let seed = 0xA5A5_0000u64 + trial as u64 * 7919;
+            vec![
+                ("uniform", uniform_f64(n, 100_000_000, seed)),
+                ("normal", normal_f64(n, 1_000.0, 250.0, seed + 1)),
+                ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 2)),
+                ("duplicate-heavy", duplicate_heavy_f64(n, 50, seed + 3)),
+                ("monotonic", monotonic_f64(n, 0.0, 1.0)),
+                (
+                    "outside-in",
+                    outside_in_ordering(normal_f64(n, 5_000.0, 900.0, seed + 4)),
+                ),
+            ]
+        };
+        let n = N;
+        let alpha = 0.01;
+        let gamma = (1.0 + alpha) / (1.0 - alpha);
+        cases.push(("exponential", exponential_f64(n, 1e-3, 3007)));
+        cases.push(("log-uniform", log_uniform_f64(n, gamma, 5..40, 3005)));
+        cases.push((
+            "sequential-10",
+            (0..10).map(|i| i as f64 * 1.7 + 11.0).collect(),
+        ));
+        cases
+    }
+    .iter()
+    .enumerate()
+    {
         let seed = kll_bulk_seed(case as u64);
         let mut via_loop: KLL<f64> = KLL::init_kll_with_seed(200, seed);
         for v in values {
@@ -381,7 +441,37 @@ fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
 #[test]
 fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
     const N: usize = 10_000;
-    for (case, (shape, values)) in bulk_cases(1, N).iter().enumerate() {
+    for (case, (shape, values)) in {
+        let mut cases = {
+            let trial = 1;
+            let n = N;
+            let seed = 0xA5A5_0000u64 + trial as u64 * 7919;
+            vec![
+                ("uniform", uniform_f64(n, 100_000_000, seed)),
+                ("normal", normal_f64(n, 1_000.0, 250.0, seed + 1)),
+                ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 2)),
+                ("duplicate-heavy", duplicate_heavy_f64(n, 50, seed + 3)),
+                ("monotonic", monotonic_f64(n, 0.0, 1.0)),
+                (
+                    "outside-in",
+                    outside_in_ordering(normal_f64(n, 5_000.0, 900.0, seed + 4)),
+                ),
+            ]
+        };
+        let n = N;
+        let alpha = 0.01;
+        let gamma = (1.0 + alpha) / (1.0 - alpha);
+        cases.push(("exponential", exponential_f64(n, 1e-3, 3007)));
+        cases.push(("log-uniform", log_uniform_f64(n, gamma, 5..40, 3005)));
+        cases.push((
+            "sequential-10",
+            (0..10).map(|i| i as f64 * 1.7 + 11.0).collect(),
+        ));
+        cases
+    }
+    .iter()
+    .enumerate()
+    {
         let seed = kll_bulk_seed(0x0100 + case as u64);
         let mut via_loop = KLLDynamic::<f64>::init_kll_with_seed(200, seed);
         for v in values {
@@ -526,7 +616,44 @@ fn ddsketch_core_and_portable_satisfy_the_relative_value_error_contract() {
         let mut port_tally = Tally::default();
         for (i, &n) in SAMPLE_SIZES.iter().enumerate() {
             let seed = 3_005_000u64 + i as u64 * 101 + (alpha * 1e6) as u64;
-            for (label, values) in dds_streams(alpha, n, seed) {
+            for (label, values) in {
+                let alpha = alpha;
+                let n = n;
+                let seed = seed;
+                let gamma = (1.0 + alpha) / (1.0 - alpha);
+                vec![
+                    (
+                        "adversarial-bucket-edges",
+                        log_uniform_f64(n, gamma, 5..40, seed),
+                    ),
+                    (
+                        "normal",
+                        normal_f64(n, 1_000.0, 250.0, seed + 1)
+                            .into_iter()
+                            .filter(|v| *v > 0.0)
+                            .collect(),
+                    ),
+                    ("exponential", exponential_f64(n, 1e-3, seed + 2)),
+                    (
+                        "uniform",
+                        uniform_u64(n, 9_000_000, seed + 3)
+                            .into_iter()
+                            .map(|v| 1_000_000.0 + v as f64)
+                            .collect(),
+                    ),
+                    ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 4)),
+                    (
+                        "wide-dynamic-range",
+                        uniform_u64(n, 1_000_000, seed + 5)
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, v)| {
+                                10f64.powi((i % 10) as i32 - 4) * (1.0 + v as f64 / 1_000_000.0)
+                            })
+                            .collect(),
+                    ),
+                ]
+            } {
                 let mut core = DDSketch::new(alpha);
                 let mut port = PortableDds::new(alpha);
                 for v in &values {
@@ -557,10 +684,47 @@ fn ddsketch_core_and_portable_satisfy_the_relative_value_error_contract() {
         // single violation is a defect and none are tolerated.
         let context = format!(
             "alpha={alpha} sizes={SAMPLE_SIZES:?} shapes={:?} q grid {DDS_QS:?}",
-            dds_streams(alpha, 1, 0)
-                .iter()
-                .map(|(s, _)| *s)
-                .collect::<Vec<_>>()
+            {
+                let alpha = alpha;
+                let n = 1;
+                let seed = 0;
+                let gamma = (1.0 + alpha) / (1.0 - alpha);
+                vec![
+                    (
+                        "adversarial-bucket-edges",
+                        log_uniform_f64(n, gamma, 5..40, seed),
+                    ),
+                    (
+                        "normal",
+                        normal_f64(n, 1_000.0, 250.0, seed + 1)
+                            .into_iter()
+                            .filter(|v| *v > 0.0)
+                            .collect(),
+                    ),
+                    ("exponential", exponential_f64(n, 1e-3, seed + 2)),
+                    (
+                        "uniform",
+                        uniform_u64(n, 9_000_000, seed + 3)
+                            .into_iter()
+                            .map(|v| 1_000_000.0 + v as f64)
+                            .collect(),
+                    ),
+                    ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 4)),
+                    (
+                        "wide-dynamic-range",
+                        uniform_u64(n, 1_000_000, seed + 5)
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, v)| {
+                                10f64.powi((i % 10) as i32 - 4) * (1.0 + v as f64 / 1_000_000.0)
+                            })
+                            .collect(),
+                    ),
+                ]
+            }
+            .iter()
+            .map(|(s, _)| *s)
+            .collect::<Vec<_>>()
         );
         core_tally.assert_none(&format!("core DDSketch alpha={alpha}"), &context);
         port_tally.assert_none(&format!("portable DdSketch alpha={alpha}"), &context);
@@ -1005,7 +1169,17 @@ fn univmonq_ordered_queries_satisfy_the_documented_cdf_and_rank_bounds() {
     let mut gate_open_seen = 0usize;
     let mut gate_closed_seen = 0usize;
 
-    for (regime, values) in univmonq_ordered_regimes() {
+    for (regime, values) in {
+        let diffuse = uniform_f64(200_000, 10_000_000, 0x0DDE_0001);
+        let heavy = zipf_f64(200_000, 4_096, 1.4, 1.0, 1e6, 0x0DDE_0002);
+        let mut mixed = zipf_f64(60_000, 64, 1.6, 1.0, 1e3, 0x0DDE_0003);
+        mixed.extend(
+            uniform_u64(140_000, 5_000_000, 0x0DDE_0004)
+                .into_iter()
+                .map(|v| 1e4 + v as f64),
+        );
+        vec![("diffuse", diffuse), ("heavy", heavy), ("mixed", mixed)]
+    } {
         let truth = NumericTruth::new(values.clone());
         let mut exact_counts: HashMap<u64, u64> = HashMap::new();
         for v in &values {
@@ -1760,7 +1934,25 @@ fn kll_minimum_compactor_capacity_at_or_above_the_default_satisfies_the_rank_cha
     let spec = KllRankSpec::datasketches(K);
     let mut tally = Tally::default();
     for (case, &m) in KLL_M_AT_OR_ABOVE_DEFAULT.iter().enumerate() {
-        for (i, (shape, values)) in rank_streams(case, N).into_iter().enumerate() {
+        for (i, (shape, values)) in {
+            let trial = case;
+            let n = N;
+            let seed = 0xA5A5_0000u64 + trial as u64 * 7919;
+            vec![
+                ("uniform", uniform_f64(n, 100_000_000, seed)),
+                ("normal", normal_f64(n, 1_000.0, 250.0, seed + 1)),
+                ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 2)),
+                ("duplicate-heavy", duplicate_heavy_f64(n, 50, seed + 3)),
+                ("monotonic", monotonic_f64(n, 0.0, 1.0)),
+                (
+                    "outside-in",
+                    outside_in_ordering(normal_f64(n, 5_000.0, 900.0, seed + 4)),
+                ),
+            ]
+        }
+        .into_iter()
+        .enumerate()
+        {
             let seed = kll_axis_seed(0x0200 + (case * 16 + i) as u64);
             let mut sketch: KLL<f64> = KLL::init_with_seed(K, m, seed);
             for v in &values {
@@ -1796,7 +1988,25 @@ fn kll_minimum_compactor_capacity_below_the_default_stays_within_a_widened_rank_
     let widened = KLL_WIDENED_EPSILON_FACTOR * spec.epsilon();
     let mut tally = Tally::default();
     for (case, &m) in KLL_M_BELOW_DEFAULT.iter().enumerate() {
-        for (i, (shape, values)) in rank_streams(case + 8, N).into_iter().enumerate() {
+        for (i, (shape, values)) in {
+            let trial = case + 8;
+            let n = N;
+            let seed = 0xA5A5_0000u64 + trial as u64 * 7919;
+            vec![
+                ("uniform", uniform_f64(n, 100_000_000, seed)),
+                ("normal", normal_f64(n, 1_000.0, 250.0, seed + 1)),
+                ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 2)),
+                ("duplicate-heavy", duplicate_heavy_f64(n, 50, seed + 3)),
+                ("monotonic", monotonic_f64(n, 0.0, 1.0)),
+                (
+                    "outside-in",
+                    outside_in_ordering(normal_f64(n, 5_000.0, 900.0, seed + 4)),
+                ),
+            ]
+        }
+        .into_iter()
+        .enumerate()
+        {
             let seed = kll_axis_seed(0x0300 + (case * 16 + i) as u64);
             let mut sketch: KLL<f64> = KLL::init_with_seed(K, m, seed);
             for v in &values {
@@ -1829,7 +2039,25 @@ fn kll_small_k_satisfies_the_rank_characterization_at_its_own_epsilon() {
     for (case, &k) in KLL_SMALL_K.iter().enumerate() {
         let spec = KllRankSpec::datasketches(k as usize);
         described.push(format!("k={k} eps={:.6}", spec.epsilon()));
-        for (i, (shape, values)) in rank_streams(case + 16, N).into_iter().enumerate() {
+        for (i, (shape, values)) in {
+            let trial = case + 16;
+            let n = N;
+            let seed = 0xA5A5_0000u64 + trial as u64 * 7919;
+            vec![
+                ("uniform", uniform_f64(n, 100_000_000, seed)),
+                ("normal", normal_f64(n, 1_000.0, 250.0, seed + 1)),
+                ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 2)),
+                ("duplicate-heavy", duplicate_heavy_f64(n, 50, seed + 3)),
+                ("monotonic", monotonic_f64(n, 0.0, 1.0)),
+                (
+                    "outside-in",
+                    outside_in_ordering(normal_f64(n, 5_000.0, 900.0, seed + 4)),
+                ),
+            ]
+        }
+        .into_iter()
+        .enumerate()
+        {
             let seed = kll_axis_seed(0x0400 + (case * 16 + i) as u64);
             let mut sketch: KLL<f64> = KLL::init_kll_with_seed(k, seed);
             for v in &values {
@@ -1909,7 +2137,44 @@ fn ddsketch_satisfies_the_relative_value_error_contract_at_extreme_accuracy_para
         let seed = 0x0DDA_0000u64 + i as u64 * 7919;
         let (min_indexable, max_indexable) =
             asap_sketchlib::sketches::ddsketch::ddsketch_indexable_bounds(alpha);
-        for (label, raw) in dds_streams(alpha, N, seed) {
+        for (label, raw) in {
+            let alpha = alpha;
+            let n = N;
+            let seed = seed;
+            let gamma = (1.0 + alpha) / (1.0 - alpha);
+            vec![
+                (
+                    "adversarial-bucket-edges",
+                    log_uniform_f64(n, gamma, 5..40, seed),
+                ),
+                (
+                    "normal",
+                    normal_f64(n, 1_000.0, 250.0, seed + 1)
+                        .into_iter()
+                        .filter(|v| *v > 0.0)
+                        .collect(),
+                ),
+                ("exponential", exponential_f64(n, 1e-3, seed + 2)),
+                (
+                    "uniform",
+                    uniform_u64(n, 9_000_000, seed + 3)
+                        .into_iter()
+                        .map(|v| 1_000_000.0 + v as f64)
+                        .collect(),
+                ),
+                ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 4)),
+                (
+                    "wide-dynamic-range",
+                    uniform_u64(n, 1_000_000, seed + 5)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            10f64.powi((i % 10) as i32 - 4) * (1.0 + v as f64 / 1_000_000.0)
+                        })
+                        .collect(),
+                ),
+            ]
+        } {
             let values: Vec<f64> = raw
                 .into_iter()
                 .filter(|v| v.is_finite() && *v >= min_indexable && *v <= max_indexable)

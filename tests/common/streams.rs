@@ -7,9 +7,132 @@
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use asap_sketchlib::DataInput;
+pub struct ZipfConfig {
+    pub count: usize,
+    pub domain: usize,
+    pub exponent: f64,
+    pub seed: u64,
+}
 
-use super::FreqTruth;
+pub struct UniformConfig {
+    pub count: usize,
+    pub domain: u64,
+    pub seed: u64,
+}
+
+pub struct NormalConfig {
+    pub count: usize,
+    pub mean: f64,
+    pub std_dev: f64,
+    pub seed: u64,
+}
+
+pub struct ExponentialConfig {
+    pub count: usize,
+    pub lambda: f64,
+    pub seed: u64,
+}
+
+pub trait DiscreteValue: Sized {
+    fn from_u64(value: u64) -> Self;
+}
+
+macro_rules! discrete_value {
+    ($($ty:ty),+ $(,)?) => { $(
+        impl DiscreteValue for $ty {
+            fn from_u64(value: u64) -> Self { value as Self }
+        }
+    )+ };
+}
+
+discrete_value!(
+    u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize, f32, f64
+);
+
+pub trait FloatValue: Sized {
+    fn from_f64(value: f64) -> Self;
+}
+
+impl FloatValue for f32 {
+    fn from_f64(value: f64) -> Self {
+        value as f32
+    }
+}
+
+impl FloatValue for f64 {
+    fn from_f64(value: f64) -> Self {
+        value
+    }
+}
+
+pub struct ZipfGenerator;
+
+impl ZipfGenerator {
+    pub fn generate<T: DiscreteValue>(config: &ZipfConfig) -> Vec<T> {
+        let mut cdf: Vec<f64> = (0..config.domain)
+            .map(|i| 1.0 / (i as f64 + 1.0).powf(config.exponent))
+            .collect();
+        for i in 1..cdf.len() {
+            cdf[i] += cdf[i - 1];
+        }
+        let total = cdf[config.domain - 1];
+        for value in &mut cdf {
+            *value /= total;
+        }
+        let mut rng = StdRng::seed_from_u64(config.seed);
+        (0..config.count)
+            .map(|_| {
+                let draw: f64 = rng.random();
+                let index = match cdf.binary_search_by(|p| p.partial_cmp(&draw).unwrap()) {
+                    Ok(index) | Err(index) => index.min(config.domain - 1),
+                };
+                T::from_u64(index as u64)
+            })
+            .collect()
+    }
+}
+
+pub struct UniformGenerator;
+
+impl UniformGenerator {
+    pub fn generate<T: DiscreteValue>(config: &UniformConfig) -> Vec<T> {
+        let mut rng = StdRng::seed_from_u64(config.seed);
+        (0..config.count)
+            .map(|_| T::from_u64(rng.random::<u64>() % config.domain))
+            .collect()
+    }
+}
+
+pub struct NormalGenerator;
+
+impl NormalGenerator {
+    pub fn generate<T: FloatValue>(config: &NormalConfig) -> Vec<T> {
+        let mut rng = StdRng::seed_from_u64(config.seed);
+        (0..config.count)
+            .map(|_| {
+                let u1 = rng.random::<f64>().max(1e-12);
+                let u2 = rng.random::<f64>();
+                T::from_f64(
+                    config.mean
+                        + config.std_dev
+                            * (-2.0 * u1.ln()).sqrt()
+                            * (std::f64::consts::TAU * u2).cos(),
+                )
+            })
+            .collect()
+    }
+}
+
+pub struct ExponentialGenerator;
+
+impl ExponentialGenerator {
+    pub fn generate<T: FloatValue>(config: &ExponentialConfig) -> Vec<T> {
+        let mut rng = StdRng::seed_from_u64(config.seed);
+        (0..config.count)
+            .map(|_| T::from_f64(-rng.random::<f64>().max(1e-12).ln() / config.lambda))
+            .collect()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Distributions
@@ -17,27 +140,12 @@ use super::FreqTruth;
 
 /// `n` draws from Zipf(s) over `[0, domain)`.
 pub fn zipf_u64(n: usize, domain: usize, exponent: f64, seed: u64) -> Vec<u64> {
-    let mut cdf: Vec<f64> = (0..domain)
-        .map(|i| 1.0 / (i as f64 + 1.0).powf(exponent))
-        .collect();
-    for i in 1..cdf.len() {
-        cdf[i] += cdf[i - 1];
-    }
-    let total = cdf[domain - 1];
-    for x in cdf.iter_mut() {
-        *x /= total;
-    }
-    let mut rng = StdRng::seed_from_u64(seed);
-    (0..n)
-        .map(|_| {
-            // Draw the variate ONCE; comparing inside the binary-search
-            // closure would use a fresh random per probe and corrupt results.
-            let u: f64 = rng.random();
-            match cdf.binary_search_by(|p| p.partial_cmp(&u).unwrap()) {
-                Ok(i) | Err(i) => (i as u64).min(domain as u64 - 1),
-            }
-        })
-        .collect()
+    ZipfGenerator::generate(&ZipfConfig {
+        count: n,
+        domain,
+        exponent,
+        seed,
+    })
 }
 
 /// `zipf_u64` as signed keys, for the suites whose ground truth is keyed on
@@ -62,8 +170,11 @@ pub fn zipf_f64(n: usize, domain: usize, exponent: f64, lo: f64, hi: f64, seed: 
 
 /// `n` draws from Uniform{[0, domain)}.
 pub fn uniform_u64(n: usize, domain: u64, seed: u64) -> Vec<u64> {
-    let mut rng = StdRng::seed_from_u64(seed);
-    (0..n).map(|_| rng.random::<u64>() % domain).collect()
+    UniformGenerator::generate(&UniformConfig {
+        count: n,
+        domain,
+        seed,
+    })
 }
 
 /// `uniform_u64` widened to `f64`, which is exact for every `domain` a test
@@ -77,22 +188,21 @@ pub fn uniform_f64(n: usize, domain: u64, seed: u64) -> Vec<f64> {
 
 /// `n` iid Normal(mean, std) samples (Box-Muller).
 pub fn normal_f64(n: usize, mean: f64, std: f64, seed: u64) -> Vec<f64> {
-    let mut rng = StdRng::seed_from_u64(seed);
-    (0..n)
-        .map(|_| {
-            let u1: f64 = rng.random::<f64>().max(1e-12);
-            let u2: f64 = rng.random::<f64>();
-            mean + std * (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
-        })
-        .collect()
+    NormalGenerator::generate(&NormalConfig {
+        count: n,
+        mean,
+        std_dev: std,
+        seed,
+    })
 }
 
 /// `n` iid Exponential(lambda) samples.
 pub fn exponential_f64(n: usize, lambda: f64, seed: u64) -> Vec<f64> {
-    let mut rng = StdRng::seed_from_u64(seed);
-    (0..n)
-        .map(|_| -rng.random::<f64>().max(1e-12).ln() / lambda)
-        .collect()
+    ExponentialGenerator::generate(&ExponentialConfig {
+        count: n,
+        lambda,
+        seed,
+    })
 }
 
 /// Log-uniform adversarial values: `gamma^k * (1 + frac*(gamma-1))`, mixing
@@ -144,269 +254,4 @@ pub fn outside_in_ordering(mut values: Vec<f64>) -> Vec<f64> {
         }
     }
     out
-}
-
-// ---------------------------------------------------------------------------
-// Streams paired with their exact ground truth
-// ---------------------------------------------------------------------------
-
-/// Exact per-key counts for an integer-keyed stream.
-pub fn freq_truth(stream: &[i64]) -> FreqTruth {
-    let mut truth = FreqTruth::default();
-    for key in stream {
-        truth.observe(*key);
-    }
-    truth
-}
-
-/// A Zipf key stream and the exact counts of the keys in it.
-pub fn zipf_stream_with_truth(
-    n: usize,
-    domain: usize,
-    exponent: f64,
-    seed: u64,
-) -> (Vec<u64>, FreqTruth) {
-    let stream = zipf_u64(n, domain, exponent, seed);
-    let mut truth = FreqTruth::default();
-    for k in &stream {
-        truth.observe(*k as i64);
-    }
-    (stream, truth)
-}
-
-// ---------------------------------------------------------------------------
-// Frequency / heavy-hitter key streams
-// ---------------------------------------------------------------------------
-
-/// Bounded integer draws mapped onto distinct f64 values in `[100, 1000)`,
-/// identified by bit pattern so exact counts stay comparable.
-pub fn uniform_f64_key(v: u64) -> i64 {
-    (100.0 + v as f64 * (900.0 / 4096.0)).to_bits() as i64
-}
-
-pub fn f64_input(key: i64) -> DataInput<'static> {
-    DataInput::F64(f64::from_bits(key as u64))
-}
-
-pub fn u64_input(key: i64) -> DataInput<'static> {
-    DataInput::U64(key as u64)
-}
-
-/// `u64` keys as the `DataInput` a sketch is fed.
-pub fn u64_inputs(keys: &[u64]) -> Vec<DataInput<'static>> {
-    keys.iter().copied().map(DataInput::U64).collect()
-}
-
-/// A named key stream paired with the `DataInput` constructor for its keys.
-pub type BoundStream = (&'static str, Vec<i64>, fn(i64) -> DataInput<'static>);
-
-/// Zipf over `u64` keys and uniform over `f64` keys for one trial, exercising
-/// both `DataInput` hashing paths. Each trial uses a disjoint key domain so
-/// its collisions are unrelated to the previous trial's.
-pub fn bound_streams(trial: u64, n: usize) -> [BoundStream; 2] {
-    [
-        (
-            "zipf/u64",
-            zipf_u64(n, 8192, 1.1, 1005 + trial * 977)
-                .into_iter()
-                .map(|v| v as i64 + (trial as i64) * 100_000)
-                .collect(),
-            u64_input as fn(i64) -> DataInput<'static>,
-        ),
-        (
-            "uniform/f64",
-            uniform_u64(n, 4096, 1006 + trial * 977)
-                .into_iter()
-                .map(|v| uniform_f64_key(v + trial * 8192))
-                .collect(),
-            f64_input as fn(i64) -> DataInput<'static>,
-        ),
-    ]
-}
-
-/// Domain of `heavy_hitter_stream`, for the tests that size a summary against
-/// it.
-pub const HEAVY_HITTER_DOMAIN: usize = 2_048;
-
-/// The skewed key stream the heavy-hitter and conformance suites score their
-/// summaries on.
-pub fn heavy_hitter_stream() -> Vec<i64> {
-    zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001)
-}
-
-// ---------------------------------------------------------------------------
-// Membership key sets
-// ---------------------------------------------------------------------------
-
-pub const BLOOM_MEMBERS: i64 = 20_000;
-pub const BLOOM_PROBES: i64 = 200_000;
-
-/// The keys inserted into a Bloom filter.
-pub fn bloom_members() -> Vec<i64> {
-    (0..BLOOM_MEMBERS).collect()
-}
-
-/// Keys disjoint from `bloom_members`, for measuring a false-positive rate.
-pub fn bloom_probes() -> Vec<i64> {
-    (10_000_000..10_000_000 + BLOOM_PROBES).collect()
-}
-
-// ---------------------------------------------------------------------------
-// Quantile value streams
-// ---------------------------------------------------------------------------
-
-/// Named stream shapes with a fixed seed each. Covers the light-tailed,
-/// heavy-tailed, tie-dense, sorted and adversarially-ordered cases a
-/// compaction scheme can behave differently on.
-pub fn rank_streams(trial: usize, n: usize) -> Vec<(&'static str, Vec<f64>)> {
-    let s = 0xA5A5_0000u64 + trial as u64 * 7919;
-    vec![
-        ("uniform", uniform_f64(n, 100_000_000, s)),
-        ("normal", normal_f64(n, 1_000.0, 250.0, s + 1)),
-        ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, s + 2)),
-        // Fifty distinct values over tens of thousands of observations: a
-        // single value legitimately spans several percent of the rank space,
-        // which is exactly where a value-error check would misfire and a
-        // rank-interval check must not.
-        ("duplicate-heavy", duplicate_heavy_f64(n, 50, s + 3)),
-        // Sorted input: every compaction sees a run that is already in global
-        // order.
-        ("monotonic", monotonic_f64(n, 0.0, 1.0)),
-        // Adversarial ordering: the same multiset emitted from both ends
-        // inward, so no prefix resembles the whole.
-        (
-            "outside-in",
-            outside_in_ordering(normal_f64(n, 5_000.0, 900.0, s + 4)),
-        ),
-    ]
-}
-
-/// The `rank_streams` shapes plus three the compaction path can behave
-/// differently on: two heavy-tailed spreads, and a run short enough that no
-/// compactor ever fills.
-pub fn bulk_cases(trial: usize, n: usize) -> Vec<(&'static str, Vec<f64>)> {
-    let alpha = 0.01;
-    let gamma = (1.0 + alpha) / (1.0 - alpha);
-    let mut cases = rank_streams(trial, n);
-    cases.push(("exponential", exponential_f64(n, 1e-3, 3007)));
-    cases.push(("log-uniform", log_uniform_f64(n, gamma, 5..40, 3005)));
-    cases.push((
-        "sequential-10",
-        (0..10).map(|i| i as f64 * 1.7 + 11.0).collect(),
-    ));
-    cases
-}
-
-/// Streams for the relative-error battery. `adversarial` places a fifth of its
-/// mass exactly on bucket lower edges, where the mapping's error is at its
-/// maximum of exactly `alpha` and one ULP of drift decides the bucket.
-pub fn dds_streams(alpha: f64, n: usize, seed: u64) -> Vec<(&'static str, Vec<f64>)> {
-    let gamma = (1.0 + alpha) / (1.0 - alpha);
-    vec![
-        (
-            "adversarial-bucket-edges",
-            log_uniform_f64(n, gamma, 5..40, seed),
-        ),
-        (
-            "normal",
-            normal_f64(n, 1_000.0, 250.0, seed + 1)
-                .into_iter()
-                .filter(|v| *v > 0.0)
-                .collect(),
-        ),
-        ("exponential", exponential_f64(n, 1e-3, seed + 2)),
-        (
-            "uniform",
-            uniform_u64(n, 9_000_000, seed + 3)
-                .into_iter()
-                .map(|v| 1_000_000.0 + v as f64)
-                .collect(),
-        ),
-        ("zipf", zipf_f64(n, 8_192, 1.1, 1e6, 1e7, seed + 4)),
-        // Nine decades in one stream: the bucket store spans a large index
-        // range and the mapping is exercised far from 1.0 in both directions.
-        (
-            "wide-dynamic-range",
-            uniform_u64(n, 1_000_000, seed + 5)
-                .into_iter()
-                .enumerate()
-                .map(|(i, v)| 10f64.powi((i % 10) as i32 - 4) * (1.0 + v as f64 / 1_000_000.0))
-                .collect(),
-        ),
-    ]
-}
-
-/// The three streams the ordered-query bound is checked on.
-///
-/// - **diffuse**: 200k observations over 200k distinct values. `F2/N^2` is tiny,
-///   the gate cannot fire, the heavy set is empty and the bound collapses to
-///   `epsilon_R`.
-/// - **heavy**: a sharp Zipf head. The gate fires on every trial, so `E_H > 0`
-///   and `P_hat_R < 1` and all three terms are live.
-/// - **mixed**: a heavy head over a broad diffuse tail, so the residual carries
-///   most of the mass while the heavy set is still non-empty.
-pub fn univmonq_ordered_regimes() -> Vec<(&'static str, Vec<f64>)> {
-    let diffuse = uniform_f64(200_000, 10_000_000, 0x0DDE_0001);
-    let heavy = zipf_f64(200_000, 4_096, 1.4, 1.0, 1e6, 0x0DDE_0002);
-    let mut mixed = zipf_f64(60_000, 64, 1.6, 1.0, 1e3, 0x0DDE_0003);
-    mixed.extend(
-        uniform_u64(140_000, 5_000_000, 0x0DDE_0004)
-            .into_iter()
-            .map(|v| 1e4 + v as f64),
-    );
-    vec![("diffuse", diffuse), ("heavy", heavy), ("mixed", mixed)]
-}
-
-// ---------------------------------------------------------------------------
-// Multi-column labelled streams (Hydra)
-// ---------------------------------------------------------------------------
-
-/// `src_region` and `dst_region` share `REGIONS`, so `{src = eu-west}` and
-/// `{dst = eu-west}` are distinct subpopulations over an identical value.
-pub const SCHEMA: [&str; 3] = ["src_region", "dst_region", "status"];
-pub const REGIONS: [&str; 4] = ["eu-west", "us-east", "apac", "sa-east"];
-pub const STATUSES: [&str; 3] = ["200", "404", "500"];
-pub const ENDPOINTS: [&str; 4] = ["/login", "/checkout", "/query", "/asset"];
-
-/// One stream row: a full-width key plus the value the counters measure.
-pub struct Record {
-    pub key: [&'static str; 3],
-    pub endpoint: &'static str,
-}
-
-/// Skewed traffic over four independently seeded columns. Consumes `seed`
-/// through `seed + 3`, so call sites space their seeds by at least four.
-pub fn labelled_stream(n: usize, seed: u64) -> Vec<Record> {
-    let src = zipf_u64(n, REGIONS.len(), 0.8, seed);
-    let dst = zipf_u64(n, REGIONS.len(), 0.5, seed + 1);
-    let statuses = zipf_u64(n, STATUSES.len(), 1.2, seed + 2);
-    let endpoints = zipf_u64(n, ENDPOINTS.len(), 0.4, seed + 3);
-    (0..n)
-        .map(|i| Record {
-            key: [
-                REGIONS[src[i] as usize],
-                REGIONS[dst[i] as usize],
-                STATUSES[statuses[i] as usize],
-            ],
-            endpoint: ENDPOINTS[endpoints[i] as usize],
-        })
-        .collect()
-}
-
-/// Two key columns over 2-value domains: 4 singles and 4 pairs = 8 subkeys,
-/// sparse against `col_num`.
-pub const H2_REGIONS: [&str; 2] = ["eu-west", "us-east"];
-pub const H2_SERVICES: [&str; 2] = ["auth", "cart"];
-
-pub fn h2_keys(n: usize, seed: u64) -> Vec<(&'static str, &'static str)> {
-    let regions = zipf_u64(n, H2_REGIONS.len(), 0.6, seed);
-    let services = zipf_u64(n, H2_SERVICES.len(), 0.6, seed + 1);
-    (0..n)
-        .map(|i| {
-            (
-                H2_REGIONS[regions[i] as usize],
-                H2_SERVICES[services[i] as usize],
-            )
-        })
-        .collect()
 }

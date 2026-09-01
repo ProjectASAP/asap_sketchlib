@@ -1,21 +1,27 @@
 //! E2E suite for the Bloom filter: the properties a membership sketch is
-//! bought for, which the shared batteries do not model.
-//!
-//! `tests/conformance_kit.rs` runs the standard `membership_battery`. Here the
-//! filter is pushed on the three things it promises exactly - no false
+//! bought for. The filter is pushed on the three things it promises exactly - no false
 //! negative, a union that is the filter of the concatenated stream, and a
 //! delivered false-positive rate its own sizing predicts - plus the two hash
 //! paths, serialization, and the degenerate geometries.
 
 mod common;
 
-use common::streams::{BLOOM_MEMBERS, BLOOM_PROBES, bloom_members, bloom_probes};
-
 use asap_sketchlib::bloom::{BLOOM_MAX_BITS, BLOOM_MAX_SLICES};
 use asap_sketchlib::{
     BLOOM_DEFAULT_COLS, BLOOM_DEFAULT_ROWS, BitMatrix, Bloom, DataInput, FastPath, MatrixHashMode,
     RegularPath, hash_mode_for_matrix,
 };
+
+const BLOOM_MEMBERS: i64 = 20_000;
+const BLOOM_PROBES: i64 = 200_000;
+
+fn bloom_members() -> Vec<i64> {
+    (0..BLOOM_MEMBERS).collect()
+}
+
+fn bloom_probes() -> Vec<i64> {
+    (10_000_000..10_000_000 + BLOOM_PROBES).collect()
+}
 
 fn all_bits(bits: &BitMatrix) -> Vec<bool> {
     (0..bits.rows())

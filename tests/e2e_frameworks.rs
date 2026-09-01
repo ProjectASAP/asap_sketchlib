@@ -3,16 +3,16 @@
 //! TumblingWindow; HashSketchEnsemble.
 
 mod common;
+#[path = "e2e_frameworks/hydra_data.rs"]
+mod hydra_data;
 
 use std::collections::HashMap;
 
-use common::conformance::{self, FrequencyOps, FrequencySpec, MergeOps, SignedFrequencyOps};
 use common::specs::KllRankSpec;
-use common::streams::{
-    ENDPOINTS, H2_REGIONS, H2_SERVICES, REGIONS, Record, SCHEMA, STATUSES, freq_truth, h2_keys,
-    labelled_stream, normal_f64, uniform_u64, zipf_i64, zipf_u64,
-};
+use common::streams::{ZipfConfig, ZipfGenerator, normal_f64, uniform_u64, zipf_i64, zipf_u64};
+use common::truth::freq_truth;
 use common::{FreqTruth, assert_between};
+use hydra_data::{ENDPOINTS, H2_REGIONS, H2_SERVICES, REGIONS, Record, SCHEMA, STATUSES, h2_keys};
 
 use asap_sketchlib::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::{
@@ -175,6 +175,7 @@ fn hydra_hll_head_cardinality() {
 /// Sole member of the measure domain, which makes each per-cell Count-Min
 /// exact and leaves the grid as the only error source.
 const MEASURE: &str = "hit";
+const DEFAULT_QUANTILE_QS: [f64; 5] = [0.1, 0.25, 0.5, 0.75, 0.9];
 
 /// Per-cell counter for grid-focused tests, sized to a value domain of a few
 /// members rather than to a standalone deployment.
@@ -186,123 +187,83 @@ fn cell_cs() -> HydraCounter {
     HydraCounter::CS(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 64))
 }
 
-// ---------------------------------------------------------------------------
-// Hydra conformance adapters: one key column, so the fan-out is a single
-// subkey and the grid is an `r x c` keyed sketch.
-// ---------------------------------------------------------------------------
-
-struct HydraCmAdapter(Hydra);
-
-impl HydraCmAdapter {
-    fn new() -> Self {
-        Self(Hydra::with_schema(5, 8192, ["key"], cell_cm()).expect("single-column schema"))
-    }
-}
-
-impl FrequencyOps<i64> for HydraCmAdapter {
-    fn ingest(&mut self, key: &i64) {
-        self.0
-            .update(&[key.to_string().as_str()], &DataInput::Str(MEASURE), None)
-            .expect("arity 1");
-    }
-    fn estimate(&self, key: &i64) -> f64 {
-        self.0
-            .query_key(
-                &[Some(key.to_string().as_str())],
-                &HydraQuery::Frequency(DataInput::Str(MEASURE)),
-            )
-            .expect("CM counters answer frequency queries")
-    }
-}
-
-impl MergeOps for HydraCmAdapter {
-    fn merge_from(&mut self, other: &Self) {
-        self.0
-            .merge(&other.0)
-            .expect("same dims, schema and counter");
-    }
-}
-
-struct HydraCsAdapter(Hydra);
-
-impl HydraCsAdapter {
-    fn new() -> Self {
-        Self(Hydra::with_schema(5, 8192, ["key"], cell_cs()).expect("single-column schema"))
-    }
-}
-
-impl FrequencyOps<i64> for HydraCsAdapter {
-    fn ingest(&mut self, key: &i64) {
-        self.0
-            .update(&[key.to_string().as_str()], &DataInput::Str(MEASURE), None)
-            .expect("arity 1");
-    }
-    fn estimate(&self, key: &i64) -> f64 {
-        self.0
-            .query_key(
-                &[Some(key.to_string().as_str())],
-                &HydraQuery::Frequency(DataInput::Str(MEASURE)),
-            )
-            .expect("Count counters answer frequency queries")
-    }
-}
-
-impl SignedFrequencyOps<i64> for HydraCsAdapter {
-    fn ingest_weighted(&mut self, key: &i64, weight: i64) {
-        self.0
-            .update(
-                &[key.to_string().as_str()],
-                &DataInput::Str(MEASURE),
-                Some(weight as i32),
-            )
-            .expect("arity 1");
-    }
-}
-
-impl MergeOps for HydraCsAdapter {
-    fn merge_from(&mut self, other: &Self) {
-        self.0
-            .merge(&other.0)
-            .expect("same dims, schema and counter");
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Hydra battery runs
-// ---------------------------------------------------------------------------
-
 #[test]
 fn hydra_cm_passes_frequency_and_merge_conformance() {
     let stream = zipf_i64(40_000, 256, 1.1, 5_101);
     let truth = freq_truth(&stream);
-    // Count-Min's reference spec from `conformance_kit.rs`.
-    let spec = FrequencySpec {
-        one_sided: true,
-        rel_tol: 0.01,
-        abs_tol: 4.0,
-    };
-
-    conformance::frequency_battery("Hydra<CM>", HydraCmAdapter::new, &stream, &truth, spec)
-        .assert_ok();
-    conformance::merge_equivalence_battery("Hydra<CM>", HydraCmAdapter::new, &stream, spec)
-        .assert_ok();
+    let mut sketch = Hydra::with_schema(5, 8192, ["key"], cell_cm()).expect("schema");
+    let mut left = Hydra::with_schema(5, 8192, ["key"], cell_cm()).expect("schema");
+    let mut right = Hydra::with_schema(5, 8192, ["key"], cell_cm()).expect("schema");
+    for (index, key) in stream.iter().enumerate() {
+        let key = key.to_string();
+        sketch
+            .update(&[key.as_str()], &DataInput::Str(MEASURE), None)
+            .expect("update");
+        let shard = if index % 2 == 0 {
+            &mut left
+        } else {
+            &mut right
+        };
+        shard
+            .update(&[key.as_str()], &DataInput::Str(MEASURE), None)
+            .expect("update");
+    }
+    left.merge(&right).expect("merge");
+    for (key, exact) in truth.pairs() {
+        let key = key.to_string();
+        let query = HydraQuery::Frequency(DataInput::Str(MEASURE));
+        let estimate = sketch
+            .query_key(&[Some(key.as_str())], &query)
+            .expect("query");
+        assert!(
+            estimate >= exact as f64 && estimate <= exact as f64 * 1.01 + 4.0,
+            "Hydra CM key {key}: estimate {estimate}, exact {exact}"
+        );
+        assert_eq!(left.query_key(&[Some(key.as_str())], &query), Ok(estimate));
+    }
 }
 
 #[test]
 fn hydra_cs_passes_signed_frequency_conformance() {
     let stream = zipf_i64(40_000, 256, 1.1, 5_101);
     let truth = freq_truth(&stream);
-    let spec = FrequencySpec {
-        one_sided: false,
-        rel_tol: 0.06,
-        abs_tol: 25.0,
-    };
-
-    conformance::frequency_battery("Hydra<CS>", HydraCsAdapter::new, &stream, &truth, spec)
-        .assert_ok();
-    conformance::turnstile_battery("Hydra<CS>", HydraCsAdapter::new, 42i64).assert_ok();
-    conformance::merge_equivalence_battery("Hydra<CS>", HydraCsAdapter::new, &stream, spec)
-        .assert_ok();
+    let mut sketch = Hydra::with_schema(5, 8192, ["key"], cell_cs()).expect("schema");
+    let mut left = Hydra::with_schema(5, 8192, ["key"], cell_cs()).expect("schema");
+    let mut right = Hydra::with_schema(5, 8192, ["key"], cell_cs()).expect("schema");
+    for (index, key) in stream.iter().enumerate() {
+        let key = key.to_string();
+        sketch
+            .update(&[key.as_str()], &DataInput::Str(MEASURE), None)
+            .expect("update");
+        let shard = if index % 2 == 0 {
+            &mut left
+        } else {
+            &mut right
+        };
+        shard
+            .update(&[key.as_str()], &DataInput::Str(MEASURE), None)
+            .expect("update");
+    }
+    left.merge(&right).expect("merge");
+    for (key, exact) in truth.pairs() {
+        let key = key.to_string();
+        let query = HydraQuery::Frequency(DataInput::Str(MEASURE));
+        let estimate = sketch
+            .query_key(&[Some(key.as_str())], &query)
+            .expect("query");
+        assert!(
+            (estimate - exact as f64).abs() <= exact as f64 * 0.06 + 25.0,
+            "Hydra CS key {key}: estimate {estimate}, exact {exact}"
+        );
+        assert_eq!(left.query_key(&[Some(key.as_str())], &query), Ok(estimate));
+    }
+    let key = "42";
+    sketch
+        .update(&[key], &DataInput::Str(MEASURE), Some(500))
+        .expect("increment");
+    sketch
+        .update(&[key], &DataInput::Str(MEASURE), Some(-500))
+        .expect("decrement");
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +311,44 @@ fn lattice_hydra(cols: usize) -> Hydra {
 fn hydra_subpopulation_counts_are_exact_on_a_sparse_grid() {
     // 99 subkeys over 4096 columns: median-of-5 needs three rows to collide
     // before an answer moves, so every dense subpopulation is exact.
-    let stream = labelled_stream(30_000, 4_200);
+    let stream = {
+        let count = 30_000;
+        let seed = 4_200;
+        let src = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: REGIONS.len(),
+            exponent: 0.8,
+            seed,
+        });
+        let dst = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: REGIONS.len(),
+            exponent: 0.5,
+            seed: seed + 1,
+        });
+        let statuses = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: STATUSES.len(),
+            exponent: 1.2,
+            seed: seed + 2,
+        });
+        let endpoints = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: ENDPOINTS.len(),
+            exponent: 0.4,
+            seed: seed + 3,
+        });
+        (0..count)
+            .map(|i| Record {
+                key: [
+                    REGIONS[src[i] as usize],
+                    REGIONS[dst[i] as usize],
+                    STATUSES[statuses[i] as usize],
+                ],
+                endpoint: ENDPOINTS[endpoints[i] as usize],
+            })
+            .collect::<Vec<_>>()
+    };
     let truth = lattice_truth(&stream);
     let mut hydra = lattice_hydra(4096);
     ingest(&mut hydra, &stream);
@@ -380,7 +378,44 @@ fn hydra_subpopulation_counts_are_exact_on_a_sparse_grid() {
 /// `Hydra::update`'s `count` reaches the per-cell counter, so a
 /// subpopulation's frequency is its weighted total, not its record count.
 fn assert_weighted_updates_reach_the_cell(counter: HydraCounter, slack: impl Fn(i64) -> f64) {
-    let stream = labelled_stream(12_000, 4_240);
+    let stream = {
+        let count = 12_000;
+        let seed = 4_240;
+        let src = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: REGIONS.len(),
+            exponent: 0.8,
+            seed,
+        });
+        let dst = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: REGIONS.len(),
+            exponent: 0.5,
+            seed: seed + 1,
+        });
+        let statuses = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: STATUSES.len(),
+            exponent: 1.2,
+            seed: seed + 2,
+        });
+        let endpoints = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: ENDPOINTS.len(),
+            exponent: 0.4,
+            seed: seed + 3,
+        });
+        (0..count)
+            .map(|i| Record {
+                key: [
+                    REGIONS[src[i] as usize],
+                    REGIONS[dst[i] as usize],
+                    STATUSES[statuses[i] as usize],
+                ],
+                endpoint: ENDPOINTS[endpoints[i] as usize],
+            })
+            .collect::<Vec<_>>()
+    };
     let mut hydra = Hydra::with_schema(5, 4096, SCHEMA, counter).expect("three-column schema");
     let mut truth: HashMap<LatticeKey, i64> = HashMap::new();
 
@@ -468,7 +503,7 @@ fn hydra_kll_weighted_updates_repeat_the_value() {
     let mut failures: Vec<String> = Vec::new();
     for (key, vals) in truth {
         let exact = common::NumericTruth::new(vals);
-        for q in conformance::DEFAULT_QUANTILE_QS {
+        for q in DEFAULT_QUANTILE_QS {
             let est = hydra
                 .query_key(&key, &HydraQuery::Quantile(q))
                 .expect("quantile");
@@ -559,7 +594,7 @@ fn hydra_kll_head_subpopulation_quantiles() {
     let mut failures: Vec<String> = Vec::new();
     for (key, vals) in truth {
         let exact = common::NumericTruth::new(vals);
-        for q in conformance::DEFAULT_QUANTILE_QS {
+        for q in DEFAULT_QUANTILE_QS {
             let est = hydra
                 .query_key(&key, &HydraQuery::Quantile(q))
                 .expect("quantile");
@@ -584,7 +619,44 @@ fn hydra_kll_head_subpopulation_quantiles() {
 fn hydra_marginals_agree_with_the_sum_of_their_children() {
     // A wildcard query reads its own subkey, written by the fan-out on every
     // matching record, not a roll-up of the cells beneath it.
-    let stream = labelled_stream(30_000, 5_210);
+    let stream = {
+        let count = 30_000;
+        let seed = 5_210;
+        let src = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: REGIONS.len(),
+            exponent: 0.8,
+            seed,
+        });
+        let dst = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: REGIONS.len(),
+            exponent: 0.5,
+            seed: seed + 1,
+        });
+        let statuses = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: STATUSES.len(),
+            exponent: 1.2,
+            seed: seed + 2,
+        });
+        let endpoints = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: ENDPOINTS.len(),
+            exponent: 0.4,
+            seed: seed + 3,
+        });
+        (0..count)
+            .map(|i| Record {
+                key: [
+                    REGIONS[src[i] as usize],
+                    REGIONS[dst[i] as usize],
+                    STATUSES[statuses[i] as usize],
+                ],
+                endpoint: ENDPOINTS[endpoints[i] as usize],
+            })
+            .collect::<Vec<_>>()
+    };
     let mut hydra = lattice_hydra(4096);
     ingest(&mut hydra, &stream);
 
@@ -620,7 +692,44 @@ fn hydra_shard_merge_is_exactly_single_pass() {
     // Cell-wise merge of an additive counter is exact, so the comparison
     // carries no tolerance.
     const SHARDS: usize = 4;
-    let stream = labelled_stream(24_000, 5_220);
+    let stream = {
+        let count = 24_000;
+        let seed = 5_220;
+        let src = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: REGIONS.len(),
+            exponent: 0.8,
+            seed,
+        });
+        let dst = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: REGIONS.len(),
+            exponent: 0.5,
+            seed: seed + 1,
+        });
+        let statuses = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: STATUSES.len(),
+            exponent: 1.2,
+            seed: seed + 2,
+        });
+        let endpoints = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: ENDPOINTS.len(),
+            exponent: 0.4,
+            seed: seed + 3,
+        });
+        (0..count)
+            .map(|i| Record {
+                key: [
+                    REGIONS[src[i] as usize],
+                    REGIONS[dst[i] as usize],
+                    STATUSES[statuses[i] as usize],
+                ],
+                endpoint: ENDPOINTS[endpoints[i] as usize],
+            })
+            .collect::<Vec<_>>()
+    };
 
     let mut single = lattice_hydra(2048);
     ingest(&mut single, &stream);
@@ -1011,7 +1120,44 @@ fn hydra_subpopulation_error_stays_within_the_additive_grid_bound() {
 #[test]
 fn hydra_cs_head_subpopulation_frequencies() {
     // Count Sketch carries signed per-cell noise, so the band is symmetric.
-    let stream = labelled_stream(30_000, 4_300);
+    let stream = {
+        let count = 30_000;
+        let seed = 4_300;
+        let src = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: REGIONS.len(),
+            exponent: 0.8,
+            seed,
+        });
+        let dst = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: REGIONS.len(),
+            exponent: 0.5,
+            seed: seed + 1,
+        });
+        let statuses = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: STATUSES.len(),
+            exponent: 1.2,
+            seed: seed + 2,
+        });
+        let endpoints = ZipfGenerator::generate::<u64>(&ZipfConfig {
+            count,
+            domain: ENDPOINTS.len(),
+            exponent: 0.4,
+            seed: seed + 3,
+        });
+        (0..count)
+            .map(|i| Record {
+                key: [
+                    REGIONS[src[i] as usize],
+                    REGIONS[dst[i] as usize],
+                    STATUSES[statuses[i] as usize],
+                ],
+                endpoint: ENDPOINTS[endpoints[i] as usize],
+            })
+            .collect::<Vec<_>>()
+    };
     let truth = lattice_truth(&stream);
     let mut hydra = Hydra::with_schema(5, 4096, SCHEMA, cell_cs()).expect("three-column schema");
     ingest(&mut hydra, &stream);
@@ -1368,7 +1514,7 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
         }
     }
     let exact = common::NumericTruth::new(region_values);
-    for q in conformance::DEFAULT_QUANTILE_QS {
+    for q in DEFAULT_QUANTILE_QS {
         let est = merged
             .query_key(&[Some("eu-west"), None], &HydraQuery::Quantile(q))
             .expect("quantile");

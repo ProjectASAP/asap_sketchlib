@@ -18,11 +18,11 @@
 //! and too tight at p12 (1.2 sigma), which is why it is gone.
 
 mod common;
+#[path = "e2e_cardinality/hll_variants.rs"]
+mod hll_variants;
 
-use common::conformance::assert_cardinality_bound;
 use common::specs::CardinalityConfidenceSpec;
 use common::streams::uniform_u64;
-use common::variants::{hyperloglog_variants, portable_hll_variants};
 
 use asap_sketchlib::{
     Classic, DataInput, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, SetAggregator,
@@ -33,16 +33,6 @@ use asap_sketchlib::{
 /// battery the binomial acceptance rule then tolerates zero failures, which is
 /// the intent — an estimator four standard errors out is broken, not unlucky.
 const Z: f64 = 4.0;
-
-#[test]
-fn every_hyperloglog_instantiation_satisfies_its_own_cardinality_error_model() {
-    assert_cardinality_bound(hyperloglog_variants);
-}
-
-#[test]
-fn every_portable_hll_instantiation_satisfies_the_register_error_model() {
-    assert_cardinality_bound(portable_hll_variants);
-}
 
 /// The Classic estimator's accuracy cliff at the linear-counting switchover.
 ///

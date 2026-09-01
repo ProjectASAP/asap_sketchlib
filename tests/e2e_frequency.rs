@@ -15,12 +15,14 @@
 //! that turn a per-key failure probability into a pass/fail decision.
 
 mod common;
+#[path = "e2e_frequency/count_min_variants.rs"]
+mod count_min_variants;
+#[path = "e2e_frequency/count_sketch_variants.rs"]
+mod count_sketch_variants;
 
 use common::FreqTruth;
-use common::conformance::{assert_cms_bound, assert_cs_bound};
 use common::specs::{CountMinSpec, Tally};
 use common::streams::zipf_u64;
-use common::variants::{countminsketch_variants, countsketch_variants};
 use std::collections::HashMap;
 
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
@@ -88,16 +90,6 @@ fn countmin_fast_path_zipf_conforms_to_the_count_min_model_and_merges_shards_exa
         });
     }
     merge_equality.assert_none("CountMin merge equality", &context);
-}
-
-#[test]
-fn every_countminsketch_instantiation_meets_the_count_min_bound_on_every_regime() {
-    assert_cms_bound(countminsketch_variants);
-}
-
-#[test]
-fn every_countsketch_instantiation_meets_the_l2_bound_on_every_regime() {
-    assert_cs_bound(countsketch_variants);
 }
 
 #[test]

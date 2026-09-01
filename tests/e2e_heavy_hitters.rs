@@ -6,9 +6,7 @@
 //! through partial-key aggregation over its recorded flows, Elastic through its
 //! heavy/light split.
 //!
-//! `tests/conformance_kit.rs` runs the standard `frequency_battery` over 1024
-//! Space-Saving counters. Here the summary is pushed on what that battery does
-//! not model - the error sandwich around every monitored key, the ceiling an
+//! The summary is pushed on the error sandwich around every monitored key, the ceiling an
 //! unmonitored key cannot exceed, `is_guaranteed` as a claim about the real
 //! top-k, and the bucket and counter lists staying well formed under sustained
 //! eviction.
@@ -26,13 +24,16 @@
 //! the same question from an unkeyed sketch plus a heap.
 
 mod common;
+#[path = "e2e_heavy_hitters/heap_variants.rs"]
+mod heap_variants;
 
-use common::conformance::{assert_cms_bound, assert_cs_bound};
-use common::streams::{HEAVY_HITTER_DOMAIN, freq_truth, heavy_hitter_stream, zipf_u64};
-use common::variants::{countminsketch_topk_variants, countsketch_topk_variants};
+use common::streams::{zipf_i64, zipf_u64};
+use common::truth::freq_truth;
 
 use asap_sketchlib::{DataInput, HeapItem, SPACE_SAVING_DEFAULT_CAPACITY, SpaceSaving};
 use std::collections::{HashMap, HashSet};
+
+const HEAVY_HITTER_DOMAIN: usize = 2_048;
 
 fn filled(capacity: usize, stream: &[i64]) -> SpaceSaving {
     let mut summary = SpaceSaving::with_capacity(capacity);
@@ -57,7 +58,7 @@ fn key_of(item: &HeapItem) -> i64 {
 /// least its true count and at most its true count plus its own error.
 #[test]
 fn a_monitored_key_is_sandwiched_by_its_error() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let truth = freq_truth(&stream);
     let summary = filled(256, &stream);
 
@@ -88,7 +89,7 @@ fn a_monitored_key_is_sandwiched_by_its_error() {
 /// every key in the stream.
 #[test]
 fn an_unmonitored_key_never_exceeds_the_minimum_count() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let truth = freq_truth(&stream);
     let summary = filled(256, &stream);
     let floor = summary.min_count();
@@ -111,7 +112,7 @@ fn an_unmonitored_key_never_exceeds_the_minimum_count() {
 /// The heavy keys the summary is bought for come back exactly, in order.
 #[test]
 fn the_true_heavy_hitters_are_reported_exactly_and_in_order() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let truth = freq_truth(&stream);
     let summary = filled(256, &stream);
 
@@ -141,7 +142,7 @@ fn the_true_heavy_hitters_are_reported_exactly_and_in_order() {
 /// genuinely above every key the summary dropped.
 #[test]
 fn a_guaranteed_key_really_outranks_everything_dropped() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let truth = freq_truth(&stream);
     let summary = filled(256, &stream);
 
@@ -201,7 +202,7 @@ fn an_arrival_displaces_the_minimum_and_inherits_its_count() {
 /// walking them reaches every counter exactly once, in descending count order.
 #[test]
 fn the_stream_summary_lists_stay_well_formed_under_eviction() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     for capacity in [1usize, 2, 17, 256, 1_024] {
         let summary = filled(capacity, &stream);
         let expected = capacity.min(freq_truth(&stream).distinct());
@@ -255,7 +256,7 @@ fn the_stream_summary_lists_stay_well_formed_under_eviction() {
 /// A weighted arrival is the same as that many single arrivals.
 #[test]
 fn a_weighted_arrival_matches_repeating_it() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let mut singles: SpaceSaving = SpaceSaving::with_capacity(2_048);
     let mut weighted: SpaceSaving = SpaceSaving::with_capacity(2_048);
 
@@ -285,7 +286,7 @@ fn a_weighted_arrival_matches_repeating_it() {
 /// With room for every distinct key the summary is exact and carries no error.
 #[test]
 fn a_summary_larger_than_the_domain_is_exact() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let truth = freq_truth(&stream);
     let summary = filled(HEAVY_HITTER_DOMAIN * 2, &stream);
 
@@ -302,7 +303,7 @@ fn a_summary_larger_than_the_domain_is_exact() {
 /// below what either side saw.
 #[test]
 fn a_merge_keeps_the_total_and_never_reads_low() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let (left_stream, right_stream): (Vec<i64>, Vec<i64>) =
         stream.iter().partition(|key| *key % 2 == 0);
 
@@ -341,7 +342,7 @@ fn a_merge_keeps_the_total_and_never_reads_low() {
 /// the summary looks up on.
 #[test]
 fn a_serde_round_trip_preserves_every_answer() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let truth = freq_truth(&stream);
     let summary = filled(256, &stream);
 
@@ -385,7 +386,7 @@ fn an_empty_summary_answers() {
 /// count and error as the arrivals it stands in for.
 #[test]
 fn a_weighted_arrival_matches_repeating_it_under_eviction() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let mut counts: HashMap<i64, u64> = HashMap::new();
     for key in &stream {
         *counts.entry(*key).or_default() += 1;
@@ -424,7 +425,7 @@ fn a_weighted_arrival_matches_repeating_it_under_eviction() {
 /// `bulk_insert` is the loop it replaces, and a zero weight records nothing.
 #[test]
 fn bulk_insert_matches_repeated_inserts_and_a_zero_weight_is_inert() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let values: Vec<DataInput> = stream.iter().map(|key| DataInput::I64(*key)).collect();
 
     let mut bulk: SpaceSaving = SpaceSaving::with_capacity(128);
@@ -490,7 +491,7 @@ fn a_merge_into_an_under_full_summary_keeps_the_ceiling_honest() {
 /// stream stays under its ceiling, and every guarantee holds against the truth.
 #[test]
 fn a_merge_chain_stays_one_sided_against_the_truth() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let mut shards: Vec<Vec<i64>> = vec![Vec::new(); 3];
     for (position, key) in stream.iter().enumerate() {
         shards[position % 3].push(*key);
@@ -585,7 +586,7 @@ fn a_merge_picks_the_same_survivors_every_time() {
 /// The ceiling a merge established survives the wire.
 #[test]
 fn a_round_trip_carries_the_merged_ceiling() {
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     let mut merged = filled(32, &stream[..stream.len() / 2]);
     merged.merge_from(&filled(4, &stream[stream.len() / 2..]));
 
@@ -695,7 +696,7 @@ fn the_default_summary_holds_the_default_capacity() {
     assert_eq!(summary.capacity(), SPACE_SAVING_DEFAULT_CAPACITY);
     assert!(summary.is_empty());
 
-    let stream = heavy_hitter_stream();
+    let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
     for key in &stream {
         summary.insert(&DataInput::I64(*key));
     }
@@ -714,97 +715,63 @@ fn the_default_summary_holds_the_default_capacity() {
 
 mod keyed_bucket {
     use super::common::assert_between;
-    use super::common::conformance::{self, FrequencyOps, FrequencySpec, MergeOps};
     use super::*;
 
     use asap_sketchlib::{Coco, DefaultXxHasher, Elastic};
-
-    // -----------------------------------------------------------------------
-    // Conformance adapters: both sketches are string-keyed, so the kit's integer
-    // keys are rendered through one shared flow-id format.
-    // -----------------------------------------------------------------------
 
     fn flow_key(key: i64) -> String {
         format!("flow::{key}")
     }
 
-    /// Coco at its documented default, `1024 x 4`: 4096 buckets against the ~2000
-    /// distinct flows the battery stream carries, which is the regime the sizing
-    /// note asks for -- the table attributes mass to at most `w * d` keys at once.
-    struct CocoAdapter(Coco<DefaultXxHasher>);
-
-    impl CocoAdapter {
-        fn new() -> Self {
-            Self(Coco::new())
-        }
-    }
-
-    impl FrequencyOps<i64> for CocoAdapter {
-        fn ingest(&mut self, key: &i64) {
-            self.0.insert(&flow_key(*key), 1);
-        }
-        fn estimate(&self, key: &i64) -> f64 {
-            self.0.estimate_key(&flow_key(*key)) as f64
-        }
-    }
-
-    impl MergeOps for CocoAdapter {
-        fn merge_from(&mut self, other: &Self) {
-            self.0.merge(&other.0);
-        }
-    }
-
-    /// Elastic at 256 heavy buckets over the default 3 x 4096 light layer.
-    /// Section 3.1.2 puts the elephant collision rate at `1 - (H/w + 1) e^(-H/w)`;
-    /// the battery stream carries 243 dense flows, so `H/w ~ 0.95` and a quarter of
-    /// the buckets hold more than one elephant. Contested buckets are the point:
-    /// the losers read through the light layer, which is where the one-sided claim
-    /// is worth checking.
-    struct ElasticAdapter(Elastic<DefaultXxHasher>);
-
-    impl ElasticAdapter {
-        fn new() -> Self {
-            Self(Elastic::init_with_length(256))
-        }
-    }
-
-    impl FrequencyOps<i64> for ElasticAdapter {
-        fn ingest(&mut self, key: &i64) {
-            self.0.insert(flow_key(*key));
-        }
-        fn estimate(&self, key: &i64) -> f64 {
-            self.0.query(flow_key(*key)) as f64
-        }
-    }
-
-    impl MergeOps for ElasticAdapter {
-        fn merge_from(&mut self, other: &Self) {
-            self.0.merge(&other.0);
-        }
-    }
-
     // -----------------------------------------------------------------------
-    // Battery runs
+    // Standard frequency and merge checks
     // -----------------------------------------------------------------------
 
     /// Coco is *unbiased*, not one-sided: an estimate comes back either side of the
-    /// truth, so `one_sided` stays false and the spec is Count Sketch's two-sided
-    /// reference spec from `conformance_kit.rs`, unchanged.
+    /// truth, so the check uses a two-sided tolerance.
     ///
-    /// `turnstile_battery` does not fit: `insert` takes an unsigned weight and the
+    /// A turnstile check does not fit: `insert` takes an unsigned weight and the
     /// sketch has no decrement path.
     #[test]
     fn coco_passes_frequency_and_merge_conformance() {
-        let stream = heavy_hitter_stream();
+        let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
         let truth = freq_truth(&stream);
-        let spec = FrequencySpec {
-            one_sided: false,
-            rel_tol: 0.06,
-            abs_tol: 25.0,
-        };
-
-        conformance::frequency_battery("Coco", CocoAdapter::new, &stream, &truth, spec).assert_ok();
-        conformance::merge_equivalence_battery("Coco", CocoAdapter::new, &stream, spec).assert_ok();
+        let mut sketch = Coco::<DefaultXxHasher>::new();
+        let mut left = Coco::<DefaultXxHasher>::new();
+        let mut right = Coco::<DefaultXxHasher>::new();
+        let mut left_truth = HashMap::<i64, i64>::new();
+        for (index, key) in stream.iter().enumerate() {
+            sketch.insert(&flow_key(*key), 1);
+            if index % 2 == 0 {
+                left.insert(&flow_key(*key), 1);
+                *left_truth.entry(*key).or_insert(0) += 1;
+            } else {
+                right.insert(&flow_key(*key), 1);
+            }
+        }
+        left.merge(&right);
+        for (key, exact) in truth.pairs() {
+            if exact < 25 {
+                continue;
+            }
+            let estimate = sketch.estimate_key(&flow_key(key)) as f64;
+            assert!(
+                (estimate - exact as f64).abs() <= 25.0 + 0.06 * exact as f64,
+                "Coco key {key}: estimate {estimate}, exact {exact}"
+            );
+        }
+        for (key, left_count) in left_truth {
+            if left_count < 25 {
+                continue;
+            }
+            let single = sketch.estimate_key(&flow_key(key)) as f64;
+            let merged = left.estimate_key(&flow_key(key)) as f64;
+            let slack = (25.0 + 0.06 * left_count as f64).max(2.0);
+            assert!(
+                (single - merged).abs() <= slack,
+                "Coco merged key {key}: single {single}, merged {merged}, slack {slack}"
+            );
+        }
     }
 
     /// `docs/api/api_elastic.md`: "The estimator is one-sided: it never returns
@@ -812,26 +779,53 @@ mod keyed_bucket {
     /// exactly; every other flow reads the light layer, so the excess above the
     /// truth is that layer's Count-Min error and the whole tolerance is absolute.
     ///
-    /// `turnstile_battery` does not fit: `insert_many` is documented as repeated
+    /// A turnstile check does not fit: `insert_many` is documented as repeated
     /// positive votes, and there is no decrement path. The battery ingests through
     /// `insert` alone -- overload mode is documented as breaking the one-sided
     /// guarantee, so a battery holding `one_sided: true` must not reach it.
     #[test]
     fn elastic_passes_frequency_and_merge_conformance() {
-        let stream = heavy_hitter_stream();
+        let stream = zipf_i64(60_000, HEAVY_HITTER_DOMAIN, 1.1, 9_001);
         let truth = freq_truth(&stream);
         // Count-Min's additive bound over the light layer: eps * N with
         // eps = e / cols. Measured worst dense-key excess is 8.
-        let spec = FrequencySpec {
-            one_sided: true,
-            rel_tol: 0.0,
-            abs_tol: std::f64::consts::E / 4096.0 * stream.len() as f64,
-        };
-
-        conformance::frequency_battery("Elastic", ElasticAdapter::new, &stream, &truth, spec)
-            .assert_ok();
-        conformance::merge_equivalence_battery("Elastic", ElasticAdapter::new, &stream, spec)
-            .assert_ok();
+        let mut sketch = Elastic::<DefaultXxHasher>::init_with_length(256);
+        let mut left = Elastic::<DefaultXxHasher>::init_with_length(256);
+        let mut right = Elastic::<DefaultXxHasher>::init_with_length(256);
+        let mut left_truth = HashMap::<i64, i64>::new();
+        for (index, key) in stream.iter().enumerate() {
+            sketch.insert(flow_key(*key));
+            if index % 2 == 0 {
+                left.insert(flow_key(*key));
+                *left_truth.entry(*key).or_insert(0) += 1;
+            } else {
+                right.insert(flow_key(*key));
+            }
+        }
+        left.merge(&right);
+        let bound = std::f64::consts::E / 4096.0 * stream.len() as f64;
+        for (key, exact) in truth.pairs() {
+            if exact < 25 {
+                continue;
+            }
+            let estimate = sketch.query(flow_key(key)) as f64;
+            assert!(
+                estimate >= exact as f64 && estimate - exact as f64 <= bound,
+                "Elastic key {key}: estimate {estimate}, exact {exact}, bound {bound}"
+            );
+        }
+        for (key, left_count) in left_truth {
+            if left_count < 25 {
+                continue;
+            }
+            let single = sketch.query(flow_key(key)) as f64;
+            let merged = left.query(flow_key(key)) as f64;
+            let slack = bound.max(2.0);
+            assert!(
+                (single - merged).abs() <= slack,
+                "Elastic merged key {key}: single {single}, merged {merged}, slack {slack}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1539,14 +1533,4 @@ mod partial_key_and_heavy_maintenance {
         assert_eq!(displaced, "takeover");
         assert_eq!(weighted.vote_pos, 1);
     }
-}
-
-#[test]
-fn every_countminsketch_topk_instantiation_meets_the_count_min_bound_on_every_regime() {
-    assert_cms_bound(countminsketch_topk_variants);
-}
-
-#[test]
-fn every_countsketch_topk_instantiation_meets_the_l2_bound_on_every_regime() {
-    assert_cs_bound(countsketch_topk_variants);
 }

@@ -42,8 +42,6 @@ use asap_sketchlib::{
     hash128_seeded, input_to_owned, univmon_layer_threshold,
 };
 use common::FreqTruth;
-#[cfg(feature = "octo-runtime")]
-use common::streams::u64_inputs;
 use common::streams::{exponential_f64, zipf_u64};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -770,7 +768,10 @@ mod runtime {
 
     #[test]
     fn run_octo_cm_matches_a_single_threaded_replay_of_the_same_partition() {
-        let inputs = u64_inputs(&zipf_u64(40_000, 512, 1.1, 9_401));
+        let inputs = zipf_u64(40_000, 512, 1.1, 9_401)
+            .into_iter()
+            .map(DataInput::U64)
+            .collect::<Vec<_>>();
         for workers in [1usize, 2, 3, 4, 7] {
             assert_eq!(
                 cm_cells(&cm_runtime(&inputs, workers, ROWS, COLS)),
@@ -782,7 +783,10 @@ mod runtime {
 
     #[test]
     fn run_octo_count_matches_a_single_threaded_replay_of_the_same_partition() {
-        let inputs = u64_inputs(&zipf_u64(40_000, 256, 1.1, 9_402));
+        let inputs = zipf_u64(40_000, 256, 1.1, 9_402)
+            .into_iter()
+            .map(DataInput::U64)
+            .collect::<Vec<_>>();
         for workers in [1usize, 2, 4] {
             let got = run_octo(
                 &inputs,
@@ -804,7 +808,7 @@ mod runtime {
 
     #[test]
     fn run_octo_hll_is_bit_exact_and_worker_count_invariant() {
-        let inputs = u64_inputs(&(0..80_000u64).collect::<Vec<_>>());
+        let inputs = (0..80_000u64).map(DataInput::U64).collect::<Vec<_>>();
         let mut reference = HyperLogLog::<Classic>::default();
         for input in &inputs {
             reference.insert(input);
@@ -871,7 +875,10 @@ mod runtime {
 
     #[test]
     fn run_octo_is_deterministic_across_repeated_runs() {
-        let inputs = u64_inputs(&zipf_u64(30_000, 512, 1.1, 9_403));
+        let inputs = zipf_u64(30_000, 512, 1.1, 9_403)
+            .into_iter()
+            .map(DataInput::U64)
+            .collect::<Vec<_>>();
         let first = cm_runtime(&inputs, 4, ROWS, COLS);
         let second = cm_runtime(&inputs, 4, ROWS, COLS);
         assert_eq!(
@@ -883,7 +890,10 @@ mod runtime {
 
     #[test]
     fn streaming_runtime_matches_the_batch_helper() {
-        let inputs = u64_inputs(&zipf_u64(30_000, 512, 1.1, 9_404));
+        let inputs = zipf_u64(30_000, 512, 1.1, 9_404)
+            .into_iter()
+            .map(DataInput::U64)
+            .collect::<Vec<_>>();
         let batch = cm_runtime(&inputs, 4, ROWS, COLS);
 
         let mut runtime = OctoRuntime::new(&config(4), CmOctoPlan::new(ROWS, COLS), || {
@@ -901,7 +911,10 @@ mod runtime {
 
     #[test]
     fn insert_batch_matches_element_wise_inserts() {
-        let inputs = u64_inputs(&zipf_u64(20_000, 512, 1.1, 9_405));
+        let inputs = zipf_u64(20_000, 512, 1.1, 9_405)
+            .into_iter()
+            .map(DataInput::U64)
+            .collect::<Vec<_>>();
 
         let mut one_by_one = OctoRuntime::new(&config(3), CmOctoPlan::new(ROWS, COLS), || {
             CmOctoAggregator {
@@ -927,7 +940,7 @@ mod runtime {
 
     #[test]
     fn degenerate_config_is_clamped_rather_than_rejected() {
-        let inputs = u64_inputs(&(0..5_000u64).collect::<Vec<_>>());
+        let inputs = (0..5_000u64).map(DataInput::U64).collect::<Vec<_>>();
         let cfg = OctoConfig {
             num_workers: 0,
             pin_cores: false,
@@ -953,7 +966,7 @@ mod runtime {
 
     #[test]
     fn a_one_slot_queue_applies_backpressure_without_deadlocking() {
-        let inputs = u64_inputs(&(0..20_000u64).collect::<Vec<_>>());
+        let inputs = (0..20_000u64).map(DataInput::U64).collect::<Vec<_>>();
         let cfg = OctoConfig {
             num_workers: 4,
             pin_cores: false,
@@ -1100,7 +1113,7 @@ mod runtime {
     fn a_user_defined_worker_and_aggregator_round_trip_every_input() {
         let workers = 3;
         let n = 10_001u64;
-        let inputs = u64_inputs(&(0..n).collect::<Vec<_>>());
+        let inputs = (0..n).map(DataInput::U64).collect::<Vec<_>>();
 
         let cfg = OctoConfig {
             partition: OctoPartition::RoundRobin,
@@ -1224,7 +1237,11 @@ mod runtime {
         let rows = 5;
         let cols = 4096;
         let stream = zipf_u64(200_000, 4_096, 1.1, 9_501);
-        let inputs = u64_inputs(&stream);
+        let inputs = stream
+            .iter()
+            .copied()
+            .map(DataInput::U64)
+            .collect::<Vec<_>>();
 
         let mut truth = FreqTruth::default();
         for k in &stream {
@@ -1256,7 +1273,7 @@ mod runtime {
     #[test]
     fn run_octo_hll_cardinality_error_stays_within_three_sigma() {
         let truth = 200_000u64;
-        let inputs = u64_inputs(&(0..truth).collect::<Vec<_>>());
+        let inputs = (0..truth).map(DataInput::U64).collect::<Vec<_>>();
         let got = run_octo(&inputs, &config(4), HllOctoPlan::new(), || {
             HllOctoAggregator {
                 sketch: HyperLogLog::<Classic>::default(),
@@ -1285,7 +1302,11 @@ mod runtime {
         let rows = 5;
         let cols = 4096;
         let stream = zipf_u64(200_000, 2_048, 1.1, 9_502);
-        let inputs = u64_inputs(&stream);
+        let inputs = stream
+            .iter()
+            .copied()
+            .map(DataInput::U64)
+            .collect::<Vec<_>>();
 
         let mut truth = FreqTruth::default();
         for k in &stream {
@@ -3893,7 +3914,11 @@ mod heavy_hitters {
         #[test]
         fn run_octo_coco_conserves_the_stream_mass_at_every_worker_count() {
             let stream = flow_stream(60_000, 2_048, 23_001);
-            let inputs = u64_inputs(&stream);
+            let inputs = stream
+                .iter()
+                .copied()
+                .map(DataInput::U64)
+                .collect::<Vec<_>>();
             let distinct: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
 
             for workers in [1usize, 2, 3, 4, 8] {
@@ -3923,7 +3948,11 @@ mod heavy_hitters {
         #[test]
         fn run_octo_elastic_conserves_the_stream_mass_whatever_the_interleaving() {
             let stream = flow_stream(60_000, 4_096, 23_002);
-            let inputs = u64_inputs(&stream);
+            let inputs = stream
+                .iter()
+                .copied()
+                .map(DataInput::U64)
+                .collect::<Vec<_>>();
             let truth = truth_of(&stream);
             let (rows, cols) = (3usize, 2_048usize);
 
@@ -3963,7 +3992,11 @@ mod heavy_hitters {
         #[test]
         fn run_octo_elastic_matches_a_single_threaded_replay_at_one_worker() {
             let stream = flow_stream(40_000, 2_048, 23_003);
-            let inputs = u64_inputs(&stream);
+            let inputs = stream
+                .iter()
+                .copied()
+                .map(DataInput::U64)
+                .collect::<Vec<_>>();
             let (rows, cols) = (3usize, 1_024usize);
 
             let mut replay = OctoElastic::new(1, 128, rows, cols, Route::HashByKey);
