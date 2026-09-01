@@ -14,8 +14,13 @@ pub mod specs;
 pub mod streamgen;
 pub mod truth;
 
+// Each test binary compiles this module separately, so a re-export used by
+// one suite is dead in another.
+#[allow(unused_imports)]
 pub use prefix_structure::*;
 
+#[allow(unused_imports)]
 pub use streamgen::*;
 
+#[allow(unused_imports)]
 pub use truth::*;

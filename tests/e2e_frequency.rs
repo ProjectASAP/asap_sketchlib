@@ -17,7 +17,10 @@
 mod common;
 
 use common::specs::{CountMinSpec, CountSketchSpec, SecondMomentSpec, Tally};
-use common::{FixMat1, FixMat2};
+use common::{
+    FixMat1, FixMat2, FixMat3, FixMat4, FixMat5, FixMat6, FixMat7, FixMat8, FixMat9, FixMat10,
+    FixMat11, FixMat12, FixMat13, FixMat14, FixMat15,
+};
 use common::{FreqTruth, uniform_u64, zipf_u64};
 use std::collections::HashMap;
 
@@ -125,49 +128,62 @@ fn countmin_vecbased_error_bound() {
 
 #[test]
 fn countmin_matbased_error_bound() {
-    let stream = zipf_u64(20_000, 512, 1.2, 1002);
-    let mut reg1 = CountMin::<FixMat1, RegularPath>::from_storage(FixMat1::default());
-    let mut fast1 = CountMin::<FixMat1, FastPath>::from_storage(FixMat1::default());
-    let mut reg2 = CountMin::<FixMat2, RegularPath>::from_storage(FixMat2::default());
-    let mut fast2 = CountMin::<FixMat2, FastPath>::from_storage(FixMat2::default());
+    const STREAM_SEED: u64 = 1002;
 
+    let stream = zipf_u64(20_000, 512, 1.2, STREAM_SEED);
     let mut truth = FreqTruth::default();
-
     for k in &stream {
         truth.observe(*k as i64);
-        reg1.insert(&DataInput::I64(*k as i64));
-        fast1.insert(&DataInput::I64(*k as i64));
-        reg2.insert(&DataInput::I64(*k as i64));
-        fast2.insert(&DataInput::I64(*k as i64));
+    }
+    let context = format!("zipf(1.2) domain=512 n=20000 stream_seed={STREAM_SEED}");
+
+    // Each `FixMatN` is a distinct type carrying its own compile-time
+    // dimensions, so the sweep has to be unrolled rather than looped. The
+    // spec's `(rows, cols)` must match the matrix's, or the assertions check
+    // the wrong theorem.
+    macro_rules! assert_fixed_matrix {
+        ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
+            $({
+                let mut reg = CountMin::<$mat, RegularPath>::from_storage($mat::default());
+                let mut fast = CountMin::<$mat, FastPath>::from_storage($mat::default());
+                for k in &stream {
+                    reg.insert(&DataInput::I64(*k as i64));
+                    fast.insert(&DataInput::I64(*k as i64));
+                }
+                let spec = CountMinSpec::new($rows, $cols);
+                spec.assert_contract(
+                    concat!("CountMin<", stringify!($mat), ", RegularPath>"),
+                    &truth,
+                    |k| reg.estimate(&DataInput::I64(k)) as f64,
+                    &context,
+                );
+                spec.assert_contract(
+                    concat!("CountMin<", stringify!($mat), ", FastPath>"),
+                    &truth,
+                    |k| fast.estimate(&DataInput::I64(k)) as f64,
+                    &context,
+                );
+            })*
+        };
     }
 
-    let context = format!("zipf(1.2) domain=512 n=20000 stream_seed=1002");
-    let spec1 = CountMinSpec::new(3, 2048);
-    spec1.assert_contract(
-        "CountMin<FixMat1, RegularPath>",
-        &truth,
-        |k| reg1.estimate(&DataInput::I64(k)) as f64,
-        &context,
-    );
-    spec1.assert_contract(
-        "CountMin<FixMat1, FastPath>",
-        &truth,
-        |k| fast1.estimate(&DataInput::I64(k)) as f64,
-        &context,
-    );
-    let spec2 = CountMinSpec::new(5, 2048);
-    spec2.assert_contract(
-        "CountMin<FixMat2, RegularPath>",
-        &truth,
-        |k| reg2.estimate(&DataInput::I64(k)) as f64,
-        &context,
-    );
-    spec2.assert_contract(
-        "CountMin<FixMat2, FastPath>",
-        &truth,
-        |k| fast2.estimate(&DataInput::I64(k)) as f64,
-        &context,
-    );
+    assert_fixed_matrix! {
+        FixMat1 => (3, 2048),
+        FixMat2 => (5, 2048),
+        FixMat3 => (7, 2048),
+        FixMat4 => (3, 4096),
+        FixMat5 => (5, 4096),
+        FixMat6 => (7, 4096),
+        FixMat7 => (3, 8192),
+        FixMat8 => (5, 8192),
+        FixMat9 => (7, 8192),
+        FixMat10 => (3, 16384),
+        FixMat11 => (5, 16384),
+        FixMat12 => (7, 16384),
+        FixMat13 => (3, 32768),
+        FixMat14 => (5, 32768),
+        FixMat15 => (7, 32768),
+    }
 }
 
 /// Bounded integer draws mapped onto distinct f64 values in `[100, 1000)`,
