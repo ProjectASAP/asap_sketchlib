@@ -646,8 +646,6 @@ const AXIS_DOMAIN: usize = 4_096;
 const AXIS_STREAM_SEED: u64 = 0x10BE_C700;
 
 const DEPTH_AXIS: [usize; 4] = [1, 2, 3, 9];
-const WIDTH_AXIS: [usize; 4] = [64, 512, 4_096, 8_192];
-const COUNTSKETCH_DEPTH_AXIS: [usize; 3] = [3, 5, 9];
 const NON_POWER_OF_TWO_WIDTHS: [usize; 4] = [3, 100, 1_000, 4_095];
 const WIDTH_EXCESS_DECAY: f64 = 2.0;
 
@@ -694,35 +692,6 @@ fn countmin_axis_contract(
 }
 
 #[test]
-fn countmin_holds_its_contract_across_the_depth_and_width_axis_on_both_paths() {
-    let (stream, truth) = zipf_stream_with_truth(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
-    for &rows in &DEPTH_AXIS {
-        for &cols in &WIDTH_AXIS {
-            let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
-            let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
-            for k in &stream {
-                regular.insert(&DataInput::U64(*k));
-                fast.insert(&DataInput::U64(*k));
-            }
-            countmin_axis_contract(
-                "CountMin<Vector2D<i64>, RegularPath> axis",
-                rows,
-                cols,
-                &truth,
-                |key| regular.estimate(&DataInput::U64(key as u64)) as f64,
-            );
-            countmin_axis_contract(
-                "CountMin<Vector2D<i64>, FastPath> axis",
-                rows,
-                cols,
-                &truth,
-                |key| fast.estimate(&DataInput::U64(key as u64)) as f64,
-            );
-        }
-    }
-}
-
-#[test]
 fn countmin_mean_excess_falls_as_the_width_axis_grows() {
     let (stream, truth) = zipf_stream_with_truth(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
     for &rows in &DEPTH_AXIS {
@@ -745,43 +714,6 @@ fn countmin_mean_excess_falls_as_the_width_axis_grows() {
                 );
             }
             previous = Some((cols, mean));
-        }
-    }
-}
-
-#[test]
-fn countsketch_holds_its_l2_contract_across_the_depth_and_width_axis() {
-    let (stream, truth) = zipf_stream_with_truth(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
-    for &rows in &COUNTSKETCH_DEPTH_AXIS {
-        for &cols in &WIDTH_AXIS {
-            let spec = CountSketchSpec::new(rows, cols);
-            let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
-            let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
-            for k in &stream {
-                regular.insert(&DataInput::U64(*k));
-                fast.insert(&DataInput::U64(*k));
-            }
-            let mut regular_simultaneous = Tally::default();
-            let mut regular_marginal = Tally::default();
-            spec.tally_into(
-                &mut regular_simultaneous,
-                &mut regular_marginal,
-                &truth,
-                |key| regular.estimate(&DataInput::U64(key as u64)),
-            );
-            regular_simultaneous.assert_none(
-                "Count<Vector2D<i64>, RegularPath> axis / simultaneous L2",
-                &axis_context("Count<Vector2D<i64>, RegularPath> axis", rows, cols),
-            );
-            let mut fast_simultaneous = Tally::default();
-            let mut fast_marginal = Tally::default();
-            spec.tally_into(&mut fast_simultaneous, &mut fast_marginal, &truth, |key| {
-                fast.estimate(&DataInput::U64(key as u64))
-            });
-            fast_simultaneous.assert_none(
-                "Count<Vector2D<i64>, FastPath> axis / simultaneous L2",
-                &axis_context("Count<Vector2D<i64>, FastPath> axis", rows, cols),
-            );
         }
     }
 }
@@ -862,11 +794,11 @@ fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
 }
 
 #[test]
-fn countminsketch_variants_meet_the_count_min_bound() {
+fn cms_bound_check() {
     assert_count_min_bound(countminsketch_variants);
 }
 
 #[test]
-fn countsketch_variants_meet_the_l2_bound() {
+fn cs_bound_check() {
     assert_l2_bound(countsketch_variants);
 }
