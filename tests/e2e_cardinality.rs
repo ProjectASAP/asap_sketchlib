@@ -19,23 +19,18 @@
 
 mod common;
 
-use common::specs::{CardinalityConfidenceSpec, Tally};
+use common::conformance::assert_cardinality_bound;
+use common::specs::CardinalityConfidenceSpec;
 use common::streams::uniform_u64;
-
-use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
-use asap_sketchlib::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};
-use asap_sketchlib::{
-    Classic, DataInput, ErtlMLE, HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogHIPP16,
-    HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, SetAggregator,
+use common::variants::{
+    HllBucketListP10, HllBucketListP13, HllBucketListP18, hyperloglog_variants,
+    portable_hll_variants,
 };
 
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP10, 10, 1_usize << 10);
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP13, 13, 1_usize << 13);
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP18, 18, 1_usize << 18);
-
-const CUSTOM_CHECKPOINTS_P10: [u64; 4] = [100, 1_000, 20_000, 200_000];
-const CUSTOM_CHECKPOINTS_P13: [u64; 4] = [1_000, 10_000, 100_000, 500_000];
-const CUSTOM_CHECKPOINTS_P18: [u64; 3] = [10_000, 100_000, 1_500_000];
+use asap_sketchlib::sketches::hll::HyperLogLogImpl;
+use asap_sketchlib::{
+    Classic, DataInput, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, SetAggregator,
+};
 
 /// Gaussian quantile for every cardinality band below. `z = 4` is a two-sided
 /// failure probability of 6.3e-5 per check; with a few dozen checks per
@@ -43,297 +38,18 @@ const CUSTOM_CHECKPOINTS_P18: [u64; 3] = [10_000, 100_000, 1_500_000];
 /// the intent — an estimator four standard errors out is broken, not unlucky.
 const Z: f64 = 4.0;
 
-/// Checkpoints spanning the linear-counting regime (far below the register
-/// count) and the raw-estimator regime well above it.
-///
-/// They deliberately avoid `n` between roughly `2m` and `4m`, where the 2007
-/// estimator switches from linear counting to the raw indicator and its error
-/// is *not* `1.04/sqrt(m)`. That band has its own test below rather than being
-/// swept under this one's tolerance.
-const CHECKPOINTS: [u64; 7] = [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000];
-
-/// Runs one core HLL type across every checkpoint, in three ingestion modes:
-/// a single pass, a replay of the same identities (which must not move the
-/// estimate at all, since registers only ever take a maximum), and a merge of
-/// two disjoint shards.
-///
-/// `$merge` says whether the type supports merging: HIP's estimate is
-/// maintained incrementally from its own insertion history, so it has no
-/// merge operation and only the first two modes apply.
-macro_rules! hll_battery {
-    ($name:ident, $ty:ty, $precision:literal, $model:ident, mergeable) => {
-        hll_battery!($name, $ty, $precision, $model, mergeable, CHECKPOINTS);
-    };
-    ($name:ident, $ty:ty, $precision:literal, $model:ident, mergeable, $checkpoints:expr) => {
-        hll_battery!(@body $name, $ty, $precision, $model, $checkpoints,
-            |single: &$ty, even: &$ty, odd: &$ty| {
-                let mut merged = even.clone();
-                merged.merge(odd);
-                Some((
-                    merged.registers_as_slice() == single.registers_as_slice(),
-                    merged.estimate() == single.estimate(),
-                ))
-            });
-    };
-    ($name:ident, $ty:ty, $precision:literal, $model:ident, not_mergeable) => {
-        hll_battery!($name, $ty, $precision, $model, not_mergeable, CHECKPOINTS);
-    };
-    ($name:ident, $ty:ty, $precision:literal, $model:ident, not_mergeable, $checkpoints:expr) => {
-        hll_battery!(@body $name, $ty, $precision, $model, $checkpoints,
-            |_s: &$ty, _e: &$ty, _o: &$ty| None);
-        // HIP has no `merge`: its estimate is maintained incrementally from the
-        // sketch's own insertion history, so two shards cannot be combined
-        // without replaying one of them.
-    };
-    (@body $name:ident, $ty:ty, $precision:literal, $model:ident, $checkpoints:expr, $merge:expr) => {
-        #[test]
-        fn $name() {
-            let spec = CardinalityConfidenceSpec::$model($precision, Z);
-            let mut tally = Tally::default();
-            let checkpoints: &[u64] = &$checkpoints;
-            let context = format!(
-                "{} p{} : m={} sigma_rel={:.5} z={Z} tolerance={:.5}; one trial = one \
-                 sketch over its own disjoint identity namespace, checkpoints {:?}",
-                stringify!($ty),
-                $precision,
-                1usize << $precision,
-                spec.sigma_rel(),
-                spec.tolerance(),
-                checkpoints
-            );
-
-            // One fresh sketch per checkpoint, each over an identity namespace
-            // disjoint from every other. Feeding one accumulating sketch and
-            // reading it at rising `n` would produce *nested* estimates — the
-            // state at 10^6 contains the state at 10^5 — which share every
-            // register and are emphatically not independent trials.
-            let mut largest: Option<$ty> = None;
-            for (i, &target) in checkpoints.iter().enumerate() {
-                let base = IDENTITY_NAMESPACE_STRIDE * (i as u64 + 1);
-                let mut sketch = <$ty>::new();
-                for k in 0..target {
-                    sketch.insert(&DataInput::U64(base + k));
-                }
-                spec.tally_into(&mut tally, sketch.estimate() as f64, target as usize);
-                largest = Some(sketch);
-            }
-
-            let mut biggest = largest.expect("the checkpoint list is non-empty");
-            let target = checkpoints[checkpoints.len() - 1];
-            let base = IDENTITY_NAMESPACE_STRIDE * (checkpoints.len() as u64);
-
-            // Duplicate replay: re-inserting every identity already seen must
-            // leave the estimate bit-identical, because a register only ever
-            // moves to a larger leading-zero count. Structural, not a band.
-            let before = biggest.estimate();
-            for k in 0..target.min(200_000) {
-                biggest.insert(&DataInput::U64(base + k));
-            }
-            assert_eq!(
-                biggest.estimate(),
-                before,
-                "replaying seen identities moved the estimate. {context}"
-            );
-
-            // Shard merge over the *same* identities is an **equality**, not a
-            // band: HLL registers combine by elementwise maximum, so merging
-            // the even and odd halves reproduces the single pass register for
-            // register.
-            {
-                const MERGE_N: u64 = 200_000;
-                let mbase = IDENTITY_NAMESPACE_STRIDE * (checkpoints.len() as u64 + 1);
-                let mut single = <$ty>::new();
-                let mut even = <$ty>::new();
-                let mut odd = <$ty>::new();
-                for k in 0..MERGE_N {
-                    let d = DataInput::U64(mbase + k);
-                    single.insert(&d);
-                    if k % 2 == 0 {
-                        even.insert(&d);
-                    } else {
-                        odd.insert(&d);
-                    }
-                }
-                let merge_shards: fn(&$ty, &$ty, &$ty) -> Option<(bool, bool)> = $merge;
-                if let Some((registers_match, estimate_match)) =
-                    merge_shards(&single, &even, &odd)
-                {
-                    assert!(
-                        registers_match,
-                        "a disjoint even/odd shard merge must reproduce the single pass \
-                         register for register. {context}"
-                    );
-                    assert!(
-                        estimate_match,
-                        "identical registers must give an identical estimate. {context}"
-                    );
-                }
-            }
-
-            tally.assert_independent_binomial(
-                concat!(stringify!($name), " / cardinality confidence band"),
-                spec.per_check_failure(),
-                &context,
-            );
-        }
-    };
-}
-
 /// Identity namespaces are `stride * i .. stride * i + n`, far enough apart
 /// that no two trials share an identity and therefore no two share a hash.
 const IDENTITY_NAMESPACE_STRIDE: u64 = 1 << 40;
 
-// Classic and Ertl-MLE share the register error model; HIP has its own.
-hll_battery!(
-    hll_classic_p12_satisfies_its_register_error_model,
-    HyperLogLogP12<Classic>,
-    12,
-    hll,
-    mergeable
-);
-hll_battery!(
-    hll_classic_p14_satisfies_its_register_error_model,
-    HyperLogLogP14<Classic>,
-    14,
-    hll,
-    mergeable
-);
-hll_battery!(
-    hll_classic_p16_satisfies_its_register_error_model,
-    HyperLogLogP16<Classic>,
-    16,
-    hll,
-    mergeable
-);
-hll_battery!(
-    hll_ertl_mle_p12_satisfies_the_cramer_rao_error_model,
-    HyperLogLogP12<ErtlMLE>,
-    12,
-    hll,
-    mergeable
-);
-hll_battery!(
-    hll_ertl_mle_p14_satisfies_the_cramer_rao_error_model,
-    HyperLogLogP14<ErtlMLE>,
-    14,
-    hll,
-    mergeable
-);
-hll_battery!(
-    hll_ertl_mle_p16_satisfies_the_cramer_rao_error_model,
-    HyperLogLogP16<ErtlMLE>,
-    16,
-    hll,
-    mergeable
-);
-hll_battery!(
-    hll_hip_p12_satisfies_the_hip_error_model,
-    HyperLogLogHIPP12,
-    12,
-    hll_hip,
-    not_mergeable
-);
-hll_battery!(
-    hll_hip_p14_satisfies_the_hip_error_model,
-    HyperLogLogHIPP14,
-    14,
-    hll_hip,
-    not_mergeable
-);
-hll_battery!(
-    hll_hip_p16_satisfies_the_hip_error_model,
-    HyperLogLogHIPP16,
-    16,
-    hll_hip,
-    not_mergeable
-);
-
-/// The portable wire type across every variant tag and precision.
-///
-/// `HllVariant` selects the *wire tag*, not the estimator: `HllSketch::estimate`
-/// runs the same register-based Classic formula for `Regular`, `Datafusion` and
-/// `Hip` alike. So all three are held to the register model — checking the
-/// `Hip` tag against HIP's tighter constant would be asserting a property this
-/// type does not implement.
 #[test]
-fn portable_hll_variants_and_precisions_satisfy_the_register_error_model() {
-    const N: usize = 200_000;
-    let mut tally = Tally::default();
-    let mut context = Vec::new();
+fn every_hyperloglog_instantiation_satisfies_its_own_cardinality_error_model() {
+    assert_cardinality_bound(hyperloglog_variants);
+}
 
-    for (v, variant) in [HllVariant::Regular, HllVariant::Datafusion, HllVariant::Hip]
-        .into_iter()
-        .enumerate()
-    {
-        for (p, precision) in [12u32, 14, 16].into_iter().enumerate() {
-            let spec = CardinalityConfidenceSpec::hll(precision, Z);
-            // A distinct stream per (variant, precision). Reusing one stream
-            // across the three variants would feed three estimators the *same*
-            // registers, whose errors are then near-perfectly correlated — nine
-            // readings of at most three independent experiments.
-            let seed = 2001 + (v * 3 + p) as u64;
-            let stream = uniform_u64(N, u64::MAX / 4, seed);
-            let truth: std::collections::HashSet<u64> = stream.iter().copied().collect();
-
-            let mut hll = HllSketch::new(variant, precision);
-            for k in &stream {
-                hll.update(k.to_be_bytes().as_slice());
-            }
-            spec.tally_into(&mut tally, hll.estimate(), truth.len());
-
-            // Merging a second sketch built over the SAME identities is a
-            // register-wise max with itself: the estimate must not move at all.
-            let mut other = HllSketch::new(variant, precision);
-            for k in &truth {
-                other.update((*k).to_be_bytes().as_slice());
-            }
-            let before = hll.estimate();
-            hll.merge(&other).expect("merge");
-            assert_eq!(
-                hll.estimate(),
-                before,
-                "{variant:?} p{precision}: merging identical identities moved the estimate"
-            );
-
-            // Disjoint shards over the same stream merge by register-wise max,
-            // so the result is the *same* sketch as the single pass and its
-            // estimate is the *same number*. That is an equality, not a second
-            // confidence-band reading: scoring it into the tally, as this test
-            // used to, counted one experiment twice.
-            let mut left = HllSketch::new(variant, precision);
-            let mut right = HllSketch::new(variant, precision);
-            for (i, k) in stream.iter().enumerate() {
-                if i % 2 == 0 {
-                    left.update(k.to_be_bytes().as_slice());
-                } else {
-                    right.update(k.to_be_bytes().as_slice());
-                }
-            }
-            left.merge(&right).expect("shard merge");
-            assert_eq!(
-                left.estimate(),
-                before,
-                "{variant:?} p{precision}: an even/odd shard merge must reproduce the \
-                 single pass exactly (registers combine by maximum)"
-            );
-
-            context.push(format!(
-                "{variant:?}/p{precision} sigma={:.5} tol={:.5} stream_seed={seed}",
-                spec.sigma_rel(),
-                spec.tolerance()
-            ));
-        }
-    }
-
-    tally.assert_independent_binomial(
-        "portable HllSketch / cardinality confidence band",
-        CardinalityConfidenceSpec::hll(12, Z).per_check_failure(),
-        &format!(
-            "n={N} unique byte keys; one trial = one (variant, precision) over its own \
-             stream seed; {}",
-            context.join("; ")
-        ),
-    );
+#[test]
+fn every_portable_hll_instantiation_satisfies_the_register_error_model() {
+    assert_cardinality_bound(portable_hll_variants);
 }
 
 /// A larger precision must actually buy accuracy. A fixed percentage band
@@ -453,8 +169,8 @@ fn hll_classic_switchover_band_stays_within_the_documented_empirical_band() {
             "p{precision} at n = 2.5m: RMS relative error {rse:.5} is only {ratio:.2}x the \
              asymptotic {asymptotic:.5}. The switchover cliff this test documents appears to \
              be gone — if the estimator gained bias correction, delete this test and widen \
-             CHECKPOINTS to cover the band under the register model instead of leaving a \
-             stale claim here"
+             CHECKPOINT_MULTIPLIERS to cover the band under the register model instead of \
+             leaving a stale claim here"
         );
     }
 }
@@ -485,79 +201,6 @@ fn set_aggregator_union_is_exact() {
     }
 }
 
-hll_battery!(
-    hll_classic_custom_p10_satisfies_its_register_error_model,
-    HyperLogLogImpl<Classic, HllBucketListP10>,
-    10,
-    hll,
-    mergeable,
-    CUSTOM_CHECKPOINTS_P10
-);
-hll_battery!(
-    hll_ertl_mle_custom_p10_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllBucketListP10>,
-    10,
-    hll,
-    mergeable,
-    CUSTOM_CHECKPOINTS_P10
-);
-hll_battery!(
-    hll_hip_custom_p10_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllBucketListP10>,
-    10,
-    hll_hip,
-    not_mergeable,
-    CUSTOM_CHECKPOINTS_P10
-);
-hll_battery!(
-    hll_classic_custom_p13_satisfies_its_register_error_model,
-    HyperLogLogImpl<Classic, HllBucketListP13>,
-    13,
-    hll,
-    mergeable,
-    CUSTOM_CHECKPOINTS_P13
-);
-hll_battery!(
-    hll_ertl_mle_custom_p13_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllBucketListP13>,
-    13,
-    hll,
-    mergeable,
-    CUSTOM_CHECKPOINTS_P13
-);
-hll_battery!(
-    hll_hip_custom_p13_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllBucketListP13>,
-    13,
-    hll_hip,
-    not_mergeable,
-    CUSTOM_CHECKPOINTS_P13
-);
-hll_battery!(
-    hll_classic_custom_p18_satisfies_its_register_error_model,
-    HyperLogLogImpl<Classic, HllBucketListP18>,
-    18,
-    hll,
-    mergeable,
-    CUSTOM_CHECKPOINTS_P18
-);
-hll_battery!(
-    hll_ertl_mle_custom_p18_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllBucketListP18>,
-    18,
-    hll,
-    mergeable,
-    CUSTOM_CHECKPOINTS_P18
-);
-hll_battery!(
-    hll_hip_custom_p18_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllBucketListP18>,
-    18,
-    hll_hip,
-    not_mergeable,
-    CUSTOM_CHECKPOINTS_P18
-);
-
 #[test]
 fn custom_precision_accuracy_improves_with_precision_as_the_error_model_predicts() {
     const N: u64 = 200_000;
@@ -586,55 +229,6 @@ fn custom_precision_accuracy_improves_with_precision_as_the_error_model_predicts
     assert!(
         e18 <= e13,
         "p18 relative error {e18:.5} exceeded p13 at {e13:.5} over {N} distinct identities"
-    );
-}
-
-#[test]
-fn a_custom_precision_merge_reproduces_the_single_pass_registers_for_every_estimator() {
-    const N: u64 = 120_000;
-    const BASE: u64 = IDENTITY_NAMESPACE_STRIDE * 42;
-
-    let mut classic_single = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
-    let mut classic_even = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
-    let mut classic_odd = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
-    let mut ertl_single = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::new();
-    let mut ertl_even = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::new();
-    let mut ertl_odd = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::new();
-    for k in 0..N {
-        let d = DataInput::U64(BASE + k);
-        classic_single.insert(&d);
-        ertl_single.insert(&d);
-        if k % 2 == 0 {
-            classic_even.insert(&d);
-            ertl_even.insert(&d);
-        } else {
-            classic_odd.insert(&d);
-            ertl_odd.insert(&d);
-        }
-    }
-
-    classic_even.merge(&classic_odd);
-    assert_eq!(
-        classic_even.registers_as_slice(),
-        classic_single.registers_as_slice(),
-        "Classic p13 shard merge must reproduce the single pass register for register"
-    );
-    assert_eq!(
-        classic_even.estimate(),
-        classic_single.estimate(),
-        "Classic p13 identical registers must give an identical estimate"
-    );
-
-    ertl_even.merge(&ertl_odd);
-    assert_eq!(
-        ertl_even.registers_as_slice(),
-        ertl_single.registers_as_slice(),
-        "ErtlMLE p13 shard merge must reproduce the single pass register for register"
-    );
-    assert_eq!(
-        ertl_even.estimate(),
-        ertl_single.estimate(),
-        "ErtlMLE p13 identical registers must give an identical estimate"
     );
 }
 

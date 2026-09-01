@@ -12,7 +12,7 @@
 
 use super::regimes::frequency_regimes;
 use super::specs::{CountMinSpec, CountSketchSpec};
-use super::variants::VariantList;
+use super::variants::{CardinalityVariantList, VariantList};
 use super::{FreqTruth, NumericTruth};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -613,4 +613,25 @@ pub fn assert_cs_bound(variants: fn() -> VariantList) {
             }
         }
     });
+}
+
+pub const CARDINALITY_Z: f64 = 4.0;
+
+pub fn assert_cardinality_bound(variants: fn() -> CardinalityVariantList) {
+    for regime in frequency_regimes() {
+        let (keys, _) = regime.build();
+        let n = keys.distinct() as f64;
+        for (label, mut sketch) in variants() {
+            keys.for_each(|d| sketch.insert(d));
+            let est = sketch.estimate();
+            let rel = (est - n).abs() / n;
+            let tolerance = CARDINALITY_Z * sketch.sigma_rel();
+            assert!(
+                rel <= tolerance,
+                "{label} on {}: distinct {n}, estimate {est:.0}, relative error {rel:.5} > \
+                 {CARDINALITY_Z} sigma = {tolerance:.5}",
+                regime.label
+            );
+        }
+    }
 }

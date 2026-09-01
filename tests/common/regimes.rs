@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use asap_sketchlib::DataInput;
+use std::collections::HashSet;
 
 use super::FreqTruth;
 use super::streams::{uniform_u64, zipf_u64};
@@ -137,6 +138,15 @@ impl Keys {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn distinct(&self) -> usize {
+        match self {
+            Keys::I64(v) => v.iter().collect::<HashSet<_>>().len(),
+            Keys::U64(v) => v.iter().collect::<HashSet<_>>().len(),
+            Keys::F64(v) => v.iter().map(|x| x.to_bits()).collect::<HashSet<_>>().len(),
+            Keys::Str(v) => v.iter().collect::<HashSet<_>>().len(),
+        }
     }
 
     pub fn for_each(&self, mut f: impl FnMut(&DataInput)) {
