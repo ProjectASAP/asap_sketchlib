@@ -17,6 +17,7 @@
 mod common;
 
 use common::specs::{CountMinSpec, CountSketchSpec, SecondMomentSpec, Tally};
+use common::{FixMat1, FixMat2};
 use common::{FreqTruth, uniform_u64, zipf_u64};
 use std::collections::HashMap;
 
@@ -24,7 +25,7 @@ use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketc
 use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
 use asap_sketchlib::{
     CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS, FoldCS, RegularPath,
-    Vector2D, impl_fixed_matrix,
+    Vector2D,
 };
 
 // ----------------------------------------------------------------- CountMin
@@ -87,19 +88,8 @@ fn countmin_fast_path_zipf_conforms_to_the_count_min_model_and_merges_shards_exa
     merge_equality.assert_none("CountMin merge equality", &context);
 }
 
-/// Both hashing paths satisfy Count-Min's contract on the same stream.
-///
-/// They are *not* required to return equal estimates and generally do not:
-/// `RegularPath` makes one hash call per row with `seed_list[r]`, while
-/// `FastPath` makes a single call with `seed_list[0]` and slices row bits out
-/// of it. Different hash functions place keys in different columns, so the two
-/// collide on different key pairs. On a 40k-update Zipf stream at 3x4096 they
-/// disagree on roughly a third of keys — every disagreement inside the bound.
-///
-/// `e2e_matrix_instances.rs` covers the equality that *is* contractual: on a
-/// collision-free workload both paths return exact counts.
 #[test]
-fn countmin_error_bound() {
+fn countmin_vecbased_error_bound() {
     const ROWS: [usize; 3] = [3, 5, 7];
     const COLS: [usize; 5] = [2048, 4096, 8192, 16384, 32768];
     const STREAM_SEED: u64 = 1002;
@@ -107,7 +97,7 @@ fn countmin_error_bound() {
     for r in ROWS {
         for c in COLS {
             let mut reg = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(r, c);
-            let mut fast = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(r, c);
+            let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(r, c);
             let mut truth = FreqTruth::default();
             let stream = zipf_u64(20_000, 512, 1.2, STREAM_SEED);
             for k in &stream {
@@ -131,29 +121,53 @@ fn countmin_error_bound() {
             );
         }
     }
-    // let mut reg = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
-    // let mut fast = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
-    // let mut truth = FreqTruth::default();
-    // let stream = zipf_u64(20_000, 512, 1.2, STREAM_SEED);
-    // for k in &stream {
-    //     truth.observe(*k as i64);
-    //     reg.insert(&DataInput::I64(*k as i64));
-    //     fast.insert(&DataInput::I64(*k as i64));
-    // }
-    // let spec = CountMinSpec::new(ROWS, COLS);
-    // let context = format!("zipf(1.2) domain=512 n=20000 stream_seed={STREAM_SEED}");
-    // spec.assert_contract(
-    //     "CountMin<Vector2D<i64>, RegularPath>",
-    //     &truth,
-    //     |k| reg.estimate(&DataInput::I64(k)) as f64,
-    //     &context,
-    // );
-    // spec.assert_contract(
-    //     "CountMin<Vector2D<i32>, FastPath>",
-    //     &truth,
-    //     |k| fast.estimate(&DataInput::I64(k)) as f64,
-    //     &context,
-    // );
+}
+
+#[test]
+fn countmin_matbased_error_bound() {
+    let stream = zipf_u64(20_000, 512, 1.2, 1002);
+    let mut reg1 = CountMin::<FixMat1, RegularPath>::from_storage(FixMat1::default());
+    let mut fast1 = CountMin::<FixMat1, FastPath>::from_storage(FixMat1::default());
+    let mut reg2 = CountMin::<FixMat2, RegularPath>::from_storage(FixMat2::default());
+    let mut fast2 = CountMin::<FixMat2, FastPath>::from_storage(FixMat2::default());
+
+    let mut truth = FreqTruth::default();
+
+    for k in &stream {
+        truth.observe(*k as i64);
+        reg1.insert(&DataInput::I64(*k as i64));
+        fast1.insert(&DataInput::I64(*k as i64));
+        reg2.insert(&DataInput::I64(*k as i64));
+        fast2.insert(&DataInput::I64(*k as i64));
+    }
+
+    let context = format!("zipf(1.2) domain=512 n=20000 stream_seed=1002");
+    let spec1 = CountMinSpec::new(3, 2048);
+    spec1.assert_contract(
+        "CountMin<FixMat1, RegularPath>",
+        &truth,
+        |k| reg1.estimate(&DataInput::I64(k)) as f64,
+        &context,
+    );
+    spec1.assert_contract(
+        "CountMin<FixMat1, FastPath>",
+        &truth,
+        |k| fast1.estimate(&DataInput::I64(k)) as f64,
+        &context,
+    );
+    let spec2 = CountMinSpec::new(5, 2048);
+    spec2.assert_contract(
+        "CountMin<FixMat2, RegularPath>",
+        &truth,
+        |k| reg2.estimate(&DataInput::I64(k)) as f64,
+        &context,
+    );
+    spec2.assert_contract(
+        "CountMin<FixMat2, FastPath>",
+        &truth,
+        |k| fast2.estimate(&DataInput::I64(k)) as f64,
+        &context,
+    );
 }
 
 /// Bounded integer draws mapped onto distinct f64 values in `[100, 1000)`,
