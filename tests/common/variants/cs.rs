@@ -11,8 +11,8 @@ where
     S: MatrixStorage + 'static,
     S::Counter: CountSketchCounter,
 {
-    fn insert(&mut self, key: u64) {
-        Count::<S, RegularPath, DefaultXxHasher>::insert(self, &DataInput::U64(key));
+    fn insert(&mut self, key: &DataInput) {
+        Count::<S, RegularPath, DefaultXxHasher>::insert(self, key);
     }
     fn merge(&mut self, other: &dyn FrequencyVariant) {
         let other = (other as &dyn Any)
@@ -20,8 +20,8 @@ where
             .expect("merge requires both variants to be the same concrete sketch type");
         Count::<S, RegularPath, DefaultXxHasher>::merge(self, other);
     }
-    fn query(&self, key: u64) -> f64 {
-        self.estimate(&DataInput::U64(key))
+    fn query(&self, key: &DataInput) -> f64 {
+        self.estimate(key)
     }
     fn dims(&self) -> (usize, usize) {
         (self.rows(), self.cols())
@@ -33,8 +33,8 @@ where
     S: MatrixStorage + FastPathHasher<DefaultXxHasher> + 'static,
     S::Counter: CountSketchCounter,
 {
-    fn insert(&mut self, key: u64) {
-        Count::<S, FastPath, DefaultXxHasher>::insert(self, &DataInput::U64(key));
+    fn insert(&mut self, key: &DataInput) {
+        Count::<S, FastPath, DefaultXxHasher>::insert(self, key);
     }
     fn merge(&mut self, other: &dyn FrequencyVariant) {
         let other = (other as &dyn Any)
@@ -42,8 +42,8 @@ where
             .expect("merge requires both variants to be the same concrete sketch type");
         Count::<S, FastPath, DefaultXxHasher>::merge(self, other);
     }
-    fn query(&self, key: u64) -> f64 {
-        self.estimate(&DataInput::U64(key))
+    fn query(&self, key: &DataInput) -> f64 {
+        self.estimate(key)
     }
     fn dims(&self) -> (usize, usize) {
         (self.rows(), self.cols())
@@ -54,8 +54,8 @@ where
     S: MatrixStorage + 'static,
     S::Counter: CountSketchCounter,
 {
-    fn insert(&mut self, key: u64) {
-        CSHeap::<S, RegularPath, DefaultXxHasher>::insert(self, &DataInput::U64(key));
+    fn insert(&mut self, key: &DataInput) {
+        CSHeap::<S, RegularPath, DefaultXxHasher>::insert(self, key);
     }
     fn merge(&mut self, other: &dyn FrequencyVariant) {
         let other = (other as &dyn Any)
@@ -63,8 +63,8 @@ where
             .expect("merge requires both variants to be the same concrete sketch type");
         CSHeap::<S, RegularPath, DefaultXxHasher>::merge(self, other);
     }
-    fn query(&self, key: u64) -> f64 {
-        self.estimate(&DataInput::U64(key))
+    fn query(&self, key: &DataInput) -> f64 {
+        self.estimate(key)
     }
     fn dims(&self) -> (usize, usize) {
         (self.rows(), self.cols())
@@ -76,8 +76,8 @@ where
     S: MatrixStorage + FastPathHasher<DefaultXxHasher> + 'static,
     S::Counter: CountSketchCounter,
 {
-    fn insert(&mut self, key: u64) {
-        CSHeap::<S, FastPath, DefaultXxHasher>::insert(self, &DataInput::U64(key));
+    fn insert(&mut self, key: &DataInput) {
+        CSHeap::<S, FastPath, DefaultXxHasher>::insert(self, key);
     }
     fn merge(&mut self, other: &dyn FrequencyVariant) {
         let other = (other as &dyn Any)
@@ -85,8 +85,8 @@ where
             .expect("merge requires both variants to be the same concrete sketch type");
         CSHeap::<S, FastPath, DefaultXxHasher>::merge(self, other);
     }
-    fn query(&self, key: u64) -> f64 {
-        self.estimate(&DataInput::U64(key))
+    fn query(&self, key: &DataInput) -> f64 {
+        self.estimate(key)
     }
     fn dims(&self) -> (usize, usize) {
         (self.rows(), self.cols())
@@ -1467,6 +1467,264 @@ pub fn countsketch_variants() -> VariantList {
             Box::new(Count::<Matrix7X32768I128, FastPath>::from_storage(
                 Matrix7X32768I128::default(),
             )),
+        ),
+        (
+            "Count<Vector2D<i32>, RegularPath> 3x100",
+            Box::new(Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 100)),
+        ),
+        (
+            "Count<Vector2D<i32>, FastPath> 3x100",
+            Box::new(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 100)),
+        ),
+        (
+            "Count<Vector2D<i64>, RegularPath> 3x100",
+            Box::new(Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 100)),
+        ),
+        (
+            "Count<Vector2D<i64>, FastPath> 3x100",
+            Box::new(Count::<Vector2D<i64>, FastPath>::with_dimensions(3, 100)),
+        ),
+        (
+            "Count<Vector2D<i128>, RegularPath> 3x100",
+            Box::new(Count::<Vector2D<i128>, RegularPath>::with_dimensions(
+                3, 100,
+            )),
+        ),
+        (
+            "Count<Vector2D<i128>, FastPath> 3x100",
+            Box::new(Count::<Vector2D<i128>, FastPath>::with_dimensions(3, 100)),
+        ),
+        (
+            "Count<Vector2D<i32>, RegularPath> 3x1000",
+            Box::new(Count::<Vector2D<i32>, RegularPath>::with_dimensions(
+                3, 1000,
+            )),
+        ),
+        (
+            "Count<Vector2D<i32>, FastPath> 3x1000",
+            Box::new(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 1000)),
+        ),
+        (
+            "Count<Vector2D<i64>, RegularPath> 3x1000",
+            Box::new(Count::<Vector2D<i64>, RegularPath>::with_dimensions(
+                3, 1000,
+            )),
+        ),
+        (
+            "Count<Vector2D<i64>, FastPath> 3x1000",
+            Box::new(Count::<Vector2D<i64>, FastPath>::with_dimensions(3, 1000)),
+        ),
+        (
+            "Count<Vector2D<i128>, RegularPath> 3x1000",
+            Box::new(Count::<Vector2D<i128>, RegularPath>::with_dimensions(
+                3, 1000,
+            )),
+        ),
+        (
+            "Count<Vector2D<i128>, FastPath> 3x1000",
+            Box::new(Count::<Vector2D<i128>, FastPath>::with_dimensions(3, 1000)),
+        ),
+        (
+            "Count<Vector2D<i32>, RegularPath> 3x4095",
+            Box::new(Count::<Vector2D<i32>, RegularPath>::with_dimensions(
+                3, 4095,
+            )),
+        ),
+        (
+            "Count<Vector2D<i32>, FastPath> 3x4095",
+            Box::new(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 4095)),
+        ),
+        (
+            "Count<Vector2D<i64>, RegularPath> 3x4095",
+            Box::new(Count::<Vector2D<i64>, RegularPath>::with_dimensions(
+                3, 4095,
+            )),
+        ),
+        (
+            "Count<Vector2D<i64>, FastPath> 3x4095",
+            Box::new(Count::<Vector2D<i64>, FastPath>::with_dimensions(3, 4095)),
+        ),
+        (
+            "Count<Vector2D<i128>, RegularPath> 3x4095",
+            Box::new(Count::<Vector2D<i128>, RegularPath>::with_dimensions(
+                3, 4095,
+            )),
+        ),
+        (
+            "Count<Vector2D<i128>, FastPath> 3x4095",
+            Box::new(Count::<Vector2D<i128>, FastPath>::with_dimensions(3, 4095)),
+        ),
+        (
+            "Count<Vector2D<i32>, RegularPath> 5x100",
+            Box::new(Count::<Vector2D<i32>, RegularPath>::with_dimensions(5, 100)),
+        ),
+        (
+            "Count<Vector2D<i32>, FastPath> 5x100",
+            Box::new(Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 100)),
+        ),
+        (
+            "Count<Vector2D<i64>, RegularPath> 5x100",
+            Box::new(Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, 100)),
+        ),
+        (
+            "Count<Vector2D<i64>, FastPath> 5x100",
+            Box::new(Count::<Vector2D<i64>, FastPath>::with_dimensions(5, 100)),
+        ),
+        (
+            "Count<Vector2D<i128>, RegularPath> 5x100",
+            Box::new(Count::<Vector2D<i128>, RegularPath>::with_dimensions(
+                5, 100,
+            )),
+        ),
+        (
+            "Count<Vector2D<i128>, FastPath> 5x100",
+            Box::new(Count::<Vector2D<i128>, FastPath>::with_dimensions(5, 100)),
+        ),
+        (
+            "Count<Vector2D<i32>, RegularPath> 5x1000",
+            Box::new(Count::<Vector2D<i32>, RegularPath>::with_dimensions(
+                5, 1000,
+            )),
+        ),
+        (
+            "Count<Vector2D<i32>, FastPath> 5x1000",
+            Box::new(Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 1000)),
+        ),
+        (
+            "Count<Vector2D<i64>, RegularPath> 5x1000",
+            Box::new(Count::<Vector2D<i64>, RegularPath>::with_dimensions(
+                5, 1000,
+            )),
+        ),
+        (
+            "Count<Vector2D<i64>, FastPath> 5x1000",
+            Box::new(Count::<Vector2D<i64>, FastPath>::with_dimensions(5, 1000)),
+        ),
+        (
+            "Count<Vector2D<i128>, RegularPath> 5x1000",
+            Box::new(Count::<Vector2D<i128>, RegularPath>::with_dimensions(
+                5, 1000,
+            )),
+        ),
+        (
+            "Count<Vector2D<i128>, FastPath> 5x1000",
+            Box::new(Count::<Vector2D<i128>, FastPath>::with_dimensions(5, 1000)),
+        ),
+        (
+            "Count<Vector2D<i32>, RegularPath> 5x4095",
+            Box::new(Count::<Vector2D<i32>, RegularPath>::with_dimensions(
+                5, 4095,
+            )),
+        ),
+        (
+            "Count<Vector2D<i32>, FastPath> 5x4095",
+            Box::new(Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 4095)),
+        ),
+        (
+            "Count<Vector2D<i64>, RegularPath> 5x4095",
+            Box::new(Count::<Vector2D<i64>, RegularPath>::with_dimensions(
+                5, 4095,
+            )),
+        ),
+        (
+            "Count<Vector2D<i64>, FastPath> 5x4095",
+            Box::new(Count::<Vector2D<i64>, FastPath>::with_dimensions(5, 4095)),
+        ),
+        (
+            "Count<Vector2D<i128>, RegularPath> 5x4095",
+            Box::new(Count::<Vector2D<i128>, RegularPath>::with_dimensions(
+                5, 4095,
+            )),
+        ),
+        (
+            "Count<Vector2D<i128>, FastPath> 5x4095",
+            Box::new(Count::<Vector2D<i128>, FastPath>::with_dimensions(5, 4095)),
+        ),
+        (
+            "Count<Vector2D<i32>, RegularPath> 7x100",
+            Box::new(Count::<Vector2D<i32>, RegularPath>::with_dimensions(7, 100)),
+        ),
+        (
+            "Count<Vector2D<i32>, FastPath> 7x100",
+            Box::new(Count::<Vector2D<i32>, FastPath>::with_dimensions(7, 100)),
+        ),
+        (
+            "Count<Vector2D<i64>, RegularPath> 7x100",
+            Box::new(Count::<Vector2D<i64>, RegularPath>::with_dimensions(7, 100)),
+        ),
+        (
+            "Count<Vector2D<i64>, FastPath> 7x100",
+            Box::new(Count::<Vector2D<i64>, FastPath>::with_dimensions(7, 100)),
+        ),
+        (
+            "Count<Vector2D<i128>, RegularPath> 7x100",
+            Box::new(Count::<Vector2D<i128>, RegularPath>::with_dimensions(
+                7, 100,
+            )),
+        ),
+        (
+            "Count<Vector2D<i128>, FastPath> 7x100",
+            Box::new(Count::<Vector2D<i128>, FastPath>::with_dimensions(7, 100)),
+        ),
+        (
+            "Count<Vector2D<i32>, RegularPath> 7x1000",
+            Box::new(Count::<Vector2D<i32>, RegularPath>::with_dimensions(
+                7, 1000,
+            )),
+        ),
+        (
+            "Count<Vector2D<i32>, FastPath> 7x1000",
+            Box::new(Count::<Vector2D<i32>, FastPath>::with_dimensions(7, 1000)),
+        ),
+        (
+            "Count<Vector2D<i64>, RegularPath> 7x1000",
+            Box::new(Count::<Vector2D<i64>, RegularPath>::with_dimensions(
+                7, 1000,
+            )),
+        ),
+        (
+            "Count<Vector2D<i64>, FastPath> 7x1000",
+            Box::new(Count::<Vector2D<i64>, FastPath>::with_dimensions(7, 1000)),
+        ),
+        (
+            "Count<Vector2D<i128>, RegularPath> 7x1000",
+            Box::new(Count::<Vector2D<i128>, RegularPath>::with_dimensions(
+                7, 1000,
+            )),
+        ),
+        (
+            "Count<Vector2D<i128>, FastPath> 7x1000",
+            Box::new(Count::<Vector2D<i128>, FastPath>::with_dimensions(7, 1000)),
+        ),
+        (
+            "Count<Vector2D<i32>, RegularPath> 7x4095",
+            Box::new(Count::<Vector2D<i32>, RegularPath>::with_dimensions(
+                7, 4095,
+            )),
+        ),
+        (
+            "Count<Vector2D<i32>, FastPath> 7x4095",
+            Box::new(Count::<Vector2D<i32>, FastPath>::with_dimensions(7, 4095)),
+        ),
+        (
+            "Count<Vector2D<i64>, RegularPath> 7x4095",
+            Box::new(Count::<Vector2D<i64>, RegularPath>::with_dimensions(
+                7, 4095,
+            )),
+        ),
+        (
+            "Count<Vector2D<i64>, FastPath> 7x4095",
+            Box::new(Count::<Vector2D<i64>, FastPath>::with_dimensions(7, 4095)),
+        ),
+        (
+            "Count<Vector2D<i128>, RegularPath> 7x4095",
+            Box::new(Count::<Vector2D<i128>, RegularPath>::with_dimensions(
+                7, 4095,
+            )),
+        ),
+        (
+            "Count<Vector2D<i128>, FastPath> 7x4095",
+            Box::new(Count::<Vector2D<i128>, FastPath>::with_dimensions(7, 4095)),
         ),
     ]
 }

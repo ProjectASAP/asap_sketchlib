@@ -1,7 +1,8 @@
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 use std::any::Any;
 
+use asap_sketchlib::DataInput;
 use asap_sketchlib::impl_fixed_matrix;
 
 pub mod cms;
@@ -119,9 +120,9 @@ impl VariantCounter for f64 {
 }
 
 pub trait FrequencyVariant: Any {
-    fn insert(&mut self, key: u64);
+    fn insert(&mut self, key: &DataInput);
     fn merge(&mut self, other: &dyn FrequencyVariant);
-    fn query(&self, key: u64) -> f64;
+    fn query(&self, key: &DataInput) -> f64;
     fn dims(&self) -> (usize, usize);
 }
 

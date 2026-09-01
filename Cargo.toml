@@ -37,6 +37,8 @@ core_affinity = "0.8"
 default = []
 experimental = []
 octo-runtime = ["core_affinity", "crossbeam-channel"]
+# middlesize = []
+# largesize = []
 
 # Note: there are intentionally no `[build-dependencies]`. The prost output
 # under `src/proto/generated/` is checked in and refreshed by the maintainer

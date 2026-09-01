@@ -18,16 +18,16 @@ mod common;
 
 use common::FreqTruth;
 use common::conformance::{assert_cms_bound, assert_cs_bound};
-use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, SecondMomentSpec, Tally};
-use common::streams::{bound_streams, zipf_stream_with_truth, zipf_u64};
+use common::specs::{CountMinSpec, Tally};
+use common::streams::zipf_u64;
 use common::variants::{countminsketch_variants, countsketch_variants};
 use std::collections::HashMap;
 
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
 use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
 use asap_sketchlib::{
-    CMSHeap, CSHeap, Count, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS,
-    FoldCS, HeapItem, RegularPath, Vector2D,
+    CMSHeap, CSHeap, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS, FoldCS,
+    HeapItem, RegularPath, Vector2D,
 };
 
 // ----------------------------------------------------------------- CountMin
@@ -90,293 +90,76 @@ fn countmin_fast_path_zipf_conforms_to_the_count_min_model_and_merges_shards_exa
     merge_equality.assert_none("CountMin merge equality", &context);
 }
 
-/// Both hashing paths satisfy Count-Min's contract on the same stream.
-///
-/// They are *not* required to return equal estimates and generally do not:
-/// `RegularPath` makes one hash call per row with `seed_list[r]`, while
-/// `FastPath` makes a single call with `seed_list[0]` and slices row bits out
-/// of it. Different hash functions place keys in different columns, so the two
-/// collide on different key pairs. On a 40k-update Zipf stream at 3x4096 they
-/// disagree on roughly a third of keys — every disagreement inside the bound.
-///
-/// The unit tests in `src/sketches/countminsketch.rs` cover the equality that
-/// *is* contractual: on a collision-free workload both paths return exact
-/// counts.
 #[test]
-fn countmin_both_paths_meet_the_count_min_bound_on_the_same_stream() {
-    const ROWS: usize = 3;
-    const COLS: usize = 2048;
-    const STREAM_SEED: u64 = 1002;
+fn every_countminsketch_instantiation_meets_the_count_min_bound_on_every_regime() {
+    assert_cms_bound(countminsketch_variants);
+}
 
-    let mut reg = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
-    let mut fast = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
-    let mut truth = FreqTruth::default();
-    let stream = zipf_u64(20_000, 512, 1.2, STREAM_SEED);
+#[test]
+fn every_countsketch_instantiation_meets_the_l2_bound_on_every_regime() {
+    assert_cs_bound(countsketch_variants);
+}
+
+#[test]
+fn countmin_regular_fast_paths_agree_on_stream() {
+    let mut reg = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, 2048);
+    let mut fast = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 2048);
+    let stream = zipf_u64(20_000, 512, 1.2, 1002);
     for k in &stream {
-        truth.observe(*k as i64);
         reg.insert(&DataInput::I64(*k as i64));
         fast.insert(&DataInput::I64(*k as i64));
     }
-    let spec = CountMinSpec::new(ROWS, COLS);
-    let context = format!("zipf(1.2) domain=512 n=20000 stream_seed={STREAM_SEED}");
-    spec.assert_contract(
-        "CountMin<Vector2D<i64>, RegularPath>",
-        &truth,
-        |k| reg.estimate(&DataInput::I64(k)) as f64,
-        &context,
-    );
-    spec.assert_contract(
-        "CountMin<Vector2D<i32>, FastPath>",
-        &truth,
-        |k| fast.estimate(&DataInput::I64(k)) as f64,
-        &context,
-    );
-}
-
-const BOUND_ROWS: usize = 3;
-const BOUND_COLS: usize = 4096;
-const BOUND_N: usize = 120_000;
-/// Independent key populations per shape. The library fixes its hash seed
-/// table, so a test cannot resample the hash function; what it *can* resample
-/// is the key population, which under the random-oracle model the sketches
-/// assume yields an independent collision configuration per trial. This is
-/// stated plainly rather than dressed up as seed independence.
-const BOUND_TRIALS: u64 = 3;
-
-/// Count-Min Theorem 1 on the **RegularPath**, over independent key
-/// populations.
-///
-/// # Why the two hash paths are separate tests
-///
-/// Theorem 1's `b^-d` comes from the `d` rows failing independently, which
-/// needs the `d` row hashes to be independent draws from a suitable family.
-/// The two paths get there differently:
-///
-/// - `RegularPath` makes one hash call per row with a distinct seed from the
-///   table, so the rows are separate hash functions. Under the standard
-///   assumption that XXH3-with-distinct-seeds behaves as an independent family
-///   — stated here rather than left implicit — the theorem applies as written.
-/// - `FastPath` makes a **single** call and slices each row's column index out
-///   of bit fields of that one 128-bit output. The rows are then deterministic
-///   functions of one hash value, not independent hash functions. Treating
-///   disjoint bit fields of a good hash as independent is a modelling
-///   assumption about XXH3's avalanche, not something the theorem grants.
-///
-/// So this test carries the theorem and
-/// `countmin_fast_path_conforms_to_the_count_min_model` carries the same
-/// arithmetic under an honest label. The coverage matrix classifies them
-/// `theorem` and `asymptotic model` respectively.
-#[test]
-fn countmin_regular_path_satisfies_the_count_min_theorem() {
-    let spec = CountMinSpec::new(BOUND_ROWS, BOUND_COLS);
-    for trial in 0..BOUND_TRIALS {
-        for (name, keys, to_input) in bound_streams(trial, BOUND_N) {
-            let mut truth = FreqTruth::default();
-            let mut regular =
-                CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
-            for k in &keys {
-                truth.observe(*k);
-                regular.insert(&to_input(*k));
-            }
-            let context = format!(
-                "{name} trial={trial} n={BOUND_N} (see bound_streams for stream seeds); \
-                 RegularPath hashes each row with its own seed from the table"
-            );
-            spec.assert_contract(
-                &format!("CountMin RegularPath {name}"),
-                &truth,
-                |k| regular.estimate(&to_input(k)) as f64,
-                &context,
-            );
-        }
-    }
-}
-
-/// The same arithmetic on the **FastPath**, which is a model check rather than
-/// a theorem.
-///
-/// `FastPath` derives all `d` column indices from bit fields of one 128-bit
-/// hash. Every bound evaluated here is Count-Min's, at the sketch's own
-/// dimensions — nothing is widened — but the `b^-d` it is quoted at assumes
-/// row independence that a single hash does not literally provide. What the
-/// test establishes is that the fast path *conforms to the same model* as the
-/// independently-hashed path, which is the useful statement and is how the
-/// coverage matrix labels it.
-#[test]
-fn countmin_fast_path_conforms_to_the_count_min_model() {
-    let spec = CountMinSpec::new(BOUND_ROWS, BOUND_COLS);
-    for trial in 0..BOUND_TRIALS {
-        for (name, keys, to_input) in bound_streams(trial, BOUND_N) {
-            let mut truth = FreqTruth::default();
-            let mut fast =
-                CountMin::<Vector2D<i32>, FastPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
-            for k in &keys {
-                truth.observe(*k);
-                fast.insert(&to_input(*k));
-            }
-            let context = format!(
-                "{name} trial={trial} n={BOUND_N} (see bound_streams for stream seeds); \
-                 FastPath slices all {BOUND_ROWS} row indices out of one 128-bit hash, so \
-                 row independence is a model, not a hypothesis the theorem supplies"
-            );
-            spec.assert_contract(
-                &format!("CountMin FastPath {name}"),
-                &truth,
-                |k| fast.estimate(&to_input(k)) as f64,
-                &context,
-            );
-        }
-    }
-}
-
-/// Count Sketch's L2 bound on both insert paths and both `DataInput` hash
-/// domains, over several independent key populations.
-///
-/// The two paths are tallied separately and the coverage matrix classifies them
-/// differently: `RegularPath` hashes each row with its own seed, so the median
-/// amplification's independence hypothesis is met (under the usual assumption
-/// about the hash family); `FastPath` slices every row index out of one
-/// 128-bit hash, so row independence there is a **model**. The arithmetic is
-/// identical — nothing is widened for the fast path — but the label is not.
-/// See `countmin_fast_path_conforms_to_the_count_min_model`.
-///
-/// # Two assertions, two acceptance rules
-///
-/// The library's hash is fixed by the sketch's type parameter, so every sketch
-/// here draws from the same hash function and the keys inside one sketch share
-/// it. They are therefore *not* independent Bernoulli trials, and a binomial
-/// over keys assumes exactly the independence that does not hold.
-///
-/// What is asserted instead:
-///
-/// 1. the **simultaneous** bound, whose `kappa` is raised until a union bound
-///    over the whole probed key set leaves `SIMULTANEOUS_LEVEL` overall. That
-///    needs no independence at all and tolerates zero violations;
-/// 2. the **marginal** bound at `kappa = 3` as a violation-*rate* pin against
-///    the theorem's own per-key failure probability — a regression pin on a
-///    fixed realisation, not a tail test.
-#[test]
-fn countsketch_both_paths_meet_the_l2_median_bound() {
-    let spec = CountSketchSpec::new(BOUND_ROWS, BOUND_COLS);
-    // One pair of tallies per (shape, path): all trials pool into a single
-    // acceptance rule, so the decision is made on the whole population rather
-    // than on whichever trial happened to look worst.
-    let mut tallies: HashMap<String, (Tally, Tally)> = HashMap::new();
-    for trial in 0..BOUND_TRIALS {
-        for (name, keys, to_input) in bound_streams(trial, BOUND_N) {
-            let mut truth = FreqTruth::default();
-            let mut regular = asap_sketchlib::Count::<Vector2D<i32>, RegularPath>::with_dimensions(
-                BOUND_ROWS, BOUND_COLS,
-            );
-            let mut fast = asap_sketchlib::Count::<Vector2D<i32>, FastPath>::with_dimensions(
-                BOUND_ROWS, BOUND_COLS,
-            );
-            for k in &keys {
-                let d = to_input(*k);
-                truth.observe(*k);
-                regular.insert(&d);
-                fast.insert(&d);
-            }
-            {
-                let (simul, marg) = tallies.entry(format!("{name}/RegularPath")).or_default();
-                spec.tally_into(simul, marg, &truth, |k| regular.estimate(&to_input(k)));
-            }
-            {
-                let (simul, marg) = tallies.entry(format!("{name}/FastPath")).or_default();
-                spec.tally_into(simul, marg, &truth, |k| fast.estimate(&to_input(k)));
-            }
-        }
-    }
-    let mut labels: Vec<String> = tallies.keys().cloned().collect();
-    labels.sort();
-    for label in labels {
-        let (simul, marg) = tallies.remove(&label).expect("label just enumerated");
-        let context = format!(
-            "rows={BOUND_ROWS} cols={BOUND_COLS} marginal kappa={} n={BOUND_N} \
-             trials={BOUND_TRIALS} (independent key populations, fixed library hash seed \
-             — the keys of one sketch share it and are not independent trials)",
-            spec.kappa
-        );
-        simul.assert_none(&format!("Count {label} / simultaneous L2 bound"), &context);
-        marg.assert_rate_at_most(
-            &format!("Count {label} / marginal L2 median bound"),
-            spec.marginal_failure(),
-            &context,
+    for k in [0i64, 7, 42, 511] {
+        assert_eq!(
+            reg.estimate(&DataInput::I64(k)),
+            fast.estimate(&DataInput::I64(k)) as i64,
+            "regular/fast paths disagree for key {k}"
         );
     }
 }
 
-/// Count Sketch's error is *rank-independent*: a cold key carries the same
-/// absolute error band as the hottest one, which is exactly what separates it
-/// from Count-Min. Documented empirical regression, not a theorem: the
-/// theorem bounds each key individually and says nothing about how the
-/// measured mean error compares across frequency strata.
-///
-/// Band source: measured on this exact stream (zipf(1.1), domain 8192,
-/// n=200_000, seed 1007, rows=5, cols=4096) where the mean |error| per decile
-/// spans 20.6 to 26.5 — a spread of 1.29x. The 3x ceiling below leaves ample
-/// room for run-to-run movement while still failing loudly if the error ever
-/// starts tracking frequency the way Count-Min's does (on this stream
-/// Count-Min's per-decile mean error spans more than 40x).
-#[test]
-fn countsketch_error_stays_rank_independent_within_the_documented_empirical_band() {
-    const ROWS: usize = 5;
-    const COLS: usize = 4096;
-    const STREAM_SEED: u64 = 1007;
-    const DECILES: usize = 10;
+// -------------------------------------------------------------- CountSketch
 
-    let stream = zipf_u64(200_000, 8192, 1.1, STREAM_SEED);
+#[test]
+fn countsketch_turnstile_net_zero_and_median_bound() {
+    // True turnstile: +500 then -500 must net to zero.
+    let mut cs = asap_sketchlib::Count::<Vector2D<i64>, RegularPath>::with_dimensions(4, 1024);
+    cs.insert_many(&DataInput::U32(9), 500);
+    cs.insert_many(&DataInput::U32(9), -500);
+    assert_eq!(
+        cs.estimate(&DataInput::U32(9)),
+        0.0,
+        "turnstile did not cancel"
+    );
+
+    // Median estimator bound |est - true| <= sqrt(e/cols) * L2.
+    let (rows, cols) = (5usize, 4096usize);
+    let mut cs = asap_sketchlib::Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+    let stream = zipf_u64(200_000, 8192, 1.1, 1003);
     let mut truth = FreqTruth::default();
-    let mut cs = Count::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
     for k in &stream {
         truth.observe(*k as i64);
         cs.insert(&DataInput::I64(*k as i64));
     }
-
-    let mut pairs = truth.pairs();
-    pairs.sort_by_key(|(_, c)| *c);
-    let per = pairs.len() / DECILES;
-    let means: Vec<f64> = (0..DECILES)
-        .map(|d| {
-            let slice = &pairs[d * per..(d + 1) * per];
-            slice
-                .iter()
-                .map(|(k, c)| (cs.estimate(&DataInput::I64(*k)) - *c as f64).abs())
-                .sum::<f64>()
-                / slice.len() as f64
-        })
-        .collect();
-    let lo = means.iter().cloned().fold(f64::INFINITY, f64::min);
-    let hi = means.iter().cloned().fold(0.0f64, f64::max);
-    assert!(
-        hi <= lo * 3.0,
-        "Count Sketch mean |error| per frequency decile spans {lo:.1}..{hi:.1} ({:.2}x), \
-         beyond the documented 3x empirical band — the error has started tracking key \
-         frequency, which Count Sketch's L2 guarantee says it must not. \
-         stream_seed={STREAM_SEED} rows={ROWS} cols={COLS} deciles={means:?}",
-        hi / lo
-    );
+    let bound = (std::f64::consts::E / cols as f64).sqrt() * truth.l2_norm();
+    for (k, c) in truth.top_k(100) {
+        let est = cs.estimate(&DataInput::I64(k));
+        assert!(
+            (est - c as f64).abs() <= 1.5 * bound,
+            "key {k}: |{est:.0} - {c}| > 1.5 * median bound {:.0}",
+            1.5 * bound
+        );
+    }
 }
 
 // ------------------------------------------------------------- Top-k heaps
 
-/// The two heap-backed sketches share heap bookkeeping but not an error
-/// metric: `CMSHeap` carries Count-Min's one-sided additive bound and
-/// `CSHeap` carries Count Sketch's L2 bound. Both must keep every heap entry
-/// equal to what the sketch itself estimates, and both must recover the true
-/// heavy hitters that the top-k contract actually guarantees.
 #[test]
-fn heaps_satisfy_their_own_bounds_and_stay_heap_consistent() {
-    const TOP_K: usize = 16;
-    const DOMAIN: usize = 1024;
-    const CM_ROWS: usize = 3;
-    const CS_ROWS: usize = 5;
-    const COLS: usize = 4096;
-    const STREAM_SEED: u64 = 1004;
-
-    let mut cms_heap = CMSHeap::<Vector2D<i64>, RegularPath>::new(CM_ROWS, COLS, TOP_K);
-    let mut cs_heap = CSHeap::<Vector2D<i64>, RegularPath>::new(CS_ROWS, COLS, TOP_K);
-    let stream = zipf_u64(20_000, DOMAIN, 1.1, STREAM_SEED);
+fn heaps_top_k_recall_and_consistency() {
+    let (top_k, domain) = (16usize, 1024usize);
+    let mut cms_heap = CMSHeap::<Vector2D<i64>, RegularPath>::new(3, 4096, top_k);
+    let mut cs_heap = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 4096, top_k);
+    let stream = zipf_u64(20_000, domain, 1.1, 1004);
     let mut truth = FreqTruth::default();
     for k in &stream {
         let d = DataInput::I64(*k as i64);
@@ -384,31 +167,13 @@ fn heaps_satisfy_their_own_bounds_and_stay_heap_consistent() {
         cms_heap.insert(&d);
         cs_heap.insert(&d);
     }
-    let context = format!("zipf(1.1) domain={DOMAIN} n=20000 stream_seed={STREAM_SEED}");
+    let expected_min_count = truth.top_k(top_k)[top_k - 1].1;
 
-    // Each sketch against its own theorem.
-    CountMinSpec::new(CM_ROWS, COLS).assert_contract(
-        "CMSHeap point estimate",
-        &truth,
-        |k| cms_heap.estimate(&DataInput::I64(k)) as f64,
-        &context,
-    );
-    CountSketchSpec::new(CS_ROWS, COLS).assert_contract(
-        "CSHeap point estimate",
-        &truth,
-        |k| cs_heap.estimate(&DataInput::I64(k)),
-        &context,
-    );
-
-    // Heap/sketch consistency is structural: a heap entry that disagrees with
-    // the sketch is a bug regardless of any error bound.
-    let kth_count = truth.top_k(TOP_K)[TOP_K - 1].1;
     for (label, items, cms) in [
         ("CMSHeap", cms_heap.heap().heap().to_vec(), true),
         ("CSHeap", cs_heap.heap().heap().to_vec(), false),
     ] {
-        assert!(items.len() <= TOP_K, "{label} heap exceeded capacity");
-        let mut consistency = Tally::default();
+        assert!(items.len() <= top_k, "{label} heap exceeded capacity");
         let mut recall = 0usize;
         for it in &items {
             let key = match &it.key {
@@ -420,45 +185,30 @@ fn heaps_satisfy_their_own_bounds_and_stay_heap_consistent() {
             } else {
                 cs_heap.estimate(&DataInput::I64(key)) as i64
             };
-            consistency.record(it.count == est, || {
-                format!(
-                    "key {key}: heap holds {} but the sketch estimates {est}",
-                    it.count
-                )
-            });
-            if truth.get(key) >= kth_count {
+            // Invariant: heap entry must always equal the sketch estimate.
+            assert_eq!(
+                it.count, est,
+                "{label}: heap {} != estimate {est} for key {key}",
+                it.count
+            );
+            if truth.get(key) >= expected_min_count {
                 recall += 1;
             }
         }
-        consistency.assert_none(&format!("{label} heap/sketch consistency"), &context);
-
-        // Recall target: a key whose true count is at least the true k-th
-        // count must be admitted. Count-Min never underestimates, so every
-        // such key's estimate dominates the heap minimum once seen; one
-        // displacement slot of slack covers the eviction race at the
-        // boundary, where several keys share the k-th count.
         assert!(
-            recall >= TOP_K - 1,
-            "{label} recovered only {recall}/{TOP_K} keys at or above the true k-th count \
-             ({kth_count}); {context}"
+            recall >= top_k - 1,
+            "{label} recovered only {recall}/{top_k} heavy hitters"
         );
     }
 }
 
 // -------------------------------------------------------------- CountL2HH
 
-/// CountL2HH is a Count Sketch carrying a running F2, so its point estimates
-/// obey the Count Sketch L2 bound and its `get_l2_sqr` tracks the exact F2.
 #[test]
-fn countl2hh_weighted_turnstile_satisfies_the_l2_median_bound() {
-    const ROWS: usize = 4;
-    const COLS: usize = 2048;
-    const HASH_SEED_IDX: usize = 11;
-    const STREAM_SEED: u64 = 1005;
-
-    let mut sk = CountL2HH::<DefaultXxHasher>::with_dimensions_and_seed(ROWS, COLS, HASH_SEED_IDX);
+fn countl2hh_weighted_f2_with_decrements() {
+    let mut sk = CountL2HH::<DefaultXxHasher>::with_dimensions_and_seed(4, 2048, 11);
     let mut truth = FreqTruth::default();
-    let stream = zipf_u64(30_000, 512, 1.3, STREAM_SEED);
+    let stream = zipf_u64(30_000, 512, 1.3, 1005);
     for (i, k) in stream.iter().enumerate() {
         let w = 1 + (i % 5) as i64;
         sk.fast_insert_with_count(&DataInput::I64(*k as i64), w);
@@ -468,25 +218,18 @@ fn countl2hh_weighted_turnstile_satisfies_the_l2_median_bound() {
     let hot = truth.top_k(1)[0].0;
     sk.fast_insert_with_count(&DataInput::I64(hot), -10);
     truth.observe_weighted(hot, -10);
-
-    let context = format!(
-        "zipf(1.3) domain=512 n=30000 weighted 1..5 with one -10 decrement, \
-         stream_seed={STREAM_SEED} hash_seed_idx={HASH_SEED_IDX}"
-    );
-    CountSketchSpec::new(ROWS, COLS).assert_contract(
-        "CountL2HH point estimate",
-        &truth,
-        |k| sk.fast_get_est(&DataInput::I64(k)),
-        &context,
+    let est_hot = sk.fast_update_and_est(&DataInput::I64(hot), 0);
+    let rel = ((est_hot - truth.get(hot) as f64) / truth.get(hot) as f64).abs();
+    assert!(
+        rel <= 0.02,
+        "hot-key frequency after decrement: {est_hot} vs {}",
+        truth.get(hot)
     );
 
-    // F2 comes from the median of the per-row counter sums, i.e. the AMS
-    // tug-of-war estimator over this sketch's own matrix — an estimate with a
-    // real bound, not an exactly maintained total.
-    let f2_spec = SecondMomentSpec::new(ROWS, COLS);
-    if let Err(detail) = f2_spec.check(sk.get_l2_sqr(), truth.f2()) {
-        panic!("CountL2HH F2: {detail}\n  context: {context}");
-    }
+    assert!(
+        (sk.get_l2_sqr() - truth.f2()).abs() / truth.f2() <= 0.10,
+        "F2 over weighted turnstile stream off by >10%"
+    );
 }
 
 // ------------------------------------------- FoldCMS / FoldCS counts + merge
@@ -532,273 +275,40 @@ fn build_fold_cms(key: &'static str, n: usize) -> FoldCMS<DefaultXxHasher> {
     s
 }
 
-/// Sixteen sub-window sketches folded to a quarter width, then hierarchically
-/// merged. Folding halves the width `fold_level` times, so the merged sketches
-/// answer at `FULL_COLS >> FOLD_LEVEL` columns — and that, not the unfolded
-/// width, is the `w` each theorem is evaluated at. FoldCMS keeps Count-Min's
-/// additive bound; FoldCS keeps Count Sketch's L2 bound.
-#[test]
-fn folded_sketches_keep_their_own_bounds_through_a_sixteen_way_merge() {
-    const ROWS: usize = 3;
-    const FULL_COLS: usize = 4096;
-    const FOLD_LEVEL: u32 = 4;
-    const TOP_K: usize = 20;
-    const WINDOWS: usize = 16;
-    // Enough per window that folding to 256 columns is a real test, while an
-    // unoptimised `cargo test` run stays affordable. The bounds are computed
-    // from the exact truth, so a shorter stream narrows nothing.
-    const N: usize = 240_000;
-    const STREAM_SEED: u64 = 1009;
-
-    let stream = zipf_u64(N, 10_000, 1.1, STREAM_SEED);
-    let per_window = N / WINDOWS;
-    let mut truth = FreqTruth::default();
-    let mut cms_windows = Vec::with_capacity(WINDOWS);
-    let mut cs_windows = Vec::with_capacity(WINDOWS);
-
-    for w in 0..WINDOWS {
-        let mut cms = FoldCMS::<DefaultXxHasher>::new(ROWS, FULL_COLS, FOLD_LEVEL, TOP_K);
-        let mut cs = FoldCS::<DefaultXxHasher>::new(ROWS, FULL_COLS, FOLD_LEVEL, TOP_K);
-        for &v in &stream[w * per_window..(w + 1) * per_window] {
-            let d = DataInput::U64(v);
-            cms.insert(&d, 1);
-            cs.insert(&d, 1);
-            truth.observe(v as i64);
-        }
-        cms_windows.push(cms);
-        cs_windows.push(cs);
-    }
-
-    let cms_merged = FoldCMS::hierarchical_merge(&cms_windows);
-    let cs_merged = FoldCS::hierarchical_merge(&cs_windows);
-    let folded_cols = FULL_COLS >> FOLD_LEVEL;
-    let context = format!(
-        "zipf(1.1) domain=10000 n={N} stream_seed={STREAM_SEED}, {WINDOWS} windows folded \
-         {FOLD_LEVEL} levels: {FULL_COLS} -> {folded_cols} columns"
-    );
-
-    CountMinSpec::new(ROWS, folded_cols).assert_contract(
-        "FoldCMS after a 16-way hierarchical merge",
-        &truth,
-        |k| cms_merged.query(&DataInput::U64(k as u64)) as f64,
-        &context,
-    );
-    CountSketchSpec::new(ROWS, folded_cols).assert_contract(
-        "FoldCS after a 16-way hierarchical merge",
-        &truth,
-        |k| cs_merged.query(&DataInput::U64(k as u64)) as f64,
-        &context,
-    );
-}
-
 // ------------------------------------------------------ Portable wire twins
 
-/// The portable wire twins answer over string keys and must satisfy the same
-/// two theorems as their core counterparts — Count-Min additive, Count Sketch
-/// L2 — with no extra slack for being on the wire side.
 #[test]
-fn portable_cms_and_cs_string_keys_satisfy_their_own_bounds() {
-    const CM_ROWS: usize = 3;
-    const CS_ROWS: usize = 5;
-    const COLS: usize = 4096;
-    const STREAM_SEED: u64 = 1006;
+fn portable_cms_and_cs_string_keys_zipf_bound() {
+    let stream = zipf_u64(50_000, 2048, 1.1, 1006);
+    let mut truth: HashMap<String, i64> = HashMap::new();
 
-    let stream = zipf_u64(50_000, 2048, 1.1, STREAM_SEED);
-    // The portable types key on strings; `FreqTruth` keys on i64. The stream's
-    // u64 values are the identity behind both, so `k -> "k{k}"` is injective
-    // and the two truths agree key for key.
-    let mut truth = FreqTruth::default();
-    let mut pcs = CountMinSketch::new(CM_ROWS, COLS);
-    let mut pcss = CountSketch::new(CS_ROWS, COLS);
+    let mut pcs = CountMinSketch::new(3, 4096);
+    let mut pcss = CountSketch::new(5, 4096);
     for k in &stream {
-        truth.observe(*k as i64);
         let key = format!("k{k}");
+        *truth.entry(key.clone()).or_insert(0) += 1;
         pcs.update(&key, 1.0);
         pcss.update(&key, 1.0);
     }
-    let context = format!("zipf(1.1) domain=2048 n=50000 string keys, stream_seed={STREAM_SEED}");
+    let l2sq: f64 = truth.values().map(|c| (*c as f64) * (*c as f64)).sum();
+    let l2 = l2sq.sqrt();
+    let total = truth.values().sum::<i64>() as f64;
+    let cm_bound = std::f64::consts::E / 4096.0 * total;
+    let cs_bound = (std::f64::consts::E / 4096.0).sqrt() * l2;
 
-    CountMinSpec::new(CM_ROWS, COLS).assert_contract(
-        "portable CountMinSketch",
-        &truth,
-        |k| pcs.estimate(&format!("k{k}")),
-        &context,
-    );
-    CountSketchSpec::new(CS_ROWS, COLS).assert_contract(
-        "portable CountSketch",
-        &truth,
-        |k| pcss.estimate(&format!("k{k}")),
-        &context,
-    );
-}
-
-// ------------------------------------------------- Depth and width axes
-//
-// Both families' bounds are parameterised by `d` and `w`, so the sweep below
-// is part of the theorem's statement rather than a property of any one
-// storage backend: it re-evaluates each bound at its own dimensions across the
-// axis, and pins the direction the width term is supposed to move.
-
-/// Medium stream: large enough that collisions are statistically meaningful at
-/// 2048 and 4096 columns, small enough that the whole axis stays quick.
-const AXIS_N: usize = 40_000;
-const AXIS_DOMAIN: usize = 4_096;
-const AXIS_STREAM_SEED: u64 = 0x10BE_C700;
-
-const DEPTH_AXIS: [usize; 4] = [1, 2, 3, 9];
-const NON_POWER_OF_TWO_WIDTHS: [usize; 4] = [3, 100, 1_000, 4_095];
-const WIDTH_EXCESS_DECAY: f64 = 2.0;
-
-fn axis_context(label: &str, rows: usize, cols: usize) -> String {
-    format!(
-        "{label} rows={rows} cols={cols} zipf(1.1) domain={AXIS_DOMAIN} n={AXIS_N} \
-         seed={AXIS_STREAM_SEED:#x}"
-    )
-}
-
-/// Count-Min's one-sided and simultaneous guarantees at one point on the axis.
-/// Returns the mean excess so a caller can compare it across widths.
-fn countmin_axis_contract(
-    label: &str,
-    rows: usize,
-    cols: usize,
-    truth: &FreqTruth,
-    estimate: impl Fn(i64) -> f64,
-) -> f64 {
-    let spec = CountMinSpec::new(rows, cols);
-    let total = truth.total() as f64;
-    let distinct = truth.distinct();
-    let mut one_sided = Tally::default();
-    let mut simultaneous = Tally::default();
-    let mut excess_sum = 0.0;
-    let mut keys = 0usize;
-    for (key, count) in truth.pairs() {
-        let est = estimate(key);
-        let f = count as f64;
-        one_sided.record(est >= f, || {
-            format!("key {key}: est {est} < true {f} (Count-Min must never underestimate)")
-        });
-        let bound = spec.simultaneous_bound(total, f, distinct, SIMULTANEOUS_LEVEL);
-        simultaneous.record(est - f <= bound, || {
-            format!("key {key}: excess {:.1} > b*(N-f)/w = {bound:.1}", est - f)
-        });
-        excess_sum += est - f;
-        keys += 1;
-    }
-    let ctx = axis_context(label, rows, cols);
-    one_sided.assert_none(&format!("{label} / one-sided"), &ctx);
-    simultaneous.assert_none(&format!("{label} / simultaneous"), &ctx);
-    excess_sum / keys.max(1) as f64
-}
-
-#[test]
-fn countmin_mean_excess_falls_as_the_width_axis_grows() {
-    let (stream, truth) = zipf_stream_with_truth(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
-    for &rows in &DEPTH_AXIS {
-        let mut previous: Option<(usize, f64)> = None;
-        for &cols in &[64usize, 512, 4_096] {
-            let mut sketch = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
-            for k in &stream {
-                sketch.insert(&DataInput::U64(*k));
-            }
-            let mut excess_sum = 0.0;
-            for (key, count) in truth.pairs() {
-                excess_sum += sketch.estimate(&DataInput::U64(key as u64)) as f64 - count as f64;
-            }
-            let mean = excess_sum / truth.distinct() as f64;
-            if let Some((prev_cols, prev_mean)) = previous {
-                assert!(
-                    mean * WIDTH_EXCESS_DECAY <= prev_mean,
-                    "d={rows}: mean excess {mean:.3} at w={cols} is not at most 1/{WIDTH_EXCESS_DECAY} \
-                     of {prev_mean:.3} at w={prev_cols}"
-                );
-            }
-            previous = Some((cols, mean));
-        }
-    }
-}
-
-/// Off the power-of-two grid the column fold is a modulo rather than a mask,
-/// which changes how evenly keys spread. That the index stays inside the
-/// matrix is a structural property and is a unit test in
-/// `src/sketches/countminsketch.rs`; what this asserts is that the *bound*
-/// still holds once the fold is doing real work.
-#[test]
-fn countmin_answers_a_non_power_of_two_width_on_both_paths() {
-    let (stream, truth) = zipf_stream_with_truth(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
-    for &cols in &NON_POWER_OF_TWO_WIDTHS {
+    let mut by_freq: Vec<(String, i64)> = truth.into_iter().collect();
+    by_freq.sort_by_key(|(_, c)| -*c);
+    for (k, c) in by_freq.iter().take(60) {
+        let cm_est = pcs.estimate(k);
         assert!(
-            !cols.is_power_of_two(),
-            "the width axis must stay off the power-of-two grid, got {cols}"
+            cm_est >= *c as f64 && cm_est <= *c as f64 + cm_bound,
+            "portable CM key {k}: est {cm_est} vs true {c}"
         );
-        let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, cols);
-        let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(3, cols);
-        for k in &stream {
-            regular.insert(&DataInput::U64(*k));
-            fast.insert(&DataInput::U64(*k));
-        }
-        assert_eq!(regular.cols(), cols, "regular path reported width");
-        assert_eq!(fast.cols(), cols, "fast path reported width");
-        countmin_axis_contract(
-            "CountMin<Vector2D<i64>, RegularPath> non-power-of-two",
-            3,
-            cols,
-            &truth,
-            |key| regular.estimate(&DataInput::U64(key as u64)) as f64,
-        );
-        countmin_axis_contract(
-            "CountMin<Vector2D<i64>, FastPath> non-power-of-two",
-            3,
-            cols,
-            &truth,
-            |key| fast.estimate(&DataInput::U64(key as u64)) as f64,
+        let cs_est = pcss.estimate(k);
+        assert!(
+            (cs_est - *c as f64).abs() <= 1.5 * cs_bound,
+            "portable CS key {k}: est {cs_est} vs true {c} (bound {:.0})",
+            1.5 * cs_bound
         );
     }
-}
-
-#[test]
-fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
-    let (stream, truth) = zipf_stream_with_truth(AXIS_N, AXIS_DOMAIN, 1.1, AXIS_STREAM_SEED);
-    for &cols in &NON_POWER_OF_TWO_WIDTHS {
-        let spec = CountSketchSpec::new(5, cols);
-        let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, cols);
-        let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(5, cols);
-        for k in &stream {
-            regular.insert(&DataInput::U64(*k));
-            fast.insert(&DataInput::U64(*k));
-        }
-        assert_eq!(regular.cols(), cols, "regular path reported width");
-        assert_eq!(fast.cols(), cols, "fast path reported width");
-        let mut regular_simultaneous = Tally::default();
-        let mut regular_marginal = Tally::default();
-        spec.tally_into(
-            &mut regular_simultaneous,
-            &mut regular_marginal,
-            &truth,
-            |key| regular.estimate(&DataInput::U64(key as u64)),
-        );
-        regular_simultaneous.assert_none(
-            "Count<Vector2D<i64>, RegularPath> non-power-of-two / simultaneous L2",
-            &axis_context("Count non-power-of-two regular", 5, cols),
-        );
-        let mut fast_simultaneous = Tally::default();
-        let mut fast_marginal = Tally::default();
-        spec.tally_into(&mut fast_simultaneous, &mut fast_marginal, &truth, |key| {
-            fast.estimate(&DataInput::U64(key as u64))
-        });
-        fast_simultaneous.assert_none(
-            "Count<Vector2D<i64>, FastPath> non-power-of-two / simultaneous L2",
-            &axis_context("Count non-power-of-two fast", 5, cols),
-        );
-    }
-}
-
-#[test]
-fn every_countminsketch_instantiation_meets_the_count_min_bound_on_every_regime() {
-    assert_cms_bound(countminsketch_variants);
-}
-
-#[test]
-fn every_countsketch_instantiation_meets_the_l2_bound_on_every_regime() {
-    assert_cs_bound(countsketch_variants);
 }

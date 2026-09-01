@@ -10,8 +10,8 @@
 //!
 //! See `tests/README.md` for the onboarding recipe.
 
-use super::specs::{CountMinSpec, CountSketchSpec};
 use super::regimes::frequency_regimes;
+use super::specs::{CountMinSpec, CountSketchSpec};
 use super::variants::VariantList;
 use super::{FreqTruth, NumericTruth};
 use std::collections::HashMap;
@@ -580,17 +580,15 @@ fn on_large_stack(f: impl FnOnce() + Send + 'static) {
 pub fn assert_cms_bound(variants: fn() -> VariantList) {
     on_large_stack(move || {
         for regime in frequency_regimes() {
-            let (stream, truth) = regime.build();
+            let (keys, truth) = regime.build();
             for (label, mut sketch) in variants() {
-                for k in &stream {
-                    sketch.insert(*k);
-                }
+                keys.for_each(|d| sketch.insert(d));
                 let (rows, cols) = sketch.dims();
                 let ctx = variant_context(label, rows, cols, &regime.label);
                 CountMinSpec::new(rows, cols).assert_contract(
                     label,
                     &truth,
-                    |k| sketch.query(k as u64),
+                    |k| regime.key_type.with_input(k, |d| sketch.query(d)),
                     &ctx,
                 );
             }
@@ -601,17 +599,15 @@ pub fn assert_cms_bound(variants: fn() -> VariantList) {
 pub fn assert_cs_bound(variants: fn() -> VariantList) {
     on_large_stack(move || {
         for regime in frequency_regimes() {
-            let (stream, truth) = regime.build();
+            let (keys, truth) = regime.build();
             for (label, mut sketch) in variants() {
-                for k in &stream {
-                    sketch.insert(*k);
-                }
+                keys.for_each(|d| sketch.insert(d));
                 let (rows, cols) = sketch.dims();
                 let ctx = variant_context(label, rows, cols, &regime.label);
                 CountSketchSpec::new(rows, cols).assert_contract(
                     label,
                     &truth,
-                    |k| sketch.query(k as u64),
+                    |k| regime.key_type.with_input(k, |d| sketch.query(d)),
                     &ctx,
                 );
             }

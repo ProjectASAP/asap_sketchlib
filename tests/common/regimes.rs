@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use asap_sketchlib::DataInput;
+
 use super::FreqTruth;
 use super::streams::{uniform_u64, zipf_u64};
 
@@ -77,6 +79,76 @@ impl Shape {
     ];
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KeyType {
+    I64,
+    U64,
+    F64,
+    Str,
+}
+
+impl KeyType {
+    pub fn tag(self) -> &'static str {
+        match self {
+            KeyType::I64 => "i64",
+            KeyType::U64 => "u64",
+            KeyType::F64 => "f64",
+            KeyType::Str => "str",
+        }
+    }
+
+    fn materialise(self, stream: &[u64]) -> Keys {
+        match self {
+            KeyType::I64 => Keys::I64(stream.iter().map(|v| *v as i64).collect()),
+            KeyType::U64 => Keys::U64(stream.to_vec()),
+            KeyType::F64 => Keys::F64(stream.iter().map(|v| *v as f64).collect()),
+            KeyType::Str => Keys::Str(stream.iter().map(|v| format!("k{v}")).collect()),
+        }
+    }
+
+    pub fn with_input<R>(self, key: i64, f: impl FnOnce(&DataInput) -> R) -> R {
+        match self {
+            KeyType::I64 => f(&DataInput::I64(key)),
+            KeyType::U64 => f(&DataInput::U64(key as u64)),
+            KeyType::F64 => f(&DataInput::F64(key as f64)),
+            KeyType::Str => f(&DataInput::Str(&format!("k{key}"))),
+        }
+    }
+
+    pub const ALL: [KeyType; 4] = [KeyType::I64, KeyType::U64, KeyType::F64, KeyType::Str];
+}
+
+pub enum Keys {
+    I64(Vec<i64>),
+    U64(Vec<u64>),
+    F64(Vec<f64>),
+    Str(Vec<String>),
+}
+
+impl Keys {
+    pub fn len(&self) -> usize {
+        match self {
+            Keys::I64(v) => v.len(),
+            Keys::U64(v) => v.len(),
+            Keys::F64(v) => v.len(),
+            Keys::Str(v) => v.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn for_each(&self, mut f: impl FnMut(&DataInput)) {
+        match self {
+            Keys::I64(v) => v.iter().for_each(|x| f(&DataInput::I64(*x))),
+            Keys::U64(v) => v.iter().for_each(|x| f(&DataInput::U64(*x))),
+            Keys::F64(v) => v.iter().for_each(|x| f(&DataInput::F64(*x))),
+            Keys::Str(v) => v.iter().for_each(|x| f(&DataInput::Str(x))),
+        }
+    }
+}
+
 const SEED_BASE: u64 = 0x10BE_C700_0000_0000;
 
 fn seed_for(scale: Scale, shape: Shape) -> u64 {
@@ -98,92 +170,70 @@ fn seed_for(scale: Scale, shape: Shape) -> u64 {
 pub struct Regime {
     pub scale: Scale,
     pub shape: Shape,
+    pub key_type: KeyType,
     pub label: String,
 }
 
 impl Regime {
-    pub fn new(scale: Scale, shape: Shape) -> Self {
+    pub fn new(scale: Scale, shape: Shape, key_type: KeyType) -> Self {
         let label = format!(
-            "{} n={} domain={} seed={:#018x}",
+            "{} n={} domain={} keys={} seed={:#018x}",
             shape.tag(),
             scale.tag(),
             scale.domain(),
+            key_type.tag(),
             seed_for(scale, shape),
         );
         Self {
             scale,
             shape,
+            key_type,
             label,
         }
     }
 
-    pub fn build(&self) -> (Vec<u64>, FreqTruth) {
-        let stream = self
-            .shape
-            .draw(self.scale.n(), self.scale.domain(), seed_for(self.scale, self.shape));
+    pub fn build(&self) -> (Keys, FreqTruth) {
+        let stream = self.shape.draw(
+            self.scale.n(),
+            self.scale.domain(),
+            seed_for(self.scale, self.shape),
+        );
         let mut truth = FreqTruth::default();
         for k in &stream {
             truth.observe(*k as i64);
         }
-        (stream, truth)
+        (self.key_type.materialise(&stream), truth)
     }
 }
 
-pub const SCALES_ENV: &str = "ASAP_REGIME_SCALES";
-pub const DEFAULT_SCALES: [Scale; 1] = [Scale::N10K];
-
 pub fn selected_scales() -> Vec<Scale> {
-    let raw = match std::env::var(SCALES_ENV) {
-        Ok(v) => v,
-        Err(_) => return DEFAULT_SCALES.to_vec(),
-    };
-    let raw = raw.trim();
-    if raw.eq_ignore_ascii_case("all") {
-        return Scale::ALL.to_vec();
-    }
-    let mut out: Vec<Scale> = Vec::new();
-    for part in raw.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        let scale = Scale::ALL
-            .iter()
-            .copied()
-            .find(|s| s.tag().eq_ignore_ascii_case(part))
-            .unwrap_or_else(|| {
-                panic!(
-                    "{SCALES_ENV}: unknown scale {part:?}; expected \"all\" or a comma list of {:?}",
-                    Scale::ALL.map(|s| s.tag())
-                )
-            });
-        if !out.contains(&scale) {
-            out.push(scale);
-        }
-    }
-    if out.is_empty() {
-        return DEFAULT_SCALES.to_vec();
-    }
+    let mut out = vec![Scale::N10K];
+    // if cfg!(feature = "middlesize") {
+    //     out.push(Scale::N100K);
+    //     out.push(Scale::N1M);
+    // }
+    // if cfg!(feature = "largesize") {
+    //     out.push(Scale::N10M);
+    // }
     out.sort();
     out
 }
 
 pub fn frequency_regimes() -> Vec<Regime> {
-    let scales = selected_scales();
-    let mut out = Vec::with_capacity(scales.len() * Shape::ALL.len());
-    for scale in scales {
-        for shape in Shape::ALL {
-            out.push(Regime::new(scale, shape));
-        }
-    }
-    out
+    regimes_over(&selected_scales())
 }
 
 pub fn all_frequency_regimes() -> Vec<Regime> {
-    let mut out = Vec::with_capacity(Scale::ALL.len() * Shape::ALL.len());
-    for scale in Scale::ALL {
+    regimes_over(&Scale::ALL)
+}
+
+fn regimes_over(scales: &[Scale]) -> Vec<Regime> {
+    let mut out = Vec::with_capacity(scales.len() * Shape::ALL.len() * KeyType::ALL.len());
+    for scale in scales {
         for shape in Shape::ALL {
-            out.push(Regime::new(scale, shape));
+            for key_type in KeyType::ALL {
+                out.push(Regime::new(*scale, shape, key_type));
+            }
         }
     }
     out

@@ -10,8 +10,8 @@ where
     S: MatrixStorage + 'static,
     S::Counter: VariantCounter + Copy + PartialOrd + From<i32> + std::ops::AddAssign,
 {
-    fn insert(&mut self, key: u64) {
-        CountMin::<S, RegularPath, DefaultXxHasher>::insert(self, &DataInput::U64(key));
+    fn insert(&mut self, key: &DataInput) {
+        CountMin::<S, RegularPath, DefaultXxHasher>::insert(self, key);
     }
     fn merge(&mut self, other: &dyn FrequencyVariant) {
         let other = (other as &dyn Any)
@@ -19,8 +19,8 @@ where
             .expect("merge requires both variants to be the same concrete sketch type");
         CountMin::<S, RegularPath, DefaultXxHasher>::merge(self, other);
     }
-    fn query(&self, key: u64) -> f64 {
-        self.estimate(&DataInput::U64(key)).as_f64()
+    fn query(&self, key: &DataInput) -> f64 {
+        self.estimate(key).as_f64()
     }
     fn dims(&self) -> (usize, usize) {
         (self.rows(), self.cols())
@@ -32,8 +32,8 @@ where
     S: MatrixStorage + FastPathHasher<DefaultXxHasher> + 'static,
     S::Counter: VariantCounter + Copy + PartialOrd + From<i32> + std::ops::AddAssign,
 {
-    fn insert(&mut self, key: u64) {
-        CountMin::<S, FastPath, DefaultXxHasher>::insert(self, &DataInput::U64(key));
+    fn insert(&mut self, key: &DataInput) {
+        CountMin::<S, FastPath, DefaultXxHasher>::insert(self, key);
     }
     fn merge(&mut self, other: &dyn FrequencyVariant) {
         let other = (other as &dyn Any)
@@ -41,8 +41,8 @@ where
             .expect("merge requires both variants to be the same concrete sketch type");
         CountMin::<S, FastPath, DefaultXxHasher>::merge(self, other);
     }
-    fn query(&self, key: u64) -> f64 {
-        self.estimate(&DataInput::U64(key)).as_f64()
+    fn query(&self, key: &DataInput) -> f64 {
+        self.estimate(key).as_f64()
     }
     fn dims(&self) -> (usize, usize) {
         (self.rows(), self.cols())
@@ -53,8 +53,8 @@ where
     S: MatrixStorage + 'static,
     S::Counter: VariantCounter + Copy + Ord + From<i32> + Into<i64> + std::ops::AddAssign,
 {
-    fn insert(&mut self, key: u64) {
-        CMSHeap::<S, RegularPath, DefaultXxHasher>::insert(self, &DataInput::U64(key));
+    fn insert(&mut self, key: &DataInput) {
+        CMSHeap::<S, RegularPath, DefaultXxHasher>::insert(self, key);
     }
     fn merge(&mut self, other: &dyn FrequencyVariant) {
         let other = (other as &dyn Any)
@@ -62,8 +62,8 @@ where
             .expect("merge requires both variants to be the same concrete sketch type");
         CMSHeap::<S, RegularPath, DefaultXxHasher>::merge(self, other);
     }
-    fn query(&self, key: u64) -> f64 {
-        self.estimate(&DataInput::U64(key)).as_f64()
+    fn query(&self, key: &DataInput) -> f64 {
+        self.estimate(key).as_f64()
     }
     fn dims(&self) -> (usize, usize) {
         (self.rows(), self.cols())
@@ -75,8 +75,8 @@ where
     S: MatrixStorage + FastPathHasher<DefaultXxHasher> + 'static,
     S::Counter: VariantCounter + Copy + Ord + From<i32> + Into<i64> + std::ops::AddAssign,
 {
-    fn insert(&mut self, key: u64) {
-        CMSHeap::<S, FastPath, DefaultXxHasher>::insert(self, &DataInput::U64(key));
+    fn insert(&mut self, key: &DataInput) {
+        CMSHeap::<S, FastPath, DefaultXxHasher>::insert(self, key);
     }
     fn merge(&mut self, other: &dyn FrequencyVariant) {
         let other = (other as &dyn Any)
@@ -84,8 +84,8 @@ where
             .expect("merge requires both variants to be the same concrete sketch type");
         CMSHeap::<S, FastPath, DefaultXxHasher>::merge(self, other);
     }
-    fn query(&self, key: u64) -> f64 {
-        self.estimate(&DataInput::U64(key)).as_f64()
+    fn query(&self, key: &DataInput) -> f64 {
+        self.estimate(key).as_f64()
     }
     fn dims(&self) -> (usize, usize) {
         (self.rows(), self.cols())
@@ -1837,6 +1837,420 @@ pub fn countminsketch_variants() -> VariantList {
             "CountMin<Matrix7X32768I128, FastPath>",
             Box::new(CountMin::<Matrix7X32768I128, FastPath>::from_storage(
                 Matrix7X32768I128::default(),
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, RegularPath> 3x100",
+            Box::new(CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                3, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, FastPath> 3x100",
+            Box::new(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 100)),
+        ),
+        (
+            "CountMin<Vector2D<i64>, RegularPath> 3x100",
+            Box::new(CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(
+                3, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, FastPath> 3x100",
+            Box::new(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(3, 100)),
+        ),
+        (
+            "CountMin<Vector2D<i128>, RegularPath> 3x100",
+            Box::new(CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(
+                3, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, FastPath> 3x100",
+            Box::new(CountMin::<Vector2D<i128>, FastPath>::with_dimensions(
+                3, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, RegularPath> 3x100",
+            Box::new(CountMin::<Vector2D<f64>, RegularPath>::with_dimensions(
+                3, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, FastPath> 3x100",
+            Box::new(CountMin::<Vector2D<f64>, FastPath>::with_dimensions(3, 100)),
+        ),
+        (
+            "CountMin<Vector2D<i32>, RegularPath> 3x1000",
+            Box::new(CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                3, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, FastPath> 3x1000",
+            Box::new(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+                3, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, RegularPath> 3x1000",
+            Box::new(CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(
+                3, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, FastPath> 3x1000",
+            Box::new(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(
+                3, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, RegularPath> 3x1000",
+            Box::new(CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(
+                3, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, FastPath> 3x1000",
+            Box::new(CountMin::<Vector2D<i128>, FastPath>::with_dimensions(
+                3, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, RegularPath> 3x1000",
+            Box::new(CountMin::<Vector2D<f64>, RegularPath>::with_dimensions(
+                3, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, FastPath> 3x1000",
+            Box::new(CountMin::<Vector2D<f64>, FastPath>::with_dimensions(
+                3, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, RegularPath> 3x4095",
+            Box::new(CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                3, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, FastPath> 3x4095",
+            Box::new(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+                3, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, RegularPath> 3x4095",
+            Box::new(CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(
+                3, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, FastPath> 3x4095",
+            Box::new(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(
+                3, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, RegularPath> 3x4095",
+            Box::new(CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(
+                3, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, FastPath> 3x4095",
+            Box::new(CountMin::<Vector2D<i128>, FastPath>::with_dimensions(
+                3, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, RegularPath> 3x4095",
+            Box::new(CountMin::<Vector2D<f64>, RegularPath>::with_dimensions(
+                3, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, FastPath> 3x4095",
+            Box::new(CountMin::<Vector2D<f64>, FastPath>::with_dimensions(
+                3, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, RegularPath> 5x100",
+            Box::new(CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                5, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, FastPath> 5x100",
+            Box::new(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 100)),
+        ),
+        (
+            "CountMin<Vector2D<i64>, RegularPath> 5x100",
+            Box::new(CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(
+                5, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, FastPath> 5x100",
+            Box::new(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(5, 100)),
+        ),
+        (
+            "CountMin<Vector2D<i128>, RegularPath> 5x100",
+            Box::new(CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(
+                5, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, FastPath> 5x100",
+            Box::new(CountMin::<Vector2D<i128>, FastPath>::with_dimensions(
+                5, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, RegularPath> 5x100",
+            Box::new(CountMin::<Vector2D<f64>, RegularPath>::with_dimensions(
+                5, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, FastPath> 5x100",
+            Box::new(CountMin::<Vector2D<f64>, FastPath>::with_dimensions(5, 100)),
+        ),
+        (
+            "CountMin<Vector2D<i32>, RegularPath> 5x1000",
+            Box::new(CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                5, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, FastPath> 5x1000",
+            Box::new(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+                5, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, RegularPath> 5x1000",
+            Box::new(CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(
+                5, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, FastPath> 5x1000",
+            Box::new(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(
+                5, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, RegularPath> 5x1000",
+            Box::new(CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(
+                5, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, FastPath> 5x1000",
+            Box::new(CountMin::<Vector2D<i128>, FastPath>::with_dimensions(
+                5, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, RegularPath> 5x1000",
+            Box::new(CountMin::<Vector2D<f64>, RegularPath>::with_dimensions(
+                5, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, FastPath> 5x1000",
+            Box::new(CountMin::<Vector2D<f64>, FastPath>::with_dimensions(
+                5, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, RegularPath> 5x4095",
+            Box::new(CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                5, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, FastPath> 5x4095",
+            Box::new(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+                5, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, RegularPath> 5x4095",
+            Box::new(CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(
+                5, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, FastPath> 5x4095",
+            Box::new(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(
+                5, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, RegularPath> 5x4095",
+            Box::new(CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(
+                5, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, FastPath> 5x4095",
+            Box::new(CountMin::<Vector2D<i128>, FastPath>::with_dimensions(
+                5, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, RegularPath> 5x4095",
+            Box::new(CountMin::<Vector2D<f64>, RegularPath>::with_dimensions(
+                5, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, FastPath> 5x4095",
+            Box::new(CountMin::<Vector2D<f64>, FastPath>::with_dimensions(
+                5, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, RegularPath> 7x100",
+            Box::new(CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                7, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, FastPath> 7x100",
+            Box::new(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(7, 100)),
+        ),
+        (
+            "CountMin<Vector2D<i64>, RegularPath> 7x100",
+            Box::new(CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(
+                7, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, FastPath> 7x100",
+            Box::new(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(7, 100)),
+        ),
+        (
+            "CountMin<Vector2D<i128>, RegularPath> 7x100",
+            Box::new(CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(
+                7, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, FastPath> 7x100",
+            Box::new(CountMin::<Vector2D<i128>, FastPath>::with_dimensions(
+                7, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, RegularPath> 7x100",
+            Box::new(CountMin::<Vector2D<f64>, RegularPath>::with_dimensions(
+                7, 100,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, FastPath> 7x100",
+            Box::new(CountMin::<Vector2D<f64>, FastPath>::with_dimensions(7, 100)),
+        ),
+        (
+            "CountMin<Vector2D<i32>, RegularPath> 7x1000",
+            Box::new(CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                7, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, FastPath> 7x1000",
+            Box::new(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+                7, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, RegularPath> 7x1000",
+            Box::new(CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(
+                7, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, FastPath> 7x1000",
+            Box::new(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(
+                7, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, RegularPath> 7x1000",
+            Box::new(CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(
+                7, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, FastPath> 7x1000",
+            Box::new(CountMin::<Vector2D<i128>, FastPath>::with_dimensions(
+                7, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, RegularPath> 7x1000",
+            Box::new(CountMin::<Vector2D<f64>, RegularPath>::with_dimensions(
+                7, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, FastPath> 7x1000",
+            Box::new(CountMin::<Vector2D<f64>, FastPath>::with_dimensions(
+                7, 1000,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, RegularPath> 7x4095",
+            Box::new(CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(
+                7, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i32>, FastPath> 7x4095",
+            Box::new(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+                7, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, RegularPath> 7x4095",
+            Box::new(CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(
+                7, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i64>, FastPath> 7x4095",
+            Box::new(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(
+                7, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, RegularPath> 7x4095",
+            Box::new(CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(
+                7, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<i128>, FastPath> 7x4095",
+            Box::new(CountMin::<Vector2D<i128>, FastPath>::with_dimensions(
+                7, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, RegularPath> 7x4095",
+            Box::new(CountMin::<Vector2D<f64>, RegularPath>::with_dimensions(
+                7, 4095,
+            )),
+        ),
+        (
+            "CountMin<Vector2D<f64>, FastPath> 7x4095",
+            Box::new(CountMin::<Vector2D<f64>, FastPath>::with_dimensions(
+                7, 4095,
             )),
         ),
     ]
