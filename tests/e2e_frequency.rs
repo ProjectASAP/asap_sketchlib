@@ -148,13 +148,13 @@ fn count_vecbased_error_bound() {
             spec.assert_contract(
                 "Count<Vector2D<i64>, RegularPath>",
                 &truth,
-                |k| reg.estimate(&DataInput::I64(k)) as f64,
+                |k| reg.estimate(&DataInput::I64(k)),
                 &context,
             );
             spec.assert_contract(
                 "Count<Vector2D<i32>, FastPath>",
                 &truth,
-                |k| fast.estimate(&DataInput::I64(k)) as f64,
+                |k| fast.estimate(&DataInput::I64(k)),
                 &context,
             );
         }
