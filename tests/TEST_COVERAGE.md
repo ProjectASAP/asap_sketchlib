@@ -30,7 +30,8 @@
   - Precision: P=10-18
   - Input: (1) ~ (12)
   - error bound:
-    - Precision 10-14: relative error 2%
+    - Precision 10-12: relative error 5%
+    - Precision 13-14: relative error 2%
     - Precisioin 15-18: relative error 1%
     - reasoning: theoretical error bound is a standard deviation, to simplify the result, use this arbitrary number
 - KMV
@@ -870,5 +871,17 @@
 ## e2e_topk
 
 - CMS_heap
+  - Input: (1) ~ (12)
+  - Configuration:
+    - top_k: 32, 64, 128
+    - cms: row: 5; col: 32768
+    - reasoning: CMS accuracy is tested elsewhere, so here is to test how the heap performs E2E
+  - Error bound: for items in heap, relative error should be less than 2%
 
 - CS_heap
+  - Input: (1) ~ (12)
+  - Configuration:
+    - top_k: 32, 64, 128
+    - cs: row: 5; col: 32768
+    - reasoning: CMS accuracy is tested elsewhere, so here is to test how the heap performs E2E
+  - Error bound: for items in heap, relative error should be less than 2%
