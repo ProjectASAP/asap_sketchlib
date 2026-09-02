@@ -36,12 +36,6 @@
     - Precision 13-14: relative error 2%
     - Precisioin 15-18: relative error 1%
     - reasoning: theoretical error bound is a standard deviation, to simplify the result, use this arbitrary number
-- KMV
-  - Input: (1) ~ (12)
-  - configuration (k value): 32, 128
-  - error bound:
-    - relative error 5%
-    - reasoning: theoretical error bound is a probability, to simplify the result, use this arbitrary number
 - UnivMon
   - cardinality only
 - SetAggregator
@@ -59,9 +53,8 @@
   - cells: CountMin (row 3, col 4096, FastPath) + HyperLogLog (ErtlMLE), one hash layer shared by every cell
   - Input: (1) ~ (12)
   - error bound:
-    - CountMin cell: one-sided only, upper slack 3x
-      - reasoning: the shared hash layer drives the whole stream through every cell, so the tail collides into the queried counter far more than it would in a standalone CountMin; only the lower bound stays a guarantee
-    - HyperLogLog cell: relative error 3%
+    - CountMin cell: same with sketch instance
+    - HyperLogLog cell: same with sketch instance
 
 ## e2e_experimental
 
@@ -77,6 +70,12 @@ Feature-gated behind `--features experimental`.
 - EHUnivOptimized
   - Configuration: k=2, window 100, UnivMon defaults (heap 32, row 5, col 2048, layers 8)
   - map tier: interval queries fully inside the retained range are exact, both for the totals and for the per-key counts
+- KMV
+  - Input: (1) ~ (12)
+  - configuration (k value): 32, 128
+  - error bound:
+    - relative error 5%
+    - reasoning: theoretical error bound is a probability, to simplify the result, use this arbitrary number
 
 ## e2e_frameworks
 
@@ -509,11 +508,6 @@ Feature-gated behind `--features experimental`.
   - Configuration: row 3, col 2048, fold level 0, top_k 32
   - counts are exact on sparse dims, including signed weighted updates through FoldCS
   - same-level merge sums disjoint contributions; hierarchical merge of level-matched sketches preserves totals
-- checks applied to every sketch in this section
-  - turnstile: `+500` then `-500` on one key nets to exactly 0, and `+500 / -200` estimates ~300
-  - path parity: RegularPath and FastPath must return identical estimates on the same stream
-  - shard merge: 3 shards merged pairwise must equal the single-pass estimate on the top-50 keys
-  - only keys dense enough to carry statistical meaning (count >= 50) are held to the per-key bound
 
 ## e2e_heavy_hitters
 
