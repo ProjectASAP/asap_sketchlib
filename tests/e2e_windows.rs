@@ -1052,3 +1052,215 @@ fn an_exponential_histogram_custom_bucket_update_matches_repeated_inserts() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The documented input matrix
+// ---------------------------------------------------------------------------
+
+/// `tests/TEST_COVERAGE.md` gives the sliding-window histogram its own row:
+/// `k = 8`, `window 100`, a Count-Min payload at `row 3, col 2048` on the fast
+/// path, over inputs `(3) ~ (6)` and `(14)`, with an interval count held to 21%
+/// relative error and the retained span reported honestly.
+///
+/// The variant matrix above runs at `window 1,000,000` so that nothing expires
+/// inside the accuracy runs; this row is the opposite case, where expiry is the
+/// point. Each stream is laid over 1000 time units, so a window of 100 retains
+/// the last tenth of it and the rest has to be gone.
+///
+/// # Why the interval count is two-sided
+///
+/// `query_interval_merge` snaps the requested interval to bucket boundaries in
+/// both directions, so the merged payload can cover slightly more or slightly
+/// less than what was asked for. The Count-Min payload can only over-count
+/// within whatever it does cover, but the snapping can drop events the
+/// requested interval contained, so the answer is not one-sided and the 21% is
+/// a two-sided granularity band rather than a sketch bound.
+mod documented_matrix {
+    use super::common::inputs::{key_input, string_input};
+    use super::common::specs::SIMULTANEOUS_LEVEL;
+    use super::*;
+
+    use std::collections::HashMap;
+    use std::hash::Hash;
+
+    /// The document's configuration for this row.
+    const DOC_K: usize = 8;
+    const DOC_WINDOW: u64 = 100;
+    const DOC_ROWS: usize = 3;
+    const DOC_COLS: usize = 2_048;
+    /// Time units the stream is spread over, so that `DOC_WINDOW` retains a
+    /// tenth of it.
+    const SPAN: u64 = 1_000;
+    /// The document's interval-count band.
+    const INTERVAL_RELATIVE_ERROR: f64 = 0.21;
+
+    fn documented_histogram() -> ExponentialHistogram {
+        ExponentialHistogram::new(
+            DOC_K,
+            DOC_WINDOW,
+            EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+                DOC_ROWS, DOC_COLS,
+            )),
+        )
+    }
+
+    /// Feeds a keyed stream through the documented histogram and checks the
+    /// interval count, the retained span and expiry past it.
+    fn eh_documented_stream<K, F>(keys: &[K], to_input: F, context: &str)
+    where
+        K: Eq + Hash + Clone + std::fmt::Debug,
+        F: Fn(&K) -> DataInput<'static>,
+    {
+        let n = keys.len() as u64;
+        let mut eh = documented_histogram();
+        let mut at: Vec<(u64, K)> = Vec::with_capacity(keys.len());
+        for (i, key) in keys.iter().enumerate() {
+            let t = i as u64 * SPAN / n;
+            eh.update(t, &to_input(key));
+            at.push((t, key.clone()));
+        }
+
+        let min_time = eh.get_min_time().expect("buckets present");
+        let max_time = eh.get_max_time().expect("buckets present");
+        assert_eq!(
+            max_time,
+            at.last().expect("non-empty stream").0,
+            "the histogram must report the last timestamp it saw. {context}"
+        );
+        assert!(
+            eh.cover(min_time, max_time),
+            "the retained span must be covered. {context}"
+        );
+        assert!(
+            !eh.cover(max_time + 1, max_time + SPAN),
+            "nothing past the observed maximum can be covered. {context}"
+        );
+        // Expiry is by bucket, not by timestamp: the oldest retained bucket may
+        // have started before the window boundary and is kept whole, so the
+        // retained span overhangs the window by that bucket's own span
+        // (measured: 120 units for a window of 100). What must not happen is
+        // the span growing to a multiple of the window, which is what an
+        // expiry that never fired would look like.
+        assert!(
+            min_time + 2 * DOC_WINDOW >= max_time,
+            "the retained span [{min_time}, {max_time}] is more than twice the \
+             {DOC_WINDOW} window. {context}"
+        );
+
+        // Everything the retained buckets can hold is a subset of the events at
+        // or after `min_time` — a timestamp on the expiry boundary can have part
+        // of its events in an expired bucket and part in a retained one, so this
+        // is a superset rather than the exact window contents, and it is used
+        // only where a superset is the right side of the inequality.
+        let mut retained: HashMap<K, i64> = HashMap::new();
+        for (t, key) in &at {
+            if *t >= min_time {
+                *retained.entry(key.clone()).or_insert(0) += 1;
+            }
+        }
+        let retained_mass: i64 = retained.values().sum();
+
+        // The payload's own bound over the full retained span: whatever subset
+        // of these events the buckets hold, a Count-Min over them cannot exceed
+        // this key's count in the superset by more than the additive budget.
+        let merged_span = eh
+            .query_interval_merge(min_time, max_time)
+            .expect("the retained span is covered");
+        let spec = CountMinSpec::new(DOC_ROWS, DOC_COLS);
+        let probed = retained.len();
+        let mut over = Tally::default();
+        for (key, count) in &retained {
+            let est = merged_span
+                .query(&to_input(key))
+                .expect("the Count-Min payload answers a frequency query");
+            let f = *count as f64;
+            let budget =
+                spec.simultaneous_bound(retained_mass as f64, f, probed, SIMULTANEOUS_LEVEL);
+            over.record(est - f <= budget, || {
+                format!(
+                    "key {key:?}: the merged span reads {est} against at most {f} retained \
+                     events, an excess of {:.1} past the additive budget {budget:.1}",
+                    est - f
+                )
+            });
+        }
+        over.assert_none(
+            "EH Count-Min payload / additive budget over the retained span",
+            &format!("{context}; retained {retained_mass} events over {probed} keys"),
+        );
+
+        // An interval strictly inside the retained span, so the query is about
+        // bucket granularity rather than about expiry.
+        let lo = min_time + (max_time - min_time) / 4;
+        let hi = max_time;
+        let mut truth: HashMap<K, i64> = HashMap::new();
+        for (t, key) in &at {
+            if *t >= lo && *t <= hi {
+                *truth.entry(key.clone()).or_insert(0) += 1;
+            }
+        }
+        let (heaviest, count) = truth
+            .iter()
+            .max_by_key(|(_, c)| **c)
+            .expect("the interval carries events");
+
+        let merged = eh
+            .query_interval_merge(lo, hi)
+            .expect("an interval inside the retained span is covered");
+        let est = merged
+            .query(&to_input(heaviest))
+            .expect("the Count-Min payload answers a frequency query");
+        let truth_count = *count as f64;
+        let rel = ((est - truth_count) / truth_count).abs();
+        assert!(
+            rel <= INTERVAL_RELATIVE_ERROR,
+            "interval [{lo}, {hi}] count for {heaviest:?}: {est} against the exact \
+             {truth_count} is {:.2}% off, past the documented {:.0}%. {context}",
+            rel * 100.0,
+            INTERVAL_RELATIVE_ERROR * 100.0
+        );
+    }
+
+    fn eh_documented_key_input(id: u8) {
+        let input = key_input(id);
+        let context = format!(
+            "{} k={DOC_K} window={DOC_WINDOW} payload CountMin {DOC_ROWS}x{DOC_COLS} FastPath, \
+             stream spread over {SPAN} time units",
+            input.context()
+        );
+        eh_documented_stream(&input.keys, |k| input.data(*k), &context);
+    }
+
+    fn eh_documented_string_input(id: u8) {
+        let input = string_input(id);
+        let context = format!(
+            "{} k={DOC_K} window={DOC_WINDOW} payload CountMin {DOC_ROWS}x{DOC_COLS} FastPath, \
+             stream spread over {SPAN} time units",
+            input.context()
+        );
+        eh_documented_stream(
+            &input.keys,
+            |k: &String| DataInput::String(k.clone()),
+            &context,
+        );
+    }
+
+    macro_rules! documented_eh_inputs {
+        ($($name:ident => $id:literal, $kind:ident;)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    $kind($id);
+                }
+            )*
+        };
+    }
+
+    documented_eh_inputs! {
+        eh_input_3_interval_counts_and_expiry => 3, eh_documented_key_input;
+        eh_input_4_interval_counts_and_expiry => 4, eh_documented_key_input;
+        eh_input_5_interval_counts_and_expiry => 5, eh_documented_key_input;
+        eh_input_6_interval_counts_and_expiry => 6, eh_documented_key_input;
+        eh_input_14_interval_counts_and_expiry => 14, eh_documented_string_input;
+    }
+}

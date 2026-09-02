@@ -1558,3 +1558,538 @@ mod partial_key_and_heavy_maintenance {
         assert_eq!(weighted.vote_pos, 1);
     }
 }
+
+// ---------------------------------------------------------------------------
+// The documented input matrix
+// ---------------------------------------------------------------------------
+
+/// `tests/TEST_COVERAGE.md` files two more heavy-hitter families under this
+/// suite: the counter matrices queried at their heaviest keys, and Space-Saving
+/// swept across the capacities its `N / m` ceiling is tabulated at. Both are
+/// written against the twelve numbered inputs, so both are swept here one test
+/// per input.
+///
+/// # What "heavy hitter" means here
+///
+/// The document's definition is positional, not thresholded: the 1% of keys
+/// with the highest counts. That set is taken from the exact frequency vector,
+/// so the sketches are asked about the keys the workload actually made heavy
+/// rather than the ones they happen to think are heavy — a sketch cannot pass
+/// by nominating a convenient set.
+///
+/// # Why the bound is not the table's percentage
+///
+/// The table's `per-key relative error` column is `e*N/w` divided by `f_HH`,
+/// the count of the key at the 1% rank. That is one number for the whole
+/// column because it is evaluated at one key. Every heavy hitter above the
+/// rank boundary has a larger `f`, so reading the column back as a per-key
+/// relative tolerance would hand those keys a budget several times larger than
+/// the theorem grants. The additive form `e*(N-f)/w` is asserted instead, at
+/// each key's own mass, which is the same theorem evaluated correctly.
+mod documented_matrix {
+    use super::common::inputs::{KeyInput, key_input, top_percent_keys};
+    use super::common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, Tally};
+    use super::common::{
+        FixMat1, FixMat2, FixMat3, FixMat4, FixMat5, FixMat6, FixMat7, FixMat8, FixMat9, FixMat10,
+        FixMat11, FixMat12, FixMat13, FixMat14, FixMat15, FreqTruth,
+    };
+    use super::*;
+
+    use asap_sketchlib::{Count, CountMin, FastPath, RegularPath, Vector2D};
+
+    /// The document's `(row, column)` grid.
+    const DOC_ROWS: [usize; 3] = [3, 5, 7];
+    const DOC_COLS: [usize; 5] = [2_048, 4_096, 8_192, 16_384, 32_768];
+
+    /// The document's heavy-hitter definition.
+    const HEAVY_HITTER_SHARE: f64 = 0.01;
+
+    /// Count-Min's contract restricted to the heavy hitters: one-sidedness with
+    /// no tolerance, the union-bounded additive excess over the probed set with
+    /// no tolerance, and the marginal `e*(N-f)/w` as a rate pin at the
+    /// theorem's own `e^-d`.
+    fn assert_countmin_heavy_hitters<F>(
+        spec: &CountMinSpec,
+        truth: &FreqTruth,
+        heavy: &[(i64, i64)],
+        label: &str,
+        estimate: F,
+        context: &str,
+    ) where
+        F: Fn(i64) -> f64,
+    {
+        let total = truth.total() as f64;
+        let probed = heavy.len();
+        let factor = spec.simultaneous_factor(probed, SIMULTANEOUS_LEVEL);
+        let mut one_sided = Tally::default();
+        let mut simultaneous = Tally::default();
+        let mut marginal = Tally::default();
+        for (key, count) in heavy {
+            let f = *count as f64;
+            let est = estimate(*key);
+            one_sided.record(est >= f, || {
+                format!("heavy hitter {key}: est {est} < true {f} (Count-Min must never read low)")
+            });
+            let simul = spec.simultaneous_bound(total, f, probed, SIMULTANEOUS_LEVEL);
+            simultaneous.record(est - f <= simul, || {
+                format!(
+                    "heavy hitter {key}: excess {:.1} > b*(N-f)/w = {simul:.1} with \
+                     b={factor:.2} (true {f}, est {est})",
+                    est - f
+                )
+            });
+            let marg = spec.marginal_bound(total, f);
+            marginal.record(est - f <= marg, || {
+                format!(
+                    "heavy hitter {key}: excess {:.1} > e*(N-f)/w = {marg:.1} (true {f}, \
+                     est {est})",
+                    est - f
+                )
+            });
+        }
+        let ctx = format!(
+            "{context}; rows={} cols={} N={total:.0} over the top {probed} keys \
+             (1% of {} distinct), simultaneous b={factor:.3}",
+            spec.rows,
+            spec.cols,
+            truth.distinct(),
+        );
+        one_sided.assert_none(&format!("{label} / heavy hitters one-sided"), &ctx);
+        simultaneous.assert_none(&format!("{label} / heavy hitters simultaneous"), &ctx);
+        marginal.assert_rate_at_most(
+            &format!("{label} / heavy hitters marginal e*(N-f)/w"),
+            spec.marginal_failure(),
+            &ctx,
+        );
+    }
+
+    /// Count Sketch's L2 contract restricted to the heavy hitters. The residual
+    /// norm is recomputed per key, which matters far more here than on a
+    /// uniform key set: a heavy hitter carries a large share of `F2`, so
+    /// `||f_-i||_2` is much smaller than `||f||_2` and the budget is
+    /// correspondingly tighter.
+    fn assert_countsketch_heavy_hitters<F>(
+        spec: &CountSketchSpec,
+        truth: &FreqTruth,
+        heavy: &[(i64, i64)],
+        label: &str,
+        estimate: F,
+        context: &str,
+    ) where
+        F: Fn(i64) -> f64,
+    {
+        let f2 = truth.f2();
+        let probed = heavy.len();
+        let kappa = spec.simultaneous_kappa(probed, SIMULTANEOUS_LEVEL);
+        let mut simultaneous = Tally::default();
+        let mut marginal = Tally::default();
+        for (key, count) in heavy {
+            let f = *count as f64;
+            let residual_l2 = (f2 - f * f).max(0.0).sqrt();
+            let est = estimate(*key);
+            let err = (est - f).abs();
+
+            let simul = spec.scale_at(kappa, residual_l2);
+            simultaneous.record(err <= simul, || {
+                format!(
+                    "heavy hitter {key}: |{est:.1} - {f}| = {err:.1} > \
+                     sqrt(kappa/w)*||f_-i||_2 = {simul:.1} at kappa={kappa:.1}"
+                )
+            });
+            let marg = spec.marginal_scale(residual_l2);
+            marginal.record(err <= marg, || {
+                format!(
+                    "heavy hitter {key}: |{est:.1} - {f}| = {err:.1} > \
+                     sqrt(3/w)*||f_-i||_2 = {marg:.1}"
+                )
+            });
+        }
+        let ctx = format!(
+            "{context}; rows={} cols={} over the top {probed} keys (1% of {} distinct), \
+             F2={f2:.3e}, simultaneous kappa={kappa:.1}",
+            spec.rows,
+            spec.cols,
+            truth.distinct(),
+        );
+        simultaneous.assert_none(&format!("{label} / heavy hitters simultaneous L2"), &ctx);
+        marginal.assert_rate_at_most(
+            &format!("{label} / heavy hitters marginal sqrt(3/w)*||f_-i||_2"),
+            spec.marginal_failure(),
+            &ctx,
+        );
+    }
+
+    fn countmin_heavy_hitter_matrix(id: u8) {
+        let input = key_input(id);
+        let truth = input.truth();
+        let heavy = top_percent_keys(&truth, HEAVY_HITTER_SHARE);
+        let context = input.context();
+
+        for rows in DOC_ROWS {
+            for cols in DOC_COLS {
+                let mut regular =
+                    CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+                let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+                for key in &input.keys {
+                    let d = input.data(*key);
+                    regular.insert(&d);
+                    fast.insert(&d);
+                }
+                let spec = CountMinSpec::new(rows, cols);
+                assert_countmin_heavy_hitters(
+                    &spec,
+                    &truth,
+                    &heavy,
+                    &format!("CountMin<Vector2D<i64>, RegularPath> {rows}x{cols}"),
+                    |k| regular.estimate(&input.data(k)) as f64,
+                    &context,
+                );
+                assert_countmin_heavy_hitters(
+                    &spec,
+                    &truth,
+                    &heavy,
+                    &format!("CountMin<Vector2D<i64>, FastPath> {rows}x{cols}"),
+                    |k| fast.estimate(&input.data(k)) as f64,
+                    &context,
+                );
+            }
+        }
+
+        macro_rules! assert_fixed_matrix {
+            ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
+                $({
+                    let mut regular = CountMin::<$mat, RegularPath>::from_storage($mat::default());
+                    let mut fast = CountMin::<$mat, FastPath>::from_storage($mat::default());
+                    for key in &input.keys {
+                        let d = input.data(*key);
+                        regular.insert(&d);
+                        fast.insert(&d);
+                    }
+                    let spec = CountMinSpec::new($rows, $cols);
+                    assert_countmin_heavy_hitters(
+                        &spec,
+                        &truth,
+                        &heavy,
+                        concat!("CountMin<", stringify!($mat), ", RegularPath>"),
+                        |k| regular.estimate(&input.data(k)) as f64,
+                        &context,
+                    );
+                    assert_countmin_heavy_hitters(
+                        &spec,
+                        &truth,
+                        &heavy,
+                        concat!("CountMin<", stringify!($mat), ", FastPath>"),
+                        |k| fast.estimate(&input.data(k)) as f64,
+                        &context,
+                    );
+                })*
+            };
+        }
+
+        assert_fixed_matrix! {
+            FixMat1 => (3, 2048),
+            FixMat2 => (5, 2048),
+            FixMat3 => (7, 2048),
+            FixMat4 => (3, 4096),
+            FixMat5 => (5, 4096),
+            FixMat6 => (7, 4096),
+            FixMat7 => (3, 8192),
+            FixMat8 => (5, 8192),
+            FixMat9 => (7, 8192),
+            FixMat10 => (3, 16384),
+            FixMat11 => (5, 16384),
+            FixMat12 => (7, 16384),
+            FixMat13 => (3, 32768),
+            FixMat14 => (5, 32768),
+            FixMat15 => (7, 32768),
+        }
+    }
+
+    fn countsketch_heavy_hitter_matrix(id: u8) {
+        let input = key_input(id);
+        let truth = input.truth();
+        let heavy = top_percent_keys(&truth, HEAVY_HITTER_SHARE);
+        let context = input.context();
+
+        for rows in DOC_ROWS {
+            for cols in DOC_COLS {
+                let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+                let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+                for key in &input.keys {
+                    let d = input.data(*key);
+                    regular.insert(&d);
+                    fast.insert(&d);
+                }
+                let spec = CountSketchSpec::new(rows, cols);
+                assert_countsketch_heavy_hitters(
+                    &spec,
+                    &truth,
+                    &heavy,
+                    &format!("Count<Vector2D<i64>, RegularPath> {rows}x{cols}"),
+                    |k| regular.estimate(&input.data(k)),
+                    &context,
+                );
+                assert_countsketch_heavy_hitters(
+                    &spec,
+                    &truth,
+                    &heavy,
+                    &format!("Count<Vector2D<i64>, FastPath> {rows}x{cols}"),
+                    |k| fast.estimate(&input.data(k)),
+                    &context,
+                );
+            }
+        }
+
+        macro_rules! assert_fixed_matrix {
+            ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
+                $({
+                    let mut regular = Count::<$mat, RegularPath>::from_storage($mat::default());
+                    let mut fast = Count::<$mat, FastPath>::from_storage($mat::default());
+                    for key in &input.keys {
+                        let d = input.data(*key);
+                        regular.insert(&d);
+                        fast.insert(&d);
+                    }
+                    let spec = CountSketchSpec::new($rows, $cols);
+                    assert_countsketch_heavy_hitters(
+                        &spec,
+                        &truth,
+                        &heavy,
+                        concat!("Count<", stringify!($mat), ", RegularPath>"),
+                        |k| regular.estimate(&input.data(k)),
+                        &context,
+                    );
+                    assert_countsketch_heavy_hitters(
+                        &spec,
+                        &truth,
+                        &heavy,
+                        concat!("Count<", stringify!($mat), ", FastPath>"),
+                        |k| fast.estimate(&input.data(k)),
+                        &context,
+                    );
+                })*
+            };
+        }
+
+        assert_fixed_matrix! {
+            FixMat1 => (3, 2048),
+            FixMat2 => (5, 2048),
+            FixMat3 => (7, 2048),
+            FixMat4 => (3, 4096),
+            FixMat5 => (5, 4096),
+            FixMat6 => (7, 4096),
+            FixMat7 => (3, 8192),
+            FixMat8 => (5, 8192),
+            FixMat9 => (7, 8192),
+            FixMat10 => (3, 16384),
+            FixMat11 => (5, 16384),
+            FixMat12 => (7, 16384),
+            FixMat13 => (3, 32768),
+            FixMat14 => (5, 32768),
+            FixMat15 => (7, 32768),
+        }
+    }
+
+    /// Space-Saving's counter guarantee at every capacity the document
+    /// tabulates, over one documented input.
+    ///
+    /// The table's cells are `N / m`: the largest over-estimate the summary can
+    /// carry at that capacity, which is `min_count`'s own ceiling. Both halves
+    /// of the sandwich are asserted for every monitored key, and the ceiling
+    /// itself is asserted against `min_count`, so a summary that stayed inside
+    /// the band by dropping the keys that would have violated it still fails.
+    fn space_saving_documented_capacities(id: u8) {
+        const CAPACITIES: [usize; 5] = [2, 8, 64, SPACE_SAVING_DEFAULT_CAPACITY, 2_048];
+
+        let input = key_input(id);
+        let truth = input.truth();
+        let n = truth.total() as f64;
+
+        for capacity in CAPACITIES {
+            let mut summary: SpaceSaving = SpaceSaving::with_capacity(capacity);
+            for key in &input.keys {
+                summary.insert(&input.data(*key));
+            }
+            let ceiling = n / capacity as f64;
+            let context = format!(
+                "{} capacity={capacity} N={n:.0} documented ceiling N/m={ceiling:.1}",
+                input.context()
+            );
+
+            assert!(
+                summary.min_count() as f64 <= ceiling,
+                "min_count {} exceeds the documented N/m ceiling. {context}",
+                summary.min_count()
+            );
+
+            let mut monitored = 0usize;
+            let mut sandwich = Tally::default();
+            let mut ceiling_tally = Tally::default();
+            for (key, count) in truth.pairs() {
+                let est = summary.estimate(&input.data(key));
+                if est == 0 {
+                    continue;
+                }
+                monitored += 1;
+                let f = count as u64;
+                sandwich.record(est >= f, || {
+                    format!("key {key}: est {est} < true {f}, a monitored key must never read low")
+                });
+                ceiling_tally.record((est.saturating_sub(f)) as f64 <= ceiling, || {
+                    format!(
+                        "key {key}: over-estimate {} exceeds the documented N/m = {ceiling:.1} \
+                         (true {f}, est {est})",
+                        est.saturating_sub(f)
+                    )
+                });
+            }
+            assert_eq!(
+                monitored,
+                summary.len(),
+                "every monitored counter must belong to a key the stream carried. {context}"
+            );
+            sandwich.assert_none("Space-Saving / monitored key floor", &context);
+            ceiling_tally.assert_none("Space-Saving / N/m over-estimate ceiling", &context);
+        }
+    }
+
+    /// Elastic at the documented `length 64`, with the document's hot-flow
+    /// workload laid over one of the skewed inputs.
+    ///
+    /// The document specifies both the background stream (the numbered input)
+    /// and the heavy part (three flows at roughly a tenth of the stream each),
+    /// so the two are combined: the input supplies the background flows, and
+    /// three synthetic flows are injected at 10% of the final total each. The
+    /// bound is the document's own 20% per hot flow, which is empirical
+    /// because the split between the heavy and light parts is data dependent.
+    fn elastic_documented_hot_flows(input: &KeyInput) {
+        use asap_sketchlib::{DefaultXxHasher, Elastic};
+
+        const HOT: [&str; 3] = ["hot-alpha", "hot-beta", "hot-gamma"];
+        const HOT_SHARE: f64 = 0.10;
+
+        // Each hot flow gets a tenth of the *final* stream, so the background
+        // supplies the remaining 70%.
+        let background = input.keys.len();
+        let per_hot =
+            (background as f64 * HOT_SHARE / (1.0 - HOT.len() as f64 * HOT_SHARE)).round() as usize;
+
+        let mut sk = Elastic::<DefaultXxHasher>::init_with_length(64);
+        let mut expected: HashMap<String, i64> = HashMap::new();
+        let mut hot_cursor = 0usize;
+        let stride = background / (per_hot * HOT.len()).max(1);
+        for (i, key) in input.keys.iter().enumerate() {
+            let id = format!("bg::{key}");
+            sk.insert(id.clone());
+            *expected.entry(id).or_insert(0) += 1;
+            // Interleave the hot flows through the stream rather than
+            // appending them, so they compete for buckets the whole way.
+            if stride > 0 && i % stride == 0 {
+                let hot = HOT[hot_cursor % HOT.len()].to_string();
+                hot_cursor += 1;
+                sk.insert(hot.clone());
+                *expected.entry(hot).or_insert(0) += 1;
+            }
+        }
+
+        let context = format!(
+            "{} with {} hot flows at ~{}% each, elastic length=64",
+            input.context(),
+            HOT.len(),
+            (HOT_SHARE * 100.0) as u32
+        );
+        for hot in HOT {
+            let truth = expected[hot] as f64;
+            let est = sk.query(hot.to_string()) as f64;
+            let rel = ((est - truth) / truth).abs();
+            assert!(
+                rel <= 0.20,
+                "elastic hot flow {hot}: est {est} vs true {truth} is {:.2}% off, past the \
+                 documented 20%. {context}",
+                rel * 100.0
+            );
+        }
+    }
+
+    macro_rules! documented_heavy_hitter_matrix {
+        ($($cm:ident, $cs:ident, $ss:ident => $id:literal;)*) => {
+            $(
+                #[test]
+                fn $cm() {
+                    countmin_heavy_hitter_matrix($id);
+                }
+
+                #[test]
+                fn $cs() {
+                    countsketch_heavy_hitter_matrix($id);
+                }
+
+                #[test]
+                fn $ss() {
+                    space_saving_documented_capacities($id);
+                }
+            )*
+        };
+    }
+
+    documented_heavy_hitter_matrix! {
+        countmin_input_1_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_1_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_1_holds_its_capacity_ceiling => 1;
+        countmin_input_2_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_2_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_2_holds_its_capacity_ceiling => 2;
+        countmin_input_3_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_3_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_3_holds_its_capacity_ceiling => 3;
+        countmin_input_4_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_4_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_4_holds_its_capacity_ceiling => 4;
+        countmin_input_5_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_5_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_5_holds_its_capacity_ceiling => 5;
+        countmin_input_6_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_6_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_6_holds_its_capacity_ceiling => 6;
+        countmin_input_7_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_7_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_7_holds_its_capacity_ceiling => 7;
+        countmin_input_8_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_8_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_8_holds_its_capacity_ceiling => 8;
+        countmin_input_9_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_9_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_9_holds_its_capacity_ceiling => 9;
+        countmin_input_10_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_10_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_10_holds_its_capacity_ceiling => 10;
+        countmin_input_11_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_11_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_11_holds_its_capacity_ceiling => 11;
+        countmin_input_12_heavy_hitters_hold_the_count_min_bound,
+        countsketch_input_12_heavy_hitters_hold_the_l2_bound,
+        space_saving_input_12_holds_its_capacity_ceiling => 12;
+    }
+
+    macro_rules! documented_elastic_inputs {
+        ($($name:ident => $id:literal;)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    elastic_documented_hot_flows(&key_input($id));
+                }
+            )*
+        };
+    }
+
+    documented_elastic_inputs! {
+        elastic_input_3_hot_flows_stay_within_twenty_percent => 3;
+        elastic_input_4_hot_flows_stay_within_twenty_percent => 4;
+        elastic_input_5_hot_flows_stay_within_twenty_percent => 5;
+        elastic_input_6_hot_flows_stay_within_twenty_percent => 6;
+        elastic_input_9_hot_flows_stay_within_twenty_percent => 9;
+        elastic_input_10_hot_flows_stay_within_twenty_percent => 10;
+        elastic_input_11_hot_flows_stay_within_twenty_percent => 11;
+        elastic_input_12_hot_flows_stay_within_twenty_percent => 12;
+    }
+}

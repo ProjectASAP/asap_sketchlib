@@ -888,3 +888,185 @@ fn eh_univ_optimized_map_tier_matches_exact_per_key_counts_on_a_skewed_stream() 
         ),
     }
 }
+
+// ---------------------------------------------------------------------------
+// The documented input matrix
+// ---------------------------------------------------------------------------
+
+/// The document's KMV row is the twelve numbered inputs at `k = 32` and
+/// `k = 128`, and its UniformSampling row is `(1)`, `(2)`, `(7)` and `(8)` at
+/// rate 0.1.
+///
+/// # The two KMV bands
+///
+/// KMV's estimator is `(k - 1) / U_(k)`, whose relative standard error is
+/// `1 / sqrt(k - 2)`: 18.3% at `k = 32` and 8.9% at `k = 128`. The document's
+/// per-`k` bands are `z = 4` of that — 73% and 36% — and are asserted with no
+/// tolerance. Each input is additionally checked against the spec's own band at
+/// its cardinality, which uses the exact finite-`n` standard error and is
+/// therefore slightly tighter than the asymptotic number the document quotes.
+mod documented_matrix {
+    use super::common::inputs::{KEY_INPUT_IDS, key_input};
+    use super::common::specs::{CardinalityConfidenceSpec, PrioritySampleSpec};
+    use super::*;
+
+    use std::collections::HashSet;
+
+    /// The document's relative-error band per `k`.
+    fn documented_band(k: usize) -> f64 {
+        match k {
+            32 => 0.73,
+            128 => 0.36,
+            other => panic!("({other}) is not one of the documented k values"),
+        }
+    }
+
+    fn kmv_documented_input(k: usize) {
+        let spec = CardinalityConfidenceSpec::kmv(k, KMV_Z);
+        let band = documented_band(k);
+
+        for id in KEY_INPUT_IDS {
+            let input = key_input(id);
+            let distinct = input.keys.iter().copied().collect::<HashSet<i64>>().len();
+            let mut sketch: KMV = KMV::new(k);
+            for key in &input.keys {
+                sketch.insert(&input.data(*key));
+            }
+            let estimate = sketch.estimate();
+            let context = input.context();
+
+            if let Err(detail) = spec.check(estimate, distinct) {
+                panic!("KMV k={k}: {detail}. distinct={distinct} {context}");
+            }
+
+            let rel = ((estimate - distinct as f64) / distinct as f64).abs();
+            assert!(
+                rel <= band,
+                "KMV k={k} on ({id}): estimate {estimate:.0} against {distinct} distinct is \
+                 {:.2}% off, past the documented {:.0}%. {context}",
+                rel * 100.0,
+                band * 100.0
+            );
+
+            // Duplicate replay is inert: KMV retains the k smallest hashes of
+            // what it has seen, and it has seen all of these already.
+            let before = sketch.estimate();
+            for key in &input.keys {
+                sketch.insert(&input.data(*key));
+            }
+            assert_eq!(
+                sketch.estimate(),
+                before,
+                "replaying ({id}) moved the k={k} KMV estimate"
+            );
+        }
+    }
+
+    #[test]
+    fn kmv_k32_over_the_documented_inputs_holds_its_error_model() {
+        kmv_documented_input(32);
+    }
+
+    #[test]
+    fn kmv_k128_over_the_documented_inputs_holds_its_error_model() {
+        kmv_documented_input(128);
+    }
+
+    /// UniformSampling at the documented rate over one documented input.
+    ///
+    /// The retained size is asserted twice: against the document's 15% band
+    /// around `n * rate`, and against `ceil(n * rate)` exactly, because this
+    /// implementation is a priority sample with a deterministic budget rather
+    /// than an independent Bernoulli filter. Only the second would notice a
+    /// sampler that started retaining one entry too few.
+    fn uniform_sampling_documented_input(id: u8) {
+        const RATE: f64 = 0.1;
+
+        let input = key_input(id);
+        let values = input.values();
+        let seed = 0x5A91_0300 + id as u64;
+        let mut us = UniformSampling::with_seed(RATE, seed);
+        for v in &values {
+            us.update(*v);
+        }
+        let context = format!("{} rate={RATE} seed={seed:#x}", input.context());
+
+        let n = values.len();
+        let expected = n as f64 * RATE;
+        let retained = us.len() as f64;
+        assert!(
+            (retained - expected).abs() <= expected * 0.15,
+            "retained {retained} samples against an expected {expected}, past the documented \
+             15%. {context}"
+        );
+        let spec = PrioritySampleSpec::new(RATE, 4.0);
+        assert_eq!(
+            us.len(),
+            spec.retained(n as u64),
+            "the retained size is the deterministic budget ceil(n*rate). {context}"
+        );
+        assert_eq!(
+            us.total_seen(),
+            n as u64,
+            "total_seen must be exact. {context}"
+        );
+
+        let seen: HashSet<u64> = values.iter().map(|v| v.to_bits()).collect();
+        for sample in us.samples() {
+            assert!(
+                seen.contains(&sample.to_bits()),
+                "sample {sample} was never in the stream. {context}"
+            );
+        }
+
+        // A same-rate merge unions the pools and sums the totals. The second
+        // half of the stream is fed to a second sketch so the merge has
+        // something to union that the first has not seen.
+        let mut left = UniformSampling::with_seed(RATE, seed);
+        let mut right = UniformSampling::with_seed(RATE, seed + 1);
+        let half = n / 2;
+        for v in &values[..half] {
+            left.update(*v);
+        }
+        for v in &values[half..] {
+            right.update(*v);
+        }
+        let pooled = left.len() + right.len();
+        left.merge(&right).expect("same-rate merge");
+        assert_eq!(
+            left.total_seen(),
+            n as u64,
+            "a merge must sum total_seen. {context}"
+        );
+        assert_eq!(
+            left.len(),
+            spec.retained(n as u64).min(pooled),
+            "a merge keeps the combined budget, capped by the {pooled} entries the two \
+             pools held. {context}"
+        );
+        for sample in left.samples() {
+            assert!(
+                seen.contains(&sample.to_bits()),
+                "merged sample {sample} was never in the stream. {context}"
+            );
+        }
+    }
+
+    macro_rules! documented_uniform_sampling_inputs {
+        ($($name:ident => $id:literal;)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    uniform_sampling_documented_input($id);
+                }
+            )*
+        };
+    }
+
+    documented_uniform_sampling_inputs! {
+        uniform_sampling_input_1_retains_its_documented_budget => 1;
+        uniform_sampling_input_2_retains_its_documented_budget => 2;
+        uniform_sampling_input_7_retains_its_documented_budget => 7;
+        uniform_sampling_input_8_retains_its_documented_budget => 8;
+    }
+}

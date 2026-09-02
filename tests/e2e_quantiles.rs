@@ -2235,3 +2235,279 @@ fn univmonq_universal_rank_is_exact_outside_the_observed_range_and_banded_inside
         "zipf(1.2) 120k observations over 2048 values, seed 0x0DDE9301, default config",
     );
 }
+
+// ---------------------------------------------------------------------------
+// The documented input matrix
+// ---------------------------------------------------------------------------
+
+/// `tests/TEST_COVERAGE.md` writes this suite as the twelve numbered inputs
+/// crossed with `k = 50, 200, 800` for both KLL implementations and
+/// `alpha = 0.1, 0.01, 0.001` for DDSketch, queried on the `P0 .. P100` decile
+/// grid, single-pass and through a shard merge.
+///
+/// The batteries above run on the stream *shapes* a compaction scheme can
+/// behave differently on (sorted, tie-dense, adversarially ordered) at
+/// `k = 64, 200, 800`; this is the document's grid, at the document's `k = 50`,
+/// on the document's streams.
+///
+/// # Where the document's percentages come from
+///
+/// The rank errors it quotes — 6.11%, 1.65%, 0.447% — are
+/// `eps(k) = 2.446 / k^0.9433` evaluated at the three `k` values, which is
+/// exactly what `KllRankSpec::datasketches` computes; the first assertion in
+/// the KLL half checks that identity, so the tests and the table cannot drift
+/// apart silently. DDSketch's quoted relative errors are `alpha` itself.
+///
+/// # Acceptance rules
+///
+/// A KLL trial is one sketch scored on its worst rank error over the whole
+/// grid, with a 1% failure probability, so a handful of trials per input has no
+/// power as a tail test: these are deterministic regression pins on fixed
+/// compaction seeds, and the tail test over independent seeds is
+/// `kll_family_stays_within_the_datasketches_maximum_rank_error_characterization`
+/// above. DDSketch's guarantee is deterministic — bucket width alone, no hash
+/// and no sampling — so its checks tolerate no violations at all.
+mod documented_matrix {
+    use super::common::inputs::key_input;
+    use super::*;
+
+    /// The document's query grid, `P0` through `P100` in steps of ten.
+    const DOC_QS: [f64; 11] = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+
+    /// The document's `k` values and the rank error it quotes for each.
+    const DOC_KS: [(i32, f64); 3] = [(50, 0.0611), (200, 0.0165), (800, 0.00447)];
+
+    /// The document's accuracy parameters and the relative error each promises.
+    const DOC_ALPHAS: [f64; 3] = [0.1, 0.01, 0.001];
+
+    fn kll_documented_matrix(id: u8) {
+        let input = key_input(id);
+        let values = input.values();
+        let truth = NumericTruth::new(values.clone());
+
+        for (k, documented_eps) in DOC_KS {
+            let spec = KllRankSpec::datasketches(k as usize);
+            assert!(
+                (spec.epsilon() - documented_eps).abs() <= 5e-5,
+                "eps(k={k}) = {:.6} is no longer the {documented_eps} the coverage document \
+                 quotes",
+                spec.epsilon()
+            );
+
+            let mut tally = Tally::default();
+            for (i, feed) in [Feed::SinglePass, Feed::ShardMerge].into_iter().enumerate() {
+                let seed = kll_trial_seed(0x00D0_0000 + id as u64 * 16 + i as u64);
+                let label = format!("k={k} feed={feed:?} seed={seed:#x} {}", input.context());
+
+                let fixed = feed_kll(feed, k, seed, &values);
+                spec.record_trial(
+                    &mut tally,
+                    &format!("KLL {label}"),
+                    truth.sorted(),
+                    &DOC_QS,
+                    |q| fixed.quantile(q),
+                );
+
+                let dynamic = feed_kll_dynamic(feed, k, seed, &values)
+                    .expect("both feeds are supported by KLLDynamic");
+                spec.record_trial(
+                    &mut tally,
+                    &format!("KLLDynamic {label}"),
+                    truth.sorted(),
+                    &DOC_QS,
+                    |q| dynamic.quantile(q),
+                );
+            }
+            tally.assert_none(
+                &format!("KLL family k={k} / maximum rank error over the documented grid"),
+                &format!(
+                    "{}, q grid {DOC_QS:?}, eps(k)={:.6}",
+                    input.context(),
+                    spec.epsilon()
+                ),
+            );
+        }
+    }
+
+    fn ddsketch_documented_matrix(id: u8) {
+        let input = key_input(id);
+        // DDSketch is defined on positive values and documents that it drops
+        // everything else, so the reference is the positive subsequence — the
+        // sketch is scored on the question it actually answers.
+        let values: Vec<f64> = input
+            .values()
+            .into_iter()
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .collect();
+        let truth = NumericTruth::new(values.clone());
+        let n = values.len();
+
+        for alpha in DOC_ALPHAS {
+            let spec = RelativeQuantileSpec::core(alpha);
+            let context = format!(
+                "{} alpha={alpha} over the {n} positive values, q grid {DOC_QS:?}",
+                input.context()
+            );
+
+            let mut single = DDSketch::new(alpha);
+            for v in &values {
+                single.add(v);
+            }
+            assert_eq!(
+                single.get_count() as usize,
+                n,
+                "DDSketch dropped a positive value. {context}"
+            );
+            let mut tally = Tally::default();
+            spec.tally_into(&mut tally, truth.sorted(), &DOC_QS, |q| {
+                single.get_value_at_quantile(q)
+            });
+            tally.assert_none(&format!("core DDSketch alpha={alpha}"), &context);
+
+            // Four-way shard merge: the same contract.
+            let mut shards: Vec<DDSketch> = (0..4).map(|_| DDSketch::new(alpha)).collect();
+            for (i, v) in values.iter().enumerate() {
+                shards[i % 4].add(v);
+            }
+            let mut merged = shards.remove(0);
+            for s in &shards {
+                merged.merge(s).expect("same-alpha merge");
+            }
+            let mut merge_tally = Tally::default();
+            spec.tally_into(&mut merge_tally, truth.sorted(), &DOC_QS, |q| {
+                merged.get_value_at_quantile(q)
+            });
+            merge_tally.assert_none(
+                &format!("core DDSketch alpha={alpha} after a 4-way shard merge"),
+                &context,
+            );
+        }
+    }
+
+    /// The document's value streams, `(15)` to `(18)`, which carry no key
+    /// identity and exist for the quantile sketches alone: two Normal streams,
+    /// an Exponential one, and the log-uniform stream that lands on a
+    /// DDSketch's own bucket edges for a given alpha.
+    ///
+    /// `(18)` is defined relative to the sketch under test — its `gamma` comes
+    /// from the alpha — so it is rebuilt per alpha rather than being one fixed
+    /// stream.
+    #[test]
+    fn the_documented_value_inputs_satisfy_both_quantile_contracts() {
+        for id in [15u8, 16, 17] {
+            let (label, values) = common::inputs::value_input(id);
+            let positive: Vec<f64> = values
+                .iter()
+                .copied()
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .collect();
+            let truth = NumericTruth::new(values.clone());
+            let positive_truth = NumericTruth::new(positive.clone());
+
+            for (k, _) in DOC_KS {
+                let spec = KllRankSpec::datasketches(k as usize);
+                let seed = kll_trial_seed(0x00E0_0000 + id as u64 * 16 + k as u64);
+                let sketch = feed_kll(Feed::SinglePass, k, seed, &values);
+                let mut tally = Tally::default();
+                spec.record_trial(
+                    &mut tally,
+                    &format!("KLL k={k} on ({id}) {label} seed={seed:#x}"),
+                    truth.sorted(),
+                    &DOC_QS,
+                    |q| sketch.quantile(q),
+                );
+                tally.assert_none(
+                    &format!("KLL k={k} / ({id}) maximum rank error"),
+                    &format!("({id}) {label} n={}, q grid {DOC_QS:?}", values.len()),
+                );
+            }
+
+            for alpha in DOC_ALPHAS {
+                let spec = RelativeQuantileSpec::core(alpha);
+                let mut dd = DDSketch::new(alpha);
+                for v in &positive {
+                    dd.add(v);
+                }
+                let mut tally = Tally::default();
+                spec.tally_into(&mut tally, positive_truth.sorted(), &DOC_QS, |q| {
+                    dd.get_value_at_quantile(q)
+                });
+                tally.assert_none(
+                    &format!("core DDSketch alpha={alpha} / ({id})"),
+                    &format!(
+                        "({id}) {label}, {} positive values, q grid {DOC_QS:?}",
+                        positive.len()
+                    ),
+                );
+            }
+        }
+
+        // (18): one stream per alpha, built on that alpha's bucket edges.
+        for alpha in DOC_ALPHAS {
+            let (label, values) = common::inputs::ddsketch_edge_input(alpha);
+            let truth = NumericTruth::new(values.clone());
+            let spec = RelativeQuantileSpec::core(alpha);
+            let mut dd = DDSketch::new(alpha);
+            for v in &values {
+                dd.add(v);
+            }
+            assert_eq!(
+                dd.get_count() as usize,
+                values.len(),
+                "({}) {label}: DDSketch dropped a value it can index",
+                18
+            );
+            let mut tally = Tally::default();
+            spec.tally_into(&mut tally, truth.sorted(), &DOC_QS, |q| {
+                dd.get_value_at_quantile(q)
+            });
+            tally.assert_none(
+                &format!("core DDSketch alpha={alpha} / (18)"),
+                &format!("(18) {label}, n={}, q grid {DOC_QS:?}", values.len()),
+            );
+        }
+    }
+
+    macro_rules! documented_quantile_matrix {
+        ($($kll:ident, $dd:ident => $id:literal;)*) => {
+            $(
+                #[test]
+                fn $kll() {
+                    kll_documented_matrix($id);
+                }
+
+                #[test]
+                fn $dd() {
+                    ddsketch_documented_matrix($id);
+                }
+            )*
+        };
+    }
+
+    documented_quantile_matrix! {
+        kll_family_on_input_1_holds_its_rank_error,
+        ddsketch_on_input_1_holds_its_relative_error => 1;
+        kll_family_on_input_2_holds_its_rank_error,
+        ddsketch_on_input_2_holds_its_relative_error => 2;
+        kll_family_on_input_3_holds_its_rank_error,
+        ddsketch_on_input_3_holds_its_relative_error => 3;
+        kll_family_on_input_4_holds_its_rank_error,
+        ddsketch_on_input_4_holds_its_relative_error => 4;
+        kll_family_on_input_5_holds_its_rank_error,
+        ddsketch_on_input_5_holds_its_relative_error => 5;
+        kll_family_on_input_6_holds_its_rank_error,
+        ddsketch_on_input_6_holds_its_relative_error => 6;
+        kll_family_on_input_7_holds_its_rank_error,
+        ddsketch_on_input_7_holds_its_relative_error => 7;
+        kll_family_on_input_8_holds_its_rank_error,
+        ddsketch_on_input_8_holds_its_relative_error => 8;
+        kll_family_on_input_9_holds_its_rank_error,
+        ddsketch_on_input_9_holds_its_relative_error => 9;
+        kll_family_on_input_10_holds_its_rank_error,
+        ddsketch_on_input_10_holds_its_relative_error => 10;
+        kll_family_on_input_11_holds_its_rank_error,
+        ddsketch_on_input_11_holds_its_relative_error => 11;
+        kll_family_on_input_12_holds_its_rank_error,
+        ddsketch_on_input_12_holds_its_relative_error => 12;
+    }
+}

@@ -971,4 +971,45 @@ mod tests {
 
         assert_eq!(storage.as_slice(), expected_once.as_slice());
     }
+
+    #[test]
+    fn countsketch_error_stays_rank_independent_across_frequency_deciles() {
+        const ROWS: usize = 5;
+        const COLS: usize = 4096;
+        const DOMAIN: usize = 8192;
+        const SAMPLES: usize = 200_000;
+        const STREAM_SEED: u64 = 1007;
+        const DECILES: usize = 10;
+
+        let mut truth = HashMap::<u64, i64>::new();
+        let mut cs = Count::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
+        for value in sample_zipf_u64(DOMAIN, 1.1, SAMPLES, STREAM_SEED) {
+            cs.insert(&DataInput::U64(value));
+            *truth.entry(value).or_insert(0) += 1;
+        }
+
+        let mut pairs: Vec<(u64, i64)> = truth.into_iter().collect();
+        pairs.sort_by_key(|(_, c)| *c);
+        let per = pairs.len() / DECILES;
+        let means: Vec<f64> = (0..DECILES)
+            .map(|d| {
+                let slice = &pairs[d * per..(d + 1) * per];
+                slice
+                    .iter()
+                    .map(|(k, c)| (cs.estimate(&DataInput::U64(*k)) - *c as f64).abs())
+                    .sum::<f64>()
+                    / slice.len() as f64
+            })
+            .collect();
+        let lo = means.iter().cloned().fold(f64::INFINITY, f64::min);
+        let hi = means.iter().cloned().fold(0.0f64, f64::max);
+        assert!(
+            hi <= lo * 3.0,
+            "Count Sketch mean |error| per frequency decile spans {lo:.1}..{hi:.1} ({:.2}x), \
+             beyond the documented 3x empirical band — the error has started tracking key \
+             frequency, which Count Sketch's L2 guarantee says it must not. \
+             stream_seed={STREAM_SEED} rows={ROWS} cols={COLS} deciles={means:?}",
+            hi / lo
+        );
+    }
 }
