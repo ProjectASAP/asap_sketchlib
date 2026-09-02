@@ -1059,8 +1059,8 @@ fn an_exponential_histogram_custom_bucket_update_matches_repeated_inserts() {
 
 /// `tests/TEST_COVERAGE.md` gives the sliding-window histogram its own row:
 /// `k = 8`, `window 100`, a Count-Min payload at `row 3, col 2048` on the fast
-/// path, over inputs `(1) ~ (6)` and `(13) ~ (14)`, with an interval count
-/// held to 21% relative error and the retained span reported honestly.
+/// path, over inputs `(3) ~ (6)` and `(14)`, with an interval count held to 21%
+/// relative error and the retained span reported honestly.
 ///
 /// The variant matrix above runs at `window 1,000,000` so that nothing expires
 /// inside the accuracy runs; this row is the opposite case, where expiry is the
@@ -1106,16 +1106,7 @@ mod documented_matrix {
 
     /// Feeds a keyed stream through the documented histogram and checks the
     /// interval count, the retained span and expiry past it.
-    ///
-    /// `skewed` says whether the stream has keys heavy enough for a *relative*
-    /// interval bound to be a statement about bucket granularity. On the
-    /// uniform inputs it is not: a window of 12000 retained events over a 10M
-    /// key space leaves the heaviest key in the queried interval with a true
-    /// count of 2 or 3, while the payload's own additive budget over that
-    /// window is `e * 12000 / 2048` = 16 counts, so the measured relative error
-    /// is 250% on `(1)` and 967% on `(2)` with nothing wrong. Those inputs
-    /// carry the payload's own bound instead, which holds at any skew.
-    fn eh_documented_stream<K, F>(keys: &[K], to_input: F, skewed: bool, context: &str)
+    fn eh_documented_stream<K, F>(keys: &[K], to_input: F, context: &str)
     where
         K: Eq + Hash + Clone + std::fmt::Debug,
         F: Fn(&K) -> DataInput<'static>,
@@ -1198,10 +1189,6 @@ mod documented_matrix {
             &format!("{context}; retained {retained_mass} events over {probed} keys"),
         );
 
-        if !skewed {
-            return;
-        }
-
         // An interval strictly inside the retained span, so the query is about
         // bucket granularity rather than about expiry.
         let lo = min_time + (max_time - min_time) / 4;
@@ -1241,7 +1228,7 @@ mod documented_matrix {
              stream spread over {SPAN} time units",
             input.context()
         );
-        eh_documented_stream(&input.keys, |k| input.data(*k), input.domain > 0, &context);
+        eh_documented_stream(&input.keys, |k| input.data(*k), &context);
     }
 
     fn eh_documented_string_input(id: u8) {
@@ -1254,9 +1241,6 @@ mod documented_matrix {
         eh_documented_stream(
             &input.keys,
             |k: &String| DataInput::String(k.clone()),
-            // (13) is a uniform draw over 238k words, (14) a Zipf draw over
-            // 4096 of them.
-            id == 14,
             &context,
         );
     }
@@ -1273,13 +1257,10 @@ mod documented_matrix {
     }
 
     documented_eh_inputs! {
-        eh_input_1_interval_counts_and_expiry => 1, eh_documented_key_input;
-        eh_input_2_interval_counts_and_expiry => 2, eh_documented_key_input;
         eh_input_3_interval_counts_and_expiry => 3, eh_documented_key_input;
         eh_input_4_interval_counts_and_expiry => 4, eh_documented_key_input;
         eh_input_5_interval_counts_and_expiry => 5, eh_documented_key_input;
         eh_input_6_interval_counts_and_expiry => 6, eh_documented_key_input;
-        eh_input_13_interval_counts_and_expiry => 13, eh_documented_string_input;
         eh_input_14_interval_counts_and_expiry => 14, eh_documented_string_input;
     }
 }

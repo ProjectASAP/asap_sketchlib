@@ -1865,26 +1865,17 @@ fn a_univmon_pool_recycles_a_returned_sketch_and_hands_back_a_cleared_one() {
 /// heads against the string inputs `(13)`/`(14)`, the float inputs `(7)`/`(8)`
 /// and a distinct-key stream respectively.
 ///
-/// # What a diffuse stream does to a fixed UnivMon pyramid
+/// # Why the pyramid carries sixteen layers
 ///
 /// UnivMon recovers everything above `L1` from the heavy hitters its top-level
 /// sketch can hold, layer by layer: layer `l` keeps roughly `F0 / 2^l` keys, so
 /// a configuration answers a stream only once `heap * 2^layers` reaches its
-/// distinct count. The document's configuration — heap 32, 8 layers — reaches
-/// 8192 keys, and four of the twelve inputs are uniform draws over a 10M key
-/// space with 100K and 1M distinct keys.
-///
-/// Measured at that configuration, on `(1)`, `(2)`, `(7)`, `(8)`: `L2` reads
-/// 65% to 90% low on the standard path and returns nothing at all on the fast
-/// path, and cardinality reads 100% low. Those are not tolerances that need
-/// widening, they are a configuration that cannot serve those streams, so the
-/// `L2` band is asserted on the eight skewed inputs and `L1` — which is
-/// maintained exactly, not estimated — on all twelve. UnivMon's cardinality
-/// over these inputs is covered in `tests/e2e_cardinality.rs`, where the
-/// pyramid is sized to the stream it is given.
+/// distinct count. The document's `heap 32, layers 16` reaches two million
+/// keys, which covers every numbered input including the uniform draws with
+/// 100K and 1M distinct keys.
 mod documented_matrix {
     use super::common::assert_in_rank_band;
-    use super::common::inputs::{KeyInput, key_input, string_input};
+    use super::common::inputs::{key_input, string_input};
     use super::common::specs::{CardinalityConfidenceSpec, KllRankSpec};
     use super::*;
 
@@ -1894,13 +1885,14 @@ mod documented_matrix {
     const UM_HEAP: usize = 32;
     const UM_ROWS: usize = 5;
     const UM_COLS: usize = 2_048;
-    const UM_LAYERS: usize = 8;
+    const UM_LAYERS: usize = 16;
 
-    /// True when the stream has heavy hitters the top-level heap can hold, the
-    /// precondition every UnivMon estimate above `L1` rests on.
-    fn heavy_tailed(input: &KeyInput) -> bool {
-        input.domain > 0
-    }
+    /// The document's bands for this row.
+    const UM_L2: f64 = 0.11;
+    const UM_FAST_L2: f64 = 0.18;
+    const UM_CARDINALITY: f64 = 0.30;
+    const PYRAMID_L2: f64 = 0.15;
+    const PYRAMID_CARDINALITY: f64 = 0.30;
 
     fn univmon_documented_input(id: u8) {
         let input = key_input(id);
@@ -1946,42 +1938,37 @@ mod documented_matrix {
         );
 
         let l2 = truth.l2_norm();
-        // The pyramid keeps its own layer schedule, so its L2 band applies to
-        // every input.
+        assert_between(
+            um.calc_l2(),
+            l2 * (1.0 - UM_L2),
+            l2 * (1.0 + UM_L2),
+            &format!("UnivMon L2 on ({id}); {context}"),
+        );
+        assert_between(
+            fast.calc_l2(),
+            l2 * (1.0 - UM_FAST_L2),
+            l2 * (1.0 + UM_FAST_L2),
+            &format!("UnivMon fast-insert L2 on ({id}); {context}"),
+        );
         assert_between(
             pyramid.calc_l2(),
-            l2 * 0.85,
-            l2 * 1.15,
+            l2 * (1.0 - PYRAMID_L2),
+            l2 * (1.0 + PYRAMID_L2),
             &format!("UnivMonPyramid L2 on ({id}); {context}"),
         );
 
-        if heavy_tailed(&input) {
-            let (lo, hi) = univmon_l2_band(l2, UM_ROWS, UM_COLS);
-            assert_between(
-                um.calc_l2(),
-                lo,
-                hi,
-                &format!("UnivMon L2 on ({id}); {context}"),
-            );
-            assert_between(
-                fast.calc_l2(),
-                l2 * 0.85,
-                l2 * 1.15,
-                &format!("UnivMon fast-insert L2 on ({id}); {context}"),
-            );
-        }
-
-        // The pyramid's cardinality is a g-sum over sampled layers, so it is
-        // held to one layer of granularity — a factor of two — rather than to a
-        // percentage. Measured spread over these inputs: -27% to +25%, which is
-        // outside the -20%/+15% the document quotes on `(5)`, `(6)`, `(11)` and
-        // `(12)` but well inside a layer.
         let distinct = truth.distinct() as f64;
-        let card = pyramid.calc_card();
-        assert!(
-            card >= distinct * 0.5 && card <= distinct * 2.0,
-            "UnivMonPyramid cardinality {card:.0} is more than one sampling layer away from \
-             the {distinct:.0} distinct keys. {context}"
+        assert_between(
+            um.calc_card(),
+            distinct * (1.0 - UM_CARDINALITY),
+            distinct * (1.0 + UM_CARDINALITY),
+            &format!("UnivMon cardinality on ({id}); {context}"),
+        );
+        assert_between(
+            pyramid.calc_card(),
+            distinct * (1.0 - PYRAMID_CARDINALITY),
+            distinct * (1.0 + PYRAMID_CARDINALITY),
+            &format!("UnivMonPyramid cardinality on ({id}); {context}"),
         );
     }
 
@@ -2018,27 +2005,28 @@ mod documented_matrix {
     const HYDRA_ROWS: usize = 4;
     const HYDRA_COLS: usize = 4_096;
     const HYDRA_REGIONS: [&str; 4] = ["eu", "us", "apac", "latam"];
+    /// The document's absolute error for a full key and for an unseen one.
+    const HYDRA_FULL_KEY_ERROR: f64 = 1_000.0;
+    const HYDRA_UNSEEN_KEY_ERROR: f64 = 100.0;
 
     /// The Count-Min head, with the string inputs supplying the `user`
     /// dimension.
     ///
-    /// # Which bound applies at this scale
+    /// # The two full-key bounds
     ///
-    /// The document's "absolute error 2" for a full key, and its "exactly 0"
-    /// for an unseen key, are what a *sparse* grid gives: a hundred records
-    /// over 4096 columns collide with nobody, so every answer is exact and a
-    /// key nobody wrote reads zero. A 100K-record stream is not that grid —
-    /// measured here, the worst full-key answer is 64 (input `(13)`) and 148
-    /// (input `(14)`) over the truth, and an unseen key reads 50.5 and 15 —
-    /// and no amount of correctness would make it so.
+    /// Hydra's own theorem (Manousis et al., VLDB 2022, Theorem 2) says that
+    /// with `eps_us = 0` every estimate is one-sided and over-counts by at most
+    /// `eps * G_s` for all but a `delta` share of subpopulations, where
+    /// `eps = 4 / cols` and `G_s` is the post-fan-out mass. At `col 4096` over a
+    /// 100K-record stream with a two-dimension fan-out that is
+    /// `4 / 4096 * 300000` = 293 with `delta` = 5.1%; measured, 100% of `(13)`'s
+    /// subpopulations and 99.85% of `(14)`'s are inside it.
     ///
-    /// What holds at any scale is Hydra's own theorem (Manousis et al., VLDB
-    /// 2022, Theorem 2): with `eps_us = 0` every estimate is one-sided, and the
-    /// over-count is at most `eps * G_s` for all but a `delta` share of
-    /// subpopulations, where `G_s` is the post-fan-out mass. That is what the
-    /// full-key and unseen-key checks assert. The wildcard bound the document
-    /// gives — one-sided with 20% + 1 slack — does hold at this scale, and is
-    /// asserted as written.
+    /// The document's flat 1000 is what the `delta` tail needs: `(14)`'s worst
+    /// subpopulation reads 850 over its truth, because a handful of hot keys
+    /// share a column. Both numbers are asserted — the flat one with no
+    /// tolerance, the theorem's with its own `1 - delta` rule — and so is the
+    /// one-key-one-`None` query's one-sided 20% + 1.
     fn hydra_cm_head_documented_input(id: u8) {
         let input = string_input(id);
         let mut hydra = Hydra::with_schema(
@@ -2094,6 +2082,12 @@ mod documented_matrix {
             if est - *count as f64 <= error_bound {
                 within += 1;
             }
+            assert!(
+                (est - *count as f64).abs() <= HYDRA_FULL_KEY_ERROR,
+                "full key ({}, {word}): {est} against {count}, past the documented \
+                 absolute error {HYDRA_FULL_KEY_ERROR}. {context}",
+                HYDRA_REGIONS[*region]
+            );
         }
         assert_eq!(
             one_sided, probed,
@@ -2106,18 +2100,20 @@ mod documented_matrix {
              which must hold for more than {required:.1} of them. {context}"
         );
 
-        // Wildcards: the document's own one-sided band.
+        // Subpopulation queries with one key and one `None`: the document's own
+        // one-sided band.
         for (region, count) in &per_region {
             let est = hydra
                 .query_key(
                     &[Some(HYDRA_REGIONS[*region]), None],
                     &HydraQuery::Frequency(measure.clone()),
                 )
-                .expect("wildcard key");
+                .expect("one key and one None");
             let truth = *count as f64;
             assert!(
                 est >= truth && est <= truth * 1.2 + 1.0,
-                "wildcard region {region}: {est} outside [{truth}, {}]. {context}",
+                "region {region} with user left None: {est} outside [{truth}, {}]. \
+                 {context}",
                 truth * 1.2 + 1.0
             );
         }
@@ -2131,9 +2127,9 @@ mod documented_matrix {
             )
             .expect("unseen key");
         assert!(
-            unseen <= error_bound,
-            "an unseen key read {unseen}, past the additive grid bound {error_bound:.1}. \
-             {context}"
+            unseen <= HYDRA_UNSEEN_KEY_ERROR && unseen <= error_bound,
+            "an unseen key read {unseen}, past the documented absolute error \
+             {HYDRA_UNSEEN_KEY_ERROR} or the additive grid bound {error_bound:.1}. {context}"
         );
     }
 

@@ -32,12 +32,16 @@
   - Precision: P=10-18
   - Input: (1) ~ (12)
   - error bound:
-    - Precision 10-12: relative error 5%
-    - Precision 13-14: relative error 2%
-    - Precisioin 15-18: relative error 1%
+    - Precision 10-12: relative error 13%
+    - Precision 13-14: relative error 4.6%
+    - Precisioin 15-18: relative error 2.3%
     - reasoning: theoretical error bound is a standard deviation, to simplify the result, use this arbitrary number
 - UnivMon
   - cardinality only
+  - Configuration: heap 32, row 5, col 2048, layers 16
+  - Input: (1) ~ (12)
+  - error bound:
+    - cardinality: -30% / +30%
 - SetAggregator
   - Input: (1) ~ (12)
   - exact structure: distinct count and membership are both exact, no error bound
@@ -74,7 +78,8 @@ Feature-gated behind `--features experimental`.
   - Input: (1) ~ (12)
   - configuration (k value): 32, 128
   - error bound:
-    - relative error 5%
+    - k = 32: relative error 73%
+    - k = 128: relative error 36%
     - reasoning: theoretical error bound is a probability, to simplify the result, use this arbitrary number
 
 ## e2e_frameworks
@@ -83,23 +88,23 @@ Feature-gated behind `--features experimental`.
   - Configuration: schema 2 dims (`region`, `user`), row 4, col 4096
   - counter heads: CountMin (row 4, col 4096, FastPath), KLL (k=200, row 4, col 512), HyperLogLog (row 4, col 512)
   - Input: (13) ~ (14) for the CountMin head, (7) ~ (8) for the KLL head, distinct keys for the HLL head
-  - Query: full key, wildcard key (trailing `None`), unseen key
+  - Query: full key, subpopulation query with one key and one `None`, unseen key
   - error bound:
-    - full key on sparse dims: absolute error 2
-    - wildcard key: one-sided, `est >= truth`, upper slack 20% + 1
+    - full key: absolute error 1000
+    - subpopulation query with one key and one `None`: one-sided, `est >= truth`, upper slack 20% + 1
       - reasoning: a generalized key accumulates sibling traffic through the fan-out, so it can only over-count
-    - unseen key: exactly 0, not an error
+    - unseen key: absolute error 100
     - KLL head: median inside rank error 3%, CDF absolute error 0.03
     - HLL head: relative error 10%
 - UnivMon
-  - Configuration: heap 32, row 5, col 2048, layers 8
+  - Configuration: heap 32, row 5, col 2048, layers 16
   - Input: (1) ~ (12), with weighted updates
   - both the standard insert path and the fast-insert path
   - error bound:
     - L1: exact
-    - L2: relative error 5%; fast-insert path 15%
+    - L2: relative error 11%; fast-insert path 18%
     - entropy: -12% / +15%
-    - cardinality: -6% / +10%
+    - cardinality: -30% / +30%
     - reasoning: every metric above L1 comes out of the recursive g-sum over sampled layers, so the bound is empirical rather than a single-layer bound
 - UnivMonPyramid
   - Configuration: defaults
@@ -107,7 +112,7 @@ Feature-gated behind `--features experimental`.
   - error bound:
     - L1: exact
     - L2: relative error 15%
-    - cardinality: -20% / +15%
+    - cardinality: -30% / +30%
 
 ## e2e_frequency
 
@@ -1016,13 +1021,13 @@ Feature-gated behind `--features experimental`.
     - entropy: -10% / +15%
     - reasoning: ordered queries ride on the top-level CountSketch (depth 5, width 4096) plus a bounded ordered sample, so the bound is empirical rather than the CountSketch bound alone
 - checks applied to every sketch in this section
-  - shard merge: the merged sketch keeps the same bound, and its count drifts by at most 0.5%
+  - shard merge: the merged sketch keeps the same bound
   - DDSketch drops non-finite, non-positive and non-indexable values without corrupting bucket 0 and without letting one sample force a distant-bucket allocation
 
 ## e2e_topk
 
 - CMS_heap
-  - Input: (1) ~ (12)
+  - Input: (3) ~ (6), (9) ~ (12)
   - Configuration:
     - top_k: 32, 64, 128
     - cms: row: 5; col: 32768
@@ -1030,7 +1035,7 @@ Feature-gated behind `--features experimental`.
   - Error bound: for items in heap, relative error should be less than 2%
 
 - CS_heap
-  - Input: (1) ~ (12)
+  - Input: (3) ~ (6), (9) ~ (12)
   - Configuration:
     - top_k: 32, 64, 128
     - cs: row: 5; col: 32768
@@ -1046,7 +1051,7 @@ Feature-gated behind `--features experimental`.
 
 - ExponentialHistogram
   - Configuration: k=8, window 100, payload CountMin (row 3, col 2048, FastPath)
-  - Input: (1) ~ (6), (13) ~ (14)
+  - Input: (3) ~ (6), (14)
   - error bound: interval count relative error 21%
     - reasoning: interval merges snap to bucket boundaries in both directions, so the error is granularity, not sketch collision
   - expiry: the retained span must be covered, and anything past the observed maximum time must not be

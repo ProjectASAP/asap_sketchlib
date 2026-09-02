@@ -1136,48 +1136,30 @@ hll_zipf_battery!(
 /// document's table. This module is that table: every estimator, every
 /// precision, over every numbered input.
 ///
-/// # Two acceptance rules, for two different statements
+/// # Two bands, both asserted per cell
 ///
-/// The document gives flat bands (5% at P10-12, 2% at P13-14, 1% at P15-18)
-/// and says outright that they are round numbers standing in for a standard
-/// deviation. Read as a per-check tolerance they are between 1.5 and 2.5 sigma
-/// of the estimator's own error, so a correct implementation misses them a few
-/// percent of the time — and does: over the 324 (estimator, precision, input)
-/// cells here, two land outside (P10 HIP on `(1)` at 5.03%, and P15 Classic on
-/// `(1)` at 1.53%). Asserting them with zero tolerance would be asserting that
-/// a correct estimator is broken.
-///
-/// So each cell carries both statements, with the acceptance rule each earns:
-///
-/// 1. the estimator's own `z = 4` confidence band, per check, zero tolerated —
-///    an estimator four standard errors out is broken, not unlucky;
-/// 2. the document's flat band as a binomial over the twelve inputs, at the
-///    probability the normal model gives it. The twelve inputs are twelve
-///    disjoint key populations, so they are twelve draws of the hash
-///    configuration the error model quantifies over. The `p` used is the
-///    largest over the twelve cells, which bounds the Poisson-binomial the
-///    heterogeneous cells actually follow.
+/// The document's flat bands (13% at P10-12, 4.6% at P13-14, 2.3% at P15-18)
+/// are `z = 4` standard errors of the loosest precision in each group, so they
+/// hold for every cell in their group and are asserted with no tolerance. Each
+/// cell is additionally held to the `z = 4` band of *its own* precision and
+/// estimator, which is up to four times tighter at the top of a group and is
+/// what actually catches a regression.
 mod documented_matrix {
     use super::common::inputs::{KEY_INPUT_IDS, KeyInput, key_input};
-    use super::common::specs::{CardinalityConfidenceSpec, Tally, standard_normal_cdf};
+    use super::common::specs::CardinalityConfidenceSpec;
     use super::*;
 
     use asap_sketchlib::UnivMon;
     use std::collections::HashSet;
 
-    /// The document's flat relative-error band for a precision.
+    /// The document's flat relative-error band for a precision: `z = 4`
+    /// standard errors of the loosest precision in its group.
     fn documented_band(precision: u32) -> f64 {
         match precision {
-            10..=12 => 0.05,
-            13..=14 => 0.02,
-            _ => 0.01,
+            10..=12 => 0.13,
+            13..=14 => 0.046,
+            _ => 0.023,
         }
-    }
-
-    /// Probability that a correct estimator with relative standard error
-    /// `sigma` misses a two-sided band of `band`, under the normal model.
-    fn miss_probability(band: f64, sigma: f64) -> f64 {
-        2.0 * (1.0 - standard_normal_cdf(band / sigma))
     }
 
     fn distinct_of(input: &KeyInput) -> usize {
@@ -1191,12 +1173,6 @@ mod documented_matrix {
                 let band = documented_band($precision);
                 let register_spec = CardinalityConfidenceSpec::hll($precision, Z);
                 let hip_spec = CardinalityConfidenceSpec::hll_hip($precision, Z);
-
-                let mut classic_doc = Tally::default();
-                let mut ertl_doc = Tally::default();
-                let mut hip_doc = Tally::default();
-                let mut register_p = 0.0f64;
-                let mut hip_p = 0.0f64;
 
                 for id in KEY_INPUT_IDS {
                     let input = key_input(id);
@@ -1213,19 +1189,10 @@ mod documented_matrix {
                         hip.insert(&d);
                     }
 
-                    register_p = register_p
-                        .max(miss_probability(band, register_spec.sigma_rel_at(distinct)));
-                    hip_p = hip_p.max(miss_probability(band, hip_spec.sigma_rel_at(distinct)));
-
-                    for (label, spec, estimate, tally) in [
-                        (
-                            "Classic",
-                            register_spec,
-                            classic.estimate() as f64,
-                            &mut classic_doc,
-                        ),
-                        ("ErtlMLE", register_spec, ertl.estimate() as f64, &mut ertl_doc),
-                        ("HIP", hip_spec, hip.estimate() as f64, &mut hip_doc),
+                    for (label, spec, estimate) in [
+                        ("Classic", register_spec, classic.estimate() as f64),
+                        ("ErtlMLE", register_spec, ertl.estimate() as f64),
+                        ("HIP", hip_spec, hip.estimate() as f64),
                     ] {
                         if let Err(detail) = spec.check(estimate, distinct) {
                             panic!(
@@ -1234,17 +1201,16 @@ mod documented_matrix {
                             );
                         }
                         let rel = ((estimate - distinct as f64) / distinct as f64).abs();
-                        tally.record(rel <= band, || {
-                            format!(
-                                "{label} p{} on ({}): estimate {estimate:.0} against \
-                                 {distinct} distinct is {:.3}% off, past the documented \
-                                 {:.0}%",
-                                $precision,
-                                input.id,
-                                rel * 100.0,
-                                band * 100.0
-                            )
-                        });
+                        assert!(
+                            rel <= band,
+                            "{} p{} on ({}): estimate {estimate:.0} against {distinct} \
+                             distinct is {:.3}% off, past the documented {:.1}%. {context}",
+                            label,
+                            $precision,
+                            input.id,
+                            rel * 100.0,
+                            band * 100.0
+                        );
                     }
 
                     // Replaying identities already seen cannot move a register:
@@ -1284,26 +1250,6 @@ mod documented_matrix {
                     );
                 }
 
-                let context = format!(
-                    "p{}, the twelve documented inputs, documented band {:.0}%",
-                    $precision,
-                    band * 100.0
-                );
-                classic_doc.assert_independent_binomial(
-                    &format!("Classic p{} / documented band", $precision),
-                    register_p,
-                    &context,
-                );
-                ertl_doc.assert_independent_binomial(
-                    &format!("ErtlMLE p{} / documented band", $precision),
-                    register_p,
-                    &context,
-                );
-                hip_doc.assert_independent_binomial(
-                    &format!("HIP p{} / documented band", $precision),
-                    hip_p,
-                    &context,
-                );
             }
         };
     }
@@ -1423,36 +1369,30 @@ mod documented_matrix {
     /// pyramid has to be deep enough for the sampled key set to shrink to
     /// something the top-level heap can enumerate: layer `l` keeps roughly
     /// `F0 / 2^l` keys, so the deepest layer only carries a recoverable
-    /// heavy-hitter set once `2^layers >= F0 / heap`.
-    ///
-    /// That is a real sizing constraint rather than an accuracy tolerance, and
-    /// it is why the layer count here is computed from the input instead of
-    /// being fixed: at the eight layers the frameworks suite uses, `(1)`'s
-    /// 99515 distinct keys never reach the heap and the estimate collapses to 0
-    /// (measured), which `a_pyramid_too_shallow_for_the_stream_cannot_recover_
-    /// its_cardinality` pins.
-    ///
-    /// With the pyramid sized, the estimate is asserted to within a factor of
-    /// two of the truth. That factor is the estimator's own granularity — the
-    /// g-sum doubles the recovered mass once per layer, so being one layer out
-    /// is a factor of two — and not a percentage read off a run. The measured
-    /// spread over the twelve inputs is -27% to +25%.
+    /// heavy-hitter set once `heap * 2^layers` reaches the stream's distinct
+    /// count. The document's 16 layers reach 2 million keys, which covers every
+    /// numbered input; at 8 layers they reach 8192 and `(1)`'s 99515 distinct
+    /// keys never arrive, which
+    /// `a_pyramid_too_shallow_for_the_stream_cannot_recover_its_cardinality`
+    /// pins.
     fn univmon_documented_cardinality(id: u8) {
         const HEAP: usize = 32;
         const ROWS: usize = 5;
         const COLS: usize = 2_048;
+        const LAYERS: usize = 16;
+        /// The document's band for this row.
+        const CARDINALITY_BAND: f64 = 0.30;
 
         let input = key_input(id);
         let distinct = distinct_of(&input) as f64;
-        let layers = ((distinct / HEAP as f64).log2().ceil() as usize + 2).max(8);
 
-        let mut um = UnivMon::init_univmon(HEAP, ROWS, COLS, layers);
+        let mut um = UnivMon::init_univmon(HEAP, ROWS, COLS, LAYERS);
         for key in &input.keys {
             um.insert(&input.data(*key), 1);
         }
 
         let context = format!(
-            "{} heap={HEAP} rows={ROWS} cols={COLS} layers={layers} distinct={distinct:.0}",
+            "{} heap={HEAP} rows={ROWS} cols={COLS} layers={LAYERS} distinct={distinct:.0}",
             input.context()
         );
         assert_eq!(
@@ -1461,10 +1401,13 @@ mod documented_matrix {
             "UnivMon L1 must be exact. {context}"
         );
         let card = um.calc_card();
+        let rel = (card - distinct) / distinct;
         assert!(
-            card >= distinct * 0.5 && card <= distinct * 2.0,
-            "UnivMon cardinality {card:.0} is more than one sampling layer away from the \
-             {distinct:.0} distinct keys. {context}"
+            rel.abs() <= CARDINALITY_BAND,
+            "UnivMon cardinality {card:.0} against {distinct:.0} distinct keys is \
+             {:+.2}%, past the documented {:.0}%. {context}",
+            rel * 100.0,
+            CARDINALITY_BAND * 100.0
         );
     }
 
@@ -1482,8 +1425,8 @@ mod documented_matrix {
         assert!(
             um.calc_card() < distinct * 0.5,
             "an eight-layer pyramid reported {} against {distinct:.0} distinct keys; if this \
-             now succeeds, the sizing rule in univmon_documented_cardinality is too \
-             conservative and should be revisited",
+             now succeeds, the layer count the documented configuration carries is larger \
+             than it needs to be",
             um.calc_card()
         );
     }

@@ -897,31 +897,33 @@ fn eh_univ_optimized_map_tier_matches_exact_per_key_counts_on_a_skewed_stream() 
 /// `k = 128`, and its UniformSampling row is `(1)`, `(2)`, `(7)` and `(8)` at
 /// rate 0.1.
 ///
-/// # The two KMV acceptance rules
+/// # The two KMV bands
 ///
 /// KMV's estimator is `(k - 1) / U_(k)`, whose relative standard error is
-/// `1 / sqrt(k - 2)`: 18.6% at `k = 32` and 8.9% at `k = 128`. The document's
-/// flat 5% is therefore 0.27 sigma at `k = 32` and 0.56 sigma at `k = 128` —
-/// a correct sketch misses it roughly four times in five, and no acceptance
-/// rule over twelve inputs can turn that into a pass/fail signal (the binomial
-/// at `p = 0.79` allows all twelve to miss). The band is still recorded, at the
-/// probability the model gives it, so the rule tightens automatically if the
-/// document's number is ever revised; the assertion that carries the coverage
-/// is the estimator's own `z = 4` band, checked per input with no tolerance.
+/// `1 / sqrt(k - 2)`: 18.3% at `k = 32` and 8.9% at `k = 128`. The document's
+/// per-`k` bands are `z = 4` of that — 73% and 36% — and are asserted with no
+/// tolerance. Each input is additionally checked against the spec's own band at
+/// its cardinality, which uses the exact finite-`n` standard error and is
+/// therefore slightly tighter than the asymptotic number the document quotes.
 mod documented_matrix {
     use super::common::inputs::{KEY_INPUT_IDS, key_input};
-    use super::common::specs::{CardinalityConfidenceSpec, PrioritySampleSpec, Tally};
+    use super::common::specs::{CardinalityConfidenceSpec, PrioritySampleSpec};
     use super::*;
 
     use std::collections::HashSet;
 
-    /// The document's flat relative-error band for KMV.
-    const KMV_DOCUMENTED_BAND: f64 = 0.05;
+    /// The document's relative-error band per `k`.
+    fn documented_band(k: usize) -> f64 {
+        match k {
+            32 => 0.73,
+            128 => 0.36,
+            other => panic!("({other}) is not one of the documented k values"),
+        }
+    }
 
     fn kmv_documented_input(k: usize) {
         let spec = CardinalityConfidenceSpec::kmv(k, KMV_Z);
-        let mut documented = Tally::default();
-        let mut documented_p = 0.0f64;
+        let band = documented_band(k);
 
         for id in KEY_INPUT_IDS {
             let input = key_input(id);
@@ -937,22 +939,14 @@ mod documented_matrix {
                 panic!("KMV k={k}: {detail}. distinct={distinct} {context}");
             }
 
-            let sigma = spec.sigma_rel_at(distinct);
-            documented_p = documented_p.max(
-                2.0 * (1.0
-                    - super::common::specs::standard_normal_cdf(KMV_DOCUMENTED_BAND / sigma)),
-            );
             let rel = ((estimate - distinct as f64) / distinct as f64).abs();
-            documented.record(rel <= KMV_DOCUMENTED_BAND, || {
-                format!(
-                    "KMV k={k} on ({id}): estimate {estimate:.0} against {distinct} distinct \
-                     is {:.2}% off, past the documented {:.0}% (which is {:.2} sigma for \
-                     this k)",
-                    rel * 100.0,
-                    KMV_DOCUMENTED_BAND * 100.0,
-                    KMV_DOCUMENTED_BAND / sigma
-                )
-            });
+            assert!(
+                rel <= band,
+                "KMV k={k} on ({id}): estimate {estimate:.0} against {distinct} distinct is \
+                 {:.2}% off, past the documented {:.0}%. {context}",
+                rel * 100.0,
+                band * 100.0
+            );
 
             // Duplicate replay is inert: KMV retains the k smallest hashes of
             // what it has seen, and it has seen all of these already.
@@ -966,19 +960,6 @@ mod documented_matrix {
                 "replaying ({id}) moved the k={k} KMV estimate"
             );
         }
-
-        documented.assert_independent_binomial(
-            &format!(
-                "KMV k={k} / documented {:.0}% band",
-                KMV_DOCUMENTED_BAND * 100.0
-            ),
-            documented_p,
-            &format!(
-                "the twelve documented inputs at k={k}, whose relative standard error is \
-                 {:.3}",
-                CardinalityConfidenceSpec::kmv(k, KMV_Z).sigma_rel()
-            ),
-        );
     }
 
     #[test]

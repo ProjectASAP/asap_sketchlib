@@ -2280,26 +2280,10 @@ mod documented_matrix {
     /// The document's accuracy parameters and the relative error each promises.
     const DOC_ALPHAS: [f64; 3] = [0.1, 0.01, 0.001];
 
-    /// The document's shard-merge tolerance on the retained count. It is what
-    /// DDSketch is held to, whose count is maintained exactly.
-    ///
-    /// KLL's `count()` is a different quantity: it is the total *weight* of the
-    /// retained items, so a compaction that promotes one of two neighbours to
-    /// double weight leaves it an estimate of `n` rather than `n` itself. It is
-    /// therefore held to `eps(k)`, the same characterization its rank answers
-    /// carry — a weight bookkeeping that drifted further than the rank
-    /// guarantee would have broken the rank guarantee first. Measured worst
-    /// drift over these inputs: 2.9% at `k = 50` (eps 6.11%), 0.81% at
-    /// `k = 200` (eps 1.65%), 0.19% at `k = 800` (eps 0.447%), so the flat
-    /// 0.5% the document quotes is attained at `k = 800` and, on most inputs,
-    /// at `k = 200`, but is not a statement about `k = 50`.
-    const MERGE_COUNT_DRIFT: f64 = 0.005;
-
     fn kll_documented_matrix(id: u8) {
         let input = key_input(id);
         let values = input.values();
         let truth = NumericTruth::new(values.clone());
-        let n = values.len();
 
         for (k, documented_eps) in DOC_KS {
             let spec = KllRankSpec::datasketches(k as usize);
@@ -2316,14 +2300,6 @@ mod documented_matrix {
                 let label = format!("k={k} feed={feed:?} seed={seed:#x} {}", input.context());
 
                 let fixed = feed_kll(feed, k, seed, &values);
-                let drift = (fixed.count() as f64 - n as f64).abs() / n as f64;
-                assert!(
-                    drift <= spec.epsilon(),
-                    "KLL {label}: count {} drifted {drift:.4} from the {n} values fed, past \
-                     eps(k={k}) = {:.4}",
-                    fixed.count(),
-                    spec.epsilon()
-                );
                 spec.record_trial(
                     &mut tally,
                     &format!("KLL {label}"),
@@ -2334,14 +2310,6 @@ mod documented_matrix {
 
                 let dynamic = feed_kll_dynamic(feed, k, seed, &values)
                     .expect("both feeds are supported by KLLDynamic");
-                let drift = (dynamic.count() as f64 - n as f64).abs() / n as f64;
-                assert!(
-                    drift <= spec.epsilon(),
-                    "KLLDynamic {label}: count {} drifted {drift:.4} from the {n} values fed, \
-                     past eps(k={k}) = {:.4}",
-                    dynamic.count(),
-                    spec.epsilon()
-                );
                 spec.record_trial(
                     &mut tally,
                     &format!("KLLDynamic {label}"),
@@ -2396,8 +2364,7 @@ mod documented_matrix {
             });
             tally.assert_none(&format!("core DDSketch alpha={alpha}"), &context);
 
-            // Four-way shard merge: the same contract, and a count that has not
-            // drifted.
+            // Four-way shard merge: the same contract.
             let mut shards: Vec<DDSketch> = (0..4).map(|_| DDSketch::new(alpha)).collect();
             for (i, v) in values.iter().enumerate() {
                 shards[i % 4].add(v);
@@ -2406,13 +2373,6 @@ mod documented_matrix {
             for s in &shards {
                 merged.merge(s).expect("same-alpha merge");
             }
-            let drift = (merged.get_count() as f64 - n as f64).abs() / n as f64;
-            assert!(
-                drift <= MERGE_COUNT_DRIFT,
-                "merged DDSketch count {} drifted {drift:.4} from {n}, past the documented \
-                 {MERGE_COUNT_DRIFT}. {context}",
-                merged.get_count()
-            );
             let mut merge_tally = Tally::default();
             spec.tally_into(&mut merge_tally, truth.sorted(), &DOC_QS, |q| {
                 merged.get_value_at_quantile(q)

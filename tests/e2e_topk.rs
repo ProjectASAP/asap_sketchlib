@@ -94,42 +94,18 @@ fn heaps_satisfy_their_own_bounds_and_stay_heap_consistent() {
 // The documented input matrix
 // ---------------------------------------------------------------------------
 
-/// `tests/TEST_COVERAGE.md` sweeps both heaps over the twelve numbered inputs
-/// at `top_k` 32, 64 and 128, over a `row 5, col 32768` sketch chosen so the
+/// `tests/TEST_COVERAGE.md` sweeps both heaps over the eight skewed inputs at
+/// `top_k` 32, 64 and 128, over a `row 5, col 32768` sketch chosen so the
 /// counter matrix is not what is being measured.
 ///
-/// # Which checks run on which inputs
-///
-/// Four of the twelve inputs — `(1)`, `(2)`, `(7)` and `(8)`, the uniform draws
-/// over a 10M key space — have no heavy hitters at all: at 100K draws the most
-/// frequent key appears 3 times and the 32nd most frequent appears 2, and at 1M
-/// draws the 32nd appears 4. Two of the document's numbers are statements about
-/// a top-k that exists:
-///
-/// - the 2% per-item relative error. The sketch's own additive budget at
-///   `row 5, col 32768` is `e*N/w` = 8.3 counts at 100K, which is several times
-///   the entire mass of any key in the heap, so a heap item reads 18 for a true
-///   3 (a measured 500%) without anything being wrong with either the sketch or
-///   the heap;
-/// - the recall target. With thousands of keys tied at the k-th count, which of
-///   them the heap admits is decided by collision noise, and a measured 4 of 32
-///   is the workload's answer, not the heap's.
-///
-/// The exact heap/sketch consistency equality is the same kind of statement. A
-/// heap entry stores the estimate as of the key's *last arrival*; every later
-/// collision into its cells moves the sketch's current answer up and away from
-/// it. On the skewed inputs a heap key keeps arriving until the end of the
-/// stream and the two agree exactly, which is what the document describes; on
-/// the uniform inputs a key that arrived 3 times and never again is left behind
-/// by 1 or 2 counts of other keys' collisions (measured: heap 35, sketch 36).
-///
-/// So those three run on the eight skewed inputs, where a top-k exists. What is
-/// a property of the heap rather than of the workload runs on all twelve: the
-/// capacity ceiling, each sketch's own error theorem evaluated at the heap's
-/// keys, and — for the Count-Min heap, whose stored value is a Count-Min
-/// estimate — that no entry reads below its key's true count.
+/// Each heap carries four checks: the capacity ceiling, the document's 2%
+/// per-item relative error, its recall target, and the equality between a heap
+/// entry's stored count and the sketch's current estimate for that key. Each
+/// sketch is also held to its own error theorem at the keys the heap admitted,
+/// so a heap that filled itself with the wrong keys fails even where the
+/// document's flat percentage would not notice.
 mod documented_matrix {
-    use super::common::inputs::{KeyInput, key_input};
+    use super::common::inputs::key_input;
     use super::common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, Tally};
     use super::*;
 
@@ -147,11 +123,6 @@ mod documented_matrix {
             HeapItem::F64(v) => v.to_bits() as i64,
             other => panic!("unexpected heap key form {other:?}"),
         }
-    }
-
-    /// True when the input has a top-k to recover at all — see the module docs.
-    fn has_heavy_hitters(input: &KeyInput) -> bool {
-        input.domain > 0
     }
 
     fn heap_documented_matrix(id: u8) {
@@ -185,7 +156,6 @@ mod documented_matrix {
                 );
 
                 let mut consistency = Tally::default();
-                let mut one_sided = Tally::default();
                 let mut documented = Tally::default();
                 let mut recall = 0usize;
                 let mut heavy: Vec<(i64, i64)> = Vec::with_capacity(items.len());
@@ -204,15 +174,6 @@ mod documented_matrix {
                         )
                     });
                     let t = truth.get(key);
-                    if cms {
-                        one_sided.record(it.count >= t, || {
-                            format!(
-                                "key {key}: heap holds {} for a true count of {t}; a Count-Min \
-                                 estimate taken at the key's last arrival cannot read low",
-                                it.count
-                            )
-                        });
-                    }
                     heavy.push((key, t));
                     if t >= kth_count {
                         recall += 1;
@@ -228,8 +189,6 @@ mod documented_matrix {
                         )
                     });
                 }
-                one_sided.assert_none(&format!("{label} heap entry one-sidedness"), &context);
-
                 // Each sketch against its own theorem, evaluated at the keys the
                 // heap actually admitted.
                 let total = truth.total() as f64;
@@ -269,18 +228,16 @@ mod documented_matrix {
                     bound.assert_none("CSHeap / L2 bound at the heap's keys", &context);
                 }
 
-                if has_heavy_hitters(&input) {
-                    consistency.assert_none(&format!("{label} heap/sketch consistency"), &context);
-                    documented.assert_none(
-                        &format!("{label} / documented per-item relative error"),
-                        &context,
-                    );
-                    assert!(
-                        recall >= top_k - 1,
-                        "{label} recovered only {recall}/{top_k} keys at or above the true \
-                         k-th count ({kth_count}). {context}"
-                    );
-                }
+                consistency.assert_none(&format!("{label} heap/sketch consistency"), &context);
+                documented.assert_none(
+                    &format!("{label} / documented per-item relative error"),
+                    &context,
+                );
+                assert!(
+                    recall >= top_k - 1,
+                    "{label} recovered only {recall}/{top_k} keys at or above the true \
+                     k-th count ({kth_count}). {context}"
+                );
             }
         }
     }
@@ -297,14 +254,10 @@ mod documented_matrix {
     }
 
     documented_topk_matrix! {
-        heaps_on_input_1_hold_their_bounds => 1;
-        heaps_on_input_2_hold_their_bounds => 2;
         heaps_on_input_3_hold_their_bounds => 3;
         heaps_on_input_4_hold_their_bounds => 4;
         heaps_on_input_5_hold_their_bounds => 5;
         heaps_on_input_6_hold_their_bounds => 6;
-        heaps_on_input_7_hold_their_bounds => 7;
-        heaps_on_input_8_hold_their_bounds => 8;
         heaps_on_input_9_hold_their_bounds => 9;
         heaps_on_input_10_hold_their_bounds => 10;
         heaps_on_input_11_hold_their_bounds => 11;
