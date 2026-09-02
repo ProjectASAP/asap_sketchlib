@@ -9,6 +9,7 @@
 #![allow(dead_code)]
 
 pub mod conformance;
+pub mod inputs;
 pub mod prefix_structure;
 pub mod specs;
 pub mod streamgen;
@@ -16,6 +17,9 @@ pub mod truth;
 
 // Each test binary compiles this module separately, so a re-export used by
 // one suite is dead in another.
+#[allow(unused_imports)]
+pub use inputs::*;
+
 #[allow(unused_imports)]
 pub use prefix_structure::*;
 

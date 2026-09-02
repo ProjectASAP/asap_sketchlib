@@ -89,3 +89,225 @@ fn heaps_satisfy_their_own_bounds_and_stay_heap_consistent() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The documented input matrix
+// ---------------------------------------------------------------------------
+
+/// `tests/TEST_COVERAGE.md` sweeps both heaps over the twelve numbered inputs
+/// at `top_k` 32, 64 and 128, over a `row 5, col 32768` sketch chosen so the
+/// counter matrix is not what is being measured.
+///
+/// # Which checks run on which inputs
+///
+/// Four of the twelve inputs — `(1)`, `(2)`, `(7)` and `(8)`, the uniform draws
+/// over a 10M key space — have no heavy hitters at all: at 100K draws the most
+/// frequent key appears 3 times and the 32nd most frequent appears 2, and at 1M
+/// draws the 32nd appears 4. Two of the document's numbers are statements about
+/// a top-k that exists:
+///
+/// - the 2% per-item relative error. The sketch's own additive budget at
+///   `row 5, col 32768` is `e*N/w` = 8.3 counts at 100K, which is several times
+///   the entire mass of any key in the heap, so a heap item reads 18 for a true
+///   3 (a measured 500%) without anything being wrong with either the sketch or
+///   the heap;
+/// - the recall target. With thousands of keys tied at the k-th count, which of
+///   them the heap admits is decided by collision noise, and a measured 4 of 32
+///   is the workload's answer, not the heap's.
+///
+/// The exact heap/sketch consistency equality is the same kind of statement. A
+/// heap entry stores the estimate as of the key's *last arrival*; every later
+/// collision into its cells moves the sketch's current answer up and away from
+/// it. On the skewed inputs a heap key keeps arriving until the end of the
+/// stream and the two agree exactly, which is what the document describes; on
+/// the uniform inputs a key that arrived 3 times and never again is left behind
+/// by 1 or 2 counts of other keys' collisions (measured: heap 35, sketch 36).
+///
+/// So those three run on the eight skewed inputs, where a top-k exists. What is
+/// a property of the heap rather than of the workload runs on all twelve: the
+/// capacity ceiling, each sketch's own error theorem evaluated at the heap's
+/// keys, and — for the Count-Min heap, whose stored value is a Count-Min
+/// estimate — that no entry reads below its key's true count.
+mod documented_matrix {
+    use super::common::inputs::{KeyInput, key_input};
+    use super::common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, Tally};
+    use super::*;
+
+    /// `cms` and `cs` geometry from the document.
+    const HEAP_ROWS: usize = 5;
+    const HEAP_COLS: usize = 32_768;
+    const TOP_KS: [usize; 3] = [32, 64, 128];
+
+    /// The document's per-item relative error for the heaps.
+    const HEAP_RELATIVE_ERROR: f64 = 0.02;
+
+    fn key_of(item: &HeapItem) -> i64 {
+        match item {
+            HeapItem::I64(v) => *v,
+            HeapItem::F64(v) => v.to_bits() as i64,
+            other => panic!("unexpected heap key form {other:?}"),
+        }
+    }
+
+    /// True when the input has a top-k to recover at all — see the module docs.
+    fn has_heavy_hitters(input: &KeyInput) -> bool {
+        input.domain > 0
+    }
+
+    fn heap_documented_matrix(id: u8) {
+        let input = key_input(id);
+        let truth = input.truth();
+
+        for top_k in TOP_KS {
+            let mut cms_heap =
+                CMSHeap::<Vector2D<i64>, RegularPath>::new(HEAP_ROWS, HEAP_COLS, top_k);
+            let mut cs_heap =
+                CSHeap::<Vector2D<i64>, RegularPath>::new(HEAP_ROWS, HEAP_COLS, top_k);
+            for key in &input.keys {
+                let d = input.data(*key);
+                cms_heap.insert(&d);
+                cs_heap.insert(&d);
+            }
+            let context = format!(
+                "{} top_k={top_k} rows={HEAP_ROWS} cols={HEAP_COLS}",
+                input.context()
+            );
+
+            let kth_count = truth.top_k(top_k)[top_k - 1].1;
+            for (label, items, cms) in [
+                ("CMSHeap", cms_heap.heap().heap().to_vec(), true),
+                ("CSHeap", cs_heap.heap().heap().to_vec(), false),
+            ] {
+                assert!(
+                    items.len() <= top_k,
+                    "{label} heap holds {} entries, past its {top_k} capacity. {context}",
+                    items.len()
+                );
+
+                let mut consistency = Tally::default();
+                let mut one_sided = Tally::default();
+                let mut documented = Tally::default();
+                let mut recall = 0usize;
+                let mut heavy: Vec<(i64, i64)> = Vec::with_capacity(items.len());
+                for it in &items {
+                    let key = key_of(&it.key);
+                    let d = input.data(key);
+                    let est = if cms {
+                        cms_heap.estimate(&d)
+                    } else {
+                        cs_heap.estimate(&d) as i64
+                    };
+                    consistency.record(it.count == est, || {
+                        format!(
+                            "key {key}: heap holds {} but the sketch estimates {est}",
+                            it.count
+                        )
+                    });
+                    let t = truth.get(key);
+                    if cms {
+                        one_sided.record(it.count >= t, || {
+                            format!(
+                                "key {key}: heap holds {} for a true count of {t}; a Count-Min \
+                                 estimate taken at the key's last arrival cannot read low",
+                                it.count
+                            )
+                        });
+                    }
+                    heavy.push((key, t));
+                    if t >= kth_count {
+                        recall += 1;
+                    }
+                    let rel = ((it.count - t) as f64 / t as f64).abs();
+                    documented.record(rel <= HEAP_RELATIVE_ERROR, || {
+                        format!(
+                            "key {key}: heap count {} vs true {t} is {:.2}% off, past the \
+                             documented {:.0}%",
+                            it.count,
+                            rel * 100.0,
+                            HEAP_RELATIVE_ERROR * 100.0
+                        )
+                    });
+                }
+                one_sided.assert_none(&format!("{label} heap entry one-sidedness"), &context);
+
+                // Each sketch against its own theorem, evaluated at the keys the
+                // heap actually admitted.
+                let total = truth.total() as f64;
+                let probed = heavy.len();
+                if cms {
+                    let spec = CountMinSpec::new(HEAP_ROWS, HEAP_COLS);
+                    let mut bound = Tally::default();
+                    for (key, count) in &heavy {
+                        let f = *count as f64;
+                        let est = cms_heap.estimate(&input.data(*key)) as f64;
+                        let simul = spec.simultaneous_bound(total, f, probed, SIMULTANEOUS_LEVEL);
+                        bound.record(est >= f && est - f <= simul, || {
+                            format!(
+                                "key {key}: est {est} against true {f} leaves the one-sided \
+                                 additive band of {simul:.1}"
+                            )
+                        });
+                    }
+                    bound.assert_none("CMSHeap / Count-Min bound at the heap's keys", &context);
+                } else {
+                    let spec = CountSketchSpec::new(HEAP_ROWS, HEAP_COLS);
+                    let f2 = truth.f2();
+                    let kappa = spec.simultaneous_kappa(probed, SIMULTANEOUS_LEVEL);
+                    let mut bound = Tally::default();
+                    for (key, count) in &heavy {
+                        let f = *count as f64;
+                        let est = cs_heap.estimate(&input.data(*key));
+                        let residual_l2 = (f2 - f * f).max(0.0).sqrt();
+                        let scale = spec.scale_at(kappa, residual_l2);
+                        bound.record((est - f).abs() <= scale, || {
+                            format!(
+                                "key {key}: |{est:.1} - {f}| exceeds sqrt(kappa/w)*||f_-i||_2 \
+                                 = {scale:.1} at kappa={kappa:.1}"
+                            )
+                        });
+                    }
+                    bound.assert_none("CSHeap / L2 bound at the heap's keys", &context);
+                }
+
+                if has_heavy_hitters(&input) {
+                    consistency.assert_none(&format!("{label} heap/sketch consistency"), &context);
+                    documented.assert_none(
+                        &format!("{label} / documented per-item relative error"),
+                        &context,
+                    );
+                    assert!(
+                        recall >= top_k - 1,
+                        "{label} recovered only {recall}/{top_k} keys at or above the true \
+                         k-th count ({kth_count}). {context}"
+                    );
+                }
+            }
+        }
+    }
+
+    macro_rules! documented_topk_matrix {
+        ($($name:ident => $id:literal;)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    heap_documented_matrix($id);
+                }
+            )*
+        };
+    }
+
+    documented_topk_matrix! {
+        heaps_on_input_1_hold_their_bounds => 1;
+        heaps_on_input_2_hold_their_bounds => 2;
+        heaps_on_input_3_hold_their_bounds => 3;
+        heaps_on_input_4_hold_their_bounds => 4;
+        heaps_on_input_5_hold_their_bounds => 5;
+        heaps_on_input_6_hold_their_bounds => 6;
+        heaps_on_input_7_hold_their_bounds => 7;
+        heaps_on_input_8_hold_their_bounds => 8;
+        heaps_on_input_9_hold_their_bounds => 9;
+        heaps_on_input_10_hold_their_bounds => 10;
+        heaps_on_input_11_hold_their_bounds => 11;
+        heaps_on_input_12_hold_their_bounds => 12;
+    }
+}

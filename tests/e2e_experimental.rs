@@ -888,3 +888,204 @@ fn eh_univ_optimized_map_tier_matches_exact_per_key_counts_on_a_skewed_stream() 
         ),
     }
 }
+
+// ---------------------------------------------------------------------------
+// The documented input matrix
+// ---------------------------------------------------------------------------
+
+/// The document's KMV row is the twelve numbered inputs at `k = 32` and
+/// `k = 128`, and its UniformSampling row is `(1)`, `(2)`, `(7)` and `(8)` at
+/// rate 0.1.
+///
+/// # The two KMV acceptance rules
+///
+/// KMV's estimator is `(k - 1) / U_(k)`, whose relative standard error is
+/// `1 / sqrt(k - 2)`: 18.6% at `k = 32` and 8.9% at `k = 128`. The document's
+/// flat 5% is therefore 0.27 sigma at `k = 32` and 0.56 sigma at `k = 128` —
+/// a correct sketch misses it roughly four times in five, and no acceptance
+/// rule over twelve inputs can turn that into a pass/fail signal (the binomial
+/// at `p = 0.79` allows all twelve to miss). The band is still recorded, at the
+/// probability the model gives it, so the rule tightens automatically if the
+/// document's number is ever revised; the assertion that carries the coverage
+/// is the estimator's own `z = 4` band, checked per input with no tolerance.
+mod documented_matrix {
+    use super::common::inputs::{KEY_INPUT_IDS, key_input};
+    use super::common::specs::{CardinalityConfidenceSpec, PrioritySampleSpec, Tally};
+    use super::*;
+
+    use std::collections::HashSet;
+
+    /// The document's flat relative-error band for KMV.
+    const KMV_DOCUMENTED_BAND: f64 = 0.05;
+
+    fn kmv_documented_input(k: usize) {
+        let spec = CardinalityConfidenceSpec::kmv(k, KMV_Z);
+        let mut documented = Tally::default();
+        let mut documented_p = 0.0f64;
+
+        for id in KEY_INPUT_IDS {
+            let input = key_input(id);
+            let distinct = input.keys.iter().copied().collect::<HashSet<i64>>().len();
+            let mut sketch: KMV = KMV::new(k);
+            for key in &input.keys {
+                sketch.insert(&input.data(*key));
+            }
+            let estimate = sketch.estimate();
+            let context = input.context();
+
+            if let Err(detail) = spec.check(estimate, distinct) {
+                panic!("KMV k={k}: {detail}. distinct={distinct} {context}");
+            }
+
+            let sigma = spec.sigma_rel_at(distinct);
+            documented_p = documented_p.max(
+                2.0 * (1.0
+                    - super::common::specs::standard_normal_cdf(KMV_DOCUMENTED_BAND / sigma)),
+            );
+            let rel = ((estimate - distinct as f64) / distinct as f64).abs();
+            documented.record(rel <= KMV_DOCUMENTED_BAND, || {
+                format!(
+                    "KMV k={k} on ({id}): estimate {estimate:.0} against {distinct} distinct \
+                     is {:.2}% off, past the documented {:.0}% (which is {:.2} sigma for \
+                     this k)",
+                    rel * 100.0,
+                    KMV_DOCUMENTED_BAND * 100.0,
+                    KMV_DOCUMENTED_BAND / sigma
+                )
+            });
+
+            // Duplicate replay is inert: KMV retains the k smallest hashes of
+            // what it has seen, and it has seen all of these already.
+            let before = sketch.estimate();
+            for key in &input.keys {
+                sketch.insert(&input.data(*key));
+            }
+            assert_eq!(
+                sketch.estimate(),
+                before,
+                "replaying ({id}) moved the k={k} KMV estimate"
+            );
+        }
+
+        documented.assert_independent_binomial(
+            &format!(
+                "KMV k={k} / documented {:.0}% band",
+                KMV_DOCUMENTED_BAND * 100.0
+            ),
+            documented_p,
+            &format!(
+                "the twelve documented inputs at k={k}, whose relative standard error is \
+                 {:.3}",
+                CardinalityConfidenceSpec::kmv(k, KMV_Z).sigma_rel()
+            ),
+        );
+    }
+
+    #[test]
+    fn kmv_k32_over_the_documented_inputs_holds_its_error_model() {
+        kmv_documented_input(32);
+    }
+
+    #[test]
+    fn kmv_k128_over_the_documented_inputs_holds_its_error_model() {
+        kmv_documented_input(128);
+    }
+
+    /// UniformSampling at the documented rate over one documented input.
+    ///
+    /// The retained size is asserted twice: against the document's 15% band
+    /// around `n * rate`, and against `ceil(n * rate)` exactly, because this
+    /// implementation is a priority sample with a deterministic budget rather
+    /// than an independent Bernoulli filter. Only the second would notice a
+    /// sampler that started retaining one entry too few.
+    fn uniform_sampling_documented_input(id: u8) {
+        const RATE: f64 = 0.1;
+
+        let input = key_input(id);
+        let values = input.values();
+        let seed = 0x5A91_0300 + id as u64;
+        let mut us = UniformSampling::with_seed(RATE, seed);
+        for v in &values {
+            us.update(*v);
+        }
+        let context = format!("{} rate={RATE} seed={seed:#x}", input.context());
+
+        let n = values.len();
+        let expected = n as f64 * RATE;
+        let retained = us.len() as f64;
+        assert!(
+            (retained - expected).abs() <= expected * 0.15,
+            "retained {retained} samples against an expected {expected}, past the documented \
+             15%. {context}"
+        );
+        let spec = PrioritySampleSpec::new(RATE, 4.0);
+        assert_eq!(
+            us.len(),
+            spec.retained(n as u64),
+            "the retained size is the deterministic budget ceil(n*rate). {context}"
+        );
+        assert_eq!(
+            us.total_seen(),
+            n as u64,
+            "total_seen must be exact. {context}"
+        );
+
+        let seen: HashSet<u64> = values.iter().map(|v| v.to_bits()).collect();
+        for sample in us.samples() {
+            assert!(
+                seen.contains(&sample.to_bits()),
+                "sample {sample} was never in the stream. {context}"
+            );
+        }
+
+        // A same-rate merge unions the pools and sums the totals. The second
+        // half of the stream is fed to a second sketch so the merge has
+        // something to union that the first has not seen.
+        let mut left = UniformSampling::with_seed(RATE, seed);
+        let mut right = UniformSampling::with_seed(RATE, seed + 1);
+        let half = n / 2;
+        for v in &values[..half] {
+            left.update(*v);
+        }
+        for v in &values[half..] {
+            right.update(*v);
+        }
+        let pooled = left.len() + right.len();
+        left.merge(&right).expect("same-rate merge");
+        assert_eq!(
+            left.total_seen(),
+            n as u64,
+            "a merge must sum total_seen. {context}"
+        );
+        assert_eq!(
+            left.len(),
+            spec.retained(n as u64).min(pooled),
+            "a merge keeps the combined budget, capped by the {pooled} entries the two \
+             pools held. {context}"
+        );
+        for sample in left.samples() {
+            assert!(
+                seen.contains(&sample.to_bits()),
+                "merged sample {sample} was never in the stream. {context}"
+            );
+        }
+    }
+
+    macro_rules! documented_uniform_sampling_inputs {
+        ($($name:ident => $id:literal;)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    uniform_sampling_documented_input($id);
+                }
+            )*
+        };
+    }
+
+    documented_uniform_sampling_inputs! {
+        uniform_sampling_input_1_retains_its_documented_budget => 1;
+        uniform_sampling_input_2_retains_its_documented_budget => 2;
+        uniform_sampling_input_7_retains_its_documented_budget => 7;
+        uniform_sampling_input_8_retains_its_documented_budget => 8;
+    }
+}

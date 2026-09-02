@@ -787,3 +787,129 @@ fn portable_kll_sketch_satisfies_the_rank_error_characterization_through_merge_a
         &format!("{context}; single pass and two-shard merge, q grid {qs:?}"),
     );
 }
+
+// ---------------------------------------------------------------------------
+// The documented input matrix
+// ---------------------------------------------------------------------------
+
+/// `tests/TEST_COVERAGE.md` specifies the ensemble as a Count-Min cell at
+/// `row 3, col 4096` on the fast path beside a `HyperLogLog<ErtlMLE>` cell,
+/// over the twelve numbered inputs, with both cells required to answer as their
+/// standalone instances do.
+///
+/// "As the standalone instance does" means two different things for the two
+/// cells, and the difference is structural rather than a tolerance:
+///
+/// - the matrix cell is handed exactly the hash its own fast path would have
+///   computed, so it must match key for key, as an equality;
+/// - the HLL cell is handed the low 64 bits of that same matrix hash, not the
+///   canonical seed `HyperLogLog::insert` uses. Two different hash functions
+///   put the same stream in different registers, so the cell is as accurate as
+///   the standalone sketch rather than equal to it: it is held to its own
+///   cardinality band, and to agreeing with the standalone reading inside the
+///   two estimators' combined band.
+mod documented_matrix {
+    use super::common::inputs::{KeyInput, key_input};
+    use super::*;
+
+    use std::collections::HashSet;
+
+    /// The document's ensemble geometry.
+    const DOC_ROWS: usize = 3;
+    const DOC_COLS: usize = 4_096;
+    /// `HyperLogLog`'s default precision, which is what the ensemble cell and
+    /// the standalone reference both run at.
+    const DOC_PRECISION: u32 = 14;
+
+    fn ensemble_documented_input(input: &KeyInput) {
+        let mut ens: HashSketchEnsemble = HashSketchEnsemble::new(vec![
+            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+                DOC_ROWS, DOC_COLS,
+            )),
+            EnsembleSketch::from(HyperLogLog::<ErtlMLE>::new()),
+        ])
+        .expect("one matrix member cannot disagree with itself about dimensions");
+
+        let mut reference_cm =
+            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(DOC_ROWS, DOC_COLS);
+        let mut reference_hll = HyperLogLog::<ErtlMLE>::new();
+        let mut truth = FreqTruth::default();
+        for key in &input.keys {
+            let d = input.data(*key);
+            truth.observe(*key);
+            ens.insert(&d);
+            reference_cm.insert(&d);
+            reference_hll.insert(&d);
+        }
+
+        let context = format!(
+            "{} rows={DOC_ROWS} cols={DOC_COLS}, members: CountMinFast, HllErtl",
+            input.context()
+        );
+
+        // The matrix cell against its standalone instance: an equality.
+        let mut cell_tally = Tally::default();
+        for (key, _) in truth.pairs() {
+            let d = input.data(key);
+            let cell = ens.estimate(0, &d).expect("CountMinFast cell");
+            let standalone = reference_cm.estimate(&d) as f64;
+            cell_tally.record(cell == standalone, || {
+                format!("key {key}: ensemble cell {cell} against standalone {standalone}")
+            });
+        }
+        cell_tally.assert_none("ensemble CountMinFast vs standalone", &context);
+
+        // The same cell still satisfies Count-Min's own theorem.
+        CountMinSpec::new(DOC_ROWS, DOC_COLS).assert_contract(
+            "ensemble CountMinFast cell",
+            &truth,
+            |k| ens.estimate(0, &input.data(k)).expect("CountMinFast cell"),
+            &context,
+        );
+
+        // The HLL cell against the truth and against its standalone instance.
+        let distinct = input.keys.iter().copied().collect::<HashSet<i64>>().len();
+        let spec = CardinalityConfidenceSpec::hll(DOC_PRECISION, 4.0);
+        let cell = ens.cardinality(1).expect("HllErtl cell");
+        let standalone = reference_hll.estimate() as f64;
+        if let Err(detail) = spec.check(cell, distinct) {
+            panic!("ensemble HllErtl cell: {detail}. {context}");
+        }
+        if let Err(detail) = spec.check(standalone, distinct) {
+            panic!("standalone HllErtl reference: {detail}. {context}");
+        }
+        let gap = (cell - standalone).abs() / distinct as f64;
+        assert!(
+            gap <= 2.0 * spec.tolerance(),
+            "the ensemble HLL cell reads {cell} while the standalone reads {standalone}; \
+             the gap {gap:.5} exceeds their combined band {:.5}. {context}",
+            2.0 * spec.tolerance()
+        );
+    }
+
+    macro_rules! documented_ensemble_inputs {
+        ($($name:ident => $id:literal;)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    ensemble_documented_input(&key_input($id));
+                }
+            )*
+        };
+    }
+
+    documented_ensemble_inputs! {
+        ensemble_input_1_cells_answer_as_their_standalone_instances => 1;
+        ensemble_input_2_cells_answer_as_their_standalone_instances => 2;
+        ensemble_input_3_cells_answer_as_their_standalone_instances => 3;
+        ensemble_input_4_cells_answer_as_their_standalone_instances => 4;
+        ensemble_input_5_cells_answer_as_their_standalone_instances => 5;
+        ensemble_input_6_cells_answer_as_their_standalone_instances => 6;
+        ensemble_input_7_cells_answer_as_their_standalone_instances => 7;
+        ensemble_input_8_cells_answer_as_their_standalone_instances => 8;
+        ensemble_input_9_cells_answer_as_their_standalone_instances => 9;
+        ensemble_input_10_cells_answer_as_their_standalone_instances => 10;
+        ensemble_input_11_cells_answer_as_their_standalone_instances => 11;
+        ensemble_input_12_cells_answer_as_their_standalone_instances => 12;
+    }
+}

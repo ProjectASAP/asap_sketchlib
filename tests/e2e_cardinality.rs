@@ -20,11 +20,11 @@
 mod common;
 
 use common::specs::CardinalityConfidenceSpec;
-use common::{uniform_u64, zipf_u64};
 use common::{
     HllRegP10, HllRegP11, HllRegP12, HllRegP13, HllRegP14, HllRegP15, HllRegP16, HllRegP17,
     HllRegP18,
 };
+use common::{uniform_u64, zipf_u64};
 
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};
@@ -881,8 +881,15 @@ fn zipf_small() -> &'static ZipfStream {
 /// 5M draws over 1,491,155 distinct identities (3.4x duplication). Above `4m`
 /// at every precision here, so the raw-estimator branch is the one under test.
 fn zipf_large() -> &'static ZipfStream {
-    ZIPF_LARGE
-        .get_or_init(|| build_zipf(1_800_000, 5_000_000, 0.6, 4002, IDENTITY_NAMESPACE_STRIDE * 52))
+    ZIPF_LARGE.get_or_init(|| {
+        build_zipf(
+            1_800_000,
+            5_000_000,
+            0.6,
+            4002,
+            IDENTITY_NAMESPACE_STRIDE * 52,
+        )
+    })
 }
 
 /// Runs one HLL type over both Zipf streams.
@@ -1117,3 +1124,398 @@ hll_zipf_battery!(
     18,
     hll_hip
 );
+
+// ---------------------------------------------------------------------------
+// The documented input matrix
+// ---------------------------------------------------------------------------
+
+/// `tests/TEST_COVERAGE.md` writes this suite against the twelve numbered
+/// inputs. The batteries above run on identity namespaces built for the
+/// checkpoint grid — one fresh sketch per cardinality, over keys nothing else
+/// touches — which is what makes them independent trials, but it is not the
+/// document's table. This module is that table: every estimator, every
+/// precision, over every numbered input.
+///
+/// # Two acceptance rules, for two different statements
+///
+/// The document gives flat bands (5% at P10-12, 2% at P13-14, 1% at P15-18)
+/// and says outright that they are round numbers standing in for a standard
+/// deviation. Read as a per-check tolerance they are between 1.5 and 2.5 sigma
+/// of the estimator's own error, so a correct implementation misses them a few
+/// percent of the time — and does: over the 324 (estimator, precision, input)
+/// cells here, two land outside (P10 HIP on `(1)` at 5.03%, and P15 Classic on
+/// `(1)` at 1.53%). Asserting them with zero tolerance would be asserting that
+/// a correct estimator is broken.
+///
+/// So each cell carries both statements, with the acceptance rule each earns:
+///
+/// 1. the estimator's own `z = 4` confidence band, per check, zero tolerated —
+///    an estimator four standard errors out is broken, not unlucky;
+/// 2. the document's flat band as a binomial over the twelve inputs, at the
+///    probability the normal model gives it. The twelve inputs are twelve
+///    disjoint key populations, so they are twelve draws of the hash
+///    configuration the error model quantifies over. The `p` used is the
+///    largest over the twelve cells, which bounds the Poisson-binomial the
+///    heterogeneous cells actually follow.
+mod documented_matrix {
+    use super::common::inputs::{KEY_INPUT_IDS, KeyInput, key_input};
+    use super::common::specs::{CardinalityConfidenceSpec, Tally, standard_normal_cdf};
+    use super::*;
+
+    use asap_sketchlib::UnivMon;
+    use std::collections::HashSet;
+
+    /// The document's flat relative-error band for a precision.
+    fn documented_band(precision: u32) -> f64 {
+        match precision {
+            10..=12 => 0.05,
+            13..=14 => 0.02,
+            _ => 0.01,
+        }
+    }
+
+    /// Probability that a correct estimator with relative standard error
+    /// `sigma` misses a two-sided band of `band`, under the normal model.
+    fn miss_probability(band: f64, sigma: f64) -> f64 {
+        2.0 * (1.0 - standard_normal_cdf(band / sigma))
+    }
+
+    fn distinct_of(input: &KeyInput) -> usize {
+        input.keys.iter().copied().collect::<HashSet<i64>>().len()
+    }
+
+    macro_rules! documented_hll_matrix {
+        ($name:ident, $reg:ty, $precision:literal) => {
+            #[test]
+            fn $name() {
+                let band = documented_band($precision);
+                let register_spec = CardinalityConfidenceSpec::hll($precision, Z);
+                let hip_spec = CardinalityConfidenceSpec::hll_hip($precision, Z);
+
+                let mut classic_doc = Tally::default();
+                let mut ertl_doc = Tally::default();
+                let mut hip_doc = Tally::default();
+                let mut register_p = 0.0f64;
+                let mut hip_p = 0.0f64;
+
+                for id in KEY_INPUT_IDS {
+                    let input = key_input(id);
+                    let distinct = distinct_of(&input);
+                    let context = input.context();
+
+                    let mut classic = HyperLogLogImpl::<Classic, $reg>::new();
+                    let mut ertl = HyperLogLogImpl::<ErtlMLE, $reg>::new();
+                    let mut hip = HyperLogLogHIPImpl::<$reg>::new();
+                    for key in &input.keys {
+                        let d = input.data(*key);
+                        classic.insert(&d);
+                        ertl.insert(&d);
+                        hip.insert(&d);
+                    }
+
+                    register_p = register_p
+                        .max(miss_probability(band, register_spec.sigma_rel_at(distinct)));
+                    hip_p = hip_p.max(miss_probability(band, hip_spec.sigma_rel_at(distinct)));
+
+                    for (label, spec, estimate, tally) in [
+                        (
+                            "Classic",
+                            register_spec,
+                            classic.estimate() as f64,
+                            &mut classic_doc,
+                        ),
+                        ("ErtlMLE", register_spec, ertl.estimate() as f64, &mut ertl_doc),
+                        ("HIP", hip_spec, hip.estimate() as f64, &mut hip_doc),
+                    ] {
+                        if let Err(detail) = spec.check(estimate, distinct) {
+                            panic!(
+                                "{label} p{}: {detail}. distinct={distinct} {context}",
+                                $precision
+                            );
+                        }
+                        let rel = ((estimate - distinct as f64) / distinct as f64).abs();
+                        tally.record(rel <= band, || {
+                            format!(
+                                "{label} p{} on ({}): estimate {estimate:.0} against \
+                                 {distinct} distinct is {:.3}% off, past the documented \
+                                 {:.0}%",
+                                $precision,
+                                input.id,
+                                rel * 100.0,
+                                band * 100.0
+                            )
+                        });
+                    }
+
+                    // Replaying identities already seen cannot move a register:
+                    // a register only ever takes a maximum. Structural.
+                    let before = classic.estimate();
+                    for key in &input.keys {
+                        classic.insert(&input.data(*key));
+                    }
+                    assert_eq!(
+                        classic.estimate(),
+                        before,
+                        "replaying ({}) moved the p{} Classic estimate",
+                        input.id,
+                        $precision
+                    );
+
+                    // Disjoint shards merge by register-wise maximum, so the
+                    // merged sketch is the single-pass sketch, register for
+                    // register — an equality, not a band.
+                    let mut even = HyperLogLogImpl::<Classic, $reg>::new();
+                    let mut odd = HyperLogLogImpl::<Classic, $reg>::new();
+                    for (i, key) in input.keys.iter().enumerate() {
+                        let d = input.data(*key);
+                        if i % 2 == 0 {
+                            even.insert(&d);
+                        } else {
+                            odd.insert(&d);
+                        }
+                    }
+                    even.merge(&odd);
+                    assert!(
+                        even.registers_as_slice() == classic.registers_as_slice(),
+                        "an even/odd shard merge of ({}) does not reproduce the p{} \
+                         single-pass registers",
+                        input.id,
+                        $precision
+                    );
+                }
+
+                let context = format!(
+                    "p{}, the twelve documented inputs, documented band {:.0}%",
+                    $precision,
+                    band * 100.0
+                );
+                classic_doc.assert_independent_binomial(
+                    &format!("Classic p{} / documented band", $precision),
+                    register_p,
+                    &context,
+                );
+                ertl_doc.assert_independent_binomial(
+                    &format!("ErtlMLE p{} / documented band", $precision),
+                    register_p,
+                    &context,
+                );
+                hip_doc.assert_independent_binomial(
+                    &format!("HIP p{} / documented band", $precision),
+                    hip_p,
+                    &context,
+                );
+            }
+        };
+    }
+
+    documented_hll_matrix!(
+        hll_p10_over_the_documented_inputs_holds_its_error_model,
+        HllRegP10,
+        10
+    );
+    documented_hll_matrix!(
+        hll_p11_over_the_documented_inputs_holds_its_error_model,
+        HllRegP11,
+        11
+    );
+    documented_hll_matrix!(
+        hll_p12_over_the_documented_inputs_holds_its_error_model,
+        HllRegP12,
+        12
+    );
+    documented_hll_matrix!(
+        hll_p13_over_the_documented_inputs_holds_its_error_model,
+        HllRegP13,
+        13
+    );
+    documented_hll_matrix!(
+        hll_p14_over_the_documented_inputs_holds_its_error_model,
+        HllRegP14,
+        14
+    );
+    documented_hll_matrix!(
+        hll_p15_over_the_documented_inputs_holds_its_error_model,
+        HllRegP15,
+        15
+    );
+    documented_hll_matrix!(
+        hll_p16_over_the_documented_inputs_holds_its_error_model,
+        HllRegP16,
+        16
+    );
+    documented_hll_matrix!(
+        hll_p17_over_the_documented_inputs_holds_its_error_model,
+        HllRegP17,
+        17
+    );
+    documented_hll_matrix!(
+        hll_p18_over_the_documented_inputs_holds_its_error_model,
+        HllRegP18,
+        18
+    );
+
+    /// `SetAggregator` is the exact member of this suite: it keeps every
+    /// member, so distinct count and membership are equalities and there is no
+    /// band to check. What is worth checking is that the exactness survives the
+    /// suite's three structural checks over every documented input.
+    fn set_aggregator_documented_input(id: u8) {
+        let input = key_input(id);
+        let expected: HashSet<i64> = input.keys.iter().copied().collect();
+        let member = |key: i64| format!("m{key}");
+
+        let mut agg = SetAggregator::new();
+        for key in &input.keys {
+            agg.update(&member(*key));
+        }
+        let context = input.context();
+
+        assert_eq!(
+            agg.values.len(),
+            expected.len(),
+            "SetAggregator distinct count must be exact. {context}"
+        );
+        for key in &expected {
+            assert!(
+                agg.values.contains(&member(*key)),
+                "member {key} is missing from the aggregator. {context}"
+            );
+        }
+        assert!(
+            !agg.values.contains("m-1"),
+            "a member the stream never carried is reported present. {context}"
+        );
+
+        // Duplicate replay: every identity is already held, so the set cannot
+        // move.
+        for key in &input.keys {
+            agg.update(&member(*key));
+        }
+        assert_eq!(
+            agg.values.len(),
+            expected.len(),
+            "replaying the stream changed the aggregator. {context}"
+        );
+
+        // Shard merge: a set union is exact, so the merged aggregator holds
+        // exactly the single-pass members.
+        let mut even = SetAggregator::new();
+        let mut odd = SetAggregator::new();
+        for (i, key) in input.keys.iter().enumerate() {
+            if i % 2 == 0 {
+                even.update(&member(*key));
+            } else {
+                odd.update(&member(*key));
+            }
+        }
+        even.merge(&odd).expect("merge");
+        assert_eq!(
+            even.values.len(),
+            expected.len(),
+            "an even/odd shard merge lost members. {context}"
+        );
+        assert!(
+            even.values == agg.values,
+            "an even/odd shard merge does not reproduce the single-pass set. {context}"
+        );
+    }
+
+    /// UnivMon answers cardinality from its recursive-sampling pyramid, and the
+    /// pyramid has to be deep enough for the sampled key set to shrink to
+    /// something the top-level heap can enumerate: layer `l` keeps roughly
+    /// `F0 / 2^l` keys, so the deepest layer only carries a recoverable
+    /// heavy-hitter set once `2^layers >= F0 / heap`.
+    ///
+    /// That is a real sizing constraint rather than an accuracy tolerance, and
+    /// it is why the layer count here is computed from the input instead of
+    /// being fixed: at the eight layers the frameworks suite uses, `(1)`'s
+    /// 99515 distinct keys never reach the heap and the estimate collapses to 0
+    /// (measured), which `a_pyramid_too_shallow_for_the_stream_cannot_recover_
+    /// its_cardinality` pins.
+    ///
+    /// With the pyramid sized, the estimate is asserted to within a factor of
+    /// two of the truth. That factor is the estimator's own granularity — the
+    /// g-sum doubles the recovered mass once per layer, so being one layer out
+    /// is a factor of two — and not a percentage read off a run. The measured
+    /// spread over the twelve inputs is -27% to +25%.
+    fn univmon_documented_cardinality(id: u8) {
+        const HEAP: usize = 32;
+        const ROWS: usize = 5;
+        const COLS: usize = 2_048;
+
+        let input = key_input(id);
+        let distinct = distinct_of(&input) as f64;
+        let layers = ((distinct / HEAP as f64).log2().ceil() as usize + 2).max(8);
+
+        let mut um = UnivMon::init_univmon(HEAP, ROWS, COLS, layers);
+        for key in &input.keys {
+            um.insert(&input.data(*key), 1);
+        }
+
+        let context = format!(
+            "{} heap={HEAP} rows={ROWS} cols={COLS} layers={layers} distinct={distinct:.0}",
+            input.context()
+        );
+        assert_eq!(
+            um.calc_l1(),
+            input.keys.len() as f64,
+            "UnivMon L1 must be exact. {context}"
+        );
+        let card = um.calc_card();
+        assert!(
+            card >= distinct * 0.5 && card <= distinct * 2.0,
+            "UnivMon cardinality {card:.0} is more than one sampling layer away from the \
+             {distinct:.0} distinct keys. {context}"
+        );
+    }
+
+    #[test]
+    fn a_pyramid_too_shallow_for_the_stream_cannot_recover_its_cardinality() {
+        // Eight layers sample (1) down to 99515 / 256 = 389 keys, still an
+        // order of magnitude past what a 32-entry heap can enumerate, so the
+        // g-sum has no recoverable heavy hitters to work from at any layer.
+        let input = key_input(1);
+        let distinct = distinct_of(&input) as f64;
+        let mut um = UnivMon::init_univmon(32, 5, 2_048, 8);
+        for key in &input.keys {
+            um.insert(&input.data(*key), 1);
+        }
+        assert!(
+            um.calc_card() < distinct * 0.5,
+            "an eight-layer pyramid reported {} against {distinct:.0} distinct keys; if this \
+             now succeeds, the sizing rule in univmon_documented_cardinality is too \
+             conservative and should be revisited",
+            um.calc_card()
+        );
+    }
+
+    macro_rules! documented_cardinality_inputs {
+        ($($set:ident, $univ:ident => $id:literal;)*) => {
+            $(
+                #[test]
+                fn $set() {
+                    set_aggregator_documented_input($id);
+                }
+
+                #[test]
+                fn $univ() {
+                    univmon_documented_cardinality($id);
+                }
+            )*
+        };
+    }
+
+    documented_cardinality_inputs! {
+        set_aggregator_input_1_is_exact, univmon_input_1_recovers_its_cardinality => 1;
+        set_aggregator_input_2_is_exact, univmon_input_2_recovers_its_cardinality => 2;
+        set_aggregator_input_3_is_exact, univmon_input_3_recovers_its_cardinality => 3;
+        set_aggregator_input_4_is_exact, univmon_input_4_recovers_its_cardinality => 4;
+        set_aggregator_input_5_is_exact, univmon_input_5_recovers_its_cardinality => 5;
+        set_aggregator_input_6_is_exact, univmon_input_6_recovers_its_cardinality => 6;
+        set_aggregator_input_7_is_exact, univmon_input_7_recovers_its_cardinality => 7;
+        set_aggregator_input_8_is_exact, univmon_input_8_recovers_its_cardinality => 8;
+        set_aggregator_input_9_is_exact, univmon_input_9_recovers_its_cardinality => 9;
+        set_aggregator_input_10_is_exact, univmon_input_10_recovers_its_cardinality => 10;
+        set_aggregator_input_11_is_exact, univmon_input_11_recovers_its_cardinality => 11;
+        set_aggregator_input_12_is_exact, univmon_input_12_recovers_its_cardinality => 12;
+    }
+}

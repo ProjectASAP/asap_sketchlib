@@ -27,7 +27,8 @@ use std::collections::HashMap;
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
 use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
 use asap_sketchlib::{
-    Count, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS, FoldCS, RegularPath, Vector2D,
+    Count, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS, FoldCS, RegularPath,
+    Vector2D,
 };
 
 // ----------------------------------------------------------------- CountMin
@@ -125,7 +126,6 @@ fn countmin_vecbased_error_bound() {
     }
 }
 
-
 #[test]
 fn count_vecbased_error_bound() {
     const ROWS: [usize; 3] = [3, 5, 7];
@@ -220,7 +220,6 @@ fn countmin_matbased_error_bound() {
         FixMat15 => (7, 32768),
     }
 }
-
 
 #[test]
 fn count_matbased_error_bound() {
@@ -733,4 +732,340 @@ fn portable_cms_and_cs_string_keys_satisfy_their_own_bounds() {
         |k| pcss.estimate(&format!("k{k}")),
         &context,
     );
+}
+
+// ---------------------------------------------------------------------------
+// The documented input matrix
+// ---------------------------------------------------------------------------
+//
+// `tests/TEST_COVERAGE.md` writes this suite's Count-Min and Count Sketch
+// tables as twelve numbered inputs crossed with a `(row, column)` grid, on both
+// storage backends and both hash paths. The tests above sweep the grid on one
+// hand-rolled stream; these sweep the grid on the streams the table is actually
+// written against, one test per input so a failure names the row it came from.
+//
+// The tolerance is never the table's percentage column read back as a literal:
+// that column *is* `e*(N-f)/w` (Count-Min) and `sqrt(e/w)*||f||_2` (Count
+// Sketch) evaluated at `f(k) = 1`, and `CountMinSpec` / `CountSketchSpec`
+// evaluate the same expressions at every key's own mass. Asserting the derived
+// percentage instead would hand every key above the first the wrong budget.
+
+/// The `(row, column)` grid both tables sweep.
+const DOC_ROWS: [usize; 3] = [3, 5, 7];
+const DOC_COLS: [usize; 5] = [2_048, 4_096, 8_192, 16_384, 32_768];
+
+/// Every documented `(row, column)` cell on the growable backend, both paths.
+fn countmin_documented_vector_grid(
+    input: &common::inputs::KeyInput,
+    truth: &FreqTruth,
+    context: &str,
+) {
+    for rows in DOC_ROWS {
+        for cols in DOC_COLS {
+            let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            for key in &input.keys {
+                let d = input.data(*key);
+                regular.insert(&d);
+                fast.insert(&d);
+            }
+            let spec = CountMinSpec::new(rows, cols);
+            spec.assert_contract(
+                &format!("CountMin<Vector2D<i64>, RegularPath> {rows}x{cols}"),
+                truth,
+                |k| regular.estimate(&input.data(k)) as f64,
+                context,
+            );
+            spec.assert_contract(
+                &format!("CountMin<Vector2D<i64>, FastPath> {rows}x{cols}"),
+                truth,
+                |k| fast.estimate(&input.data(k)) as f64,
+                context,
+            );
+        }
+    }
+}
+
+/// The same grid on the compile-time matrices. Each `FixMatN` is its own type,
+/// so the sweep is unrolled and the spec's dimensions must match the matrix's.
+fn countmin_documented_fixed_grid(
+    input: &common::inputs::KeyInput,
+    truth: &FreqTruth,
+    context: &str,
+) {
+    macro_rules! assert_fixed_matrix {
+        ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
+            $({
+                let mut regular = CountMin::<$mat, RegularPath>::from_storage($mat::default());
+                let mut fast = CountMin::<$mat, FastPath>::from_storage($mat::default());
+                for key in &input.keys {
+                    let d = input.data(*key);
+                    regular.insert(&d);
+                    fast.insert(&d);
+                }
+                let spec = CountMinSpec::new($rows, $cols);
+                spec.assert_contract(
+                    concat!("CountMin<", stringify!($mat), ", RegularPath>"),
+                    truth,
+                    |k| regular.estimate(&input.data(k)) as f64,
+                    context,
+                );
+                spec.assert_contract(
+                    concat!("CountMin<", stringify!($mat), ", FastPath>"),
+                    truth,
+                    |k| fast.estimate(&input.data(k)) as f64,
+                    context,
+                );
+            })*
+        };
+    }
+
+    assert_fixed_matrix! {
+        FixMat1 => (3, 2048),
+        FixMat2 => (5, 2048),
+        FixMat3 => (7, 2048),
+        FixMat4 => (3, 4096),
+        FixMat5 => (5, 4096),
+        FixMat6 => (7, 4096),
+        FixMat7 => (3, 8192),
+        FixMat8 => (5, 8192),
+        FixMat9 => (7, 8192),
+        FixMat10 => (3, 16384),
+        FixMat11 => (5, 16384),
+        FixMat12 => (7, 16384),
+        FixMat13 => (3, 32768),
+        FixMat14 => (5, 32768),
+        FixMat15 => (7, 32768),
+    }
+}
+
+fn countmin_documented_matrix(id: u8) {
+    let input = common::inputs::key_input(id);
+    let truth = input.truth();
+    let context = input.context();
+    countmin_documented_vector_grid(&input, &truth, &context);
+    countmin_documented_fixed_grid(&input, &truth, &context);
+}
+
+fn countsketch_documented_vector_grid(
+    input: &common::inputs::KeyInput,
+    truth: &FreqTruth,
+    context: &str,
+) {
+    for rows in DOC_ROWS {
+        for cols in DOC_COLS {
+            let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            for key in &input.keys {
+                let d = input.data(*key);
+                regular.insert(&d);
+                fast.insert(&d);
+            }
+            let spec = CountSketchSpec::new(rows, cols);
+            spec.assert_contract(
+                &format!("Count<Vector2D<i64>, RegularPath> {rows}x{cols}"),
+                truth,
+                |k| regular.estimate(&input.data(k)),
+                context,
+            );
+            spec.assert_contract(
+                &format!("Count<Vector2D<i64>, FastPath> {rows}x{cols}"),
+                truth,
+                |k| fast.estimate(&input.data(k)),
+                context,
+            );
+        }
+    }
+}
+
+fn countsketch_documented_fixed_grid(
+    input: &common::inputs::KeyInput,
+    truth: &FreqTruth,
+    context: &str,
+) {
+    macro_rules! assert_fixed_matrix {
+        ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
+            $({
+                let mut regular = Count::<$mat, RegularPath>::from_storage($mat::default());
+                let mut fast = Count::<$mat, FastPath>::from_storage($mat::default());
+                for key in &input.keys {
+                    let d = input.data(*key);
+                    regular.insert(&d);
+                    fast.insert(&d);
+                }
+                let spec = CountSketchSpec::new($rows, $cols);
+                spec.assert_contract(
+                    concat!("Count<", stringify!($mat), ", RegularPath>"),
+                    truth,
+                    |k| regular.estimate(&input.data(k)),
+                    context,
+                );
+                spec.assert_contract(
+                    concat!("Count<", stringify!($mat), ", FastPath>"),
+                    truth,
+                    |k| fast.estimate(&input.data(k)),
+                    context,
+                );
+            })*
+        };
+    }
+
+    assert_fixed_matrix! {
+        FixMat1 => (3, 2048),
+        FixMat2 => (5, 2048),
+        FixMat3 => (7, 2048),
+        FixMat4 => (3, 4096),
+        FixMat5 => (5, 4096),
+        FixMat6 => (7, 4096),
+        FixMat7 => (3, 8192),
+        FixMat8 => (5, 8192),
+        FixMat9 => (7, 8192),
+        FixMat10 => (3, 16384),
+        FixMat11 => (5, 16384),
+        FixMat12 => (7, 16384),
+        FixMat13 => (3, 32768),
+        FixMat14 => (5, 32768),
+        FixMat15 => (7, 32768),
+    }
+}
+
+fn countsketch_documented_matrix(id: u8) {
+    let input = common::inputs::key_input(id);
+    let truth = input.truth();
+    let context = input.context();
+    countsketch_documented_vector_grid(&input, &truth, &context);
+    countsketch_documented_fixed_grid(&input, &truth, &context);
+}
+
+macro_rules! documented_frequency_matrix {
+    ($($cm:ident, $cs:ident => $id:literal;)*) => {
+        $(
+            #[test]
+            fn $cm() {
+                countmin_documented_matrix($id);
+            }
+
+            #[test]
+            fn $cs() {
+                countsketch_documented_matrix($id);
+            }
+        )*
+    };
+}
+
+documented_frequency_matrix! {
+    countmin_input_1_grid_satisfies_the_count_min_model,
+    countsketch_input_1_grid_satisfies_the_l2_bound => 1;
+    countmin_input_2_grid_satisfies_the_count_min_model,
+    countsketch_input_2_grid_satisfies_the_l2_bound => 2;
+    countmin_input_3_grid_satisfies_the_count_min_model,
+    countsketch_input_3_grid_satisfies_the_l2_bound => 3;
+    countmin_input_4_grid_satisfies_the_count_min_model,
+    countsketch_input_4_grid_satisfies_the_l2_bound => 4;
+    countmin_input_5_grid_satisfies_the_count_min_model,
+    countsketch_input_5_grid_satisfies_the_l2_bound => 5;
+    countmin_input_6_grid_satisfies_the_count_min_model,
+    countsketch_input_6_grid_satisfies_the_l2_bound => 6;
+    countmin_input_7_grid_satisfies_the_count_min_model,
+    countsketch_input_7_grid_satisfies_the_l2_bound => 7;
+    countmin_input_8_grid_satisfies_the_count_min_model,
+    countsketch_input_8_grid_satisfies_the_l2_bound => 8;
+    countmin_input_9_grid_satisfies_the_count_min_model,
+    countsketch_input_9_grid_satisfies_the_l2_bound => 9;
+    countmin_input_10_grid_satisfies_the_count_min_model,
+    countsketch_input_10_grid_satisfies_the_l2_bound => 10;
+    countmin_input_11_grid_satisfies_the_count_min_model,
+    countsketch_input_11_grid_satisfies_the_l2_bound => 11;
+    countmin_input_12_grid_satisfies_the_count_min_model,
+    countsketch_input_12_grid_satisfies_the_l2_bound => 12;
+}
+
+/// CountL2HH over the eight skewed documented inputs, at the documented
+/// `row 4, col 2048`, with weighted arrivals and one negative update.
+///
+/// Two assertions come straight from the coverage document — the hottest key
+/// within 2% after its decrement, and `F2` within 10% — and both are checked
+/// alongside the sketch's own theorems (`CountSketchSpec` per key,
+/// `SecondMomentSpec` for `F2`), so a regression that stays inside the
+/// document's round numbers but leaves the estimator's model still fails.
+fn countl2hh_documented_input(id: u8) {
+    const ROWS: usize = 4;
+    const COLS: usize = 2_048;
+    const HASH_SEED_IDX: usize = 11;
+
+    let input = common::inputs::key_input(id);
+    let mut sk = CountL2HH::<DefaultXxHasher>::with_dimensions_and_seed(ROWS, COLS, HASH_SEED_IDX);
+    let mut truth = FreqTruth::default();
+    for (i, key) in input.keys.iter().enumerate() {
+        let w = 1 + (i % 5) as i64;
+        sk.fast_insert_with_count(&input.data(*key), w);
+        truth.observe_weighted(*key, w);
+    }
+
+    // The decrement lands on the hottest key, so it has to survive the median
+    // path rather than being absorbed by a counter nobody reads.
+    let hot = truth.top_k(1)[0].0;
+    let decrement = -(truth.get(hot) / 10);
+    sk.fast_insert_with_count(&input.data(hot), decrement);
+    truth.observe_weighted(hot, decrement);
+
+    let context = format!(
+        "{} weighted 1..5 with a {decrement} decrement on the hottest key, \
+         rows={ROWS} cols={COLS} hash_seed_idx={HASH_SEED_IDX}",
+        input.context()
+    );
+
+    CountSketchSpec::new(ROWS, COLS).assert_contract(
+        "CountL2HH point estimate",
+        &truth,
+        |k| sk.fast_get_est(&input.data(k)),
+        &context,
+    );
+
+    let hot_truth = truth.get(hot) as f64;
+    let hot_est = sk.fast_get_est(&input.data(hot));
+    let hot_rel = ((hot_est - hot_truth) / hot_truth).abs();
+    assert!(
+        hot_rel <= 0.02,
+        "CountL2HH hottest key after the decrement: est {hot_est:.1} vs true {hot_truth} \
+         is {:.3}% off, past the documented 2%. {context}",
+        hot_rel * 100.0
+    );
+
+    let f2_truth = truth.f2();
+    let f2_est = sk.get_l2_sqr();
+    let f2_rel = ((f2_est - f2_truth) / f2_truth).abs();
+    assert!(
+        f2_rel <= 0.10,
+        "CountL2HH F2: est {f2_est:.3e} vs true {f2_truth:.3e} is {:.2}% off, past the \
+         documented 10%. {context}",
+        f2_rel * 100.0
+    );
+
+    let f2_spec = SecondMomentSpec::new(ROWS, COLS);
+    if let Err(detail) = f2_spec.check(f2_est, f2_truth) {
+        panic!("CountL2HH F2 model: {detail}\n  context: {context}");
+    }
+}
+
+macro_rules! documented_countl2hh_inputs {
+    ($($name:ident => $id:literal;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                countl2hh_documented_input($id);
+            }
+        )*
+    };
+}
+
+documented_countl2hh_inputs! {
+    countl2hh_input_3_weighted_turnstile_holds_its_bounds => 3;
+    countl2hh_input_4_weighted_turnstile_holds_its_bounds => 4;
+    countl2hh_input_5_weighted_turnstile_holds_its_bounds => 5;
+    countl2hh_input_6_weighted_turnstile_holds_its_bounds => 6;
+    countl2hh_input_9_weighted_turnstile_holds_its_bounds => 9;
+    countl2hh_input_10_weighted_turnstile_holds_its_bounds => 10;
+    countl2hh_input_11_weighted_turnstile_holds_its_bounds => 11;
+    countl2hh_input_12_weighted_turnstile_holds_its_bounds => 12;
 }
