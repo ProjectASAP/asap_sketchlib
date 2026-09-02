@@ -29,7 +29,16 @@
   - all classic, ErtlMLE, HIP
   - Precision: P=10-18
   - Input: (1) ~ (12)
+  - error bound:
+    - Precision 10-14: relative error 2%
+    - Precisioin 15-18: relative error 1%
+    - reasoning: theoretical error bound is a standard deviation, to simplify the result, use this arbitrary number
 - KMV
+  - Input: (1) ~ (12)
+  - configuration (k value): 32, 128
+  - error bound:
+    - relative error 5%
+    - reasoning: theoretical error bound is a probability, to simplify the result, use this arbitrary number
 - UnivMon
   - cardinality only
 
@@ -821,6 +830,8 @@
 |(12)|7|16384|528.4%|76.97%|
 |(12)|7|32768|373.6%|76.97%|
 
+- elastic sketch
+
 ## e2e_membership
 
 ## e2e_nitro
@@ -830,46 +841,34 @@
 ## e2e_quantiles
 
 - KLL
-  - Input
-    - 100K uniform distribution i64 range from 0-10M
-    - 1M uniform distribution i64 range from 0-10M
-    - 100K zipf distribution i64, s=1.1, key-size=4096
-    - 1M zipf distribution i64, s=1.1, key-size=4096
-    - 100K zipf distribution i64, s=1.1, key-size=20k
-    - 1M zipf distribution i64, s=1.1, key-size=20k
-    - 100K uniform distribution f64 range from 0-10M
-    - 1M uniform distribution f64 range from 0-10M
-    - 100K zipf distribution f64, s=1.1, key-size=4096
-    - 1M zipf distribution f64, s=1.1, key-size=4096
-    - 100K zipf distribution f64, s=1.1, key-size=20k
-    - 1M zipf distribution f64, s=1.1, key-size=20k
+  - Input: (1) ~ (12)
+  - Configuration: k = 50, 200, 800
+  - Query: P0, P10, P20, P30, P40, P50, P60, P70, P80, P90, P100
+  - Error bound: rank error
+    - k = 50: 6.11%
+    - k = 200: 1.65%
+    - k = 800: 0.447%
+- KLL_Dynamic
+  - Input: (1) ~ (12)
+  - Configuration: k = 50, 200, 800
+  - Query: P0, P10, P20, P30, P40, P50, P60, P70, P80, P90, P100
+  - Error bound: rank error
+    - k = 50: 6.11%
+    - k = 200: 1.65%
+    - k = 800: 0.447%
 - DD
-  - Input
-    - 100K uniform distribution i64 range from 0-10M
-    - 1M uniform distribution i64 range from 0-10M
-    - 100K zipf distribution i64, s=1.1, key-size=4096
-    - 1M zipf distribution i64, s=1.1, key-size=4096
-    - 100K zipf distribution i64, s=1.1, key-size=20k
-    - 1M zipf distribution i64, s=1.1, key-size=20k
-    - 100K uniform distribution f64 range from 0-10M
-    - 1M uniform distribution f64 range from 0-10M
-    - 100K zipf distribution f64, s=1.1, key-size=4096
-    - 1M zipf distribution f64, s=1.1, key-size=4096
-    - 100K zipf distribution f64, s=1.1, key-size=20k
-    - 1M zipf distribution f64, s=1.1, key-size=20k
+  - Input: (1) ~ (12)
+  - Configuration: alpha = 0.1, 0.01, 0.001
+  - Query: P0, P10, P20, P30, P40, P50, P60, P70, P80, P90, P100
+  - Error bound: relative error
+    - alpha = 0.1: 10%
+    - alpha = 0.01: 1%
+    - alpha = 0.001: 0.1%
 - UnivMonQ
-  - Input
-    - 100K uniform distribution i64 range from 0-10M
-    - 1M uniform distribution i64 range from 0-10M
-    - 100K zipf distribution i64, s=1.1, key-size=4096
-    - 1M zipf distribution i64, s=1.1, key-size=4096
-    - 100K zipf distribution i64, s=1.1, key-size=20k
-    - 1M zipf distribution i64, s=1.1, key-size=20k
-    - 100K uniform distribution f64 range from 0-10M
-    - 1M uniform distribution f64 range from 0-10M
-    - 100K zipf distribution f64, s=1.1, key-size=4096
-    - 1M zipf distribution f64, s=1.1, key-size=4096
-    - 100K zipf distribution f64, s=1.1, key-size=20k
-    - 1M zipf distribution f64, s=1.1, key-size=20k
+  - Input: (1) ~ (12)
 
 ## e2e_topk
+
+- CMS_heap
+
+- CS_heap
