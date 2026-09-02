@@ -27,8 +27,6 @@
 
 ## e2e_cardinality
 
-### Sketches included
-
 - HyperLogLog
   - all classic, ErtlMLE, HIP
   - Precision: P=10-18
@@ -61,7 +59,7 @@
   - cells: CountMin (row 3, col 4096, FastPath) + HyperLogLog (ErtlMLE), one hash layer shared by every cell
   - Input: (1) ~ (12)
   - error bound:
-    - CountMin cell: one-sided only, `est >= f(k)`, upper slack 3x
+    - CountMin cell: one-sided only, upper slack 3x
       - reasoning: the shared hash layer drives the whole stream through every cell, so the tail collides into the queried counter far more than it would in a standalone CountMin; only the lower bound stays a guarantee
     - HyperLogLog cell: relative error 3%
 
@@ -924,8 +922,33 @@ Feature-gated behind `--features experimental`.
   - Input: disjoint key prefixes (`aaa*` over 50 keys at weight 7, `zzz*` over 30 keys at weight 3)
   - error bound: per prefix family, `est` in `[0.75 * truth, N]`, and a prefix must never pick up a bucket from another prefix
     - reasoning: eviction loses counts one-sidedly downwards while over-attribution is capped by the stream total, so only that band is guaranteed
+- SpaceSaving
+  - Configuration (capacity): 2, 8, 64, 2048, and the default 1024
+  - Input: (1) ~ (12)
+  - heavy hitter definition:
+    - the monitored keys the Stream-Summary still holds
+  - per key error bound (theoretical, worst case):
+    - `f(k) <= est <= f(k) + min_count`, and `min_count <= N / m` with `m` the capacity
+    - the table is the absolute over-estimate `N / m`, not a relative error
+
+|capacity|N=100K -- (1)(3)(5)(7)(9)(11)|N=1M -- (2)(4)(6)(8)(10)(12)|
+|---|---|---|
+|2|50,000|500,000|
+|8|12,500|125,000|
+|64|1,563|15,625|
+|1024 (default)|97.7|977|
+|2048|48.8|488|
 
 ## e2e_membership
+
+- Bloom filter
+  - input: 20K distinct members inserted
+  - configuration
+    - both FastPath and RegularPath
+    - 7 rows, each row 65536 bits
+  - error bound:
+    - false positive rate: 0.0087% at 20K members with cols=65536, rows=7
+
 
 ## e2e_nitro
 
@@ -936,10 +959,27 @@ Feature-gated behind `--features experimental`.
   - error bound:
     - CountMin target: relative error 5%
     - Count sketch target: relative error 10%
-    - reasoning: the estimate is rescaled by the sampling rate, so the dominant term is sampling variance rather than the target sketch's collision term
-  - every sampled record must update every row, and `total_seen` must count every input, not only the sampled ones
 
 ## e2e_octo
+
+- Octo
+  - input: zipf(1.1) streams of 40K to 400K keys over a 2048 to 8192 key domain, dispatched to 2, 3 or 4 workers under both the `HashByKey` and `RoundRobin` partitions
+  - configuration:
+    - CMS: row 5, col 2048 or row 5, col 4096,  with the worker promotion threshold tau = 31
+    - CS: row 5, col 4096, with the worker promotion threshold tau = 31
+    - DD: alpha = 0.01, with the worker promotion threshold tau = 4
+    - HLL: Classic at P14 for the protocol runs, and P12/P14/P16 across Classic and ErtlMLE for the exactness sweep, with the worker promotion threshold tau = 0 so every register improvement promotes at once
+    - UnivMon: heap 64, row 5, col 1024, 12 layers, with the worker promotion threshold tau = 31, applied both flat across the pyramid and scaled per layer
+    - Coco: 512 buckets, 2 ways, with the worker promotion threshold tau = 31
+    - Elastic: 256 heavy buckets over a light part of row 3, col 2048, with the worker promotion threshold tau = 31
+  - error bound: counts a promotion can hold back per counter on top of the standalone sketch's own bound, `workers * tau` at 4 workers
+    - CMS: 124
+    - CS: 124
+    - DD: 16
+    - HLL: 0
+    - UnivMon: 124
+    - Coco: 124
+    - Elastic: 124
 
 ## e2e_quantiles
 
@@ -981,11 +1021,6 @@ Feature-gated behind `--features experimental`.
     - `F2`: relative error 15%
     - entropy: -10% / +15%
     - reasoning: ordered queries ride on the top-level CountSketch (depth 5, width 4096) plus a bounded ordered sample, so the bound is empirical rather than the CountSketch bound alone
-- portable DDSketch
-  - Input: (1) ~ (12), (18)
-  - Configuration: alpha = 0.1, 0.01, 0.001
-  - Query: P0, P10, P20, P30, P40, P50, P60, P70, P80, P90, P100
-  - Error bound: relative error alpha, the same as the core type, asserted against the true order statistic
 - checks applied to every sketch in this section
   - shard merge: the merged sketch keeps the same bound, and its count drifts by at most 0.5%
   - DDSketch drops non-finite, non-positive and non-indexable values without corrupting bucket 0 and without letting one sample force a distant-bucket allocation
@@ -1031,3 +1066,28 @@ Feature-gated behind `--features experimental`.
   - Error bound: rank error
     - `query_all` and `query_recent(1)`: 5%
     - active window alone: 6%
+- ExponentialHistogram, variant matrix
+  - Configuration: k=8, window 1,000,000 for the accuracy runs so nothing expires inside them; payload row 3, col 512; UnivMon payload row 5, col 2048
+  - Input: 10K keys over a 2048 key domain
+  - each variant keeps its own bound over the retained window:
+    - CountMin: the CountMin model -- the merged window estimate is one-sided and its excess is held to `eps * N` over the events still retained, exactly as for a standalone CountMin at row 3, col 512
+    - Count sketch: the L2 model
+    - CountL2HH: the L2 bound
+    - Coco and Elastic: one-sided -- on the 32 heaviest keys of the retained window a query must never read low, which is the only direction a structure that evicts flow keys can guarantee
+    - HyperLogLog: the register error model
+    - KLL: the rank error characterization
+    - DDSketch: the relative value error contract
+    - UnivMon: exact L1
+    - UniformSampling: exact retention bookkeeping
+  - other properties:
+    - every variant selects the documented merge norm, and can merge into its own kind
+    - buckets past the window expire, the retained span is reported, and expiry follows the window length the histogram was last given
+    - a custom bucket update matches repeated inserts
+
+## e2e_wire
+
+- ASAPv1 envelope round trip, one kind at a time
+  - kinds covered: DDSketch, Bloom (both hash paths), Coco, Elastic, SpaceSaving, KLLDynamic, the heap-backed matrix types, ExponentialHistogram, EHSketchList, Hydra (naming the counter it carries), the UnivMon family, and the experimental kinds
+  - every envelope must round trip and name its own kind
+  - an envelope is refused by every decoder but its own
+  - the matrix and quantile envelopes carry their answers unchanged across the wire
