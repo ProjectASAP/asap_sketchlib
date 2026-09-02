@@ -16,6 +16,10 @@
 - 1M zipf distribution f64, s=1.1, key-size=20k -- (12)
 - 100K uniform distribution string, 3 char long, within `alphabet` -- (13)
 - 100K zipf distribution string, s=1.1, key-size=4096, 3 char long, within `alphabet` -- (14)
+- 100K normal distribution f64, mean=1000, sd=250 -- (15)
+- 1M normal distribution f64, mean=1000, sd=250 -- (16)
+- 100K exponential distribution f64, lambda=1e-3 -- (17)
+- 100K log-uniform f64 landing on DDSketch bucket edges, `gamma^k * (1 + frac*(gamma-1))`, k in [5, 40), gamma from the sketch's alpha -- (18)
 
 ### alphabet
 
@@ -42,10 +46,71 @@
     - reasoning: theoretical error bound is a probability, to simplify the result, use this arbitrary number
 - UnivMon
   - cardinality only
+- SetAggregator
+  - Input: (1) ~ (12)
+  - exact structure: distinct count and membership are both exact, no error bound
+- checks applied to every sketch in this section
+  - checkpoint accuracy: the same band must hold at 10K, 100K and 1M distinct keys, not only at the end of the stream
+  - duplicate-replay invariance: re-inserting keys already seen must not move the estimate
+  - shard merge: an even/odd split merged back must stay inside the same band as the single-pass sketch
+  - configuration
 
 ## e2e_composition
 
+- HashSketchEnsemble
+  - cells: CountMin (row 3, col 4096, FastPath) + HyperLogLog (ErtlMLE), one hash layer shared by every cell
+  - Input: (1) ~ (12)
+  - error bound:
+    - CountMin cell: one-sided only, `est >= f(k)`, upper slack 3x
+      - reasoning: the shared hash layer drives the whole stream through every cell, so the tail collides into the queried counter far more than it would in a standalone CountMin; only the lower bound stays a guarantee
+    - HyperLogLog cell: relative error 3%
+
+## e2e_experimental
+
+Feature-gated behind `--features experimental`.
+
+- UniformSampling
+  - Configuration: rate 0.1
+  - Input: (1) ~ (2), (7) ~ (8)
+  - error bound:
+    - retained sample count within 15% of `n * rate`
+    - `total_seen` is exact, and every retained sample must be a value that appeared in the stream
+    - merge of two same-rate sketches unions the samples and sums `total_seen`
+- EHUnivOptimized
+  - Configuration: k=2, window 100, UnivMon defaults (heap 32, row 5, col 2048, layers 8)
+  - map tier: interval queries fully inside the retained range are exact, both for the totals and for the per-key counts
+
 ## e2e_frameworks
+
+- Hydra
+  - Configuration: schema 2 dims (`region`, `user`), row 4, col 4096
+  - counter heads: CountMin (row 4, col 4096, FastPath), KLL (k=200, row 4, col 512), HyperLogLog (row 4, col 512)
+  - Input: (13) ~ (14) for the CountMin head, (7) ~ (8) for the KLL head, distinct keys for the HLL head
+  - Query: full key, wildcard key (trailing `None`), unseen key
+  - error bound:
+    - full key on sparse dims: absolute error 2
+    - wildcard key: one-sided, `est >= truth`, upper slack 20% + 1
+      - reasoning: a generalized key accumulates sibling traffic through the fan-out, so it can only over-count
+    - unseen key: exactly 0, not an error
+    - KLL head: median inside rank error 3%, CDF absolute error 0.03
+    - HLL head: relative error 10%
+- UnivMon
+  - Configuration: heap 32, row 5, col 2048, layers 8
+  - Input: (1) ~ (12), with weighted updates
+  - both the standard insert path and the fast-insert path
+  - error bound:
+    - L1: exact
+    - L2: relative error 5%; fast-insert path 15%
+    - entropy: -12% / +15%
+    - cardinality: -6% / +10%
+    - reasoning: every metric above L1 comes out of the recursive g-sum over sampled layers, so the bound is empirical rather than a single-layer bound
+- UnivMonPyramid
+  - Configuration: defaults
+  - Input: (1) ~ (12), with weighted updates
+  - error bound:
+    - L1: exact
+    - L2: relative error 15%
+    - cardinality: -20% / +15%
 
 ## e2e_frequency
 
@@ -435,6 +500,22 @@
 |(12)|7|8192|323,719%|76.97%|
 |(12)|7|16384|228,904%|76.97%|
 |(12)|7|32768|161,859%|76.97%|
+
+- CountL2HH
+  - Configuration: row 4, col 2048
+  - Input: (3) ~ (6), (9) ~ (12), with weighted and negative updates
+  - error bound:
+    - hottest key after a decrement: relative error 2%
+    - `F2`: relative error 10%
+- FoldCMS / FoldCS
+  - Configuration: row 3, col 2048, fold level 0, top_k 32
+  - counts are exact on sparse dims, including signed weighted updates through FoldCS
+  - same-level merge sums disjoint contributions; hierarchical merge of level-matched sketches preserves totals
+- checks applied to every sketch in this section
+  - turnstile: `+500` then `-500` on one key nets to exactly 0, and `+500 / -200` estimates ~300
+  - path parity: RegularPath and FastPath must return identical estimates on the same stream
+  - shard merge: 3 shards merged pairwise must equal the single-pass estimate on the top-50 keys
+  - only keys dense enough to carry statistical meaning (count >= 50) are held to the per-key bound
 
 ## e2e_heavy_hitters
 
@@ -832,10 +913,31 @@
 |(12)|7|32768|373.6%|76.97%|
 
 - elastic sketch
+  - Configuration: length 64
+  - Input: (3) ~ (6), (9) ~ (12)
+  - heavy hitter definition:
+    - 3 hot flows at ~10% of the stream each, against ~977 background flows
+  - error bound: per hot flow, relative error 20%
+    - reasoning: the split between the light and heavy parts is data dependent, so the bound is empirical rather than derived
+- Coco
+  - Configuration: table size 256, 2 ways
+  - Input: disjoint key prefixes (`aaa*` over 50 keys at weight 7, `zzz*` over 30 keys at weight 3)
+  - error bound: per prefix family, `est` in `[0.75 * truth, N]`, and a prefix must never pick up a bucket from another prefix
+    - reasoning: eviction loses counts one-sidedly downwards while over-attribution is capped by the stream total, so only that band is guaranteed
 
 ## e2e_membership
 
 ## e2e_nitro
+
+- NitroBatch
+  - target sketches: CountMin (row 5, col 2048, FastPath) and Count sketch (row 5, col 2048, FastPath)
+  - Configuration (sampling rate): 1.0, 0.5
+  - Input: one key repeated 100K times, so the rescaling of the estimator is what the bound measures
+  - error bound:
+    - CountMin target: relative error 5%
+    - Count sketch target: relative error 10%
+    - reasoning: the estimate is rescaled by the sampling rate, so the dominant term is sampling variance rather than the target sketch's collision term
+  - every sampled record must update every row, and `total_seen` must count every input, not only the sampled ones
 
 ## e2e_octo
 
@@ -867,6 +969,26 @@
     - alpha = 0.001: 0.1%
 - UnivMonQ
   - Input: (1) ~ (12)
+  - Configuration: levels 10, width 4096, depth 5, candidates 1024, ordered_samples 1024
+    - `ordered_samples = 0` disables rank/CDF/quantile entirely, covered as a negative case
+  - Query: P0, P10, P20, P30, P40, P50, P60, P70, P80, P90, P100, plus rank(), cdf() and heavy hitters
+  - Error bound:
+    - quantile: rank error 4%
+    - rank(): relative error 6%
+    - count, min, max: exact
+    - heaviest key frequency: -5% / +10%
+    - distinct: -10% / +15%
+    - `F2`: relative error 15%
+    - entropy: -10% / +15%
+    - reasoning: ordered queries ride on the top-level CountSketch (depth 5, width 4096) plus a bounded ordered sample, so the bound is empirical rather than the CountSketch bound alone
+- portable DDSketch
+  - Input: (1) ~ (12), (18)
+  - Configuration: alpha = 0.1, 0.01, 0.001
+  - Query: P0, P10, P20, P30, P40, P50, P60, P70, P80, P90, P100
+  - Error bound: relative error alpha, the same as the core type, asserted against the true order statistic
+- checks applied to every sketch in this section
+  - shard merge: the merged sketch keeps the same bound, and its count drifts by at most 0.5%
+  - DDSketch drops non-finite, non-positive and non-indexable values without corrupting bucket 0 and without letting one sample force a distant-bucket allocation
 
 ## e2e_topk
 
@@ -885,3 +1007,27 @@
     - cs: row: 5; col: 32768
     - reasoning: CMS accuracy is tested elsewhere, so here is to test how the heap performs E2E
   - Error bound: for items in heap, relative error should be less than 2%
+
+- checks applied to both heaps
+  - capacity: the heap must never hold more than `top_k` entries
+  - recall: at least `top_k - 1` of the entries must be true top-k keys
+  - consistency: every heap entry's stored count must equal the sketch's current estimate for that key
+
+## e2e_windows
+
+- ExponentialHistogram
+  - Configuration: k=8, window 100, payload CountMin (row 3, col 2048, FastPath)
+  - Input: (1) ~ (6), (13) ~ (14)
+  - error bound: interval count relative error 21%
+    - reasoning: interval merges snap to bucket boundaries in both directions, so the error is granularity, not sketch collision
+  - expiry: the retained span must be covered, and anything past the observed maximum time must not be
+- TumblingWindow<FoldCMS>
+  - Configuration: window 10, 16 slots, FoldCMS row 3, col 2048, fold level 0, top_k 32
+  - counts are exact per window
+  - `query_all` and `query_recent(n)` cover exactly the expected spans; `flush` closes the active window even when it is partially filled or empty
+- TumblingWindow<KLL>
+  - Configuration: window 100, KLL k=200
+  - Query: P50, P90
+  - Error bound: rank error
+    - `query_all` and `query_recent(1)`: 5%
+    - active window alone: 6%
