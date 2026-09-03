@@ -126,6 +126,31 @@ fn compute_max_capacity(k: usize, m: usize) -> usize {
     total
 }
 
+fn build_capacity_cache(k: usize, m: usize) -> [u32; CAPACITY_CACHE_LEN] {
+    let mut cache = [0u32; CAPACITY_CACHE_LEN];
+    let mut scale = 1.0_f64;
+    for slot in cache.iter_mut() {
+        *slot = (((k as f64) * scale).ceil() as usize).max(m) as u32;
+        scale *= CAPACITY_DECAY;
+    }
+    cache
+}
+
+#[inline]
+fn capacity_for_slot(cache: &[u32; CAPACITY_CACHE_LEN], dist: usize) -> usize {
+    cache[dist.min(CAPACITY_CACHE_LEN - 1)] as usize
+}
+
+fn build_segment_layout(cache: &[u32; CAPACITY_CACHE_LEN]) -> (Box<[usize]>, usize) {
+    let mut starts = vec![0usize; MAX_LEVELS];
+    let mut cursor = 0usize;
+    for (slot, start) in starts.iter_mut().enumerate() {
+        *start = cursor;
+        cursor += 2 * capacity_for_slot(cache, slot);
+    }
+    (starts.into_boxed_slice(), cursor)
+}
+
 /// Checked total weighted item count for compactor-level sizes given
 /// **bottom-first** (`sizes[h]` is the item count at compactor level `h`, whose
 /// weight is `2^h`). Returns `None` on `usize` overflow.
@@ -227,18 +252,11 @@ pub(crate) fn merge_sorted_runs<T: NumericalValue>(
 // ---------------------------------------------------------------------------
 
 /// Compact, insert-optimized KLL quantile sketch.
-///
-/// Memory layout (grows leftward):
-/// ```text
-/// items: [ free ← | L0 (unsorted) | L1 | L2 | … | L_top ]
-///         0        levels[0]                        levels[num_levels]
-/// ```
-///
-/// `levels[h]` = start of level h.  `levels[h+1] - levels[h]` = size of level h.
 #[derive(Clone, Debug)]
 pub struct KLL<T: NumericalValue = f64> {
     items: Box<[T]>,
-    levels: Box<[usize]>,
+    seg_start: Box<[usize]>,
+    count: Box<[usize]>,
     k: usize,
     m: usize,
     num_levels: usize,
@@ -252,7 +270,6 @@ pub struct KLL<T: NumericalValue = f64> {
     capacity_cache: [u32; CAPACITY_CACHE_LEN],
     top_height: usize,
     level0_capacity: usize,
-    merge_buf: Vec<T>,
     /// Memoized CDF, valid only while no mutation has occurred since it was
     /// built. Every mutating entry point (`push_value`, `merge`, `clear`,
     /// `ensure_levels_sorted`) drops it; query-side accessors never touch it.
@@ -305,24 +322,21 @@ impl<T: NumericalValue> KLL<T> {
             norm_k = MAX_CACHEABLE_K;
         }
         let max_cap = compute_max_capacity(norm_k, norm_m);
+        let capacity_cache = build_capacity_cache(norm_k, norm_m);
+        let (seg_start, buffer_len) = build_segment_layout(&capacity_cache);
         let mut s = Self {
-            items: vec![T::default(); max_cap].into_boxed_slice(),
-            levels: {
-                let mut v = vec![0usize; MAX_LEVELS + 1];
-                v[0] = max_cap;
-                v[1] = max_cap;
-                v.into_boxed_slice()
-            },
+            items: vec![T::default(); buffer_len].into_boxed_slice(),
+            seg_start,
+            count: vec![0usize; MAX_LEVELS].into_boxed_slice(),
             k: norm_k,
             m: norm_m,
             num_levels: 1,
             max_capacity: max_cap,
             co: coin,
             seed,
-            capacity_cache: [0; CAPACITY_CACHE_LEN],
+            capacity_cache,
             top_height: 0,
             level0_capacity: 0,
-            merge_buf: Vec::with_capacity(norm_k),
             cdf_cache: None,
         };
         s.rebuild_capacity_cache();
@@ -346,7 +360,7 @@ impl<T: NumericalValue> KLL<T> {
         if items.is_empty() {
             return Ok(s);
         }
-        if num_levels == 0 || num_levels >= s.levels.len() {
+        if num_levels == 0 || num_levels > MAX_LEVELS {
             return Err(format!(
                 "from_portable_state: invalid num_levels {num_levels}"
             ));
@@ -374,32 +388,21 @@ impl<T: NumericalValue> KLL<T> {
                 k
             ));
         }
-        // Live data occupies the high end of the buffer; free space at the front.
-        let offset = s.max_capacity - items.len();
-        let max_cap = s.max_capacity;
-        s.items[offset..].clone_from_slice(items);
-        for (dst, &src) in s.levels.iter_mut().zip(levels[..=num_levels].iter()) {
-            *dst = src + offset;
-        }
-        for dst in s.levels.iter_mut().skip(num_levels + 1) {
-            *dst = max_cap;
-        }
         s.num_levels = num_levels;
+        s.scatter_levels_bottom_first(items, levels)?;
         s.rebuild_capacity_cache(); // recomputes top_height + level0_capacity for num_levels
         Ok(s)
     }
 
-    /// Hot-path insert: decrement `levels[0]`, write item, check capacity.
     #[inline]
     fn push_value(&mut self, value: T) {
         self.invalidate_cdf_cache();
-        if self.levels[0] == 0 {
-            self.compress_while_updating();
-        }
-        self.levels[0] -= 1;
-        self.items[self.levels[0]] = value;
+        let slot = self.num_levels - 1;
+        let pos = self.seg_start[slot] + self.count[slot];
+        self.items[pos] = value;
+        self.count[slot] += 1;
 
-        if self.levels[1] - self.levels[0] > self.level0_capacity {
+        if self.count[slot] > self.level0_capacity {
             self.compress_while_updating();
         }
     }
@@ -438,51 +441,63 @@ impl<T: NumericalValue> KLL<T> {
     }
 
     fn compact(&mut self, h: usize) {
-        // Redundant today (compact is only reachable via push_value, which
-        // already drops the cache) but cheap insurance against future
-        // call-graph drift silently serving stale quantiles.
         self.invalidate_cdf_cache();
-        let beg = self.levels[h];
-        let end = self.levels[h + 1];
-        let pop = end - beg;
+        let slot = self.num_levels - 1 - h;
+        let beg = self.seg_start[slot];
+        let pop = self.count[slot];
 
         if h == 0 {
-            self.items[beg..end].sort_unstable_by(T::total_cmp);
+            self.items[beg..beg + pop].sort_unstable_by(T::total_cmp);
         }
 
         let offset = usize::from(self.co.toss());
-        let num_survivors = randomly_halve_up(&mut self.items, beg, pop, offset);
-        let surv_start = beg + pop - num_survivors;
+        let num_survivors = (pop - offset).div_ceil(2);
 
-        let pop_above = self.levels[h + 2] - end;
-        if pop_above > 0 {
-            merge_sorted_runs(
-                &mut self.items[surv_start..end + pop_above],
-                num_survivors,
-                &mut self.merge_buf,
-            );
-        }
+        let parent = slot - 1;
+        let pbeg = self.seg_start[parent];
+        let pcount = self.count[parent];
 
-        let delta = surv_start - beg;
-        if delta > 0 && h > 0 {
-            let lo = self.levels[0];
-            let hi = beg;
-            if hi > lo {
-                self.items.copy_within(lo..hi, lo + delta);
-            }
-            for lvl in self.levels[..h].iter_mut() {
-                *lvl += delta;
+        let mut out = pcount + num_survivors;
+        let mut surv = num_survivors;
+        let mut prev = pcount;
+        while surv > 0 && prev > 0 {
+            let a = self.items[beg + offset + (surv - 1) * 2];
+            let b = self.items[pbeg + prev - 1];
+            out -= 1;
+            if a.total_cmp(&b).is_lt() {
+                self.items[pbeg + out] = b;
+                prev -= 1;
+            } else {
+                self.items[pbeg + out] = a;
+                surv -= 1;
             }
         }
+        while surv > 0 {
+            out -= 1;
+            self.items[pbeg + out] = self.items[beg + offset + (surv - 1) * 2];
+            surv -= 1;
+        }
 
-        self.levels[h] = surv_start;
-        self.levels[h + 1] = surv_start;
+        self.count[parent] = pcount + num_survivors;
+        self.count[slot] = 0;
     }
 
     fn add_new_top_level(&mut self) {
-        let sentinel = self.levels[self.num_levels];
+        assert!(
+            self.num_levels < MAX_LEVELS,
+            "KLL: num_levels would exceed MAX_LEVELS {MAX_LEVELS}"
+        );
+        for slot in (0..self.num_levels).rev() {
+            let n = self.count[slot];
+            if n > 0 {
+                let src = self.seg_start[slot];
+                self.items
+                    .copy_within(src..src + n, self.seg_start[slot + 1]);
+            }
+            self.count[slot + 1] = n;
+        }
+        self.count[0] = 0;
         self.num_levels += 1;
-        self.levels[self.num_levels] = sentinel;
         self.top_height = self.num_levels - 1;
         self.level0_capacity = self.capacity_for_level(0);
     }
@@ -512,7 +527,33 @@ impl<T: NumericalValue> KLL<T> {
 
     #[inline]
     fn level_size(&self, h: usize) -> usize {
-        self.levels[h + 1] - self.levels[h]
+        self.count[self.num_levels - 1 - h]
+    }
+
+    #[inline]
+    fn level_range(&self, h: usize) -> (usize, usize) {
+        let slot = self.num_levels - 1 - h;
+        let beg = self.seg_start[slot];
+        (beg, beg + self.count[slot])
+    }
+
+    fn scatter_levels_bottom_first(&mut self, items: &[T], levels: &[usize]) -> Result<(), String> {
+        self.count.fill(0);
+        for h in 0..self.num_levels {
+            let (s, e) = (levels[h], levels[h + 1]);
+            let len = e - s;
+            let slot = self.num_levels - 1 - h;
+            let seg = 2 * capacity_for_slot(&self.capacity_cache, slot);
+            if len > seg {
+                return Err(format!(
+                    "KLL: level {h} holds {len} items, segment for slot {slot} is {seg}"
+                ));
+            }
+            let beg = self.seg_start[slot];
+            self.items[beg..beg + len].copy_from_slice(&items[s..e]);
+            self.count[slot] = len;
+        }
+        Ok(())
     }
 
     #[inline(always)]
@@ -530,8 +571,7 @@ impl<T: NumericalValue> KLL<T> {
         let mut total_w = 0usize;
 
         for h in 0..self.num_levels {
-            let start = self.levels[h];
-            let end = self.levels[h + 1];
+            let (start, end) = self.level_range(h);
             let weight = 1 << h;
             for &value in &self.items[start..end] {
                 cdf.entries.push(CdfEntry {
@@ -618,29 +658,23 @@ impl<T: NumericalValue> KLL<T> {
     /// empty target is simply a no-op union at every level, so the
     /// source's structure — and its weight — comes through exactly.
     pub fn merge(&mut self, other: &KLL<T>) {
-        let other_start = other.levels[0];
-        let other_end = other.levels[other.num_levels];
-        if other_end == other_start {
-            return; // `other` is empty: nothing to merge.
+        if other.buffer_size() == 0 {
+            return;
         }
         self.invalidate_cdf_cache();
 
         let target_num_levels = self.num_levels.max(other.num_levels);
 
-        // work[h] holds level h's combined (not-yet-compacted) retained
-        // items. +1 slack so `work[h + 1]` is always valid while cascading.
         let mut work: Vec<Vec<T>> = vec![Vec::new(); target_num_levels + 1];
-        #[allow(clippy::needless_range_loop)] // `h` also indexes self.levels/self.items
+        #[allow(clippy::needless_range_loop)]
         for h in 0..self.num_levels {
-            let s = self.levels[h];
-            let e = self.levels[h + 1];
+            let (s, e) = self.level_range(h);
             work[h].extend_from_slice(&self.items[s..e]);
         }
         let mut merge_buf: Vec<T> = Vec::new();
-        #[allow(clippy::needless_range_loop)] // `h` also indexes other.levels/other.items
+        #[allow(clippy::needless_range_loop)]
         for h in 0..other.num_levels {
-            let s = other.levels[h];
-            let e = other.levels[h + 1];
+            let (s, e) = other.level_range(h);
             let self_len = work[h].len();
             work[h].extend_from_slice(&other.items[s..e]);
             // Levels >= 1 are individually sorted in both operands already;
@@ -656,54 +690,54 @@ impl<T: NumericalValue> KLL<T> {
         self.num_levels = target_num_levels;
         self.rebuild_capacity_cache();
 
-        // Cascade-compact exactly like `compress_while_updating`/`compact`,
-        // except a level may need more than one halving pass here (a merge
-        // can leave a level far over capacity, not just one element over).
-        let mut h = 0;
-        while h < self.num_levels {
-            if h == 0 {
-                work[0].sort_unstable_by(T::total_cmp);
-            }
-            while work[h].len() > self.capacity_for_level(h) {
-                if h + 1 == self.num_levels {
-                    self.num_levels += 1;
-                    self.rebuild_capacity_cache();
-                    work.resize(self.num_levels + 1, Vec::new());
+        work[0].sort_unstable_by(T::total_cmp);
+        loop {
+            let mut promoted_any = false;
+            let mut h = 0;
+            while h < self.num_levels {
+                while work[h].len() > self.capacity_for_level(h) {
+                    if h + 1 == self.num_levels {
+                        assert!(
+                            self.num_levels < MAX_LEVELS,
+                            "KLL merge: num_levels would exceed MAX_LEVELS {MAX_LEVELS}"
+                        );
+                        self.num_levels += 1;
+                        self.rebuild_capacity_cache();
+                        work.resize(self.num_levels + 1, Vec::new());
+                    }
+                    let pop = work[h].len();
+                    let offset = usize::from(self.co.toss());
+                    let num_survivors = randomly_halve_up(work[h].as_mut_slice(), 0, pop, offset);
+                    let discard = pop - num_survivors;
+                    work[h].drain(0..discard);
+
+                    let mut promoted = std::mem::take(&mut work[h]);
+                    let left_len = promoted.len();
+                    promoted.append(&mut work[h + 1]);
+                    merge_sorted_runs(promoted.as_mut_slice(), left_len, &mut merge_buf);
+                    work[h + 1] = promoted;
+                    promoted_any = true;
                 }
-                let pop = work[h].len();
-                let offset = usize::from(self.co.toss());
-                let num_survivors = randomly_halve_up(work[h].as_mut_slice(), 0, pop, offset);
-                let discard = pop - num_survivors;
-                work[h].drain(0..discard);
-
-                // Promote the (sorted) survivors into level h+1, merging
-                // with its existing (already-sorted) content.
-                let mut promoted = std::mem::take(&mut work[h]);
-                let left_len = promoted.len();
-                promoted.append(&mut work[h + 1]);
-                merge_sorted_runs(promoted.as_mut_slice(), left_len, &mut merge_buf);
-                work[h + 1] = promoted;
+                h += 1;
             }
-            h += 1;
+            if !promoted_any {
+                break;
+            }
         }
 
-        // Write the compacted per-level vectors back into the fixed
-        // buffer, top level first (matches the buffer's grow-leftward
-        // layout). `total <= max_capacity` is guaranteed here because
-        // every level 0..self.num_levels now satisfies its own capacity
-        // bound — the same invariant a live KLL always maintains — and
-        // max_capacity is exactly the sum of all per-level capacities.
-        let mc = self.max_capacity;
-        let mut cursor = mc;
-        for h in (0..self.num_levels).rev() {
+        self.count.fill(0);
+        #[allow(clippy::needless_range_loop)]
+        for h in 0..self.num_levels {
+            let slot = self.num_levels - 1 - h;
             let len = work[h].len();
-            cursor -= len;
-            self.items[cursor..cursor + len].copy_from_slice(&work[h]);
-            self.levels[h] = cursor;
-        }
-        self.levels[self.num_levels] = mc;
-        for lvl in self.levels[self.num_levels + 1..].iter_mut() {
-            *lvl = mc;
+            debug_assert!(
+                len <= 2 * capacity_for_slot(&self.capacity_cache, slot),
+                "KLL merge: level {h} holds {len} items, segment for slot {slot} is {}",
+                2 * capacity_for_slot(&self.capacity_cache, slot)
+            );
+            let beg = self.seg_start[slot];
+            self.items[beg..beg + len].copy_from_slice(&work[h]);
+            self.count[slot] = len;
         }
     }
 
@@ -717,8 +751,7 @@ impl<T: NumericalValue> KLL<T> {
     pub fn rank(&self, x: f64) -> usize {
         let mut r = 0;
         for h in 0..self.num_levels {
-            let start = self.levels[h];
-            let end = self.levels[h + 1];
+            let (start, end) = self.level_range(h);
             let weight = 1 << h;
             for &val in &self.items[start..end] {
                 if val.to_f64() <= x {
@@ -744,7 +777,7 @@ impl<T: NumericalValue> KLL<T> {
     }
 
     fn buffer_size(&self) -> usize {
-        self.levels[self.num_levels] - self.levels[0]
+        self.count[..self.num_levels].iter().sum()
     }
 
     // -- Lifecycle -----------------------------------------------------------
@@ -756,10 +789,8 @@ impl<T: NumericalValue> KLL<T> {
     /// Otherwise the coin is re-seeded from the wall clock — the historical
     /// behavior.
     pub fn clear(&mut self) {
-        let mc = self.max_capacity;
         self.invalidate_cdf_cache();
-        self.levels[0] = mc;
-        self.levels[1] = mc;
+        self.count.fill(0);
         self.num_levels = 1;
         self.co = match self.seed {
             Some(s) => Coin::from_seed(s),
@@ -780,8 +811,7 @@ impl<T: NumericalValue> KLL<T> {
             self.buffer_size()
         );
         for h in (0..self.num_levels).rev() {
-            let start = self.levels[h];
-            let end = self.levels[h + 1];
+            let (start, end) = self.level_range(h);
             println!("  L{}: {:?}", h, &self.items[start..end]);
         }
     }
@@ -831,27 +861,21 @@ impl<T: NumericalValue> KLL<T> {
     /// in `levels` maps to compactor level `num_levels - 1 - i` in the
     /// in-memory representation.
     pub fn wire_levels(&self) -> Vec<u32> {
-        // Walk from top compactor-level downward, accumulating sizes.
         let n = self.num_levels;
         let mut out = Vec::with_capacity(n + 1);
         out.push(0u32);
         let mut acc = 0u32;
         for h in (0..n).rev() {
-            let size = (self.levels[h + 1] - self.levels[h]) as u32;
-            acc += size;
+            acc += self.level_size(h) as u32;
             out.push(acc);
         }
         out
     }
 
     /// Returns the retained items in `sketchlib-go`'s wire shape:
-    /// concatenated top-most-level-first. Sketchlib-go pushes inputs
-    /// into the unsorted L0 in input order; `asap_sketchlib`'s compact
-    /// layout instead grows L0 leftward, so the buffer reads
-    /// reverse-input-order. This accessor reverses the unsorted L0 run
-    /// so the emitted byte sequence is identical to Go's for the same
-    /// input stream (when no compaction has yet occurred). Higher
-    /// levels are sorted in both producers and emitted as-is.
+    /// concatenated top-most-level-first. L0 is emitted in input order,
+    /// matching Go, and higher levels are sorted in both producers and
+    /// emitted as-is.
     ///
     /// Caveat: after L0 → L1 compaction the two producers' L1 content
     /// orderings diverge (Go's `compact` leaves L1 as two concatenated
@@ -865,17 +889,8 @@ impl<T: NumericalValue> KLL<T> {
     pub fn wire_items(&self) -> Vec<T> {
         let mut out = Vec::with_capacity(self.buffer_size());
         for h in (0..self.num_levels).rev() {
-            let start = self.levels[h];
-            let end = self.levels[h + 1];
-            if h == 0 {
-                // Unsorted L0 in `asap_sketchlib` reads reverse of the
-                // input order because `push_value` decrements
-                // `levels[0]` before each write. Reverse here so the
-                // emitted bytes match Go's input-order L0 layout.
-                out.extend(self.items[start..end].iter().rev().copied());
-            } else {
-                out.extend_from_slice(&self.items[start..end]);
-            }
+            let (start, end) = self.level_range(h);
+            out.extend_from_slice(&self.items[start..end]);
         }
         out
     }
@@ -895,8 +910,7 @@ impl<T: NumericalValue> KLL<T> {
         }
         self.invalidate_cdf_cache();
         for h in 1..self.num_levels {
-            let s = self.levels[h];
-            let e = self.levels[h + 1];
+            let (s, e) = self.level_range(h);
             if s < e {
                 self.items[s..e].sort_unstable_by(T::total_cmp);
             }
@@ -917,14 +931,17 @@ struct KLLWire<T> {
 
 impl<T: NumericalValue + Serialize> Serialize for KLL<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let used_start = self.levels[0];
-        let used_end = self.levels[self.num_levels];
+        let mut items = Vec::with_capacity(self.buffer_size());
+        let mut levels = Vec::with_capacity(self.num_levels + 1);
+        levels.push(0usize);
+        for h in 0..self.num_levels {
+            let (beg, end) = self.level_range(h);
+            items.extend_from_slice(&self.items[beg..end]);
+            levels.push(items.len());
+        }
         let wire = KLLWire {
-            items: self.items[used_start..used_end].to_vec(),
-            levels: self.levels[..=self.num_levels]
-                .iter()
-                .map(|&l| l - used_start)
-                .collect(),
+            items,
+            levels,
             k: self.k,
             m: self.m,
             num_levels: self.num_levels,
@@ -999,19 +1016,13 @@ impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for KLL<T> {
                 "KLL: {used_len} items exceed max_capacity {max_cap}"
             )));
         }
-        let offset = max_cap - used_len;
-
-        let mut items = vec![T::default(); max_cap].into_boxed_slice();
-        items[offset..offset + used_len].copy_from_slice(&wire.items);
-
-        let mut levels = vec![0usize; MAX_LEVELS + 1].into_boxed_slice();
-        for (i, &l) in wire.levels.iter().enumerate() {
-            levels[i] = l + offset;
-        }
+        let capacity_cache = build_capacity_cache(wire.k, wire.m);
+        let (seg_start, buffer_len) = build_segment_layout(&capacity_cache);
 
         let mut sketch = KLL {
-            items,
-            levels,
+            items: vec![T::default(); buffer_len].into_boxed_slice(),
+            seg_start,
+            count: vec![0usize; MAX_LEVELS].into_boxed_slice(),
             k: wire.k,
             m: wire.m,
             num_levels: wire.num_levels,
@@ -1023,13 +1034,15 @@ impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for KLL<T> {
             // Callers that need clear()-determinism after a deserialize
             // should rebuild via init_with_seed.
             seed: None,
-            capacity_cache: [0; CAPACITY_CACHE_LEN],
+            capacity_cache,
             top_height: 0,
             level0_capacity: 0,
-            merge_buf: Vec::with_capacity(wire.k),
             cdf_cache: None,
         };
         sketch.rebuild_capacity_cache();
+        sketch
+            .scatter_levels_bottom_first(&wire.items, &wire.levels)
+            .map_err(D::Error::custom)?;
         sketch.ensure_levels_sorted();
         Ok(sketch)
     }
@@ -1135,6 +1148,120 @@ mod tests {
     use super::*;
     use crate::test_utils::{sample_uniform_f64, sample_zipf_f64};
 
+    fn assert_layout_invariants<T: NumericalValue + std::fmt::Debug>(sk: &KLL<T>) {
+        assert!(
+            sk.num_levels >= 1 && sk.num_levels <= MAX_LEVELS,
+            "num_levels {} outside [1, {MAX_LEVELS}]",
+            sk.num_levels
+        );
+        for h in 0..sk.num_levels {
+            let slot = sk.num_levels - 1 - h;
+            let size = sk.level_size(h);
+            let cap = sk.capacity_for_level(h);
+            let seg = 2 * capacity_for_slot(&sk.capacity_cache, slot);
+            assert!(size <= cap, "level {h} size {size} exceeds capacity {cap}");
+            assert!(
+                size <= seg,
+                "level {h} size {size} overflows slot {slot} segment {seg}"
+            );
+            if h >= 1 {
+                let (s, e) = sk.level_range(h);
+                assert!(
+                    sk.items[s..e]
+                        .windows(2)
+                        .all(|p| p[0].total_cmp(&p[1]) != std::cmp::Ordering::Greater),
+                    "level {h} is not sorted"
+                );
+            }
+        }
+    }
+
+    fn assert_exact_count_precompaction<T: NumericalValue + std::fmt::Debug>(
+        sk: &KLL<T>,
+        expected_count: usize,
+    ) {
+        assert_eq!(
+            sk.count(),
+            expected_count,
+            "count() must be exact while no compaction has occurred"
+        );
+    }
+
+    #[test]
+    fn kll_layout_invariants_hold_through_multi_level_compaction() {
+        let mut sk = KLL::<f64>::init_with_seed(200, 8, 7);
+        for i in 0..200_000u64 {
+            sk.update(&(i as f64));
+            if i % 997 == 0 {
+                assert_layout_invariants(&sk);
+            }
+        }
+        assert_layout_invariants(&sk);
+        assert!(
+            sk.num_levels > 1,
+            "test setup didn't actually exercise compaction"
+        );
+    }
+
+    #[test]
+    fn kll_layout_invariants_survive_many_new_top_levels() {
+        let mut sk = KLL::<f64>::init_with_seed(8, 2, 11);
+        for i in 0..500_000u64 {
+            sk.update(&(i as f64));
+        }
+        assert!(
+            sk.num_levels > 10,
+            "test didn't actually exercise many level promotions (num_levels={})",
+            sk.num_levels
+        );
+        assert_layout_invariants(&sk);
+    }
+
+    #[test]
+    fn kll_layout_invariants_hold_after_merge_across_shapes() {
+        let shapes: [(&str, usize, usize, u64, u64); 5] = [
+            ("empty", 200, 8, 1, 0),
+            ("shallow", 200, 8, 2, 100),
+            ("one_level_full", 200, 8, 3, 1_000),
+            ("deep", 200, 8, 4, 200_000),
+            ("small_k_deep", 8, 2, 5, 50_000),
+        ];
+
+        for &(_name_a, k_a, m_a, seed_a, n_a) in &shapes {
+            for &(_name_b, k_b, m_b, seed_b, n_b) in &shapes {
+                if k_a != k_b {
+                    continue;
+                }
+                let mut a = KLL::<f64>::init_with_seed(k_a, m_a, seed_a * 1000 + 1);
+                for i in 0..n_a {
+                    a.update(&(i as f64));
+                }
+                let mut b = KLL::<f64>::init_with_seed(k_b, m_b, seed_b * 1000 + 2);
+                for i in 0..n_b {
+                    b.update(&((i as f64) * 1.5 + 0.25));
+                }
+                a.merge(&b);
+                assert_layout_invariants(&a);
+            }
+        }
+    }
+
+    #[test]
+    fn kll_merge_conserves_exact_count_when_no_cascade_compaction_fires() {
+        let mut a = KLL::<f64>::init_with_seed(200, 8, 101);
+        for i in 0..50u64 {
+            a.update(&(i as f64));
+        }
+        let mut b = KLL::<f64>::init_with_seed(200, 8, 102);
+        for i in 0..30u64 {
+            b.update(&((i as f64) * 2.0 + 0.5));
+        }
+        let expected = a.count() + b.count();
+        a.merge(&b);
+        assert_exact_count_precompaction(&a, expected);
+        assert_layout_invariants(&a);
+    }
+
     /// The memoized CDF must agree with the from-scratch rebuild at every
     /// lifecycle stage: fresh, mid-stream, post-merge, and post-clear.
     #[test]
@@ -1227,9 +1354,13 @@ mod tests {
         }
         // Extract the compacted portable form (proto contract: levels[0]==0,
         // levels[num_levels]==items.len()).
-        let off = src.levels[0];
-        let items: Vec<f64> = src.items[off..src.max_capacity].to_vec();
-        let levels: Vec<usize> = (0..=src.num_levels).map(|h| src.levels[h] - off).collect();
+        let mut items: Vec<f64> = Vec::new();
+        let mut levels: Vec<usize> = vec![0];
+        for h in 0..src.num_levels {
+            let (b, e) = src.level_range(h);
+            items.extend_from_slice(&src.items[b..e]);
+            levels.push(items.len());
+        }
         let n = src.num_levels;
 
         // (A) bit-exact: direct reconstruction reproduces the source exactly.
@@ -1245,7 +1376,7 @@ mod tests {
         // An empty sketch round-trips to an empty sketch.
         let empty = KLL::<f64>::from_portable_state(k, &[], &[], 0).unwrap();
         assert_eq!(empty.num_levels, 1);
-        assert_eq!(empty.levels[0], empty.max_capacity);
+        assert_eq!(empty.buffer_size(), 0);
     }
 
     // Ensure each 64-bit chunk is consumed bit-by-bit before refilling.
@@ -1672,18 +1803,13 @@ mod tests {
         assert_eq!(sketch.top_height, restored.top_height);
         assert_eq!(sketch.level0_capacity, restored.level0_capacity);
         assert_eq!(
-            sketch.levels, restored.levels,
-            "level boundaries changed after round-trip"
+            sketch.count, restored.count,
+            "level occupancies changed after round-trip"
         );
-
-        let s_start = sketch.levels[0];
-        let s_end = sketch.levels[sketch.num_levels];
-        let r_start = restored.levels[0];
-        let r_end = restored.levels[restored.num_levels];
         assert_eq!(
-            &sketch.items[s_start..s_end],
-            &restored.items[r_start..r_end],
-            "packed items changed after round-trip"
+            sketch.wire_items(),
+            restored.wire_items(),
+            "retained items changed after round-trip"
         );
 
         let quantiles = [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0];
