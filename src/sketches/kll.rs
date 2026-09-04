@@ -600,10 +600,10 @@ impl<T: NumericalValue> KLL<T> {
             let (s, e) = (levels[h], levels[h + 1]);
             let len = e - s;
             let slot = self.num_levels - 1 - h;
-            let seg = 2 * capacity_for_slot(&self.capacity_cache, slot);
-            if len > seg {
+            let cap = capacity_for_slot(&self.capacity_cache, slot);
+            if len > cap {
                 return Err(format!(
-                    "KLL: level {h} holds {len} items, segment for slot {slot} is {seg}"
+                    "KLL: level {h} holds {len} items, capacity for slot {slot} is {cap}"
                 ));
             }
             let beg = self.seg_start[slot];

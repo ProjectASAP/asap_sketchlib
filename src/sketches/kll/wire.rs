@@ -295,10 +295,10 @@ where
             let s = levels[slot] as usize;
             let e = levels[slot + 1] as usize;
             let len = e - s;
-            let seg = 2 * capacity_for_slot(&capacity_cache, slot);
-            if len > seg {
+            let cap = capacity_for_slot(&capacity_cache, slot);
+            if len > cap {
                 return Err(RmpDecodeError::Uncategorized(format!(
-                    "KLL payload: slot {slot} holds {len} items, segment is {seg}"
+                    "KLL payload: slot {slot} holds {len} items, capacity is {cap}"
                 )));
             }
             let beg = seg_start[slot];
