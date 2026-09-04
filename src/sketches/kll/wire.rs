@@ -4,7 +4,7 @@
 //! DTOs (metadata + payload + coin), the kind_id constants for both KLL
 //! variants, the [`KllWireItem`] marker trait, and the `serialize_to_bytes` /
 //! `deserialize_from_bytes` impls for the compact [`KLL`]. Being a descendant
-//! module, it reads the sketch's private fields (`self.items`, `self.levels`,
+//! module, it reads the sketch's private fields (`self.items`, `self.count`,
 //! `self.co`, …) and constructs the struct directly without widening any field
 //! visibility. The sibling `kll_dynamic::wire` reuses these DTOs for the dynamic
 //! variant. See `docs/asapv1_wire_format.md` §3.
@@ -23,8 +23,7 @@
 //! byte-for-byte matching `sketchlib-go`'s `KLLState` (index `i` in `levels`
 //! maps to compactor level `num_levels - 1 - i`; level 0's run is in input
 //! order). For the compact KLL this is exactly what [`KLL::wire_levels`] /
-//! [`KLL::wire_items`] emit (they reverse the leftward-grown L0 buffer back to
-//! input order); decode inverts that mapping.
+//! [`KLL::wire_items`] emit; decode inverts that mapping.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
@@ -33,8 +32,8 @@ use crate::common::numerical::NumericalValue;
 use crate::message_pack_format::envelope;
 
 use super::{
-    CAPACITY_CACHE_LEN, Coin, KLL, MAX_CACHEABLE_K, MAX_LEVELS, checked_weighted_count,
-    compute_max_capacity,
+    Coin, KLL, MAX_CACHEABLE_K, MAX_LEVELS, build_capacity_cache, build_segment_layout,
+    capacity_for_slot, checked_weighted_count, compute_max_capacity,
 };
 
 const KLL_KIND_FAMILY: u8 = 0x06;
@@ -262,11 +261,10 @@ where
         )
     }
 
-    /// Rebuilds the compact leftward-grown buffer from the top-most-first wire
-    /// payload. Inverse of [`KLL::wire_levels`] / [`KLL::wire_items`]: L0's
-    /// input-order run is reversed back into the buffer (which stores L0
-    /// reverse-input), and higher levels are copied as-is, so a round-trip
-    /// re-serializes to byte-identical output.
+    /// Scatters the top-most-first wire payload into the fixed per-slot
+    /// segments. Inverse of [`KLL::wire_levels`] / [`KLL::wire_items`]: wire
+    /// index `i` is exactly slot `i`, so a round-trip re-serializes to
+    /// byte-identical output.
     fn from_wire_top_first(
         k: usize,
         m: usize,
@@ -287,53 +285,41 @@ where
                 "KLL payload: {total} items exceed max_capacity {max_cap} for k={k}, m={m}"
             )));
         }
-        let offset = max_cap - total;
 
-        let mut buf = vec![T::default(); max_cap].into_boxed_slice();
-        let mut internal_levels = vec![0usize; MAX_LEVELS + 1].into_boxed_slice();
+        let capacity_cache = build_capacity_cache(k, m);
+        let (seg_start, buffer_len) = build_segment_layout(&capacity_cache);
+        let mut buf = vec![T::default(); buffer_len].into_boxed_slice();
+        let mut count = vec![0usize; MAX_LEVELS].into_boxed_slice();
 
-        // Place levels bottom-first into the buffer starting at `offset` (free
-        // space stays at the front). Wire slot `top_i = num_levels - 1 - h`
-        // holds compactor level `h`.
-        let mut cursor = offset;
-        for h in 0..num_levels {
-            let top_i = num_levels - 1 - h;
-            let s = levels[top_i] as usize;
-            let e = levels[top_i + 1] as usize;
-            internal_levels[h] = cursor;
-            if h == 0 {
-                // Wire L0 is input order; the compact buffer stores L0
-                // reverse-input, so reverse it back on the way in.
-                for (j, &v) in items[s..e].iter().rev().enumerate() {
-                    buf[cursor + j] = v;
-                }
-            } else {
-                buf[cursor..cursor + (e - s)].copy_from_slice(&items[s..e]);
+        for slot in 0..num_levels {
+            let s = levels[slot] as usize;
+            let e = levels[slot + 1] as usize;
+            let len = e - s;
+            let cap = capacity_for_slot(&capacity_cache, slot);
+            if len > cap {
+                return Err(RmpDecodeError::Uncategorized(format!(
+                    "KLL payload: slot {slot} holds {len} items, capacity is {cap}"
+                )));
             }
-            cursor += e - s;
+            let beg = seg_start[slot];
+            buf[beg..beg + len].copy_from_slice(&items[s..e]);
+            count[slot] = len;
         }
-        // Sentinel boundary for the top level; slots beyond stay 0, matching a
-        // live sketch (which only writes `levels[num_levels]`), so a decoded
-        // sketch's level array is identical to the source's.
-        internal_levels[num_levels] = cursor;
-        debug_assert_eq!(cursor, max_cap);
 
         let mut sketch = KLL {
             items: buf,
-            levels: internal_levels,
+            merge_scratch: vec![T::default(); buffer_len].into_boxed_slice(),
+            seg_start,
+            count,
             k,
             m,
             num_levels,
             max_capacity: max_cap,
             co: Coin::from_wire(coin.state, coin.bit_cache, coin.remaining_bits as u8),
-            // The reproducible compaction seed is restored from the metadata (it
-            // is `None` for a sketch that never carried one), so a decoded sketch
-            // keeps clear()-determinism when the producer had it.
             seed,
-            capacity_cache: [0; CAPACITY_CACHE_LEN],
+            capacity_cache,
             top_height: 0,
             level0_capacity: 0,
-            merge_buf: Vec::with_capacity(k),
             cdf_cache: None,
         };
         sketch.rebuild_capacity_cache();
