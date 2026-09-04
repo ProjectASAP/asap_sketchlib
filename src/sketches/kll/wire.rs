@@ -308,6 +308,7 @@ where
 
         let mut sketch = KLL {
             items: buf,
+            merge_scratch: vec![T::default(); buffer_len].into_boxed_slice(),
             seg_start,
             count,
             k,
