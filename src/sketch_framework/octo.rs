@@ -1677,7 +1677,7 @@ impl OctoAggregator for CountTopKOctoAggregator {
 pub struct DdWorkerSketch {
     /// An empty sketch kept only for its logarithmic bucket mapping.
     mapping: DDSketch,
-    counters: HashMap<i32, u8>,
+    counters: HashMap<(crate::octo_delta::DdStore, i32), u8>,
 }
 
 impl DdWorkerSketch {
@@ -1695,7 +1695,7 @@ impl DdWorkerSketch {
     }
 
     /// Counts still held back from the aggregator, by bucket index.
-    pub fn residual(&self) -> &HashMap<i32, u8> {
+    pub fn residual(&self) -> &HashMap<(crate::octo_delta::DdStore, i32), u8> {
         &self.counters
     }
 
@@ -1714,9 +1714,10 @@ impl DdWorkerSketch {
     /// entirely - so `count`, `min`, `max`, `sum` and the extreme quantiles are
     /// wrong without bound, not within alpha. Flush before reading those.
     pub fn flush(&mut self, emit: &mut impl FnMut(DdDelta)) {
-        for (index, count) in self.counters.drain() {
+        for ((store, index), count) in self.counters.drain() {
             if count != 0 {
                 emit(DdDelta {
+                    store,
                     index,
                     value: count as u64,
                 });
@@ -1726,21 +1727,22 @@ impl DdWorkerSketch {
 
     /// Adds a sample, promoting and clearing the bucket that reaches `threshold`.
     ///
-    /// Values the parent sketch would itself drop - non-positive, non-finite or
+    /// Values the parent sketch would itself reject - non-finite or
     /// outside the indexable range - are dropped here too.
     pub fn add_emit_delta(&mut self, value: f64, threshold: u32, emit: &mut impl FnMut(DdDelta)) {
-        let Some(index) = self.mapping.bucket_index_for(value) else {
+        let Some((store, index)) = self.mapping.signed_bucket_for(value) else {
             return;
         };
         let threshold = threshold.clamp(1, MAX_PROMASK) as u8;
-        let counter = self.counters.entry(index).or_insert(0);
+        let counter = self.counters.entry((store, index)).or_insert(0);
         *counter += 1;
         if *counter >= threshold {
             emit(DdDelta {
+                store,
                 index,
                 value: *counter as u64,
             });
-            self.counters.remove(&index);
+            self.counters.remove(&(store, index));
         }
     }
 }
@@ -2939,15 +2941,12 @@ mod worker_tests {
     fn dd_worker_drops_what_the_parent_would_drop() {
         let mut worker = DdWorkerSketch::new(0.01);
         let mut promoted = 0usize;
-        for value in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             for _ in 0..1_000 {
                 worker.add_emit_delta(value, 1, &mut |_| promoted += 1);
             }
         }
-        assert_eq!(
-            promoted, 0,
-            "non-positive and non-finite values are dropped"
-        );
+        assert_eq!(promoted, 0, "non-finite values are dropped");
     }
 
     #[test]
@@ -3125,10 +3124,12 @@ mod worker_tests {
         parent.add(&50.0);
         let before = parent.store_counts().len();
         parent.apply_delta(DdDelta {
+            store: Default::default(),
             index: i32::MAX / 2,
             value: 4,
         });
         parent.apply_delta(DdDelta {
+            store: Default::default(),
             index: i32::MIN / 2,
             value: 4,
         });

@@ -624,6 +624,13 @@ pub struct DdSketchState {
     /// May be negative (values < 1.0 map to negative bucket indices).
     #[prost(sint32, tag = "3")]
     pub store_offset: i32,
+    /// Signed extension: negative magnitudes use the same mapping as positives.
+    #[prost(uint64, repeated, tag = "16")]
+    pub negative_store_counts: ::prost::alloc::vec::Vec<u64>,
+    #[prost(sint32, tag = "17")]
+    pub negative_store_offset: i32,
+    #[prost(uint64, tag = "18")]
+    pub zero_count: u64,
 }
 /// DDSketchDelta carries only the buckets that changed above threshold T.
 ///
@@ -638,6 +645,10 @@ pub struct DdSketchState {
 pub struct DdSketchDelta {
     #[prost(message, repeated, tag = "1")]
     pub buckets: ::prost::alloc::vec::Vec<DdSketchBucketDelta>,
+    #[prost(message, repeated, tag = "16")]
+    pub negative_buckets: ::prost::alloc::vec::Vec<DdSketchBucketDelta>,
+    #[prost(uint64, tag = "17")]
+    pub zero_count: u64,
 }
 /// DDSketchBucketDelta is the delta for one log-scale bucket.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]

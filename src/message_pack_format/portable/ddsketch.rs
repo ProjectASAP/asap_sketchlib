@@ -28,23 +28,6 @@ pub const MAX_APPLY_DELTA_SPAN_BUCKETS: i64 = 1 << 22;
 // `crate::sketches::ddsketch::DDSketch`, which keeps its own design.
 // =====================================================================
 
-// DDSketch — log-bucketed quantile sketch, mergeable by store-index alignment.
-//
-// Parallel to `count_sketch::CountSketch`, for the modified-OTLP
-// `Metric.data = DDSketch{…}` hot path. Holds the bucket counts, their
-// absolute-index base offset, and the aggregate `{count, sum, min, max}`.
-//
-// Merge semantics: two sketches with the same relative-accuracy
-// parameter `alpha` are merged by aligning bucket arrays along their
-// `store_offset` and summing counts element-wise, with `min`/`max`
-// combined via min/max and `count`/`sum` added.
-//
-// The wire format is the protobuf-encoded
-// `asap_sketchlib::proto::sketchlib::DDSketchState`. Quantile
-// estimation against stored data is not implemented here: queries
-// return a placeholder error and fall through to the exact-backend
-// fallback.
-
 /// Sparse delta between two consecutive DDSketch snapshots — the
 /// input shape for [`DdSketch::apply_delta`]. Mirrors the
 /// `DDSketchDelta` proto (and its Rust bindings). Kept as a plain
@@ -54,6 +37,8 @@ pub const MAX_APPLY_DELTA_SPAN_BUCKETS: i64 = 1 << 22;
 pub struct DdSketchDelta {
     /// `(absolute_bucket_index, Δcount)` pairs, additive.
     pub buckets: Vec<(i32, u64)>,
+    pub negative_buckets: Vec<(i32, u64)>,
+    pub zero_count: u64,
     /// Δ total count. May be negative (signed on the wire).
     pub d_count: i64,
     /// Δ sum.
@@ -68,15 +53,10 @@ pub struct DdSketchDelta {
     pub new_max: f64,
 }
 
-/// Minimal DDSketch state — bucket counts + alpha.
-///
-/// The serde field order below IS the msgpack wire layout: `rmp_serde`'s
-/// compact encoding writes a fixed-order array, so this serializes to a
-/// 3-element array `[alpha, store_counts, store_offset]`. The total count is
-/// recoverable by summing `store_counts`.
-/// KEEP these three fields in this exact order so the bytes stay identical
-/// to the Go reference implementation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Signed DDSketch state: separate magnitude stores and a zero count.
+/// Positive-only MessagePack retains `[alpha, counts, offset]`; signed state
+/// appends `[negative_counts, negative_offset, zero_count]` to that array.
+#[derive(Debug, Clone, Deserialize)]
 pub struct DdSketch {
     /// Relative accuracy parameter; must satisfy `0 < alpha < 1`.
     pub alpha: f64,
@@ -86,6 +66,30 @@ pub struct DdSketch {
     /// Absolute bucket index corresponding to `store_counts[0]`. May
     /// be negative.
     pub store_offset: i32,
+    /// Negative-value magnitudes, indexed with the same logarithmic mapping.
+    #[serde(default)]
+    pub negative_store_counts: Vec<u64>,
+    #[serde(default)]
+    pub negative_store_offset: i32,
+    #[serde(default)]
+    pub zero_count: u64,
+}
+
+impl Serialize for DdSketch {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let signed = !self.negative_store_counts.is_empty() || self.zero_count != 0;
+        let mut state = serializer.serialize_struct("DdSketch", if signed { 6 } else { 3 })?;
+        state.serialize_field("alpha", &self.alpha)?;
+        state.serialize_field("store_counts", &self.store_counts)?;
+        state.serialize_field("store_offset", &self.store_offset)?;
+        if signed {
+            state.serialize_field("negative_store_counts", &self.negative_store_counts)?;
+            state.serialize_field("negative_store_offset", &self.negative_store_offset)?;
+            state.serialize_field("zero_count", &self.zero_count)?;
+        }
+        state.end()
+    }
 }
 
 impl DdSketch {
@@ -99,6 +103,9 @@ impl DdSketch {
             alpha,
             store_counts: Vec::new(),
             store_offset: 0,
+            negative_store_counts: Vec::new(),
+            negative_store_offset: 0,
+            zero_count: 0,
         }
     }
 
@@ -108,6 +115,33 @@ impl DdSketch {
             alpha,
             store_counts,
             store_offset,
+            negative_store_counts: Vec::new(),
+            negative_store_offset: 0,
+            zero_count: 0,
+        }
+    }
+
+    /// Convert every store to protobuf, including negative and zero observations.
+    pub fn to_proto(&self) -> crate::proto::sketchlib::DdSketchState {
+        crate::proto::sketchlib::DdSketchState {
+            alpha: self.wire_alpha(),
+            store_counts: self.store_counts.clone(),
+            store_offset: self.store_offset,
+            negative_store_counts: self.negative_store_counts.clone(),
+            negative_store_offset: self.negative_store_offset,
+            zero_count: self.zero_count,
+        }
+    }
+
+    /// Restore all stores from a decoded protobuf state.
+    pub fn from_proto(state: crate::proto::sketchlib::DdSketchState) -> Self {
+        Self {
+            alpha: state.alpha,
+            store_counts: state.store_counts,
+            store_offset: state.store_offset,
+            negative_store_counts: state.negative_store_counts,
+            negative_store_offset: state.negative_store_offset,
+            zero_count: state.zero_count,
         }
     }
 
@@ -117,8 +151,9 @@ impl DdSketch {
     pub fn total_count(&self) -> u64 {
         self.store_counts
             .iter()
+            .chain(&self.negative_store_counts)
             .copied()
-            .fold(0u64, u64::saturating_add)
+            .fold(self.zero_count, u64::saturating_add)
     }
 
     /// Merge one other sketch into self by aligning bucket arrays on
@@ -132,6 +167,33 @@ impl DdSketch {
     /// configurations) merge normally as long as the union stays within
     /// what either side already holds.
     pub fn merge(
+        &mut self,
+        other: &DdSketch,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Validate both store unions before publishing any of the merged state.
+        let mut merged = self.clone();
+        merged.merge_positive(other)?;
+        let mut negative = Self::from_raw(
+            self.alpha,
+            self.negative_store_counts.clone(),
+            self.negative_store_offset,
+        );
+        negative.merge_positive(&Self::from_raw(
+            other.alpha,
+            other.negative_store_counts.clone(),
+            other.negative_store_offset,
+        ))?;
+        merged.negative_store_counts = negative.store_counts;
+        merged.negative_store_offset = negative.store_offset;
+        merged.zero_count = self
+            .zero_count
+            .checked_add(other.zero_count)
+            .ok_or("DDSketch zero count overflow")?;
+        *self = merged;
+        Ok(())
+    }
+
+    fn merge_positive(
         &mut self,
         other: &DdSketch,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -203,6 +265,31 @@ impl DdSketch {
     /// independent of α, unlike the `update()` path whose worst case is
     /// bounded by the indexable-range guard.
     pub fn apply_delta(
+        &mut self,
+        delta: &DdSketchDelta,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut merged = self.clone();
+        merged.apply_positive_delta(delta)?;
+        let mut negative = Self::from_raw(
+            self.alpha,
+            self.negative_store_counts.clone(),
+            self.negative_store_offset,
+        );
+        negative.apply_positive_delta(&DdSketchDelta {
+            buckets: delta.negative_buckets.clone(),
+            ..Default::default()
+        })?;
+        merged.negative_store_counts = negative.store_counts;
+        merged.negative_store_offset = negative.store_offset;
+        merged.zero_count = self
+            .zero_count
+            .checked_add(delta.zero_count)
+            .ok_or("DDSketch zero count overflow")?;
+        *self = merged;
+        Ok(())
+    }
+
+    fn apply_positive_delta(
         &mut self,
         delta: &DdSketchDelta,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -306,6 +393,24 @@ impl DdSketch {
                 }
             }
         }
+        let negative = Self::from_raw(
+            self.alpha,
+            self.negative_store_counts.clone(),
+            self.negative_store_offset,
+        );
+        let previous = Self::from_raw(
+            snapshot.alpha,
+            snapshot.negative_store_counts.clone(),
+            snapshot.negative_store_offset,
+        );
+        delta.negative_buckets = sparse_difference(&negative, &previous, threshold)
+            .into_iter()
+            .map(|(index, d_count)| DdSketchBucketDelta { index, d_count })
+            .collect();
+        delta.zero_count = self.zero_count.saturating_sub(snapshot.zero_count);
+        if delta.zero_count < threshold {
+            delta.zero_count = 0;
+        }
         delta.encode_to_vec()
     }
 
@@ -323,6 +428,12 @@ impl DdSketch {
 
         let proto = ProtoDelta::decode(bytes)?;
         let delta = DdSketchDelta {
+            negative_buckets: proto
+                .negative_buckets
+                .into_iter()
+                .map(|b| (b.index, b.d_count))
+                .collect(),
+            zero_count: proto.zero_count,
             buckets: proto
                 .buckets
                 .into_iter()
@@ -364,6 +475,23 @@ impl DdSketch {
                     delta.buckets.push((k, dc));
                 }
             }
+        }
+        delta.negative_buckets = sparse_difference(
+            &Self::from_raw(
+                self.alpha,
+                self.negative_store_counts.clone(),
+                self.negative_store_offset,
+            ),
+            &Self::from_raw(
+                snapshot.alpha,
+                snapshot.negative_store_counts.clone(),
+                snapshot.negative_store_offset,
+            ),
+            threshold,
+        );
+        delta.zero_count = self.zero_count.saturating_sub(snapshot.zero_count);
+        if delta.zero_count < threshold {
+            delta.zero_count = 0;
         }
         delta
             .to_msgpack()
@@ -413,27 +541,45 @@ impl DdSketch {
     /// `DDSketchState` proto bytes would diverge from the Go producer's
     /// payload (cross-language byte parity).
     pub fn update(&mut self, value: f64) {
-        if !(value.is_finite() && value > 0.0) {
-            // DDSketch is defined for positive reals; non-positive and
-            // non-finite values are rejected silently (matching the Go
-            // reference and the core DDSketch). NaN in particular would
-            // otherwise floor-cast to bucket 0 and corrupt it.
-            return;
+        let _ = self.try_update(value);
+    }
+
+    /// Reject NaN/infinity and values above the mapping range explicitly.
+    /// Like DataDog, magnitudes below the mapping range enter the zero bucket;
+    /// the relative-error guarantee does not cover those nonzero tiny values.
+    pub fn try_update(&mut self, value: f64) -> Result<(), &'static str> {
+        if !value.is_finite() {
+            return Err("DDSketch requires finite values");
         }
+        let (min_v, max_v) = crate::sketches::ddsketch::ddsketch_indexable_bounds(self.alpha);
+        if value.abs() > max_v {
+            return Err("DDSketch value exceeds indexable range");
+        }
+        if value.abs() < min_v {
+            self.zero_count = self
+                .zero_count
+                .checked_add(1)
+                .ok_or("DDSketch zero count overflow")?;
+            return Ok(());
+        }
+        let negative = value < 0.0;
+        let value = value.abs();
         let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
         let ln_gamma = gamma.ln();
-        // Reject finite-but-extreme values whose bucket index would be
-        // unrepresentable or force an arbitrarily distant allocation. Uses
-        // the SHARED bounds helper so core and portable can never drift
-        // algebraically.
-        let (min_v, max_v) = crate::sketches::ddsketch::ddsketch_indexable_bounds(self.alpha);
-        if value < min_v || value > max_v {
-            return;
+        // Reuse the positive-store growth routine for the magnitude store.
+        if negative {
+            std::mem::swap(&mut self.store_counts, &mut self.negative_store_counts);
+            std::mem::swap(&mut self.store_offset, &mut self.negative_store_offset);
         }
         let idx = (value.ln() / ln_gamma).floor() as i32;
         self.ensure_bucket(idx);
         let arr_idx = (idx as i64 - self.store_offset as i64) as usize;
         self.store_counts[arr_idx] = self.store_counts[arr_idx].saturating_add(1);
+        if negative {
+            std::mem::swap(&mut self.store_counts, &mut self.negative_store_counts);
+            std::mem::swap(&mut self.store_offset, &mut self.negative_store_offset);
+        }
+        Ok(())
     }
 
     /// Ensure bucket `k` is addressable in `store_counts`, growing in
@@ -473,15 +619,73 @@ impl DdSketch {
     /// value `gamma^k * (1 + alpha)` where `k` is the bucket's absolute
     /// index. Returns `None` if the sketch is empty.
     ///
-    /// Accuracy: bounded by DDSketch's α parameter — the estimated
-    /// quantile value is within `(1+α)/(1-α)` relative error of the
-    /// true quantile.
+    /// For indexable nonzero order statistics, absolute error is at most
+    /// `alpha * abs(true_value)`. Tiny values mapped to zero are excluded.
     pub fn quantile(&self, q: f64) -> Option<f64> {
         let count = self.total_count();
-        if count == 0 || self.store_counts.is_empty() {
+        if count == 0 {
             return None;
         }
         let target = (q * (count.saturating_sub(1)) as f64).floor() as u64;
+        self.value_at_rank(target)
+    }
+
+    /// Estimate the linearly interpolated quantile at `q * (n - 1)`.
+    ///
+    /// Interpolation across opposite signs can cancel: its absolute error is
+    /// bounded by alpha times the weighted absolute endpoints, but its relative
+    /// error need not be bounded by alpha. Zero-mapped tiny values are excluded.
+    /// This interpolates the two adjacent order-statistic bucket estimates,
+    /// as required by PromQL quantile and continuous percentiles. The existing
+    /// `quantile` method retains its lower-order-statistic convention.
+    /// Returns `None` for invalid q/alpha, empty or overflowing counts, counts
+    /// above exact Float64 integer precision, or nonfinite bucket estimates.
+    pub fn quantile_interpolated(&self, q: f64) -> Option<f64> {
+        if !q.is_finite()
+            || !(0.0..=1.0).contains(&q)
+            || !self.alpha.is_finite()
+            || !(0.0..1.0).contains(&self.alpha)
+            || self.alpha == 0.0
+        {
+            return None;
+        }
+        let count = self
+            .store_counts
+            .iter()
+            .chain(&self.negative_store_counts)
+            .try_fold(self.zero_count, |sum, count| sum.checked_add(*count))?;
+        if count == 0 || count > (1u64 << 53) {
+            return None;
+        }
+        let rank = q * (count - 1) as f64;
+        let lower_rank = rank.floor() as u64;
+        let upper_rank = rank.ceil() as u64;
+        let lower = self.value_at_rank(lower_rank)?;
+        let upper = self.value_at_rank(upper_rank)?;
+        if !lower.is_finite() || !upper.is_finite() {
+            return None;
+        }
+        let fraction = rank - lower_rank as f64;
+        let result = lower * (1.0 - fraction) + upper * fraction;
+        result.is_finite().then_some(result)
+    }
+
+    fn value_at_rank(&self, target: u64) -> Option<f64> {
+        let mut target = target;
+        let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
+        for (i, &count) in self.negative_store_counts.iter().enumerate().rev() {
+            if target < count {
+                return Some(
+                    -gamma.powf((self.negative_store_offset as i64 + i as i64) as f64)
+                        * (1.0 + self.alpha),
+                );
+            }
+            target = target.checked_sub(count)?;
+        }
+        if target < self.zero_count {
+            return Some(0.0);
+        }
+        target = target.checked_sub(self.zero_count)?;
         let mut cumulative: u64 = 0;
         let gamma = (1.0 + self.alpha) / (1.0 - self.alpha);
         let mut last_nonempty: Option<usize> = None;
@@ -521,6 +725,34 @@ impl DdSketch {
     }
 }
 
+fn sparse_difference(current: &DdSketch, previous: &DdSketch, threshold: u64) -> Vec<(i32, u64)> {
+    current
+        .store_counts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, count)| {
+            let key = i64::from(current.store_offset) + i as i64;
+            let old = key - i64::from(previous.store_offset);
+            let old_count = usize::try_from(old)
+                .ok()
+                .and_then(|i| previous.store_counts.get(i))
+                .copied()
+                .unwrap_or(0);
+            let delta = count.saturating_sub(old_count);
+            (delta > 0 && delta >= threshold).then_some((key as i32, delta))
+        })
+        .collect()
+}
+
+#[derive(Deserialize)]
+struct DeltaWire(
+    Vec<i32>,
+    Vec<u64>,
+    #[serde(default)] Vec<i32>,
+    #[serde(default)] Vec<u64>,
+    #[serde(default)] u64,
+);
+
 impl MessagePackCodec for DdSketch {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
         Ok(rmp_serde::to_vec(self)?)
@@ -543,13 +775,27 @@ impl MessagePackCodec for DdSketchDelta {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
         let idx: Vec<i32> = self.buckets.iter().map(|(i, _)| *i).collect();
         let d_count: Vec<u64> = self.buckets.iter().map(|(_, c)| *c).collect();
-        Ok(rmp_serde::to_vec(&(idx, d_count))?)
+        if self.negative_buckets.is_empty() && self.zero_count == 0 {
+            Ok(rmp_serde::to_vec(&(idx, d_count))?)
+        } else {
+            let ni: Vec<_> = self.negative_buckets.iter().map(|b| b.0).collect();
+            let nc: Vec<_> = self.negative_buckets.iter().map(|b| b.1).collect();
+            Ok(rmp_serde::to_vec(&(idx, d_count, ni, nc, self.zero_count))?)
+        }
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let (idx, d_count): (Vec<i32>, Vec<u64>) = rmp_serde::from_slice(bytes)?;
+        let DeltaWire(idx, d_count, ni, nc, zero_count) = rmp_serde::from_slice(bytes)?;
+        if idx.len() != d_count.len() || ni.len() != nc.len() {
+            return Err(rmp_serde::decode::Error::Syntax(
+                "DDSketch delta array lengths differ".into(),
+            )
+            .into());
+        }
         Ok(DdSketchDelta {
             buckets: idx.into_iter().zip(d_count).collect(),
+            negative_buckets: ni.into_iter().zip(nc).collect(),
+            zero_count,
             ..DdSketchDelta::default()
         })
     }
@@ -656,6 +902,7 @@ mod tests {
             new_min: 0.0,
             max_changed: true,
             new_max: 9.0,
+            ..Default::default()
         };
         base.apply_delta(&delta).unwrap();
         assert_eq!(base.store_counts, vec![5, 10, 15]);
@@ -674,6 +921,7 @@ mod tests {
             new_min: 0.0,
             max_changed: true,
             new_max: 6.0,
+            ..Default::default()
         };
         base.apply_delta(&delta).unwrap();
         assert_eq!(base.store_counts, vec![1, 2, 0, 0, 7]);
@@ -698,6 +946,7 @@ mod tests {
             new_min: 0.5,
             max_changed: true,
             new_max: 5.0,
+            ..Default::default()
         };
         let mut via_delta = base;
         via_delta.apply_delta(&delta).unwrap();
@@ -889,6 +1138,7 @@ mod tests {
             new_min: 0.0,
             max_changed: false,
             new_max: 0.0,
+            ..Default::default()
         }
     }
 
@@ -996,6 +1246,7 @@ mod tests {
             alpha: sk.wire_alpha(),
             store_counts: sk.store_counts.clone(),
             store_offset: sk.store_offset,
+            ..Default::default()
         };
         let envelope = SketchEnvelope {
             format_version: 1,
@@ -1040,6 +1291,66 @@ mod tests {
             })
             .collect();
         bytes
+    }
+
+    #[test]
+    fn interpolated_quantile_preserves_adjacent_ranks_and_legacy_convention() {
+        let mut sketch = DdSketch::new(0.01);
+        sketch.update(20.0);
+        sketch.update(40.0);
+        let lower = sketch.quantile(0.0).unwrap();
+        let upper = sketch.quantile(1.0).unwrap();
+        assert_eq!(sketch.quantile(0.9), Some(lower));
+        for (q, expected) in [(0.0, 20.0), (0.5, 30.0), (0.9, 38.0), (1.0, 40.0)] {
+            let actual = sketch.quantile_interpolated(q).unwrap();
+            assert!((actual - expected).abs() <= expected * 0.01);
+            assert_eq!(actual, lower * (1.0 - q) + upper * q);
+        }
+        for q in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
+            assert!(sketch.quantile_interpolated(q).is_none());
+        }
+        assert!(DdSketch::new(0.01).quantile_interpolated(0.5).is_none());
+        let mut singleton = DdSketch::new(0.01);
+        singleton.update(20.0);
+        assert_eq!(
+            singleton.quantile_interpolated(0.9),
+            singleton.quantile(0.0)
+        );
+        for values in [vec![20.0, 20.0], vec![10.0, 10.0, 20.0, 40.0]] {
+            let mut repeated = DdSketch::new(0.01);
+            for &value in &values {
+                repeated.update(value);
+            }
+            for q in [0.0, 0.5, 0.9, 1.0] {
+                let rank = q * (values.len() - 1) as f64;
+                let fraction = rank - rank.floor();
+                let expected = values[rank.floor() as usize] * (1.0 - fraction)
+                    + values[rank.ceil() as usize] * fraction;
+                assert!(
+                    (repeated.quantile_interpolated(q).unwrap() - expected).abs()
+                        <= 0.01 * expected
+                );
+            }
+        }
+        for alpha in [0.0, -0.1, 1.0, f64::NAN] {
+            assert!(
+                DdSketch::from_raw(alpha, vec![1], 0)
+                    .quantile_interpolated(0.5)
+                    .is_none()
+            );
+        }
+        assert!(
+            DdSketch::from_raw(0.01, vec![(1u64 << 53) + 1], 0)
+                .quantile_interpolated(0.5)
+                .is_none()
+        );
+        // Negative and zero inputs retain their ranks during interpolation.
+        let mut unsupported = DdSketch::new(0.01);
+        unsupported.update(-20.0);
+        unsupported.update(0.0);
+        assert!((unsupported.quantile_interpolated(0.9).unwrap() + 2.0).abs() <= 0.02);
+        let overflow = DdSketch::from_raw(0.01, vec![u64::MAX, 1], 0);
+        assert!(overflow.quantile_interpolated(0.5).is_none());
     }
 
     fn hex_nibble(c: u8) -> u8 {

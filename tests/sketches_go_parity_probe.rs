@@ -237,6 +237,7 @@ fn sketches_ddsketch_matches_go_envelope() {
         alpha: alpha_wire,
         store_counts: sk.store_counts().to_vec(),
         store_offset: sk.store_offset(),
+        ..Default::default()
     };
     let envelope = SketchEnvelope {
         format_version: 1,

@@ -907,6 +907,7 @@ fn ddsketch_merge_and_delta_replay_preserve_the_relative_error_contract() {
         for (i, &count) in single.store_counts().iter().enumerate() {
             if count > 0 {
                 replayed.apply_delta(DdDelta {
+                    store: Default::default(),
                     index: single.store_offset() + i as i32,
                     value: count,
                 });
@@ -1629,7 +1630,7 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
     let mut core = DDSketch::new(alpha);
     let mut port = PortableDds::new(alpha);
 
-    // Non-finite / non-positive / beyond-indexable-range values must be
+    // Non-finite / above-maximum-magnitude values must be
     // dropped by BOTH implementations: silently, without corrupting bucket 0
     // (NaN floor-casts to 0) and without letting one sample force a distant-
     // bucket allocation (unguarded, f64::MAX maps ~35k buckets away at
@@ -1638,11 +1639,7 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
         f64::NAN,
         f64::NEG_INFINITY,
         f64::INFINITY,
-        -5.0,
-        0.0,
-        f64::MIN_POSITIVE, // below min-indexable
-        5e-324,            // smallest subnormal
-        f64::MAX,          // above max-indexable
+        f64::MAX, // above max-indexable
         1e308,
     ] {
         core.add(&v);
@@ -1698,20 +1695,23 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
     assert_eq!(core_boundary.get_count(), 2, "core boundary agreement");
     assert_eq!(port_boundary.total_count(), core_boundary.get_count());
 
-    // And one step past each boundary must be rejected by both.
+    // Below the minimum counts as zero; above the maximum is rejected.
     port_boundary.update(min_idx * 0.5);
     port_boundary.update(max_idx * (1.0 + 1e-6));
     core_boundary.add(&(min_idx * 0.5));
     assert_eq!(
         port_boundary.total_count(),
-        2,
-        "out-of-range neighbors rejected"
+        3,
+        "sub-indexable neighbor enters zero bucket"
     );
     assert_eq!(
         core_boundary.get_count(),
-        2,
-        "core rejects out-of-range neighbor"
+        3,
+        "core retains sub-indexable neighbor as zero"
     );
+
+    assert_eq!(port_boundary.zero_count, 1);
+    assert_eq!(core_boundary.zero_count(), 1);
 
     // Item 2 contract: mismatched mappings are a runtime error in BOTH types,
     // not a debug-only assertion.
@@ -1732,25 +1732,25 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
     // Tiny-alpha regression: at alpha=1e-9 ln(gamma) ~ 2e-9, and naive
     // reciprocal-multiplied guard formulas diverge from core's — admitting
     // v=1e-300 whose bucket index saturates i32 and overflows ensure_bucket.
-    // Both implementations must drop it identically via the shared helper.
+    // Both implementations count it as zero without allocating a bucket.
     let mut tiny = PortableDds::new(1e-9);
     let mut tiny_core = DDSketch::new(1e-9);
     tiny.update(1e-300);
     tiny_core.add(&1e-300);
     assert_eq!(
         tiny.total_count(),
-        0,
-        "portable drops sub-indexable value at tiny alpha"
+        1,
+        "portable counts sub-indexable value at tiny alpha"
     );
     assert_eq!(
         tiny_core.get_count(),
-        0,
-        "core drops sub-indexable value at tiny alpha"
+        1,
+        "core counts sub-indexable value at tiny alpha"
     );
     assert_eq!(
         tiny.store_counts.len(),
         0,
-        "no allocation may occur for rejected values"
+        "no allocation may occur for zero-mapped values"
     );
 }
 
