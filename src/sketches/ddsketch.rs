@@ -19,7 +19,7 @@ use crate::DataInput;
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
-use crate::octo_delta::DdDelta;
+use crate::octo_delta::{DdDelta, DdStore};
 use serde::{Deserialize, Serialize};
 
 /// ASAPv1 wire serialization (kind_id `0x05 0x00`).
@@ -32,6 +32,12 @@ const GROW_CHUNK: usize = 128;
 struct Buckets {
     counts: Vector1D<u64>,
     offset: i32,
+}
+
+impl Default for Buckets {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Buckets {
@@ -137,6 +143,10 @@ pub struct DDSketch {
     sum: f64,
     min: f64,
     max: f64,
+    #[serde(default)]
+    negative_store: Buckets,
+    #[serde(default)]
+    zero_count: u64,
 }
 
 /// The fields a serialized [`DDSketch`] carries, in the order it emits them.
@@ -149,6 +159,10 @@ struct DDSketchState {
     sum: f64,
     min: f64,
     max: f64,
+    #[serde(default)]
+    negative_store: Buckets,
+    #[serde(default)]
+    zero_count: u64,
 }
 
 impl TryFrom<DDSketchState> for DDSketch {
@@ -158,9 +172,21 @@ impl TryFrom<DDSketchState> for DDSketch {
         wire::check_alpha(state.alpha)?;
         let counts = state.store.counts.as_slice();
         wire::check_store_span(state.store.offset, counts.len())?;
+        wire::check_store_span(
+            state.negative_store.offset,
+            state.negative_store.counts.len(),
+        )?;
+        let negative_count = wire::total_count(state.negative_store.counts.as_slice())
+            .ok_or("DDSketch count overflow")?;
         let count = wire::total_count(counts)
+            .and_then(|c| c.checked_add(negative_count))
+            .and_then(|c| c.checked_add(state.zero_count))
             .ok_or_else(|| "DDSketch bucket counts overflow the total sample count".to_string())?;
-        wire::check_scalars(count, state.sum, state.min, state.max)?;
+        if negative_count == 0 && state.zero_count == 0 {
+            wire::check_scalars(count, state.sum, state.min, state.max)?;
+        } else {
+            wire::check_signed_scalars(count, state.sum, state.min, state.max)?;
+        }
 
         let gamma = (1.0 + state.alpha) / (1.0 - state.alpha);
         let log_gamma = gamma.ln();
@@ -174,6 +200,8 @@ impl TryFrom<DDSketchState> for DDSketch {
             sum: state.sum,
             min: state.min,
             max: state.max,
+            negative_store: state.negative_store,
+            zero_count: state.zero_count,
         })
     }
 }
@@ -182,9 +210,8 @@ impl TryFrom<DDSketchState> for DDSketch {
 /// representable without integer overflow (index within `i32`) or
 /// `exp`/`powf` overflow, mirroring DataDog's logarithmic_mapping.go
 /// `minIndexableValue`/`maxIndexableValue`. Values outside this range are
-/// dropped rather than mapped to an arbitrarily distant bucket index — that
-/// guards the dense bucket store against a single finite-but-extreme outlier
-/// forcing an allocation spanning the whole index gap.
+/// handled without growing the dense store: smaller magnitudes enter the
+/// zero bucket, while larger magnitudes are rejected.
 ///
 /// Single source of truth shared by core `DDSketch`, the portable wire twin,
 /// and tests, so the two implementations cannot drift algebraically again.
@@ -220,6 +247,8 @@ impl DDSketch {
             sum: 0.0,
             min: f64::INFINITY,
             max: f64::NEG_INFINITY,
+            negative_store: Buckets::new(),
+            zero_count: 0,
         }
     }
 
@@ -231,42 +260,49 @@ impl DDSketch {
     #[inline(always)]
     fn add_to_sum(&mut self, delta: f64) {
         let next = self.sum + delta;
-        self.sum = if next.is_finite() { next } else { f64::MAX };
+        self.sum = if next.is_finite() {
+            next
+        } else {
+            f64::MAX.copysign(next)
+        };
     }
 
-    /// Adds a positive finite numeric sample to the sketch; non-positive or
-    /// non-finite values are ignored.
-    ///
-    /// Values outside `[min_indexable_value, max_indexable_value]` are also
-    /// dropped rather than mapped to an arbitrarily distant bucket index — that
-    /// guards the dense store against a single finite-but-extreme outlier
-    /// forcing an allocation spanning the whole index gap. Dropped silently,
-    /// like the non-positive case, since `add` has no error channel.
-    #[inline(always)]
+    /// Adds a finite signed sample. Tiny magnitudes enter the zero bucket.
+    /// Invalid or too-large values are ignored by this compatibility API;
+    /// use [`Self::try_add`] to receive an explicit error.
     pub fn add<T: NumericalValue>(&mut self, val: &T) {
+        let _ = self.try_add(val);
+    }
+
+    /// Fallible update. Tiny magnitudes enter the zero bucket, matching DataDog;
+    /// relative error is not guaranteed for nonzero values mapped to zero.
+    pub fn try_add<T: NumericalValue>(&mut self, val: &T) -> Result<(), &'static str> {
         let v = val.to_f64();
-        if !(v.is_finite() && v > 0.0) {
-            return;
+        if !v.is_finite() {
+            return Err("DDSketch requires finite values");
         }
         let (min_indexable, max_indexable) = ddsketch_indexable_bounds(self.alpha);
-        if v < min_indexable || v > max_indexable {
-            return; // untrackable extreme: would blow up the dense bucket span
+        if v.abs() > max_indexable {
+            return Err("DDSketch value exceeds indexable range");
         }
-
-        self.count += 1;
+        self.count = self.count.checked_add(1).ok_or("DDSketch count overflow")?;
         self.add_to_sum(v);
-        if v < self.min {
-            self.min = v;
+        self.min = self.min.min(v);
+        self.max = self.max.max(v);
+        if v.abs() < min_indexable {
+            self.zero_count += 1;
+        } else {
+            let key = self.key_for(v.abs());
+            if v < 0.0 {
+                self.negative_store.add_one(key);
+            } else {
+                self.store.add_one(key);
+            }
         }
-        if v > self.max {
-            self.max = v;
-        }
-
-        let k = self.key_for(v);
-        self.store.add_one(k);
+        Ok(())
     }
 
-    /// Bucket index a value maps to, or `None` if `add` would have dropped it.
+    /// Positive magnitude bucket index; use `signed_bucket_for` for signed samples.
     ///
     /// Exposed so an OctoSketch worker can hold one-byte counters over the same
     /// bucket space without duplicating the logarithmic mapping.
@@ -281,6 +317,25 @@ impl DDSketch {
         Some(self.key_for(value))
     }
 
+    /// Select the signed store and magnitude index for an accepted observation.
+    pub fn signed_bucket_for(&self, value: f64) -> Option<(DdStore, i32)> {
+        let (min, max) = ddsketch_indexable_bounds(self.alpha);
+        if !value.is_finite() || value.abs() > max {
+            return None;
+        }
+        if value.abs() < min {
+            return Some((DdStore::Zero, 0));
+        }
+        Some((
+            if value < 0.0 {
+                DdStore::Negative
+            } else {
+                DdStore::Positive
+            },
+            self.key_for(value.abs()),
+        ))
+    }
+
     /// Adds a promoted bucket count from an OctoSketch worker.
     ///
     /// A delta carries only a bucket and a count, so `sum`, `min` and `max` are
@@ -288,6 +343,10 @@ impl DDSketch {
     /// estimate a deserialize-and-recompute produces. Quantiles and `count`
     /// stay exact with respect to the bucket store.
     pub fn apply_delta(&mut self, delta: DdDelta) {
+        if delta.store == DdStore::Zero {
+            self.apply_zero_delta(delta.value);
+            return;
+        }
         if delta.value == 0 {
             return;
         }
@@ -302,11 +361,21 @@ impl DDSketch {
         if delta.index < lowest || delta.index > highest {
             return;
         }
-        self.store.ensure(delta.index);
-        let slot = (delta.index - self.store.offset) as usize;
-        self.store.counts.as_mut_slice()[slot] += delta.value;
+        let store = if delta.store == DdStore::Negative {
+            &mut self.negative_store
+        } else {
+            &mut self.store
+        };
+        store.ensure(delta.index);
+        let slot = (delta.index - store.offset) as usize;
+        store.counts.as_mut_slice()[slot] += delta.value;
 
-        let representative = self.bin_representative(delta.index);
+        let representative = self.bin_representative(delta.index)
+            * if delta.store == DdStore::Negative {
+                -1.0
+            } else {
+                1.0
+            };
         self.count += delta.value;
         self.add_to_sum(representative * delta.value as f64);
         if representative < self.min {
@@ -329,8 +398,28 @@ impl DDSketch {
             return Some(self.max);
         }
 
-        let rank = (q * self.count as f64).ceil() as u64;
+        let rank = ((q * self.count as f64).ceil() as u64).max(1);
         let mut seen = 0u64;
+        for (i, &count) in self
+            .negative_store
+            .counts
+            .as_slice()
+            .iter()
+            .enumerate()
+            .rev()
+        {
+            seen += count;
+            if seen >= rank {
+                return Some(
+                    (-self.bin_representative(self.negative_store.offset + i as i32))
+                        .clamp(self.min, self.max),
+                );
+            }
+        }
+        seen += self.zero_count;
+        if seen >= rank {
+            return Some(0.0);
+        }
 
         let slice = self.store.counts.as_slice();
         let offset = self.store.offset;
@@ -404,6 +493,25 @@ impl DDSketch {
         self.store.offset
     }
 
+    pub fn negative_store_counts(&self) -> &[u64] {
+        self.negative_store.counts.as_slice()
+    }
+    pub fn negative_store_offset(&self) -> i32 {
+        self.negative_store.offset
+    }
+    pub fn zero_count(&self) -> u64 {
+        self.zero_count
+    }
+
+    pub fn apply_zero_delta(&mut self, count: u64) {
+        self.count += count;
+        self.zero_count += count;
+        if count != 0 {
+            self.min = self.min.min(0.0);
+            self.max = self.max.max(0.0);
+        }
+    }
+
     /// Merges another DDSketch into this one. Returns `Err` if the two sketches
     /// use different index mappings (different `alpha`/`gamma`): merging under a
     /// mismatched mapping would reinterpret one sketch's bucket indices under
@@ -440,7 +548,9 @@ impl DDSketch {
         }
 
         // Merge bucket vectors
-        self.merge_buckets_from(other);
+        Self::merge_store(&mut self.store, &other.store);
+        Self::merge_store(&mut self.negative_store, &other.negative_store);
+        self.zero_count += other.zero_count;
         Ok(())
     }
 
@@ -465,17 +575,17 @@ impl DDSketch {
         self.lower_bound(k) * (1.0 + self.alpha)
     }
 
-    fn merge_buckets_from(&mut self, other: &DDSketch) {
-        if other.store.is_empty() {
+    fn merge_store(store: &mut Buckets, other: &Buckets) {
+        if other.is_empty() {
             return;
         }
-        if self.store.is_empty() {
-            self.store = other.store.clone();
+        if store.is_empty() {
+            *store = other.clone();
             return;
         }
 
-        let (self_l, self_r) = self.store.range().unwrap();
-        let (other_l, other_r) = other.store.range().unwrap();
+        let (self_l, self_r) = store.range().unwrap();
+        let (other_l, other_r) = other.range().unwrap();
 
         let new_l = self_l.min(other_l);
         let new_r = self_r.max(other_r);
@@ -484,19 +594,19 @@ impl DDSketch {
         let mut merged = vec![0u64; new_len];
 
         // Copy self
-        for (i, &c) in self.store.counts.as_slice().iter().enumerate() {
+        for (i, &c) in store.counts.as_slice().iter().enumerate() {
             let k = self_l + i as i32;
             merged[(k - new_l) as usize] += c;
         }
 
         // Add other
-        for (i, &c) in other.store.counts.as_slice().iter().enumerate() {
+        for (i, &c) in other.counts.as_slice().iter().enumerate() {
             let k = other_l + i as i32;
             merged[(k - new_l) as usize] += c;
         }
 
-        self.store.counts = Vector1D::from_vec(merged);
-        self.store.offset = new_l;
+        store.counts = Vector1D::from_vec(merged);
+        store.offset = new_l;
     }
 }
 
@@ -512,6 +622,8 @@ impl Clone for DDSketch {
             sum: self.sum,
             min: self.min,
             max: self.max,
+            negative_store: self.negative_store.clone(),
+            zero_count: self.zero_count,
         }
     }
 }
@@ -521,8 +633,7 @@ impl DDSketch {
     #[inline(always)]
     pub fn add_input(&mut self, v: &DataInput) -> Result<(), &'static str> {
         let value = data_input_to_f64(v).map_err(|_| "DDSketch only accepts numeric inputs")?;
-        self.add(&value);
-        Ok(())
+        self.try_add(&value)
     }
 }
 
@@ -538,8 +649,8 @@ mod tests {
             s.add(&v);
         }
 
-        // Non-positives ignored
-        assert_eq!(s.get_count(), 7);
+        // Every finite sample is retained, including zero and negatives.
+        assert_eq!(s.get_count(), 9);
 
         let ps = [0.0, 0.5, 0.9, 0.99, 1.0];
         let mut prev = f64::NEG_INFINITY;
@@ -676,7 +787,11 @@ mod tests {
         let (min_indexable, max_indexable) = ddsketch_indexable_bounds(0.01);
         d.add(&(max_indexable * 10.0));
         d.add(&(min_indexable / 10.0));
-        assert_eq!(d.get_count(), count_before, "extreme values were recorded");
+        assert_eq!(
+            d.get_count(),
+            count_before + 1,
+            "tiny value belongs to zero bucket"
+        );
         assert_eq!(
             d.store.counts.as_slice().len(),
             span_before,
@@ -685,7 +800,7 @@ mod tests {
 
         // A large-but-trackable value is still recorded.
         d.add(&(max_indexable / 2.0));
-        assert_eq!(d.get_count(), count_before + 1);
+        assert_eq!(d.get_count(), count_before + 2);
     }
 
     fn populated_sketch() -> DDSketch {

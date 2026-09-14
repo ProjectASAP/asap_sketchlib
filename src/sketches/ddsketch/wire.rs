@@ -21,13 +21,11 @@
 //! `gamma` / `log_gamma` / `inv_log_gamma` triple is derived from it
 //! (`gamma = (1 + alpha) / (1 - alpha)`) and never reaches the wire.
 //!
-//! ## One positive-range store
+//! ## Signed stores
 //!
-//! DDSketch is defined for positive reals: `add` drops non-positive,
-//! non-finite, and non-indexable values. There is no negative-range store and
-//! no zero-count bucket, so the payload has no field for either. Bucket
-//! *indices* are still signed — a value below `1.0` maps to a negative index —
-//! and `offset` carries that as a msgpack int.
+//! Positive-only payloads retain metadata version 1. Signed or zero-containing
+//! payloads use version 2 and append a negative-magnitude store and zero count.
+//! Older native readers reject version 2 instead of silently dropping samples.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
@@ -75,6 +73,29 @@ struct DdPayload {
     sum: f64,
     min: f64,
     max: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SignedPayload {
+    counts: Vec<u64>,
+    offset: i32,
+    sum: f64,
+    min: f64,
+    max: f64,
+    negative_counts: Vec<u64>,
+    negative_offset: i32,
+    zero_count: u64,
+}
+
+pub(super) fn check_signed_scalars(count: u64, sum: f64, min: f64, max: f64) -> Result<(), String> {
+    if count == 0 {
+        return check_scalars(count, sum, min, max);
+    }
+    if sum.is_finite() && min.is_finite() && max.is_finite() && min <= max {
+        Ok(())
+    } else {
+        Err("DDSketch invalid signed scalars".into())
+    }
 }
 
 /// Checks a relative accuracy against the domain [`DDSketch::new`] accepts:
@@ -156,8 +177,37 @@ impl DDSketch {
         check_store_span(self.store.offset, counts.len()).map_err(fail)?;
         let count = total_count(counts)
             .ok_or_else(|| fail("bucket counts overflow the total sample count".to_string()))?;
-        check_scalars(count, self.sum, self.min, self.max).map_err(fail)?;
+        if self.negative_store.is_empty() && self.zero_count == 0 {
+            check_scalars(count, self.sum, self.min, self.max).map_err(fail)?;
+        }
 
+        if !self.negative_store.is_empty() || self.zero_count != 0 {
+            check_store_span(self.negative_store.offset, self.negative_store.counts.len())
+                .map_err(fail)?;
+            let count = total_count(self.store.counts.as_slice())
+                .and_then(|c| {
+                    total_count(self.negative_store.counts.as_slice())
+                        .and_then(|n| c.checked_add(n))
+                })
+                .and_then(|c| c.checked_add(self.zero_count))
+                .ok_or_else(|| fail("count overflow".into()))?;
+            check_signed_scalars(count, self.sum, self.min, self.max).map_err(fail)?;
+            let metadata = rmp_serde::to_vec_named(&DdMetadata {
+                metadata_version: 2,
+                alpha: self.alpha,
+            })?;
+            let payload = rmp_serde::to_vec(&SignedPayload {
+                counts: counts.to_vec(),
+                offset: self.store.offset,
+                sum: self.sum,
+                min: self.min,
+                max: self.max,
+                negative_counts: self.negative_store.counts.as_slice().to_vec(),
+                negative_offset: self.negative_store.offset,
+                zero_count: self.zero_count,
+            })?;
+            return Ok(envelope::encode(DD_KIND, &metadata, &payload));
+        }
         let metadata = rmp_serde::to_vec_named(&dd_metadata(self.alpha))?;
         let payload = rmp_serde::to_vec(&DdPayload {
             counts: counts.to_vec(),
@@ -184,6 +234,25 @@ impl DDSketch {
         // `alpha` is a property of the stored sketch rather than of the target
         // type, so it is echoed back into the expected block and bounded by
         // range instead of being pinned.
+        if meta.metadata_version == 2 {
+            let p: SignedPayload = from_slice(payload)?;
+            return DDSketch::try_from(super::DDSketchState {
+                alpha: meta.alpha,
+                store: Buckets {
+                    counts: Vector1D::from_vec(p.counts),
+                    offset: p.offset,
+                },
+                negative_store: Buckets {
+                    counts: Vector1D::from_vec(p.negative_counts),
+                    offset: p.negative_offset,
+                },
+                zero_count: p.zero_count,
+                sum: p.sum,
+                min: p.min,
+                max: p.max,
+            })
+            .map_err(RmpDecodeError::Uncategorized);
+        }
         if meta != dd_metadata(meta.alpha) {
             return Err(RmpDecodeError::Uncategorized(
                 "ASAPv1 DDSketch envelope: metadata mismatch".to_string(),
@@ -216,6 +285,8 @@ impl DDSketch {
             sum: p.sum,
             min: p.min,
             max: p.max,
+            negative_store: Buckets::new(),
+            zero_count: 0,
         })
     }
 }

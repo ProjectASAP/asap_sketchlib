@@ -39,6 +39,10 @@ message DDSketchState {
   reserved 4, 5, 6, 7;
 
   reserved 8 to 15;
+  // Signed extension: negative magnitudes use the same mapping as positives.
+  repeated uint64 negative_store_counts = 16 [packed = true];
+  sint32 negative_store_offset = 17;
+  uint64 zero_count = 18;
 }
 
 // ============================================================================
@@ -56,6 +60,8 @@ message DDSketchState {
 // state (cross-language byte parity).
 message DDSketchDelta {
   repeated DDSketchBucketDelta buckets = 1;
+  repeated DDSketchBucketDelta negative_buckets = 16;
+  uint64 zero_count = 17;
 
   // Fields 2-7 (d_count/d_sum/new_min/new_max/min_changed/max_changed)
   // removed: DataPoint-level metric scalars are no longer carried on the wire.

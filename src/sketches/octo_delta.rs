@@ -94,9 +94,19 @@ pub struct HllDelta {
     pub value: u8,
 }
 
+/// Store selected by a DDSketch delta; logarithmic indices alone do not encode sign.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DdStore {
+    #[default]
+    Positive,
+    Negative,
+    Zero,
+}
+
 /// Delta emitted by a DDSketch child worker for one bucket.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DdDelta {
+    pub store: DdStore,
     /// Absolute bucket index, as used by `DDSketch::store_offset`.
     pub index: i32,
     /// Accumulated count for the bucket.
