@@ -31,6 +31,7 @@ its theorem.
 | `e2e/octo.rs` | OctoSketch delta-promotion invariants, the `octo-runtime` pipeline, and conformance to the paper's Theorems 1-4 and its sketch-merge baseline |
 | `e2e/experimental.rs` | The remaining `feature = "experimental"` sketches: KMV, UniformSampling, EHUnivOptimized, CountMinHll |
 | `bug_verification.rs` | Regression tests for fixed wrong-query-results bugs |
+| `pbt/` | Property tests under `proptest`, one target (`cargo test --test pbt`): merge algebra, path equivalence, wire and ASAPv1 round-trips, and the papers' own reference models |
 | `spec_self_tests.rs` | The specs checking themselves — the median's bad-row threshold, the binomial tails it selects, the four-row counter-example behind it, and the simultaneous `kappa` search. Its own binary because a `#[test]` in `common/specs.rs` runs once per target that pulls `common` in |
 
 ## Onboarding a new sketch
@@ -99,6 +100,7 @@ its theorem.
 
 ```bash
 cargo test --test e2e                     # every end-to-end suite
+cargo test --test pbt                     # every property test
 cargo test --test e2e matrix_instances::  # every storage x path instance
 cargo test --test conformance_kit         # kit + reference adapters
 cargo test --all-features                 # everything, incl. the experimental suites
