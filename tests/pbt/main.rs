@@ -11,3 +11,8 @@ mod support;
 
 mod count_min;
 mod count_sketch;
+mod ensemble;
+mod hydra;
+mod set_aggregator;
+mod univmon;
+mod univmon_q;
