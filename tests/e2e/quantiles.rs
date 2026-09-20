@@ -35,7 +35,7 @@
 //! **different order statistics**, so each is compared against the truth for
 //! its own convention; see `DdRankConvention`.
 
-mod common;
+use crate::common;
 
 use common::specs::{DdRankConvention, KllRankSpec, RelativeQuantileSpec, Tally, rank_error};
 use common::{

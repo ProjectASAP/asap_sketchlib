@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::{uniform_u64, zipf_u64};
 

@@ -18,7 +18,7 @@ column enumerates every generated name with the parameter it was invoked with.
 cargo test
 ```
 
-Two feature gates hide tests from that command: `tests/e2e_experimental.rs` and
+Two feature gates hide tests from that command: `tests/e2e/experimental.rs` and
 scattered `#[cfg(feature = "experimental")]` tests need
 `cargo test --features experimental`, and the `runtime_tests` module in
 `src/sketch_framework/octo.rs` needs `cargo test --features octo-runtime`.
@@ -439,7 +439,7 @@ The shared `FoldCell` and `FoldEntry` behaviour is covered by the cell tests in 
 
 ### SpaceSaving
 
-Test file: [`tests/e2e_heavy_hitters.rs`](../tests/e2e_heavy_hitters.rs)
+Test file: [`tests/e2e/heavy_hitters.rs`](../tests/e2e/heavy_hitters.rs)
 
 Unit tests: [`src/sketches/space_saving.rs`](../src/sketches/space_saving.rs)
 
@@ -521,7 +521,7 @@ Conformance: [`tests/conformance_kit.rs`](../tests/conformance_kit.rs) runs `spa
 
 ### Bloom
 
-Test file: [`tests/e2e_membership.rs`](../tests/e2e_membership.rs)
+Test file: [`tests/e2e/membership.rs`](../tests/e2e/membership.rs)
 
 Unit tests: [`src/sketches/bloom.rs`](../src/sketches/bloom.rs)
 
@@ -1017,7 +1017,7 @@ Test file: [`src/sketch_framework/eh_univ_optimized.rs`](../src/sketch_framework
 
 ### OctoSketch
 
-Test file: [`tests/e2e_octo.rs`](../tests/e2e_octo.rs)
+Test file: [`tests/e2e/octo.rs`](../tests/e2e/octo.rs)
 
 Unit tests: [`src/sketch_framework/octo.rs`](../src/sketch_framework/octo.rs)
 
@@ -1571,7 +1571,7 @@ One subsection per integration test binary under [`tests/`](../tests/); the comp
 
 ### Frequency: Count-Min and Count Sketch
 
-Test file: [`tests/e2e_frequency.rs`](../tests/e2e_frequency.rs)
+Test file: [`tests/e2e/frequency.rs`](../tests/e2e/frequency.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1587,7 +1587,7 @@ Test file: [`tests/e2e_frequency.rs`](../tests/e2e_frequency.rs)
 
 ### Frequency: CountL2HH
 
-Test file: [`tests/e2e_frequency.rs`](../tests/e2e_frequency.rs)
+Test file: [`tests/e2e/frequency.rs`](../tests/e2e/frequency.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1595,7 +1595,7 @@ Test file: [`tests/e2e_frequency.rs`](../tests/e2e_frequency.rs)
 
 ### Frequency: FoldCMS and FoldCS
 
-Test file: [`tests/e2e_frequency.rs`](../tests/e2e_frequency.rs)
+Test file: [`tests/e2e/frequency.rs`](../tests/e2e/frequency.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1604,7 +1604,7 @@ Test file: [`tests/e2e_frequency.rs`](../tests/e2e_frequency.rs)
 
 ### Frequency: Portable Count-Min and Count Sketch
 
-Test file: [`tests/e2e_frequency.rs`](../tests/e2e_frequency.rs)
+Test file: [`tests/e2e/frequency.rs`](../tests/e2e/frequency.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1612,7 +1612,7 @@ Test file: [`tests/e2e_frequency.rs`](../tests/e2e_frequency.rs)
 
 ### Frequency: Documented Input Matrix
 
-Test file: [`tests/e2e_frequency.rs`](../tests/e2e_frequency.rs)
+Test file: [`tests/e2e/frequency.rs`](../tests/e2e/frequency.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1622,7 +1622,7 @@ Test file: [`tests/e2e_frequency.rs`](../tests/e2e_frequency.rs)
 
 ### Cardinality: Batteries
 
-Test file: [`tests/e2e_cardinality.rs`](../tests/e2e_cardinality.rs)
+Test file: [`tests/e2e/cardinality.rs`](../tests/e2e/cardinality.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1638,7 +1638,7 @@ Test file: [`tests/e2e_cardinality.rs`](../tests/e2e_cardinality.rs)
 
 ### Cardinality: Duplicate-Heavy Zipf Streams
 
-Test file: [`tests/e2e_cardinality.rs`](../tests/e2e_cardinality.rs)
+Test file: [`tests/e2e/cardinality.rs`](../tests/e2e/cardinality.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1646,7 +1646,7 @@ Test file: [`tests/e2e_cardinality.rs`](../tests/e2e_cardinality.rs)
 
 ### Cardinality: Documented Input Matrix
 
-Test file: [`tests/e2e_cardinality.rs`](../tests/e2e_cardinality.rs)
+Test file: [`tests/e2e/cardinality.rs`](../tests/e2e/cardinality.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1657,7 +1657,7 @@ Test file: [`tests/e2e_cardinality.rs`](../tests/e2e_cardinality.rs)
 
 ### Quantiles: KLL Rank Contract
 
-Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
+Test file: [`tests/e2e/quantiles.rs`](../tests/e2e/quantiles.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1666,7 +1666,7 @@ Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
 
 ### Quantiles: KLL Bulk Ingestion
 
-Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
+Test file: [`tests/e2e/quantiles.rs`](../tests/e2e/quantiles.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1677,7 +1677,7 @@ Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
 
 ### Quantiles: KLL Geometry Axes
 
-Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
+Test file: [`tests/e2e/quantiles.rs`](../tests/e2e/quantiles.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1690,7 +1690,7 @@ Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
 
 ### Quantiles: DDSketch Relative Value Error
 
-Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
+Test file: [`tests/e2e/quantiles.rs`](../tests/e2e/quantiles.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1704,7 +1704,7 @@ Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
 
 ### Quantiles: DDSketch Input Rejection
 
-Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
+Test file: [`tests/e2e/quantiles.rs`](../tests/e2e/quantiles.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1713,7 +1713,7 @@ Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
 
 ### Quantiles: UnivMon-Q Estimators
 
-Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
+Test file: [`tests/e2e/quantiles.rs`](../tests/e2e/quantiles.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1729,7 +1729,7 @@ Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
 
 ### Quantiles: Windowed and Per-Key KLL
 
-Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
+Test file: [`tests/e2e/quantiles.rs`](../tests/e2e/quantiles.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1738,7 +1738,7 @@ Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
 
 ### Quantiles: Documented Input Matrix
 
-Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
+Test file: [`tests/e2e/quantiles.rs`](../tests/e2e/quantiles.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1748,7 +1748,7 @@ Test file: [`tests/e2e_quantiles.rs`](../tests/e2e_quantiles.rs)
 
 ### Heavy Hitters: Coco and Elastic Keyed Buckets
 
-Test file: [`tests/e2e_heavy_hitters.rs`](../tests/e2e_heavy_hitters.rs)
+Test file: [`tests/e2e/heavy_hitters.rs`](../tests/e2e/heavy_hitters.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1764,7 +1764,7 @@ Test file: [`tests/e2e_heavy_hitters.rs`](../tests/e2e_heavy_hitters.rs)
 
 ### Heavy Hitters: Partial-Key Queries and Heavy-Table Maintenance
 
-Test file: [`tests/e2e_heavy_hitters.rs`](../tests/e2e_heavy_hitters.rs)
+Test file: [`tests/e2e/heavy_hitters.rs`](../tests/e2e/heavy_hitters.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1782,7 +1782,7 @@ Test file: [`tests/e2e_heavy_hitters.rs`](../tests/e2e_heavy_hitters.rs)
 
 ### Heavy Hitters: Documented Input Matrix
 
-Test file: [`tests/e2e_heavy_hitters.rs`](../tests/e2e_heavy_hitters.rs)
+Test file: [`tests/e2e/heavy_hitters.rs`](../tests/e2e/heavy_hitters.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1793,7 +1793,7 @@ Test file: [`tests/e2e_heavy_hitters.rs`](../tests/e2e_heavy_hitters.rs)
 
 ### Top-K: Heap-Backed Sketches
 
-Test file: [`tests/e2e_topk.rs`](../tests/e2e_topk.rs)
+Test file: [`tests/e2e/topk.rs`](../tests/e2e/topk.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1801,7 +1801,7 @@ Test file: [`tests/e2e_topk.rs`](../tests/e2e_topk.rs)
 
 ### Top-K: Documented Input Matrix
 
-Test file: [`tests/e2e_topk.rs`](../tests/e2e_topk.rs)
+Test file: [`tests/e2e/topk.rs`](../tests/e2e/topk.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1809,7 +1809,7 @@ Test file: [`tests/e2e_topk.rs`](../tests/e2e_topk.rs)
 
 ### Frameworks: Hydra Pipelines
 
-Test file: [`tests/e2e_frameworks.rs`](../tests/e2e_frameworks.rs)
+Test file: [`tests/e2e/frameworks.rs`](../tests/e2e/frameworks.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1843,7 +1843,7 @@ Test file: [`tests/e2e_frameworks.rs`](../tests/e2e_frameworks.rs)
 
 ### Frameworks: UnivMon Pipelines
 
-Test file: [`tests/e2e_frameworks.rs`](../tests/e2e_frameworks.rs)
+Test file: [`tests/e2e/frameworks.rs`](../tests/e2e/frameworks.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1855,7 +1855,7 @@ Test file: [`tests/e2e_frameworks.rs`](../tests/e2e_frameworks.rs)
 
 ### Frameworks: Windowed Pipelines
 
-Test file: [`tests/e2e_frameworks.rs`](../tests/e2e_frameworks.rs)
+Test file: [`tests/e2e/frameworks.rs`](../tests/e2e/frameworks.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1864,7 +1864,7 @@ Test file: [`tests/e2e_frameworks.rs`](../tests/e2e_frameworks.rs)
 
 ### Frameworks: Documented Input Matrix
 
-Test file: [`tests/e2e_frameworks.rs`](../tests/e2e_frameworks.rs)
+Test file: [`tests/e2e/frameworks.rs`](../tests/e2e/frameworks.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1878,7 +1878,7 @@ Test file: [`tests/e2e_frameworks.rs`](../tests/e2e_frameworks.rs)
 
 ### Windows: Exponential Histogram Payload Variants
 
-Test file: [`tests/e2e_windows.rs`](../tests/e2e_windows.rs)
+Test file: [`tests/e2e/windows.rs`](../tests/e2e/windows.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1896,7 +1896,7 @@ Test file: [`tests/e2e_windows.rs`](../tests/e2e_windows.rs)
 
 ### Windows: Exponential Histogram Semantics
 
-Test file: [`tests/e2e_windows.rs`](../tests/e2e_windows.rs)
+Test file: [`tests/e2e/windows.rs`](../tests/e2e/windows.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1906,7 +1906,7 @@ Test file: [`tests/e2e_windows.rs`](../tests/e2e_windows.rs)
 
 ### Windows: Tumbling Windows and Sketch Pools
 
-Test file: [`tests/e2e_windows.rs`](../tests/e2e_windows.rs)
+Test file: [`tests/e2e/windows.rs`](../tests/e2e/windows.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1918,7 +1918,7 @@ Test file: [`tests/e2e_windows.rs`](../tests/e2e_windows.rs)
 
 ### Windows: Documented Input Matrix
 
-Test file: [`tests/e2e_windows.rs`](../tests/e2e_windows.rs)
+Test file: [`tests/e2e/windows.rs`](../tests/e2e/windows.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1926,7 +1926,7 @@ Test file: [`tests/e2e_windows.rs`](../tests/e2e_windows.rs)
 
 ### Composition: HashSketchEnsemble
 
-Test file: [`tests/e2e_composition.rs`](../tests/e2e_composition.rs)
+Test file: [`tests/e2e/composition.rs`](../tests/e2e/composition.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1936,7 +1936,7 @@ Test file: [`tests/e2e_composition.rs`](../tests/e2e_composition.rs)
 
 ### Composition: UnivMon-Q Configuration Surface
 
-Test file: [`tests/e2e_composition.rs`](../tests/e2e_composition.rs)
+Test file: [`tests/e2e/composition.rs`](../tests/e2e/composition.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1947,7 +1947,7 @@ Test file: [`tests/e2e_composition.rs`](../tests/e2e_composition.rs)
 
 ### Composition: Portable Sketch-With-Heap Facades
 
-Test file: [`tests/e2e_composition.rs`](../tests/e2e_composition.rs)
+Test file: [`tests/e2e/composition.rs`](../tests/e2e/composition.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1957,7 +1957,7 @@ Test file: [`tests/e2e_composition.rs`](../tests/e2e_composition.rs)
 
 ### Composition: Documented Input Matrix
 
-Test file: [`tests/e2e_composition.rs`](../tests/e2e_composition.rs)
+Test file: [`tests/e2e/composition.rs`](../tests/e2e/composition.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1965,7 +1965,7 @@ Test file: [`tests/e2e_composition.rs`](../tests/e2e_composition.rs)
 
 ### Matrix Instance Coverage
 
-Test file: [`tests/e2e_matrix_instances.rs`](../tests/e2e_matrix_instances.rs)
+Test file: [`tests/e2e/matrix_instances.rs`](../tests/e2e/matrix_instances.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -1993,7 +1993,7 @@ Test file: [`tests/e2e_matrix_instances.rs`](../tests/e2e_matrix_instances.rs)
 
 ### Numeric Type Coverage
 
-Test file: [`tests/e2e_numeric_types.rs`](../tests/e2e_numeric_types.rs)
+Test file: [`tests/e2e/numeric_types.rs`](../tests/e2e/numeric_types.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -2004,7 +2004,7 @@ Test file: [`tests/e2e_numeric_types.rs`](../tests/e2e_numeric_types.rs)
 
 ### DataInput Variant Coverage
 
-Test file: [`tests/e2e_data_input.rs`](../tests/e2e_data_input.rs)
+Test file: [`tests/e2e/data_input.rs`](../tests/e2e/data_input.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -2025,7 +2025,7 @@ Test file: [`tests/e2e_data_input.rs`](../tests/e2e_data_input.rs)
 
 ### Experimental: KMV
 
-Test file: [`tests/e2e_experimental.rs`](../tests/e2e_experimental.rs)
+Test file: [`tests/e2e/experimental.rs`](../tests/e2e/experimental.rs)
 
 Feature: the whole file is `#![cfg(feature = "experimental")]`, so these rows run only under `cargo test --features experimental`.
 
@@ -2039,7 +2039,7 @@ Feature: the whole file is `#![cfg(feature = "experimental")]`, so these rows ru
 
 ### Experimental: UniformSampling
 
-Test file: [`tests/e2e_experimental.rs`](../tests/e2e_experimental.rs)
+Test file: [`tests/e2e/experimental.rs`](../tests/e2e/experimental.rs)
 
 Feature: the whole file is `#![cfg(feature = "experimental")]`, so these rows run only under `cargo test --features experimental`.
 
@@ -2053,7 +2053,7 @@ Feature: the whole file is `#![cfg(feature = "experimental")]`, so these rows ru
 
 ### Experimental: EHUnivOptimized
 
-Test file: [`tests/e2e_experimental.rs`](../tests/e2e_experimental.rs)
+Test file: [`tests/e2e/experimental.rs`](../tests/e2e/experimental.rs)
 
 Feature: the whole file is `#![cfg(feature = "experimental")]`, so these rows run only under `cargo test --features experimental`.
 
@@ -2069,7 +2069,7 @@ Feature: the whole file is `#![cfg(feature = "experimental")]`, so these rows ru
 
 ### Nitro Sampling
 
-Test file: [`tests/e2e_nitro.rs`](../tests/e2e_nitro.rs)
+Test file: [`tests/e2e/nitro.rs`](../tests/e2e/nitro.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
@@ -2091,7 +2091,7 @@ Test file: [`tests/e2e_nitro.rs`](../tests/e2e_nitro.rs)
 
 ### ASAPv1 Envelope Round Trips
 
-Test file: [`tests/e2e_wire.rs`](../tests/e2e_wire.rs)
+Test file: [`tests/e2e/wire.rs`](../tests/e2e/wire.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |

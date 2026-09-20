@@ -51,7 +51,7 @@
 //! Seeds are spaced so that no two trials read overlapping stretches of the
 //! shared skip table — see `TRIAL_STRIDE`.
 
-mod common;
+use crate::common;
 
 use common::specs::{CountMinSpec, SIMULTANEOUS_LEVEL, SamplingConfidenceSpec, Tally};
 use common::{FreqTruth, zipf_u64};

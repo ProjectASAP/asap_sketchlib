@@ -40,7 +40,7 @@ mod wire;
 /// Above `2^53` the estimate has already lost precision in `f64` inside
 /// `Count::estimate`, so an `i128` sketch's heap entries are exact only up to
 /// that magnitude. Both limits are asserted in
-/// `tests/e2e_matrix_instances.rs`.
+/// `tests/e2e/matrix_instances.rs`.
 #[inline]
 pub fn cs_heap_count(estimate: f64) -> i64 {
     // `as` on a float is a saturating cast in Rust (since 1.45); this is the

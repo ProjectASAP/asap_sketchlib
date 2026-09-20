@@ -890,7 +890,7 @@ pub fn occurrence_sample_epsilon(samples: usize, delta: f64) -> f64 {
 /// breakpoint* across a region carrying a lot of mass scores zero error under
 /// that check and arbitrarily large error under this one.
 /// `cdf_sup_distance_detects_a_gap_a_breakpoint_scan_misses` in
-/// `tests/e2e_quantiles.rs` is exactly that fixture.
+/// `tests/e2e/quantiles.rs` is exactly that fixture.
 pub fn cdf_sup_distance(estimated: &[(f64, f64)], sorted_truth: &[f64]) -> (f64, f64) {
     let n = sorted_truth.len();
     assert!(

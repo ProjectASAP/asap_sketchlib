@@ -194,7 +194,7 @@ attempt: serialization round trips, window semantics, framework composition
 parity between core types and their portable wire twins.
 
 A composition framework can also *be* a battery subject, in the same suite that
-already covers it. `e2e_frameworks.rs` runs a single-column Hydra — where the
+already covers it. `e2e/frameworks.rs` runs a single-column Hydra — where the
 grid does the keying and each cell holds one counter — through the standard
 batteries once per counter family it can host (CM, Count Sketch, HLL, KLL),
 alongside the depth no battery models: the `2^D - 1` fan-out across the
@@ -205,11 +205,11 @@ for delimiter-laden values. Suites grow with their family; a framework that
 outgrows a smoke test deepens in place rather than splitting off.
 
 What does split is a suite held together by something other than its subject.
-`e2e_experimental.rs` groups sketches by cargo feature; Space-Saving, CocoSketch
-and the Elastic sketch sit in `e2e_heavy_hitters.rs` instead, organised by what
+`e2e/experimental.rs` groups sketches by cargo feature; Space-Saving, CocoSketch
+and the Elastic sketch sit in `e2e/heavy_hitters.rs` instead, organised by what
 they are: heavy-hitter sketches, which answer *which flows are big* from a flow
 key kept beside every counter. None of the three is feature-gated, so the
-default-feature run gets all of them. `e2e_octo.rs` holds the multi-threaded
+default-feature run gets all of them. `e2e/octo.rs` holds the multi-threaded
 Octo variants of Coco and Elastic, in its own `heavy_hitters` module, beside
 the rest of the promotion protocol.
 
@@ -351,9 +351,9 @@ error against its bound.
 
 ```bash
 cargo test --all-features --locked           # full matrix incl. experimental
+cargo test --test e2e                        # every end-to-end suite
+cargo test --test e2e matrix_instances::     # every storage x path instance
 cargo test --test conformance_kit            # kit + reference adapters only
-cargo test --test e2e_matrix_instances       # every storage x path instance
-cargo test --test e2e_numeric_types          # every NumericalValue type
 cargo run --release --example accuracy_probe --features experimental
                                              # heavy release-only probes
 ```

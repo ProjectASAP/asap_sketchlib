@@ -7,7 +7,7 @@
 //! The two Nitro defects the probe found — the insert and query paths reading
 //! different hash domains, and each sampled record reaching only one row — are
 //! pinned by `full_sampling_is_exact_and_the_query_reads_the_cells_the_insert_wrote`
-//! in `tests/e2e_nitro.rs`, which names both failure modes on the same run
+//! in `tests/e2e/nitro.rs`, which names both failure modes on the same run
 //! that already exercises every ingestion path.
 
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;

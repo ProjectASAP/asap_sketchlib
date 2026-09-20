@@ -268,7 +268,7 @@ deep layers outright — and those are exactly the layers the recursive
 estimator leans on for cardinality. `univmon_layer_threshold(base, layer)`
 halves τ per layer with a floor of 1. On a 60k Zipf stream with 12
 layers, `a_flat_threshold_starves_the_deep_univmon_layers`
-(`tests/e2e_octo.rs`) pins a flat τ=31 as leaving the deepest layer
+(`tests/e2e/octo.rs`) pins a flat τ=31 as leaving the deepest layer
 without a single non-zero cell and losing more than half the cardinality,
 while the scaled rule keeps that layer's non-zero cell count equal to the
 single-threaded sketch's and the estimate within 10% of it.

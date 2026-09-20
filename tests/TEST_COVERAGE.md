@@ -25,7 +25,7 @@
 
 `A-Za-z0-9`
 
-## e2e_cardinality
+## e2e/cardinality
 
 - HyperLogLog
   - all classic, ErtlMLE, HIP
@@ -51,7 +51,7 @@
   - shard merge: an even/odd split merged back must stay inside the same band as the single-pass sketch
   - configuration
 
-## e2e_composition
+## e2e/composition
 
 - HashSketchEnsemble
   - cells: CountMin (row 3, col 4096, FastPath) + HyperLogLog (ErtlMLE), one hash layer shared by every cell
@@ -60,7 +60,7 @@
     - CountMin cell: same with sketch instance
     - HyperLogLog cell: same with sketch instance
 
-## e2e_experimental
+## e2e/experimental
 
 Feature-gated behind `--features experimental`.
 
@@ -95,7 +95,7 @@ Feature-gated behind `--features experimental`.
   - both runs assert their own occupancy, so a routing regression that made the rows track each other fails rather than silently skipping the checks
   - merge: register-wise maximum reproduces a single pass over both halves byte for byte
 
-## e2e_frameworks
+## e2e/frameworks
 
 - Hydra
   - Configuration: schema 2 dims (`region`, `user`), row 4, col 4096
@@ -127,7 +127,7 @@ Feature-gated behind `--features experimental`.
     - L2: relative error 15%
     - cardinality: -30% / +30%
 
-## e2e_frequency
+## e2e/frequency
 
 - CountMin sketch
   - both vector based and fixed matrix based
@@ -527,7 +527,7 @@ Feature-gated behind `--features experimental`.
   - counts are exact on sparse dims, including signed weighted updates through FoldCS
   - same-level merge sums disjoint contributions; hierarchical merge of level-matched sketches preserves totals
 
-## e2e_heavy_hitters
+## e2e/heavy_hitters
 
 - CountMin sketch
   - both vector based and fixed matrix based
@@ -951,7 +951,7 @@ Feature-gated behind `--features experimental`.
 |1024 (default)|97.7|977|
 |2048|48.8|488|
 
-## e2e_membership
+## e2e/membership
 
 - Bloom filter
   - input: 20K distinct members, 200K disjoint probes per measured rate
@@ -965,7 +965,7 @@ Feature-gated behind `--features experimental`.
   - sizing, the default geometry and the allocation ceiling are checked as exact geometries rather than rates
 
 
-## e2e_nitro
+## e2e/nitro
 
 - NitroBatch
   - target sketches: CountMin (row 5, col 2048, FastPath) and Count sketch (row 5, col 2048, FastPath)
@@ -975,7 +975,7 @@ Feature-gated behind `--features experimental`.
     - CountMin target: relative error 5%
     - Count sketch target: relative error 10%
 
-## e2e_octo
+## e2e/octo
 
 - Octo
   - input: zipf(1.1) streams of 40K to 400K keys over a 2048 to 8192 key domain, dispatched to 2, 3 or 4 workers under both the `HashByKey` and `RoundRobin` partitions
@@ -996,7 +996,7 @@ Feature-gated behind `--features experimental`.
     - Coco: 124
     - Elastic: 124
 
-## e2e_quantiles
+## e2e/quantiles
 
 - KLL
   - Input: (1) ~ (12)
@@ -1040,7 +1040,7 @@ Feature-gated behind `--features experimental`.
   - shard merge: the merged sketch keeps the same bound
   - DDSketch drops non-finite, non-positive and non-indexable values without corrupting bucket 0 and without letting one sample force a distant-bucket allocation
 
-## e2e_topk
+## e2e/topk
 
 - CMS_heap
   - Input: (3) ~ (6), (9) ~ (12)
@@ -1063,7 +1063,7 @@ Feature-gated behind `--features experimental`.
   - recall: at least `top_k - 1` of the entries must be true top-k keys
   - consistency: every heap entry's stored count must equal the sketch's current estimate for that key
 
-## e2e_windows
+## e2e/windows
 
 - ExponentialHistogram
   - Configuration: k=8, window 100, payload CountMin (row 3, col 2048, FastPath)
@@ -1119,7 +1119,7 @@ Feature-gated behind `--features experimental`.
     - no cell zooms, so the error is one-sided; past a zoom the probabilistic rounding makes it two-sided and `one_sided: true` would be the wrong contract
   - CountMinHll is not run through the batteries: its query is a grouped distinct count, and no `*Ops` trait in the kit models that
 
-## e2e_wire
+## e2e/wire
 
 - ASAPv1 envelope round trip, one kind at a time
   - kinds covered: DDSketch, Bloom (both hash paths), Coco, Elastic, SpaceSaving, KLLDynamic, the heap-backed matrix types, ExponentialHistogram, EHSketchList, Hydra (naming the counter it carries), the UnivMon family, and the experimental kinds

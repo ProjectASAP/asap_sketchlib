@@ -2,7 +2,7 @@
 //! surface, and the portable facade types that pair a sketch with a heap.
 //!
 //! Nitro is a composition layer too, but all of its behaviour lives in
-//! `tests/e2e_nitro.rs`.
+//! `tests/e2e/nitro.rs`.
 //!
 //! The common thread is that none of these change what a sketch guarantees —
 //! they change how it is fed. So each is checked against a **standalone
@@ -10,7 +10,7 @@
 //! error metric. A composition layer that quietly altered state would show up
 //! as a divergence from the reference, not as a widened tolerance.
 
-mod common;
+use crate::common;
 
 use common::specs::{CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, KllRankSpec, Tally};
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
