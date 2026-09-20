@@ -11,3 +11,5 @@ mod support;
 
 mod count_min;
 mod count_sketch;
+mod exponential_histogram;
+mod fold;
