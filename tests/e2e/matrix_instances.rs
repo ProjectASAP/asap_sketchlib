@@ -9,10 +9,10 @@
 //! that independence is a modelling assumption about the hash's avalanche. The
 //! coverage matrix classifies the fast-path rows `asymptotic model` for this
 //! reason. Nothing is widened for them — see
-//! `countmin_fast_path_conforms_to_the_count_min_model` in `e2e_frequency.rs`
+//! `countmin_fast_path_conforms_to_the_count_min_model` in `e2e/frequency.rs`
 //! for the split written out in full.
 //!
-//! The deep, production-sized accuracy runs live in `e2e_frequency.rs` on each
+//! The deep, production-sized accuracy runs live in `e2e/frequency.rs` on each
 //! family's headline instance. This file is about *coverage of the instance
 //! matrix*: a storage backend that silently mis-indexes, a counter width that
 //! wraps, or a fast path that reads cells the regular path never wrote, would
@@ -30,7 +30,7 @@
 //! Counter-width overflow is covered separately, once per width, because that
 //! is where `i32`, `i64` and `i128` actually differ.
 
-mod common;
+use crate::common;
 
 use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, Tally};
 use common::{FreqTruth, zipf_u64};

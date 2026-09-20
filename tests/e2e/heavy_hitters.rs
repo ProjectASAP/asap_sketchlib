@@ -20,13 +20,13 @@
 //! operating point; Elastic's hot-flow tracking, its one-sided estimator under
 //! eviction pressure, and the reach of the light layer's dimensions.
 //!
-//! `tests/e2e_octo.rs` covers the multi-threaded OctoSketch variants of Coco
+//! `tests/e2e/octo.rs` covers the multi-threaded OctoSketch variants of Coco
 //! and Elastic in its `heavy_hitters` module; everything here is the
 //! single-threaded sketch. The top-k heap sketches (`CMSHeap`, `CSHeap`) answer
 //! the same question from an unkeyed sketch plus a heap, and stay with their
-//! own family in `tests/e2e_frequency.rs`.
+//! own family in `tests/e2e/frequency.rs`.
 
-mod common;
+use crate::common;
 
 use common::{FreqTruth, zipf_u64};
 

@@ -22,7 +22,7 @@
 //! that belongs to the caller's type choice is covered separately and
 //! explicitly by `the_f64_projection_is_exact_below_two_to_the_53`.
 
-mod common;
+use crate::common;
 
 use common::specs::{KllRankSpec, RelativeQuantileSpec, Tally};
 use common::{NumericTruth, uniform_u64};
@@ -35,7 +35,7 @@ const K: i32 = 200;
 const SKETCH_SEEDS: [u64; 3] = [0x4E17_0001, 0x4E17_0002, 0x4E17_0003];
 
 /// A fresh compaction seed per KLL trial, so no two sketches in a battery share
-/// a coin sequence. See `tests/e2e_quantiles.rs` for why the rank batteries are
+/// a coin sequence. See `tests/e2e/quantiles.rs` for why the rank batteries are
 /// binomials over seeds rather than over quantiles.
 fn kll_trial_seed(trial: u64) -> u64 {
     0x4E17_0000_0000_0001u64.wrapping_add(trial.wrapping_mul(0x9E37_79B9_7F4A_7C15))

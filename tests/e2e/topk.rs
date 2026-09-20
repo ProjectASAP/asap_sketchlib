@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::specs::{CountMinSpec, CountSketchSpec, Tally};
 use common::{FreqTruth, zipf_u64};

@@ -18,7 +18,7 @@
 //! else. Both endpoints are public, so the reference window is known exactly
 //! and no tolerance is spent on bucket granularity.
 
-mod common;
+use crate::common;
 
 use common::specs::{
     CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, KllRankSpec, RelativeQuantileSpec,
@@ -216,7 +216,7 @@ fn eh_countl2hh_variant_satisfies_the_l2_bound_over_the_retained_window() {
 /// The heavy-hitter payloads keep a flow key beside each counter and evict on
 /// pressure, so their guarantee is one-sided on the keys they retain: a
 /// reported count never reads below the truth. Their full error sandwiches are
-/// covered in `e2e_heavy_hitters.rs`; what is new here is that the guarantee
+/// covered in `e2e/heavy_hitters.rs`; what is new here is that the guarantee
 /// survives EH bucket merging.
 #[test]
 fn eh_heavy_hitter_variants_stay_one_sided_over_the_retained_window() {

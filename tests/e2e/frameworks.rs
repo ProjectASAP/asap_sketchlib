@@ -2,7 +2,7 @@
 //! batteries and error bounds; UnivMon; Nitro; ExponentialHistogram;
 //! TumblingWindow; HashSketchEnsemble.
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 

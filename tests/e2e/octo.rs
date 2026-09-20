@@ -23,12 +23,12 @@
 //! The last section covers the two families that keep a flow key beside every
 //! counter - CocoSketch and the Elastic sketch, section 4.4 and appendix C.
 //! Only the Octo variants are here; the single-threaded sketches are
-//! `tests/e2e_heavy_hitters.rs`. Neither family is covered by a theorem, and
+//! `tests/e2e/heavy_hitters.rs`. Neither family is covered by a theorem, and
 //! Coco's aggregator elects from an unseeded RNG, so those tests split: exact
 //! mass identities that hold under any interleaving, and the paper's own
 //! measured comparison against sketch-merge for everything else.
 
-mod common;
+use crate::common;
 
 #[cfg(feature = "octo-runtime")]
 use asap_sketchlib::DD_PROMASK;

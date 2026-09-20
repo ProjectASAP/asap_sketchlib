@@ -468,7 +468,7 @@ pub fn compute_median_inline_f64(values: &mut [f64]) -> f64 {
 
 /// Structural and distributional tests for the row-level sampler.
 ///
-/// These live here rather than in `tests/e2e_nitro.rs` because they read the
+/// These live here rather than in `tests/e2e/nitro.rs` because they read the
 /// cursor and the skip counter, which are private: exposing them as public
 /// accessors would put a test-only surface in the crate's API.
 #[cfg(test)]

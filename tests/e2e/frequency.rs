@@ -14,7 +14,7 @@
 //! Both bounds live in `common::specs` alongside the binomial acceptance rules
 //! that turn a per-key failure probability into a pass/fail decision.
 
-mod common;
+use crate::common;
 
 use common::specs::{CountMinSpec, CountSketchSpec, SecondMomentSpec, Tally};
 use common::{

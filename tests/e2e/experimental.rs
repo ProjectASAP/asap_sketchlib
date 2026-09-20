@@ -3,13 +3,11 @@
 //! CountMinHll's per-key distinct counts.
 //!
 //! CocoSketch and the Elastic sketch are a family of their own;
-//! `tests/e2e_heavy_hitters.rs` covers them.
+//! `tests/e2e/heavy_hitters.rs` covers them.
 //!
 //! Compiled only under `--features experimental`.
 
-#![cfg(feature = "experimental")]
-
-mod common;
+use crate::common;
 
 use common::specs::{CardinalityConfidenceSpec, PrioritySampleSpec, Tally};
 use common::{FreqTruth, assert_between, uniform_u64, zipf_u64};

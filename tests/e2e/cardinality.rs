@@ -17,7 +17,7 @@
 //! A single hard-coded 2% would be simultaneously too loose at p16 (4.9 sigma)
 //! and too tight at p12 (1.2 sigma), which is why it is gone.
 
-mod common;
+use crate::common;
 
 use common::specs::CardinalityConfidenceSpec;
 use common::{
