@@ -352,6 +352,7 @@ error against its bound.
 ```bash
 cargo test --all-features --locked           # full matrix incl. experimental
 cargo test --test e2e                        # every end-to-end suite
+cargo test --test pbt                        # every property test
 cargo test --test e2e matrix_instances::     # every storage x path instance
 cargo test --test conformance_kit            # kit + reference adapters only
 cargo run --release --example accuracy_probe --features experimental
