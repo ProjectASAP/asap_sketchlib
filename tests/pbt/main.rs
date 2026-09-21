@@ -9,8 +9,11 @@
 #[macro_use]
 mod support;
 
+mod coco;
 mod count_min;
 mod count_sketch;
+mod elastic;
+mod space_saving;
 mod hll;
 
 #[cfg(feature = "experimental")]
