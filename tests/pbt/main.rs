@@ -10,36 +10,32 @@
 mod support;
 
 mod bloom;
-mod count_min;
-mod count_sketch;
-mod octo_delta;
-
-#[cfg(feature = "experimental")]
-mod microscope;
-mod nitro;
-
-#[cfg(feature = "experimental")]
-mod uniform_sampling;
 mod coco;
 mod count_min;
 mod count_sketch;
+mod ddsketch;
+mod elastic;
 mod ensemble;
-mod hydra;
-mod set_aggregator;
-mod univmon;
-mod univmon_q;
 mod exponential_histogram;
 mod fold;
 mod heaps;
-mod topk_wrappers;
-mod elastic;
-mod space_saving;
 mod hll;
+mod hydra;
+mod kll;
+mod kll_dynamic;
+mod nitro;
+mod octo_delta;
+mod set_aggregator;
+mod space_saving;
+mod topk_wrappers;
+mod univmon;
+mod univmon_q;
 
 #[cfg(feature = "experimental")]
 mod count_min_hll;
 #[cfg(feature = "experimental")]
 mod kmv;
-mod ddsketch;
-mod kll;
-mod kll_dynamic;
+#[cfg(feature = "experimental")]
+mod microscope;
+#[cfg(feature = "experimental")]
+mod uniform_sampling;
