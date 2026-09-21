@@ -44,12 +44,39 @@ signals a backwards-compatible change.
   the largest count they might ever hold. Count-based and time-based windows
   are one `SubWindowClock` type. Not yet checked against the paper's published
   measurements.
+- **Property tests for every sketch** (`tests/pbt/`, one target:
+  `cargo test --test pbt`). One file per sketch, named after it, holding every
+  law that sketch claims — merge algebra, path equivalence, the paper's own
+  model, and the wire / ASAPv1 round trip. Shared generators, the `grid`
+  reader and the `round_trip!` macro live in `tests/pbt/support.rs`; four
+  modules sit behind `experimental`. 434 tests under `--all-features`, 367
+  under the default feature set. Every law was mutation-checked: the
+  implementation was broken deliberately, the law confirmed red, and confirmed
+  not to take unrelated laws down with it; a law no semantically real mutation
+  could kill was deleted rather than kept. [PBT notes](docs/pbt_notes.md) say
+  what the suite is for and what it has found.
 
 ### Changed
 
 - `HyperLogLog`'s classic estimator body is now a shared function that
   `CountMinHll` also uses, so the two cannot drift. HyperLogLog's own numbers
   are unchanged.
+- **The end-to-end suites are one target.** `tests/e2e_*.rs` are now
+  `tests/e2e/*.rs` under a single `e2e` target, so `tests/common/` is compiled
+  once for all of them instead of once per suite. `cargo test --test e2e` runs
+  the set; a single suite is a filter, `cargo test --test e2e frequency::`.
+- Two doc comments described behaviour the code does not have, and now say
+  what it does: `HHHeap::update`'s return value reports whether the key took
+  its place without displacing another, not whether every key offered so far
+  is retained; `TumblingWindow::insert` closes a period that saw no arrivals
+  as an empty window like any other, and that window takes a place in
+  `max_windows`.
+
+### Fixed
+
+- `KLLDynamic` panicked on every quantile query once a NaN had entered the
+  stream: the CDF was sorted with `partial_cmp(..).unwrap()`. It sorts with
+  `total_cmp`, as the three sibling sorts beside it already did.
 
 ## [0.3.0] - 2026-09-07
 
