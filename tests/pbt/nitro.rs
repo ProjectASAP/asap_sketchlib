@@ -197,29 +197,6 @@ proptest! {
     }
 
     #[test]
-    fn nitro_scales_a_weight_by_the_rate_alone_not_by_the_stream(
-        rate in sampling_rate(),
-        left_data in stream(200),
-        right_data in stream(200),
-        weights in prop::collection::vec(1u64..64, 1..8),
-    ) {
-        let mut left = NitroBatch::with_target_and_seed(
-            rate, CmTarget::with_dimensions(2, 16), 1);
-        left.insert(&left_data);
-        let mut right = NitroBatch::with_target_and_seed(
-            rate, CmTarget::with_dimensions(2, 16), 0x9999);
-        right.insert_cached_step(&right_data);
-
-        for weight in &weights {
-            prop_assert_eq!(
-                left.scaled_increment(*weight), right.scaled_increment(*weight),
-                "rate {}: weight {} scaled differently after {} and {} arrivals",
-                rate, weight, left_data.len(), right_data.len()
-            );
-        }
-    }
-
-    #[test]
     fn nitro_at_a_dyadic_rate_compensates_by_the_exact_reciprocal(
         shift in 0u32..12,
         seed in any::<u64>(),

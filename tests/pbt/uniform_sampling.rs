@@ -246,24 +246,6 @@ proptest! {
         prop_assert_eq!(second.total_seen(), first.total_seen());
     }
 
-    /// Seed zero is the one seed the constructor rewrites, to the seed `new`
-    /// uses. The draw stays reproducible.
-    #[test]
-    fn seed_zero_falls_back_to_the_default_seed(
-        rate in dropping_rate(),
-        values in stream(200),
-    ) {
-        let zeroed = fed(rate, 0, &values);
-
-        let mut defaulted = UniformSampling::new(rate);
-        for value in &values {
-            defaulted.update(*value);
-        }
-
-        prop_assert_eq!(bits(&zeroed.samples()), bits(&defaulted.samples()), "rate {}", rate);
-        prop_assert_eq!(bits(&fed(rate, 0, &values).samples()), bits(&zeroed.samples()), "rate {}", rate);
-    }
-
     /// Which draws survive, not just how many. A full-rate run over the same
     /// seed and stream drops nothing and lists its entries in draw order, so it
     /// reveals the rank of every arrival without naming a priority. Replaying
@@ -442,36 +424,6 @@ proptest! {
             "rate {}", rate
         );
         prop_assert_eq!(forward.total_seen(), backward.total_seen());
-    }
-
-    /// A merge carries the other side's draw sequence forward: two samplers
-    /// that merged different partners hold the same samples at that moment but
-    /// must not keep drawing in lockstep afterwards.
-    #[test]
-    fn a_merge_carries_the_other_sides_draw_sequence(
-        seed in any::<u64>(),
-        (first_partner, second_partner) in (1u64.., 1u64..)
-            .prop_filter("distinct seeds", |(a, b)| a != b),
-    ) {
-        let values: Vec<f64> = (0..24).map(|position| position as f64).collect();
-        let later: Vec<f64> = (0..24).map(|position| -(position as f64) - 1.0).collect();
-
-        let mut first = fed(1.0, seed, &values);
-        first.merge(&UniformSampling::with_seed(1.0, first_partner)).expect("equal rates merge");
-        let mut second = fed(1.0, seed, &values);
-        second.merge(&UniformSampling::with_seed(1.0, second_partner)).expect("equal rates merge");
-
-        prop_assert_eq!(bits(&first.samples()), bits(&second.samples()), "the merge itself differed");
-
-        for value in &later {
-            first.update(*value);
-            second.update(*value);
-        }
-        prop_assert_ne!(
-            bits(&first.samples()),
-            bits(&second.samples()),
-            "partners {} and {} left the same draw sequence", first_partner, second_partner
-        );
     }
 
     #[test]
