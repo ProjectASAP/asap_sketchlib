@@ -11,6 +11,12 @@ mod support;
 
 mod count_min;
 mod count_sketch;
+mod hll;
+
+#[cfg(feature = "experimental")]
+mod count_min_hll;
+#[cfg(feature = "experimental")]
+mod kmv;
 mod ddsketch;
 mod kll;
 mod kll_dynamic;
