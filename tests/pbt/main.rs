@@ -12,6 +12,8 @@ mod support;
 mod coco;
 mod count_min;
 mod count_sketch;
+mod exponential_histogram;
+mod fold;
 mod heaps;
 mod topk_wrappers;
 mod elastic;
