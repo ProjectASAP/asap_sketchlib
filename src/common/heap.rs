@@ -90,8 +90,8 @@ impl HHHeap {
 
     /// Updates an existing key's count or inserts it if it earns a place.
     ///
-    /// Returns whether every key offered so far is still retained, which stops
-    /// being true once the heap has turned one away.
+    /// Returns whether the key took its place without displacing another: true
+    /// for one already resident, and for a new one the heap had room for.
     pub fn update(&mut self, key: &DataInput, count: i64) -> bool {
         let slot = self.slot_for_input(key);
         if let Some(idx) = self.lookup(slot, |item| item.key == *key) {
@@ -109,7 +109,7 @@ impl HHHeap {
 
     /// Updates an existing owned item or inserts it if needed.
     ///
-    /// The return value has the same completeness meaning as [`Self::update`].
+    /// The return value means what [`Self::update`]'s does.
     pub fn update_heap_item(&mut self, key: &HeapItem, count: i64) -> bool {
         let slot = self.slot_for_item(key);
         if let Some(idx) = self.lookup(slot, |item| &item.key == key) {

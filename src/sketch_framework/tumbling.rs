@@ -300,8 +300,10 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
     /// Insert an observation at the given timestamp.
     ///
     /// If `time` falls beyond the current window boundary, the active window
-    /// is closed and new windows are opened as needed (empty intermediate
-    /// windows are skipped).
+    /// is closed and new windows are opened as needed. A period that saw no
+    /// arrivals is closed as an empty window like any other and takes a place
+    /// in `max_windows`, so a long enough gap retires every window that holds
+    /// data.
     pub fn insert(&mut self, time: u64, key: &DataInput, value: i64) {
         // Advance windows as needed.
         while time >= self.active_start + self.window_size {
