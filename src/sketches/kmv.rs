@@ -52,6 +52,8 @@ impl<H: SketchHasher> KMV<H> {
         self.k_vals.push(hash_value);
     }
 
+    /// `(k - 1) / U(k)`, where `U(k)` is the k-th smallest hash's position in
+    /// the 64-bit range, mapped into (0, 1].
     pub fn estimate(&mut self) -> f64 {
         if self.k_vals.len() < self.k {
             return self.k_vals.len() as f64;
@@ -60,8 +62,8 @@ impl<H: SketchHasher> KMV<H> {
             .k_vals
             .peek()
             .expect("k_vals should be non-empty when len >= k");
-        const DIVISOR: f64 = 1.0 / (1u64 << 53) as f64;
-        let mapped: f64 = (largest >> 11) as f64 * DIVISOR;
+        const HASH_RANGE: f64 = 18_446_744_073_709_551_616.0;
+        let mapped: f64 = (largest as f64 + 1.0) / HASH_RANGE;
         (self.k - 1) as f64 / mapped
     }
 

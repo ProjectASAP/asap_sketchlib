@@ -66,8 +66,8 @@ fn stream_and_permutation(max: usize) -> impl Strategy<Value = (Vec<u64>, Vec<u6
 
 /// Two streams of k distinct hashes that agree on their k - 1 smallest and
 /// differ in the largest, the second's being strictly the larger. The hashes
-/// are spaced `1 << 32` apart so that distinct values stay distinct through
-/// the truncation the estimator reads them under.
+/// are spaced `1 << 32` apart so that distinct values stay distinct in the
+/// f64 the estimator maps them into.
 fn two_full_streams() -> impl Strategy<Value = (usize, Vec<u64>, Vec<u64>)> {
     estimating_bound()
         .prop_flat_map(|k| {
@@ -83,6 +83,35 @@ fn two_full_streams() -> impl Strategy<Value = (usize, Vec<u64>, Vec<u64>)> {
             higher.push(values[k]);
             (k, values[..k].to_vec(), higher)
         })
+}
+
+/// A bound, a stream carrying at least that many distinct hashes so the sketch
+/// fills, and a hash to raise the k-th minimum to. Two of the domains are small
+/// enough that the k-th minimum is a small hash; the third spans the 64-bit
+/// range.
+fn full_stream() -> impl Strategy<Value = (usize, Vec<u64>, u64)> {
+    estimating_bound().prop_flat_map(|k| {
+        let hashes = prop_oneof![
+            prop::collection::hash_set(0u64..64, k..k + 8),
+            prop::collection::hash_set(0u64..(1 << 11), k..k + 8),
+            prop::collection::hash_set(any::<u64>(), k..k + 8),
+        ]
+        .prop_map(|set| set.into_iter().collect::<Vec<u64>>())
+        .prop_shuffle();
+        (Just(k), hashes, any::<u64>())
+    })
+}
+
+/// `(k - 1) * 2^64 / (kth + 1)`, associated the other way round from the
+/// sketch, so only the value is shared and not the arithmetic.
+fn scaled_reciprocal(k: usize, kth: u64) -> f64 {
+    ((k - 1) as f64 * (1u128 << 64) as f64) / (kth as f64 + 1.0)
+}
+
+/// Agreement to within four ulps at the larger magnitude, which admits any
+/// correctly rounded reading of the same quotient.
+fn within_a_few_ulps(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 4.0 * f64::EPSILON * a.abs().max(b.abs())
 }
 
 /// The retained hashes, ascending. The heap's array order follows the arrivals,
@@ -202,6 +231,72 @@ proptest! {
 
     // ===== Estimation =====
 
+    /// A full sketch reports `(k - 1) / U(k)`, where `U(k)` is its own k-th
+    /// smallest hash mapped into (0, 1]. Read back through the estimate, the
+    /// mapping stays inside that interval for every hash the 64-bit range
+    /// holds, which bounds the estimate below by `k - 1` and keeps it finite;
+    /// raising the k-th minimum cannot raise the estimate; and the value is
+    /// the reciprocal the estimator names, up to rounding.
+    #[test]
+    fn a_full_sketch_estimates_k_minus_one_over_its_mapped_k_th_smallest_hash(
+        (k, stream, raise) in full_stream(),
+    ) {
+        let mut sketch = from_hashes(k, &stream);
+        prop_assert_eq!(sketch.k_vals.len(), k);
+        let hashes = retained(&sketch);
+        let kth = *hashes.last().expect("a full sketch retains k hashes");
+
+        let estimate = sketch.estimate();
+        prop_assert!(
+            estimate.is_finite() && estimate > 0.0,
+            "k {}: k-th smallest hash {} over {} arrivals estimates {}",
+            k,
+            kth,
+            stream.len(),
+            estimate
+        );
+
+        let mapped = (k - 1) as f64 / estimate;
+        prop_assert!(
+            mapped > 0.0 && mapped <= 1.0,
+            "k {}: k-th smallest hash {} maps to {}, outside (0, 1]",
+            k,
+            kth,
+            mapped
+        );
+        prop_assert!(
+            estimate >= (k - 1) as f64,
+            "k {}: k-th smallest hash {} estimates {}, below k - 1",
+            k,
+            kth,
+            estimate
+        );
+        prop_assert!(
+            within_a_few_ulps(estimate, scaled_reciprocal(k, kth)),
+            "k {}: k-th smallest hash {} estimates {}, not {}",
+            k,
+            kth,
+            estimate,
+            scaled_reciprocal(k, kth)
+        );
+
+        let raised = kth.max(raise);
+        let mut taller = Kmv::new(k);
+        for hash in hashes[..k - 1].iter().chain(std::iter::once(&raised)) {
+            taller.insert_by_hash(*hash);
+        }
+        prop_assert_eq!(taller.k_vals.len(), k);
+        prop_assert!(
+            taller.estimate() <= estimate,
+            "k {}: raising the k-th minimum from {} to {} raised the estimate from {} to {}",
+            k,
+            kth,
+            raised,
+            estimate,
+            taller.estimate()
+        );
+    }
+
     #[test]
     fn the_estimate_never_falls_as_the_stream_runs(
         k in estimating_bound(),
@@ -213,6 +308,14 @@ proptest! {
         for (i, hash) in stream.iter().enumerate() {
             sketch.insert_by_hash(*hash);
             let now = sketch.estimate();
+            prop_assert!(
+                now.is_finite(),
+                "k {}: the estimate reached {} at arrival {} of {}",
+                k,
+                now,
+                i,
+                stream.len()
+            );
             prop_assert!(
                 now >= previous,
                 "k {}: the estimate fell from {} to {} at arrival {} of {}",
