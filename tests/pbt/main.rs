@@ -11,3 +11,6 @@ mod support;
 
 mod count_min;
 mod count_sketch;
+mod ddsketch;
+mod kll;
+mod kll_dynamic;
