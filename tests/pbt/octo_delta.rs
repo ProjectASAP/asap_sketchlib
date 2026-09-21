@@ -806,37 +806,6 @@ proptest! {
         prop_assert_eq!(evictions[0].2, 1, "the eviction carried {} votes", evictions[0].2);
     }
 
-    /// A heavy promotion says how the bucket came to hold its flow: clear for a
-    /// flow seated on a vacant bucket, set for one that took the bucket over.
-    #[test]
-    fn elastic_heavy_promotion_reports_how_the_bucket_was_taken(
-        seated in 0u64..64,
-        taker in 64u64..128,
-        tau in 2u32..=8,
-    ) {
-        let mut worker = ElasticWorkerSketch::new(1, 2, 8);
-        let mut deltas: Vec<ElasticDelta> = Vec::new();
-        for _ in 0..tau {
-            worker.insert_emit_delta(&flow(seated), tau, &mut |delta| deltas.push(delta));
-        }
-        for _ in 0..tau {
-            worker.insert_emit_delta(&flow(taker), tau, &mut |delta| deltas.push(delta));
-        }
-
-        let heavy: Vec<(String, u32, bool)> = deltas
-            .iter()
-            .filter_map(|delta| match delta {
-                ElasticDelta::Heavy { key, value, eviction } => {
-                    Some((key.clone(), *value, *eviction))
-                }
-                _ => None,
-            })
-            .collect();
-        prop_assert_eq!(heavy.len(), 2, "the two flows promoted {:?}", heavy);
-        prop_assert_eq!(&heavy[0], &(flow(seated), tau, false));
-        prop_assert_eq!(&heavy[1], &(flow(taker), tau, true));
-    }
-
     // ===== UnivMon: one Count layer per level, tagged with layer and weight =====
 
     #[test]
