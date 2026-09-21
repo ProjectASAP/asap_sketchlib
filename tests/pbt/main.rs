@@ -9,9 +9,37 @@
 #[macro_use]
 mod support;
 
+mod bloom;
 mod count_min;
 mod count_sketch;
 mod octo_delta;
 
 #[cfg(feature = "experimental")]
 mod microscope;
+mod nitro;
+
+#[cfg(feature = "experimental")]
+mod uniform_sampling;
+mod coco;
+mod count_min;
+mod count_sketch;
+mod ensemble;
+mod hydra;
+mod set_aggregator;
+mod univmon;
+mod univmon_q;
+mod exponential_histogram;
+mod fold;
+mod heaps;
+mod topk_wrappers;
+mod elastic;
+mod space_saving;
+mod hll;
+
+#[cfg(feature = "experimental")]
+mod count_min_hll;
+#[cfg(feature = "experimental")]
+mod kmv;
+mod ddsketch;
+mod kll;
+mod kll_dynamic;
