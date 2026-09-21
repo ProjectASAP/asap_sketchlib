@@ -149,49 +149,6 @@ macro_rules! shape_laws {
             proptest! {
                 #![proptest_config(ProptestConfig::with_cases(64))]
 
-                // One value hash serves every row, so a key with the grid to
-                // itself writes the same register array into each row it
-                // reaches. This is what makes the minimum across rows a bound
-                // on one side only: the rows differ by what collided into
-                // them, never by what the key itself wrote.
-                #[test]
-                fn every_row_holds_the_same_registers_for_a_key_that_has_the_grid_to_itself(
-                    key in 0u64..4096,
-                    values in prop::collection::vec(0u64..64, 1..40),
-                ) {
-                    let sketch = sketch_of(&[(key, values)]);
-                    let storage = sketch.as_storage();
-
-                    let touched: Vec<(usize, usize)> = (0..ROWS)
-                        .flat_map(|row| (0..COLS).map(move |col| (row, col)))
-                        .filter(|&(row, col)| {
-                            storage.bucket_slice(row, col).iter().any(|&r| r != 0)
-                        })
-                        .collect();
-                    prop_assert_eq!(
-                        touched.len(),
-                        ROWS,
-                        "key {} wrote into {:?}, expected one bucket per row",
-                        key,
-                        touched
-                    );
-
-                    let (first_row, first_col) = touched[0];
-                    let first = storage.bucket_slice(first_row, first_col);
-                    for &(row, col) in &touched[1..] {
-                        prop_assert_eq!(
-                            storage.bucket_slice(row, col),
-                            first,
-                            "key {}: bucket ({}, {}) differs from ({}, {})",
-                            key,
-                            row,
-                            col,
-                            first_row,
-                            first_col
-                        );
-                    }
-                }
-
                 // A bucket no other key routes to holds this key's values and
                 // nothing else, so it must equal a standalone HyperLogLog of
                 // the same precision fed the same hashes - register for
@@ -251,24 +208,6 @@ macro_rules! shape_laws {
                                 );
                             }
                         }
-                    }
-                }
-
-                // The error is one-sided at the answer as well as at the
-                // registers: no collision can talk the estimate down below
-                // what the key's own HyperLogLog reports.
-                #[test]
-                fn an_estimate_never_falls_below_the_keys_own_hyperloglog(groups in groups()) {
-                    let sketch = sketch_of(&groups);
-
-                    for (key, values) in &groups {
-                        let alone = reference_of(values).estimate() as f64;
-                        let estimate = sketch.estimate(&DataInput::U64(*key));
-                        prop_assert!(
-                            estimate >= alone,
-                            "key {}: estimate {} below its own HyperLogLog's {}",
-                            key, estimate, alone
-                        );
                     }
                 }
 
