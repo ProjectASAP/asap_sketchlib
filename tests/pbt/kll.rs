@@ -61,6 +61,19 @@ fn repeating_stream(max: usize) -> impl Strategy<Value = Vec<f64>> {
         .prop_map(|v| v.into_iter().map(|x| x as f64).collect())
 }
 
+/// `k` large enough that the rank budget below is a fraction of the stream
+/// rather than wider than it, paired with a stream thirty times longer. At
+/// `k = 8` the budget `ERROR_CONSTANT * n / k` is twice the stream itself, so
+/// the accuracy law would hold for any answer at all.
+fn accurate_k_and_stream(extra: usize) -> impl Strategy<Value = (i32, Vec<f64>)> {
+    prop_oneof![Just(200usize), Just(400)]
+        .prop_flat_map(move |k| {
+            let n = (OVER_THRESHOLD * k)..(OVER_THRESHOLD * k + extra);
+            (Just(k as i32), distinct_stream(n))
+        })
+        .boxed()
+}
+
 /// `k` paired with a stream long enough to force compaction at `k`.
 fn k_and_long_stream(extra: usize) -> impl Strategy<Value = (i32, Vec<f64>)> {
     (8usize..=64)
@@ -329,7 +342,7 @@ proptest! {
     // distribution is flat there, but its true rank stays within `eps * n`.
     #[test]
     fn kll_quantile_rank_error_stays_inside_the_kll_band(
-        (k, values) in k_and_long_stream(2_000),
+        (k, values) in accurate_k_and_stream(2_000),
         seed in any::<u64>(),
     ) {
         let s = native_kll(k, seed, &values);
@@ -338,6 +351,11 @@ proptest! {
 
         let n = oracle.len() as f64;
         let budget = ERROR_CONSTANT / k as f64 * n;
+        prop_assert!(
+            budget < n / 10.0,
+            "k={} n={} leaves a budget of {}, which bounds nothing",
+            k, n, budget
+        );
 
         for i in 0..=40 {
             let q = i as f64 / 40.0;
