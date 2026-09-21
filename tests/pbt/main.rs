@@ -9,6 +9,13 @@
 #[macro_use]
 mod support;
 
+mod bloom;
+mod count_min;
+mod count_sketch;
+mod nitro;
+
+#[cfg(feature = "experimental")]
+mod uniform_sampling;
 mod coco;
 mod count_min;
 mod count_sketch;
