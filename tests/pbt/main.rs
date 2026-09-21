@@ -12,6 +12,10 @@ mod support;
 mod bloom;
 mod count_min;
 mod count_sketch;
+mod octo_delta;
+
+#[cfg(feature = "experimental")]
+mod microscope;
 mod nitro;
 
 #[cfg(feature = "experimental")]
