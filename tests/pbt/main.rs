@@ -17,3 +17,6 @@ mod hll;
 mod count_min_hll;
 #[cfg(feature = "experimental")]
 mod kmv;
+mod ddsketch;
+mod kll;
+mod kll_dynamic;

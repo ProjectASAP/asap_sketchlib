@@ -338,7 +338,7 @@ impl<T: NumericalValue> KLLDynamic<T> {
 
         cdf.entries
             .as_mut_slice()
-            .sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap());
+            .sort_unstable_by(|a, b| a.value.total_cmp(&b.value));
 
         let mut cur_w = 0.0;
         for entry in cdf.entries.as_mut_slice() {
