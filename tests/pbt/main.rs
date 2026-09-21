@@ -12,6 +12,8 @@ mod support;
 mod coco;
 mod count_min;
 mod count_sketch;
+mod heaps;
+mod topk_wrappers;
 mod elastic;
 mod space_saving;
 mod hll;
