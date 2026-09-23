@@ -49,12 +49,14 @@ signals a backwards-compatible change.
   law that sketch claims — merge algebra, path equivalence, the paper's own
   model, and the wire / ASAPv1 round trip. Shared generators, the `grid`
   reader and the `round_trip!` macro live in `tests/pbt/support.rs`; four
-  modules sit behind `experimental`. 434 tests under `--all-features`, 367
+  modules sit behind `experimental`. 435 tests under `--all-features`, 367
   under the default feature set. Every law was mutation-checked: the
   implementation was broken deliberately, the law confirmed red, and confirmed
   not to take unrelated laws down with it; a law no semantically real mutation
   could kill was deleted rather than kept. [PBT notes](docs/pbt_notes.md) say
-  what the suite is for and what it has found.
+  what the suite is for and what it has found;
+  [`tests/PBT_COVERAGE.md`](tests/PBT_COVERAGE.md) lists every law as a
+  relation, one section per sketch, with what it is checked against.
 
 ### Changed
 
