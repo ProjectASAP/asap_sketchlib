@@ -125,3 +125,9 @@ pub use fold_cms::{FoldCMS, FoldCell, FoldEntry};
 
 pub mod fold_cs;
 pub use fold_cs::FoldCS;
+
+/// Float64 weighted frequency estimation with a bounded typed candidate heap.
+pub mod weighted_frequency;
+pub use weighted_frequency::{
+    FrequencyAlgorithm, FrequencyIdentity, WeightedFrequency, WeightedFrequencyError,
+};
