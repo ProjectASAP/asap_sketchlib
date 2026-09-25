@@ -56,19 +56,6 @@ fn extreme_compacting() -> impl Strategy<Value = (i32, Vec<f64>)> {
     })
 }
 
-/// A compacting stream with no repeated value, so the CDF's binary search has
-/// one index per value to stop at.
-fn distinct_compacting() -> impl Strategy<Value = (i32, Vec<f64>)> {
-    small_k().prop_flat_map(|k| {
-        let n = 30 * k as usize;
-        let set = prop::collection::hash_set(-1_000_000i64..1_000_000, n..n + 200);
-        (
-            Just(k),
-            set.prop_map(|s| s.into_iter().map(|v| v as f64).collect::<Vec<f64>>()),
-        )
-    })
-}
-
 /// `k` large enough for the rank band to say something, paired with a stream
 /// thirty times longer: the budget below is a multiple of `n / k`, so a small
 /// `k` would make it wider than the stream itself.
@@ -357,11 +344,12 @@ proptest! {
 
     // Two readings of one state that share no code: `rank` walks the levels and
     // weights each by `2^h`, the CDF flattens every item into one sorted run and
-    // takes a prefix sum. Distinct values keep the CDF's binary search off the
-    // tie it would otherwise stop at an arbitrary member of.
+    // takes a prefix sum. The stream repeats its values and the probes land on
+    // them, so both readings answer for a whole run of copies rather than for
+    // one member of it. A NaN probe stands below the stream to both.
     #[test]
     fn the_cdf_agrees_with_rank(
-        (k, values) in distinct_compacting(),
+        (k, values) in compacting(),
         seed in any::<u64>(),
         xs in ascending_probes(),
     ) {
@@ -377,6 +365,11 @@ proptest! {
                 "k={k}: cdf({x}) * {n} = {scaled} against rank({x}) = {ranked}"
             );
         }
+
+        prop_assert_eq!(
+            cdf.quantile(f64::NAN) * n, sketch.rank(f64::NAN) as f64,
+            "k={}: cdf at a NaN probe", k
+        );
     }
 
     // ===== Rank at the extremes =====

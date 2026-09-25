@@ -1021,18 +1021,14 @@ pub struct Cdf {
 }
 
 impl Cdf {
-    /// Returns the quantile for value `x` using the CDF table.
+    /// Returns the quantile for value `x`: the cumulative share carried by
+    /// every entry at or below `x`, taken at the last entry of a repeated
+    /// value. A NaN probe stands below every entry and reads 0.0.
     pub fn quantile(&self, x: f64) -> f64 {
-        if self.entries.is_empty() {
-            return 0.0;
-        }
         let slice = self.entries.as_slice();
-        match slice
-            .binary_search_by(|e| e.value.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Less))
-        {
-            Ok(idx) => slice[idx].quantile,
-            Err(0) => 0.0,
-            Err(idx) => slice[idx - 1].quantile,
+        match slice.partition_point(|e| e.value <= x) {
+            0 => 0.0,
+            idx => slice[idx - 1].quantile,
         }
     }
 
@@ -1041,21 +1037,16 @@ impl Cdf {
         println!("entries: {:?}", self.entries);
     }
 
-    /// Returns the estimated value corresponding to quantile `p`.
+    /// Returns the estimated value corresponding to quantile `p`: the value of
+    /// the first entry whose cumulative share reaches `p`. A NaN probe stands
+    /// below every entry and reads the smallest value.
     pub fn query(&self, p: f64) -> f64 {
         if self.entries.is_empty() {
             return 0.0;
         }
         let slice = self.entries.as_slice();
-        match slice.binary_search_by(|e| {
-            e.quantile
-                .partial_cmp(&p)
-                .unwrap_or(std::cmp::Ordering::Less)
-        }) {
-            Ok(idx) => slice[idx].value,
-            Err(idx) if idx == slice.len() => slice[slice.len() - 1].value,
-            Err(idx) => slice[idx].value,
-        }
+        let idx = slice.partition_point(|e| e.quantile < p);
+        slice[idx.min(slice.len() - 1)].value
     }
 
     /// Quantile estimation of value `x` using linear interpolation.
