@@ -68,6 +68,8 @@ Only sketches with a prehashed insertion path are accepted:
 
 All matrix-backed sketches (CMS / `Count`) in one ensemble must share the same hash layout (rows × cols dimensions). HLL sketches can coexist with them because they only consume the lower 64 bits of the shared hash.
 
+The hash layout is fixed at construction. An ensemble built with no matrix sketch hashes at the canonical seed, and `push` returns `Err` for a matrix sketch handed to it; pass every member to `new` to build an ensemble that mixes a matrix sketch with HLLs. An HLL carries no layout, so `push` takes one into any ensemble.
+
 ## Construction
 
 ```rust
