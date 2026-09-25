@@ -3,8 +3,8 @@
 //! Child submodule of [`crate::sketches::coco`]: it holds ALL of Coco's
 //! serialization (the metadata/payload DTOs, the kind_id constant, and the
 //! `serialize_to_bytes` / `deserialize_from_bytes` impls) while the algorithm
-//! lives in the parent module file. Being a descendant module, it reads the
-//! sketch's private `_hasher` marker and rebuilds the struct directly, without
+//! lives in the parent module file. Being a descendant module, it rebuilds the
+//! struct directly, private `rng` and `_hasher` fields included, without
 //! widening any field visibility. See the Coco section of
 //! `docs/asapv1_wire_format.md`.
 //!
@@ -43,7 +43,7 @@ use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::{DataInput, HashProfile, SketchHasher, Vector2D};
 
-use super::{Coco, CocoBucket};
+use super::{Coco, CocoBucket, CocoRng};
 
 /// Coco kind_id: family `0x0c`, single algorithm variant `0x00`.
 const COCO_KIND: &[u8] = &[0x0c, 0x00];
@@ -236,6 +236,7 @@ impl<H: SketchHasher + HashProfile> Coco<H> {
             w: cols,
             d: rows,
             table,
+            rng: CocoRng::default(),
             _hasher: std::marker::PhantomData,
         })
     }

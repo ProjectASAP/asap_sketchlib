@@ -13,12 +13,13 @@
 //! top-k, and the bucket and counter lists staying well formed under sustained
 //! eviction.
 //!
-//! Coco and Elastic run the standard conformance batteries their documented
-//! contracts justify, then the depth no battery models: Coco's
-//! over-attribution under substring matching, its point-query mass partition,
-//! its unbiasedness under eviction and its recall at the paper's worked
-//! operating point; Elastic's hot-flow tracking, its one-sided estimator under
-//! eviction pressure, and the reach of the light layer's dimensions.
+//! Coco runs no battery: its partial-key and point-query mass partitions are
+//! exact, and its accuracy is the mean over independent seeds, single-pass,
+//! merged and under eviction, plus its recall at the paper's worked operating
+//! point. Elastic runs the
+//! standard batteries its documented contract justifies, then its hot-flow
+//! tracking, its one-sided estimator under eviction pressure, and the reach of
+//! the light layer's dimensions.
 //!
 //! `tests/e2e/octo.rs` covers the multi-threaded OctoSketch variants of Coco
 //! and Elastic in its `heavy_hitters` module; everything here is the
@@ -36,6 +37,8 @@ use std::collections::{HashMap, HashSet};
 const STREAM: usize = 60_000;
 const DOMAIN: usize = 2_048;
 const SEED: u64 = 9_001;
+/// Base generator seed for the Coco fixtures; independent sketches offset it.
+const COCO_SEED: u64 = 0xC0C0;
 
 fn stream() -> Vec<i64> {
     zipf_u64(STREAM, DOMAIN, 1.1, SEED)
@@ -734,6 +737,7 @@ fn the_default_summary_holds_the_default_capacity() {
 mod keyed_bucket {
     use super::common::assert_between;
     use super::common::conformance::{self, FrequencyOps, FrequencySpec, MergeOps};
+    use super::common::specs::assert_unbiased_mean;
     use super::*;
 
     use asap_sketchlib::{Coco, DefaultXxHasher, Elastic};
@@ -745,32 +749,6 @@ mod keyed_bucket {
 
     fn flow_key(key: i64) -> String {
         format!("flow::{key}")
-    }
-
-    /// Coco at its documented default, `1024 x 4`: 4096 buckets against the ~2000
-    /// distinct flows the battery stream carries, which is the regime the sizing
-    /// note asks for -- the table attributes mass to at most `w * d` keys at once.
-    struct CocoAdapter(Coco<DefaultXxHasher>);
-
-    impl CocoAdapter {
-        fn new() -> Self {
-            Self(Coco::new())
-        }
-    }
-
-    impl FrequencyOps<i64> for CocoAdapter {
-        fn ingest(&mut self, key: &i64) {
-            self.0.insert(&flow_key(*key), 1);
-        }
-        fn estimate(&self, key: &i64) -> f64 {
-            self.0.estimate_key(&flow_key(*key)) as f64
-        }
-    }
-
-    impl MergeOps for CocoAdapter {
-        fn merge_from(&mut self, other: &Self) {
-            self.0.merge(&other.0);
-        }
     }
 
     /// Elastic at 256 heavy buckets over the default 3 x 4096 light layer.
@@ -806,24 +784,53 @@ mod keyed_bucket {
     // Battery runs
     // -----------------------------------------------------------------------
 
-    /// Coco is *unbiased*, not one-sided: an estimate comes back either side of the
-    /// truth, so `one_sided` stays false and the spec is Count Sketch's two-sided
-    /// reference spec from `conformance_kit.rs`, unchanged.
-    ///
-    /// `turnstile_battery` does not fit: `insert` takes an unsigned weight and the
-    /// sketch has no decrement path.
+    /// Section 3.2: estimates are unbiased. The dense keys' summed estimate,
+    /// single-pass and parity-split then merged, averaged over independent
+    /// seeds on a `128 x 2` table under ~2000 distinct flows.
     #[test]
-    fn coco_passes_frequency_and_merge_conformance() {
+    fn coco_dense_key_mass_is_unbiased_single_pass_and_merged() {
+        const TRIALS: u64 = 48;
+        const W: usize = 128;
+        const D: usize = 2;
         let stream = stream();
         let truth = truth_of(&stream);
-        let spec = FrequencySpec {
-            one_sided: false,
-            rel_tol: 0.06,
-            abs_tol: 25.0,
+        let dense: Vec<(String, i64)> = truth
+            .pairs()
+            .into_iter()
+            .filter(|(_, c)| *c >= 25)
+            .map(|(k, c)| (flow_key(k), c))
+            .collect();
+        let exact = dense.iter().map(|(_, c)| *c).sum::<i64>() as f64;
+        let dense_mass = |coco: &Coco<DefaultXxHasher>| {
+            dense.iter().map(|(k, _)| coco.estimate_key(k)).sum::<u64>() as f64
         };
 
-        conformance::frequency_battery("Coco", CocoAdapter::new, &stream, &truth, spec).assert_ok();
-        conformance::merge_equivalence_battery("Coco", CocoAdapter::new, &stream, spec).assert_ok();
+        let (mut single, mut merged) = (Vec::new(), Vec::new());
+        for trial in 0..TRIALS {
+            let seed = COCO_SEED + 3 * trial;
+            let mut one = Coco::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed);
+            let mut left = Coco::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed + 1);
+            let mut right = Coco::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed + 2);
+            for (i, k) in stream.iter().enumerate() {
+                let key = flow_key(*k);
+                one.insert(&key, 1);
+                if i % 2 == 0 {
+                    left.insert(&key, 1);
+                } else {
+                    right.insert(&key, 1);
+                }
+            }
+            left.merge(&right);
+            single.push(dense_mass(&one));
+            merged.push(dense_mass(&left));
+        }
+
+        let ctx = format!(
+            "{} dense keys, {TRIALS} seeds from {COCO_SEED:#x}",
+            dense.len()
+        );
+        assert_unbiased_mean(&format!("Coco single pass ({ctx})"), &single, exact, 0.02);
+        assert_unbiased_mean(&format!("Coco merged ({ctx})"), &merged, exact, 0.02);
     }
 
     /// `docs/api/api_elastic.md`: "The estimator is one-sided: it never returns
@@ -857,44 +864,29 @@ mod keyed_bucket {
     // CocoSketch
     // -----------------------------------------------------------------------
 
+    /// The containment query for one prefix family and the prefix UDF for a
+    /// disjoint one together return the stream mass.
     #[test]
-    fn coco_over_attribution_bounds_with_disjoint_prefixes() {
-        // Table sized well above distinct-key count keeps eviction loss bounded;
-        // Coco remains an approximate estimator either way.
-        let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size(256, 2);
-        let mut truth: HashMap<String, u64> = HashMap::new();
+    fn coco_disjoint_prefix_families_partition_the_mass() {
+        let mut coco =
+            Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(256, 2, COCO_SEED);
         let mut total = 0u64;
         for i in 0..3000u64 {
-            let key = format!("aaa{}", i % 50);
-            coco.insert(&key, 7);
-            *truth.entry("aaa".to_string()).or_insert(0) += 7;
+            coco.insert(&format!("aaa{}", i % 50), 7);
             total += 7;
-            let _ = i;
         }
         for i in 0..2000u64 {
-            let key = format!("zzz{}", i % 30);
-            coco.insert(&key, 3);
-            *truth.entry("zzz".to_string()).or_insert(0) += 3;
+            coco.insert(&format!("zzz{}", i % 30), 3);
             total += 3;
         }
 
-        // Substring matching: "aaa" only matches aaa* buckets, never zzz*.
-        let got_aaa = coco.estimate_substring("aaa");
-        let true_aaa = truth["aaa"];
-        assert!(
-            got_aaa >= true_aaa * 3 / 4 && got_aaa <= total,
-            "coco 'aaa' estimate {got_aaa} outside [{}, {total}]",
-            true_aaa * 3 / 4
-        );
-
-        // Exact-match UDF pins down the precise family sum.
-        let exact =
+        let aaa = coco.estimate_substring("aaa");
+        let zzz =
             coco.estimate_with_udf("zzz", |full: &str, partial: &str| full.starts_with(partial));
-        let true_zzz = truth["zzz"];
-        assert!(
-            exact >= true_zzz * 3 / 4 && exact <= total,
-            "coco 'zzz' estimate {exact} outside [{}, {total}]",
-            true_zzz * 3 / 4
+        assert_eq!(
+            aaa + zzz,
+            total,
+            "'aaa' reads {aaa} and 'zzz' reads {zzz}; together they must be the stream mass"
         );
     }
 
@@ -904,7 +896,11 @@ mod keyed_bucket {
     #[test]
     fn coco_point_queries_partition_the_inserted_mass() {
         const COCO_BUCKETS: usize = 128;
-        let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size(COCO_BUCKETS, 3);
+        let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
+            COCO_BUCKETS,
+            3,
+            COCO_SEED,
+        );
         let mut truth: HashMap<String, u64> = HashMap::new();
         let mut total = 0u64;
 
@@ -920,40 +916,6 @@ mod keyed_bucket {
             attributed, total,
             "point queries must partition the inserted mass"
         );
-
-        // Heavy keys hold their own bucket, so their estimates track the truth.
-        //
-        // The **ceiling is derived**: CocoSketch's stochastic-variance-
-        // minimizing eviction attributes each increment to exactly one bucket,
-        // so a key's estimate can only exceed its count by the mass of the other
-        // keys that landed in the same bucket. With `w` buckets per array that
-        // expectation is `(total - count) / w`, and Markov at `e` — the same
-        // step Count-Min's Theorem 1 takes — gives a per-array ceiling of
-        // `count + e (total - count) / w` that holds with probability
-        // `1 - 1/e`. The union bound over the ten probed keys is what the
-        // failure message quotes.
-        //
-        // The **floor is empirical and is named as such below**: eviction can
-        // take a key's whole bucket at any moment, so nothing forbids a low
-        // read, and 0.5x is a measured regression pin (the worst of the ten on
-        // this stream and seed is 1.00x, i.e. exact) rather than a bound.
-        let mut ranked: Vec<(&String, &u64)> = truth.iter().collect();
-        ranked.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-        for (key, count) in ranked.iter().take(10) {
-            let est = coco.estimate_key(key);
-            let ceiling = **count as f64
-                + std::f64::consts::E * (total - **count) as f64 / COCO_BUCKETS as f64;
-            assert!(
-                est as f64 <= ceiling,
-                "coco heavy key {key}: estimate {est} above count + e*(total-count)/w = \
-                 {ceiling:.1} (true {count}, total {total}, w={COCO_BUCKETS})"
-            );
-            assert!(
-                est as f64 >= **count as f64 * 0.5,
-                "coco heavy key {key}: estimate {est} below the documented empirical floor \
-                 of 0.5x its true count {count}; measured worst on this stream is 1.00x"
-            );
-        }
     }
 
     // Theorems 3 and 4 are stated for the section 4.2 hardware variant, which this
@@ -975,8 +937,12 @@ mod keyed_bucket {
         let keys: Vec<String> = (0..BG_KEYS).map(|i| format!("bg::{i}")).collect();
         let mut estimates: Vec<u64> = Vec::with_capacity(TRIALS);
 
-        for _ in 0..TRIALS {
-            let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size(32, 2);
+        for trial in 0..TRIALS {
+            let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
+                32,
+                2,
+                COCO_SEED + trial as u64,
+            );
             let mut sent = 0u64;
             for (i, key) in keys.iter().enumerate() {
                 for _ in 0..BG_WEIGHT {
@@ -1037,8 +1003,12 @@ mod keyed_bucket {
         let keys: Vec<String> = (0..BG_KEYS).map(|i| format!("bg::{i}")).collect();
         let mut recorded = 0usize;
 
-        for _ in 0..TRIALS {
-            let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size(WIDTH, DEPTH);
+        for trial in 0..TRIALS {
+            let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
+                WIDTH,
+                DEPTH,
+                COCO_SEED + trial as u64,
+            );
             let mut sent = 0u64;
             for (i, key) in keys.iter().enumerate() {
                 coco.insert(key, 1);
@@ -1221,7 +1191,7 @@ mod partial_key_and_heavy_maintenance {
     }
 
     fn filled_coco() -> (Coco<DefaultXxHasher>, u64) {
-        let mut coco = Coco::<DefaultXxHasher>::init_with_size(2_048, 4);
+        let mut coco = Coco::<DefaultXxHasher>::init_with_size_and_seed(2_048, 4, super::COCO_SEED);
         let mut inserted = 0u64;
         for (i, key) in coco_keys().iter().enumerate() {
             let weight = REPEATS + (i % 3) as u64;

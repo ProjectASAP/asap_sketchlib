@@ -61,6 +61,9 @@ const TAU: i32 = CM_PROMASK as i32;
 /// multiple of τ, so at most `τ - 1` un-promoted increments remain.
 const MAX_CELL_RESIDUAL: i32 = TAU - 1;
 
+/// Base generator seed for the Coco fixtures; independent sketches offset it.
+const COCO_SEED: u64 = 0xC0C0;
+
 fn keys(n: usize, domain: usize, seed: u64) -> Vec<u64> {
     zipf_u64(n, domain, 1.1, seed)
 }
@@ -2936,8 +2939,8 @@ mod heavy_hitters {
     }
 
     impl OctoCoco {
-        fn new(workers: usize, w: usize, d: usize, route: Route) -> Self {
-            let plan = CocoOctoPlan::new(w, d);
+        fn new(workers: usize, w: usize, d: usize, route: Route, seed: u64) -> Self {
+            let plan = CocoOctoPlan::with_seed(w, d, seed);
             Self {
                 children: (0..workers).map(|id| plan.worker(id)).collect(),
                 parent: plan.aggregator(),
@@ -2995,20 +2998,33 @@ mod heavy_hitters {
         d: usize,
         route: Route,
         sent_counters: usize,
+        next_seed: u64,
     }
 
     impl MergeCoco {
-        fn new(workers: usize, w: usize, d: usize, period: usize, route: Route) -> Self {
-            Self {
-                children: (0..workers).map(|_| Coco::init_with_size(w, d)).collect(),
+        fn new(workers: usize, w: usize, d: usize, period: usize, route: Route, seed: u64) -> Self {
+            let mut this = Self {
+                children: Vec::with_capacity(workers),
                 seen: vec![0; workers],
-                parent: Coco::init_with_size(w, d),
+                parent: Coco::init_with_size_and_seed(w, d, seed),
                 period,
                 w,
                 d,
                 route,
                 sent_counters: 0,
+                next_seed: seed,
+            };
+            for _ in 0..workers {
+                let child = this.fresh();
+                this.children.push(child);
             }
+            this
+        }
+
+        /// An empty child table on the next seed.
+        fn fresh(&mut self) -> Coco {
+            self.next_seed += 1;
+            Coco::init_with_size_and_seed(self.w, self.d, self.next_seed)
         }
 
         fn insert(&mut self, index: usize, raw: u64) {
@@ -3017,10 +3033,8 @@ mod heavy_hitters {
             self.children[worker].insert(&key_of(raw), 1);
             self.seen[worker] += 1;
             if self.seen[worker] % self.period == 0 {
-                let full = std::mem::replace(
-                    &mut self.children[worker],
-                    Coco::init_with_size(self.w, self.d),
-                );
+                let empty = self.fresh();
+                let full = std::mem::replace(&mut self.children[worker], empty);
                 self.parent.merge(&full);
                 self.sent_counters += self.w * self.d;
             }
@@ -3217,7 +3231,7 @@ mod heavy_hitters {
         let stream = flow_stream(40_000, 2_048, 21_001);
         let seen: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
 
-        let mut worker = CocoOctoPlan::new(512, 2).worker(0);
+        let mut worker = CocoOctoPlan::with_seed(512, 2, COCO_SEED).worker(0);
         let mut promoted = Vec::new();
         for raw in &stream {
             worker.process(&key_of(*raw), &mut |d: CocoDelta| promoted.push(d));
@@ -3248,7 +3262,7 @@ mod heavy_hitters {
     #[test]
     fn coco_promotion_conserves_the_stream_mass_exactly() {
         let stream = flow_stream(60_000, 2_048, 21_002);
-        let mut octo = OctoCoco::new(4, 512, 2, Route::HashByKey);
+        let mut octo = OctoCoco::new(4, 512, 2, Route::HashByKey, COCO_SEED);
         for (i, raw) in stream.iter().enumerate() {
             octo.insert(i, *raw);
         }
@@ -3287,7 +3301,7 @@ mod heavy_hitters {
     #[test]
     fn coco_flush_hands_over_every_residual_bucket() {
         let stream = flow_stream(60_000, 2_048, 21_003);
-        let mut octo = OctoCoco::new(4, 512, 2, Route::HashByKey);
+        let mut octo = OctoCoco::new(4, 512, 2, Route::HashByKey, COCO_SEED);
         for (i, raw) in stream.iter().enumerate() {
             octo.insert(i, *raw);
         }
@@ -3326,7 +3340,7 @@ mod heavy_hitters {
         let mut incumbent = 0usize;
         for seed in 0..4u64 {
             let stream = flow_stream(20_000, 2_048, 21_100 + seed);
-            let mut worker = CocoOctoPlan::new(16, 2).worker(0);
+            let mut worker = CocoOctoPlan::with_seed(16, 2, COCO_SEED + seed).worker(0);
             for raw in &stream {
                 let arrival = key_of(*raw);
                 worker.process(&arrival, &mut |d: CocoDelta| {
@@ -3358,7 +3372,7 @@ mod heavy_hitters {
         let distinct: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
 
         for workers in [1usize, 2, 4, 8] {
-            let mut octo = OctoCoco::new(workers, 512, 2, Route::HashByKey);
+            let mut octo = OctoCoco::new(workers, 512, 2, Route::HashByKey, COCO_SEED);
             for (i, raw) in stream.iter().enumerate() {
                 octo.insert(i, *raw);
             }
@@ -3403,8 +3417,8 @@ mod heavy_hitters {
         // 128 buckets under 1000 flows: the watched flows are evicted and
         // re-elected constantly, which is where a biased replay would show.
         let mut totals = Vec::with_capacity(TRIALS);
-        for _ in 0..TRIALS {
-            let mut octo = OctoCoco::new(1, 64, 2, Route::HashByKey);
+        for trial in 0..TRIALS {
+            let mut octo = OctoCoco::new(1, 64, 2, Route::HashByKey, COCO_SEED + trial as u64);
             for (i, raw) in stream.iter().enumerate() {
                 octo.insert(i, *raw);
             }
@@ -3903,8 +3917,9 @@ mod heavy_hitters {
             let distinct: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
 
             for workers in [1usize, 2, 3, 4, 8] {
-                let parent = run_octo(&inputs, &config(workers), CocoOctoPlan::new(512, 2), || {
-                    CocoOctoAggregator::new(512, 2)
+                let plan = CocoOctoPlan::with_seed(512, 2, COCO_SEED);
+                let parent = run_octo(&inputs, &config(workers), plan, || {
+                    CocoOctoAggregator::with_seed(512, 2, COCO_SEED)
                 })
                 .parent
                 .sketch;
@@ -4056,15 +4071,22 @@ mod heavy_hitters {
             ranked.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
             let watched: Vec<String> = ranked.iter().take(32).map(|(k, _)| (*k).clone()).collect();
 
-            let mut probe = OctoCoco::new(workers, w, d, Route::HashByKey);
+            let mut probe = OctoCoco::new(workers, w, d, Route::HashByKey, COCO_SEED + seed);
             for (i, raw) in stream.iter().enumerate() {
                 probe.insert(i, *raw);
             }
             let period = merge_period(probe.sent_counters, w * d, n / workers);
 
-            let mut octo = OctoCoco::new(workers, w, d, Route::HashByKey);
-            let mut merge = MergeCoco::new(workers, w, d, period, Route::HashByKey);
-            let mut ideal: Coco = Coco::init_with_size(w, d);
+            let mut octo = OctoCoco::new(workers, w, d, Route::HashByKey, COCO_SEED + seed);
+            let mut merge = MergeCoco::new(
+                workers,
+                w,
+                d,
+                period,
+                Route::HashByKey,
+                COCO_SEED + 100 + seed,
+            );
+            let mut ideal: Coco = Coco::init_with_size_and_seed(w, d, COCO_SEED + 200 + seed);
             let mut running: HashMap<String, u64> = HashMap::new();
             let mut seen = 0u64;
             let stride = n / 8;
@@ -4745,10 +4767,10 @@ mod top_k_plans {
 mod partition_accuracy {
     use super::*;
     use asap_sketchlib::{
-        Coco, CocoDelta, CocoOctoPlan, DdOctoPlan, Elastic, ElasticDelta, ElasticOctoPlan,
-        HllOctoPlan, UNIVMON_PROMASK, flow_key_string,
+        CocoDelta, CocoOctoPlan, DdOctoPlan, Elastic, ElasticDelta, ElasticOctoPlan, HllOctoPlan,
+        UNIVMON_PROMASK, flow_key_string,
     };
-    use common::specs::{CardinalityConfidenceSpec, Tally};
+    use common::specs::{CardinalityConfidenceSpec, Tally, assert_unbiased_mean};
 
     const WORKERS: usize = 4;
     const N: usize = 60_000;
@@ -5012,23 +5034,69 @@ mod partition_accuracy {
         }
     }
 
-    /// CocoSketch and Elastic under both partitions, against exact truth.
-    ///
-    /// Both are eviction-based heavy-hitter sketches, so their guarantee is
-    /// one-sided over-attribution: an estimate may credit a key with mass that
-    /// belonged to a colliding one, but a key that survives eviction is never
-    /// read *low*. That is what the route can change — under `RoundRobin` each
-    /// of the `k` workers runs its own eviction contest, so a flow can be
-    /// evicted `k` times independently — and it is checked here rather than
-    /// assumed.
-    ///
-    /// The comparison is against exact truth for the true top flows, and
-    /// against a single-threaded sketch for the total mass the protocol
-    /// delivered.
+    /// CocoSketch under both partitions: the flushed parent holds the stream
+    /// mass, and the true top 32 flows' summed estimate is unbiased over
+    /// independent seeds per route, on `128 x 2` tables under 1,024 flows.
     #[test]
-    fn coco_and_elastic_octo_plans_stay_one_sided_on_heavy_keys_under_both_partitions() {
-        const COCO_W: usize = 4_096;
+    fn coco_octo_plan_stays_unbiased_on_heavy_keys_under_both_partitions() {
+        const COCO_W: usize = 128;
         const COCO_D: usize = 2;
+        const TRIALS: u64 = 32;
+        const HEAVY: usize = 32;
+
+        let stream = stream();
+        let truth = truth_of(&stream);
+        let heavy = truth.top_k(HEAVY);
+        let exact = heavy.iter().map(|(_, c)| *c).sum::<i64>() as f64;
+
+        for route in routes() {
+            let mut samples = Vec::with_capacity(TRIALS as usize);
+            for trial in 0..TRIALS {
+                let plan = CocoOctoPlan::with_seed(COCO_W, COCO_D, COCO_SEED + trial);
+                let mut workers: Vec<_> = (0..WORKERS).map(|id| plan.worker(id)).collect();
+                let mut parent = plan.aggregator();
+                for (i, k) in stream.iter().enumerate() {
+                    let input = DataInput::U64(*k);
+                    let w = route.worker(i, &input, WORKERS);
+                    workers[w].process(&key_of(*k), &mut |d: CocoDelta| parent.apply(d));
+                }
+                for w in workers.iter_mut() {
+                    w.flush(&mut |d: CocoDelta| parent.apply(d));
+                }
+
+                let mass: u64 = parent.sketch.recorded_flows().map(|(_, v)| v).sum();
+                assert_eq!(
+                    mass,
+                    stream.len() as u64,
+                    "the flushed parent must hold the stream mass. {}",
+                    context(route, &format!("seed={:#x}", COCO_SEED + trial))
+                );
+                samples.push(
+                    heavy
+                        .iter()
+                        .map(|(k, _)| parent.sketch.estimate_key(&key_of(*k as u64)))
+                        .sum::<u64>() as f64,
+                );
+            }
+            assert_unbiased_mean(
+                &context(
+                    route,
+                    &format!(
+                        "CocoOctoPlan w={COCO_W} d={COCO_D}, top {HEAVY} mass over {TRIALS} seeds \
+                         from {COCO_SEED:#x}"
+                    ),
+                ),
+                &samples,
+                exact,
+                0.02,
+            );
+        }
+    }
+
+    /// Elastic under both partitions: on the true top 32 flows the plan and a
+    /// single-threaded reference both stay inside `[0, stream mass]`.
+    #[test]
+    fn elastic_octo_plan_stays_inside_the_stream_mass_under_both_partitions() {
         const ELASTIC_BUCKETS: i32 = 512;
         const ELASTIC_ROWS: usize = 3;
         const ELASTIC_COLS: usize = 4_096;
@@ -5039,69 +5107,6 @@ mod partition_accuracy {
         let heavy = truth.top_k(HEAVY);
 
         for route in routes() {
-            // --- CocoSketch ------------------------------------------------
-            let plan = CocoOctoPlan::new(COCO_W, COCO_D);
-            let mut workers: Vec<_> = (0..WORKERS).map(|id| plan.worker(id)).collect();
-            let mut parent = plan.aggregator();
-            for (i, k) in stream.iter().enumerate() {
-                let input = DataInput::U64(*k);
-                let w = route.worker(i, &input, WORKERS);
-                let payload = key_of(*k);
-                workers[w].process(&payload, &mut |d: CocoDelta| parent.apply(d));
-            }
-            for w in workers.iter_mut() {
-                w.flush(&mut |d: CocoDelta| parent.apply(d));
-            }
-
-            let mut reference: Coco = Coco::init_with_size(COCO_W, COCO_D);
-            for k in &stream {
-                reference.insert(&key_of(*k), 1);
-            }
-
-            let ctx = context(route, &format!("CocoOctoPlan w={COCO_W} d={COCO_D}"));
-            let mut one_sided = Tally::default();
-            for (k, c) in &heavy {
-                let est = parent.sketch.estimate_key(&key_of(*k as u64)) as i64;
-                one_sided.record(est >= *c, || {
-                    format!(
-                        "key {k}: true {c}, octo {est} — CocoSketch must not read a \
-                         surviving heavy key low"
-                    )
-                });
-            }
-            one_sided.assert_none(
-                &format!("CocoOctoPlan one-sided on the true top {HEAVY} ({route:?})"),
-                &ctx,
-            );
-            // Over-attribution has a ceiling: no estimate may exceed the whole
-            // stream mass, because that is more than was ever inserted. The
-            // single-threaded reference is checked against the same two rules,
-            // so a failure separates "the partition broke it" from "CocoSketch
-            // at these dimensions does this anyway".
-            let mut ceiling = Tally::default();
-            for (k, c) in &heavy {
-                let key = key_of(*k as u64);
-                let est = parent.sketch.estimate_key(&key) as i64;
-                let single = reference.estimate_key(&key) as i64;
-                ceiling.record(est <= truth.total(), || {
-                    format!(
-                        "key {k}: octo {est} exceeds the whole stream mass {}",
-                        truth.total()
-                    )
-                });
-                ceiling.record(single >= *c && single <= truth.total(), || {
-                    format!(
-                        "key {k}: the single-threaded reference itself reads {single} for a \
-                         true count of {c}, so the partition is not what broke this"
-                    )
-                });
-            }
-            ceiling.assert_none(
-                &format!("CocoOctoPlan estimates stay inside the stream mass ({route:?})"),
-                &ctx,
-            );
-
-            // --- Elastic ---------------------------------------------------
             let plan = ElasticOctoPlan::new(ELASTIC_BUCKETS, ELASTIC_ROWS, ELASTIC_COLS);
             let mut workers: Vec<_> = (0..WORKERS).map(|id| plan.worker(id)).collect();
             let mut parent = plan.aggregator();

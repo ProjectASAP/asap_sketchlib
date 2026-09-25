@@ -41,6 +41,8 @@ const EH_WINDOW: u64 = 1_000_000; // no expiry inside the accuracy runs
 const N: usize = 10_000;
 const DOMAIN: usize = 2_048;
 const STREAM_SEED: u64 = 0x0E11_0001;
+/// Generator seed for every `Coco` fixture.
+const COCO_SEED: u64 = 0xC0C0;
 
 /// Matrix dimensions for the counter-backed variants, chosen so their bounds
 /// are meaningful at `N` updates over `DOMAIN` keys.
@@ -107,7 +109,7 @@ fn every_eh_variant_selects_the_documented_merge_norm() {
         ),
         (
             "COCO",
-            asap_sketchlib::EHSketchList::COCO(Coco::init_with_size(512, 4)),
+            asap_sketchlib::EHSketchList::COCO(Coco::init_with_size_and_seed(512, 4, COCO_SEED)),
         ),
         (
             "ELASTIC",
@@ -213,58 +215,64 @@ fn eh_countl2hh_variant_satisfies_the_l2_bound_over_the_retained_window() {
     );
 }
 
-/// The heavy-hitter payloads keep a flow key beside each counter and evict on
-/// pressure, so their guarantee is one-sided on the keys they retain: a
-/// reported count never reads below the truth. Their full error sandwiches are
-/// covered in `e2e/heavy_hitters.rs`; what is new here is that the guarantee
-/// survives EH bucket merging.
-#[test]
-fn eh_heavy_hitter_variants_stay_one_sided_over_the_retained_window() {
-    for (name, proto) in [
-        (
-            "COCO",
-            asap_sketchlib::EHSketchList::COCO(Coco::init_with_size(1024, 4)),
-        ),
-        (
-            "ELASTIC",
-            asap_sketchlib::EHSketchList::ELASTIC(Elastic::init_with_length(1024)),
-        ),
-    ] {
-        // Both payloads key on strings, so the stream is fed as strings and
-        // the truth is keyed by the same identity.
-        let keys = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
-        let mut eh = ExponentialHistogram::new(EH_K, EH_WINDOW, proto);
-        for (t, k) in keys.iter().enumerate() {
-            eh.update(t as u64, &DataInput::String(format!("f{k}")));
-        }
-        let (lo, hi) = full_span(&eh);
-        let merged = eh.query_interval_merge(lo, hi).expect("full span");
-        let mut truth = FreqTruth::default();
-        for t in lo..=hi {
-            truth.observe(keys[t as usize] as i64);
-        }
-        let ctx = format!(
-            "{name} k={EH_K} zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}, \
-             retained span [{lo}, {hi}] over {} buckets",
-            eh.payload.len()
-        );
-
-        // Only the truly heavy keys are guaranteed to be retained; the
-        // one-sided property is asserted over those.
-        let mut tally = Tally::default();
-        for (k, c) in truth.top_k(32) {
-            let est = merged
-                .query(&DataInput::String(format!("f{k}")))
-                .expect("heavy-hitter query");
-            tally.record(est >= c as f64, || {
-                format!("key f{k}: true {c}, reported {est} (must never read low)")
-            });
-        }
-        tally.assert_none(
-            &format!("EHSketchList::{name} one-sided on heavy keys"),
-            &ctx,
-        );
+/// Merges every retained bucket of an EH over `proto`, fed the zipf stream as
+/// string keys, and returns it with the truth over the retained span.
+fn run_heavy_hitter_variant(
+    proto: asap_sketchlib::EHSketchList,
+) -> (asap_sketchlib::EHSketchList, FreqTruth, String) {
+    let keys = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
+    let mut eh = ExponentialHistogram::new(EH_K, EH_WINDOW, proto);
+    for (t, k) in keys.iter().enumerate() {
+        eh.update(t as u64, &DataInput::String(format!("f{k}")));
     }
+    let (lo, hi) = full_span(&eh);
+    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let mut truth = FreqTruth::default();
+    for t in lo..=hi {
+        truth.observe(keys[t as usize] as i64);
+    }
+    let ctx = format!(
+        "k={EH_K} zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}, \
+         retained span [{lo}, {hi}] over {} buckets",
+        eh.payload.len()
+    );
+    (merged, truth, ctx)
+}
+
+/// Elastic never reads a retained heavy key below its true count, over EH
+/// bucket merging.
+#[test]
+fn eh_elastic_variant_stays_one_sided_over_the_retained_window() {
+    let (merged, truth, ctx) = run_heavy_hitter_variant(asap_sketchlib::EHSketchList::ELASTIC(
+        Elastic::init_with_length(1024),
+    ));
+    let mut tally = Tally::default();
+    for (k, c) in truth.top_k(32) {
+        let est = merged
+            .query(&DataInput::String(format!("f{k}")))
+            .expect("heavy-hitter query");
+        tally.record(est >= c as f64, || {
+            format!("key f{k}: true {c}, reported {est} (must never read low)")
+        });
+    }
+    tally.assert_none("EHSketchList::ELASTIC one-sided on heavy keys", &ctx);
+}
+
+/// The merged Coco window holds exactly one unit of mass per retained event.
+#[test]
+fn eh_coco_variant_conserves_the_retained_mass() {
+    let (merged, truth, ctx) = run_heavy_hitter_variant(asap_sketchlib::EHSketchList::COCO(
+        Coco::init_with_size_and_seed(1024, 4, COCO_SEED),
+    ));
+    let asap_sketchlib::EHSketchList::COCO(coco) = &merged else {
+        panic!("a COCO histogram merges into a COCO payload");
+    };
+    let mass: u64 = coco.recorded_flows().map(|(_, v)| v).sum();
+    assert_eq!(
+        mass as i64,
+        truth.total(),
+        "the merged window must hold the retained mass. {ctx}, coco seed={COCO_SEED:#x}"
+    );
 }
 
 #[test]
@@ -701,7 +709,10 @@ fn every_eh_variant_can_merge_into_its_own_kind() {
             "CS",
             EHSketchList::CS(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 256)),
         ),
-        ("COCO", EHSketchList::COCO(Coco::init_with_size(256, 4))),
+        (
+            "COCO",
+            EHSketchList::COCO(Coco::init_with_size_and_seed(256, 4, COCO_SEED)),
+        ),
         (
             "COUNTL2HH",
             EHSketchList::COUNTL2HH(CountL2HH::with_dimensions(3, 256)),

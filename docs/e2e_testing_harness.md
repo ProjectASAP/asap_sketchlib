@@ -323,12 +323,15 @@ error against its bound.
 
 ## Rules and anti-patterns
 
-- No unseeded randomness anywhere in tests — no `rand::rng()`, no wall-clock
-  seeding, no implicit RNG inside a constructor. `KLL::init_kll_with_seed`,
+- No assertion depends on unseeded randomness — no `rand::rng()`, no
+  wall-clock seeding, no implicit RNG inside a constructor. An unseeded
+  sketch appears only where the assertion holds for every draw. `KLL::init_kll_with_seed`,
   `KLLDynamic::init_kll_with_seed`, `KllSketch::with_seed`,
-  `NitroBatch::with_target_and_seed` and `UniformSampling::with_seed` exist for
-  this. Coco-style nondeterministic implementations are tested statistically
-  over bounded ranges instead.
+  `NitroBatch::with_target_and_seed`, `UniformSampling::with_seed`,
+  `Coco::init_with_size_and_seed` and `CocoOctoPlan::with_seed` exist for this.
+- An estimator whose guarantee is unbiasedness gets no per-key band: its
+  accuracy is the mean over independent seeds, within standard errors of the
+  truth (`specs::assert_unbiased_mean`).
 - A probabilistic guarantee is about randomness the test cannot resample: the
   library fixes its hash seed table, so counting how many keys clear a bound
   under *one* hash is not a measurement of the theorem's failure probability.

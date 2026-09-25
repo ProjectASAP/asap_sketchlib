@@ -14,8 +14,8 @@
 //! * <https://dl.acm.org/doi/10.1145/3452296.3472892>
 
 use crate::{DataInput, DefaultXxHasher, SketchHasher, Vector2D};
-use rand::Rng;
-use rand::rngs::ThreadRng;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -35,8 +35,39 @@ pub struct Coco<H: SketchHasher = DefaultXxHasher> {
     pub w: usize,
     pub d: usize,
     pub table: Vector2D<CocoBucket>,
+    /// Source of the tie-break and election draws. Not serialized: a decoded
+    /// sketch draws from the thread generator.
+    #[serde(skip)]
+    rng: CocoRng,
     #[serde(skip)]
     _hasher: PhantomData<H>,
+}
+
+/// The thread generator when unseeded; an owned `SmallRng` when seeded, which
+/// a clone copies along with its state.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CocoRng(Option<SmallRng>);
+
+impl CocoRng {
+    pub(crate) fn seeded(seed: u64) -> Self {
+        Self(Some(SmallRng::seed_from_u64(seed)))
+    }
+
+    /// Uniform in `0..n`.
+    pub(crate) fn below(&mut self, n: u32) -> u32 {
+        match &mut self.0 {
+            Some(rng) => rng.random_range(0..n),
+            None => rand::rng().random_range(0..n),
+        }
+    }
+
+    /// Uniform in `0.0..=1.0`.
+    pub(crate) fn unit(&mut self) -> f64 {
+        match &mut self.0 {
+            Some(rng) => rng.random_range(0.0..=1.0),
+            None => rand::rng().random_range(0.0..=1.0),
+        }
+    }
 }
 
 /// Buckets per array in a default `Coco`. Width sets the collision rate, and
@@ -118,11 +149,23 @@ impl<H: SketchHasher> Coco<H> {
         }
     }
 
+    /// A `d` x `w` table whose draws come from the thread generator.
     pub fn init_with_size(w: usize, d: usize) -> Self {
+        Self::with_rng(w, d, CocoRng::default())
+    }
+
+    /// A `d` x `w` table whose draws come from `seed`. Two sketches built with
+    /// the same seed and fed the same inserts hold identical tables.
+    pub fn init_with_size_and_seed(w: usize, d: usize, seed: u64) -> Self {
+        Self::with_rng(w, d, CocoRng::seeded(seed))
+    }
+
+    fn with_rng(w: usize, d: usize, rng: CocoRng) -> Self {
         Coco {
             w,
             d,
             table: Vector2D::from_fn(d, w, |_, _| CocoBucket::default()),
+            rng,
             _hasher: PhantomData,
         }
     }
@@ -138,7 +181,6 @@ impl<H: SketchHasher> Coco<H> {
             return;
         }
         let key_input = DataInput::Str(key);
-        let mut rng: Option<ThreadRng> = None;
         let mut victim = (0usize, 0usize);
         let mut victim_val = u64::MAX;
         let mut tied = 0u32;
@@ -158,7 +200,7 @@ impl<H: SketchHasher> Coco<H> {
                 // reservoir sampling: the n-th tie takes the slot with probability 1/n.
                 // The paper randomizes ties; yindazhang/CocoSketch keeps the first.
                 tied += 1;
-                if rng.get_or_insert_with(rand::rng).random_range(0..tied) == 0 {
+                if self.rng.below(tied) == 0 {
                     victim = (i, idx);
                 }
             }
@@ -169,9 +211,7 @@ impl<H: SketchHasher> Coco<H> {
         let elected = match bucket.full_key {
             None => true,
             Some(_) => {
-                let draw = rng
-                    .get_or_insert_with(rand::rng)
-                    .random_range(0.0..=1.0_f64);
+                let draw = self.rng.unit();
                 v as f64 > draw * bucket.val as f64
             }
         };
@@ -313,14 +353,42 @@ mod tests {
         assert_eq!(total_all, 10);
     }
 
+    fn table_of(coco: &Coco) -> Vec<(Option<String>, u64)> {
+        (0..coco.d)
+            .flat_map(|i| (0..coco.w).map(move |j| (i, j)))
+            .map(|(i, j)| (coco.table[i][j].full_key.clone(), coco.table[i][j].val))
+            .collect()
+    }
+
+    #[test]
+    fn equal_seeds_build_identical_tables() {
+        let build = |seed: u64| {
+            let mut left: Coco = Coco::init_with_size_and_seed(64, 2, seed);
+            let mut right: Coco = Coco::init_with_size_and_seed(64, 2, seed + 1);
+            for i in 0..20_000u64 {
+                let key = format!("flow::{}", (i * i + 7 * i) % 512);
+                if i % 2 == 0 {
+                    left.insert(&key, 1);
+                } else {
+                    right.insert(&key, 1);
+                }
+            }
+            left.merge(&right);
+            table_of(&left)
+        };
+
+        assert_eq!(build(7), build(7));
+        assert_ne!(build(7), build(9));
+    }
+
     #[test]
     fn tied_minimum_buckets_are_chosen_uniformly_at_random() {
         // every mapped bucket of a fresh table holds 0, so all TEST_D of them tie
         const TRIALS: usize = 2_000;
         let mut landings = [0usize; TEST_D];
 
-        for _ in 0..TRIALS {
-            let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        for trial in 0..TRIALS {
+            let mut coco: Coco = Coco::init_with_size_and_seed(TEST_W, TEST_D, trial as u64);
             coco.insert("flow::tie-probe", 1);
             let row = (0..TEST_D)
                 .find(|i| {
