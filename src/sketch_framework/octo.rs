@@ -39,7 +39,7 @@ use crate::octo_delta::{
     DD_PROMASK, DdDelta, KeyedCmDelta, KeyedCountDelta, MAX_PROMASK, OctoThreshold, UNIVMON_PROMASK,
 };
 use crate::sketch_framework::univmon::{UnivMonDeltaFidelity, bottom_layer_for_hash};
-use crate::sketches::coco::Coco;
+use crate::sketches::coco::{Coco, CocoRng};
 use crate::sketches::countminsketch_topk::CMSHeap;
 use crate::sketches::countsketch_topk::{CSHeap, l2hh_cell_for_row};
 use crate::sketches::elastic::{Elastic, LAMBDA};
@@ -50,8 +50,6 @@ use crate::{
     input_to_owned,
 };
 use crate::{CANONICAL_HASH_SEED, COCO_PROMASK, CocoDelta, ELASTIC_PROMASK, ElasticDelta};
-use rand::Rng;
-use rand::rngs::ThreadRng;
 use smallvec::SmallVec;
 
 #[cfg(feature = "octo-runtime")]
@@ -513,17 +511,28 @@ pub struct CocoWorkerSketch {
     counters: Vec<u8>,
     w: usize,
     d: usize,
+    rng: CocoRng,
 }
 
 impl CocoWorkerSketch {
-    /// Creates a `d` x `w` worker table, empty and cleared. The argument order
-    /// is `Coco::init_with_size`'s.
+    /// Creates a `d` x `w` worker table, empty and cleared, drawing from the
+    /// thread generator. The argument order is `Coco::init_with_size`'s.
     pub fn new(w: usize, d: usize) -> Self {
+        Self::with_rng(w, d, CocoRng::default())
+    }
+
+    /// As [`Self::new`], drawing from `seed`.
+    pub fn with_seed(w: usize, d: usize, seed: u64) -> Self {
+        Self::with_rng(w, d, CocoRng::seeded(seed))
+    }
+
+    fn with_rng(w: usize, d: usize, rng: CocoRng) -> Self {
         Self {
             keys: vec![None; w * d],
             counters: vec![0u8; w * d],
             w,
             d,
+            rng,
         }
     }
 
@@ -563,7 +572,6 @@ impl CocoWorkerSketch {
         }
         let threshold = threshold.clamp(1, MAX_PROMASK) as u8;
         let key_input = DataInput::Str(key);
-        let mut rng: Option<ThreadRng> = None;
         let mut victim = 0usize;
         let mut victim_val = u8::MAX;
         let mut tied = 0u32;
@@ -587,7 +595,7 @@ impl CocoWorkerSketch {
                 tied = 1;
             } else if self.counters[cell] == victim_val {
                 tied += 1;
-                if rng.get_or_insert_with(rand::rng).random_range(0..tied) == 0 {
+                if self.rng.below(tied) == 0 {
                     victim = cell;
                 }
             }
@@ -597,9 +605,7 @@ impl CocoWorkerSketch {
         let elected = match self.keys[victim] {
             None => true,
             Some(_) => {
-                let draw = rng
-                    .get_or_insert_with(rand::rng)
-                    .random_range(0.0..=1.0_f64);
+                let draw = self.rng.unit();
                 1.0 > draw * self.counters[victim] as f64
             }
         };
@@ -2214,6 +2220,19 @@ impl CocoOctoWorker {
         }
     }
 
+    /// As [`Self::with_threshold`], with the worker table drawing from `seed`.
+    pub fn with_threshold_and_seed(
+        w: usize,
+        d: usize,
+        threshold: OctoThreshold,
+        seed: u64,
+    ) -> Self {
+        Self {
+            sketch: CocoWorkerSketch::with_seed(w, d, seed),
+            threshold,
+        }
+    }
+
     /// Borrows the worker's table.
     pub fn sketch(&self) -> &CocoWorkerSketch {
         &self.sketch
@@ -2261,6 +2280,13 @@ impl CocoOctoAggregator {
     pub fn new(w: usize, d: usize) -> Self {
         Self {
             sketch: Coco::init_with_size(w, d),
+        }
+    }
+
+    /// As [`Self::new`], with the parent table drawing from `seed`.
+    pub fn with_seed(w: usize, d: usize, seed: u64) -> Self {
+        Self {
+            sketch: Coco::init_with_size_and_seed(w, d, seed),
         }
     }
 }
@@ -2657,6 +2683,7 @@ pub struct CocoOctoPlan {
     w: usize,
     d: usize,
     threshold: OctoThreshold,
+    seed: Option<u64>,
 }
 
 impl CocoOctoPlan {
@@ -2667,7 +2694,33 @@ impl CocoOctoPlan {
 
     /// Creates a plan whose workers share `threshold`.
     pub fn with_threshold(w: usize, d: usize, threshold: OctoThreshold) -> Self {
-        Self { w, d, threshold }
+        Self {
+            w,
+            d,
+            threshold,
+            seed: None,
+        }
+    }
+
+    /// As [`Self::new`], with every worker and the aggregator drawing from its
+    /// own generator derived from `seed` and its worker id.
+    pub fn with_seed(w: usize, d: usize, seed: u64) -> Self {
+        Self::with_threshold_and_seed(w, d, OctoThreshold::new(COCO_PROMASK), seed)
+    }
+
+    /// As [`Self::with_threshold`], seeded as [`Self::with_seed`].
+    pub fn with_threshold_and_seed(
+        w: usize,
+        d: usize,
+        threshold: OctoThreshold,
+        seed: u64,
+    ) -> Self {
+        Self {
+            w,
+            d,
+            threshold,
+            seed: Some(seed),
+        }
     }
 
     /// The threshold this plan's workers read.
@@ -2677,15 +2730,33 @@ impl CocoOctoPlan {
 
     /// Builds the parent this plan's workers feed. See `CmOctoPlan::aggregator`.
     pub fn aggregator(&self) -> CocoOctoAggregator {
-        CocoOctoAggregator::new(self.w, self.d)
+        match self.seed {
+            Some(seed) => CocoOctoAggregator::with_seed(self.w, self.d, derive_seed(seed, 0)),
+            None => CocoOctoAggregator::new(self.w, self.d),
+        }
     }
+}
+
+/// Seed for generator `stream` of a plan seeded with `seed`; stream 0 is the
+/// aggregator and stream `id + 1` is worker `id`.
+fn derive_seed(seed: u64, stream: u64) -> u64 {
+    seed ^ stream.wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
 impl OctoPlan for CocoOctoPlan {
     type Worker = CocoOctoWorker;
 
-    fn worker(&self, _worker_id: usize) -> Self::Worker {
-        CocoOctoWorker::with_threshold(self.w, self.d, self.threshold.clone())
+    fn worker(&self, worker_id: usize) -> Self::Worker {
+        let threshold = self.threshold.clone();
+        match self.seed {
+            Some(seed) => CocoOctoWorker::with_threshold_and_seed(
+                self.w,
+                self.d,
+                threshold,
+                derive_seed(seed, worker_id as u64 + 1),
+            ),
+            None => CocoOctoWorker::with_threshold(self.w, self.d, threshold),
+        }
     }
 
     fn prepare(&self, input: &DataInput<'_>) -> String {
@@ -3155,6 +3226,56 @@ mod worker_tests {
         let mut worker = CmWorkerSketch::new(4, 16);
         let hashes = CmWorkerSketch::hashes(2, &DataInput::U64(1));
         worker.insert_hashes_emit_delta(&hashes, CM_PROMASK, &mut |_| {});
+    }
+
+    /// Deltas each worker emitted, and the parent table as `(key, val)` per bucket.
+    type CocoPlanRun = (Vec<Vec<CocoDelta>>, Vec<(Option<String>, u64)>);
+
+    fn coco_plan_run(plan: &CocoOctoPlan) -> CocoPlanRun {
+        let mut workers: Vec<CocoOctoWorker> = (0..2).map(|id| plan.worker(id)).collect();
+        let mut parent = plan.aggregator();
+        let mut sent: Vec<Vec<CocoDelta>> = vec![Vec::new(); 2];
+        for i in 0..20_000u64 {
+            let key = format!("flow::{}", (i * i + 7 * i) % 512);
+            workers[(i % 2) as usize].process(&key, &mut |d: CocoDelta| {
+                sent[(i % 2) as usize].push(d.clone());
+                parent.apply(d);
+            });
+        }
+        let table = (0..parent.sketch.d)
+            .flat_map(|r| (0..parent.sketch.w).map(move |c| (r, c)))
+            .map(|(r, c)| {
+                let bucket = &parent.sketch.table[r][c];
+                (bucket.full_key.clone(), bucket.val)
+            })
+            .collect();
+        (sent, table)
+    }
+
+    #[test]
+    fn a_seeded_coco_plan_replays_identically() {
+        let (sent, table) = coco_plan_run(&CocoOctoPlan::with_seed(64, 2, 7));
+        assert_eq!(
+            (sent.clone(), table),
+            coco_plan_run(&CocoOctoPlan::with_seed(64, 2, 7))
+        );
+        assert_ne!(sent, coco_plan_run(&CocoOctoPlan::with_seed(64, 2, 9)).0);
+    }
+
+    #[test]
+    fn a_seeded_coco_plan_gives_each_worker_its_own_stream() {
+        let plan = CocoOctoPlan::with_seed(64, 2, 7);
+        let run = |id: usize| {
+            let mut worker = plan.worker(id);
+            let mut sent: Vec<CocoDelta> = Vec::new();
+            for i in 0..20_000u64 {
+                let key = format!("flow::{}", (i * i + 7 * i) % 512);
+                worker.process(&key, &mut |d: CocoDelta| sent.push(d));
+            }
+            (sent, worker.sketch().residual().to_vec())
+        };
+        assert_eq!(run(0), run(0));
+        assert_ne!(run(0), run(1));
     }
 
     #[test]

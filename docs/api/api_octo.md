@@ -542,7 +542,14 @@ heap, which is Algorithm 2.
 The two keyed-bucket pairs instead replay the key, per §4.4.
 `CocoOctoAggregator` calls the weighted `Coco::insert`, so the promoted
 mass contests the parent's own buckets and runs the parent's own `v/val`
-election. `ElasticOctoAggregator` splits the halves: a `Heavy` message
+election. Both halves of the Coco pair draw from the thread generator;
+`CocoWorkerSketch::with_seed`, `CocoOctoWorker::with_threshold_and_seed`,
+`CocoOctoAggregator::with_seed` and `CocoOctoPlan::with_seed` /
+`with_threshold_and_seed` draw from a seeded one instead. A seeded plan
+derives each worker's and the aggregator's seed from its own seed and the
+worker id. Under `run_octo` the parent applies deltas in arrival order,
+so only a single-threaded replay of a seeded plan reproduces exactly.
+`ElasticOctoAggregator` splits the halves: a `Heavy` message
 goes through `Elastic::merge_heavy`, a `Light` message is an ordinary
 Count-Min cell delta applied to `sketch.light`, and an `Evicted` message
 goes through `Elastic::absorb_evicted`. Neither aggregator keeps a heap:

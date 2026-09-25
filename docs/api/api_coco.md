@@ -19,10 +19,16 @@ subset aggregation.
 ```rust
 fn new() -> Self
 fn init_with_size(w: usize, d: usize) -> Self
+fn init_with_size_and_seed(w: usize, d: usize, seed: u64) -> Self
 ```
 
 `new()` builds a `1024 x 4` table: 4096 buckets, 128 KiB, plus a heap allocation
 per occupied bucket for its stored key.
+
+`new` and `init_with_size` draw the tie-break and the election from the thread
+generator. `init_with_size_and_seed` draws them from a generator seeded with
+`seed`, so the table is a deterministic function of the seed and the insert
+sequence; a clone copies the generator's state along with the table.
 
 Sizing: `d` is the number of arrays an insert scans, and the paper recommends
 2 to 4 — larger `d` spreads small flows better at the cost of a longer scan per
@@ -129,14 +135,18 @@ let _ = sk.estimate_projected("region=us", |full| {
 ## Caveats
 
 - `estimate_substring` matches by containment, which over-attributes across keys that prefix one another.
-- Replacement behavior is probabilistic.
+- Replacement behavior is probabilistic. Only a seeded sketch reproduces.
+- The seed is not serialized: a decoded sketch draws from the thread generator.
+- Clones of a seeded sketch draw the same sequence. `ExponentialHistogram`
+  clones its prototype for every bucket, so over a seeded `Coco` every bucket's
+  elections are correlated; use an unseeded prototype when that matters.
 
 ## Multi-core (OctoSketch)
 
 > **Feature gate:** requires `octo-runtime` for the runtime itself.
 
 ```rust
-let plan = CocoOctoPlan::new(1024, 2);
+let plan = CocoOctoPlan::new(1024, 2); // or CocoOctoPlan::with_seed(1024, 2, seed)
 let config = OctoConfig { threshold: plan.threshold().clone(), ..OctoConfig::default() };
 let out = run_octo(&inputs, &config, plan.clone(), || plan.aggregator());
 out.parent.sketch.estimate_key("flow::7");
@@ -151,7 +161,8 @@ paper prescribes. Mass is conserved exactly; residency churns faster than a
 single-threaded pass, because a promoted batch of τ takes a bucket with
 probability `τ/val` rather than `1/val`. Keys are rendered with
 `flow_key_string`, and that rendering is what `estimate_key` must be asked for.
-See `docs/api/api_octo.md`.
+`CocoOctoPlan::with_seed` gives the aggregator and each worker its own generator
+derived from one seed and the worker id. See `docs/api/api_octo.md`.
 
 ## Relation to the paper
 

@@ -577,9 +577,10 @@ proptest! {
         w in 1usize..8,
         d in 1usize..4,
         tau in 1u32..=8,
+        seed in any::<u64>(),
         keys in stream(300),
     ) {
-        let mut worker = CocoWorkerSketch::new(w, d);
+        let mut worker = CocoWorkerSketch::with_seed(w, d, seed);
         let mut deltas: Vec<CocoDelta> = Vec::new();
         for k in &keys {
             worker.insert_emit_delta(&flow(*k), tau, &mut |delta| deltas.push(delta));
@@ -611,11 +612,13 @@ proptest! {
         d in 1usize..4,
         tau in 1u32..=8,
         shards in 1usize..5,
+        seed in any::<u64>(),
         keys in stream(300),
     ) {
-        let mut workers: Vec<CocoWorkerSketch> =
-            (0..shards).map(|_| CocoWorkerSketch::new(w, d)).collect();
-        let mut parent = CocoOctoAggregator::new(w, d);
+        let mut workers: Vec<CocoWorkerSketch> = (0..shards)
+            .map(|i| CocoWorkerSketch::with_seed(w, d, seed.wrapping_add(i as u64 + 1)))
+            .collect();
+        let mut parent = CocoOctoAggregator::with_seed(w, d, seed);
         for (i, k) in keys.iter().enumerate() {
             workers[i % shards].insert_emit_delta(&flow(*k), tau, &mut |delta| parent.apply(delta));
         }
@@ -642,8 +645,9 @@ proptest! {
     fn coco_worker_fills_the_least_loaded_bucket(
         d in 2usize..5,
         n in 2usize..120,
+        seed in any::<u64>(),
     ) {
-        let mut worker = CocoWorkerSketch::new(1, d);
+        let mut worker = CocoWorkerSketch::with_seed(1, d, seed);
         let mut promoted = 0usize;
         for k in 0..n as u64 {
             worker.insert_emit_delta(&flow(k), MAX_PROMASK, &mut |_| promoted += 1);
@@ -667,9 +671,10 @@ proptest! {
     fn coco_at_threshold_one_promotes_the_arriving_key(
         w in 1usize..8,
         d in 1usize..4,
+        seed in any::<u64>(),
         keys in stream(300),
     ) {
-        let mut worker = CocoWorkerSketch::new(w, d);
+        let mut worker = CocoWorkerSketch::with_seed(w, d, seed);
         for k in &keys {
             let arrival = flow(*k);
             let mut promoted: Vec<CocoDelta> = Vec::new();
@@ -992,6 +997,7 @@ proptest! {
 
     #[test]
     fn every_promask_is_the_promotion_step_of_its_own_delta_type(
+        seed in any::<u64>(),
         key in 0u64..1024,
         n in 600usize..800,
     ) {
@@ -1033,7 +1039,7 @@ proptest! {
             prop_assert_eq!(d.value, u64::from(DD_PROMASK), "a DDSketch promotion carried {}", d.value);
         }
 
-        let mut coco = CocoWorkerSketch::new(8, 2);
+        let mut coco = CocoWorkerSketch::with_seed(8, 2, seed);
         let mut coco_deltas: Vec<CocoDelta> = Vec::new();
         for k in &keys {
             coco.insert_emit_delta(&flow(*k), COCO_PROMASK, &mut |d| coco_deltas.push(d));

@@ -932,8 +932,8 @@ Feature-gated behind `--features experimental`.
 - Coco
   - Configuration: table size 256, 2 ways
   - Input: disjoint key prefixes (`aaa*` over 50 keys at weight 7, `zzz*` over 30 keys at weight 3)
-  - error bound: per prefix family, `est` in `[0.75 * truth, N]`, and a prefix must never pick up a bucket from another prefix
-    - reasoning: eviction loses counts one-sidedly downwards while over-attribution is capped by the stream total, so only that band is guaranteed
+  - exact: the two families' estimates sum to the stream mass
+  - accuracy: unbiasedness only, the mean over independent seeds; no per-key band
 - SpaceSaving
   - Configuration (capacity): 2, 8, 64, 2048, and the default 1024
   - Input: (1) ~ (12)
@@ -1088,7 +1088,8 @@ Feature-gated behind `--features experimental`.
     - CountMin: the CountMin model -- the merged window estimate is one-sided and its excess is held to `eps * N` over the events still retained, exactly as for a standalone CountMin at row 3, col 512
     - Count sketch: the L2 model
     - CountL2HH: the L2 bound
-    - Coco and Elastic: one-sided -- on the 32 heaviest keys of the retained window a query must never read low, which is the only direction a structure that evicts flow keys can guarantee
+    - Elastic: one-sided -- on the 32 heaviest keys of the retained window a query must never read low
+    - Coco: the merged window holds exactly the retained mass
     - HyperLogLog: the register error model
     - KLL: the rank error characterization
     - DDSketch: the relative value error contract

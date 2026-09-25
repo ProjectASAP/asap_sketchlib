@@ -243,6 +243,49 @@ impl Tally {
 }
 
 // ---------------------------------------------------------------------------
+// Unbiased estimators
+// ---------------------------------------------------------------------------
+
+/// Standard errors an unbiasedness check allows. Over at least
+/// [`UNBIASED_MIN_SEEDS`] seeds, the two-sided Student-t tail at this many
+/// sample standard errors is under [`TEST_LEVEL`].
+pub const UNBIASED_SIGMAS: f64 = 6.5;
+
+/// Fewest independent seeds an unbiasedness check accepts.
+pub const UNBIASED_MIN_SEEDS: usize = 32;
+
+/// Unbiasedness acceptance for `samples`, one estimate per independent seed.
+///
+/// The seeds must disagree, the band of [`UNBIASED_SIGMAS`] standard errors
+/// must be under `max_relative * exact`, and the mean must lie inside it.
+pub fn assert_unbiased_mean(label: &str, samples: &[f64], exact: f64, max_relative: f64) {
+    assert!(
+        samples.len() >= UNBIASED_MIN_SEEDS,
+        "{label}: {} seeds, fewer than {UNBIASED_MIN_SEEDS}",
+        samples.len()
+    );
+    let n = samples.len() as f64;
+    let mean = samples.iter().sum::<f64>() / n;
+    let variance = samples.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    assert!(
+        variance > 0.0,
+        "{label}: every seed gave {mean}, so the check exercises no randomness"
+    );
+    let band = UNBIASED_SIGMAS * (variance / n).sqrt();
+    assert!(
+        band < max_relative * exact,
+        "{label}: {UNBIASED_SIGMAS} standard errors = {band:.2} is not under {max_relative} \
+         of the exact {exact}"
+    );
+    assert!(
+        (mean - exact).abs() <= band,
+        "{label}: mean {mean:.2} over {n} seeds is {:.2} from the exact {exact}, outside \
+         {UNBIASED_SIGMAS} standard errors ({band:.2})",
+        mean - exact
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Count-Min: one-sided additive error
 // ---------------------------------------------------------------------------
 

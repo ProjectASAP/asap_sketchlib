@@ -57,6 +57,15 @@ signals a backwards-compatible change.
   what the suite is for and what it has found;
   [`tests/PBT_COVERAGE.md`](tests/PBT_COVERAGE.md) lists every law as a
   relation, one section per sketch, with what it is checked against.
+- **Seeded CocoSketch.** `Coco::init_with_size_and_seed(w, d, seed)` draws the
+  tie-break and the election from a generator seeded with `seed`, so two
+  sketches built with the same seed and fed the same inserts hold identical
+  tables. The OctoSketch pair has the same: `CocoWorkerSketch::with_seed`,
+  `CocoOctoWorker::with_threshold_and_seed`, `CocoOctoAggregator::with_seed`,
+  and `CocoOctoPlan::with_seed` / `with_threshold_and_seed`, which derive each
+  worker's seed and the aggregator's from one seed. The unseeded constructors
+  draw from the thread generator. The seed is not serialized, and the ASAPv1
+  payload is unchanged.
 
 ### Changed
 

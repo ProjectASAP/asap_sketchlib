@@ -44,21 +44,25 @@ const SUBSTRINGS: [&str; 5] = ["fam1", "item1", "item31", "|", "zzz"];
 /// Suffixes probed against the UDF query.
 const SUFFIXES: [&str; 3] = ["1", "0", "item3"];
 
+/// A geometry, a generator seed and one stream over it.
+type Crowded = (usize, usize, u64, Vec<(u64, u64)>);
+
 /// A key domain four times the size of the table, so every bucket is claimed
 /// and later arrivals contest an occupied one.
-fn crowded_stream(max: usize) -> impl Strategy<Value = (usize, usize, Vec<(u64, u64)>)> {
+fn crowded_stream(max: usize) -> impl Strategy<Value = Crowded> {
     (1usize..=8, 1usize..=4).prop_flat_map(move |(w, d)| {
         let domain = 4 * (w * d) as u64;
         (
             Just(w),
             Just(d),
+            any::<u64>(),
             prop::collection::vec((0..domain, 1u64..1_000), 1..max),
         )
     })
 }
 
-/// A geometry paired with two streams over it, for the laws that merge.
-type CrowdedPair = (usize, usize, Vec<(u64, u64)>, Vec<(u64, u64)>);
+/// A geometry, a generator seed and two streams over it, for the laws that merge.
+type CrowdedPair = (usize, usize, u64, Vec<(u64, u64)>, Vec<(u64, u64)>);
 
 /// Two streams over one geometry, for the laws that merge.
 fn crowded_pair(max: usize) -> impl Strategy<Value = CrowdedPair> {
@@ -67,14 +71,15 @@ fn crowded_pair(max: usize) -> impl Strategy<Value = CrowdedPair> {
         (
             Just(w),
             Just(d),
+            any::<u64>(),
             prop::collection::vec((0..domain, 1u64..1_000), 1..max),
             prop::collection::vec((0..domain, 1u64..1_000), 1..max),
         )
     })
 }
 
-fn filled(w: usize, d: usize, stream: &[(u64, u64)]) -> C {
-    let mut sketch = C::init_with_size(w, d);
+fn filled(w: usize, d: usize, seed: u64, stream: &[(u64, u64)]) -> C {
+    let mut sketch = C::init_with_size_and_seed(w, d, seed);
     for (id, v) in stream {
         sketch.insert(&key_of(*id), *v);
     }
@@ -158,9 +163,10 @@ proptest! {
     fn coco_round_trips_at_edge_geometries(
         width in edge_dimension(),
         depth in edge_rows(),
+        seed in any::<u64>(),
         stream in keys(200),
     ) {
-        let mut sketch = C::init_with_size(width, depth);
+        let mut sketch = C::init_with_size_and_seed(width, depth, seed);
         for k in &stream {
             sketch.insert(&format!("flow-{k}"), 1);
         }
@@ -178,9 +184,9 @@ proptest! {
 
     #[test]
     fn the_table_holds_exactly_the_mass_that_arrived(
-        (w, d, stream) in crowded_stream(300),
+        (w, d, seed, stream) in crowded_stream(300),
     ) {
-        let sketch = filled(w, d, &stream);
+        let sketch = filled(w, d, seed, &stream);
 
         prop_assert_eq!(
             table_mass(&sketch),
@@ -194,11 +200,11 @@ proptest! {
 
     #[test]
     fn an_arrival_for_a_new_key_grows_one_smallest_mapped_bucket(
-        (w, d, stream) in crowded_stream(300),
+        (w, d, seed, stream) in crowded_stream(300),
         probe in 0u64..64,
         weight in 1u64..1_000,
     ) {
-        let mut sketch = filled(w, d, &stream);
+        let mut sketch = filled(w, d, seed, &stream);
         let key = format!("probe|item{probe}");
         prop_assume!(homes(&sketch, &key).is_empty());
 
@@ -236,9 +242,9 @@ proptest! {
 
     #[test]
     fn every_key_lives_in_at_most_one_bucket(
-        (w, d, stream) in crowded_stream(300),
+        (w, d, seed, stream) in crowded_stream(300),
     ) {
-        let sketch = filled(w, d, &stream);
+        let sketch = filled(w, d, seed, &stream);
 
         for key in distinct_keys(&stream) {
             let at = homes(&sketch, &key);
@@ -248,9 +254,9 @@ proptest! {
 
     #[test]
     fn recorded_flows_lists_each_occupied_bucket_once_and_carries_all_the_mass(
-        (w, d, stream) in crowded_stream(300),
+        (w, d, seed, stream) in crowded_stream(300),
     ) {
-        let sketch = filled(w, d, &stream);
+        let sketch = filled(w, d, seed, &stream);
         let listed: Vec<(String, u64)> = sketch
             .recorded_flows()
             .map(|(key, val)| (key.to_string(), val))
@@ -272,9 +278,9 @@ proptest! {
 
     #[test]
     fn group_by_folds_the_occupied_buckets_onto_their_partial_key(
-        (w, d, stream) in crowded_stream(300),
+        (w, d, seed, stream) in crowded_stream(300),
     ) {
-        let sketch = filled(w, d, &stream);
+        let sketch = filled(w, d, seed, &stream);
 
         let mut expected: HashMap<String, u64> = HashMap::new();
         for (full, val) in occupied(&sketch) {
@@ -286,9 +292,9 @@ proptest! {
 
     #[test]
     fn estimate_projected_answers_one_group_of_the_same_fold(
-        (w, d, stream) in crowded_stream(300),
+        (w, d, seed, stream) in crowded_stream(300),
     ) {
-        let sketch = filled(w, d, &stream);
+        let sketch = filled(w, d, seed, &stream);
         let cells = occupied(&sketch);
 
         let mut partials: Vec<String> = cells.iter().map(|(full, _)| family(full).to_string()).collect();
@@ -310,9 +316,9 @@ proptest! {
 
     #[test]
     fn estimate_substring_collects_every_key_containing_the_probe(
-        (w, d, stream) in crowded_stream(300),
+        (w, d, seed, stream) in crowded_stream(300),
     ) {
-        let sketch = filled(w, d, &stream);
+        let sketch = filled(w, d, seed, &stream);
         let cells = occupied(&sketch);
 
         for probe in SUBSTRINGS {
@@ -332,9 +338,9 @@ proptest! {
 
     #[test]
     fn estimate_with_udf_collects_the_keys_its_predicate_accepts(
-        (w, d, stream) in crowded_stream(300),
+        (w, d, seed, stream) in crowded_stream(300),
     ) {
-        let sketch = filled(w, d, &stream);
+        let sketch = filled(w, d, seed, &stream);
         let cells = occupied(&sketch);
         let ends_with = |full: &str, partial: &str| full.ends_with(partial);
 
@@ -355,9 +361,9 @@ proptest! {
 
     #[test]
     fn estimate_key_reports_the_mass_of_the_bucket_that_holds_the_key(
-        (w, d, stream) in crowded_stream(300),
+        (w, d, seed, stream) in crowded_stream(300),
     ) {
-        let sketch = filled(w, d, &stream);
+        let sketch = filled(w, d, seed, &stream);
         let total = mass_of(&stream);
         let cells = occupied(&sketch);
 
@@ -379,10 +385,10 @@ proptest! {
 
     #[test]
     fn merge_adds_the_other_tables_mass_to_this_one(
-        (w, d, left_stream, right_stream) in crowded_pair(200),
+        (w, d, seed, left_stream, right_stream) in crowded_pair(200),
     ) {
-        let mut left = filled(w, d, &left_stream);
-        let right = filled(w, d, &right_stream);
+        let mut left = filled(w, d, seed, &left_stream);
+        let right = filled(w, d, seed.wrapping_add(1), &right_stream);
         left.merge(&right);
 
         prop_assert_eq!(
@@ -397,10 +403,10 @@ proptest! {
 
     #[test]
     fn merge_leaves_every_key_in_at_most_one_bucket(
-        (w, d, left_stream, right_stream) in crowded_pair(200),
+        (w, d, seed, left_stream, right_stream) in crowded_pair(200),
     ) {
-        let mut left = filled(w, d, &left_stream);
-        let right = filled(w, d, &right_stream);
+        let mut left = filled(w, d, seed, &left_stream);
+        let right = filled(w, d, seed.wrapping_add(1), &right_stream);
         left.merge(&right);
 
         for key in distinct_keys(&left_stream)
