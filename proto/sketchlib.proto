@@ -67,7 +67,6 @@ message SketchEnvelope {
   // The sketch payload. Exactly one field must be set.
   oneof sketch_state {
     CountMinState    count_min    = 10;
-    CountSketchState count_sketch = 11;
     HyperLogLogState hll          = 12;
     KLLState         kll          = 13;
     DDSketchState    ddsketch     = 14;
@@ -77,6 +76,8 @@ message SketchEnvelope {
     ElasticState     elastic      = 18;
   }
 
+  reserved 11;
+  reserved "count_sketch";
   reserved 19 to 31;  // Reserved for future sketch types.
 
   // Geometric / NitroSketch sampling probability for the producing sketch.
