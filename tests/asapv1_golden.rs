@@ -295,11 +295,11 @@ fn kll_i64_k200_matches_golden() {
 // The two fixtures hold the same state and differ only by `stale_copies`.
 // ---------------------------------------------------------------------------
 
-/// Heavy buckets `(flow_id, vote_pos, vote_neg, eviction)`: a free bucket, a
-/// 31-byte fixstr id, an empty id and a 32-byte str8 id; the votes sweep
-/// positive fixint / uint8 / uint16 / uint32.
+/// Heavy buckets `(flow_id, vote_pos, vote_neg, eviction)`: a free bucket with
+/// the eviction flag, a 31-byte fixstr id, an empty id and a 32-byte str8 id;
+/// the votes sweep positive fixint / uint8 / uint16 / uint32.
 const ELASTIC_HEAVY: [(&str, i32, i32, bool); 4] = [
-    ("", 0, 0, false),
+    ("", 0, 0, true),
     ("10.0.0.1:443>192.168.10.20:5123", 127, 128, false),
     ("", 1, 65535, true),
     ("10.0.0.1:443>192.168.10.20:51234", 2147483647, 256, true),
