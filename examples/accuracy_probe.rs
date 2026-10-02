@@ -10,7 +10,6 @@ use asap_sketchlib::common::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
-use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketch as PortableKll;
 use asap_sketchlib::{
     CMSHeap, CSHeap, Count as CoreCount, CountL2HH, CountMin, DDSketch, DataInput, Hydra,
@@ -1074,30 +1073,5 @@ fn probe_portable_wire_types() {
         (med - t).abs() / t < 0.05,
     );
 
-    // HydraKllSketch: per-key quantiles, median across rows.
-    let mut hk = HydraKllSketch::new(3, 256, 200);
-    let mut per_key: HashMap<&str, Vec<f64>> = HashMap::new();
-    let mut rng2 = StdRng::seed_from_u64(56);
-    for key in ["svc-a", "svc-b"] {
-        let base = if key == "svc-a" { 100.0 } else { 900.0 };
-        let vs: Vec<f64> = (0..2_000)
-            .map(|_| base + rng2.random::<f64>() * 50.0)
-            .collect();
-        for v in &vs {
-            hk.update(key, *v);
-        }
-        per_key.insert(key, vs);
-    }
-    for (key, vs) in per_key {
-        let mut s = vs.clone();
-        s.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let t = s[s.len() / 2];
-        let got = hk.quantile(key, 0.5);
-        p.check(
-            &format!("HydraKll median({key})"),
-            format!("expected ~{t:.1}, got {got:.1}"),
-            (got - t).abs() / t < 0.05,
-        );
-    }
     p.finish("Portable wire types");
 }

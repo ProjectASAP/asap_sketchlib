@@ -20,19 +20,15 @@
 //! subkey names. Everything else about a subpopulation answer — that it never
 //! falls below the records it counts, that a generalization never reads below
 //! its specialization — follows from those two.
-//!
-//! `HydraKllSketch` is a second, unrelated grid in the portable module: no
-//! schema and no fan-out, one string key routed by `xxh32(key, row)` and a
-//! median of the row KLLs. Its accuracy is characterized in the end-to-end
-//! quantile battery; the two laws here pin its routing and its reduction.
 
 use asap_sketchlib::common::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::{
-    CountMin, DataInput, FastPath, HYDRA_SEED, Hydra, HydraKllSketch, MatrixFastHash, Vector2D,
+    CountMin, DataInput, FastPath, HYDRA_SEED, Hydra, KLL, MatrixFastHash, Vector2D,
     hash_for_matrix_seeded,
 };
 use proptest::prelude::*;
-use xxhash_rust::xxh32::xxh32;
+
+use crate::support::QUANTILES;
 
 /// The value every record carries.
 const PAYLOAD: &str = "pkt";
@@ -260,35 +256,47 @@ fn grid_cols() -> impl Strategy<Value = usize> {
     ]
 }
 
-/// The compaction-coin seed every portable grid is built with, so a cell's
-/// answer is a function of its stream alone.
+/// The compaction-coin seed every KLL cell is built with.
 const KLL_SEED: u64 = 0x5EED_2000;
 
-/// Wide enough that the streams below are retained whole, so no cell compacts.
-const KLL_K: u16 = 256;
+/// Small enough that a short stream compacts the busier cells.
+const KLL_K: i32 = 8;
 
-/// Keys the portable grid is streamed and probed with. Few and short, so a
-/// narrow grid makes them share cells.
-const KLL_KEYS: [&str; 5] = ["a", "b", "c", "", "a:b"];
-
-/// The column a portable key occupies on each row.
-fn kll_columns(rows: usize, cols: usize, key: &str) -> Vec<usize> {
-    (0..rows)
-        .map(|row| xxh32(key.as_bytes(), row as u32) as usize % cols)
-        .collect()
-}
-
-/// A stream of `(key index, value)` for the portable grid.
-fn kll_stream(max: usize) -> impl Strategy<Value = Vec<(usize, f64)>> {
-    prop::collection::vec((0usize..KLL_KEYS.len(), 0.0f64..1000.0), 1..max)
-}
-
-fn kll_filled(rows: usize, cols: usize, stream: &[(usize, f64)]) -> HydraKllSketch {
-    let mut grid = HydraKllSketch::with_seed(rows, cols, KLL_K, KLL_SEED);
-    for (key, value) in stream {
-        grid.update(KLL_KEYS[*key], *value);
+/// Streams the records into a grid of KLL cells, record `i` carrying
+/// `values[i % values.len()]`.
+fn kll_filled(
+    rows: usize,
+    cols: usize,
+    labels: &[String],
+    records: &[Vec<String>],
+    values: &[f64],
+) -> Hydra {
+    let counter = HydraCounter::KLL(KLL::init_kll_with_seed(KLL_K, KLL_SEED));
+    let mut hydra = Hydra::with_schema(rows, cols, labels.to_vec(), counter).expect("valid schema");
+    for (record, value) in records.iter().zip(values.iter().cycle()) {
+        hydra
+            .update(&borrow(record), &DataInput::F64(*value), None)
+            .expect("schema arity");
     }
-    grid
+    hydra
+}
+
+/// Every cell's answer at each probed quantile, row-major.
+fn cell_quantiles(hydra: &Hydra) -> Vec<Vec<u64>> {
+    hydra
+        .sketches
+        .as_slice()
+        .iter()
+        .map(|cell| {
+            QUANTILES
+                .iter()
+                .map(|q| {
+                    let answer = cell.query(&HydraQuery::Quantile(*q));
+                    answer.expect("KLL answers a quantile").to_bits()
+                })
+                .collect()
+        })
+        .collect()
 }
 
 proptest! {
@@ -415,73 +423,6 @@ proptest! {
         }
     }
 
-    // ===== The portable grid routes each row by its own seeded hash =========
-    //
-    // `HydraKllSketch` carries no schema and does not fan out: one key reaches
-    // one cell per row, at `xxh32(key, row) % cols`. The oracle counts the
-    // stream into that map and reads each cell's retained count back, so a row
-    // seeded alike as its neighbours — or a routing that ignores the row — is
-    // an unequal count rather than a merely worse estimate.
-
-    #[test]
-    fn portable_hydra_kll_routes_each_update_to_the_cell_its_row_hash_names(
-        rows in 1usize..5,
-        cols in 1usize..9,
-        stream in kll_stream(24),
-    ) {
-        let grid = kll_filled(rows, cols, &stream);
-
-        let mut oracle = vec![vec![0u64; cols]; rows];
-        for (key, _) in &stream {
-            for (row, col) in kll_columns(rows, cols, KLL_KEYS[*key]).into_iter().enumerate() {
-                oracle[row][col] += 1;
-            }
-        }
-
-        for (r, row) in oracle.iter().enumerate() {
-            for (c, want) in row.iter().enumerate() {
-                prop_assert_eq!(
-                    grid.sketch[r][c].count(), *want,
-                    "cell ({}, {}) of a {}x{} portable grid", r, c, rows, cols
-                );
-            }
-        }
-    }
-
-    // ===== The portable grid answers a median of its row cells ==============
-    //
-    // As above, an order statistic: the tie rule for an even row count is not
-    // part of the contract. An empty cell answers 0, which is below every value
-    // the stream carries, so a query for an absent key is a real probe of the
-    // reduction rather than a vacuous one.
-
-    #[test]
-    fn portable_hydra_kll_answers_a_median_of_its_row_cells(
-        rows in 1usize..5,
-        cols in 1usize..9,
-        stream in kll_stream(24),
-        q in 0.0f64..=1.0,
-    ) {
-        let grid = kll_filled(rows, cols, &stream);
-
-        for key in KLL_KEYS {
-            let row_estimates: Vec<f64> = kll_columns(rows, cols, key)
-                .into_iter()
-                .enumerate()
-                .map(|(r, c)| grid.sketch[r][c].quantile(q))
-                .collect();
-
-            let seen = grid.quantile(key, q);
-            let at_or_below = row_estimates.iter().filter(|e| **e <= seen).count();
-            let at_or_above = row_estimates.iter().filter(|e| **e >= seen).count();
-            prop_assert!(
-                2 * at_or_below >= rows && 2 * at_or_above >= rows,
-                "key {:?} at q {} read {}, no median of its row estimates {:?}",
-                key, q, seen, row_estimates
-            );
-        }
-    }
-
     // ===== Wire =====
     //
     // A grid of counters cut to size costs no more to build than any other
@@ -518,6 +459,35 @@ proptest! {
                     h.query_frequency(&key, &payload()).expect("well-formed query")
                 })
                 .collect::<Vec<f64>>(),
+            |h: &Hydra| h.schema().to_vec(),
+        );
+    }
+
+    // A KLL cell holds a variable-length state, so the cells travel one array
+    // element each rather than tiled. Every cell must come back with its
+    // retained samples, its level layout and its compaction coin.
+
+    #[test]
+    fn hydra_kll_counter_round_trips_through_its_asapv1_envelope(
+        rows in 1usize..6,
+        cols in grid_cols(),
+        (labels, records) in schema_and_records(16),
+        values in prop::collection::vec(-1.0e6f64..1.0e6, 1..16),
+    ) {
+        let hydra = kll_filled(rows, cols, &labels, &records, &values);
+
+        round_trip!(
+            Hydra,
+            hydra,
+            cell_quantiles,
+            |h: &Hydra| records
+                .iter()
+                .map(|record| {
+                    let key: Vec<Option<&str>> = record.iter().map(|v| Some(v.as_str())).collect();
+                    let median = h.query_key(&key, &HydraQuery::Quantile(0.5));
+                    median.expect("well-formed query").to_bits()
+                })
+                .collect::<Vec<u64>>(),
             |h: &Hydra| h.schema().to_vec(),
         );
     }

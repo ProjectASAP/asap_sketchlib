@@ -11,7 +11,7 @@
 //! - [`message_pack_format`]: MessagePack/proto wire format shared with
 //!   `sketchlib-go`. Owns the wire-DTO sketch types consumed by the ASAP
 //!   query engine (`CountMinSketch`, `CountSketch`, `KllSketch`, `HllSketch`,
-//!   `DdSketch`, `HydraKllSketch`, `CountMinSketchWithHeap`,
+//!   `DdSketch`, `CountMinSketchWithHeap`,
 //!   `SetAggregator`, `DeltaResult`).
 //!
 //! Most users can start with the crate-root re-exports such as [`DataInput`],
@@ -50,7 +50,6 @@ pub use message_pack_format::portable::countsketch_topk::{CountSketchWithHeap, C
 pub use message_pack_format::portable::ddsketch::{DDSKETCH_GROW_CHUNK, DdSketch, DdSketchDelta};
 pub use message_pack_format::portable::delta_set_aggregator::DeltaResult;
 pub use message_pack_format::portable::hll::{HllSketch, HllSketchDelta, HllVariant};
-pub use message_pack_format::portable::hydra_kll::HydraKllSketch;
 pub use message_pack_format::portable::kll::{KllSketch, KllSketchData};
 pub use message_pack_format::portable::sampling::{
     effective_sample_p, is_quantile_scale_invariant, rescale_count, rescale_count_with_env,

@@ -66,6 +66,10 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **ASAPv1 golden fixtures for Hydra's five counter variants** (`0x07 0x00`
+  KLL, `0x07 0x01` Count-Min, `0x07 0x02` Count Sketch, `0x07 0x03` HLL,
+  `0x07 0x04` UnivMon), each a small grid whose cell states are set directly,
+  checked by `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -87,6 +91,19 @@ signals a backwards-compatible change.
   is retained; `TumblingWindow::insert` closes a period that saw no arrivals
   as an empty window like any other, and that window takes a place in
   `max_windows`.
+
+### Removed
+
+- **Hydra's proto and portable formats.** `Hydra` serializes as ASAPv1 only
+  (`serialize_to_bytes` / `deserialize_from_bytes`, kinds `0x07 0x00`-`0x07
+  0x04`). Removed: the portable `HydraKllSketch` and `HydraKllSketchWire`
+  (module `message_pack_format::portable::hydra_kll`, and the crate-root
+  `HydraKllSketch` re-export), with `HydraKllSketch`'s `MessagePackCodec` impl,
+  `with_seed`, `merge_refs` and `aggregate_hydrakll`; the proto file
+  `hydra/hydra.proto` with `HydraState`, `HydraCell` and `HydraCounterType`
+  (and their generated `proto::sketchlib` types); and `SketchEnvelope`'s
+  `hydra` field (16, now reserved). A matrix of KLLs keyed by string is
+  `Hydra` with a one-column schema and `HydraCounter::KLL`.
 
 ### Fixed
 

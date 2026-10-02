@@ -14,7 +14,6 @@ pub mod countsketch_topk;
 pub mod ddsketch;
 pub mod delta_set_aggregator;
 pub mod hll;
-pub mod hydra_kll;
 pub mod kll;
 pub mod sampling;
 pub mod set_aggregator;
