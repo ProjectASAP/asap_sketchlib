@@ -7,6 +7,5 @@
 //! to them. Call those methods directly; `docs/asapv1_wire_format.md`
 //! specifies the format `sketchlib-go` mirrors.
 
-pub mod countsketch_topk;
 #[cfg(feature = "experimental")]
 pub mod kmv;

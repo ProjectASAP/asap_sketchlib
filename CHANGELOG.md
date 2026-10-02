@@ -102,6 +102,10 @@ signals a backwards-compatible change.
   a 3x7 bucket table set directly, checked by `tests/asapv1_golden.rs`.
 - **ASAPv1 golden fixtures for Elastic**: `elastic_4b_2x4` and
   `elastic_4b_2x4_stale` in `asapv1_golden/`, checked by `tests/asapv1_golden.rs`.
+- An ASAPv1 golden fixture for CountL2HH (`0x19 0x00`), `count_l2hh_2x4_seed7`:
+  a non-zero seed index, and cells and `l2` accumulators set apart from each
+  other that together reach every msgpack integer width, positive fixint
+  through uint64 and negative fixint through int64.
 
 ### Changed
 
@@ -244,6 +248,10 @@ signals a backwards-compatible change.
   (`sketch_envelope::SketchState::Elastic`, field 18, now reserved) are gone.
   `Elastic::serialize_to_bytes` / `deserialize_from_bytes` (ASAPv1, `0x0b 0x00`)
   is Elastic's only serialization.
+- **CountL2HH's `MessagePackCodec` impl** and its module,
+  `message_pack_format::native::countsketch_topk`. Use
+  `CountL2HH::serialize_to_bytes` / `CountL2HH::deserialize_from_bytes`, which
+  emit the same ASAPv1 bytes.
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
