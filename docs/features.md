@@ -112,7 +112,7 @@ MessagePack (`rmp-serde`) support. **serde support** means the type derives `Ser
 | EHSketchList | Yes | Yes |
 | ExponentialHistogram | No | Yes |
 
-Protobuf (prost): `SketchEnvelope` carries Elastic and Coco state. Rust conversion code is in progress.
+Protobuf (prost): `SketchEnvelope` carries Elastic state. Rust conversion code is in progress.
 
 ### API Stability
 

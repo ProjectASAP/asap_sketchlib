@@ -25,7 +25,6 @@ package sketchlib.v1;
 
 import "common/common.proto";
 import "countsketch/countsketch.proto";
-import "cocosketch/cocosketch.proto";
 import "elasticsketch/elasticsketch.proto";
 
 option go_package = "github.com/ProjectASAP/sketchlib-go/proto/sketch_envelope;sketch_envelopepb";
@@ -55,7 +54,6 @@ message SketchEnvelope {
 
   // The sketch payload. Exactly one field must be set.
   oneof sketch_state {
-    CocoSketchState  coco         = 17;
     ElasticState     elastic      = 18;
   }
 
@@ -73,6 +71,8 @@ message SketchEnvelope {
   reserved "univmon";
   reserved 16;
   reserved "hydra";
+  reserved 17;
+  reserved "coco";
   reserved 19 to 31;  // Reserved for future sketch types.
 
   // Geometric / NitroSketch sampling probability for the producing sketch.

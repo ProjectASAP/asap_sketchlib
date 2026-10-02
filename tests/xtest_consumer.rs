@@ -5,7 +5,6 @@
 //! to confirm the data survived the language boundary intact.
 //!
 //! Files consumed (from $XTEST_DIR/):
-//!   coco.pb        — CocoSketchState (hash+val+hasKey buckets)
 //!   elastic.pb     — ElasticState (heavy buckets + light CountMin)
 //!
 //! Usage:
@@ -40,45 +39,6 @@ fn cross_language_proto() {
     let mut all_ok = true;
 
     // -----------------------------------------------------------------------
-    // -----------------------------------------------------------------------
-    // CocoSketch
-    // -----------------------------------------------------------------------
-    println!();
-    println!("[CocoSketch] Step 1/3 — Read coco.pb");
-    let bytes = read_file(in_dir.join("coco.pb"));
-    let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode coco envelope");
-
-    println!(
-        "[CocoSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
-        env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library)
-    );
-
-    let coco_state = match env.sketch_state {
-        Some(sketch_envelope::SketchState::Coco(ref s)) => s.clone(),
-        other => panic!("expected CocoSketch sketch_state, got {other:?}"),
-    };
-
-    println!(
-        "[CocoSketch]   d={} width={} buckets={}",
-        coco_state.d,
-        coco_state.width,
-        coco_state.hashes.len()
-    );
-
-    // Query "coco:hot" — inserted with val=500.
-    // Go uses: hash = common.Hash64([]byte("coco:hot")) = xxh3_64_seeded(seedList[0], ...)
-    // DeriveIndex(hash, row, width): col = (hash >> (row * maskBitsForWidth(width))) & (width-1)
-    let coco_hash = xxh3_64_seeded(SEED_0, b"coco:hot");
-    let coco_est = coco_estimate(&coco_state, coco_hash);
-    println!("[CocoSketch] Step 3/3 — 'coco:hot' est = {coco_est} (expect ≥ 500)");
-    if coco_est >= 500 {
-        println!("[CocoSketch]   PASS");
-    } else {
-        eprintln!("[CocoSketch] FAIL: estimate {coco_est} < 500");
-        all_ok = false;
-    }
-
     // -----------------------------------------------------------------------
     // ElasticSketch
     // -----------------------------------------------------------------------
@@ -281,21 +241,6 @@ fn col_bits(cols: usize) -> u64 {
     width.trailing_zeros() as u64
 }
 
-/// maskBitsForWidth — mirrors Go's common.maskBitsForWidth.
-/// Returns the number of bits needed to represent (width-1).
-fn mask_bits_for_width(width: usize) -> u64 {
-    if width <= 1 {
-        return 1;
-    }
-    let mut u = width - 1;
-    let mut bits = 0u64;
-    while u > 0 {
-        bits += 1;
-        u >>= 1;
-    }
-    bits
-}
-
 /// XXH3-64 with explicit seed, matching Go's `hash64_seeded(seed, key)`.
 fn xxh3_64_seeded(seed: u64, data: &[u8]) -> u64 {
     XxHash3_64::oneshot_with_seed(seed, data)
@@ -314,31 +259,6 @@ fn median_f64(v: &mut [f64]) -> f64 {
     } else {
         (v[n / 2 - 1] + v[n / 2]) / 2.0
     }
-}
-
-// ---------------------------------------------------------------------------
-// CocoSketch estimate
-// ---------------------------------------------------------------------------
-// Mirrors Go's CocoSketch.EstimateHash:
-//   for row i: col = DeriveIndex(hash, i, width); if b.HasKey && b.Hash==hash: total += b.Val
-// DeriveIndex(hash, row, width) = (hash >> (row * maskBitsForWidth(width))) & (width-1)
-
-fn coco_estimate(state: &CocoSketchState, hash: u64) -> u64 {
-    let d = state.d as usize;
-    let width = state.width as usize;
-    let mbw = mask_bits_for_width(width);
-    let mask = (width as u64) - 1;
-    let mut total = 0u64;
-
-    for i in 0..d {
-        let shift = (i as u64) * mbw;
-        let col = ((hash >> shift) & mask) as usize;
-        let idx = i * width + col;
-        if state.has_keys[idx] && state.hashes[idx] == hash {
-            total += state.vals[idx];
-        }
-    }
-    total
 }
 
 // ---------------------------------------------------------------------------

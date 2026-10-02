@@ -445,29 +445,6 @@ pub struct UnivMonLayer {
     #[prost(message, optional, tag = "2")]
     pub heap: ::core::option::Option<TopKState>,
 }
-/// CocoSketchState is the portable state of a CocoSketch flow-size estimator.
-///
-/// The bucket table is stored flat in row-major order (d rows × width cols).
-/// Element [r][c] is at index r * width + c.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CocoSketchState {
-    /// Number of hash rows.
-    #[prost(uint32, tag = "1")]
-    pub d: u32,
-    /// Number of buckets per row.
-    #[prost(uint32, tag = "2")]
-    pub width: u32,
-    /// Full hash stored in each bucket, length = d * width.
-    /// Zero means the bucket is empty (has_keys\[i\] == false).
-    #[prost(uint64, repeated, tag = "3")]
-    pub hashes: ::prost::alloc::vec::Vec<u64>,
-    /// Cumulative count value per bucket, length = d * width.
-    #[prost(uint64, repeated, tag = "4")]
-    pub vals: ::prost::alloc::vec::Vec<u64>,
-    /// Whether each bucket holds a valid key entry, length = d * width.
-    #[prost(bool, repeated, tag = "5")]
-    pub has_keys: ::prost::alloc::vec::Vec<bool>,
-}
 /// ElasticState is the portable state of an Elastic Sketch.
 ///
 /// The Elastic Sketch has a heavy part (one bucket per index) and a light
@@ -535,7 +512,7 @@ pub struct SketchEnvelope {
     #[prost(double, tag = "4")]
     pub sample_p: f64,
     /// The sketch payload. Exactly one field must be set.
-    #[prost(oneof = "sketch_envelope::SketchState", tags = "17, 18")]
+    #[prost(oneof = "sketch_envelope::SketchState", tags = "18")]
     pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
 }
 /// Nested message and enum types in `SketchEnvelope`.
@@ -543,8 +520,6 @@ pub mod sketch_envelope {
     /// The sketch payload. Exactly one field must be set.
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum SketchState {
-        #[prost(message, tag = "17")]
-        Coco(super::CocoSketchState),
         #[prost(message, tag = "18")]
         Elastic(super::ElasticState),
     }

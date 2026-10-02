@@ -98,6 +98,8 @@ signals a backwards-compatible change.
 - **ASAPv1 golden fixtures for `UnivMon`** (kind_id `0x10 0x00`):
   `univmon_str_l3_2x4_h5`, `univmon_i64_l3_2x4_h5` and
   `univmon_empty_l3_2x4_h5`, checked in `tests/asapv1_golden.rs`.
+- **ASAPv1 golden fixture for Coco** (`0c 00`): `asapv1_golden/coco_3x7.hex`,
+  a 3x7 bucket table set directly, checked by `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -229,6 +231,11 @@ signals a backwards-compatible change.
   it `sketch_envelope::SketchState::Univmon`; `UnivMonState` and
   `UnivMonLayer` stay in `proto/univmon/univmon.proto` only as
   `HydraCell.univmon`.
+- **Coco's protobuf format.** `proto/cocosketch/cocosketch.proto` and the
+  generated `asap_sketchlib::proto::sketchlib::CocoSketchState` are gone, and
+  the `SketchEnvelope` oneof field `coco` (17) is reserved, so
+  `sketch_envelope::SketchState::Coco` is gone too. Coco serializes only as
+  ASAPv1 (`Coco::serialize_to_bytes` / `deserialize_from_bytes`).
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
