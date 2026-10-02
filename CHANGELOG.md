@@ -142,9 +142,8 @@ signals a backwards-compatible change.
 - **KLL's proto and portable formats.** `KLL` and `KLLDynamic` serialize only
   as ASAPv1 (`serialize_to_bytes` / `deserialize_from_bytes`, kind_ids
   `0x06 0x00` / `0x06 0x01`). Removed:
-  - the `kll` field (13) of `SketchEnvelope` (now reserved) and with it
-    `sketch_envelope::SketchState::Kll`; `KLLState` stays in
-    `proto/kll/kll.proto` only as `HydraCell.kll`;
+  - the `kll` field of `SketchEnvelope` and with it
+    `sketch_envelope::SketchState::Kll`;
   - the crate-root `KllSketch` and `KllSketchData`, and the public module
     `message_pack_format::portable::kll`: `SketchlibKll`, `new_sketchlib_kll`,
     `new_sketchlib_kll_with_seed`, `sketchlib_kll_update`,
@@ -154,9 +153,7 @@ signals a backwards-compatible change.
     `MessagePackCodec` impls for `KllSketch` and `KllSketchData`, the
     value-offset codec (`KLL_SCALE_SWEEP`, `encode_value_offset`,
     `decode_value_offset`, `KllProtoItems`), and the `unsafe impl Send/Sync
-    for KllSketch`. `HydraKllSketch`'s per-cell type stays reachable through
-    the public fields `HydraKllSketch.sketch` and
-    `HydraKllSketchWire.sketches`, but can no longer be named;
+    for KllSketch`;
   - `message_pack_format::native::{kll, kll_dynamic}`, the `MessagePackCodec`
     impls for `KLL<T>` and `KLLDynamic<T>`;
   - `KLL::from_portable_state`.
@@ -168,13 +165,11 @@ signals a backwards-compatible change.
   `encode_sparse_registers`; the `MessagePackCodec` impls for
   `HyperLogLogImpl` and `HyperLogLogHIPImpl` (`message_pack_format::native::hll`);
   the `HLLDelta` proto message (`proto::sketchlib::HllDelta`); and the `hll`
-  field (12) of `SketchEnvelope`, now reserved. `HyperLogLogState`,
-  `HLLSparseRegisters` and `HLLVariant` remain only as the `HydraCell` HLL
-  state.
+  field of `SketchEnvelope`.
 - **Count-Min's proto and portable formats.** `CountMin` serializes to ASAPv1
   only (`serialize_to_bytes` / `deserialize_from_bytes`, kind `0x02 0x00`).
   Removed: the `CountMinDelta` and `CountMinCell` proto messages and the
-  `count_min` field (10) of `SketchEnvelope`, now reserved;
+  `count_min` field of `SketchEnvelope`;
   `message_pack_format::portable::countminsketch` (`CountMinSketch`,
   `CountMinSketchDelta`, `CountMinSketchWire`, `SketchlibCms`,
   `new_sketchlib_cms`, `sketchlib_cms_from_matrix`,
@@ -182,10 +177,9 @@ signals a backwards-compatible change.
   and the crate-root `CountMinSketch` / `CountMinSketchDelta` re-exports; the
   `MessagePackCodec` impl for `CountMin` in
   `message_pack_format::native::countminsketch`; and the
-  `src/sketches/testdata/cms_envelope_golden.hex` proto golden. The
-  `CountMinState` proto message stays as the nested Count-Min state of
-  `HydraCell` and `ElasticState`. Count-Min deltas (including `hh_keys`) and
-  the envelope `sample_p` for Count-Min have no ASAPv1 carrier.
+  `src/sketches/testdata/cms_envelope_golden.hex` proto golden. Count-Min
+  deltas (including `hh_keys`) and the envelope `sample_p` for Count-Min have
+  no ASAPv1 carrier.
 - **Count Sketch's proto and portable formats.** Count Sketch (`Count`)
   serializes as ASAPv1 only (`serialize_to_bytes` / `deserialize_from_bytes`,
   kind `0x04 0x00`). Removed: the portable `CountSketch`, `CountSketchDelta`
@@ -196,8 +190,7 @@ signals a backwards-compatible change.
   `apply_delta_msgpack_bytes`); the `MessagePackCodec` impl for `Count`
   (module `message_pack_format::native::countsketch`); the proto messages
   `CountSketchDelta` and `CountSketchCell`; and `SketchEnvelope`'s
-  `count_sketch` field (11, now reserved). `CountSketchState` stays, as
-  UnivMon and Hydra embed it.
+  `count_sketch` field.
 - **CMSHeap's pre-envelope MessagePack format.** `CMSHeap` serializes through
   ASAPv1 only (`serialize_to_bytes` / `deserialize_from_bytes`). Removed: the
   module `message_pack_format::portable::countminsketch_topk` with
@@ -223,7 +216,7 @@ signals a backwards-compatible change.
   ASAPv1 only (`DDSketch::serialize_to_bytes` / `deserialize_from_bytes`).
   Removed: `proto/ddsketch/ddsketch.proto` and the generated
   `proto::sketchlib::{DdSketchState, DdSketchDelta, DdSketchBucketDelta}`;
-  `SketchEnvelope`'s `ddsketch` field (14), now reserved;
+  `SketchEnvelope`'s `ddsketch` field;
   `message_pack_format::portable::ddsketch` (`DdSketch`, `DdSketchDelta`,
   `DDSKETCH_GROW_CHUNK`, `MAX_APPLY_DELTA_SPAN_BUCKETS`) and the crate-root
   re-exports of the first three; the `MessagePackCodec` impl for `DDSketch`.
@@ -236,25 +229,22 @@ signals a backwards-compatible change.
   `with_seed`, `merge_refs` and `aggregate_hydrakll`; the proto file
   `hydra/hydra.proto` with `HydraState`, `HydraCell` and `HydraCounterType`
   (and their generated `proto::sketchlib` types); and `SketchEnvelope`'s
-  `hydra` field (16, now reserved). The nearest replacement is `Hydra` with a
+  `hydra` field. The nearest replacement is `Hydra` with a
   one-column schema and `HydraCounter::KLL`, but it routes `label:value`
   subkeys through the matrix hash at `HYDRA_SEED`, not `xxh32(key, row) %
   cols`, so `HydraKllSketch` cells do not map onto the new grid.
 - **UnivMon's proto format.** `UnivMon` serializes only as ASAPv1
   (`serialize_to_bytes` / `deserialize_from_bytes`, kind_id `0x10 0x00`).
-  Removed the `univmon` field (15) of `SketchEnvelope` (now reserved) and with
-  it `sketch_envelope::SketchState::Univmon`; `UnivMonState` and
-  `UnivMonLayer` stay in `proto/univmon/univmon.proto` only as
-  `HydraCell.univmon`.
+  Removed the `univmon` field of `SketchEnvelope` and with it
+  `sketch_envelope::SketchState::Univmon`.
 - **Coco's protobuf format.** `proto/cocosketch/cocosketch.proto` and the
-  generated `asap_sketchlib::proto::sketchlib::CocoSketchState` are gone, and
-  the `SketchEnvelope` oneof field `coco` (17) is reserved, so
-  `sketch_envelope::SketchState::Coco` is gone too. Coco serializes only as
+  generated `asap_sketchlib::proto::sketchlib::CocoSketchState` are gone, with
+  the `SketchEnvelope` oneof field `coco` (`sketch_envelope::SketchState::Coco`). Coco serializes only as
   ASAPv1 (`Coco::serialize_to_bytes` / `deserialize_from_bytes`).
 - **BREAKING: Elastic's protobuf form.** `proto/elasticsketch/elasticsketch.proto`,
   its message `ElasticState` (`asap_sketchlib::proto::sketchlib::ElasticState`),
   and the `SketchEnvelope` oneof variant `elastic`
-  (`sketch_envelope::SketchState::Elastic`, field 18, now reserved) are gone.
+  (`sketch_envelope::SketchState::Elastic`) are gone.
   `Elastic::serialize_to_bytes` / `deserialize_from_bytes` (ASAPv1, `0x0b 0x00`)
   is Elastic's only serialization.
 - **CountL2HH's `MessagePackCodec` impl** and its module,

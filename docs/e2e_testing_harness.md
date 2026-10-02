@@ -72,7 +72,7 @@ tests/
 ├── e2e_matrix_instances.rs  # every (storage, path) instance of the matrix families
 ├── e2e_numeric_types.rs     # every NumericalValue type through KLL / DDSketch
 ├── e2e_windows.rs           # every EHSketchList variant + TumblingWindow payloads
-├── e2e_composition.rs       # HashSketchEnsemble, NitroBatch, UnivMonQ config, portable facade
+├── e2e_composition.rs       # HashSketchEnsemble, NitroBatch, UnivMonQ config, CMSHeap / KLL merge and wire
 ├── e2e_frameworks.rs        # Hydra and UnivMon composition
 ├── e2e_octo.rs              # …the OctoSketch promotion protocol
 ├── e2e_heavy_hitters.rs     # …Space-Saving, CocoSketch and Elastic
@@ -186,9 +186,8 @@ suite with the matching spec from Layer 2.
 **Layer 4 — suites.**
 `conformance_kit.rs` wires established sketches through the kit as reference
 adapters. The `e2e_*.rs` suites add depth the kit deliberately does not
-attempt: serialization round trips, window semantics, framework composition
-(Hydra fan-out, tumbling windows, sliding histograms), and cross-implementation
-parity between core types and their portable wire twins.
+attempt: serialization round trips, window semantics, and framework
+composition (Hydra fan-out, tumbling windows, sliding histograms).
 
 A composition framework can also *be* a battery subject, in the same suite that
 already covers it. `e2e/frameworks.rs` runs a single-column Hydra — where the
@@ -282,8 +281,8 @@ bugs only appeared at deployment-shaped dimensions.
 ### 4. Add depth where the sketch is unusual
 
 Anything not covered by a battery belongs in the matching `e2e_*.rs` suite:
-window semantics, merge order-independence, wire-format parity with the
-portable type, heavy-hitter recall targets, and so on.
+window semantics, merge order-independence, ASAPv1 round trips, heavy-hitter
+recall targets, and so on.
 
 ## Tolerance policy
 

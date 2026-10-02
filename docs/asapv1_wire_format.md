@@ -917,8 +917,6 @@ Rules 2 and 5 are enforced on the **encode** side too, so the format never emits
 
 A `NaN` sample is legal: `update(f64::NAN)` is legal in memory and `total_cmp` gives it a total order, so it round-trips rather than being rejected.
 
-**Not this: `portable/sampling.rs`.** That module is not ASAPv1 and does not touch this payload. It is query-time rescaling for NitroSketch-style geometric sampling, reading a `sample_p` scalar off a **protobuf** `SketchEnvelope` and dividing count-like estimates by it. Its policy on a bad rate is the **opposite** of rule 2's: `sample_p_or_default` **clamps** `0.0`, a negative, a value above `1` and `NaN` all to `1.0` and carries on, where ASAPv1 rejects the envelope. Neither the field nor the policy carries over; `sample_rate` here is a construction parameter of a reservoir, not a rescale factor.
-
 ### 3.14: KMV payload (`0x0e 0x00`)
 
 `KMV` is the k-minimum-values distinct-count estimator: it hashes each key once and retains the `k` smallest 64-bit digests it has seen. The retention bound `k` is construction config and lives in the metadata, so the payload is the retained digests alone:
@@ -1365,21 +1363,19 @@ It does not convert the mode (Regular to/from Fast); that would need re-insertin
 
 ## Cross-language contract
 
-Direction: **custom per-sketch payload replaces the `portable` types, and `sketchlib-go` mirrors each payload.**
-Good direction (more compact, higher fidelity, less Rust-internal duplication), but it moves the contract from shared code to discipline. To keep it safe:
+Each sketch has its own payload, and `sketchlib-go` mirrors each one.
+The contract is held by discipline rather than shared code, through three things:
 
 1. **This spec**: byte-level, language-neutral, per sketch.
-2. **Golden byte-vector fixtures** in one shared repo, [`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), which each implementation mounts at `asapv1_golden/`; both languages decode and re-encode them byte-identically. These replace the `portable`-as-oracle round-trip test.
+2. **Golden byte-vector fixtures** in one shared repo, [`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), which each implementation mounts at `asapv1_golden/`; both languages decode and re-encode them byte-identically.
 3. **This registry**, mirrored, never independently allocated.
 
-`asapv1_golden/README.md`'s Coverage section lists which `kind_id`s have fixtures; for every other kind, this document is the only contract. `portable` carries its own Go goldens.
+`asapv1_golden/README.md`'s Coverage section lists which `kind_id`s have fixtures; for every other kind, this document is the only contract.
 
 **Hash profile on the Go side.**
 Rust derives the hash spec from a generic `HashProfile` bound on the hasher type; Go has no generic hasher type, so there is nothing to derive from.
 On the Go side the profile is simply **written into** the metadata on encode and **read from** it on decode.
 Go MUST validate the profile it reads (same fail-closed intent as Rust): a sketch is only mergeable/queryable if its `hash_profile_id` + seeds match the profile Go is prepared to reproduce.
-
-Retire `portable` once the fixtures cover the rest.
 
 ---
 

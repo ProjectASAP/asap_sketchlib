@@ -23,7 +23,7 @@ its theorem.
 | `e2e/matrix_instances.rs` | Every built-in `(storage, hashing path)` instance of CountMin / Count / CMSHeap / CSHeap, plus counter-width edges |
 | `e2e/numeric_types.rs` | Every `NumericalValue` type through `KLL<T>`, `KLLDynamic<T>` and `DDSketch::add<T>` |
 | `e2e/windows.rs` | Every `EHSketchList` variant in an `ExponentialHistogram`, every `TumblingWindow` payload, and `MicroCM`'s in-cell sliding window |
-| `e2e/composition.rs` | `HashSketchEnsemble`, `UnivMonQ`'s config surface, `CMSHeap`, and the portable sketch+heap facade |
+| `e2e/composition.rs` | `HashSketchEnsemble`, `UnivMonQ`'s config surface, and `CMSHeap` and `KLL` through merge and wire |
 | `e2e/nitro.rs` | Every Nitro ingestion path — row-level `CountMin`/`Count`, `NitroBatch::insert` / `insert_cached_step`, and the bare `Vector2D<u32>` target — under one sampling model, plus merge, seeding, saturation and serde/context continuation. **All Nitro E2E behaviour lives here**; the sampler's own structural tests are unit tests in `src/common/structure_utils.rs` and `src/sketch_framework/nitro.rs`, where the cursor and skip counter are visible without a public accessor |
 | `e2e/frameworks.rs` | Hydra's subpopulation lattice and UnivMon composition |
 | `e2e/heavy_hitters.rs` | Space-Saving's error sandwich, `min_count` ceiling and Stream-Summary lists under sustained eviction, plus CocoSketch's exact mass partitions and multi-seed unbiasedness, and Elastic through the batteries and the heavy-hitter properties no battery models |
