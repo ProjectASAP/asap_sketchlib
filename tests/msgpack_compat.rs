@@ -19,20 +19,17 @@
 //! `include_bytes!` and asserts deserialize succeeds and field values
 //! match the producer's expectations.
 
-use std::collections::HashSet;
-
 use asap_sketchlib::CmsHeapItem;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketchWire;
 use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
     CountMinSketchInnerWire, CountMinSketchWithHeapWire,
 };
-use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaResult;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketchData;
 use asap_sketchlib::{
     CountMinSketch, CountMinSketchWithHeap, CountSketch, DdSketch, HllSketch, HllVariant,
-    HydraKllSketch, KllSketch, SetAggregator,
+    HydraKllSketch, KllSketch,
 };
 
 // ===== round-trip: every wire-format-aligned type =====
@@ -117,30 +114,6 @@ fn hydra_kll_sketch_round_trip() {
     let restored = HydraKllSketch::from_msgpack(&bytes).expect("decode");
     assert_eq!(restored.rows, 2);
     assert_eq!(restored.cols, 4);
-}
-
-#[test]
-fn set_aggregator_round_trip() {
-    let mut s = SetAggregator::new();
-    s.update("web");
-    s.update("api");
-    let bytes = s.to_msgpack().expect("encode");
-    let restored = SetAggregator::from_msgpack(&bytes).expect("decode");
-    assert_eq!(restored.values.len(), 2);
-    assert!(restored.values.contains("web"));
-}
-
-#[test]
-fn delta_result_round_trip() {
-    let mut added = HashSet::new();
-    added.insert("a".to_string());
-    let mut removed = HashSet::new();
-    removed.insert("b".to_string());
-    let dr = DeltaResult { added, removed };
-    let bytes = dr.to_msgpack().expect("encode");
-    let restored = DeltaResult::from_msgpack(&bytes).expect("decode");
-    assert!(restored.added.contains("a"));
-    assert!(restored.removed.contains("b"));
 }
 
 // ===== DTO-level structural sanity =====

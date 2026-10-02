@@ -8,9 +8,11 @@
 //!
 //! See `asapv1_golden/README.md`.
 
+use std::collections::HashSet;
+
 use asap_sketchlib::{
-    Classic, Count, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12,
-    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
+    Classic, Count, CountMin, DeltaResult, ErtlMLE, FastPath, HllSketch, HllVariant,
+    HyperLogLogHIPP12, HyperLogLogP12, KLL, MessagePackCodec, RegularPath, SetAggregator, Vector2D,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -32,6 +34,10 @@ const GOLDEN_CS_FAST: &str = include_str!("../asapv1_golden/cs_i64_fast_2x4.hex"
 const GOLDEN_CS_I32: &str = include_str!("../asapv1_golden/cs_i32_regular_2x4.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
+const GOLDEN_SET_STRINGS: &str = include_str!("../asapv1_golden/set_aggregator_strings.hex");
+const GOLDEN_SET_EMPTY: &str = include_str!("../asapv1_golden/set_aggregator_empty.hex");
+const GOLDEN_DELTA_STRINGS: &str = include_str!("../asapv1_golden/delta_result_strings.hex");
+const GOLDEN_DELTA_EMPTY: &str = include_str!("../asapv1_golden/delta_result_empty.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -286,4 +292,84 @@ fn kll_i64_k200_matches_golden() {
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
     assert_eq!(decoded.quantile(0.0), 1.0);
     assert_eq!(decoded.quantile(1.0), 50.0);
+}
+
+// ---------------------------------------------------------------------------
+// SetAggregator / DeltaResult: string sets set directly -> serialize ==
+// golden, golden decodes to that state, and re-encode is byte-identical.
+// ---------------------------------------------------------------------------
+
+fn string_set(keys: &[&str]) -> HashSet<String> {
+    keys.iter().map(|k| k.to_string()).collect()
+}
+
+/// The empty string, a 32-byte str8, and UTF-8 code points of two, three and
+/// four bytes. U+FF5E precedes U+1F600 in byte order but not in UTF-16 order.
+const SET_STRINGS: [&str; 8] = [
+    "",
+    "abcdefghijklmnopqrstuvwxyz012345",
+    "api",
+    "web",
+    "\u{e9}",
+    "\u{4e2d}",
+    "\u{ff5e}",
+    "\u{1f600}",
+];
+
+fn check_set_golden(golden: &str, keys: &[&str]) {
+    let want = decode_hex(golden);
+    let agg = SetAggregator {
+        values: string_set(keys),
+    };
+    assert_eq!(
+        agg.serialize_to_bytes().expect("serialize"),
+        want,
+        "SetAggregator bytes diverge from golden"
+    );
+
+    let decoded = SetAggregator::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.values, agg.values);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+fn check_delta_golden(golden: &str, added: &[&str], removed: &[&str]) {
+    let want = decode_hex(golden);
+    let delta = DeltaResult {
+        added: string_set(added),
+        removed: string_set(removed),
+    };
+    assert_eq!(
+        delta.serialize_to_bytes().expect("serialize"),
+        want,
+        "DeltaResult bytes diverge from golden"
+    );
+
+    let decoded = DeltaResult::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.added, delta.added);
+    assert_eq!(decoded.removed, delta.removed);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn set_aggregator_strings_matches_golden() {
+    check_set_golden(GOLDEN_SET_STRINGS, &SET_STRINGS);
+}
+
+#[test]
+fn set_aggregator_empty_matches_golden() {
+    check_set_golden(GOLDEN_SET_EMPTY, &[]);
+}
+
+#[test]
+fn delta_result_strings_matches_golden() {
+    check_delta_golden(
+        GOLDEN_DELTA_STRINGS,
+        &["queue", "\u{e9}t\u{e9}", "\u{1f600}"],
+        &["", "cache", "db", "\u{4e2d}"],
+    );
+}
+
+#[test]
+fn delta_result_empty_matches_golden() {
+    check_delta_golden(GOLDEN_DELTA_EMPTY, &[], &[]);
 }
