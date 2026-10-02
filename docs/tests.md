@@ -2013,13 +2013,6 @@ Test file: [`tests/spec_self_tests.rs`](../tests/spec_self_tests.rs)
 | `simultaneous_kappa_reflects_the_corrected_threshold` | The simultaneous `kappa` search reaches its target and is wider than a `d/2 + 1` threshold demands. | For `CountSketchSpec::new(4, 2048)`, verifies `simultaneous_kappa(512, SIMULTANEOUS_LEVEL)` at a level of `1e-3` yields a `kappa` whose `key_failure_at(kappa)` is at most `1e-3 / 512`, and that this `kappa` is strictly larger than the one a geometric-then-bisection search over `binomial_tail_ge(4, 3, 1.0 / kappa)` finds for the same target. |
 | `two_same_direction_bad_rows_move_an_averaged_four_row_median_out_of_band` | Two same-direction bad rows break a four-row averaged median, and one does not. | With an inline median-of-four `(v[1] + v[2]) / 2`, a true value of `100.0` and an error scale of `10.0` (band `[90, 110]`), verifies `[95, 105, 100, 10_000]` stays in band, `[95, 105, 10_000, 10_000]` leaves it, and `[95, 105, -10_000, 10_000]` stays in band, asserting the bad-row count of each fixture first. |
 
-### Proto Envelope Parity Probe
-
-Test file: [`tests/sketches_go_parity_probe.rs`](../tests/sketches_go_parity_probe.rs)
-
-| test_name | test_description | what_is_tested |
-| --- | --- | --- |
-
 ### HLL Custom Precision
 
 Test file: [`tests/hll_custom_precision.rs`](../tests/hll_custom_precision.rs)

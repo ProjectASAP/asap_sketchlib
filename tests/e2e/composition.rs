@@ -17,8 +17,8 @@ use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{
     CMSHeap, Classic, Count, CountMin, DataInput, EnsembleSketch, ErtlMLE, FastPath,
-    HashSketchEnsemble, HeapItem, HyperLogLog, HyperLogLogHIP, KLL, MessagePackCodec, RegularPath,
-    UnivMonQ, UnivMonQConfig, Vector2D,
+    HashSketchEnsemble, HeapItem, HyperLogLog, HyperLogLogHIP, KLL, RegularPath, UnivMonQ,
+    UnivMonQConfig, Vector2D,
 };
 
 const ROWS: usize = 3;

@@ -78,7 +78,6 @@ mod tests {
             producer: None,
             hash_spec: None,
             sample_p: p,
-            sketch_state: None,
         }
     }
 

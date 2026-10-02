@@ -114,7 +114,6 @@ fn main() {
     #[cfg(feature = "experimental")]
     probe_eh_univ();
     probe_tumbling();
-    probe_portable_wire_types();
 
     println!("====================================================================");
     println!("Probe complete. FAIL lines above are candidate wrong-query-results.");
@@ -988,12 +987,4 @@ fn probe_tumbling() {
         rel_err(med, truth_med) < 0.05,
     );
     p.finish("Tumbling");
-}
-
-// ---------------------------------------------------- Portable wire types
-fn probe_portable_wire_types() {
-    let mut p = Probe::new();
-    println!("--- Portable wire types (Go-parity DTOs) ---");
-
-    p.finish("Portable wire types");
 }

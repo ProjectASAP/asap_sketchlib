@@ -30,6 +30,20 @@ fn decode_hex(s: &str) -> Vec<u8> {
         .collect()
 }
 
+/// Splits an ASAPv1 envelope by hand into its kind_id, metadata and payload.
+fn split_envelope(bytes: &[u8]) -> (Vec<u8>, &[u8], &[u8]) {
+    assert_eq!(&bytes[..7], b"ASAPv1\x01", "magic and version");
+    let kind_len = bytes[7] as usize;
+    let kind_id = bytes[8..8 + kind_len].to_vec();
+    let at = 8 + kind_len;
+    let meta_len = u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let payload_len = u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+    let metadata = &bytes[at + 8..at + 8 + meta_len];
+    let payload = &bytes[at + 8 + meta_len..];
+    assert_eq!(payload.len(), payload_len, "payload length prefix");
+    (kind_id, metadata, payload)
+}
+
 const GOLDEN_CLASSIC: &str = include_str!("../asapv1_golden/hll_classic_p12.hex");
 const GOLDEN_ERTL: &str = include_str!("../asapv1_golden/hll_ertl_mle_p12.hex");
 const GOLDEN_HIP: &str = include_str!("../asapv1_golden/hll_hip_p12.hex");
@@ -576,16 +590,9 @@ const KLL_COIN_SEED_42: (u64, u64, u32) = (42, 0, 0);
 /// A KLL payload `[levels, items, coin]`, read straight from the envelope.
 type KllPayloadView<T> = (Vec<u32>, Vec<T>, (u64, u64, u32));
 
-/// Splits an ASAPv1 envelope by hand and decodes its KLL payload.
+/// Decodes the KLL payload of an ASAPv1 envelope.
 fn kll_envelope<T: DeserializeOwned>(bytes: &[u8]) -> (Vec<u8>, KllPayloadView<T>) {
-    assert_eq!(&bytes[..7], b"ASAPv1\x01", "magic and version");
-    let kind_len = bytes[7] as usize;
-    let kind_id = bytes[8..8 + kind_len].to_vec();
-    let at = 8 + kind_len;
-    let meta_len = u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
-    let payload_len = u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
-    let payload = &bytes[at + 8 + meta_len..];
-    assert_eq!(payload.len(), payload_len, "payload length prefix");
+    let (kind_id, _, payload) = split_envelope(bytes);
     (
         kind_id,
         rmp_serde::from_slice(payload).expect("KLL payload"),
@@ -1183,19 +1190,11 @@ struct UnivMonShape {
     key_type: String,
 }
 
-/// Splits an ASAPv1 envelope by hand and decodes its UnivMon metadata and payload.
+/// Decodes the UnivMon metadata and payload of an ASAPv1 envelope.
 fn univmon_envelope<K: DeserializeOwned>(
     bytes: &[u8],
 ) -> (Vec<u8>, UnivMonShape, UnivMonPayloadView<K>) {
-    assert_eq!(&bytes[..7], b"ASAPv1\x01", "magic and version");
-    let kind_len = bytes[7] as usize;
-    let kind_id = bytes[8..8 + kind_len].to_vec();
-    let at = 8 + kind_len;
-    let meta_len = u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
-    let payload_len = u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
-    let metadata = &bytes[at + 8..at + 8 + meta_len];
-    let payload = &bytes[at + 8 + meta_len..];
-    assert_eq!(payload.len(), payload_len, "payload length prefix");
+    let (kind_id, metadata, payload) = split_envelope(bytes);
     (
         kind_id,
         rmp_serde::from_slice(metadata).expect("UnivMon metadata"),

@@ -2,8 +2,8 @@
 
 One `proptest` law per line. Each compares the sketch against an answer
 computed without it; what that answer is comes first in every section. One
-file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 369 laws;
-with `--all-features`, 437, adding the four **experimental** modules. Every
+file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 364 laws;
+with `--all-features`, 432, adding the four **experimental** modules. Every
 law was mutation-checked: break the implementation, the law goes red. Shared
 generators, `grid` and `round_trip!` live in `support.rs`.
 
