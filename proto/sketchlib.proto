@@ -10,7 +10,6 @@
 //   kll/kll.proto                    — KLLState, CoinState
 //   ddsketch/ddsketch.proto          — DDSketchState
 //   univmon/univmon.proto            — UnivMonState, UnivMonLayer
-//   hydra/hydra.proto                — HydraState, HydraCounterType, HydraCell
 //
 // Design goals:
 //   - Cross-language: Go (sketchlib-go) ↔ Rust (asap_sketchlib) round-trips.
@@ -35,7 +34,6 @@ import "hll/hll.proto";
 import "kll/kll.proto";
 import "ddsketch/ddsketch.proto";
 import "univmon/univmon.proto";
-import "hydra/hydra.proto";
 import "cocosketch/cocosketch.proto";
 import "elasticsketch/elasticsketch.proto";
 
@@ -72,11 +70,12 @@ message SketchEnvelope {
     KLLState         kll          = 13;
     DDSketchState    ddsketch     = 14;
     UnivMonState     univmon      = 15;
-    HydraState       hydra        = 16;
     CocoSketchState  coco         = 17;
     ElasticState     elastic      = 18;
   }
 
+  reserved 16;
+  reserved "hydra";
   reserved 19 to 31;  // Reserved for future sketch types.
 
   // Geometric / NitroSketch sampling probability for the producing sketch.

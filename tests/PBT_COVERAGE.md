@@ -2,8 +2,8 @@
 
 One `proptest` law per line. Each compares the sketch against an answer
 computed without it; what that answer is comes first in every section. One
-file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 367 laws;
-with `--all-features`, 435, adding the four **experimental** modules. Every
+file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 366 laws;
+with `--all-features`, 434, adding the four **experimental** modules. Every
 law was mutation-checked: break the implementation, the law goes red. Shared
 generators, `grid` and `round_trip!` live in `support.rs`.
 
@@ -257,7 +257,7 @@ Models use only what the paper fixes; register indexing and rank mapping stay fr
   - msgpack keeps variant, precision, registers, estimate; `Regular`, `Datafusion`, `Hip`; precisions 4-13
   - ASAPv1 on `HyperLogLog<ErtlMLE>` keeps registers and estimate; empty included
 
-## hydra.rs — 7
+## hydra.rs — 6
 
 Compared against: the map rebuilt from the subkey encoding (`label ":" value`, joined by `";"`, escaped) and the public matrix hash at `HYDRA_SEED`. All records share one payload value, so each cell's Count-Min is exact. Labels and values include the escaped characters. Cols in {1, 2, 3, 8, 64, 251, 256}.
 
@@ -268,11 +268,9 @@ Compared against: the map rebuilt from the subkey encoding (`label ":" value`, j
   - an answer is a median of the subkey's cells: at least half the rows `<=` it and at least half `>=` it. Probes: every subset of every record, every single-column equality, one absent value
 - merge
   - `merge(S(xs), S(ys)) == S(xs ++ ys)`, cell for cell
-- `HydraKllSketch`, no schema, no fan-out
-  - one key hits one cell per row at `xxh32(key, row) % cols`, read back as retained count
-  - query == median of its row cells, as an order statistic; an absent key reads 0
 - wire
   - ASAPv1 keeps every subpopulation answer and the schema
+  - ASAPv1 on a KLL-counter grid (k=8, so busy cells compact) keeps every cell's quantiles, each record's median and the schema
 
 ## kll.rs — 14
 
