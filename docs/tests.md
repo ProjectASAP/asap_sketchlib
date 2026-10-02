@@ -1380,7 +1380,7 @@ Test file: [`src/common/structures/matrix_storage.rs`](../src/common/structures/
 
 ### ASAPv1 Envelope (MessagePack)
 
-Test file: [`src/message_pack_format/envelope.rs`](../src/message_pack_format/envelope.rs)
+Test file: [`src/asapv1/envelope.rs`](../src/asapv1/envelope.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |

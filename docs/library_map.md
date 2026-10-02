@@ -23,11 +23,9 @@
   - Not in the API index: `tumbling.rs`, `sketch_catalog.rs`
   - The same `<framework>.rs` + `<framework>/wire.rs` split carries the ASAPv1 wire format for `hydra.rs`, `univmon.rs`, `univmon_optimized.rs`, `univmon_q.rs`, `eh.rs` and `eh_sketch_list.rs`
 
-- **`src/message_pack_format/`** - Serialization plumbing ([message_pack_format.md](./message_pack_format.md)). The current format is **ASAPv1**, specified in [asapv1_wire_format.md](./asapv1_wire_format.md)
-  - `envelope.rs` — the shared, sketch-agnostic ASAPv1 framing (magic/version/`kind_id` + length prefixes, `encode`/`split`); every `wire.rs` under `src/sketches/` and `src/sketch_framework/` calls into it
-  - `codec.rs` — the `MessagePackCodec` trait; `error.rs` — the unified `Error`
-  - `portable/` — **deprecated**, being retired. The older per-sketch wire types (`CountSketch`, `DdSketch`, …); ASAPv1 (per-sketch `wire.rs`) is now what `sketchlib-go` mirrors, not these
-  - `native/` — **deprecated**, being retired. Older `MessagePackCodec` shims over `src/sketches/` byte serialization
+- **`src/asapv1/`** - Crate-private ASAPv1 framing, specified in [asapv1_wire_format.md](./asapv1_wire_format.md)
+  - `envelope.rs` — the shared, sketch-agnostic framing (magic/version/`kind_id` + length prefixes, `encode`/`split`); every `wire.rs` under `src/sketches/` and `src/sketch_framework/` calls into it
+  - `wire_key.rs` — the msgpack `bin` / `str` form of byte and string heap keys
 
 ## Documentation
 

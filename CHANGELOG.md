@@ -266,14 +266,15 @@ signals a backwards-compatible change.
   `message_pack_format::portable::delta_set_aggregator`, both types'
   `MessagePackCodec` impls, and `DeltaResult`'s `serde::Serialize` /
   `Deserialize` derives. They serialize only as ASAPv1.
-- **`MessagePackCodec` and the `portable` and `native` modules.** Removed
+- **`MessagePackCodec` and the public `message_pack_format` module.** Removed
   `message_pack_format::{MessagePackCodec, Error}` and the crate-root
   `MessagePackCodec`; `message_pack_format::native`, with the `MessagePackCodec`
   impl for `KMV`; and `message_pack_format::portable`, with `sampling` and its
   crate-root re-exports `effective_sample_p`, `sample_p_or_default`,
   `rescale_count`, `rescale_count_with_env` and `is_quantile_scale_invariant`.
-  Every sketch encodes through `serialize_to_bytes` / `deserialize_from_bytes`;
-  ASAPv1 carries no sampling probability.
+  The ASAPv1 framing that module also held is crate-private. Every sketch
+  encodes through `serialize_to_bytes` / `deserialize_from_bytes`; ASAPv1
+  carries no sampling probability.
 - **The protobuf layer.** Removed the public module `proto::sketchlib` with
   `SketchEnvelope`, `ProducerInfo`, `HashSpec`, `HashAlgorithm`,
   `SeedDerivation`, `CounterType` and the state messages no envelope field

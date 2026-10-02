@@ -21,7 +21,7 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::envelope;
+use crate::asapv1::envelope;
 use crate::sketch_framework::univmon::wire::{
     check_layer_size, decode_pyramid, encode_pyramid, pyramid_key_type, pyramid_state,
     rebuild_layers, update_mode_of, update_mode_tag,

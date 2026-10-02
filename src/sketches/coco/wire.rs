@@ -39,8 +39,8 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashSet;
 
+use crate::asapv1::envelope;
 use crate::common::hash::check_matrix_rows;
-use crate::message_pack_format::envelope;
 use crate::{DataInput, HashProfile, SketchHasher, Vector2D};
 
 use super::{Coco, CocoBucket, CocoRng};
