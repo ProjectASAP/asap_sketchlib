@@ -67,8 +67,8 @@ signals a backwards-compatible change.
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
 - **ASAPv1 golden fixtures for `UnivMon`** (kind_id `0x10 0x00`):
-  `univmon_str_l2_2x4_h2`, `univmon_i64_l2_2x4_h2` and
-  `univmon_empty_l2_2x4_h2`, checked in `tests/asapv1_golden.rs`.
+  `univmon_str_l3_2x4_h5`, `univmon_i64_l3_2x4_h5` and
+  `univmon_empty_l3_2x4_h5`, checked in `tests/asapv1_golden.rs`.
 
 ### Changed
 
