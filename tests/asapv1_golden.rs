@@ -9,8 +9,8 @@
 //! See `asapv1_golden/README.md`.
 
 use asap_sketchlib::{
-    Classic, Count, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12,
-    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
+    Classic, Count, CountL2HH, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant,
+    HyperLogLogHIPP12, HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -30,6 +30,7 @@ const GOLDEN_CMS_F64: &str = include_str!("../asapv1_golden/cms_f64_fast_2x3.hex
 const GOLDEN_CS_REGULAR: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4.hex");
 const GOLDEN_CS_FAST: &str = include_str!("../asapv1_golden/cs_i64_fast_2x4.hex");
 const GOLDEN_CS_I32: &str = include_str!("../asapv1_golden/cs_i32_regular_2x4.hex");
+const GOLDEN_L2HH: &str = include_str!("../asapv1_golden/count_l2hh_2x4_seed7.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
 
@@ -286,4 +287,76 @@ fn kll_i64_k200_matches_golden() {
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
     assert_eq!(decoded.quantile(0.0), 1.0);
     assert_eq!(decoded.quantile(1.0), 50.0);
+}
+
+// ---------------------------------------------------------------------------
+// CountL2HH: counts, l2 accumulators and seed index set through the sketch's
+// serde form -> serialize == golden, and golden round-trips.
+// ---------------------------------------------------------------------------
+
+/// CountL2HH cells are signed: row 0 is positive fixint max / uint8 / uint16 /
+/// int16, row 1 is negative fixint min / int8 / int32 / int64.
+const L2HH_COUNTS: [[i64; 4]; 2] = [[127, 128, 65535, -32768], [-32, -33, -2147483648, i64::MIN]];
+/// One accumulator per row, set independently of the cells: uint32 / uint64.
+const L2HH_L2: [i64; 2] = [65536, i64::MAX];
+const L2HH_SEED_INDEX: usize = 7;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct L2hhMatrixForm {
+    data: Vec<i64>,
+    rows: usize,
+    cols: usize,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct L2hhVectorForm {
+    data: Vec<i64>,
+}
+
+/// The named serde form of `CountL2HH`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct L2hhForm {
+    counts: L2hhMatrixForm,
+    l2: L2hhVectorForm,
+    row: usize,
+    col: usize,
+    seed_idx: usize,
+}
+
+fn l2hh_form(counts: &[[i64; 4]; 2], l2: &[i64; 2], seed_idx: usize) -> L2hhForm {
+    L2hhForm {
+        counts: L2hhMatrixForm {
+            data: counts.iter().flatten().copied().collect(),
+            rows: 2,
+            cols: 4,
+        },
+        l2: L2hhVectorForm { data: l2.to_vec() },
+        row: 2,
+        col: 4,
+        seed_idx,
+    }
+}
+
+#[test]
+fn count_l2hh_2x4_seed7_matches_golden() {
+    let want = decode_hex(GOLDEN_L2HH);
+
+    let form = l2hh_form(&L2HH_COUNTS, &L2HH_L2, L2HH_SEED_INDEX);
+    let sketch: CountL2HH =
+        rmp_serde::from_slice(&rmp_serde::to_vec_named(&form).expect("serde form"))
+            .expect("CountL2HH from its serde form");
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "CountL2HH bytes diverge from golden");
+
+    let decoded: CountL2HH = CountL2HH::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = L2HH_COUNTS.iter().flatten().copied().collect();
+    assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.rows(), 2);
+    assert_eq!(decoded.cols(), 4);
+    assert_eq!(decoded.seed_idx(), L2HH_SEED_INDEX);
+    let state: L2hhForm =
+        rmp_serde::from_slice(&rmp_serde::to_vec_named(&decoded).expect("serde form"))
+            .expect("decoded serde form");
+    assert_eq!(state.l2.data, L2HH_L2);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
