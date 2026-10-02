@@ -23,7 +23,6 @@ use std::collections::HashSet;
 
 use asap_sketchlib::CmsHeapItem;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketchWire;
 use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
     CountMinSketchInnerWire, CountMinSketchWithHeapWire,
 };
@@ -31,23 +30,11 @@ use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaRe
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketchData;
 use asap_sketchlib::{
-    CountMinSketch, CountMinSketchWithHeap, CountSketch, DdSketch, HllSketch, HllVariant,
-    HydraKllSketch, KllSketch, SetAggregator,
+    CountMinSketchWithHeap, CountSketch, DdSketch, HllSketch, HllVariant, HydraKllSketch,
+    KllSketch, SetAggregator,
 };
 
 // ===== round-trip: every wire-format-aligned type =====
-
-#[test]
-fn count_min_sketch_round_trip() {
-    let mut s = CountMinSketch::new(3, 64);
-    s.update("alpha", 1.0);
-    s.update("beta", 2.0);
-    s.update("alpha", 4.0);
-    let bytes = s.to_msgpack().expect("encode");
-    let restored = CountMinSketch::from_msgpack(&bytes).expect("decode");
-    assert_eq!(restored.rows, 3);
-    assert_eq!(restored.cols, 64);
-}
 
 #[test]
 fn count_min_sketch_with_heap_round_trip() {
@@ -150,20 +137,6 @@ fn delta_result_round_trip() {
 // trip these.
 
 #[test]
-fn count_min_wire_shape() {
-    let wire = CountMinSketchWire {
-        sketch: vec![vec![1.0, 2.0]; 3],
-        rows: 3,
-        cols: 2,
-    };
-    let bytes = rmp_serde::to_vec(&wire).unwrap();
-    let restored: CountMinSketchWire = rmp_serde::from_slice(&bytes).unwrap();
-    assert_eq!(restored.rows, 3);
-    assert_eq!(restored.cols, 2);
-    assert_eq!(restored.sketch.len(), 3);
-}
-
-#[test]
 fn count_min_with_heap_wire_shape() {
     let wire = CountMinSketchWithHeapWire {
         sketch: CountMinSketchInnerWire {
@@ -228,14 +201,6 @@ fn hydra_kll_wire_shape() {
 //   1. include_bytes!("fixtures/msgpack/<type>.msgpack")
 //   2. <Type>::from_msgpack(bytes) succeeds
 //   3. assert specific field values match the Go producer
-
-#[ignore = "gap: needs a sketchlib-go-produced msgpack fixture; none can be generated in this repo"]
-#[test]
-fn count_min_decodes_go_bytes() {
-    // let bytes = include_bytes!("fixtures/msgpack/count_min.msgpack");
-    // let s = CountMinSketch::from_msgpack(bytes).unwrap();
-    // assert_eq!(s.rows, EXPECTED_ROWS);
-}
 
 #[ignore = "gap: needs a sketchlib-go-produced msgpack fixture; none can be generated in this repo"]
 #[test]

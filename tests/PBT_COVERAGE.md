@@ -68,7 +68,7 @@ Compared against: an exact `HashMap` count, columns via the public `hash_for_mat
 - estimator
   - `estimate(k)` never drops on a non-negative insert; all 32 keys probed after every insert
   - `truth(k) <= estimate(k) <= truth(k) + min over rows of colliding mass`; 1-8 cols x 32 keys, every row collides
-  - portable `CountMinSketch`: `estimate(k) >= truth(k)`
+  - `f64` counters over string keys: `estimate(k) >= truth(k)`
 - merge
   - commutative, associative, empty is identity
   - `merge(S(xs), S(ys)) == S(xs ++ ys)`
@@ -78,9 +78,9 @@ Compared against: an exact `HashMap` count, columns via the public `hash_for_mat
   - `merge_max(s, s) == s`
   - shared keys: `max(a, b) <= cell <= a + b`, and the same for every estimate
 - model across a rebuilt backend
-  - after any sequence of insert, merge, `apply_delta`, msgpack round trip, mismatched merge: geometry unchanged; every cell `>= 0`; every row sums to total mass; `truth(k) <= estimate(k) <= band`. `apply_delta == merge`; a mismatched merge is refused and changes nothing
+  - after any sequence of insert, merge, `apply_delta`, ASAPv1 round trip, mismatched merge: geometry unchanged; every cell `>= 0`; every row sums to total mass; `truth(k) <= estimate(k) <= band`. `apply_delta == merge`; a mismatched merge is refused and changes nothing
 - wire
-  - msgpack keeps geometry, cells, estimates
+  - ASAPv1 keeps geometry, cells, estimates of `f64` counters
   - ASAPv1 keeps 64 estimates; `edge_rows` x `edge_dimension`
 
 ## count_sketch.rs — 12

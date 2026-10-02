@@ -1,6 +1,6 @@
 //! Cross-language hash layer mirroring `sketchlib-go::common`'s
 //! `HashSpec` / `DeriveIndex` / `DeriveSign` decomposition for
-//! matrix-backed sketches (CountSketch, CountMinSketch).
+//! matrix-backed sketches (CountSketch, CountMin).
 //!
 //! `sketchlib-go` and `asap_sketchlib` share three building blocks for
 //! these sketches:
@@ -15,9 +15,8 @@
 //! This module re-exposes that pipeline as a small, byte-key API so
 //! sketches that consume keys as raw bytes (e.g. the wire-format
 //! `CountSketch::update`) can match Go's emitted matrix
-//! cell-for-cell. CountMinSketch's pending byte-parity fix will reuse
-//! the same primitives — the seed table, derive_index, and derive_sign
-//! are agnostic to whether ±1 signing is applied.
+//! cell-for-cell. The seed table, derive_index, and derive_sign are
+//! agnostic to whether ±1 signing is applied.
 //!
 //! # Example
 //!

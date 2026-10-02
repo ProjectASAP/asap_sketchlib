@@ -1,5 +1,4 @@
-//! Property tests for Count-Min: the native matrix sketch and the portable
-//! `CountMinSketch` that carries it over the wire.
+//! Property tests for Count-Min.
 //!
 //! Cormode and Muthukrishnan, J. Algorithms '05.
 //!
@@ -12,17 +11,18 @@
 use crate::support::{
     PROBE_KEYS, close, edge_dimension, edge_rows, grid, keyed_updates, keys, matrices_close,
 };
-use asap_sketchlib::message_pack_format::MessagePackCodec;
 use asap_sketchlib::{
-    CountMin, CountMinSketch, CountMinSketchDelta, DataInput, DefaultMatrixI32, FastPath,
-    MatrixFastHash, MatrixStorage, QuickMatrixI64, RegularPath, Vector2D, hash_for_matrix,
+    CmDelta, CountMin, DataInput, DefaultMatrixI32, FastPath, MatrixFastHash, MatrixStorage,
+    QuickMatrixI64, RegularPath, Vector2D, hash_for_matrix,
 };
 use proptest::prelude::*;
 use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 type Cm = CountMin<Vector2D<i32>, RegularPath>;
 type CmFast = CountMin<Vector2D<i32>, FastPath>;
 type CmWire = CountMin<Vector2D<i64>, FastPath>;
+type CmF64 = CountMin<Vector2D<f64>, FastPath>;
 type CmFixedI32 = CountMin<DefaultMatrixI32, FastPath>;
 type CmFixedI64 = CountMin<QuickMatrixI64, FastPath>;
 
@@ -70,18 +70,33 @@ fn columns_of(rows: usize, cols: usize, k: u64) -> Vec<usize> {
     (0..rows).map(|r| hashed.col_for_row(r, cols)).collect()
 }
 
-fn cms_of(rows: usize, cols: usize, updates: &[(String, f64)]) -> CountMinSketch {
-    let mut s = CountMinSketch::new(rows, cols);
+fn cms_of(rows: usize, cols: usize, updates: &[(String, f64)]) -> CmF64 {
+    let mut s = CmF64::with_dimensions(rows, cols);
     for (k, v) in updates {
-        s.update(k, *v);
+        s.insert_many(&DataInput::Str(k), *v);
     }
     s
+}
+
+/// The counter matrix of `sketch`, one `Vec` per row.
+fn matrix_of(sketch: &CmF64) -> Vec<Vec<f64>> {
+    (0..sketch.rows())
+        .map(|r| {
+            (0..sketch.cols())
+                .map(|c| sketch.as_storage().query_one_counter(r, c))
+                .collect()
+        })
+        .collect()
+}
+
+fn str_estimate(sketch: &CmF64, key: &str) -> f64 {
+    sketch.estimate(&DataInput::Str(key))
 }
 
 // ===== Sequence-law scaffolding =====
 
 /// A transition the sequence law draws from. Every variant is a public entry
-/// point of `CountMinSketch`.
+/// point of `CountMin`.
 #[derive(Debug, Clone)]
 enum Op {
     Insert(u64, i64),
@@ -114,40 +129,34 @@ fn seq_op() -> impl Strategy<Value = Op> {
     ]
 }
 
-/// `"0"` through `"31"`, the string keys the portable sketch takes.
+/// `"0"` through `"31"`, the string keys the sequence law inserts.
 fn key_domain() -> Vec<String> {
     (0..DOMAIN).map(|k| k.to_string()).collect()
 }
 
-fn cms_stream_of(
-    rows: usize,
-    cols: usize,
-    keys: &[String],
-    stream: &[(u64, i64)],
-) -> CountMinSketch {
-    let mut sketch = CountMinSketch::new(rows, cols);
+fn cms_stream_of(rows: usize, cols: usize, keys: &[String], stream: &[(u64, i64)]) -> CmF64 {
+    let mut sketch = CmF64::with_dimensions(rows, cols);
     for (k, w) in stream {
-        sketch.update(&keys[*k as usize], *w as f64);
+        sketch.insert_many(&DataInput::Str(&keys[*k as usize]), *w as f64);
     }
     sketch
 }
 
-/// Every non-zero cell of `sketch`, as the delta that adds it to a peer.
-fn delta_of(sketch: &CountMinSketch) -> CountMinSketchDelta {
-    let mut cells = Vec::new();
-    for (r, row) in sketch.sketch().iter().enumerate() {
+/// Every non-zero cell of `sketch`, as the deltas that add it to a peer.
+fn deltas_of(sketch: &CmF64) -> Vec<CmDelta> {
+    let mut deltas = Vec::new();
+    for (r, row) in matrix_of(sketch).iter().enumerate() {
         for (c, count) in row.iter().enumerate() {
             if *count != 0.0 {
-                cells.push((r as u32, c as u32, *count as i64));
+                deltas.push(CmDelta {
+                    row: r as u32,
+                    col: c as u32,
+                    value: *count as u32,
+                });
             }
         }
     }
-    CountMinSketchDelta {
-        rows: sketch.rows() as u32,
-        cols: sketch.cols() as u32,
-        cells,
-        ..CountMinSketchDelta::default()
-    }
+    deltas
 }
 
 /// The column a string key occupies on each row, from the public hash entry
@@ -184,7 +193,7 @@ fn cm_fast_of(rows: usize, cols: usize, stream: &[(u64, i32)]) -> CmFast {
 /// built with, non-negative cells, every row carrying the model's whole mass,
 /// and each key's estimate between its truth and its lightest row's mass.
 fn holds_model(
-    sketch: &CountMinSketch,
+    sketch: &CmF64,
     model: &[i64],
     keys: &[String],
     columns: &[Vec<usize>],
@@ -195,7 +204,7 @@ fn holds_model(
     prop_assert_eq!(sketch.rows(), rows, "{}: rows", what);
     prop_assert_eq!(sketch.cols(), cols, "{}: cols", what);
 
-    let cells = sketch.sketch();
+    let cells = matrix_of(sketch);
     prop_assert_eq!(cells.len(), rows, "{}: rows of the matrix", what);
 
     let total: i64 = model.iter().sum();
@@ -228,7 +237,7 @@ fn holds_model(
     }
 
     for (k, own) in model.iter().enumerate() {
-        let est = sketch.estimate(&keys[k]).round() as i64;
+        let est = str_estimate(sketch, &keys[k]).round() as i64;
         let ceiling = (0..rows)
             .map(|r| column_mass[r * cols + columns[k][r]])
             .min()
@@ -318,7 +327,7 @@ proptest! {
         prop_assert_eq!(cm_fast_cells(&by_hashes), cm_fast_cells(&by_loop));
     }
 
-    // ===== Merge algebra, on the portable representation =====
+    // ===== Merge algebra, on f64 counters over string keys =====
 
     #[test]
     fn count_min_merge_is_commutative(
@@ -328,11 +337,11 @@ proptest! {
         b in keyed_updates(30),
     ) {
         let mut ab = cms_of(rows, cols, &a);
-        ab.merge(&cms_of(rows, cols, &b)).expect("merge");
+        ab.merge(&cms_of(rows, cols, &b));
         let mut ba = cms_of(rows, cols, &b);
-        ba.merge(&cms_of(rows, cols, &a)).expect("merge");
+        ba.merge(&cms_of(rows, cols, &a));
 
-        prop_assert_eq!(ab.sketch(), ba.sketch());
+        prop_assert_eq!(matrix_of(&ab), matrix_of(&ba));
     }
 
     #[test]
@@ -344,15 +353,15 @@ proptest! {
         c in keyed_updates(20),
     ) {
         let mut left = cms_of(rows, cols, &a);
-        left.merge(&cms_of(rows, cols, &b)).expect("merge");
-        left.merge(&cms_of(rows, cols, &c)).expect("merge");
+        left.merge(&cms_of(rows, cols, &b));
+        left.merge(&cms_of(rows, cols, &c));
 
         let mut right = cms_of(rows, cols, &b);
-        right.merge(&cms_of(rows, cols, &c)).expect("merge");
+        right.merge(&cms_of(rows, cols, &c));
         let mut right_full = cms_of(rows, cols, &a);
-        right_full.merge(&right).expect("merge");
+        right_full.merge(&right);
 
-        prop_assert!(matrices_close(&left.sketch(), &right_full.sketch()));
+        prop_assert!(matrices_close(&matrix_of(&left), &matrix_of(&right_full)));
     }
 
     #[test]
@@ -363,9 +372,9 @@ proptest! {
     ) {
         let base = cms_of(rows, cols, &a);
         let mut merged = base.clone();
-        merged.merge(&CountMinSketch::new(rows, cols)).expect("merge");
+        merged.merge(&CmF64::with_dimensions(rows, cols));
 
-        prop_assert_eq!(merged.sketch(), base.sketch());
+        prop_assert_eq!(matrix_of(&merged), matrix_of(&base));
     }
 
     #[test]
@@ -376,12 +385,12 @@ proptest! {
         b in keyed_updates(30),
     ) {
         let mut merged = cms_of(rows, cols, &a);
-        merged.merge(&cms_of(rows, cols, &b)).expect("merge");
+        merged.merge(&cms_of(rows, cols, &b));
 
         let concatenated: Vec<_> = a.iter().chain(b.iter()).cloned().collect();
         let streamed = cms_of(rows, cols, &concatenated);
 
-        prop_assert!(matrices_close(&merged.sketch(), &streamed.sketch()));
+        prop_assert!(matrices_close(&matrix_of(&merged), &matrix_of(&streamed)));
     }
 
     #[test]
@@ -393,7 +402,7 @@ proptest! {
         let s = cms_of(rows, cols, &updates);
         for (k, _) in &updates {
             let truth: f64 = updates.iter().filter(|(x, _)| x == k).map(|(_, v)| v).sum();
-            let est = s.estimate(k);
+            let est = str_estimate(&s, k);
             prop_assert!(
                 est >= truth || close(est, truth),
                 "key {}: estimate {} < truth {}", k, est, truth
@@ -411,14 +420,14 @@ proptest! {
     ) {
         let s = cms_of(rows, cols, &updates);
 
-        let bytes = s.to_msgpack().expect("encode");
-        let restored = CountMinSketch::from_msgpack(&bytes).expect("decode");
+        let bytes = s.serialize_to_bytes().expect("encode");
+        let restored = CmF64::deserialize_from_bytes(&bytes).expect("decode");
 
         prop_assert_eq!(restored.rows(), s.rows());
         prop_assert_eq!(restored.cols(), s.cols());
-        prop_assert_eq!(restored.sketch(), s.sketch());
+        prop_assert_eq!(matrix_of(&restored), matrix_of(&s));
         for (k, _) in &updates {
-            prop_assert_eq!(restored.estimate(k), s.estimate(k), "key {}", k);
+            prop_assert_eq!(str_estimate(&restored, k), str_estimate(&s, k), "key {}", k);
         }
     }
 
@@ -527,7 +536,7 @@ proptest! {
         let left = cms_of(rows, cols, &a);
         let right = cms_of(rows, cols, &b);
         let mut merged = left.clone();
-        merged.merge(&right).expect("merge");
+        merged.merge(&right);
 
         let probes = a
             .iter()
@@ -535,14 +544,15 @@ proptest! {
             .map(|(k, _)| k.as_str())
             .chain(["0", "!"]);
         for k in probes {
-            let after = merged.estimate(k);
+            let after = str_estimate(&merged, k);
+            let (mine, theirs) = (str_estimate(&left, k), str_estimate(&right, k));
             prop_assert!(
-                after >= left.estimate(k),
-                "key {}: merged {} below the left estimate {}", k, after, left.estimate(k)
+                after >= mine,
+                "key {}: merged {} below the left estimate {}", k, after, mine
             );
             prop_assert!(
-                after >= right.estimate(k),
-                "key {}: merged {} below the right estimate {}", k, after, right.estimate(k)
+                after >= theirs,
+                "key {}: merged {} below the right estimate {}", k, after, theirs
             );
         }
     }
@@ -600,7 +610,7 @@ proptest! {
 
     // ===== A state that survives being rebuilt =====
     //
-    // Merge, apply_delta and a msgpack round trip each replace the backend
+    // Merge, apply_delta and an ASAPv1 round trip each rewrite the matrix
     // mid-stream. The model is the exact ledger of everything inserted so far,
     // and every invariant is re-checked after every transition.
 
@@ -616,18 +626,18 @@ proptest! {
             .map(|k| str_columns_of(rows, cols, k))
             .collect();
         let mut model = vec![0i64; keys.len()];
-        let mut sketch = CountMinSketch::new(rows, cols);
+        let mut sketch = CmF64::with_dimensions(rows, cols);
         holds_model(&sketch, &model, &keys, &columns, (rows, cols), "before the first op")?;
 
         for (step, op) in ops.iter().enumerate() {
             match op {
                 Op::Insert(k, w) => {
-                    sketch.update(&keys[*k as usize], *w as f64);
+                    sketch.insert_many(&DataInput::Str(&keys[*k as usize]), *w as f64);
                     model[*k as usize] += *w;
                 }
                 Op::Merge(stream) => {
                     let other = cms_stream_of(rows, cols, &keys, stream);
-                    sketch.merge(&other).expect("a peer of the same geometry merges");
+                    sketch.merge(&other);
                     for (k, w) in stream {
                         model[*k as usize] += *w;
                     }
@@ -635,37 +645,39 @@ proptest! {
                 Op::ApplyDelta(stream) => {
                     let other = cms_stream_of(rows, cols, &keys, stream);
                     let mut merged = sketch.clone();
-                    merged.merge(&other).expect("a peer of the same geometry merges");
+                    merged.merge(&other);
 
-                    sketch.apply_delta(&delta_of(&other)).expect("an in-range delta applies");
+                    for delta in deltas_of(&other) {
+                        sketch.apply_delta(delta);
+                    }
                     for (k, w) in stream {
                         model[*k as usize] += *w;
                     }
 
                     prop_assert_eq!(
-                        sketch.sketch(), merged.sketch(),
+                        matrix_of(&sketch), matrix_of(&merged),
                         "step {}: apply_delta and the merge it stands for left different matrices", step
                     );
                 }
                 Op::RoundTrip => {
-                    let bytes = sketch.to_msgpack().expect("encode");
-                    let restored = CountMinSketch::from_msgpack(&bytes).expect("decode");
+                    let bytes = sketch.serialize_to_bytes().expect("encode");
+                    let restored = CmF64::deserialize_from_bytes(&bytes).expect("decode");
                     prop_assert_eq!(
-                        restored.sketch(), sketch.sketch(),
+                        matrix_of(&restored), matrix_of(&sketch),
                         "step {}: the decoded matrix differs", step
                     );
                     sketch = restored;
                 }
                 Op::MergeMismatched(over_rows, over_cols) => {
-                    let before = sketch.sketch();
-                    let peer = CountMinSketch::new(rows + over_rows, cols + over_cols);
+                    let before = matrix_of(&sketch);
+                    let peer = CmF64::with_dimensions(rows + over_rows, cols + over_cols);
                     prop_assert!(
-                        sketch.merge(&peer).is_err(),
+                        catch_unwind(AssertUnwindSafe(|| sketch.merge(&peer))).is_err(),
                         "step {}: merging a {}x{} peer into a {}x{} sketch was accepted",
                         step, peer.rows(), peer.cols(), rows, cols
                     );
                     prop_assert_eq!(
-                        sketch.sketch(), before,
+                        matrix_of(&sketch), before,
                         "step {}: a refused merge still changed the matrix", step
                     );
                 }
