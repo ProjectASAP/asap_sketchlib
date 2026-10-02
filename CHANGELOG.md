@@ -106,6 +106,15 @@ signals a backwards-compatible change.
   a non-zero seed index, and cells and `l2` accumulators set apart from each
   other that together reach every msgpack integer width, positive fixint
   through uint64 and negative fixint through int64.
+- **ASAPv1 payloads for `SetAggregator` (`0x08 0x00`) and `DeltaResult`
+  (`0x09 0x00`)**, spec §3.21 and §3.22. The metadata is `metadata_version`
+  alone; the payload is `[values]` and `[added, removed]`, each an array of
+  `str` in ascending UTF-8 byte order, and a key in both `added` and `removed`
+  is refused on both sides. Both types gain `serialize_to_bytes` /
+  `deserialize_from_bytes` and live in `asap_sketchlib::sketches::set_aggregator`;
+  the crate-root re-exports are unchanged. Golden fixtures
+  `set_aggregator_strings`, `set_aggregator_empty`, `delta_result_strings` and
+  `delta_result_empty` are checked by `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -252,6 +261,11 @@ signals a backwards-compatible change.
   `message_pack_format::native::countsketch_topk`. Use
   `CountL2HH::serialize_to_bytes` / `CountL2HH::deserialize_from_bytes`, which
   emit the same ASAPv1 bytes.
+- **The portable MessagePack format for `SetAggregator` and `DeltaResult`**:
+  the modules `message_pack_format::portable::set_aggregator` and
+  `message_pack_format::portable::delta_set_aggregator`, both types'
+  `MessagePackCodec` impls, and `DeltaResult`'s `serde::Serialize` /
+  `Deserialize` derives. They serialize only as ASAPv1.
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the

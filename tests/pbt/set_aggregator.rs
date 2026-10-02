@@ -3,8 +3,7 @@
 //! There is no error band here, so every law is an exact equality. The oracle
 //! is a `std::collections::HashSet` built from the stream on the test side.
 
-use asap_sketchlib::SetAggregator;
-use asap_sketchlib::message_pack_format::MessagePackCodec;
+use asap_sketchlib::{DeltaResult, SetAggregator};
 use proptest::prelude::*;
 use std::collections::HashSet;
 
@@ -170,18 +169,45 @@ proptest! {
     // ===== Wire =====
 
     #[test]
-    fn a_msgpack_round_trip_preserves_the_key_set(stream in awkward_keys(120)) {
+    fn an_asapv1_round_trip_preserves_the_key_set(stream in awkward_keys(120)) {
         let s = aggregator_of(&stream);
 
-        let bytes = s.to_msgpack().expect("encode");
-        let restored = SetAggregator::from_msgpack(&bytes).expect("decode");
+        let bytes = s.serialize_to_bytes().expect("encode");
+        let restored = SetAggregator::deserialize_from_bytes(&bytes).expect("decode");
 
         prop_assert_eq!(&restored.values, &s.values, "round trip moved the set");
         prop_assert_eq!(restored.values.len(), s.values.len());
+        prop_assert_eq!(
+            restored.serialize_to_bytes().expect("re-encode"),
+            bytes,
+            "a re-encode changed the bytes"
+        );
+    }
 
-        let twice = SetAggregator::from_msgpack(
-            &restored.to_msgpack().expect("re-encode")
-        ).expect("decode a re-encode");
-        prop_assert_eq!(&twice.values, &s.values, "the second round trip moved the set");
+    #[test]
+    fn a_delta_between_two_snapshots_round_trips_byte_identically(
+        before in awkward_keys(80),
+        after in awkward_keys(80),
+    ) {
+        let (b, a) = (oracle(&before), oracle(&after));
+        let delta = DeltaResult {
+            added: a.difference(&b).cloned().collect(),
+            removed: b.difference(&a).cloned().collect(),
+        };
+
+        let bytes = delta.serialize_to_bytes().expect("encode");
+        let restored = DeltaResult::deserialize_from_bytes(&bytes).expect("decode");
+
+        prop_assert_eq!(&restored.added, &delta.added, "round trip moved added");
+        prop_assert_eq!(&restored.removed, &delta.removed, "round trip moved removed");
+        prop_assert_eq!(restored.serialize_to_bytes().expect("re-encode"), bytes);
+    }
+
+    #[test]
+    fn the_encoding_depends_on_the_key_set_alone((a, b) in stream_and_permutation(200)) {
+        prop_assert_eq!(
+            aggregator_of(&a).serialize_to_bytes().expect("encode"),
+            aggregator_of(&b).serialize_to_bytes().expect("encode")
+        );
     }
 }

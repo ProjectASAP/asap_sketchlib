@@ -4,6 +4,4 @@
 //! New code uses ASAPv1: prefer a sketch's own `serialize_to_bytes`; do not
 //! add callers here.
 
-pub mod delta_set_aggregator;
 pub mod sampling;
-pub mod set_aggregator;

@@ -751,6 +751,30 @@ Wire tests: [`src/sketches/uniform/wire.rs`](../src/sketches/uniform/wire.rs)
 | `uniform_sampling_rejects_crafted_bytes_without_panicking` | Truncated, foreign and garbage bytes are errors, never panics. | Verifies six truncations of a valid envelope, 64 bytes of `0xff`, and a valid envelope carrying a garbage payload all fail to decode. |
 | `uniform_sampling_rejects_serializing_an_over_full_sampler` | The encode side refuses a sampler its own decoder would reject. | Verifies a sampler holding two samples whose `total_seen` is set to `1` fails to serialize. |
 
+### SetAggregator and DeltaResult
+
+Test file: [`src/sketches/set_aggregator.rs`](../src/sketches/set_aggregator.rs)
+
+Wire tests: [`src/sketches/set_aggregator/wire.rs`](../src/sketches/set_aggregator/wire.rs)
+
+| test_name | test_description | what_is_tested |
+| --- | --- | --- |
+| `test_creation` | A fresh aggregator holds nothing. | Verifies `SetAggregator::new()` has an empty `values` set. |
+| `test_insert` | A repeated key is inserted once. | Feeds `"web"`, `"api"`, and `"web"` again and verifies `values` holds 2 keys, both `"web"` and `"api"`. |
+| `test_merge` | Merge is set union. | Merges an aggregator holding `{"api", "db"}` into one holding `{"web", "api"}` and verifies the result holds exactly `"web"`, `"api"`, and `"db"`. |
+| `set_aggregator_round_trips_and_re_encodes_byte_identically` | The envelope frames a set under kind_id `0x08 0x00`, and the set survives a round trip. | For a set holding `""`, `"web"`, `"api"`, `"é"`, `"😀"` and `"～"`, verifies the bytes carry `kind_id_len` `2` and `0x08 0x00`, that the decode holds the same set, and that it re-serializes to the same bytes. |
+| `set_aggregator_emits_members_in_ascending_byte_order` | Members are written in UTF-8 byte order. | Verifies the same set serializes to a hand-built payload ordered `""`, `"api"`, `"web"`, `"é"`, `"～"`, `"😀"`, so U+FF5E precedes U+1F600. |
+| `set_aggregator_empty_has_exactly_one_encoding` | An empty set has one encoding. | Verifies `SetAggregator::new()` serializes to a hand-built envelope with an empty `values` array and decodes back empty. |
+| `set_aggregator_rejects_unordered_and_duplicate_members` | `values` must be strictly ascending. | Verifies payloads `["b", "a"]`, `["a", "a"]` and `["😀", "～"]` each fail to decode. |
+| `set_aggregator_rejects_a_bin_member` | A member must be msgpack `str`. | Verifies a payload whose one member is the `bin` `b"a"` fails to decode. |
+| `metadata_rejects_unknown_missing_and_wrong_version` | The metadata map is exactly `{metadata_version: 1}`. | Verifies envelopes whose metadata adds a `bogus_field`, is an empty map, or carries `metadata_version` `2` each fail to decode. |
+| `each_kind_rejects_the_other` | Neither decoder takes the other's kind_id. | Verifies an empty `SetAggregator` envelope fails to decode as a `DeltaResult`, and the reverse. |
+| `delta_result_round_trips_and_re_encodes_byte_identically` | The envelope frames a delta under kind_id `0x09 0x00`, both sets ordered. | For `added` `{"queue", "été", "😀"}` and `removed` `{"db", "cache", ""}`, verifies the bytes carry `0x09 0x00` and equal a hand-built payload of `["queue", "été", "😀"]` and `["", "cache", "db"]`, that the decode holds both sets, and that it re-serializes to the same bytes. |
+| `delta_result_empty_round_trips` | An empty delta round-trips. | Verifies a hand-built envelope with two empty arrays decodes to two empty sets and re-serializes to the same bytes. |
+| `delta_result_rejects_a_key_both_added_and_removed` | `added` and `removed` are disjoint on both doors. | Verifies a payload with `"b"` on both sides fails to decode, and that a `DeltaResult` holding `"a"` on both sides fails to serialize. |
+| `delta_result_rejects_unordered_sides` | Both arrays must be strictly ascending. | Verifies an `added` of `["b", "a"]` and a `removed` of `["c", "c"]` each fail to decode. |
+| `crafted_bytes_are_errors_not_panics` | Truncated and garbage bytes are errors, never panics. | Verifies six truncations of a valid `SetAggregator` envelope, 64 bytes of `0xff` for either type, and a valid `DeltaResult` envelope carrying a garbage payload all fail to decode. |
+
 ## Sketch Frameworks
 
 ### Hydra
@@ -1216,15 +1240,6 @@ Test file: [`src/sketch_framework/tumbling.rs`](../src/sketch_framework/tumbling
 ## MessagePack Portable Wire Types
 
 
-### Portable DeltaResult
-
-Test file: [`src/message_pack_format/portable/delta_set_aggregator.rs`](../src/message_pack_format/portable/delta_set_aggregator.rs)
-
-| test_name | test_description | what_is_tested |
-| --- | --- | --- |
-| `test_msgpack_round_trip` | Both key sets survive the round trip. | Round-trips a `DeltaResult` with `added` `{"web", "api"}` and `removed` `{"db"}` and verifies the decode holds 2 added keys including both names and 1 removed key. |
-| `test_empty_sets` | A `DeltaResult` holding nothing round-trips. | Verifies a `DeltaResult` with both sets empty encodes and decodes back with both sets still empty. |
-
 ### Portable Sampling Rescale
 
 Test file: [`src/message_pack_format/portable/sampling.rs`](../src/message_pack_format/portable/sampling.rs)
@@ -1237,18 +1252,6 @@ Test file: [`src/message_pack_format/portable/sampling.rs`](../src/message_pack_
 | `rescale_count_inverts_probability` | A count-like estimate is rescaled by `1/p`. | Verifies `rescale_count(10_000.0, 0.1)` is `100_000.0` within `1e-6`, that `rescale_count(123.0, 1.0)` is `123.0`, and that a `p` of `0.0` returns `123.0` rather than dividing by zero. |
 | `rescale_with_env` | The envelope's own `sample_p` drives the rescale. | Verifies `rescale_count_with_env(5_000.0, env)` at `sample_p` `0.05` is `100_000.0` within `1e-6`, and that at `sample_p` `0.0` an input of `42.0` comes back unchanged. |
 | `quantiles_are_scale_invariant` | The quantile family is declared to need no rescale. | Asserts `is_quantile_scale_invariant()`, a `const fn` returning `true`; nothing about a quantile estimate is computed. |
-
-### Portable SetAggregator
-
-Test file: [`src/message_pack_format/portable/set_aggregator.rs`](../src/message_pack_format/portable/set_aggregator.rs)
-
-| test_name | test_description | what_is_tested |
-| --- | --- | --- |
-| `test_creation` | A fresh aggregator holds nothing. | Verifies `SetAggregator::new()` has an empty `values` set. |
-| `test_insert` | A repeated key is inserted once. | Feeds `"web"`, `"api"`, and `"web"` again and verifies `values` holds 2 keys, both `"web"` and `"api"`. |
-| `test_merge` | Merge is set union. | Merges an aggregator holding `{"api", "db"}` into one holding `{"web", "api"}` and verifies the result holds exactly `"web"`, `"api"`, and `"db"`. |
-| `test_msgpack_round_trip` | The set survives the round trip. | Round-trips an aggregator holding `{"web", "api"}` and verifies the decode holds 2 keys, both names present. |
-| `test_msgpack_matches_wire_format` | The bytes are a named map under a `values` key. | For an aggregator holding `{"a"}`, verifies the bytes decode into a locally declared `StringSet { values: HashSet<String> }` that still contains `"a"`. |
 
 ## Common
 
@@ -1461,7 +1464,7 @@ Test file: [`tests/e2e/cardinality.rs`](../tests/e2e/cardinality.rs)
 | `set_aggregator_union_is_exact` | A `SetAggregator` union keeps every member exactly. | Feeds `uniform_u64(20_000, 500, 2002)` as `member-{k}` strings into `SetAggregator::update`, merges a second aggregator holding `extra-a` and `extra-b`, then asserts `agg.values.len()` equals the length of a parallel `HashSet` of the same members and that `agg.values` contains every one of them; the distinct count is compared against the in-test truth set rather than a pinned number. |
 | `custom_precision_accuracy_improves_with_precision_as_the_error_model_predicts` | A higher custom precision does not lose to a lower one on the same stream. | Feeds the same `N = 200_000` identities from `BASE = (1 << 40) * 41` into `HyperLogLogImpl<Classic, HllRegP10>`, `<Classic, HllRegP13>` and `<Classic, HllRegP18>` and asserts only the two orderings `e18 <= e10` and `e18 <= e13` on absolute relative error; no error band is asserted, p10 against p13 is not compared, and with one trial per precision no error ratio is pinned. |
 | `a_custom_precision_merge_reproduces_the_single_pass_registers_for_every_estimator` | A shard merge at a custom precision reproduces the single pass exactly, for both register estimators. | Over `N = 120_000` identities from `BASE = (1 << 40) * 42` split even/odd by `k % 2`, builds single/even/odd `HyperLogLogImpl<Classic, HllRegP13>` and `HyperLogLogImpl<ErtlMLE, HllRegP13>`, calls `merge`, and asserts for each estimator that the merged `registers_as_slice()` equals the single pass's and that `estimate()` is equal too. |
-| `a_set_aggregator_delta_describes_the_change_and_survives_the_wire` | A `DeltaResult` over two set snapshots survives the MessagePack wire and replays into the later snapshot. | Builds `SetAggregator`s over `["web", "api", "db", "cache"]` and `["web", "api", "queue"]`, forms a `DeltaResult` from the two `HashSet::difference` results, and asserts `added == {"queue"}` and `removed == {"db", "cache"}` (these two pin the test's own set arithmetic, not a library call); then `to_msgpack` / `DeltaResult::from_msgpack` must return both sets unchanged, applying the decoded delta to the earlier aggregator must reproduce `after.values`, and an all-empty `DeltaResult` must round-trip still empty. |
+| `a_set_aggregator_delta_describes_the_change_and_survives_the_wire` | A `DeltaResult` over two set snapshots survives the ASAPv1 wire and replays into the later snapshot. | Builds `SetAggregator`s over `["web", "api", "db", "cache"]` and `["web", "api", "queue"]`, forms a `DeltaResult` from the two `HashSet::difference` results, and asserts `added == {"queue"}` and `removed == {"db", "cache"}` (these two pin the test's own set arithmetic, not a library call); then `serialize_to_bytes` / `DeltaResult::deserialize_from_bytes` must return both sets unchanged, applying the decoded delta to the earlier aggregator must reproduce `after.values`, and an all-empty `DeltaResult` must round-trip still empty. |
 
 ### Cardinality: Duplicate-Heavy Zipf Streams
 
@@ -1957,6 +1960,8 @@ Test file: [`tests/asapv1_golden.rs`](../tests/asapv1_golden.rs)
 | `ddsketch_empty_a001_matches_golden` | The empty DDSketch state serializes to its golden bytes as metadata version 1, and the golden decodes back to it. | Builds the state at `alpha = 0.01` with empty stores, `sum = 0.0`, `min = +inf`, `max = -inf`, and verifies both it and a fresh `DDSketch::new(0.01)` serialize to `ddsketch_empty_a001.hex`; the decode has empty stores at offset `0`, a zero count and `zero_count`, `sum` `0.0`, `min()` and `max()` of `None`, and re-encodes byte-identically. |
 | `ddsketch_positive_a001_matches_golden` | A positive-only DDSketch state serializes to its golden bytes as metadata version 1, and the golden decodes back to that state. | Builds `DDSketch` at `alpha = 0.01` through its serde form from the store `[1, 0, 127, 128, 300, 65536, 4294967296]` at offset `-40`, `sum = 2181071000.0`, `min = 0.453125`, `max = 0.5078125`, and verifies `serialize_to_bytes` equals `ddsketch_positive_a001.hex`; the decode reports that `alpha`, store, offset and scalars, an empty negative store, a zero `zero_count`, a `get_count()` equal to the bucket sum, and re-encodes byte-identically. |
 | `ddsketch_signed_a001_matches_golden` | A signed DDSketch state serializes to its golden bytes as metadata version 2, and the golden decodes back to that state. | Builds `DDSketch` at `alpha = 0.01` from the positive store `[3, 0, 2]` at offset `310`, the negative store `[5, 1]` at offset `-208`, `zero_count = 7`, `sum = 2523.90625`, `min = -0.016`, `max = 515.0`, and verifies `serialize_to_bytes` equals `ddsketch_signed_a001.hex`; the decode reports both stores, both offsets, the zero count, the scalars and a `get_count()` of `18`, and re-encodes byte-identically. |
+| `delta_result_empty_matches_golden` | An empty delta serializes to its golden bytes. | Verifies a `DeltaResult` with both sets empty serializes to `asapv1_golden/delta_result_empty.hex`, and that decoding the fixture gives two empty sets and a byte-identical re-serialization. |
+| `delta_result_strings_matches_golden` | A known delta serializes to its golden bytes, each side in byte order. | Verifies `added` `{"queue", "été", "😀"}` and `removed` `{"", "cache", "db", "中"}` serialize to `asapv1_golden/delta_result_strings.hex`, and that decoding the fixture recovers both sets and re-serializes to the same bytes. |
 | `elastic_4b_2x4_matches_golden` | A known Elastic heavy table and light layer serialize to their golden bytes. | Sets a 4-bucket `2x4` sketch's buckets to a free one carrying the eviction flag, a 31-byte flow id with votes `127`/`128`, an empty flow id with votes `1`/`65535` and the eviction flag, and a 32-byte flow id with votes `i32::MAX`/`256` and the flag, and its light cells to `[[0, 255, 65536, i32::MAX], [-1, -33, -32768, i32::MIN]]`; verifies the bytes equal `asapv1_golden/elastic_4b_2x4.hex`, and that decoding the fixture recovers every bucket, `bktlen` `4`, the light dimensions and cells, and a byte-identical re-serialization. |
 | `elastic_4b_2x4_stale_matches_golden` | `stale_copies` reaches the bytes, and nothing else differs. | Builds the same state on a 2-bucket sketch after `expand_heavy()`, verifies the bytes equal `asapv1_golden/elastic_4b_2x4_stale.hex`, that decoding recovers the same state and re-serializes identically, and that the two fixtures have equal length and differ in exactly one byte, `0xc2` against `0xc3`. |
 | `hll_classic_p12_matches_golden` | A known P12 Classic register pattern serializes to its golden bytes, which round-trip unchanged. | Builds `HyperLogLogP12::<Classic>::from_storage` over 4,096 registers that are zero except `[0] = 1`, `[1] = 7`, `[100] = 42` and `[4095] = 3`, verifies `serialize_to_bytes()` equals `asapv1_golden/hll_classic_p12.hex`, and that `deserialize_from_bytes` on the fixture recovers those registers and re-serializes identically. |
@@ -1974,18 +1979,11 @@ Test file: [`tests/asapv1_golden.rs`](../tests/asapv1_golden.rs)
 | `kll_dynamic_i64_k200_matches_golden` | A deterministic i64 `KLLDynamic` whose items cross every msgpack integer width serializes to its golden bytes, and the golden decodes to that state. | Verifies `KLLDynamic::<i64>::init_kll_with_seed(200, 42)` fed 21 values from `0` through `i64::MAX` and `i64::MIN` — positive fixint / uint8 / uint16 / uint32 / uint64 and negative fixint / int8 / int16 / int32 / int64 — serializes to `asapv1_golden/kll_dynamic_i64_k200.hex`; that the hand-read payload is kind_id `0x06 0x01`, `levels` `[0, 21]`, those items in input order, and coin `(42, 0, 0)`; that the decode reports `count()` `21`, `quantile(0.0)` `i64::MIN`, `quantile(1.0)` `i64::MAX` and the source's `rank` at every input, and re-serializes identically; and that each KLL kind_id is rejected by the other variant's decoder. |
 | `kll_f64_k200_matches_golden` | A deterministic f64 KLL serializes to its golden bytes, and the golden decodes to that state. | Verifies `KLL::<f64>::init_kll_with_seed(200, 42)` fed `1..=50` (below the level-0 capacity, so no compaction fires) serializes to `asapv1_golden/kll_f64_k200.hex`; that the hand-read payload is kind_id `0x06 0x00`, `levels` `[0, 50]`, items `1.0..=50.0` and coin `(42, 0, 0)`; and that decoding the fixture gives the source's `wire_levels()`, `wire_items()` and `wire_coin()`, `count()` `50`, `quantile(0.0)` `1.0` and `quantile(1.0)` `50.0`, and re-serializes to the same bytes. |
 | `kll_i64_k200_matches_golden` | A deterministic i64 KLL serializes to its golden bytes, and the golden decodes to that state. | Verifies `KLL::<i64>::init_kll_with_seed(200, 42)` fed `1..=50` serializes to `asapv1_golden/kll_i64_k200.hex`; that the hand-read payload is kind_id `0x06 0x00`, `levels` `[0, 50]`, items `1..=50` and coin `(42, 0, 0)`; and that decoding the fixture gives the source's `wire_levels()`, `wire_items()` and `wire_coin()`, `count()` `50`, `quantile(0.0)` `1.0` and `quantile(1.0)` `50.0`, and re-serializes to the same bytes. |
+| `set_aggregator_empty_matches_golden` | An empty set serializes to its golden bytes. | Verifies `SetAggregator` with no members serializes to `asapv1_golden/set_aggregator_empty.hex`, and that decoding the fixture gives an empty set and a byte-identical re-serialization. |
+| `set_aggregator_strings_matches_golden` | A known string set serializes to its golden bytes in UTF-8 byte order. | Verifies the set `{"", "ab", "abc", "abcdefghijklmnopqrstuvwxyz012345", "api", "fixstr-max-31-bytes-0123456789a", "web", "é", "中", "～", "😀"}` — the empty string, a proper-prefix chain, a 31-byte fixstr and a 32-byte str8, and code points of two, three and four bytes — serializes to `asapv1_golden/set_aggregator_strings.hex`, and that decoding the fixture recovers the set and re-serializes to the same bytes. |
 | `univmon_empty_l3_2x4_h5_matches_golden` | A freshly constructed pyramid has one encoding, pinned by its golden. | Verifies `UnivMon::init_univmon(5, 2, 4, 3)` serializes to `asapv1_golden/univmon_empty_l3_2x4_h5.hex`; reading the envelope by hand gives kind_id `0x10 0x00`, shape `(3, 2, 4, 5)`, `key_type` `u64`, 24 zero counts, 6 zero `l2` accumulators, `heap_lens` `[0, 0, 0]`, no keys or heap counts, candidate flags `[true, true, true]`, `bucket_size` `0` and `update_mode` `0`; the decode matches the source's shape, weight, flags, counters, per-layer `get_l2()` and heaps, and re-serializes identically. |
 | `univmon_i64_l3_2x4_h5_matches_golden` | The `i64` key type reaches the bytes, and only it differs from the string fixture. | Builds the same layers as the string fixture with heap keys `i64::MIN`, `-1`, `-129` on layer 0, `128` on layer 1 and `4294967296`, `7` on layer 2, verifies the bytes equal `asapv1_golden/univmon_i64_l3_2x4_h5.hex`, that the hand-read envelope carries shape `(3, 2, 4, 5)` and those keys under `key_type` `i64` with the same counts, `l2`, heap lengths, heap counts, flags, weight and mode, that the decode matches the source and re-serializes identically, that layer 0's heap holds `HeapItem::I64(i64::MIN)`, and that the fixture differs from the string one. |
 | `univmon_str_l3_2x4_h5_matches_golden` | A known 3-layer pyramid with string keys serializes to its golden bytes and decodes back to that state. | Builds `UnivMon::init_univmon(5, 2, 4, 3)` (heap 5, 2 rows, 4 columns, 3 layers: pairwise distinct), writes layer 0's cells `[[0, 127, 128, 65536], [-1, -33, -32768, -2147483648]]`, layer 1's `[[3, -2, 0, 1], [0, 0, 5, -4]]` and layer 2's `[[0, 7, 0, 0], [-6, 0, 0, 0]]` through `L2HH::apply_delta`, seats `alpha`=`65536`, `beta`=`300`, `delta`=`128` in layer 0's heap, `gamma`=`5` in layer 1's and `epsilon`=`9`, `zeta`=`2` in layer 2's, calls `set_total_weight(70_000)` and `mark_layer_candidates_incomplete(1)`, and verifies the bytes equal `asapv1_golden/univmon_str_l3_2x4_h5.hex`. Reading the envelope by hand gives kind_id `0x10 0x00`, shape `(3, 2, 4, 5)`, `key_type` `string`, the 24 cells in layer then row-major order, `l2` `[4294999809, 4611686019501130818, 14, 41, 49, 36]`, `heap_lens` `[3, 1, 2]`, the six keys and heap counts `[65536, 300, 128, 5, 9, 2]` in that order, flags `[true, false, true]`, `bucket_size` `70000` and `update_mode` `1`; the decode matches the source and re-serializes identically. |
-
-### MessagePack Envelope Compatibility
-
-Test file: [`tests/msgpack_compat.rs`](../tests/msgpack_compat.rs)
-
-| test_name | test_description | what_is_tested |
-| --- | --- | --- |
-| `delta_result_round_trip` | A `DeltaResult` survives a msgpack round trip with both of its sets. | Serializes a `DeltaResult` whose `added` holds `a` and whose `removed` holds `b`, then verifies the decode's `added` contains `a` and its `removed` contains `b`. |
-| `set_aggregator_round_trip` | A `SetAggregator` survives a msgpack round trip with its members. | Updates a `SetAggregator::new()` with `web` and `api`, then verifies the decode holds two values, one of which is `web`. |
 
 ### Conformance Kit
 
