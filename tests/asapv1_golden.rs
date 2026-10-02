@@ -9,8 +9,8 @@
 //! See `asapv1_golden/README.md`.
 
 use asap_sketchlib::{
-    Classic, Count, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12,
-    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
+    CMSHeap, Classic, Count, CountMin, ErtlMLE, FastPath, HeapItem, HllSketch, HllVariant,
+    HyperLogLogHIPP12, HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -27,6 +27,9 @@ const GOLDEN_ERTL: &str = include_str!("../asapv1_golden/hll_ertl_mle_p12.hex");
 const GOLDEN_HIP: &str = include_str!("../asapv1_golden/hll_hip_p12.hex");
 const GOLDEN_CMS_I64: &str = include_str!("../asapv1_golden/cms_i64_regular_2x3.hex");
 const GOLDEN_CMS_F64: &str = include_str!("../asapv1_golden/cms_f64_fast_2x3.hex");
+const GOLDEN_CMSHEAP_STR: &str =
+    include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_strkeys.hex");
+const GOLDEN_CMSHEAP_I64: &str = include_str!("../asapv1_golden/cmsheap_i32_fast_2x3_i64keys.hex");
 const GOLDEN_CS_REGULAR: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4.hex");
 const GOLDEN_CS_FAST: &str = include_str!("../asapv1_golden/cs_i64_fast_2x4.hex");
 const GOLDEN_CS_I32: &str = include_str!("../asapv1_golden/cs_i32_regular_2x4.hex");
@@ -159,6 +162,96 @@ fn cms_f64_fast_2x3_matches_golden() {
         CountMin::<Vector2D<f64>, FastPath>::deserialize_from_bytes(&want).expect("decode");
     let flat: Vec<f64> = F64_VALS.iter().flatten().copied().collect();
     assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// CMSHeap: the Count-Min i64 matrix plus heap entries set directly. Each heap
+// holds a count tie, so the fixtures pin the emitted entry order.
+// ---------------------------------------------------------------------------
+
+/// `(key, count)` entries of the string-keyed fixture, in emitted order.
+const CMSHEAP_STR_ENTRIES: [(&str, i64); 4] =
+    [("hot", 65536), ("mild", 300), ("warm", 300), ("cold", 1)];
+
+/// `(key, count)` entries of the i64-keyed fixture, in emitted order.
+const CMSHEAP_I64_ENTRIES: [(i64, i64); 3] = [(-129, 7), (-1, 7), (4_294_967_296, 3)];
+
+#[test]
+fn cmsheap_i64_regular_2x3_strkeys_matches_golden() {
+    let want = decode_hex(GOLDEN_CMSHEAP_STR);
+
+    let mut sketch = CMSHeap::<Vector2D<i64>, RegularPath>::from_storage(
+        Vector2D::from_fn(2, 3, |r, c| I64_VALS[r][c]),
+        5,
+    );
+    for (key, count) in [("cold", 1), ("warm", 300), ("hot", 65536), ("mild", 300)] {
+        sketch
+            .heap_mut()
+            .update_heap_item(&HeapItem::String(key.to_string()), count);
+    }
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(
+        got, want,
+        "CMSHeap i64/regular/string bytes diverge from golden"
+    );
+
+    let decoded =
+        CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = I64_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    assert_eq!((decoded.rows(), decoded.cols()), (2, 3));
+    assert_eq!(decoded.heap().capacity(), 5);
+    let mut held: Vec<(String, i64)> = decoded
+        .heap()
+        .heap()
+        .iter()
+        .map(|item| match &item.key {
+            HeapItem::String(k) => (k.clone(), item.count),
+            other => panic!("key {other:?} is not a string"),
+        })
+        .collect();
+    held.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let expected: Vec<(String, i64)> = CMSHEAP_STR_ENTRIES
+        .iter()
+        .map(|&(k, c)| (k.to_string(), c))
+        .collect();
+    assert_eq!(held, expected);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn cmsheap_i32_fast_2x3_i64keys_matches_golden() {
+    let want = decode_hex(GOLDEN_CMSHEAP_I64);
+
+    let mut sketch = CMSHeap::<Vector2D<i32>, FastPath>::from_storage(
+        Vector2D::from_fn(2, 3, |r, c| I64_VALS[r][c] as i32),
+        3,
+    );
+    for (key, count) in [(4_294_967_296, 3), (-1, 7), (-129, 7)] {
+        sketch
+            .heap_mut()
+            .update_heap_item(&HeapItem::I64(key), count);
+    }
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "CMSHeap i32/fast/i64 bytes diverge from golden");
+
+    let decoded =
+        CMSHeap::<Vector2D<i32>, FastPath>::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i32> = I64_VALS.iter().flatten().map(|&v| v as i32).collect();
+    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.heap().capacity(), 3);
+    let mut held: Vec<(i64, i64)> = decoded
+        .heap()
+        .heap()
+        .iter()
+        .map(|item| match item.key {
+            HeapItem::I64(k) => (k, item.count),
+            ref other => panic!("key {other:?} is not an i64"),
+        })
+        .collect();
+    held.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    assert_eq!(held, CMSHEAP_I64_ENTRIES);
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 

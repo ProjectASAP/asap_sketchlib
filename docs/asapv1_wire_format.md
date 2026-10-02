@@ -659,8 +659,6 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 
 **A producer-side constraint: a `NaN` key.** `HHHeap` finds a resident by digest and then compares with `PartialEq`, and `NaN` never equals itself, so offering the same `NaN` key twice seats **two** entries rather than rescoring one. That state is reachable in memory and has **no encoding**: the encode-side duplicate check reads the two keys' bits, sees one key twice, and fails with the same complaint the decoder would make. Nothing repairs it on either door — a producer that inserts float keys must keep `NaN` out of a heap it intends to serialize.
 
-**Not this: `portable/countminsketch_topk.rs`.** Despite the name, that module emits no ASAPv1 bytes. It is a legacy Go-interop struct with its own msgpack shape: an `f64` matrix rounded into the `i64` one on the way in, and heap keys coerced to `String` — a `HeapItem` that is not already a `String` goes through a Rust debug format, which is lossy and reversible by nothing. `0x03 0x00` shares none of that: its matrix travels at the metadata's `counter_type` and its keys travel as the exact `HeapItem` variant `key_type` names.
-
 ### 3.8: DDSketch payload (`0x05 0x00`)
 
 `DDSketch` maps a positive value to the logarithmic bucket index `floor(ln(v) / ln(gamma))` and keeps a dense count per bucket. The relative accuracy `alpha` is its one construction parameter and lives in the metadata, so the payload is the bucket store plus the running scalars the buckets do not determine:
