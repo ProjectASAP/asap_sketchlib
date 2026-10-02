@@ -800,29 +800,6 @@ impl HydraCounterType {
         }
     }
 }
-/// CocoSketchState is the portable state of a CocoSketch flow-size estimator.
-///
-/// The bucket table is stored flat in row-major order (d rows × width cols).
-/// Element [r][c] is at index r * width + c.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CocoSketchState {
-    /// Number of hash rows.
-    #[prost(uint32, tag = "1")]
-    pub d: u32,
-    /// Number of buckets per row.
-    #[prost(uint32, tag = "2")]
-    pub width: u32,
-    /// Full hash stored in each bucket, length = d * width.
-    /// Zero means the bucket is empty (has_keys\[i\] == false).
-    #[prost(uint64, repeated, tag = "3")]
-    pub hashes: ::prost::alloc::vec::Vec<u64>,
-    /// Cumulative count value per bucket, length = d * width.
-    #[prost(uint64, repeated, tag = "4")]
-    pub vals: ::prost::alloc::vec::Vec<u64>,
-    /// Whether each bucket holds a valid key entry, length = d * width.
-    #[prost(bool, repeated, tag = "5")]
-    pub has_keys: ::prost::alloc::vec::Vec<bool>,
-}
 /// ElasticState is the portable state of an Elastic Sketch.
 ///
 /// The Elastic Sketch has a heavy part (one bucket per index) and a light
@@ -892,7 +869,7 @@ pub struct SketchEnvelope {
     /// The sketch payload. Exactly one field must be set.
     #[prost(
         oneof = "sketch_envelope::SketchState",
-        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "10, 11, 12, 13, 14, 15, 16, 18"
     )]
     pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
 }
@@ -915,8 +892,6 @@ pub mod sketch_envelope {
         Univmon(super::UnivMonState),
         #[prost(message, tag = "16")]
         Hydra(super::HydraState),
-        #[prost(message, tag = "17")]
-        Coco(super::CocoSketchState),
         #[prost(message, tag = "18")]
         Elastic(super::ElasticState),
     }
