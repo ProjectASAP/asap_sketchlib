@@ -1,13 +1,11 @@
-//! Property tests for DDSketch: the native sketch and the portable `DdSketch`
-//! that carries it over the wire.
+//! Property tests for DDSketch.
 //!
 //! Masson, Rim, Lee, VLDB '19. The model is the paper's relative-error
 //! guarantee, not a transcription of the bucket arithmetic: an answer sits
 //! within a relative alpha of the exact order statistic of the stream.
 
 use crate::support::{QUANTILES, extreme_values};
-use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::{DDSketch, DdSketch};
+use asap_sketchlib::DDSketch;
 use proptest::prelude::*;
 
 const QUANTILE_PROBES: [f64; 7] = [0.0, 0.01, 0.25, 0.5, 0.75, 0.99, 1.0];
@@ -74,14 +72,6 @@ fn dd_of(alpha: f64, values: &[f64]) -> DDSketch {
     s
 }
 
-fn portable_of(alpha: f64, values: &[f64]) -> DdSketch {
-    let mut s = DdSketch::new(alpha);
-    for v in values {
-        s.update(*v);
-    }
-    s
-}
-
 fn sorted(values: &[f64]) -> Vec<f64> {
     let mut v = values.to_vec();
     v.sort_by(|a, b| a.partial_cmp(b).expect("the generator excludes NaN"));
@@ -123,24 +113,6 @@ proptest! {
         prop_assert_eq!(sketch.get_count(), values.len() as u64, "total count");
     }
 
-    #[test]
-    fn ddsketch_portable_keeps_negative_and_zero_observations(
-        alpha in alpha(),
-        values in signed_values(120),
-    ) {
-        let sketch = portable_of(alpha, &values);
-        let negatives = values.iter().filter(|v| **v < 0.0).count() as u64;
-        let zeros = values.iter().filter(|v| **v == 0.0).count() as u64;
-        let positives = values.iter().filter(|v| **v > 0.0).count() as u64;
-
-        prop_assert_eq!(
-            sketch.negative_store_counts.iter().sum::<u64>(), negatives, "negative store"
-        );
-        prop_assert_eq!(sketch.zero_count, zeros, "zero bucket");
-        prop_assert_eq!(sketch.store_counts.iter().sum::<u64>(), positives, "positive store");
-        prop_assert_eq!(sketch.total_count(), values.len() as u64, "total count");
-    }
-
     /// `sum` is carried on the wire and read back through `sum()`, so it is
     /// the running total of the stream, not an estimate off the buckets.
     #[test]
@@ -159,7 +131,7 @@ proptest! {
     }
 
     /// The first dense allocation is one `GROW_CHUNK` centred on the value's
-    /// bucket, in both implementations and in both signed stores. The layout
+    /// bucket, in both signed stores. The layout
     /// reaches the wire as `store_counts` / `store_offset`, where the Go
     /// producer's bytes have to match it for the same input.
     #[test]
@@ -168,13 +140,10 @@ proptest! {
         value in 1e-6f64..1e9,
     ) {
         let native = dd_of(alpha, &[value, -value]);
-        let portable = portable_of(alpha, &[value, -value]);
 
         for (label, counts) in [
-            ("native positive", native.store_counts()),
-            ("native negative", native.negative_store_counts()),
-            ("portable positive", portable.store_counts.as_slice()),
-            ("portable negative", portable.negative_store_counts.as_slice()),
+            ("positive", native.store_counts()),
+            ("negative", native.negative_store_counts()),
         ] {
             prop_assert_eq!(counts.len(), GROW_CHUNK, "{} store width", label);
             prop_assert_eq!(counts[GROW_CHUNK_CENTRE], 1, "{} store centre", label);
@@ -259,27 +228,6 @@ proptest! {
         }
     }
 
-    /// The portable twin answers the floor(q*(n-1)) order statistic, and it
-    /// carries no min/max, so the bound applies at every q including 0 and 1.
-    #[test]
-    fn ddsketch_portable_signed_answers_stay_within_alpha_of_the_exact_order_statistic(
-        alpha in alpha(),
-        values in signed_values(50),
-    ) {
-        let sketch = portable_of(alpha, &values);
-        let ordered = sorted(&values);
-
-        for q in probe_quantiles(40) {
-            let want = ordered[(q * (ordered.len() - 1) as f64).floor() as usize];
-            let got = sketch.quantile(q).expect("a non-empty sketch answers");
-            prop_assert!(
-                (got - want).abs() <= want.abs() * (alpha + 1e-12),
-                "alpha={} q={} n={}: got {}, exact order statistic {}",
-                alpha, q, ordered.len(), got, want
-            );
-        }
-    }
-
     // ===== Merge =====
 
     #[test]
@@ -288,25 +236,25 @@ proptest! {
         a in maybe_signed_values(40),
         b in maybe_signed_values(40),
     ) {
-        let mut ab = portable_of(alpha, &a);
-        ab.merge(&portable_of(alpha, &b)).expect("merge");
-        let mut ba = portable_of(alpha, &b);
-        ba.merge(&portable_of(alpha, &a)).expect("merge");
+        let mut ab = dd_of(alpha, &a);
+        ab.merge(&dd_of(alpha, &b)).expect("merge");
+        let mut ba = dd_of(alpha, &b);
+        ba.merge(&dd_of(alpha, &a)).expect("merge");
 
-        prop_assert_eq!(ab.total_count(), (a.len() + b.len()) as u64);
-        prop_assert_eq!(ab.total_count(), ba.total_count());
-        prop_assert_eq!(&ab.store_counts, &ba.store_counts);
-        prop_assert_eq!(ab.store_offset, ba.store_offset);
-        prop_assert_eq!(&ab.negative_store_counts, &ba.negative_store_counts);
-        prop_assert_eq!(ab.negative_store_offset, ba.negative_store_offset);
-        prop_assert_eq!(ab.zero_count, ba.zero_count);
+        prop_assert_eq!(ab.get_count(), (a.len() + b.len()) as u64);
+        prop_assert_eq!(ab.get_count(), ba.get_count());
+        prop_assert_eq!(ab.store_counts(), ba.store_counts());
+        prop_assert_eq!(ab.store_offset(), ba.store_offset());
+        prop_assert_eq!(ab.negative_store_counts(), ba.negative_store_counts());
+        prop_assert_eq!(ab.negative_store_offset(), ba.negative_store_offset());
+        prop_assert_eq!(ab.zero_count(), ba.zero_count());
         prop_assert_eq!(
-            ab.zero_count,
+            ab.zero_count(),
             a.iter().chain(&b).filter(|v| **v == 0.0).count() as u64,
             "the merged zero bucket"
         );
         prop_assert_eq!(
-            ab.negative_store_counts.iter().sum::<u64>(),
+            ab.negative_store_counts().iter().sum::<u64>(),
             a.iter().chain(&b).filter(|v| **v < 0.0).count() as u64,
             "the merged negative store"
         );
@@ -340,8 +288,8 @@ proptest! {
     }
 
     /// Two alphas are two index mappings, so the bucket indices of one sketch
-    /// mean nothing under the other's gamma. Both implementations refuse the
-    /// merge and leave the receiver as it was.
+    /// mean nothing under the other's gamma. The merge is refused and leaves
+    /// the receiver as it was.
     #[test]
     fn ddsketch_merge_refuses_a_different_index_mapping(
         alpha in alpha(),
@@ -357,13 +305,6 @@ proptest! {
         );
         prop_assert_eq!(native.get_count(), values.len() as u64, "refused merge changed the count");
 
-        let mut portable = portable_of(alpha, &values);
-        prop_assert!(
-            portable.merge(&portable_of(other_alpha, &values)).is_err(),
-            "portable alpha {} merged a sketch built with alpha {}", alpha, other_alpha
-        );
-        prop_assert_eq!(portable.total_count(), values.len() as u64, "refused merge changed the count");
-
         prop_assert!(
             dd_of(alpha, &values).merge(&dd_of(alpha, &values)).is_ok(),
             "a shared mapping must still merge"
@@ -377,19 +318,20 @@ proptest! {
         alpha in alpha(),
         values in maybe_signed_values(120),
     ) {
-        let s = portable_of(alpha, &values);
+        let s = dd_of(alpha, &values);
 
-        let bytes = s.to_msgpack().expect("encode");
-        let restored = DdSketch::from_msgpack(&bytes).expect("decode");
+        let bytes = s.serialize_to_bytes().expect("encode");
+        let restored = DDSketch::deserialize_from_bytes(&bytes).expect("decode");
 
-        prop_assert_eq!(restored.total_count(), s.total_count());
-        prop_assert_eq!(&restored.store_counts, &s.store_counts);
-        prop_assert_eq!(restored.store_offset, s.store_offset);
-        prop_assert_eq!(&restored.negative_store_counts, &s.negative_store_counts);
-        prop_assert_eq!(restored.negative_store_offset, s.negative_store_offset);
-        prop_assert_eq!(restored.zero_count, s.zero_count);
+        prop_assert_eq!(restored.get_count(), s.get_count());
+        prop_assert_eq!(restored.store_counts(), s.store_counts());
+        prop_assert_eq!(restored.store_offset(), s.store_offset());
+        prop_assert_eq!(restored.negative_store_counts(), s.negative_store_counts());
+        prop_assert_eq!(restored.negative_store_offset(), s.negative_store_offset());
+        prop_assert_eq!(restored.zero_count(), s.zero_count());
+        prop_assert_eq!(restored.sum().to_bits(), s.sum().to_bits());
         for q in QUANTILE_PROBES {
-            prop_assert_eq!(restored.quantile(q), s.quantile(q), "q={}", q);
+            prop_assert_eq!(restored.get_value_at_quantile(q), s.get_value_at_quantile(q), "q={}", q);
         }
     }
 

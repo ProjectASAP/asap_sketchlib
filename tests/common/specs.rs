@@ -996,21 +996,14 @@ pub fn breakpoint_rank_interval_distance(estimated: &[(f64, f64)], sorted_truth:
 // DDSketch: relative value error
 // ---------------------------------------------------------------------------
 
-/// Which order statistic a DDSketch implementation answers a quantile query
-/// with. The two shipped implementations do not agree, and the truth a test
-/// compares against has to follow the implementation it is testing.
+/// Which order statistic a DDSketch answers a quantile query with; the truth
+/// a test compares against follows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DdRankConvention {
     /// `DDSketch::get_value_at_quantile`: `rank = ceil(q * n)`, 1-based, so the
     /// answer is `sorted[ceil(q*n) - 1]`. `q = 0` and `q = 1` short-circuit to
     /// the exact stored minimum and maximum.
     CeilNearestRank,
-    /// Portable `DdSketch::quantile`: `target = floor(q * (n - 1))`, 0-based,
-    /// so the answer is `sorted[floor(q*(n-1))]` — the lower-quantile
-    /// convention of the DDSketch paper and of DataDog's reference
-    /// implementation. No exact minimum or maximum is retained, so the
-    /// endpoints are bucket representatives like any other rank.
-    LowerFloor,
 }
 
 impl DdRankConvention {
@@ -1024,7 +1017,6 @@ impl DdRankConvention {
         let q = q.clamp(0.0, 1.0);
         match self {
             DdRankConvention::CeilNearestRank => (((q * n as f64).ceil() as usize).clamp(1, n)) - 1,
-            DdRankConvention::LowerFloor => ((q * (n - 1) as f64).floor() as usize).min(n - 1),
         }
     }
 
@@ -1036,7 +1028,6 @@ impl DdRankConvention {
     pub fn name(self) -> &'static str {
         match self {
             DdRankConvention::CeilNearestRank => "ceil(q*n) nearest-rank",
-            DdRankConvention::LowerFloor => "floor(q*(n-1)) lower-quantile",
         }
     }
 }
@@ -1045,8 +1036,7 @@ impl DdRankConvention {
 ///
 /// DDSketch's guarantee is on the *value*, not the rank: the returned estimate
 /// for the `q`-quantile must be within `alpha` relative error of the exact
-/// order statistic **at the same `q` under that implementation's own rank
-/// convention**:
+/// order statistic **at the same `q` under the sketch's rank convention**:
 ///
 /// ```text
 ///   |est - true| / |true| <= alpha + numerical_slack(true)
@@ -1078,14 +1068,6 @@ impl RelativeQuantileSpec {
         Self {
             alpha,
             convention: DdRankConvention::CeilNearestRank,
-        }
-    }
-
-    /// A spec for the portable `DdSketch`.
-    pub fn portable(alpha: f64) -> Self {
-        Self {
-            alpha,
-            convention: DdRankConvention::LowerFloor,
         }
     }
 

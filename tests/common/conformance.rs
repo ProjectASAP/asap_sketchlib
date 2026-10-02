@@ -429,10 +429,8 @@ where
 /// interchangeable: a rank band says nothing about DDSketch's promise, and a
 /// relative-value band says nothing about KLL's.
 ///
-/// The order statistic compared against comes from the spec's own
-/// `DdRankConvention`, so a core `DDSketch` (`ceil(q*n)`) and the portable
-/// `DdSketch` (`floor(q*(n-1))`) are each scored on the question they actually
-/// answer.
+/// The order statistic compared against comes from the spec's
+/// `DdRankConvention`.
 pub fn relative_quantile_battery<S, F>(
     sketch: &str,
     new_sketch: F,

@@ -66,6 +66,9 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **DDSketch ASAPv1 golden fixtures**: `ddsketch_positive_a001` (metadata
+  version 1) and `ddsketch_signed_a001` (metadata version 2, negative store and
+  zero count), checked by `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -87,6 +90,18 @@ signals a backwards-compatible change.
   is retained; `TumblingWindow::insert` closes a period that saw no arrivals
   as an empty window like any other, and that window takes a place in
   `max_windows`.
+
+### Removed
+
+- **DDSketch's protobuf and portable formats.** DDSketch serializes through
+  ASAPv1 only (`DDSketch::serialize_to_bytes` / `deserialize_from_bytes`).
+  Removed: `proto/ddsketch/ddsketch.proto` and the generated
+  `proto::sketchlib::{DdSketchState, DdSketchDelta, DdSketchBucketDelta}`;
+  `SketchEnvelope`'s `ddsketch` field (14), now reserved;
+  `message_pack_format::portable::ddsketch` (`DdSketch`, `DdSketchDelta`,
+  `DDSKETCH_GROW_CHUNK`, `MAX_APPLY_DELTA_SPAN_BUCKETS`) and the crate-root
+  re-exports of the first three; the `MessagePackCodec` impl for `DDSketch`.
+  There is no ASAPv1 DDSketch delta.
 
 ### Fixed
 

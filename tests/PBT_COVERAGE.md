@@ -2,8 +2,8 @@
 
 One `proptest` law per line. Each compares the sketch against an answer
 computed without it; what that answer is comes first in every section. One
-file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 367 laws;
-with `--all-features`, 435, adding the four **experimental** modules. Every
+file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 365 laws;
+with `--all-features`, 433, adding the four **experimental** modules. Every
 law was mutation-checked: break the implementation, the law goes red. Shared
 generators, `grid` and `round_trip!` live in `support.rs`.
 
@@ -105,25 +105,24 @@ Compared against: a key's `(col, sign)` per row, read off a one-key sketch; the 
   - msgpack keeps cells and estimates
   - ASAPv1 keeps 64 estimates; `edge_rows` x `edge_dimension`
 
-## ddsketch.rs — 14
+## ddsketch.rs — 12
 
-Compared against: the sorted stream. `DDSketch::get_value_at_quantile` targets the `ceil(q*n)`-th value, portable `DdSketch::quantile` the `floor(q*(n-1))`-th. Streams carry negatives, zeros and positives inside the indexable band.
+Compared against: the sorted stream. `DDSketch::get_value_at_quantile` targets the `ceil(q*n)`-th value. Streams carry negatives, zeros and positives inside the indexable band.
 
 - placement
   - negative store, zero counter, positive store hold exactly the three class counts; `get_count() == arrivals`
-  - portable `DdSketch`: the same three counts
   - `sum() == stream sum`, bit for bit
-  - first dense allocation: one 128-bucket chunk, seed value at its center; both impls, both signed stores
+  - first dense allocation: one 128-bucket chunk, seed value at its center; both signed stores
 - relative error `<= alpha`
-  - `|quantile(q) - exact| <= alpha * |exact|`, across the sign boundary, both impls
+  - `|quantile(q) - exact| <= alpha * |exact|`, across the sign boundary
   - `quantile(q)` non-decreasing in `q`, across the sign boundary
   - single value `v`: `quantile(q) == v` for every `q`; `min`, `max`, `q=0`, `q=1` equal the tracked extremes
 - merge
   - counts add; both stores, both offsets, zero counter identical either way round
   - merged `quantile(q)` within `alpha` of the combined stream's exact value
-  - different `alpha`: refused, receiver count unchanged, both impls; same `alpha`: merges
+  - different `alpha`: refused, receiver count unchanged; same `alpha`: merges
 - wire
-  - msgpack keeps stores, offsets, zero count, quantiles
+  - ASAPv1 keeps stores, offsets, zero count, `sum`, quantiles
   - ASAPv1 keeps count, `alpha`, `sum`, quantiles; stream of NaN, ±inf, ±0, f64 extremes
 
 ## elastic.rs — 12

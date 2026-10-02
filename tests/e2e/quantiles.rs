@@ -31,19 +31,17 @@
 //!
 //! DDSketch's guarantee is deterministic — bucket width alone, no hash and no
 //! sampling — so its batteries tolerate zero violations and no statistical
-//! model applies. The two shipped implementations answer a quantile query with
-//! **different order statistics**, so each is compared against the truth for
-//! its own convention; see `DdRankConvention`.
+//! model applies. Its truth is the `ceil(q*n)` order statistic; see
+//! `DdRankConvention`.
 
 use crate::common;
 
-use common::specs::{DdRankConvention, KllRankSpec, RelativeQuantileSpec, Tally, rank_error};
+use common::specs::{KllRankSpec, RelativeQuantileSpec, Tally, rank_error};
 use common::{
     NumericTruth, assert_between, duplicate_heavy_f64, exponential_f64, log_uniform_f64,
     monotonic_f64, normal_f64, outside_in_ordering, uniform_u64, zipf_f64,
 };
 
-use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::{
     DDSketch, DataInput, KLL, KLLConfig, KLLDynamic, TumblingWindow, UnivMonQ, UnivMonQConfig,
@@ -587,37 +585,26 @@ fn dds_streams(alpha: f64, n: usize, seed: u64) -> Vec<(&'static str, Vec<f64>)>
     ]
 }
 
-/// DDSketch's relative-value-error guarantee, for the core sketch and the
-/// portable wire twin, at every supported alpha.
-///
-/// Each implementation is compared against the exact order statistic **of its
-/// own rank convention**: `DDSketch::get_value_at_quantile` answers
-/// `sorted[ceil(q*n) - 1]`, while the portable `DdSketch::quantile` answers
-/// `sorted[floor(q*(n-1))]`. They are different questions (see
-/// `ddsketch_core_and_portable_answer_different_order_statistics`), so a single
-/// truth helper would score one of them against the other one's question and
-/// quietly absorb the difference into `alpha`.
+/// DDSketch's relative-value-error guarantee at every supported alpha,
+/// against the exact order statistic `DDSketch::get_value_at_quantile`
+/// answers: `sorted[ceil(q*n) - 1]`.
 ///
 /// The tolerance is `alpha + numerical_slack`, where the slack is a few ULP of
 /// the logarithmic mapping — never a percentage of alpha, which would license
 /// breaking the advertised guarantee by that percentage.
 #[test]
-fn ddsketch_core_and_portable_satisfy_the_relative_value_error_contract() {
+fn ddsketch_satisfies_the_relative_value_error_contract() {
     const SAMPLE_SIZES: [usize; 3] = [1_000, 20_000, 100_000];
 
     for &alpha in &DDS_ALPHAS {
         let core_spec = RelativeQuantileSpec::core(alpha);
-        let port_spec = RelativeQuantileSpec::portable(alpha);
         let mut core_tally = Tally::default();
-        let mut port_tally = Tally::default();
         for (i, &n) in SAMPLE_SIZES.iter().enumerate() {
             let seed = 3_005_000u64 + i as u64 * 101 + (alpha * 1e6) as u64;
             for (label, values) in dds_streams(alpha, n, seed) {
                 let mut core = DDSketch::new(alpha);
-                let mut port = PortableDds::new(alpha);
                 for v in &values {
                     core.add(v);
-                    port.update(*v);
                 }
                 let truth = NumericTruth::new(values.clone());
                 assert_eq!(
@@ -625,16 +612,8 @@ fn ddsketch_core_and_portable_satisfy_the_relative_value_error_contract() {
                     truth.len(),
                     "{label} alpha={alpha} n={n} seed={seed}: core dropped samples"
                 );
-                assert_eq!(
-                    port.total_count() as usize,
-                    truth.len(),
-                    "{label} alpha={alpha} n={n} seed={seed}: portable dropped samples"
-                );
                 core_spec.tally_into(&mut core_tally, truth.sorted(), &DDS_QS, |q| {
                     core.get_value_at_quantile(q)
-                });
-                port_spec.tally_into(&mut port_tally, truth.sorted(), &DDS_QS, |q| {
-                    port.quantile(q)
                 });
             }
         }
@@ -649,126 +628,20 @@ fn ddsketch_core_and_portable_satisfy_the_relative_value_error_contract() {
                 .collect::<Vec<_>>()
         );
         core_tally.assert_none(&format!("core DDSketch alpha={alpha}"), &context);
-        port_tally.assert_none(&format!("portable DdSketch alpha={alpha}"), &context);
     }
 }
 
-/// The two implementations answer a quantile query with **different order
-/// statistics**, and this pins the divergence rather than letting `alpha`
-/// absorb it.
-///
-/// - `DDSketch::get_value_at_quantile` uses `rank = ceil(q * n)`, 1-based.
-/// - Portable `DdSketch::quantile` uses `target = floor(q * (n - 1))`, 0-based
-///   — the lower-quantile convention of the DDSketch paper and of DataDog's
-///   reference implementation, which is also what the wire format's Go twin
-///   answers.
-///
-/// **The decision taken here is to keep both.** The portable type exists to be
-/// byte- and answer-compatible with `sketchlib-go`, so its convention is fixed
-/// by an external contract; the core type's `ceil` convention is what its own
-/// callers have been reading for the life of the API, and it is what lets `q=0`
-/// and `q=1` return the exactly retained minimum and maximum. Changing either
-/// silently moves numbers under existing callers, and the divergence is only
-/// observable at small `n` or ragged `q` — precisely the cases pinned below.
-/// What is *not* acceptable is leaving it undocumented, or scoring both against
-/// one truth helper, which is what the previous revision did.
-///
-/// The probes are chosen so the two formulas disagree: at `n = 3, q = 0.4` the
-/// core answers `sorted[1]` and the portable `sorted[0]`.
+/// The sketch tracks the exact minimum and maximum beside the bucket store, and
+/// `get_value_at_quantile` short-circuits `q <= 0` and `q >= 1` to them, so its
+/// endpoints are exact.
 #[test]
-fn ddsketch_core_and_portable_answer_different_order_statistics() {
-    // (n, q, expected core 0-based index, expected portable 0-based index)
-    const PROBES: [(usize, f64, usize, usize); 8] = [
-        (3, 0.4, 1, 0),
-        (4, 0.34, 1, 1),
-        (4, 0.3, 1, 0),
-        (7, 0.2, 1, 1),
-        (7, 0.6, 4, 3),
-        (5, 0.5, 2, 2),
-        (10, 0.25, 2, 2),
-        (10, 0.15, 1, 1),
-    ];
-
-    // Values one bucket apart at the coarsest alpha, so a one-rank difference
-    // is a different bucket and therefore a different answer — not two ranks
-    // that happen to share a representative.
-    const ALPHA: f64 = 0.01;
-    let gamma = (1.0 + ALPHA) / (1.0 - ALPHA);
-
-    let mut disagreements = 0usize;
-    for &(n, q, core_idx, port_idx) in &PROBES {
-        let values: Vec<f64> = (0..n).map(|i| 100.0 * gamma.powi(3 * i as i32)).collect();
-        let sorted = values.clone();
-
-        assert_eq!(
-            DdRankConvention::CeilNearestRank.index(n, q),
-            core_idx,
-            "core convention ceil(q*n)-1 at n={n} q={q}"
-        );
-        assert_eq!(
-            DdRankConvention::LowerFloor.index(n, q),
-            port_idx,
-            "portable convention floor(q*(n-1)) at n={n} q={q}"
-        );
-
-        let mut core = DDSketch::new(ALPHA);
-        let mut port = PortableDds::new(ALPHA);
-        for v in &values {
-            core.add(v);
-            port.update(*v);
-        }
-
-        let core_spec = RelativeQuantileSpec::core(ALPHA);
-        let port_spec = RelativeQuantileSpec::portable(ALPHA);
-        let core_est = core.get_value_at_quantile(q).expect("non-empty");
-        let port_est = port.quantile(q).expect("non-empty");
-
-        if let Err(detail) = core_spec.check(q, core_est, sorted[core_idx]) {
-            panic!("core DDSketch n={n} q={q}: {detail}");
-        }
-        if let Err(detail) = port_spec.check(q, port_est, sorted[port_idx]) {
-            panic!("portable DdSketch n={n} q={q}: {detail}");
-        }
-
-        if core_idx != port_idx {
-            disagreements += 1;
-            // Each implementation must be answering *its own* order statistic,
-            // so the two answers must differ here: if they agreed, one of them
-            // would have silently changed convention.
-            assert!(
-                core_est != port_est,
-                "n={n} q={q}: the conventions pick different order statistics \
-                 ({core_idx} vs {port_idx}) but both returned {core_est}"
-            );
-        }
-    }
-    assert!(
-        disagreements >= 3,
-        "the probe set must contain cases where the two conventions genuinely \
-         disagree; only {disagreements} did"
-    );
-}
-
-/// Endpoint behaviour, which is **not** the same on the two implementations.
-///
-/// - The core sketch tracks the exact minimum and maximum beside the bucket
-///   store, and `get_value_at_quantile` short-circuits `q <= 0` and `q >= 1` to
-///   them. Its endpoints are therefore *exact*, with zero error.
-/// - The portable sketch carries no min/max scalars at all — they were removed
-///   from the wire — so its endpoints are ordinary bucket representatives and
-///   are only guaranteed within `alpha`. The previous revision of this test
-///   claimed it "clamps its bucket representative into [min, max], so its
-///   endpoints are exact too", which is not what the code does.
-#[test]
-fn ddsketch_core_endpoints_are_exact_and_portable_endpoints_are_alpha_relative() {
+fn ddsketch_endpoints_are_exact() {
     for &alpha in &DDS_ALPHAS {
         let values = log_uniform_f64(5_000, (1.0 + alpha) / (1.0 - alpha), 3..30, 4_242);
         let truth = NumericTruth::new(values.clone());
         let mut core = DDSketch::new(alpha);
-        let mut port = PortableDds::new(alpha);
         for v in &values {
             core.add(v);
-            port.update(*v);
         }
         assert_eq!(
             core.get_value_at_quantile(0.0),
@@ -790,17 +663,6 @@ fn ddsketch_core_endpoints_are_exact_and_portable_endpoints_are_alpha_relative()
             Some(truth.max()),
             "core alpha={alpha}: max() must be exact"
         );
-
-        // The portable twin holds only buckets, so its endpoints get the same
-        // relative-value guarantee as any other quantile and nothing more.
-        let spec = RelativeQuantileSpec::portable(alpha);
-        let (p0, p1) = (port.quantile(0.0).unwrap(), port.quantile(1.0).unwrap());
-        if let Err(detail) = spec.check(0.0, p0, truth.min()) {
-            panic!("portable alpha={alpha} at q=0: {detail}");
-        }
-        if let Err(detail) = spec.check(1.0, p1, truth.max()) {
-            panic!("portable alpha={alpha} at q=1: {detail}");
-        }
     }
 }
 
@@ -813,11 +675,7 @@ fn ddsketch_core_endpoints_are_exact_and_portable_endpoints_are_alpha_relative()
 fn ddsketch_satisfies_the_relative_error_contract_at_bucket_boundaries() {
     for &alpha in &DDS_ALPHAS {
         let gamma = (1.0 + alpha) / (1.0 - alpha);
-        // A one-sample sketch answers every q with that one sample, so the two
-        // rank conventions coincide here by construction (both index 0) and the
-        // probe isolates the mapping from any rank effect.
         let core_spec = RelativeQuantileSpec::core(alpha);
-        let port_spec = RelativeQuantileSpec::portable(alpha);
         for k in [-40i32, -7, 0, 1, 13, 60, 200] {
             let edge = gamma.powi(k);
             if edge <= 0.0 || !edge.is_finite() {
@@ -832,9 +690,7 @@ fn ddsketch_satisfies_the_relative_error_contract_at_bucket_boundaries() {
             ];
             for probe in probes {
                 let mut core = DDSketch::new(alpha);
-                let mut port = PortableDds::new(alpha);
                 core.add(&probe);
-                port.update(probe);
                 if core.get_count() == 0 {
                     continue; // outside the indexable range at this alpha
                 }
@@ -843,10 +699,6 @@ fn ddsketch_satisfies_the_relative_error_contract_at_bucket_boundaries() {
                 let est = core.get_value_at_quantile(0.5).unwrap();
                 if let Err(detail) = core_spec.check(0.5, est, probe) {
                     panic!("core DDSketch alpha={alpha} gamma^{k} boundary probe: {detail}");
-                }
-                let pest = port.quantile(0.5).unwrap();
-                if let Err(detail) = port_spec.check(0.5, pest, probe) {
-                    panic!("portable DdSketch alpha={alpha} gamma^{k} boundary probe: {detail}");
                 }
             }
         }
@@ -858,13 +710,11 @@ fn ddsketch_satisfies_the_relative_error_contract_at_bucket_boundaries() {
 /// guarantee is stated over.
 #[test]
 fn ddsketch_merge_and_delta_replay_preserve_the_relative_error_contract() {
-    use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketchDelta;
     use asap_sketchlib::octo_delta::DdDelta;
 
     const N: usize = 40_000;
     for &alpha in &DDS_ALPHAS {
         let spec = RelativeQuantileSpec::core(alpha);
-        let port_spec = RelativeQuantileSpec::portable(alpha);
         let values = zipf_f64(N, 8_192, 1.1, 1e3, 1e7, 7_654_321 + (alpha * 1e5) as u64);
         let truth = NumericTruth::new(values.clone());
 
@@ -924,49 +774,6 @@ fn ddsketch_merge_and_delta_replay_preserve_the_relative_error_contract() {
         });
         replay_tally.assert_none(
             &format!("core DDSketch alpha={alpha} rebuilt from bucket deltas"),
-            &format!(
-                "zipf n={N} over [1e3, 1e7], interior q grid {:?}",
-                &DDS_QS[1..6]
-            ),
-        );
-
-        // Portable side: merge, then a delta carrying the same buckets.
-        let mut pa = PortableDds::new(alpha);
-        let mut pb = PortableDds::new(alpha);
-        for (i, v) in values.iter().enumerate() {
-            if i % 2 == 0 {
-                pa.update(*v);
-            } else {
-                pb.update(*v);
-            }
-        }
-        pa.merge(&pb).expect("same-alpha portable merge");
-        let mut port_tally = Tally::default();
-        port_spec.tally_into(&mut port_tally, truth.sorted(), &DDS_QS, |q| pa.quantile(q));
-        port_tally.assert_none(
-            &format!("portable DdSketch alpha={alpha} after merge"),
-            &format!("zipf n={N} over [1e3, 1e7]"),
-        );
-
-        let mut pr = PortableDds::new(alpha);
-        let delta = DdSketchDelta {
-            buckets: pa
-                .store_counts
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| **c > 0)
-                .map(|(i, c)| (pa.store_offset + i as i32, *c))
-                .collect(),
-            d_count: pa.total_count() as i64,
-            ..DdSketchDelta::default()
-        };
-        pr.apply_delta(&delta).expect("benign delta");
-        let mut pr_tally = Tally::default();
-        port_spec.tally_into(&mut pr_tally, truth.sorted(), &DDS_QS[1..6], |q| {
-            pr.quantile(q)
-        });
-        pr_tally.assert_none(
-            &format!("portable DdSketch alpha={alpha} rebuilt from a delta"),
             &format!(
                 "zipf n={N} over [1e3, 1e7], interior q grid {:?}",
                 &DDS_QS[1..6]
@@ -1622,19 +1429,17 @@ fn portable_hydra_kll_per_key_medians_satisfy_the_rank_characterization() {
 // ------------------------------------------- DDSketch input rejection
 
 /// Structural guards, not accuracy: values the mapping cannot index and
-/// deltas spanning an implausible bucket range must be rejected without
-/// corrupting state. No error bound applies to any of it.
+/// merges across mappings must be rejected without corrupting state. No error
+/// bound applies to any of it.
 #[test]
 fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
     let alpha = 0.01;
     let mut core = DDSketch::new(alpha);
-    let mut port = PortableDds::new(alpha);
 
-    // Non-finite / above-maximum-magnitude values must be
-    // dropped by BOTH implementations: silently, without corrupting bucket 0
-    // (NaN floor-casts to 0) and without letting one sample force a distant-
-    // bucket allocation (unguarded, f64::MAX maps ~35k buckets away at
-    // alpha=0.01 — ~277 KiB of amplification per sample, scaling with 1/lnγ).
+    // Non-finite / above-maximum-magnitude values are dropped silently,
+    // without corrupting bucket 0 (NaN floor-casts to 0) and without letting
+    // one sample force a distant-bucket allocation (unguarded, f64::MAX maps
+    // ~35k buckets away at alpha=0.01).
     for v in [
         f64::NAN,
         f64::NEG_INFINITY,
@@ -1643,31 +1448,27 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
         1e308,
     ] {
         core.add(&v);
-        port.update(v);
     }
     assert_eq!(core.get_count(), 0, "core must drop untrackable extremes");
-    assert_eq!(
-        port.total_count(),
-        0,
-        "portable must drop untrackable extremes"
-    );
     assert!(
-        port.store_counts.len() < 10_000,
-        "portable store grew to {} buckets from untrackable input",
-        port.store_counts.len()
+        core.store_counts().is_empty(),
+        "store grew to {} buckets from untrackable input",
+        core.store_counts().len()
     );
-    assert_eq!(port.quantile(0.5), None, "nothing trackable was added");
+    assert_eq!(
+        core.get_value_at_quantile(0.5),
+        None,
+        "nothing trackable was added"
+    );
 
     // Normal samples still work after the rejected inputs.
     let good = [1.0f64, 2.0, 4.0, 8.0, 16.0];
     for v in good {
         core.add(&v);
-        port.update(v);
     }
     assert_eq!(core.get_count(), 5);
-    assert_eq!(port.total_count(), 5);
     assert_between(
-        port.store_counts.len() as f64,
+        core.store_counts().len() as f64,
         1.0,
         2.0 * 256.0, // initial GROW_CHUNK seed + at most one more
         "store stays compact",
@@ -1675,46 +1476,30 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
 
     // Boundary acceptance: values just INSIDE the indexable range must still
     // be tracked, so the guards reject only genuinely unmappable extremes.
-    // Bounds come from the shared production helper — core and portable MUST
-    // agree because they compute from the same function.
     let (min_idx, max_idx) = asap_sketchlib::sketches::ddsketch::ddsketch_indexable_bounds(alpha);
 
-    let mut port_boundary = PortableDds::new(alpha);
     let mut core_boundary = DDSketch::new(alpha);
     let just_inside_min = min_idx * (1.0 + 1e-9); // a hair above the floor
     let just_inside_max = max_idx * (1.0 - 1e-9); // a hair below the ceiling
-    port_boundary.update(just_inside_min);
-    port_boundary.update(just_inside_max);
     core_boundary.add(&just_inside_min);
     core_boundary.add(&just_inside_max);
     assert_eq!(
-        port_boundary.total_count(),
+        core_boundary.get_count(),
         2,
         "in-range extremes near boundaries must be kept"
     );
-    assert_eq!(core_boundary.get_count(), 2, "core boundary agreement");
-    assert_eq!(port_boundary.total_count(), core_boundary.get_count());
 
     // Below the minimum counts as zero; above the maximum is rejected.
-    port_boundary.update(min_idx * 0.5);
-    port_boundary.update(max_idx * (1.0 + 1e-6));
     core_boundary.add(&(min_idx * 0.5));
-    assert_eq!(
-        port_boundary.total_count(),
-        3,
-        "sub-indexable neighbor enters zero bucket"
-    );
+    core_boundary.add(&(max_idx * (1.0 + 1e-6)));
     assert_eq!(
         core_boundary.get_count(),
         3,
         "core retains sub-indexable neighbor as zero"
     );
-
-    assert_eq!(port_boundary.zero_count, 1);
     assert_eq!(core_boundary.zero_count(), 1);
 
-    // Item 2 contract: mismatched mappings are a runtime error in BOTH types,
-    // not a debug-only assertion.
+    // Mismatched mappings are a runtime error, not a debug-only assertion.
     let other_alpha = 0.05;
     let mut core_other = DDSketch::new(other_alpha);
     core_other.add(&1.0);
@@ -1722,79 +1507,20 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
         core.merge(&core_other).is_err(),
         "core merge must reject alpha mismatch"
     );
-    let mut port_other = PortableDds::new(other_alpha);
-    port_other.update(1.0);
-    assert!(
-        port.merge(&port_other).is_err(),
-        "portable merge must reject alpha mismatch"
-    );
 
-    // Tiny-alpha regression: at alpha=1e-9 ln(gamma) ~ 2e-9, and naive
-    // reciprocal-multiplied guard formulas diverge from core's — admitting
-    // v=1e-300 whose bucket index saturates i32 and overflows ensure_bucket.
-    // Both implementations count it as zero without allocating a bucket.
-    let mut tiny = PortableDds::new(1e-9);
+    // Tiny-alpha regression: at alpha=1e-9 ln(gamma) ~ 2e-9, and v=1e-300
+    // would saturate an i32 bucket index. It is counted as zero without
+    // allocating a bucket.
     let mut tiny_core = DDSketch::new(1e-9);
-    tiny.update(1e-300);
     tiny_core.add(&1e-300);
-    assert_eq!(
-        tiny.total_count(),
-        1,
-        "portable counts sub-indexable value at tiny alpha"
-    );
     assert_eq!(
         tiny_core.get_count(),
         1,
         "core counts sub-indexable value at tiny alpha"
     );
-    assert_eq!(
-        tiny.store_counts.len(),
-        0,
-        "no allocation may occur for zero-mapped values"
-    );
-}
-
-#[test]
-fn portable_ddsketch_rejects_hostile_delta_spans() {
-    use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketchDelta;
-
-    let alpha = 0.01;
-    let mut base = PortableDds::new(alpha);
-    base.update(1.0);
-    let (len_before, offset_before) = (base.store_counts.len(), base.store_offset);
-
-    // A corrupt/hostile delta pointing near i32::MAX must be rejected with an
-    // error BEFORE any allocation: the naive pad would be ~2e9 buckets.
-    let hostile = DdSketchDelta {
-        buckets: vec![(i32::MAX - 1, 1), (7, 3)],
-        ..DdSketchDelta::default()
-    };
     assert!(
-        base.apply_delta(&hostile).is_err(),
-        "hostile far-span delta must be rejected"
-    );
-    assert_eq!(
-        base.store_counts.len(),
-        len_before,
-        "state untouched on rejection"
-    );
-    assert_eq!(
-        base.store_offset, offset_before,
-        "offset untouched on rejection"
-    );
-
-    // Benign deltas still apply: bucket index 6 carries count 5 afterward,
-    // and its representative gamma^6*(1+alpha) becomes visible in queries.
-    let benign = DdSketchDelta {
-        buckets: vec![(6, 5)],
-        ..DdSketchDelta::default()
-    };
-    base.apply_delta(&benign).expect("benign delta");
-    let gamma = (1.0 + alpha) / (1.0 - alpha);
-    assert_eq!(
-        base.quantile(0.9),
-        Some(gamma.powf(6.0) * (1.0 + alpha)),
-        "applied delta count visible through queries"
+        tiny_core.store_counts().is_empty(),
+        "no allocation may occur for zero-mapped values"
     );
 }
 
@@ -2020,9 +1746,7 @@ fn ddsketch_satisfies_the_relative_value_error_contract_at_extreme_accuracy_para
 
     for (i, &alpha) in DDS_EXTREME_ALPHAS.iter().enumerate() {
         let core_spec = RelativeQuantileSpec::core(alpha);
-        let port_spec = RelativeQuantileSpec::portable(alpha);
         let mut core_tally = Tally::default();
-        let mut port_tally = Tally::default();
         let seed = 0x0DDA_0000u64 + i as u64 * 7919;
         let (min_indexable, max_indexable) =
             asap_sketchlib::sketches::ddsketch::ddsketch_indexable_bounds(alpha);
@@ -2035,10 +1759,8 @@ fn ddsketch_satisfies_the_relative_value_error_contract_at_extreme_accuracy_para
                 continue;
             }
             let mut core = DDSketch::new(alpha);
-            let mut port = PortableDds::new(alpha);
             for v in &values {
                 core.add(v);
-                port.update(*v);
             }
             let truth = NumericTruth::new(values.clone());
             assert_eq!(
@@ -2046,16 +1768,8 @@ fn ddsketch_satisfies_the_relative_value_error_contract_at_extreme_accuracy_para
                 truth.len(),
                 "{label} alpha={alpha}: core dropped an indexable sample"
             );
-            assert_eq!(
-                port.total_count() as usize,
-                truth.len(),
-                "{label} alpha={alpha}: portable dropped an indexable sample"
-            );
             core_spec.tally_into(&mut core_tally, truth.sorted(), &DDS_QS, |q| {
                 core.get_value_at_quantile(q)
-            });
-            port_spec.tally_into(&mut port_tally, truth.sorted(), &DDS_QS, |q| {
-                port.quantile(q)
             });
         }
         let context = format!(
@@ -2063,7 +1777,6 @@ fn ddsketch_satisfies_the_relative_value_error_contract_at_extreme_accuracy_para
              q grid {DDS_QS:?}"
         );
         core_tally.assert_none(&format!("core DDSketch alpha={alpha}"), &context);
-        port_tally.assert_none(&format!("portable DdSketch alpha={alpha}"), &context);
     }
 }
 

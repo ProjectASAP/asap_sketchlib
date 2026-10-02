@@ -8,7 +8,6 @@
 //   countsketch/countsketch.proto    — CountSketchState, TopKState, HeapEntry
 //   hll/hll.proto                    — HyperLogLogState, HLLVariant
 //   kll/kll.proto                    — KLLState, CoinState
-//   ddsketch/ddsketch.proto          — DDSketchState
 //   univmon/univmon.proto            — UnivMonState, UnivMonLayer
 //   hydra/hydra.proto                — HydraState, HydraCounterType, HydraCell
 //
@@ -33,7 +32,6 @@ import "countminsketch/countminsketch.proto";
 import "countsketch/countsketch.proto";
 import "hll/hll.proto";
 import "kll/kll.proto";
-import "ddsketch/ddsketch.proto";
 import "univmon/univmon.proto";
 import "hydra/hydra.proto";
 import "cocosketch/cocosketch.proto";
@@ -70,13 +68,14 @@ message SketchEnvelope {
     CountSketchState count_sketch = 11;
     HyperLogLogState hll          = 12;
     KLLState         kll          = 13;
-    DDSketchState    ddsketch     = 14;
     UnivMonState     univmon      = 15;
     HydraState       hydra        = 16;
     CocoSketchState  coco         = 17;
     ElasticState     elastic      = 18;
   }
 
+  reserved 14;
+  reserved "ddsketch";
   reserved 19 to 31;  // Reserved for future sketch types.
 
   // Geometric / NitroSketch sampling probability for the producing sketch.
