@@ -21,18 +21,14 @@
 
 use std::collections::HashSet;
 
-use asap_sketchlib::CmsHeapItem;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketchWire;
-use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
-    CountMinSketchInnerWire, CountMinSketchWithHeapWire,
-};
 use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaResult;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketchData;
 use asap_sketchlib::{
-    CountMinSketch, CountMinSketchWithHeap, CountSketch, DdSketch, HllSketch, HllVariant,
-    HydraKllSketch, KllSketch, SetAggregator,
+    CountMinSketch, CountSketch, DdSketch, HllSketch, HllVariant, HydraKllSketch, KllSketch,
+    SetAggregator,
 };
 
 // ===== round-trip: every wire-format-aligned type =====
@@ -47,18 +43,6 @@ fn count_min_sketch_round_trip() {
     let restored = CountMinSketch::from_msgpack(&bytes).expect("decode");
     assert_eq!(restored.rows, 3);
     assert_eq!(restored.cols, 64);
-}
-
-#[test]
-fn count_min_sketch_with_heap_round_trip() {
-    let mut s = CountMinSketchWithHeap::new(3, 64, 8);
-    s.update("hot", 100.0);
-    s.update("warm", 10.0);
-    let bytes = s.to_msgpack().expect("encode");
-    let restored = CountMinSketchWithHeap::from_msgpack(&bytes).expect("decode");
-    assert_eq!(restored.rows, 3);
-    assert_eq!(restored.cols, 64);
-    assert_eq!(restored.heap_size, 8);
 }
 
 #[test]
@@ -161,27 +145,6 @@ fn count_min_wire_shape() {
     assert_eq!(restored.rows, 3);
     assert_eq!(restored.cols, 2);
     assert_eq!(restored.sketch.len(), 3);
-}
-
-#[test]
-fn count_min_with_heap_wire_shape() {
-    let wire = CountMinSketchWithHeapWire {
-        sketch: CountMinSketchInnerWire {
-            sketch: vec![vec![0.0; 4]; 2],
-            rows: 2,
-            cols: 4,
-        },
-        topk_heap: vec![CmsHeapItem {
-            key: "hot".to_string(),
-            value: 42.0,
-        }],
-        heap_size: 8,
-    };
-    let bytes = rmp_serde::to_vec(&wire).unwrap();
-    let restored: CountMinSketchWithHeapWire = rmp_serde::from_slice(&bytes).unwrap();
-    assert_eq!(restored.heap_size, 8);
-    assert_eq!(restored.topk_heap.len(), 1);
-    assert_eq!(restored.topk_heap[0].key, "hot");
 }
 
 #[test]

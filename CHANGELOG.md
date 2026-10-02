@@ -66,6 +66,14 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **ASAPv1 golden fixtures for CMSHeap** (`03 00`):
+  `cmsheap_i64_regular_2x3_strkeys`, `cmsheap_i32_fast_2x3_i64keys`, the
+  key-tie fixtures `cmsheap_i64_regular_2x3_i64tie` and
+  `cmsheap_i64_regular_2x3_strtie`, and the empty heap
+  `cmsheap_i64_regular_2x3_empty`, checked by `tests/asapv1_golden.rs`.
+- The ASAPv1 spec states the heap key tie order: a signed key compares as its
+  two's-complement bit pattern read unsigned, a float by its bits, a string or
+  bytes key byte-wise with a proper prefix first.
 
 ### Changed
 
@@ -87,6 +95,20 @@ signals a backwards-compatible change.
   is retained; `TumblingWindow::insert` closes a period that saw no arrivals
   as an empty window like any other, and that window takes a place in
   `max_windows`.
+
+### Removed
+
+- **CMSHeap's pre-envelope MessagePack format.** `CMSHeap` serializes through
+  ASAPv1 only (`serialize_to_bytes` / `deserialize_from_bytes`). Removed: the
+  module `message_pack_format::portable::countminsketch_topk` with
+  `CountMinSketchWithHeap` (and its `MessagePackCodec` impl, `merge_refs` and
+  `aggregate_topk`), `CmsHeapItem`, `WireHeapItem`, `SketchlibCMSHeap`,
+  `CountMinSketchInnerWire`, `CountMinSketchWithHeapWire`,
+  `new_sketchlib_cms_heap`, `sketchlib_cms_heap_from_matrix_and_heap`,
+  `matrix_from_sketchlib_cms_heap`, `heap_to_wire`, `sketchlib_cms_heap_update`
+  and `sketchlib_cms_heap_query`, plus the crate-root re-exports
+  `CountMinSketchWithHeap` and `CmsHeapItem`. Bytes in that format no longer
+  decode.
 
 ### Fixed
 

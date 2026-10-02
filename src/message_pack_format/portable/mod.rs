@@ -8,7 +8,6 @@
 //! prefer a sketch's own `serialize_to_bytes`; do not add callers here.
 
 pub mod countminsketch;
-pub mod countminsketch_topk;
 pub mod countsketch;
 pub mod countsketch_topk;
 pub mod ddsketch;
