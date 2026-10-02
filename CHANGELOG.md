@@ -274,6 +274,14 @@ signals a backwards-compatible change.
   `rescale_count`, `rescale_count_with_env` and `is_quantile_scale_invariant`.
   Every sketch encodes through `serialize_to_bytes` / `deserialize_from_bytes`;
   ASAPv1 carries no sampling probability.
+- **The protobuf layer.** Removed the public module `proto::sketchlib` with
+  `SketchEnvelope`, `ProducerInfo`, `HashSpec`, `HashAlgorithm`,
+  `SeedDerivation`, `CounterType` and the state messages no envelope field
+  carries any more (`HyperLogLogState`, `KllState`, `CountMinState`,
+  `CountSketchState`, `UnivMonState` and their nested types); the `.proto`
+  sources under `proto/`, the vendored `src/proto/generated/`, the
+  `tools/gen-proto` generator and its CI drift check; and the `prost` and
+  `bytes` dependencies.
 
 ### Fixed
 

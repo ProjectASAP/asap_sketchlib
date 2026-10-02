@@ -5,7 +5,6 @@
 //!   KLL, and DDSketch.
 //! - [`common`]: shared input types, hashing abstractions, storage backends, and
 //!   reusable utilities used across sketches.
-//! - [`proto`]: portable protobuf message types for sketch interchange.
 //! - [`sketch_framework`]: higher-level composition layers such as Hydra,
 //!   UnivMon, tumbling windows, and batch/parallel execution helpers.
 //! - [`message_pack_format`]: MessagePack/proto wire format shared with
@@ -20,8 +19,6 @@
 /// storage backends, and reusable utilities.
 pub mod common;
 pub mod message_pack_format;
-/// Portable protobuf message types for sketch interchange.
-pub mod proto;
 /// Higher-level composition layers such as Hydra, UnivMon, tumbling windows,
 /// and batch/parallel execution helpers.
 pub mod sketch_framework;

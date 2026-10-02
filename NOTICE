@@ -32,8 +32,6 @@ serde-big-array - Copyright (c) 2019 est31 (MIT/Apache-2.0)
 rmp-serde - Copyright (c) 2017 Nikolai Vazquez (MIT)
 twox-hash - Copyright (c) 2015 Jake Goulding (MIT)
 smallvec - Copyright (c) 2018 The Servo Project Developers (MIT/Apache-2.0)
-prost - Copyright (c) 2022 Dan Burkert and Tokio Contributors (Apache-2.0)
-bytes - Copyright (c) 2022 Carl Lerche and Tokio Contributors (MIT)
 
 Optional (behind "octo-runtime" feature):
 core_affinity - Copyright (c) 2016 Eliot Courtney (MIT/Apache-2.0)

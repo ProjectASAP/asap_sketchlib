@@ -36,14 +36,6 @@ cargo test --features octo-runtime --locked
 cargo test --features experimental --locked
 ```
 
-Vendored proto code must have no drift — regenerate, then confirm the tree is
-unchanged:
-
-```bash
-cargo run --manifest-path tools/gen-proto/Cargo.toml --locked
-git diff --exit-code -- src/proto/generated
-```
-
 Rustdoc, warnings denied:
 
 ```bash
@@ -51,5 +43,5 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --locked
 ```
 
 The Rust CI workflow skips `**/*.md` and `docs/**`; the docs workflow runs on
-`docs/**`, `README.md`, `src/**`, `proto/**`, `tools/gen-proto/**` and the
-manifests. A documentation-only change is therefore gated by rustdoc alone.
+`docs/**`, `README.md`, `src/**` and the manifests. A documentation-only
+change is therefore gated by rustdoc alone.
