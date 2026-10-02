@@ -100,6 +100,8 @@ signals a backwards-compatible change.
   `univmon_empty_l3_2x4_h5`, checked in `tests/asapv1_golden.rs`.
 - **ASAPv1 golden fixture for Coco** (`0c 00`): `asapv1_golden/coco_3x7.hex`,
   a 3x7 bucket table set directly, checked by `tests/asapv1_golden.rs`.
+- **ASAPv1 golden fixtures for Elastic**: `elastic_4b_2x4` and
+  `elastic_4b_2x4_stale` in `asapv1_golden/`, checked by `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -236,6 +238,12 @@ signals a backwards-compatible change.
   the `SketchEnvelope` oneof field `coco` (17) is reserved, so
   `sketch_envelope::SketchState::Coco` is gone too. Coco serializes only as
   ASAPv1 (`Coco::serialize_to_bytes` / `deserialize_from_bytes`).
+- **BREAKING: Elastic's protobuf form.** `proto/elasticsketch/elasticsketch.proto`,
+  its message `ElasticState` (`asap_sketchlib::proto::sketchlib::ElasticState`),
+  and the `SketchEnvelope` oneof variant `elastic`
+  (`sketch_envelope::SketchState::Elastic`, field 18, now reserved) are gone.
+  `Elastic::serialize_to_bytes` / `deserialize_from_bytes` (ASAPv1, `0x0b 0x00`)
+  is Elastic's only serialization.
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the

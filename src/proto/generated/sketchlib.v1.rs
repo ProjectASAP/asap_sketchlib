@@ -445,33 +445,6 @@ pub struct UnivMonLayer {
     #[prost(message, optional, tag = "2")]
     pub heap: ::core::option::Option<TopKState>,
 }
-/// ElasticState is the portable state of an Elastic Sketch.
-///
-/// The Elastic Sketch has a heavy part (one bucket per index) and a light
-/// Count-Min layer. The heavy part is serialized as parallel arrays.
-/// The light layer is stored as a CountMinState with FLOAT64 counters.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ElasticState {
-    /// Number of heavy buckets.
-    #[prost(uint32, tag = "1")]
-    pub bucket_count: u32,
-    /// Per-bucket flow identifiers (strings), length = bucket_count.
-    /// Empty string means the bucket is unoccupied.
-    #[prost(string, repeated, tag = "2")]
-    pub flow_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// Positive vote counts per bucket, length = bucket_count.
-    #[prost(sint32, repeated, tag = "3")]
-    pub vote_pos: ::prost::alloc::vec::Vec<i32>,
-    /// Negative vote counts per bucket, length = bucket_count.
-    #[prost(sint32, repeated, tag = "4")]
-    pub vote_neg: ::prost::alloc::vec::Vec<i32>,
-    /// Whether each bucket is in eviction state, length = bucket_count.
-    #[prost(bool, repeated, tag = "5")]
-    pub evictions: ::prost::alloc::vec::Vec<bool>,
-    /// Light Count-Min layer (FLOAT64 counters).
-    #[prost(message, optional, tag = "6")]
-    pub light: ::core::option::Option<CountMinState>,
-}
 /// SketchEnvelope is the portable container for all sketch transfers.
 /// Producers fill exactly one field inside sketch_state.
 /// Consumers check format_version first, then dispatch on the oneof.
@@ -511,16 +484,4 @@ pub struct SketchEnvelope {
     /// is byte-identical to the pre-sampling format.
     #[prost(double, tag = "4")]
     pub sample_p: f64,
-    /// The sketch payload. Exactly one field must be set.
-    #[prost(oneof = "sketch_envelope::SketchState", tags = "18")]
-    pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
-}
-/// Nested message and enum types in `SketchEnvelope`.
-pub mod sketch_envelope {
-    /// The sketch payload. Exactly one field must be set.
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum SketchState {
-        #[prost(message, tag = "18")]
-        Elastic(super::ElasticState),
-    }
 }

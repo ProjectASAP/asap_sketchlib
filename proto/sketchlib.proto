@@ -25,7 +25,6 @@ package sketchlib.v1;
 
 import "common/common.proto";
 import "countsketch/countsketch.proto";
-import "elasticsketch/elasticsketch.proto";
 
 option go_package = "github.com/ProjectASAP/sketchlib-go/proto/sketch_envelope;sketch_envelopepb";
 
@@ -52,11 +51,6 @@ message SketchEnvelope {
   // Mismatches do not prevent loading but will cause diverging results.
   HashSpec hash_spec = 3;
 
-  // The sketch payload. Exactly one field must be set.
-  oneof sketch_state {
-    ElasticState     elastic      = 18;
-  }
-
   reserved 10;
   reserved "count_min";
   reserved 11;
@@ -73,6 +67,8 @@ message SketchEnvelope {
   reserved "hydra";
   reserved 17;
   reserved "coco";
+  reserved 18;
+  reserved "elastic";
   reserved 19 to 31;  // Reserved for future sketch types.
 
   // Geometric / NitroSketch sampling probability for the producing sketch.
