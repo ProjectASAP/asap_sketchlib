@@ -95,6 +95,9 @@ signals a backwards-compatible change.
   KLL, `0x07 0x01` Count-Min, `0x07 0x02` Count Sketch, `0x07 0x03` HLL,
   `0x07 0x04` UnivMon), each a small grid whose cell states are set directly,
   checked by `tests/asapv1_golden.rs`.
+- **ASAPv1 golden fixtures for `UnivMon`** (kind_id `0x10 0x00`):
+  `univmon_str_l3_2x4_h5`, `univmon_i64_l3_2x4_h5` and
+  `univmon_empty_l3_2x4_h5`, checked in `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -220,6 +223,12 @@ signals a backwards-compatible change.
   one-column schema and `HydraCounter::KLL`, but it routes `label:value`
   subkeys through the matrix hash at `HYDRA_SEED`, not `xxh32(key, row) %
   cols`, so `HydraKllSketch` cells do not map onto the new grid.
+- **UnivMon's proto format.** `UnivMon` serializes only as ASAPv1
+  (`serialize_to_bytes` / `deserialize_from_bytes`, kind_id `0x10 0x00`).
+  Removed the `univmon` field (15) of `SketchEnvelope` (now reserved) and with
+  it `sketch_envelope::SketchState::Univmon`; `UnivMonState` and
+  `UnivMonLayer` stay in `proto/univmon/univmon.proto` only as
+  `HydraCell.univmon`.
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the

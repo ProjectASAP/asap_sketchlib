@@ -12,11 +12,11 @@ use asap_sketchlib::common::input::HydraCounter;
 use asap_sketchlib::{
     CMSHeap, CSHeap, Classic, Count, CountDelta, CountMin, DDSketch, DataInput, ErtlMLE, FastPath,
     HeapItem, HllBucketListP12, HllBucketListP14, HllRegisterStorage, Hydra, HyperLogLog,
-    HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogP12, HyperLogLogP14, KLL, KLLDynamic,
+    HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogP12, HyperLogLogP14, KLL, KLLDynamic, L2HH,
     RegularPath, UnivMon, Vector1D, Vector2D,
 };
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 fn decode_hex(s: &str) -> Vec<u8> {
     let s = s.trim();
@@ -60,6 +60,9 @@ const GOLDEN_HYDRA_CM: &str = include_str!("../asapv1_golden/hydra_cm_2x2_counte
 const GOLDEN_HYDRA_CS: &str = include_str!("../asapv1_golden/hydra_cs_2x2_counter_2x2.hex");
 const GOLDEN_HYDRA_HLL: &str = include_str!("../asapv1_golden/hydra_hll_1x2_p14.hex");
 const GOLDEN_HYDRA_UNIVMON: &str = include_str!("../asapv1_golden/hydra_univmon_1x2.hex");
+const GOLDEN_UNIVMON_STR: &str = include_str!("../asapv1_golden/univmon_str_l3_2x4_h5.hex");
+const GOLDEN_UNIVMON_I64: &str = include_str!("../asapv1_golden/univmon_i64_l3_2x4_h5.hex");
+const GOLDEN_UNIVMON_EMPTY: &str = include_str!("../asapv1_golden/univmon_empty_l3_2x4_h5.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -1111,4 +1114,272 @@ fn hydra_hll_1x2_p14_matches_golden() {
 #[test]
 fn hydra_univmon_1x2_matches_golden() {
     assert_hydra_golden(GOLDEN_HYDRA_UNIVMON, hydra_univmon_fixture(), [0x07, 0x04]);
+}
+
+// ---------------------------------------------------------------------------
+// UnivMon: 3 layers of 2x4 CountL2HH with heap capacity 5. Cells are written
+// through `L2HH::apply_delta` (which carries each row's L2 accumulator) and
+// heap entries through `HHHeap::update`; no hash reaches the bytes.
+// ---------------------------------------------------------------------------
+
+/// `init_univmon`'s arguments `(heap_size, sketch_row, sketch_col, layer_size)`,
+/// pairwise distinct so no length can stand in for another.
+const UNIVMON_SHAPE: (usize, usize, usize, usize) = (5, 2, 4, 3);
+
+/// The layers' counters; layer 0 holds `CS_VALS`.
+const UNIVMON_LAYERS: [[[i64; 4]; 2]; 3] = [
+    CS_VALS,
+    [[3, -2, 0, 1], [0, 0, 5, -4]],
+    [[0, 7, 0, 0], [-6, 0, 0, 0]],
+];
+
+/// Each row's sum of squared cells; both of layer 0's are uint64.
+const UNIVMON_L2: [i64; 6] = [4_294_999_809, 4_611_686_019_501_130_818, 14, 41, 49, 36];
+
+/// Entries per layer's heap.
+const UNIVMON_HEAP_LENS: [u32; 3] = [3, 1, 2];
+
+/// The heap counts in emitted order: layer by layer, each descending.
+const UNIVMON_HEAP_COUNTS: [i64; 6] = [65536, 300, 128, 5, 9, 2];
+
+/// The string fixture's keys in emitted order.
+const UNIVMON_STR_KEYS: [&str; 6] = ["alpha", "beta", "delta", "gamma", "epsilon", "zeta"];
+
+/// The i64 fixture's keys in emitted order: int64, negative fixint, int16,
+/// uint8, uint64, positive fixint.
+const UNIVMON_I64_KEYS: [i64; 6] = [i64::MIN, -1, -129, 128, 4_294_967_296, 7];
+
+/// A UnivMon payload `[counts, l2, heap_lens, keys, heap_counts,
+/// candidate_complete, bucket_size, update_mode]`.
+type UnivMonPayloadView<K> = (
+    Vec<i64>,
+    Vec<i64>,
+    Vec<u32>,
+    Vec<K>,
+    Vec<i64>,
+    Vec<bool>,
+    u64,
+    u8,
+);
+
+/// The structural keys of the UnivMon metadata map.
+#[derive(Deserialize)]
+struct UnivMonShape {
+    layer_size: u32,
+    sketch_row: u32,
+    sketch_col: u32,
+    heap_size: u32,
+    key_type: String,
+}
+
+/// Splits an ASAPv1 envelope by hand and decodes its UnivMon metadata and payload.
+fn univmon_envelope<K: DeserializeOwned>(
+    bytes: &[u8],
+) -> (Vec<u8>, UnivMonShape, UnivMonPayloadView<K>) {
+    assert_eq!(&bytes[..7], b"ASAPv1\x01", "magic and version");
+    let kind_len = bytes[7] as usize;
+    let kind_id = bytes[8..8 + kind_len].to_vec();
+    let at = 8 + kind_len;
+    let meta_len = u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let payload_len = u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+    let metadata = &bytes[at + 8..at + 8 + meta_len];
+    let payload = &bytes[at + 8 + meta_len..];
+    assert_eq!(payload.len(), payload_len, "payload length prefix");
+    (
+        kind_id,
+        rmp_serde::from_slice(metadata).expect("UnivMon metadata"),
+        rmp_serde::from_slice(payload).expect("UnivMon payload"),
+    )
+}
+
+/// The populated pyramid: `keys` fill the heaps in emitted order, cut by
+/// `UNIVMON_HEAP_LENS`, at `UNIVMON_HEAP_COUNTS`; layer 1 is incomplete.
+fn univmon_known(keys: [DataInput<'_>; 6]) -> UnivMon {
+    let (heap_size, sketch_row, sketch_col, layer_size) = UNIVMON_SHAPE;
+    let mut um = UnivMon::init_univmon(heap_size, sketch_row, sketch_col, layer_size);
+    for (layer, cells) in UNIVMON_LAYERS.iter().enumerate() {
+        for (row, values) in cells.iter().enumerate() {
+            for (col, &value) in values.iter().enumerate() {
+                um.l2_sketch_layers[layer].apply_delta(CountDelta {
+                    row: row as u32,
+                    col: col as u32,
+                    value: value as i32,
+                });
+            }
+        }
+    }
+    let layers = UNIVMON_HEAP_LENS
+        .iter()
+        .enumerate()
+        .flat_map(|(layer, &len)| std::iter::repeat_n(layer, len as usize));
+    for ((layer, key), count) in layers.zip(keys.iter()).zip(UNIVMON_HEAP_COUNTS) {
+        um.hh_layers[layer].update(key, count);
+    }
+    um.set_total_weight(70_000);
+    um.mark_layer_candidates_incomplete(1);
+    um
+}
+
+/// Layer counters flattened in wire order.
+fn univmon_counts(um: &UnivMon) -> Vec<i64> {
+    (0..um.layer_size)
+        .flat_map(|layer| {
+            let L2HH::COUNT(counter) = &um.l2_sketch_layers[layer];
+            counter.as_storage().as_slice().to_vec()
+        })
+        .collect()
+}
+
+/// Each layer's heap as `(key, count)`, sorted.
+fn univmon_heaps(um: &UnivMon) -> Vec<Vec<(String, i64)>> {
+    (0..um.layer_size)
+        .map(|layer| {
+            let mut entries: Vec<(String, i64)> = um.hh_layers[layer]
+                .heap()
+                .iter()
+                .map(|item| (format!("{:?}", item.key), item.count))
+                .collect();
+            entries.sort();
+            entries
+        })
+        .collect()
+}
+
+/// Decodes `want`, checks it against `source`, and checks the re-encode.
+fn assert_univmon_decodes_to(want: &[u8], source: &UnivMon) {
+    let decoded = UnivMon::deserialize_from_bytes(want).expect("decode");
+    assert_eq!(
+        (
+            decoded.layer_size,
+            decoded.sketch_row,
+            decoded.sketch_col,
+            decoded.heap_size
+        ),
+        (3, 2, 4, 5)
+    );
+    assert_eq!(decoded.bucket_size, source.bucket_size);
+    assert_eq!(decoded.candidates_complete(), source.candidates_complete());
+    assert_eq!(univmon_counts(&decoded), univmon_counts(source));
+    for layer in 0..3 {
+        assert_eq!(
+            decoded.l2_sketch_layers[layer].get_l2(),
+            source.l2_sketch_layers[layer].get_l2()
+        );
+    }
+    assert_eq!(univmon_heaps(&decoded), univmon_heaps(source));
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+fn univmon_known_counts() -> Vec<i64> {
+    UNIVMON_LAYERS.iter().flatten().flatten().copied().collect()
+}
+
+#[test]
+fn univmon_str_l3_2x4_h5_matches_golden() {
+    let want = decode_hex(GOLDEN_UNIVMON_STR);
+
+    let sketch = univmon_known(UNIVMON_STR_KEYS.map(DataInput::Str));
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "UnivMon string-key bytes diverge from golden");
+
+    let (kind_id, shape, payload) = univmon_envelope::<String>(&want);
+    assert_eq!(kind_id, [0x10, 0x00]);
+    assert_eq!(
+        (
+            shape.layer_size,
+            shape.sketch_row,
+            shape.sketch_col,
+            shape.heap_size
+        ),
+        (3, 2, 4, 5)
+    );
+    assert_eq!(shape.key_type, "string");
+    let (counts, l2, heap_lens, keys, heap_counts, flags, bucket_size, update_mode) = payload;
+    assert_eq!(counts, univmon_known_counts());
+    assert_eq!(l2, UNIVMON_L2);
+    assert_eq!(heap_lens, UNIVMON_HEAP_LENS);
+    assert_eq!(keys, UNIVMON_STR_KEYS);
+    assert_eq!(heap_counts, UNIVMON_HEAP_COUNTS);
+    assert_eq!(flags, [true, false, true]);
+    assert_eq!(bucket_size, 70_000);
+    assert_eq!(update_mode, 1, "set_total_weight selects the standard mode");
+
+    assert_univmon_decodes_to(&want, &sketch);
+}
+
+#[test]
+fn univmon_i64_l3_2x4_h5_matches_golden() {
+    let want = decode_hex(GOLDEN_UNIVMON_I64);
+
+    let sketch = univmon_known(UNIVMON_I64_KEYS.map(DataInput::I64));
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "UnivMon i64-key bytes diverge from golden");
+
+    let (kind_id, shape, payload) = univmon_envelope::<i64>(&want);
+    assert_eq!(kind_id, [0x10, 0x00]);
+    assert_eq!(
+        (
+            shape.layer_size,
+            shape.sketch_row,
+            shape.sketch_col,
+            shape.heap_size
+        ),
+        (3, 2, 4, 5)
+    );
+    assert_eq!(shape.key_type, "i64");
+    let (counts, l2, heap_lens, keys, heap_counts, flags, bucket_size, update_mode) = payload;
+    assert_eq!(counts, univmon_known_counts());
+    assert_eq!(l2, UNIVMON_L2);
+    assert_eq!(heap_lens, UNIVMON_HEAP_LENS);
+    assert_eq!(keys, UNIVMON_I64_KEYS);
+    assert_eq!(heap_counts, UNIVMON_HEAP_COUNTS);
+    assert_eq!(flags, [true, false, true]);
+    assert_eq!((bucket_size, update_mode), (70_000, 1));
+
+    assert_univmon_decodes_to(&want, &sketch);
+    let decoded = UnivMon::deserialize_from_bytes(&want).expect("decode");
+    assert!(
+        decoded.hh_layers[0]
+            .heap()
+            .iter()
+            .any(|item| item.key == HeapItem::I64(i64::MIN))
+    );
+
+    // Same layers and heap counts, other keys: only `key_type` and `keys` differ.
+    assert_ne!(want, decode_hex(GOLDEN_UNIVMON_STR));
+}
+
+#[test]
+fn univmon_empty_l3_2x4_h5_matches_golden() {
+    let want = decode_hex(GOLDEN_UNIVMON_EMPTY);
+
+    let (heap_size, sketch_row, sketch_col, layer_size) = UNIVMON_SHAPE;
+    let sketch = UnivMon::init_univmon(heap_size, sketch_row, sketch_col, layer_size);
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "empty UnivMon bytes diverge from golden");
+
+    let (kind_id, shape, payload) = univmon_envelope::<u64>(&want);
+    assert_eq!(kind_id, [0x10, 0x00]);
+    assert_eq!(
+        (
+            shape.layer_size,
+            shape.sketch_row,
+            shape.sketch_col,
+            shape.heap_size
+        ),
+        (3, 2, 4, 5)
+    );
+    assert_eq!(
+        shape.key_type, "u64",
+        "an empty pyramid records key_type u64"
+    );
+    let (counts, l2, heap_lens, keys, heap_counts, flags, bucket_size, update_mode) = payload;
+    assert_eq!(counts, [0; 24]);
+    assert_eq!(l2, [0; 6]);
+    assert_eq!(heap_lens, [0, 0, 0]);
+    assert!(keys.is_empty() && heap_counts.is_empty());
+    assert_eq!(flags, [true, true, true]);
+    assert_eq!((bucket_size, update_mode), (0, 0));
+
+    assert_univmon_decodes_to(&want, &sketch);
 }

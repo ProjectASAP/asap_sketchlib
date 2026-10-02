@@ -7,7 +7,6 @@
 //! Files consumed (from $XTEST_DIR/):
 //!   coco.pb        — CocoSketchState (hash+val+hasKey buckets)
 //!   elastic.pb     — ElasticState (heavy buckets + light CountMin)
-//!   univmon.pb     — UnivMonState (layered CountSketch + TopK heaps)
 //!
 //! Usage:
 //!   XTEST_DIR=<path> cargo test --test xtest_consumer -- --nocapture
@@ -115,41 +114,6 @@ fn cross_language_proto() {
         println!("[ElasticSketch]   PASS");
     } else {
         eprintln!("[ElasticSketch] FAIL: estimate {elephant_est} < 900");
-        all_ok = false;
-    }
-
-    // -----------------------------------------------------------------------
-    // UnivMon
-    // -----------------------------------------------------------------------
-    println!();
-    println!("[UnivMon] Step 1/3 — Read univmon.pb");
-    let bytes = read_file(in_dir.join("univmon.pb"));
-    let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode univmon envelope");
-
-    println!(
-        "[UnivMon] Step 2/3 — Validate envelope (format_version={}, producer={})",
-        env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library)
-    );
-
-    let um_state = match env.sketch_state {
-        Some(sketch_envelope::SketchState::Univmon(ref s)) => s.clone(),
-        other => panic!("expected UnivMon sketch_state, got {other:?}"),
-    };
-
-    println!(
-        "[UnivMon]   layer_size={} sketch_rows={} sketch_cols={} heap_size={}",
-        um_state.layer_size, um_state.sketch_rows, um_state.sketch_cols, um_state.heap_size
-    );
-
-    let um_card = univmon_cardinality(&um_state);
-    // Note: the g-sum heuristic typically underestimates (Go itself reports ~4250 for 10k inserts).
-    // We verify the Rust result matches Go's algorithm rather than the true cardinality.
-    println!("[UnivMon] Step 3/3 — cardinality ≈ {um_card:.0} (g-sum heuristic, Go also ~4250)");
-    if (1_000.0..=15_000.0).contains(&um_card) {
-        println!("[UnivMon]   PASS");
-    } else {
-        eprintln!("[UnivMon] FAIL: cardinality {um_card:.0} not in [1000, 15000]");
         all_ok = false;
     }
 
@@ -430,98 +394,6 @@ fn elastic_light_min(state: &ElasticState, hash: u64) -> i64 {
         0
     } else {
         min_val as i64
-    }
-}
-
-// ---------------------------------------------------------------------------
-// UnivMon cardinality (g-sum heuristic)
-// ---------------------------------------------------------------------------
-// Mirrors Go's UnivSketch.calcGSumHeuristic(g=1, isCard=true):
-//   Y[L-1] = count of heap items at top layer with count > threshold
-//   for i from L-2 down to 0:
-//     tmp = Σ coe*1 for items with count > threshold
-//     coe = 1 - 2 * ((Hash64(key) >> (i+1)) & 1)
-//     Y[i] = 2*Y[i+1] + tmp
-//   return Y[0]
-// l2_val = sqrt(median_of_first_3(layer.sketch.l2))
-
-fn univmon_cardinality(state: &UnivMonState) -> f64 {
-    let nlayers = state.layers.len();
-    if nlayers == 0 {
-        return 0.0;
-    }
-
-    let mut y = vec![0.0f64; nlayers];
-
-    // Top layer
-    let top = &state.layers[nlayers - 1];
-    let l2_val = cs_l2_from_state(top.sketch.as_ref());
-    let threshold = (l2_val * 0.01) as i64;
-    let mut tmp = 0.0f64;
-    if let Some(heap) = &top.heap {
-        for entry in &heap.entries {
-            if entry.count as i64 > threshold {
-                tmp += 1.0;
-            }
-        }
-    }
-    y[nlayers - 1] = tmp;
-
-    // Lower layers from L-2 down to 0
-    for i in (0..nlayers - 1).rev() {
-        tmp = 0.0;
-        let layer = &state.layers[i];
-        let l2_val = cs_l2_from_state(layer.sketch.as_ref());
-        let threshold = (l2_val * 0.01) as i64;
-
-        if let Some(heap) = &layer.heap {
-            for entry in &heap.entries {
-                if entry.count as i64 > threshold {
-                    let h = xxh3_64_seeded(SEED_0, entry.key.as_bytes());
-                    let bit = (h >> (i + 1)) & 1;
-                    let coe = 1.0 - 2.0 * bit as f64;
-                    tmp += coe;
-                }
-            }
-        }
-        y[i] = 2.0 * y[i + 1] + tmp;
-    }
-
-    y[0]
-}
-
-/// cs_l2_from_state mirrors Go's CountSketchUniv.cs_l2():
-///   f2_value = MedianOfThree(l2[0], l2[1], l2[2])
-///   return sqrt(f2_value)
-/// The portable l2 values are raw int64 cast to float64.
-fn cs_l2_from_state(cs: Option<&CountSketchState>) -> f64 {
-    let cs = match cs {
-        Some(s) => s,
-        None => return 0.0,
-    };
-    let l2 = &cs.l2;
-    if l2.len() < 3 {
-        return 0.0;
-    }
-    let med = median_of_three_f64(l2[0], l2[1], l2[2]);
-    med.abs().sqrt()
-}
-
-fn median_of_three_f64(a: f64, b: f64, c: f64) -> f64 {
-    if a <= b {
-        if b <= c {
-            b
-        } else if a <= c {
-            c
-        } else {
-            a
-        }
-    } else if a <= c {
-        a
-    } else if b <= c {
-        c
-    } else {
-        b
     }
 }
 

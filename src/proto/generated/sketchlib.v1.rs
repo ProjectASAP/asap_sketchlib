@@ -535,7 +535,7 @@ pub struct SketchEnvelope {
     #[prost(double, tag = "4")]
     pub sample_p: f64,
     /// The sketch payload. Exactly one field must be set.
-    #[prost(oneof = "sketch_envelope::SketchState", tags = "15, 17, 18")]
+    #[prost(oneof = "sketch_envelope::SketchState", tags = "17, 18")]
     pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
 }
 /// Nested message and enum types in `SketchEnvelope`.
@@ -543,8 +543,6 @@ pub mod sketch_envelope {
     /// The sketch payload. Exactly one field must be set.
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum SketchState {
-        #[prost(message, tag = "15")]
-        Univmon(super::UnivMonState),
         #[prost(message, tag = "17")]
         Coco(super::CocoSketchState),
         #[prost(message, tag = "18")]

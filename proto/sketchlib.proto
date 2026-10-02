@@ -6,7 +6,6 @@
 //   common/common.proto              — HashSpec, ProducerInfo, CounterType, ...
 //   countminsketch/countminsketch.proto — CountMinState
 //   countsketch/countsketch.proto    — CountSketchState, TopKState, HeapEntry
-//   univmon/univmon.proto            — UnivMonState, UnivMonLayer
 //
 // Design goals:
 //   - Cross-language: Go (sketchlib-go) ↔ Rust (asap_sketchlib) round-trips.
@@ -26,7 +25,6 @@ package sketchlib.v1;
 
 import "common/common.proto";
 import "countsketch/countsketch.proto";
-import "univmon/univmon.proto";
 import "cocosketch/cocosketch.proto";
 import "elasticsketch/elasticsketch.proto";
 
@@ -57,7 +55,6 @@ message SketchEnvelope {
 
   // The sketch payload. Exactly one field must be set.
   oneof sketch_state {
-    UnivMonState     univmon      = 15;
     CocoSketchState  coco         = 17;
     ElasticState     elastic      = 18;
   }
@@ -72,6 +69,8 @@ message SketchEnvelope {
   reserved "kll";
   reserved 14;
   reserved "ddsketch";
+  reserved 15;
+  reserved "univmon";
   reserved 16;
   reserved "hydra";
   reserved 19 to 31;  // Reserved for future sketch types.
