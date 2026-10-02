@@ -88,6 +88,28 @@ signals a backwards-compatible change.
   as an empty window like any other, and that window takes a place in
   `max_windows`.
 
+### Removed
+
+- **KLL's proto and portable formats.** `KLL` and `KLLDynamic` serialize only
+  as ASAPv1 (`serialize_to_bytes` / `deserialize_from_bytes`, kind_ids
+  `0x06 0x00` / `0x06 0x01`). Removed:
+  - the `kll` field (13) of `SketchEnvelope` (now reserved) and with it
+    `sketch_envelope::SketchState::Kll`; `KLLState` stays in
+    `proto/kll/kll.proto` only as `HydraCell.kll`;
+  - the crate-root `KllSketch` and `KllSketchData`, and the public module
+    `message_pack_format::portable::kll`: `SketchlibKll`, `new_sketchlib_kll`,
+    `new_sketchlib_kll_with_seed`, `sketchlib_kll_update`,
+    `sketchlib_kll_quantile`, `sketchlib_kll_merge`,
+    `bytes_from_sketchlib_kll`, `sketchlib_kll_from_bytes`,
+    `KllSketch::{merge_refs, aggregate_kll, from_portable_state}`, the
+    `MessagePackCodec` impls for `KllSketch` and `KllSketchData`, the
+    value-offset codec (`KLL_SCALE_SWEEP`, `encode_value_offset`,
+    `decode_value_offset`, `KllProtoItems`), and the `unsafe impl Send/Sync
+    for KllSketch`. `HydraKllSketch` keeps its per-cell type crate-internally;
+  - `message_pack_format::native::{kll, kll_dynamic}`, the `MessagePackCodec`
+    impls for `KLL<T>` and `KLLDynamic<T>`;
+  - `KLL::from_portable_state`.
+
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the

@@ -17,7 +17,7 @@ use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{
     Classic, Count, CountMin, CountMinSketchWithHeap, CountSketchWithHeap, DataInput,
-    EnsembleSketch, ErtlMLE, FastPath, HashSketchEnsemble, HyperLogLog, HyperLogLogHIP, KllSketch,
+    EnsembleSketch, ErtlMLE, FastPath, HashSketchEnsemble, HyperLogLog, HyperLogLogHIP, KLL,
     MessagePackCodec, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 
@@ -697,16 +697,15 @@ fn portable_count_sketch_with_heap_satisfies_the_l2_bound_through_merge_and_wire
     );
 }
 
-/// The portable KLL facade under the DataSketches maximum-rank-error
-/// characterization, seeded so a failure reproduces. `KllSketch::new` seeds
-/// from the wall clock; `with_seed` is what an accuracy test must use.
+/// KLL under the DataSketches maximum-rank-error characterization through a
+/// two-shard merge and an ASAPv1 round trip, seeded so a failure reproduces.
 ///
 /// Trial unit is one sketch, scored on its worst rank error over the `q` grid,
 /// with an independent compaction seed per trial. The post-wire sketch is *not*
 /// a separate trial — a round trip that preserves every answer bit for bit, as
 /// asserted below, gives literally the same numbers.
 #[test]
-fn portable_kll_sketch_satisfies_the_rank_error_characterization_through_merge_and_wire() {
+fn kll_satisfies_the_rank_error_characterization_through_merge_and_wire() {
     const K: u16 = 200;
     const TRIALS: u64 = 12;
     let values: Vec<f64> = uniform_u64(N, 1_000_000, STREAM_SEED)
@@ -724,29 +723,29 @@ fn portable_kll_sketch_satisfies_the_rank_error_characterization_through_merge_a
     let mut tally = Tally::default();
     for t in 0..TRIALS {
         let seed = 0x5EED_0400u64.wrapping_add(t.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-        let mut single = KllSketch::with_seed(K, seed);
-        let mut left = KllSketch::with_seed(K, seed ^ 0xAAAA);
-        let mut right = KllSketch::with_seed(K, seed ^ 0x5555);
+        let mut single = KLL::<f64>::init_kll_with_seed(K as i32, seed);
+        let mut left = KLL::<f64>::init_kll_with_seed(K as i32, seed ^ 0xAAAA);
+        let mut right = KLL::<f64>::init_kll_with_seed(K as i32, seed ^ 0x5555);
         for (i, v) in values.iter().enumerate() {
-            single.update(*v);
+            single.update(v);
             if i % 2 == 0 {
-                left.update(*v);
+                left.update(v);
             } else {
-                right.update(*v);
+                right.update(v);
             }
         }
-        left.merge(&right).expect("same-k merge");
+        left.merge(&right);
 
         spec.record_trial(
             &mut tally,
-            &format!("portable KllSketch single pass seed={seed:#x}"),
+            &format!("KLL single pass seed={seed:#x}"),
             truth.sorted(),
             &qs,
             |q| single.quantile(q),
         );
         spec.record_trial(
             &mut tally,
-            &format!("portable KllSketch two-shard merge seed={seed:#x}"),
+            &format!("KLL two-shard merge seed={seed:#x}"),
             truth.sorted(),
             &qs,
             |q| left.quantile(q),
@@ -755,9 +754,9 @@ fn portable_kll_sketch_satisfies_the_rank_error_characterization_through_merge_a
         // The wire round trip must preserve every answer bit for bit, which is
         // an equality rather than a band — and is why the decoded sketch does
         // not enter the rank battery as a second trial.
-        let bytes = single.to_msgpack().expect("encode");
-        let decoded = KllSketch::from_msgpack(&bytes).expect("decode");
-        assert_eq!(decoded.k(), K, "k must survive the wire");
+        let bytes = single.serialize_to_bytes().expect("encode");
+        let decoded = KLL::<f64>::deserialize_from_bytes(&bytes).expect("decode");
+        assert_eq!(decoded.k(), K as usize, "k must survive the wire");
         assert_eq!(
             decoded.count(),
             single.count(),
@@ -768,21 +767,11 @@ fn portable_kll_sketch_satisfies_the_rank_error_characterization_through_merge_a
             let (a, b) = (single.quantile(q), decoded.quantile(q));
             wire_tally.record(a == b, || format!("q={q}: before {a} after {b}"));
         }
-        wire_tally.assert_none(
-            &format!("portable KllSketch wire round trip (seed={seed:#x})"),
-            &context,
-        );
-
-        // A mismatched `k` must be refused rather than silently merged.
-        let other_k = KllSketch::with_seed(K * 2, seed);
-        assert!(
-            single.merge(&other_k).is_err(),
-            "merging sketches with different k must fail"
-        );
+        wire_tally.assert_none(&format!("KLL wire round trip (seed={seed:#x})"), &context);
     }
 
     tally.assert_independent_binomial(
-        "portable KllSketch / maximum normalized rank error per compaction seed",
+        "KLL / maximum normalized rank error per compaction seed",
         spec.trial_failure_probability,
         &format!("{context}; single pass and two-shard merge, q grid {qs:?}"),
     );

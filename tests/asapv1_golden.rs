@@ -245,9 +245,7 @@ fn cs_i32_regular_2x4_matches_golden() {
 // ---------------------------------------------------------------------------
 // KLL: build known state (k=200, seed 42, integers 1..=50 — below the level-0
 // capacity, so no compaction fires and the retained set is deterministic) ->
-// serialize == golden, and golden round-trips. Matches the deterministic
-// scenario the proto parity test uses (sketchlib-go's KLLSketch over the same
-// input), so the coin state (42) lines up cross-language.
+// serialize == golden, and golden round-trips.
 // ---------------------------------------------------------------------------
 
 /// A k=200 KLL over `1..=50` with a fixed compaction seed: fully deterministic.

@@ -6,7 +6,6 @@
 //!
 //! Files consumed (from $XTEST_DIR/):
 //!   countmin.pb    — CountMinState with float64 counters
-//!   kll.pb         — KLLState with quantile items and coin RNG state
 //!   ddsketch.pb    — DDSketchState with alpha + bucket array
 //!   hll.pb         — HyperLogLogState (ErtlMLE variant)
 //!   countsketch.pb — CountSketchState with float64 signed counters
@@ -115,48 +114,6 @@ fn cross_language_proto() {
         all_ok = false;
     } else {
         println!("[CountMin]   PASS");
-    }
-
-    // -----------------------------------------------------------------------
-    // KLL
-    // -----------------------------------------------------------------------
-    println!();
-    println!("[KLL] Step 1/3 — Read kll.pb");
-    let bytes = read_file(in_dir.join("kll.pb"));
-    let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode kll envelope");
-
-    println!(
-        "[KLL] Step 2/3 — Validate envelope (format_version={}, producer={})",
-        env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library)
-    );
-
-    let kll_state = match env.sketch_state {
-        Some(sketch_envelope::SketchState::Kll(ref s)) => s.clone(),
-        other => panic!("expected KLL sketch_state, got {other:?}"),
-    };
-
-    println!(
-        "[KLL]   k={} m={} num_levels={} items={} levels={}",
-        kll_state.k,
-        kll_state.m,
-        kll_state.num_levels,
-        kll_state.items.len(),
-        kll_state.levels.len()
-    );
-
-    let kll = KllFromProto::from_state(&kll_state);
-    let p50 = kll.quantile(0.50);
-    let p99 = kll.quantile(0.99);
-    println!("[KLL] Step 3/3 — p50 ≈ {p50:.1} (expect ~5000)  p99 ≈ {p99:.1} (expect ~9900)");
-
-    let p50_ok = (p50 - 5000.0).abs() / 5000.0 < 0.05;
-    let p99_ok = (p99 - 9900.0).abs() / 9900.0 < 0.05;
-    if p50_ok && p99_ok {
-        println!("[KLL]   PASS");
-    } else {
-        eprintln!("[KLL] FAIL: p50={p50:.1} p99={p99:.1}");
-        all_ok = false;
     }
 
     // -----------------------------------------------------------------------
@@ -1095,74 +1052,6 @@ fn cm_query_min(cm: &CountMinState, hash: u64) -> f64 {
         }
     }
     if min_val == f64::MAX { 0.0 } else { min_val }
-}
-
-// ---------------------------------------------------------------------------
-// Minimal KLL deserialization + CDF query
-// ---------------------------------------------------------------------------
-
-struct KllFromProto {
-    items: Vec<f64>,
-    levels: Vec<usize>,
-    num_levels: usize,
-}
-
-impl KllFromProto {
-    fn from_state(s: &KllState) -> Self {
-        // Dual-read: prefer the value-offset fixed-point representation when
-        // residuals are present, else fall back to raw f64 items[] (v1).
-        let items: Vec<f64> = if !s.residuals.is_empty() {
-            asap_sketchlib::message_pack_format::portable::kll::decode_value_offset(
-                s.offset,
-                s.value_scale,
-                &s.residuals,
-            )
-        } else {
-            s.items.clone()
-        };
-        let levels: Vec<usize> = s.levels.iter().map(|&v| v as usize).collect();
-        let num_levels = s.num_levels as usize;
-        Self {
-            items,
-            levels,
-            num_levels,
-        }
-    }
-
-    fn weighted_samples(&self) -> Vec<(f64, u64)> {
-        let mut out = Vec::with_capacity(self.items.len());
-        for h in 0..self.num_levels {
-            let weight: u64 = 1 << h;
-            let idx = self.num_levels - 1 - h;
-            if idx + 1 >= self.levels.len() {
-                continue;
-            }
-            let start = self.levels[idx];
-            let end = self.levels[idx + 1];
-            for &v in &self.items[start..end] {
-                out.push((v, weight));
-            }
-        }
-        out
-    }
-
-    fn quantile(&self, q: f64) -> f64 {
-        let mut samples = self.weighted_samples();
-        if samples.is_empty() {
-            return 0.0;
-        }
-        samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        let total: u64 = samples.iter().map(|(_, w)| w).sum();
-        let target = (q * total as f64).ceil() as u64;
-        let mut acc = 0u64;
-        for (v, w) in &samples {
-            acc += w;
-            if acc >= target {
-                return *v;
-            }
-        }
-        samples.last().unwrap().0
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -29,10 +29,9 @@ use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
 };
 use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaResult;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
-use asap_sketchlib::message_pack_format::portable::kll::KllSketchData;
 use asap_sketchlib::{
     CountMinSketch, CountMinSketchWithHeap, CountSketch, DdSketch, HllSketch, HllVariant,
-    HydraKllSketch, KllSketch, SetAggregator,
+    HydraKllSketch, SetAggregator,
 };
 
 // ===== round-trip: every wire-format-aligned type =====
@@ -93,18 +92,6 @@ fn hll_sketch_round_trip() {
     let bytes = s.to_msgpack().expect("encode");
     let restored = HllSketch::from_msgpack(&bytes).expect("decode");
     assert_eq!(restored.registers.len(), s.registers.len());
-}
-
-#[test]
-fn kll_sketch_round_trip() {
-    let mut s = KllSketch::with_seed(200, 0x5EED_0800);
-    for i in 0..100 {
-        s.update(i as f64);
-    }
-    let bytes = s.to_msgpack().expect("encode");
-    let restored = KllSketch::from_msgpack(&bytes).expect("decode");
-    assert_eq!(restored.k, 200);
-    assert_eq!(restored.count(), 100);
 }
 
 #[test]
@@ -186,21 +173,7 @@ fn count_min_with_heap_wire_shape() {
 
 #[test]
 fn hydra_kll_wire_shape() {
-    let wire = HydraKllSketchWire {
-        rows: 2,
-        cols: 3,
-        sketches: vec![
-            vec![
-                KllSketchData {
-                    k: 200,
-                    sketch_bytes: vec![],
-                };
-                3
-            ];
-            2
-        ],
-    };
-    let bytes = rmp_serde::to_vec(&wire).unwrap();
+    let bytes = HydraKllSketch::new(2, 3, 200).to_msgpack().unwrap();
     let restored: HydraKllSketchWire = rmp_serde::from_slice(&bytes).unwrap();
     assert_eq!(restored.rows, 2);
     assert_eq!(restored.cols, 3);
@@ -210,7 +183,7 @@ fn hydra_kll_wire_shape() {
 
 // ===== golden-bytes placeholders: an ignored, uncovered gap =====
 //
-// The five tests below are **empty and ignored**. They verify nothing today.
+// The four tests below are **empty and ignored**. They verify nothing today.
 //
 // What they need is a msgpack payload produced by `sketchlib-go` and checked in
 // under `tests/fixtures/msgpack/`. That fixture cannot be generated here: this
@@ -244,10 +217,6 @@ fn dd_sketch_decodes_go_bytes() {}
 #[ignore = "gap: needs a sketchlib-go-produced msgpack fixture; none can be generated in this repo"]
 #[test]
 fn hll_sketch_decodes_go_bytes() {}
-
-#[ignore = "gap: needs a sketchlib-go-produced msgpack fixture; none can be generated in this repo"]
-#[test]
-fn kll_sketch_decodes_go_bytes() {}
 
 #[ignore = "gap: needs a sketchlib-go-produced msgpack fixture; none can be generated in this repo"]
 #[test]

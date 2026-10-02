@@ -11,7 +11,6 @@ use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketc
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
-use asap_sketchlib::message_pack_format::portable::kll::KllSketch as PortableKll;
 use asap_sketchlib::{
     CMSHeap, CSHeap, Count as CoreCount, CountL2HH, CountMin, DDSketch, DataInput, Hydra,
     HyperLogLog, KLL, UnivMon,
@@ -1056,22 +1055,6 @@ fn probe_portable_wire_types() {
             rel_err(est, 100_000.0)
         ),
         rel_err(est, 100_000.0) < 0.03,
-    );
-
-    // Portable KLL.
-    let mut pk = PortableKll::new(200);
-    let mut rng = StdRng::seed_from_u64(55);
-    let mut vals: Vec<f64> = (0..50_000).map(|_| rng.random::<f64>() * 1e6).collect();
-    vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    for v in &vals {
-        pk.update(*v);
-    }
-    let med = pk.quantile(0.5);
-    let t = vals[25_000];
-    p.check(
-        "portable KLL median",
-        format!("expected ~{t:.0}, got {med:.0}"),
-        (med - t).abs() / t < 0.05,
     );
 
     // HydraKllSketch: per-key quantiles, median across rows.
