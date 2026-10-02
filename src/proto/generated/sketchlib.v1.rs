@@ -601,65 +601,6 @@ pub struct CoinState {
     #[prost(uint32, tag = "3")]
     pub remaining_bits: u32,
 }
-/// DDSketchState is the portable state of a DDSketch quantile sketch.
-///
-/// Only alpha is required to reconstruct the index mapping. Consumers must
-/// recompute all derived mapping values on load:
-///    gamma        = (1.0 + alpha) / (1.0 - alpha)
-///    log_gamma    = ln(gamma)
-///    inv_log_gamma = 1.0 / log_gamma
-///
-/// Bucket indices: a value v maps to bucket floor(ln(v) * inv_log_gamma).
-/// Stored bucket absolute_index = array_index + store_offset.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DdSketchState {
-    /// Relative accuracy guarantee. Required. Must satisfy 0 < alpha < 1.
-    #[prost(double, tag = "1")]
-    pub alpha: f64,
-    /// Bucket count array in index order (ascending absolute bucket index).
-    /// Absolute index of store_counts\[i\] is i + store_offset.
-    #[prost(uint64, repeated, tag = "2")]
-    pub store_counts: ::prost::alloc::vec::Vec<u64>,
-    /// Absolute bucket index corresponding to store_counts\[0\].
-    /// May be negative (values < 1.0 map to negative bucket indices).
-    #[prost(sint32, tag = "3")]
-    pub store_offset: i32,
-    /// Signed extension: negative magnitudes use the same mapping as positives.
-    #[prost(uint64, repeated, tag = "16")]
-    pub negative_store_counts: ::prost::alloc::vec::Vec<u64>,
-    #[prost(sint32, tag = "17")]
-    pub negative_store_offset: i32,
-    #[prost(uint64, tag = "18")]
-    pub zero_count: u64,
-}
-/// DDSketchDelta carries only the buckets that changed above threshold T.
-///
-/// DataPoint-level metric scalars (d_count/d_sum/new_min/new_max/min_changed/
-/// max_changed) are intentionally NOT carried on the wire: the count delta is
-/// recoverable by summing bucket deltas, and min/max/quantiles are derived from
-/// the bucket distribution within the relative-accuracy guarantee. This message
-/// is byte-identical to the Go reference implementation's DDSketchDelta so the
-/// Go and Rust runtimes emit byte-identical delta frames for identical window
-/// state (cross-language byte parity).
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DdSketchDelta {
-    #[prost(message, repeated, tag = "1")]
-    pub buckets: ::prost::alloc::vec::Vec<DdSketchBucketDelta>,
-    #[prost(message, repeated, tag = "16")]
-    pub negative_buckets: ::prost::alloc::vec::Vec<DdSketchBucketDelta>,
-    #[prost(uint64, tag = "17")]
-    pub zero_count: u64,
-}
-/// DDSketchBucketDelta is the delta for one log-scale bucket.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct DdSketchBucketDelta {
-    /// signed bucket index (negative for values < 1)
-    #[prost(sint32, tag = "1")]
-    pub index: i32,
-    /// Δcount ≥ threshold T
-    #[prost(uint64, tag = "2")]
-    pub d_count: u64,
-}
 /// UnivMonState is the portable state of a Universal Monitoring (UnivMon) sketch.
 ///
 /// UnivMon is a hierarchy of L Count Sketches paired with L heavy-hitter heaps.
@@ -892,7 +833,7 @@ pub struct SketchEnvelope {
     /// The sketch payload. Exactly one field must be set.
     #[prost(
         oneof = "sketch_envelope::SketchState",
-        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "10, 11, 12, 13, 15, 16, 17, 18"
     )]
     pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
 }
@@ -909,8 +850,6 @@ pub mod sketch_envelope {
         Hll(super::HyperLogLogState),
         #[prost(message, tag = "13")]
         Kll(super::KllState),
-        #[prost(message, tag = "14")]
-        Ddsketch(super::DdSketchState),
         #[prost(message, tag = "15")]
         Univmon(super::UnivMonState),
         #[prost(message, tag = "16")]

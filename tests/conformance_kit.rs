@@ -10,7 +10,6 @@ use common::conformance::{
 };
 use common::{FreqTruth, zipf_u64};
 
-use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::{
     Bloom, CMSHeap, CSHeap, CountL2HH, CountMin, DDSketch, DataInput, FastPath, FoldCMS, FoldCS,
@@ -172,17 +171,6 @@ impl QuantileOps for KllDynamicAdapter {
     }
     fn quantile(&self, q: f64) -> f64 {
         self.0.quantile(q)
-    }
-}
-
-struct PortableDdsAdapter(PortableDds);
-
-impl QuantileOps for PortableDdsAdapter {
-    fn update(&mut self, value: f64) {
-        self.0.update(value);
-    }
-    fn quantile(&self, q: f64) -> f64 {
-        self.0.quantile(q).expect("non-empty sketch")
     }
 }
 
@@ -360,26 +348,6 @@ fn kll_family_passes_quantile_conformance() {
         || KllCachedAdapter(RefCell::new(KLL::init_kll_with_seed(200, KIT_KLL_SEED))),
         &values,
         QuantileSpec::default(),
-    )
-    .assert_ok();
-}
-
-/// DDSketch through the **relative-value-error** battery, against exact
-/// nearest-rank order statistics — the guarantee it actually makes.
-#[test]
-fn ddsketch_passes_relative_quantile_conformance() {
-    const ALPHA: f64 = 0.01;
-    let values: Vec<f64> = common::normal_f64(40_000, 500.0, 80.0, 7001)
-        .into_iter()
-        .filter(|v| *v > 0.0)
-        .collect();
-
-    conformance::relative_quantile_battery(
-        "PortableDds",
-        || PortableDdsAdapter(PortableDds::new(ALPHA)),
-        &values,
-        common::specs::RelativeQuantileSpec::portable(ALPHA),
-        &conformance::DEFAULT_QUANTILE_QS,
     )
     .assert_ok();
 }

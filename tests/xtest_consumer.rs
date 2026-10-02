@@ -7,7 +7,6 @@
 //! Files consumed (from $XTEST_DIR/):
 //!   countmin.pb    — CountMinState with float64 counters
 //!   kll.pb         — KLLState with quantile items and coin RNG state
-//!   ddsketch.pb    — DDSketchState with alpha + bucket array
 //!   hll.pb         — HyperLogLogState (ErtlMLE variant)
 //!   countsketch.pb — CountSketchState with float64 signed counters
 //!   coco.pb        — CocoSketchState (hash+val+hasKey buckets)
@@ -156,57 +155,6 @@ fn cross_language_proto() {
         println!("[KLL]   PASS");
     } else {
         eprintln!("[KLL] FAIL: p50={p50:.1} p99={p99:.1}");
-        all_ok = false;
-    }
-
-    // -----------------------------------------------------------------------
-    // DDSketch
-    // -----------------------------------------------------------------------
-    println!();
-    println!("[DDSketch] Step 1/3 — Read ddsketch.pb");
-    let bytes = read_file(in_dir.join("ddsketch.pb"));
-    let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode ddsketch envelope");
-
-    println!(
-        "[DDSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
-        env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library)
-    );
-
-    let dd_state = match env.sketch_state {
-        Some(sketch_envelope::SketchState::Ddsketch(ref s)) => s.clone(),
-        other => panic!("expected DDSketch sketch_state, got {other:?}"),
-    };
-
-    // `count` is not on the wire; recover it by summing the bucket counts.
-    let dd_total_count: u64 = dd_state.store_counts.iter().copied().sum();
-    println!(
-        "[DDSketch]   alpha={:.4} count={} buckets={} offset={}",
-        dd_state.alpha,
-        dd_total_count,
-        dd_state.store_counts.len(),
-        dd_state.store_offset
-    );
-
-    let dd = DdFromProto::from_state(&dd_state);
-    let p50_dd = dd.quantile(0.50);
-    let p99_dd = dd.quantile(0.99);
-    println!(
-        "[DDSketch] Step 3/3 — p50 ≈ {:.2} (expect ~5000)  p99 ≈ {:.2} (expect ~9900)",
-        p50_dd.unwrap_or(f64::NAN),
-        p99_dd.unwrap_or(f64::NAN)
-    );
-
-    let p50_ok = p50_dd
-        .map(|v| (v - 5000.0).abs() / 5000.0 < 0.02)
-        .unwrap_or(false);
-    let p99_ok = p99_dd
-        .map(|v| (v - 9900.0).abs() / 9900.0 < 0.02)
-        .unwrap_or(false);
-    if p50_ok && p99_ok {
-        println!("[DDSketch]   PASS");
-    } else {
-        eprintln!("[DDSketch] FAIL: p50={p50_dd:?} p99={p99_dd:?}");
         all_ok = false;
     }
 
@@ -1162,84 +1110,5 @@ impl KllFromProto {
             }
         }
         samples.last().unwrap().0
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Minimal DDSketch deserialization + quantile query
-// ---------------------------------------------------------------------------
-
-struct DdFromProto {
-    gamma: f64,
-    #[allow(dead_code)]
-    inv_log_gamma: f64,
-    store_counts: Vec<u64>,
-    store_offset: i32,
-    // Total count is recovered by summing the bucket array; the
-    // DataPoint-level count/min/max scalars are not on the wire.
-    count: u64,
-}
-
-impl DdFromProto {
-    fn from_state(s: &DdSketchState) -> Self {
-        let alpha = s.alpha;
-        let gamma = (1.0 + alpha) / (1.0 - alpha);
-        let log_gamma = gamma.ln();
-        let inv_log_gamma = 1.0 / log_gamma;
-        Self {
-            gamma,
-            inv_log_gamma,
-            store_counts: s.store_counts.clone(),
-            store_offset: s.store_offset,
-            count: s.store_counts.iter().copied().sum(),
-        }
-    }
-
-    fn bin_representative(&self, k: i32) -> f64 {
-        self.gamma.powf(k as f64 + 0.5)
-    }
-
-    /// Representative value of the lowest non-empty bucket — the
-    /// α-bounded estimate of the minimum now that the `min` scalar is
-    /// gone from the wire.
-    fn min_estimate(&self) -> Option<f64> {
-        self.store_counts
-            .iter()
-            .position(|&c| c > 0)
-            .map(|i| self.bin_representative(self.store_offset + i as i32))
-    }
-
-    /// Representative value of the highest non-empty bucket — the
-    /// α-bounded estimate of the maximum.
-    fn max_estimate(&self) -> Option<f64> {
-        self.store_counts
-            .iter()
-            .rposition(|&c| c > 0)
-            .map(|i| self.bin_representative(self.store_offset + i as i32))
-    }
-
-    fn quantile(&self, q: f64) -> Option<f64> {
-        if self.count == 0 {
-            return None;
-        }
-        if q <= 0.0 {
-            return self.min_estimate();
-        }
-        if q >= 1.0 {
-            return self.max_estimate();
-        }
-        let rank = (q * self.count as f64).ceil() as u64;
-        let mut seen = 0u64;
-        for (i, &c) in self.store_counts.iter().enumerate() {
-            if c == 0 {
-                continue;
-            }
-            seen += c;
-            if seen >= rank {
-                let bin = self.store_offset + i as i32;
-                return Some(self.bin_representative(bin));
-            }
-        }
-        self.max_estimate()
     }
 }

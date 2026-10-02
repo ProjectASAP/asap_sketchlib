@@ -212,9 +212,6 @@ impl TryFrom<DDSketchState> for DDSketch {
 /// `minIndexableValue`/`maxIndexableValue`. Values outside this range are
 /// handled without growing the dense store: smaller magnitudes enter the
 /// zero bucket, while larger magnitudes are rejected.
-///
-/// Single source of truth shared by core `DDSketch`, the portable wire twin,
-/// and tests, so the two implementations cannot drift algebraically again.
 pub fn ddsketch_indexable_bounds(alpha: f64) -> (f64, f64) {
     let gamma = (1.0 + alpha) / (1.0 - alpha);
     let inv_log_gamma = 1.0 / gamma.ln();
@@ -520,8 +517,7 @@ impl DDSketch {
     /// This is a REAL runtime check, not a `debug_assert!`: a `debug_assert!`
     /// compiles out in release builds, leaving a mismatched merge to corrupt
     /// results with no signal at all. DataDog's `MergeWith` and sketchlib-go's
-    /// Go `Merge` both return an error here; the portable `DdSketch::merge` in
-    /// this same crate does too.
+    /// Go `Merge` both return an error here.
     pub fn merge(&mut self, other: &DDSketch) -> Result<(), String> {
         if (self.alpha - other.alpha).abs() >= 1e-12 || (self.gamma - other.gamma).abs() >= 1e-12 {
             return Err(format!(

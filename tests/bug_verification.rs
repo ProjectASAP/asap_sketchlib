@@ -10,51 +10,7 @@
 //! in `tests/e2e/nitro.rs`, which names both failure modes on the same run
 //! that already exercises every ingestion path.
 
-use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
-use asap_sketchlib::{CountL2HH, DDSketch, DataInput, DefaultXxHasher};
-
-// ---------------------------------------------------------------------------
-// Bug 3: portable DdSketch reports gamma^(k+0.5) (bucket log-midpoint) as the
-// representative (portable/ddsketch.rs:426). For values sitting at the lower
-// edge of bucket k the relative error is sqrt(gamma)-1 ~= alpha + alpha^2/2,
-// violating the advertised relative-accuracy guarantee. Core DDSketch already
-// uses gamma^k * (1 + alpha) (ddsketch.rs:383-392), so the two disagree on
-// identical data.
-//
-// Synthetic data: value gamma^k * (1 + 1e-6) repeated 10_000x, alpha = 0.05.
-// Truth for every quantile: the value itself. Current behavior: 5.13% error.
-// ---------------------------------------------------------------------------
-#[test]
-fn portable_ddsketch_respects_alpha_at_bucket_edges() {
-    let alpha = 0.05;
-    let gamma = (1.0f64 + alpha) / (1.0 - alpha);
-    let v = gamma.powi(20) * (1.0 + 1e-6);
-
-    let mut port = PortableDds::new(alpha);
-    let mut core = DDSketch::new(alpha);
-    for _ in 0..10_000 {
-        port.update(v);
-        core.add(&v);
-    }
-
-    let q_port = port.quantile(0.5).unwrap();
-    let rel_port = ((q_port - v) / v).abs();
-    assert!(
-        rel_port <= alpha * (1.0 + 1e-6),
-        "portable DdSketch median off by {rel_port:.5} (> alpha={alpha}) at a \
-         bucket-edge value"
-    );
-
-    // Both implementations must sit within alpha of the truth on identical
-    // data. (Exact equality is impossible: core clamps representatives to its
-    // observed min/max, which the portable wire format does not carry.)
-    let q_core = core.get_value_at_quantile(0.5).unwrap();
-    let rel_core = ((q_core - v) / v).abs();
-    assert!(
-        rel_core <= alpha * (1.0 + 1e-6),
-        "core DDSketch median off by {rel_core:.5} (> alpha={alpha})"
-    );
-}
+use asap_sketchlib::{CountL2HH, DataInput, DefaultXxHasher};
 
 // ---------------------------------------------------------------------------
 // Bug 4: CountL2HH's hot-path L2 accumulation ran in plain i64
