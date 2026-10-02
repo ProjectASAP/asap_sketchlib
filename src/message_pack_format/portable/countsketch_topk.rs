@@ -2,11 +2,7 @@
 //!
 //! No `sketches::*` equivalent — this combines `sketches::CSHeap` with
 //! the signed `rows x cols` matrix shape and exposes it as a single
-//! Go-interop type. Mirrors [`crate::message_pack_format::portable::countminsketch_topk::CountMinSketchWithHeap`]
-//! structurally, but backed by `CSHeap` (median estimator, signed rows)
-//! instead of `CMSHeap` (min-over-rows estimator) — the two are
-//! different sketch algorithms that happen to produce a same-shaped
-//! `rows x cols` matrix, not interchangeable data.
+//! Go-interop type, backed by `CSHeap` (median estimator, signed rows).
 
 use serde::{Deserialize, Serialize};
 
@@ -447,10 +443,8 @@ mod tests {
         assert!(CountSketchWithHeap::aggregate_topk(4, 100, 10, &[], &[]).is_none());
     }
 
-    /// The whole point of splitting this from `CountMinSketchWithHeap`:
     /// CS's median estimator must behave differently from CMS's
-    /// min-over-rows estimator on the same kind of skewed insert
-    /// pattern, not just share a struct shape.
+    /// min-over-rows estimator on the same kind of skewed insert pattern.
     #[test]
     fn test_median_estimator_differs_from_cms_style_min() {
         let mut cs = CountSketchWithHeap::new(5, 64, 10);

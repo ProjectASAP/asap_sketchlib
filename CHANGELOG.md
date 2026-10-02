@@ -76,6 +76,14 @@ signals a backwards-compatible change.
   `hll_hip_p14` in `asapv1_golden/`, checked in both directions by
   `tests/asapv1_golden.rs`. Their registers touch the first, a middle and the
   last index and hold 51, the largest P14 rank.
+- **ASAPv1 golden fixtures for CMSHeap** (`03 00`):
+  `cmsheap_i64_regular_2x3_strkeys`, `cmsheap_i32_fast_2x3_i64keys`, the
+  key-tie fixtures `cmsheap_i64_regular_2x3_i64tie` and
+  `cmsheap_i64_regular_2x3_strtie`, and the empty heap
+  `cmsheap_i64_regular_2x3_empty`, checked by `tests/asapv1_golden.rs`.
+- The ASAPv1 spec states the heap key tie order: a signed key compares as its
+  two's-complement bit pattern read unsigned, a float by its bits, a string or
+  bytes key byte-wise with a proper prefix first.
 
 ### Changed
 
@@ -159,6 +167,17 @@ signals a backwards-compatible change.
   `CountSketchDelta` and `CountSketchCell`; and `SketchEnvelope`'s
   `count_sketch` field (11, now reserved). `CountSketchState` stays, as
   UnivMon and Hydra embed it.
+- **CMSHeap's pre-envelope MessagePack format.** `CMSHeap` serializes through
+  ASAPv1 only (`serialize_to_bytes` / `deserialize_from_bytes`). Removed: the
+  module `message_pack_format::portable::countminsketch_topk` with
+  `CountMinSketchWithHeap` (and its `MessagePackCodec` impl, `merge_refs` and
+  `aggregate_topk`), `CmsHeapItem`, `WireHeapItem`, `SketchlibCMSHeap`,
+  `CountMinSketchInnerWire`, `CountMinSketchWithHeapWire`,
+  `new_sketchlib_cms_heap`, `sketchlib_cms_heap_from_matrix_and_heap`,
+  `matrix_from_sketchlib_cms_heap`, `heap_to_wire`, `sketchlib_cms_heap_update`
+  and `sketchlib_cms_heap_query`, plus the crate-root re-exports
+  `CountMinSketchWithHeap` and `CmsHeapItem`. Bytes in that format no longer
+  decode.
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the

@@ -1,5 +1,5 @@
 //! Composition layers: `HashSketchEnsemble`, `UnivMonQ`'s configuration
-//! surface, and the portable facade types that pair a sketch with a heap.
+//! surface, and the types that pair a sketch with a heap.
 //!
 //! Nitro is a composition layer too, but all of its behaviour lives in
 //! `tests/e2e/nitro.rs`.
@@ -16,9 +16,9 @@ use common::specs::{CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, Kl
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{
-    Classic, Count, CountMin, CountMinSketchWithHeap, CountSketchWithHeap, DataInput,
-    EnsembleSketch, ErtlMLE, FastPath, HashSketchEnsemble, HyperLogLog, HyperLogLogHIP, KLL,
-    MessagePackCodec, UnivMonQ, UnivMonQConfig, Vector2D,
+    CMSHeap, Classic, Count, CountMin, CountSketchWithHeap, DataInput, EnsembleSketch, ErtlMLE,
+    FastPath, HashSketchEnsemble, HeapItem, HyperLogLog, HyperLogLogHIP, KLL, MessagePackCodec,
+    RegularPath, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 
 const ROWS: usize = 3;
@@ -559,27 +559,29 @@ fn univmonq_multi_shard_merge_with_distinct_source_ids_covers_the_union() {
     assert_eq!(merged.max(), Some(truth.max()), "merged max must be exact");
 }
 
-// -------------------------------------------------------- Portable facade
+// -------------------------------------------------------- Sketch plus heap
 
-/// The portable sketch-plus-heap types, on a real stream against exact truth:
-/// the point estimate under the right family's bound, the heap consistent with
-/// it, and both surviving a MessagePack round trip and a merge.
+/// `CMSHeap` on a real stream against exact truth: the point estimate under
+/// Count-Min's bound, the heap consistent with it, and both surviving a merge
+/// and an ASAPv1 round trip.
 #[test]
-fn portable_count_min_with_heap_satisfies_the_count_min_bound_through_merge_and_wire() {
+fn cms_heap_satisfies_the_count_min_bound_through_merge_and_wire() {
     const HEAP: usize = 32;
+    type Sketch = CMSHeap<Vector2D<i64>, RegularPath>;
+    let key_of = |k: i64| DataInput::String(format!("k{k}"));
     let stream = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
     let mut truth = FreqTruth::default();
-    let mut single = CountMinSketchWithHeap::new(ROWS, COLS, HEAP);
-    let mut left = CountMinSketchWithHeap::new(ROWS, COLS, HEAP);
-    let mut right = CountMinSketchWithHeap::new(ROWS, COLS, HEAP);
+    let mut single = Sketch::new(ROWS, COLS, HEAP);
+    let mut left = Sketch::new(ROWS, COLS, HEAP);
+    let mut right = Sketch::new(ROWS, COLS, HEAP);
     for (i, k) in stream.iter().enumerate() {
         truth.observe(*k as i64);
-        let key = format!("k{k}");
-        single.update(&key, 1.0);
+        let key = key_of(*k as i64);
+        single.insert(&key);
         if i % 2 == 0 {
-            left.update(&key, 1.0);
+            left.insert(&key);
         } else {
-            right.update(&key, 1.0);
+            right.insert(&key);
         }
     }
 
@@ -588,54 +590,65 @@ fn portable_count_min_with_heap_satisfies_the_count_min_bound_through_merge_and_
     );
     let spec = CountMinSpec::new(ROWS, COLS);
     spec.assert_contract(
-        "portable CountMinSketchWithHeap",
+        "CMSHeap",
         &truth,
-        |k| single.estimate(&format!("k{k}")),
+        |k| single.estimate(&key_of(k)) as f64,
         &context,
     );
 
     // The heap must agree with the sketch it sits beside.
     let mut heap_tally = Tally::default();
-    for item in single.topk_heap_items() {
-        let est = single.estimate(&item.key);
-        heap_tally.record(item.value == est, || {
+    for item in single.heap().heap() {
+        let HeapItem::String(key) = &item.key else {
+            panic!(
+                "heap key {:?} is not the string it was inserted as",
+                item.key
+            );
+        };
+        let est = single.estimate(&DataInput::Str(key));
+        heap_tally.record(item.count == est, || {
             format!(
-                "key {}: heap holds {} but the sketch estimates {est}",
-                item.key, item.value
+                "key {key}: heap holds {} but the sketch estimates {est}",
+                item.count
             )
         });
     }
-    heap_tally.assert_none("portable CountMinSketchWithHeap heap consistency", &context);
+    heap_tally.assert_none("CMSHeap heap consistency", &context);
 
     // Merge, then the same contract.
-    let merged = CountMinSketchWithHeap::merge_refs(&[&left, &right]).expect("merge");
+    let mut merged = left.clone();
+    merged.merge(&right);
     spec.assert_contract(
-        "portable CountMinSketchWithHeap after merge",
+        "CMSHeap after merge",
         &truth,
-        |k| merged.estimate(&format!("k{k}")),
+        |k| merged.estimate(&key_of(k)) as f64,
         &context,
     );
 
     // Wire round trip, then the same contract again: serialization must not
     // change a single answer.
-    let bytes = single.to_msgpack().expect("encode");
-    let decoded = CountMinSketchWithHeap::from_msgpack(&bytes).expect("decode");
+    let bytes = single.serialize_to_bytes().expect("encode");
+    let decoded = Sketch::deserialize_from_bytes(&bytes).expect("decode");
     let mut wire_tally = Tally::default();
     for (k, _) in truth.pairs() {
-        let key = format!("k{k}");
-        let a = single.estimate(&key);
-        let b = decoded.estimate(&key);
-        wire_tally.record(a == b, || format!("key {key}: before {a} after {b}"));
+        let a = single.estimate(&key_of(k));
+        let b = decoded.estimate(&key_of(k));
+        wire_tally.record(a == b, || format!("key k{k}: before {a} after {b}"));
     }
-    wire_tally.assert_none("portable CountMinSketchWithHeap wire round trip", &context);
+    wire_tally.assert_none("CMSHeap wire round trip", &context);
     spec.assert_contract(
-        "portable CountMinSketchWithHeap after a wire round trip",
+        "CMSHeap after a wire round trip",
         &truth,
-        |k| decoded.estimate(&format!("k{k}")),
+        |k| decoded.estimate(&key_of(k)) as f64,
         &context,
     );
 }
 
+// -------------------------------------------------------- Portable facade
+
+/// The portable sketch-plus-heap type, on a real stream against exact truth:
+/// the point estimate under the L2 bound, the heap consistent with it, and
+/// both surviving a MessagePack round trip and a merge.
 #[test]
 fn portable_count_sketch_with_heap_satisfies_the_l2_bound_through_merge_and_wire() {
     const HEAP: usize = 32;

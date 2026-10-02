@@ -559,7 +559,7 @@ Two summaries have no encoding and **fail to serialize** rather than being coerc
 
 **Empty summary.** A summary that monitors nothing has no variant to report. It emits `key_type = "u64"` with three empty arrays, so an empty summary has exactly one encoding rather than one per producer.
 
-**Emitted order (cross-language contract).** The payload is **order-defined**: entries are written in **descending `count`**, ties broken by a **total order over the key** (variant tag first, then the value). This is required, not cosmetic: `entries()` order follows the counter arena and `top_k` order follows the bucket walk, and neither survives a rebuild, so an unordered payload would re-serialize to different bytes than it decoded from. With the order pinned, two summaries holding the same triples emit the same bytes whatever order they were seated in, and re-serializing a decoded summary reproduces its bytes exactly.
+**Emitted order (cross-language contract).** The payload is **order-defined**: entries are written in **descending `count`**, ties broken by a **total order over the key** (variant tag first, then the value). The value compares as unsigned bits: a signed key by its two's-complement pattern, so every negative key sorts after every non-negative one; a float by its IEEE-754 bits; a string or bytes key byte-wise, a proper prefix first. This is required, not cosmetic: `entries()` order follows the counter arena and `top_k` order follows the bucket walk, and neither survives a rebuild, so an unordered payload would re-serialize to different bytes than it decoded from. With the order pinned, two summaries holding the same triples emit the same bytes whatever order they were seated in, and re-serializing a decoded summary reproduces its bytes exactly.
 
 **Decode rules.** Fail **closed** on each, with an error and never a panic:
 
@@ -639,7 +639,7 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 
 **`key_type` names the exact key variant, and is never widened.** This is §3.5's rule, and the fourteen names and their `HeapItem` variants are the table there. A heap whose keys are of different variants has no single `key_type` and **fails to serialize** with an error naming the mismatch; `HeapItem::I128` / `U128` have no msgpack integer form and are not wire types. An empty heap has no variant to report: it emits `key_type = "u64"` with two empty arrays, so an empty heap has exactly one encoding rather than one per producer.
 
-**Emitted order (cross-language contract).** `counts` is row-major. Heap entries are written in **descending `heap_counts`**, ties broken by a **total order over the key**: the variant tag first, in `HeapItem`'s declaration order, so every string sorts after every numeric key; then the value. This is required, not cosmetic: the heap's in-memory array order follows the sift path taken while it filled, and that order does not survive a rebuild, so an unordered payload would re-serialize to different bytes than it decoded from. With the order pinned, two heaps holding the same entries emit the same bytes whatever order they were seated in. Go must mirror the same comparator.
+**Emitted order (cross-language contract).** `counts` is row-major. Heap entries are written in **descending `heap_counts`**, ties broken by a **total order over the key**: the variant tag first, in `HeapItem`'s declaration order, so every string sorts after every numeric key; then the value, compared as §3.5 defines it. This is required, not cosmetic: the heap's in-memory array order follows the sift path taken while it filled, and that order does not survive a rebuild, so an unordered payload would re-serialize to different bytes than it decoded from. With the order pinned, two heaps holding the same entries emit the same bytes whatever order they were seated in. Go must mirror the same comparator.
 
 **Decode rules.** Fail **closed** on each, with an error and never a panic:
 
@@ -655,8 +655,6 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 `slots`, `positions` and the heap array are recomputed from the validated entries; nothing about them is trusted from the wire. Rules 6 and 7 are enforced on the **encode** side too — a matrix whose cell count disagrees with its own dimensions (`Vector2D::init` reserves without filling) fails to serialize, and so does a heap holding the same key twice, judged by exactly the wire-representation check the decoder runs — as is the `k` bound. `cols` must fit the metadata's `u32` field on the way out as well. So the format never emits bytes it would refuse to read back.
 
 **A producer-side constraint: a `NaN` key.** `HHHeap` finds a resident by digest and then compares with `PartialEq`, and `NaN` never equals itself, so offering the same `NaN` key twice seats **two** entries rather than rescoring one. That state is reachable in memory and has **no encoding**: the encode-side duplicate check reads the two keys' bits, sees one key twice, and fails with the same complaint the decoder would make. Nothing repairs it on either door — a producer that inserts float keys must keep `NaN` out of a heap it intends to serialize.
-
-**Not this: `portable/countminsketch_topk.rs`.** Despite the name, that module emits no ASAPv1 bytes. It is a legacy Go-interop struct with its own msgpack shape: an `f64` matrix rounded into the `i64` one on the way in, and heap keys coerced to `String` — a `HeapItem` that is not already a `String` goes through a Rust debug format, which is lossy and reversible by nothing. `0x03 0x00` shares none of that: its matrix travels at the metadata's `counter_type` and its keys travel as the exact `HeapItem` variant `key_type` names.
 
 ### 3.8: DDSketch payload (`0x05 0x00`)
 
@@ -1338,7 +1336,7 @@ Good direction (more compact, higher fidelity, less Rust-internal duplication), 
 2. **Golden byte-vector fixtures** in one shared repo, [`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), which each implementation mounts at `asapv1_golden/`; both languages decode and re-encode them byte-identically. These replace the `portable`-as-oracle round-trip test.
 3. **This registry**, mirrored, never independently allocated.
 
-Fixtures exist for seven `kind_id`s — HLL's three estimators, Count-Min, Count Sketch and both KLL variants — and `sketchlib-go` mirrors those. Every other kind here has a payload and **no fixture**, so this document is its only contract; `asapv1_golden/README.md` lists the gap. `portable` carries its own Go goldens.
+`asapv1_golden/README.md` lists the `kind_id`s with fixtures, which `sketchlib-go` mirrors; for every other kind this document is the only contract. `portable` carries its own Go goldens.
 
 **Hash profile on the Go side.**
 Rust derives the hash spec from a generic `HashProfile` bound on the hasher type; Go has no generic hasher type, so there is nothing to derive from.
