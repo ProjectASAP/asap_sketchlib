@@ -66,6 +66,8 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **ASAPv1 golden fixture for Coco** (`0c 00`): `asapv1_golden/coco_3x8.hex`,
+  a 3x8 bucket table set directly, checked by `tests/asapv1_golden.rs`.
 
 ### Changed
 
