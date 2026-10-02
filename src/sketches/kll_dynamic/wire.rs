@@ -37,8 +37,8 @@ where
     /// top-most-level-first / input-order-L0 layout, so `levels` and `items` are
     /// copied straight out.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        // `KLLDynamic` has no reproducible-seed concept, so `seed` is always
-        // `None` and the metadata key is omitted.
+        // `KLLDynamic` never emits the `seed` metadata key, even when built
+        // with one.
         let metadata =
             rmp_serde::to_vec_named(&kll_metadata::<T>(self.k as u32, self.m as u32, None))?;
         let (state, bit_cache, remaining_bits) = self.co.to_wire();

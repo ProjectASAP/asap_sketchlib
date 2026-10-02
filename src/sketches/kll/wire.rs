@@ -21,7 +21,8 @@
 //!
 //! The payload's `levels` / `items` use the **top-most-level-first** layout,
 //! byte-for-byte matching `sketchlib-go` (index `i` in `levels` maps to
-//! compactor level `num_levels - 1 - i`; level 0's run is in input order). For the compact KLL this is exactly what [`KLL::wire_levels`] /
+//! compactor level `num_levels - 1 - i`; level 0's run is in input order). For
+//! the compact KLL this is exactly what [`KLL::wire_levels`] /
 //! [`KLL::wire_items`] emit (they reverse the leftward-grown L0 buffer back to
 //! input order); decode inverts that mapping.
 

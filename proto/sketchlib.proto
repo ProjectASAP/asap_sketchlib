@@ -7,7 +7,6 @@
 //   countminsketch/countminsketch.proto — CountMinState
 //   countsketch/countsketch.proto    — CountSketchState, TopKState, HeapEntry
 //   hll/hll.proto                    — HyperLogLogState, HLLVariant
-//   kll/kll.proto                    — KLLState, CoinState
 //   ddsketch/ddsketch.proto          — DDSketchState
 //   univmon/univmon.proto            — UnivMonState, UnivMonLayer
 //   hydra/hydra.proto                — HydraState, HydraCounterType, HydraCell
