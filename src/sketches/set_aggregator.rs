@@ -60,7 +60,8 @@ impl Default for SetAggregator {
 }
 
 /// The keys a later set snapshot added and removed relative to an earlier
-/// one. The two sets are disjoint.
+/// one. The two sets must be disjoint; `serialize_to_bytes` refuses a key
+/// held in both.
 #[derive(Debug, Clone)]
 pub struct DeltaResult {
     pub added: HashSet<String>,

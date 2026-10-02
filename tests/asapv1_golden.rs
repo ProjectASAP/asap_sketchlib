@@ -303,12 +303,17 @@ fn string_set(keys: &[&str]) -> HashSet<String> {
     keys.iter().map(|k| k.to_string()).collect()
 }
 
-/// The empty string, a 32-byte str8, and UTF-8 code points of two, three and
-/// four bytes. U+FF5E precedes U+1F600 in byte order but not in UTF-16 order.
-const SET_STRINGS: [&str; 8] = [
+/// The empty string, a proper-prefix chain (`"ab"`, `"abc"`, the 32-byte
+/// key), a 31-byte fixstr and a 32-byte str8, and UTF-8 code points of two,
+/// three and four bytes. U+FF5E precedes U+1F600 in byte order but not in
+/// UTF-16 order.
+const SET_STRINGS: [&str; 11] = [
     "",
+    "ab",
+    "abc",
     "abcdefghijklmnopqrstuvwxyz012345",
     "api",
+    "fixstr-max-31-bytes-0123456789a",
     "web",
     "\u{e9}",
     "\u{4e2d}",

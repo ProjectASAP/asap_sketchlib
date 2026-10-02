@@ -63,21 +63,13 @@ fn canonical(set: &HashSet<String>) -> Vec<&str> {
 /// Rebuilds a set from a wire array, rejecting any array that is not strictly
 /// ascending. The set reserves from the array actually shipped.
 fn read_canonical(field: &str, keys: Vec<WireString>) -> Result<HashSet<String>, RmpDecodeError> {
-    let mut set = HashSet::with_capacity(keys.len());
-    let mut previous: Option<String> = None;
-    for (idx, key) in keys.into_iter().enumerate() {
-        let key = key.into_string();
-        if let Some(prev) = &previous
-            && prev.as_str() >= key.as_str()
-        {
-            return Err(RmpDecodeError::Uncategorized(format!(
-                "ASAPv1 {field} must be strictly ascending in byte order, broken at index {idx}"
-            )));
-        }
-        set.insert(key.clone());
-        previous = Some(key);
+    if let Some(idx) = keys.windows(2).position(|pair| pair[0].0 >= pair[1].0) {
+        return Err(RmpDecodeError::Uncategorized(format!(
+            "ASAPv1 {field} must be strictly ascending in byte order, broken at index {}",
+            idx + 1
+        )));
     }
-    Ok(set)
+    Ok(keys.into_iter().map(WireString::into_string).collect())
 }
 
 /// Splits the envelope, checks the kind_id and the metadata, and returns the
