@@ -71,7 +71,6 @@ pub const fn is_quantile_scale_invariant() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::sketchlib::{HyperLogLogState, SketchEnvelope, sketch_envelope::SketchState};
 
     fn env_with_p(p: f64) -> SketchEnvelope {
         SketchEnvelope {
@@ -79,15 +78,7 @@ mod tests {
             producer: None,
             hash_spec: None,
             sample_p: p,
-            sketch_state: Some(SketchState::Hll(HyperLogLogState {
-                variant: 2,
-                precision: 14,
-                registers: Vec::new(),
-                hip_kxq0: 0.0,
-                hip_kxq1: 0.0,
-                hip_est: 0.0,
-                registers_sparse: None,
-            })),
+            sketch_state: None,
         }
     }
 

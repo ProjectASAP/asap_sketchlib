@@ -6,7 +6,6 @@
 //   common/common.proto              — HashSpec, ProducerInfo, CounterType, ...
 //   countminsketch/countminsketch.proto — CountMinState
 //   countsketch/countsketch.proto    — CountSketchState, TopKState, HeapEntry
-//   hll/hll.proto                    — HyperLogLogState, HLLVariant
 //   kll/kll.proto                    — KLLState, CoinState
 //   ddsketch/ddsketch.proto          — DDSketchState
 //   univmon/univmon.proto            — UnivMonState, UnivMonLayer
@@ -31,7 +30,6 @@ package sketchlib.v1;
 import "common/common.proto";
 import "countminsketch/countminsketch.proto";
 import "countsketch/countsketch.proto";
-import "hll/hll.proto";
 import "kll/kll.proto";
 import "ddsketch/ddsketch.proto";
 import "univmon/univmon.proto";
@@ -68,7 +66,6 @@ message SketchEnvelope {
   oneof sketch_state {
     CountMinState    count_min    = 10;
     CountSketchState count_sketch = 11;
-    HyperLogLogState hll          = 12;
     KLLState         kll          = 13;
     DDSketchState    ddsketch     = 14;
     UnivMonState     univmon      = 15;
@@ -77,6 +74,8 @@ message SketchEnvelope {
     ElasticState     elastic      = 18;
   }
 
+  reserved 12;
+  reserved "hll";
   reserved 19 to 31;  // Reserved for future sketch types.
 
   // Geometric / NitroSketch sampling probability for the producing sketch.

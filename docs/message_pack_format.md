@@ -150,7 +150,7 @@ being **phased out** in favor of the per-sketch `wire.rs` + the shared
 `envelope.rs`.
 
 - `portable/` holds per-sketch wire types that predate the envelope. They
-  carry their own byte-parity goldens against `sketchlib-go` — HLL, Count-Min,
+  carry their own byte-parity goldens against `sketchlib-go` — Count-Min,
   Count Sketch and KLL (both directions) — separate from `asapv1_golden/`.
 - `native/` is a set of thin `MessagePackCodec` shims over the sketches'
   `serialize_to_bytes` / `deserialize_from_bytes`. Every type it wraps emits the

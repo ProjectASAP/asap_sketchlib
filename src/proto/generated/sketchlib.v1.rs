@@ -461,38 +461,6 @@ pub struct HllSparseRegisters {
     #[prost(bytes = "vec", tag = "2")]
     pub packed: ::prost::alloc::vec::Vec<u8>,
 }
-/// HLLDelta carries the registers that increased between two consecutive
-/// snapshots. HLL uses max semantics, so only increases are meaningful;
-/// at a fixed precision a register can never decrease. Each update is applied
-/// losslessly on the receiver via register\[index\] = max(register\[index\], value)
-/// — no register update is ever dropped (there is no threshold to apply).
-///
-/// The increased registers are varint-packed exactly like
-/// HLLSparseRegisters.packed: sorted ascending by index, each register emitted
-/// as (index_delta, value) where index_delta = index - prev_index (prev_index
-/// starts at 0) and value is the new (larger) register value:
-///
-///    for each increased register, in ascending index order:
-///      uvarint(index - prev_index)   // prev_index starts at 0; deltas are >= 0
-///      uvarint(value)                // 1..=Q+1, always 1 byte in practice
-///
-/// A single-emit delta against the all-zero snapshot is therefore the same size
-/// as the full sparse frame, and a sub-window delta is strictly smaller (it
-/// packs only the registers that actually grew). This replaces the previous
-/// per-register sub-message encoding, eliminating ~6–8 bytes of tag/length
-/// overhead per register.
-///
-/// This message is byte-identical to the Go reference implementation's HLLDelta
-/// so the two runtimes emit byte-identical delta frames for identical window
-/// state (cross-language byte parity).
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct HllDelta {
-    /// Varint-packed (index_delta, value) pairs for the registers that increased,
-    /// in ascending index order. Same layout as HLLSparseRegisters.packed. Empty
-    /// when no register changed.
-    #[prost(bytes = "vec", tag = "1")]
-    pub packed_updates: ::prost::alloc::vec::Vec<u8>,
-}
 /// HLLVariant identifies which HLL estimator algorithm the registers belong to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -892,7 +860,7 @@ pub struct SketchEnvelope {
     /// The sketch payload. Exactly one field must be set.
     #[prost(
         oneof = "sketch_envelope::SketchState",
-        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "10, 11, 13, 14, 15, 16, 17, 18"
     )]
     pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
 }
@@ -905,8 +873,6 @@ pub mod sketch_envelope {
         CountMin(super::CountMinState),
         #[prost(message, tag = "11")]
         CountSketch(super::CountSketchState),
-        #[prost(message, tag = "12")]
-        Hll(super::HyperLogLogState),
         #[prost(message, tag = "13")]
         Kll(super::KllState),
         #[prost(message, tag = "14")]

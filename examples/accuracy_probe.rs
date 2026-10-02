@@ -9,7 +9,6 @@
 use asap_sketchlib::common::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
-use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketch as PortableKll;
 use asap_sketchlib::{
@@ -1041,21 +1040,6 @@ fn probe_portable_wire_types() {
         "portable CMS one-sided bound (top-50)",
         format!("{bad} violations"),
         bad == 0,
-    );
-
-    // Portable HLL precision 12.
-    let mut ph = HllSketch::new(HllVariant::Regular, 12);
-    for i in 0..100_000u64 {
-        ph.update(i.to_le_bytes().as_slice());
-    }
-    let est = ph.estimate();
-    p.check(
-        "portable HLL p12 within 3%",
-        format!(
-            "expected 100000, got {est:.0} (rel {:.4})",
-            rel_err(est, 100_000.0)
-        ),
-        rel_err(est, 100_000.0) < 0.03,
     );
 
     // Portable KLL.
