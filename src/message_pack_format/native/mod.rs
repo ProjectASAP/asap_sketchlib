@@ -9,7 +9,6 @@
 
 pub mod countminsketch;
 pub mod countsketch;
-pub mod countsketch_topk;
 pub mod ddsketch;
 pub mod hll;
 pub mod kll;
