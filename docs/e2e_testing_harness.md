@@ -101,7 +101,7 @@ One spec per *metric*, not per sketch, because the metric is what differs:
 | `CountSketchSpec` | two-sided L2, rank-independent | marginal `sqrt(3/w)·‖f₋ᵢ‖₂` at `P[Bin(d, 1/3) ≥ ⌈d/2⌉]`; simultaneous at the smallest κ with `P[Bin(d,1/κ) ≥ ⌈d/2⌉] ≤ δ/D` |
 | `SecondMomentSpec` | F2 from a Count Sketch matrix | `sqrt(2κ/w)`, same median amplification |
 | `KllRankSpec` | KLL **maximum** rank error over a q grid | `ε(k) = 2.446 / k^0.9433` — an Apache DataSketches *characterization fit*, not a theorem about this code |
-| `RelativeQuantileSpec` + `DdRankConvention` | DDSketch relative value error | `α + ULP slack` vs the exact `ceil(q·n)` order statistic |
+| `RelativeQuantileSpec` + `dd_rank_index` | DDSketch relative value error | `α + ULP slack` vs the exact `ceil(q·n)` order statistic |
 | `CardinalityConfidenceSpec` | HLL / KMV | `z · σ_rel`, σ derived exactly, the tail a normal approximation |
 | `SamplingConfidenceSpec` | Nitro | `z · sqrt(f(p·r(1−r) + (1−p)/p))`, `r = frac(1/p)` |
 | `PrioritySampleSpec` | `UniformSampling` | `len = ⌈n·rate⌉` exactly; `Var[mean] = (σ_N²/m)(N−m)/(N−1)` |
@@ -142,7 +142,7 @@ Keeping these apart is deliberate. There is no shared
 promise the same thing: a correct KLL can return a value 100× off on a
 heavy-tailed stream and still be within its rank guarantee, and a correct
 DDSketch has no rank guarantee at all. `DDSketch::get_value_at_quantile`
-answers `sorted[ceil(q·n) − 1]`, and `DdRankConvention` names that truth.
+answers `sorted[ceil(q·n) − 1]`, and `dd_rank_index` computes that truth.
 
 Two distinctions are easy to lose:
 

@@ -6,11 +6,7 @@
 
 Quantiles use the ceil(q*n) order-statistic convention and exact ingested extrema. For indexable nonzero order statistics the estimate has absolute error at most `alpha * abs(value)`, for either sign.
 
-If interpolation combines endpoints x and y with weight t, the absolute error is bounded by `alpha * ((1-t)*abs(x) + t*abs(y))`, excluding zero-mapped tiny values. Opposite signs can cancel, so the interpolated result need not have relative error alpha. Dividing quantiles additionally requires a finite nonzero true denominator and valid relative-error bounds for both operands. This change does not establish those planner preconditions.
+## Wire and OctoSketch
 
-## Wire and downstream upgrade
-
-- Native ASAPv1: positive-only states keep metadata version 1 and their existing bytes. Signed/zero states use metadata version 2 and append negative counts, negative offset, and zero count. Old native readers reject version 2.
-- Octo: `DdDelta` now requires a `store: DdStore` discriminator. Existing positive delta constructors should use `DdStore::Positive`. Worker residual keys are `(DdStore, i32)`. Both promotion and flush preserve all three categories; partial counts still need flushing before complete queries.
-
-Go implementations of the ASAP wire formats and downstream dependency pins are not changed by this Rust library patch.
+- ASAPv1: positive-only states use metadata version 1. States with negative samples or zeros use version 2, which appends negative counts, negative offset, and zero count.
+- OctoSketch: `DdDelta` carries a `store: DdStore` discriminator, and worker residual keys are `(DdStore, i32)`. Promotion and flush preserve all three categories; partial counts need flushing before complete queries.

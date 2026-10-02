@@ -66,9 +66,10 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
-- **DDSketch ASAPv1 golden fixtures**: `ddsketch_positive_a001` (metadata
-  version 1) and `ddsketch_signed_a001` (metadata version 2, negative store and
-  zero count), checked by `tests/asapv1_golden.rs`.
+- **DDSketch ASAPv1 golden fixtures**: `ddsketch_positive_a001` and
+  `ddsketch_empty_a001` (metadata version 1) and `ddsketch_signed_a001`
+  (metadata version 2, negative store and zero count), checked by
+  `tests/asapv1_golden.rs`.
 
 ### Changed
 

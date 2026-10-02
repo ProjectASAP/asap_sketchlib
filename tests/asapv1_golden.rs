@@ -35,6 +35,7 @@ const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
 const GOLDEN_DD_POSITIVE: &str = include_str!("../asapv1_golden/ddsketch_positive_a001.hex");
 const GOLDEN_DD_SIGNED: &str = include_str!("../asapv1_golden/ddsketch_signed_a001.hex");
+const GOLDEN_DD_EMPTY: &str = include_str!("../asapv1_golden/ddsketch_empty_a001.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -293,8 +294,9 @@ fn kll_i64_k200_matches_golden() {
 
 // ---------------------------------------------------------------------------
 // DDSketch: bucket stores, offsets, zero count and scalars set directly
-// (DDSketch never hashes). The positive-only state is metadata version 1; the
-// signed state is version 2 and adds the negative store and zero count.
+// (DDSketch never hashes). The positive-only and empty states are metadata
+// version 1; the signed state is version 2 and adds the negative store and
+// zero count.
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -303,7 +305,7 @@ struct DdStore {
     offset: i32,
 }
 
-/// The field order of `DDSketch`'s serde form.
+/// The field names of `DDSketch`'s serde form.
 #[derive(Serialize)]
 struct DdState {
     alpha: f64,
@@ -350,7 +352,7 @@ fn dd_sketch(
         },
         zero_count,
     };
-    rmp_serde::from_slice(&rmp_serde::to_vec(&state).expect("encode state"))
+    rmp_serde::from_slice(&rmp_serde::to_vec_named(&state).expect("encode state"))
         .expect("a valid DDSketch state")
 }
 
@@ -415,5 +417,36 @@ fn ddsketch_signed_a001_matches_golden() {
     assert_eq!(decoded.min(), Some(min));
     assert_eq!(decoded.max(), Some(max));
     assert_eq!(decoded.get_count(), 18);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn ddsketch_empty_a001_matches_golden() {
+    let want = decode_hex(GOLDEN_DD_EMPTY);
+
+    let state = dd_sketch(
+        (&[], 0),
+        (&[], 0),
+        0,
+        (0.0, f64::INFINITY, f64::NEG_INFINITY),
+    );
+    let got = state.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "DDSketch empty bytes diverge from golden");
+    assert_eq!(
+        DDSketch::new(0.01).serialize_to_bytes().expect("serialize"),
+        want,
+        "a fresh sketch is the empty state"
+    );
+
+    let decoded = DDSketch::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.alpha(), 0.01);
+    assert!(decoded.store_counts().is_empty());
+    assert_eq!(decoded.store_offset(), 0);
+    assert!(decoded.negative_store_counts().is_empty());
+    assert_eq!(decoded.zero_count(), 0);
+    assert_eq!(decoded.get_count(), 0);
+    assert_eq!(decoded.sum(), 0.0);
+    assert_eq!(decoded.min(), None);
+    assert_eq!(decoded.max(), None);
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }

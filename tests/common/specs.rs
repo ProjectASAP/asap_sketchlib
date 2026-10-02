@@ -996,47 +996,26 @@ pub fn breakpoint_rank_interval_distance(estimated: &[(f64, f64)], sorted_truth:
 // DDSketch: relative value error
 // ---------------------------------------------------------------------------
 
-/// Which order statistic a DDSketch answers a quantile query with; the truth
-/// a test compares against follows it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DdRankConvention {
-    /// `DDSketch::get_value_at_quantile`: `rank = ceil(q * n)`, 1-based, so the
-    /// answer is `sorted[ceil(q*n) - 1]`. `q = 0` and `q = 1` short-circuit to
-    /// the exact stored minimum and maximum.
-    CeilNearestRank,
+/// Zero-based index into an ascending slice of the order statistic
+/// `DDSketch::get_value_at_quantile` answers `q` with: `rank = ceil(q * n)`,
+/// 1-based, so `sorted[ceil(q*n) - 1]`. `q = 0` and `q = 1` are the exact
+/// minimum and maximum.
+pub fn dd_rank_index(n: usize, q: f64) -> usize {
+    assert!(n > 0, "a quantile rank is undefined on an empty stream");
+    let q = q.clamp(0.0, 1.0);
+    (((q * n as f64).ceil() as usize).clamp(1, n)) - 1
 }
 
-impl DdRankConvention {
-    /// The zero-based index into an ascending `sorted` slice this convention
-    /// answers `q` with.
-    pub fn index(self, n: usize, q: f64) -> usize {
-        assert!(
-            n > 0,
-            "a quantile convention is undefined on an empty stream"
-        );
-        let q = q.clamp(0.0, 1.0);
-        match self {
-            DdRankConvention::CeilNearestRank => (((q * n as f64).ceil() as usize).clamp(1, n)) - 1,
-        }
-    }
-
-    /// The exact order statistic this convention answers `q` with.
-    pub fn order_statistic(self, sorted: &[f64], q: f64) -> f64 {
-        sorted[self.index(sorted.len(), q)]
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            DdRankConvention::CeilNearestRank => "ceil(q*n) nearest-rank",
-        }
-    }
+/// The exact order statistic `DDSketch` answers `q` with.
+pub fn dd_order_statistic(sorted: &[f64], q: f64) -> f64 {
+    sorted[dd_rank_index(sorted.len(), q)]
 }
 
 /// Relative-value-error contract for a DDSketch of accuracy parameter `alpha`.
 ///
 /// DDSketch's guarantee is on the *value*, not the rank: the returned estimate
 /// for the `q`-quantile must be within `alpha` relative error of the exact
-/// order statistic **at the same `q` under the sketch's rank convention**:
+/// `ceil(q*n)` order statistic at the same `q` (see [`dd_rank_index`]):
 ///
 /// ```text
 ///   |est - true| / |true| <= alpha + numerical_slack(true)
@@ -1059,16 +1038,12 @@ impl DdRankConvention {
 #[derive(Clone, Copy, Debug)]
 pub struct RelativeQuantileSpec {
     pub alpha: f64,
-    pub convention: DdRankConvention,
 }
 
 impl RelativeQuantileSpec {
-    /// A spec for the core `DDSketch`.
+    /// A spec for `DDSketch` at accuracy `alpha`.
     pub fn core(alpha: f64) -> Self {
-        Self {
-            alpha,
-            convention: DdRankConvention::CeilNearestRank,
-        }
+        Self { alpha }
     }
 
     /// A few ULP of headroom, scaled by the magnitude of the logarithm because
@@ -1098,24 +1073,21 @@ impl RelativeQuantileSpec {
         } else {
             Err(format!(
                 "q={q}: est {estimate:.10e} vs exact {true_value:.10e} \
-                 -> relative error {rel:.3e} > alpha + slack = {tol:.3e} (alpha={}, {})",
+                 -> relative error {rel:.3e} > alpha + slack = {tol:.3e} \
+                 (alpha={}, ceil(q*n) nearest-rank)",
                 self.alpha,
-                self.convention.name(),
             ))
         }
     }
 
-    /// Tallies a sketch's answers over a q grid against the exact order
-    /// statistics **of this spec's own rank convention**.
-    ///
-    /// `sorted` must be ascending. Using one truth helper for both
-    /// implementations would compare each against the other's question.
+    /// Tallies a sketch's answers over a q grid against the exact `ceil(q*n)`
+    /// order statistics. `sorted` must be ascending.
     pub fn tally_into<F>(&self, tally: &mut Tally, sorted: &[f64], qs: &[f64], quantile: F)
     where
         F: Fn(f64) -> Option<f64>,
     {
         for &q in qs {
-            let truth = self.convention.order_statistic(sorted, q);
+            let truth = dd_order_statistic(sorted, q);
             match quantile(q) {
                 None => tally.record(false, || format!("q={q}: sketch returned None")),
                 Some(est) => {

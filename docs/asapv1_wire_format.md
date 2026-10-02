@@ -673,7 +673,7 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 | 3 | `min` | f64 | smallest value as ingested; `+inf` when empty |
 | 4 | `max` | f64 | largest value as ingested; `-inf` when empty |
 
-**Metadata vs payload.** `alpha` shapes every bucket index and is chosen at construction, so per the config-to-metadata rule it is a structural param, like HLL's `precision`. `gamma`, `log_gamma` and `inv_log_gamma` are derived from it (`gamma = (1 + alpha) / (1 - alpha)`) and appear nowhere: the decoder re-derives them exactly as `DDSketch::new` does. The store's dimensions are not configuration — the store grows with the data — so there is no `rows`/`cols` analogue; `counts` is self-delimiting and `offset` positions it. The metadata is `metadata_version` then `alpha`.
+**Metadata vs payload.** `alpha` shapes every bucket index and is chosen at construction, so per the config-to-metadata rule it is a structural param, like HLL's `precision`. `gamma`, `log_gamma` and `inv_log_gamma` are derived from it (`gamma = (1 + alpha) / (1 - alpha)`) and appear nowhere: the decoder re-derives them exactly as `DDSketch::new` does. The store's dimensions are not configuration — the store grows with the data — so there is no `rows`/`cols` analogue; `counts` is self-delimiting and `offset` positions it. The metadata is `metadata_version` then `alpha`. `alpha` is the constructor's argument bit for bit, never re-derived from `gamma`.
 
 **DDSketch carries no hash-spec group.** It never hashes: it maps a raw `f64` through a logarithm and carries no hasher type parameter at all. The hash spec answers "how were keys hashed", and a sketch that does not hash has no truthful answer, so the group is omitted entirely. This is the Q-KLL precedent, and the reason DDSketch's metadata schema is not `HashProfile`-derived the way HLL's and Count-Min's are.
 
@@ -681,9 +681,9 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 
 **`sum` saturates at signed `f64::MAX`.** All three paths that advance it — `add`, `apply_delta` and `merge` — go through one guarded step: the new total is taken when it is finite and `f64::MAX` with the overflow sign is stored otherwise. So a sketch that ingests enough mass to overflow the accumulator still serializes, and only `sum` degrades, only past `f64::MAX`. `count`, the bucket store, `min` and `max` do not pass through the guard and are unaffected. This is what keeps rule 7's finiteness requirement satisfiable: an unguarded `+=` would leave a legally-ingested sketch carrying `+inf`, which the same rule refuses on both doors, so a sketch nothing did wrong to would have no encoding.
 
-**Signed extension (metadata version 2).** Positive-only states retain the five-field payload and version 1. States with negative observations or a zero count use version 2 and append three fields: `negative_counts: array<u64>`, `negative_offset: int`, and `zero_count: u64`. Negative values use the same mapping on their magnitudes; quantile traversal visits their buckets in descending index order, then zeros, then positive buckets in ascending order. Values smaller in magnitude than the mapping minimum count as zero; nonfinite and too-large magnitudes are rejected by `try_add`. The legacy `add` wrapper ignores those errors.
+**Signed extension (metadata version 2).** Positive-only states retain the five-field payload and version 1. States with negative observations or a zero count use version 2 and append three fields: `negative_counts: array<u64>`, `negative_offset: int`, and `zero_count: u64`. Negative values use the same mapping on their magnitudes; quantile traversal visits their buckets in descending index order, then zeros, then positive buckets in ascending order. Values smaller in magnitude than the mapping minimum count as zero; nonfinite and too-large magnitudes are rejected by `try_add` and ignored by `add`.
 
-For version 2 the total is `sum(counts) + sum(negative_counts) + zero_count`, checked for overflow. Both stores obey the span checks below. A nonempty signed state requires finite scalars and `min <= max`; the positive-only `min > 0` and `sum >= min` checks do not apply. Empty-state scalars remain unchanged. Version 1 readers reject version 2. The existing positive-only golden bytes remain unchanged.
+For version 2 the total is `sum(counts) + sum(negative_counts) + zero_count`, checked for overflow. Both stores obey the span checks below. A nonempty signed state requires finite scalars and `min <= max`; the positive-only `min > 0` and `sum >= min` checks do not apply. Empty-state scalars are as in version 1. A decoder that knows only version 1 rejects version 2.
 
 **Emitted order (cross-language contract).** `counts` is the dense store in its own bucket-index order, ascending from `offset`, with the `GROW_CHUNK` padding zeros left in place and `offset` left where the sketch put it. Nothing is trimmed and nothing is sorted, so a decoded sketch re-serializes byte-identically and `store_counts()` / `store_offset()` mean the same thing on both sides.
 
@@ -1341,14 +1341,14 @@ Good direction (more compact, higher fidelity, less Rust-internal duplication), 
 2. **Golden byte-vector fixtures** in one shared repo, [`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), which each implementation mounts at `asapv1_golden/`; both languages decode and re-encode them byte-identically. These replace the `portable`-as-oracle round-trip test.
 3. **This registry**, mirrored, never independently allocated.
 
-Fixtures exist for seven `kind_id`s — HLL's three estimators, Count-Min, Count Sketch, DDSketch and compact KLL — and `sketchlib-go` mirrors all but DDSketch's. Every other kind here has a payload and **no fixture**, so this document is its only contract; `asapv1_golden/README.md` lists the gap. `portable` carries its own Go goldens.
+`asapv1_golden/README.md` ("Coverage") lists which `kind_id`s have fixtures; a kind without one has this document as its only contract. `portable` carries its own Go goldens.
 
 **Hash profile on the Go side.**
 Rust derives the hash spec from a generic `HashProfile` bound on the hasher type; Go has no generic hasher type, so there is nothing to derive from.
 On the Go side the profile is simply **written into** the metadata on encode and **read from** it on decode.
 Go MUST validate the profile it reads (same fail-closed intent as Rust): a sketch is only mergeable/queryable if its `hash_profile_id` + seeds match the profile Go is prepared to reproduce.
 
-Sequencing: (2) covers seven `kind_id`s, and the one `native bytes == portable bytes` test is HLL-only, since no other `portable` type emits ASAPv1 bytes.
+Sequencing: (2) covers the kinds the golden README lists, and the one `native bytes == portable bytes` test is HLL-only, since no other `portable` type emits ASAPv1 bytes.
 Retire `portable` once the fixtures cover the rest.
 
 ---

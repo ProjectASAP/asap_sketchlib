@@ -32,11 +32,11 @@
 //! DDSketch's guarantee is deterministic — bucket width alone, no hash and no
 //! sampling — so its batteries tolerate zero violations and no statistical
 //! model applies. Its truth is the `ceil(q*n)` order statistic; see
-//! `DdRankConvention`.
+//! `dd_rank_index`.
 
 use crate::common;
 
-use common::specs::{KllRankSpec, RelativeQuantileSpec, Tally, rank_error};
+use common::specs::{KllRankSpec, RelativeQuantileSpec, Tally, dd_rank_index, rank_error};
 use common::{
     NumericTruth, assert_between, duplicate_heavy_f64, exponential_f64, log_uniform_f64,
     monotonic_f64, normal_f64, outside_in_ordering, uniform_u64, zipf_f64,
@@ -629,6 +629,49 @@ fn ddsketch_satisfies_the_relative_value_error_contract() {
         );
         core_tally.assert_none(&format!("core DDSketch alpha={alpha}"), &context);
     }
+}
+
+/// At small `n` and ragged `q` the `ceil(q*n)` order statistic differs from
+/// the `floor(q*(n-1))` one, and with values three buckets apart the two are
+/// more than `alpha` apart, so these probes tell the conventions apart.
+#[test]
+fn ddsketch_answers_the_ceil_nearest_rank_order_statistic_at_small_n() {
+    // (n, q, expected 0-based index sorted[ceil(q*n) - 1])
+    const PROBES: [(usize, f64, usize); 8] = [
+        (3, 0.4, 1),
+        (4, 0.34, 1),
+        (4, 0.3, 1),
+        (7, 0.2, 1),
+        (7, 0.6, 4),
+        (5, 0.5, 2),
+        (10, 0.25, 2),
+        (10, 0.15, 1),
+    ];
+    const ALPHA: f64 = 0.01;
+    let gamma = (1.0 + ALPHA) / (1.0 - ALPHA);
+    let spec = RelativeQuantileSpec::core(ALPHA);
+
+    let mut distinguishing = 0usize;
+    for &(n, q, idx) in &PROBES {
+        assert_eq!(dd_rank_index(n, q), idx, "ceil(q*n)-1 at n={n} q={q}");
+        if (q * (n - 1) as f64).floor() as usize != idx {
+            distinguishing += 1;
+        }
+
+        let sorted: Vec<f64> = (0..n).map(|i| 100.0 * gamma.powi(3 * i as i32)).collect();
+        let mut sketch = DDSketch::new(ALPHA);
+        for v in &sorted {
+            sketch.add(v);
+        }
+        let est = sketch.get_value_at_quantile(q).expect("non-empty");
+        if let Err(detail) = spec.check(q, est, sorted[idx]) {
+            panic!("DDSketch n={n} q={q}: {detail}");
+        }
+    }
+    assert!(
+        distinguishing >= 3,
+        "only {distinguishing} probes separate ceil(q*n) from floor(q*(n-1))"
+    );
 }
 
 /// The sketch tracks the exact minimum and maximum beside the bucket store, and
