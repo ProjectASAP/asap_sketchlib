@@ -39,7 +39,6 @@ pub mod __private {
 
 pub use common::*;
 pub use message_pack_format::MessagePackCodec;
-pub use message_pack_format::portable::countsketch_topk::{CountSketchWithHeap, CsHeapItem};
 pub use message_pack_format::portable::ddsketch::{DDSKETCH_GROW_CHUNK, DdSketch, DdSketchDelta};
 pub use message_pack_format::portable::delta_set_aggregator::DeltaResult;
 pub use message_pack_format::portable::hydra_kll::HydraKllSketch;

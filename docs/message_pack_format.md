@@ -167,9 +167,10 @@ decode → re-encode them byte-identically. The `kind_id` registry is mirrored
 verbatim with Go's `wire/asapmsgpack/magic_ids.go`, never independently
 allocated.
 
-That proof covers only the `kind_id`s a fixture exists for, listed in
-[its README](https://github.com/ProjectASAP/sketchlib-golden-bytes#coverage);
-a kind without one has **no ASAPv1 drift guard**.
+That proof covers only the `kind_id`s with a fixture, which
+[its README's Coverage section](https://github.com/ProjectASAP/sketchlib-golden-bytes#coverage)
+lists. Every other implemented kind has **no ASAPv1 golden and therefore no
+ASAPv1 drift guard**.
 The older `portable` path is guarded separately, by the `sketchlib-go` goldens
 of its own listed above.
 

@@ -84,6 +84,9 @@ signals a backwards-compatible change.
 - The ASAPv1 spec states the heap key tie order: a signed key compares as its
   two's-complement bit pattern read unsigned, a float by its bits, a string or
   bytes key byte-wise with a proper prefix first.
+- **An ASAPv1 golden fixture for CSHeap** (`0x0a 0x00`),
+  `csheap_i64_regular_2x4_strkeys`: the Count Sketch 2x4 signed matrix with a
+  string-keyed heap at `k = 5`, pinned in `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -178,6 +181,16 @@ signals a backwards-compatible change.
   and `sketchlib_cms_heap_query`, plus the crate-root re-exports
   `CountMinSketchWithHeap` and `CmsHeapItem`. Bytes in that format no longer
   decode.
+- **The portable Count-Sketch-with-heap type.** `CountSketchWithHeap` and
+  `CsHeapItem` (crate root) and the module
+  `message_pack_format::portable::countsketch_topk` with `WireHeapItem`,
+  `SketchlibCSHeap`, `new_sketchlib_cs_heap`,
+  `sketchlib_cs_heap_from_matrix_and_heap`, `matrix_from_sketchlib_cs_heap`,
+  `heap_to_wire`, `sketchlib_cs_heap_update`, `sketchlib_cs_heap_query`,
+  `CountSketchInnerWire` and `CountSketchWithHeapWire`. Its MessagePack
+  `{sketch, topk_heap, heap_size}` encoding is gone with it; `CSHeap` encodes
+  and decodes ASAPv1 only, through `serialize_to_bytes` /
+  `deserialize_from_bytes`.
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the

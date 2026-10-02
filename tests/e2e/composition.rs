@@ -16,9 +16,9 @@ use common::specs::{CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, Kl
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{
-    CMSHeap, Classic, Count, CountMin, CountSketchWithHeap, DataInput, EnsembleSketch, ErtlMLE,
-    FastPath, HashSketchEnsemble, HeapItem, HyperLogLog, HyperLogLogHIP, KLL, MessagePackCodec,
-    RegularPath, UnivMonQ, UnivMonQConfig, Vector2D,
+    CMSHeap, Classic, Count, CountMin, DataInput, EnsembleSketch, ErtlMLE, FastPath,
+    HashSketchEnsemble, HeapItem, HyperLogLog, HyperLogLogHIP, KLL, MessagePackCodec, RegularPath,
+    UnivMonQ, UnivMonQConfig, Vector2D,
 };
 
 const ROWS: usize = 3;
@@ -644,71 +644,7 @@ fn cms_heap_satisfies_the_count_min_bound_through_merge_and_wire() {
     );
 }
 
-// -------------------------------------------------------- Portable facade
-
-/// The portable sketch-plus-heap type, on a real stream against exact truth:
-/// the point estimate under the L2 bound, the heap consistent with it, and
-/// both surviving a MessagePack round trip and a merge.
-#[test]
-fn portable_count_sketch_with_heap_satisfies_the_l2_bound_through_merge_and_wire() {
-    const HEAP: usize = 32;
-    const CS_ROWS: usize = 5;
-    let stream = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
-    let mut truth = FreqTruth::default();
-    let mut single = CountSketchWithHeap::new(CS_ROWS, COLS, HEAP);
-    let mut left = CountSketchWithHeap::new(CS_ROWS, COLS, HEAP);
-    let mut right = CountSketchWithHeap::new(CS_ROWS, COLS, HEAP);
-    for (i, k) in stream.iter().enumerate() {
-        truth.observe(*k as i64);
-        let key = format!("k{k}");
-        single.update(&key, 1.0);
-        if i % 2 == 0 {
-            left.update(&key, 1.0);
-        } else {
-            right.update(&key, 1.0);
-        }
-    }
-
-    let context = format!(
-        "rows={CS_ROWS} cols={COLS} heap={HEAP} zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}"
-    );
-    let spec = CountSketchSpec::new(CS_ROWS, COLS);
-    spec.assert_contract(
-        "portable CountSketchWithHeap",
-        &truth,
-        |k| single.estimate(&format!("k{k}")),
-        &context,
-    );
-
-    let mut heap_tally = Tally::default();
-    for item in single.topk_heap_items() {
-        let est = single.estimate(&item.key);
-        heap_tally.record(item.value == est, || {
-            format!(
-                "key {}: heap holds {} but the sketch estimates {est}",
-                item.key, item.value
-            )
-        });
-    }
-    heap_tally.assert_none("portable CountSketchWithHeap heap consistency", &context);
-
-    let merged = CountSketchWithHeap::merge_refs(&[&left, &right]).expect("merge");
-    spec.assert_contract(
-        "portable CountSketchWithHeap after merge",
-        &truth,
-        |k| merged.estimate(&format!("k{k}")),
-        &context,
-    );
-
-    let bytes = single.to_msgpack().expect("encode");
-    let decoded = CountSketchWithHeap::from_msgpack(&bytes).expect("decode");
-    spec.assert_contract(
-        "portable CountSketchWithHeap after a wire round trip",
-        &truth,
-        |k| decoded.estimate(&format!("k{k}")),
-        &context,
-    );
-}
+// --------------------------------------------------------------------- KLL
 
 /// KLL under the DataSketches maximum-rank-error characterization through a
 /// two-shard merge and an ASAPv1 round trip, seeded so a failure reproduces.
