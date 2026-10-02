@@ -767,7 +767,7 @@ fn a_custom_precision_merge_reproduces_the_single_pass_registers_for_every_estim
 
 #[test]
 fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
-    use asap_sketchlib::{DeltaResult, MessagePackCodec};
+    use asap_sketchlib::DeltaResult;
     use std::collections::HashSet;
 
     let mut before = SetAggregator::new();
@@ -797,8 +797,8 @@ fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
         "both departing keys are removed"
     );
 
-    let bytes = delta.to_msgpack().expect("encode");
-    let decoded = DeltaResult::from_msgpack(&bytes).expect("decode");
+    let bytes = delta.serialize_to_bytes().expect("encode");
+    let decoded = DeltaResult::deserialize_from_bytes(&bytes).expect("decode");
     assert_eq!(decoded.added, added, "added set survived the wire");
     assert_eq!(decoded.removed, removed, "removed set survived the wire");
 
@@ -818,8 +818,9 @@ fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
         added: HashSet::new(),
         removed: HashSet::new(),
     };
-    let round_tripped = DeltaResult::from_msgpack(&empty.to_msgpack().expect("encode empty"))
-        .expect("decode empty");
+    let round_tripped =
+        DeltaResult::deserialize_from_bytes(&empty.serialize_to_bytes().expect("encode empty"))
+            .expect("decode empty");
     assert!(
         round_tripped.added.is_empty() && round_tripped.removed.is_empty(),
         "an empty delta must stay empty across the wire"

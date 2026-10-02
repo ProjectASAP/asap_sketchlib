@@ -2,8 +2,8 @@
 
 One `proptest` law per line. Each compares the sketch against an answer
 computed without it; what that answer is comes first in every section. One
-file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 367 laws;
-with `--all-features`, 435, adding the four **experimental** modules. Every
+file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 369 laws;
+with `--all-features`, 437, adding the four **experimental** modules. Every
 law was mutation-checked: break the implementation, the law goes red. Shared
 generators, `grid` and `round_trip!` live in `support.rs`.
 
@@ -378,7 +378,7 @@ A worker holds counts back until one reaches `tau`, promotes that `tau` step, an
   - `max_hll_threshold(p) == 64 - p`; `HLL_PROMASK` below it at default precision; a worker at it holds nothing back
   - `MAX_PROMASK == i8::MAX`; `OctoThreshold` clamps 0 up to 1 and above down to `MAX_PROMASK`; every promotion fits an `i8`
 
-## set_aggregator.rs — 9
+## set_aggregator.rs — 11
 
 Exact. Compared against: a `HashSet` of the stream. Keys from `[a-c]{0,2}`, so streams repeat and intersect.
 
@@ -393,7 +393,9 @@ Exact. Compared against: a `HashSet` of the stream. Keys from `[a-c]{0,2}`, so s
   - empty is a two-sided identity
   - `merge_refs` unions all inputs; refuses an empty list
 - wire
-  - msgpack keeps the key set, and again on a second round trip; keys include `""`, non-ASCII, embedded NUL, 300 chars, arbitrary `String`
+  - ASAPv1 keeps the key set and re-encodes to the same bytes; keys include `""`, non-ASCII, embedded NUL, 300 chars, arbitrary `String`
+  - the bytes of `S(xs)` equal the bytes of `S(perm(xs))`
+  - a `DeltaResult` of two such sets keeps `added` and `removed` and re-encodes to the same bytes
 
 ## space_saving.rs — 19
 

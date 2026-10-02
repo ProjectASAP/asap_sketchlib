@@ -106,6 +106,10 @@ pub use uniform::UniformSampling;
 pub mod ddsketch;
 pub use ddsketch::DDSketch;
 
+/// Exact string-key set and the delta between two of its snapshots.
+pub mod set_aggregator;
+pub use set_aggregator::{DeltaResult, SetAggregator};
+
 pub mod countminsketch_topk;
 pub use countminsketch_topk::CMSHeap;
 
