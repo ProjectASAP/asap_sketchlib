@@ -4,8 +4,9 @@
 //!
 //! Approach: reuse the exact same Go-golden envelopes that the
 //! `message_pack_format::portable` parity tests use, but build the
-//! matrix via `sketches::Count` with `FastPath` and `DefaultXxHasher`. Identical bytes confirm the shared FastPath
-//! math is sufficient — no hashspec bypass needed.
+//! matrix via `sketches::Count` with `FastPath` and `DefaultXxHasher`.
+//! Identical bytes confirm the shared FastPath math is sufficient — no
+//! hashspec bypass needed.
 
 use asap_sketchlib::common::DataInput;
 use asap_sketchlib::common::hash::CANONICAL_HASH_SEED;

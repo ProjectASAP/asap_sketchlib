@@ -103,7 +103,8 @@ signals a backwards-compatible change.
   `message_pack_format::native::countminsketch`; and the
   `src/sketches/testdata/cms_envelope_golden.hex` proto golden. The
   `CountMinState` proto message stays as the nested Count-Min state of
-  `HydraCell` and `ElasticState`.
+  `HydraCell` and `ElasticState`. Count-Min deltas (including `hh_keys`) and
+  the envelope `sample_p` for Count-Min have no ASAPv1 carrier.
 
 ### Fixed
 

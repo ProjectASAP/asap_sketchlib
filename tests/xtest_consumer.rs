@@ -675,7 +675,7 @@ fn count_sketch_query_float(state: &CountSketchState, hash: u64) -> f64 {
     let bits_per_row = col_bits(cols);
     let mask = (cols as u64) - 1;
     // Read whichever counter field the producer populated (int vs float),
-    // discriminated by counter_type — same as CountMin.
+    // discriminated by counter_type.
     let counts: Vec<f64> = if !state.counts_float.is_empty() {
         state.counts_float.clone()
     } else {

@@ -802,7 +802,7 @@ pub struct SketchEnvelope {
     /// geometric skip-sampling, statistically identical to per-update Bernoulli(p))
     /// and stores the RAW SAMPLED sketch state — never the rescaled state. The
     /// consumer applies the `× 1/sample_p` rescale at QUERY time on the count-like
-    /// estimators (HLL cardinality, CountMin / CountSketch frequency, SUM / COUNT);
+    /// estimators (HLL cardinality, CountSketch frequency, SUM / COUNT);
     /// quantile estimators (KLL, DDSketch) are scale-invariant under uniform
     /// sampling so they carry `sample_p` but need no rescale.
     ///
