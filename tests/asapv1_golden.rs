@@ -30,6 +30,12 @@ const GOLDEN_CMS_F64: &str = include_str!("../asapv1_golden/cms_f64_fast_2x3.hex
 const GOLDEN_CMSHEAP_STR: &str =
     include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_strkeys.hex");
 const GOLDEN_CMSHEAP_I64: &str = include_str!("../asapv1_golden/cmsheap_i32_fast_2x3_i64keys.hex");
+const GOLDEN_CMSHEAP_I64_TIE: &str =
+    include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_i64tie.hex");
+const GOLDEN_CMSHEAP_STR_TIE: &str =
+    include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_strtie.hex");
+const GOLDEN_CMSHEAP_EMPTY: &str =
+    include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_empty.hex");
 const GOLDEN_CS_REGULAR: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4.hex");
 const GOLDEN_CS_FAST: &str = include_str!("../asapv1_golden/cs_i64_fast_2x4.hex");
 const GOLDEN_CS_I32: &str = include_str!("../asapv1_golden/cs_i32_regular_2x4.hex");
@@ -253,6 +259,105 @@ fn cmsheap_i32_fast_2x3_i64keys_matches_golden() {
     held.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     assert_eq!(held, CMSHEAP_I64_ENTRIES);
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+/// The i64 regular-path CMSHeap over the Count-Min i64 matrix with these
+/// entries seated in the given order.
+fn cmsheap_i64_regular(
+    k: usize,
+    entries: &[(HeapItem, i64)],
+) -> CMSHeap<Vector2D<i64>, RegularPath> {
+    let mut sketch = CMSHeap::<Vector2D<i64>, RegularPath>::from_storage(
+        Vector2D::from_fn(2, 3, |r, c| I64_VALS[r][c]),
+        k,
+    );
+    for (key, count) in entries {
+        assert!(sketch.heap_mut().update_heap_item(key, *count));
+    }
+    sketch
+}
+
+/// Asserts the golden's payload ends with exactly these `keys` and
+/// `heap_counts` arrays, in this order.
+fn assert_heap_tail<K: serde::Serialize>(golden: &[u8], keys: &[K], counts: &[i64]) {
+    let mut tail = rmp_serde::to_vec(keys).expect("keys");
+    tail.extend(rmp_serde::to_vec(counts).expect("counts"));
+    assert!(
+        golden.ends_with(&tail),
+        "golden heap arrays are not in the pinned order"
+    );
+}
+
+/// Encodes the entries seated forward and reversed, asserts both equal the
+/// golden, then decodes it and asserts the held entries and a byte-identical
+/// re-encode.
+fn check_cmsheap_golden(want: &[u8], k: usize, entries: &[(HeapItem, i64)]) {
+    let reversed: Vec<(HeapItem, i64)> = entries.iter().rev().cloned().collect();
+    for seated in [entries, reversed.as_slice()] {
+        let got = cmsheap_i64_regular(k, seated)
+            .serialize_to_bytes()
+            .expect("serialize");
+        assert_eq!(got, want, "CMSHeap bytes diverge from golden");
+    }
+
+    let decoded =
+        CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(want).expect("decode");
+    let flat: Vec<i64> = I64_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.heap().capacity(), k);
+    let mut held: Vec<(HeapItem, i64)> = decoded
+        .heap()
+        .heap()
+        .iter()
+        .map(|item| (item.key.clone(), item.count))
+        .collect();
+    let mut expected = entries.to_vec();
+    let by_debug =
+        |a: &(HeapItem, i64), b: &(HeapItem, i64)| format!("{a:?}").cmp(&format!("{b:?}"));
+    held.sort_by(by_debug);
+    expected.sort_by(by_debug);
+    assert_eq!(held, expected);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+/// Signed keys tie by their two's-complement bit pattern read unsigned, so the
+/// negatives follow every non-negative key.
+#[test]
+fn cmsheap_i64_regular_2x3_i64tie_matches_golden() {
+    let want = decode_hex(GOLDEN_CMSHEAP_I64_TIE);
+    let entries: Vec<(HeapItem, i64)> = [(-1, 5), (1, 5), (0, 5), (i64::MIN, 5), (2, 9)]
+        .into_iter()
+        .map(|(k, c)| (HeapItem::I64(k), c))
+        .collect();
+    check_cmsheap_golden(&want, 5, &entries);
+    assert_heap_tail(&want, &[2i64, 0, 1, i64::MIN, -1], &[9, 5, 5, 5, 5]);
+}
+
+/// String keys tie byte-wise, a proper prefix first: case and length do not
+/// enter except through the bytes.
+#[test]
+fn cmsheap_i64_regular_2x3_strtie_matches_golden() {
+    let want = decode_hex(GOLDEN_CMSHEAP_STR_TIE);
+    let entries: Vec<(HeapItem, i64)> = [("b", 5), ("aa", 5), ("Z", 5), ("a", 5), ("hot", 9)]
+        .into_iter()
+        .map(|(k, c)| (HeapItem::String(k.to_string()), c))
+        .collect();
+    check_cmsheap_golden(&want, 5, &entries);
+    assert_heap_tail(&want, &["hot", "Z", "a", "aa", "b"], &[9, 5, 5, 5, 5]);
+}
+
+/// An empty heap has one encoding: `key_type` `"u64"` and two empty arrays.
+#[test]
+fn cmsheap_i64_regular_2x3_empty_matches_golden() {
+    let want = decode_hex(GOLDEN_CMSHEAP_EMPTY);
+    check_cmsheap_golden(&want, 4, &[]);
+    assert_heap_tail::<u64>(&want, &[], &[]);
+    assert!(
+        CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&want)
+            .expect("decode")
+            .heap()
+            .is_empty()
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -67,8 +67,13 @@ signals a backwards-compatible change.
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
 - **ASAPv1 golden fixtures for CMSHeap** (`03 00`):
-  `cmsheap_i64_regular_2x3_strkeys` and `cmsheap_i32_fast_2x3_i64keys`, checked
-  by `tests/asapv1_golden.rs`.
+  `cmsheap_i64_regular_2x3_strkeys`, `cmsheap_i32_fast_2x3_i64keys`, the
+  key-tie fixtures `cmsheap_i64_regular_2x3_i64tie` and
+  `cmsheap_i64_regular_2x3_strtie`, and the empty heap
+  `cmsheap_i64_regular_2x3_empty`, checked by `tests/asapv1_golden.rs`.
+- The ASAPv1 spec states the heap key tie order: a signed key compares as its
+  two's-complement bit pattern read unsigned, a float by its bits, a string or
+  bytes key byte-wise with a proper prefix first.
 
 ### Changed
 

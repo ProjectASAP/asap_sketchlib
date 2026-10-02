@@ -444,8 +444,7 @@ mod tests {
     }
 
     /// CS's median estimator must behave differently from CMS's
-    /// min-over-rows estimator on the same kind of skewed insert
-    /// pattern, not just share a struct shape.
+    /// min-over-rows estimator on the same kind of skewed insert pattern.
     #[test]
     fn test_median_estimator_differs_from_cms_style_min() {
         let mut cs = CountSketchWithHeap::new(5, 64, 10);
