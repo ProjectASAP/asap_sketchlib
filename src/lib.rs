@@ -37,10 +37,5 @@ pub mod __private {
 }
 
 pub use common::*;
-pub use message_pack_format::MessagePackCodec;
-pub use message_pack_format::portable::sampling::{
-    effective_sample_p, is_quantile_scale_invariant, rescale_count, rescale_count_with_env,
-    sample_p_or_default,
-};
 pub use sketch_framework::*;
 pub use sketches::*;

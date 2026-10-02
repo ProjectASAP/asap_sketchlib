@@ -1237,22 +1237,6 @@ Test file: [`src/sketch_framework/tumbling.rs`](../src/sketch_framework/tumbling
 | `tumbling_very_small_windows` | Five hundred rotations under a fifty-window cap still answer the retained tail. | For `TumblingWindow::new(10, 50, cfg, 52)` over `FoldCMSConfig { rows: 3, full_cols: 1024, fold_level: 3, top_k: 10 }` fed a seeded (`0x77_1100`) Zipf(`domain = 500`, `exponent = 1.2`) stream of `5000` samples at timestamps `i` - `500` windows, of which only the newest `50` closed plus the active survive - verifies over `85%` of the truth built from samples `4500..5000` is within `(e / 1024) * L1` under `query_all`. |
 | `tumbling_skewed_load` | A window carrying most of the stream does not break the Count-Min bound. | For `TumblingWindow::new(10_000, 5, cfg, 7)` over `FoldCMSConfig { rows: 3, full_cols: 4096, fold_level: 4, top_k: 20 }` fed five seeded (`0xBE_EF00 + w`) Zipf(`domain = 5000`, `exponent = 1.1`) phases - `1_000` samples each except `36_000` for phase `2`, each phase followed by a jump to the next window boundary - verifies over `90%` of keys are within `(e / 4096) * L1`, the truth covering all `40_000` samples including the two light windows the `max_windows` cap has already evicted. |
 
-## MessagePack Portable Wire Types
-
-
-### Portable Sampling Rescale
-
-Test file: [`src/message_pack_format/portable/sampling.rs`](../src/message_pack_format/portable/sampling.rs)
-
-| test_name | test_description | what_is_tested |
-| --- | --- | --- |
-| `dual_read_zero_means_one` | An unset `sample_p` reads as no sampling. | Verifies both `effective_sample_p` over an envelope carrying `sample_p` `0.0` and `sample_p_or_default(0.0)` return `1.0`. |
-| `out_of_range_falls_back_to_one` | A malformed probability falls back to no sampling. | Verifies `sample_p_or_default` returns `1.0` for `-0.5`, for `1.5`, and for `f64::NAN`. |
-| `valid_p_passes_through` | A probability inside `(0, 1]` is used as given. | Verifies `effective_sample_p` over an envelope carrying `sample_p` `0.1` returns `0.1`, and that `sample_p_or_default(1.0)` returns `1.0`. |
-| `rescale_count_inverts_probability` | A count-like estimate is rescaled by `1/p`. | Verifies `rescale_count(10_000.0, 0.1)` is `100_000.0` within `1e-6`, that `rescale_count(123.0, 1.0)` is `123.0`, and that a `p` of `0.0` returns `123.0` rather than dividing by zero. |
-| `rescale_with_env` | The envelope's own `sample_p` drives the rescale. | Verifies `rescale_count_with_env(5_000.0, env)` at `sample_p` `0.05` is `100_000.0` within `1e-6`, and that at `sample_p` `0.0` an input of `42.0` comes back unchanged. |
-| `quantiles_are_scale_invariant` | The quantile family is declared to need no rescale. | Asserts `is_quantile_scale_invariant()`, a `const fn` returning `true`; nothing about a quantile estimate is computed. |
-
 ## Common
 
 ### Common Hash Utilities
