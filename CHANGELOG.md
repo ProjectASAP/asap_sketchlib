@@ -274,6 +274,9 @@ signals a backwards-compatible change.
   `tools/gen-proto` generator and its CI drift check; and the `prost` and
   `bytes` dependencies.
 - **The `xxhash-rust` dependency**, which nothing uses.
+- **`common::hashspec`**, which nothing uses: `HashSpec`, `SeedDerivation`,
+  `CANONICAL_HASH_SEED_TABLE`, `CANONICAL_HASH_SEED`, `hash_with_spec`,
+  `derive_index` and `derive_sign`.
 
 ### Fixed
 

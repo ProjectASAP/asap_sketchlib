@@ -1357,19 +1357,6 @@ Test file: [`src/common/structures/bit_matrix.rs`](../src/common/structures/bit_
 | `a_packed_64_grid_decodes_a_distinct_window_per_row` | Each row of a packed-64 grid reads its own window of the hash. | For a `5x1024` `BitMatrix`, verifies `hash_mode_for_matrix(5, 1024)` is `MatrixHashMode::Packed64`, then `fast_insert`s 300 `U64` keys and verifies every pair of rows differs at some column; the per-row bit windows themselves are not compared. |
 | `dimensions_whose_word_count_overflows_are_rejected` | Dimensions whose word count overflows fail at decode. | Verifies a crafted payload declaring `usize::MAX` rows by `128` columns with an empty `words` array is refused with an error containing "dimensions overflow". |
 
-### Common Hash Spec
-
-Test file: [`src/common/hashspec.rs`](../src/common/hashspec.rs)
-
-| test_name | test_description | what_is_tested |
-| --- | --- | --- |
-| `seed_table_matches_sketchlib_go` | The seed table and the canonical seed index are pinned values. | Verifies `CANONICAL_HASH_SEED_TABLE` equals the twenty listed seeds (`0xcafe3553`, `0xade3415118`, through `0xdb0c2e0d`) in order, and that `CANONICAL_HASH_SEED` is `5`. |
-| `hash_with_spec_matches_sketchlib_go` | The byte-key hash of one fixed key is a pinned value. | Verifies `hash_with_spec(&HashSpec::default(), b"projectasap")` is `887548862923853302`. |
-| `derive_index_matches_go_bit_slicing` | `derive_index` slices the row's own window out of one hash. | For the `HashSpec::default()` hash of `b"projectasap"`, verifies `derive_index(&spec, row, h, 512)` is `(h >> (row * 9)) & 0x1ff` and `derive_index(&spec, row, h, 1024)` is `(h >> (row * 10)) & 0x3ff`, for rows `0..3` of each width. |
-| `derive_sign_matches_go_high_bit` | `derive_sign` reads bit `63 - row` of the hash. | For the same hash, verifies `derive_sign(&spec, row, h)` is `1` where bit `63 - row` is set and `-1` where it is clear, for rows `0..5`. |
-| `mask_bits_for_width_matches_go` | The mask width is the column count's bit length. | Verifies `mask_bits_for_width` returns `1` for `1` and for `2`, `2` for `4`, `9` for `512`, `10` for `1024`, and `12` for `4096`. |
-| `default_hashspec_has_packed_derivation` | The default spec names packed derivation, the canonical index, and the full seed table. | Verifies `HashSpec::default()` carries `seed_derivation == SeedDerivation::Packed`, `canonical_seed_index == CANONICAL_HASH_SEED`, and a `seed_list` as long as `CANONICAL_HASH_SEED_TABLE`. |
-
 ### MatrixHashType (Common Structure)
 
 Test file: [`src/common/structures/matrix_storage.rs`](../src/common/structures/matrix_storage.rs)

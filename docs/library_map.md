@@ -7,7 +7,7 @@
   - `structures/` - High-performance data structures (`Vector1D`, `Vector2D`, `Vector3D`, `BitMatrix`, `CommonHeap`, `MatrixStorage`, `FixedMatrix`)
   - `heap.rs` - `HHHeap` convenience wrapper for heavy hitter tracking
   - `hash.rs` - Hashing utilities (`hash_for_matrix`, `hash64_seeded`, `SEEDLIST`, `BOTTOM_LAYER_FINDER`) plus `SketchHasher` for custom hasher injection and `DigestHasher` / `DigestBuildHasher` for maps keyed by an already-hashed digest
-  - `hashspec.rs` - `HashSpec`/`derive_index`/`derive_sign` byte parity with `sketchlib-go`; `numerical.rs` - `NumericalValue`; `structure_utils.rs` - `Nitro`, `NitroContext`, `ToF64`
+  - `numerical.rs` - `NumericalValue`; `structure_utils.rs` - `Nitro`, `NitroContext`, `ToF64`
 
 - **`src/sketches/`** - Sketch implementations (status source: [apis.md](./apis.md))
   - `Ready` in API index: `countminsketch.rs`, `countsketch.rs`, `hll.rs`, `kll.rs`, `ddsketch.rs`, `countminsketch_topk.rs`, `countsketch_topk.rs`, `space_saving.rs`, `bloom.rs`, `elastic.rs`, `coco.rs`
