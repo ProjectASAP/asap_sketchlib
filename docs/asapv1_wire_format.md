@@ -1341,7 +1341,7 @@ Good direction (more compact, higher fidelity, less Rust-internal duplication), 
 2. **Golden byte-vector fixtures** in one shared repo, [`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), which each implementation mounts at `asapv1_golden/`; both languages decode and re-encode them byte-identically. These replace the `portable`-as-oracle round-trip test.
 3. **This registry**, mirrored, never independently allocated.
 
-`sketchlib-go` mirrors every fixture; the [Coverage section](https://github.com/ProjectASAP/sketchlib-golden-bytes#coverage) of `asapv1_golden/README.md` lists the `kind_id`s they cover. For a kind without a fixture, this document is the only contract. `portable` carries its own Go goldens.
+The [Coverage section](https://github.com/ProjectASAP/sketchlib-golden-bytes#coverage) of `asapv1_golden/README.md` lists the `kind_id`s the fixtures cover. For a kind without a fixture, this document is the only contract. `portable` carries its own Go goldens.
 
 **Hash profile on the Go side.**
 Rust derives the hash spec from a generic `HashProfile` bound on the hasher type; Go has no generic hasher type, so there is nothing to derive from.

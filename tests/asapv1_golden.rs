@@ -295,13 +295,10 @@ fn kll_i64_k200_matches_golden() {
 // ---------------------------------------------------------------------------
 
 /// CountL2HH cells are signed: row 0 is positive fixint max / uint8 / uint16 /
-/// uint64, row 1 is negative fixint min / int8 / int32 / int64.
-const L2HH_COUNTS: [[i64; 4]; 2] = [
-    [127, 128, 65535, 4294967296],
-    [-32, -33, -2147483648, i64::MIN],
-];
-/// One accumulator per row, set independently of the cells: uint16 / uint64.
-const L2HH_L2: [i64; 2] = [256, i64::MAX];
+/// int16, row 1 is negative fixint min / int8 / int32 / int64.
+const L2HH_COUNTS: [[i64; 4]; 2] = [[127, 128, 65535, -32768], [-32, -33, -2147483648, i64::MIN]];
+/// One accumulator per row, set independently of the cells: uint32 / uint64.
+const L2HH_L2: [i64; 2] = [65536, i64::MAX];
 const L2HH_SEED_INDEX: usize = 7;
 
 #[derive(serde::Serialize, serde::Deserialize)]

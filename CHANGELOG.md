@@ -67,8 +67,9 @@ signals a backwards-compatible change.
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
 - An ASAPv1 golden fixture for CountL2HH (`0x19 0x00`), `count_l2hh_2x4_seed7`:
-  signed cells across the msgpack integer widths, `l2` accumulators set apart
-  from the cells, and a non-zero seed index.
+  a non-zero seed index, and cells and `l2` accumulators set apart from each
+  other that together reach every msgpack integer width, positive fixint
+  through uint64 and negative fixint through int64.
 
 ### Changed
 
