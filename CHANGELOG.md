@@ -88,6 +88,23 @@ signals a backwards-compatible change.
   as an empty window like any other, and that window takes a place in
   `max_windows`.
 
+### Removed
+
+- **Count-Min's proto and portable formats.** `CountMin` serializes to ASAPv1
+  only (`serialize_to_bytes` / `deserialize_from_bytes`, kind `0x02 0x00`).
+  Removed: the `CountMinDelta` and `CountMinCell` proto messages and the
+  `count_min` field (10) of `SketchEnvelope`, now reserved;
+  `message_pack_format::portable::countminsketch` (`CountMinSketch`,
+  `CountMinSketchDelta`, `CountMinSketchWire`, `SketchlibCms`,
+  `new_sketchlib_cms`, `sketchlib_cms_from_matrix`,
+  `matrix_from_sketchlib_cms`, `sketchlib_cms_update`, `sketchlib_cms_query`)
+  and the crate-root `CountMinSketch` / `CountMinSketchDelta` re-exports; the
+  `MessagePackCodec` impl for `CountMin` in
+  `message_pack_format::native::countminsketch`; and the
+  `src/sketches/testdata/cms_envelope_golden.hex` proto golden. The
+  `CountMinState` proto message stays as the nested Count-Min state of
+  `HydraCell` and `ElasticState`.
+
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the

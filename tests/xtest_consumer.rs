@@ -5,7 +5,6 @@
 //! to confirm the data survived the language boundary intact.
 //!
 //! Files consumed (from $XTEST_DIR/):
-//!   countmin.pb    — CountMinState with float64 counters
 //!   kll.pb         — KLLState with quantile items and coin RNG state
 //!   ddsketch.pb    — DDSketchState with alpha + bucket array
 //!   hll.pb         — HyperLogLogState (ErtlMLE variant)
@@ -45,77 +44,6 @@ fn cross_language_proto() {
     println!("=======================================================");
 
     let mut all_ok = true;
-
-    // -----------------------------------------------------------------------
-    // CountMin
-    // -----------------------------------------------------------------------
-    println!();
-    println!("[CountMin] Step 1/3 — Read countmin.pb");
-    let bytes = read_file(in_dir.join("countmin.pb"));
-    let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode countmin envelope");
-
-    println!(
-        "[CountMin] Step 2/3 — Validate envelope (format_version={}, producer={})",
-        env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library)
-    );
-
-    let cm_state = match env.sketch_state {
-        Some(sketch_envelope::SketchState::CountMin(ref s)) => s.clone(),
-        other => panic!("expected CountMin sketch_state, got {other:?}"),
-    };
-
-    println!(
-        "[CountMin]   rows={} cols={} counter_type={:?}",
-        cm_state.rows,
-        cm_state.cols,
-        CounterType::try_from(cm_state.counter_type)
-    );
-
-    // Reconstruct the row-major matrix as f64. The producer populates EITHER
-    // counts_int (counter_type ∈ {INT32,INT64}) OR counts_float (FLOAT64),
-    // discriminated by counter_type — read whichever is present.
-    let rows = cm_state.rows as usize;
-    let cols = cm_state.cols as usize;
-    let counts: Vec<f64> = if !cm_state.counts_float.is_empty() {
-        cm_state.counts_float.clone()
-    } else {
-        cm_state.counts_int.iter().map(|&v| v as f64).collect()
-    };
-    let counts = &counts;
-    if counts.len() != rows * cols {
-        eprintln!(
-            "[CountMin] FAIL: counts length {} != rows*cols {}",
-            counts.len(),
-            rows * cols
-        );
-        all_ok = false;
-    }
-
-    // Point query for hot key "item:42" using the same hash formula as Go.
-    let hot_key = b"item:42" as &[u8];
-    let hot_hash = xxh3_64_seeded(SEED_0, hot_key);
-
-    println!("[CountMin] Step 3/3 — Point query 'item:42' (hash=0x{hot_hash:016x})");
-
-    let bits_per_row = col_bits(cols);
-    let mask = (cols as u64) - 1;
-    let mut min_freq = f64::MAX;
-    for r in 0..rows {
-        let shift = (r as u64) * bits_per_row;
-        let c = ((hot_hash >> shift) & mask) as usize;
-        let v = counts[r * cols + c];
-        if v < min_freq {
-            min_freq = v;
-        }
-    }
-    println!("[CountMin]   min frequency estimate = {min_freq:.0} (expect ≥ 101)");
-    if min_freq < 101.0 {
-        eprintln!("[CountMin] FAIL: frequency {min_freq:.0} < 101");
-        all_ok = false;
-    } else {
-        println!("[CountMin]   PASS");
-    }
 
     // -----------------------------------------------------------------------
     // KLL
@@ -434,61 +362,6 @@ fn cross_language_proto() {
     } else {
         eprintln!("[Hydra] FAIL: estimate {hydra_est:.0} < 51");
         all_ok = false;
-    }
-
-    // -----------------------------------------------------------------------
-    // Sampled CountMin (geometric skip-sampling, p=0.1) — exercises the
-    // sample_p envelope field + the backend ×1/p rescale at query.
-    // -----------------------------------------------------------------------
-    let sampled_cms_path = in_dir.join("countmin_sampled.pb");
-    if sampled_cms_path.exists() {
-        println!();
-        println!("[CountMin/sampled] Step 1/3 — Read countmin_sampled.pb");
-        let bytes = read_file(&sampled_cms_path);
-        let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode sampled countmin");
-
-        // Dual-read: 0.0/unset means 1.0; a sampled producer stamps the real p.
-        let p = effective_sample_p(&env);
-        println!("[CountMin/sampled] Step 2/3 — envelope sample_p = {p}");
-        if (p - 0.1).abs() > 1e-9 {
-            eprintln!("[CountMin/sampled] FAIL: sample_p {p} != 0.1");
-            all_ok = false;
-        }
-
-        let cm_state = match env.sketch_state {
-            Some(sketch_envelope::SketchState::CountMin(ref s)) => s.clone(),
-            other => panic!("expected CountMin sketch_state, got {other:?}"),
-        };
-        let rows = cm_state.rows as usize;
-        let cols = cm_state.cols as usize;
-        let counts: Vec<f64> = if !cm_state.counts_float.is_empty() {
-            cm_state.counts_float.clone()
-        } else {
-            cm_state.counts_int.iter().map(|&v| v as f64).collect()
-        };
-
-        // Raw min-frequency point query for "item:hot".
-        let hot_hash = xxh3_64_seeded(SEED_0, b"item:hot");
-        let bits_per_row = col_bits(cols);
-        let mask = (cols as u64) - 1;
-        let mut raw = f64::MAX;
-        for r in 0..rows {
-            let shift = (r as u64) * bits_per_row;
-            let c = ((hot_hash >> shift) & mask) as usize;
-            raw = raw.min(counts[r * cols + c]);
-        }
-        // Backend rescale: ×1/p recovers the full-stream frequency.
-        let rescaled = rescale_count(raw, p);
-        let rel_err = (rescaled - 100_000.0).abs() / 100_000.0;
-        println!(
-            "[CountMin/sampled] Step 3/3 — raw={raw:.0} rescaled(×1/p)={rescaled:.0} truth=100000 relErr={rel_err:.4}"
-        );
-        if rel_err <= 0.05 {
-            println!("[CountMin/sampled]   PASS");
-        } else {
-            eprintln!("[CountMin/sampled] FAIL: rescaled rel err {rel_err:.4} > 0.05");
-            all_ok = false;
-        }
     }
 
     // -----------------------------------------------------------------------
