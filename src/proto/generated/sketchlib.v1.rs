@@ -198,80 +198,6 @@ pub struct CountMinState {
     #[prost(double, repeated, tag = "9")]
     pub l2: ::prost::alloc::vec::Vec<f64>,
 }
-/// CountMinDelta carries only the matrix cells that changed by at least the
-/// threshold between two consecutive snapshots, plus the full per-row L1/L2
-/// norm deltas (one entry per row, negligible size).
-///
-/// Cells apply additively on the receiver: matrix[row][col] += d_count. CMS
-/// counters only ever grow, but the delta encodes a signed count (sint64) so
-/// the same wire form covers weighted/decay variants.
-///
-/// The packed cell encoding (cell_rows / cell_cols / d_counts, tags 9-11) is
-/// the canonical form; the legacy per-cell message (tag 3) is retained only so
-/// payloads from older producers still decode. This message is byte-identical
-/// to the Go reference implementation's CountMinDelta so the two runtimes emit
-/// byte-identical delta frames for identical window state (cross-language byte
-/// parity).
-///
-/// CountMinDelta is structurally identical to CountSketchDelta: rows, cols, the
-/// packed cell encoding, per-row norm deltas, and an optional repeated hh_keys
-/// at the SAME tag number (6). Both sketches can track heavy hitters; whether
-/// hh_keys is populated is a control-plane decision (it is empty/omitted when
-/// heavy-hitter tracking is not enabled for this sketch).
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CountMinDelta {
-    #[prost(uint32, tag = "1")]
-    pub rows: u32,
-    #[prost(uint32, tag = "2")]
-    pub cols: u32,
-    /// Deprecated: use cell_rows/cell_cols/d_counts (tags 9-11). Retained for
-    /// backward-compatible decode of payloads from older producers.
-    #[prost(message, repeated, tag = "3")]
-    pub cells_legacy: ::prost::alloc::vec::Vec<CountMinCell>,
-    /// Per-row L1 norm deltas, length = rows.
-    #[prost(double, repeated, tag = "4")]
-    pub l1: ::prost::alloc::vec::Vec<f64>,
-    /// Per-row L2 norm deltas, length = rows.
-    #[prost(double, repeated, tag = "5")]
-    pub l2: ::prost::alloc::vec::Vec<f64>,
-    /// Heavy-hitter candidate keys from an upstream tracker, mirroring
-    /// CountSketchDelta.hh_keys (same tag number 6, same wire shape). Downstream
-    /// queries the merged Count-Min matrix for each key to (re)build its Top-K
-    /// with globally-merged estimates. Empty/omitted when heavy-hitter tracking
-    /// is not enabled.
-    #[prost(string, repeated, tag = "6")]
-    pub hh_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// Packed cell encoding (canonical form):
-    ///
-    /// row index of each changed cell
-    #[prost(uint32, repeated, tag = "9")]
-    pub cell_rows: ::prost::alloc::vec::Vec<u32>,
-    /// col index of each changed cell
-    #[prost(uint32, repeated, tag = "10")]
-    pub cell_cols: ::prost::alloc::vec::Vec<u32>,
-    /// signed integer count delta
-    #[prost(sint64, repeated, tag = "11")]
-    pub d_counts: ::prost::alloc::vec::Vec<i64>,
-}
-/// CountMinCell is the deprecated per-cell delta record. Producers emit the
-/// packed cell arrays on CountMinDelta instead; this message exists only to
-/// decode payloads from older producers.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct CountMinCell {
-    #[prost(uint32, tag = "1")]
-    pub row: u32,
-    #[prost(uint32, tag = "2")]
-    pub col: u32,
-    /// deprecated: use CountMinDelta.d_counts
-    #[prost(double, tag = "3")]
-    pub d_count: f64,
-    /// deprecated: omitted in the packed encoding
-    #[prost(double, tag = "4")]
-    pub d_sum: f64,
-    /// deprecated: omitted in the packed encoding
-    #[prost(double, tag = "5")]
-    pub d_sum2: f64,
-}
 /// CountSketchState is the portable state of a Count (±1) Sketch.
 ///
 /// The counter matrix is signed because Count Sketch uses ±1 increments.
@@ -820,7 +746,7 @@ pub struct SketchEnvelope {
     /// geometric skip-sampling, statistically identical to per-update Bernoulli(p))
     /// and stores the RAW SAMPLED sketch state — never the rescaled state. The
     /// consumer applies the `× 1/sample_p` rescale at QUERY time on the count-like
-    /// estimators (HLL cardinality, CountMin / CountSketch frequency, SUM / COUNT);
+    /// estimators (HLL cardinality, CountSketch frequency, SUM / COUNT);
     /// quantile estimators (DDSketch) are scale-invariant under uniform
     /// sampling so they carry `sample_p` but need no rescale.
     ///
@@ -834,7 +760,7 @@ pub struct SketchEnvelope {
     #[prost(double, tag = "4")]
     pub sample_p: f64,
     /// The sketch payload. Exactly one field must be set.
-    #[prost(oneof = "sketch_envelope::SketchState", tags = "10, 11, 14, 15, 16, 17, 18")]
+    #[prost(oneof = "sketch_envelope::SketchState", tags = "11, 14, 15, 16, 17, 18")]
     pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
 }
 /// Nested message and enum types in `SketchEnvelope`.
@@ -842,8 +768,6 @@ pub mod sketch_envelope {
     /// The sketch payload. Exactly one field must be set.
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum SketchState {
-        #[prost(message, tag = "10")]
-        CountMin(super::CountMinState),
         #[prost(message, tag = "11")]
         CountSketch(super::CountSketchState),
         #[prost(message, tag = "14")]

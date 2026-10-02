@@ -7,7 +7,6 @@
 //! printing EXPECTED vs ACTUAL and a theory-based verdict.
 
 use asap_sketchlib::common::input::{HydraCounter, HydraQuery};
-use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::{
@@ -1015,31 +1014,6 @@ fn probe_tumbling() {
 fn probe_portable_wire_types() {
     let mut p = Probe::new();
     println!("--- Portable wire types (Go-parity DTOs) ---");
-
-    // Portable CountMin.
-    let mut pcs = CountMinSketch::new(3, 4096);
-    let mut truth: HashMap<String, f64> = HashMap::new();
-    let mut z = Zipf::new(2048, 1.1, 54);
-    for _ in 0..50_000 {
-        let k = format!("k{}", z.sample_usize());
-        *truth.entry(k.clone()).or_insert(0.0) += 1.0;
-        pcs.update(&k, 1.0);
-    }
-    let mut by_freq: Vec<(String, f64)> = truth.iter().map(|(k, v)| (k.clone(), *v)).collect();
-    by_freq.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    let eps = std::f64::consts::E / 4096.0;
-    let mut bad = 0usize;
-    for (k, v) in by_freq.iter().take(50) {
-        let est = pcs.estimate(k);
-        if est < *v || est > v + eps * 50_000.0 {
-            bad += 1;
-        }
-    }
-    p.check(
-        "portable CMS one-sided bound (top-50)",
-        format!("{bad} violations"),
-        bad == 0,
-    );
 
     // HydraKllSketch: per-key quantiles, median across rows.
     let mut hk = HydraKllSketch::new(3, 256, 200);

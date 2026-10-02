@@ -371,9 +371,6 @@ Per sketch. **Raw state only**, a **positional msgpack array** in the order its 
 - No field derivable from another (no HLL `precision`; no CMS `l1`/`l2`, which are `sum(count)` / `sum(count^2)` and are recomputed on decode). The rule is "derivable", not "named `l2`": CountL2HH and the UnivMon family carry a payload field spelled exactly `l2` (§3.19, §3.15, §3.16) and are right to, because that accumulator is **not** `sum(counts[row]^2)` — an insert path exists that moves counters without touching it, and it clamps. Nothing derivable rides the wire; nothing that only looks derivable is dropped.
 - msgpack array (positional), never a keyed map. The exact msgpack types are in "Wire encoding rules".
 
-> Note: derived summaries like CMS `l1`/`l2` and `sum_counts`/`sum2_counts` live in the **delta / error-accounting** format (proto `CountMinState`), a separate wire format.
-> They do not belong in the self-contained sketch payload.
-
 ### 3.1: HLL payload (`0x01 0x01` / `0x01 0x02` / `0x01 0x03`)
 
 The variant is in `kind_id`, precision is in the metadata (and equals `log2(register count)`), so the only real state is the register bytes (plus three running scalars for HIP).
@@ -1316,7 +1313,7 @@ Fail **closed** on any mismatch:
 
 The library provides no free wire serialization for exotic counters; only the owner knows if the mapping is lossless.
 Convert to a canonical counter type, then serialize.
-Doable **today** with existing public API (the pattern `SketchlibCms` already uses):
+Doable **today** with existing public API:
 
 ```rust
 // e.g. a u64-counter FastPath CMS to the i64 wire form

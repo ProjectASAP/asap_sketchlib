@@ -27,7 +27,6 @@ syntax = "proto3";
 package sketchlib.v1;
 
 import "common/common.proto";
-import "countminsketch/countminsketch.proto";
 import "countsketch/countsketch.proto";
 import "ddsketch/ddsketch.proto";
 import "univmon/univmon.proto";
@@ -62,7 +61,6 @@ message SketchEnvelope {
 
   // The sketch payload. Exactly one field must be set.
   oneof sketch_state {
-    CountMinState    count_min    = 10;
     CountSketchState count_sketch = 11;
     DDSketchState    ddsketch     = 14;
     UnivMonState     univmon      = 15;
@@ -71,6 +69,8 @@ message SketchEnvelope {
     ElasticState     elastic      = 18;
   }
 
+  reserved 10;
+  reserved "count_min";
   reserved 12;
   reserved "hll";
   reserved 13;
@@ -83,7 +83,7 @@ message SketchEnvelope {
   // geometric skip-sampling, statistically identical to per-update Bernoulli(p))
   // and stores the RAW SAMPLED sketch state — never the rescaled state. The
   // consumer applies the `× 1/sample_p` rescale at QUERY time on the count-like
-  // estimators (HLL cardinality, CountMin / CountSketch frequency, SUM / COUNT);
+  // estimators (HLL cardinality, CountSketch frequency, SUM / COUNT);
   // quantile estimators (DDSketch) are scale-invariant under uniform
   // sampling so they carry `sample_p` but need no rescale.
   //

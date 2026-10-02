@@ -7,7 +7,6 @@
 //! to them. Call those methods directly; `docs/asapv1_wire_format.md`
 //! specifies the format `sketchlib-go` mirrors.
 
-pub mod countminsketch;
 pub mod countsketch;
 pub mod countsketch_topk;
 pub mod ddsketch;

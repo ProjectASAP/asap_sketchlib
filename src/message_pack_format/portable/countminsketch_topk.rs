@@ -1,8 +1,7 @@
 //! Wire-format-aligned Count-Min sketch + top-k heap composite.
 //!
-//! No `sketches::*` equivalent — this combines `sketches::CMSHeap`
-//! with the wire-format `CountMinSketch` shape and exposes it as a
-//! single Go-interop type.
+//! No `sketches::*` equivalent — this wraps `sketches::CMSHeap` in a
+//! row/column matrix shape and exposes it as a single Go-interop type.
 
 use serde::{Deserialize, Serialize};
 
