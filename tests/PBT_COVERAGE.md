@@ -296,7 +296,7 @@ Compaction is randomized, so no law names retained items. Compared against: the 
   - same seed, same stream: same items
   - `clear` re-seeds from the stored seed: replay == fresh, items and levels
 - wire
-  - msgpack keeps `k`, count, quantiles
+  - ASAPv1 keeps `k`, count, quantiles
   - ASAPv1 keeps count and quantiles under NaN, ±inf, ±0, f64 extremes
 
 ## kll_dynamic.rs — 14

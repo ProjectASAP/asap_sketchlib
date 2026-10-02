@@ -325,8 +325,8 @@ error against its bound.
 
 - No assertion depends on unseeded randomness — no `rand::rng()`, no
   wall-clock seeding, no implicit RNG inside a constructor. An unseeded
-  sketch appears only where the assertion holds for every draw. `KLL::init_kll_with_seed`,
-  `KLLDynamic::init_kll_with_seed`, `KllSketch::with_seed`,
+  sketch appears only where the assertion holds for every draw.
+  `KLL::init_kll_with_seed`, `KLLDynamic::init_kll_with_seed`,
   `NitroBatch::with_target_and_seed`, `UniformSampling::with_seed`,
   `Coco::init_with_size_and_seed` and `CocoOctoPlan::with_seed` exist for this.
 - An estimator whose guarantee is unbiasedness gets no per-key band: its

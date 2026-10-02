@@ -150,8 +150,8 @@ being **phased out** in favor of the per-sketch `wire.rs` + the shared
 `envelope.rs`.
 
 - `portable/` holds per-sketch wire types that predate the envelope. They
-  carry their own byte-parity goldens against `sketchlib-go` — HLL, Count-Min,
-  Count Sketch and KLL (both directions) — separate from `asapv1_golden/`.
+  carry their own byte-parity goldens against `sketchlib-go` — HLL, Count-Min
+  and Count Sketch — separate from `asapv1_golden/`.
 - `native/` is a set of thin `MessagePackCodec` shims over the sketches'
   `serialize_to_bytes` / `deserialize_from_bytes`. Every type it wraps emits the
   ASAPv1 envelope, so each shim is a pass-through.
@@ -169,9 +169,9 @@ decode → re-encode them byte-identically. The `kind_id` registry is mirrored
 verbatim with Go's `wire/asapmsgpack/magic_ids.go`, never independently
 allocated.
 
-That proof covers the six `kind_id`s a fixture exists for — HLL's three
-estimators, Count-Min, Count Sketch and compact KLL. Every other implemented
-kind has **no ASAPv1 golden and therefore no ASAPv1 drift guard**;
+That proof covers the seven `kind_id`s a fixture exists for — HLL's three
+estimators, Count-Min, Count Sketch and both KLL variants. Every other
+implemented kind has **no ASAPv1 golden and therefore no ASAPv1 drift guard**;
 [its README](https://github.com/ProjectASAP/sketchlib-golden-bytes#coverage) lists what is covered.
 The older `portable` path is guarded separately, by the `sketchlib-go` goldens
 of its own listed above.

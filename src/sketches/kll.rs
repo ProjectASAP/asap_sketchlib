@@ -329,66 +329,6 @@ impl<T: NumericalValue> KLL<T> {
         s
     }
 
-    /// Reconstruct a KLL directly from portable wire state — the retained
-    /// `items` in level order plus the `levels` boundary array (proto contract:
-    /// `levels[0] == 0`, `levels[num_levels] == items.len()`). Avoids replaying
-    /// every item through `update()`: it places the items straight into the
-    /// internal buffer and fixes up the level boundaries, so the result is
-    /// bit-identical to the source sketch (identical quantiles) at a fraction
-    /// of the cost. Errors if the supplied state is inconsistent.
-    pub fn from_portable_state(
-        k: usize,
-        items: &[T],
-        levels: &[usize],
-        num_levels: usize,
-    ) -> Result<Self, String> {
-        let mut s = Self::init_kll(k as i32);
-        if items.is_empty() {
-            return Ok(s);
-        }
-        if num_levels == 0 || num_levels >= s.levels.len() {
-            return Err(format!(
-                "from_portable_state: invalid num_levels {num_levels}"
-            ));
-        }
-        if levels.len() != num_levels + 1 {
-            return Err(format!(
-                "from_portable_state: levels.len()={} != num_levels+1={}",
-                levels.len(),
-                num_levels + 1
-            ));
-        }
-        if levels[0] != 0 || levels[num_levels] != items.len() {
-            return Err(format!(
-                "from_portable_state: level bounds [{}..{}] inconsistent with items.len()={}",
-                levels[0],
-                levels[num_levels],
-                items.len()
-            ));
-        }
-        if items.len() > s.max_capacity {
-            return Err(format!(
-                "from_portable_state: {} items exceed max_capacity {} for k={}",
-                items.len(),
-                s.max_capacity,
-                k
-            ));
-        }
-        // Live data occupies the high end of the buffer; free space at the front.
-        let offset = s.max_capacity - items.len();
-        let max_cap = s.max_capacity;
-        s.items[offset..].clone_from_slice(items);
-        for (dst, &src) in s.levels.iter_mut().zip(levels[..=num_levels].iter()) {
-            *dst = src + offset;
-        }
-        for dst in s.levels.iter_mut().skip(num_levels + 1) {
-            *dst = max_cap;
-        }
-        s.num_levels = num_levels;
-        s.rebuild_capacity_cache(); // recomputes top_height + level0_capacity for num_levels
-        Ok(s)
-    }
-
     /// Hot-path insert: decrement `levels[0]`, write item, check capacity.
     #[inline]
     fn push_value(&mut self, value: T) {
@@ -785,12 +725,8 @@ impl<T: NumericalValue> KLL<T> {
         self.num_levels as u32
     }
 
-    /// Returns the compaction-coin state in `sketchlib-go::CoinState`
-    /// shape: `(state, bit_cache, remaining_bits)`. Wire-format wrappers
-    /// pack this directly into the `KLLState.coin` proto field; without
-    /// it the coin state would have to be poked from private internals
-    /// or reconstructed by a serde round-trip, neither of which is
-    /// stable across `asap_sketchlib` releases.
+    /// Returns the compaction-coin state as `(state, bit_cache,
+    /// remaining_bits)`, the ASAPv1 payload's `coin` array.
     #[inline]
     pub fn wire_coin(&self) -> (u64, u64, u32) {
         (
@@ -804,11 +740,9 @@ impl<T: NumericalValue> KLL<T> {
     /// length `num_levels + 1`, starting at 0 and ending at the total
     /// number of retained items. The chunk
     /// `wire_items()[wire_levels()[i] .. wire_levels()[i+1]]` is the
-    /// **top-most-first** run for the proto's `KLLState.levels`/`items`
-    /// fields, matching `sketchlib-go::KLLSketch.SerializePortable`.
-    /// See the `KLLState` docstring in `proto/kll/kll.proto`: index `i`
-    /// in `levels` maps to compactor level `num_levels - 1 - i` in the
-    /// in-memory representation.
+    /// **top-most-first** run of the ASAPv1 payload's `levels`/`items`:
+    /// index `i` in `levels` maps to compactor level `num_levels - 1 - i`
+    /// in the in-memory representation.
     pub fn wire_levels(&self) -> Vec<u32> {
         // Walk from top compactor-level downward, accumulating sizes.
         let n = self.num_levels;
@@ -1182,39 +1116,6 @@ mod tests {
             rmp_serde::from_slice::<KLL<f64>>(&bytes).is_err(),
             "an out-of-range k must be rejected by the nested serde decoder"
         );
-    }
-
-    // Direct reconstruction from portable wire state must be BIT-EXACT:
-    // identical quantiles to the source sketch (unlike a lossy
-    // replay-through-`update()` reconstruction).
-    #[test]
-    fn from_portable_state_reproduces_source_exactly() {
-        let k = 200usize;
-        let mut src = KLL::<f64>::init_kll(k as i32);
-        for i in 0..200_000u32 {
-            src.update(&((i as f64) * 0.0007 + 3.0));
-        }
-        // Extract the compacted portable form (proto contract: levels[0]==0,
-        // levels[num_levels]==items.len()).
-        let off = src.levels[0];
-        let items: Vec<f64> = src.items[off..src.max_capacity].to_vec();
-        let levels: Vec<usize> = (0..=src.num_levels).map(|h| src.levels[h] - off).collect();
-        let n = src.num_levels;
-
-        // (A) bit-exact: direct reconstruction reproduces the source exactly.
-        let rebuilt = KLL::<f64>::from_portable_state(k, &items, &levels, n).unwrap();
-        for &q in &[0.0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0] {
-            assert_eq!(
-                rebuilt.quantile(q),
-                src.quantile(q),
-                "direct reconstruction quantile mismatch at q={q}"
-            );
-        }
-
-        // An empty sketch round-trips to an empty sketch.
-        let empty = KLL::<f64>::from_portable_state(k, &[], &[], 0).unwrap();
-        assert_eq!(empty.num_levels, 1);
-        assert_eq!(empty.levels[0], empty.max_capacity);
     }
 
     // Ensure each 64-bit chunk is consumed bit-by-bit before refilling.

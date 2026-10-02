@@ -1,5 +1,4 @@
-//! Property tests for KLL: the native sketch and the portable `KllSketch`
-//! that carries it over the wire.
+//! Property tests for the compact KLL sketch.
 //!
 //! Karnin, Lang, Liberty, FOCS '16. Compaction is randomized, so a law may
 //! not name the items it keeps. What survives: a quantile is monotone in q,
@@ -12,8 +11,7 @@
 //! `kll_the_ends_are_exact_until_the_first_compaction`.
 
 use crate::support::{QUANTILES, close, extreme_values};
-use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::{KLL, KllSketch};
+use asap_sketchlib::KLL;
 use proptest::prelude::*;
 
 const QUANTILE_PROBES: [f64; 7] = [0.0, 0.01, 0.25, 0.5, 0.75, 0.99, 1.0];
@@ -89,12 +87,8 @@ fn top_weight(s: &KLL<f64>) -> f64 {
     (1u64 << (s.wire_num_levels() - 1)) as f64
 }
 
-fn kll_of(k: u16, values: &[f64]) -> KllSketch {
-    let mut s = KllSketch::with_seed(k, 0xC0FFEE);
-    for v in values {
-        s.update(*v);
-    }
-    s
+fn kll_of(k: u16, values: &[f64]) -> KLL<f64> {
+    native_kll(k as i32, 0xC0FFEE, values)
 }
 
 proptest! {
@@ -106,7 +100,7 @@ proptest! {
         values in prop::collection::vec(-1e5f64..1e5, 0..8),
     ) {
         let s = kll_of(k, &values);
-        prop_assert_eq!(s.count(), values.len() as u64);
+        prop_assert_eq!(s.count(), values.len());
     }
 
     #[test]
@@ -116,7 +110,7 @@ proptest! {
         b in prop::collection::vec(-1e5f64..1e5, 0..400),
     ) {
         let mut merged = kll_of(k, &a);
-        merged.merge(&kll_of(k, &b)).expect("merge");
+        merged.merge(&kll_of(k, &b));
 
         let n = (a.len() + b.len()) as f64;
         let got = merged.count() as f64;
@@ -164,18 +158,15 @@ proptest! {
         k in 8u16..256,
         values in prop::collection::vec(-1e6f64..1e6, 0..300),
     ) {
-        let mut s = KllSketch::with_seed(k, 0x5EED);
-        for v in &values {
-            s.update(*v);
-        }
+        let s = native_kll(k as i32, 0x5EED, &values);
 
-        let bytes = s.to_msgpack().expect("encode");
-        let restored = KllSketch::from_msgpack(&bytes).expect("decode");
+        let bytes = s.serialize_to_bytes().expect("encode");
+        let restored = KLL::<f64>::deserialize_from_bytes(&bytes).expect("decode");
 
         prop_assert_eq!(restored.k(), s.k());
         prop_assert_eq!(restored.count(), s.count());
         for q in QUANTILE_PROBES {
-            prop_assert_eq!(restored.quantile(q), s.quantile(q), "q={}", q);
+            prop_assert_eq!(restored.quantile(q).to_bits(), s.quantile(q).to_bits(), "q={}", q);
         }
     }
 

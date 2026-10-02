@@ -877,7 +877,7 @@ pub struct SketchEnvelope {
     /// and stores the RAW SAMPLED sketch state — never the rescaled state. The
     /// consumer applies the `× 1/sample_p` rescale at QUERY time on the count-like
     /// estimators (HLL cardinality, CountMin / CountSketch frequency, SUM / COUNT);
-    /// quantile estimators (KLL, DDSketch) are scale-invariant under uniform
+    /// quantile estimators (DDSketch) are scale-invariant under uniform
     /// sampling so they carry `sample_p` but need no rescale.
     ///
     /// Lives on the envelope (not per-sketch state) so downstream consumers that
@@ -892,7 +892,7 @@ pub struct SketchEnvelope {
     /// The sketch payload. Exactly one field must be set.
     #[prost(
         oneof = "sketch_envelope::SketchState",
-        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "10, 11, 12, 14, 15, 16, 17, 18"
     )]
     pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
 }
@@ -907,8 +907,6 @@ pub mod sketch_envelope {
         CountSketch(super::CountSketchState),
         #[prost(message, tag = "12")]
         Hll(super::HyperLogLogState),
-        #[prost(message, tag = "13")]
-        Kll(super::KllState),
         #[prost(message, tag = "14")]
         Ddsketch(super::DdSketchState),
         #[prost(message, tag = "15")]
