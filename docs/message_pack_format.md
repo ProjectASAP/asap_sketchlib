@@ -169,8 +169,8 @@ decode → re-encode them byte-identically. The `kind_id` registry is mirrored
 verbatim with Go's `wire/asapmsgpack/magic_ids.go`, never independently
 allocated.
 
-That proof covers the six `kind_id`s a fixture exists for — HLL's three
-estimators, Count-Min, Count Sketch and compact KLL. Every other implemented
+That proof covers the seven `kind_id`s a fixture exists for — HLL's three
+estimators, Count-Min, Count Sketch, compact KLL and Elastic. Every other implemented
 kind has **no ASAPv1 golden and therefore no ASAPv1 drift guard**;
 [its README](https://github.com/ProjectASAP/sketchlib-golden-bytes#coverage) lists what is covered.
 The older `portable` path is guarded separately, by the `sketchlib-go` goldens
