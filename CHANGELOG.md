@@ -69,6 +69,10 @@ signals a backwards-compatible change.
 - **HyperLogLog `from_storage` constructors.** `HyperLogLogImpl::from_storage(registers)`
   and `HyperLogLogHIPImpl::from_storage(registers, kxq0, kxq1, est)` build a
   sketch from known register storage (and HIP running state).
+- **HLL P14 golden fixtures** `hll_classic_p14`, `hll_ertl_mle_p14` and
+  `hll_hip_p14` in `asapv1_golden/`, checked in both directions by
+  `tests/asapv1_golden.rs`. Their registers touch the first, a middle and the
+  last index and hold 51, the largest P14 rank.
 
 ### Changed
 
