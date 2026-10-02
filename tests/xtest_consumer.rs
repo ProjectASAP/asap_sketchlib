@@ -8,7 +8,6 @@
 //!   coco.pb        — CocoSketchState (hash+val+hasKey buckets)
 //!   elastic.pb     — ElasticState (heavy buckets + light CountMin)
 //!   univmon.pb     — UnivMonState (layered CountSketch + TopK heaps)
-//!   hydra.pb       — HydraState (CM-cell grid)
 //!
 //! Usage:
 //!   XTEST_DIR=<path> cargo test --test xtest_consumer -- --nocapture
@@ -155,47 +154,6 @@ fn cross_language_proto() {
     }
 
     // -----------------------------------------------------------------------
-    // HydraSketch
-    // -----------------------------------------------------------------------
-    println!();
-    println!("[Hydra] Step 1/3 — Read hydra.pb");
-    let bytes = read_file(in_dir.join("hydra.pb"));
-    let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode hydra envelope");
-
-    println!(
-        "[Hydra] Step 2/3 — Validate envelope (format_version={}, producer={})",
-        env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library)
-    );
-
-    let hydra_state = match env.sketch_state {
-        Some(sketch_envelope::SketchState::Hydra(ref s)) => s.clone(),
-        other => panic!("expected Hydra sketch_state, got {other:?}"),
-    };
-
-    println!(
-        "[Hydra]   row_num={} col_num={} counter_type={} cells={}",
-        hydra_state.row_num,
-        hydra_state.col_num,
-        hydra_state.counter_type,
-        hydra_state.cells.len()
-    );
-
-    // Query "hydra:42" — inserted 51 times (1 base + 50 extra).
-    // Routing: subkey_hash = xxh3_64_seeded(seedList[6]=0xbb67ae85, b"hydra:42")
-    // Value hash: value_hash = xxh3_64_seeded(seedList[0]=0xcafe3553, b"hydra:42")
-    let hydra_subkey_hash = xxh3_64_seeded(SEED_6, b"hydra:42");
-    let hydra_value_hash = xxh3_64_seeded(SEED_0, b"hydra:42");
-    let hydra_est = hydra_query_cm(&hydra_state, hydra_subkey_hash, hydra_value_hash);
-    println!("[Hydra] Step 3/3 — 'hydra:42' est = {hydra_est:.0} (expect ≥ 51)");
-    if hydra_est >= 51.0 {
-        println!("[Hydra]   PASS");
-    } else {
-        eprintln!("[Hydra] FAIL: estimate {hydra_est:.0} < 51");
-        all_ok = false;
-    }
-
-    // -----------------------------------------------------------------------
     // Final summary
     // -----------------------------------------------------------------------
     println!();
@@ -216,7 +174,6 @@ fn cross_language_proto() {
 
 const SEED_0: u64 = 0xcafe3553; // seedList[0] — Hash64 / default hash
 const SEED_5: u64 = 0x6a09e667; // seedList[5] — CanonicalHashSeed
-const SEED_6: u64 = 0xbb67ae85; // seedList[6] — defaultHydraSeed
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -566,95 +523,6 @@ fn median_of_three_f64(a: f64, b: f64, c: f64) -> f64 {
     } else {
         b
     }
-}
-
-// ---------------------------------------------------------------------------
-// HydraSketch CountMin frequency query
-// ---------------------------------------------------------------------------
-// Routing (mirrors Go's fillPositionsFromHash with default seeds):
-//   seedCM1 = 0x1111111111111111, seedCM2 = 0x2222222222222222
-//   x = subkey_hash ^ seedCM1;  y = subkey_hash ^ seedCM2
-//   for r in 0..D: xorshift both; pos[r] = (x ^ (y<<1)) % W
-// For each row: query CM cell at cells[r*W + pos[r]] with value_hash.
-// CM query: min across rows of count at col=(value_hash>>(r*bits))&mask.
-// Final result: median of per-Hydra-row CM estimates.
-
-const HYDRA_SEED_CM1: u64 = 0x1111111111111111;
-const HYDRA_SEED_CM2: u64 = 0x2222222222222222;
-
-fn xorshift64(x: &mut u64) {
-    *x ^= *x << 13;
-    *x ^= *x >> 7;
-    *x ^= *x << 17;
-}
-
-fn hydra_fill_positions(subkey_hash: u64, d: usize, w: usize) -> Vec<usize> {
-    let mut x = subkey_hash ^ HYDRA_SEED_CM1;
-    let mut y = subkey_hash ^ HYDRA_SEED_CM2;
-    if x == 0 {
-        x = HYDRA_SEED_CM1;
-    }
-    if y == 0 {
-        y = HYDRA_SEED_CM2 | 1;
-    }
-
-    let mut pos = Vec::with_capacity(d);
-    for _ in 0..d {
-        xorshift64(&mut x);
-        xorshift64(&mut y);
-        pos.push(((x ^ (y << 1)) % w as u64) as usize);
-    }
-    pos
-}
-
-fn hydra_query_cm(state: &HydraState, subkey_hash: u64, value_hash: u64) -> f64 {
-    let d = state.row_num as usize;
-    let w = state.col_num as usize;
-    let cells = &state.cells;
-
-    let pos = hydra_fill_positions(subkey_hash, d, w);
-
-    let mut estimates = Vec::with_capacity(d);
-    for (r, &p) in pos.iter().enumerate().take(d) {
-        let cell_idx = r * w + p;
-        if cell_idx >= cells.len() {
-            estimates.push(0.0f64);
-            continue;
-        }
-        let cell = &cells[cell_idx];
-        let freq = match &cell.sketch {
-            Some(hydra_cell::Sketch::CountMin(cm)) => cm_query_min(cm, value_hash),
-            _ => 0.0,
-        };
-        estimates.push(freq);
-    }
-
-    median_f64(&mut estimates)
-}
-
-/// CountMin min-frequency query with packed hash.
-fn cm_query_min(cm: &CountMinState, hash: u64) -> f64 {
-    let rows = cm.rows as usize;
-    let cols = cm.cols as usize;
-    let bits_per_row = col_bits(cols);
-    let mask = (cols as u64) - 1;
-    let counts: Vec<f64> = if !cm.counts_float.is_empty() {
-        cm.counts_float.clone()
-    } else {
-        cm.counts_int.iter().map(|&v| v as f64).collect()
-    };
-    let counts = &counts;
-
-    let mut min_val = f64::MAX;
-    for r in 0..rows {
-        let shift = (r as u64) * bits_per_row;
-        let col = ((hash >> shift) & mask) as usize;
-        let v = counts[r * cols + col];
-        if v < min_val {
-            min_val = v;
-        }
-    }
-    if min_val == f64::MAX { 0.0 } else { min_val }
 }
 
 // ---------------------------------------------------------------------------

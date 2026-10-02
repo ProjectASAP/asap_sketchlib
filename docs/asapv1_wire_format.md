@@ -702,8 +702,6 @@ A Hydra is a `rows x cols` grid of counters over a fixed set of named key column
 
 **Counters are inlined, not nested.** A cell's raw state goes straight into Hydra's positional array in the shape that counter's own section fixes; no cell carries an envelope, a magic or a metadata map of its own.
 
-**Not this: `portable/hydra_kll.rs`.** `HydraKllSketch` is a legacy Go-interop type, not `0x07 0x00`, and it is the counter-example this rule exists to rule out: every cell of its matrix carries a **full ASAPv1 KLL envelope** — magic, version, kind_id, both length prefixes and a complete metadata map — plus `k` repeated once per cell beside it, in a msgpack shape of its own with no ASAPv1 envelope around the whole. That is exactly what Q-NEST forbids, and `0x07 0x00` does none of it: one envelope for the grid, `counter_k` / `counter_m` / `counter_item_type` carried once in its metadata, and each cell just the `[levels, items, coin]` array §3.3 fixes.
-
 **`0x07 0x01` Count-Min counter, `0x07 0x02` Count Sketch counter** — the fixed-size matrix counters tile one array:
 
 | Pos | Field | Type | Notes |

@@ -445,108 +445,6 @@ pub struct UnivMonLayer {
     #[prost(message, optional, tag = "2")]
     pub heap: ::core::option::Option<TopKState>,
 }
-/// HydraState is the portable state of a Hydra multi-sketch framework.
-///
-/// Hydra maintains a grid of row_num child sketches (cells), each of the
-/// same type (counter_type). Items are routed to a specific row cell using a
-/// position hash derived from the item's subkey. An optional global "big
-/// counter" sketch aggregates the full stream.
-///
-/// Current implementations set col_num = 1 (one sketch per row). The field is
-/// included for schema completeness and future extensions.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct HydraState {
-    /// Number of sketch rows (D / number of subpopulations).
-    #[prost(uint32, tag = "1")]
-    pub row_num: u32,
-    /// Number of sketch columns per row. Currently always 1.
-    #[prost(uint32, tag = "2")]
-    pub col_num: u32,
-    /// The sketch type used for every cell.
-    #[prost(enumeration = "HydraCounterType", tag = "3")]
-    pub counter_type: i32,
-    /// Serialized cells in row-major order, length = row_num * col_num.
-    /// Each cell's oneof field must match counter_type.
-    #[prost(message, repeated, tag = "4")]
-    pub cells: ::prost::alloc::vec::Vec<HydraCell>,
-    /// Optional global sketch covering the entire stream.
-    /// Absent when global counter is disabled (enable_global_counter = false).
-    #[prost(message, optional, tag = "5")]
-    pub big_counter: ::core::option::Option<HydraCell>,
-    /// Seed index used for subpopulation routing (Go: seedHydra, Rust: HYDRA_SEED).
-    /// Both libraries default to 6.
-    #[prost(uint32, tag = "6")]
-    pub seed_index: u32,
-    /// True when per-cell TopK tracking is enabled.
-    #[prost(bool, tag = "7")]
-    pub enable_topk: bool,
-    /// True when fanout subkey expansion is active.
-    #[prost(bool, tag = "8")]
-    pub fanout_subkeys: bool,
-}
-/// HydraCell holds the serialized state of one Hydra grid cell.
-/// Exactly one field in the oneof must be set, and it must match the parent
-/// HydraState.counter_type.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct HydraCell {
-    #[prost(oneof = "hydra_cell::Sketch", tags = "1, 2, 3, 4, 5")]
-    pub sketch: ::core::option::Option<hydra_cell::Sketch>,
-}
-/// Nested message and enum types in `HydraCell`.
-pub mod hydra_cell {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Sketch {
-        #[prost(message, tag = "1")]
-        CountMin(super::CountMinState),
-        #[prost(message, tag = "2")]
-        CountSketch(super::CountSketchState),
-        #[prost(message, tag = "3")]
-        Hll(super::HyperLogLogState),
-        #[prost(message, tag = "4")]
-        Kll(super::KllState),
-        #[prost(message, tag = "5")]
-        Univmon(super::UnivMonState),
-    }
-}
-/// HydraCounterType identifies the sketch algorithm used inside Hydra cells.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum HydraCounterType {
-    Unspecified = 0,
-    CountMin = 1,
-    CountSketch = 2,
-    Hll = 3,
-    Kll = 4,
-    Univmon = 5,
-}
-impl HydraCounterType {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "HYDRA_COUNTER_TYPE_UNSPECIFIED",
-            Self::CountMin => "HYDRA_COUNTER_TYPE_COUNT_MIN",
-            Self::CountSketch => "HYDRA_COUNTER_TYPE_COUNT_SKETCH",
-            Self::Hll => "HYDRA_COUNTER_TYPE_HLL",
-            Self::Kll => "HYDRA_COUNTER_TYPE_KLL",
-            Self::Univmon => "HYDRA_COUNTER_TYPE_UNIVMON",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "HYDRA_COUNTER_TYPE_UNSPECIFIED" => Some(Self::Unspecified),
-            "HYDRA_COUNTER_TYPE_COUNT_MIN" => Some(Self::CountMin),
-            "HYDRA_COUNTER_TYPE_COUNT_SKETCH" => Some(Self::CountSketch),
-            "HYDRA_COUNTER_TYPE_HLL" => Some(Self::Hll),
-            "HYDRA_COUNTER_TYPE_KLL" => Some(Self::Kll),
-            "HYDRA_COUNTER_TYPE_UNIVMON" => Some(Self::Univmon),
-            _ => None,
-        }
-    }
-}
 /// CocoSketchState is the portable state of a CocoSketch flow-size estimator.
 ///
 /// The bucket table is stored flat in row-major order (d rows × width cols).
@@ -637,7 +535,7 @@ pub struct SketchEnvelope {
     #[prost(double, tag = "4")]
     pub sample_p: f64,
     /// The sketch payload. Exactly one field must be set.
-    #[prost(oneof = "sketch_envelope::SketchState", tags = "15, 16, 17, 18")]
+    #[prost(oneof = "sketch_envelope::SketchState", tags = "15, 17, 18")]
     pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
 }
 /// Nested message and enum types in `SketchEnvelope`.
@@ -647,8 +545,6 @@ pub mod sketch_envelope {
     pub enum SketchState {
         #[prost(message, tag = "15")]
         Univmon(super::UnivMonState),
-        #[prost(message, tag = "16")]
-        Hydra(super::HydraState),
         #[prost(message, tag = "17")]
         Coco(super::CocoSketchState),
         #[prost(message, tag = "18")]

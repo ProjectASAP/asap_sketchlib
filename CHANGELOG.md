@@ -91,6 +91,10 @@ signals a backwards-compatible change.
   `ddsketch_empty_a001` (metadata version 1) and `ddsketch_signed_a001`
   (metadata version 2, negative store and zero count), checked by
   `tests/asapv1_golden.rs`.
+- **ASAPv1 golden fixtures for Hydra's five counter variants** (`0x07 0x00`
+  KLL, `0x07 0x01` Count-Min, `0x07 0x02` Count Sketch, `0x07 0x03` HLL,
+  `0x07 0x04` UnivMon), each a small grid whose cell states are set directly,
+  checked by `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -204,6 +208,18 @@ signals a backwards-compatible change.
   `DDSKETCH_GROW_CHUNK`, `MAX_APPLY_DELTA_SPAN_BUCKETS`) and the crate-root
   re-exports of the first three; the `MessagePackCodec` impl for `DDSketch`.
   There is no ASAPv1 DDSketch delta.
+- **Hydra's proto and portable formats.** `Hydra` serializes as ASAPv1 only
+  (`serialize_to_bytes` / `deserialize_from_bytes`, kinds `0x07 0x00`-`0x07
+  0x04`). Removed: the portable `HydraKllSketch` and `HydraKllSketchWire`
+  (module `message_pack_format::portable::hydra_kll`, and the crate-root
+  `HydraKllSketch` re-export), with `HydraKllSketch`'s `MessagePackCodec` impl,
+  `with_seed`, `merge_refs` and `aggregate_hydrakll`; the proto file
+  `hydra/hydra.proto` with `HydraState`, `HydraCell` and `HydraCounterType`
+  (and their generated `proto::sketchlib` types); and `SketchEnvelope`'s
+  `hydra` field (16, now reserved). The nearest replacement is `Hydra` with a
+  one-column schema and `HydraCounter::KLL`, but it routes `label:value`
+  subkeys through the matrix hash at `HYDRA_SEED`, not `xxh32(key, row) %
+  cols`, so `HydraKllSketch` cells do not map onto the new grid.
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the

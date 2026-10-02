@@ -42,7 +42,6 @@ use common::{
     monotonic_f64, normal_f64, outside_in_ordering, uniform_u64, zipf_f64,
 };
 
-use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::{
     DDSketch, DataInput, KLL, KLLConfig, KLLDynamic, TumblingWindow, UnivMonQ, UnivMonQConfig,
 };
@@ -1406,66 +1405,6 @@ fn tumbling_kll_windows_are_exact_and_answers_satisfy_the_rank_contract() {
          inserts (drift {drift:.5} > eps(k) {:.5}); a dropped or duplicated window would \
          show up here. {context}",
         spec.epsilon()
-    );
-}
-
-// --------------------------------------------- Portable HydraKll per-key
-
-/// Hydra routes each key to its own KLL cell, so each cell answers under the
-/// same rank characterization as a standalone KLL over that key's observations.
-///
-/// Every cell of a `HydraKllSketch` is cloned from one seeded prototype, so the
-/// two keys of a single grid share a compaction seed and are **not** independent
-/// trials. Each grid is therefore reduced to its worst rank error across both
-/// keys and the whole q grid, and the binomial runs over twelve independent
-/// prototype seeds.
-#[test]
-fn portable_hydra_kll_per_key_medians_satisfy_the_rank_characterization() {
-    const K: usize = 200;
-    const TRIALS: usize = 12;
-    const QS: [f64; 5] = [0.1, 0.25, 0.5, 0.75, 0.9];
-
-    let spec = KllRankSpec::datasketches(K);
-    let mut truths: Vec<(&str, NumericTruth)> = Vec::new();
-    for (name, base, seed) in [("svc-a", 100.0f64, 3010u64), ("svc-b", 900.0, 3011)] {
-        let vals: Vec<f64> = normal_f64(4000, base, base * 0.05, seed)
-            .into_iter()
-            .map(f64::abs) // HydraKll cells are KLL: positive domain
-            .collect();
-        truths.push((name, NumericTruth::new(vals)));
-    }
-
-    let mut tally = Tally::default();
-    for t in 0..TRIALS {
-        let seed = kll_trial_seed(0x5EED_0500 + t as u64);
-        let mut hk = HydraKllSketch::with_seed(3, 256, K as u16, seed);
-        for (name, truth) in &truths {
-            for v in truth.sorted() {
-                hk.update(name, *v);
-            }
-        }
-        let mut worst = 0.0f64;
-        let mut detail = String::new();
-        for (name, truth) in &truths {
-            let (e, d) = spec.max_rank_error(truth.sorted(), &QS, |q| hk.quantile(name, q));
-            if e >= worst {
-                worst = e;
-                detail = format!("key {name}: {d}");
-            }
-        }
-        let eps = spec.epsilon();
-        tally.record(worst <= eps, || {
-            format!("seed={seed:#x}: max rank error {worst:.6} > eps(k={K}) = {eps:.6}; {detail}")
-        });
-    }
-    tally.assert_independent_binomial(
-        "portable HydraKll per-key quantiles / maximum rank error per prototype seed",
-        spec.trial_failure_probability,
-        &format!(
-            "k={K}, 3x256 grid, normal(100, 5) and normal(900, 45), stream seeds 3010/3011, \
-             {TRIALS} independent prototype seeds from kll_trial_seed(0x5EED_0500..), \
-             q grid {QS:?}"
-        ),
     );
 }
 

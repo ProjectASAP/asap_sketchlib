@@ -112,7 +112,7 @@ MessagePack (`rmp-serde`) support. **serde support** means the type derives `Ser
 | EHSketchList | Yes | Yes |
 | ExponentialHistogram | No | Yes |
 
-Protobuf (prost): `.proto` definitions exist for Elastic, Coco, Hydra, and UnivMon; Count Sketch has only the `CountSketchState` that Hydra and UnivMon embed. Rust conversion code is in progress.
+Protobuf (prost): `.proto` definitions exist for Elastic, Coco, and UnivMon; Count Sketch has only the `CountSketchState` that UnivMon embeds. Rust conversion code is in progress.
 
 ### API Stability
 
