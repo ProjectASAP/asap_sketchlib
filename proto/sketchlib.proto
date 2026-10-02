@@ -7,7 +7,6 @@
 //   countminsketch/countminsketch.proto — CountMinState
 //   countsketch/countsketch.proto    — CountSketchState, TopKState, HeapEntry
 //   hll/hll.proto                    — HyperLogLogState, HLLVariant
-//   kll/kll.proto                    — KLLState, CoinState
 //   ddsketch/ddsketch.proto          — DDSketchState
 //   univmon/univmon.proto            — UnivMonState, UnivMonLayer
 //   hydra/hydra.proto                — HydraState, HydraCounterType, HydraCell
@@ -32,7 +31,6 @@ import "common/common.proto";
 import "countminsketch/countminsketch.proto";
 import "countsketch/countsketch.proto";
 import "hll/hll.proto";
-import "kll/kll.proto";
 import "ddsketch/ddsketch.proto";
 import "univmon/univmon.proto";
 import "hydra/hydra.proto";
@@ -69,7 +67,6 @@ message SketchEnvelope {
     CountMinState    count_min    = 10;
     CountSketchState count_sketch = 11;
     HyperLogLogState hll          = 12;
-    KLLState         kll          = 13;
     DDSketchState    ddsketch     = 14;
     UnivMonState     univmon      = 15;
     HydraState       hydra        = 16;
@@ -77,6 +74,8 @@ message SketchEnvelope {
     ElasticState     elastic      = 18;
   }
 
+  reserved 13;
+  reserved "kll";
   reserved 19 to 31;  // Reserved for future sketch types.
 
   // Geometric / NitroSketch sampling probability for the producing sketch.
@@ -86,7 +85,7 @@ message SketchEnvelope {
   // and stores the RAW SAMPLED sketch state — never the rescaled state. The
   // consumer applies the `× 1/sample_p` rescale at QUERY time on the count-like
   // estimators (HLL cardinality, CountMin / CountSketch frequency, SUM / COUNT);
-  // quantile estimators (KLL, DDSketch) are scale-invariant under uniform
+  // quantile estimators (DDSketch) are scale-invariant under uniform
   // sampling so they carry `sample_p` but need no rescale.
   //
   // Lives on the envelope (not per-sketch state) so downstream consumers that

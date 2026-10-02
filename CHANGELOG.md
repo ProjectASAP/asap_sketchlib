@@ -66,6 +66,9 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **ASAPv1 golden fixtures for `KLLDynamic`** (kind_id `0x06 0x01`):
+  `kll_dynamic_f64_k200` and `kll_dynamic_i64_k200`, the i64 items crossing
+  every msgpack integer width in both signs, checked in `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -87,6 +90,30 @@ signals a backwards-compatible change.
   is retained; `TumblingWindow::insert` closes a period that saw no arrivals
   as an empty window like any other, and that window takes a place in
   `max_windows`.
+
+### Removed
+
+- **KLL's proto and portable formats.** `KLL` and `KLLDynamic` serialize only
+  as ASAPv1 (`serialize_to_bytes` / `deserialize_from_bytes`, kind_ids
+  `0x06 0x00` / `0x06 0x01`). Removed:
+  - the `kll` field (13) of `SketchEnvelope` (now reserved) and with it
+    `sketch_envelope::SketchState::Kll`; `KLLState` stays in
+    `proto/kll/kll.proto` only as `HydraCell.kll`;
+  - the crate-root `KllSketch` and `KllSketchData`, and the public module
+    `message_pack_format::portable::kll`: `SketchlibKll`, `new_sketchlib_kll`,
+    `new_sketchlib_kll_with_seed`, `sketchlib_kll_update`,
+    `sketchlib_kll_quantile`, `sketchlib_kll_merge`,
+    `bytes_from_sketchlib_kll`, `sketchlib_kll_from_bytes`,
+    `KllSketch::{merge_refs, aggregate_kll, from_portable_state}`, the
+    `MessagePackCodec` impls for `KllSketch` and `KllSketchData`, the
+    value-offset codec (`KLL_SCALE_SWEEP`, `encode_value_offset`,
+    `decode_value_offset`, `KllProtoItems`), and the `unsafe impl Send/Sync
+    for KllSketch`. `HydraKllSketch`'s per-cell type stays reachable through
+    the public fields `HydraKllSketch.sketch` and
+    `HydraKllSketchWire.sketches`, but can no longer be named;
+  - `message_pack_format::native::{kll, kll_dynamic}`, the `MessagePackCodec`
+    impls for `KLL<T>` and `KLLDynamic<T>`;
+  - `KLL::from_portable_state`.
 
 ### Fixed
 

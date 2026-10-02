@@ -10,8 +10,9 @@
 
 use asap_sketchlib::{
     Classic, Count, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12,
-    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
+    HyperLogLogP12, KLL, KLLDynamic, MessagePackCodec, RegularPath, Vector2D,
 };
+use serde::de::DeserializeOwned;
 
 fn decode_hex(s: &str) -> Vec<u8> {
     let s = s.trim();
@@ -32,6 +33,8 @@ const GOLDEN_CS_FAST: &str = include_str!("../asapv1_golden/cs_i64_fast_2x4.hex"
 const GOLDEN_CS_I32: &str = include_str!("../asapv1_golden/cs_i32_regular_2x4.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
+const GOLDEN_KLL_DYN_F64: &str = include_str!("../asapv1_golden/kll_dynamic_f64_k200.hex");
+const GOLDEN_KLL_DYN_I64: &str = include_str!("../asapv1_golden/kll_dynamic_i64_k200.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -243,12 +246,32 @@ fn cs_i32_regular_2x4_matches_golden() {
 }
 
 // ---------------------------------------------------------------------------
-// KLL: build known state (k=200, seed 42, integers 1..=50 — below the level-0
-// capacity, so no compaction fires and the retained set is deterministic) ->
-// serialize == golden, and golden round-trips. Matches the deterministic
-// scenario the proto parity test uses (sketchlib-go's KLLSketch over the same
-// input), so the coin state (42) lines up cross-language.
+// KLL: build known state (k=200, seed 42, inputs below the level-0 capacity, so
+// no compaction fires and the retained set is deterministic) -> serialize ==
+// golden; golden decodes to that state and re-encodes byte-identically.
 // ---------------------------------------------------------------------------
+
+/// The coin of a sketch seeded with 42 that has not compacted.
+const KLL_COIN_SEED_42: (u64, u64, u32) = (42, 0, 0);
+
+/// A KLL payload `[levels, items, coin]`, read straight from the envelope.
+type KllPayloadView<T> = (Vec<u32>, Vec<T>, (u64, u64, u32));
+
+/// Splits an ASAPv1 envelope by hand and decodes its KLL payload.
+fn kll_envelope<T: DeserializeOwned>(bytes: &[u8]) -> (Vec<u8>, KllPayloadView<T>) {
+    assert_eq!(&bytes[..7], b"ASAPv1\x01", "magic and version");
+    let kind_len = bytes[7] as usize;
+    let kind_id = bytes[8..8 + kind_len].to_vec();
+    let at = 8 + kind_len;
+    let meta_len = u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let payload_len = u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+    let payload = &bytes[at + 8 + meta_len..];
+    assert_eq!(payload.len(), payload_len, "payload length prefix");
+    (
+        kind_id,
+        rmp_serde::from_slice(payload).expect("KLL payload"),
+    )
+}
 
 /// A k=200 KLL over `1..=50` with a fixed compaction seed: fully deterministic.
 fn kll_1to50<T: From<u8> + asap_sketchlib::NumericalValue>(seed: u64) -> KLL<T> {
@@ -267,11 +290,20 @@ fn kll_f64_k200_matches_golden() {
     let got = sketch.serialize_to_bytes().expect("serialize");
     assert_eq!(got, want, "KLL f64 bytes diverge from golden");
 
-    // Golden round-trips: decode, and re-encode is byte-identical.
+    let (kind_id, (levels, items, coin)) = kll_envelope::<f64>(&want);
+    assert_eq!(kind_id, [0x06, 0x00]);
+    assert_eq!(levels, [0, 50]);
+    assert_eq!(items, (1..=50).map(f64::from).collect::<Vec<_>>());
+    assert_eq!(coin, KLL_COIN_SEED_42);
+
     let decoded = KLL::<f64>::deserialize_from_bytes(&want).expect("decode");
-    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+    assert_eq!(decoded.wire_levels(), sketch.wire_levels());
+    assert_eq!(decoded.wire_items(), sketch.wire_items());
+    assert_eq!(decoded.wire_coin(), sketch.wire_coin());
+    assert_eq!(decoded.count(), 50);
     assert_eq!(decoded.quantile(0.0), 1.0);
     assert_eq!(decoded.quantile(1.0), 50.0);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
 #[test]
@@ -282,8 +314,117 @@ fn kll_i64_k200_matches_golden() {
     let got = sketch.serialize_to_bytes().expect("serialize");
     assert_eq!(got, want, "KLL i64 bytes diverge from golden");
 
+    let (kind_id, (levels, items, coin)) = kll_envelope::<i64>(&want);
+    assert_eq!(kind_id, [0x06, 0x00]);
+    assert_eq!(levels, [0, 50]);
+    assert_eq!(items, (1..=50).collect::<Vec<i64>>());
+    assert_eq!(coin, KLL_COIN_SEED_42);
+
     let decoded = KLL::<i64>::deserialize_from_bytes(&want).expect("decode");
-    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+    assert_eq!(decoded.wire_levels(), sketch.wire_levels());
+    assert_eq!(decoded.wire_items(), sketch.wire_items());
+    assert_eq!(decoded.wire_coin(), sketch.wire_coin());
+    assert_eq!(decoded.count(), 50);
     assert_eq!(decoded.quantile(0.0), 1.0);
     assert_eq!(decoded.quantile(1.0), 50.0);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+/// Negative, zero, fractional and extreme f64 samples, in insertion order.
+const KLL_DYN_F64_VALS: [f64; 7] = [2.5, -1.0, 0.0, 1e300, -0.125, 42.0, 3.0e-5];
+
+/// i64 samples crossing every msgpack integer width: positive fixint / uint8 /
+/// uint16 / uint32 / uint64 and negative fixint / int8 / int16 / int32 / int64.
+const KLL_DYN_I64_VALS: [i64; 21] = [
+    0,
+    1,
+    -1,
+    127,
+    -32,
+    128,
+    -33,
+    255,
+    -128,
+    256,
+    -129,
+    65535,
+    -32768,
+    65536,
+    -32769,
+    4294967295,
+    -2147483648,
+    4294967296,
+    -2147483649,
+    i64::MAX,
+    i64::MIN,
+];
+
+fn kll_dynamic_of<T: asap_sketchlib::NumericalValue>(values: &[T]) -> KLLDynamic<T> {
+    let mut sketch = KLLDynamic::<T>::init_kll_with_seed(200, 42);
+    for v in values {
+        sketch.update(v);
+    }
+    sketch
+}
+
+#[test]
+fn kll_dynamic_f64_k200_matches_golden() {
+    let want = decode_hex(GOLDEN_KLL_DYN_F64);
+
+    let sketch = kll_dynamic_of(&KLL_DYN_F64_VALS);
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "KLLDynamic f64 bytes diverge from golden");
+
+    let (kind_id, (levels, items, coin)) = kll_envelope::<f64>(&want);
+    assert_eq!(kind_id, [0x06, 0x01]);
+    assert_eq!(levels, [0, KLL_DYN_F64_VALS.len() as u32]);
+    assert_eq!(
+        items.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+        KLL_DYN_F64_VALS
+            .iter()
+            .map(|v| v.to_bits())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(coin, KLL_COIN_SEED_42);
+
+    // Encode copies the buffer, levels and coin verbatim, so equal bytes mean
+    // equal state.
+    let decoded = KLLDynamic::<f64>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.count(), KLL_DYN_F64_VALS.len());
+    assert_eq!(decoded.quantile(0.0), -1.0);
+    assert_eq!(decoded.quantile(1.0), 1e300);
+    for v in KLL_DYN_F64_VALS {
+        assert_eq!(decoded.rank(v), sketch.rank(v), "rank({v})");
+    }
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    assert!(KLL::<f64>::deserialize_from_bytes(&want).is_err());
+    assert!(KLLDynamic::<f64>::deserialize_from_bytes(&decode_hex(GOLDEN_KLL_F64)).is_err());
+}
+
+#[test]
+fn kll_dynamic_i64_k200_matches_golden() {
+    let want = decode_hex(GOLDEN_KLL_DYN_I64);
+
+    let sketch = kll_dynamic_of(&KLL_DYN_I64_VALS);
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "KLLDynamic i64 bytes diverge from golden");
+
+    let (kind_id, (levels, items, coin)) = kll_envelope::<i64>(&want);
+    assert_eq!(kind_id, [0x06, 0x01]);
+    assert_eq!(levels, [0, KLL_DYN_I64_VALS.len() as u32]);
+    assert_eq!(items, KLL_DYN_I64_VALS);
+    assert_eq!(coin, KLL_COIN_SEED_42);
+
+    let decoded = KLLDynamic::<i64>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.count(), KLL_DYN_I64_VALS.len());
+    assert_eq!(decoded.quantile(0.0), i64::MIN as f64);
+    assert_eq!(decoded.quantile(1.0), i64::MAX as f64);
+    for v in KLL_DYN_I64_VALS {
+        assert_eq!(decoded.rank(v as f64), sketch.rank(v as f64), "rank({v})");
+    }
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    assert!(KLL::<i64>::deserialize_from_bytes(&want).is_err());
+    assert!(KLLDynamic::<i64>::deserialize_from_bytes(&decode_hex(GOLDEN_KLL_I64)).is_err());
 }
