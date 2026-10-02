@@ -5,7 +5,7 @@
 //!
 //! This is the *partitioned* variant. The filter is a [`BitMatrix`](crate::BitMatrix) of `rows`
 //! slices by `cols` bits, one slice per hash function, which is the same
-//! `rows x cols` shape [`CountMin`](crate::CountMin) probes — one cell per row,
+//! `rows x cols` shape [`CountMin`] probes — one cell per row,
 //! folded from the same seeded hashes. A membership query is the minimum across
 //! rows, which over single bits is their AND.
 //!
