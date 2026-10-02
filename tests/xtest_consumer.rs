@@ -7,7 +7,6 @@
 //! Files consumed (from $XTEST_DIR/):
 //!   countmin.pb    — CountMinState with float64 counters
 //!   ddsketch.pb    — DDSketchState with alpha + bucket array
-//!   hll.pb         — HyperLogLogState (ErtlMLE variant)
 //!   countsketch.pb — CountSketchState with float64 signed counters
 //!   coco.pb        — CocoSketchState (hash+val+hasKey buckets)
 //!   elastic.pb     — ElasticState (heavy buckets + light CountMin)
@@ -164,41 +163,6 @@ fn cross_language_proto() {
         println!("[DDSketch]   PASS");
     } else {
         eprintln!("[DDSketch] FAIL: p50={p50_dd:?} p99={p99_dd:?}");
-        all_ok = false;
-    }
-
-    // -----------------------------------------------------------------------
-    // HLL (ErtlMLE estimator)
-    // -----------------------------------------------------------------------
-    println!();
-    println!("[HLL] Step 1/3 — Read hll.pb");
-    let bytes = read_file(in_dir.join("hll.pb"));
-    let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode hll envelope");
-
-    println!(
-        "[HLL] Step 2/3 — Validate envelope (format_version={}, producer={})",
-        env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library)
-    );
-
-    let hll_state = match env.sketch_state {
-        Some(sketch_envelope::SketchState::Hll(ref s)) => s.clone(),
-        other => panic!("expected HLL sketch_state, got {other:?}"),
-    };
-
-    println!(
-        "[HLL]   variant={} precision={} registers={}",
-        hll_state.variant,
-        hll_state.precision,
-        hll_state.registers.len()
-    );
-
-    let hll_card = hll_ertl_mle_estimate(&hll_state);
-    println!("[HLL] Step 3/3 — cardinality ≈ {hll_card} (expect ~50000)");
-    if (40_000..=65_000).contains(&hll_card) {
-        println!("[HLL]   PASS");
-    } else {
-        eprintln!("[HLL] FAIL: cardinality {hll_card} not in [40000, 65000]");
         all_ok = false;
     }
 
@@ -449,48 +413,6 @@ fn cross_language_proto() {
     }
 
     // -----------------------------------------------------------------------
-    // Sampled HLL (hash-threshold sampling, p=0.1) — cardinality ×1/p rescale.
-    // -----------------------------------------------------------------------
-    let sampled_hll_path = in_dir.join("hll_sampled.pb");
-    if sampled_hll_path.exists() {
-        println!();
-        println!("[HLL/sampled] Step 1/3 — Read hll_sampled.pb");
-        let bytes = read_file(&sampled_hll_path);
-        let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode sampled hll");
-
-        let p = effective_sample_p(&env);
-        println!("[HLL/sampled] Step 2/3 — envelope sample_p = {p}");
-        if (p - 0.1).abs() > 1e-9 {
-            eprintln!("[HLL/sampled] FAIL: sample_p {p} != 0.1");
-            all_ok = false;
-        }
-
-        let mut hll_state = match env.sketch_state {
-            Some(sketch_envelope::SketchState::Hll(ref s)) => s.clone(),
-            other => panic!("expected HLL sketch_state, got {other:?}"),
-        };
-        // Dual-read the registers (sampling thins them → may be sparse-encoded).
-        let regs =
-            asap_sketchlib::message_pack_format::portable::hll::registers_from_state(&hll_state)
-                .expect("decode sampled hll registers");
-        hll_state.registers = regs;
-        hll_state.registers_sparse = None;
-
-        let raw = hll_ertl_mle_estimate(&hll_state) as f64;
-        let rescaled = rescale_count(raw, p);
-        let rel_err = (rescaled - 200_000.0).abs() / 200_000.0;
-        println!(
-            "[HLL/sampled] Step 3/3 — raw≈{raw:.0} rescaled(×1/p)≈{rescaled:.0} truth=200000 relErr={rel_err:.4}"
-        );
-        if rel_err <= 0.06 {
-            println!("[HLL/sampled]   PASS");
-        } else {
-            eprintln!("[HLL/sampled] FAIL: rescaled rel err {rel_err:.4} > 0.06");
-            all_ok = false;
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // Final summary
     // -----------------------------------------------------------------------
     println!();
@@ -673,78 +595,6 @@ fn mask_bits_for_width(width: usize) -> u64 {
 /// XXH3-64 with explicit seed, matching Go's `hash64_seeded(seed, key)`.
 fn xxh3_64_seeded(seed: u64, data: &[u8]) -> u64 {
     XxHash3_64::oneshot_with_seed(seed, data)
-}
-
-// ---------------------------------------------------------------------------
-// HLL ErtlMLE estimator (Ertl 2017)
-// ---------------------------------------------------------------------------
-// Mirrors Go's HyperLogLog.Estimate() which uses HLLRegisterBits = 50,
-// HLLPrecision = 14, HLLRegisterCount = 16384.
-
-fn hll_sigma(mut x: f64) -> f64 {
-    if x == 1.0 {
-        return f64::INFINITY;
-    }
-    let mut y = 1.0f64;
-    let mut z = x;
-    loop {
-        x *= x;
-        let z_prev = z;
-        z += x * y;
-        y += y;
-        if z_prev == z {
-            break;
-        }
-    }
-    z
-}
-
-fn hll_tau(mut x: f64) -> f64 {
-    if x == 0.0 || x == 1.0 {
-        return 0.0;
-    }
-    let mut y = 1.0f64;
-    let mut z = 1.0 - x;
-    loop {
-        x = x.sqrt();
-        let z_prev = z;
-        y *= 0.5;
-        z -= (1.0 - x).powi(2) * y;
-        if z_prev == z {
-            break;
-        }
-    }
-    z / 3.0
-}
-
-fn hll_ertl_mle_estimate(state: &HyperLogLogState) -> u64 {
-    let precision = state.precision as usize;
-    let register_bits = 64 - precision; // Q = 50
-    let m = (1usize << precision) as f64; // 16384
-
-    // Build histogram C[v] for v in 0..=(register_bits+1)
-    let hist_len = register_bits + 2;
-    let mut hist = vec![0u32; hist_len];
-    for &r in &state.registers {
-        let v = r as usize;
-        let capped = v.min(hist_len - 1);
-        hist[capped] += 1;
-    }
-
-    // z = m * tau((m - C[register_bits+1]) / m)
-    let mut z = m * hll_tau((m - hist[register_bits + 1] as f64) / m);
-
-    // for i from register_bits down to 1: z = (z + C[i]) * 0.5
-    for i in (1..=register_bits).rev() {
-        z += hist[i] as f64;
-        z *= 0.5;
-    }
-
-    // z += m * sigma(C[0] / m)
-    z += m * hll_sigma(hist[0] as f64 / m);
-
-    // estimate = round(0.5 / ln(2) * m^2 / z)
-    (0.5 / std::f64::consts::LN_2 * m * m / z).round() as u64
 }
 
 // ---------------------------------------------------------------------------

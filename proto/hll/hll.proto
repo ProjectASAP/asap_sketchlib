@@ -1,4 +1,4 @@
-// hll.proto — Portable wire format for HyperLogLog sketch state.
+// hll.proto — HyperLogLog cell state for HydraCell (hydra/hydra.proto).
 
 syntax = "proto3";
 
@@ -10,14 +10,8 @@ option go_package = "github.com/ProjectASAP/sketchlib-go/proto/hll;hllpb";
 // HyperLogLog
 // ============================================================================
 
-// HyperLogLogState is the portable state of a HyperLogLog cardinality sketch.
-//
-// Precision p determines the register count: num_registers = 2^precision.
-// Both libraries default to precision = 14 (16 384 registers).
-//
-// The variant field is required because the three estimator algorithms are
-// not interchangeable: loading an ErtlMLE state into a Regular estimator
-// (or vice versa) produces incorrect cardinality estimates.
+// HyperLogLogState is the state of one HyperLogLog cell.
+// num_registers = 2^precision; variant selects the estimator.
 message HyperLogLogState {
   // HLL estimator variant. Required.
   HLLVariant variant = 1;
@@ -26,14 +20,8 @@ message HyperLogLogState {
   // Default = 14 → 16 384 registers.
   uint32 precision = 2;
 
-  // DENSE register encoding: raw register values, length = 2^precision.
-  // Each byte stores the maximum (leading-zeros + 1) seen for that bucket.
-  // Stored as a raw byte string for compact encoding (1 byte per register).
-  //
-  // Exactly one of `registers` (dense) or `registers_sparse` (sparse) is
-  // populated by a producer. A decoder MUST read whichever is present; if
-  // both are empty the sketch is all-zero. This field stays at tag 3 so old
-  // dense-only readers keep working unchanged.
+  // Dense registers, one byte each, length 2^precision. Exactly one of
+  // `registers` and `registers_sparse` is set; both empty means all zero.
   bytes registers = 3;
 
   // ---- HIP-variant extra fields (populated only when variant = HIP) --------
@@ -47,13 +35,7 @@ message HyperLogLogState {
   // HIP running cardinality estimate.
   double hip_est = 6;
 
-  // SPARSE register encoding (additive, tag 7). Populated instead of
-  // `registers` (tag 3) when the number of non-zero registers is below the
-  // producer's dense/sparse crossover. Old readers that predate this field
-  // ignore tag 7 (proto skips unknown fields), so adding it is wire-backward-
-  // compatible. New readers decode BOTH representations — see
-  // HLLSparseRegisters. Reconstruction yields the identical 2^precision-byte
-  // dense register array, so cardinality estimation is unaffected.
+  // Sparse registers, set instead of `registers`; see HLLSparseRegisters.
   HLLSparseRegisters registers_sparse = 7;
 
   reserved 8 to 15;
@@ -67,13 +49,9 @@ message HyperLogLogState {
 //     uvarint(index - prev_index)   // prev_index starts at 0; deltas are >= 0
 //     uvarint(value)                // 1..=Q+1, always 1 byte in practice
 //
-// For low/medium cardinality (most registers zero) this is far smaller than
-// the dense 2^precision-byte array. Decoding allocates a zero-filled dense
-// array of length `num_registers` and writes each decoded (index, value).
+// Registers absent from `packed` are zero.
 message HLLSparseRegisters {
-  // Total number of registers in the reconstructed dense array (= 2^precision).
-  // Carried explicitly so the decoder can size the dense buffer without
-  // re-deriving it from precision.
+  // Length of the dense register array (= 2^precision).
   uint32 num_registers = 1;
 
   // Varint-packed (index_delta, value) pairs for non-zero registers, in
@@ -89,46 +67,9 @@ enum HLLVariant {
   HLL_VARIANT_REGULAR = 1;
 
   // Otmar Ertl's MLE estimator (arXiv:1702.01284).
-  // Originally derived from Apache DataFusion's HLL implementation.
-  // Not compatible with REGULAR registers.
   HLL_VARIANT_ERTL_MLE = 2;
 
   // Kevin Lang's HyperLogLog++ Improved Proposal (HIP).
   // Requires hip_kxq0, hip_kxq1, hip_est to be populated.
   HLL_VARIANT_HIP = 3;
-}
-
-// ============================================================================
-// HyperLogLog Delta
-// ============================================================================
-
-// HLLDelta carries the registers that increased between two consecutive
-// snapshots. HLL uses max semantics, so only increases are meaningful;
-// at a fixed precision a register can never decrease. Each update is applied
-// losslessly on the receiver via register[index] = max(register[index], value)
-// — no register update is ever dropped (there is no threshold to apply).
-//
-// The increased registers are varint-packed exactly like
-// HLLSparseRegisters.packed: sorted ascending by index, each register emitted
-// as (index_delta, value) where index_delta = index - prev_index (prev_index
-// starts at 0) and value is the new (larger) register value:
-//
-//   for each increased register, in ascending index order:
-//     uvarint(index - prev_index)   // prev_index starts at 0; deltas are >= 0
-//     uvarint(value)                // 1..=Q+1, always 1 byte in practice
-//
-// A single-emit delta against the all-zero snapshot is therefore the same size
-// as the full sparse frame, and a sub-window delta is strictly smaller (it
-// packs only the registers that actually grew). This replaces the previous
-// per-register sub-message encoding, eliminating ~6–8 bytes of tag/length
-// overhead per register.
-//
-// This message is byte-identical to the Go reference implementation's HLLDelta
-// so the two runtimes emit byte-identical delta frames for identical window
-// state (cross-language byte parity).
-message HLLDelta {
-  // Varint-packed (index_delta, value) pairs for the registers that increased,
-  // in ascending index order. Same layout as HLLSparseRegisters.packed. Empty
-  // when no register changed.
-  bytes packed_updates = 1;
 }

@@ -392,14 +392,8 @@ pub struct CountSketchCell {
     #[prost(double, tag = "3")]
     pub d_count: f64,
 }
-/// HyperLogLogState is the portable state of a HyperLogLog cardinality sketch.
-///
-/// Precision p determines the register count: num_registers = 2^precision.
-/// Both libraries default to precision = 14 (16 384 registers).
-///
-/// The variant field is required because the three estimator algorithms are
-/// not interchangeable: loading an ErtlMLE state into a Regular estimator
-/// (or vice versa) produces incorrect cardinality estimates.
+/// HyperLogLogState is the state of one HyperLogLog cell.
+/// num_registers = 2^precision; variant selects the estimator.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HyperLogLogState {
     /// HLL estimator variant. Required.
@@ -409,14 +403,8 @@ pub struct HyperLogLogState {
     /// Default = 14 → 16 384 registers.
     #[prost(uint32, tag = "2")]
     pub precision: u32,
-    /// DENSE register encoding: raw register values, length = 2^precision.
-    /// Each byte stores the maximum (leading-zeros + 1) seen for that bucket.
-    /// Stored as a raw byte string for compact encoding (1 byte per register).
-    ///
-    /// Exactly one of `registers` (dense) or `registers_sparse` (sparse) is
-    /// populated by a producer. A decoder MUST read whichever is present; if
-    /// both are empty the sketch is all-zero. This field stays at tag 3 so old
-    /// dense-only readers keep working unchanged.
+    /// Dense registers, one byte each, length 2^precision. Exactly one of
+    /// `registers` and `registers_sparse` is set; both empty means all zero.
     #[prost(bytes = "vec", tag = "3")]
     pub registers: ::prost::alloc::vec::Vec<u8>,
     /// HIP accumulator component kxq0.
@@ -428,13 +416,7 @@ pub struct HyperLogLogState {
     /// HIP running cardinality estimate.
     #[prost(double, tag = "6")]
     pub hip_est: f64,
-    /// SPARSE register encoding (additive, tag 7). Populated instead of
-    /// `registers` (tag 3) when the number of non-zero registers is below the
-    /// producer's dense/sparse crossover. Old readers that predate this field
-    /// ignore tag 7 (proto skips unknown fields), so adding it is wire-backward-
-    /// compatible. New readers decode BOTH representations — see
-    /// HLLSparseRegisters. Reconstruction yields the identical 2^precision-byte
-    /// dense register array, so cardinality estimation is unaffected.
+    /// Sparse registers, set instead of `registers`; see HLLSparseRegisters.
     #[prost(message, optional, tag = "7")]
     pub registers_sparse: ::core::option::Option<HllSparseRegisters>,
 }
@@ -446,52 +428,16 @@ pub struct HyperLogLogState {
 ///      uvarint(index - prev_index)   // prev_index starts at 0; deltas are >= 0
 ///      uvarint(value)                // 1..=Q+1, always 1 byte in practice
 ///
-/// For low/medium cardinality (most registers zero) this is far smaller than
-/// the dense 2^precision-byte array. Decoding allocates a zero-filled dense
-/// array of length `num_registers` and writes each decoded (index, value).
+/// Registers absent from `packed` are zero.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HllSparseRegisters {
-    /// Total number of registers in the reconstructed dense array (= 2^precision).
-    /// Carried explicitly so the decoder can size the dense buffer without
-    /// re-deriving it from precision.
+    /// Length of the dense register array (= 2^precision).
     #[prost(uint32, tag = "1")]
     pub num_registers: u32,
     /// Varint-packed (index_delta, value) pairs for non-zero registers, in
     /// ascending index order. See message-level comment for the exact layout.
     #[prost(bytes = "vec", tag = "2")]
     pub packed: ::prost::alloc::vec::Vec<u8>,
-}
-/// HLLDelta carries the registers that increased between two consecutive
-/// snapshots. HLL uses max semantics, so only increases are meaningful;
-/// at a fixed precision a register can never decrease. Each update is applied
-/// losslessly on the receiver via register\[index\] = max(register\[index\], value)
-/// — no register update is ever dropped (there is no threshold to apply).
-///
-/// The increased registers are varint-packed exactly like
-/// HLLSparseRegisters.packed: sorted ascending by index, each register emitted
-/// as (index_delta, value) where index_delta = index - prev_index (prev_index
-/// starts at 0) and value is the new (larger) register value:
-///
-///    for each increased register, in ascending index order:
-///      uvarint(index - prev_index)   // prev_index starts at 0; deltas are >= 0
-///      uvarint(value)                // 1..=Q+1, always 1 byte in practice
-///
-/// A single-emit delta against the all-zero snapshot is therefore the same size
-/// as the full sparse frame, and a sub-window delta is strictly smaller (it
-/// packs only the registers that actually grew). This replaces the previous
-/// per-register sub-message encoding, eliminating ~6–8 bytes of tag/length
-/// overhead per register.
-///
-/// This message is byte-identical to the Go reference implementation's HLLDelta
-/// so the two runtimes emit byte-identical delta frames for identical window
-/// state (cross-language byte parity).
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct HllDelta {
-    /// Varint-packed (index_delta, value) pairs for the registers that increased,
-    /// in ascending index order. Same layout as HLLSparseRegisters.packed. Empty
-    /// when no register changed.
-    #[prost(bytes = "vec", tag = "1")]
-    pub packed_updates: ::prost::alloc::vec::Vec<u8>,
 }
 /// HLLVariant identifies which HLL estimator algorithm the registers belong to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -501,8 +447,6 @@ pub enum HllVariant {
     /// Classic HLL with bias-correction tables (Flajolet et al. 2007).
     Regular = 1,
     /// Otmar Ertl's MLE estimator (arXiv:1702.01284).
-    /// Originally derived from Apache DataFusion's HLL implementation.
-    /// Not compatible with REGULAR registers.
     ErtlMle = 2,
     /// Kevin Lang's HyperLogLog++ Improved Proposal (HIP).
     /// Requires hip_kxq0, hip_kxq1, hip_est to be populated.
@@ -890,10 +834,7 @@ pub struct SketchEnvelope {
     #[prost(double, tag = "4")]
     pub sample_p: f64,
     /// The sketch payload. Exactly one field must be set.
-    #[prost(
-        oneof = "sketch_envelope::SketchState",
-        tags = "10, 11, 12, 14, 15, 16, 17, 18"
-    )]
+    #[prost(oneof = "sketch_envelope::SketchState", tags = "10, 11, 14, 15, 16, 17, 18")]
     pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
 }
 /// Nested message and enum types in `SketchEnvelope`.
@@ -905,8 +846,6 @@ pub mod sketch_envelope {
         CountMin(super::CountMinState),
         #[prost(message, tag = "11")]
         CountSketch(super::CountSketchState),
-        #[prost(message, tag = "12")]
-        Hll(super::HyperLogLogState),
         #[prost(message, tag = "14")]
         Ddsketch(super::DdSketchState),
         #[prost(message, tag = "15")]
