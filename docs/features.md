@@ -112,7 +112,7 @@ MessagePack (`rmp-serde`) support. **serde support** means the type derives `Ser
 | EHSketchList | Yes | Yes |
 | ExponentialHistogram | No | Yes |
 
-Protobuf (prost): `.proto` definitions exist for CountMin, Count, HLL, DDSketch, KLL, Elastic, Coco, Hydra, and UnivMon. Rust conversion code is in progress.
+Protobuf (prost): `SketchEnvelope` carries CountMin, Count, HLL, DDSketch, KLL, Elastic, Coco, and Hydra state; `UnivMonState` exists only inside `HydraCell`. Rust conversion code is in progress.
 
 ### API Stability
 

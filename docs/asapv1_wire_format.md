@@ -972,7 +972,7 @@ The encode side enforces rules 3 and 4 as well, and rejects a sketch holding the
 
 **A layer's `CountL2HH` is inlined, not nested.** The layer's `counts` and `l2` are appended to the outer sketch's own positional arrays, and its `rows` / `cols` / `seed_index` come from the outer metadata plus the layer's position. No nested envelope, magic, version or metadata map is emitted per layer.
 
-**Metadata vs payload.** `layer_size`, `sketch_row`, `sketch_col` and `heap_size` are `init_univmon`'s four arguments — configuration that shapes the payload, so the descriptor carries them and every derived length is checked rather than re-stored. `key_type` is a structural param in the §3.5 sense: it fixes the element type of `keys`, and the payload cannot be read without it. One `key_type` covers every layer; a pyramid whose layers mix `HeapItem` variants has no single one and fails to serialize, as a Space-Saving summary does. Structural-param order is `layer_size, sketch_row, sketch_col, heap_size, key_type`.
+**Metadata vs payload.** `layer_size`, `sketch_row`, `sketch_col` and `heap_size` are `init_univmon`'s four arguments — configuration that shapes the payload, so the descriptor carries them and every derived length is checked rather than re-stored. `key_type` is a structural param in the §3.5 sense: it fixes the element type of `keys`, and the payload cannot be read without it. One `key_type` covers every layer; a pyramid whose layers mix `HeapItem` variants has no single one and fails to serialize, as a Space-Saving summary does. Structural-param order is `layer_size, sketch_row, sketch_col, heap_size, key_type`. A pyramid with no heap entries emits `key_type = "u64"`.
 
 UnivMon carries the hash-spec group — it hashes, and a consumer must reproduce that hash to query a key — but carries **no seed-index key**. It hashes the bottom-layer finder at `BOTTOM_LAYER_FINDER` unconditionally: a fixed part of the algorithm, not a profile choice, exactly as Space-Saving's index 0 is (§3.5). The per-layer counter seed index *is* a real value, but it equals the layer's position, so it is derived and not stored, and the encoder rejects a layer whose seed index is not its position. `UnivMon` has no hasher type parameter, so its metadata is derived from `DefaultXxHasher`'s `HashProfile` — read live, never hardcoded — and a custom-profile envelope is different bytes and is rejected on decode.
 
@@ -1341,14 +1341,14 @@ Good direction (more compact, higher fidelity, less Rust-internal duplication), 
 2. **Golden byte-vector fixtures** in one shared repo, [`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), which each implementation mounts at `asapv1_golden/`; both languages decode and re-encode them byte-identically. These replace the `portable`-as-oracle round-trip test.
 3. **This registry**, mirrored, never independently allocated.
 
-Fixtures exist for six `kind_id`s — HLL's three estimators, Count-Min, Count Sketch and compact KLL — and `sketchlib-go` mirrors those. Every other kind here has a payload and **no fixture**, so this document is its only contract; `asapv1_golden/README.md` lists the gap. `portable` carries its own Go goldens.
+`asapv1_golden/README.md`'s Coverage section lists which `kind_id`s have fixtures; for every other kind, this document is the only contract. `portable` carries its own Go goldens.
 
 **Hash profile on the Go side.**
 Rust derives the hash spec from a generic `HashProfile` bound on the hasher type; Go has no generic hasher type, so there is nothing to derive from.
 On the Go side the profile is simply **written into** the metadata on encode and **read from** it on decode.
 Go MUST validate the profile it reads (same fail-closed intent as Rust): a sketch is only mergeable/queryable if its `hash_profile_id` + seeds match the profile Go is prepared to reproduce.
 
-Sequencing: (2) covers six `kind_id`s, and the one `native bytes == portable bytes` test is HLL-only, since no other `portable` type emits ASAPv1 bytes.
+Sequencing: the one `native bytes == portable bytes` test is HLL-only, since no other `portable` type emits ASAPv1 bytes.
 Retire `portable` once the fixtures cover the rest.
 
 ---
