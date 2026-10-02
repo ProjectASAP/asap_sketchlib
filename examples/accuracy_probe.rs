@@ -7,7 +7,6 @@
 //! printing EXPECTED vs ACTUAL and a theory-based verdict.
 
 use asap_sketchlib::common::input::{HydraCounter, HydraQuery};
-use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::{
     CMSHeap, CSHeap, Count as CoreCount, CountL2HH, CountMin, DDSketch, DataInput, Hydra,
@@ -509,65 +508,47 @@ fn quantile_report(qf: impl Fn(f64) -> f64, data: &[f64], qs: &[f64]) -> (f64, S
 // ---------------------------------------------------------------- DDSketch
 fn probe_ddsketch() {
     let mut p = Probe::new();
-    println!("--- DDSketch core vs portable (alpha=0.05) ---");
+    println!("--- DDSketch (alpha=0.05) ---");
     let alpha = 0.05;
     let gamma = (1.0f64 + alpha) / (1.0 - alpha);
     // Isolated adversarial probe: one distinct value sitting just above a
     // bucket's lower edge gamma^k, repeated N times. The only correct answer
     // for every quantile is v itself.
     let mut worst_core = 0.0f64;
-    let mut worst_port = 0.0f64;
     for k in [10i32, 20, 30] {
         let v = gamma.powi(k) * (1.0 + 1e-6); // just inside bucket k
         let n = 10_000u64;
 
         let mut core = DDSketch::new(alpha);
-        let mut port = PortableDds::new(alpha);
         for _ in 0..n {
             core.add(&v);
-            port.update(v);
         }
         let rc = rel_err(core.get_value_at_quantile(0.5).unwrap(), v);
-        let rp = rel_err(port.quantile(0.5).unwrap(), v);
         worst_core = worst_core.max(rc);
-        worst_port = worst_port.max(rp);
     }
     p.check(
         "core DDSketch honors alpha=0.05 at bucket edges",
         format!("max rel err {worst_core:.5}"),
         worst_core <= alpha * (1.0 + 1e-6),
     );
-    p.check(
-        "portable DdSketch honors alpha=0.05 at bucket edges",
-        format!("max rel err {worst_port:.5} (shared gamma^k*(1+alpha) representative)"),
-        worst_port <= alpha * (1.0 + 1e-6),
-    );
 
-    // Mixed-stream sanity on both.
+    // Mixed-stream sanity.
     let mut rng = StdRng::seed_from_u64(47);
     let mut core = DDSketch::new(alpha);
-    let mut port = PortableDds::new(alpha);
     let mut truth: Vec<f64> = Vec::new();
     for _ in 0..20_000 {
         let k = rng.random_range(5..40);
         let frac = rng.random::<f64>();
         let v = gamma.powi(k) * (1.0 + frac * (gamma - 1.0));
         core.add(&v);
-        port.update(v);
         truth.push(v);
     }
     truth.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mc = qs_max_rel(&truth, |q| core.get_value_at_quantile(q).unwrap(), &qs_dd());
-    let mp = qs_max_rel(&truth, |q| port.quantile(q).unwrap(), &qs_dd());
     p.check(
         "core mixed stream <= alpha",
         format!("max rel {mc:.5}"),
         mc <= alpha,
-    );
-    p.check(
-        "portable mixed stream <= alpha",
-        format!("max rel {mp:.5}"),
-        mp <= alpha,
     );
     p.finish("DDSketch");
 }

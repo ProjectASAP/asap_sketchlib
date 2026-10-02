@@ -24,21 +24,9 @@ use std::collections::HashSet;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
 use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaResult;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
-use asap_sketchlib::{DdSketch, HydraKllSketch, SetAggregator};
+use asap_sketchlib::{HydraKllSketch, SetAggregator};
 
 // ===== round-trip: every wire-format-aligned type =====
-
-#[test]
-fn dd_sketch_round_trip() {
-    let mut s = DdSketch::new(0.01);
-    s.update(1.0);
-    s.update(10.0);
-    s.update(100.0);
-    let bytes = s.to_msgpack().expect("encode");
-    let restored = DdSketch::from_msgpack(&bytes).expect("decode");
-    // `count` is not on the wire; recover it by summing the bucket array.
-    assert_eq!(restored.total_count(), 3);
-}
 
 #[test]
 fn hydra_kll_sketch_round_trip() {
@@ -94,7 +82,7 @@ fn hydra_kll_wire_shape() {
 
 // ===== golden-bytes placeholders: an ignored, uncovered gap =====
 //
-// The four tests below are **empty and ignored**. They verify nothing today.
+// The two tests below are **empty and ignored**. They verify nothing today.
 //
 // What they need is a msgpack payload produced by `sketchlib-go` and checked in
 // under `tests/fixtures/msgpack/`. That fixture cannot be generated here: this
@@ -112,10 +100,6 @@ fn hydra_kll_wire_shape() {
 //   1. include_bytes!("fixtures/msgpack/<type>.msgpack")
 //   2. <Type>::from_msgpack(bytes) succeeds
 //   3. assert specific field values match the Go producer
-
-#[ignore = "gap: needs a sketchlib-go-produced msgpack fixture; none can be generated in this repo"]
-#[test]
-fn dd_sketch_decodes_go_bytes() {}
 
 #[ignore = "gap: needs a sketchlib-go-produced msgpack fixture; none can be generated in this repo"]
 #[test]

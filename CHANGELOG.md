@@ -87,6 +87,10 @@ signals a backwards-compatible change.
 - **An ASAPv1 golden fixture for CSHeap** (`0x0a 0x00`),
   `csheap_i64_regular_2x4_strkeys`: the Count Sketch 2x4 signed matrix with a
   string-keyed heap at `k = 5`, pinned in `tests/asapv1_golden.rs`.
+- **DDSketch ASAPv1 golden fixtures**: `ddsketch_positive_a001` and
+  `ddsketch_empty_a001` (metadata version 1) and `ddsketch_signed_a001`
+  (metadata version 2, negative store and zero count), checked by
+  `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -191,6 +195,15 @@ signals a backwards-compatible change.
   `{sketch, topk_heap, heap_size}` encoding is gone with it; `CSHeap` encodes
   and decodes ASAPv1 only, through `serialize_to_bytes` /
   `deserialize_from_bytes`.
+- **DDSketch's protobuf and portable formats.** DDSketch serializes through
+  ASAPv1 only (`DDSketch::serialize_to_bytes` / `deserialize_from_bytes`).
+  Removed: `proto/ddsketch/ddsketch.proto` and the generated
+  `proto::sketchlib::{DdSketchState, DdSketchDelta, DdSketchBucketDelta}`;
+  `SketchEnvelope`'s `ddsketch` field (14), now reserved;
+  `message_pack_format::portable::ddsketch` (`DdSketch`, `DdSketchDelta`,
+  `DDSKETCH_GROW_CHUNK`, `MAX_APPLY_DELTA_SPAN_BUCKETS`) and the crate-root
+  re-exports of the first three; the `MessagePackCodec` impl for `DDSketch`.
+  There is no ASAPv1 DDSketch delta.
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the

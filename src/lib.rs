@@ -10,7 +10,7 @@
 //!   UnivMon, tumbling windows, and batch/parallel execution helpers.
 //! - [`message_pack_format`]: MessagePack/proto wire format shared with
 //!   `sketchlib-go`. Owns the wire-DTO sketch types consumed by the ASAP
-//!   query engine (`DdSketch`, `HydraKllSketch`, `SetAggregator`, `DeltaResult`).
+//!   query engine (`HydraKllSketch`, `SetAggregator`, `DeltaResult`).
 //!
 //! Most users can start with the crate-root re-exports such as [`DataInput`],
 //! [`CountMin`], [`HyperLogLog`], [`KLL`], and [`DDSketch`]. Reach for the
@@ -39,7 +39,6 @@ pub mod __private {
 
 pub use common::*;
 pub use message_pack_format::MessagePackCodec;
-pub use message_pack_format::portable::ddsketch::{DDSKETCH_GROW_CHUNK, DdSketch, DdSketchDelta};
 pub use message_pack_format::portable::delta_set_aggregator::DeltaResult;
 pub use message_pack_format::portable::hydra_kll::HydraKllSketch;
 pub use message_pack_format::portable::sampling::{

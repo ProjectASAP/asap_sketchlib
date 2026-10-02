@@ -9,10 +9,11 @@
 //! See `asapv1_golden/README.md`.
 
 use asap_sketchlib::{
-    CMSHeap, CSHeap, Classic, Count, CountMin, DataInput, ErtlMLE, FastPath, HeapItem,
+    CMSHeap, CSHeap, Classic, Count, CountMin, DDSketch, DataInput, ErtlMLE, FastPath, HeapItem,
     HllBucketListP12, HllBucketListP14, HllRegisterStorage, HyperLogLogHIPP12, HyperLogLogHIPP14,
-    HyperLogLogP12, HyperLogLogP14, KLL, KLLDynamic, RegularPath, Vector2D,
+    HyperLogLogP12, HyperLogLogP14, KLL, KLLDynamic, RegularPath, Vector1D, Vector2D,
 };
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -49,6 +50,9 @@ const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
 const GOLDEN_KLL_DYN_F64: &str = include_str!("../asapv1_golden/kll_dynamic_f64_k200.hex");
 const GOLDEN_KLL_DYN_I64: &str = include_str!("../asapv1_golden/kll_dynamic_i64_k200.hex");
+const GOLDEN_DD_POSITIVE: &str = include_str!("../asapv1_golden/ddsketch_positive_a001.hex");
+const GOLDEN_DD_SIGNED: &str = include_str!("../asapv1_golden/ddsketch_signed_a001.hex");
+const GOLDEN_DD_EMPTY: &str = include_str!("../asapv1_golden/ddsketch_empty_a001.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -721,4 +725,163 @@ fn kll_dynamic_i64_k200_matches_golden() {
 
     assert!(KLL::<i64>::deserialize_from_bytes(&want).is_err());
     assert!(KLLDynamic::<i64>::deserialize_from_bytes(&decode_hex(GOLDEN_KLL_I64)).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// DDSketch: bucket stores, offsets, zero count and scalars set directly
+// (DDSketch never hashes). The positive-only and empty states are metadata
+// version 1; the signed state is version 2 and adds the negative store and
+// zero count.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct DdStore {
+    counts: Vector1D<u64>,
+    offset: i32,
+}
+
+/// The field names of `DDSketch`'s serde form.
+#[derive(Serialize)]
+struct DdState {
+    alpha: f64,
+    store: DdStore,
+    sum: f64,
+    min: f64,
+    max: f64,
+    negative_store: DdStore,
+    zero_count: u64,
+}
+
+/// Positive-only: `uint` widths fixint / uint8 / uint16 / uint32 / uint64 in
+/// the counts and an int8 offset.
+const DD_POSITIVE_COUNTS: [u64; 7] = [1, 0, 127, 128, 300, 65536, 4294967296];
+const DD_POSITIVE_OFFSET: i32 = -40;
+const DD_POSITIVE_SCALARS: (f64, f64, f64) = (2181071000.0, 0.453125, 0.5078125);
+
+/// Signed: uint16 positive offset, int16 negative offset, nonzero zero count.
+const DD_SIGNED_COUNTS: [u64; 3] = [3, 0, 2];
+const DD_SIGNED_OFFSET: i32 = 310;
+const DD_SIGNED_NEGATIVE_COUNTS: [u64; 2] = [5, 1];
+const DD_SIGNED_NEGATIVE_OFFSET: i32 = -208;
+const DD_SIGNED_ZERO_COUNT: u64 = 7;
+const DD_SIGNED_SCALARS: (f64, f64, f64) = (2523.90625, -0.016, 515.0);
+
+fn dd_sketch(
+    (counts, offset): (&[u64], i32),
+    (negative_counts, negative_offset): (&[u64], i32),
+    zero_count: u64,
+    (sum, min, max): (f64, f64, f64),
+) -> DDSketch {
+    let state = DdState {
+        alpha: 0.01,
+        store: DdStore {
+            counts: Vector1D::from_vec(counts.to_vec()),
+            offset,
+        },
+        sum,
+        min,
+        max,
+        negative_store: DdStore {
+            counts: Vector1D::from_vec(negative_counts.to_vec()),
+            offset: negative_offset,
+        },
+        zero_count,
+    };
+    rmp_serde::from_slice(&rmp_serde::to_vec_named(&state).expect("encode state"))
+        .expect("a valid DDSketch state")
+}
+
+fn dd_positive() -> DDSketch {
+    dd_sketch(
+        (&DD_POSITIVE_COUNTS, DD_POSITIVE_OFFSET),
+        (&[], 0),
+        0,
+        DD_POSITIVE_SCALARS,
+    )
+}
+
+fn dd_signed() -> DDSketch {
+    dd_sketch(
+        (&DD_SIGNED_COUNTS, DD_SIGNED_OFFSET),
+        (&DD_SIGNED_NEGATIVE_COUNTS, DD_SIGNED_NEGATIVE_OFFSET),
+        DD_SIGNED_ZERO_COUNT,
+        DD_SIGNED_SCALARS,
+    )
+}
+
+#[test]
+fn ddsketch_positive_a001_matches_golden() {
+    let want = decode_hex(GOLDEN_DD_POSITIVE);
+
+    let got = dd_positive().serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "DDSketch positive bytes diverge from golden");
+
+    let decoded = DDSketch::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.alpha(), 0.01);
+    assert_eq!(decoded.store_counts(), DD_POSITIVE_COUNTS.as_slice());
+    assert_eq!(decoded.store_offset(), DD_POSITIVE_OFFSET);
+    assert!(decoded.negative_store_counts().is_empty());
+    assert_eq!(decoded.zero_count(), 0);
+    let (sum, min, max) = DD_POSITIVE_SCALARS;
+    assert_eq!(decoded.sum(), sum);
+    assert_eq!(decoded.min(), Some(min));
+    assert_eq!(decoded.max(), Some(max));
+    assert_eq!(decoded.get_count(), DD_POSITIVE_COUNTS.iter().sum::<u64>());
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn ddsketch_signed_a001_matches_golden() {
+    let want = decode_hex(GOLDEN_DD_SIGNED);
+
+    let got = dd_signed().serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "DDSketch signed bytes diverge from golden");
+
+    let decoded = DDSketch::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.alpha(), 0.01);
+    assert_eq!(decoded.store_counts(), DD_SIGNED_COUNTS.as_slice());
+    assert_eq!(decoded.store_offset(), DD_SIGNED_OFFSET);
+    assert_eq!(
+        decoded.negative_store_counts(),
+        DD_SIGNED_NEGATIVE_COUNTS.as_slice()
+    );
+    assert_eq!(decoded.negative_store_offset(), DD_SIGNED_NEGATIVE_OFFSET);
+    assert_eq!(decoded.zero_count(), DD_SIGNED_ZERO_COUNT);
+    let (sum, min, max) = DD_SIGNED_SCALARS;
+    assert_eq!(decoded.sum(), sum);
+    assert_eq!(decoded.min(), Some(min));
+    assert_eq!(decoded.max(), Some(max));
+    assert_eq!(decoded.get_count(), 18);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn ddsketch_empty_a001_matches_golden() {
+    let want = decode_hex(GOLDEN_DD_EMPTY);
+
+    let state = dd_sketch(
+        (&[], 0),
+        (&[], 0),
+        0,
+        (0.0, f64::INFINITY, f64::NEG_INFINITY),
+    );
+    let got = state.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "DDSketch empty bytes diverge from golden");
+    assert_eq!(
+        DDSketch::new(0.01).serialize_to_bytes().expect("serialize"),
+        want,
+        "a fresh sketch is the empty state"
+    );
+
+    let decoded = DDSketch::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.alpha(), 0.01);
+    assert!(decoded.store_counts().is_empty());
+    assert_eq!(decoded.store_offset(), 0);
+    assert!(decoded.negative_store_counts().is_empty());
+    assert_eq!(decoded.zero_count(), 0);
+    assert_eq!(decoded.get_count(), 0);
+    assert_eq!(decoded.sum(), 0.0);
+    assert_eq!(decoded.min(), None);
+    assert_eq!(decoded.max(), None);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }

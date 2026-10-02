@@ -15,7 +15,7 @@ its theorem.
 | Path | Purpose |
 | --- | --- |
 | `common/mod.rs` | Seeded stream generators (`zipf_u64`, `uniform_u64`, `normal_f64`, `exponential_f64`, adversarial `log_uniform_f64`, `duplicate_heavy_f64`, `monotonic_f64`, `outside_in_ordering`), exact truth trackers (`FreqTruth`, `NumericTruth`), assertion helpers |
-| `common/specs.rs` | One error model per metric — `CountMinSpec`, `CountSketchSpec`, `SecondMomentSpec`, `KllRankSpec`, `RelativeQuantileSpec` (+ `DdRankConvention`), `CardinalityConfidenceSpec`, `SamplingConfidenceSpec`, `PrioritySampleSpec` — plus the three acceptance rules and the trial-unit rules that say which one applies |
+| `common/specs.rs` | One error model per metric — `CountMinSpec`, `CountSketchSpec`, `SecondMomentSpec`, `KllRankSpec`, `RelativeQuantileSpec` (+ `dd_rank_index`), `CardinalityConfidenceSpec`, `SamplingConfidenceSpec`, `PrioritySampleSpec` — plus the three acceptance rules and the trial-unit rules that say which one applies |
 | `common/conformance.rs` | Capability traits + standard conformance batteries (the floor) |
 | `conformance_kit.rs` | Reference adapters: established sketches running through the kit (copy these) |
 | `e2e/` | Every end-to-end suite, one target (`cargo test --test e2e`), with `common/` compiled once for all of them |

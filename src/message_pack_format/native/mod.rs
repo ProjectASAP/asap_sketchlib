@@ -8,6 +8,5 @@
 //! specifies the format `sketchlib-go` mirrors.
 
 pub mod countsketch_topk;
-pub mod ddsketch;
 #[cfg(feature = "experimental")]
 pub mod kmv;

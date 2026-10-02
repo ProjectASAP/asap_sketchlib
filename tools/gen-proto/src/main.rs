@@ -32,7 +32,6 @@ const PROTO_FILES: &[&str] = &[
     "countsketch/countsketch.proto",
     "hll/hll.proto",
     "kll/kll.proto",
-    "ddsketch/ddsketch.proto",
     "univmon/univmon.proto",
     "hydra/hydra.proto",
     "cocosketch/cocosketch.proto",
