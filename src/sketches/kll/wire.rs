@@ -20,17 +20,17 @@
 //! ## Payload item order (cross-language contract)
 //!
 //! The payload's `levels` / `items` use the **top-most-level-first** layout,
-//! byte-for-byte matching `sketchlib-go`'s `KLLState` (index `i` in `levels`
-//! maps to compactor level `num_levels - 1 - i`; level 0's run is in input
-//! order). For the compact KLL this is exactly what [`KLL::wire_levels`] /
+//! byte-for-byte matching `sketchlib-go` (index `i` in `levels` maps to
+//! compactor level `num_levels - 1 - i`; level 0's run is in input order). For
+//! the compact KLL this is exactly what [`KLL::wire_levels`] /
 //! [`KLL::wire_items`] emit (they reverse the leftward-grown L0 buffer back to
 //! input order); decode inverts that mapping.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 
+use crate::asapv1::envelope;
 use crate::common::numerical::NumericalValue;
-use crate::message_pack_format::envelope;
 
 use super::{
     CAPACITY_CACHE_LEN, Coin, KLL, MAX_CACHEABLE_K, MAX_LEVELS, checked_weighted_count,
@@ -229,7 +229,7 @@ where
 {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope
     /// (kind_id `0x06 0x00`). The retained samples use the top-most-level-first
-    /// layout that matches `sketchlib-go`'s `KLLState`.
+    /// layout that matches `sketchlib-go`.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata =
             rmp_serde::to_vec_named(&kll_metadata::<T>(self.k as u32, self.m as u32, self.seed))?;

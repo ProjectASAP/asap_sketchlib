@@ -30,7 +30,7 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::envelope;
+use crate::asapv1::envelope;
 use crate::sketch_framework::eh_sketch_list::wire::{SketchState, rebuild_sketch, sketch_state};
 
 use super::{EHBucket, ExponentialHistogram, compute_l2_mass, infer_merge_norm};

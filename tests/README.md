@@ -15,7 +15,7 @@ its theorem.
 | Path | Purpose |
 | --- | --- |
 | `common/mod.rs` | Seeded stream generators (`zipf_u64`, `uniform_u64`, `normal_f64`, `exponential_f64`, adversarial `log_uniform_f64`, `duplicate_heavy_f64`, `monotonic_f64`, `outside_in_ordering`), exact truth trackers (`FreqTruth`, `NumericTruth`), assertion helpers |
-| `common/specs.rs` | One error model per metric — `CountMinSpec`, `CountSketchSpec`, `SecondMomentSpec`, `KllRankSpec`, `RelativeQuantileSpec` (+ `DdRankConvention`), `CardinalityConfidenceSpec`, `SamplingConfidenceSpec`, `PrioritySampleSpec` — plus the three acceptance rules and the trial-unit rules that say which one applies |
+| `common/specs.rs` | One error model per metric — `CountMinSpec`, `CountSketchSpec`, `SecondMomentSpec`, `KllRankSpec`, `RelativeQuantileSpec` (+ `dd_rank_index`), `CardinalityConfidenceSpec`, `SamplingConfidenceSpec`, `PrioritySampleSpec` — plus the three acceptance rules and the trial-unit rules that say which one applies |
 | `common/conformance.rs` | Capability traits + standard conformance batteries (the floor) |
 | `conformance_kit.rs` | Reference adapters: established sketches running through the kit (copy these) |
 | `e2e/` | Every end-to-end suite, one target (`cargo test --test e2e`), with `common/` compiled once for all of them |
@@ -23,7 +23,7 @@ its theorem.
 | `e2e/matrix_instances.rs` | Every built-in `(storage, hashing path)` instance of CountMin / Count / CMSHeap / CSHeap, plus counter-width edges |
 | `e2e/numeric_types.rs` | Every `NumericalValue` type through `KLL<T>`, `KLLDynamic<T>` and `DDSketch::add<T>` |
 | `e2e/windows.rs` | Every `EHSketchList` variant in an `ExponentialHistogram`, every `TumblingWindow` payload, and `MicroCM`'s in-cell sliding window |
-| `e2e/composition.rs` | `HashSketchEnsemble`, `UnivMonQ`'s config surface, and the portable sketch+heap facade |
+| `e2e/composition.rs` | `HashSketchEnsemble`, `UnivMonQ`'s config surface, and `CMSHeap` and `KLL` through merge and wire |
 | `e2e/nitro.rs` | Every Nitro ingestion path — row-level `CountMin`/`Count`, `NitroBatch::insert` / `insert_cached_step`, and the bare `Vector2D<u32>` target — under one sampling model, plus merge, seeding, saturation and serde/context continuation. **All Nitro E2E behaviour lives here**; the sampler's own structural tests are unit tests in `src/common/structure_utils.rs` and `src/sketch_framework/nitro.rs`, where the cursor and skip counter are visible without a public accessor |
 | `e2e/frameworks.rs` | Hydra's subpopulation lattice and UnivMon composition |
 | `e2e/heavy_hitters.rs` | Space-Saving's error sandwich, `min_count` ceiling and Stream-Summary lists under sustained eviction, plus CocoSketch's exact mass partitions and multi-seed unbiasedness, and Elastic through the batteries and the heavy-hitter properties no battery models |

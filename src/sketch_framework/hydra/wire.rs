@@ -44,9 +44,9 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
+use crate::asapv1::envelope;
 use crate::common::hash::check_matrix_rows;
 use crate::input::HydraCounter;
-use crate::message_pack_format::envelope;
 use crate::sketch_framework::univmon::wire::{PyramidPayload, UnivMonMetadata, univmon_metadata};
 use crate::{
     Count, CountMin, DefaultXxHasher, ErtlMLE, FastPath, HashProfile, HllBucketListP14,
@@ -1118,7 +1118,7 @@ fn pack_univmon_cells(key_type: &str, payloads: &[&[u8]]) -> Result<Vec<u8>, Rmp
         "f32" => pack!(f32),
         "f64" => pack!(f64),
         "string" => pack!(String),
-        "bytes" => pack!(crate::message_pack_format::wire_key::WireBytes),
+        "bytes" => pack!(crate::asapv1::wire_key::WireBytes),
         other => Err(encode_error(format!(
             "ASAPv1 Hydra: key_type {other:?} is not a wire key type"
         ))),
@@ -1153,7 +1153,7 @@ fn unpack_univmon_cells(key_type: &str, payload: &[u8]) -> Result<Vec<Vec<u8>>, 
         "f32" => unpack!(f32),
         "f64" => unpack!(f64),
         "string" => unpack!(String),
-        "bytes" => unpack!(crate::message_pack_format::wire_key::WireBytes),
+        "bytes" => unpack!(crate::asapv1::wire_key::WireBytes),
         other => Err(decode_error(format!(
             "ASAPv1 Hydra: key_type {other:?} is not a wire key type"
         ))),

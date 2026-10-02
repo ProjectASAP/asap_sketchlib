@@ -24,8 +24,6 @@ use common::{
 use common::{FreqTruth, uniform_u64, zipf_u64};
 use std::collections::HashMap;
 
-use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
-use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
 use asap_sketchlib::{
     Count, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS, FoldCS, RegularPath,
     Vector2D,
@@ -689,47 +687,6 @@ fn folded_sketches_keep_their_own_bounds_through_a_sixteen_way_merge() {
         "FoldCS after a 16-way hierarchical merge",
         &truth,
         |k| cs_merged.query(&DataInput::U64(k as u64)) as f64,
-        &context,
-    );
-}
-
-// ------------------------------------------------------ Portable wire twins
-
-/// The portable wire twins answer over string keys and must satisfy the same
-/// two theorems as their core counterparts — Count-Min additive, Count Sketch
-/// L2 — with no extra slack for being on the wire side.
-#[test]
-fn portable_cms_and_cs_string_keys_satisfy_their_own_bounds() {
-    const CM_ROWS: usize = 3;
-    const CS_ROWS: usize = 5;
-    const COLS: usize = 4096;
-    const STREAM_SEED: u64 = 1006;
-
-    let stream = zipf_u64(50_000, 2048, 1.1, STREAM_SEED);
-    // The portable types key on strings; `FreqTruth` keys on i64. The stream's
-    // u64 values are the identity behind both, so `k -> "k{k}"` is injective
-    // and the two truths agree key for key.
-    let mut truth = FreqTruth::default();
-    let mut pcs = CountMinSketch::new(CM_ROWS, COLS);
-    let mut pcss = CountSketch::new(CS_ROWS, COLS);
-    for k in &stream {
-        truth.observe(*k as i64);
-        let key = format!("k{k}");
-        pcs.update(&key, 1.0);
-        pcss.update(&key, 1.0);
-    }
-    let context = format!("zipf(1.1) domain=2048 n=50000 string keys, stream_seed={STREAM_SEED}");
-
-    CountMinSpec::new(CM_ROWS, COLS).assert_contract(
-        "portable CountMinSketch",
-        &truth,
-        |k| pcs.estimate(&format!("k{k}")),
-        &context,
-    );
-    CountSketchSpec::new(CS_ROWS, COLS).assert_contract(
-        "portable CountSketch",
-        &truth,
-        |k| pcss.estimate(&format!("k{k}")),
         &context,
     );
 }

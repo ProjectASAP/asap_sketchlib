@@ -91,6 +91,6 @@ the structure carries no run-to-run state at all.
 derived rather than carried, and a decoded heap rebuilds it before first use.
 A named-map encoding that carries an index field still decodes, since the extra
 key is skipped; a positional encoding of the three-field form does not. Nothing
-in-crate writes the positional form: the portable MessagePack wire for the top-k
-sketches carries a `(key, value)` list and rebuilds through `update`, and no
-golden covers a top-k envelope.
+in-crate writes the positional form: the ASAPv1 payload of the top-k sketches
+carries parallel `keys` / `heap_counts` arrays and rebuilds the heap from them
+through `update_heap_item`.

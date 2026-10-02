@@ -7,11 +7,6 @@
 //! printing EXPECTED vs ACTUAL and a theory-based verdict.
 
 use asap_sketchlib::common::input::{HydraCounter, HydraQuery};
-use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
-use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
-use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
-use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
-use asap_sketchlib::message_pack_format::portable::kll::KllSketch as PortableKll;
 use asap_sketchlib::{
     CMSHeap, CSHeap, Count as CoreCount, CountL2HH, CountMin, DDSketch, DataInput, Hydra,
     HyperLogLog, KLL, UnivMon,
@@ -119,7 +114,6 @@ fn main() {
     #[cfg(feature = "experimental")]
     probe_eh_univ();
     probe_tumbling();
-    probe_portable_wire_types();
 
     println!("====================================================================");
     println!("Probe complete. FAIL lines above are candidate wrong-query-results.");
@@ -512,65 +506,47 @@ fn quantile_report(qf: impl Fn(f64) -> f64, data: &[f64], qs: &[f64]) -> (f64, S
 // ---------------------------------------------------------------- DDSketch
 fn probe_ddsketch() {
     let mut p = Probe::new();
-    println!("--- DDSketch core vs portable (alpha=0.05) ---");
+    println!("--- DDSketch (alpha=0.05) ---");
     let alpha = 0.05;
     let gamma = (1.0f64 + alpha) / (1.0 - alpha);
     // Isolated adversarial probe: one distinct value sitting just above a
     // bucket's lower edge gamma^k, repeated N times. The only correct answer
     // for every quantile is v itself.
     let mut worst_core = 0.0f64;
-    let mut worst_port = 0.0f64;
     for k in [10i32, 20, 30] {
         let v = gamma.powi(k) * (1.0 + 1e-6); // just inside bucket k
         let n = 10_000u64;
 
         let mut core = DDSketch::new(alpha);
-        let mut port = PortableDds::new(alpha);
         for _ in 0..n {
             core.add(&v);
-            port.update(v);
         }
         let rc = rel_err(core.get_value_at_quantile(0.5).unwrap(), v);
-        let rp = rel_err(port.quantile(0.5).unwrap(), v);
         worst_core = worst_core.max(rc);
-        worst_port = worst_port.max(rp);
     }
     p.check(
         "core DDSketch honors alpha=0.05 at bucket edges",
         format!("max rel err {worst_core:.5}"),
         worst_core <= alpha * (1.0 + 1e-6),
     );
-    p.check(
-        "portable DdSketch honors alpha=0.05 at bucket edges",
-        format!("max rel err {worst_port:.5} (shared gamma^k*(1+alpha) representative)"),
-        worst_port <= alpha * (1.0 + 1e-6),
-    );
 
-    // Mixed-stream sanity on both.
+    // Mixed-stream sanity.
     let mut rng = StdRng::seed_from_u64(47);
     let mut core = DDSketch::new(alpha);
-    let mut port = PortableDds::new(alpha);
     let mut truth: Vec<f64> = Vec::new();
     for _ in 0..20_000 {
         let k = rng.random_range(5..40);
         let frac = rng.random::<f64>();
         let v = gamma.powi(k) * (1.0 + frac * (gamma - 1.0));
         core.add(&v);
-        port.update(v);
         truth.push(v);
     }
     truth.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mc = qs_max_rel(&truth, |q| core.get_value_at_quantile(q).unwrap(), &qs_dd());
-    let mp = qs_max_rel(&truth, |q| port.quantile(q).unwrap(), &qs_dd());
     p.check(
         "core mixed stream <= alpha",
         format!("max rel {mc:.5}"),
         mc <= alpha,
-    );
-    p.check(
-        "portable mixed stream <= alpha",
-        format!("max rel {mp:.5}"),
-        mp <= alpha,
     );
     p.finish("DDSketch");
 }
@@ -1011,93 +987,4 @@ fn probe_tumbling() {
         rel_err(med, truth_med) < 0.05,
     );
     p.finish("Tumbling");
-}
-
-// ---------------------------------------------------- Portable wire types
-fn probe_portable_wire_types() {
-    let mut p = Probe::new();
-    println!("--- Portable wire types (Go-parity DTOs) ---");
-
-    // Portable CountMin.
-    let mut pcs = CountMinSketch::new(3, 4096);
-    let mut truth: HashMap<String, f64> = HashMap::new();
-    let mut z = Zipf::new(2048, 1.1, 54);
-    for _ in 0..50_000 {
-        let k = format!("k{}", z.sample_usize());
-        *truth.entry(k.clone()).or_insert(0.0) += 1.0;
-        pcs.update(&k, 1.0);
-    }
-    let mut by_freq: Vec<(String, f64)> = truth.iter().map(|(k, v)| (k.clone(), *v)).collect();
-    by_freq.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    let eps = std::f64::consts::E / 4096.0;
-    let mut bad = 0usize;
-    for (k, v) in by_freq.iter().take(50) {
-        let est = pcs.estimate(k);
-        if est < *v || est > v + eps * 50_000.0 {
-            bad += 1;
-        }
-    }
-    p.check(
-        "portable CMS one-sided bound (top-50)",
-        format!("{bad} violations"),
-        bad == 0,
-    );
-
-    // Portable HLL precision 12.
-    let mut ph = HllSketch::new(HllVariant::Regular, 12);
-    for i in 0..100_000u64 {
-        ph.update(i.to_le_bytes().as_slice());
-    }
-    let est = ph.estimate();
-    p.check(
-        "portable HLL p12 within 3%",
-        format!(
-            "expected 100000, got {est:.0} (rel {:.4})",
-            rel_err(est, 100_000.0)
-        ),
-        rel_err(est, 100_000.0) < 0.03,
-    );
-
-    // Portable KLL.
-    let mut pk = PortableKll::new(200);
-    let mut rng = StdRng::seed_from_u64(55);
-    let mut vals: Vec<f64> = (0..50_000).map(|_| rng.random::<f64>() * 1e6).collect();
-    vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    for v in &vals {
-        pk.update(*v);
-    }
-    let med = pk.quantile(0.5);
-    let t = vals[25_000];
-    p.check(
-        "portable KLL median",
-        format!("expected ~{t:.0}, got {med:.0}"),
-        (med - t).abs() / t < 0.05,
-    );
-
-    // HydraKllSketch: per-key quantiles, median across rows.
-    let mut hk = HydraKllSketch::new(3, 256, 200);
-    let mut per_key: HashMap<&str, Vec<f64>> = HashMap::new();
-    let mut rng2 = StdRng::seed_from_u64(56);
-    for key in ["svc-a", "svc-b"] {
-        let base = if key == "svc-a" { 100.0 } else { 900.0 };
-        let vs: Vec<f64> = (0..2_000)
-            .map(|_| base + rng2.random::<f64>() * 50.0)
-            .collect();
-        for v in &vs {
-            hk.update(key, *v);
-        }
-        per_key.insert(key, vs);
-    }
-    for (key, vs) in per_key {
-        let mut s = vs.clone();
-        s.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let t = s[s.len() / 2];
-        let got = hk.quantile(key, 0.5);
-        p.check(
-            &format!("HydraKll median({key})"),
-            format!("expected ~{t:.1}, got {got:.1}"),
-            (got - t).abs() / t < 0.05,
-        );
-    }
-    p.finish("Portable wire types");
 }

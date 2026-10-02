@@ -15,7 +15,6 @@ This page is the docs home for `asap_sketchlib`.
 - [API Pages Directory](./api/)
 - [Common API](./api/api_common.md)
 - [ASAPv1 Wire Format](./asapv1_wire_format.md) - authoritative byte-level spec for the self-describing sketch envelope mirrored by `sketchlib-go`
-- [Message Pack Format](./message_pack_format.md) - how the serialization code is organized (shared envelope + per-sketch `wire.rs`; `portable`/`native` retiring)
 - [Advanced Use Cases](./advanced_use_cases.md)
 - [HHHeap Acceleration](./hhheap_acceleration.md) - what the top-k heap costs per update, how its digest-keyed position index is maintained through the sift, and the throughput it measures at
 - [Test Coverage Map](./tests.md)

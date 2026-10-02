@@ -23,15 +23,14 @@
 //!
 //! ## Signed stores
 //!
-//! Positive-only payloads retain metadata version 1. Signed or zero-containing
+//! Positive-only payloads use metadata version 1. Signed or zero-containing
 //! payloads use version 2 and append a negative-magnitude store and zero count.
-//! Older native readers reject version 2 instead of silently dropping samples.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
 use serde::{Deserialize, Serialize};
 
+use crate::asapv1::envelope;
 use crate::common::structures::Vector1D;
-use crate::message_pack_format::envelope;
 
 use super::{Buckets, DDSketch};
 

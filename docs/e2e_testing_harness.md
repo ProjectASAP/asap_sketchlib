@@ -47,7 +47,7 @@ Sketch actually promises.
 The harness earned its keep immediately: its first run surfaced four real
 defects — a Nitro estimator that returned zero because inserts and queries
 hashed keys differently, a structural under-count from single-row updates, a
-skip-draw rounding bug that halved the effective sampling rate, and a portable
+skip-draw rounding bug that halved the effective sampling rate, and a
 DDSketch representative that violated the advertised α bound at bucket edges.
 None of these were caught by the existing unit tests.
 
@@ -72,7 +72,7 @@ tests/
 ├── e2e_matrix_instances.rs  # every (storage, path) instance of the matrix families
 ├── e2e_numeric_types.rs     # every NumericalValue type through KLL / DDSketch
 ├── e2e_windows.rs           # every EHSketchList variant + TumblingWindow payloads
-├── e2e_composition.rs       # HashSketchEnsemble, NitroBatch, UnivMonQ config, portable facade
+├── e2e_composition.rs       # HashSketchEnsemble, NitroBatch, UnivMonQ config, CMSHeap / KLL merge and wire
 ├── e2e_frameworks.rs        # Hydra and UnivMon composition
 ├── e2e_octo.rs              # …the OctoSketch promotion protocol
 ├── e2e_heavy_hitters.rs     # …Space-Saving, CocoSketch and Elastic
@@ -101,7 +101,7 @@ One spec per *metric*, not per sketch, because the metric is what differs:
 | `CountSketchSpec` | two-sided L2, rank-independent | marginal `sqrt(3/w)·‖f₋ᵢ‖₂` at `P[Bin(d, 1/3) ≥ ⌈d/2⌉]`; simultaneous at the smallest κ with `P[Bin(d,1/κ) ≥ ⌈d/2⌉] ≤ δ/D` |
 | `SecondMomentSpec` | F2 from a Count Sketch matrix | `sqrt(2κ/w)`, same median amplification |
 | `KllRankSpec` | KLL **maximum** rank error over a q grid | `ε(k) = 2.446 / k^0.9433` — an Apache DataSketches *characterization fit*, not a theorem about this code |
-| `RelativeQuantileSpec` + `DdRankConvention` | DDSketch relative value error | `α + ULP slack` vs the exact order statistic **of that implementation's own rank convention** |
+| `RelativeQuantileSpec` + `dd_rank_index` | DDSketch relative value error | `α + ULP slack` vs the exact `ceil(q·n)` order statistic |
 | `CardinalityConfidenceSpec` | HLL / KMV | `z · σ_rel`, σ derived exactly, the tail a normal approximation |
 | `SamplingConfidenceSpec` | Nitro | `z · sqrt(f(p·r(1−r) + (1−p)/p))`, `r = frac(1/p)` |
 | `PrioritySampleSpec` | `UniformSampling` | `len = ⌈n·rate⌉` exactly; `Var[mean] = (σ_N²/m)(N−m)/(N−1)` |
@@ -141,11 +141,8 @@ Keeping these apart is deliberate. There is no shared
 `QuantileSpec { rank_tol }` that KLL and DDSketch both use, because they do not
 promise the same thing: a correct KLL can return a value 100× off on a
 heavy-tailed stream and still be within its rank guarantee, and a correct
-DDSketch has no rank guarantee at all. For the same reason the two DDSketch
-implementations do not share a truth helper: `DDSketch::get_value_at_quantile`
-answers `sorted[ceil(q·n) − 1]` while the portable `DdSketch::quantile` answers
-`sorted[floor(q·(n−1))]`, so `DdRankConvention` carries the choice and each is
-scored on the question it actually answers.
+DDSketch has no rank guarantee at all. `DDSketch::get_value_at_quantile`
+answers `sorted[ceil(q·n) − 1]`, and `dd_rank_index` computes that truth.
 
 Two distinctions are easy to lose:
 
@@ -189,9 +186,8 @@ suite with the matching spec from Layer 2.
 **Layer 4 — suites.**
 `conformance_kit.rs` wires established sketches through the kit as reference
 adapters. The `e2e_*.rs` suites add depth the kit deliberately does not
-attempt: serialization round trips, window semantics, framework composition
-(Hydra fan-out, tumbling windows, sliding histograms), and cross-implementation
-parity between core types and their portable wire twins.
+attempt: serialization round trips, window semantics, and framework
+composition (Hydra fan-out, tumbling windows, sliding histograms).
 
 A composition framework can also *be* a battery subject, in the same suite that
 already covers it. `e2e/frameworks.rs` runs a single-column Hydra — where the
@@ -285,8 +281,8 @@ bugs only appeared at deployment-shaped dimensions.
 ### 4. Add depth where the sketch is unusual
 
 Anything not covered by a battery belongs in the matching `e2e_*.rs` suite:
-window semantics, merge order-independence, wire-format parity with the
-portable type, heavy-hitter recall targets, and so on.
+window semantics, merge order-independence, ASAPv1 round trips, heavy-hitter
+recall targets, and so on.
 
 ## Tolerance policy
 
@@ -325,8 +321,8 @@ error against its bound.
 
 - No assertion depends on unseeded randomness — no `rand::rng()`, no
   wall-clock seeding, no implicit RNG inside a constructor. An unseeded
-  sketch appears only where the assertion holds for every draw. `KLL::init_kll_with_seed`,
-  `KLLDynamic::init_kll_with_seed`, `KllSketch::with_seed`,
+  sketch appears only where the assertion holds for every draw.
+  `KLL::init_kll_with_seed`, `KLLDynamic::init_kll_with_seed`,
   `NitroBatch::with_target_and_seed`, `UniformSampling::with_seed`,
   `Coco::init_with_size_and_seed` and `CocoOctoPlan::with_seed` exist for this.
 - An estimator whose guarantee is unbiasedness gets no per-key band: its

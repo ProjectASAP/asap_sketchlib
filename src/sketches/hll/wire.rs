@@ -12,7 +12,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use crate::message_pack_format::envelope;
+use crate::asapv1::envelope;
 use crate::structures::fixed_structure::HllRegisterStorage;
 use crate::{DefaultXxHasher, HashProfile, SketchHasher};
 
@@ -36,25 +36,25 @@ impl HllWireVariant for ErtlMLE {
 /// positional). `registers` is a msgpack `bin` (one byte per register, matching
 /// Go's `[]byte`) via `serde_bytes` rather than serde's default `array<u8>`.
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct HllPayloadPlain {
+struct HllPayloadPlain {
     #[serde(with = "serde_bytes")]
-    pub(crate) registers: Vec<u8>,
+    registers: Vec<u8>,
 }
 
 /// HIP payload: the register bin plus the three HIP running scalars.
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct HllPayloadHip {
+struct HllPayloadHip {
     #[serde(with = "serde_bytes")]
-    pub(crate) registers: Vec<u8>,
-    pub(crate) hip_kxq0: f64,
-    pub(crate) hip_kxq1: f64,
-    pub(crate) hip_est: f64,
+    registers: Vec<u8>,
+    hip_kxq0: f64,
+    hip_kxq1: f64,
+    hip_est: f64,
 }
 
 const HLL_KIND_FAMILY: u8 = 0x01;
-pub(crate) const HLL_KIND_CLASSIC: &[u8] = &[HLL_KIND_FAMILY, 0x01];
-pub(crate) const HLL_KIND_ERTL_MLE: &[u8] = &[HLL_KIND_FAMILY, 0x02];
-pub(crate) const HLL_KIND_HIP: &[u8] = &[HLL_KIND_FAMILY, 0x03];
+const HLL_KIND_CLASSIC: &[u8] = &[HLL_KIND_FAMILY, 0x01];
+const HLL_KIND_ERTL_MLE: &[u8] = &[HLL_KIND_FAMILY, 0x02];
+const HLL_KIND_HIP: &[u8] = &[HLL_KIND_FAMILY, 0x03];
 
 /// Descriptor metadata for an HLL sketch (ASAPv1 §2), serialized as a msgpack
 /// **map** (`to_vec_named`) with keys in this declaration order — the canonical
@@ -64,21 +64,21 @@ pub(crate) const HLL_KIND_HIP: &[u8] = &[HLL_KIND_FAMILY, 0x03];
 /// decode fail closed on any unexpected key rather than silently dropping it.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct HllMetadata {
-    pub(crate) metadata_version: u8,
-    pub(crate) hash_profile_id: String,
-    pub(crate) hash_algorithm: String,
-    pub(crate) seed_derivation: String,
-    pub(crate) input_encoding: String,
-    pub(crate) seed_list: Vec<u64>,
-    pub(crate) canonical_seed_index: u32,
-    pub(crate) precision: u32,
+struct HllMetadata {
+    metadata_version: u8,
+    hash_profile_id: String,
+    hash_algorithm: String,
+    seed_derivation: String,
+    input_encoding: String,
+    seed_list: Vec<u64>,
+    canonical_seed_index: u32,
+    precision: u32,
 }
 
 /// Builds the HLL descriptor metadata from the hasher's [`HashProfile`], so the
 /// wire bytes truthfully describe how the sketch was hashed (rather than
 /// hardcoding the standard profile).
-pub(crate) fn hll_metadata<H: HashProfile>(precision: u32) -> HllMetadata {
+fn hll_metadata<H: HashProfile>(precision: u32) -> HllMetadata {
     HllMetadata {
         metadata_version: 1,
         hash_profile_id: H::PROFILE_ID.to_string(),
@@ -89,12 +89,6 @@ pub(crate) fn hll_metadata<H: HashProfile>(precision: u32) -> HllMetadata {
         canonical_seed_index: H::CANONICAL_SEED_INDEX,
         precision,
     }
-}
-
-/// The standard ProjectASAP profile metadata (the [`DefaultXxHasher`] profile).
-/// Used by the portable path, which only represents standard-profile sketches.
-pub(crate) fn standard_hll_metadata(precision: u32) -> HllMetadata {
-    hll_metadata::<DefaultXxHasher>(precision)
 }
 
 /// Validate the envelope for a known target and return the raw payload bytes.
@@ -215,8 +209,9 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
     /// than bytes that would be refused on decode.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let registers = registers_to_bytes(&self.registers)?;
-        let metadata =
-            rmp_serde::to_vec_named(&standard_hll_metadata(Registers::PRECISION as u32))?;
+        let metadata = rmp_serde::to_vec_named(&hll_metadata::<DefaultXxHasher>(
+            Registers::PRECISION as u32,
+        ))?;
         let payload = rmp_serde::to_vec(&HllPayloadHip {
             registers,
             hip_kxq0: self.kxq0,
@@ -247,9 +242,9 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DataInput;
     use crate::sketches::hll::{HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogP12};
     use crate::structures::fixed_structure::{HllBucketListP12, HllBucketListP14};
-    use crate::{DataInput, HllBucketList};
 
     const ERROR_TOLERANCE: f64 = 0.02;
     const SERDE_SAMPLE: usize = 100_000;
@@ -444,52 +439,6 @@ mod tests {
         assert_eq!(decoded.est, sketch.est);
     }
 
-    /// Drift guard: the native path and the (deprecated) portable path must emit
-    /// byte-identical ASAPv1 envelopes. Keep until golden byte-vectors exist.
-    #[test]
-    fn native_and_portable_hll_bytes_match() {
-        use crate::message_pack_format::MessagePackCodec;
-        use crate::message_pack_format::portable::hll::{HllSketch, HllVariant};
-
-        // Ertl-MLE / Datafusion: registers-only payload.
-        let mut native = HyperLogLog::<ErtlMLE>::default();
-        for v in 0..1000 {
-            native.insert(&DataInput::U64(v));
-        }
-        let native_bytes = native.serialize_to_bytes().expect("native serialize");
-        let portable = HllSketch::from_raw(
-            HllVariant::Datafusion,
-            HllBucketList::PRECISION as u32,
-            native.registers_as_slice().to_vec(),
-            0.0,
-            0.0,
-            0.0,
-        );
-        assert_eq!(
-            native_bytes,
-            portable.to_msgpack().expect("portable serialize")
-        );
-
-        // HIP: registers + three running scalars.
-        let mut hip = HyperLogLogHIP::default();
-        for v in 0..1000 {
-            hip.insert(&DataInput::U64(v));
-        }
-        let hip_bytes = hip.serialize_to_bytes().expect("native serialize");
-        let portable_hip = HllSketch::from_raw(
-            HllVariant::Hip,
-            HllBucketList::PRECISION as u32,
-            hip.registers.as_slice().to_vec(),
-            hip.kxq0,
-            hip.kxq1,
-            hip.est,
-        );
-        assert_eq!(
-            hip_bytes,
-            portable_hip.to_msgpack().expect("portable serialize")
-        );
-    }
-
     // A test-only custom hasher: it hashes exactly like `DefaultXxHasher`
     // (delegation) but declares a DIFFERENT `HashProfile` (distinct profile id
     // and seed list). Serialization is derived from the profile, so an
@@ -590,7 +539,7 @@ mod tests {
             precision: u32,
             bogus_field: u8, // key not in HllMetadata
         }
-        let std = standard_hll_metadata(14);
+        let std = hll_metadata::<DefaultXxHasher>(14);
         let extra = WithExtra {
             metadata_version: std.metadata_version,
             hash_profile_id: std.hash_profile_id.clone(),
@@ -626,7 +575,8 @@ mod tests {
 
     /// Builds a well-framed envelope around a crafted register bin.
     fn crafted_plain(kind_id: &[u8], precision: u32, registers: Vec<u8>) -> Vec<u8> {
-        let metadata = rmp_serde::to_vec_named(&standard_hll_metadata(precision)).expect("meta");
+        let metadata =
+            rmp_serde::to_vec_named(&hll_metadata::<DefaultXxHasher>(precision)).expect("meta");
         let payload = rmp_serde::to_vec(&HllPayloadPlain { registers }).expect("payload");
         envelope::encode(kind_id, &metadata, &payload)
     }
@@ -682,7 +632,7 @@ mod tests {
         );
 
         // The HIP payload carries the same bin and is held to the same bound.
-        let metadata = rmp_serde::to_vec_named(&standard_hll_metadata(14)).expect("meta");
+        let metadata = rmp_serde::to_vec_named(&hll_metadata::<DefaultXxHasher>(14)).expect("meta");
         let payload = rmp_serde::to_vec(&HllPayloadHip {
             registers: bin(p14, P14_MAX + 1),
             hip_kxq0: p14 as f64,

@@ -45,7 +45,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::message_pack_format::wire_key::WireBytes;
+use crate::asapv1::wire_key::WireBytes;
 use crate::{HHHeap, HashProfile, HeapItem};
 
 /// Metadata `key_type` of a heap that holds nothing. A heap with no entries has
@@ -401,7 +401,7 @@ pub(crate) fn rebuild_heap(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_pack_format::envelope;
+    use crate::asapv1::envelope;
     use crate::{DataInput, DefaultXxHasher, RegularPath, Vector2D};
 
     use super::super::CMSHeap;

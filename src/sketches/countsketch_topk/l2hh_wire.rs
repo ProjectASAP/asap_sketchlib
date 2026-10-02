@@ -31,9 +31,9 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::asapv1::envelope;
 use crate::common::hash::check_matrix_rows;
 use crate::common::structures::matrix_storage::cols_mask_bits;
-use crate::message_pack_format::envelope;
 use crate::{HashProfile, SketchHasher, Vector1D, Vector2D};
 
 use super::CountL2HH;

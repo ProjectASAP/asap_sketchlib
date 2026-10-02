@@ -49,7 +49,7 @@ signals a backwards-compatible change.
   law that sketch claims — merge algebra, path equivalence, the paper's own
   model, and the wire / ASAPv1 round trip. Shared generators, the `grid`
   reader and the `round_trip!` macro live in `tests/pbt/support.rs`; four
-  modules sit behind `experimental`. 435 tests under `--all-features`, 367
+  modules sit behind `experimental`. 432 tests under `--all-features`, 364
   under the default feature set. Every law was mutation-checked: the
   implementation was broken deliberately, the law confirmed red, and confirmed
   not to take unrelated laws down with it; a law no semantically real mutation
@@ -66,6 +66,55 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **ASAPv1 golden fixtures for `KLLDynamic`** (kind_id `0x06 0x01`):
+  `kll_dynamic_f64_k200` and `kll_dynamic_i64_k200`, the i64 items crossing
+  every msgpack integer width in both signs, checked in `tests/asapv1_golden.rs`.
+- **HyperLogLog `from_storage` constructors.** `HyperLogLogImpl::from_storage(registers)`
+  and `HyperLogLogHIPImpl::from_storage(registers, kxq0, kxq1, est)` build a
+  sketch from known register storage (and HIP running state).
+- **HLL P14 golden fixtures** `hll_classic_p14`, `hll_ertl_mle_p14` and
+  `hll_hip_p14` in `asapv1_golden/`, checked in both directions by
+  `tests/asapv1_golden.rs`. Their registers touch the first, a middle and the
+  last index and hold 51, the largest P14 rank.
+- **ASAPv1 golden fixtures for CMSHeap** (`03 00`):
+  `cmsheap_i64_regular_2x3_strkeys`, `cmsheap_i32_fast_2x3_i64keys`, the
+  key-tie fixtures `cmsheap_i64_regular_2x3_i64tie` and
+  `cmsheap_i64_regular_2x3_strtie`, and the empty heap
+  `cmsheap_i64_regular_2x3_empty`, checked by `tests/asapv1_golden.rs`.
+- The ASAPv1 spec states the heap key tie order: a signed key compares as its
+  two's-complement bit pattern read unsigned, a float by its bits, a string or
+  bytes key byte-wise with a proper prefix first.
+- **An ASAPv1 golden fixture for CSHeap** (`0x0a 0x00`),
+  `csheap_i64_regular_2x4_strkeys`: the Count Sketch 2x4 signed matrix with a
+  string-keyed heap at `k = 5`, pinned in `tests/asapv1_golden.rs`.
+- **DDSketch ASAPv1 golden fixtures**: `ddsketch_positive_a001` and
+  `ddsketch_empty_a001` (metadata version 1) and `ddsketch_signed_a001`
+  (metadata version 2, negative store and zero count), checked by
+  `tests/asapv1_golden.rs`.
+- **ASAPv1 golden fixtures for Hydra's five counter variants** (`0x07 0x00`
+  KLL, `0x07 0x01` Count-Min, `0x07 0x02` Count Sketch, `0x07 0x03` HLL,
+  `0x07 0x04` UnivMon), each a small grid whose cell states are set directly,
+  checked by `tests/asapv1_golden.rs`.
+- **ASAPv1 golden fixtures for `UnivMon`** (kind_id `0x10 0x00`):
+  `univmon_str_l3_2x4_h5`, `univmon_i64_l3_2x4_h5` and
+  `univmon_empty_l3_2x4_h5`, checked in `tests/asapv1_golden.rs`.
+- **ASAPv1 golden fixture for Coco** (`0c 00`): `asapv1_golden/coco_3x7.hex`,
+  a 3x7 bucket table set directly, checked by `tests/asapv1_golden.rs`.
+- **ASAPv1 golden fixtures for Elastic**: `elastic_4b_2x4` and
+  `elastic_4b_2x4_stale` in `asapv1_golden/`, checked by `tests/asapv1_golden.rs`.
+- An ASAPv1 golden fixture for CountL2HH (`0x19 0x00`), `count_l2hh_2x4_seed7`:
+  a non-zero seed index, and cells and `l2` accumulators set apart from each
+  other that together reach every msgpack integer width, positive fixint
+  through uint64 and negative fixint through int64.
+- **ASAPv1 payloads for `SetAggregator` (`0x08 0x00`) and `DeltaResult`
+  (`0x09 0x00`)**, spec §3.21 and §3.22. The metadata is `metadata_version`
+  alone; the payload is `[values]` and `[added, removed]`, each an array of
+  `str` in ascending UTF-8 byte order, and a key in both `added` and `removed`
+  is refused on both sides. Both types gain `serialize_to_bytes` /
+  `deserialize_from_bytes` and live in `asap_sketchlib::sketches::set_aggregator`;
+  the crate-root re-exports are unchanged. Golden fixtures
+  `set_aggregator_strings`, `set_aggregator_empty`, `delta_result_strings` and
+  `delta_result_empty` are checked by `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -87,6 +136,148 @@ signals a backwards-compatible change.
   is retained; `TumblingWindow::insert` closes a period that saw no arrivals
   as an empty window like any other, and that window takes a place in
   `max_windows`.
+
+### Removed
+
+- **KLL's proto and portable formats.** `KLL` and `KLLDynamic` serialize only
+  as ASAPv1 (`serialize_to_bytes` / `deserialize_from_bytes`, kind_ids
+  `0x06 0x00` / `0x06 0x01`). Removed:
+  - the `kll` field of `SketchEnvelope` and with it
+    `sketch_envelope::SketchState::Kll`;
+  - the crate-root `KllSketch` and `KllSketchData`, and the public module
+    `message_pack_format::portable::kll`: `SketchlibKll`, `new_sketchlib_kll`,
+    `new_sketchlib_kll_with_seed`, `sketchlib_kll_update`,
+    `sketchlib_kll_quantile`, `sketchlib_kll_merge`,
+    `bytes_from_sketchlib_kll`, `sketchlib_kll_from_bytes`,
+    `KllSketch::{merge_refs, aggregate_kll, from_portable_state}`, the
+    `MessagePackCodec` impls for `KllSketch` and `KllSketchData`, the
+    value-offset codec (`KLL_SCALE_SWEEP`, `encode_value_offset`,
+    `decode_value_offset`, `KllProtoItems`), and the `unsafe impl Send/Sync
+    for KllSketch`;
+  - `message_pack_format::native::{kll, kll_dynamic}`, the `MessagePackCodec`
+    impls for `KLL<T>` and `KLLDynamic<T>`;
+  - `KLL::from_portable_state`.
+- **HyperLogLog's protobuf and portable formats.** HyperLogLog serializes only
+  as ASAPv1 (`serialize_to_bytes` / `deserialize_from_bytes`). Removed: the
+  portable `HllSketch`, `HllSketchDelta` and `HllVariant` (module
+  `message_pack_format::portable::hll` and their crate-root re-exports), with
+  `registers_from_state`, `decode_sparse_registers` and
+  `encode_sparse_registers`; the `MessagePackCodec` impls for
+  `HyperLogLogImpl` and `HyperLogLogHIPImpl` (`message_pack_format::native::hll`);
+  the `HLLDelta` proto message (`proto::sketchlib::HllDelta`); and the `hll`
+  field of `SketchEnvelope`.
+- **Count-Min's proto and portable formats.** `CountMin` serializes to ASAPv1
+  only (`serialize_to_bytes` / `deserialize_from_bytes`, kind `0x02 0x00`).
+  Removed: the `CountMinDelta` and `CountMinCell` proto messages and the
+  `count_min` field of `SketchEnvelope`;
+  `message_pack_format::portable::countminsketch` (`CountMinSketch`,
+  `CountMinSketchDelta`, `CountMinSketchWire`, `SketchlibCms`,
+  `new_sketchlib_cms`, `sketchlib_cms_from_matrix`,
+  `matrix_from_sketchlib_cms`, `sketchlib_cms_update`, `sketchlib_cms_query`)
+  and the crate-root `CountMinSketch` / `CountMinSketchDelta` re-exports; the
+  `MessagePackCodec` impl for `CountMin` in
+  `message_pack_format::native::countminsketch`; and the
+  `src/sketches/testdata/cms_envelope_golden.hex` proto golden. Count-Min
+  deltas (including `hh_keys`) and the envelope `sample_p` for Count-Min have
+  no ASAPv1 carrier.
+- **Count Sketch's proto and portable formats.** Count Sketch (`Count`)
+  serializes as ASAPv1 only (`serialize_to_bytes` / `deserialize_from_bytes`,
+  kind `0x04 0x00`). Removed: the portable `CountSketch`, `CountSketchDelta`
+  and `COUNT_SKETCH_TOPK_CAPACITY` (module
+  `message_pack_format::portable::countsketch` and their crate-root
+  re-exports), including `CountSketch`'s proto and MessagePack delta codecs
+  (`compute_delta`, `apply_delta_bytes`, `compute_delta_msgpack`,
+  `apply_delta_msgpack_bytes`); the `MessagePackCodec` impl for `Count`
+  (module `message_pack_format::native::countsketch`); the proto messages
+  `CountSketchDelta` and `CountSketchCell`; and `SketchEnvelope`'s
+  `count_sketch` field.
+- **CMSHeap's pre-envelope MessagePack format.** `CMSHeap` serializes through
+  ASAPv1 only (`serialize_to_bytes` / `deserialize_from_bytes`). Removed: the
+  module `message_pack_format::portable::countminsketch_topk` with
+  `CountMinSketchWithHeap` (and its `MessagePackCodec` impl, `merge_refs` and
+  `aggregate_topk`), `CmsHeapItem`, `WireHeapItem`, `SketchlibCMSHeap`,
+  `CountMinSketchInnerWire`, `CountMinSketchWithHeapWire`,
+  `new_sketchlib_cms_heap`, `sketchlib_cms_heap_from_matrix_and_heap`,
+  `matrix_from_sketchlib_cms_heap`, `heap_to_wire`, `sketchlib_cms_heap_update`
+  and `sketchlib_cms_heap_query`, plus the crate-root re-exports
+  `CountMinSketchWithHeap` and `CmsHeapItem`. Bytes in that format no longer
+  decode.
+- **The portable Count-Sketch-with-heap type.** `CountSketchWithHeap` and
+  `CsHeapItem` (crate root) and the module
+  `message_pack_format::portable::countsketch_topk` with `WireHeapItem`,
+  `SketchlibCSHeap`, `new_sketchlib_cs_heap`,
+  `sketchlib_cs_heap_from_matrix_and_heap`, `matrix_from_sketchlib_cs_heap`,
+  `heap_to_wire`, `sketchlib_cs_heap_update`, `sketchlib_cs_heap_query`,
+  `CountSketchInnerWire` and `CountSketchWithHeapWire`. Its MessagePack
+  `{sketch, topk_heap, heap_size}` encoding is gone with it; `CSHeap` encodes
+  and decodes ASAPv1 only, through `serialize_to_bytes` /
+  `deserialize_from_bytes`.
+- **DDSketch's protobuf and portable formats.** DDSketch serializes through
+  ASAPv1 only (`DDSketch::serialize_to_bytes` / `deserialize_from_bytes`).
+  Removed: `proto/ddsketch/ddsketch.proto` and the generated
+  `proto::sketchlib::{DdSketchState, DdSketchDelta, DdSketchBucketDelta}`;
+  `SketchEnvelope`'s `ddsketch` field;
+  `message_pack_format::portable::ddsketch` (`DdSketch`, `DdSketchDelta`,
+  `DDSKETCH_GROW_CHUNK`, `MAX_APPLY_DELTA_SPAN_BUCKETS`) and the crate-root
+  re-exports of the first three; the `MessagePackCodec` impl for `DDSketch`.
+  There is no ASAPv1 DDSketch delta.
+- **Hydra's proto and portable formats.** `Hydra` serializes as ASAPv1 only
+  (`serialize_to_bytes` / `deserialize_from_bytes`, kinds `0x07 0x00`-`0x07
+  0x04`). Removed: the portable `HydraKllSketch` and `HydraKllSketchWire`
+  (module `message_pack_format::portable::hydra_kll`, and the crate-root
+  `HydraKllSketch` re-export), with `HydraKllSketch`'s `MessagePackCodec` impl,
+  `with_seed`, `merge_refs` and `aggregate_hydrakll`; the proto file
+  `hydra/hydra.proto` with `HydraState`, `HydraCell` and `HydraCounterType`
+  (and their generated `proto::sketchlib` types); and `SketchEnvelope`'s
+  `hydra` field. The nearest replacement is `Hydra` with a
+  one-column schema and `HydraCounter::KLL`, but it routes `label:value`
+  subkeys through the matrix hash at `HYDRA_SEED`, not `xxh32(key, row) %
+  cols`, so `HydraKllSketch` cells do not map onto the new grid.
+- **UnivMon's proto format.** `UnivMon` serializes only as ASAPv1
+  (`serialize_to_bytes` / `deserialize_from_bytes`, kind_id `0x10 0x00`).
+  Removed the `univmon` field of `SketchEnvelope` and with it
+  `sketch_envelope::SketchState::Univmon`.
+- **Coco's protobuf format.** `proto/cocosketch/cocosketch.proto` and the
+  generated `asap_sketchlib::proto::sketchlib::CocoSketchState` are gone, with
+  the `SketchEnvelope` oneof field `coco` (`sketch_envelope::SketchState::Coco`).
+  Coco serializes only as ASAPv1 (`Coco::serialize_to_bytes` /
+  `deserialize_from_bytes`).
+- **BREAKING: Elastic's protobuf form.** `proto/elasticsketch/elasticsketch.proto`,
+  its message `ElasticState` (`asap_sketchlib::proto::sketchlib::ElasticState`),
+  and the `SketchEnvelope` oneof variant `elastic`
+  (`sketch_envelope::SketchState::Elastic`) are gone.
+  `Elastic::serialize_to_bytes` / `deserialize_from_bytes` (ASAPv1, `0x0b 0x00`)
+  is Elastic's only serialization.
+- **CountL2HH's `MessagePackCodec` impl** and its module,
+  `message_pack_format::native::countsketch_topk`. Use
+  `CountL2HH::serialize_to_bytes` / `CountL2HH::deserialize_from_bytes`, which
+  emit the same ASAPv1 bytes.
+- **The portable MessagePack format for `SetAggregator` and `DeltaResult`**:
+  the modules `message_pack_format::portable::set_aggregator` and
+  `message_pack_format::portable::delta_set_aggregator`, both types'
+  `MessagePackCodec` impls, and `DeltaResult`'s `serde::Serialize` /
+  `Deserialize` derives. They serialize only as ASAPv1.
+- **`MessagePackCodec` and the public `message_pack_format` module.** Removed
+  `message_pack_format::{MessagePackCodec, Error}` and the crate-root
+  `MessagePackCodec`; `message_pack_format::native`, with the `MessagePackCodec`
+  impl for `KMV`; and `message_pack_format::portable`, with `sampling` and its
+  crate-root re-exports `effective_sample_p`, `sample_p_or_default`,
+  `rescale_count`, `rescale_count_with_env` and `is_quantile_scale_invariant`.
+  The ASAPv1 framing that module also held is crate-private. Every sketch
+  encodes through `serialize_to_bytes` / `deserialize_from_bytes`; ASAPv1
+  carries no sampling probability.
+- **The protobuf layer.** Removed the public module `proto::sketchlib` with
+  `SketchEnvelope`, `ProducerInfo`, `HashSpec`, `HashAlgorithm`,
+  `SeedDerivation`, `CounterType` and the state messages no envelope field
+  carries any more (`HyperLogLogState`, `KllState`, `CountMinState`,
+  `CountSketchState`, `UnivMonState` and their nested types); the `.proto`
+  sources under `proto/`, the vendored `src/proto/generated/`, the
+  `tools/gen-proto` generator and its CI drift check; and the `prost` and
+  `bytes` dependencies.
+- **The `xxhash-rust` dependency**, which nothing uses.
+- **`common::hashspec`**, which nothing uses: `HashSpec`, `SeedDerivation`,
+  `CANONICAL_HASH_SEED_TABLE`, `CANONICAL_HASH_SEED`, `hash_with_spec`,
+  `derive_index` and `derive_sign`.
 
 ### Fixed
 
