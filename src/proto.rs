@@ -18,3 +18,7 @@
 pub mod sketchlib {
     include!("proto/generated/sketchlib.v1.rs");
 }
+
+/// Decoding and encoding of the protobuf `SketchEnvelope` for KLL and
+/// DDSketch states.
+pub mod envelope;
