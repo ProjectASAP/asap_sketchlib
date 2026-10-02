@@ -40,6 +40,8 @@ but improves accuracy.
 ```rust
 fn new() -> Self
 fn default() -> Self
+fn from_storage(registers: Registers) -> Self                              // HyperLogLogImpl
+fn from_storage(registers: Registers, kxq0: f64, kxq1: f64, est: f64) -> Self  // HyperLogLogHIPImpl
 ```
 
 ## Insert / Update
