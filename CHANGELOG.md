@@ -49,7 +49,7 @@ signals a backwards-compatible change.
   law that sketch claims — merge algebra, path equivalence, the paper's own
   model, and the wire / ASAPv1 round trip. Shared generators, the `grid`
   reader and the `round_trip!` macro live in `tests/pbt/support.rs`; four
-  modules sit behind `experimental`. 433 tests under `--all-features`, 365
+  modules sit behind `experimental`. 432 tests under `--all-features`, 364
   under the default feature set. Every law was mutation-checked: the
   implementation was broken deliberately, the law confirmed red, and confirmed
   not to take unrelated laws down with it; a law no semantically real mutation
@@ -239,8 +239,9 @@ signals a backwards-compatible change.
   `sketch_envelope::SketchState::Univmon`.
 - **Coco's protobuf format.** `proto/cocosketch/cocosketch.proto` and the
   generated `asap_sketchlib::proto::sketchlib::CocoSketchState` are gone, with
-  the `SketchEnvelope` oneof field `coco` (`sketch_envelope::SketchState::Coco`). Coco serializes only as
-  ASAPv1 (`Coco::serialize_to_bytes` / `deserialize_from_bytes`).
+  the `SketchEnvelope` oneof field `coco` (`sketch_envelope::SketchState::Coco`).
+  Coco serializes only as ASAPv1 (`Coco::serialize_to_bytes` /
+  `deserialize_from_bytes`).
 - **BREAKING: Elastic's protobuf form.** `proto/elasticsketch/elasticsketch.proto`,
   its message `ElasticState` (`asap_sketchlib::proto::sketchlib::ElasticState`),
   and the `SketchEnvelope` oneof variant `elastic`

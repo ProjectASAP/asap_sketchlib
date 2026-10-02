@@ -47,7 +47,7 @@ Sketch actually promises.
 The harness earned its keep immediately: its first run surfaced four real
 defects — a Nitro estimator that returned zero because inserts and queries
 hashed keys differently, a structural under-count from single-row updates, a
-skip-draw rounding bug that halved the effective sampling rate, and a portable
+skip-draw rounding bug that halved the effective sampling rate, and a
 DDSketch representative that violated the advertised α bound at bucket edges.
 None of these were caught by the existing unit tests.
 
