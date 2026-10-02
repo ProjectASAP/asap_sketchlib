@@ -24,7 +24,6 @@ use common::{
 use common::{FreqTruth, uniform_u64, zipf_u64};
 use std::collections::HashMap;
 
-use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
 use asap_sketchlib::{
     Count, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS, FoldCS, RegularPath,
     Vector2D,
@@ -688,37 +687,6 @@ fn folded_sketches_keep_their_own_bounds_through_a_sixteen_way_merge() {
         "FoldCS after a 16-way hierarchical merge",
         &truth,
         |k| cs_merged.query(&DataInput::U64(k as u64)) as f64,
-        &context,
-    );
-}
-
-// ------------------------------------------------------- Portable wire twin
-
-/// The portable Count Sketch answers over string keys and must satisfy the
-/// same L2 theorem as its core counterpart, with no extra slack for being on
-/// the wire side.
-#[test]
-fn portable_cs_string_keys_satisfy_its_own_bound() {
-    const CS_ROWS: usize = 5;
-    const COLS: usize = 4096;
-    const STREAM_SEED: u64 = 1006;
-
-    let stream = zipf_u64(50_000, 2048, 1.1, STREAM_SEED);
-    // The portable type keys on strings; `FreqTruth` keys on i64. The stream's
-    // u64 values are the identity behind both, so `k -> "k{k}"` is injective
-    // and the two truths agree key for key.
-    let mut truth = FreqTruth::default();
-    let mut pcss = CountSketch::new(CS_ROWS, COLS);
-    for k in &stream {
-        truth.observe(*k as i64);
-        pcss.update(&format!("k{k}"), 1.0);
-    }
-    let context = format!("zipf(1.1) domain=2048 n=50000 string keys, stream_seed={STREAM_SEED}");
-
-    CountSketchSpec::new(CS_ROWS, COLS).assert_contract(
-        "portable CountSketch",
-        &truth,
-        |k| pcss.estimate(&format!("k{k}")),
         &context,
     );
 }

@@ -4,24 +4,16 @@
 //!
 //! Approach: reuse the exact same Go-golden envelopes that the
 //! `message_pack_format::portable` parity tests use, but build the
-//! matrix via `sketches::Count` with `FastPath` and `DefaultXxHasher`.
-//! Identical bytes confirm the shared FastPath math is sufficient — no
-//! hashspec bypass needed.
+//! sketch via `sketches::*` defaults. Identical bytes confirm the shared
+//! FastPath math is sufficient — no hashspec bypass needed.
 
 use asap_sketchlib::common::DataInput;
 use asap_sketchlib::proto::sketchlib::{
-    CountSketchState, CounterType, DdSketchState, SketchEnvelope, sketch_envelope::SketchState,
+    CounterType, DdSketchState, SketchEnvelope, sketch_envelope::SketchState,
 };
-use asap_sketchlib::sketches::countsketch::Count;
 use asap_sketchlib::sketches::ddsketch::DDSketch;
 use asap_sketchlib::{DefaultXxHasher, FastPath, Vector2D};
 use prost::Message;
-
-/// 1577-byte envelope captured from `sketchlib-go::CountSketch.SerializeProtoBytes`
-/// for `(rows=3, cols=512)` × `goldenCsKeys()` (25 keys "k-a".."k-e", each
-/// repeated 5×). Identical to the constant in
-/// `src/message_pack_format/portable/countsketch.rs::test_update_then_envelope_matches_sketchlib_go_bytes`.
-const COUNTSKETCH_GOLDEN_HEX: &str = include_str!("cs_envelope_golden.hex");
 
 /// 403-byte DDSketch envelope for `alpha=0.01`, `(1..=50)` integer-as-f64
 /// input, without the DataPoint-level METRIC scalars (count/sum/min/max →
@@ -31,61 +23,6 @@ const COUNTSKETCH_GOLDEN_HEX: &str = include_str!("cs_envelope_golden.hex");
 /// against the parallel `sketchlib-go` golden regeneration before declaring
 /// cross-language byte parity.
 const DDSKETCH_GOLDEN_HEX: &str = "0801728e03096214ae47e17a843f128003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000100000000000000000000000000000100000000000000000000010000000000000000010000000000000001000000000001000000000001000000000001000000010000000001000000010000010000000100000100000100000100000100010000010001000100010001000100010001000100010100010100010100010101000101010100010101010101010100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000187f";
-
-#[test]
-fn sketches_count_fastpath_matches_go_count_sketch_envelope() {
-    let rows = 3usize;
-    let cols = 512usize;
-
-    let mut sk: Count<Vector2D<i64>, FastPath, DefaultXxHasher> =
-        Count::with_dimensions(rows, cols);
-    for i in 0..25 {
-        let key = format!("k-{}", (b'a' + (i % 5) as u8) as char);
-        sk.insert_many(&DataInput::String(key), 1i64);
-    }
-
-    let storage = sk.as_storage();
-    let mut counts_int: Vec<i64> = Vec::with_capacity(rows * cols);
-    let mut l2: Vec<f64> = Vec::with_capacity(rows);
-    for r in 0..rows {
-        let mut row_l2 = 0.0f64;
-        for c in 0..cols {
-            let cell = *storage.get(r, c).expect("cell in range");
-            counts_int.push(cell);
-            row_l2 += (cell as f64) * (cell as f64);
-        }
-        l2.push(row_l2);
-    }
-
-    let state = CountSketchState {
-        rows: rows as u32,
-        cols: cols as u32,
-        counter_type: CounterType::Int64 as i32,
-        counts_int,
-        counts_float: Vec::new(),
-        l2,
-        topk: None,
-    };
-    let envelope = SketchEnvelope {
-        format_version: 1,
-        producer: None,
-        hash_spec: None,
-        sample_p: 0.0,
-        sketch_state: Some(SketchState::CountSketch(state)),
-    };
-    let mut got = Vec::with_capacity(envelope.encoded_len());
-    envelope.encode(&mut got).expect("prost encode");
-
-    let want = decode_hex(COUNTSKETCH_GOLDEN_HEX);
-    assert_eq!(
-        got,
-        want,
-        "sketches::Count<Vector2D<i64>, FastPath> envelope diverges from Go golden \
-         ({} bytes got vs {} bytes want)",
-        got.len(),
-        want.len(),
-    );
-}
 
 #[test]
 fn sketches_ddsketch_matches_go_envelope() {

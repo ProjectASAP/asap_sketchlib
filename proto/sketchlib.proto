@@ -61,7 +61,6 @@ message SketchEnvelope {
 
   // The sketch payload. Exactly one field must be set.
   oneof sketch_state {
-    CountSketchState count_sketch = 11;
     DDSketchState    ddsketch     = 14;
     UnivMonState     univmon      = 15;
     HydraState       hydra        = 16;
@@ -71,6 +70,8 @@ message SketchEnvelope {
 
   reserved 10;
   reserved "count_min";
+  reserved 11;
+  reserved "count_sketch";
   reserved 12;
   reserved "hll";
   reserved 13;

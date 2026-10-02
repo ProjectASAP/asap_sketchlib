@@ -147,7 +147,18 @@ signals a backwards-compatible change.
   `CountMinState` proto message stays as the nested Count-Min state of
   `HydraCell` and `ElasticState`. Count-Min deltas (including `hh_keys`) and
   the envelope `sample_p` for Count-Min have no ASAPv1 carrier.
-
+- **Count Sketch's proto and portable formats.** Count Sketch (`Count`)
+  serializes as ASAPv1 only (`serialize_to_bytes` / `deserialize_from_bytes`,
+  kind `0x04 0x00`). Removed: the portable `CountSketch`, `CountSketchDelta`
+  and `COUNT_SKETCH_TOPK_CAPACITY` (module
+  `message_pack_format::portable::countsketch` and their crate-root
+  re-exports), including `CountSketch`'s proto and MessagePack delta codecs
+  (`compute_delta`, `apply_delta_bytes`, `compute_delta_msgpack`,
+  `apply_delta_msgpack_bytes`); the `MessagePackCodec` impl for `Count`
+  (module `message_pack_format::native::countsketch`); the proto messages
+  `CountSketchDelta` and `CountSketchCell`; and `SketchEnvelope`'s
+  `count_sketch` field (11, now reserved). `CountSketchState` stays, as
+  UnivMon and Hydra embed it.
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the

@@ -13,8 +13,7 @@
 //!      ±1 signs.
 //!
 //! This module re-exposes that pipeline as a small, byte-key API so
-//! sketches that consume keys as raw bytes (e.g. the wire-format
-//! `CountSketch::update`) can match Go's emitted matrix
+//! sketches that consume keys as raw bytes can match Go's emitted matrix
 //! cell-for-cell. The seed table, derive_index, and derive_sign are
 //! agnostic to whether ±1 signing is applied.
 //!
@@ -74,10 +73,7 @@ pub const CANONICAL_HASH_SEED: usize = 5;
 /// derivation strategy so consumers can validate hash compatibility
 /// before merging.
 ///
-/// `asap_sketchlib`'s wire-format CountSketch constructs a
-/// `HashSpec::default()` and feeds it to [`derive_index`] /
-/// [`derive_sign`] on the hot path. The default matches Go's
-/// `portableHashSpec()`:
+/// The default matches Go's `portableHashSpec()`:
 ///
 /// - `seed_list = CANONICAL_HASH_SEED_TABLE`
 /// - `canonical_seed_index = CANONICAL_HASH_SEED` (= 5)

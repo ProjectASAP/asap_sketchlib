@@ -28,9 +28,7 @@ use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
 };
 use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaResult;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
-use asap_sketchlib::{
-    CountMinSketchWithHeap, CountSketch, DdSketch, HydraKllSketch, SetAggregator,
-};
+use asap_sketchlib::{CountMinSketchWithHeap, DdSketch, HydraKllSketch, SetAggregator};
 
 // ===== round-trip: every wire-format-aligned type =====
 
@@ -44,17 +42,6 @@ fn count_min_sketch_with_heap_round_trip() {
     assert_eq!(restored.rows, 3);
     assert_eq!(restored.cols, 64);
     assert_eq!(restored.heap_size, 8);
-}
-
-#[test]
-fn count_sketch_round_trip() {
-    let mut s = CountSketch::new(3, 64);
-    s.update("k1", 1.0);
-    s.update("k2", 2.0);
-    let bytes = s.to_msgpack().expect("encode");
-    let restored = CountSketch::from_msgpack(&bytes).expect("decode");
-    assert_eq!(restored.rows, 3);
-    assert_eq!(restored.cols, 64);
 }
 
 #[test]

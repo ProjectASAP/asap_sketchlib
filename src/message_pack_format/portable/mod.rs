@@ -1,14 +1,11 @@
 //! Older per-sketch MessagePack wire types, being retired.
 //!
 //! Each per-algorithm submodule holds one sketch's pre-envelope wire type.
-//! These carry a cross-language contract of their own, on goldens apart
-//! from ASAPv1's `asapv1_golden/`: Count Sketch pins byte parity against Go's
-//! serializers; DDSketch's golden is a Rust self-pin, not yet reconciled. New
-//! code uses ASAPv1:
+//! DDSketch's carries a Rust self-pin golden apart from ASAPv1's
+//! `asapv1_golden/`, not yet reconciled with Go. New code uses ASAPv1:
 //! prefer a sketch's own `serialize_to_bytes`; do not add callers here.
 
 pub mod countminsketch_topk;
-pub mod countsketch;
 pub mod countsketch_topk;
 pub mod ddsketch;
 pub mod delta_set_aggregator;

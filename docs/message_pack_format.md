@@ -149,9 +149,7 @@ unified `Error` at the module root) are the **older** serialization path and are
 being **phased out** in favor of the per-sketch `wire.rs` + the shared
 `envelope.rs`.
 
-- `portable/` holds per-sketch wire types that predate the envelope. They
-  carry their own byte-parity goldens against `sketchlib-go` — Count Sketch
-  only — separate from `asapv1_golden/`.
+- `portable/` holds per-sketch wire types that predate the envelope.
 - `native/` is a set of thin `MessagePackCodec` shims over the sketches'
   `serialize_to_bytes` / `deserialize_from_bytes`. Every type it wraps emits the
   ASAPv1 envelope, so each shim is a pass-through.

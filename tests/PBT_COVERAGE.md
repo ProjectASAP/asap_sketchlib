@@ -97,12 +97,12 @@ Compared against: a key's `(col, sign)` per row, read off a one-key sketch; the 
 - linearity
   - insert `w` then `-w` for every `w`: cells back to start; signed stream over a background
   - `insert(k, -1)` undoes `insert(k)`, cell for cell
-  - `cells(S(xs)) + cells(S(ys)) == cells(S(xs ++ ys))`; integral weights, power-of-two widths
+  - `cells(S(xs)) + cells(S(ys)) == cells(S(xs ++ ys))`; signed weights
   - negate every weight: every cell negated
 - merge
-  - portable `CountSketch`: `merge(S(xs), S(ys)) == S(xs ++ ys)` to `REL_TOL`
+  - `cells(merge(S(xs), S(ys))) == cells(S(xs ++ ys))`; signed weights
 - wire
-  - msgpack keeps cells and estimates
+  - ASAPv1 keeps every cell and estimate; signed weights
   - ASAPv1 keeps 64 estimates; `edge_rows` x `edge_dimension`
 
 ## ddsketch.rs — 14

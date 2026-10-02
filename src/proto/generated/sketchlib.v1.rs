@@ -254,70 +254,6 @@ pub struct HeapEntry {
     #[prost(double, tag = "2")]
     pub count: f64,
 }
-/// CountSketchDelta carries only the matrix cells that changed by at least the
-/// threshold between two consecutive snapshots, plus the full per-row L2 norm
-/// deltas and any heavy-hitter candidate keys.
-///
-/// Cells apply additively on the receiver: matrix[row][col] += d_count. Count
-/// Sketch counters are signed (±1 increments), so d_count is a signed integer
-/// (sint64). Heavy-hitter candidate keys (hh_keys) are re-queried against the
-/// merged matrix downstream to rebuild the receiver's Top-K with accurate,
-/// globally-merged estimates.
-///
-/// The packed cell encoding (cell_rows / cell_cols / d_counts, tags 9-11) plus
-/// l2 (tag 12) is the canonical form; the legacy per-cell message (tag 3),
-/// l2_legacy (tag 4) and topk (tag 5) are retained only so payloads from older
-/// producers still decode. This message is byte-identical to the Go reference
-/// implementation's CountSketchDelta so the two runtimes emit byte-identical
-/// delta frames for identical window state (cross-language byte parity).
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CountSketchDelta {
-    #[prost(uint32, tag = "1")]
-    pub rows: u32,
-    #[prost(uint32, tag = "2")]
-    pub cols: u32,
-    /// Deprecated: use cell_rows/cell_cols/d_counts (tags 9-11). Retained for
-    /// backward-compatible decode of payloads from older producers.
-    #[prost(message, repeated, tag = "3")]
-    pub cells_legacy: ::prost::alloc::vec::Vec<CountSketchCell>,
-    /// Deprecated: use l2 (tag 12) instead.
-    #[prost(double, repeated, tag = "4")]
-    pub l2_legacy: ::prost::alloc::vec::Vec<f64>,
-    /// Deprecated: use hh_keys (tag 6) instead.
-    #[prost(message, optional, tag = "5")]
-    pub topk: ::core::option::Option<TopKState>,
-    /// Heavy-hitter candidate keys from the upstream tracker. Downstream queries
-    /// the merged Count Sketch matrix for each key to build its Top-K.
-    #[prost(string, repeated, tag = "6")]
-    pub hh_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// Packed cell encoding (canonical form):
-    ///
-    /// row index of each changed cell
-    #[prost(uint32, repeated, tag = "9")]
-    pub cell_rows: ::prost::alloc::vec::Vec<u32>,
-    /// col index of each changed cell
-    #[prost(uint32, repeated, tag = "10")]
-    pub cell_cols: ::prost::alloc::vec::Vec<u32>,
-    /// signed integer count delta
-    #[prost(sint64, repeated, tag = "11")]
-    pub d_counts: ::prost::alloc::vec::Vec<i64>,
-    /// per-row L2 norm deltas
-    #[prost(double, repeated, tag = "12")]
-    pub l2: ::prost::alloc::vec::Vec<f64>,
-}
-/// CountSketchCell is the deprecated per-cell delta record. Producers emit the
-/// packed cell arrays on CountSketchDelta instead; this message exists only to
-/// decode payloads from older producers.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct CountSketchCell {
-    #[prost(uint32, tag = "1")]
-    pub row: u32,
-    #[prost(uint32, tag = "2")]
-    pub col: u32,
-    /// deprecated: use CountSketchDelta.d_counts
-    #[prost(double, tag = "3")]
-    pub d_count: f64,
-}
 /// HyperLogLogState is the state of one HyperLogLog cell.
 /// num_registers = 2^precision; variant selects the estimator.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -760,7 +696,7 @@ pub struct SketchEnvelope {
     #[prost(double, tag = "4")]
     pub sample_p: f64,
     /// The sketch payload. Exactly one field must be set.
-    #[prost(oneof = "sketch_envelope::SketchState", tags = "11, 14, 15, 16, 17, 18")]
+    #[prost(oneof = "sketch_envelope::SketchState", tags = "14, 15, 16, 17, 18")]
     pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
 }
 /// Nested message and enum types in `SketchEnvelope`.
@@ -768,8 +704,6 @@ pub mod sketch_envelope {
     /// The sketch payload. Exactly one field must be set.
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum SketchState {
-        #[prost(message, tag = "11")]
-        CountSketch(super::CountSketchState),
         #[prost(message, tag = "14")]
         Ddsketch(super::DdSketchState),
         #[prost(message, tag = "15")]
