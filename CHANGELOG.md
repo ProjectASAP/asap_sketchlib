@@ -102,8 +102,10 @@ signals a backwards-compatible change.
   `with_seed`, `merge_refs` and `aggregate_hydrakll`; the proto file
   `hydra/hydra.proto` with `HydraState`, `HydraCell` and `HydraCounterType`
   (and their generated `proto::sketchlib` types); and `SketchEnvelope`'s
-  `hydra` field (16, now reserved). A matrix of KLLs keyed by string is
-  `Hydra` with a one-column schema and `HydraCounter::KLL`.
+  `hydra` field (16, now reserved). The nearest replacement is `Hydra` with a
+  one-column schema and `HydraCounter::KLL`, but it routes `label:value`
+  subkeys through the matrix hash at `HYDRA_SEED`, not `xxh32(key, row) %
+  cols`, so `HydraKllSketch` cells do not map onto the new grid.
 
 ### Fixed
 
