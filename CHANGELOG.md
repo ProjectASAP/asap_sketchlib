@@ -66,6 +66,9 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **An ASAPv1 golden fixture for CSHeap** (`0x0a 0x00`),
+  `csheap_i64_regular_2x4_strkeys`: the Count Sketch 2x4 signed matrix with a
+  string-keyed heap at `k = 5`, pinned in `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -87,6 +90,19 @@ signals a backwards-compatible change.
   is retained; `TumblingWindow::insert` closes a period that saw no arrivals
   as an empty window like any other, and that window takes a place in
   `max_windows`.
+
+### Removed
+
+- **The portable Count-Sketch-with-heap type.** `CountSketchWithHeap` and
+  `CsHeapItem` (crate root) and the module
+  `message_pack_format::portable::countsketch_topk` with `WireHeapItem`,
+  `SketchlibCSHeap`, `new_sketchlib_cs_heap`,
+  `sketchlib_cs_heap_from_matrix_and_heap`, `matrix_from_sketchlib_cs_heap`,
+  `heap_to_wire`, `sketchlib_cs_heap_update`, `sketchlib_cs_heap_query`,
+  `CountSketchInnerWire` and `CountSketchWithHeapWire`. Its MessagePack
+  `{sketch, topk_heap, heap_size}` encoding is gone with it; `CSHeap` encodes
+  and decodes ASAPv1 only, through `serialize_to_bytes` /
+  `deserialize_from_bytes`.
 
 ### Fixed
 

@@ -9,8 +9,8 @@
 //! See `asapv1_golden/README.md`.
 
 use asap_sketchlib::{
-    Classic, Count, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12,
-    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
+    CSHeap, Classic, Count, CountMin, DataInput, ErtlMLE, FastPath, HllSketch, HllVariant,
+    HyperLogLogHIPP12, HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -30,6 +30,7 @@ const GOLDEN_CMS_F64: &str = include_str!("../asapv1_golden/cms_f64_fast_2x3.hex
 const GOLDEN_CS_REGULAR: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4.hex");
 const GOLDEN_CS_FAST: &str = include_str!("../asapv1_golden/cs_i64_fast_2x4.hex");
 const GOLDEN_CS_I32: &str = include_str!("../asapv1_golden/cs_i32_regular_2x4.hex");
+const GOLDEN_CS_HEAP: &str = include_str!("../asapv1_golden/csheap_i64_regular_2x4_strkeys.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
 
@@ -239,6 +240,59 @@ fn cs_i32_regular_2x4_matches_golden() {
     assert!(
         Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&want).is_err(),
         "the i32 golden must not decode as an i64 sketch"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CSHeap: the Count Sketch matrix above plus a heap whose entries are seated
+// directly, never by inserting through the sketch.
+// ---------------------------------------------------------------------------
+
+/// Heap entries of the CSHeap fixture, in seating order. The counts span
+/// uint64, a positive fixint tie (ordered by key on the wire) and a negative
+/// int8; a CSHeap heap count is a signed median and may be negative.
+const CS_HEAP_ENTRIES: [(&str, i64); 4] = [
+    ("gamma", -33),
+    ("delta", 127),
+    ("alpha", 4_294_967_296),
+    ("beta", 127),
+];
+const CS_HEAP_K: usize = 5;
+
+#[test]
+fn csheap_i64_regular_2x4_strkeys_matches_golden() {
+    let want = decode_hex(GOLDEN_CS_HEAP);
+
+    let mut sketch = CSHeap::<Vector2D<i64>, RegularPath>::from_storage(
+        Vector2D::from_fn(2, 4, |r, c| CS_VALS[r][c]),
+        CS_HEAP_K,
+    );
+    for (key, count) in CS_HEAP_ENTRIES {
+        sketch.heap_mut().update(&DataInput::Str(key), count);
+    }
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "CSHeap i64/regular bytes diverge from golden");
+
+    let decoded =
+        CSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    assert_eq!((decoded.rows(), decoded.cols()), (2, 4));
+    assert_eq!(decoded.heap().capacity(), CS_HEAP_K);
+    assert_eq!(decoded.heap().len(), CS_HEAP_ENTRIES.len());
+    for (key, count) in CS_HEAP_ENTRIES {
+        let seat = decoded
+            .heap()
+            .find(&DataInput::Str(key))
+            .unwrap_or_else(|| panic!("heap key {key:?} missing after decode"));
+        assert_eq!(decoded.heap().heap()[seat].count, count, "heap key {key:?}");
+    }
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    // A CSHeap golden is not a Count Sketch envelope.
+    assert!(
+        Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&want).is_err(),
+        "the CSHeap golden must not decode as a plain Count Sketch"
     );
 }
 
