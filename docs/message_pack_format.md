@@ -162,7 +162,8 @@ byte-vector fixtures are the drift guard on both sides.
 ## Cross-language parity
 
 ASAPv1 parity with `sketchlib-go` is proven by **golden byte-vectors** in
-[`asapv1_golden/`](../asapv1_golden) (exercised by
+[`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), mounted as the
+submodule `asapv1_golden/` (exercised by
 [`tests/asapv1_golden.rs`](../tests/asapv1_golden.rs)): both languages must
 decode → re-encode them byte-identically. The `kind_id` registry is mirrored
 verbatim with Go's `wire/asapmsgpack/magic_ids.go`, never independently
@@ -171,7 +172,7 @@ allocated.
 That proof covers the six `kind_id`s a fixture exists for — HLL's three
 estimators, Count-Min, Count Sketch and compact KLL. Every other implemented
 kind has **no ASAPv1 golden and therefore no ASAPv1 drift guard**;
-[`asapv1_golden/README.md`](../asapv1_golden/README.md) lists what is covered.
+[its README](https://github.com/ProjectASAP/sketchlib-golden-bytes#coverage) lists what is covered.
 The older `portable` path is guarded separately, by the `sketchlib-go` goldens
 of its own listed above.
 

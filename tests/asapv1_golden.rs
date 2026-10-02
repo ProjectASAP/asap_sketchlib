@@ -2,10 +2,9 @@
 //!
 //! Each fixture is built from a fixed, KNOWN raw sketch state (register bytes /
 //! matrix values set directly, never hashed) and asserted to serialize to the
-//! exact bytes checked into `asapv1_golden/*.hex`. The same `.hex` files live
-//! byte-identically in `sketchlib-go/asapv1_golden/`, where the Go test suite
-//! proves its encoder emits the same bytes. Together they machine-prove the Rust
-//! and Go ASAPv1 wire encodings are byte-identical for these configs.
+//! exact bytes in `asapv1_golden/*.hex`. That directory is a git submodule of
+//! <https://github.com/ProjectASAP/sketchlib-golden-bytes>, the fixtures every ASAPv1 implementation
+//! must reproduce.
 //!
 //! See `asapv1_golden/README.md`.
 
