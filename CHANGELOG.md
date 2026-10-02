@@ -88,6 +88,14 @@ signals a backwards-compatible change.
   as an empty window like any other, and that window takes a place in
   `max_windows`.
 
+### Removed
+
+- **Coco's protobuf format.** `proto/cocosketch/cocosketch.proto` and the
+  generated `asap_sketchlib::proto::sketchlib::CocoSketchState` are gone, and
+  the `SketchEnvelope` oneof field `coco` (17) is reserved, so
+  `sketch_envelope::SketchState::Coco` is gone too. Coco serializes only as
+  ASAPv1 (`Coco::serialize_to_bytes` / `deserialize_from_bytes`).
+
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
