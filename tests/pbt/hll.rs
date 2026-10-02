@@ -442,11 +442,9 @@ macro_rules! hip_laws {
             const M: usize = <$buckets>::NUM_REGISTERS;
             const P: u32 = <$buckets>::PRECISION as u32;
 
-            /// The registers, read back out of the ASAPv1 payload. The struct
-            /// holds them privately behind the `kxq0`/`kxq1` accumulators, and
-            /// those accumulators are what the increment law checks, so the
-            /// envelope is the one view of the registers that stays independent
-            /// of it.
+            /// The registers, read out of the ASAPv1 payload: the struct keeps
+            /// them private, and this view is independent of the `kxq0`/`kxq1`
+            /// accumulators the increment law checks.
             fn registers_of(sketch: &S) -> Vec<u8> {
                 let bytes = sketch.serialize_to_bytes().expect("encode");
                 let lengths_at = 8 + bytes[7] as usize;

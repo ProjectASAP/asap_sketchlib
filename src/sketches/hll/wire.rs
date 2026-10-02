@@ -36,25 +36,25 @@ impl HllWireVariant for ErtlMLE {
 /// positional). `registers` is a msgpack `bin` (one byte per register, matching
 /// Go's `[]byte`) via `serde_bytes` rather than serde's default `array<u8>`.
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct HllPayloadPlain {
+struct HllPayloadPlain {
     #[serde(with = "serde_bytes")]
-    pub(crate) registers: Vec<u8>,
+    registers: Vec<u8>,
 }
 
 /// HIP payload: the register bin plus the three HIP running scalars.
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct HllPayloadHip {
+struct HllPayloadHip {
     #[serde(with = "serde_bytes")]
-    pub(crate) registers: Vec<u8>,
-    pub(crate) hip_kxq0: f64,
-    pub(crate) hip_kxq1: f64,
-    pub(crate) hip_est: f64,
+    registers: Vec<u8>,
+    hip_kxq0: f64,
+    hip_kxq1: f64,
+    hip_est: f64,
 }
 
 const HLL_KIND_FAMILY: u8 = 0x01;
-pub(crate) const HLL_KIND_CLASSIC: &[u8] = &[HLL_KIND_FAMILY, 0x01];
-pub(crate) const HLL_KIND_ERTL_MLE: &[u8] = &[HLL_KIND_FAMILY, 0x02];
-pub(crate) const HLL_KIND_HIP: &[u8] = &[HLL_KIND_FAMILY, 0x03];
+const HLL_KIND_CLASSIC: &[u8] = &[HLL_KIND_FAMILY, 0x01];
+const HLL_KIND_ERTL_MLE: &[u8] = &[HLL_KIND_FAMILY, 0x02];
+const HLL_KIND_HIP: &[u8] = &[HLL_KIND_FAMILY, 0x03];
 
 /// Descriptor metadata for an HLL sketch (ASAPv1 §2), serialized as a msgpack
 /// **map** (`to_vec_named`) with keys in this declaration order — the canonical
@@ -64,21 +64,21 @@ pub(crate) const HLL_KIND_HIP: &[u8] = &[HLL_KIND_FAMILY, 0x03];
 /// decode fail closed on any unexpected key rather than silently dropping it.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct HllMetadata {
-    pub(crate) metadata_version: u8,
-    pub(crate) hash_profile_id: String,
-    pub(crate) hash_algorithm: String,
-    pub(crate) seed_derivation: String,
-    pub(crate) input_encoding: String,
-    pub(crate) seed_list: Vec<u64>,
-    pub(crate) canonical_seed_index: u32,
-    pub(crate) precision: u32,
+struct HllMetadata {
+    metadata_version: u8,
+    hash_profile_id: String,
+    hash_algorithm: String,
+    seed_derivation: String,
+    input_encoding: String,
+    seed_list: Vec<u64>,
+    canonical_seed_index: u32,
+    precision: u32,
 }
 
 /// Builds the HLL descriptor metadata from the hasher's [`HashProfile`], so the
 /// wire bytes truthfully describe how the sketch was hashed (rather than
 /// hardcoding the standard profile).
-pub(crate) fn hll_metadata<H: HashProfile>(precision: u32) -> HllMetadata {
+fn hll_metadata<H: HashProfile>(precision: u32) -> HllMetadata {
     HllMetadata {
         metadata_version: 1,
         hash_profile_id: H::PROFILE_ID.to_string(),
