@@ -1542,6 +1542,8 @@ impl UnivMonQ<DefaultXxHasher> {
     }
 }
 
+// `try_update` is not available at the 1.85 MSRV.
+#[allow(deprecated)]
 fn allocate_source_id() -> u64 {
     NEXT_SOURCE_ID
         .fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |value| {

@@ -197,6 +197,12 @@ If you are evaluating the crate for production use, start with the API index fir
 
 ## Dev Commands
 
+The ASAPv1 golden fixtures are a git submodule at `asapv1_golden/`, which `cargo test` needs. Clone with `--recursive`, or fetch it in an existing checkout:
+
+```bash
+git submodule update --init
+```
+
 ```bash
 cargo build --all-targets
 cargo test --all-features

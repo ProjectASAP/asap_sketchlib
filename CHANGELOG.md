@@ -69,6 +69,11 @@ signals a backwards-compatible change.
 
 ### Changed
 
+- **The ASAPv1 golden fixtures live in their own repo**,
+  [`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), mounted
+  as the git submodule `asapv1_golden/`. The bytes are unchanged. `cargo test`
+  needs the submodule: clone with `--recursive` or run
+  `git submodule update --init`.
 - `HyperLogLog`'s classic estimator body is now a shared function that
   `CountMinHll` also uses, so the two cannot drift. HyperLogLog's own numbers
   are unchanged.

@@ -554,7 +554,6 @@ impl UnivMon {
 mod tests {
     use super::*;
     use crate::{DataInput, HeapItem};
-    use core::f64;
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use std::collections::HashMap;
 

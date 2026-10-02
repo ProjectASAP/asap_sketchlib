@@ -1,0 +1,3 @@
+[submodule "asapv1_golden"]
+	path = asapv1_golden
+	url = https://github.com/ProjectASAP/sketchlib-golden-bytes.git

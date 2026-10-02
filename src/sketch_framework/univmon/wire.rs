@@ -482,7 +482,7 @@ pub(crate) fn rebuild_layers(
     let mut cells = 0usize;
     let mut accumulators = 0usize;
     for &(rows, cols) in geometry {
-        l2hh_wire::check_dimensions(rows, cols).map_err(&complain)?;
+        l2hh_wire::check_dimensions(rows, cols).map_err(complain)?;
         cells = cells
             .checked_add(rows.checked_mul(cols).ok_or_else(|| {
                 complain(format!("UnivMon layer geometry {rows}x{cols} overflows"))
