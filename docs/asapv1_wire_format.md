@@ -241,6 +241,7 @@ This registry is the master list of algorithms still to design payloads for, and
 
 > Implementation note: the shared envelope module (`src/message_pack_format/envelope.rs`) owns rules 1-3 and the byte framing (`encode` / `split`); it is sketch-agnostic and does not know the registry.
 > Rule 4 (and metadata/kind_id validation) happens in each sketch's decoder, which checks the `kind_id` against the ones it owns.
+> `peek_kind_id` checks only rules 1-3 and that `kind_id`, both length fields, and the `metadata_len + payload_len` bytes after them lie inside the buffer, then returns the `kind_id` bytes and ignores bytes after the payload; otherwise it fails.
 
 ---
 
