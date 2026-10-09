@@ -311,7 +311,7 @@ These two are the only seed-index keys, because `HashProfile` declares exactly t
 | `rows` | u32 | Count-Min, Count Sketch, CMSHeap, CSHeap, Bloom, Coco, CountL2HH, Hydra | matrix depth; for Bloom the number of slices; for Coco the arrays an insert scans; for Hydra the grid depth |
 | `cols` | u32 | Count-Min, Count Sketch, CMSHeap, CSHeap, Bloom, Coco, CountL2HH, Hydra | matrix width; for Bloom the bits per slice; for Coco the buckets per array; for Hydra the grid width |
 | `counter_type` | string | Count-Min, CMSHeap | `"i32"`, `"i64"` or `"f64"`; element type of `counts`, never widened |
-| `counter_type` | string | Count Sketch, CSHeap | `"i32"` or `"i64"`; signed cells, never widened |
+| `counter_type` | string | Count Sketch, CSHeap | `"i32"`, `"i64"` or `"f64"`; signed cells, never widened |
 | `counter_type` | string | UnivMon-Q | `"i32"` or `"i64"`; signed cells. Names a **runtime** counter width rather than a Rust type parameter, so it is echoed back rather than pinned and a relabel between the two widths decodes (§3.20, rule 2) |
 | `counter_type` | string | Hydra (`0x07 0x01` / `0x07 0x02`) | `"i32"`; the **cell's** element type, not the grid's. Pinned, since the kind_id fixes the counter variant (§3.9) |
 | `mode` | string | Count-Min, CMSHeap, Bloom | `"fast"` or `"regular"`; the key-to-column derivation |
@@ -621,7 +621,7 @@ Same shape as Count-Min (§3.2): the matrix dimensions (`rows` / `cols`), the **
 
 The payload is a **1-element positional array `[counts]`**.
 
-Wire counter types are **`"i32"` and `"i64"`**. The reason `f64` is absent is not that it fails a bound — it is signed, negatable and satisfies every `CountSketchCounter` requirement — but that **no `impl CountSketchCounter for f64` exists**: the trait is implemented for `i32`, `i64` and `i128` and for nothing else, so Count-Min's `f64` has no Count Sketch counterpart to serialize in the first place. Of the three that do exist, `i128` has no msgpack integer form (the same line Count-Min draws), leaving the two the wire covers. Non-`Vector2D` storage must be converted first; see Section 5, "Converting an exotic in-memory sketch".
+Wire counter types are Count-Min's: **`"i32"`, `"i64"` and `"f64"`** (§3.2). A counter type outside that set, or non-`Vector2D` storage, must be converted first; see Section 5, "Converting an exotic in-memory sketch".
 
 **`i32` is carried at its own width, not widened to `i64`**, exactly as Count-Min's is (§3.2). The `Vector2D<i32>` variants of `HydraCounter` and `EHSketchList` are *nested* sketches, decoded back into the enum variant they were stored as, so the width is part of the identity; the decoder pins it, and `i32` bytes do not decode into an `i64` sketch, or the reverse.
 
@@ -636,7 +636,7 @@ metadata_version, hash_profile_id, hash_algorithm, seed_derivation, input_encodi
 seed_list, matrix_seed_index, rows, cols, counter_type, mode
 ```
 
-This is Count-Min's list exactly (§3.2, Q-CMS-DIMS), key for key and in the same order; only the `counter_type` domain differs.
+This is Count-Min's list exactly (§3.2, Q-CMS-DIMS), key for key and in the same order.
 
 **Decode rules** (all fail closed, per Section 1's decoder rules):
 
@@ -797,7 +797,7 @@ Rules 3 and 4 are enforced on the **encode** side too, along with a grid whose d
 
 ### 3.10: CSHeap payload (`0x0a 0x00`)
 
-`CSHeap` is a Count Sketch (§3.6) paired with an `HHHeap`, and its payload is §3.7's with the Count Sketch counter domain:
+`CSHeap` is a Count Sketch (§3.6) paired with an `HHHeap`, and its payload is §3.7's:
 
 | Pos | Field | Type | Notes |
 | ----- | ------- | ------ | ------- |
@@ -812,16 +812,15 @@ metadata_version, hash_profile_id, hash_algorithm, seed_derivation, input_encodi
 seed_list, matrix_seed_index, rows, cols, counter_type, mode, k, key_type
 ```
 
-Wire counter types are the base Count Sketch's: **`"i32"` and `"i64"`** (§3.6, Q-CS). `CountSketchCounter` is implemented for `i32`, `i64` and `i128` and for nothing else, so Count-Min's `"f64"` has no counterpart here to serialize, and `i128` has no msgpack integer form. `i32` is carried at its own width and the decoder pins it: i32 bytes do not decode into an i64 sketch, or the reverse.
+Wire counter types are the base Count Sketch's: **`"i32"`, `"i64"` and `"f64"`** (§3.6, Q-CS). `i32` is carried at its own width and the decoder pins it: i32 bytes do not decode into an i64 sketch, or the reverse.
 
-**Both signed columns.** Cells carry a sign, so a decoder must not assume monotonicity — and neither does `heap_counts`, which is where §3.10 diverges behaviourally from §3.7 and is the only place it does. A CSHeap entry's count is `Count::estimate` rounded, the **median of signed cells**, so it can be negative; a CMSHeap entry's is a minimum over counters the sketch only ever increments, so it is not. The `heap_counts` array is `i64` in both, and Go must model it signed in both, but only a CSHeap ever puts a negative number there.
+**Both signed columns.** Cells carry a sign, so a decoder must not assume monotonicity — and neither does `heap_counts`, which is where §3.10 diverges behaviourally from §3.7 and is the only place it does. A CSHeap entry's count is `Count::estimate`, the **median of signed cells**, truncated toward zero, saturating at the `i64` bounds and `NaN` as `0`, so it can be negative; a CMSHeap entry's is a minimum over counters the sketch only ever increments, so it is not. The `heap_counts` array is `i64` in both, and Go must model it signed in both, but only a CSHeap ever puts a negative number there.
 
 **Emitted order (cross-language contract).** §3.7's, unchanged: `counts` row-major, then heap entries in descending count with ties broken by the total order over the key.
 
-**Decode rules.** §3.7's rules 2 through 8 apply verbatim, with two differences:
+**Decode rules.** §3.7's rules 2 through 8 apply verbatim, with one difference:
 
 1. `kind_id` is `0x0a 0x00`; any other id is rejected — including `0x04 0x00` (a plain Count Sketch) and `0x03 0x00` (a CMSHeap).
-2. `"f64"` is not a CSHeap `counter_type` and decodes into neither wire-eligible type.
 
 The same encode-side checks apply — the wire-representation duplicate-key check and the `cols` `u32` bound included — so the format never emits bytes it would refuse to read back. §3.7's `NaN` producer-side constraint holds here too: a heap holding the same `NaN` twice is reachable in memory and has no encoding.
 
@@ -1434,8 +1433,7 @@ Fail **closed** on any mismatch:
 2. Every hash-spec field matches the **target hasher's** `HashProfile`: decode compares the read metadata against the block that type's own metadata builder produces (`hll_metadata::<H>`, `cms_metadata::<H>`, and one per kind) for the exact type being decoded into, so it does not merely accept the standard profile. Bytes carrying a different profile are rejected. A sketch with no hasher type parameter compares against `DefaultXxHasher`'s profile, read live.
 3. Structural params are consistent with `kind_id` and the payload. Each kind's full list is in its Section 3 subsection; the recurring shapes are:
    - HLL: `registers.len() == 2^precision ==` the target storage's register count.
-   - Count-Min: `counts` element type matches `counter_type` (`"i32"`/`"i64"`/`"f64"`, never widened); `counts.len() == rows*cols`.
-   - Count Sketch: `counts` element type matches `counter_type` (`"i32"`/`"i64"`, never widened); `counts.len() == rows*cols`.
+   - Count-Min, Count Sketch: `counts` element type matches `counter_type` (`"i32"`/`"i64"`/`"f64"`, never widened); `counts.len() == rows*cols`.
    - Every declared dimension is checked for zero and for overflow **before** it sizes anything, and every parallel array is measured against the declared geometry **before** an allocation. A declared capacity never sizes an allocation.
 4. A nested sketch's blocks are validated by that sketch's own decoder, so every rule above applies inside a Hydra cell (§3.9), a UnivMon layer (§3.15) and an EHSketchList triple (§3.18) exactly as it does at the top level.
 
@@ -1489,7 +1487,7 @@ Retire `portable` once the fixtures cover the rest.
 - **Q-CMS**: Count-Min is one `kind_id` (`0x02 0x00`); counter type and mode live in the metadata, so the id stays single. The counter-type domain is `"i32"`, `"i64"` and `"f64"`, with no `i128` (no msgpack integer form); `i32` is recorded at its own width and pinned on decode.
 - **Q-KLL**: KLL metadata carries **no hash-spec group** — KLL is comparison-based and never hashes, so those fields have no truthful value. Its metadata is structural-only (`metadata_version`, `k`, `m`, `item_type`, optional `seed`) and is *not* `HashProfile`-derived. The two KLL variants (compact `0x06 0x00`, dynamic `0x06 0x01`) share one payload `[levels, items, coin]` and differ only by `kind_id`. `item_type` (`"f64"`/`"i64"`) is a metadata param, not a separate `kind_id` (mirrors Q-CMS's `counter_type`). Retained samples use the top-most-level-first layout that matches `sketchlib-go`'s `KLLState`.
 - **Q-KLL-SEED**: KLL records its reproducible compaction `seed` as an **optional** metadata key. It is construction config (so metadata, not payload, per the config→metadata rule), and it is an optional key: present only when the sketch carries a seed, omitted otherwise. Rationale: the payload's `coin` already carries the RNG's *current* position (enough to resume compaction), but `seed` is what a later `clear()` re-seeds from — so serializing it lets a decoded sketch keep `clear()`-reproducibility instead of falling back to wall-clock. Cost of omitting it is bounded (only a decoded-then-`clear()`ed sketch loses cross-run byte reproducibility — never correctness), but it is cheap to carry and future-proofs the checkpoint/restore path. `KLLDynamic` has no seed concept and never emits the key; the two variants are deliberately **not** forced to be symmetric here. Go carries and preserves the key without interpreting it.
-- **Q-CS**: Count Sketch is one `kind_id` (`0x04 0x00`) and mirrors Count-Min's metadata and `[counts]` payload, including `counter_type`. Its type domain differs: `"i32"` and `"i64"`, with no `"f64"` — not because a float fails a bound, but because **no `CountSketchCounter` impl exists for it**: the trait covers `i32`, `i64` and `i128` and nothing else, so Count-Min's `f64` has no Count Sketch counterpart to serialize — and no `i128` (no msgpack integer form), which leaves the two `CsWireCounter` covers. Structural-param order matches Q-CMS: `... matrix_seed_index, rows, cols, counter_type, mode`. **`i32` is not widened to `i64`** — unlike Count-Min, whose counters are plain numbers, a Count Sketch appears *nested* inside `HydraCounter` and `EHSketchList` as `Vector2D<i32>` and must decode back into that variant, so the width is identity and is recorded exactly. Cells are signed, so a decoder must not assume monotonicity.
+- **Q-CS**: Count Sketch is one `kind_id` (`0x04 0x00`) and mirrors Count-Min's metadata and `[counts]` payload, including `counter_type`. Structural-param order matches Q-CMS: `... matrix_seed_index, rows, cols, counter_type, mode`. **`i32` is not widened to `i64`** — a Count Sketch appears *nested* inside `HydraCounter` and `EHSketchList` as `Vector2D<i32>` and must decode back into that variant, so the width is identity and is recorded exactly. Cells are signed, so a decoder must not assume monotonicity.
 - **Q-CMS-DIMS**: Count-Min `rows`/`cols` are **metadata** and the payload omits them. They are configuration that shapes the payload (like HLL's `precision`), so per the config-to-metadata rule they belong in the descriptor. The payload is then just `[counts]`. Canonical structural-param order: `... matrix_seed_index, rows, cols, counter_type, mode`.
 - **Q-VER**: no payload version field. A new incompatible encoding gets a **new `kind_id`**; retired ids are reserved forever and never recycled.
 - **Q-NEST**: a nested sketch's state is **inlined**, never wrapped in an envelope of its own. By the time a decoder reaches the payload it has read `kind_id` and the metadata, and together those fix the shape completely, so a nested envelope would repeat a magic sentinel, a version, an id, two length prefixes and a metadata map the outer one already carries — and would create a second place for the same fact to live, which a decoder would then have to cross-check. This governs CMSHeap's and CSHeap's base matrix (§3.7, §3.10), Elastic's light Count-Min (§3.11), Hydra's counter cells (§3.9) and UnivMon's `CountL2HH` layers (§3.15).
