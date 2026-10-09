@@ -655,7 +655,7 @@ Rules 3 and 4 are enforced on the **encode** side too: a matrix past `MATRIX_MAX
 | ----- | ------- | ------ | ------- |
 | 0 | `counts` | array | the Count-Min matrix, packed **row-major**, `rows*cols` cells; element type = `counter_type` |
 | 1 | `keys` | array | one key per heap entry; element type = `key_type`; homogeneous |
-| 2 | `heap_counts` | array | i64 count, parallel to `keys` |
+| 2 | `heap_counts` | array | parallel to `keys`; `f64` when `counter_type` is `"f64"`, else `i64` |
 
 **The heap's index does not reach the wire.** `HHHeap` is a capacity-bounded min-heap beside a digest-to-position index; `slots` and `positions` are `#[serde(skip)]` in the type itself and are rebuilt from the entries on load, so the payload carries the entries only — the same argument §3.5 makes for Space-Saving's arenas, with the same benefit: with no index on the wire, no crafted payload can point one out of bounds or into a cycle. The entry count is `len(keys)` (derived, so not stored), and the heap's array order and its `is_full` state are recomputed.
 
@@ -669,6 +669,8 @@ seed_list, matrix_seed_index, rows, cols, counter_type, mode, k, key_type
 `rows` / `cols` / `counter_type` / `mode` are exactly Count-Min's (§3.2, Q-CMS-DIMS), in exactly Count-Min's order; `k` and `key_type` are the heap's and follow them. `k` is the heap's one sizing parameter, chosen at construction (`HHHeap::new(k)`), so per the config-to-metadata rule it is a descriptor field, like `capacity` in §3.5. It is a `u32`; a heap whose `k` exceeds that fails the encode rather than emitting a capacity no decode would accept.
 
 Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `mode` records `RegularPath` vs `FastPath` because they place a key in different columns. A counter type outside that set, or non-`Vector2D` storage, must be converted first (Section 5).
+
+**Heap counts.** Under `"f64"` an entry's count is the base sketch's estimate when the heap last updated it, not rounded, and the emitted order compares counts by `f64::total_cmp`. A decoder accepts any `f64` heap count, `NaN` and the infinities included.
 
 **`key_type` names the exact key variant, and is never widened.** This is §3.5's rule, and the fourteen names and their `HeapItem` variants are the table there. A heap whose keys are of different variants has no single `key_type` and **fails to serialize** with an error naming the mismatch; `HeapItem::I128` / `U128` have no msgpack integer form and are not wire types. An empty heap has no variant to report: it emits `key_type = "u64"` with two empty arrays, so an empty heap has exactly one encoding rather than one per producer.
 
@@ -803,7 +805,7 @@ Rules 3 and 4 are enforced on the **encode** side too, along with a grid whose d
 | ----- | ------- | ------ | ------- |
 | 0 | `counts` | array | the Count Sketch matrix, packed **row-major**, `rows*cols` cells; element type = `counter_type`, **signed** |
 | 1 | `keys` | array | heap keys; element type = `key_type`; homogeneous (§3.7) |
-| 2 | `heap_counts` | array | i64 heap count, parallel to `keys` (§3.7) |
+| 2 | `heap_counts` | array | parallel to `keys`, §3.7's `heap_counts` |
 
 **Metadata vs payload.** One schema serves both top-k sketches, with §3.7's canonical key order:
 
@@ -814,7 +816,7 @@ seed_list, matrix_seed_index, rows, cols, counter_type, mode, k, key_type
 
 Wire counter types are the base Count Sketch's: **`"i32"`, `"i64"` and `"f64"`** (§3.6, Q-CS). `i32` is carried at its own width and the decoder pins it: i32 bytes do not decode into an i64 sketch, or the reverse.
 
-**Both signed columns.** Cells carry a sign, so a decoder must not assume monotonicity — and neither does `heap_counts`, which is where §3.10 diverges behaviourally from §3.7 and is the only place it does. A CSHeap entry's count is `Count::estimate`, the **median of signed cells**, truncated toward zero, saturating at the `i64` bounds and `NaN` as `0`, so it can be negative; a CMSHeap entry's is a minimum over counters the sketch only ever increments, so it is not. The `heap_counts` array is `i64` in both, and Go must model it signed in both, but only a CSHeap ever puts a negative number there.
+**Both signed columns.** Cells and heap counts carry a sign, so a decoder must not assume monotonicity. A CSHeap entry's count is `Count::estimate`, the **median of signed cells**: under `"i32"` and `"i64"` truncated toward zero and saturating at the `i64` bounds, under `"f64"` not rounded (§3.7).
 
 **Emitted order (cross-language contract).** §3.7's, unchanged: `counts` row-major, then heap entries in descending count with ties broken by the total order over the key.
 
@@ -1407,7 +1409,7 @@ Golden byte-vectors lock it.
 - `light_counts` (§3.11) is Elastic's inlined light Count-Min, `i32` integers, fixed by `light_counter_type`.
 - `deltas` / `negative_deltas` (§3.23) take the element type of the cells they add to.
 
-*Other arrays, by name.* `words` (§3.4) is Bloom's bit grid as unsigned 64-bit integers, one per packed word. `hashes` (§3.14) is KMV's retained digests as unsigned integers — a digest above `2^63` is still `uint`, never the `int` family. `l2` (§3.19, §3.15, §3.16) is one `i64` accumulator per row. `indices` (§3.23) are unsigned integers, except DDSketch's `indices` / `negative_indices`, which are signed bucket indices. `heap_counts` (§3.7, §3.10, §3.15, §3.16, §3.23) is `i64` and may be negative for a CSHeap. `levels` and `coin` (§3.3) are integer arrays; `heap_lens` and `candidate_lens` are `u32` counts; `sizes` / `min_times` / `max_times` (§3.17), `priorities` (§3.13), `values` (§3.12), `candidate_keys` / `candidate_scores` / `occurrence_keys` / `occurrence_priority_high` / `occurrence_priority_low` (§3.20) are all unsigned integers; `vote_pos` / `vote_neg` (§3.11) are `i32`.
+*Other arrays, by name.* `words` (§3.4) is Bloom's bit grid as unsigned 64-bit integers, one per packed word. `hashes` (§3.14) is KMV's retained digests as unsigned integers — a digest above `2^63` is still `uint`, never the `int` family. `l2` (§3.19, §3.15, §3.16) is one `i64` accumulator per row. `indices` (§3.23) are unsigned integers, except DDSketch's `indices` / `negative_indices`, which are signed bucket indices. `heap_counts` is `i64`, or float64 in §3.7, §3.10 and §3.23 when `counter_type` reads `"f64"`. `levels` and `coin` (§3.3) are integer arrays; `heap_lens` and `candidate_lens` are `u32` counts; `sizes` / `min_times` / `max_times` (§3.17), `priorities` (§3.13), `values` (§3.12), `candidate_keys` / `candidate_scores` / `occurrence_keys` / `occurrence_priority_high` / `occurrence_priority_low` (§3.20) are all unsigned integers; `vote_pos` / `vote_neg` (§3.11) are `i32`.
 
 *Key and item arrays.* `keys` and `items` take the element type the metadata names — `key_type` for the `HeapItem` keys of §3.5, §3.7, §3.10, §3.15, §3.16, §3.23 and Hydra's `counter_key_type` (§3.9), per §3.5's table; `item_type` for KLL's `items` (§3.3). Four payloads name no such key and are fixed by their kind_id instead: Coco's `keys` (§3.12) and Elastic's `flow_ids` (§3.11) are nil-or-`str`, SetAggregator's `values` (§3.21) and DeltaResult's `added` / `removed` (§3.22) are `str`, and Coco's `values` are unsigned integers. UniformSampling's `values` (§3.13) is float64, which is what its `item_type` names.
 
