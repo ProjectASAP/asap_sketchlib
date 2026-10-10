@@ -1455,7 +1455,7 @@ Fail **closed** on any mismatch:
 
 The library provides no free wire serialization for exotic counters; only the owner knows if the mapping is lossless.
 Convert to a canonical counter type, then serialize.
-Doable **today** with existing public API (the pattern `SketchlibCms` already uses):
+Doable **today** with existing public API:
 
 ```rust
 // e.g. a u64-counter FastPath CMS to the i64 wire form
