@@ -3,9 +3,7 @@
 //! `KllSketch` is a thin facade over the pure-Rust [`crate::sketches::kll::KLL`]
 //! (parity already locked in by the existing
 //! `test_update_then_envelope_matches_sketchlib_go_bytes` in this file
-//! against `sketchlib-go::KLLSketch.SerializePortable`). The wire shape
-//! also serves as a nested field for
-//! [`crate::message_pack_format::portable::hydra_kll`].
+//! against `sketchlib-go::KLLSketch.SerializePortable`).
 
 use serde::{Deserialize, Serialize};
 
@@ -352,8 +350,7 @@ impl KllProtoItems {
 
 // ----- Wire format -----
 
-/// Wire DTO for [`KllSketch`]. Also referenced as a nested field by
-/// [`crate::message_pack_format::portable::hydra_kll::HydraKllSketchWire`].
+/// Wire DTO for [`KllSketch`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KllSketchData {
     pub k: u16,
