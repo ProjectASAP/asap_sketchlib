@@ -819,6 +819,8 @@ Test file: [`src/sketch_framework/hashlayer.rs`](../src/sketch_framework/hashlay
 | `test_mixed_matrix_and_hll` | Mixed CMS + HLL ensemble queries. | Builds ensemble with one CMS and one `HyperLogLog<ErtlMLE>`, inserts Zipf stream, verifies CMS estimate at index `0` is positive and HLL cardinality error at index `1` is `< 0.05`. |
 | `test_push_compatible` | Push compatible sketch succeeds. | Creates single-CMS ensemble (`3x4096`), pushes a Count sketch with matching dimensions, verifies `push` returns `Ok` and `len=2`. |
 | `test_push_incompatible_rejected` | Push incompatible sketch is rejected. | Creates single-CMS ensemble (`3x4096`), pushes a Count sketch with different dimensions (`5x2048`), verifies `push` returns `Err`. |
+| `test_push_matrix_into_matrix_free_layer_rejected` | An ensemble with no matrix sketch takes none by push. | On an HLL-only ensemble (`HyperLogLog<ErtlMLE>`), verifies pushing a default CMS and a default Count each return `Err` and leave `len=1`, while pushing a `HyperLogLogHIP` returns `Ok`. |
+| `test_a_refused_push_leaves_the_hashing_alone` | A refused push does not move the hash the ensemble inserts under. | Feeds keys `0..1000` into an HLL-only ensemble through `get_mut(0)` + `insert_with_hash`, verifies the default CMS push returns `Err`, re-inserts the same 1000 keys through `insert`, and confirms the cardinality is unchanged rather than doubled. |
 
 ### UnivMon
 
