@@ -66,6 +66,8 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **ASAPv1 golden fixture for Coco** (`0c 00`): `asapv1_golden/coco_3x7.hex`,
+  a 3x7 bucket table set directly, checked by `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -87,6 +89,14 @@ signals a backwards-compatible change.
   is retained; `TumblingWindow::insert` closes a period that saw no arrivals
   as an empty window like any other, and that window takes a place in
   `max_windows`.
+
+### Removed
+
+- **Coco's protobuf format.** `proto/cocosketch/cocosketch.proto` and the
+  generated `asap_sketchlib::proto::sketchlib::CocoSketchState` are gone, and
+  the `SketchEnvelope` oneof field `coco` (17) is reserved, so
+  `sketch_envelope::SketchState::Coco` is gone too. Coco serializes only as
+  ASAPv1 (`Coco::serialize_to_bytes` / `deserialize_from_bytes`).
 
 ### Fixed
 
