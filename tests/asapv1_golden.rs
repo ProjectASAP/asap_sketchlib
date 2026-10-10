@@ -9,8 +9,8 @@
 //! See `asapv1_golden/README.md`.
 
 use asap_sketchlib::{
-    Classic, Count, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12,
-    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
+    Classic, Count, CountMin, Elastic, ErtlMLE, FastPath, HeavyBucket, HllSketch, HllVariant,
+    HyperLogLogHIPP12, HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -32,6 +32,8 @@ const GOLDEN_CS_FAST: &str = include_str!("../asapv1_golden/cs_i64_fast_2x4.hex"
 const GOLDEN_CS_I32: &str = include_str!("../asapv1_golden/cs_i32_regular_2x4.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
+const GOLDEN_ELASTIC: &str = include_str!("../asapv1_golden/elastic_4b_2x4.hex");
+const GOLDEN_ELASTIC_STALE: &str = include_str!("../asapv1_golden/elastic_4b_2x4_stale.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -286,4 +288,89 @@ fn kll_i64_k200_matches_golden() {
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
     assert_eq!(decoded.quantile(0.0), 1.0);
     assert_eq!(decoded.quantile(1.0), 50.0);
+}
+
+// ---------------------------------------------------------------------------
+// Elastic: heavy buckets and light counters set directly, never inserted.
+// The two fixtures hold the same state and differ only by `stale_copies`.
+// ---------------------------------------------------------------------------
+
+/// Heavy buckets `(flow_id, vote_pos, vote_neg, eviction)`: a free bucket with
+/// the eviction flag, a 31-byte fixstr id, an empty id and a 32-byte str8 id;
+/// the votes sweep positive fixint / uint8 / uint16 / uint32.
+const ELASTIC_HEAVY: [(&str, i32, i32, bool); 4] = [
+    ("", 0, 0, true),
+    ("10.0.0.1:443>192.168.10.20:5123", 127, 128, false),
+    ("", 1, 65535, true),
+    ("10.0.0.1:443>192.168.10.20:51234", 2147483647, 256, true),
+];
+
+/// Light layer: row 0 sweeps the unsigned widths up to `i32::MAX`, row 1 the
+/// signed widths down to `i32::MIN`.
+const ELASTIC_LIGHT: [[i32; 4]; 2] = [[0, 255, 65536, 2147483647], [-1, -33, -32768, -2147483648]];
+
+/// Sets the known heavy and light state on a 4-bucket, `2x4` sketch.
+fn elastic_known_state(mut sketch: Elastic) -> Elastic {
+    assert_eq!(sketch.heavy.len(), ELASTIC_HEAVY.len());
+    for (bucket, &(id, pos, neg, eviction)) in sketch.heavy.iter_mut().zip(&ELASTIC_HEAVY) {
+        *bucket = HeavyBucket {
+            flow_id: id.to_string(),
+            vote_pos: pos,
+            vote_neg: neg,
+            eviction,
+        };
+    }
+    sketch.light = CountMin::from_storage(Vector2D::from_fn(2, 4, |r, c| ELASTIC_LIGHT[r][c]));
+    sketch
+}
+
+fn assert_elastic_known_state(sketch: &Elastic) {
+    let buckets: Vec<(&str, i32, i32, bool)> = sketch
+        .heavy
+        .iter()
+        .map(|b| (b.flow_id.as_str(), b.vote_pos, b.vote_neg, b.eviction))
+        .collect();
+    assert_eq!(buckets, ELASTIC_HEAVY);
+    assert_eq!(sketch.bktlen, 4);
+    assert_eq!((sketch.light.rows(), sketch.light.cols()), (2, 4));
+    let flat: Vec<i32> = ELASTIC_LIGHT.iter().flatten().copied().collect();
+    assert_eq!(sketch.light.as_storage().as_slice(), flat.as_slice());
+}
+
+#[test]
+fn elastic_4b_2x4_matches_golden() {
+    let want = decode_hex(GOLDEN_ELASTIC);
+
+    let sketch = elastic_known_state(Elastic::init_with_dimensions(4, 2, 4));
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "Elastic bytes diverge from golden");
+
+    let decoded = Elastic::deserialize_from_bytes(&want).expect("decode");
+    assert_elastic_known_state(&decoded);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn elastic_4b_2x4_stale_matches_golden() {
+    let want = decode_hex(GOLDEN_ELASTIC_STALE);
+
+    let mut expanded: Elastic = Elastic::init_with_dimensions(2, 2, 4);
+    expanded.expand_heavy();
+    let sketch = elastic_known_state(expanded);
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "Elastic stale-copies bytes diverge from golden");
+
+    let decoded = Elastic::deserialize_from_bytes(&want).expect("decode");
+    assert_elastic_known_state(&decoded);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    let fresh = decode_hex(GOLDEN_ELASTIC);
+    assert_eq!(want.len(), fresh.len());
+    let differing: Vec<usize> = (0..want.len()).filter(|&i| want[i] != fresh[i]).collect();
+    assert_eq!(
+        differing.len(),
+        1,
+        "the fixtures differ only by stale_copies"
+    );
+    assert_eq!((fresh[differing[0]], want[differing[0]]), (0xc2, 0xc3));
 }

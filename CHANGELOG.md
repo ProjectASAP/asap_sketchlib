@@ -66,6 +66,8 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **ASAPv1 golden fixtures for Elastic**: `elastic_4b_2x4` and
+  `elastic_4b_2x4_stale` in `asapv1_golden/`, checked by `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -87,6 +89,15 @@ signals a backwards-compatible change.
   is retained; `TumblingWindow::insert` closes a period that saw no arrivals
   as an empty window like any other, and that window takes a place in
   `max_windows`.
+
+### Removed
+
+- **BREAKING: Elastic's protobuf form.** `proto/elasticsketch/elasticsketch.proto`,
+  its message `ElasticState` (`asap_sketchlib::proto::sketchlib::ElasticState`),
+  and the `SketchEnvelope` oneof variant `elastic`
+  (`sketch_envelope::SketchState::Elastic`, field 18, now reserved) are gone.
+  `Elastic::serialize_to_bytes` / `deserialize_from_bytes` (ASAPv1, `0x0b 0x00`)
+  is Elastic's only serialization.
 
 ### Fixed
 
