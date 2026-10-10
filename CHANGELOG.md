@@ -12,6 +12,10 @@ signals a backwards-compatible change.
 
 ### Added
 
+- `WeightedFrequency`: Float64 CMS/CountSketch updates, typed tuple identities,
+  bounded candidate ranking, compatible-state merging and versioned snapshots.
+  Extracted from ASAPPlanner; preserves existing `ASAP-WFREQ-1` bytes.
+
 - **`Vector3D<T>`**, filled in from a stub. A `rows x cols` grid whose every
   cell is a contiguous `depth`-length record, addressed by the same
   `MatrixFastHash` machinery as `Vector2D`. Reach for it when a cell is made
