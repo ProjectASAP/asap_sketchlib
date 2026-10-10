@@ -66,6 +66,9 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **ASAPv1 golden fixtures for `UnivMon`** (kind_id `0x10 0x00`):
+  `univmon_str_l3_2x4_h5`, `univmon_i64_l3_2x4_h5` and
+  `univmon_empty_l3_2x4_h5`, checked in `tests/asapv1_golden.rs`.
 
 ### Changed
 
@@ -87,6 +90,15 @@ signals a backwards-compatible change.
   is retained; `TumblingWindow::insert` closes a period that saw no arrivals
   as an empty window like any other, and that window takes a place in
   `max_windows`.
+
+### Removed
+
+- **UnivMon's proto format.** `UnivMon` serializes only as ASAPv1
+  (`serialize_to_bytes` / `deserialize_from_bytes`, kind_id `0x10 0x00`).
+  Removed the `univmon` field (15) of `SketchEnvelope` (now reserved) and with
+  it `sketch_envelope::SketchState::Univmon`; `UnivMonState` and
+  `UnivMonLayer` stay in `proto/univmon/univmon.proto` only as
+  `HydraCell.univmon`.
 
 ### Fixed
 

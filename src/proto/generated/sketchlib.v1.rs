@@ -892,7 +892,7 @@ pub struct SketchEnvelope {
     /// The sketch payload. Exactly one field must be set.
     #[prost(
         oneof = "sketch_envelope::SketchState",
-        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "10, 11, 12, 13, 14, 16, 17, 18"
     )]
     pub sketch_state: ::core::option::Option<sketch_envelope::SketchState>,
 }
@@ -911,8 +911,6 @@ pub mod sketch_envelope {
         Kll(super::KllState),
         #[prost(message, tag = "14")]
         Ddsketch(super::DdSketchState),
-        #[prost(message, tag = "15")]
-        Univmon(super::UnivMonState),
         #[prost(message, tag = "16")]
         Hydra(super::HydraState),
         #[prost(message, tag = "17")]
