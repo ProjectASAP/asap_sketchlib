@@ -10,7 +10,7 @@
 //!   UnivMon, tumbling windows, and batch/parallel execution helpers.
 //! - [`message_pack_format`]: MessagePack/proto wire format shared with
 //!   `sketchlib-go`. Owns the wire-DTO sketch types consumed by the ASAP
-//!   query engine (`CountMinSketch`, `CountSketch`, `KllSketch`, `HllSketch`,
+//!   query engine (`CountMinSketch`, `CountSketch`, `KllSketch`,
 //!   `DdSketch`, `HydraKllSketch`, `CountMinSketchWithHeap`,
 //!   `SetAggregator`, `DeltaResult`).
 //!
@@ -49,7 +49,6 @@ pub use message_pack_format::portable::countsketch::{
 pub use message_pack_format::portable::countsketch_topk::{CountSketchWithHeap, CsHeapItem};
 pub use message_pack_format::portable::ddsketch::{DDSKETCH_GROW_CHUNK, DdSketch, DdSketchDelta};
 pub use message_pack_format::portable::delta_set_aggregator::DeltaResult;
-pub use message_pack_format::portable::hll::{HllSketch, HllSketchDelta, HllVariant};
 pub use message_pack_format::portable::hydra_kll::HydraKllSketch;
 pub use message_pack_format::portable::kll::{KllSketch, KllSketchData};
 pub use message_pack_format::portable::sampling::{

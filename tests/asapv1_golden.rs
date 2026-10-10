@@ -9,8 +9,9 @@
 //! See `asapv1_golden/README.md`.
 
 use asap_sketchlib::{
-    Classic, Count, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12,
-    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
+    Classic, Count, CountMin, ErtlMLE, FastPath, HllBucketListP12, HllBucketListP14,
+    HllRegisterStorage, HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogP12, HyperLogLogP14, KLL,
+    RegularPath, Vector2D,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -25,6 +26,9 @@ fn decode_hex(s: &str) -> Vec<u8> {
 const GOLDEN_CLASSIC: &str = include_str!("../asapv1_golden/hll_classic_p12.hex");
 const GOLDEN_ERTL: &str = include_str!("../asapv1_golden/hll_ertl_mle_p12.hex");
 const GOLDEN_HIP: &str = include_str!("../asapv1_golden/hll_hip_p12.hex");
+const GOLDEN_CLASSIC_P14: &str = include_str!("../asapv1_golden/hll_classic_p14.hex");
+const GOLDEN_ERTL_P14: &str = include_str!("../asapv1_golden/hll_ertl_mle_p14.hex");
+const GOLDEN_HIP_P14: &str = include_str!("../asapv1_golden/hll_hip_p14.hex");
 const GOLDEN_CMS_I64: &str = include_str!("../asapv1_golden/cms_i64_regular_2x3.hex");
 const GOLDEN_CMS_F64: &str = include_str!("../asapv1_golden/cms_f64_fast_2x3.hex");
 const GOLDEN_CS_REGULAR: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4.hex");
@@ -43,6 +47,29 @@ fn p12_registers() -> Vec<u8> {
     r
 }
 
+fn p12_storage() -> HllBucketListP12 {
+    let mut storage = HllBucketListP12::default();
+    storage.as_mut_slice().copy_from_slice(&p12_registers());
+    storage
+}
+
+/// The known P14 register pattern: the first, a middle and the last index,
+/// up to 51, the largest rank a P14 register holds.
+fn p14_registers() -> Vec<u8> {
+    let mut r = vec![0u8; 16384];
+    r[0] = 1;
+    r[1] = 7;
+    r[8192] = 42;
+    r[16383] = 51;
+    r
+}
+
+fn p14_storage() -> HllBucketListP14 {
+    let mut storage = HllBucketListP14::default();
+    storage.as_mut_slice().copy_from_slice(&p14_registers());
+    storage
+}
+
 const I64_VALS: [[i64; 3]; 2] = [[0, 1, 127], [128, 300, 65536]];
 const F64_VALS: [[f64; 3]; 2] = [[0.0, 1.5, 2.25], [3.75, 4.125, 5.0625]];
 
@@ -59,65 +86,80 @@ const CS_VALS: [[i64; 4]; 2] = [[0, 127, 128, 65536], [-1, -33, -32768, -2147483
 #[test]
 fn hll_classic_p12_matches_golden() {
     let want = decode_hex(GOLDEN_CLASSIC);
-    let regs = p12_registers();
 
-    // Build known state and serialize.
-    let got = HllSketch::from_raw(HllVariant::Regular, 12, regs.clone(), 0.0, 0.0, 0.0)
-        .to_msgpack()
-        .expect("serialize");
+    let sketch = HyperLogLogP12::<Classic>::from_storage(p12_storage());
+    let got = sketch.serialize_to_bytes().expect("serialize");
     assert_eq!(got, want, "Classic P12 bytes diverge from golden");
 
-    // Native wire path (src/sketches/hll.rs) round-trips the golden identically.
-    let native = HyperLogLogP12::<Classic>::deserialize_from_bytes(&want).expect("native decode");
-    assert_eq!(native.registers_as_slice(), regs.as_slice());
-    assert_eq!(native.serialize_to_bytes().expect("re-serialize"), want);
-
-    // Portable decode round-trips to the same known state.
-    let decoded = HllSketch::from_msgpack(&want).expect("decode");
-    assert_eq!(decoded.registers, regs);
-    assert_eq!(decoded.precision, 12);
-    assert_eq!(decoded.variant, HllVariant::Regular);
+    let decoded = HyperLogLogP12::<Classic>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.registers_as_slice(), p12_registers().as_slice());
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
 #[test]
 fn hll_ertl_mle_p12_matches_golden() {
     let want = decode_hex(GOLDEN_ERTL);
-    let regs = p12_registers();
 
-    let got = HllSketch::from_raw(HllVariant::Datafusion, 12, regs.clone(), 0.0, 0.0, 0.0)
-        .to_msgpack()
-        .expect("serialize");
+    let sketch = HyperLogLogP12::<ErtlMLE>::from_storage(p12_storage());
+    let got = sketch.serialize_to_bytes().expect("serialize");
     assert_eq!(got, want, "Ertl-MLE P12 bytes diverge from golden");
 
-    let native = HyperLogLogP12::<ErtlMLE>::deserialize_from_bytes(&want).expect("native decode");
-    assert_eq!(native.registers_as_slice(), regs.as_slice());
-    assert_eq!(native.serialize_to_bytes().expect("re-serialize"), want);
-
-    let decoded = HllSketch::from_msgpack(&want).expect("decode");
-    assert_eq!(decoded.registers, regs);
-    assert_eq!(decoded.variant, HllVariant::Datafusion);
+    let decoded = HyperLogLogP12::<ErtlMLE>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.registers_as_slice(), p12_registers().as_slice());
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
 #[test]
 fn hll_hip_p12_matches_golden() {
     let want = decode_hex(GOLDEN_HIP);
-    let regs = p12_registers();
 
-    let got = HllSketch::from_raw(HllVariant::Hip, 12, regs.clone(), 1.5, 2.5, 3.0)
-        .to_msgpack()
-        .expect("serialize");
+    let sketch = HyperLogLogHIPP12::from_storage(p12_storage(), 1.5, 2.5, 3.0);
+    let got = sketch.serialize_to_bytes().expect("serialize");
     assert_eq!(got, want, "HIP P12 bytes diverge from golden");
 
-    // Native HIP wire path round-trips the golden identically.
-    let native = HyperLogLogHIPP12::deserialize_from_bytes(&want).expect("native decode");
-    assert_eq!(native.serialize_to_bytes().expect("re-serialize"), want);
+    // `Debug` prints the registers and the three HIP scalars exactly.
+    let decoded = HyperLogLogHIPP12::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(format!("{decoded:?}"), format!("{sketch:?}"));
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
 
-    let decoded = HllSketch::from_msgpack(&want).expect("decode");
-    assert_eq!(decoded.registers, regs);
-    assert_eq!(decoded.variant, HllVariant::Hip);
-    assert_eq!(decoded.hip_kxq0, 1.5);
-    assert_eq!(decoded.hip_kxq1, 2.5);
-    assert_eq!(decoded.hip_est, 3.0);
+#[test]
+fn hll_classic_p14_matches_golden() {
+    let want = decode_hex(GOLDEN_CLASSIC_P14);
+
+    let sketch = HyperLogLogP14::<Classic>::from_storage(p14_storage());
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "Classic P14 bytes diverge from golden");
+
+    let decoded = HyperLogLogP14::<Classic>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.registers_as_slice(), p14_registers().as_slice());
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn hll_ertl_mle_p14_matches_golden() {
+    let want = decode_hex(GOLDEN_ERTL_P14);
+
+    let sketch = HyperLogLogP14::<ErtlMLE>::from_storage(p14_storage());
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "Ertl-MLE P14 bytes diverge from golden");
+
+    let decoded = HyperLogLogP14::<ErtlMLE>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.registers_as_slice(), p14_registers().as_slice());
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn hll_hip_p14_matches_golden() {
+    let want = decode_hex(GOLDEN_HIP_P14);
+
+    let sketch = HyperLogLogHIPP14::from_storage(p14_storage(), 16380.5, 0.25, 4.125);
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "HIP P14 bytes diverge from golden");
+
+    let decoded = HyperLogLogHIPP14::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(format!("{decoded:?}"), format!("{sketch:?}"));
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
 // ---------------------------------------------------------------------------

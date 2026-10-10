@@ -1487,7 +1487,7 @@ Rust derives the hash spec from a generic `HashProfile` bound on the hasher type
 On the Go side the profile is simply **written into** the metadata on encode and **read from** it on decode.
 Go MUST validate the profile it reads (same fail-closed intent as Rust): a sketch is only mergeable/queryable if its `hash_profile_id` + seeds match the profile Go is prepared to reproduce.
 
-Sequencing: (2) covers six `kind_id`s, and the one `native bytes == portable bytes` test is HLL-only, since no other `portable` type emits ASAPv1 bytes.
+Sequencing: (2) covers six `kind_id`s.
 Retire `portable` once the fixtures cover the rest.
 
 ---

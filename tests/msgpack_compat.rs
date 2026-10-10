@@ -31,8 +31,8 @@ use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaRe
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketchData;
 use asap_sketchlib::{
-    CountMinSketch, CountMinSketchWithHeap, CountSketch, DdSketch, HllSketch, HllVariant,
-    HydraKllSketch, KllSketch, SetAggregator,
+    CountMinSketch, CountMinSketchWithHeap, CountSketch, DdSketch, HydraKllSketch, KllSketch,
+    SetAggregator,
 };
 
 // ===== round-trip: every wire-format-aligned type =====
@@ -82,17 +82,6 @@ fn dd_sketch_round_trip() {
     let restored = DdSketch::from_msgpack(&bytes).expect("decode");
     // `count` is not on the wire; recover it by summing the bucket array.
     assert_eq!(restored.total_count(), 3);
-}
-
-#[test]
-fn hll_sketch_round_trip() {
-    let mut s = HllSketch::new(HllVariant::Regular, 8);
-    s.update(b"a");
-    s.update(b"b");
-    s.update(b"c");
-    let bytes = s.to_msgpack().expect("encode");
-    let restored = HllSketch::from_msgpack(&bytes).expect("decode");
-    assert_eq!(restored.registers.len(), s.registers.len());
 }
 
 #[test]
@@ -240,10 +229,6 @@ fn count_min_decodes_go_bytes() {
 #[ignore = "gap: needs a sketchlib-go-produced msgpack fixture; none can be generated in this repo"]
 #[test]
 fn dd_sketch_decodes_go_bytes() {}
-
-#[ignore = "gap: needs a sketchlib-go-produced msgpack fixture; none can be generated in this repo"]
-#[test]
-fn hll_sketch_decodes_go_bytes() {}
 
 #[ignore = "gap: needs a sketchlib-go-produced msgpack fixture; none can be generated in this repo"]
 #[test]
