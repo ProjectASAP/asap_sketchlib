@@ -17,6 +17,16 @@ fn default() -> Self
 fn init_univmon(heap_size: usize, sketch_row: usize, sketch_col: usize, layer_size: usize) -> Self
 ```
 
+`init_univmon` panics on a shape whose hashes would not be independent:
+
+- `layer_size > MAX_LAYER_SIZE` (19). Layer `i` hashes at seed index `i`, and
+  the layers a key reaches are read from the hash at `BOTTOM_LAYER_FINDER`
+  (19). A 20th layer would hash at the finder's seed, and later ones would wrap
+  onto layer 0's.
+- `sketch_row * (ceil_log2(sketch_col) + 1) > 128`. Every row of a layer reads
+  its column and its sign from one 128-bit hash; past this budget a deep row's
+  column reuses a shallow row's sign bit.
+
 ## Insert/Update
 
 ```rust

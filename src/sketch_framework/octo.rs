@@ -41,7 +41,7 @@ use crate::octo_delta::{
 use crate::sketch_framework::univmon::{UnivMonDeltaFidelity, bottom_layer_for_hash};
 use crate::sketches::coco::{Coco, CocoRng};
 use crate::sketches::countminsketch_topk::CMSHeap;
-use crate::sketches::countsketch_topk::{CSHeap, l2hh_cell_for_row};
+use crate::sketches::countsketch_topk::{CSHeap, check_l2hh_hash_bits, l2hh_cell_for_row};
 use crate::sketches::elastic::{Elastic, LAMBDA};
 use crate::{
     BOTTOM_LAYER_FINDER, CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin,
@@ -411,13 +411,13 @@ impl L2hhWorkerSketch {
         let rows = rows.max(1);
         let cols = cols.max(1);
         let mask_bits = cols_mask_bits(cols);
-        // Every row slices its column out of the same 128-bit hash, so the
-        // rows collectively have 128 bits to spend. Past that the shift is
-        // undefined: debug builds panic and release builds wrap, aliasing a
-        // deep row onto a shallow one's column bits.
+        // Every row slices its column and its sign out of the same 128-bit
+        // hash, so the rows collectively have 128 bits to spend. Past that a
+        // deep row's column reads a shallow row's sign bit, and further on
+        // the shift runs off the hash.
         assert!(
-            rows * mask_bits as usize <= 128,
-            "{rows} rows x {mask_bits} column bits exceeds the 128-bit hash budget; \
+            check_l2hh_hash_bits(rows, cols).is_ok(),
+            "{rows} rows x ({mask_bits} column bits + 1 sign bit) exceeds the 128-bit hash budget; \
              reduce rows or columns"
         );
         Self {
@@ -3088,15 +3088,23 @@ mod worker_tests {
         L2hhWorkerSketch::new(13, 2048, 0);
     }
 
+    /// 11 rows x (11 column bits + 1 sign bit) = 132: the column fields of
+    /// the deep rows would read the shallow rows' sign bits.
+    #[test]
+    #[should_panic(expected = "exceeds the 128-bit hash budget")]
+    fn a_univmon_worker_refuses_column_bits_that_reach_the_sign_bits() {
+        L2hhWorkerSketch::new(11, 2048, 0);
+    }
+
     #[test]
     fn the_widest_accepted_univmon_geometry_still_addresses_distinct_rows() {
-        // 11 rows x 11 bits = 121, just inside the budget.
-        let mut worker = L2hhWorkerSketch::new(11, 2048, 0);
+        // 10 rows x (11 column bits + 1 sign bit) = 120, inside the budget.
+        let mut worker = L2hhWorkerSketch::new(10, 2048, 0);
         let mut cells: Vec<(u32, u32)> = Vec::new();
         worker.insert_emit_delta(&DataInput::U64(7), 1, &mut |d| cells.push((d.row, d.col)));
-        assert_eq!(cells.len(), 11, "every row promotes at threshold 1");
+        assert_eq!(cells.len(), 10, "every row promotes at threshold 1");
         let rows: std::collections::HashSet<u32> = cells.iter().map(|(r, _)| *r).collect();
-        assert_eq!(rows.len(), 11, "each row must land on its own index");
+        assert_eq!(rows.len(), 10, "each row must land on its own index");
     }
 
     #[test]
