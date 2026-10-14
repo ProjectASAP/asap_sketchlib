@@ -528,6 +528,30 @@ impl HydraCounter {
         }
     }
 
+    /// Total mass inserted into this cell, read from the counter's own state.
+    ///
+    /// - Count-Min: the sum of any one inner row. Every insert adds its count
+    ///   to exactly one counter per row, so a row sum is the cell's exact mass.
+    /// - KLL: the retained weight ([`KLL::count`]), which compaction preserves.
+    ///
+    /// Count Sketch rows carry signed updates, HyperLogLog keeps no counts, and
+    /// UnivMon's mass is itself an estimate (query it with
+    /// [`HydraQuery::L1Norm`]), so these return an error.
+    pub fn total_mass(&self) -> Result<f64, String> {
+        match self {
+            HydraCounter::CM(cm) => {
+                let storage = cm.as_storage();
+                if storage.rows() == 0 {
+                    return Ok(0.0);
+                }
+                let sum: i64 = storage.row_slice(0).iter().map(|&c| i64::from(c)).sum();
+                Ok(sum as f64)
+            }
+            HydraCounter::KLL(kll) => Ok(kll.count() as f64),
+            other => Err(format!("{other} does not answer a group total")),
+        }
+    }
+
     /// Merge another HydraCounter into this one
     /// Both counters must be of the same type
     pub fn merge(&mut self, other: &HydraCounter) -> Result<(), String> {
