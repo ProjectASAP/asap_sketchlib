@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::common::structures::matrix_storage::cols_mask_bits;
 use crate::octo_delta::CountDelta;
 use crate::sketches::countsketch::CountSketchCounter;
 use crate::{
@@ -939,6 +940,27 @@ mod tests {
 // file stays focused on plain Count Sketch.
 // =====================================================================
 
+/// Checks that a `rows` x `cols` `CountL2HH` fits its one 128-bit key hash.
+///
+/// Row `r` reads its column from bits `[r * mask_bits, (r + 1) * mask_bits)`
+/// and its sign from bit `127 - r`, where `mask_bits = cols_mask_bits(cols)`.
+/// Each row therefore claims `mask_bits + 1` bits, and the fields are in range
+/// and pairwise disjoint (so every column and sign is an independent hash
+/// draw) exactly while `rows * (mask_bits + 1) <= 128`. Past that, deep rows'
+/// columns reuse shallow rows' sign bits, and from `rows * mask_bits >= 128`
+/// the shift runs off the hash.
+pub(crate) fn check_l2hh_hash_bits(rows: usize, cols: usize) -> Result<(), String> {
+    let mask_bits = cols_mask_bits(cols.max(1)) as usize;
+    let bits_required = mask_bits.saturating_add(1).saturating_mul(rows);
+    if bits_required > 128 {
+        return Err(format!(
+            "CountL2HH rows={rows}, cols={cols} needs {bits_required} hash bits \
+             ({mask_bits} column bits + 1 sign bit per row), past the 128 the key hash carries"
+        ));
+    }
+    Ok(())
+}
+
 /// Column and sign `CountL2HH` uses for `row`, given its 128-bit key hash.
 ///
 /// Shared with the OctoSketch worker sketches so a worker and its parent can
@@ -985,7 +1007,15 @@ impl<H: SketchHasher> CountL2HH<H> {
     }
 
     /// Creates a sketch with the requested dimensions and a custom seed offset.
+    ///
+    /// # Panics
+    ///
+    /// When `rows * (cols_mask_bits(cols) + 1) > 128`: the rows' column and
+    /// sign fields would overlap in the one 128-bit key hash.
     pub fn with_dimensions_and_seed(rows: usize, cols: usize, seed_idx: usize) -> Self {
+        if let Err(problem) = check_l2hh_hash_bits(rows, cols) {
+            panic!("{problem}");
+        }
         let mut sk = CountL2HH {
             counts: Vector2D::init(rows, cols),
             l2: Vector1D::filled(rows, 0),
@@ -1185,6 +1215,21 @@ impl<H: SketchHasher> CountL2HH<H> {
 #[cfg(test)]
 mod tests_count_l2_hh {
     use super::*;
+
+    /// 11 rows x (11 column bits + 1 sign bit) = 132 bits of one 128-bit
+    /// hash: the deep rows' columns would reuse the shallow rows' signs.
+    #[test]
+    #[should_panic(expected = "hash bits")]
+    fn countl2hh_rejects_column_bits_that_reach_the_sign_bits() {
+        let _: CountL2HH = CountL2HH::with_dimensions_and_seed(11, 2048, 0);
+    }
+
+    /// 10 x 2048 spends 120 bits and is accepted.
+    #[test]
+    fn countl2hh_accepts_the_widest_disjoint_geometry() {
+        let sketch: CountL2HH = CountL2HH::with_dimensions_and_seed(10, 2048, 0);
+        assert_eq!((sketch.rows(), sketch.cols()), (10, 2048));
+    }
 
     #[test]
     fn countl2hh_estimates_and_l2_are_consistent() {

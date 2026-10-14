@@ -25,7 +25,7 @@
 
 use crate::common::heap::HHHeap;
 use crate::common::{
-    BOTTOM_LAYER_FINDER, DataInput, HeapItem, hash_item64_seeded, hash64_seeded,
+    BOTTOM_LAYER_FINDER, DataInput, HeapItem, SEEDLIST, hash_item64_seeded, hash64_seeded,
     heap_item_to_sketch_input,
 };
 use crate::common::{L2HH, Vector1D};
@@ -83,10 +83,19 @@ impl Default for UnivMon {
     }
 }
 
-/// Layers one pyramid may hold. [`bottom_layer_for_hash`] and the query
-/// recurrences shift a 64-bit key hash right by up to `layer_size - 1`, so a
-/// deeper pyramid would shift past the hash's width.
-pub const MAX_LAYER_SIZE: usize = 64;
+/// Layers one pyramid may hold.
+///
+/// Layer `i`'s Count Sketch hashes at seed index `i`, and the layer a key
+/// reaches is read from the hash at seed index [`BOTTOM_LAYER_FINDER`]. The
+/// error bounds need every layer's hash independent of the bits that select
+/// its keys and of the other layers' hashes, so no layer may hash at the
+/// finder's seed, and none past the seed list, where indices wrap onto layer
+/// 0's. Layers `0..BOTTOM_LAYER_FINDER` are exactly the distinct seeds below
+/// the finder. (The finder's bits are read by shifting a 64-bit hash right by
+/// up to `layer_size - 1`, which this cap also keeps in range.)
+pub const MAX_LAYER_SIZE: usize = BOTTOM_LAYER_FINDER;
+
+const _: () = assert!(BOTTOM_LAYER_FINDER < SEEDLIST.len() && MAX_LAYER_SIZE < 64);
 
 /// Deepest pyramid layer the given key hash reaches.
 #[inline(always)]
@@ -658,6 +667,42 @@ mod tests {
     use crate::{DataInput, HeapItem};
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use std::collections::HashMap;
+
+    /// Every layer hashes at its own seed, inside the seed list (no wrap onto
+    /// layer 0) and never at the seed that picks the layers.
+    #[test]
+    fn layer_seeds_are_distinct_and_never_the_layer_finder() {
+        use crate::common::SEEDLIST;
+        let deepest = UnivMon::init_univmon(4, 2, 16, MAX_LAYER_SIZE);
+        let seeds: Vec<usize> = (0..MAX_LAYER_SIZE)
+            .map(|layer| {
+                let L2HH::COUNT(counter) = &deepest.l2_sketch_layers[layer];
+                counter.seed_idx()
+            })
+            .collect();
+        for &seed in &seeds {
+            assert!(seed < SEEDLIST.len(), "seed index {seed} wraps");
+            assert_ne!(
+                seed, BOTTOM_LAYER_FINDER,
+                "a layer hashes at the finder seed"
+            );
+        }
+        let distinct: HashSet<usize> = seeds.iter().copied().collect();
+        assert_eq!(distinct.len(), seeds.len(), "two layers share a seed");
+    }
+
+    /// Layer `BOTTOM_LAYER_FINDER` would hash at the finder's own seed.
+    #[test]
+    #[should_panic(expected = "MAX_LAYER_SIZE")]
+    fn init_univmon_rejects_a_layer_on_the_finder_seed() {
+        UnivMon::init_univmon(4, 2, 16, BOTTOM_LAYER_FINDER + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "hash bits")]
+    fn init_univmon_rejects_column_bits_that_reach_the_sign_bits() {
+        UnivMon::init_univmon(4, 11, 2048, 2);
+    }
 
     /// Persisted terminal states must be distinguishable before standard ingestion.
     #[test]
