@@ -1529,7 +1529,11 @@ fn univmon_weighted_metrics_and_fast_insert_parity() {
 
 #[test]
 fn univmon_pyramid_weighted_metrics() {
-    let mut up = UnivMonPyramid::with_defaults();
+    // The default tiers with heap 128 instead of 32. With a complete top layer
+    // the distinct count is unbiased with variance at most `2 F0² / heap`: at
+    // heap 32 the 20% band is under one of those standard deviations, at heap
+    // 128 it is over 1.6 (and the exact identity's spread is ~0.6x that bound).
+    let mut up = UnivMonPyramid::new(128, 8, 3, 2048, 3, 512, 16);
     let mut truth = common::FreqTruth::default();
     let stream = zipf_u64(15_000, 800, 1.3, 4004);
     for (i, k) in stream.iter().enumerate() {
@@ -1545,6 +1549,10 @@ fn univmon_pyramid_weighted_metrics() {
     let l2_truth = truth.l2_norm();
     assert_between(up.calc_l2(), l2_truth * 0.85, l2_truth * 1.15, "pyramid L2");
     let card_truth = truth.distinct() as f64;
+    assert!(
+        up.top_layer_complete(),
+        "the top layer must hold every key it received for the bound to apply"
+    );
     assert_between(
         up.calc_card(),
         card_truth * 0.80,
