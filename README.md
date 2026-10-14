@@ -18,6 +18,7 @@ A Rust library for **streaming data sketches** — compact data structures that 
 | Goal | Sketch | When to pick it | What it does | Polars equivalent |
 | --- | --- | --- | --- | --- |
 | Frequency estimation | `CountMin`, `Count` | Fast approximate counts for high-volume keys | Estimates how often each key appears in a stream | `df.group_by("key").agg(pl.len())` |
+| Weighted frequency candidates | `WeightedFrequency` | Fractional weights or signed CountSketch updates with typed keys | Maintains Float64 CMS/CountSketch estimates and a bounded candidate heap; does not guarantee complete TopK membership | `df.group_by("key").agg(pl.col("weight").sum())` followed by ranking |
 | Heavy hitters / frequent items | `SpaceSaving`, `CMSHeap`, `CSHeap` | The top-k keys and their counts under a fixed memory budget | Tracks the most frequent keys of a stream, each with a per-key error bound | `df["key"].value_counts().top_k(10, by="count")` |
 | Approximate set membership | `Bloom` | Cheap "have I seen this key?" checks at a chosen false-positive rate | Answers membership with no false negatives and a bounded false-positive rate | `df["key"].is_in(seen)` — exact, but stores every key |
 | Cardinality estimation | `HyperLogLog`, `HyperLogLogHIP` | Approximate distinct counts with bounded memory | Estimates the number of unique elements | `df["col"].n_unique()` |
@@ -30,6 +31,7 @@ A Rust library for **streaming data sketches** — compact data structures that 
 | Update acceleration | `NitroBatch` | Batch-accelerated sketch updates | Speeds up sketch insertions by batching updates | No direct equivalent |
 
 Full sketch status and API details: [APIs Index](./docs/apis.md).
+[Weighted frequency API](./docs/api/api_weighted_frequency.md) describes Float64 updates and candidate retention.
 
 ## Quick Start
 
