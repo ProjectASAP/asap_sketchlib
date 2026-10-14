@@ -44,6 +44,24 @@ Because UnivMon accepts only non-negative updates, `calc_l1()` returns the
 exact tracked total weight. The generic recurrence remains available through
 `calc_g_sum` for compatible frequency functions.
 
+```rust
+fn top_layer_complete(&self) -> bool
+```
+
+`calc_l2()` reads layer 0's Count Sketch directly in standard mode (every key
+reaches layer 0), and sums the strata's squared estimates in terminal mode.
+With `w = sketch_col` and `r = sketch_row`, the squared norm is within a
+relative `ε` of the truth except with probability
+`δ = P(Binomial(r, p) ≥ ⌈r/2⌉)`, where `p = 2/(wε²)` for a power-of-two `w`
+and `9/(4wε²)` otherwise; the same `ε` bounds the L2 norm itself.
+
+`calc_card()` counts every heap key at every layer. When `top_layer_complete()`
+holds, it is unbiased with variance at most `2 F0² / k` (`k = heap_size ≥ 8`),
+so it misses by more than `ε F0` with probability at most `2/(kε²)`
+(Chebyshev), or about `2 exp(−ε²k/4)` under a normal approximation. Sizing
+`layer_size ≥ ⌈log2(F0_max/k)⌉ + 2` makes an incomplete top layer unlikely
+(below `(e/4)^{k/2}`). The derivations are in the methods' doc comments.
+
 ## Merge
 
 ```rust

@@ -820,16 +820,16 @@ mod tests {
         assert_eq!(decoded.calc_entropy(), terminal.calc_entropy());
         assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), encoded);
 
-        // A layer marked incomplete keeps its widened threshold: flipping the
-        // flag changes what the pyramid reports.
+        // A layer marked incomplete stays incomplete: flipping the flag
+        // changes what the pyramid reports about its distinct-count bound.
         let mut forged = payload_of::<u64>(&encoded);
         forged.candidate_complete.fill(true);
         let meta = metadata_of(&encoded);
         let relaxed = UnivMon::deserialize_from_bytes(&crafted(&meta, &forged)).expect("decode");
-        assert_ne!(
-            relaxed.calc_card(),
-            terminal.calc_card(),
-            "candidate_complete had no effect on a query"
+        assert!(!terminal.top_layer_complete());
+        assert!(
+            relaxed.top_layer_complete(),
+            "candidate_complete had no effect on what the pyramid reports"
         );
     }
 
