@@ -238,18 +238,18 @@ This registry is the master list of algorithms still to design payloads for, and
 
 ### Decoder rules
 
-1. `len >= 6+1+1+0+4+4` before reading anything.
+1. `len >= 6+1+1+0+4+4` before reading anything, then `len >= 6+1+1+kind_id_len+4+4` before reading the length fields, then `len >= 6+1+1+kind_id_len+4+4+metadata_len+payload_len`. The metadata map fills exactly `metadata_len` bytes and the payload array exactly `payload_len` bytes; bytes after the payload are ignored.
 2. `magic` matches, else reject.
 3. `version` is known, else reject (no best-effort parse).
 4. Read `kind_id`; the per-sketch decoder rejects any `kind_id` it does not own.
 5. Read `metadata`; validate it against the target type's profile (Section 5, Validation).
 6. Cross-check metadata against `kind_id` and the payload, so structural params stay consistent (Section 5, Validation).
-7. Read exactly `payload_len` bytes; hand to the per-sketch payload decoder.
+7. Hand the payload to the per-sketch payload decoder.
 8. Fail **closed** on any inconsistency; never merge or query a sketch whose hash spec did not validate.
 
 > Implementation note: the shared envelope module (`src/message_pack_format/envelope.rs`) owns rules 1-3 and the byte framing (`encode` / `split`); it is sketch-agnostic and does not know the registry.
 > Rule 4 (and metadata/kind_id validation) happens in each sketch's decoder, which checks the `kind_id` against the ones it owns.
-> `peek_kind_id` checks only rules 1-3 and that `kind_id`, both length fields, and the `metadata_len + payload_len` bytes after them lie inside the buffer, then returns the `kind_id` bytes and ignores bytes after the payload; otherwise it fails.
+> `peek_kind_id` checks only rules 1-3, then returns the `kind_id` bytes; otherwise it fails.
 
 ---
 
@@ -584,8 +584,6 @@ Count-Min's counter type is a Rust type parameter, fixed at compile time. A Spac
 
 `"bytes"` is written as msgpack `bin`, never `str`: a `Bytes` key is an arbitrary byte array with no encoding, so `str` would refuse the byte strings that are not UTF-8 and lose the distinction from a `String` key for the ones that are. `"string"` and `"bytes"` are different key types for the same reason a widened integer is not the key it came from — `HeapItem::Bytes(b"abc")` does **not** equal `DataInput::Str("abc")`, so a summary holding both has no single `key_type` and fails to serialize.
 
-`"f32"` is the one place a float is *not* widened to float64: the key's variant is the identity, so narrowing or widening it would change which key it is. Section 4's "always float64" rule governs *counter* and *sample* values, which have no identity to preserve.
-
 **Why a key is never widened (e.g. `i32` to `i64`).** A counter is a number, and its width is a storage choice. A Space-Saving key is an *identity*, and the variant is part of it. `HeapItem`'s equality against a query `DataInput` is variant-exact — `HeapItem::I64(5)` does **not** equal `DataInput::I32(5)`. The digest, however, is variant-blind: the whole signed family hashes its value widened to `u64`, so a widened key lands in the **same index slot** and then fails the equality check. The result is not an error; it is `estimate` returning `0` for a key the summary is holding, with nothing anywhere to indicate a problem. So the wire records the variant exactly and the decoder rebuilds it exactly.
 
 Two summaries have no encoding and **fail to serialize** rather than being coerced:
@@ -610,7 +608,7 @@ This is required, not cosmetic: `entries()` order follows the counter arena and 
 
 1. `kind_id` is `0x18 0x00`.
 2. The hash-spec group matches the **target hasher's** `HashProfile`. `capacity` and `key_type` are properties of the *stored* summary rather than of the target type, so they are echoed back into the expected metadata rather than pinned — the same treatment Count-Min gives `rows`/`cols`.
-3. `key_type` is one of the fourteen names above; anything else is rejected. The `keys` array is then read **as** that type, and what that buys is a **family** separation, not a full pin. The msgpack decode refuses a relabel across the string, bytes, float and integer families — string-keyed bytes relabelled `"u64"` do not decode as a `u64`-keyed summary — and `bin` and `str` are separated from each other too, so neither a `str`-keyed payload relabelled `"bytes"` nor a UTF-8 `bin`-keyed one relabelled `"string"` decodes. It does **not** separate the numeric names from one another: msgpack writes every integer at its minimal width, so an `i32`-keyed payload relabelled `"i64"`, `"u64"`, `"f32"` or `"f64"` decodes, and one relabelled to a narrower name decodes too unless a value is out of the narrower range. Within the numeric families the wire records the variant but does not enforce it, and a relabelled summary answers `0` for every key it holds (see "Why a key is never widened"). Only the producer can get this right.
+3. `key_type` is one of the fourteen names above; anything else is rejected. The `keys` array is then read **as** that type, so every relabel of a non-empty `keys` fails except one integer name as another (Section 4). That one decodes whenever every key is in the new name's range, since a msgpack integer carries its value and not its type, and the summary then answers `0` for every key it holds (see "Why a key is never widened"). Only the producer can get this right.
 4. `keys`, `counts` and `errors` have equal length.
 5. `capacity >= 1`, and `len(keys) <= capacity`.
 6. Every `counts[i] >= 1` (a counter at zero is not a state the algorithm reaches) and `errors[i] <= counts[i]`.
@@ -694,7 +692,7 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 1. `kind_id` is `0x03 0x00`; any other id is rejected — including `0x0a 0x00` (a CSHeap), whose metadata map is structurally identical because both share one schema (§3.10), and `0x02 0x00` (a plain Count-Min), whose is not: Count-Min's map is eleven keys with no `heap_size` and no `key_type`, and its payload is a one-element array. Either way the id check is what separates them, so a decoder must not fall back on telling the maps apart.
 2. The metadata's hash spec, `counter_type` and `mode` must equal the target type's own, with `rows` / `cols` / `heap_size` / `key_type` echoed back since those are properties of the stored sketch rather than of the target. Every key is required: a map missing one, or carrying an unknown one, does not decode.
 3. `rows` and `cols` are both non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — the base matrix is Count-Min's, and declares Count-Min's bound), checked **before** the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
-4. `key_type` is one of §3.5's fourteen names; anything else is rejected before the payload is read. The `keys` array is then read **as** that type, with exactly the separation §3.5's rule 3 spells out: across the string, bytes, float and integer families the relabel is refused, and `bin` and `str` are separated from each other too, but one numeric name relabelled as another is not caught.
+4. `key_type` is one of §3.5's fourteen names; anything else is rejected before the payload is read. The `keys` array is then read **as** that type; every relabel fails except one integer name as another (§3.5, rule 3).
 5. `keys` and `heap_counts` have equal length.
 6. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
 7. `len(keys) <= heap_size`, and no key appears twice. Duplication is judged **before any entry is seated**, by heap key order (§3.5): two bit-identical `NaN`s are one key twice and are rejected, while `+0.0` and `-0.0` are two keys and pass. The seated count is compared against the entry count afterwards, as a second net for a pair that is distinct on the wire but equal to the heap.
@@ -804,7 +802,7 @@ The KLL counter's optional `compaction_seed` is not carried, so the bounded cost
 2. The hash-spec group matches the target's `HashProfile` (Hydra hashes through the crate default, `DefaultXxHasher`). `cell_counter_type` (`"i32"`), `cell_mode` (`"fast"`), `cell_item_type` (`"f64"`) and `cell_precision` are pinned, since the counter variant fixes them; `rows` / `cols` / `schema` and the counter *dimensions* — `cell_rows` / `cell_cols`, `cell_k` / `cell_m`, `cell_layers`, `cell_heap_size` — are properties of the *stored* grid, so they are echoed back and then validated on their own. `0x07 0x04`'s `cell_key_type` belongs to neither list: it is not pinned (the cells' keys are whatever the caller inserted, as §3.5 describes) and it is not a dimension (nothing is sized from it). It is echoed back like the dimensions and validated by rule 5.
 3. `rows` and `cols` are non-zero, `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — the grid places a subkey the way a Count-Min matrix does, and declares the same bound) and `rows * cols` is overflow-checked. For the tiled variants the counter dimensions are non-zero, `cell_rows <= 20` for the two matrix counters and `rows * cols * per_cell` is overflow-checked too, and for `0x07 0x04` every one of `cell_layers` / `cell_rows` / `cell_cols` / `cell_heap_size` is non-zero. All **before** anything is sized from them.
 4. The payload's length is measured against the declared geometry — `len(counts) == rows*cols*cell_rows*cell_cols`, `len(registers) == rows*cols*2^cell_precision`, `len(cells) == rows*cols` — before any grid or matrix is allocated. A declared grid larger than the payload carries costs nothing.
-5. `0x07 0x04` reads `cells` as `cell_key_type`, which must be one of §3.5's fourteen names; a payload whose keys are not of the declared type is rejected by the msgpack decode itself.
+5. `0x07 0x04` reads `cells` as `cell_key_type`, which must be one of §3.5's fourteen names, with §3.5 rule 3's relabel limits.
 6. The three variable-size counters rebuild each cell **through that counter's own decoder** — the cell's blocks are wrapped back into the counter's envelope and handed to it — so every rule that decoder enforces holds for a Hydra cell too: KLL's level layout and `k` / `m` bounds (`0x07 0x00`), HLL's register count (`0x07 0x03`), UnivMon's per-layer geometry and heap runs (`0x07 0x04`). The two tiled matrix variants (`0x07 0x01` / `0x07 0x02`) do not: their cells are cut out of the flat `counts` run and built directly from storage, never through the counter's own `deserialize_from_bytes`, so what guards them is rule 3's geometry bounds and rule 4's length check and nothing further. There is nothing left for a counter decoder to check — a fixed-size matrix has no state beyond its cells — but a Go implementer must not expect a nested decode to run there.
 7. `schema` is re-validated through `KeySchema::try_from`: non-empty, at most `MAX_KEY_COLUMNS` labels, no duplicates.
 8. `type_to_clone` is rebuilt as a fresh counter of the declared geometry; nothing about it is read from the payload.
@@ -900,7 +898,7 @@ Coco carries the hash-spec group — it hashes, and a consumer must reproduce th
 
 **An unoccupied bucket is msgpack `nil`, never an empty string.** A bucket's key is `Option<String>` in memory, and `insert` accepts any `&str`, `""` included. An inserted `""` produces `Some("")`: a genuinely occupied bucket that `estimate_key("")` answers for and that `recorded_flows` yields. Encoding a free bucket as `""` would make the two indistinguishable on the wire, and a decoder would resurrect an empty-string flow holding the free bucket's mass. So `keys[i]` is msgpack `nil` (`0xc0`) when the bucket is free and a msgpack `str` (`0xa0` for the empty key) when it is occupied. **Consequence for `sketchlib-go`:** the `keys` array is heterogeneous — nil or str — and must be modelled as `[]*string` or an equivalent nullable string, never as `[]string` with `""` standing in for absent.
 
-**Bucket values are never negative.** Mass is `u64` and only ever grows by `+= v`, so every `values[i]` goes in the msgpack **uint** family at minimal width per Section 4. Coco has nothing like Count Sketch's signed cells.
+**Bucket values are never negative.** Mass is `u64` and only ever grows by `+= v`, so every `values[i]` goes in the msgpack **uint** family per Section 4. Coco has nothing like Count Sketch's signed cells.
 
 **Wire-eligible geometries.** `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, §3.2) and `cols >= 1`. `cols == 0` is not representable at all — `Vector2D` derives its column mask through `cols.ilog2()`, which panics on zero — and a table with no arrays records nothing. Each is rejected on **both** sides. There is no power-of-two constraint on `cols`, since Coco folds with `% w` rather than a mask.
 
@@ -1031,7 +1029,7 @@ UnivMon carries the hash-spec group — it hashes, and a consumer must reproduce
 1. `kind_id` is `0x10 0x00`; any other id is rejected.
 2. The hash-spec group matches `DefaultXxHasher`'s `HashProfile`. `layers`, `rows`, `cols`, `heap_size` and `key_type` are properties of the stored sketch, so they are echoed back rather than pinned.
 3. `layers`, `rows`, `cols` and `heap_size` are **all non-zero**, and `layers <= 64` (`MAX_LAYER_SIZE`). All of it is checked **before** the per-layer geometry vector is built, so it is the first thing standing between a declared shape and an allocation. The ceiling is a hash-width bound, and `bottom_layer_for_hash` is where it comes from: the layer finder tests `(hash >> l) & 1` for `l` in `1 .. layers`, and the query recurrences shift the same way, so a 64-layer pyramid shifts a 64-bit key hash by at most 63 and a deeper one would shift past the hash's width. The ceiling is checked on **both** doors; the four non-zero checks are the decode door's, since only a decoder is handed a shape it did not build.
-4. `key_type` is one of §3.5's fourteen names; the `keys` array is read **as** that type, with the family separation §3.5's rule 3 spells out (and its limits — one numeric name relabelled as another is not caught); and `keys` and `heap_counts` have equal length.
+4. `key_type` is one of §3.5's fourteen names; the `keys` array is read **as** that type, with §3.5 rule 3's relabel limits; and `keys` and `heap_counts` have equal length.
 5. `rows * layers == len(l2)` exactly, with checked arithmetic, and checked **before** the layer geometry is built. Together with rule 3's ceiling this is what makes a declared `layers` far larger than the payload carries cost nothing: `rows >= 1`, so the equality caps `layers` at `len(l2)`, and the ceiling caps it at 64 regardless.
 6. `len(heap_lens) == len(candidate_complete) == layers`; every layer's `rows` and `cols` are non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — a layer is a CountL2HH matrix; `cols.ilog2()` panics on zero) and its geometry fits the 128-bit key hash, `(ceil_log2(cols) + 1) * rows <= 128` (§3.19); the layers' total cell count and total accumulator count are computed with checked arithmetic and must equal `len(counts)` and `len(l2)`; and `len(keys) == len(heap_counts) == sum(heap_lens)`.
 7. Each layer's entry count is `<= heap_size`, and no key appears twice within a layer — judged on the key's wire representation before any entry is seated, exactly as §3.7's rule 7 describes, since a layer's heap is rebuilt through the same code. `heap_size` **never sizes an allocation**: each heap reserves `min(entries this layer carries, heap_size, 1024)` and grows from there, so a crafted `heap_size` costs nothing and an honest one reserves no more than 1024 slots up front. It still fixes the decoded heap's capacity.
@@ -1395,12 +1393,23 @@ msgpack fixes endianness and float format; these rules fix the family/width choi
 **Integer family + width rule (applies to every integer below).**
 This is the single biggest cross-language trap: some Go msgpack libraries emit a *signed* `int` family for a positive `int64` while Rust's `rmp_serde` narrows it to the `uint` family. Pin it:
 
-- A **non-negative** integer is encoded in the msgpack **uint** family, at the **minimal width** for its value (e.g. `300` gives `cd 01 2c`, uint16; `1` gives positive fixint `01`).
-- A **negative** integer is encoded in the msgpack **int** family, minimal width.
-- `f64` is always full **float64** (`0xcb`), never narrowed to float32.
+- A **non-negative** integer is encoded in the msgpack **uint** family (e.g. `300` gives `cd 01 2c`, uint16; `1` gives positive fixint `01`).
+- A **negative** integer is encoded in the msgpack **int** family.
 
-The Go side MUST configure its encoder to match (uint-narrowing on, minimal width).
+**Shortest forms.** An encoder writes every integer, and every `str`, `bin`, array and map length, in its shortest form. A decoder accepts any integer width and any length prefix. Every byte-identical round trip in this document starts from bytes an encoder wrote.
+
+The Go side MUST configure its encoder to match (uint-narrowing on, shortest forms).
 Golden byte-vectors lock it.
+
+**Float fields.** Every float field is msgpack **float64** (`0xcb`). A decoder rejects an integer or a float32 in a float field, and a float in an integer field. The float fields are:
+
+- metadata: `alpha` (§3.8), `sample_rate` (§3.13), `admission_rate` (Section 2);
+- HLL HIP's `hip_kxq0` / `hip_kxq1` / `hip_est` (§3.1) and DDSketch's `sum` / `min` / `max` (§3.8);
+- `counts`, `heap_counts` and `deltas` elements where `counter_type` reads `"f64"` (§3.2, §3.6, §3.7, §3.10, §3.23);
+- `items` / `values` elements where `item_type` or `cell_item_type` reads `"f64"` (§3.3, §3.9, §3.13);
+- `keys` elements where `key_type` or `cell_key_type` reads `"f64"` (§3.5, §3.7, §3.9, §3.10, §3.15, §3.16, §3.23).
+
+A `"f32"` key is float32 (`0xca`); a decoder rejects any other type there (§3.5).
 
 **Metadata (msgpack map)**
 
@@ -1426,9 +1435,9 @@ Golden byte-vectors lock it.
 
 *Other arrays, by name.* `words` (§3.4) is Bloom's bit grid as unsigned 64-bit integers, one per packed word. `hashes` (§3.14) is KMV's retained digests as unsigned integers — a digest above `2^63` is still `uint`, never the `int` family. `l2` (§3.19, §3.15, §3.16) is one `i64` accumulator per row. `indices` (§3.23) are unsigned integers, except DDSketch's `indices` / `negative_indices`, which are signed bucket indices. `heap_counts` is `i64`, or float64 in §3.7, §3.10 and §3.23 when `counter_type` reads `"f64"`. `levels` and `coin` (§3.3) are integer arrays; `heap_lens` and `candidate_lens` are `u32` counts; `sizes` / `min_times` / `max_times` (§3.17), `priorities` (§3.13), `values` (§3.12), `candidate_keys` / `candidate_scores` / `occurrence_keys` / `occurrence_priority_high` / `occurrence_priority_low` (§3.20) are all unsigned integers; `vote_pos` / `vote_neg` (§3.11) are `i32`.
 
-*Key and item arrays.* `keys` and `items` take the element type the metadata names — `key_type` for the `HeapItem` keys of §3.5, §3.7, §3.10, §3.15, §3.16, §3.23 and Hydra's `cell_key_type` (§3.9), per §3.5's table; `item_type` for KLL's `items` (§3.3). Four payloads name no such key and are fixed by their kind_id instead: Coco's `keys` (§3.12) and Elastic's `flow_ids` (§3.11) are nil-or-`str`, SetAggregator's `values` (§3.21) and DeltaResult's `added` / `removed` (§3.22) are `str`, and Coco's `values` are unsigned integers. UniformSampling's `values` (§3.13) is float64, which is what its `item_type` names.
+*Key and item arrays.* `keys` and `items` take the element type the metadata names — `key_type` for the `HeapItem` keys of §3.5, §3.7, §3.10, §3.15, §3.16, §3.23 and Hydra's `cell_key_type` (§3.9), per §3.5's table; `item_type` for KLL's `items` (§3.3) and UniformSampling's `values` (§3.13). Four payloads name no such key and are fixed by their kind_id instead: Coco's `keys` (§3.12) and Elastic's `flow_ids` (§3.11) are nil-or-`str`, SetAggregator's `values` (§3.21) and DeltaResult's `added` / `removed` (§3.22) are `str`, and Coco's `values` are unsigned integers.
 
-*Scalars.* Floats are always full **float64** (`0xcb`): HLL HIP's `hip_kxq0` / `hip_kxq1` / `hip_est` (§3.1), DDSketch's `sum` / `min` / `max` (§3.8), and any float element of an array above. The one exception is a `"f32"` **key**, which is float32 (`0xca`) because the variant is the key's identity and widening it would change which key it is (§3.5); that rule governs counter and sample values, which have no identity to preserve. Booleans are msgpack `true` / `false` (`0xc3` / `0xc2`) — `evictions` and `stale_copies` (§3.11), `candidate_complete` (§3.15, §3.16), `ever_evicted` (§3.20). Every other scalar is an integer under the family/width rule: `inserted` (§3.4), `total` / `discarded_max` (§3.5), `offset` / `negative_offset` (§3.8, **signed**), `zero_count` (§3.8), `total_seen` / `rng_state` (§3.13), `bucket_size` / `update_mode` (§3.15, §3.16), `count` / `source_id` / `next_sequence` (§3.20).
+*Scalars.* Float scalars are listed above. Booleans are msgpack `true` / `false` (`0xc3` / `0xc2`) — `evictions` and `stale_copies` (§3.11), `candidate_complete` (§3.15, §3.16), `ever_evicted` (§3.20). Every other scalar is an integer under the family/width rule: `inserted` (§3.4), `total` / `discarded_max` (§3.5), `offset` / `negative_offset` (§3.8, **signed**), `zero_count` (§3.8), `total_seen` / `rng_state` (§3.13), `bucket_size` / `update_mode` (§3.15, §3.16), `count` / `source_id` / `next_sequence` (§3.20).
 
 *Nil.* A nullable slot is msgpack **nil** (`0xc0`), never an empty string and never a zero: an unoccupied Coco bucket, a free Elastic heavy bucket, an absent UnivMon-Q `min` / `max`.
 
