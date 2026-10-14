@@ -9,16 +9,13 @@
 //! math is sufficient — no hashspec bypass needed.
 
 use asap_sketchlib::common::DataInput;
-use asap_sketchlib::common::hash::CANONICAL_HASH_SEED;
-use asap_sketchlib::common::structures::HllBucketListP14;
 use asap_sketchlib::proto::sketchlib::{
-    CountMinState, CountSketchState, CounterType, DdSketchState, HyperLogLogState, SketchEnvelope,
+    CountMinState, CountSketchState, CounterType, DdSketchState, SketchEnvelope,
     sketch_envelope::SketchState,
 };
 use asap_sketchlib::sketches::countminsketch::CountMin;
 use asap_sketchlib::sketches::countsketch::Count;
 use asap_sketchlib::sketches::ddsketch::DDSketch;
-use asap_sketchlib::sketches::hll::{ErtlMLE, HyperLogLogImpl};
 use asap_sketchlib::{DefaultXxHasher, FastPath, Vector2D};
 use prost::Message;
 
@@ -33,11 +30,6 @@ const COUNTSKETCH_GOLDEN_HEX: &str = include_str!("cs_envelope_golden.hex");
 /// `(rows=4, cols=2048)` × `goldenCmsKeys()` (10 keys "flow-0".."flow-9",
 /// each repeated 5×). Same file the wrapper test already uses.
 const COUNTMIN_GOLDEN_HEX: &str = include_str!("../src/sketches/testdata/cms_envelope_golden.hex");
-
-/// 16 398-byte envelope captured from `sketchlib-go::HyperLogLog.SerializePortable`
-/// for precision=14, `(1..=50)` IEEE-754-LE byte-key input. Same file
-/// the wrapper test already uses.
-const HLL_GOLDEN_HEX: &str = include_str!("../src/sketches/testdata/hll_envelope_golden.hex");
 
 /// 403-byte DDSketch envelope for `alpha=0.01`, `(1..=50)` integer-as-f64
 /// input, without the DataPoint-level METRIC scalars (count/sum/min/max →
@@ -164,57 +156,6 @@ fn sketches_countmin_fastpath_matches_go_count_min_envelope() {
     assert_eq!(
         got, want,
         "sketches::CountMin<Vector2D<f64>, FastPath> envelope diverges from Go golden",
-    );
-}
-
-#[test]
-fn sketches_hll_classic_matches_go_envelope() {
-    // Go's `HyperLogLog.SerializePortable` emits variant=DATAFUSION=2
-    // (ErtlMLE). Use the same variant + precision=14 + same input here.
-    let mut sk: HyperLogLogImpl<ErtlMLE, HllBucketListP14, DefaultXxHasher> =
-        <HyperLogLogImpl<ErtlMLE, HllBucketListP14, DefaultXxHasher>>::new();
-    for i in 1..=50i32 {
-        let v = i as f64;
-        let bytes = v.to_le_bytes();
-        let hashed = <DefaultXxHasher as asap_sketchlib::common::SketchHasher>::hash64_seeded(
-            CANONICAL_HASH_SEED,
-            &DataInput::Bytes(&bytes),
-        );
-        sk.insert_with_hash(hashed);
-    }
-
-    let state = HyperLogLogState {
-        // 2 = DATAFUSION on the Go wire (matches ErtlMLE)
-        variant: 2,
-        precision: 14,
-        registers: sk.registers_as_slice().to_vec(),
-        hip_kxq0: 0.0,
-        hip_kxq1: 0.0,
-        hip_est: 0.0,
-        // This parity probe pins the DENSE wire form; leave sparse unset.
-        registers_sparse: None,
-    };
-    let envelope = SketchEnvelope {
-        format_version: 1,
-        producer: None,
-        hash_spec: None,
-        sample_p: 0.0,
-        sketch_state: Some(SketchState::Hll(state)),
-    };
-    let mut got = Vec::with_capacity(envelope.encoded_len());
-    envelope.encode(&mut got).expect("prost encode");
-
-    let want = decode_hex(HLL_GOLDEN_HEX);
-    assert_eq!(
-        got.len(),
-        want.len(),
-        "HLL envelope length: got {} want {}",
-        got.len(),
-        want.len(),
-    );
-    assert_eq!(
-        got, want,
-        "sketches::HyperLogLogImpl<ErtlMLE, P14> envelope diverges from Go golden",
     );
 }
 

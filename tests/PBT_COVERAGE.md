@@ -2,8 +2,8 @@
 
 One `proptest` law per line. Each compares the sketch against an answer
 computed without it; what that answer is comes first in every section. One
-file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 367 laws;
-with `--all-features`, 435, adding the four **experimental** modules. Every
+file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 365 laws;
+with `--all-features`, 433, adding the four **experimental** modules. Every
 law was mutation-checked: break the implementation, the law goes red. Shared
 generators, `grid` and `round_trip!` live in `support.rs`.
 
@@ -228,7 +228,7 @@ Compared against: the offers sorted and truncated. `HHHeap` is path dependent on
   - one offer per key: the `k` largest counts resident
   - `update` returns true iff the key was resident or there was room, i.e. nothing was displaced
 
-## hll.rs — 101
+## hll.rs — 99
 
 Models use only what the paper fixes; register indexing and rank mapping stay free. For `Classic` and `ErtlMLE`, `estimate` is a function of the registers, so laws relate estimates rather than restate the formula. Registers `<= 40`, so `sum(2^-M[j])` is exact in f64.
 
@@ -252,10 +252,8 @@ Models use only what the paper fixes; register indexing and rank mapping stay fr
   - `estimate` non-decreasing; a repeated key adds 0
   - order matters: a descending run into one register estimates exactly 1, an ascending run `> 1`
   - an arrival that raises a register adds `m / sum(2^-M[j])` over the prior registers; one that raises nothing adds 0; both sides exact in f64, compared after truncation to `usize`
-- portable `HllSketch` (5)
-  - merge commutative, idempotent, empty identity, `== S(xs ++ ys)`; precisions 4-11
-  - msgpack keeps variant, precision, registers, estimate; `Regular`, `Datafusion`, `Hip`; precisions 4-13
-  - ASAPv1 on `HyperLogLog<ErtlMLE>` keeps registers and estimate; empty included
+- wire (3)
+  - ASAPv1 on `HyperLogLog<ErtlMLE>` and `HyperLogLog<Classic>` keeps registers and estimate, on `HyperLogLogHIP` keeps estimate; re-encode byte-identical; empty included
 
 ## hydra.rs — 7
 

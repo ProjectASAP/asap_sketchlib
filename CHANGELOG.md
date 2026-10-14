@@ -49,7 +49,7 @@ signals a backwards-compatible change.
   law that sketch claims — merge algebra, path equivalence, the paper's own
   model, and the wire / ASAPv1 round trip. Shared generators, the `grid`
   reader and the `round_trip!` macro live in `tests/pbt/support.rs`; four
-  modules sit behind `experimental`. 435 tests under `--all-features`, 367
+  modules sit behind `experimental`. 433 tests under `--all-features`, 365
   under the default feature set. Every law was mutation-checked: the
   implementation was broken deliberately, the law confirmed red, and confirmed
   not to take unrelated laws down with it; a law no semantically real mutation
@@ -66,6 +66,13 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **HyperLogLog `from_storage` constructors.** `HyperLogLogImpl::from_storage(registers)`
+  and `HyperLogLogHIPImpl::from_storage(registers, kxq0, kxq1, est)` build a
+  sketch from known register storage (and HIP running state).
+- **HLL P14 golden fixtures** `hll_classic_p14`, `hll_ertl_mle_p14` and
+  `hll_hip_p14` in `asapv1_golden/`, checked in both directions by
+  `tests/asapv1_golden.rs`. Their registers touch the first, a middle and the
+  last index and hold 51, the largest P14 rank.
 
 ### Changed
 
@@ -87,6 +94,20 @@ signals a backwards-compatible change.
   is retained; `TumblingWindow::insert` closes a period that saw no arrivals
   as an empty window like any other, and that window takes a place in
   `max_windows`.
+
+### Removed
+
+- **HyperLogLog's protobuf and portable formats.** HyperLogLog serializes only
+  as ASAPv1 (`serialize_to_bytes` / `deserialize_from_bytes`). Removed: the
+  portable `HllSketch`, `HllSketchDelta` and `HllVariant` (module
+  `message_pack_format::portable::hll` and their crate-root re-exports), with
+  `registers_from_state`, `decode_sparse_registers` and
+  `encode_sparse_registers`; the `MessagePackCodec` impls for
+  `HyperLogLogImpl` and `HyperLogLogHIPImpl` (`message_pack_format::native::hll`);
+  the `HLLDelta` proto message (`proto::sketchlib::HllDelta`); and the `hll`
+  field (12) of `SketchEnvelope`, now reserved. `HyperLogLogState`,
+  `HLLSparseRegisters` and `HLLVariant` remain only as the `HydraCell` HLL
+  state.
 
 ### Fixed
 

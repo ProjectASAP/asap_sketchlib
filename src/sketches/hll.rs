@@ -42,10 +42,6 @@ use std::marker::PhantomData;
 
 mod wire;
 pub use wire::HllWireVariant;
-pub(crate) use wire::{
-    HLL_KIND_CLASSIC, HLL_KIND_ERTL_MLE, HLL_KIND_HIP, HllMetadata, HllPayloadHip, HllPayloadPlain,
-    standard_hll_metadata,
-};
 
 /// Generic HyperLogLog sketch parameterized by estimation variant, register storage, and hasher.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -140,8 +136,13 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     HyperLogLogImpl<Variant, Registers, H>
 {
     fn new_base() -> Self {
+        Self::from_storage(Registers::default())
+    }
+
+    /// Creates a sketch from an existing register storage instance.
+    pub fn from_storage(registers: Registers) -> Self {
         Self {
-            registers: Registers::default(),
+            registers,
             _marker: PhantomData,
             _hasher: PhantomData,
         }
@@ -340,6 +341,18 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
             est: 0.0,
         }
     }
+
+    /// Creates a sketch from register storage and the HIP running state
+    /// (`kxq0`, `kxq1`, `est`).
+    pub fn from_storage(registers: Registers, kxq0: f64, kxq1: f64, est: f64) -> Self {
+        Self {
+            registers,
+            kxq0,
+            kxq1,
+            est,
+        }
+    }
+
     /// Inserts a pre-hashed value, updating both the register and the HIP running estimate.
     #[inline(always)]
     pub fn insert_with_hash(&mut self, hashed: u64) {

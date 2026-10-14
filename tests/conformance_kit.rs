@@ -11,7 +11,6 @@ use common::conformance::{
 use common::{FreqTruth, zipf_u64};
 
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
-use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::{
     Bloom, CMSHeap, CSHeap, CountL2HH, CountMin, DDSketch, DataInput, FastPath, FoldCMS, FoldCS,
     HyperLogLog, HyperLogLogHIP, KLL, KLLDynamic, RegularPath, SpaceSaving, UnivMonQ, Vector2D,
@@ -128,17 +127,6 @@ impl CardinalityOps for HllHipAdapter {
     }
     fn estimate(&self) -> f64 {
         self.0.estimate() as f64
-    }
-}
-
-struct PortableHllAdapter(HllSketch);
-
-impl CardinalityOps for PortableHllAdapter {
-    fn ingest(&mut self, key: &[u8]) {
-        self.0.update(key);
-    }
-    fn estimate(&self) -> f64 {
-        self.0.estimate()
     }
 }
 
@@ -307,15 +295,6 @@ fn hll_variants_pass_cardinality_conformance() {
     conformance::cardinality_battery(
         "HyperLogLogHIP",
         || HllHipAdapter(HyperLogLogHIP::new()),
-        &unique,
-        100_000,
-        spec,
-    )
-    .assert_ok();
-
-    conformance::cardinality_battery(
-        "portable HllSketch<p14>",
-        || PortableHllAdapter(HllSketch::new(HllVariant::Regular, 14)),
         &unique,
         100_000,
         spec,

@@ -20,15 +20,11 @@
 //! `impl<Variant, Registers, H>` block, so the two variants share one
 //! monomorphization. Estimation expands over both.
 //!
-//! The merge laws cover both representations: `HyperLogLogImpl` itself and
-//! `HllSketch`, the portable one with a register array of its own.
-//!
 //! Flajolet, Fusy, Gandouet, Meunier, AofA '07.
 
 use crate::support::keys;
-use asap_sketchlib::message_pack_format::MessagePackCodec;
 use asap_sketchlib::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};
-use asap_sketchlib::{Classic, DataInput, ErtlMLE, HllSketch, HllVariant, HyperLogLog};
+use asap_sketchlib::{Classic, DataInput, ErtlMLE, HyperLogLog, HyperLogLogHIP};
 use proptest::prelude::*;
 
 asap_sketchlib::impl_hll_bucket_list!(BucketsP4, 4, 1_usize << 4);
@@ -446,14 +442,18 @@ macro_rules! hip_laws {
             const M: usize = <$buckets>::NUM_REGISTERS;
             const P: u32 = <$buckets>::PRECISION as u32;
 
-            /// The registers, read back through the wire format. The struct
-            /// holds them privately behind the `kxq0`/`kxq1` accumulators, and
-            /// those accumulators are what the increment law checks, so the
-            /// envelope is the one view of the registers that stays independent
-            /// of it.
+            /// The registers, read out of the ASAPv1 payload: the struct keeps
+            /// them private, and this view is independent of the `kxq0`/`kxq1`
+            /// accumulators the increment law checks.
             fn registers_of(sketch: &S) -> Vec<u8> {
-                let bytes = sketch.to_msgpack().expect("encode");
-                HllSketch::from_msgpack(&bytes).expect("decode").registers
+                let bytes = sketch.serialize_to_bytes().expect("encode");
+                let lengths_at = 8 + bytes[7] as usize;
+                let metadata_len =
+                    u32::from_be_bytes(bytes[lengths_at..lengths_at + 4].try_into().unwrap());
+                let payload = &bytes[lengths_at + 8 + metadata_len as usize..];
+                let (registers, ..): (serde_bytes::ByteBuf, f64, f64, f64) =
+                    rmp_serde::from_slice(payload).expect("decode");
+                registers.into_vec()
             }
 
             #[test]
@@ -565,98 +565,8 @@ hip_laws!(hip_p6, BucketsP6);
 hip_laws!(hip_p8, BucketsP8);
 hip_laws!(hip_p10, BucketsP10);
 
-fn byte_items(max: usize) -> impl Strategy<Value = Vec<Vec<u8>>> {
-    prop::collection::vec(prop::collection::vec(any::<u8>(), 1..16), 0..max)
-}
-
-fn portable_hll_of(precision: u32, items: &[Vec<u8>]) -> HllSketch {
-    let mut s = HllSketch::new(HllVariant::Regular, precision);
-    for i in items {
-        s.update(i);
-    }
-    s
-}
-
-proptest! {
-    // ===== Merge =====
-
-    #[test]
-    fn hll_register_merge_is_commutative_and_idempotent(
-        precision in 4u32..12,
-        a in byte_items(50),
-        b in byte_items(50),
-    ) {
-        let mut ab = portable_hll_of(precision, &a);
-        ab.merge(&portable_hll_of(precision, &b)).expect("merge");
-        let mut ba = portable_hll_of(precision, &b);
-        ba.merge(&portable_hll_of(precision, &a)).expect("merge");
-
-        prop_assert_eq!(&ab.registers, &ba.registers);
-
-        let before = ab.registers.clone();
-        let again = ab.clone();
-        ab.merge(&again).expect("merge");
-        prop_assert_eq!(&ab.registers, &before);
-    }
-
-    #[test]
-    fn hll_merge_equals_streaming_the_concatenation(
-        precision in 4u32..12,
-        a in byte_items(50),
-        b in byte_items(50),
-    ) {
-        let mut merged = portable_hll_of(precision, &a);
-        merged.merge(&portable_hll_of(precision, &b)).expect("merge");
-
-        let concatenated: Vec<_> = a.iter().chain(b.iter()).cloned().collect();
-        let streamed = portable_hll_of(precision, &concatenated);
-
-        prop_assert_eq!(&merged.registers, &streamed.registers);
-    }
-
-    #[test]
-    fn hll_empty_is_a_merge_identity(
-        precision in 4u32..12,
-        a in byte_items(50),
-    ) {
-        let base = portable_hll_of(precision, &a);
-        let mut merged = base.clone();
-        merged.merge(&HllSketch::new(HllVariant::Regular, precision)).expect("merge");
-
-        prop_assert_eq!(&merged.registers, &base.registers);
-    }
-}
-
-fn hll_variant() -> impl Strategy<Value = HllVariant> {
-    prop_oneof![
-        Just(HllVariant::Regular),
-        Just(HllVariant::Datafusion),
-        Just(HllVariant::Hip),
-    ]
-}
-
 proptest! {
     // ===== Wire =====
-
-    #[test]
-    fn hll_round_trip_preserves_registers(
-        variant in hll_variant(),
-        precision in 4u32..14,
-        items in byte_items(64),
-    ) {
-        let mut s = HllSketch::new(variant, precision);
-        for item in &items {
-            s.update(item);
-        }
-
-        let bytes = s.to_msgpack().expect("encode");
-        let restored = HllSketch::from_msgpack(&bytes).expect("decode");
-
-        prop_assert_eq!(restored.variant, s.variant);
-        prop_assert_eq!(restored.precision, s.precision);
-        prop_assert_eq!(&restored.registers, &s.registers);
-        prop_assert_eq!(restored.estimate(), s.estimate());
-    }
 
     #[test]
     fn hyperloglog_round_trips_including_the_empty_sketch(stream in keys(400)) {
@@ -672,5 +582,31 @@ proptest! {
             |s: &Hll| s.registers_as_slice().to_vec(),
             |s: &Hll| s.estimate(),
         );
+    }
+
+    #[test]
+    fn classic_round_trips_including_the_empty_sketch(stream in keys(400)) {
+        type Hll = HyperLogLog<Classic>;
+        let mut sketch = Hll::new();
+        for k in &stream {
+            sketch.insert(&DataInput::U64(*k));
+        }
+
+        round_trip!(
+            Hll,
+            sketch,
+            |s: &Hll| s.registers_as_slice().to_vec(),
+            |s: &Hll| s.estimate(),
+        );
+    }
+
+    #[test]
+    fn hip_round_trips_including_the_empty_sketch(stream in keys(400)) {
+        let mut sketch = HyperLogLogHIP::new();
+        for k in &stream {
+            sketch.insert(&DataInput::U64(*k));
+        }
+
+        round_trip!(HyperLogLogHIP, sketch, |s: &HyperLogLogHIP| s.estimate());
     }
 }
