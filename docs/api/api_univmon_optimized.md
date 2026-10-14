@@ -46,6 +46,7 @@ fn calc_l2(&self) -> f64
 fn calc_entropy(&self) -> f64
 fn calc_card(&self) -> f64
 fn calc_g_sum<F>(&self, g: F, is_card: bool) -> f64
+fn top_layer_complete(&self) -> bool
 
 // UnivSketchPool
 fn available(&self) -> usize
@@ -55,6 +56,15 @@ fn total_allocated(&self) -> usize
 For the supported non-negative update stream, `calc_l1()` returns the exact
 tracked total weight rather than estimating the linear sum through the
 hierarchy.
+
+The pyramid's estimators are `UnivMon`'s (see [UnivMon](api_univmon.md)).
+`calc_l2()` reads layer 0's Count Sketch directly in standard mode, so its
+`(ε, δ)` bound uses layer 0's dimensions (the elephant ones whenever
+`elephant_layers ≥ 1`); in terminal mode it sums the strata, each held to its
+own layer's dimensions. `calc_card()` counts every heap key and, when
+`top_layer_complete()` holds, misses by more than `ε F0` with probability at
+most `2/(kε²)` for `k = heap_size ≥ 8`, independent of the elephant/mouse
+split.
 
 ## Merge
 

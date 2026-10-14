@@ -270,6 +270,11 @@ impl UnivMonPyramid {
     // -- Query methods (identical to UnivMon) --------------------------------
 
     /// Computes a g-sum estimate.
+    ///
+    /// With `is_card` every heap key contributes `g` of its estimate; that
+    /// is [`Self::calc_card`]'s estimator. Otherwise a key whose estimate is
+    /// not positive is skipped, and in terminal mode a layer whose candidate
+    /// set is incomplete also skips keys below `L2 / √heap_size`.
     pub fn calc_g_sum<F>(&self, g: F, is_card: bool) -> f64
     where
         F: Fn(f64) -> f64,
@@ -278,23 +283,19 @@ impl UnivMonPyramid {
             return 0.0;
         }
         if self.update_mode == UnivMonUpdateMode::Terminal {
-            return self.calc_terminal_g_sum(g);
+            return self.calc_terminal_g_sum(g, is_card);
         }
 
+        // A distinct count weighs every heap key 1 whatever its estimate: the
+        // recursion stays unbiased only if no key is dropped by its value.
+        let counted = |count: i64| is_card || count > 0;
         let mut y = vec![0.0; self.layer_size];
-
-        let l2_top = self.l2_sketch_layers[self.layer_size - 1].get_l2();
-        let threshold_top = if is_card {
-            self.heavy_threshold(l2_top, self.candidate_complete[self.layer_size - 1])
-        } else {
-            0
-        };
 
         let mut tmp = 0.0;
         for item in self.hh_layers[self.layer_size - 1].heap() {
             let input = heap_item_to_sketch_input(&item.key);
             let count = self.l2_sketch_layers[self.layer_size - 1].estimate(&input) as i64;
-            if count > threshold_top {
+            if counted(count) {
                 tmp += g(count as f64);
             }
         }
@@ -302,17 +303,10 @@ impl UnivMonPyramid {
 
         for i in (0..(self.layer_size - 1)).rev() {
             tmp = 0.0;
-            let l2_val = self.l2_sketch_layers[i].get_l2();
-            let threshold = if is_card {
-                self.heavy_threshold(l2_val, self.candidate_complete[i])
-            } else {
-                0
-            };
-
             for item in self.hh_layers[i].heap() {
                 let input = heap_item_to_sketch_input(&item.key);
                 let count = self.l2_sketch_layers[i].estimate(&input) as i64;
-                if count > threshold {
+                if counted(count) {
                     let hash = (hash_item64_seeded(BOTTOM_LAYER_FINDER, &item.key) >> (i + 1)) & 1;
                     let coe = 1.0 - 2.0 * (hash as f64);
                     tmp += coe * g(count as f64);
@@ -323,11 +317,13 @@ impl UnivMonPyramid {
         y[0]
     }
 
-    fn calc_terminal_g_sum<F>(&self, g: F) -> f64
+    fn calc_terminal_g_sum<F>(&self, g: F, is_card: bool) -> f64
     where
         F: Fn(f64) -> f64,
     {
         let (candidates, complete) = self.logical_terminal_candidates();
+        // As in standard mode, a distinct count weighs every candidate 1.
+        let counted = |count: i64, threshold: i64| is_card || count > threshold;
         let mut logical_l2 = vec![0.0; self.layer_size];
         let mut suffix_l2_squared = 0.0;
         for level in (0..self.layer_size).rev() {
@@ -341,7 +337,7 @@ impl UnivMonPyramid {
         let threshold = self.heavy_threshold(logical_l2[last], complete[last]);
         y[last] = candidates[last]
             .iter()
-            .filter(|(_, count)| *count > threshold)
+            .filter(|(_, count)| counted(*count, threshold))
             .map(|(_, count)| g(*count as f64))
             .sum();
 
@@ -349,7 +345,7 @@ impl UnivMonPyramid {
             let threshold = self.heavy_threshold(logical_l2[level], complete[level]);
             let correction = candidates[level]
                 .iter()
-                .filter(|(_, count)| *count > threshold)
+                .filter(|(_, count)| counted(*count, threshold))
                 .map(|(key, count)| {
                     let hash = (hash_item64_seeded(BOTTOM_LAYER_FINDER, key) >> (level + 1)) & 1;
                     (1.0 - 2.0 * hash as f64) * g(*count as f64)
@@ -408,8 +404,45 @@ impl UnivMonPyramid {
     }
 
     /// Returns the estimated L2 norm.
+    ///
+    /// In standard mode layer 0 receives every key, so its Count Sketch
+    /// estimates `F2 = Σ f_i²` directly (each row's sum of squared counters,
+    /// median across rows). In terminal mode the layers hold disjoint strata,
+    /// so their `F2` estimates add. The heap recursion of
+    /// [`Self::calc_g_sum`] is not used.
+    ///
+    /// # Error bound (standard mode)
+    ///
+    /// The derivation is [`UnivMon::calc_l2`]'s, applied to layer 0, which is
+    /// an elephant layer (`elephant_row x elephant_col`) whenever
+    /// `elephant_layers ≥ 1` and a mouse layer otherwise. With `w` and `r`
+    /// that layer's columns and rows: one row's estimate has
+    /// `Var ≤ 2q F2²`, where `q = 1/w` for a power-of-two `w` and
+    /// `q ≤ 9/(8w)` otherwise, so it misses by more than `ε F2` with
+    /// probability at most `p = 2q/ε²`. The rows read disjoint slices of one
+    /// 128-bit hash and are independent, and their median misses only when
+    /// `⌈r/2⌉` rows miss on the same side:
+    ///
+    /// `P(|F2_est − F2| > ε F2) ≤ δ = P(Binomial(r, p) ≥ ⌈r/2⌉)`.
+    ///
+    /// The same `ε` and `δ` bound the returned norm's relative error. The
+    /// mouse layers do not enter the standard-mode estimate.
+    ///
+    /// # Terminal mode
+    ///
+    /// Each stratum satisfies the bound above with its own layer's `w` and
+    /// `r` (mouse layers are narrower, so their `δ` is larger). The sum is
+    /// within `ε` of the total whenever every non-empty stratum is within `ε`
+    /// of its own `F2`, so the failure probability is at most the sum of the
+    /// non-empty strata's `δ`s.
     pub fn calc_l2(&self) -> f64 {
-        self.calc_g_sum(|x| x * x, false).sqrt()
+        if self.update_mode == UnivMonUpdateMode::Terminal {
+            return (0..self.layer_size)
+                .map(|level| self.l2_sketch_layers[level].get_l2_sqr())
+                .sum::<f64>()
+                .sqrt();
+        }
+        self.l2_sketch_layers[0].get_l2()
     }
 
     /// Returns the estimated entropy.
@@ -421,9 +454,39 @@ impl UnivMonPyramid {
         (self.bucket_size as f64).log2() - tmp / (self.bucket_size as f64)
     }
 
-    /// Returns the estimated cardinality.
+    /// Returns the estimated number of distinct keys, `F0`.
+    ///
+    /// This is the recursion of [`Self::calc_g_sum`] with `g = 1`, and every
+    /// heap key counts whatever its Count Sketch estimate: a key is in a heap
+    /// only because the stream inserted it.
+    ///
+    /// # Error bound (standard mode)
+    ///
+    /// The derivation is [`UnivMon::calc_card`]'s and does not depend on the
+    /// sketch dimensions, so the elephant/mouse split does not enter it. With
+    /// `k = heap_size` and `S_j`, `H_j`, `M_j = S_j \ H_j` the keys reaching,
+    /// held at and missed at layer `j`, a complete top layer
+    /// ([`Self::top_layer_complete`]) gives
+    /// `Y_0 − F0 = −Σ_{j=0}^{L−2} 2^j Σ_{i∈M_j} (1 − 2 b_{j+1}(i))`.
+    /// `M_j` is decided by layer `j`'s own sketch over `S_j` and does not
+    /// depend on bit `j+1`, so the estimate is unbiased with
+    /// `Var[Y_0] = Σ_j 4^j E(|S_j| − k)^+ ≤ 1.35 F0²/k ≤ 2 F0²/k` for `k ≥ 8`.
+    /// By Chebyshev, `P(|Y_0 − F0| > ε F0) ≤ 2/(k ε²)`.
+    ///
+    /// With `layer_size ≥ ⌈log2(F0_max / k)⌉ + 2` the top layer overflows
+    /// with probability below `(e/4)^{k/2}`; read
+    /// [`Self::top_layer_complete`] rather than assume it. Terminal mode
+    /// reconstructs its candidate sets from the strata and is not covered.
     pub fn calc_card(&self) -> f64 {
         self.calc_g_sum(|_| 1.0, true)
+    }
+
+    /// Whether the top layer's heap still holds every key that layer received.
+    ///
+    /// This is the precondition of [`Self::calc_card`]'s error bound: with an
+    /// incomplete top layer the distinct count is biased low.
+    pub fn top_layer_complete(&self) -> bool {
+        self.candidate_complete[self.layer_size - 1]
     }
 
     // -- Lifecycle -----------------------------------------------------------
@@ -507,6 +570,204 @@ impl UnivMonPyramid {
 mod tests {
     use super::*;
     use crate::DataInput;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    /// Sign layer 0 gives `key` in its single row (`+1` or `-1`).
+    fn layer0_sign(key: &DataInput, cols: usize) -> i64 {
+        use crate::common::hash128_seeded;
+        use crate::common::structures::matrix_storage::cols_mask_bits;
+        use crate::sketches::countsketch_topk::l2hh_cell_for_row;
+        l2hh_cell_for_row(hash128_seeded(0, key), 0, cols, cols_mask_bits(cols)).1
+    }
+
+    /// A key whose Count Sketch estimate is not positive is still a key the
+    /// stream inserted; a complete layer must count it.
+    #[test]
+    fn pyramid_calc_card_counts_heap_keys_with_nonpositive_estimates() {
+        let plus = (0_u64..)
+            .map(DataInput::U64)
+            .find(|key| layer0_sign(key, 1) == 1)
+            .expect("a key with sign +1");
+        let minus = (0_u64..)
+            .map(DataInput::U64)
+            .find(|key| layer0_sign(key, 1) == -1)
+            .expect("a key with sign -1");
+        let mut pyramid = UnivMonPyramid::new(4, 1, 1, 1, 1, 1, 1);
+        pyramid.insert(&plus, 5);
+        pyramid.insert(&minus, 1);
+        assert!(pyramid.l2_sketch_layers[0].estimate(&minus) <= 0.0);
+        assert!(pyramid.top_layer_complete());
+        assert_eq!(pyramid.calc_card(), 2.0);
+    }
+
+    /// Layer 0 sees every key in standard mode, so its own Count Sketch is the
+    /// L2 estimate.
+    #[test]
+    fn pyramid_calc_l2_reads_layer_zero_directly_in_standard_mode() {
+        let mut pyramid = UnivMonPyramid::new(16, 2, 5, 256, 3, 64, 8);
+        for key in 0..2000_u64 {
+            pyramid.insert(&DataInput::U64(key), (key % 7 + 1) as i64);
+        }
+        let direct = pyramid.l2_sketch_layers[0].get_l2();
+        assert!(
+            (pyramid.calc_l2() - direct).abs() < 1e-9,
+            "calc_l2 {} differs from layer 0's direct estimate {direct}",
+            pyramid.calc_l2()
+        );
+    }
+
+    /// Terminal mode keeps disjoint strata, so the squared L2 estimates add.
+    #[test]
+    fn pyramid_calc_l2_sums_stratum_estimates_in_terminal_mode() {
+        let mut pyramid = UnivMonPyramid::new(16, 2, 5, 256, 3, 64, 8);
+        for key in 0..2000_u64 {
+            pyramid.fast_insert(&DataInput::U64(key), (key % 7 + 1) as i64);
+        }
+        let direct = (0..pyramid.layer_size)
+            .map(|level| pyramid.l2_sketch_layers[level].get_l2_sqr())
+            .sum::<f64>()
+            .sqrt();
+        assert!(
+            (pyramid.calc_l2() - direct).abs() < 1e-9,
+            "calc_l2 {} differs from the summed strata {direct}",
+            pyramid.calc_l2()
+        );
+    }
+
+    #[test]
+    fn pyramid_top_layer_complete_tracks_the_top_heap() {
+        let mut pyramid = UnivMonPyramid::new(4, 1, 3, 64, 2, 16, 1);
+        for key in 0..4_u64 {
+            pyramid.insert(&DataInput::U64(key), 1);
+        }
+        assert!(pyramid.top_layer_complete());
+        pyramid.insert(&DataInput::U64(4), 1);
+        assert!(!pyramid.top_layer_complete());
+        pyramid.free();
+        assert!(pyramid.top_layer_complete());
+    }
+
+    /// Fresh random key ids with Zipf weights: one trial's stream. The seed
+    /// is fixed, so each trial draws fresh ids instead; a uniformly random
+    /// hash makes those trials independent.
+    fn zipf_stream(n: usize, rng: &mut StdRng) -> Vec<(u64, i64)> {
+        let mut ids = HashSet::with_capacity(n);
+        while ids.len() < n {
+            ids.insert(rng.random::<u64>());
+        }
+        ids.into_iter()
+            .enumerate()
+            .map(|(rank, id)| (id, (10_000.0 / ((rank + 1) as f64).powf(1.1)).ceil() as i64))
+            .collect()
+    }
+
+    /// Failures allowed out of `trials` at a true rate of at most `delta`:
+    /// the mean plus four standard deviations, plus one.
+    fn allowed_failures(trials: usize, delta: f64) -> f64 {
+        let n = trials as f64;
+        n * delta + 4.0 * (n * delta * (1.0 - delta)).sqrt() + 1.0
+    }
+
+    /// `calc_l2`'s documented bound, on a pyramid whose layer 0 is `5 x 64`
+    /// and whose mouse layers are `3 x 16`:
+    /// `p = 2/(64 · 0.25) = 0.125`, `δ = P(Bin(5, p) ≥ 3) ≈ 0.016`.
+    fn check_l2(trials: usize) {
+        const EPS: f64 = 0.5;
+        const DELTA: f64 = 0.0161;
+        let mut rng = StdRng::seed_from_u64(0x5EED_0013);
+        let mut failures = 0;
+        for _ in 0..trials {
+            let keys = zipf_stream(400, &mut rng);
+            let mut pyramid = UnivMonPyramid::new(8, 1, 5, 64, 3, 16, 3);
+            for &(id, weight) in &keys {
+                pyramid.insert(&DataInput::U64(id), weight);
+            }
+            let f2: f64 = keys.iter().map(|&(_, f)| (f as f64).powi(2)).sum();
+            if (pyramid.calc_l2().powi(2) - f2).abs() > EPS * f2 {
+                failures += 1;
+            }
+        }
+        assert!(
+            failures as f64 <= allowed_failures(trials, DELTA),
+            "{failures}/{trials} misses beyond ε={EPS}, δ={DELTA}"
+        );
+    }
+
+    /// `calc_card`'s documented bound with a complete top layer, on mouse
+    /// layers much narrower than the elephant ones: unbiased, variance at most
+    /// `2 F0²/k`, Chebyshev `δ = 2/(k ε²)`.
+    fn check_card(trials: usize) {
+        const HEAP: usize = 32;
+        const KEYS: usize = 2000;
+        const EPS: f64 = 0.5;
+        // L ≥ ⌈log2(F0 / k)⌉ + 2.
+        let layers = (KEYS as f64 / HEAP as f64).log2().ceil() as usize + 2;
+        let mut rng = StdRng::seed_from_u64(0x5EED_00F1);
+        let f0 = KEYS as f64;
+        let (mut failures, mut kept, mut sum, mut sum_sq) = (0, 0, 0.0, 0.0);
+        for _ in 0..trials {
+            let mut pyramid = UnivMonPyramid::new(HEAP, 2, 3, 256, 2, 32, layers);
+            for (id, weight) in zipf_stream(KEYS, &mut rng) {
+                pyramid.insert(&DataInput::U64(id), weight);
+            }
+            if !pyramid.top_layer_complete() {
+                continue;
+            }
+            kept += 1;
+            let error = pyramid.calc_card() - f0;
+            sum += error;
+            sum_sq += error * error;
+            if error.abs() > EPS * f0 {
+                failures += 1;
+            }
+        }
+        // (e/4)^{k/2} ≈ 2e-3 for k = 32.
+        let incomplete = trials - kept;
+        assert!(
+            incomplete as f64 <= allowed_failures(trials, 0.01),
+            "top layer incomplete in {incomplete}/{trials} trials"
+        );
+        let n = kept as f64;
+        let delta = 2.0 / (HEAP as f64 * EPS * EPS);
+        assert!(
+            failures as f64 <= allowed_failures(kept, delta),
+            "{failures}/{kept} misses beyond ε={EPS}"
+        );
+        let variance = sum_sq / n;
+        assert!(
+            variance <= 2.0 * f0 * f0 / HEAP as f64,
+            "variance {:.3}·F0²/k above 2",
+            variance / (f0 * f0 / HEAP as f64)
+        );
+        // Unbiased: the mean error is within four standard errors.
+        assert!(
+            (sum / n).abs() <= 4.0 * (variance / n).sqrt(),
+            "mean error {:.1} looks biased",
+            sum / n
+        );
+    }
+
+    #[test]
+    fn pyramid_calc_l2_meets_its_documented_bound() {
+        check_l2(150);
+    }
+
+    #[test]
+    #[ignore = "long Monte Carlo run; the fast variant runs by default"]
+    fn pyramid_calc_l2_meets_its_documented_bound_long() {
+        check_l2(3000);
+    }
+
+    #[test]
+    fn pyramid_calc_card_meets_its_documented_bound() {
+        check_card(60);
+    }
+
+    #[test]
+    #[ignore = "long Monte Carlo run; the fast variant runs by default"]
+    fn pyramid_calc_card_meets_its_documented_bound_long() {
+        check_card(2000);
+    }
 
     #[test]
     fn pool_basic_take_put() {
