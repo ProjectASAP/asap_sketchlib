@@ -29,13 +29,18 @@ fn insert_by_hash(&mut self, hash_value: u64)
 ## Query
 
 ```rust
-fn estimate(&mut self) -> f64
+fn estimate(&self) -> f64
+fn approx_memory_bytes(&self) -> usize
 ```
+
+`approx_memory_bytes` is the struct plus the hash slots the heap has
+allocated: up to 1024 at construction, growing toward `k` as distinct hashes
+arrive.
 
 ## Merge
 
 ```rust
-fn merge(&mut self, other: &mut KMV<H>)
+fn merge(&mut self, other: &KMV<H>)
 ```
 
 ## Serialization

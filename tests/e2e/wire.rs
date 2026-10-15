@@ -461,7 +461,7 @@ fn the_experimental_envelopes_round_trip_and_name_their_kinds() {
     }
     let kmv_bytes = kmv.serialize_to_bytes().expect("encode KMV");
     assert_kind(&kmv_bytes, 0x0e, 0x00, "KMV");
-    let mut decoded_kmv =
+    let decoded_kmv =
         KMV::<DefaultXxHasher>::deserialize_from_bytes(&kmv_bytes).expect("decode KMV");
     assert_eq!(decoded_kmv.estimate(), kmv.estimate(), "KMV estimate");
 

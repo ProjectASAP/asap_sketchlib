@@ -92,6 +92,14 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- **`KMV` reads, merges and reports memory without a mutable borrow or a
+  copy.** `estimate` takes `&self` and `merge` takes the other sketch as
+  `&KMV`, so a caller holding a shared state no longer clones it to read an
+  estimate or to merge it in; existing `&mut` call sites still compile.
+  `approx_memory_bytes` reports the struct plus the hash slots the heap has
+  allocated. A full sketch turns away a hash at or above its largest
+  retained one before scanning the `k` retained hashes for a duplicate, so
+  steady-state inserts no longer cost `O(k)`; the retained set is unchanged.
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
   stream: the CDF was sorted with `partial_cmp(..).unwrap()`. It sorts with
   `total_cmp`, as the three sibling sorts beside it already did.

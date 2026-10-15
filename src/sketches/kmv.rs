@@ -46,6 +46,11 @@ impl<H: SketchHasher> KMV<H> {
     }
 
     pub fn insert_by_hash(&mut self, hash_value: u64) {
+        // A full sketch keeps only hashes below its largest retained one, so
+        // most inserts are turned away here without scanning the k hashes.
+        if self.k_vals.is_full() && self.k_vals.peek().is_some_and(|max| hash_value >= *max) {
+            return;
+        }
         if self.k_vals.iter().any(|value| *value == hash_value) {
             return;
         }
@@ -54,7 +59,7 @@ impl<H: SketchHasher> KMV<H> {
 
     /// `(k - 1) / U(k)`, where `U(k)` is the k-th smallest hash's position in
     /// the 64-bit range, mapped into (0, 1].
-    pub fn estimate(&mut self) -> f64 {
+    pub fn estimate(&self) -> f64 {
         if self.k_vals.len() < self.k {
             return self.k_vals.len() as f64;
         }
@@ -67,7 +72,7 @@ impl<H: SketchHasher> KMV<H> {
         (self.k - 1) as f64 / mapped
     }
 
-    pub fn merge(&mut self, other: &mut KMV<H>) {
+    pub fn merge(&mut self, other: &KMV<H>) {
         assert_eq!(
             self.k, other.k,
             "Two KMV sketch have different k size, not mergeable"
@@ -75,6 +80,13 @@ impl<H: SketchHasher> KMV<H> {
         for &value in other.k_vals.iter() {
             self.insert_by_hash(value);
         }
+    }
+
+    /// Approximate in-memory footprint in bytes: the struct plus the hash
+    /// slots its heap has allocated. The heap reserves up to 1024 slots at
+    /// construction and grows toward `k` as distinct hashes arrive.
+    pub fn approx_memory_bytes(&self) -> usize {
+        std::mem::size_of::<Self>().saturating_add(self.k_vals.allocated_slots().saturating_mul(8))
     }
 }
 
@@ -86,6 +98,51 @@ mod tests {
 
     const ERROR_TOLERANCE: f64 = 0.02;
     const SERDE_SAMPLE: usize = 100_000;
+
+    fn build(k: usize, items: std::ops::Range<u64>) -> KMV {
+        let mut sketch = KMV::new(k);
+        for item in items {
+            sketch.insert(&DataInput::U64(item));
+        }
+        sketch
+    }
+
+    /// Reading an estimate and merging in another sketch borrow their inputs
+    /// shared, so neither needs a mutable binding or a copy, and the merged
+    /// estimate equals the union build's.
+    #[test]
+    fn estimate_and_merge_borrow_inputs_shared() {
+        let left = build(64, 0..600);
+        let right = build(64, 400..1_000);
+        let union = build(64, 0..1_000);
+        let mut merged = left.clone();
+        merged.merge(&right);
+        assert_eq!(merged.estimate(), union.estimate());
+        assert_eq!(left.estimate(), build(64, 0..600).estimate());
+    }
+
+    /// The memory report covers the hashes the heap holds, grows as it fills,
+    /// and is the same after a duplicate or a hash past the retained k.
+    #[test]
+    fn memory_report_covers_the_retained_hashes() {
+        let k = 3_000;
+        let empty = KMV::new(k);
+        let full = build(k, 0..20_000);
+        assert_eq!(full.k_vals.len(), k);
+        for sketch in [&empty, &full] {
+            assert!(
+                sketch.approx_memory_bytes()
+                    >= std::mem::size_of::<KMV>() + sketch.k_vals.len() * 8
+            );
+        }
+        assert!(full.approx_memory_bytes() > empty.approx_memory_bytes());
+        let mut again = full.clone();
+        let before = again.approx_memory_bytes();
+        again.insert(&DataInput::U64(7));
+        again.insert_by_hash(u64::MAX);
+        assert_eq!(again.approx_memory_bytes(), before);
+        assert_eq!(again.estimate(), full.estimate());
+    }
 
     #[test]
     fn assert_serialization_round_trip() {
@@ -103,7 +160,7 @@ mod tests {
             "KMV serialization output should not be empty"
         );
 
-        let mut decoded: KMV = KMV::deserialize_from_bytes(&encoded)
+        let decoded: KMV = KMV::deserialize_from_bytes(&encoded)
             .unwrap_or_else(|err| panic!("KMV deserialize_from_bytes failed: {err}"));
 
         let reencoded = decoded

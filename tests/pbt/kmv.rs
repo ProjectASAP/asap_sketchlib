@@ -143,8 +143,8 @@ fn from_hashes(k: usize, stream: &[u64]) -> Kmv {
 
 fn merged(k: usize, left: &[u64], right: &[u64]) -> Kmv {
     let mut a = from_hashes(k, left);
-    let mut b = from_hashes(k, right);
-    a.merge(&mut b);
+    let b = from_hashes(k, right);
+    a.merge(&b);
     a
 }
 
@@ -241,7 +241,7 @@ proptest! {
     fn a_full_sketch_estimates_k_minus_one_over_its_mapped_k_th_smallest_hash(
         (k, stream, raise) in full_stream(),
     ) {
-        let mut sketch = from_hashes(k, &stream);
+        let sketch = from_hashes(k, &stream);
         prop_assert_eq!(sketch.k_vals.len(), k);
         let hashes = retained(&sketch);
         let kth = *hashes.last().expect("a full sketch retains k hashes");
@@ -333,7 +333,7 @@ proptest! {
     fn a_sketch_under_its_bound_estimates_its_distinct_count_exactly(
         (k, distinct, stream) in under_the_bound(48),
     ) {
-        let mut sketch = from_hashes(k, &stream);
+        let sketch = from_hashes(k, &stream);
 
         prop_assert_eq!(sketch.k_vals.len(), distinct.len());
         prop_assert_eq!(
@@ -353,8 +353,8 @@ proptest! {
     fn a_full_sketch_estimates_above_one_holding_a_larger_k_th_hash(
         (k, lower, higher) in two_full_streams(),
     ) {
-        let mut lower_sketch = from_hashes(k, &lower);
-        let mut higher_sketch = from_hashes(k, &higher);
+        let lower_sketch = from_hashes(k, &lower);
+        let higher_sketch = from_hashes(k, &higher);
         prop_assert_eq!(lower_sketch.k_vals.len(), k);
         prop_assert_eq!(higher_sketch.k_vals.len(), k);
 
@@ -379,9 +379,9 @@ proptest! {
         right in hash_stream(200),
     ) {
         let mut a = from_hashes(k, &left);
-        let mut b = from_hashes(k, &right);
+        let b = from_hashes(k, &right);
         let read_before = retained(&b);
-        a.merge(&mut b);
+        a.merge(&b);
 
         let both: Vec<u64> = left.iter().chain(right.iter()).copied().collect();
         prop_assert_eq!(
@@ -411,12 +411,12 @@ proptest! {
         );
 
         let mut left_first = merged(k, &first, &second);
-        let mut third_sketch = from_hashes(k, &third);
-        left_first.merge(&mut third_sketch);
+        let third_sketch = from_hashes(k, &third);
+        left_first.merge(&third_sketch);
 
         let mut right_first = from_hashes(k, &first);
-        let mut tail = merged(k, &second, &third);
-        right_first.merge(&mut tail);
+        let tail = merged(k, &second, &third);
+        right_first.merge(&tail);
 
         prop_assert_eq!(
             retained(&left_first),
@@ -433,8 +433,8 @@ proptest! {
     ) {
         let mut sketch = from_hashes(k, &stream);
         let before = retained(&sketch);
-        let mut copy = sketch.clone();
-        sketch.merge(&mut copy);
+        let copy = sketch.clone();
+        sketch.merge(&copy);
 
         prop_assert_eq!(
             retained(&sketch),
