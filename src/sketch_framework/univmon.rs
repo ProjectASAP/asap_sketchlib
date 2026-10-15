@@ -128,21 +128,47 @@ impl UnivMon {
             UnivMonUpdateMode::Unset | UnivMonUpdateMode::Standard
         )
     }
+    /// Checks a pyramid shape without building it: `heap_size`, `sketch_row`,
+    /// `sketch_col` and `layer_size` positive, at most [`MAX_LAYER_SIZE`]
+    /// layers, at most [`crate::common::MATRIX_MAX_ROWS`] rows (what the ASAPv1
+    /// wire carries), rows whose column and sign bits fit one 128-bit key hash,
+    /// and a counter count that fits `usize`. [`Self::init_univmon`] builds
+    /// exactly these shapes, so a caller can refuse a configuration up front
+    /// instead of catching a panic.
+    pub fn check_shape(
+        heap_size: usize,
+        sketch_row: usize,
+        sketch_col: usize,
+        layer_size: usize,
+    ) -> Result<(), String> {
+        wire::check_univmon_dimensions(layer_size, sketch_row, sketch_col, heap_size)?;
+        wire::check_layer_size("UnivMon", layer_size)?;
+        crate::sketches::countsketch_topk::l2hh_wire::check_dimensions(sketch_row, sketch_col)?;
+        sketch_row
+            .checked_mul(sketch_col)
+            .and_then(|cells| cells.checked_mul(layer_size))
+            .map(|_| ())
+            .ok_or_else(|| {
+                format!(
+                    "UnivMon {layer_size} layers of {sketch_row}x{sketch_col} counters overflow usize"
+                )
+            })
+    }
+
     /// Creates a UnivMon instance with explicit dimensions.
+    ///
+    /// # Panics
+    ///
+    /// When [`Self::check_shape`] refuses the shape.
     pub fn init_univmon(
         heap_size: usize,
         sketch_row: usize,
         sketch_col: usize,
         layer_size: usize,
     ) -> Self {
-        assert!(heap_size > 0, "heap size must be positive");
-        assert!(sketch_row > 0, "sketch row count must be positive");
-        assert!(sketch_col > 0, "sketch column count must be positive");
-        assert!(layer_size > 0, "layer count must be positive");
-        assert!(
-            layer_size <= MAX_LAYER_SIZE,
-            "layer count must be at most MAX_LAYER_SIZE {MAX_LAYER_SIZE}"
-        );
+        if let Err(problem) = Self::check_shape(heap_size, sketch_row, sketch_col, layer_size) {
+            panic!("{problem}");
+        }
         let sk_vec: Vec<L2HH> = (0..layer_size)
             .map(|i| {
                 L2HH::COUNT(CountL2HH::with_dimensions_and_seed(
@@ -600,6 +626,36 @@ mod tests {
     #[should_panic(expected = "hash bits")]
     fn init_univmon_rejects_column_bits_that_reach_the_sign_bits() {
         UnivMon::init_univmon(4, 11, 2048, 2);
+    }
+
+    /// A caller can check a shape before building it: `check_shape` accepts
+    /// exactly the shapes `init_univmon` builds, and both refuse the row
+    /// counts the ASAPv1 wire cannot carry.
+    #[test]
+    fn check_shape_accepts_exactly_what_init_univmon_builds() {
+        use crate::common::MATRIX_MAX_ROWS;
+        for (heap, rows, cols, layers, valid) in [
+            (4, 3, 2048, 8, true),
+            (4, 10, 2048, 2, true),
+            (4, 11, 2048, 2, false),
+            (4, 2, 16, MAX_LAYER_SIZE, true),
+            (4, 2, 16, MAX_LAYER_SIZE + 1, false),
+            (0, 3, 16, 2, false),
+            (4, 0, 16, 2, false),
+            (4, 3, 0, 2, false),
+            (4, 3, 16, 0, false),
+            (4, MATRIX_MAX_ROWS, 2, 1, true),
+            (4, MATRIX_MAX_ROWS + 1, 2, 1, false),
+        ] {
+            assert_eq!(
+                UnivMon::check_shape(heap, rows, cols, layers).is_ok(),
+                valid,
+                "{heap} {rows}x{cols} x{layers}"
+            );
+            let built =
+                std::panic::catch_unwind(|| UnivMon::init_univmon(heap, rows, cols, layers));
+            assert_eq!(built.is_ok(), valid, "{heap} {rows}x{cols} x{layers}");
+        }
     }
 
     /// Persisted terminal states must be distinguishable before standard ingestion.

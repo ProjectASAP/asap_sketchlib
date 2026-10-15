@@ -15,9 +15,14 @@ Universal stream-monitoring sketch for L1/L2/cardinality/entropy.
 ```rust
 fn default() -> Self
 fn init_univmon(heap_size: usize, sketch_row: usize, sketch_col: usize, layer_size: usize) -> Self
+fn check_shape(heap_size: usize, sketch_row: usize, sketch_col: usize, layer_size: usize) -> Result<(), String>
 ```
 
-`init_univmon` panics on a shape whose hashes would not be independent:
+`check_shape` accepts exactly the shapes `init_univmon` builds, so a caller can
+refuse a configuration without catching a panic. `init_univmon` panics on a
+zero dimension, on a counter count past `usize`, on more than
+`MATRIX_MAX_ROWS` (20) rows, which the ASAPv1 wire does not carry, and on a
+shape whose hashes would not be independent:
 
 - `layer_size > MAX_LAYER_SIZE` (19). Layer `i` hashes at seed index `i`, and
   the layers a key reaches are read from the hash at `BOTTOM_LAYER_FINDER`

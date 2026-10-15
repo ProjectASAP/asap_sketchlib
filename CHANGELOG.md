@@ -92,6 +92,12 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- **`UnivMon::check_shape`** accepts exactly the pyramid shapes
+  `init_univmon` builds, so a caller can refuse a configuration without
+  catching a panic. `init_univmon` now also refuses more than
+  `MATRIX_MAX_ROWS` rows, which the ASAPv1 wire already refused to encode or
+  decode, so it no longer builds a state it cannot serialize. Its panic
+  messages now come from the same checks as the wire's.
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
   stream: the CDF was sorted with `partial_cmp(..).unwrap()`. It sorts with
   `total_cmp`, as the three sibling sorts beside it already did.
