@@ -12,7 +12,7 @@
 //! to the end of a growable buffer), so encode/decode are a direct copy — no
 //! buffer reversal is needed.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 
 use crate::Vector1D;
 use crate::message_pack_format::envelope;
@@ -59,7 +59,7 @@ where
     /// as are inconsistent level layouts.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (meta, payload_bytes) = split_and_validate_meta::<T>(bytes, KLL_KIND_DYNAMIC)?;
-        let payload: KllPayload<T> = from_slice(payload_bytes)?;
+        let payload: KllPayload<T> = envelope::decode_block(payload_bytes)?;
         let num_levels = validate_kll_payload(&payload.levels, &payload.items, &payload.coin)?;
 
         let KllPayload {

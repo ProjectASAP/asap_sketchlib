@@ -17,11 +17,12 @@
 //! counters (i128/…) must be converted to a wire type first. `i32` is carried at
 //! its own width and is pinned on decode.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::wire_key::exact_vec;
 use crate::{FastPath, HashProfile, RegularPath, SketchHasher, Vector2D};
 
 use super::CountMin;
@@ -110,6 +111,10 @@ fn cms_metadata<H: HashProfile>(
 /// type is fixed by the metadata `counter_type`.
 #[derive(Debug, Serialize, Deserialize)]
 struct CmsPayload<T> {
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "T: Deserialize<'de>")
+    )]
     counts: Vec<T>,
 }
 
@@ -173,7 +178,7 @@ where
                 "CMS kind_id mismatch: stored {kind_id:?}, expected {CMS_KIND:?}"
             )));
         }
-        let meta: CmsMetadata = from_slice(metadata)?;
+        let meta: CmsMetadata = envelope::decode_block(metadata)?;
         // Validate the hash spec + counter type + mode against this target;
         // `rows`/`cols` are structural (the sketch is dynamically sized), so they
         // are echoed back into the expected block rather than known a priori.
@@ -183,7 +188,7 @@ where
             ));
         }
         let (rows, cols) = (meta.rows as usize, meta.cols as usize);
-        let p: CmsPayload<T> = from_slice(payload)?;
+        let p: CmsPayload<T> = envelope::decode_block(payload)?;
         // Reject zero dimensions before building the matrix: `Vector2D::from_fn`
         // derives its mask via `cols.ilog2()`, which panics on `cols == 0`. Fail
         // closed with an error rather than panicking on crafted bytes.

@@ -32,7 +32,7 @@
 //! The heavy arrays are dense in bucket index order and the light counters are
 //! row-major, so a decoded sketch re-serializes byte-identically.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -218,7 +218,7 @@ impl<H: SketchHasher + HashProfile> Elastic<H> {
                 "Elastic kind_id mismatch: stored {kind_id:?}, expected {ELASTIC_KIND:?}"
             )));
         }
-        let meta: ElasticMetadata = from_slice(metadata)?;
+        let meta: ElasticMetadata = envelope::decode_block(metadata)?;
         // Validate the hash spec, counter type and mode against this target;
         // the two geometries are structural (both parts are dynamically
         // sized), so they are echoed back into the expected block.
@@ -233,7 +233,7 @@ impl<H: SketchHasher + HashProfile> Elastic<H> {
         // crafted dimensions never reach an allocation.
         let light_cells = check_geometry(heavy_buckets, light_rows, light_cols)
             .map_err(RmpDecodeError::Uncategorized)?;
-        let mut p: ElasticPayload = from_slice(payload)?;
+        let mut p: ElasticPayload = envelope::decode_block(payload)?;
         if p.flow_ids.len() != heavy_buckets
             || p.vote_pos.len() != heavy_buckets
             || p.vote_neg.len() != heavy_buckets

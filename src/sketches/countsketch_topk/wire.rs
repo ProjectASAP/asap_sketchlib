@@ -18,7 +18,7 @@
 //! [`CountL2HH`](super::CountL2HH) is a different algorithm and is not covered
 //! here.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::common::hash::check_matrix_rows;
@@ -112,7 +112,7 @@ where
                 "CSHeap kind_id mismatch: stored {kind_id:?}, expected {CS_HEAP_KIND:?}"
             )));
         }
-        let meta: TopKMetadata = from_slice(metadata)?;
+        let meta: TopKMetadata = envelope::decode_block(metadata)?;
         if meta
             != topk_metadata::<H>(
                 meta.rows,
@@ -162,6 +162,7 @@ mod tests {
     use crate::{
         CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, FastPath, MATRIX_MAX_ROWS, RegularPath,
     };
+    use rmp_serde::from_slice;
 
     fn populated() -> CSHeap<Vector2D<i64>, RegularPath> {
         let mut sketch = CSHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);

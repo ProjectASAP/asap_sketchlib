@@ -47,6 +47,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::hash::check_matrix_rows;
 use crate::input::HydraCounter;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::wire_key::exact_vec;
 use crate::sketch_framework::univmon::wire::{PyramidPayload, UnivMonMetadata, univmon_metadata};
 use crate::{
     Count, CountMin, DefaultXxHasher, ErtlMLE, FastPath, HashProfile, HllBucketListP14,
@@ -286,6 +287,7 @@ struct HydraHllPayload {
 #[derive(Debug, Serialize, Deserialize)]
 struct HydraKllCell {
     levels: Vec<u32>,
+    #[serde(deserialize_with = "exact_vec")]
     items: Vec<f64>,
     coin: HydraKllCoin,
 }
@@ -885,7 +887,7 @@ impl Hydra {
         kind_id: &[u8],
     ) -> Result<(Vec<i32>, HydraMatrixMetadata, usize), RmpDecodeError> {
         let (metadata, payload) = split_for(bytes, kind_id)?;
-        let meta: HydraMatrixMetadata = from_slice(metadata)?;
+        let meta: HydraMatrixMetadata = envelope::decode_block(metadata)?;
         if meta
             != hydra_matrix_metadata::<DefaultXxHasher>(
                 &HydraGrid {
@@ -910,7 +912,7 @@ impl Hydra {
         )
         .map_err(decode_error)?;
         let total = tiled_len(cells, per_cell, "counters").map_err(decode_error)?;
-        let p: HydraMatrixPayload = from_slice(payload)?;
+        let p: HydraMatrixPayload = envelope::decode_block(payload)?;
         if p.counts.len() != total {
             return Err(decode_error(format!(
                 "Hydra counts length {} != rows*cols*counter_rows*counter_cols {total}",
@@ -922,7 +924,7 @@ impl Hydra {
 
     fn decode_hll(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (metadata, payload) = split_for(bytes, HYDRA_KIND_HLL)?;
-        let meta: HydraHllMetadata = from_slice(metadata)?;
+        let meta: HydraHllMetadata = envelope::decode_block(metadata)?;
         if meta
             != hydra_hll_metadata::<DefaultXxHasher>(
                 &HydraGrid {
@@ -940,7 +942,7 @@ impl Hydra {
         let (rows, cols) = (meta.rows as usize, meta.cols as usize);
         let cells = checked_cells("grid", rows, cols).map_err(decode_error)?;
         let total = tiled_len(cells, HLL_CELL_REGISTERS, "registers").map_err(decode_error)?;
-        let p: HydraHllPayload = from_slice(payload)?;
+        let p: HydraHllPayload = envelope::decode_block(payload)?;
         if p.registers.len() != total {
             return Err(decode_error(format!(
                 "Hydra registers length {} != rows*cols*2^precision {total}",
@@ -970,7 +972,7 @@ impl Hydra {
 
     fn decode_kll(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (metadata, payload) = split_for(bytes, HYDRA_KIND_KLL)?;
-        let meta: HydraKllMetadata = from_slice(metadata)?;
+        let meta: HydraKllMetadata = envelope::decode_block(metadata)?;
         if meta
             != hydra_kll_metadata::<DefaultXxHasher>(
                 &HydraGrid {
@@ -988,7 +990,7 @@ impl Hydra {
         }
         let (rows, cols) = (meta.rows as usize, meta.cols as usize);
         let cells = checked_cells("grid", rows, cols).map_err(decode_error)?;
-        let p: HydraKllPayload = from_slice(payload)?;
+        let p: HydraKllPayload = envelope::decode_block(payload)?;
         if p.cells.len() != cells {
             return Err(decode_error(format!(
                 "Hydra carries {} KLL cells != rows*cols {cells}",
@@ -1021,7 +1023,7 @@ impl Hydra {
 
     fn decode_univmon(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (metadata, payload) = split_for(bytes, HYDRA_KIND_UNIVMON)?;
-        let meta: HydraUnivMonMetadata = from_slice(metadata)?;
+        let meta: HydraUnivMonMetadata = envelope::decode_block(metadata)?;
         let shape = UnivMonShape {
             layer_size: meta.counter_layer_size,
             sketch_row: meta.counter_sketch_row,
@@ -1127,11 +1129,11 @@ fn pack_univmon_cells(key_type: &str, payloads: &[&[u8]]) -> Result<Vec<u8>, Rmp
 
 /// Reads the cells with `keys` typed by the metadata `counter_key_type`,
 /// returning each cell's pyramid payload bytes. An unknown key type is
-/// rejected, and keys whose msgpack types disagree fail in `from_slice`.
+/// rejected, and keys whose msgpack types disagree fail to decode.
 fn unpack_univmon_cells(key_type: &str, payload: &[u8]) -> Result<Vec<Vec<u8>>, RmpDecodeError> {
     macro_rules! unpack {
         ($ty:ty) => {{
-            let decoded: HydraUnivMonPayload<$ty> = from_slice(payload)?;
+            let decoded: HydraUnivMonPayload<$ty> = envelope::decode_block(payload)?;
             decoded
                 .cells
                 .iter()

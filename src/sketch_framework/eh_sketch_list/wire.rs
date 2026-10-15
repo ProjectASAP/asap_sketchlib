@@ -27,7 +27,7 @@
 //! `experimental` rejects `0x0d 0x00` by name with the feature named, and its
 //! encoder can never emit it.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
@@ -237,13 +237,13 @@ impl EHSketchList {
                 "EHSketchList kind_id mismatch: stored {kind_id:?}, expected {EH_SKETCH_LIST_KIND:?}"
             )));
         }
-        let meta: EhSketchListMetadata = from_slice(metadata)?;
+        let meta: EhSketchListMetadata = envelope::decode_block(metadata)?;
         if meta != eh_sketch_list_metadata() {
             return Err(RmpDecodeError::Uncategorized(
                 "ASAPv1 EHSketchList envelope: metadata mismatch".to_string(),
             ));
         }
-        let triple: SketchState = from_slice(payload)?;
+        let triple: SketchState = envelope::decode_block(payload)?;
         rebuild_sketch(&triple)
     }
 }

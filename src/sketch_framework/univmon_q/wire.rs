@@ -31,7 +31,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::marker::PhantomData;
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
@@ -210,7 +210,7 @@ fn read_payload(
 ) -> Result<(Counters, SharedPayload), RmpDecodeError> {
     macro_rules! unpack {
         ($variant:ident, $ty:ty) => {{
-            let decoded: UnivMonQPayload<$ty> = from_slice(payload)?;
+            let decoded: UnivMonQPayload<$ty> = envelope::decode_block(payload)?;
             (Counters::$variant(decoded.counters), {
                 if decoded.occurrence_priority_high.len() != decoded.occurrence_priority_low.len()
                     || decoded.occurrence_priority_high.len() != decoded.occurrence_keys.len()
@@ -476,7 +476,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
                 "UnivMon-Q kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_Q_KIND:?}"
             )));
         }
-        let meta: UnivMonQMetadata = from_slice(metadata)?;
+        let meta: UnivMonQMetadata = envelope::decode_block(metadata)?;
         let config = config_of(&meta)?;
         let expected = univmon_q_metadata::<H>(config, &meta.counter_type).map_err(decode_error)?;
         if meta != expected {
@@ -570,6 +570,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
 mod tests {
     use super::*;
     use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, HeapItem, RegularPath, Vector2D};
+    use rmp_serde::from_slice;
 
     fn tiny_config() -> UnivMonQConfig {
         UnivMonQConfig {

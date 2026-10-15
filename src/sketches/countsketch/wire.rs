@@ -24,7 +24,7 @@
 //!
 //! [`CountSketchCounter`]: crate::sketches::countsketch::CountSketchCounter
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::common::hash::check_matrix_rows;
@@ -184,7 +184,7 @@ where
                 "Count Sketch kind_id mismatch: stored {kind_id:?}, expected {CS_KIND:?}"
             )));
         }
-        let meta: CsMetadata = from_slice(metadata)?;
+        let meta: CsMetadata = envelope::decode_block(metadata)?;
         // Validate the hash spec + counter type + mode against this target;
         // `rows`/`cols` are structural (the sketch is dynamically sized), so they
         // are echoed back into the expected block rather than known a priori.
@@ -194,7 +194,7 @@ where
             ));
         }
         let (rows, cols) = (meta.rows as usize, meta.cols as usize);
-        let p: CsPayload<T> = from_slice(payload)?;
+        let p: CsPayload<T> = envelope::decode_block(payload)?;
         // Reject zero dimensions before building the matrix: `Vector2D::from_fn`
         // derives its mask via `cols.ilog2()`, which panics on `cols == 0`. Fail
         // closed with an error rather than panicking on crafted bytes.
