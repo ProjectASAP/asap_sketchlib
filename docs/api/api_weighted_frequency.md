@@ -12,6 +12,10 @@ candidate heap. It is independent of Planner schemas and execution runtimes.
 - `update`, `topk`, `merge`: update weights, read descending estimated scores,
   and combine states with identical algorithm/width/depth/capacity. Merging leaves
   both inputs unchanged. Negative scores are ranked numerically, not by magnitude.
+- `check_shape`, `check_weight`: accept exactly the shapes `new` builds and the
+  weights `update` takes, so a caller can reject a configuration or an input
+  without building or touching a state. `clear` empties a state in place and
+  keeps its shape.
 - `to_bytes` / `from_bytes`: versioned `ASAP-WFREQ-1` snapshots, compatible with
   the implementation extracted from ASAPPlanner. Integer-count sketch formats
   and cross-language interchange are separate contracts.

@@ -17,6 +17,12 @@ signals a backwards-compatible change.
   Extracted from ASAPPlanner; preserves existing `ASAP-WFREQ-1` bytes.
   `WeightedFrequency::estimate` reads one identity tuple's point estimate, and
   capacity 0 builds a frequency sketch that retains no candidates.
+  `WeightedFrequency::check_shape` and `check_weight` validate a shape or a
+  weight without building or updating a state, and `clear` empties a state
+  in place. An update with a candidate heap moves the retained candidates
+  into the rescoring instead of copying them, and scores them with one
+  buffer, about halving its cost at capacity 100; the retained candidates
+  and their scores are unchanged.
 
 - **`Vector3D<T>`**, filled in from a stub. A `rows x cols` grid whose every
   cell is a contiguous `depth`-length record, addressed by the same
