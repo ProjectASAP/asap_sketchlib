@@ -32,11 +32,10 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use crate::common::hash::check_matrix_rows;
-use crate::common::structures::matrix_storage::cols_mask_bits;
 use crate::message_pack_format::envelope;
 use crate::{HashProfile, SketchHasher, Vector1D, Vector2D};
 
-use super::CountL2HH;
+use super::{CountL2HH, check_l2hh_hash_bits};
 
 /// CountL2HH kind_id: family `0x19`, single algorithm variant `0x00`.
 const L2HH_KIND: &[u8] = &[0x19, 0x00];
@@ -96,13 +95,9 @@ struct L2hhPayload {
 /// `Vector2D` derives its column mask via `cols.ilog2()`, which panics on
 /// `cols == 0`.
 ///
-/// CountL2HH draws one 128-bit hash per key and slices it per row: row `r`
-/// reads its column from bits `[r * mask_bits, (r + 1) * mask_bits)` and its
-/// sign from bit `127 - r`, where `mask_bits = cols_mask_bits(cols)`. Each row
-/// therefore claims `mask_bits + 1` of the 128 bits, so the fields are in
-/// range and disjoint exactly while `rows * (mask_bits + 1) <= 128` — the
-/// budget `<u128 as MatrixFastHash>::assert_compatible` asserts, restated here
-/// as a `Result` so both wire doors fail closed instead of panicking.
+/// The hash-bit budget is [`check_l2hh_hash_bits`], the same check the
+/// constructor panics on, returned here as a `Result` so both wire doors fail
+/// closed instead of panicking.
 pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
     if rows == 0 || cols == 0 {
         return Err(format!(
@@ -110,15 +105,7 @@ pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
         ));
     }
     check_matrix_rows("CountL2HH", rows)?;
-    let mask_bits = cols_mask_bits(cols) as usize;
-    let bits_required = mask_bits.saturating_add(1).saturating_mul(rows);
-    if bits_required > 128 {
-        return Err(format!(
-            "CountL2HH rows={rows}, cols={cols} needs {bits_required} hash bits \
-             ({mask_bits} column bits + 1 sign bit per row), past the 128 the key hash carries"
-        ));
-    }
-    Ok(())
+    check_l2hh_hash_bits(rows, cols)
 }
 
 /// Rejects a seed index the hasher's seed list does not hold. Seed selection
@@ -593,6 +580,19 @@ mod tests {
         );
     }
 
+    /// A sketch past the hash budget, built without the constructor's check,
+    /// as a struct deserialized by another route could be.
+    fn unchecked(rows: usize, cols: usize) -> Std {
+        CountL2HH {
+            counts: Vector2D::init(rows, cols),
+            l2: Vector1D::filled(rows, 0),
+            row: rows,
+            col: cols,
+            seed_idx: 0,
+            _hasher: PhantomData,
+        }
+    }
+
     /// One 128-bit key hash gives each row `mask_bits + 1` bits, so a geometry
     /// needing more than 128 of them is not a sketch either door may pass.
     /// `rows = 12, cols = 4096` and `rows = 13, cols = 2048` both need 156:
@@ -600,7 +600,7 @@ mod tests {
     #[test]
     fn count_l2hh_rejects_a_geometry_past_the_hash_budget() {
         for (rows, cols) in [(12usize, 4096usize), (13, 2048)] {
-            let problem = Std::with_dimensions(rows, cols)
+            let problem = unchecked(rows, cols)
                 .serialize_to_bytes()
                 .expect_err("a geometry past the hash budget must not serialize")
                 .to_string();
@@ -624,14 +624,14 @@ mod tests {
     #[test]
     fn count_l2hh_rejects_column_fields_overlapping_the_sign_bits() {
         assert!(
-            Std::with_dimensions(10, 4096).serialize_to_bytes().is_err(),
+            unchecked(10, 4096).serialize_to_bytes().is_err(),
             "column fields must not reach into the sign bits"
         );
         // The widest geometry each column count still admits.
         assert!(Std::with_dimensions(9, 4096).serialize_to_bytes().is_ok());
         assert!(Std::with_dimensions(10, 2048).serialize_to_bytes().is_ok());
         assert!(
-            Std::with_dimensions(11, 2048).serialize_to_bytes().is_err(),
+            unchecked(11, 2048).serialize_to_bytes().is_err(),
             "column fields must not reach into the sign bits"
         );
     }
