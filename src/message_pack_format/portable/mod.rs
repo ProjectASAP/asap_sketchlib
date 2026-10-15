@@ -10,7 +10,6 @@
 pub mod countminsketch;
 pub mod countminsketch_topk;
 pub mod countsketch;
-pub mod countsketch_topk;
 pub mod ddsketch;
 pub mod delta_set_aggregator;
 pub mod hll;
