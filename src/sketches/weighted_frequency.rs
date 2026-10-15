@@ -53,6 +53,22 @@ impl Ord for Candidate {
             .then_with(|| other.key.cmp(&self.key))
     }
 }
+/// Canonical identity tuple and its hash key: floating identities must be
+/// finite, and signed zeros share one identity.
+fn normalize(values: &[FrequencyIdentity]) -> Result<(Vec<FrequencyIdentity>, Vec<u8>), Error> {
+    let identity = values
+        .iter()
+        .map(|value| match value {
+            FrequencyIdentity::Float64(v) if !v.is_finite() => Err(Error::Invalid(
+                "non-finite weighted frequency identity".into(),
+            )),
+            FrequencyIdentity::Float64(v) if *v == 0.0 => Ok(FrequencyIdentity::Float64(0.0)),
+            value => Ok(value.clone()),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let key = bincode::serialize(&identity).map_err(|e| Error::Update(e.to_string()))?;
+    Ok((identity, key))
+}
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrequencyAlgorithm {
     Cms,
@@ -61,8 +77,11 @@ pub enum FrequencyAlgorithm {
 /// Weighted frequency estimates with bounded candidate retention.
 ///
 /// CMS accepts nonnegative finite weights; CountSketch accepts signed finite
-/// weights and requires positive odd depth. Floating identities must be finite;
-/// signed zeros denote the same identity. The heap ranks estimated scores, not
+/// weights and requires positive odd depth. Each row hashes with its own seed,
+/// so rows are pairwise independent at any depth. Floating identities must be
+/// finite; signed zeros denote the same identity. Capacity 0 retains no
+/// candidates: the state is then a plain frequency sketch read by
+/// [`WeightedFrequency::estimate`]. The heap ranks estimated scores, not
 /// absolute magnitudes, and does not establish candidate completeness.
 ///
 /// ```
@@ -100,7 +119,6 @@ impl WeightedFrequency {
             .filter(|_| {
                 width > 0
                     && depth > 0
-                    && capacity > 0
                     && (algorithm != FrequencyAlgorithm::CountSketch || depth % 2 == 1)
             })
             .ok_or_else(|| Error::Invalid("invalid weighted frequency dimensions".into()))?;
@@ -133,7 +151,6 @@ impl WeightedFrequency {
             .map_err(|e| Error::Invalid(e.to_string()))?;
         if state.width == 0
             || state.depth == 0
-            || state.capacity == 0
             || (state.algorithm == FrequencyAlgorithm::CountSketch && state.depth % 2 == 0)
             || state.width.checked_mul(state.depth) != Some(state.cells.len())
             || state
@@ -173,7 +190,7 @@ impl WeightedFrequency {
             (row * self.width + bucket, sign)
         })
     }
-    fn estimate(&self, key: &[u8]) -> f64 {
+    fn estimate_key(&self, key: &[u8]) -> f64 {
         let mut estimates = self
             .indexes(key)
             .map(|(i, sign)| self.cells[i] * sign)
@@ -191,7 +208,7 @@ impl WeightedFrequency {
         candidates.dedup_by(|a, b| a.key == b.key);
         self.candidates.clear();
         for mut candidate in candidates {
-            candidate.score = self.estimate(&candidate.key);
+            candidate.score = self.estimate_key(&candidate.key);
             self.candidates.push(candidate);
             if self.candidates.len() > self.capacity {
                 self.candidates.pop();
@@ -204,17 +221,7 @@ impl WeightedFrequency {
                 "weighted frequency requires finite weights; CMS additionally requires nonnegative weights".into(),
             ));
         }
-        let identity = values
-            .iter()
-            .map(|value| match value {
-                FrequencyIdentity::Float64(v) if !v.is_finite() => Err(Error::Invalid(
-                    "non-finite weighted frequency identity".into(),
-                )),
-                FrequencyIdentity::Float64(v) if *v == 0.0 => Ok(FrequencyIdentity::Float64(0.0)),
-                value => Ok(value.clone()),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let key = bincode::serialize(&identity).map_err(|e| Error::Update(e.to_string()))?;
+        let (identity, key) = normalize(values)?;
         let indexes = self.indexes(&key).collect::<Vec<_>>();
         if indexes
             .iter()
@@ -225,6 +232,9 @@ impl WeightedFrequency {
         for (i, sign) in indexes {
             self.cells[i] += sign * weight;
         }
+        if self.capacity == 0 {
+            return Ok(());
+        }
         let mut candidates = self.candidates.iter().cloned().collect::<Vec<_>>();
         candidates.push(Candidate {
             identity,
@@ -233,6 +243,11 @@ impl WeightedFrequency {
         });
         self.retain(candidates);
         Ok(())
+    }
+    /// Point estimate for one identity tuple: the minimum over rows for CMS, the
+    /// sign-corrected median over rows for CountSketch.
+    pub fn estimate(&self, values: &[FrequencyIdentity]) -> Result<f64, Error> {
+        Ok(self.estimate_key(&normalize(values)?.1))
     }
     /// Return retained candidates in descending estimated-score order.
     /// Candidate retention alone does not guarantee top-k membership completeness.
@@ -339,7 +354,7 @@ mod tests {
             assert_eq!(state.cells[index] * sign, -0.375);
         }
         state.cells[indexes[0].0] += 1000.0;
-        assert_eq!(state.estimate(&key), -0.375);
+        assert_eq!(state.estimate_key(&key), -0.375);
         let mut invalid = state.clone();
         invalid.depth = 4;
         invalid.cells.truncate(64);
@@ -454,6 +469,79 @@ mod tests {
         trailing.push(0);
         assert!(WeightedFrequency::from_bytes(&trailing).is_err());
     }
+    // A point estimate reads the same sign-corrected median the heap scores use,
+    // and capacity 0 is a frequency sketch without candidate retention.
+    #[test]
+    fn point_estimate_and_heapless_capacity() {
+        for algorithm in [FrequencyAlgorithm::Cms, FrequencyAlgorithm::CountSketch] {
+            let mut left = WeightedFrequency::new(algorithm, 4096, 5, 0).unwrap();
+            let mut right = left.clone();
+            left.update(&[FrequencyIdentity::Int64(7)], 0.125).unwrap();
+            right.update(&[FrequencyIdentity::Int64(7)], 0.25).unwrap();
+            right
+                .update(&[FrequencyIdentity::Float64(-0.0)], 0.5)
+                .unwrap();
+            assert!(left.topk(8).is_empty());
+            let merged = left.merge(&right).unwrap();
+            assert_eq!(
+                merged.estimate(&[FrequencyIdentity::Int64(7)]).unwrap(),
+                0.375
+            );
+            // Signed zeros denote one identity, as in `update`.
+            assert_eq!(
+                merged.estimate(&[FrequencyIdentity::Float64(0.0)]).unwrap(),
+                0.5
+            );
+            assert_eq!(merged.estimate(&[FrequencyIdentity::Null]).unwrap(), 0.0);
+            assert!(
+                merged
+                    .estimate(&[FrequencyIdentity::Float64(f64::NAN)])
+                    .is_err()
+            );
+            let decoded = WeightedFrequency::from_bytes(&merged.to_bytes()).unwrap();
+            assert_eq!(decoded.shape(), (4096, 5, 0));
+            assert_eq!(
+                decoded.estimate(&[FrequencyIdentity::Int64(7)]).unwrap(),
+                0.375
+            );
+        }
+        let mut heap = WeightedFrequency::new(FrequencyAlgorithm::CountSketch, 64, 3, 2).unwrap();
+        heap.update(&[FrequencyIdentity::Int64(1)], -2.5).unwrap();
+        assert_eq!(
+            heap.estimate(&[FrequencyIdentity::Int64(1)]).unwrap(),
+            heap.topk(1)[0].1
+        );
+    }
+
+    // Each row hashes with its own seed, so deep shapes stay pairwise independent:
+    // no row geometry limit, and two rows rarely share a key's column.
+    #[test]
+    fn deep_rows_hash_independently() {
+        let (width, depth) = (30_000, 15);
+        let state =
+            WeightedFrequency::new(FrequencyAlgorithm::CountSketch, width, depth, 0).unwrap();
+        let keys = (0..2_000i64)
+            .map(|i| bincode::serialize(&[FrequencyIdentity::Int64(i)]).unwrap())
+            .collect::<Vec<_>>();
+        let columns = keys
+            .iter()
+            .map(|key| {
+                state
+                    .indexes(key)
+                    .enumerate()
+                    .map(|(row, (index, _))| index - row * width)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for a in 0..depth {
+            for b in a + 1..depth {
+                let shared = columns.iter().filter(|c| c[a] == c[b]).count();
+                // Expected 2000 / 30000 < 1 per pair.
+                assert!(shared <= 5, "rows {a} and {b} share {shared} columns");
+            }
+        }
+    }
+
     // Overflow errors are atomic, and candidate storage never exceeds its configured bound.
     #[test]
     fn overflow_and_candidate_capacity() {
@@ -478,7 +566,7 @@ mod tests {
             }
             assert_eq!(bounded.topk(100).len(), 2);
         }
-        for (width, depth, capacity) in [(0, 3, 1), (1, 0, 1), (1, 3, 0), (usize::MAX, 3, 1)] {
+        for (width, depth, capacity) in [(0, 3, 1), (1, 0, 1), (usize::MAX, 3, 1)] {
             assert!(
                 WeightedFrequency::new(FrequencyAlgorithm::Cms, width, depth, capacity).is_err()
             );
