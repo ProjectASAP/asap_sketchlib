@@ -48,19 +48,11 @@ exact tracked total weight. The generic recurrence remains available through
 fn top_layer_complete(&self) -> bool
 ```
 
-`calc_l2()` reads layer 0's Count Sketch directly in standard mode (every key
-reaches layer 0), and sums the strata's squared estimates in terminal mode.
-With `w = sketch_col` and `r = sketch_row`, the squared norm is within a
-relative `ε` of the truth except with probability
-`δ = P(Binomial(r, p) ≥ ⌈r/2⌉)`, where `p = 2/(wε²)` for a power-of-two `w`
-and `9/(4wε²)` otherwise; the same `ε` bounds the L2 norm itself.
-
-`calc_card()` counts every heap key at every layer. When `top_layer_complete()`
-holds, it is unbiased with variance at most `2 F0² / k` (`k = heap_size ≥ 8`),
-so it misses by more than `ε F0` with probability at most `2/(kε²)`
-(Chebyshev), or about `2 exp(−ε²k/4)` under a normal approximation. Sizing
-`layer_size ≥ ⌈log2(F0_max/k)⌉ + 2` makes an incomplete top layer unlikely
-(below `(e/4)^{k/2}`). The derivations are in the methods' doc comments.
+`calc_l2()` reads layer 0's Count Sketch in standard mode and sums squared
+stratum estimates in terminal mode. This deliberately differs from the paper's
+generic heap recurrence, which remains available through `calc_g_sum`.
+`calc_card()` counts all heap keys, including keys inserted with weight zero.
+See [Error bounds](#error-bounds) for assumptions and failure probabilities.
 
 ## Merge
 
@@ -116,3 +108,100 @@ assert!(um.calc_l1() >= 1.0);
 ## Status
 
 Primary multi-metric framework.
+
+## Error bounds
+
+For `0 < epsilon < 1`, these statements use an ideal independent uniform hash
+model, with the finder hash independent of each layer's Count Sketch. They apply to full-stream
+updates, not the partial counters and candidates of a promoted-only aggregator.
+Write `r = sketch_row` and `w = sketch_col`. Independent row bits require `r * (ceil(log2(w)) + 1) <= 128`, and layer seeds
+must not reuse the finder seed or wrap the seed table. The constructor in this
+branch does not enforce all these conditions; their enforcement is tracked in
+[PR #220](https://github.com/ProjectASAP/asap_sketchlib/pull/220). Fixed seeded
+xxHash is an implementation of the model, not a proof of random independence.
+No counter, squared-norm accumulator, or intermediate arithmetic may overflow;
+`F2 < i64::MAX` alone does not ensure that a colliding row's squared norm fits.
+
+### L2
+
+Take one row with `w = sketch_col` columns. With column `c_i` and sign
+`s_i` for key `i`, the row's estimate is
+`Z = Σ_c (Σ_{i: c_i = c} s_i f_i)² = F2 + Σ_{i≠j} s_i s_j f_i f_j [c_i = c_j]`.
+Treating the key hash as uniformly random, the signs are independent
+of each other and of the columns, so `E[Z] = F2` and
+`Var[Z] = 2q (F2² − F4) ≤ 2q F2²`, where `F4 = Σ f_i⁴` and
+`q = P(c_i = c_j)`. A column is a hash slice of `⌈log2 w⌉` bits taken
+modulo `w`, so `q = 1/w` when `w` is a power of two and `q ≤ 9/(8w)`
+otherwise (the slice values `w..2^⌈log2 w⌉` fold onto the low
+columns; the worst case, `w = ¾·2^⌈log2 w⌉`, doubles a third of them).
+
+By Chebyshev, one row misses by more than `ε F2` with probability at
+most `p = 2q / ε²`, i.e. `p = 2 / (w ε²)` for a power-of-two `w` and
+`p = 9 / (4 w ε²)` otherwise. The `r = sketch_row` rows hash disjoint
+bit slices of one 128-bit hash (while `r · (⌈log2 w⌉ + 1) ≤ 128`), so
+they are independent. Their median (the mean of the two middle rows
+when `r` is even) misses only when at least `⌈r/2⌉` rows miss on the
+same side, hence
+
+`P(|F2_est − F2| > ε F2) ≤ δ = P(Binomial(r, p) ≥ ⌈r/2⌉)`.
+
+For odd `r`, `⌈r/2⌉ = (r+1)/2`. The bound is useful only for
+`p < 1/2`. It bounds the squared norm; because
+`|√(1 ± ε) − 1| ≤ ε`, the same `ε` and `δ` also bound the relative
+error of the returned L2 norm. The bound assumes the counter and arithmetic
+limits stated above.
+
+#### Terminal mode
+
+Each stratum's estimate satisfies the bound above for that stratum's
+own `F2`. If every non-empty stratum is within `ε` of its own `F2`, the
+sum is within `ε` of the total, so by a union bound the failure
+probability is at most `δ` times the number of non-empty strata
+(at most `layer_size`).
+
+### Distinct count (standard mode)
+
+Let `S_j` be the keys reaching layer `j`, `H_j` its heap of
+`min(|S_j|, k)` keys, and `M_j = S_j \ H_j`, where `k = heap_size >= 8`.
+The finder bits `1..=j` select `S_j`; write `b_(j+1)(i)` for the next bit.
+For `L = layer_size`, define an ideal estimator `Y*` by using the exact top
+count `|S_(L-1)|` and applying the implementation's recurrence below it:
+
+`Y*_j = 2 Y*_(j+1) + sum_(i in H_j) (1 - 2 b_(j+1)(i))`.
+
+Telescoping gives
+
+`Y*_0 - F0 = -sum_(j=0..L-2) 2^j sum_(i in M_j) (1 - 2 b_(j+1)(i))`.
+
+Each `M_j` is determined before the independent next finder bits are exposed.
+The layer increments form a martingale difference sequence, so unconditionally
+`E[Y*_0] = F0` and `Var[Y*_0] = sum_j 4^j E[(|S_j| - k)^+]`.
+Bound the expectation by `F0 / 2^j` on low layers, and on high layers by
+`(F0 / 2^j)^3 / (5 k^2)`, using
+`(x-k)^+ <= x(x-1)(x-2)/(5 k^2)` for `k >= 8`.
+Splitting at `2^j` in `[0.45, 0.9) * F0/k` gives
+`Var[Y*_0] <= 1.35 F0^2/k <= 2 F0^2/k`.
+
+Let `C` mean the top heap is complete (`top_layer_complete()`), and let
+`Y = calc_card()`. On `C`, `Y = Y*_0`, hence Chebyshev gives the **joint** bound
+
+`P(|Y - F0| > epsilon F0 AND C) <= d`, where `d = min(1, 2/(k epsilon^2))`.
+
+Checking completeness does not imply conditional unbiasedness. For example,
+with `F0=9`, `k=8`, `L=2`, any independently selected layer-0 heap misses one
+key. Of 512 equally likely next-bit assignments, only the all-ones assignment
+makes the top incomplete. The sum of the errors over the other 511 assignments
+is -1, so `E[Y-F0 | C] = -1/511`.
+
+If `P(not C) <= rho < 1`, then
+
+- `P(|Y-F0| > epsilon F0 | C) <= min(1, d/(1-rho))`;
+- without rejecting incomplete results, `P(|Y-F0| > epsilon F0) <= min(1, d+rho)`.
+
+For ordinary inserts, `C` holds exactly when `|S_(L-1)| <= k`.
+Sizing `L >= ceil(log2(F0_max/k)) + 2` makes its mean at most `k/2`,
+so Chernoff gives `rho <= (e/4)^(k/2)`. Conservatively false completeness flags
+from merges or partial delivery require their own completeness probability.
+A normal approximation for the ideal estimator suggests
+`2 exp(-epsilon^2 k/4)`; this is not a rigorous tail bound.
+Terminal mode reconstructs candidates from strata and is outside this proof.

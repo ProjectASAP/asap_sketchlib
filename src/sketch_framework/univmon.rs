@@ -192,9 +192,9 @@ impl UnivMon {
 
     /// Whether the top layer's heap still holds every key that layer received.
     ///
-    /// This is the precondition of [`Self::calc_card`]'s error bound: with an
-    /// incomplete top layer the distinct count is biased low. The top layer is
-    /// the same physical heap in standard and terminal mode.
+    /// In standard mode this identifies results covered by [`Self::calc_card`]'s
+    /// joint failure bound. It does not establish conditional unbiasedness.
+    /// The top layer is the same physical heap in standard and terminal mode.
     pub fn top_layer_complete(&self) -> bool {
         self.candidate_complete[self.layer_size - 1]
     }
@@ -328,7 +328,7 @@ impl UnivMon {
     where
         F: Fn(f64) -> f64,
     {
-        if self.bucket_size == 0 {
+        if self.bucket_size == 0 && !is_card {
             return 0.0;
         }
         if self.update_mode == UnivMonUpdateMode::Terminal {
@@ -466,49 +466,12 @@ impl UnivMon {
 
     /// Returns the estimated L2 norm.
     ///
-    /// In standard mode layer 0 receives every key, so its Count Sketch
-    /// estimates the second moment `F2 = Σ f_i²` directly: each row's sum of
-    /// squared counters, then the median across rows. In terminal mode the
-    /// layers hold disjoint strata of the key space, so their `F2` estimates
-    /// add. The heap recursion of [`Self::calc_g_sum`] is not used here; it
-    /// estimates the same quantity with more variance.
-    ///
-    /// # Error bound (standard mode)
-    ///
-    /// Take one row with `w = sketch_col` columns. With column `c_i` and sign
-    /// `s_i` for key `i`, the row's estimate is
-    /// `Z = Σ_c (Σ_{i: c_i = c} s_i f_i)² = F2 + Σ_{i≠j} s_i s_j f_i f_j [c_i = c_j]`.
-    /// Treating the key hash as uniformly random, the signs are independent
-    /// of each other and of the columns, so `E[Z] = F2` and
-    /// `Var[Z] = 2q (F2² − F4) ≤ 2q F2²`, where `F4 = Σ f_i⁴` and
-    /// `q = P(c_i = c_j)`. A column is a hash slice of `⌈log2 w⌉` bits taken
-    /// modulo `w`, so `q = 1/w` when `w` is a power of two and `q ≤ 9/(8w)`
-    /// otherwise (the slice values `w..2^⌈log2 w⌉` fold onto the low
-    /// columns; the worst case, `w = ¾·2^⌈log2 w⌉`, doubles a third of them).
-    ///
-    /// By Chebyshev, one row misses by more than `ε F2` with probability at
-    /// most `p = 2q / ε²`, i.e. `p = 2 / (w ε²)` for a power-of-two `w` and
-    /// `p = 9 / (4 w ε²)` otherwise. The `r = sketch_row` rows hash disjoint
-    /// bit slices of one 128-bit hash (while `r · (⌈log2 w⌉ + 1) ≤ 128`), so
-    /// they are independent. Their median (the mean of the two middle rows
-    /// when `r` is even) misses only when at least `⌈r/2⌉` rows miss on the
-    /// same side, hence
-    ///
-    /// `P(|F2_est − F2| > ε F2) ≤ δ = P(Binomial(r, p) ≥ ⌈r/2⌉)`.
-    ///
-    /// For odd `r`, `⌈r/2⌉ = (r+1)/2`. The bound is useful only for
-    /// `p < 1/2`. It bounds the squared norm; because
-    /// `|√(1 ± ε) − 1| ≤ ε`, the same `ε` and `δ` also bound the relative
-    /// error of the returned L2 norm. The bound is independent of the stream's
-    /// shape and length while `F2` stays below the `i64` counters' range.
-    ///
-    /// # Terminal mode
-    ///
-    /// Each stratum's estimate satisfies the bound above for that stratum's
-    /// own `F2`. If every non-empty stratum is within `ε` of its own `F2`, the
-    /// sum is within `ε` of the total, so by a union bound the failure
-    /// probability is at most `δ` times the number of non-empty strata
-    /// (at most `layer_size`).
+    /// Standard mode reads layer 0's Count Sketch; terminal mode sums the
+    /// disjoint strata's squared estimates before taking the square root.
+    /// This deliberately differs from the paper's generic heap recurrence,
+    /// which remains available through [`Self::calc_g_sum`]. See the
+    /// [API documentation](https://github.com/ProjectASAP/asap_sketchlib/blob/fix/univmon-certifiable-estimators/docs/api/api_univmon.md#error-bounds)
+    /// for error bounds, hash assumptions and counter limits.
     pub fn calc_l2(&self) -> f64 {
         if self.update_mode == UnivMonUpdateMode::Terminal {
             return (0..self.layer_size)
@@ -533,55 +496,15 @@ impl UnivMon {
         (self.bucket_size as f64).log2() - tmp / (self.bucket_size as f64)
     }
 
-    /// Returns the estimated number of distinct keys, `F0`.
+    /// Returns the estimated number of distinct keys, including zero-weight keys.
     ///
-    /// This is the recursion of [`Self::calc_g_sum`] with `g = 1`, and every
-    /// heap key counts whatever its Count Sketch estimate: a key is in a heap
-    /// only because the stream inserted it. A key inserted with weight 0 is
-    /// therefore counted too.
-    ///
-    /// # Error bound (standard mode)
-    ///
-    /// Write `S_j` for the keys that reach layer `j` (hash bits `1..=j` of
-    /// `BOTTOM_LAYER_FINDER` all set), `H_j ⊆ S_j` for layer `j`'s heap, which
-    /// holds `min(|S_j|, k)` keys for `k = heap_size`, and `M_j = S_j \ H_j`
-    /// for the keys it misses. Let `L = layer_size` and let `b_{j+1}(i)` be
-    /// bit `j+1` of key `i`'s finder hash. The estimate is
-    /// `Y_{L−1} = |H_{L−1}|` and `Y_j = 2 Y_{j+1} + Σ_{i∈H_j} (1 − 2 b_{j+1}(i))`.
-    ///
-    /// When the top layer is complete ([`Self::top_layer_complete`],
-    /// `H_{L−1} = S_{L−1}`), telescoping
-    /// `|S_j| = 2 |S_{j+1}| + Σ_{i∈S_j} (1 − 2 b_{j+1}(i))` gives
-    ///
-    /// `Y_0 − F0 = −Σ_{j=0}^{L−2} 2^j Σ_{i∈M_j} (1 − 2 b_{j+1}(i))`.
-    ///
-    /// `M_j` is decided by layer `j`'s Count Sketch, which sees only `S_j`
-    /// (bits `1..=j`) and hashes with its own seed, so it does not depend on
-    /// bit `j+1`. Each term is then a fair ±1 independent of everything
-    /// before it, the sum is a martingale, and the estimate is unbiased with
-    ///
-    /// `Var[Y_0] = Σ_{j=0}^{L−2} 4^j E|M_j|`, with `|M_j| = (|S_j| − k)^+`.
-    ///
-    /// Bounding `E(|S_j| − k)^+` by `E|S_j| = F0 / 2^j` on the low layers
-    /// and by `E[X(X−1)(X−2)] / (5k²) ≤ (F0/2^j)³ / (5k²)` on the high ones
-    /// (valid for `k ≥ 8`), and splitting where `2^j ≈ 0.45–0.9 · F0/k`,
-    /// gives `Var[Y_0] ≤ 1.35 F0² / k ≤ 2 F0² / k` for `k ≥ 8`. Summed
-    /// exactly, the identity stays below `0.83 F0² / k` for `k ∈ [8, 256]`.
-    ///
-    /// Hence, given a complete top layer,
-    /// `P(|Y_0 − F0| > ε F0) ≤ 2 / (k ε²)` (Chebyshev, rigorous), and under
-    /// a normal approximation of the martingale
-    /// `P(|Y_0 − F0| > ε F0) ≈ 2 exp(−ε² k / 4)`. The latter is an
-    /// approximation, not a bound.
-    ///
-    /// The top layer is complete when `|S_{L−1}| ≤ k`. With
-    /// `L ≥ ⌈log2(F0_max / k)⌉ + 2`, `E|S_{L−1}| = F0 / 2^{L−1} ≤ k/2` and a
-    /// Chernoff bound puts the chance of an incomplete top layer below
-    /// `(e/4)^{k/2}`. Completeness is observed rather than assumed: read
-    /// [`Self::top_layer_complete`] before relying on the bound.
-    ///
-    /// Terminal mode reconstructs its candidate sets from the strata, so the
-    /// independence argument above does not carry over; it is not covered.
+    /// Uses [`Self::calc_g_sum`] with `g = 1`, counting every heap key
+    /// regardless of its frequency estimate. Standard-mode error guarantees
+    /// require independent sampling; [`Self::top_layer_complete`] identifies
+    /// results covered by the joint failure bound, not conditional unbiasedness.
+    /// Terminal mode is outside that proof. See the
+    /// [API documentation](https://github.com/ProjectASAP/asap_sketchlib/blob/fix/univmon-certifiable-estimators/docs/api/api_univmon.md#error-bounds)
+    /// for the precise guarantees and sizing guidance.
     pub fn calc_card(&self) -> f64 {
         self.calc_g_sum(|_| 1.0, true)
     }
@@ -1075,6 +998,31 @@ mod tests {
         l2hh_cell_for_row(hash128_seeded(0, key), 0, cols, cols_mask_bits(cols)).1
     }
 
+    #[test]
+    fn calc_card_counts_zero_weight_only_streams() {
+        for terminal in [false, true] {
+            let mut sketch = UnivMon::init_univmon(8, 3, 64, 4);
+            assert_eq!(sketch.calc_card(), 0.0);
+            for id in [1, 2, 1, 3] {
+                if terminal {
+                    sketch.fast_insert(&DataInput::U64(id), 0);
+                } else {
+                    sketch.insert(&DataInput::U64(id), 0);
+                }
+            }
+            assert_eq!(sketch.calc_l1(), 0.0);
+            assert_eq!(sketch.calc_l2(), 0.0);
+            assert_eq!(sketch.calc_entropy(), 0.0);
+            assert!(sketch.top_layer_complete());
+            assert_eq!(sketch.calc_card(), 3.0);
+            let decoded =
+                UnivMon::deserialize_from_bytes(&sketch.serialize_to_bytes().unwrap()).unwrap();
+            assert_eq!(decoded.calc_card(), 3.0);
+            sketch.free();
+            assert_eq!(sketch.calc_card(), 0.0);
+        }
+    }
+
     /// A key whose Count Sketch estimate is not positive is still a key the
     /// stream inserted; a complete layer must count it.
     #[test]
@@ -1270,26 +1218,29 @@ mod tests {
             // L ≥ ⌈log2(F0 / k)⌉ + 2.
             let layers = (KEYS as f64 / HEAP as f64).log2().ceil() as usize + 2;
             let chebyshev = 2.0 / (HEAP as f64 * EPS * EPS);
-            let normal = 2.0 * (-EPS * EPS * HEAP as f64 / 4.0).exp();
             let mut rng = StdRng::seed_from_u64(0x5EED_00F0);
             let f0 = KEYS as f64;
             for shape in SHAPES {
-                let (mut failures, mut incomplete, mut kept) = (0, 0, 0);
+                let (mut failures, mut incomplete) = (0, 0);
                 let (mut sum, mut sum_sq) = (0.0, 0.0);
                 for _ in 0..trials {
                     let mut sketch = UnivMon::init_univmon(HEAP, 3, 256, layers);
+                    let mut top_keys = 0;
                     for (id, weight) in stream(shape, KEYS, &mut rng) {
-                        sketch.insert(&DataInput::U64(id), weight);
+                        let key = DataInput::U64(id);
+                        top_keys += usize::from(sketch.bottom_layer_for(&key) == layers - 1);
+                        sketch.insert(&key, weight);
                     }
-                    if !sketch.top_layer_complete() {
-                        incomplete += 1;
-                        continue;
-                    }
-                    kept += 1;
+                    let complete = sketch.top_layer_complete();
+                    incomplete += usize::from(!complete);
                     let estimate = sketch.calc_card();
-                    sum += estimate - f0;
-                    sum_sq += (estimate - f0).powi(2);
-                    if (estimate - f0).abs() > EPS * f0 {
+                    // Restore the exact top count to test the unconditional
+                    // ideal estimator, including trials whose top overflowed.
+                    let missing = top_keys - sketch.hh_layers[layers - 1].len();
+                    let ideal = estimate + ((1_u64 << (layers - 1)) as f64) * missing as f64;
+                    sum += ideal - f0;
+                    sum_sq += (ideal - f0).powi(2);
+                    if complete && (estimate - f0).abs() > EPS * f0 {
                         failures += 1;
                     }
                 }
@@ -1298,28 +1249,28 @@ mod tests {
                     incomplete as f64 <= allowed_failures(trials, 0.01),
                     "card {shape:?}: top layer incomplete in {incomplete}/{trials} trials"
                 );
-                let kept_f = kept as f64;
-                let variance = sum_sq / kept_f;
+                let trials_f = trials as f64;
+                let variance = sum_sq / trials_f;
                 eprintln!(
-                    "card {shape:?}: {failures}/{kept} misses (δ={:.4}), {incomplete} incomplete, variance {:.4}·F0²/k, mean error {:.2}",
-                    chebyshev.min(normal),
+                    "card {shape:?}: {failures}/{trials} joint misses (δ={:.4}), {incomplete} incomplete, variance {:.4}·F0²/k, mean error {:.2}",
+                    chebyshev,
                     variance / (f0 * f0 / HEAP as f64),
-                    sum / kept_f
+                    sum / trials_f
                 );
                 assert!(
-                    failures as f64 <= allowed_failures(kept, chebyshev.min(normal)),
-                    "card {shape:?}: {failures}/{kept} misses beyond ε={EPS}"
+                    failures as f64 <= allowed_failures(trials, chebyshev),
+                    "card {shape:?}: {failures}/{trials} joint misses beyond ε={EPS}"
                 );
                 assert!(
                     variance <= 1.35 * f0 * f0 / HEAP as f64,
                     "card {shape:?}: variance {:.4}·F0²/k above 1.35",
                     variance / (f0 * f0 / HEAP as f64)
                 );
-                // Unbiased: the mean error is within four standard errors.
+                // The ideal estimator is unconditionally unbiased.
                 assert!(
-                    (sum / kept_f).abs() <= 4.0 * (variance / kept_f).sqrt(),
+                    (sum / trials_f).abs() <= 4.0 * (variance / trials_f).sqrt(),
                     "card {shape:?}: mean error {:.2} looks biased",
-                    sum / kept_f
+                    sum / trials_f
                 );
             }
         }
