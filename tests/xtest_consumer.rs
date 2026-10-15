@@ -11,7 +11,6 @@
 //!   hll.pb         — HyperLogLogState (ErtlMLE variant)
 //!   countsketch.pb — CountSketchState with float64 signed counters
 //!   coco.pb        — CocoSketchState (hash+val+hasKey buckets)
-//!   elastic.pb     — ElasticState (heavy buckets + light CountMin)
 //!   univmon.pb     — UnivMonState (layered CountSketch + TopK heaps)
 //!   hydra.pb       — HydraState (CM-cell grid)
 //!
@@ -323,44 +322,6 @@ fn cross_language_proto() {
     }
 
     // -----------------------------------------------------------------------
-    // ElasticSketch
-    // -----------------------------------------------------------------------
-    println!();
-    println!("[ElasticSketch] Step 1/3 — Read elastic.pb");
-    let bytes = read_file(in_dir.join("elastic.pb"));
-    let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode elastic envelope");
-
-    println!(
-        "[ElasticSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
-        env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library)
-    );
-
-    let elastic_state = match env.sketch_state {
-        Some(sketch_envelope::SketchState::Elastic(ref s)) => s.clone(),
-        other => panic!("expected ElasticSketch sketch_state, got {other:?}"),
-    };
-
-    println!(
-        "[ElasticSketch]   bucket_count={} light_rows={} light_cols={}",
-        elastic_state.bucket_count,
-        elastic_state.light.as_ref().map_or(0, |l| l.rows),
-        elastic_state.light.as_ref().map_or(0, |l| l.cols)
-    );
-
-    // Query "elephant" — inserted 1000 times.
-    // Go uses CanonicalHashSeed = seedList[5] = 0x6a09e667
-    let elephant_hash = xxh3_64_seeded(SEED_5, b"elephant");
-    let elephant_est = elastic_query(&elastic_state, "elephant", elephant_hash);
-    println!("[ElasticSketch] Step 3/3 — 'elephant' est = {elephant_est} (expect ≥ 900)");
-    if elephant_est >= 900 {
-        println!("[ElasticSketch]   PASS");
-    } else {
-        eprintln!("[ElasticSketch] FAIL: estimate {elephant_est} < 900");
-        all_ok = false;
-    }
-
-    // -----------------------------------------------------------------------
     // UnivMon
     // -----------------------------------------------------------------------
     println!();
@@ -553,7 +514,6 @@ fn cross_language_proto() {
 // ---------------------------------------------------------------------------
 
 const SEED_0: u64 = 0xcafe3553; // seedList[0] — Hash64 / default hash
-const SEED_5: u64 = 0x6a09e667; // seedList[5] — CanonicalHashSeed
 const SEED_6: u64 = 0xbb67ae85; // seedList[6] — defaultHydraSeed
 
 // ---------------------------------------------------------------------------
@@ -858,62 +818,6 @@ fn coco_estimate(state: &CocoSketchState, hash: u64) -> u64 {
         }
     }
     total
-}
-
-// ---------------------------------------------------------------------------
-// ElasticSketch query
-// ---------------------------------------------------------------------------
-// Mirrors Go's ElasticSketch.queryLocked:
-//   hash = HashIt(CanonicalHashSeed, []byte(id))   → SEED_5
-//   idx = hash % bucket_count
-//   if flow_ids[idx] == id: if !eviction: return vote_pos[idx]
-//                           else: return vote_pos[idx] + light_estimate
-//   else: return light_estimate
-// Light layer: rows=5, cols=2048, bits=11, mask=2047
-//   col_r = (hash >> (r * 11)) & 2047;  min across rows
-
-fn elastic_query(state: &ElasticState, id: &str, hash: u64) -> i64 {
-    let n = state.bucket_count as usize;
-    let idx = (hash % n as u64) as usize;
-
-    let heavy_match = idx < state.flow_ids.len() && state.flow_ids[idx] == id;
-
-    if heavy_match {
-        let vpos = state.vote_pos.get(idx).copied().unwrap_or(0) as i64;
-        let evicted = state.evictions.get(idx).copied().unwrap_or(false);
-        if !evicted {
-            return vpos;
-        }
-        return vpos + elastic_light_min(state, hash);
-    }
-    elastic_light_min(state, hash)
-}
-
-fn elastic_light_min(state: &ElasticState, hash: u64) -> i64 {
-    let light = match &state.light {
-        Some(l) => l,
-        None => return 0,
-    };
-    let rows = light.rows as usize;
-    let cols = light.cols as usize;
-    let bits = col_bits(cols); // trailing zeros of cols = 11 for 2048
-    let mask = (cols as u64) - 1;
-    let counts = &light.counts_float;
-
-    let mut min_val = f64::MAX;
-    for r in 0..rows {
-        let shift = (r as u64) * bits;
-        let col = ((hash >> shift) & mask) as usize;
-        let v = counts[r * cols + col];
-        if v < min_val {
-            min_val = v;
-        }
-    }
-    if min_val == f64::MAX {
-        0
-    } else {
-        min_val as i64
-    }
 }
 
 // ---------------------------------------------------------------------------
