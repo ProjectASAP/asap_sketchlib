@@ -17,10 +17,10 @@ use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 // Count Sketch (a.k.a. Count-Min-style signed-counter sketch) —
 // element-wise mergeable frequency estimator.
 //
-// Parallel to `count_min::CountMinSketch` but with **signed** counters,
-// matching the `asap_sketchlib::proto::sketchlib::CountSketchState` wire
-// format that DataCollector's `countsketchprocessor` emits via the
-// modified OTLP `Metric.data = CountSketch{…}` variant.
+// Signed counters, matching the
+// `asap_sketchlib::proto::sketchlib::CountSketchState` wire format that
+// DataCollector's `countsketchprocessor` emits via the modified OTLP
+// `Metric.data = CountSketch{…}` variant.
 //
 // The surface is: construct from a decoded proto state, merge
 // element-wise with another sketch, emit the matrix for queries and

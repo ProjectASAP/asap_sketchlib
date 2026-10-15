@@ -880,4 +880,65 @@ mod tests {
 
         assert_eq!(storage.as_slice(), expected_once.as_slice());
     }
+
+    /// The non-zero cells of sketchlib-go's `CountMinSketch` at `4x2048` after
+    /// 50 inserts of `flow-{i % 10}`: every listed cell holds `5`.
+    const GO_FLOW_CELLS: [(usize, usize); 40] = [
+        (0, 193),
+        (0, 306),
+        (0, 1078),
+        (0, 1079),
+        (0, 1160),
+        (0, 1212),
+        (0, 1730),
+        (0, 1734),
+        (0, 1937),
+        (0, 1979),
+        (1, 159),
+        (1, 525),
+        (1, 550),
+        (1, 576),
+        (1, 726),
+        (1, 901),
+        (1, 1193),
+        (1, 1426),
+        (1, 1808),
+        (1, 1863),
+        (2, 429),
+        (2, 515),
+        (2, 700),
+        (2, 896),
+        (2, 962),
+        (2, 1356),
+        (2, 1410),
+        (2, 1621),
+        (2, 1982),
+        (2, 1997),
+        (3, 226),
+        (3, 286),
+        (3, 333),
+        (3, 359),
+        (3, 935),
+        (3, 1208),
+        (3, 1312),
+        (3, 1602),
+        (3, 1774),
+        (3, 2046),
+    ];
+
+    #[test]
+    fn cm_f64_fast_path_places_keys_in_go_cells() {
+        let (rows, cols) = (4usize, 2048usize);
+        let mut sk: CountMin<Vector2D<f64>, FastPath, DefaultXxHasher> =
+            CountMin::with_dimensions(rows, cols);
+        for i in 0..50u64 {
+            sk.insert_many(&DataInput::String(format!("flow-{}", i % 10)), 1.0);
+        }
+
+        let mut want = vec![0.0f64; rows * cols];
+        for (r, c) in GO_FLOW_CELLS {
+            want[r * cols + c] = 5.0;
+        }
+        assert_eq!(sk.as_storage().as_slice(), want.as_slice());
+    }
 }
