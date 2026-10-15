@@ -15,6 +15,8 @@ signals a backwards-compatible change.
 - `WeightedFrequency`: Float64 CMS/CountSketch updates, typed tuple identities,
   bounded candidate ranking, compatible-state merging and versioned snapshots.
   Extracted from ASAPPlanner; preserves existing `ASAP-WFREQ-1` bytes.
+  `WeightedFrequency::estimate` reads one identity tuple's point estimate, and
+  capacity 0 builds a frequency sketch that retains no candidates.
 
 - **`Vector3D<T>`**, filled in from a stub. A `rows x cols` grid whose every
   cell is a contiguous `depth`-length record, addressed by the same
