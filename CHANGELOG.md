@@ -118,6 +118,14 @@ signals a backwards-compatible change.
   `MATRIX_MAX_ROWS` rows, which the ASAPv1 wire already refused to encode or
   decode, so it no longer builds a state it cannot serialize. Its panic
   messages now come from the same checks as the wire's.
+- **The portable `CountSketch` hashes every row independently at any width.**
+  It sliced every row's column and sign from one 64-bit hash whatever the
+  shape, so once `rows * (ceil_log2(cols) + 1)` passed 64, deep rows reused
+  shallow rows' bits (at `30000` columns only about four rows were
+  independent) and debug builds panicked on the shift. It now lays the hash
+  out by shape as the native fast-path sketches do: one 64-bit hash while the
+  rows fit, then one 128-bit hash, then one hash per row. Shapes that fit 64
+  bits keep their cells, so the Go parity probe is unchanged.
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
   stream: the CDF was sorted with `partial_cmp(..).unwrap()`. It sorts with
   `total_cmp`, as the three sibling sorts beside it already did.
