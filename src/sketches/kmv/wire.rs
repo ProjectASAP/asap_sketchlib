@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn kmv_round_trip_serialization() {
-        let mut sketch = populated(64, 5_000);
+        let sketch = populated(64, 5_000);
         assert_eq!(sketch.k_vals.len(), 64, "the bound was never reached");
 
         let encoded = sketch.serialize_to_bytes().expect("serialize KMV");
@@ -260,7 +260,7 @@ mod tests {
             assert!(pair[0] < pair[1], "the emitted hashes are not ascending");
         }
 
-        let mut decoded = KMV::<DefaultXxHasher>::deserialize_from_bytes(&encoded).expect("decode");
+        let decoded = KMV::<DefaultXxHasher>::deserialize_from_bytes(&encoded).expect("decode");
         assert_eq!(decoded.k, sketch.k);
         assert_eq!(decoded.k_vals.capacity(), sketch.k_vals.capacity());
         assert_eq!(decoded.wire_hashes(), sketch.wire_hashes());
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(metadata_of(&bytes).k, 16);
         assert!(payload_of(&bytes).hashes.is_empty());
 
-        let mut decoded = KMV::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let decoded = KMV::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
         assert_eq!(decoded.k, 16);
         assert_eq!(decoded.k_vals.len(), 0);
         assert_eq!(decoded.k_vals.capacity(), 16);
