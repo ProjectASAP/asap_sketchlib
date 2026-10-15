@@ -202,15 +202,21 @@ impl WeightedFrequency {
         })
     }
     fn estimate_key(&self, key: &[u8]) -> f64 {
-        let mut estimates = self
-            .indexes(key)
-            .map(|(i, sign)| self.cells[i] * sign)
-            .collect::<Vec<_>>();
+        self.estimate_key_with(key, &mut Vec::new())
+    }
+    /// [`Self::estimate_key`] with a caller-owned buffer for the CountSketch
+    /// row estimates, so scoring many candidates allocates once.
+    fn estimate_key_with(&self, key: &[u8], rows: &mut Vec<f64>) -> f64 {
         match self.algorithm {
-            FrequencyAlgorithm::Cms => estimates.into_iter().fold(f64::INFINITY, f64::min),
+            FrequencyAlgorithm::Cms => self
+                .indexes(key)
+                .map(|(i, _)| self.cells[i])
+                .fold(f64::INFINITY, f64::min),
             FrequencyAlgorithm::CountSketch => {
-                let middle = estimates.len() / 2;
-                *estimates.select_nth_unstable_by(middle, f64::total_cmp).1
+                rows.clear();
+                rows.extend(self.indexes(key).map(|(i, sign)| self.cells[i] * sign));
+                let middle = rows.len() / 2;
+                *rows.select_nth_unstable_by(middle, f64::total_cmp).1
             }
         }
     }
@@ -218,8 +224,9 @@ impl WeightedFrequency {
         candidates.sort_by(|a, b| a.key.cmp(&b.key));
         candidates.dedup_by(|a, b| a.key == b.key);
         self.candidates.clear();
+        let mut rows = Vec::with_capacity(self.depth);
         for mut candidate in candidates {
-            candidate.score = self.estimate_key(&candidate.key);
+            candidate.score = self.estimate_key_with(&candidate.key, &mut rows);
             self.candidates.push(candidate);
             if self.candidates.len() > self.capacity {
                 self.candidates.pop();
@@ -258,12 +265,17 @@ impl WeightedFrequency {
         if self.capacity == 0 {
             return Ok(());
         }
-        let mut candidates = self.candidates.iter().cloned().collect::<Vec<_>>();
-        candidates.push(Candidate {
-            identity,
-            key,
-            score: 0.0,
-        });
+        // Every retained score is re-read, since this update may have moved
+        // cells they share. The candidates move into the rescoring instead of
+        // being copied, and a key already retained is not added twice.
+        let mut candidates = std::mem::take(&mut self.candidates).into_vec();
+        if !candidates.iter().any(|candidate| candidate.key == key) {
+            candidates.push(Candidate {
+                identity,
+                key,
+                score: 0.0,
+            });
+        }
         self.retain(candidates);
         Ok(())
     }
@@ -614,6 +626,28 @@ mod tests {
             assert_eq!(state.to_bytes(), fresh.to_bytes());
             assert!(state.topk(4).is_empty());
             assert_eq!(state.estimate(&[FrequencyIdentity::Int64(1)]).unwrap(), 0.0);
+        }
+    }
+
+    // Under heavy collisions every update re-reads each retained score, and a
+    // key updated again stays one candidate: the retained scores always equal
+    // the point estimates.
+    #[test]
+    fn retained_scores_track_every_update() {
+        for algorithm in [FrequencyAlgorithm::Cms, FrequencyAlgorithm::CountSketch] {
+            let mut state = WeightedFrequency::new(algorithm, 8, 3, 3).unwrap();
+            for step in 0..60i64 {
+                let key = [FrequencyIdentity::Int64(step % 7)];
+                state.update(&key, 0.5 + (step % 3) as f64).unwrap();
+                let rows = state.topk(8);
+                assert!(rows.len() <= 3);
+                for (identity, score) in &rows {
+                    assert_eq!(*score, state.estimate(identity).unwrap(), "step {step}");
+                }
+                let mut keys = rows.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+                keys.dedup();
+                assert_eq!(keys.len(), rows.len());
+            }
         }
     }
 
