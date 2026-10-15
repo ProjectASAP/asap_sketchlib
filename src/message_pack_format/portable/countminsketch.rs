@@ -90,9 +90,8 @@ pub fn sketchlib_cms_query(inner: &SketchlibCms, key: &str) -> f64 {
 /// L1 and L2 norm deltas are carried for downstream error-accounting
 /// but are not consumed by `apply_delta` itself.
 ///
-/// Structurally identical to [`super::countsketch::CountSketchDelta`]: the
-/// optional `hh_keys` channel carries heavy-hitter candidate keys forwarded by
-/// an upstream tracker. Count-Min can track heavy hitters, but whether
+/// The optional `hh_keys` channel carries heavy-hitter candidate keys
+/// forwarded by an upstream tracker. Count-Min can track heavy hitters, but whether
 /// `hh_keys` is populated is a control-plane decision — it is empty when
 /// heavy-hitter tracking is not enabled. The receiver re-queries the merged
 /// matrix for each key to (re)build its Top-K. Mirrors the Go reference
@@ -266,9 +265,8 @@ impl CountMinSketch {
     /// Go producer maintains incrementally. Heavy-hitter candidate keys
     /// (`hh_keys`) are sourced from an upstream tracker that this minimal
     /// wrapper does not maintain, so the field is left empty (an empty repeated
-    /// field encodes to nothing on the wire), exactly as CountSketch's
-    /// `compute_delta` does. The returned bytes are a `prost`-encoded
-    /// [`crate::proto::sketchlib::CountMinDelta`], byte-identical to the Go
+    /// field encodes to nothing on the wire). The returned bytes are a
+    /// `prost`-encoded [`crate::proto::sketchlib::CountMinDelta`], byte-identical to the Go
     /// `proto.Marshal(CountMinDelta)` output for the same inputs when no
     /// heavy-hitter keys are forwarded (cross-language byte parity).
     ///
@@ -334,7 +332,7 @@ impl CountMinSketch {
             l1,
             l2,
             // Heavy-hitter keys are control-plane-gated; this wrapper has no
-            // tracker, so the field is empty (mirrors CountSketch::compute_delta).
+            // tracker, so the field is empty.
             hh_keys: Vec::new(),
             cell_rows,
             cell_cols,
@@ -348,9 +346,9 @@ impl CountMinSketch {
     /// Go reference implementation's `DeserializeDelta` + `ApplyDelta`.
     /// Reads the packed cell arrays (`cell_rows`/`cell_cols`/`d_counts`)
     /// and falls back to the legacy per-cell records for payloads from
-    /// older producers. Heavy-hitter keys (`hh_keys`) are read symmetrically
-    /// (mirroring CountSketch) and carried onto the decoded delta; a plain CMS
-    /// keeps no Top-K, so they are not otherwise consumed here.
+    /// older producers. Heavy-hitter keys (`hh_keys`) are read and carried
+    /// onto the decoded delta; a plain CMS keeps no Top-K, so they are not
+    /// otherwise consumed here.
     ///
     /// Returns `Err` if `bytes` is not a valid `CountMinDelta` proto or a
     /// cell is out of range for this sketch's dimensions.
@@ -383,10 +381,8 @@ impl CountMinSketch {
             cells,
             l1: proto.l1,
             l2: proto.l2,
-            // Heavy-hitter keys are carried through symmetrically (mirrors
-            // CountSketch). This wrapper keeps no Top-K, so they are not
-            // otherwise consumed; a control-plane sink would re-query the
-            // merged matrix for each key. Empty for a plain CMS.
+            // This wrapper keeps no Top-K, so heavy-hitter keys are carried
+            // through but not otherwise consumed. Empty for a plain CMS.
             hh_keys: proto.hh_keys,
         };
         self.apply_delta(&delta)

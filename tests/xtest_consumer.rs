@@ -9,7 +9,6 @@
 //!   kll.pb         — KLLState with quantile items and coin RNG state
 //!   ddsketch.pb    — DDSketchState with alpha + bucket array
 //!   hll.pb         — HyperLogLogState (ErtlMLE variant)
-//!   countsketch.pb — CountSketchState with float64 signed counters
 //!   coco.pb        — CocoSketchState (hash+val+hasKey buckets)
 //!   elastic.pb     — ElasticState (heavy buckets + light CountMin)
 //!   univmon.pb     — UnivMonState (layered CountSketch + TopK heaps)
@@ -242,44 +241,6 @@ fn cross_language_proto() {
         println!("[HLL]   PASS");
     } else {
         eprintln!("[HLL] FAIL: cardinality {hll_card} not in [40000, 65000]");
-        all_ok = false;
-    }
-
-    // -----------------------------------------------------------------------
-    // CountSketch
-    // -----------------------------------------------------------------------
-    println!();
-    println!("[CountSketch] Step 1/3 — Read countsketch.pb");
-    let bytes = read_file(in_dir.join("countsketch.pb"));
-    let env = SketchEnvelope::decode(bytes.as_slice()).expect("decode countsketch envelope");
-
-    println!(
-        "[CountSketch] Step 2/3 — Validate envelope (format_version={}, producer={})",
-        env.format_version,
-        env.producer.as_ref().map_or("?", |p| &p.library)
-    );
-
-    let cs_state = match env.sketch_state {
-        Some(sketch_envelope::SketchState::CountSketch(ref s)) => s.clone(),
-        other => panic!("expected CountSketch sketch_state, got {other:?}"),
-    };
-
-    println!(
-        "[CountSketch]   rows={} cols={} counter_type={:?}",
-        cs_state.rows,
-        cs_state.cols,
-        CounterType::try_from(cs_state.counter_type)
-    );
-
-    // Query "cs:hot" — inserted 200 extra times.
-    // Go hash: common.Hash64([]byte("cs:hot")) = xxh3_64_seeded(seedList[0], b"cs:hot")
-    let cs_hot_hash = xxh3_64_seeded(SEED_0, b"cs:hot");
-    let cs_est = count_sketch_query_float(&cs_state, cs_hot_hash);
-    println!("[CountSketch] Step 3/3 — 'cs:hot' est = {cs_est:.0} (expect ≥ 200)");
-    if cs_est >= 200.0 {
-        println!("[CountSketch]   PASS");
-    } else {
-        eprintln!("[CountSketch] FAIL: estimate {cs_est:.0} < 200");
         all_ok = false;
     }
 
@@ -788,38 +749,6 @@ fn hll_ertl_mle_estimate(state: &HyperLogLogState) -> u64 {
 
     // estimate = round(0.5 / ln(2) * m^2 / z)
     (0.5 / std::f64::consts::LN_2 * m * m / z).round() as u64
-}
-
-// ---------------------------------------------------------------------------
-// CountSketch median frequency query (float64 counters, packed hash)
-// ---------------------------------------------------------------------------
-// Mirrors Go's CountSketch.fastPacked64PosAndSign + ComputeMedianInlineF64.
-// hash = xxh3_64_seeded(SEED_0, key)  — Go's Hash64
-
-fn count_sketch_query_float(state: &CountSketchState, hash: u64) -> f64 {
-    let rows = state.rows as usize;
-    let cols = state.cols as usize;
-    let bits_per_row = col_bits(cols);
-    let mask = (cols as u64) - 1;
-    // Read whichever counter field the producer populated (int vs float),
-    // discriminated by counter_type — same as CountMin.
-    let counts: Vec<f64> = if !state.counts_float.is_empty() {
-        state.counts_float.clone()
-    } else {
-        state.counts_int.iter().map(|&v| v as f64).collect()
-    };
-    let counts = &counts;
-
-    let mut estimates: Vec<f64> = Vec::with_capacity(rows);
-    for r in 0..rows {
-        let shift = (r as u64) * bits_per_row;
-        let col = ((hash >> shift) & mask) as usize;
-        // sign: bit (63-r) of hash → 1 means +1, 0 means −1
-        let sign_bit = (hash >> (63 - r)) & 1;
-        let sign = if sign_bit == 1 { 1.0f64 } else { -1.0f64 };
-        estimates.push(counts[r * cols + col] * sign);
-    }
-    median_f64(&mut estimates)
 }
 
 fn median_f64(v: &mut [f64]) -> f64 {

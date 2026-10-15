@@ -1,7 +1,7 @@
 //! Wire-format-aligned Count Sketch + top-k heap composite.
 //!
 //! No `sketches::*` equivalent — this combines `sketches::CSHeap` with
-//! the wire-format `CountSketch` shape and exposes it as a single
+//! the signed `rows x cols` matrix shape and exposes it as a single
 //! Go-interop type. Mirrors [`crate::message_pack_format::portable::countminsketch_topk::CountMinSketchWithHeap`]
 //! structurally, but backed by `CSHeap` (median estimator, signed rows)
 //! instead of `CMSHeap` (min-over-rows estimator) — the two are

@@ -1012,4 +1012,42 @@ mod tests {
             hi / lo
         );
     }
+
+    /// Go's `CountSketch` places these 25 string inserts in these 15 cells
+    /// with these signs.
+    #[test]
+    fn fast_path_string_keys_land_in_go_cells() {
+        let (rows, cols) = (3usize, 512usize);
+        let mut sk: Count<Vector2D<i64>, FastPath, DefaultXxHasher> =
+            Count::with_dimensions(rows, cols);
+        for i in 0..25 {
+            let key = format!("k-{}", (b'a' + (i % 5) as u8) as char);
+            sk.insert_many(&DataInput::String(key), 1i64);
+        }
+
+        let mut want = vec![0i64; rows * cols];
+        for (r, c, v) in [
+            (0, 61, -5),
+            (0, 127, 5),
+            (0, 217, -5),
+            (0, 276, -5),
+            (0, 467, -5),
+            (1, 78, 5),
+            (1, 185, -5),
+            (1, 278, 5),
+            (1, 503, -5),
+            (1, 510, 5),
+            (2, 6, -5),
+            (2, 165, -5),
+            (2, 198, 5),
+            (2, 210, -5),
+            (2, 314, -5),
+        ] {
+            want[r * cols + c] = v;
+        }
+        let got: Vec<i64> = (0..rows * cols)
+            .map(|i| sk.as_storage().query_one_counter(i / cols, i % cols))
+            .collect();
+        assert_eq!(got, want);
+    }
 }

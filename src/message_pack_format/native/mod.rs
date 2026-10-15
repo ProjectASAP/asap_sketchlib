@@ -8,7 +8,6 @@
 //! specifies the format `sketchlib-go` mirrors.
 
 pub mod countminsketch;
-pub mod countsketch;
 pub mod countsketch_topk;
 pub mod ddsketch;
 pub mod hll;
