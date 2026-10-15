@@ -26,11 +26,12 @@
 //! [`KLL::wire_items`] emit (they reverse the leftward-grown L0 buffer back to
 //! input order); decode inverts that mapping.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::common::numerical::NumericalValue;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::wire_key::exact_vec;
 
 use super::{
     CAPACITY_CACHE_LEN, Coin, KLL, MAX_CACHEABLE_K, MAX_LEVELS, checked_weighted_count,
@@ -112,6 +113,10 @@ pub(crate) struct KllCoinWire {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct KllPayload<T> {
     pub(crate) levels: Vec<u32>,
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "T: Deserialize<'de>")
+    )]
     pub(crate) items: Vec<T>,
     pub(crate) coin: KllCoinWire,
 }
@@ -198,7 +203,7 @@ pub(crate) fn split_and_validate_meta<'a, T: KllWireItem>(
             "KLL kind_id mismatch: stored {kind_id:?}, expected {expected_kind_id:?}"
         )));
     }
-    let meta: KllMetadata = from_slice(metadata)?;
+    let meta: KllMetadata = envelope::decode_block(metadata)?;
     if meta != kll_metadata::<T>(meta.k, meta.m, meta.seed) {
         return Err(RmpDecodeError::Uncategorized(
             "ASAPv1 KLL envelope: metadata mismatch".to_string(),
@@ -251,7 +256,7 @@ where
     /// as are inconsistent level layouts.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (meta, payload_bytes) = split_and_validate_meta::<T>(bytes, KLL_KIND_COMPACT)?;
-        let payload: KllPayload<T> = from_slice(payload_bytes)?;
+        let payload: KllPayload<T> = envelope::decode_block(payload_bytes)?;
         let num_levels = validate_kll_payload(&payload.levels, &payload.items, &payload.coin)?;
         Self::from_wire_top_first(
             meta.k as usize,

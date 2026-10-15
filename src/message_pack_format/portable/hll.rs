@@ -535,7 +535,7 @@ impl MessagePackCodec for HllSketch {
 
         // Validate the hash spec is the standard profile (precision is read from
         // the metadata, so compare against a standard block built with it).
-        let meta: HllMetadata = rmp_serde::from_slice(metadata)?;
+        let meta: HllMetadata = envelope::decode_block(metadata)?;
         if meta != standard_hll_metadata(meta.precision) {
             return Err(MsgPackError::Decode(
                 rmp_serde::decode::Error::Uncategorized(
@@ -559,10 +559,10 @@ impl MessagePackCodec for HllSketch {
         };
 
         let (registers, hip_kxq0, hip_kxq1, hip_est) = if variant == HllVariant::Hip {
-            let p: HllPayloadHip = rmp_serde::from_slice(payload)?;
+            let p: HllPayloadHip = envelope::decode_block(payload)?;
             (p.registers, p.hip_kxq0, p.hip_kxq1, p.hip_est)
         } else {
-            let p: HllPayloadPlain = rmp_serde::from_slice(payload)?;
+            let p: HllPayloadPlain = envelope::decode_block(payload)?;
             (p.registers, 0.0, 0.0, 0.0)
         };
 

@@ -21,7 +21,7 @@
 //! modulo-folded width, which is outside that subset and rejected on **both**
 //! sides, so the format never emits bytes it would refuse to read back.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -159,7 +159,7 @@ where
                 "Bloom kind_id mismatch: stored {kind_id:?}, expected {BLOOM_KIND:?}"
             )));
         }
-        let meta: BloomMetadata = from_slice(metadata)?;
+        let meta: BloomMetadata = envelope::decode_block(metadata)?;
         // Validate the hash spec + mode against this target; `rows`/`cols` are
         // structural (the filter is dynamically sized), so they are echoed back
         // into the expected block rather than known a priori.
@@ -177,7 +177,7 @@ where
                 "Bloom word count overflows: rows={rows}, words_per_row={words_per_row}"
             ))
         })?;
-        let p: BloomPayload = from_slice(payload)?;
+        let p: BloomPayload = envelope::decode_block(payload)?;
         if p.words.len() != expected_words {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "Bloom words length {} != rows*words_per_row {expected_words}",
@@ -214,6 +214,7 @@ where
 mod tests {
     use super::*;
     use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, FastPath, RegularPath};
+    use rmp_serde::from_slice;
 
     const MEMBERS: u64 = 5_000;
     const PROBE_BASE: u64 = 10_000_000;

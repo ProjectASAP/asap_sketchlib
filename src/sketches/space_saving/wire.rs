@@ -43,11 +43,11 @@
 //! holding the same triples emit the same bytes whatever order they were seated
 //! in, and re-serializing a decoded summary reproduces its bytes exactly.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
-use crate::message_pack_format::wire_key::{WireBytes, WireString};
+use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::{HashProfile, HeapItem, SketchHasher};
 
 use super::{SpaceSaving, SpaceSavingState, key_order};
@@ -127,6 +127,10 @@ fn space_saving_metadata<H: HashProfile>(capacity: u32, key_type: &str) -> Space
 /// to have left the summary.
 #[derive(Debug, Serialize, Deserialize)]
 struct SpaceSavingPayload<K> {
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "K: Deserialize<'de>")
+    )]
     keys: Vec<K>,
     counts: Vec<u64>,
     errors: Vec<u64>,
@@ -239,7 +243,7 @@ fn encode_payload(
 /// Reads the payload with `keys` typed by the metadata `key_type` and assembles
 /// the state the in-memory rebuild consumes. Rejects an unknown `key_type` and
 /// parallel arrays of unequal length; a `keys` array whose msgpack types do not
-/// match `key_type` fails in `from_slice`.
+/// match `key_type` fails to decode.
 fn decode_payload(
     key_type: &str,
     capacity: usize,
@@ -247,7 +251,7 @@ fn decode_payload(
 ) -> Result<SpaceSavingState, RmpDecodeError> {
     macro_rules! unpack {
         ($variant:ident, $ty:ty) => {{
-            let decoded: SpaceSavingPayload<$ty> = from_slice(payload)?;
+            let decoded: SpaceSavingPayload<$ty> = envelope::decode_block(payload)?;
             (
                 decoded
                     .keys
@@ -276,7 +280,7 @@ fn decode_payload(
         "f32" => unpack!(F32, f32),
         "f64" => unpack!(F64, f64),
         "string" => {
-            let decoded: SpaceSavingPayload<WireString> = from_slice(payload)?;
+            let decoded: SpaceSavingPayload<WireString> = envelope::decode_block(payload)?;
             (
                 decoded
                     .keys
@@ -290,7 +294,7 @@ fn decode_payload(
             )
         }
         "bytes" => {
-            let decoded: SpaceSavingPayload<WireBytes> = from_slice(payload)?;
+            let decoded: SpaceSavingPayload<WireBytes> = envelope::decode_block(payload)?;
             (
                 decoded
                     .keys
@@ -373,7 +377,7 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
                 "Space-Saving kind_id mismatch: stored {kind_id:?}, expected {SPACE_SAVING_KIND:?}"
             )));
         }
-        let meta: SpaceSavingMetadata = from_slice(metadata)?;
+        let meta: SpaceSavingMetadata = envelope::decode_block(metadata)?;
         if meta != space_saving_metadata::<H>(meta.capacity, &meta.key_type) {
             return Err(RmpDecodeError::Uncategorized(
                 "ASAPv1 Space-Saving envelope: metadata mismatch".to_string(),
@@ -410,6 +414,7 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
 mod tests {
     use super::*;
     use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher};
+    use rmp_serde::from_slice;
 
     fn next_random(state: &mut u64) -> u64 {
         *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);

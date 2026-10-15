@@ -41,11 +41,12 @@
 //! one out of bounds or into a cycle. `k` is construction config, so it lives
 //! in the metadata; it never sizes an allocation on decode.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::message_pack_format::wire_key::WireBytes;
+use crate::message_pack_format::envelope;
+use crate::message_pack_format::wire_key::{WireBytes, exact_vec};
 use crate::{HHHeap, HashProfile, HeapItem};
 
 /// Metadata `key_type` of a heap that holds nothing. A heap with no entries has
@@ -176,7 +177,15 @@ pub(crate) fn topk_metadata<H: HashProfile>(
 /// typed by the metadata `key_type`.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct TopKPayload<C, K> {
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "C: Deserialize<'de>")
+    )]
     pub(crate) counts: Vec<C>,
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "K: Deserialize<'de>")
+    )]
     pub(crate) keys: Vec<K>,
     pub(crate) heap_counts: Vec<i64>,
 }
@@ -299,7 +308,7 @@ pub(crate) type DecodedTopK<C> = (Vec<C>, Vec<(HeapItem, i64)>);
 /// Reads the payload with `keys` typed by the metadata `key_type`, returning the
 /// base counters and the heap entries. Rejects an unknown `key_type` and
 /// parallel arrays of unequal length; a `keys` array whose msgpack types do not
-/// match `key_type` fails in `from_slice`.
+/// match `key_type` fails to decode.
 pub(crate) fn decode_payload<C>(
     key_type: &str,
     payload: &[u8],
@@ -309,7 +318,7 @@ where
 {
     macro_rules! unpack {
         ($variant:ident, $ty:ty) => {{
-            let decoded: TopKPayload<C, $ty> = from_slice(payload)?;
+            let decoded: TopKPayload<C, $ty> = envelope::decode_block(payload)?;
             (
                 decoded.counts,
                 decoded
@@ -337,7 +346,7 @@ where
         "f64" => unpack!(F64, f64),
         "string" => unpack!(String, String),
         "bytes" => {
-            let decoded: TopKPayload<C, WireBytes> = from_slice(payload)?;
+            let decoded: TopKPayload<C, WireBytes> = envelope::decode_block(payload)?;
             (
                 decoded.counts,
                 decoded
@@ -403,6 +412,7 @@ mod tests {
     use super::*;
     use crate::message_pack_format::envelope;
     use crate::{DataInput, DefaultXxHasher, RegularPath, Vector2D};
+    use rmp_serde::from_slice;
 
     use super::super::CMSHeap;
 
