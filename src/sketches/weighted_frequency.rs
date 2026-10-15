@@ -108,20 +108,33 @@ impl WeightedFrequency {
     pub fn shape(&self) -> (usize, usize, usize) {
         (self.width, self.depth, self.capacity)
     }
-    pub fn new(
+    /// Checks a shape without allocating it: `width` and `depth` positive,
+    /// `width * depth` representable, and an odd CountSketch `depth` (the
+    /// median needs an odd row count). [`Self::new`] accepts exactly these
+    /// shapes, so a caller can reject a configuration before building it.
+    pub fn check_shape(
         algorithm: FrequencyAlgorithm,
         width: usize,
         depth: usize,
-        capacity: usize,
-    ) -> Result<Self, Error> {
-        let len = width
+    ) -> Result<(), Error> {
+        width
             .checked_mul(depth)
             .filter(|_| {
                 width > 0
                     && depth > 0
                     && (algorithm != FrequencyAlgorithm::CountSketch || depth % 2 == 1)
             })
-            .ok_or_else(|| Error::Invalid("invalid weighted frequency dimensions".into()))?;
+            .map(|_| ())
+            .ok_or_else(|| Error::Invalid("invalid weighted frequency dimensions".into()))
+    }
+    pub fn new(
+        algorithm: FrequencyAlgorithm,
+        width: usize,
+        depth: usize,
+        capacity: usize,
+    ) -> Result<Self, Error> {
+        Self::check_shape(algorithm, width, depth)?;
+        let len = width * depth;
         let mut cells = Vec::new();
         cells
             .try_reserve_exact(len)
@@ -149,10 +162,8 @@ impl WeightedFrequency {
             .reject_trailing_bytes()
             .deserialize(bytes)
             .map_err(|e| Error::Invalid(e.to_string()))?;
-        if state.width == 0
-            || state.depth == 0
-            || (state.algorithm == FrequencyAlgorithm::CountSketch && state.depth % 2 == 0)
-            || state.width.checked_mul(state.depth) != Some(state.cells.len())
+        if Self::check_shape(state.algorithm, state.width, state.depth).is_err()
+            || state.width * state.depth != state.cells.len()
             || state
                 .cells
                 .iter()
@@ -215,12 +226,24 @@ impl WeightedFrequency {
             }
         }
     }
-    pub fn update(&mut self, values: &[FrequencyIdentity], weight: f64) -> Result<(), Error> {
+    /// Checks a weight [`Self::update`] would accept: finite, and nonnegative
+    /// for CMS. Lets a caller reject an input before it reaches the state.
+    pub fn check_weight(&self, weight: f64) -> Result<(), Error> {
         if !weight.is_finite() || (self.algorithm == FrequencyAlgorithm::Cms && weight < 0.0) {
             return Err(Error::Update(
                 "weighted frequency requires finite weights; CMS additionally requires nonnegative weights".into(),
             ));
         }
+        Ok(())
+    }
+    /// Empties the counters and candidates in place, keeping the algorithm,
+    /// shape and allocation, so a state can be reused for the next window.
+    pub fn clear(&mut self) {
+        self.cells.fill(0.0);
+        self.candidates.clear();
+    }
+    pub fn update(&mut self, values: &[FrequencyIdentity], weight: f64) -> Result<(), Error> {
+        self.check_weight(weight)?;
         let (identity, key) = normalize(values)?;
         let indexes = self.indexes(&key).collect::<Vec<_>>();
         if indexes
@@ -539,6 +562,58 @@ mod tests {
                 // Expected 2000 / 30000 < 1 per pair.
                 assert!(shared <= 5, "rows {a} and {b} share {shared} columns");
             }
+        }
+    }
+
+    // A caller can check a shape and a weight before building or updating:
+    // the checks accept exactly what `new` and `update` accept.
+    #[test]
+    fn shape_and_weight_checks_match_construction_and_update() {
+        use FrequencyAlgorithm::{Cms, CountSketch};
+        for (algorithm, width, depth) in [
+            (Cms, 16, 4),
+            (Cms, 16, 5),
+            (CountSketch, 16, 5),
+            (CountSketch, 16, 4),
+            (Cms, 0, 3),
+            (CountSketch, 16, 0),
+            (Cms, usize::MAX, 3),
+        ] {
+            assert_eq!(
+                WeightedFrequency::check_shape(algorithm, width, depth).is_ok(),
+                WeightedFrequency::new(algorithm, width, depth, 0).is_ok(),
+                "{algorithm:?} {width}x{depth}"
+            );
+        }
+        assert!(WeightedFrequency::check_shape(CountSketch, 16, 4).is_err());
+        for algorithm in [Cms, CountSketch] {
+            let state = WeightedFrequency::new(algorithm, 16, 3, 2).unwrap();
+            for weight in [0.5, -0.5, 0.0, f64::NAN, f64::INFINITY] {
+                assert_eq!(
+                    state.check_weight(weight).is_ok(),
+                    state
+                        .clone()
+                        .update(&[FrequencyIdentity::Null], weight)
+                        .is_ok(),
+                    "{algorithm:?} {weight}"
+                );
+            }
+            assert_eq!(state.check_weight(-0.5).is_ok(), algorithm == CountSketch);
+        }
+    }
+
+    // `clear` empties the counters and candidates in place and keeps the shape,
+    // so a cleared state equals a fresh one byte for byte.
+    #[test]
+    fn clear_empties_in_place_and_keeps_the_shape() {
+        for algorithm in [FrequencyAlgorithm::Cms, FrequencyAlgorithm::CountSketch] {
+            let fresh = WeightedFrequency::new(algorithm, 64, 3, 4).unwrap();
+            let mut state = fresh.clone();
+            state.update(&[FrequencyIdentity::Int64(1)], 2.5).unwrap();
+            state.clear();
+            assert_eq!(state.to_bytes(), fresh.to_bytes());
+            assert!(state.topk(4).is_empty());
+            assert_eq!(state.estimate(&[FrequencyIdentity::Int64(1)]).unwrap(), 0.0);
         }
     }
 
