@@ -1260,6 +1260,8 @@ Test file: [`src/message_pack_format/portable/countsketch.rs`](../src/message_pa
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
+| `deep_shapes_hash_every_row_independently` | A shape too deep for one 64-bit hash hashes every row independently and does not panic. | For a `15x30000` sketch (15 column bits and a sign bit per row), verifies one update of `2.5` reads back `2.5`, and that over 200 keys no two rows put more than 2 keys in the same column. |
+| `packed_shapes_keep_their_cells` | A shape that fits one 64-bit hash keeps the Go-parity cells. | For a `5x1024` sketch, verifies each row's column for `"api"` is the column the packed 64-bit hash at seed index `0` gives that row. |
 | `msgpack_delta_against_empty_round_trips` | A msgpack delta against an empty snapshot carries the signed cells exactly. | For a `5x1024` sketch fed 200 updates of `"hot"` at weight `1.0`, verifies the delta against a fresh sketch at threshold `1.0`, applied to another fresh sketch, reproduces `sketch()` cell for cell. |
 | `msgpack_delta_wire_layout_is_parallel_arrays` | The delta is a five-element array of scalars plus parallel index arrays. | For a `3x8` sketch fed `"x"` at weight `5.0`, verifies the delta bytes equal `rmp_serde::to_vec(&(rows as u64, cols as u64, row_idx: Vec<u32>, col_idx: Vec<u32>, d_count: Vec<i64>))` recomputed from the non-zero cells, and that decoding reports `rows` `3` and `cols` `8`. |
 | `test_new_empty` | A fresh sketch has the requested shape and zeroed cells. | For `CountSketch::new(2, 3)`, verifies `rows` is `2`, `cols` is `3`, and `sketch()` is `[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]`. |
