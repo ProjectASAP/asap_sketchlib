@@ -27,7 +27,7 @@
 //! Buckets are emitted oldest to newest and the parallel arrays follow that
 //! order, so a decoded histogram re-serializes byte-identically.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
@@ -194,7 +194,7 @@ impl ExponentialHistogram {
                 "ExponentialHistogram kind_id mismatch: stored {kind_id:?}, expected {EH_KIND:?}"
             )));
         }
-        let meta: EhMetadata = from_slice(metadata)?;
+        let meta: EhMetadata = envelope::decode_block(metadata)?;
         // `window` and `k` are properties of the stored histogram rather than
         // of the target, so they are echoed back into the expected block and
         // bounded by range instead of being pinned.
@@ -208,7 +208,7 @@ impl ExponentialHistogram {
                 "ExponentialHistogram k must be at least 1".to_string(),
             ));
         }
-        let p: EhPayload = from_slice(payload)?;
+        let p: EhPayload = envelope::decode_block(payload)?;
         let count = p.buckets.len();
         if p.sizes.len() != count || p.min_times.len() != count || p.max_times.len() != count {
             return Err(RmpDecodeError::Uncategorized(format!(

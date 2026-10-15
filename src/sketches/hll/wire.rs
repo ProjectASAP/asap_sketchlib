@@ -8,11 +8,12 @@
 //! fields (`self.registers`) and construct them directly without widening any
 //! field visibility. See `docs/asapv1_wire_format.md`.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::wire_key::exact;
 use crate::structures::fixed_structure::HllRegisterStorage;
 use crate::{DefaultXxHasher, HashProfile, SketchHasher};
 
@@ -46,8 +47,11 @@ pub(crate) struct HllPayloadPlain {
 pub(crate) struct HllPayloadHip {
     #[serde(with = "serde_bytes")]
     pub(crate) registers: Vec<u8>,
+    #[serde(deserialize_with = "exact")]
     pub(crate) hip_kxq0: f64,
+    #[serde(deserialize_with = "exact")]
     pub(crate) hip_kxq1: f64,
+    #[serde(deserialize_with = "exact")]
     pub(crate) hip_est: f64,
 }
 
@@ -112,7 +116,7 @@ fn validated_hll_payload<'a, H: HashProfile>(
             "HLL kind_id mismatch: stored {kind_id:?}, expected {expected_kind_id:?}"
         )));
     }
-    let meta: HllMetadata = from_slice(metadata)?;
+    let meta: HllMetadata = envelope::decode_block(metadata)?;
     if meta != hll_metadata::<H>(expected_precision) {
         return Err(RmpDecodeError::Uncategorized(
             "ASAPv1 HLL envelope: metadata mismatch".to_string(),
@@ -197,7 +201,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     {
         let payload =
             validated_hll_payload::<H>(bytes, Variant::WIRE_KIND_ID, Registers::PRECISION as u32)?;
-        let payload: HllPayloadPlain = from_slice(payload)?;
+        let payload: HllPayloadPlain = envelope::decode_block(payload)?;
         let registers = registers_from_bytes::<Registers>(&payload.registers)?;
         Ok(Self {
             registers,
@@ -233,7 +237,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
             HLL_KIND_HIP,
             Registers::PRECISION as u32,
         )?;
-        let payload: HllPayloadHip = from_slice(payload)?;
+        let payload: HllPayloadHip = envelope::decode_block(payload)?;
         let registers = registers_from_bytes::<Registers>(&payload.registers)?;
         Ok(Self {
             registers,

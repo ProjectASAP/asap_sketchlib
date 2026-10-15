@@ -27,11 +27,12 @@
 //! payloads use version 2 and append a negative-magnitude store and zero count.
 //! Older native readers reject version 2 instead of silently dropping samples.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::common::structures::Vector1D;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::wire_key::exact;
 
 use super::{Buckets, DDSketch};
 
@@ -47,6 +48,7 @@ const DD_KIND: &[u8] = &[0x05, 0x00];
 #[serde(deny_unknown_fields)]
 struct DdMetadata {
     metadata_version: u8,
+    #[serde(deserialize_with = "exact")]
     alpha: f64,
 }
 
@@ -70,8 +72,11 @@ fn dd_metadata(alpha: f64) -> DdMetadata {
 struct DdPayload {
     counts: Vec<u64>,
     offset: i32,
+    #[serde(deserialize_with = "exact")]
     sum: f64,
+    #[serde(deserialize_with = "exact")]
     min: f64,
+    #[serde(deserialize_with = "exact")]
     max: f64,
 }
 
@@ -79,8 +84,11 @@ struct DdPayload {
 struct SignedPayload {
     counts: Vec<u64>,
     offset: i32,
+    #[serde(deserialize_with = "exact")]
     sum: f64,
+    #[serde(deserialize_with = "exact")]
     min: f64,
+    #[serde(deserialize_with = "exact")]
     max: f64,
     negative_counts: Vec<u64>,
     negative_offset: i32,
@@ -230,12 +238,12 @@ impl DDSketch {
                 "DDSketch kind_id mismatch: stored {kind_id:?}, expected {DD_KIND:?}"
             )));
         }
-        let meta: DdMetadata = from_slice(metadata)?;
+        let meta: DdMetadata = envelope::decode_block(metadata)?;
         // `alpha` is a property of the stored sketch rather than of the target
         // type, so it is echoed back into the expected block and bounded by
         // range instead of being pinned.
         if meta.metadata_version == 2 {
-            let p: SignedPayload = from_slice(payload)?;
+            let p: SignedPayload = envelope::decode_block(payload)?;
             return DDSketch::try_from(super::DDSketchState {
                 alpha: meta.alpha,
                 store: Buckets {
@@ -260,7 +268,7 @@ impl DDSketch {
         }
         check_alpha(meta.alpha).map_err(RmpDecodeError::Uncategorized)?;
 
-        let p: DdPayload = from_slice(payload)?;
+        let p: DdPayload = envelope::decode_block(payload)?;
         check_store_span(p.offset, p.counts.len()).map_err(RmpDecodeError::Uncategorized)?;
         let count = total_count(&p.counts).ok_or_else(|| {
             RmpDecodeError::Uncategorized(
@@ -294,6 +302,7 @@ impl DDSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmp_serde::from_slice;
 
     const ALPHA: f64 = 0.01;
 

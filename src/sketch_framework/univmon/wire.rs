@@ -31,11 +31,11 @@
 //! a profile choice — and layer `i`'s counter hashes at seed index `i`, which
 //! the layer's position already gives.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
-use crate::message_pack_format::wire_key::WireBytes;
+use crate::message_pack_format::wire_key::{WireBytes, exact_vec};
 use crate::sketches::countminsketch_topk::heap_wire::{
     EMPTY_KEY_TYPE, check_distinct_keys, heap_entries, key_type_of, rebuild_heap,
 };
@@ -106,6 +106,10 @@ pub(crate) struct PyramidPayload<K> {
     pub(crate) counts: Vec<i64>,
     pub(crate) l2: Vec<i64>,
     pub(crate) heap_lens: Vec<u32>,
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "K: Deserialize<'de>")
+    )]
     pub(crate) keys: Vec<K>,
     pub(crate) heap_counts: Vec<i64>,
     pub(crate) candidate_complete: Vec<bool>,
@@ -372,14 +376,14 @@ pub(crate) struct DecodedPyramid {
 
 /// Reads the payload with `keys` typed by the metadata `key_type`. Rejects an
 /// unknown `key_type` and parallel arrays of unequal length; a `keys` array
-/// whose msgpack types do not match `key_type` fails in `from_slice`.
+/// whose msgpack types do not match `key_type` fails to decode.
 pub(crate) fn decode_pyramid(
     key_type: &str,
     payload: &[u8],
 ) -> Result<DecodedPyramid, RmpDecodeError> {
     macro_rules! unpack {
         ($variant:ident, $ty:ty) => {{
-            let decoded: PyramidPayload<$ty> = from_slice(payload)?;
+            let decoded: PyramidPayload<$ty> = envelope::decode_block(payload)?;
             (
                 decoded
                     .keys
@@ -415,7 +419,7 @@ pub(crate) fn decode_pyramid(
         "f64" => unpack!(F64, f64),
         "string" => unpack!(String, String),
         "bytes" => {
-            let decoded: PyramidPayload<WireBytes> = from_slice(payload)?;
+            let decoded: PyramidPayload<WireBytes> = envelope::decode_block(payload)?;
             (
                 decoded
                     .keys
@@ -615,7 +619,7 @@ impl UnivMon {
                 "UnivMon kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_KIND:?}"
             )));
         }
-        let meta: UnivMonMetadata = from_slice(metadata)?;
+        let meta: UnivMonMetadata = envelope::decode_block(metadata)?;
         if meta
             != univmon_metadata::<DefaultXxHasher>(
                 meta.layer_size,
@@ -671,6 +675,7 @@ mod tests {
     use crate::{
         CANONICAL_HASH_SEED, DataInput, MATRIX_MAX_ROWS, RegularPath, SketchHasher, Vector2D,
     };
+    use rmp_serde::from_slice;
 
     fn populated() -> UnivMon {
         let mut um = UnivMon::init_univmon(4, 2, 16, 3);
