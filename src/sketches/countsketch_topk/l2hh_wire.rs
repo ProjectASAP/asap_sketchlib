@@ -27,7 +27,7 @@
 //! is not `sum(counts[row]^2)`: `fast_insert_with_count_without_l2_and_hash`
 //! moves counters without it and saturation is one-way, so it is state.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -251,7 +251,7 @@ impl<H: SketchHasher + HashProfile> CountL2HH<H> {
                 "CountL2HH kind_id mismatch: stored {kind_id:?}, expected {L2HH_KIND:?}"
             )));
         }
-        let meta: L2hhMetadata = from_slice(metadata)?;
+        let meta: L2hhMetadata = envelope::decode_block(metadata)?;
         if meta != l2hh_metadata::<H>(meta.seed_index, meta.rows, meta.cols) {
             return Err(RmpDecodeError::Uncategorized(
                 "ASAPv1 CountL2HH envelope: metadata mismatch".to_string(),
@@ -259,7 +259,7 @@ impl<H: SketchHasher + HashProfile> CountL2HH<H> {
         }
         check_seed_index(meta.seed_index as usize, meta.seed_list.len())
             .map_err(RmpDecodeError::Uncategorized)?;
-        let p: L2hhPayload = from_slice(payload)?;
+        let p: L2hhPayload = envelope::decode_block(payload)?;
         rebuild_layer::<H>(
             meta.rows as usize,
             meta.cols as usize,
@@ -276,6 +276,7 @@ mod tests {
     use crate::{
         CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, HeapItem, MATRIX_MAX_ROWS, RegularPath,
     };
+    use rmp_serde::from_slice;
 
     /// The standard-profile sketch, named so decode calls can pick a hasher.
     type Std = CountL2HH<DefaultXxHasher>;

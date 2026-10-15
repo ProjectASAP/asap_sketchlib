@@ -18,7 +18,7 @@
 //! [`UnivSketchPool`](super::UnivSketchPool) is a free-list of scratch
 //! `UnivMon`s rather than a sketch, and has no wire kind.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
@@ -214,7 +214,7 @@ impl UnivMonPyramid {
                 "UnivMonPyramid kind_id mismatch: stored {kind_id:?}, expected {PYRAMID_KIND:?}"
             )));
         }
-        let meta: PyramidMetadata = from_slice(metadata)?;
+        let meta: PyramidMetadata = envelope::decode_block(metadata)?;
         let layout = PyramidLayout {
             elephant_layers: meta.elephant_layers,
             elephant_row: meta.elephant_row,
@@ -290,6 +290,7 @@ mod tests {
         CANONICAL_HASH_SEED, DataInput, HeapItem, L2HH, MATRIX_MAX_ROWS, RegularPath, SketchHasher,
         Vector2D,
     };
+    use rmp_serde::from_slice;
 
     fn populated() -> UnivMonPyramid {
         let mut pyramid = UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4);

@@ -22,10 +22,11 @@
 //! in the payload so a decoded sampler continues the same draw sequence. It is
 //! the counterpart of KLL's `coin`.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::wire_key::{exact, exact_vec};
 
 use super::{SampleEntry, UniformSampling};
 
@@ -45,6 +46,7 @@ const SAMPLE_ITEM_TYPE: &str = "f64";
 #[serde(deny_unknown_fields)]
 struct UsMetadata {
     metadata_version: u8,
+    #[serde(deserialize_with = "exact")]
     sample_rate: f64,
     item_type: String,
 }
@@ -69,6 +71,7 @@ fn us_metadata(sample_rate: f64) -> UsMetadata {
 #[derive(Debug, Serialize, Deserialize)]
 struct UsPayload {
     priorities: Vec<u64>,
+    #[serde(deserialize_with = "exact_vec")]
     values: Vec<f64>,
     total_seen: u64,
     rng_state: u64,
@@ -139,7 +142,7 @@ impl UniformSampling {
                 "UniformSampling kind_id mismatch: stored {kind_id:?}, expected {US_KIND:?}"
             )));
         }
-        let meta: UsMetadata = from_slice(metadata)?;
+        let meta: UsMetadata = envelope::decode_block(metadata)?;
         check_sample_rate(meta.sample_rate).map_err(RmpDecodeError::Uncategorized)?;
         // `sample_rate` is a property of the stored sampler, so it is echoed
         // back into the expected block; `metadata_version` and `item_type` are
@@ -149,7 +152,7 @@ impl UniformSampling {
                 "ASAPv1 UniformSampling envelope: metadata mismatch".to_string(),
             ));
         }
-        let p: UsPayload = from_slice(payload)?;
+        let p: UsPayload = envelope::decode_block(payload)?;
         if p.priorities.len() != p.values.len() {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "UniformSampling priorities length {} != values length {}",

@@ -34,7 +34,7 @@
 //! A Coco key is a `String` at every entry point, so there is no `key_type`
 //! param: the kind_id fixes the element type of `keys`.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashSet;
@@ -191,7 +191,7 @@ impl<H: SketchHasher + HashProfile> Coco<H> {
                 "Coco kind_id mismatch: stored {kind_id:?}, expected {COCO_KIND:?}"
             )));
         }
-        let meta: CocoMetadata = from_slice(metadata)?;
+        let meta: CocoMetadata = envelope::decode_block(metadata)?;
         // Validate the hash spec against this target; `rows`/`cols` are
         // structural (the table is dynamically sized), so they are echoed back
         // into the expected block rather than known a priori.
@@ -204,7 +204,7 @@ impl<H: SketchHasher + HashProfile> Coco<H> {
         // The geometry is validated before anything is sized from it, so
         // crafted dimensions never reach an allocation.
         check_geometry(rows, cols).map_err(RmpDecodeError::Uncategorized)?;
-        let mut p: CocoPayload = from_slice(payload)?;
+        let mut p: CocoPayload = envelope::decode_block(payload)?;
         let expected = rows.saturating_mul(cols);
         if p.keys.len() != expected || p.values.len() != expected {
             return Err(RmpDecodeError::Uncategorized(format!(

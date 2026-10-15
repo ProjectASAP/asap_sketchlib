@@ -177,7 +177,7 @@ impl<H: SketchHasher + HashProfile> KMV<H> {
                 "KMV kind_id mismatch: stored {kind_id:?}, expected {KMV_KIND:?}"
             )));
         }
-        let meta: KmvMetadata = from_slice(metadata)?;
+        let meta: KmvMetadata = envelope::decode_block(metadata)?;
         if meta != kmv_metadata::<H>(meta.k) {
             return Err(RmpDecodeError::Uncategorized(
                 "ASAPv1 KMV envelope: metadata mismatch".to_string(),
@@ -189,7 +189,7 @@ impl<H: SketchHasher + HashProfile> KMV<H> {
             ));
         }
         let k = meta.k as usize;
-        let decoded: KmvPayload = from_slice(payload)?;
+        let decoded: KmvPayload = envelope::decode_block(payload)?;
         if decoded.hashes.len() > k {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "KMV payload carries {} hashes over a k of {k}",
