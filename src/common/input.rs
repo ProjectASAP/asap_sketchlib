@@ -308,6 +308,14 @@ impl L2HH {
         }
     }
 
+    /// Returns the median across rows of each row's sum of squared counters,
+    /// the Count Sketch estimate of the squared L2 norm (`F2`).
+    pub fn get_l2_sqr(&self) -> f64 {
+        match self {
+            L2HH::COUNT(count_l2hh) => count_l2hh.get_l2_sqr(),
+        }
+    }
+
     /// Returns the current frequency estimate without changing the sketch.
     pub fn estimate(&self, key: &DataInput) -> f64 {
         match self {
