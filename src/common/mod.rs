@@ -41,7 +41,7 @@ pub use hash::{
     hash_for_matrix_seeded_with_mode_generic, hash_item64_seeded, hash_item128_seeded,
     hash_mode_for_matrix, hash64_seeded, hash128_seeded,
 };
-pub use heap::HHHeap;
+pub use heap::{HHHeap, HeapCount, TopKCounter};
 pub use input::{DataInput, HHItem, HeapItem, L2HH, heap_item_to_sketch_input, input_to_owned};
 pub use numerical::NumericalValue;
 pub use precompute_hash::PRECOMPUTED_HASH;

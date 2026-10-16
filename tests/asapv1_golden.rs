@@ -10,8 +10,9 @@
 
 use asap_sketchlib::sketches::CountSketchDelta;
 use asap_sketchlib::{
-    Classic, Count, CountMin, CountMinDelta, ErtlMLE, FastPath, HllSketch, HllVariant,
-    HyperLogLogHIPP12, HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D, peek_kind_id,
+    CMSHeap, CMSHeapDelta, CSHeap, Classic, Count, CountMin, CountMinDelta, ErtlMLE, FastPath,
+    HHHeap, HeapCount, HeapItem, HllSketch, HllVariant, HyperLogLogHIPP12, HyperLogLogP12, KLL,
+    MessagePackCodec, RegularPath, Vector2D, peek_kind_id,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -36,6 +37,19 @@ const GOLDEN_CS_I32: &str = include_str!("../asapv1_golden/cs_i32_regular_2x4.he
 const GOLDEN_CS_F64_FAST: &str = include_str!("../asapv1_golden/cs_f64_fast_2x4.hex");
 const GOLDEN_CS_I64_DELTA: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4_delta.hex");
 const GOLDEN_CS_F64_DELTA: &str = include_str!("../asapv1_golden/cs_f64_fast_2x4_delta.hex");
+const GOLDEN_CMSHEAP_STR: &str =
+    include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_strkeys.hex");
+const GOLDEN_CMSHEAP_I32: &str = include_str!("../asapv1_golden/cmsheap_i32_fast_2x3_i64keys.hex");
+const GOLDEN_CMSHEAP_I64_TIE: &str =
+    include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_i64tie.hex");
+const GOLDEN_CMSHEAP_STR_TIE: &str =
+    include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_strtie.hex");
+const GOLDEN_CMSHEAP_EMPTY: &str =
+    include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_empty.hex");
+const GOLDEN_CMSHEAP_F64: &str = include_str!("../asapv1_golden/cmsheap_f64_fast_2x3_f64keys.hex");
+const GOLDEN_CMSHEAP_DELTA: &str =
+    include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_delta.hex");
+const GOLDEN_CSHEAP_STR: &str = include_str!("../asapv1_golden/csheap_i64_regular_2x4_strkeys.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
 
@@ -346,6 +360,181 @@ fn cs_f64_fast_2x4_delta_matches_golden() {
     state.merge_delta(&decoded).expect("merge");
     let expected = [0.0, -0.75, 1.5, 0.0, 127.0, -32768.0, 0.125, 0.0];
     assert_eq!(state.as_storage().as_slice(), expected.as_slice());
+}
+
+// ---------------------------------------------------------------------------
+// CMSHeap / CSHeap: the matrix and the heap entries set directly -> serialize ==
+// golden, round-trips. Entries are seated out of emitted order.
+// ---------------------------------------------------------------------------
+
+/// `(key, count)` pairs as string-keyed heap entries.
+fn str_entries(entries: &[(&str, i64)]) -> Vec<(HeapItem, i64)> {
+    entries
+        .iter()
+        .map(|&(key, count)| (HeapItem::String(key.to_string()), count))
+        .collect()
+}
+
+/// `(key, count)` pairs as `i64`-keyed heap entries.
+fn i64_entries(entries: &[(i64, i64)]) -> Vec<(HeapItem, i64)> {
+    entries
+        .iter()
+        .map(|&(key, count)| (HeapItem::I64(key), count))
+        .collect()
+}
+
+/// A heap of capacity `heap_size` holding `entries`, seated in the given order.
+fn heap_of<N: HeapCount>(heap_size: usize, entries: &[(HeapItem, N)]) -> HHHeap<N> {
+    let mut heap = HHHeap::new(heap_size);
+    for (key, count) in entries {
+        assert!(heap.update_heap_item(key, *count));
+    }
+    heap
+}
+
+/// Asserts `heap` has capacity `heap_size` and holds exactly `entries`.
+fn assert_heap<N: HeapCount>(heap: &HHHeap<N>, heap_size: usize, entries: &[(HeapItem, N)]) {
+    assert_eq!(heap.capacity(), heap_size);
+    assert_eq!(heap.len(), entries.len());
+    for (key, count) in entries {
+        let at = heap.find_heap_item(key).expect("heap key");
+        assert!(heap.heap()[at].count.order(count).is_eq(), "{key:?}");
+    }
+}
+
+type CmsHeapI64 = CMSHeap<Vector2D<i64>, RegularPath>;
+
+/// The i64 regular-path CMSHeap over the Count-Min i64 matrix with `entries`.
+fn cmsheap_i64(heap_size: usize, entries: &[(HeapItem, i64)]) -> CmsHeapI64 {
+    let mut sketch =
+        CmsHeapI64::from_storage(Vector2D::from_fn(2, 3, |r, c| I64_VALS[r][c]), heap_size);
+    *sketch.heap_mut() = heap_of(heap_size, entries);
+    sketch
+}
+
+fn check_cmsheap_i64_golden(golden: &str, heap_size: usize, entries: &[(HeapItem, i64)]) {
+    let want = decode_hex(golden);
+    let got = cmsheap_i64(heap_size, entries).serialize_to_bytes();
+    assert_eq!(got.expect("serialize"), want);
+
+    let decoded = CmsHeapI64::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = I64_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    assert_heap(decoded.heap(), heap_size, entries);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn cmsheap_i64_regular_2x3_strkeys_matches_golden() {
+    let entries = [("cold", 1), ("warm", 300), ("hot", 65536), ("mild", 300)];
+    check_cmsheap_i64_golden(GOLDEN_CMSHEAP_STR, 5, &str_entries(&entries));
+}
+
+/// Signed keys tie by their two's-complement bits read unsigned.
+#[test]
+fn cmsheap_i64_regular_2x3_i64tie_matches_golden() {
+    let entries = [(-1, 5), (1, 5), (0, 5), (i64::MIN, 5), (2, 9)];
+    check_cmsheap_i64_golden(GOLDEN_CMSHEAP_I64_TIE, 5, &i64_entries(&entries));
+}
+
+/// String keys tie byte-wise, a proper prefix first.
+#[test]
+fn cmsheap_i64_regular_2x3_strtie_matches_golden() {
+    let entries = [("b", 5), ("aa", 5), ("Z", 5), ("a", 5), ("hot", 9)];
+    check_cmsheap_i64_golden(GOLDEN_CMSHEAP_STR_TIE, 5, &str_entries(&entries));
+}
+
+#[test]
+fn cmsheap_i64_regular_2x3_empty_matches_golden() {
+    check_cmsheap_i64_golden(GOLDEN_CMSHEAP_EMPTY, 4, &[]);
+}
+
+#[test]
+fn cmsheap_i32_fast_2x3_i64keys_matches_golden() {
+    type Heap = CMSHeap<Vector2D<i32>, FastPath>;
+    let want = decode_hex(GOLDEN_CMSHEAP_I32);
+    let entries = i64_entries(&[(4_294_967_296, 3), (-1, 7), (-129, 7)]);
+    let mut sketch = Heap::from_storage(Vector2D::from_fn(2, 3, |r, c| I64_VALS[r][c] as i32), 3);
+    *sketch.heap_mut() = heap_of(3, &entries);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Heap::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i32> = I64_VALS.iter().flatten().map(|&v| v as i32).collect();
+    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    assert_heap(decoded.heap(), 3, &entries);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+/// `f64` heap counts order by `total_cmp`: `+0.0` before `-0.0`, the
+/// infinities at the ends; the `300.25` tie falls to the key's bits.
+#[test]
+fn cmsheap_f64_fast_2x3_f64keys_matches_golden() {
+    type Heap = CMSHeap<Vector2D<f64>, FastPath>;
+    let want = decode_hex(GOLDEN_CMSHEAP_F64);
+    let entries: Vec<(HeapItem, f64)> = [
+        (8.0, 0.0),
+        (-0.5, 300.25),
+        (9.0, f64::NEG_INFINITY),
+        (7.0, -0.0),
+        (1.5, 300.25),
+        (2.0, f64::INFINITY),
+    ]
+    .into_iter()
+    .map(|(key, count)| (HeapItem::F64(key), count))
+    .collect();
+    let mut sketch = Heap::from_storage(Vector2D::from_fn(2, 3, |r, c| F64_VALS[r][c]), 6);
+    *sketch.heap_mut() = heap_of(6, &entries);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Heap::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<f64> = F64_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    assert_heap(decoded.heap(), 6, &entries);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+/// The delta carries `i64` keys into a `string`-keyed state: applying it adds
+/// the cells and replaces the heap, `key_type` with it.
+#[test]
+fn cmsheap_i64_regular_2x3_delta_matches_golden() {
+    type Delta = CMSHeapDelta<i64, RegularPath>;
+    let want = decode_hex(GOLDEN_CMSHEAP_DELTA);
+    let entries = i64_entries(&[(7, 128), (-129, 128), (-1, 4_295_032_832)]);
+    let indices = vec![0, 1, 2, 4, 5];
+    let deltas = vec![127, -1, -33, -32769, 4294967296];
+    let delta = Delta::new(2, 3, indices, deltas, heap_of(5, &entries)).expect("valid");
+    assert_eq!(delta.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Delta::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    let mut state =
+        CmsHeapI64::deserialize_from_bytes(&decode_hex(GOLDEN_CMSHEAP_STR)).expect("state");
+    state.merge_delta(&decoded).expect("merge");
+    let expected = [127, 0, 94, 128, -32469, 4295032832];
+    assert_eq!(state.cms().as_storage().as_slice(), expected.as_slice());
+    assert_heap(state.heap(), 5, &entries);
+}
+
+#[test]
+fn csheap_i64_regular_2x4_strkeys_matches_golden() {
+    type Heap = CSHeap<Vector2D<i64>, RegularPath>;
+    let want = decode_hex(GOLDEN_CSHEAP_STR);
+    let entries = str_entries(&[
+        ("gamma", -33),
+        ("delta", 127),
+        ("alpha", 4_294_967_296),
+        ("beta", 127),
+    ]);
+    let mut sketch = Heap::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_VALS[r][c]), 5);
+    *sketch.heap_mut() = heap_of(5, &entries);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Heap::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    assert_heap(decoded.heap(), 5, &entries);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
 // ---------------------------------------------------------------------------

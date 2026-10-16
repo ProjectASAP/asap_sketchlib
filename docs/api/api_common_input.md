@@ -12,7 +12,7 @@ Canonical input and ownership model shared across sketches/frameworks.
 
 - `DataInput<'a>`
 - `HeapItem`
-- `HHItem`
+- `HHItem<C: HeapCount = i64>`
 - `HydraQuery<'a>`
 - `HydraCounter`
 - `L2HH`
@@ -25,10 +25,10 @@ Canonical input and ownership model shared across sketches/frameworks.
 fn heap_item_to_sketch_input(item: &HeapItem) -> DataInput<'_>
 fn input_to_owned(input: &DataInput<'_>) -> HeapItem
 
-// HHItem
-fn new(k: DataInput, count: i64) -> Self
-fn create_item(k: HeapItem, count: i64) -> Self
-fn init_item(k: DataInput, count: i64) -> Self
+// HHItem<C>
+fn new(k: DataInput, count: C) -> Self
+fn create_item(k: HeapItem, count: C) -> Self
+fn init_item(k: DataInput, count: C) -> Self
 ```
 
 ## Insert/Update

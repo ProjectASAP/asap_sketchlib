@@ -11,21 +11,21 @@
 //! CMSHeap is one algorithm — a single kind_id `0x03 0x00`. The structural
 //! parameters — the matrix dimensions (`rows` / `cols`), the base **counter
 //! type** (i32/i64/f64), the column-derivation **mode** (fast/regular), the heap
-//! capacity `k` and the heap's `key_type` — all live in the metadata, so the
-//! payload is `[counts, keys, heap_counts]`: the base matrix packed row-major
-//! followed by the heap's entries.
+//! capacity `heap_size` and the heap's `key_type` — all live in the metadata, so
+//! the payload is `[counts, keys, heap_counts]`: the base matrix packed row-major
+//! followed by the heap's entries, whose counts are `f64` under `f64` counters
+//! and `i64` otherwise.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode};
-use crate::{CountMin, HashProfile, SketchHasher, Vector2D};
+use crate::{CountMin, HashProfile, SketchHasher, TopKCounter, Vector2D};
 
 use super::CMSHeap;
 use super::heap_wire::{
-    TopKMetadata, decode_payload, encode_payload, heap_entries, rebuild_heap, topk_metadata,
+    decode_metadata, decode_payload, encode_metadata, encode_payload, heap_entries, rebuild_heap,
     wire_key_type,
 };
 
@@ -39,7 +39,7 @@ impl<T, Mode, H> CMSHeap<Vector2D<T>, Mode, H>
 where
     // `AddAssign` is required for `Vector2D<T>: MatrixStorage` (the struct's
     // bound), not by the bodies below.
-    T: CmsWireCounter + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
+    T: CmsWireCounter + TopKCounter + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
     Mode: CmsWireMode,
     H: SketchHasher + HashProfile,
 {
@@ -47,15 +47,25 @@ where
     /// (kind_id `0x03 0x00`). The metadata is derived from the hasher's
     /// [`HashProfile`], so it truthfully describes how the sketch was hashed.
     ///
-    /// Fails when the matrix's cell count disagrees with its own dimensions,
-    /// when the heap's keys mix `HeapItem` variants or hold a 128-bit key, or
-    /// when `k` or `cols` overflows the metadata's `u32` field.
+    /// Fails when the matrix has a zero dimension, more than `MATRIX_MAX_ROWS`
+    /// rows or a cell count that disagrees with its own dimensions, when the
+    /// heap's keys mix `HeapItem` variants or hold a 128-bit key, or when
+    /// `heap_size` or `cols` overflows the metadata's `u32` field.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let rows = self.cms.rows();
         let cols = self.cms.cols();
         let counts = self.cms.as_storage().as_slice();
-        check_matrix_rows("CMSHeap", rows)
-            .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CMSHeap envelope: {e}")))?;
+        let entries = heap_entries(&self.heap);
+        let key_type = wire_key_type(&entries)?;
+        let metadata = encode_metadata::<H>(
+            "CMSHeap",
+            rows,
+            cols,
+            T::COUNTER_TYPE,
+            Mode::MODE,
+            self.heap.capacity(),
+            key_type,
+        )?;
         if counts.len() != rows.saturating_mul(cols) {
             return Err(RmpEncodeError::Syntax(format!(
                 "ASAPv1 CMSHeap envelope: counts length {} != rows*cols {}",
@@ -63,40 +73,19 @@ where
                 rows.saturating_mul(cols)
             )));
         }
-        let k = u32::try_from(self.heap.capacity()).map_err(|_| {
-            RmpEncodeError::Syntax(format!(
-                "ASAPv1 CMSHeap envelope: heap k {} exceeds the u32 metadata field",
-                self.heap.capacity()
-            ))
-        })?;
-        let wire_cols = u32::try_from(cols).map_err(|_| {
-            RmpEncodeError::Syntax(format!(
-                "ASAPv1 CMSHeap envelope: cols {cols} exceeds the u32 metadata field"
-            ))
-        })?;
-        let entries = heap_entries(&self.heap);
-        let key_type = wire_key_type(&entries)?;
-        let metadata = rmp_serde::to_vec_named(&topk_metadata::<H>(
-            rows as u32,
-            wire_cols,
-            T::COUNTER_TYPE,
-            Mode::MODE,
-            k,
-            key_type,
-        ))?;
         let payload = encode_payload(key_type, counts.to_vec(), &entries)?;
         Ok(envelope::encode(CMS_HEAP_KIND, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The matrix
-    /// dimensions, `k` and `key_type` are structural (they are properties of
-    /// the stored sketch, not of the target), so they are echoed back into the
-    /// expected metadata; the hash spec, counter type and mode are pinned
-    /// against this target.
+    /// dimensions, `heap_size` and `key_type` are structural (they are
+    /// properties of the stored sketch, not of the target), so they are echoed
+    /// back into the expected metadata; the hash spec, counter type and mode are
+    /// pinned against this target.
     ///
     /// Every state the algorithm could not have produced is rejected with an
-    /// error rather than a panic, and neither the declared geometry nor `k`
-    /// sizes an allocation before the payload is measured against it.
+    /// error rather than a panic, and neither the declared geometry nor
+    /// `heap_size` sizes an allocation before the payload is measured against it.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
@@ -105,31 +94,9 @@ where
                 "CMSHeap kind_id mismatch: stored {kind_id:?}, expected {CMS_HEAP_KIND:?}"
             )));
         }
-        let meta: TopKMetadata = envelope::decode_block(metadata)?;
-        if meta
-            != topk_metadata::<H>(
-                meta.rows,
-                meta.cols,
-                T::COUNTER_TYPE,
-                Mode::MODE,
-                meta.k,
-                &meta.key_type,
-            )
-        {
-            return Err(RmpDecodeError::Uncategorized(
-                "ASAPv1 CMSHeap envelope: metadata mismatch".to_string(),
-            ));
-        }
-        let (rows, cols) = (meta.rows as usize, meta.cols as usize);
-        // Reject zero dimensions before building the matrix: `Vector2D::from_fn`
-        // derives its mask via `cols.ilog2()`, which panics on `cols == 0`.
-        if rows == 0 || cols == 0 {
-            return Err(RmpDecodeError::Uncategorized(format!(
-                "CMSHeap dimensions must be non-zero: rows={rows}, cols={cols}"
-            )));
-        }
-        check_matrix_rows("CMSHeap", rows).map_err(RmpDecodeError::Uncategorized)?;
-        let (counts, entries) = decode_payload::<T>(&meta.key_type, payload)?;
+        let shape = decode_metadata::<H>("CMSHeap", metadata, T::COUNTER_TYPE, Mode::MODE)?;
+        let (rows, cols) = (shape.rows, shape.cols);
+        let (counts, entries) = decode_payload::<Vec<T>, _>(&shape.key_type, payload)?;
         // Length check precedes the allocation, so crafted dimensions cannot
         // drive `from_fn` into a huge reserve.
         if counts.len() != rows.saturating_mul(cols) {
@@ -139,7 +106,7 @@ where
                 rows.saturating_mul(cols)
             )));
         }
-        let heap = rebuild_heap(meta.k as usize, entries)?;
+        let heap = rebuild_heap(shape.heap_size, entries)?;
         let storage = Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]);
         Ok(CMSHeap {
             cms: CountMin::from_storage(storage),
@@ -151,7 +118,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketches::countminsketch_topk::heap_wire::TopKPayload;
+    use crate::sketches::countminsketch_topk::heap_wire::{
+        TopKMetadata, TopKPayload, topk_metadata,
+    };
     use crate::{
         CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, FastPath, MATRIX_MAX_ROWS, RegularPath,
     };
@@ -191,7 +160,7 @@ mod tests {
         assert_eq!((meta.rows, meta.cols), (3, 8));
         assert_eq!(meta.counter_type, "i64");
         assert_eq!(meta.mode, "regular");
-        assert_eq!(meta.k, 4);
+        assert_eq!(meta.heap_size, 4);
         assert_eq!(meta.key_type, "u64");
 
         let decoded = CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded)
@@ -224,7 +193,7 @@ mod tests {
             Vector2D::from_fn(2, 4, |r, c| (r * 4 + c) as f64 + 0.5),
             4,
         );
-        sketch.heap_mut().update(&DataInput::Str("flow"), 11);
+        sketch.heap_mut().update(&DataInput::Str("flow"), 11.0);
 
         let encoded = sketch.serialize_to_bytes().expect("serialize");
         assert_eq!(metadata_of(&encoded).counter_type, "f64");
@@ -332,12 +301,12 @@ mod tests {
 
     /// Builds a well-framed envelope around crafted metadata and a `u64`-keyed
     /// payload.
-    fn crafted(rows: u32, cols: u32, k: u32, counts: Vec<i64>) -> Vec<u8> {
+    fn crafted(rows: u32, cols: u32, heap_size: u32, counts: Vec<i64>) -> Vec<u8> {
         let metadata = rmp_serde::to_vec_named(&topk_metadata::<DefaultXxHasher>(
-            rows, cols, "i64", "regular", k, "u64",
+            rows, cols, "i64", "regular", heap_size, "u64",
         ))
         .expect("metadata");
-        let payload = rmp_serde::to_vec(&TopKPayload::<i64, u64> {
+        let payload = rmp_serde::to_vec(&TopKPayload::<i64, u64, i64> {
             counts,
             keys: Vec::new(),
             heap_counts: Vec::new(),
@@ -388,6 +357,18 @@ mod tests {
         );
     }
 
+    /// A `rows == 0` matrix satisfies the length check trivially but is refused
+    /// on decode, so serializing it must fail.
+    #[test]
+    fn cms_heap_rejects_serializing_zero_rows() {
+        let sketch = CMSHeap::<Vector2D<i64>, RegularPath>::new(0, 4, 4);
+        let problem = sketch
+            .serialize_to_bytes()
+            .expect_err("a zero-row matrix must not serialize")
+            .to_string();
+        assert!(problem.contains("non-zero"), "got {problem}");
+    }
+
     /// An unpopulated matrix carries dimensions its cells do not match.
     /// Serializing it must fail rather than emit bytes the decoder refuses.
     #[test]
@@ -416,7 +397,7 @@ mod tests {
             cols: u32,
             counter_type: String,
             mode: String,
-            k: u32,
+            heap_size: u32,
             key_type: String,
             bogus_field: u8, // key not in TopKMetadata
         }
@@ -433,7 +414,7 @@ mod tests {
             cols: m.cols,
             counter_type: m.counter_type.clone(),
             mode: m.mode.clone(),
-            k: m.k,
+            heap_size: m.heap_size,
             key_type: m.key_type.clone(),
             bogus_field: 7,
         };
@@ -444,12 +425,12 @@ mod tests {
         );
     }
 
-    /// `k` is required: a metadata map missing it does not decode, so the heap
-    /// capacity can never be silently defaulted.
+    /// `heap_size` is required: a metadata map missing it does not decode, so
+    /// the heap capacity can never be silently defaulted.
     #[test]
-    fn cms_heap_metadata_rejects_a_missing_k_key() {
+    fn cms_heap_metadata_rejects_a_missing_heap_size_key() {
         #[derive(Serialize)]
-        struct WithoutK {
+        struct WithoutHeapSize {
             metadata_version: u8,
             hash_profile_id: String,
             hash_algorithm: String,
@@ -464,7 +445,7 @@ mod tests {
             key_type: String,
         }
         let m = topk_metadata::<DefaultXxHasher>(2, 4, "i64", "regular", 4, "u64");
-        let without = WithoutK {
+        let without = WithoutHeapSize {
             metadata_version: m.metadata_version,
             hash_profile_id: m.hash_profile_id.clone(),
             hash_algorithm: m.hash_algorithm.clone(),
@@ -481,7 +462,7 @@ mod tests {
         let bytes = rmp_serde::to_vec_named(&without).expect("encode");
         assert!(
             from_slice::<TopKMetadata>(&bytes).is_err(),
-            "a missing k must be rejected"
+            "a missing heap_size must be rejected"
         );
     }
 
@@ -495,7 +476,7 @@ mod tests {
             2, 4, "i32", "regular", 4, "u64",
         ))
         .expect("metadata");
-        let payload = rmp_serde::to_vec(&TopKPayload::<i64, u64> {
+        let payload = rmp_serde::to_vec(&TopKPayload::<i64, u64, i64> {
             counts: vec![0; 8],
             keys: Vec::new(),
             heap_counts: Vec::new(),
@@ -585,17 +566,17 @@ mod tests {
         );
     }
 
-    /// A `k` past the metadata's `u32` field fails the encode rather than
+    /// A `heap_size` past the metadata's `u32` field fails the encode rather than
     /// emitting a truncated capacity.
     #[test]
-    fn cms_heap_refuses_a_k_the_metadata_cannot_carry() {
+    fn cms_heap_refuses_a_heap_size_the_metadata_cannot_carry() {
         let sketch = CMSHeap::<Vector2D<i64>, RegularPath>::from_storage(
             Vector2D::from_fn(2, 4, |_, _| 0i64),
             1usize << 40,
         );
         let problem = sketch
             .serialize_to_bytes()
-            .expect_err("an oversized k must not serialize")
+            .expect_err("an oversized heap_size must not serialize")
             .to_string();
         assert!(
             problem.contains("exceeds the u32 metadata field"),

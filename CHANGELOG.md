@@ -75,9 +75,14 @@ signals a backwards-compatible change.
   and `f64` Count Sketch counters (`counter_type` `"f64"`): the delta is built
   with `new` from changed cells, serialized like a sketch, and added with
   `Count::merge_delta`, which changes nothing when it fails.
+- **`CMSHeapDelta`**, the ASAPv1 CMSHeap delta (`0x03 0x80`), and `f64`
+  CMSHeap insert and merge, with unrounded `f64` heap counts.
 
 ### Changed
 
+- **The CMSHeap and CSHeap ASAPv1 metadata key `k` is renamed `heap_size`**,
+  and the CMSHeap, CSHeap and UnivMon decoders reject heap entries out of
+  emitted order. `HHItem` and `HHHeap` take a count type, `i64` by default.
 - **ASAPv1 decoders reject a block with bytes after its msgpack value, and a
   float field that is not msgpack float64** (an `f32` key: not float32).
 - **The ASAPv1 golden fixtures live in their own repo**,

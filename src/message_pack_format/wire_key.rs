@@ -339,8 +339,13 @@ mod tests {
         for value in [1.0, 2.5, 7.0] {
             kll.update(&value);
         }
-        heap.heap_mut().update(&DataInput::F32(1.5), 11);
-        heap.heap_mut().update(&DataInput::F32(3.0), 5);
+        heap.heap_mut().update(&DataInput::F32(1.5), 11.0);
+        heap.heap_mut().update(&DataInput::F32(3.0), 5.0);
+        let mut delta_heap = HHHeap::new(4);
+        delta_heap.update(&DataInput::F32(1.5), 13.0);
+        let heap_delta =
+            CMSHeapDelta::<f64, RegularPath>::new(2, 4, vec![1], vec![2.5], delta_heap)
+                .expect("delta");
         space_saving.insert(&DataInput::F64(2.5));
         univmon.insert(&DataInput::F64(2.5), 2);
         hydra
@@ -360,6 +365,7 @@ mod tests {
         ));
         let kll = &kll.serialize_to_bytes().unwrap();
         let heap = &heap.serialize_to_bytes().unwrap();
+        let heap_delta = &heap_delta.serialize_to_bytes().unwrap();
         let ss = &space_saving.serialize_to_bytes().unwrap();
         let um = &univmon.serialize_to_bytes().unwrap();
         let hy = &hydra.serialize_to_bytes().unwrap();
@@ -374,6 +380,8 @@ mod tests {
         };
         let kll_ok = |b: &[u8]| KLL::<f64>::deserialize_from_bytes(b).is_ok();
         let heap_ok = |b: &[u8]| HeapF64::deserialize_from_bytes(b).is_ok();
+        let heap_delta_ok =
+            |b: &[u8]| CMSHeapDelta::<f64, RegularPath>::deserialize_from_bytes(b).is_ok();
         let ss_ok = |b: &[u8]| SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(b).is_ok();
         let um_ok = |b: &[u8]| UnivMon::deserialize_from_bytes(b).is_ok();
         let hy_ok = |b: &[u8]| Hydra::deserialize_from_bytes(b).is_ok();
@@ -396,6 +404,16 @@ mod tests {
             row("KLL f64 item", kll, 7.0, Int, kll_ok),
             row("CMSHeap f64 count", heap, 1.0, Int, heap_ok),
             row("CMSHeap f32 key", heap, 1.5, F64, heap_ok),
+            row("CMSHeap f64 heap count", heap, 11.0, Int, heap_ok),
+            row("CMSHeap f64 delta", heap_delta, 2.5, Int, heap_delta_ok),
+            row("CMSHeap delta f32 key", heap_delta, 1.5, F64, heap_delta_ok),
+            row(
+                "CMSHeap delta f64 heap count",
+                heap_delta,
+                13.0,
+                Int,
+                heap_delta_ok,
+            ),
             row("SpaceSaving f64 key", ss, 2.5, F32, ss_ok),
             row("UnivMon f64 key", um, 2.5, F32, um_ok),
             row("Hydra KLL item", hy, 7.0, Int, hy_ok),

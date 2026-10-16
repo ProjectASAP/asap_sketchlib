@@ -10,6 +10,10 @@ Count-Min with integrated heavy-hitter heap (`HHHeap`) for top-k tracking.
 
 - `CMSHeap<S = Vector2D<i64>, M = RegularPath, H = DefaultXxHasher>`
 
+The heap is an `HHHeap<C>` whose count type `C` is `S::Counter`'s
+`TopKCounter::HeapCount`: `f64` over `f64` counters, `i64` over `i32`, `i64`
+and `i128`. Each entry's count is the sketch's estimate, unrounded.
+
 ## Constructors
 
 ```rust
@@ -34,7 +38,7 @@ fn estimate(&self, key: &DataInput) -> S::Counter
 fn rows(&self) -> usize
 fn cols(&self) -> usize
 fn cms(&self) -> &CountMin<S, M, H>
-fn heap(&self) -> &HHHeap
+fn heap(&self) -> &HHHeap<C>
 ```
 
 ## Merge
@@ -59,14 +63,15 @@ on every `CMSHeap`: the impl exists only for wire-eligible configs
 (only you know if the mapping is lossless).
 
 A sketch travels as the base matrix plus the heap's entries: the metadata
-carries `rows`, `cols`, `counter_type`, `mode`, the heap capacity `k` and the
-heap's `key_type`, and the payload is `[counts, keys, heap_counts]`. The heap's
-digest index is rebuilt on load, so no index reaches the wire, and `k` never
-sizes an allocation on decode. The base matrix is bound by the same
-`1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length) the stand-alone
-sketch is: past that, the regular path gives row `r` and row `r + 20` the same
-seed and identical counters, so a wider matrix is refused on both sides in
-either mode.
+carries `rows`, `cols`, `counter_type`, `mode`, the heap capacity `heap_size`
+and the heap's `key_type`, and the payload is `[counts, keys, heap_counts]`,
+with `heap_counts` `f64` under `counter_type` `"f64"` and `i64` otherwise. The
+heap's digest index is rebuilt on load, so no index reaches the wire, and
+`heap_size` never sizes an allocation on decode. The base matrix is bound by
+the same `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length) the
+stand-alone sketch is: past that, the regular path gives row `r` and row
+`r + 20` the same seed and identical counters, so a wider matrix is refused on
+both sides in either mode.
 
 Heap keys are `HeapItem`s, so the key type is a runtime property: `key_type`
 names the **exact** variant (`"i32"` stays `"i32"`, never widened to `"i64"`)
@@ -74,8 +79,33 @@ and the `keys` array is homogeneous in it. A heap whose keys mix variants, or
 holds an `I128` / `U128` key, does not serialize. An empty heap emits
 `key_type = "u64"`.
 
-Entries are emitted in descending count, ties broken by a total order over the
-key, so a decoded sketch re-serializes byte-identically.
+Entries are emitted in descending count (`f64::total_cmp` for `f64` counts),
+ties broken by a total order over the key, so a decoded sketch re-serializes
+byte-identically. The decoder rejects entries in any other order.
+
+## Deltas
+
+```rust
+CMSHeapDelta<T = i64, Mode = RegularPath, H = DefaultXxHasher>
+
+fn new(rows: usize, cols: usize, indices: Vec<u64>, deltas: Vec<T>,
+       heap: HHHeap<T::HeapCount>) -> Result<Self, String>
+fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+
+// on CMSHeap<Vector2D<T>, Mode, H>
+fn merge_delta(&mut self, delta: &CMSHeapDelta<T, Mode, H>)
+    -> Result<(), String>
+```
+
+A `CMSHeapDelta` is the ASAPv1 delta kind `0x03 0x80`, for the same configs as
+the state serialization: the changed cells as `CountMinDelta`'s (strictly
+ascending row-major indices below `rows * cols`, each with a non-zero value)
+and the producer's whole heap, encoded as the state's heap is. `new` and the
+decoder refuse anything else. `merge_delta` adds the cells to the counters and
+replaces the heap with the delta's, its key type included; a delta of other
+dimensions or heap capacity, or an integer add that overflows, fails and leaves
+the sketch unchanged.
 
 ## Examples
 
@@ -91,11 +121,9 @@ assert!(sk.estimate(&DataInput::Str("flow")) >= 1);
 
 - Heap can be cleared independently of sketch counters.
 - Merge requires matching dimensions and compatible type parameters.
-- **Eight built-in instances are constructible but inert.** `insert`,
-  `insert_many`, `estimate` and `merge` live in an impl bounded on
-  `S::Counter: Copy + Ord + From<i32> + Into<i64> + AddAssign`. `i128` has no
-  `Into<i64>` and `f64` has neither `Ord` nor `Into<i64>`, so
-  `CMSHeap<Vector2D<i128>>`, `CMSHeap<Vector2D<f64>>`,
+- **Six built-in instances are constructible but inert.** `insert`,
+  `insert_many`, `estimate` and `merge` need `S::Counter` to convert into its
+  heap count. `i128` has no `Into<i64>`, so `CMSHeap<Vector2D<i128>>`,
   `CMSHeap<QuickMatrixI128>` and `CMSHeap<DefaultMatrixI128>` — on both hashing
   paths — allocate a sketch and a heap and can then do nothing but report their
   dimensions. Use `CSHeap` when you need a 128-bit counter beside a top-k heap;

@@ -107,7 +107,7 @@ pub mod ddsketch;
 pub use ddsketch::DDSketch;
 
 pub mod countminsketch_topk;
-pub use countminsketch_topk::CMSHeap;
+pub use countminsketch_topk::{CMSHeap, CMSHeapDelta};
 
 pub mod countsketch_topk;
 pub use countsketch_topk::{CSHeap, cs_heap_count};

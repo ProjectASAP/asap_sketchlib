@@ -7,32 +7,41 @@
 use crate::{
     CountMin, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher,
     FastPath, FixedMatrix, HHHeap, MatrixStorage, QuickMatrixI64, QuickMatrixI128, RegularPath,
-    SketchHasher, Vector2D, heap_item_to_sketch_input,
+    SketchHasher, TopKCounter, Vector2D, heap_item_to_sketch_input,
 };
 
+mod delta;
 pub(crate) mod heap_wire;
 mod wire;
+
+pub use delta::CMSHeapDelta;
+
+/// The heap count type of a `CMSHeap` over storage `S`.
+type HeapCountOf<S> = <<S as MatrixStorage>::Counter as TopKCounter>::HeapCount;
 
 const DEFAULT_TOP_K: usize = 32;
 
 /// A Count-Min Sketch paired with a top-k heavy-hitter heap.
 ///
-/// Generic over the same type parameters as [`CountMin`].
+/// Generic over the same type parameters as [`CountMin`]. The heap's counts are
+/// `f64` over `f64` counters and `i64` otherwise ([`TopKCounter`]).
 #[derive(Clone)]
 pub struct CMSHeap<
     S: MatrixStorage = Vector2D<i64>,
     Mode = RegularPath,
     H: SketchHasher = DefaultXxHasher,
-> {
+> where
+    S::Counter: TopKCounter,
+{
     cms: CountMin<S, Mode, H>,
-    heap: HHHeap,
+    heap: HHHeap<HeapCountOf<S>>,
 }
 
 // -- Construction for Vector2D-backed storage --------------------------------
 
 impl<T, M, H: SketchHasher> CMSHeap<Vector2D<T>, M, H>
 where
-    T: Copy + Default + std::ops::AddAssign,
+    T: Copy + Default + std::ops::AddAssign + TopKCounter,
 {
     /// Creates a new `CMSHeap` with the given CMS dimensions and heap capacity.
     pub fn new(rows: usize, cols: usize, top_k: usize) -> Self {
@@ -45,7 +54,10 @@ where
 
 // -- Construction from any MatrixStorage -------------------------------------
 
-impl<S: MatrixStorage, M, H: SketchHasher> CMSHeap<S, M, H> {
+impl<S: MatrixStorage, M, H: SketchHasher> CMSHeap<S, M, H>
+where
+    S::Counter: TopKCounter,
+{
     /// Creates a `CMSHeap` from a pre-built storage backend.
     pub fn from_storage(storage: S, top_k: usize) -> Self {
         CMSHeap {
@@ -159,7 +171,10 @@ impl Default for CMSHeap<DefaultMatrixI128, FastPath> {
 
 // -- Shared accessors (all storage types) ------------------------------------
 
-impl<S: MatrixStorage, M, H: SketchHasher> CMSHeap<S, M, H> {
+impl<S: MatrixStorage, M, H: SketchHasher> CMSHeap<S, M, H>
+where
+    S::Counter: TopKCounter,
+{
     /// Returns a reference to the internal CMS.
     pub fn cms(&self) -> &CountMin<S, M, H> {
         &self.cms
@@ -171,12 +186,12 @@ impl<S: MatrixStorage, M, H: SketchHasher> CMSHeap<S, M, H> {
     }
 
     /// Returns a reference to the heavy-hitter heap.
-    pub fn heap(&self) -> &HHHeap {
+    pub fn heap(&self) -> &HHHeap<HeapCountOf<S>> {
         &self.heap
     }
 
     /// Returns a mutable reference to the heavy-hitter heap.
-    pub fn heap_mut(&mut self) -> &mut HHHeap {
+    pub fn heap_mut(&mut self) -> &mut HHHeap<HeapCountOf<S>> {
         &mut self.heap
     }
 
@@ -202,7 +217,8 @@ impl<S: MatrixStorage, M, H: SketchHasher> CMSHeap<S, M, H> {
 
 impl<S: MatrixStorage, H: SketchHasher> CMSHeap<S, RegularPath, H>
 where
-    S::Counter: Copy + Ord + From<i32> + Into<i64> + std::ops::AddAssign,
+    S::Counter: Copy + PartialOrd + From<i32> + std::ops::AddAssign + TopKCounter,
+    S::Counter: Into<HeapCountOf<S>>,
 {
     /// Inserts a single observation and updates the top-k heap.
     #[inline]
@@ -260,7 +276,8 @@ where
 impl<S, H: SketchHasher> CMSHeap<S, FastPath, H>
 where
     S: MatrixStorage + crate::FastPathHasher<H>,
-    S::Counter: Copy + Ord + From<i32> + Into<i64> + std::ops::AddAssign,
+    S::Counter: Copy + PartialOrd + From<i32> + std::ops::AddAssign + TopKCounter,
+    S::Counter: Into<HeapCountOf<S>>,
 {
     /// Inserts a single observation using fast-path hashing and updates the heap.
     #[inline]
@@ -317,7 +334,7 @@ mod tests {
     use crate::test_utils::sample_zipf_u64;
     use std::collections::{HashMap, HashSet};
 
-    fn heap_count_for_key(heap: &HHHeap, key: &DataInput) -> Option<i64> {
+    fn heap_count_for_key<C: crate::HeapCount>(heap: &HHHeap<C>, key: &DataInput) -> Option<C> {
         heap.heap()
             .iter()
             .find(|item| heap_item_to_sketch_input(&item.key) == *key)
@@ -442,6 +459,24 @@ mod tests {
             })
             .expect("key should be in heap");
         assert_eq!(heap_item.count, 30);
+    }
+
+    /// An `f64` sketch's heap holds the unrounded estimate after an insert and
+    /// after a merge, on both paths.
+    #[test]
+    fn f64_heap_counts_are_the_unrounded_estimate() {
+        let key = DataInput::Str("flow");
+        let mut regular = CMSHeap::<Vector2D<f64>, RegularPath>::new(3, 64, 4);
+        regular.insert_many(&key, 2.25);
+        assert_eq!(heap_count_for_key(regular.heap(), &key), Some(2.25));
+        regular.merge(&regular.clone());
+        assert_eq!(heap_count_for_key(regular.heap(), &key), Some(4.5));
+
+        let mut fast = CMSHeap::<Vector2D<f64>, FastPath>::new(3, 64, 4);
+        fast.insert_many(&key, 2.25);
+        assert_eq!(heap_count_for_key(fast.heap(), &key), Some(2.25));
+        fast.merge(&fast.clone());
+        assert_eq!(heap_count_for_key(fast.heap(), &key), Some(4.5));
     }
 
     #[test]

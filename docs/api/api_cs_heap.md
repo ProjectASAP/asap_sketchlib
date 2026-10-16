@@ -60,14 +60,14 @@ on every `CSHeap`: the impl exists only for wire-eligible configs
 mapping is lossless).
 
 A sketch travels as the base matrix plus the heap's entries: the metadata
-carries `rows`, `cols`, `counter_type`, `mode`, the heap capacity `k` and the
-heap's `key_type`, and the payload is `[counts, keys, heap_counts]`. The heap's
-digest index is rebuilt on load, so no index reaches the wire, and `k` never
-sizes an allocation on decode. The base matrix is bound by the same
-`1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length) the stand-alone
-sketch is: past that, the regular path gives row `r` and row `r + 20` the same
-seed and identical counters, so a wider matrix is refused on both sides in
-either mode.
+carries `rows`, `cols`, `counter_type`, `mode`, the heap capacity `heap_size`
+and the heap's `key_type`, and the payload is `[counts, keys, heap_counts]`.
+The heap's digest index is rebuilt on load, so no index reaches the wire, and
+`heap_size` never sizes an allocation on decode. The base matrix is bound by
+the same `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length) the
+stand-alone sketch is: past that, the regular path gives row `r` and row
+`r + 20` the same seed and identical counters, so a wider matrix is refused on
+both sides in either mode.
 
 Heap keys are `HeapItem`s, so the key type is a runtime property: `key_type`
 names the **exact** variant (`"i32"` stays `"i32"`, never widened to `"i64"`)
@@ -76,7 +76,8 @@ holds an `I128` / `U128` key, does not serialize. An empty heap emits
 `key_type = "u64"`.
 
 Entries are emitted in descending count, ties broken by a total order over the
-key, so a decoded sketch re-serializes byte-identically.
+key, so a decoded sketch re-serializes byte-identically. The decoder rejects
+entries in any other order.
 
 `CountL2HH` is a different algorithm with its own ASAPv1 kind (`0x19 0x00`);
 see [the Count Sketch API doc](./api_count_sketch.md).

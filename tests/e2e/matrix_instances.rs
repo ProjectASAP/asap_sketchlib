@@ -574,11 +574,11 @@ macro_rules! heap_matrix_test {
 // The two heap families do **not** have the same instance coverage, and the
 // reason is a difference in their insert bounds rather than an oversight:
 //
-// - `CMSHeap`'s insert path is bounded on `S::Counter: Copy + Ord + From<i32> +
-//   Into<i64> + AddAssign`. `i128` has no `Into<i64>` and `f64` has neither
-//   `Ord` nor `Into<i64>`, so those instances construct but have no `insert`,
-//   `estimate` or `merge` at all. They are enumerated and pinned as inert by
-//   `cmsheap_instances_without_an_insert_impl_are_inert_by_construction`.
+// - `CMSHeap`'s insert path needs the counter to convert into its heap count
+//   (`i64`, or `f64` for an `f64` counter). `i128` has no `Into<i64>`, so those
+//   instances construct but have no `insert`, `estimate` or `merge` at all.
+//   They are enumerated and pinned as inert by
+//   `cmsheap_inert_instances_construct_and_report_their_geometry`.
 // - `CSHeap`'s insert path is bounded on `S::Counter: CountSketchCounter`,
 //   which `i128` *does* satisfy. All six `i128` instances are fully
 //   operational and are covered below; the previous revision of this file and
@@ -760,21 +760,18 @@ fn heap_count(items: &[asap_sketchlib::HHItem], key: &DataInput) -> Option<i64> 
 /// The `CMSHeap` instances that construct but have no operations at all.
 ///
 /// `CMSHeap::insert` / `insert_many` / `estimate` / `merge` all live in an impl
-/// bounded on `S::Counter: Copy + Ord + From<i32> + Into<i64> + AddAssign`.
-/// Four counter types reach `CMSHeap` through a public constructor and two of
-/// them fail that bound:
+/// bounded on the counter converting into its heap count (`TopKCounter`):
 ///
-/// | counter | `Ord` | `Into<i64>` | operations |
-/// | --- | --- | --- | --- |
-/// | `i32`, `i64` | yes | yes | full |
-/// | `i128` | yes | **no** | none |
-/// | `f64` | **no** | **no** | none |
+/// | counter | heap count | operations |
+/// | --- | --- | --- |
+/// | `i32`, `i64` | `i64` | full |
+/// | `f64` | `f64` | full |
+/// | `i128` | `i64`, no `Into<i64>` | none |
 ///
-/// So `CMSHeap<Vector2D<i128>>`, `CMSHeap<Vector2D<f64>>`,
-/// `CMSHeap<QuickMatrixI128>` and `CMSHeap<DefaultMatrixI128>` are
-/// *constructible but inert* on both hashing paths — eight instances that
-/// allocate a sketch and a heap and can then do nothing but report their
-/// dimensions.
+/// So `CMSHeap<Vector2D<i128>>`, `CMSHeap<QuickMatrixI128>` and
+/// `CMSHeap<DefaultMatrixI128>` are *constructible but inert* on both hashing
+/// paths — six instances that allocate a sketch and a heap and can then do
+/// nothing but report their dimensions.
 ///
 /// # What this test is, and what it is not
 ///
@@ -789,7 +786,7 @@ fn heap_count(items: &[asap_sketchlib::HHItem], key: &DataInput) -> Option<i64> 
 /// A `trybuild` fixture would close that hole and is the right thing if these
 /// instances ever matter; it was not added here because it means a new
 /// dev-dependency for a set of instances that, by construction, have no
-/// behaviour to protect. The coverage matrix lists all eight under **gap**, not
+/// behaviour to protect. The coverage matrix lists all six under **gap**, not
 /// under covered instances, and this test is filed as `structural
 /// (constructibility only)`.
 ///
@@ -836,20 +833,6 @@ fn cmsheap_inert_instances_construct_and_report_their_geometry() {
         Vector2D<i128>,
         FastPath,
         CMSHeap::<Vector2D<i128>, FastPath>::new(3, 4096, 32),
-        3,
-        4096
-    );
-    inert!(
-        Vector2D<f64>,
-        RegularPath,
-        CMSHeap::<Vector2D<f64>, RegularPath>::new(3, 4096, 32),
-        3,
-        4096
-    );
-    inert!(
-        Vector2D<f64>,
-        FastPath,
-        CMSHeap::<Vector2D<f64>, FastPath>::new(3, 4096, 32),
         3,
         4096
     );
