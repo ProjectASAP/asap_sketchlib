@@ -148,24 +148,29 @@ impl CountSketch {
         }
     }
 
-    /// Insert a single weighted observation. Uses the shared
-    /// [`crate::MatrixHashType::Packed64`] fast-path hash so the matrix-cell
-    /// layout matches `sketchlib-go::CountSketch.UpdateString`
-    /// bit-for-bit. Locked in by
-    /// `tests/sketches_go_parity_probe.rs`.
-    ///
-    /// Constraints inherited from Go's Packed64 mode:
-    /// - `cols` must be a power of two; the column mask is `cols - 1`.
-    /// - `rows * (log2(cols) + 1) ≤ 64` so the packed hash holds all
-    ///   row indices and sign bits.
+    /// The key's per-row hash, laid out for this shape as the native
+    /// fast-path sketches lay it out: one 64-bit hash while every row's
+    /// column bits and sign bit fit in it, then one 128-bit hash, then one
+    /// hash per row. Packed rows therefore never share hash bits, and a shape
+    /// that fits 64 bits keeps the cells `sketchlib-go::CountSketch.UpdateString`
+    /// gives it (locked in by `tests/sketches_go_parity_probe.rs`). One hash
+    /// per row draws row `r`'s seed from the seed list, so past
+    /// [`crate::MATRIX_MAX_ROWS`] rows, row `r + MATRIX_MAX_ROWS` repeats row `r`.
+    fn row_hash(&self, key: &str) -> crate::common::MatrixHashType {
+        crate::common::hash_for_matrix_seeded(
+            0,
+            self.rows,
+            self.cols,
+            &crate::common::DataInput::String(key.to_owned()),
+        )
+    }
+
+    /// Insert a single weighted observation, hashed as [`Self::row_hash`] says.
     pub fn update(&mut self, key: &str, value: f64) {
         if self.rows == 0 || self.cols == 0 {
             return;
         }
-        let input = crate::common::DataInput::String(key.to_owned());
-        let hashed = crate::common::MatrixHashType::Packed64(
-            <crate::DefaultXxHasher as crate::common::SketchHasher>::hash64_seeded(0, &input),
-        );
+        let hashed = self.row_hash(key);
         for r in 0..self.rows {
             let col = <crate::common::MatrixHashType as crate::common::MatrixFastHash>::col_for_row(
                 &hashed, r, self.cols,
@@ -185,10 +190,7 @@ impl CountSketch {
         if self.rows == 0 || self.cols == 0 {
             return 0.0;
         }
-        let input = crate::common::DataInput::String(key.to_owned());
-        let hashed = crate::common::MatrixHashType::Packed64(
-            <crate::DefaultXxHasher as crate::common::SketchHasher>::hash64_seeded(0, &input),
-        );
+        let hashed = self.row_hash(key);
         let mut estimates: Vec<f64> = Vec::with_capacity(self.rows);
         for r in 0..self.rows {
             let col = <crate::common::MatrixHashType as crate::common::MatrixFastHash>::col_for_row(
@@ -540,6 +542,57 @@ impl MessagePackCodec for CountSketchDelta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The column each row gives `key`, read off a fresh sketch.
+    fn columns(rows: usize, cols: usize, key: &str) -> Vec<usize> {
+        let mut sketch = CountSketch::new(rows, cols);
+        sketch.update(key, 1.0);
+        sketch
+            .matrix
+            .iter()
+            .map(|row| row.iter().position(|cell| *cell != 0.0).unwrap())
+            .collect()
+    }
+
+    /// A shape too deep for one 64-bit hash (15 rows of 15 column bits and a
+    /// sign) reads back its weight, and its rows place keys independently:
+    /// two rows rarely put a key in the same column.
+    #[test]
+    fn deep_shapes_hash_every_row_independently() {
+        let (rows, cols) = (15, 30_000);
+        let mut sketch = CountSketch::new(rows, cols);
+        sketch.update("api", 2.5);
+        assert_eq!(sketch.estimate("api"), 2.5);
+        let placed: Vec<Vec<usize>> = (0..200)
+            .map(|i| columns(rows, cols, &format!("key-{i}")))
+            .collect();
+        for a in 0..rows {
+            for b in a + 1..rows {
+                let shared = placed.iter().filter(|c| c[a] == c[b]).count();
+                // Expected 200 / 30000 < 1 per pair.
+                assert!(shared <= 2, "rows {a} and {b} share {shared} columns");
+            }
+        }
+    }
+
+    /// A shape that fits one 64-bit hash keeps its cells: the layout the Go
+    /// parity probe pins does not move.
+    #[test]
+    fn packed_shapes_keep_their_cells() {
+        let hash = <crate::DefaultXxHasher as crate::common::SketchHasher>::hash64_seeded(
+            0,
+            &crate::common::DataInput::String("api".to_owned()),
+        );
+        let packed = crate::common::MatrixHashType::Packed64(hash);
+        let expected: Vec<usize> = (0..5)
+            .map(|row| {
+                <crate::common::MatrixHashType as crate::common::MatrixFastHash>::col_for_row(
+                    &packed, row, 1024,
+                )
+            })
+            .collect();
+        assert_eq!(columns(5, 1024, "api"), expected);
+    }
 
     #[test]
     fn msgpack_delta_against_empty_round_trips() {
