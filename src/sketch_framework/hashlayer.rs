@@ -19,7 +19,10 @@
 //! All matrix-backed sketches (CMS / Count) in one layer must agree on the
 //! same hash layout (determined by rows × cols dimensions).  HLL sketches can
 //! coexist with them because they only consume the lower 64 bits of the shared
-//! hash.
+//! hash. The layout is fixed at construction: a layer built with no matrix
+//! sketch hashes at the canonical seed, and [`HashSketchEnsemble::push`]
+//! refuses a matrix sketch pushed into it. Pass every member to
+//! [`HashSketchEnsemble::new`] to build a layer that mixes the two.
 //!
 //! # Querying
 //!
@@ -205,16 +208,19 @@ where
     }
 
     /// Adds one compatible sketch to the ensemble.
+    ///
+    /// The hash layout is fixed at construction: a matrix sketch pushed into
+    /// a layer that holds none is refused, as is one whose dimensions
+    /// disagree. Build such a layer through [`Self::new`] with every member.
     pub fn push(&mut self, sketch: EnsembleSketch) -> Result<(), &'static str> {
-        let sketch_cfg = sketch.hash_config();
-        match (self.hash_config, sketch_cfg) {
+        match (self.hash_config, sketch.hash_config()) {
             (Some(layer_cfg), Some(sketch_cfg)) if layer_cfg != sketch_cfg => {
                 return Err(
                     "all matrix sketches in a HashSketchEnsemble must share the same dimensions",
                 );
             }
-            (None, Some(sketch_cfg)) => {
-                self.hash_config = Some(sketch_cfg);
+            (None, Some(_)) => {
+                return Err("a HashSketchEnsemble with no matrix sketch cannot take one by push");
             }
             _ => {}
         }
@@ -635,5 +641,52 @@ mod tests {
 
         let result = layer.push(Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_push_matrix_into_matrix_free_layer_rejected() {
+        let mut layer: HashSketchEnsemble<DefaultXxHasher> =
+            HashSketchEnsemble::new(vec![HyperLogLog::<ErtlMLE>::default().into()])
+                .expect("HLL-only layer");
+
+        assert!(
+            layer
+                .push(CountMin::<Vector2D<i32>, FastPath>::default().into())
+                .is_err()
+        );
+        assert!(
+            layer
+                .push(Count::<Vector2D<i32>, FastPath>::default().into())
+                .is_err()
+        );
+        assert_eq!(layer.len(), 1);
+        assert!(layer.push(HyperLogLogHIP::default().into()).is_ok());
+    }
+
+    #[test]
+    fn test_a_refused_push_leaves_the_hashing_alone() {
+        let mut layer: HashSketchEnsemble<DefaultXxHasher> =
+            HashSketchEnsemble::new(vec![HyperLogLog::<ErtlMLE>::default().into()])
+                .expect("HLL-only layer");
+
+        for value in 0..1_000u64 {
+            let hash = layer.hash_input(&DataInput::U64(value));
+            layer
+                .get_mut(0)
+                .expect("mutable ref")
+                .insert_with_hash(&hash);
+        }
+        let before = layer.cardinality(0).expect("HLL cardinality");
+
+        assert!(
+            layer
+                .push(CountMin::<Vector2D<i32>, FastPath>::default().into())
+                .is_err()
+        );
+        for value in 0..1_000u64 {
+            layer.insert(&DataInput::U64(value));
+        }
+
+        assert_eq!(layer.cardinality(0).expect("HLL cardinality"), before);
     }
 }
