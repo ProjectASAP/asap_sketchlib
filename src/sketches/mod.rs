@@ -110,7 +110,7 @@ pub mod countminsketch_topk;
 pub use countminsketch_topk::{CMSHeap, CMSHeapDelta};
 
 pub mod countsketch_topk;
-pub use countsketch_topk::{CSHeap, cs_heap_count};
+pub use countsketch_topk::{CSHeap, CSHeapDelta, CsHeapCounter, cs_heap_count};
 pub use countsketch_topk::{CountL2HH, l2hh_cell_for_row};
 
 pub mod octo_delta;

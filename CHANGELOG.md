@@ -77,6 +77,8 @@ signals a backwards-compatible change.
   `Count::merge_delta`, which changes nothing when it fails.
 - **`CMSHeapDelta`**, the ASAPv1 CMSHeap delta (`0x03 0x80`), and `f64`
   CMSHeap insert and merge, with unrounded `f64` heap counts.
+- **`CSHeapDelta`**, the ASAPv1 CSHeap delta (`0x0a 0x80`), and unrounded
+  `f64` heap counts for an `f64` CSHeap (`CsHeapCounter`).
 
 ### Changed
 

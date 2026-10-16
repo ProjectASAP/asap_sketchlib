@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators), Count-Min with its delta (`CountMinDelta`), CMSHeap with its delta (`CMSHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap, DDSketch, KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH and UnivMon-Q.
+- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators), Count-Min with its delta (`CountMinDelta`), CMSHeap with its delta (`CMSHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap with its delta (`CSHeapDelta`), DDSketch, KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH and UnivMon-Q.
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -207,7 +207,7 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x08 0x80` | SetAggregator | SetAggregator delta | Section 3.22 | designed |
 | `0x09 0x00` | - | - | TBD | retired / permanently reserved, never reassign |
 | `0x0a 0x00` | Count-Sketch-with-heap (CSHeap) | Count Sketch + top-k heap | Section 3.10 | implemented |
-| `0x0a 0x80` | Count-Sketch-with-heap (CSHeap) | CSHeap delta | Section 3.23 | designed |
+| `0x0a 0x80` | Count-Sketch-with-heap (CSHeap) | CSHeap delta | Section 3.23 | implemented |
 | `0x0b 0x00` | Elastic | Heavy/light | Section 3.11 | implemented |
 | `0x0c 0x00` | Coco | CocoSketch | Section 3.12 | implemented |
 | `0x0d 0x00` | UniformSampling (`Unstable`) | Priority sampling | Section 3.13 | implemented |

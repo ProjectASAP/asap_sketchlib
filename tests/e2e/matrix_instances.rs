@@ -579,7 +579,7 @@ macro_rules! heap_matrix_test {
 //   instances construct but have no `insert`, `estimate` or `merge` at all.
 //   They are enumerated and pinned as inert by
 //   `cmsheap_inert_instances_construct_and_report_their_geometry`.
-// - `CSHeap`'s insert path is bounded on `S::Counter: CountSketchCounter`,
+// - `CSHeap`'s insert path is bounded on `S::Counter: CsHeapCounter`,
 //   which `i128` *does* satisfy. All six `i128` instances are fully
 //   operational and are covered below; the previous revision of this file and
 //   of the coverage matrix wrongly claimed they were not insertable.

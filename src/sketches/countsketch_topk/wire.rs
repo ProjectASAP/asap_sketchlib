@@ -13,7 +13,8 @@
 //! type** (i32/i64/f64), the column-derivation **mode** (fast/regular), the heap
 //! capacity `heap_size` and the heap's `key_type` — all live in the metadata, so
 //! the payload is `[counts, keys, heap_counts]`: the base matrix packed row-major
-//! followed by the heap's entries.
+//! followed by the heap's entries, whose counts are `f64` under `f64` counters
+//! and `i64` otherwise.
 //!
 //! [`CountL2HH`](super::CountL2HH) is a different algorithm and is not covered
 //! here.
@@ -26,10 +27,10 @@ use crate::sketches::countminsketch_topk::heap_wire::{
     decode_metadata, decode_payload, encode_metadata, encode_payload, heap_entries, rebuild_heap,
     wire_key_type,
 };
-use crate::sketches::countsketch::{CountSketchCounter, CsWireCounter, CsWireMode};
+use crate::sketches::countsketch::{CsWireCounter, CsWireMode};
 use crate::{Count, HashProfile, SketchHasher, Vector2D};
 
-use super::CSHeap;
+use super::{CSHeap, CsHeapCounter};
 
 /// CSHeap kind_id: family `0x0a`, single algorithm variant `0x00`.
 const CS_HEAP_KIND: &[u8] = &[0x0a, 0x00];
@@ -39,13 +40,10 @@ const CS_HEAP_KIND: &[u8] = &[0x0a, 0x00];
 // directly.
 impl<T, Mode, H> CSHeap<Vector2D<T>, Mode, H>
 where
-    // `CountSketchCounter` is required by `Count::from_storage`; `AddAssign` by
-    // `Vector2D<T>: MatrixStorage`. Neither is used by the bodies below.
-    T: CsWireCounter
-        + CountSketchCounter
-        + std::ops::AddAssign
-        + Serialize
-        + for<'de> Deserialize<'de>,
+    // `CsHeapCounter` carries `Count::from_storage`'s `CountSketchCounter` and
+    // the heap's `TopKCounter`; `AddAssign` is required by
+    // `Vector2D<T>: MatrixStorage`.
+    T: CsWireCounter + CsHeapCounter + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
     Mode: CsWireMode,
     H: SketchHasher + HashProfile,
 {
