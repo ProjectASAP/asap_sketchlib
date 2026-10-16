@@ -8,6 +8,7 @@
 //!
 //! See `asapv1_golden/README.md`.
 
+use asap_sketchlib::sketches::CountSketchDelta;
 use asap_sketchlib::{
     Classic, Count, CountMin, CountMinDelta, ErtlMLE, FastPath, HllSketch, HllVariant,
     HyperLogLogHIPP12, HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D, peek_kind_id,
@@ -32,6 +33,9 @@ const GOLDEN_CMS_F64_DELTA: &str = include_str!("../asapv1_golden/cms_f64_fast_2
 const GOLDEN_CS_REGULAR: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4.hex");
 const GOLDEN_CS_FAST: &str = include_str!("../asapv1_golden/cs_i64_fast_2x4.hex");
 const GOLDEN_CS_I32: &str = include_str!("../asapv1_golden/cs_i32_regular_2x4.hex");
+const GOLDEN_CS_F64_FAST: &str = include_str!("../asapv1_golden/cs_f64_fast_2x4.hex");
+const GOLDEN_CS_I64_DELTA: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4_delta.hex");
+const GOLDEN_CS_F64_DELTA: &str = include_str!("../asapv1_golden/cs_f64_fast_2x4_delta.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
 
@@ -53,6 +57,9 @@ const F64_VALS: [[f64; 3]; 2] = [[0.0, 1.5, 2.25], [3.75, 4.125, 5.0625]];
 /// positive fixint / positive fixint max / uint8 / uint32, row 1 is negative
 /// fixint / int8 / int16 / int32.
 const CS_VALS: [[i64; 4]; 2] = [[0, 127, 128, 65536], [-1, -33, -32768, -2147483648]];
+
+/// The f64 Count Sketch matrix: signed, fractional, and both zeros.
+const CS_F64_VALS: [[f64; 4]; 2] = [[0.0, -0.0, 1.5, -2.25], [127.0, -32768.5, 0.125, -1e300]];
 
 // ---------------------------------------------------------------------------
 // HLL: build known state -> serialize == golden, and golden round-trips.
@@ -207,8 +214,8 @@ fn cms_f64_fast_2x3_delta_matches_golden() {
 
 // ---------------------------------------------------------------------------
 // Count Sketch: build known matrix state -> serialize == golden, round-trips.
-// All three fixtures hold the SAME matrix: the i64 pair differs only by `mode`
-// and the i32 fixture only by `counter_type`, so the set pins that both
+// The three integer fixtures hold the SAME matrix: the i64 pair differs only by
+// `mode` and the i32 fixture only by `counter_type`, so the set pins that both
 // metadata keys reach the bytes and that nothing else does.
 // ---------------------------------------------------------------------------
 
@@ -283,6 +290,62 @@ fn cs_i32_regular_2x4_matches_golden() {
         Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&want).is_err(),
         "the i32 golden must not decode as an i64 sketch"
     );
+}
+
+#[test]
+fn cs_f64_fast_2x4_matches_golden() {
+    type Cs = Count<Vector2D<f64>, FastPath>;
+    let want = decode_hex(GOLDEN_CS_F64_FAST);
+    let sketch = Cs::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_F64_VALS[r][c]));
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Cs::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<f64> = CS_F64_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// Count Sketch delta: build known delta -> serialize == golden, round-trips,
+// and merged into the matching state golden gives the expected state.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cs_i64_regular_2x4_delta_matches_golden() {
+    type Cs = Count<Vector2D<i64>, RegularPath>;
+    type Delta = CountSketchDelta<i64, RegularPath>;
+    let want = decode_hex(GOLDEN_CS_I64_DELTA);
+    let indices = vec![0, 1, 2, 4, 6, 7];
+    let deltas = vec![-32, -128, 255, -129, 65535, -2147483649];
+    let delta = Delta::new(2, 4, indices, deltas).expect("valid");
+    assert_eq!(delta.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Delta::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    let mut state = Cs::deserialize_from_bytes(&decode_hex(GOLDEN_CS_REGULAR)).expect("state");
+    state.merge_delta(&decoded).expect("merge");
+    let expected = [-32, -1, 383, 65536, -130, -33, 32767, -4294967297];
+    assert_eq!(state.as_storage().as_slice(), expected.as_slice());
+}
+
+#[test]
+fn cs_f64_fast_2x4_delta_matches_golden() {
+    type Cs = Count<Vector2D<f64>, FastPath>;
+    type Delta = CountSketchDelta<f64, FastPath>;
+    let want = decode_hex(GOLDEN_CS_F64_DELTA);
+    let indices = vec![1, 3, 5, 7];
+    let deltas = vec![-0.75, 2.25, 0.5, 1e300];
+    let delta = Delta::new(2, 4, indices, deltas).expect("valid");
+    assert_eq!(delta.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Delta::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    let mut state = Cs::deserialize_from_bytes(&decode_hex(GOLDEN_CS_F64_FAST)).expect("state");
+    state.merge_delta(&decoded).expect("merge");
+    let expected = [0.0, -0.75, 1.5, 0.0, 127.0, -32768.0, 0.125, 0.0];
+    assert_eq!(state.as_storage().as_slice(), expected.as_slice());
 }
 
 // ---------------------------------------------------------------------------

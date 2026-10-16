@@ -71,6 +71,10 @@ signals a backwards-compatible change.
 - **`CountMinDelta`**, the ASAPv1 Count-Min delta (`0x02 0x80`): built with
   `new` from changed cells, serialized like a sketch, and added with
   `CountMin::merge_delta`, which changes nothing when it fails.
+- **`sketches::CountSketchDelta`**, the ASAPv1 Count Sketch delta (`0x04 0x80`),
+  and `f64` Count Sketch counters (`counter_type` `"f64"`): the delta is built
+  with `new` from changed cells, serialized like a sketch, and added with
+  `Count::merge_delta`, which changes nothing when it fails.
 
 ### Changed
 

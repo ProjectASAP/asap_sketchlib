@@ -54,7 +54,7 @@ pub use bloom::{
 };
 
 pub mod countsketch;
-pub use countsketch::Count;
+pub use countsketch::{Count, CountSketchDelta};
 
 /// Count-Min-shaped grid with a per-bucket HyperLogLog (distinct-count) sketch.
 #[cfg(feature = "experimental")]

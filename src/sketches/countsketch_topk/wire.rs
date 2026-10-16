@@ -10,7 +10,7 @@
 //!
 //! CSHeap is one algorithm — a single kind_id `0x0a 0x00`. The structural
 //! parameters — the matrix dimensions (`rows` / `cols`), the base **counter
-//! type** (i32/i64), the column-derivation **mode** (fast/regular), the heap
+//! type** (i32/i64/f64), the column-derivation **mode** (fast/regular), the heap
 //! capacity `k` and the heap's `key_type` — all live in the metadata, so the
 //! payload is `[counts, keys, heap_counts]`: the base matrix packed row-major
 //! followed by the heap's entries.
@@ -482,10 +482,9 @@ mod tests {
         );
     }
 
-    /// `f64` is a Count-Min wire counter but not a Count Sketch one, so its name
-    /// must not decode into either wire-eligible type.
+    /// An `f64`-labelled envelope decodes into neither integer sketch.
     #[test]
-    fn cs_heap_rejects_a_foreign_counter_type_name() {
+    fn cs_heap_rejects_f64_into_an_integer_sketch() {
         let metadata = rmp_serde::to_vec_named(&topk_metadata::<DefaultXxHasher>(
             2, 4, "f64", "regular", 4, "u64",
         ))

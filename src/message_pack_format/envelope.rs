@@ -217,6 +217,9 @@ mod tests {
             "../../asapv1_golden/cms_i64_regular_2x3_delta.hex"
         ));
         let cs = hex(include_str!("../../asapv1_golden/cs_i64_regular_2x4.hex"));
+        let cs_delta = hex(include_str!(
+            "../../asapv1_golden/cs_i64_regular_2x4_delta.hex"
+        ));
         let kll = hex(include_str!("../../asapv1_golden/kll_f64_k200.hex"));
 
         let str_keys = ["alpha", "beta", "gamma", "alpha", "alpha"].map(DataInput::Str);
@@ -296,6 +299,7 @@ mod tests {
             case!("CMS", cms, Cms),
             case!("CMS delta", cms_delta, CountMinDelta<i64, RegularPath>),
             case!("CS", cs, Cs),
+            case!("CS delta", cs_delta, sketches::CountSketchDelta<i64, RegularPath>),
             case!("KLL", kll, KLL<f64>),
             sketch!("KLL dynamic", kll_dynamic, KLLDynamic<f64>),
             sketch!("CMSHeap", cms_heap, CmsHeap),

@@ -68,11 +68,10 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 These produce/consume the **ASAPv1** wire envelope (kind `0x04 0x00`) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). They are **not** available
 on every `Count`: the impl exists only for wire-eligible configs
-`Count<Vector2D<T>, Mode, H>` where `T` is `i32` or `i64` (`CsWireCounter`),
-`Mode` is `FastPath` or `RegularPath` (`CsWireMode`), and `H: HashProfile`.
-Count Sketch counters must be signed and negatable, so there is no `f64`
-counterpart to Count-Min's; an `i128` or non-`Vector2D` sketch must be converted
-first (only you know if the mapping is lossless).
+`Count<Vector2D<T>, Mode, H>` where `T` is `i32`, `i64` or `f64`
+(`CsWireCounter`), `Mode` is `FastPath` or `RegularPath` (`CsWireMode`), and
+`H: HashProfile`. An `i128` or non-`Vector2D` sketch must be converted first
+(only you know if the mapping is lossless).
 
 `i32` is **not** widened to `i64` on the wire. The counter type is carried in
 the metadata and pinned on decode, so `i32` bytes do not decode into an `i64`
@@ -94,6 +93,28 @@ accumulator per row. `l2` is carried rather than recomputed, because
 `fast_insert_with_count_without_l2_and_hash` moves counters without it and the
 accumulator saturates one way. The same `(counts, l2)` pair is what a `UnivMon`
 layer inlines into its own payload.
+
+## Deltas
+
+```rust
+CountSketchDelta<T = i32, Mode = RegularPath, H = DefaultXxHasher>
+
+fn new(rows: usize, cols: usize, indices: Vec<u64>, deltas: Vec<T>) -> Result<Self, String>
+fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+
+// on Count<Vector2D<T>, Mode, H>
+fn merge_delta(&mut self, delta: &CountSketchDelta<T, Mode, H>) -> Result<(), String>
+```
+
+A `CountSketchDelta` is the ASAPv1 delta kind `0x04 0x80`, for the same configs
+as the state serialization: the changed cells as strictly ascending row-major
+indices `row * cols + col`, below `rows * cols`, and the non-zero signed value
+added to each. `new` and the decoder refuse anything else. `merge_delta` adds
+the delta to the counters; a delta of other dimensions, or an integer add that
+overflows, fails and leaves the sketch unchanged. The crate root's
+`CountSketchDelta` is the legacy portable type; this one is
+`asap_sketchlib::sketches::CountSketchDelta`.
 
 ## Examples
 

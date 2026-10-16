@@ -53,11 +53,11 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 These produce/consume the **ASAPv1** wire envelope (kind `0x0a 0x00`) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). They are **not** available
 on every `CSHeap`: the impl exists only for wire-eligible configs
-`CSHeap<Vector2D<T>, Mode, H>` where `T` is `i32` or `i64` (`CsWireCounter`),
-`Mode` is `FastPath` or `RegularPath` (`CsWireMode`), and `H: HashProfile`. Count Sketch
-counters must be signed and negatable, so there is no `f64` counterpart to
-Count-Min's; an `i128` or non-`Vector2D` sketch must be converted first (only
-you know if the mapping is lossless).
+`CSHeap<Vector2D<T>, Mode, H>` where `T` is `i32`, `i64` or `f64`
+(`CsWireCounter`), `Mode` is `FastPath` or `RegularPath` (`CsWireMode`), and
+`H: HashProfile`. Heap counts are written as `i64` under every counter type. An
+`i128` or non-`Vector2D` sketch must be converted first (only you know if the
+mapping is lossless).
 
 A sketch travels as the base matrix plus the heap's entries: the metadata
 carries `rows`, `cols`, `counter_type`, `mode`, the heap capacity `k` and the

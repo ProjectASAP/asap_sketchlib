@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators), Count-Min with its delta (`CountMinDelta`), CMSHeap, Count Sketch, CSHeap, DDSketch, KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH and UnivMon-Q.
+- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators), Count-Min with its delta (`CountMinDelta`), CMSHeap, Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap, DDSketch, KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH and UnivMon-Q.
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -193,7 +193,7 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x03 0x00` | Count-Min-with-heap (CMSHeap) | Count-Min + top-k heap | Section 3.7 | implemented |
 | `0x03 0x80` | Count-Min-with-heap (CMSHeap) | CMSHeap delta | Section 3.23 | designed |
 | `0x04 0x00` | Count Sketch | Count Sketch | Section 3.6 | implemented |
-| `0x04 0x80` | Count Sketch | Count Sketch delta | Section 3.23 | designed |
+| `0x04 0x80` | Count Sketch | Count Sketch delta | Section 3.23 | implemented |
 | `0x05 0x00` | DDSketch | Logarithmic bucket stores | Section 3.8 | implemented |
 | `0x05 0x80` | DDSketch | DDSketch delta | Section 3.23 | designed |
 | `0x06 0x00` | KLL | Compact | Section 3.3 | implemented |
