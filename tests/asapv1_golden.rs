@@ -10,7 +10,7 @@
 
 use asap_sketchlib::{
     Classic, Count, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12,
-    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D,
+    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D, peek_kind_id,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -286,4 +286,32 @@ fn kll_i64_k200_matches_golden() {
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
     assert_eq!(decoded.quantile(0.0), 1.0);
     assert_eq!(decoded.quantile(1.0), 50.0);
+}
+
+// ---------------------------------------------------------------------------
+// peek_kind_id
+// ---------------------------------------------------------------------------
+
+#[test]
+fn peek_kind_id_checks_magic_version_and_framing() {
+    let bytes = decode_hex(GOLDEN_CMS_I64);
+
+    let trailing = [&bytes[..], &[0xc0]].concat();
+    assert_eq!(
+        peek_kind_id(&trailing).expect("trailing bytes ignored"),
+        [0x02, 0x00]
+    );
+
+    let mut bad_magic = bytes.clone();
+    bad_magic[0] = b'X';
+    assert!(peek_kind_id(&bad_magic).is_err(), "bad magic");
+
+    let mut bad_version = bytes.clone();
+    bad_version[6] = 0x02;
+    assert!(peek_kind_id(&bad_version).is_err(), "unknown version");
+
+    // Cut inside the length fields, then inside the payload.
+    for len in [17, bytes.len() - 1] {
+        assert!(peek_kind_id(&bytes[..len]).is_err(), "truncated to {len}");
+    }
 }
