@@ -83,8 +83,8 @@ pub use elastic::HeavyBucket;
 /// HyperLogLog implementations and aliases.
 pub mod hll;
 pub use hll::{
-    Classic, ErtlMLE, HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogHIPP14,
-    HyperLogLogHIPP16, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16,
+    Classic, ErtlMLE, HyperLogLog, HyperLogLogDelta, HyperLogLogHIP, HyperLogLogHIPP12,
+    HyperLogLogHIPP14, HyperLogLogHIPP16, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16,
 };
 
 pub mod kll;

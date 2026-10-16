@@ -40,7 +40,9 @@ use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, SketchHasher, hash6
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+mod delta;
 mod wire;
+pub use delta::HyperLogLogDelta;
 pub use wire::HllWireVariant;
 pub(crate) use wire::{
     HLL_KIND_CLASSIC, HLL_KIND_ERTL_MLE, HLL_KIND_HIP, HllMetadata, HllPayloadHip, HllPayloadPlain,

@@ -212,6 +212,9 @@ mod tests {
 
         let classic = hex(include_str!("../../asapv1_golden/hll_classic_p12.hex"));
         let hip = hex(include_str!("../../asapv1_golden/hll_hip_p12.hex"));
+        let classic_delta = hex(include_str!(
+            "../../asapv1_golden/hll_classic_p14_delta.hex"
+        ));
         let cms = hex(include_str!("../../asapv1_golden/cms_i64_regular_2x3.hex"));
         let cms_delta = hex(include_str!(
             "../../asapv1_golden/cms_i64_regular_2x3_delta.hex"
@@ -297,6 +300,7 @@ mod tests {
         let cases: Vec<Case> = vec![
             case!("HLL classic", classic.clone(), HllClassic),
             case!("HLL HIP", hip.clone(), HyperLogLogHIPP12),
+            case!("HLL classic delta", classic_delta, HyperLogLogDelta<Classic, HllBucketListP14>),
             ("HLL portable classic", classic, portable),
             ("HLL portable HIP", hip, portable),
             case!("CMS", cms, Cms),

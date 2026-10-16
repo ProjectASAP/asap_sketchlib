@@ -9,10 +9,12 @@
 //! See `asapv1_golden/README.md`.
 
 use asap_sketchlib::sketches::CountSketchDelta;
+use asap_sketchlib::sketches::hll::HllWireVariant;
 use asap_sketchlib::{
     CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Count, CountMin, CountMinDelta, ErtlMLE,
-    FastPath, HHHeap, HeapCount, HeapItem, HllSketch, HllVariant, HyperLogLogHIPP12,
-    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D, peek_kind_id,
+    FastPath, HHHeap, HeapCount, HeapItem, HllBucketListP14, HllSketch, HllVariant,
+    HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogP12, HyperLogLogP14, KLL, MessagePackCodec,
+    RegularPath, Vector2D, peek_kind_id,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -27,6 +29,10 @@ fn decode_hex(s: &str) -> Vec<u8> {
 const GOLDEN_CLASSIC: &str = include_str!("../asapv1_golden/hll_classic_p12.hex");
 const GOLDEN_ERTL: &str = include_str!("../asapv1_golden/hll_ertl_mle_p12.hex");
 const GOLDEN_HIP: &str = include_str!("../asapv1_golden/hll_hip_p12.hex");
+const GOLDEN_CLASSIC_P14: &str = include_str!("../asapv1_golden/hll_classic_p14.hex");
+const GOLDEN_ERTL_P14: &str = include_str!("../asapv1_golden/hll_ertl_mle_p14.hex");
+const GOLDEN_CLASSIC_P14_DELTA: &str = include_str!("../asapv1_golden/hll_classic_p14_delta.hex");
+const GOLDEN_ERTL_P14_DELTA: &str = include_str!("../asapv1_golden/hll_ertl_mle_p14_delta.hex");
 const GOLDEN_CMS_I64: &str = include_str!("../asapv1_golden/cms_i64_regular_2x3.hex");
 const GOLDEN_CMS_F64: &str = include_str!("../asapv1_golden/cms_f64_fast_2x3.hex");
 const GOLDEN_CMS_I64_DELTA: &str = include_str!("../asapv1_golden/cms_i64_regular_2x3_delta.hex");
@@ -143,6 +149,42 @@ fn hll_hip_p12_matches_golden() {
     assert_eq!(decoded.hip_kxq0, 1.5);
     assert_eq!(decoded.hip_kxq1, 2.5);
     assert_eq!(decoded.hip_est, 3.0);
+}
+
+// ---------------------------------------------------------------------------
+// HLL delta: build known delta -> serialize == golden, round-trips, and merged
+// into the matching P14 state golden gives the expected registers.
+// ---------------------------------------------------------------------------
+
+fn assert_hll_p14_delta<Variant: HllWireVariant>(delta_hex: &str, state_hex: &str) {
+    type Delta<V> = HyperLogLogDelta<V, HllBucketListP14>;
+    let want = decode_hex(delta_hex);
+    let indices = vec![0, 2, 200, 8192, 16383];
+    let registers = vec![51, 1, 9, 7, 1];
+    let delta = Delta::<Variant>::new(indices, registers).expect("valid");
+    assert_eq!(delta.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Delta::<Variant>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    let mut state =
+        HyperLogLogP14::<Variant>::deserialize_from_bytes(&decode_hex(state_hex)).expect("state");
+    state.merge_delta(&decoded);
+    let mut expected = vec![0u8; 16384];
+    for (index, value) in [(0, 51), (1, 7), (2, 1), (200, 9), (8192, 42), (16383, 51)] {
+        expected[index] = value;
+    }
+    assert_eq!(state.registers_as_slice(), expected.as_slice());
+}
+
+#[test]
+fn hll_classic_p14_delta_matches_golden() {
+    assert_hll_p14_delta::<Classic>(GOLDEN_CLASSIC_P14_DELTA, GOLDEN_CLASSIC_P14);
+}
+
+#[test]
+fn hll_ertl_mle_p14_delta_matches_golden() {
+    assert_hll_p14_delta::<ErtlMLE>(GOLDEN_ERTL_P14_DELTA, GOLDEN_ERTL_P14);
 }
 
 // ---------------------------------------------------------------------------

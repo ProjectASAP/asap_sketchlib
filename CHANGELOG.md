@@ -79,6 +79,10 @@ signals a backwards-compatible change.
   CMSHeap insert and merge, with unrounded `f64` heap counts.
 - **`CSHeapDelta`**, the ASAPv1 CSHeap delta (`0x0a 0x80`), and unrounded
   `f64` heap counts for an `f64` CSHeap (`CsHeapCounter`).
+- **`HyperLogLogDelta`**, the ASAPv1 HLL Classic and Ertl-MLE deltas
+  (`0x01 0x81`, `0x01 0x82`): built with `new` from changed registers,
+  serialized like a sketch, and merged register-wise by `max` with
+  `HyperLogLogImpl::merge_delta`.
 
 ### Changed
 

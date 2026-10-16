@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators), Count-Min with its delta (`CountMinDelta`), CMSHeap with its delta (`CMSHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap with its delta (`CSHeapDelta`), DDSketch, KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH and UnivMon-Q.
+- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinDelta`), CMSHeap with its delta (`CMSHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap with its delta (`CSHeapDelta`), DDSketch, KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH and UnivMon-Q.
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -186,8 +186,8 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x01 0x01` | HLL | Classic ("Regular") | Section 3.1 | implemented |
 | `0x01 0x02` | HLL | Ertl-MLE ("Datafusion") | Section 3.1 | implemented |
 | `0x01 0x03` | HLL | HIP | Section 3.1 | implemented |
-| `0x01 0x81` | HLL | Classic delta | Section 3.23 | designed |
-| `0x01 0x82` | HLL | Ertl-MLE delta | Section 3.23 | designed |
+| `0x01 0x81` | HLL | Classic delta | Section 3.23 | implemented |
+| `0x01 0x82` | HLL | Ertl-MLE delta | Section 3.23 | implemented |
 | `0x02 0x00` | Count-Min | Count-Min | Section 3.2 | implemented |
 | `0x02 0x80` | Count-Min | Count-Min delta | Section 3.23 | implemented |
 | `0x03 0x00` | Count-Min-with-heap (CMSHeap) | Count-Min + top-k heap | Section 3.7 | implemented |
