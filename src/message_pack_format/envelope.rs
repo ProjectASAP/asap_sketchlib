@@ -227,6 +227,10 @@ mod tests {
         let cms_heap_delta = hex(include_str!(
             "../../asapv1_golden/cmsheap_i64_regular_2x3_delta.hex"
         ));
+        let set = hex(include_str!(
+            "../../asapv1_golden/set_aggregator_strings.hex"
+        ));
+        let delta = hex(include_str!("../../asapv1_golden/delta_result_strings.hex"));
 
         let str_keys = ["alpha", "beta", "gamma", "alpha", "alpha"].map(DataInput::Str);
         let bytes_keys = [b"ab", b"cd", b"ab"].map(|key| DataInput::Bytes(key));
@@ -308,6 +312,8 @@ mod tests {
             case!("CS", cs, Cs),
             case!("CS delta", cs_delta, sketches::CountSketchDelta<i64, RegularPath>),
             case!("KLL", kll, KLL<f64>),
+            case!("SetAggregator", set, SetAggregator),
+            case!("DeltaResult", delta, DeltaResult),
             sketch!("KLL dynamic", kll_dynamic, KLLDynamic<f64>),
             sketch!("CMSHeap", cms_heap, CmsHeap),
             sketch!("CMSHeap bytes", cms_heap_bytes, CmsHeap),

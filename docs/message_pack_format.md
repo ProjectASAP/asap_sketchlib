@@ -138,6 +138,10 @@ Converted:
 - **ExponentialHistogram** (`src/sketch_framework/eh/wire.rs`, `0x13 0x00`) and
   **EHSketchList** (`src/sketch_framework/eh_sketch_list/wire.rs`, `0x14 0x00`) —
   one `[kind_id, descriptor, state]` triple, standalone and per bucket.
+- **SetAggregator** and **DeltaResult**
+  (`src/message_pack_format/portable/set_aggregator/wire.rs`, `0x08 0x00` and
+  `0x08 0x80`) — the members, and the added and removed members, as strictly
+  ascending `str` arrays.
 
 NitroBatch, FoldCMS, FoldCS, HashSketchEnsemble, EHUnivOptimized and OctoSketch
 have **no `wire.rs`**; their `kind_id`s are reserved with payload TBD.
@@ -169,10 +173,10 @@ decode → re-encode them byte-identically. The `kind_id` registry is mirrored
 verbatim with Go's `wire/asapmsgpack/magic_ids.go`, never independently
 allocated.
 
-That proof covers the six `kind_id`s a fixture exists for — HLL's three
-estimators, Count-Min, Count Sketch and compact KLL. Every other implemented
-kind has **no ASAPv1 golden and therefore no ASAPv1 drift guard**;
-[its README](https://github.com/ProjectASAP/sketchlib-golden-bytes#coverage) lists what is covered.
+That proof covers the eight `kind_id`s the test checks — HLL's three
+estimators, Count-Min, Count Sketch, compact KLL, SetAggregator and its delta.
+Every other implemented kind has **no ASAPv1 golden and therefore no ASAPv1
+drift guard**; [its README](https://github.com/ProjectASAP/sketchlib-golden-bytes#coverage) lists what is covered.
 The older `portable` path is guarded separately, by the `sketchlib-go` goldens
 of its own listed above.
 

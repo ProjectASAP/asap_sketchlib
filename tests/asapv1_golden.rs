@@ -8,13 +8,15 @@
 //!
 //! See `asapv1_golden/README.md`.
 
+use std::collections::HashSet;
+
 use asap_sketchlib::sketches::CountSketchDelta;
 use asap_sketchlib::sketches::hll::HllWireVariant;
 use asap_sketchlib::{
-    CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Count, CountMin, CountMinDelta, ErtlMLE,
-    FastPath, HHHeap, HeapCount, HeapItem, HllBucketListP14, HllSketch, HllVariant,
-    HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogP12, HyperLogLogP14, KLL, MessagePackCodec,
-    RegularPath, Vector2D, peek_kind_id,
+    CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Count, CountMin, CountMinDelta,
+    DeltaResult, ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HllBucketListP14, HllSketch,
+    HllVariant, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogP12, HyperLogLogP14, KLL,
+    MessagePackCodec, RegularPath, SetAggregator, Vector2D, peek_kind_id,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -60,6 +62,10 @@ const GOLDEN_CSHEAP_F64: &str = include_str!("../asapv1_golden/csheap_f64_fast_2
 const GOLDEN_CSHEAP_DELTA: &str = include_str!("../asapv1_golden/csheap_i64_regular_2x4_delta.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
+const GOLDEN_SET_STRINGS: &str = include_str!("../asapv1_golden/set_aggregator_strings.hex");
+const GOLDEN_SET_EMPTY: &str = include_str!("../asapv1_golden/set_aggregator_empty.hex");
+const GOLDEN_DELTA_STRINGS: &str = include_str!("../asapv1_golden/delta_result_strings.hex");
+const GOLDEN_DELTA_EMPTY: &str = include_str!("../asapv1_golden/delta_result_empty.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -676,6 +682,80 @@ fn kll_i64_k200_matches_golden() {
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
     assert_eq!(decoded.quantile(0.0), 1.0);
     assert_eq!(decoded.quantile(1.0), 50.0);
+}
+
+// ---------------------------------------------------------------------------
+// SetAggregator and its delta: set the members directly -> serialize ==
+// golden, and golden round-trips.
+// ---------------------------------------------------------------------------
+
+fn set_of(members: &[&str]) -> HashSet<String> {
+    members.iter().map(|m| m.to_string()).collect()
+}
+
+fn set_aggregator_matches(golden: &str, members: &[&str]) {
+    let want = decode_hex(golden);
+    let set = SetAggregator {
+        values: set_of(members),
+    };
+    assert_eq!(set.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = SetAggregator::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.values, set.values);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+fn delta_result_matches(golden: &str, added: &[&str], removed: &[&str]) {
+    let want = decode_hex(golden);
+    let delta = DeltaResult {
+        added: set_of(added),
+        removed: set_of(removed),
+    };
+    assert_eq!(delta.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = DeltaResult::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.added, delta.added);
+    assert_eq!(decoded.removed, delta.removed);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn set_aggregator_strings_matches_golden() {
+    set_aggregator_matches(
+        GOLDEN_SET_STRINGS,
+        &[
+            "\u{1f600}",
+            "web",
+            "\u{ff5e}",
+            "abcdefghijklmnopqrstuvwxyz012345",
+            "",
+            "\u{4e2d}",
+            "abc",
+            "fixstr-max-31-bytes-0123456789a",
+            "\u{e9}",
+            "api",
+            "ab",
+        ],
+    );
+}
+
+#[test]
+fn set_aggregator_empty_matches_golden() {
+    set_aggregator_matches(GOLDEN_SET_EMPTY, &[]);
+}
+
+#[test]
+fn delta_result_strings_matches_golden() {
+    delta_result_matches(
+        GOLDEN_DELTA_STRINGS,
+        &["\u{1f600}", "queue", "\u{e9}t\u{e9}"],
+        &["\u{4e2d}", "db", "", "cache"],
+    );
+}
+
+#[test]
+fn delta_result_empty_matches_golden() {
+    delta_result_matches(GOLDEN_DELTA_EMPTY, &[], &[]);
 }
 
 // ---------------------------------------------------------------------------

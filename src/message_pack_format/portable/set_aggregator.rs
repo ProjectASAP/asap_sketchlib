@@ -1,15 +1,16 @@
 //! Set aggregator: wire-format type for tracking a set of unique string keys.
 //!
 //! `SetAggregator` is not a sketch — it's a plain `HashSet<String>` wrapped
-//! for cross-language interop. Wire format: `StringSet { values:
-//! HashSet<String> }` in MessagePack. No `sketches::*` equivalent exists,
-//! so both the wire shape and the runtime API live here.
+//! for cross-language interop. `serialize_to_bytes` writes ASAPv1 (§3.21);
+//! [`MessagePackCodec`] writes `StringSet { values: HashSet<String> }`.
 
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
+
+mod wire;
 
 /// Set aggregator for tracking a set of unique string keys.
 #[derive(Debug, Clone)]

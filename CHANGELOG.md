@@ -83,6 +83,8 @@ signals a backwards-compatible change.
   (`0x01 0x81`, `0x01 0x82`): built with `new` from changed registers,
   serialized like a sketch, and merged register-wise by `max` with
   `HyperLogLogImpl::merge_delta`.
+- **ASAPv1 for `SetAggregator` (`0x08 0x00`) and `DeltaResult` (`0x08 0x80`)**:
+  `serialize_to_bytes` / `deserialize_from_bytes` on both types.
 
 ### Changed
 
