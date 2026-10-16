@@ -9,8 +9,8 @@
 //! See `asapv1_golden/README.md`.
 
 use asap_sketchlib::{
-    Classic, Count, CountMin, ErtlMLE, FastPath, HllSketch, HllVariant, HyperLogLogHIPP12,
-    HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D, peek_kind_id,
+    Classic, Count, CountMin, CountMinDelta, ErtlMLE, FastPath, HllSketch, HllVariant,
+    HyperLogLogHIPP12, HyperLogLogP12, KLL, MessagePackCodec, RegularPath, Vector2D, peek_kind_id,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -27,6 +27,8 @@ const GOLDEN_ERTL: &str = include_str!("../asapv1_golden/hll_ertl_mle_p12.hex");
 const GOLDEN_HIP: &str = include_str!("../asapv1_golden/hll_hip_p12.hex");
 const GOLDEN_CMS_I64: &str = include_str!("../asapv1_golden/cms_i64_regular_2x3.hex");
 const GOLDEN_CMS_F64: &str = include_str!("../asapv1_golden/cms_f64_fast_2x3.hex");
+const GOLDEN_CMS_I64_DELTA: &str = include_str!("../asapv1_golden/cms_i64_regular_2x3_delta.hex");
+const GOLDEN_CMS_F64_DELTA: &str = include_str!("../asapv1_golden/cms_f64_fast_2x3_delta.hex");
 const GOLDEN_CS_REGULAR: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4.hex");
 const GOLDEN_CS_FAST: &str = include_str!("../asapv1_golden/cs_i64_fast_2x4.hex");
 const GOLDEN_CS_I32: &str = include_str!("../asapv1_golden/cs_i32_regular_2x4.hex");
@@ -160,6 +162,47 @@ fn cms_f64_fast_2x3_matches_golden() {
     let flat: Vec<f64> = F64_VALS.iter().flatten().copied().collect();
     assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// Count-Min delta: build known delta -> serialize == golden, round-trips, and
+// merged into the matching state golden gives the expected state.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cms_i64_regular_2x3_delta_matches_golden() {
+    type Cms = CountMin<Vector2D<i64>, RegularPath>;
+    let want = decode_hex(GOLDEN_CMS_I64_DELTA);
+    let indices = vec![0, 1, 2, 4, 5];
+    let deltas = vec![127, -1, -33, -32769, 4294967296];
+    let delta = CountMinDelta::<i64, RegularPath>::new(2, 3, indices, deltas).expect("valid");
+    assert_eq!(delta.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = CountMinDelta::<i64, RegularPath>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    let mut state = Cms::deserialize_from_bytes(&decode_hex(GOLDEN_CMS_I64)).expect("state");
+    state.merge_delta(&decoded).expect("merge");
+    let expected = [127, 0, 94, 128, -32469, 4295032832];
+    assert_eq!(state.as_storage().as_slice(), expected.as_slice());
+}
+
+#[test]
+fn cms_f64_fast_2x3_delta_matches_golden() {
+    type Cms = CountMin<Vector2D<f64>, FastPath>;
+    let want = decode_hex(GOLDEN_CMS_F64_DELTA);
+    let indices = vec![0, 3, 5];
+    let deltas = vec![2.5, -0.75, -5.0625];
+    let delta = CountMinDelta::<f64, FastPath>::new(2, 3, indices, deltas).expect("valid");
+    assert_eq!(delta.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = CountMinDelta::<f64, FastPath>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    let mut state = Cms::deserialize_from_bytes(&decode_hex(GOLDEN_CMS_F64)).expect("state");
+    state.merge_delta(&decoded).expect("merge");
+    let expected = [2.5, 1.5, 2.25, 3.0, 4.125, 0.0];
+    assert_eq!(state.as_storage().as_slice(), expected.as_slice());
 }
 
 // ---------------------------------------------------------------------------

@@ -213,6 +213,9 @@ mod tests {
         let classic = hex(include_str!("../../asapv1_golden/hll_classic_p12.hex"));
         let hip = hex(include_str!("../../asapv1_golden/hll_hip_p12.hex"));
         let cms = hex(include_str!("../../asapv1_golden/cms_i64_regular_2x3.hex"));
+        let cms_delta = hex(include_str!(
+            "../../asapv1_golden/cms_i64_regular_2x3_delta.hex"
+        ));
         let cs = hex(include_str!("../../asapv1_golden/cs_i64_regular_2x4.hex"));
         let kll = hex(include_str!("../../asapv1_golden/kll_f64_k200.hex"));
 
@@ -291,6 +294,7 @@ mod tests {
             ("HLL portable classic", classic, portable),
             ("HLL portable HIP", hip, portable),
             case!("CMS", cms, Cms),
+            case!("CMS delta", cms_delta, CountMinDelta<i64, RegularPath>),
             case!("CS", cs, Cs),
             case!("KLL", kll, KLL<f64>),
             sketch!("KLL dynamic", kll_dynamic, KLLDynamic<f64>),

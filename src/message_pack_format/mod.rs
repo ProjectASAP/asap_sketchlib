@@ -18,6 +18,7 @@
 //! [`MessagePackCodec`] and [`Error`] are the contract both share.
 
 pub mod codec;
+pub(crate) mod delta;
 pub(crate) mod envelope;
 pub mod error;
 pub mod native;

@@ -74,7 +74,7 @@ pub use mode::{FastPath, RegularPath};
 
 pub mod countminsketch;
 pub use crate::MatrixStorage;
-pub use countminsketch::{CountMin, QUICKSTART_COL_NUM, QUICKSTART_ROW_NUM};
+pub use countminsketch::{CountMin, CountMinDelta, QUICKSTART_COL_NUM, QUICKSTART_ROW_NUM};
 
 pub mod elastic;
 pub use elastic::Elastic;

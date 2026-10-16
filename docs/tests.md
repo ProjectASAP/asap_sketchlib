@@ -31,6 +31,8 @@ Test file: [`src/sketches/countminsketch.rs`](../src/sketches/countminsketch.rs)
 
 Wire tests: [`src/sketches/countminsketch/wire.rs`](../src/sketches/countminsketch/wire.rs)
 
+Delta tests: [`src/sketches/countminsketch/delta.rs`](../src/sketches/countminsketch/delta.rs)
+
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
 | `dimension_test` | Default/custom dimensions initialize zeroed counters. | Verifies default dimensions (`rows=3`, `cols=4096`), custom dimensions (`3x17`), and zero-initialized counters after construction. |
@@ -50,6 +52,10 @@ Wire tests: [`src/sketches/countminsketch/wire.rs`](../src/sketches/countminsket
 | `count_min_rejects_too_many_rows` | More rows than the seed list has seeds is refused on both sides. | Verifies a sketch past `MATRIX_MAX_ROWS` fails to serialize, that a crafted envelope of that geometry fails to decode with a message naming `MATRIX_MAX_ROWS`, and that the boundary row count still serializes. |
 | `estimate_does_not_clamp_i64_counts_above_i32_max` | An `i64` counter's estimate is not clamped at `i32::MAX`. | Inserts `Str("pkt_len")` with weight `35_000_000_000` into a `3x64` `CountMin<Vector2D<i64>, RegularPath>` through `insert_many` and verifies `estimate` is at or above that count and is not `i32::MAX as i64`. |
 | `merge_requires_matching_dimensions` | Merging across row counts panics. | Verifies merging a `3x32` `CountMin<Vector2D<i32>, RegularPath>` into a `2x32` one panics with "dimension mismatch while merging CountMin sketches". |
+| `decode_rejects_each_payload_rule` | A `0x02 0x80` payload breaking any delta rule fails to decode. | For a `2x3` `i64` delta, verifies `[[0, 5], [1, -1]]` decodes and that unequal lengths, a repeated index, index `6`, and a zero delta each fail. |
+| `decode_rejects_another_kind` | A delta decodes only under its own kind_id. | Verifies the `cms_i64_regular_2x3_delta` golden decodes and fails with its kind_id relabelled `0x02 0x00`. |
+| `new_rejects_a_geometry_past_the_seed_list` | A delta has the state's wire geometry. | Verifies `new` accepts `20` rows and refuses `21`. |
+| `merge_delta_rejects_without_changing_the_state` | A rejected delta leaves the sketch unchanged. | Verifies a `2x3` delta fails on a `3x2` sketch, that a delta whose last cell overflows `i32::MAX` fails with its first cell unadded, and that an unfilled matrix fails rather than panics. |
 
 ### Count
 
@@ -1574,6 +1580,7 @@ Test file: [`src/message_pack_format/envelope.rs`](../src/message_pack_format/en
 | `round_trip_frames_metadata_and_payload` | `encode` frames the two blocks and `split` hands them back unchanged. | Verifies `encode(&[0x01, 0x03], b"meta-block", b"payload-bytes")` opens with `MAGIC`, carries `VERSION` at byte `6` and a `kind_id_len` of `2` at byte `7`, and that `split` returns the kind_id, metadata, and payload byte for byte. |
 | `rejects_bad_magic_and_version` | A wrong magic byte and an unknown version both fail. | Verifies `split` accepts `encode(&[0x01, 0x01], b"m", b"p")`, then rejects the same bytes with byte `0` set to `b'X'`, and rejects them with the version byte `6` set to `0xFF`. |
 | `rejects_truncation` | A truncated envelope fails rather than indexing past its slices. | Verifies `split` rejects `encode(&[0x01, 0x01], b"metadata", b"payload")` cut by its last byte, and rejects it cut to its first three bytes. |
+
 
 ## Integration Suites
 

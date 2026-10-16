@@ -73,6 +73,26 @@ list length): past that, the regular path gives row `r` and row `r + 20` the
 same seed and identical counters, so a wider matrix is refused on both sides in
 either mode.
 
+## Deltas
+
+```rust
+CountMinDelta<T = i32, Mode = RegularPath, H = DefaultXxHasher>
+
+fn new(rows: usize, cols: usize, indices: Vec<u64>, deltas: Vec<T>) -> Result<Self, String>
+fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+
+// on CountMin<Vector2D<T>, Mode, H>
+fn merge_delta(&mut self, delta: &CountMinDelta<T, Mode, H>) -> Result<(), String>
+```
+
+A `CountMinDelta` is the ASAPv1 delta kind `0x02 0x80`, for the same configs
+as the state serialization: the changed cells as strictly ascending row-major
+indices `row * cols + col`, below `rows * cols`, and the non-zero value added
+to each. `new` and the decoder refuse anything else. `merge_delta` adds the
+delta to the counters; a delta of other dimensions, or an integer add that
+overflows, fails and leaves the sketch unchanged.
+
 ## Examples
 
 ```rust

@@ -1,0 +1,189 @@
+//! The Count-Min delta, ASAPv1 kind `0x02 0x80` (`docs/asapv1_wire_format.md`
+//! §3.23). Its metadata is the state's (§3.2); its payload is
+//! `[indices, deltas]`.
+
+use std::marker::PhantomData;
+
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
+use serde::{Deserialize, Serialize};
+
+use crate::message_pack_format::delta::{add_cells, check_cells};
+use crate::message_pack_format::envelope;
+use crate::message_pack_format::wire_key::exact_vec;
+use crate::{DefaultXxHasher, HashProfile, RegularPath, SketchHasher, Vector2D};
+
+use super::CountMin;
+use super::wire::{CmsWireCounter, CmsWireMode, check_geometry, decode_metadata, encode_metadata};
+
+/// Count-Min delta kind_id: the state's `0x02 0x00` with the variant's top bit set.
+const CMS_DELTA_KIND: &[u8] = &[0x02, 0x80];
+
+/// A change to a `rows x cols` [`CountMin`] state: each value of `deltas` is
+/// added to the cell its position names in `indices`, a row-major index
+/// `row * cols + col`. Indices are strictly ascending and below `rows * cols`,
+/// and no delta is zero.
+#[derive(Clone, Debug)]
+pub struct CountMinDelta<T = i32, Mode = RegularPath, H = DefaultXxHasher> {
+    rows: usize,
+    cols: usize,
+    indices: Vec<u64>,
+    deltas: Vec<T>,
+    _config: PhantomData<(Mode, H)>,
+}
+
+/// The delta payload: `[indices, deltas]`.
+#[derive(Serialize, Deserialize)]
+struct CmsDeltaPayload<T> {
+    indices: Vec<u64>,
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "T: Deserialize<'de>")
+    )]
+    deltas: Vec<T>,
+}
+
+impl<T, Mode, H> CountMinDelta<T, Mode, H>
+where
+    T: CmsWireCounter + Serialize + for<'de> Deserialize<'de>,
+    Mode: CmsWireMode,
+    H: SketchHasher + HashProfile,
+{
+    /// Builds a delta over a `rows x cols` matrix from the changed cells. Fails
+    /// when the geometry is not wire-eligible or the cells break the rules above.
+    pub fn new(
+        rows: usize,
+        cols: usize,
+        indices: Vec<u64>,
+        deltas: Vec<T>,
+    ) -> Result<Self, String> {
+        check_geometry(rows, cols)?;
+        check_cells(&indices, &deltas, ..rows as u64 * cols as u64)
+            .map_err(|e| format!("CMS delta: {e}"))?;
+        Ok(Self {
+            rows,
+            cols,
+            indices,
+            deltas,
+            _config: PhantomData,
+        })
+    }
+
+    /// Serializes the delta into an ASAPv1 MessagePack envelope.
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        let metadata = encode_metadata::<T, Mode, H>(self.rows, self.cols)?;
+        let payload = rmp_serde::to_vec(&CmsDeltaPayload {
+            indices: self.indices.clone(),
+            deltas: self.deltas.clone(),
+        })?;
+        Ok(envelope::encode(CMS_DELTA_KIND, &metadata, &payload))
+    }
+
+    /// Deserializes a delta from an ASAPv1 MessagePack envelope.
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        let (kind_id, metadata, payload) =
+            envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        if kind_id != CMS_DELTA_KIND {
+            return Err(RmpDecodeError::Uncategorized(format!(
+                "CMS delta kind_id mismatch: stored {kind_id:?}, expected {CMS_DELTA_KIND:?}"
+            )));
+        }
+        let (rows, cols) = decode_metadata::<T, Mode, H>(metadata)?;
+        let p: CmsDeltaPayload<T> = envelope::decode_block(payload)?;
+        Self::new(rows, cols, p.indices, p.deltas).map_err(RmpDecodeError::Uncategorized)
+    }
+}
+
+impl<T, Mode, H> CountMin<Vector2D<T>, Mode, H>
+where
+    T: CmsWireCounter + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
+    Mode: CmsWireMode,
+    H: SketchHasher + HashProfile,
+{
+    /// Adds a delta to the counters. Fails, changing nothing, when the delta is
+    /// for another geometry or an integer add overflows.
+    pub fn merge_delta(&mut self, delta: &CountMinDelta<T, Mode, H>) -> Result<(), String> {
+        if (self.rows(), self.cols()) != (delta.rows, delta.cols) {
+            return Err(format!(
+                "CMS delta: metadata mismatch: a {}x{} delta for a {}x{} sketch",
+                delta.rows,
+                delta.cols,
+                self.rows(),
+                self.cols()
+            ));
+        }
+        add_cells(self.counts.as_mut_slice(), &delta.indices, &delta.deltas)
+            .map_err(|e| format!("CMS delta: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message_pack_format::envelope::hex;
+
+    type Delta = CountMinDelta<i64, RegularPath>;
+
+    /// A 2x3 `i64` delta envelope around the given payload arrays.
+    fn delta_bytes(indices: &[u64], deltas: &[i64]) -> Vec<u8> {
+        let metadata = encode_metadata::<i64, RegularPath, DefaultXxHasher>(2, 3).unwrap();
+        let payload = rmp_serde::to_vec(&(indices, deltas)).unwrap();
+        envelope::encode(CMS_DELTA_KIND, &metadata, &payload)
+    }
+
+    #[test]
+    fn decode_rejects_each_payload_rule() {
+        assert!(Delta::deserialize_from_bytes(&delta_bytes(&[0, 5], &[1, -1])).is_ok());
+        let rows: [(&str, &[u64], &[i64]); 4] = [
+            ("unequal lengths", &[0, 1], &[1]),
+            ("repeated index", &[1, 1], &[1, 1]),
+            ("index rows * cols", &[6], &[1]),
+            ("zero delta", &[0], &[0]),
+        ];
+        for (label, indices, deltas) in rows {
+            assert!(
+                Delta::deserialize_from_bytes(&delta_bytes(indices, deltas)).is_err(),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_rejects_another_kind() {
+        let delta = hex(include_str!(
+            "../../../asapv1_golden/cms_i64_regular_2x3_delta.hex"
+        ));
+        assert!(Delta::deserialize_from_bytes(&delta).is_ok());
+        let mut state_kind = delta.clone();
+        state_kind[9] = 0x00;
+        assert!(Delta::deserialize_from_bytes(&state_kind).is_err());
+    }
+
+    #[test]
+    fn new_rejects_a_geometry_past_the_seed_list() {
+        assert!(Delta::new(20, 3, vec![0], vec![1]).is_ok());
+        assert!(Delta::new(21, 3, vec![0], vec![1]).is_err());
+    }
+
+    #[test]
+    fn merge_delta_rejects_without_changing_the_state() {
+        let delta = |indices: Vec<u64>, deltas: Vec<i32>| {
+            CountMinDelta::<i32, RegularPath>::new(2, 3, indices, deltas).unwrap()
+        };
+        let mut transposed = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 2);
+        assert!(transposed.merge_delta(&delta(vec![0], vec![1])).is_err());
+        assert_eq!(transposed.as_storage().as_slice(), &[0; 6]);
+
+        let cells = |_, c| if c == 2 { i32::MAX } else { 0 };
+        let mut full =
+            CountMin::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(2, 3, cells));
+        assert!(full.merge_delta(&delta(vec![0, 5], vec![1, 1])).is_err());
+        assert_eq!(
+            full.as_storage().as_slice(),
+            &[0, 0, i32::MAX, 0, 0, i32::MAX]
+        );
+
+        let mut unfilled =
+            CountMin::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::init(2, 3));
+        assert!(unfilled.merge_delta(&delta(vec![0], vec![1])).is_err());
+    }
+}

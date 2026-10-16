@@ -351,6 +351,9 @@ mod tests {
         let sdd = &signed.serialize_to_bytes().unwrap();
         let hip = &hex(include_str!("../../asapv1_golden/hll_hip_p12.hex"));
         let cms = &hex(include_str!("../../asapv1_golden/cms_f64_fast_2x3.hex"));
+        let cms_delta = &hex(include_str!(
+            "../../asapv1_golden/cms_f64_fast_2x3_delta.hex"
+        ));
         let kll = &kll.serialize_to_bytes().unwrap();
         let heap = &heap.serialize_to_bytes().unwrap();
         let ss = &space_saving.serialize_to_bytes().unwrap();
@@ -360,6 +363,7 @@ mod tests {
         let dd_ok = |b: &[u8]| DDSketch::deserialize_from_bytes(b).is_ok();
         let hip_ok = |b: &[u8]| HyperLogLogHIPP12::deserialize_from_bytes(b).is_ok();
         let cms_ok = |b: &[u8]| CmsF64::deserialize_from_bytes(b).is_ok();
+        let delta_ok = |b: &[u8]| CountMinDelta::<f64, FastPath>::deserialize_from_bytes(b).is_ok();
         let kll_ok = |b: &[u8]| KLL::<f64>::deserialize_from_bytes(b).is_ok();
         let heap_ok = |b: &[u8]| HeapF64::deserialize_from_bytes(b).is_ok();
         let ss_ok = |b: &[u8]| SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(b).is_ok();
@@ -378,6 +382,7 @@ mod tests {
             row("HLL hip_kxq1", hip, 2.5, F32, hip_ok),
             row("HLL hip_est", hip, 3.0, Int, hip_ok),
             row("CMS f64 count", cms, 1.5, F32, cms_ok),
+            row("CMS f64 delta", cms_delta, 2.5, Int, delta_ok),
             row("KLL f64 item", kll, 7.0, Int, kll_ok),
             row("CMSHeap f64 count", heap, 1.0, Int, heap_ok),
             row("CMSHeap f32 key", heap, 1.5, F64, heap_ok),

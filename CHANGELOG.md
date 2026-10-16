@@ -68,6 +68,9 @@ signals a backwards-compatible change.
   payload is unchanged.
 - **`peek_kind_id(&[u8])`** returns an ASAPv1 envelope's `kind_id` after
   checking its magic, version, and framing, without decoding the sketch.
+- **`CountMinDelta`**, the ASAPv1 Count-Min delta (`0x02 0x80`): built with
+  `new` from changed cells, serialized like a sketch, and added with
+  `CountMin::merge_delta`, which changes nothing when it fails.
 
 ### Changed
 
