@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinDelta`), CMSHeap with its delta (`CMSHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap with its delta (`CSHeapDelta`), DDSketch, KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH, UnivMon-Q, and SetAggregator with its delta (`DeltaResult`).
+- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinDelta`), CMSHeap with its delta (`CMSHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap with its delta (`CSHeapDelta`), DDSketch with its delta (`DDSketchDelta`), KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH, UnivMon-Q, and SetAggregator with its delta (`DeltaResult`).
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -195,7 +195,7 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x04 0x00` | Count Sketch | Count Sketch | Section 3.6 | implemented |
 | `0x04 0x80` | Count Sketch | Count Sketch delta | Section 3.23 | implemented |
 | `0x05 0x00` | DDSketch | Logarithmic bucket stores | Section 3.8 | implemented |
-| `0x05 0x80` | DDSketch | DDSketch delta | Section 3.23 | designed |
+| `0x05 0x80` | DDSketch | DDSketch delta | Section 3.23 | implemented |
 | `0x06 0x00` | KLL | Compact | Section 3.3 | implemented |
 | `0x06 0x01` | KLL dynamic | Dynamic | Section 3.3 | implemented |
 | `0x07 0x00` | Hydra | KLL counter | Section 3.9 | implemented |

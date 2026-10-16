@@ -325,7 +325,6 @@ mod tests {
         type CmsF64 = CountMin<Vector2D<f64>, FastPath>;
         type HeapF64 = CMSHeap<Vector2D<f64>, RegularPath>;
         let mut positive = DDSketch::new(0.25);
-        let mut signed = DDSketch::new(0.25);
         let mut kll = KLL::<f64>::init_kll_with_seed(200, 1);
         let mut heap = HeapF64::from_storage(Vector2D::from_fn(2, 4, |r, c| (r * 4 + c) as f64), 4);
         let mut space_saving: SpaceSaving = SpaceSaving::with_capacity(4);
@@ -334,7 +333,6 @@ mod tests {
             .expect("schema");
         for value in [1.0, 2.0] {
             positive.add(&value);
-            signed.add(&-value);
         }
         for value in [1.0, 2.5, 7.0] {
             kll.update(&value);
@@ -353,7 +351,6 @@ mod tests {
             .expect("arity");
 
         let dd = &positive.serialize_to_bytes().unwrap();
-        let sdd = &signed.serialize_to_bytes().unwrap();
         let hip = &hex(include_str!("../../asapv1_golden/hll_hip_p12.hex"));
         let cms = &hex(include_str!("../../asapv1_golden/cms_f64_fast_2x3.hex"));
         let cms_delta = &hex(include_str!(
@@ -391,9 +388,6 @@ mod tests {
             row("DDSketch sum", dd, 3.0, Int, dd_ok),
             row("DDSketch min", dd, 1.0, Int, dd_ok),
             row("DDSketch max", dd, 2.0, F32, dd_ok),
-            row("DDSketch signed sum", sdd, -3.0, Int, dd_ok),
-            row("DDSketch signed min", sdd, -2.0, Int, dd_ok),
-            row("DDSketch signed max", sdd, -1.0, F32, dd_ok),
             row("HLL hip_kxq0", hip, 1.5, F32, hip_ok),
             row("HLL hip_kxq1", hip, 2.5, F32, hip_ok),
             row("HLL hip_est", hip, 3.0, Int, hip_ok),

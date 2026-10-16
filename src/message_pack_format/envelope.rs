@@ -231,6 +231,9 @@ mod tests {
             "../../asapv1_golden/set_aggregator_strings.hex"
         ));
         let delta = hex(include_str!("../../asapv1_golden/delta_result_strings.hex"));
+        let dd_delta = hex(include_str!(
+            "../../asapv1_golden/ddsketch_signed_a001_delta.hex"
+        ));
 
         let str_keys = ["alpha", "beta", "gamma", "alpha", "alpha"].map(DataInput::Str);
         let bytes_keys = [b"ab", b"cd", b"ab"].map(|key| DataInput::Bytes(key));
@@ -266,7 +269,6 @@ mod tests {
         elastic.insert("flow::a".to_string());
         let mut kll_dynamic = KLLDynamic::<f64>::init_kll(200);
         let mut positive = DDSketch::new(0.01);
-        let mut signed = DDSketch::new(0.01);
         let config = UnivMonQConfig {
             levels: 4,
             width: 64,
@@ -281,7 +283,6 @@ mod tests {
         for value in [1.0, 2.5, 7.0] {
             kll_dynamic.update(&value);
             positive.add(&value);
-            signed.add(&-value);
             univmon_q.update(&value);
         }
         let cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8);
@@ -321,7 +322,7 @@ mod tests {
             sketch!("CSHeap", cs_heap, CsHeap),
             sketch!("CountL2HH", l2hh, CountL2HH),
             sketch!("DDSketch", positive, DDSketch),
-            sketch!("DDSketch signed", signed, DDSketch),
+            case!("DDSketch delta", dd_delta, DDSketchDelta),
             sketch!("Bloom", bloom, Bloom<RegularPath>),
             sketch!("SpaceSaving string", ss, SpaceSaving),
             sketch!("SpaceSaving u64", ss_u64, SpaceSaving),

@@ -104,7 +104,7 @@ pub mod uniform;
 pub use uniform::UniformSampling;
 
 pub mod ddsketch;
-pub use ddsketch::DDSketch;
+pub use ddsketch::{DDSketch, DDSketchDelta};
 
 pub mod countminsketch_topk;
 pub use countminsketch_topk::{CMSHeap, CMSHeapDelta};

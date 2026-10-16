@@ -13,10 +13,10 @@ use std::collections::HashSet;
 use asap_sketchlib::sketches::CountSketchDelta;
 use asap_sketchlib::sketches::hll::HllWireVariant;
 use asap_sketchlib::{
-    CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Count, CountMin, CountMinDelta,
-    DeltaResult, ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HllBucketListP14, HllSketch,
-    HllVariant, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogP12, HyperLogLogP14, KLL,
-    MessagePackCodec, RegularPath, SetAggregator, Vector2D, peek_kind_id,
+    CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Count, CountMin, CountMinDelta, DDSketch,
+    DDSketchDelta, DeltaResult, ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HllBucketListP14,
+    HllSketch, HllVariant, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogP12, HyperLogLogP14,
+    KLL, MessagePackCodec, RegularPath, SetAggregator, Vector2D, peek_kind_id,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -60,6 +60,10 @@ const GOLDEN_CMSHEAP_DELTA: &str =
 const GOLDEN_CSHEAP_STR: &str = include_str!("../asapv1_golden/csheap_i64_regular_2x4_strkeys.hex");
 const GOLDEN_CSHEAP_F64: &str = include_str!("../asapv1_golden/csheap_f64_fast_2x4_strkeys.hex");
 const GOLDEN_CSHEAP_DELTA: &str = include_str!("../asapv1_golden/csheap_i64_regular_2x4_delta.hex");
+const GOLDEN_DD_POSITIVE: &str = include_str!("../asapv1_golden/ddsketch_positive_a001.hex");
+const GOLDEN_DD_SIGNED: &str = include_str!("../asapv1_golden/ddsketch_signed_a001.hex");
+const GOLDEN_DD_EMPTY: &str = include_str!("../asapv1_golden/ddsketch_empty_a001.hex");
+const GOLDEN_DD_DELTA: &str = include_str!("../asapv1_golden/ddsketch_signed_a001_delta.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
 const GOLDEN_SET_STRINGS: &str = include_str!("../asapv1_golden/set_aggregator_strings.hex");
@@ -682,6 +686,135 @@ fn kll_i64_k200_matches_golden() {
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
     assert_eq!(decoded.quantile(0.0), 1.0);
     assert_eq!(decoded.quantile(1.0), 50.0);
+}
+
+// ---------------------------------------------------------------------------
+// DDSketch and its delta: set the stores and scalars directly -> serialize ==
+// golden, golden round-trips, and the delta merged into the signed state gives
+// the expected stores and scalars.
+// ---------------------------------------------------------------------------
+
+const DD_ALPHA: f64 = 0.01;
+
+/// An α=0.01 DDSketch with its stores, zero count and scalars set directly,
+/// built through `DDSketch`'s serde form.
+fn dd_state(
+    positive: (&[u64], i32),
+    negative: (&[u64], i32),
+    zero_count: u64,
+    scalars: (f64, f64, f64),
+) -> DDSketch {
+    let (sum, min, max) = scalars;
+    let store = |(counts, offset): (&[u64], i32)| ((counts.to_vec(),), offset);
+    let state = (
+        DD_ALPHA,
+        store(positive),
+        sum,
+        min,
+        max,
+        store(negative),
+        zero_count,
+    );
+    rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state")
+}
+
+fn assert_dd_golden(golden: &str, sketch: &DDSketch) {
+    let want = decode_hex(golden);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+    let decoded = DDSketch::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+/// A store's non-zero buckets as `(index, count)`.
+fn dd_buckets(counts: &[u64], offset: i32) -> Vec<(i32, u64)> {
+    (offset..)
+        .zip(counts.iter().copied())
+        .filter(|&(_, c)| c != 0)
+        .collect()
+}
+
+#[test]
+fn ddsketch_positive_a001_matches_golden() {
+    let counts = [1, 0, 127, 128, 300, 65536, 4294967296];
+    let scalars = (2181071000.0, 0.453125, 0.5078125);
+    let sketch = dd_state((&counts, -40), (&[], 0), 0, scalars);
+    assert_dd_golden(GOLDEN_DD_POSITIVE, &sketch);
+}
+
+#[test]
+fn ddsketch_signed_a001_matches_golden() {
+    let scalars = (2523.90625, -0.016, 515.0);
+    let sketch = dd_state((&[3, 0, 2], 310), (&[5, 1], -208), 7, scalars);
+    assert_dd_golden(GOLDEN_DD_SIGNED, &sketch);
+}
+
+#[test]
+fn ddsketch_empty_a001_matches_golden() {
+    assert_dd_golden(GOLDEN_DD_EMPTY, &DDSketch::new(DD_ALPHA));
+}
+
+#[test]
+fn ddsketch_signed_a001_delta_matches_golden() {
+    let want = decode_hex(GOLDEN_DD_DELTA);
+    let indices = vec![-300, -100, -5, 7, 200, 400];
+    let deltas = vec![1, 127, 128, 256, 65536, 4294967296];
+    let negative_indices = vec![-208, -33, -1, 0, 130, 1000];
+    let negative_deltas = vec![2, 3, 3, 1, 3, 1];
+    let delta = DDSketchDelta::new(
+        DD_ALPHA,
+        indices.clone(),
+        deltas.clone(),
+        negative_indices.clone(),
+        negative_deltas.clone(),
+        9,
+    )
+    .expect("valid");
+    assert_eq!(delta.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = DDSketchDelta::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    let mut state = DDSketch::deserialize_from_bytes(&decode_hex(GOLDEN_DD_SIGNED)).expect("state");
+    state.merge_delta(&decoded).expect("merge");
+
+    let gamma = (1.0 + DD_ALPHA) / (1.0 - DD_ALPHA);
+    let r = |k: i32| (1.0 + DD_ALPHA) * gamma.powf(f64::from(k));
+    let mut sum = 2523.90625;
+    for (k, c) in indices.iter().zip(&deltas) {
+        sum += r(*k) * *c as f64;
+    }
+    for (k, c) in negative_indices.iter().zip(&negative_deltas) {
+        sum += -r(*k) * *c as f64;
+    }
+    assert_eq!(
+        dd_buckets(state.store_counts(), state.store_offset()),
+        [
+            (-300, 1),
+            (-100, 127),
+            (-5, 128),
+            (7, 256),
+            (200, 65536),
+            (310, 3),
+            (312, 2),
+            (400, 4294967296)
+        ]
+    );
+    assert_eq!(
+        dd_buckets(state.negative_store_counts(), state.negative_store_offset()),
+        [
+            (-208, 7),
+            (-207, 1),
+            (-33, 3),
+            (-1, 3),
+            (0, 1),
+            (130, 3),
+            (1000, 1)
+        ]
+    );
+    assert_eq!((state.zero_count(), state.get_count()), (16, 4295033384));
+    assert_eq!(state.sum(), sum);
+    assert_eq!(state.min(), Some(-r(1000)));
+    assert_eq!(state.max(), Some(r(400)));
 }
 
 // ---------------------------------------------------------------------------

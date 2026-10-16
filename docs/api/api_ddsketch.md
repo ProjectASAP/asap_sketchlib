@@ -56,24 +56,52 @@ inputs, so the metadata carries **no hash-spec group**: it is `metadata_version`
 plus `alpha`, the sketch's one construction parameter. `gamma` and its logs are
 derived from `alpha` and never reach the wire.
 
-The payload is `[counts, offset, sum, min, max]`: the dense bucket store carried
-verbatim (the bucket index of `counts[i]` is `offset + i`), plus the three
-scalars the buckets do not determine. `count` is **not** carried — it is the sum
-of the bucket counts and is recovered exactly on decode. `sum`, `min` and `max`
-come back exactly rather than as α-bounded bucket estimates, so a decoded sketch
-re-serializes byte-identically.
+Every payload is `[counts, offset, sum, min, max, negative_counts,
+negative_offset, zero_count]`: the positive store and the negative-magnitude
+store carried verbatim (the bucket index of `counts[i]` is `offset + i`), the
+three scalars the buckets do not determine, and the zero count. `count` is
+**not** carried — it is the sum of both stores and `zero_count`, recovered
+exactly on decode. `sum`, `min` and `max` come back exactly rather than as
+α-bounded bucket estimates, so a decoded sketch re-serializes byte-identically.
 
-There is one positive-range store and no zero-count bucket, because `add` drops
-non-positive, non-finite and non-indexable values. Bucket indices are still
-signed, so `offset` may be negative. Decode rejects an `alpha` outside `(0, 1)`,
-a store span past `i32`, a non-zero offset on an empty store, bucket counts that
-overflow the total, and scalars inconsistent with that total; `serialize_to_bytes`
-enforces the same rules, so the format never emits bytes it would refuse to read
-back.
+Bucket indices are signed, so either offset may be negative. Decode rejects a
+`metadata_version` other than `1`, an `alpha` outside `(0, 1)`, a store span
+past `i32`, a non-zero offset on an empty store, counts that overflow the total,
+and scalars inconsistent with that total; `serialize_to_bytes` enforces the same
+rules, so the format never emits bytes it would refuse to read back.
 
 Independently of ASAPv1, `DDSketch` is plain `Serialize`/`Deserialize` for use
 where it is nested in another type (`EHSketchList`); that form skips the four
 running scalars.
+
+## Deltas
+
+```rust
+DDSketchDelta
+
+fn new(
+    alpha: f64,
+    indices: Vec<i32>,
+    deltas: Vec<u64>,
+    negative_indices: Vec<i32>,
+    negative_deltas: Vec<u64>,
+    zero_count: u64,
+) -> Result<Self, String>
+fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+
+// on DDSketch
+fn merge_delta(&mut self, delta: &DDSketchDelta) -> Result<(), String>
+```
+
+A `DDSketchDelta` is the ASAPv1 delta kind `0x05 0x80`: the changed buckets of
+each store as strictly ascending bucket indices inside the range `alpha`'s
+mapping produces, the non-zero count added to each, and a count added to the
+zero count. `new` and the decoder refuse anything else. `merge_delta` adds each
+count to its bucket, growing the store as insertion does, and folds the
+bucket's representative into `sum`, `min` and `max`; a delta of another
+`alpha`, one that overflows the total count, or one that would grow a store
+past `i32`, fails and leaves the sketch unchanged.
 
 ## Examples
 

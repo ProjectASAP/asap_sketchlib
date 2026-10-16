@@ -85,9 +85,16 @@ signals a backwards-compatible change.
   `HyperLogLogImpl::merge_delta`.
 - **ASAPv1 for `SetAggregator` (`0x08 0x00`) and `DeltaResult` (`0x08 0x80`)**:
   `serialize_to_bytes` / `deserialize_from_bytes` on both types.
+- **`DDSketchDelta`**, the ASAPv1 DDSketch delta (`0x05 0x80`): built with
+  `new` from changed buckets of both stores and a zero-count increment,
+  serialized like a sketch, and added with `DDSketch::merge_delta`, which
+  changes nothing when it fails.
 
 ### Changed
 
+- **DDSketch has one ASAPv1 encoding**: `metadata_version` 1 with all eight
+  payload fields, the negative store and zero count included. Bytes change for
+  positive-only and empty sketches, and `metadata_version` 2 is rejected.
 - **The CMSHeap and CSHeap ASAPv1 metadata key `k` is renamed `heap_size`**,
   and the CMSHeap, CSHeap and UnivMon decoders reject heap entries out of
   emitted order. `HHItem` and `HHHeap` take a count type, `i64` by default.

@@ -115,8 +115,9 @@ Converted:
 - **CMSHeap** (`src/sketches/countminsketch_topk/wire.rs`, `0x03 0x00`) and
   **CSHeap** (`src/sketches/countsketch_topk/wire.rs`, `0x0a 0x00`) — a base
   matrix inlined ahead of the shared top-k heap entries.
-- **DDSketch** (`src/sketches/ddsketch/wire.rs`, `0x05 0x00`) — the bucket store
-  verbatim plus `offset`, `sum`, `min` and `max`; no hash-spec group.
+- **DDSketch** (`src/sketches/ddsketch/wire.rs`, `0x05 0x00`) — both bucket
+  stores verbatim with their offsets, `sum`, `min`, `max` and `zero_count`; no
+  hash-spec group.
 - **Elastic** (`src/sketches/elastic/wire.rs`, `0x0b 0x00`) — the heavy table's
   four parallel arrays, the `stale_copies` flag, and the inlined light Count-Min.
 - **Coco** (`src/sketches/coco/wire.rs`, `0x0c 0x00`) — the dense bucket table as
