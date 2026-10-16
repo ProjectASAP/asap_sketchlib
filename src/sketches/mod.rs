@@ -54,7 +54,7 @@ pub use bloom::{
 };
 
 pub mod countsketch;
-pub use countsketch::Count;
+pub use countsketch::{Count, CountSketchDelta};
 
 /// Count-Min-shaped grid with a per-bucket HyperLogLog (distinct-count) sketch.
 #[cfg(feature = "experimental")]
@@ -74,7 +74,7 @@ pub use mode::{FastPath, RegularPath};
 
 pub mod countminsketch;
 pub use crate::MatrixStorage;
-pub use countminsketch::{CountMin, QUICKSTART_COL_NUM, QUICKSTART_ROW_NUM};
+pub use countminsketch::{CountMin, CountMinDelta, QUICKSTART_COL_NUM, QUICKSTART_ROW_NUM};
 
 pub mod elastic;
 pub use elastic::Elastic;
@@ -83,8 +83,8 @@ pub use elastic::HeavyBucket;
 /// HyperLogLog implementations and aliases.
 pub mod hll;
 pub use hll::{
-    Classic, ErtlMLE, HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogHIPP14,
-    HyperLogLogHIPP16, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16,
+    Classic, ErtlMLE, HyperLogLog, HyperLogLogDelta, HyperLogLogHIP, HyperLogLogHIPP12,
+    HyperLogLogHIPP14, HyperLogLogHIPP16, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16,
 };
 
 pub mod kll;
@@ -104,13 +104,13 @@ pub mod uniform;
 pub use uniform::UniformSampling;
 
 pub mod ddsketch;
-pub use ddsketch::DDSketch;
+pub use ddsketch::{DDSketch, DDSketchDelta};
 
 pub mod countminsketch_topk;
-pub use countminsketch_topk::CMSHeap;
+pub use countminsketch_topk::{CMSHeap, CMSHeapDelta};
 
 pub mod countsketch_topk;
-pub use countsketch_topk::{CSHeap, cs_heap_count};
+pub use countsketch_topk::{CSHeap, CSHeapDelta, CsHeapCounter, cs_heap_count};
 pub use countsketch_topk::{CountL2HH, l2hh_cell_for_row};
 
 pub mod octo_delta;

@@ -8,8 +8,8 @@ use std::{
 };
 
 use crate::{
-    Count, CountL2HH, CountMin, ErtlMLE, FastPath, HyperLogLog, KLL, MatrixHashType, UnivMon,
-    Vector2D,
+    Count, CountL2HH, CountMin, ErtlMLE, FastPath, HeapCount, HyperLogLog, KLL, MatrixHashType,
+    UnivMon, Vector2D,
 };
 
 /// Input wrapper for sketch APIs (supports primitive and borrowed values).
@@ -551,16 +551,17 @@ impl HydraCounter {
 
 /// A key-count pair used in heap-based sketches for tracking heavy hitters.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct HHItem {
+#[serde(bound = "")]
+pub struct HHItem<C: HeapCount = i64> {
     /// Stored key.
     pub key: HeapItem,
     /// Estimated count associated with `key`.
-    pub count: i64,
+    pub count: C,
 }
 
-impl HHItem {
+impl<C: HeapCount> HHItem<C> {
     /// Creates a new Item with the given key and count.
-    pub fn new(k: DataInput, count: i64) -> Self {
+    pub fn new(k: DataInput, count: C) -> Self {
         HHItem {
             key: input_to_owned(&k),
             count,
@@ -568,12 +569,12 @@ impl HHItem {
     }
 
     /// Creates an item from an already-owned key.
-    pub fn create_item(k: HeapItem, count: i64) -> Self {
+    pub fn create_item(k: HeapItem, count: C) -> Self {
         HHItem { key: k, count }
     }
 
     /// Legacy constructor for compatibility.
-    pub fn init_item(k: DataInput, count: i64) -> Self {
+    pub fn init_item(k: DataInput, count: C) -> Self {
         HHItem {
             key: input_to_owned(&k),
             count,
@@ -587,25 +588,25 @@ impl HHItem {
 }
 
 // Implement Ord and PartialOrd to compare by count
-impl Ord for HHItem {
+impl<C: HeapCount> Ord for HHItem<C> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.count.cmp(&other.count)
+        self.count.order(&other.count)
     }
 }
 
-impl PartialOrd for HHItem {
+impl<C: HeapCount> PartialOrd for HHItem<C> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl PartialEq for HHItem {
+impl<C: HeapCount> PartialEq for HHItem<C> {
     fn eq(&self, other: &Self) -> bool {
-        self.key == other.key && self.count == other.count
+        self.key == other.key && self.count.order(&other.count).is_eq()
     }
 }
 
-impl Eq for HHItem {}
+impl<C: HeapCount> Eq for HHItem<C> {}
 
 #[cfg(test)]
 mod tests {

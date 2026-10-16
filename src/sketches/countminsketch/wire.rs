@@ -1,12 +1,12 @@
 //! ASAPv1 wire serialization for the Count-Min sketch.
 //!
-//! Child submodule of [`crate::sketches::countminsketch`]: it holds ALL of
-//! Count-Min's serialization (the metadata/payload DTOs, the kind_id constant,
-//! the [`CmsWireCounter`] / [`CmsWireMode`] marker traits, and the
+//! Child submodule of [`crate::sketches::countminsketch`]: it holds Count-Min's
+//! state serialization (the metadata/payload DTOs, the kind_id constant, the
+//! [`CmsWireCounter`] / [`CmsWireMode`] marker traits, and the
 //! `serialize_to_bytes` / `deserialize_from_bytes` impls) while the algorithm
-//! lives in the parent module file. Being a descendant module, it reads the
-//! sketch's private `counts` field directly without widening any field
-//! visibility. See `docs/asapv1_wire_format.md` §3.2.
+//! lives in the parent module file and the delta kind in `delta.rs`. Being a
+//! descendant module, it reads the sketch's private `counts` field directly
+//! without widening any field visibility. See `docs/asapv1_wire_format.md` §3.2.
 //!
 //! Count-Min is one algorithm — a single kind_id `0x02 0x00`. The structural
 //! parameters — the matrix dimensions (`rows` / `cols`), the **counter type**
@@ -21,6 +21,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 
 use crate::common::hash::check_matrix_rows;
+use crate::message_pack_format::delta::DeltaCounter;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact_vec;
 use crate::{FastPath, HashProfile, RegularPath, SketchHasher, Vector2D};
@@ -32,7 +33,7 @@ const CMS_KIND: &[u8] = &[0x02, 0x00];
 
 /// Names the wire counter type carried in the metadata (`counter_type`).
 /// Implemented only for the wire-eligible counter types.
-pub trait CmsWireCounter: Copy {
+pub trait CmsWireCounter: DeltaCounter {
     /// Metadata `counter_type` string — `"i32"`, `"i64"` or `"f64"`.
     const COUNTER_TYPE: &'static str;
 }
@@ -105,6 +106,54 @@ fn cms_metadata<H: HashProfile>(
     }
 }
 
+/// The wire-eligible geometry: `1 <= rows <= MATRIX_MAX_ROWS` and
+/// `1 <= cols <= u32::MAX`.
+pub(super) fn check_geometry(rows: usize, cols: usize) -> Result<(), String> {
+    if rows == 0 || cols == 0 {
+        return Err(format!(
+            "CMS dimensions must be non-zero: rows={rows}, cols={cols}"
+        ));
+    }
+    check_matrix_rows("CMS", rows)?;
+    if u32::try_from(cols).is_err() {
+        return Err(format!("CMS cols {cols} exceeds u32"));
+    }
+    Ok(())
+}
+
+/// The metadata block of a `rows x cols` sketch of this configuration.
+pub(super) fn encode_metadata<T: CmsWireCounter, Mode: CmsWireMode, H: HashProfile>(
+    rows: usize,
+    cols: usize,
+) -> Result<Vec<u8>, RmpEncodeError> {
+    check_geometry(rows, cols)
+        .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 envelope: {e}")))?;
+    rmp_serde::to_vec_named(&cms_metadata::<H>(
+        rows as u32,
+        cols as u32,
+        T::COUNTER_TYPE,
+        Mode::MODE,
+    ))
+}
+
+/// Reads a metadata block and returns its `(rows, cols)`. The hash spec,
+/// `counter_type` and `mode` must be this configuration's; `rows` / `cols` are
+/// echoed back and must be a wire-eligible geometry, checked before anything is
+/// sized from them.
+pub(super) fn decode_metadata<T: CmsWireCounter, Mode: CmsWireMode, H: HashProfile>(
+    block: &[u8],
+) -> Result<(usize, usize), RmpDecodeError> {
+    let meta: CmsMetadata = envelope::decode_block(block)?;
+    if meta != cms_metadata::<H>(meta.rows, meta.cols, T::COUNTER_TYPE, Mode::MODE) {
+        return Err(RmpDecodeError::Uncategorized(
+            "ASAPv1 CMS envelope: metadata mismatch".to_string(),
+        ));
+    }
+    let (rows, cols) = (meta.rows as usize, meta.cols as usize);
+    check_geometry(rows, cols).map_err(RmpDecodeError::Uncategorized)?;
+    Ok((rows, cols))
+}
+
 /// CMS payload (ASAPv1 §3.2), a msgpack **array** (`to_vec`, positional):
 /// `[counts]` — a 1-element array (mirroring HLL Classic's `[registers]`). The
 /// dimensions live in the metadata; `counts` is packed row-major and its element
@@ -136,15 +185,7 @@ where
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         let counts = self.counts.as_slice();
-        // The decoder refuses a zero dimension, so the encoder must too: with
-        // `rows == 0` the length check below passes trivially (`0 == 0*cols`).
-        if rows == 0 || cols == 0 {
-            return Err(RmpEncodeError::Syntax(format!(
-                "ASAPv1 CMS envelope: dimensions must be non-zero: rows={rows}, cols={cols}"
-            )));
-        }
-        check_matrix_rows("CMS", rows)
-            .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CMS envelope: {e}")))?;
+        let metadata = encode_metadata::<T, Mode, H>(rows, cols)?;
         if counts.len() != rows.saturating_mul(cols) {
             return Err(RmpEncodeError::Syntax(format!(
                 "ASAPv1 CMS envelope: counts length {} != rows*cols {}",
@@ -152,15 +193,6 @@ where
                 rows.saturating_mul(cols)
             )));
         }
-        let cols_u32 = u32::try_from(cols).map_err(|_| {
-            RmpEncodeError::Syntax(format!("ASAPv1 CMS envelope: cols {cols} exceeds u32"))
-        })?;
-        let metadata = rmp_serde::to_vec_named(&cms_metadata::<H>(
-            rows as u32,
-            cols_u32,
-            T::COUNTER_TYPE,
-            Mode::MODE,
-        ))?;
         let payload = rmp_serde::to_vec(&CmsPayload::<T> {
             counts: counts.to_vec(),
         })?;
@@ -178,26 +210,8 @@ where
                 "CMS kind_id mismatch: stored {kind_id:?}, expected {CMS_KIND:?}"
             )));
         }
-        let meta: CmsMetadata = envelope::decode_block(metadata)?;
-        // Validate the hash spec + counter type + mode against this target;
-        // `rows`/`cols` are structural (the sketch is dynamically sized), so they
-        // are echoed back into the expected block rather than known a priori.
-        if meta != cms_metadata::<H>(meta.rows, meta.cols, T::COUNTER_TYPE, Mode::MODE) {
-            return Err(RmpDecodeError::Uncategorized(
-                "ASAPv1 CMS envelope: metadata mismatch".to_string(),
-            ));
-        }
-        let (rows, cols) = (meta.rows as usize, meta.cols as usize);
+        let (rows, cols) = decode_metadata::<T, Mode, H>(metadata)?;
         let p: CmsPayload<T> = envelope::decode_block(payload)?;
-        // Reject zero dimensions before building the matrix: `Vector2D::from_fn`
-        // derives its mask via `cols.ilog2()`, which panics on `cols == 0`. Fail
-        // closed with an error rather than panicking on crafted bytes.
-        if rows == 0 || cols == 0 {
-            return Err(RmpDecodeError::Uncategorized(format!(
-                "CMS dimensions must be non-zero: rows={rows}, cols={cols}"
-            )));
-        }
-        check_matrix_rows("CMS", rows).map_err(RmpDecodeError::Uncategorized)?;
         if p.counts.len() != rows.saturating_mul(cols) {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "CMS counts length {} != rows*cols {}",

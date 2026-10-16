@@ -9,9 +9,53 @@ use crate::common::input::HHItem;
 use crate::common::structures::heap::PREALLOCATED_SLOTS;
 use crate::common::{CommonHeap, DigestBuildHasher, KeepSmallest};
 use crate::{DataInput, HeapItem, hash_item64_seeded, hash64_seeded, input_to_owned};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use smallvec::SmallVec;
+use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fmt;
+
+/// The count an [`HHItem`] carries: `i64`, or `f64` ranked by
+/// [`f64::total_cmp`].
+pub trait HeapCount: Copy + fmt::Display + Serialize + DeserializeOwned {
+    /// The total order the heap ranks counts by.
+    fn order(&self, other: &Self) -> Ordering;
+}
+
+impl HeapCount for i64 {
+    fn order(&self, other: &Self) -> Ordering {
+        self.cmp(other)
+    }
+}
+
+impl HeapCount for f64 {
+    fn order(&self, other: &Self) -> Ordering {
+        self.total_cmp(other)
+    }
+}
+
+/// A matrix counter type with a top-k heap beside it: `f64` counters keep `f64`
+/// heap counts, the integer counters keep `i64`.
+pub trait TopKCounter {
+    /// The heap's count type.
+    type HeapCount: HeapCount;
+}
+
+impl TopKCounter for i32 {
+    type HeapCount = i64;
+}
+
+impl TopKCounter for i64 {
+    type HeapCount = i64;
+}
+
+impl TopKCounter for i128 {
+    type HeapCount = i64;
+}
+
+impl TopKCounter for f64 {
+    type HeapCount = f64;
+}
 
 /// Heap positions sharing one digest. Two residents colliding on a 64-bit
 /// digest is rare enough that the inline pair is effectively never spilled.
@@ -22,17 +66,18 @@ type Index = HashMap<u64, Slot, DigestBuildHasher>;
 /// Serialized form. The index is derived from the heap, so it is rebuilt on
 /// load rather than carried.
 #[derive(Deserialize)]
-struct HHHeapState {
-    heap: CommonHeap<HHItem, KeepSmallest>,
+#[serde(bound = "")]
+struct HHHeapState<C: HeapCount> {
+    heap: CommonHeap<HHItem<C>, KeepSmallest>,
     k: usize,
 }
 
 /// Bounded min-heap over [`HHItem`] with key lookup, retaining the `k` largest
 /// counts.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(from = "HHHeapState")]
-pub struct HHHeap {
-    heap: CommonHeap<HHItem, KeepSmallest>,
+#[serde(from = "HHHeapState<C>", bound = "")]
+pub struct HHHeap<C: HeapCount = i64> {
+    heap: CommonHeap<HHItem<C>, KeepSmallest>,
     /// Digest of each resident, parallel to the heap array, so a sift patches
     /// the index without re-hashing the keys it moves.
     #[serde(skip)]
@@ -42,8 +87,8 @@ pub struct HHHeap {
     k: usize,
 }
 
-impl From<HHHeapState> for HHHeap {
-    fn from(state: HHHeapState) -> Self {
+impl<C: HeapCount> From<HHHeapState<C>> for HHHeap<C> {
+    fn from(state: HHHeapState<C>) -> Self {
         let mut heap = HHHeap {
             heap: state.heap,
             slots: Vec::new(),
@@ -55,7 +100,7 @@ impl From<HHHeapState> for HHHeap {
     }
 }
 
-impl HHHeap {
+impl<C: HeapCount> HHHeap<C> {
     /// Creates a new HHHeap with capacity k.
     pub fn new(k: usize) -> Self {
         Self::with_expected_len(k, k)
@@ -92,7 +137,7 @@ impl HHHeap {
     ///
     /// Returns whether the key took its place without displacing another: true
     /// for one already resident, and for a new one the heap had room for.
-    pub fn update(&mut self, key: &DataInput, count: i64) -> bool {
+    pub fn update(&mut self, key: &DataInput, count: C) -> bool {
         let slot = self.slot_for_input(key);
         if let Some(idx) = self.lookup(slot, |item| item.key == *key) {
             self.rescore(idx, count);
@@ -110,7 +155,7 @@ impl HHHeap {
     /// Updates an existing owned item or inserts it if needed.
     ///
     /// The return value means what [`Self::update`]'s does.
-    pub fn update_heap_item(&mut self, key: &HeapItem, count: i64) -> bool {
+    pub fn update_heap_item(&mut self, key: &HeapItem, count: C) -> bool {
         let slot = self.slot_for_item(key);
         if let Some(idx) = self.lookup(slot, |item| &item.key == key) {
             self.rescore(idx, count);
@@ -127,7 +172,7 @@ impl HHHeap {
 
     /// Provides access to the underlying data as a slice.
     /// Named `heap` for API compatibility with TopKHeap.
-    pub fn heap(&self) -> &[HHItem] {
+    pub fn heap(&self) -> &[HHItem<C>] {
         self.heap.as_slice()
     }
 
@@ -158,7 +203,7 @@ impl HHHeap {
     }
 
     /// Creates a copy of another HHHeap.
-    pub fn from_heap(other: &HHHeap) -> Self {
+    pub fn from_heap(other: &HHHeap<C>) -> Self {
         other.clone()
     }
 
@@ -169,7 +214,7 @@ impl HHHeap {
 
     // -- index maintenance ---------------------------------------------------
 
-    fn lookup(&self, slot: u64, matches: impl Fn(&HHItem) -> bool) -> Option<usize> {
+    fn lookup(&self, slot: u64, matches: impl Fn(&HHItem<C>) -> bool) -> Option<usize> {
         self.positions
             .get(&slot)?
             .iter()
@@ -178,7 +223,7 @@ impl HHHeap {
     }
 
     /// Writes a new count onto a resident and re-sifts it.
-    fn rescore(&mut self, idx: usize, count: i64) {
+    fn rescore(&mut self, idx: usize, count: C) {
         self.heap[idx].count = count;
         let Self {
             heap,
@@ -191,7 +236,7 @@ impl HHHeap {
 
     /// Places a key the heap has decided to accept, evicting the root when the
     /// heap is already at capacity.
-    fn seat(&mut self, key: HeapItem, slot: u64, count: i64) {
+    fn seat(&mut self, key: HeapItem, slot: u64, count: C) {
         let item = HHItem::create_item(key, count);
         if self.heap.len() < self.k {
             let idx = self.heap.len();
@@ -238,7 +283,7 @@ impl HHHeap {
     }
 
     #[inline]
-    fn should_accept_new(&self, count: i64) -> bool {
+    fn should_accept_new(&self, count: C) -> bool {
         if self.k == 0 {
             return false;
         }
@@ -251,7 +296,7 @@ impl HHHeap {
         );
         self.heap
             .peek()
-            .is_some_and(|min_item| count > min_item.count)
+            .is_some_and(|min_item| count.order(&min_item.count).is_gt())
     }
 
     #[inline]

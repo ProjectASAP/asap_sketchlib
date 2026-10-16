@@ -63,7 +63,7 @@ use asap_sketchlib::common::{
     CommonHeap, CommonHeapOrder, KeepSmallest, KeepLargest,
 
     // HH helper + utilities
-    HHHeap,
+    HHHeap, HeapCount, TopKCounter,
     Nitro, compute_median_inline_f64,
 
     // Precomputed assets

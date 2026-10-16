@@ -4,10 +4,11 @@
 //! [`CSHeap`](crate::sketches::countsketch_topk::CSHeap) (kind_id `0x0a 0x00`)
 //! are each a matrix sketch plus an [`HHHeap`], so both carry the same
 //! descriptor metadata and the same positional payload
-//! `[counts, keys, heap_counts]`. This module is the one place that encoding
-//! lives: the metadata DTO, the payload DTO, the `key_type` mapping, the
-//! emitted order, and the heap rebuild. See `docs/asapv1_wire_format.md` §3.7
-//! and §3.10 for the pieces it follows.
+//! `[counts, keys, heap_counts]`; their deltas carry
+//! `[indices, deltas, keys, heap_counts]` under the same metadata. This module
+//! is the one place that encoding lives: the metadata DTO, the payload DTOs, the
+//! `key_type` mapping, the emitted order, and the heap rebuild. See
+//! `docs/asapv1_wire_format.md` §3.7, §3.10 and §3.23 for the pieces it follows.
 //!
 //! ## `key_type` names the exact `HeapItem` variant
 //!
@@ -28,26 +29,29 @@
 //! ## Emitted order (byte-stable round trips)
 //!
 //! The heap's array order follows the sift path and does not survive a rebuild,
-//! so the payload is **order-defined**: descending count, ties broken by
-//! [`key_order`], a total order over [`HeapItem`] (variant tag first, then the
-//! value). Two heaps holding the same entries emit the same bytes whatever
-//! order they were seated in, and re-serializing a decoded sketch reproduces
-//! its bytes exactly.
+//! so the payload is **order-defined**: descending count ([`HeapCount::order`],
+//! `f64::total_cmp` for `f64` counts), ties broken by [`key_order`], a total
+//! order over [`HeapItem`] (variant tag first, then the value). Two heaps holding
+//! the same entries emit the same bytes whatever order they were seated in, and
+//! re-serializing a decoded sketch reproduces its bytes exactly. The decoder
+//! rejects entries in any other order.
 //!
 //! ## What the heap does not put on the wire
 //!
 //! `HHHeap`'s `slots` and `positions` are `#[serde(skip)]` and are rebuilt from
 //! the entries, so no index reaches the wire and no crafted payload can point
-//! one out of bounds or into a cycle. `k` is construction config, so it lives
-//! in the metadata; it never sizes an allocation on decode.
+//! one out of bounds or into a cycle. `heap_size` is construction config, so it
+//! lives in the metadata; it never sizes an allocation on decode.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::HashSet;
 
+use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::{WireBytes, exact_vec};
-use crate::{HHHeap, HashProfile, HeapItem};
+use crate::{HHHeap, HashProfile, HeapCount, HeapItem};
 
 /// Metadata `key_type` of a heap that holds nothing. A heap with no entries has
 /// no variant to report, so the wire pins one: empty heaps have one encoding.
@@ -97,6 +101,13 @@ fn key_order(key: &HeapItem) -> (u8, u128, &[u8]) {
     }
 }
 
+/// The emitted order of two entries: descending count, ties broken by
+/// [`key_order`].
+fn emitted_order<N: HeapCount>(a: (&HeapItem, N), b: (&HeapItem, N)) -> Ordering {
+    b.1.order(&a.1)
+        .then_with(|| key_order(a.0).cmp(&key_order(b.0)))
+}
+
 /// The complaint both directions report when one key is on the wire twice.
 const DUPLICATE_KEY: &str = "ASAPv1 top-k heap: the same key appears twice";
 
@@ -122,7 +133,7 @@ pub(crate) fn check_distinct_keys<'a>(
 /// with keys in this declaration order — the canonical order the wire spec
 /// fixes (Go must mirror it). Hash-spec fields first, then the base sketch's
 /// structural params `rows` / `cols` / `counter_type` / `mode`, then the heap's
-/// `k` / `key_type`.
+/// `heap_size` / `key_type`.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TopKMetadata {
@@ -137,20 +148,21 @@ pub(crate) struct TopKMetadata {
     pub(crate) cols: u32,
     pub(crate) counter_type: String,
     pub(crate) mode: String,
-    pub(crate) k: u32,
+    pub(crate) heap_size: u32,
     pub(crate) key_type: String,
 }
 
 /// Builds the descriptor metadata from the hasher's [`HashProfile`], so the wire
 /// bytes truthfully describe how the sketch was hashed. `rows` / `cols` /
-/// `counter_type` / `mode` describe the base matrix; `k` is the heap capacity
-/// and `key_type` the exact [`HeapItem`] variant the `keys` array carries.
+/// `counter_type` / `mode` describe the base matrix; `heap_size` is the heap
+/// capacity and `key_type` the exact [`HeapItem`] variant the `keys` array
+/// carries.
 pub(crate) fn topk_metadata<H: HashProfile>(
     rows: u32,
     cols: u32,
     counter_type: &str,
     mode: &str,
-    k: u32,
+    heap_size: u32,
     key_type: &str,
 ) -> TopKMetadata {
     TopKMetadata {
@@ -165,9 +177,97 @@ pub(crate) fn topk_metadata<H: HashProfile>(
         cols,
         counter_type: counter_type.to_string(),
         mode: mode.to_string(),
-        k,
+        heap_size,
         key_type: key_type.to_string(),
     }
+}
+
+/// The wire-eligible base matrix: `1 <= rows <= MATRIX_MAX_ROWS` and
+/// `1 <= cols <= u32::MAX`.
+pub(crate) fn check_geometry(sketch: &str, rows: usize, cols: usize) -> Result<(), String> {
+    if rows == 0 || cols == 0 {
+        return Err(format!(
+            "{sketch} dimensions must be non-zero: rows={rows}, cols={cols}"
+        ));
+    }
+    check_matrix_rows(sketch, rows)?;
+    if u32::try_from(cols).is_err() {
+        return Err(format!(
+            "{sketch} cols {cols} exceeds the u32 metadata field"
+        ));
+    }
+    Ok(())
+}
+
+/// The metadata block of a `sketch` (`"CMSHeap"` / `"CSHeap"`) state or delta.
+/// Fails when the geometry is not wire-eligible or `heap_size` overflows the
+/// metadata's `u32` field.
+pub(crate) fn encode_metadata<H: HashProfile>(
+    sketch: &str,
+    rows: usize,
+    cols: usize,
+    counter_type: &str,
+    mode: &str,
+    heap_size: usize,
+    key_type: &str,
+) -> Result<Vec<u8>, RmpEncodeError> {
+    let complain = |e: String| RmpEncodeError::Syntax(format!("ASAPv1 {sketch} envelope: {e}"));
+    check_geometry(sketch, rows, cols).map_err(complain)?;
+    let heap_size = u32::try_from(heap_size).map_err(|_| {
+        complain(format!(
+            "heap_size {heap_size} exceeds the u32 metadata field"
+        ))
+    })?;
+    rmp_serde::to_vec_named(&topk_metadata::<H>(
+        rows as u32,
+        cols as u32,
+        counter_type,
+        mode,
+        heap_size,
+        key_type,
+    ))
+}
+
+/// What a top-k metadata block declares beyond the pinned fields.
+pub(crate) struct TopKShape {
+    pub(crate) rows: usize,
+    pub(crate) cols: usize,
+    pub(crate) heap_size: usize,
+    pub(crate) key_type: String,
+}
+
+/// Reads a metadata block. The hash spec, `counter_type` and `mode` must be the
+/// target's; `rows` / `cols` / `heap_size` / `key_type` are echoed back, and the
+/// geometry must be wire-eligible, checked before anything is sized from it.
+pub(crate) fn decode_metadata<H: HashProfile>(
+    sketch: &str,
+    block: &[u8],
+    counter_type: &str,
+    mode: &str,
+) -> Result<TopKShape, RmpDecodeError> {
+    let meta: TopKMetadata = envelope::decode_block(block)?;
+    if meta
+        != topk_metadata::<H>(
+            meta.rows,
+            meta.cols,
+            counter_type,
+            mode,
+            meta.heap_size,
+            &meta.key_type,
+        )
+    {
+        return Err(RmpDecodeError::Uncategorized(format!(
+            "ASAPv1 {sketch} envelope: metadata mismatch"
+        )));
+    }
+    let (rows, cols) = (meta.rows as usize, meta.cols as usize);
+    check_geometry(sketch, rows, cols).map_err(RmpDecodeError::Uncategorized)?;
+    Ok(TopKShape {
+        rows,
+        cols,
+        heap_size: meta.heap_size as usize,
+        key_type: meta.key_type,
+    })
 }
 
 /// Top-k payload, a msgpack **array** (`to_vec`, positional):
@@ -176,7 +276,7 @@ pub(crate) fn topk_metadata<H: HashProfile>(
 /// `heap_counts` are the heap's entries, parallel and equal-length, with `keys`
 /// typed by the metadata `key_type`.
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct TopKPayload<C, K> {
+pub(crate) struct TopKPayload<C, K, N> {
     #[serde(
         deserialize_with = "exact_vec",
         bound(deserialize = "C: Deserialize<'de>")
@@ -187,29 +287,128 @@ pub(crate) struct TopKPayload<C, K> {
         bound(deserialize = "K: Deserialize<'de>")
     )]
     pub(crate) keys: Vec<K>,
-    pub(crate) heap_counts: Vec<i64>,
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "N: Deserialize<'de>")
+    )]
+    pub(crate) heap_counts: Vec<N>,
+}
+
+/// Top-k delta payload (§3.23), a msgpack **array**:
+/// `[indices, deltas, keys, heap_counts]`. `indices` / `deltas` are the changed
+/// cells; `keys` / `heap_counts` are the producer's whole heap, as in
+/// [`TopKPayload`].
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TopKDeltaPayload<C, K, N> {
+    pub(crate) indices: Vec<u64>,
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "C: Deserialize<'de>")
+    )]
+    pub(crate) deltas: Vec<C>,
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "K: Deserialize<'de>")
+    )]
+    pub(crate) keys: Vec<K>,
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "N: Deserialize<'de>")
+    )]
+    pub(crate) heap_counts: Vec<N>,
+}
+
+/// The matrix part of a top-k payload, written ahead of the heap's `keys` and
+/// `heap_counts`: a state's `counts`, or a delta's [`DeltaCells`].
+pub(crate) trait TopKBody: Sized {
+    /// Packs `self` and the heap arrays into one payload.
+    fn encode<K: Serialize, N: Serialize>(
+        self,
+        keys: Vec<K>,
+        heap_counts: Vec<N>,
+    ) -> Result<Vec<u8>, RmpEncodeError>;
+
+    /// Reads one payload back into `self` and the heap arrays.
+    fn decode<K, N>(payload: &[u8]) -> Result<(Self, Vec<K>, Vec<N>), RmpDecodeError>
+    where
+        K: for<'de> Deserialize<'de>,
+        N: for<'de> Deserialize<'de>;
+}
+
+impl<C: Serialize + for<'de> Deserialize<'de>> TopKBody for Vec<C> {
+    fn encode<K: Serialize, N: Serialize>(
+        self,
+        keys: Vec<K>,
+        heap_counts: Vec<N>,
+    ) -> Result<Vec<u8>, RmpEncodeError> {
+        rmp_serde::to_vec(&TopKPayload {
+            counts: self,
+            keys,
+            heap_counts,
+        })
+    }
+
+    fn decode<K, N>(payload: &[u8]) -> Result<(Self, Vec<K>, Vec<N>), RmpDecodeError>
+    where
+        K: for<'de> Deserialize<'de>,
+        N: for<'de> Deserialize<'de>,
+    {
+        let p: TopKPayload<C, K, N> = envelope::decode_block(payload)?;
+        Ok((p.counts, p.keys, p.heap_counts))
+    }
+}
+
+/// A delta's changed cells: row-major `indices` and the value added at each.
+pub(crate) struct DeltaCells<C> {
+    pub(crate) indices: Vec<u64>,
+    pub(crate) deltas: Vec<C>,
+}
+
+impl<C: Serialize + for<'de> Deserialize<'de>> TopKBody for DeltaCells<C> {
+    fn encode<K: Serialize, N: Serialize>(
+        self,
+        keys: Vec<K>,
+        heap_counts: Vec<N>,
+    ) -> Result<Vec<u8>, RmpEncodeError> {
+        rmp_serde::to_vec(&TopKDeltaPayload {
+            indices: self.indices,
+            deltas: self.deltas,
+            keys,
+            heap_counts,
+        })
+    }
+
+    fn decode<K, N>(payload: &[u8]) -> Result<(Self, Vec<K>, Vec<N>), RmpDecodeError>
+    where
+        K: for<'de> Deserialize<'de>,
+        N: for<'de> Deserialize<'de>,
+    {
+        let p: TopKDeltaPayload<C, K, N> = envelope::decode_block(payload)?;
+        let cells = DeltaCells {
+            indices: p.indices,
+            deltas: p.deltas,
+        };
+        Ok((cells, p.keys, p.heap_counts))
+    }
 }
 
 /// The heap's entries in emitted order: descending count, ties broken by
 /// [`key_order`]. Independent of the heap array's sift order, so the bytes are
 /// stable across a round trip.
-pub(crate) fn heap_entries(heap: &HHHeap) -> Vec<(&HeapItem, i64)> {
-    let mut entries: Vec<(&HeapItem, i64)> = heap
+pub(crate) fn heap_entries<N: HeapCount>(heap: &HHHeap<N>) -> Vec<(&HeapItem, N)> {
+    let mut entries: Vec<(&HeapItem, N)> = heap
         .heap()
         .iter()
         .map(|item| (&item.key, item.count))
         .collect();
-    entries.sort_unstable_by(|a, b| {
-        b.1.cmp(&a.1)
-            .then_with(|| key_order(a.0).cmp(&key_order(b.0)))
-    });
+    entries.sort_unstable_by(|a, b| emitted_order(*a, *b));
     entries
 }
 
 /// The `key_type` the payload will be written in, taken from the first key in
 /// emitted order. Rejects a 128-bit key outright; the homogeneity of the rest is
 /// enforced by [`encode_payload`].
-pub(crate) fn wire_key_type(entries: &[(&HeapItem, i64)]) -> Result<&'static str, RmpEncodeError> {
+pub(crate) fn wire_key_type<N>(entries: &[(&HeapItem, N)]) -> Result<&'static str, RmpEncodeError> {
     match entries.first() {
         None => Ok(EMPTY_KEY_TYPE),
         Some((key, _)) => key_type_of(key).ok_or_else(|| {
@@ -225,138 +424,87 @@ fn mixed_variant_error(key_type: &str, key: &HeapItem) -> RmpEncodeError {
     ))
 }
 
-/// Packs the base counters and the emitted heap entries into the positional
+/// Packs the matrix part and the emitted heap entries into the positional
 /// payload, with `keys` typed by `key_type`. Any key that is not of that variant
 /// fails the encode, as does a key the entries hold twice on the wire — a live
 /// heap can seat one, since `NaN` misses its own lookup.
-pub(crate) fn encode_payload<C: Serialize>(
+pub(crate) fn encode_payload<B: TopKBody, N: HeapCount>(
     key_type: &str,
-    counts: Vec<C>,
-    entries: &[(&HeapItem, i64)],
+    body: B,
+    entries: &[(&HeapItem, N)],
 ) -> Result<Vec<u8>, RmpEncodeError> {
     check_distinct_keys(entries.iter().map(|(key, _)| *key))
         .map_err(|problem| RmpEncodeError::Syntax(problem.to_string()))?;
-    let heap_counts: Vec<i64> = entries.iter().map(|entry| entry.1).collect();
+    let heap_counts: Vec<N> = entries.iter().map(|entry| entry.1).collect();
 
     macro_rules! pack {
-        ($variant:ident) => {{
+        ($variant:ident, $value:ident => $wire:expr) => {{
             let mut keys = Vec::with_capacity(entries.len());
             for (key, _) in entries {
                 match key {
-                    HeapItem::$variant(value) => keys.push(*value),
+                    HeapItem::$variant($value) => keys.push($wire),
                     _ => return Err(mixed_variant_error(key_type, key)),
                 }
             }
-            rmp_serde::to_vec(&TopKPayload {
-                counts,
-                keys,
-                heap_counts,
-            })
+            body.encode(keys, heap_counts)
         }};
     }
 
     match key_type {
-        "i8" => pack!(I8),
-        "i16" => pack!(I16),
-        "i32" => pack!(I32),
-        "i64" => pack!(I64),
-        "isize" => pack!(ISIZE),
-        "u8" => pack!(U8),
-        "u16" => pack!(U16),
-        "u32" => pack!(U32),
-        "u64" => pack!(U64),
-        "usize" => pack!(USIZE),
-        "f32" => pack!(F32),
-        "f64" => pack!(F64),
-        "string" => {
-            let mut keys = Vec::with_capacity(entries.len());
-            for (key, _) in entries {
-                match key {
-                    HeapItem::String(value) => keys.push(value.clone()),
-                    _ => return Err(mixed_variant_error(key_type, key)),
-                }
-            }
-            rmp_serde::to_vec(&TopKPayload {
-                counts,
-                keys,
-                heap_counts,
-            })
-        }
-        "bytes" => {
-            let mut keys = Vec::with_capacity(entries.len());
-            for (key, _) in entries {
-                match key {
-                    HeapItem::Bytes(value) => keys.push(WireBytes(value.clone())),
-                    _ => return Err(mixed_variant_error(key_type, key)),
-                }
-            }
-            rmp_serde::to_vec(&TopKPayload {
-                counts,
-                keys,
-                heap_counts,
-            })
-        }
+        "i8" => pack!(I8, v => *v),
+        "i16" => pack!(I16, v => *v),
+        "i32" => pack!(I32, v => *v),
+        "i64" => pack!(I64, v => *v),
+        "isize" => pack!(ISIZE, v => *v),
+        "u8" => pack!(U8, v => *v),
+        "u16" => pack!(U16, v => *v),
+        "u32" => pack!(U32, v => *v),
+        "u64" => pack!(U64, v => *v),
+        "usize" => pack!(USIZE, v => *v),
+        "f32" => pack!(F32, v => *v),
+        "f64" => pack!(F64, v => *v),
+        "string" => pack!(String, v => v.clone()),
+        "bytes" => pack!(Bytes, v => WireBytes(v.clone())),
         other => Err(RmpEncodeError::Syntax(format!(
             "ASAPv1 top-k heap: key_type {other:?} is not a wire key type"
         ))),
     }
 }
 
-/// The base counters and the heap entries one payload decodes into.
-pub(crate) type DecodedTopK<C> = (Vec<C>, Vec<(HeapItem, i64)>);
+/// The matrix part and the heap entries one payload decodes into.
+pub(crate) type DecodedTopK<B, N> = (B, Vec<(HeapItem, N)>);
 
 /// Reads the payload with `keys` typed by the metadata `key_type`, returning the
-/// base counters and the heap entries. Rejects an unknown `key_type` and
-/// parallel arrays of unequal length; a `keys` array whose msgpack types do not
-/// match `key_type` fails to decode.
-pub(crate) fn decode_payload<C>(
+/// matrix part and the heap entries. Rejects an unknown `key_type` and parallel
+/// arrays of unequal length; a `keys` array whose msgpack types do not match
+/// `key_type` fails to decode.
+pub(crate) fn decode_payload<B: TopKBody, N: HeapCount>(
     key_type: &str,
     payload: &[u8],
-) -> Result<DecodedTopK<C>, RmpDecodeError>
-where
-    C: for<'de> Deserialize<'de>,
-{
+) -> Result<DecodedTopK<B, N>, RmpDecodeError> {
     macro_rules! unpack {
-        ($variant:ident, $ty:ty) => {{
-            let decoded: TopKPayload<C, $ty> = envelope::decode_block(payload)?;
-            (
-                decoded.counts,
-                decoded
-                    .keys
-                    .into_iter()
-                    .map(HeapItem::$variant)
-                    .collect::<Vec<HeapItem>>(),
-                decoded.heap_counts,
-            )
+        ($ty:ty, $into:expr) => {{
+            let (body, keys, heap_counts) = B::decode::<$ty, N>(payload)?;
+            let keys: Vec<HeapItem> = keys.into_iter().map($into).collect();
+            (body, keys, heap_counts)
         }};
     }
 
-    let (counts, keys, heap_counts) = match key_type {
-        "i8" => unpack!(I8, i8),
-        "i16" => unpack!(I16, i16),
-        "i32" => unpack!(I32, i32),
-        "i64" => unpack!(I64, i64),
-        "isize" => unpack!(ISIZE, isize),
-        "u8" => unpack!(U8, u8),
-        "u16" => unpack!(U16, u16),
-        "u32" => unpack!(U32, u32),
-        "u64" => unpack!(U64, u64),
-        "usize" => unpack!(USIZE, usize),
-        "f32" => unpack!(F32, f32),
-        "f64" => unpack!(F64, f64),
-        "string" => unpack!(String, String),
-        "bytes" => {
-            let decoded: TopKPayload<C, WireBytes> = envelope::decode_block(payload)?;
-            (
-                decoded.counts,
-                decoded
-                    .keys
-                    .into_iter()
-                    .map(|key| HeapItem::Bytes(key.into_vec()))
-                    .collect::<Vec<HeapItem>>(),
-                decoded.heap_counts,
-            )
-        }
+    let (body, keys, heap_counts) = match key_type {
+        "i8" => unpack!(i8, HeapItem::I8),
+        "i16" => unpack!(i16, HeapItem::I16),
+        "i32" => unpack!(i32, HeapItem::I32),
+        "i64" => unpack!(i64, HeapItem::I64),
+        "isize" => unpack!(isize, HeapItem::ISIZE),
+        "u8" => unpack!(u8, HeapItem::U8),
+        "u16" => unpack!(u16, HeapItem::U16),
+        "u32" => unpack!(u32, HeapItem::U32),
+        "u64" => unpack!(u64, HeapItem::U64),
+        "usize" => unpack!(usize, HeapItem::USIZE),
+        "f32" => unpack!(f32, HeapItem::F32),
+        "f64" => unpack!(f64, HeapItem::F64),
+        "string" => unpack!(String, HeapItem::String),
+        "bytes" => unpack!(WireBytes, |key: WireBytes| HeapItem::Bytes(key.into_vec())),
         other => {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "ASAPv1 top-k heap: key_type {other:?} is not a wire key type"
@@ -371,32 +519,40 @@ where
             heap_counts.len()
         )));
     }
-    Ok((counts, keys.into_iter().zip(heap_counts).collect()))
+    Ok((body, keys.into_iter().zip(heap_counts).collect()))
 }
 
-/// Seats the decoded entries into a heap of capacity `k`, rebuilding the index
-/// as it goes. `k` is checked against the entry count first and the heap
-/// reserves from that count, so a declared capacity never sizes an allocation
-/// on its own.
+/// Seats the decoded entries into a heap of capacity `heap_size`, rebuilding the
+/// index as it goes. `heap_size` is checked against the entry count first and
+/// the heap reserves from that count, so a declared capacity never sizes an
+/// allocation on its own.
 ///
 /// The keys are checked for duplicates on their **wire** representation before
 /// any is seated — floats by their bits, so two identical `NaN`s are one key
-/// twice even though they do not compare equal — and the seated count is
-/// checked afterwards, which catches keys that are distinct on the wire but
-/// equal to the heap.
-pub(crate) fn rebuild_heap(
-    k: usize,
-    entries: Vec<(HeapItem, i64)>,
-) -> Result<HHHeap, RmpDecodeError> {
-    if entries.len() > k {
+/// twice even though they do not compare equal — then for the emitted order,
+/// and the seated count is checked afterwards, which catches keys that are
+/// distinct on the wire but equal to the heap.
+pub(crate) fn rebuild_heap<N: HeapCount>(
+    heap_size: usize,
+    entries: Vec<(HeapItem, N)>,
+) -> Result<HHHeap<N>, RmpDecodeError> {
+    if entries.len() > heap_size {
         return Err(RmpDecodeError::Uncategorized(format!(
-            "ASAPv1 top-k heap: {} entries over a k of {k}",
+            "ASAPv1 top-k heap: {} entries over a heap_size of {heap_size}",
             entries.len()
         )));
     }
     check_distinct_keys(entries.iter().map(|(key, _)| key))
         .map_err(|problem| RmpDecodeError::Uncategorized(problem.to_string()))?;
-    let mut heap = HHHeap::with_expected_len(k, entries.len());
+    if entries
+        .windows(2)
+        .any(|pair| emitted_order((&pair[0].0, pair[0].1), (&pair[1].0, pair[1].1)).is_ge())
+    {
+        return Err(RmpDecodeError::Uncategorized(
+            "ASAPv1 top-k heap: entries are not in descending count, ties by key".to_string(),
+        ));
+    }
+    let mut heap = HHHeap::with_expected_len(heap_size, entries.len());
     let seated = entries.len();
     for (key, count) in entries {
         heap.update_heap_item(&key, count);
@@ -520,7 +676,7 @@ mod tests {
         let bytes = sketch.serialize_to_bytes().expect("serialize");
         let meta = metadata_of(&bytes);
         assert_eq!(meta.key_type, EMPTY_KEY_TYPE);
-        assert_eq!(meta.k, 8);
+        assert_eq!(meta.heap_size, 8);
 
         let decoded =
             CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes).expect("decode");
@@ -553,7 +709,7 @@ mod tests {
         );
 
         let (_, _, payload) = envelope::split(&bytes).expect("split");
-        let emitted: TopKPayload<i64, u64> = from_slice(payload).expect("payload");
+        let emitted: TopKPayload<i64, u64, i64> = from_slice(payload).expect("payload");
         assert_eq!(emitted.heap_counts, vec![9, 9, 5, 5], "not descending");
         assert_eq!(emitted.keys, vec![1, 4, 2, 3], "ties not broken by key");
 
@@ -626,9 +782,9 @@ mod tests {
         }
     }
 
-    /// A declared `k` is metadata, never an allocation size.
+    /// A declared `heap_size` is metadata, never an allocation size.
     #[test]
-    fn heap_does_not_allocate_a_declared_k() {
+    fn heap_does_not_allocate_a_declared_heap_size() {
         let metadata = rmp_serde::to_vec_named(&topk_metadata::<DefaultXxHasher>(
             2,
             4,
@@ -652,13 +808,13 @@ mod tests {
         assert_eq!(decoded.heap().len(), 2);
     }
 
-    /// More entries than `k`, and the same key twice, are both states the heap
-    /// could not have reached.
+    /// More entries than `heap_size`, and the same key twice, are both states
+    /// the heap could not have reached.
     #[test]
     fn heap_rejects_crafted_entry_sets() {
-        let crafted = |k: u32, keys: Vec<u64>, heap_counts: Vec<i64>| {
+        let crafted = |heap_size: u32, keys: Vec<u64>, heap_counts: Vec<i64>| {
             let metadata = rmp_serde::to_vec_named(&topk_metadata::<DefaultXxHasher>(
-                2, 4, "i64", "regular", k, "u64",
+                2, 4, "i64", "regular", heap_size, "u64",
             ))
             .expect("metadata");
             let payload = rmp_serde::to_vec(&TopKPayload {
@@ -673,7 +829,7 @@ mod tests {
         let cases = [
             (
                 crafted(1, vec![1, 2], vec![5, 4]),
-                "2 entries over a k of 1",
+                "2 entries over a heap_size of 1",
             ),
             (
                 crafted(4, vec![1, 1], vec![5, 4]),
@@ -686,6 +842,36 @@ mod tests {
             assert!(
                 problem.contains(expected),
                 "expected a complaint about {expected}, got {problem}"
+            );
+        }
+    }
+
+    /// Entries must arrive in emitted order: descending count, a tie broken by
+    /// the key's unsigned bits.
+    #[test]
+    fn heap_rejects_entries_out_of_emitted_order() {
+        let crafted = |keys: Vec<i64>, heap_counts: Vec<i64>| {
+            let metadata = rmp_serde::to_vec_named(&topk_metadata::<DefaultXxHasher>(
+                2, 4, "i64", "regular", 4, "i64",
+            ))
+            .expect("metadata");
+            let payload = rmp_serde::to_vec(&TopKPayload {
+                counts: vec![0i64; 8],
+                keys,
+                heap_counts,
+            })
+            .expect("payload");
+            envelope::encode(KIND, &metadata, &payload)
+        };
+        let rows = [
+            ("i64 tie", crafted(vec![-1, 1], vec![5, 5])),
+            ("i64 ascending", crafted(vec![1, 2], vec![4, 9])),
+        ];
+        for (label, bytes) in rows {
+            let problem = decode_error(&bytes);
+            assert!(
+                problem.contains("not in descending count"),
+                "{label}: {problem}"
             );
         }
     }

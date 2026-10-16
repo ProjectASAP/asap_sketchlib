@@ -22,8 +22,12 @@ use crate::common::structures::Vector1D;
 use crate::octo_delta::{DdDelta, DdStore};
 use serde::{Deserialize, Serialize};
 
+/// The ASAPv1 DDSketch delta (kind_id `0x05 0x80`).
+mod delta;
 /// ASAPv1 wire serialization (kind_id `0x05 0x00`).
 mod wire;
+
+pub use delta::DDSketchDelta;
 
 // Number of buckets to grow by when expanding.
 const GROW_CHUNK: usize = 128;
@@ -118,14 +122,13 @@ impl Buckets {
 /// Mergeable, relative-error quantile sketch using logarithmically-spaced buckets.
 ///
 /// ASAPv1 serialization lives in the `wire` submodule (kind_id `0x05 0x00`); it
-/// carries `alpha`, the bucket store, and `sum` / `min` / `max`, and recovers
-/// `count` by summing the buckets.
+/// carries `alpha`, both bucket stores, the zero count and `sum` / `min` /
+/// `max`, and recovers `count` by summing them.
 ///
 /// The derived `Serialize` / `Deserialize` is a separate, Rust-internal form
 /// used where a `DDSketch` is nested in another type. It carries the same state
-/// as the ASAPv1 payload — `alpha`, the bucket store, and `sum` / `min` / `max`
-/// — and rebuilds the index mapping and `count` on the way in, refusing a state
-/// the ASAPv1 decoder would refuse.
+/// as the ASAPv1 payload and rebuilds the index mapping and `count` on the way
+/// in, refusing a state the ASAPv1 decoder would refuse.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(try_from = "DDSketchState")]
 pub struct DDSketch {
@@ -169,25 +172,7 @@ impl TryFrom<DDSketchState> for DDSketch {
     type Error = String;
 
     fn try_from(state: DDSketchState) -> Result<Self, Self::Error> {
-        wire::check_alpha(state.alpha)?;
-        let counts = state.store.counts.as_slice();
-        wire::check_store_span(state.store.offset, counts.len())?;
-        wire::check_store_span(
-            state.negative_store.offset,
-            state.negative_store.counts.len(),
-        )?;
-        let negative_count = wire::total_count(state.negative_store.counts.as_slice())
-            .ok_or("DDSketch count overflow")?;
-        let count = wire::total_count(counts)
-            .and_then(|c| c.checked_add(negative_count))
-            .and_then(|c| c.checked_add(state.zero_count))
-            .ok_or_else(|| "DDSketch bucket counts overflow the total sample count".to_string())?;
-        if negative_count == 0 && state.zero_count == 0 {
-            wire::check_scalars(count, state.sum, state.min, state.max)?;
-        } else {
-            wire::check_signed_scalars(count, state.sum, state.min, state.max)?;
-        }
-
+        let count = wire::check_state(&state)?;
         let gamma = (1.0 + state.alpha) / (1.0 - state.alpha);
         let log_gamma = gamma.ln();
         Ok(Self {

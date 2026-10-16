@@ -212,9 +212,28 @@ mod tests {
 
         let classic = hex(include_str!("../../asapv1_golden/hll_classic_p12.hex"));
         let hip = hex(include_str!("../../asapv1_golden/hll_hip_p12.hex"));
+        let classic_delta = hex(include_str!(
+            "../../asapv1_golden/hll_classic_p14_delta.hex"
+        ));
         let cms = hex(include_str!("../../asapv1_golden/cms_i64_regular_2x3.hex"));
+        let cms_delta = hex(include_str!(
+            "../../asapv1_golden/cms_i64_regular_2x3_delta.hex"
+        ));
         let cs = hex(include_str!("../../asapv1_golden/cs_i64_regular_2x4.hex"));
+        let cs_delta = hex(include_str!(
+            "../../asapv1_golden/cs_i64_regular_2x4_delta.hex"
+        ));
         let kll = hex(include_str!("../../asapv1_golden/kll_f64_k200.hex"));
+        let cms_heap_delta = hex(include_str!(
+            "../../asapv1_golden/cmsheap_i64_regular_2x3_delta.hex"
+        ));
+        let set = hex(include_str!(
+            "../../asapv1_golden/set_aggregator_strings.hex"
+        ));
+        let delta = hex(include_str!("../../asapv1_golden/delta_result_strings.hex"));
+        let dd_delta = hex(include_str!(
+            "../../asapv1_golden/ddsketch_signed_a001_delta.hex"
+        ));
 
         let str_keys = ["alpha", "beta", "gamma", "alpha", "alpha"].map(DataInput::Str);
         let bytes_keys = [b"ab", b"cd", b"ab"].map(|key| DataInput::Bytes(key));
@@ -250,7 +269,6 @@ mod tests {
         elastic.insert("flow::a".to_string());
         let mut kll_dynamic = KLLDynamic::<f64>::init_kll(200);
         let mut positive = DDSketch::new(0.01);
-        let mut signed = DDSketch::new(0.01);
         let config = UnivMonQConfig {
             levels: 4,
             width: 64,
@@ -265,7 +283,6 @@ mod tests {
         for value in [1.0, 2.5, 7.0] {
             kll_dynamic.update(&value);
             positive.add(&value);
-            signed.add(&-value);
             univmon_q.update(&value);
         }
         let cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8);
@@ -288,18 +305,24 @@ mod tests {
         let cases: Vec<Case> = vec![
             case!("HLL classic", classic.clone(), HllClassic),
             case!("HLL HIP", hip.clone(), HyperLogLogHIPP12),
+            case!("HLL classic delta", classic_delta, HyperLogLogDelta<Classic, HllBucketListP14>),
             ("HLL portable classic", classic, portable),
             ("HLL portable HIP", hip, portable),
             case!("CMS", cms, Cms),
+            case!("CMS delta", cms_delta, CountMinDelta<i64, RegularPath>),
             case!("CS", cs, Cs),
+            case!("CS delta", cs_delta, sketches::CountSketchDelta<i64, RegularPath>),
             case!("KLL", kll, KLL<f64>),
+            case!("SetAggregator", set, SetAggregator),
+            case!("DeltaResult", delta, DeltaResult),
             sketch!("KLL dynamic", kll_dynamic, KLLDynamic<f64>),
             sketch!("CMSHeap", cms_heap, CmsHeap),
             sketch!("CMSHeap bytes", cms_heap_bytes, CmsHeap),
+            case!("CMSHeap delta", cms_heap_delta, CMSHeapDelta<i64, RegularPath>),
             sketch!("CSHeap", cs_heap, CsHeap),
             sketch!("CountL2HH", l2hh, CountL2HH),
             sketch!("DDSketch", positive, DDSketch),
-            sketch!("DDSketch signed", signed, DDSketch),
+            case!("DDSketch delta", dd_delta, DDSketchDelta),
             sketch!("Bloom", bloom, Bloom<RegularPath>),
             sketch!("SpaceSaving string", ss, SpaceSaving),
             sketch!("SpaceSaving u64", ss_u64, SpaceSaving),

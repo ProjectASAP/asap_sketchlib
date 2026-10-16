@@ -15,18 +15,23 @@ use crate::sketches::countsketch::CountSketchCounter;
 use crate::{
     Count, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher,
     FastPath, FixedMatrix, HHHeap, MatrixStorage, QuickMatrixI64, QuickMatrixI128, RegularPath,
-    SketchHasher, Vector1D, Vector2D, compute_median_inline_f64, heap_item_to_sketch_input,
+    SketchHasher, TopKCounter, Vector1D, Vector2D, compute_median_inline_f64,
+    heap_item_to_sketch_input,
 };
 
+mod delta;
 pub(crate) mod l2hh_wire;
 mod wire;
 
-/// The count a `CSHeap` entry carries for a Count Sketch estimate.
+pub use delta::CSHeapDelta;
+
+/// The count a `CSHeap` entry over integer counters carries for a Count Sketch
+/// estimate.
 ///
 /// `Count::estimate` returns the row **median** as `f64`, because a Count
 /// Sketch estimate is signed and is a median rather than a counter read. The
-/// heap stores `i64`, so a conversion is unavoidable and its semantics are part
-/// of the API rather than an accident of a cast:
+/// integer counters' heap stores `i64`, so a conversion is unavoidable and its
+/// semantics are part of the API rather than an accident of a cast:
 ///
 /// - **Saturating**, not wrapping. Rust's `f64 as i64` saturates at
 ///   `i64::MIN`/`i64::MAX` and maps `NaN` to `0`; this function names that
@@ -49,28 +54,66 @@ pub fn cs_heap_count(estimate: f64) -> i64 {
     estimate as i64
 }
 
+/// The heap count type of a `CSHeap` over storage `S`.
+type HeapCountOf<S> = <<S as MatrixStorage>::Counter as TopKCounter>::HeapCount;
+
+/// A Count Sketch counter type a `CSHeap` keeps a heap beside: the heap count
+/// of a median estimate is [`cs_heap_count`]'s for `i32`, `i64` and `i128`, and
+/// the unrounded median for `f64`.
+pub trait CsHeapCounter: CountSketchCounter + TopKCounter {
+    /// The heap count of a median `estimate`.
+    fn heap_count(estimate: f64) -> Self::HeapCount;
+}
+
+impl CsHeapCounter for i32 {
+    fn heap_count(estimate: f64) -> i64 {
+        cs_heap_count(estimate)
+    }
+}
+
+impl CsHeapCounter for i64 {
+    fn heap_count(estimate: f64) -> i64 {
+        cs_heap_count(estimate)
+    }
+}
+
+impl CsHeapCounter for i128 {
+    fn heap_count(estimate: f64) -> i64 {
+        cs_heap_count(estimate)
+    }
+}
+
+impl CsHeapCounter for f64 {
+    fn heap_count(estimate: f64) -> f64 {
+        estimate
+    }
+}
+
 const DEFAULT_TOP_K: usize = 32;
 const DEFAULT_ROW_NUM: usize = 3;
 const DEFAULT_COL_NUM: usize = 4096;
 
 /// A Count Sketch paired with a top-k heavy-hitter heap.
 ///
-/// Generic over the same type parameters as [`Count`].
+/// Generic over the same type parameters as [`Count`]. The heap's counts are
+/// `f64` over `f64` counters and `i64` otherwise ([`CsHeapCounter`]).
 #[derive(Clone)]
 pub struct CSHeap<
     S: MatrixStorage = Vector2D<i64>,
     Mode = RegularPath,
     H: SketchHasher = DefaultXxHasher,
-> {
+> where
+    S::Counter: TopKCounter,
+{
     cs: Count<S, Mode, H>,
-    heap: HHHeap,
+    heap: HHHeap<HeapCountOf<S>>,
 }
 
 // -- Construction for Vector2D-backed storage --------------------------------
 
 impl<T, M, H: SketchHasher> CSHeap<Vector2D<T>, M, H>
 where
-    T: CountSketchCounter,
+    T: CsHeapCounter,
 {
     /// Creates a new `CSHeap` with the given CS dimensions and heap capacity.
     pub fn new(rows: usize, cols: usize, top_k: usize) -> Self {
@@ -85,7 +128,7 @@ where
 
 impl<S: MatrixStorage, M, H: SketchHasher> CSHeap<S, M, H>
 where
-    S::Counter: CountSketchCounter,
+    S::Counter: CsHeapCounter,
 {
     /// Creates a `CSHeap` from a pre-built storage backend.
     pub fn from_storage(storage: S, top_k: usize) -> Self {
@@ -202,7 +245,7 @@ impl Default for CSHeap<DefaultMatrixI128, FastPath> {
 
 impl<S: MatrixStorage, M, H: SketchHasher> CSHeap<S, M, H>
 where
-    S::Counter: CountSketchCounter,
+    S::Counter: CsHeapCounter,
 {
     /// Returns a reference to the internal Count Sketch.
     pub fn cs(&self) -> &Count<S, M, H> {
@@ -215,12 +258,12 @@ where
     }
 
     /// Returns a reference to the heavy-hitter heap.
-    pub fn heap(&self) -> &HHHeap {
+    pub fn heap(&self) -> &HHHeap<HeapCountOf<S>> {
         &self.heap
     }
 
     /// Returns a mutable reference to the heavy-hitter heap.
-    pub fn heap_mut(&mut self) -> &mut HHHeap {
+    pub fn heap_mut(&mut self) -> &mut HHHeap<HeapCountOf<S>> {
         &mut self.heap
     }
 
@@ -246,14 +289,14 @@ where
 
 impl<S: MatrixStorage, H: SketchHasher> CSHeap<S, RegularPath, H>
 where
-    S::Counter: CountSketchCounter,
+    S::Counter: CsHeapCounter,
 {
     /// Inserts a single observation and updates the top-k heap.
     #[inline]
     pub fn insert(&mut self, key: &DataInput) {
         self.cs.insert(key);
         let est = self.cs.estimate(key);
-        self.heap.update(key, cs_heap_count(est));
+        self.heap.update(key, S::Counter::heap_count(est));
     }
 
     /// Inserts an observation with the given count and updates the top-k heap.
@@ -261,7 +304,7 @@ where
     pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
         self.cs.insert_many(key, many);
         let est = self.cs.estimate(key);
-        self.heap.update(key, cs_heap_count(est));
+        self.heap.update(key, S::Counter::heap_count(est));
     }
 
     /// Inserts a batch of observations, updating the heap after each.
@@ -294,7 +337,7 @@ where
         for key in candidate_keys {
             let key_ref = heap_item_to_sketch_input(&key);
             let est = self.cs.estimate(&key_ref);
-            self.heap.update(&key_ref, cs_heap_count(est));
+            self.heap.update(&key_ref, S::Counter::heap_count(est));
         }
     }
 }
@@ -304,14 +347,14 @@ where
 impl<S, H: SketchHasher> CSHeap<S, FastPath, H>
 where
     S: MatrixStorage + crate::FastPathHasher<H>,
-    S::Counter: CountSketchCounter,
+    S::Counter: CsHeapCounter,
 {
     /// Inserts a single observation using fast-path hashing and updates the heap.
     #[inline]
     pub fn insert(&mut self, key: &DataInput) {
         self.cs.insert(key);
         let est = self.cs.estimate(key);
-        self.heap.update(key, cs_heap_count(est));
+        self.heap.update(key, S::Counter::heap_count(est));
     }
 
     /// Inserts an observation with the given count using fast-path hashing.
@@ -319,7 +362,7 @@ where
     pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
         self.cs.insert_many(key, many);
         let est = self.cs.estimate(key);
-        self.heap.update(key, cs_heap_count(est));
+        self.heap.update(key, S::Counter::heap_count(est));
     }
 
     /// Inserts a batch of observations using fast-path hashing.
@@ -349,7 +392,7 @@ where
         for key in candidate_keys {
             let key_ref = heap_item_to_sketch_input(&key);
             let est = self.cs.estimate(&key_ref);
-            self.heap.update(&key_ref, cs_heap_count(est));
+            self.heap.update(&key_ref, S::Counter::heap_count(est));
         }
     }
 }
@@ -361,7 +404,7 @@ mod tests {
     use crate::test_utils::sample_zipf_u64;
     use std::collections::{HashMap, HashSet};
 
-    fn heap_count_for_key(heap: &HHHeap, key: &DataInput) -> Option<i64> {
+    fn heap_count_for_key<C: crate::HeapCount>(heap: &HHHeap<C>, key: &DataInput) -> Option<C> {
         heap.heap()
             .iter()
             .find(|item| heap_item_to_sketch_input(&item.key) == *key)
@@ -486,6 +529,39 @@ mod tests {
             })
             .expect("key should be in heap");
         assert_eq!(heap_item.count, 30);
+    }
+
+    /// An `f64` sketch's heap holds the unrounded median after an insert and
+    /// after a merge, on both paths.
+    #[test]
+    fn f64_heap_counts_are_the_unrounded_median() {
+        let key = DataInput::Str("flow");
+        let mut regular = CSHeap::<Vector2D<f64>, RegularPath>::new(3, 64, 4);
+        regular.insert_many(&key, -2.25);
+        assert_eq!(heap_count_for_key(regular.heap(), &key), Some(-2.25));
+        regular.merge(&regular.clone());
+        assert_eq!(heap_count_for_key(regular.heap(), &key), Some(-4.5));
+
+        let mut fast = CSHeap::<Vector2D<f64>, FastPath>::new(3, 64, 4);
+        fast.insert_many(&key, -2.25);
+        assert_eq!(heap_count_for_key(fast.heap(), &key), Some(-2.25));
+        fast.merge(&fast.clone());
+        assert_eq!(heap_count_for_key(fast.heap(), &key), Some(-4.5));
+    }
+
+    /// An integer sketch's heap holds its median truncated toward zero: rows
+    /// reading `-2` and `-3` give `-2.5`, held as `-2`.
+    #[test]
+    fn integer_heap_counts_truncate_the_median_toward_zero() {
+        let key = DataInput::Str("flow");
+        let mut sketch = CSHeap::<Vector2D<i64>, RegularPath>::new(2, 64, 4);
+        sketch.insert_many(&key, -2);
+        let row = &mut sketch.cs_mut().as_storage_mut()[1];
+        let cell = row.iter_mut().find(|cell| **cell != 0).expect("key cell");
+        *cell = *cell / 2 * 3;
+        sketch.insert_many(&key, 0);
+        assert_eq!(sketch.estimate(&key), -2.5);
+        assert_eq!(heap_count_for_key(sketch.heap(), &key), Some(-2));
     }
 
     #[test]

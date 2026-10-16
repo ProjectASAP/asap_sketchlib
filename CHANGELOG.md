@@ -68,9 +68,36 @@ signals a backwards-compatible change.
   payload is unchanged.
 - **`peek_kind_id(&[u8])`** returns an ASAPv1 envelope's `kind_id` after
   checking its magic, version, and framing, without decoding the sketch.
+- **`CountMinDelta`**, the ASAPv1 Count-Min delta (`0x02 0x80`): built with
+  `new` from changed cells, serialized like a sketch, and added with
+  `CountMin::merge_delta`, which changes nothing when it fails.
+- **`sketches::CountSketchDelta`**, the ASAPv1 Count Sketch delta (`0x04 0x80`),
+  and `f64` Count Sketch counters (`counter_type` `"f64"`): the delta is built
+  with `new` from changed cells, serialized like a sketch, and added with
+  `Count::merge_delta`, which changes nothing when it fails.
+- **`CMSHeapDelta`**, the ASAPv1 CMSHeap delta (`0x03 0x80`), and `f64`
+  CMSHeap insert and merge, with unrounded `f64` heap counts.
+- **`CSHeapDelta`**, the ASAPv1 CSHeap delta (`0x0a 0x80`), and unrounded
+  `f64` heap counts for an `f64` CSHeap (`CsHeapCounter`).
+- **`HyperLogLogDelta`**, the ASAPv1 HLL Classic and Ertl-MLE deltas
+  (`0x01 0x81`, `0x01 0x82`): built with `new` from changed registers,
+  serialized like a sketch, and merged register-wise by `max` with
+  `HyperLogLogImpl::merge_delta`.
+- **ASAPv1 for `SetAggregator` (`0x08 0x00`) and `DeltaResult` (`0x08 0x80`)**:
+  `serialize_to_bytes` / `deserialize_from_bytes` on both types.
+- **`DDSketchDelta`**, the ASAPv1 DDSketch delta (`0x05 0x80`): built with
+  `new` from changed buckets of both stores and a zero-count increment,
+  serialized like a sketch, and added with `DDSketch::merge_delta`, which
+  changes nothing when it fails.
 
 ### Changed
 
+- **DDSketch has one ASAPv1 encoding**: `metadata_version` 1 with all eight
+  payload fields, the negative store and zero count included. Bytes change for
+  positive-only and empty sketches, and `metadata_version` 2 is rejected.
+- **The CMSHeap and CSHeap ASAPv1 metadata key `k` is renamed `heap_size`**,
+  and the CMSHeap, CSHeap and UnivMon decoders reject heap entries out of
+  emitted order. `HHItem` and `HHHeap` take a count type, `i64` by default.
 - **ASAPv1 decoders reject a block with bytes after its msgpack value, and a
   float field that is not msgpack float64** (an `f32` key: not float32).
 - **The ASAPv1 golden fixtures live in their own repo**,

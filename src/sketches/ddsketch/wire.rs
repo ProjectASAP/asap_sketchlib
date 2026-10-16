@@ -6,7 +6,7 @@
 //! algorithm lives in the parent module file. Being a descendant module, it
 //! reads the sketch's private `store` / `count` / `sum` / `min` / `max` fields
 //! directly without widening any field visibility. See
-//! `docs/asapv1_wire_format.md` §3.
+//! `docs/asapv1_wire_format.md` §3.8.
 //!
 //! ## DDSketch metadata has no hash spec
 //!
@@ -23,9 +23,8 @@
 //!
 //! ## Signed stores
 //!
-//! Positive-only payloads retain metadata version 1. Signed or zero-containing
-//! payloads use version 2 and append a negative-magnitude store and zero count.
-//! Older native readers reject version 2 instead of silently dropping samples.
+//! Every payload carries the positive store, the negative-magnitude store and
+//! the zero count, whether or not the sketch holds a value `<= 0`.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
@@ -34,7 +33,7 @@ use crate::common::structures::Vector1D;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact;
 
-use super::{Buckets, DDSketch};
+use super::{Buckets, DDSketch, DDSketchState};
 
 /// DDSketch kind_id: family `0x05`, single algorithm variant `0x00`.
 const DD_KIND: &[u8] = &[0x05, 0x00];
@@ -60,28 +59,34 @@ fn dd_metadata(alpha: f64) -> DdMetadata {
     }
 }
 
-/// DDSketch payload (ASAPv1 §3), a msgpack **array** (`to_vec`, positional):
-/// `[counts, offset, sum, min, max]`. `counts` is the dense bucket store,
-/// carried verbatim including the growth padding, so a decoded sketch
-/// re-serializes byte-identically; the bucket index of `counts[i]` is
-/// `offset + i`. `sum` / `min` / `max` are the sketch's running scalars, which
-/// the bucket counts do not determine: exact over the values passed to `add`,
-/// and the bucket representative for a bucket promoted through `apply_delta`.
-/// The total sample count is the sum of `counts` and so is not carried.
-#[derive(Debug, Serialize, Deserialize)]
-struct DdPayload {
-    counts: Vec<u64>,
-    offset: i32,
-    #[serde(deserialize_with = "exact")]
-    sum: f64,
-    #[serde(deserialize_with = "exact")]
-    min: f64,
-    #[serde(deserialize_with = "exact")]
-    max: f64,
+/// Encodes the metadata block for `alpha`.
+pub(super) fn encode_metadata(alpha: f64) -> Result<Vec<u8>, RmpEncodeError> {
+    rmp_serde::to_vec_named(&dd_metadata(alpha))
 }
 
+/// Decodes the metadata block to its `alpha`: exactly `metadata_version` 1 and
+/// an `alpha` inside `(0, 1)`.
+pub(super) fn decode_metadata(metadata: &[u8]) -> Result<f64, RmpDecodeError> {
+    let meta: DdMetadata = envelope::decode_block(metadata)?;
+    // `alpha` is a property of the stored sketch rather than of the target
+    // type, so it is echoed back into the expected block instead of pinned.
+    if meta != dd_metadata(meta.alpha) {
+        return Err(RmpDecodeError::Uncategorized(
+            "ASAPv1 DDSketch envelope: metadata mismatch".to_string(),
+        ));
+    }
+    check_alpha(meta.alpha).map_err(RmpDecodeError::Uncategorized)?;
+    Ok(meta.alpha)
+}
+
+/// DDSketch payload (ASAPv1 §3.8), a msgpack **array** (`to_vec`, positional).
+/// Each store is carried verbatim including the growth padding, so a decoded
+/// sketch re-serializes byte-identically; the bucket index of `counts[i]` is
+/// `offset + i`. `sum` / `min` / `max` are the running scalars, which the
+/// bucket counts do not determine. The total sample count is the sum of both
+/// stores and `zero_count`, and so is not carried.
 #[derive(Debug, Serialize, Deserialize)]
-struct SignedPayload {
+struct DdPayload {
     counts: Vec<u64>,
     offset: i32,
     #[serde(deserialize_with = "exact")]
@@ -93,17 +98,6 @@ struct SignedPayload {
     negative_counts: Vec<u64>,
     negative_offset: i32,
     zero_count: u64,
-}
-
-pub(super) fn check_signed_scalars(count: u64, sum: f64, min: f64, max: f64) -> Result<(), String> {
-    if count == 0 {
-        return check_scalars(count, sum, min, max);
-    }
-    if sum.is_finite() && min.is_finite() && max.is_finite() && min <= max {
-        Ok(())
-    } else {
-        Err("DDSketch invalid signed scalars".into())
-    }
 }
 
 /// Checks a relative accuracy against the domain [`DDSketch::new`] accepts:
@@ -119,7 +113,8 @@ pub(super) fn check_alpha(alpha: f64) -> Result<(), String> {
 /// Checks a bucket store's index span: an empty store sits at offset `0`, and
 /// a populated one's highest index `offset + len - 1` is representable as an
 /// `i32`. Applied before the store is rebuilt from the declared offset.
-pub(super) fn check_store_span(offset: i32, len: usize) -> Result<(), String> {
+fn check_store_span(store: &Buckets) -> Result<(), String> {
+    let (offset, len) = (store.offset, store.counts.len());
     if len == 0 {
         if offset != 0 {
             return Err(format!(
@@ -137,16 +132,26 @@ pub(super) fn check_store_span(offset: i32, len: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// Total sample count, the checked sum of every bucket. `None` on overflow.
-pub(super) fn total_count(counts: &[u64]) -> Option<u64> {
-    counts.iter().try_fold(0u64, |acc, &c| acc.checked_add(c))
+/// Sum of a store's bucket counts. `None` on overflow.
+fn store_total(store: &Buckets) -> Option<u64> {
+    store
+        .counts
+        .as_slice()
+        .iter()
+        .try_fold(0u64, |acc, &c| acc.checked_add(c))
 }
 
-/// Checks the running scalars against the store's total count. An empty sketch
-/// carries `0.0` / `+inf` / `-inf`, the state [`DDSketch::new`] starts in. A
-/// populated one carries finite scalars with `0 < min <= max`, and `sum >= min`
-/// since every ingested value is at least `min`.
-pub(super) fn check_scalars(count: u64, sum: f64, min: f64, max: f64) -> Result<(), String> {
+/// Checks the running scalars against the total count. An empty sketch carries
+/// `0.0` / `+inf` / `-inf`, the state [`DDSketch::new`] starts in. A populated
+/// one carries finite scalars with `min <= max`; when every value is positive,
+/// also `0 < min` and `sum >= min`.
+fn check_scalars(
+    count: u64,
+    positive_only: bool,
+    sum: f64,
+    min: f64,
+    max: f64,
+) -> Result<(), String> {
     if count == 0 {
         if sum == 0.0 && min == f64::INFINITY && max == f64::NEG_INFINITY {
             return Ok(());
@@ -160,7 +165,7 @@ pub(super) fn check_scalars(count: u64, sum: f64, min: f64, max: f64) -> Result<
             "DDSketch scalars must be finite for a populated store: {sum}, {min}, {max}"
         ));
     }
-    if !(min > 0.0 && min <= max && sum >= min) {
+    if !(min <= max && (!positive_only || (min > 0.0 && sum >= min))) {
         return Err(format!(
             "DDSketch scalars out of order: sum={sum}, min={min}, max={max}"
         ));
@@ -168,68 +173,62 @@ pub(super) fn check_scalars(count: u64, sum: f64, min: f64, max: f64) -> Result<
     Ok(())
 }
 
+/// Checks a state against §3.8 rules 3 through 7 and returns its total sample
+/// count, the checked sum of both stores and `zero_count`.
+pub(super) fn check_state(state: &DDSketchState) -> Result<u64, String> {
+    check_alpha(state.alpha)?;
+    check_store_span(&state.store)?;
+    check_store_span(&state.negative_store)?;
+    let overflow = || "DDSketch bucket counts overflow the total sample count".to_string();
+    let negative = store_total(&state.negative_store).ok_or_else(overflow)?;
+    let count = store_total(&state.store)
+        .and_then(|c| c.checked_add(negative))
+        .and_then(|c| c.checked_add(state.zero_count))
+        .ok_or_else(overflow)?;
+    let positive_only = negative == 0 && state.zero_count == 0;
+    check_scalars(count, positive_only, state.sum, state.min, state.max)?;
+    Ok(count)
+}
+
 // Wire serialization for DDSketch. `wire` is a descendant of the sketch module,
 // so these impls read the private fields and construct the struct directly.
 impl DDSketch {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope
     /// (kind_id `0x05 0x00`). `alpha` lands in the metadata; the payload is the
-    /// bucket store plus the three scalars the buckets do not determine.
+    /// two bucket stores, the zero count and the three scalars.
     ///
     /// A sketch whose state the decoder would refuse — an out-of-range `alpha`,
-    /// a store spanning past `i32`, or bucket counts that overflow `u64` — is an
-    /// error rather than bytes that would be refused on decode.
+    /// a store spanning past `i32`, counts that overflow `u64`, or inconsistent
+    /// scalars — is an error rather than bytes that would be refused on decode.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let fail = |e: String| RmpEncodeError::Syntax(format!("ASAPv1 DDSketch envelope: {e}"));
-        check_alpha(self.alpha).map_err(fail)?;
-        let counts = self.store.counts.as_slice();
-        check_store_span(self.store.offset, counts.len()).map_err(fail)?;
-        let count = total_count(counts)
-            .ok_or_else(|| fail("bucket counts overflow the total sample count".to_string()))?;
-        if self.negative_store.is_empty() && self.zero_count == 0 {
-            check_scalars(count, self.sum, self.min, self.max).map_err(fail)?;
-        }
-
-        if !self.negative_store.is_empty() || self.zero_count != 0 {
-            check_store_span(self.negative_store.offset, self.negative_store.counts.len())
-                .map_err(fail)?;
-            let count = total_count(self.store.counts.as_slice())
-                .and_then(|c| {
-                    total_count(self.negative_store.counts.as_slice())
-                        .and_then(|n| c.checked_add(n))
-                })
-                .and_then(|c| c.checked_add(self.zero_count))
-                .ok_or_else(|| fail("count overflow".into()))?;
-            check_signed_scalars(count, self.sum, self.min, self.max).map_err(fail)?;
-            let metadata = rmp_serde::to_vec_named(&DdMetadata {
-                metadata_version: 2,
-                alpha: self.alpha,
-            })?;
-            let payload = rmp_serde::to_vec(&SignedPayload {
-                counts: counts.to_vec(),
-                offset: self.store.offset,
-                sum: self.sum,
-                min: self.min,
-                max: self.max,
-                negative_counts: self.negative_store.counts.as_slice().to_vec(),
-                negative_offset: self.negative_store.offset,
-                zero_count: self.zero_count,
-            })?;
-            return Ok(envelope::encode(DD_KIND, &metadata, &payload));
-        }
-        let metadata = rmp_serde::to_vec_named(&dd_metadata(self.alpha))?;
-        let payload = rmp_serde::to_vec(&DdPayload {
-            counts: counts.to_vec(),
-            offset: self.store.offset,
+        let state = DDSketchState {
+            alpha: self.alpha,
+            store: self.store.clone(),
             sum: self.sum,
             min: self.min,
             max: self.max,
+            negative_store: self.negative_store.clone(),
+            zero_count: self.zero_count,
+        };
+        check_state(&state)
+            .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 DDSketch envelope: {e}")))?;
+        let metadata = encode_metadata(self.alpha)?;
+        let payload = rmp_serde::to_vec(&DdPayload {
+            counts: state.store.counts.into_vec(),
+            offset: state.store.offset,
+            sum: self.sum,
+            min: self.min,
+            max: self.max,
+            negative_counts: state.negative_store.counts.into_vec(),
+            negative_offset: state.negative_store.offset,
+            zero_count: self.zero_count,
         })?;
         Ok(envelope::encode(DD_KIND, &metadata, &payload))
     }
 
     /// Deserializes a DDSketch from an ASAPv1 MessagePack envelope. The index
     /// mapping is rebuilt from the metadata `alpha` and the total sample count
-    /// is summed from the buckets. Every inconsistency fails closed.
+    /// is summed from the stores. Every inconsistency fails closed.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
@@ -238,64 +237,24 @@ impl DDSketch {
                 "DDSketch kind_id mismatch: stored {kind_id:?}, expected {DD_KIND:?}"
             )));
         }
-        let meta: DdMetadata = envelope::decode_block(metadata)?;
-        // `alpha` is a property of the stored sketch rather than of the target
-        // type, so it is echoed back into the expected block and bounded by
-        // range instead of being pinned.
-        if meta.metadata_version == 2 {
-            let p: SignedPayload = envelope::decode_block(payload)?;
-            return DDSketch::try_from(super::DDSketchState {
-                alpha: meta.alpha,
-                store: Buckets {
-                    counts: Vector1D::from_vec(p.counts),
-                    offset: p.offset,
-                },
-                negative_store: Buckets {
-                    counts: Vector1D::from_vec(p.negative_counts),
-                    offset: p.negative_offset,
-                },
-                zero_count: p.zero_count,
-                sum: p.sum,
-                min: p.min,
-                max: p.max,
-            })
-            .map_err(RmpDecodeError::Uncategorized);
-        }
-        if meta != dd_metadata(meta.alpha) {
-            return Err(RmpDecodeError::Uncategorized(
-                "ASAPv1 DDSketch envelope: metadata mismatch".to_string(),
-            ));
-        }
-        check_alpha(meta.alpha).map_err(RmpDecodeError::Uncategorized)?;
-
+        let alpha = decode_metadata(metadata)?;
         let p: DdPayload = envelope::decode_block(payload)?;
-        check_store_span(p.offset, p.counts.len()).map_err(RmpDecodeError::Uncategorized)?;
-        let count = total_count(&p.counts).ok_or_else(|| {
-            RmpDecodeError::Uncategorized(
-                "DDSketch bucket counts overflow the total sample count".to_string(),
-            )
-        })?;
-        check_scalars(count, p.sum, p.min, p.max).map_err(RmpDecodeError::Uncategorized)?;
-
-        let alpha = meta.alpha;
-        let gamma = (1.0 + alpha) / (1.0 - alpha);
-        let log_gamma = gamma.ln();
-        Ok(DDSketch {
+        DDSketch::try_from(DDSketchState {
             alpha,
-            gamma,
-            log_gamma,
-            inv_log_gamma: 1.0 / log_gamma,
             store: Buckets {
                 counts: Vector1D::from_vec(p.counts),
                 offset: p.offset,
             },
-            count,
             sum: p.sum,
             min: p.min,
             max: p.max,
-            negative_store: Buckets::new(),
-            zero_count: 0,
+            negative_store: Buckets {
+                counts: Vector1D::from_vec(p.negative_counts),
+                offset: p.negative_offset,
+            },
+            zero_count: p.zero_count,
         })
+        .map_err(RmpDecodeError::Uncategorized)
     }
 }
 
@@ -314,20 +273,31 @@ mod tests {
         sketch
     }
 
-    /// Builds a real envelope with real metadata around a hand-built payload,
-    /// so the crafted-bytes tests exercise the decoder's own rules rather than
-    /// the envelope's framing.
-    fn crafted(alpha: f64, counts: Vec<u64>, offset: i32, sum: f64, min: f64, max: f64) -> Vec<u8> {
-        let metadata = rmp_serde::to_vec_named(&dd_metadata(alpha)).unwrap();
-        let payload = rmp_serde::to_vec(&DdPayload {
+    /// A payload with only a positive store.
+    fn positive(counts: Vec<u64>, offset: i32, sum: f64, min: f64, max: f64) -> DdPayload {
+        DdPayload {
             counts,
             offset,
             sum,
             min,
             max,
-        })
-        .unwrap();
+            negative_counts: Vec::new(),
+            negative_offset: 0,
+            zero_count: 0,
+        }
+    }
+
+    /// Builds a real envelope with real metadata around a hand-built payload,
+    /// so the crafted-bytes tests exercise the decoder's own rules rather than
+    /// the envelope's framing.
+    fn crafted_payload(alpha: f64, payload: &DdPayload) -> Vec<u8> {
+        let metadata = rmp_serde::to_vec_named(&dd_metadata(alpha)).unwrap();
+        let payload = rmp_serde::to_vec(payload).unwrap();
         envelope::encode(DD_KIND, &metadata, &payload)
+    }
+
+    fn crafted(alpha: f64, counts: Vec<u64>, offset: i32, sum: f64, min: f64, max: f64) -> Vec<u8> {
+        crafted_payload(alpha, &positive(counts, offset, sum, min, max))
     }
 
     /// The message a rejected decode fails with, so a test can pin *which*
@@ -382,23 +352,24 @@ mod tests {
         assert_eq!(decoded.alpha(), sketch.alpha());
     }
 
-    /// The total sample count is the sum of the buckets, so the payload carries
-    /// no `count` field: it is a 5-element array and nothing more.
+    /// A positive-only sketch still carries all eight payload fields, and the
+    /// total sample count is not one of them.
     #[test]
-    fn ddsketch_count_is_recovered_from_the_buckets() {
+    fn ddsketch_payload_is_eight_fields_without_a_count() {
+        type Eight = (Vec<u64>, i32, f64, f64, f64, Vec<u64>, i32, u64);
         let sketch = populated();
         let bytes = sketch.serialize_to_bytes().expect("serialize");
         let (_, _, payload) = envelope::split(&bytes).expect("split");
 
-        let five: (Vec<u64>, i32, f64, f64, f64) = from_slice(payload).expect("5-element payload");
-        assert_eq!(five.0.iter().sum::<u64>(), sketch.get_count());
-        assert!(
-            from_slice::<(Vec<u64>, i32, f64, f64, f64, u64)>(payload).is_err(),
-            "the payload must not carry a sixth element"
+        let eight: Eight = envelope::decode_block(payload).expect("8-element payload");
+        assert_eq!(eight.0.iter().sum::<u64>(), sketch.get_count());
+        assert_eq!((eight.5.len(), eight.6, eight.7), (0, 0, 0));
+        assert_eq!(
+            DDSketch::deserialize_from_bytes(&bytes)
+                .expect("decode")
+                .get_count(),
+            sketch.get_count()
         );
-
-        let decoded = DDSketch::deserialize_from_bytes(&bytes).expect("decode");
-        assert_eq!(decoded.get_count(), sketch.get_count());
     }
 
     #[test]
@@ -447,16 +418,9 @@ mod tests {
             "Count-Min bytes must not decode as a DDSketch"
         );
 
-        let metadata = rmp_serde::to_vec_named(&dd_metadata(ALPHA)).unwrap();
-        let payload = rmp_serde::to_vec(&DdPayload {
-            counts: Vec::new(),
-            offset: 0,
-            sum: 0.0,
-            min: f64::INFINITY,
-            max: f64::NEG_INFINITY,
-        })
-        .unwrap();
-        let bytes = envelope::encode(&[0x02, 0x00], &metadata, &payload);
+        let mut bytes = DDSketch::new(ALPHA).serialize_to_bytes().unwrap();
+        assert!(DDSketch::deserialize_from_bytes(&bytes).is_ok());
+        bytes[8] = 0x02;
         assert!(
             DDSketch::deserialize_from_bytes(&bytes).is_err(),
             "a foreign kind_id must be rejected"
@@ -502,6 +466,24 @@ mod tests {
         );
     }
 
+    /// `metadata_version` is `1`; any other version is refused.
+    #[test]
+    fn ddsketch_rejects_another_metadata_version() {
+        let payload = rmp_serde::to_vec(&positive(vec![3], 7, 6.0, 1.5, 2.5)).unwrap();
+        for version in [0u8, 2] {
+            let metadata = rmp_serde::to_vec_named(&DdMetadata {
+                metadata_version: version,
+                alpha: ALPHA,
+            })
+            .unwrap();
+            let err = decode_error(&envelope::encode(DD_KIND, &metadata, &payload));
+            assert!(
+                err.contains("metadata mismatch"),
+                "version {version}: {err}"
+            );
+        }
+    }
+
     /// `alpha` outside `(0, 1)` makes every bucket index meaningless, so it is
     /// rejected rather than used to derive a nonsense mapping.
     #[test]
@@ -520,6 +502,15 @@ mod tests {
         );
     }
 
+    /// `alpha` is checked before the payload is read: a bad `alpha` in front of
+    /// an unreadable payload fails on `alpha`.
+    #[test]
+    fn ddsketch_checks_alpha_before_the_payload() {
+        let metadata = rmp_serde::to_vec_named(&dd_metadata(2.0)).unwrap();
+        let err = decode_error(&envelope::encode(DD_KIND, &metadata, &[0xc1]));
+        assert!(err.contains("alpha"), "got {err}");
+    }
+
     /// A store whose declared offset pushes its highest bucket index past
     /// `i32` is rejected from the offset and the array length alone, before the
     /// store is rebuilt — and never panics.
@@ -530,6 +521,11 @@ mod tests {
             err.contains("store span past i32"),
             "an overflowing store span must be rejected as such, got {err}"
         );
+        let mut negative = positive(vec![3], 7, 6.0, -1.0, 2.5);
+        negative.negative_counts = vec![1; 10];
+        negative.negative_offset = i32::MAX - 2;
+        let err = decode_error(&crafted_payload(ALPHA, &negative));
+        assert!(err.contains("store span past i32"), "negative store: {err}");
         // The same payload one bucket shorter than the boundary decodes.
         let ok = crafted(ALPHA, vec![1; 3], i32::MAX - 2, 5.0, 1.0, 2.0);
         assert!(DDSketch::deserialize_from_bytes(&ok).is_ok());
@@ -540,29 +536,35 @@ mod tests {
     /// different bytes.
     #[test]
     fn ddsketch_rejects_a_nonzero_offset_on_an_empty_store() {
-        let err = decode_error(&crafted(
-            ALPHA,
-            Vec::new(),
-            42,
-            0.0,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-        ));
+        let empty = || positive(Vec::new(), 0, 0.0, f64::INFINITY, f64::NEG_INFINITY);
+        let mut payload = empty();
+        payload.offset = 42;
+        let err = decode_error(&crafted_payload(ALPHA, &payload));
         assert!(
             err.contains("empty store must be at offset 0"),
             "a non-zero empty-store offset must be rejected as such, got {err}"
         );
     }
 
-    /// Bucket counts that overflow the recovered total are rejected rather than
-    /// wrapping into a count the quantile walk would disagree with.
+    /// Counts that overflow the recovered total — across both stores and the
+    /// zero count — are rejected rather than wrapping.
     #[test]
     fn ddsketch_rejects_a_total_count_overflow() {
-        let err = decode_error(&crafted(ALPHA, vec![u64::MAX, 1], 0, 5.0, 1.0, 2.0));
-        assert!(
-            err.contains("overflow the total sample count"),
-            "an overflowing bucket total must be rejected as such, got {err}"
-        );
+        let mut negative = positive(vec![u64::MAX], 0, 5.0, -1.0, 2.0);
+        negative.negative_counts = vec![1];
+        let mut zero = positive(vec![u64::MAX], 0, 5.0, 0.0, 2.0);
+        zero.zero_count = 1;
+        for payload in [
+            positive(vec![u64::MAX, 1], 0, 5.0, 1.0, 2.0),
+            negative,
+            zero,
+        ] {
+            let err = decode_error(&crafted_payload(ALPHA, &payload));
+            assert!(
+                err.contains("overflow the total sample count"),
+                "an overflowing total must be rejected as such, got {err}"
+            );
+        }
     }
 
     /// The scalars the buckets do not determine are still bounded by them: an
@@ -592,6 +594,28 @@ mod tests {
                     || err.contains("scalars must be finite"),
                 "sum={sum}, min={min}, max={max} must be rejected by a scalar rule, got {err}"
             );
+        }
+    }
+
+    /// `0 < min` and `sum >= min` hold only while the negative store sums to
+    /// zero and `zero_count` is zero; an all-zero negative store keeps them.
+    #[test]
+    fn ddsketch_positive_scalar_checks_follow_the_counts() {
+        let mut zero_negative = positive(vec![3], 7, 6.0, -1.0, 2.5);
+        zero_negative.negative_counts = vec![0, 0];
+        zero_negative.negative_offset = 5;
+        let err = decode_error(&crafted_payload(ALPHA, &zero_negative));
+        assert!(err.contains("scalars out of order"), "got {err}");
+
+        let mut negative = positive(vec![3], 7, -0.5, -1.5, 2.5);
+        negative.negative_counts = vec![1];
+        negative.negative_offset = 5;
+        let mut zero = positive(vec![3], 7, 0.0, 0.0, 2.5);
+        zero.zero_count = 2;
+        for payload in [negative, zero] {
+            let bytes = crafted_payload(ALPHA, &payload);
+            let decoded = DDSketch::deserialize_from_bytes(&bytes).expect("decode");
+            assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
         }
     }
 

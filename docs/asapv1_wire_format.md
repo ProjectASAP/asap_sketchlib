@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators), Count-Min, CMSHeap, Count Sketch, CSHeap, DDSketch, KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH and UnivMon-Q.
+- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinDelta`), CMSHeap with its delta (`CMSHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap with its delta (`CSHeapDelta`), DDSketch with its delta (`DDSketchDelta`), KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH, UnivMon-Q, and SetAggregator with its delta (`DeltaResult`).
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -186,16 +186,16 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x01 0x01` | HLL | Classic ("Regular") | Section 3.1 | implemented |
 | `0x01 0x02` | HLL | Ertl-MLE ("Datafusion") | Section 3.1 | implemented |
 | `0x01 0x03` | HLL | HIP | Section 3.1 | implemented |
-| `0x01 0x81` | HLL | Classic delta | Section 3.23 | designed |
-| `0x01 0x82` | HLL | Ertl-MLE delta | Section 3.23 | designed |
+| `0x01 0x81` | HLL | Classic delta | Section 3.23 | implemented |
+| `0x01 0x82` | HLL | Ertl-MLE delta | Section 3.23 | implemented |
 | `0x02 0x00` | Count-Min | Count-Min | Section 3.2 | implemented |
-| `0x02 0x80` | Count-Min | Count-Min delta | Section 3.23 | designed |
+| `0x02 0x80` | Count-Min | Count-Min delta | Section 3.23 | implemented |
 | `0x03 0x00` | Count-Min-with-heap (CMSHeap) | Count-Min + top-k heap | Section 3.7 | implemented |
-| `0x03 0x80` | Count-Min-with-heap (CMSHeap) | CMSHeap delta | Section 3.23 | designed |
+| `0x03 0x80` | Count-Min-with-heap (CMSHeap) | CMSHeap delta | Section 3.23 | implemented |
 | `0x04 0x00` | Count Sketch | Count Sketch | Section 3.6 | implemented |
-| `0x04 0x80` | Count Sketch | Count Sketch delta | Section 3.23 | designed |
+| `0x04 0x80` | Count Sketch | Count Sketch delta | Section 3.23 | implemented |
 | `0x05 0x00` | DDSketch | Logarithmic bucket stores | Section 3.8 | implemented |
-| `0x05 0x80` | DDSketch | DDSketch delta | Section 3.23 | designed |
+| `0x05 0x80` | DDSketch | DDSketch delta | Section 3.23 | implemented |
 | `0x06 0x00` | KLL | Compact | Section 3.3 | implemented |
 | `0x06 0x01` | KLL dynamic | Dynamic | Section 3.3 | implemented |
 | `0x07 0x00` | Hydra | KLL counter | Section 3.9 | implemented |
@@ -203,11 +203,11 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x07 0x02` | Hydra | Count Sketch counter | Section 3.9 | implemented |
 | `0x07 0x03` | Hydra | HyperLogLog counter | Section 3.9 | implemented |
 | `0x07 0x04` | Hydra | UnivMon counter | Section 3.9 | implemented |
-| `0x08 0x00` | SetAggregator | Exact string set | Section 3.21 | designed |
-| `0x08 0x80` | SetAggregator | SetAggregator delta | Section 3.22 | designed |
+| `0x08 0x00` | SetAggregator | Exact string set | Section 3.21 | implemented |
+| `0x08 0x80` | SetAggregator | SetAggregator delta | Section 3.22 | implemented |
 | `0x09 0x00` | - | - | TBD | retired / permanently reserved, never reassign |
 | `0x0a 0x00` | Count-Sketch-with-heap (CSHeap) | Count Sketch + top-k heap | Section 3.10 | implemented |
-| `0x0a 0x80` | Count-Sketch-with-heap (CSHeap) | CSHeap delta | Section 3.23 | designed |
+| `0x0a 0x80` | Count-Sketch-with-heap (CSHeap) | CSHeap delta | Section 3.23 | implemented |
 | `0x0b 0x00` | Elastic | Heavy/light | Section 3.11 | implemented |
 | `0x0c 0x00` | Coco | CocoSketch | Section 3.12 | implemented |
 | `0x0d 0x00` | UniformSampling (`Unstable`) | Priority sampling | Section 3.13 | implemented |
@@ -1038,7 +1038,7 @@ UnivMon carries the hash-spec group — it hashes, and a consumer must reproduce
 10. `update_mode` is `0`, `1` or `2`; any other value is rejected.
 11. Each layer's heap entries are in the emitted order above; any other order is rejected.
 
-The encode side enforces the same shape rules — a `layers` past 64, a layer that is not the declared size, a layer hashing at another layer's seed index, mixed or 128-bit keys, a layer count that disagrees with the declared `layers` — so the format never emits bytes it would refuse to read back. Rule 7's duplicate-key half is the exception, and it is the decode door's alone here where §3.7's is on both: a layer heap holding the same `NaN` twice (§3.7's producer-side constraint) serializes, and the bytes are refused when they are read back.
+The encode side enforces the same shape rules — a `layers` past 64, a layer that is not the declared size, a layer hashing at another layer's seed index, mixed or 128-bit keys, a layer count that disagrees with the declared `layers` — and rule 7, so the format never emits bytes it would refuse to read back: a layer heap holding the same `NaN` twice (§3.7's producer-side constraint) fails to serialize.
 
 ### 3.16: UnivMon Optimized payload (`0x11 0x00`)
 
@@ -1069,7 +1069,7 @@ The encode side enforces the same shape rules — a `layers` past 64, a layer th
 4. The declared layout's accumulator count — `min(elephant_layers, layers) * elephant_rows + max(0, layers - elephant_layers) * mouse_rows` — equals `len(l2)` exactly, computed with checked arithmetic and checked **before** the per-layer geometry is built. With rule 3's ceiling above it, that is what makes a crafted `layers` or tier width cost nothing.
 5. §3.15's rules 4, 6, 7, 8, 9, 10 and 11 apply verbatim over the derived per-layer geometry — including the per-layer `l2[i] >= 0` check and the per-layer 128-bit hash-budget check (§3.19).
 
-The encode side enforces §3.15's shape rules over the two-tier layout, the `layers <= 64` ceiling included, and inherits §3.15's one exception, the duplicate-key half of its rule 7.
+The encode side enforces §3.15's shape rules and rule 7 over the two-tier layout, the `layers <= 64` ceiling included.
 
 **`UnivSketchPool` is not a wire kind.** It is a `Vec<UnivMon>` free list of pre-allocated scratch `UnivMon`s — `0x10 0x00`'s type, not this section's — beside a `total_allocated` counter: an allocator, not a sketch, with nothing an observer could query. `0x11 0x00` is `UnivMonPyramid`'s alone.
 

@@ -8,11 +8,15 @@ Common heavy-hitter heap helper used by multiple sketches/frameworks.
 
 ## Type/Struct
 
-- `HHHeap`
+- `HHHeap<C: HeapCount = i64>`
 
-A capacity-bounded min-heap of `HHItem` beside an index from key digest to heap
-position, so a keyed update is a lookup and a sift rather than a scan. The index
-is patched through each sift: `update` costs one hash, one map probe and
+`C` is the count type, `i64` or `f64`; `f64` counts are ranked by
+`f64::total_cmp`. `TopKCounter` maps a matrix counter type to the heap count
+type a top-k sketch keeps beside it.
+
+A capacity-bounded min-heap of `HHItem<C>` beside an index from key digest to
+heap position, so a keyed update is a lookup and a sift rather than a scan. The
+index is patched through each sift: `update` costs one hash, one map probe and
 `O(log k)` index writes, and its rate does not fall as `k` grows. See
 [HHHeap acceleration](../hhheap_acceleration.md) for the measurements.
 
@@ -20,14 +24,14 @@ is patched through each sift: `update` costs one hash, one map probe and
 
 ```rust
 fn new(k: usize) -> Self
-fn from_heap(other: &HHHeap) -> Self
+fn from_heap(other: &HHHeap<C>) -> Self
 ```
 
 ## Insert/Update
 
 ```rust
-fn update(&mut self, key: &DataInput, count: i64) -> bool
-fn update_heap_item(&mut self, key: &HeapItem, count: i64) -> bool
+fn update(&mut self, key: &DataInput, count: C) -> bool
+fn update_heap_item(&mut self, key: &HeapItem, count: C) -> bool
 fn clear(&mut self)
 ```
 
@@ -36,7 +40,7 @@ fn clear(&mut self)
 ```rust
 fn find(&self, key: &DataInput) -> Option<usize>
 fn find_heap_item(&self, key: &HeapItem) -> Option<usize>
-fn heap(&self) -> &[HHItem]
+fn heap(&self) -> &[HHItem<C>]
 fn len(&self) -> usize
 fn is_empty(&self) -> bool
 fn capacity(&self) -> usize

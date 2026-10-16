@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::ops::Neg;
 
+mod delta;
 mod wire;
+pub use delta::CountSketchDelta;
 pub(crate) use wire::{CsWireCounter, CsWireMode};
 
 const DEFAULT_ROW_NUM: usize = 3;
@@ -65,6 +67,13 @@ impl CountSketchCounter for i64 {
 impl CountSketchCounter for i128 {
     fn to_f64(self) -> f64 {
         self as f64
+    }
+}
+
+// Implements CountSketchCounter for f64.
+impl CountSketchCounter for f64 {
+    fn to_f64(self) -> f64 {
+        self
     }
 }
 
@@ -335,7 +344,7 @@ where
         if estimates.is_empty() {
             return 0.0;
         }
-        estimates.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        estimates.sort_unstable_by(f64::total_cmp);
         let mid = estimates.len() / 2;
         if estimates.len() % 2 == 1 {
             estimates[mid]
@@ -863,6 +872,20 @@ mod tests {
             let expected = counter_sign(row, &key) * 3;
             assert_eq!(left.as_storage().query_one_counter(row, idx), expected);
         }
+    }
+
+    #[test]
+    fn f64_estimate_is_the_unrounded_median_and_takes_nan() {
+        let key = DataInput::Str("alpha");
+        let mut sketch = Count::<Vector2D<f64>, RegularPath>::with_dimensions(3, 64);
+        sketch.insert_many(&key, 1.5);
+        assert_eq!(sketch.estimate(&key), 1.5);
+
+        let nan =
+            Count::<Vector2D<f64>, RegularPath>::from_storage(Vector2D::from_fn(3, 4, |_, _| {
+                f64::NAN
+            }));
+        assert!(nan.estimate(&key).is_nan());
     }
 
     #[test]

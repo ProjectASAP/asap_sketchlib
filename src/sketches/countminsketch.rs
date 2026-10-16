@@ -20,7 +20,9 @@ use crate::{
     QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded, nitro_delta_saturated_i32,
 };
 
+mod delta;
 mod wire;
+pub use delta::CountMinDelta;
 pub(crate) use wire::{CmsWireCounter, CmsWireMode};
 
 const DEFAULT_ROW_NUM: usize = 3;

@@ -1,12 +1,13 @@
 //! ASAPv1 wire serialization for the HyperLogLog sketches.
 //!
-//! Child submodule of [`crate::sketches::hll`]: it holds ALL of HLL's
+//! Child submodule of [`crate::sketches::hll`]: it holds HLL's state
 //! serialization (the metadata/payload DTOs, kind_id constants, the
 //! [`HllWireVariant`] mapping, and the `serialize_to_bytes` /
 //! `deserialize_from_bytes` impls) while the algorithm lives in the parent
-//! module file (`hll.rs`). Being a descendant module, it can read the sketch structs' private
-//! fields (`self.registers`) and construct them directly without widening any
-//! field visibility. See `docs/asapv1_wire_format.md`.
+//! module file (`hll.rs`) and the delta kinds in `delta.rs`. Being a
+//! descendant module, it can read the sketch structs' private fields
+//! (`self.registers`) and construct them directly without widening any field
+//! visibility. See `docs/asapv1_wire_format.md`.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
@@ -101,10 +102,16 @@ pub(crate) fn standard_hll_metadata(precision: u32) -> HllMetadata {
     hll_metadata::<DefaultXxHasher>(precision)
 }
 
+/// The metadata block of a sketch with `Registers` storage hashed under `H`.
+pub(super) fn encode_metadata<Registers: HllRegisterStorage, H: HashProfile>()
+-> Result<Vec<u8>, RmpEncodeError> {
+    rmp_serde::to_vec_named(&hll_metadata::<H>(Registers::PRECISION as u32))
+}
+
 /// Validate the envelope for a known target and return the raw payload bytes.
 /// The metadata is checked against the profile of `H`, so bytes hashed under a
 /// different profile are rejected (fail closed).
-fn validated_hll_payload<'a, H: HashProfile>(
+pub(super) fn validated_hll_payload<'a, H: HashProfile>(
     bytes: &'a [u8],
     expected_kind_id: &[u8],
     expected_precision: u32,
@@ -129,7 +136,9 @@ fn validated_hll_payload<'a, H: HashProfile>(
 /// register holds a rank of at most `REGISTER_BITS + 1`, so a byte above that
 /// bound is an impossible state. Both directions call this, so the encode and
 /// decode predicates cannot drift.
-fn check_register_range<Registers: HllRegisterStorage>(registers: &[u8]) -> Result<(), String> {
+pub(super) fn check_register_range<Registers: HllRegisterStorage>(
+    registers: &[u8],
+) -> Result<(), String> {
     let max_rank = (Registers::REGISTER_BITS + 1) as u8;
     match registers.iter().find(|&&rank| rank > max_rank) {
         Some(&rank) => Err(format!(
@@ -187,7 +196,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         H: HashProfile,
     {
         let registers = registers_to_bytes(&self.registers)?;
-        let metadata = rmp_serde::to_vec_named(&hll_metadata::<H>(Registers::PRECISION as u32))?;
+        let metadata = encode_metadata::<Registers, H>()?;
         let payload = rmp_serde::to_vec(&HllPayloadPlain { registers })?;
         Ok(envelope::encode(Variant::WIRE_KIND_ID, &metadata, &payload))
     }
@@ -219,8 +228,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
     /// than bytes that would be refused on decode.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let registers = registers_to_bytes(&self.registers)?;
-        let metadata =
-            rmp_serde::to_vec_named(&standard_hll_metadata(Registers::PRECISION as u32))?;
+        let metadata = encode_metadata::<Registers, DefaultXxHasher>()?;
         let payload = rmp_serde::to_vec(&HllPayloadHip {
             registers,
             hip_kxq0: self.kxq0,

@@ -1,6 +1,7 @@
 //! Wire-format DTO for the delta set aggregator.
 //!
-//! Owns the [`DeltaResult`] wire DTO and its [`MessagePackCodec`] impl.
+//! Owns the [`DeltaResult`] wire DTO and its [`MessagePackCodec`] impl; its
+//! ASAPv1 `serialize_to_bytes` (§3.22) is beside `SetAggregator`'s.
 //! The streaming/state-tracking logic lives in the downstream consumer
 //! (ASAPQuery's accumulators) — only the over-the-wire shape lives here.
 

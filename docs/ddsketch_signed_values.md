@@ -10,7 +10,7 @@ If interpolation combines endpoints x and y with weight t, the absolute error is
 
 ## Wire and downstream upgrade
 
-- Native ASAPv1: positive-only states keep metadata version 1 and their existing bytes. Signed/zero states use metadata version 2 and append negative counts, negative offset, and zero count. Old native readers reject version 2.
+- Native ASAPv1: every state is metadata version 1 with the eight-field payload, negative counts, negative offset and zero count included. `DDSketchDelta` (`0x05 0x80`) carries both stores and a zero-count increment.
 - Portable MessagePack: positive-only snapshots keep their three fields; signed snapshots append the same three fields. Positive-only deltas keep their two arrays; signed deltas append negative indices, negative counts, and zero-count increment. New readers accept both layouts.
 - Protobuf: `DdSketchState` adds fields 16–18; `DdSketchDelta` adds fields 16–17. `DdSketch::to_proto` / `from_proto` preserve all stores. Old protobuf readers silently ignore unknown fields: upgrade Collector, backend, and Go producer schema/mapping together before emitting signed protobuf. This is not DataDog's binary wire format.
 - Octo: `DdDelta` now requires a `store: DdStore` discriminator. Existing positive delta constructors should use `DdStore::Positive`. Worker residual keys are `(DdStore, i32)`. Both promotion and flush preserve all three categories; partial counts still need flushing before complete queries.

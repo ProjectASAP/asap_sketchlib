@@ -90,6 +90,27 @@ the register bytes (plus three HIP scalars for the HIP variant). `HyperLogLogHIP
 is a non-generic struct that hashes through the default functions, so it is
 wire-eligible under the **standard** hash profile only.
 
+## Deltas
+
+```rust
+HyperLogLogDelta<Variant, Registers, H = DefaultXxHasher>
+
+fn new(indices: Vec<u64>, registers: Vec<u8>) -> Result<Self, String>
+fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+
+// on HyperLogLogImpl<Variant, Registers, H>
+fn merge_delta(&mut self, delta: &HyperLogLogDelta<Variant, Registers, H>)
+```
+
+A `HyperLogLogDelta` is the ASAPv1 delta kind `0x01 0x81` (Classic) or
+`0x01 0x82` (Ertl-MLE), for the same configs as the state serialization; HIP
+has no delta. It carries the changed registers as strictly ascending indices
+below `2^p` and a new value for each, non-zero and at most `65 - p`. `new` and
+the decoder refuse anything else. `merge_delta` sets each named register to the
+larger of its value and the delta's; the type parameters pin the estimator,
+precision and hasher, so it cannot fail.
+
 ## Examples
 
 ```rust
