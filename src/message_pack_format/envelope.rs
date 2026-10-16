@@ -111,6 +111,13 @@ pub(crate) fn split(bytes: &[u8]) -> Result<Parts<'_>, String> {
     ))
 }
 
+/// Returns the `kind_id` of an ASAPv1 envelope after checking its magic, version,
+/// and framing; the metadata and payload blocks are not parsed.
+pub fn peek_kind_id(bytes: &[u8]) -> Result<&[u8], RmpDecodeError> {
+    let (kind_id, _, _) = split(bytes).map_err(RmpDecodeError::Uncategorized)?;
+    Ok(kind_id)
+}
+
 /// Decodes a metadata or payload block as one msgpack value that fills the
 /// block exactly; a byte left after the value is an error.
 pub(crate) fn decode_block<T: DeserializeOwned>(block: &[u8]) -> Result<T, RmpDecodeError> {

@@ -66,6 +66,8 @@ signals a backwards-compatible change.
   worker's seed and the aggregator's from one seed. The unseeded constructors
   draw from the thread generator. The seed is not serialized, and the ASAPv1
   payload is unchanged.
+- **`peek_kind_id(&[u8])`** returns an ASAPv1 envelope's `kind_id` after
+  checking its magic, version, and framing, without decoding the sketch.
 
 ### Changed
 
