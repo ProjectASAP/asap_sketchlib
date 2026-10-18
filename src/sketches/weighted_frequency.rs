@@ -55,17 +55,21 @@ impl Ord for Candidate {
 }
 /// Canonical identity tuple and its hash key: floating identities must be
 /// finite, and signed zeros share one identity.
+/// The identity is allocated at its exact length, so a retained candidate
+/// holds no spare slots.
 fn normalize(values: &[FrequencyIdentity]) -> Result<(Vec<FrequencyIdentity>, Vec<u8>), Error> {
-    let identity = values
-        .iter()
-        .map(|value| match value {
-            FrequencyIdentity::Float64(v) if !v.is_finite() => Err(Error::Invalid(
-                "non-finite weighted frequency identity".into(),
-            )),
-            FrequencyIdentity::Float64(v) if *v == 0.0 => Ok(FrequencyIdentity::Float64(0.0)),
-            value => Ok(value.clone()),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut identity = Vec::with_capacity(values.len());
+    for value in values {
+        identity.push(match value {
+            FrequencyIdentity::Float64(v) if !v.is_finite() => {
+                return Err(Error::Invalid(
+                    "non-finite weighted frequency identity".into(),
+                ));
+            }
+            FrequencyIdentity::Float64(v) if *v == 0.0 => FrequencyIdentity::Float64(0.0),
+            value => value.clone(),
+        });
+    }
     let key = bincode::serialize(&identity).map_err(|e| Error::Update(e.to_string()))?;
     Ok((identity, key))
 }
@@ -126,6 +130,44 @@ impl WeightedFrequency {
             })
             .map(|_| ())
             .ok_or_else(|| Error::Invalid("invalid weighted frequency dimensions".into()))
+    }
+    /// Bytes a state of shape `width × depth` holds once it retains
+    /// `capacity` candidates whose identity tuples are shaped like `identity`:
+    /// the struct, the `width × depth` 8-byte cells, the candidate heap's
+    /// slots, and per retained candidate its identity tuple (with a `Utf8`
+    /// value's bytes) and its encoded hash key. Only the identity's shape
+    /// matters (its variants and string lengths), not its values.
+    ///
+    /// The candidate heap is rebuilt on every update by pushing up to
+    /// `capacity + 1` candidates, so it holds `max(4, (capacity + 1)
+    /// rounded up to a power of two)` slots, and during an update the
+    /// previous heap's slots are held as well. A memory model calls this to
+    /// price a top-k frequency state before building one.
+    pub fn estimated_memory_bytes(
+        width: usize,
+        depth: usize,
+        capacity: usize,
+        identity: &[FrequencyIdentity],
+    ) -> usize {
+        let cells = width.saturating_mul(depth).saturating_mul(size_of::<f64>());
+        if capacity == 0 {
+            return size_of::<Self>() + cells;
+        }
+        let heap_slots =
+            crate::common::heap::vec_slots_after_pushes(0, capacity + 1, size_of::<Candidate>());
+        let identity_bytes = size_of_val(identity)
+            + identity
+                .iter()
+                .map(|value| match value {
+                    FrequencyIdentity::Utf8(text) => text.len(),
+                    _ => 0,
+                })
+                .sum::<usize>();
+        let key_bytes = bincode::serialized_size(identity).map_or(0, |bytes| bytes as usize);
+        size_of::<Self>()
+            + cells
+            + heap_slots * size_of::<Candidate>()
+            + capacity * (identity_bytes + key_bytes)
     }
     pub fn new(
         algorithm: FrequencyAlgorithm,

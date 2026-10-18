@@ -23,6 +23,12 @@ signals a backwards-compatible change.
   into the rescoring instead of copying them, and scores them with one
   buffer, about halving its cost at capacity 100; the retained candidates
   and their scores are unchanged.
+  `WeightedFrequency::estimated_memory_bytes` and
+  `HHHeap::estimated_memory_bytes` give the bytes a state of a given shape
+  holds once its top-k heap is full of keys of a given shape, so a memory
+  model can price one before building it. A retained candidate's identity
+  tuple is allocated at its exact length (it held four slots for a
+  one-value tuple, 72 bytes per candidate more than needed).
 
 - **`Vector3D<T>`**, filled in from a stub. A `rows x cols` grid whose every
   cell is a contiguous `depth`-length record, addressed by the same
