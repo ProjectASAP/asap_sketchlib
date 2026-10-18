@@ -10,15 +10,16 @@
 
 use std::collections::HashSet;
 
+use asap_sketchlib::common::input::HydraCounter;
 use asap_sketchlib::sketches::CountSketchDelta;
 use asap_sketchlib::sketches::hll::HllWireVariant;
 use asap_sketchlib::{
     CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Coco, CocoBucket, Count, CountDelta,
     CountL2HH, CountMin, CountMinDelta, DDSketch, DDSketchDelta, DataInput, DeltaResult, Elastic,
     ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HeavyBucket, HllBucketListP14, HllSketch,
-    HllVariant, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogP12,
-    HyperLogLogP14, KLL, KLLDynamic, L2HH, MessagePackCodec, RegularPath, SetAggregator, UnivMon,
-    Vector2D, peek_kind_id,
+    HllVariant, Hydra, HyperLogLog, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogHIPP14,
+    HyperLogLogP12, HyperLogLogP14, KLL, KLLDynamic, L2HH, MessagePackCodec, RegularPath,
+    SetAggregator, UnivMon, Vector2D, peek_kind_id,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -82,6 +83,11 @@ const GOLDEN_UNIVMON_STR: &str = include_str!("../asapv1_golden/univmon_str_l3_2
 const GOLDEN_UNIVMON_I64: &str = include_str!("../asapv1_golden/univmon_i64_l3_2x4_h5.hex");
 const GOLDEN_UNIVMON_EMPTY: &str = include_str!("../asapv1_golden/univmon_empty_l3_2x4_h5.hex");
 const GOLDEN_L2HH: &str = include_str!("../asapv1_golden/count_l2hh_2x4_seed7.hex");
+const GOLDEN_HYDRA_KLL: &str = include_str!("../asapv1_golden/hydra_kll_2x2_k200.hex");
+const GOLDEN_HYDRA_CM: &str = include_str!("../asapv1_golden/hydra_cm_2x2_counter_2x2.hex");
+const GOLDEN_HYDRA_CS: &str = include_str!("../asapv1_golden/hydra_cs_2x2_counter_2x2.hex");
+const GOLDEN_HYDRA_HLL: &str = include_str!("../asapv1_golden/hydra_hll_1x2_p14.hex");
+const GOLDEN_HYDRA_UNIVMON: &str = include_str!("../asapv1_golden/hydra_univmon_1x2.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -1274,6 +1280,167 @@ fn count_l2hh_2x4_seed7_matches_golden() {
     assert_eq!((decoded.rows(), decoded.cols()), (2, 4));
     assert_eq!(decoded.seed_idx(), L2HH_SEED_INDEX);
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// Hydra: one fixture per counter variant, each cell's state set directly ->
+// serialize == golden, round-trips.
+// ---------------------------------------------------------------------------
+
+const HYDRA_SCHEMA: [&str; 2] = ["region", "service"];
+
+/// A grid over [`HYDRA_SCHEMA`] holding `cells` row-major.
+fn hydra_grid(
+    rows: usize,
+    cols: usize,
+    prototype: HydraCounter,
+    cells: Vec<HydraCounter>,
+) -> Hydra {
+    let mut hydra = Hydra::with_schema(rows, cols, HYDRA_SCHEMA, prototype).expect("valid schema");
+    let mut cells = cells.into_iter();
+    hydra.sketches = Vector2D::from_fn(rows, cols, |_, _| cells.next().expect("one cell each"));
+    assert!(cells.next().is_none(), "one cell per grid position");
+    hydra
+}
+
+fn assert_same_grid(got: &Hydra, want: &Hydra) {
+    assert_eq!((got.row_num, got.col_num), (want.row_num, want.col_num));
+    assert_eq!(got.schema(), want.schema());
+    let cells = got.sketches.as_slice().iter().zip(want.sketches.as_slice());
+    for (i, (g, w)) in cells.enumerate() {
+        let same = match (g, w) {
+            (HydraCounter::KLL(g), HydraCounter::KLL(w)) => {
+                (g.wire_k(), g.wire_m(), g.wire_levels(), g.wire_coin())
+                    == (w.wire_k(), w.wire_m(), w.wire_levels(), w.wire_coin())
+                    && g.wire_items() == w.wire_items()
+            }
+            (HydraCounter::CM(g), HydraCounter::CM(w)) => {
+                g.as_storage().as_slice() == w.as_storage().as_slice()
+            }
+            (HydraCounter::CS(g), HydraCounter::CS(w)) => {
+                g.as_storage().as_slice() == w.as_storage().as_slice()
+            }
+            (HydraCounter::HLL(g), HydraCounter::HLL(w)) => {
+                g.registers_as_slice() == w.registers_as_slice()
+            }
+            (HydraCounter::UNIVERSAL(g), HydraCounter::UNIVERSAL(w)) => {
+                g.serialize_to_bytes().unwrap() == w.serialize_to_bytes().unwrap()
+            }
+            _ => false,
+        };
+        assert!(same, "cell {i} differs after decode");
+    }
+}
+
+fn assert_hydra_golden(golden: &str, fixture: Hydra) {
+    let want = decode_hex(golden);
+    assert_eq!(fixture.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Hydra::deserialize_from_bytes(&want).expect("decode");
+    assert_same_grid(&decoded, &fixture);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn hydra_kll_2x2_k200_matches_golden() {
+    let cell = |seed: u64, values: &[f64]| {
+        let mut kll = KLL::init_kll_with_seed(200, seed);
+        for v in values {
+            kll.update(v);
+        }
+        HydraCounter::KLL(kll)
+    };
+    let cells = vec![
+        cell(1, &[1.0, 2.0, 3.0, 4.0, 5.0]),
+        cell(2, &[]),
+        cell(3, &[2.5, -1.0, 0.0, 1e300, -0.125]),
+        cell(4, &[3.0e-5]),
+    ];
+    let prototype = HydraCounter::KLL(KLL::init_kll_with_seed(200, 0));
+    assert_hydra_golden(GOLDEN_HYDRA_KLL, hydra_grid(2, 2, prototype, cells));
+}
+
+#[test]
+fn hydra_cm_2x2_counter_2x2_matches_golden() {
+    const CELLS: [[[i32; 2]; 2]; 4] = [
+        [[0, 1], [127, 128]],
+        [[255, 256], [300, 65535]],
+        [[65536, 1_000_000], [i32::MAX, 0]],
+        [[0, 0], [0, 0]],
+    ];
+    let cells = CELLS
+        .iter()
+        .map(|m| {
+            HydraCounter::CM(CountMin::from_storage(Vector2D::from_fn(2, 2, |r, c| {
+                m[r][c]
+            })))
+        })
+        .collect();
+    let prototype = HydraCounter::CM(CountMin::with_dimensions(2, 2));
+    assert_hydra_golden(GOLDEN_HYDRA_CM, hydra_grid(2, 2, prototype, cells));
+}
+
+#[test]
+fn hydra_cs_2x2_counter_2x2_matches_golden() {
+    const CELLS: [[[i32; 2]; 2]; 4] = [
+        [[0, -1], [127, -32]],
+        [[-33, 128], [-128, -129]],
+        [[-32768, 65536], [-32769, i32::MAX]],
+        [[i32::MIN, 1], [0, 0]],
+    ];
+    let cells = CELLS
+        .iter()
+        .map(|m| HydraCounter::CS(Count::from_storage(Vector2D::from_fn(2, 2, |r, c| m[r][c]))))
+        .collect();
+    let prototype = HydraCounter::CS(Count::with_dimensions(2, 2));
+    assert_hydra_golden(GOLDEN_HYDRA_CS, hydra_grid(2, 2, prototype, cells));
+}
+
+/// A P14 Ertl-MLE HLL whose registers are exactly `set`. Each register is
+/// written by a hash whose top 14 bits name the index and whose leading zeros
+/// below them give the value.
+fn hll_p14_with(set: &[(usize, u8)]) -> HyperLogLog<ErtlMLE> {
+    let mut hll = HyperLogLog::<ErtlMLE>::default();
+    let mut want = vec![0u8; 1 << 14];
+    for &(index, value) in set {
+        let rank_bit = if value == 51 { 0 } else { 1u64 << (50 - value) };
+        hll.insert_with_hash(((index as u64) << 50) | rank_bit);
+        want[index] = value;
+    }
+    assert_eq!(hll.registers_as_slice(), want.as_slice());
+    hll
+}
+
+#[test]
+fn hydra_hll_1x2_p14_matches_golden() {
+    let cells = vec![
+        HydraCounter::HLL(hll_p14_with(&[(0, 1), (1, 7), (100, 42), (16383, 3)])),
+        HydraCounter::HLL(hll_p14_with(&[(0, 2), (8192, 51)])),
+    ];
+    let prototype = HydraCounter::HLL(HyperLogLog::<ErtlMLE>::default());
+    assert_hydra_golden(GOLDEN_HYDRA_HLL, hydra_grid(1, 2, prototype, cells));
+}
+
+/// Cell 0: 2 layers of 1x2 counters, heap capacity 2, layer 0 incomplete,
+/// total weight 7. Cell 1 is empty.
+#[test]
+fn hydra_univmon_1x2_matches_golden() {
+    let fresh = || UnivMon::init_univmon(2, 1, 2, 2);
+    let mut um = fresh();
+    for (layer, col, value) in [(0usize, 0u32, 5i32), (0, 1, -3), (1, 1, 2)] {
+        um.l2_sketch_layers[layer].apply_delta(CountDelta { row: 0, col, value });
+    }
+    um.hh_layers[0].update(&DataInput::U64(7), 5);
+    um.hh_layers[0].update(&DataInput::U64(300), 2);
+    um.hh_layers[1].update(&DataInput::U64(4_294_967_296), 2);
+    um.set_total_weight(7);
+    um.mark_layer_candidates_incomplete(0);
+    let cells = vec![
+        HydraCounter::UNIVERSAL(um),
+        HydraCounter::UNIVERSAL(fresh()),
+    ];
+    let prototype = HydraCounter::UNIVERSAL(fresh());
+    assert_hydra_golden(GOLDEN_HYDRA_UNIVMON, hydra_grid(1, 2, prototype, cells));
 }
 
 // ---------------------------------------------------------------------------
