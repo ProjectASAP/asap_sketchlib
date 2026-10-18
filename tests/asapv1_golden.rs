@@ -16,7 +16,8 @@ use asap_sketchlib::{
     CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Count, CountMin, CountMinDelta, DDSketch,
     DDSketchDelta, DeltaResult, ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HllBucketListP14,
     HllSketch, HllVariant, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogP12,
-    HyperLogLogP14, KLL, MessagePackCodec, RegularPath, SetAggregator, Vector2D, peek_kind_id,
+    HyperLogLogP14, KLL, KLLDynamic, MessagePackCodec, RegularPath, SetAggregator, Vector2D,
+    peek_kind_id,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -67,6 +68,8 @@ const GOLDEN_DD_EMPTY: &str = include_str!("../asapv1_golden/ddsketch_empty_a001
 const GOLDEN_DD_DELTA: &str = include_str!("../asapv1_golden/ddsketch_signed_a001_delta.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
+const GOLDEN_KLL_DYN_F64: &str = include_str!("../asapv1_golden/kll_dynamic_f64_k200.hex");
+const GOLDEN_KLL_DYN_I64: &str = include_str!("../asapv1_golden/kll_dynamic_i64_k200.hex");
 const GOLDEN_SET_STRINGS: &str = include_str!("../asapv1_golden/set_aggregator_strings.hex");
 const GOLDEN_SET_EMPTY: &str = include_str!("../asapv1_golden/set_aggregator_empty.hex");
 const GOLDEN_DELTA_STRINGS: &str = include_str!("../asapv1_golden/delta_result_strings.hex");
@@ -712,6 +715,88 @@ fn kll_i64_k200_matches_golden() {
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
     assert_eq!(decoded.quantile(0.0), 1.0);
     assert_eq!(decoded.quantile(1.0), 50.0);
+}
+
+// ---------------------------------------------------------------------------
+// KLLDynamic: k=200, seed 42, inputs below the level-0 capacity -> serialize ==
+// golden, and golden round-trips.
+// ---------------------------------------------------------------------------
+
+const KLL_DYN_F64_VALS: [f64; 7] = [2.5, -1.0, 0.0, 1e300, -0.125, 42.0, 3.0e-5];
+
+/// Every msgpack integer width, positive and negative.
+const KLL_DYN_I64_VALS: [i64; 21] = [
+    0,
+    1,
+    -1,
+    127,
+    -32,
+    128,
+    -33,
+    255,
+    -128,
+    256,
+    -129,
+    65535,
+    -32768,
+    65536,
+    -32769,
+    4294967295,
+    -2147483648,
+    4294967296,
+    -2147483649,
+    i64::MAX,
+    i64::MIN,
+];
+
+fn kll_dynamic_of<T: asap_sketchlib::NumericalValue>(values: &[T]) -> KLLDynamic<T> {
+    let mut sketch = KLLDynamic::<T>::init_kll_with_seed(200, 42);
+    for v in values {
+        sketch.update(v);
+    }
+    sketch
+}
+
+#[test]
+fn kll_dynamic_f64_k200_matches_golden() {
+    let want = decode_hex(GOLDEN_KLL_DYN_F64);
+
+    let sketch = kll_dynamic_of(&KLL_DYN_F64_VALS);
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "KLLDynamic f64 bytes diverge from golden");
+
+    let decoded = KLLDynamic::<f64>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.count(), KLL_DYN_F64_VALS.len());
+    assert_eq!(decoded.quantile(0.0), -1.0);
+    assert_eq!(decoded.quantile(1.0), 1e300);
+    for v in KLL_DYN_F64_VALS {
+        assert_eq!(decoded.rank(v), sketch.rank(v), "rank({v})");
+    }
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    assert!(KLL::<f64>::deserialize_from_bytes(&want).is_err());
+    assert!(KLLDynamic::<f64>::deserialize_from_bytes(&decode_hex(GOLDEN_KLL_F64)).is_err());
+}
+
+#[test]
+fn kll_dynamic_i64_k200_matches_golden() {
+    let want = decode_hex(GOLDEN_KLL_DYN_I64);
+
+    let sketch = kll_dynamic_of(&KLL_DYN_I64_VALS);
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "KLLDynamic i64 bytes diverge from golden");
+
+    let decoded = KLLDynamic::<i64>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.count(), KLL_DYN_I64_VALS.len());
+    assert_eq!(decoded.quantile(0.0), i64::MIN as f64);
+    assert_eq!(decoded.quantile(1.0), i64::MAX as f64);
+    for v in KLL_DYN_I64_VALS {
+        assert_eq!(decoded.rank(v as f64), sketch.rank(v as f64), "rank({v})");
+    }
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+
+    assert!(KLL::<i64>::deserialize_from_bytes(&want).is_err());
+    assert!(KLLDynamic::<i64>::deserialize_from_bytes(&decode_hex(GOLDEN_KLL_I64)).is_err());
 }
 
 // ---------------------------------------------------------------------------
