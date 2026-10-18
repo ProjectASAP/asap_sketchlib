@@ -15,8 +15,8 @@ use asap_sketchlib::sketches::hll::HllWireVariant;
 use asap_sketchlib::{
     CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Count, CountMin, CountMinDelta, DDSketch,
     DDSketchDelta, DeltaResult, ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HllBucketListP14,
-    HllSketch, HllVariant, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogP12, HyperLogLogP14,
-    KLL, MessagePackCodec, RegularPath, SetAggregator, Vector2D, peek_kind_id,
+    HllSketch, HllVariant, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogP12,
+    HyperLogLogP14, KLL, MessagePackCodec, RegularPath, SetAggregator, Vector2D, peek_kind_id,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -31,6 +31,7 @@ fn decode_hex(s: &str) -> Vec<u8> {
 const GOLDEN_CLASSIC: &str = include_str!("../asapv1_golden/hll_classic_p12.hex");
 const GOLDEN_ERTL: &str = include_str!("../asapv1_golden/hll_ertl_mle_p12.hex");
 const GOLDEN_HIP: &str = include_str!("../asapv1_golden/hll_hip_p12.hex");
+const GOLDEN_HIP_P14: &str = include_str!("../asapv1_golden/hll_hip_p14.hex");
 const GOLDEN_CLASSIC_P14: &str = include_str!("../asapv1_golden/hll_classic_p14.hex");
 const GOLDEN_ERTL_P14: &str = include_str!("../asapv1_golden/hll_ertl_mle_p14.hex");
 const GOLDEN_CLASSIC_P14_DELTA: &str = include_str!("../asapv1_golden/hll_classic_p14_delta.hex");
@@ -159,6 +160,31 @@ fn hll_hip_p12_matches_golden() {
     assert_eq!(decoded.hip_kxq0, 1.5);
     assert_eq!(decoded.hip_kxq1, 2.5);
     assert_eq!(decoded.hip_est, 3.0);
+}
+
+#[test]
+fn hll_hip_p14_matches_golden() {
+    let want = decode_hex(GOLDEN_HIP_P14);
+    let mut regs = vec![0u8; 16384];
+    for (index, value) in [(0, 1), (1, 7), (8192, 42), (16383, 51)] {
+        regs[index] = value;
+    }
+
+    let got = HllSketch::from_raw(HllVariant::Hip, 14, regs.clone(), 16380.5, 0.25, 4.125)
+        .to_msgpack()
+        .expect("serialize");
+    assert_eq!(got, want, "HIP P14 bytes diverge from golden");
+
+    let native = HyperLogLogHIPP14::deserialize_from_bytes(&want).expect("native decode");
+    assert_eq!(native.serialize_to_bytes().expect("re-serialize"), want);
+
+    let decoded = HllSketch::from_msgpack(&want).expect("decode");
+    assert_eq!(decoded.registers, regs);
+    assert_eq!(decoded.precision, 14);
+    assert_eq!(decoded.variant, HllVariant::Hip);
+    assert_eq!(decoded.hip_kxq0, 16380.5);
+    assert_eq!(decoded.hip_kxq1, 0.25);
+    assert_eq!(decoded.hip_est, 4.125);
 }
 
 // ---------------------------------------------------------------------------
