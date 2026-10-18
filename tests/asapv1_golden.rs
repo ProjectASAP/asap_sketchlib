@@ -13,11 +13,11 @@ use std::collections::HashSet;
 use asap_sketchlib::sketches::CountSketchDelta;
 use asap_sketchlib::sketches::hll::HllWireVariant;
 use asap_sketchlib::{
-    CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Count, CountMin, CountMinDelta, DDSketch,
-    DDSketchDelta, DeltaResult, ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HllBucketListP14,
-    HllSketch, HllVariant, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogP12,
-    HyperLogLogP14, KLL, KLLDynamic, MessagePackCodec, RegularPath, SetAggregator, Vector2D,
-    peek_kind_id,
+    CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Coco, CocoBucket, Count, CountMin,
+    CountMinDelta, DDSketch, DDSketchDelta, DeltaResult, ErtlMLE, FastPath, HHHeap, HeapCount,
+    HeapItem, HllBucketListP14, HllSketch, HllVariant, HyperLogLogDelta, HyperLogLogHIPP12,
+    HyperLogLogHIPP14, HyperLogLogP12, HyperLogLogP14, KLL, KLLDynamic, MessagePackCodec,
+    RegularPath, SetAggregator, Vector2D, peek_kind_id,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -74,6 +74,7 @@ const GOLDEN_SET_STRINGS: &str = include_str!("../asapv1_golden/set_aggregator_s
 const GOLDEN_SET_EMPTY: &str = include_str!("../asapv1_golden/set_aggregator_empty.hex");
 const GOLDEN_DELTA_STRINGS: &str = include_str!("../asapv1_golden/delta_result_strings.hex");
 const GOLDEN_DELTA_EMPTY: &str = include_str!("../asapv1_golden/delta_result_empty.hex");
+const GOLDEN_COCO: &str = include_str!("../asapv1_golden/coco_3x7.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -1000,6 +1001,60 @@ fn delta_result_strings_matches_golden() {
 #[test]
 fn delta_result_empty_matches_golden() {
     delta_result_matches(GOLDEN_DELTA_EMPTY, &[], &[]);
+}
+
+// ---------------------------------------------------------------------------
+// Coco: the bucket table set directly -> serialize == golden, round-trips.
+// ---------------------------------------------------------------------------
+
+/// The occupied buckets `(row, col, key, value)`; each key sits in the column
+/// its row hashes it to. Every other bucket is unoccupied.
+const COCO_CELLS: [(usize, usize, &str, u64); 15] = [
+    (0, 0, "uint32-min", 65536),
+    (0, 1, "uint16-max", 65535),
+    (0, 2, "fixint-max", 127),
+    (0, 3, "", 1),
+    (0, 4, "uint8-max", 255),
+    (0, 5, "emoji-😀", 5),
+    (1, 0, "uint16-min", 256),
+    (1, 1, "str8-min-32-bytes-0123456789abcd", 3),
+    (1, 2, "uint8-min", 128),
+    (1, 3, "clé-ünïcode-流量", 4),
+    (1, 4, "fixstr-max-31-bytes-0123456789a", 2),
+    (1, 5, "uint64-min", 4294967296),
+    (1, 6, "zero", 0),
+    (2, 1, "uint64-max", u64::MAX),
+    (2, 5, "uint32-max", 4294967295),
+];
+
+#[test]
+fn coco_3x7_matches_golden() {
+    let want = decode_hex(GOLDEN_COCO);
+
+    let mut sketch: Coco = Coco::init_with_size(7, 3);
+    for (r, c, key, val) in COCO_CELLS {
+        sketch.table[r][c] = CocoBucket {
+            full_key: Some(key.to_string()),
+            val,
+        };
+    }
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "Coco bytes diverge from golden");
+
+    let decoded: Coco = Coco::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!((decoded.d, decoded.w), (3, 7));
+    let mut expected = vec![(None, 0); 21];
+    for (r, c, key, val) in COCO_CELLS {
+        expected[r * 7 + c] = (Some(key.to_string()), val);
+    }
+    let cells: Vec<(Option<String>, u64)> = decoded
+        .table
+        .as_slice()
+        .iter()
+        .map(|b| (b.full_key.clone(), b.val))
+        .collect();
+    assert_eq!(cells, expected);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
 // ---------------------------------------------------------------------------
