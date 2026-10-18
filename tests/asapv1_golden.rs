@@ -14,11 +14,11 @@ use asap_sketchlib::sketches::CountSketchDelta;
 use asap_sketchlib::sketches::hll::HllWireVariant;
 use asap_sketchlib::{
     CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Coco, CocoBucket, Count, CountDelta,
-    CountMin, CountMinDelta, DDSketch, DDSketchDelta, DataInput, DeltaResult, Elastic, ErtlMLE,
-    FastPath, HHHeap, HeapCount, HeapItem, HeavyBucket, HllBucketListP14, HllSketch, HllVariant,
-    HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogP12, HyperLogLogP14, KLL,
-    KLLDynamic, L2HH, MessagePackCodec, RegularPath, SetAggregator, UnivMon, Vector2D,
-    peek_kind_id,
+    CountL2HH, CountMin, CountMinDelta, DDSketch, DDSketchDelta, DataInput, DeltaResult, Elastic,
+    ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HeavyBucket, HllBucketListP14, HllSketch,
+    HllVariant, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogP12,
+    HyperLogLogP14, KLL, KLLDynamic, L2HH, MessagePackCodec, RegularPath, SetAggregator, UnivMon,
+    Vector2D, peek_kind_id,
 };
 
 fn decode_hex(s: &str) -> Vec<u8> {
@@ -81,6 +81,7 @@ const GOLDEN_ELASTIC_STALE: &str = include_str!("../asapv1_golden/elastic_4b_2x4
 const GOLDEN_UNIVMON_STR: &str = include_str!("../asapv1_golden/univmon_str_l3_2x4_h5.hex");
 const GOLDEN_UNIVMON_I64: &str = include_str!("../asapv1_golden/univmon_i64_l3_2x4_h5.hex");
 const GOLDEN_UNIVMON_EMPTY: &str = include_str!("../asapv1_golden/univmon_empty_l3_2x4_h5.hex");
+const GOLDEN_L2HH: &str = include_str!("../asapv1_golden/count_l2hh_2x4_seed7.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -1245,6 +1246,34 @@ fn univmon_i64_l3_2x4_h5_matches_golden() {
 #[test]
 fn univmon_empty_l3_2x4_h5_matches_golden() {
     assert_univmon_golden(GOLDEN_UNIVMON_EMPTY, &univmon_empty());
+}
+
+// ---------------------------------------------------------------------------
+// CountL2HH: counts, l2 accumulators and seed index set through the sketch's
+// serde form -> serialize == golden, round-trips.
+// ---------------------------------------------------------------------------
+
+const L2HH_COUNTS: [[i64; 4]; 2] = [[127, 128, 65535, -32768], [-32, -33, -2147483648, i64::MIN]];
+/// Set independently of the counts.
+const L2HH_L2: [i64; 2] = [65536, i64::MAX];
+const L2HH_SEED_INDEX: usize = 7;
+
+#[test]
+fn count_l2hh_2x4_seed7_matches_golden() {
+    let want = decode_hex(GOLDEN_L2HH);
+
+    let flat: Vec<i64> = L2HH_COUNTS.iter().flatten().copied().collect();
+    let state = ((&flat, 2, 4), (L2HH_L2,), 2, 4, L2HH_SEED_INDEX);
+    let sketch: CountL2HH =
+        rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state");
+    let got = sketch.serialize_to_bytes().expect("serialize");
+    assert_eq!(got, want, "CountL2HH bytes diverge from golden");
+
+    let decoded: CountL2HH = CountL2HH::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
+    assert_eq!((decoded.rows(), decoded.cols()), (2, 4));
+    assert_eq!(decoded.seed_idx(), L2HH_SEED_INDEX);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
 // ---------------------------------------------------------------------------
