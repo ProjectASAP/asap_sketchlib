@@ -1122,7 +1122,7 @@ fn pack_univmon_cells(key_type: &str, payloads: &[&[u8]]) -> Result<Vec<u8>, Rmp
         "usize" => pack!(usize),
         "f32" => pack!(f32),
         "f64" => pack!(f64),
-        "string" => pack!(String),
+        "string" => pack!(crate::message_pack_format::wire_key::WireString),
         "bytes" => pack!(crate::message_pack_format::wire_key::WireBytes),
         other => Err(encode_error(format!(
             "ASAPv1 Hydra: key_type {other:?} is not a wire key type"
@@ -1157,7 +1157,7 @@ fn unpack_univmon_cells(key_type: &str, payload: &[u8]) -> Result<Vec<Vec<u8>>, 
         "usize" => unpack!(usize),
         "f32" => unpack!(f32),
         "f64" => unpack!(f64),
-        "string" => unpack!(String),
+        "string" => unpack!(crate::message_pack_format::wire_key::WireString),
         "bytes" => unpack!(crate::message_pack_format::wire_key::WireBytes),
         other => Err(decode_error(format!(
             "ASAPv1 Hydra: key_type {other:?} is not a wire key type"
@@ -1323,6 +1323,49 @@ mod tests {
             (&[None, Some("auth")], HydraQuery::Cardinality),
         ];
         assert_round_trip(&univmon_grid(), HYDRA_KIND_UNIVMON, &probes);
+    }
+
+    /// A `"string"` cell key is read from msgpack `str` alone: the same keys as
+    /// UTF-8 `bin` under `cell_key_type` `"string"` are rejected.
+    #[test]
+    fn hydra_univmon_reads_string_keys_from_str_only() {
+        use crate::message_pack_format::wire_key::WireBytes;
+        let mut hydra = grid(HydraCounter::UNIVERSAL(UnivMon::init_univmon(4, 2, 16, 3)));
+        let keys = ["alpha", "beta", "gamma", "delta"];
+        feed(&mut hydra, (0..40).map(|i| DataInput::Str(keys[i % 4])));
+        let encoded = hydra.serialize_to_bytes().expect("serialize");
+        let (kind, metadata, payload) = envelope::split(&encoded).expect("split");
+        let meta: HydraUnivMonMetadata = from_slice(metadata).expect("metadata");
+        assert_eq!(meta.cell_key_type, "string");
+        let cells: HydraUnivMonPayload<String> = from_slice(payload).expect("payload");
+        assert!(cells.cells.iter().any(|cell| !cell.keys.is_empty()));
+        let as_bin = HydraUnivMonPayload {
+            cells: cells
+                .cells
+                .into_iter()
+                .map(|cell| PyramidPayload {
+                    counts: cell.counts,
+                    l2: cell.l2,
+                    heap_lens: cell.heap_lens,
+                    keys: cell
+                        .keys
+                        .iter()
+                        .map(|key| WireBytes(key.as_bytes().to_vec()))
+                        .collect(),
+                    heap_counts: cell.heap_counts,
+                    candidate_complete: cell.candidate_complete,
+                    bucket_size: cell.bucket_size,
+                    update_mode: cell.update_mode,
+                })
+                .collect(),
+        };
+        let forged = envelope::encode(kind, metadata, &rmp_serde::to_vec(&as_bin).unwrap());
+        let problem = Hydra::deserialize_from_bytes(&forged)
+            .map(drop)
+            .expect_err("bin keys under cell_key_type string must be rejected")
+            .to_string();
+        assert!(problem.contains("must be msgpack str"), "{problem}");
+        assert!(Hydra::deserialize_from_bytes(&encoded).is_ok());
     }
 
     /// Count Sketch cells are signed: the payload must carry negatives through
