@@ -1060,6 +1060,7 @@ where
             }
 
             let mut controller = adaptive.as_ref().map(ThresholdController::new);
+            let mut pending_drain: Option<Sender<()>> = None;
             let mut disconnected_workers = 0usize;
             while disconnected_workers < num_workers {
                 let mut made_progress = false;
@@ -1086,12 +1087,12 @@ where
                     controller.maybe_adjust(&delta_rxs, &threshold);
                 }
                 if !made_progress {
-                    // Only answer a drain request once every queue is empty.
-                    // The caller has already collected each worker's flush
-                    // acknowledgement, so no worker is still producing and
-                    // "empty" means "applied".
-                    if let Ok(AggregatorMsg::Drain(ack)) = control_rx.try_recv() {
+                    // A drain is answered once a whole pass that started after
+                    // the request was received finds every queue empty.
+                    if let Some(ack) = pending_drain.take() {
                         let _ = ack.send(());
+                    } else if let Ok(AggregatorMsg::Drain(ack)) = control_rx.try_recv() {
+                        pending_drain = Some(ack);
                     }
                     std::hint::spin_loop();
                 }

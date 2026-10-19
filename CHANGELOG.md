@@ -173,6 +173,8 @@ signals a backwards-compatible change.
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
   stream: the CDF was sorted with `partial_cmp(..).unwrap()`. It sorts with
   `total_cmp`, as the three sibling sorts beside it already did.
+- `OctoRuntime::flush` could return before the aggregator had applied every
+  worker's flushed deltas, so a live read right after it could miss inputs.
 
 ## [0.3.0] - 2026-09-07
 
