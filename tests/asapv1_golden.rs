@@ -70,6 +70,8 @@ const GOLDEN_CMSHEAP_DELTA: &str =
 const GOLDEN_CSHEAP_STR: &str = include_str!("../asapv1_golden/csheap_i64_regular_2x4_strkeys.hex");
 const GOLDEN_CSHEAP_F64: &str = include_str!("../asapv1_golden/csheap_f64_fast_2x4_strkeys.hex");
 const GOLDEN_CSHEAP_DELTA: &str = include_str!("../asapv1_golden/csheap_i64_regular_2x4_delta.hex");
+const GOLDEN_CSHEAP_I64_TIE: &str =
+    include_str!("../asapv1_golden/csheap_i64_regular_2x4_i64tie.hex");
 const GOLDEN_DD_POSITIVE: &str = include_str!("../asapv1_golden/ddsketch_positive_a001.hex");
 const GOLDEN_DD_SIGNED: &str = include_str!("../asapv1_golden/ddsketch_signed_a001.hex");
 const GOLDEN_DD_EMPTY: &str = include_str!("../asapv1_golden/ddsketch_empty_a001.hex");
@@ -658,6 +660,31 @@ fn csheap_i64_regular_2x4_strkeys_matches_golden() {
     let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
     assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
     assert_heap(decoded.heap(), 5, &entries);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+/// Signed heap counts; the `-3` tie emits by two's-complement bits, so
+/// `0, 1, i64::MIN, -1` rather than signed order.
+#[test]
+fn csheap_i64_regular_2x4_i64tie_matches_golden() {
+    type Heap = CSHeap<Vector2D<i64>, RegularPath>;
+    let want = decode_hex(GOLDEN_CSHEAP_I64_TIE);
+    let entries = i64_entries(&[
+        (-1, -3),
+        (-129, -40),
+        (1, -3),
+        (0, -3),
+        (i64::MIN, -3),
+        (2, 9),
+    ]);
+    let mut sketch = Heap::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_VALS[r][c]), 6);
+    *sketch.heap_mut() = heap_of(6, &entries);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Heap::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    assert_heap(decoded.heap(), 6, &entries);
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
