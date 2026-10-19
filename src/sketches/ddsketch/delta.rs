@@ -7,6 +7,7 @@ use std::ops::RangeInclusive;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::check_cells;
 use crate::message_pack_format::envelope;
 
@@ -31,6 +32,7 @@ pub struct DDSketchDelta {
     negative_indices: Vec<i32>,
     negative_deltas: Vec<u64>,
     zero_count: u64,
+    admission_rate: f64,
 }
 
 /// The delta payload: `[indices, deltas, negative_indices, negative_deltas,
@@ -100,12 +102,19 @@ impl DDSketchDelta {
             negative_indices,
             negative_deltas,
             zero_count,
+            admission_rate: admission_rate::admit_all(),
         })
+    }
+
+    /// Sets the admission rate of the state this delta changes; `1` unless set.
+    pub fn with_admission_rate(mut self, p: f64) -> Self {
+        self.admission_rate = p;
+        self
     }
 
     /// Serializes the delta into an ASAPv1 MessagePack envelope.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let metadata = encode_metadata(self.alpha)?;
+        let metadata = encode_metadata(self.alpha, self.admission_rate)?;
         let payload = rmp_serde::to_vec(&DdDeltaPayload {
             indices: self.indices.clone(),
             deltas: self.deltas.clone(),
@@ -125,9 +134,9 @@ impl DDSketchDelta {
                 "DDSketch delta kind_id mismatch: stored {kind_id:?}, expected {DD_DELTA_KIND:?}"
             )));
         }
-        let alpha = decode_metadata(metadata)?;
+        let (alpha, admission_rate) = decode_metadata(metadata)?;
         let p: DdDeltaPayload = envelope::decode_block(payload)?;
-        Self::new(
+        let delta = Self::new(
             alpha,
             p.indices,
             p.deltas,
@@ -135,7 +144,8 @@ impl DDSketchDelta {
             p.negative_deltas,
             p.zero_count,
         )
-        .map_err(RmpDecodeError::Uncategorized)
+        .map_err(RmpDecodeError::Uncategorized)?;
+        Ok(delta.with_admission_rate(admission_rate))
     }
 }
 
@@ -144,8 +154,9 @@ impl DDSketch {
     /// one, adds its count `c` and folds the bucket representative `r` into the
     /// scalars (`sum += r * c`, saturating; `min` / `max`); a non-zero
     /// `zero_count` adds to the zero count and folds `0.0` into `min` / `max`.
-    /// Fails, changing nothing, when the delta's `alpha` differs, the total
-    /// sample count overflows, or a store would span past `i32`.
+    /// Fails, changing nothing, when the delta's `alpha` or admission rate
+    /// differs, the total sample count overflows, or a store would span past
+    /// `i32`.
     pub fn merge_delta(&mut self, delta: &DDSketchDelta) -> Result<(), String> {
         if self.alpha != delta.alpha {
             return Err(format!(
@@ -153,6 +164,8 @@ impl DDSketch {
                 delta.alpha, self.alpha
             ));
         }
+        admission_rate::check_equal(self.admission_rate, delta.admission_rate)
+            .map_err(|e| format!("DDSketch delta: metadata mismatch: {e}"))?;
         let count = delta
             .deltas
             .iter()
@@ -210,7 +223,7 @@ mod tests {
 
     /// An `ALPHA` delta envelope around the given payload arrays.
     fn delta_bytes(positive: Cells, negative: Cells, zero_count: u64) -> Vec<u8> {
-        let metadata = encode_metadata(ALPHA).unwrap();
+        let metadata = encode_metadata(ALPHA, 1.0).unwrap();
         let payload =
             rmp_serde::to_vec(&(positive.0, positive.1, negative.0, negative.1, zero_count))
                 .unwrap();
@@ -308,6 +321,7 @@ mod tests {
             max: 1e300,
             negative_store: Buckets::new(),
             zero_count: 0,
+            admission_rate: 1.0,
         })
         .unwrap();
         let before = sketch.serialize_to_bytes().unwrap();

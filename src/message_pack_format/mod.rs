@@ -17,6 +17,7 @@
 //!
 //! [`MessagePackCodec`] and [`Error`] are the contract both share.
 
+pub(crate) mod admission_rate;
 pub mod codec;
 pub(crate) mod delta;
 pub(crate) mod envelope;

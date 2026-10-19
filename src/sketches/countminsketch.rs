@@ -13,6 +13,7 @@ use std::marker::PhantomData;
 
 use crate::common::structure_utils::AdmittedRows;
 use crate::input_to_owned;
+use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
 use crate::octo_delta::{CM_PROMASK, CmDelta, KeyedCmDelta, MAX_PROMASK};
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
@@ -48,6 +49,8 @@ pub struct CountMin<
     _mode: PhantomData<Mode>,
     #[serde(skip)]
     _hasher: PhantomData<H>,
+    #[serde(default = "admit_all", deserialize_with = "deserialize_rate")]
+    admission_rate: f64,
 }
 
 // Default CountMin sketch for Vector2D<i32> (RegularPath).
@@ -202,6 +205,7 @@ where
             col: cols,
             _mode: PhantomData,
             _hasher: PhantomData,
+            admission_rate: admit_all(),
         };
         sk.counts.fill(T::default());
         sk
@@ -220,7 +224,21 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
             col,
             _mode: PhantomData,
             _hasher: PhantomData,
+            admission_rate: admit_all(),
         }
+    }
+
+    /// Sets the probability `p` with which each update was admitted. Estimates
+    /// count admitted updates alone; a consumer divides a key's frequency and a
+    /// row's total by `p`.
+    pub fn with_admission_rate(mut self, p: f64) -> Self {
+        self.admission_rate = p;
+        self
+    }
+
+    /// The probability with which each update was admitted; `1` unless set.
+    pub fn admission_rate(&self) -> f64 {
+        self.admission_rate
     }
 
     /// Number of rows in the sketch.
@@ -245,7 +263,8 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
         &mut self.counts
     }
 
-    /// Merges another sketch while asserting compatible dimensions.
+    /// Merges another sketch while asserting compatible dimensions and equal
+    /// admission rates.
     pub fn merge(&mut self, other: &Self) {
         let self_rows = self.counts.rows();
         let self_cols = self.counts.cols();
@@ -253,6 +272,10 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
             (self_rows, self_cols),
             (other.counts.rows(), other.counts.cols()),
             "dimension mismatch while merging CountMin sketches"
+        );
+        assert_eq!(
+            self.admission_rate, other.admission_rate,
+            "admission rate mismatch while merging CountMin sketches"
         );
 
         for i in 0..self_rows {
@@ -276,6 +299,10 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
             (self_rows, self_cols),
             (other.counts.rows(), other.counts.cols()),
             "dimension mismatch while merging CountMin sketches"
+        );
+        assert_eq!(
+            self.admission_rate, other.admission_rate,
+            "admission rate mismatch while merging CountMin sketches"
         );
 
         for i in 0..self_rows {

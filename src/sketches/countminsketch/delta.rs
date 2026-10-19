@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::{add_cells, check_cells};
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact_vec;
@@ -28,6 +29,7 @@ pub struct CountMinDelta<T = i32, Mode = RegularPath, H = DefaultXxHasher> {
     cols: usize,
     indices: Vec<u64>,
     deltas: Vec<T>,
+    admission_rate: f64,
     _config: PhantomData<(Mode, H)>,
 }
 
@@ -64,13 +66,20 @@ where
             cols,
             indices,
             deltas,
+            admission_rate: admission_rate::admit_all(),
             _config: PhantomData,
         })
     }
 
+    /// Sets the admission rate of the state this delta changes; `1` unless set.
+    pub fn with_admission_rate(mut self, p: f64) -> Self {
+        self.admission_rate = p;
+        self
+    }
+
     /// Serializes the delta into an ASAPv1 MessagePack envelope.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let metadata = encode_metadata::<T, Mode, H>(self.rows, self.cols)?;
+        let metadata = encode_metadata::<T, Mode, H>(self.rows, self.cols, self.admission_rate)?;
         let payload = rmp_serde::to_vec(&CmsDeltaPayload {
             indices: self.indices.clone(),
             deltas: self.deltas.clone(),
@@ -87,9 +96,11 @@ where
                 "CMS delta kind_id mismatch: stored {kind_id:?}, expected {CMS_DELTA_KIND:?}"
             )));
         }
-        let (rows, cols) = decode_metadata::<T, Mode, H>(metadata)?;
+        let (rows, cols, admission_rate) = decode_metadata::<T, Mode, H>(metadata)?;
         let p: CmsDeltaPayload<T> = envelope::decode_block(payload)?;
-        Self::new(rows, cols, p.indices, p.deltas).map_err(RmpDecodeError::Uncategorized)
+        let delta =
+            Self::new(rows, cols, p.indices, p.deltas).map_err(RmpDecodeError::Uncategorized)?;
+        Ok(delta.with_admission_rate(admission_rate))
     }
 }
 
@@ -100,7 +111,7 @@ where
     H: SketchHasher + HashProfile,
 {
     /// Adds a delta to the counters. Fails, changing nothing, when the delta is
-    /// for another geometry or an integer add overflows.
+    /// for another geometry or admission rate, or an integer add overflows.
     pub fn merge_delta(&mut self, delta: &CountMinDelta<T, Mode, H>) -> Result<(), String> {
         if (self.rows(), self.cols()) != (delta.rows, delta.cols) {
             return Err(format!(
@@ -111,6 +122,8 @@ where
                 self.cols()
             ));
         }
+        admission_rate::check_equal(self.admission_rate, delta.admission_rate)
+            .map_err(|e| format!("CMS delta: metadata mismatch: {e}"))?;
         add_cells(self.counts.as_mut_slice(), &delta.indices, &delta.deltas)
             .map_err(|e| format!("CMS delta: {e}"))
     }
@@ -125,7 +138,7 @@ mod tests {
 
     /// A 2x3 `i64` delta envelope around the given payload arrays.
     fn delta_bytes(indices: &[u64], deltas: &[i64]) -> Vec<u8> {
-        let metadata = encode_metadata::<i64, RegularPath, DefaultXxHasher>(2, 3).unwrap();
+        let metadata = encode_metadata::<i64, RegularPath, DefaultXxHasher>(2, 3, 1.0).unwrap();
         let payload = rmp_serde::to_vec(&(indices, deltas)).unwrap();
         envelope::encode(CMS_DELTA_KIND, &metadata, &payload)
     }

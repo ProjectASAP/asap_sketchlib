@@ -30,6 +30,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 
 use crate::common::structures::Vector1D;
+use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact;
 
@@ -42,41 +43,54 @@ const DD_KIND: &[u8] = &[0x05, 0x00];
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
 /// the wire spec fixes (Go must mirror it). There is no hash-spec group;
 /// `alpha` is the sketch's one construction parameter and so, per the spec's
-/// config→metadata rule, its only structural param.
+/// config→metadata rule, its only structural param. The optional
+/// `admission_rate` closes the map.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DdMetadata {
     metadata_version: u8,
     #[serde(deserialize_with = "exact")]
     alpha: f64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "admission_rate::deserialize"
+    )]
+    admission_rate: Option<f64>,
 }
 
 /// Builds the DDSketch descriptor metadata for a relative accuracy `alpha`.
-fn dd_metadata(alpha: f64) -> DdMetadata {
+fn dd_metadata(alpha: f64, admission_rate: Option<f64>) -> DdMetadata {
     DdMetadata {
         metadata_version: 1,
         alpha,
+        admission_rate,
     }
 }
 
-/// Encodes the metadata block for `alpha`.
-pub(super) fn encode_metadata(alpha: f64) -> Result<Vec<u8>, RmpEncodeError> {
-    rmp_serde::to_vec_named(&dd_metadata(alpha))
+/// Encodes the metadata block for `alpha` and `admission_rate`.
+pub(super) fn encode_metadata(alpha: f64, admission_rate: f64) -> Result<Vec<u8>, RmpEncodeError> {
+    let admission_rate = admission_rate::to_key(admission_rate)
+        .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 DDSketch envelope: {e}")))?;
+    rmp_serde::to_vec_named(&dd_metadata(alpha, admission_rate))
 }
 
-/// Decodes the metadata block to its `alpha`: exactly `metadata_version` 1 and
-/// an `alpha` inside `(0, 1)`.
-pub(super) fn decode_metadata(metadata: &[u8]) -> Result<f64, RmpDecodeError> {
+/// Decodes the metadata block to its `(alpha, admission_rate)`: exactly
+/// `metadata_version` 1, an `alpha` inside `(0, 1)` and an optional
+/// `admission_rate`.
+pub(super) fn decode_metadata(metadata: &[u8]) -> Result<(f64, f64), RmpDecodeError> {
     let meta: DdMetadata = envelope::decode_block(metadata)?;
+    let admission_rate = admission_rate::from_key(meta.admission_rate)
+        .map_err(|e| RmpDecodeError::Uncategorized(format!("ASAPv1 DDSketch envelope: {e}")))?;
     // `alpha` is a property of the stored sketch rather than of the target
     // type, so it is echoed back into the expected block instead of pinned.
-    if meta != dd_metadata(meta.alpha) {
+    if meta != dd_metadata(meta.alpha, meta.admission_rate) {
         return Err(RmpDecodeError::Uncategorized(
             "ASAPv1 DDSketch envelope: metadata mismatch".to_string(),
         ));
     }
     check_alpha(meta.alpha).map_err(RmpDecodeError::Uncategorized)?;
-    Ok(meta.alpha)
+    Ok((meta.alpha, admission_rate))
 }
 
 /// DDSketch payload (ASAPv1 §3.8), a msgpack **array** (`to_vec`, positional).
@@ -209,10 +223,11 @@ impl DDSketch {
             max: self.max,
             negative_store: self.negative_store.clone(),
             zero_count: self.zero_count,
+            admission_rate: self.admission_rate,
         };
         check_state(&state)
             .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 DDSketch envelope: {e}")))?;
-        let metadata = encode_metadata(self.alpha)?;
+        let metadata = encode_metadata(self.alpha, self.admission_rate)?;
         let payload = rmp_serde::to_vec(&DdPayload {
             counts: state.store.counts.into_vec(),
             offset: state.store.offset,
@@ -237,7 +252,7 @@ impl DDSketch {
                 "DDSketch kind_id mismatch: stored {kind_id:?}, expected {DD_KIND:?}"
             )));
         }
-        let alpha = decode_metadata(metadata)?;
+        let (alpha, admission_rate) = decode_metadata(metadata)?;
         let p: DdPayload = envelope::decode_block(payload)?;
         DDSketch::try_from(DDSketchState {
             alpha,
@@ -253,6 +268,7 @@ impl DDSketch {
                 offset: p.negative_offset,
             },
             zero_count: p.zero_count,
+            admission_rate,
         })
         .map_err(RmpDecodeError::Uncategorized)
     }
@@ -291,7 +307,7 @@ mod tests {
     /// so the crafted-bytes tests exercise the decoder's own rules rather than
     /// the envelope's framing.
     fn crafted_payload(alpha: f64, payload: &DdPayload) -> Vec<u8> {
-        let metadata = rmp_serde::to_vec_named(&dd_metadata(alpha)).unwrap();
+        let metadata = rmp_serde::to_vec_named(&dd_metadata(alpha, None)).unwrap();
         let payload = rmp_serde::to_vec(payload).unwrap();
         envelope::encode(DD_KIND, &metadata, &payload)
     }
@@ -474,6 +490,7 @@ mod tests {
             let metadata = rmp_serde::to_vec_named(&DdMetadata {
                 metadata_version: version,
                 alpha: ALPHA,
+                admission_rate: None,
             })
             .unwrap();
             let err = decode_error(&envelope::encode(DD_KIND, &metadata, &payload));
@@ -506,7 +523,7 @@ mod tests {
     /// an unreadable payload fails on `alpha`.
     #[test]
     fn ddsketch_checks_alpha_before_the_payload() {
-        let metadata = rmp_serde::to_vec_named(&dd_metadata(2.0)).unwrap();
+        let metadata = rmp_serde::to_vec_named(&dd_metadata(2.0, None)).unwrap();
         let err = decode_error(&envelope::encode(DD_KIND, &metadata, &[0xc1]));
         assert!(err.contains("alpha"), "got {err}");
     }

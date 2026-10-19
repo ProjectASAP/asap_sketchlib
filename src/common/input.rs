@@ -1,6 +1,7 @@
 //! Shared input, query, and counter types used across sketches.
 //! This module defines value wrappers, heap-friendly items, and Hydra/UnivMon helpers.
 
+use crate::message_pack_format::admission_rate;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -525,14 +526,20 @@ impl HydraCounter {
     pub fn merge(&mut self, other: &HydraCounter) -> Result<(), String> {
         match (self, other) {
             (HydraCounter::CM(self_cm), HydraCounter::CM(other_cm)) => {
+                admission_rate::check_equal(self_cm.admission_rate(), other_cm.admission_rate())?;
                 self_cm.merge(other_cm);
                 Ok(())
             }
             (HydraCounter::HLL(h1), HydraCounter::HLL(h2)) => {
+                admission_rate::check_equal(h1.admission_rate(), h2.admission_rate())?;
                 h1.merge(h2);
                 Ok(())
             }
             (HydraCounter::CS(self_count), HydraCounter::CS(other_count)) => {
+                admission_rate::check_equal(
+                    self_count.admission_rate(),
+                    other_count.admission_rate(),
+                )?;
                 self_count.merge(other_count);
                 Ok(())
             }

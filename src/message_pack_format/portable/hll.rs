@@ -536,6 +536,13 @@ impl MessagePackCodec for HllSketch {
         // Validate the hash spec is the standard profile (precision is read from
         // the metadata, so compare against a standard block built with it).
         let meta: HllMetadata = envelope::decode_block(metadata)?;
+        if meta.admission_rate.is_some() {
+            return Err(MsgPackError::Decode(
+                rmp_serde::decode::Error::Uncategorized(
+                    "ASAPv1 HLL envelope: HllSketch does not carry admission_rate".to_string(),
+                ),
+            ));
+        }
         if meta != standard_hll_metadata(meta.precision) {
             return Err(MsgPackError::Decode(
                 rmp_serde::decode::Error::Uncategorized(
@@ -793,6 +800,16 @@ mod tests {
         assert_eq!(decoded.registers, original.registers);
         assert_eq!(decoded.precision, original.precision);
         assert_eq!(decoded.hip_kxq0, 1.0);
+    }
+
+    #[test]
+    fn from_msgpack_rejects_a_sampled_hll() {
+        let sampled = crate::HyperLogLog::<crate::ErtlMLE>::default()
+            .with_admission_rate(0.5)
+            .serialize_to_bytes()
+            .unwrap();
+        let err = HllSketch::from_msgpack(&sampled).unwrap_err().to_string();
+        assert!(err.contains("does not carry admission_rate"), "{err}");
     }
 
     /// Cross-language byte-parity guard against

@@ -13,6 +13,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact;
 use crate::structures::fixed_structure::HllRegisterStorage;
@@ -65,8 +66,9 @@ pub(crate) const HLL_KIND_HIP: &[u8] = &[HLL_KIND_FAMILY, 0x03];
 /// **map** (`to_vec_named`) with keys in this declaration order — the canonical
 /// order the wire spec fixes. HLL carries the full hash spec (including the
 /// inlined `seed_list`, so the bytes are self-describing) plus the seed index it
-/// uses and its one structural param, `precision`. `deny_unknown_fields` makes
-/// decode fail closed on any unexpected key rather than silently dropping it.
+/// uses and its one structural param, `precision`, then the optional
+/// `admission_rate`. `deny_unknown_fields` makes decode fail closed on any
+/// unexpected key rather than silently dropping it.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HllMetadata {
@@ -78,12 +80,21 @@ pub(crate) struct HllMetadata {
     pub(crate) seed_list: Vec<u64>,
     pub(crate) canonical_seed_index: u32,
     pub(crate) precision: u32,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "admission_rate::deserialize"
+    )]
+    pub(crate) admission_rate: Option<f64>,
 }
 
 /// Builds the HLL descriptor metadata from the hasher's [`HashProfile`], so the
 /// wire bytes truthfully describe how the sketch was hashed (rather than
 /// hardcoding the standard profile).
-pub(crate) fn hll_metadata<H: HashProfile>(precision: u32) -> HllMetadata {
+pub(crate) fn hll_metadata<H: HashProfile>(
+    precision: u32,
+    admission_rate: Option<f64>,
+) -> HllMetadata {
     HllMetadata {
         metadata_version: 1,
         hash_profile_id: H::PROFILE_ID.to_string(),
@@ -93,29 +104,37 @@ pub(crate) fn hll_metadata<H: HashProfile>(precision: u32) -> HllMetadata {
         seed_list: H::seed_list(),
         canonical_seed_index: H::CANONICAL_SEED_INDEX,
         precision,
+        admission_rate,
     }
 }
 
 /// The standard ProjectASAP profile metadata (the [`DefaultXxHasher`] profile).
 /// Used by the portable path, which only represents standard-profile sketches.
 pub(crate) fn standard_hll_metadata(precision: u32) -> HllMetadata {
-    hll_metadata::<DefaultXxHasher>(precision)
+    hll_metadata::<DefaultXxHasher>(precision, None)
 }
 
-/// The metadata block of a sketch with `Registers` storage hashed under `H`.
-pub(super) fn encode_metadata<Registers: HllRegisterStorage, H: HashProfile>()
--> Result<Vec<u8>, RmpEncodeError> {
-    rmp_serde::to_vec_named(&hll_metadata::<H>(Registers::PRECISION as u32))
+/// The metadata block of a sketch with `Registers` storage hashed under `H`
+/// and admitting updates at `admission_rate`.
+pub(super) fn encode_metadata<Registers: HllRegisterStorage, H: HashProfile>(
+    admission_rate: f64,
+) -> Result<Vec<u8>, RmpEncodeError> {
+    let admission_rate = admission_rate::to_key(admission_rate)
+        .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 HLL envelope: {e}")))?;
+    rmp_serde::to_vec_named(&hll_metadata::<H>(
+        Registers::PRECISION as u32,
+        admission_rate,
+    ))
 }
 
-/// Validate the envelope for a known target and return the raw payload bytes.
-/// The metadata is checked against the profile of `H`, so bytes hashed under a
-/// different profile are rejected (fail closed).
+/// Validate the envelope for a known target and return the raw payload bytes
+/// and the admission rate. The metadata is checked against the profile of `H`,
+/// so bytes hashed under a different profile are rejected (fail closed).
 pub(super) fn validated_hll_payload<'a, H: HashProfile>(
     bytes: &'a [u8],
     expected_kind_id: &[u8],
     expected_precision: u32,
-) -> Result<&'a [u8], RmpDecodeError> {
+) -> Result<(&'a [u8], f64), RmpDecodeError> {
     let (kind_id, metadata, payload) =
         envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
     if kind_id != expected_kind_id {
@@ -124,12 +143,14 @@ pub(super) fn validated_hll_payload<'a, H: HashProfile>(
         )));
     }
     let meta: HllMetadata = envelope::decode_block(metadata)?;
-    if meta != hll_metadata::<H>(expected_precision) {
+    let admission_rate = admission_rate::from_key(meta.admission_rate)
+        .map_err(|e| RmpDecodeError::Uncategorized(format!("ASAPv1 HLL envelope: {e}")))?;
+    if meta != hll_metadata::<H>(expected_precision, meta.admission_rate) {
         return Err(RmpDecodeError::Uncategorized(
             "ASAPv1 HLL envelope: metadata mismatch".to_string(),
         ));
     }
-    Ok(payload)
+    Ok((payload, admission_rate))
 }
 
 /// Rejects a register bin holding a rank no insert could have produced. A
@@ -196,7 +217,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         H: HashProfile,
     {
         let registers = registers_to_bytes(&self.registers)?;
-        let metadata = encode_metadata::<Registers, H>()?;
+        let metadata = encode_metadata::<Registers, H>(self.admission_rate)?;
         let payload = rmp_serde::to_vec(&HllPayloadPlain { registers })?;
         Ok(envelope::encode(Variant::WIRE_KIND_ID, &metadata, &payload))
     }
@@ -208,7 +229,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         Variant: HllWireVariant,
         H: HashProfile,
     {
-        let payload =
+        let (payload, admission_rate) =
             validated_hll_payload::<H>(bytes, Variant::WIRE_KIND_ID, Registers::PRECISION as u32)?;
         let payload: HllPayloadPlain = envelope::decode_block(payload)?;
         let registers = registers_from_bytes::<Registers>(&payload.registers)?;
@@ -216,6 +237,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
             registers,
             _marker: PhantomData,
             _hasher: PhantomData,
+            admission_rate,
         })
     }
 }
@@ -228,7 +250,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
     /// than bytes that would be refused on decode.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let registers = registers_to_bytes(&self.registers)?;
-        let metadata = encode_metadata::<Registers, DefaultXxHasher>()?;
+        let metadata = encode_metadata::<Registers, DefaultXxHasher>(self.admission_rate)?;
         let payload = rmp_serde::to_vec(&HllPayloadHip {
             registers,
             hip_kxq0: self.kxq0,
@@ -240,7 +262,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let payload = validated_hll_payload::<DefaultXxHasher>(
+        let (payload, admission_rate) = validated_hll_payload::<DefaultXxHasher>(
             bytes,
             HLL_KIND_HIP,
             Registers::PRECISION as u32,
@@ -252,6 +274,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
             kxq0: payload.hip_kxq0,
             kxq1: payload.hip_kxq1,
             est: payload.hip_est,
+            admission_rate,
         })
     }
 }

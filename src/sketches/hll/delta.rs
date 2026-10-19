@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::check_cells;
 use crate::message_pack_format::envelope;
 use crate::structures::fixed_structure::HllRegisterStorage;
@@ -29,6 +30,7 @@ fn delta_kind<V: HllWireVariant>() -> [u8; 2] {
 pub struct HyperLogLogDelta<Variant, Registers, H = DefaultXxHasher> {
     indices: Vec<u64>,
     registers: Vec<u8>,
+    admission_rate: f64,
     _config: PhantomData<(Variant, Registers, H)>,
 }
 
@@ -55,13 +57,20 @@ where
         Ok(Self {
             indices,
             registers,
+            admission_rate: admission_rate::admit_all(),
             _config: PhantomData,
         })
     }
 
+    /// Sets the admission rate of the state this delta changes; `1` unless set.
+    pub fn with_admission_rate(mut self, p: f64) -> Self {
+        self.admission_rate = p;
+        self
+    }
+
     /// Serializes the delta into an ASAPv1 MessagePack envelope.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let metadata = encode_metadata::<Registers, H>()?;
+        let metadata = encode_metadata::<Registers, H>(self.admission_rate)?;
         let payload = rmp_serde::to_vec(&HllDeltaPayload {
             indices: self.indices.clone(),
             registers: self.registers.clone(),
@@ -75,13 +84,14 @@ where
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let payload = validated_hll_payload::<H>(
+        let (payload, admission_rate) = validated_hll_payload::<H>(
             bytes,
             &delta_kind::<Variant>(),
             Registers::PRECISION as u32,
         )?;
         let p: HllDeltaPayload = envelope::decode_block(payload)?;
-        Self::new(p.indices, p.registers).map_err(RmpDecodeError::Uncategorized)
+        let delta = Self::new(p.indices, p.registers).map_err(RmpDecodeError::Uncategorized)?;
+        Ok(delta.with_admission_rate(admission_rate))
     }
 }
 
@@ -89,13 +99,20 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     HyperLogLogImpl<Variant, Registers, H>
 {
     /// Raises each register the delta names to the delta's value, keeping the
-    /// larger of the two.
-    pub fn merge_delta(&mut self, delta: &HyperLogLogDelta<Variant, Registers, H>) {
+    /// larger of the two. Fails, changing nothing, when the admission rates
+    /// differ.
+    pub fn merge_delta(
+        &mut self,
+        delta: &HyperLogLogDelta<Variant, Registers, H>,
+    ) -> Result<(), String> {
+        admission_rate::check_equal(self.admission_rate, delta.admission_rate)
+            .map_err(|e| format!("HLL delta: metadata mismatch: {e}"))?;
         let registers = self.registers.as_mut_slice();
         for (&index, &value) in delta.indices.iter().zip(&delta.registers) {
             let register = &mut registers[index as usize];
             *register = (*register).max(value);
         }
+        Ok(())
     }
 }
 
@@ -109,7 +126,7 @@ mod tests {
 
     /// A P14 Classic delta envelope around the given indices and registers.
     fn delta_bytes(indices: &[u64], registers: &[u8]) -> Vec<u8> {
-        let metadata = encode_metadata::<HllBucketListP14, DefaultXxHasher>().unwrap();
+        let metadata = encode_metadata::<HllBucketListP14, DefaultXxHasher>(1.0).unwrap();
         let payload = rmp_serde::to_vec(&HllDeltaPayload {
             indices: indices.to_vec(),
             registers: registers.to_vec(),

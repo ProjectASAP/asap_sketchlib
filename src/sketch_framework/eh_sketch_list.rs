@@ -1,5 +1,6 @@
 //! Sketch enums used by the exponential histogram framework.
 
+use crate::message_pack_format::admission_rate;
 use crate::{DataInput, Vector2D};
 use serde::{Deserialize, Serialize};
 
@@ -121,9 +122,10 @@ impl EHSketchList {
     }
 
     /// Merge another sketch of the same type into this one
-    pub fn merge(&mut self, other: &EHSketchList) -> Result<(), &'static str> {
+    pub fn merge(&mut self, other: &EHSketchList) -> Result<(), String> {
         match (self, other) {
             (EHSketchList::CM(s), EHSketchList::CM(o)) => {
+                admission_rate::check_equal(s.admission_rate(), o.admission_rate())?;
                 s.merge(o);
                 Ok(())
             }
@@ -136,17 +138,17 @@ impl EHSketchList {
                 Ok(())
             }
             (EHSketchList::CS(s), EHSketchList::CS(o)) => {
+                admission_rate::check_equal(s.admission_rate(), o.admission_rate())?;
                 s.merge(o);
                 Ok(())
             }
-            (EHSketchList::DDS(s), EHSketchList::DDS(o)) => s
-                .merge(o)
-                .map_err(|_| "Cannot merge DDSketches with different index mappings"),
+            (EHSketchList::DDS(s), EHSketchList::DDS(o)) => s.merge(o),
             (EHSketchList::ELASTIC(s), EHSketchList::ELASTIC(o)) => {
                 s.merge(o);
                 Ok(())
             }
             (EHSketchList::HLL(s), EHSketchList::HLL(o)) => {
+                admission_rate::check_equal(s.admission_rate(), o.admission_rate())?;
                 s.merge(o);
                 Ok(())
             }
@@ -155,12 +157,14 @@ impl EHSketchList {
                 Ok(())
             }
             #[cfg(feature = "experimental")]
-            (EHSketchList::UNIFORM(s), EHSketchList::UNIFORM(o)) => s.merge(o),
+            (EHSketchList::UNIFORM(s), EHSketchList::UNIFORM(o)) => {
+                s.merge(o).map_err(String::from)
+            }
             (EHSketchList::UNIVMON(s), EHSketchList::UNIVMON(o)) => {
                 s.merge(o);
                 Ok(())
             }
-            _ => Err("Cannot merge sketches of different types"),
+            _ => Err("Cannot merge sketches of different types".to_string()),
         }
     }
 

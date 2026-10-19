@@ -30,6 +30,7 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 
 use super::EHSketchList;
@@ -148,9 +149,22 @@ fn triple(kind: &'static [u8], bytes: &[u8]) -> Result<SketchState, RmpEncodeErr
     })
 }
 
+/// Rejects a variant whose admission rate is not `1`.
+fn check_admits_all(sketch: &EHSketchList) -> Result<(), String> {
+    let rate = match sketch {
+        EHSketchList::CM(s) => s.admission_rate(),
+        EHSketchList::CS(s) => s.admission_rate(),
+        EHSketchList::DDS(s) => s.admission_rate(),
+        EHSketchList::HLL(s) => s.admission_rate(),
+        _ => return Ok(()),
+    };
+    admission_rate::check_admits_all(rate).map_err(|e| format!("ASAPv1 EHSketchList: {e}"))
+}
+
 /// The triple one EHSketchList contributes, in the order the wire emits it.
 /// Every state the variant's own encoder refuses is refused here too.
 pub(crate) fn sketch_state(sketch: &EHSketchList) -> Result<SketchState, RmpEncodeError> {
+    check_admits_all(sketch).map_err(RmpEncodeError::Syntax)?;
     match sketch {
         EHSketchList::CM(s) => triple(CM_KIND, &s.serialize_to_bytes()?),
         EHSketchList::COCO(s) => triple(COCO_KIND, &s.serialize_to_bytes()?),
@@ -168,8 +182,15 @@ pub(crate) fn sketch_state(sketch: &EHSketchList) -> Result<SketchState, RmpEnco
 
 /// Rebuilds one EHSketchList from a triple, through the variant's own decoder.
 /// An unknown kind_id, and one this build does not carry, are rejected before
-/// any block is assembled.
+/// any block is assembled. A descriptor carrying `admission_rate` is rejected.
 pub(crate) fn rebuild_sketch(triple: &SketchState) -> Result<EHSketchList, RmpDecodeError> {
+    let sketch = rebuild_variant(triple)?;
+    check_admits_all(&sketch).map_err(RmpDecodeError::Uncategorized)?;
+    Ok(sketch)
+}
+
+/// [`rebuild_sketch`] before the `admission_rate` check.
+fn rebuild_variant(triple: &SketchState) -> Result<EHSketchList, RmpDecodeError> {
     let kind_id = triple.kind_id.as_slice();
     check_variant_available(kind_id)?;
     if variant_name(kind_id).is_none() {

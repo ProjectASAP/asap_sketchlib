@@ -58,7 +58,7 @@ impl EHBucket {
     /// Merges another bucket into this one. When the two sketches refuse to
     /// merge the error is returned and this bucket's size, time range and
     /// cached mass are left as they were.
-    pub fn to_merge(&mut self, other: EHBucket) -> Result<(), &'static str> {
+    pub fn to_merge(&mut self, other: EHBucket) -> Result<(), String> {
         self.bucket.merge(&other.bucket)?;
         self.size += other.size;
         self.max_time = self.max_time.max(other.max_time);
@@ -125,14 +125,14 @@ impl ExponentialHistogram {
         let _ = self.merge_volumes();
     }
 
-    fn merge_volumes(&mut self) -> Result<(), &'static str> {
+    fn merge_volumes(&mut self) -> Result<(), String> {
         match self.merge_norm {
             SketchNorm::L1 => self.merge_volumes_l1(),
             SketchNorm::L2 => self.merge_volumes_l2(),
         }
     }
 
-    fn merge_volumes_l1(&mut self) -> Result<(), &'static str> {
+    fn merge_volumes_l1(&mut self) -> Result<(), String> {
         let s_count = self.payload.len();
         if s_count < 2 {
             return Ok(());
@@ -168,7 +168,7 @@ impl ExponentialHistogram {
         Ok(())
     }
 
-    fn merge_volumes_l2(&mut self) -> Result<(), &'static str> {
+    fn merge_volumes_l2(&mut self) -> Result<(), String> {
         while let Some(index) = self.find_l2_merge_candidate() {
             // A refused merge leaves the pair in place, so the candidate would
             // be found again: stop rather than loop forever.
@@ -198,7 +198,7 @@ impl ExponentialHistogram {
     /// Merges bucket `index + 1` into bucket `index` and drops the emptied
     /// slot. A bucket that refuses to merge is kept, so the pair survives the
     /// failure and the error reaches the caller.
-    fn merge_at_index(&mut self, index: usize) -> Result<(), &'static str> {
+    fn merge_at_index(&mut self, index: usize) -> Result<(), String> {
         if index + 1 >= self.payload.len() {
             return Ok(());
         }

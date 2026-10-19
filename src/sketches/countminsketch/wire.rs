@@ -21,6 +21,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 
 use crate::common::hash::check_matrix_rows;
+use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::DeltaCounter;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact_vec;
@@ -79,6 +80,12 @@ struct CmsMetadata {
     cols: u32,
     counter_type: String,
     mode: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "admission_rate::deserialize"
+    )]
+    admission_rate: Option<f64>,
 }
 
 /// Builds the CMS descriptor metadata from the hasher's [`HashProfile`], so the
@@ -90,6 +97,7 @@ fn cms_metadata<H: HashProfile>(
     cols: u32,
     counter_type: &str,
     mode: &str,
+    admission_rate: Option<f64>,
 ) -> CmsMetadata {
     CmsMetadata {
         metadata_version: 1,
@@ -103,6 +111,7 @@ fn cms_metadata<H: HashProfile>(
         cols,
         counter_type: counter_type.to_string(),
         mode: mode.to_string(),
+        admission_rate,
     }
 }
 
@@ -121,37 +130,51 @@ pub(super) fn check_geometry(rows: usize, cols: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// The metadata block of a `rows x cols` sketch of this configuration.
+/// The metadata block of a `rows x cols` sketch of this configuration,
+/// admitting updates at `admission_rate`.
 pub(super) fn encode_metadata<T: CmsWireCounter, Mode: CmsWireMode, H: HashProfile>(
     rows: usize,
     cols: usize,
+    admission_rate: f64,
 ) -> Result<Vec<u8>, RmpEncodeError> {
     check_geometry(rows, cols)
+        .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 envelope: {e}")))?;
+    let admission_rate = admission_rate::to_key(admission_rate)
         .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 envelope: {e}")))?;
     rmp_serde::to_vec_named(&cms_metadata::<H>(
         rows as u32,
         cols as u32,
         T::COUNTER_TYPE,
         Mode::MODE,
+        admission_rate,
     ))
 }
 
-/// Reads a metadata block and returns its `(rows, cols)`. The hash spec,
-/// `counter_type` and `mode` must be this configuration's; `rows` / `cols` are
-/// echoed back and must be a wire-eligible geometry, checked before anything is
-/// sized from them.
+/// Reads a metadata block and returns its `(rows, cols, admission_rate)`. The
+/// hash spec, `counter_type` and `mode` must be this configuration's; `rows` /
+/// `cols` and `admission_rate` are echoed back, and the geometry must be
+/// wire-eligible, checked before anything is sized from it.
 pub(super) fn decode_metadata<T: CmsWireCounter, Mode: CmsWireMode, H: HashProfile>(
     block: &[u8],
-) -> Result<(usize, usize), RmpDecodeError> {
+) -> Result<(usize, usize, f64), RmpDecodeError> {
     let meta: CmsMetadata = envelope::decode_block(block)?;
-    if meta != cms_metadata::<H>(meta.rows, meta.cols, T::COUNTER_TYPE, Mode::MODE) {
+    let admission_rate = admission_rate::from_key(meta.admission_rate)
+        .map_err(|e| RmpDecodeError::Uncategorized(format!("ASAPv1 CMS envelope: {e}")))?;
+    let expected = cms_metadata::<H>(
+        meta.rows,
+        meta.cols,
+        T::COUNTER_TYPE,
+        Mode::MODE,
+        meta.admission_rate,
+    );
+    if meta != expected {
         return Err(RmpDecodeError::Uncategorized(
             "ASAPv1 CMS envelope: metadata mismatch".to_string(),
         ));
     }
     let (rows, cols) = (meta.rows as usize, meta.cols as usize);
     check_geometry(rows, cols).map_err(RmpDecodeError::Uncategorized)?;
-    Ok((rows, cols))
+    Ok((rows, cols, admission_rate))
 }
 
 /// CMS payload (ASAPv1 §3.2), a msgpack **array** (`to_vec`, positional):
@@ -185,7 +208,7 @@ where
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         let counts = self.counts.as_slice();
-        let metadata = encode_metadata::<T, Mode, H>(rows, cols)?;
+        let metadata = encode_metadata::<T, Mode, H>(rows, cols, self.admission_rate)?;
         if counts.len() != rows.saturating_mul(cols) {
             return Err(RmpEncodeError::Syntax(format!(
                 "ASAPv1 CMS envelope: counts length {} != rows*cols {}",
@@ -210,7 +233,7 @@ where
                 "CMS kind_id mismatch: stored {kind_id:?}, expected {CMS_KIND:?}"
             )));
         }
-        let (rows, cols) = decode_metadata::<T, Mode, H>(metadata)?;
+        let (rows, cols, admission_rate) = decode_metadata::<T, Mode, H>(metadata)?;
         let p: CmsPayload<T> = envelope::decode_block(payload)?;
         if p.counts.len() != rows.saturating_mul(cols) {
             return Err(RmpDecodeError::Uncategorized(format!(
@@ -220,7 +243,7 @@ where
             )));
         }
         let storage = Vector2D::from_fn(rows, cols, |r, c| p.counts[r * cols + c]);
-        Ok(CountMin::from_storage(storage))
+        Ok(CountMin::from_storage(storage).with_admission_rate(admission_rate))
     }
 }
 
@@ -350,9 +373,10 @@ mod tests {
     /// via `0.ilog2()`.
     #[test]
     fn count_min_rejects_zero_dimension_payload() {
-        let metadata =
-            rmp_serde::to_vec_named(&cms_metadata::<DefaultXxHasher>(4, 0, "i64", "regular"))
-                .unwrap();
+        let metadata = rmp_serde::to_vec_named(&cms_metadata::<DefaultXxHasher>(
+            4, 0, "i64", "regular", None,
+        ))
+        .unwrap();
         let payload = rmp_serde::to_vec(&CmsPayload::<i64> { counts: Vec::new() }).unwrap();
         let bytes = envelope::encode(CMS_KIND, &metadata, &payload);
         assert!(
@@ -378,6 +402,7 @@ mod tests {
             8,
             "i64",
             "regular",
+            None,
         ))
         .unwrap();
         let payload = rmp_serde::to_vec(&CmsPayload::<i64> {
@@ -445,7 +470,7 @@ mod tests {
             mode: String,
             bogus_field: u8, // key not in CmsMetadata
         }
-        let m = cms_metadata::<DefaultXxHasher>(2, 3, "i64", "regular");
+        let m = cms_metadata::<DefaultXxHasher>(2, 3, "i64", "regular", None);
         let extra = WithExtra {
             metadata_version: m.metadata_version,
             hash_profile_id: m.hash_profile_id.clone(),

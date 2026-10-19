@@ -88,6 +88,13 @@ const GOLDEN_HYDRA_CM: &str = include_str!("../asapv1_golden/hydra_cm_2x2_counte
 const GOLDEN_HYDRA_CS: &str = include_str!("../asapv1_golden/hydra_cs_2x2_counter_2x2.hex");
 const GOLDEN_HYDRA_HLL: &str = include_str!("../asapv1_golden/hydra_hll_1x2_p14.hex");
 const GOLDEN_HYDRA_UNIVMON: &str = include_str!("../asapv1_golden/hydra_univmon_1x2.hex");
+const GOLDEN_CLASSIC_ADMISSION: &str =
+    include_str!("../asapv1_golden/hll_classic_p12_admission.hex");
+const GOLDEN_CMS_ADMISSION: &str =
+    include_str!("../asapv1_golden/cms_i64_regular_2x3_admission.hex");
+const GOLDEN_CS_ADMISSION: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4_admission.hex");
+const GOLDEN_DD_ADMISSION: &str =
+    include_str!("../asapv1_golden/ddsketch_signed_a001_admission.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -222,7 +229,7 @@ fn assert_hll_p14_delta<Variant: HllWireVariant>(delta_hex: &str, state_hex: &st
 
     let mut state =
         HyperLogLogP14::<Variant>::deserialize_from_bytes(&decode_hex(state_hex)).expect("state");
-    state.merge_delta(&decoded);
+    state.merge_delta(&decoded).expect("merge");
     let mut expected = vec![0u8; 16384];
     for (index, value) in [(0, 51), (1, 7), (2, 1), (200, 9), (8192, 42), (16383, 51)] {
         expected[index] = value;
@@ -1441,6 +1448,66 @@ fn hydra_univmon_1x2_matches_golden() {
     ];
     let prototype = HydraCounter::UNIVERSAL(fresh());
     assert_hydra_golden(GOLDEN_HYDRA_UNIVMON, hydra_grid(1, 2, prototype, cells));
+}
+
+// ---------------------------------------------------------------------------
+// admission_rate: a sampled state's metadata closes with the key; the state is
+// the unsampled fixture's, decoded back with its rate.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hll_classic_p12_admission_matches_golden() {
+    let want = decode_hex(GOLDEN_CLASSIC_ADMISSION);
+    let state = HyperLogLogP12::<Classic>::deserialize_from_bytes(&decode_hex(GOLDEN_CLASSIC))
+        .expect("state");
+    let sketch = state.with_admission_rate(0.5);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = HyperLogLogP12::<Classic>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.registers_as_slice(), p12_registers().as_slice());
+    assert_eq!(decoded.admission_rate(), 0.5);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn cms_i64_regular_2x3_admission_matches_golden() {
+    type Cms = CountMin<Vector2D<i64>, RegularPath>;
+    let want = decode_hex(GOLDEN_CMS_ADMISSION);
+    let sketch = Cms::from_storage(Vector2D::from_fn(2, 3, |r, c| I64_VALS[r][c]));
+    let sketch = sketch.with_admission_rate(0.1);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Cms::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = I64_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.admission_rate(), 0.1);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn cs_i64_regular_2x4_admission_matches_golden() {
+    type Cs = Count<Vector2D<i64>, RegularPath>;
+    let want = decode_hex(GOLDEN_CS_ADMISSION);
+    let sketch = Cs::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_VALS[r][c]));
+    let sketch = sketch.with_admission_rate(0.25);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Cs::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.admission_rate(), 0.25);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn ddsketch_signed_a001_admission_matches_golden() {
+    let scalars = (2523.90625, -0.016, 515.0);
+    let sketch = dd_state((&[3, 0, 2], 310), (&[5, 1], -208), 7, scalars);
+    assert_dd_golden(GOLDEN_DD_ADMISSION, &sketch.with_admission_rate(0.125));
+    let decoded =
+        DDSketch::deserialize_from_bytes(&decode_hex(GOLDEN_DD_ADMISSION)).expect("decode");
+    assert_eq!(decoded.admission_rate(), 0.125);
+    assert_eq!((decoded.get_count(), decoded.sum()), (18, 2523.90625));
 }
 
 // ---------------------------------------------------------------------------
