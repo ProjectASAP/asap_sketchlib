@@ -114,6 +114,9 @@ signals a backwards-compatible change.
   `mouse_rows` and `mouse_cols`; UnivMon-Q writes `layers`, `top_layer_cols`,
   `cols_halving_period`, `rows` and `heap_size`. Bytes with the old keys are
   rejected.
+- **CMSHeap, CSHeap, their deltas, UnivMon and UnivMon Optimized read a
+  `"string"` key from msgpack `str` alone**; UTF-8 `bin` keys relabelled
+  `"string"` are rejected.
 - **Space-Saving and UnivMon-Q ASAPv1 decodes reject entries out of emitted
   order.** Space-Saving also rejects a key held twice judged by its bits, so
   two `NaN` keys fail on both doors.

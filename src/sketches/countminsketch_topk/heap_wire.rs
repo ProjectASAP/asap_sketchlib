@@ -24,7 +24,8 @@
 //! mix variants, `String` and `Bytes` included. A `Bytes` key is written as
 //! msgpack `bin` through `WireBytes` and read back from `bin` alone, so any
 //! byte string survives whether or not it is UTF-8 and a `str`-keyed payload
-//! relabelled `"bytes"` is refused.
+//! relabelled `"bytes"` is refused. A `String` key is read from `str` alone
+//! through `WireString`, so `bin` keys relabelled `"string"` are refused too.
 //!
 //! ## Emitted order (byte-stable round trips)
 //!
@@ -50,7 +51,7 @@ use std::collections::HashSet;
 
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
-use crate::message_pack_format::wire_key::{WireBytes, exact_vec};
+use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::{HHHeap, HashProfile, HeapCount, HeapItem};
 
 /// Metadata `key_type` of a heap that holds nothing. A heap with no entries has
@@ -463,7 +464,7 @@ pub(crate) fn encode_payload<B: TopKBody, N: HeapCount>(
         "usize" => pack!(USIZE, v => *v),
         "f32" => pack!(F32, v => *v),
         "f64" => pack!(F64, v => *v),
-        "string" => pack!(String, v => v.clone()),
+        "string" => pack!(String, v => WireString(v.clone())),
         "bytes" => pack!(Bytes, v => WireBytes(v.clone())),
         other => Err(RmpEncodeError::Syntax(format!(
             "ASAPv1 top-k heap: key_type {other:?} is not a wire key type"
@@ -503,7 +504,9 @@ pub(crate) fn decode_payload<B: TopKBody, N: HeapCount>(
         "usize" => unpack!(usize, HeapItem::USIZE),
         "f32" => unpack!(f32, HeapItem::F32),
         "f64" => unpack!(f64, HeapItem::F64),
-        "string" => unpack!(String, HeapItem::String),
+        "string" => unpack!(WireString, |key: WireString| HeapItem::String(
+            key.into_string()
+        )),
         "bytes" => unpack!(WireBytes, |key: WireBytes| HeapItem::Bytes(key.into_vec())),
         other => {
             return Err(RmpDecodeError::Uncategorized(format!(
@@ -744,6 +747,34 @@ mod tests {
                 CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&forged).is_err(),
                 "a payload relabelled {claimed} must be rejected"
             );
+        }
+    }
+
+    /// A `"string"` key is read from msgpack `str` alone: UTF-8 `bin` keys
+    /// relabelled `"string"` are rejected, as `str` keys relabelled `"bytes"` are.
+    #[test]
+    fn heap_string_and_bytes_keys_do_not_decode_as_each_other() {
+        let forge = |sketch: CMSHeap<Vector2D<i64>, RegularPath>, claimed: &str| {
+            let bytes = sketch.serialize_to_bytes().expect("serialize");
+            let (_, _, payload) = envelope::split(&bytes).expect("split");
+            let metadata = rmp_serde::to_vec_named(&topk_metadata::<DefaultXxHasher>(
+                2, 8, "i64", "regular", 8, claimed,
+            ))
+            .expect("metadata");
+            envelope::encode(KIND, &metadata, payload)
+        };
+        let bin = sketch_with(&[(DataInput::Bytes(b"alpha"), 5)]);
+        let str_keys = sketch_with(&[(DataInput::Str("alpha"), 5)]);
+        for (forged, claimed) in [
+            (forge(bin, "string"), "string"),
+            (forge(str_keys, "bytes"), "bytes"),
+        ] {
+            let problem =
+                match CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&forged) {
+                    Ok(_) => panic!("keys relabelled {claimed} must be rejected"),
+                    Err(err) => err.to_string(),
+                };
+            assert!(problem.contains("must be msgpack"), "{claimed}: {problem}");
         }
     }
 

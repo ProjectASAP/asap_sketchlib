@@ -35,7 +35,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
-use crate::message_pack_format::wire_key::{WireBytes, exact_vec};
+use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::sketches::countminsketch_topk::heap_wire::{
     EMPTY_KEY_TYPE, check_distinct_keys, heap_entries, key_type_of, rebuild_heap,
 };
@@ -323,7 +323,7 @@ pub(crate) fn encode_pyramid(
             let mut keys = Vec::with_capacity(state.entries.len());
             for (key, _) in &state.entries {
                 match key {
-                    HeapItem::String(value) => keys.push(value.clone()),
+                    HeapItem::String(value) => keys.push(WireString(value.clone())),
                     _ => return Err(mixed_variant_error(key_type, key)),
                 }
             }
@@ -382,13 +382,16 @@ pub(crate) fn decode_pyramid(
     payload: &[u8],
 ) -> Result<DecodedPyramid, RmpDecodeError> {
     macro_rules! unpack {
-        ($variant:ident, $ty:ty) => {{
+        ($variant:ident, $ty:ty) => {
+            unpack!($ty, HeapItem::$variant)
+        };
+        ($ty:ty, $into:expr) => {{
             let decoded: PyramidPayload<$ty> = envelope::decode_block(payload)?;
             (
                 decoded
                     .keys
                     .into_iter()
-                    .map(HeapItem::$variant)
+                    .map($into)
                     .collect::<Vec<HeapItem>>(),
                 DecodedPyramid {
                     counts: decoded.counts,
@@ -417,7 +420,9 @@ pub(crate) fn decode_pyramid(
         "usize" => unpack!(USIZE, usize),
         "f32" => unpack!(F32, f32),
         "f64" => unpack!(F64, f64),
-        "string" => unpack!(String, String),
+        "string" => unpack!(WireString, |key: WireString| HeapItem::String(
+            key.into_string()
+        )),
         "bytes" => {
             let decoded: PyramidPayload<WireBytes> = envelope::decode_block(payload)?;
             (
@@ -699,6 +704,37 @@ mod tests {
     fn payload_of<K: for<'de> Deserialize<'de>>(bytes: &[u8]) -> PyramidPayload<K> {
         let (_, _, payload) = envelope::split(bytes).expect("split");
         from_slice(payload).expect("payload")
+    }
+
+    /// A `"string"` key is read from msgpack `str` alone: the same keys as
+    /// UTF-8 `bin` under `key_type` `"string"` are rejected.
+    #[test]
+    fn univmon_reads_string_keys_from_str_only() {
+        let encoded = populated().serialize_to_bytes().expect("serialize");
+        let meta = metadata_of(&encoded);
+        assert_eq!(meta.key_type, "string");
+        let payload: PyramidPayload<String> = payload_of(&encoded);
+        assert!(!payload.keys.is_empty());
+        let as_bin = PyramidPayload {
+            counts: payload.counts,
+            l2: payload.l2,
+            heap_lens: payload.heap_lens,
+            keys: payload
+                .keys
+                .iter()
+                .map(|key| WireBytes(key.as_bytes().to_vec()))
+                .collect(),
+            heap_counts: payload.heap_counts,
+            candidate_complete: payload.candidate_complete,
+            bucket_size: payload.bucket_size,
+            update_mode: payload.update_mode,
+        };
+        let problem = UnivMon::deserialize_from_bytes(&crafted(&meta, &as_bin))
+            .map(drop)
+            .expect_err("bin keys under key_type string must be rejected")
+            .to_string();
+        assert!(problem.contains("must be msgpack str"), "{problem}");
+        assert!(UnivMon::deserialize_from_bytes(&encoded).is_ok());
     }
 
     /// Every layer is a CountL2HH matrix, so a layer past the seed list's row
