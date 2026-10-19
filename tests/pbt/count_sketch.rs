@@ -4,7 +4,7 @@
 //! Charikar, Chen, Farach-Colton, ICALP '02.
 
 use crate::support::{
-    PROBE_KEYS, edge_dimension, edge_rows, grid, keyed_updates, keys, matrices_close,
+    PROBE_KEYS, edge_dimension, edge_rows, grid, keyed_updates, keys, matrices_close_at_mass,
 };
 use asap_sketchlib::message_pack_format::MessagePackCodec;
 use asap_sketchlib::{Count, CountSketch, DataInput, RegularPath, Vector2D};
@@ -147,8 +147,9 @@ proptest! {
 
         let concatenated: Vec<_> = a.iter().chain(b.iter()).cloned().collect();
         let streamed = cs_of(rows, cols, &concatenated);
+        let mass: f64 = concatenated.iter().map(|(_, w)| w.abs()).sum();
 
-        prop_assert!(matrices_close(merged.sketch(), streamed.sketch()));
+        prop_assert!(matrices_close_at_mass(merged.sketch(), streamed.sketch(), mass));
     }
 
     // ===== Wire =====
