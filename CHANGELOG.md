@@ -12,6 +12,11 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **`KLL::memory_bytes()`**: the bytes a KLL sketch holds — its item
+  buffer (only as large as the items it has needed), its level array, its
+  merge scratch space and a memoized CDF when one is held. Callers that
+  charged a KLL a fixed size can charge what it holds.
+
 - `WeightedFrequency`: Float64 CMS/CountSketch updates, typed tuple identities,
   bounded candidate ranking, compatible-state merging and versioned snapshots.
   Extracted from ASAPPlanner; preserves existing `ASAP-WFREQ-1` bytes.
@@ -80,6 +85,15 @@ signals a backwards-compatible change.
   payload is unchanged.
 
 ### Changed
+
+- **KLL allocates its item buffer as items arrive.** A new sketch holds no
+  item buffer; the buffer starts at 16 items and doubles up to the sketch's
+  full capacity, which it reached at construction before. The retained
+  items, their order and the compaction coin are unchanged, so quantiles,
+  merges and serialized bytes are identical to before for the same input
+  and seed. A sketch of `k = 469` holding 10 items now holds about 0.9 KiB
+  instead of about 18 KiB (the merge scratch space also starts empty), and
+  creating one with 10 updates is about 11× faster. A decoded sketch's buffer holds just its retained items.
 
 - **ASAPv1 decoders reject a block with bytes after its msgpack value, and a
   float field that is not msgpack float64** (an `f32` key: not float32).
