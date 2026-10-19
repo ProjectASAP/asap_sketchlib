@@ -14,9 +14,9 @@
 //! A layer holding a matrix sketch hashes at seed index 0, and an HLL member
 //! of it therefore diverges from a bare HLL, which hashes at
 //! `CANONICAL_HASH_SEED`. The bare-HLL equality covers HLL members of layers
-//! with no matrix sketch, where the layer hashes at the canonical seed too;
-//! the layer that adopts its first matrix member mid-stream is a law of its
-//! own.
+//! with no matrix sketch, where the layer hashes at the canonical seed too.
+//! A layer takes its layout at construction and never changes it, so a push
+//! mid-stream moves no member the layer already holds.
 
 use crate::support::keys;
 use asap_sketchlib::{
@@ -357,10 +357,10 @@ proptest! {
         }
     }
 
-    // ===== A member pushed mid-stream takes only the rest =====
+    // ===== A push mid-stream moves no member the layer already holds =====
 
     #[test]
-    fn a_member_pushed_mid_stream_lands_last_and_takes_only_the_rest_of_the_stream(
+    fn a_push_mid_stream_moves_no_member_and_a_taken_one_holds_only_the_rest(
         (rows, pool) in geometry(),
         (members, extra) in prop_oneof![
             (mixed_members(2), kind()),
@@ -369,11 +369,9 @@ proptest! {
         prefix in keys(60),
         suffix in keys(60),
     ) {
-        // A layer with no matrix member yet hashes at the canonical seed and
-        // takes its layout from the first matrix sketch pushed into it, which
-        // moves the HLL members already there; a layer whose layout is
-        // already fixed moves nobody.
-        let fixed = members.iter().any(|k| k.answers_frequency());
+        // A layer takes its layout at construction: a matrix sketch pushed
+        // into a layer holding none is refused, and a layer whose layout is
+        // already fixed takes a member of that layout.
         let width = cols_at(&pool, members.len());
         let mut pushed = layer_of(&members, rows, &pool);
         let mut untouched = layer_of(&members, rows, &pool);
@@ -384,7 +382,12 @@ proptest! {
             pushed.insert(&input);
             untouched.insert(&input);
         }
-        pushed.push(member(extra, rows, width)).expect("one layout");
+        let taken = pushed.push(member(extra, rows, width)).is_ok();
+        prop_assert_eq!(
+            pushed.len(),
+            members.len() + usize::from(taken),
+            "a refused {:?} was added to {:?} anyway", extra, members
+        );
         for k in &suffix {
             let input = DataInput::U64(*k);
             pushed.insert(&input);
@@ -394,17 +397,15 @@ proptest! {
 
         let whole: Vec<u64> = prefix.iter().chain(&suffix).copied().collect();
         let probes = probes(&whole);
-        if fixed {
-            for (i, kind) in members.iter().enumerate() {
-                prop_assert_eq!(
-                    layer_answers(&pushed, i, *kind, &probes),
-                    layer_answers(&untouched, i, *kind, &probes),
-                    "member {} ({:?}) moved by a {:?} pushed mid-stream", i, kind, extra
-                );
-            }
+        for (i, kind) in members.iter().enumerate() {
+            prop_assert_eq!(
+                layer_answers(&pushed, i, *kind, &probes),
+                layer_answers(&untouched, i, *kind, &probes),
+                "member {} ({:?}) moved by a {:?} pushed mid-stream", i, kind, extra
+            );
         }
 
-        if extra.answers_frequency() {
+        if taken && extra.answers_frequency() {
             let i = members.len();
             prop_assert_eq!(
                 layer_answers(&pushed, i, extra, &probes),
@@ -413,6 +414,52 @@ proptest! {
                 extra, rows, width
             );
         }
+    }
+
+    // ===== A matrix-free layer takes no matrix member, fed or not =====
+
+    #[test]
+    fn a_matrix_free_layer_refuses_a_matrix_member_whether_or_not_it_has_been_fed(
+        (rows, pool) in geometry(),
+        members in hll_members(2),
+        alien in matrix_kind(),
+        stream in keys(120),
+    ) {
+        let width = cols_at(&pool, members.len());
+        let mut layer = layer_of(&members, rows, &pool);
+        let mut untouched = layer_of(&members, rows, &pool);
+
+        prop_assert!(
+            layer.push(member(alien, rows, width)).is_err(),
+            "a layer of {:?} took a {:?} before any insert", members, alien
+        );
+        prop_assert_eq!(layer.len(), members.len());
+
+        for k in &stream {
+            let input = DataInput::U64(*k);
+            layer.insert(&input);
+            untouched.insert(&input);
+        }
+        prop_assert!(
+            layer.push(member(alien, rows, width)).is_err(),
+            "a layer of {:?} took a {:?} after a stream", members, alien
+        );
+        prop_assert_eq!(layer.len(), members.len());
+
+        // The layer still hashes at the canonical seed, so the stream it
+        // holds is what a layer that saw no push holds.
+        let probes = probes(&stream);
+        for (i, kind) in members.iter().enumerate() {
+            prop_assert_eq!(
+                layer_answers(&layer, i, *kind, &probes),
+                layer_answers(&untouched, i, *kind, &probes),
+                "member {} ({:?}) moved by a refused {:?}", i, kind, alien
+            );
+        }
+
+        // An HLL member carries no layout, so it is taken either way.
+        prop_assert!(layer.push(member(Kind::Hip, rows, width)).is_ok());
+        prop_assert_eq!(layer.len(), members.len() + 1);
     }
 
     // ===== A layer answers for the family it holds, and only for it =====
