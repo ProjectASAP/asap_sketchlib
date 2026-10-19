@@ -14,8 +14,8 @@ use asap_sketchlib::common::input::HydraCounter;
 use asap_sketchlib::sketches::CountSketchDelta;
 use asap_sketchlib::sketches::hll::HllWireVariant;
 use asap_sketchlib::{
-    Bloom, DefaultXxHasher, EHBucket, EHSketchList, ExponentialHistogram, SpaceSaving,
-    UnivMonPyramid, UnivMonQ, UnivMonQConfig,
+    Bloom, DefaultXxHasher, EHBucket, EHSketchList, ExponentialHistogram, KeyColumn, SpaceSaving,
+    TupleKey, UnivMonPyramid, UnivMonQ, UnivMonQConfig,
 };
 use asap_sketchlib::{
     CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Coco, CocoBucket, Count, CountDelta,
@@ -72,6 +72,10 @@ const GOLDEN_CSHEAP_F64: &str = include_str!("../asapv1_golden/csheap_f64_fast_2
 const GOLDEN_CSHEAP_DELTA: &str = include_str!("../asapv1_golden/csheap_i64_regular_2x4_delta.hex");
 const GOLDEN_CSHEAP_I64_TIE: &str =
     include_str!("../asapv1_golden/csheap_i64_regular_2x4_i64tie.hex");
+const GOLDEN_CMSHEAP_TUPLE: &str =
+    include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_tuplekeys.hex");
+const GOLDEN_CSHEAP_TUPLE: &str =
+    include_str!("../asapv1_golden/csheap_i64_regular_2x4_tuplekeys.hex");
 const GOLDEN_DD_POSITIVE: &str = include_str!("../asapv1_golden/ddsketch_positive_a001.hex");
 const GOLDEN_DD_SIGNED: &str = include_str!("../asapv1_golden/ddsketch_signed_a001.hex");
 const GOLDEN_DD_EMPTY: &str = include_str!("../asapv1_golden/ddsketch_empty_a001.hex");
@@ -737,6 +741,93 @@ fn csheap_i64_regular_2x4_delta_matches_golden() {
     let expected = [-32, -1, 383, 65536, -130, -33, 32767, -4294967297];
     assert_eq!(state.cs().as_storage().as_slice(), expected.as_slice());
     assert_heap(state.heap(), 5, &entries);
+}
+
+// ---------------------------------------------------------------------------
+// Tuple keys: CMSHeap and CSHeap keys made of typed columns, each encoded as a
+// `bytes` key -> serialize == golden, round-trips back to the columns.
+// ---------------------------------------------------------------------------
+
+/// The tuples, named; `-0.0` and `NaN` take their canonical encodings.
+fn tuple(name: &str) -> TupleKey {
+    use KeyColumn::*;
+    TupleKey::new(match name {
+        "east443" => vec![Str("us-east".into()), I64(443), Bool(true)],
+        "east80" => vec![Str("us-east".into()), I64(80), Null],
+        "null" => vec![Null, I64(-1), F64(2.5)],
+        "zero" => vec![Str(String::new()), I64(i64::MIN), F64(-0.0)],
+        "nan" => vec![Str("é".into()), I64(0), F64(f64::NAN), Bool(false)],
+        other => panic!("no tuple {other}"),
+    })
+}
+
+fn tuple_entries(entries: &[(&str, i64)]) -> Vec<(HeapItem, i64)> {
+    entries
+        .iter()
+        .map(|&(name, count)| (HeapItem::Bytes(tuple(name).to_bytes().unwrap()), count))
+        .collect()
+}
+
+/// Every decoded heap key is a canonical tuple key naming one of `entries`.
+fn assert_tuple_keys<N: HeapCount>(heap: &HHHeap<N>, entries: &[(&str, i64)]) {
+    for item in heap.heap() {
+        let HeapItem::Bytes(bytes) = &item.key else {
+            panic!("expected a bytes key, got {:?}", item.key);
+        };
+        let key = TupleKey::from_bytes(bytes).expect("a tuple key");
+        assert_eq!(&key.to_bytes().unwrap(), bytes);
+        assert!(
+            entries
+                .iter()
+                .any(|&(name, _)| tuple(name).to_bytes().unwrap() == *bytes)
+        );
+    }
+}
+
+#[test]
+fn cmsheap_i64_regular_2x3_tuplekeys_matches_golden() {
+    let entries = [
+        ("zero", 1),
+        ("east80", 300),
+        ("null", 65536),
+        ("nan", 127),
+        ("east443", 300),
+    ];
+    check_cmsheap_i64_golden(GOLDEN_CMSHEAP_TUPLE, 5, &tuple_entries(&entries));
+    let decoded = CmsHeapI64::deserialize_from_bytes(&decode_hex(GOLDEN_CMSHEAP_TUPLE)).unwrap();
+    assert_tuple_keys(decoded.heap(), &entries);
+    let positive_zero = TupleKey::new(vec![
+        KeyColumn::Str(String::new()),
+        KeyColumn::I64(i64::MIN),
+        KeyColumn::F64(0.0),
+    ]);
+    let found = decoded
+        .heap()
+        .find_heap_item(&HeapItem::Bytes(positive_zero.to_bytes().unwrap()));
+    assert!(found.is_some(), "-0.0 and 0.0 are one tuple key");
+}
+
+#[test]
+fn csheap_i64_regular_2x4_tuplekeys_matches_golden() {
+    type Heap = CSHeap<Vector2D<i64>, RegularPath>;
+    let want = decode_hex(GOLDEN_CSHEAP_TUPLE);
+    let named = [
+        ("null", -33),
+        ("east443", 127),
+        ("nan", 65536),
+        ("zero", 127),
+    ];
+    let entries = tuple_entries(&named);
+    let mut sketch = Heap::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_VALS[r][c]), 6);
+    *sketch.heap_mut() = heap_of(6, &entries);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Heap::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    assert_heap(decoded.heap(), 6, &entries);
+    assert_tuple_keys(decoded.heap(), &named);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
 // ---------------------------------------------------------------------------

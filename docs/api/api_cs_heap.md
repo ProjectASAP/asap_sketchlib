@@ -80,6 +80,11 @@ and the `keys` array is homogeneous in it. A heap whose keys mix variants, or
 holds an `I128` / `U128` key, does not serialize. An empty heap emits
 `key_type = "u64"`.
 
+A key of several typed columns, such as one GROUP BY row, is a
+[`TupleKey`](./api_common_input.md#tuple-keys): insert
+`DataInput::Bytes(&key.to_bytes()?)` and the heap carries `key_type`
+`"bytes"`; `TupleKey::from_bytes` reads a heap key back into its columns.
+
 Entries are emitted in descending count (`f64::total_cmp` for `f64` counts),
 ties broken by a total order over the key, so a decoded sketch re-serializes
 byte-identically. The decoder rejects entries in any other order.

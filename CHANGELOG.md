@@ -12,6 +12,11 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **`TupleKey` and `KeyColumn`**, a heap key of typed columns (null, bool,
+  `i64`, `f64`, string) encoded into one canonical byte string, so a GROUP BY
+  over several columns keeps one CMSHeap or CSHeap candidate per tuple under
+  `key_type` `"bytes"`. The encoding is ASAPv1's tuple key (spec Section 2);
+  `-0.0` encodes as `0.0` and every `NaN` as one `NaN`.
 - **ASAPv1 golden fixtures for KMV, Bloom, Space-Saving, UniformSampling,
   UnivMon Optimized, UnivMon-Q, ExponentialHistogram and EHSketchList**, so
   every kind_id the spec marks implemented has one. The spec fixes Bloom's bit

@@ -363,6 +363,25 @@ HLL admits by key: all updates of a key are admitted or none are.
 
 A sketch nested in another kind's state holds `p = 1`.
 
+### Tuple keys
+
+A key made of several typed columns, such as one GROUP BY row, is a `"bytes"` key (§3.5) holding its columns encoded in order and concatenated. Each column is a tag byte and a value:
+
+| Tag | Column | Value |
+| --- | ------ | ----- |
+| `0x00` | null | none |
+| `0x01` | `false` | none |
+| `0x02` | `true` | none |
+| `0x03` | i64 | 8 bytes, big-endian two's complement |
+| `0x04` | f64 | 8 bytes, big-endian IEEE-754 bits; `-0.0` is written as `0.0`, and every `NaN` as `0x7ff8000000000000` |
+| `0x05` | string | u32 big-endian byte length, then that many bytes of UTF-8 |
+
+Each column delimits itself, so the column count is not written; the empty tuple is the empty byte string. A tuple has one encoding, so equal tuples are equal keys. A string longer than `2^32 - 1` bytes fails to encode.
+
+**Decode rules** (all fail closed): an unknown tag, a value cut short, a string that is not UTF-8, and an f64 written as `-0.0` or as a `NaN` other than `0x7ff8000000000000` are rejected.
+
+Nothing on the wire marks a `"bytes"` key as a tuple key.
+
 ### Standard ProjectASAP profile (reference values)
 
 The hash-spec field *values* are read live from the hasher's `HashProfile`: `hll_metadata::<H>` / `cms_metadata::<H>` read `PROFILE_ID`, `ALGORITHM`, `SEED_DERIVATION`, `INPUT_ENCODING`, `seed_list()`, and the seed index straight off `H`.
@@ -585,7 +604,7 @@ Count-Min's counter type is a Rust type parameter, fixed at compile time. A Spac
 
 **`"isize"` / `"usize"` are platform-width, and the wire does not widen them.** The other twelve names fix a width the same on every target; these two are whatever the encoding host's pointer is. A `usize` key of `1 << 33` encodes on a 64-bit host and fails to decode on a 32-bit one, and a language whose integer types have no pointer-width member — Go among them — has no type to map them to at all. They are wire-eligible because `HeapItem` has the variants and an identity must be recorded exactly, not because they are portable; a producer that needs the bytes to travel should insert `i64` / `u64` keys instead.
 
-`"bytes"` is written as msgpack `bin`, never `str`: a `Bytes` key is an arbitrary byte array with no encoding, so `str` would refuse the byte strings that are not UTF-8 and lose the distinction from a `String` key for the ones that are. `"string"` and `"bytes"` are different key types for the same reason a widened integer is not the key it came from — `HeapItem::Bytes(b"abc")` does **not** equal `DataInput::Str("abc")`, so a summary holding both has no single `key_type` and fails to serialize.
+A key of several typed columns is a `"bytes"` key holding a [tuple key](#tuple-keys). `"bytes"` is written as msgpack `bin`, never `str`: a `Bytes` key is an arbitrary byte array with no encoding, so `str` would refuse the byte strings that are not UTF-8 and lose the distinction from a `String` key for the ones that are. `"string"` and `"bytes"` are different key types for the same reason a widened integer is not the key it came from — `HeapItem::Bytes(b"abc")` does **not** equal `DataInput::Str("abc")`, so a summary holding both has no single `key_type` and fails to serialize.
 
 **Why a key is never widened (e.g. `i32` to `i64`).** A counter is a number, and its width is a storage choice. A Space-Saving key is an *identity*, and the variant is part of it. `HeapItem`'s equality against a query `DataInput` is variant-exact — `HeapItem::I64(5)` does **not** equal `DataInput::I32(5)`. The digest, however, is variant-blind: the whole signed family hashes its value widened to `u64`, so a widened key lands in the **same index slot** and then fails the equality check. The result is not an error; it is `estimate` returning `0` for a key the summary is holding, with nothing anywhere to indicate a problem. So the wire records the variant exactly and the decoder rebuilds it exactly.
 
