@@ -98,6 +98,13 @@ impl KllSketch {
         self.backend.count() as u64
     }
 
+    /// Memory the sketch holds, in bytes: this wrapper plus its KLL's
+    /// [`KLL::memory_bytes`], which counts only the items it has needed.
+    pub fn memory_bytes(&self) -> usize {
+        std::mem::size_of::<Self>() - std::mem::size_of::<SketchlibKll>()
+            + self.backend.memory_bytes()
+    }
+
     /// Estimate the value at the given quantile `q ∈ [0, 1]`.
     pub fn quantile(&self, q: f64) -> f64 {
         if self.count() == 0 {
@@ -394,6 +401,22 @@ impl MessagePackCodec for KllSketchData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The wrapper reports its KLL's memory: small while it holds few items,
+    // larger once it holds many.
+    #[test]
+    fn memory_bytes_follows_the_items_held() {
+        let mut sketch = KllSketch::new(469);
+        for i in 0..10 {
+            sketch.update(f64::from(i));
+        }
+        let small = sketch.memory_bytes();
+        assert!(small < 2048, "10 items reported {small} bytes");
+        for i in 0..100_000 {
+            sketch.update(f64::from(i));
+        }
+        assert!(sketch.memory_bytes() > small + 469 * std::mem::size_of::<f64>());
+    }
 
     #[test]
     fn kll_data_msgpack_matches_kll_sketch() {
