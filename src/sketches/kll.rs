@@ -17,6 +17,8 @@ use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};
 
+#[cfg(test)]
+mod eager_reference;
 mod wire;
 pub(crate) use wire::{
     KLL_KIND_DYNAMIC, KllCoinWire, KllPayload, KllWireItem, kll_metadata, split_and_validate_meta,
@@ -29,6 +31,9 @@ const CAPACITY_CACHE_LEN: usize = 20;
 const MAX_CACHEABLE_K: usize = 26_602;
 const CAPACITY_DECAY: f64 = 2.0 / 3.0;
 const DEFAULT_K: i32 = 200;
+/// Items the buffer holds at its first allocation; it then doubles, up to
+/// the sketch's `max_capacity`.
+const INITIAL_BUFFER_ITEMS: usize = 16;
 
 /// Coin generates deterministic pseudo-random coin flips while amortizing
 /// calls to the RNG by consuming one bit at a time from a 64-bit buffer.
@@ -114,8 +119,8 @@ pub struct CdfEntry {
 }
 
 /// Computes the maximum number of items the sketch can hold across all
-/// levels for the given `k` and `m`. The buffer is pre-allocated to this
-/// size so that no dynamic reallocation ever occurs.
+/// levels for the given `k` and `m`. The buffer grows as items arrive, up to
+/// this size, and never past it.
 fn compute_max_capacity(k: usize, m: usize) -> usize {
     let mut total = 0;
     let mut scale = 1.0_f64;
@@ -235,6 +240,15 @@ pub(crate) fn merge_sorted_runs<T: NumericalValue>(
 /// ```
 ///
 /// `levels[h]` = start of level h.  `levels[h+1] - levels[h]` = size of level h.
+///
+/// The buffer starts empty and grows as items arrive: when L0 reaches its
+/// front, the buffer doubles (up to `max_capacity`) and the retained items
+/// move to the high end of the new buffer, every level boundary shifting by
+/// the growth. Compaction reads only level sizes and positions relative to
+/// one another, and a full buffer compacts only once it has reached
+/// `max_capacity`, as a buffer allocated whole would. So the retained items,
+/// their order and the coin tosses are the same as with a buffer allocated
+/// whole, and a sketch holding few items holds little memory.
 #[derive(Clone, Debug)]
 pub struct KLL<T: NumericalValue = f64> {
     items: Box<[T]>,
@@ -306,13 +320,9 @@ impl<T: NumericalValue> KLL<T> {
         }
         let max_cap = compute_max_capacity(norm_k, norm_m);
         let mut s = Self {
-            items: vec![T::default(); max_cap].into_boxed_slice(),
-            levels: {
-                let mut v = vec![0usize; MAX_LEVELS + 1];
-                v[0] = max_cap;
-                v[1] = max_cap;
-                v.into_boxed_slice()
-            },
+            // Allocated as items arrive (see `grow_buffer`).
+            items: Box::default(),
+            levels: vec![0usize; MAX_LEVELS + 1].into_boxed_slice(),
             k: norm_k,
             m: norm_m,
             num_levels: 1,
@@ -322,11 +332,47 @@ impl<T: NumericalValue> KLL<T> {
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
             level0_capacity: 0,
-            merge_buf: Vec::with_capacity(norm_k),
+            merge_buf: Vec::new(),
             cdf_cache: None,
         };
         s.rebuild_capacity_cache();
         s
+    }
+
+    /// Grows the item buffer to at least `min_len` items (at least double,
+    /// at most `max_capacity`), moving the retained items to the high end of
+    /// the new buffer and shifting every level boundary by the growth.
+    fn grow_buffer(&mut self, min_len: usize) {
+        let old_len = self.items.len();
+        let new_len = min_len
+            .max(old_len * 2)
+            .max(INITIAL_BUFFER_ITEMS)
+            .min(self.max_capacity);
+        if new_len <= old_len {
+            return;
+        }
+        let delta = new_len - old_len;
+        let used_start = self.levels[0];
+        let mut items = vec![T::default(); new_len].into_boxed_slice();
+        items[used_start + delta..].copy_from_slice(&self.items[used_start..]);
+        self.items = items;
+        for level in self.levels[..=self.num_levels].iter_mut() {
+            *level += delta;
+        }
+    }
+
+    /// Memory the sketch holds, in bytes: the struct, its item buffer (only
+    /// as large as the items it has needed so far), its level array, its
+    /// merge scratch space, and a memoized CDF when one is held.
+    pub fn memory_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + std::mem::size_of_val(&*self.items)
+            + std::mem::size_of_val(&*self.levels)
+            + self.merge_buf.capacity() * std::mem::size_of::<T>()
+            + self
+                .cdf_cache
+                .as_ref()
+                .map_or(0, |cdf| cdf.entries.len() * std::mem::size_of::<CdfEntry>())
     }
 
     /// Reconstruct a KLL directly from portable wire state — the retained
@@ -374,9 +420,10 @@ impl<T: NumericalValue> KLL<T> {
                 k
             ));
         }
+        s.grow_buffer(items.len());
         // Live data occupies the high end of the buffer; free space at the front.
-        let offset = s.max_capacity - items.len();
-        let max_cap = s.max_capacity;
+        let max_cap = s.items.len();
+        let offset = max_cap - items.len();
         s.items[offset..].clone_from_slice(items);
         for (dst, &src) in s.levels.iter_mut().zip(levels[..=num_levels].iter()) {
             *dst = src + offset;
@@ -394,12 +441,24 @@ impl<T: NumericalValue> KLL<T> {
     fn push_value(&mut self, value: T) {
         self.invalidate_cdf_cache();
         if self.levels[0] == 0 {
-            self.compress_while_updating();
+            self.make_room();
         }
         self.levels[0] -= 1;
         self.items[self.levels[0]] = value;
 
         if self.levels[1] - self.levels[0] > self.level0_capacity {
+            self.compress_while_updating();
+        }
+    }
+
+    /// The buffer is full: grow it, or compact once it is whole. Kept out of
+    /// line so the insert path stays small.
+    #[cold]
+    #[inline(never)]
+    fn make_room(&mut self) {
+        if self.items.len() < self.max_capacity {
+            self.grow_buffer(self.items.len() + 1);
+        } else {
             self.compress_while_updating();
         }
     }
@@ -668,13 +727,21 @@ impl<T: NumericalValue> KLL<T> {
             h += 1;
         }
 
-        // Write the compacted per-level vectors back into the fixed
-        // buffer, top level first (matches the buffer's grow-leftward
-        // layout). `total <= max_capacity` is guaranteed here because
-        // every level 0..self.num_levels now satisfies its own capacity
-        // bound — the same invariant a live KLL always maintains — and
-        // max_capacity is exactly the sum of all per-level capacities.
-        let mc = self.max_capacity;
+        // Write the compacted per-level vectors back into the buffer, top
+        // level first (matches the buffer's grow-leftward layout), growing
+        // it first if they need more room. `total <= max_capacity` is
+        // guaranteed here because every level 0..self.num_levels now
+        // satisfies its own capacity bound — the same invariant a live KLL
+        // always maintains — and max_capacity is exactly the sum of all
+        // per-level capacities.
+        let total: usize = work[..self.num_levels].iter().map(Vec::len).sum();
+        if total > self.items.len() {
+            // `grow_buffer` shifts the stale boundaries too; they are all
+            // rewritten below.
+            self.levels[0] = self.levels[0].min(self.items.len());
+            self.grow_buffer(total);
+        }
+        let mc = self.items.len();
         let mut cursor = mc;
         for h in (0..self.num_levels).rev() {
             let len = work[h].len();
@@ -735,7 +802,8 @@ impl<T: NumericalValue> KLL<T> {
     /// `init_kll_with_seed`), the coin is re-seeded from that seed so determinism
     /// survives `clear()` (and therefore window rotation in stateful aggregators).
     pub fn clear(&mut self) {
-        let mc = self.max_capacity;
+        // The buffer keeps the size it grew to.
+        let mc = self.items.len();
         self.invalidate_cdf_cache();
         self.levels[0] = mc;
         self.levels[1] = mc;
@@ -978,10 +1046,9 @@ impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for KLL<T> {
                 "KLL: {used_len} items exceed max_capacity {max_cap}"
             )));
         }
-        let offset = max_cap - used_len;
-
-        let mut items = vec![T::default(); max_cap].into_boxed_slice();
-        items[offset..offset + used_len].copy_from_slice(&wire.items);
+        // The buffer holds just the retained items; it grows as more arrive.
+        let offset = 0;
+        let items = wire.items.into_boxed_slice();
 
         let mut levels = vec![0usize; MAX_LEVELS + 1].into_boxed_slice();
         for (i, &l) in wire.levels.iter().enumerate() {
@@ -1005,7 +1072,7 @@ impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for KLL<T> {
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
             level0_capacity: 0,
-            merge_buf: Vec::with_capacity(wire.k),
+            merge_buf: Vec::new(),
             cdf_cache: None,
         };
         sketch.rebuild_capacity_cache();
@@ -1104,6 +1171,82 @@ mod tests {
     use super::*;
     use crate::test_utils::{sample_uniform_f64, sample_zipf_f64};
 
+    /// Each level's retained items, bottom level first, in buffer order.
+    fn levels_items(sk: &KLL<f64>) -> Vec<Vec<f64>> {
+        (0..sk.num_levels)
+            .map(|h| sk.items[sk.levels[h]..sk.levels[h + 1]].to_vec())
+            .collect()
+    }
+
+    /// The lazily growing buffer holds exactly the eager buffer's state:
+    /// the same items per level in the same order, the same coin, so the
+    /// same quantiles and serialized bytes. Several k, input sizes from
+    /// empty to far above k, merges, and updates after a merge.
+    #[test]
+    fn lazy_allocation_matches_eager() {
+        use eager_reference::EagerKll;
+        for k in [8usize, 64, 200, 469, 1024] {
+            for n in [0usize, 1, 10, k - 1, k, k + 1, 3 * k, 10 * k, 50_000] {
+                for seed in [1u64, 7] {
+                    let values = if n == 0 {
+                        Vec::new()
+                    } else {
+                        sample_uniform_f64(0.0, 1e6, n, seed ^ ((k as u64) << 8))
+                    };
+                    let mut lazy = KLL::<f64>::init_with_seed(k, 8, seed);
+                    let mut eager = EagerKll::<f64>::init_with_seed(k, 8, seed);
+                    for &v in &values {
+                        lazy.update(&v);
+                        eager.update(v);
+                    }
+                    let context = format!("k={k} n={n} seed={seed}");
+                    assert_eq!(levels_items(&lazy), eager.levels_items(), "{context}");
+                    assert_eq!(lazy.co.to_wire(), eager.co.to_wire(), "{context}");
+
+                    // Merge in a second sketch, then keep updating.
+                    let more = sample_uniform_f64(-1e6, 0.0, n / 2 + 3, seed + 100);
+                    let mut lazy_other = KLL::<f64>::init_with_seed(k, 8, seed + 1);
+                    let mut eager_other = EagerKll::<f64>::init_with_seed(k, 8, seed + 1);
+                    for &v in &more {
+                        lazy_other.update(&v);
+                        eager_other.update(v);
+                    }
+                    lazy.merge(&lazy_other);
+                    eager.merge(&eager_other);
+                    for &v in &more {
+                        lazy.update(&v);
+                        eager.update(v);
+                    }
+                    assert_eq!(
+                        levels_items(&lazy),
+                        eager.levels_items(),
+                        "{context} merged"
+                    );
+                    assert_eq!(lazy.co.to_wire(), eager.co.to_wire(), "{context} merged");
+                }
+            }
+        }
+    }
+
+    /// A new sketch holds memory for the items it has, not its full
+    /// capacity: a k = 469 sketch with 10 items holds well under 1 KiB of
+    /// items, and its reported memory grows as items arrive.
+    #[test]
+    fn memory_follows_the_items_held() {
+        let mut sk = KLL::<f64>::init_with_seed(469, 8, 3);
+        for i in 0..10 {
+            sk.update(&f64::from(i));
+        }
+        let small = sk.memory_bytes();
+        assert!(sk.items.len() * std::mem::size_of::<f64>() < 1024);
+        assert!(small < 2048, "10 items reported {small} bytes");
+        for i in 0..100_000 {
+            sk.update(&f64::from(i));
+        }
+        assert!(sk.memory_bytes() > small + 469 * std::mem::size_of::<f64>());
+        assert!(sk.items.len() <= sk.max_capacity);
+    }
+
     /// The memoized CDF must agree with the from-scratch rebuild at every
     /// lifecycle stage: fresh, mid-stream, post-merge, and post-clear.
     #[test]
@@ -1197,7 +1340,7 @@ mod tests {
         // Extract the compacted portable form (proto contract: levels[0]==0,
         // levels[num_levels]==items.len()).
         let off = src.levels[0];
-        let items: Vec<f64> = src.items[off..src.max_capacity].to_vec();
+        let items: Vec<f64> = src.items[off..].to_vec();
         let levels: Vec<usize> = (0..=src.num_levels).map(|h| src.levels[h] - off).collect();
         let n = src.num_levels;
 
@@ -1214,7 +1357,7 @@ mod tests {
         // An empty sketch round-trips to an empty sketch.
         let empty = KLL::<f64>::from_portable_state(k, &[], &[], 0).unwrap();
         assert_eq!(empty.num_levels, 1);
-        assert_eq!(empty.levels[0], empty.max_capacity);
+        assert_eq!(empty.levels[0], empty.items.len());
     }
 
     // Ensure each 64-bit chunk is consumed bit-by-bit before refilling.
@@ -1630,8 +1773,18 @@ mod tests {
         assert_eq!(sketch.num_levels, restored.num_levels);
         assert_eq!(sketch.top_height, restored.top_height);
         assert_eq!(sketch.level0_capacity, restored.level0_capacity);
+        // Boundaries relative to the first retained item: the restored
+        // buffer holds just the retained items, while the source's buffer
+        // grew in doublings, so absolute positions differ.
+        let relative = |sk: &KLL<f64>| -> Vec<usize> {
+            sk.levels[..=sk.num_levels]
+                .iter()
+                .map(|&l| l - sk.levels[0])
+                .collect()
+        };
         assert_eq!(
-            sketch.levels, restored.levels,
+            relative(&sketch),
+            relative(&restored),
             "level boundaries changed after round-trip"
         );
 
