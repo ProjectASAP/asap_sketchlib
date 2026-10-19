@@ -110,7 +110,8 @@ A `TupleKey` is a key of several typed columns. `to_bytes` writes the ASAPv1
 tuple key encoding ([spec](../asapv1_wire_format.md#tuple-keys)): one byte
 string per tuple, `-0.0` written as `0.0` and every `NaN` as one `NaN`, so a
 heap-carrying sketch keeps one candidate per tuple under a `bytes` key.
-`from_bytes` rejects bytes `to_bytes` does not write.
+`from_bytes` rejects bytes `to_bytes` does not write. Equality and hashing
+follow the bytes: `-0.0 == 0.0` and `NaN == NaN`.
 
 ## Examples
 

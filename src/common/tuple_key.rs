@@ -12,6 +12,8 @@
 //! assert_eq!(TupleKey::from_bytes(&bytes).unwrap(), key);
 //! ```
 
+use std::hash::{Hash, Hasher};
+
 const TAG_NULL: u8 = 0x00;
 const TAG_FALSE: u8 = 0x01;
 const TAG_TRUE: u8 = 0x02;
@@ -22,8 +24,9 @@ const TAG_STR: u8 = 0x05;
 /// The one `NaN` bit pattern a tuple key carries.
 const CANONICAL_NAN: u64 = 0x7ff8_0000_0000_0000;
 
-/// One column of a [`TupleKey`].
-#[derive(Clone, Debug, PartialEq)]
+/// One column of a [`TupleKey`]. Equality and hashing follow the canonical
+/// encoding: `-0.0` equals `0.0`, and every `NaN` equals every `NaN`.
+#[derive(Clone, Debug)]
 pub enum KeyColumn {
     /// SQL `NULL`.
     Null,
@@ -37,8 +40,37 @@ pub enum KeyColumn {
     Str(String),
 }
 
-/// A key made of typed columns, encoded into one canonical byte string.
-#[derive(Clone, Debug, PartialEq)]
+impl PartialEq for KeyColumn {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Null, Self::Null) => true,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::I64(a), Self::I64(b)) => a == b,
+            (Self::F64(a), Self::F64(b)) => canonical_f64_bits(*a) == canonical_f64_bits(*b),
+            (Self::Str(a), Self::Str(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for KeyColumn {}
+
+impl Hash for KeyColumn {
+    fn hash<S: Hasher>(&self, state: &mut S) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Null => {}
+            Self::Bool(value) => value.hash(state),
+            Self::I64(value) => value.hash(state),
+            Self::F64(value) => canonical_f64_bits(*value).hash(state),
+            Self::Str(value) => value.hash(state),
+        }
+    }
+}
+
+/// A key made of typed columns, encoded into one canonical byte string. Two
+/// tuples are equal exactly when their encodings are.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TupleKey(Vec<KeyColumn>);
 
 impl TupleKey {
@@ -221,6 +253,45 @@ mod tests {
             panic!("expected an f64 column");
         };
         assert_eq!(value.to_bits(), CANONICAL_NAN);
+    }
+
+    /// Equality and hashing agree with the bytes: `-0.0 == 0.0`, `NaN == NaN`.
+    #[test]
+    fn equality_and_hash_follow_the_canonical_bytes() {
+        use std::collections::HashSet;
+        let pairs = [
+            (KeyColumn::F64(-0.0), KeyColumn::F64(0.0)),
+            (
+                KeyColumn::F64(f64::NAN),
+                KeyColumn::F64(f64::from_bits(0xfff8_0000_0000_0001)),
+            ),
+        ];
+        for (a, b) in pairs {
+            let (a, b) = (
+                key(vec![KeyColumn::I64(1), a]),
+                key(vec![KeyColumn::I64(1), b]),
+            );
+            assert_eq!(a.to_bytes().unwrap(), b.to_bytes().unwrap());
+            assert_eq!(a, b);
+            assert_eq!(HashSet::from([a.clone(), b.clone()]).len(), 1);
+        }
+        let distinct = [
+            key(vec![KeyColumn::F64(1.0)]),
+            key(vec![KeyColumn::F64(-1.0)]),
+            key(vec![KeyColumn::I64(0)]),
+            key(vec![KeyColumn::F64(0.0)]),
+            key(vec![KeyColumn::Null]),
+        ];
+        for (i, a) in distinct.iter().enumerate() {
+            for b in &distinct[i + 1..] {
+                assert_ne!(a, b);
+                assert_ne!(a.to_bytes().unwrap(), b.to_bytes().unwrap());
+            }
+        }
+        assert_eq!(
+            HashSet::<&TupleKey>::from_iter(&distinct).len(),
+            distinct.len()
+        );
     }
 
     /// Distinct tuples are distinct bytes, column boundaries included.
