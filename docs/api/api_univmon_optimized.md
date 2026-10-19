@@ -72,11 +72,11 @@ fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 These produce/consume the **ASAPv1** wire envelope (kind `0x11 0x00`) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). `UnivMonPyramid` shares
 [`UnivMon`](./api_univmon.md)'s payload and differs only in its metadata: the
-two-tier layout (`layer_size`, `elephant_layers`, `elephant_row`,
-`elephant_col`, `mouse_row`, `mouse_col`, `heap_size`) plus the heaps'
+two-tier layout (`layers`, `elephant_layers`, `elephant_rows`,
+`elephant_cols`, `mouse_rows`, `mouse_cols`, `heap_size`) plus the heaps'
 `key_type`. Layer `i` takes the elephant dimensions while `i < elephant_layers`
 and the mouse dimensions after, so every per-layer geometry is derived and none
-is stored. `elephant_row` and `mouse_row` carry `UnivMon`'s per-layer row bound,
+is stored. `elephant_rows` and `mouse_rows` carry `UnivMon`'s per-layer row bound,
 `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length).
 
 `UnivSketchPool` is a free-list of scratch `UnivMon`s rather than a sketch, and

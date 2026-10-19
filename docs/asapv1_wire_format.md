@@ -615,13 +615,15 @@ This is required, not cosmetic: `entries()` order follows the counter arena and 
 4. `keys`, `counts` and `errors` have equal length.
 5. `capacity >= 1`, and `len(keys) <= capacity`.
 6. Every `counts[i] >= 1` (a counter at zero is not a state the algorithm reaches) and `errors[i] <= counts[i]`.
-7. No key appears twice.
+7. No key appears twice, judged by heap key order: two bit-identical `NaN`s are one key twice.
 8. `capacity` **never sizes an allocation.** The counter arena and the key index both reserve from `len(keys)`, so a payload declaring `capacity = 2^32 - 1` with two counters costs two counters. A decoder must not preallocate from a declared size.
 9. `discarded_max <= min(counts)`. The ceiling records what left the summary, and the algorithm only ever evicts a *smallest* counter, so a ceiling above a count still held describes no reachable state — and it would make `upper_bound` read lower than the count beside it. The comparison uses `0` as the smallest count of an empty summary, so an empty summary carrying a non-zero `discarded_max` is rejected too.
 10. `sum(counts[i] - errors[i]) <= total`, with the sum taken in **saturating** `u64` arithmetic: each term is a saturating subtraction (rule 6 has already forbidden a negative one) and the running total saturates at `u64::MAX` rather than wrapping. Each counter's `count - error` is weight the summary claims to have actually recorded, so a `total` under that sum contradicts its own triples and would make every frequency the summary reports unbounded from below. The saturation is part of the contract, not an implementation detail: a set of triples whose exact sum exceeds `u64::MAX` is **accepted** whenever `total == u64::MAX`, so a decoder computing the sum in unbounded integers would reject bytes this one takes. Mirror the saturation.
 11. Entries are in the emitted order above; any other order is rejected.
 
 Rules 9 and 10 are hard rejections, not repairs: a Go decoder must mirror them.
+
+The encode side refuses a summary holding one key twice, judged as rule 7 judges it: `NaN` never equals itself, so a `NaN` key offered twice seats two counters, and that state has no encoding.
 
 `min_count`, the bucket list, the counter arena and the key index are then recomputed from the validated triples; nothing about them is trusted from the wire.
 
@@ -1268,6 +1270,7 @@ Two things read it, and neither is a stored threshold. A layer's flag joins the 
 8. `count == 0` if and only if `min` and `max` are both nil, and `min <= max` when both are present.
 9. `heap_size` and `ordered_samples` **never size an allocation.** Each layer's candidate map and heap are sized from the run the payload carries, and the ordered heap is built from the occurrences it carries, so a payload declaring `heap_size = 2^32 - 1` with two candidates costs two candidates. The sketch is built field by field rather than through `with_hasher_and_source_id`, which reserves from the declared capacities.
 10. No candidate key repeats within a layer, and each candidate's key hashes into the layer it is stored at.
+11. Candidates are strictly ascending by key within each layer, and occurrences strictly ascending by `(priority_high, priority_low, key)`; any other order is rejected.
 
 The encode side refuses the same states: a layer count that disagrees with the config, a layer whose Count Sketch layout is not the declared one, layers mixing counter widths, an over-capacity candidate table, a candidate at the wrong terminal layer, a duplicate or over-capacity occurrence, and an inconsistent `count` / `min` / `max` triple. So the format never emits bytes it would refuse to read back.
 

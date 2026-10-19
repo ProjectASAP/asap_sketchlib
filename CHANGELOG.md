@@ -100,6 +100,14 @@ signals a backwards-compatible change.
 
 ### Changed
 
+- **UnivMon Optimized and UnivMon-Q metadata keys follow the spec.**
+  UnivMon Optimized writes `layers`, `elephant_rows`, `elephant_cols`,
+  `mouse_rows` and `mouse_cols`; UnivMon-Q writes `layers`, `top_layer_cols`,
+  `cols_halving_period`, `rows` and `heap_size`. Bytes with the old keys are
+  rejected.
+- **Space-Saving and UnivMon-Q ASAPv1 decodes reject entries out of emitted
+  order.** Space-Saving also rejects a key held twice judged by its bits, so
+  two `NaN` keys fail on both doors.
 - **`HyperLogLogImpl::merge_delta` returns `Result<(), String>`**, an `Err`
   when the delta's admission rate differs from the state's.
 - **`EHSketchList::merge` and `EHBucket::to_merge` return `Result<(), String>`**,
