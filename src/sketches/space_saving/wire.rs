@@ -50,9 +50,9 @@ use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::{HashProfile, HeapItem, SketchHasher};
 
-use std::cmp::Ordering;
 use std::collections::HashSet;
 
+use super::parts::emitted_order;
 use super::{SpaceSaving, SpaceSavingState, key_order};
 
 /// Space-Saving kind_id: family `0x18`, single algorithm variant `0x00`.
@@ -160,13 +160,6 @@ fn mixed_variant_error(key_type: &str, key: &HeapItem) -> RmpEncodeError {
         "Space-Saving: monitored keys mix variants — key_type is {key_type}, but a {} key is held",
         key_type_of(key).unwrap_or("128-bit")
     ))
-}
-
-/// The emitted order of two triples: descending count, ties broken by
-/// `key_order`.
-fn emitted_order(a: (&HeapItem, u64), b: (&HeapItem, u64)) -> Ordering {
-    b.1.cmp(&a.1)
-        .then_with(|| key_order(a.0).cmp(&key_order(b.0)))
 }
 
 /// Rejects a key held twice, judged by `key_order` (floats by their bits, so
@@ -383,7 +376,7 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
                 self.capacity
             ))
         })?;
-        let entries = self.wire_entries();
+        let entries = self.emitted_entries();
         check_wire_entries(entries.iter().map(|entry| (entry.0, entry.1)))
             .map_err(RmpEncodeError::Syntax)?;
         let key_type = wire_key_type(&entries)?;
@@ -418,25 +411,6 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
         check_wire_entries(state.entries.iter().map(|entry| (&entry.0, entry.1)))
             .map_err(RmpDecodeError::Uncategorized)?;
         Self::rebuild(state).map_err(RmpDecodeError::Uncategorized)
-    }
-
-    /// The monitored triples in emitted order: descending count, ties broken by
-    /// `key_order`. Independent of the arena's seat order, so the bytes are
-    /// stable across a round trip.
-    fn wire_entries(&self) -> Vec<(&HeapItem, u64, u64)> {
-        let mut entries: Vec<(&HeapItem, u64, u64)> = self
-            .monitored
-            .iter()
-            .map(|counter| {
-                (
-                    &counter.key,
-                    self.buckets[counter.bucket].count,
-                    counter.error,
-                )
-            })
-            .collect();
-        entries.sort_unstable_by(|a, b| emitted_order((a.0, a.1), (b.0, b.1)));
-        entries
     }
 }
 
