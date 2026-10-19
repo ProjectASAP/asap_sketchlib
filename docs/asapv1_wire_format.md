@@ -519,7 +519,7 @@ Its structural parameters — the grid dimensions (`rows` / `cols`) and the colu
 
 | Pos | Field | Type | Notes |
 | ----- | ------- | ------ | ------- |
-| 0 | `words` | array | the bit grid packed into `u64`s, **row-major**; each row padded out to whole words, so the stride is `ceil(cols / 64)` and the length is `rows * ceil(cols / 64)` |
+| 0 | `words` | array | the bit grid packed into `u64`s, **row-major**; each row padded out to whole words, so the stride is `ceil(cols / 64)` and the length is `rows * ceil(cols / 64)`. Column `c` of row `r` is bit `c mod 64` (bit 0 the least significant) of `words[r * ceil(cols / 64) + floor(c / 64)]` |
 | 1 | `inserted` | u64 | `insert` calls the filter has seen, duplicates included |
 
 `rows` and `cols` are metadata structural params (Section 2), so the payload omits them and the decoder derives the word stride from `cols`.
@@ -1499,14 +1499,14 @@ Good direction (more compact, higher fidelity, less Rust-internal duplication), 
 2. **Golden byte-vector fixtures** in one shared repo, [`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), which each implementation mounts at `asapv1_golden/`; both languages decode and re-encode them byte-identically. These replace the `portable`-as-oracle round-trip test.
 3. **This registry**, mirrored, never independently allocated.
 
-Fixtures exist for six `kind_id`s — HLL's three estimators, Count-Min, Count Sketch and compact KLL — and `sketchlib-go` mirrors those. Every other kind here has a payload and **no fixture**, so this document is its only contract; `asapv1_golden/README.md` lists the gap. `portable` carries its own Go goldens.
+Every `kind_id` the registry marks *implemented* has at least one fixture; `asapv1_golden/README.md` lists them. `portable` carries its own Go goldens.
 
 **Hash profile on the Go side.**
 Rust derives the hash spec from a generic `HashProfile` bound on the hasher type; Go has no generic hasher type, so there is nothing to derive from.
 On the Go side the profile is simply **written into** the metadata on encode and **read from** it on decode.
 Go MUST validate the profile it reads (same fail-closed intent as Rust): a sketch is only mergeable/queryable if its `hash_profile_id` + seeds match the profile Go is prepared to reproduce.
 
-Sequencing: (2) covers six `kind_id`s, and the one `native bytes == portable bytes` test is HLL-only, since no other `portable` type emits ASAPv1 bytes.
+Sequencing: the one `native bytes == portable bytes` test is HLL-only, since no other `portable` type emits ASAPv1 bytes.
 Retire `portable` once the fixtures cover the rest.
 
 ---

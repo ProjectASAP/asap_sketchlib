@@ -12,6 +12,10 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **ASAPv1 golden fixtures for KMV, Bloom, Space-Saving, UniformSampling,
+  UnivMon Optimized, UnivMon-Q, ExponentialHistogram and EHSketchList**, so
+  every kind_id the spec marks implemented has one. The spec fixes Bloom's bit
+  order within a word: column `c` is bit `c mod 64`.
 - **`Vector3D<T>`**, filled in from a stub. A `rows x cols` grid whose every
   cell is a contiguous `depth`-length record, addressed by the same
   `MatrixFastHash` machinery as `Vector2D`. Reach for it when a cell is made
