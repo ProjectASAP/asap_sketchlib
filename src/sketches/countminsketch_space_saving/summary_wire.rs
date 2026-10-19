@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::sketches::countminsketch_topk::heap_wire::{
-    EMPTY_KEY_TYPE, check_distinct_keys, check_geometry, key_type_of,
+    EMPTY_KEY_TYPE, check_distinct_keys, check_empty_key_type, check_geometry, key_type_of,
 };
 use crate::sketches::space_saving::parts::emitted_order;
 use crate::{HashProfile, HeapItem, SketchHasher, SpaceSaving};
@@ -300,6 +300,7 @@ pub(crate) fn decode<C: DeserializeOwned, H: SketchHasher + HashProfile>(
         }
     };
 
+    check_empty_key_type(&meta.key_type, keys.is_empty()).map_err(complain)?;
     if keys.len() != summary_counts.len() || keys.len() != errors.len() {
         return Err(complain(format!(
             "{} keys against {} summary_counts and {} errors",
@@ -508,6 +509,28 @@ mod tests {
         let back = Target::deserialize_from_bytes(&bytes).expect("empty");
         assert!(back.space_saving().is_empty());
         assert_eq!(back.capacity(), 4);
+    }
+
+    /// An empty summary carries `key_type` `"u64"`; any other name is rejected,
+    /// for both kinds.
+    #[test]
+    fn an_empty_summary_must_carry_the_u64_key_type() {
+        use crate::sketches::countminsketch_topk::heap_wire::relabel_u64_key_type;
+        let cms = Target::new(2, 3, 4).serialize_to_bytes().expect("empty");
+        let cs = CSSpaceSaving::<Vector2D<i64>, RegularPath>::new(2, 8, 3)
+            .serialize_to_bytes()
+            .expect("empty");
+        for to in ["string", "f64"] {
+            let problem = decode_error(&relabel_u64_key_type(&cms, "key_type", to));
+            assert!(problem.contains("empty key set"), "{to}: {problem}");
+            let problem = CSSpaceSaving::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(
+                &relabel_u64_key_type(&cs, "key_type", to),
+            )
+            .map(drop)
+            .expect_err("an empty CSSpaceSaving under another key_type must be rejected")
+            .to_string();
+            assert!(problem.contains("empty key set"), "{to}: {problem}");
+        }
     }
 
     #[test]

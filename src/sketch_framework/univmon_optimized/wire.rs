@@ -26,6 +26,7 @@ use crate::sketch_framework::univmon::wire::{
     check_layer_size, decode_pyramid, encode_pyramid, pyramid_key_type, pyramid_state,
     rebuild_layers, update_mode_of, update_mode_tag,
 };
+use crate::sketches::countminsketch_topk::heap_wire::check_empty_key_type;
 use crate::{DefaultXxHasher, HashProfile};
 
 use super::UnivMonPyramid;
@@ -252,6 +253,8 @@ impl UnivMonPyramid {
         .map_err(RmpDecodeError::Uncategorized)?;
         check_layer_size("UnivMonPyramid", layers).map_err(RmpDecodeError::Uncategorized)?;
         let decoded = decode_pyramid(&meta.key_type, payload)?;
+        check_empty_key_type(&meta.key_type, decoded.entries.is_empty())
+            .map_err(RmpDecodeError::Uncategorized)?;
         // The declared layout is measured against the accumulators the payload
         // actually carries before the geometry is built from it.
         if accumulator_count(layers, &layout) != Some(decoded.l2.len()) {
@@ -420,6 +423,22 @@ mod tests {
     }
 
     /// An empty pyramid has exactly one encoding.
+    /// An empty pyramid carries `key_type` `"u64"`; any other name is rejected.
+    #[test]
+    fn pyramid_empty_must_carry_the_u64_key_type() {
+        use crate::sketches::countminsketch_topk::heap_wire::relabel_u64_key_type;
+        let bytes = UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4)
+            .serialize_to_bytes()
+            .expect("serialize");
+        let problem = UnivMonPyramid::deserialize_from_bytes(&relabel_u64_key_type(
+            &bytes, "key_type", "string",
+        ))
+        .map(drop)
+        .expect_err("an empty pyramid under another key_type must be rejected")
+        .to_string();
+        assert!(problem.contains("empty key set"), "{problem}");
+    }
+
     #[test]
     fn pyramid_empty_has_one_encoding() {
         let left = UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4);

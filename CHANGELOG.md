@@ -128,6 +128,10 @@ signals a backwards-compatible change.
   `mouse_rows` and `mouse_cols`; UnivMon-Q writes `layers`, `top_layer_cols`,
   `cols_halving_period`, `rows` and `heap_size`. Bytes with the old keys are
   rejected.
+- **An empty heap or summary must carry `key_type` `"u64"`.** CMSHeap, CSHeap,
+  their deltas, UnivMon, UnivMon Optimized, Hydra's UnivMon counter,
+  Space-Saving, CMSSpaceSaving and CSSpaceSaving reject one under any other
+  name.
 - **CMSHeap, CSHeap, their deltas, UnivMon, UnivMon Optimized and Hydra's
   UnivMon counter read a `"string"` key from msgpack `str` alone**; UTF-8 `bin` keys relabelled
   `"string"` are rejected.

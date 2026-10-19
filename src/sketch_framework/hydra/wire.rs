@@ -50,6 +50,7 @@ use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact_vec;
 use crate::sketch_framework::univmon::wire::{PyramidPayload, UnivMonMetadata, univmon_metadata};
+use crate::sketches::countminsketch_topk::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
 use crate::{
     Count, CountMin, DefaultXxHasher, ErtlMLE, FastPath, HashProfile, HllBucketListP14,
     HyperLogLog, KLL, UnivMon, Vector2D,
@@ -1067,9 +1068,19 @@ impl Hydra {
                 payloads.len()
             )));
         }
-        let mut counters = Vec::with_capacity(cells);
+        let mut holds = Vec::with_capacity(payloads.len());
         for cell in &payloads {
-            let envelope_bytes = univmon_cell_envelope(&shape, &meta.cell_key_type, cell)
+            holds.push(univmon_cell_holds_keys(cell).map_err(|e| decode_error(e.to_string()))?);
+        }
+        check_empty_key_type(&meta.cell_key_type, !holds.contains(&true)).map_err(decode_error)?;
+        let mut counters = Vec::with_capacity(cells);
+        for (cell, holds_keys) in payloads.iter().zip(holds) {
+            let key_type = if holds_keys {
+                meta.cell_key_type.as_str()
+            } else {
+                EMPTY_KEY_TYPE
+            };
+            let envelope_bytes = univmon_cell_envelope(&shape, key_type, cell)
                 .map_err(|e| decode_error(e.to_string()))?;
             counters.push(HydraCounter::UNIVERSAL(UnivMon::deserialize_from_bytes(
                 &envelope_bytes,
@@ -1323,6 +1334,27 @@ mod tests {
             (&[None, Some("auth")], HydraQuery::Cardinality),
         ];
         assert_round_trip(&univmon_grid(), HYDRA_KIND_UNIVMON, &probes);
+    }
+
+    /// A grid with no keys in any cell carries `cell_key_type` `"u64"`; any
+    /// other name is rejected. A grid holding keys decodes with empty cells.
+    #[test]
+    fn hydra_univmon_empty_grid_must_carry_the_u64_key_type() {
+        use crate::sketches::countminsketch_topk::heap_wire::relabel_u64_key_type;
+        let empty = grid(HydraCounter::UNIVERSAL(UnivMon::init_univmon(4, 2, 16, 3)));
+        let bytes = empty.serialize_to_bytes().expect("serialize");
+        let problem =
+            Hydra::deserialize_from_bytes(&relabel_u64_key_type(&bytes, "cell_key_type", "string"))
+                .map(drop)
+                .expect_err("an empty grid under another cell_key_type must be rejected")
+                .to_string();
+        assert!(problem.contains("empty key set"), "{problem}");
+
+        let mut sparse = grid(HydraCounter::UNIVERSAL(UnivMon::init_univmon(4, 2, 16, 3)));
+        feed(&mut sparse, std::iter::once(DataInput::Str("alpha")));
+        let bytes = sparse.serialize_to_bytes().expect("serialize");
+        let decoded = Hydra::deserialize_from_bytes(&bytes).expect("decode");
+        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
     }
 
     /// A `"string"` cell key is read from msgpack `str` alone: the same keys as

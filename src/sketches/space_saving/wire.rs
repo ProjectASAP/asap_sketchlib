@@ -54,14 +54,10 @@ use std::collections::HashSet;
 
 use super::parts::emitted_order;
 use super::{SpaceSaving, SpaceSavingState, key_order};
+use crate::sketches::countminsketch_topk::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
 
 /// Space-Saving kind_id: family `0x18`, single algorithm variant `0x00`.
 const SPACE_SAVING_KIND: &[u8] = &[0x18, 0x00];
-
-/// Metadata `key_type` of a summary that monitors nothing. A summary with no
-/// keys has no variant to report, so the wire pins one rather than leaving the
-/// field free: empty summaries have one encoding.
-const EMPTY_KEY_TYPE: &str = "u64";
 
 /// The metadata `key_type` naming a key's exact [`HeapItem`] variant, or `None`
 /// for the 128-bit variants, which are not wire types.
@@ -336,6 +332,7 @@ fn decode_payload(
         }
     };
 
+    check_empty_key_type(key_type, keys.is_empty()).map_err(RmpDecodeError::Uncategorized)?;
     if keys.len() != counts.len() || keys.len() != errors.len() {
         return Err(RmpDecodeError::Uncategorized(format!(
             "Space-Saving payload: {} keys against {} counts and {} errors",
@@ -565,6 +562,23 @@ mod tests {
         assert_eq!(decoded.min_count(), 0);
         assert_eq!(decoded.total(), 0);
         assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+    }
+
+    /// An empty summary carries `key_type` `"u64"`; any other name is rejected.
+    #[test]
+    fn space_saving_empty_must_carry_the_u64_key_type() {
+        use crate::sketches::countminsketch_topk::heap_wire::relabel_u64_key_type;
+        let bytes = SpaceSaving::<DefaultXxHasher>::with_capacity(4)
+            .serialize_to_bytes()
+            .expect("serialize");
+        for to in ["string", "i64"] {
+            let problem = SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(
+                &relabel_u64_key_type(&bytes, "key_type", to),
+            )
+            .expect_err("an empty summary under another key_type must be rejected")
+            .to_string();
+            assert!(problem.contains("empty key set"), "{to}: {problem}");
+        }
     }
 
     /// Every wire-eligible key family round-trips, and the decoded key still

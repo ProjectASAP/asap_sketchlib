@@ -37,7 +37,8 @@ use serde::{Deserialize, Serialize};
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::sketches::countminsketch_topk::heap_wire::{
-    EMPTY_KEY_TYPE, check_distinct_keys, heap_entries, key_type_of, rebuild_heap,
+    EMPTY_KEY_TYPE, check_distinct_keys, check_empty_key_type, heap_entries, key_type_of,
+    rebuild_heap,
 };
 use crate::sketches::countsketch_topk::l2hh_wire;
 use crate::{DefaultXxHasher, HHHeap, HashProfile, HeapItem, L2HH, Vector1D};
@@ -648,6 +649,8 @@ impl UnivMon {
             .map_err(RmpDecodeError::Uncategorized)?;
         check_layer_size("UnivMon", layer_size).map_err(RmpDecodeError::Uncategorized)?;
         let decoded = decode_pyramid(&meta.key_type, payload)?;
+        check_empty_key_type(&meta.key_type, decoded.entries.is_empty())
+            .map_err(RmpDecodeError::Uncategorized)?;
         // The declared layer count is measured against the accumulators the
         // payload actually carries before the geometry is built from it.
         if sketch_row.checked_mul(layer_size) != Some(decoded.l2.len()) {
@@ -704,6 +707,21 @@ mod tests {
     fn payload_of<K: for<'de> Deserialize<'de>>(bytes: &[u8]) -> PyramidPayload<K> {
         let (_, _, payload) = envelope::split(bytes).expect("split");
         from_slice(payload).expect("payload")
+    }
+
+    /// An empty pyramid carries `key_type` `"u64"`; any other name is rejected.
+    #[test]
+    fn univmon_empty_must_carry_the_u64_key_type() {
+        use crate::sketches::countminsketch_topk::heap_wire::relabel_u64_key_type;
+        let bytes = UnivMon::init_univmon(4, 2, 16, 3)
+            .serialize_to_bytes()
+            .expect("serialize");
+        let problem =
+            UnivMon::deserialize_from_bytes(&relabel_u64_key_type(&bytes, "key_type", "string"))
+                .map(drop)
+                .expect_err("an empty pyramid under another key_type must be rejected")
+                .to_string();
+        assert!(problem.contains("empty key set"), "{problem}");
     }
 
     /// A `"string"` key is read from msgpack `str` alone: the same keys as

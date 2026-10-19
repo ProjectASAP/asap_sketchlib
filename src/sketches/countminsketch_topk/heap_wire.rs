@@ -109,6 +109,38 @@ fn emitted_order<N: HeapCount>(a: (&HeapItem, N), b: (&HeapItem, N)) -> Ordering
         .then_with(|| key_order(a.0).cmp(&key_order(b.0)))
 }
 
+/// Rejects an empty key set whose `key_type` is not [`EMPTY_KEY_TYPE`], the
+/// one name an empty heap or summary carries.
+pub(crate) fn check_empty_key_type(key_type: &str, is_empty: bool) -> Result<(), String> {
+    if is_empty && key_type != EMPTY_KEY_TYPE {
+        return Err(format!(
+            "ASAPv1: an empty key set carries key_type {key_type:?}, not {EMPTY_KEY_TYPE:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Rewrites the metadata `field` of an envelope from `"u64"` to `to`, leaving
+/// the payload as it is.
+#[cfg(test)]
+pub(crate) fn relabel_u64_key_type(bytes: &[u8], field: &str, to: &str) -> Vec<u8> {
+    let (kind_id, metadata, payload) = envelope::split(bytes).expect("split");
+    let pack = |key: &str, value: &str| {
+        let mut out = rmp_serde::to_vec(key).expect("key");
+        out.extend(rmp_serde::to_vec(value).expect("value"));
+        out
+    };
+    let (from, into) = (pack(field, "u64"), pack(field, to));
+    let at = metadata
+        .windows(from.len())
+        .position(|window| window == from.as_slice())
+        .expect("the metadata names u64");
+    let mut relabelled = metadata[..at].to_vec();
+    relabelled.extend(&into);
+    relabelled.extend(&metadata[at + from.len()..]);
+    envelope::encode(kind_id, &relabelled, payload)
+}
+
 /// The complaint both directions report when one key is on the wire twice.
 const DUPLICATE_KEY: &str = "ASAPv1 top-k heap: the same key appears twice";
 
@@ -522,6 +554,7 @@ pub(crate) fn decode_payload<B: TopKBody, N: HeapCount>(
             heap_counts.len()
         )));
     }
+    check_empty_key_type(key_type, keys.is_empty()).map_err(RmpDecodeError::Uncategorized)?;
     Ok((body, keys.into_iter().zip(heap_counts).collect()))
 }
 
@@ -686,6 +719,36 @@ mod tests {
         assert_eq!(decoded.heap().len(), 0);
         assert_eq!(decoded.heap().capacity(), 8);
         assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+    }
+
+    /// An empty heap carries `key_type` `"u64"`; any other name is rejected, on
+    /// the state and the delta alike.
+    #[test]
+    fn heap_empty_must_carry_the_u64_key_type() {
+        use crate::sketches::countminsketch_topk::CMSHeapDelta;
+        let state = CMSHeap::<Vector2D<i64>, RegularPath>::new(2, 8, 8)
+            .serialize_to_bytes()
+            .expect("serialize");
+        let delta = CMSHeapDelta::<i64, RegularPath>::new(2, 8, vec![], vec![], HHHeap::new(8))
+            .expect("delta")
+            .serialize_to_bytes()
+            .expect("serialize");
+        for to in ["string", "i64", "bytes"] {
+            let problem = match CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(
+                &relabel_u64_key_type(&state, "key_type", to),
+            ) {
+                Ok(_) => panic!("an empty heap under {to} must be rejected"),
+                Err(err) => err.to_string(),
+            };
+            assert!(problem.contains("empty key set"), "{to}: {problem}");
+            let problem = CMSHeapDelta::<i64, RegularPath>::deserialize_from_bytes(
+                &relabel_u64_key_type(&delta, "key_type", to),
+            )
+            .map(drop)
+            .expect_err("an empty delta heap under another key_type must be rejected")
+            .to_string();
+            assert!(problem.contains("empty key set"), "{to}: {problem}");
+        }
     }
 
     /// The emitted order is fixed by (count, key_order), not by the sift path,
