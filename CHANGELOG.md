@@ -174,7 +174,8 @@ signals a backwards-compatible change.
   stream: the CDF was sorted with `partial_cmp(..).unwrap()`. It sorts with
   `total_cmp`, as the three sibling sorts beside it already did.
 - `OctoRuntime::flush` could return before the aggregator had applied every
-  worker's flushed deltas, so a live read right after it could miss inputs.
+  worker's flushed deltas, so a live read right after it could miss inputs. A
+  drain still pending when the workers stop is answered.
 
 ## [0.3.0] - 2026-09-07
 

@@ -1097,6 +1097,9 @@ where
                     std::hint::spin_loop();
                 }
             }
+            if let Some(ack) = pending_drain {
+                let _ = ack.send(());
+            }
         });
 
         let mut worker_input_txs = Vec::with_capacity(num_workers);
@@ -4297,6 +4300,64 @@ mod runtime_tests {
         {
             emit(1);
         }
+    }
+
+    /// Holds every input until a flush, then hands the count over at once.
+    struct HoldingWorker {
+        held: u64,
+    }
+
+    impl OctoWorker for HoldingWorker {
+        type Delta = u64;
+        type Payload = ();
+
+        fn process<F>(&mut self, _payload: &(), _emit: &mut F)
+        where
+            F: FnMut(Self::Delta),
+        {
+            self.held += 1;
+        }
+
+        fn flush<F>(&mut self, emit: &mut F)
+        where
+            F: FnMut(Self::Delta),
+        {
+            if self.held > 0 {
+                emit(std::mem::take(&mut self.held));
+            }
+        }
+    }
+
+    struct HoldingPlan;
+
+    impl OctoPlan for HoldingPlan {
+        type Worker = HoldingWorker;
+
+        fn worker(&self, _worker_id: usize) -> Self::Worker {
+            HoldingWorker { held: 0 }
+        }
+
+        fn prepare(&self, _input: &DataInput<'_>) {}
+    }
+
+    /// A read right after `flush` sees every input, over many rounds of a
+    /// worker that hands its inputs over only when flushed.
+    #[test]
+    fn a_live_read_right_after_flush_sees_every_input() {
+        let mut runtime =
+            OctoRuntime::new(&config(1), HoldingPlan, || CountingAggregator { total: 0 });
+        let reader = runtime.read_handle();
+        let mut inserted = 0u64;
+        for round in 0..30_000u64 {
+            for i in 0..(1 + round % 7) {
+                runtime.insert(DataInput::U64(i));
+                inserted += 1;
+            }
+            runtime.flush();
+            let observed = reader.with_parent(|p| p.total);
+            assert_eq!(observed, inserted, "round {round}: flush returned early");
+        }
+        assert_eq!(runtime.finish().parent.total, inserted);
     }
 
     struct CountingPlan;
