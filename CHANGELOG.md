@@ -21,6 +21,11 @@ signals a backwards-compatible change.
   UnivMonTwoTier, UnivMon-Q, ExponentialHistogram and EhBucketSketch**, so
   every kind_id the spec marks implemented has one. The spec fixes Bloom's bit
   order within a word: column `c` is bit `c mod 64`.
+- **`Kll::memory_bytes()`**: the bytes a KLL sketch holds — its item
+  buffer (only as large as the items it has needed), its level array, its
+  merge scratch space and a memoized CDF when one is held. Callers that
+  charged a KLL a fixed size can charge what it holds.
+
 - **`Vector3D<T>`**, filled in from a stub. A `rows x cols` grid whose every
   cell is a contiguous `depth`-length record, addressed by the same
   `MatrixFastHash` machinery as `Vector2D`. Reach for it when a cell is made
@@ -271,6 +276,15 @@ signals a backwards-compatible change.
 - **Space-Saving and UnivMon-Q ASAPv1 decodes reject entries out of emitted
   order.** Space-Saving also rejects a key held twice judged by its bits, so
   two `NaN` keys fail on both doors.
+
+- **KLL allocates its item buffer as items arrive.** A new sketch holds no
+  item buffer; the buffer starts at 16 items and doubles up to the sketch's
+  full capacity, which it reached at construction before. The retained
+  items, their order and the compaction coin are unchanged, so quantiles,
+  merges and serialized bytes are identical to before for the same input
+  and seed. A sketch of `k = 469` holding 10 items now holds about 0.9 KiB
+  instead of about 18 KiB (the merge scratch space also starts empty), and
+  creating one with 10 updates is about 11× faster. A decoded sketch's buffer holds just its retained items.
 - **`HyperLogLogImpl::merge_delta` returns `Result<(), String>`**, an `Err`
   when the delta's admission rate differs from the state's.
 - **`EhBucketSketch::merge` and `EhBucket::merge` return `Result<(), String>`**,
