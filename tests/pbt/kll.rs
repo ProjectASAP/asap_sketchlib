@@ -40,9 +40,9 @@ fn native_kll(k: i32, seed: u64, values: &[f64]) -> KLL<f64> {
     s
 }
 
-/// A stream with no repeated value, shuffled out of sorted order. The rank
-/// laws need distinctness: with duplicates, `rank(x)` counts every copy while
-/// the CDF's binary search stops at an arbitrary one of them.
+/// A stream with no repeated value, shuffled out of sorted order. `rank(x)`
+/// counts every copy of `x`, so the laws that bound `rank(quantile(q))` by a
+/// single item's weight are stated over a stream where each value arrives once.
 fn distinct_stream(len: impl Strategy<Value = usize>) -> impl Strategy<Value = Vec<f64>> {
     (
         len,
@@ -56,8 +56,8 @@ fn distinct_stream(len: impl Strategy<Value = usize>) -> impl Strategy<Value = V
 }
 
 /// A stream over a domain narrow enough that most values arrive many times.
-fn repeating_stream(max: usize) -> impl Strategy<Value = Vec<f64>> {
-    prop::collection::vec(-64i64..64, 1..max)
+fn repeating_stream(len: impl Strategy<Value = usize>) -> impl Strategy<Value = Vec<f64>> {
+    len.prop_flat_map(|n| prop::collection::vec(-64i64..64, n))
         .prop_map(|v| v.into_iter().map(|x| x as f64).collect())
 }
 
@@ -80,6 +80,17 @@ fn k_and_long_stream(extra: usize) -> impl Strategy<Value = (i32, Vec<f64>)> {
         .prop_flat_map(move |k| {
             let n = (OVER_THRESHOLD * k)..(OVER_THRESHOLD * k + extra);
             (Just(k as i32), distinct_stream(n))
+        })
+        .boxed()
+}
+
+/// `k` paired with a repeating stream long enough to force compaction at `k`,
+/// so every probe that lands on a value lands on a run of copies.
+fn k_and_long_repeating_stream(extra: usize) -> impl Strategy<Value = (i32, Vec<f64>)> {
+    (8usize..=64)
+        .prop_flat_map(move |k| {
+            let n = (OVER_THRESHOLD * k)..(OVER_THRESHOLD * k + extra);
+            (Just(k as i32), repeating_stream(n))
         })
         .boxed()
 }
@@ -208,7 +219,7 @@ proptest! {
     fn kll_every_quantile_is_a_value_the_stream_carried(
         k in 8i32..=64,
         seed in any::<u64>(),
-        values in repeating_stream(1_500),
+        values in repeating_stream(1usize..1_500),
     ) {
         let s = native_kll(k, seed, &values);
         let seen: std::collections::HashSet<u64> =
@@ -304,10 +315,13 @@ proptest! {
 
     // Two independent readings of the same compactors: `rank` sums level
     // weights in place, `cdf` flattens every item into one sorted table and
-    // takes prefix sums. They must land on the same number.
+    // takes prefix sums. They must land on the same number. The stream repeats
+    // its values and the probes land on them, so both readings answer for a
+    // whole run of copies rather than for one member of it. A NaN probe stands
+    // below the stream to both.
     #[test]
     fn kll_the_cdf_is_rank_normalized_by_the_count(
-        (k, values) in k_and_long_stream(1_000),
+        (k, values) in k_and_long_repeating_stream(1_000),
         seed in any::<u64>(),
     ) {
         let s = native_kll(k, seed, &values);
@@ -317,9 +331,13 @@ proptest! {
         let hi = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let span = hi - lo;
 
+        let mut probes: Vec<f64> = (0..=40).map(|i| lo + span * i as f64 / 40.0).collect();
+        probes.extend(values.iter().copied());
+        probes.sort_by(f64::total_cmp);
+        probes.dedup();
+
         let mut previous = 0.0f64;
-        for i in 0..=40 {
-            let x = lo + span * i as f64 / 40.0;
+        for x in probes {
             let p = cdf.quantile(x);
 
             prop_assert!((0.0..=1.0).contains(&p), "k={} x={} cdf {} outside [0, 1]", k, x, p);
@@ -333,6 +351,7 @@ proptest! {
 
         prop_assert_eq!(cdf.quantile(lo - span - 1.0), 0.0);
         prop_assert_eq!(cdf.quantile(hi), 1.0);
+        prop_assert_eq!(cdf.quantile(f64::NAN) * n, s.rank(f64::NAN) as f64);
     }
 
     // ===== Accuracy =====
