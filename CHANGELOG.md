@@ -15,7 +15,8 @@ signals a backwards-compatible change.
 - **`KLL::memory_bytes()`**: the bytes a KLL sketch holds — its item
   buffer (only as large as the items it has needed), its level array, its
   merge scratch space and a memoized CDF when one is held. Callers that
-  charged a KLL a fixed size can charge what it holds.
+  charged a KLL a fixed size can charge what it holds. The portable
+  `KllSketch` wrapper exposes it as `KllSketch::memory_bytes()`.
 
 - `WeightedFrequency`: Float64 CMS/CountSketch updates, typed tuple identities,
   bounded candidate ranking, compatible-state merging and versioned snapshots.
