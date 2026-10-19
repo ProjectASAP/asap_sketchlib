@@ -9,7 +9,7 @@
 //! visibility. See `docs/asapv1_wire_format.md`.
 //!
 //! UnivMon is one algorithm — a single kind_id `0x10 0x00`. The pyramid shape
-//! (`layer_size`, `sketch_row`, `sketch_col`, `heap_size`) and the heaps'
+//! (`layers`, `rows`, `cols`, `heap_size`) and the heaps'
 //! `key_type` are construction config and live in the metadata, so the payload
 //! carries the layers' raw state.
 //!
@@ -50,7 +50,7 @@ const UNIVMON_KIND: &[u8] = &[0x10, 0x00];
 /// UnivMon descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
 /// the wire spec fixes (Go must mirror it). Hash-spec fields first, then the
-/// structural params `layer_size` / `sketch_row` / `sketch_col` / `heap_size`
+/// structural params `layers` / `rows` / `cols` / `heap_size`
 /// / `key_type`.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,9 +61,9 @@ pub(crate) struct UnivMonMetadata {
     pub(crate) seed_derivation: String,
     pub(crate) input_encoding: String,
     pub(crate) seed_list: Vec<u64>,
-    pub(crate) layer_size: u32,
-    pub(crate) sketch_row: u32,
-    pub(crate) sketch_col: u32,
+    pub(crate) layers: u32,
+    pub(crate) rows: u32,
+    pub(crate) cols: u32,
     pub(crate) heap_size: u32,
     pub(crate) key_type: String,
 }
@@ -85,9 +85,9 @@ pub(crate) fn univmon_metadata<H: HashProfile>(
         seed_derivation: H::SEED_DERIVATION.to_string(),
         input_encoding: H::INPUT_ENCODING.to_string(),
         seed_list: H::seed_list(),
-        layer_size,
-        sketch_row,
-        sketch_col,
+        layers: layer_size,
+        rows: sketch_row,
+        cols: sketch_col,
         heap_size,
         key_type: key_type.to_string(),
     }
@@ -598,9 +598,9 @@ impl UnivMon {
             })
         };
         let metadata = rmp_serde::to_vec_named(&univmon_metadata::<DefaultXxHasher>(
-            field("layer_size", self.layer_size)?,
-            field("sketch_row", self.sketch_row)?,
-            field("sketch_col", self.sketch_col)?,
+            field("layers", self.layer_size)?,
+            field("rows", self.sketch_row)?,
+            field("cols", self.sketch_col)?,
             field("heap_size", self.heap_size)?,
             key_type,
         ))?;
@@ -627,9 +627,9 @@ impl UnivMon {
         let meta: UnivMonMetadata = envelope::decode_block(metadata)?;
         if meta
             != univmon_metadata::<DefaultXxHasher>(
-                meta.layer_size,
-                meta.sketch_row,
-                meta.sketch_col,
+                meta.layers,
+                meta.rows,
+                meta.cols,
                 meta.heap_size,
                 &meta.key_type,
             )
@@ -639,9 +639,9 @@ impl UnivMon {
             ));
         }
         let (layer_size, sketch_row, sketch_col, heap_size) = (
-            meta.layer_size as usize,
-            meta.sketch_row as usize,
-            meta.sketch_col as usize,
+            meta.layers as usize,
+            meta.rows as usize,
+            meta.cols as usize,
             meta.heap_size as usize,
         );
         check_univmon_dimensions(layer_size, sketch_row, sketch_col, heap_size)
@@ -752,9 +752,9 @@ mod tests {
         let um = populated();
         let encoded = um.serialize_to_bytes().expect("serialize");
         let mut meta = metadata_of(&encoded);
-        meta.sketch_row = rows as u32;
-        let layers = meta.layer_size as usize;
-        let cols = meta.sketch_col as usize;
+        meta.rows = rows as u32;
+        let layers = meta.layers as usize;
+        let cols = meta.cols as usize;
         // Sized to the crafted geometry, so the row bound is what bites.
         let mut payload: PyramidPayload<String> = payload_of(&encoded);
         payload.counts = vec![0; rows * cols * layers];
@@ -782,12 +782,7 @@ mod tests {
         let meta = metadata_of(&encoded);
         assert_eq!(meta.metadata_version, 1);
         assert_eq!(
-            (
-                meta.layer_size,
-                meta.sketch_row,
-                meta.sketch_col,
-                meta.heap_size
-            ),
+            (meta.layers, meta.rows, meta.cols, meta.heap_size),
             (3, 2, 16, 4)
         );
         assert_eq!(meta.key_type, "string");
@@ -945,9 +940,9 @@ mod tests {
         assert_eq!(meta.seed_list, DefaultXxHasher::seed_list());
 
         let alt = univmon_metadata::<AltHasher>(
-            meta.layer_size,
-            meta.sketch_row,
-            meta.sketch_col,
+            meta.layers,
+            meta.rows,
+            meta.cols,
             meta.heap_size,
             &meta.key_type,
         );
@@ -1008,9 +1003,9 @@ mod tests {
         let payload = payload_of::<String>(&encoded);
 
         let shaped = |layer_size, sketch_row, sketch_col, heap_size| UnivMonMetadata {
-            layer_size,
-            sketch_row,
-            sketch_col,
+            layers: layer_size,
+            rows: sketch_row,
+            cols: sketch_col,
             heap_size,
             ..univmon_metadata::<DefaultXxHasher>(0, 0, 0, 0, &base.key_type)
         };
@@ -1165,8 +1160,8 @@ mod tests {
 
         let layers = MAX_LAYER_SIZE + 1;
         let mut meta = metadata_of(&encoded);
-        meta.layer_size = layers as u32;
-        let (rows, cols) = (meta.sketch_row as usize, meta.sketch_col as usize);
+        meta.layers = layers as u32;
+        let (rows, cols) = (meta.rows as usize, meta.cols as usize);
         let mut payload: PyramidPayload<u64> = payload_of(&encoded);
         payload.counts = vec![0; rows * cols * layers];
         payload.l2 = vec![0; rows * layers];
@@ -1196,9 +1191,9 @@ mod tests {
             seed_derivation: String,
             input_encoding: String,
             seed_list: Vec<u64>,
-            layer_size: u32,
-            sketch_row: u32,
-            sketch_col: u32,
+            layers: u32,
+            rows: u32,
+            cols: u32,
             heap_size: u32,
             key_type: String,
             bogus_field: u8, // key not in UnivMonMetadata
@@ -1211,9 +1206,9 @@ mod tests {
             seed_derivation: String,
             input_encoding: String,
             seed_list: Vec<u64>,
-            layer_size: u32,
-            sketch_row: u32,
-            sketch_col: u32,
+            layers: u32,
+            rows: u32,
+            cols: u32,
             heap_size: u32,
         }
         let m = univmon_metadata::<DefaultXxHasher>(3, 2, 16, 4, "u64");
@@ -1224,9 +1219,9 @@ mod tests {
             seed_derivation: m.seed_derivation.clone(),
             input_encoding: m.input_encoding.clone(),
             seed_list: m.seed_list.clone(),
-            layer_size: m.layer_size,
-            sketch_row: m.sketch_row,
-            sketch_col: m.sketch_col,
+            layers: m.layers,
+            rows: m.rows,
+            cols: m.cols,
             heap_size: m.heap_size,
             key_type: m.key_type.clone(),
             bogus_field: 7,
@@ -1238,9 +1233,9 @@ mod tests {
             seed_derivation: m.seed_derivation.clone(),
             input_encoding: m.input_encoding.clone(),
             seed_list: m.seed_list.clone(),
-            layer_size: m.layer_size,
-            sketch_row: m.sketch_row,
-            sketch_col: m.sketch_col,
+            layers: m.layers,
+            rows: m.rows,
+            cols: m.cols,
             heap_size: m.heap_size,
         };
         assert!(

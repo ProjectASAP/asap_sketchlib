@@ -15,7 +15,7 @@
 //! values with `total_cmp`. So the hash-spec metadata group (profile id,
 //! algorithm, inlined `seed_list`, …) that HLL/CMS carry does not apply, and KLL
 //! metadata is **structural params only** (`k`, `m`, `item_type`, and an optional
-//! `seed`). See the wire doc's KLL section for the recorded decision.
+//! `compaction_seed`). See the wire doc's KLL section for the recorded decision.
 //!
 //! ## Payload item order (cross-language contract)
 //!
@@ -65,7 +65,7 @@ impl KllWireItem for i64 {
 /// fields are structural params only. `deny_unknown_fields` makes decode fail
 /// closed on any unexpected key.
 ///
-/// `seed` is the **only optional** field: it is the compaction RNG's reproducible
+/// `compaction_seed` is the **only optional** field: it is the compaction RNG's reproducible
 /// seed (see [`crate::sketches::kll::KLL::init_with_seed`]). It is present only
 /// when the sketch carries one (`Some`), and the key is **omitted** otherwise
 /// (`skip_serializing_if` + `default`), so an unseeded sketch's bytes are
@@ -79,7 +79,7 @@ pub(crate) struct KllMetadata {
     pub(crate) m: u32,
     pub(crate) item_type: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub(crate) seed: Option<u64>,
+    pub(crate) compaction_seed: Option<u64>,
 }
 
 /// Builds the KLL descriptor metadata for a wire-eligible item type `T`. `seed`
@@ -91,7 +91,7 @@ pub(crate) fn kll_metadata<T: KllWireItem>(k: u32, m: u32, seed: Option<u64>) ->
         k,
         m,
         item_type: T::ITEM_TYPE.to_string(),
-        seed,
+        compaction_seed: seed,
     }
 }
 
@@ -204,7 +204,7 @@ pub(crate) fn split_and_validate_meta<'a, T: KllWireItem>(
         )));
     }
     let meta: KllMetadata = envelope::decode_block(metadata)?;
-    if meta != kll_metadata::<T>(meta.k, meta.m, meta.seed) {
+    if meta != kll_metadata::<T>(meta.k, meta.m, meta.compaction_seed) {
         return Err(RmpDecodeError::Uncategorized(
             "ASAPv1 KLL envelope: metadata mismatch".to_string(),
         ));
@@ -261,7 +261,7 @@ where
         Self::from_wire_top_first(
             meta.k as usize,
             meta.m as usize,
-            meta.seed,
+            meta.compaction_seed,
             num_levels,
             payload,
         )
@@ -505,14 +505,21 @@ mod tests {
         let bytes = seeded.serialize_to_bytes().expect("serialize");
         let (_k, meta_bytes, _p) = envelope::split(&bytes).expect("split");
         let meta: KllMetadata = rmp_serde::from_slice(meta_bytes).expect("meta");
-        assert_eq!(meta.seed, Some(42), "seeded KLL must record its seed");
+        assert_eq!(
+            meta.compaction_seed,
+            Some(42),
+            "seeded KLL must record its seed"
+        );
 
         let mut unseeded = KLL::<f64>::init_kll(200); // Coin::new(); seed = None
         unseeded.update(&1.0);
         let bytes = unseeded.serialize_to_bytes().expect("serialize");
         let (_k, meta_bytes, _p) = envelope::split(&bytes).expect("split");
         let meta: KllMetadata = rmp_serde::from_slice(meta_bytes).expect("meta");
-        assert_eq!(meta.seed, None, "unseeded KLL must omit the seed key");
+        assert_eq!(
+            meta.compaction_seed, None,
+            "unseeded KLL must omit the seed key"
+        );
     }
 
     #[test]

@@ -73,7 +73,7 @@ crate's default hasher, so its metadata carries that profile and no seed index:
 the bottom-layer finder's seed is fixed by the algorithm, and layer `i`'s
 counter hashes at seed index `i`.
 
-The pyramid shape (`layer_size`, `sketch_row`, `sketch_col`, `heap_size`) and
+The pyramid shape (`layers`, `rows`, `cols`, `heap_size`) and
 the heaps' `key_type` live in the metadata; the payload is
 `[counts, l2, heap_lens, keys, heap_counts, candidate_complete, bucket_size,
 update_mode]`. Each layer's `CountL2HH` state is inlined rather than nested in

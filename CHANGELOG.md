@@ -109,6 +109,12 @@ signals a backwards-compatible change.
 
 ### Changed
 
+- **KLL, UnivMon and Hydra metadata keys follow the spec.** Compact KLL
+  writes `compaction_seed`; UnivMon writes `layers`, `rows` and `cols`; Hydra
+  writes `cell_*` for its counter params (`cell_rows`, `cell_cols`,
+  `cell_counter_type`, `cell_mode`, `cell_precision`, `cell_k`, `cell_m`,
+  `cell_item_type`, `cell_layers`, `cell_heap_size`, `cell_key_type`). Bytes
+  with the old keys are rejected; the affected goldens are regenerated.
 - **UnivMon Optimized and UnivMon-Q metadata keys follow the spec.**
   UnivMon Optimized writes `layers`, `elephant_rows`, `elephant_cols`,
   `mouse_rows` and `mouse_cols`; UnivMon-Q writes `layers`, `top_layer_cols`,
