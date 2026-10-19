@@ -100,7 +100,7 @@ fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 
 // on HyperLogLogImpl<Variant, Registers, H>
-fn merge_delta(&mut self, delta: &HyperLogLogDelta<Variant, Registers, H>)
+fn merge_delta(&mut self, delta: &HyperLogLogDelta<Variant, Registers, H>) -> Result<(), String>
 ```
 
 A `HyperLogLogDelta` is the ASAPv1 delta kind `0x01 0x81` (Classic) or
@@ -109,7 +109,27 @@ has no delta. It carries the changed registers as strictly ascending indices
 below `2^p` and a new value for each, non-zero and at most `65 - p`. `new` and
 the decoder refuse anything else. `merge_delta` sets each named register to the
 larger of its value and the delta's; the type parameters pin the estimator,
-precision and hasher, so it cannot fail.
+precision and hasher, so it fails, changing nothing, only when the admission
+rates differ.
+
+## Admission rate
+
+```rust
+fn with_admission_rate(self, p: f64) -> Self
+fn admission_rate(&self) -> f64
+
+// on HyperLogLogDelta
+fn with_admission_rate(self, p: f64) -> Self
+```
+
+`p` is the probability with which each update was admitted, `1` unless set. The
+estimate counts admitted keys alone; a consumer divides it by `p`. A key's
+updates are admitted all or none. The ASAPv1 metadata carries `p` as its last
+key, `admission_rate`, when `p < 1`; a `p` outside `(0, 1]` fails to serialize.
+`merge` panics, and `merge_delta` fails, when the two rates differ. A sketch
+nested in another kind (`EHSketchList`, `Hydra`, CMSHeap, CSHeap, Elastic) must
+hold `p = 1` to serialize. Both methods are on `HyperLogLogImpl` and
+`HyperLogLogHIPImpl`.
 
 ## Examples
 

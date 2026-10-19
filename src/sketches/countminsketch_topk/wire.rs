@@ -19,6 +19,7 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode};
 use crate::{CountMin, HashProfile, SketchHasher, TopKCounter, Vector2D};
@@ -52,6 +53,8 @@ where
     /// heap's keys mix `HeapItem` variants or hold a 128-bit key, or when
     /// `heap_size` or `cols` overflows the metadata's `u32` field.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        admission_rate::check_admits_all(self.cms.admission_rate())
+            .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CMSHeap envelope: {e}")))?;
         let rows = self.cms.rows();
         let cols = self.cms.cols();
         let counts = self.cms.as_storage().as_slice();

@@ -361,6 +361,8 @@ HLL admits by key: all updates of a key are admitted or none are.
 
 **Merge.** States merge only when their `admission_rate` are equal, an absent key counting as `1`.
 
+A sketch nested in another kind's state holds `p = 1`.
+
 ### Standard ProjectASAP profile (reference values)
 
 The hash-spec field *values* are read live from the hasher's `HashProfile`: `hll_metadata::<H>` / `cms_metadata::<H>` read `PROFILE_ID`, `ALGORITHM`, `SEED_DERIVATION`, `INPUT_ENCODING`, `seed_list()`, and the seed index straight off `H`.
@@ -478,6 +480,7 @@ At the loosest config (`top_layer_cols = 1`, `layers = 2`) the budget allows 127
 2. The metadata's hash spec, `counter_type` and `mode` must equal the target type's own, with `rows` / `cols` echoed back since those are structural and the matrix is sized from them.
 3. `rows` and `cols` are both non-zero and `rows <= 20`. Checked before the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
 4. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
+5. An optional `admission_rate` is accepted (Section 2, [admission rate](#admission-rate-admission_rate)).
 
 ### 3.3: KLL payload (`0x06 0x00` compact / `0x06 0x01` dynamic)
 
@@ -655,6 +658,7 @@ This is Count-Min's list exactly (§3.2, Q-CMS-DIMS), key for key and in the sam
 2. The metadata's hash spec, `counter_type` and `mode` must equal the target type's own, with `rows` / `cols` echoed back since those are structural and the matrix is sized from them. `counter_type` is required: a map missing it does not decode, so it can never be silently defaulted.
 3. `rows` and `cols` are both non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length — §3.2's wire-eligible geometries, the same line Count-Min draws). Checked before the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
 4. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
+5. An optional `admission_rate` is accepted (Section 2, [admission rate](#admission-rate-admission_rate)).
 
 Rules 3 and 4 are enforced on the **encode** side too: a matrix past `MATRIX_MAX_ROWS`, one with a zero dimension, and one whose cell count disagrees with its own dimensions (`Vector2D::init` reserves without filling) all fail to serialize. `cols` must also fit the metadata's `u32` field, so a matrix wider than `u32::MAX` fails the encode rather than emitting a width no decode would read back. The format never emits bytes it would refuse to read back.
 
@@ -731,7 +735,7 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 **Decode rules.** Fail **closed** on each, with an error and never a panic:
 
 1. `kind_id` is `0x05 0x00`; any other id is rejected.
-2. The metadata map is exact: `metadata_version` and `alpha` are both required, `metadata_version` is `1`, and no other key is accepted. `alpha` is a property of the *stored* sketch rather than of the target type, so it is echoed back into the expected block rather than pinned — the same treatment Count-Min gives `rows` / `cols`.
+2. The metadata map is exact: `metadata_version` and `alpha` are both required, `metadata_version` is `1`, and no other key is accepted except `admission_rate` (rule 8). `alpha` is a property of the *stored* sketch rather than of the target type, so it is echoed back into the expected block rather than pinned — the same treatment Count-Min gives `rows` / `cols`.
 3. `alpha` is finite and strictly inside `(0, 1)` — both endpoints excluded, and `NaN` and the infinities rejected with them. Checked **before** the payload is read, so a crafted accuracy never reaches the store. Outside that range the `gamma` derivation is non-positive or infinite and every bucket index is meaningless.
 4. An empty `counts` sits at `offset == 0` and an empty `negative_counts` at `negative_offset == 0`.
 5. Each populated store has its highest bucket index (`offset + len - 1`, `negative_offset + len - 1`) representable as an `i32`, checked in `i64` so the check itself cannot overflow. Applied from the declared offset and the array length alone, **before** the store is rebuilt.

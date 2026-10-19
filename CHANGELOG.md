@@ -89,9 +89,24 @@ signals a backwards-compatible change.
   `new` from changed buckets of both stores and a zero-count increment,
   serialized like a sketch, and added with `DDSketch::merge_delta`, which
   changes nothing when it fails.
+- **`admission_rate`**, the optional ASAPv1 metadata key of a sampled HLL,
+  Count-Min, Count Sketch or DDSketch state and its delta: set with
+  `with_admission_rate(p)` and read with `admission_rate()` on
+  `HyperLogLogImpl`, `HyperLogLogHIPImpl`, `CountMin`, `Count` and `DDSketch`,
+  and set with `with_admission_rate(p)` on the four delta types. Estimates are
+  of the admitted updates; a consumer divides them by `p`. States and deltas
+  merge only at equal rates. A sketch nested in another kind's state must hold
+  `p = 1` to serialize.
 
 ### Changed
 
+- **`HyperLogLogImpl::merge_delta` returns `Result<(), String>`**, an `Err`
+  when the delta's admission rate differs from the state's.
+- **`EHSketchList::merge` and `EHBucket::to_merge` return `Result<(), String>`**,
+  passing the inner sketch's error through.
+- **The derived serde form of `HyperLogLogImpl`, `HyperLogLogHIPImpl`,
+  `CountMin`, `Count` and `DDSketch` gains a trailing `admission_rate` field**,
+  `1` when absent and refused outside `(0, 1]`.
 - **DDSketch has one ASAPv1 encoding**: `metadata_version` 1 with all eight
   payload fields, the negative store and zero count included. Bytes change for
   positive-only and empty sketches, and `metadata_version` 2 is rejected.

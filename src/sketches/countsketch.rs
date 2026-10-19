@@ -8,6 +8,7 @@
 //!   ICALP 2002. <https://www.cs.rutgers.edu/~farach/pubs/FrequentStream.pdf>
 
 use crate::common::structure_utils::AdmittedRows;
+use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
@@ -41,6 +42,8 @@ pub struct Count<
     _mode: PhantomData<Mode>,
     #[serde(skip)]
     _hasher: PhantomData<H>,
+    #[serde(default = "admit_all", deserialize_with = "deserialize_rate")]
+    admission_rate: f64,
 }
 
 /// Counter trait required by Count Sketch backends.
@@ -216,6 +219,7 @@ where
             col: cols,
             _mode: PhantomData,
             _hasher: PhantomData,
+            admission_rate: admit_all(),
         };
         sk.counts.fill(T::from(0));
         sk
@@ -238,7 +242,20 @@ where
             col,
             _mode: PhantomData,
             _hasher: PhantomData,
+            admission_rate: admit_all(),
         }
+    }
+
+    /// Sets the probability `p` with which each update was admitted. Estimates
+    /// count admitted updates alone; a consumer divides a key's frequency by `p`.
+    pub fn with_admission_rate(mut self, p: f64) -> Self {
+        self.admission_rate = p;
+        self
+    }
+
+    /// The probability with which each update was admitted; `1` unless set.
+    pub fn admission_rate(&self) -> f64 {
+        self.admission_rate
     }
 
     /// Number of rows in the sketch.
@@ -251,7 +268,8 @@ where
         self.counts.cols()
     }
 
-    /// Merges another sketch while asserting compatible dimensions.
+    /// Merges another sketch while asserting compatible dimensions and equal
+    /// admission rates.
     pub fn merge(&mut self, other: &Self) {
         let self_rows = self.counts.rows();
         let self_cols = self.counts.cols();
@@ -259,6 +277,10 @@ where
             (self_rows, self_cols),
             (other.counts.rows(), other.counts.cols()),
             "dimension mismatch while merging CountMin sketches"
+        );
+        assert_eq!(
+            self.admission_rate, other.admission_rate,
+            "admission rate mismatch while merging Count sketches"
         );
 
         for i in 0..self_rows {

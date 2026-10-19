@@ -19,6 +19,7 @@ use crate::DataInput;
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
+use crate::message_pack_format::admission_rate::{self, admit_all};
 use crate::octo_delta::{DdDelta, DdStore};
 use serde::{Deserialize, Serialize};
 
@@ -150,6 +151,8 @@ pub struct DDSketch {
     negative_store: Buckets,
     #[serde(default)]
     zero_count: u64,
+    #[serde(default = "admit_all")]
+    admission_rate: f64,
 }
 
 /// The fields a serialized [`DDSketch`] carries, in the order it emits them.
@@ -166,6 +169,8 @@ struct DDSketchState {
     negative_store: Buckets,
     #[serde(default)]
     zero_count: u64,
+    #[serde(default = "admit_all")]
+    admission_rate: f64,
 }
 
 impl TryFrom<DDSketchState> for DDSketch {
@@ -173,6 +178,7 @@ impl TryFrom<DDSketchState> for DDSketch {
 
     fn try_from(state: DDSketchState) -> Result<Self, Self::Error> {
         let count = wire::check_state(&state)?;
+        admission_rate::to_key(state.admission_rate).map_err(|e| format!("DDSketch {e}"))?;
         let gamma = (1.0 + state.alpha) / (1.0 - state.alpha);
         let log_gamma = gamma.ln();
         Ok(Self {
@@ -187,6 +193,7 @@ impl TryFrom<DDSketchState> for DDSketch {
             max: state.max,
             negative_store: state.negative_store,
             zero_count: state.zero_count,
+            admission_rate: state.admission_rate,
         })
     }
 }
@@ -234,7 +241,20 @@ impl DDSketch {
             max: f64::NEG_INFINITY,
             negative_store: Buckets::new(),
             zero_count: 0,
+            admission_rate: admit_all(),
         }
+    }
+
+    /// Sets the probability `p` with which each sample was admitted. `count`
+    /// and `sum` cover admitted samples alone; a consumer divides them by `p`.
+    pub fn with_admission_rate(mut self, p: f64) -> Self {
+        self.admission_rate = p;
+        self
+    }
+
+    /// The probability with which each sample was admitted; `1` unless set.
+    pub fn admission_rate(&self) -> f64 {
+        self.admission_rate
     }
 
     /// Advances the running `sum` by `delta`, saturating at `f64::MAX` instead
@@ -500,7 +520,8 @@ impl DDSketch {
     /// Merges another DDSketch into this one. Returns `Err` if the two sketches
     /// use different index mappings (different `alpha`/`gamma`): merging under a
     /// mismatched mapping would reinterpret one sketch's bucket indices under
-    /// the other's γ and silently corrupt every quantile.
+    /// the other's γ and silently corrupt every quantile. Also returns `Err`
+    /// when the admission rates differ.
     ///
     /// This is a REAL runtime check, not a `debug_assert!`: a `debug_assert!`
     /// compiles out in release builds, leaving a mismatched merge to corrupt
@@ -514,6 +535,8 @@ impl DDSketch {
                 self.alpha, other.alpha
             ));
         }
+        admission_rate::check_equal(self.admission_rate, other.admission_rate)
+            .map_err(|e| format!("cannot merge DDSketches: {e}"))?;
 
         if other.count == 0 {
             return Ok(());
@@ -609,6 +632,7 @@ impl Clone for DDSketch {
             max: self.max,
             negative_store: self.negative_store.clone(),
             zero_count: self.zero_count,
+            admission_rate: self.admission_rate,
         }
     }
 }

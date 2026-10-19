@@ -45,7 +45,7 @@ fn sketch_type(&self) -> &'static str
 ## Merge
 
 ```rust
-fn merge(&mut self, other: &EHSketchList) -> Result<(), &'static str>
+fn merge(&mut self, other: &EHSketchList) -> Result<(), String>
 ```
 
 ## Serialization

@@ -46,6 +46,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::hash::check_matrix_rows;
 use crate::input::HydraCounter;
+use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact_vec;
 use crate::sketch_framework::univmon::wire::{PyramidPayload, UnivMonMetadata, univmon_metadata};
@@ -487,6 +488,7 @@ impl Hydra {
     /// refused on decode.
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let grid = self.wire_grid()?;
+        self.check_admits_all()?;
         match &self.type_to_clone {
             HydraCounter::KLL(prototype) => self.encode_kll(&grid, prototype),
             HydraCounter::CM(prototype) => self.encode_cm(&grid, prototype),
@@ -597,6 +599,21 @@ impl Hydra {
             counts.extend_from_slice(cell);
         }
         Ok(counts)
+    }
+
+    /// Rejects a prototype or cell whose admission rate is not `1`.
+    fn check_admits_all(&self) -> Result<(), RmpEncodeError> {
+        for counter in std::iter::once(&self.type_to_clone).chain(self.sketches.as_slice()) {
+            let rate = match counter {
+                HydraCounter::CM(cm) => cm.admission_rate(),
+                HydraCounter::CS(cs) => cs.admission_rate(),
+                HydraCounter::HLL(hll) => hll.admission_rate(),
+                HydraCounter::KLL(_) | HydraCounter::UNIVERSAL(_) => continue,
+            };
+            admission_rate::check_admits_all(rate)
+                .map_err(|e| encode_error(format!("ASAPv1 Hydra envelope: {e}")))?;
+        }
+        Ok(())
     }
 
     /// Rejects a prototype holding data: it reaches the wire only through the

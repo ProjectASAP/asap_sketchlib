@@ -100,8 +100,26 @@ mapping produces, the non-zero count added to each, and a count added to the
 zero count. `new` and the decoder refuse anything else. `merge_delta` adds each
 count to its bucket, growing the store as insertion does, and folds the
 bucket's representative into `sum`, `min` and `max`; a delta of another
-`alpha`, one that overflows the total count, or one that would grow a store
-past `i32`, fails and leaves the sketch unchanged.
+`alpha` or admission rate, one that overflows the total count, or one that
+would grow a store past `i32`, fails and leaves the sketch unchanged.
+
+## Admission rate
+
+```rust
+fn with_admission_rate(self, p: f64) -> Self
+fn admission_rate(&self) -> f64
+
+// on DDSketchDelta
+fn with_admission_rate(self, p: f64) -> Self
+```
+
+`p` is the probability with which each update was admitted, `1` unless set.
+`count` and `sum` cover admitted samples alone; a consumer divides them by `p`.
+Quantiles, `min` and `max` need no rescaling. The ASAPv1 metadata carries `p` as
+its last key, `admission_rate`, when `p < 1`; a `p` outside `(0, 1]` fails to
+serialize. `merge` and `merge_delta` fail when the two rates differ. A sketch
+nested in another kind (`EHSketchList`, `Hydra`, CMSHeap, CSHeap, Elastic) must
+hold `p = 1` to serialize.
 
 ## Examples
 

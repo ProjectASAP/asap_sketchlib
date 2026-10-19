@@ -90,8 +90,26 @@ A `CountMinDelta` is the ASAPv1 delta kind `0x02 0x80`, for the same configs
 as the state serialization: the changed cells as strictly ascending row-major
 indices `row * cols + col`, below `rows * cols`, and the non-zero value added
 to each. `new` and the decoder refuse anything else. `merge_delta` adds the
-delta to the counters; a delta of other dimensions, or an integer add that
-overflows, fails and leaves the sketch unchanged.
+delta to the counters; a delta of other dimensions or admission rate, or an
+integer add that overflows, fails and leaves the sketch unchanged.
+
+## Admission rate
+
+```rust
+fn with_admission_rate(self, p: f64) -> Self
+fn admission_rate(&self) -> f64
+
+// on CountMinDelta
+fn with_admission_rate(self, p: f64) -> Self
+```
+
+`p` is the probability with which each update was admitted, `1` unless set.
+Estimates count admitted updates alone; a consumer divides a key's frequency and
+a row's total by `p`. The ASAPv1 metadata carries `p` as its last key,
+`admission_rate`, when `p < 1`; a `p` outside `(0, 1]` fails to serialize.
+`merge` and `merge_max` panic, and `merge_delta` fails, when the two rates
+differ. A sketch nested in another kind (`EHSketchList`, `Hydra`, CMSHeap,
+CSHeap, Elastic) must hold `p = 1` to serialize.
 
 ## Examples
 

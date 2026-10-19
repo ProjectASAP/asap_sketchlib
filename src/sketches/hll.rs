@@ -33,6 +33,7 @@
 // - Refactored into a generic `HyperLogLog<Variant>` structure.
 // ----------------------------------------------------------------
 
+use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
 use crate::structures::fixed_structure::{
     HllBucketListP12, HllBucketListP14, HllBucketListP16, HllRegisterStorage,
 };
@@ -62,6 +63,8 @@ pub struct HyperLogLogImpl<
     _marker: PhantomData<Variant>,
     #[serde(skip)]
     _hasher: PhantomData<H>,
+    #[serde(default = "admit_all", deserialize_with = "deserialize_rate")]
+    admission_rate: f64,
 }
 
 /// Classic HyperLogLog cardinality estimate over a raw register slice.
@@ -106,6 +109,8 @@ pub struct HyperLogLogHIPImpl<Registers: HllRegisterStorage> {
     kxq0: f64,
     kxq1: f64,
     est: f64,
+    #[serde(default = "admit_all", deserialize_with = "deserialize_rate")]
+    admission_rate: f64,
 }
 
 /// HyperLogLog with 12-bit precision.
@@ -146,12 +151,25 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
             registers: Registers::default(),
             _marker: PhantomData,
             _hasher: PhantomData,
+            admission_rate: admit_all(),
         }
     }
 
     /// Borrow the raw register byte slice (one byte per register).
     pub fn registers_as_slice(&self) -> &[u8] {
         self.registers.as_slice()
+    }
+
+    /// Sets the probability `p` with which each update was admitted. The
+    /// estimate counts admitted keys alone; a consumer divides it by `p`.
+    pub fn with_admission_rate(mut self, p: f64) -> Self {
+        self.admission_rate = p;
+        self
+    }
+
+    /// The probability with which each update was admitted; `1` unless set.
+    pub fn admission_rate(&self) -> f64 {
+        self.admission_rate
     }
 
     /// Inserts a pre-hashed value into the sketch.
@@ -174,11 +192,16 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         }
     }
 
-    /// Merges another sketch into this one by taking the element-wise max of registers.
+    /// Merges another sketch into this one by taking the element-wise max of
+    /// registers. Panics when the two admission rates differ.
     pub fn merge(&mut self, other: &Self) {
         assert!(
             self.registers.len() == other.registers.len(),
             "Different register length, should not merge"
+        );
+        assert_eq!(
+            self.admission_rate, other.admission_rate,
+            "admission rate mismatch while merging HyperLogLog sketches"
         );
         for (reg, other_val) in self
             .registers
@@ -340,8 +363,22 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
             kxq0: Registers::NUM_REGISTERS as f64,
             kxq1: 0.0,
             est: 0.0,
+            admission_rate: admit_all(),
         }
     }
+
+    /// Sets the probability `p` with which each update was admitted. The
+    /// estimate counts admitted keys alone; a consumer divides it by `p`.
+    pub fn with_admission_rate(mut self, p: f64) -> Self {
+        self.admission_rate = p;
+        self
+    }
+
+    /// The probability with which each update was admitted; `1` unless set.
+    pub fn admission_rate(&self) -> f64 {
+        self.admission_rate
+    }
+
     /// Inserts a pre-hashed value, updating both the register and the HIP running estimate.
     #[inline(always)]
     pub fn insert_with_hash(&mut self, hashed: u64) {

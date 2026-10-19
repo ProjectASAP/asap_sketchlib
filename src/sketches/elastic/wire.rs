@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use crate::common::hash::check_matrix_rows;
+use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 use crate::{CountMin, HashProfile, SketchHasher, Vector2D};
 
@@ -164,6 +165,9 @@ impl<H: SketchHasher + HashProfile> Elastic<H> {
                 self.bktlen
             )));
         }
+        admission_rate::check_admits_all(self.light.admission_rate()).map_err(|e| {
+            RmpEncodeError::Syntax(format!("ASAPv1 Elastic envelope: light layer: {e}"))
+        })?;
         let counts = self.light.as_storage().as_slice();
         if counts.len() != light_cells {
             return Err(RmpEncodeError::Syntax(format!(
