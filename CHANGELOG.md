@@ -133,8 +133,8 @@ signals a backwards-compatible change.
   Space-Saving, CMSSpaceSaving and CSSpaceSaving reject one under any other
   name.
 - **CMSHeap, CSHeap, their deltas, UnivMon, UnivMon Optimized and Hydra's
-  UnivMon counter read a `"string"` key from msgpack `str` alone**; UTF-8 `bin` keys relabelled
-  `"string"` are rejected.
+  UnivMon counter read a `"string"` key from msgpack `str` alone**; UTF-8
+  `bin` keys relabelled `"string"` are rejected.
 - **Space-Saving and UnivMon-Q ASAPv1 decodes reject entries out of emitted
   order.** Space-Saving also rejects a key held twice judged by its bits, so
   two `NaN` keys fail on both doors.

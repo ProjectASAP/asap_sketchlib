@@ -1,6 +1,6 @@
 # API: CMSSpaceSaving
 
-Status: `Ready`
+Status: `Unstable`
 
 ## Purpose
 

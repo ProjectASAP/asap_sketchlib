@@ -1,6 +1,6 @@
 # API: CSSpaceSaving
 
-Status: `Ready`
+Status: `Unstable`
 
 ## Purpose
 

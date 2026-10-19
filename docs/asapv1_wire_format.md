@@ -227,8 +227,8 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x1b 0x00` | FoldCMS | - | TBD | reserved / not designed |
 | `0x1c 0x00` | FoldCS | - | TBD | reserved / not designed |
 | `0x1d 0x00` | - | - | TBD | retired / permanently reserved, never reassign |
-| `0x1e 0x00` | Count-Min-with-Space-Saving (CMSSpaceSaving) | Count-Min + Space-Saving candidates | Section 3.24 | implemented |
-| `0x1f 0x00` | Count-Sketch-with-Space-Saving (CSSpaceSaving) | Count Sketch + Space-Saving candidates | Section 3.25 | implemented |
+| `0x1e 0x00` | Count-Min-with-Space-Saving (CMSSpaceSaving, `Unstable`) | Count-Min + Space-Saving candidates | Section 3.24 | implemented |
+| `0x1f 0x00` | Count-Sketch-with-Space-Saving (CSSpaceSaving, `Unstable`) | Count Sketch + Space-Saving candidates | Section 3.25 | implemented |
 
 **Mapping notes** (mismatches between `apis.md` and Go's `magic_ids.go`):
 

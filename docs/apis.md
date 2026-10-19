@@ -18,8 +18,8 @@ This is the canonical API entry point for `asap_sketchlib`.
   - Reference: Masson, Rim & Lee, "DDSketch: A Fast and Fully-Mergeable Quantile Sketch with Relative-Error Guarantees," VLDB 2019. [https://arxiv.org/abs/1908.10693](https://arxiv.org/abs/1908.10693)
 - [CMSHeap](./api/api_cms_heap.md) - `Ready`
 - [CSHeap](./api/api_cs_heap.md) - `Ready`
-- [CMSSpaceSaving](./api/api_cms_space_saving.md) - `Ready`
-- [CSSpaceSaving](./api/api_cs_space_saving.md) - `Ready`
+- [CMSSpaceSaving](./api/api_cms_space_saving.md) - `Unstable`
+- [CSSpaceSaving](./api/api_cs_space_saving.md) - `Unstable`
 - [SpaceSaving](./api/api_space_saving.md) - `Ready`
   - Reference: Metwally, Agrawal & El Abbadi, "Efficient Computation of Frequent and Top-k Elements in Data Streams," ICDT 2005. [https://doi.org/10.1007/978-3-540-30570-5_27](https://doi.org/10.1007/978-3-540-30570-5_27)
 - [Bloom](./api/api_bloom.md) - `Ready`
