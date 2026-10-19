@@ -33,6 +33,7 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+pub(crate) mod parts;
 pub mod wire;
 
 const NIL: usize = usize::MAX;

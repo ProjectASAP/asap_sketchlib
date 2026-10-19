@@ -18,12 +18,12 @@ use asap_sketchlib::{
     TupleKey, UnivMonPyramid, UnivMonQ, UnivMonQConfig,
 };
 use asap_sketchlib::{
-    CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Coco, CocoBucket, Count, CountDelta,
-    CountL2HH, CountMin, CountMinDelta, DDSketch, DDSketchDelta, DataInput, DeltaResult, Elastic,
-    ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HeavyBucket, HllBucketListP14, HllSketch,
-    HllVariant, Hydra, HyperLogLog, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogHIPP14,
-    HyperLogLogP12, HyperLogLogP14, KLL, KLLDynamic, L2HH, MessagePackCodec, RegularPath,
-    SetAggregator, UnivMon, Vector2D, peek_kind_id,
+    CMSHeap, CMSHeapDelta, CMSSpaceSaving, CSHeap, CSHeapDelta, CSSpaceSaving, Classic, Coco,
+    CocoBucket, Count, CountDelta, CountL2HH, CountMin, CountMinDelta, DDSketch, DDSketchDelta,
+    DataInput, DeltaResult, Elastic, ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HeavyBucket,
+    HllBucketListP14, HllSketch, HllVariant, Hydra, HyperLogLog, HyperLogLogDelta,
+    HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogP12, HyperLogLogP14, KLL, KLLDynamic, L2HH,
+    MessagePackCodec, RegularPath, SetAggregator, UnivMon, Vector2D, peek_kind_id,
 };
 #[cfg(feature = "experimental")]
 use asap_sketchlib::{KMV, UniformSampling};
@@ -76,6 +76,10 @@ const GOLDEN_CMSHEAP_TUPLE: &str =
     include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_tuplekeys.hex");
 const GOLDEN_CSHEAP_TUPLE: &str =
     include_str!("../asapv1_golden/csheap_i64_regular_2x4_tuplekeys.hex");
+const GOLDEN_CMSSS_STR: &str =
+    include_str!("../asapv1_golden/cmsspacesaving_i64_regular_2x3_strkeys.hex");
+const GOLDEN_CSSS_I64: &str =
+    include_str!("../asapv1_golden/csspacesaving_f64_fast_2x4_i64keys.hex");
 const GOLDEN_DD_POSITIVE: &str = include_str!("../asapv1_golden/ddsketch_positive_a001.hex");
 const GOLDEN_DD_SIGNED: &str = include_str!("../asapv1_golden/ddsketch_signed_a001.hex");
 const GOLDEN_DD_EMPTY: &str = include_str!("../asapv1_golden/ddsketch_empty_a001.hex");
@@ -827,6 +831,89 @@ fn csheap_i64_regular_2x4_tuplekeys_matches_golden() {
     assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
     assert_heap(decoded.heap(), 6, &entries);
     assert_tuple_keys(decoded.heap(), &named);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// CMSSpaceSaving / CSSpaceSaving: the matrix set directly and the summary built
+// by weighted inserts, whose triples do not depend on the hash.
+// ---------------------------------------------------------------------------
+
+/// Asserts `summary` has `capacity`, `total` and `ceiling` and holds exactly
+/// `entries` as `(key, count, error)`.
+fn assert_summary(
+    summary: &SpaceSaving,
+    capacity: usize,
+    total: u64,
+    ceiling: u64,
+    entries: &[(DataInput<'_>, u64, u64)],
+) {
+    assert_eq!(summary.capacity(), capacity);
+    assert_eq!(summary.total(), total);
+    assert_eq!(summary.min_count(), ceiling);
+    assert_eq!(summary.len(), entries.len());
+    for (key, count, error) in entries {
+        assert_eq!(summary.estimate(key), *count, "{key:?}");
+        assert_eq!(summary.error(key), *error, "{key:?}");
+    }
+}
+
+/// `aa` displaces `cold` (count 1) and carries it as error; the `7` tie falls
+/// to the keys, so `"aa"` precedes `"b"`.
+#[test]
+fn cmsspacesaving_i64_regular_2x3_strkeys_matches_golden() {
+    type Sketch = CMSSpaceSaving<Vector2D<i64>, RegularPath>;
+    let want = decode_hex(GOLDEN_CMSSS_STR);
+    let mut summary = SpaceSaving::with_capacity(4);
+    for (key, weight) in [
+        ("hot", 300),
+        ("warm", 128),
+        ("cold", 1),
+        ("b", 7),
+        ("aa", 6),
+    ] {
+        summary.insert_many(&DataInput::Str(key), weight);
+    }
+    let matrix = CountMin::from_storage(Vector2D::from_fn(2, 3, |r, c| I64_VALS[r][c]));
+    let sketch = Sketch::from_parts(matrix, summary);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Sketch::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = I64_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    let entries = [
+        (DataInput::Str("hot"), 300, 0),
+        (DataInput::Str("warm"), 128, 0),
+        (DataInput::Str("aa"), 7, 1),
+        (DataInput::Str("b"), 7, 0),
+    ];
+    assert_summary(decoded.space_saving(), 4, 442, 7, &entries);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+/// `7` displaces `128` (count 5) and carries it as error; the `6` tie falls to
+/// the keys' two's-complement bits, so `7` precedes `i64::MIN`.
+#[test]
+fn csspacesaving_f64_fast_2x4_i64keys_matches_golden() {
+    type Sketch = CSSpaceSaving<Vector2D<f64>, FastPath>;
+    let want = decode_hex(GOLDEN_CSSS_I64);
+    let mut summary = SpaceSaving::with_capacity(3);
+    for (key, weight) in [(-1, 65536), (i64::MIN, 5), (128, 5), (7, 1), (i64::MIN, 1)] {
+        summary.insert_many(&DataInput::I64(key), weight);
+    }
+    let matrix = Count::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_F64_VALS[r][c]));
+    let sketch = Sketch::from_parts(matrix, summary);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Sketch::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<f64> = CS_F64_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    let entries = [
+        (DataInput::I64(-1), 65536, 0),
+        (DataInput::I64(7), 6, 5),
+        (DataInput::I64(i64::MIN), 6, 0),
+    ];
+    assert_summary(decoded.space_saving(), 3, 65548, 6, &entries);
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 

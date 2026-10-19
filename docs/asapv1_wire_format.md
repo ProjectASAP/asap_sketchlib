@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinDelta`), CMSHeap with its delta (`CMSHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap with its delta (`CSHeapDelta`), DDSketch with its delta (`DDSketchDelta`), KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH, UnivMon-Q, and SetAggregator with its delta (`DeltaResult`).
+- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinDelta`), CMSHeap with its delta (`CMSHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap with its delta (`CSHeapDelta`), DDSketch with its delta (`DDSketchDelta`), KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH, UnivMon-Q, CMSSpaceSaving, CSSpaceSaving, and SetAggregator with its delta (`DeltaResult`).
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -227,13 +227,15 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x1b 0x00` | FoldCMS | - | TBD | reserved / not designed |
 | `0x1c 0x00` | FoldCS | - | TBD | reserved / not designed |
 | `0x1d 0x00` | - | - | TBD | retired / permanently reserved, never reassign |
+| `0x1e 0x00` | Count-Min-with-Space-Saving (CMSSpaceSaving) | Count-Min + Space-Saving candidates | Section 3.24 | implemented |
+| `0x1f 0x00` | Count-Sketch-with-Space-Saving (CSSpaceSaving) | Count Sketch + Space-Saving candidates | Section 3.25 | implemented |
 
 **Mapping notes** (mismatches between `apis.md` and Go's `magic_ids.go`):
 
 - **CMSHeap vs CSHeap.** Go's `MagicCountMinSketchWithHeap` (`0x03`) is the Count-*Min*-with-heap sketch (`apis.md` to CMSHeap). The Count-*Sketch*-with-heap sketch (`apis.md` to CSHeap) is a distinct family and gets a fresh byte (`0x0a`), separate from `0x03`.
 - **Hydra.** `apis.md` lists the "Hydra" framework; Go's only Hydra id is `MagicHydraKLLSketch` (`0x07`), so Hydra maps here to the `0x07` family. Each base sketch under Hydra has its own variant: `0x07 0x00` KLL, `0x07 0x01` Count-Min, `0x07 0x02` Count Sketch, `0x07 0x03` HyperLogLog, `0x07 0x04` UnivMon. `0x07 0x05`-`0x07 0x7f` are **reserved for Hydra over further base sketches**; a concrete variant is allocated when that combination's payload is designed.
 - **SetAggregator / DeltaResult** (`0x08 0x00` / `0x08 0x80`) are exact string sets, not sketches, so `apis.md` does not list them.
-- **`0x19`-`0x1c`.** CountL2HH, UnivMon-Q, FoldCMS and FoldCS have no counterpart in Go's `magic_ids.go`; their family bytes are allocated here first, and Go mirrors them from this registry.
+- **`0x19`-`0x1c`, `0x1e`-`0x1f`.** CountL2HH, UnivMon-Q, FoldCMS, FoldCS, CMSSpaceSaving and CSSpaceSaving have no counterpart in Go's `magic_ids.go`; their family bytes are allocated here first, and Go mirrors them from this registry.
 - **`Unstable`** rows mirror the `Unstable` status those sketches carry in `apis.md`. The kind_id is permanent either way; the payload and the sketch API may still change, and a change to the payload takes a new id (Q-VER).
 
 ### Decoder rules
@@ -1396,7 +1398,77 @@ Rules 3 through 7 are enforced on the **encode** side too, so the format never e
 2. The state's metadata equals the delta's, key for key, `key_type` excepted for CMSHeap and CSHeap.
 3. An integer add that overflows rejects the delta: a `counter_type` cell, or DDSketch's total count (§3.8 rule 6).
 
-### 3.24: payloads not yet designed
+### 3.24: CMSSpaceSaving payload (`0x1e 0x00`)
+
+`CMSSpaceSaving` is a Count-Min sketch (§3.2) paired with a Space-Saving summary (§3.5). Every update reaches both. A top-k query ranks the summary's monitored keys by their Count-Min estimate: the summary nominates the candidates and the matrix counts them. Both are **inlined**, so the payload is Count-Min's `counts` followed by §3.5's payload, its `counts` renamed `summary_counts`:
+
+| Pos | Field | Type | Notes |
+| ----- | ------- | ------ | ------- |
+| 0 | `counts` | array | the Count-Min matrix, packed **row-major**, `rows*cols` cells; element type = `counter_type` |
+| 1 | `keys` | array | one monitored key per counter; element type = `key_type`; homogeneous (§3.5) |
+| 2 | `summary_counts` | array | u64 recorded count, parallel to `keys` |
+| 3 | `errors` | array | u64 error allowance, parallel to `keys`; `errors[i] <= summary_counts[i]` |
+| 4 | `total` | u64 | total weight the summary recorded |
+| 5 | `discarded_max` | u64 | the largest count known to have left the summary |
+
+The summary's arenas and key index are rebuilt from the triples, and `min_count` is recomputed, exactly as in §3.5.
+
+**Metadata vs payload.** The descriptor keys, in canonical wire order:
+
+```md
+metadata_version, hash_profile_id, hash_algorithm, seed_derivation, input_encoding,
+seed_list, matrix_seed_index, rows, cols, counter_type, mode, capacity, key_type
+```
+
+`rows` / `cols` / `counter_type` / `mode` are Count-Min's (§3.2), in Count-Min's order; `capacity` and `key_type` are §3.5's and follow them. `matrix_seed_index` describes the matrix. The summary hashes every key at seed index `0`, fixed by the algorithm, so it adds no seed-index key (§2). `capacity` is a `u32`; a summary whose capacity exceeds it fails to encode.
+
+Wire counter types are Count-Min's: **`"i32"`, `"i64"` and `"f64"`**, pinned on decode.
+
+**Summary weight.** An update of weight `w` adds `w` to the matrix and `ceil(w)` to the summary, saturating at `2^64 - 1`. A `w` that is not positive adds nothing to the summary.
+
+**No `admission_rate`.** The matrix is a nested sketch and holds `p = 1` (Section 2); a sketch whose matrix holds `p != 1` fails to serialize.
+
+**No delta kind.** CMSSpaceSaving has no delta.
+
+**Emitted order (cross-language contract).** `counts` is row-major. Summary entries are in §3.5's emitted order: descending `summary_counts`, ties broken by heap key order.
+
+**Decode rules.** Fail **closed** on each, with an error and never a panic:
+
+1. `kind_id` is `0x1e 0x00`; any other id is rejected — including `0x1f 0x00` (a CSSpaceSaving, whose metadata schema is this one), `0x03 0x00` (a CMSHeap), `0x02 0x00` (a Count-Min) and `0x18 0x00` (a Space-Saving).
+2. The metadata's hash spec, `counter_type` and `mode` must equal the target type's own, with `rows` / `cols` / `capacity` / `key_type` echoed back. Every key is required: a map missing one, or carrying an unknown one (`admission_rate` included), does not decode.
+3. `rows` and `cols` are both non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2), checked **before** the matrix is built.
+4. `key_type` is one of §3.5's fourteen names; anything else is rejected before the payload is read. The `keys` array is then read **as** that type, with §3.5 rule 3's relabel limits.
+5. `keys`, `summary_counts` and `errors` have equal length.
+6. `len(counts) == rows * cols` exactly, checked **before** the allocation.
+7. §3.5's rules 5, 6, 7, 8, 9 and 10 hold over `capacity`, `keys`, `summary_counts`, `errors`, `total` and `discarded_max`. Duplication (rule 7) is judged on the key's wire representation before any entry is seated, as §3.7's rule 7 judges it: two bit-identical `NaN`s are one key twice, `+0.0` and `-0.0` are two keys. `capacity` never sizes an allocation.
+8. Summary entries are in the emitted order above; any other order is rejected.
+
+Rules 3, 6 and 7's duplicate check are enforced on the **encode** side too, as are §3.5's mixed-variant and 128-bit-key refusals and the `u32` bounds on `capacity` and `cols`. A summary seats a `NaN` key anew on every insert, since `NaN` never finds itself; a summary holding the same `NaN` twice has no encoding and fails to serialize.
+
+### 3.25: CSSpaceSaving payload (`0x1f 0x00`)
+
+`CSSpaceSaving` is a Count Sketch (§3.6) paired with a Space-Saving summary, and its payload is §3.24's with the Count Sketch matrix as `counts`:
+
+| Pos | Field | Type | Notes |
+| ----- | ------- | ------ | ------- |
+| 0 | `counts` | array | the Count Sketch matrix, packed **row-major**, `rows*cols` cells; element type = `counter_type`, **signed** |
+| 1-5 | `keys`, `summary_counts`, `errors`, `total`, `discarded_max` | | §3.24's |
+
+**Metadata vs payload.** §3.24's schema and canonical key order. Wire counter types are Count Sketch's: **`"i32"`, `"i64"` and `"f64"`** (§3.6), pinned on decode; `mode` fixes the sign derivation as well as the column (§3.6).
+
+A top-k query ranks the summary's keys by the Count Sketch estimate, the median of signed cells. §3.24's summary weight holds: a negative update moves the matrix alone.
+
+**No `admission_rate`, no delta kind**, as in §3.24.
+
+**Emitted order (cross-language contract).** §3.24's.
+
+**Decode rules.** §3.24's rules 2 through 8 apply verbatim, with one difference:
+
+1. `kind_id` is `0x1f 0x00`; any other id is rejected — including `0x1e 0x00` (a CMSSpaceSaving), `0x0a 0x00` (a CSHeap) and `0x04 0x00` (a Count Sketch).
+
+The same encode-side checks apply.
+
+### 3.26: payloads not yet designed
 
 The remaining `kind_id`s reserve a family byte with payload TBD (the Section 1 registry carries their status). Likely shape when designed:
 

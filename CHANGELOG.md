@@ -106,6 +106,14 @@ signals a backwards-compatible change.
   of the admitted updates; a consumer divides them by `p`. States and deltas
   merge only at equal rates. A sketch nested in another kind's state must hold
   `p = 1` to serialize.
+- **`CMSSpaceSaving` and `CSSpaceSaving`**: a Count-Min or Count Sketch
+  matrix beside a `SpaceSaving` summary of `capacity` counters. Every update
+  reaches both; `top_k(k)` ranks the summary's keys by their matrix estimate.
+  `insert_many` gives the summary the weight rounded up, or nothing when it is
+  not positive (`SpaceSavingCounter`). Merge adds the matrices and merges the
+  summaries, and panics on a dimension, admission-rate or capacity mismatch.
+  ASAPv1 kinds `0x1e 0x00` and `0x1f 0x00` (spec §3.24, §3.25) for `i32`,
+  `i64` and `f64` `Vector2D` matrices on either path, with no delta kind.
 
 ### Changed
 

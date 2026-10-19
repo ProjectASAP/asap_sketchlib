@@ -102,6 +102,7 @@ MessagePack (`rmp-serde`) support. **serde support** means the type derives `Ser
 | UniformSampling | Yes | Yes |
 | FoldCMS / FoldCS | Yes | In Progress |
 | CMSHeap / CSHeap | In Progress | Yes |
+| CMSSpaceSaving / CSSpaceSaving | No | Yes |
 | SpaceSaving | Yes | Yes |
 | Bloom | Yes | Yes |
 | Hydra | Yes | Yes |

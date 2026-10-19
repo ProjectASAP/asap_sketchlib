@@ -7,8 +7,8 @@
 //! - cardinality estimation: [`HyperLogLog`]
 //! - quantiles and distributions: [`KLL`], [`DDSketch`]
 //! - specialized or composite structures: heap-backed, folded, and
-//!   runtime-oriented variants such as [`CMSHeap`], [`CSHeap`], [`FoldCMS`], and
-//!   [`FoldCS`]
+//!   runtime-oriented variants such as [`CMSHeap`], [`CSHeap`],
+//!   [`CMSSpaceSaving`], [`CSSpaceSaving`], [`FoldCMS`], and [`FoldCS`]
 //!
 //! For most users:
 //!
@@ -112,6 +112,12 @@ pub use countminsketch_topk::{CMSHeap, CMSHeapDelta};
 pub mod countsketch_topk;
 pub use countsketch_topk::{CSHeap, CSHeapDelta, CsHeapCounter, cs_heap_count};
 pub use countsketch_topk::{CountL2HH, l2hh_cell_for_row};
+
+pub mod countminsketch_space_saving;
+pub use countminsketch_space_saving::{CMSSpaceSaving, SpaceSavingCounter};
+
+pub mod countsketch_space_saving;
+pub use countsketch_space_saving::CSSpaceSaving;
 
 pub mod octo_delta;
 pub use octo_delta::{
