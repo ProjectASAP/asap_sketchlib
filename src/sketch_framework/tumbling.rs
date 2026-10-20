@@ -34,7 +34,7 @@ pub trait TumblingWindowSketch: Clone + Sized {
     fn from_config(config: &Self::Config) -> Self;
 
     /// Insert one observation.
-    fn tumbling_insert(&mut self, key: &DataInput, value: i64);
+    fn tumbling_update_weighted(&mut self, key: &DataInput, value: i64);
 
     /// Merge `other` into `self`.
     fn tumbling_merge(&mut self, other: &Self);
@@ -105,8 +105,8 @@ impl TumblingWindowSketch for FoldCMS {
         )
     }
 
-    fn tumbling_insert(&mut self, key: &DataInput, value: i64) {
-        self.insert(key, value);
+    fn tumbling_update_weighted(&mut self, key: &DataInput, weight: i64) {
+        self.update_weighted(key, weight);
     }
 
     fn tumbling_merge(&mut self, other: &Self) {
@@ -130,8 +130,8 @@ impl TumblingWindowSketch for FoldCS {
         )
     }
 
-    fn tumbling_insert(&mut self, key: &DataInput, value: i64) {
-        self.insert(key, value);
+    fn tumbling_update_weighted(&mut self, key: &DataInput, weight: i64) {
+        self.update_weighted(key, weight);
     }
 
     fn tumbling_merge(&mut self, other: &Self) {
@@ -153,7 +153,7 @@ impl TumblingWindowSketch for KLL {
         }
     }
 
-    fn tumbling_insert(&mut self, key: &DataInput, _value: i64) {
+    fn tumbling_update_weighted(&mut self, key: &DataInput, _weight: i64) {
         // KLL is a quantile sketch — each call is one observation.
         let _ = self.update_data_input(key);
     }
@@ -174,7 +174,7 @@ impl TumblingWindowSketch for UnivMonQ {
         UnivMonQ::new(*config).expect("TumblingWindow received an invalid UnivMon-Q config")
     }
 
-    fn tumbling_insert(&mut self, key: &DataInput, _value: i64) {
+    fn tumbling_update_weighted(&mut self, key: &DataInput, _weight: i64) {
         let _ = self.update_data_input(key);
     }
 
@@ -304,12 +304,12 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
     /// arrivals is closed as an empty window like any other and takes a place
     /// in `max_windows`, so a long enough gap retires every window that holds
     /// data.
-    pub fn insert(&mut self, time: u64, key: &DataInput, value: i64) {
+    pub fn update_weighted(&mut self, time: u64, key: &DataInput, weight: i64) {
         // Advance windows as needed.
         while time >= self.active_start + self.window_size {
             self.close_active();
         }
-        self.active.tumbling_insert(key, value);
+        self.active.tumbling_update_weighted(key, weight);
     }
 
     /// Force-close the active window at `current_time` and open a fresh one.
@@ -481,7 +481,7 @@ mod tests {
     fn fold_cms_clear_resets_to_empty() {
         let mut sk: FoldCMS = FoldCMS::new(3, 1024, 3, 10);
         for i in 0..50u64 {
-            sk.insert(&DataInput::U64(i), 1);
+            sk.update_weighted(&DataInput::U64(i), 1);
         }
         assert!(sk.query(&DataInput::U64(0)) > 0);
 
@@ -501,7 +501,7 @@ mod tests {
     fn fold_cs_clear_resets_to_empty() {
         let mut sk: FoldCS = FoldCS::new(3, 1024, 3, 10);
         for i in 0..50u64 {
-            sk.insert(&DataInput::U64(i), 1);
+            sk.update_weighted(&DataInput::U64(i), 1);
         }
         assert_ne!(sk.query(&DataInput::U64(0)), 0);
 
@@ -546,7 +546,7 @@ mod tests {
         };
         let mut windows: TumblingWindow<UnivMonQ> = TumblingWindow::new(100, 4, config, 2);
         for value in 0..300_u64 {
-            windows.insert(value, &DataInput::F64((value % 50) as f64), 1);
+            windows.update_weighted(value, &DataInput::F64((value % 50) as f64), 1);
         }
         let merged = windows.query_all();
         assert_eq!(merged.count(), 300);
@@ -581,16 +581,16 @@ mod tests {
         let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 10, config, 4);
 
         // Insert into window 0 (time 0..99).
-        tw.insert(0, &DataInput::Str("a"), 1);
-        tw.insert(50, &DataInput::Str("a"), 1);
+        tw.update_weighted(0, &DataInput::Str("a"), 1);
+        tw.update_weighted(50, &DataInput::Str("a"), 1);
         assert_eq!(tw.closed_count(), 0);
 
         // Time 100 → window 0 closes, window 1 opens.
-        tw.insert(100, &DataInput::Str("b"), 1);
+        tw.update_weighted(100, &DataInput::Str("b"), 1);
         assert_eq!(tw.closed_count(), 1);
 
         // Time 200 → window 1 closes.
-        tw.insert(200, &DataInput::Str("c"), 1);
+        tw.update_weighted(200, &DataInput::Str("c"), 1);
         assert_eq!(tw.closed_count(), 2);
     }
 
@@ -607,7 +607,7 @@ mod tests {
         // One key per window: five windows open, four of them close, and the
         // fourth close pushes the retained count past max_windows.
         for w in 0..5 {
-            tw.insert(w * 100, &DataInput::U64(w), 1);
+            tw.update_weighted(w * 100, &DataInput::U64(w), 1);
         }
 
         assert_eq!(
@@ -649,7 +649,7 @@ mod tests {
         // three sketches go back to the pool and every close after the first
         // eviction is served from the free list.
         for w in 0..6 {
-            tw.insert(w * 100, &DataInput::U64(w), 1);
+            tw.update_weighted(w * 100, &DataInput::U64(w), 1);
         }
 
         assert_eq!(tw.closed_count(), 2, "max_windows 2 retains two windows");
@@ -701,8 +701,8 @@ mod tests {
         let keys: Vec<DataInput> = (0..20u64).map(DataInput::U64).collect();
         for (i, key) in keys.iter().enumerate() {
             let time = (i as u64) * 30; // spread across windows
-            tw.insert(time, key, 1);
-            manual.insert(key, 1);
+            tw.update_weighted(time, key, 1);
+            manual.update_weighted(key, 1);
         }
 
         let merged = tw.query_all();
@@ -726,11 +726,11 @@ mod tests {
         let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 10, config, 4);
 
         // Window 0: key "old"
-        tw.insert(0, &DataInput::Str("old"), 5);
+        tw.update_weighted(0, &DataInput::Str("old"), 5);
         // Window 1: key "new"
-        tw.insert(100, &DataInput::Str("new"), 10);
+        tw.update_weighted(100, &DataInput::Str("new"), 10);
         // Window 2 (active): key "active"
-        tw.insert(200, &DataInput::Str("active"), 7);
+        tw.update_weighted(200, &DataInput::Str("active"), 7);
 
         // query_recent(1) should include 1 most recent closed + active.
         let recent = tw.query_recent(1);
@@ -775,7 +775,7 @@ mod tests {
         );
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &DataInput::U64(value), 1);
+            tw.update_weighted(i as u64, &DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -828,7 +828,7 @@ mod tests {
         );
 
         for (i, &v) in values.iter().enumerate() {
-            tw.insert(i as u64, &DataInput::F64(v), 1);
+            tw.update_weighted(i as u64, &DataInput::F64(v), 1);
         }
 
         let merged = tw.query_all();
@@ -862,7 +862,7 @@ mod tests {
         };
         let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 10, config, 4);
 
-        tw.insert(10, &DataInput::Str("x"), 5);
+        tw.update_weighted(10, &DataInput::Str("x"), 5);
         assert_eq!(tw.closed_count(), 0);
 
         tw.flush(50);
@@ -888,9 +888,9 @@ mod tests {
         };
         let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(100, 10, config, 4);
 
-        tw.insert(0, &DataInput::Str("hello"), 5);
-        tw.insert(100, &DataInput::Str("hello"), 3);
-        tw.insert(200, &DataInput::Str("hello"), 2);
+        tw.update_weighted(0, &DataInput::Str("hello"), 5);
+        tw.update_weighted(100, &DataInput::Str("hello"), 3);
+        tw.update_weighted(200, &DataInput::Str("hello"), 2);
 
         let merged = tw.query_all();
         assert_eq!(merged.query(&DataInput::Str("hello")), 10);
@@ -908,7 +908,7 @@ mod tests {
 
         for w in 0..4u64 {
             for i in (w * 10)..((w + 1) * 10) {
-                tw.insert(w * 100 + i, &DataInput::U64(i), 1);
+                tw.update_weighted(w * 100 + i, &DataInput::U64(i), 1);
             }
         }
 
@@ -960,7 +960,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &DataInput::U64(value), 1);
+            tw.update_weighted(i as u64, &DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1042,8 +1042,8 @@ mod tests {
         for (i, &value) in stream.iter().enumerate() {
             let t = i as u64;
             let key = DataInput::U64(value);
-            tumbling_flat.insert(t, &key, 1);
-            tumbling_hier.insert(t, &key, 1);
+            tumbling_flat.update_weighted(t, &key, 1);
+            tumbling_hier.update_weighted(t, &key, 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1101,7 +1101,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &DataInput::U64(value), 1);
+            tw.update_weighted(i as u64, &DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1166,7 +1166,7 @@ mod tests {
         let values = sample_uniform_f64(0.0, 10_000_000.0, total_samples, 0x411_00171);
 
         for (i, &v) in values.iter().enumerate() {
-            tw.insert(i as u64, &DataInput::F64(v), 1);
+            tw.update_weighted(i as u64, &DataInput::F64(v), 1);
         }
 
         let merged = tw.query_all();
@@ -1217,11 +1217,11 @@ mod tests {
         let phase2 = sample_normal_f64(500.0, 50.0, samples_per_phase, 0xFA_ACE2);
 
         for (i, &v) in phase1.iter().enumerate() {
-            tw.insert(i as u64, &DataInput::F64(v), 1);
+            tw.update_weighted(i as u64, &DataInput::F64(v), 1);
         }
         for (i, &v) in phase2.iter().enumerate() {
             let t = (samples_per_phase + i) as u64;
-            tw.insert(t, &DataInput::F64(v), 1);
+            tw.update_weighted(t, &DataInput::F64(v), 1);
         }
 
         let merged = tw.query_all();
@@ -1279,8 +1279,8 @@ mod tests {
         let values = sample_uniform_f64(0.0, 1_000_000.0, 20_000, 0x5EED_0001);
         for (i, &v) in values.iter().enumerate() {
             let t = i as u64;
-            tw_a.insert(t, &DataInput::F64(v), 1);
-            tw_b.insert(t, &DataInput::F64(v), 1);
+            tw_a.update_weighted(t, &DataInput::F64(v), 1);
+            tw_b.update_weighted(t, &DataInput::F64(v), 1);
         }
 
         let bytes_a = tw_a.query_all().serialize_to_bytes().unwrap();
@@ -1302,7 +1302,7 @@ mod tests {
             6,
         );
         for (i, &v) in values.iter().enumerate() {
-            tw_c.insert(i as u64, &DataInput::F64(v), 1);
+            tw_c.update_weighted(i as u64, &DataInput::F64(v), 1);
         }
         let bytes_c = tw_c.query_all().serialize_to_bytes().unwrap();
         assert_ne!(
@@ -1350,7 +1350,7 @@ mod tests {
             let start = w * samples_per_window;
             let end = start + samples_per_window;
             for (i, &value) in stream.iter().enumerate().take(end).skip(start) {
-                tw.insert(i as u64, &DataInput::U64(value), 1);
+                tw.update_weighted(i as u64, &DataInput::U64(value), 1);
                 *window_truth.entry(value).or_insert(0) += 1;
             }
             per_window_truth.push(window_truth);
@@ -1464,7 +1464,7 @@ mod tests {
             let start = w * samples_per_window;
             let end = start + samples_per_window;
             for (i, &value) in stream.iter().enumerate().take(end).skip(start) {
-                tw.insert(i as u64, &DataInput::U64(value), 1);
+                tw.update_weighted(i as u64, &DataInput::U64(value), 1);
                 *window_truth.entry(value).or_insert(0) += 1;
             }
             per_window_truth.push(window_truth);
@@ -1554,7 +1554,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &DataInput::U64(value), 1);
+            tw.update_weighted(i as u64, &DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1670,7 +1670,7 @@ mod tests {
             let start = w * samples_per_window;
             let end = start + samples_per_window;
             for (i, &value) in stream.iter().enumerate().take(end).skip(start) {
-                tw.insert(i as u64, &DataInput::U64(value), 1);
+                tw.update_weighted(i as u64, &DataInput::U64(value), 1);
                 *window_truth.entry(value).or_insert(0) += 1;
             }
             per_window_truth.push(window_truth);
@@ -1767,7 +1767,7 @@ mod tests {
             let end = start + samples_per_window;
             let window_values: Vec<f64> = values[start..end].to_vec();
             for (j, &v) in window_values.iter().enumerate() {
-                tw.insert((start + j) as u64, &DataInput::F64(v), 1);
+                tw.update_weighted((start + j) as u64, &DataInput::F64(v), 1);
             }
             per_window.push(window_values);
         }
@@ -1833,7 +1833,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &DataInput::U64(value), 1);
+            tw.update_weighted(i as u64, &DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1933,8 +1933,8 @@ mod tests {
 
         for (i, &value) in stream.iter().enumerate() {
             let key = DataInput::U64(value);
-            tw.insert(i as u64, &key, 1);
-            mono.insert(&key, 1);
+            tw.update_weighted(i as u64, &key, 1);
+            mono.update_weighted(&key, 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1992,8 +1992,8 @@ mod tests {
 
         for (i, &value) in stream.iter().enumerate() {
             let key = DataInput::U64(value);
-            tw.insert(i as u64, &key, 1);
-            mono.insert(&key, 1);
+            tw.update_weighted(i as u64, &key, 1);
+            mono.update_weighted(&key, 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -2042,7 +2042,7 @@ mod tests {
         let values = sample_uniform_f64(0.0, 10_000_000.0, total_samples, 0xDE_AD03);
 
         for (i, &v) in values.iter().enumerate() {
-            tw.insert(i as u64, &DataInput::F64(v), 1);
+            tw.update_weighted(i as u64, &DataInput::F64(v), 1);
             mono.update_data_input(&DataInput::F64(v)).unwrap();
         }
 
@@ -2105,7 +2105,7 @@ mod tests {
             let stream = sample_zipf_u64(5000, 1.1, total_samples, 0x51_0001);
             let mut truth = HashMap::<u64, i64>::new();
             for (i, &value) in stream.iter().enumerate() {
-                tw.insert(i as u64, &DataInput::U64(value), 1);
+                tw.update_weighted(i as u64, &DataInput::U64(value), 1);
                 *truth.entry(value).or_insert(0) += 1;
             }
 
@@ -2144,7 +2144,7 @@ mod tests {
             let stream = sample_zipf_u64(5000, 1.1, total_samples, 0x51_0002);
             let mut truth = HashMap::<u64, i64>::new();
             for (i, &value) in stream.iter().enumerate() {
-                tw.insert(i as u64, &DataInput::U64(value), 1);
+                tw.update_weighted(i as u64, &DataInput::U64(value), 1);
                 *truth.entry(value).or_insert(0) += 1;
             }
 
@@ -2185,7 +2185,7 @@ mod tests {
 
             let values = sample_uniform_f64(0.0, 1_000_000.0, total_samples, 0x51_0003);
             for (i, &v) in values.iter().enumerate() {
-                tw.insert(i as u64, &DataInput::F64(v), 1);
+                tw.update_weighted(i as u64, &DataInput::F64(v), 1);
             }
 
             assert_eq!(tw.closed_count(), 0, "no windows should have closed");
@@ -2230,7 +2230,7 @@ mod tests {
         let stream = sample_zipf_u64(500, 1.2, total_samples, 0x77_1100);
 
         for (i, &value) in stream.iter().enumerate() {
-            tw.insert(i as u64, &DataInput::U64(value), 1);
+            tw.update_weighted(i as u64, &DataInput::U64(value), 1);
         }
 
         // With 5000 samples and window_size=10, there are 500 windows total.
@@ -2309,7 +2309,7 @@ mod tests {
             let n_samples = if w == 2 { heavy_samples } else { light_samples };
             let stream = sample_zipf_u64(domain, exponent, n_samples, 0xBE_EF00 + w as u64);
             for &value in &stream {
-                tw.insert(time, &DataInput::U64(value), 1);
+                tw.update_weighted(time, &DataInput::U64(value), 1);
                 *truth.entry(value).or_insert(0) += 1;
                 time += 1;
             }

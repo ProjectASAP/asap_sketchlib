@@ -58,7 +58,7 @@ fn truth_of(stream: &[i64]) -> FreqTruth {
 fn filled(capacity: usize, stream: &[i64]) -> SpaceSaving {
     let mut summary = SpaceSaving::with_capacity(capacity);
     for key in stream {
-        summary.insert(&DataInput::I64(*key));
+        summary.update(&DataInput::I64(*key));
     }
     summary
 }
@@ -197,14 +197,14 @@ fn a_guaranteed_key_really_outranks_everything_dropped() {
 fn an_arrival_displaces_the_minimum_and_inherits_its_count() {
     let mut summary: SpaceSaving = SpaceSaving::with_capacity(2);
     for _ in 0..3 {
-        summary.insert(&DataInput::I64(1));
+        summary.update(&DataInput::I64(1));
     }
     for _ in 0..2 {
-        summary.insert(&DataInput::I64(2));
+        summary.update(&DataInput::I64(2));
     }
     assert_eq!(summary.min_count(), 2);
 
-    summary.insert(&DataInput::I64(3));
+    summary.update(&DataInput::I64(3));
 
     assert_eq!(summary.len(), 2);
     assert_eq!(summary.estimate(&DataInput::I64(1)), 3);
@@ -282,13 +282,13 @@ fn a_weighted_arrival_matches_repeating_it() {
 
     let mut counts: HashMap<i64, u64> = HashMap::new();
     for key in &stream {
-        singles.insert(&DataInput::I64(*key));
+        singles.update(&DataInput::I64(*key));
         *counts.entry(*key).or_default() += 1;
     }
     let mut keys: Vec<i64> = counts.keys().copied().collect();
     keys.sort_unstable();
     for key in keys {
-        weighted.insert_many(&DataInput::I64(key), counts[&key]);
+        weighted.update_weighted(&DataInput::I64(key), counts[&key]);
     }
 
     assert_eq!(weighted.total(), singles.total());
@@ -383,7 +383,7 @@ fn a_serde_round_trip_preserves_every_answer() {
     let mut decoded = decoded;
     let hottest = key_of(&summary.top_k(1)[0].0);
     let before = decoded.estimate(&DataInput::I64(hottest));
-    decoded.insert(&DataInput::I64(hottest));
+    decoded.update(&DataInput::I64(hottest));
     assert_eq!(decoded.estimate(&DataInput::I64(hottest)), before + 1);
 }
 
@@ -418,9 +418,9 @@ fn a_weighted_arrival_matches_repeating_it_under_eviction() {
     let mut weighted: SpaceSaving = SpaceSaving::with_capacity(64);
     for key in &keys {
         for _ in 0..counts[key] {
-            singles.insert(&DataInput::I64(*key));
+            singles.update(&DataInput::I64(*key));
         }
-        weighted.insert_many(&DataInput::I64(*key), counts[key]);
+        weighted.update_weighted(&DataInput::I64(*key), counts[key]);
     }
 
     assert_eq!(weighted.len(), 64, "the run should have evicted heavily");
@@ -442,22 +442,22 @@ fn a_weighted_arrival_matches_repeating_it_under_eviction() {
     assert_eq!(left, right, "a weighted arrival diverged from repeating it");
 }
 
-/// `bulk_insert` is the loop it replaces, and a zero weight records nothing.
+/// `update_batch` is the loop it replaces, and a zero weight records nothing.
 #[test]
 fn bulk_insert_matches_repeated_inserts_and_a_zero_weight_is_inert() {
     let stream = stream();
     let values: Vec<DataInput> = stream.iter().map(|key| DataInput::I64(*key)).collect();
 
     let mut bulk: SpaceSaving = SpaceSaving::with_capacity(128);
-    bulk.bulk_insert(&values);
+    bulk.update_batch(&values);
     let one_at_a_time = filled(128, &stream);
 
     assert_eq!(bulk.total(), one_at_a_time.total());
     assert_eq!(bulk.top_k(usize::MAX), one_at_a_time.top_k(usize::MAX));
 
     let before = bulk.top_k(usize::MAX);
-    bulk.insert_many(&DataInput::I64(stream[0]), 0);
-    bulk.insert_many(&DataInput::I64(i64::MIN), 0);
+    bulk.update_weighted(&DataInput::I64(stream[0]), 0);
+    bulk.update_weighted(&DataInput::I64(i64::MIN), 0);
     assert_eq!(bulk.total(), one_at_a_time.total());
     assert_eq!(bulk.len(), one_at_a_time.len());
     assert_eq!(bulk.top_k(usize::MAX), before);
@@ -469,7 +469,7 @@ fn a_zero_capacity_summary_still_answers() {
     let mut summary: SpaceSaving = SpaceSaving::with_capacity(0);
     assert_eq!(summary.capacity(), 1);
     for key in 0..10i64 {
-        summary.insert(&DataInput::I64(key));
+        summary.update(&DataInput::I64(key));
     }
     assert_eq!(summary.len(), 1);
     assert_eq!(summary.total(), 10);
@@ -486,10 +486,10 @@ fn a_merge_into_an_under_full_summary_keeps_the_ceiling_honest() {
     let mut left: SpaceSaving = SpaceSaving::with_capacity(33);
     let mut right: SpaceSaving = SpaceSaving::with_capacity(1);
     for _ in 0..10 {
-        right.insert(&DataInput::I64(7));
+        right.update(&DataInput::I64(7));
     }
     for _ in 0..20 {
-        right.insert(&DataInput::I64(8));
+        right.update(&DataInput::I64(8));
     }
 
     left.merge(&right);
@@ -570,10 +570,10 @@ fn a_merge_picks_the_same_survivors_every_time() {
             right_keys.reverse();
         }
         for key in left_keys {
-            left.insert(&DataInput::I64(key));
+            left.update(&DataInput::I64(key));
         }
         for key in right_keys {
-            right.insert(&DataInput::I64(key));
+            right.update(&DataInput::I64(key));
         }
         left.merge(&right);
         left.top_k(usize::MAX)
@@ -719,7 +719,7 @@ fn the_default_summary_holds_the_default_capacity() {
 
     let stream = stream();
     for key in &stream {
-        summary.insert(&DataInput::I64(*key));
+        summary.update(&DataInput::I64(*key));
     }
 
     assert_eq!(summary.len(), SPACE_SAVING_DEFAULT_CAPACITY);
@@ -767,7 +767,7 @@ mod keyed_bucket {
 
     impl FrequencyOps<i64> for ElasticAdapter {
         fn ingest(&mut self, key: &i64) {
-            self.0.insert(flow_key(*key));
+            self.0.update(flow_key(*key));
         }
         fn estimate(&self, key: &i64) -> f64 {
             self.0.query(flow_key(*key)) as f64
@@ -813,11 +813,11 @@ mod keyed_bucket {
             let mut right = Coco::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed + 2);
             for (i, k) in stream.iter().enumerate() {
                 let key = flow_key(*k);
-                one.insert(&key, 1);
+                one.update_weighted(&key, 1);
                 if i % 2 == 0 {
-                    left.insert(&key, 1);
+                    left.update_weighted(&key, 1);
                 } else {
-                    right.insert(&key, 1);
+                    right.update_weighted(&key, 1);
                 }
             }
             left.merge(&right);
@@ -838,9 +838,9 @@ mod keyed_bucket {
     /// exactly; every other flow reads the light layer, so the excess above the
     /// truth is that layer's Count-Min error and the whole tolerance is absolute.
     ///
-    /// `turnstile_battery` does not fit: `insert_many` is documented as repeated
+    /// `turnstile_battery` does not fit: `update_weighted` is documented as repeated
     /// positive votes, and there is no decrement path. The battery ingests through
-    /// `insert` alone -- overload mode is documented as breaking the one-sided
+    /// `update` alone -- overload mode is documented as breaking the one-sided
     /// guarantee, so a battery holding `one_sided: true` must not reach it.
     #[test]
     fn elastic_passes_frequency_and_merge_conformance() {
@@ -872,11 +872,11 @@ mod keyed_bucket {
             Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(256, 2, COCO_SEED);
         let mut total = 0u64;
         for i in 0..3000u64 {
-            coco.insert(&format!("aaa{}", i % 50), 7);
+            coco.update_weighted(&format!("aaa{}", i % 50), 7);
             total += 7;
         }
         for i in 0..2000u64 {
-            coco.insert(&format!("zzz{}", i % 30), 3);
+            coco.update_weighted(&format!("zzz{}", i % 30), 3);
             total += 3;
         }
 
@@ -906,7 +906,7 @@ mod keyed_bucket {
 
         for key in zipf_u64(40_000, 2_000, 1.2, 4242) {
             let id = format!("key::{key}");
-            coco.insert(&id, 2);
+            coco.update_weighted(&id, 2);
             *truth.entry(id).or_insert(0) += 2;
             total += 2;
         }
@@ -946,16 +946,16 @@ mod keyed_bucket {
             let mut sent = 0u64;
             for (i, key) in keys.iter().enumerate() {
                 for _ in 0..BG_WEIGHT {
-                    coco.insert(key, 1);
+                    coco.update_weighted(key, 1);
                 }
                 // spread the target's packets evenly through the background stream
                 while sent * (BG_KEYS as u64) < TARGET * (i as u64 + 1) {
-                    coco.insert("flow::target", 1);
+                    coco.update_weighted("flow::target", 1);
                     sent += 1;
                 }
             }
             while sent < TARGET {
-                coco.insert("flow::target", 1);
+                coco.update_weighted("flow::target", 1);
                 sent += 1;
             }
             estimates.push(coco.estimate_key("flow::target"));
@@ -1011,14 +1011,14 @@ mod keyed_bucket {
             );
             let mut sent = 0u64;
             for (i, key) in keys.iter().enumerate() {
-                coco.insert(key, 1);
+                coco.update_weighted(key, 1);
                 while sent * (BG_KEYS as u64) < HEAVY * (i as u64 + 1) {
-                    coco.insert("flow::heavy", 1);
+                    coco.update_weighted("flow::heavy", 1);
                     sent += 1;
                 }
             }
             while sent < HEAVY {
-                coco.insert("flow::heavy", 1);
+                coco.update_weighted("flow::heavy", 1);
                 sent += 1;
             }
             if coco.recorded_flows().any(|(key, _)| key == "flow::heavy") {
@@ -1050,7 +1050,7 @@ mod keyed_bucket {
                 2 => "hot-gamma".to_string(),
                 _ => format!("bg{}", i % 977),
             };
-            sk.insert(id.clone());
+            sk.update(id.clone());
             *expected.entry(id).or_insert(0) += 1;
         }
 
@@ -1079,10 +1079,10 @@ mod keyed_bucket {
             let mut sk =
                 Elastic::<asap_sketchlib::DefaultXxHasher>::init_with_dimensions(8, rows, cols);
             for _ in 0..TARGET {
-                sk.insert("flow::target".to_string());
+                sk.update("flow::target".to_string());
             }
             for i in 0..BG_KEYS {
-                sk.insert(format!("bg::{i}"));
+                sk.update(format!("bg::{i}"));
             }
             assert!(
                 !sk.heavy.iter().any(|b| b.flow_id == "flow::target"),
@@ -1124,7 +1124,7 @@ mod keyed_bucket {
             } else {
                 format!("flow::{key}")
             };
-            sk.insert(id.clone());
+            sk.update(id.clone());
             *truth.entry(id).or_insert(0) += 1;
         }
 
@@ -1195,7 +1195,7 @@ mod partial_key_and_heavy_maintenance {
         let mut inserted = 0u64;
         for (i, key) in coco_keys().iter().enumerate() {
             let weight = REPEATS + (i % 3) as u64;
-            coco.insert(key, weight);
+            coco.update_weighted(key, weight);
             inserted += weight;
         }
         (coco, inserted)
@@ -1288,8 +1288,8 @@ mod partial_key_and_heavy_maintenance {
         );
 
         bucket.update_key("tenant-00/flow-0001");
-        bucket.add_v(7);
-        bucket.add_v(5);
+        bucket.add(7);
+        bucket.add(5);
 
         assert!(bucket.is_partial_key("tenant-00"), "prefix containment");
         assert!(bucket.is_partial_key("flow-0001"), "suffix containment");
@@ -1332,7 +1332,7 @@ mod partial_key_and_heavy_maintenance {
     fn filled_elastic(stream: &[String]) -> Elastic<DefaultXxHasher> {
         let mut sk = Elastic::<DefaultXxHasher>::init_with_dimensions(64, 3, 1_024);
         for id in stream {
-            sk.insert(id.clone());
+            sk.update(id.clone());
         }
         sk
     }
@@ -1425,7 +1425,7 @@ mod partial_key_and_heavy_maintenance {
         let mut sk = Elastic::<DefaultXxHasher>::init_with_dimensions(8, 3, 256);
         for e in 0..64 {
             for _ in 0..20 {
-                sk.insert_heavy_only(format!("flow-{e:03}"));
+                sk.update_heavy_only(format!("flow-{e:03}"));
             }
         }
         for e in 0..64 {
@@ -1703,8 +1703,8 @@ mod documented_matrix {
                 let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
                 for key in &input.keys {
                     let d = input.data(*key);
-                    regular.insert(&d);
-                    fast.insert(&d);
+                    regular.update(&d);
+                    fast.update(&d);
                 }
                 let spec = CountMinSpec::new(rows, cols);
                 assert_countmin_heavy_hitters(
@@ -1733,8 +1733,8 @@ mod documented_matrix {
                     let mut fast = CountMin::<$mat, FastPath>::from_storage($mat::default());
                     for key in &input.keys {
                         let d = input.data(*key);
-                        regular.insert(&d);
-                        fast.insert(&d);
+                        regular.update(&d);
+                        fast.update(&d);
                     }
                     let spec = CountMinSpec::new($rows, $cols);
                     assert_countmin_heavy_hitters(
@@ -1788,8 +1788,8 @@ mod documented_matrix {
                 let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
                 for key in &input.keys {
                     let d = input.data(*key);
-                    regular.insert(&d);
-                    fast.insert(&d);
+                    regular.update(&d);
+                    fast.update(&d);
                 }
                 let spec = CountSketchSpec::new(rows, cols);
                 assert_countsketch_heavy_hitters(
@@ -1818,8 +1818,8 @@ mod documented_matrix {
                     let mut fast = Count::<$mat, FastPath>::from_storage($mat::default());
                     for key in &input.keys {
                         let d = input.data(*key);
-                        regular.insert(&d);
-                        fast.insert(&d);
+                        regular.update(&d);
+                        fast.update(&d);
                     }
                     let spec = CountSketchSpec::new($rows, $cols);
                     assert_countsketch_heavy_hitters(
@@ -1879,7 +1879,7 @@ mod documented_matrix {
         for capacity in CAPACITIES {
             let mut summary: SpaceSaving = SpaceSaving::with_capacity(capacity);
             for key in &input.keys {
-                summary.insert(&input.data(*key));
+                summary.update(&input.data(*key));
             }
             let ceiling = n / capacity as f64;
             let context = format!(
@@ -1951,14 +1951,14 @@ mod documented_matrix {
         let stride = background / (per_hot * HOT.len()).max(1);
         for (i, key) in input.keys.iter().enumerate() {
             let id = format!("bg::{key}");
-            sk.insert(id.clone());
+            sk.update(id.clone());
             *expected.entry(id).or_insert(0) += 1;
             // Interleave the hot flows through the stream rather than
             // appending them, so they compete for buckets the whole way.
             if stride > 0 && i % stride == 0 {
                 let hot = HOT[hot_cursor % HOT.len()].to_string();
                 hot_cursor += 1;
-                sk.insert(hot.clone());
+                sk.update(hot.clone());
                 *expected.entry(hot).or_insert(0) += 1;
             }
         }

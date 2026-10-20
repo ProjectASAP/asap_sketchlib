@@ -30,12 +30,12 @@ fn init_univmon(heap_size: usize, sketch_row: usize, sketch_col: usize, layer_si
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &DataInput, value: i64)
+fn update_weighted(&mut self, key: &DataInput, weight: i64)
 fn fast_insert(&mut self, key: &DataInput, value: i64)
 fn free(&mut self)
 ```
 
-`insert` maintains the cumulative sampled substream at every selected layer.
+`update_weighted` maintains the cumulative sampled substream at every selected layer.
 `fast_insert` uses the Joltik update-last-layer layout and reconstructs logical
 layers during queries. Choose one update method for the lifetime of a sketch;
 mixing the two physical layouts is rejected.
@@ -94,7 +94,7 @@ length), refused on both sides past it.
 use asap_sketchlib::{DataInput, UnivMon};
 
 let mut um = UnivMon::init_univmon(32, 3, 1024, 4);
-um.insert(&DataInput::Str("flow"), 1);
+um.update_weighted(&DataInput::Str("flow"), 1);
 assert!(um.calc_l1() >= 1.0);
 ```
 

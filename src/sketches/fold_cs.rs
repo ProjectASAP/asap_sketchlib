@@ -183,11 +183,11 @@ impl<H: SketchHasher> FoldCS<H> {
     ///
     /// For each row, the stored value is `sign * delta` where `sign` is ±1
     /// determined by the hash function.
-    pub fn insert(&mut self, key: &DataInput, delta: i64) {
+    pub fn update_weighted(&mut self, key: &DataInput, weight: i64) {
         for r in 0..self.rows {
             let (full_col, sign) = self.hash_for(r, key);
             let fc = self.fold_col_of(full_col);
-            self.cells[r * self.fold_cols + fc].insert(full_col, sign * delta);
+            self.cells[r * self.fold_cols + fc].insert(full_col, sign * weight);
         }
         // Update top-k heap with current estimate.
         let est = self.query(key);
@@ -196,8 +196,8 @@ impl<H: SketchHasher> FoldCS<H> {
 
     /// Insert `key` once (delta = 1).
     #[inline]
-    pub fn insert_one(&mut self, key: &DataInput) {
-        self.insert(key, 1);
+    pub fn update(&mut self, key: &DataInput) {
+        self.update_weighted(key, 1);
     }
 
     // -- Point Query --------------------------------------------------------
@@ -477,7 +477,7 @@ mod tests {
     fn fold_cs_insert_query_single_key() {
         let mut sketch: FoldCS = FoldCS::new(3, 1024, 4, 10);
         let key = DataInput::Str("hello");
-        sketch.insert(&key, 7);
+        sketch.update_weighted(&key, 7);
         assert_eq!(sketch.query(&key), 7);
     }
 
@@ -485,15 +485,15 @@ mod tests {
     fn fold_cs_insert_accumulates() {
         let mut sketch: FoldCS = FoldCS::new(3, 1024, 4, 10);
         let key = DataInput::Str("hello");
-        sketch.insert(&key, 3);
-        sketch.insert(&key, 4);
+        sketch.update_weighted(&key, 3);
+        sketch.update_weighted(&key, 4);
         assert_eq!(sketch.query(&key), 7);
     }
 
     #[test]
     fn fold_cs_absent_key_returns_zero() {
         let mut sketch: FoldCS = FoldCS::new(3, 1024, 4, 10);
-        sketch.insert(&DataInput::Str("present"), 10);
+        sketch.update_weighted(&DataInput::Str("present"), 10);
         assert_eq!(sketch.query(&DataInput::Str("absent")), 0);
     }
 
@@ -501,7 +501,7 @@ mod tests {
     fn fold_cs_multiple_keys() {
         let mut sketch: FoldCS = FoldCS::new(3, 4096, 4, 10);
         for i in 0..100u64 {
-            sketch.insert(&DataInput::U64(i), i as i64);
+            sketch.update_weighted(&DataInput::U64(i), i as i64);
         }
         // Count Sketch estimates can be negative; check they are roughly correct.
         for i in 0..100u64 {
@@ -523,7 +523,7 @@ mod tests {
         // confirming sign is being applied on insert.
         let mut sketch: FoldCS = FoldCS::new(5, 1024, 4, 10);
         for i in 0..50u64 {
-            sketch.insert(&DataInput::U64(i), 1);
+            sketch.update_weighted(&DataInput::U64(i), 1);
         }
 
         let mut has_positive = false;
@@ -557,8 +557,8 @@ mod tests {
 
         let keys: Vec<DataInput> = (0..50).map(DataInput::I32).collect();
         for key in &keys {
-            fold.insert(key, 1);
-            standard.insert(key);
+            fold.update_weighted(key, 1);
+            standard.update(key);
         }
 
         // Every single query must match exactly.
@@ -583,8 +583,8 @@ mod tests {
 
         let keys: Vec<DataInput> = (0..50).map(DataInput::I32).collect();
         for key in &keys {
-            fold.insert(key, 1);
-            standard.insert(key);
+            fold.update_weighted(key, 1);
+            standard.update(key);
         }
 
         // Verify via flat counter extraction.
@@ -611,8 +611,8 @@ mod tests {
         for i in 0..30 {
             let key = DataInput::U64(i);
             let count = (i + 1) as i64;
-            fold.insert(&key, count);
-            standard.insert_many(&key, count);
+            fold.update_weighted(&key, count);
+            standard.update_weighted(&key, count);
         }
 
         for i in 0..30 {
@@ -633,8 +633,8 @@ mod tests {
         let mut b: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
 
         let key = DataInput::Str("user_001");
-        a.insert(&key, 100);
-        b.insert(&key, 200);
+        a.update_weighted(&key, 100);
+        b.update_weighted(&key, 200);
 
         a.merge_same_level(&b);
         assert_eq!(a.query(&key), 300);
@@ -653,13 +653,13 @@ mod tests {
 
         for i in 0..20 {
             let key = DataInput::U64(i);
-            fa.insert(&key, 1);
-            sa.insert(&key);
+            fa.update_weighted(&key, 1);
+            sa.update(&key);
         }
         for i in 10..30 {
             let key = DataInput::U64(i);
-            fb.insert(&key, 1);
-            sb.insert(&key);
+            fb.update_weighted(&key, 1);
+            sb.update(&key);
         }
 
         fa.merge_same_level(&fb);
@@ -702,8 +702,8 @@ mod tests {
 
         let key_a = DataInput::Str("alpha");
         let key_b = DataInput::Str("beta");
-        a.insert(&key_a, 10);
-        b.insert(&key_b, 20);
+        a.update_weighted(&key_a, 10);
+        b.update_weighted(&key_b, 20);
 
         let merged = FoldCS::unfold_merge(&a, &b);
         assert_eq!(merged.fold_level(), 1);
@@ -724,13 +724,13 @@ mod tests {
 
         for i in 0..40 {
             let key = DataInput::U64(i);
-            fa.insert(&key, (i + 1) as i64);
-            sa.insert_many(&key, (i + 1) as i64);
+            fa.update_weighted(&key, (i + 1) as i64);
+            sa.update_weighted(&key, (i + 1) as i64);
         }
         for i in 20..60 {
             let key = DataInput::U64(i);
-            fb.insert(&key, (i + 1) as i64);
-            sb.insert_many(&key, (i + 1) as i64);
+            fb.update_weighted(&key, (i + 1) as i64);
+            sb.update_weighted(&key, (i + 1) as i64);
         }
 
         let merged_fold = FoldCS::unfold_merge(&fa, &fb);
@@ -761,8 +761,8 @@ mod tests {
             let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
             for i in (epoch * 10)..((epoch + 1) * 10) {
                 let key = DataInput::U64(i);
-                sk.insert(&key, 1);
-                standard.insert(&key);
+                sk.update_weighted(&key, 1);
+                standard.update(&key);
             }
             sketches.push(sk);
         }
@@ -790,7 +790,7 @@ mod tests {
 
         let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         for i in 0..30 {
-            sk.insert(&DataInput::I32(i), 1);
+            sk.update_weighted(&DataInput::I32(i), 1);
         }
 
         let flat_before = sk.to_flat_counters();
@@ -815,8 +815,8 @@ mod tests {
 
         for i in 0..20 {
             let key = DataInput::I32(i);
-            fold.insert(&key, 1);
-            standard.insert(&key);
+            fold.update_weighted(&key, 1);
+            standard.update(&key);
         }
 
         let flat = fold.to_flat_counters();
@@ -847,7 +847,7 @@ mod tests {
         let mut sk: FoldCS = FoldCS::new(rows, full_cols, fold_level, top_k);
         let stream = sample_zipf_u64(2_000, 1.2, 20_000, 0x5EED_C55C);
         for &value in &stream {
-            sk.insert(&DataInput::U64(value), 1);
+            sk.update_weighted(&DataInput::U64(value), 1);
         }
         assert!(
             sk.collided_cells() > 0,
@@ -901,7 +901,7 @@ mod tests {
 
         let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         for i in 0..50u64 {
-            sk.insert(&DataInput::U64(i), 1);
+            sk.update_weighted(&DataInput::U64(i), 1);
         }
 
         let total_entries = sk.total_entries();
@@ -926,12 +926,12 @@ mod tests {
         let mut sk: FoldCS = FoldCS::new(3, 1024, 3, 5);
 
         for _ in 0..100 {
-            sk.insert(&DataInput::Str("heavy"), 1);
+            sk.update_weighted(&DataInput::Str("heavy"), 1);
         }
         for _ in 0..10 {
-            sk.insert(&DataInput::Str("medium"), 1);
+            sk.update_weighted(&DataInput::Str("medium"), 1);
         }
-        sk.insert(&DataInput::Str("light"), 1);
+        sk.update_weighted(&DataInput::Str("light"), 1);
 
         let heap_items = sk.heap().heap();
         assert!(!heap_items.is_empty());
@@ -949,10 +949,10 @@ mod tests {
         let mut b: FoldCS = FoldCS::new(3, 1024, 3, 5);
 
         for _ in 0..50 {
-            a.insert(&DataInput::Str("user_x"), 1);
+            a.update_weighted(&DataInput::Str("user_x"), 1);
         }
         for _ in 0..70 {
-            b.insert(&DataInput::Str("user_x"), 1);
+            b.update_weighted(&DataInput::Str("user_x"), 1);
         }
 
         a.merge_same_level(&b);
@@ -972,10 +972,10 @@ mod tests {
         let mut b: FoldCS = FoldCS::new(3, 512, 2, 5);
 
         for _ in 0..40 {
-            a.insert(&DataInput::Str("endpoint_a"), 1);
+            a.update_weighted(&DataInput::Str("endpoint_a"), 1);
         }
         for _ in 0..60 {
-            b.insert(&DataInput::Str("endpoint_a"), 1);
+            b.update_weighted(&DataInput::Str("endpoint_a"), 1);
         }
 
         let merged = FoldCS::unfold_merge(&a, &b);
@@ -1003,7 +1003,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for value in sample_zipf_u64(domain, exponent, samples, 0x5eed_c0de) {
-            fold.insert(&DataInput::U64(value), 1);
+            fold.update_weighted(&DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1051,8 +1051,8 @@ mod tests {
                 let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
                 for i in (epoch * 10)..((epoch + 1) * 10) {
                     let key = DataInput::U64(i);
-                    sk.insert(&key, 1);
-                    standard.insert(&key);
+                    sk.update_weighted(&key, 1);
+                    standard.update(&key);
                 }
                 sketches.push(sk);
             }
@@ -1081,7 +1081,7 @@ mod tests {
 
         let mut sk: FoldCS = FoldCS::new(rows, cols, fold_level, 10);
         for i in 0..40 {
-            sk.insert(&DataInput::U64(i), (i + 1) as i64);
+            sk.update_weighted(&DataInput::U64(i), (i + 1) as i64);
         }
 
         let expected = sk.to_flat_counters();
@@ -1101,7 +1101,7 @@ mod tests {
     #[test]
     fn unfold_to_same_level_returns_clone() {
         let mut sk: FoldCS = FoldCS::new(3, 256, 3, 10);
-        sk.insert(&DataInput::Str("x"), 42);
+        sk.update_weighted(&DataInput::Str("x"), 42);
 
         let result = sk.unfold_to(3);
         assert_eq!(result.fold_level(), 3);
@@ -1118,10 +1118,10 @@ mod tests {
         let mut sk_low: FoldCS = FoldCS::new(rows, cols, 2, 10);
 
         for i in 0..20u64 {
-            sk_high.insert(&DataInput::U64(i), 1);
+            sk_high.update_weighted(&DataInput::U64(i), 1);
         }
         for i in 10..30u64 {
-            sk_low.insert(&DataInput::U64(i), 1);
+            sk_low.update_weighted(&DataInput::U64(i), 1);
         }
 
         let merged = FoldCS::hierarchical_merge(&[sk_high.clone(), sk_low.clone()]);

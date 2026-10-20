@@ -1158,7 +1158,7 @@ fn assert_head_routes_to_the_right_cell<F>(
         hydra.update(&[region, service], &v, None).expect("arity 2");
         for (slot, key) in lattice.iter().enumerate() {
             if h2_matches(key, region, service) {
-                reference[slot].insert(&v, None);
+                reference[slot].update(&v, None);
             }
         }
     }
@@ -1490,7 +1490,7 @@ fn univmon_weighted_metrics_and_fast_insert_parity() {
     let stream = zipf_u64(20_000, 1000, 1.2, 4003);
     for (i, k) in stream.iter().enumerate() {
         let w = 1 + (i % 7) as i64;
-        um.insert(&DataInput::U32(*k as u32), w);
+        um.update_weighted(&DataInput::U32(*k as u32), w);
         fast.fast_insert(&DataInput::U32(*k as u32), w);
         truth.observe_weighted(*k as i64, w);
     }
@@ -1534,7 +1534,7 @@ fn univmon_pyramid_weighted_metrics() {
     let stream = zipf_u64(15_000, 800, 1.3, 4004);
     for (i, k) in stream.iter().enumerate() {
         let w = 1 + (i % 3) as i64;
-        up.insert(&DataInput::U32(*k as u32), w);
+        up.update_weighted(&DataInput::U32(*k as u32), w);
         truth.observe_weighted(*k as i64, w);
     }
     assert_eq!(
@@ -1601,8 +1601,8 @@ fn tumbling_foldcms_weighted_windows_exact_counts() {
     let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(10, 16, cfg, 4);
 
     for t in 0..35u64 {
-        tw.insert(t, &DataInput::Str("A"), 2);
-        tw.insert(t, &DataInput::Str("B"), 1);
+        tw.update_weighted(t, &DataInput::Str("A"), 2);
+        tw.update_weighted(t, &DataInput::Str("B"), 1);
     }
     assert_eq!(
         tw.closed_count(),
@@ -1747,7 +1747,7 @@ fn univmon_generic_g_sum_reproduces_every_named_estimator() {
     let mut truth = common::FreqTruth::default();
     for (i, k) in stream.iter().enumerate() {
         let w = 1 + (i % 7) as i64;
-        um.insert(&DataInput::U32(*k as u32), w);
+        um.update_weighted(&DataInput::U32(*k as u32), w);
         truth.observe_weighted(*k as i64, w);
     }
 
@@ -1819,7 +1819,7 @@ fn a_univmon_pool_recycles_a_returned_sketch_and_hands_back_a_cleared_one() {
 
     let mut dirty = first;
     for k in zipf_u64(5_000, 512, 1.1, 4_202) {
-        dirty.insert(&DataInput::U32(k as u32), 1);
+        dirty.update_weighted(&DataInput::U32(k as u32), 1);
     }
     assert!(dirty.calc_l1() > 0.0, "the fixture must carry mass");
     pool.put(dirty);
@@ -1887,9 +1887,9 @@ mod documented_matrix {
         for (i, key) in input.keys.iter().enumerate() {
             let w = 1 + (i % 7) as i64;
             let d = input.data(*key);
-            um.insert(&d, w);
+            um.update_weighted(&d, w);
             fast.fast_insert(&d, w);
-            pyramid.insert(&d, w);
+            pyramid.update_weighted(&d, w);
             truth.observe_weighted(*key, w);
         }
 

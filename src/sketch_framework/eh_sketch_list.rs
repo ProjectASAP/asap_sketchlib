@@ -74,42 +74,42 @@ impl EHSketchList {
     }
 
     /// Insert a value into the sketch
-    pub fn insert(&mut self, val: &DataInput) {
+    pub fn update(&mut self, val: &DataInput) {
         match self {
-            EHSketchList::CM(sketch) => sketch.insert(val),
+            EHSketchList::CM(sketch) => sketch.update(val),
             EHSketchList::COCO(sketch) => match val {
-                DataInput::Str(s) => sketch.insert(s, 1),
-                DataInput::String(s) => sketch.insert(s.as_str(), 1),
+                DataInput::Str(s) => sketch.update_weighted(s, 1),
+                DataInput::String(s) => sketch.update_weighted(s.as_str(), 1),
                 _ => {}
             },
             EHSketchList::COUNTL2HH(sketch) => sketch.fast_insert_with_count(val, 1),
-            EHSketchList::CS(sketch) => sketch.insert(val),
+            EHSketchList::CS(sketch) => sketch.update(val),
             EHSketchList::DDS(sketch) => {
                 let _ = sketch.add_input(val);
             }
             EHSketchList::ELASTIC(sketch) => match val {
-                DataInput::String(s) => sketch.insert(s.to_string()),
-                DataInput::I32(i) => sketch.insert(i.to_string()),
-                DataInput::I64(i) => sketch.insert(i.to_string()),
-                DataInput::U32(u) => sketch.insert(u.to_string()),
-                DataInput::U64(u) => sketch.insert(u.to_string()),
-                DataInput::F32(f) => sketch.insert(f.to_string()),
-                DataInput::F64(f) => sketch.insert(f.to_string()),
-                DataInput::Str(s) => sketch.insert(s.to_string()),
+                DataInput::String(s) => sketch.update(s.to_string()),
+                DataInput::I32(i) => sketch.update(i.to_string()),
+                DataInput::I64(i) => sketch.update(i.to_string()),
+                DataInput::U32(u) => sketch.update(u.to_string()),
+                DataInput::U64(u) => sketch.update(u.to_string()),
+                DataInput::F32(f) => sketch.update(f.to_string()),
+                DataInput::F64(f) => sketch.update(f.to_string()),
+                DataInput::Str(s) => sketch.update(s.to_string()),
                 DataInput::Bytes(items) => {
                     let s = String::from_utf8_lossy(items).to_string();
-                    sketch.insert(s)
+                    sketch.update(s)
                 }
-                DataInput::I8(i) => sketch.insert(i.to_string()),
-                DataInput::I16(i) => sketch.insert(i.to_string()),
-                DataInput::I128(i) => sketch.insert(i.to_string()),
-                DataInput::ISIZE(i) => sketch.insert(i.to_string()),
-                DataInput::U8(u) => sketch.insert(u.to_string()),
-                DataInput::U16(u) => sketch.insert(u.to_string()),
-                DataInput::U128(u) => sketch.insert(u.to_string()),
-                DataInput::USIZE(u) => sketch.insert(u.to_string()),
+                DataInput::I8(i) => sketch.update(i.to_string()),
+                DataInput::I16(i) => sketch.update(i.to_string()),
+                DataInput::I128(i) => sketch.update(i.to_string()),
+                DataInput::ISIZE(i) => sketch.update(i.to_string()),
+                DataInput::U8(u) => sketch.update(u.to_string()),
+                DataInput::U16(u) => sketch.update(u.to_string()),
+                DataInput::U128(u) => sketch.update(u.to_string()),
+                DataInput::USIZE(u) => sketch.update(u.to_string()),
             },
-            EHSketchList::HLL(sketch) => sketch.insert(val),
+            EHSketchList::HLL(sketch) => sketch.update(val),
             EHSketchList::KLL(sketch) => {
                 let _ = sketch.update_data_input(val);
             }
@@ -117,7 +117,7 @@ impl EHSketchList {
             EHSketchList::UNIFORM(sketch) => {
                 let _ = sketch.update_input(val);
             }
-            EHSketchList::UNIVMON(sketch) => sketch.insert(val, 1),
+            EHSketchList::UNIVMON(sketch) => sketch.update_weighted(val, 1),
         }
     }
 
@@ -292,7 +292,7 @@ mod tests {
 
         let mut count_l2hh = EHSketchList::COUNTL2HH(CountL2HH::with_dimensions(5, 1024));
         for _ in 0..9 {
-            count_l2hh.insert(&key);
+            count_l2hh.update(&key);
         }
         let l2hh_est = count_l2hh.query(&key).expect("query COUNTL2HH");
         assert!(
@@ -302,7 +302,7 @@ mod tests {
 
         let mut um = EHSketchList::UNIVMON(UnivMon::default());
         for _ in 0..6 {
-            um.insert(&key);
+            um.update(&key);
         }
         match um {
             EHSketchList::UNIVMON(ref u) => assert_eq!(u.bucket_size, 6),
@@ -314,7 +314,7 @@ mod tests {
     fn count_sketch_insert_and_query_round_trip() {
         let mut cs = EHSketchList::CS(Count::<Vector2D<i32>, FastPath>::default());
         let key = DataInput::I64(11);
-        cs.insert(&key);
+        cs.update(&key);
         let est = cs.query(&key).expect("query CountSketch");
         assert!(est >= 1.0, "expected CountSketch estimate >= 1, got {est}");
     }
@@ -322,9 +322,9 @@ mod tests {
     #[test]
     fn ddsketch_insert_and_quantile_query_round_trip() {
         let mut dd = EHSketchList::DDS(DDSketch::new(0.01));
-        dd.insert(&DataInput::F64(10.0));
-        dd.insert(&DataInput::F64(20.0));
-        dd.insert(&DataInput::F64(30.0));
+        dd.update(&DataInput::F64(10.0));
+        dd.update(&DataInput::F64(20.0));
+        dd.update(&DataInput::F64(30.0));
 
         let q50 = dd.query(&DataInput::F64(0.5)).expect("query DDSketch q50");
         assert!((10.0..=30.0).contains(&q50), "unexpected q50 {q50}");
@@ -336,7 +336,7 @@ mod tests {
     fn nested_ddsketch_survives_a_serde_round_trip() {
         let mut dd = EHSketchList::DDS(DDSketch::new(0.01));
         for v in [10.0f64, 20.0, 30.0, 40.0] {
-            dd.insert(&DataInput::F64(v));
+            dd.update(&DataInput::F64(v));
         }
         let before = match &dd {
             EHSketchList::DDS(inner) => (inner.get_count(), inner.sum(), inner.min(), inner.max()),

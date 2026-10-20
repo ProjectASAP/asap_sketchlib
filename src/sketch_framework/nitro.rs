@@ -128,8 +128,8 @@ pub struct NitroBatch<S: NitroTarget> {
     inv_ln_one_minus_p: f64,
     /// Weight applied to each sampled update.
     pub delta: u64,
-    /// Live sampling RNG for [`NitroBatch::insert`]. Not serialized: a decoded
-    /// batch restarts it from the OS, so an `insert` stream does not resume
+    /// Live sampling RNG for [`NitroBatch::update_batch`]. Not serialized: a decoded
+    /// batch restarts it from the OS, so an `update_batch` stream does not resume
     /// across a round trip. The cached path's state (`idx`, `to_skip`) is
     /// serialized and does resume.
     #[serde(skip)]
@@ -218,7 +218,7 @@ impl<S: NitroTarget> NitroBatch<S> {
     /// bound be asserted reproducibly instead of re-rolled on every run.
     pub fn with_target_and_seed(rate: f64, sk: S, seed: u64) -> Self {
         let mut this = Self::build(rate, sk, SmallRng::seed_from_u64(seed));
-        // `insert` draws its skips live from `generator`; `insert_cached_step`
+        // `update_batch` draws its skips live from `generator`; `update_batch_cached_step`
         // reads the shared table, so the seed has to move that cursor too. The
         // table is a fixed stream of `ln(1 - u)` draws, so two far-apart
         // offsets read disjoint stretches of it.
@@ -387,8 +387,8 @@ impl<S: NitroTarget> NitroBatch<S> {
     /// Legacy cached-path snapshot: `(cursor, 1/ln(1-p), to_skip, unused)`.
     ///
     /// This covers the **cached** schedule only. It does not carry the live
-    /// `SmallRng` that [`NitroBatch::insert`] draws from, nor the stochastic
-    /// rounding draws that share it, so it cannot resume an `insert` stream.
+    /// `SmallRng` that [`NitroBatch::update_batch`] draws from, nor the stochastic
+    /// rounding draws that share it, so it cannot resume an `update_batch` stream.
     pub fn get_ctx(&self) -> (usize, f64, usize, usize) {
         (self.idx, self.inv_ln_one_minus_p, self.to_skip, self.mask)
     }
@@ -401,7 +401,7 @@ impl<S: NitroTarget> NitroBatch<S> {
     }
 
     /// Inserts a batch of values using geometric skipping.
-    pub fn insert(&mut self, data: &[i64]) {
+    pub fn update_batch(&mut self, data: &[i64]) {
         self.draw_geometric();
         let mut position = self.to_skip;
         while position < data.len() {
@@ -414,7 +414,7 @@ impl<S: NitroTarget> NitroBatch<S> {
     }
 
     /// Inserts a batch using the precomputed skip table.
-    pub fn insert_cached_step(&mut self, data: &[i64]) {
+    pub fn update_batch_cached_step(&mut self, data: &[i64]) {
         self.cached_geometric();
         let mut position = self.to_skip;
         while position < data.len() {
@@ -459,7 +459,7 @@ mod tests {
     /// The cached path walks the shared skip table and wraps at its length.
     ///
     /// The cursor is private, so this is a unit test rather than an E2E one.
-    /// `insert_cached_step` reading one entry per admission is what makes the
+    /// `update_batch_cached_step` reading one entry per admission is what makes the
     /// seeded offset meaningful: a cursor that never advanced would replay one
     /// skip distance forever, and every seed would admit the same subset.
     #[test]
@@ -473,7 +473,7 @@ mod tests {
             0,
         );
         assert_eq!(nitro.cursor(), 0, "seed 0 starts at entry 0");
-        nitro.insert_cached_step(&data);
+        nitro.update_batch_cached_step(&data);
         // One table entry per drawn skip: the leading draw plus one per
         // admission, so roughly `n * p`.
         let advanced = nitro.cursor();
@@ -491,7 +491,7 @@ mod tests {
             start as u64,
         );
         assert_eq!(wrapping.cursor(), start);
-        wrapping.insert_cached_step(&data);
+        wrapping.update_batch_cached_step(&data);
         assert!(
             wrapping.cursor() < start,
             "the cursor must wrap at the table length"
@@ -505,7 +505,7 @@ mod tests {
         );
         hostile.commit_ctx(usize::MAX, 0);
         assert!(hostile.cursor() < SKIP_TABLE_LEN);
-        hostile.insert_cached_step(&data); // must not panic
+        hostile.update_batch_cached_step(&data); // must not panic
     }
 
     #[test]
@@ -529,7 +529,7 @@ mod tests {
 
         let cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
         let mut batch = NitroBatch::with_target_and_seed(1.0, cm, NITRO_TEST_SEED);
-        batch.insert(&data);
+        batch.update_batch(&data);
 
         let epsilon = std::f64::consts::E / cols as f64;
         let delta = 1.0 / std::f64::consts::E.powi(rows as i32);
@@ -569,7 +569,7 @@ mod tests {
 
         let cs = Count::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
         let mut batch = NitroBatch::with_target_and_seed(1.0, cs, NITRO_TEST_SEED);
-        batch.insert(&data);
+        batch.update_batch(&data);
 
         // Count Sketch's bound, not Count-Min's. The error is driven by the L2
         // norm of the residual frequency vector and is rank-independent:

@@ -251,24 +251,24 @@ mod tests {
         let mut univmon_bytes = UnivMon::init_univmon(4, 2, 16, 3);
         let mut pyramid = UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4);
         for key in &str_keys {
-            cms_heap.insert(key);
-            cs_heap.insert(key);
+            cms_heap.update(key);
+            cs_heap.update(key);
             l2hh.fast_insert_with_count(key, 2);
-            bloom.insert(key);
-            ss.insert(key);
-            univmon.insert(key, 2);
-            pyramid.insert(key, 2);
+            bloom.update(key);
+            ss.update(key);
+            univmon.update_weighted(key, 2);
+            pyramid.update_weighted(key, 2);
         }
         for key in &bytes_keys {
-            cms_heap_bytes.insert(key);
-            ss_bytes.insert(key);
-            univmon_bytes.insert(key, 2);
+            cms_heap_bytes.update(key);
+            ss_bytes.update(key);
+            univmon_bytes.update_weighted(key, 2);
         }
-        ss_u64.insert(&DataInput::U64(9));
+        ss_u64.update(&DataInput::U64(9));
         let mut coco: Coco = Coco::init_with_size(8, 2);
-        coco.insert("flow::a", 3);
+        coco.update_weighted("flow::a", 3);
         let mut elastic: Elastic = Elastic::init_with_dimensions(4, 2, 16);
-        elastic.insert("flow::a".to_string());
+        elastic.update("flow::a".to_string());
         let mut kll_dynamic = KLLDynamic::<f64>::init_kll(200);
         let mut positive = DDSketch::new(0.01);
         let config = UnivMonQConfig {
@@ -346,7 +346,7 @@ mod tests {
         let cases = {
             let mut cases = cases;
             let mut kmv: KMV = KMV::new(4);
-            kmv.insert(&DataInput::U64(9));
+            kmv.update(&DataInput::U64(9));
             let mut uniform = UniformSampling::with_seed(1.0, 7);
             uniform.update(2.5);
             cases.push(sketch!("KMV", kmv, KMV));

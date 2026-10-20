@@ -89,7 +89,7 @@ impl ExponentialHistogram {
     /// Inserts one value at timestamp `time`.
     pub fn update(&mut self, time: u64, val: &DataInput) {
         self.update_with(time, |sketch| {
-            sketch.insert(val);
+            sketch.update(val);
         });
     }
 

@@ -17,7 +17,7 @@ fn main() {
 
     for i in 0u64..10_000 {
         let user_id = if i % 2 == 0 { i % 5 } else { 5 + (i % 95) };
-        sketch.insert(&DataInput::U64(user_id));
+        sketch.update(&DataInput::U64(user_id));
     }
 
     println!("top-{top_k} heavy hitters:");

@@ -31,7 +31,7 @@ const KMV_Z: f64 = 4.0;
 
 /// Seed-list indices used as independent hash functions.
 ///
-/// `KMV::insert_by_hash` is public and `DefaultXxHasher::hash64_seeded(d, ..)`
+/// `KMV::update_with_hash` is public and `DefaultXxHasher::hash64_seeded(d, ..)`
 /// selects seed `d` from the library's 20-entry table, so a trial can be run
 /// under a genuinely different hash rather than under a relabelled key set. The
 /// randomness KMV's error model quantifies over *is* the hash, so this is the
@@ -81,7 +81,7 @@ fn kmv_trial(k: usize, n: usize, seed_idx: usize, namespace: u64) -> KMV {
                 seed_idx,
                 &DataInput::U64(namespace.wrapping_add(i)),
             );
-        sketch.insert_by_hash(hashed);
+        sketch.update_with_hash(hashed);
     }
     sketch
 }
@@ -225,11 +225,11 @@ fn kmv_duplicates_are_inert_and_a_shard_merge_reproduces_the_single_pass_exactly
     let mut a: KMV = KMV::new(K);
     let mut b: KMV = KMV::new(K);
     for (i, k) in stream.iter().enumerate() {
-        full.insert(&DataInput::U64(*k));
+        full.update(&DataInput::U64(*k));
         if i % 2 == 0 {
-            a.insert(&DataInput::U64(*k));
+            a.update(&DataInput::U64(*k));
         } else {
-            b.insert(&DataInput::U64(*k));
+            b.update(&DataInput::U64(*k));
         }
     }
 
@@ -244,7 +244,7 @@ fn kmv_duplicates_are_inert_and_a_shard_merge_reproduces_the_single_pass_exactly
     // already retained is skipped, and one that was not retained cannot
     // displace anything smaller.
     for k in &stream {
-        full.insert(&DataInput::U64(*k));
+        full.update(&DataInput::U64(*k));
     }
     assert_eq!(
         full.estimate(),
@@ -930,7 +930,7 @@ mod documented_matrix {
             let distinct = input.keys.iter().copied().collect::<HashSet<i64>>().len();
             let mut sketch: KMV = KMV::new(k);
             for key in &input.keys {
-                sketch.insert(&input.data(*key));
+                sketch.update(&input.data(*key));
             }
             let estimate = sketch.estimate();
             let context = input.context();
@@ -952,7 +952,7 @@ mod documented_matrix {
             // what it has seen, and it has seen all of these already.
             let before = sketch.estimate();
             for key in &input.keys {
-                sketch.insert(&input.data(*key));
+                sketch.update(&input.data(*key));
             }
             assert_eq!(
                 sketch.estimate(),
@@ -1082,7 +1082,7 @@ const CMHLL_Z: f64 = 4.0;
 /// The column `key` occupies in each row, computed the way the sketch
 /// computes it.
 ///
-/// `CountMinHll::insert` hashes the key once with `hash128_seeded(0, ..)` and
+/// `CountMinHll::update` hashes the key once with `hash128_seeded(0, ..)` and
 /// hands that value to `Vector3D`, which decodes one column per row through
 /// `MatrixFastHash`. Both calls are public, so a test can reproduce the
 /// routing exactly rather than guessing at it — which is what lets the
@@ -1133,7 +1133,7 @@ fn cmhll_load(sk: &mut CountMinHll, keys: &[u64]) -> HashMap<u64, usize> {
         let mut seen = HashSet::new();
         for i in 0..n {
             let value = key * 1_000_000 + i;
-            sk.insert(&DataInput::U64(key), &DataInput::U64(value));
+            sk.update(&DataInput::U64(key), &DataInput::U64(value));
             seen.insert(value);
         }
         truth.insert(key, seen.len());
@@ -1266,8 +1266,8 @@ fn count_min_hll_merge_reproduces_a_single_pass_over_both_halves() {
         for i in 0..500u64 {
             let value = key * 1_000_000 + i;
             let target = if i % 2 == 0 { &mut left } else { &mut right };
-            target.insert(&DataInput::U64(key), &DataInput::U64(value));
-            single.insert(&DataInput::U64(key), &DataInput::U64(value));
+            target.update(&DataInput::U64(key), &DataInput::U64(value));
+            single.update(&DataInput::U64(key), &DataInput::U64(value));
         }
     }
 

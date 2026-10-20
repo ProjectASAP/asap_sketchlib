@@ -256,8 +256,8 @@ mod tests {
     fn count_min_round_trip_serialization() {
         // i64 counters are a wire-eligible config; the ASAPv1 envelope round-trips.
         let mut sketch = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
-        sketch.insert(&DataInput::U64(42));
-        sketch.insert(&DataInput::U64(7));
+        sketch.update(&DataInput::U64(42));
+        sketch.update(&DataInput::U64(7));
 
         let encoded = sketch.serialize_to_bytes().expect("serialize CountMin");
         assert!(encoded.starts_with(b"ASAPv1"));
@@ -324,10 +324,10 @@ mod tests {
         // (a) A CMS built with a custom-profile hasher round-trips.
         let mut alt = CountMin::<Vector2D<i64>, RegularPath, AltHasher>::with_dimensions(3, 8);
         let mut std = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
-        alt.insert(&DataInput::U64(42));
-        alt.insert(&DataInput::U64(7));
-        std.insert(&DataInput::U64(42));
-        std.insert(&DataInput::U64(7));
+        alt.update(&DataInput::U64(42));
+        alt.update(&DataInput::U64(7));
+        std.update(&DataInput::U64(42));
+        std.update(&DataInput::U64(7));
 
         let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
         let decoded =
@@ -351,8 +351,8 @@ mod tests {
     fn count_min_f64_and_mode_in_metadata_round_trip() {
         // f64 counters (fractional weights) are the other wire-eligible config.
         let mut sketch = CountMin::<Vector2D<f64>, FastPath>::with_dimensions(4, 16);
-        sketch.insert_many(&DataInput::U64(1), 2.5);
-        sketch.insert_many(&DataInput::U64(2), 1.25);
+        sketch.update_weighted(&DataInput::U64(1), 2.5);
+        sketch.update_weighted(&DataInput::U64(2), 1.25);
 
         let encoded = sketch.serialize_to_bytes().expect("serialize");
         let decoded = CountMin::<Vector2D<f64>, FastPath>::deserialize_from_bytes(&encoded)

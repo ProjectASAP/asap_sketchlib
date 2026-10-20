@@ -241,12 +241,12 @@ impl UnivMonPyramid {
     }
 
     /// Standard insert: updates sketch + heap at every layer 0..=bottom.
-    pub fn insert(&mut self, key: &DataInput, value: i64) {
-        self.begin_update(value, UnivMonUpdateMode::Standard);
+    pub fn update_weighted(&mut self, key: &DataInput, weight: i64) {
+        self.begin_update(weight, UnivMonUpdateMode::Standard);
         let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
         let bottom = self.find_bottom_layer_num(h);
         for i in 0..=bottom {
-            let count = self.l2_sketch_layers[i].update_and_est(key, value);
+            let count = self.l2_sketch_layers[i].update_and_est(key, weight);
             if !self.hh_layers[i].update(key, count as i64) {
                 self.candidate_complete[i] = false;
             }
@@ -256,7 +256,7 @@ impl UnivMonPyramid {
     /// Joltik-style insert: updates only the terminal CountSketch and heap.
     ///
     /// Logical upper-layer candidate sets are reconstructed at query time.
-    /// Do not mix this method with [`Self::insert`] on the same sketch.
+    /// Do not mix this method with [`Self::update`] on the same sketch.
     pub fn fast_insert(&mut self, key: &DataInput, value: i64) {
         self.begin_update(value, UnivMonUpdateMode::Terminal);
         let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
@@ -547,7 +547,7 @@ mod tests {
 
         // Take a sketch, insert some data
         let mut sketch = pool.take();
-        sketch.insert(&DataInput::I64(42), 100);
+        sketch.update_weighted(&DataInput::I64(42), 100);
         assert!(sketch.bucket_size > 0);
 
         // Return it — should reset
@@ -570,7 +570,7 @@ mod tests {
         let cases: Vec<(&str, i64)> = vec![("hello", 10), ("world", 20), ("hello", 5), ("foo", 30)];
 
         for (key, val) in &cases {
-            um.insert(&DataInput::Str(key), *val);
+            um.update_weighted(&DataInput::Str(key), *val);
         }
 
         assert_eq!(um.bucket_size, 65);
@@ -588,7 +588,7 @@ mod tests {
 
         for i in 0..500i64 {
             let key = DataInput::I64(i % 100);
-            standard.insert(&key, 1);
+            standard.update_weighted(&key, 1);
             fast.fast_insert(&key, 1);
         }
 
@@ -627,7 +627,7 @@ mod tests {
     fn pyramid_free_resets_state() {
         let mut um = UnivMonPyramid::with_defaults();
         for i in 0..100i64 {
-            um.insert(&DataInput::I64(i), 10);
+            um.update_weighted(&DataInput::I64(i), 10);
         }
         assert!(um.bucket_size > 0);
 
@@ -643,12 +643,12 @@ mod tests {
         let mut right = UnivMonPyramid::new(128, 8, 3, 2048, 3, 512, 16);
 
         for i in 0..50i64 {
-            left.insert(&DataInput::I64(i), 10);
-            one_pass.insert(&DataInput::I64(i), 10);
+            left.update_weighted(&DataInput::I64(i), 10);
+            one_pass.update_weighted(&DataInput::I64(i), 10);
         }
         for i in 50..100i64 {
-            right.insert(&DataInput::I64(i), 10);
-            one_pass.insert(&DataInput::I64(i), 10);
+            right.update_weighted(&DataInput::I64(i), 10);
+            one_pass.update_weighted(&DataInput::I64(i), 10);
         }
 
         left.merge(&right);
@@ -707,19 +707,19 @@ mod tests {
 
         // Heavy hitter
         for _ in 0..5000 {
-            um.insert(&DataInput::I64(0), 1);
+            um.update_weighted(&DataInput::I64(0), 1);
             *freq.entry(0).or_insert(0) += 1;
         }
         // Medium flows
         for key in 1..=20i64 {
             for _ in 0..200 {
-                um.insert(&DataInput::I64(key), 1);
+                um.update_weighted(&DataInput::I64(key), 1);
                 *freq.entry(key).or_insert(0) += 1;
             }
         }
         // Light flows
         for key in 21..=500i64 {
-            um.insert(&DataInput::I64(key), 1);
+            um.update_weighted(&DataInput::I64(key), 1);
             *freq.entry(key).or_insert(0) += 1;
         }
 

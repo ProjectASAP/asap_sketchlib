@@ -298,7 +298,7 @@ mod tests {
     fn populated() -> UnivMonPyramid {
         let mut pyramid = UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4);
         for (key, weight) in [("alpha", 5i64), ("beta", 7), ("gamma", 9), ("delta", 11)] {
-            pyramid.insert(&DataInput::Str(key), weight);
+            pyramid.update_weighted(&DataInput::Str(key), weight);
         }
         pyramid
     }
@@ -382,7 +382,7 @@ mod tests {
     fn pyramid_layers_with_different_heap_loads_round_trip() {
         let mut pyramid = UnivMonPyramid::new(8, 2, 3, 32, 2, 16, 4);
         for key in 0..40u64 {
-            pyramid.insert(&DataInput::U64(key), 1 + (key as i64 % 5));
+            pyramid.update_weighted(&DataInput::U64(key), 1 + (key as i64 % 5));
         }
         let loads: Vec<usize> = (0..pyramid.layer_size)
             .map(|i| pyramid.hh_layers[i].len())
@@ -412,7 +412,7 @@ mod tests {
     #[test]
     fn pyramid_without_mouse_layers_round_trips() {
         let mut pyramid = UnivMonPyramid::new(4, 4, 2, 16, 2, 8, 3);
-        pyramid.insert(&DataInput::U64(7), 3);
+        pyramid.update_weighted(&DataInput::U64(7), 3);
         let encoded = pyramid.serialize_to_bytes().expect("serialize");
         let decoded = UnivMonPyramid::deserialize_from_bytes(&encoded).expect("decode");
         for layer in 0..3 {
@@ -443,7 +443,7 @@ mod tests {
     fn pyramid_empty_has_one_encoding() {
         let left = UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4);
         let mut right = UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4);
-        right.insert(&DataInput::Str("alpha"), 5);
+        right.update_weighted(&DataInput::Str("alpha"), 5);
         right.free();
         let encoded = left.serialize_to_bytes().expect("serialize");
         assert_eq!(right.serialize_to_bytes().expect("serialize"), encoded);
@@ -690,7 +690,7 @@ mod tests {
     #[test]
     fn pyramid_rejects_zero_dimensions_of_a_tier_it_never_materializes() {
         let mut one_tier = UnivMonPyramid::new(4, 4, 2, 16, 2, 8, 3);
-        one_tier.insert(&DataInput::U64(7), 3);
+        one_tier.update_weighted(&DataInput::U64(7), 3);
         let encoded = one_tier.serialize_to_bytes().expect("serialize");
         let mut meta = metadata_of(&encoded);
         meta.mouse_rows = 0;

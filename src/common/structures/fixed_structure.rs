@@ -75,7 +75,7 @@ pub trait HllRegisterStorage:
 /// asap_sketchlib::impl_hll_bucket_list!(HllBucketListP18, 18, 1_usize << 18);
 ///
 /// let mut hll = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
-/// hll.insert(&DataInput::Str("hello"));
+/// hll.update(&DataInput::Str("hello"));
 /// assert_eq!(HllBucketListP18::NUM_REGISTERS, 1 << 18);
 /// ```
 macro_rules! impl_hll_bucket_list {

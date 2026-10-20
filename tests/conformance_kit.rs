@@ -26,7 +26,7 @@ struct CountMinAdapter(CountMin<Vector2D<i64>, FastPath>);
 
 impl FrequencyOps<i64> for CountMinAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key)) as f64
@@ -43,7 +43,7 @@ struct BloomAdapter(Bloom<FastPath>);
 
 impl MembershipOps<i64> for BloomAdapter {
     fn add(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn contains(&self, key: &i64) -> bool {
         self.0.contains(&DataInput::I64(*key))
@@ -54,7 +54,7 @@ struct RegularBloomAdapter(Bloom<RegularPath>);
 
 impl MembershipOps<i64> for RegularBloomAdapter {
     fn add(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn contains(&self, key: &i64) -> bool {
         self.0.contains(&DataInput::I64(*key))
@@ -65,7 +65,7 @@ struct SpaceSavingAdapter(SpaceSaving);
 
 impl FrequencyOps<i64> for SpaceSavingAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key)) as f64
@@ -76,7 +76,7 @@ struct CountSketchAdapter(asap_sketchlib::Count<Vector2D<i64>, RegularPath>);
 
 impl FrequencyOps<i64> for CountSketchAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key))
@@ -85,7 +85,7 @@ impl FrequencyOps<i64> for CountSketchAdapter {
 
 impl SignedFrequencyOps<i64> for CountSketchAdapter {
     fn ingest_weighted(&mut self, key: &i64, weight: i64) {
-        self.0.insert_many(&DataInput::I64(*key), weight);
+        self.0.update_weighted(&DataInput::I64(*key), weight);
     }
 }
 
@@ -100,7 +100,7 @@ struct HllClassicAdapter(HyperLogLog<asap_sketchlib::Classic>);
 impl CardinalityOps for HllClassicAdapter {
     fn ingest(&mut self, key: &[u8]) {
         self.0
-            .insert(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
+            .update(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
     }
     fn estimate(&self) -> f64 {
         self.0.estimate() as f64
@@ -112,7 +112,7 @@ struct HllErtlAdapter(HyperLogLog<asap_sketchlib::ErtlMLE>);
 impl CardinalityOps for HllErtlAdapter {
     fn ingest(&mut self, key: &[u8]) {
         self.0
-            .insert(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
+            .update(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
     }
     fn estimate(&self) -> f64 {
         self.0.estimate() as f64
@@ -124,7 +124,7 @@ struct HllHipAdapter(HyperLogLogHIP);
 impl CardinalityOps for HllHipAdapter {
     fn ingest(&mut self, key: &[u8]) {
         self.0
-            .insert(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
+            .update(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
     }
     fn estimate(&self) -> f64 {
         self.0.estimate() as f64
@@ -493,7 +493,7 @@ struct CmsHeapAdapter(CMSHeap<Vector2D<i64>, FastPath>);
 
 impl FrequencyOps<i64> for CmsHeapAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key)) as f64
@@ -510,7 +510,7 @@ struct CsHeapAdapter(CSHeap<Vector2D<i64>, RegularPath>);
 
 impl FrequencyOps<i64> for CsHeapAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key))
@@ -550,7 +550,7 @@ struct FoldCmsAdapter(FoldCMS);
 
 impl FrequencyOps<i64> for FoldCmsAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert_one(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.query(&DataInput::I64(*key)) as f64
@@ -567,7 +567,7 @@ struct FoldCsAdapter(FoldCS);
 
 impl FrequencyOps<i64> for FoldCsAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert_one(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.query(&DataInput::I64(*key)) as f64
@@ -576,7 +576,7 @@ impl FrequencyOps<i64> for FoldCsAdapter {
 
 impl SignedFrequencyOps<i64> for FoldCsAdapter {
     fn ingest_weighted(&mut self, key: &i64, weight: i64) {
-        self.0.insert(&DataInput::I64(*key), weight);
+        self.0.update_weighted(&DataInput::I64(*key), weight);
     }
 }
 
@@ -592,7 +592,7 @@ struct KmvAdapter(RefCell<asap_sketchlib::KMV>);
 #[cfg(feature = "experimental")]
 impl CardinalityOps for KmvAdapter {
     fn ingest(&mut self, key: &[u8]) {
-        self.0.borrow_mut().insert(&DataInput::Bytes(key));
+        self.0.borrow_mut().update(&DataInput::Bytes(key));
     }
     fn estimate(&self) -> f64 {
         self.0.borrow_mut().estimate()
@@ -797,7 +797,7 @@ impl MicroCmAdapter {
 #[cfg(feature = "experimental")]
 impl FrequencyOps<i64> for MicroCmAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         use asap_sketchlib::sketches::microscope::DeltaStrategy;

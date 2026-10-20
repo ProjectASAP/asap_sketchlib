@@ -337,11 +337,11 @@ impl<H: SketchHasher> FoldCMS<H> {
     // -- Insert -------------------------------------------------------------
 
     /// Insert `key` with count `delta`.
-    pub fn insert(&mut self, key: &DataInput, delta: i64) {
+    pub fn update_weighted(&mut self, key: &DataInput, weight: i64) {
         for r in 0..self.rows {
             let full_col = self.full_col_for(r, key);
             let fc = self.fold_col_of(full_col);
-            self.cells[r * self.fold_cols + fc].insert(full_col, delta);
+            self.cells[r * self.fold_cols + fc].insert(full_col, weight);
         }
         // Update top-k heap with current estimate.
         let est = self.query(key);
@@ -350,8 +350,8 @@ impl<H: SketchHasher> FoldCMS<H> {
 
     /// Insert `key` once (delta = 1).
     #[inline]
-    pub fn insert_one(&mut self, key: &DataInput) {
-        self.insert(key, 1);
+    pub fn update(&mut self, key: &DataInput) {
+        self.update_weighted(key, 1);
     }
 
     // -- Point Query --------------------------------------------------------
@@ -762,7 +762,7 @@ mod tests {
     fn fold_cms_insert_query_single_key() {
         let mut sketch: FoldCMS = FoldCMS::new(3, 1024, 4, 10);
         let key = DataInput::Str("hello");
-        sketch.insert(&key, 7);
+        sketch.update_weighted(&key, 7);
         assert_eq!(sketch.query(&key), 7);
     }
 
@@ -770,15 +770,15 @@ mod tests {
     fn fold_cms_insert_accumulates() {
         let mut sketch: FoldCMS = FoldCMS::new(3, 1024, 4, 10);
         let key = DataInput::Str("hello");
-        sketch.insert(&key, 3);
-        sketch.insert(&key, 4);
+        sketch.update_weighted(&key, 3);
+        sketch.update_weighted(&key, 4);
         assert_eq!(sketch.query(&key), 7);
     }
 
     #[test]
     fn fold_cms_absent_key_returns_zero() {
         let mut sketch: FoldCMS = FoldCMS::new(3, 1024, 4, 10);
-        sketch.insert(&DataInput::Str("present"), 10);
+        sketch.update_weighted(&DataInput::Str("present"), 10);
         assert_eq!(sketch.query(&DataInput::Str("absent")), 0);
     }
 
@@ -786,7 +786,7 @@ mod tests {
     fn fold_cms_multiple_keys() {
         let mut sketch: FoldCMS = FoldCMS::new(3, 4096, 4, 10);
         for i in 0..100u64 {
-            sketch.insert(&DataInput::U64(i), i as i64);
+            sketch.update_weighted(&DataInput::U64(i), i as i64);
         }
         for i in 0..100u64 {
             let est = sketch.query(&DataInput::U64(i));
@@ -811,8 +811,8 @@ mod tests {
 
         let keys: Vec<DataInput> = (0..50).map(DataInput::I32).collect();
         for key in &keys {
-            fold.insert(key, 1);
-            standard.insert(key);
+            fold.update_weighted(key, 1);
+            standard.update(key);
         }
 
         // Every single query must match exactly.
@@ -850,8 +850,8 @@ mod tests {
         for i in 0..30 {
             let key = DataInput::U64(i);
             let count = (i + 1) as i64;
-            fold.insert(&key, count);
-            standard.insert_many(&key, count);
+            fold.update_weighted(&key, count);
+            standard.update_weighted(&key, count);
         }
 
         for i in 0..30 {
@@ -872,8 +872,8 @@ mod tests {
         let mut b: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
 
         let key = DataInput::Str("user_001");
-        a.insert(&key, 100);
-        b.insert(&key, 200);
+        a.update_weighted(&key, 100);
+        b.update_weighted(&key, 200);
 
         a.merge_same_level(&b);
         assert_eq!(a.query(&key), 300);
@@ -892,13 +892,13 @@ mod tests {
 
         for i in 0..20 {
             let key = DataInput::U64(i);
-            fa.insert(&key, 1);
-            sa.insert(&key);
+            fa.update_weighted(&key, 1);
+            sa.update(&key);
         }
         for i in 10..30 {
             let key = DataInput::U64(i);
-            fb.insert(&key, 1);
-            sb.insert(&key);
+            fb.update_weighted(&key, 1);
+            sb.update(&key);
         }
 
         fa.merge_same_level(&fb);
@@ -941,8 +941,8 @@ mod tests {
 
         let key_a = DataInput::Str("alpha");
         let key_b = DataInput::Str("beta");
-        a.insert(&key_a, 10);
-        b.insert(&key_b, 20);
+        a.update_weighted(&key_a, 10);
+        b.update_weighted(&key_b, 20);
 
         let merged = FoldCMS::unfold_merge(&a, &b);
         assert_eq!(merged.fold_level(), 1);
@@ -963,13 +963,13 @@ mod tests {
 
         for i in 0..40 {
             let key = DataInput::U64(i);
-            fa.insert(&key, (i + 1) as i64);
-            sa.insert_many(&key, (i + 1) as i64);
+            fa.update_weighted(&key, (i + 1) as i64);
+            sa.update_weighted(&key, (i + 1) as i64);
         }
         for i in 20..60 {
             let key = DataInput::U64(i);
-            fb.insert(&key, (i + 1) as i64);
-            sb.insert_many(&key, (i + 1) as i64);
+            fb.update_weighted(&key, (i + 1) as i64);
+            sb.update_weighted(&key, (i + 1) as i64);
         }
 
         let merged_fold = FoldCMS::unfold_merge(&fa, &fb);
@@ -1000,8 +1000,8 @@ mod tests {
             let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
             for i in (epoch * 10)..((epoch + 1) * 10) {
                 let key = DataInput::U64(i);
-                sk.insert(&key, 1);
-                standard.insert(&key);
+                sk.update_weighted(&key, 1);
+                standard.update(&key);
             }
             sketches.push(sk);
         }
@@ -1029,7 +1029,7 @@ mod tests {
 
         let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         for i in 0..30 {
-            sk.insert(&DataInput::I32(i), 1);
+            sk.update_weighted(&DataInput::I32(i), 1);
         }
 
         let flat_before = sk.to_flat_counters();
@@ -1054,8 +1054,8 @@ mod tests {
 
         for i in 0..20 {
             let key = DataInput::I32(i);
-            fold.insert(&key, 1);
-            standard.insert(&key);
+            fold.update_weighted(&key, 1);
+            standard.update(&key);
         }
 
         let flat = fold.to_flat_counters();
@@ -1086,7 +1086,7 @@ mod tests {
         let mut sk: FoldCMS = FoldCMS::new(rows, full_cols, fold_level, top_k);
         let stream = sample_zipf_u64(2_000, 1.2, 20_000, 0x5EED_C45C);
         for &value in &stream {
-            sk.insert(&DataInput::U64(value), 1);
+            sk.update_weighted(&DataInput::U64(value), 1);
         }
         assert!(
             sk.collided_cells() > 0,
@@ -1141,7 +1141,7 @@ mod tests {
         let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
         // Insert only 50 distinct keys into a 256-column folded sketch.
         for i in 0..50u64 {
-            sk.insert(&DataInput::U64(i), 1);
+            sk.update_weighted(&DataInput::U64(i), 1);
         }
 
         let total_entries = sk.total_entries();
@@ -1171,12 +1171,12 @@ mod tests {
 
         // Insert keys with different frequencies.
         for _ in 0..100 {
-            sk.insert(&DataInput::Str("heavy"), 1);
+            sk.update_weighted(&DataInput::Str("heavy"), 1);
         }
         for _ in 0..10 {
-            sk.insert(&DataInput::Str("medium"), 1);
+            sk.update_weighted(&DataInput::Str("medium"), 1);
         }
-        sk.insert(&DataInput::Str("light"), 1);
+        sk.update_weighted(&DataInput::Str("light"), 1);
 
         let heap_items = sk.heap().heap();
         assert!(!heap_items.is_empty());
@@ -1195,10 +1195,10 @@ mod tests {
         let mut b: FoldCMS = FoldCMS::new(3, 1024, 3, 5);
 
         for _ in 0..50 {
-            a.insert(&DataInput::Str("user_x"), 1);
+            a.update_weighted(&DataInput::Str("user_x"), 1);
         }
         for _ in 0..70 {
-            b.insert(&DataInput::Str("user_x"), 1);
+            b.update_weighted(&DataInput::Str("user_x"), 1);
         }
 
         a.merge_same_level(&b);
@@ -1218,10 +1218,10 @@ mod tests {
         let mut b: FoldCMS = FoldCMS::new(3, 512, 2, 5);
 
         for _ in 0..40 {
-            a.insert(&DataInput::Str("endpoint_a"), 1);
+            a.update_weighted(&DataInput::Str("endpoint_a"), 1);
         }
         for _ in 0..60 {
-            b.insert(&DataInput::Str("endpoint_a"), 1);
+            b.update_weighted(&DataInput::Str("endpoint_a"), 1);
         }
 
         let merged = FoldCMS::unfold_merge(&a, &b);
@@ -1249,7 +1249,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
 
         for value in sample_zipf_u64(domain, exponent, samples, 0x5eed_c0de) {
-            fold.insert(&DataInput::U64(value), 1);
+            fold.update_weighted(&DataInput::U64(value), 1);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -1283,15 +1283,15 @@ mod tests {
 
         // Epoch 1: 10:00-10:01
         let mut epoch1: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch1.insert(&DataInput::Str("user_001"), 350);
-        epoch1.insert(&DataInput::Str("user_002"), 10);
-        epoch1.insert(&DataInput::Str("user_003"), 600);
+        epoch1.update_weighted(&DataInput::Str("user_001"), 350);
+        epoch1.update_weighted(&DataInput::Str("user_002"), 10);
+        epoch1.update_weighted(&DataInput::Str("user_003"), 600);
 
         // Epoch 2: 10:01-10:02
         let mut epoch2: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch2.insert(&DataInput::Str("user_001"), 350);
-        epoch2.insert(&DataInput::Str("user_002"), 5);
-        epoch2.insert(&DataInput::Str("user_003"), 700);
+        epoch2.update_weighted(&DataInput::Str("user_001"), 350);
+        epoch2.update_weighted(&DataInput::Str("user_002"), 5);
+        epoch2.update_weighted(&DataInput::Str("user_003"), 700);
 
         // Merge via same-level (both at fold_level 4)
         epoch1.merge_same_level(&epoch2);
@@ -1309,16 +1309,16 @@ mod tests {
         let fold_level = 4;
 
         let mut epoch1: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch1.insert(&DataInput::Str("/api/v1/search"), 300);
-        epoch1.insert(&DataInput::Str("/api/v1/checkout"), 5);
-        epoch1.insert(&DataInput::Str("/api/v1/login"), 200);
-        epoch1.insert(&DataInput::Str("/api/v2/recommend"), 1);
+        epoch1.update_weighted(&DataInput::Str("/api/v1/search"), 300);
+        epoch1.update_weighted(&DataInput::Str("/api/v1/checkout"), 5);
+        epoch1.update_weighted(&DataInput::Str("/api/v1/login"), 200);
+        epoch1.update_weighted(&DataInput::Str("/api/v2/recommend"), 1);
 
         let mut epoch2: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch2.insert(&DataInput::Str("/api/v1/search"), 50);
-        epoch2.insert(&DataInput::Str("/api/v1/checkout"), 5);
-        epoch2.insert(&DataInput::Str("/api/v1/login"), 10);
-        epoch2.insert(&DataInput::Str("/api/v2/recommend"), 100);
+        epoch2.update_weighted(&DataInput::Str("/api/v1/search"), 50);
+        epoch2.update_weighted(&DataInput::Str("/api/v1/checkout"), 5);
+        epoch2.update_weighted(&DataInput::Str("/api/v1/login"), 10);
+        epoch2.update_weighted(&DataInput::Str("/api/v2/recommend"), 100);
 
         epoch1.merge_same_level(&epoch2);
 
@@ -1338,22 +1338,22 @@ mod tests {
         let fold_level = 4;
 
         let mut epoch1: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch1.insert(&DataInput::Str("192.168.1.1"), 50);
-        epoch1.insert(&DataInput::Str("10.0.0.42"), 10_000);
-        epoch1.insert(&DataInput::Str("172.16.5.99"), 30);
-        epoch1.insert(&DataInput::Str("10.0.0.43"), 8_000);
+        epoch1.update_weighted(&DataInput::Str("192.168.1.1"), 50);
+        epoch1.update_weighted(&DataInput::Str("10.0.0.42"), 10_000);
+        epoch1.update_weighted(&DataInput::Str("172.16.5.99"), 30);
+        epoch1.update_weighted(&DataInput::Str("10.0.0.43"), 8_000);
 
         let mut epoch2: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch2.insert(&DataInput::Str("192.168.1.1"), 45);
-        epoch2.insert(&DataInput::Str("10.0.0.42"), 15_000);
-        epoch2.insert(&DataInput::Str("172.16.5.99"), 25);
-        epoch2.insert(&DataInput::Str("10.0.0.43"), 200);
+        epoch2.update_weighted(&DataInput::Str("192.168.1.1"), 45);
+        epoch2.update_weighted(&DataInput::Str("10.0.0.42"), 15_000);
+        epoch2.update_weighted(&DataInput::Str("172.16.5.99"), 25);
+        epoch2.update_weighted(&DataInput::Str("10.0.0.43"), 200);
 
         let mut epoch3: FoldCMS = FoldCMS::new(rows, cols, fold_level, 5);
-        epoch3.insert(&DataInput::Str("192.168.1.1"), 60);
-        epoch3.insert(&DataInput::Str("10.0.0.42"), 12_000);
-        epoch3.insert(&DataInput::Str("172.16.5.99"), 9_000);
-        epoch3.insert(&DataInput::Str("10.0.0.43"), 100);
+        epoch3.update_weighted(&DataInput::Str("192.168.1.1"), 60);
+        epoch3.update_weighted(&DataInput::Str("10.0.0.42"), 12_000);
+        epoch3.update_weighted(&DataInput::Str("172.16.5.99"), 9_000);
+        epoch3.update_weighted(&DataInput::Str("10.0.0.43"), 100);
 
         // Hierarchical merge of 3 epochs (not a power of 2, tests carry-forward).
         let merged = FoldCMS::hierarchical_merge(&[epoch1, epoch2, epoch3]);
@@ -1389,8 +1389,8 @@ mod tests {
                 let mut sk: FoldCMS = FoldCMS::new(rows, cols, fold_level, 10);
                 for i in (epoch * 10)..((epoch + 1) * 10) {
                     let key = DataInput::U64(i);
-                    sk.insert(&key, 1);
-                    standard.insert(&key);
+                    sk.update_weighted(&key, 1);
+                    standard.update(&key);
                 }
                 sketches.push(sk);
             }
@@ -1419,7 +1419,7 @@ mod tests {
 
         let mut sk = FoldCMS::<DefaultXxHasher>::new(rows, cols, fold_level, 10);
         for i in 0..40 {
-            sk.insert(&DataInput::U64(i), (i + 1) as i64);
+            sk.update_weighted(&DataInput::U64(i), (i + 1) as i64);
         }
 
         let expected = sk.to_flat_counters();
@@ -1439,7 +1439,7 @@ mod tests {
     #[test]
     fn unfold_to_same_level_returns_clone() {
         let mut sk: FoldCMS = FoldCMS::new(3, 256, 3, 10);
-        sk.insert(&DataInput::Str("x"), 42);
+        sk.update_weighted(&DataInput::Str("x"), 42);
 
         let result = sk.unfold_to(3);
         assert_eq!(result.fold_level(), 3);
@@ -1456,10 +1456,10 @@ mod tests {
         let mut sk_low: FoldCMS = FoldCMS::new(rows, cols, 2, 10);
 
         for i in 0..20u64 {
-            sk_high.insert(&DataInput::U64(i), 1);
+            sk_high.update_weighted(&DataInput::U64(i), 1);
         }
         for i in 10..30u64 {
-            sk_low.insert(&DataInput::U64(i), 1);
+            sk_low.update_weighted(&DataInput::U64(i), 1);
         }
 
         let merged = FoldCMS::hierarchical_merge(&[sk_high.clone(), sk_low.clone()]);

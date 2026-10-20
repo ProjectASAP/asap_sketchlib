@@ -93,23 +93,23 @@ where
 {
     /// Records one occurrence of `key`.
     #[inline]
-    pub fn insert(&mut self, key: &DataInput) {
-        self.cs.insert(key);
-        self.summary.insert(key);
+    pub fn update(&mut self, key: &DataInput) {
+        self.cs.update(key);
+        self.summary.update(key);
     }
 
     /// Adds `±many` to `key`'s cells and its
     /// [`SpaceSavingCounter::summary_weight`] to the summary.
     #[inline]
-    pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
-        self.cs.insert_many(key, many);
-        self.summary.insert_many(key, many.summary_weight());
+    pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
+        self.cs.update_weighted(key, weight);
+        self.summary.update_weighted(key, weight.summary_weight());
     }
 
     /// Records every key in `values`.
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
@@ -133,23 +133,23 @@ where
 {
     /// Records one occurrence of `key`.
     #[inline]
-    pub fn insert(&mut self, key: &DataInput) {
-        self.cs.insert(key);
-        self.summary.insert(key);
+    pub fn update(&mut self, key: &DataInput) {
+        self.cs.update(key);
+        self.summary.update(key);
     }
 
     /// Adds `±many` to `key`'s cells and its
     /// [`SpaceSavingCounter::summary_weight`] to the summary.
     #[inline]
-    pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
-        self.cs.insert_many(key, many);
-        self.summary.insert_many(key, many.summary_weight());
+    pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
+        self.cs.update_weighted(key, weight);
+        self.summary.update_weighted(key, weight.summary_weight());
     }
 
     /// Records every key in `values`.
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
@@ -185,9 +185,9 @@ mod tests {
     #[test]
     fn top_k_ranks_the_candidates_by_their_matrix_estimate() {
         let mut sk = CSSpaceSaving::<Vector2D<i64>, RegularPath>::new(3, 1024, 2);
-        sk.insert_many(&DataInput::U64(1), 5);
-        sk.insert(&DataInput::U64(2));
-        sk.insert(&DataInput::U64(3));
+        sk.update_weighted(&DataInput::U64(1), 5);
+        sk.update(&DataInput::U64(2));
+        sk.update(&DataInput::U64(3));
         assert_eq!(sk.estimate(&DataInput::U64(2)), 1.0);
         assert_eq!(sk.estimate(&DataInput::U64(3)), 1.0);
         assert_eq!(sk.space_saving().estimate(&DataInput::U64(3)), 2);
@@ -204,12 +204,12 @@ mod tests {
         let mut ss_a = CSSpaceSaving::<Vector2D<i64>, FastPath>::new(3, 1024, 3);
         let mut ss_b = ss_a.clone();
         for (local, heap) in [(1u64, &mut heap_a), (2, &mut heap_b)] {
-            heap.insert_many(&DataInput::U64(local), 5);
-            heap.insert_many(&DataInput::U64(3), 3);
+            heap.update_weighted(&DataInput::U64(local), 5);
+            heap.update_weighted(&DataInput::U64(3), 3);
         }
         for (local, ss) in [(1u64, &mut ss_a), (2, &mut ss_b)] {
-            ss.insert_many(&DataInput::U64(local), 5);
-            ss.insert_many(&DataInput::U64(3), 3);
+            ss.update_weighted(&DataInput::U64(local), 5);
+            ss.update_weighted(&DataInput::U64(3), 3);
         }
         heap_a.merge(&heap_b);
         ss_a.merge(&ss_b);
@@ -236,8 +236,8 @@ mod tests {
     #[test]
     fn a_negative_weight_reaches_the_matrix_alone() {
         let mut sk = CSSpaceSaving::<Vector2D<f64>, RegularPath>::new(3, 1024, 4);
-        sk.insert_many(&DataInput::U64(1), -2.5);
-        sk.insert_many(&DataInput::U64(2), 0.5);
+        sk.update_weighted(&DataInput::U64(1), -2.5);
+        sk.update_weighted(&DataInput::U64(2), 0.5);
         assert_eq!(sk.estimate(&DataInput::U64(1)), -2.5);
         assert_eq!(sk.space_saving().estimate(&DataInput::U64(1)), 0);
         assert_eq!(sk.space_saving().estimate(&DataInput::U64(2)), 1);

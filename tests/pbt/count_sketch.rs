@@ -57,7 +57,7 @@ fn packed_cols() -> impl Strategy<Value = usize> {
 /// key alone.
 fn signature(rows: usize, cols: usize, key: u64) -> Vec<(usize, i32)> {
     let mut probe = Cs::with_dimensions(rows, cols);
-    probe.insert(&DataInput::U64(key));
+    probe.update(&DataInput::U64(key));
     (0..rows)
         .map(|r| {
             let touched: Vec<(usize, i32)> = (0..cols)
@@ -105,10 +105,10 @@ proptest! {
         let mut first = Cs::with_dimensions(rows, cols);
         let mut second = Cs::with_dimensions(rows, cols);
         for k in &a {
-            first.insert(&DataInput::U64(*k));
+            first.update(&DataInput::U64(*k));
         }
         for k in &b {
-            second.insert(&DataInput::U64(*k));
+            second.update(&DataInput::U64(*k));
         }
 
         prop_assert_eq!(cs_cells(&first), cs_cells(&second));
@@ -125,9 +125,9 @@ proptest! {
         let mut by_weight = Cs::with_dimensions(rows, cols);
         let mut by_repeat = Cs::with_dimensions(rows, cols);
         for (k, n) in &updates {
-            by_weight.insert_many(&DataInput::U64(*k), *n);
+            by_weight.update_weighted(&DataInput::U64(*k), *n);
             for _ in 0..*n {
-                by_repeat.insert(&DataInput::U64(*k));
+                by_repeat.update(&DataInput::U64(*k));
             }
         }
 
@@ -180,7 +180,7 @@ proptest! {
     ) {
         let mut sketch = CsWire::with_dimensions(rows, cols);
         for k in &stream {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
 
         round_trip!(
@@ -203,15 +203,15 @@ proptest! {
     ) {
         let mut sketch = Cs::with_dimensions(rows, cols);
         for k in &background {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
         let before = cs_cells(&sketch);
 
         for (k, w) in &undone {
-            sketch.insert_many(&DataInput::U64(*k), *w);
+            sketch.update_weighted(&DataInput::U64(*k), *w);
         }
         for (k, w) in undone.iter().rev() {
-            sketch.insert_many(&DataInput::U64(*k), -*w);
+            sketch.update_weighted(&DataInput::U64(*k), -*w);
         }
 
         prop_assert_eq!(first_difference(cols, &cs_cells(&sketch), &before), None);
@@ -226,15 +226,15 @@ proptest! {
     ) {
         let mut sketch = Cs::with_dimensions(rows, cols);
         for k in &background {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
         let before = cs_cells(&sketch);
 
         for k in &undone {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
         for k in undone.iter().rev() {
-            sketch.insert_many(&DataInput::U64(*k), -1);
+            sketch.update_weighted(&DataInput::U64(*k), -1);
         }
 
         prop_assert_eq!(first_difference(cols, &cs_cells(&sketch), &before), None);
@@ -253,9 +253,9 @@ proptest! {
         let mut sketch = Cs::with_dimensions(rows, cols);
 
         for (step, k) in background.iter().enumerate() {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
             let before = cs_cells(&sketch);
-            sketch.insert(&DataInput::U64(key));
+            sketch.update(&DataInput::U64(key));
             let after = cs_cells(&sketch);
 
             for (r, (col, sign)) in signature.iter().enumerate() {
@@ -283,7 +283,7 @@ proptest! {
     ) {
         let mut repeated = Cs::with_dimensions(rows, cols);
         for _ in 0..repeats {
-            repeated.insert(&DataInput::U64(key));
+            repeated.update(&DataInput::U64(key));
         }
         prop_assert_eq!(
             repeated.estimate(&DataInput::U64(key)), repeats as f64,
@@ -292,7 +292,7 @@ proptest! {
 
         let mut signed = Cs::with_dimensions(rows, cols);
         for w in &weights {
-            signed.insert_many(&DataInput::U64(key), *w);
+            signed.update_weighted(&DataInput::U64(key), *w);
         }
         let total: i32 = weights.iter().sum();
         prop_assert_eq!(
@@ -313,7 +313,7 @@ proptest! {
         let signature = signature(rows, cols, key);
         let mut sketch = Cs::with_dimensions(rows, cols);
         for k in &stream {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
 
         let readings = row_readings(&sketch, &signature);

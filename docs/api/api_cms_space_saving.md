@@ -28,12 +28,12 @@ fn from_parts(cms: CountMin<S, M, H>, space_saving: SpaceSaving<H>) -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &DataInput)
-fn insert_many(&mut self, key: &DataInput, many: S::Counter)
-fn bulk_insert(&mut self, values: &[DataInput])
+fn update(&mut self, key: &DataInput)
+fn update_weighted(&mut self, key: &DataInput, weight: S::Counter)
+fn update_batch(&mut self, values: &[DataInput])
 ```
 
-`insert_many` adds `many` to the matrix and `many.summary_weight()` to the
+`update_weighted` adds `many` to the matrix and `many.summary_weight()` to the
 summary: the weight rounded up, saturating at `u64::MAX`, and nothing when the
 weight is not positive.
 
@@ -81,6 +81,6 @@ serialize. There is no delta kind.
 use asap_sketchlib::{CMSSpaceSaving, DataInput, RegularPath, Vector2D};
 
 let mut sk = CMSSpaceSaving::<Vector2D<i64>, RegularPath>::new(4, 1024, 64);
-sk.insert_many(&DataInput::Str("flow"), 3);
+sk.update_weighted(&DataInput::Str("flow"), 3);
 assert_eq!(sk.top_k(1)[0].1, 3);
 ```

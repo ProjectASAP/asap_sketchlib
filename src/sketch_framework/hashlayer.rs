@@ -101,13 +101,13 @@ impl EnsembleSketch {
     }
 
     /// Inserts a precomputed hash into the sketch.
-    pub fn insert_with_hash(&mut self, hash: &MatrixHashType) {
+    pub fn update_with_hash(&mut self, hash: &MatrixHashType) {
         match self {
             EnsembleSketch::CountMinFast(sketch) => sketch.fast_insert(hash),
             EnsembleSketch::CountFast(sketch) => sketch.fast_insert(hash),
-            EnsembleSketch::HllErtl(hll) => hll.insert_with_hash(hash.lower_64()),
-            EnsembleSketch::HllClassic(hll) => hll.insert_with_hash(hash.lower_64()),
-            EnsembleSketch::HllHip(hll) => hll.insert_with_hash(hash.lower_64()),
+            EnsembleSketch::HllErtl(hll) => hll.update_with_hash(hash.lower_64()),
+            EnsembleSketch::HllClassic(hll) => hll.update_with_hash(hash.lower_64()),
+            EnsembleSketch::HllHip(hll) => hll.update_with_hash(hash.lower_64()),
         }
     }
 
@@ -255,64 +255,64 @@ where
     // -- Insertion -------------------------------------------------------------
 
     /// Hash `val` once and insert into every sketch in the layer.
-    pub fn insert(&mut self, val: &DataInput) {
+    pub fn update(&mut self, val: &DataInput) {
         let hash = self.hash_input(val);
         for i in 0..self.sketches.len() {
-            self.sketches[i].insert_with_hash(&hash);
+            self.sketches[i].update_with_hash(&hash);
         }
     }
 
     /// Insert a pre-computed hash into every sketch in the layer.
-    pub fn insert_with_hash(&mut self, hash: &H::HashType) {
+    pub fn update_with_hash(&mut self, hash: &H::HashType) {
         for i in 0..self.sketches.len() {
-            self.sketches[i].insert_with_hash(hash);
+            self.sketches[i].update_with_hash(hash);
         }
     }
 
     /// Hash `val` once and insert into the sketches at `indices` only.
-    pub fn insert_at(&mut self, indices: &[usize], val: &DataInput) {
+    pub fn update_at(&mut self, indices: &[usize], val: &DataInput) {
         let hash = self.hash_input(val);
         for &idx in indices {
             if idx < self.sketches.len() {
-                self.sketches[idx].insert_with_hash(&hash);
+                self.sketches[idx].update_with_hash(&hash);
             }
         }
     }
 
     /// Insert a pre-computed hash into the sketches at `indices` only.
-    pub fn insert_at_with_hash(&mut self, indices: &[usize], hash: &H::HashType) {
+    pub fn update_at_with_hash(&mut self, indices: &[usize], hash: &H::HashType) {
         for &idx in indices {
             if idx < self.sketches.len() {
-                self.sketches[idx].insert_with_hash(hash);
+                self.sketches[idx].update_with_hash(hash);
             }
         }
     }
 
     /// Insert a batch of inputs into every sketch in the layer.
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
     /// Insert a batch of pre-computed hashes into every sketch in the layer.
-    pub fn bulk_insert_with_hashes(&mut self, hashes: &[H::HashType]) {
+    pub fn update_batch_with_hashes(&mut self, hashes: &[H::HashType]) {
         for hash in hashes {
-            self.insert_with_hash(hash);
+            self.update_with_hash(hash);
         }
     }
 
     /// Insert a batch of inputs into the sketches at `indices` only.
-    pub fn bulk_insert_at(&mut self, indices: &[usize], values: &[DataInput]) {
+    pub fn update_batch_at(&mut self, indices: &[usize], values: &[DataInput]) {
         for value in values {
-            self.insert_at(indices, value);
+            self.update_at(indices, value);
         }
     }
 
     /// Insert a batch of pre-computed hashes into the sketches at `indices` only.
-    pub fn bulk_insert_at_with_hashes(&mut self, indices: &[usize], hashes: &[H::HashType]) {
+    pub fn update_batch_at_with_hashes(&mut self, indices: &[usize], hashes: &[H::HashType]) {
         for hash in hashes {
-            self.insert_at_with_hash(indices, hash);
+            self.update_at_with_hash(indices, hash);
         }
     }
 
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(layer.len(), 2);
 
         for &value in &data {
-            layer.insert(&DataInput::U64(value));
+            layer.update(&DataInput::U64(value));
         }
 
         let mut cms_errors = Vec::new();
@@ -469,7 +469,7 @@ mod tests {
         let mut layer = default_layer();
 
         for &value in &data {
-            layer.insert_at(&[0], &DataInput::U64(value));
+            layer.update_at(&[0], &DataInput::U64(value));
         }
 
         let sample_key = *baseline.keys().next().unwrap();
@@ -491,10 +491,10 @@ mod tests {
 
         for &value in &data {
             let input = DataInput::U64(value);
-            layer_a.insert(&input);
+            layer_a.update(&input);
 
             let hash = layer_b.hash_input(&input);
-            layer_b.insert_with_hash(&hash);
+            layer_b.update_with_hash(&hash);
         }
 
         let probe = DataInput::U64(data[0]);
@@ -516,7 +516,7 @@ mod tests {
                 .expect("HLL-only layer");
 
         for &value in &data {
-            layer.insert(&DataInput::U64(value));
+            layer.update(&DataInput::U64(value));
         }
 
         let hll_est = layer.cardinality(0).expect("HLL cardinality");
@@ -581,7 +581,7 @@ mod tests {
 
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
         for &value in &data {
-            layer.insert(&DataInput::U64(value));
+            layer.update(&DataInput::U64(value));
         }
 
         let input = DataInput::U64(data[0]);
@@ -601,7 +601,7 @@ mod tests {
         let baseline = create_baseline(&data);
 
         for &value in &data {
-            layer.insert(&DataInput::U64(value));
+            layer.update(&DataInput::U64(value));
         }
 
         let cms_est = layer

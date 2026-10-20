@@ -313,7 +313,7 @@ where
     C: CountSketchCounter,
 {
     /// Inserts an observation with standard Count Sketch updating algorithm.
-    pub fn insert(&mut self, value: &DataInput) {
+    pub fn update(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -332,7 +332,7 @@ where
     }
 
     /// Inserts an observation with the given count (weight).
-    pub fn insert_many(&mut self, value: &DataInput, many: C) {
+    pub fn update_weighted(&mut self, value: &DataInput, weight: C) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -340,7 +340,7 @@ where
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             let bit = ((hashed >> 63) & 1) as i32;
             let sign_bit = if bit == 1 { 1 } else { -1 };
-            let delta = if sign_bit > 0 { many } else { -many };
+            let delta = if sign_bit > 0 { weight } else { -weight };
             self.counts
                 .update_one_counter(r, col, |a, b| *a += b, delta);
         }
@@ -384,7 +384,7 @@ where
 {
     /// Inserts an observation using the combined hash optimization.
     #[inline(always)]
-    pub fn insert(&mut self, value: &DataInput) {
+    pub fn update(&mut self, value: &DataInput) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts.fast_insert(
             |counter, value, row| {
@@ -399,7 +399,7 @@ where
 
     /// Inserts an observation with the given count using the combined hash optimization.
     #[inline(always)]
-    pub fn insert_many(&mut self, value: &DataInput, many: S::Counter) {
+    pub fn update_weighted(&mut self, value: &DataInput, weight: S::Counter) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts.fast_insert(
             |counter, value, row| {
@@ -407,7 +407,7 @@ where
                 let delta = if sign > 0 { *value } else { -*value };
                 *counter += delta;
             },
-            many,
+            weight,
             &hashed_val,
         );
     }
@@ -498,7 +498,7 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
 
     /// Inserts an observation through Nitro's per-row sampling schedule.
     ///
-    /// Cells and signs are derived exactly as a plain `insert` derives them —
+    /// Cells and signs are derived exactly as a plain `update` derives them —
     /// `FastPathHasher::hash_for_matrix`, then `col_for_row` and
     /// `sign_for_row` — so `estimate` reads back what this wrote. The hash is
     /// computed once per observation, and the admitted rows are collected into
@@ -571,15 +571,15 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> 
     /// Inserts a value, emitting a delta at every promotion of the default
     /// threshold `COUNT_PROMASK`.
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
-        self.insert_emit_delta_with_threshold(value, COUNT_PROMASK, emit);
+    pub fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
+        self.update_emit_delta_with_threshold(value, COUNT_PROMASK, emit);
     }
 
     /// Inserts a value, emitting a delta and clearing the counter each time
     /// `|counter|` reaches `threshold`. Count sketch counters are signed, so
     /// the magnitude is what the threshold is applied to (§4.4).
     #[inline(always)]
-    pub fn insert_emit_delta_with_threshold(
+    pub fn update_emit_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
@@ -605,15 +605,15 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> 
         }
     }
 
-    /// As `insert_emit_delta_with_threshold`, but every delta carries the flow
+    /// As `update_emit_delta_with_threshold`, but every delta carries the flow
     /// key so an aggregator can maintain a heavy-hitter heap.
-    pub fn insert_emit_keyed_delta_with_threshold(
+    pub fn update_emit_keyed_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
         emit: &mut impl FnMut(KeyedCountDelta),
     ) {
-        self.insert_emit_delta_with_threshold(value, threshold, &mut |delta| {
+        self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
             emit(KeyedCountDelta {
                 key: input_to_owned(value),
                 delta,
@@ -629,13 +629,13 @@ where
     /// Inserts a value using the fast path, emitting a delta at every
     /// promotion of the default threshold `COUNT_PROMASK`.
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
-        self.insert_emit_delta_with_threshold(value, COUNT_PROMASK, emit);
+    pub fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
+        self.update_emit_delta_with_threshold(value, COUNT_PROMASK, emit);
     }
 
     /// Fast-path counterpart of the regular-path threshold API.
     #[inline(always)]
-    pub fn insert_emit_delta_with_threshold(
+    pub fn update_emit_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
@@ -661,14 +661,14 @@ where
         }
     }
 
-    /// Fast-path counterpart of `insert_emit_keyed_delta_with_threshold`.
-    pub fn insert_emit_keyed_delta_with_threshold(
+    /// Fast-path counterpart of `update_emit_keyed_delta_with_threshold`.
+    pub fn update_emit_keyed_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
         emit: &mut impl FnMut(KeyedCountDelta),
     ) {
-        self.insert_emit_delta_with_threshold(value, threshold, &mut |delta| {
+        self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
             emit(KeyedCountDelta {
                 key: input_to_owned(value),
                 delta,
@@ -705,7 +705,7 @@ mod tests {
         let mut deltas: Vec<CountDelta> = Vec::new();
 
         for _ in 0..200 {
-            child.insert_emit_delta(&key, &mut |d| deltas.push(d));
+            child.update_emit_delta(&key, &mut |d| deltas.push(d));
         }
         assert!(
             deltas.len() >= 3,
@@ -731,7 +731,7 @@ mod tests {
 
         for value in sample_zipf_u64(domain, exponent, samples, seed) {
             let key = DataInput::U64(value);
-            sketch.insert(&key);
+            sketch.update(&key);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -768,7 +768,7 @@ mod tests {
         let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::Str("alpha");
 
-        sketch.insert(&key);
+        sketch.update(&key);
 
         for row in 0..sketch.rows() {
             let idx = counter_index(row, &key, sketch.cols());
@@ -794,7 +794,7 @@ mod tests {
         ];
 
         for key in &keys {
-            fast.insert(key);
+            fast.update(key);
         }
 
         for key in &keys {
@@ -819,7 +819,7 @@ mod tests {
         ];
 
         for key in &keys {
-            sketch.insert(key);
+            sketch.update(key);
         }
 
         for key in &keys {
@@ -838,7 +838,7 @@ mod tests {
 
         let repeats = 37;
         for _ in 0..repeats {
-            sketch.insert(&key);
+            sketch.update(&key);
         }
 
         let estimate = sketch.estimate(&key);
@@ -861,7 +861,7 @@ mod tests {
 
         for _ in 0..5 {
             for key in &keys {
-                sketch.insert(key);
+                sketch.update(key);
             }
         }
 
@@ -880,9 +880,9 @@ mod tests {
         let mut right = Count::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
         let key = DataInput::Str("delta");
 
-        left.insert(&key);
-        right.insert(&key);
-        right.insert(&key);
+        left.update(&key);
+        right.update(&key);
+        right.update(&key);
 
         let left_indices: Vec<_> = (0..left.rows())
             .map(|row| counter_index(row, &key, left.cols()))
@@ -900,7 +900,7 @@ mod tests {
     fn f64_estimate_is_the_unrounded_median_and_takes_nan() {
         let key = DataInput::Str("alpha");
         let mut sketch = Count::<Vector2D<f64>, RegularPath>::with_dimensions(3, 64);
-        sketch.insert_many(&key, 1.5);
+        sketch.update_weighted(&key, 1.5);
         assert_eq!(sketch.estimate(&key), 1.5);
 
         let nan =
@@ -946,7 +946,7 @@ mod tests {
         let mut sk = Count::<Vector2D<i32>, RegularPath>::default();
         // Insert values 0..9 once using the regular path.
         for i in 0..10 {
-            sk.insert(&DataInput::I32(i));
+            sk.update(&DataInput::I32(i));
         }
 
         // Build the expected counter array by mirroring the regular-path hashing logic.
@@ -970,7 +970,7 @@ mod tests {
 
         // Insert the same values again; counters should double.
         for i in 0..10 {
-            sk.insert(&DataInput::I32(i));
+            sk.update(&DataInput::I32(i));
         }
         let expected_twice: Vec<i32> = expected_once.iter().map(|v| v * 2).collect();
         assert_eq!(sk.as_storage().as_slice(), expected_twice.as_slice());
@@ -990,7 +990,7 @@ mod tests {
         let mut sk = Count::<Vector2D<i32>, FastPath>::default();
         // Insert values 0..9 once using the fast path.
         for i in 0..10 {
-            sk.insert(&DataInput::I32(i));
+            sk.update(&DataInput::I32(i));
         }
 
         // Build the expected counter array by mirroring the fast-path hashing logic.
@@ -1029,7 +1029,7 @@ mod tests {
         let mut truth = HashMap::<u64, i64>::new();
         let mut cs = Count::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
         for value in sample_zipf_u64(DOMAIN, 1.1, SAMPLES, STREAM_SEED) {
-            cs.insert(&DataInput::U64(value));
+            cs.update(&DataInput::U64(value));
             *truth.entry(value).or_insert(0) += 1;
         }
 

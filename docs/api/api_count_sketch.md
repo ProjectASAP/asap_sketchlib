@@ -27,8 +27,8 @@ fn with_dimensions_and_seed(rows: usize, cols: usize, seed_idx: usize) -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, value: &DataInput)
-fn insert_many(&mut self, value: &DataInput, many: S::Counter)
+fn update(&mut self, value: &DataInput)
+fn update_weighted(&mut self, value: &DataInput, weight: S::Counter)
 fn fast_insert_with_hash_value(&mut self, hashed_val: &H::HashType)
 
 // CountL2HH
@@ -140,7 +140,7 @@ serialize.
 use asap_sketchlib::{Count, DataInput};
 
 let mut cs = Count::with_dimensions(5, 2048);
-cs.insert(&DataInput::Str("alpha"));
+cs.update(&DataInput::Str("alpha"));
 let est = cs.estimate(&DataInput::Str("alpha"));
 assert!(est >= 1.0);
 ```

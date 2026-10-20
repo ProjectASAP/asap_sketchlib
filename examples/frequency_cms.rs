@@ -27,7 +27,7 @@ fn main() {
     // FastPath selects the optimized hashing route for throughput-critical workloads.
     let mut cms = CountMin::<FixedMatrix, FastPath>::default();
     for &id in &user_ids {
-        cms.insert(&DataInput::U64(id));
+        cms.update(&DataInput::U64(id));
     }
     let estimated_count = cms.estimate(&DataInput::U64(target));
 

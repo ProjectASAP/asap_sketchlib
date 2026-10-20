@@ -116,7 +116,7 @@ macro_rules! hll_battery {
                 let base = IDENTITY_NAMESPACE_STRIDE * (i as u64 + 1);
                 let mut sketch = <$ty>::new();
                 for k in 0..target {
-                    sketch.insert(&DataInput::U64(base + k));
+                    sketch.update(&DataInput::U64(base + k));
                 }
                 if let Err(detail) = spec.check(sketch.estimate() as f64, target as usize) {
                     panic!("{detail}. {context}");
@@ -133,7 +133,7 @@ macro_rules! hll_battery {
             // moves to a larger leading-zero count. Structural, not a band.
             let before = biggest.estimate();
             for k in 0..target.min(200_000) {
-                biggest.insert(&DataInput::U64(base + k));
+                biggest.update(&DataInput::U64(base + k));
             }
             assert_eq!(
                 biggest.estimate(),
@@ -153,11 +153,11 @@ macro_rules! hll_battery {
                 let mut odd = <$ty>::new();
                 for k in 0..MERGE_N {
                     let d = DataInput::U64(mbase + k);
-                    single.insert(&d);
+                    single.update(&d);
                     if k % 2 == 0 {
-                        even.insert(&d);
+                        even.update(&d);
                     } else {
-                        odd.insert(&d);
+                        odd.update(&d);
                     }
                 }
                 let merge_shards: fn(&$ty, &$ty, &$ty) -> Option<(bool, bool)> = $merge;
@@ -340,7 +340,7 @@ fn hll_accuracy_improves_with_precision_as_the_error_model_predicts() {
             for b in 0..BLOCKS {
                 let mut s = <$ty>::new();
                 for i in 0..N {
-                    s.insert(&DataInput::U64(b * N + i));
+                    s.update(&DataInput::U64(b * N + i));
                 }
                 let rel = (s.estimate() as f64 - N as f64) / N as f64;
                 sq += rel * rel;
@@ -404,7 +404,7 @@ fn hll_classic_switchover_band_stays_within_the_documented_empirical_band() {
             for b in 0..BLOCKS {
                 let mut s = <$ty>::new();
                 for i in 0..n {
-                    s.insert(&DataInput::U64(b * 20_000_000 + i));
+                    s.update(&DataInput::U64(b * 20_000_000 + i));
                 }
                 let rel = (s.estimate() as f64 - n as f64) / n as f64;
                 sq += rel * rel;
@@ -695,9 +695,9 @@ fn custom_precision_accuracy_improves_with_precision_as_the_error_model_predicts
     let mut p18 = HyperLogLogImpl::<Classic, HllRegP18>::new();
     for k in 0..N {
         let d = DataInput::U64(BASE + k);
-        p10.insert(&d);
-        p13.insert(&d);
-        p18.insert(&d);
+        p10.update(&d);
+        p13.update(&d);
+        p18.update(&d);
     }
 
     let relative = |estimate: usize| (estimate as f64 - N as f64).abs() / N as f64;
@@ -729,14 +729,14 @@ fn a_custom_precision_merge_reproduces_the_single_pass_registers_for_every_estim
     let mut ertl_odd = HyperLogLogImpl::<ErtlMLE, HllRegP13>::new();
     for k in 0..N {
         let d = DataInput::U64(BASE + k);
-        classic_single.insert(&d);
-        ertl_single.insert(&d);
+        classic_single.update(&d);
+        ertl_single.update(&d);
         if k % 2 == 0 {
-            classic_even.insert(&d);
-            ertl_even.insert(&d);
+            classic_even.update(&d);
+            ertl_even.update(&d);
         } else {
-            classic_odd.insert(&d);
-            ertl_odd.insert(&d);
+            classic_odd.update(&d);
+            ertl_odd.update(&d);
         }
     }
 
@@ -930,7 +930,7 @@ macro_rules! hll_zipf_battery {
 
                 let mut sketch = <$ty>::new();
                 for &v in &stream.values {
-                    sketch.insert(&DataInput::U64(v));
+                    sketch.update(&DataInput::U64(v));
                 }
                 if let Err(detail) = spec.check(sketch.estimate() as f64, n) {
                     panic!("{detail}. {context}");
@@ -938,7 +938,7 @@ macro_rules! hll_zipf_battery {
 
                 let mut once = <$ty>::new();
                 for &v in &stream.first_appearance {
-                    once.insert(&DataInput::U64(v));
+                    once.update(&DataInput::U64(v));
                 }
                 assert_eq!(
                     sketch.estimate(),
@@ -951,7 +951,7 @@ macro_rules! hll_zipf_battery {
 
                 let before = sketch.estimate();
                 for &v in &stream.values {
-                    sketch.insert(&DataInput::U64(v));
+                    sketch.update(&DataInput::U64(v));
                 }
                 assert_eq!(
                     sketch.estimate(),
@@ -1185,9 +1185,9 @@ mod documented_matrix {
                     let mut hip = HyperLogLogHIPImpl::<$reg>::new();
                     for key in &input.keys {
                         let d = input.data(*key);
-                        classic.insert(&d);
-                        ertl.insert(&d);
-                        hip.insert(&d);
+                        classic.update(&d);
+                        ertl.update(&d);
+                        hip.update(&d);
                     }
 
                     for (label, spec, estimate) in [
@@ -1218,7 +1218,7 @@ mod documented_matrix {
                     // a register only ever takes a maximum. Structural.
                     let before = classic.estimate();
                     for key in &input.keys {
-                        classic.insert(&input.data(*key));
+                        classic.update(&input.data(*key));
                     }
                     assert_eq!(
                         classic.estimate(),
@@ -1236,9 +1236,9 @@ mod documented_matrix {
                     for (i, key) in input.keys.iter().enumerate() {
                         let d = input.data(*key);
                         if i % 2 == 0 {
-                            even.insert(&d);
+                            even.update(&d);
                         } else {
-                            odd.insert(&d);
+                            odd.update(&d);
                         }
                     }
                     even.merge(&odd);
@@ -1389,7 +1389,7 @@ mod documented_matrix {
 
         let mut um = UnivMon::init_univmon(HEAP, ROWS, COLS, LAYERS);
         for key in &input.keys {
-            um.insert(&input.data(*key), 1);
+            um.update_weighted(&input.data(*key), 1);
         }
 
         let context = format!(
@@ -1421,7 +1421,7 @@ mod documented_matrix {
         let distinct = distinct_of(&input) as f64;
         let mut um = UnivMon::init_univmon(32, 5, 2_048, 8);
         for key in &input.keys {
-            um.insert(&input.data(*key), 1);
+            um.update_weighted(&input.data(*key), 1);
         }
         assert!(
             um.calc_card() < distinct * 0.5,

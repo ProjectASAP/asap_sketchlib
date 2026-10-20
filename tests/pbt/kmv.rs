@@ -5,7 +5,7 @@
 //! is that definition read literally: a `BTreeSet` over the stream, truncated
 //! to k.
 //!
-//! Most laws drive `insert_by_hash`, so the stream the oracle reads is the
+//! Most laws drive `update_with_hash`, so the stream the oracle reads is the
 //! stream the sketch retains from and no hash function stands between them.
 //! One law covers the key path separately, pinning what the wire format
 //! declares: each key is hashed once, at the canonical seed.
@@ -136,7 +136,7 @@ fn smallest_distinct(stream: &[u64], k: usize) -> Vec<u64> {
 fn from_hashes(k: usize, stream: &[u64]) -> Kmv {
     let mut sketch = Kmv::new(k);
     for hash in stream {
-        sketch.insert_by_hash(*hash);
+        sketch.update_with_hash(*hash);
     }
     sketch
 }
@@ -177,7 +177,7 @@ proptest! {
         let before = retained(&sketch);
 
         for hash in &again {
-            sketch.insert_by_hash(*hash);
+            sketch.update_with_hash(*hash);
         }
 
         prop_assert_eq!(
@@ -212,7 +212,7 @@ proptest! {
     ) {
         let mut sketch = Kmv::new(k);
         for key in &stream {
-            sketch.insert(&DataInput::U64(*key));
+            sketch.update(&DataInput::U64(*key));
         }
 
         let hashed: Vec<u64> = stream
@@ -283,7 +283,7 @@ proptest! {
         let raised = kth.max(raise);
         let mut taller = Kmv::new(k);
         for hash in hashes[..k - 1].iter().chain(std::iter::once(&raised)) {
-            taller.insert_by_hash(*hash);
+            taller.update_with_hash(*hash);
         }
         prop_assert_eq!(taller.k_vals.len(), k);
         prop_assert!(
@@ -306,7 +306,7 @@ proptest! {
         let mut previous = sketch.estimate();
 
         for (i, hash) in stream.iter().enumerate() {
-            sketch.insert_by_hash(*hash);
+            sketch.update_with_hash(*hash);
             let now = sketch.estimate();
             prop_assert!(
                 now.is_finite(),

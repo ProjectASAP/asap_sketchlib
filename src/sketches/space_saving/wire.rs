@@ -433,7 +433,7 @@ mod tests {
             let draw = next_random(&mut state);
             let unit = (draw >> 11) as f64 / (1u64 << 53) as f64;
             let key = (distinct as f64).powf(unit) as i64;
-            summary.insert_many(&DataInput::I64(key), 1 + draw % 3);
+            summary.update_weighted(&DataInput::I64(key), 1 + draw % 3);
         }
         summary
     }
@@ -524,10 +524,10 @@ mod tests {
         let mut left: SpaceSaving = SpaceSaving::with_capacity(33);
         let mut right: SpaceSaving = SpaceSaving::with_capacity(1);
         for _ in 0..10 {
-            right.insert(&DataInput::I64(7));
+            right.update(&DataInput::I64(7));
         }
         for _ in 0..20 {
-            right.insert(&DataInput::I64(8));
+            right.update(&DataInput::I64(8));
         }
         left.merge(&right);
 
@@ -590,7 +590,7 @@ mod tests {
         fn check(expected: &str, values: &[DataInput]) {
             let mut summary: SpaceSaving = SpaceSaving::with_capacity(8);
             for (i, value) in values.iter().enumerate() {
-                summary.insert_many(value, 3 * (i as u64 + 1));
+                summary.update_weighted(value, 3 * (i as u64 + 1));
             }
             assert_eq!(summary.len(), values.len(), "{expected}: keys collided");
 
@@ -649,7 +649,7 @@ mod tests {
         let keys: [&[u8]; 3] = [&[0xff, 0x00, 0xfe], &[0x80; 40], b""];
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(8);
         for (i, key) in keys.iter().enumerate() {
-            summary.insert_many(&DataInput::Bytes(key), 3 * (i as u64 + 1));
+            summary.update_weighted(&DataInput::Bytes(key), 3 * (i as u64 + 1));
         }
 
         let bytes = summary.serialize_to_bytes().expect("serialize");
@@ -681,8 +681,8 @@ mod tests {
     #[test]
     fn space_saving_refuses_byte_keys_mixed_with_string_keys() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(4);
-        summary.insert_many(&DataInput::Bytes(b"abc"), 5);
-        summary.insert_many(&DataInput::Str("abc"), 2);
+        summary.update_weighted(&DataInput::Bytes(b"abc"), 5);
+        summary.update_weighted(&DataInput::Str("abc"), 2);
         assert_eq!(summary.len(), 2);
 
         let problem = summary.serialize_to_bytes().expect_err("mixed variants");
@@ -738,8 +738,8 @@ mod tests {
     #[test]
     fn space_saving_refuses_mixed_and_128_bit_keys() {
         let mut mixed: SpaceSaving = SpaceSaving::with_capacity(4);
-        mixed.insert(&DataInput::I32(1));
-        mixed.insert(&DataInput::I64(2));
+        mixed.update(&DataInput::I32(1));
+        mixed.update(&DataInput::I64(2));
         assert_eq!(mixed.len(), 2);
         assert!(
             mixed.serialize_to_bytes().is_err(),
@@ -748,7 +748,7 @@ mod tests {
 
         for key in [DataInput::I128(1), DataInput::U128(2)] {
             let mut wide: SpaceSaving = SpaceSaving::with_capacity(4);
-            wide.insert(&key);
+            wide.update(&key);
             assert!(
                 wide.serialize_to_bytes().is_err(),
                 "{key:?} is not a wire key type"
@@ -758,32 +758,32 @@ mod tests {
         // A 128-bit key behind a wire-eligible one is caught on the way into
         // the payload rather than by the first-key check.
         let mut trailing: SpaceSaving = SpaceSaving::with_capacity(4);
-        trailing.insert_many(&DataInput::U64(1), 9);
-        trailing.insert_many(&DataInput::U128(2), 1);
+        trailing.update_weighted(&DataInput::U64(1), 9);
+        trailing.update_weighted(&DataInput::U128(2), 1);
         assert!(trailing.serialize_to_bytes().is_err());
     }
 
     #[test]
     fn space_saving_rejects_a_key_type_the_payload_does_not_carry() {
         let mut strings: SpaceSaving = SpaceSaving::with_capacity(4);
-        strings.insert(&DataInput::Str("alpha"));
+        strings.update(&DataInput::Str("alpha"));
         let string_bytes = strings.serialize_to_bytes().expect("serialize");
         let (_, _, string_payload) = envelope::split(&string_bytes).expect("split");
 
         let mut numbers: SpaceSaving = SpaceSaving::with_capacity(4);
-        numbers.insert(&DataInput::U64(11));
+        numbers.update(&DataInput::U64(11));
         let number_bytes = numbers.serialize_to_bytes().expect("serialize");
         let (_, _, number_payload) = envelope::split(&number_bytes).expect("split");
 
         let mut raw: SpaceSaving = SpaceSaving::with_capacity(4);
-        raw.insert(&DataInput::Bytes(&[0xff, 0x00, 0xfe]));
+        raw.update(&DataInput::Bytes(&[0xff, 0x00, 0xfe]));
         let raw_bytes = raw.serialize_to_bytes().expect("serialize");
         let (_, _, raw_payload) = envelope::split(&raw_bytes).expect("split");
 
         // Bytes that ARE valid UTF-8: relabelled "string" they would decode
         // into `HeapItem::String` keys unless the string decode refuses `bin`.
         let mut utf8: SpaceSaving = SpaceSaving::with_capacity(4);
-        utf8.insert(&DataInput::Bytes(b"alpha"));
+        utf8.update(&DataInput::Bytes(b"alpha"));
         let utf8_bytes = utf8.serialize_to_bytes().expect("serialize");
         let (_, _, utf8_payload) = envelope::split(&utf8_bytes).expect("split");
 
@@ -857,8 +857,8 @@ mod tests {
         let mut alt: SpaceSaving<AltHasher> = SpaceSaving::with_capacity(4);
         let mut std: SpaceSaving = SpaceSaving::with_capacity(4);
         for (key, weight) in [(1u64, 5u64), (2, 3)] {
-            alt.insert_many(&DataInput::U64(key), weight);
-            std.insert_many(&DataInput::U64(key), weight);
+            alt.update_weighted(&DataInput::U64(key), weight);
+            std.update_weighted(&DataInput::U64(key), weight);
         }
 
         // (a) A summary built with a custom-profile hasher round-trips.

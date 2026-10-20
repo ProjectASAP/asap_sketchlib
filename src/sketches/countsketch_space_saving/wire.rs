@@ -77,7 +77,7 @@ mod tests {
     fn round_trip_keeps_matrix_summary_and_bytes() {
         let mut sketch = Target::new(3, 8, 2);
         for (key, weight) in [(1u64, 9i64), (2, 5), (3, -4), (4, 2)] {
-            sketch.insert_many(&DataInput::U64(key), weight);
+            sketch.update_weighted(&DataInput::U64(key), weight);
         }
         let encoded = sketch.serialize_to_bytes().expect("serialize");
         assert_eq!(&encoded[7..10], &[2u8, 0x1f, 0x00]);
@@ -98,8 +98,8 @@ mod tests {
     #[test]
     fn f64_counters_round_trip_on_the_fast_path() {
         let mut sketch = CSSpaceSaving::<Vector2D<f64>, FastPath>::new(3, 16, 4);
-        sketch.insert_many(&DataInput::I32(-7), 2.5);
-        sketch.insert_many(&DataInput::I32(3), 0.25);
+        sketch.update_weighted(&DataInput::I32(-7), 2.5);
+        sketch.update_weighted(&DataInput::I32(3), 0.25);
         let encoded = sketch.serialize_to_bytes().expect("serialize");
         let decoded = CSSpaceSaving::<Vector2D<f64>, FastPath>::deserialize_from_bytes(&encoded)
             .expect("f64");

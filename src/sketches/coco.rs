@@ -121,8 +121,8 @@ impl CocoBucket {
         }
     }
 
-    pub fn add_v(&mut self, v: u64) {
-        self.val += v;
+    pub fn add(&mut self, weight: u64) {
+        self.val += weight;
     }
 }
 
@@ -176,7 +176,7 @@ impl<H: SketchHasher> Coco<H> {
     /// directly. Otherwise the whole increment lands in the smallest of them,
     /// drawn uniformly at random when several share that smallest value, and
     /// that bucket's key is replaced with `key` with probability `v / val`.
-    pub fn insert(&mut self, key: &str, v: u64) {
+    pub fn update_weighted(&mut self, key: &str, weight: u64) {
         if self.d == 0 || self.w == 0 {
             return;
         }
@@ -189,7 +189,7 @@ impl<H: SketchHasher> Coco<H> {
             let idx = H::hash64_seeded(i, &key_input) as usize % self.w;
             let bucket = &self.table[i][idx];
             if bucket.full_key.as_deref() == Some(key) {
-                self.table[i][idx].val += v;
+                self.table[i][idx].val += weight;
                 return;
             }
             if bucket.val < victim_val {
@@ -207,12 +207,12 @@ impl<H: SketchHasher> Coco<H> {
         }
 
         let bucket = &mut self.table[victim.0][victim.1];
-        bucket.val += v;
+        bucket.val += weight;
         let elected = match bucket.full_key {
             None => true,
             Some(_) => {
                 let draw = self.rng.unit();
-                v as f64 > draw * bucket.val as f64
+                weight as f64 > draw * bucket.val as f64
             }
         };
         if elected {
@@ -301,7 +301,7 @@ impl<H: SketchHasher> Coco<H> {
         for i in 0..self.d {
             for j in 0..self.w {
                 if let Some(k) = &other.table[i][j].full_key {
-                    self.insert(k.as_str(), other.table[i][j].val);
+                    self.update_weighted(k.as_str(), other.table[i][j].val);
                 }
             }
         }
@@ -327,8 +327,8 @@ mod tests {
         let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
         let key = "user:1234";
 
-        coco.insert(key, 3);
-        coco.insert(key, 2);
+        coco.update_weighted(key, 3);
+        coco.update_weighted(key, 2);
 
         let estimate = coco.estimate_substring("user");
         assert_eq!(estimate, 5);
@@ -339,8 +339,8 @@ mod tests {
     fn estimate_with_udf_allows_custom_partial_matching() {
         // ensure custom UDF matching logic aggregates only intended buckets
         let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
-        coco.insert("region=us|id=1", 4);
-        coco.insert("region=eu|id=2", 6);
+        coco.update_weighted("region=us|id=1", 4);
+        coco.update_weighted("region=eu|id=2", 6);
 
         fn matcher(full: &str, partial: &str) -> bool {
             full.contains(partial)
@@ -368,9 +368,9 @@ mod tests {
             for i in 0..20_000u64 {
                 let key = format!("flow::{}", (i * i + 7 * i) % 512);
                 if i % 2 == 0 {
-                    left.insert(&key, 1);
+                    left.update_weighted(&key, 1);
                 } else {
-                    right.insert(&key, 1);
+                    right.update_weighted(&key, 1);
                 }
             }
             left.merge(&right);
@@ -389,7 +389,7 @@ mod tests {
 
         for trial in 0..TRIALS {
             let mut coco: Coco = Coco::init_with_size_and_seed(TEST_W, TEST_D, trial as u64);
-            coco.insert("flow::tie-probe", 1);
+            coco.update_weighted("flow::tie-probe", 1);
             let row = (0..TEST_D)
                 .find(|i| {
                     (0..TEST_W)
@@ -412,8 +412,8 @@ mod tests {
     fn the_three_queries_disagree_on_a_key_that_prefixes_another() {
         // substring containment is not a key projection: "k1" also matches "k10"
         let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
-        coco.insert("k1", 7);
-        coco.insert("k10", 5);
+        coco.update_weighted("k1", 7);
+        coco.update_weighted("k10", 5);
 
         assert_eq!(coco.estimate_substring("k1"), 12);
         assert_eq!(coco.estimate_key("k1"), 7);
@@ -424,9 +424,9 @@ mod tests {
     fn estimate_projected_aggregates_full_keys_sharing_a_partial_key() {
         // the paper's figure 7: two full keys on one srcip sum to that srcip
         let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
-        coco.insert("19.98.10.26|80", 521);
-        coco.insert("19.98.10.26|443", 520);
-        coco.insert("34.52.73.17|118", 856);
+        coco.update_weighted("19.98.10.26|80", 521);
+        coco.update_weighted("19.98.10.26|443", 520);
+        coco.update_weighted("34.52.73.17|118", 856);
 
         fn srcip(full: &str) -> &str {
             full.split('|').next().unwrap_or(full)
@@ -440,7 +440,7 @@ mod tests {
     fn recorded_flows_yields_each_occupied_bucket_once() {
         let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
         for i in 0..20u64 {
-            coco.insert(&format!("flow::{i}"), i + 1);
+            coco.update_weighted(&format!("flow::{i}"), i + 1);
         }
 
         let occupied = (0..TEST_D)
@@ -460,7 +460,7 @@ mod tests {
         // the one-pass grouping and the per-key scan must never disagree
         let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
         for i in 0..60u64 {
-            coco.insert(&format!("fam{}|item{i}", i % 5), i % 7 + 1);
+            coco.update_weighted(&format!("fam{}|item{i}", i % 5), i % 7 + 1);
         }
 
         let grouped = coco.group_by(before_pipe);
@@ -480,7 +480,7 @@ mod tests {
         let mut coco: Coco = Coco::init_with_size(8, 2);
         let mut total = 0u64;
         for i in 0..400u64 {
-            coco.insert(&format!("fam{}|item{}", i % 6, i % 37), 3);
+            coco.update_weighted(&format!("fam{}|item{}", i % 6, i % 37), 3);
             total += 3;
         }
 
@@ -491,9 +491,9 @@ mod tests {
     #[test]
     fn group_by_reproduces_the_papers_figure_seven() {
         let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
-        coco.insert("19.98.10.26|80", 521);
-        coco.insert("19.98.10.26|443", 520);
-        coco.insert("34.52.73.17|118", 856);
+        coco.update_weighted("19.98.10.26|80", 521);
+        coco.update_weighted("19.98.10.26|443", 520);
+        coco.update_weighted("34.52.73.17|118", 856);
 
         let grouped = coco.group_by(before_pipe);
         assert_eq!(grouped.len(), 2, "two distinct srcips");
@@ -509,7 +509,7 @@ mod tests {
         let key = "flow::single-home";
 
         for _ in 0..64 {
-            coco.insert(key, 1);
+            coco.update_weighted(key, 1);
         }
 
         let homes = (0..TEST_D)
@@ -527,7 +527,7 @@ mod tests {
         let mut coco: Coco = Coco::init_with_size(8, 2);
         let mut total = 0u64;
         for i in 0..500u64 {
-            coco.insert(&format!("k{}", i % 40), 3);
+            coco.update_weighted(&format!("k{}", i % 40), 3);
             total += 3;
         }
 
@@ -547,8 +547,8 @@ mod tests {
         let mut left: Coco = Coco::init_with_size(TEST_W, TEST_D);
         let mut right: Coco = Coco::init_with_size(TEST_W, TEST_D);
 
-        left.insert("alpha:key", 7);
-        right.insert("beta:key", 11);
+        left.update_weighted("alpha:key", 7);
+        right.update_weighted("beta:key", 11);
 
         left.merge(&right);
 

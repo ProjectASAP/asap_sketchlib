@@ -158,8 +158,8 @@ proptest! {
         let mut wrapped = CmHeap::new(rows, cols, top_k);
         let mut bare = Cm::with_dimensions(rows, cols);
         for k in &keys {
-            wrapped.insert(&DataInput::U64(*k));
-            bare.insert(&DataInput::U64(*k));
+            wrapped.update(&DataInput::U64(*k));
+            bare.update(&DataInput::U64(*k));
         }
 
         prop_assert_eq!(cm_cells(wrapped.cms()), cm_cells(&bare));
@@ -175,8 +175,8 @@ proptest! {
         let mut wrapped = CsHeap::new(rows, cols, top_k);
         let mut bare = Cs::with_dimensions(rows, cols);
         for k in &keys {
-            wrapped.insert(&DataInput::U64(*k));
-            bare.insert(&DataInput::U64(*k));
+            wrapped.update(&DataInput::U64(*k));
+            bare.update(&DataInput::U64(*k));
         }
 
         prop_assert_eq!(cs_cells(wrapped.cs()), cs_cells(&bare));
@@ -193,7 +193,7 @@ proptest! {
     ) {
         let mut sketch = CmHeapWire::new(rows, cols, top_k);
         for k in &stream {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
 
         round_trip!(
@@ -215,7 +215,7 @@ proptest! {
     ) {
         let mut sketch = CsHeapWire::new(rows, cols, top_k);
         for k in &stream {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
 
         round_trip!(
@@ -242,7 +242,7 @@ proptest! {
     ) {
         let mut wrapped = CmHeap::new(rows, cols, top_k);
         for k in &stream {
-            wrapped.insert(&DataInput::U64(*k));
+            wrapped.update(&DataInput::U64(*k));
         }
 
         for (key, truth) in truth_of(&stream) {
@@ -269,7 +269,7 @@ proptest! {
         let mut read_at_last_insert: HashMap<u64, i64> = HashMap::new();
         for k in &stream {
             let probe = DataInput::U64(*k);
-            wrapped.insert(&probe);
+            wrapped.update(&probe);
             read_at_last_insert.insert(*k, cs_heap_count(wrapped.estimate(&probe)));
         }
 
@@ -291,8 +291,8 @@ proptest! {
         let mut cs = CsHeap::new(rows, cols, top_k);
         for k in &stream {
             let probe = DataInput::U64(*k);
-            cms.insert(&probe);
-            cs.insert(&probe);
+            cms.update(&probe);
+            cs.update(&probe);
             prop_assert!(
                 cms.heap().len() <= top_k,
                 "CMS holds {} of {}", cms.heap().len(), top_k
@@ -317,8 +317,8 @@ proptest! {
         let mut cs = CsHeap::new(rows, cols, top_k);
         for k in &stream {
             let probe = DataInput::U64(*k);
-            cms.insert(&probe);
-            cs.insert(&probe);
+            cms.update(&probe);
+            cs.update(&probe);
         }
 
         let truth = truth_of(&stream);
@@ -356,12 +356,12 @@ proptest! {
         let mut cs = CsHeap::new(rows, cols, top_k);
         let mut cs_other = CsHeap::new(rows, cols, top_k);
         for k in &left {
-            cms.insert(&DataInput::U64(*k));
-            cs.insert(&DataInput::U64(*k));
+            cms.update(&DataInput::U64(*k));
+            cs.update(&DataInput::U64(*k));
         }
         for k in &right {
-            cms_other.insert(&DataInput::U64(*k));
-            cs_other.insert(&DataInput::U64(*k));
+            cms_other.update(&DataInput::U64(*k));
+            cs_other.update(&DataInput::U64(*k));
         }
 
         let cms_union: HashSet<String> = resident_keys(cms.heap())
@@ -398,12 +398,12 @@ proptest! {
         let mut cs = CsHeap::new(rows, cols, top_k);
         let mut cs_other = CsHeap::new(rows, cols, top_k);
         for k in &left {
-            cms.insert(&DataInput::U64(*k));
-            cs.insert(&DataInput::U64(*k));
+            cms.update(&DataInput::U64(*k));
+            cs.update(&DataInput::U64(*k));
         }
         for k in &right {
-            cms_other.insert(&DataInput::U64(*k));
-            cs_other.insert(&DataInput::U64(*k));
+            cms_other.update(&DataInput::U64(*k));
+            cs_other.update(&DataInput::U64(*k));
         }
         cms.merge(&cms_other);
         cs.merge(&cs_other);
@@ -439,12 +439,12 @@ proptest! {
         let mut cs = CsHeap::new(rows, cols, top_k);
         let mut cs_other = CsHeap::new(rows, cols, top_k);
         for k in &left {
-            cms.insert(&DataInput::U64(*k));
-            cs.insert(&DataInput::U64(*k));
+            cms.update(&DataInput::U64(*k));
+            cs.update(&DataInput::U64(*k));
         }
         for k in &right {
-            cms_other.insert(&DataInput::U64(*k));
-            cs_other.insert(&DataInput::U64(*k));
+            cms_other.update(&DataInput::U64(*k));
+            cs_other.update(&DataInput::U64(*k));
         }
 
         let cms_union: HashSet<String> = resident_keys(cms.heap())

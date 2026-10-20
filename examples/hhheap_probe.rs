@@ -333,7 +333,7 @@ fn sketch_ceiling() {
     let mut plain = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(4, 4096);
     let started = Instant::now();
     for (key, _) in &stream {
-        plain.insert(&as_input(key));
+        plain.update(&as_input(key));
     }
     let plain_rate = stream.len() as f64 / started.elapsed().as_secs_f64() / 1e6;
 
@@ -344,7 +344,7 @@ fn sketch_ceiling() {
         let mut sketch = CMSHeap::<Vector2D<i64>, FastPath>::new(4, 4096, cap);
         let started = Instant::now();
         for (key, _) in &stream {
-            sketch.insert(&as_input(key));
+            sketch.update(&as_input(key));
         }
         let rate = stream.len() as f64 / started.elapsed().as_secs_f64() / 1e6;
         let share = 1.0 - rate / plain_rate;

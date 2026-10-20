@@ -53,11 +53,11 @@ fn countmin_fast_path_zipf_conforms_to_the_count_min_model_and_merges_shards_exa
     for (i, k) in stream.iter().enumerate() {
         let d = DataInput::I64(*k as i64);
         truth.observe(*k as i64);
-        single.insert(&d);
+        single.update(&d);
         match i % 3 {
-            0 => shard_a.insert(&d),
-            1 => shard_b.insert(&d),
-            _ => shard_c.insert(&d),
+            0 => shard_a.update(&d),
+            1 => shard_b.update(&d),
+            _ => shard_c.update(&d),
         }
     }
     shard_b.merge(&shard_c);
@@ -105,8 +105,8 @@ fn countmin_vecbased_error_bound() {
             let stream = zipf_u64(20_000, 512, 1.2, STREAM_SEED);
             for k in &stream {
                 truth.observe(*k as i64);
-                reg.insert(&DataInput::I64(*k as i64));
-                fast.insert(&DataInput::I64(*k as i64));
+                reg.update(&DataInput::I64(*k as i64));
+                fast.update(&DataInput::I64(*k as i64));
             }
             let spec = CountMinSpec::new(r, c);
             let context = format!("zipf(1.2) domain=512 n=20000 stream_seed={STREAM_SEED}");
@@ -140,8 +140,8 @@ fn count_vecbased_error_bound() {
             let stream = zipf_u64(20_000, 512, 1.2, STREAM_SEED);
             for k in &stream {
                 truth.observe(*k as i64);
-                reg.insert(&DataInput::I64(*k as i64));
-                fast.insert(&DataInput::I64(*k as i64));
+                reg.update(&DataInput::I64(*k as i64));
+                fast.update(&DataInput::I64(*k as i64));
             }
             let spec = CountSketchSpec::new(r, c);
             let context = format!("zipf(1.2) domain=512 n=20000 stream_seed={STREAM_SEED}");
@@ -182,8 +182,8 @@ fn countmin_matbased_error_bound() {
                 let mut reg = CountMin::<$mat, RegularPath>::from_storage($mat::default());
                 let mut fast = CountMin::<$mat, FastPath>::from_storage($mat::default());
                 for k in &stream {
-                    reg.insert(&DataInput::I64(*k as i64));
-                    fast.insert(&DataInput::I64(*k as i64));
+                    reg.update(&DataInput::I64(*k as i64));
+                    fast.update(&DataInput::I64(*k as i64));
                 }
                 let spec = CountMinSpec::new($rows, $cols);
                 spec.assert_contract(
@@ -242,8 +242,8 @@ fn count_matbased_error_bound() {
                 let mut reg = Count::<$mat, RegularPath>::from_storage($mat::default());
                 let mut fast = Count::<$mat, FastPath>::from_storage($mat::default());
                 for k in &stream {
-                    reg.insert(&DataInput::I64(*k as i64));
-                    fast.insert(&DataInput::I64(*k as i64));
+                    reg.update(&DataInput::I64(*k as i64));
+                    fast.update(&DataInput::I64(*k as i64));
                 }
                 let spec = CountSketchSpec::new($rows, $cols);
                 spec.assert_contract(
@@ -365,7 +365,7 @@ fn countmin_regular_path_satisfies_the_count_min_theorem() {
                 CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
             for k in &keys {
                 truth.observe(*k);
-                regular.insert(&to_input(*k));
+                regular.update(&to_input(*k));
             }
             let context = format!(
                 "{name} trial={trial} n={BOUND_N} (see bound_streams for stream seeds); \
@@ -401,7 +401,7 @@ fn countmin_fast_path_conforms_to_the_count_min_model() {
                 CountMin::<Vector2D<i32>, FastPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
             for k in &keys {
                 truth.observe(*k);
-                fast.insert(&to_input(*k));
+                fast.update(&to_input(*k));
             }
             let context = format!(
                 "{name} trial={trial} n={BOUND_N} (see bound_streams for stream seeds); \
@@ -463,8 +463,8 @@ fn countsketch_both_paths_meet_the_l2_median_bound() {
             for k in &keys {
                 let d = to_input(*k);
                 truth.observe(*k);
-                regular.insert(&d);
-                fast.insert(&d);
+                regular.update(&d);
+                fast.update(&d);
             }
             {
                 let (simul, marg) = tallies.entry(format!("{name}/RegularPath")).or_default();
@@ -519,7 +519,7 @@ fn countsketch_error_stays_rank_independent_within_the_documented_empirical_band
     let mut cs = asap_sketchlib::Count::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
     for k in &stream {
         truth.observe(*k as i64);
-        cs.insert(&DataInput::I64(*k as i64));
+        cs.update(&DataInput::I64(*k as i64));
     }
 
     let mut pairs = truth.pairs();
@@ -599,9 +599,9 @@ fn fold_cms_foldcs_counts_and_hierarchical_merge() {
     let mut a = FoldCMS::<DefaultXxHasher>::new(3, 2048, 0, 32);
     let mut b = FoldCMS::<DefaultXxHasher>::new(3, 2048, 0, 32);
     for _ in 0..100 {
-        a.insert(&DataInput::Str("alpha"), 2);
-        b.insert(&DataInput::Str("alpha"), 2);
-        b.insert(&DataInput::Str("beta"), 1);
+        a.update_weighted(&DataInput::Str("alpha"), 2);
+        b.update_weighted(&DataInput::Str("alpha"), 2);
+        b.update_weighted(&DataInput::Str("beta"), 1);
     }
     assert_eq!(a.query(&DataInput::Str("alpha")), 200);
     assert_eq!(b.query(&DataInput::Str("alpha")), 200);
@@ -614,8 +614,8 @@ fn fold_cms_foldcs_counts_and_hierarchical_merge() {
 
     // Signed weighted updates through FoldCS.
     let mut fs = FoldCS::<DefaultXxHasher>::new(3, 2048, 0, 32);
-    fs.insert(&DataInput::Str("gamma"), 60);
-    fs.insert(&DataInput::Str("gamma"), -20);
+    fs.update_weighted(&DataInput::Str("gamma"), 60);
+    fs.update_weighted(&DataInput::Str("gamma"), -20);
     assert_eq!(fs.query(&DataInput::Str("gamma")), 40);
 
     // Hierarchical merge of level-matched sketches preserves totals.
@@ -629,7 +629,7 @@ fn fold_cms_foldcs_counts_and_hierarchical_merge() {
 fn build_fold_cms(key: &'static str, n: usize) -> FoldCMS<DefaultXxHasher> {
     let mut s = FoldCMS::<DefaultXxHasher>::new(3, 2048, 0, 32);
     for _ in 0..n {
-        s.insert(&DataInput::Str(key), 3);
+        s.update_weighted(&DataInput::Str(key), 3);
     }
     s
 }
@@ -663,8 +663,8 @@ fn folded_sketches_keep_their_own_bounds_through_a_sixteen_way_merge() {
         let mut cs = FoldCS::<DefaultXxHasher>::new(ROWS, FULL_COLS, FOLD_LEVEL, TOP_K);
         for &v in &stream[w * per_window..(w + 1) * per_window] {
             let d = DataInput::U64(v);
-            cms.insert(&d, 1);
-            cs.insert(&d, 1);
+            cms.update_weighted(&d, 1);
+            cs.update_weighted(&d, 1);
             truth.observe(v as i64);
         }
         cms_windows.push(cms);
@@ -766,8 +766,8 @@ fn countmin_documented_vector_grid(
             let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for key in &input.keys {
                 let d = input.data(*key);
-                regular.insert(&d);
-                fast.insert(&d);
+                regular.update(&d);
+                fast.update(&d);
             }
             let spec = CountMinSpec::new(rows, cols);
             spec.assert_contract(
@@ -800,8 +800,8 @@ fn countmin_documented_fixed_grid(
                 let mut fast = CountMin::<$mat, FastPath>::from_storage($mat::default());
                 for key in &input.keys {
                     let d = input.data(*key);
-                    regular.insert(&d);
-                    fast.insert(&d);
+                    regular.update(&d);
+                    fast.update(&d);
                 }
                 let spec = CountMinSpec::new($rows, $cols);
                 spec.assert_contract(
@@ -858,8 +858,8 @@ fn countsketch_documented_vector_grid(
             let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for key in &input.keys {
                 let d = input.data(*key);
-                regular.insert(&d);
-                fast.insert(&d);
+                regular.update(&d);
+                fast.update(&d);
             }
             let spec = CountSketchSpec::new(rows, cols);
             spec.assert_contract(
@@ -890,8 +890,8 @@ fn countsketch_documented_fixed_grid(
                 let mut fast = Count::<$mat, FastPath>::from_storage($mat::default());
                 for key in &input.keys {
                     let d = input.data(*key);
-                    regular.insert(&d);
-                    fast.insert(&d);
+                    regular.update(&d);
+                    fast.update(&d);
                 }
                 let spec = CountSketchSpec::new($rows, $cols);
                 spec.assert_contract(

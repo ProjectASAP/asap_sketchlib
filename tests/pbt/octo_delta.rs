@@ -65,7 +65,7 @@ fn cs_cells(sketch: &Cs) -> Vec<i32> {
 fn cm_reference(rows: usize, cols: usize, keys: &[u64]) -> Cm {
     let mut s = Cm::with_dimensions(rows, cols);
     for k in keys {
-        s.insert(&DataInput::U64(*k));
+        s.update(&DataInput::U64(*k));
     }
     s
 }
@@ -73,7 +73,7 @@ fn cm_reference(rows: usize, cols: usize, keys: &[u64]) -> Cm {
 fn cs_reference(rows: usize, cols: usize, keys: &[u64]) -> Cs {
     let mut s = Cs::with_dimensions(rows, cols);
     for k in keys {
-        s.insert(&DataInput::U64(*k));
+        s.update(&DataInput::U64(*k));
     }
     s
 }
@@ -147,7 +147,7 @@ fn pow2(exp: u8) -> u128 {
 fn hll_reference(keys: &[u64]) -> Hll {
     let mut s = Hll::default();
     for k in keys {
-        s.insert(&DataInput::U64(*k));
+        s.update(&DataInput::U64(*k));
     }
     s
 }
@@ -155,7 +155,7 @@ fn hll_reference(keys: &[u64]) -> Hll {
 fn small_hll_reference(keys: &[u64]) -> SmallHll {
     let mut s = SmallHll::new();
     for k in keys {
-        s.insert(&DataInput::U64(*k));
+        s.update(&DataInput::U64(*k));
     }
     s
 }
@@ -225,7 +225,7 @@ proptest! {
         let mut child = Cm::with_dimensions(rows, cols);
         let mut parent = Cm::with_dimensions(rows, cols);
         for k in &keys {
-            child.insert_emit_delta_with_threshold(&DataInput::U64(*k), tau, &mut |d| {
+            child.update_emit_delta_with_threshold(&DataInput::U64(*k), tau, &mut |d| {
                 parent.apply_delta(d)
             });
         }
@@ -254,7 +254,7 @@ proptest! {
         let mut worker = CmWorkerSketch::new(rows, cols);
         let mut parent = CmOctoAggregator::new(rows, cols);
         for k in &keys {
-            worker.insert_emit_delta(&DataInput::U64(*k), tau, &mut |d| parent.apply(d));
+            worker.update_emit_delta(&DataInput::U64(*k), tau, &mut |d| parent.apply(d));
         }
 
         let residual = worker.residual().to_vec();
@@ -282,7 +282,7 @@ proptest! {
         let mut workers: Vec<CmWorkerSketch> = (0..shards).map(|_| CmWorkerSketch::new(rows, cols)).collect();
         let mut parent = CmOctoAggregator::new(rows, cols);
         for (i, k) in keys.iter().enumerate() {
-            workers[i % shards].insert_emit_delta(&DataInput::U64(*k), tau, &mut |d| parent.apply(d));
+            workers[i % shards].update_emit_delta(&DataInput::U64(*k), tau, &mut |d| parent.apply(d));
         }
         for worker in &mut workers {
             worker.flush(&mut |d| parent.apply(d));
@@ -309,7 +309,7 @@ proptest! {
         let mut child = Cs::with_dimensions(rows, cols);
         let mut parent = Cs::with_dimensions(rows, cols);
         for k in &keys {
-            child.insert_emit_delta_with_threshold(&DataInput::U64(*k), tau, &mut |d| {
+            child.update_emit_delta_with_threshold(&DataInput::U64(*k), tau, &mut |d| {
                 parent.apply_delta(d)
             });
         }
@@ -338,7 +338,7 @@ proptest! {
             (0..shards).map(|_| CountWorkerSketch::new(rows, cols)).collect();
         let mut parent = CountOctoAggregator::new(rows, cols);
         for (i, k) in keys.iter().enumerate() {
-            workers[i % shards].insert_emit_delta(&DataInput::U64(*k), tau, &mut |d| parent.apply(d));
+            workers[i % shards].update_emit_delta(&DataInput::U64(*k), tau, &mut |d| parent.apply(d));
         }
         for worker in &mut workers {
             worker.flush(&mut |d| parent.apply(d));
@@ -363,7 +363,7 @@ proptest! {
         let mut worker = CountWorkerSketch::new(rows, cols);
         let mut parent = CountOctoAggregator::new(rows, cols);
         for k in &keys {
-            worker.insert_emit_delta(&DataInput::U64(*k), tau, &mut |d| parent.apply(d));
+            worker.update_emit_delta(&DataInput::U64(*k), tau, &mut |d| parent.apply(d));
         }
 
         let residual = worker.residual().to_vec();
@@ -456,7 +456,7 @@ proptest! {
         let mut worker = SmallHll::new();
         let mut parent = SmallHll::new();
         for k in &keys {
-            worker.insert_emit_delta_with_threshold(&DataInput::U64(*k), tau, &mut |d| {
+            worker.update_emit_delta_with_threshold(&DataInput::U64(*k), tau, &mut |d| {
                 parent.apply_delta(d)
             });
         }
@@ -511,7 +511,7 @@ proptest! {
         let mut workers: Vec<SmallHll> = (0..shards).map(|_| SmallHll::new()).collect();
         let mut parent = SmallHll::new();
         for (i, k) in keys.iter().enumerate() {
-            workers[i % shards].insert_emit_delta_with_threshold(
+            workers[i % shards].update_emit_delta_with_threshold(
                 &DataInput::U64(*k),
                 0,
                 &mut |d| parent.apply_delta(d),
@@ -550,7 +550,7 @@ proptest! {
         let mut worker = SmallHll::new();
         let mut deltas: Vec<HllDelta> = Vec::new();
         for k in &keys {
-            worker.insert_emit_delta_with_threshold(&DataInput::U64(*k), tau, &mut |d| deltas.push(d));
+            worker.update_emit_delta_with_threshold(&DataInput::U64(*k), tau, &mut |d| deltas.push(d));
         }
 
         let mut ordered = SmallHll::new();
@@ -583,7 +583,7 @@ proptest! {
         let mut worker = CocoWorkerSketch::with_seed(w, d, seed);
         let mut deltas: Vec<CocoDelta> = Vec::new();
         for k in &keys {
-            worker.insert_emit_delta(&flow(*k), tau, &mut |delta| deltas.push(delta));
+            worker.update_emit_delta(&flow(*k), tau, &mut |delta| deltas.push(delta));
         }
 
         let promoted: u64 = deltas.iter().map(|delta| delta.value).sum();
@@ -620,7 +620,7 @@ proptest! {
             .collect();
         let mut parent = CocoOctoAggregator::with_seed(w, d, seed);
         for (i, k) in keys.iter().enumerate() {
-            workers[i % shards].insert_emit_delta(&flow(*k), tau, &mut |delta| parent.apply(delta));
+            workers[i % shards].update_emit_delta(&flow(*k), tau, &mut |delta| parent.apply(delta));
         }
         for worker in &mut workers {
             worker.flush(&mut |delta| parent.apply(delta));
@@ -650,7 +650,7 @@ proptest! {
         let mut worker = CocoWorkerSketch::with_seed(1, d, seed);
         let mut promoted = 0usize;
         for k in 0..n as u64 {
-            worker.insert_emit_delta(&flow(k), MAX_PROMASK, &mut |_| promoted += 1);
+            worker.update_emit_delta(&flow(k), MAX_PROMASK, &mut |_| promoted += 1);
         }
 
         prop_assert_eq!(promoted, 0, "{} inserts promoted at a threshold of {}", n, MAX_PROMASK);
@@ -678,7 +678,7 @@ proptest! {
         for k in &keys {
             let arrival = flow(*k);
             let mut promoted: Vec<CocoDelta> = Vec::new();
-            worker.insert_emit_delta(&arrival, 1, &mut |delta| promoted.push(delta));
+            worker.update_emit_delta(&arrival, 1, &mut |delta| promoted.push(delta));
 
             prop_assert_eq!(
                 promoted.len(), 1,
@@ -706,7 +706,7 @@ proptest! {
         let mut worker = ElasticWorkerSketch::new(buckets, light_rows, light_cols);
         let mut deltas: Vec<ElasticDelta> = Vec::new();
         for k in &keys {
-            worker.insert_emit_delta(&flow(*k), tau, &mut |delta| deltas.push(delta));
+            worker.update_emit_delta(&flow(*k), tau, &mut |delta| deltas.push(delta));
         }
         let promoted_during_inserts = deltas.len();
         worker.flush(&mut |delta| deltas.push(delta));
@@ -762,7 +762,7 @@ proptest! {
             .collect();
         let mut parent = ElasticOctoAggregator::new(buckets as i32, light_rows, light_cols);
         for (i, k) in keys.iter().enumerate() {
-            workers[i % shards].insert_emit_delta(&flow(*k), tau, &mut |delta| parent.apply(delta));
+            workers[i % shards].update_emit_delta(&flow(*k), tau, &mut |delta| parent.apply(delta));
         }
         for worker in &mut workers {
             worker.flush(&mut |delta| parent.apply(delta));
@@ -791,11 +791,11 @@ proptest! {
         light_cols in 2usize..16,
     ) {
         let mut worker = ElasticWorkerSketch::new(1, light_rows, light_cols);
-        worker.insert_emit_delta(&flow(resident), MAX_PROMASK, &mut |_| {});
+        worker.update_emit_delta(&flow(resident), MAX_PROMASK, &mut |_| {});
 
         let mut evictions: Vec<(usize, String, u32)> = Vec::new();
         for arrival in 1..=16usize {
-            worker.insert_emit_delta(&flow(rival), MAX_PROMASK, &mut |delta| {
+            worker.update_emit_delta(&flow(rival), MAX_PROMASK, &mut |delta| {
                 if let ElasticDelta::Evicted { key, votes } = delta {
                     evictions.push((arrival, key, votes));
                 }
@@ -824,7 +824,7 @@ proptest! {
         let mut worker = L2hhWorkerSketch::new(rows, cols, layer);
         let mut parent = CountL2HH::with_dimensions_and_seed(rows, cols, layer);
         for k in &keys {
-            worker.insert_emit_delta(&DataInput::U64(*k), tau, &mut |d| parent.apply_delta(d));
+            worker.update_emit_delta(&DataInput::U64(*k), tau, &mut |d| parent.apply_delta(d));
         }
 
         let residual = worker.residual().to_vec();
@@ -959,7 +959,7 @@ proptest! {
             let input = DataInput::U64(*k);
             let hashes = CmWorkerSketch::hashes(rows, &input);
             let key = input_to_owned(&input);
-            worker.insert_hashes_emit_keyed_delta(&hashes, &key, tau, &mut |d| {
+            worker.update_emit_keyed_delta_with_row_hashes(&hashes, &key, tau, &mut |d| {
                 deltas.push(d.clone());
                 promoted.insert(*k);
                 parent.apply(d);
@@ -1012,7 +1012,7 @@ proptest! {
         let mut cm = CmWorkerSketch::new(4, 16);
         let mut cm_deltas: Vec<CmDelta> = Vec::new();
         for k in &keys {
-            cm.insert_emit_delta(&DataInput::U64(*k), CM_PROMASK, &mut |d| cm_deltas.push(d));
+            cm.update_emit_delta(&DataInput::U64(*k), CM_PROMASK, &mut |d| cm_deltas.push(d));
         }
         prop_assert!(!cm_deltas.is_empty(), "CM_PROMASK promoted nothing over {} inserts", n);
         for d in &cm_deltas {
@@ -1022,7 +1022,7 @@ proptest! {
         let mut cs = CountWorkerSketch::new(4, 16);
         let mut cs_deltas: Vec<CountDelta> = Vec::new();
         for k in &keys {
-            cs.insert_emit_delta(&DataInput::U64(*k), COUNT_PROMASK, &mut |d| cs_deltas.push(d));
+            cs.update_emit_delta(&DataInput::U64(*k), COUNT_PROMASK, &mut |d| cs_deltas.push(d));
         }
         prop_assert!(!cs_deltas.is_empty(), "COUNT_PROMASK promoted nothing over {} inserts", n);
         for d in &cs_deltas {
@@ -1042,7 +1042,7 @@ proptest! {
         let mut coco = CocoWorkerSketch::with_seed(8, 2, seed);
         let mut coco_deltas: Vec<CocoDelta> = Vec::new();
         for k in &keys {
-            coco.insert_emit_delta(&flow(*k), COCO_PROMASK, &mut |d| coco_deltas.push(d));
+            coco.update_emit_delta(&flow(*k), COCO_PROMASK, &mut |d| coco_deltas.push(d));
         }
         prop_assert!(!coco_deltas.is_empty(), "COCO_PROMASK promoted nothing over {} inserts", n);
         for d in &coco_deltas {
@@ -1052,7 +1052,7 @@ proptest! {
         let mut elastic = ElasticWorkerSketch::new(8, 2, 8);
         let mut elastic_deltas: Vec<ElasticDelta> = Vec::new();
         for k in &keys {
-            elastic.insert_emit_delta(&flow(*k), ELASTIC_PROMASK, &mut |d| elastic_deltas.push(d));
+            elastic.update_emit_delta(&flow(*k), ELASTIC_PROMASK, &mut |d| elastic_deltas.push(d));
         }
         let heavy: Vec<u32> = elastic_deltas
             .iter()
@@ -1087,7 +1087,7 @@ proptest! {
         let mut hll_worker = Hll::default();
         let mut hll_parent = Hll::default();
         for k in &keys {
-            hll_worker.insert_emit_delta_with_threshold(&DataInput::U64(*k), HLL_PROMASK, &mut |d| {
+            hll_worker.update_emit_delta_with_threshold(&DataInput::U64(*k), HLL_PROMASK, &mut |d| {
                 hll_parent.apply_delta(d)
             });
         }
@@ -1118,7 +1118,7 @@ proptest! {
         let mut worker = CountWorkerSketch::new(4, 16);
         let mut deltas: Vec<CountDelta> = Vec::new();
         for k in &keys {
-            worker.insert_emit_delta(&DataInput::U64(*k), MAX_PROMASK, &mut |d| deltas.push(d));
+            worker.update_emit_delta(&DataInput::U64(*k), MAX_PROMASK, &mut |d| deltas.push(d));
         }
         prop_assert!(!deltas.is_empty(), "MAX_PROMASK promoted nothing over {} inserts", n);
         for d in &deltas {

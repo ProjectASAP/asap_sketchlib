@@ -78,7 +78,7 @@ fn truth_of(stream: &[u64]) -> HashMap<u64, i64> {
 fn sketch_of(buckets: i32, light_rows: usize, light_cols: usize, stream: &[u64]) -> E {
     let mut sketch = E::init_with_dimensions(buckets, light_rows, light_cols);
     for key in stream {
-        sketch.insert(flow(*key));
+        sketch.update(flow(*key));
     }
     sketch
 }
@@ -157,7 +157,7 @@ proptest! {
     ) {
         let mut sketch = E::init_with_dimensions(buckets as i32, light_rows, light_cols);
         for k in &stream {
-            sketch.insert(format!("flow-{k}"));
+            sketch.update(format!("flow-{k}"));
         }
 
         round_trip!(
@@ -193,7 +193,7 @@ proptest! {
     ) {
         let mut sketch = E::init_with_dimensions(buckets, light_rows, light_cols);
         for (key, weight) in &stream {
-            sketch.insert_many(flow(*key), *weight);
+            sketch.update_weighted(flow(*key), *weight);
         }
         let total: i64 = stream.iter().map(|(_, w)| *w as i64).sum();
 
@@ -254,7 +254,7 @@ proptest! {
         let mut before = flags(&sketch);
 
         for (step, key) in stream.iter().enumerate() {
-            sketch.insert(flow(*key));
+            sketch.update(flow(*key));
             let after = flags(&sketch);
             for (idx, (was, now)) in before.iter().zip(&after).enumerate() {
                 prop_assert!(
@@ -274,7 +274,7 @@ proptest! {
         let mut sketch = E::init_with_dimensions(buckets, light_rows, light_cols);
 
         for (step, key) in stream.iter().enumerate() {
-            sketch.insert(flow(*key));
+            sketch.update(flow(*key));
             for (idx, bucket) in sketch.heavy.iter().enumerate() {
                 if bucket.is_vacant() {
                     continue;

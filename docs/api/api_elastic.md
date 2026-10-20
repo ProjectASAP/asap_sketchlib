@@ -58,7 +58,7 @@ default 3 x 4096 at exactly 50.
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, id: String)
+fn update(&mut self, id: String)
 ```
 
 Follows the SIGCOMM '18 insertion rule. A vacant bucket seats the flow. A
@@ -71,17 +71,17 @@ light layer with its whole positive vote and the arrival takes the bucket with
 ### Weighted and merge-time insertion
 
 ```rust
-fn insert_many(&mut self, id: String, count: i32)
+fn update_weighted(&mut self, id: String, weight: i32)
 fn merge_heavy(&mut self, id: String, votes: i32, eviction: bool)
 fn absorb_evicted(&mut self, id: String, votes: i32)
 ```
 
-`insert_many` is `insert` with a weight: a matching bucket takes `count`
+`update_weighted` is `update` with a weight: a matching bucket takes `count`
 positive votes, a non-matching one takes `count` negative votes, and a takeover
-seats the arrival with `count` of each. `count` of 1 is `insert` exactly.
+seats the arrival with `count` of each. `count` of 1 is `update` exactly.
 
 `merge_heavy` absorbs a `<flow, votes, eviction>` message from another sketch's
-heavy part: `insert_many`, plus the sender's flag OR-ed in when the arrival ends
+heavy part: `update_weighted`, plus the sender's flag OR-ed in when the arrival ends
 up resident here. The flag travels with the counter it qualifies: the counter
 word handed between the two parts *is* the flag. A sender whose bucket is
 unflagged holds
@@ -97,16 +97,16 @@ of the flow next arrives through the light layer.
 ### Overload mode
 
 ```rust
-fn insert_heavy_only(&mut self, id: String)
+fn update_heavy_only(&mut self, id: String)
 ```
 
 Section 3.3 adapts to packet rate by letting arrivals "only access the heavy
 part, so as to record the information of elephant flows only and discard mouse
-flows". Call this instead of `insert` while your input queue is backed up, and
-go back to `insert` when it drains; the sketch holds no mode of its own, since
+flows". Call this instead of `update` while your input queue is backed up, and
+go back to `update` when it drains; the sketch holds no mode of its own, since
 only the caller can see the queue.
 
-Seating and matching behave exactly as in `insert`. The two other cases differ:
+Seating and matching behave exactly as in `update`. The two other cases differ:
 
 - A non-matching arrival takes its negative vote and is then **dropped**. It
   does not reach the light layer.
@@ -351,7 +351,7 @@ both sides. `Elastic` also derives serde.
 use asap_sketchlib::Elastic;
 
 let mut sk = Elastic::init_with_length(8);
-sk.insert("flow".to_string());
+sk.update("flow".to_string());
 let _ = sk.query("flow".to_string());
 ```
 
@@ -359,7 +359,7 @@ let _ = sk.query("flow".to_string());
 
 - Light-layer counters are fixed at `i32`; the paper's 8-bit counters are not
   selectable.
-- `insert_heavy_only` is lossy by design and does not keep the one-sided
+- `update_heavy_only` is lossy by design and does not keep the one-sided
   guarantee the rest of the API holds.
 - Under the OctoSketch runtime the one-sided guarantee needs
   `OctoPartition::HashByKey`, the default. `RoundRobin` breaks it; see

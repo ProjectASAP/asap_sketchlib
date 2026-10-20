@@ -25,9 +25,9 @@ fn default() -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &DataInput)
-fn insert_many(&mut self, key: &DataInput, many: S::Counter)
-fn bulk_insert(&mut self, values: &[DataInput])
+fn update(&mut self, key: &DataInput)
+fn update_weighted(&mut self, key: &DataInput, weight: S::Counter)
+fn update_batch(&mut self, values: &[DataInput])
 fn clear_heap(&mut self)
 ```
 
@@ -118,7 +118,7 @@ the sketch unchanged.
 use asap_sketchlib::{CMSHeap, DataInput, Vector2D, RegularPath};
 
 let mut sk = CMSHeap::<Vector2D<i64>, RegularPath>::new(3, 256, 8);
-sk.insert(&DataInput::Str("flow"));
+sk.update(&DataInput::Str("flow"));
 assert!(sk.estimate(&DataInput::Str("flow")) >= 1);
 ```
 
@@ -126,8 +126,8 @@ assert!(sk.estimate(&DataInput::Str("flow")) >= 1);
 
 - Heap can be cleared independently of sketch counters.
 - Merge requires matching dimensions and compatible type parameters.
-- **Six built-in instances are constructible but inert.** `insert`,
-  `insert_many`, `estimate` and `merge` need `S::Counter` to convert into its
+- **Six built-in instances are constructible but inert.** `update`,
+  `update_weighted`, `estimate` and `merge` need `S::Counter` to convert into its
   heap count. `i128` has no `Into<i64>`, so `CMSHeap<Vector2D<i128>>`,
   `CMSHeap<QuickMatrixI128>` and `CMSHeap<DefaultMatrixI128>` — on both hashing
   paths — allocate a sketch and a heap and can then do nothing but report their

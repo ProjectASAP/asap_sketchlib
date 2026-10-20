@@ -56,9 +56,9 @@ fn check_precision<R: HllRegisterStorage>(lg_k: usize, cardinality: usize, toler
     let mut hip = HyperLogLogHIPImpl::<R>::new();
     for i in 0..cardinality {
         let value = DataInput::String(item(i));
-        classic.insert(&value);
-        ertl.insert(&value);
-        hip.insert(&value);
+        classic.update(&value);
+        ertl.update(&value);
+        hip.update(&value);
     }
 
     // Registers really were written, and none exceeds the rank ceiling.
@@ -112,11 +112,11 @@ fn custom_precision_merges() {
     let mut left = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
     let mut right = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
     for i in 0..60_000 {
-        left.insert(&DataInput::String(item(i)));
+        left.update(&DataInput::String(item(i)));
     }
     // Overlapping halves: the union is 100_000 distinct items.
     for i in 40_000..100_000 {
-        right.insert(&DataInput::String(item(i)));
+        right.update(&DataInput::String(item(i)));
     }
 
     left.merge(&right);
@@ -148,7 +148,7 @@ fn custom_precision_indexing_and_iteration() {
 fn custom_precision_round_trips_through_serde() {
     let mut sketch = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
     for i in 0..5_000 {
-        sketch.insert(&DataInput::String(item(i)));
+        sketch.update(&DataInput::String(item(i)));
     }
 
     let bytes = rmp_serde::to_vec(&sketch).expect("serialize");
@@ -175,7 +175,7 @@ fn large_precision_allocates_on_the_heap() {
 
     let mut big = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
     for i in 0..1_000 {
-        big.insert(&DataInput::String(item(i)));
+        big.update(&DataInput::String(item(i)));
     }
     let bytes = rmp_serde::to_vec(&big).expect("serialize");
     let restored: HyperLogLogImpl<Classic, HllBucketListP18> =
@@ -194,9 +194,9 @@ fn custom_precision_round_trips_through_the_asapv1_wire_format() {
     let mut hip = HyperLogLogHIPImpl::<HllBucketListP13>::new();
     for i in 0..5_000 {
         let value = DataInput::String(item(i));
-        classic.insert(&value);
-        ertl.insert(&value);
-        hip.insert(&value);
+        classic.update(&value);
+        ertl.update(&value);
+        hip.update(&value);
     }
 
     let bytes = classic.serialize_to_bytes().expect("classic encode");

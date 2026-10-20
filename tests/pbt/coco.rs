@@ -81,7 +81,7 @@ fn crowded_pair(max: usize) -> impl Strategy<Value = CrowdedPair> {
 fn filled(w: usize, d: usize, seed: u64, stream: &[(u64, u64)]) -> C {
     let mut sketch = C::init_with_size_and_seed(w, d, seed);
     for (id, v) in stream {
-        sketch.insert(&key_of(*id), *v);
+        sketch.update_weighted(&key_of(*id), *v);
     }
     sketch
 }
@@ -168,7 +168,7 @@ proptest! {
     ) {
         let mut sketch = C::init_with_size_and_seed(width, depth, seed);
         for k in &stream {
-            sketch.insert(&format!("flow-{k}"), 1);
+            sketch.update_weighted(&format!("flow-{k}"), 1);
         }
 
         round_trip!(
@@ -216,7 +216,7 @@ proptest! {
             .min()
             .expect("a table has at least one row");
 
-        sketch.insert(&key, weight);
+        sketch.update_weighted(&key, weight);
 
         let after = vals(&sketch);
         let grown: Vec<(usize, usize)> = (0..d)

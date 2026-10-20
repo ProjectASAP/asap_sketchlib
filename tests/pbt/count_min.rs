@@ -177,7 +177,7 @@ fn ceiling_for(rows: usize, columns: &[Vec<usize>], truth: &HashMap<u64, i64>, k
 fn cm_fast_of(rows: usize, cols: usize, stream: &[(u64, i32)]) -> CmFast {
     let mut sketch = CmFast::with_dimensions(rows, cols);
     for (k, w) in stream {
-        sketch.insert_many(&DataInput::U64(*k), *w);
+        sketch.update_weighted(&DataInput::U64(*k), *w);
     }
     sketch
 }
@@ -260,10 +260,10 @@ proptest! {
         let mut first = Cm::with_dimensions(rows, cols);
         let mut second = Cm::with_dimensions(rows, cols);
         for k in &a {
-            first.insert(&DataInput::U64(*k));
+            first.update(&DataInput::U64(*k));
         }
         for k in &b {
-            second.insert(&DataInput::U64(*k));
+            second.update(&DataInput::U64(*k));
         }
 
         prop_assert_eq!(cm_cells(&first), cm_cells(&second));
@@ -280,9 +280,9 @@ proptest! {
         let mut by_weight = Cm::with_dimensions(rows, cols);
         let mut by_repeat = Cm::with_dimensions(rows, cols);
         for (k, n) in &updates {
-            by_weight.insert_many(&DataInput::U64(*k), *n);
+            by_weight.update_weighted(&DataInput::U64(*k), *n);
             for _ in 0..*n {
-                by_repeat.insert(&DataInput::U64(*k));
+                by_repeat.update(&DataInput::U64(*k));
             }
         }
 
@@ -291,7 +291,7 @@ proptest! {
 
     // ===== The pre-hashed entry point must address the same cells =====
     //
-    // `bulk_insert_many` is a literal loop over `insert_many`, so comparing
+    // `update_weighted_batch` is a literal loop over `update_weighted`, so comparing
     // the two would hold by construction. The law with content is that a
     // caller which hashes on its own thread lands in the same cells.
 
@@ -312,10 +312,10 @@ proptest! {
 
         let mut by_loop = CmFast::with_dimensions(rows, cols);
         for (value, n) in &pairs {
-            by_loop.insert_many(value, *n);
+            by_loop.update_weighted(value, *n);
         }
         let mut by_hashes = CmFast::with_dimensions(rows, cols);
-        by_hashes.bulk_insert_many_with_hashes(&hashed);
+        by_hashes.update_weighted_batch_with_hashes(&hashed);
 
         prop_assert_eq!(cm_fast_cells(&by_hashes), cm_fast_cells(&by_loop));
     }
@@ -432,7 +432,7 @@ proptest! {
     ) {
         let mut sketch = CmWire::with_dimensions(rows, cols);
         for k in &stream {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
 
         round_trip!(
@@ -458,7 +458,7 @@ proptest! {
             .collect();
 
         for (step, arrival) in stream.iter().enumerate() {
-            sketch.insert(&DataInput::U64(*arrival));
+            sketch.update(&DataInput::U64(*arrival));
             for probe in 0..DOMAIN {
                 let now = sketch.estimate(&DataInput::U64(probe));
                 prop_assert!(
@@ -488,7 +488,7 @@ proptest! {
     ) {
         let mut sketch = CmFast::with_dimensions(rows, cols);
         for (k, w) in &updates {
-            sketch.insert_many(&DataInput::U64(*k), *w);
+            sketch.update_weighted(&DataInput::U64(*k), *w);
         }
 
         let truth = truth_of(&updates);
@@ -563,8 +563,8 @@ proptest! {
         let mut fixed = CmFixedI32::default();
         let mut dynamic = CmFast::with_dimensions(fixed.rows(), fixed.cols());
         for (k, w) in &updates {
-            fixed.insert_many(&DataInput::U64(*k), *w);
-            dynamic.insert_many(&DataInput::U64(*k), *w);
+            fixed.update_weighted(&DataInput::U64(*k), *w);
+            dynamic.update_weighted(&DataInput::U64(*k), *w);
         }
 
         for r in 0..fixed.rows() {
@@ -585,8 +585,8 @@ proptest! {
         let mut fixed = CmFixedI64::default();
         let mut dynamic = CmWire::with_dimensions(fixed.rows(), fixed.cols());
         for (k, w) in &updates {
-            fixed.insert_many(&DataInput::U64(*k), *w);
-            dynamic.insert_many(&DataInput::U64(*k), *w);
+            fixed.update_weighted(&DataInput::U64(*k), *w);
+            dynamic.update_weighted(&DataInput::U64(*k), *w);
         }
 
         for r in 0..fixed.rows() {

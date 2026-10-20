@@ -20,7 +20,7 @@ Compared against: the bit grid read via `as_bits`, and the stream's distinct key
 - membership
   - `contains(k)` for every inserted `k`; 1-7 slices x 8-255 bits
   - once `contains(p)`, always `contains(p)`; every probe re-read after every insert
-- both hash paths, `RegularPath` and `FastPath`, through their own `insert` / `contains`
+- both hash paths, `RegularPath` and `FastPath`, through their own `update` / `contains`
   - no member lost; `slices <= bits set <= slices * distinct` (non-empty stream); `fill_ratio() == bits set / bit_capacity()`; `bit_capacity() <= BLOOM_MAX_BITS`; `inserted() == arrivals`. Geometries 1-4 x 1-8 (saturates) and 1-7 x 256-1023 (mostly zero)
 - grid
   - `grid(S(xs)) == grid(S(perm(xs)))`
@@ -62,8 +62,8 @@ Compared against: an exact `HashMap` count, columns via the public `hash_for_mat
 
 - paths
   - `cells(S(xs)) == cells(S(perm(xs)))`
-  - `insert_many(k, n) == n x insert(k)`, cell for cell
-  - `bulk_insert_many_with_hashes == insert_many`, cell for cell
+  - `update_weighted(k, n) == n x update(k)`, cell for cell
+  - `update_weighted_batch_with_hashes == insert_many`, cell for cell
   - `DefaultMatrixI32`, `QuickMatrixI64` == `Vector2D`, cell for cell, at their fixed geometries
 - estimator
   - `estimate(k)` never drops on a non-negative insert; all 32 keys probed after every insert
@@ -89,14 +89,14 @@ Compared against: a key's `(col, sign)` per row, read off a one-key sketch; the 
 
 - paths
   - `cells(S(xs)) == cells(S(perm(xs)))`
-  - `insert_many(k, n) == n x insert(k)`
+  - `update_weighted(k, n) == n x update(k)`
 - sign and column
   - `k` hits one fixed `(col, sign)` per row and nothing else in the row; checked after each of 120 background arrivals
   - one-key stream: `estimate(k) == truth(k)`; unit and signed weights
   - `min(row readings) <= estimate <= max(row readings)`; odd rows: `estimate == median`
 - linearity
   - insert `w` then `-w` for every `w`: cells back to start; signed stream over a background
-  - `insert(k, -1)` undoes `insert(k)`, cell for cell
+  - `update_weighted(k, -1)` undoes `update(k)`, cell for cell
   - `cells(S(xs)) + cells(S(ys)) == cells(S(xs ++ ys))`; integral weights, power-of-two widths
   - negate every weight: every cell negated
 - merge
@@ -156,8 +156,8 @@ Compared against: a bare sketch of the member's type on the same stream. The lay
   - each frequency member == bare `CountMin` / `Count` of its geometry; widths cycle through a pool, so one layer mixes widths on one hash
   - no matrix member, hashing at `CANONICAL_HASH_SEED`: each HLL member == bare HLL
 - entry points
-  - `hash_input` + `bulk_insert_with_hashes == insert`; `estimate_with_hash == estimate`
-  - `bulk_insert_at(chosen, values)`: chosen members == fully fed, the rest == untouched
+  - `hash_input` + `update_batch_with_hashes == insert`; `estimate_with_hash == estimate`
+  - `update_batch_at(chosen, values)`: chosen members == fully fed, the rest == untouched
   - a mid-stream `push` lands last and sees only the rest of the stream; with a matrix member already fixing the layout, existing members do not move
 - contract
   - `sketch_type()` names the family; `estimate` succeeds exactly for frequency members, `cardinality` exactly for the rest; any accessor at `index >= len()` fails
@@ -234,10 +234,10 @@ Models use only what the paper fixes; register indexing and rank mapping stay fr
 
 - insertion, per precision 4, 6, 8, 10 (16)
   - registers are a function of the distinct set; repeats and interleaving invisible
-  - `insert_many_with_hashes` over `canonical_hash` == `insert`, register for register
+  - `update_batch_with_hashes` over `canonical_hash` == `update`, register for register
   - no register decreases; whole array checked every arrival
   - one arrival moves at most one register
-- estimation, per `Classic` and `ErtlMLE` at those precisions (40); registers set via public `insert_with_hash` and asserted equal to the target
+- estimation, per `Classic` and `ErtlMLE` at those precisions (40); registers set via public `update_with_hash` and asserted equal to the target
   - all registers 0: `estimate() == 0`
   - `estimate(perm(registers)) == estimate(registers)`
   - every register +1: `estimate` doubles; drift `0..=1` for `Classic` (truncates), `-1..=1` for `ErtlMLE` (rounds)
@@ -326,10 +326,10 @@ The dynamic item path. Compared against: the sorted stream. Streams `>= 30 k`, s
 
 ## nitro.rs — 10
 
-Compared against: a bare target fed through its own `insert`, not `NitroTarget::update_sample`; and integer arithmetic in the test. Below rate 1.0 a single insert has no deterministic expected value, so nothing asserts one.
+Compared against: a bare target fed through its own `update`, not `NitroTarget::update_sample`; and integer arithmetic in the test. Below rate 1.0 a single insert has no deterministic expected value, so nothing asserts one.
 
 - rate 1.0
-  - `CountMin` target cells == bare `CountMin`; via `insert` and `insert_cached_step`
+  - `CountMin` target cells == bare `CountMin`; via `update` and `update_batch_cached_step`
   - same for a `Count` target
   - `merge == bare S(xs ++ ys)`
 - the seed fixes the sample
@@ -349,7 +349,7 @@ Compared against: a bare target fed through its own `insert`, not `NitroTarget::
 A worker holds counts back until one reaches `tau`, promotes that `tau` step, and keeps the rest as residual. Compared against: a single-threaded sketch on the same stream; `parent + residuals` must reconstruct it. Per type: addition for Count-Min, Count, DDSketch and UnivMon layers; max for HLL; replay through the parent's election for Coco and Elastic.
 
 - Count-Min, Count: addition
-  - `parent + residual == reference`, cell for cell; `|residual| < tau`; via `insert_emit_delta_with_threshold`, and via `CmWorkerSketch` / `CountWorkerSketch` with a byte-wide residual
+  - `parent + residual == reference`, cell for cell; `|residual| < tau`; via `update_emit_delta_with_threshold`, and via `CmWorkerSketch` / `CountWorkerSketch` with a byte-wide residual
   - flush over 1-4 shards: `parent == reference`; every worker counter 0
 - DDSketch: addition, sparse
   - `parent + residual == reference` per bucket; no bucket the stream never filled; `promoted + held == reference count`; `residual < tau`
@@ -413,8 +413,8 @@ Compared against: an exact `HashMap` count. Every bound is deterministic.
   - `min_count` non-decreasing over the stream
 - domain `<= capacity`
   - exact: `count == truth`; `error == 0`; `upper_bound == truth`; order-free
-  - `insert(k, w) == w x insert(k)`: counters, total, `min_count`
-  - `bulk_insert == one at a time`
+  - `update_weighted(k, w) == w x update(k)`: counters, total, `min_count`
+  - `update_batch == one at a time`
   - `clear` then a different stream `== fresh`
 - merge
   - bounds hold on `xs ++ ys` after merging two capacities; `total()` adds
@@ -501,7 +501,7 @@ A Count-Min grid of HLL registers. Compared against: a standalone `HyperLogLogIm
 
 ## kmv.rs — 12 (experimental)
 
-Retained set == the `k` smallest distinct hashes, so laws are mostly equalities. Compared against: a `BTreeSet` truncated to `k`. Laws drive `insert_by_hash`; one covers the key path. Hash domains: below the smallest bound, straddling the largest, full u64.
+Retained set == the `k` smallest distinct hashes, so laws are mostly equalities. Compared against: a `BTreeSet` truncated to `k`. Laws drive `update_with_hash`; one covers the key path. Hash domains: below the smallest bound, straddling the largest, full u64.
 
 - retention
   - `retained == k smallest distinct hashes`; `capacity == k`

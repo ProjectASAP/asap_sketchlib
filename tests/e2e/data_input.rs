@@ -230,8 +230,8 @@ fn count_min_answers_every_variant_and_folds_the_aliasing_ones_together() {
     let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(4, 4_096);
     for (name, value) in every_variant() {
         for _ in 0..10 {
-            regular.insert(&value);
-            fast.insert(&value);
+            regular.update(&value);
+            fast.update(&value);
         }
         assert!(
             regular.estimate(&value) >= 10,
@@ -245,9 +245,9 @@ fn count_min_answers_every_variant_and_folds_the_aliasing_ones_together() {
 
     let mut aliasing = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(4, 4_096);
     for _ in 0..5 {
-        aliasing.insert(&DataInput::I8(7));
-        aliasing.insert(&DataInput::U16(7));
-        aliasing.insert(&DataInput::I64(7));
+        aliasing.update(&DataInput::I8(7));
+        aliasing.update(&DataInput::U16(7));
+        aliasing.update(&DataInput::I64(7));
     }
     assert_eq!(
         aliasing.estimate(&DataInput::U64(7)),
@@ -266,7 +266,7 @@ fn count_sketch_answers_every_variant() {
     let mut sketch = Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, 4_096);
     for (_, value) in every_variant() {
         for _ in 0..200 {
-            sketch.insert(&value);
+            sketch.update(&value);
         }
     }
     for (name, value) in every_variant() {
@@ -283,7 +283,7 @@ fn a_bloom_filter_answers_every_variant_without_a_false_negative() {
     let mut filter = Bloom::<RegularPath>::with_capacity(64, 0.01);
     let variants = every_variant();
     for (_, value) in &variants {
-        filter.insert(value);
+        filter.update(value);
     }
     for (name, value) in &variants {
         assert!(
@@ -294,7 +294,7 @@ fn a_bloom_filter_answers_every_variant_without_a_false_negative() {
 
     let mut fast = Bloom::<FastPath>::with_capacity(64, 0.01);
     for (_, value) in &variants {
-        fast.insert(value);
+        fast.update(value);
     }
     for (name, value) in &variants {
         assert!(
@@ -309,11 +309,11 @@ fn hyperloglog_counts_the_variants_as_distinct_identities() {
     let mut hll = HyperLogLog::<Classic>::new();
     let variants = every_variant();
     for (_, value) in &variants {
-        hll.insert(value);
+        hll.update(value);
     }
     let after_first_pass = hll.estimate();
     for (_, value) in &variants {
-        hll.insert(value);
+        hll.update(value);
     }
     assert_eq!(
         hll.estimate(),
@@ -331,7 +331,7 @@ fn space_saving_tracks_every_variant() {
     let mut summary: SpaceSaving = SpaceSaving::with_capacity(64);
     for (_, value) in every_variant() {
         for _ in 0..12 {
-            summary.insert(&value);
+            summary.update(&value);
         }
     }
     for (name, value) in every_variant() {

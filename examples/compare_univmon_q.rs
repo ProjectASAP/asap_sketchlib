@@ -190,7 +190,7 @@ fn main() {
         let mut sketch = UnivMon::init_univmon(CANDIDATES, DEPTH, WIDTH, LEVELS);
         let start = Instant::now();
         for &value in &values {
-            sketch.insert(&DataInput::U64(black_box(value)), 1);
+            sketch.update_weighted(&DataInput::U64(black_box(value)), 1);
         }
         regular_times.push(start.elapsed());
         black_box(sketch.bucket_size);
@@ -242,7 +242,7 @@ fn main() {
     let mut q_memory_matched_sketch = UnivMonQ::new(q_memory_matched).unwrap();
     for &value in &values {
         let input = DataInput::U64(value);
-        regular.insert(&input, 1);
+        regular.update_weighted(&input, 1);
         fast.fast_insert(&input, 1);
         q_base_sketch.add(&value);
         q_ordered_sketch.add(&value);

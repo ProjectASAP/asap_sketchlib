@@ -261,7 +261,7 @@ impl Hydra {
                 &DataInput::Str(&buffer),
             );
             self.sketches
-                .fast_insert(|a, b, _| a.insert(b, count), value, &hash);
+                .fast_insert(|a, b, _| a.update(b, count), value, &hash);
         }
         Ok(())
     }
@@ -1028,9 +1028,9 @@ mod tests {
         let key = DataInput::I64(42);
 
         // 1. Insert data
-        counter.insert(&key, None);
-        counter.insert(&key, None);
-        counter.insert(&key, None);
+        counter.update(&key, None);
+        counter.update(&key, None);
+        counter.update(&key, None);
 
         // 2. Query Frequency (Valid)
         let query = HydraQuery::Frequency(key);
@@ -1064,10 +1064,10 @@ mod tests {
 
         // 1. Insert unique items
         for i in 0..100 {
-            counter.insert(&DataInput::I64(i), None);
+            counter.update(&DataInput::I64(i), None);
         }
         // Duplicate insertions shouldn't affect cardinality
-        counter.insert(&DataInput::I64(0), None);
+        counter.update(&DataInput::I64(0), None);
 
         // 2. Query Cardinality (Valid)
         let result = counter.query(&HydraQuery::Cardinality);
@@ -1088,7 +1088,7 @@ mod tests {
 
         // Insert numbers 1 to 100
         for i in 1..=100 {
-            counter.insert(&DataInput::F64(i as f64), None);
+            counter.update(&DataInput::F64(i as f64), None);
         }
 
         // Query Median (0.5)
@@ -1114,10 +1114,10 @@ mod tests {
         let key_b = DataInput::Str("B");
 
         for _ in 0..10 {
-            counter.insert(&key_a, None);
+            counter.update(&key_a, None);
         }
         for _ in 0..20 {
-            counter.insert(&key_b, None);
+            counter.update(&key_b, None);
         }
 
         // 1. Test L1 Norm (Total Sum of Weights)
@@ -1142,8 +1142,8 @@ mod tests {
         let mut c1 = cm_counter();
         let mut c2 = cm_counter();
 
-        c1.insert(&DataInput::I64(1), None);
-        c2.insert(&DataInput::I64(1), None);
+        c1.update(&DataInput::I64(1), None);
+        c2.update(&DataInput::I64(1), None);
 
         // Valid merge
         assert!(c1.merge(&c2).is_ok());
@@ -1162,7 +1162,7 @@ mod tests {
         let key = DataInput::I64(7);
 
         for _ in 0..4 {
-            counter.insert(&key, None);
+            counter.update(&key, None);
         }
 
         let query = HydraQuery::Frequency(key);

@@ -256,7 +256,7 @@ impl EHUnivOptimized {
         let mut sketch = self.pool.take();
         for (key, value) in &oldest.freq_map {
             let input = heap_item_to_sketch_input(key);
-            sketch.insert(&input, *value);
+            sketch.update_weighted(&input, *value);
         }
 
         let l22 = sketch.l2_sketch_layers[0].get_l2().powi(2);
@@ -427,7 +427,7 @@ impl EHUnivOptimized {
             // Insert map entries into merged sketch
             for (key, value) in &map_merged {
                 let input = heap_item_to_sketch_input(key);
-                merged.insert(&input, *value);
+                merged.update_weighted(&input, *value);
             }
 
             Some(EHUnivQueryResult::Sketch(merged))

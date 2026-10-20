@@ -99,11 +99,11 @@ macro_rules! countmin_instance {
         let mut right = CountMin::<$storage, $path>::default();
         for (i, k) in $stream.iter().enumerate() {
             let d = DataInput::U64(*k);
-            single.insert(&d);
+            single.update(&d);
             if i % 2 == 0 {
-                left.insert(&d);
+                left.update(&d);
             } else {
-                right.insert(&d);
+                right.update(&d);
             }
         }
         left.merge(&right);
@@ -163,8 +163,8 @@ macro_rules! assert_both_paths_exact_without_collisions {
         for (i, k) in $keys.iter().enumerate() {
             for _ in 0..(i + 1) * 10 {
                 let d = DataInput::U64(*k);
-                regular.insert(&d);
-                fast.insert(&d);
+                regular.update(&d);
+                fast.update(&d);
                 truth.observe(*k as i64);
             }
         }
@@ -265,11 +265,11 @@ macro_rules! count_instance {
         let mut right = Count::<$storage, $path>::default();
         for (i, k) in $stream.iter().enumerate() {
             let d = DataInput::U64(*k);
-            single.insert(&d);
+            single.update(&d);
             if i % 2 == 0 {
-                left.insert(&d);
+                left.update(&d);
             } else {
-                right.insert(&d);
+                right.update(&d);
             }
         }
         left.merge(&right);
@@ -353,8 +353,8 @@ fn countsketch_both_paths_are_exact_on_a_collision_free_workload() {
             for (i, k) in COLLISION_FREE_KEYS.iter().enumerate() {
                 for _ in 0..(i + 1) * 10 {
                     let d = DataInput::U64(*k);
-                    regular.insert(&d);
-                    fast.insert(&d);
+                    regular.update(&d);
+                    fast.update(&d);
                     truth.observe(*k as i64);
                 }
             }
@@ -398,11 +398,11 @@ macro_rules! cmsheap_instance {
         let mut right = CMSHeap::<$storage, $path>::default();
         for (i, k) in $stream.iter().enumerate() {
             let d = DataInput::U64(*k);
-            single.insert(&d);
+            single.update(&d);
             if i % 2 == 0 {
-                left.insert(&d);
+                left.update(&d);
             } else {
-                right.insert(&d);
+                right.update(&d);
             }
         }
         left.merge(&right);
@@ -465,11 +465,11 @@ macro_rules! csheap_instance {
         let mut right = $ctor;
         for (i, k) in $stream.iter().enumerate() {
             let d = DataInput::U64(*k);
-            single.insert(&d);
+            single.update(&d);
             if i % 2 == 0 {
-                left.insert(&d);
+                left.update(&d);
             } else {
-                right.insert(&d);
+                right.update(&d);
             }
         }
         left.merge(&right);
@@ -576,7 +576,7 @@ macro_rules! heap_matrix_test {
 //
 // - `CMSHeap`'s insert path needs the counter to convert into its heap count
 //   (`i64`, or `f64` for an `f64` counter). `i128` has no `Into<i64>`, so those
-//   instances construct but have no `insert`, `estimate` or `merge` at all.
+//   instances construct but have no `update`, `estimate` or `merge` at all.
 //   They are enumerated and pinned as inert by
 //   `cmsheap_inert_instances_construct_and_report_their_geometry`.
 // - `CSHeap`'s insert path is bounded on `S::Counter: CsHeapCounter`,
@@ -652,7 +652,7 @@ heap_matrix_test!(
 /// Saturating is the chosen semantics. Wrapping would turn a huge positive
 /// count into a negative one and corrupt the heap's ordering, which is the one
 /// failure mode a top-k structure cannot survive; returning an error would put
-/// a fallible result on an infallible `insert`; and widening `HHItem::count` to
+/// a fallible result on an infallible `update`; and widening `HHItem::count` to
 /// `i128` would change the heap wire payload for every family that shares it.
 /// This test fails if any of that silently changes.
 #[test]
@@ -671,7 +671,7 @@ fn csheap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
             // Below 2^53 the whole pipeline is exact.
             let mut small = $ctor;
             let exact: i128 = 1_i128 << 40;
-            small.insert_many(&key, exact);
+            small.update_weighted(&key, exact);
             assert_eq!(
                 small.estimate(&key),
                 exact as f64,
@@ -688,7 +688,7 @@ fn csheap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
             // number: `i64::MAX` is the documented ceiling.
             let mut huge = $ctor;
             let over: i128 = (i64::MAX as i128) * 4;
-            huge.insert_many(&key, over);
+            huge.update_weighted(&key, over);
             let est = huge.estimate(&key);
             assert!(
                 est >= i64::MAX as f64,
@@ -707,7 +707,7 @@ fn csheap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
 
             // Merging two saturated sketches must stay saturated and positive.
             let mut other = $ctor;
-            other.insert_many(&key, over);
+            other.update_weighted(&key, over);
             huge.merge(&other);
             assert_eq!(
                 heap_count(huge.heap().heap(), &key),
@@ -759,7 +759,7 @@ fn heap_count(items: &[asap_sketchlib::HHItem], key: &DataInput) -> Option<i64> 
 
 /// The `CMSHeap` instances that construct but have no operations at all.
 ///
-/// `CMSHeap::insert` / `insert_many` / `estimate` / `merge` all live in an impl
+/// `CMSHeap::update` / `update_weighted` / `estimate` / `merge` all live in an impl
 /// bounded on the counter converting into its heap count (`TopKCounter`):
 ///
 /// | counter | heap count | operations |
@@ -777,7 +777,7 @@ fn heap_count(items: &[asap_sketchlib::HHItem], key: &DataInput) -> Option<i64> 
 ///
 /// It is **constructibility coverage only**. It shows that the constructors
 /// exist, that the geometry accessors answer, and that the heap starts empty.
-/// It does **not** verify that `insert` is uncallable — a Rust test cannot
+/// It does **not** verify that `update` is uncallable — a Rust test cannot
 /// assert the absence of a method without a compile-fail harness such as
 /// `trybuild`, and an earlier revision of this comment wrongly claimed the test
 /// "fails to compile if an insert impl appears". It would not: adding an impl
@@ -793,7 +793,7 @@ fn heap_count(items: &[asap_sketchlib::HHItem], key: &DataInput) -> Option<i64> 
 /// # Why the API is not being changed
 ///
 /// Every alternative costs more than it buys: `TryInto<i64>` would make
-/// `insert` fallible or silently lossy for exactly the counters that motivated
+/// `update` fallible or silently lossy for exactly the counters that motivated
 /// `i128`; widening `HHItem::count` to `i128` changes the heap wire payload
 /// shared with `CSHeap`, Space-Saving and the Octo top-k plans; and removing
 /// the constructors is a breaking change to a type that composes generically.
@@ -879,7 +879,7 @@ fn countmin_counter_widths_carry_the_mass_their_type_allows() {
     // i32: just under the signed 32-bit ceiling.
     let mut cm32 = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
     let near_i32 = i32::MAX - 1;
-    cm32.insert_many(&key, near_i32);
+    cm32.update_weighted(&key, near_i32);
     assert_eq!(
         cm32.estimate(&key),
         near_i32,
@@ -889,7 +889,7 @@ fn countmin_counter_widths_carry_the_mass_their_type_allows() {
     // i64: a count an i32 cell could not represent at all.
     let mut cm64 = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, 64);
     let beyond_i32 = i32::MAX as i64 * 4;
-    cm64.insert_many(&key, beyond_i32);
+    cm64.update_weighted(&key, beyond_i32);
     assert_eq!(
         cm64.estimate(&key),
         beyond_i32,
@@ -899,7 +899,7 @@ fn countmin_counter_widths_carry_the_mass_their_type_allows() {
     // i128: a count an i64 cell could not represent.
     let mut cm128 = CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
     let beyond_i64 = i64::MAX as i128 * 4;
-    cm128.insert_many(&key, beyond_i64);
+    cm128.update_weighted(&key, beyond_i64);
     assert_eq!(
         cm128.estimate(&key),
         beyond_i64,
@@ -910,8 +910,8 @@ fn countmin_counter_widths_carry_the_mass_their_type_allows() {
     // i128 target either.
     let mut a = CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
     let mut b = CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
-    a.insert_many(&key, i64::MAX as i128);
-    b.insert_many(&key, i64::MAX as i128);
+    a.update_weighted(&key, i64::MAX as i128);
+    b.update_weighted(&key, i64::MAX as i128);
     a.merge(&b);
     assert_eq!(
         a.estimate(&key),
@@ -927,8 +927,8 @@ fn countsketch_counter_widths_carry_signed_mass_in_both_directions() {
     let key = DataInput::U64(0xDEAD_BEEF);
 
     let mut cs32 = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
-    cs32.insert_many(&key, i32::MAX / 2);
-    cs32.insert_many(&key, -(i32::MAX / 2));
+    cs32.update_weighted(&key, i32::MAX / 2);
+    cs32.update_weighted(&key, -(i32::MAX / 2));
     assert_eq!(
         cs32.estimate(&key),
         0.0,
@@ -937,9 +937,9 @@ fn countsketch_counter_widths_carry_signed_mass_in_both_directions() {
 
     let mut cs64 = Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 64);
     let big = i32::MAX as i64 * 4;
-    cs64.insert_many(&key, big);
+    cs64.update_weighted(&key, big);
     assert_eq!(cs64.estimate(&key), big as f64);
-    cs64.insert_many(&key, -big * 2);
+    cs64.update_weighted(&key, -big * 2);
     assert_eq!(
         cs64.estimate(&key),
         -(big as f64),
@@ -948,9 +948,9 @@ fn countsketch_counter_widths_carry_signed_mass_in_both_directions() {
 
     let mut cs128 = Count::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
     let huge = i64::MAX as i128 * 4;
-    cs128.insert_many(&key, huge);
+    cs128.update_weighted(&key, huge);
     assert_eq!(cs128.estimate(&key), huge as f64);
-    cs128.insert_many(&key, -huge * 2);
+    cs128.update_weighted(&key, -huge * 2);
     assert_eq!(
         cs128.estimate(&key),
         -(huge as f64),
@@ -1005,8 +1005,8 @@ fn countmin_holds_its_contract_across_the_depth_and_width_axis_on_both_paths() {
             let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
             let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for k in &stream {
-                regular.insert(&DataInput::U64(*k));
-                fast.insert(&DataInput::U64(*k));
+                regular.update(&DataInput::U64(*k));
+                fast.update(&DataInput::U64(*k));
             }
             countmin_axis_contract(
                 "CountMin<Vector2D<i64>, RegularPath> axis",
@@ -1034,7 +1034,7 @@ fn countmin_mean_excess_falls_as_the_width_axis_grows() {
         for &cols in &[64usize, 512, 4_096] {
             let mut sketch = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for k in &stream {
-                sketch.insert(&DataInput::U64(*k));
+                sketch.update(&DataInput::U64(*k));
             }
             let mut excess_sum = 0.0;
             for (key, count) in truth.pairs() {
@@ -1062,8 +1062,8 @@ fn countsketch_holds_its_l2_contract_across_the_depth_and_width_axis() {
             let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
             let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for k in &stream {
-                regular.insert(&DataInput::U64(*k));
-                fast.insert(&DataInput::U64(*k));
+                regular.update(&DataInput::U64(*k));
+                fast.update(&DataInput::U64(*k));
             }
             let mut regular_simultaneous = Tally::default();
             let mut regular_marginal = Tally::default();
@@ -1101,8 +1101,8 @@ fn countmin_answers_a_non_power_of_two_width_on_both_paths() {
         let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, cols);
         let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(3, cols);
         for k in &stream {
-            regular.insert(&DataInput::U64(*k));
-            fast.insert(&DataInput::U64(*k));
+            regular.update(&DataInput::U64(*k));
+            fast.update(&DataInput::U64(*k));
         }
         assert_eq!(regular.cols(), cols, "regular path reported width");
         assert_eq!(fast.cols(), cols, "fast path reported width");
@@ -1131,8 +1131,8 @@ fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
         let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, cols);
         let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(5, cols);
         for k in &stream {
-            regular.insert(&DataInput::U64(*k));
-            fast.insert(&DataInput::U64(*k));
+            regular.update(&DataInput::U64(*k));
+            fast.update(&DataInput::U64(*k));
         }
         assert_eq!(regular.cols(), cols, "regular path reported width");
         assert_eq!(fast.cols(), cols, "fast path reported width");
@@ -1165,7 +1165,7 @@ fn a_non_power_of_two_width_keeps_every_column_index_inside_the_matrix() {
     for &cols in &NON_POWER_OF_TWO_WIDTHS {
         let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(3, cols);
         for k in 0..20_000u64 {
-            fast.insert(&DataInput::U64(k.wrapping_mul(0x9E37_79B9_7F4A_7C15)));
+            fast.update(&DataInput::U64(k.wrapping_mul(0x9E37_79B9_7F4A_7C15)));
         }
         let occupied = (0..fast.rows())
             .map(|row| {
@@ -1199,10 +1199,10 @@ fn countmin_merge_max_dominates_both_sides_on_disjoint_key_sets() {
     let mut right_truth = FreqTruth::default();
     for k in &stream {
         if k % 2 == 0 {
-            left.insert(&DataInput::U64(*k));
+            left.update(&DataInput::U64(*k));
             left_truth.observe(*k as i64);
         } else {
-            right.insert(&DataInput::U64(*k));
+            right.update(&DataInput::U64(*k));
             right_truth.observe(*k as i64);
         }
     }
@@ -1266,7 +1266,7 @@ fn countmin_merge_max_is_idempotent_and_absorbs_an_empty_sketch() {
     let (stream, truth) = stream_and_truth();
     let mut sketch = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
     for k in &stream {
-        sketch.insert(&DataInput::U64(*k));
+        sketch.update(&DataInput::U64(*k));
     }
     let baseline: Vec<(i64, i64)> = truth
         .pairs()
@@ -1309,12 +1309,12 @@ fn countmin_precomputed_hash_entry_points_match_the_value_entry_points() {
         .map(|k| hash_for_matrix(ROWS, COLS, &DataInput::U64(*k)))
         .collect();
     for k in &stream {
-        by_value.insert(&DataInput::U64(*k));
+        by_value.update(&DataInput::U64(*k));
     }
     for h in &hashes {
         by_hash.fast_insert_with_hash_value(h);
     }
-    by_bulk_hash.bulk_insert_with_hashes(&hashes);
+    by_bulk_hash.update_batch_with_hashes(&hashes);
 
     for (key, _) in truth.pairs() {
         let probe = DataInput::U64(key as u64);
@@ -1365,10 +1365,10 @@ fn countmin_weighted_batch_entry_points_match_a_loop_of_single_inserts() {
         .collect();
 
     for (value, many) in &weighted {
-        by_loop.insert_many(value, *many);
+        by_loop.update_weighted(value, *many);
     }
-    by_bulk_many.bulk_insert_many(&weighted);
-    by_hashed_many.bulk_insert_many_with_hashes(&hashed_weighted);
+    by_bulk_many.update_weighted_batch(&weighted);
+    by_hashed_many.update_weighted_batch_with_hashes(&hashed_weighted);
 
     for (key, _) in truth.pairs() {
         let probe = DataInput::U64(key as u64);
@@ -1404,7 +1404,7 @@ fn countsketch_precomputed_hash_entry_points_match_the_value_entry_points() {
     let mut by_value = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
     let mut by_hash = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
     for k in &stream {
-        by_value.insert(&DataInput::U64(*k));
+        by_value.update(&DataInput::U64(*k));
         by_hash.fast_insert_with_hash_value(&hash_for_matrix(ROWS, COLS, &DataInput::U64(*k)));
     }
 

@@ -41,8 +41,8 @@ any row count.
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &DataInput, distinct_value: &DataInput)
-fn insert_many(&mut self, pairs: &[(&DataInput, &DataInput)])
+fn update(&mut self, key: &DataInput, distinct_value: &DataInput)
+fn update_batch(&mut self, pairs: &[(&DataInput, &DataInput)])
 ```
 
 Two hash calls per insert regardless of row count: one `hash128_seeded(0, ..)`
@@ -119,8 +119,8 @@ use asap_sketchlib::{CountMinHll, DataInput};
 // Distinct pages visited, per user.
 let mut sk = CountMinHll::default();
 for page in 0..500u64 {
-    sk.insert(&DataInput::Str("alice"), &DataInput::U64(page));
-    sk.insert(&DataInput::Str("bob"), &DataInput::U64(page % 20));
+    sk.update(&DataInput::Str("alice"), &DataInput::U64(page));
+    sk.update(&DataInput::Str("bob"), &DataInput::U64(page % 20));
 }
 
 let alice = sk.estimate(&DataInput::Str("alice"));

@@ -354,7 +354,7 @@ mod tests {
         let mut prototype =
             EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
         for _ in 0..7 {
-            prototype.insert(&DataInput::U64(9));
+            prototype.update(&DataInput::U64(9));
         }
         let eh = ExponentialHistogram::new(2, 1000, prototype);
         let bytes = eh.serialize_to_bytes().expect("serialize");

@@ -33,7 +33,7 @@ fn with_defaults() -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &DataInput, value: i64)
+fn update_weighted(&mut self, key: &DataInput, weight: i64)
 fn fast_insert(&mut self, key: &DataInput, value: i64)
 fn free(&mut self)
 ```
@@ -88,14 +88,14 @@ has no wire kind.
 use asap_sketchlib::{DataInput, UnivMonPyramid};
 
 let mut um = UnivMonPyramid::with_defaults();
-um.insert(&DataInput::U64(1), 1);
+um.update_weighted(&DataInput::U64(1), 1);
 assert!(um.calc_l1() >= 1.0);
 ```
 
 ## Caveats
 
 - Updates must have non-negative weights.
-- `insert` and `fast_insert` use different physical layouts and cannot be mixed
+- `update_weighted` and `fast_insert` use different physical layouts and cannot be mixed
   within one sketch.
 - Merge expects compatible layout/configuration and update strategy.
 

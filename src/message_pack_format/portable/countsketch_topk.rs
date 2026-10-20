@@ -102,7 +102,7 @@ pub fn sketchlib_cs_heap_update(cs_heap: &mut SketchlibCSHeap, key: &str, value:
     if many <= 0 {
         return;
     }
-    cs_heap.insert_many(&DataInput::String(key.to_owned()), many);
+    cs_heap.update_weighted(&DataInput::String(key.to_owned()), many);
 }
 
 /// Queries a CSHeap for a key's frequency estimate (median-of-signed-rows,

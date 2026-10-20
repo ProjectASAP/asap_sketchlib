@@ -57,7 +57,7 @@ fn sketches_count_fastpath_matches_go_count_sketch_envelope() {
         Count::with_dimensions(rows, cols);
     for i in 0..25 {
         let key = format!("k-{}", (b'a' + (i % 5) as u8) as char);
-        sk.insert_many(&DataInput::String(key), 1i64);
+        sk.update_weighted(&DataInput::String(key), 1i64);
     }
 
     let storage = sk.as_storage();
@@ -112,7 +112,7 @@ fn sketches_countmin_fastpath_matches_go_count_min_envelope() {
         CountMin::with_dimensions(rows, cols);
     for i in 0..50u64 {
         let key = format!("flow-{}", i % 10);
-        sk.insert_many(&DataInput::String(key), 1.0f64);
+        sk.update_weighted(&DataInput::String(key), 1.0f64);
     }
 
     let storage = sk.as_storage();
@@ -180,7 +180,7 @@ fn sketches_hll_classic_matches_go_envelope() {
             CANONICAL_HASH_SEED,
             &DataInput::Bytes(&bytes),
         );
-        sk.insert_with_hash(hashed);
+        sk.update_with_hash(hashed);
     }
 
     let state = HyperLogLogState {

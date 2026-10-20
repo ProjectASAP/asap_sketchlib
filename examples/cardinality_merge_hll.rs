@@ -19,7 +19,7 @@ fn main() {
             let mut hll = HyperLogLog::<ErtlMLE>::default();
             let start = shard * shard_size;
             for id in start..start + shard_size {
-                hll.insert(&DataInput::U64(id));
+                hll.update(&DataInput::U64(id));
             }
             hll
         })

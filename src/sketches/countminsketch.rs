@@ -331,7 +331,7 @@ where
 {
     /// Inserts an observation while using the standard Count-Min minimum row update rule.
     #[inline(always)]
-    pub fn insert(&mut self, value: &DataInput) {
+    pub fn update(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -343,29 +343,29 @@ where
 
     /// Inserts observations with the given count (supports fractional weights for f64 counters).
     #[inline(always)]
-    pub fn insert_many(&mut self, value: &DataInput, many: S::Counter) {
+    pub fn update_weighted(&mut self, value: &DataInput, weight: S::Counter) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
             let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
-            self.counts.increment_by_row(r, col, many);
+            self.counts.increment_by_row(r, col, weight);
         }
     }
 
     /// Inserts a batch of observations using the regular Count-Min update rule.
     #[inline(always)]
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
     /// Inserts a batch of observations with per-item counts.
     #[inline(always)]
-    pub fn bulk_insert_many(&mut self, values: &[(DataInput, S::Counter)]) {
+    pub fn update_weighted_batch(&mut self, values: &[(DataInput, S::Counter)]) {
         for (value, many) in values {
-            self.insert_many(value, *many);
+            self.update_weighted(value, *many);
         }
     }
 
@@ -397,14 +397,14 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMin<S, RegularPath, 
     /// Inserts an observation, emitting a delta at every promotion of the
     /// default threshold `CM_PROMASK`.
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CmDelta)) {
-        self.insert_emit_delta_with_threshold(value, CM_PROMASK, emit);
+    pub fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CmDelta)) {
+        self.update_emit_delta_with_threshold(value, CM_PROMASK, emit);
     }
 
     /// Inserts an observation, emitting a delta and clearing the counter each
     /// time a row counter reaches `threshold` (OctoSketch Algorithm 1).
     #[inline(always)]
-    pub fn insert_emit_delta_with_threshold(
+    pub fn update_emit_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
@@ -429,16 +429,16 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMin<S, RegularPath, 
         }
     }
 
-    /// As `insert_emit_delta_with_threshold`, but every delta carries the flow
+    /// As `update_emit_delta_with_threshold`, but every delta carries the flow
     /// key so an aggregator can maintain the heavy-hitter heap that workers
     /// no longer keep.
-    pub fn insert_emit_keyed_delta_with_threshold(
+    pub fn update_emit_keyed_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
         emit: &mut impl FnMut(KeyedCmDelta),
     ) {
-        self.insert_emit_delta_with_threshold(value, threshold, &mut |delta| {
+        self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
             emit(KeyedCmDelta {
                 key: input_to_owned(value),
                 delta,
@@ -454,13 +454,13 @@ where
     /// Inserts an observation via fast-path, emitting a delta at every
     /// promotion of the default threshold `CM_PROMASK`.
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CmDelta)) {
-        self.insert_emit_delta_with_threshold(value, CM_PROMASK, emit);
+    pub fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CmDelta)) {
+        self.update_emit_delta_with_threshold(value, CM_PROMASK, emit);
     }
 
     /// Fast-path counterpart of the regular-path threshold API.
     #[inline(always)]
-    pub fn insert_emit_delta_with_threshold(
+    pub fn update_emit_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
@@ -485,14 +485,14 @@ where
         }
     }
 
-    /// Fast-path counterpart of `insert_emit_keyed_delta_with_threshold`.
-    pub fn insert_emit_keyed_delta_with_threshold(
+    /// Fast-path counterpart of `update_emit_keyed_delta_with_threshold`.
+    pub fn update_emit_keyed_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
         emit: &mut impl FnMut(KeyedCmDelta),
     ) {
-        self.insert_emit_delta_with_threshold(value, threshold, &mut |delta| {
+        self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
             emit(KeyedCmDelta {
                 key: input_to_owned(value),
                 delta,
@@ -524,7 +524,7 @@ where
 {
     /// Inserts an observation using the combined hash optimization.
     #[inline(always)]
-    pub fn insert(&mut self, value: &DataInput) {
+    pub fn update(&mut self, value: &DataInput) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts
             .fast_insert(|a, b, _| *a += *b, S::Counter::from(1), &hashed_val);
@@ -532,25 +532,25 @@ where
 
     /// Inserts observations with the given count using the fast-path hash.
     #[inline(always)]
-    pub fn insert_many(&mut self, value: &DataInput, many: S::Counter) {
+    pub fn update_weighted(&mut self, value: &DataInput, weight: S::Counter) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts
-            .fast_insert(|a, b, _| *a += *b, many, &hashed_val);
+            .fast_insert(|a, b, _| *a += *b, weight, &hashed_val);
     }
 
     /// Inserts a batch of observations using the fast-path hash.
     #[inline(always)]
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
     /// Inserts a batch of observations with per-item counts using the fast-path hash.
     #[inline(always)]
-    pub fn bulk_insert_many(&mut self, values: &[(DataInput, S::Counter)]) {
+    pub fn update_weighted_batch(&mut self, values: &[(DataInput, S::Counter)]) {
         for (value, many) in values {
-            self.insert_many(value, *many);
+            self.update_weighted(value, *many);
         }
     }
 
@@ -585,7 +585,7 @@ where
 
     /// Inserts a batch of observations using pre-computed hash values.
     #[inline(always)]
-    pub fn bulk_insert_with_hashes(&mut self, hashes: &[H::HashType]) {
+    pub fn update_batch_with_hashes(&mut self, hashes: &[H::HashType]) {
         for hashed_val in hashes {
             self.fast_insert_with_hash_value(hashed_val);
         }
@@ -593,7 +593,7 @@ where
 
     /// Inserts a batch of observations with per-item counts using pre-computed hash values.
     #[inline(always)]
-    pub fn bulk_insert_many_with_hashes(&mut self, hashes: &[(H::HashType, S::Counter)]) {
+    pub fn update_weighted_batch_with_hashes(&mut self, hashes: &[(H::HashType, S::Counter)]) {
         for (hashed_val, many) in hashes {
             self.fast_insert_many_with_hash_value(hashed_val, *many);
         }
@@ -629,7 +629,7 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
 
     /// Inserts an observation through Nitro's per-row sampling schedule.
     ///
-    /// The cells written are the ones a plain `insert` would write — the hash
+    /// The cells written are the ones a plain `update` would write — the hash
     /// is `FastPathHasher::hash_for_matrix` and the column is
     /// `MatrixFastHash::col_for_row`, exactly as `MatrixStorage::fast_insert`
     /// derives them, so `nitro_estimate` reads back what this wrote. The hash
@@ -710,14 +710,14 @@ mod tests {
         let mut deltas: Vec<CmDelta> = Vec::new();
 
         for _ in 0..(CM_PROMASK - 1) {
-            sketch.insert_emit_delta(&key, &mut |d| deltas.push(d));
+            sketch.update_emit_delta(&key, &mut |d| deltas.push(d));
         }
         assert!(
             deltas.is_empty(),
             "regular CMS worker path should not emit before threshold"
         );
 
-        sketch.insert_emit_delta(&key, &mut |d| deltas.push(d));
+        sketch.update_emit_delta(&key, &mut |d| deltas.push(d));
         assert_eq!(
             deltas.len(),
             3,
@@ -726,10 +726,10 @@ mod tests {
         assert!(deltas.iter().all(|d| d.value == CM_PROMASK));
 
         for _ in 0..(CM_PROMASK - 1) {
-            sketch.insert_emit_delta(&key, &mut |d| deltas.push(d));
+            sketch.update_emit_delta(&key, &mut |d| deltas.push(d));
         }
         assert_eq!(deltas.len(), 3, "no second emission before next threshold");
-        sketch.insert_emit_delta(&key, &mut |d| deltas.push(d));
+        sketch.update_emit_delta(&key, &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 6, "should emit again on next threshold");
     }
 
@@ -781,8 +781,8 @@ mod tests {
         ];
 
         for key in &keys {
-            slow.insert(key);
-            fast.insert(key);
+            slow.update(key);
+            fast.update(key);
         }
 
         for key in &keys {
@@ -800,7 +800,7 @@ mod tests {
         let key = DataInput::Str("pkt_len");
         let count: i64 = 35_000_000_000; // ~35 billion, well past i32::MAX
 
-        sk.insert_many(&key, count);
+        sk.update_weighted(&key, count);
 
         let est = sk.estimate(&key);
         assert!(
@@ -816,9 +816,9 @@ mod tests {
         let mut right = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
         let key = DataInput::Str("delta");
 
-        left.insert(&key);
-        right.insert(&key);
-        right.insert(&key);
+        left.update(&key);
+        right.update(&key);
+        right.update(&key);
 
         let left_indices: Vec<_> = (0..left.rows())
             .map(|row| counter_index(row, &key, left.cols()))
@@ -844,7 +844,7 @@ mod tests {
         let mut sk = CountMin::<Vector2D<i32>, RegularPath>::default();
         // Insert values 0..9 once using the regular path.
         for i in 0..10 {
-            sk.insert(&DataInput::I32(i));
+            sk.update(&DataInput::I32(i));
         }
 
         // Build the expected counter array by mirroring the regular-path hashing logic.
@@ -866,7 +866,7 @@ mod tests {
 
         // Insert the same values again; counters should double.
         for i in 0..10 {
-            sk.insert(&DataInput::I32(i));
+            sk.update(&DataInput::I32(i));
         }
         let expected_twice: Vec<i32> = expected_once.iter().map(|v| v * 2).collect();
         assert_eq!(sk.as_storage().as_slice(), expected_twice.as_slice());
@@ -886,7 +886,7 @@ mod tests {
     fn cm_fast_path_correctness() {
         let mut sk = CountMin::<Vector2D<i32>, FastPath>::default();
         for i in 0..10 {
-            sk.insert(&DataInput::I32(i));
+            sk.update(&DataInput::I32(i));
         }
 
         let storage = sk.as_storage();

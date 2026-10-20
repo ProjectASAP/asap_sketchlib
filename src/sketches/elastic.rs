@@ -83,7 +83,7 @@ impl HeavyBucket {
     }
 
     /// Seats `id` in a vacant bucket with `count` positive votes already to its
-    /// name, for [`Elastic::insert_many`].
+    /// name, for [`Elastic::update_weighted`].
     pub fn occupy_many(&mut self, id: String, count: i32) {
         self.flow_id = id;
         self.vote_pos = count;
@@ -154,57 +154,57 @@ impl<H: SketchHasher> Elastic<H> {
     /// goes to the light layer, or, once `vote_neg >= LAMBDA * vote_pos`, the
     /// resident flow is evicted into the light layer with its full positive
     /// vote and `id` takes the bucket.
-    pub fn insert(&mut self, id: String) {
-        self.insert_many(id, 1);
+    pub fn update(&mut self, id: String) {
+        self.update_weighted(id, 1);
     }
 
     /// Records `count` occurrences of `id` in one step.
     ///
-    /// The weighted form of [`Self::insert`]: a matching bucket takes `count`
+    /// The weighted form of [`Self::update`]: a matching bucket takes `count`
     /// positive votes, a non-matching one takes `count` negative votes, and a
     /// takeover seats the arrival with `count` of each. `count` of 1 is
-    /// [`Self::insert`] exactly.
+    /// [`Self::update`] exactly.
     ///
     /// This is the insertion an OctoSketch aggregator applies to a heavy-part
     /// `<key, votes>` message; it absorbs the whole promoted counter in one
     /// pass rather than replaying it `count` times.
-    pub fn insert_many(&mut self, id: String, count: i32) {
-        if count <= 0 {
+    pub fn update_weighted(&mut self, id: String, weight: i32) {
+        if weight <= 0 {
             return;
         }
         let idx = self.bucket_index(&id);
         if self.stale_at(idx) {
-            self.seat_over_stale_copy(idx, id, count);
+            self.seat_over_stale_copy(idx, id, weight);
             return;
         }
         let bucket = &mut self.heavy[idx];
 
         if bucket.is_vacant() {
-            bucket.occupy_many(id, count);
+            bucket.occupy_many(id, weight);
             return;
         }
         if bucket.flow_id == id {
-            bucket.vote_pos += count;
+            bucket.vote_pos += weight;
             return;
         }
 
-        bucket.vote_neg += count;
+        bucket.vote_neg += weight;
         if bucket.vote_neg < LAMBDA * bucket.vote_pos {
-            self.light.insert_many(&DataInput::String(id), count);
+            self.light.update_weighted(&DataInput::String(id), weight);
             return;
         }
 
         let evicted_votes = bucket.vote_pos;
-        let evicted_id = bucket.evict_many(id, count);
+        let evicted_id = bucket.evict_many(id, weight);
         self.light
-            .insert_many(&DataInput::String(evicted_id), evicted_votes);
+            .update_weighted(&DataInput::String(evicted_id), evicted_votes);
     }
 
     /// Absorbs a `<flow, votes, eviction>` message from another sketch's heavy
     /// part, the insertion an OctoSketch aggregator applies to a heavy-part
     /// delta (§4.4) once the flag is carried with the counter.
     ///
-    /// [`Self::insert_many`], plus the sender's flag OR-ed in when the arrival
+    /// [`Self::update_weighted`], plus the sender's flag OR-ed in when the arrival
     /// ends up resident here. The counter word handed between the two parts
     /// *is* the flag. A sender whose bucket is unflagged holds the flow's whole
     /// mass in its heavy part, so flagging it here would make the estimate read
@@ -215,7 +215,7 @@ impl<H: SketchHasher> Elastic<H> {
         }
         let idx = self.bucket_index(&id);
         let arrival = id.clone();
-        self.insert_many(id, votes);
+        self.update_weighted(id, votes);
         if eviction && !self.heavy[idx].is_vacant() && self.heavy[idx].flow_id == arrival {
             self.heavy[idx].eviction = true;
         }
@@ -232,7 +232,7 @@ impl<H: SketchHasher> Elastic<H> {
         let idx = self.bucket_index(&id);
         if votes > 0 {
             self.light
-                .insert_many(&DataInput::String(id.clone()), votes);
+                .update_weighted(&DataInput::String(id.clone()), votes);
         }
         if !self.heavy[idx].is_vacant() && self.heavy[idx].flow_id == id {
             self.heavy[idx].eviction = true;
@@ -244,7 +244,7 @@ impl<H: SketchHasher> Elastic<H> {
     /// queries but never written, so an unelected flow is dropped outright.
     ///
     /// A vacant bucket seats the flow and a matching bucket takes a positive
-    /// vote, both as in [`Self::insert`]. A non-matching arrival takes a
+    /// vote, both as in [`Self::update`]. A non-matching arrival takes a
     /// negative vote and is discarded. On takeover the arrival keeps the
     /// evicted flow's positive vote instead of starting at 1, and the evicted
     /// flow's size is lost rather than spilled.
@@ -252,7 +252,7 @@ impl<H: SketchHasher> Elastic<H> {
     /// The arrival also inherits the bucket's eviction flag, and the negative
     /// vote resets to 0: this path leaves the counter and its flag bit
     /// untouched.
-    pub fn insert_heavy_only(&mut self, id: String) {
+    pub fn update_heavy_only(&mut self, id: String) {
         let idx = self.bucket_index(&id);
         if self.stale_at(idx) {
             self.seat_over_stale_copy(idx, id, 1);
@@ -404,7 +404,7 @@ impl<H: SketchHasher> Elastic<H> {
     /// Adds each flow's votes to the light layer.
     fn spill(&mut self, flows: Vec<(String, i32)>) {
         for (flow_id, votes) in flows {
-            self.light.insert_many(&DataInput::String(flow_id), votes);
+            self.light.update_weighted(&DataInput::String(flow_id), votes);
         }
     }
 
@@ -563,7 +563,7 @@ impl<H: SketchHasher> Elastic<H> {
         self.bktlen = width as i32;
 
         for (flow_id, votes) in losers {
-            self.light.insert_many(&DataInput::String(flow_id), votes);
+            self.light.update_weighted(&DataInput::String(flow_id), votes);
         }
     }
 
@@ -684,7 +684,7 @@ mod tests {
         let flow = "flow::primary".to_string();
 
         for _ in 0..12 {
-            sketch.insert(flow.clone());
+            sketch.update(flow.clone());
         }
 
         assert_eq!(sketch.query(flow.clone()), 12);
@@ -699,10 +699,10 @@ mod tests {
         let secondary = colliding_key(primary, &sketch);
 
         for _ in 0..10 {
-            sketch.insert(primary.to_string());
+            sketch.update(primary.to_string());
         }
         for _ in 0..6 {
-            sketch.insert(secondary.clone());
+            sketch.update(secondary.clone());
         }
 
         let heavy_est = sketch.query(primary.to_string());
@@ -726,11 +726,11 @@ mod tests {
         let secondary = colliding_key(primary, &sketch);
 
         for _ in 0..10 {
-            sketch.insert(primary.to_string());
+            sketch.update(primary.to_string());
         }
         // vote_neg reaches LAMBDA * 10 on the 80th arrival, which triggers takeover
         for _ in 0..(LAMBDA * 10) {
-            sketch.insert(secondary.clone());
+            sketch.update(secondary.clone());
         }
 
         let idx = bucket_for(primary, &sketch);
@@ -757,10 +757,10 @@ mod tests {
         let mut right: Elastic = Elastic::init_with_length(16);
 
         for _ in 0..30 {
-            left.insert("flow::left".to_string());
+            left.update("flow::left".to_string());
         }
         for _ in 0..18 {
-            right.insert("flow::right".to_string());
+            right.update("flow::right".to_string());
         }
 
         left.merge(&right);
@@ -791,12 +791,12 @@ mod tests {
         let secondary = colliding_key(primary, &left);
 
         for _ in 0..20 {
-            left.insert(primary.to_string());
+            left.update(primary.to_string());
         }
 
         let mut right: Elastic = Elastic::init_with_length(8);
         for _ in 0..9 {
-            right.insert(secondary.clone());
+            right.update(secondary.clone());
         }
 
         left.merge(&right);
@@ -809,12 +809,12 @@ mod tests {
     fn a_bucket_reoccupied_after_merge_still_reads_the_light_layer() {
         let mut left: Elastic = Elastic::init_with_length(8);
         for _ in 0..30 {
-            left.insert("flow::left".to_string());
+            left.update("flow::left".to_string());
         }
         let right: Elastic = Elastic::init_with_length(8);
 
         left.merge(&right);
-        left.insert("flow::left".to_string());
+        left.update("flow::left".to_string());
 
         assert_eq!(
             left.query("flow::left".to_string()),
@@ -830,11 +830,11 @@ mod tests {
         let secondary = colliding_key(primary, &left);
 
         for _ in 0..20 {
-            left.insert(primary.to_string());
+            left.update(primary.to_string());
         }
         let mut right: Elastic = Elastic::init_with_length(8);
         for _ in 0..9 {
-            right.insert(secondary.clone());
+            right.update(secondary.clone());
         }
 
         left.merge(&right);
@@ -853,10 +853,10 @@ mod tests {
         let mut left: Elastic = Elastic::init_with_length(8);
         let mut right: Elastic = Elastic::init_with_length(8);
         for _ in 0..30 {
-            left.insert("flow::shared".to_string());
+            left.update("flow::shared".to_string());
         }
         for _ in 0..20 {
-            right.insert("flow::shared".to_string());
+            right.update("flow::shared".to_string());
         }
 
         left.merge(&right);
@@ -876,11 +876,11 @@ mod tests {
         let secondary = colliding_key(primary, &left);
 
         for _ in 0..3 {
-            left.insert(primary.to_string());
+            left.update(primary.to_string());
         }
         let mut right: Elastic = Elastic::init_with_length(8);
         for _ in 0..50 {
-            right.insert(secondary.clone());
+            right.update(secondary.clone());
         }
 
         left.merge(&right);
@@ -926,10 +926,10 @@ mod tests {
             let in_left = (i % 3) + 1;
             let in_right = if i % 2 == 0 { (i % 4) + 1 } else { 0 };
             for _ in 0..in_left {
-                left.insert(key.clone());
+                left.update(key.clone());
             }
             for _ in 0..in_right {
-                right.insert(key.clone());
+                right.update(key.clone());
             }
             truth.push((key, in_left + in_right));
         }
@@ -954,11 +954,11 @@ mod tests {
         let secondary = colliding_key(primary, &left);
 
         for _ in 0..20 {
-            left.insert(primary.to_string());
+            left.update(primary.to_string());
         }
         let mut right: Elastic = Elastic::init_with_length(8);
         for _ in 0..9 {
-            right.insert(secondary.clone());
+            right.update(secondary.clone());
         }
 
         left.merge_max(&right);
@@ -979,7 +979,7 @@ mod tests {
             let key = format!("left::{i}");
             let count = (i % 7) + 1;
             for _ in 0..count {
-                left.insert(key.clone());
+                left.update(key.clone());
             }
             truth.push((key, count));
         }
@@ -987,7 +987,7 @@ mod tests {
             let key = format!("right::{i}");
             let count = (i % 5) + 1;
             for _ in 0..count {
-                right.insert(key.clone());
+                right.update(key.clone());
             }
             truth.push((key, count));
         }
@@ -1040,14 +1040,14 @@ mod tests {
         let mut right: Elastic = Elastic::init_with_dimensions(1, 2, 64);
         for sketch in [&mut left, &mut right] {
             for _ in 0..500 {
-                sketch.insert("flow::hot".to_string());
+                sketch.update("flow::hot".to_string());
             }
         }
         for _ in 0..left_count {
-            left.insert("flow::mouse".to_string());
+            left.update("flow::mouse".to_string());
         }
         for _ in 0..right_count {
-            right.insert("flow::mouse".to_string());
+            right.update("flow::mouse".to_string());
         }
         assert_eq!(
             left.heavy[0].flow_id, "flow::hot",
@@ -1076,10 +1076,10 @@ mod tests {
         let mut left: Elastic = Elastic::init_with_length(8);
         let mut right: Elastic = Elastic::init_with_length(8);
         for _ in 0..30 {
-            left.insert("flow::shared".to_string());
+            left.update("flow::shared".to_string());
         }
         for _ in 0..20 {
-            right.insert("flow::shared".to_string());
+            right.update("flow::shared".to_string());
         }
 
         left.merge_max(&right);
@@ -1106,10 +1106,10 @@ mod tests {
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &sketch);
         for _ in 0..4 {
-            sketch.insert(primary.to_string());
+            sketch.update(primary.to_string());
         }
         for _ in 0..3 {
-            sketch.insert(secondary.clone());
+            sketch.update(secondary.clone());
         }
 
         let before = light_snapshot(&sketch);
@@ -1123,12 +1123,12 @@ mod tests {
             .map(|idx| format!("flow::fresh::{idx}"))
             .find(|candidate| sketch.heavy[bucket_for(candidate, &sketch)].is_vacant())
             .expect("a vacant bucket must exist in an 8-bucket table");
-        sketch.insert_heavy_only(vacant.clone());
-        sketch.insert_heavy_only(vacant.clone());
+        sketch.update_heavy_only(vacant.clone());
+        sketch.update_heavy_only(vacant.clone());
 
         // non-matching arrivals: discarded first, then a takeover
         for _ in 0..(LAMBDA * 4 + 4) {
-            sketch.insert_heavy_only(secondary.clone());
+            sketch.update_heavy_only(secondary.clone());
         }
         assert_eq!(
             sketch.heavy[bucket_for(primary, &sketch)].flow_id,
@@ -1150,11 +1150,11 @@ mod tests {
         let secondary = colliding_key(primary, &sketch);
 
         for _ in 0..10 {
-            sketch.insert_heavy_only(primary.to_string());
+            sketch.update_heavy_only(primary.to_string());
         }
         // vote_neg reaches LAMBDA * 10 on the 80th arrival, which takes over
         for _ in 0..(LAMBDA * 10) {
-            sketch.insert_heavy_only(secondary.clone());
+            sketch.update_heavy_only(secondary.clone());
         }
 
         let bucket = &sketch.heavy[bucket_for(primary, &sketch)];
@@ -1177,12 +1177,12 @@ mod tests {
             let idx = bucket_for(primary, &sketch);
 
             for _ in 0..10 {
-                sketch.insert_heavy_only(primary.to_string());
+                sketch.update_heavy_only(primary.to_string());
             }
             sketch.heavy[idx].eviction = seeded_flag;
 
             for _ in 0..(LAMBDA * 10) {
-                sketch.insert_heavy_only(secondary.clone());
+                sketch.update_heavy_only(secondary.clone());
             }
 
             assert_eq!(sketch.heavy[idx].flow_id, secondary);
@@ -1201,10 +1201,10 @@ mod tests {
         let secondary = colliding_key(primary, &sketch);
 
         for _ in 0..10 {
-            sketch.insert_heavy_only(primary.to_string());
+            sketch.update_heavy_only(primary.to_string());
         }
         for _ in 0..(LAMBDA * 10) {
-            sketch.insert_heavy_only(secondary.clone());
+            sketch.update_heavy_only(secondary.clone());
         }
 
         assert_eq!(
@@ -1222,8 +1222,8 @@ mod tests {
         for i in 0..6 {
             let flow = format!("flow::{i}");
             for _ in 0..(i + 3) {
-                normal.insert(flow.clone());
-                overload.insert_heavy_only(flow.clone());
+                normal.update(flow.clone());
+                overload.update_heavy_only(flow.clone());
             }
         }
 
@@ -1251,7 +1251,7 @@ mod tests {
             let key = format!("flow::{i}");
             let count = (i as i32 % 5) + 1;
             for _ in 0..count {
-                sk.insert(key.clone());
+                sk.update(key.clone());
             }
             truth.push((key, count));
         }
@@ -1261,7 +1261,7 @@ mod tests {
     #[test]
     fn expansion_doubles_the_heavy_table() {
         let mut sk: Elastic = Elastic::init_with_length(8);
-        sk.insert("flow::a".to_string());
+        sk.update("flow::a".to_string());
 
         sk.expand_heavy();
 
@@ -1311,7 +1311,7 @@ mod tests {
             .map(|i| format!("late::{i}"))
             .find(|key| sk.bucket_index(key) == stale_idx)
             .expect("unable to find a key for the stale bucket");
-        sk.insert(arrival.clone());
+        sk.update(arrival.clone());
 
         assert_eq!(sk.heavy[stale_idx].flow_id, arrival);
         assert_eq!(sk.heavy[stale_idx].vote_pos, 1);
@@ -1380,7 +1380,7 @@ mod tests {
         for i in 0..6 {
             let key = format!("hot::{i}");
             for _ in 0..10 {
-                sk.insert(key.clone());
+                sk.update(key.clone());
             }
         }
 
@@ -1417,10 +1417,10 @@ mod tests {
             .expect("no key for bucket 4");
 
         for _ in 0..30 {
-            sk.insert(big.clone());
+            sk.update(big.clone());
         }
         for _ in 0..3 {
-            sk.insert(small.clone());
+            sk.update(small.clone());
         }
 
         sk.compress_heavy(2);
@@ -1524,7 +1524,7 @@ mod tests {
         let mut sk: Elastic = Elastic::init_with_length(buckets);
         for (id, count) in flows {
             for _ in 0..*count {
-                sk.insert((*id).to_string());
+                sk.update((*id).to_string());
             }
         }
         for (id, count) in flows {
@@ -1570,10 +1570,10 @@ mod tests {
         let secondary = colliding_key(primary, &sketch);
 
         for _ in 0..10 {
-            sketch.insert(primary.to_string());
+            sketch.update(primary.to_string());
         }
         for _ in 0..(LAMBDA * 10) {
-            sketch.insert(secondary.clone());
+            sketch.update(secondary.clone());
         }
 
         let idx = bucket_for(primary, &sketch);

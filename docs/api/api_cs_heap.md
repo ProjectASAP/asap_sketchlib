@@ -26,9 +26,9 @@ fn default() -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &DataInput)
-fn insert_many(&mut self, key: &DataInput, many: S::Counter)
-fn bulk_insert(&mut self, values: &[DataInput])
+fn update(&mut self, key: &DataInput)
+fn update_weighted(&mut self, key: &DataInput, weight: S::Counter)
+fn update_batch(&mut self, values: &[DataInput])
 fn clear_heap(&mut self)
 ```
 
@@ -122,7 +122,7 @@ the sketch unchanged.
 use asap_sketchlib::{CSHeap, DataInput, Vector2D, RegularPath};
 
 let mut sk = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 256, 8);
-sk.insert(&DataInput::Str("flow"));
+sk.update(&DataInput::Str("flow"));
 assert!(sk.estimate(&DataInput::Str("flow")) >= 1.0);
 ```
 
@@ -136,7 +136,7 @@ assert!(sk.estimate(&DataInput::Str("flow")) >= 1.0);
   saturates at `i64::MAX` / `i64::MIN` (and maps `NaN` to `0`) rather than
   wrapping, because a wrapped negative count would corrupt the heap's ordering.
   An `i128`-backed sketch can genuinely hold counts past `i64::MAX` —
-  `insert_many(key, i128)` accepts them, and the sketch keeps them — but its
+  `update_weighted(key, i128)` accepts them, and the sketch keeps them — but its
   heap entry clamps. Above `2^53` the estimate has already lost precision
   inside `Count::estimate`.
 - Every storage backend is insertable, `i128` included: the bound is

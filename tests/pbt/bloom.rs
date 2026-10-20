@@ -22,7 +22,7 @@ fn bloom_bits(f: &Bloom) -> Vec<bool> {
 fn bloom_of(rows: usize, cols: usize, values: &[u64]) -> Bloom {
     let mut f: Bloom = Bloom::with_dimensions(rows, cols);
     for v in values {
-        f.insert(&DataInput::U64(*v));
+        f.update(&DataInput::U64(*v));
     }
     f
 }
@@ -49,12 +49,12 @@ fn distinct(stream: &[u64]) -> usize {
 /// Insert `stream` into a fresh filter of the given mode, then hold that mode
 /// to the paper's guarantee and to the partitioning: one bit per slice per key.
 /// The two modes reach their bits through different code, so each is checked
-/// through its own inherent `insert` and `contains`.
+/// through its own inherent `update` and `contains`.
 macro_rules! mode_laws {
     ($ty:ty, $path:expr, $rows:expr, $cols:expr, $stream:expr) => {{
         let mut filter = <$ty>::with_dimensions($rows, $cols);
         for v in $stream {
-            filter.insert(&DataInput::U64(*v));
+            filter.update(&DataInput::U64(*v));
         }
 
         for v in $stream {
@@ -140,7 +140,7 @@ proptest! {
             .collect();
 
         for k in &stream {
-            filter.insert(&DataInput::U64(*k));
+            filter.update(&DataInput::U64(*k));
             for (i, p) in probes.iter().enumerate() {
                 let now = filter.contains(&DataInput::U64(*p));
                 prop_assert!(now || !seen[i], "probe {} stopped being a member", p);
@@ -226,7 +226,7 @@ proptest! {
         let mut filter: Bloom = Bloom::with_dimensions(rows, cols);
         let mut inserts = 0u64;
         while !bloom_bits(&filter).iter().all(|b| *b) && inserts < 4_096 {
-            filter.insert(&DataInput::U64(inserts));
+            filter.update(&DataInput::U64(inserts));
             inserts += 1;
         }
         prop_assert!(

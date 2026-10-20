@@ -167,23 +167,23 @@ where
 {
     /// Records one occurrence of `key`.
     #[inline]
-    pub fn insert(&mut self, key: &DataInput) {
-        self.cms.insert(key);
-        self.summary.insert(key);
+    pub fn update(&mut self, key: &DataInput) {
+        self.cms.update(key);
+        self.summary.update(key);
     }
 
     /// Adds `many` to `key`'s cells and its [`SpaceSavingCounter::summary_weight`]
     /// to the summary.
     #[inline]
-    pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
-        self.cms.insert_many(key, many);
-        self.summary.insert_many(key, many.summary_weight());
+    pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
+        self.cms.update_weighted(key, weight);
+        self.summary.update_weighted(key, weight.summary_weight());
     }
 
     /// Records every key in `values`.
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
@@ -207,23 +207,23 @@ where
 {
     /// Records one occurrence of `key`.
     #[inline]
-    pub fn insert(&mut self, key: &DataInput) {
-        self.cms.insert(key);
-        self.summary.insert(key);
+    pub fn update(&mut self, key: &DataInput) {
+        self.cms.update(key);
+        self.summary.update(key);
     }
 
     /// Adds `many` to `key`'s cells and its [`SpaceSavingCounter::summary_weight`]
     /// to the summary.
     #[inline]
-    pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
-        self.cms.insert_many(key, many);
-        self.summary.insert_many(key, many.summary_weight());
+    pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
+        self.cms.update_weighted(key, weight);
+        self.summary.update_weighted(key, weight.summary_weight());
     }
 
     /// Records every key in `values`.
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
@@ -261,8 +261,8 @@ mod tests {
     #[test]
     fn every_update_reaches_matrix_and_summary() {
         let mut sk = CMSSpaceSaving::<Vector2D<i64>, RegularPath>::new(3, 1024, 8);
-        sk.insert(&DataInput::U64(1));
-        sk.insert_many(&DataInput::U64(2), 7);
+        sk.update(&DataInput::U64(1));
+        sk.update_weighted(&DataInput::U64(2), 7);
         assert_eq!(sk.estimate(&DataInput::U64(1)), 1);
         assert_eq!(sk.estimate(&DataInput::U64(2)), 7);
         assert_eq!(sk.space_saving().estimate(&DataInput::U64(1)), 1);
@@ -277,9 +277,9 @@ mod tests {
     #[test]
     fn top_k_ranks_the_candidates_by_their_matrix_count() {
         let mut sk = CMSSpaceSaving::<Vector2D<i64>, RegularPath>::new(3, 1024, 2);
-        sk.insert_many(&DataInput::U64(1), 5);
-        sk.insert(&DataInput::U64(2));
-        sk.insert(&DataInput::U64(3));
+        sk.update_weighted(&DataInput::U64(1), 5);
+        sk.update(&DataInput::U64(2));
+        sk.update(&DataInput::U64(3));
         for key in 1..=3u64 {
             let truth = if key == 1 { 5 } else { 1 };
             assert_eq!(sk.estimate(&DataInput::U64(key)), truth);
@@ -293,7 +293,7 @@ mod tests {
     fn top_k_returns_at_most_capacity_keys_whatever_k() {
         let mut sk = CMSSpaceSaving::<Vector2D<i64>, FastPath>::new(3, 1024, 3);
         for key in 1..=5u64 {
-            sk.insert_many(&DataInput::U64(key), key as i64);
+            sk.update_weighted(&DataInput::U64(key), key as i64);
         }
         assert_eq!(sk.top_k(10).len(), 3);
         assert_eq!(ranked(&sk.top_k(1)), vec![(5, 5)]);
@@ -304,7 +304,7 @@ mod tests {
     fn top_k_breaks_count_ties_by_key_order() {
         let mut sk = CMSSpaceSaving::<Vector2D<i64>, RegularPath>::new(3, 1024, 4);
         for key in [9u64, 4, 7] {
-            sk.insert_many(&DataInput::U64(key), 2);
+            sk.update_weighted(&DataInput::U64(key), 2);
         }
         assert_eq!(ranked(&sk.top_k(3)), vec![(4, 2), (7, 2), (9, 2)]);
     }
@@ -319,12 +319,12 @@ mod tests {
         let mut ss_a = CMSSpaceSaving::<Vector2D<i64>, RegularPath>::new(3, 1024, 3);
         let mut ss_b = ss_a.clone();
         for (local, heavy) in [(1u64, &mut heap_a), (2, &mut heap_b)] {
-            heavy.insert_many(&DataInput::U64(local), 5);
-            heavy.insert_many(&DataInput::U64(3), 3);
+            heavy.update_weighted(&DataInput::U64(local), 5);
+            heavy.update_weighted(&DataInput::U64(3), 3);
         }
         for (local, ss) in [(1u64, &mut ss_a), (2, &mut ss_b)] {
-            ss.insert_many(&DataInput::U64(local), 5);
-            ss.insert_many(&DataInput::U64(3), 3);
+            ss.update_weighted(&DataInput::U64(local), 5);
+            ss.update_weighted(&DataInput::U64(3), 3);
         }
         heap_a.merge(&heap_b);
         ss_a.merge(&ss_b);
@@ -339,9 +339,9 @@ mod tests {
     fn merge_adds_the_matrices() {
         let mut a = CMSSpaceSaving::<Vector2D<i64>, RegularPath>::new(2, 64, 4);
         let mut b = a.clone();
-        a.insert_many(&DataInput::U64(1), 3);
-        b.insert_many(&DataInput::U64(1), 4);
-        b.insert(&DataInput::U64(2));
+        a.update_weighted(&DataInput::U64(1), 3);
+        b.update_weighted(&DataInput::U64(1), 4);
+        b.update(&DataInput::U64(2));
         let cells: Vec<i64> = a
             .cms()
             .as_storage()
@@ -398,8 +398,8 @@ mod tests {
     #[test]
     fn f64_counters_rank_by_their_fractional_estimate() {
         let mut sk = CMSSpaceSaving::<Vector2D<f64>, RegularPath>::new(3, 1024, 4);
-        sk.insert_many(&DataInput::U64(1), 0.25);
-        sk.insert_many(&DataInput::U64(2), 1.5);
+        sk.update_weighted(&DataInput::U64(1), 0.25);
+        sk.update_weighted(&DataInput::U64(2), 1.5);
         assert_eq!(sk.space_saving().estimate(&DataInput::U64(1)), 1);
         let top = sk.top_k(2);
         assert_eq!(heap_item_to_sketch_input(&top[0].0), DataInput::U64(2));
@@ -410,8 +410,8 @@ mod tests {
     #[test]
     fn a_non_positive_weight_reaches_the_matrix_alone() {
         let mut sk = CMSSpaceSaving::<Vector2D<i64>, RegularPath>::new(3, 1024, 4);
-        sk.insert_many(&DataInput::U64(1), 0);
-        sk.insert_many(&DataInput::U64(2), -3);
+        sk.update_weighted(&DataInput::U64(1), 0);
+        sk.update_weighted(&DataInput::U64(2), -3);
         assert!(sk.space_saving().is_empty());
         assert_eq!(sk.estimate(&DataInput::U64(2)), -3);
     }

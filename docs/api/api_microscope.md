@@ -53,8 +53,8 @@ count-based sub-windows of 4096 items.
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &DataInput)                      // count-based clock
-fn insert_at(&mut self, key: &DataInput, timestamp: u64)   // time-based clock
+fn update(&mut self, key: &DataInput)                      // count-based clock
+fn update_at(&mut self, key: &DataInput, timestamp: u64)   // time-based clock
 ```
 
 Each panics if given the other's clock, rather than silently not advancing it.
@@ -165,7 +165,7 @@ let mut sk: MicroCM = MicroCM::with_dimensions(
 );
 
 for i in 0..5_000u64 {
-    sk.insert(&DataInput::U64(i % 100));
+    sk.update(&DataInput::U64(i % 100));
 }
 
 // Nothing has expired yet and nothing has zoomed, so the only error left

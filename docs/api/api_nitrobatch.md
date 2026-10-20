@@ -30,8 +30,8 @@ asserted reproducibly.
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, data: &[i64])
-fn insert_cached_step(&mut self, data: &[i64])
+fn update_batch(&mut self, data: &[i64])
+fn update_batch_cached_step(&mut self, data: &[i64])
 fn draw_geometric(&mut self)
 fn reduce_to_skip(&mut self)
 ```
@@ -64,7 +64,7 @@ use asap_sketchlib::{CountMin, FastPath, NitroBatch, Vector2D};
 
 let base = CountMin::<Vector2D<i32>, FastPath>::default();
 let mut nitro = NitroBatch::with_target(0.1, base);
-nitro.insert(&[1, 2, 3, 4]);
+nitro.update_batch(&[1, 2, 3, 4]);
 ```
 
 ## Accuracy

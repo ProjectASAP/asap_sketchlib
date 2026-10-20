@@ -127,6 +127,23 @@ signals a backwards-compatible change.
   `message_pack_format::portable::...`; `MessagePackCodec` from
   `message_pack_format`. `CountSketchDelta` at the root is the ASAPv1
   Count Sketch delta.
+- **Every sketch write is `update`** (breaking). `insert` -> `update`;
+  `insert_many` and weighted `insert` -> `update_weighted`; `bulk_insert`,
+  batch `insert_many`, `insert_batch`, `bulk_update` -> `update_batch`;
+  `bulk_insert_many` -> `update_weighted_batch`; `insert_with_hash`,
+  `insert_by_hash` -> `update_with_hash`; `bulk_insert_with_hashes`,
+  `insert_many_with_hashes` -> `update_batch_with_hashes`;
+  `bulk_insert_many_with_hashes` -> `update_weighted_batch_with_hashes`;
+  `insert_at*`/`bulk_insert_at*` -> `update_at*`/`update_batch_at*`;
+  `insert_heavy_only` -> `update_heavy_only`; `insert_cached_step` ->
+  `update_batch_cached_step`; `bulk_update_data_input` ->
+  `update_batch_data_input`; `tumbling_insert` -> `tumbling_update_weighted`;
+  `insert_emit_*` -> `update_emit_*`; `insert_hash_emit_delta` ->
+  `update_emit_delta_with_hash`; `insert_hashes_emit_delta`,
+  `insert_hashes_emit_keyed_delta` -> `update_emit_delta_with_row_hashes`,
+  `update_emit_keyed_delta_with_row_hashes`; `CocoBucket::add_v` -> `add`.
+  Weight parameters are named `weight`. Custom `sketch_catalog` and
+  `TumblingWindowSketch` impls break.
 - **KLL, UnivMon and Hydra metadata keys follow the spec.** Compact KLL
   writes `compaction_seed`; UnivMon writes `layers`, `rows` and `cols`; Hydra
   writes `cell_*` for its counter params (`cell_rows`, `cell_cols`,

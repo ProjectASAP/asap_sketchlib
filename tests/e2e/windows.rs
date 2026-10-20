@@ -548,7 +548,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(WINDOW, 16, cfg, 4);
     let keys = zipf_u64(TOTAL as usize, 512, 1.1, STREAM_SEED);
     for (t, k) in keys.iter().enumerate() {
-        tw.insert(t as u64, &DataInput::U64(*k), 1);
+        tw.update_weighted(t as u64, &DataInput::U64(*k), 1);
     }
 
     assert_eq!(
@@ -609,7 +609,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     // clean active window, not one carrying the previous window's counters.
     tw.flush(TOTAL);
     let closed_after_flush = tw.closed_count();
-    tw.insert(TOTAL, &DataInput::U64(7), 1);
+    tw.update_weighted(TOTAL, &DataInput::U64(7), 1);
     assert_eq!(
         tw.active_sketch().query(&DataInput::U64(7)),
         1,
@@ -644,7 +644,7 @@ fn tumbling_univmon_q_windows_carry_exact_aggregates_through_rotation() {
         .map(|v| v as f64)
         .collect();
     for (t, v) in values.iter().enumerate() {
-        tw.insert(t as u64, &DataInput::F64(*v), 0);
+        tw.update_weighted(t as u64, &DataInput::F64(*v), 0);
     }
 
     assert_eq!(
@@ -679,7 +679,7 @@ fn tumbling_univmon_q_windows_carry_exact_aggregates_through_rotation() {
 
     // Rotation through the pool must hand back a cleared sketch.
     tw.flush(TOTAL);
-    tw.insert(TOTAL, &DataInput::F64(42.0), 0);
+    tw.update_weighted(TOTAL, &DataInput::F64(42.0), 0);
     let active = tw.active_sketch();
     assert_eq!(
         active.count(),
@@ -743,10 +743,10 @@ fn every_eh_variant_can_merge_into_its_own_kind() {
         let mut right = proto.clone();
         // Feed each side something it can actually ingest, then merge.
         for i in 0..64u64 {
-            left.insert(&DataInput::String(format!("k{i}")));
-            left.insert(&DataInput::F64(1.0 + i as f64));
-            right.insert(&DataInput::String(format!("k{}", i + 64)));
-            right.insert(&DataInput::F64(100.0 + i as f64));
+            left.update(&DataInput::String(format!("k{i}")));
+            left.update(&DataInput::F64(1.0 + i as f64));
+            right.update(&DataInput::String(format!("k{}", i + 64)));
+            right.update(&DataInput::F64(100.0 + i as f64));
         }
         assert!(
             left.merge(&right).is_ok(),
@@ -828,7 +828,7 @@ fn tumbling_fold_cms_hierarchical_merge_covers_every_observation() {
     let keys = zipf_u64(TOTAL as usize, 512, 1.1, STREAM_SEED);
     let mut truth = FreqTruth::default();
     for (t, k) in keys.iter().enumerate() {
-        tw.insert(t as u64, &DataInput::U64(*k), 1);
+        tw.update_weighted(t as u64, &DataInput::U64(*k), 1);
         truth.observe(*k as i64);
     }
 
@@ -896,7 +896,7 @@ fn tumbling_window_pool_accounting_tracks_every_recycled_sketch() {
     );
 
     for t in 0..(WINDOW * 8) {
-        tw.insert(t, &DataInput::U64(t % 97), 1);
+        tw.update_weighted(t, &DataInput::U64(t % 97), 1);
     }
     assert_eq!(
         tw.closed_count(),
@@ -1011,7 +1011,7 @@ fn an_exponential_histogram_custom_bucket_update_matches_repeated_inserts() {
         let key = DataInput::U64(t % 64);
         by_update.update(t, &key);
         by_custom.update_with(t, |sketch| {
-            sketch.insert(&key);
+            sketch.update(&key);
         });
     }
 
@@ -1046,8 +1046,8 @@ fn an_exponential_histogram_custom_bucket_update_matches_repeated_inserts() {
     for t in 0..500u64 {
         let key = DataInput::U64(t % 64);
         doubled.update_with(t, |sketch| {
-            sketch.insert(&key);
-            sketch.insert(&key);
+            sketch.update(&key);
+            sketch.update(&key);
         });
     }
     let (dlo, dhi) = full_span(&doubled);
@@ -1321,7 +1321,7 @@ mod microscope {
         let stream = zipf_u64(ITEMS, 4096, 1.1, 20_250_909);
         let mut sk = fresh();
         for key in &stream {
-            sk.insert(&DataInput::U64(*key));
+            sk.update(&DataInput::U64(*key));
         }
 
         let n = sk.sub_window();
@@ -1369,12 +1369,12 @@ mod microscope {
         let stream = zipf_u64(ITEMS, 4096, 1.1, 4_242);
         let mut sk = fresh();
         for key in &stream {
-            sk.insert(&DataInput::U64(*key));
+            sk.update(&DataInput::U64(*key));
         }
         // Land part-way into a sub-window so the residual is strictly between
         // 0 and 1 and the three policies genuinely differ.
         for key in stream.iter().take(377) {
-            sk.insert(&DataInput::U64(*key));
+            sk.update(&DataInput::U64(*key));
         }
         let p = sk.residual_fraction();
         assert!(
@@ -1434,7 +1434,7 @@ mod microscope {
         let mut sk = fresh();
         let loud = DataInput::U64(QUIET);
         for _ in 0..3 * PER_SUB_WINDOW {
-            sk.insert(&loud);
+            sk.update(&loud);
         }
         assert!(sk.estimate_with(&loud, DeltaStrategy::Under) > 0.0);
 
@@ -1448,7 +1448,7 @@ mod microscope {
                 .zip(&occupied)
                 .all(|(a, b)| a != b);
             if disjoint {
-                sk.insert(&DataInput::U64(candidate));
+                sk.update(&DataInput::U64(candidate));
                 pushed += 1;
             }
             candidate += 1;

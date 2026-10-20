@@ -22,8 +22,8 @@ fn new(k: usize) -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, item: &DataInput)
-fn insert_by_hash(&mut self, hash_value: u64)
+fn update(&mut self, item: &DataInput)
+fn update_with_hash(&mut self, hash_value: u64)
 ```
 
 ## Query
@@ -60,7 +60,7 @@ than `k` all fail to serialize.
 use asap_sketchlib::{KMV, DataInput};
 
 let mut kmv = KMV::new(1024);
-kmv.insert(&DataInput::U64(1));
+kmv.update(&DataInput::U64(1));
 let _ = kmv.estimate();
 ```
 

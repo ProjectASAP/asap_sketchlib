@@ -40,7 +40,7 @@ expect to resolve.
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &str, v: u64)
+fn update_weighted(&mut self, key: &str, weight: u64)
 ```
 
 The SIGCOMM '21 update: the `d` mapped buckets are scanned for `key` first and a
@@ -125,7 +125,7 @@ map every key to the same bucket. A wider table is refused on both sides.
 use asap_sketchlib::Coco;
 
 let mut sk = Coco::init_with_size(1024, 4);
-sk.insert("region=us|id=1", 3);
+sk.update_weighted("region=us|id=1", 3);
 let _ = sk.estimate_key("region=us|id=1");
 let _ = sk.estimate_projected("region=us", |full| {
     full.split('|').next().unwrap_or(full)
@@ -155,7 +155,7 @@ out.parent.sketch.estimate_key("flow::7");
 `CocoOctoWorker` keeps a table of the same shape with one-byte counters and
 ships a `<key, counter>` message when a bucket reaches τ — the bucket's key
 *after* the election, so a losing arrival promotes the incumbent instead of
-itself. `CocoOctoAggregator` replays each message through `insert(key, value)`,
+itself. `CocoOctoAggregator` replays each message through `update_weighted(key, value)`,
 this sketch's own insertion logic, which is what appendix C of the OctoSketch
 paper prescribes. Mass is conserved exactly; residency churns faster than a
 single-threaded pass, because a promoted batch of τ takes a bucket with

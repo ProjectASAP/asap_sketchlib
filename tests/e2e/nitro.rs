@@ -198,13 +198,13 @@ fn batch_target(rate: f64, seed: u64) -> NitroBatch<CountMin<Vector2D<i32>, Fast
 
 fn batch_live(rate: f64, seed: u64, f: usize) -> Vec<f64> {
     let mut nb = batch_target(rate, seed);
-    nb.insert(&vec![SOLO_KEY as i64; f]);
+    nb.update_batch(&vec![SOLO_KEY as i64; f]);
     vec![nb.estimate_median(&DataInput::I64(SOLO_KEY as i64))]
 }
 
 fn batch_cached(rate: f64, seed: u64, f: usize) -> Vec<f64> {
     let mut nb = batch_target(rate, seed);
-    nb.insert_cached_step(&vec![SOLO_KEY as i64; f]);
+    nb.update_batch_cached_step(&vec![SOLO_KEY as i64; f]);
     vec![nb.estimate_median(&DataInput::I64(SOLO_KEY as i64))]
 }
 
@@ -223,7 +223,7 @@ fn batch_cached(rate: f64, seed: u64, f: usize) -> Vec<f64> {
 /// batch path and is asserted here rather than left to the band.
 fn batch_bare(rate: f64, seed: u64, f: usize) -> Vec<f64> {
     let mut nb = NitroBatch::init_nitro_with_seed(rate, seed);
-    nb.insert(&vec![SOLO_KEY as i64; f]);
+    nb.update_batch(&vec![SOLO_KEY as i64; f]);
     let target = nb.target();
     let masses: Vec<f64> = (0..target.rows())
         .map(|r| {
@@ -402,9 +402,9 @@ fn full_sampling_is_exact_and_the_query_reads_the_cells_the_insert_wrote() {
         let mut nb = batch_target(1.0, trial_seed(0));
         let data = vec![SOLO_KEY as i64; F];
         if run {
-            nb.insert_cached_step(&data);
+            nb.update_batch_cached_step(&data);
         } else {
-            nb.insert(&data);
+            nb.update_batch(&data);
         }
         assert_eq!(
             nb.estimate_median(&DataInput::I64(SOLO_KEY as i64)),
@@ -470,7 +470,7 @@ fn nitro_merge_lands_in_the_combined_band() {
     let batch: Merged = |rate, sa, sb, half| {
         let build = |seed: u64| {
             let mut nb = batch_target(rate, seed);
-            nb.insert(&vec![SOLO_KEY as i64; half]);
+            nb.update_batch(&vec![SOLO_KEY as i64; half]);
             nb
         };
         let mut a = build(sa);
@@ -649,7 +649,7 @@ fn nitro_saturates_oversized_weights_instead_of_wrapping() {
     // A rate low enough to push `1/rate` past `i32::MAX` must still leave
     // counters non-negative, on the batch path and the row-level path alike.
     let mut tiny = batch_target(1e-9, trial_seed(0));
-    tiny.insert(&vec![1i64; 4_000]);
+    tiny.update_batch(&vec![1i64; 4_000]);
     assert!(
         tiny.estimate_median(&DataInput::I64(1)) >= 0.0,
         "a saturating weight must not turn Count-Min counters negative"
@@ -923,7 +923,7 @@ fn count_min_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() 
         CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
     sampled.enable_nitro(1.0);
     for k in &stream {
-        plain.insert(&DataInput::U64(*k));
+        plain.update(&DataInput::U64(*k));
         sampled.fast_insert_nitro(&DataInput::U64(*k));
     }
     assert_eq!(
@@ -971,7 +971,7 @@ fn count_min_after_disable_nitro_leaves_the_sampled_insert_path_inert() {
     );
 
     for k in &stream {
-        sketch.insert(&DataInput::U64(*k));
+        sketch.update(&DataInput::U64(*k));
     }
     assert_ne!(
         counters(sketch.as_storage()),
@@ -1008,7 +1008,7 @@ fn count_min_seeded_nitro_sampling_is_reproducible_and_admits_a_strict_subset() 
     let mut full =
         CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
     for k in &stream {
-        full.insert(&DataInput::U64(*k));
+        full.update(&DataInput::U64(*k));
     }
     let sampled_slots = counters(first.as_storage())
         .iter()
@@ -1034,7 +1034,7 @@ fn count_sketch_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes
         Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
     sampled.enable_nitro(1.0);
     for k in &stream {
-        plain.insert(&DataInput::U64(*k));
+        plain.update(&DataInput::U64(*k));
         sampled.fast_insert_nitro(&DataInput::U64(*k));
     }
     assert_eq!(

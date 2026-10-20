@@ -140,7 +140,7 @@ macro_rules! insertion_laws {
             fn sketch_of(keys: &[u64]) -> S {
                 let mut s = S::new();
                 for k in keys {
-                    s.insert(&DataInput::U64(*k));
+                    s.update(&DataInput::U64(*k));
                 }
                 s
             }
@@ -169,7 +169,7 @@ macro_rules! insertion_laws {
                         .map(|k| S::canonical_hash(&DataInput::U64(*k)))
                         .collect();
                     let mut by_hash = S::new();
-                    by_hash.insert_many_with_hashes(&hashes);
+                    by_hash.update_batch_with_hashes(&hashes);
 
                     prop_assert_eq!(by_value.registers_as_slice(), by_hash.registers_as_slice());
                 }
@@ -186,7 +186,7 @@ macro_rules! insertion_laws {
                     let mut sketch = S::new();
                     let mut previous = vec![0u8; M];
                     for k in &stream {
-                        sketch.insert(&DataInput::U64(*k));
+                        sketch.update(&DataInput::U64(*k));
                         for (j, (now, before)) in
                             sketch.registers_as_slice().iter().zip(&previous).enumerate()
                         {
@@ -204,7 +204,7 @@ macro_rules! insertion_laws {
                     let mut sketch = S::new();
                     let mut previous = vec![0u8; M];
                     for k in &stream {
-                        sketch.insert(&DataInput::U64(*k));
+                        sketch.update(&DataInput::U64(*k));
                         let changed = sketch
                             .registers_as_slice()
                             .iter()
@@ -242,7 +242,7 @@ macro_rules! estimation_laws {
                 let mut sketch = S::new();
                 for (bucket, &value) in target.iter().enumerate() {
                     if value != 0 {
-                        sketch.insert_with_hash(hash_placing(P, bucket, value));
+                        sketch.update_with_hash(hash_placing(P, bucket, value));
                     }
                 }
                 assert_eq!(sketch.registers_as_slice(), target, "crafted registers");
@@ -297,11 +297,11 @@ macro_rules! estimation_laws {
                 ) {
                     let mut ascending = S::new();
                     for v in &values {
-                        ascending.insert_with_hash(hash_placing(P, bucket, *v));
+                        ascending.update_with_hash(hash_placing(P, bucket, *v));
                     }
                     let mut descending = S::new();
                     for v in values.iter().rev() {
-                        descending.insert_with_hash(hash_placing(P, bucket, *v));
+                        descending.update_with_hash(hash_placing(P, bucket, *v));
                     }
 
                     let mut expected = vec![0u8; M];
@@ -356,7 +356,7 @@ macro_rules! merge_laws {
             fn sketch_of(keys: &[u64]) -> S {
                 let mut s = S::new();
                 for k in keys {
-                    s.insert(&DataInput::U64(*k));
+                    s.update(&DataInput::U64(*k));
                 }
                 s
             }
@@ -471,7 +471,7 @@ macro_rules! hip_laws {
                     let mut sketch = S::new();
                     let mut previous = sketch.estimate();
                     for k in &stream {
-                        sketch.insert(&DataInput::U64(*k));
+                        sketch.update(&DataInput::U64(*k));
                         let now = sketch.estimate();
                         prop_assert!(now >= previous, "estimate fell to {} on {}", now, k);
                         previous = now;
@@ -484,7 +484,7 @@ macro_rules! hip_laws {
                     let mut seen = std::collections::HashSet::new();
                     for k in &stream {
                         let before = sketch.estimate();
-                        sketch.insert(&DataInput::U64(*k));
+                        sketch.update(&DataInput::U64(*k));
                         if !seen.insert(*k) {
                             prop_assert_eq!(
                                 sketch.estimate(),
@@ -506,11 +506,11 @@ macro_rules! hip_laws {
                 ) {
                     let mut ascending = S::new();
                     for v in &values {
-                        ascending.insert_with_hash(hash_placing(P, bucket, *v));
+                        ascending.update_with_hash(hash_placing(P, bucket, *v));
                     }
                     let mut descending = S::new();
                     for v in values.iter().rev() {
-                        descending.insert_with_hash(hash_placing(P, bucket, *v));
+                        descending.update_with_hash(hash_placing(P, bucket, *v));
                     }
 
                     prop_assert_eq!(descending.estimate(), 1);
@@ -542,7 +542,7 @@ macro_rules! hip_laws {
                     let mut expected = 0.0_f64;
 
                     for (step, (bucket, value)) in plan.iter().enumerate() {
-                        sketch.insert_with_hash(hash_placing(P, *bucket, *value));
+                        sketch.update_with_hash(hash_placing(P, *bucket, *value));
                         let after = registers_of(&sketch);
                         if after != before {
                             expected += M as f64 / inverse_probability_sum(&before);
@@ -665,7 +665,7 @@ proptest! {
         type Hll = HyperLogLog<ErtlMLE>;
         let mut sketch = Hll::new();
         for k in &stream {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
 
         round_trip!(

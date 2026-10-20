@@ -405,51 +405,51 @@ impl fmt::Display for HydraCounter {
 impl HydraCounter {
     /// Insert a value into the counter sketch
     /// This updates the underlying sketch with the given value
-    pub fn insert(&mut self, value: &DataInput, count: Option<i32>) {
-        match (self, count) {
-            (HydraCounter::CM(cm), None) => cm.insert(value),
-            (HydraCounter::CM(cm), Some(i)) => cm.insert_many(value, i),
-            (HydraCounter::HLL(hll), _) => hll.insert(value), // for cardinality, insert once or many times make no difference
-            (HydraCounter::CS(count), None) => count.insert(value),
-            (HydraCounter::CS(count), Some(i)) => count.insert_many(value, i),
+    pub fn update(&mut self, value: &DataInput, weight: Option<i32>) {
+        match (self, weight) {
+            (HydraCounter::CM(cm), None) => cm.update(value),
+            (HydraCounter::CM(cm), Some(i)) => cm.update_weighted(value, i),
+            (HydraCounter::HLL(hll), _) => hll.update(value), // for cardinality, insert once or many times make no difference
+            (HydraCounter::CS(weight), None) => weight.update(value),
+            (HydraCounter::CS(weight), Some(i)) => weight.update_weighted(value, i),
             (HydraCounter::KLL(kll), None) => kll.update_data_input(value).unwrap(),
             (HydraCounter::KLL(kll), Some(i)) => {
                 for _ in 0..i as usize {
                     kll.update_data_input(value).unwrap()
                 }
             }
-            (HydraCounter::UNIVERSAL(u), None) => u.insert(value, 1),
-            (HydraCounter::UNIVERSAL(u), Some(i)) => u.insert(value, i as i64),
+            (HydraCounter::UNIVERSAL(u), None) => u.update_weighted(value, 1),
+            (HydraCounter::UNIVERSAL(u), Some(i)) => u.update_weighted(value, i as i64),
         }
     }
 
-    /// Batch insert for `bulk_update` paths. For `KLL` this delegates to
-    /// the new `bulk_update_data_input` (single CDF invalidation); for
+    /// Batch insert for `update_batch` paths. For `KLL` this delegates to
+    /// the new `update_batch_data_input` (single CDF invalidation); for
     /// other counters it loops over the existing per-item APIs.
-    pub fn bulk_insert(&mut self, values: &[DataInput]) -> Result<(), String> {
+    pub fn update_batch(&mut self, values: &[DataInput]) -> Result<(), String> {
         match self {
             HydraCounter::KLL(kll) => kll
-                .bulk_update_data_input(values)
+                .update_batch_data_input(values)
                 .map_err(|e| e.to_string()),
             HydraCounter::CM(cm) => {
-                cm.bulk_insert(values);
+                cm.update_batch(values);
                 Ok(())
             }
             HydraCounter::HLL(hll) => {
                 for v in values {
-                    hll.insert(v);
+                    hll.update(v);
                 }
                 Ok(())
             }
             HydraCounter::CS(cs) => {
                 for v in values {
-                    cs.insert(v);
+                    cs.update(v);
                 }
                 Ok(())
             }
             HydraCounter::UNIVERSAL(u) => {
                 for v in values {
-                    u.insert(v, 1);
+                    u.update_weighted(v, 1);
                 }
                 Ok(())
             }
@@ -457,17 +457,17 @@ impl HydraCounter {
     }
 
     /// Insert a value using a pre-computed hash when supported.
-    /// For sketches that require full values (e.g., KLL, UnivMon), this falls back to `insert`.
-    pub fn insert_with_hash(
+    /// For sketches that require full values (e.g., KLL, UnivMon), this falls back to `update`.
+    pub fn update_with_hash(
         &mut self,
         value: &DataInput,
         hashed_val: &MatrixHashType,
-        count: Option<i32>,
+        weight: Option<i32>,
     ) {
-        match (self, count) {
+        match (self, weight) {
             (HydraCounter::CM(cm), None) => cm.fast_insert_with_hash_value(hashed_val),
             (HydraCounter::CM(cm), Some(i)) => cm.fast_insert_many_with_hash_value(hashed_val, i),
-            (HydraCounter::HLL(hll), _) => hll.insert(value),
+            (HydraCounter::HLL(hll), _) => hll.update(value),
             (HydraCounter::CS(count), None) => count.fast_insert_with_hash_value(hashed_val),
             (HydraCounter::CS(count), Some(i)) => {
                 count.fast_insert_many_with_hash_value(hashed_val, i)
@@ -478,8 +478,8 @@ impl HydraCounter {
                     kll.update_data_input(value).unwrap()
                 }
             }
-            (HydraCounter::UNIVERSAL(u), None) => u.insert(value, 1),
-            (HydraCounter::UNIVERSAL(u), Some(i)) => u.insert(value, i as i64),
+            (HydraCounter::UNIVERSAL(u), None) => u.update_weighted(value, 1),
+            (HydraCounter::UNIVERSAL(u), Some(i)) => u.update_weighted(value, i as i64),
         }
     }
 

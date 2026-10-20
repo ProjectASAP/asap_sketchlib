@@ -98,7 +98,7 @@ fn weighted_truth_of(stream: &[(i64, u64)]) -> HashMap<i64, u64> {
 fn summary_of(capacity: usize, stream: &[i64]) -> SpaceSaving {
     let mut s = SpaceSaving::with_capacity(capacity);
     for k in stream {
-        s.insert(&DataInput::I64(*k));
+        s.update(&DataInput::I64(*k));
     }
     s
 }
@@ -106,7 +106,7 @@ fn summary_of(capacity: usize, stream: &[i64]) -> SpaceSaving {
 fn weighted_summary_of(capacity: usize, stream: &[(i64, u64)]) -> SpaceSaving {
     let mut s = SpaceSaving::with_capacity(capacity);
     for (k, w) in stream {
-        s.insert_many(&DataInput::I64(*k), *w);
+        s.update_weighted(&DataInput::I64(*k), *w);
     }
     s
 }
@@ -334,7 +334,7 @@ proptest! {
         let mut expanded = SpaceSaving::with_capacity(capacity);
         for (key, weight) in &stream {
             for _ in 0..*weight {
-                expanded.insert(&DataInput::I64(*key));
+                expanded.update(&DataInput::I64(*key));
             }
         }
 
@@ -355,7 +355,7 @@ proptest! {
     ) {
         let values: Vec<DataInput> = stream.iter().map(|k| DataInput::I64(*k)).collect();
         let mut bulk: SpaceSaving = SpaceSaving::with_capacity(capacity);
-        bulk.bulk_insert(&values);
+        bulk.update_batch(&values);
         let one_at_a_time = summary_of(capacity, &stream);
 
         prop_assert_eq!(
@@ -383,7 +383,7 @@ proptest! {
         prop_assert_eq!(reused.min_count(), 0);
 
         for key in &stream {
-            reused.insert(&DataInput::I64(*key));
+            reused.update(&DataInput::I64(*key));
         }
         let fresh = summary_of(capacity, &stream);
 
@@ -404,7 +404,7 @@ proptest! {
         let mut ceiling = 0;
 
         for (i, key) in stream.iter().enumerate() {
-            s.insert(&DataInput::I64(*key));
+            s.update(&DataInput::I64(*key));
             let now = s.min_count();
             prop_assert!(
                 now >= ceiling,
@@ -507,7 +507,7 @@ proptest! {
         s.merge(&summary_of(narrow, &middle));
         s.merge(&summary_of(other_narrow, &right));
         for key in &tail {
-            s.insert(&DataInput::I64(*key));
+            s.update(&DataInput::I64(*key));
         }
 
         let whole: Vec<i64> = left.iter()
@@ -547,14 +547,14 @@ proptest! {
         type Ss = SpaceSaving<DefaultXxHasher>;
         let mut sketch = Ss::with_capacity(capacity);
         for k in &stream {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
 
         // A single counter over several keys leaves behind a ceiling that no
         // counter of the merged summary holds.
         let mut narrow = Ss::with_capacity(1);
         for k in &dropped {
-            narrow.insert(&DataInput::U64(*k));
+            narrow.update(&DataInput::U64(*k));
         }
         sketch.merge(&narrow);
 

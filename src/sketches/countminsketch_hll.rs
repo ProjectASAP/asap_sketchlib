@@ -244,7 +244,7 @@ impl<H: SketchHasher> CountMinHll<H> {
     /// than a function of `rows`: `SEEDLIST` has `MATRIX_MAX_ROWS` entries
     /// and the index wraps, so a row count equal to that length would have
     /// selected seed 0 — the column seed — and tied the two together.
-    pub fn insert(&mut self, key: &DataInput, distinct_value: &DataInput) {
+    pub fn update(&mut self, key: &DataInput, distinct_value: &DataInput) {
         let col_hash = H::hash128_seeded(0, key);
         let hll_hash = H::hash64_seeded(HLL_SEED, distinct_value);
         let (index, rank) = self.register_and_rank_from_hash(hll_hash);
@@ -258,9 +258,9 @@ impl<H: SketchHasher> CountMinHll<H> {
     }
 
     /// Inserts each `(key, distinct_value)` pair in the slice.
-    pub fn insert_many(&mut self, pairs: &[(&DataInput, &DataInput)]) {
+    pub fn update_batch(&mut self, pairs: &[(&DataInput, &DataInput)]) {
         for (key, distinct_value) in pairs {
-            self.insert(key, distinct_value);
+            self.update(key, distinct_value);
         }
     }
 
@@ -409,7 +409,7 @@ mod tests {
         let k = key("user_A");
         let v = val(42);
         for _ in 0..500 {
-            sk.insert(&k, &v);
+            sk.update(&k, &v);
         }
         let est = sk.estimate(&k);
         // One distinct value leaves exactly one register set, so every
@@ -429,7 +429,7 @@ mod tests {
         let k = key("user_A");
         let n = 500u64;
         for i in 0..n {
-            sk.insert(&k, &val(i));
+            sk.update(&k, &val(i));
         }
         let est = sk.estimate(&k);
         let rel_err = (est - n as f64).abs() / n as f64;
@@ -448,7 +448,7 @@ mod tests {
         let ka = key("key_A");
         let kb = key("key_B");
         for i in 0..200u64 {
-            sk.insert(&ka, &val(i));
+            sk.update(&ka, &val(i));
         }
         let est_b = sk.estimate(&kb);
         // key_B shares a bucket with key_A only by collision, and the
@@ -468,11 +468,11 @@ mod tests {
         let mut b = CountMinHll::<DefaultXxHasher>::default();
         let k = key("user_A");
         for i in 0..1000u64 {
-            a.insert(&k, &val(i));
+            a.update(&k, &val(i));
         }
         let est_a = a.estimate(&k);
         for i in 1000..2000u64 {
-            b.insert(&k, &val(i));
+            b.update(&k, &val(i));
         }
         a.merge(&b).expect("same shape merges");
         let merged = a.estimate(&k);
@@ -495,7 +495,7 @@ mod tests {
         let b = CountMinHll::<DefaultXxHasher>::with_dimensions(4, 64, 8);
         let k = key("user_A");
         for i in 0..300u64 {
-            a.insert(&k, &val(i));
+            a.update(&k, &val(i));
         }
         let before = a.as_storage().as_slice().to_vec();
         let err = a.merge(&b).expect_err("mismatched cols must not merge");
@@ -512,7 +512,7 @@ mod tests {
         let mut sk = CountMinHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
         let k = key("user_A");
         for i in 0..1500u64 {
-            sk.insert(&k, &val(i));
+            sk.update(&k, &val(i));
         }
         let bytes = sk.serialize_to_bytes().expect("serialize");
         let restored =
@@ -533,11 +533,11 @@ mod tests {
 
         let mut sk_seq = CountMinHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
         for v in &vals {
-            sk_seq.insert(&k, v);
+            sk_seq.update(&k, v);
         }
 
         let mut sk_batch = CountMinHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
-        sk_batch.insert_many(&pairs);
+        sk_batch.update_batch(&pairs);
 
         assert_eq!(
             sk_seq.as_storage().as_slice(),

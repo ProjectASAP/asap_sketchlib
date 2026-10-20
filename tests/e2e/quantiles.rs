@@ -135,7 +135,7 @@ fn feed_kll(feed: Feed, k: i32, seed: u64, values: &[f64]) -> KLL<f64> {
         }
         Feed::BulkUpdate => {
             let mut s = KLL::init_kll_with_seed(k, seed);
-            s.bulk_update(values);
+            s.update_batch(values);
             s
         }
         Feed::ShardMerge => {
@@ -167,7 +167,7 @@ fn feed_kll(feed: Feed, k: i32, seed: u64, values: &[f64]) -> KLL<f64> {
             let window = (values.len() / 8).max(1) as u64;
             let mut tw: TumblingWindow<KLL> = TumblingWindow::new(window, 32, cfg, 4);
             for (t, v) in values.iter().enumerate() {
-                tw.insert(t as u64, &DataInput::F64(*v), 0);
+                tw.update_weighted(t as u64, &DataInput::F64(*v), 0);
             }
             tw.query_all()
         }
@@ -185,7 +185,7 @@ fn feed_kll_dynamic(feed: Feed, k: i32, seed: u64, values: &[f64]) -> Option<KLL
         }
         Feed::BulkUpdate => {
             let mut s = KLLDynamic::init_kll_with_seed(k, seed);
-            s.bulk_update(values);
+            s.update_batch(values);
             Some(s)
         }
         Feed::ShardMerge => {
@@ -383,7 +383,7 @@ fn bulk_cases(trial: usize, n: usize) -> Vec<(&'static str, Vec<f64>)> {
     cases
 }
 
-/// `bulk_update` and a loop of `update` must produce the *same sketch*, not
+/// `update_batch` and a loop of `update` must produce the *same sketch*, not
 /// two sketches that happen to land in the same rank band.
 ///
 /// `kll_family_stays_within_the_datasketches_maximum_rank_error_characterization`
@@ -401,7 +401,7 @@ fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
             via_loop.update(v);
         }
         let mut via_bulk: KLL<f64> = KLL::init_kll_with_seed(200, seed);
-        via_bulk.bulk_update(values);
+        via_bulk.update_batch(values);
 
         let ctx = format!("{shape} n={} sketch_seed={seed:#x}", values.len());
         assert_eq!(
@@ -435,7 +435,7 @@ fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
             via_loop.update(v);
         }
         let mut via_bulk = KLLDynamic::<f64>::init_kll_with_seed(200, seed);
-        via_bulk.bulk_update(values);
+        via_bulk.update_batch(values);
 
         let ctx = format!("{shape} n={} sketch_seed={seed:#x}", values.len());
         assert_eq!(
@@ -458,8 +458,8 @@ fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
     }
 }
 
-/// The two degenerate slice lengths: an empty `bulk_update` leaves the sketch
-/// byte-for-byte untouched, and a one-element `bulk_update` equals a single
+/// The two degenerate slice lengths: an empty `update_batch` leaves the sketch
+/// byte-for-byte untouched, and a one-element `update_batch` equals a single
 /// `update`.
 #[test]
 fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
@@ -472,7 +472,7 @@ fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
     let median = sk.quantile(0.5);
     let bytes = sk.serialize_to_bytes().unwrap();
 
-    sk.bulk_update(&[]);
+    sk.update_batch(&[]);
     assert_eq!(sk.count(), count, "an empty bulk_update changed the count");
     assert_eq!(
         sk.quantile(0.5).to_bits(),
@@ -487,7 +487,7 @@ fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
 
     let mut one: KLL<f64> = KLL::init_kll_with_seed(200, seed);
     let mut once: KLL<f64> = KLL::init_kll_with_seed(200, seed);
-    one.bulk_update(&[42.0]);
+    one.update_batch(&[42.0]);
     once.update(&42.0);
     assert_eq!(
         one.serialize_to_bytes().unwrap(),
@@ -509,7 +509,7 @@ fn kll_bulk_update_data_input_matches_the_loop_and_stops_at_the_first_non_numeri
         via_loop.update_data_input(v).unwrap();
     }
     let mut via_bulk: KLL<f64> = KLL::init_kll_with_seed(200, seed);
-    via_bulk.bulk_update_data_input(&inputs).unwrap();
+    via_bulk.update_batch_data_input(&inputs).unwrap();
     assert_eq!(
         via_loop.serialize_to_bytes().unwrap(),
         via_bulk.serialize_to_bytes().unwrap(),
@@ -523,7 +523,7 @@ fn kll_bulk_update_data_input_matches_the_loop_and_stops_at_the_first_non_numeri
     ];
     let mut stopped: KLL<f64> = KLL::init_kll_with_seed(200, seed);
     assert!(
-        stopped.bulk_update_data_input(&mixed).is_err(),
+        stopped.update_batch_data_input(&mixed).is_err(),
         "a non-numeric element must return an error"
     );
     assert_eq!(
@@ -533,7 +533,7 @@ fn kll_bulk_update_data_input_matches_the_loop_and_stops_at_the_first_non_numeri
     );
 
     let mut empty: KLL<f64> = KLL::init_kll_with_seed(200, seed);
-    empty.bulk_update_data_input(&[]).unwrap();
+    empty.update_batch_data_input(&[]).unwrap();
     assert_eq!(empty.count(), 0, "an empty DataInput batch must be a no-op");
 }
 
@@ -1469,7 +1469,7 @@ fn tumbling_kll_windows_are_exact_and_answers_satisfy_the_rank_contract() {
         .map(|v| *v as f64)
         .collect();
     for (t, v) in all.iter().enumerate() {
-        tw.insert(t as u64, &DataInput::F64(*v), 0);
+        tw.update_weighted(t as u64, &DataInput::F64(*v), 0);
     }
 
     // Window boundaries are arithmetic, so this is an equality, not a band.
@@ -1501,7 +1501,7 @@ fn tumbling_kll_windows_are_exact_and_answers_satisfy_the_rank_contract() {
         };
         let mut w: TumblingWindow<KLL> = TumblingWindow::new(WINDOW, 16, cfg, 4);
         for (t, v) in all.iter().enumerate() {
-            w.insert(t as u64, &DataInput::F64(*v), 0);
+            w.update_weighted(t as u64, &DataInput::F64(*v), 0);
         }
         let views: [(&str, KLL<f64>, &[f64]); 3] = [
             ("query_all", w.query_all(), &all[..]),

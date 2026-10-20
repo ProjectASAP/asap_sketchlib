@@ -344,8 +344,8 @@ mod tests {
         let heap_delta =
             CMSHeapDelta::<f64, RegularPath>::new(2, 4, vec![1], vec![2.5], delta_heap)
                 .expect("delta");
-        space_saving.insert(&DataInput::F64(2.5));
-        univmon.insert(&DataInput::F64(2.5), 2);
+        space_saving.update(&DataInput::F64(2.5));
+        univmon.update_weighted(&DataInput::F64(2.5), 2);
         hydra
             .update(&["eu"], &DataInput::F64(7.0), None)
             .expect("arity");

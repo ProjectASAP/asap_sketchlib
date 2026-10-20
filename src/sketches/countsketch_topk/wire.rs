@@ -136,7 +136,7 @@ mod tests {
     fn populated() -> CSHeap<Vector2D<i64>, RegularPath> {
         let mut sketch = CSHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
         for (key, weight) in [(1u64, 9i64), (2, 5), (3, 7)] {
-            sketch.insert_many(&DataInput::U64(key), weight);
+            sketch.update_weighted(&DataInput::U64(key), weight);
         }
         sketch
     }
@@ -259,8 +259,8 @@ mod tests {
     #[test]
     fn cs_heap_mode_in_metadata_round_trips() {
         let mut sketch = CSHeap::<Vector2D<i64>, FastPath>::new(4, 16, 8);
-        sketch.insert_many(&DataInput::U64(1), 5);
-        sketch.insert_many(&DataInput::U64(2), 3);
+        sketch.update_weighted(&DataInput::U64(1), 5);
+        sketch.update_weighted(&DataInput::U64(2), 3);
 
         let encoded = sketch.serialize_to_bytes().expect("serialize");
         assert_eq!(metadata_of(&encoded).mode, "fast");
@@ -526,8 +526,8 @@ mod tests {
         let mut alt = CSHeap::<Vector2D<i64>, RegularPath, AltHasher>::new(3, 8, 4);
         let mut std = CSHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
         for key in [42u64, 7] {
-            alt.insert(&DataInput::U64(key));
-            std.insert(&DataInput::U64(key));
+            alt.update(&DataInput::U64(key));
+            std.update(&DataInput::U64(key));
         }
 
         let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");

@@ -63,7 +63,7 @@ fn arrivals_in(list: &EHSketchList) -> i64 {
 fn cm_over(stream: &[(u64, u64)]) -> EHSketchList {
     let mut sketch = Cm::with_dimensions(ROWS, COLS);
     for (_, key) in stream {
-        sketch.insert(&DataInput::U64(*key));
+        sketch.update(&DataInput::U64(*key));
     }
     EHSketchList::CM(sketch)
 }
@@ -388,7 +388,7 @@ proptest! {
     //
     // Windows carve the stream into disjoint pieces; merging the retained
     // pieces has to rebuild what a single sketch fed those same arrivals
-    // holds. `merge_same_level` and `insert` are separate code paths, and the
+    // holds. `merge_same_level` and `update` are separate code paths, and the
     // retained set is chosen by eviction rather than by the test, so neither
     // side is the other by construction.
 
@@ -403,7 +403,7 @@ proptest! {
     ) {
         let mut tw = TumblingWindow::<FoldCMS>::new(size, max_windows, fold_cms_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let elapsed = stream.last().map(|(t, _)| t / size).unwrap_or(0) as usize;
@@ -422,13 +422,13 @@ proptest! {
     ) {
         let mut tw = TumblingWindow::<FoldCMS>::new(size, max_windows, fold_cms_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let kept = retained_after(&stream, size, max_windows);
         let mut single = fresh_fold_cms();
         for i in &kept {
-            single.insert(&DataInput::F64(stream[*i].1), 1);
+            single.update_weighted(&DataInput::F64(stream[*i].1), 1);
         }
 
         prop_assert_eq!(
@@ -447,13 +447,13 @@ proptest! {
     ) {
         let mut tw = TumblingWindow::<FoldCS>::new(size, max_windows, fold_cs_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let kept = retained_after(&stream, size, max_windows);
         let mut single = fresh_fold_cs();
         for i in &kept {
-            single.insert(&DataInput::F64(stream[*i].1), 1);
+            single.update_weighted(&DataInput::F64(stream[*i].1), 1);
         }
 
         prop_assert_eq!(
@@ -476,7 +476,7 @@ proptest! {
     ) {
         let mut tw = TumblingWindow::<KLL>::new(size, max_windows, roomy_kll_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let kept = retained_after(&stream, size, max_windows);
@@ -514,7 +514,7 @@ proptest! {
     ) {
         let mut tw = TumblingWindow::<KLL>::new(size, max_windows, kll_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let kept = retained_after(&stream, size, max_windows);
@@ -558,7 +558,7 @@ proptest! {
     ) {
         let mut tw = TumblingWindow::<UnivMonQ>::new(size, max_windows, univ_q_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let kept = retained_after(&stream, size, max_windows);
@@ -595,7 +595,7 @@ proptest! {
         let mut pool = SketchPool::<FoldCMS>::new(0, fold_cms_config());
         let mut used = pool.take();
         for (_, key) in first {
-            used.insert(&DataInput::F64(*key), 1);
+            used.update_weighted(&DataInput::F64(*key), 1);
         }
         pool.put(used);
 
@@ -607,8 +607,8 @@ proptest! {
         prop_assert_eq!(recycled.heap().heap().len(), fresh.heap().heap().len(), "heap handed back");
 
         for (_, key) in second {
-            recycled.insert(&DataInput::F64(*key), 1);
-            fresh.insert(&DataInput::F64(*key), 1);
+            recycled.update_weighted(&DataInput::F64(*key), 1);
+            fresh.update_weighted(&DataInput::F64(*key), 1);
         }
 
         prop_assert_eq!(recycled.to_flat_counters(), fresh.to_flat_counters(), "counters reused");
@@ -624,7 +624,7 @@ proptest! {
         let mut pool = SketchPool::<FoldCS>::new(0, fold_cs_config());
         let mut used = pool.take();
         for (_, key) in first {
-            used.insert(&DataInput::F64(*key), 1);
+            used.update_weighted(&DataInput::F64(*key), 1);
         }
         pool.put(used);
 
@@ -636,8 +636,8 @@ proptest! {
         prop_assert_eq!(recycled.heap().heap().len(), fresh.heap().heap().len(), "heap handed back");
 
         for (_, key) in second {
-            recycled.insert(&DataInput::F64(*key), 1);
-            fresh.insert(&DataInput::F64(*key), 1);
+            recycled.update_weighted(&DataInput::F64(*key), 1);
+            fresh.update_weighted(&DataInput::F64(*key), 1);
         }
 
         prop_assert_eq!(recycled.to_flat_counters(), fresh.to_flat_counters(), "counters reused");
@@ -720,7 +720,7 @@ proptest! {
         let mut pool = UnivSketchPool::new(0, 8, 3, 256, 4);
         let mut used = pool.take();
         for (_, key) in first {
-            used.insert(&DataInput::F64(*key), 1);
+            used.update_weighted(&DataInput::F64(*key), 1);
         }
         pool.put(used);
 
@@ -731,8 +731,8 @@ proptest! {
         prop_assert_eq!(recycled.calc_card(), fresh.calc_card(), "cardinality handed back");
 
         for (_, key) in second {
-            recycled.insert(&DataInput::F64(*key), 1);
-            fresh.insert(&DataInput::F64(*key), 1);
+            recycled.update_weighted(&DataInput::F64(*key), 1);
+            fresh.update_weighted(&DataInput::F64(*key), 1);
         }
 
         prop_assert_eq!(recycled.calc_l1(), fresh.calc_l1(), "L1 reused");

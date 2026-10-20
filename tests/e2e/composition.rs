@@ -34,7 +34,7 @@ const STREAM_SEED: u64 = 0xC090_5101;
 
 /// The ensemble's whole purpose is to compute one hash and hand it to several
 /// sketches, so every member is compared against a standalone sketch fed the
-/// same stream through its own `insert`.
+/// same stream through its own `update`.
 ///
 /// The two kinds of member have different obligations, and conflating them
 /// would make this test either vacuous or wrong:
@@ -43,7 +43,7 @@ const STREAM_SEED: u64 = 0xC090_5101;
 ///   their own fast path would have computed, so they must match a standalone
 ///   sketch *exactly*, key for key;
 /// - **HLL members** receive the low 64 bits of that shared matrix hash, not
-///   the canonical seed `HyperLogLog::insert` uses. Two different hash
+///   the canonical seed `HyperLogLog::update` uses. Two different hash
 ///   functions land the same stream in different registers, so the ensemble's
 ///   readings are equally accurate but not equal. They are held to their own
 ///   cardinality bands, and to agreeing with the standalone readings within
@@ -75,12 +75,12 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
     for k in &stream {
         let d = DataInput::U64(*k);
         truth.observe(*k as i64);
-        ens.insert(&d);
-        ref_cm.insert(&d);
-        ref_cs.insert(&d);
-        ref_ertl.insert(&d);
-        ref_classic.insert(&d);
-        ref_hip.insert(&d);
+        ens.update(&d);
+        ref_cm.update(&d);
+        ref_cs.update(&d);
+        ref_ertl.update(&d);
+        ref_classic.update(&d);
+        ref_hip.update(&d);
     }
 
     let context = format!(
@@ -106,7 +106,7 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
 
     // HLL members are deliberately *not* bit-identical to a standalone HLL.
     // The ensemble feeds them the low 64 bits of the shared **matrix** hash
-    // (seed index 0), while `HyperLogLog::insert` hashes with the canonical
+    // (seed index 0), while `HyperLogLog::update` hashes with the canonical
     // seed index. Two different hash functions land the same stream in
     // different registers, so the two are equally accurate rather than equal —
     // which is the point of sharing a hash, not a defect.
@@ -187,7 +187,7 @@ fn ensemble_members_stay_inside_their_own_error_models() {
     let mut truth = FreqTruth::default();
     let mut distinct = std::collections::HashSet::new();
     for k in &stream {
-        ens.insert(&DataInput::U64(*k));
+        ens.update(&DataInput::U64(*k));
         truth.observe(*k as i64);
         distinct.insert(*k);
     }
@@ -269,7 +269,7 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     let stream = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
     let mut truth = FreqTruth::default();
     for k in &stream {
-        mixed.insert(&DataInput::U64(*k));
+        mixed.update(&DataInput::U64(*k));
         truth.observe(*k as i64);
     }
     let context = format!("zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}");
@@ -806,7 +806,7 @@ fn portable_kll_sketch_satisfies_the_rank_error_characterization_through_merge_a
 /// - the matrix cell is handed exactly the hash its own fast path would have
 ///   computed, so it must match key for key, as an equality;
 /// - the HLL cell is handed the low 64 bits of that same matrix hash, not the
-///   canonical seed `HyperLogLog::insert` uses. Two different hash functions
+///   canonical seed `HyperLogLog::update` uses. Two different hash functions
 ///   put the same stream in different registers, so the cell is as accurate as
 ///   the standalone sketch rather than equal to it: it is held to its own
 ///   cardinality band, and to agreeing with the standalone reading inside the
@@ -840,9 +840,9 @@ mod documented_matrix {
         for key in &input.keys {
             let d = input.data(*key);
             truth.observe(*key);
-            ens.insert(&d);
-            reference_cm.insert(&d);
-            reference_hll.insert(&d);
+            ens.update(&d);
+            reference_cm.update(&d);
+            reference_hll.update(&d);
         }
 
         let context = format!(

@@ -194,18 +194,18 @@ impl CmWorkerSketch {
     /// Inserts a key, emitting and clearing every counter that reaches
     /// `threshold` (Algorithm 1).
     #[inline(always)]
-    pub fn insert_emit_delta(
+    pub fn update_emit_delta(
         &mut self,
         value: &DataInput,
         threshold: u32,
         emit: &mut impl FnMut(CmDelta),
     ) {
-        self.insert_hashes_emit_delta(&Self::hashes(self.rows, value), threshold, emit);
+        self.update_emit_delta_with_row_hashes(&Self::hashes(self.rows, value), threshold, emit);
     }
 
-    /// As `insert_emit_delta`, from hashes already computed by `hashes`.
+    /// As `update_emit_delta`, from hashes already computed by `hashes`.
     #[inline(always)]
-    pub fn insert_hashes_emit_delta(
+    pub fn update_emit_delta_with_row_hashes(
         &mut self,
         hashes: &[u64],
         threshold: u32,
@@ -250,17 +250,17 @@ impl CmWorkerSketch {
         }
     }
 
-    /// As `insert_hashes_emit_delta`, but each delta carries the flow key so
+    /// As `update_emit_delta_with_row_hashes`, but each delta carries the flow key so
     /// the aggregator can maintain the heavy-hitter heap.
     #[inline(always)]
-    pub fn insert_hashes_emit_keyed_delta(
+    pub fn update_emit_keyed_delta_with_row_hashes(
         &mut self,
         hashes: &[u64],
         key: &HeapItem,
         threshold: u32,
         emit: &mut impl FnMut(KeyedCmDelta),
     ) {
-        self.insert_hashes_emit_delta(hashes, threshold, &mut |delta| {
+        self.update_emit_delta_with_row_hashes(hashes, threshold, &mut |delta| {
             emit(KeyedCmDelta {
                 key: key.clone(),
                 delta,
@@ -312,19 +312,19 @@ impl CountWorkerSketch {
     /// Inserts a key, emitting and clearing every counter whose magnitude
     /// reaches `threshold` (§4.4: signed counters compare on `|counter|`).
     #[inline(always)]
-    pub fn insert_emit_delta(
+    pub fn update_emit_delta(
         &mut self,
         value: &DataInput,
         threshold: u32,
         emit: &mut impl FnMut(CountDelta),
     ) {
-        self.insert_hashes_emit_delta(&CmWorkerSketch::hashes(self.rows, value), threshold, emit);
+        self.update_emit_delta_with_row_hashes(&CmWorkerSketch::hashes(self.rows, value), threshold, emit);
     }
 
-    /// As `insert_emit_delta`, from hashes already computed by
+    /// As `update_emit_delta`, from hashes already computed by
     /// `CmWorkerSketch::hashes` - the two share a per-row hashing scheme.
     #[inline(always)]
-    pub fn insert_hashes_emit_delta(
+    pub fn update_emit_delta_with_row_hashes(
         &mut self,
         hashes: &[u64],
         threshold: u32,
@@ -370,16 +370,16 @@ impl CountWorkerSketch {
         }
     }
 
-    /// As `insert_hashes_emit_delta`, but each delta carries the flow key.
+    /// As `update_emit_delta_with_row_hashes`, but each delta carries the flow key.
     #[inline(always)]
-    pub fn insert_hashes_emit_keyed_delta(
+    pub fn update_emit_keyed_delta_with_row_hashes(
         &mut self,
         hashes: &[u64],
         key: &HeapItem,
         threshold: u32,
         emit: &mut impl FnMut(KeyedCountDelta),
     ) {
-        self.insert_hashes_emit_delta(hashes, threshold, &mut |delta| {
+        self.update_emit_delta_with_row_hashes(hashes, threshold, &mut |delta| {
             emit(KeyedCountDelta {
                 key: key.clone(),
                 delta,
@@ -459,13 +459,13 @@ impl L2hhWorkerSketch {
     /// Inserts a key, emitting and clearing every counter whose magnitude
     /// reaches `threshold`.
     #[inline(always)]
-    pub fn insert_emit_delta(
+    pub fn update_emit_delta(
         &mut self,
         value: &DataInput,
         threshold: u32,
         emit: &mut impl FnMut(CountDelta),
     ) {
-        self.insert_hash_emit_delta(hash128_seeded(self.seed_idx, value), threshold, emit);
+        self.update_emit_delta_with_hash(hash128_seeded(self.seed_idx, value), threshold, emit);
     }
 
     /// Seed this layer hashes under.
@@ -473,9 +473,9 @@ impl L2hhWorkerSketch {
         self.seed_idx
     }
 
-    /// As `insert_emit_delta`, from a hash already computed under `seed_idx`.
+    /// As `update_emit_delta`, from a hash already computed under `seed_idx`.
     #[inline(always)]
-    pub fn insert_hash_emit_delta(
+    pub fn update_emit_delta_with_hash(
         &mut self,
         hashed: u128,
         threshold: u32,
@@ -503,7 +503,7 @@ impl L2hhWorkerSketch {
 /// §3.2 Idea 3 strips flow-key storage out of a worker, but CocoSketch *is*
 /// key storage - a bucket's key is the only record of what its counter counts -
 /// so this worker keeps the keys and shrinks only the counters. Every step of
-/// `insert_emit_delta` mirrors `Coco::insert`, down to the uniform draw among
+/// `update_emit_delta` mirrors `Coco::update_weighted`, down to the uniform draw among
 /// tied minima and the `v / val` election, so the two cannot drift apart.
 #[derive(Clone, Debug)]
 pub struct CocoWorkerSketch {
@@ -561,7 +561,7 @@ impl CocoWorkerSketch {
     /// The promoted message carries whichever key the bucket holds *after* the
     /// election, which is the arriving key when it won the bucket and the
     /// incumbent when it did not.
-    pub fn insert_emit_delta(
+    pub fn update_emit_delta(
         &mut self,
         key: &str,
         threshold: u32,
@@ -693,13 +693,13 @@ impl ElasticWorkerSketch {
     /// Records one occurrence of `id`, promoting whichever half crosses
     /// `threshold`.
     ///
-    /// Every branch is `Elastic::insert`'s: a vacant bucket seats the flow and
+    /// Every branch is `Elastic::update`'s: a vacant bucket seats the flow and
     /// clears the slot's eviction flag, a matching one takes a positive vote,
     /// and otherwise the bucket takes a negative vote and either the arrival
     /// goes to the light layer or, once `vote_neg >= LAMBDA * vote_pos`, the
     /// slot is flagged and the resident is handed over as
     /// [`ElasticDelta::Evicted`] with its whole positive vote.
-    pub fn insert_emit_delta(
+    pub fn update_emit_delta(
         &mut self,
         id: &str,
         threshold: u32,
@@ -768,7 +768,7 @@ impl ElasticWorkerSketch {
     fn spill(&mut self, id: &str, threshold: u32, emit: &mut impl FnMut(ElasticDelta)) {
         let hashes = CmWorkerSketch::hashes(self.light.rows(), &DataInput::Str(id));
         self.light
-            .insert_hashes_emit_delta(&hashes, threshold, &mut |delta| {
+            .update_emit_delta_with_row_hashes(&hashes, threshold, &mut |delta| {
                 emit(ElasticDelta::Light(delta))
             });
     }
@@ -926,7 +926,7 @@ enum AggregatorMsg {
 ///
 /// Nothing borrowed crosses a thread: [`OctoPlan::prepare`] turns each input
 /// into the worker's payload on the calling thread, so a borrowed key is
-/// finished with by the time `insert` returns.
+/// finished with by the time `update` returns.
 pub struct OctoRuntime<L, P>
 where
     L: OctoPlan,
@@ -1268,7 +1268,7 @@ where
     /// The input is hashed for partitioning and converted to the worker's
     /// payload here, on the calling thread, so `input` may borrow from storage
     /// that is dropped as soon as this returns.
-    pub fn insert(&mut self, input: DataInput<'_>) {
+    pub fn update(&mut self, input: DataInput<'_>) {
         let core = self.core.as_ref().expect("runtime core missing");
         if core.closed.load(Ordering::Acquire) {
             panic!("cannot insert after runtime has been closed");
@@ -1329,9 +1329,9 @@ where
     }
 
     /// Inserts a batch, one element at a time.
-    pub fn insert_batch(&mut self, inputs: &[DataInput<'_>]) {
+    pub fn update_batch(&mut self, inputs: &[DataInput<'_>]) {
         for input in inputs {
-            self.insert(input.clone());
+            self.update(input.clone());
         }
     }
 
@@ -1417,7 +1417,7 @@ impl OctoWorker for CmOctoWorker {
         F: FnMut(Self::Delta),
     {
         self.sketch
-            .insert_hashes_emit_delta(payload, self.threshold.get(), emit);
+            .update_emit_delta_with_row_hashes(payload, self.threshold.get(), emit);
     }
 
     fn flush<F>(&mut self, emit: &mut F)
@@ -1489,7 +1489,7 @@ impl OctoWorker for CmTopKOctoWorker {
     where
         F: FnMut(Self::Delta),
     {
-        self.sketch.insert_hashes_emit_keyed_delta(
+        self.sketch.update_emit_keyed_delta_with_row_hashes(
             &payload.hashes,
             &payload.key,
             self.threshold.get(),
@@ -1570,7 +1570,7 @@ impl OctoWorker for CountOctoWorker {
         F: FnMut(Self::Delta),
     {
         self.sketch
-            .insert_hashes_emit_delta(payload, self.threshold.get(), emit);
+            .update_emit_delta_with_row_hashes(payload, self.threshold.get(), emit);
     }
 
     fn flush<F>(&mut self, emit: &mut F)
@@ -1637,7 +1637,7 @@ impl OctoWorker for CountTopKOctoWorker {
     where
         F: FnMut(Self::Delta),
     {
-        self.sketch.insert_hashes_emit_keyed_delta(
+        self.sketch.update_emit_keyed_delta_with_row_hashes(
             &payload.hashes,
             &payload.key,
             self.threshold.get(),
@@ -1897,7 +1897,7 @@ impl OctoWorker for HllOctoWorker {
         F: FnMut(Self::Delta),
     {
         self.child
-            .insert_emit_delta_with_hash_and_threshold(*payload, self.threshold, emit);
+            .update_emit_delta_with_hash_and_threshold(*payload, self.threshold, emit);
     }
 
     /// Ships every non-empty register. At the default threshold of 0 nothing is
@@ -1971,7 +1971,7 @@ pub fn univmon_layer_threshold(base: u32, layer: usize) -> u32 {
 /// OctoSketch worker backed by one compact sketch per UnivMon layer.
 ///
 /// An insert reaches layers `0..=bottom_layer_for(key)`, exactly the set a
-/// single-threaded `UnivMon::insert` touches, because the layer selector is a
+/// single-threaded `UnivMon::update_weighted` touches, because the layer selector is a
 /// pure function of the key's hash. The worker keeps no heavy-hitter heap;
 /// that lives only in the aggregator.
 pub struct UnivMonOctoWorker {
@@ -2040,7 +2040,7 @@ impl OctoWorker for UnivMonOctoWorker {
         {
             let layer_threshold = univmon_layer_threshold(threshold, layer);
             let key = &payload.key;
-            self.layers[layer].insert_hash_emit_delta(hashed, layer_threshold, &mut |delta| {
+            self.layers[layer].update_emit_delta_with_hash(hashed, layer_threshold, &mut |delta| {
                 emit(LayeredCountDelta {
                     layer: layer as u32,
                     key: key.clone(),
@@ -2254,7 +2254,7 @@ impl OctoWorker for CocoOctoWorker {
         F: FnMut(Self::Delta),
     {
         self.sketch
-            .insert_emit_delta(payload, self.threshold.get(), emit);
+            .update_emit_delta(payload, self.threshold.get(), emit);
     }
 
     /// Ships every bucket still holding a partial count. Unlike the `*TopK*`
@@ -2271,7 +2271,7 @@ impl OctoWorker for CocoOctoWorker {
 /// OctoSketch parent wrapping a full-precision `Coco`.
 ///
 /// §4.4: each `<key, counter>` message is replayed through the parent's own
-/// insertion logic, which for CocoSketch is the weighted `Coco::insert` - the
+/// insertion logic, which for CocoSketch is the weighted `Coco::update_weighted` - the
 /// aggregator picks its own victim bucket and runs its own election, so a key
 /// the worker held lands wherever the *parent's* table would have put it.
 pub struct CocoOctoAggregator {
@@ -2300,7 +2300,7 @@ impl OctoAggregator for CocoOctoAggregator {
 
     #[inline(always)]
     fn apply(&mut self, delta: CocoDelta) {
-        self.sketch.insert(&delta.key, delta.value);
+        self.sketch.update_weighted(&delta.key, delta.value);
     }
 }
 
@@ -2355,7 +2355,7 @@ impl OctoWorker for ElasticOctoWorker {
         F: FnMut(Self::Delta),
     {
         self.sketch
-            .insert_emit_delta(payload, self.threshold.get(), emit);
+            .update_emit_delta(payload, self.threshold.get(), emit);
     }
 
     /// Ships both halves: residual votes with their resident flow, and every
@@ -2910,7 +2910,7 @@ where
 {
     let mut runtime = OctoRuntime::new(config, plan, parent_factory);
     for input in inputs {
-        runtime.insert(input.clone());
+        runtime.update(input.clone());
     }
     runtime.finish()
 }
@@ -2926,11 +2926,11 @@ mod worker_tests {
         let mut deltas: Vec<CmDelta> = Vec::new();
 
         for _ in 0..(CM_PROMASK - 1) {
-            worker.insert_emit_delta(&key, CM_PROMASK, &mut |d| deltas.push(d));
+            worker.update_emit_delta(&key, CM_PROMASK, &mut |d| deltas.push(d));
         }
         assert!(deltas.is_empty(), "should not promote before the threshold");
 
-        worker.insert_emit_delta(&key, CM_PROMASK, &mut |d| deltas.push(d));
+        worker.update_emit_delta(&key, CM_PROMASK, &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 3, "one promotion per row");
         for d in &deltas {
             assert_eq!(d.value, CM_PROMASK);
@@ -2955,7 +2955,7 @@ mod worker_tests {
         let key = DataInput::U64(7);
         let mut promotions = 0usize;
         for _ in 0..100 {
-            worker.insert_emit_delta(&key, 10, &mut |_| promotions += 1);
+            worker.update_emit_delta(&key, 10, &mut |_| promotions += 1);
         }
         assert_eq!(
             promotions, 10,
@@ -2969,7 +2969,7 @@ mod worker_tests {
         let key = DataInput::U64(99);
         let mut deltas: Vec<CountDelta> = Vec::new();
         for _ in 0..200 {
-            worker.insert_emit_delta(&key, COUNT_PROMASK, &mut |d| deltas.push(d));
+            worker.update_emit_delta(&key, COUNT_PROMASK, &mut |d| deltas.push(d));
         }
         assert!(!deltas.is_empty());
         for d in &deltas {
@@ -2984,7 +2984,7 @@ mod worker_tests {
         let key = DataInput::Str("flow-a");
         let mut keyed: Vec<KeyedCmDelta> = Vec::new();
         for _ in 0..CM_PROMASK {
-            worker.insert_hashes_emit_keyed_delta(
+            worker.update_emit_keyed_delta_with_row_hashes(
                 &CmWorkerSketch::hashes(2, &key),
                 &input_to_owned(&key),
                 CM_PROMASK,
@@ -3105,7 +3105,7 @@ mod worker_tests {
         // 10 rows x (11 column bits + 1 sign bit) = 120, inside the budget.
         let mut worker = L2hhWorkerSketch::new(10, 2048, 0);
         let mut cells: Vec<(u32, u32)> = Vec::new();
-        worker.insert_emit_delta(&DataInput::U64(7), 1, &mut |d| cells.push((d.row, d.col)));
+        worker.update_emit_delta(&DataInput::U64(7), 1, &mut |d| cells.push((d.row, d.col)));
         assert_eq!(cells.len(), 10, "every row promotes at threshold 1");
         let rows: std::collections::HashSet<u32> = cells.iter().map(|(r, _)| *r).collect();
         assert_eq!(rows.len(), 10, "each row must land on its own index");
@@ -3121,8 +3121,8 @@ mod worker_tests {
         let mut full = Count::<Vector2D<i32>, RegularPath>::with_dimensions(1, 64);
         let mut full_values: Vec<i32> = Vec::new();
         for _ in 0..400 {
-            compact.insert_emit_delta(&key, tau, &mut |d| compact_values.push(d.value));
-            full.insert_emit_delta_with_threshold(&key, tau, &mut |d| full_values.push(d.value));
+            compact.update_emit_delta(&key, tau, &mut |d| compact_values.push(d.value));
+            full.update_emit_delta_with_threshold(&key, tau, &mut |d| full_values.push(d.value));
         }
 
         assert!(!compact_values.is_empty(), "tau must be reachable at all");
@@ -3160,7 +3160,7 @@ mod worker_tests {
             let mut parent = HyperLogLog::<Classic>::default();
             let mut promoted = 0usize;
             for i in 0..truth {
-                child.insert_emit_delta_with_threshold(&DataInput::U64(i), threshold, &mut |d| {
+                child.update_emit_delta_with_threshold(&DataInput::U64(i), threshold, &mut |d| {
                     promoted += 1;
                     parent.apply_delta(d);
                 });
@@ -3170,7 +3170,7 @@ mod worker_tests {
 
         let mut reference = HyperLogLog::<Classic>::default();
         for i in 0..truth {
-            reference.insert(&DataInput::U64(i));
+            reference.update(&DataInput::U64(i));
         }
         assert_eq!(
             sweep[0].2,
@@ -3225,7 +3225,7 @@ mod worker_tests {
     fn a_count_worker_refuses_hashes_built_for_a_different_geometry() {
         let mut worker = CountWorkerSketch::new(4, 16);
         let hashes = CmWorkerSketch::hashes(2, &DataInput::U64(1));
-        worker.insert_hashes_emit_delta(&hashes, COUNT_PROMASK, &mut |_| {});
+        worker.update_emit_delta_with_row_hashes(&hashes, COUNT_PROMASK, &mut |_| {});
     }
 
     #[test]
@@ -3237,7 +3237,7 @@ mod worker_tests {
         // every key.
         let mut worker = CmWorkerSketch::new(4, 16);
         let hashes = CmWorkerSketch::hashes(2, &DataInput::U64(1));
-        worker.insert_hashes_emit_delta(&hashes, CM_PROMASK, &mut |_| {});
+        worker.update_emit_delta_with_row_hashes(&hashes, CM_PROMASK, &mut |_| {});
     }
 
     /// Deltas each worker emitted, and the parent table as `(key, val)` per bucket.
@@ -3297,11 +3297,11 @@ mod worker_tests {
         let mut deltas: Vec<CocoDelta> = Vec::new();
 
         for _ in 0..(COCO_PROMASK - 1) {
-            worker.insert_emit_delta(key, COCO_PROMASK, &mut |d| deltas.push(d));
+            worker.update_emit_delta(key, COCO_PROMASK, &mut |d| deltas.push(d));
         }
         assert!(deltas.is_empty(), "should not promote before the threshold");
 
-        worker.insert_emit_delta(key, COCO_PROMASK, &mut |d| deltas.push(d));
+        worker.update_emit_delta(key, COCO_PROMASK, &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 1, "one bucket, one promotion");
         assert_eq!(deltas[0].key, key, "the message carries the bucket's key");
         assert_eq!(deltas[0].value as u32, COCO_PROMASK);
@@ -3319,7 +3319,7 @@ mod worker_tests {
         let mut parent = CocoOctoAggregator::new(16, 2);
         let inserted = 5_000u64;
         for i in 0..inserted {
-            worker.insert_emit_delta(&format!("flow::{}", i % 200), COCO_PROMASK, &mut |d| {
+            worker.update_emit_delta(&format!("flow::{}", i % 200), COCO_PROMASK, &mut |d| {
                 parent.apply(d)
             });
         }
@@ -3346,7 +3346,7 @@ mod worker_tests {
         // takeover hands the loser over keyed.
         for i in 0..1_000u32 {
             let key = if i % 2 == 0 { "flow::a" } else { "flow::b" };
-            worker.insert_emit_delta(key, ELASTIC_PROMASK, &mut |d| match d {
+            worker.update_emit_delta(key, ELASTIC_PROMASK, &mut |d| match d {
                 ElasticDelta::Heavy { .. } => heavy += 1,
                 ElasticDelta::Evicted { .. } => evicted += 1,
                 ElasticDelta::Light(_) => light += 1,
@@ -3388,9 +3388,9 @@ mod worker_tests {
     fn hll_threshold_zero_promotes_every_improvement() {
         let mut child = HyperLogLog::<Classic>::default();
         let mut deltas = 0usize;
-        child.insert_emit_delta_with_threshold(&DataInput::U64(1), 0, &mut |_| deltas += 1);
+        child.update_emit_delta_with_threshold(&DataInput::U64(1), 0, &mut |_| deltas += 1);
         assert_eq!(deltas, 1);
-        child.insert_emit_delta_with_threshold(&DataInput::U64(1), 0, &mut |_| deltas += 1);
+        child.update_emit_delta_with_threshold(&DataInput::U64(1), 0, &mut |_| deltas += 1);
         assert_eq!(deltas, 1, "a duplicate cannot improve a register");
     }
 
@@ -3402,10 +3402,10 @@ mod worker_tests {
         let mut a = HyperLogLog::<Classic>::default();
         let mut b = HyperLogLog::<Classic>::default();
         for i in 0..n {
-            a.insert_emit_delta_with_threshold(&DataInput::U64(i), 0, &mut |_| {
+            a.update_emit_delta_with_threshold(&DataInput::U64(i), 0, &mut |_| {
                 promoted_at_zero += 1
             });
-            b.insert_emit_delta_with_threshold(&DataInput::U64(i), 4, &mut |_| {
+            b.update_emit_delta_with_threshold(&DataInput::U64(i), 4, &mut |_| {
                 promoted_at_four += 1
             });
         }
@@ -3438,7 +3438,7 @@ mod runtime_tests {
 
         let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
 
         let result = run_octo(&inputs, &config(4), CmOctoPlan::new(rows, cols), || {
@@ -3466,7 +3466,7 @@ mod runtime_tests {
         let inputs: Vec<DataInput<'_>> = (0..n).map(DataInput::U64).collect();
         let mut reference = HyperLogLog::<Classic>::default();
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
 
         let result = run_octo(
@@ -3493,7 +3493,7 @@ mod runtime_tests {
         });
         // One key, many inserts: a hash partition must pile them all on one worker.
         for _ in 0..1_000 {
-            runtime.insert(DataInput::U64(4_242));
+            runtime.update(DataInput::U64(4_242));
         }
         let loads = runtime.finish().parent.loads;
         assert_eq!(loads.iter().filter(|&&l| l > 0).count(), 1, "{loads:?}");
@@ -3511,7 +3511,7 @@ mod runtime_tests {
             loads: vec![0; workers],
         });
         for i in 0..10u64 {
-            runtime.insert(DataInput::U64(i));
+            runtime.update(DataInput::U64(i));
         }
         assert_eq!(runtime.finish().parent.loads, vec![4, 3, 3]);
     }
@@ -3599,7 +3599,7 @@ mod runtime_tests {
             let mut worker = CmWorkerSketch::new(rows, cols);
             let mut promoted = 0usize;
             for key in &stream {
-                worker.insert_emit_delta(&DataInput::U64(*key), tau, &mut |_| promoted += 1);
+                worker.update_emit_delta(&DataInput::U64(*key), tau, &mut |_| promoted += 1);
             }
             volumes.push((tau, promoted));
         }
@@ -3744,7 +3744,7 @@ mod runtime_tests {
         );
         let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
         let key = DataInput::U64(0);
         let deficit = reference.estimate(&key) - result.parent.sketch.estimate(&key);
@@ -4042,7 +4042,7 @@ mod runtime_tests {
             CmOctoAggregator::new(rows, cols)
         });
         for input in &inputs {
-            runtime.insert(input.clone());
+            runtime.update(input.clone());
         }
         let streamed = runtime.finish();
 
@@ -4110,7 +4110,7 @@ mod runtime_tests {
 
         let half = values.len() / 2;
         for value in &values[..half] {
-            runtime.insert(DataInput::F64(*value));
+            runtime.update(DataInput::F64(*value));
         }
 
         runtime.flush();
@@ -4124,7 +4124,7 @@ mod runtime_tests {
 
         // The runtime is not sealed by a flush.
         for value in &values[half..] {
-            runtime.insert(DataInput::F64(*value));
+            runtime.update(DataInput::F64(*value));
         }
         assert_eq!(
             runtime.finish().parent.sketch.get_count(),
@@ -4174,7 +4174,7 @@ mod runtime_tests {
         let mut runtime = OctoRuntime::new(&config(2), PanicOnFlushPlan, || CountingAggregator {
             total: 0,
         });
-        runtime.insert(DataInput::U64(1));
+        runtime.update(DataInput::U64(1));
         runtime.flush();
     }
 
@@ -4185,7 +4185,7 @@ mod runtime_tests {
             DdOctoAggregator::new(alpha)
         });
         for i in 1..=5_000u64 {
-            runtime.insert(DataInput::F64(i as f64));
+            runtime.update(DataInput::F64(i as f64));
         }
         runtime.flush();
         runtime.flush();
@@ -4203,7 +4203,7 @@ mod runtime_tests {
         });
         let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
         for row in 0..rows {
             for col in 0..cols {
@@ -4229,7 +4229,7 @@ mod runtime_tests {
     fn octo_runtime_insert_after_close_panics() {
         let mut runtime = OctoRuntime::new(&config(2), HllOctoPlan::new(), HllOctoAggregator::new);
         runtime.close();
-        runtime.insert(DataInput::U64(1));
+        runtime.update(DataInput::U64(1));
     }
 
     #[test]
@@ -4247,7 +4247,7 @@ mod runtime_tests {
         assert_eq!(reader.with_parent(|p| p.total), 0, "nothing inserted yet");
 
         for i in 0..n {
-            runtime.insert(DataInput::U64(i));
+            runtime.update(DataInput::U64(i));
         }
 
         // Poll rather than sleep-and-hope: the point is that the handle reaches
@@ -4282,7 +4282,7 @@ mod runtime_tests {
         let mut runtime =
             OctoRuntime::new(&config(4), CountingPlan, || CountingAggregator { total: 0 });
         for i in 0..n {
-            runtime.insert(DataInput::U64(i + 42));
+            runtime.update(DataInput::U64(i + 42));
         }
         runtime.close();
         assert_eq!(runtime.finish().parent.total, n);
@@ -4350,7 +4350,7 @@ mod runtime_tests {
         let mut inserted = 0u64;
         for round in 0..30_000u64 {
             for i in 0..(1 + round % 7) {
-                runtime.insert(DataInput::U64(i));
+                runtime.update(DataInput::U64(i));
                 inserted += 1;
             }
             runtime.flush();
@@ -4495,7 +4495,7 @@ mod univmon_tests {
 
         let mut reference = UnivMon::init_univmon(HEAP, ROWS, COLS, LAYERS);
         for input in &inputs {
-            reference.insert(input, 1);
+            reference.update_weighted(input, 1);
         }
 
         let preparer = UnivMonOctoPlan::with_threshold(ROWS, COLS, LAYERS, OctoThreshold::new(1));
@@ -4548,7 +4548,7 @@ mod univmon_tests {
 
         let mut reference = UnivMon::init_univmon(HEAP, ROWS, COLS, LAYERS);
         for input in &inputs {
-            reference.insert(input, 1);
+            reference.update_weighted(input, 1);
         }
 
         let preparer =

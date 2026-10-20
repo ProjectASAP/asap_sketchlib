@@ -13,7 +13,7 @@ fn main() {
     // --- Count-Min Sketch ---
     let mut cms: CountMin<Vector2D<i64>, RegularPath> = CountMin::with_dimensions(5, 1024);
     for id in 0u64..1_000 {
-        cms.insert(&DataInput::U64(id % 100)); // 100 distinct IDs
+        cms.update(&DataInput::U64(id % 100)); // 100 distinct IDs
     }
     let before = cms.estimate(&DataInput::U64(42));
 
@@ -31,7 +31,7 @@ fn main() {
     // --- HyperLogLog ---
     let mut hll = HyperLogLog::<ErtlMLE>::default();
     for id in 0u64..10_000 {
-        hll.insert(&DataInput::U64(id));
+        hll.update(&DataInput::U64(id));
     }
     let card_before = hll.estimate();
 

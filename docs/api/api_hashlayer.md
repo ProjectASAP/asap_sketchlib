@@ -23,7 +23,7 @@ let mut ensemble = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
 ]).unwrap();
 
 // Insert — hashes once, updates all 3 sketches
-ensemble.insert(&DataInput::U64(42));
+ensemble.update(&DataInput::U64(42));
 
 // Query frequency (CMS at index 0)
 let freq = ensemble.estimate(0, &DataInput::U64(42)).unwrap();
@@ -33,7 +33,7 @@ let card = ensemble.cardinality(2).unwrap();
 
 // Pre-computed hash path for hot loops
 let hash = ensemble.hash_input(&DataInput::U64(42));
-ensemble.insert_with_hash(&hash);
+ensemble.update_with_hash(&hash);
 let freq = ensemble.estimate_with_hash(0, &hash).unwrap();
 ```
 
@@ -46,7 +46,7 @@ coordination:
 let hash = hash_for_matrix_seeded_generic::<MyHasher>(0, rows, cols, &input);
 cms_a.fast_insert_with_hash_value(&hash);
 cms_b.fast_insert_with_hash_value(&hash);
-hll.insert_with_hash(hash.lower_64());
+hll.update_with_hash(hash.lower_64());
 ```
 
 `HashSketchEnsemble` wraps this pattern into a single structure that manages
@@ -102,17 +102,17 @@ Computes the shared hash for an input using the ensemble's hash configuration an
 ## Insertion
 
 ```rust
-fn insert(&mut self, val: &DataInput)
-fn insert_with_hash(&mut self, hash: &H::HashType)
-fn insert_at(&mut self, indices: &[usize], val: &DataInput)
-fn insert_at_with_hash(&mut self, indices: &[usize], hash: &H::HashType)
-fn bulk_insert(&mut self, values: &[DataInput])
-fn bulk_insert_with_hashes(&mut self, hashes: &[H::HashType])
-fn bulk_insert_at(&mut self, indices: &[usize], values: &[DataInput])
-fn bulk_insert_at_with_hashes(&mut self, indices: &[usize], hashes: &[H::HashType])
+fn update(&mut self, val: &DataInput)
+fn update_with_hash(&mut self, hash: &H::HashType)
+fn update_at(&mut self, indices: &[usize], val: &DataInput)
+fn update_at_with_hash(&mut self, indices: &[usize], hash: &H::HashType)
+fn update_batch(&mut self, values: &[DataInput])
+fn update_batch_with_hashes(&mut self, hashes: &[H::HashType])
+fn update_batch_at(&mut self, indices: &[usize], values: &[DataInput])
+fn update_batch_at_with_hashes(&mut self, indices: &[usize], hashes: &[H::HashType])
 ```
 
-`insert` hashes once and fans out to all sketches. The `_at` variants target specific sketch indices. The `bulk_` variants accept slices for batch processing.
+`update` hashes once and fans out to all sketches. The `_at` variants target specific sketch indices. The `bulk_` variants accept slices for batch processing.
 
 ## Query
 

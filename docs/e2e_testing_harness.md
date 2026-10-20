@@ -236,7 +236,7 @@ struct MyAdapter(MyHeavyHitter);
 
 impl FrequencyOps<i64> for MyAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key)) as f64
@@ -245,7 +245,7 @@ impl FrequencyOps<i64> for MyAdapter {
 
 impl SignedFrequencyOps<i64> for MyAdapter {
     fn ingest_weighted(&mut self, key: &i64, weight: i64) {
-        self.0.insert_many(&DataInput::I64(*key), weight);
+        self.0.update_weighted(&DataInput::I64(*key), weight);
     }
 }
 ```

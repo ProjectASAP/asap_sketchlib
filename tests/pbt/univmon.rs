@@ -87,7 +87,7 @@ fn heap_entries(sketch: &UnivMon) -> Vec<Vec<(u64, i64)>> {
 fn filled(layers: usize, rows: usize, cols: usize, stream: &[(u64, i64)]) -> UnivMon {
     let mut sketch = UnivMon::init_univmon(WIDE_HEAP, rows, cols, layers);
     for (k, w) in stream {
-        sketch.insert(&DataInput::U64(*k), *w);
+        sketch.update_weighted(&DataInput::U64(*k), *w);
     }
     sketch
 }
@@ -200,7 +200,7 @@ proptest! {
     ) {
         let mut sketch = UnivMon::init_univmon(8, rows, cols, layers);
         for w in &weights {
-            sketch.insert(&DataInput::U64(key), *w);
+            sketch.update_weighted(&DataInput::U64(key), *w);
         }
         let total: i64 = weights.iter().sum();
         let at = deepest_layer(key, layers);
@@ -392,7 +392,7 @@ proptest! {
     ) {
         let mut sketch = UnivMon::init_univmon(heap_size, rows, cols, layers);
         for (k, w) in &stream {
-            sketch.insert(&DataInput::U64(*k), *w);
+            sketch.update_weighted(&DataInput::U64(*k), *w);
         }
 
         round_trip!(

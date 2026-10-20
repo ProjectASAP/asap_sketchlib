@@ -81,7 +81,7 @@ fn cm_child_run(stream: &[u64], rows: usize, cols: usize) -> (Cm, Vec<CmDelta>) 
     let mut child = Cm::with_dimensions(rows, cols);
     let mut deltas = Vec::new();
     for k in stream {
-        child.insert_emit_delta(&DataInput::U64(*k), &mut |d| deltas.push(d));
+        child.update_emit_delta(&DataInput::U64(*k), &mut |d| deltas.push(d));
     }
     (child, deltas)
 }
@@ -90,7 +90,7 @@ fn cs_child_run(stream: &[u64], rows: usize, cols: usize) -> (Cs, Vec<CountDelta
     let mut child = Cs::with_dimensions(rows, cols);
     let mut deltas = Vec::new();
     for k in stream {
-        child.insert_emit_delta(&DataInput::U64(*k), &mut |d| deltas.push(d));
+        child.update_emit_delta(&DataInput::U64(*k), &mut |d| deltas.push(d));
     }
     (child, deltas)
 }
@@ -99,7 +99,7 @@ fn hll_child_run(stream: &[u64]) -> (HyperLogLog<Classic>, Vec<HllDelta>) {
     let mut child = HyperLogLog::<Classic>::default();
     let mut deltas = Vec::new();
     for k in stream {
-        child.insert_emit_delta(&DataInput::U64(*k), &mut |d| deltas.push(d));
+        child.update_emit_delta(&DataInput::U64(*k), &mut |d| deltas.push(d));
     }
     (child, deltas)
 }
@@ -135,7 +135,7 @@ fn cm_promotion_is_lossless_modulo_the_child_residual() {
     }
     let mut reference = Cm::with_dimensions(ROWS, COLS);
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
 
     // Algorithm 1 clears the counter it promotes, so what the child still
@@ -178,7 +178,7 @@ fn cm_parent_holds_every_completed_promotion() {
 
     let mut reference = Cm::with_dimensions(ROWS, COLS);
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
 
     let mask = CM_PROMASK as i32;
@@ -210,7 +210,7 @@ fn cm_octo_estimate_trails_the_single_thread_estimate_by_under_one_promotion() {
     }
     let mut reference = Cm::with_dimensions(ROWS, COLS);
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
 
     // Per row the parent lags by `count mod tau`, so the row-wise minimum
@@ -239,7 +239,7 @@ fn cm_fast_path_promotes_on_the_same_schedule_as_the_regular_path() {
     let mut fast_parent = CmFast::with_dimensions(ROWS, COLS);
     let mut fast_deltas = 0usize;
     for k in &stream {
-        fast_child.insert_emit_delta(&DataInput::U64(*k), &mut |d| {
+        fast_child.update_emit_delta(&DataInput::U64(*k), &mut |d| {
             assert_eq!(d.value, CM_PROMASK);
             fast_parent.apply_delta(d);
             fast_deltas += 1;
@@ -253,7 +253,7 @@ fn cm_fast_path_promotes_on_the_same_schedule_as_the_regular_path() {
     // path. Only the per-cell promotion rule is shared.
     let mut reference = CmFast::with_dimensions(ROWS, COLS);
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
     for r in 0..ROWS {
         for c in 0..COLS {
@@ -278,12 +278,12 @@ fn cm_delta_addressing_survives_columns_past_the_u16_ceiling() {
     let mut child = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
     let mut parent = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
     for k in &stream {
-        child.insert_emit_delta(&DataInput::U64(*k), &mut |d| parent.apply_delta(d));
+        child.update_emit_delta(&DataInput::U64(*k), &mut |d| parent.apply_delta(d));
     }
 
     let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
     for r in 0..rows {
         for c in 0..cols {
@@ -332,7 +332,7 @@ fn cm_sharded_children_conserve_counts_against_a_single_pass() {
     let mut parent = Cm::with_dimensions(ROWS, COLS);
     for (i, k) in stream.iter().enumerate() {
         let mut out = Vec::new();
-        children[i % shards].insert_emit_delta(&DataInput::U64(*k), &mut |d| out.push(d));
+        children[i % shards].update_emit_delta(&DataInput::U64(*k), &mut |d| out.push(d));
         for d in out {
             parent.apply_delta(d);
         }
@@ -340,7 +340,7 @@ fn cm_sharded_children_conserve_counts_against_a_single_pass() {
 
     let mut reference = Cm::with_dimensions(ROWS, COLS);
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
 
     // parent + Σ per-shard residuals == the single-pass sketch, cell for cell.
@@ -397,7 +397,7 @@ fn count_promotion_is_lossless_modulo_the_child_residual() {
 
     let mut reference = Cs::with_dimensions(ROWS, COLS);
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
 
     let (child_cells, parent_cells, ref_cells) =
@@ -431,7 +431,7 @@ fn count_octo_estimate_stays_within_one_residual_of_the_single_thread_estimate()
     }
     let mut reference = Cs::with_dimensions(ROWS, COLS);
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
 
     // Every row cell is within `MAX_CELL_RESIDUAL` of the reference, and the
@@ -453,7 +453,7 @@ fn count_fast_path_conserves_counts_like_the_regular_path() {
     let mut child = CsFast::with_dimensions(ROWS, COLS);
     let mut parent = CsFast::with_dimensions(ROWS, COLS);
     for k in &stream {
-        child.insert_emit_delta(&DataInput::U64(*k), &mut |d| {
+        child.update_emit_delta(&DataInput::U64(*k), &mut |d| {
             assert_eq!(d.value.unsigned_abs(), COUNT_PROMASK);
             parent.apply_delta(d);
         });
@@ -461,7 +461,7 @@ fn count_fast_path_conserves_counts_like_the_regular_path() {
 
     let mut reference = CsFast::with_dimensions(ROWS, COLS);
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
 
     for r in 0..ROWS {
@@ -506,7 +506,7 @@ fn count_sharded_children_conserve_signed_counts() {
     let mut parent = Cs::with_dimensions(ROWS, COLS);
     for (i, k) in stream.iter().enumerate() {
         let mut out = Vec::new();
-        children[i % shards].insert_emit_delta(&DataInput::U64(*k), &mut |d| out.push(d));
+        children[i % shards].update_emit_delta(&DataInput::U64(*k), &mut |d| out.push(d));
         for d in out {
             parent.apply_delta(d);
         }
@@ -514,7 +514,7 @@ fn count_sharded_children_conserve_signed_counts() {
 
     let mut reference = Cs::with_dimensions(ROWS, COLS);
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
 
     for r in 0..ROWS {
@@ -548,7 +548,7 @@ fn hll_promotion_reproduces_the_single_thread_registers_exactly() {
 
     let mut reference = HyperLogLog::<Classic>::default();
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
 
     assert_eq!(
@@ -579,11 +579,11 @@ fn hll_promotion_is_exact_for_every_variant_and_precision() {
             let mut child = <$ty>::default();
             let mut parent = <$ty>::default();
             for k in &stream {
-                child.insert_emit_delta(&DataInput::U64(*k), &mut |d| parent.apply_delta(d));
+                child.update_emit_delta(&DataInput::U64(*k), &mut |d| parent.apply_delta(d));
             }
             let mut reference = <$ty>::default();
             for k in &stream {
-                reference.insert(&DataInput::U64(*k));
+                reference.update(&DataInput::U64(*k));
             }
             assert_eq!(
                 parent.registers_as_slice(),
@@ -637,7 +637,7 @@ fn hll_duplicate_keys_promote_nothing_after_the_first_improvement() {
     let mut child = HyperLogLog::<Classic>::default();
     let mut deltas = 0usize;
     for _ in 0..1_000 {
-        child.insert_emit_delta(&DataInput::U64(7), &mut |_| deltas += 1);
+        child.update_emit_delta(&DataInput::U64(7), &mut |_| deltas += 1);
     }
     assert_eq!(deltas, 1, "only the first insert can improve a register");
 }
@@ -675,7 +675,7 @@ fn hll_sharded_children_match_a_single_pass_exactly() {
     let mut parent = HyperLogLog::<Classic>::default();
     for (i, k) in stream.iter().enumerate() {
         let mut out = Vec::new();
-        children[i % shards].insert_emit_delta(&DataInput::U64(*k), &mut |d| out.push(d));
+        children[i % shards].update_emit_delta(&DataInput::U64(*k), &mut |d| out.push(d));
         for d in out {
             parent.apply_delta(d);
         }
@@ -683,7 +683,7 @@ fn hll_sharded_children_match_a_single_pass_exactly() {
 
     let mut reference = HyperLogLog::<Classic>::default();
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
 
     assert_eq!(
@@ -704,7 +704,7 @@ fn hll_cardinality_survives_the_delta_round_trip_exactly() {
     }
     let mut reference = HyperLogLog::<Classic>::default();
     for k in &stream {
-        reference.insert(&DataInput::U64(*k));
+        reference.update(&DataInput::U64(*k));
     }
 
     // At HLL_PROMASK = 0 every improvement is promoted, so this is an equality,
@@ -816,7 +816,7 @@ mod runtime {
         let inputs = inputs_from(&(0..80_000u64).collect::<Vec<_>>());
         let mut reference = HyperLogLog::<Classic>::default();
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
 
         for workers in [1usize, 2, 3, 4, 8] {
@@ -901,7 +901,7 @@ mod runtime {
             }
         });
         for input in &inputs {
-            runtime.insert(input.clone());
+            runtime.update(input.clone());
         }
         let streamed = runtime.finish().parent.sketch;
 
@@ -918,7 +918,7 @@ mod runtime {
             }
         });
         for input in &inputs {
-            one_by_one.insert(input.clone());
+            one_by_one.update(input.clone());
         }
 
         let mut batched = OctoRuntime::new(&config(3), CmOctoPlan::new(ROWS, COLS), || {
@@ -926,7 +926,7 @@ mod runtime {
                 sketch: Cm::with_dimensions(ROWS, COLS),
             }
         });
-        batched.insert_batch(&inputs);
+        batched.update_batch(&inputs);
 
         assert_eq!(
             cm_cells(&one_by_one.finish().parent.sketch),
@@ -951,7 +951,7 @@ mod runtime {
 
         let mut reference = HyperLogLog::<Classic>::default();
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
         assert_eq!(
             got.registers_as_slice(),
@@ -977,7 +977,7 @@ mod runtime {
 
         let mut reference = HyperLogLog::<Classic>::default();
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
         assert_eq!(got.registers_as_slice(), reference.registers_as_slice());
     }
@@ -985,21 +985,21 @@ mod runtime {
     #[test]
     fn a_borrowed_key_may_be_dropped_the_moment_insert_returns() {
         // The point of a borrowed key is that its owner does not have to
-        // outlive the sketch. `insert` hashes for partitioning and prepares the
+        // outlive the sketch. `update` hashes for partitioning and prepares the
         // payload on this thread, so nothing borrowed crosses to a worker and
         // the string below is free the instant the call returns.
         let n = 20_000u64;
         let mut runtime = OctoRuntime::new(&config(4), HllOctoPlan::new(), HllOctoAggregator::new);
         for i in 0..n {
             let owned = format!("session-{i:020}");
-            runtime.insert(DataInput::Str(&owned));
+            runtime.update(DataInput::Str(&owned));
             drop(owned);
         }
         let got = runtime.finish().parent.sketch;
 
         let mut reference = HyperLogLog::<Classic>::default();
         for i in 0..n {
-            reference.insert(&DataInput::Str(&format!("session-{i:020}")));
+            reference.update(&DataInput::Str(&format!("session-{i:020}")));
         }
         assert_eq!(
             got.registers_as_slice(),
@@ -1020,7 +1020,7 @@ mod runtime {
         for _ in 0..4_000 {
             for hot in 0..3usize {
                 let owned = format!("hot-{hot}");
-                runtime.insert(DataInput::Str(&owned));
+                runtime.update(DataInput::Str(&owned));
                 drop(owned);
             }
         }
@@ -1149,7 +1149,7 @@ mod runtime {
 
         let mut last = 0u64;
         for i in 0..n {
-            runtime.insert(DataInput::U64(i));
+            runtime.update(DataInput::U64(i));
             if i % 500 == 0 {
                 let observed = reader.with_parent(|p| p.per_worker.iter().sum::<u64>());
                 assert!(
@@ -1202,7 +1202,7 @@ mod runtime {
             per_worker: vec![0; workers],
         });
         for i in 0..n {
-            runtime.insert(DataInput::U64(i));
+            runtime.update(DataInput::U64(i));
         }
         runtime.close();
         runtime.close();
@@ -1223,7 +1223,7 @@ mod runtime {
             per_worker: vec![0; workers],
         });
         runtime.close();
-        runtime.insert(DataInput::U64(1));
+        runtime.update(DataInput::U64(1));
     }
 
     // -- accuracy end to end -------------------------------------------------
@@ -1278,7 +1278,7 @@ mod runtime {
         // the single-threaded sketch exactly, not merely within 3 sigma of it.
         let mut reference = HyperLogLog::<Classic>::default();
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
         assert_eq!(got.registers_as_slice(), reference.registers_as_slice());
         let estimate = got.estimate() as f64;
@@ -1384,7 +1384,7 @@ impl OctoCm {
     fn insert(&mut self, index: usize, key: &DataInput) {
         let worker = self.route.worker(index, key, self.children.len());
         let mut promoted = Vec::new();
-        self.children[worker].insert_emit_delta(key, &mut |d| promoted.push(d));
+        self.children[worker].update_emit_delta(key, &mut |d| promoted.push(d));
         self.sent_counters += promoted.len();
         for d in promoted {
             self.parent.apply_delta(d);
@@ -1450,7 +1450,7 @@ impl MergeCm {
 
     fn insert(&mut self, index: usize, key: &DataInput) {
         let worker = self.route.worker(index, key, self.children.len());
-        self.children[worker].insert(key);
+        self.children[worker].update(key);
         self.seen[worker] += 1;
         if self.seen[worker] % self.period == 0 {
             self.parent.merge(&self.children[worker]);
@@ -1483,7 +1483,7 @@ impl OctoCs {
     fn insert(&mut self, index: usize, key: &DataInput) {
         let worker = self.route.worker(index, key, self.children.len());
         let mut promoted = Vec::new();
-        self.children[worker].insert_emit_delta(key, &mut |d| promoted.push(d));
+        self.children[worker].update_emit_delta(key, &mut |d| promoted.push(d));
         self.sent_counters += promoted.len();
         for d in promoted {
             self.parent.apply_delta(d);
@@ -1623,7 +1623,7 @@ fn theorem_3_bounds_the_count_sketch_error() {
     let mut single_core = Cs::with_dimensions(d, l);
     for key in &stream {
         truth.observe(*key as i64);
-        single_core.insert(&DataInput::U64(*key));
+        single_core.update(&DataInput::U64(*key));
     }
     let mut measured: Vec<(Route, f64)> = Vec::new();
     for route in [Route::HashByKey, Route::RoundRobin] {
@@ -1705,11 +1705,11 @@ fn theorem_4_holds_unconditionally_because_this_implementation_pins_tau_to_zero(
         let mut child = HyperLogLog::<Classic>::default();
         let mut parent = HyperLogLog::<Classic>::default();
         for i in 0..n {
-            child.insert_emit_delta(&DataInput::U64(i), &mut |d| parent.apply_delta(d));
+            child.update_emit_delta(&DataInput::U64(i), &mut |d| parent.apply_delta(d));
         }
         let mut ideal = HyperLogLog::<Classic>::default();
         for i in 0..n {
-            ideal.insert(&DataInput::U64(i));
+            ideal.update(&DataInput::U64(i));
         }
 
         assert!(
@@ -1760,7 +1760,7 @@ fn theorem_2_delta_promotion_sends_l_times_fewer_counters_for_the_same_goal() {
         let input = DataInput::U64(*key);
         octo.insert(i, &input);
         merge.insert(i, &input);
-        single_core.insert(&input);
+        single_core.update(&input);
     }
 
     // Both configurations must actually meet the goal before their costs are
@@ -1862,7 +1862,7 @@ fn delta_promotion_beats_sketch_merge_on_online_accuracy() {
         let input = DataInput::U64(*key);
         truth.observe(*key as i64);
         octo.insert(i, &input);
-        single_core.insert(&input);
+        single_core.update(&input);
         for merge in merges.iter_mut() {
             merge.insert(i, &input);
         }
@@ -2099,7 +2099,7 @@ impl MergeCs {
 
     fn insert(&mut self, index: usize, key: &DataInput) {
         let worker = Route::HashByKey.worker(index, key, self.children.len());
-        self.children[worker].insert(key);
+        self.children[worker].update(key);
         self.seen[worker] += 1;
         if self.seen[worker] % self.period == 0 {
             self.parent.merge(&self.children[worker]);
@@ -2140,7 +2140,7 @@ fn count_sketch_online_accuracy_beats_sketch_merge() {
         let input = DataInput::U64(*key);
         running.observe(*key as i64);
         octo.insert(i, &input);
-        ideal.insert(&input);
+        ideal.update(&input);
         parity.insert(i, &input);
         ten_x.insert(i, &input);
         if i > 0 && i % stride == stride / 3 {
@@ -2192,7 +2192,7 @@ impl OctoHll {
     fn insert(&mut self, index: usize, key: &DataInput) {
         let worker = Route::HashByKey.worker(index, key, self.children.len());
         let mut promoted = Vec::new();
-        self.children[worker].insert_emit_delta(key, &mut |d| promoted.push(d));
+        self.children[worker].update_emit_delta(key, &mut |d| promoted.push(d));
         self.sent_counters += promoted.len();
         for d in promoted {
             self.parent.apply_delta(d);
@@ -2221,7 +2221,7 @@ impl MergeHll {
 
     fn insert(&mut self, index: usize, key: &DataInput) {
         let worker = Route::HashByKey.worker(index, key, self.children.len());
-        self.children[worker].insert(key);
+        self.children[worker].update(key);
         self.seen[worker] += 1;
         if self.seen[worker] % self.period == 0 {
             // A max-merge does not clear the worker: its registers stay valid.
@@ -2255,7 +2255,7 @@ fn hyperloglog_online_accuracy_beats_sketch_merge() {
     for (i, key) in stream.iter().enumerate() {
         let input = DataInput::U64(*key);
         octo.insert(i, &input);
-        ideal.insert(&input);
+        ideal.update(&input);
         parity.insert(i, &input);
         ten_x.insert(i, &input);
         if i > 0 && i % stride == stride / 3 {
@@ -2539,7 +2539,7 @@ impl MergeUniv {
 
     fn insert(&mut self, index: usize, key: &DataInput) {
         let worker = Route::HashByKey.worker(index, key, self.children.len());
-        self.children[worker].insert(key, 1);
+        self.children[worker].update_weighted(key, 1);
         self.seen[worker] += 1;
         if self.seen[worker] % self.period == 0 {
             let (heap, rows, cols, layers) = self.dims;
@@ -2583,7 +2583,7 @@ fn univmon_online_accuracy_beats_sketch_merge() {
         let input = DataInput::U64(*key);
         truth.observe(*key as i64);
         octo.insert(i, &input);
-        ideal.insert(&input, 1);
+        ideal.update_weighted(&input, 1);
         parity.insert(i, &input);
         ten_x.insert(i, &input);
         if i > 0 && i % stride == stride / 3 {
@@ -2748,7 +2748,7 @@ fn univmon_through_deltas(
             let hashed = hash128_seeded(layer, &input);
             let mut promoted = Vec::new();
             worker
-                .insert_hash_emit_delta(hashed, layer_threshold(layer), &mut |d| promoted.push(d));
+                .update_emit_delta_with_hash(hashed, layer_threshold(layer), &mut |d| promoted.push(d));
             for delta in promoted {
                 parent.apply_layered_delta(
                     &LayeredCountDelta {
@@ -2784,7 +2784,7 @@ fn a_flat_threshold_starves_the_deep_univmon_layers() {
 
     let mut ideal = UnivMon::init_univmon(heap, rows, cols, layers);
     for key in &stream {
-        ideal.insert(&DataInput::U64(*key), 1);
+        ideal.update_weighted(&DataInput::U64(*key), 1);
     }
 
     let flat = univmon_through_deltas(&stream, heap, rows, cols, layers, |_| base);
@@ -2898,7 +2898,7 @@ mod heavy_hitters {
 
     // -- mass accessors ------------------------------------------------------
 
-    /// Every `Coco::insert` adds its whole weight to exactly one bucket, so the
+    /// Every `Coco::update_weighted` adds its whole weight to exactly one bucket, so the
     /// table's total is the mass it has absorbed.
     fn coco_mass(sketch: &Coco) -> u64 {
         (0..sketch.d)
@@ -3030,7 +3030,7 @@ mod heavy_hitters {
         fn insert(&mut self, index: usize, raw: u64) {
             let input = DataInput::U64(raw);
             let worker = self.route.worker(index, &input, self.children.len());
-            self.children[worker].insert(&key_of(raw), 1);
+            self.children[worker].update_weighted(&key_of(raw), 1);
             self.seen[worker] += 1;
             if self.seen[worker] % self.period == 0 {
                 let empty = self.fresh();
@@ -3130,7 +3130,7 @@ mod heavy_hitters {
         fn insert(&mut self, index: usize, raw: u64) {
             let input = DataInput::U64(raw);
             let worker = self.route.worker(index, &input, self.children.len());
-            self.children[worker].insert(key_of(raw));
+            self.children[worker].update(key_of(raw));
             self.seen[worker] += 1;
             if self.seen[worker] % self.period == 0 {
                 let full = std::mem::replace(
@@ -4096,7 +4096,7 @@ mod heavy_hitters {
                 seen += 1;
                 octo.insert(i, *raw);
                 merge.insert(i, *raw);
-                ideal.insert(&key_of(*raw), 1);
+                ideal.update_weighted(&key_of(*raw), 1);
                 if i > 0 && i % stride == stride / 3 {
                     let threshold = (seen as f64 * HH_ALPHA) as u64;
                     for key in &watched {
@@ -4205,7 +4205,7 @@ mod heavy_hitters {
             seen += 1;
             octo.insert(i, *raw);
             merge.insert(i, *raw);
-            ideal.insert(key);
+            ideal.update(key);
             if i > 0 && i % stride == stride / 3 {
                 let threshold = (seen as f64 * HH_ALPHA) as u64;
                 for key in &watched {
@@ -4357,7 +4357,7 @@ mod top_k_plans {
     fn reference_cm(stream: &[u64]) -> CMSHeap<Vector2D<i32>, RegularPath> {
         let mut sk: CMSHeap<Vector2D<i32>, RegularPath> = CMSHeap::new(ROWS, COLS, TOP_K);
         for k in stream {
-            sk.insert(&DataInput::U64(*k));
+            sk.update(&DataInput::U64(*k));
         }
         sk
     }
@@ -4365,7 +4365,7 @@ mod top_k_plans {
     fn reference_cs(stream: &[u64]) -> CSHeap<Vector2D<i32>, RegularPath> {
         let mut sk: CSHeap<Vector2D<i32>, RegularPath> = CSHeap::new(ROWS, COLS, TOP_K);
         for k in stream {
-            sk.insert(&DataInput::U64(*k));
+            sk.update(&DataInput::U64(*k));
         }
         sk
     }
@@ -4825,7 +4825,7 @@ mod partition_accuracy {
 
         let mut reference = HyperLogLog::<Classic>::default();
         for k in &stream {
-            reference.insert(&DataInput::U64(*k));
+            reference.update(&DataInput::U64(*k));
         }
 
         let spec = CardinalityConfidenceSpec::hll(14, 4.0);
@@ -5123,7 +5123,7 @@ mod partition_accuracy {
             let mut reference: Elastic =
                 Elastic::init_with_dimensions(ELASTIC_BUCKETS, ELASTIC_ROWS, ELASTIC_COLS);
             for k in &stream {
-                reference.insert(key_of(*k));
+                reference.update(key_of(*k));
             }
 
             let ctx = context(

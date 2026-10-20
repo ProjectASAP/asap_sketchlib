@@ -17,7 +17,7 @@
 //!
 //! ## An unoccupied bucket is msgpack `nil`
 //!
-//! A bucket's key is `Option<String>` and `insert` accepts any `&str`,
+//! A bucket's key is `Option<String>` and `update_weighted` accepts any `&str`,
 //! including `""`. So `Some("")` is an occupied bucket that `estimate_key("")`
 //! answers for, and it must not share an encoding with an unoccupied one.
 //! `keys[i]` is therefore msgpack `nil` (`0xc0`) when the bucket is free and a
@@ -109,7 +109,7 @@ fn check_geometry(rows: usize, cols: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// Rejects a bucket layout no insert could produce. `insert` scans all `d`
+/// Rejects a bucket layout no insert could produce. `update_weighted` scans all `d`
 /// mapped buckets before electing one, so a stored key sits in row `r` only at
 /// column `hash64_seeded(r, key) % cols`, and holds at most one bucket in the
 /// whole table. `keys` must already be `rows*cols` long and `cols` non-zero.
@@ -213,7 +213,7 @@ impl<H: SketchHasher + HashProfile> Coco<H> {
                 p.values.len()
             )));
         }
-        // An unoccupied bucket holds no mass: `insert` always elects a key into
+        // An unoccupied bucket holds no mass: `update_weighted` always elects a key into
         // the bucket it credits. Rejecting mass under a `nil` key keeps the
         // decoded table canonical.
         if let Some(i) = (0..expected).find(|&i| p.keys[i].is_none() && p.values[i] != 0) {
@@ -293,8 +293,8 @@ mod tests {
     #[test]
     fn coco_round_trip_serialization() {
         let mut sketch: Coco = Coco::init_with_size(8, 4);
-        sketch.insert("19.98.10.26|80", 521);
-        sketch.insert("34.52.73.17|118", 856);
+        sketch.update_weighted("19.98.10.26|80", 521);
+        sketch.update_weighted("34.52.73.17|118", 856);
 
         let encoded = sketch.serialize_to_bytes().expect("serialize Coco");
         assert!(encoded.starts_with(b"ASAPv1"));
@@ -561,7 +561,7 @@ mod tests {
         assert!(decoded.recorded_flows().next().is_none());
 
         let mut with_empty_key: Coco = Coco::init_with_size(4, 2);
-        with_empty_key.insert("", 5);
+        with_empty_key.update_weighted("", 5);
         let encoded = with_empty_key.serialize_to_bytes().expect("serialize");
         let (_, _, payload) = envelope::split(&encoded).expect("split");
         assert!(payload.contains(&0xa0), "the inserted empty key is a str");
@@ -576,7 +576,7 @@ mod tests {
     fn coco_mixed_occupancy_round_trips() {
         let mut sketch: Coco = Coco::init_with_size(16, 3);
         for i in 0..10u64 {
-            sketch.insert(&format!("flow::{i}"), i + 1);
+            sketch.update_weighted(&format!("flow::{i}"), i + 1);
         }
         let occupied = sketch.recorded_flows().count();
         assert!(occupied > 0 && occupied < 16 * 3, "mix both bucket states");
@@ -596,7 +596,7 @@ mod tests {
     fn coco_decoded_sketch_reserializes_byte_identically() {
         let mut sketch: Coco = Coco::init_with_size(16, 3);
         for i in 0..12u64 {
-            sketch.insert(&format!("fam{}|item{i}", i % 4), i % 5 + 1);
+            sketch.update_weighted(&format!("fam{}|item{i}", i % 4), i % 5 + 1);
         }
         let encoded = sketch.serialize_to_bytes().expect("serialize");
         let decoded: Coco = Coco::deserialize_from_bytes(&encoded).expect("deserialize");
@@ -651,10 +651,10 @@ mod tests {
         // (a) A Coco built with a custom-profile hasher round-trips.
         let mut alt: Coco<AltHasher> = Coco::init_with_size(8, 4);
         let mut std: Coco = Coco::init_with_size(8, 4);
-        alt.insert("flow::42", 7);
-        alt.insert("flow::7", 3);
-        std.insert("flow::42", 7);
-        std.insert("flow::7", 3);
+        alt.update_weighted("flow::42", 7);
+        alt.update_weighted("flow::7", 3);
+        std.update_weighted("flow::42", 7);
+        std.update_weighted("flow::7", 3);
 
         let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
         let decoded = Coco::<AltHasher>::deserialize_from_bytes(&alt_bytes).expect("alt decode");

@@ -67,7 +67,7 @@ let mut hll = HyperLogLog::<ErtlMLE>::default();
 
 // Insert some user IDs — HLL handles distinct counting and deduplicates items.
 for user_id in [101, 202, 303, 101, 404, 202, 505, 101] {
-    hll.insert(&DataInput::U64(user_id));
+    hll.update(&DataInput::U64(user_id));
 }
 
 let unique_users = hll.estimate();
@@ -96,7 +96,7 @@ let events = [
 ];
 for &(event, count) in &events {
     for _ in 0..count {
-        cms.insert(&DataInput::Str(event));
+        cms.update(&DataInput::Str(event));
     }
 }
 
@@ -162,8 +162,8 @@ let mut node_a = HyperLogLog::<ErtlMLE>::default();
 let mut node_b = HyperLogLog::<ErtlMLE>::default();
 
 // Each node sees different (and some overlapping) users
-for id in [1, 2, 3, 4, 5]  { node_a.insert(&DataInput::U64(id)); }
-for id in [4, 5, 6, 7, 8]  { node_b.insert(&DataInput::U64(id)); }
+for id in [1, 2, 3, 4, 5]  { node_a.update(&DataInput::U64(id)); }
+for id in [4, 5, 6, 7, 8]  { node_b.update(&DataInput::U64(id)); }
 
 node_a.merge(&node_b);
 println!("total unique users ≈ {}", node_a.estimate()); // ≈ 8

@@ -875,7 +875,7 @@ fn cmsspacesaving_i64_regular_2x3_strkeys_matches_golden() {
         ("b", 7),
         ("aa", 6),
     ] {
-        summary.insert_many(&DataInput::Str(key), weight);
+        summary.update_weighted(&DataInput::Str(key), weight);
     }
     let matrix = CountMin::from_storage(Vector2D::from_fn(2, 3, |r, c| I64_VALS[r][c]));
     let sketch = Sketch::from_parts(matrix, summary);
@@ -902,7 +902,7 @@ fn csspacesaving_f64_fast_2x4_i64keys_matches_golden() {
     let want = decode_hex(GOLDEN_CSSS_I64);
     let mut summary = SpaceSaving::with_capacity(3);
     for (key, weight) in [(-1, 65536), (i64::MIN, 5), (128, 5), (7, 1), (i64::MIN, 1)] {
-        summary.insert_many(&DataInput::I64(key), weight);
+        summary.update_weighted(&DataInput::I64(key), weight);
     }
     let matrix = Count::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_F64_VALS[r][c]));
     let sketch = Sketch::from_parts(matrix, summary);
@@ -1639,7 +1639,7 @@ fn hll_p14_with(set: &[(usize, u8)]) -> HyperLogLog<ErtlMLE> {
     let mut want = vec![0u8; 1 << 14];
     for &(index, value) in set {
         let rank_bit = if value == 51 { 0 } else { 1u64 << (50 - value) };
-        hll.insert_with_hash(((index as u64) << 50) | rank_bit);
+        hll.update_with_hash(((index as u64) << 50) | rank_bit);
         want[index] = value;
     }
     assert_eq!(hll.registers_as_slice(), want.as_slice());
@@ -1749,7 +1749,7 @@ fn kmv_k8_matches_golden() {
     let digests = [1u64, 127, 128, 65535, 4294967296, 0xfedc_ba98_7654_3210];
     let mut sketch: KMV = KMV::new(8);
     for digest in [128, 0xfedc_ba98_7654_3210, 1, 4294967296, 127, 65535] {
-        sketch.insert_by_hash(digest);
+        sketch.update_with_hash(digest);
     }
     assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
 

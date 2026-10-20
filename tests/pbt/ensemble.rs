@@ -76,11 +76,11 @@ impl Bare {
 
     fn insert(&mut self, value: &DataInput) {
         match self {
-            Bare::CountMin(s) => s.insert(value),
-            Bare::Count(s) => s.insert(value),
-            Bare::Ertl(s) => s.insert(value),
-            Bare::Classic(s) => s.insert(value),
-            Bare::Hip(s) => s.insert(value),
+            Bare::CountMin(s) => s.update(value),
+            Bare::Count(s) => s.update(value),
+            Bare::Ertl(s) => s.update(value),
+            Bare::Classic(s) => s.update(value),
+            Bare::Hip(s) => s.update(value),
         }
     }
 
@@ -156,7 +156,7 @@ fn layer_answers(layer: &Layer, index: usize, kind: Kind, probes: &[u64]) -> Vec
 fn feed(layer: &mut Layer, bare: &mut [Bare], stream: &[u64]) {
     for k in stream {
         let input = DataInput::U64(*k);
-        layer.insert(&input);
+        layer.update(&input);
         for sketch in bare.iter_mut() {
             sketch.insert(&input);
         }
@@ -301,9 +301,9 @@ proptest! {
             .map(|k| prehashed.hash_input(&DataInput::U64(*k)))
             .collect();
         for k in &stream {
-            plain.insert(&DataInput::U64(*k));
+            plain.update(&DataInput::U64(*k));
         }
-        prehashed.bulk_insert_with_hashes(&hashes);
+        prehashed.update_batch_with_hashes(&hashes);
 
         let probes = probes(&stream);
         for (i, kind) in members.iter().enumerate() {
@@ -343,8 +343,8 @@ proptest! {
         let mut every = layer_of(&members, rows, &pool);
         let empty = layer_of(&members, rows, &pool);
         let values: Vec<DataInput> = stream.iter().map(|k| DataInput::U64(*k)).collect();
-        named.bulk_insert_at(&chosen, &values);
-        every.bulk_insert(&values);
+        named.update_batch_at(&chosen, &values);
+        every.update_batch(&values);
 
         let probes = probes(&stream);
         for (i, kind) in members.iter().enumerate() {
@@ -381,14 +381,14 @@ proptest! {
 
         for k in &prefix {
             let input = DataInput::U64(*k);
-            pushed.insert(&input);
-            untouched.insert(&input);
+            pushed.update(&input);
+            untouched.update(&input);
         }
         pushed.push(member(extra, rows, width)).expect("one layout");
         for k in &suffix {
             let input = DataInput::U64(*k);
-            pushed.insert(&input);
-            untouched.insert(&input);
+            pushed.update(&input);
+            untouched.update(&input);
             late.insert(&input);
         }
 
@@ -425,7 +425,7 @@ proptest! {
     ) {
         let mut layer = layer_of(&members, rows, &pool);
         for k in &stream {
-            layer.insert(&DataInput::U64(*k));
+            layer.update(&DataInput::U64(*k));
         }
 
         let key = DataInput::U64(7);
@@ -484,7 +484,7 @@ proptest! {
 
         let mut layer = layer_of(&members, rows, &pool);
         for k in &stream {
-            layer.insert(&DataInput::U64(*k));
+            layer.update(&DataInput::U64(*k));
         }
         let probes = probes(&stream);
         let before: Vec<Vec<f64>> = members

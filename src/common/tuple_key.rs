@@ -8,7 +8,7 @@
 //! let key = TupleKey::new(vec![KeyColumn::Str("us-east".into()), KeyColumn::I64(443)]);
 //! let bytes = key.to_bytes().unwrap();
 //! let mut sketch: CMSHeap = CMSHeap::new(3, 64, 8);
-//! sketch.insert(&DataInput::Bytes(&bytes));
+//! sketch.update(&DataInput::Bytes(&bytes));
 //! assert_eq!(TupleKey::from_bytes(&bytes).unwrap(), key);
 //! ```
 

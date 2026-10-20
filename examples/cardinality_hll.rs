@@ -20,7 +20,7 @@ fn main() {
     // ErtlMLE is more accurate than Classic at very low or very high cardinalities.
     let mut hll = HyperLogLog::<ErtlMLE>::default();
     for &id in &user_ids {
-        hll.insert(&DataInput::U64(id));
+        hll.update(&DataInput::U64(id));
     }
     let estimated_count = hll.estimate();
 

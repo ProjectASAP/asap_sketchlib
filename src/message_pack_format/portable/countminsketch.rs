@@ -72,7 +72,7 @@ pub fn sketchlib_cms_update(inner: &mut SketchlibCms, key: &str, value: f64) {
     if value <= 0.0 {
         return;
     }
-    inner.insert_many(&DataInput::String(key.to_owned()), value);
+    inner.update_weighted(&DataInput::String(key.to_owned()), value);
 }
 
 /// Helper to query a sketchlib Count-Min for a key, returning f64.
@@ -162,7 +162,7 @@ impl CountMinSketch {
             return;
         }
         self.backend
-            .insert_many(&DataInput::String(key.to_owned()), value);
+            .update_weighted(&DataInput::String(key.to_owned()), value);
     }
 
     /// Estimate the frequency of `key` (CountMin point query).

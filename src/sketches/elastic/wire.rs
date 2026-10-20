@@ -22,7 +22,7 @@
 //!
 //! ## A free heavy bucket is msgpack `nil`
 //!
-//! A bucket holds a flow exactly while `vote_pos != 0`, and `insert("")` seats
+//! A bucket holds a flow exactly while `vote_pos != 0`, and `update("")` seats
 //! the empty flow id in a bucket that `query("")` answers for. So `flow_ids[i]`
 //! is msgpack `nil` (`0xc0`) when the bucket is free and a msgpack `str`
 //! otherwise, and the two states never share an encoding.
@@ -358,9 +358,9 @@ mod tests {
     fn elastic_round_trip_serialization() {
         let mut sketch: Elastic = Elastic::init_with_dimensions(8, 2, 256);
         for _ in 0..12 {
-            sketch.insert("19.98.10.26|80".to_string());
+            sketch.update("19.98.10.26|80".to_string());
         }
-        sketch.insert("34.52.73.17|118".to_string());
+        sketch.update("34.52.73.17|118".to_string());
 
         let encoded = sketch.serialize_to_bytes().expect("serialize Elastic");
         assert!(encoded.starts_with(b"ASAPv1"));
@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(buckets(&all_free), buckets(&decoded));
 
         let mut with_empty_flow: Elastic = Elastic::init_with_dimensions(4, 1, 2);
-        with_empty_flow.insert(String::new());
+        with_empty_flow.update(String::new());
         let encoded = with_empty_flow.serialize_to_bytes().expect("serialize");
         let (_, _, payload) = envelope::split(&encoded).expect("split");
         assert!(
@@ -618,13 +618,13 @@ mod tests {
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &sketch);
         for _ in 0..10 {
-            sketch.insert(primary.to_string());
+            sketch.update(primary.to_string());
         }
         for _ in 0..(super::super::LAMBDA * 10) {
-            sketch.insert(secondary.clone());
+            sketch.update(secondary.clone());
         }
         for i in 0..6u32 {
-            sketch.insert(format!("flow::{i}"));
+            sketch.update(format!("flow::{i}"));
         }
         assert!(
             sketch.heavy.iter().any(|b| b.is_vacant()) && sketch.heavy.iter().any(|b| b.eviction),
@@ -647,13 +647,13 @@ mod tests {
     #[test]
     fn elastic_negative_votes_and_light_counters_round_trip() {
         let mut sketch: Elastic = Elastic::init_with_dimensions(4, 2, 8);
-        sketch.insert("flow::signed".to_string());
+        sketch.update("flow::signed".to_string());
         let idx = sketch.bucket_index("flow::signed");
         sketch.heavy[idx].vote_neg = -300;
         sketch.heavy[idx].vote_pos = -7;
         sketch
             .light
-            .insert_many(&DataInput::String("flow::mouse".to_string()), -9);
+            .update_weighted(&DataInput::String("flow::mouse".to_string()), -9);
         assert!(light_cells(&sketch).iter().any(|&c| c < 0));
 
         let encoded = sketch.serialize_to_bytes().expect("serialize");
@@ -669,7 +669,7 @@ mod tests {
         let mut sketch: Elastic = Elastic::init_with_dimensions(8, 2, 256);
         for i in 0..5u32 {
             for _ in 0..(i + 3) {
-                sketch.insert(format!("flow::{i}"));
+                sketch.update(format!("flow::{i}"));
             }
         }
         let encoded = sketch.serialize_to_bytes().expect("serialize");
@@ -705,7 +705,7 @@ mod tests {
     fn elastic_decoded_sketch_reserializes_byte_identically() {
         let mut sketch: Elastic = Elastic::init_with_dimensions(16, 3, 512);
         for i in 0..40u32 {
-            sketch.insert(format!("fam{}|item{i}", i % 5));
+            sketch.update(format!("fam{}|item{i}", i % 5));
         }
         sketch.expand_heavy();
         let encoded = sketch.serialize_to_bytes().expect("serialize");
@@ -762,11 +762,11 @@ mod tests {
         let mut alt: Elastic<AltHasher> = Elastic::init_with_dimensions(8, 2, 256);
         let mut std: Elastic = Elastic::init_with_dimensions(8, 2, 256);
         for _ in 0..4 {
-            alt.insert("flow::42".to_string());
-            std.insert("flow::42".to_string());
+            alt.update("flow::42".to_string());
+            std.update("flow::42".to_string());
         }
-        alt.insert("flow::7".to_string());
-        std.insert("flow::7".to_string());
+        alt.update("flow::7".to_string());
+        std.update("flow::7".to_string());
 
         let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
         let decoded = Elastic::<AltHasher>::deserialize_from_bytes(&alt_bytes).expect("alt decode");

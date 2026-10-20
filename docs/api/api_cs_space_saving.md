@@ -26,12 +26,12 @@ fn from_parts(cs: Count<S, M, H>, space_saving: SpaceSaving<H>) -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &DataInput)
-fn insert_many(&mut self, key: &DataInput, many: S::Counter)
-fn bulk_insert(&mut self, values: &[DataInput])
+fn update(&mut self, key: &DataInput)
+fn update_weighted(&mut self, key: &DataInput, weight: S::Counter)
+fn update_batch(&mut self, values: &[DataInput])
 ```
 
-`insert_many` adds `±many` to the matrix and `many.summary_weight()`
+`update_weighted` adds `±many` to the matrix and `many.summary_weight()`
 (`SpaceSavingCounter`) to the summary, so a negative weight moves the matrix
 alone.
 
@@ -77,6 +77,6 @@ The **ASAPv1** envelope, kind `0x1f 0x00` (spec §3.25), for
 use asap_sketchlib::{CSSpaceSaving, DataInput, FastPath, Vector2D};
 
 let mut sk = CSSpaceSaving::<Vector2D<f64>, FastPath>::new(5, 1024, 64);
-sk.insert_many(&DataInput::Str("flow"), 2.5);
+sk.update_weighted(&DataInput::Str("flow"), 2.5);
 assert_eq!(sk.top_k(1)[0].1, 2.5);
 ```

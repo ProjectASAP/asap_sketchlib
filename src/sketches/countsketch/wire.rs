@@ -273,8 +273,8 @@ mod tests {
     #[test]
     fn count_sketch_round_trip_serialization() {
         let mut sketch = Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
-        sketch.insert(&DataInput::U64(42));
-        sketch.insert(&DataInput::U64(7));
+        sketch.update(&DataInput::U64(42));
+        sketch.update(&DataInput::U64(7));
 
         let encoded = sketch.serialize_to_bytes().expect("serialize Count");
         assert!(encoded.starts_with(b"ASAPv1"));
@@ -360,10 +360,10 @@ mod tests {
         // (a) A Count Sketch built with a custom-profile hasher round-trips.
         let mut alt = Count::<Vector2D<i64>, RegularPath, AltHasher>::with_dimensions(3, 8);
         let mut std = Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
-        alt.insert(&DataInput::U64(42));
-        alt.insert(&DataInput::U64(7));
-        std.insert(&DataInput::U64(42));
-        std.insert(&DataInput::U64(7));
+        alt.update(&DataInput::U64(42));
+        alt.update(&DataInput::U64(7));
+        std.update(&DataInput::U64(42));
+        std.update(&DataInput::U64(7));
 
         let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
         let decoded =
@@ -386,8 +386,8 @@ mod tests {
     #[test]
     fn count_sketch_mode_in_metadata_round_trips() {
         let mut sketch = Count::<Vector2D<i64>, FastPath>::with_dimensions(4, 16);
-        sketch.insert_many(&DataInput::U64(1), 5);
-        sketch.insert_many(&DataInput::U64(2), 3);
+        sketch.update_weighted(&DataInput::U64(1), 5);
+        sketch.update_weighted(&DataInput::U64(2), 3);
 
         let encoded = sketch.serialize_to_bytes().expect("serialize");
         let decoded = Count::<Vector2D<i64>, FastPath>::deserialize_from_bytes(&encoded)

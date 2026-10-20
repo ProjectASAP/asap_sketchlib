@@ -225,7 +225,7 @@ mod tests {
     fn populated(k: usize, keys: u64) -> KMV {
         let mut sketch: KMV = KMV::new(k);
         for value in 0..keys {
-            sketch.insert(&DataInput::U64(value));
+            sketch.update(&DataInput::U64(value));
         }
         sketch
     }
@@ -285,10 +285,10 @@ mod tests {
         let mut forward: KMV = KMV::new(32);
         let mut backward: KMV = KMV::new(32);
         for value in &keys {
-            forward.insert(&DataInput::U64(*value));
+            forward.update(&DataInput::U64(*value));
         }
         for value in keys.iter().rev() {
-            backward.insert(&DataInput::U64(*value));
+            backward.update(&DataInput::U64(*value));
         }
         assert_eq!(forward.k_vals.len(), 32);
         assert_ne!(
@@ -330,7 +330,7 @@ mod tests {
     fn kmv_carries_hashes_at_full_u64_width() {
         let mut sketch: KMV = KMV::new(4);
         for value in [0u64, 1, u64::MAX / 2, u64::MAX] {
-            sketch.insert_by_hash(value);
+            sketch.update_with_hash(value);
         }
         let bytes = sketch.serialize_to_bytes().expect("serialize");
         assert_eq!(
@@ -472,7 +472,7 @@ mod tests {
         assert_eq!(decoded.k_vals.len(), 2);
         assert_eq!(decoded.estimate(), 2.0);
 
-        decoded.insert_by_hash(11);
+        decoded.update_with_hash(11);
         assert_eq!(decoded.k_vals.len(), 3, "the bound evicted instead");
         assert_eq!(decoded.wire_hashes(), vec![7, 9, 11]);
     }
@@ -511,8 +511,8 @@ mod tests {
             k_vals: CommonHeap::new_max(4),
             _hasher: PhantomData,
         };
-        over.insert_by_hash(3);
-        over.insert_by_hash(5);
+        over.update_with_hash(3);
+        over.update_with_hash(5);
         let problem = over
             .serialize_to_bytes()
             .expect_err("a retained set past k must not serialize")
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn kmv_refuses_a_k_that_disagrees_with_the_retained_bound() {
         let mut wider: KMV = KMV::new(4);
-        wider.insert_by_hash(7);
+        wider.update_with_hash(7);
         wider.k = 100;
         let problem = wider
             .serialize_to_bytes()
@@ -603,8 +603,8 @@ mod tests {
         let mut alt: KMV<AltHasher> = KMV::new(16);
         let mut std: KMV = KMV::new(16);
         for value in 0..500u64 {
-            alt.insert(&DataInput::U64(value));
-            std.insert(&DataInput::U64(value));
+            alt.update(&DataInput::U64(value));
+            std.update(&DataInput::U64(value));
         }
 
         // (a) A sketch built with a custom-profile hasher round-trips.

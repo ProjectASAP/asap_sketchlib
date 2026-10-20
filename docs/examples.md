@@ -39,7 +39,7 @@ let user_ids: Vec<u64> = get_user_ids();
 // ErtlMLE is more accurate than Classic at very low or very high cardinalities.
 let mut hll = HyperLogLog::<ErtlMLE>::default();
 for &user_id in &user_ids {
-    hll.insert(&DataInput::U64(user_id));
+    hll.update(&DataInput::U64(user_id));
 }
 let unique_users = hll.estimate();
 ```
@@ -77,7 +77,7 @@ let user_ids: Vec<u64> = get_user_ids();
 // FastPath: optimized hashing route for throughput-critical workloads.
 let mut cms = CountMin::<FixedMatrix, FastPath>::default();
 for &user_id in &user_ids {
-    cms.insert(&DataInput::U64(user_id));
+    cms.update(&DataInput::U64(user_id));
 }
 let estimated_count = cms.estimate(&DataInput::U64(101));
 ```

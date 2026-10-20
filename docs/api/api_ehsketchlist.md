@@ -31,7 +31,7 @@ Enum-based; construct by variant.
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, val: &DataInput)
+fn update(&mut self, val: &DataInput)
 ```
 
 ## Query
@@ -91,7 +91,7 @@ An unrecognized kind_id is rejected. `EHSketchList` also derives serde.
 use asap_sketchlib::{CountMin, EHSketchList, FastPath, DataInput, Vector2D};
 
 let mut sk = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::default());
-sk.insert(&DataInput::U64(1));
+sk.update(&DataInput::U64(1));
 let _ = sk.query(&DataInput::U64(1));
 ```
 

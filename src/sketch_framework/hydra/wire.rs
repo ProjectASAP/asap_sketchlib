@@ -1548,7 +1548,7 @@ mod tests {
 
         let mut primed = cm_grid();
         let mut counter = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(2, 16);
-        counter.insert(&DataInput::U64(1));
+        counter.update(&DataInput::U64(1));
         primed.type_to_clone = HydraCounter::CM(counter);
         let problem = primed
             .serialize_to_bytes()
@@ -1566,7 +1566,7 @@ mod tests {
     fn hydra_univmon_rejects_cells_mixing_key_variants() {
         let mut hydra = univmon_grid();
         let mut strings = UnivMon::init_univmon(4, 2, 16, 3);
-        strings.insert(&DataInput::Str("alpha"), 5);
+        strings.update_weighted(&DataInput::Str("alpha"), 5);
         hydra.sketches.as_mut_slice()[0] = HydraCounter::UNIVERSAL(strings);
         let problem = hydra
             .serialize_to_bytes()
@@ -1842,7 +1842,7 @@ mod tests {
     #[test]
     fn hydra_cell_envelopes_mirror_the_counters_own_bytes() {
         let mut hll = HyperLogLog::<ErtlMLE>::default();
-        hll.insert(&DataInput::U64(7));
+        hll.update(&DataInput::U64(7));
         assert_eq!(
             hll_cell_envelope(hll.registers_as_slice()).expect("HLL cell"),
             hll.serialize_to_bytes().expect("HLL envelope")
@@ -1868,7 +1868,7 @@ mod tests {
         );
 
         let mut um = UnivMon::init_univmon(4, 2, 16, 3);
-        um.insert(&DataInput::U64(9), 3);
+        um.update_weighted(&DataInput::U64(9), 3);
         let bytes = um.serialize_to_bytes().expect("UnivMon envelope");
         let (_, metadata, payload) = envelope::split(&bytes).expect("split");
         let meta: UnivMonMetadata = from_slice(metadata).expect("metadata");

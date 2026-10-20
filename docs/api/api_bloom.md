@@ -56,8 +56,8 @@ at about 1 false positive in 11,500.
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, value: &DataInput)
-fn bulk_insert(&mut self, values: &[DataInput])
+fn update(&mut self, value: &DataInput)
+fn update_batch(&mut self, values: &[DataInput])
 ```
 
 One bit per slice. Re-inserting a key sets nothing new, so the fill is a
@@ -134,7 +134,7 @@ dimensions is rejected there rather than panicking later.
 use asap_sketchlib::{Bloom, DataInput, RegularPath};
 
 let mut seen = Bloom::<RegularPath>::with_capacity(1_000_000, 0.001);
-seen.insert(&DataInput::Str("10.0.0.1:443"));
+seen.update(&DataInput::Str("10.0.0.1:443"));
 
 if !seen.contains(&DataInput::Str("10.0.0.2:443")) {
     // definitely new

@@ -40,8 +40,8 @@ fn update_and_est_without_l2(&mut self, key: &DataInput, value: i64) -> f64
 fn clear(&mut self)
 
 // HydraCounter
-fn insert(&mut self, value: &DataInput, count: Option<i32>)
-fn insert_with_hash(
+fn update(&mut self, value: &DataInput, weight: Option<i32>)
+fn update_with_hash(
     &mut self,
     value: &DataInput,
     hashed_val: &MatrixHashType,

@@ -359,7 +359,7 @@ mod tests {
     fn populated() -> Target {
         let mut sketch = Target::new(2, 8, 3);
         for (key, weight) in [(1u64, 9i64), (2, 5), (3, 7), (4, 2)] {
-            sketch.insert_many(&DataInput::U64(key), weight);
+            sketch.update_weighted(&DataInput::U64(key), weight);
         }
         sketch
     }
@@ -477,9 +477,9 @@ mod tests {
     #[test]
     fn every_wire_counter_type_and_mode_round_trips() {
         let mut fast = CMSSpaceSaving::<Vector2D<i32>, FastPath>::new(3, 16, 2);
-        fast.insert_many(&DataInput::Str("a"), 4);
-        fast.insert_many(&DataInput::Str("b"), 1);
-        fast.insert_many(&DataInput::Str("c"), 2);
+        fast.update_weighted(&DataInput::Str("a"), 4);
+        fast.update_weighted(&DataInput::Str("b"), 1);
+        fast.update_weighted(&DataInput::Str("c"), 2);
         let bytes = fast.serialize_to_bytes().expect("i32");
         let meta = metadata_of(&bytes);
         assert_eq!(
@@ -493,7 +493,7 @@ mod tests {
         assert_eq!(back.serialize_to_bytes().expect("i32"), bytes);
 
         let mut floating = CMSSpaceSaving::<Vector2D<f64>, RegularPath>::new(2, 4, 5);
-        floating.insert_many(&DataInput::Bytes(&[0xff, 0x00]), 2.5);
+        floating.update_weighted(&DataInput::Bytes(&[0xff, 0x00]), 2.5);
         let bytes = floating.serialize_to_bytes().expect("f64");
         assert_eq!(metadata_of(&bytes).key_type, "bytes");
         let back = CMSSpaceSaving::<Vector2D<f64>, RegularPath>::deserialize_from_bytes(&bytes)
@@ -831,8 +831,8 @@ mod tests {
         assert!(problem.contains("CMSSpaceSaving"), "got {problem}");
 
         let mut mixed = Target::new(2, 3, 4);
-        mixed.insert(&DataInput::U64(1));
-        mixed.insert(&DataInput::I64(2));
+        mixed.update(&DataInput::U64(1));
+        mixed.update(&DataInput::I64(2));
         assert!(
             mixed
                 .serialize_to_bytes()
@@ -842,7 +842,7 @@ mod tests {
         );
 
         let mut wide = Target::new(2, 3, 4);
-        wide.insert(&DataInput::I128(1));
+        wide.update(&DataInput::I128(1));
         assert!(
             wide.serialize_to_bytes()
                 .expect_err("128-bit")
@@ -851,8 +851,8 @@ mod tests {
         );
 
         let mut nan = Target::new(2, 3, 4);
-        nan.insert(&DataInput::F64(f64::NAN));
-        nan.insert(&DataInput::F64(f64::NAN));
+        nan.update(&DataInput::F64(f64::NAN));
+        nan.update(&DataInput::F64(f64::NAN));
         assert_eq!(nan.space_saving().len(), 2);
         assert!(
             nan.serialize_to_bytes()

@@ -3,7 +3,7 @@
 //! At rate 1.0 the layer must be transparent; below it the relation between
 //! the admitted weight and the compensation factor is fixed by the rate alone.
 //!
-//! The oracles are a bare target sketch driven through its own `insert` — a
+//! The oracles are a bare target sketch driven through its own `update` — a
 //! different code path from `NitroTarget::update_sample` — and integer
 //! arithmetic done in the test. A single insert below rate 1.0 has no
 //! deterministic oracle at all, so nothing here asserts one: the laws stated
@@ -78,7 +78,7 @@ fn fractional_rate() -> impl Strategy<Value = f64> {
 proptest! {
     // ===== Rate 1.0 is transparent =====
     //
-    // The oracle is the bare target's own `insert`, which derives its cells
+    // The oracle is the bare target's own `update`, which derives its cells
     // through `fast_insert` rather than through `NitroTarget::update_sample`.
 
     #[test]
@@ -89,14 +89,14 @@ proptest! {
     ) {
         let mut live = NitroBatch::with_target_and_seed(
             1.0, CmTarget::with_dimensions(rows, cols), 0xA5);
-        live.insert(&data);
+        live.update_batch(&data);
         let mut cached = NitroBatch::with_target_and_seed(
             1.0, CmTarget::with_dimensions(rows, cols), 0xA5);
-        cached.insert_cached_step(&data);
+        cached.update_batch_cached_step(&data);
 
         let mut bare = CmTarget::with_dimensions(rows, cols);
         for value in &data {
-            bare.insert(&DataInput::I64(*value));
+            bare.update(&DataInput::I64(*value));
         }
 
         let expected = cm_cells(&bare);
@@ -118,14 +118,14 @@ proptest! {
     ) {
         let mut live = NitroBatch::with_target_and_seed(
             1.0, CsTarget::with_dimensions(rows, cols), 0xA5);
-        live.insert(&data);
+        live.update_batch(&data);
         let mut cached = NitroBatch::with_target_and_seed(
             1.0, CsTarget::with_dimensions(rows, cols), 0xA5);
-        cached.insert_cached_step(&data);
+        cached.update_batch_cached_step(&data);
 
         let mut bare = CsTarget::with_dimensions(rows, cols);
         for value in &data {
-            bare.insert(&DataInput::I64(*value));
+            bare.update(&DataInput::I64(*value));
         }
 
         let expected = cs_cells(&bare);
@@ -149,8 +149,8 @@ proptest! {
     ) {
         let mut left = NitroBatch::init_nitro_with_seed(rate, seed);
         let mut right = NitroBatch::init_nitro_with_seed(rate, seed);
-        left.insert(&data);
-        right.insert(&data);
+        left.update_batch(&data);
+        right.update_batch(&data);
         prop_assert_eq!(
             bare_cells(left.target()), bare_cells(right.target()),
             "live path, rate {}, seed {}, {} arrivals", rate, seed, data.len()
@@ -158,8 +158,8 @@ proptest! {
 
         let mut left = NitroBatch::init_nitro_with_seed(rate, seed);
         let mut right = NitroBatch::init_nitro_with_seed(rate, seed);
-        left.insert_cached_step(&data);
-        right.insert_cached_step(&data);
+        left.update_batch_cached_step(&data);
+        right.update_batch_cached_step(&data);
         prop_assert_eq!(
             bare_cells(left.target()), bare_cells(right.target()),
             "cached path, rate {}, seed {}, {} arrivals", rate, seed, data.len()
@@ -177,7 +177,7 @@ proptest! {
     ) {
         let mut nitro = NitroBatch::with_target_and_seed(
             rate, CmTarget::with_dimensions(2, 16), seed);
-        nitro.insert(&data);
+        nitro.update_batch(&data);
 
         for weight in &weights {
             let floor = nitro.scaled_increment(*weight);
@@ -233,7 +233,7 @@ proptest! {
     ) {
         let reciprocal = 1u64 << shift;
         let mut nitro = NitroBatch::init_nitro_with_seed(1.0 / reciprocal as f64, seed);
-        nitro.insert(&data);
+        nitro.update_batch(&data);
 
         let target = nitro.target();
         for (cell, mass) in bare_cells(target).iter().enumerate() {
@@ -283,10 +283,10 @@ proptest! {
         for _ in 0..probes {
             probed.admitted_weight(1);
         }
-        probed.insert(&data);
+        probed.update_batch(&data);
 
         let mut untouched = NitroBatch::init_nitro_with_seed(rate, seed);
-        untouched.insert(&data);
+        untouched.update_batch(&data);
 
         prop_assert_eq!(
             bare_cells(probed.target()), bare_cells(untouched.target()),
@@ -309,8 +309,8 @@ proptest! {
             rate, CmTarget::with_dimensions(rows, cols), 7);
         let mut right = NitroBatch::with_target_and_seed(
             rate, CmTarget::with_dimensions(rows, cols), 0xBEEF);
-        left.insert(&left_data);
-        right.insert(&right_data);
+        left.update_batch(&left_data);
+        right.update_batch(&right_data);
 
         let before_left = cm_cells(left.target());
         let before_right = cm_cells(right.target());
@@ -342,13 +342,13 @@ proptest! {
             1.0, CmTarget::with_dimensions(rows, cols), 7);
         let mut right = NitroBatch::with_target_and_seed(
             1.0, CmTarget::with_dimensions(rows, cols), 0xBEEF);
-        left.insert(&left_data);
-        right.insert(&right_data);
+        left.update_batch(&left_data);
+        right.update_batch(&right_data);
         left.merge(&right);
 
         let mut bare = CmTarget::with_dimensions(rows, cols);
         for value in left_data.iter().chain(right_data.iter()) {
-            bare.insert(&DataInput::I64(*value));
+            bare.update(&DataInput::I64(*value));
         }
 
         prop_assert_eq!(

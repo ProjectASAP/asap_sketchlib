@@ -337,7 +337,7 @@ impl HllSketch {
         Ok(merged)
     }
 
-    /// Insert a value. Math mirrors `sketches::HyperLogLogImpl::insert_with_hash`
+    /// Insert a value. Math mirrors `sketches::HyperLogLogImpl::update_with_hash`
     /// (CANONICAL_HASH_SEED, packed bucket/leading-zero); locked in by
     /// `tests/sketches_go_parity_probe.rs`.
     pub fn update(&mut self, value: &[u8]) {

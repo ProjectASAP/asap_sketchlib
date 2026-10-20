@@ -1,7 +1,7 @@
 //! Release-only throughput probe for the OctoSketch pipeline on UnivMon.
 //!
 //! Measures the three stages separately so the bottleneck is visible:
-//! a single-threaded `UnivMon::insert`, an Octo worker's per-insert work, and
+//! a single-threaded `UnivMon::update_weighted`, an Octo worker's per-insert work, and
 //! the aggregator's per-delta work. The sustainable pipeline rate is the
 //! aggregator's rate divided by how many deltas each insert produces, because
 //! one aggregator serves every worker.
@@ -83,7 +83,7 @@ fn main() {
     let mut ideal = UnivMon::init_univmon(heap, rows, cols, layers);
     let started = Instant::now();
     for input in &inputs {
-        ideal.insert(input, 1);
+        ideal.update_weighted(input, 1);
     }
     let single_rate = n as f64 / started.elapsed().as_secs_f64() / 1e6;
     let (ideal_card, ideal_entropy) = (ideal.calc_card(), ideal.calc_entropy());

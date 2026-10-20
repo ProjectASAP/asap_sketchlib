@@ -219,7 +219,7 @@ impl UnivMon {
     ///
     /// An OctoSketch aggregator never observes the raw stream, so it restores
     /// this from the running totals its workers report. This *assigns* where
-    /// `insert` and `merge` accumulate, so a sketch fed by deltas must not also
+    /// `update_weighted` and `merge` accumulate, so a sketch fed by deltas must not also
     /// be inserted into or merged with: the next delta would erase whatever
     /// those added. Feeding one exclusively through `apply_layered_delta` and
     /// this method is the supported arrangement.
@@ -287,18 +287,18 @@ impl UnivMon {
     }
 
     /// Inserts one weighted update.
-    pub fn insert(&mut self, key: &DataInput, value: i64) {
-        self.begin_update(value, UnivMonUpdateMode::Standard);
+    pub fn update_weighted(&mut self, key: &DataInput, weight: i64) {
+        self.begin_update(weight, UnivMonUpdateMode::Standard);
         let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
         let bottom_layer_num = self.find_bottom_layer_num(h, self.layer_size);
-        self.process_univmon(key, value, bottom_layer_num)
+        self.process_univmon(key, weight, bottom_layer_num)
     }
 
     /// Inserts one weighted update into its terminal stratum only.
     ///
     /// This is the Joltik update-last-layer construction. Logical sampled
     /// streams and their candidate sets are reconstructed during queries.
-    /// Do not mix this method with [`Self::insert`] on the same sketch.
+    /// Do not mix this method with [`Self::update`] on the same sketch.
     pub fn fast_insert(&mut self, key: &DataInput, value: i64) {
         self.begin_update(value, UnivMonUpdateMode::Terminal);
         let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
@@ -607,7 +607,7 @@ mod tests {
     fn standard_update_compatibility_survives_roundtrip_and_reset() {
         let mut sketch = UnivMon::init_univmon(4, 3, 16, 2);
         assert!(sketch.accepts_standard_updates());
-        sketch.insert(&DataInput::U64(1), 1);
+        sketch.update_weighted(&DataInput::U64(1), 1);
         assert!(sketch.accepts_standard_updates());
         let standard =
             UnivMon::deserialize_from_bytes(&sketch.serialize_to_bytes().unwrap()).unwrap();
@@ -633,7 +633,7 @@ mod tests {
         ];
 
         for (key, count) in flows {
-            um.insert(&DataInput::String(key.to_string()), count);
+            um.update_weighted(&DataInput::String(key.to_string()), count);
         }
 
         let bucket_size_before = um.bucket_size;
@@ -681,7 +681,7 @@ mod tests {
         let key = "alpha";
 
         for _ in 0..40 {
-            um.insert(&DataInput::Str(key), 1);
+            um.update_weighted(&DataInput::Str(key), 1);
         }
 
         assert_eq!(um.bucket_size, 40);
@@ -716,10 +716,10 @@ mod tests {
         let key_right = "right";
 
         for _ in 0..25 {
-            left.insert(&DataInput::Str(key_left), 1);
+            left.update_weighted(&DataInput::Str(key_left), 1);
         }
         for _ in 0..30 {
-            right.insert(&DataInput::Str(key_right), 1);
+            right.update_weighted(&DataInput::Str(key_right), 1);
         }
 
         left.merge(&right);
@@ -756,9 +756,9 @@ mod tests {
     fn merge_combines_weight_l2_and_evicted_candidate_counts() {
         let mut left = UnivMon::init_univmon(1, 3, 1024, 1);
         let mut right = UnivMon::init_univmon(1, 3, 1024, 1);
-        left.insert(&DataInput::Str("x"), 100);
-        right.insert(&DataInput::Str("x"), 5);
-        right.insert(&DataInput::Str("y"), 10);
+        left.update_weighted(&DataInput::Str("x"), 100);
+        right.update_weighted(&DataInput::Str("x"), 5);
+        right.update_weighted(&DataInput::Str("y"), 10);
 
         left.merge(&right);
 
@@ -790,11 +790,11 @@ mod tests {
                         right.fast_insert(&key, 1);
                     }
                 } else {
-                    one_pass.insert(&key, 1);
+                    one_pass.update_weighted(&key, 1);
                     if observation % 2 == 0 {
-                        left.insert(&key, 1);
+                        left.update_weighted(&key, 1);
                     } else {
-                        right.insert(&key, 1);
+                        right.update_weighted(&key, 1);
                     }
                 }
             }
@@ -820,7 +820,7 @@ mod tests {
             .expect("find a key sampled into multiple layers");
         let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &key);
         let bottom = sketch.find_bottom_layer_num(hash, sketch.layer_size);
-        sketch.insert(&key, 3);
+        sketch.update_weighted(&key, 3);
         for level in 0..=bottom {
             assert_eq!(sketch.l2_sketch_layers[level].get_l2(), 3.0);
         }
@@ -883,7 +883,7 @@ mod tests {
 
         for i in 0..20 {
             let key = format!("flow_{i}");
-            um.insert(&DataInput::String(key), 1);
+            um.update_weighted(&DataInput::String(key), 1);
         }
 
         let card = um.calc_card();
@@ -902,7 +902,7 @@ mod tests {
         let expected_total = 450;
 
         for (key, count) in &flows {
-            um.insert(&DataInput::Str(key), *count);
+            um.update_weighted(&DataInput::Str(key), *count);
         }
 
         assert_eq!(
@@ -937,7 +937,7 @@ mod tests {
 
         let mut um = UnivMon::init_univmon(100, 3, 2048, 16);
         for case in cases {
-            um.insert(&DataInput::String(case.0), case.1);
+            um.update_weighted(&DataInput::String(case.0), case.1);
         }
 
         assert_eq!(um.calc_card(), 10.0, "Cardinality estimation incorrect");
@@ -970,7 +970,7 @@ mod tests {
                 total_count += val_f;
 
                 // Update Sketch
-                um.insert(&DataInput::String(key), val);
+                um.update_weighted(&DataInput::String(key), val);
             }
         }
 
@@ -1021,7 +1021,7 @@ mod tests {
             let key = format!("key_{key_id}");
             let value = (rng.random::<u32>() % 100 + 1) as i64;
             *truth.entry(key.clone()).or_insert(0) += value;
-            um.insert(&DataInput::String(key), value);
+            um.update_weighted(&DataInput::String(key), value);
         }
 
         let total_mass: f64 = truth.values().map(|&v| v as f64).sum();

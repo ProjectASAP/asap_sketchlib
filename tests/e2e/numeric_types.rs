@@ -141,12 +141,12 @@ macro_rules! kll_type_case {
             // Bulk ingestion must be equivalent to the loop.
             trial!(("KLL", "bulk update"), |seed| {
                 let mut s = KLL::<$ty>::init_kll_with_seed(K, seed);
-                s.bulk_update(&values);
+                s.update_batch(&values);
                 s
             });
             trial!(("KLLDynamic", "bulk update"), |seed| {
                 let mut s = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
-                s.bulk_update(&values);
+                s.update_batch(&values);
                 s
             });
         }

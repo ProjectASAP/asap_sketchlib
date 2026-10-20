@@ -40,12 +40,12 @@ impl<H: SketchHasher> KMV<H> {
         }
     }
 
-    pub fn insert(&mut self, item: &DataInput) {
+    pub fn update(&mut self, item: &DataInput) {
         let hashed = H::hash64_seeded(CANONICAL_HASH_SEED, item);
-        self.insert_by_hash(hashed);
+        self.update_with_hash(hashed);
     }
 
-    pub fn insert_by_hash(&mut self, hash_value: u64) {
+    pub fn update_with_hash(&mut self, hash_value: u64) {
         if self.k_vals.iter().any(|value| *value == hash_value) {
             return;
         }
@@ -73,7 +73,7 @@ impl<H: SketchHasher> KMV<H> {
             "Two KMV sketch have different k size, not mergeable"
         );
         for &value in other.k_vals.iter() {
-            self.insert_by_hash(value);
+            self.update_with_hash(value);
         }
     }
 }
@@ -92,7 +92,7 @@ mod tests {
         let mut sketch: KMV = KMV::default();
         for value in 0..SERDE_SAMPLE {
             let input = DataInput::U64(value as u64);
-            sketch.insert(&input);
+            sketch.update(&input);
         }
 
         let encoded = sketch

@@ -83,7 +83,7 @@ fn truth_of(stream: &[(u64, i64)]) -> HashMap<u64, i64> {
 fn cms_of(rows: usize, full_cols: usize, level: u32, stream: &[(u64, i64)]) -> FoldCMS {
     let mut sketch = FoldCMS::new(rows, full_cols, level, TOP_K);
     for (key, delta) in stream {
-        sketch.insert(&DataInput::U64(*key), *delta);
+        sketch.update_weighted(&DataInput::U64(*key), *delta);
     }
     sketch
 }
@@ -91,7 +91,7 @@ fn cms_of(rows: usize, full_cols: usize, level: u32, stream: &[(u64, i64)]) -> F
 fn cs_of(rows: usize, full_cols: usize, level: u32, stream: &[(u64, i64)]) -> FoldCS {
     let mut sketch = FoldCS::new(rows, full_cols, level, TOP_K);
     for (key, delta) in stream {
-        sketch.insert(&DataInput::U64(*key), *delta);
+        sketch.update_weighted(&DataInput::U64(*key), *delta);
     }
     sketch
 }

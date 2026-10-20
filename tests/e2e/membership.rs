@@ -55,7 +55,7 @@ fn sampling_band(rate: f64) -> f64 {
 fn filled_regular(target: f64) -> Bloom<RegularPath> {
     let mut filter = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, target);
     for key in members() {
-        filter.insert(&DataInput::I64(key));
+        filter.update(&DataInput::I64(key));
     }
     filter
 }
@@ -84,7 +84,7 @@ fn an_inserted_key_is_never_reported_absent() {
 
     let mut fast = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
     for key in members() {
-        fast.insert(&DataInput::I64(key));
+        fast.update(&DataInput::I64(key));
     }
     let absent_fast = members()
         .into_iter()
@@ -148,7 +148,7 @@ fn the_fill_based_estimate_tracks_the_measured_rate() {
     let mut filter = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
     for _ in 0..3 {
         for key in members() {
-            filter.insert(&DataInput::I64(key));
+            filter.update(&DataInput::I64(key));
         }
     }
     assert_eq!(filter.inserted(), 3 * MEMBERS as u64);
@@ -164,7 +164,7 @@ fn the_fill_based_estimate_tracks_the_measured_rate() {
     // estimate that read the counter would move and this one does not.
     let mut once = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
     for key in members() {
-        once.insert(&DataInput::I64(key));
+        once.update(&DataInput::I64(key));
     }
     assert_eq!(all_bits(once.as_bits()), all_bits(filter.as_bits()));
     assert_ne!(once.inserted(), filter.inserted());
@@ -182,9 +182,9 @@ fn repeated_inserts_leave_the_bits_unchanged() {
     let mut once = Bloom::<RegularPath>::with_capacity(1_000, 0.01);
     let mut twice = Bloom::<RegularPath>::with_capacity(1_000, 0.01);
     for key in 0..1_000i64 {
-        once.insert(&DataInput::I64(key));
-        twice.insert(&DataInput::I64(key));
-        twice.insert(&DataInput::I64(key));
+        once.update(&DataInput::I64(key));
+        twice.update(&DataInput::I64(key));
+        twice.update(&DataInput::I64(key));
     }
     assert_eq!(once.as_bits().count_ones(), twice.as_bits().count_ones());
     // The same population is not the same bits; compare the grids cell by cell.
@@ -203,11 +203,11 @@ fn a_union_equals_the_filter_of_the_concatenated_stream() {
 
     for key in 0..10_000i64 {
         if key % 2 == 0 {
-            left.insert(&DataInput::I64(key));
+            left.update(&DataInput::I64(key));
         } else {
-            right.insert(&DataInput::I64(key));
+            right.update(&DataInput::I64(key));
         }
-        whole.insert(&DataInput::I64(key));
+        whole.update(&DataInput::I64(key));
     }
 
     left.merge(&right);
@@ -280,7 +280,7 @@ fn sizing_never_asks_for_more_slices_than_the_seed_list_has() {
 
         let mut filter = Bloom::<RegularPath>::with_dimensions(rows, cols);
         for key in 0..n as i64 {
-            filter.insert(&DataInput::I64(key));
+            filter.update(&DataInput::I64(key));
         }
         assert_eq!(
             duplicate_slice_pairs(filter.as_bits()),
@@ -371,8 +371,8 @@ fn non_power_of_two_widths_answer_membership_on_both_paths() {
         let mut regular = Bloom::<RegularPath>::with_dimensions(rows, cols);
         let mut fast = Bloom::<FastPath>::with_dimensions(rows, cols);
         for key in 0..KEYS {
-            regular.insert(&DataInput::I64(key));
-            fast.insert(&DataInput::I64(key));
+            regular.update(&DataInput::I64(key));
+            fast.update(&DataInput::I64(key));
         }
         let lost_regular = (0..KEYS)
             .filter(|k| !regular.contains(&DataInput::I64(*k)))
@@ -408,7 +408,7 @@ fn a_packed_64_geometry_gives_each_row_its_own_window() {
 
     let mut filter = Bloom::<FastPath>::with_dimensions(ROWS, COLS);
     for key in 0..KEYS {
-        filter.insert(&DataInput::I64(key));
+        filter.update(&DataInput::I64(key));
     }
     for key in 0..KEYS {
         assert!(filter.contains(&DataInput::I64(key)), "lost member {key}");
@@ -453,7 +453,7 @@ fn a_negative_infinite_target_rate_is_rejected() {
 fn degenerate_geometries_still_answer() {
     let mut one = Bloom::<RegularPath>::with_dimensions(1, 1);
     assert!(!one.contains(&DataInput::I64(7)));
-    one.insert(&DataInput::I64(7));
+    one.update(&DataInput::I64(7));
     assert!(one.contains(&DataInput::I64(7)));
     // One bit, so everything now reads present.
     assert!(one.contains(&DataInput::I64(8)));
@@ -461,7 +461,7 @@ fn degenerate_geometries_still_answer() {
 
     let mut row = Bloom::<RegularPath>::with_dimensions(1, 4096);
     for key in 0..500i64 {
-        row.insert(&DataInput::I64(key));
+        row.update(&DataInput::I64(key));
     }
     for key in 0..500i64 {
         assert!(row.contains(&DataInput::I64(key)));
@@ -525,7 +525,7 @@ fn storage_is_one_bit_per_cell() {
         // Padding bits sit outside `cols`, so filling every slice cannot reach
         // them and `fill_ratio` still tops out at 1.
         for key in 0..20_000i64 {
-            filter.insert(&DataInput::I64(key));
+            filter.update(&DataInput::I64(key));
         }
         assert!(
             filter.fill_ratio() <= 1.0,
@@ -550,8 +550,8 @@ fn the_two_hash_paths_agree_only_where_the_geometry_gives_each_row_its_own_hash(
         Bloom::<FastPath>::with_dimensions(8, 1 << 16),
     );
     for key in members() {
-        regular.insert(&DataInput::I64(key));
-        fast.insert(&DataInput::I64(key));
+        regular.update(&DataInput::I64(key));
+        fast.update(&DataInput::I64(key));
     }
     assert_eq!(
         all_bits(regular.as_bits()),
@@ -566,8 +566,8 @@ fn the_two_hash_paths_agree_only_where_the_geometry_gives_each_row_its_own_hash(
         Bloom::<FastPath>::with_dimensions(7, 1 << 16),
     );
     for key in members() {
-        regular.insert(&DataInput::I64(key));
-        fast.insert(&DataInput::I64(key));
+        regular.update(&DataInput::I64(key));
+        fast.update(&DataInput::I64(key));
     }
     assert_ne!(
         all_bits(regular.as_bits()),
@@ -593,7 +593,7 @@ fn a_filter_cannot_be_decoded_into_the_other_hash_path() {
     let regular = filled_regular(0.01);
     let mut fast = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
     for key in members() {
-        fast.insert(&DataInput::I64(key));
+        fast.update(&DataInput::I64(key));
     }
 
     let regular_bytes = rmp_serde::to_vec(&regular).expect("serialize");
@@ -621,7 +621,7 @@ fn a_filter_cannot_be_decoded_into_the_other_hash_path() {
 fn a_fast_path_serde_round_trip_preserves_every_answer() {
     let mut filter = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
     for key in members() {
-        filter.insert(&DataInput::I64(key));
+        filter.update(&DataInput::I64(key));
     }
     let bytes = rmp_serde::to_vec(&filter).expect("serialize");
     let decoded: Bloom<FastPath> = rmp_serde::from_slice(&bytes).expect("deserialize");
@@ -649,11 +649,11 @@ fn a_fast_path_union_equals_the_filter_of_the_concatenated_stream() {
 
     for key in 0..10_000i64 {
         if key % 2 == 0 {
-            left.insert(&DataInput::I64(key));
+            left.update(&DataInput::I64(key));
         } else {
-            right.insert(&DataInput::I64(key));
+            right.update(&DataInput::I64(key));
         }
-        whole.insert(&DataInput::I64(key));
+        whole.update(&DataInput::I64(key));
     }
     left.merge(&right);
     assert_eq!(all_bits(left.as_bits()), all_bits(whole.as_bits()));
@@ -679,26 +679,26 @@ fn merging_filters_of_different_slice_counts_panics() {
     left.merge(&right);
 }
 
-/// `bulk_insert` is the loop, not a different filter.
+/// `update_batch` is the loop, not a different filter.
 #[test]
 fn bulk_insert_matches_inserting_one_at_a_time() {
     let batch: Vec<DataInput> = members().into_iter().map(DataInput::I64).collect();
 
     let mut one_by_one = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
     for key in members() {
-        one_by_one.insert(&DataInput::I64(key));
+        one_by_one.update(&DataInput::I64(key));
     }
     let mut bulk = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
-    bulk.bulk_insert(&batch);
+    bulk.update_batch(&batch);
     assert_eq!(all_bits(bulk.as_bits()), all_bits(one_by_one.as_bits()));
     assert_eq!(bulk.inserted(), one_by_one.inserted());
 
     let mut fast_one_by_one = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
     for key in members() {
-        fast_one_by_one.insert(&DataInput::I64(key));
+        fast_one_by_one.update(&DataInput::I64(key));
     }
     let mut fast_bulk = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
-    fast_bulk.bulk_insert(&batch);
+    fast_bulk.update_batch(&batch);
     assert_eq!(
         all_bits(fast_bulk.as_bits()),
         all_bits(fast_one_by_one.as_bits())

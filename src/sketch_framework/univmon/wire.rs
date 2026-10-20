@@ -688,7 +688,7 @@ mod tests {
     fn populated() -> UnivMon {
         let mut um = UnivMon::init_univmon(4, 2, 16, 3);
         for (key, weight) in [("alpha", 5i64), ("beta", 7), ("gamma", 9), ("delta", 11)] {
-            um.insert(&DataInput::Str(key), weight);
+            um.update_weighted(&DataInput::Str(key), weight);
         }
         um
     }
@@ -826,7 +826,7 @@ mod tests {
     fn univmon_layers_with_different_heap_loads_round_trip() {
         let mut um = UnivMon::init_univmon(8, 2, 16, 4);
         for key in 0..40u64 {
-            um.insert(&DataInput::U64(key), 1 + (key as i64 % 5));
+            um.update_weighted(&DataInput::U64(key), 1 + (key as i64 % 5));
         }
         let loads: Vec<usize> = (0..um.layer_size).map(|i| um.hh_layers[i].len()).collect();
         assert!(
@@ -892,7 +892,7 @@ mod tests {
     fn univmon_empty_has_one_encoding() {
         let left = UnivMon::init_univmon(4, 2, 16, 3);
         let mut right = UnivMon::init_univmon(4, 2, 16, 3);
-        right.insert(&DataInput::Str("alpha"), 5);
+        right.update_weighted(&DataInput::Str("alpha"), 5);
         right.free();
 
         let encoded = left.serialize_to_bytes().expect("serialize");

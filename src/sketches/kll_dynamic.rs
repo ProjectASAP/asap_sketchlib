@@ -147,7 +147,7 @@ impl<T: NumericalValue> KLLDynamic<T> {
 
     /// Batch variant of `update`. Exactly equivalent to looping `update`.
     #[inline]
-    pub fn bulk_update(&mut self, values: &[T]) {
+    pub fn update_batch(&mut self, values: &[T]) {
         for v in values {
             self.push_value(*v);
         }
@@ -504,7 +504,7 @@ impl KLLDynamic<f64> {
     }
 
     /// Batch variant of `update_data_input`.
-    pub fn bulk_update_data_input(&mut self, values: &[DataInput]) -> Result<(), &'static str> {
+    pub fn update_batch_data_input(&mut self, values: &[DataInput]) -> Result<(), &'static str> {
         for v in values {
             let value = data_input_to_f64(v)?;
             self.push_value(value);
@@ -985,7 +985,7 @@ mod tests {
         for v in &vals {
             a.update(v);
         }
-        b.bulk_update(&vals);
+        b.update_batch(&vals);
         // KLLDynamic is non-deterministic (Coin::new wall-clock), so counts
         // and quantiles are only approximately equal — same tolerance as
         // merge tests.
@@ -1007,7 +1007,7 @@ mod tests {
         for v in &di {
             c.update_data_input(v).unwrap();
         }
-        d.bulk_update_data_input(&di).unwrap();
+        d.update_batch_data_input(&di).unwrap();
         assert_eq!(c.count(), d.count());
     }
 }

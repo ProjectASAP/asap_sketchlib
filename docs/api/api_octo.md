@@ -19,7 +19,7 @@ The paper's three ideas map onto this module as:
 
 ### Two Usage Levels
 
-- **Low-level (this page)**: Call `insert_emit_delta` / `apply_delta`
+- **Low-level (this page)**: Call `update_emit_delta` / `apply_delta`
   directly on sketch structs. You manage threads, channels, and
   scheduling yourself.
 - **Turnkey runtime**: Use `OctoRuntime` or `run_octo` for a ready-made
@@ -139,13 +139,13 @@ Available on `CountMin<S, RegularPath, H>` and `CountMin<S, FastPath, H>`
 where `S::Counter = i32`.
 
 ```rust
-fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CmDelta))
-fn insert_emit_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(CmDelta))
-fn insert_emit_keyed_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(KeyedCmDelta))
+fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CmDelta))
+fn update_emit_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(CmDelta))
+fn update_emit_keyed_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(KeyedCmDelta))
 fn apply_delta(&mut self, delta: CmDelta)
 ```
 
-`insert_emit_delta` inserts a key and, for each row counter that reaches
+`update_emit_delta` inserts a key and, for each row counter that reaches
 τ, emits a delta carrying that counter's value and clears it — Algorithm
 1 of the paper. What the child still holds plus what the parent received
 always reconstructs a single-threaded pass.
@@ -160,7 +160,7 @@ let mut child = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096)
 let mut parent = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
 
 let key = DataInput::U64(42);
-child.insert_emit_delta(&key, &mut |delta: CmDelta| {
+child.update_emit_delta(&key, &mut |delta: CmDelta| {
     parent.apply_delta(delta);
 });
 ```
@@ -172,9 +172,9 @@ Same shape as CountMin, on `Count<S, RegularPath, H>` and
 the threshold is applied to `|counter|` (§4.4).
 
 ```rust
-fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta))
-fn insert_emit_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(CountDelta))
-fn insert_emit_keyed_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(KeyedCountDelta))
+fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta))
+fn update_emit_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(CountDelta))
+fn update_emit_keyed_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(KeyedCountDelta))
 fn apply_delta(&mut self, delta: CountDelta)
 ```
 
@@ -183,10 +183,10 @@ fn apply_delta(&mut self, delta: CountDelta)
 Available on all `HyperLogLogImpl<Variant, Registers, H>` variants.
 
 ```rust
-fn insert_emit_delta(&mut self, obj: &DataInput, emit: &mut impl FnMut(HllDelta))
-fn insert_emit_delta_with_threshold(&mut self, obj: &DataInput, threshold: u8, emit: &mut impl FnMut(HllDelta))
-fn insert_emit_delta_with_hash(&mut self, hashed_val: u64, emit: &mut impl FnMut(HllDelta))
-fn insert_emit_delta_with_hash_and_threshold(&mut self, hashed_val: u64, threshold: u8, emit: &mut impl FnMut(HllDelta))
+fn update_emit_delta(&mut self, obj: &DataInput, emit: &mut impl FnMut(HllDelta))
+fn update_emit_delta_with_threshold(&mut self, obj: &DataInput, threshold: u8, emit: &mut impl FnMut(HllDelta))
+fn update_emit_delta_with_hash(&mut self, hashed_val: u64, emit: &mut impl FnMut(HllDelta))
+fn update_emit_delta_with_hash_and_threshold(&mut self, hashed_val: u64, threshold: u8, emit: &mut impl FnMut(HllDelta))
 fn apply_delta(&mut self, delta: HllDelta)
 ```
 
@@ -248,7 +248,7 @@ One aggregator serves every worker, so the pipeline's ceiling is the
 aggregator's rate divided by how many deltas each insert produces — which
 makes τ the parameter that decides throughput, and is why §4.3 has the
 aggregator drive it. At a low τ an insert produces several deltas, the
-aggregator does more heap work than a single-threaded `UnivMon::insert`
+aggregator does more heap work than a single-threaded `UnivMon::update_weighted`
 would, and the pipeline is slower than one core; the accuracy cost of
 raising τ stays negligible well past the default, so the trade is
 throughput against messages rather than against error.
@@ -412,7 +412,7 @@ pub trait OctoPlan: Send + 'static {
 }
 ```
 
-`insert` hashes for partitioning and calls `prepare`, both on the calling
+`update` hashes for partitioning and calls `prepare`, both on the calling
 thread, so a borrowed key is finished with by the time it returns — the
 key's owner never has to outlive the runtime.
 
@@ -464,8 +464,8 @@ min-over-rows estimate is zero for every key. Every plan has an
 
 ```rust
 fn new<PF>(config: &OctoConfig, plan: L, parent_factory: PF) -> Self
-fn insert(&mut self, input: DataInput<'_>)
-fn insert_batch(&mut self, inputs: &[DataInput<'_>])
+fn update(&mut self, input: DataInput<'_>)
+fn update_batch(&mut self, inputs: &[DataInput<'_>])
 fn flush(&mut self)
 fn read_handle(&self) -> OctoReadHandle<P>
 fn close(&self)
@@ -540,7 +540,7 @@ aggregator: each keyed delta updates the parent counter and then the
 heap, which is Algorithm 2.
 
 The two keyed-bucket pairs instead replay the key, per §4.4.
-`CocoOctoAggregator` calls the weighted `Coco::insert`, so the promoted
+`CocoOctoAggregator` calls the weighted `Coco::update_weighted`, so the promoted
 mass contests the parent's own buckets and runs the parent's own `v/val`
 election. Both halves of the Coco pair draw from the thread generator;
 `CocoWorkerSketch::with_seed`, `CocoOctoWorker::with_threshold_and_seed`,
@@ -651,10 +651,10 @@ let result = run_octo(&inputs, &config, plan, || CmOctoAggregator::new(4, 4096))
   it, while `core_affinity::get_core_ids` reports a count without testing
   whether pinning works. The throughput probe prints which case you are
   in.
-- The runtime's `insert` dispatches from the calling thread, so that
+- The runtime's `update` dispatches from the calling thread, so that
   thread is a serialization point. The paper instead has each worker pull
   from its own NIC queue.
-- `insert` after `close` panics.
+- `update` after `close` panics.
 - A UnivMon layer that thresholds cannot call its candidate set complete,
   so `candidates_complete()` reads false on exactly those layers. Queries
   then take the conservative branch of `heavy_threshold` instead of

@@ -21,10 +21,10 @@ fn from_storage(counts: S) -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, value: &DataInput)
-fn insert_many(&mut self, value: &DataInput, many: S::Counter)
-fn bulk_insert(&mut self, values: &[DataInput])
-fn bulk_insert_many(&mut self, values: &[(DataInput, S::Counter)])
+fn update(&mut self, value: &DataInput)
+fn update_weighted(&mut self, value: &DataInput, weight: S::Counter)
+fn update_batch(&mut self, values: &[DataInput])
+fn update_weighted_batch(&mut self, values: &[(DataInput, S::Counter)])
 fn fast_insert_with_hash_value(&mut self, hashed_val: &H::HashType)
 fn fast_insert_many_with_hash_value(&mut self, hashed_val: &H::HashType, many: S::Counter)
 ```
@@ -117,7 +117,7 @@ CSHeap, Elastic) must hold `p = 1` to serialize.
 use asap_sketchlib::{CountMin, DataInput};
 
 let mut cm = CountMin::with_dimensions(3, 1024);
-cm.insert(&DataInput::U64(42));
+cm.update(&DataInput::U64(42));
 let est = cm.estimate(&DataInput::U64(42));
 assert!(est >= 1);
 ```

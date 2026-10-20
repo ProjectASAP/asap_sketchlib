@@ -135,8 +135,8 @@ fn probe_countmin() {
         CountMin::<asap_sketchlib::Vector2D<i32>, asap_sketchlib::RegularPath>::with_dimensions(
             3, 256,
         );
-    cm.insert_many(&DataInput::U32(7), 100);
-    cm.insert_many(&DataInput::U32(7), -40);
+    cm.update_weighted(&DataInput::U32(7), 100);
+    cm.update_weighted(&DataInput::U32(7), -40);
     let est = cm.estimate(&DataInput::U32(7));
     p.check(
         "turnstile +100/-40 == 60",
@@ -155,7 +155,7 @@ fn probe_countmin() {
     for _ in 0..n {
         let k = z.sample_i64();
         *truth.entry(k).or_insert(0) += 1;
-        cm.insert(&DataInput::I64(k));
+        cm.update(&DataInput::I64(k));
     }
     let eps = std::f64::consts::E / cols as f64;
     // Check top-100 hottest keys.
@@ -197,8 +197,8 @@ fn probe_countsketch() {
         CoreCount::<asap_sketchlib::Vector2D<i64>, asap_sketchlib::RegularPath>::with_dimensions(
             4, 512,
         );
-    cs.insert_many(&DataInput::U32(3), 500);
-    cs.insert_many(&DataInput::U32(3), -500);
+    cs.update_weighted(&DataInput::U32(3), 500);
+    cs.update_weighted(&DataInput::U32(3), -500);
     let est = cs.estimate(&DataInput::U32(3));
     p.check(
         "turnstile +500/-500 ~= 0",
@@ -217,7 +217,7 @@ fn probe_countsketch() {
     for _ in 0..n {
         let k = z.sample_i64();
         *truth.entry(k).or_insert(0) += 1;
-        cs.insert(&DataInput::I64(k));
+        cs.update(&DataInput::I64(k));
     }
     let l2 = (truth
         .values()
@@ -269,8 +269,8 @@ fn probe_topk_heaps() {
         CSHeap::<asap_sketchlib::Vector2D<i64>, asap_sketchlib::RegularPath>::new(5, 4096, top_k);
     for k in &stream {
         let d = DataInput::U32(*k);
-        cms_heap.insert(&d);
-        cs_heap.insert(&d);
+        cms_heap.update(&d);
+        cs_heap.update(&d);
     }
     for (label, heap_items) in [
         ("CMSHeap", cms_heap.heap().heap().to_vec()),
@@ -293,7 +293,7 @@ fn probe_topk_heaps() {
     // CSHeap turnstile can push NEGATIVE counts into the heap (legal CS estimate).
     let mut cs_neg =
         CSHeap::<asap_sketchlib::Vector2D<i64>, asap_sketchlib::RegularPath>::new(3, 4096, 8);
-    cs_neg.insert_many(&DataInput::U32(999), -5);
+    cs_neg.update_weighted(&DataInput::U32(999), -5);
     if let Some(it) = cs_neg
         .heap()
         .heap()
@@ -377,9 +377,9 @@ fn probe_hll() {
     for &target in &checkpoints {
         while inserted < target {
             let v = DataInput::U64(inserted);
-            classic.insert(&v);
-            ertl.insert(&v);
-            hip.insert(&v);
+            classic.update(&v);
+            ertl.update(&v);
+            hip.update(&v);
             inserted += 1;
         }
         let ec = classic.estimate() as f64;
@@ -408,7 +408,7 @@ fn probe_hll() {
     let target = 170_000_000u64;
     while inserted < target {
         let v = DataInput::U64(inserted);
-        classic.insert(&v);
+        classic.update(&v);
         inserted += 1;
     }
     let t = target as f64;
@@ -659,7 +659,7 @@ fn probe_univmon() {
     for i in 0..20_000usize {
         let k = z.sample_usize() as u32;
         let w = 1 + (i % 7) as i64;
-        um.insert(&DataInput::U32(k), w);
+        um.update_weighted(&DataInput::U32(k), w);
         *truth_w.entry(k).or_insert(0) += w;
     }
     let l1_truth: i64 = truth_w.values().sum();
@@ -722,7 +722,7 @@ fn probe_univmon_pyramid() {
     for i in 0..20_000usize {
         let k = z.sample_usize() as u32;
         let w = 1 + (i % 7) as i64;
-        up.insert(&DataInput::U32(k), w);
+        up.update_weighted(&DataInput::U32(k), w);
         *truth_w.entry(k).or_insert(0) += w;
     }
     let l1_truth: i64 = truth_w.values().sum();
@@ -890,7 +890,7 @@ fn probe_nitro() {
                 5, 2048,
             ),
         );
-        nb.insert(&vec![7i64; n as usize]);
+        nb.update_batch(&vec![7i64; n as usize]);
         let est = nb.estimate_median(&DataInput::I64(7));
         p.check(
             &format!("estimate_median ~ truth at rate={rate}"),
@@ -967,8 +967,8 @@ fn probe_tumbling() {
     let mut tw: TumblingWindow<asap_sketchlib::FoldCMS> =
         TumblingWindow::new(10, 8, cfg.clone(), 4);
     for t in 0..25u64 {
-        tw.insert(t, &DataInput::Str("A"), 2);
-        tw.insert(t, &DataInput::Str("B"), 1);
+        tw.update_weighted(t, &DataInput::Str("A"), 2);
+        tw.update_weighted(t, &DataInput::Str("B"), 1);
     }
     let merged = tw.query_all();
     let fa = merged.query(&DataInput::Str("A"));
@@ -997,7 +997,7 @@ fn probe_tumbling() {
     for t in 0..1000u64 {
         let v = rng.random::<f64>() * 100.0;
         all_vals.push(v);
-        tkw.insert(t, &DataInput::F64(v), 999 /* ignored */);
+        tkw.update_weighted(t, &DataInput::F64(v), 999 /* ignored */);
     }
     // query_all merges every window (closed + active), so truth = full stream.
     all_vals.sort_by(|a, b| a.partial_cmp(b).unwrap());

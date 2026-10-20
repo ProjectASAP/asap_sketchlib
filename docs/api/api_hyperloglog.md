@@ -45,10 +45,10 @@ fn default() -> Self
 ## Insert / Update
 
 ```rust
-fn insert(&mut self, obj: &DataInput)
-fn insert_many(&mut self, items: &[DataInput])
-fn insert_with_hash(&mut self, hashed: u64)
-fn insert_many_with_hashes(&mut self, hashes: &[u64])
+fn update(&mut self, obj: &DataInput)
+fn update_batch(&mut self, items: &[DataInput])
+fn update_with_hash(&mut self, hashed: u64)
+fn update_batch_with_hashes(&mut self, hashes: &[u64])
 ```
 
 ## Query
@@ -138,7 +138,7 @@ use asap_sketchlib::{ErtlMLE, HyperLogLog, DataInput};
 
 let mut hll = HyperLogLog::<ErtlMLE>::default();
 for i in 0..1000u64 {
-    hll.insert(&DataInput::U64(i));
+    hll.update(&DataInput::U64(i));
 }
 let card = hll.estimate();
 assert!(card > 900);

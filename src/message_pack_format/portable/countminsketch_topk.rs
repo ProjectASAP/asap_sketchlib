@@ -102,7 +102,7 @@ pub fn sketchlib_cms_heap_update(cms_heap: &mut SketchlibCMSHeap, key: &str, val
     if many <= 0 {
         return;
     }
-    cms_heap.insert_many(&DataInput::String(key.to_owned()), many);
+    cms_heap.update_weighted(&DataInput::String(key.to_owned()), many);
 }
 
 /// Queries a CMSHeap for a key's frequency estimate.

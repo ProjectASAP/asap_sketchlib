@@ -507,8 +507,8 @@ impl<H: SketchHasher> MicroCM<H> {
     /// count-based clock out of phase with a time-based one fed the matching
     /// timestamps.
     ///
-    /// Panics if this sketch's clock is time-based; use [`Self::insert_at`].
-    pub fn insert(&mut self, key: &DataInput) {
+    /// Panics if this sketch's clock is time-based; use [`Self::update_at`].
+    pub fn update(&mut self, key: &DataInput) {
         self.record(key);
         if self.clock.tick() {
             self.enter_sub_window(1);
@@ -518,8 +518,8 @@ impl<H: SketchHasher> MicroCM<H> {
     /// Records one occurrence of `key` at `timestamp`, against a time-based
     /// clock.
     ///
-    /// Panics if this sketch's clock is count-based; use [`Self::insert`].
-    pub fn insert_at(&mut self, key: &DataInput, timestamp: u64) {
+    /// Panics if this sketch's clock is count-based; use [`Self::update`].
+    pub fn update_at(&mut self, key: &DataInput, timestamp: u64) {
         self.advance_to(timestamp);
         self.record(key);
     }
@@ -748,11 +748,11 @@ mod tests {
     fn merge_rejects_clocks_of_different_sub_window_length() {
         let mut a = sketch(2, 16, 4, 1000);
         for _ in 0..999 {
-            a.insert(&key(1));
+            a.update(&key(1));
         }
         let mut b = sketch(2, 16, 4, 10);
         for _ in 0..9 {
-            b.insert(&key(1));
+            b.update(&key(1));
         }
         assert_eq!((a.sub_window(), b.sub_window()), (0, 0));
         let err = a.merge(&b).expect_err("different sub-window lengths");
@@ -792,7 +792,7 @@ mod tests {
     fn a_linear_weight_outside_the_unit_interval_is_refused() {
         let mut sk = sketch(2, 16, 4, 10);
         for _ in 0..100 {
-            sk.insert(&key(1));
+            sk.update(&key(1));
         }
         let _ = sk.estimate_with(&key(1), DeltaStrategy::Linear(3.0));
     }
@@ -810,10 +810,10 @@ mod tests {
         let mut sk = sketch(2, 16, 4, 10);
         assert_eq!(sk.sub_window(), 0);
         for _ in 0..9 {
-            sk.insert(&key(1));
+            sk.update(&key(1));
         }
         assert_eq!(sk.sub_window(), 0, "nine of ten items is still window 0");
-        sk.insert(&key(1));
+        sk.update(&key(1));
         assert_eq!(sk.sub_window(), 1, "the tenth item fills sub-window 0");
         // Sub-window 0 holds exactly L items, not L-1.
         assert_eq!(sk.estimate_with(&key(1), DeltaStrategy::Under), 10.0);
@@ -844,7 +844,7 @@ mod tests {
     fn a_single_key_in_one_row_is_counted_exactly() {
         let mut sk = sketch(1, 16, 4, 50);
         for _ in 0..200 {
-            sk.insert(&key(7));
+            sk.update(&key(7));
         }
         let est = sk.estimate_with(&key(7), DeltaStrategy::Over);
         assert_eq!(est, 200.0);
@@ -858,7 +858,7 @@ mod tests {
         let mut truth = [0u64; 40];
         for round in 0..2_000u64 {
             let k = round % 40;
-            sk.insert(&key(k));
+            sk.update(&key(k));
             truth[k as usize] += 1;
         }
         // Everything inserted is still inside a window of 4 x 500 = 2000.
@@ -876,12 +876,12 @@ mod tests {
     fn a_key_that_stops_appearing_decays_to_nothing() {
         let mut sk = sketch(3, 64, 4, 100);
         for _ in 0..400 {
-            sk.insert(&key(1));
+            sk.update(&key(1));
         }
         assert!(sk.estimate_with(&key(1), DeltaStrategy::Under) > 0.0);
         // Push the window past the burst with a different key.
         for _ in 0..600 {
-            sk.insert(&key(2));
+            sk.update(&key(2));
         }
         let est = sk.estimate_with(&key(1), DeltaStrategy::Over);
         assert!(
@@ -902,11 +902,11 @@ mod tests {
             1,
         );
         for i in 0..50u64 {
-            sk.insert_at(&key(9), i);
+            sk.update_at(&key(9), i);
         }
         assert!(sk.estimate_with(&key(9), DeltaStrategy::Over) > 0.0);
         // Jump well past T + 1 sub-windows without inserting key 9 again.
-        sk.insert_at(&key(10), 100_000);
+        sk.update_at(&key(10), 100_000);
         assert_eq!(sk.estimate_with(&key(9), DeltaStrategy::Over), 0.0);
     }
 
@@ -920,14 +920,14 @@ mod tests {
             SubWindowClock::time_based(10, 0),
             1,
         );
-        sk.insert(&key(1));
+        sk.update(&key(1));
     }
 
     #[test]
     #[should_panic(expected = "use insert()")]
     fn insert_at_refuses_a_count_based_clock() {
         let mut sk = sketch(1, 16, 4, 10);
-        sk.insert_at(&key(1), 5);
+        sk.update_at(&key(1), 5);
     }
 
     /// A merge of two halves recovers exactly what a single pass over both
@@ -945,8 +945,8 @@ mod tests {
         // Key 3 takes every other item on both sides: 100 per sub-window
         // each, so the merged pixel is 200 and still fits a byte.
         for i in 0..4 * PER_SUB_WINDOW {
-            left.insert(&key(if i % 2 == 0 { 3 } else { 4 }));
-            right.insert(&key(if i % 2 == 0 { 3 } else { 5 }));
+            left.update(&key(if i % 2 == 0 { 3 } else { 4 }));
+            right.update(&key(if i % 2 == 0 { 3 } else { 5 }));
         }
         assert_eq!(left.sub_window(), right.sub_window());
         assert_eq!(left.max_zoom(), 0, "the load must stay below a zoom");
@@ -974,8 +974,8 @@ mod tests {
         // pixel divides exactly and never draws. Equal item counts keep the
         // two clocks in step.
         for i in 0..40_000u64 {
-            a.insert(&key(1));
-            b.insert(&key(if i % 4 == 0 { 9 } else { 1 }));
+            a.update(&key(1));
+            b.update(&key(if i % 4 == 0 { 9 } else { 1 }));
         }
         let before = a.rounding.state();
         a.merge(&b).expect("same shape and clock");
@@ -992,10 +992,10 @@ mod tests {
         let mut a = sketch(2, 32, 4, 10);
         let mut b = sketch(2, 32, 4, 10);
         for _ in 0..25 {
-            a.insert(&key(1));
+            a.update(&key(1));
         }
         for _ in 0..5 {
-            b.insert(&key(1));
+            b.update(&key(1));
         }
         assert_ne!(a.sub_window(), b.sub_window());
         let before = a.as_storage().as_slice().to_vec();
@@ -1008,7 +1008,7 @@ mod tests {
     fn serde_round_trip_preserves_the_answers() {
         let mut sk = sketch(3, 32, 4, 100);
         for i in 0..1_000u64 {
-            sk.insert(&key(i % 17));
+            sk.update(&key(i % 17));
         }
         let bytes = sk.serialize_to_bytes().expect("serialize");
         let back = MicroCM::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");

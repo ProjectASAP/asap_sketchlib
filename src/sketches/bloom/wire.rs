@@ -253,7 +253,7 @@ mod tests {
     fn bloom_envelope_structure_and_round_trip() {
         let mut filter = Bloom::<RegularPath>::with_dimensions(7, 1 << 14);
         for key in members() {
-            filter.insert(&key);
+            filter.update(&key);
         }
         let bytes = filter.serialize_to_bytes().expect("serialize");
 
@@ -285,7 +285,7 @@ mod tests {
     fn bloom_fast_path_round_trip() {
         let mut filter = Bloom::<FastPath>::with_dimensions(7, 1 << 14);
         for key in members() {
-            filter.insert(&key);
+            filter.update(&key);
         }
         let bytes = filter.serialize_to_bytes().expect("serialize");
         let decoded = Bloom::<FastPath>::deserialize_from_bytes(&bytes).expect("decode");
@@ -316,8 +316,8 @@ mod tests {
         let mut regular = Bloom::<RegularPath>::with_dimensions(7, 1 << 12);
         let mut fast = Bloom::<FastPath>::with_dimensions(7, 1 << 12);
         for key in members() {
-            regular.insert(&key);
-            fast.insert(&key);
+            regular.update(&key);
+            fast.update(&key);
         }
         let regular_bytes = regular.serialize_to_bytes().expect("serialize regular");
         let fast_bytes = fast.serialize_to_bytes().expect("serialize fast");
@@ -384,8 +384,8 @@ mod tests {
         let mut alt = Bloom::<RegularPath, AltHasher>::with_dimensions(7, 1 << 12);
         let mut std = Bloom::<RegularPath>::with_dimensions(7, 1 << 12);
         for key in members() {
-            alt.insert(&key);
-            std.insert(&key);
+            alt.update(&key);
+            std.update(&key);
         }
         let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
         let decoded = Bloom::<RegularPath, AltHasher>::deserialize_from_bytes(&alt_bytes)
@@ -599,7 +599,7 @@ mod tests {
         const TARGET: f64 = 0.001;
         let mut filter = Bloom::<RegularPath>::with_capacity(N, TARGET);
         for key in 0..N as u64 {
-            filter.insert(&DataInput::U64(key));
+            filter.update(&DataInput::U64(key));
         }
         let bytes = filter.serialize_to_bytes().expect("serialize");
         let decoded = Bloom::<RegularPath>::deserialize_from_bytes(&bytes).expect("decode");

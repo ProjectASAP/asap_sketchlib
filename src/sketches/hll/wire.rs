@@ -308,7 +308,7 @@ mod tests {
         for HyperLogLogImpl<Classic, Registers, H>
     {
         fn push(&mut self, input: &DataInput) {
-            self.insert(input);
+            self.update(input);
         }
 
         fn estimate(&self) -> f64 {
@@ -332,7 +332,7 @@ mod tests {
         for HyperLogLogImpl<ErtlMLE, Registers, H>
     {
         fn push(&mut self, input: &DataInput) {
-            self.insert(input);
+            self.update(input);
         }
 
         fn estimate(&self) -> f64 {
@@ -354,7 +354,7 @@ mod tests {
 
     impl<Registers: HllRegisterStorage> HllEstimator for HyperLogLogHIPImpl<Registers> {
         fn push(&mut self, input: &DataInput) {
-            self.insert(input);
+            self.update(input);
         }
 
         fn estimate(&self) -> f64 {
@@ -446,7 +446,7 @@ mod tests {
         // kind_id_len 2, kind_id [0x01, 0x02].
         let mut sketch = HyperLogLog::<ErtlMLE>::default();
         for value in 0..1000 {
-            sketch.insert(&DataInput::U64(value));
+            sketch.update(&DataInput::U64(value));
         }
         let bytes = sketch.serialize_to_bytes().expect("serialize");
 
@@ -466,7 +466,7 @@ mod tests {
     fn hll_hip_round_trip_preserves_state() {
         let mut sketch = HyperLogLogHIP::default();
         for value in 0..1000 {
-            sketch.insert(&DataInput::U64(value));
+            sketch.update(&DataInput::U64(value));
         }
         let bytes = sketch.serialize_to_bytes().expect("serialize");
         assert!(bytes.starts_with(envelope::MAGIC));
@@ -489,7 +489,7 @@ mod tests {
         // Ertl-MLE / Datafusion: registers-only payload.
         let mut native = HyperLogLog::<ErtlMLE>::default();
         for v in 0..1000 {
-            native.insert(&DataInput::U64(v));
+            native.update(&DataInput::U64(v));
         }
         let native_bytes = native.serialize_to_bytes().expect("native serialize");
         let portable = HllSketch::from_raw(
@@ -508,7 +508,7 @@ mod tests {
         // HIP: registers + three running scalars.
         let mut hip = HyperLogLogHIP::default();
         for v in 0..1000 {
-            hip.insert(&DataInput::U64(v));
+            hip.update(&DataInput::U64(v));
         }
         let hip_bytes = hip.serialize_to_bytes().expect("native serialize");
         let portable_hip = HllSketch::from_raw(
@@ -582,8 +582,8 @@ mod tests {
         let mut alt = HyperLogLogImpl::<ErtlMLE, HllBucketListP14, AltHasher>::default();
         let mut std = HyperLogLog::<ErtlMLE>::default();
         for v in 0..1000 {
-            alt.insert(&DataInput::U64(v));
-            std.insert(&DataInput::U64(v));
+            alt.update(&DataInput::U64(v));
+            std.update(&DataInput::U64(v));
         }
         let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
         let decoded =
@@ -650,7 +650,7 @@ mod tests {
     fn hll_precision_cross_rejection() {
         let mut p12 = HyperLogLogP12::<Classic>::default();
         for v in 0..100 {
-            p12.insert(&DataInput::U64(v));
+            p12.update(&DataInput::U64(v));
         }
         let bytes = p12.serialize_to_bytes().expect("serialize");
         assert!(
@@ -807,7 +807,7 @@ mod tests {
     fn hll_hip_kind_id_rejected_by_classic() {
         let mut hip = HyperLogLogHIP::default();
         for v in 0..100 {
-            hip.insert(&DataInput::U64(v));
+            hip.update(&DataInput::U64(v));
         }
         let bytes = hip.serialize_to_bytes().expect("serialize");
         assert!(

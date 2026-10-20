@@ -13,16 +13,16 @@ fn main() {
     // Worker A sees even user IDs.
     let mut cms_a: CountMin<Vector2D<i32>, RegularPath> = CountMin::with_dimensions(5, 1024);
     for id in (0u64..10_000).step_by(2) {
-        cms_a.insert(&DataInput::U64(id));
+        cms_a.update(&DataInput::U64(id));
     }
 
     // Worker B sees odd user IDs, plus extra occurrences of user 42.
     let mut cms_b: CountMin<Vector2D<i32>, RegularPath> = CountMin::with_dimensions(5, 1024);
     for id in (1u64..10_000).step_by(2) {
-        cms_b.insert(&DataInput::U64(id));
+        cms_b.update(&DataInput::U64(id));
     }
     for _ in 0..99 {
-        cms_b.insert(&DataInput::U64(42));
+        cms_b.update(&DataInput::U64(42));
     }
 
     // Merge B into A — merge requires identical dimensions.

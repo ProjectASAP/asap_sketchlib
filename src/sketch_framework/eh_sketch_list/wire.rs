@@ -309,7 +309,7 @@ pub(crate) mod tests {
         for sketch in &mut out {
             let key = sample_input(sketch.sketch_type());
             for _ in 0..5 {
-                sketch.insert(&key);
+                sketch.update(&key);
             }
         }
         out
@@ -387,7 +387,7 @@ pub(crate) mod tests {
     fn eh_sketch_list_round_trip_serialization() {
         let mut sketch =
             EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
-        sketch.insert(&DataInput::U64(42));
+        sketch.update(&DataInput::U64(42));
 
         let encoded = sketch.serialize_to_bytes().expect("serialize EHSketchList");
         assert!(encoded.starts_with(b"ASAPv1"));

@@ -99,7 +99,7 @@ fn main() {
         let mut sk = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
         let start = Instant::now();
         for &k in &seq_keys {
-            sk.insert(&DataInput::U64(k));
+            sk.update(&DataInput::U64(k));
         }
         let elapsed = start.elapsed();
         std::hint::black_box(sk.estimate(&DataInput::U64(seq_keys[0])));
@@ -110,7 +110,7 @@ fn main() {
         let mut sk = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
         let start = Instant::now();
         for &k in &zipf {
-            sk.insert(&DataInput::U64(k));
+            sk.update(&DataInput::U64(k));
         }
         let elapsed = start.elapsed();
         std::hint::black_box(sk.estimate(&DataInput::U64(zipf[0])));
@@ -119,7 +119,7 @@ fn main() {
 
     let mut filled = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
     for &k in &zipf {
-        filled.insert(&DataInput::U64(k));
+        filled.update(&DataInput::U64(k));
     }
     bench("cms_fast_estimate", ESTIMATE_N, || {
         let start = Instant::now();
@@ -136,7 +136,7 @@ fn main() {
         let mut sk = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
         let start = Instant::now();
         for &k in &seq_keys {
-            sk.insert(&DataInput::U64(k));
+            sk.update(&DataInput::U64(k));
         }
         let elapsed = start.elapsed();
         std::hint::black_box(sk.estimate(&DataInput::U64(seq_keys[0])));
@@ -147,7 +147,7 @@ fn main() {
         let mut sk = Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
         let start = Instant::now();
         for &k in &seq_keys {
-            sk.insert(&DataInput::U64(k));
+            sk.update(&DataInput::U64(k));
         }
         let elapsed = start.elapsed();
         std::hint::black_box(sk.estimate(&DataInput::U64(seq_keys[0])));

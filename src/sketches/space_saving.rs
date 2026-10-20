@@ -12,7 +12,7 @@
 //! count in a doubly linked list, each owning a doubly linked list of the
 //! counters at that count, plus a key index into those counters. A unit arrival
 //! moves one counter to the neighbouring bucket and an eviction takes the head
-//! of the lowest bucket, so [`SpaceSaving::insert`] touches a constant number of
+//! of the lowest bucket, so [`SpaceSaving::update`] touches a constant number of
 //! links whatever the capacity. A weighted arrival lands further along the
 //! bucket list and walks it to reach its destination, one step per bucket it
 //! passes.
@@ -163,8 +163,8 @@ impl<H: SketchHasher> SpaceSaving<H> {
 
     /// Records one occurrence of `value`.
     #[inline]
-    pub fn insert(&mut self, value: &DataInput) {
-        self.insert_many(value, 1);
+    pub fn update(&mut self, value: &DataInput) {
+        self.update_weighted(value, 1);
     }
 
     /// Records `count` occurrences of `value` in one step.
@@ -173,20 +173,20 @@ impl<H: SketchHasher> SpaceSaving<H> {
     /// takes a free or displaced counter seats itself at [`Self::min_count`]
     /// plus `count` and carries that minimum as its error. `count` of zero is a
     /// no-op, and counts saturate at [`u64::MAX`].
-    pub fn insert_many(&mut self, value: &DataInput, count: u64) {
-        if count == 0 {
+    pub fn update_weighted(&mut self, value: &DataInput, weight: u64) {
+        if weight == 0 {
             return;
         }
-        self.total = self.total.saturating_add(count);
+        self.total = self.total.saturating_add(weight);
         let digest = H::hash64_seeded(0, value);
 
         if let Some(cid) = self.find(digest, value) {
-            self.raise(cid, count);
+            self.raise(cid, weight);
             return;
         }
 
         if self.monitored.len() < self.capacity {
-            let seated = self.discarded_max.saturating_add(count);
+            let seated = self.discarded_max.saturating_add(weight);
             let discarded_max = self.discarded_max;
             self.seat(digest, input_to_owned(value), seated, discarded_max);
             return;
@@ -196,7 +196,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
         let lowest = self.buckets[self.bucket_head].count;
         debug_assert!(
             self.discarded_max <= lowest,
-            "the ceiling {} sits above the lowest live count {lowest}",
+            "the ceiling {} sits above the lowest live weight {lowest}",
             self.discarded_max
         );
         self.discarded_max = lowest;
@@ -205,13 +205,13 @@ impl<H: SketchHasher> SpaceSaving<H> {
         self.monitored[victim].digest = digest;
         self.monitored[victim].error = lowest;
         self.index.entry(digest).or_default().push(victim);
-        self.raise(victim, count);
+        self.raise(victim, weight);
     }
 
     /// Records every value in `values`.
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
@@ -907,7 +907,7 @@ mod tests {
                 6 => 11,
                 _ => 97,
             };
-            summary.insert_many(&DataInput::I64(key), weight);
+            summary.update_weighted(&DataInput::I64(key), weight);
             *truth.entry(key).or_default() += weight;
             if let Err(problem) = summary.validate() {
                 panic!("capacity {capacity} step {step}: {problem}");
@@ -928,8 +928,8 @@ mod tests {
     fn a_capacity_of_zero_floors_at_one() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(0);
         assert_eq!(summary.capacity(), 1);
-        summary.insert(&DataInput::I64(1));
-        summary.insert(&DataInput::I64(2));
+        summary.update(&DataInput::I64(1));
+        summary.update(&DataInput::I64(2));
         summary.validate().expect("single counter");
         assert_eq!(summary.len(), 1);
         assert_eq!(summary.estimate(&DataInput::I64(2)), 2);
@@ -939,13 +939,13 @@ mod tests {
     fn a_weighted_arrival_displaces_the_minimum_and_starts_above_it() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(2);
         for _ in 0..5 {
-            summary.insert(&DataInput::I64(1));
+            summary.update(&DataInput::I64(1));
         }
         for _ in 0..2 {
-            summary.insert(&DataInput::I64(2));
+            summary.update(&DataInput::I64(2));
         }
 
-        summary.insert_many(&DataInput::I64(3), 4);
+        summary.update_weighted(&DataInput::I64(3), 4);
 
         summary.validate().expect("after a weighted eviction");
         assert_eq!(summary.len(), 2);
@@ -961,11 +961,11 @@ mod tests {
     fn a_weighted_raise_passes_every_bucket_below_its_destination() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(4);
         for (key, count) in [(1i64, 1u64), (2, 2), (3, 3), (4, 4)] {
-            summary.insert_many(&DataInput::I64(key), count);
+            summary.update_weighted(&DataInput::I64(key), count);
         }
         assert_eq!(walk(&summary), vec![(4, 4), (3, 3), (2, 2), (1, 1)]);
 
-        summary.insert_many(&DataInput::I64(1), 9);
+        summary.update_weighted(&DataInput::I64(1), 9);
 
         summary.validate().expect("after a multi-hop raise");
         assert_eq!(walk(&summary), vec![(1, 10), (4, 4), (3, 3), (2, 2)]);
@@ -974,13 +974,13 @@ mod tests {
     #[test]
     fn counts_saturate_and_keep_the_bucket_order() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(3);
-        summary.insert_many(&DataInput::I64(3), 7);
-        summary.insert_many(&DataInput::I64(1), u64::MAX - 2);
-        summary.insert_many(&DataInput::I64(2), u64::MAX);
-        summary.insert_many(&DataInput::I64(1), 10);
+        summary.update_weighted(&DataInput::I64(3), 7);
+        summary.update_weighted(&DataInput::I64(1), u64::MAX - 2);
+        summary.update_weighted(&DataInput::I64(2), u64::MAX);
+        summary.update_weighted(&DataInput::I64(1), 10);
         summary.validate().expect("after a saturating raise");
 
-        summary.insert_many(&DataInput::I64(1), 5);
+        summary.update_weighted(&DataInput::I64(1), 5);
         summary
             .validate()
             .expect("after raising a saturated counter");
@@ -1004,8 +1004,8 @@ mod tests {
     #[test]
     fn an_eviction_from_a_saturated_counter_stays_sound() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(1);
-        summary.insert_many(&DataInput::I64(1), u64::MAX);
-        summary.insert(&DataInput::I64(2));
+        summary.update_weighted(&DataInput::I64(1), u64::MAX);
+        summary.update(&DataInput::I64(2));
         summary
             .validate()
             .expect("after evicting a saturated counter");
@@ -1019,12 +1019,12 @@ mod tests {
     #[test]
     fn a_merge_saturates_instead_of_wrapping() {
         let mut left: SpaceSaving = SpaceSaving::with_capacity(2);
-        left.insert_many(&DataInput::I64(1), u64::MAX);
-        left.insert_many(&DataInput::I64(2), u64::MAX - 1);
+        left.update_weighted(&DataInput::I64(1), u64::MAX);
+        left.update_weighted(&DataInput::I64(2), u64::MAX - 1);
         let mut right: SpaceSaving = SpaceSaving::with_capacity(3);
-        right.insert_many(&DataInput::I64(1), u64::MAX / 2);
-        right.insert_many(&DataInput::I64(3), 100);
-        right.insert_many(&DataInput::I64(4), 50);
+        right.update_weighted(&DataInput::I64(1), u64::MAX / 2);
+        right.update_weighted(&DataInput::I64(3), 100);
+        right.update_weighted(&DataInput::I64(4), 50);
 
         left.merge(&right);
 
@@ -1044,8 +1044,8 @@ mod tests {
     /// truly reached `ceiling - 1`; `held` arrived once.
     fn ceilinged(capacity: usize, ceiling: u64, held: i64, dropped: i64) -> SpaceSaving {
         let mut source: SpaceSaving = SpaceSaving::with_capacity(1);
-        source.insert_many(&DataInput::I64(dropped), ceiling - 1);
-        source.insert(&DataInput::I64(held));
+        source.update_weighted(&DataInput::I64(dropped), ceiling - 1);
+        source.update(&DataInput::I64(held));
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(capacity);
         summary.merge(&source);
         assert_eq!(summary.min_count(), ceiling, "the fixture ceiling");
@@ -1056,11 +1056,11 @@ mod tests {
     /// the same key at 6 with an error of 5. Key 2 truly arrived twice.
     fn a_saturated_overlap() -> (SpaceSaving, SpaceSaving) {
         let mut left: SpaceSaving = SpaceSaving::with_capacity(1);
-        left.insert_many(&DataInput::I64(1), u64::MAX);
-        left.insert(&DataInput::I64(2));
+        left.update_weighted(&DataInput::I64(1), u64::MAX);
+        left.update(&DataInput::I64(2));
         let mut right: SpaceSaving = SpaceSaving::with_capacity(1);
-        right.insert_many(&DataInput::I64(3), 5);
-        right.insert(&DataInput::I64(2));
+        right.update_weighted(&DataInput::I64(3), 5);
+        right.update(&DataInput::I64(2));
         assert_eq!(left.estimate(&DataInput::I64(2)), u64::MAX);
         assert_eq!(right.estimate(&DataInput::I64(2)), 6);
         (left, right)
@@ -1072,7 +1072,7 @@ mod tests {
     fn a_seat_above_the_ceiling_saturates() {
         let mut summary = ceilinged(4, u64::MAX - 3, 8, 9);
 
-        summary.insert_many(&DataInput::I64(5), 10);
+        summary.update_weighted(&DataInput::I64(5), 10);
 
         summary.validate().expect("after seating above the ceiling");
         assert_eq!(summary.estimate(&DataInput::I64(5)), u64::MAX);
@@ -1125,7 +1125,7 @@ mod tests {
     fn a_merge_saturates_a_key_only_the_other_side_holds() {
         let mut left = ceilinged(4, u64::MAX - 3, 8, 9);
         let mut right: SpaceSaving = SpaceSaving::with_capacity(4);
-        right.insert_many(&DataInput::I64(3), 7);
+        right.update_weighted(&DataInput::I64(3), 7);
 
         left.merge(&right);
 
@@ -1144,7 +1144,7 @@ mod tests {
     #[test]
     fn a_merge_saturates_a_key_only_this_side_holds() {
         let mut left: SpaceSaving = SpaceSaving::with_capacity(4);
-        left.insert_many(&DataInput::I64(3), 7);
+        left.update_weighted(&DataInput::I64(3), 7);
         let right = ceilinged(4, u64::MAX - 3, 8, 9);
 
         left.merge(&right);
@@ -1186,10 +1186,10 @@ mod tests {
         let mut left: SpaceSaving = SpaceSaving::with_capacity(33);
         let mut right: SpaceSaving = SpaceSaving::with_capacity(1);
         for _ in 0..10 {
-            right.insert(&DataInput::I64(7));
+            right.update(&DataInput::I64(7));
         }
         for _ in 0..20 {
-            right.insert(&DataInput::I64(8));
+            right.update(&DataInput::I64(8));
         }
         left.merge(&right);
         assert!(left.len() < left.capacity(), "the merge left room to spare");
@@ -1217,12 +1217,12 @@ mod tests {
     fn a_key_that_only_ties_the_ceiling_is_not_guaranteed() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(2);
         for _ in 0..3 {
-            summary.insert(&DataInput::I64(1));
+            summary.update(&DataInput::I64(1));
         }
         for _ in 0..3 {
-            summary.insert(&DataInput::I64(2));
+            summary.update(&DataInput::I64(2));
         }
-        summary.insert(&DataInput::I64(3));
+        summary.update(&DataInput::I64(3));
 
         summary.validate().expect("after the eviction");
         assert_eq!(summary.estimate(&DataInput::I64(1)), 3);
@@ -1235,7 +1235,7 @@ mod tests {
         assert!(!summary.is_guaranteed(&DataInput::I64(3)));
 
         for _ in 0..2 {
-            summary.insert(&DataInput::I64(1));
+            summary.update(&DataInput::I64(1));
         }
         assert_eq!(summary.estimate(&DataInput::I64(1)), 5);
         assert_eq!(summary.min_count(), 4);
@@ -1248,12 +1248,12 @@ mod tests {
     fn clear_resets_every_answer() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(2);
         for _ in 0..5 {
-            summary.insert(&DataInput::I64(1));
+            summary.update(&DataInput::I64(1));
         }
         for _ in 0..3 {
-            summary.insert(&DataInput::I64(2));
+            summary.update(&DataInput::I64(2));
         }
-        summary.insert(&DataInput::I64(3));
+        summary.update(&DataInput::I64(3));
         assert!(summary.min_count() > 0);
         assert!(summary.total() > 0);
 
@@ -1270,7 +1270,7 @@ mod tests {
         assert!(summary.top_k(4).is_empty());
         assert!(summary.entries().is_empty());
 
-        summary.insert(&DataInput::I64(4));
+        summary.update(&DataInput::I64(4));
         summary.validate().expect("after refilling");
         assert_eq!(summary.estimate(&DataInput::I64(4)), 1);
         assert_eq!(summary.total(), 1);
@@ -1281,10 +1281,10 @@ mod tests {
         let mut left: SpaceSaving = SpaceSaving::with_capacity(33);
         let mut right: SpaceSaving = SpaceSaving::with_capacity(1);
         for _ in 0..10 {
-            right.insert(&DataInput::I64(7));
+            right.update(&DataInput::I64(7));
         }
         for _ in 0..20 {
-            right.insert(&DataInput::I64(8));
+            right.update(&DataInput::I64(8));
         }
 
         left.merge(&right);
@@ -1312,16 +1312,16 @@ mod tests {
     fn a_truncating_merge_keeps_the_keys_the_encoder_emits_first() {
         fn left_side() -> SpaceSaving {
             let mut left: SpaceSaving = SpaceSaving::with_capacity(4);
-            left.insert_many(&DataInput::I64(1), 9);
+            left.update_weighted(&DataInput::I64(1), 9);
             for key in [10i64, 20, 30] {
-                left.insert_many(&DataInput::I64(key), 3);
+                left.update_weighted(&DataInput::I64(key), 3);
             }
             left
         }
         fn right_side() -> SpaceSaving {
             let mut right: SpaceSaving = SpaceSaving::with_capacity(3);
             for key in [40i64, 50, 60] {
-                right.insert_many(&DataInput::I64(key), 2);
+                right.update_weighted(&DataInput::I64(key), 2);
             }
             right
         }
@@ -1390,16 +1390,16 @@ mod tests {
         let mut middle: SpaceSaving = SpaceSaving::with_capacity(1);
         let mut right: SpaceSaving = SpaceSaving::with_capacity(1);
         for _ in 0..10 {
-            middle.insert(&DataInput::I64(7));
+            middle.update(&DataInput::I64(7));
         }
         for _ in 0..20 {
-            middle.insert(&DataInput::I64(8));
+            middle.update(&DataInput::I64(8));
         }
         for _ in 0..5 {
-            right.insert(&DataInput::I64(9));
+            right.update(&DataInput::I64(9));
         }
         for _ in 0..7 {
-            right.insert(&DataInput::I64(10));
+            right.update(&DataInput::I64(10));
         }
 
         left.merge(&middle);
@@ -1423,15 +1423,15 @@ mod tests {
         let mut left: SpaceSaving = SpaceSaving::with_capacity(8);
         let mut right: SpaceSaving = SpaceSaving::with_capacity(1);
         for _ in 0..12 {
-            right.insert(&DataInput::I64(7));
+            right.update(&DataInput::I64(7));
         }
         for _ in 0..30 {
-            right.insert(&DataInput::I64(8));
+            right.update(&DataInput::I64(8));
         }
         left.merge(&right);
 
         let ceiling = left.min_count();
-        left.insert(&DataInput::I64(7));
+        left.update(&DataInput::I64(7));
 
         left.validate().expect("after re-entry");
         let estimate = left.estimate(&DataInput::I64(7));
@@ -1486,7 +1486,7 @@ mod tests {
             let mut state = seed;
             for _ in 0..200 {
                 let key = (next_random(&mut state) % 90) as i64;
-                left.insert(&DataInput::I64(key));
+                left.update(&DataInput::I64(key));
                 *truth.entry(key).or_default() += 1;
             }
             left.validate()
@@ -1628,9 +1628,9 @@ mod tests {
     fn a_non_utf8_byte_key_is_monitored_and_queried() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(4);
         for _ in 0..3 {
-            summary.insert(&DataInput::Bytes(RAW));
+            summary.update(&DataInput::Bytes(RAW));
         }
-        summary.insert_many(&DataInput::Bytes(&[0x00, 0x80]), 2);
+        summary.update_weighted(&DataInput::Bytes(&[0x00, 0x80]), 2);
 
         summary.validate().expect("two byte keys");
         assert_eq!(summary.len(), 2, "a repeat took a second counter");
@@ -1645,8 +1645,8 @@ mod tests {
     #[test]
     fn a_byte_key_and_a_string_key_are_separate_counters() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(4);
-        summary.insert_many(&DataInput::Bytes(b"abc"), 5);
-        summary.insert_many(&DataInput::Str("abc"), 2);
+        summary.update_weighted(&DataInput::Bytes(b"abc"), 5);
+        summary.update_weighted(&DataInput::Str("abc"), 2);
 
         summary.validate().expect("a byte key beside a string key");
         assert_eq!(summary.len(), 2, "the two keys shared a counter");
@@ -1661,12 +1661,12 @@ mod tests {
     fn an_evicted_byte_key_keeps_its_bound() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(2);
         for _ in 0..3 {
-            summary.insert(&DataInput::Bytes(RAW));
+            summary.update(&DataInput::Bytes(RAW));
         }
         for _ in 0..2 {
-            summary.insert(&DataInput::Bytes(b"\x00mid"));
+            summary.update(&DataInput::Bytes(b"\x00mid"));
         }
-        summary.insert(&DataInput::Bytes(&[0xfd]));
+        summary.update(&DataInput::Bytes(&[0xfd]));
 
         summary.validate().expect("after a byte-key eviction");
         assert_eq!(summary.len(), 2);
@@ -1685,11 +1685,11 @@ mod tests {
     #[test]
     fn a_merge_pairs_byte_keys_by_their_bytes() {
         let mut left: SpaceSaving = SpaceSaving::with_capacity(4);
-        left.insert_many(&DataInput::Bytes(RAW), 5);
-        left.insert_many(&DataInput::Bytes(&[0x01]), 3);
+        left.update_weighted(&DataInput::Bytes(RAW), 5);
+        left.update_weighted(&DataInput::Bytes(&[0x01]), 3);
         let mut right: SpaceSaving = SpaceSaving::with_capacity(4);
-        right.insert_many(&DataInput::Bytes(RAW), 2);
-        right.insert_many(&DataInput::Bytes(&[0x02]), 7);
+        right.update_weighted(&DataInput::Bytes(RAW), 2);
+        right.update_weighted(&DataInput::Bytes(&[0x02]), 7);
 
         left.merge(&right);
 
@@ -1711,8 +1711,8 @@ mod tests {
     #[test]
     fn a_serde_round_trip_keeps_a_byte_key() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(4);
-        summary.insert_many(&DataInput::Bytes(RAW), 9);
-        summary.insert_many(&DataInput::Bytes(&[0x00; 5]), 4);
+        summary.update_weighted(&DataInput::Bytes(RAW), 9);
+        summary.update_weighted(&DataInput::Bytes(&[0x00; 5]), 4);
 
         let bytes = rmp_serde::to_vec(&summary).expect("serialize");
         let decoded: SpaceSaving = rmp_serde::from_slice(&bytes).expect("deserialize");
@@ -1783,7 +1783,7 @@ mod collisions {
     fn colliding_keys_stay_distinct() {
         let mut summary: Colliding = SpaceSaving::with_capacity(4);
         for (key, weight) in [(10i64, 3u64), (20, 5), (30, 1)] {
-            summary.insert_many(&DataInput::I64(key), weight);
+            summary.update_weighted(&DataInput::I64(key), weight);
         }
 
         summary.validate().expect("three keys under one digest");
@@ -1801,13 +1801,13 @@ mod collisions {
     fn an_eviction_under_collision_keeps_the_index_straight() {
         let mut summary: Colliding = SpaceSaving::with_capacity(2);
         for _ in 0..3 {
-            summary.insert(&DataInput::I64(10));
+            summary.update(&DataInput::I64(10));
         }
         for _ in 0..2 {
-            summary.insert(&DataInput::I64(20));
+            summary.update(&DataInput::I64(20));
         }
 
-        summary.insert(&DataInput::I64(30));
+        summary.update(&DataInput::I64(30));
 
         summary.validate().expect("after a colliding eviction");
         assert_eq!(summary.len(), 2);
@@ -1822,11 +1822,11 @@ mod collisions {
     #[test]
     fn a_merge_under_collision_pairs_by_key() {
         let mut left: Colliding = SpaceSaving::with_capacity(4);
-        left.insert_many(&DataInput::I64(20), 3);
-        left.insert_many(&DataInput::I64(10), 5);
+        left.update_weighted(&DataInput::I64(20), 3);
+        left.update_weighted(&DataInput::I64(10), 5);
         let mut right: Colliding = SpaceSaving::with_capacity(4);
-        right.insert_many(&DataInput::I64(10), 2);
-        right.insert_many(&DataInput::I64(30), 7);
+        right.update_weighted(&DataInput::I64(10), 2);
+        right.update_weighted(&DataInput::I64(30), 7);
 
         left.merge(&right);
 
@@ -1846,10 +1846,10 @@ mod collisions {
             let mut left: Colliding = SpaceSaving::with_capacity(2);
             let mut right: Colliding = SpaceSaving::with_capacity(2);
             for key in [30i64, 40] {
-                left.insert(&DataInput::I64(key));
+                left.update(&DataInput::I64(key));
             }
             for key in [10i64, 20] {
-                right.insert(&DataInput::I64(key));
+                right.update(&DataInput::I64(key));
             }
             if swap {
                 right.merge(&left);
@@ -1872,7 +1872,7 @@ mod collisions {
     fn a_decoded_summary_under_collision_keeps_its_keys() {
         let mut summary: Colliding = SpaceSaving::with_capacity(4);
         for (key, weight) in [(10i64, 5u64), (20, 3), (30, 9)] {
-            summary.insert_many(&DataInput::I64(key), weight);
+            summary.update_weighted(&DataInput::I64(key), weight);
         }
 
         let bytes = rmp_serde::to_vec(&summary).expect("serialize");

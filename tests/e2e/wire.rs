@@ -51,8 +51,8 @@ fn a_bloom_envelope_round_trips_on_both_paths_and_names_its_kind() {
     let mut regular = Bloom::<RegularPath>::with_capacity(2_000, 0.01);
     let mut fast = Bloom::<FastPath>::with_capacity(2_000, 0.01);
     for i in 0..2_000i64 {
-        regular.insert(&DataInput::I64(i));
-        fast.insert(&DataInput::I64(i));
+        regular.update(&DataInput::I64(i));
+        fast.update(&DataInput::I64(i));
     }
 
     let regular_bytes = regular.serialize_to_bytes().expect("encode regular");
@@ -92,7 +92,7 @@ fn a_bloom_envelope_round_trips_on_both_paths_and_names_its_kind() {
 fn a_coco_envelope_round_trips_and_names_its_kind() {
     let mut coco = Coco::<DefaultXxHasher>::init_with_size_and_seed(512, 4, 0xC0C0);
     for k in frequency_stream() {
-        coco.insert(&format!("flow-{k}"), 1);
+        coco.update_weighted(&format!("flow-{k}"), 1);
     }
     let bytes = coco.serialize_to_bytes().expect("encode");
     assert_kind(&bytes, 0x0c, 0x00, "Coco");
@@ -111,7 +111,7 @@ fn a_coco_envelope_round_trips_and_names_its_kind() {
 fn an_elastic_envelope_round_trips_and_names_its_kind() {
     let mut elastic = Elastic::<DefaultXxHasher>::init_with_dimensions(64, 3, 1_024);
     for k in frequency_stream() {
-        elastic.insert(format!("flow-{k}"));
+        elastic.update(format!("flow-{k}"));
     }
     let bytes = elastic.serialize_to_bytes().expect("encode");
     assert_kind(&bytes, 0x0b, 0x00, "Elastic");
@@ -130,7 +130,7 @@ fn an_elastic_envelope_round_trips_and_names_its_kind() {
 fn a_space_saving_envelope_round_trips_and_names_its_kind() {
     let mut summary = SpaceSaving::<DefaultXxHasher>::with_capacity(256);
     for k in frequency_stream() {
-        summary.insert(&DataInput::U64(k));
+        summary.update(&DataInput::U64(k));
     }
     let bytes = summary.serialize_to_bytes().expect("encode");
     assert_kind(&bytes, 0x18, 0x00, "SpaceSaving");
@@ -175,8 +175,8 @@ fn the_heap_backed_matrix_envelopes_round_trip_and_name_their_kinds() {
     let mut cms = CMSHeap::<Vector2D<i64>, FastPath>::new(4, 2_048, 32);
     let mut cs = CSHeap::<Vector2D<i64>, RegularPath>::new(5, 2_048, 32);
     for k in &stream {
-        cms.insert(&DataInput::U64(*k));
-        cs.insert(&DataInput::U64(*k));
+        cms.update(&DataInput::U64(*k));
+        cs.update(&DataInput::U64(*k));
     }
 
     let cms_bytes = cms.serialize_to_bytes().expect("encode CMSHeap");
@@ -249,7 +249,7 @@ fn an_exponential_histogram_envelope_round_trips_and_names_its_kind() {
 fn an_eh_sketch_list_envelope_round_trips_and_names_its_kind() {
     let mut payload = eh_prototype();
     for k in frequency_stream().iter().take(5_000) {
-        payload.insert(&DataInput::U64(*k));
+        payload.update(&DataInput::U64(*k));
     }
     let bytes = payload.serialize_to_bytes().expect("encode");
     assert_kind(&bytes, 0x14, 0x00, "EHSketchList");
@@ -314,8 +314,8 @@ fn the_univmon_family_envelopes_round_trip_and_name_their_kinds() {
     let mut pyramid = UnivMonPyramid::with_defaults();
     let mut q = UnivMonQ::new(Default::default()).expect("default config valid");
     for k in &stream {
-        um.insert(&DataInput::U32(*k as u32), 1);
-        pyramid.insert(&DataInput::U32(*k as u32), 1);
+        um.update_weighted(&DataInput::U32(*k as u32), 1);
+        pyramid.update_weighted(&DataInput::U32(*k as u32), 1);
         q.update(&(*k as f64));
     }
 
@@ -369,7 +369,7 @@ fn an_envelope_is_refused_by_every_decoder_but_its_own() {
     let dds_bytes = dds.serialize_to_bytes().expect("encode");
 
     let mut bloom = Bloom::<RegularPath>::with_capacity(100, 0.01);
-    bloom.insert(&DataInput::I64(1));
+    bloom.update(&DataInput::I64(1));
     let bloom_bytes = bloom.serialize_to_bytes().expect("encode");
 
     assert!(
@@ -402,10 +402,10 @@ fn the_matrix_and_quantile_envelopes_carry_their_answers_unchanged() {
     let mut kll: KLL<f64> = KLL::init_kll_with_seed(200, 0x5EED_9002);
     let mut hll = HyperLogLog::<ErtlMLE>::new();
     for k in &stream {
-        cm.insert(&DataInput::U64(*k));
-        cs.insert(&DataInput::U64(*k));
+        cm.update(&DataInput::U64(*k));
+        cs.update(&DataInput::U64(*k));
         kll.update(&(*k as f64));
-        hll.insert(&DataInput::U64(*k));
+        hll.update(&DataInput::U64(*k));
     }
 
     let cm_bytes = cm.serialize_to_bytes().expect("encode CountMin");
@@ -457,7 +457,7 @@ fn the_experimental_envelopes_round_trip_and_name_their_kinds() {
 
     let mut kmv = KMV::<DefaultXxHasher>::new(1_024);
     for k in uniform_u64(50_000, 10_000_000, 0x_5EED_1001) {
-        kmv.insert(&DataInput::U64(k));
+        kmv.update(&DataInput::U64(k));
     }
     let kmv_bytes = kmv.serialize_to_bytes().expect("encode KMV");
     assert_kind(&kmv_bytes, 0x0e, 0x00, "KMV");

@@ -26,8 +26,8 @@ fn heaps_satisfy_their_own_bounds_and_stay_heap_consistent() {
     for k in &stream {
         let d = DataInput::I64(*k as i64);
         truth.observe(*k as i64);
-        cms_heap.insert(&d);
-        cs_heap.insert(&d);
+        cms_heap.update(&d);
+        cs_heap.update(&d);
     }
     let context = format!("zipf(1.1) domain={DOMAIN} n=20000 stream_seed={STREAM_SEED}");
 
@@ -136,8 +136,8 @@ mod documented_matrix {
                 CSHeap::<Vector2D<i64>, RegularPath>::new(HEAP_ROWS, HEAP_COLS, top_k);
             for key in &input.keys {
                 let d = input.data(*key);
-                cms_heap.insert(&d);
-                cs_heap.insert(&d);
+                cms_heap.update(&d);
+                cs_heap.update(&d);
             }
             let context = format!(
                 "{} top_k={top_k} rows={HEAP_ROWS} cols={HEAP_COLS}",

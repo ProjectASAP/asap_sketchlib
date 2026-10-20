@@ -413,7 +413,7 @@ impl<T: NumericalValue> KLL<T> {
     /// but exposed as a single call for callers that already have a slice.
     /// Empty slices are a no-op and do not disturb the CDF cache or coin.
     #[inline]
-    pub fn bulk_update(&mut self, values: &[T]) {
+    pub fn update_batch(&mut self, values: &[T]) {
         for v in values {
             self.push_value(*v);
         }
@@ -926,9 +926,9 @@ impl KLL<f64> {
 
     /// Batch variant of `update_data_input`. Stops on the first non-numeric
     /// input and returns the same error as the per-element path, so
-    /// `bulk_update_data_input` is exactly equivalent to looping `update_data_input`.
+    /// `update_batch_data_input` is exactly equivalent to looping `update_data_input`.
     /// On error `count()` is the successful prefix before the error.
-    pub fn bulk_update_data_input(&mut self, values: &[DataInput]) -> Result<(), &'static str> {
+    pub fn update_batch_data_input(&mut self, values: &[DataInput]) -> Result<(), &'static str> {
         for v in values {
             let value = data_input_to_f64(v)?;
             self.push_value(value);
@@ -1723,7 +1723,7 @@ mod tests {
         let cnt_before = sk.count();
         let q_before = sk.quantile_cached(0.5);
         let bytes_before = sk.serialize_to_bytes().unwrap();
-        sk.bulk_update(&[]);
+        sk.update_batch(&[]);
         assert_eq!(sk.count(), cnt_before);
         assert_eq!(sk.quantile(0.5), q_before);
         assert_eq!(sk.serialize_to_bytes().unwrap(), bytes_before);
@@ -1735,7 +1735,7 @@ mod tests {
         for v in &vals {
             a.update(v);
         }
-        b.bulk_update(&vals);
+        b.update_batch(&vals);
         assert_eq!(a.count(), b.count());
         assert_eq!(
             a.serialize_to_bytes().unwrap(),
@@ -1752,7 +1752,7 @@ mod tests {
         for v in &di_vals {
             c.update_data_input(v).unwrap();
         }
-        d.bulk_update_data_input(&di_vals).unwrap();
+        d.update_batch_data_input(&di_vals).unwrap();
         assert_eq!(
             c.serialize_to_bytes().unwrap(),
             d.serialize_to_bytes().unwrap()
@@ -1765,7 +1765,7 @@ mod tests {
             DataInput::F64(2.0),
         ];
         let mut e = KLL::<f64>::init_with_seed(200, 8, 11);
-        assert!(e.bulk_update_data_input(&bad).is_err());
+        assert!(e.update_batch_data_input(&bad).is_err());
         assert_eq!(e.count(), 1);
     }
 }
