@@ -1763,9 +1763,15 @@ fn univmon_generic_g_sum_reproduces_every_named_estimator() {
     }
 
     assert_eq!(
-        um.estimate_g_sum(|x| x * x, false).sqrt(),
         um.estimate_l2(),
-        "g(x)=x^2 under a square root is the L2 estimator"
+        um.layer_sketches[0].l2(),
+        "the L2 estimator reads layer 0's Count Sketch, which sees every key"
+    );
+    assert_between(
+        um.estimate_g_sum(|x| x * x, false).sqrt(),
+        truth.f2().sqrt() * 0.85,
+        truth.f2().sqrt() * 1.15,
+        "g(x)=x^2 under a square root still tracks the exact L2",
     );
     assert_eq!(
         um.estimate_g_sum(|_| 1.0, true),

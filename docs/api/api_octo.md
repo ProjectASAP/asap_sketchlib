@@ -658,10 +658,8 @@ let result = run_octo(&inputs, &config, plan, || CountMinSketchOctoAggregator::n
   from its own NIC queue.
 - `update` after `close` panics.
 - A UnivMon layer that thresholds cannot call its candidate set complete,
-  so `candidates_complete()` reads false on exactly those layers. Queries
-  then take the conservative branch of `heavy_threshold` instead of
-  overcounting. Deep layers, whose scaled threshold floors at 1, keep the
-  heap's own verdict. At a base threshold of 1 a single worker reproduces
+  so `candidates_complete()` reads false on exactly those layers. Deep
+  layers, whose scaled threshold floors at 1, keep the heap's own verdict. At a base threshold of 1 a single worker reproduces
   a single-threaded UnivMon exactly - counters, L2, heaps, total weight
   and g-sum alike.
 - DDSketch is the one integrated sketch where delta promotion does not pay

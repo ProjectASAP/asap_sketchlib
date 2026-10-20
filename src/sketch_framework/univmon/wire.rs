@@ -873,16 +873,16 @@ mod tests {
         assert_eq!(decoded.estimate_entropy(), terminal.estimate_entropy());
         assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
 
-        // A layer marked incomplete keeps its widened threshold: flipping the
-        // flag changes what the pyramid reports.
+        // A layer marked incomplete stays incomplete: flipping the flag
+        // changes what the pyramid reports.
         let mut forged = payload_of::<u64>(&encoded);
         forged.candidate_complete.fill(true);
         let meta = metadata_of(&encoded);
         let relaxed = UnivMon::from_asapv1(&crafted(&meta, &forged)).expect("decode");
-        assert_ne!(
-            relaxed.estimate_cardinality(),
-            terminal.estimate_cardinality(),
-            "candidate_complete had no effect on a query"
+        assert!(!terminal.top_layer_complete());
+        assert!(
+            relaxed.top_layer_complete(),
+            "candidate_complete had no effect on what the pyramid reports"
         );
     }
 

@@ -1,7 +1,7 @@
 //! Count Sketch whose rows also keep a running sum of squared counters.
 //!
 //! [`CountSketchWithL2Norm`] is the per-layer sketch of `UnivMon` and
-//! `UnivMonTwoTier`; its L2 norm sets their heavy-hitter threshold.
+//! `UnivMonTwoTier`; its L2 norm sets their terminal-mode heavy-hitter threshold.
 
 use std::marker::PhantomData;
 

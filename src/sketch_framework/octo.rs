@@ -2121,8 +2121,8 @@ impl UnivMonOctoAggregator {
     ///
     /// Completeness has to track τ rather than a snapshot of it: with the
     /// adaptive controller running, a layer that started at τ = 1 can be
-    /// raised above it mid-stream, and a stale `EveryInsert` verdict would let
-    /// `heavy_threshold` take its permissive branch and overcount.
+    /// raised above it mid-stream, and a stale `EveryInsert` verdict would
+    /// report candidate sets complete that are not.
     pub fn with_threshold(
         heap_size: usize,
         rows: usize,
@@ -4760,8 +4760,7 @@ mod univmon_tests {
     fn raising_tau_mid_run_withdraws_completeness_that_was_already_granted() {
         // With the adaptive controller live, a layer that started at tau = 1
         // can be pushed above it. A fidelity verdict frozen at construction
-        // would leave that layer claiming a complete candidate set, sending
-        // heavy_threshold down its permissive branch.
+        // would leave that layer claiming a complete candidate set.
         let threshold = OctoThreshold::new(1);
         let mut worker =
             UnivMonOctoWorker::with_threshold(0, ROWS, COLS, LAYERS, threshold.clone());

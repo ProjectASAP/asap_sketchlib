@@ -119,6 +119,9 @@ signals a backwards-compatible change.
 
 ### Changed
 
+- **`UnivMon::estimate_g_sum`'s flag is `count_every_key`** (breaking), was
+  `heavy_only`. `true` now counts every heap key; `heavy_only = true` applied
+  the `L2 / sqrt(heap_size)` threshold.
 - **The legacy MessagePack wrappers leave the crate root** (breaking).
   `CountMinSketch`, `CountMinSketchDelta`, `CountMinSketchWithHeap`,
   `CmsHeapItem`, `CountSketch`, `CountSketchDelta`,
@@ -357,6 +360,11 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- `UnivMon::estimate_cardinality` counts every heap key, zero-weight keys and
+  keys with a nonpositive Count Sketch estimate included. `estimate_l2` reads
+  layer 0's Count Sketch F2 estimate (terminal mode: the summed strata's), not
+  the heap recurrence. New `top_layer_complete()`; the error bounds, stated
+  jointly with `top_layer_complete()`, are in `docs/api/api_univmon.md`.
 - `UnivMon::new` refuses more than `MATRIX_MAX_ROWS` rows, which the ASAPv1
   wire refuses to encode or decode; it panics exactly when `check_shape` fails.
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
