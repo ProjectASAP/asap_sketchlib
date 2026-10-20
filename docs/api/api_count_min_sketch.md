@@ -19,7 +19,8 @@ fn from_storage(counts: S) -> Self
 fn check_shape(rows: usize, cols: usize) -> Result<(), String>
 ```
 
-`check_shape` accepts any shape with both dimensions non-zero and
+`check_shape` is defined once for the type (`CountMinSketch::check_shape(3, 64)`
+needs no type parameters) and accepts any shape with both dimensions non-zero and
 `rows * cols` within `usize`; `with_dimensions` and `from_storage` panic on any
 other shape. Every row draws its own seed (`seed_for_index`), so any row count
 hashes independently.
@@ -48,7 +49,11 @@ fn rows(&self) -> usize
 fn cols(&self) -> usize
 fn as_storage(&self) -> &S
 fn as_storage_mut(&mut self) -> &mut S
+fn memory_bytes(&self) -> usize
 ```
+
+`memory_bytes` is the struct plus its `rows * cols` counters, exact for
+`Vector2D` storage.
 
 ## Merge
 

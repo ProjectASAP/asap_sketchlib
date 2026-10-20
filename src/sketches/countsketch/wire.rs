@@ -510,8 +510,8 @@ mod tests {
     /// bytes the format would not read back.
     #[test]
     fn count_sketch_rejects_zero_rows() {
-        let problem = CountSketch::<Vector2D<i64>, RegularPath>::check_shape(0, 4)
-            .expect_err("a zero-row matrix must not be built");
+        let problem =
+            CountSketch::check_shape(0, 4).expect_err("a zero-row matrix must not be built");
         assert!(problem.contains("non-zero"), "got {problem}");
     }
 

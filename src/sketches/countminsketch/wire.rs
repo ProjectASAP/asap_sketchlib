@@ -437,8 +437,8 @@ mod tests {
     /// A `rows == 0` matrix is not a shape the constructors build.
     #[test]
     fn count_min_rejects_zero_rows() {
-        let problem = CountMinSketch::<Vector2D<i64>, RegularPath>::check_shape(0, 4)
-            .expect_err("a zero-row matrix must not be built");
+        let problem =
+            CountMinSketch::check_shape(0, 4).expect_err("a zero-row matrix must not be built");
         assert!(problem.contains("non-zero"), "got {problem}");
     }
 

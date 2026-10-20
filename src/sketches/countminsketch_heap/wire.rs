@@ -380,7 +380,7 @@ mod tests {
     /// A `rows == 0` matrix is not a shape the constructors build.
     #[test]
     fn count_min_sketch_with_heap_rejects_zero_rows() {
-        let problem = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::check_shape(0, 4)
+        let problem = CountMinSketchWithHeap::check_shape(0, 4)
             .expect_err("a zero-row matrix must not be built");
         assert!(problem.contains("non-zero"), "got {problem}");
     }

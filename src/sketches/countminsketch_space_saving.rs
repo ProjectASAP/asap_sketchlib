@@ -117,11 +117,6 @@ where
 }
 
 impl<S: MatrixStorage, M, H: SketchHasher> CountMinSketchWithSpaceSaving<S, M, H> {
-    /// The shapes this sketch builds; see [`CountMinSketch::check_shape`].
-    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
-        CountMinSketch::<S, M, H>::check_shape(rows, cols)
-    }
-
     /// Pairs an existing matrix with an existing summary.
     pub fn from_parts(
         count_min_sketch: CountMinSketch<S, M, H>,
@@ -247,6 +242,14 @@ where
     /// first, ties broken by heap key order.
     pub fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, S::Counter)> {
         rank_candidates(&self.summary, k, |key| self.count_min_sketch.estimate(key))
+    }
+}
+
+// Shape check; the rule is the same for every storage, path and hasher.
+impl CountMinSketchWithSpaceSaving {
+    /// The shapes this sketch builds; see [`CountMinSketch::check_shape`].
+    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
+        CountMinSketch::check_shape(rows, cols)
     }
 }
 

@@ -25,7 +25,8 @@ fn with_dimensions(rows: usize, cols: usize) -> Self
 fn with_dimensions_and_seed_index(rows: usize, cols: usize, seed_index: usize) -> Self
 ```
 
-`check_shape` accepts any shape with both dimensions non-zero and
+`check_shape` is defined once for the type (`CountSketch::check_shape(3, 64)`
+needs no type parameters) and accepts any shape with both dimensions non-zero and
 `rows * cols` within `usize`; `with_dimensions` and `from_storage` panic on any
 other shape. Every row draws its own seed (`seed_for_index`), so any row count
 hashes independently.
@@ -52,6 +53,7 @@ the shape, allocation and admission rate.
 ```rust
 fn estimate(&self, value: &DataInput) -> f64
 fn estimate_with_hash(&self, hashed_val: &H::HashType) -> f64
+fn memory_bytes(&self) -> usize
 
 // CountSketchWithL2Norm
 fn estimate(&self, val: &DataInput) -> f64
@@ -60,6 +62,9 @@ fn update_weighted_and_estimate(&mut self, val: &DataInput, weight: i64) -> f64
 fn l2(&self) -> f64
 fn l2_squared(&self) -> f64
 ```
+
+`memory_bytes` is the struct plus its `rows * cols` counters, exact for
+`Vector2D` storage.
 
 ## Merge
 

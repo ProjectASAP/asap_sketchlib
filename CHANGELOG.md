@@ -129,12 +129,17 @@ signals a backwards-compatible change.
   through it.
 - **`check_shape(rows, cols)`** on `CountMinSketch`, `CountSketch`, their
   WithHeap and WithSpaceSaving forms: the shapes their constructors build,
-  both dimensions non-zero and `rows * cols` within `usize`.
+  both dimensions non-zero and `rows * cols` within `usize`. Each is defined
+  on the type with its default parameters, so `CountMinSketch::check_shape(3, 64)`
+  names no storage, path or hasher.
 - **`clear`** on `CountMinSketch`, `CountSketch` and their WithHeap forms:
   zeroes the counters (and empties the heap) and returns the Nitro sampler to
   its start, keeping shape and allocation. With it, `Nitro::reset` and
   `MatrixStorage::reset_sampler` (a no-op by default; `Vector2D` resets its
   Nitro).
+- **`memory_bytes`** on `CountMinSketch` and `CountSketch`: the struct plus
+  its counters. **`CountMinF64`** is re-exported from the crate root and
+  `sketches`.
 - **`TopKHeap::memory_bytes`**, and **`memory_bytes` and
   `estimated_memory_bytes(rows, cols, heap_size, key)`** on
   `CountMinSketchWithHeap` and `CountSketchWithHeap`.

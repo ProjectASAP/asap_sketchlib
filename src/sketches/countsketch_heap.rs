@@ -298,11 +298,6 @@ where
         self.heap.clear();
     }
 
-    /// The shapes this sketch builds; see [`CountSketch::check_shape`].
-    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
-        CountSketch::<S, M, H>::check_shape(rows, cols)
-    }
-
     /// Bytes this sketch holds: the struct, its `rows * cols` counters and
     /// [`TopKHeap::memory_bytes`].
     pub fn memory_bytes(&self) -> usize {
@@ -424,6 +419,14 @@ where
     }
 }
 
+// Shape check; the rule is the same for every storage, path and hasher.
+impl CountSketchWithHeap {
+    /// The shapes this sketch builds; see [`CountSketch::check_shape`].
+    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
+        CountSketch::check_shape(rows, cols)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,8 +456,8 @@ mod tests {
                 .all(|&c| c == 0)
         );
         assert_eq!(sketch.memory_bytes(), held);
-        assert!(CountSketchWithHeap::<Vector2D<i64>, RegularPath>::check_shape(21, 64).is_ok());
-        assert!(CountSketchWithHeap::<Vector2D<i64>, RegularPath>::check_shape(0, 64).is_err());
+        assert!(CountSketchWithHeap::check_shape(21, 64).is_ok());
+        assert!(CountSketchWithHeap::check_shape(0, 64).is_err());
     }
 
     fn heap_count_for_key<C: crate::HeapCount>(heap: &TopKHeap<C>, key: &DataInput) -> Option<C> {

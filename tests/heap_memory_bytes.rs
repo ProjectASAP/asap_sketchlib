@@ -1,11 +1,11 @@
-//! `TopKHeap`, `CountMinSketchWithHeap`, `CountSketchWithHeap` and `UnivMonQ`
-//! memory methods checked against `size_of` and against the bytes an instance
-//! holds, counted by a global allocator. One `#[test]` so no other test
+//! `TopKHeap`, `CountMinSketch`, `CountSketch`, their WithHeap forms and
+//! `UnivMonQ` memory methods checked against `size_of` and against the bytes
+//! an instance holds, counted by a global allocator. One `#[test]` so no other test
 //! allocates while a count is taken.
 
 use asap_sketchlib::{
-    CountMinSketchWithHeap, CountSketchWithHeap, DataInput, FastPath, HeapEntry, RegularPath,
-    TopKHeap, UnivMonQ, UnivMonQConfig, Vector2D,
+    CountMinF64, CountMinSketchWithHeap, CountSketch, CountSketchWithHeap, DataInput, FastPath,
+    HeapEntry, RegularPath, TopKHeap, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -174,6 +174,26 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
                 "CountSketchWithHeap {context}"
             );
         }
+    }
+
+    // Plain Count-Min and Count Sketch hold the struct and their counters.
+    for (rows, cols) in [(1usize, 1usize), (3, 64), (5, 2048), (64, 1024)] {
+        let (sketch, bytes) = measured_bytes(|| {
+            let mut sketch: CountMinF64 = CountMinF64::with_dimensions(rows, cols);
+            for i in 0..1_000u64 {
+                sketch.update(&DataInput::U64(i));
+            }
+            sketch
+        });
+        assert_eq!(sketch.memory_bytes(), bytes, "CountMinF64 {rows}x{cols}");
+        let (sketch, bytes) = measured_bytes(|| {
+            let mut sketch = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
+            for i in 0..1_000u64 {
+                sketch.update(&DataInput::U64(i));
+            }
+            sketch
+        });
+        assert_eq!(sketch.memory_bytes(), bytes, "CountSketch {rows}x{cols}");
     }
 
     // UnivMon-Q reports exactly what it allocated, fresh and after enough

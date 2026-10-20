@@ -205,21 +205,30 @@ where
     }
 }
 
-// Core CountMinSketch API for any storage.
-impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H> {
+// Shape check; the rule is the same for every storage, path and hasher.
+impl CountMinSketch {
     /// The shapes this sketch builds: both dimensions non-zero and
     /// `rows * cols` within `usize`. The constructors panic on any other
     /// shape; `to_asapv1` also needs `rows <= MATRIX_MAX_ROWS` and
     /// `cols <= u32::MAX`.
+    ///
+    /// ```
+    /// use asap_sketchlib::CountMinSketch;
+    /// assert!(CountMinSketch::check_shape(3, 64).is_ok());
+    /// assert!(CountMinSketch::check_shape(0, 64).is_err());
+    /// ```
     pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
         check_matrix_shape("CMS", rows, cols)
     }
+}
 
+// Core CountMinSketch API for any storage.
+impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H> {
     /// Creates a sketch from an existing matrix storage instance.
     ///
     /// Panics when [`Self::check_shape`] refuses the storage's shape.
     pub fn from_storage(counts: S) -> Self {
-        if let Err(problem) = Self::check_shape(counts.rows(), counts.cols()) {
+        if let Err(problem) = CountMinSketch::check_shape(counts.rows(), counts.cols()) {
             panic!("{problem}");
         }
         Self {
@@ -253,6 +262,12 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H> {
     #[inline(always)]
     pub fn cols(&self) -> usize {
         self.counts.cols()
+    }
+
+    /// Bytes this sketch holds: the struct and its `rows * cols` counters.
+    /// Exact for `Vector2D` storage.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() + self.rows() * self.cols() * size_of::<S::Counter>()
     }
 
     /// Exposes the backing matrix for inspection/testing.
@@ -743,8 +758,7 @@ mod tests {
             (MATRIX_MAX_ROWS + 1, 7),
             (2 * MATRIX_MAX_ROWS, 64),
         ] {
-            let accepted = Regular::check_shape(rows, cols).is_ok();
-            assert_eq!(accepted, Fast::check_shape(rows, cols).is_ok());
+            let accepted = CountMinSketch::check_shape(rows, cols).is_ok();
             assert_eq!(accepted, rows >= 1 && cols >= 1);
             let shape = format!("{rows}x{cols}");
             assert_eq!(
@@ -769,7 +783,7 @@ mod tests {
                 "{shape}"
             );
         }
-        let problem = Regular::check_shape(2, usize::MAX).expect_err("overflow");
+        let problem = CountMinSketch::check_shape(2, usize::MAX).expect_err("overflow");
         assert!(problem.contains("overflow usize"), "got {problem}");
         assert!(catch_unwind(|| Regular::with_dimensions(2, usize::MAX)).is_err());
     }

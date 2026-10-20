@@ -43,11 +43,6 @@ impl<S: MatrixStorage, M, H: SketchHasher> CountSketchWithSpaceSaving<S, M, H>
 where
     S::Counter: CountSketchCounter,
 {
-    /// The shapes this sketch builds; see [`CountSketch::check_shape`].
-    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
-        CountSketch::<S, M, H>::check_shape(rows, cols)
-    }
-
     /// Pairs an existing matrix with an existing summary.
     pub fn from_parts(count_sketch: CountSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self {
         CountSketchWithSpaceSaving {
@@ -170,6 +165,14 @@ where
     /// first by `f64::total_cmp`, ties broken by heap key order.
     pub fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, f64)> {
         rank_candidates(&self.summary, k, |key| self.count_sketch.estimate(key))
+    }
+}
+
+// Shape check; the rule is the same for every storage, path and hasher.
+impl CountSketchWithSpaceSaving {
+    /// The shapes this sketch builds; see [`CountSketch::check_shape`].
+    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
+        CountSketch::check_shape(rows, cols)
     }
 }
 
