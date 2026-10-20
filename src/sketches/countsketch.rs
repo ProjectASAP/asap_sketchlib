@@ -36,8 +36,8 @@ pub struct CountSketch<
     H: SketchHasher = DefaultXxHasher,
 > {
     counts: S,
-    row: usize,
-    col: usize,
+    rows: usize,
+    cols: usize,
     #[serde(skip)]
     _mode: PhantomData<Mode>,
     #[serde(skip)]
@@ -215,8 +215,8 @@ where
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
         let mut sk = CountSketch {
             counts: Vector2D::init(rows, cols),
-            row: rows,
-            col: cols,
+            rows: rows,
+            cols: cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),
@@ -234,12 +234,12 @@ where
 {
     /// Wraps an existing matrix storage as a Count Sketch.
     pub fn from_storage(counts: S) -> Self {
-        let row = counts.rows();
-        let col = counts.cols();
+        let rows = counts.rows();
+        let cols = counts.cols();
         Self {
             counts,
-            row,
-            col,
+            rows,
+            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),

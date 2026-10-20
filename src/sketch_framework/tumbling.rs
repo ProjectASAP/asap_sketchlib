@@ -57,7 +57,7 @@ pub struct CountMinSketchFoldConfig {
     /// Folding depth applied to the sketch.
     pub fold_level: u32,
     /// Capacity of the heavy-hitter heap.
-    pub top_k: usize,
+    pub heap_size: usize,
 }
 
 /// Configuration for constructing a [`CountSketchFold`] via [`TumblingWindowSketch`].
@@ -70,7 +70,7 @@ pub struct CountSketchFoldConfig {
     /// Folding depth applied to the sketch.
     pub fold_level: u32,
     /// Capacity of the heavy-hitter heap.
-    pub top_k: usize,
+    pub heap_size: usize,
 }
 
 /// Configuration for constructing a [`Kll`] via [`TumblingWindowSketch`].
@@ -101,7 +101,7 @@ impl TumblingWindowSketch for CountMinSketchFold {
             config.rows,
             config.full_cols,
             config.fold_level,
-            config.top_k,
+            config.heap_size,
         )
     }
 
@@ -126,7 +126,7 @@ impl TumblingWindowSketch for CountSketchFold {
             config.rows,
             config.full_cols,
             config.fold_level,
-            config.top_k,
+            config.heap_size,
         )
     }
 
@@ -436,7 +436,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut pool = SketchPool::<CountMinSketchFold>::new(4, config);
         assert_eq!(pool.available(), 4);
@@ -453,7 +453,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut pool = SketchPool::<CountMinSketchFold>::new(0, config);
         assert_eq!(pool.available(), 0);
@@ -469,7 +469,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut pool = SketchPool::<CountMinSketchFold>::new(1, config);
         let s = pool.take();
@@ -488,13 +488,13 @@ mod tests {
         for i in 0..50u64 {
             sk.update_weighted(&DataInput::U64(i), 1);
         }
-        assert!(sk.query(&DataInput::U64(0)) > 0);
+        assert!(sk.estimate(&DataInput::U64(0)) > 0);
 
         sk.clear();
 
         for i in 0..50u64 {
             assert_eq!(
-                sk.query(&DataInput::U64(i)),
+                sk.estimate(&DataInput::U64(i)),
                 0,
                 "key {i} should be 0 after clear"
             );
@@ -508,13 +508,13 @@ mod tests {
         for i in 0..50u64 {
             sk.update_weighted(&DataInput::U64(i), 1);
         }
-        assert_ne!(sk.query(&DataInput::U64(0)), 0);
+        assert_ne!(sk.estimate(&DataInput::U64(0)), 0);
 
         sk.clear();
 
         for i in 0..50u64 {
             assert_eq!(
-                sk.query(&DataInput::U64(i)),
+                sk.estimate(&DataInput::U64(i)),
                 0,
                 "key {i} should be 0 after clear"
             );
@@ -568,7 +568,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let _tw = TumblingWindow::<CountMinSketchFold>::new(0, 5, config, 4);
     }
@@ -581,7 +581,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(100, 10, config, 4);
 
@@ -605,7 +605,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(100, 3, config, 4);
 
@@ -626,13 +626,13 @@ mod tests {
         let merged = tw.query_all();
         for w in 1..5u64 {
             assert_eq!(
-                merged.query(&DataInput::U64(w)),
+                merged.estimate(&DataInput::U64(w)),
                 1,
                 "window {w}'s key is still in the merge"
             );
         }
         assert_eq!(
-            merged.query(&DataInput::U64(0)),
+            merged.estimate(&DataInput::U64(0)),
             0,
             "the evicted window's key is gone from the merge, not merely capped"
         );
@@ -644,7 +644,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(100, 2, config, 4);
 
@@ -673,12 +673,12 @@ mod tests {
         // sketch window 2 was using. `put` clears on the way in, so window 2's
         // key must not read back through it.
         assert_eq!(
-            tw.active_sketch().query(&DataInput::U64(5)),
+            tw.active_sketch().estimate(&DataInput::U64(5)),
             1,
             "the recycled sketch holds the active window's own key"
         );
         assert_eq!(
-            tw.active_sketch().query(&DataInput::U64(2)),
+            tw.active_sketch().estimate(&DataInput::U64(2)),
             0,
             "a recycled sketch is cleared, so its previous window's key is gone"
         );
@@ -692,7 +692,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> =
             TumblingWindow::new(100, 10, config.clone(), 4);
@@ -701,7 +701,7 @@ mod tests {
             config.rows,
             config.full_cols,
             config.fold_level,
-            config.top_k,
+            config.heap_size,
         );
 
         let keys: Vec<DataInput> = (0..20u64).map(DataInput::U64).collect();
@@ -714,8 +714,8 @@ mod tests {
         let merged = tw.query_all();
         for key in &keys {
             assert_eq!(
-                merged.query(key),
-                manual.query(key),
+                merged.estimate(key),
+                manual.estimate(key),
                 "query_all mismatch for {key:?}"
             );
         }
@@ -727,7 +727,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(100, 10, config, 4);
 
@@ -740,10 +740,10 @@ mod tests {
 
         // query_recent(1) should include 1 most recent closed + active.
         let recent = tw.query_recent(1);
-        assert_eq!(recent.query(&DataInput::Str("new")), 10);
-        assert_eq!(recent.query(&DataInput::Str("active")), 7);
+        assert_eq!(recent.estimate(&DataInput::Str("new")), 10);
+        assert_eq!(recent.estimate(&DataInput::Str("active")), 7);
         // "old" is in window 0 which is not in the recent 1.
-        assert_eq!(recent.query(&DataInput::Str("old")), 0);
+        assert_eq!(recent.estimate(&DataInput::Str("old")), 0);
     }
 
     // -- CountMinSketchFold hierarchical merge via tumbling windows ----------------------
@@ -763,7 +763,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
@@ -794,7 +794,7 @@ mod tests {
 
         let mut within = 0usize;
         for (&key, &true_count) in &truth {
-            let est = merged.query(&DataInput::U64(key));
+            let est = merged.estimate(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) < error_bound {
                 within += 1;
             }
@@ -864,7 +864,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(100, 10, config, 4);
 
@@ -875,11 +875,11 @@ mod tests {
         assert_eq!(tw.closed_count(), 1);
 
         // Active should now be empty.
-        assert_eq!(tw.active_sketch().query(&DataInput::Str("x")), 0);
+        assert_eq!(tw.active_sketch().estimate(&DataInput::Str("x")), 0);
 
         // But query_all should still find the data.
         let all = tw.query_all();
-        assert_eq!(all.query(&DataInput::Str("x")), 5);
+        assert_eq!(all.estimate(&DataInput::Str("x")), 5);
     }
 
     // -- CountSketchFold tumbling test ------------------------------------------------
@@ -890,7 +890,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(100, 10, config, 4);
 
@@ -899,7 +899,7 @@ mod tests {
         tw.update_weighted(200, &DataInput::Str("hello"), 2);
 
         let merged = tw.query_all();
-        assert_eq!(merged.query(&DataInput::Str("hello")), 10);
+        assert_eq!(merged.estimate(&DataInput::Str("hello")), 10);
     }
 
     #[test]
@@ -908,7 +908,7 @@ mod tests {
             rows: 5,
             full_cols: 4096,
             fold_level: 2,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(100, 10, config, 6);
 
@@ -924,7 +924,7 @@ mod tests {
         // Count Sketch uses signed counters + median; allow small error.
         let mut errors = 0;
         for i in 0..40u64 {
-            let est = merged.query(&DataInput::U64(i));
+            let est = merged.estimate(&DataInput::U64(i));
             if (est - 1).abs() > 1 {
                 errors += 1;
             }
@@ -953,7 +953,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
@@ -984,7 +984,7 @@ mod tests {
         let mut total_abs_error = 0i64;
         let mut max_abs_error = 0i64;
         for (&key, &true_count) in &truth {
-            let est = merged.query(&DataInput::U64(key));
+            let est = merged.estimate(&DataInput::U64(key));
             let err = (est - true_count).abs();
             total_abs_error += err;
             max_abs_error = max_abs_error.max(err);
@@ -1025,7 +1025,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
 
         let stream = sample_zipf_u64(domain, exponent, total_samples, 0xF1A7_CAFE);
@@ -1069,8 +1069,8 @@ mod tests {
         let merged_flat_unfolded = merged_flat.unfold_full();
 
         for &key in truth.keys() {
-            let est_flat = merged_flat_unfolded.query(&DataInput::U64(key));
-            let est_hier = merged_hier.query(&DataInput::U64(key));
+            let est_flat = merged_flat_unfolded.estimate(&DataInput::U64(key));
+            let est_hier = merged_hier.estimate(&DataInput::U64(key));
             assert_eq!(
                 est_flat, est_hier,
                 "flat vs hierarchical mismatch for key {key}: flat={est_flat}, hier={est_hier}"
@@ -1094,7 +1094,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
         let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
@@ -1128,7 +1128,7 @@ mod tests {
         let mut total_abs_error = 0i64;
         let mut max_abs_error = 0i64;
         for (&key, &true_count) in &truth {
-            let est = merged.query(&DataInput::U64(key));
+            let est = merged.estimate(&DataInput::U64(key));
             let err = (est - true_count).abs();
             total_abs_error += err;
             max_abs_error = max_abs_error.max(err);
@@ -1333,7 +1333,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
@@ -1405,7 +1405,7 @@ mod tests {
         // Retained keys: estimates should be close to retained truth.
         let mut within = 0usize;
         for (&key, &true_count) in &retained_truth {
-            let est = merged.query(&DataInput::U64(key));
+            let est = merged.estimate(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) <= error_bound {
                 within += 1;
             }
@@ -1424,7 +1424,7 @@ mod tests {
             if retained_truth.contains_key(&key) {
                 continue; // key also appears in retained windows
             }
-            let est = merged.query(&DataInput::U64(key));
+            let est = merged.estimate(&DataInput::U64(key));
             assert!(
                 (est as f64) <= error_bound,
                 "evicted-only key {key} estimate {est} exceeds error bound {error_bound:.2}"
@@ -1448,7 +1448,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
@@ -1499,7 +1499,7 @@ mod tests {
 
         let mut within = 0usize;
         for (&key, &true_count) in &recent_truth {
-            let est = merged.query(&DataInput::U64(key));
+            let est = merged.estimate(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) <= error_bound {
                 within += 1;
             }
@@ -1523,7 +1523,7 @@ mod tests {
             if recent_truth.contains_key(&key) {
                 continue;
             }
-            let est = merged.query(&DataInput::U64(key));
+            let est = merged.estimate(&DataInput::U64(key));
             assert!(
                 (est as f64) <= error_bound,
                 "excluded key {key} estimate {est} exceeds error bound {error_bound:.2}"
@@ -1547,7 +1547,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
@@ -1588,7 +1588,7 @@ mod tests {
             let crate::OwnedDataInput::U64(key) = item.key else {
                 panic!("a U64 stream seats U64 keys, got {:?}", item.key);
             };
-            let estimate = merged.query(&DataInput::U64(key));
+            let estimate = merged.estimate(&DataInput::U64(key));
             assert!(item.count > 0, "resident {key} carries a count of zero");
             assert!(
                 item.count <= estimate,
@@ -1654,7 +1654,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
         let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
@@ -1710,7 +1710,7 @@ mod tests {
 
         let mut within = 0usize;
         for (&key, &true_count) in &recent_truth {
-            let est = merged.query(&DataInput::U64(key));
+            let est = merged.estimate(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) <= error_bound {
                 within += 1;
             }
@@ -1736,7 +1736,7 @@ mod tests {
             if recent_truth.contains_key(&key) {
                 continue;
             }
-            let est = merged.query(&DataInput::U64(key));
+            let est = merged.estimate(&DataInput::U64(key));
             assert!(
                 (est.abs() as f64) <= error_bound,
                 "excluded key {key} estimate {est} exceeds error bound {error_bound:.2}"
@@ -1826,7 +1826,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
         let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
@@ -1866,7 +1866,7 @@ mod tests {
             };
             assert!(item.count > 0, "resident {key} carries a count of zero");
             if let Some(&exact) = truth.get(&key) {
-                let estimate = merged.query(&DataInput::U64(key));
+                let estimate = merged.estimate(&DataInput::U64(key));
                 let error = (estimate - exact).abs() as f64 / exact as f64;
                 assert!(
                     error < 0.02,
@@ -1924,7 +1924,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
@@ -1951,8 +1951,8 @@ mod tests {
         let mut mono_total_err = 0i64;
         for (&key, &true_count) in &truth {
             let sk = DataInput::U64(key);
-            tumbling_total_err += (merged.query(&sk) - true_count).abs();
-            mono_total_err += (mono.query(&sk) - true_count).abs();
+            tumbling_total_err += (merged.estimate(&sk) - true_count).abs();
+            mono_total_err += (mono.estimate(&sk) - true_count).abs();
         }
 
         let tumbling_mae = tumbling_total_err as f64 / truth.len() as f64;
@@ -1984,7 +1984,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
         let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
@@ -2010,8 +2010,8 @@ mod tests {
         let mut mono_total_err = 0i64;
         for (&key, &true_count) in &truth {
             let sk = DataInput::U64(key);
-            tumbling_total_err += (merged.query(&sk) - true_count).abs();
-            mono_total_err += (mono.query(&sk) - true_count).abs();
+            tumbling_total_err += (merged.estimate(&sk) - true_count).abs();
+            mono_total_err += (mono.estimate(&sk) - true_count).abs();
         }
 
         let tumbling_mae = tumbling_total_err as f64 / truth.len() as f64;
@@ -2100,7 +2100,7 @@ mod tests {
                 rows: 3,
                 full_cols: 4096,
                 fold_level: 4,
-                top_k: 20,
+                heap_size: 20,
             };
             let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
                 total_samples as u64 + 1, // window_size > total_samples → never closes
@@ -2125,7 +2125,7 @@ mod tests {
 
             let mut within = 0usize;
             for (&key, &true_count) in &truth {
-                let est = merged.query(&DataInput::U64(key));
+                let est = merged.estimate(&DataInput::U64(key));
                 if ((est - true_count).abs() as f64) <= bound {
                     within += 1;
                 }
@@ -2143,7 +2143,7 @@ mod tests {
                 rows: 5,
                 full_cols: 4096,
                 fold_level: 4,
-                top_k: 20,
+                heap_size: 20,
             };
             let mut tw: TumblingWindow<CountSketchFold> =
                 TumblingWindow::new(total_samples as u64 + 1, 10, config, 4);
@@ -2168,7 +2168,7 @@ mod tests {
 
             let mut within = 0usize;
             for (&key, &true_count) in &truth {
-                let est = merged.query(&DataInput::U64(key));
+                let est = merged.estimate(&DataInput::U64(key));
                 if ((est - true_count).abs() as f64) <= bound {
                     within += 1;
                 }
@@ -2229,7 +2229,7 @@ mod tests {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
-            top_k: 10,
+            heap_size: 10,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> =
             TumblingWindow::new(window_size, max_windows, config, max_windows + 2);
@@ -2266,7 +2266,7 @@ mod tests {
 
         let mut within = 0usize;
         for (&key, &true_count) in &retained_truth {
-            let est = merged.query(&DataInput::U64(key));
+            let est = merged.estimate(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) <= bound {
                 within += 1;
             }
@@ -2298,7 +2298,7 @@ mod tests {
             rows,
             full_cols,
             fold_level,
-            top_k,
+            heap_size: top_k,
         };
         let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
@@ -2334,7 +2334,7 @@ mod tests {
 
         let mut within = 0usize;
         for (&key, &true_count) in &truth {
-            let est = merged.query(&DataInput::U64(key));
+            let est = merged.estimate(&DataInput::U64(key));
             if ((est - true_count).abs() as f64) <= bound {
                 within += 1;
             }

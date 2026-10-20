@@ -336,7 +336,7 @@ fn fold_cms_config() -> CountMinSketchFoldConfig {
         rows: FOLD_ROWS,
         full_cols: FOLD_COLS,
         fold_level: FOLD_LEVEL,
-        top_k: FOLD_TOP_K,
+        heap_size: FOLD_TOP_K,
     }
 }
 
@@ -345,7 +345,7 @@ fn fold_cs_config() -> CountSketchFoldConfig {
         rows: FOLD_ROWS,
         full_cols: FOLD_COLS,
         fold_level: FOLD_LEVEL,
-        top_k: FOLD_TOP_K,
+        heap_size: FOLD_TOP_K,
     }
 }
 

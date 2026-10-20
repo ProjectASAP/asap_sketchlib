@@ -554,7 +554,7 @@ impl FrequencyOps<i64> for FoldCmsAdapter {
         self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
-        self.0.query(&DataInput::I64(*key)) as f64
+        self.0.estimate(&DataInput::I64(*key)) as f64
     }
 }
 
@@ -571,7 +571,7 @@ impl FrequencyOps<i64> for FoldCsAdapter {
         self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
-        self.0.query(&DataInput::I64(*key)) as f64
+        self.0.estimate(&DataInput::I64(*key)) as f64
     }
 }
 

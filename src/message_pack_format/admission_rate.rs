@@ -376,12 +376,12 @@ mod tests {
 
         let mut cms_heap = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(2, 4, 3);
         assert!(cms_heap.to_asapv1().is_ok());
-        *cms_heap.cms_mut() = cms_heap.cms().clone().with_admission_rate(0.5);
+        *cms_heap.count_min_sketch_mut() = cms_heap.count_min_sketch().clone().with_admission_rate(0.5);
         assert!(cms_heap.to_asapv1().is_err());
 
         let mut cs_heap = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(2, 4, 3);
         assert!(cs_heap.to_asapv1().is_ok());
-        *cs_heap.cs_mut() = cs_heap.cs().clone().with_admission_rate(0.5);
+        *cs_heap.count_sketch_mut() = cs_heap.count_sketch().clone().with_admission_rate(0.5);
         assert!(cs_heap.to_asapv1().is_err());
 
         let mut elastic: ElasticSketch = ElasticSketch::with_heavy_and_light(4, 2, 4);

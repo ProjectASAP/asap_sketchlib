@@ -43,9 +43,7 @@ use crate::octo_delta::{
 use crate::sketch_framework::univmon::{UnivMonDeltaFidelity, bottom_layer_for_hash};
 use crate::sketches::coco::{CocoRng, CocoSketch};
 use crate::sketches::countminsketch_heap::CountMinSketchWithHeap;
-use crate::sketches::countsketch_heap::{
-    CountSketchWithHeap, check_l2hh_hash_bits, l2hh_cell_for_row,
-};
+use crate::sketches::countsketch_heap::{CountSketchWithHeap, CountSketchWithL2Norm};
 use crate::sketches::elastic::{ElasticSketch, LAMBDA};
 use crate::{
     Classic, CountSketch, CountMinSketch, CountMinSketchCellDelta, CountSketchCellDelta, DataInput,
@@ -406,7 +404,7 @@ impl CountSketchWorker {
 /// A UnivMon layer is not a plain `CountSketch` sketch: it slices one 128-bit hash
 /// into per-row columns and takes each row's sign from a different high bit,
 /// and every layer hashes under its own seed. This worker calls the same
-/// `l2hh_cell_for_row` the parent does, so the two cannot drift apart.
+/// `CountSketchWithL2Norm::cell_for_row` the parent does, so the two cannot drift apart.
 #[derive(Clone, Debug)]
 pub struct CountSketchWithL2NormWorker {
     counters: Vec<i8>,
@@ -428,7 +426,7 @@ impl CountSketchWithL2NormWorker {
         // deep row's column reads a shallow row's sign bit, and further on
         // the shift runs off the hash.
         assert!(
-            check_l2hh_hash_bits(rows, cols).is_ok(),
+            CountSketchWithL2Norm::check_hash_bits(rows, cols).is_ok(),
             "{rows} rows x ({mask_bits} column bits + 1 sign bit) exceeds the 128-bit hash budget; \
              reduce rows or columns"
         );
@@ -495,7 +493,7 @@ impl CountSketchWithL2NormWorker {
     ) {
         let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD) as u8;
         for row in 0..self.rows {
-            let (col, sign) = l2hh_cell_for_row(hashed, row, self.cols, self.mask_bits);
+            let (col, sign) = CountSketchWithL2Norm::cell_for_row(hashed, row, self.cols, self.mask_bits);
             let cell = &mut self.counters[row * self.cols + col];
             *cell += sign as i8;
             if cell.unsigned_abs() >= threshold {
@@ -1535,9 +1533,9 @@ pub struct CountMinSketchWithHeapOctoAggregator {
 
 impl CountMinSketchWithHeapOctoAggregator {
     /// Creates an aggregator tracking the `top_k` heaviest keys.
-    pub fn new(rows: usize, cols: usize, top_k: usize) -> Self {
+    pub fn new(rows: usize, cols: usize, heap_size: usize) -> Self {
         Self {
-            sketch: CountMinSketchWithHeap::new(rows, cols, top_k),
+            sketch: CountMinSketchWithHeap::new(rows, cols, heap_size),
         }
     }
 }
@@ -1547,9 +1545,9 @@ impl OctoAggregator for CountMinSketchWithHeapOctoAggregator {
 
     #[inline(always)]
     fn apply(&mut self, delta: KeyedCountMinSketchCellDelta) {
-        self.sketch.cms_mut().apply_delta(delta.delta);
+        self.sketch.count_min_sketch_mut().apply_delta(delta.delta);
         let key = heap_item_to_sketch_input(&delta.key);
-        let estimate = self.sketch.cms().estimate(&key);
+        let estimate = self.sketch.count_min_sketch().estimate(&key);
         self.sketch.heap_mut().update(&key, estimate as i64);
     }
 }
@@ -1687,9 +1685,9 @@ pub struct CountSketchWithHeapOctoAggregator {
 
 impl CountSketchWithHeapOctoAggregator {
     /// Creates an aggregator tracking the `top_k` heaviest keys.
-    pub fn new(rows: usize, cols: usize, top_k: usize) -> Self {
+    pub fn new(rows: usize, cols: usize, heap_size: usize) -> Self {
         Self {
-            sketch: CountSketchWithHeap::new(rows, cols, top_k),
+            sketch: CountSketchWithHeap::new(rows, cols, heap_size),
         }
     }
 }
@@ -1699,9 +1697,9 @@ impl OctoAggregator for CountSketchWithHeapOctoAggregator {
 
     #[inline(always)]
     fn apply(&mut self, delta: KeyedCountSketchCellDelta) {
-        self.sketch.cs_mut().apply_delta(delta.delta);
+        self.sketch.count_sketch_mut().apply_delta(delta.delta);
         let key = heap_item_to_sketch_input(&delta.key);
-        let estimate = self.sketch.cs().estimate(&key);
+        let estimate = self.sketch.count_sketch().estimate(&key);
         self.sketch.heap_mut().update(&key, estimate as i64);
     }
 }
@@ -2538,15 +2536,15 @@ impl CountSketchOctoPlan {
 
 impl CountMinSketchWithHeapOctoPlan {
     /// Builds the parent this plan's workers feed, tracking `top_k` keys.
-    pub fn aggregator(&self, top_k: usize) -> CountMinSketchWithHeapOctoAggregator {
-        CountMinSketchWithHeapOctoAggregator::new(self.rows, self.cols, top_k)
+    pub fn aggregator(&self, heap_size: usize) -> CountMinSketchWithHeapOctoAggregator {
+        CountMinSketchWithHeapOctoAggregator::new(self.rows, self.cols, heap_size)
     }
 }
 
 impl CountSketchWithHeapOctoPlan {
     /// Builds the parent this plan's workers feed, tracking `top_k` keys.
-    pub fn aggregator(&self, top_k: usize) -> CountSketchWithHeapOctoAggregator {
-        CountSketchWithHeapOctoAggregator::new(self.rows, self.cols, top_k)
+    pub fn aggregator(&self, heap_size: usize) -> CountSketchWithHeapOctoAggregator {
+        CountSketchWithHeapOctoAggregator::new(self.rows, self.cols, heap_size)
     }
 }
 

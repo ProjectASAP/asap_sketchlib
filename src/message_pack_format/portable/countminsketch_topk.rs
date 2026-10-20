@@ -61,7 +61,7 @@ pub fn sketchlib_cms_heap_from_matrix_and_heap(
 
 /// Converts a CMSHeap's storage into a `Vec<Vec<f64>>` matrix.
 pub fn matrix_from_sketchlib_cms_heap(cms_heap: &SketchlibCMSHeap) -> Vec<Vec<f64>> {
-    let storage = cms_heap.cms().as_storage();
+    let storage = cms_heap.count_min_sketch().as_storage();
     let rows = storage.rows();
     let cols = storage.cols();
     let mut sketch = vec![vec![0.0; cols]; rows];

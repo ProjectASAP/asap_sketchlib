@@ -919,7 +919,7 @@ proptest! {
 
         let residual = worker.sketch().residual().to_vec();
         let reference = cm_reference(rows, cols, &keys);
-        for (i, (p, r)) in cm_cells(parent.sketch.cms()).into_iter().zip(cm_cells(&reference)).enumerate() {
+        for (i, (p, r)) in cm_cells(parent.sketch.count_min_sketch()).into_iter().zip(cm_cells(&reference)).enumerate() {
             prop_assert_eq!(
                 p + i32::from(residual[i]), r,
                 "cell {}: promoted {} plus residual {} != {}", i, p, residual[i], r
@@ -934,7 +934,7 @@ proptest! {
         );
         for item in parent.sketch.heap().heap() {
             let key = heap_item_to_sketch_input(&item.key);
-            let estimate = i64::from(parent.sketch.cms().estimate(&key));
+            let estimate = i64::from(parent.sketch.count_min_sketch().estimate(&key));
             prop_assert!(
                 matches!(key, DataInput::U64(k) if seen.contains(&k)),
                 "the heap holds {:?}, which never arrived", item.key
@@ -971,7 +971,7 @@ proptest! {
 
         let residual = worker.residual().to_vec();
         let reference = cs_reference(rows, cols, &keys);
-        for (i, (p, r)) in cs_cells(parent.sketch.cs()).into_iter().zip(cs_cells(&reference)).enumerate() {
+        for (i, (p, r)) in cs_cells(parent.sketch.count_sketch()).into_iter().zip(cs_cells(&reference)).enumerate() {
             prop_assert_eq!(
                 p + i32::from(residual[i]), r,
                 "cell {}: promoted {} plus residual {} != {}", i, p, residual[i], r

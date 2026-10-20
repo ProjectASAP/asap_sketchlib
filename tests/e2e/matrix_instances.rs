@@ -840,7 +840,7 @@ fn cmsheap_inert_instances_construct_and_report_their_geometry() {
             assert_eq!(sketch.cols(), $cols, "{label}: cols()");
             assert_eq!(sketch.heap().len(), 0, "{label}: the heap starts empty");
             assert_eq!(
-                sketch.cms().rows(),
+                sketch.count_min_sketch().rows(),
                 $rows,
                 "{label}: the wrapped CountMin reports the same geometry"
             );

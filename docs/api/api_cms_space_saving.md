@@ -22,7 +22,7 @@ its matrix estimate and a newcomer enters only by beating the heap minimum.
 
 ```rust
 fn new(rows: usize, cols: usize, capacity: usize) -> Self
-fn from_parts(cms: CountMinSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self
+fn from_parts(count_min_sketch: CountMinSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self
 ```
 
 ## Insert/Update
@@ -45,7 +45,7 @@ fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, S::Counter)>
 fn rows(&self) -> usize
 fn cols(&self) -> usize
 fn capacity(&self) -> usize
-fn cms(&self) -> &CountMinSketch<S, M, H>
+fn count_min_sketch(&self) -> &CountMinSketch<S, M, H>
 fn space_saving(&self) -> &SpaceSaving<H>
 ```
 

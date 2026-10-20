@@ -289,7 +289,7 @@ explicitly:
 - **Candidate completeness.** See the caveats below.
 
 The worker mirrors `CountSketchWithL2Norm`'s cell mapping through the shared
-`l2hh_cell_for_row`, not a copy of it: a UnivMon layer slices one
+`CountSketchWithL2Norm::cell_for_row`, not a copy of it: a UnivMon layer slices one
 128-bit hash into per-row columns and takes each row's sign from a
 different high bit, under a per-layer seed, so a hand-written copy would
 be easy to drift.

@@ -459,8 +459,8 @@ mod tests {
 
         let decoded = Target::from_asapv1(&encoded).expect("decode");
         assert_eq!(
-            decoded.cms().as_storage().as_slice(),
-            sketch.cms().as_storage().as_slice()
+            decoded.count_min_sketch().as_storage().as_slice(),
+            sketch.count_min_sketch().as_storage().as_slice()
         );
         assert_eq!(
             entries_of(decoded.space_saving()),
@@ -636,7 +636,7 @@ mod tests {
     fn the_crafted_baseline_decodes() {
         let decoded = Target::from_asapv1(&craft().bytes()).expect("baseline");
         assert_eq!(decoded.space_saving().len(), 3);
-        assert_eq!(decoded.cms().as_storage().as_slice(), &[0, 1, 2, 3, 4, 5]);
+        assert_eq!(decoded.count_min_sketch().as_storage().as_slice(), &[0, 1, 2, 3, 4, 5]);
     }
 
     #[test]

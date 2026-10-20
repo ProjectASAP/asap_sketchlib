@@ -105,7 +105,7 @@ pub struct CountSketchWithHeap<
 > where
     S::Counter: HeapCounter,
 {
-    cs: CountSketch<S, Mode, H>,
+    count_sketch: CountSketch<S, Mode, H>,
     heap: TopKHeap<HeapCountOf<S>>,
 }
 
@@ -116,10 +116,10 @@ where
     T: CountSketchHeapCounter,
 {
     /// Creates a new `CountSketchWithHeap` with the given CS dimensions and heap capacity.
-    pub fn new(rows: usize, cols: usize, top_k: usize) -> Self {
+    pub fn new(rows: usize, cols: usize, heap_size: usize) -> Self {
         CountSketchWithHeap {
-            cs: CountSketch::with_dimensions(rows, cols),
-            heap: TopKHeap::new(top_k),
+            count_sketch: CountSketch::with_dimensions(rows, cols),
+            heap: TopKHeap::new(heap_size),
         }
     }
 }
@@ -131,10 +131,10 @@ where
     S::Counter: CountSketchHeapCounter,
 {
     /// Creates a `CountSketchWithHeap` from a pre-built storage backend.
-    pub fn from_storage(storage: S, top_k: usize) -> Self {
+    pub fn from_storage(storage: S, heap_size: usize) -> Self {
         CountSketchWithHeap {
-            cs: CountSketch::from_storage(storage),
-            heap: TopKHeap::new(top_k),
+            count_sketch: CountSketch::from_storage(storage),
+            heap: TopKHeap::new(heap_size),
         }
     }
 }
@@ -248,13 +248,13 @@ where
     S::Counter: CountSketchHeapCounter,
 {
     /// Returns a reference to the internal Count Sketch.
-    pub fn cs(&self) -> &CountSketch<S, M, H> {
-        &self.cs
+    pub fn count_sketch(&self) -> &CountSketch<S, M, H> {
+        &self.count_sketch
     }
 
     /// Returns a mutable reference to the internal Count Sketch.
-    pub fn cs_mut(&mut self) -> &mut CountSketch<S, M, H> {
-        &mut self.cs
+    pub fn count_sketch_mut(&mut self) -> &mut CountSketch<S, M, H> {
+        &mut self.count_sketch
     }
 
     /// Returns a reference to the heavy-hitter heap.
@@ -270,13 +270,13 @@ where
     /// Number of rows in the underlying CS.
     #[inline(always)]
     pub fn rows(&self) -> usize {
-        self.cs.rows()
+        self.count_sketch.rows()
     }
 
     /// Number of columns in the underlying CS.
     #[inline(always)]
     pub fn cols(&self) -> usize {
-        self.cs.cols()
+        self.count_sketch.cols()
     }
 
     /// Clears the heap.
@@ -294,16 +294,16 @@ where
     /// Inserts a single observation and updates the top-k heap.
     #[inline]
     pub fn update(&mut self, key: &DataInput) {
-        self.cs.update(key);
-        let est = self.cs.estimate(key);
+        self.count_sketch.update(key);
+        let est = self.count_sketch.estimate(key);
         self.heap.update(key, S::Counter::heap_count(est));
     }
 
     /// Inserts an observation with the given count and updates the top-k heap.
     #[inline]
     pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
-        self.cs.update_weighted(key, weight);
-        let est = self.cs.estimate(key);
+        self.count_sketch.update_weighted(key, weight);
+        let est = self.count_sketch.estimate(key);
         self.heap.update(key, S::Counter::heap_count(est));
     }
 
@@ -317,7 +317,7 @@ where
     /// Returns the CS frequency estimate (median) for the given key.
     #[inline]
     pub fn estimate(&self, key: &DataInput) -> f64 {
-        self.cs.estimate(key)
+        self.count_sketch.estimate(key)
     }
 
     /// Merges another `CountSketchWithHeap` into `self`.
@@ -325,7 +325,7 @@ where
     /// After merging the CS counters, all heap items from both sources are
     /// re-queried against the merged sketch to reconcile the top-k heap.
     pub fn merge(&mut self, other: &Self) {
-        self.cs.merge(&other.cs);
+        self.count_sketch.merge(&other.count_sketch);
         let mut candidate_keys = Vec::with_capacity(self.heap.len() + other.heap.len());
         for item in self.heap.heap() {
             candidate_keys.push(item.key.clone());
@@ -336,7 +336,7 @@ where
         self.heap.clear();
         for key in candidate_keys {
             let key_ref = heap_item_to_sketch_input(&key);
-            let est = self.cs.estimate(&key_ref);
+            let est = self.count_sketch.estimate(&key_ref);
             self.heap.update(&key_ref, S::Counter::heap_count(est));
         }
     }
@@ -352,16 +352,16 @@ where
     /// Inserts a single observation using fast-path hashing and updates the heap.
     #[inline]
     pub fn update(&mut self, key: &DataInput) {
-        self.cs.update(key);
-        let est = self.cs.estimate(key);
+        self.count_sketch.update(key);
+        let est = self.count_sketch.estimate(key);
         self.heap.update(key, S::Counter::heap_count(est));
     }
 
     /// Inserts an observation with the given count using fast-path hashing.
     #[inline]
     pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
-        self.cs.update_weighted(key, weight);
-        let est = self.cs.estimate(key);
+        self.count_sketch.update_weighted(key, weight);
+        let est = self.count_sketch.estimate(key);
         self.heap.update(key, S::Counter::heap_count(est));
     }
 
@@ -375,12 +375,12 @@ where
     /// Returns the CS frequency estimate (median) using fast-path hashing.
     #[inline]
     pub fn estimate(&self, key: &DataInput) -> f64 {
-        self.cs.estimate(key)
+        self.count_sketch.estimate(key)
     }
 
     /// Merges another `CountSketchWithHeap` into `self`.
     pub fn merge(&mut self, other: &Self) {
-        self.cs.merge(&other.cs);
+        self.count_sketch.merge(&other.count_sketch);
         let mut candidate_keys = Vec::with_capacity(self.heap.len() + other.heap.len());
         for item in self.heap.heap() {
             candidate_keys.push(item.key.clone());
@@ -391,7 +391,7 @@ where
         self.heap.clear();
         for key in candidate_keys {
             let key_ref = heap_item_to_sketch_input(&key);
-            let est = self.cs.estimate(&key_ref);
+            let est = self.count_sketch.estimate(&key_ref);
             self.heap.update(&key_ref, S::Counter::heap_count(est));
         }
     }
@@ -562,7 +562,7 @@ mod tests {
         let key = DataInput::Str("flow");
         let mut sketch = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(2, 64, 4);
         sketch.update_weighted(&key, -2);
-        let row = &mut sketch.cs_mut().as_storage_mut()[1];
+        let row = &mut sketch.count_sketch_mut().as_storage_mut()[1];
         let cell = row.iter_mut().find(|cell| **cell != 0).expect("key cell");
         *cell = *cell / 2 * 3;
         sketch.update_weighted(&key, 0);
@@ -1022,56 +1022,58 @@ mod tests {
 // file stays focused on plain Count Sketch.
 // =====================================================================
 
-/// Checks that a `rows` x `cols` `CountSketchWithL2Norm` fits its one 128-bit key hash.
-///
-/// Row `r` reads its column from bits `[r * mask_bits, (r + 1) * mask_bits)`
-/// and its sign from bit `127 - r`, where `mask_bits = cols_mask_bits(cols)`.
-/// Each row therefore claims `mask_bits + 1` bits, and the fields are in range
-/// and pairwise disjoint (so every column and sign is an independent hash
-/// draw) exactly while `rows * (mask_bits + 1) <= 128`. Past that, deep rows'
-/// columns reuse shallow rows' sign bits, and from `rows * mask_bits >= 128`
-/// the shift runs off the hash.
-pub(crate) fn check_l2hh_hash_bits(rows: usize, cols: usize) -> Result<(), String> {
-    let mask_bits = cols_mask_bits(cols.max(1)) as usize;
-    let bits_required = mask_bits.saturating_add(1).saturating_mul(rows);
-    if bits_required > 128 {
-        return Err(format!(
-            "CountL2HH rows={rows}, cols={cols} needs {bits_required} hash bits \
-             ({mask_bits} column bits + 1 sign bit per row), past the 128 the key hash carries"
-        ));
-    }
-    Ok(())
-}
-
-/// Column and sign `CountSketchWithL2Norm` uses for `row`, given its 128-bit key hash.
-///
-/// Shared with the OctoSketch worker sketches so a worker and its parent can
-/// never disagree about which cell a key lands in.
-#[inline(always)]
-pub fn l2hh_cell_for_row(
-    hashed_val: u128,
-    row: usize,
-    cols: usize,
-    mask_bits: u32,
-) -> (usize, i64) {
-    let mask = (1u128 << mask_bits) - 1;
-    let hashed = (hashed_val >> (row * mask_bits as usize)) & mask;
-    let col = (hashed as usize) % cols;
-    let bit = ((hashed_val >> (127 - row)) & 1) as i64;
-    (col, -(1 - 2 * bit))
-}
-
 /// Count Sketch augmented with per-row L2 norm tracking for heavy-hitter detection.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "")]
 pub struct CountSketchWithL2Norm<H: SketchHasher = DefaultXxHasher> {
     counts: Vector2D<i64>,
-    l2: Vector1D<i64>,
-    row: usize,
-    col: usize,
+    row_l2_squared: Vector1D<i64>,
+    rows: usize,
+    cols: usize,
     seed_index: usize,
     #[serde(skip)]
     _hasher: PhantomData<H>,
+}
+
+impl CountSketchWithL2Norm {
+    /// Checks that a `rows` x `cols` `CountSketchWithL2Norm` fits its one 128-bit key hash.
+    ///
+    /// Row `r` reads its column from bits `[r * mask_bits, (r + 1) * mask_bits)`
+    /// and its sign from bit `127 - r`, where `mask_bits = cols_mask_bits(cols)`.
+    /// Each row therefore claims `mask_bits + 1` bits, and the fields are in range
+    /// and pairwise disjoint (so every column and sign is an independent hash
+    /// draw) exactly while `rows * (mask_bits + 1) <= 128`. Past that, deep rows'
+    /// columns reuse shallow rows' sign bits, and from `rows * mask_bits >= 128`
+    /// the shift runs off the hash.
+    pub(crate) fn check_hash_bits(rows: usize, cols: usize) -> Result<(), String> {
+        let mask_bits = cols_mask_bits(cols.max(1)) as usize;
+        let bits_required = mask_bits.saturating_add(1).saturating_mul(rows);
+        if bits_required > 128 {
+            return Err(format!(
+                "CountL2HH rows={rows}, cols={cols} needs {bits_required} hash bits \
+                 ({mask_bits} column bits + 1 sign bit per row), past the 128 the key hash carries"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Column and sign `CountSketchWithL2Norm` uses for `row`, given its 128-bit key hash.
+    ///
+    /// Shared with the OctoSketch worker sketches so a worker and its parent can
+    /// never disagree about which cell a key lands in.
+    #[inline(always)]
+    pub fn cell_for_row(
+        hashed_val: u128,
+        row: usize,
+        cols: usize,
+        mask_bits: u32,
+    ) -> (usize, i64) {
+        let mask = (1u128 << mask_bits) - 1;
+        let hashed = (hashed_val >> (row * mask_bits as usize)) & mask;
+        let col = (hashed as usize) % cols;
+        let bit = ((hashed_val >> (127 - row)) & 1) as i64;
+        (col, -(1 - 2 * bit))
+    }
 }
 
 // Default CountSketchWithL2Norm configuration.
@@ -1095,14 +1097,14 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     /// When `rows * (cols_mask_bits(cols) + 1) > 128`: the rows' column and
     /// sign fields would overlap in the one 128-bit key hash.
     pub fn with_dimensions_and_seed_index(rows: usize, cols: usize, seed_index: usize) -> Self {
-        if let Err(problem) = check_l2hh_hash_bits(rows, cols) {
+        if let Err(problem) = CountSketchWithL2Norm::check_hash_bits(rows, cols) {
             panic!("{problem}");
         }
         let mut sk = CountSketchWithL2Norm {
             counts: Vector2D::init(rows, cols),
-            l2: Vector1D::filled(rows, 0),
-            row: rows,
-            col: cols,
+            row_l2_squared: Vector1D::filled(rows, 0),
+            rows: rows,
+            cols: cols,
             seed_index,
             _hasher: PhantomData,
         };
@@ -1112,12 +1114,12 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
 
     /// Number of rows in the sketch.
     pub fn rows(&self) -> usize {
-        self.row
+        self.rows
     }
 
     /// Number of columns in the sketch.
     pub fn cols(&self) -> usize {
-        self.col
+        self.cols
     }
 
     /// Exposes the backing matrix for inspection/testing.
@@ -1133,8 +1135,8 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     /// Merges another sketch while asserting compatible dimensions.
     pub fn merge(&mut self, other: &Self) {
         assert_eq!(
-            (self.row, self.col),
-            (other.row, other.col),
+            (self.rows, self.cols),
+            (other.rows, other.cols),
             "dimension mismatch while merging CountL2HH sketches"
         );
         assert_eq!(
@@ -1142,21 +1144,21 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
             "seed mismatch while merging CountL2HH sketches"
         );
 
-        for i in 0..self.row {
+        for i in 0..self.rows {
             let mut row_l2 = 0_i128;
-            for j in 0..self.col {
+            for j in 0..self.cols {
                 self.counts[i][j] += other.counts[i][j];
                 let counter = self.counts[i][j] as i128;
                 row_l2 = row_l2.saturating_add(counter.saturating_mul(counter));
             }
-            self.l2[i] = row_l2.min(i64::MAX as i128) as i64;
+            self.row_l2_squared[i] = row_l2.min(i64::MAX as i128) as i64;
         }
     }
 
     /// Resets all counters and L2 accumulators to zero without reallocating.
     pub fn clear(&mut self) {
         self.counts.fill(0);
-        self.l2.fill(0);
+        self.row_l2_squared.fill(0);
     }
 
     /// Inserts with hash optimization - computes hash once and reuses it.
@@ -1169,8 +1171,8 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     /// Inserts with hash optimization using precomputed hash value.
     pub fn update_weighted_with_hash(&mut self, hashed_val: u128, c: i64) {
         let mask_bits = self.counts.mask_bits();
-        for i in 0..self.row {
-            let (idx, sign_bit) = l2hh_cell_for_row(hashed_val, i, self.col, mask_bits);
+        for i in 0..self.rows {
+            let (idx, sign_bit) = CountSketchWithL2Norm::cell_for_row(hashed_val, i, self.cols, mask_bits);
             let old_value = self.counts.query_one_counter(i, idx);
             self.write_counter(i, idx, old_value + sign_bit * c);
         }
@@ -1186,10 +1188,10 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     fn write_counter(&mut self, row: usize, col: usize, new_value: i64) {
         let old_value = self.counts.query_one_counter(row, col);
         self.counts[row][col] = new_value;
-        let old_l2 = self.l2.as_slice()[row] as i128;
+        let old_l2 = self.row_l2_squared.as_slice()[row] as i128;
         let new_l2 = old_l2 + (new_value as i128) * (new_value as i128)
             - (old_value as i128) * (old_value as i128);
-        self.l2[row] = new_l2.clamp(0, i64::MAX as i128) as i64;
+        self.row_l2_squared[row] = new_l2.clamp(0, i64::MAX as i128) as i64;
     }
 
     /// Seed offset this sketch hashes with; UnivMon gives each layer its own.
@@ -1219,9 +1221,9 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
         let mut shift_amount = 0;
         let mut sign_bit_pos = 127;
 
-        for i in 0..self.row {
+        for i in 0..self.rows {
             let hashed = (hashed_val >> shift_amount) & mask;
-            let idx = (hashed as usize) % self.col;
+            let idx = (hashed as usize) % self.cols;
             let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
             let sign_bit = -(1 - 2 * bit);
 
@@ -1250,7 +1252,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
 
     /// Returns the median estimate of the squared L2 norm across rows.
     pub fn l2_squared(&self) -> f64 {
-        let mut values: Vec<f64> = self.l2.as_slice()[..self.row]
+        let mut values: Vec<f64> = self.row_l2_squared.as_slice()[..self.rows]
             .iter()
             .map(|&v| v as f64)
             .collect();
@@ -1275,13 +1277,13 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     pub fn estimate_with_hash(&self, hashed_val: u128) -> f64 {
         let mask_bits = self.counts.mask_bits() as usize;
         let mask = (1u128 << mask_bits) - 1;
-        let mut lst = Vec::with_capacity(self.row);
+        let mut lst = Vec::with_capacity(self.rows);
         let mut shift_amount = 0;
         let mut sign_bit_pos = 127;
 
-        for i in 0..self.row {
+        for i in 0..self.rows {
             let hashed = (hashed_val >> shift_amount) & mask;
-            let idx = (hashed as usize) % self.col;
+            let idx = (hashed as usize) % self.cols;
             let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
             let sign_bit = -(1 - 2 * bit);
             let counter = self.counts.query_one_counter(i, idx);

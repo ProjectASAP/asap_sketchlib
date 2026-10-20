@@ -27,9 +27,9 @@ pub trait CountMinFastOps {
     /// Returns the column count.
     fn cols(&self) -> usize;
     /// Inserts one precomputed hash.
-    fn fast_insert(&mut self, hash: &MatrixHash);
+    fn update_with_hash(&mut self, hash: &MatrixHash);
     /// Returns the estimate for one precomputed hash.
-    fn fast_estimate(&self, hash: &MatrixHash) -> f64;
+    fn estimate_with_hash(&self, hash: &MatrixHash) -> f64;
 }
 
 /// Type-erased adapter for regular-path Count Sketches.
@@ -51,9 +51,9 @@ pub trait CountSketchFastOps {
     /// Returns the column count.
     fn cols(&self) -> usize;
     /// Inserts one precomputed hash.
-    fn fast_insert(&mut self, hash: &MatrixHash);
+    fn update_with_hash(&mut self, hash: &MatrixHash);
     /// Returns the estimate for one precomputed hash.
-    fn fast_estimate(&self, hash: &MatrixHash) -> f64;
+    fn estimate_with_hash(&self, hash: &MatrixHash) -> f64;
 }
 
 impl<S> CountMinRegularOps for CountMinSketch<S, RegularPath>
@@ -92,11 +92,11 @@ where
         self.cols()
     }
 
-    fn fast_insert(&mut self, hash: &MatrixHash) {
+    fn update_with_hash(&mut self, hash: &MatrixHash) {
         self.update_with_hash(hash);
     }
 
-    fn fast_estimate(&self, hash: &MatrixHash) -> f64 {
+    fn estimate_with_hash(&self, hash: &MatrixHash) -> f64 {
         self.estimate_with_hash(hash).to_f64()
     }
 }
@@ -137,11 +137,11 @@ where
         self.cols()
     }
 
-    fn fast_insert(&mut self, hash: &MatrixHash) {
+    fn update_with_hash(&mut self, hash: &MatrixHash) {
         self.update_with_hash(hash);
     }
 
-    fn fast_estimate(&self, hash: &MatrixHash) -> f64 {
+    fn estimate_with_hash(&self, hash: &MatrixHash) -> f64 {
         self.estimate_with_hash(hash)
     }
 }

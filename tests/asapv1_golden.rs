@@ -558,7 +558,7 @@ fn check_cmsheap_i64_golden(golden: &str, heap_size: usize, entries: &[(OwnedDat
 
     let decoded = CmsHeapI64::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = I64_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.count_min_sketch().as_storage().as_slice(), flat.as_slice());
     assert_heap(decoded.heap(), heap_size, entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -599,7 +599,7 @@ fn cmsheap_i32_fast_2x3_i64keys_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<i32> = I64_VALS.iter().flatten().map(|&v| v as i32).collect();
-    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.count_min_sketch().as_storage().as_slice(), flat.as_slice());
     assert_heap(decoded.heap(), 3, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -627,7 +627,7 @@ fn cmsheap_f64_fast_2x3_f64keys_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<f64> = F64_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.count_min_sketch().as_storage().as_slice(), flat.as_slice());
     assert_heap(decoded.heap(), 6, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -650,7 +650,7 @@ fn cmsheap_i64_regular_2x3_delta_matches_golden() {
     let mut state = CmsHeapI64::from_asapv1(&decode_hex(GOLDEN_CMSHEAP_STR)).expect("state");
     state.merge_delta(&decoded).expect("merge");
     let expected = [127, 0, 94, 128, -32469, 4295032832];
-    assert_eq!(state.cms().as_storage().as_slice(), expected.as_slice());
+    assert_eq!(state.count_min_sketch().as_storage().as_slice(), expected.as_slice());
     assert_heap(state.heap(), 5, &entries);
 }
 
@@ -670,7 +670,7 @@ fn csheap_i64_regular_2x4_strkeys_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.count_sketch().as_storage().as_slice(), flat.as_slice());
     assert_heap(decoded.heap(), 5, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -695,7 +695,7 @@ fn csheap_i64_regular_2x4_i64tie_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.count_sketch().as_storage().as_slice(), flat.as_slice());
     assert_heap(decoded.heap(), 6, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -721,7 +721,7 @@ fn csheap_f64_fast_2x4_strkeys_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<f64> = CS_F64_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.count_sketch().as_storage().as_slice(), flat.as_slice());
     assert_heap(decoded.heap(), 4, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -747,7 +747,7 @@ fn csheap_i64_regular_2x4_delta_matches_golden() {
     .expect("state");
     state.merge_delta(&decoded).expect("merge");
     let expected = [-32, -1, 383, 65536, -130, -33, 32767, -4294967297];
-    assert_eq!(state.cs().as_storage().as_slice(), expected.as_slice());
+    assert_eq!(state.count_sketch().as_storage().as_slice(), expected.as_slice());
     assert_heap(state.heap(), 5, &entries);
 }
 
@@ -837,7 +837,7 @@ fn csheap_i64_regular_2x4_tuplekeys_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.count_sketch().as_storage().as_slice(), flat.as_slice());
     assert_heap(decoded.heap(), 6, &entries);
     assert_tuple_keys(decoded.heap(), &named);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
@@ -889,7 +889,7 @@ fn cmsspacesaving_i64_regular_2x3_strkeys_matches_golden() {
 
     let decoded = Sketch::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = I64_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.count_min_sketch().as_storage().as_slice(), flat.as_slice());
     let entries = [
         (DataInput::Str("hot"), 300, 0),
         (DataInput::Str("warm"), 128, 0),
@@ -916,7 +916,7 @@ fn csspacesaving_f64_fast_2x4_i64keys_matches_golden() {
 
     let decoded = Sketch::from_asapv1(&want).expect("decode");
     let flat: Vec<f64> = CS_F64_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(decoded.count_sketch().as_storage().as_slice(), flat.as_slice());
     let entries = [
         (DataInput::I64(-1), 65536, 0),
         (DataInput::I64(7), 6, 5),

@@ -70,7 +70,7 @@ impl<H: SketchHasher> CountSketchFold<H> {
     /// # Panics
     ///
     /// Panics if `full_cols` is not a power of two or `fold_level` is too large.
-    pub fn new(rows: usize, full_cols: usize, fold_level: u32, top_k: usize) -> Self {
+    pub fn new(rows: usize, full_cols: usize, fold_level: u32, heap_size: usize) -> Self {
         assert!(
             full_cols.is_power_of_two(),
             "full_cols must be a power of two, got {full_cols}"
@@ -90,14 +90,14 @@ impl<H: SketchHasher> CountSketchFold<H> {
             full_cols,
             fold_level,
             cells,
-            heap: TopKHeap::new(top_k),
+            heap: TopKHeap::new(heap_size),
             _hasher: PhantomData,
         }
     }
 
     /// Creates a CountSketchFold equivalent to a full-width CS (fold_level = 0).
-    pub fn unfolded(rows: usize, full_cols: usize, top_k: usize) -> Self {
-        Self::new(rows, full_cols, 0, top_k)
+    pub fn unfolded(rows: usize, full_cols: usize, heap_size: usize) -> Self {
+        Self::new(rows, full_cols, 0, heap_size)
     }
 
     // -- Accessors ----------------------------------------------------------
@@ -187,10 +187,10 @@ impl<H: SketchHasher> CountSketchFold<H> {
         for r in 0..self.rows {
             let (full_col, sign) = self.hash_for(r, key);
             let fc = self.fold_col_of(full_col);
-            self.cells[r * self.fold_cols + fc].insert(full_col, sign * weight);
+            self.cells[r * self.fold_cols + fc].add(full_col, sign * weight);
         }
         // Update top-k heap with current estimate.
-        let est = self.query(key);
+        let est = self.estimate(key);
         self.heap.update(key, est);
     }
 
@@ -204,12 +204,12 @@ impl<H: SketchHasher> CountSketchFold<H> {
 
     /// Returns the Count Sketch frequency estimate for `key` (median of
     /// sign-corrected row estimates).
-    pub fn query(&self, key: &DataInput) -> i64 {
+    pub fn estimate(&self, key: &DataInput) -> i64 {
         let mut estimates = Vec::with_capacity(self.rows);
         for r in 0..self.rows {
             let (full_col, sign) = self.hash_for(r, key);
             let fc = self.fold_col_of(full_col);
-            let cell_value = self.cells[r * self.fold_cols + fc].query(full_col);
+            let cell_value = self.cells[r * self.fold_cols + fc].get(full_col);
             estimates.push((sign * cell_value) as f64);
         }
         compute_median_inline_f64(&mut estimates) as i64
@@ -253,7 +253,7 @@ impl<H: SketchHasher> CountSketchFold<H> {
                 let cell = &self.cells[src_row_off + c];
                 for (full_col, count) in cell.iter() {
                     let new_fc = (full_col as usize) & (target_fold_cols - 1);
-                    target.cells[dst_row_off + new_fc].insert(full_col, count);
+                    target.cells[dst_row_off + new_fc].add(full_col, count);
                 }
             }
         }
@@ -291,7 +291,7 @@ impl<H: SketchHasher> CountSketchFold<H> {
         for source in [a, b] {
             for item in source.heap.heap() {
                 let key_ref = heap_item_to_sketch_input(&item.key);
-                let est = result.query(&key_ref);
+                let est = result.estimate(&key_ref);
                 result.heap.update(&key_ref, est);
             }
         }
@@ -338,7 +338,7 @@ impl<H: SketchHasher> CountSketchFold<H> {
         // Reconcile heap.
         for item in self.heap.heap() {
             let key_ref = heap_item_to_sketch_input(&item.key);
-            let est = result.query(&key_ref);
+            let est = result.estimate(&key_ref);
             result.heap.update(&key_ref, est);
         }
 
@@ -382,7 +382,7 @@ impl<H: SketchHasher> CountSketchFold<H> {
         for sk in sketches {
             for item in sk.heap.heap() {
                 let key_ref = heap_item_to_sketch_input(&item.key);
-                let est = result.query(&key_ref);
+                let est = result.estimate(&key_ref);
                 result.heap.update(&key_ref, est);
             }
         }
@@ -426,7 +426,7 @@ impl<H: SketchHasher> CountSketchFold<H> {
     fn reconcile_heap_from(&mut self, other: &CountSketchFold<H>) {
         for item in other.heap.heap() {
             let key_ref = heap_item_to_sketch_input(&item.key);
-            let est = self.query(&key_ref);
+            let est = self.estimate(&key_ref);
             self.heap.update(&key_ref, est);
         }
     }
@@ -478,7 +478,7 @@ mod tests {
         let mut sketch: CountSketchFold = CountSketchFold::new(3, 1024, 4, 10);
         let key = DataInput::Str("hello");
         sketch.update_weighted(&key, 7);
-        assert_eq!(sketch.query(&key), 7);
+        assert_eq!(sketch.estimate(&key), 7);
     }
 
     #[test]
@@ -487,14 +487,14 @@ mod tests {
         let key = DataInput::Str("hello");
         sketch.update_weighted(&key, 3);
         sketch.update_weighted(&key, 4);
-        assert_eq!(sketch.query(&key), 7);
+        assert_eq!(sketch.estimate(&key), 7);
     }
 
     #[test]
     fn fold_cs_absent_key_returns_zero() {
         let mut sketch: CountSketchFold = CountSketchFold::new(3, 1024, 4, 10);
         sketch.update_weighted(&DataInput::Str("present"), 10);
-        assert_eq!(sketch.query(&DataInput::Str("absent")), 0);
+        assert_eq!(sketch.estimate(&DataInput::Str("absent")), 0);
     }
 
     #[test]
@@ -505,7 +505,7 @@ mod tests {
         }
         // Count Sketch estimates can be negative; check they are roughly correct.
         for i in 0..100u64 {
-            let est = sketch.query(&DataInput::U64(i));
+            let est = sketch.estimate(&DataInput::U64(i));
             // With a wide enough sketch, error should be small.
             let err = (est - i as i64).abs();
             assert!(
@@ -563,7 +563,7 @@ mod tests {
 
         // Every single query must match exactly.
         for key in &keys {
-            let fold_est = fold.query(key);
+            let fold_est = fold.estimate(key);
             let std_est = standard.estimate(key) as i64;
             assert_eq!(
                 fold_est, std_est,
@@ -617,7 +617,7 @@ mod tests {
 
         for i in 0..30 {
             let key = DataInput::U64(i);
-            assert_eq!(fold.query(&key), standard.estimate(&key) as i64);
+            assert_eq!(fold.estimate(&key), standard.estimate(&key) as i64);
         }
     }
 
@@ -637,7 +637,7 @@ mod tests {
         b.update_weighted(&key, 200);
 
         a.merge_same_level(&b);
-        assert_eq!(a.query(&key), 300);
+        assert_eq!(a.estimate(&key), 300);
     }
 
     #[test]
@@ -668,7 +668,7 @@ mod tests {
         for i in 0..30 {
             let key = DataInput::U64(i);
             assert_eq!(
-                fa.query(&key),
+                fa.estimate(&key),
                 sa.estimate(&key) as i64,
                 "mismatch after same-level merge for key {i}"
             );
@@ -707,8 +707,8 @@ mod tests {
 
         let merged = CountSketchFold::unfold_merge(&a, &b);
         assert_eq!(merged.fold_level(), 1);
-        assert_eq!(merged.query(&key_a), 10);
-        assert_eq!(merged.query(&key_b), 20);
+        assert_eq!(merged.estimate(&key_a), 10);
+        assert_eq!(merged.estimate(&key_b), 20);
     }
 
     #[test]
@@ -739,7 +739,7 @@ mod tests {
         for i in 0..60 {
             let key = DataInput::U64(i);
             assert_eq!(
-                merged_fold.query(&key),
+                merged_fold.estimate(&key),
                 sa.estimate(&key) as i64,
                 "unfold merge mismatch for key {i}"
             );
@@ -773,7 +773,7 @@ mod tests {
         for i in 0..40u64 {
             let key = DataInput::U64(i);
             assert_eq!(
-                merged.query(&key),
+                merged.estimate(&key),
                 standard.estimate(&key) as i64,
                 "hierarchical merge mismatch for key {i}"
             );
@@ -868,8 +868,8 @@ mod tests {
         for value in 0..2_000u64 {
             let key = DataInput::U64(value);
             assert_eq!(
-                restored.query(&key),
-                sk.query(&key),
+                restored.estimate(&key),
+                sk.estimate(&key),
                 "estimate for {value} moved across the round trip"
             );
         }
@@ -1021,7 +1021,7 @@ mod tests {
 
         let mut within_count = 0;
         for (key, true_count) in &truth {
-            let est = fold.query(&DataInput::U64(*key));
+            let est = fold.estimate(&DataInput::U64(*key));
             if ((est - true_count).abs() as f64) < error_bound {
                 within_count += 1;
             }
@@ -1063,7 +1063,7 @@ mod tests {
             for i in 0..(n * 10) {
                 let key = DataInput::U64(i);
                 assert_eq!(
-                    merged.query(&key),
+                    merged.estimate(&key),
                     standard.estimate(&key) as i64,
                     "N={n}: mismatch for key {i}"
                 );
@@ -1105,7 +1105,7 @@ mod tests {
 
         let result = sk.unfold_to(3);
         assert_eq!(result.fold_level(), 3);
-        assert_eq!(result.query(&DataInput::Str("x")), 42);
+        assert_eq!(result.estimate(&DataInput::Str("x")), 42);
     }
 
     #[test]
@@ -1136,8 +1136,8 @@ mod tests {
         for i in 0..30u64 {
             let key = DataInput::U64(i);
             assert_eq!(
-                merged.query(&key),
-                reference.query(&key),
+                merged.estimate(&key),
+                reference.estimate(&key),
                 "mixed-level merge mismatch for key {i}"
             );
         }

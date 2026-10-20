@@ -523,7 +523,7 @@ Feature-gated behind `--features experimental`.
     - hottest key after a decrement: relative error 2%
     - `F2`: relative error 10%
 - CountMinSketchFold / CountSketchFold
-  - Configuration: row 3, col 2048, fold level 0, top_k 32
+  - Configuration: row 3, col 2048, fold level 0, heap_size 32
   - counts are exact on sparse dims, including signed weighted updates through CountSketchFold
   - same-level merge sums disjoint contributions; hierarchical merge of level-matched sketches preserves totals
 
@@ -1045,7 +1045,7 @@ Feature-gated behind `--features experimental`.
 - CMS_heap
   - Input: (3) ~ (6), (9) ~ (12)
   - Configuration:
-    - top_k: 32, 64, 128
+    - heap_size: 32, 64, 128
     - cms: row: 5; col: 32768
     - reasoning: CMS accuracy is tested elsewhere, so here is to test how the heap performs E2E
   - Error bound: for items in heap, relative error should be less than 2%
@@ -1053,7 +1053,7 @@ Feature-gated behind `--features experimental`.
 - CS_heap
   - Input: (3) ~ (6), (9) ~ (12)
   - Configuration:
-    - top_k: 32, 64, 128
+    - heap_size: 32, 64, 128
     - cs: row: 5; col: 32768
     - reasoning: CMS accuracy is tested elsewhere, so here is to test how the heap performs E2E
   - Error bound: for items in heap, relative error should be less than 2%
@@ -1072,7 +1072,7 @@ Feature-gated behind `--features experimental`.
     - reasoning: interval merges snap to bucket boundaries in both directions, so the error is granularity, not sketch collision
   - expiry: the retained span must be covered, and anything past the observed maximum time must not be
 - TumblingWindow<CountMinSketchFold>
-  - Configuration: window 10, 16 slots, CountMinSketchFold row 3, col 2048, fold level 0, top_k 32
+  - Configuration: window 10, 16 slots, CountMinSketchFold row 3, col 2048, fold level 0, heap_size 32
   - counts are exact per window
   - `query_all` and `query_recent(n)` cover exactly the expected spans; `flush` closes the active window even when it is partially filled or empty
 - TumblingWindow<KLL>

@@ -17,8 +17,8 @@
 
 use crate::support::{PROBE_KEYS, close, grid};
 use asap_sketchlib::{
-    DataInput, HeapEntry, L2HH, OwnedDataInput, UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon,
-    bottom_layer_for_hash, hash64_seeded, hash128_seeded, l2hh_cell_for_row,
+    CountSketchWithL2Norm, DataInput, HeapEntry, L2HH, OwnedDataInput, UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon,
+    bottom_layer_for_hash, hash64_seeded, hash128_seeded,
 };
 use proptest::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -359,7 +359,7 @@ proptest! {
                 }
                 let hashed = hash128_seeded(i, &DataInput::U64(*k));
                 for r in 0..rows {
-                    let (col, sign) = l2hh_cell_for_row(hashed, r, cols, mask_bits);
+                    let (col, sign) = CountSketchWithL2Norm::cell_for_row(hashed, r, cols, mask_bits);
                     expected[r * cols + col] += sign * mass;
                 }
             }

@@ -543,7 +543,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
         rows: ROWS,
         full_cols: FULL_COLS,
         fold_level: FOLD_LEVEL,
-        top_k: 32,
+        heap_size: 32,
     };
     let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(WINDOW, 16, cfg, 4);
     let keys = zipf_u64(TOTAL as usize, 512, 1.1, STREAM_SEED);
@@ -571,7 +571,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     spec.assert_contract(
         "TumblingWindow<FoldCS> active window",
         &active_truth,
-        |k| active.query(&DataInput::U64(k as u64)) as f64,
+        |k| active.estimate(&DataInput::U64(k as u64)) as f64,
         &format!(
             "rows={ROWS} full_cols={FULL_COLS} fold_level={FOLD_LEVEL} -> {folded_cols} cols, \
              window={WINDOW} zipf(1.1) domain=512 seed={STREAM_SEED:#x}"
@@ -587,7 +587,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     spec.assert_contract(
         "TumblingWindow<FoldCS> query_all",
         &all_truth,
-        |k| all.query(&DataInput::U64(k as u64)) as f64,
+        |k| all.estimate(&DataInput::U64(k as u64)) as f64,
         &format!("all {TOTAL} observations across {} windows", TOTAL / WINDOW),
     );
 
@@ -601,7 +601,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     spec.assert_contract(
         "TumblingWindow<FoldCS> query_recent(2)",
         &recent_truth,
-        |k| recent.query(&DataInput::U64(k as u64)) as f64,
+        |k| recent.estimate(&DataInput::U64(k as u64)) as f64,
         "last three windows",
     );
 
@@ -611,7 +611,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     let closed_after_flush = tw.closed_count();
     tw.update_weighted(TOTAL, &DataInput::U64(7), 1);
     assert_eq!(
-        tw.active_sketch().query(&DataInput::U64(7)),
+        tw.active_sketch().estimate(&DataInput::U64(7)),
         1,
         "a recycled window sketch must start empty; got a carried-over count"
     );
@@ -824,7 +824,7 @@ fn tumbling_fold_cms_hierarchical_merge_covers_every_observation() {
         rows: ROWS,
         full_cols: FULL_COLS,
         fold_level: FOLD_LEVEL,
-        top_k: 32,
+        heap_size: 32,
     };
     let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(WINDOW, 16, cfg, 4);
     let keys = zipf_u64(TOTAL as usize, 512, 1.1, STREAM_SEED);
@@ -847,7 +847,7 @@ fn tumbling_fold_cms_hierarchical_merge_covers_every_observation() {
     spec.assert_contract(
         "TumblingWindow<FoldCMS> query_all_hierarchical",
         &truth,
-        |k| hierarchical.query(&DataInput::U64(k as u64)) as f64,
+        |k| hierarchical.estimate(&DataInput::U64(k as u64)) as f64,
         &format!(
             "rows={ROWS} full_cols={FULL_COLS} fold_level={FOLD_LEVEL} -> {} cols after \
              hierarchical merge, window={WINDOW}, {TOTAL} observations",
@@ -857,8 +857,8 @@ fn tumbling_fold_cms_hierarchical_merge_covers_every_observation() {
 
     for (key, count) in truth.pairs() {
         let probe = DataInput::U64(key as u64);
-        let h = hierarchical.query(&probe);
-        let f = flat.query(&probe);
+        let h = hierarchical.estimate(&probe);
+        let f = flat.estimate(&probe);
         assert!(
             h >= count,
             "key {key}: hierarchical merge underestimated {count} as {h}"

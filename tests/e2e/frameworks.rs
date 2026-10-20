@@ -1605,7 +1605,7 @@ fn tumbling_foldcms_weighted_windows_exact_counts() {
         rows: 3,
         full_cols: 2048,
         fold_level: 0,
-        top_k: 32,
+        heap_size: 32,
     };
     let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(10, 16, cfg, 4);
 
@@ -1620,13 +1620,13 @@ fn tumbling_foldcms_weighted_windows_exact_counts() {
     );
 
     let all = tw.query_all();
-    assert_eq!(all.query(&DataInput::Str("A")), 70);
-    assert_eq!(all.query(&DataInput::Str("B")), 35);
+    assert_eq!(all.estimate(&DataInput::Str("A")), 70);
+    assert_eq!(all.estimate(&DataInput::Str("B")), 35);
 
     // Last two windows + active cover t in [10,35): 25 inserts.
     let recent = tw.query_recent(2);
-    assert_eq!(recent.query(&DataInput::Str("A")), 50);
-    assert_eq!(recent.query(&DataInput::Str("B")), 25);
+    assert_eq!(recent.estimate(&DataInput::Str("A")), 50);
+    assert_eq!(recent.estimate(&DataInput::Str("B")), 25);
 
     // flush() closes the active window unconditionally (even if partially
     // filled or empty), so [30,40) and an empty [40,50) both land in closed.
@@ -1637,8 +1637,8 @@ fn tumbling_foldcms_weighted_windows_exact_counts() {
         "flush closes active + opens/closes empty"
     );
     let post = tw.query_all();
-    assert_eq!(post.query(&DataInput::Str("A")), 70);
-    assert_eq!(post.query(&DataInput::Str("B")), 35);
+    assert_eq!(post.estimate(&DataInput::Str("A")), 70);
+    assert_eq!(post.estimate(&DataInput::Str("B")), 35);
 }
 
 #[test]

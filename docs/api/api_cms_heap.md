@@ -17,8 +17,8 @@ and `i128`. Each entry's count is the sketch's estimate, unrounded.
 ## Constructors
 
 ```rust
-fn new(rows: usize, cols: usize, top_k: usize) -> Self
-fn from_storage(storage: S, top_k: usize) -> Self
+fn new(rows: usize, cols: usize, heap_size: usize) -> Self
+fn from_storage(storage: S, heap_size: usize) -> Self
 fn default() -> Self
 ```
 
@@ -37,7 +37,7 @@ fn clear_heap(&mut self)
 fn estimate(&self, key: &DataInput) -> S::Counter
 fn rows(&self) -> usize
 fn cols(&self) -> usize
-fn cms(&self) -> &CountMinSketch<S, M, H>
+fn count_min_sketch(&self) -> &CountMinSketch<S, M, H>
 fn heap(&self) -> &TopKHeap<C>
 ```
 

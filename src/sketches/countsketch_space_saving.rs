@@ -19,7 +19,7 @@ pub struct CountSketchWithSpaceSaving<
     Mode = RegularPath,
     H: SketchHasher = DefaultXxHasher,
 > {
-    cs: CountSketch<S, Mode, H>,
+    count_sketch: CountSketch<S, Mode, H>,
     summary: SpaceSaving<H>,
 }
 
@@ -31,7 +31,7 @@ where
     /// `capacity` keys.
     pub fn new(rows: usize, cols: usize, capacity: usize) -> Self {
         CountSketchWithSpaceSaving {
-            cs: CountSketch::with_dimensions(rows, cols),
+            count_sketch: CountSketch::with_dimensions(rows, cols),
             summary: SpaceSaving::with_capacity(capacity),
         }
     }
@@ -42,16 +42,16 @@ where
     S::Counter: CountSketchCounter,
 {
     /// Pairs an existing matrix with an existing summary.
-    pub fn from_parts(cs: CountSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self {
+    pub fn from_parts(count_sketch: CountSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self {
         CountSketchWithSpaceSaving {
-            cs,
+            count_sketch,
             summary: space_saving,
         }
     }
 
     /// The Count Sketch matrix.
-    pub fn cs(&self) -> &CountSketch<S, M, H> {
-        &self.cs
+    pub fn count_sketch(&self) -> &CountSketch<S, M, H> {
+        &self.count_sketch
     }
 
     /// The candidate summary.
@@ -61,12 +61,12 @@ where
 
     /// Number of rows in the matrix.
     pub fn rows(&self) -> usize {
-        self.cs.rows()
+        self.count_sketch.rows()
     }
 
     /// Number of columns in the matrix.
     pub fn cols(&self) -> usize {
-        self.cs.cols()
+        self.count_sketch.cols()
     }
 
     /// Keys the summary can monitor.
@@ -82,7 +82,7 @@ where
             other.summary.capacity(),
             "Space-Saving capacity mismatch while merging CSSpaceSaving sketches"
         );
-        self.cs.merge(&other.cs);
+        self.count_sketch.merge(&other.count_sketch);
         self.summary.merge(&other.summary);
     }
 }
@@ -94,7 +94,7 @@ where
     /// Records one occurrence of `key`.
     #[inline]
     pub fn update(&mut self, key: &DataInput) {
-        self.cs.update(key);
+        self.count_sketch.update(key);
         self.summary.update(key);
     }
 
@@ -102,7 +102,7 @@ where
     /// [`CandidateCounter::summary_weight`] to the summary.
     #[inline]
     pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
-        self.cs.update_weighted(key, weight);
+        self.count_sketch.update_weighted(key, weight);
         self.summary.update_weighted(key, weight.summary_weight());
     }
 
@@ -116,13 +116,13 @@ where
     /// The Count Sketch estimate (row median) for `key`.
     #[inline]
     pub fn estimate(&self, key: &DataInput) -> f64 {
-        self.cs.estimate(key)
+        self.count_sketch.estimate(key)
     }
 
     /// The `k` monitored keys with the largest Count Sketch estimates, highest
     /// first by `f64::total_cmp`, ties broken by heap key order.
     pub fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, f64)> {
-        rank_candidates(&self.summary, k, |key| self.cs.estimate(key))
+        rank_candidates(&self.summary, k, |key| self.count_sketch.estimate(key))
     }
 }
 
@@ -134,7 +134,7 @@ where
     /// Records one occurrence of `key`.
     #[inline]
     pub fn update(&mut self, key: &DataInput) {
-        self.cs.update(key);
+        self.count_sketch.update(key);
         self.summary.update(key);
     }
 
@@ -142,7 +142,7 @@ where
     /// [`CandidateCounter::summary_weight`] to the summary.
     #[inline]
     pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
-        self.cs.update_weighted(key, weight);
+        self.count_sketch.update_weighted(key, weight);
         self.summary.update_weighted(key, weight.summary_weight());
     }
 
@@ -156,13 +156,13 @@ where
     /// The Count Sketch estimate (row median) for `key`.
     #[inline]
     pub fn estimate(&self, key: &DataInput) -> f64 {
-        self.cs.estimate(key)
+        self.count_sketch.estimate(key)
     }
 
     /// The `k` monitored keys with the largest Count Sketch estimates, highest
     /// first by `f64::total_cmp`, ties broken by heap key order.
     pub fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, f64)> {
-        rank_candidates(&self.summary, k, |key| self.cs.estimate(key))
+        rank_candidates(&self.summary, k, |key| self.count_sketch.estimate(key))
     }
 }
 

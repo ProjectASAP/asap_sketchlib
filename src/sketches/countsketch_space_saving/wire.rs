@@ -33,13 +33,13 @@ where
     /// when the matrix samples its updates or the state breaks a §3.24 decode
     /// rule, and on mixed-variant or 128-bit keys.
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        admission_rate::check_admits_all(self.cs.admission_rate())
+        admission_rate::check_admits_all(self.count_sketch.admission_rate())
             .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CSSpaceSaving envelope: {e}")))?;
         summary_wire::encode::<T, H>(
             &Self::KIND,
-            self.cs.rows(),
-            self.cs.cols(),
-            self.cs.as_storage().as_slice(),
+            self.count_sketch.rows(),
+            self.count_sketch.cols(),
+            self.count_sketch.as_storage().as_slice(),
             &self.summary,
         )
     }
@@ -56,7 +56,7 @@ where
         } = summary_wire::decode::<T, H>(&Self::KIND, bytes)?;
         let storage = Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]);
         Ok(CountSketchWithSpaceSaving {
-            cs: CountSketch::from_storage(storage),
+            count_sketch: CountSketch::from_storage(storage),
             summary,
         })
     }
@@ -83,8 +83,8 @@ mod tests {
 
         let decoded = Target::from_asapv1(&encoded).expect("decode");
         assert_eq!(
-            decoded.cs().as_storage().as_slice(),
-            sketch.cs().as_storage().as_slice()
+            decoded.count_sketch().as_storage().as_slice(),
+            sketch.count_sketch().as_storage().as_slice()
         );
         assert_eq!(
             decoded.space_saving().emitted_entries(),

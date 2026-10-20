@@ -784,8 +784,8 @@ fn a_payload_written_before_the_rounding_field_existed_still_decodes() {
     #[derive(serde::Serialize)]
     struct LegacyCountMin {
         counts: LegacyVector2D,
-        row: usize,
-        col: usize,
+        rows: usize,
+        cols: usize,
     }
 
     const RATE: f64 = 0.3;
@@ -811,8 +811,8 @@ fn a_payload_written_before_the_rounding_field_existed_still_decodes() {
                 mask: 0x1_0000,
             },
         },
-        row: ROWS,
-        col: COLS,
+        rows: ROWS,
+        cols: COLS,
     };
 
     let bytes = rmp_serde::to_vec_named(&legacy).expect("encode the legacy shape");

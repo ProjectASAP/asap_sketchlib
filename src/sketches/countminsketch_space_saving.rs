@@ -96,7 +96,7 @@ pub struct CountMinSketchWithSpaceSaving<
     Mode = RegularPath,
     H: SketchHasher = DefaultXxHasher,
 > {
-    cms: CountMinSketch<S, Mode, H>,
+    count_min_sketch: CountMinSketch<S, Mode, H>,
     summary: SpaceSaving<H>,
 }
 
@@ -108,7 +108,7 @@ where
     /// `capacity` keys.
     pub fn new(rows: usize, cols: usize, capacity: usize) -> Self {
         CountMinSketchWithSpaceSaving {
-            cms: CountMinSketch::with_dimensions(rows, cols),
+            count_min_sketch: CountMinSketch::with_dimensions(rows, cols),
             summary: SpaceSaving::with_capacity(capacity),
         }
     }
@@ -116,16 +116,16 @@ where
 
 impl<S: MatrixStorage, M, H: SketchHasher> CountMinSketchWithSpaceSaving<S, M, H> {
     /// Pairs an existing matrix with an existing summary.
-    pub fn from_parts(cms: CountMinSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self {
+    pub fn from_parts(count_min_sketch: CountMinSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self {
         CountMinSketchWithSpaceSaving {
-            cms,
+            count_min_sketch,
             summary: space_saving,
         }
     }
 
     /// The Count-Min matrix.
-    pub fn cms(&self) -> &CountMinSketch<S, M, H> {
-        &self.cms
+    pub fn count_min_sketch(&self) -> &CountMinSketch<S, M, H> {
+        &self.count_min_sketch
     }
 
     /// The candidate summary.
@@ -135,12 +135,12 @@ impl<S: MatrixStorage, M, H: SketchHasher> CountMinSketchWithSpaceSaving<S, M, H
 
     /// Number of rows in the matrix.
     pub fn rows(&self) -> usize {
-        self.cms.rows()
+        self.count_min_sketch.rows()
     }
 
     /// Number of columns in the matrix.
     pub fn cols(&self) -> usize {
-        self.cms.cols()
+        self.count_min_sketch.cols()
     }
 
     /// Keys the summary can monitor.
@@ -156,7 +156,7 @@ impl<S: MatrixStorage, M, H: SketchHasher> CountMinSketchWithSpaceSaving<S, M, H
             other.summary.capacity(),
             "Space-Saving capacity mismatch while merging CMSSpaceSaving sketches"
         );
-        self.cms.merge(&other.cms);
+        self.count_min_sketch.merge(&other.count_min_sketch);
         self.summary.merge(&other.summary);
     }
 }
@@ -168,7 +168,7 @@ where
     /// Records one occurrence of `key`.
     #[inline]
     pub fn update(&mut self, key: &DataInput) {
-        self.cms.update(key);
+        self.count_min_sketch.update(key);
         self.summary.update(key);
     }
 
@@ -176,7 +176,7 @@ where
     /// to the summary.
     #[inline]
     pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
-        self.cms.update_weighted(key, weight);
+        self.count_min_sketch.update_weighted(key, weight);
         self.summary.update_weighted(key, weight.summary_weight());
     }
 
@@ -190,13 +190,13 @@ where
     /// The Count-Min estimate for `key`.
     #[inline]
     pub fn estimate(&self, key: &DataInput) -> S::Counter {
-        self.cms.estimate(key)
+        self.count_min_sketch.estimate(key)
     }
 
     /// The `k` monitored keys with the largest Count-Min estimates, highest
     /// first, ties broken by heap key order.
     pub fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, S::Counter)> {
-        rank_candidates(&self.summary, k, |key| self.cms.estimate(key))
+        rank_candidates(&self.summary, k, |key| self.count_min_sketch.estimate(key))
     }
 }
 
@@ -208,7 +208,7 @@ where
     /// Records one occurrence of `key`.
     #[inline]
     pub fn update(&mut self, key: &DataInput) {
-        self.cms.update(key);
+        self.count_min_sketch.update(key);
         self.summary.update(key);
     }
 
@@ -216,7 +216,7 @@ where
     /// to the summary.
     #[inline]
     pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
-        self.cms.update_weighted(key, weight);
+        self.count_min_sketch.update_weighted(key, weight);
         self.summary.update_weighted(key, weight.summary_weight());
     }
 
@@ -230,13 +230,13 @@ where
     /// The Count-Min estimate for `key`.
     #[inline]
     pub fn estimate(&self, key: &DataInput) -> S::Counter {
-        self.cms.estimate(key)
+        self.count_min_sketch.estimate(key)
     }
 
     /// The `k` monitored keys with the largest Count-Min estimates, highest
     /// first, ties broken by heap key order.
     pub fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, S::Counter)> {
-        rank_candidates(&self.summary, k, |key| self.cms.estimate(key))
+        rank_candidates(&self.summary, k, |key| self.count_min_sketch.estimate(key))
     }
 }
 
@@ -343,15 +343,15 @@ mod tests {
         b.update_weighted(&DataInput::U64(1), 4);
         b.update(&DataInput::U64(2));
         let cells: Vec<i64> = a
-            .cms()
+            .count_min_sketch()
             .as_storage()
             .as_slice()
             .iter()
-            .zip(b.cms().as_storage().as_slice())
+            .zip(b.count_min_sketch().as_storage().as_slice())
             .map(|(x, y)| x + y)
             .collect();
         a.merge(&b);
-        assert_eq!(a.cms().as_storage().as_slice(), cells.as_slice());
+        assert_eq!(a.count_min_sketch().as_storage().as_slice(), cells.as_slice());
         assert_eq!(ranked(&a.top_k(2)), vec![(1, 7), (2, 1)]);
     }
 

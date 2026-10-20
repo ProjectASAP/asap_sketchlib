@@ -53,11 +53,11 @@ where
     /// heap's keys mix `OwnedDataInput` variants or hold a 128-bit key, or when
     /// `heap_size` or `cols` overflows the metadata's `u32` field.
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        admission_rate::check_admits_all(self.cms.admission_rate())
+        admission_rate::check_admits_all(self.count_min_sketch.admission_rate())
             .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CMSHeap envelope: {e}")))?;
-        let rows = self.cms.rows();
-        let cols = self.cms.cols();
-        let counts = self.cms.as_storage().as_slice();
+        let rows = self.count_min_sketch.rows();
+        let cols = self.count_min_sketch.cols();
+        let counts = self.count_min_sketch.as_storage().as_slice();
         let entries = heap_entries(&self.heap);
         let key_type = wire_key_type(&entries)?;
         let metadata = encode_metadata::<H>(
@@ -112,7 +112,7 @@ where
         let heap = rebuild_heap(shape.heap_size, entries)?;
         let storage = Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]);
         Ok(CountMinSketchWithHeap {
-            cms: CountMinSketch::from_storage(storage),
+            count_min_sketch: CountMinSketch::from_storage(storage),
             heap,
         })
     }
@@ -172,8 +172,8 @@ mod tests {
         assert_eq!(sketch.rows(), decoded.rows());
         assert_eq!(sketch.cols(), decoded.cols());
         assert_eq!(
-            sketch.cms().as_storage().as_slice(),
-            decoded.cms().as_storage().as_slice()
+            sketch.count_min_sketch().as_storage().as_slice(),
+            decoded.count_min_sketch().as_storage().as_slice()
         );
         assert_eq!(decoded.heap().len(), 3);
         assert_eq!(decoded.heap().capacity(), 4);
@@ -206,8 +206,8 @@ mod tests {
         let decoded = CountMinSketchWithHeap::<Vector2D<f64>, RegularPath>::from_asapv1(&encoded)
             .expect("decode");
         assert_eq!(
-            sketch.cms().as_storage().as_slice(),
-            decoded.cms().as_storage().as_slice()
+            sketch.count_min_sketch().as_storage().as_slice(),
+            decoded.count_min_sketch().as_storage().as_slice()
         );
         assert!(decoded.heap().find(&DataInput::Str("flow")).is_some());
         assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
@@ -275,8 +275,8 @@ mod tests {
         let decoded = CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::from_asapv1(&encoded)
             .expect("deserialize");
         assert_eq!(
-            sketch.cms().as_storage().as_slice(),
-            decoded.cms().as_storage().as_slice()
+            sketch.count_min_sketch().as_storage().as_slice(),
+            decoded.count_min_sketch().as_storage().as_slice()
         );
 
         // Mode is pinned by the target: a fast payload must not decode into a
@@ -559,8 +559,8 @@ mod tests {
         )
         .expect("alt decode");
         assert_eq!(
-            alt.cms().as_storage().as_slice(),
-            decoded.cms().as_storage().as_slice()
+            alt.count_min_sketch().as_storage().as_slice(),
+            decoded.count_min_sketch().as_storage().as_slice()
         );
         assert_eq!(decoded.heap().len(), 2);
 

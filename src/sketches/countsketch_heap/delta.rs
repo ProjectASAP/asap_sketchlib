@@ -131,7 +131,7 @@ where
             ));
         }
         add_cells(
-            self.cs.as_storage_mut().as_mut_slice(),
+            self.count_sketch.as_storage_mut().as_mut_slice(),
             &delta.indices,
             &delta.deltas,
         )
@@ -192,7 +192,7 @@ mod tests {
         for rejected in [transposed, wider, overflowing] {
             assert!(state.merge_delta(&rejected).is_err());
             assert_eq!(
-                state.cs().as_storage().as_slice(),
+                state.count_sketch().as_storage().as_slice(),
                 &[0, 0, 0, i64::MIN, 0, 0, 0, i64::MIN]
             );
             assert_eq!(state.heap().len(), 1);

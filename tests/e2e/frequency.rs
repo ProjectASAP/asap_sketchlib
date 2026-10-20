@@ -608,27 +608,27 @@ fn fold_cms_foldcs_counts_and_hierarchical_merge() {
         b.update_weighted(&DataInput::Str("alpha"), 2);
         b.update_weighted(&DataInput::Str("beta"), 1);
     }
-    assert_eq!(a.query(&DataInput::Str("alpha")), 200);
-    assert_eq!(b.query(&DataInput::Str("alpha")), 200);
-    assert_eq!(b.query(&DataInput::Str("beta")), 100);
+    assert_eq!(a.estimate(&DataInput::Str("alpha")), 200);
+    assert_eq!(b.estimate(&DataInput::Str("alpha")), 200);
+    assert_eq!(b.estimate(&DataInput::Str("beta")), 100);
 
     // Same-level merge sums disjoint contributions.
     a.merge_same_level(&b);
-    assert_eq!(a.query(&DataInput::Str("alpha")), 400);
-    assert_eq!(a.query(&DataInput::Str("beta")), 100);
+    assert_eq!(a.estimate(&DataInput::Str("alpha")), 400);
+    assert_eq!(a.estimate(&DataInput::Str("beta")), 100);
 
     // Signed weighted updates through CountSketchFold.
     let mut fs = CountSketchFold::<DefaultXxHasher>::new(3, 2048, 0, 32);
     fs.update_weighted(&DataInput::Str("gamma"), 60);
     fs.update_weighted(&DataInput::Str("gamma"), -20);
-    assert_eq!(fs.query(&DataInput::Str("gamma")), 40);
+    assert_eq!(fs.estimate(&DataInput::Str("gamma")), 40);
 
     // Hierarchical merge of level-matched sketches preserves totals.
     let s1 = build_fold_cms("s1", 30);
     let s2 = build_fold_cms("s2", 45);
     let merged = CountMinSketchFold::hierarchical_merge(&[s1, s2]);
-    assert_eq!(merged.query(&DataInput::Str("s1")), 90);
-    assert_eq!(merged.query(&DataInput::Str("s2")), 135);
+    assert_eq!(merged.estimate(&DataInput::Str("s1")), 90);
+    assert_eq!(merged.estimate(&DataInput::Str("s2")), 135);
 }
 
 fn build_fold_cms(key: &'static str, n: usize) -> CountMinSketchFold<DefaultXxHasher> {
@@ -688,13 +688,13 @@ fn folded_sketches_keep_their_own_bounds_through_a_sixteen_way_merge() {
     CountMinSpec::new(ROWS, folded_cols).assert_contract(
         "FoldCMS after a 16-way hierarchical merge",
         &truth,
-        |k| cms_merged.query(&DataInput::U64(k as u64)) as f64,
+        |k| cms_merged.estimate(&DataInput::U64(k as u64)) as f64,
         &context,
     );
     CountSketchSpec::new(ROWS, folded_cols).assert_contract(
         "FoldCS after a 16-way hierarchical merge",
         &truth,
-        |k| cs_merged.query(&DataInput::U64(k as u64)) as f64,
+        |k| cs_merged.estimate(&DataInput::U64(k as u64)) as f64,
         &context,
     );
 }

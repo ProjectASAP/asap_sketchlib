@@ -33,7 +33,7 @@ pub struct CountMinSketchWithHeap<
 > where
     S::Counter: HeapCounter,
 {
-    cms: CountMinSketch<S, Mode, H>,
+    count_min_sketch: CountMinSketch<S, Mode, H>,
     heap: TopKHeap<HeapCountOf<S>>,
 }
 
@@ -44,10 +44,10 @@ where
     T: Copy + Default + std::ops::AddAssign + HeapCounter,
 {
     /// Creates a new `CountMinSketchWithHeap` with the given CMS dimensions and heap capacity.
-    pub fn new(rows: usize, cols: usize, top_k: usize) -> Self {
+    pub fn new(rows: usize, cols: usize, heap_size: usize) -> Self {
         CountMinSketchWithHeap {
-            cms: CountMinSketch::with_dimensions(rows, cols),
-            heap: TopKHeap::new(top_k),
+            count_min_sketch: CountMinSketch::with_dimensions(rows, cols),
+            heap: TopKHeap::new(heap_size),
         }
     }
 }
@@ -59,10 +59,10 @@ where
     S::Counter: HeapCounter,
 {
     /// Creates a `CountMinSketchWithHeap` from a pre-built storage backend.
-    pub fn from_storage(storage: S, top_k: usize) -> Self {
+    pub fn from_storage(storage: S, heap_size: usize) -> Self {
         CountMinSketchWithHeap {
-            cms: CountMinSketch::from_storage(storage),
-            heap: TopKHeap::new(top_k),
+            count_min_sketch: CountMinSketch::from_storage(storage),
+            heap: TopKHeap::new(heap_size),
         }
     }
 }
@@ -176,13 +176,13 @@ where
     S::Counter: HeapCounter,
 {
     /// Returns a reference to the internal CMS.
-    pub fn cms(&self) -> &CountMinSketch<S, M, H> {
-        &self.cms
+    pub fn count_min_sketch(&self) -> &CountMinSketch<S, M, H> {
+        &self.count_min_sketch
     }
 
     /// Returns a mutable reference to the internal CMS.
-    pub fn cms_mut(&mut self) -> &mut CountMinSketch<S, M, H> {
-        &mut self.cms
+    pub fn count_min_sketch_mut(&mut self) -> &mut CountMinSketch<S, M, H> {
+        &mut self.count_min_sketch
     }
 
     /// Returns a reference to the heavy-hitter heap.
@@ -198,13 +198,13 @@ where
     /// Number of rows in the underlying CMS.
     #[inline(always)]
     pub fn rows(&self) -> usize {
-        self.cms.rows()
+        self.count_min_sketch.rows()
     }
 
     /// Number of columns in the underlying CMS.
     #[inline(always)]
     pub fn cols(&self) -> usize {
-        self.cms.cols()
+        self.count_min_sketch.cols()
     }
 
     /// Clears both the CMS counters (by rebuilding) and the heap.
@@ -223,16 +223,16 @@ where
     /// Inserts a single observation and updates the top-k heap.
     #[inline]
     pub fn update(&mut self, key: &DataInput) {
-        self.cms.update(key);
-        let est = self.cms.estimate(key);
+        self.count_min_sketch.update(key);
+        let est = self.count_min_sketch.estimate(key);
         self.heap.update(key, est.into());
     }
 
     /// Inserts an observation with the given count and updates the top-k heap.
     #[inline]
     pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
-        self.cms.update_weighted(key, weight);
-        let est = self.cms.estimate(key);
+        self.count_min_sketch.update_weighted(key, weight);
+        let est = self.count_min_sketch.estimate(key);
         self.heap.update(key, est.into());
     }
 
@@ -246,7 +246,7 @@ where
     /// Returns the CMS frequency estimate for the given key.
     #[inline]
     pub fn estimate(&self, key: &DataInput) -> S::Counter {
-        self.cms.estimate(key)
+        self.count_min_sketch.estimate(key)
     }
 
     /// Merges another `CountMinSketchWithHeap` into `self`.
@@ -254,7 +254,7 @@ where
     /// After merging the CMS counters, all heap items from both sources are
     /// re-queried against the merged sketch to reconcile the top-k heap.
     pub fn merge(&mut self, other: &Self) {
-        self.cms.merge(&other.cms);
+        self.count_min_sketch.merge(&other.count_min_sketch);
         let mut candidate_keys = Vec::with_capacity(self.heap.len() + other.heap.len());
         for item in self.heap.heap() {
             candidate_keys.push(item.key.clone());
@@ -265,7 +265,7 @@ where
         self.heap.clear();
         for key in candidate_keys {
             let key_ref = heap_item_to_sketch_input(&key);
-            let est = self.cms.estimate(&key_ref);
+            let est = self.count_min_sketch.estimate(&key_ref);
             self.heap.update(&key_ref, est.into());
         }
     }
@@ -282,16 +282,16 @@ where
     /// Inserts a single observation using fast-path hashing and updates the heap.
     #[inline]
     pub fn update(&mut self, key: &DataInput) {
-        self.cms.update(key);
-        let est = self.cms.estimate(key);
+        self.count_min_sketch.update(key);
+        let est = self.count_min_sketch.estimate(key);
         self.heap.update(key, est.into());
     }
 
     /// Inserts an observation with the given count using fast-path hashing.
     #[inline]
     pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
-        self.cms.update_weighted(key, weight);
-        let est = self.cms.estimate(key);
+        self.count_min_sketch.update_weighted(key, weight);
+        let est = self.count_min_sketch.estimate(key);
         self.heap.update(key, est.into());
     }
 
@@ -305,12 +305,12 @@ where
     /// Returns the CMS frequency estimate using fast-path hashing.
     #[inline]
     pub fn estimate(&self, key: &DataInput) -> S::Counter {
-        self.cms.estimate(key)
+        self.count_min_sketch.estimate(key)
     }
 
     /// Merges another `CountMinSketchWithHeap` into `self`.
     pub fn merge(&mut self, other: &Self) {
-        self.cms.merge(&other.cms);
+        self.count_min_sketch.merge(&other.count_min_sketch);
         let mut candidate_keys = Vec::with_capacity(self.heap.len() + other.heap.len());
         for item in self.heap.heap() {
             candidate_keys.push(item.key.clone());
@@ -321,7 +321,7 @@ where
         self.heap.clear();
         for key in candidate_keys {
             let key_ref = heap_item_to_sketch_input(&key);
-            let est = self.cms.estimate(&key_ref);
+            let est = self.count_min_sketch.estimate(&key_ref);
             self.heap.update(&key_ref, est.into());
         }
     }

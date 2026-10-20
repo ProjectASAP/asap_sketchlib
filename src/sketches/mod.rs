@@ -113,7 +113,7 @@ pub mod countsketch_heap;
 pub use countsketch_heap::{
     CountSketchHeapCounter, CountSketchWithHeap, CountSketchWithHeapDelta, heap_count_from_estimate,
 };
-pub use countsketch_heap::{CountSketchWithL2Norm, l2hh_cell_for_row};
+pub use countsketch_heap::{CountSketchWithL2Norm};
 
 pub mod countminsketch_space_saving;
 pub use countminsketch_space_saving::{CandidateCounter, CountMinSketchWithSpaceSaving};

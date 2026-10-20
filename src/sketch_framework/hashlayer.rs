@@ -105,8 +105,8 @@ impl EnsembleSketch {
     /// Inserts a precomputed hash into the sketch.
     pub fn update_with_hash(&mut self, hash: &MatrixHash) {
         match self {
-            EnsembleSketch::CountMinFast(sketch) => sketch.fast_insert(hash),
-            EnsembleSketch::CountSketchFast(sketch) => sketch.fast_insert(hash),
+            EnsembleSketch::CountMinFast(sketch) => sketch.update_with_hash(hash),
+            EnsembleSketch::CountSketchFast(sketch) => sketch.update_with_hash(hash),
             EnsembleSketch::HllErtl(hll) => hll.update_with_hash(hash.lower_64()),
             EnsembleSketch::HllClassic(hll) => hll.update_with_hash(hash.lower_64()),
             EnsembleSketch::HllHip(hll) => hll.update_with_hash(hash.lower_64()),
@@ -117,8 +117,8 @@ impl EnsembleSketch {
     /// `Some(f64)` for CMS / Count, `None` for HLL.
     pub fn estimate_with_hash(&self, hash: &MatrixHash) -> Option<f64> {
         match self {
-            EnsembleSketch::CountMinFast(sketch) => Some(sketch.fast_estimate(hash)),
-            EnsembleSketch::CountSketchFast(sketch) => Some(sketch.fast_estimate(hash)),
+            EnsembleSketch::CountMinFast(sketch) => Some(sketch.estimate_with_hash(hash)),
+            EnsembleSketch::CountSketchFast(sketch) => Some(sketch.estimate_with_hash(hash)),
             EnsembleSketch::HllErtl(_)
             | EnsembleSketch::HllClassic(_)
             | EnsembleSketch::HllHip(_) => None,

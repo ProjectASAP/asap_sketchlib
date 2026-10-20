@@ -202,8 +202,8 @@ macro_rules! fold_laws {
                         prop_assert_eq!(folded.fold_cols(), full_cols >> level);
                         for key in &asked {
                             prop_assert_eq!(
-                                folded.query(&DataInput::U64(*key)),
-                                flat.query(&DataInput::U64(*key)),
+                                folded.estimate(&DataInput::U64(*key)),
+                                flat.estimate(&DataInput::U64(*key)),
                                 "key {} at fold level {}", key, level
                             );
                         }
@@ -224,8 +224,8 @@ macro_rules! fold_laws {
                         prop_assert_eq!(unfolded.fold_cols(), full_cols >> target);
                         for key in &asked {
                             prop_assert_eq!(
-                                unfolded.query(&DataInput::U64(*key)),
-                                sketch.query(&DataInput::U64(*key)),
+                                unfolded.estimate(&DataInput::U64(*key)),
+                                sketch.estimate(&DataInput::U64(*key)),
                                 "key {} unfolded from {} to {}", key, level, target
                             );
                         }
@@ -355,8 +355,8 @@ macro_rules! fold_laws {
                     prop_assert_eq!(merged.to_flat_counters(), whole.to_flat_counters());
                     for key in probes(&concatenated) {
                         prop_assert_eq!(
-                            merged.query(&DataInput::U64(key)),
-                            whole.query(&DataInput::U64(key)),
+                            merged.estimate(&DataInput::U64(key)),
+                            whole.estimate(&DataInput::U64(key)),
                             "key {} after merging {} sub-windows", key, sub_windows.len()
                         );
                     }
@@ -410,7 +410,7 @@ proptest! {
                 .min()
                 .expect("at least two rows");
             prop_assert_eq!(
-                sketch.query(&DataInput::U64(key)),
+                sketch.estimate(&DataInput::U64(key)),
                 expected,
                 "key {} at columns {:?} from fold level {}",
                 key, marks.iter().map(|m| m.0).collect::<Vec<_>>(), level
@@ -429,9 +429,9 @@ proptest! {
 
         for (key, count) in truth_of(&stream) {
             prop_assert!(
-                sketch.query(&DataInput::U64(key)) >= count,
+                sketch.estimate(&DataInput::U64(key)) >= count,
                 "key {}: estimate {} below the true {} at fold level {}",
-                key, sketch.query(&DataInput::U64(key)), count, level
+                key, sketch.estimate(&DataInput::U64(key)), count, level
             );
         }
     }
@@ -494,7 +494,7 @@ proptest! {
         for key in probes(&stream) {
             let per_row = cs_row_estimates(rows, full_cols, &counters, key);
             let values: Vec<i64> = per_row.iter().map(|(_, _, est)| *est).collect();
-            let estimate = sketch.query(&DataInput::U64(key));
+            let estimate = sketch.estimate(&DataInput::U64(key));
             prop_assert!(
                 estimate >= *values.iter().min().expect("at least two rows")
                     && estimate <= *values.iter().max().expect("at least two rows"),
@@ -518,7 +518,7 @@ proptest! {
             let mut values: Vec<i64> = per_row.iter().map(|(_, _, est)| *est).collect();
             values.sort_unstable();
             prop_assert_eq!(
-                sketch.query(&DataInput::U64(key)),
+                sketch.estimate(&DataInput::U64(key)),
                 values[rows / 2],
                 "key {}: row estimates {:?} at fold level {}",
                 key, per_row, level
@@ -596,9 +596,9 @@ fn holds_model(cell: &FoldCell, model: &[(u16, i64)], what: &str) -> Result<(), 
     );
 
     for (col, count) in model {
-        prop_assert_eq!(cell.query(*col), *count, "{}: column {}", what, col);
+        prop_assert_eq!(cell.get(*col), *count, "{}: column {}", what, col);
     }
-    prop_assert_eq!(cell.query(9), 0, "{}: a column never inserted", what);
+    prop_assert_eq!(cell.get(9), 0, "{}: a column never inserted", what);
     Ok(())
 }
 
@@ -615,7 +615,7 @@ proptest! {
         prop_assert_eq!(cell.entry_count(), 0);
 
         for (step, (col, delta)) in inserts.iter().enumerate() {
-            cell.insert(*col, *delta);
+            cell.add(*col, *delta);
             let model = cell_model(&inserts[..=step]);
             holds_model(&cell, &model, &format!("after {} inserts", step + 1))?;
         }
@@ -630,11 +630,11 @@ proptest! {
     ) {
         let mut merged = FoldCell::Empty;
         for (col, delta) in &left {
-            merged.insert(*col, *delta);
+            merged.add(*col, *delta);
         }
         let mut other = FoldCell::Empty;
         for (col, delta) in &right {
-            other.insert(*col, *delta);
+            other.add(*col, *delta);
         }
         merged.merge_from(&other);
 
@@ -644,7 +644,7 @@ proptest! {
         let mut reversed = other;
         let mut first = FoldCell::Empty;
         for (col, delta) in &left {
-            first.insert(*col, *delta);
+            first.add(*col, *delta);
         }
         reversed.merge_from(&first);
         holds_model(&reversed, &cell_model(&concatenated), "right merged with left")?;

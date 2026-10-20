@@ -9,7 +9,7 @@ use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, grid, keys};
 use asap_sketchlib::{
     CountSketch, CountMinSketch, CountMinSketchWithHeap, CountSketchWithHeap, CountSketchWithL2Norm,
     DataInput, DefaultXxHasher, FastPath, RegularPath, TopKHeap, Vector2D,
-    heap_count_from_estimate, heap_item_to_sketch_input, l2hh_cell_for_row,
+    heap_count_from_estimate, heap_item_to_sketch_input,
 };
 use proptest::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -139,7 +139,7 @@ fn mapped_cells(
     let mut cells = vec![vec![0i64; cols]; rows];
     for (hash, delta) in updates {
         for (r, row) in cells.iter_mut().enumerate() {
-            let (col, sign) = l2hh_cell_for_row(*hash, r, cols, mask_bits);
+            let (col, sign) = CountSketchWithL2Norm::cell_for_row(*hash, r, cols, mask_bits);
             row[col] += sign * delta;
         }
     }
@@ -163,7 +163,7 @@ proptest! {
             bare.update(&DataInput::U64(*k));
         }
 
-        prop_assert_eq!(cm_cells(wrapped.cms()), cm_cells(&bare));
+        prop_assert_eq!(cm_cells(wrapped.count_min_sketch()), cm_cells(&bare));
     }
 
     #[test]
@@ -180,7 +180,7 @@ proptest! {
             bare.update(&DataInput::U64(*k));
         }
 
-        prop_assert_eq!(cs_cells(wrapped.cs()), cs_cells(&bare));
+        prop_assert_eq!(cs_cells(wrapped.count_sketch()), cs_cells(&bare));
     }
 
     // ===== Wire =====
@@ -465,7 +465,7 @@ proptest! {
 
     // ===== CountSketchWithL2Norm lands where the shared cell map says =====
 
-    /// An OctoSketch worker addresses cells with `l2hh_cell_for_row` and its
+    /// An OctoSketch worker addresses cells with `CountSketchWithL2Norm::cell_for_row` and its
     /// parent with the sketch's own insert, so the two must name one cell.
     #[test]
     fn count_l2hh_writes_the_cells_the_shared_map_names(
@@ -509,7 +509,7 @@ proptest! {
         for (hash, _) in &updates {
             let rows_read: Vec<f64> = (0..rows)
                 .map(|r| {
-                    let (col, sign) = l2hh_cell_for_row(*hash, r, cols, mask_bits);
+                    let (col, sign) = CountSketchWithL2Norm::cell_for_row(*hash, r, cols, mask_bits);
                     (sign * mapped[r][col]) as f64
                 })
                 .collect();

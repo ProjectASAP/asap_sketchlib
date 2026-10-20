@@ -191,7 +191,7 @@ Compared against: the raw arrival stream, from which the window and each bucket'
 Every law is an equality. Compared against: the sketch definition over an exact `HashMap`; a key's `(col, sign)` read off a level-0 one-key sketch via `cell` / `iter`. Regime: 48 keys, 8-64 full cols, folded 0-6 levels, so `FoldCell::Collided` occurs.
 
 - per `CountMinSketchFold` and `CountSketchFold` (12)
-  - `fold(S, level).query(k) == S.query(k)` at every admitted level; `cols() == full_cols >> level`
+  - `fold(S, level).estimate(k) == S.estimate(k)` at every admitted level; `cols() == full_cols >> level`
   - `unfold_to(t)` keeps every query, for every `t <= level`
   - each row holds at most one entry per full column, at every level
   - `unfold_to(h).unfold_to(l) == unfold_to(l)`; `unfold_full() == unfold_to(0)`
@@ -429,8 +429,8 @@ Compared against: an exact `HashMap` count. Every bound is deterministic.
 Path laws compare two real implementations: the wrapper's matrix must equal the bare sketch's.
 
 - matrix
-  - `CountMinSketchWithHeap.cms()` cells == bare `CountMinSketch`
-  - `CountSketchWithHeap.cs()` cells == bare Count sketch
+  - `CountMinSketchWithHeap.count_min_sketch()` cells == bare `CountMinSketch`
+  - `CountSketchWithHeap.count_sketch()` cells == bare Count sketch
 - heap
   - `CountMinSketchWithHeap` resident: `truth(k) <= count <= estimate(k)`
   - `CountSketchWithHeap` resident: `count == estimate at its last insert`
@@ -441,7 +441,7 @@ Path laws compare two real implementations: the wrapper's matrix must equal the 
   - every merged resident: `count == merged estimate(k)`
   - room for the union: merged keys `== a.keys + b.keys`
 - `CountSketchWithL2Norm`, via hash-taking entry points
-  - `update_weighted_with_hash_without_l2` writes the cells `l2hh_cell_for_row` names, with the row sign
+  - `update_weighted_with_hash_without_l2` writes the cells `CountSketchWithL2Norm::cell_for_row` names, with the row sign
   - `estimate_with_hash == median(sign-corrected cells)`
   - `l2_squared() == median over rows of sum of squares`, every update
   - merge adds cells and recomputes L2 from them
@@ -457,7 +457,7 @@ Layer placement is a deterministic hash, so nesting is exact. Layer membership c
   - `bottom_layer_for_hash(h, layers)` == set bits of `h` above bit 0, capped at depth
   - `layer[i].keys` contains `layer[i+1].keys`
 - counters
-  - `layer[i]` cells == signed mass of exactly the keys reaching `i`, placed by `l2hh_cell_for_row` under that layer's seed; the expected cells are the stream summed directly
+  - `layer[i]` cells == signed mass of exactly the keys reaching `i`, placed by `CountSketchWithL2Norm::cell_for_row` under that layer's seed; the expected cells are the stream summed directly
 - one key
   - `estimate_l1() == weight` exactly; `estimate_l2() == weight`, `estimate_cardinality() == 1`, `estimate_entropy() == 0` to `REL_TOL`
 - merge

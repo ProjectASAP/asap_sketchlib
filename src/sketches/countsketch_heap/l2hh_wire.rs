@@ -37,7 +37,7 @@ use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::{HashProfile, SketchHasher, Vector1D, Vector2D};
 
-use super::{CountSketchWithL2Norm, check_l2hh_hash_bits};
+use super::{CountSketchWithL2Norm};
 
 
 /// CountSketchWithL2Norm descriptor metadata (ASAPv1 §2), a msgpack **map**
@@ -99,7 +99,7 @@ struct CountSketchWithL2NormPayload {
 /// `Vector2D` derives its column mask via `cols.ilog2()`, which panics on
 /// `cols == 0`.
 ///
-/// The hash-bit budget is [`check_l2hh_hash_bits`], the same check the
+/// The hash-bit budget is [`CountSketchWithL2Norm::check_hash_bits`], the same check the
 /// constructor panics on, returned here as a `Result` so both wire doors fail
 /// closed instead of panicking.
 pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
@@ -109,7 +109,7 @@ pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
         ));
     }
     check_matrix_rows("CountL2HH", rows)?;
-    check_l2hh_hash_bits(rows, cols)
+    CountSketchWithL2Norm::check_hash_bits(rows, cols)
 }
 
 /// Rejects a seed index the hasher's seed list does not hold. Seed selection
@@ -131,21 +131,21 @@ pub(crate) fn check_seed_index(seed_index: usize, seed_list_len: usize) -> Resul
 pub(crate) fn layer_state<H: SketchHasher>(
     sketch: &CountSketchWithL2Norm<H>,
 ) -> Result<(&[i64], &[i64]), RmpEncodeError> {
-    check_dimensions(sketch.row, sketch.col).map_err(RmpEncodeError::Syntax)?;
-    let cells = sketch.row.saturating_mul(sketch.col);
+    check_dimensions(sketch.rows, sketch.cols).map_err(RmpEncodeError::Syntax)?;
+    let cells = sketch.rows.saturating_mul(sketch.cols);
     let counts = sketch.counts.as_slice();
-    let l2 = sketch.l2.as_slice();
+    let l2 = sketch.row_l2_squared.as_slice();
     if counts.len() != cells {
         return Err(RmpEncodeError::Syntax(format!(
             "ASAPv1 CountL2HH state: counts length {} != rows*cols {cells}",
             counts.len()
         )));
     }
-    if l2.len() != sketch.row {
+    if l2.len() != sketch.rows {
         return Err(RmpEncodeError::Syntax(format!(
             "ASAPv1 CountL2HH state: l2 length {} != rows {}",
             l2.len(),
-            sketch.row
+            sketch.rows
         )));
     }
     if let Some(negative) = l2.iter().find(|&&value| value < 0) {
@@ -187,9 +187,9 @@ pub(crate) fn rebuild_layer<H: SketchHasher>(
     }
     Ok(CountSketchWithL2Norm {
         counts: Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]),
-        l2: Vector1D::from_vec(l2.to_vec()),
-        row: rows,
-        col: cols,
+        row_l2_squared: Vector1D::from_vec(l2.to_vec()),
+        rows: rows,
+        cols: cols,
         seed_index,
         _hasher: PhantomData,
     })
@@ -208,7 +208,7 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
     /// seed list, or when a dimension or the seed index overflows its `u32`
     /// metadata field.
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        check_dimensions(self.row, self.col).map_err(RmpEncodeError::Syntax)?;
+        check_dimensions(self.rows, self.cols).map_err(RmpEncodeError::Syntax)?;
         check_seed_index(self.seed_index, H::seed_list().len()).map_err(RmpEncodeError::Syntax)?;
         let (counts, l2) = layer_state(self)?;
         let field = |name: &str, value: usize| {
@@ -220,8 +220,8 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
         };
         let metadata = rmp_serde::to_vec_named(&count_sketch_with_l2_norm_metadata::<H>(
             field("seed_index", self.seed_index)?,
-            field("rows", self.row)?,
-            field("cols", self.col)?,
+            field("rows", self.rows)?,
+            field("cols", self.cols)?,
         ))?;
         let payload = rmp_serde::to_vec(&CountSketchWithL2NormPayload {
             counts: counts.to_vec(),
@@ -340,7 +340,7 @@ mod tests {
             sketch.as_storage().as_slice(),
             decoded.as_storage().as_slice()
         );
-        assert_eq!(sketch.l2.as_slice(), decoded.l2.as_slice());
+        assert_eq!(sketch.row_l2_squared.as_slice(), decoded.row_l2_squared.as_slice());
         assert_eq!(sketch.l2(), decoded.l2());
     }
 
@@ -595,9 +595,9 @@ mod tests {
     fn unchecked(rows: usize, cols: usize) -> Std {
         CountSketchWithL2Norm {
             counts: Vector2D::init(rows, cols),
-            l2: Vector1D::filled(rows, 0),
-            row: rows,
-            col: cols,
+            row_l2_squared: Vector1D::filled(rows, 0),
+            rows: rows,
+            cols: cols,
             seed_index: 0,
             _hasher: PhantomData,
         }

@@ -980,7 +980,7 @@ fn probe_tumbling() {
         rows: 3,
         full_cols: 2048,
         fold_level: 0,
-        top_k: 32,
+        heap_size: 32,
     };
     let mut tw: TumblingWindow<asap_sketchlib::CountMinSketchFold> =
         TumblingWindow::new(10, 8, cfg.clone(), 4);
@@ -989,8 +989,8 @@ fn probe_tumbling() {
         tw.update_weighted(t, &DataInput::Str("B"), 1);
     }
     let merged = tw.query_all();
-    let fa = merged.query(&DataInput::Str("A"));
-    let fb = merged.query(&DataInput::Str("B"));
+    let fa = merged.estimate(&DataInput::Str("A"));
+    let fb = merged.estimate(&DataInput::Str("B"));
     p.check(
         "FoldCMS key A == 50",
         format!("expected 50, got {fa}"),

@@ -31,13 +31,13 @@ where
     /// when the matrix samples its updates or the state breaks a §3.24 decode
     /// rule, and on mixed-variant or 128-bit keys.
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        admission_rate::check_admits_all(self.cms.admission_rate())
+        admission_rate::check_admits_all(self.count_min_sketch.admission_rate())
             .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CMSSpaceSaving envelope: {e}")))?;
         summary_wire::encode::<T, H>(
             &Self::KIND,
-            self.cms.rows(),
-            self.cms.cols(),
-            self.cms.as_storage().as_slice(),
+            self.count_min_sketch.rows(),
+            self.count_min_sketch.cols(),
+            self.count_min_sketch.as_storage().as_slice(),
             &self.summary,
         )
     }
@@ -54,7 +54,7 @@ where
         } = summary_wire::decode::<T, H>(&Self::KIND, bytes)?;
         let storage = Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]);
         Ok(CountMinSketchWithSpaceSaving {
-            cms: CountMinSketch::from_storage(storage),
+            count_min_sketch: CountMinSketch::from_storage(storage),
             summary,
         })
     }
