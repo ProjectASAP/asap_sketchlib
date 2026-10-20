@@ -21,19 +21,24 @@
 
 use std::collections::HashSet;
 
-use asap_sketchlib::CmsHeapItem;
+use asap_sketchlib::SetAggregator;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
+use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketchWire;
+use asap_sketchlib::message_pack_format::portable::countminsketch_topk::CmsHeapItem;
+use asap_sketchlib::message_pack_format::portable::countminsketch_topk::CountMinSketchWithHeap;
 use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
     CountMinSketchInnerWire, CountMinSketchWithHeapWire,
 };
+use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
+use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch;
 use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaResult;
+use asap_sketchlib::message_pack_format::portable::hll::HllSketch;
+use asap_sketchlib::message_pack_format::portable::hll::HllVariant;
+use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
+use asap_sketchlib::message_pack_format::portable::kll::KllSketch;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketchData;
-use asap_sketchlib::{
-    CountMinSketch, CountMinSketchWithHeap, CountSketch, DdSketch, HllSketch, HllVariant,
-    HydraKllSketch, KllSketch, SetAggregator,
-};
 
 // ===== round-trip: every wire-format-aligned type =====
 

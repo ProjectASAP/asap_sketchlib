@@ -190,6 +190,8 @@ mod tests {
 
     fn decode_paths() -> Vec<Case> {
         use crate::input::HydraCounter;
+        use crate::message_pack_format::MessagePackCodec;
+        use crate::message_pack_format::portable::hll::HllSketch;
         use crate::*;
 
         macro_rules! case {

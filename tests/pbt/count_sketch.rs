@@ -7,7 +7,8 @@ use crate::support::{
     PROBE_KEYS, edge_dimension, edge_rows, grid, keyed_updates, keys, matrices_close_at_mass,
 };
 use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::{Count, CountSketch, DataInput, RegularPath, Vector2D};
+use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
+use asap_sketchlib::{Count, DataInput, RegularPath, Vector2D};
 use proptest::prelude::*;
 
 type Cs = Count<Vector2D<i32>, RegularPath>;

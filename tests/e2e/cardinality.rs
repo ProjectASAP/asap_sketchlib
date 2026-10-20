@@ -767,7 +767,8 @@ fn a_custom_precision_merge_reproduces_the_single_pass_registers_for_every_estim
 
 #[test]
 fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
-    use asap_sketchlib::{DeltaResult, MessagePackCodec};
+    use asap_sketchlib::DeltaResult;
+    use asap_sketchlib::message_pack_format::MessagePackCodec;
     use std::collections::HashSet;
 
     let mut before = SetAggregator::new();

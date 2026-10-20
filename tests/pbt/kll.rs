@@ -12,8 +12,9 @@
 //! `kll_the_ends_are_exact_until_the_first_compaction`.
 
 use crate::support::{QUANTILES, close, extreme_values};
+use asap_sketchlib::KLL;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::{KLL, KllSketch};
+use asap_sketchlib::message_pack_format::portable::kll::KllSketch;
 use proptest::prelude::*;
 
 const QUANTILE_PROBES: [f64; 7] = [0.0, 0.01, 0.25, 0.5, 0.75, 0.99, 1.0];

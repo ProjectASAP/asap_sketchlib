@@ -15,10 +15,13 @@ use crate::common;
 use common::specs::{CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, KllRankSpec, Tally};
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
+use asap_sketchlib::message_pack_format::MessagePackCodec;
+use asap_sketchlib::message_pack_format::portable::countminsketch_topk::CountMinSketchWithHeap;
+use asap_sketchlib::message_pack_format::portable::countsketch_topk::CountSketchWithHeap;
+use asap_sketchlib::message_pack_format::portable::kll::KllSketch;
 use asap_sketchlib::{
-    Classic, Count, CountMin, CountMinSketchWithHeap, CountSketchWithHeap, DataInput,
-    EnsembleSketch, ErtlMLE, FastPath, HashSketchEnsemble, HyperLogLog, HyperLogLogHIP, KllSketch,
-    MessagePackCodec, UnivMonQ, UnivMonQConfig, Vector2D,
+    Classic, Count, CountMin, DataInput, EnsembleSketch, ErtlMLE, FastPath, HashSketchEnsemble,
+    HyperLogLog, HyperLogLogHIP, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 
 const ROWS: usize = 3;

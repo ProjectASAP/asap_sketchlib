@@ -1,5 +1,6 @@
+use asap_sketchlib::DDSketch;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::{DDSketch, DdSketch};
+use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch;
 
 // Both public implementations must count negative and zero observations.
 #[test]

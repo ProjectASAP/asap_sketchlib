@@ -40,23 +40,8 @@ pub mod __private {
 }
 
 pub use common::*;
-pub use message_pack_format::MessagePackCodec;
 pub use message_pack_format::envelope::peek_kind_id;
-pub use message_pack_format::portable::countminsketch::{CountMinSketch, CountMinSketchDelta};
-pub use message_pack_format::portable::countminsketch_topk::{CmsHeapItem, CountMinSketchWithHeap};
-pub use message_pack_format::portable::countsketch::{
-    COUNT_SKETCH_TOPK_CAPACITY, CountSketch, CountSketchDelta,
-};
-pub use message_pack_format::portable::countsketch_topk::{CountSketchWithHeap, CsHeapItem};
-pub use message_pack_format::portable::ddsketch::{DDSKETCH_GROW_CHUNK, DdSketch, DdSketchDelta};
 pub use message_pack_format::portable::delta_set_aggregator::DeltaResult;
-pub use message_pack_format::portable::hll::{HllSketch, HllSketchDelta, HllVariant};
-pub use message_pack_format::portable::hydra_kll::HydraKllSketch;
-pub use message_pack_format::portable::kll::{KllSketch, KllSketchData};
-pub use message_pack_format::portable::sampling::{
-    effective_sample_p, is_quantile_scale_invariant, rescale_count, rescale_count_with_env,
-    sample_p_or_default,
-};
 pub use message_pack_format::portable::set_aggregator::SetAggregator;
 pub use sketch_framework::*;
 pub use sketches::*;

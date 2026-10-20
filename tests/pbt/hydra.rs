@@ -27,8 +27,9 @@
 //! quantile battery; the two laws here pin its routing and its reduction.
 
 use asap_sketchlib::common::input::{HydraCounter, HydraQuery};
+use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::{
-    CountMin, DataInput, FastPath, HYDRA_SEED, Hydra, HydraKllSketch, MatrixFastHash, Vector2D,
+    CountMin, DataInput, FastPath, HYDRA_SEED, Hydra, MatrixFastHash, Vector2D,
     hash_for_matrix_seeded,
 };
 use proptest::prelude::*;

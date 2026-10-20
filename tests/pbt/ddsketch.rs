@@ -6,8 +6,9 @@
 //! within a relative alpha of the exact order statistic of the stream.
 
 use crate::support::{QUANTILES, extreme_values};
+use asap_sketchlib::DDSketch;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::{DDSketch, DdSketch};
+use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch;
 use proptest::prelude::*;
 
 const QUANTILE_PROBES: [f64; 7] = [0.0, 0.01, 0.25, 0.5, 0.75, 0.99, 1.0];

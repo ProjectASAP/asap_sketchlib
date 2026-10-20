@@ -18,8 +18,9 @@
 //! Usage:
 //!   XTEST_DIR=<path> cargo test --test xtest_consumer -- --nocapture
 
+use asap_sketchlib::message_pack_format::portable::sampling::effective_sample_p;
+use asap_sketchlib::message_pack_format::portable::sampling::rescale_count;
 use asap_sketchlib::proto::sketchlib::*;
-use asap_sketchlib::{effective_sample_p, rescale_count};
 use prost::Message;
 use std::{
     env, fs,

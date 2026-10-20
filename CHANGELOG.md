@@ -117,6 +117,16 @@ signals a backwards-compatible change.
 
 ### Changed
 
+- **The legacy MessagePack wrappers leave the crate root** (breaking).
+  `CountMinSketch`, `CountMinSketchDelta`, `CountMinSketchWithHeap`,
+  `CmsHeapItem`, `CountSketch`, `CountSketchDelta`,
+  `COUNT_SKETCH_TOPK_CAPACITY`, `CountSketchWithHeap`, `CsHeapItem`,
+  `DdSketch`, `DdSketchDelta`, `DDSKETCH_GROW_CHUNK`, `HllSketch`,
+  `HllSketchDelta`, `HllVariant`, `HydraKllSketch`, `KllSketch`,
+  `KllSketchData` and the sampling helpers are imported from
+  `message_pack_format::portable::...`; `MessagePackCodec` from
+  `message_pack_format`. `CountSketchDelta` at the root is the ASAPv1
+  Count Sketch delta.
 - **KLL, UnivMon and Hydra metadata keys follow the spec.** Compact KLL
   writes `compaction_seed`; UnivMon writes `layers`, `rows` and `cols`; Hydra
   writes `cell_*` for its counter params (`cell_rows`, `cell_cols`,

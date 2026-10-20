@@ -13,9 +13,11 @@ use crate::support::{
     PROBE_KEYS, close, edge_dimension, edge_rows, grid, keyed_updates, keys, matrices_close,
 };
 use asap_sketchlib::message_pack_format::MessagePackCodec;
+use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
+use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketchDelta;
 use asap_sketchlib::{
-    CountMin, CountMinSketch, CountMinSketchDelta, DataInput, DefaultMatrixI32, FastPath,
-    MatrixFastHash, MatrixStorage, QuickMatrixI64, RegularPath, Vector2D, hash_for_matrix,
+    CountMin, DataInput, DefaultMatrixI32, FastPath, MatrixFastHash, MatrixStorage, QuickMatrixI64,
+    RegularPath, Vector2D, hash_for_matrix,
 };
 use proptest::prelude::*;
 use std::collections::HashMap;

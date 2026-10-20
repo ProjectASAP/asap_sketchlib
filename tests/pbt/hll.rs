@@ -27,8 +27,10 @@
 
 use crate::support::keys;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
+use asap_sketchlib::message_pack_format::portable::hll::HllSketch;
+use asap_sketchlib::message_pack_format::portable::hll::HllVariant;
 use asap_sketchlib::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};
-use asap_sketchlib::{Classic, DataInput, ErtlMLE, HllSketch, HllVariant, HyperLogLog};
+use asap_sketchlib::{Classic, DataInput, ErtlMLE, HyperLogLog};
 use proptest::prelude::*;
 
 asap_sketchlib::impl_hll_bucket_list!(BucketsP4, 4, 1_usize << 4);
