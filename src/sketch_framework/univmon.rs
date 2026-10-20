@@ -203,8 +203,6 @@ impl UnivMon {
     }
 
     /// Whether the top layer's heap still holds every key that layer received.
-    /// In standard mode a complete top layer is the event the distinct-count
-    /// bound in `docs/api/api_univmon.md` is joint with.
     pub fn top_layer_complete(&self) -> bool {
         self.candidate_complete[self.layers - 1]
     }
@@ -321,30 +319,51 @@ impl UnivMon {
         }
     }
 
-    /// Computes a g-sum with the UnivMon recurrence. With `count_every_key` every heap
-    /// key counts; otherwise nonpositive estimates are skipped, and in terminal mode
-    /// so are those at or below `floor(logical L2 / sqrt(heap_size))` on incomplete layers.
-    pub fn estimate_g_sum<F>(&self, g: F, count_every_key: bool) -> f64
+    /// Estimates the G-sum `Σ_i g(f_i)` with the paper's offline recursion.
+    ///
+    /// This is Algorithm 2 of Liu et al., "One Sketch to Rule Them All:
+    /// Rethinking Network Flow Monitoring with UnivMon" (SIGCOMM 2016),
+    /// the Recursive Sum of Braverman and Ostrovsky. `Q_j` is layer `j`'s
+    /// top-`heap_size` heap with each key's Count Sketch estimate `w_j(i)`
+    /// (the paper's top-k realization, §6.2 and §6.3), and
+    ///
+    /// - `Y_top = Σ_{i ∈ Q_top} g(w_top(i))`;
+    /// - `Y_j = 2 Y_{j+1} + Σ_{i ∈ Q_j} (1 − 2 h_{j+1}(i)) g(w_j(i))`,
+    ///   where `h_{j+1}(i)` is the finder bit that samples key `i` into
+    ///   layer `j + 1`;
+    /// - the result is `Y_0`.
+    ///
+    /// `g` is a function of a frequency, so it is applied to the estimate as
+    /// a real number and only to positive estimates: a key whose estimate is
+    /// not positive contributes `g(0) = 0`, the paper's convention for the
+    /// distinct count (`g(0) = 0`) and the entropy (`0 log 0 = 0`). The
+    /// guarantee the paper relies on, its parameters, and where this
+    /// implementation departs from them are in `docs/api/api_univmon.md`.
+    ///
+    /// A terminal-mode state (Joltik update-last-layer, not in the paper)
+    /// first reconstructs each logical layer's candidates from the disjoint
+    /// strata and, on a layer whose candidate set is incomplete, keeps only
+    /// keys above `floor(L2 / sqrt(heap_size))`. No paper bound covers it.
+    pub fn estimate_g_sum<F>(&self, g: F) -> f64
     where
         F: Fn(f64) -> f64,
     {
-        if self.total_weight == 0 && !count_every_key {
+        if self.total_weight == 0 {
             return 0.0;
         }
         if self.update_mode == UnivMonUpdateMode::Terminal {
-            return self.calc_terminal_g_sum(g, count_every_key);
+            return self.calc_terminal_g_sum(g);
         }
 
-        let counted = |count: i64| count_every_key || count > 0;
         let mut y = vec![0.0; self.layers];
         let mut tmp: f64;
 
         tmp = 0.0;
         for item in self.layer_heaps[self.layers - 1].heap() {
             let input = item.key.as_data_input();
-            let count = self.layer_sketches[self.layers - 1].estimate(&input) as i64;
-            if counted(count) {
-                tmp += g(count as f64);
+            let estimate = self.layer_sketches[self.layers - 1].estimate(&input);
+            if estimate > 0.0 {
+                tmp += g(estimate);
             }
         }
         y[self.layers - 1] = tmp;
@@ -353,13 +372,13 @@ impl UnivMon {
             tmp = 0.0;
             for item in self.layer_heaps[i].heap() {
                 let input = item.key.as_data_input();
-                let count = self.layer_sketches[i].estimate(&input) as i64;
-                if counted(count) {
+                let estimate = self.layer_sketches[i].estimate(&input);
+                if estimate > 0.0 {
                     let hash = (hash64_seeded_owned(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &item.key)
                         >> (i + 1))
                         & 1;
                     let coe = 1.0 - 2.0 * (hash as f64);
-                    tmp += coe * g(count as f64);
+                    tmp += coe * g(estimate);
                 }
             }
             y[i] = 2.0 * y[i + 1] + tmp;
@@ -368,12 +387,11 @@ impl UnivMon {
         y[0]
     }
 
-    fn calc_terminal_g_sum<F>(&self, g: F, count_every_key: bool) -> f64
+    fn calc_terminal_g_sum<F>(&self, g: F) -> f64
     where
         F: Fn(f64) -> f64,
     {
         let (candidates, complete) = self.logical_terminal_candidates();
-        let counted = |count: i64, threshold: i64| count_every_key || count > threshold;
         let mut logical_l2 = vec![0.0; self.layers];
         let mut suffix_l2_squared = 0.0;
         for level in (0..self.layers).rev() {
@@ -387,7 +405,7 @@ impl UnivMon {
         let threshold = self.heavy_threshold(logical_l2[last], complete[last]);
         y[last] = candidates[last]
             .iter()
-            .filter(|(_, count)| counted(*count, threshold))
+            .filter(|(_, count)| *count > threshold)
             .map(|(_, count)| g(*count as f64))
             .sum();
 
@@ -395,7 +413,7 @@ impl UnivMon {
             let threshold = self.heavy_threshold(logical_l2[level], complete[level]);
             let correction = candidates[level]
                 .iter()
-                .filter(|(_, count)| counted(*count, threshold))
+                .filter(|(_, count)| *count > threshold)
                 .map(|(key, count)| {
                     let hash = (hash64_seeded_owned(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key)
                         >> (level + 1))
@@ -454,42 +472,40 @@ impl UnivMon {
     }
 
     /// Returns the exact L1 norm for the supported non-negative update stream.
+    ///
+    /// For a non-negative stream the L1 norm is the stream mass `m`, which
+    /// the paper reads from a single counter (§4.3, footnote 4) rather than
+    /// estimating it. The G-sum form, `g(x) = x`, is
+    /// `estimate_g_sum(|x| x)`.
     pub fn estimate_l1(&self) -> f64 {
         self.total_weight as f64
     }
 
-    /// Returns the estimated L2 norm: layer 0's Count Sketch F2 estimate in
-    /// standard mode, the summed strata's F2 estimates in terminal mode.
-    /// Error bounds: `docs/api/api_univmon.md`.
+    /// Returns the estimated L2 norm: the square root of the G-sum with
+    /// `g(x) = x²` ([`Self::estimate_g_sum`]), the paper's F2.
     pub fn estimate_l2(&self) -> f64 {
-        if self.update_mode == UnivMonUpdateMode::Terminal {
-            return (0..self.layers)
-                .map(|level| self.layer_sketches[level].l2_squared())
-                .sum::<f64>()
-                .sqrt();
-        }
-        self.layer_sketches[0].l2()
+        let tmp = self.estimate_g_sum(|x| x * x);
+        tmp.sqrt()
     }
 
     /// Returns the estimated Shannon entropy, in bits (log2).
+    ///
+    /// The paper's `H = log(m) − (1/m) Σ_i f_i log(f_i)` (§4.3): the G-sum
+    /// with `g(x) = x log2(x)` ([`Self::estimate_g_sum`]), and the stream
+    /// mass `m` from the exact total weight (footnote 4).
     pub fn estimate_entropy(&self) -> f64 {
         if self.total_weight == 0 {
             return 0.0;
         }
-        let tmp = self.estimate_g_sum(
-            |x| {
-                if x > 0.0 { x * x.log2() } else { 0.0 }
-            },
-            false,
-        );
+        let tmp = self.estimate_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 });
         (self.total_weight as f64).log2() - tmp / (self.total_weight as f64)
     }
 
-    /// Returns the estimated number of distinct keys, counting every heap key
-    /// (zero-weight keys included) whatever its frequency estimate.
-    /// Error bounds: `docs/api/api_univmon.md`.
+    /// Returns the estimated number of distinct keys: the G-sum with
+    /// `g(x) = x⁰` and `g(0) = 0` ([`Self::estimate_g_sum`]), the paper's
+    /// DDoS-victim statistic (§4.3).
     pub fn estimate_cardinality(&self) -> f64 {
-        self.estimate_g_sum(|_| 1.0, true)
+        self.estimate_g_sum(|_| 1.0)
     }
 
     /// Resets the sketch to its initial state without reallocating.
@@ -1162,88 +1178,6 @@ mod tests {
         );
     }
 
-    /// Sign layer 0 gives `key` in its single row (`+1` or `-1`).
-    fn layer0_sign(key: &DataInput, cols: usize) -> i64 {
-        use crate::common::hash128_seeded;
-        use crate::common::structures::matrix_storage::cols_mask_bits;
-        CountSketchWithL2Norm::cell_for_row(hash128_seeded(0, key), 0, cols, cols_mask_bits(cols)).1
-    }
-
-    #[test]
-    fn estimate_cardinality_counts_zero_weight_only_streams() {
-        for terminal in [false, true] {
-            let mut sketch = UnivMon::new(8, 3, 64, 4);
-            assert_eq!(sketch.estimate_cardinality(), 0.0);
-            for id in [1, 2, 1, 3] {
-                if terminal {
-                    sketch.update_weighted_terminal(&DataInput::U64(id), 0);
-                } else {
-                    sketch.update_weighted(&DataInput::U64(id), 0);
-                }
-            }
-            assert_eq!(sketch.estimate_l1(), 0.0);
-            assert_eq!(sketch.estimate_l2(), 0.0);
-            assert_eq!(sketch.estimate_entropy(), 0.0);
-            assert!(sketch.top_layer_complete());
-            assert_eq!(sketch.estimate_cardinality(), 3.0);
-            let decoded = UnivMon::from_asapv1(&sketch.to_asapv1().unwrap()).unwrap();
-            assert_eq!(decoded.estimate_cardinality(), 3.0);
-            sketch.clear();
-            assert_eq!(sketch.estimate_cardinality(), 0.0);
-        }
-    }
-
-    /// A heap key whose Count Sketch estimate is not positive still counts.
-    #[test]
-    fn estimate_cardinality_counts_heap_keys_with_nonpositive_estimates() {
-        let plus = (0_u64..)
-            .map(DataInput::U64)
-            .find(|key| layer0_sign(key, 1) == 1)
-            .expect("a key with sign +1");
-        let minus = (0_u64..)
-            .map(DataInput::U64)
-            .find(|key| layer0_sign(key, 1) == -1)
-            .expect("a key with sign -1");
-        // One row, one column: the light key reads 1 - 5 = -4.
-        let mut sketch = UnivMon::new(4, 1, 1, 1);
-        sketch.update_weighted(&plus, 5);
-        sketch.update_weighted(&minus, 1);
-        assert!(sketch.layer_sketches[0].estimate(&minus) <= 0.0);
-        assert!(sketch.top_layer_complete());
-        assert_eq!(sketch.estimate_cardinality(), 2.0);
-    }
-
-    #[test]
-    fn estimate_l2_reads_layer_zero_directly_in_standard_mode() {
-        let mut sketch = UnivMon::new(16, 5, 256, 8);
-        for key in 0..2000_u64 {
-            sketch.update_weighted(&DataInput::U64(key), (key % 7 + 1) as i64);
-        }
-        let direct = sketch.layer_sketches[0].l2();
-        assert!(
-            (sketch.estimate_l2() - direct).abs() < 1e-9,
-            "estimate_l2 {} differs from layer 0's direct estimate {direct}",
-            sketch.estimate_l2()
-        );
-    }
-
-    #[test]
-    fn estimate_l2_sums_stratum_estimates_in_terminal_mode() {
-        let mut sketch = UnivMon::new(16, 5, 256, 8);
-        for key in 0..2000_u64 {
-            sketch.update_weighted_terminal(&DataInput::U64(key), (key % 7 + 1) as i64);
-        }
-        let direct = (0..sketch.layers)
-            .map(|level| sketch.layer_sketches[level].l2_squared())
-            .sum::<f64>()
-            .sqrt();
-        assert!(
-            (sketch.estimate_l2() - direct).abs() < 1e-9,
-            "estimate_l2 {} differs from the summed strata {direct}",
-            sketch.estimate_l2()
-        );
-    }
-
     #[test]
     fn top_layer_complete_tracks_the_top_heap() {
         let mut sketch = UnivMon::new(4, 3, 64, 1);
@@ -1257,182 +1191,118 @@ mod tests {
         assert!(sketch.top_layer_complete());
     }
 
-    /// Monte Carlo checks of the error bounds in `docs/api/api_univmon.md`.
-    /// The seed list is fixed, so each trial draws fresh random key ids.
-    mod error_bounds {
+    /// Seeded Monte Carlo checks of the guarantee the paper relies on
+    /// (Braverman and Ostrovsky's Recursive Sum, arXiv:1011.2571
+    /// Theorem 4.2): `(1 ± ε)` with probability at least 0.7, on streams and
+    /// shapes that meet its assumptions.
+    ///
+    /// - `φ = layers − 1 = ⌈log2 n⌉` sampled layers.
+    /// - Every layer's core must hold each key with `g(f_i) ≥ α |V_j|`,
+    ///   `α ≈ ε²/φ³`. At `n = 2000` and `ε = 0.5`, `1/α ≈ 5300 > n`, so the
+    ///   theorem asks for a heap that holds every key a layer receives; the
+    ///   heap is `n`.
+    /// - Every reported estimate must be within `(1 ± ε)`: every key has
+    ///   frequency at least 50, and `5 x 65536` Count Sketches keep the row
+    ///   noise (`sqrt(F2 / 65536)`, at most about 25 here) well under it.
+    ///
+    /// At these sizes every core is complete, so the tests check that the
+    /// recursion reconstructs each G-sum from the layers' heaps; they do not
+    /// exercise incomplete cores, which the theorem's `α` rules out until `n`
+    /// exceeds `φ³/ε²`.
+    mod paper_guarantee {
         use super::*;
+
+        const KEYS: usize = 2000;
+        const EPS: f64 = 0.5;
+        /// Theorem 4.2's failure probability.
+        const DELTA: f64 = 0.3;
 
         #[derive(Clone, Copy, Debug)]
         enum Shape {
-            Zipf,
             Uniform,
-            SingleHeavy,
+            Zipf,
+            OneHeavy,
         }
 
-        const SHAPES: [Shape; 3] = [Shape::Zipf, Shape::Uniform, Shape::SingleHeavy];
-
-        /// Per-key weights of `n` keys in one of the three stream shapes.
-        fn weights(shape: Shape, n: usize, rng: &mut StdRng) -> Vec<i64> {
-            match shape {
-                Shape::Zipf => (1..=n)
-                    .map(|rank| (10_000.0 / (rank as f64).powf(1.1)).ceil() as i64)
-                    .collect(),
-                Shape::Uniform => (0..n).map(|_| rng.random_range(1..=10)).collect(),
-                Shape::SingleHeavy => (0..n)
-                    .map(|i| if i == 0 { 100 * n as i64 } else { 1 })
-                    .collect(),
+        /// `KEYS` fresh random key ids with frequencies of the given shape,
+        /// every frequency at least 50.
+        fn stream(shape: Shape, rng: &mut StdRng) -> Vec<(u64, i64)> {
+            let mut ids = HashSet::with_capacity(KEYS);
+            while ids.len() < KEYS {
+                ids.insert(rng.random::<u64>());
             }
+            ids.into_iter()
+                .enumerate()
+                .map(|(rank, id)| {
+                    let f = match shape {
+                        Shape::Uniform => rng.random_range(50..=100),
+                        Shape::Zipf => 50 + (5000.0 / ((rank + 1) as f64).powf(1.1)) as i64,
+                        Shape::OneHeavy if rank == 0 => 1500,
+                        Shape::OneHeavy => rng.random_range(50..=100),
+                    };
+                    (id, f)
+                })
+                .collect()
         }
 
-        /// One stream: fresh random key ids with the shape's weights.
-        fn stream(shape: Shape, n: usize, rng: &mut StdRng) -> Vec<(u64, i64)> {
-            let ws = weights(shape, n, rng);
-            let mut seen = HashSet::with_capacity(n);
-            let mut ids = Vec::with_capacity(n);
-            while ids.len() < n {
-                let id = rng.random::<u64>();
-                if seen.insert(id) {
-                    ids.push(id);
-                }
-            }
-            ids.into_iter().zip(ws).collect()
-        }
-
-        /// `P(Binomial(r, p) >= m)`.
-        fn binomial_tail(r: u32, p: f64, m: u32) -> f64 {
-            let choose = |n: u32, k: u32| {
-                (0..k).fold(1.0, |acc, i| acc * f64::from(n - i) / f64::from(i + 1))
-            };
-            (m..=r)
-                .map(|j| choose(r, j) * p.powi(j as i32) * (1.0 - p).powi((r - j) as i32))
-                .sum()
-        }
-
-        /// Failures allowed out of `trials` at a true rate of at most `delta`:
+        /// Misses allowed out of `trials` at a true rate of at most `delta`:
         /// the mean plus four standard deviations, plus one.
-        fn allowed_failures(trials: usize, delta: f64) -> f64 {
+        fn allowed(trials: usize, delta: f64) -> f64 {
             let n = trials as f64;
             n * delta + 4.0 * (n * delta * (1.0 - delta)).sqrt() + 1.0
         }
 
-        /// Collision probability `q` the docs bound for a `w`-column row.
-        fn q_bound(w: usize) -> f64 {
-            if w.is_power_of_two() {
-                1.0 / w as f64
-            } else {
-                9.0 / (8.0 * w as f64)
-            }
-        }
-
-        fn check_l2(trials: usize) {
-            const ROWS: usize = 5;
-            const KEYS: usize = 400;
-            const EPS: f64 = 0.5;
-            let mut rng = StdRng::seed_from_u64(0x5EED_0012);
-            // 48 columns slice 6 bits: the worst case of the modulo fold.
-            for w in [64_usize, 48] {
-                let q = q_bound(w);
-                let p = 2.0 * q / (EPS * EPS);
-                let delta = binomial_tail(ROWS as u32, p, ROWS.div_ceil(2) as u32);
-                for shape in SHAPES {
-                    let mut failures = 0;
-                    for _ in 0..trials {
-                        let keys = stream(shape, KEYS, &mut rng);
-                        let mut sketch = UnivMon::new(8, ROWS, w, 2);
-                        for &(id, weight) in &keys {
-                            sketch.update_weighted(&DataInput::U64(id), weight);
-                        }
-                        let f2: f64 = keys.iter().map(|&(_, f)| (f as f64).powi(2)).sum();
-                        let estimate = sketch.estimate_l2().powi(2);
-                        if (estimate - f2).abs() > EPS * f2 {
-                            failures += 1;
-                        }
+        fn check(trials: usize) {
+            let layers = (KEYS as f64).log2().ceil() as usize + 1;
+            let mut rng = StdRng::seed_from_u64(0x0B5E_55ED);
+            for shape in [Shape::Uniform, Shape::Zipf, Shape::OneHeavy] {
+                let (mut card_misses, mut f2_misses, mut entropy_misses) = (0, 0, 0);
+                for _ in 0..trials {
+                    let keys = stream(shape, &mut rng);
+                    let mut sketch = UnivMon::new(KEYS, 5, 65_536, layers);
+                    for &(id, f) in &keys {
+                        sketch.update_weighted(&DataInput::U64(id), f);
                     }
+                    let m: f64 = keys.iter().map(|&(_, f)| f as f64).sum();
+                    let f2: f64 = keys.iter().map(|&(_, f)| (f as f64).powi(2)).sum();
+                    let entropy = m.log2()
+                        - keys
+                            .iter()
+                            .map(|&(_, f)| f as f64 * (f as f64).log2())
+                            .sum::<f64>()
+                            / m;
+                    let miss = |estimate: f64, truth: f64| (estimate - truth).abs() > EPS * truth;
+                    card_misses += usize::from(miss(sketch.estimate_cardinality(), KEYS as f64));
+                    f2_misses += usize::from(miss(sketch.estimate_l2().powi(2), f2));
+                    entropy_misses += usize::from(miss(sketch.estimate_entropy(), entropy));
+                }
+                eprintln!(
+                    "{shape:?}: misses beyond ε = {EPS} in {trials} trials: \
+                     cardinality {card_misses}, F2 {f2_misses}, entropy {entropy_misses}"
+                );
+                for (name, misses) in [
+                    ("cardinality", card_misses),
+                    ("F2", f2_misses),
+                    ("entropy", entropy_misses),
+                ] {
                     assert!(
-                        failures as f64 <= allowed_failures(trials, delta),
-                        "L2 {shape:?} w={w}: {failures}/{trials} misses beyond eps={EPS}, delta={delta:.4}"
+                        misses as f64 <= allowed(trials, DELTA),
+                        "{shape:?} {name}: {misses}/{trials} misses beyond ε = {EPS}, \
+                         more than the guarantee's δ = {DELTA} allows"
                     );
                 }
             }
         }
 
-        fn check_cardinality(trials: usize) {
-            const HEAP: usize = 32;
-            const KEYS: usize = 2000;
-            const EPS: f64 = 0.5;
-            // L >= ceil(log2(F0 / k)) + 2.
-            let layers = (KEYS as f64 / HEAP as f64).log2().ceil() as usize + 2;
-            let chebyshev = 2.0 / (HEAP as f64 * EPS * EPS);
-            let mut rng = StdRng::seed_from_u64(0x5EED_00F0);
-            let f0 = KEYS as f64;
-            for shape in SHAPES {
-                let (mut failures, mut incomplete) = (0, 0);
-                let (mut sum, mut sum_sq) = (0.0, 0.0);
-                for _ in 0..trials {
-                    let mut sketch = UnivMon::new(HEAP, 3, 256, layers);
-                    let mut top_keys = 0;
-                    for (id, weight) in stream(shape, KEYS, &mut rng) {
-                        let key = DataInput::U64(id);
-                        top_keys += usize::from(sketch.bottom_layer_for(&key) == layers - 1);
-                        sketch.update_weighted(&key, weight);
-                    }
-                    let complete = sketch.top_layer_complete();
-                    incomplete += usize::from(!complete);
-                    let estimate = sketch.estimate_cardinality();
-                    // The ideal estimator restores the exact top count, also
-                    // on trials whose top layer overflowed.
-                    let missing = top_keys - sketch.layer_heaps[layers - 1].len();
-                    let ideal = estimate + ((1_u64 << (layers - 1)) as f64) * missing as f64;
-                    sum += ideal - f0;
-                    sum_sq += (ideal - f0).powi(2);
-                    if complete && (estimate - f0).abs() > EPS * f0 {
-                        failures += 1;
-                    }
-                }
-                // (e/4)^{k/2} is about 2e-3 for k = 32.
-                assert!(
-                    incomplete as f64 <= allowed_failures(trials, 0.01),
-                    "cardinality {shape:?}: top layer incomplete in {incomplete}/{trials} trials"
-                );
-                let trials_f = trials as f64;
-                let variance = sum_sq / trials_f;
-                assert!(
-                    failures as f64 <= allowed_failures(trials, chebyshev),
-                    "cardinality {shape:?}: {failures}/{trials} joint misses beyond eps={EPS}"
-                );
-                assert!(
-                    variance <= 1.35 * f0 * f0 / HEAP as f64,
-                    "cardinality {shape:?}: variance {:.4} F0^2/k above 1.35",
-                    variance / (f0 * f0 / HEAP as f64)
-                );
-                assert!(
-                    (sum / trials_f).abs() <= 4.0 * (variance / trials_f).sqrt(),
-                    "cardinality {shape:?}: mean error {:.2} looks biased",
-                    sum / trials_f
-                );
-            }
-        }
-
         #[test]
-        fn estimate_l2_meets_its_documented_bound() {
-            check_l2(150);
+        fn g_sums_meet_the_recursive_sum_guarantee() {
+            check(20);
         }
 
         #[test]
         #[ignore = "long Monte Carlo run; the fast variant runs by default"]
-        fn estimate_l2_meets_its_documented_bound_long() {
-            check_l2(3000);
-        }
-
-        #[test]
-        fn estimate_cardinality_meets_its_documented_bound() {
-            check_cardinality(60);
-        }
-
-        #[test]
-        #[ignore = "long Monte Carlo run; the fast variant runs by default"]
-        fn estimate_cardinality_meets_its_documented_bound_long() {
-            check_cardinality(2000);
+        fn g_sums_meet_the_recursive_sum_guarantee_long() {
+            check(500);
         }
     }
 

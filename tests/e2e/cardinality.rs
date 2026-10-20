@@ -1294,8 +1294,10 @@ mod documented_matrix {
     }
 
     /// 16 layers of heap 128 reach `128 * 2^16` keys, covering every numbered input.
-    /// The 30% band is checked jointly with `top_layer_complete()`, the event the
-    /// distinct-count bound in `docs/api/api_univmon.md` is stated with.
+    /// The top layer must hold every key it received: its heap is the recursion's
+    /// starting sum. The 30% band is this matrix's own; at heap 32 the light keys'
+    /// Count Sketch estimates on the lower layers fall to zero often enough to
+    /// push inputs 11 and 12 past it.
     fn univmon_documented_cardinality(id: u8) {
         const HEAP: usize = 128;
         const ROWS: usize = 5;

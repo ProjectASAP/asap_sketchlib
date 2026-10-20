@@ -182,28 +182,28 @@ impl UnivMonTwoTier {
 
     // -- Query methods (identical to UnivMon) --------------------------------
 
-    /// Computes a g-sum estimate with the UnivMon recurrence; `count_every_key`
-    /// selects which heap keys contribute, as in [`UnivMon::estimate_g_sum`].
-    pub fn estimate_g_sum<F>(&self, g: F, count_every_key: bool) -> f64
+    /// Estimates the G-sum `Σ_i g(f_i)` with the paper's Algorithm 2 over the
+    /// two-tier layers, as [`UnivMon::estimate_g_sum`] does: every heap key
+    /// with a positive estimate contributes, `g(0) = 0` otherwise.
+    pub fn estimate_g_sum<F>(&self, g: F) -> f64
     where
         F: Fn(f64) -> f64,
     {
-        if self.total_weight == 0 && !count_every_key {
+        if self.total_weight == 0 {
             return 0.0;
         }
         if self.update_mode == UnivMonUpdateMode::Terminal {
-            return self.calc_terminal_g_sum(g, count_every_key);
+            return self.calc_terminal_g_sum(g);
         }
 
-        let counted = |count: i64| count_every_key || count > 0;
         let mut y = vec![0.0; self.layers];
 
         let mut tmp = 0.0;
         for item in self.layer_heaps[self.layers - 1].heap() {
             let input = item.key.as_data_input();
-            let count = self.layer_sketches[self.layers - 1].estimate(&input) as i64;
-            if counted(count) {
-                tmp += g(count as f64);
+            let estimate = self.layer_sketches[self.layers - 1].estimate(&input);
+            if estimate > 0.0 {
+                tmp += g(estimate);
             }
         }
         y[self.layers - 1] = tmp;
@@ -212,13 +212,13 @@ impl UnivMonTwoTier {
             tmp = 0.0;
             for item in self.layer_heaps[i].heap() {
                 let input = item.key.as_data_input();
-                let count = self.layer_sketches[i].estimate(&input) as i64;
-                if counted(count) {
+                let estimate = self.layer_sketches[i].estimate(&input);
+                if estimate > 0.0 {
                     let hash = (hash64_seeded_owned(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &item.key)
                         >> (i + 1))
                         & 1;
                     let coe = 1.0 - 2.0 * (hash as f64);
-                    tmp += coe * g(count as f64);
+                    tmp += coe * g(estimate);
                 }
             }
             y[i] = 2.0 * y[i + 1] + tmp;
@@ -226,12 +226,11 @@ impl UnivMonTwoTier {
         y[0]
     }
 
-    fn calc_terminal_g_sum<F>(&self, g: F, count_every_key: bool) -> f64
+    fn calc_terminal_g_sum<F>(&self, g: F) -> f64
     where
         F: Fn(f64) -> f64,
     {
         let (candidates, complete) = self.logical_terminal_candidates();
-        let counted = |count: i64, threshold: i64| count_every_key || count > threshold;
         let mut logical_l2 = vec![0.0; self.layers];
         let mut suffix_l2_squared = 0.0;
         for level in (0..self.layers).rev() {
@@ -245,7 +244,7 @@ impl UnivMonTwoTier {
         let threshold = self.heavy_threshold(logical_l2[last], complete[last]);
         y[last] = candidates[last]
             .iter()
-            .filter(|(_, count)| counted(*count, threshold))
+            .filter(|(_, count)| *count > threshold)
             .map(|(_, count)| g(*count as f64))
             .sum();
 
@@ -253,7 +252,7 @@ impl UnivMonTwoTier {
             let threshold = self.heavy_threshold(logical_l2[level], complete[level]);
             let correction = candidates[level]
                 .iter()
-                .filter(|(_, count)| counted(*count, threshold))
+                .filter(|(_, count)| *count > threshold)
                 .map(|(key, count)| {
                     let hash = (hash64_seeded_owned(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key)
                         >> (level + 1))
@@ -314,17 +313,10 @@ impl UnivMonTwoTier {
         self.total_weight as f64
     }
 
-    /// Returns the estimated L2 norm: layer 0's Count Sketch F2 estimate in
-    /// standard mode, the summed strata's F2 estimates in terminal mode.
-    /// Error bounds: `docs/api/api_univmon_two_tier.md`.
+    /// Returns the estimated L2 norm: the square root of the G-sum with
+    /// `g(x) = x²`, the paper's F2.
     pub fn estimate_l2(&self) -> f64 {
-        if self.update_mode == UnivMonUpdateMode::Terminal {
-            return (0..self.layers)
-                .map(|level| self.layer_sketches[level].l2_squared())
-                .sum::<f64>()
-                .sqrt();
-        }
-        self.layer_sketches[0].l2()
+        self.estimate_g_sum(|x| x * x).sqrt()
     }
 
     /// Returns the estimated Shannon entropy, in bits (log2).
@@ -332,15 +324,14 @@ impl UnivMonTwoTier {
         if self.total_weight == 0 {
             return 0.0;
         }
-        let tmp = self.estimate_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 }, false);
+        let tmp = self.estimate_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 });
         (self.total_weight as f64).log2() - tmp / (self.total_weight as f64)
     }
 
-    /// Returns the estimated number of distinct keys, counting every heap key
-    /// (zero-weight keys included) whatever its frequency estimate.
-    /// Error bounds: `docs/api/api_univmon_two_tier.md`.
+    /// Returns the estimated number of distinct keys: the G-sum with
+    /// `g(x) = x⁰` and `g(0) = 0`.
     pub fn estimate_cardinality(&self) -> f64 {
-        self.estimate_g_sum(|_| 1.0, true)
+        self.estimate_g_sum(|_| 1.0)
     }
 
     /// Whether the top layer's heap still holds every key that layer received.
@@ -426,79 +417,6 @@ impl UnivMonTwoTier {
 mod tests {
     use super::*;
     use crate::DataInput;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
-
-    /// Sign layer 0 gives `key` in its single row (`+1` or `-1`).
-    fn layer0_sign(key: &DataInput, cols: usize) -> i64 {
-        use crate::common::hash128_seeded;
-        use crate::common::structures::matrix_storage::cols_mask_bits;
-        CountSketchWithL2Norm::cell_for_row(hash128_seeded(0, key), 0, cols, cols_mask_bits(cols)).1
-    }
-
-    #[test]
-    fn two_tier_estimate_cardinality_counts_heap_keys_with_nonpositive_estimates() {
-        let plus = (0_u64..)
-            .map(DataInput::U64)
-            .find(|key| layer0_sign(key, 1) == 1)
-            .expect("a key with sign +1");
-        let minus = (0_u64..)
-            .map(DataInput::U64)
-            .find(|key| layer0_sign(key, 1) == -1)
-            .expect("a key with sign -1");
-        let mut pyramid = UnivMonTwoTier::new(4, 1, 1, 1, 1, 1, 1);
-        pyramid.update_weighted(&plus, 5);
-        pyramid.update_weighted(&minus, 1);
-        assert!(pyramid.layer_sketches[0].estimate(&minus) <= 0.0);
-        assert!(pyramid.top_layer_complete());
-        assert_eq!(pyramid.estimate_cardinality(), 2.0);
-    }
-
-    #[test]
-    fn two_tier_estimate_cardinality_counts_zero_weight_only_streams() {
-        for terminal in [false, true] {
-            let mut pyramid = UnivMonTwoTier::new(8, 1, 3, 64, 2, 16, 4);
-            for id in [1, 2, 1, 3] {
-                if terminal {
-                    pyramid.update_weighted_terminal(&DataInput::U64(id), 0);
-                } else {
-                    pyramid.update_weighted(&DataInput::U64(id), 0);
-                }
-            }
-            assert_eq!(pyramid.estimate_l2(), 0.0);
-            assert_eq!(pyramid.estimate_cardinality(), 3.0);
-        }
-    }
-
-    #[test]
-    fn two_tier_estimate_l2_reads_layer_zero_directly_in_standard_mode() {
-        let mut pyramid = UnivMonTwoTier::new(16, 2, 5, 256, 3, 64, 8);
-        for key in 0..2000_u64 {
-            pyramid.update_weighted(&DataInput::U64(key), (key % 7 + 1) as i64);
-        }
-        let direct = pyramid.layer_sketches[0].l2();
-        assert!(
-            (pyramid.estimate_l2() - direct).abs() < 1e-9,
-            "estimate_l2 {} differs from layer 0's direct estimate {direct}",
-            pyramid.estimate_l2()
-        );
-    }
-
-    #[test]
-    fn two_tier_estimate_l2_sums_stratum_estimates_in_terminal_mode() {
-        let mut pyramid = UnivMonTwoTier::new(16, 2, 5, 256, 3, 64, 8);
-        for key in 0..2000_u64 {
-            pyramid.update_weighted_terminal(&DataInput::U64(key), (key % 7 + 1) as i64);
-        }
-        let direct = (0..pyramid.layers)
-            .map(|level| pyramid.layer_sketches[level].l2_squared())
-            .sum::<f64>()
-            .sqrt();
-        assert!(
-            (pyramid.estimate_l2() - direct).abs() < 1e-9,
-            "estimate_l2 {} differs from the summed strata {direct}",
-            pyramid.estimate_l2()
-        );
-    }
 
     #[test]
     fn two_tier_top_layer_complete_tracks_the_top_heap() {
@@ -511,131 +429,6 @@ mod tests {
         assert!(!pyramid.top_layer_complete());
         pyramid.clear();
         assert!(pyramid.top_layer_complete());
-    }
-
-    /// One trial's stream: fresh random key ids with Zipf weights.
-    fn zipf_stream(n: usize, rng: &mut StdRng) -> Vec<(u64, i64)> {
-        let mut seen = HashSet::with_capacity(n);
-        let mut ids = Vec::with_capacity(n);
-        while ids.len() < n {
-            let id = rng.random::<u64>();
-            if seen.insert(id) {
-                ids.push(id);
-            }
-        }
-        ids.into_iter()
-            .enumerate()
-            .map(|(rank, id)| (id, (10_000.0 / ((rank + 1) as f64).powf(1.1)).ceil() as i64))
-            .collect()
-    }
-
-    /// Failures allowed out of `trials` at a true rate of at most `delta`:
-    /// the mean plus four standard deviations, plus one.
-    fn allowed_failures(trials: usize, delta: f64) -> f64 {
-        let n = trials as f64;
-        n * delta + 4.0 * (n * delta * (1.0 - delta)).sqrt() + 1.0
-    }
-
-    /// Layer 0 is `5 x 64`, mouse layers `3 x 16`:
-    /// `p = 2/(64 * 0.25) = 0.125`, `delta = P(Bin(5, p) >= 3) ~ 0.016`.
-    fn check_l2(trials: usize) {
-        const EPS: f64 = 0.5;
-        const DELTA: f64 = 0.0161;
-        let mut rng = StdRng::seed_from_u64(0x5EED_0013);
-        let mut failures = 0;
-        for _ in 0..trials {
-            let keys = zipf_stream(400, &mut rng);
-            let mut pyramid = UnivMonTwoTier::new(8, 1, 5, 64, 3, 16, 3);
-            for &(id, weight) in &keys {
-                pyramid.update_weighted(&DataInput::U64(id), weight);
-            }
-            let f2: f64 = keys.iter().map(|&(_, f)| (f as f64).powi(2)).sum();
-            if (pyramid.estimate_l2().powi(2) - f2).abs() > EPS * f2 {
-                failures += 1;
-            }
-        }
-        assert!(
-            failures as f64 <= allowed_failures(trials, DELTA),
-            "{failures}/{trials} misses beyond eps={EPS}, delta={DELTA}"
-        );
-    }
-
-    /// Mouse layers much narrower than the elephant ones: the joint bound
-    /// `P(error > eps F0 AND complete) <= 2/(k eps^2)`, and the ideal estimator
-    /// (exact top count restored) has mean `F0` and variance at most `2 F0^2/k`.
-    fn check_cardinality(trials: usize) {
-        const HEAP: usize = 32;
-        const KEYS: usize = 2000;
-        const EPS: f64 = 0.5;
-        // L >= ceil(log2(F0 / k)) + 2.
-        let layers = (KEYS as f64 / HEAP as f64).log2().ceil() as usize + 2;
-        let mut rng = StdRng::seed_from_u64(0x5EED_00F1);
-        let f0 = KEYS as f64;
-        let (mut failures, mut incomplete, mut sum, mut sum_sq) = (0, 0, 0.0, 0.0);
-        for _ in 0..trials {
-            let mut pyramid = UnivMonTwoTier::new(HEAP, 2, 3, 256, 2, 32, layers);
-            let mut top_keys = 0;
-            for (id, weight) in zipf_stream(KEYS, &mut rng) {
-                let key = DataInput::U64(id);
-                let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &key);
-                top_keys += usize::from(UnivMon::bottom_layer_for_hash(h, layers) == layers - 1);
-                pyramid.update_weighted(&key, weight);
-            }
-            let complete = pyramid.top_layer_complete();
-            incomplete += usize::from(!complete);
-            let estimate = pyramid.estimate_cardinality();
-            let missing = top_keys - pyramid.layer_heaps[layers - 1].len();
-            let ideal = estimate + ((1_u64 << (layers - 1)) as f64) * missing as f64;
-            sum += ideal - f0;
-            sum_sq += (ideal - f0).powi(2);
-            if complete && (estimate - f0).abs() > EPS * f0 {
-                failures += 1;
-            }
-        }
-        // (e/4)^{k/2} is about 2e-3 for k = 32.
-        assert!(
-            incomplete as f64 <= allowed_failures(trials, 0.01),
-            "top layer incomplete in {incomplete}/{trials} trials"
-        );
-        let n = trials as f64;
-        let delta = 2.0 / (HEAP as f64 * EPS * EPS);
-        assert!(
-            failures as f64 <= allowed_failures(trials, delta),
-            "{failures}/{trials} joint misses beyond eps={EPS}"
-        );
-        let variance = sum_sq / n;
-        assert!(
-            variance <= 2.0 * f0 * f0 / HEAP as f64,
-            "variance {:.3} F0^2/k above 2",
-            variance / (f0 * f0 / HEAP as f64)
-        );
-        assert!(
-            (sum / n).abs() <= 4.0 * (variance / n).sqrt(),
-            "ideal estimator mean error {:.1} looks biased",
-            sum / n
-        );
-    }
-
-    #[test]
-    fn two_tier_estimate_l2_meets_its_documented_bound() {
-        check_l2(150);
-    }
-
-    #[test]
-    #[ignore = "long Monte Carlo run; the fast variant runs by default"]
-    fn two_tier_estimate_l2_meets_its_documented_bound_long() {
-        check_l2(3000);
-    }
-
-    #[test]
-    fn two_tier_estimate_cardinality_meets_its_documented_bound() {
-        check_cardinality(60);
-    }
-
-    #[test]
-    #[ignore = "long Monte Carlo run; the fast variant runs by default"]
-    fn two_tier_estimate_cardinality_meets_its_documented_bound_long() {
-        check_cardinality(2000);
     }
 
     // =======================================================================

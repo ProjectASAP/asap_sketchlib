@@ -62,22 +62,27 @@ fn estimate_l1(&self) -> f64
 fn estimate_l2(&self) -> f64
 fn estimate_entropy(&self) -> f64
 fn estimate_cardinality(&self) -> f64
-fn estimate_g_sum<F>(&self, g: F, count_every_key: bool) -> f64
+fn estimate_g_sum<F>(&self, g: F) -> f64
 fn top_layer_complete(&self) -> bool
 ```
 
-Because UnivMon accepts only non-negative updates, `estimate_l1()` returns the
-exact tracked total weight. `estimate_entropy()` is Shannon entropy in bits
-(log2); UnivMon-Q's is in nats. The generic recurrence remains available through
-`estimate_g_sum` for compatible frequency functions.
+Every query is a G-sum `Σ_i g(f_i)` computed with the paper's offline
+recursion (Algorithm 2, see [Paper](#paper)):
 
-`estimate_l2()` uses layer 0's Count Sketch F2 estimate in standard mode, and
-`sqrt` of the summed per-layer F2 estimates in terminal mode, where the layers
-hold disjoint strata. This differs from the paper's generic recurrence, which
-`estimate_g_sum(|x| x * x, false)` computes. `estimate_cardinality()` counts
-every heap key, including keys inserted with weight zero, whatever its
-frequency estimate. `top_layer_complete()` reports whether the top layer's heap
-holds every key that layer received. See [Error bounds](#error-bounds).
+| Query | `g` | Paper |
+| --- | --- | --- |
+| `estimate_cardinality()` | `g(x) = x⁰`, `g(0) = 0` | §4.3, DDoS victim detection |
+| `estimate_l2()` | `sqrt` of the G-sum with `g(x) = x²` | §4.1, F2 and the L2 norm |
+| `estimate_entropy()` | `log2(m) − Y/m`, `Y` the G-sum with `g(x) = x log2 x` | §4.3, entropy estimation |
+| `estimate_l1()` | the exact stream mass `m` | §4.3 footnote 4: `m` from a single counter |
+| `estimate_g_sum(g)` | any `g` | Algorithm 2 |
+
+Because UnivMon accepts only non-negative updates, the L1 norm is the stream
+mass, so `estimate_l1()` returns the exact tracked total weight, the single
+counter the paper reads `m` from; its G-sum form is `estimate_g_sum(|x| x)`.
+`estimate_entropy()` is Shannon entropy in bits (log2); UnivMon-Q's is in nats.
+`top_layer_complete()` reports whether the top layer's heap holds every key that
+layer received.
 
 ## Merge
 
@@ -134,83 +139,102 @@ assert!(um.estimate_l1() >= 1.0);
 
 Primary multi-metric framework.
 
-## Error bounds
+## Paper
 
-For `0 < epsilon < 1`, these statements use an ideal independent uniform hash
-model, with the finder hash independent of each layer's Count Sketch; `new`
-refuses the shapes that break this (see Constructors). They apply to full-stream
-updates, not to a promoted-only Octo aggregator. Write `r = rows` and `w = cols`.
-No counter, squared-norm accumulator or intermediate arithmetic may overflow;
-`F2 < i64::MAX` alone does not ensure that a colliding row's squared norm fits.
+UnivMon follows Liu et al., "One Sketch to Rule Them All: Rethinking Network
+Flow Monitoring with UnivMon", SIGCOMM 2016
+(<https://zaoxing.github.io/papers/2016/SIGCOMM16_UnivMon.pdf>).
 
-### L2
+### Online sketching (Algorithm 1)
 
-Take one row. With column `c_i` and sign `s_i` for key `i`, the row's estimate
-is `Z = Σ_c (Σ_{i: c_i = c} s_i f_i)² = F2 + Σ_{i≠j} s_i s_j f_i f_j [c_i = c_j]`.
-The signs are independent of each other and of the columns, so `E[Z] = F2` and
-`Var[Z] = 2q (F2² − F4) ≤ 2q F2²`, where `F4 = Σ f_i⁴` and `q = P(c_i = c_j)`.
-A column is a hash slice of `⌈log2 w⌉` bits taken modulo `w`, so `q = 1/w` when
-`w` is a power of two and `q ≤ 9/(8w)` otherwise (the slice values
-`w..2^⌈log2 w⌉` fold onto the low columns; the worst case,
-`w = ¾·2^⌈log2 w⌉`, doubles a third of them).
+Layer `j` holds the substream `D_j` of keys whose sampling bits `h_1..h_j` are
+all 1 (layer 0 holds the whole stream) and runs an L2 heavy-hitter sketch on
+it. As in the paper's P4 data plane (§6.2), a layer's L2 heavy-hitter sketch is
+a Count Sketch (`rows x cols`, `CountSketchWithL2Norm`) and a priority queue of
+the `heap_size` keys with the largest estimates (`TopKHeap`). `update_weighted`
+is Algorithm 1: a key updates every layer up to the deepest one its sampling
+bits select.
 
-By Chebyshev, one row misses by more than `ε F2` with probability at most
-`p = 2q / ε²`. The rows hash disjoint bit slices of one 128-bit hash, so they
-are independent. Their median (the mean of the two middle rows when `r` is
-even) misses only when at least `⌈r/2⌉` rows miss on the same side, hence
+### Offline estimation (Algorithm 2)
 
-`P(|F2_est − F2| > ε F2) ≤ δ = P(Binomial(r, p) ≥ ⌈r/2⌉)`.
+`Q_j` is layer `j`'s heap with each key's Count Sketch estimate `w_j(i)`: the
+top-k heavy keys the paper's control plane feeds the recursion (§6.3). With `L`
+the top layer:
 
-The bound is useful only for `p < 1/2`. Because `|√(1 ± ε) − 1| ≤ ε`, the same
-`ε` and `δ` bound the relative error of the returned L2 norm.
+- `Y_L = Σ_{i ∈ Q_L} g(w_L(i))`;
+- `Y_j = 2 Y_{j+1} + Σ_{i ∈ Q_j} (1 − 2 h_{j+1}(i)) g(w_j(i))` for
+  `j = L−1, ..., 0`;
+- the estimate is `Y_0`.
 
-In terminal mode each stratum's estimate satisfies this bound for its own `F2`.
-If every non-empty stratum is within `ε` of its own `F2`, the sum is within `ε`
-of the total, so by a union bound the failure probability is at most `δ` times
-the number of non-empty strata (at most `layers`).
+`g` is applied to the Count Sketch estimate as a real number, and only to
+positive estimates: a key whose estimate is not positive contributes
+`g(0) = 0`, the paper's convention for the distinct count (`g(0) = 0`) and the
+entropy (`0 log 0 = 0`), both in §4.3.
 
-### Distinct count (standard mode)
+### Guarantee
 
-Let `S_j` be the keys reaching layer `j`, `H_j` its heap of `min(|S_j|, k)`
-keys, and `M_j = S_j \ H_j`, where `k = heap_size >= 8`. The finder bits
-`1..=j` select `S_j`; write `b_(j+1)(i)` for the next bit. For `L = layers`,
-define an ideal estimator `Y*` that uses the exact top count `|S_(L-1)|` and
-the implementation's recurrence below it:
+The paper states no `(ε, δ)` bound of its own. §4.1 and §4.2 state that a G-sum
+whose `g` is in the class Stream-PolyLog (informally, `g` monotonic and upper
+bounded by `O(f²)`; the precise characterization is in Braverman and
+Ostrovsky, "Zero-one frequency laws", STOC 2010) can be approximated in
+polylogarithmic space by this universal sketch, and that Algorithm 2's output
+is an unbiased estimator of the G-sum. For the theorems it refers to Braverman
+and Ostrovsky's Recursive Sum ("Generalizing the layering method of Indyk and
+Woodruff: Recursive sketches for frequency-based vectors on streams",
+APPROX/RANDOM 2013; arXiv:1011.2571, "Recursive Sketching For Frequency
+Moments"). §4.3 shows that the distinct count (`g(x) = x⁰`), the L1 and L2
+norms and the entropy's `Σ f log f` (`g(x) = x log x`) are G-sums in
+Stream-PolyLog, so the one statement below covers every query here. No
+separate bound is stated for any of them.
 
-`Y*_j = 2 Y*_(j+1) + sum_(i in H_j) (1 - 2 b_(j+1)(i))`.
+The Recursive Sum's statement (arXiv:1011.2571, Algorithm 4.1, Lemma 3.8 and
+Theorem 4.2), for the implicit vector `V = (g(f_1), ..., g(f_n))`, `|V_j|` its
+sum over the keys reaching layer `j`, and target error `ε`:
 
-Telescoping gives
+- **Layers.** `φ = O(log n)` pairwise independent zero-one sampling vectors,
+  `n` the number of distinct keys.
+- **Cores.** At every layer `j`, a heavy-hitter algorithm `HH(D_j, α, ε, δ_j)`
+  that with probability at least `1 − δ_j` outputs an `(α, ε)`-cover
+  (Definition 3.2): every key with `g(f_i) ≥ α |V_j|` is reported, and every
+  reported value is within `(1 ± ε)` of `g(f_i)`. Algorithm 4.1 takes
+  `α = ε²/φ³` and `δ_j = 1/φ`; Lemma 3.8 needs `α` of order `ε²/φ³` and `δ_j`
+  of order `1/φ`, and adds the per-layer failures by a union bound over the
+  `φ + 1` layers (Fact 3.7).
+- **Top layer.** `|V_φ|` computed exactly.
 
-`Y*_0 - F0 = -sum_(j=0..L-2) 2^j sum_(i in M_j) (1 - 2 b_(j+1)(i))`.
+Then `Y_0` is a `(1 ± ε)`-approximation of `Σ_i g(f_i)` with probability at
+least 0.7 (Theorem 4.2). The failure probability is a constant; a smaller `δ`
+needs the median of independent copies, which this library does not take.
 
-Each `M_j` is determined before the independent next finder bits are exposed,
-so the layer increments form a martingale difference sequence: unconditionally
-`E[Y*_0] = F0` and `Var[Y*_0] = sum_j 4^j E[(|S_j| - k)^+]`. Bound the
-expectation by `F0 / 2^j` on low layers, and on high layers by
-`(F0 / 2^j)^3 / (5 k^2)`, using `(x-k)^+ <= x(x-1)(x-2)/(5 k^2)` for `k >= 8`.
-Splitting at `2^j` in `[0.45, 0.9) * F0/k` gives
-`Var[Y*_0] <= 1.35 F0^2/k <= 2 F0^2/k`.
+### Where this implementation departs from the paper
 
-Let `C` be the event that the top heap is complete (`top_layer_complete()`),
-and `Y = estimate_cardinality()`. On `C`, `Y = Y*_0`, so Chebyshev gives the
-**joint** bound
-
-`P(|Y - F0| > epsilon F0 AND C) <= d`, where `d = min(1, 2/(k epsilon^2))`.
-
-Completeness does not imply conditional unbiasedness. With `F0 = 9`, `k = 8`,
-`L = 2`, any layer-0 heap misses one key. Of 512 equally likely next-bit
-assignments only the all-ones one makes the top incomplete, and the errors over
-the other 511 sum to -1, so `E[Y - F0 | C] = -1/511`.
-
-If `P(not C) <= rho < 1`, then
-
-- `P(|Y-F0| > epsilon F0 | C) <= min(1, d/(1-rho))`;
-- without rejecting incomplete results, `P(|Y-F0| > epsilon F0) <= min(1, d+rho)`.
-
-For ordinary updates, `C` holds exactly when `|S_(L-1)| <= k`. Sizing
-`L >= ceil(log2(F0_max/k)) + 2` makes its mean at most `k/2`, so Chernoff gives
-`rho <= (e/4)^(k/2)`. A completeness flag lowered by a merge or by partial
-delivery needs its own completeness probability. A normal approximation for
-the ideal estimator suggests `2 exp(-epsilon^2 k/4)`; this is not a rigorous
-tail bound. Terminal mode reconstructs candidates from strata and is outside
-this proof.
+- **Number of layers.** The Recursive Sum uses `φ = O(log n)` sampled layers
+  (the paper `log(n)`). `layers` is a constructor argument (default 8), at most
+  `UNIVMON_MAX_LAYERS` (19); matching the statement needs `layers` near
+  `log2(n) + 1` for the largest `n` expected.
+- **Sampling hashes.** The paper draws `log(n)` pairwise independent hash
+  functions `h_j : [n] → {0, 1}`. Here `h_j(i)` is bit `j` of one 64-bit hash
+  of the key at seed index `UNIVMON_BOTTOM_LAYER_SEED_INDEX`, and layer `j`'s
+  Count Sketch hashes at seed index `j`; the statement assumes these behave as
+  independent uniform bits. `new` refuses a layer that would reuse the finder's
+  seed and rows whose column and sign bits overlap (see
+  [Constructors](#constructors)).
+- **Cores.** A core here is the fixed-size top-`heap_size` heap with Count
+  Sketch estimates (§6.2), not an `(α, ε)`-cover sized from `ε`. It is one when
+  both conditions of Definition 3.2 hold. Capacity: at most `1/α` keys have
+  `g(f_i) ≥ α |V_j|` (their values sum to at most `|V_j|`), so
+  `heap_size ≥ 1/α = φ³/ε²` leaves room for all of them, provided the heap
+  ranks them above the other keys. Accuracy: every heap key's Count Sketch
+  estimate must give `g(w_j(i))` within `(1 ± ε)` of `g(f_i)`, which `rows` and
+  `cols` govern. The library does not size `heap_size`, `rows` or `cols` from
+  `ε`, and does not check either condition.
+- **Top layer.** The Recursive Sum computes `|V_φ|` exactly; Algorithm 2 and
+  this implementation sum `g` over the top layer's heap.
+- **Success probability.** 0.7 per instance; no median over copies.
+- **L1 and entropy's `m`.** The exact total weight, as §4.3 footnote 4 allows.
+- **Terminal mode.** `update_weighted_terminal` (the Joltik update-last-layer
+  layout) is not in the paper. Its queries reconstruct each logical layer's
+  candidates from the disjoint strata, apply `g` to integer counts, and on a
+  layer whose candidate set is incomplete keep only keys above
+  `floor(L2 / sqrt(heap_size))`, a filter of this implementation's own. No
+  paper bound covers terminal-mode answers, for any `g`.
