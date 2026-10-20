@@ -700,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "dimension mismatch while merging CountMin sketches")]
+    #[should_panic(expected = "dimension mismatch while merging Count-Min sketches")]
     fn merge_requires_matching_dimensions_panics() {
         // Verifies merge rejects sketches with incompatible dimensions.
         let mut left = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 256, 4);

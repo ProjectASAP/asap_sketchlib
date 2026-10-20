@@ -293,7 +293,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         T: std::fmt::Debug,
     {
         println!(
-            "KLLDynamic Packed (k={}, levels={}, items={})",
+            "KllDynamic Packed (k={}, levels={}, items={})",
             self.k,
             self.num_levels,
             self.items.len()
@@ -906,10 +906,10 @@ mod tests {
             sketch.update(value);
         }
 
-        let bytes = sketch.to_asapv1().expect("serialize KLLDynamic with rmp");
+        let bytes = sketch.to_asapv1().expect("serialize KllDynamic with rmp");
         assert!(!bytes.is_empty(), "serialized bytes should not be empty");
 
-        let restored = KllDynamic::from_asapv1(&bytes).expect("deserialize KLLDynamic with rmp");
+        let restored = KllDynamic::from_asapv1(&bytes).expect("deserialize KllDynamic with rmp");
         assert_eq!(sketch.k, restored.k);
         assert_eq!(sketch.m, restored.m);
         assert_eq!(sketch.num_levels, restored.num_levels);
@@ -966,8 +966,8 @@ mod tests {
             "p90={p90} out of range for n={n}"
         );
 
-        let bytes = sketch.to_asapv1().expect("serialize KLLDynamic<i64>");
-        let restored = KllDynamic::<i64>::from_asapv1(&bytes).expect("deserialize KLLDynamic<i64>");
+        let bytes = sketch.to_asapv1().expect("serialize KllDynamic<i64>");
+        let restored = KllDynamic::<i64>::from_asapv1(&bytes).expect("deserialize KllDynamic<i64>");
         assert_eq!(sketch.count(), restored.count());
     }
 

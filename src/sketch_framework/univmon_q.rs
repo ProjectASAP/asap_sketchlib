@@ -79,7 +79,7 @@ impl UnivMonQConfig {
         failure_probability: f64,
     ) -> Result<Self, UnivMonQError> {
         if self.heap_size == 0 {
-            return Err(UnivMonQError::new("candidates must be positive"));
+            return Err(UnivMonQError::new("heap_size must be positive"));
         }
         if !failure_probability.is_finite() || !(0.0..1.0).contains(&failure_probability) {
             return Err(UnivMonQError::new("failure probability must be in (0, 1)"));
@@ -95,7 +95,7 @@ impl UnivMonQConfig {
             }
         }
         Err(UnivMonQError::new(
-            "window bound does not fit the candidate table within 63 levels",
+            "window bound does not fit the candidate table within 63 layers",
         ))
     }
 }
@@ -1553,19 +1553,19 @@ fn allocate_source_id() -> u64 {
 
 fn validate_config(config: UnivMonQConfig) -> Result<(), UnivMonQError> {
     if !(2..=63).contains(&config.layers) {
-        return Err(UnivMonQError::new("levels must be in 2..=63"));
+        return Err(UnivMonQError::new("layers must be in 2..=63"));
     }
     if config.top_layer_cols == 0 {
-        return Err(UnivMonQError::new("width must be positive"));
+        return Err(UnivMonQError::new("top_layer_cols must be positive"));
     }
     if config.rows == 0 || config.rows % 2 == 0 {
-        return Err(UnivMonQError::new("depth must be a positive odd number"));
+        return Err(UnivMonQError::new("rows must be a positive odd number"));
     }
     if !matches!(config.counter_bits, 32 | 64) {
         return Err(UnivMonQError::new("counter_bits must be 32 or 64"));
     }
     if config.heap_size == 0 {
-        return Err(UnivMonQError::new("candidates must be positive"));
+        return Err(UnivMonQError::new("heap_size must be positive"));
     }
     Ok(())
 }

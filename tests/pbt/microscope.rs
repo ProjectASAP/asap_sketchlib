@@ -857,7 +857,7 @@ proptest! {
         prop_assert!(refused.is_err(), "a grid with no bytes must be refused");
         let err = refused.err().unwrap_or_default();
         prop_assert!(
-            err.contains("does not match rows * cols * depth"),
+            err.contains("does not match rows * cols * bucket_len"),
             "unexpected refusal for an unfilled {}x{}x{} grid: {}",
             rows, cols, depth, err
         );

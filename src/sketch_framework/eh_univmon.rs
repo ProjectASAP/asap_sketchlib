@@ -472,9 +472,9 @@ impl ExponentialHistogramUnivMon {
     }
 
     pub fn print_buckets(&self) {
-        println!("=== EHUnivOptimized Buckets ===");
+        println!("=== ExponentialHistogramUnivMon Buckets ===");
         println!(
-            "k: {}, window: {}, max_map_size: {}",
+            "k: {}, window: {}, exact_bucket_budget: {}",
             self.k, self.window, self.exact_bucket_budget
         );
         println!(
@@ -485,14 +485,14 @@ impl ExponentialHistogramUnivMon {
         println!("Sketch buckets ({}):", self.sketch_buckets.len());
         for (i, b) in self.sketch_buckets.iter().enumerate() {
             println!(
-                "  [S{}] min_time={}, max_time={}, bucket_size={}, l22={:.2}",
+                "  [S{}] min_time={}, max_time={}, total_weight={}, l2_squared={:.2}",
                 i, b.min_time, b.max_time, b.total_weight, b.l2_squared
             );
         }
-        println!("Map buckets ({}):", self.exact_buckets.len());
+        println!("Exact buckets ({}):", self.exact_buckets.len());
         for (i, b) in self.exact_buckets.iter().enumerate() {
             println!(
-                "  [M{}] min_time={}, max_time={}, bucket_size={}, l22={:.2}, keys={}",
+                "  [E{}] min_time={}, max_time={}, total_weight={}, l2_squared={:.2}, keys={}",
                 i,
                 b.min_time,
                 b.max_time,
@@ -941,7 +941,7 @@ mod tests {
             let rel_diff = (b.l2_squared - actual_l22).abs() / actual_l22.max(1e-12);
             assert!(
                 rel_diff < 0.01,
-                "Sketch bucket {i}: stored l22={:.4} vs actual={actual_l22:.4}",
+                "Sketch bucket {i}: stored l2_squared={:.4} vs actual={actual_l22:.4}",
                 b.l2_squared
             );
         }

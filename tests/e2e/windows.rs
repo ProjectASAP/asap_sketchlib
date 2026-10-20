@@ -74,13 +74,13 @@ fn full_span(eh: &ExponentialHistogram) -> (u64, u64) {
 fn every_eh_variant_selects_the_documented_merge_norm() {
     let l2_variants = [
         (
-            "COUNTL2HH",
+            "CountSketchWithL2Norm",
             asap_sketchlib::EhBucketSketch::CountSketchWithL2Norm(
                 CountSketchWithL2Norm::with_dimensions(ROWS, COLS),
             ),
         ),
         (
-            "UNIVMON",
+            "UnivMon",
             asap_sketchlib::EhBucketSketch::UnivMon(UnivMon::new(32, ROWS, COLS, 4)),
         ),
     ];
@@ -99,37 +99,37 @@ fn every_eh_variant_selects_the_documented_merge_norm() {
 
     let l1_variants: Vec<(&str, asap_sketchlib::EhBucketSketch)> = vec![
         (
-            "CM",
+            "CountMinSketch",
             asap_sketchlib::EhBucketSketch::CountMinSketch(
                 CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
             ),
         ),
         (
-            "CS",
+            "CountSketch",
             asap_sketchlib::EhBucketSketch::CountSketch(
                 CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
             ),
         ),
         (
-            "COCO",
+            "CocoSketch",
             asap_sketchlib::EhBucketSketch::CocoSketch(CocoSketch::init_with_size_and_seed(
                 512, 4, COCO_SEED,
             )),
         ),
         (
-            "ELASTIC",
+            "ElasticSketch",
             asap_sketchlib::EhBucketSketch::ElasticSketch(ElasticSketch::with_heavy_buckets(512)),
         ),
         (
-            "HLL",
+            "Hll",
             asap_sketchlib::EhBucketSketch::Hll(HyperLogLog::<Ertl>::new()),
         ),
         (
-            "KLL",
+            "Kll",
             asap_sketchlib::EhBucketSketch::Kll(Kll::with_k_and_seed(200, 0x5EED_0100)),
         ),
         (
-            "DDS",
+            "DdSketch",
             asap_sketchlib::EhBucketSketch::DdSketch(DdSketch::new(0.01)),
         ),
     ];
@@ -181,7 +181,7 @@ fn eh_count_min_variant_conforms_to_the_count_min_model_over_the_retained_window
         CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
     ));
     CountMinSpec::new(ROWS, COLS).assert_contract(
-        "EHSketchList::CM",
+        "EhBucketSketch::CountMinSketch",
         &truth,
         |k| merged.query(&DataInput::U64(k as u64)).expect("CM query"),
         &ctx,
@@ -198,7 +198,7 @@ fn eh_count_sketch_variant_conforms_to_the_l2_model_over_the_retained_window() {
             ROWS, COLS
         )));
     CountSketchSpec::new(ROWS, COLS).assert_contract(
-        "EHSketchList::CS",
+        "EhBucketSketch::CountSketch",
         &truth,
         |k| merged.query(&DataInput::U64(k as u64)).expect("CS query"),
         &ctx,
@@ -212,9 +212,13 @@ fn eh_countl2hh_variant_satisfies_the_l2_bound_over_the_retained_window() {
             CountSketchWithL2Norm::with_dimensions(ROWS, COLS),
         ));
     CountSketchSpec::new(ROWS, COLS).assert_contract(
-        "EHSketchList::COUNTL2HH",
+        "EhBucketSketch::CountSketchWithL2Norm",
         &truth,
-        |k| merged.query(&DataInput::U64(k as u64)).expect("L2HH query"),
+        |k| {
+            merged
+                .query(&DataInput::U64(k as u64))
+                .expect("CountSketchWithL2Norm query")
+        },
         &ctx,
     );
 }
@@ -259,7 +263,10 @@ fn eh_elastic_variant_stays_one_sided_over_the_retained_window() {
             format!("key f{k}: true {c}, reported {est} (must never read low)")
         });
     }
-    tally.assert_none("EHSketchList::ELASTIC one-sided on heavy keys", &ctx);
+    tally.assert_none(
+        "EhBucketSketch::ElasticSketch one-sided on heavy keys",
+        &ctx,
+    );
 }
 
 /// The merged Coco window holds exactly one unit of mass per retained event.
@@ -270,7 +277,7 @@ fn eh_coco_variant_conserves_the_retained_mass() {
             CocoSketch::init_with_size_and_seed(1024, 4, COCO_SEED),
         ));
     let asap_sketchlib::EhBucketSketch::CocoSketch(coco) = &merged else {
-        panic!("a COCO histogram merges into a COCO payload");
+        panic!("a CocoSketch histogram merges into a CocoSketch payload");
     };
     let mass: u64 = coco.recorded_flows().map(|(_, v)| v).sum();
     assert_eq!(
@@ -307,7 +314,7 @@ fn eh_hll_variant_satisfies_the_register_error_model_over_the_retained_window() 
     // acceptance rule at n = 1 is exactly "this must pass", which is the honest
     // reading of a one-draw experiment.
     tally.assert_independent_binomial(
-        "EHSketchList::HLL / register error model",
+        "EhBucketSketch::Hll / register error model",
         spec.per_check_failure(),
         &format!(
             "k={EH_K} uniform n={N} domain=200000 seed={STREAM_SEED:#x}, retained span \
@@ -359,14 +366,14 @@ fn eh_kll_variant_satisfies_the_rank_error_characterization_over_the_retained_wi
         // The KLL payload answers `query(q)` as `quantile(q)`.
         spec.record_trial(
             &mut tally,
-            &format!("EHSketchList::KLL seed={seed:#x} span=[{tlo}, {thi}]"),
+            &format!("EhBucketSketch::Kll seed={seed:#x} span=[{tlo}, {thi}]"),
             trial_truth.sorted(),
             &QS,
             |q| trial_merged.query(&DataInput::F64(q)).expect("KLL query"),
         );
     }
     tally.assert_independent_binomial(
-        "EHSketchList::KLL / maximum normalized rank error per compaction seed",
+        "EhBucketSketch::Kll / maximum normalized rank error per compaction seed",
         spec.trial_failure_probability,
         &format!(
             "k={EH_K} kll_k={KLL_K} uniform n={N} seed={STREAM_SEED:#x}, retained span \
@@ -406,7 +413,7 @@ fn eh_ddsketch_variant_satisfies_the_relative_value_error_contract_over_the_wind
         |q| merged.query(&DataInput::F64(q)).ok(),
     );
     tally.assert_none(
-        "EHSketchList::DDS / relative value error",
+        "EhBucketSketch::DdSketch / relative value error",
         &format!(
             "alpha={ALPHA} k={EH_K} uniform n={N} seed={STREAM_SEED:#x}, retained span \
              [{lo}, {hi}] with {} observations",
@@ -569,7 +576,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     }
     let active = tw.active_sketch();
     spec.assert_contract(
-        "TumblingWindow<FoldCS> active window",
+        "TumblingWindow<CountSketchFold> active window",
         &active_truth,
         |k| active.estimate(&DataInput::U64(k as u64)) as f64,
         &format!(
@@ -585,7 +592,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     }
     let all = tw.query_all();
     spec.assert_contract(
-        "TumblingWindow<FoldCS> query_all",
+        "TumblingWindow<CountSketchFold> query_all",
         &all_truth,
         |k| all.estimate(&DataInput::U64(k as u64)) as f64,
         &format!("all {TOTAL} observations across {} windows", TOTAL / WINDOW),
@@ -599,7 +606,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     }
     let recent = tw.query_recent(2);
     spec.assert_contract(
-        "TumblingWindow<FoldCS> query_recent(2)",
+        "TumblingWindow<CountSketchFold> query_recent(2)",
         &recent_truth,
         |k| recent.estimate(&DataInput::U64(k as u64)) as f64,
         "last three windows",
@@ -702,42 +709,42 @@ fn every_eh_variant_can_merge_into_its_own_kind() {
 
     let variants: Vec<(&str, EhBucketSketch)> = vec![
         (
-            "CM",
+            "CountMinSketch",
             EhBucketSketch::CountMinSketch(
                 CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 256),
             ),
         ),
         (
-            "CS",
+            "CountSketch",
             EhBucketSketch::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 3, 256,
             )),
         ),
         (
-            "COCO",
+            "CocoSketch",
             EhBucketSketch::CocoSketch(CocoSketch::init_with_size_and_seed(256, 4, COCO_SEED)),
         ),
         (
-            "COUNTL2HH",
+            "CountSketchWithL2Norm",
             EhBucketSketch::CountSketchWithL2Norm(CountSketchWithL2Norm::with_dimensions(3, 256)),
         ),
-        ("DDS", EhBucketSketch::DdSketch(DdSketch::new(0.01))),
+        ("DdSketch", EhBucketSketch::DdSketch(DdSketch::new(0.01))),
         (
-            "ELASTIC",
+            "ElasticSketch",
             EhBucketSketch::ElasticSketch(ElasticSketch::with_heavy_buckets(256)),
         ),
-        ("HLL", EhBucketSketch::Hll(HyperLogLog::<Ertl>::new())),
+        ("Hll", EhBucketSketch::Hll(HyperLogLog::<Ertl>::new())),
         (
-            "KLL",
+            "Kll",
             EhBucketSketch::Kll(Kll::with_k_and_seed(200, 0x5EED_0300)),
         ),
         (
-            "UNIVMON",
+            "UnivMon",
             EhBucketSketch::UnivMon(UnivMon::new(32, 3, 256, 4)),
         ),
         #[cfg(feature = "experimental")]
         (
-            "UNIFORM",
+            "Uniform",
             EhBucketSketch::Uniform(asap_sketchlib::UniformSampling::with_seed(0.5, 7)),
         ),
     ];
@@ -754,7 +761,7 @@ fn every_eh_variant_can_merge_into_its_own_kind() {
         }
         assert!(
             left.merge(&right).is_ok(),
-            "EHSketchList::{name} has no merge arm, so an ExponentialHistogram over it \
+            "EhBucketSketch::{name} has no merge arm, so an ExponentialHistogram over it \
              silently discards data on every bucket merge"
         );
     }
@@ -847,7 +854,7 @@ fn tumbling_fold_cms_hierarchical_merge_covers_every_observation() {
 
     let spec = CountMinSpec::new(ROWS, hierarchical.fold_cols());
     spec.assert_contract(
-        "TumblingWindow<FoldCMS> query_all_hierarchical",
+        "TumblingWindow<CountMinSketchFold> query_all_hierarchical",
         &truth,
         |k| hierarchical.estimate(&DataInput::U64(k as u64)) as f64,
         &format!(
@@ -1239,7 +1246,7 @@ mod documented_matrix {
     fn eh_documented_key_input(id: u8) {
         let input = key_input(id);
         let context = format!(
-            "{} k={DOC_K} window={DOC_WINDOW} payload CountMin {DOC_ROWS}x{DOC_COLS} FastPath, \
+            "{} k={DOC_K} window={DOC_WINDOW} payload CountMinSketch {DOC_ROWS}x{DOC_COLS} FastPath, \
              stream spread over {SPAN} time units",
             input.context()
         );
@@ -1249,7 +1256,7 @@ mod documented_matrix {
     fn eh_documented_string_input(id: u8) {
         let input = string_input(id);
         let context = format!(
-            "{} k={DOC_K} window={DOC_WINDOW} payload CountMin {DOC_ROWS}x{DOC_COLS} FastPath, \
+            "{} k={DOC_K} window={DOC_WINDOW} payload CountMinSketch {DOC_ROWS}x{DOC_COLS} FastPath, \
              stream spread over {SPAN} time units",
             input.context()
         );
@@ -1351,7 +1358,7 @@ mod microscope {
 
         let spec = CountMinSpec::new(ROWS, COLS);
         spec.assert_contract(
-            "MicroCM/Over",
+            "MicroCm/Over",
             &truth,
             |key| sk.estimate_with(&DataInput::U64(key as u64), DeltaStrategy::Over),
             &format!("zipf(4096, 1.1) x {ITEMS}, window = {T} x {PER_SUB_WINDOW} items"),

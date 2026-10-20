@@ -85,7 +85,7 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
 
     let context = format!(
         "rows={ROWS} cols={COLS} zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}, \
-         members: CountMinFast, CountFast, HllErtl, HllClassic, HllHip"
+         members: CountMinFast, CountSketchFast, HllErtl, HllClassic, HllHip"
     );
 
     // Matrix members: identical estimates, key for key.
@@ -97,12 +97,12 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
         let b = ref_cm.estimate(&d) as f64;
         cm_tally.record(a == b, || format!("key {k}: ensemble {a} standalone {b}"));
 
-        let c = ens.estimate(1, &d).expect("CountFast cell");
+        let c = ens.estimate(1, &d).expect("CountSketchFast cell");
         let e = ref_cs.estimate(&d);
         cs_tally.record(c == e, || format!("key {k}: ensemble {c} standalone {e}"));
     }
     cm_tally.assert_none("ensemble CountMinFast vs standalone", &context);
-    cs_tally.assert_none("ensemble CountFast vs standalone", &context);
+    cs_tally.assert_none("ensemble CountSketchFast vs standalone", &context);
 
     // HLL members are deliberately *not* bit-identical to a standalone HLL.
     // The ensemble feeds them the low 64 bits of the shared **matrix** hash
@@ -201,7 +201,7 @@ fn ensemble_members_stay_inside_their_own_error_models() {
         &context,
     );
     CountSketchSpec::new(ROWS, COLS).assert_contract(
-        "ensemble CountFast",
+        "ensemble CountSketchFast",
         &truth,
         |k| ens.estimate(1, &DataInput::U64(k as u64)).expect("cs"),
         &context,
@@ -288,7 +288,7 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
         &context,
     );
     CountSketchSpec::new(ROWS, COLS).assert_contract(
-        "ensemble Count member",
+        "ensemble CountSketch member",
         &truth,
         |k| mixed.estimate(2, &DataInput::U64(k as u64)).expect("cs"),
         &context,
@@ -387,14 +387,14 @@ fn univmonq_configuration_variants_all_build_and_keep_exact_aggregates() {
             },
         ),
         (
-            "width_halving_period=2",
+            "cols_halving_period=2",
             UnivMonQConfig {
                 cols_halving_period: 2,
                 ..base
             },
         ),
         (
-            "explicit hash_seed",
+            "explicit seed_index",
             UnivMonQConfig {
                 seed_index: 3,
                 ..base
@@ -484,7 +484,7 @@ fn univmonq_with_window_bound_chooses_a_hierarchy_that_satisfies_its_own_inequal
         let upper = mean + (2.0 * mean * log_inv_delta).sqrt() + (2.0 / 3.0) * log_inv_delta;
         assert!(
             upper < cfg.heap_size as f64,
-            "levels={} leaves the deepest stratum with an upper bound of {upper:.1}, \
+            "layers={} leaves the deepest stratum with an upper bound of {upper:.1}, \
              above the {} candidate slots",
             cfg.layers,
             cfg.heap_size
@@ -497,7 +497,7 @@ fn univmonq_with_window_bound_chooses_a_hierarchy_that_satisfies_its_own_inequal
                 + (2.0 / 3.0) * log_inv_delta;
             assert!(
                 upper_lower >= cfg.heap_size as f64,
-                "levels={} is not minimal: {} levels would already fit",
+                "layers={} is not minimal: {} layers would already fit",
                 cfg.layers,
                 cfg.layers - 1
             );

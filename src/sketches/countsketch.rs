@@ -276,11 +276,11 @@ where
         assert_eq!(
             (self_rows, self_cols),
             (other.counts.rows(), other.counts.cols()),
-            "dimension mismatch while merging CountMin sketches"
+            "dimension mismatch while merging Count Sketches"
         );
         assert_eq!(
             self.admission_rate, other.admission_rate,
-            "admission rate mismatch while merging Count sketches"
+            "admission rate mismatch while merging Count Sketches"
         );
 
         for i in 0..self_rows {
@@ -923,7 +923,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "dimension mismatch while merging CountMin sketches")]
+    #[should_panic(expected = "dimension mismatch while merging Count Sketches")]
     fn merge_requires_matching_dimensions() {
         let mut left = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
         let right = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 32);

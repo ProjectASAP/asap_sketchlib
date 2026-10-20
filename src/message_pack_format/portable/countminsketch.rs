@@ -889,7 +889,7 @@ mod tests {
         assert_eq!(
             got,
             want,
-            "CountMin delta hh_keys bytes diverge from the Go reference golden \
+            "CountMinSketch delta hh_keys bytes diverge from the Go reference golden \
              ({} bytes got vs {} bytes want)",
             got.len(),
             want.len(),
@@ -991,7 +991,7 @@ mod tests {
         assert_eq!(
             got,
             want,
-            "CountMin delta bytes diverge from the Go reference golden \
+            "CountMinSketch delta bytes diverge from the Go reference golden \
              ({} bytes got vs {} bytes want)",
             got.len(),
             want.len(),

@@ -111,7 +111,7 @@ macro_rules! countmin_instance {
 
         let (rows, cols) = (single.rows(), single.cols());
         let label = concat!(
-            "CountMin<",
+            "CountMinSketch<",
             stringify!($storage),
             ", ",
             stringify!($path),
@@ -300,7 +300,13 @@ macro_rules! count_instance {
         left.merge(&right);
 
         let (rows, cols) = (single.rows(), single.cols());
-        let label = concat!("Count<", stringify!($storage), ", ", stringify!($path), ">");
+        let label = concat!(
+            "CountSketch<",
+            stringify!($storage),
+            ", ",
+            stringify!($path),
+            ">"
+        );
         let ctx = context(label, rows, cols);
         let spec = CountSketchSpec::new(rows, cols);
         spec.assert_contract(
@@ -384,7 +390,7 @@ fn countsketch_both_paths_are_exact_on_a_collision_free_workload() {
                 }
             }
             let label = concat!(
-                "Count<",
+                "CountSketch<",
                 stringify!($storage),
                 "> collision-free exactness on both paths"
             );
@@ -434,7 +440,7 @@ macro_rules! cmsheap_instance {
 
         let (rows, cols) = (single.rows(), single.cols());
         let label = concat!(
-            "CMSHeap<",
+            "CountMinSketchWithHeap<",
             stringify!($storage),
             ", ",
             stringify!($path),
@@ -501,7 +507,7 @@ macro_rules! csheap_instance {
 
         let (rows, cols) = (single.rows(), single.cols());
         let label = concat!(
-            "CSHeap<",
+            "CountSketchWithHeap<",
             stringify!($storage),
             ", ",
             stringify!($path),
@@ -685,7 +691,7 @@ fn csheap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
     macro_rules! probe {
         ($storage:ty, $path:ty, $ctor:expr) => {{
             let label = concat!(
-                "CSHeap<",
+                "CountSketchWithHeap<",
                 stringify!($storage),
                 ", ",
                 stringify!($path),
@@ -722,7 +728,7 @@ fn csheap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
             assert_eq!(
                 heap_count_from_estimate(est),
                 i64::MAX,
-                "{label}: cs_heap_count must saturate at i64::MAX"
+                "{label}: heap_count_from_estimate must saturate at i64::MAX"
             );
             assert_eq!(
                 heap_count(huge.heap().heap(), &key),
@@ -828,7 +834,7 @@ fn cmsheap_inert_instances_construct_and_report_their_geometry() {
     macro_rules! inert {
         ($storage:ty, $path:ty, $ctor:expr, $rows:expr, $cols:expr) => {{
             let label = concat!(
-                "CMSHeap<",
+                "CountMinSketchWithHeap<",
                 stringify!($storage),
                 ", ",
                 stringify!($path),
@@ -842,7 +848,7 @@ fn cmsheap_inert_instances_construct_and_report_their_geometry() {
             assert_eq!(
                 sketch.count_min_sketch().rows(),
                 $rows,
-                "{label}: the wrapped CountMin reports the same geometry"
+                "{label}: the wrapped CountMinSketch reports the same geometry"
             );
         }};
     }
@@ -1035,14 +1041,14 @@ fn countmin_holds_its_contract_across_the_depth_and_width_axis_on_both_paths() {
                 fast.update(&DataInput::U64(*k));
             }
             countmin_axis_contract(
-                "CountMin<Vector2D<i64>, RegularPath> axis",
+                "CountMinSketch<Vector2D<i64>, RegularPath> axis",
                 rows,
                 cols,
                 &truth,
                 |key| regular.estimate(&DataInput::U64(key as u64)) as f64,
             );
             countmin_axis_contract(
-                "CountMin<Vector2D<i64>, FastPath> axis",
+                "CountMinSketch<Vector2D<i64>, FastPath> axis",
                 rows,
                 cols,
                 &truth,
@@ -1101,8 +1107,8 @@ fn countsketch_holds_its_l2_contract_across_the_depth_and_width_axis() {
                 |key| regular.estimate(&DataInput::U64(key as u64)),
             );
             regular_simultaneous.assert_none(
-                "Count<Vector2D<i64>, RegularPath> axis / simultaneous L2",
-                &context("Count<Vector2D<i64>, RegularPath> axis", rows, cols),
+                "CountSketch<Vector2D<i64>, RegularPath> axis / simultaneous L2",
+                &context("CountSketch<Vector2D<i64>, RegularPath> axis", rows, cols),
             );
             let mut fast_simultaneous = Tally::default();
             let mut fast_marginal = Tally::default();
@@ -1110,8 +1116,8 @@ fn countsketch_holds_its_l2_contract_across_the_depth_and_width_axis() {
                 fast.estimate(&DataInput::U64(key as u64))
             });
             fast_simultaneous.assert_none(
-                "Count<Vector2D<i64>, FastPath> axis / simultaneous L2",
-                &context("Count<Vector2D<i64>, FastPath> axis", rows, cols),
+                "CountSketch<Vector2D<i64>, FastPath> axis / simultaneous L2",
+                &context("CountSketch<Vector2D<i64>, FastPath> axis", rows, cols),
             );
         }
     }
@@ -1134,14 +1140,14 @@ fn countmin_answers_a_non_power_of_two_width_on_both_paths() {
         assert_eq!(regular.cols(), cols, "regular path reported width");
         assert_eq!(fast.cols(), cols, "fast path reported width");
         countmin_axis_contract(
-            "CountMin<Vector2D<i64>, RegularPath> non-power-of-two",
+            "CountMinSketch<Vector2D<i64>, RegularPath> non-power-of-two",
             3,
             cols,
             &truth,
             |key| regular.estimate(&DataInput::U64(key as u64)) as f64,
         );
         countmin_axis_contract(
-            "CountMin<Vector2D<i64>, FastPath> non-power-of-two",
+            "CountMinSketch<Vector2D<i64>, FastPath> non-power-of-two",
             3,
             cols,
             &truth,
@@ -1172,8 +1178,8 @@ fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
             |key| regular.estimate(&DataInput::U64(key as u64)),
         );
         regular_simultaneous.assert_none(
-            "Count<Vector2D<i64>, RegularPath> non-power-of-two / simultaneous L2",
-            &context("Count non-power-of-two regular", 5, cols),
+            "CountSketch<Vector2D<i64>, RegularPath> non-power-of-two / simultaneous L2",
+            &context("CountSketch non-power-of-two regular", 5, cols),
         );
         let mut fast_simultaneous = Tally::default();
         let mut fast_marginal = Tally::default();
@@ -1181,8 +1187,8 @@ fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
             fast.estimate(&DataInput::U64(key as u64))
         });
         fast_simultaneous.assert_none(
-            "Count<Vector2D<i64>, FastPath> non-power-of-two / simultaneous L2",
-            &context("Count non-power-of-two fast", 5, cols),
+            "CountSketch<Vector2D<i64>, FastPath> non-power-of-two / simultaneous L2",
+            &context("CountSketch non-power-of-two fast", 5, cols),
         );
     }
 }
@@ -1350,17 +1356,17 @@ fn countmin_precomputed_hash_entry_points_match_the_value_entry_points() {
         assert_eq!(
             by_hash.estimate(&probe),
             expected,
-            "key {key}: fast_insert_with_hash_value diverged from insert"
+            "key {key}: update_with_hash diverged from update"
         );
         assert_eq!(
             by_bulk_hash.estimate(&probe),
             expected,
-            "key {key}: bulk_insert_with_hashes diverged from insert"
+            "key {key}: update_batch_with_hashes diverged from update"
         );
         assert_eq!(
             by_value.estimate_with_hash(&hashed),
             expected,
-            "key {key}: fast_estimate_with_hash diverged from estimate"
+            "key {key}: estimate_with_hash diverged from estimate"
         );
     }
 }
@@ -1403,12 +1409,12 @@ fn countmin_weighted_batch_entry_points_match_a_loop_of_single_inserts() {
         assert_eq!(
             by_bulk_many.estimate(&probe),
             expected,
-            "key {key}: bulk_insert_many diverged from a loop of insert_many"
+            "key {key}: update_weighted_batch diverged from a loop of update_weighted"
         );
         assert_eq!(
             by_hashed_many.estimate(&probe),
             expected,
-            "key {key}: bulk_insert_many_with_hashes diverged from a loop of insert_many"
+            "key {key}: update_weighted_batch_with_hashes diverged from a loop of update_weighted"
         );
     }
 
@@ -1418,7 +1424,7 @@ fn countmin_weighted_batch_entry_points_match_a_loop_of_single_inserts() {
     assert_eq!(
         single.estimate(&DataInput::U64(7)),
         9,
-        "fast_insert_many_with_hash_value must apply the whole weight"
+        "update_weighted_with_hash must apply the whole weight"
     );
 }
 
@@ -1442,12 +1448,12 @@ fn countsketch_precomputed_hash_entry_points_match_the_value_entry_points() {
         assert_eq!(
             by_hash.estimate(&probe),
             expected,
-            "key {key}: fast_insert_with_hash_value diverged from insert"
+            "key {key}: update_with_hash diverged from update"
         );
         assert_eq!(
             by_value.estimate_with_hash(&hashed),
             expected,
-            "key {key}: fast_estimate_with_hash diverged from estimate"
+            "key {key}: estimate_with_hash diverged from estimate"
         );
     }
 
@@ -1457,6 +1463,6 @@ fn countsketch_precomputed_hash_entry_points_match_the_value_entry_points() {
     assert_eq!(
         weighted.estimate(&DataInput::U64(11)),
         6.0,
-        "fast_insert_many_with_hash_value must apply the whole weight"
+        "update_weighted_with_hash must apply the whole weight"
     );
 }

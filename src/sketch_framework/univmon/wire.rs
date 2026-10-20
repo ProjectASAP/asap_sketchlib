@@ -145,7 +145,7 @@ pub(crate) fn update_mode_of(tag: u8) -> Result<UnivMonUpdateMode, RmpDecodeErro
 pub(crate) fn check_layers(sketch: &str, layers: usize) -> Result<(), String> {
     if layers > UNIVMON_MAX_LAYERS {
         return Err(format!(
-            "{sketch} layer_size {layers} exceeds MAX_LAYER_SIZE {UNIVMON_MAX_LAYERS}"
+            "{sketch} layers {layers} exceeds UNIVMON_MAX_LAYERS {UNIVMON_MAX_LAYERS}"
         ));
     }
     Ok(())
@@ -162,7 +162,7 @@ pub(crate) fn check_univmon_dimensions(
 ) -> Result<(), String> {
     if layers == 0 || rows == 0 || cols == 0 || heap_size == 0 {
         return Err(format!(
-            "UnivMon layer_size, sketch_row, sketch_col and heap_size must be non-zero: layer_size={layers}, sketch_row={rows}, sketch_col={cols}, heap_size={heap_size}"
+            "UnivMon layers, rows, cols and heap_size must be non-zero: layers={layers}, rows={rows}, cols={cols}, heap_size={heap_size}"
         ));
     }
     Ok(())
@@ -478,13 +478,13 @@ pub(crate) fn rebuild_layers(
     let complain = |problem: String| RmpDecodeError::Uncategorized(problem);
     if decoded.heap_lens.len() != layers {
         return Err(complain(format!(
-            "UnivMon heap_lens length {} != layer_size {layers}",
+            "UnivMon heap_lens length {} != layers {layers}",
             decoded.heap_lens.len()
         )));
     }
     if decoded.candidate_complete.len() != layers {
         return Err(complain(format!(
-            "UnivMon candidate_complete length {} != layer_size {layers}",
+            "UnivMon candidate_complete length {} != layers {layers}",
             decoded.candidate_complete.len()
         )));
     }
@@ -976,10 +976,10 @@ mod tests {
         let count_l2hh =
             crate::sketches::countsketch_heap::CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(2, 8)
                 .to_asapv1()
-                .expect("serialize CountL2HH");
+                .expect("serialize CountSketchWithL2Norm");
         let pyramid = crate::UnivMonTwoTier::new(4, 1, 2, 8, 2, 4, 2)
             .to_asapv1()
-            .expect("serialize UnivMonPyramid");
+            .expect("serialize UnivMonTwoTier");
         let univmon_q = crate::UnivMonQ::new(crate::UnivMonQConfig {
             layers: 2,
             top_layer_cols: 8,
@@ -1144,12 +1144,12 @@ mod tests {
     /// built by writing the public field directly.
     #[test]
     fn univmon_refuses_to_serialize_a_zero_dimension() {
-        for zero in ["layer_size", "sketch_row", "sketch_col", "heap_size"] {
+        for zero in ["layers", "rows", "cols", "heap_size"] {
             let mut um = UnivMon::new(4, 2, 16, 3);
             match zero {
-                "layer_size" => um.layers = 0,
-                "sketch_row" => um.rows = 0,
-                "sketch_col" => um.cols = 0,
+                "layers" => um.layers = 0,
+                "rows" => um.rows = 0,
+                "cols" => um.cols = 0,
                 _ => um.heap_size = 0,
             }
             let problem = match um.to_asapv1() {
@@ -1181,11 +1181,11 @@ mod tests {
         let problem = UnivMon::from_asapv1(&crafted(&meta, &payload))
             .expect_err("a pyramid past the shift bound must be rejected")
             .to_string();
-        assert!(problem.contains("MAX_LAYER_SIZE"), "got {problem}");
+        assert!(problem.contains("UNIVMON_MAX_LAYERS"), "got {problem}");
     }
 
     #[test]
-    #[should_panic(expected = "at most MAX_LAYER_SIZE")]
+    #[should_panic(expected = "at most UNIVMON_MAX_LAYERS")]
     fn univmon_refuses_constructing_past_the_shift_bound() {
         UnivMon::new(4, 2, 16, UNIVMON_MAX_LAYERS + 1);
     }

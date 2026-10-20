@@ -398,7 +398,7 @@ mod tests {
         let list = EhBucketSketch::CountMinSketch(
             CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
         );
-        let list_bytes = list.to_asapv1().expect("serialize EHSketchList");
+        let list_bytes = list.to_asapv1().expect("serialize EhBucketSketch");
         assert!(ExponentialHistogram::from_asapv1(&list_bytes).is_err());
 
         let cms = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8);

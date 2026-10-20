@@ -100,17 +100,19 @@ where
         let input = Vector3DDeserialize::deserialize(deserializer)?;
         if input.rows == 0 || input.cols == 0 || input.bucket_len == 0 {
             return Err(serde::de::Error::custom(
-                "Vector3D: rows, cols and depth must all be non-zero",
+                "Vector3D: rows, cols and bucket_len must all be non-zero",
             ));
         }
         let expected = input
             .rows
             .checked_mul(input.cols)
             .and_then(|n| n.checked_mul(input.bucket_len))
-            .ok_or_else(|| serde::de::Error::custom("Vector3D: rows * cols * depth overflows"))?;
+            .ok_or_else(|| {
+                serde::de::Error::custom("Vector3D: rows * cols * bucket_len overflows")
+            })?;
         if input.data.len() != expected {
             return Err(serde::de::Error::custom(format!(
-                "Vector3D: data length {} does not match rows * cols * depth = {expected}",
+                "Vector3D: data length {} does not match rows * cols * bucket_len = {expected}",
                 input.data.len()
             )));
         }
@@ -138,15 +140,15 @@ impl<T> Vector3D<T> {
     pub fn unfilled(rows: usize, cols: usize, bucket_len: usize) -> Self {
         assert!(
             rows > 0 && cols > 0 && bucket_len > 0,
-            "Vector3D dimensions must be non-zero, got rows={rows}, cols={cols}, depth={bucket_len}"
+            "Vector3D dimensions must be non-zero, got rows={rows}, cols={cols}, bucket_len={bucket_len}"
         );
         let len = rows
             .checked_mul(cols)
             .and_then(|n| n.checked_mul(bucket_len))
             .unwrap_or_else(|| {
                 panic!(
-                    "Vector3D rows * cols * depth overflows usize, got \
-                     rows={rows}, cols={cols}, depth={bucket_len}"
+                    "Vector3D rows * cols * bucket_len overflows usize, got \
+                     rows={rows}, cols={cols}, bucket_len={bucket_len}"
                 )
             });
         let mask_bits = cols_mask_bits(cols);
@@ -467,7 +469,7 @@ mod tests {
             .expect_err("a short payload must be rejected");
         assert!(
             err.to_string()
-                .contains("does not match rows * cols * depth"),
+                .contains("does not match rows * cols * bucket_len"),
             "unexpected error: {err}"
         );
     }

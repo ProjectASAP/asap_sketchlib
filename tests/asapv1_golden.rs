@@ -1052,7 +1052,7 @@ fn kll_dynamic_f64_k200_matches_golden() {
 
     let sketch = kll_dynamic_of(&KLL_DYN_F64_VALS);
     let got = sketch.to_asapv1().expect("serialize");
-    assert_eq!(got, want, "KLLDynamic f64 bytes diverge from golden");
+    assert_eq!(got, want, "KllDynamic f64 bytes diverge from golden");
 
     let decoded = KllDynamic::<f64>::from_asapv1(&want).expect("decode");
     assert_eq!(decoded.count(), KLL_DYN_F64_VALS.len());
@@ -1073,7 +1073,7 @@ fn kll_dynamic_i64_k200_matches_golden() {
 
     let sketch = kll_dynamic_of(&KLL_DYN_I64_VALS);
     let got = sketch.to_asapv1().expect("serialize");
-    assert_eq!(got, want, "KLLDynamic i64 bytes diverge from golden");
+    assert_eq!(got, want, "KllDynamic i64 bytes diverge from golden");
 
     let decoded = KllDynamic::<i64>::from_asapv1(&want).expect("decode");
     assert_eq!(decoded.count(), KLL_DYN_I64_VALS.len());
@@ -1549,7 +1549,7 @@ fn count_l2hh_2x4_seed7_matches_golden() {
     let sketch: CountSketchWithL2Norm =
         rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state");
     let got = sketch.to_asapv1().expect("serialize");
-    assert_eq!(got, want, "CountL2HH bytes diverge from golden");
+    assert_eq!(got, want, "CountSketchWithL2Norm bytes diverge from golden");
 
     let decoded: CountSketchWithL2Norm = CountSketchWithL2Norm::from_asapv1(&want).expect("decode");
     assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());

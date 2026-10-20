@@ -395,7 +395,7 @@ fn main() {
     let q_memory_prepared_cdf_query = average_query(|| q_memory_prepared.cdf(), QUERY_REPEATS);
 
     println!(
-        "workload: n={N}, domain={DOMAIN}, levels={LEVELS}, width={WIDTH}, depth={DEPTH}, candidates={CANDIDATES}"
+        "workload: n={N}, domain={DOMAIN}, layers={LEVELS}, top_layer_cols={WIDTH}, rows={DEPTH}, heap_size={CANDIDATES}"
     );
     println!(
         "exact: L1={exact_l1:.0}, freq(0)={}, F0={exact_f0:.0}, F2={exact_f2:.0}, entropy={exact_entropy_bits:.6} bits",
@@ -407,12 +407,12 @@ fn main() {
     println!();
     println!("update (median of {REPEATS} release runs):");
     println!(
-        "  UnivMon insert       {:>9.3} M/s  {:?}",
+        "  UnivMon update_weighted           {:>9.3} M/s  {:?}",
         rate(regular_time),
         regular_time
     );
     println!(
-        "  UnivMon fast_insert  {:>9.3} M/s  {:?}",
+        "  UnivMon update_weighted_terminal  {:>9.3} M/s  {:?}",
         rate(fast_time),
         fast_time
     );
@@ -434,11 +434,11 @@ fn main() {
     println!();
     println!("state size:");
     println!(
-        "  UnivMon insert       wire={regular_wire} bytes, counters>={} bytes",
+        "  UnivMon update_weighted           wire={regular_wire} bytes, counters>={} bytes",
         LEVELS * DEPTH * WIDTH * 8
     );
     println!(
-        "  UnivMon fast_insert  wire={fast_wire} bytes, counters>={} bytes",
+        "  UnivMon update_weighted_terminal  wire={fast_wire} bytes, counters>={} bytes",
         LEVELS * DEPTH * WIDTH * 8
     );
     println!(
@@ -574,7 +574,7 @@ fn main() {
     println!();
     println!("accuracy (relative error):");
     println!(
-        "  UnivMon insert       L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, H={:.4}, HH-recall={:.2}",
+        "  UnivMon update_weighted           L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, H={:.4}, HH-recall={:.2}",
         relative_error(regular_l1, exact_l1),
         relative_error(regular_frequency, exact[&0] as f64),
         relative_error(regular_card, exact_f0),
@@ -583,7 +583,7 @@ fn main() {
         heavy_hitter_recall(&regular_hh, &exact_top),
     );
     println!(
-        "  UnivMon fast_insert  L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, H={:.4}, HH-recall={:.2}",
+        "  UnivMon update_weighted_terminal  L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, H={:.4}, HH-recall={:.2}",
         relative_error(fast_l1, exact_l1),
         relative_error(fast_frequency, exact[&0] as f64),
         relative_error(fast_card, exact_f0),

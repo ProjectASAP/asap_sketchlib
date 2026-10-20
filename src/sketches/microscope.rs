@@ -232,7 +232,7 @@ impl SubWindowClock {
                 *seen / *items_per_sub_window != before
             }
             Self::TimeBased { .. } => {
-                panic!("insert() drives a count-based clock; use insert_at() for a time-based one")
+                panic!("update() drives a count-based clock; use update_at() for a time-based one")
             }
         }
     }
@@ -253,7 +253,7 @@ impl SubWindowClock {
                 now.saturating_sub(*epoch) / *sub_window_len - before
             }
             Self::CountBased { .. } => {
-                panic!("insert_at() drives a time-based clock; use insert() for a count-based one")
+                panic!("update_at() drives a time-based clock; use update() for a count-based one")
             }
         }
     }
@@ -306,7 +306,7 @@ impl<'de, H: SketchHasher> Deserialize<'de> for MicroCm<H> {
         let layout = MicroLayout::new(params);
         if cells.bucket_len() != layout.depth() {
             return Err(serde::de::Error::custom(format!(
-                "cell depth {} does not match the {} bytes the layout for t={}, c={} needs",
+                "cell bucket_len {} does not match the {} bytes the layout for t={}, c={} needs",
                 cells.bucket_len(),
                 layout.depth(),
                 params.t,
@@ -911,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "use insert_at()")]
+    #[should_panic(expected = "use update_at()")]
     fn insert_refuses_a_time_based_clock() {
         let mut sk: MicroCm = MicroCm::with_dimensions(
             1,
@@ -924,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "use insert()")]
+    #[should_panic(expected = "use update()")]
     fn insert_at_refuses_a_count_based_clock() {
         let mut sk = sketch(1, 16, 4, 10);
         sk.update_at(&key(1), 5);
@@ -1111,7 +1111,7 @@ mod tests {
                 "zoom base c must be in",
             ),
             (
-                "depth the layout disagrees with",
+                "bucket_len the layout disagrees with",
                 attempt(cells_for(2, 16, depth + 4), good, clock),
                 "does not match",
             ),

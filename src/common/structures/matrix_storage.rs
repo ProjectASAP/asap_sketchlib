@@ -135,7 +135,7 @@ impl MatrixFastHash for u64 {
         let bits_required = bits_per_row.saturating_mul(rows);
         assert!(
             bits_required <= 64,
-            "SketchHasher hash type u64 cannot represent fast-path hash for rows={rows}, cols={cols}; use u128 or MatrixHashType"
+            "SketchHasher hash type u64 cannot represent fast-path hash for rows={rows}, cols={cols}; use u128 or MatrixHash"
         );
     }
 
@@ -166,7 +166,7 @@ impl MatrixFastHash for u128 {
         let bits_required = bits_per_row.saturating_mul(rows);
         assert!(
             bits_required <= 128,
-            "SketchHasher hash type u128 cannot represent fast-path hash for rows={rows}, cols={cols}; use MatrixHashType"
+            "SketchHasher hash type u128 cannot represent fast-path hash for rows={rows}, cols={cols}; use MatrixHash"
         );
     }
 

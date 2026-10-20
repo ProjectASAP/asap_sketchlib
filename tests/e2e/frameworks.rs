@@ -244,7 +244,7 @@ impl FrequencyOps<i64> for HydraCsAdapter {
                 &[Some(key.to_string().as_str())],
                 &HydraQuery::Frequency(DataInput::Str(MEASURE)),
             )
-            .expect("Count counters answer frequency queries")
+            .expect("CountSketch counters answer frequency queries")
     }
 }
 
@@ -1501,7 +1501,7 @@ fn univmon_weighted_metrics_and_fast_insert_parity() {
     assert_eq!(
         fast.estimate_l1(),
         total as f64,
-        "fast-insert L1 must be exact"
+        "terminal-update L1 must be exact"
     );
 
     let l2_truth = truth.l2_norm();
@@ -1728,13 +1728,13 @@ fn hydra_query_quantile_is_the_cumulative_query_it_wraps() {
             .expect("cdf query");
         assert_eq!(
             wrapper, explicit,
-            "x={x}: query_quantile disagreed with the query it wraps"
+            "x={x}: query_cdf disagreed with the query it wraps"
         );
         assert_between(
             wrapper,
             truth.cdf(x) - kll_eps,
             truth.cdf(x) + kll_eps,
-            &format!("Hydra query_quantile at x={x}"),
+            &format!("Hydra query_cdf at x={x}"),
         );
     }
 
@@ -1915,12 +1915,12 @@ mod documented_matrix {
         assert_eq!(
             fast.estimate_l1(),
             l1,
-            "the fast-insert path's L1 must be exact. {context}"
+            "the terminal-update path's L1 must be exact. {context}"
         );
         assert_eq!(
             pyramid.estimate_l1(),
             l1,
-            "UnivMonPyramid L1 must be exact. {context}"
+            "UnivMonTwoTier L1 must be exact. {context}"
         );
 
         let entropy = truth.entropy(true);
@@ -1942,13 +1942,13 @@ mod documented_matrix {
             fast.estimate_l2(),
             l2 * (1.0 - UM_FAST_L2),
             l2 * (1.0 + UM_FAST_L2),
-            &format!("UnivMon fast-insert L2 on ({id}); {context}"),
+            &format!("UnivMon terminal-update L2 on ({id}); {context}"),
         );
         assert_between(
             pyramid.estimate_l2(),
             l2 * (1.0 - PYRAMID_L2),
             l2 * (1.0 + PYRAMID_L2),
-            &format!("UnivMonPyramid L2 on ({id}); {context}"),
+            &format!("UnivMonTwoTier L2 on ({id}); {context}"),
         );
 
         let distinct = truth.distinct() as f64;
@@ -1962,7 +1962,7 @@ mod documented_matrix {
             pyramid.estimate_cardinality(),
             distinct * (1.0 - PYRAMID_CARDINALITY),
             distinct * (1.0 + PYRAMID_CARDINALITY),
-            &format!("UnivMonPyramid cardinality on ({id}); {context}"),
+            &format!("UnivMonTwoTier cardinality on ({id}); {context}"),
         );
     }
 

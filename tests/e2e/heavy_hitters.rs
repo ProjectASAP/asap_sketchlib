@@ -1329,7 +1329,7 @@ mod partial_key_and_heavy_maintenance {
                 == partial),
             "a projection predicate must reject a non-projection"
         );
-        assert_eq!(bucket.val, 12, "add_v must accumulate");
+        assert_eq!(bucket.val, 12, "add must accumulate");
     }
 
     fn elephant_stream(prefix: &str, elephants: usize, weight: usize) -> Vec<String> {
@@ -1728,7 +1728,7 @@ mod documented_matrix {
                     &spec,
                     &truth,
                     &heavy,
-                    &format!("CountMin<Vector2D<i64>, RegularPath> {rows}x{cols}"),
+                    &format!("CountMinSketch<Vector2D<i64>, RegularPath> {rows}x{cols}"),
                     |k| regular.estimate(&input.data(k)) as f64,
                     &context,
                 );
@@ -1736,7 +1736,7 @@ mod documented_matrix {
                     &spec,
                     &truth,
                     &heavy,
-                    &format!("CountMin<Vector2D<i64>, FastPath> {rows}x{cols}"),
+                    &format!("CountMinSketch<Vector2D<i64>, FastPath> {rows}x{cols}"),
                     |k| fast.estimate(&input.data(k)) as f64,
                     &context,
                 );
@@ -1758,7 +1758,7 @@ mod documented_matrix {
                         &spec,
                         &truth,
                         &heavy,
-                        concat!("CountMin<", stringify!($mat), ", RegularPath>"),
+                        concat!("CountMinSketch<", stringify!($mat), ", RegularPath>"),
                         |k| regular.estimate(&input.data(k)) as f64,
                         &context,
                     );
@@ -1766,7 +1766,7 @@ mod documented_matrix {
                         &spec,
                         &truth,
                         &heavy,
-                        concat!("CountMin<", stringify!($mat), ", FastPath>"),
+                        concat!("CountMinSketch<", stringify!($mat), ", FastPath>"),
                         |k| fast.estimate(&input.data(k)) as f64,
                         &context,
                     );
@@ -1814,7 +1814,7 @@ mod documented_matrix {
                     &spec,
                     &truth,
                     &heavy,
-                    &format!("Count<Vector2D<i64>, RegularPath> {rows}x{cols}"),
+                    &format!("CountSketch<Vector2D<i64>, RegularPath> {rows}x{cols}"),
                     |k| regular.estimate(&input.data(k)),
                     &context,
                 );
@@ -1822,7 +1822,7 @@ mod documented_matrix {
                     &spec,
                     &truth,
                     &heavy,
-                    &format!("Count<Vector2D<i64>, FastPath> {rows}x{cols}"),
+                    &format!("CountSketch<Vector2D<i64>, FastPath> {rows}x{cols}"),
                     |k| fast.estimate(&input.data(k)),
                     &context,
                 );
@@ -1844,7 +1844,7 @@ mod documented_matrix {
                         &spec,
                         &truth,
                         &heavy,
-                        concat!("Count<", stringify!($mat), ", RegularPath>"),
+                        concat!("CountSketch<", stringify!($mat), ", RegularPath>"),
                         |k| regular.estimate(&input.data(k)),
                         &context,
                     );
@@ -1852,7 +1852,7 @@ mod documented_matrix {
                         &spec,
                         &truth,
                         &heavy,
-                        concat!("Count<", stringify!($mat), ", FastPath>"),
+                        concat!("CountSketch<", stringify!($mat), ", FastPath>"),
                         |k| fast.estimate(&input.data(k)),
                         &context,
                     );

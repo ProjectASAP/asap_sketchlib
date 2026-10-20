@@ -157,7 +157,7 @@ impl<S: MatrixStorage, M, H: SketchHasher> CountMinSketchWithSpaceSaving<S, M, H
         assert_eq!(
             self.summary.capacity(),
             other.summary.capacity(),
-            "Space-Saving capacity mismatch while merging CMSSpaceSaving sketches"
+            "Space-Saving capacity mismatch while merging CountMinSketchWithSpaceSaving sketches"
         );
         self.count_min_sketch.merge(&other.count_min_sketch);
         self.summary.merge(&other.summary);

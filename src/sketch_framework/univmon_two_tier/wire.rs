@@ -125,7 +125,7 @@ fn check_layout_dimensions(
         || mouse_cols == 0
     {
         return Err(format!(
-            "UnivMonPyramid layers, heap_size and both tiers' dimensions must be non-zero: layers={layers}, elephant_rows={elephant_rows}, elephant_cols={elephant_cols}, mouse_rows={mouse_rows}, mouse_cols={mouse_cols}, heap_size={heap_size}"
+            "UnivMonTwoTier layers, heap_size and both tiers' dimensions must be non-zero: layers={layers}, elephant_rows={elephant_rows}, elephant_cols={elephant_cols}, mouse_rows={mouse_rows}, mouse_cols={mouse_cols}, heap_size={heap_size}"
         ));
     }
     Ok(())
@@ -163,11 +163,11 @@ impl UnivMonTwoTier {
             self.mouse_cols,
         )
         .map_err(RmpEncodeError::Syntax)?;
-        check_layers("UnivMonPyramid", self.layers).map_err(RmpEncodeError::Syntax)?;
+        check_layers("UnivMonTwoTier", self.layers).map_err(RmpEncodeError::Syntax)?;
         let field = |name: &str, value: usize| {
             u32::try_from(value).map_err(|_| {
                 RmpEncodeError::Syntax(format!(
-                    "ASAPv1 UnivMonPyramid envelope: {name} {value} exceeds the u32 metadata field"
+                    "ASAPv1 UnivMonTwoTier envelope: {name} {value} exceeds the u32 metadata field"
                 ))
             })
         };
@@ -215,7 +215,7 @@ impl UnivMonTwoTier {
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != kind::UNIVMON_TWO_TIER {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "UnivMonPyramid kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_TWO_TIER:?}"
+                "UnivMonTwoTier kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_TWO_TIER:?}"
             )));
         }
         let meta: UnivMonTwoTierMetadata = envelope::decode_block(metadata)?;
@@ -235,7 +235,7 @@ impl UnivMonTwoTier {
             )
         {
             return Err(RmpDecodeError::Uncategorized(
-                "ASAPv1 UnivMonPyramid envelope: metadata mismatch".to_string(),
+                "ASAPv1 UnivMonTwoTier envelope: metadata mismatch".to_string(),
             ));
         }
         let (layers, heap_size) = (meta.layers as usize, meta.heap_size as usize);
@@ -254,7 +254,7 @@ impl UnivMonTwoTier {
             mouse_cols,
         )
         .map_err(RmpDecodeError::Uncategorized)?;
-        check_layers("UnivMonPyramid", layers).map_err(RmpDecodeError::Uncategorized)?;
+        check_layers("UnivMonTwoTier", layers).map_err(RmpDecodeError::Uncategorized)?;
         let decoded = decode_pyramid(&meta.key_type, payload)?;
         check_empty_key_type(&meta.key_type, decoded.entries.is_empty())
             .map_err(RmpDecodeError::Uncategorized)?;
@@ -262,7 +262,7 @@ impl UnivMonTwoTier {
         // actually carries before the geometry is built from it.
         if accumulator_count(layers, &layout) != Some(decoded.l2.len()) {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "UnivMonPyramid declares a layout the payload's {} accumulators do not match",
+                "UnivMonTwoTier declares a layout the payload's {} accumulators do not match",
                 decoded.l2.len()
             )));
         }
@@ -571,7 +571,7 @@ mod tests {
             .expect("serialize Count Sketch");
         let count_l2hh = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(2, 8)
             .to_asapv1()
-            .expect("serialize CountL2HH");
+            .expect("serialize CountSketchWithL2Norm");
         let univmon = crate::UnivMon::new(4, 2, 8, 2)
             .to_asapv1()
             .expect("serialize UnivMon");
@@ -590,7 +590,7 @@ mod tests {
         for foreign in [count_sketch, count_l2hh, univmon, univmon_q] {
             assert!(
                 UnivMonTwoTier::from_asapv1(&foreign).is_err(),
-                "a foreign envelope must not decode as a UnivMonPyramid"
+                "a foreign envelope must not decode as a UnivMonTwoTier"
             );
         }
     }
@@ -792,11 +792,11 @@ mod tests {
         let problem = UnivMonTwoTier::from_asapv1(&crafted(&meta, &payload))
             .expect_err("a pyramid past the shift bound must be rejected")
             .to_string();
-        assert!(problem.contains("MAX_LAYER_SIZE"), "got {problem}");
+        assert!(problem.contains("UNIVMON_MAX_LAYERS"), "got {problem}");
     }
 
     #[test]
-    #[should_panic(expected = "at most MAX_LAYER_SIZE")]
+    #[should_panic(expected = "at most UNIVMON_MAX_LAYERS")]
     fn pyramid_refuses_constructing_past_the_shift_bound() {
         UnivMonTwoTier::new(4, 2, 2, 16, 2, 8, UNIVMON_MAX_LAYERS + 1);
     }

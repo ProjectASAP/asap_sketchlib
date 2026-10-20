@@ -1293,7 +1293,7 @@ mod tests {
         let bytes_b = tw_b.query_all().to_asapv1().unwrap();
         assert_eq!(
             bytes_a, bytes_b,
-            "same KLLConfig seed must give byte-identical tumbling state"
+            "same KllConfig seed must give byte-identical tumbling state"
         );
 
         // A different seed must not silently alias onto the same coin stream.
@@ -1313,7 +1313,7 @@ mod tests {
         let bytes_c = tw_c.query_all().to_asapv1().unwrap();
         assert_ne!(
             bytes_a, bytes_c,
-            "different KLLConfig seeds must produce different state"
+            "different KllConfig seeds must produce different state"
         );
     }
 
@@ -2133,7 +2133,7 @@ mod tests {
             let pct = within as f64 / truth.len() as f64 * 100.0;
             assert!(
                 pct > 90.0,
-                "FoldCMS single-window: only {pct:.1}% within bound"
+                "CountMinSketchFold single-window: only {pct:.1}% within bound"
             );
         }
 
@@ -2176,7 +2176,7 @@ mod tests {
             let pct = within as f64 / truth.len() as f64 * 100.0;
             assert!(
                 pct > 90.0,
-                "FoldCS single-window: only {pct:.1}% within bound"
+                "CountSketchFold single-window: only {pct:.1}% within bound"
             );
         }
 

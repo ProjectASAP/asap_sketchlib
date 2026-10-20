@@ -38,12 +38,12 @@ fn check_precision<R: HllRegisterStorage>(lg_k: usize, cardinality: usize, toler
     assert_eq!(
         R::RANK_HASH_BITS,
         64 - lg_k,
-        "REGISTER_BITS for lg_k={lg_k}"
+        "RANK_HASH_BITS for lg_k={lg_k}"
     );
     assert_eq!(
         R::INDEX_MASK,
         (num_registers as u64) - 1,
-        "P_MASK for lg_k={lg_k}"
+        "INDEX_MASK for lg_k={lg_k}"
     );
 
     let storage = R::default();

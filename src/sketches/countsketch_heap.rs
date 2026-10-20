@@ -791,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "dimension mismatch while merging CountMin sketches")]
+    #[should_panic(expected = "dimension mismatch while merging Count Sketches")]
     fn merge_requires_matching_dimensions_panics() {
         // Verifies merge panics when dimensions differ.
         let mut left = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(5, 256, 4);
@@ -1050,7 +1050,7 @@ impl CountSketchWithL2Norm {
         let bits_required = mask_bits.saturating_add(1).saturating_mul(rows);
         if bits_required > 128 {
             return Err(format!(
-                "CountL2HH rows={rows}, cols={cols} needs {bits_required} hash bits \
+                "CountSketchWithL2Norm rows={rows}, cols={cols} needs {bits_required} hash bits \
                  ({mask_bits} column bits + 1 sign bit per row), past the 128 the key hash carries"
             ));
         }
@@ -1132,11 +1132,11 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
         assert_eq!(
             (self.rows, self.cols),
             (other.rows, other.cols),
-            "dimension mismatch while merging CountL2HH sketches"
+            "dimension mismatch while merging CountSketchWithL2Norm sketches"
         );
         assert_eq!(
             self.seed_index, other.seed_index,
-            "seed mismatch while merging CountL2HH sketches"
+            "seed mismatch while merging CountSketchWithL2Norm sketches"
         );
 
         for i in 0..self.rows {
@@ -1357,12 +1357,12 @@ mod tests_count_l2_hh {
 
         let encoded = sketch
             .to_asapv1()
-            .expect("serialize CountL2HH into MessagePack");
+            .expect("serialize CountSketchWithL2Norm into MessagePack");
         assert!(!encoded.is_empty(), "serialized bytes should not be empty");
         let data = encoded.clone();
 
         let decoded: CountSketchWithL2Norm = CountSketchWithL2Norm::from_asapv1(&data)
-            .expect("deserialize CountL2HH from MessagePack");
+            .expect("deserialize CountSketchWithL2Norm from MessagePack");
 
         assert_eq!(sketch.rows(), decoded.rows());
         assert_eq!(sketch.cols(), decoded.cols());

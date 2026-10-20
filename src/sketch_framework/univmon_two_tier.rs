@@ -153,7 +153,7 @@ impl UnivMonTwoTier {
         assert!(layers > 0, "layer count must be positive");
         assert!(
             layers <= UNIVMON_MAX_LAYERS,
-            "layer count must be at most MAX_LAYER_SIZE {UNIVMON_MAX_LAYERS}"
+            "layer count must be at most UNIVMON_MAX_LAYERS {UNIVMON_MAX_LAYERS}"
         );
         let sk_vec: Vec<L2HH> = if layers <= elephant_layers {
             (0..layers)
@@ -732,7 +732,7 @@ mod tests {
             let rel = (est - truth).abs() / truth.max(1e-12);
             assert!(
                 rel < 0.15,
-                "Pyramid {name}: error {:.2}%, est={est:.2}, truth={truth:.2}",
+                "UnivMonTwoTier {name}: error {:.2}%, est={est:.2}, truth={truth:.2}",
                 rel * 100.0
             );
         };
@@ -768,7 +768,7 @@ mod tests {
             let rel = (est - truth).abs() / truth.max(1e-12);
             assert!(
                 rel < 0.15,
-                "Pyramid fast {name}: error {:.2}%, est={est:.2}, truth={truth:.2}",
+                "UnivMonTwoTier terminal {name}: error {:.2}%, est={est:.2}, truth={truth:.2}",
                 rel * 100.0
             );
         };
@@ -795,7 +795,7 @@ mod tests {
 
         assert!(
             pyramid_cols < uniform_cols,
-            "Pyramid ({pyramid_cols}) should use fewer columns than uniform ({uniform_cols})"
+            "UnivMonTwoTier ({pyramid_cols}) should use fewer columns than uniform ({uniform_cols})"
         );
         // With defaults: pyramid = 8*2048 + 8*512 = 20480, uniform = 16*2048 = 32768
         // Savings = ~37.5%

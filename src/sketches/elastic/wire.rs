@@ -160,7 +160,7 @@ impl<H: SketchHasher + HashProfile> ElasticSketch<H> {
             .map_err(RmpEncodeError::Syntax)?;
         if self.heavy_buckets <= 0 || self.heavy_buckets as usize != heavy_buckets {
             return Err(RmpEncodeError::Syntax(format!(
-                "ASAPv1 Elastic envelope: bktlen {} != heavy table length {heavy_buckets}",
+                "ASAPv1 Elastic envelope: heavy_buckets {} != heavy table length {heavy_buckets}",
                 self.heavy_buckets
             )));
         }
@@ -569,7 +569,7 @@ mod tests {
         desynced.heavy_buckets = 16;
         assert!(
             desynced.to_asapv1().is_err(),
-            "a bktlen disagreeing with the heavy table must not serialize"
+            "a heavy_buckets disagreeing with the heavy table must not serialize"
         );
 
         let mut named_free: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 256);

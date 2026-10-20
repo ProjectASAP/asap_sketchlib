@@ -721,7 +721,7 @@ mod tests {
         );
         assert!(
             light_est >= 6,
-            "colliding flow should accumulate in CountMin, expected >= 6, got {light_est}"
+            "colliding flow should accumulate in CountMinSketch, expected >= 6, got {light_est}"
         );
     }
 

@@ -96,7 +96,7 @@ fn sketches_count_fastpath_matches_go_count_sketch_envelope() {
     assert_eq!(
         got,
         want,
-        "sketches::Count<Vector2D<i64>, FastPath> envelope diverges from Go golden \
+        "sketches::CountSketch<Vector2D<i64>, FastPath> envelope diverges from Go golden \
          ({} bytes got vs {} bytes want)",
         got.len(),
         want.len(),
@@ -157,13 +157,13 @@ fn sketches_countmin_fastpath_matches_go_count_min_envelope() {
     assert_eq!(
         got.len(),
         want.len(),
-        "CountMin envelope length: got {} want {}",
+        "CountMinSketch envelope length: got {} want {}",
         got.len(),
         want.len(),
     );
     assert_eq!(
         got, want,
-        "sketches::CountMin<Vector2D<f64>, FastPath> envelope diverges from Go golden",
+        "sketches::CountMinSketch<Vector2D<f64>, FastPath> envelope diverges from Go golden",
     );
 }
 
@@ -214,7 +214,7 @@ fn sketches_hll_classic_matches_go_envelope() {
     );
     assert_eq!(
         got, want,
-        "sketches::HyperLogLogImpl<ErtlMLE, P14> envelope diverges from Go golden",
+        "sketches::HyperLogLogImpl<Ertl, P14> envelope diverges from Go golden",
     );
 }
 

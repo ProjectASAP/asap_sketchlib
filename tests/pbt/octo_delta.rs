@@ -1017,7 +1017,7 @@ proptest! {
         for k in &keys {
             cm.update_emit_delta(&DataInput::U64(*k), OCTO_COUNT_MIN_DEFAULT_THRESHOLD, &mut |d| cm_deltas.push(d));
         }
-        prop_assert!(!cm_deltas.is_empty(), "CM_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!cm_deltas.is_empty(), "OCTO_COUNT_MIN_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for d in &cm_deltas {
             prop_assert_eq!(d.count, OCTO_COUNT_MIN_DEFAULT_THRESHOLD, "a Count-Min promotion carried {}", d.count);
         }
@@ -1027,9 +1027,9 @@ proptest! {
         for k in &keys {
             cs.update_emit_delta(&DataInput::U64(*k), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, &mut |d| cs_deltas.push(d));
         }
-        prop_assert!(!cs_deltas.is_empty(), "COUNT_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!cs_deltas.is_empty(), "OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for d in &cs_deltas {
-            prop_assert_eq!(d.count.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, "a Count promotion carried {}", d.count);
+            prop_assert_eq!(d.count.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, "a CountSketch promotion carried {}", d.count);
         }
 
         let mut dd = DdSketchWorker::new(0.05);
@@ -1037,7 +1037,7 @@ proptest! {
         for k in &keys {
             dd.add_emit_delta(f64::from((*k % 8) as u32), OCTO_DDSKETCH_DEFAULT_THRESHOLD, &mut |d| dd_deltas.push(d));
         }
-        prop_assert!(!dd_deltas.is_empty(), "DD_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!dd_deltas.is_empty(), "OCTO_DDSKETCH_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for d in &dd_deltas {
             prop_assert_eq!(d.count, u64::from(OCTO_DDSKETCH_DEFAULT_THRESHOLD), "a DDSketch promotion carried {}", d.count);
         }
@@ -1047,7 +1047,7 @@ proptest! {
         for k in &keys {
             coco.update_emit_delta(&flow(*k), OCTO_COCO_DEFAULT_THRESHOLD, &mut |d| coco_deltas.push(d));
         }
-        prop_assert!(!coco_deltas.is_empty(), "COCO_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!coco_deltas.is_empty(), "OCTO_COCO_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for d in &coco_deltas {
             prop_assert_eq!(d.count, u64::from(OCTO_COCO_DEFAULT_THRESHOLD), "a Coco promotion carried {}", d.count);
         }
@@ -1064,7 +1064,7 @@ proptest! {
                 _ => None,
             })
             .collect();
-        prop_assert!(!heavy.is_empty(), "ELASTIC_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!heavy.is_empty(), "OCTO_ELASTIC_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for value in &heavy {
             prop_assert_eq!(*value, OCTO_ELASTIC_DEFAULT_THRESHOLD, "an Elastic promotion carried {}", value);
         }
@@ -1082,7 +1082,7 @@ proptest! {
             .filter(|d| d.layer == 0)
             .map(|d| d.cell.count)
             .collect();
-        prop_assert!(!top_layer.is_empty(), "UNIVMON_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!top_layer.is_empty(), "OCTO_UNIVMON_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for value in &top_layer {
             prop_assert_eq!(value.unsigned_abs(), OCTO_UNIVMON_DEFAULT_THRESHOLD, "a UnivMon promotion carried {}", value);
         }
@@ -1099,11 +1099,11 @@ proptest! {
             max_hll_threshold(precision), 64 - precision,
             "the HLL threshold ceiling is not 64 minus the precision"
         );
-        prop_assert!(OCTO_HLL_DEFAULT_THRESHOLD < 64 - precision, "HLL_PROMASK can never fire");
+        prop_assert!(OCTO_HLL_DEFAULT_THRESHOLD < 64 - precision, "OCTO_HLL_DEFAULT_THRESHOLD can never fire");
         prop_assert_eq!(
             hll_parent.registers_as_slice(),
             hll_worker.registers_as_slice(),
-            "HLL_PROMASK held a register improvement back"
+            "OCTO_HLL_DEFAULT_THRESHOLD held a register improvement back"
         );
     }
 
@@ -1123,7 +1123,7 @@ proptest! {
         for k in &keys {
             worker.update_emit_delta(&DataInput::U64(*k), OCTO_MAX_PROMOTION_THRESHOLD, &mut |d| deltas.push(d));
         }
-        prop_assert!(!deltas.is_empty(), "MAX_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!deltas.is_empty(), "OCTO_MAX_PROMOTION_THRESHOLD promoted nothing over {} inserts", n);
         for d in &deltas {
             prop_assert_eq!(d.count.unsigned_abs(), OCTO_MAX_PROMOTION_THRESHOLD, "a promotion carried {}", d.count);
             prop_assert!(i8::try_from(d.count).is_ok(), "{} does not fit the worker's counter", d.count);

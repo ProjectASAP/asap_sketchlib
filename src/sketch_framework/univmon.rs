@@ -136,7 +136,7 @@ impl UnivMon {
         assert!(layers > 0, "layer count must be positive");
         assert!(
             layers <= UNIVMON_MAX_LAYERS,
-            "layer count must be at most MAX_LAYER_SIZE {UNIVMON_MAX_LAYERS}"
+            "layer count must be at most UNIVMON_MAX_LAYERS {UNIVMON_MAX_LAYERS}"
         );
         let sk_vec: Vec<L2HH> = (0..layers)
             .map(|i| {
@@ -590,7 +590,7 @@ mod tests {
 
     /// Layer `UNIVMON_BOTTOM_LAYER_SEED_INDEX` would hash at the finder's own seed.
     #[test]
-    #[should_panic(expected = "MAX_LAYER_SIZE")]
+    #[should_panic(expected = "UNIVMON_MAX_LAYERS")]
     fn init_univmon_rejects_a_layer_on_the_finder_seed() {
         UnivMon::new(4, 2, 16, UNIVMON_BOTTOM_LAYER_SEED_INDEX + 1);
     }

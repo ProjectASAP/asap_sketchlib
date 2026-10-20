@@ -1708,8 +1708,8 @@ mod tests {
         );
 
         // Serialization round-trip for the generic specialization.
-        let bytes = a.to_asapv1().expect("serialize KLL<i64>");
-        let restored = Kll::<i64>::from_asapv1(&bytes).expect("deserialize KLL<i64>");
+        let bytes = a.to_asapv1().expect("serialize Kll<i64>");
+        let restored = Kll::<i64>::from_asapv1(&bytes).expect("deserialize Kll<i64>");
         assert_eq!(a.count(), restored.count());
     }
 

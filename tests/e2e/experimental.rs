@@ -127,7 +127,7 @@ fn kmv_estimates_stay_inside_their_relative_standard_error_band_over_independent
                 let outcome = spec.check(estimate, n);
                 tally.record(outcome.is_ok(), || {
                     format!(
-                        "k={k} seed_idx={seed_index} (trial {s}) {regime:?} n={n} \
+                        "k={k} seed_index={seed_index} (trial {s}) {regime:?} n={n} \
                          namespace={namespace:#x}: {}",
                         outcome.unwrap_err()
                     )
@@ -605,7 +605,7 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
     assert!(
         eh.sketch_buckets.len() >= 2,
         "test premise: the map tier must have promoted at least two sketch \
-         buckets (max_map_size={}, got {} sketch and {} map buckets)",
+         buckets (exact_bucket_budget={}, got {} sketch and {} map buckets)",
         eh.exact_bucket_budget,
         eh.sketch_buckets.len(),
         eh.exact_buckets.len()
@@ -649,7 +649,7 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
         result.estimate_l2(),
         l2_truth * 0.90,
         l2_truth * 1.10,
-        &format!("EHUnivOptimized sketch-tier L2 (empirical band). {context}"),
+        &format!("ExponentialHistogramUnivMon sketch-tier L2 (empirical band). {context}"),
     );
 
     let entropy_bits = truth.entropy(true);
@@ -657,7 +657,9 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
         result.estimate_entropy(),
         entropy_bits * 0.90,
         entropy_bits * 1.40,
-        &format!("EHUnivOptimized sketch-tier entropy in bits (empirical band). {context}"),
+        &format!(
+            "ExponentialHistogramUnivMon sketch-tier entropy in bits (empirical band). {context}"
+        ),
     );
 }
 
@@ -713,8 +715,8 @@ fn eh_univ_optimized_sketch_tier_cardinality_is_documented_as_unrecoverable() {
     assert!(
         reported < distinct * 0.10,
         "sketch-tier cardinality reported {reported} for {distinct} distinct keys. \
-         If UnivMon's F0 recovery was fixed or EHUnivOptimized stopped coupling the \
-         promotion threshold to layer_size, delete this test and assert a real band \
+         If UnivMon's F0 recovery was fixed or ExponentialHistogramUnivMon stopped coupling the \
+         promotion threshold to layers, delete this test and assert a real band \
          instead of leaving this stale documentation in place"
     );
 }

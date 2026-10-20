@@ -258,12 +258,12 @@ mod tests {
         sketch.update(&DataInput::U64(42));
         sketch.update(&DataInput::U64(7));
 
-        let encoded = sketch.to_asapv1().expect("serialize CountMin");
+        let encoded = sketch.to_asapv1().expect("serialize CountMinSketch");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x02, 0x00]); // kind_id_len=2, kind_id=[0x02,0x00]
 
         let decoded = CountMinSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&encoded)
-            .expect("deserialize CountMin");
+            .expect("deserialize CountMinSketch");
 
         assert_eq!(sketch.rows(), decoded.rows());
         assert_eq!(sketch.cols(), decoded.cols());

@@ -52,15 +52,16 @@ where
     /// heap's keys mix `OwnedDataInput` variants or hold a 128-bit key, or when
     /// `heap_size` or `cols` overflows the metadata's `u32` field.
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        admission_rate::check_admits_all(self.count_min_sketch.admission_rate())
-            .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CMSHeap envelope: {e}")))?;
+        admission_rate::check_admits_all(self.count_min_sketch.admission_rate()).map_err(|e| {
+            RmpEncodeError::Syntax(format!("ASAPv1 CountMinSketchWithHeap envelope: {e}"))
+        })?;
         let rows = self.count_min_sketch.rows();
         let cols = self.count_min_sketch.cols();
         let counts = self.count_min_sketch.as_storage().as_slice();
         let entries = heap_entries(&self.heap);
         let key_type = wire_key_type(&entries)?;
         let metadata = encode_metadata::<H>(
-            "CMSHeap",
+            "CountMinSketchWithHeap",
             rows,
             cols,
             T::COUNTER_TYPE,
@@ -70,7 +71,7 @@ where
         )?;
         if counts.len() != rows.saturating_mul(cols) {
             return Err(RmpEncodeError::Syntax(format!(
-                "ASAPv1 CMSHeap envelope: counts length {} != rows*cols {}",
+                "ASAPv1 CountMinSketchWithHeap envelope: counts length {} != rows*cols {}",
                 counts.len(),
                 rows.saturating_mul(cols)
             )));
@@ -97,17 +98,22 @@ where
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != kind::COUNT_MIN_WITH_HEAP {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "CMSHeap kind_id mismatch: stored {kind_id:?}, expected {COUNT_MIN_WITH_HEAP:?}"
+                "CountMinSketchWithHeap kind_id mismatch: stored {kind_id:?}, expected {COUNT_MIN_WITH_HEAP:?}"
             )));
         }
-        let shape = decode_metadata::<H>("CMSHeap", metadata, T::COUNTER_TYPE, Mode::MODE)?;
+        let shape = decode_metadata::<H>(
+            "CountMinSketchWithHeap",
+            metadata,
+            T::COUNTER_TYPE,
+            Mode::MODE,
+        )?;
         let (rows, cols) = (shape.rows, shape.cols);
         let (counts, entries) = decode_payload::<Vec<T>, _>(&shape.key_type, payload)?;
         // Length check precedes the allocation, so crafted dimensions cannot
         // drive `from_fn` into a huge reserve.
         if counts.len() != rows.saturating_mul(cols) {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "CMSHeap counts length {} != rows*cols {}",
+                "CountMinSketchWithHeap counts length {} != rows*cols {}",
                 counts.len(),
                 rows.saturating_mul(cols)
             )));
@@ -158,7 +164,9 @@ mod tests {
     #[test]
     fn cms_heap_round_trip_serialization() {
         let sketch = populated();
-        let encoded = sketch.to_asapv1().expect("serialize CMSHeap");
+        let encoded = sketch
+            .to_asapv1()
+            .expect("serialize CountMinSketchWithHeap");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x03, 0x00]); // kind_id_len=2, kind_id=[0x03,0x00]
 
@@ -171,7 +179,7 @@ mod tests {
         assert_eq!(meta.key_type, "u64");
 
         let decoded = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&encoded)
-            .expect("deserialize CMSHeap");
+            .expect("deserialize CountMinSketchWithHeap");
         assert_eq!(sketch.rows(), decoded.rows());
         assert_eq!(sketch.cols(), decoded.cols());
         assert_eq!(
@@ -298,13 +306,16 @@ mod tests {
         let count = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
 
         for (bytes, what) in [
-            (cs_heap.to_asapv1().expect("CSHeap"), "CSHeap"),
+            (
+                cs_heap.to_asapv1().expect("CountSketchWithHeap"),
+                "CountSketchWithHeap",
+            ),
             (cms.to_asapv1().expect("CMS"), "Count-Min"),
-            (count.to_asapv1().expect("Count"), "Count Sketch"),
+            (count.to_asapv1().expect("CountSketch"), "Count Sketch"),
         ] {
             assert!(
                 CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&bytes).is_err(),
-                "{what} bytes must not decode as a CMSHeap"
+                "{what} bytes must not decode as a CountMinSketchWithHeap"
             );
         }
     }

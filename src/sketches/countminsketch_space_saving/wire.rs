@@ -20,7 +20,7 @@ where
     H: SketchHasher + HashProfile,
 {
     const KIND: SummaryKind = SummaryKind {
-        name: "CMSSpaceSaving",
+        name: "CountMinSketchWithSpaceSaving",
         kind_id: kind::COUNT_MIN_WITH_SPACE_SAVING,
         counter_type: T::COUNTER_TYPE,
         mode: Mode::MODE,
@@ -30,8 +30,11 @@ where
     /// when the matrix samples its updates or the state breaks a §3.24 decode
     /// rule, and on mixed-variant or 128-bit keys.
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        admission_rate::check_admits_all(self.count_min_sketch.admission_rate())
-            .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CMSSpaceSaving envelope: {e}")))?;
+        admission_rate::check_admits_all(self.count_min_sketch.admission_rate()).map_err(|e| {
+            RmpEncodeError::Syntax(format!(
+                "ASAPv1 CountMinSketchWithSpaceSaving envelope: {e}"
+            ))
+        })?;
         summary_wire::encode::<T, H>(
             &Self::KIND,
             self.count_min_sketch.rows(),

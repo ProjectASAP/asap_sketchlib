@@ -12,13 +12,13 @@ fn every_variant() -> Vec<(&'static str, DataInput<'static>)> {
         ("I32", DataInput::I32(-32)),
         ("I64", DataInput::I64(-64)),
         ("I128", DataInput::I128(-128)),
-        ("ISIZE", DataInput::Isize(-1_000)),
+        ("Isize", DataInput::Isize(-1_000)),
         ("U8", DataInput::U8(8)),
         ("U16", DataInput::U16(16)),
         ("U32", DataInput::U32(32)),
         ("U64", DataInput::U64(64)),
         ("U128", DataInput::U128(128)),
-        ("USIZE", DataInput::Usize(1_000)),
+        ("Usize", DataInput::Usize(1_000)),
         ("F32", DataInput::F32(1.5)),
         ("F64", DataInput::F64(2.5)),
         ("Str", DataInput::Str("borrowed")),
@@ -95,7 +95,7 @@ fn signed_integer_variants_sign_extend_to_one_canonical_digest() {
         assert_same_digest(
             &DataInput::Isize(probe as isize),
             &widened,
-            &format!("ISIZE({probe}) must sign-extend onto I64"),
+            &format!("Isize({probe}) must sign-extend onto I64"),
         );
     }
 }
@@ -122,7 +122,7 @@ fn unsigned_integer_variants_zero_extend_to_one_canonical_digest() {
         assert_same_digest(
             &DataInput::Usize(probe as usize),
             &widened,
-            &format!("USIZE({probe}) must zero-extend onto U64"),
+            &format!("Usize({probe}) must zero-extend onto U64"),
         );
     }
 }
@@ -350,13 +350,13 @@ fn the_numeric_variants_reach_the_quantile_sketches_and_the_others_are_refused()
         ("I32", DataInput::I32(3)),
         ("I64", DataInput::I64(4)),
         ("I128", DataInput::I128(5)),
-        ("ISIZE", DataInput::Isize(6)),
+        ("Isize", DataInput::Isize(6)),
         ("U8", DataInput::U8(7)),
         ("U16", DataInput::U16(8)),
         ("U32", DataInput::U32(9)),
         ("U64", DataInput::U64(10)),
         ("U128", DataInput::U128(11)),
-        ("USIZE", DataInput::Usize(12)),
+        ("Usize", DataInput::Usize(12)),
         ("F32", DataInput::F32(13.0)),
         ("F64", DataInput::F64(14.0)),
     ];

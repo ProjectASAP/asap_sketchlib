@@ -262,7 +262,7 @@ fn kll_family_stays_within_the_datasketches_maximum_rank_error_characterization(
                     trial += 1;
                     if let Some(dynamic) = feed_kll_dynamic(feed, k, seed, &values) {
                         spec.record_trial(
-                            tallies.entry(format!("KLLDynamic/{feed:?}")).or_default(),
+                            tallies.entry(format!("KllDynamic/{feed:?}")).or_default(),
                             &format!("k={k} shape={shape} seed={seed:#x} n={N}"),
                             truth.sorted(),
                             &RANK_QS,
@@ -473,16 +473,16 @@ fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
     let bytes = sk.to_asapv1().unwrap();
 
     sk.update_batch(&[]);
-    assert_eq!(sk.count(), count, "an empty bulk_update changed the count");
+    assert_eq!(sk.count(), count, "an empty update_batch changed the count");
     assert_eq!(
         sk.quantile(0.5).to_bits(),
         median.to_bits(),
-        "an empty bulk_update moved the median"
+        "an empty update_batch moved the median"
     );
     assert_eq!(
         sk.to_asapv1().unwrap(),
         bytes,
-        "an empty bulk_update changed the serialized state"
+        "an empty update_batch changed the serialized state"
     );
 
     let mut one: Kll<f64> = Kll::with_k_and_seed(200, seed);
@@ -492,7 +492,7 @@ fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
     assert_eq!(
         one.to_asapv1().unwrap(),
         once.to_asapv1().unwrap(),
-        "a one-element bulk_update diverged from one update"
+        "a one-element update_batch diverged from one update"
     );
 }
 
@@ -1022,7 +1022,7 @@ fn univmonq_frequency_and_f2_satisfy_the_count_sketch_bounds() {
     }
 
     let context = format!(
-        "UnivMonQConfig {{ levels: {}, width: {}, depth: {}, hash_seed: {} }}, \
+        "UnivMonQConfig {{ layers: {}, top_layer_cols: {}, rows: {}, seed_index: {} }}, \
          40 separated heavy keys + uniform background (stream seed 3008)",
         config.layers, config.top_layer_cols, config.rows, config.seed_index
     );
@@ -1171,7 +1171,7 @@ fn univmonq_ordered_queries_satisfy_the_documented_cdf_and_rank_bounds() {
             let eta = 2.0 * e_h + p_hat_r * eps_r;
 
             let context = format!(
-                "{regime} trial {t}: hash_seed={} source_id={:#x}, n={n}, gate \
+                "{regime} trial {t}: seed_index={} source_id={:#x}, n={n}, gate \
                  F2_hat/N^2={gate:.3e} vs 1/ordered_samples={threshold:.3e}, heavy set \
                  {} values, E_H={e_h:.6} (sum form), P_hat_R={p_hat_r:.6}, m_R={m_r}, \
                  epsilon_R={eps_r:.6} at delta={DELTA} -> eta {eta:.6}; \
@@ -2317,10 +2317,10 @@ mod documented_matrix {
                 );
 
                 let dynamic = feed_kll_dynamic(feed, k, seed, &values)
-                    .expect("both feeds are supported by KLLDynamic");
+                    .expect("both feeds are supported by KllDynamic");
                 spec.record_trial(
                     &mut tally,
-                    &format!("KLLDynamic {label}"),
+                    &format!("KllDynamic {label}"),
                     truth.sorted(),
                     &DOC_QS,
                     |q| dynamic.quantile(q),

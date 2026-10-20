@@ -383,7 +383,7 @@ fn count_deltas_carry_exactly_the_signed_threshold() {
         assert_eq!(
             d.count.unsigned_abs(),
             OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
-            "Count resets on promotion, so a delta is always ±the mask"
+            "CountSketch resets on promotion, so a delta is always ±the mask"
         );
         assert!((d.row as usize) < ROWS, "row {} out of range", d.row);
         assert!((d.col as usize) < COLS, "col {} out of range", d.col);
@@ -608,9 +608,9 @@ fn hll_promotion_is_exact_for_every_variant_and_precision() {
     check!(HyperLogLogP12<Classic>, "P12/Classic");
     check!(HyperLogLog<Classic>, "P14/Classic");
     check!(HyperLogLogP16<Classic>, "P16/Classic");
-    check!(HyperLogLogP12<Ertl>, "P12/ErtlMLE");
-    check!(HyperLogLog<Ertl>, "P14/ErtlMLE");
-    check!(HyperLogLogP16<Ertl>, "P16/ErtlMLE");
+    check!(HyperLogLogP12<Ertl>, "P12/Ertl");
+    check!(HyperLogLog<Ertl>, "P14/Ertl");
+    check!(HyperLogLogP16<Ertl>, "P16/Ertl");
 }
 
 #[test]
@@ -1230,7 +1230,7 @@ mod runtime {
     }
 
     #[test]
-    #[should_panic(expected = "cannot insert after runtime has been closed")]
+    #[should_panic(expected = "cannot update after runtime has been closed")]
     fn inserting_after_close_panics() {
         let workers = 2;
         let mut runtime = OctoRuntime::new(&config(workers), SumPlan, || SumAggregator {
@@ -2183,7 +2183,7 @@ fn count_sketch_online_accuracy_beats_sketch_merge() {
         parity_counters: parity.sent_counters,
         ten_x_counters: ten_x.sent_counters,
     };
-    comparison.report("Count");
+    comparison.report("CountSketch");
     comparison.assert_baselines_were_funded();
     assert!(comparison.octo < comparison.merge_at_parity / 2.0);
     assert!(comparison.octo < comparison.merge_at_ten_x);
@@ -5056,7 +5056,7 @@ mod partition_accuracy {
             assert_eq!(
                 parent.sketch.estimate_l1(),
                 delivered as f64,
-                "the parent's L1 is restored from the last weight_total each worker \
+                "the parent's L1 is restored from the last total_weight each worker \
                  stamped on a delta, so it must equal their sum exactly. {ctx}"
             );
 

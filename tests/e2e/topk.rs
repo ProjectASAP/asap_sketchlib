@@ -36,13 +36,13 @@ fn heaps_satisfy_their_own_bounds_and_stay_heap_consistent() {
 
     // Each sketch against its own theorem.
     CountMinSpec::new(CM_ROWS, COLS).assert_contract(
-        "CMSHeap point estimate",
+        "CountMinSketchWithHeap point estimate",
         &truth,
         |k| cms_heap.estimate(&DataInput::I64(k)) as f64,
         &context,
     );
     CountSketchSpec::new(CS_ROWS, COLS).assert_contract(
-        "CSHeap point estimate",
+        "CountSketchWithHeap point estimate",
         &truth,
         |k| cs_heap.estimate(&DataInput::I64(k)),
         &context,
@@ -52,8 +52,12 @@ fn heaps_satisfy_their_own_bounds_and_stay_heap_consistent() {
     // the sketch is a bug regardless of any error bound.
     let kth_count = truth.top_k(TOP_K)[TOP_K - 1].1;
     for (label, items, cms) in [
-        ("CMSHeap", cms_heap.heap().heap().to_vec(), true),
-        ("CSHeap", cs_heap.heap().heap().to_vec(), false),
+        (
+            "CountMinSketchWithHeap",
+            cms_heap.heap().heap().to_vec(),
+            true,
+        ),
+        ("CountSketchWithHeap", cs_heap.heap().heap().to_vec(), false),
     ] {
         assert!(items.len() <= TOP_K, "{label} heap exceeded capacity");
         let mut consistency = Tally::default();
@@ -150,8 +154,12 @@ mod documented_matrix {
 
             let kth_count = truth.top_k(top_k)[top_k - 1].1;
             for (label, items, cms) in [
-                ("CMSHeap", cms_heap.heap().heap().to_vec(), true),
-                ("CSHeap", cs_heap.heap().heap().to_vec(), false),
+                (
+                    "CountMinSketchWithHeap",
+                    cms_heap.heap().heap().to_vec(),
+                    true,
+                ),
+                ("CountSketchWithHeap", cs_heap.heap().heap().to_vec(), false),
             ] {
                 assert!(
                     items.len() <= top_k,
@@ -211,7 +219,10 @@ mod documented_matrix {
                             )
                         });
                     }
-                    bound.assert_none("CMSHeap / Count-Min bound at the heap's keys", &context);
+                    bound.assert_none(
+                        "CountMinSketchWithHeap / Count-Min bound at the heap's keys",
+                        &context,
+                    );
                 } else {
                     let spec = CountSketchSpec::new(HEAP_ROWS, HEAP_COLS);
                     let f2 = truth.f2();
@@ -229,7 +240,10 @@ mod documented_matrix {
                             )
                         });
                     }
-                    bound.assert_none("CSHeap / L2 bound at the heap's keys", &context);
+                    bound.assert_none(
+                        "CountSketchWithHeap / L2 bound at the heap's keys",
+                        &context,
+                    );
                 }
 
                 consistency.assert_none(&format!("{label} heap/sketch consistency"), &context);

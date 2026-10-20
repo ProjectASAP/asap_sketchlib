@@ -22,7 +22,7 @@ where
     H: SketchHasher + HashProfile,
 {
     const KIND: SummaryKind = SummaryKind {
-        name: "CSSpaceSaving",
+        name: "CountSketchWithSpaceSaving",
         kind_id: kind::COUNT_SKETCH_WITH_SPACE_SAVING,
         counter_type: T::COUNTER_TYPE,
         mode: Mode::MODE,
@@ -32,8 +32,9 @@ where
     /// when the matrix samples its updates or the state breaks a §3.24 decode
     /// rule, and on mixed-variant or 128-bit keys.
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        admission_rate::check_admits_all(self.count_sketch.admission_rate())
-            .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CSSpaceSaving envelope: {e}")))?;
+        admission_rate::check_admits_all(self.count_sketch.admission_rate()).map_err(|e| {
+            RmpEncodeError::Syntax(format!("ASAPv1 CountSketchWithSpaceSaving envelope: {e}"))
+        })?;
         summary_wire::encode::<T, H>(
             &Self::KIND,
             self.count_sketch.rows(),
@@ -122,15 +123,18 @@ mod tests {
         let count = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
         for (bytes, what) in [
             (
-                cms_ss.to_asapv1().expect("CMSSpaceSaving"),
-                "CMSSpaceSaving",
+                cms_ss.to_asapv1().expect("CountMinSketchWithSpaceSaving"),
+                "CountMinSketchWithSpaceSaving",
             ),
-            (cs_heap.to_asapv1().expect("CSHeap"), "CSHeap"),
-            (count.to_asapv1().expect("Count"), "Count Sketch"),
+            (
+                cs_heap.to_asapv1().expect("CountSketchWithHeap"),
+                "CountSketchWithHeap",
+            ),
+            (count.to_asapv1().expect("CountSketch"), "Count Sketch"),
         ] {
             assert!(
                 Target::from_asapv1(&bytes).is_err(),
-                "{what} bytes must not decode as a CSSpaceSaving"
+                "{what} bytes must not decode as a CountSketchWithSpaceSaving"
             );
         }
     }

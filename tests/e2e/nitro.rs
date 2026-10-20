@@ -125,27 +125,27 @@ struct Path {
 
 const PATHS: [Path; 5] = [
     Path {
-        name: "CountMin::fast_insert_nitro",
+        name: "CountMinSketch::nitro_update",
         run: row_countmin,
         rows: ROWS,
     },
     Path {
-        name: "Count::fast_insert_nitro",
+        name: "CountSketch::nitro_update",
         run: row_countsketch,
         rows: ROWS,
     },
     Path {
-        name: "NitroBatch::insert",
+        name: "NitroBatch::update_batch",
         run: batch_live,
         rows: 1,
     },
     Path {
-        name: "NitroBatch::insert_cached_step",
+        name: "NitroBatch::update_batch_cached_step",
         run: batch_cached,
         rows: 1,
     },
     Path {
-        name: "NitroBatch<Vector2D<u32>>::insert",
+        name: "NitroBatch<Vector2D<u32>>::update_batch",
         run: batch_bare,
         rows: 5,
     },
@@ -371,7 +371,7 @@ fn full_sampling_is_exact_and_the_query_reads_the_cells_the_insert_wrote() {
             assert_eq!(
                 *mass,
                 F as f64,
-                "{} rate=1.0: row {r} holds {mass} for {F} updates. 0 means insert and \
+                "{} rate=1.0: row {r} holds {mass} for {F} updates. 0 means update and \
                  query disagree on the hash domain; {:.1} means the path divided the \
                  work across its {} rows",
                 path.name,
@@ -390,12 +390,12 @@ fn full_sampling_is_exact_and_the_query_reads_the_cells_the_insert_wrote() {
     assert_eq!(
         cm.nitro_estimate(&key),
         F as f64,
-        "CountMin::nitro_estimate must return the exact count at rate 1.0"
+        "CountMinSketch::nitro_estimate must return the exact count at rate 1.0"
     );
 
     for (name, run) in [
-        ("NitroBatch::insert", false),
-        ("NitroBatch::insert_cached_step", true),
+        ("NitroBatch::update_batch", false),
+        ("NitroBatch::update_batch_cached_step", true),
     ]
     .map(|(n, cached)| (n, cached))
     {
@@ -479,8 +479,11 @@ fn nitro_merge_lands_in_the_combined_band() {
     };
 
     for (name, merged) in [
-        ("CountMin::fast_insert_nitro + CountMin::merge", row_level),
-        ("NitroBatch::insert + NitroBatch::merge", batch),
+        (
+            "CountMinSketch::nitro_update + CountMinSketch::merge",
+            row_level,
+        ),
+        ("NitroBatch::update_batch + NitroBatch::merge", batch),
     ] {
         for &rate in &RATES {
             let spec = SamplingConfidenceSpec::new(rate, Z);
@@ -552,7 +555,7 @@ fn row_level_countmin_nitro_tracks_a_zipf_stream_within_the_combined_band() {
         let collision_budget =
             |f: f64| cm_spec.simultaneous_bound(total, f, distinct, SIMULTANEOUS_LEVEL);
         let context = format!(
-            "row-level CountMin Nitro over zipf(1.1) domain={DOMAIN} n={N} \
+            "row-level CountMinSketch Nitro over zipf(1.1) domain={DOMAIN} n={N} \
              seed={STREAM_SEED:#x}, rate={rate}, rows={ROWS} cols={COLS}"
         );
 
@@ -576,11 +579,11 @@ fn row_level_countmin_nitro_tracks_a_zipf_stream_within_the_combined_band() {
         // Both halves are union-bounded over the probed keys, so neither
         // tolerates a violation.
         low.assert_none(
-            &format!("row-level CountMin Nitro rate={rate} / lower band"),
+            &format!("row-level CountMinSketch Nitro rate={rate} / lower band"),
             &context,
         );
         high.assert_none(
-            &format!("row-level CountMin Nitro rate={rate} / upper band"),
+            &format!("row-level CountMinSketch Nitro rate={rate} / upper band"),
             &context,
         );
     }
@@ -619,7 +622,7 @@ fn row_level_countmin_nitro_separates_keys_of_similar_frequency() {
             });
         }
         tally.assert_none(
-            &format!("row-level CountMin Nitro rate={rate} / {KEYS} equal-frequency keys"),
+            &format!("row-level CountMinSketch Nitro rate={rate} / {KEYS} equal-frequency keys"),
             &format!("each key inserted {PER_KEY} times, rows={ROWS} cols={COLS}"),
         );
     }
@@ -677,8 +680,8 @@ const CONTINUATION_RATES: [f64; 2] = [0.3, 0.07];
 fn round_trip(
     cm: &CountMinSketch<Vector2D<i32>, FastPath>,
 ) -> CountMinSketch<Vector2D<i32>, FastPath> {
-    let bytes = rmp_serde::to_vec_named(cm).expect("serialize a Nitro-enabled CountMin");
-    rmp_serde::from_slice(&bytes).expect("deserialize a Nitro-enabled CountMin")
+    let bytes = rmp_serde::to_vec_named(cm).expect("serialize a Nitro-enabled CountMinSketch");
+    rmp_serde::from_slice(&bytes).expect("deserialize a Nitro-enabled CountMinSketch")
 }
 
 fn nitro_enabled(rate: f64, seed: u64) -> CountMinSketch<Vector2D<i32>, FastPath> {
@@ -935,7 +938,7 @@ fn count_min_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() 
     assert_eq!(
         counters(sampled.as_storage()),
         counters(plain.as_storage()),
-        "rate=1 Nitro insertion must write the same counters as insert"
+        "rate=1 Nitro insertion must write the same counters as update"
     );
     for (key, count) in truth.pairs() {
         let probe = DataInput::U64(key as u64);
@@ -984,7 +987,7 @@ fn count_min_after_disable_nitro_leaves_the_sampled_insert_path_inert() {
     assert_ne!(
         counters(sketch.as_storage()),
         before,
-        "disabling sampling must not disable the ordinary insert path"
+        "disabling sampling must not disable the ordinary update path"
     );
 }
 
@@ -1050,7 +1053,7 @@ fn count_sketch_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes
     assert_eq!(
         counters(sampled.as_storage()),
         counters(plain.as_storage()),
-        "rate=1 Nitro insertion must write the same signed counters as insert"
+        "rate=1 Nitro insertion must write the same signed counters as update"
     );
     for (key, _) in truth.pairs() {
         let probe = DataInput::U64(key as u64);
@@ -1080,6 +1083,6 @@ fn count_sketch_seeded_nitro_sampling_is_reproducible() {
     assert_eq!(
         counters(build(0x5A11_0002).as_storage()),
         counters(build(0x5A11_0002).as_storage()),
-        "two Count sketches at the same rate and seed must admit the same subset"
+        "two Count Sketches at the same rate and seed must admit the same subset"
     );
 }

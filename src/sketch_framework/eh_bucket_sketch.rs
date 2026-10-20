@@ -272,9 +272,9 @@ impl EhBucketSketch {
     /// Get the type of sketch as a string
     pub fn sketch_type(&self) -> &'static str {
         match self {
-            EhBucketSketch::CountMinSketch(_) => "CountMin",
+            EhBucketSketch::CountMinSketch(_) => "CountMinSketch",
             EhBucketSketch::CocoSketch(_) => "Coco",
-            EhBucketSketch::CountSketchWithL2Norm(_) => "CountL2HH",
+            EhBucketSketch::CountSketchWithL2Norm(_) => "CountSketchWithL2Norm",
             EhBucketSketch::CountSketch(_) => "CountSketch",
             EhBucketSketch::DdSketch(_) => "DDSketch",
             EhBucketSketch::ElasticSketch(_) => "Elastic",
@@ -300,10 +300,10 @@ mod tests {
         for _ in 0..9 {
             count_l2hh.update(&key);
         }
-        let l2hh_est = count_l2hh.query(&key).expect("query COUNTL2HH");
+        let l2hh_est = count_l2hh.query(&key).expect("query CountSketchWithL2Norm");
         assert!(
             l2hh_est >= 9.0,
-            "expected COUNTL2HH estimate >= 9, got {l2hh_est}"
+            "expected CountSketchWithL2Norm estimate >= 9, got {l2hh_est}"
         );
 
         let mut um = EhBucketSketch::UnivMon(UnivMon::default());

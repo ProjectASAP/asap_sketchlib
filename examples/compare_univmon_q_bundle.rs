@@ -55,7 +55,7 @@ fn main() {
         "bundle: HLL(p=14) + {DEPTH}x{BUNDLE_WIDTH} CountSketch(i32) + SpaceSaving({BUNDLE_CANDIDATES}) + occurrence bottom-k({BUNDLE_RESERVOIR}) + KLL(k={BUNDLE_KLL_K}) + exact count/extrema"
     );
     println!(
-        "Q-matched: width={}, candidates={}; Q-quality: width={}, candidates={}; both use {} ordered samples",
+        "Q-matched: top_layer_cols={}, heap_size={}; Q-quality: top_layer_cols={}, heap_size={}; both use {} ordered samples",
         q_matched.top_layer_cols,
         q_matched.heap_size,
         q_quality.top_layer_cols,

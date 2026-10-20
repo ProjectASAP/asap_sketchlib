@@ -376,8 +376,8 @@ proptest! {
                 .map(|&(_, val)| val)
                 .sum();
             let estimate = sketch.estimate(&key);
-            prop_assert_eq!(estimate, expected, "estimate_key({})", key);
-            prop_assert!(estimate <= total, "estimate_key({}) exceeds {}", key, total);
+            prop_assert_eq!(estimate, expected, "estimate({})", key);
+            prop_assert!(estimate <= total, "estimate({}) exceeds {}", key, total);
         }
     }
 

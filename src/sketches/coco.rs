@@ -296,8 +296,8 @@ impl<H: SketchHasher> CocoSketch<H> {
     }
 
     pub fn merge(&mut self, other: &CocoSketch<H>) {
-        assert_eq!(self.rows, other.rows, "Different depth, do nothing");
-        assert_eq!(self.cols, other.cols, "Different width, do nothing");
+        assert_eq!(self.rows, other.rows, "Different rows, do nothing");
+        assert_eq!(self.cols, other.cols, "Different cols, do nothing");
         for i in 0..self.rows {
             for j in 0..self.cols {
                 if let Some(k) = &other.table[i][j].full_key {

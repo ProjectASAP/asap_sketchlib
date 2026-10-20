@@ -335,9 +335,12 @@ fn sketch_ceiling() {
     }
     let plain_rate = stream.len() as f64 / started.elapsed().as_secs_f64() / 1e6;
 
-    println!("\nCMSHeap::insert with the current HHHeap (rows=4, cols=4096)");
-    println!("  bare CountMin::insert: {plain_rate:.3} Minsert/s");
-    println!("{:>6}  {:>16}  {:>12}", "top_k", "Minsert/s", "heap share");
+    println!("\nCountMinSketchWithHeap::update with the current TopKHeap (rows=4, cols=4096)");
+    println!("  bare CountMinSketch::update: {plain_rate:.3} Minsert/s");
+    println!(
+        "{:>6}  {:>16}  {:>12}",
+        "heap_size", "Minsert/s", "heap share"
+    );
     for cap in CAPACITIES {
         let mut sketch = CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::new(4, 4096, cap);
         let started = Instant::now();
@@ -364,7 +367,7 @@ fn main() {
         );
         println!(
             "{:>6}  {:>14}  {:>14}  {:>14}  {:>8}",
-            "cap", "HHHeap Mups/s", "indexed Mups/s", "scan Mups/s", "speedup"
+            "cap", "TopKHeap Mups/s", "indexed Mups/s", "scan Mups/s", "speedup"
         );
 
         for cap in CAPACITIES {

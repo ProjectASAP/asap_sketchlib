@@ -274,11 +274,11 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H> {
         assert_eq!(
             (self_rows, self_cols),
             (other.counts.rows(), other.counts.cols()),
-            "dimension mismatch while merging CountMin sketches"
+            "dimension mismatch while merging Count-Min sketches"
         );
         assert_eq!(
             self.admission_rate, other.admission_rate,
-            "admission rate mismatch while merging CountMin sketches"
+            "admission rate mismatch while merging Count-Min sketches"
         );
 
         for i in 0..self_rows {
@@ -301,11 +301,11 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H> {
         assert_eq!(
             (self_rows, self_cols),
             (other.counts.rows(), other.counts.cols()),
-            "dimension mismatch while merging CountMin sketches"
+            "dimension mismatch while merging Count-Min sketches"
         );
         assert_eq!(
             self.admission_rate, other.admission_rate,
-            "admission rate mismatch while merging CountMin sketches"
+            "admission rate mismatch while merging Count-Min sketches"
         );
 
         for i in 0..self_rows {
@@ -847,7 +847,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "dimension mismatch while merging CountMin sketches")]
+    #[should_panic(expected = "dimension mismatch while merging Count-Min sketches")]
     fn merge_requires_matching_dimensions() {
         let mut left = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
         let right = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 32);

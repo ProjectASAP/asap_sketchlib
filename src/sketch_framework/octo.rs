@@ -1284,7 +1284,7 @@ where
     pub fn update(&mut self, input: DataInput<'_>) {
         let core = self.core.as_ref().expect("runtime core missing");
         if core.closed.load(Ordering::Acquire) {
-            panic!("cannot insert after runtime has been closed");
+            panic!("cannot update after runtime has been closed");
         }
 
         let worker_id = core.worker_for(&input);
@@ -4326,7 +4326,7 @@ mod runtime_tests {
     }
 
     #[test]
-    #[should_panic(expected = "cannot insert after runtime has been closed")]
+    #[should_panic(expected = "cannot update after runtime has been closed")]
     fn octo_runtime_insert_after_close_panics() {
         let mut runtime = OctoRuntime::new(&config(2), HllOctoPlan::new(), HllOctoAggregator::new);
         runtime.close();

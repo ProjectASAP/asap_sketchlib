@@ -41,9 +41,9 @@ use super::EhBucketSketch;
 /// decoding dispatch on the bytes.
 pub(crate) fn variant_name(kind_id: &[u8]) -> Option<&'static str> {
     match kind_id {
-        kind::COUNT_MIN => Some("CountMin"),
+        kind::COUNT_MIN => Some("CountMinSketch"),
         kind::COCO => Some("Coco"),
-        kind::COUNT_SKETCH_WITH_L2_NORM => Some("CountL2HH"),
+        kind::COUNT_SKETCH_WITH_L2_NORM => Some("CountSketchWithL2Norm"),
         kind::COUNT_SKETCH => Some("CountSketch"),
         kind::DDSKETCH => Some("DDSketch"),
         kind::ELASTIC => Some("Elastic"),
@@ -87,7 +87,7 @@ pub(crate) struct SketchState {
 /// Rejects a kind_id outside the ten.
 pub(crate) fn unknown_variant(kind_id: &[u8]) -> RmpDecodeError {
     RmpDecodeError::Uncategorized(format!(
-        "ASAPv1 EHSketchList: kind_id {kind_id:02x?} is not a wire variant"
+        "ASAPv1 EhBucketSketch: kind_id {kind_id:02x?} is not a wire variant"
     ))
 }
 
@@ -96,7 +96,7 @@ pub(crate) fn unknown_variant(kind_id: &[u8]) -> RmpDecodeError {
 fn check_variant_available(kind_id: &[u8]) -> Result<(), RmpDecodeError> {
     match kind_id {
         kind::UNIFORM_SAMPLING => Err(RmpDecodeError::Uncategorized(format!(
-            "ASAPv1 EHSketchList: variant {} (kind_id {kind_id:02x?}) needs the experimental feature",
+            "ASAPv1 EhBucketSketch: variant {} (kind_id {kind_id:02x?}) needs the experimental feature",
             variant_name(kind_id).unwrap_or("unnamed")
         ))),
         _ => Ok(()),
@@ -114,7 +114,7 @@ fn triple(kind: &'static [u8], bytes: &[u8]) -> Result<SketchState, RmpEncodeErr
     let (kind_id, descriptor, state) = envelope::split(bytes).map_err(RmpEncodeError::Syntax)?;
     if kind_id != kind {
         return Err(RmpEncodeError::Syntax(format!(
-            "ASAPv1 EHSketchList: {} produced kind_id {kind_id:02x?}, expected {kind:02x?}",
+            "ASAPv1 EhBucketSketch: {} produced kind_id {kind_id:02x?}, expected {kind:02x?}",
             variant_name(kind).unwrap_or("variant")
         )));
     }
@@ -134,7 +134,7 @@ fn check_admits_all(sketch: &EhBucketSketch) -> Result<(), String> {
         EhBucketSketch::Hll(s) => s.admission_rate(),
         _ => return Ok(()),
     };
-    admission_rate::check_admits_all(rate).map_err(|e| format!("ASAPv1 EHSketchList: {e}"))
+    admission_rate::check_admits_all(rate).map_err(|e| format!("ASAPv1 EhBucketSketch: {e}"))
 }
 
 /// The triple one EhBucketSketch contributes, in the order the wire emits it.
@@ -235,13 +235,13 @@ impl EhBucketSketch {
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != kind::EH_BUCKET_SKETCH {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "EHSketchList kind_id mismatch: stored {kind_id:?}, expected {EH_BUCKET_SKETCH:?}"
+                "EhBucketSketch kind_id mismatch: stored {kind_id:?}, expected {EH_BUCKET_SKETCH:?}"
             )));
         }
         let meta: EhSketchListMetadata = envelope::decode_block(metadata)?;
         if meta != eh_sketch_list_metadata() {
             return Err(RmpDecodeError::Uncategorized(
-                "ASAPv1 EHSketchList envelope: metadata mismatch".to_string(),
+                "ASAPv1 EhBucketSketch envelope: metadata mismatch".to_string(),
             ));
         }
         let triple: SketchState = envelope::decode_block(payload)?;
@@ -379,12 +379,12 @@ pub(crate) mod tests {
         );
         sketch.update(&DataInput::U64(42));
 
-        let encoded = sketch.to_asapv1().expect("serialize EHSketchList");
+        let encoded = sketch.to_asapv1().expect("serialize EhBucketSketch");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x14, 0x00]); // kind_id_len=2, kind_id=[0x14,0x00]
 
         let decoded = EhBucketSketch::from_asapv1(&encoded).expect("deserialize");
-        assert_eq!(decoded.sketch_type(), "CountMin");
+        assert_eq!(decoded.sketch_type(), "CountMinSketch");
         assert_eq!(
             decoded.query(&DataInput::U64(42)),
             sketch.query(&DataInput::U64(42))
@@ -417,9 +417,9 @@ pub(crate) mod tests {
     #[test]
     fn eh_sketch_list_kind_ids_are_build_independent() {
         let table: [(&[u8], &str); 10] = [
-            (kind::COUNT_MIN, "CountMin"),
+            (kind::COUNT_MIN, "CountMinSketch"),
             (kind::COCO, "Coco"),
-            (kind::COUNT_SKETCH_WITH_L2_NORM, "CountL2HH"),
+            (kind::COUNT_SKETCH_WITH_L2_NORM, "CountSketchWithL2Norm"),
             (kind::COUNT_SKETCH, "CountSketch"),
             (kind::DDSKETCH, "DDSketch"),
             (kind::ELASTIC, "Elastic"),

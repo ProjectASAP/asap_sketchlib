@@ -682,7 +682,7 @@ mod tests {
         assert_eq!(
             filter.inserted(),
             8,
-            "bulk_insert of three left the count at {}",
+            "update_batch of three left the count at {}",
             filter.inserted()
         );
 

@@ -611,7 +611,7 @@ impl Hydra {
             return Ok(());
         }
         Err(encode_error(format!(
-            "ASAPv1 Hydra envelope: type_to_clone holds data; the {} prototype carries only its geometry",
+            "ASAPv1 Hydra envelope: prototype holds data; the {} prototype carries only its geometry",
             self.prototype
         )))
     }
@@ -1539,10 +1539,7 @@ mod tests {
             .to_asapv1()
             .expect_err("a prototype holding data must not serialize")
             .to_string();
-        assert!(
-            problem.contains("type_to_clone holds data"),
-            "got {problem}"
-        );
+        assert!(problem.contains("prototype holds data"), "got {problem}");
     }
 
     /// A UnivMon grid whose cells hold different `OwnedDataInput` variants has no

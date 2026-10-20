@@ -47,8 +47,8 @@ impl Kind {
     /// The label the layer reports for the family.
     fn label(self) -> &'static str {
         match self {
-            Kind::CountMinSketch => "CountMin",
-            Kind::Count => "Count",
+            Kind::CountMinSketch => "CountMinSketch",
+            Kind::Count => "CountSketch",
             Kind::Ertl | Kind::Classic | Kind::Hip => "HLL",
         }
     }
@@ -354,7 +354,7 @@ proptest! {
             prop_assert_eq!(
                 layer_answers(&named, i, *kind, &probes),
                 layer_answers(expected, i, *kind, &probes),
-                "member {} ({:?}) under insert_at {:?}", i, kind, chosen
+                "member {} ({:?}) under update_at {:?}", i, kind, chosen
             );
         }
     }

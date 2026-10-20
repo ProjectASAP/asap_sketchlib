@@ -86,7 +86,7 @@ pub(crate) fn univmon_q_metadata<H: HashProfile>(
         seed_derivation: H::SEED_DERIVATION.to_string(),
         input_encoding: H::INPUT_ENCODING.to_string(),
         seed_list: H::seed_list(),
-        seed_index: field("hash_seed", config.seed_index)?,
+        seed_index: field("seed_index", config.seed_index)?,
         layers: field("layers", config.layers)?,
         top_layer_cols: field("top_layer_cols", config.top_layer_cols)?,
         cols_halving_period: config.cols_halving_period,
@@ -261,7 +261,7 @@ fn read_payload(
 fn validate_shared(config: UnivMonQConfig, shared: &SharedPayload) -> Result<(), RmpDecodeError> {
     if shared.candidate_lens.len() != config.layers || shared.ever_evicted.len() != config.layers {
         return Err(decode_error(format!(
-            "UnivMon-Q carries {} candidate runs and {} eviction flags over {} levels",
+            "UnivMon-Q carries {} candidate runs and {} eviction flags over {} layers",
             shared.candidate_lens.len(),
             shared.ever_evicted.len(),
             config.layers
@@ -271,7 +271,7 @@ fn validate_shared(config: UnivMonQConfig, shared: &SharedPayload) -> Result<(),
     for (index, &len) in shared.candidate_lens.iter().enumerate() {
         if len as usize > config.heap_size {
             return Err(decode_error(format!(
-                "UnivMon-Q candidate capacity exceeded at level {index}"
+                "UnivMon-Q candidate capacity exceeded at layer {index}"
             )));
         }
         seated = seated
@@ -341,7 +341,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
         )?;
         if self.layers.len() != self.config.layers {
             return Err(syntax(format!(
-                "ASAPv1 UnivMon-Q envelope: {} levels against a config of {}",
+                "ASAPv1 UnivMon-Q envelope: {} layers against a config of {}",
                 self.layers.len(),
                 self.config.layers
             )));
@@ -380,12 +380,12 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
                 self.config.counter_bits,
             ) {
                 return Err(syntax(format!(
-                    "ASAPv1 UnivMon-Q envelope: CountSketch layout mismatch at level {index}"
+                    "ASAPv1 UnivMon-Q envelope: CountSketch layout mismatch at layer {index}"
                 )));
             }
             if level.candidate_scores.len() > self.config.heap_size {
                 return Err(syntax(format!(
-                    "ASAPv1 UnivMon-Q envelope: candidate capacity exceeded at level {index}"
+                    "ASAPv1 UnivMon-Q envelope: candidate capacity exceeded at layer {index}"
                 )));
             }
             if level
@@ -394,7 +394,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
                 .any(|key| self.sample_level(*key) != index)
             {
                 return Err(syntax(format!(
-                    "ASAPv1 UnivMon-Q envelope: a candidate sits in the wrong terminal level {index}"
+                    "ASAPv1 UnivMon-Q envelope: a candidate sits in the wrong terminal layer {index}"
                 )));
             }
             let mut candidates: Vec<(u64, u64)> = level
@@ -405,7 +405,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
             candidates.sort_unstable();
             candidate_lens.push(u32::try_from(candidates.len()).map_err(|_| {
                 syntax(format!(
-                    "ASAPv1 UnivMon-Q envelope: level {index} holds more candidates than u32 can name"
+                    "ASAPv1 UnivMon-Q envelope: layer {index} holds more candidates than u32 can name"
                 ))
             })?);
             candidate_keys.extend(candidates.iter().map(|entry| entry.0));
@@ -421,7 +421,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
                         Counters::$variant(values) => counters.extend_from_slice(values),
                         _ => {
                             return Err(syntax(
-                                "ASAPv1 UnivMon-Q envelope: levels mix counter widths".to_string(),
+                                "ASAPv1 UnivMon-Q envelope: layers mix counter widths".to_string(),
                             ));
                         }
                     }
@@ -494,7 +494,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
                     .checked_mul(config.rows)
                     .and_then(|cells| total.checked_add(cells))
             })
-            .ok_or_else(|| decode_error("UnivMon-Q level layout overflows".to_string()))?;
+            .ok_or_else(|| decode_error("UnivMon-Q layer layout overflows".to_string()))?;
         if counters_len(&counters) != cells {
             return Err(decode_error(format!(
                 "UnivMon-Q carries {} counters against the config's {cells}",
@@ -560,7 +560,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
                 .any(|key| sketch.sample_level(*key) != index)
             {
                 return Err(decode_error(format!(
-                    "UnivMon-Q candidate stored in the wrong terminal level {index}"
+                    "UnivMon-Q candidate stored in the wrong terminal layer {index}"
                 )));
             }
         }
@@ -815,13 +815,13 @@ mod tests {
         let count_l2hh =
             crate::sketches::countsketch_heap::CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(2, 8)
                 .to_asapv1()
-                .expect("serialize CountL2HH");
+                .expect("serialize CountSketchWithL2Norm");
         let univmon = crate::UnivMon::new(4, 2, 8, 2)
             .to_asapv1()
             .expect("serialize UnivMon");
         let pyramid = crate::UnivMonTwoTier::new(4, 1, 2, 8, 2, 4, 2)
             .to_asapv1()
-            .expect("serialize UnivMonPyramid");
+            .expect("serialize UnivMonTwoTier");
 
         for foreign in [count_sketch, count_l2hh, univmon, pyramid] {
             assert!(
@@ -885,7 +885,7 @@ mod tests {
         misplaced.candidate_keys.reverse();
         assert!(
             UnivMonQ::<DefaultXxHasher>::from_asapv1(&crafted(&base, &misplaced)).is_err(),
-            "a candidate must live in the level its own key hashes into"
+            "a candidate must live in the layer its own key hashes into"
         );
     }
 
@@ -950,7 +950,7 @@ mod tests {
         wrong_layout.layers[1].sketch = PackedCountSketch::new(8, 3, 64);
         assert!(
             wrong_layout.to_asapv1().is_err(),
-            "a level whose CountSketch is not the config's size must not serialize"
+            "a layer whose CountSketch is not the config's size must not serialize"
         );
 
         let mut wrong_extrema = populated();

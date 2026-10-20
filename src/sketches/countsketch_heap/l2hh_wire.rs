@@ -104,10 +104,10 @@ struct CountSketchWithL2NormPayload {
 pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
     if rows == 0 || cols == 0 {
         return Err(format!(
-            "CountL2HH dimensions must be non-zero: rows={rows}, cols={cols}"
+            "CountSketchWithL2Norm dimensions must be non-zero: rows={rows}, cols={cols}"
         ));
     }
-    check_matrix_rows("CountL2HH", rows)?;
+    check_matrix_rows("CountSketchWithL2Norm", rows)?;
     CountSketchWithL2Norm::check_hash_bits(rows, cols)
 }
 
@@ -117,7 +117,7 @@ pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
 pub(crate) fn check_seed_index(seed_index: usize, seed_list_len: usize) -> Result<(), String> {
     if seed_index >= seed_list_len {
         return Err(format!(
-            "CountL2HH seed_index {seed_index} is past the seed list's {seed_list_len} entries"
+            "CountSketchWithL2Norm seed_index {seed_index} is past the seed list's {seed_list_len} entries"
         ));
     }
     Ok(())
@@ -136,20 +136,20 @@ pub(crate) fn layer_state<H: SketchHasher>(
     let l2 = sketch.row_l2_squared.as_slice();
     if counts.len() != cells {
         return Err(RmpEncodeError::Syntax(format!(
-            "ASAPv1 CountL2HH state: counts length {} != rows*cols {cells}",
+            "ASAPv1 CountSketchWithL2Norm state: counts length {} != rows*cols {cells}",
             counts.len()
         )));
     }
     if l2.len() != sketch.rows {
         return Err(RmpEncodeError::Syntax(format!(
-            "ASAPv1 CountL2HH state: l2 length {} != rows {}",
+            "ASAPv1 CountSketchWithL2Norm state: l2 length {} != rows {}",
             l2.len(),
             sketch.rows
         )));
     }
     if let Some(negative) = l2.iter().find(|&&value| value < 0) {
         return Err(RmpEncodeError::Syntax(format!(
-            "ASAPv1 CountL2HH state: l2 accumulator {negative} is negative"
+            "ASAPv1 CountSketchWithL2Norm state: l2 accumulator {negative} is negative"
         )));
     }
     Ok((counts, l2))
@@ -169,19 +169,19 @@ pub(crate) fn rebuild_layer<H: SketchHasher>(
     let cells = rows.saturating_mul(cols);
     if counts.len() != cells {
         return Err(RmpDecodeError::Uncategorized(format!(
-            "CountL2HH counts length {} != rows*cols {cells}",
+            "CountSketchWithL2Norm counts length {} != rows*cols {cells}",
             counts.len()
         )));
     }
     if l2.len() != rows {
         return Err(RmpDecodeError::Uncategorized(format!(
-            "CountL2HH l2 length {} != rows {rows}",
+            "CountSketchWithL2Norm l2 length {} != rows {rows}",
             l2.len()
         )));
     }
     if let Some(negative) = l2.iter().find(|&&value| value < 0) {
         return Err(RmpDecodeError::Uncategorized(format!(
-            "CountL2HH l2 accumulator {negative} is negative"
+            "CountSketchWithL2Norm l2 accumulator {negative} is negative"
         )));
     }
     Ok(CountSketchWithL2Norm {
@@ -213,7 +213,7 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
         let field = |name: &str, value: usize| {
             u32::try_from(value).map_err(|_| {
                 RmpEncodeError::Syntax(format!(
-                    "ASAPv1 CountL2HH envelope: {name} {value} exceeds the u32 metadata field"
+                    "ASAPv1 CountSketchWithL2Norm envelope: {name} {value} exceeds the u32 metadata field"
                 ))
             })
         };
@@ -242,13 +242,13 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != kind::COUNT_SKETCH_WITH_L2_NORM {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "CountL2HH kind_id mismatch: stored {kind_id:?}, expected {COUNT_SKETCH_WITH_L2_NORM:?}"
+                "CountSketchWithL2Norm kind_id mismatch: stored {kind_id:?}, expected {COUNT_SKETCH_WITH_L2_NORM:?}"
             )));
         }
         let meta: CountSketchWithL2NormMetadata = envelope::decode_block(metadata)?;
         if meta != count_sketch_with_l2_norm_metadata::<H>(meta.seed_index, meta.rows, meta.cols) {
             return Err(RmpDecodeError::Uncategorized(
-                "ASAPv1 CountL2HH envelope: metadata mismatch".to_string(),
+                "ASAPv1 CountSketchWithL2Norm envelope: metadata mismatch".to_string(),
             ));
         }
         check_seed_index(meta.seed_index as usize, meta.seed_list.len())
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn count_l2hh_round_trip_serialization() {
         let sketch = populated();
-        let encoded = sketch.to_asapv1().expect("serialize CountL2HH");
+        let encoded = sketch.to_asapv1().expect("serialize CountSketchWithL2Norm");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x19, 0x00]); // kind_id_len=2, kind_id=[0x19,0x00]
 
@@ -335,7 +335,7 @@ mod tests {
         assert_eq!(meta.metadata_version, 1);
         assert_eq!((meta.seed_index, meta.rows, meta.cols), (7, 3, 32));
 
-        let decoded = Std::from_asapv1(&encoded).expect("deserialize CountL2HH");
+        let decoded = Std::from_asapv1(&encoded).expect("deserialize CountSketchWithL2Norm");
         assert_eq!(decoded.rows(), 3);
         assert_eq!(decoded.cols(), 32);
         assert_eq!(decoded.seed_index(), 7);
@@ -473,7 +473,7 @@ mod tests {
             .expect("serialize UnivMon");
         let pyramid = crate::UnivMonTwoTier::new(4, 1, 2, 8, 2, 4, 2)
             .to_asapv1()
-            .expect("serialize UnivMonPyramid");
+            .expect("serialize UnivMonTwoTier");
         let univmon_q = crate::UnivMonQ::new(crate::UnivMonQConfig {
             layers: 2,
             top_layer_cols: 8,
@@ -489,7 +489,7 @@ mod tests {
         for foreign in [count_sketch, univmon, pyramid, univmon_q] {
             assert!(
                 Std::from_asapv1(&foreign).is_err(),
-                "a foreign envelope must not decode as a CountL2HH"
+                "a foreign envelope must not decode as a CountSketchWithL2Norm"
             );
         }
     }

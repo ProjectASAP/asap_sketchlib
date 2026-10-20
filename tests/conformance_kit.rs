@@ -234,7 +234,7 @@ fn countmin_passes_frequency_and_merge_conformance() {
     };
 
     conformance::frequency_battery(
-        "CountMin<FastPath>",
+        "CountMinSketch<FastPath>",
         || {
             CountMinAdapter(CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(
                 4, 4096,
@@ -247,7 +247,7 @@ fn countmin_passes_frequency_and_merge_conformance() {
     .assert_ok();
 
     conformance::merge_equivalence_battery(
-        "CountMin<FastPath>",
+        "CountMinSketch<FastPath>",
         || {
             CountMinAdapter(CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(
                 4, 4096,
@@ -274,9 +274,9 @@ fn countsketch_passes_signed_frequency_conformance() {
         )
     };
 
-    conformance::frequency_battery("Count<Regular>", make, &stream, &truth, spec).assert_ok();
-    conformance::turnstile_battery("Count<Regular>", make, 42i64).assert_ok();
-    conformance::merge_equivalence_battery("Count<Regular>", make, &stream, spec).assert_ok();
+    conformance::frequency_battery("CountSketch<Regular>", make, &stream, &truth, spec).assert_ok();
+    conformance::turnstile_battery("CountSketch<Regular>", make, 42i64).assert_ok();
+    conformance::merge_equivalence_battery("CountSketch<Regular>", make, &stream, spec).assert_ok();
 }
 
 #[test]
@@ -297,7 +297,7 @@ fn hll_variants_pass_cardinality_conformance() {
     .assert_ok();
 
     conformance::cardinality_battery(
-        "HyperLogLog<ErtlMLE>",
+        "HyperLogLog<Ertl>",
         || HllErtlAdapter(HyperLogLog::<asap_sketchlib::Ertl>::new()),
         &unique,
         100_000,
@@ -306,7 +306,7 @@ fn hll_variants_pass_cardinality_conformance() {
     .assert_ok();
 
     conformance::cardinality_battery(
-        "HyperLogLogHIP",
+        "HyperLogLogHip",
         || HllHipAdapter(HyperLogLogHip::new()),
         &unique,
         100_000,
@@ -349,7 +349,7 @@ fn kll_family_passes_quantile_conformance() {
     .assert_ok();
 
     conformance::quantile_battery(
-        "KLLDynamic",
+        "KllDynamic",
         || KllDynamicAdapter(KllDynamic::<f64>::with_k_and_seed(200, KIT_KLL_SEED)),
         &values,
         QuantileSpec::default(),
@@ -663,10 +663,21 @@ fn heap_backed_frequency_sketches_pass_frequency_and_merge_conformance() {
             4, 4_096, 64,
         ))
     };
-    conformance::frequency_battery("CMSHeap<FastPath>", make_cms, &stream, &truth, one_sided)
-        .assert_ok();
-    conformance::merge_equivalence_battery("CMSHeap<FastPath>", make_cms, &stream, one_sided)
-        .assert_ok();
+    conformance::frequency_battery(
+        "CountMinSketchWithHeap<FastPath>",
+        make_cms,
+        &stream,
+        &truth,
+        one_sided,
+    )
+    .assert_ok();
+    conformance::merge_equivalence_battery(
+        "CountMinSketchWithHeap<FastPath>",
+        make_cms,
+        &stream,
+        one_sided,
+    )
+    .assert_ok();
 
     let two_sided = conformance::FrequencySpec {
         one_sided: false,
@@ -678,10 +689,21 @@ fn heap_backed_frequency_sketches_pass_frequency_and_merge_conformance() {
             5, 4_096, 64,
         ))
     };
-    conformance::frequency_battery("CSHeap<Regular>", make_cs, &stream, &truth, two_sided)
-        .assert_ok();
-    conformance::merge_equivalence_battery("CSHeap<Regular>", make_cs, &stream, two_sided)
-        .assert_ok();
+    conformance::frequency_battery(
+        "CountSketchWithHeap<Regular>",
+        make_cs,
+        &stream,
+        &truth,
+        two_sided,
+    )
+    .assert_ok();
+    conformance::merge_equivalence_battery(
+        "CountSketchWithHeap<Regular>",
+        make_cs,
+        &stream,
+        two_sided,
+    )
+    .assert_ok();
 }
 
 #[test]
@@ -695,9 +717,11 @@ fn count_l2hh_passes_signed_frequency_and_merge_conformance() {
     };
     let make = || CountL2hhAdapter(CountSketchWithL2Norm::with_dimensions(5, 4_096));
 
-    conformance::frequency_battery("CountL2HH", make, &stream, &truth, spec).assert_ok();
-    conformance::turnstile_battery("CountL2HH", make, 42i64).assert_ok();
-    conformance::merge_equivalence_battery("CountL2HH", make, &stream, spec).assert_ok();
+    conformance::frequency_battery("CountSketchWithL2Norm", make, &stream, &truth, spec)
+        .assert_ok();
+    conformance::turnstile_battery("CountSketchWithL2Norm", make, 42i64).assert_ok();
+    conformance::merge_equivalence_battery("CountSketchWithL2Norm", make, &stream, spec)
+        .assert_ok();
 }
 
 #[test]
@@ -711,8 +735,10 @@ fn folded_frequency_sketches_pass_frequency_and_merge_conformance() {
         abs_tol: 12.0,
     };
     let make_cms = || FoldCmsAdapter(CountMinSketchFold::new(4, 8_192, 1, 64));
-    conformance::frequency_battery("FoldCMS", make_cms, &stream, &truth, one_sided).assert_ok();
-    conformance::merge_equivalence_battery("FoldCMS", make_cms, &stream, one_sided).assert_ok();
+    conformance::frequency_battery("CountMinSketchFold", make_cms, &stream, &truth, one_sided)
+        .assert_ok();
+    conformance::merge_equivalence_battery("CountMinSketchFold", make_cms, &stream, one_sided)
+        .assert_ok();
 
     let two_sided = conformance::FrequencySpec {
         one_sided: false,
@@ -720,9 +746,11 @@ fn folded_frequency_sketches_pass_frequency_and_merge_conformance() {
         abs_tol: 30.0,
     };
     let make_cs = || FoldCsAdapter(CountSketchFold::new(5, 8_192, 1, 64));
-    conformance::frequency_battery("FoldCS", make_cs, &stream, &truth, two_sided).assert_ok();
-    conformance::turnstile_battery("FoldCS", make_cs, 42i64).assert_ok();
-    conformance::merge_equivalence_battery("FoldCS", make_cs, &stream, two_sided).assert_ok();
+    conformance::frequency_battery("CountSketchFold", make_cs, &stream, &truth, two_sided)
+        .assert_ok();
+    conformance::turnstile_battery("CountSketchFold", make_cs, 42i64).assert_ok();
+    conformance::merge_equivalence_battery("CountSketchFold", make_cs, &stream, two_sided)
+        .assert_ok();
 }
 
 #[cfg(feature = "experimental")]
@@ -852,9 +880,9 @@ fn micro_cm_passes_frequency_and_merge_conformance() {
          not the full per-key count"
     );
 
-    conformance::frequency_battery("MicroCM", MicroCmAdapter::new, &stream, &truth, spec)
+    conformance::frequency_battery("MicroCm", MicroCmAdapter::new, &stream, &truth, spec)
         .assert_ok();
 
-    conformance::merge_equivalence_battery("MicroCM", MicroCmAdapter::new, &stream, spec)
+    conformance::merge_equivalence_battery("MicroCm", MicroCmAdapter::new, &stream, spec)
         .assert_ok();
 }

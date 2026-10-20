@@ -66,7 +66,7 @@ impl<H: SketchHasher> Kmv<H> {
         let largest = *self
             .retained_hashes
             .peek()
-            .expect("k_vals should be non-empty when len >= k");
+            .expect("retained_hashes should be non-empty when len >= k");
         const HASH_RANGE: f64 = 18_446_744_073_709_551_616.0;
         let mapped: f64 = (largest as f64 + 1.0) / HASH_RANGE;
         (self.k - 1) as f64 / mapped
@@ -102,14 +102,14 @@ mod tests {
 
         let encoded = sketch
             .to_asapv1()
-            .unwrap_or_else(|err| panic!("KMV serialize_to_bytes failed: {err}"));
+            .unwrap_or_else(|err| panic!("KMV to_asapv1 failed: {err}"));
         assert!(
             !encoded.is_empty(),
             "KMV serialization output should not be empty"
         );
 
         let mut decoded: Kmv = Kmv::from_asapv1(&encoded)
-            .unwrap_or_else(|err| panic!("KMV deserialize_from_bytes failed: {err}"));
+            .unwrap_or_else(|err| panic!("KMV from_asapv1 failed: {err}"));
 
         let reencoded = decoded
             .to_asapv1()
