@@ -1,4 +1,3 @@
-
 use super::matrix_storage::cols_mask_bits;
 use crate::MatrixFastHash;
 
@@ -342,5 +341,4 @@ mod tests {
         // bucket instead of panicking.
         let _ = v.bucket_slice(0, 5);
     }
-
 }

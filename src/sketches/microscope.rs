@@ -586,7 +586,6 @@ impl<H: SketchHasher> MicroCm<H> {
         }
         Ok(())
     }
-
 }
 
 #[cfg(test)]
@@ -921,5 +920,4 @@ mod tests {
         assert!(err.contains("different sub-windows"), "unexpected: {err}");
         assert_eq!(a.as_storage().as_slice(), before.as_slice());
     }
-
 }

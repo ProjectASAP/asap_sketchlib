@@ -166,8 +166,8 @@ fn large_precision_allocates_on_the_heap() {
         big.update(&DataInput::String(item(i)));
     }
     let bytes = big.to_asapv1().expect("serialize");
-    let restored = HyperLogLogImpl::<Classic, HllBucketListP18>::from_asapv1(&bytes)
-        .expect("deserialize");
+    let restored =
+        HyperLogLogImpl::<Classic, HllBucketListP18>::from_asapv1(&bytes).expect("deserialize");
     assert_eq!(restored.registers_as_slice(), big.registers_as_slice());
 }
 

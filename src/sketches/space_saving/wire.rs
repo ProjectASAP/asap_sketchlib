@@ -1141,12 +1141,22 @@ mod tests {
             (-129, 5, 0),
         ]
         .map(|(key, count, error)| (OwnedDataInput::I64(key), count, error));
-        let golden = hex(include_str!("../../../asapv1_golden/space_saving_i64_c8.hex"));
-        assert_eq!(summary(8, 70030, 4, i64_keys.to_vec()).to_asapv1().unwrap(), golden);
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/space_saving_i64_c8.hex"
+        ));
+        assert_eq!(
+            summary(8, 70030, 4, i64_keys.to_vec()).to_asapv1().unwrap(),
+            golden
+        );
 
         let byte_keys = [(&b"\xff\x00"[..], 9, 0), (b"", 4, 1), (b"ab", 4, 0)]
             .map(|(key, count, error)| (OwnedDataInput::Bytes(key.to_vec()), count, error));
-        let golden = hex(include_str!("../../../asapv1_golden/space_saving_bytes_c3.hex"));
-        assert_eq!(summary(3, 20, 3, byte_keys.to_vec()).to_asapv1().unwrap(), golden);
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/space_saving_bytes_c3.hex"
+        ));
+        assert_eq!(
+            summary(3, 20, 3, byte_keys.to_vec()).to_asapv1().unwrap(),
+            golden
+        );
     }
 }

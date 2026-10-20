@@ -501,7 +501,9 @@ mod tests {
             .map(|(priority, value)| SampleEntry::new(priority, value))
             .to_vec(),
         };
-        let golden = hex(include_str!("../../../asapv1_golden/uniform_sampling_r0p25.hex"));
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/uniform_sampling_r0p25.hex"
+        ));
         assert_eq!(sampler.to_asapv1().unwrap(), golden);
     }
 }

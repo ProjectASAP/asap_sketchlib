@@ -20,7 +20,6 @@
 //! - Manousis et al., VLDB 2022.
 //!   <https://vldb.org/pvldb/vol15/p3249-manousis.pdf>
 
-
 use crate::Vector2D;
 use crate::input::{HydraCounter, HydraQuery};
 use crate::{DataInput, HYDRA_SEED_INDEX, hash_for_matrix_seeded};

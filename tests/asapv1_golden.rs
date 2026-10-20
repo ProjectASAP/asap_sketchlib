@@ -1050,11 +1050,17 @@ fn assert_dd_golden(
     let want = decode_hex(golden);
     let decoded = DdSketch::from_asapv1(&want).expect("decode");
     assert_eq!(
-        (decoded.positive_store_counts(), decoded.positive_store_offset()),
+        (
+            decoded.positive_store_counts(),
+            decoded.positive_store_offset()
+        ),
         positive
     );
     assert_eq!(
-        (decoded.negative_store_counts(), decoded.negative_store_offset()),
+        (
+            decoded.negative_store_counts(),
+            decoded.negative_store_offset()
+        ),
         negative
     );
     assert_eq!(decoded.zero_count(), zero_count);
@@ -1082,13 +1088,22 @@ fn ddsketch_positive_a001_matches_golden() {
 #[test]
 fn ddsketch_signed_a001_matches_golden() {
     let scalars = (2523.90625, -0.016, 515.0);
-    assert_dd_golden(GOLDEN_DD_SIGNED, (&[3, 0, 2], 310), (&[5, 1], -208), 7, scalars);
+    assert_dd_golden(
+        GOLDEN_DD_SIGNED,
+        (&[3, 0, 2], 310),
+        (&[5, 1], -208),
+        7,
+        scalars,
+    );
 }
 
 #[test]
 fn ddsketch_empty_a001_matches_golden() {
     let want = decode_hex(GOLDEN_DD_EMPTY);
-    assert_eq!(DdSketch::new(DD_ALPHA).to_asapv1().expect("serialize"), want);
+    assert_eq!(
+        DdSketch::new(DD_ALPHA).to_asapv1().expect("serialize"),
+        want
+    );
     let decoded = DdSketch::from_asapv1(&want).expect("decode");
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -1711,8 +1726,21 @@ fn cs_i64_regular_2x4_admission_matches_golden() {
 #[test]
 fn ddsketch_signed_a001_admission_matches_golden() {
     let scalars = (2523.90625, -0.016, 515.0);
-    let sketch = dd_state((&[3, 0, 2], 310), (&[5, 1], -208), 7, scalars);
-    assert_dd_golden(GOLDEN_DD_ADMISSION, &sketch.with_admission_rate(0.125));
+    let signed = DdSketch::from_asapv1(&decode_hex(GOLDEN_DD_SIGNED)).expect("decode");
+    assert_eq!(
+        signed
+            .with_admission_rate(0.125)
+            .to_asapv1()
+            .expect("serialize"),
+        decode_hex(GOLDEN_DD_ADMISSION)
+    );
+    assert_dd_golden(
+        GOLDEN_DD_ADMISSION,
+        (&[3, 0, 2], 310),
+        (&[5, 1], -208),
+        7,
+        scalars,
+    );
     let decoded = DdSketch::from_asapv1(&decode_hex(GOLDEN_DD_ADMISSION)).expect("decode");
     assert_eq!(decoded.admission_rate(), 0.125);
     assert_eq!((decoded.get_count(), decoded.sum()), (18, 2523.90625));

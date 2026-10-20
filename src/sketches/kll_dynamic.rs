@@ -12,7 +12,6 @@
 //!   <https://arxiv.org/abs/1603.05346>
 //! - <https://www.amazon.science/publications/insert-optimized-implementation-of-streaming-data-sketches>
 
-
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};

@@ -627,7 +627,12 @@ mod tests {
         use crate::asapv1::envelope::hex;
         use std::marker::PhantomData;
 
-        fn bloom<Mode: BloomMode>(rows: usize, cols: usize, words: &[u64], inserted: u64) -> Bloom<Mode> {
+        fn bloom<Mode: BloomMode>(
+            rows: usize,
+            cols: usize,
+            words: &[u64],
+            inserted: u64,
+        ) -> Bloom<Mode> {
             Bloom {
                 bits: BitMatrix::from_words(rows, cols, words.to_vec()).expect("valid grid"),
                 inserted,
@@ -637,7 +642,9 @@ mod tests {
         }
 
         let regular = bloom::<RegularPath>(3, 128, &[1, 1 << 63, 0, 0xff, u64::MAX, 0x10000], 300);
-        let golden = hex(include_str!("../../../asapv1_golden/bloom_regular_3x128.hex"));
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/bloom_regular_3x128.hex"
+        ));
         assert_eq!(regular.to_asapv1().unwrap(), golden);
 
         let fast = bloom::<FastPath>(5, 32, &[1, 0x8000_0000, 0, 0xffff_ffff, 0x10000], 9);

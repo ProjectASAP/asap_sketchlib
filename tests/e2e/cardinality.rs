@@ -746,9 +746,8 @@ fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
         added: HashSet::new(),
         removed: HashSet::new(),
     };
-    let round_tripped =
-        SetAggregatorDelta::from_asapv1(&empty.to_asapv1().expect("encode empty"))
-            .expect("decode empty");
+    let round_tripped = SetAggregatorDelta::from_asapv1(&empty.to_asapv1().expect("encode empty"))
+        .expect("decode empty");
     assert!(
         round_tripped.added.is_empty() && round_tripped.removed.is_empty(),
         "an empty delta must stay empty across the wire"

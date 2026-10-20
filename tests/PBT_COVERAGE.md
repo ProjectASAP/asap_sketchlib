@@ -2,8 +2,8 @@
 
 One `proptest` law per line. Each compares the sketch against an answer
 computed without it; what that answer is comes first in every section. One
-file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 367 laws;
-with `--all-features`, 435, adding the four **experimental** modules. Every
+file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 342 laws;
+with `--all-features`, 407, adding the four **experimental** modules. Every
 law was mutation-checked: break the implementation, the law goes red. Shared
 generators, `grid` and `round_trip!` live in `support.rs`.
 
@@ -461,7 +461,7 @@ The u64 key encoding must be injective and order preserving over every f64. Comp
 - wire
   - ASAPv1 keeps count, extrema, CDF breakpoints, F2; both counter widths, even and odd halving period, an overrun ordered sample
 
-## count_min_hll.rs — 25 (experimental)
+## count_min_hll.rs — 24 (experimental)
 
 A Count-Min grid of HLL registers. Compared against: a standalone `HyperLogLogImpl<Classic, _>` on the same value hashes, byte-equal. Column routing read from a one-key probe sketch. 9 laws, 8 expanded over 3 shapes: 4 x 512 at p4 (rows mostly private), 4 x 32 at p6 and 3 x 32 at p8 (collisions).
 
@@ -498,7 +498,7 @@ Retained set == the `k` smallest distinct hashes, so laws are mostly equalities.
 - wire
   - ASAPv1 keeps retained set, `k`, estimate; empty included
 
-## microscope.rs — 15 (experimental)
+## microscope.rs — 13 (experimental)
 
 Sliding-window frequency with adaptive zoom. A cell holds `t + 2` byte **pixels** (a ring indexed by sub-window) sharing one **zoom** exponent `Z`; a pixel is worth `c^Z` items and the cell rescales when a pixel would overflow. The **shutter** is the current sub-window's carry, `< c^Z`, rounded into its pixel at the boundary. A **reclaim** lowers `Z` at a boundary when load has fallen. Compared against: an exact `VecDeque` window tagged by sub-window.
 

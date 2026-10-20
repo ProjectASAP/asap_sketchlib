@@ -8,9 +8,7 @@
 //! The bound laws use an exact `HashMap` of the generated stream as the
 //! oracle, which is independent of the sketch's own bookkeeping.
 
-use crate::support::{
-    PROBE_KEYS, edge_dimension, edge_rows, grid, keys,
-};
+use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, grid, keys};
 use asap_sketchlib::{
     CountMinSketch, DataInput, DefaultMatrixI32, FastPath, MatrixFastHash, MatrixStorage,
     QuickMatrixI64, RegularPath, Vector2D, hash_for_matrix,

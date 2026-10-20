@@ -17,11 +17,10 @@
 //! `a_hot_key_saturates_a_pixel_and_forces_a_zoom` pins the generator to a
 //! load that zooms, and every law below re-asserts it on the run it drew.
 
-use crate::support::close;
 use asap_sketchlib::sketches::microscope::{
     DeltaStrategy, MicroLayout, MicroParams, SubWindowClock,
 };
-use asap_sketchlib::{DataInput, DefaultXxHasher, MatrixFastHash, MicroCm, SketchHasher, Vector3D};
+use asap_sketchlib::{DataInput, DefaultXxHasher, MatrixFastHash, MicroCm, SketchHasher};
 use proptest::prelude::*;
 use std::collections::{HashMap, VecDeque};
 

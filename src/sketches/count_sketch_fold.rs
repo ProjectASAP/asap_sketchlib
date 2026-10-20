@@ -14,7 +14,6 @@
 //! additional approximation error — the accuracy is identical to a full-width
 //! Count Sketch with W columns.
 
-
 use crate::count_min_fold::FoldCell;
 use crate::{DataInput, DefaultXxHasher, SketchHasher, TopKHeap, compute_median_inline_f64};
 use std::marker::PhantomData;

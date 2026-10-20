@@ -1,4 +1,3 @@
-
 use crate::DataInput;
 
 mod wire;

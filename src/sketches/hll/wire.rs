@@ -109,7 +109,8 @@ pub(crate) fn hll_metadata<H: HashProfile>(
 }
 
 /// The standard ProjectASAP profile metadata (the [`DefaultXxHasher`] profile).
-pub(crate) fn standard_hll_metadata(precision: u32) -> HllMetadata {
+#[cfg(test)]
+fn standard_hll_metadata(precision: u32) -> HllMetadata {
     hll_metadata::<DefaultXxHasher>(precision, None)
 }
 
@@ -281,9 +282,9 @@ impl<Registers: HllRegisterStorage> HyperLogLogHipImpl<Registers> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DataInput;
     use crate::sketches::hll::{HyperLogLog, HyperLogLogHip, HyperLogLogHipP12, HyperLogLogP12};
     use crate::structures::fixed_structure::{HllRegistersP12, HllRegistersP14};
-    use crate::{DataInput, HllRegisters};
 
     const ERROR_TOLERANCE: f64 = 0.02;
     const SERDE_SAMPLE: usize = 100_000;
@@ -455,7 +456,12 @@ mod tests {
                 admission_rate: 1.0,
             }
         }
-        fn hip<R: HllRegisterStorage>(regs: &[u8], kxq0: f64, kxq1: f64, est: f64) -> HyperLogLogHipImpl<R> {
+        fn hip<R: HllRegisterStorage>(
+            regs: &[u8],
+            kxq0: f64,
+            kxq1: f64,
+            est: f64,
+        ) -> HyperLogLogHipImpl<R> {
             HyperLogLogHipImpl {
                 registers: registers_from_bytes(regs).expect("registers"),
                 kxq0,
@@ -500,9 +506,13 @@ mod tests {
         ] {
             let (kxq0, kxq1, est) = state;
             let encoded = if regs.len() == 4096 {
-                hip::<HllRegistersP12>(regs, kxq0, kxq1, est).to_asapv1().unwrap()
+                hip::<HllRegistersP12>(regs, kxq0, kxq1, est)
+                    .to_asapv1()
+                    .unwrap()
             } else {
-                hip::<HllRegistersP14>(regs, kxq0, kxq1, est).to_asapv1().unwrap()
+                hip::<HllRegistersP14>(regs, kxq0, kxq1, est)
+                    .to_asapv1()
+                    .unwrap()
             };
             assert_eq!(encoded, golden);
         }

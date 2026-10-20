@@ -29,10 +29,10 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::common::numerical::NumericalValue;
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
 use crate::asapv1::wire_key::exact_vec;
+use crate::common::numerical::NumericalValue;
 
 use super::{
     CAPACITY_CACHE_LEN, Coin, Kll, MAX_K, MAX_LEVELS, checked_weighted_count, compute_max_capacity,

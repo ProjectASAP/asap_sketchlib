@@ -965,7 +965,6 @@ mod index_invariants {
         heap.assert_index_consistent("refilled");
         assert_eq!(heap.len(), 8);
     }
-
 }
 
 #[cfg(test)]

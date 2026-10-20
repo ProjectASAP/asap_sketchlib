@@ -12,7 +12,7 @@
 
 use crate::common;
 
-use common::specs::{CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, KllRankSpec, Tally};
+use common::specs::{CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, Tally};
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{

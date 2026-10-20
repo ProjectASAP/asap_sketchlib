@@ -1,4 +1,3 @@
-
 /// Hashing mode of a matrix-backed sketch in which row `r` hashes the key on
 /// its own, at seed-table index `r`. ASAPv1 `mode` `"regular"`.
 #[derive(Clone, Copy, Debug, Default)]

@@ -237,7 +237,6 @@ impl<H: SketchHasher> CountMinHll<H> {
         }
         Ok(())
     }
-
 }
 
 #[cfg(test)]
@@ -464,5 +463,4 @@ mod tests {
         let sk = CountMinHll::<DefaultXxHasher>::with_dimensions(21, 64, 6);
         assert_eq!(sk.rows(), 21);
     }
-
 }

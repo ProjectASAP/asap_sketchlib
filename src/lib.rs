@@ -25,7 +25,7 @@ pub mod sketches;
 #[cfg(test)]
 pub mod test_utils;
 
-pub use common::*;
 pub use asapv1::envelope::peek_kind_id;
+pub use common::*;
 pub use sketch_framework::*;
 pub use sketches::*;

@@ -10,8 +10,8 @@
 
 use std::marker::PhantomData;
 
-use crate::common::structure_utils::AdmittedRows;
 use crate::asapv1::admission_rate::admit_all;
+use crate::common::structure_utils::AdmittedRows;
 use crate::octo_delta::{
     CountMinSketchCellDelta, KeyedCountMinSketchCellDelta, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
     OCTO_MAX_PROMOTION_THRESHOLD,
@@ -39,8 +39,6 @@ pub struct CountMinSketch<
     H: SketchHasher = DefaultXxHasher,
 > {
     counts: S,
-    rows: usize,
-    cols: usize,
     _mode: PhantomData<Mode>,
     _hasher: PhantomData<H>,
     admission_rate: f64,
@@ -194,8 +192,6 @@ where
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
         CountMinSketch {
             counts: Vector2D::filled(rows, cols, T::default()),
-            rows,
-            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),
@@ -207,12 +203,8 @@ where
 impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H> {
     /// Creates a sketch from an existing matrix storage instance.
     pub fn from_storage(counts: S) -> Self {
-        let rows = counts.rows();
-        let cols = counts.cols();
         Self {
             counts,
-            rows,
-            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),

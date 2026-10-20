@@ -29,12 +29,12 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::common::structures::Vector1D;
 use crate::asapv1::admission_rate;
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
 use crate::asapv1::kind::DDSKETCH;
 use crate::asapv1::wire_key::exact;
+use crate::common::structures::Vector1D;
 
 use super::{Buckets, DdSketch, DdSketchState};
 
@@ -696,7 +696,9 @@ mod tests {
             0,
             (2181071000.0, 0.453125, 0.5078125),
         );
-        let golden = hex(include_str!("../../../asapv1_golden/ddsketch_positive_a001.hex"));
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/ddsketch_positive_a001.hex"
+        ));
         assert_eq!(positive.to_asapv1().unwrap(), golden);
 
         let signed = state(
@@ -705,7 +707,9 @@ mod tests {
             7,
             (2523.90625, -0.016, 515.0),
         );
-        let golden = hex(include_str!("../../../asapv1_golden/ddsketch_signed_a001.hex"));
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/ddsketch_signed_a001.hex"
+        ));
         assert_eq!(signed.to_asapv1().unwrap(), golden);
     }
 }

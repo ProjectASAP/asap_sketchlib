@@ -75,6 +75,7 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
     }
 
     /// Wraps `data` that already satisfies the heap invariant for `order`.
+    #[cfg(feature = "experimental")]
     pub(crate) fn from_heap_vec(data: Vec<T>, capacity: usize, order: O) -> Self {
         Self {
             data,

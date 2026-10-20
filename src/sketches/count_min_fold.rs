@@ -15,7 +15,6 @@
 //! additional approximation error — the accuracy is identical to a full-width
 //! CMS with W columns.
 
-
 use crate::{DataInput, DefaultXxHasher, SketchHasher, TopKHeap};
 use std::marker::PhantomData;
 

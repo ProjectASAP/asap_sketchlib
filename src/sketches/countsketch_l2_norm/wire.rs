@@ -31,10 +31,10 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use crate::common::hash::check_matrix_rows;
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
 use crate::asapv1::kind::COUNT_SKETCH_WITH_L2_NORM;
+use crate::common::hash::check_matrix_rows;
 use crate::{HashProfile, SketchHasher, Vector1D, Vector2D};
 
 use super::CountSketchWithL2Norm;
@@ -709,7 +709,8 @@ mod tests {
         use crate::asapv1::envelope::hex;
         use std::marker::PhantomData;
 
-        const COUNTS: [[i64; 4]; 2] = [[127, 128, 65535, -32768], [-32, -33, -2147483648, i64::MIN]];
+        const COUNTS: [[i64; 4]; 2] =
+            [[127, 128, 65535, -32768], [-32, -33, -2147483648, i64::MIN]];
         let sketch: CountSketchWithL2Norm = CountSketchWithL2Norm {
             counts: Vector2D::from_fn(2, 4, |r, c| COUNTS[r][c]),
             row_l2_squared: Vector1D::from_vec(vec![65536, i64::MAX]),
@@ -718,7 +719,9 @@ mod tests {
             seed_index: 7,
             _hasher: PhantomData,
         };
-        let golden = hex(include_str!("../../../asapv1_golden/count_l2hh_2x4_seed7.hex"));
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/count_l2hh_2x4_seed7.hex"
+        ));
         assert_eq!(sketch.to_asapv1().unwrap(), golden);
     }
 }

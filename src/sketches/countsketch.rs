@@ -7,8 +7,8 @@
 //! - Charikar, Chen & Farach-Colton, "Finding Frequent Items in Data Streams,"
 //!   ICALP 2002. <https://www.cs.rutgers.edu/~farach/pubs/FrequentStream.pdf>
 
-use crate::common::structure_utils::AdmittedRows;
 use crate::asapv1::admission_rate::admit_all;
+use crate::common::structure_utils::AdmittedRows;
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
@@ -33,8 +33,6 @@ pub struct CountSketch<
     H: SketchHasher = DefaultXxHasher,
 > {
     counts: S,
-    rows: usize,
-    cols: usize,
     _mode: PhantomData<Mode>,
     _hasher: PhantomData<H>,
     admission_rate: f64,
@@ -209,8 +207,6 @@ where
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
         CountSketch {
             counts: Vector2D::filled(rows, cols, T::from(0)),
-            rows,
-            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),
@@ -226,12 +222,8 @@ where
 {
     /// Wraps an existing matrix storage as a Count Sketch.
     pub fn from_storage(counts: S) -> Self {
-        let rows = counts.rows();
-        let cols = counts.cols();
         Self {
             counts,
-            rows,
-            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),

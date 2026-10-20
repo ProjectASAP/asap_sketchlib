@@ -36,11 +36,11 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use crate::common::hash::check_matrix_rows;
 use crate::asapv1::admission_rate;
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
 use crate::asapv1::kind::ELASTIC;
+use crate::common::hash::check_matrix_rows;
 use crate::{CountMinSketch, HashProfile, SketchHasher, Vector2D};
 
 use super::{ElasticSketch, HeavyBucket};

@@ -2,9 +2,7 @@
 //!
 //! Charikar, Chen, Farach-Colton, ICALP '02.
 
-use crate::support::{
-    PROBE_KEYS, edge_dimension, edge_rows, grid, keys,
-};
+use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, grid, keys};
 use asap_sketchlib::{CountSketch, DataInput, RegularPath, Vector2D};
 use proptest::prelude::*;
 

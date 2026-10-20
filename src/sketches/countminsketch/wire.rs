@@ -20,13 +20,13 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::common::hash::check_matrix_rows;
 use crate::asapv1::admission_rate;
 use crate::asapv1::delta::DeltaCounter;
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
 use crate::asapv1::kind::COUNT_MIN;
 use crate::asapv1::wire_key::exact_vec;
+use crate::common::hash::check_matrix_rows;
 use crate::{FastPath, HashProfile, RegularPath, SketchHasher, Vector2D};
 
 use super::CountMinSketch;

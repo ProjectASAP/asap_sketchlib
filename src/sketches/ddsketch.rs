@@ -16,10 +16,10 @@
 //!   <https://www.vldb.org/pvldb/vol12/p2195-masson.pdf>
 
 use crate::DataInput;
+use crate::asapv1::admission_rate::{self, admit_all};
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
-use crate::asapv1::admission_rate::{self, admit_all};
 use crate::octo_delta::{DdSign, DdSketchBucketDelta};
 
 /// The ASAPv1 DDSketch delta (kind_id `0x05 0x80`).
@@ -789,5 +789,4 @@ mod tests {
         d.add(&(max_indexable / 2.0));
         assert_eq!(d.get_count(), count_before + 2);
     }
-
 }
