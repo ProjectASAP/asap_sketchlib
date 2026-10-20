@@ -1024,16 +1024,16 @@ fn univmonq_frequency_and_f2_satisfy_the_count_sketch_bounds() {
     let context = format!(
         "UnivMonQConfig {{ levels: {}, width: {}, depth: {}, hash_seed: {} }}, \
          40 separated heavy keys + uniform background (stream seed 3008)",
-        config.levels, config.width, config.depth, config.seed_index
+        config.layers, config.top_layer_cols, config.rows, config.seed_index
     );
-    CountSketchSpec::new(config.depth, config.width).assert_contract(
+    CountSketchSpec::new(config.rows, config.top_layer_cols).assert_contract(
         "UnivMonQ::estimate_frequency (bottom layer Count Sketch)",
         &truth,
         |k| q.estimate_frequency(k as f64) as f64,
         &context,
     );
 
-    let f2_spec = SecondMomentSpec::new(config.depth, config.width);
+    let f2_spec = SecondMomentSpec::new(config.rows, config.top_layer_cols);
     if let Err(detail) = f2_spec.check(q.estimate_f2(), truth.f2()) {
         panic!("UnivMonQ::estimate_f2: {detail}\n  context: {context}");
     }
@@ -1120,7 +1120,7 @@ fn univmonq_ordered_queries_satisfy_the_documented_cdf_and_rank_bounds() {
             let n = q.count() as f64;
             let view = q.prepare_queries();
             let diag = view.ordered_query_diagnostics();
-            let estimated: Vec<(f64, f64)> = view.cdf().iter().map(|p| (p.value, p.rank)).collect();
+            let estimated: Vec<(f64, f64)> = view.cdf().iter().map(|p| (p.value, p.normalized_rank)).collect();
 
             let gate = view.estimate_f2() / (n * n);
             let threshold = 1.0 / config.ordered_samples as f64;

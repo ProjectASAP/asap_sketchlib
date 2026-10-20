@@ -65,7 +65,7 @@ pub struct UnivMon {
     /// Heap capacity per layer.
     pub heap_size: usize,
     /// Bucket size used for hashing decisions.
-    pub bucket_size: usize,
+    pub total_weight: usize,
     #[serde(default)]
     update_mode: UnivMonUpdateMode,
     #[serde(default)]
@@ -97,17 +97,6 @@ pub const UNIVMON_MAX_LAYERS: usize = UNIVMON_BOTTOM_LAYER_SEED_INDEX;
 
 const _: () = assert!(UNIVMON_BOTTOM_LAYER_SEED_INDEX < SEED_LIST.len() && UNIVMON_MAX_LAYERS < 64);
 
-/// Deepest pyramid layer the given key hash reaches.
-#[inline(always)]
-pub fn bottom_layer_for_hash(hash: u64, layers: usize) -> usize {
-    for l in 1..layers {
-        if ((hash >> l) & 1) == 0 {
-            return l - 1;
-        }
-    }
-    layers - 1
-}
-
 /// How much of the stream reached an aggregator being fed `UnivMonCellDelta`s.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnivMonDeltaFidelity {
@@ -120,6 +109,17 @@ pub enum UnivMonDeltaFidelity {
 }
 
 impl UnivMon {
+    /// Deepest pyramid layer the given key hash reaches.
+    #[inline(always)]
+    pub fn bottom_layer_for_hash(hash: u64, layers: usize) -> usize {
+        for l in 1..layers {
+            if ((hash >> l) & 1) == 0 {
+                return l - 1;
+            }
+        }
+        layers - 1
+    }
+
     /// Whether this state accepts standard updates and standard-state merges.
     /// Empty states have not selected an update strategy yet.
     pub fn accepts_standard_updates(&self) -> bool {
@@ -155,7 +155,7 @@ impl UnivMon {
             rows,
             cols,
             heap_size,
-            bucket_size: 0,
+            total_weight: 0,
             update_mode: UnivMonUpdateMode::Unset,
             candidate_complete: vec![true; layers],
         }
@@ -169,15 +169,15 @@ impl UnivMon {
             current if current == mode => {}
             _ => panic!("cannot mix standard and terminal-only updates in one UnivMon"),
         }
-        self.bucket_size = self
-            .bucket_size
+        self.total_weight = self
+            .total_weight
             .checked_add(value as usize)
             .expect("UnivMon total weight overflowed usize");
     }
 
     #[inline(always)]
     fn find_bottom_layer_num(&self, hash: u64, layer: usize) -> usize {
-        bottom_layer_for_hash(hash, layer)
+        UnivMon::bottom_layer_for_hash(hash, layer)
     }
 
     /// Deepest pyramid layer an insert of `key` reaches; it touches `0..=this`.
@@ -185,7 +185,7 @@ impl UnivMon {
     /// A pure function of the key's hash, so an OctoSketch worker picks exactly
     /// the same layers as a single-threaded insert would.
     pub fn bottom_layer_for(&self, key: &DataInput) -> usize {
-        bottom_layer_for_hash(
+        UnivMon::bottom_layer_for_hash(
             hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key),
             self.layers,
         )
@@ -227,7 +227,7 @@ impl UnivMon {
             UnivMonUpdateMode::Terminal,
             "a terminal-mode UnivMon cannot be fed by the delta path"
         );
-        self.bucket_size = weight;
+        self.total_weight = weight;
         if self.update_mode == UnivMonUpdateMode::Unset {
             self.update_mode = UnivMonUpdateMode::Standard;
         }
@@ -249,7 +249,7 @@ impl UnivMon {
             self.layers
         );
 
-        self.layer_sketches[layer].apply_delta(delta.delta);
+        self.layer_sketches[layer].apply_delta(delta.cell);
         let key = heap_item_to_sketch_input(&delta.key);
         let count = self.layer_sketches[layer].estimate(&key);
         let heap_kept_everything = self.layer_heaps[layer].update(&key, count as i64);
@@ -293,7 +293,7 @@ impl UnivMon {
     /// This is the Joltik update-last-layer construction. Logical sampled
     /// streams and their candidate sets are reconstructed during queries.
     /// Do not mix this method with [`Self::update`] on the same sketch.
-    pub fn fast_insert(&mut self, key: &DataInput, value: i64) {
+    pub fn update_weighted_terminal(&mut self, key: &DataInput, value: i64) {
         self.begin_update(value, UnivMonUpdateMode::Terminal);
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
         let bottom_layer_num = self.find_bottom_layer_num(h, self.layers);
@@ -317,7 +317,7 @@ impl UnivMon {
     where
         F: Fn(f64) -> f64,
     {
-        if self.bucket_size == 0 {
+        if self.total_weight == 0 {
             return 0.0;
         }
         if self.update_mode == UnivMonUpdateMode::Terminal {
@@ -464,7 +464,7 @@ impl UnivMon {
 
     /// Returns the exact L1 norm for the supported non-negative update stream.
     pub fn estimate_l1(&self) -> f64 {
-        self.bucket_size as f64
+        self.total_weight as f64
     }
 
     /// Returns the estimated L2 norm.
@@ -475,7 +475,7 @@ impl UnivMon {
 
     /// Returns the estimated entropy.
     pub fn estimate_entropy(&self) -> f64 {
-        if self.bucket_size == 0 {
+        if self.total_weight == 0 {
             return 0.0;
         }
         let tmp = self.estimate_g_sum(
@@ -484,7 +484,7 @@ impl UnivMon {
             },
             false,
         );
-        (self.bucket_size as f64).log2() - tmp / (self.bucket_size as f64)
+        (self.total_weight as f64).log2() - tmp / (self.total_weight as f64)
     }
 
     /// Returns the estimated cardinality.
@@ -494,8 +494,8 @@ impl UnivMon {
 
     /// Resets the sketch to its initial state without reallocating.
     /// Zeroes all counters and clears all heaps, matching the Go `Free()` method.
-    pub fn free(&mut self) {
-        self.bucket_size = 0;
+    pub fn clear(&mut self) {
+        self.total_weight = 0;
         self.update_mode = UnivMonUpdateMode::Unset;
         self.candidate_complete.fill(true);
         for i in 0..self.layers {
@@ -527,9 +527,9 @@ impl UnivMon {
                 "cannot merge standard and terminal-only UnivMon states"
             ),
         }
-        self.bucket_size = self
-            .bucket_size
-            .checked_add(other.bucket_size)
+        self.total_weight = self
+            .total_weight
+            .checked_add(other.total_weight)
             .expect("merged UnivMon total weight overflowed usize");
         for i in 0..self.layers {
             let sources_complete = self.candidate_complete[i] && other.candidate_complete[i];
@@ -610,11 +610,11 @@ mod tests {
         assert!(sketch.accepts_standard_updates());
         let standard = UnivMon::from_asapv1(&sketch.to_asapv1().unwrap()).unwrap();
         assert!(standard.accepts_standard_updates());
-        sketch.free();
-        sketch.fast_insert(&DataInput::U64(1), 1);
+        sketch.clear();
+        sketch.update_weighted_terminal(&DataInput::U64(1), 1);
         let mut terminal = UnivMon::from_asapv1(&sketch.to_asapv1().unwrap()).unwrap();
         assert!(!terminal.accepts_standard_updates());
-        terminal.free();
+        terminal.clear();
         assert!(terminal.accepts_standard_updates());
     }
 
@@ -633,7 +633,7 @@ mod tests {
             um.update_weighted(&DataInput::String(key.to_string()), count);
         }
 
-        let bucket_size_before = um.bucket_size;
+        let bucket_size_before = um.total_weight;
         let l1_before = um.estimate_l1();
         let l2_before = um.estimate_l2();
         let entropy_before = um.estimate_entropy();
@@ -649,7 +649,7 @@ mod tests {
         assert_eq!(um.rows, decoded.rows);
         assert_eq!(um.cols, decoded.cols);
         assert_eq!(um.heap_size, decoded.heap_size);
-        assert_eq!(bucket_size_before, decoded.bucket_size);
+        assert_eq!(bucket_size_before, decoded.total_weight);
         assert!(
             (decoded.estimate_l1() - l1_before).abs() < 1e-6,
             "L1 changed after round trip"
@@ -678,7 +678,7 @@ mod tests {
             um.update_weighted(&DataInput::Str(key), 1);
         }
 
-        assert_eq!(um.bucket_size, 40);
+        assert_eq!(um.total_weight, 40);
 
         let idx = um.layer_heaps[0]
             .find_owned(&OwnedDataInput::String(key.to_owned()))
@@ -756,7 +756,7 @@ mod tests {
 
         left.merge(&right);
 
-        assert_eq!(left.bucket_size, 115);
+        assert_eq!(left.total_weight, 115);
         let expected_l2 = (105.0_f64.powi(2) + 10.0_f64.powi(2)).sqrt();
         assert!((left.layer_sketches[0].l2() - expected_l2).abs() < 1e-9);
         let x = OwnedDataInput::String("x".to_owned());
@@ -777,11 +777,11 @@ mod tests {
             for observation in 0..2000_u64 {
                 let key = DataInput::U64(observation % 64);
                 if terminal_only {
-                    one_pass.fast_insert(&key, 1);
+                    one_pass.update_weighted_terminal(&key, 1);
                     if observation % 2 == 0 {
-                        left.fast_insert(&key, 1);
+                        left.update_weighted_terminal(&key, 1);
                     } else {
-                        right.fast_insert(&key, 1);
+                        right.update_weighted_terminal(&key, 1);
                     }
                 } else {
                     one_pass.update_weighted(&key, 1);
@@ -794,7 +794,7 @@ mod tests {
             }
 
             left.merge(&right);
-            assert_eq!(left.bucket_size, one_pass.bucket_size);
+            assert_eq!(left.total_weight, one_pass.total_weight);
             assert!((left.estimate_l1() - one_pass.estimate_l1()).abs() < 1e-9);
             assert!((left.estimate_l2() - one_pass.estimate_l2()).abs() < 1e-9);
             assert!((left.estimate_cardinality() - one_pass.estimate_cardinality()).abs() < 1e-9);
@@ -832,7 +832,7 @@ mod tests {
             .expect("find a key sampled into multiple layers");
         let hash = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &key);
         let bottom = sketch.find_bottom_layer_num(hash, sketch.layers);
-        sketch.fast_insert(&key, 3);
+        sketch.update_weighted_terminal(&key, 3);
 
         for level in 0..sketch.layers {
             let expected = if level == bottom { 3.0 } else { 0.0 };
@@ -889,7 +889,7 @@ mod tests {
 
     #[test]
     fn univmon_bucket_size_tracked_correctly() {
-        // Verify that bucket_size is correctly tracked with seed configuration
+        // Verify that total_weight is correctly tracked with seed configuration
         let mut um = UnivMon::new(20, 3, 1024, 6);
 
         let flows = [("flow_a", 100), ("flow_b", 200), ("flow_c", 150)];
@@ -900,7 +900,7 @@ mod tests {
         }
 
         assert_eq!(
-            um.bucket_size, expected_total,
+            um.total_weight, expected_total,
             "Bucket size should equal sum of all counts"
         );
     }

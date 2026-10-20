@@ -930,14 +930,14 @@ fn probe_eh_univ() {
     let mut eh = ExponentialHistogramUnivMon::with_defaults(2, window);
     // Stream updates over times 0..150; only [50,149] survive at t=149+window semantics.
     for t in 0..150u64 {
-        eh.update(t, &DataInput::U32((t % 10) as u32), (t as i64 % 3) + 1);
+        eh.update_weighted(t, &DataInput::U32((t % 10) as u32), (t as i64 % 3) + 1);
     }
     // Query recent interval fully inside surviving range.
     let res = eh.query_interval(120, 149);
     match res {
         Some(asap_sketchlib::EhUnivMonQueryResult::Exact {
             counts,
-            total_count,
+            total_weight: total_count,
         }) => {
             let expect_total: usize = (120..=149u64).map(|t| (t as i64 % 3 + 1) as usize).sum();
             p.check(

@@ -29,7 +29,7 @@ fn exact_l2_squared(counts: &HashMap<OwnedDataInput, i64>) -> f64 {
 pub struct EhUnivMonExactBucket {
     pub counts: HashMap<OwnedDataInput, i64>,
     pub l2_squared: f64,
-    pub bucket_size: usize,
+    pub total_weight: usize,
     pub min_time: u64,
     pub max_time: u64,
 }
@@ -39,7 +39,7 @@ pub struct EhUnivMonExactBucket {
 pub struct EhUnivMonSketchBucket {
     pub sketch: UnivMon,
     pub l2_squared: f64,
-    pub bucket_size: usize,
+    pub total_weight: usize,
     pub min_time: u64,
     pub max_time: u64,
 }
@@ -63,7 +63,7 @@ pub enum EhUnivMonQueryResult {
     Sketch(UnivMon),
     Exact {
         counts: HashMap<OwnedDataInput, i64>,
-        total_count: usize,
+        total_weight: usize,
     },
 }
 
@@ -94,9 +94,9 @@ impl EhUnivMonQueryResult {
             Self::Sketch(um) => um.estimate_entropy(),
             Self::Exact {
                 counts,
-                total_count,
+                total_weight,
             } => {
-                let n = *total_count as f64;
+                let n = *total_weight as f64;
                 if n <= 0.0 {
                     return 0.0;
                 }
@@ -175,7 +175,7 @@ impl ExponentialHistogramUnivMon {
         )
     }
 
-    pub fn update(&mut self, time: u64, key: &DataInput, value: i64) {
+    pub fn update_weighted(&mut self, time: u64, key: &DataInput, weight: i64) {
         // 1. Expire old sketch buckets, recycling sketches to pool
         let cutoff = time.saturating_sub(self.window);
         let expired_count = self
@@ -204,11 +204,11 @@ impl ExponentialHistogramUnivMon {
         // 3. Create new map bucket
         let owned_key = input_to_owned(key);
         let mut counts = HashMap::new();
-        counts.insert(owned_key, value);
+        counts.insert(owned_key, weight);
         self.exact_buckets.push(EhUnivMonExactBucket {
             counts,
-            l2_squared: (value as f64) * (value as f64),
-            bucket_size: value as usize,
+            l2_squared: (weight as f64) * (weight as f64),
+            total_weight: weight as usize,
             min_time: time,
             max_time: time,
         });
@@ -225,7 +225,7 @@ impl ExponentialHistogramUnivMon {
                     // Merge i+1 into i
                     let other = self.exact_buckets.remove(i + 1);
                     let bucket = &mut self.exact_buckets[i];
-                    bucket.bucket_size += other.bucket_size;
+                    bucket.total_weight += other.total_weight;
                     bucket.max_time = bucket.max_time.max(other.max_time);
                     bucket.min_time = bucket.min_time.min(other.min_time);
                     for (k, v) in other.counts {
@@ -266,7 +266,7 @@ impl ExponentialHistogramUnivMon {
         self.sketch_buckets.push(EhUnivMonSketchBucket {
             sketch,
             l2_squared,
-            bucket_size: oldest.bucket_size,
+            total_weight: oldest.total_weight,
             min_time: oldest.min_time,
             max_time: oldest.max_time,
         });
@@ -290,7 +290,7 @@ impl ExponentialHistogramUnivMon {
                 let other = self.sketch_buckets.remove(i + 1);
                 let bucket = &mut self.sketch_buckets[i];
                 bucket.sketch.merge(&other.sketch);
-                bucket.bucket_size += other.bucket_size;
+                bucket.total_weight += other.total_weight;
                 bucket.max_time = bucket.max_time.max(other.max_time);
                 bucket.min_time = bucket.min_time.min(other.min_time);
                 bucket.l2_squared = bucket.sketch.layer_sketches[0].l2().powi(2);
@@ -398,10 +398,10 @@ impl ExponentialHistogramUnivMon {
                     *merged_map.entry(k.clone()).or_insert(0) += v;
                 }
             }
-            let total_count = merged_map.values().sum::<i64>() as usize;
+            let total_weight = merged_map.values().sum::<i64>() as usize;
             Some(EhUnivMonQueryResult::Exact {
                 counts: merged_map,
-                total_count,
+                total_weight,
             })
         } else {
             // Case 3: Hybrid — from in sketch, to in map
@@ -486,7 +486,7 @@ impl ExponentialHistogramUnivMon {
         for (i, b) in self.sketch_buckets.iter().enumerate() {
             println!(
                 "  [S{}] min_time={}, max_time={}, bucket_size={}, l22={:.2}",
-                i, b.min_time, b.max_time, b.bucket_size, b.l2_squared
+                i, b.min_time, b.max_time, b.total_weight, b.l2_squared
             );
         }
         println!("Map buckets ({}):", self.exact_buckets.len());
@@ -496,7 +496,7 @@ impl ExponentialHistogramUnivMon {
                 i,
                 b.min_time,
                 b.max_time,
-                b.bucket_size,
+                b.total_weight,
                 b.l2_squared,
                 b.counts.len()
             );
@@ -504,8 +504,8 @@ impl ExponentialHistogramUnivMon {
     }
 
     pub fn memory_info(&self) -> (usize, usize, Vec<usize>, Vec<usize>) {
-        let sketch_sizes: Vec<usize> = self.sketch_buckets.iter().map(|b| b.bucket_size).collect();
-        let map_sizes: Vec<usize> = self.exact_buckets.iter().map(|b| b.bucket_size).collect();
+        let sketch_sizes: Vec<usize> = self.sketch_buckets.iter().map(|b| b.total_weight).collect();
+        let map_sizes: Vec<usize> = self.exact_buckets.iter().map(|b| b.total_weight).collect();
         (
             self.sketch_buckets.len(),
             self.exact_buckets.len(),
@@ -523,9 +523,9 @@ mod tests {
     fn basic_insertion_and_query() {
         let mut eh = ExponentialHistogramUnivMon::with_defaults(4, 1000);
 
-        eh.update(100, &DataInput::I64(1), 5);
-        eh.update(101, &DataInput::I64(2), 3);
-        eh.update(102, &DataInput::I64(1), 2);
+        eh.update_weighted(100, &DataInput::I64(1), 5);
+        eh.update_weighted(101, &DataInput::I64(2), 3);
+        eh.update_weighted(102, &DataInput::I64(1), 2);
 
         assert!(eh.sketch_buckets.is_empty());
         assert!(!eh.exact_buckets.is_empty());
@@ -534,14 +534,14 @@ mod tests {
         match &result {
             EhUnivMonQueryResult::Exact {
                 counts,
-                total_count,
+                total_weight,
             } => {
                 // key=1 has total count 5+2=7, key=2 has 3
                 let k1 = counts.get(&OwnedDataInput::I64(1)).copied().unwrap_or(0);
                 let k2 = counts.get(&OwnedDataInput::I64(2)).copied().unwrap_or(0);
                 assert_eq!(k1, 7);
                 assert_eq!(k2, 3);
-                assert_eq!(*total_count, 10);
+                assert_eq!(*total_weight, 10);
             }
             EhUnivMonQueryResult::Sketch(_) => panic!("Expected Map result"),
         }
@@ -555,7 +555,7 @@ mod tests {
         let mut eh = ExponentialHistogramUnivMon::with_defaults(1, 10000);
 
         for i in 0..50u64 {
-            eh.update(i, &DataInput::I64(i as i64), 1);
+            eh.update_weighted(i, &DataInput::I64(i as i64), 1);
         }
 
         // With k=1 and L2 merging, bucket count should stay bounded
@@ -577,7 +577,7 @@ mod tests {
 
         // Insert many distinct keys to grow the oldest map bucket
         for i in 0..200u64 {
-            eh.update(i, &DataInput::I64(i as i64), 1);
+            eh.update_weighted(i, &DataInput::I64(i as i64), 1);
         }
 
         assert!(
@@ -590,14 +590,14 @@ mod tests {
     fn window_expiration() {
         let mut eh = ExponentialHistogramUnivMon::with_defaults(4, 100);
 
-        eh.update(10, &DataInput::I64(1), 1);
-        eh.update(20, &DataInput::I64(2), 1);
-        eh.update(30, &DataInput::I64(3), 1);
+        eh.update_weighted(10, &DataInput::I64(1), 1);
+        eh.update_weighted(20, &DataInput::I64(2), 1);
+        eh.update_weighted(30, &DataInput::I64(3), 1);
 
         assert_eq!(eh.min_time(), Some(10));
 
         // This update at time=200 should expire buckets with max_time < 200-100=100
-        eh.update(200, &DataInput::I64(4), 1);
+        eh.update_weighted(200, &DataInput::I64(4), 1);
 
         // All buckets with max_time < 100 should be gone
         assert!(
@@ -615,7 +615,7 @@ mod tests {
 
         // Insert enough distinct keys to force promotion
         for i in 0..200u64 {
-            eh.update(i, &DataInput::I64(i as i64), 1);
+            eh.update_weighted(i, &DataInput::I64(i as i64), 1);
         }
 
         assert!(!eh.sketch_buckets.is_empty(), "Need sketch buckets");
@@ -635,8 +635,8 @@ mod tests {
 
         assert!(!eh.cover(0, 100));
 
-        eh.update(50, &DataInput::I64(1), 1);
-        eh.update(100, &DataInput::I64(2), 1);
+        eh.update_weighted(50, &DataInput::I64(1), 1);
+        eh.update_weighted(100, &DataInput::I64(2), 1);
 
         assert!(eh.cover(50, 100));
         assert!(eh.cover(60, 90));
@@ -654,7 +654,7 @@ mod tests {
         let mut time = 0u64;
         for &(key, count) in &data {
             for _ in 0..count {
-                eh.update(time, &DataInput::I64(key), 1);
+                eh.update_weighted(time, &DataInput::I64(key), 1);
                 time += 1;
             }
         }
@@ -728,7 +728,7 @@ mod tests {
 
         // Insert enough to trigger promotions
         for i in 0..200u64 {
-            eh.update(i, &DataInput::I64(i as i64), 1);
+            eh.update_weighted(i, &DataInput::I64(i as i64), 1);
         }
 
         assert!(!eh.sketch_buckets.is_empty());
@@ -800,7 +800,7 @@ mod tests {
         let mut time = 0u64;
         for &(key, count) in &data {
             for _ in 0..count {
-                eh.update(time, &DataInput::I64(key), 1);
+                eh.update_weighted(time, &DataInput::I64(key), 1);
                 time += 1;
             }
         }
@@ -830,11 +830,11 @@ mod tests {
 
         // Phase 1: t=0..99, key=1
         for t in 0..100u64 {
-            eh.update(t, &DataInput::I64(1), 1);
+            eh.update_weighted(t, &DataInput::I64(1), 1);
         }
         // Phase 2: t=100..199, key=2
         for t in 100..200u64 {
-            eh.update(t, &DataInput::I64(2), 1);
+            eh.update_weighted(t, &DataInput::I64(2), 1);
         }
 
         // Full interval
@@ -852,11 +852,11 @@ mod tests {
 
         // Insert key=1 at times 0..49
         for t in 0..50u64 {
-            eh.update(t, &DataInput::I64(1), 1);
+            eh.update_weighted(t, &DataInput::I64(1), 1);
         }
         // Insert key=2 at times 50..249 (push well past the window)
         for t in 50..250u64 {
-            eh.update(t, &DataInput::I64(2), 1);
+            eh.update_weighted(t, &DataInput::I64(2), 1);
         }
 
         // At time 249, cutoff = 249 - 100 = 149. Buckets with max_time < 149 are expired.
@@ -878,7 +878,7 @@ mod tests {
 
         let mut max_bucket = 0;
         for t in 0..20000u64 {
-            eh.update(t, &DataInput::I64((t % 100) as i64), 1);
+            eh.update_weighted(t, &DataInput::I64((t % 100) as i64), 1);
             max_bucket = max_bucket.max(eh.bucket_count());
         }
 
@@ -900,7 +900,7 @@ mod tests {
 
         // Run a long stream with sliding window to exercise expiration and reuse
         for t in 0..2000u64 {
-            eh.update(t, &DataInput::I64((t % 50) as i64), 1);
+            eh.update_weighted(t, &DataInput::I64((t % 50) as i64), 1);
         }
 
         // The system should still be functional and pool should not have grown unboundedly
@@ -927,7 +927,7 @@ mod tests {
 
         // Insert enough distinct keys to trigger multiple promotions and merges
         for t in 0..1000u64 {
-            eh.update(t, &DataInput::I64((t % 200) as i64), 1);
+            eh.update_weighted(t, &DataInput::I64((t % 200) as i64), 1);
         }
 
         // After merging, each sketch bucket should have a valid L2 mass
@@ -965,21 +965,21 @@ mod tests {
 
         // Heavy hitter: key=0, count=5000
         for _ in 0..5000 {
-            eh.update(time, &DataInput::I64(0), 1);
+            eh.update_weighted(time, &DataInput::I64(0), 1);
             samples.push((time, 0));
             time += 1;
         }
         // Medium flows: keys 1..=20, count=200 each
         for key in 1..=20i64 {
             for _ in 0..200 {
-                eh.update(time, &DataInput::I64(key), 1);
+                eh.update_weighted(time, &DataInput::I64(key), 1);
                 samples.push((time, key));
                 time += 1;
             }
         }
         // Light flows: keys 21..=1020, count=1 each
         for key in 21..=1020i64 {
-            eh.update(time, &DataInput::I64(key), 1);
+            eh.update_weighted(time, &DataInput::I64(key), 1);
             samples.push((time, key));
             time += 1;
         }
@@ -1013,7 +1013,7 @@ mod tests {
 
         for _ in 0..count_per_key {
             for key in 0..num_keys {
-                eh.update(time, &DataInput::I64(key), 1);
+                eh.update_weighted(time, &DataInput::I64(key), 1);
                 samples.push((time, key));
                 time += 1;
             }
@@ -1058,7 +1058,7 @@ mod tests {
         let mut all_samples: Vec<(u64, i64)> = Vec::new();
         for t in 0..total_length {
             let key = (rng.random::<u32>() % 500) as i64;
-            eh.update(t, &DataInput::I64(key), 1);
+            eh.update_weighted(t, &DataInput::I64(key), 1);
             all_samples.push((t, key));
         }
 
@@ -1103,7 +1103,7 @@ mod tests {
         for query_t in (window..total_length).step_by(query_interval as usize) {
             let mut eh2 = ExponentialHistogramUnivMon::with_defaults(8, window);
             for t in 0..=query_t {
-                eh2.update(t, &DataInput::I64(all_samples[t as usize].1), 1);
+                eh2.update_weighted(t, &DataInput::I64(all_samples[t as usize].1), 1);
             }
 
             let t1 = query_t.saturating_sub(window - 1);
@@ -1185,7 +1185,7 @@ mod tests {
         for &k in &[2, 8, 32] {
             let mut eh = ExponentialHistogramUnivMon::with_defaults(k, window);
             for (t, &key) in stream.iter().enumerate() {
-                eh.update(t as u64, &DataInput::I64(key), 1);
+                eh.update_weighted(t as u64, &DataInput::I64(key), 1);
             }
 
             let t1 = stream_len - window;
@@ -1231,7 +1231,7 @@ mod tests {
 
         for t in 0..total_length {
             let key = (rng.random::<u32>() % 300) as i64;
-            eh.update(t, &DataInput::I64(key), 1);
+            eh.update_weighted(t, &DataInput::I64(key), 1);
             all_samples.push((t, key));
         }
 
@@ -1274,14 +1274,14 @@ mod tests {
         // Phase 1 (t=0..1999): highly skewed, key=0 is heavy
         for t in 0..2000u64 {
             let key = if t % 5 == 0 { 0 } else { (t % 10 + 1) as i64 };
-            eh.update(t, &DataInput::I64(key), 1);
+            eh.update_weighted(t, &DataInput::I64(key), 1);
             all_samples.push((t, key));
         }
 
         // Phase 2 (t=2000..3999): uniform-ish, 50 distinct keys
         for t in 2000..4000u64 {
             let key = (t % 50) as i64;
-            eh.update(t, &DataInput::I64(key), 1);
+            eh.update_weighted(t, &DataInput::I64(key), 1);
             all_samples.push((t, key));
         }
 

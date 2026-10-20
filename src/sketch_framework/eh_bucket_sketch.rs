@@ -311,7 +311,7 @@ mod tests {
             um.update(&key);
         }
         match um {
-            EhBucketSketch::UnivMon(ref u) => assert_eq!(u.bucket_size, 6),
+            EhBucketSketch::UnivMon(ref u) => assert_eq!(u.total_weight, 6),
             _ => panic!("expected UnivMon chapter variant"),
         }
     }

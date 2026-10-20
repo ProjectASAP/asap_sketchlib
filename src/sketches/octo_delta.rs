@@ -200,7 +200,7 @@ pub struct UnivMonCellDelta {
     /// Flow key whose insertion triggered the promotion.
     pub key: OwnedDataInput,
     /// The promoted cell update.
-    pub delta: CountSketchCellDelta,
+    pub cell: CountSketchCellDelta,
     /// Which worker emitted this, so an aggregator can keep per-worker totals.
     pub worker_id: u32,
     /// Total weight the emitting worker has seen so far.

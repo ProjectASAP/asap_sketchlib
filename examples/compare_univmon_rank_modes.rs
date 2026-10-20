@@ -331,12 +331,12 @@ fn print_row(
 
 fn config(trial: usize) -> UnivMonQConfig {
     UnivMonQConfig {
-        levels: 12,
-        width: 1_024,
+        layers: 12,
+        top_layer_cols: 1_024,
         cols_halving_period: 3,
-        depth: 5,
+        rows: 5,
         counter_bits: 32,
-        candidates: 256,
+        heap_size: 256,
         ordered_samples: 0,
         seed_index: 5 + trial,
     }
@@ -558,7 +558,7 @@ impl AssistedOccurrenceQuery {
         f2: f64,
         count: f64,
     ) -> Self {
-        let frequency_error_scale = (f2 / core.config().width as f64).sqrt();
+        let frequency_error_scale = (f2 / core.config().top_layer_cols as f64).sqrt();
         let threshold = sigma * frequency_error_scale;
         let mut heavy: BTreeMap<i64, f64> = core_query
             .heavy_hitters(64)

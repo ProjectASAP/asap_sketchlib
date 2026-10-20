@@ -162,12 +162,12 @@ fn main() {
     exact_top.truncate(TOP_K);
 
     let q_base = UnivMonQConfig {
-        levels: LEVELS,
-        width: WIDTH,
+        layers: LEVELS,
+        top_layer_cols: WIDTH,
         cols_halving_period: 0,
-        depth: DEPTH,
+        rows: DEPTH,
         counter_bits: 32,
-        candidates: CANDIDATES,
+        heap_size: CANDIDATES,
         ordered_samples: 0,
         seed_index: 5,
     };
@@ -176,7 +176,7 @@ fn main() {
         ..q_base
     };
     let q_memory_matched = UnivMonQConfig {
-        candidates: MEMORY_MATCHED_CANDIDATES,
+        heap_size: MEMORY_MATCHED_CANDIDATES,
         ordered_samples: ORDERED_SAMPLES,
         ..q_base
     };
@@ -194,15 +194,15 @@ fn main() {
             sketch.update_weighted(&DataInput::U64(black_box(value)), 1);
         }
         regular_times.push(start.elapsed());
-        black_box(sketch.bucket_size);
+        black_box(sketch.total_weight);
 
         let mut sketch = UnivMon::new(CANDIDATES, DEPTH, WIDTH, LEVELS);
         let start = Instant::now();
         for &value in &values {
-            sketch.fast_insert(&DataInput::U64(black_box(value)), 1);
+            sketch.update_weighted_terminal(&DataInput::U64(black_box(value)), 1);
         }
         fast_times.push(start.elapsed());
-        black_box(sketch.bucket_size);
+        black_box(sketch.total_weight);
 
         let mut sketch = UnivMonQ::new(q_base).unwrap();
         let start = Instant::now();
@@ -244,7 +244,7 @@ fn main() {
     for &value in &values {
         let input = DataInput::U64(value);
         regular.update_weighted(&input, 1);
-        fast.fast_insert(&input, 1);
+        fast.update_weighted_terminal(&input, 1);
         q_base_sketch.add(&value);
         q_ordered_sketch.add(&value);
         q_memory_matched_sketch.add(&value);
@@ -650,10 +650,10 @@ fn main() {
     let mut left = UnivMon::new(CANDIDATES, DEPTH, WIDTH, LEVELS);
     let mut right = UnivMon::new(CANDIDATES, DEPTH, WIDTH, LEVELS);
     for &value in &values[..midpoint] {
-        left.fast_insert(&DataInput::U64(value), 1);
+        left.update_weighted_terminal(&DataInput::U64(value), 1);
     }
     for &value in &values[midpoint..] {
-        right.fast_insert(&DataInput::U64(value), 1);
+        right.update_weighted_terminal(&DataInput::U64(value), 1);
     }
     let mut univmon_merge_times = Vec::with_capacity(MERGE_REPEATS);
     for _ in 0..MERGE_REPEATS {
@@ -661,7 +661,7 @@ fn main() {
         let start = Instant::now();
         merged.merge(&right);
         univmon_merge_times.push(start.elapsed());
-        black_box(merged.bucket_size);
+        black_box(merged.total_weight);
     }
     let univmon_merge = median_duration(univmon_merge_times);
 

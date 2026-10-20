@@ -540,14 +540,14 @@ fn eh_univ_optimized_map_tier_exact_windows() {
     let mut eh = ExponentialHistogramUnivMon::with_defaults(2, window);
 
     for t in 0..150u64 {
-        eh.update(t, &DataInput::U32((t % 10) as u32), (t as i64 % 3) + 1);
+        eh.update_weighted(t, &DataInput::U32((t % 10) as u32), (t as i64 % 3) + 1);
     }
 
     // Interval fully inside the retained range: map tier answers EXACTLY.
     match eh.query_interval(120, 149) {
         Some(EhUnivMonQueryResult::Exact {
             counts,
-            total_count,
+            total_weight: total_count,
         }) => {
             let expect_total: usize = (120..=149u64).map(|t| (t as i64 % 3 + 1) as usize).sum();
             assert_eq!(total_count, expect_total, "interval total");
@@ -572,7 +572,7 @@ fn eh_univ_optimized_map_tier_exact_windows() {
 /// answers interval queries — with the error model of a UnivMon sketch, not
 /// the map tier's exactness.
 ///
-/// `UnivMon::estimate_l1` returns the maintained `bucket_size`, an exactly
+/// `UnivMon::estimate_l1` returns the maintained `total_weight`, an exactly
 /// accumulated weight, so L1 is asserted by equality on both tiers. L2 comes
 /// out of UnivMon's recursive g-sum recurrence across `layers` sampled
 /// substreams, for which the crate publishes no closed-form constant, so it is
@@ -599,7 +599,7 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
     let keys = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
     let mut eh = promoting_eh(EH_K, 100_000_000);
     for (t, k) in keys.iter().enumerate() {
-        eh.update(t as u64, &DataInput::U64(*k), 1);
+        eh.update_weighted(t as u64, &DataInput::U64(*k), 1);
     }
 
     assert!(
@@ -690,7 +690,7 @@ fn eh_univ_optimized_sketch_tier_cardinality_is_documented_as_unrecoverable() {
     let keys = zipf_u64(N, DOMAIN, 1.1, 4242);
     let mut eh = promoting_eh(EH_K, 100_000_000);
     for (t, k) in keys.iter().enumerate() {
-        eh.update(t as u64, &DataInput::U64(*k), 1);
+        eh.update_weighted(t as u64, &DataInput::U64(*k), 1);
     }
     let lo = eh.sketch_buckets[0].min_time;
     let hi = eh.sketch_buckets[eh.sketch_buckets.len() - 1].max_time;
@@ -729,7 +729,7 @@ fn eh_univ_optimized_answers_a_mixed_map_and_sketch_interval() {
 
     let mut eh = promoting_eh(EH_K, 1_000_000);
     for t in 0..N {
-        eh.update(t, &DataInput::U64(t % DOMAIN), 1);
+        eh.update_weighted(t, &DataInput::U64(t % DOMAIN), 1);
     }
     assert!(!eh.sketch_buckets.is_empty() && !eh.exact_buckets.is_empty());
 
@@ -763,7 +763,7 @@ fn eh_univ_optimized_expires_buckets_past_the_window() {
     const WINDOW: u64 = 5_000;
     let mut eh = promoting_eh(8, WINDOW);
     for t in 0..40_000u64 {
-        eh.update(t, &DataInput::U64(t % 8_000), 1);
+        eh.update_weighted(t, &DataInput::U64(t % 8_000), 1);
     }
 
     let min_time = eh.min_time().expect("buckets present");
@@ -807,7 +807,7 @@ fn eh_univ_optimized_expires_buckets_past_the_window() {
     // Continuing past the window must not grow the structure without bound.
     let buckets_before = eh.bucket_count();
     for t in 40_000..70_000u64 {
-        eh.update(t, &DataInput::U64(t % 8_000), 1);
+        eh.update_weighted(t, &DataInput::U64(t % 8_000), 1);
     }
     assert!(
         eh.bucket_count() <= buckets_before * 2,
@@ -825,7 +825,7 @@ fn eh_univ_optimized_reuses_pooled_sketches_without_leaking_state() {
     // and expired repeatedly and the pool is exercised.
     let mut eh = promoting_eh(8, 20_000);
     for t in 0..80_000u64 {
-        eh.update(t, &DataInput::U64(t % DOMAIN), 1);
+        eh.update_weighted(t, &DataInput::U64(t % DOMAIN), 1);
     }
 
     let lo = eh.min_time().expect("buckets");
@@ -857,14 +857,14 @@ fn eh_univ_optimized_map_tier_matches_exact_per_key_counts_on_a_skewed_stream() 
     let mut truth = FreqTruth::default();
     for (t, k) in keys.iter().enumerate() {
         let w = 1 + (t % 3) as i64;
-        eh.update(t as u64, &DataInput::U64(*k), w);
+        eh.update_weighted(t as u64, &DataInput::U64(*k), w);
         truth.observe_weighted(*k as i64, w);
     }
 
     match eh.query_interval(0, N - 1) {
         Some(EhUnivMonQueryResult::Exact {
             counts,
-            total_count,
+            total_weight: total_count,
         }) => {
             assert_eq!(total_count as i64, truth.total(), "map-tier total weight");
             for (k, c) in truth.pairs() {

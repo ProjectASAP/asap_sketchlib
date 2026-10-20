@@ -40,7 +40,7 @@ use asap_sketchlib::{
     OCTO_COUNT_MIN_DEFAULT_THRESHOLD, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
     OCTO_HLL_DEFAULT_THRESHOLD, OctoAggregator, OctoPlan, OctoThreshold, OctoWorker, RegularPath,
     UnivMon, UnivMonCellDelta, UnivMonDeltaFidelity, UnivMonOctoAggregator, UnivMonOctoPlan,
-    UnivMonOctoWorker, Vector2D, bottom_layer_for_hash, hash64_seeded, hash128_seeded,
+    UnivMonOctoWorker, Vector2D, hash64_seeded, hash128_seeded,
     input_to_owned, univmon_layer_threshold,
 };
 use common::{FreqTruth, zipf_u64};
@@ -2761,7 +2761,7 @@ fn univmon_through_deltas(
     for key in stream {
         let input = DataInput::U64(*key);
         weight += 1;
-        let bottom = bottom_layer_for_hash(
+        let bottom = UnivMon::bottom_layer_for_hash(
             hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &input),
             layers,
         );
@@ -2777,7 +2777,7 @@ fn univmon_through_deltas(
                     &UnivMonCellDelta {
                         layer: layer as u32,
                         key: owned.clone(),
-                        delta,
+                        cell: delta,
                         worker_id: 0,
                         total_weight: weight,
                     },
@@ -4978,7 +4978,7 @@ mod partition_accuracy {
     ///
     /// # What `estimate_l1` means for the Octo plan, and why it is not `N`
     ///
-    /// `UnivMon::estimate_l1` returns the sketch's `bucket_size`, which for an Octo
+    /// `UnivMon::estimate_l1` returns the sketch's `total_weight`, which for an Octo
     /// parent is restored from the `total_weight` each worker stamps on the
     /// deltas it emits. `UnivMonOctoWorker` is the one shipped worker with **no
     /// `flush`**, and it cannot have one: `UnivMonCellDelta` carries the flow

@@ -1466,7 +1466,7 @@ fn assert_univmon_golden(golden: &str, sketch: &UnivMon) {
         decoded.layers,
     );
     assert_eq!(shape, UNIVMON_SHAPE);
-    assert_eq!(decoded.bucket_size, sketch.bucket_size);
+    assert_eq!(decoded.total_weight, sketch.total_weight);
     assert_eq!(decoded.candidates_complete(), sketch.candidates_complete());
     assert_eq!(univmon_counts(&decoded), univmon_counts(sketch));
     for layer in 0..decoded.layers {
@@ -1945,7 +1945,7 @@ fn univmon_optimized_l5_e2_3x8_1x4_h6_matches_golden() {
             pyramid.layer_heaps[layer].update(&DataInput::Str(key), count);
         }
     }
-    pyramid.bucket_size = 70;
+    pyramid.total_weight = 70;
     assert_eq!(pyramid.to_asapv1().expect("serialize"), want);
 
     let decoded = UnivMonTwoTier::from_asapv1(&want).expect("decode");
@@ -1957,7 +1957,7 @@ fn univmon_optimized_l5_e2_3x8_1x4_h6_matches_golden() {
         decoded.mouse_rows,
         decoded.mouse_cols,
         decoded.heap_size,
-        decoded.bucket_size,
+        decoded.total_weight,
     );
     assert_eq!(shape, (5, 2, 3, 8, 1, 4, 6, 70));
     for (layer, rows) in pyramid_layers().iter().enumerate() {
@@ -1997,12 +1997,12 @@ fn univmon_q_i32_l3_c8_r3_matches_golden() {
     let decoded = UnivMonQ::<DefaultXxHasher>::from_asapv1(&want).expect("decode");
     let config = decoded.config();
     let expected = UnivMonQConfig {
-        levels: 3,
-        width: 8,
+        layers: 3,
+        top_layer_cols: 8,
         cols_halving_period: 1,
-        depth: 3,
+        rows: 3,
         counter_bits: 32,
-        candidates: 2,
+        heap_size: 2,
         ordered_samples: 3,
         seed_index: 5,
     };

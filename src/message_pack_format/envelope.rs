@@ -270,12 +270,12 @@ mod tests {
         let mut kll_dynamic = KllDynamic::<f64>::with_k(200);
         let mut positive = DdSketch::new(0.01);
         let config = UnivMonQConfig {
-            levels: 4,
-            width: 64,
+            layers: 4,
+            top_layer_cols: 64,
             cols_halving_period: 0,
-            depth: 3,
+            rows: 3,
             counter_bits: 64,
-            candidates: 16,
+            heap_size: 16,
             ordered_samples: 16,
             seed_index: 5,
         };

@@ -540,12 +540,12 @@ mod tests {
     #[test]
     fn univmon_q_tumbling_merges_quantiles_and_universal_metrics() {
         let config = UnivMonQConfig {
-            levels: 8,
-            width: 256,
+            layers: 8,
+            top_layer_cols: 256,
             cols_halving_period: 0,
-            depth: 5,
+            rows: 5,
             counter_bits: 64,
-            candidates: 64,
+            heap_size: 64,
             ordered_samples: 64,
             seed_index: 5,
         };

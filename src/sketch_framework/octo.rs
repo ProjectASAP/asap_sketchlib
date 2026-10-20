@@ -40,7 +40,7 @@ use crate::octo_delta::{
     OCTO_DDSKETCH_DEFAULT_THRESHOLD, OCTO_MAX_PROMOTION_THRESHOLD, OCTO_UNIVMON_DEFAULT_THRESHOLD,
     OctoThreshold,
 };
-use crate::sketch_framework::univmon::{UnivMonDeltaFidelity, bottom_layer_for_hash};
+use crate::sketch_framework::univmon::UnivMonDeltaFidelity;
 use crate::sketches::coco::{CocoRng, CocoSketch};
 use crate::sketches::countminsketch_heap::CountMinSketchWithHeap;
 use crate::sketches::countsketch_heap::{CountSketchWithHeap, CountSketchWithL2Norm};
@@ -1379,7 +1379,7 @@ pub struct KeyedHashes {
 #[derive(Clone, Debug)]
 pub struct KeyedLayerHashes {
     /// Deepest layer this key reaches; it touches `0..=bottom`.
-    pub bottom: usize,
+    pub bottom_layer: usize,
     /// One 128-bit hash per touched layer, under that layer's seed. Layer depth
     /// is geometric, so this is nearly always one or two entries.
     pub layer_hashes: SmallVec<[u128; 4]>,
@@ -2008,7 +2008,7 @@ pub fn univmon_layer_threshold(base: u32, layer: usize) -> u32 {
 /// pure function of the key's hash. The worker keeps no heavy-hitter heap;
 /// that lives only in the aggregator.
 pub struct UnivMonOctoWorker {
-    layers: Vec<CountSketchWithL2NormWorker>,
+    layer_sketches: Vec<CountSketchWithL2NormWorker>,
     threshold: OctoThreshold,
     worker_id: u32,
     total_weight: u64,
@@ -2036,7 +2036,7 @@ impl UnivMonOctoWorker {
     ) -> Self {
         let layers = layers.max(1);
         Self {
-            layers: (0..layers)
+            layer_sketches: (0..layers)
                 .map(|layer| CountSketchWithL2NormWorker::new(rows, cols, layer))
                 .collect(),
             threshold,
@@ -2047,7 +2047,7 @@ impl UnivMonOctoWorker {
 
     /// Bytes held across every layer's counter array.
     pub fn counter_bytes(&self) -> usize {
-        self.layers.iter().map(|l| l.counter_bytes()).sum()
+        self.layer_sketches.iter().map(|l| l.counter_bytes()).sum()
     }
 }
 
@@ -2063,7 +2063,7 @@ impl OctoWorker for UnivMonOctoWorker {
         self.total_weight += 1;
         let threshold = self.threshold.get();
         let (worker_id, total_weight) = (self.worker_id, self.total_weight);
-        let bottom = payload.bottom.min(self.layers.len() - 1);
+        let bottom = payload.bottom_layer.min(self.layer_sketches.len() - 1);
         for (layer, hashed) in payload
             .layer_hashes
             .iter()
@@ -2073,11 +2073,11 @@ impl OctoWorker for UnivMonOctoWorker {
         {
             let layer_threshold = univmon_layer_threshold(threshold, layer);
             let key = &payload.key;
-            self.layers[layer].update_emit_delta_with_hash(hashed, layer_threshold, &mut |delta| {
+            self.layer_sketches[layer].update_emit_delta_with_hash(hashed, layer_threshold, &mut |delta| {
                 emit(UnivMonCellDelta {
                     layer: layer as u32,
                     key: key.clone(),
-                    delta,
+                    cell: delta,
                     worker_id,
                     total_weight,
                 })
@@ -2924,12 +2924,12 @@ impl OctoPlan for UnivMonOctoPlan {
     fn prepare(&self, input: &DataInput<'_>) -> KeyedLayerHashes {
         // Only the layers this key actually reaches get hashed. Layer depth is
         // geometric, so that is nearly always one or two.
-        let bottom = bottom_layer_for_hash(
+        let bottom = UnivMon::bottom_layer_for_hash(
             hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, input),
             self.layers,
         );
         KeyedLayerHashes {
-            bottom,
+            bottom_layer: bottom,
             layer_hashes: (0..=bottom).map(|l| hash128_seeded(l, input)).collect(),
             key: input_to_owned(input),
         }
@@ -4093,14 +4093,14 @@ mod runtime_tests {
         // sending, so the aggregator's total trails by whatever arrived after
         // each worker's last promotion - never overshoots.
         assert!(
-            univmon.bucket_size <= inputs.len(),
+            univmon.total_weight <= inputs.len(),
             "reported weight {} exceeds the stream",
-            univmon.bucket_size
+            univmon.total_weight
         );
         assert!(
-            univmon.bucket_size as f64 > inputs.len() as f64 * 0.9,
+            univmon.total_weight as f64 > inputs.len() as f64 * 0.9,
             "reported weight {} trails the stream of {} by too much",
-            univmon.bucket_size,
+            univmon.total_weight,
             inputs.len()
         );
 
@@ -4571,7 +4571,7 @@ mod univmon_tests {
         let reference = UnivMon::new(HEAP, ROWS, COLS, LAYERS);
         for key in 0..5_000u64 {
             let input = DataInput::U64(key);
-            let from_hash = bottom_layer_for_hash(
+            let from_hash = UnivMon::bottom_layer_for_hash(
                 hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &input),
                 LAYERS,
             );
@@ -4609,7 +4609,7 @@ mod univmon_tests {
         }
         let octo = &aggregator.sketch;
 
-        assert_eq!(octo.bucket_size, reference.bucket_size, "total weight");
+        assert_eq!(octo.total_weight, reference.total_weight, "total weight");
         assert_eq!(
             octo.candidates_complete(),
             reference.candidates_complete(),
@@ -4665,7 +4665,7 @@ mod univmon_tests {
         for layer in 0..LAYERS {
             let promoted = layer_counters(&aggregator.sketch, layer);
             let exact = layer_counters(&reference, layer);
-            let residual = worker.layers[layer].residual();
+            let residual = worker.layer_sketches[layer].residual();
             for (cell, ((&p, &e), &r)) in
                 promoted.iter().zip(exact.iter()).zip(residual).enumerate()
             {

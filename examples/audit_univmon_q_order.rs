@@ -180,12 +180,12 @@ fn main() {
 
 fn config(ordered_samples: usize, candidates: usize, trial: usize) -> UnivMonQConfig {
     UnivMonQConfig {
-        levels: 12,
-        width: 1_024,
+        layers: 12,
+        top_layer_cols: 1_024,
         cols_halving_period: 3,
-        depth: 5,
+        rows: 5,
         counter_bits: 32,
-        candidates,
+        heap_size: candidates,
         ordered_samples,
         seed_index: 5 + trial,
     }

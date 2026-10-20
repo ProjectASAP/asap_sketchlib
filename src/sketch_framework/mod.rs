@@ -37,7 +37,7 @@ pub mod hydra;
 pub use hydra::Hydra;
 
 pub mod univmon;
-pub use univmon::{UnivMon, UnivMonDeltaFidelity, bottom_layer_for_hash};
+pub use univmon::{UnivMon, UnivMonDeltaFidelity};
 
 pub mod univmon_q;
 pub use univmon_q::{

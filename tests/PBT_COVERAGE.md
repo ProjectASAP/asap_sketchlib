@@ -454,7 +454,7 @@ Layer placement is a deterministic hash, so nesting is exact. Layer membership c
 
 - layers
   - `layer[i].keys == {k arrived : deepest(k) >= i}`
-  - `bottom_layer_for_hash(h, layers)` == set bits of `h` above bit 0, capped at depth
+  - `UnivMon::bottom_layer_for_hash(h, layers)` == set bits of `h` above bit 0, capped at depth
   - `layer[i].keys` contains `layer[i+1].keys`
 - counters
   - `layer[i]` cells == signed mass of exactly the keys reaching `i`, placed by `CountSketchWithL2Norm::cell_for_row` under that layer's seed; the expected cells are the stream summed directly

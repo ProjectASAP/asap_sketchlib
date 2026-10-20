@@ -469,10 +469,10 @@ mod tests {
             .to_asapv1()
             .expect("serialize UnivMonPyramid");
         let univmon_q = crate::UnivMonQ::new(crate::UnivMonQConfig {
-            levels: 2,
-            width: 8,
-            depth: 3,
-            candidates: 4,
+            layers: 2,
+            top_layer_cols: 8,
+            rows: 3,
+            heap_size: 4,
             ordered_samples: 4,
             ..Default::default()
         })

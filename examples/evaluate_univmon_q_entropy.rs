@@ -32,9 +32,9 @@ fn main() {
             "profile={}: {:.3} MiB, width={}, halve/{}, candidates={}, samples={}",
             profile.name,
             empty.estimated_memory_bytes() as f64 / (1024.0 * 1024.0),
-            profile.config.width,
+            profile.config.top_layer_cols,
             profile.config.cols_halving_period,
-            profile.config.candidates,
+            profile.config.heap_size,
             profile.config.ordered_samples,
         );
     }
@@ -133,12 +133,12 @@ struct Profile {
 
 fn profiles(n: usize) -> Vec<Profile> {
     let compact = UnivMonQConfig {
-        levels: 12,
-        width: 4_096,
+        layers: 12,
+        top_layer_cols: 4_096,
         cols_halving_period: 3,
-        depth: 5,
+        rows: 5,
         counter_bits: 32,
-        candidates: 256,
+        heap_size: 256,
         ordered_samples: 4_096,
         seed_index: 5,
     }
@@ -150,8 +150,8 @@ fn profiles(n: usize) -> Vec<Profile> {
     large_sample.ordered_samples = 16_384;
     let mut equal_memory = compact;
     equal_memory.cols_halving_period = 0;
-    let target = compact.levels * compact.depth * compact.width * size_of::<i64>();
-    equal_memory.candidates = largest_candidate_budget(equal_memory, target);
+    let target = compact.layers * compact.rows * compact.top_layer_cols * size_of::<i64>();
+    equal_memory.heap_size = largest_candidate_budget(equal_memory, target);
     vec![
         Profile {
             name: "compact-k512",
@@ -175,10 +175,10 @@ fn profiles(n: usize) -> Vec<Profile> {
 fn largest_candidate_budget(config: UnivMonQConfig, target: usize) -> usize {
     let memory = |candidates| {
         let mut candidate = config;
-        candidate.candidates = candidates;
+        candidate.heap_size = candidates;
         UnivMonQ::new(candidate).unwrap().estimated_memory_bytes()
     };
-    let mut low = config.candidates;
+    let mut low = config.heap_size;
     let mut high = low * 2;
     assert!(memory(low) <= target);
     while memory(high) <= target {

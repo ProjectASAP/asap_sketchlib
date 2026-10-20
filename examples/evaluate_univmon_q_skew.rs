@@ -52,12 +52,12 @@ fn main() {
     );
 
     let mut base_config = UnivMonQConfig {
-        levels: 12,
-        width: 4_096,
+        layers: 12,
+        top_layer_cols: 4_096,
         cols_halving_period: 3,
-        depth: 5,
+        rows: 5,
         counter_bits: 32,
-        candidates,
+        heap_size: candidates,
         ordered_samples: 4_096,
         seed_index: 5,
     }
@@ -65,10 +65,10 @@ fn main() {
     .expect("the evaluation window must fit within 63 levels");
     let um_candidates = candidates;
     let um_counter_bytes =
-        base_config.levels * base_config.depth * base_config.width * size_of::<i64>();
+        base_config.layers * base_config.rows * base_config.top_layer_cols * size_of::<i64>();
     if profile == "equal-memory" {
         base_config.cols_halving_period = 0;
-        base_config.candidates = largest_candidate_budget(base_config, um_counter_bytes);
+        base_config.heap_size = largest_candidate_budget(base_config, um_counter_bytes);
     }
     let q_reserved_bytes = UnivMonQ::new(base_config)
         .expect("evaluation config must be valid")
@@ -79,11 +79,11 @@ fn main() {
     println!("profile={profile}");
     println!(
         "config: levels={}, width={}, halve/{} levels, depth={}, candidates={}, ordered_samples={}",
-        base_config.levels,
-        base_config.width,
+        base_config.layers,
+        base_config.top_layer_cols,
         base_config.cols_halving_period,
-        base_config.depth,
-        base_config.candidates,
+        base_config.rows,
+        base_config.heap_size,
         base_config.ordered_samples,
     );
     println!(
@@ -212,7 +212,7 @@ fn main() {
     println!(
         "  Q reserved memory={:.3} MiB; UnivMon counters alone={:.3} MiB before heap metadata.",
         summaries[0].memory_mib,
-        (base_config.levels * base_config.depth * base_config.width * size_of::<i64>()) as f64
+        (base_config.layers * base_config.rows * base_config.top_layer_cols * size_of::<i64>()) as f64
             / (1024.0 * 1024.0),
     );
     println!(
@@ -254,8 +254,8 @@ fn argument(index: usize, default: usize, name: &str) -> usize {
 }
 
 fn largest_candidate_budget(config: UnivMonQConfig, target_bytes: usize) -> usize {
-    let mut low = config.candidates;
-    let mut high = config.candidates;
+    let mut low = config.heap_size;
+    let mut high = config.heap_size;
     assert!(
         estimated_q_memory(config, low) <= target_bytes,
         "initial UnivMon-Q configuration exceeds the equal-memory target"
@@ -276,7 +276,7 @@ fn largest_candidate_budget(config: UnivMonQConfig, target_bytes: usize) -> usiz
 }
 
 fn estimated_q_memory(mut config: UnivMonQConfig, candidates: usize) -> usize {
-    config.candidates = candidates;
+    config.heap_size = candidates;
     UnivMonQ::new(config)
         .expect("candidate search must preserve a valid config")
         .estimated_memory_bytes()
@@ -368,7 +368,7 @@ fn evaluate_trial(
 }
 
 fn new_univmon(config: UnivMonQConfig, candidates: usize) -> UnivMon {
-    UnivMon::new(candidates, config.depth, config.width, config.levels)
+    UnivMon::new(candidates, config.rows, config.top_layer_cols, config.layers)
 }
 
 fn build_shards(data: &[i64], config: UnivMonQConfig, seed: u64) -> Vec<UnivMonQ> {
@@ -415,7 +415,7 @@ fn build_um_shards(data: &[i64], config: UnivMonQConfig, candidates: usize) -> V
             let end = (shard + 1) * data.len() / SHARDS;
             let mut sketch = new_univmon(config, candidates);
             for &value in &data[start..end] {
-                sketch.fast_insert(&DataInput::U64(value as u64), 1);
+                sketch.update_weighted_terminal(&DataInput::U64(value as u64), 1);
             }
             sketch
         })
@@ -479,7 +479,7 @@ fn benchmark_um_queries(sketch: &UnivMon, truth: &Truth) -> f64 {
     let mut durations = Vec::with_capacity(UM_QUERY_REPEATS);
     for _ in 0..UM_QUERY_REPEATS {
         let start = Instant::now();
-        black_box(sketch.bucket_size);
+        black_box(sketch.total_weight);
         black_box(univmon_frequency(sketch, truth.domain / 2));
         black_box(sketch.estimate_cardinality());
         black_box(sketch.estimate_l2());
@@ -645,12 +645,12 @@ fn validate(sketch: &UnivMonQ, truth: &Truth) -> usize {
     violations += cdf
         .windows(2)
         .filter(|pair| {
-            !pair[0].value.total_cmp(&pair[1].value).is_lt() || pair[0].rank > pair[1].rank
+            !pair[0].value.total_cmp(&pair[1].value).is_lt() || pair[0].normalized_rank > pair[1].normalized_rank
         })
         .count();
     violations += cdf
         .iter()
-        .filter(|point| !point.rank.is_finite() || !(0.0..=1.0).contains(&point.rank))
+        .filter(|point| !point.normalized_rank.is_finite() || !(0.0..=1.0).contains(&point.normalized_rank))
         .count();
     let quantiles = query.quantiles(&QUANTILES);
     violations += quantiles
@@ -671,7 +671,7 @@ fn validate_um(sketch: &UnivMon, truth: &Truth) -> usize {
         sketch.estimate_entropy(),
         sketch.estimate_l1(),
     ];
-    usize::from(sketch.bucket_size != truth.n)
+    usize::from(sketch.total_weight != truth.n)
         + estimates.iter().filter(|value| !value.is_finite()).count()
         + estimates.iter().filter(|&&value| value < 0.0).count()
 }
@@ -694,13 +694,13 @@ fn equivalent_queries(left: &UnivMonQ, right: &UnivMonQ, truth: &Truth) -> bool 
         && left.cdf().len() == right.cdf().len()
         && left.cdf().iter().zip(right.cdf()).all(|(left, right)| {
             left.value.to_bits() == right.value.to_bits()
-                && left.rank.to_bits() == right.rank.to_bits()
+                && left.normalized_rank.to_bits() == right.normalized_rank.to_bits()
         })
 }
 
 fn um_query_mismatches(left: &UnivMon, right: &UnivMon, truth: &Truth) -> Vec<&'static str> {
     let mut mismatches = Vec::new();
-    if left.bucket_size != right.bucket_size {
+    if left.total_weight != right.total_weight {
         mismatches.push("count");
     }
     if left.estimate_cardinality().to_bits() != right.estimate_cardinality().to_bits() {

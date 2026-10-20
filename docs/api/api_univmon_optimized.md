@@ -15,7 +15,7 @@ Two-tier UnivMon pyramid, and a free-list pool of scratch `UnivMon`s.
 
 ```rust
 // UnivMonPool
-fn new(cap: usize, heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self
+fn new(initial_size: usize, heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self
 
 // UnivMonTwoTier
 fn new(
@@ -34,8 +34,8 @@ fn with_defaults() -> Self
 
 ```rust
 fn update_weighted(&mut self, key: &DataInput, weight: i64)
-fn fast_insert(&mut self, key: &DataInput, value: i64)
-fn free(&mut self)
+fn update_weighted_terminal(&mut self, key: &DataInput, weight: i64)
+fn clear(&mut self)
 ```
 
 ## Query
@@ -95,7 +95,7 @@ assert!(um.estimate_l1() >= 1.0);
 ## Caveats
 
 - Updates must have non-negative weights.
-- `update_weighted` and `fast_insert` use different physical layouts and cannot be mixed
+- `update_weighted` and `update_weighted_terminal` use different physical layouts and cannot be mixed
   within one sketch.
 - Merge expects compatible layout/configuration and update strategy.
 

@@ -6,7 +6,7 @@
 //!
 //! The oracle for layer membership is the trailing-ones closed form read off
 //! `hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key)`, which owes nothing to the
-//! pyramid's own `bottom_layer_for_hash` loop. The oracle for per-layer state
+//! pyramid's own `UnivMon::bottom_layer_for_hash` loop. The oracle for per-layer state
 //! is a direct scan of the counter grids and the heaps, so the merge laws pin
 //! the merge against the layers it claims to rebuild.
 //!
@@ -18,7 +18,7 @@
 use crate::support::{PROBE_KEYS, close, grid};
 use asap_sketchlib::{
     CountSketchWithL2Norm, DataInput, HeapEntry, L2HH, OwnedDataInput, UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon,
-    bottom_layer_for_hash, hash64_seeded, hash128_seeded,
+    hash64_seeded, hash128_seeded,
 };
 use proptest::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -153,7 +153,7 @@ proptest! {
         let hash = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &DataInput::U64(key));
 
         prop_assert_eq!(
-            bottom_layer_for_hash(hash, layers),
+            UnivMon::bottom_layer_for_hash(hash, layers),
             deepest_layer(key, layers),
             "key {} at hash {:#x} in a {}-layer pyramid",
             key,

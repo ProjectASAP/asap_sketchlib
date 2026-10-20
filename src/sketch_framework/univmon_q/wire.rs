@@ -3,7 +3,7 @@
 //! Child submodule of [`crate::sketch_framework::univmon_q`]: it holds the
 //! metadata/payload DTOs, the kind_id constant and the `to_asapv1` /
 //! `from_asapv1` impls, while the algorithm lives in the parent
-//! module file. Being a descendant module, it reads the private `levels`,
+//! module file. Being a descendant module, it reads the private `layers`,
 //! `count`, `min`, `max`, `source_id`, `next_sequence` and `ordered_heap`
 //! fields directly without widening any field visibility. See
 //! `docs/asapv1_wire_format.md`.
@@ -40,8 +40,8 @@ use crate::message_pack_format::envelope;
 use crate::{HashProfile, SketchHasher};
 
 use super::{
-    Counters, HashLayout, Level, OrderedOccurrence, PackedCountSketch, UnivMonQ, UnivMonQConfig,
-    decode_error, level_width, validate_config,
+    Counters, HashLayout, Layer, OrderedOccurrence, PackedCountSketch, UnivMonQ, UnivMonQConfig,
+    decode_error, layer_cols, validate_config,
 };
 
 
@@ -88,12 +88,12 @@ pub(crate) fn univmon_q_metadata<H: HashProfile>(
         input_encoding: H::INPUT_ENCODING.to_string(),
         seed_list: H::seed_list(),
         seed_index: field("hash_seed", config.seed_index)?,
-        layers: field("layers", config.levels)?,
-        top_layer_cols: field("top_layer_cols", config.width)?,
+        layers: field("layers", config.layers)?,
+        top_layer_cols: field("top_layer_cols", config.top_layer_cols)?,
         cols_halving_period: config.cols_halving_period,
-        rows: field("rows", config.depth)?,
+        rows: field("rows", config.rows)?,
         counter_type: counter_type.to_string(),
-        heap_size: field("heap_size", config.candidates)?,
+        heap_size: field("heap_size", config.heap_size)?,
         ordered_samples: field("ordered_samples", config.ordered_samples)?,
     })
 }
@@ -101,12 +101,12 @@ pub(crate) fn univmon_q_metadata<H: HashProfile>(
 /// The config a validated metadata block describes.
 fn config_of(meta: &UnivMonQMetadata) -> Result<UnivMonQConfig, RmpDecodeError> {
     Ok(UnivMonQConfig {
-        levels: meta.layers as usize,
-        width: meta.top_layer_cols as usize,
+        layers: meta.layers as usize,
+        top_layer_cols: meta.top_layer_cols as usize,
         cols_halving_period: meta.cols_halving_period,
-        depth: meta.rows as usize,
+        rows: meta.rows as usize,
         counter_bits: counter_bits_of(&meta.counter_type)?,
-        candidates: meta.heap_size as usize,
+        heap_size: meta.heap_size as usize,
         ordered_samples: meta.ordered_samples as usize,
         seed_index: meta.seed_index as usize,
     })
@@ -181,8 +181,8 @@ fn emitted_occurrences(heap: &BinaryHeap<OrderedOccurrence>) -> Vec<OrderedOccur
 
 /// The per-level CountSketch widths the config implies.
 fn level_widths(config: UnivMonQConfig) -> Vec<usize> {
-    (0..config.levels)
-        .map(|level| level_width(config, level))
+    (0..config.layers)
+        .map(|level| layer_cols(config, level))
         .collect()
 }
 
@@ -260,17 +260,17 @@ fn read_payload(
 /// Checks everything the counters do not cover: the per-level runs, the
 /// capacities, the extrema and the ordered sample.
 fn validate_shared(config: UnivMonQConfig, shared: &SharedPayload) -> Result<(), RmpDecodeError> {
-    if shared.candidate_lens.len() != config.levels || shared.ever_evicted.len() != config.levels {
+    if shared.candidate_lens.len() != config.layers || shared.ever_evicted.len() != config.layers {
         return Err(decode_error(format!(
             "UnivMon-Q carries {} candidate runs and {} eviction flags over {} levels",
             shared.candidate_lens.len(),
             shared.ever_evicted.len(),
-            config.levels
+            config.layers
         )));
     }
     let mut seated = 0usize;
     for (index, &len) in shared.candidate_lens.iter().enumerate() {
-        if len as usize > config.candidates {
+        if len as usize > config.heap_size {
             return Err(decode_error(format!(
                 "UnivMon-Q candidate capacity exceeded at level {index}"
             )));
@@ -340,11 +340,11 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
         let metadata = rmp_serde::to_vec_named(
             &univmon_q_metadata::<H>(self.config, counter_type).map_err(syntax)?,
         )?;
-        if self.levels.len() != self.config.levels {
+        if self.layers.len() != self.config.layers {
             return Err(syntax(format!(
                 "ASAPv1 UnivMon-Q envelope: {} levels against a config of {}",
-                self.levels.len(),
-                self.config.levels
+                self.layers.len(),
+                self.config.layers
             )));
         }
         let valid_extrema = if self.count == 0 {
@@ -370,21 +370,21 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
                 "ASAPv1 UnivMon-Q envelope: the same ordered occurrence appears twice".to_string(),
             ));
         }
-        let mut candidate_lens = Vec::with_capacity(self.levels.len());
+        let mut candidate_lens = Vec::with_capacity(self.layers.len());
         let mut candidate_keys = Vec::new();
         let mut candidate_scores = Vec::new();
-        let mut ever_evicted = Vec::with_capacity(self.levels.len());
-        for (index, level) in self.levels.iter().enumerate() {
+        let mut ever_evicted = Vec::with_capacity(self.layers.len());
+        for (index, level) in self.layers.iter().enumerate() {
             if !level.sketch.matches(
-                level_width(self.config, index),
-                self.config.depth,
+                layer_cols(self.config, index),
+                self.config.rows,
                 self.config.counter_bits,
             ) {
                 return Err(syntax(format!(
                     "ASAPv1 UnivMon-Q envelope: CountSketch layout mismatch at level {index}"
                 )));
             }
-            if level.candidate_scores.len() > self.config.candidates {
+            if level.candidate_scores.len() > self.config.heap_size {
                 return Err(syntax(format!(
                     "ASAPv1 UnivMon-Q envelope: candidate capacity exceeded at level {index}"
                 )));
@@ -417,7 +417,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
         macro_rules! pack {
             ($variant:ident) => {{
                 let mut counters = Vec::new();
-                for level in &self.levels {
+                for level in &self.layers {
                     match &level.sketch.counters {
                         Counters::$variant(values) => counters.extend_from_slice(values),
                         _ => {
@@ -492,7 +492,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
             .iter()
             .try_fold(0usize, |total, width| {
                 width
-                    .checked_mul(config.depth)
+                    .checked_mul(config.rows)
                     .and_then(|cells| total.checked_add(cells))
             })
             .ok_or_else(|| decode_error("UnivMon-Q level layout overflows".to_string()))?;
@@ -526,16 +526,16 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
                 candidate_heap.push(Reverse((score, key)));
             }
             candidate += run;
-            let span = width * config.depth;
-            levels.push(Level {
+            let span = width * config.rows;
+            levels.push(Layer {
                 sketch: PackedCountSketch {
                     width,
-                    depth: config.depth,
+                    depth: config.rows,
                     counters: counters_slice(&counters, cell, span),
                 },
                 candidate_scores,
                 candidate_heap,
-                candidate_capacity: config.candidates,
+                candidate_capacity: config.heap_size,
                 ever_evicted: shared.ever_evicted[index],
             });
             cell += span;
@@ -544,7 +544,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
         let sketch = UnivMonQ {
             config,
             hash_layout,
-            levels,
+            layers: levels,
             count: shared.count,
             min: shared.min,
             max: shared.max,
@@ -554,7 +554,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
             hasher: PhantomData,
         };
         // A candidate only reaches a level its own key hashes into.
-        for (index, level) in sketch.levels.iter().enumerate() {
+        for (index, level) in sketch.layers.iter().enumerate() {
             if level
                 .candidate_scores
                 .keys()
@@ -580,12 +580,12 @@ mod tests {
 
     fn tiny_config() -> UnivMonQConfig {
         UnivMonQConfig {
-            levels: 4,
-            width: 64,
+            layers: 4,
+            top_layer_cols: 64,
             cols_halving_period: 0,
-            depth: 3,
+            rows: 3,
             counter_bits: 64,
-            candidates: 16,
+            heap_size: 16,
             ordered_samples: 16,
             seed_index: 5,
         }
@@ -845,11 +845,11 @@ mod tests {
             univmon_q_metadata::<DefaultXxHasher>(config, "i64").expect("metadata")
         };
         let cases = [
-            shaped(config_with(|config| config.levels = 63)),
-            shaped(config_with(|config| config.width = u32::MAX as usize)),
-            shaped(config_with(|config| config.levels = 1)),
-            shaped(config_with(|config| config.depth = 4)),
-            shaped(config_with(|config| config.candidates = 0)),
+            shaped(config_with(|config| config.layers = 63)),
+            shaped(config_with(|config| config.top_layer_cols = u32::MAX as usize)),
+            shaped(config_with(|config| config.layers = 1)),
+            shaped(config_with(|config| config.rows = 4)),
+            shaped(config_with(|config| config.heap_size = 0)),
             shaped(config_with(|config| config.ordered_samples = 0)),
             shaped(config_with(|config| config.seed_index = 6)),
         ];
@@ -946,7 +946,7 @@ mod tests {
     #[test]
     fn univmon_q_rejects_serializing_an_inconsistent_state() {
         let mut wrong_layout = populated();
-        wrong_layout.levels[1].sketch = PackedCountSketch::new(8, 3, 64);
+        wrong_layout.layers[1].sketch = PackedCountSketch::new(8, 3, 64);
         assert!(
             wrong_layout.to_asapv1().is_err(),
             "a level whose CountSketch is not the config's size must not serialize"
@@ -960,7 +960,7 @@ mod tests {
         );
 
         let mut over_capacity = populated();
-        over_capacity.config.candidates = 1;
+        over_capacity.config.heap_size = 1;
         assert!(
             over_capacity.to_asapv1().is_err(),
             "a candidate table over its capacity must not serialize"

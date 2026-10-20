@@ -631,10 +631,10 @@ fn tumbling_univmon_q_windows_carry_exact_aggregates_through_rotation() {
     const TOTAL: u64 = 3_000;
 
     let cfg = UnivMonQConfig {
-        levels: 6,
-        width: 1_024,
-        depth: 5,
-        candidates: 256,
+        layers: 6,
+        top_layer_cols: 1_024,
+        rows: 5,
+        heap_size: 256,
         ordered_samples: 512,
         ..UnivMonQConfig::default()
     };

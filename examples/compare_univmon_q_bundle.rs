@@ -34,18 +34,18 @@ fn main() {
     assert!(n > 0, "n must be a positive integer");
     let seed = 0x2026_0804_u64;
     let q_matched = UnivMonQConfig {
-        levels: LEVELS,
-        width: 256,
+        layers: LEVELS,
+        top_layer_cols: 256,
         cols_halving_period: 3,
-        depth: DEPTH,
+        rows: DEPTH,
         counter_bits: 32,
-        candidates: 128,
+        heap_size: 128,
         ordered_samples: ORDERED_SAMPLES,
         seed_index: 5,
     };
     let q_quality = UnivMonQConfig {
-        width: 1_024,
-        candidates: 256,
+        top_layer_cols: 1_024,
+        heap_size: 256,
         ..q_matched
     };
 
@@ -56,10 +56,10 @@ fn main() {
     );
     println!(
         "Q-matched: width={}, candidates={}; Q-quality: width={}, candidates={}; both use {} ordered samples",
-        q_matched.width,
-        q_matched.candidates,
-        q_quality.width,
-        q_quality.candidates,
+        q_matched.top_layer_cols,
+        q_matched.heap_size,
+        q_quality.top_layer_cols,
+        q_quality.heap_size,
         q_matched.ordered_samples
     );
 

@@ -581,7 +581,7 @@ impl UnivMon {
             &self.layer_sketches,
             &self.layer_heaps,
             &geometry,
-            self.bucket_size,
+            self.total_weight,
             update_mode_tag(self.update_mode),
             &self.candidate_complete,
         )?;
@@ -664,7 +664,7 @@ impl UnivMon {
             rows,
             cols,
             heap_size,
-            bucket_size,
+            total_weight: bucket_size,
             update_mode: update_mode_of(mode_tag)?,
             candidate_complete,
         })
@@ -794,7 +794,7 @@ mod tests {
 
         let decoded = UnivMon::from_asapv1(&encoded).expect("deserialize UnivMon");
         assert_eq!(decoded.layers, um.layers);
-        assert_eq!(decoded.bucket_size, um.bucket_size);
+        assert_eq!(decoded.total_weight, um.total_weight);
         assert_eq!(decoded.estimate_l1(), um.estimate_l1());
         assert_eq!(decoded.estimate_l2(), um.estimate_l2());
         assert_eq!(decoded.estimate_cardinality(), um.estimate_cardinality());
@@ -843,7 +843,7 @@ mod tests {
     fn univmon_carries_update_mode_and_candidate_flags() {
         let mut terminal = UnivMon::new(2, 2, 8, 3);
         for key in 0..20u64 {
-            terminal.fast_insert(&DataInput::U64(key), 3);
+            terminal.update_weighted_terminal(&DataInput::U64(key), 3);
         }
         assert!(
             terminal.candidates_complete().iter().any(|&flag| !flag),
@@ -883,7 +883,7 @@ mod tests {
         let left = UnivMon::new(4, 2, 16, 3);
         let mut right = UnivMon::new(4, 2, 16, 3);
         right.update_weighted(&DataInput::Str("alpha"), 5);
-        right.free();
+        right.clear();
 
         let encoded = left.to_asapv1().expect("serialize");
         assert_eq!(right.to_asapv1().expect("serialize"), encoded);
@@ -982,10 +982,10 @@ mod tests {
             .to_asapv1()
             .expect("serialize UnivMonPyramid");
         let univmon_q = crate::UnivMonQ::new(crate::UnivMonQConfig {
-            levels: 2,
-            width: 8,
-            depth: 3,
-            candidates: 4,
+            layers: 2,
+            top_layer_cols: 8,
+            rows: 3,
+            heap_size: 4,
             ordered_samples: 4,
             ..Default::default()
         })

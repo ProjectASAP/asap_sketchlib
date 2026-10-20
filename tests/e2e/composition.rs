@@ -480,33 +480,33 @@ fn univmonq_with_window_bound_chooses_a_hierarchy_that_satisfies_its_own_inequal
         // level sees `max_updates / 2^(levels-1)` updates in expectation, and
         // its upper tail must sit under the candidate table's capacity.
         let log_inv_delta = (1.0 / DELTA).ln();
-        let mean = max_updates as f64 / 2f64.powi((cfg.levels - 1) as i32);
+        let mean = max_updates as f64 / 2f64.powi((cfg.layers - 1) as i32);
         let upper = mean + (2.0 * mean * log_inv_delta).sqrt() + (2.0 / 3.0) * log_inv_delta;
         assert!(
-            upper < cfg.candidates as f64,
+            upper < cfg.heap_size as f64,
             "levels={} leaves the deepest stratum with an upper bound of {upper:.1}, \
              above the {} candidate slots",
-            cfg.levels,
-            cfg.candidates
+            cfg.layers,
+            cfg.heap_size
         );
         // And it must be the *smallest* such hierarchy.
-        if cfg.levels > 2 {
-            let mean_lower = max_updates as f64 / 2f64.powi((cfg.levels - 2) as i32);
+        if cfg.layers > 2 {
+            let mean_lower = max_updates as f64 / 2f64.powi((cfg.layers - 2) as i32);
             let upper_lower = mean_lower
                 + (2.0 * mean_lower * log_inv_delta).sqrt()
                 + (2.0 / 3.0) * log_inv_delta;
             assert!(
-                upper_lower >= cfg.candidates as f64,
+                upper_lower >= cfg.heap_size as f64,
                 "levels={} is not minimal: {} levels would already fit",
-                cfg.levels,
-                cfg.levels - 1
+                cfg.layers,
+                cfg.layers - 1
             );
         }
         assert!(
-            cfg.levels >= previous,
+            cfg.layers >= previous,
             "a larger window must not need a shallower hierarchy"
         );
-        previous = cfg.levels;
+        previous = cfg.layers;
 
         // The chosen config must build and answer.
         let mut q = UnivMonQ::new(cfg).expect("chosen config must be valid");

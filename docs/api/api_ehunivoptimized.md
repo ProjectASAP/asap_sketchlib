@@ -39,7 +39,7 @@ fn with_defaults(k: usize, window: u64) -> Self
 ## Insert/Update
 
 ```rust
-fn update(&mut self, time: u64, key: &DataInput, value: i64)
+fn update_weighted(&mut self, time: u64, key: &DataInput, weight: i64)
 fn update_window(&mut self, window: u64)
 ```
 
@@ -75,7 +75,7 @@ No dedicated serialization API.
 use asap_sketchlib::{ExponentialHistogramUnivMon, DataInput};
 
 let mut eh = ExponentialHistogramUnivMon::with_defaults(2, 120);
-eh.update(1, &DataInput::U64(10), 1);
+eh.update_weighted(1, &DataInput::U64(10), 1);
 let _ = eh.query_interval(0, 120);
 ```
 

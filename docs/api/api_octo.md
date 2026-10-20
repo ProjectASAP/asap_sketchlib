@@ -227,7 +227,7 @@ fn candidates_complete(&self) -> &[bool]
 pub struct UnivMonCellDelta {
     pub layer: u32,
     pub key: OwnedDataInput,
-    pub delta: CountSketchCellDelta,
+    pub cell: CountSketchCellDelta,
     pub worker_id: u32,
     pub total_weight: u64,
 }
@@ -281,7 +281,7 @@ explicitly:
 - **L2 per row.** `CountSketchWithL2Norm` carries `l2[row] += new² − old²` on every
   counter write, so `CountSketchWithL2Norm::apply_delta` does the same fix-up and a
   parent fed only deltas reports the same `l2` as one fed the stream.
-- **Total weight.** `bucket_size` is what g-sum queries divide by and it
+- **Total weight.** `total_weight` is what g-sum queries divide by and it
   cannot be recovered from thresholded counters, so each delta carries the
   emitting worker's running total. The aggregator keeps the newest report
   per worker and sums them — no extra messages, and the total trails by

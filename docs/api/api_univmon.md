@@ -31,12 +31,12 @@ fn new(heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self
 
 ```rust
 fn update_weighted(&mut self, key: &DataInput, weight: i64)
-fn fast_insert(&mut self, key: &DataInput, value: i64)
-fn free(&mut self)
+fn update_weighted_terminal(&mut self, key: &DataInput, weight: i64)
+fn clear(&mut self)
 ```
 
 `update_weighted` maintains the cumulative sampled substream at every selected layer.
-`fast_insert` uses the Joltik update-last-layer layout and reconstructs logical
+`update_weighted_terminal` uses the Joltik update-last-layer layout and reconstructs logical
 layers during queries. Choose one update method for the lifetime of a sketch;
 mixing the two physical layouts is rejected.
 

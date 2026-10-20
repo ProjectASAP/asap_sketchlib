@@ -375,10 +375,10 @@ fn kll_config() -> KllConfig {
 
 fn univ_q_config() -> UnivMonQConfig {
     UnivMonQConfig {
-        levels: 4,
-        width: 256,
-        depth: 3,
-        candidates: 64,
+        layers: 4,
+        top_layer_cols: 256,
+        rows: 3,
+        heap_size: 64,
         ordered_samples: 128,
         ..UnivMonQConfig::default()
     }

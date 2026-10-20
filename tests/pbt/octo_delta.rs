@@ -882,9 +882,9 @@ proptest! {
                 "layer {}'s threshold is not tau halved {} times", layer, layer
             );
             prop_assert_eq!(
-                d.delta.value.unsigned_abs(),
+                d.cell.value.unsigned_abs(),
                 (tau >> layer).max(1),
-                "layer {} promoted {} rather than its own threshold", layer, d.delta.value
+                "layer {} promoted {} rather than its own threshold", layer, d.cell.value
             );
             prop_assert_eq!(d.worker_id as usize, worker_id);
             prop_assert_eq!(
@@ -1080,7 +1080,7 @@ proptest! {
         let top_layer: Vec<i32> = layered
             .iter()
             .filter(|d| d.layer == 0)
-            .map(|d| d.delta.value)
+            .map(|d| d.cell.value)
             .collect();
         prop_assert!(!top_layer.is_empty(), "UNIVMON_PROMASK promoted nothing over {} inserts", n);
         for value in &top_layer {

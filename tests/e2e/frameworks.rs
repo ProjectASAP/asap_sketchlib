@@ -1490,7 +1490,7 @@ fn univmon_weighted_metrics_and_fast_insert_parity() {
     for (i, k) in stream.iter().enumerate() {
         let w = 1 + (i % 7) as i64;
         um.update_weighted(&DataInput::U32(*k as u32), w);
-        fast.fast_insert(&DataInput::U32(*k as u32), w);
+        fast.update_weighted_terminal(&DataInput::U32(*k as u32), w);
         truth.observe_weighted(*k as i64, w);
     }
 
@@ -1897,7 +1897,7 @@ mod documented_matrix {
             let w = 1 + (i % 7) as i64;
             let d = input.data(*key);
             um.update_weighted(&d, w);
-            fast.fast_insert(&d, w);
+            fast.update_weighted_terminal(&d, w);
             pyramid.update_weighted(&d, w);
             truth.observe_weighted(*key, w);
         }

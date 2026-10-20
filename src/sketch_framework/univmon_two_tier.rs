@@ -34,14 +34,14 @@ pub struct UnivMonPool {
 }
 
 impl UnivMonPool {
-    /// Creates a new pool with `cap` pre-allocated sketches.
-    pub fn new(cap: usize, heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self {
-        let free_list: Vec<UnivMon> = (0..cap)
+    /// Creates a new pool with `initial_size` pre-allocated sketches.
+    pub fn new(initial_size: usize, heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self {
+        let free_list: Vec<UnivMon> = (0..initial_size)
             .map(|_| UnivMon::new(heap_size, rows, cols, layers))
             .collect();
         UnivMonPool {
             free_list,
-            total_allocated: cap,
+            total_allocated: initial_size,
             heap_size,
             rows,
             cols,
@@ -64,7 +64,7 @@ impl UnivMonPool {
 
     /// Returns a sketch to the pool for reuse. Resets all internal state.
     pub fn put(&mut self, mut sketch: UnivMon) {
-        sketch.free();
+        sketch.clear();
         self.free_list.push(sketch);
     }
 
@@ -119,7 +119,7 @@ pub struct UnivMonTwoTier {
     /// Heap capacity per layer.
     pub heap_size: usize,
     /// Bucket size used for hashing decisions.
-    pub bucket_size: usize,
+    pub total_weight: usize,
     update_mode: UnivMonUpdateMode,
     candidate_complete: Vec<bool>,
 }
@@ -188,7 +188,7 @@ impl UnivMonTwoTier {
             mouse_rows,
             mouse_cols,
             heap_size,
-            bucket_size: 0,
+            total_weight: 0,
             update_mode: UnivMonUpdateMode::Unset,
             candidate_complete: vec![true; layers],
         }
@@ -202,8 +202,8 @@ impl UnivMonTwoTier {
             current if current == mode => {}
             _ => panic!("cannot mix standard and terminal-only updates in one UnivMon"),
         }
-        self.bucket_size = self
-            .bucket_size
+        self.total_weight = self
+            .total_weight
             .checked_add(value as usize)
             .expect("UnivMon total weight overflowed usize");
     }
@@ -248,7 +248,7 @@ impl UnivMonTwoTier {
     ///
     /// Logical upper-layer candidate sets are reconstructed at query time.
     /// Do not mix this method with [`Self::update`] on the same sketch.
-    pub fn fast_insert(&mut self, key: &DataInput, value: i64) {
+    pub fn update_weighted_terminal(&mut self, key: &DataInput, value: i64) {
         self.begin_update(value, UnivMonUpdateMode::Terminal);
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
         let bottom = self.find_bottom_layer_num(h);
@@ -265,7 +265,7 @@ impl UnivMonTwoTier {
     where
         F: Fn(f64) -> f64,
     {
-        if self.bucket_size == 0 {
+        if self.total_weight == 0 {
             return 0.0;
         }
         if self.update_mode == UnivMonUpdateMode::Terminal {
@@ -400,7 +400,7 @@ impl UnivMonTwoTier {
 
     /// Returns the exact L1 norm for the supported non-negative update stream.
     pub fn estimate_l1(&self) -> f64 {
-        self.bucket_size as f64
+        self.total_weight as f64
     }
 
     /// Returns the estimated L2 norm.
@@ -410,11 +410,11 @@ impl UnivMonTwoTier {
 
     /// Returns the estimated entropy.
     pub fn estimate_entropy(&self) -> f64 {
-        if self.bucket_size == 0 {
+        if self.total_weight == 0 {
             return 0.0;
         }
         let tmp = self.estimate_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 }, false);
-        (self.bucket_size as f64).log2() - tmp / (self.bucket_size as f64)
+        (self.total_weight as f64).log2() - tmp / (self.total_weight as f64)
     }
 
     /// Returns the estimated cardinality.
@@ -425,8 +425,8 @@ impl UnivMonTwoTier {
     // -- Lifecycle -----------------------------------------------------------
 
     /// Resets all counters and heaps without deallocating.
-    pub fn free(&mut self) {
-        self.bucket_size = 0;
+    pub fn clear(&mut self) {
+        self.total_weight = 0;
         self.update_mode = UnivMonUpdateMode::Unset;
         self.candidate_complete.fill(true);
         for i in 0..self.layers {
@@ -465,9 +465,9 @@ impl UnivMonTwoTier {
                 "cannot merge standard and terminal-only UnivMon states"
             ),
         }
-        self.bucket_size = self
-            .bucket_size
-            .checked_add(other.bucket_size)
+        self.total_weight = self
+            .total_weight
+            .checked_add(other.total_weight)
             .expect("merged UnivMon total weight overflowed usize");
         for i in 0..self.layers {
             let sources_complete = self.candidate_complete[i] && other.candidate_complete[i];
@@ -541,14 +541,14 @@ mod tests {
         // Take a sketch, insert some data
         let mut sketch = pool.take();
         sketch.update_weighted(&DataInput::I64(42), 100);
-        assert!(sketch.bucket_size > 0);
+        assert!(sketch.total_weight > 0);
 
         // Return it — should reset
         pool.put(sketch);
 
         // Take it back — should be clean
         let sketch2 = pool.take();
-        assert_eq!(sketch2.bucket_size, 0);
+        assert_eq!(sketch2.total_weight, 0);
         assert!((sketch2.layer_sketches[0].l2()).abs() < 1e-9);
     }
 
@@ -566,7 +566,7 @@ mod tests {
             um.update_weighted(&DataInput::Str(key), *val);
         }
 
-        assert_eq!(um.bucket_size, 65);
+        assert_eq!(um.total_weight, 65);
         assert!(
             (um.estimate_l1() - 65.0).abs() < 1e-6,
             "L1 = {}",
@@ -586,10 +586,10 @@ mod tests {
         for i in 0..500i64 {
             let key = DataInput::I64(i % 100);
             standard.update_weighted(&key, 1);
-            fast.fast_insert(&key, 1);
+            fast.update_weighted_terminal(&key, 1);
         }
 
-        assert_eq!(standard.bucket_size, fast.bucket_size);
+        assert_eq!(standard.total_weight, fast.total_weight);
 
         // Standard cumulative layers and Joltik terminal strata must yield
         // the same logical estimates when all candidates are retained.
@@ -626,10 +626,10 @@ mod tests {
         for i in 0..100i64 {
             um.update_weighted(&DataInput::I64(i), 10);
         }
-        assert!(um.bucket_size > 0);
+        assert!(um.total_weight > 0);
 
-        um.free();
-        assert_eq!(um.bucket_size, 0);
+        um.clear();
+        assert_eq!(um.total_weight, 0);
         assert!((um.layer_sketches[0].l2()).abs() < 1e-9);
     }
 
@@ -650,7 +650,7 @@ mod tests {
 
         left.merge(&right);
 
-        assert_eq!(left.bucket_size, 1000);
+        assert_eq!(left.total_weight, 1000);
         assert!(left.estimate_entropy().is_finite());
         for level in 0..left.layers {
             let L2HH::COUNT(merged_count) = &left.layer_sketches[level];
@@ -744,14 +744,14 @@ mod tests {
         let mut um = UnivMonTwoTier::new(64, 8, 5, 2048, 3, 512, 16);
         let mut freq: HashMap<i64, i64> = HashMap::new();
 
-        // Use fast_insert for everything.
+        // Use update_weighted_terminal for everything.
         for _ in 0..3000 {
-            um.fast_insert(&DataInput::I64(0), 1);
+            um.update_weighted_terminal(&DataInput::I64(0), 1);
             *freq.entry(0).or_insert(0) += 1;
         }
         for key in 1..=50i64 {
             for _ in 0..100 {
-                um.fast_insert(&DataInput::I64(key), 1);
+                um.update_weighted_terminal(&DataInput::I64(key), 1);
                 *freq.entry(key).or_insert(0) += 1;
             }
         }
