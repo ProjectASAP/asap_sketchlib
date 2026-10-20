@@ -102,6 +102,14 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
         self.size
     }
 
+    /// Element slots the heap has allocated: at least [`Self::len`], growing
+    /// on demand toward [`Self::capacity`].
+    #[cfg(feature = "experimental")]
+    #[inline]
+    pub(crate) fn allocated_slots(&self) -> usize {
+        self.data.capacity()
+    }
+
     /// Returns true if the heap is at full capacity.
     #[inline]
     pub fn is_full(&self) -> bool {

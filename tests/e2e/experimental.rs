@@ -122,7 +122,7 @@ fn kmv_estimates_stay_inside_their_relative_standard_error_band_over_independent
             for regime in KMV_REGIMES {
                 let n = regime.n(k);
                 namespace = namespace.wrapping_add(NAMESPACE_STRIDE);
-                let mut sketch = kmv_trial(k, n, seed_index, namespace);
+                let sketch = kmv_trial(k, n, seed_index, namespace);
                 let estimate = sketch.estimate();
                 let outcome = spec.check(estimate, n);
                 tally.record(outcome.is_ok(), || {
@@ -175,7 +175,7 @@ fn kmv_is_exact_below_k_and_estimates_at_k() {
     );
 
     for n in [1usize, 2, K / 2, K - 2, K - 1] {
-        let mut sketch: Kmv = kmv_trial(K, n, 0, NAMESPACE_STRIDE * 900 + n as u64 * 4096);
+        let sketch: Kmv = kmv_trial(K, n, 0, NAMESPACE_STRIDE * 900 + n as u64 * 4096);
         assert_eq!(
             sketch.estimate(),
             n as f64,
@@ -188,7 +188,7 @@ fn kmv_is_exact_below_k_and_estimates_at_k() {
     // to k, so the exact-regime branch must not claim it.
     let mut estimates = Vec::new();
     for (i, &seed_index) in KMV_HASH_SEEDS.iter().enumerate() {
-        let mut sketch = kmv_trial(K, K, seed_index, NAMESPACE_STRIDE * (1_000 + i as u64));
+        let sketch = kmv_trial(K, K, seed_index, NAMESPACE_STRIDE * (1_000 + i as u64));
         let est = sketch.estimate();
         assert!(
             spec.check(est, K).is_ok(),
@@ -255,8 +255,7 @@ fn kmv_duplicates_are_inert_and_a_shard_merge_reproduces_the_single_pass_exactly
     );
 
     let mut merged = a.clone();
-    let mut rhs = b.clone();
-    merged.merge(&mut rhs);
+    merged.merge(&b);
     assert_eq!(
         merged.estimate(),
         single,

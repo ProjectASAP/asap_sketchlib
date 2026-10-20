@@ -122,6 +122,8 @@ signals a backwards-compatible change.
   `i64` and `f64` `Vector2D` matrices on either path, with no delta kind.
 - **`Kll::memory_bytes` and `KllDynamic::memory_bytes`**: the bytes the
   sketch holds now.
+- **`Kmv::memory_bytes`**: the struct plus the hash slots the heap has
+  allocated.
 
 ### Changed
 
@@ -343,6 +345,9 @@ signals a backwards-compatible change.
   empty, then holds 16 items and doubles up to the sketch's full capacity; a
   decoded sketch holds just its retained items. Retained items, coin tosses,
   quantiles, merges and ASAPv1 bytes do not depend on the buffer's size.
+- **`Kmv::estimate` takes `&self` and `Kmv::merge` takes `&Kmv`.** A full
+  sketch turns away a hash at or above its largest retained one before
+  scanning for a duplicate; the retained set is unchanged.
 
 ### Removed
 

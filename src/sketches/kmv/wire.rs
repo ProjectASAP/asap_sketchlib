@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn kmv_round_trip_serialization() {
-        let mut sketch = populated(64, 5_000);
+        let sketch = populated(64, 5_000);
         assert_eq!(
             sketch.retained_hashes.len(),
             64,
@@ -240,7 +240,7 @@ mod tests {
             assert!(pair[0] < pair[1], "the emitted hashes are not ascending");
         }
 
-        let mut decoded = Kmv::<DefaultXxHasher>::from_asapv1(&encoded).expect("decode");
+        let decoded = Kmv::<DefaultXxHasher>::from_asapv1(&encoded).expect("decode");
         assert_eq!(decoded.k, sketch.k);
         assert_eq!(
             decoded.retained_hashes.capacity(),
@@ -300,7 +300,7 @@ mod tests {
         assert_eq!(metadata_of(&bytes).k, 16);
         assert!(payload_of(&bytes).hashes.is_empty());
 
-        let mut decoded = Kmv::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
+        let decoded = Kmv::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.k, 16);
         assert_eq!(decoded.retained_hashes.len(), 0);
         assert_eq!(decoded.retained_hashes.capacity(), 16);
