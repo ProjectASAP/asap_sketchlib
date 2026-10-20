@@ -254,11 +254,11 @@ impl UnivMonTwoTier {
     ///
     /// Logical upper-layer candidate sets are reconstructed at query time.
     /// Do not mix this method with [`Self::update`] on the same sketch.
-    pub fn update_weighted_terminal(&mut self, key: &DataInput, value: i64) {
-        self.begin_update(value, UnivMonUpdateMode::Terminal);
+    pub fn update_weighted_terminal(&mut self, key: &DataInput, weight: i64) {
+        self.begin_update(weight, UnivMonUpdateMode::Terminal);
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
         let bottom = self.find_bottom_layer_num(h);
-        let count = self.layer_sketches[bottom].update_and_est(key, value);
+        let count = self.layer_sketches[bottom].update_and_est(key, weight);
         if !self.layer_heaps[bottom].update(key, count as i64) {
             self.candidate_complete[bottom] = false;
         }

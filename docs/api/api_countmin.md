@@ -26,7 +26,7 @@ fn update_weighted(&mut self, value: &DataInput, weight: S::Counter)
 fn update_batch(&mut self, values: &[DataInput])
 fn update_weighted_batch(&mut self, values: &[(DataInput, S::Counter)])
 fn update_with_hash(&mut self, hashed_val: &H::HashType)
-fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, many: S::Counter)
+fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, weight: S::Counter)
 ```
 
 ## Query

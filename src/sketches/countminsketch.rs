@@ -589,9 +589,9 @@ where
 
     #[inline(always)]
     /// Inserts multiple observations using a pre-computed hash value.
-    pub fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, many: S::Counter) {
+    pub fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, weight: S::Counter) {
         self.counts
-            .fast_insert(|a, b, _| *a += *b, many, hashed_val);
+            .fast_insert(|a, b, _| *a += *b, weight, hashed_val);
     }
 
     /// Inserts a batch of observations using pre-computed hash values.

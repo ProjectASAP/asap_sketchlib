@@ -1164,13 +1164,13 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     }
 
     /// Inserts with hash optimization using precomputed hash value.
-    pub fn update_weighted_with_hash(&mut self, hashed_val: u128, c: i64) {
+    pub fn update_weighted_with_hash(&mut self, hashed_val: u128, weight: i64) {
         let mask_bits = self.counts.mask_bits();
         for i in 0..self.rows {
             let (idx, sign_bit) =
                 CountSketchWithL2Norm::cell_for_row(hashed_val, i, self.cols, mask_bits);
             let old_value = self.counts.query_one_counter(i, idx);
-            self.write_counter(i, idx, old_value + sign_bit * c);
+            self.write_counter(i, idx, old_value + sign_bit * weight);
         }
     }
 
@@ -1211,7 +1211,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     }
 
     /// Inserts without L2 update using precomputed hash value.
-    pub fn update_weighted_with_hash_without_l2(&mut self, hashed_val: u128, c: i64) {
+    pub fn update_weighted_with_hash_without_l2(&mut self, hashed_val: u128, weight: i64) {
         let mask_bits = self.counts.mask_bits() as usize;
         let mask = (1u128 << mask_bits) - 1;
         let mut shift_amount = 0;
@@ -1223,7 +1223,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
             let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
             let sign_bit = -(1 - 2 * bit);
 
-            self.counts[i][idx] += sign_bit * c;
+            self.counts[i][idx] += sign_bit * weight;
 
             shift_amount += mask_bits;
             sign_bit_pos -= 1;
@@ -1232,9 +1232,9 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
 
     /// Update and estimate with hash optimization.
     /// due to the limitation of seeds, use fast_insert only
-    pub fn update_weighted_and_estimate(&mut self, val: &DataInput, c: i64) -> f64 {
+    pub fn update_weighted_and_estimate(&mut self, val: &DataInput, weight: i64) -> f64 {
         let hashed_val = H::hash128_seeded(self.seed_index, val);
-        self.update_weighted_with_hash(hashed_val, c);
+        self.update_weighted_with_hash(hashed_val, weight);
         self.estimate_with_hash(hashed_val)
     }
 

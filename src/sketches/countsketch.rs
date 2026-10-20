@@ -444,14 +444,14 @@ where
 
     /// Inserts an observation with the given count using a pre-computed hash value.
     #[inline(always)]
-    pub fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, many: S::Counter) {
+    pub fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, weight: S::Counter) {
         self.counts.fast_insert(
             |counter, value, row| {
                 let sign = hashed_val.sign_for_row(row);
                 let delta = if sign > 0 { *value } else { -*value };
                 *counter += delta;
             },
-            many,
+            weight,
             hashed_val,
         );
     }
