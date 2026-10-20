@@ -4,9 +4,9 @@ This is the canonical API entry point for `asap_sketchlib`.
 
 ## Core Sketch APIs
 
-- [CountMinSketch Sketch](./api/api_countmin.md) - `Ready`
+- [Count-Min Sketch](./api/api_countmin.md) - `Ready`
   - Reference: Cormode & Muthukrishnan, "An Improved Data Stream Summary: The Count-Min Sketch and its Applications," J. Algorithms 2005. [https://www.cs.rutgers.edu/~muthu/cm-jal.pdf](https://www.cs.rutgers.edu/~muthu/cm-jal.pdf)
-- [Count (`Count Sketch`)](./api/api_count_sketch.md) - `Ready`
+- [Count Sketch](./api/api_count_sketch.md) - `Ready`
   - Reference: Charikar, Chen & Farach-Colton, "Finding Frequent Items in Data Streams," ICALP 2002. [https://dl.acm.org/doi/10.1007/3-540-45465-9_59](https://dl.acm.org/doi/10.1007/3-540-45465-9_59)
 - [HyperLogLog](./api/api_hyperloglog.md) - `Ready`
   - `Classic` variant: Flajolet, Fusy, Gandouet & Meunier, "HyperLogLog: the analysis of a near-optimal cardinality estimation algorithm," AOFA 2007. [https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf](https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf)
@@ -34,7 +34,7 @@ This is the canonical API entry point for `asap_sketchlib`.
   - Reference: "On synopses for distinct-value estimation under multiset operations." [https://dl.acm.org/doi/10.1145/1247480.1247504](https://dl.acm.org/doi/10.1145/1247480.1247504)
 - [CountMinHll](./api/api_countminsketch_hll.md) - `Experimental`
   - Per-key distinct counts from a Count-Min grid of per-cell HyperLogLogs. Behind the `experimental` feature; `Hydra` with `HydraCounter::Hll` answers the same query on a stable API.
-- [MicroCM (MicroscopeSketch)](./api/api_microscope.md) - `Experimental`
+- [MicroCm (Microscope sketch)](./api/api_microscope.md) - `Experimental`
   - Sliding-window frequency estimation with adaptive zoom. Behind the `experimental` feature; not yet checked against the paper's published measurements.
   - Reference: Zhao et al., "MicroscopeSketch: Accurate Sliding Estimation Using Adaptive Zooming," KDD 2023. [https://dl.acm.org/doi/10.1145/3580305.3599432](https://dl.acm.org/doi/10.1145/3580305.3599432)
 

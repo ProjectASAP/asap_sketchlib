@@ -283,7 +283,7 @@ impl Hash for OwnedDataInput {
 /// Query type for Hydra sketches.
 #[derive(Clone, Debug)]
 pub enum HydraQuery<'a> {
-    /// Query for frequency of a specific item (for CountMinSketch, Count, etc.)
+    /// Query for frequency of a specific item (for CountMinSketch, CountSketch, etc.)
     Frequency(DataInput<'a>),
     /// Query for quantile/CDF at a threshold (for KLL, DDSketch, etc.)
     Quantile(f64),

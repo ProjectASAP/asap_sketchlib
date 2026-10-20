@@ -14,11 +14,11 @@ signals a backwards-compatible change.
 
 - **`TupleKey` and `KeyColumn`**, a heap key of typed columns (null, bool,
   `i64`, `f64`, string) encoded into one canonical byte string, so a GROUP BY
-  over several columns keeps one CMSHeap or CSHeap candidate per tuple under
+  over several columns keeps one CountMinSketchWithHeap or CountSketchWithHeap candidate per tuple under
   `key_type` `"bytes"`. The encoding is ASAPv1's tuple key (spec Section 2);
   `-0.0` encodes as `0.0` and every `NaN` as one `NaN`.
 - **ASAPv1 golden fixtures for KMV, Bloom, Space-Saving, UniformSampling,
-  UnivMon Optimized, UnivMon-Q, ExponentialHistogram and EHSketchList**, so
+  UnivMonTwoTier, UnivMon-Q, ExponentialHistogram and EhBucketSketch**, so
   every kind_id the spec marks implemented has one. The spec fixes Bloom's bit
   order within a word: column `c` is bit `c mod 64`.
 - **`Vector3D<T>`**, filled in from a stub. A `rows x cols` grid whose every
@@ -44,9 +44,9 @@ signals a backwards-compatible change.
   a stream of `(key, distinct_value)` pairs, how many distinct values has this
   key seen? A Count-Min-shaped grid whose every cell is a small HyperLogLog,
   held in one contiguous `Vector3D<u8>` register plane. `Hydra` with
-  `HydraCounter::HLL` answers the same query on a stable API, with one
+  `HydraCounter::Hll` answers the same query on a stable API, with one
   heap-allocated HLL per cell.
-- **`MicroCM`** (`experimental` feature), a sliding-window frequency sketch
+- **`MicroCm`** (`experimental` feature), a sliding-window frequency sketch
   following MicroscopeSketch (Zhao et al., KDD 2023). Each cell holds `T + 2`
   byte-wide pixels and one shared zoom exponent, so the counters stay narrow
   and the exponent buys the range instead of the counters being widened for
@@ -77,40 +77,40 @@ signals a backwards-compatible change.
   payload is unchanged.
 - **`peek_kind_id(&[u8])`** returns an ASAPv1 envelope's `kind_id` after
   checking its magic, version, and framing, without decoding the sketch.
-- **`CountMinDelta`**, the ASAPv1 Count-Min delta (`0x02 0x80`): built with
+- **`CountMinSketchDelta`**, the ASAPv1 Count-Min delta (`0x02 0x80`): built with
   `new` from changed cells, serialized like a sketch, and added with
-  `CountMin::merge_delta`, which changes nothing when it fails.
+  `CountMinSketch::merge_delta`, which changes nothing when it fails.
 - **`sketches::CountSketchDelta`**, the ASAPv1 Count Sketch delta (`0x04 0x80`),
   and `f64` Count Sketch counters (`counter_type` `"f64"`): the delta is built
   with `new` from changed cells, serialized like a sketch, and added with
-  `Count::merge_delta`, which changes nothing when it fails.
-- **`CMSHeapDelta`**, the ASAPv1 CMSHeap delta (`0x03 0x80`), and `f64`
-  CMSHeap insert and merge, with unrounded `f64` heap counts.
-- **`CSHeapDelta`**, the ASAPv1 CSHeap delta (`0x0a 0x80`), and unrounded
-  `f64` heap counts for an `f64` CSHeap (`CsHeapCounter`).
+  `CountSketch::merge_delta`, which changes nothing when it fails.
+- **`CountMinSketchWithHeapDelta`**, the ASAPv1 CountMinSketchWithHeap delta (`0x03 0x80`), and `f64`
+  CountMinSketchWithHeap insert and merge, with unrounded `f64` heap counts.
+- **`CountSketchWithHeapDelta`**, the ASAPv1 CountSketchWithHeap delta (`0x0a 0x80`), and unrounded
+  `f64` heap counts for an `f64` CountSketchWithHeap (`CountSketchHeapCounter`).
 - **`HyperLogLogDelta`**, the ASAPv1 HLL Classic and Ertl-MLE deltas
   (`0x01 0x81`, `0x01 0x82`): built with `new` from changed registers,
   serialized like a sketch, and merged register-wise by `max` with
   `HyperLogLogImpl::merge_delta`.
-- **ASAPv1 for `SetAggregator` (`0x08 0x00`) and `DeltaResult` (`0x08 0x80`)**:
-  `serialize_to_bytes` / `deserialize_from_bytes` on both types.
-- **`DDSketchDelta`**, the ASAPv1 DDSketch delta (`0x05 0x80`): built with
+- **ASAPv1 for `SetAggregator` (`0x08 0x00`) and `SetAggregatorDelta` (`0x08 0x80`)**:
+  `to_asapv1` / `from_asapv1` on both types.
+- **`DdSketchDelta`**, the ASAPv1 DDSketch delta (`0x05 0x80`): built with
   `new` from changed buckets of both stores and a zero-count increment,
-  serialized like a sketch, and added with `DDSketch::merge_delta`, which
+  serialized like a sketch, and added with `DdSketch::merge_delta`, which
   changes nothing when it fails.
 - **`admission_rate`**, the optional ASAPv1 metadata key of a sampled HLL,
   Count-Min, Count Sketch or DDSketch state and its delta: set with
   `with_admission_rate(p)` and read with `admission_rate()` on
-  `HyperLogLogImpl`, `HyperLogLogHIPImpl`, `CountMin`, `Count` and `DDSketch`,
+  `HyperLogLogImpl`, `HyperLogLogHipImpl`, `CountMinSketch`, `CountSketch` and `DdSketch`,
   and set with `with_admission_rate(p)` on the four delta types. Estimates are
   of the admitted updates; a consumer divides them by `p`. States and deltas
   merge only at equal rates. A sketch nested in another kind's state must hold
   `p = 1` to serialize.
-- **`CMSSpaceSaving` and `CSSpaceSaving`**: a Count-Min or Count Sketch
+- **`CountMinSketchWithSpaceSaving` and `CountSketchWithSpaceSaving`**: a Count-Min or Count Sketch
   matrix beside a `SpaceSaving` summary of `capacity` counters. Every update
   reaches both; `top_k(k)` ranks the summary's keys by their matrix estimate.
-  `insert_many` gives the summary the weight rounded up, or nothing when it is
-  not positive (`SpaceSavingCounter`). Merge adds the matrices and merges the
+  `update_weighted` gives the summary the weight rounded up, or nothing when it is
+  not positive (`CandidateCounter`). Merge adds the matrices and merges the
   summaries, and panics on a dimension, admission-rate or capacity mismatch.
   ASAPv1 kinds `0x1e 0x00` and `0x1f 0x00` (spec §3.24, §3.25) for `i32`,
   `i64` and `f64` `Vector2D` matrices on either path, with no delta kind.
@@ -127,22 +127,16 @@ signals a backwards-compatible change.
   `message_pack_format::portable::...`; `MessagePackCodec` from
   `message_pack_format`. `CountSketchDelta` at the root is the ASAPv1
   Count Sketch delta.
-- **Every sketch write is `update`** (breaking). `insert` -> `update`;
-  `insert_many` and weighted `insert` -> `update_weighted`; `bulk_insert`,
-  batch `insert_many`, `insert_batch`, `bulk_update` -> `update_batch`;
-  `bulk_insert_many` -> `update_weighted_batch`; `insert_with_hash`,
-  `insert_by_hash` -> `update_with_hash`; `bulk_insert_with_hashes`,
-  `insert_many_with_hashes` -> `update_batch_with_hashes`;
-  `bulk_insert_many_with_hashes` -> `update_weighted_batch_with_hashes`;
-  `insert_at*`/`bulk_insert_at*` -> `update_at*`/`update_batch_at*`;
-  `insert_heavy_only` -> `update_heavy_only`; `insert_cached_step` ->
-  `update_batch_cached_step`; `bulk_update_data_input` ->
-  `update_batch_data_input`; `tumbling_insert` -> `tumbling_update_weighted`;
-  `insert_emit_*` -> `update_emit_*`; `insert_hash_emit_delta` ->
-  `update_emit_delta_with_hash`; `insert_hashes_emit_delta`,
-  `insert_hashes_emit_keyed_delta` -> `update_emit_delta_with_row_hashes`,
-  `update_emit_keyed_delta_with_row_hashes`; `CocoBucket::add_v` -> `add`.
-  Weight parameters are named `weight`. Custom `sketch_catalog` and
+- **Every sketch write is `update`** (breaking). A write is named
+  `update[_weighted][_batch][_at | _emit_delta | ...][_with_hash | _with_hashes |
+  _with_row_hashes][_with_threshold | _and_threshold]`: `insert` -> `update`,
+  `insert_many` -> `update_weighted`, `bulk_insert` -> `update_batch`,
+  `bulk_insert_many_with_hashes` -> `update_weighted_batch_with_hashes`, and so
+  on. The cases the rule does not spell out: `tumbling_insert` ->
+  `tumbling_update_weighted`, `insert_cached_step` ->
+  `update_batch_cached_step`, `insert_hashes_emit_*` ->
+  `update_emit_*_with_row_hashes`, `CocoBucket::add_v` -> `add`. Weight
+  parameters are named `weight`. Custom `sketch_catalog` and
   `TumblingWindowSketch` impls break.
 - **Acronyms are one word in type names** (breaking). `KLL`, `KLLDynamic`,
   `KLLConfig` -> `Kll`, `KllDynamic`, `KllConfig`; `DDSketch`, `DDSketchDelta`
@@ -179,7 +173,11 @@ signals a backwards-compatible change.
   `CocoSketch`, `CocoWorkerSketch` -> `CocoSketchWorker`; `bktlen` ->
   `heavy_buckets`, `init_with_length` -> `with_heavy_buckets`,
   `init_with_dimensions` -> `with_heavy_and_light`, `query` -> `estimate`;
-  Coco `w`/`d` -> `cols`/`rows`, `estimate_key` -> `estimate`.
+  Coco `w`/`d` -> `cols`/`rows`, `estimate_key` -> `estimate`. Coco
+  constructors take `(rows, cols)`: `init_with_size(w, d)` ->
+  `with_dimensions(rows, cols)`, `init_with_size_and_seed(w, d, seed)` ->
+  `with_dimensions_and_seed(rows, cols, seed)`, and `CocoSketchWorker::new` /
+  `with_seed` swap their first two arguments the same way.
 - **KLL, CDF and DDSketch** (breaking). KLL `init`/`init_with_seed`/
   `init_kll`/`init_kll_with_seed` -> `new`/`with_seed`/`with_k`/
   `with_k_and_seed`; `wire_*` accessors -> `level_bounds_top_down()`,
@@ -228,6 +226,12 @@ signals a backwards-compatible change.
   `CandidateCounter`; `KeepSmallest`/`KeepLargest` -> `RetainLargest`/
   `RetainSmallest`; `KeyColumn::Str` -> `KeyColumn::String`.
 - **`DeltaResult` -> `SetAggregatorDelta`** (breaking).
+- **Error, panic and label strings name the new types, methods and fields**
+  (breaking for code that matches on them). `sketch_type()` reports
+  `"CountMinSketch"`, `"CountSketch"` and `"CountSketchWithL2Norm"` for
+  `EnsembleSketch` and `EhBucketSketch`; UnivMon-Q config errors name
+  `layers`, `top_layer_cols`, `rows` and `heap_size`. ASAPv1 bytes are
+  unchanged.
 - **Hashing and seeds** (breaking). `hash_item64_seeded`/`hash_item128_seeded`
   -> `hash64_seeded_owned`/`hash128_seeded_owned`; seed-table index
   parameters are `seed_index`; `CANONICAL_HASH_SEED` ->
@@ -250,16 +254,16 @@ signals a backwards-compatible change.
   `cell_counter_type`, `cell_mode`, `cell_precision`, `cell_k`, `cell_m`,
   `cell_item_type`, `cell_layers`, `cell_heap_size`, `cell_key_type`). Bytes
   with the old keys are rejected; the affected goldens are regenerated.
-- **UnivMon Optimized and UnivMon-Q metadata keys follow the spec.**
-  UnivMon Optimized writes `layers`, `elephant_rows`, `elephant_cols`,
+- **UnivMonTwoTier and UnivMon-Q metadata keys follow the spec.**
+  UnivMonTwoTier writes `layers`, `elephant_rows`, `elephant_cols`,
   `mouse_rows` and `mouse_cols`; UnivMon-Q writes `layers`, `top_layer_cols`,
   `cols_halving_period`, `rows` and `heap_size`. Bytes with the old keys are
   rejected.
-- **An empty heap or summary must carry `key_type` `"u64"`.** CMSHeap, CSHeap,
-  their deltas, UnivMon, UnivMon Optimized, Hydra's UnivMon counter,
-  Space-Saving, CMSSpaceSaving and CSSpaceSaving reject one under any other
+- **An empty heap or summary must carry `key_type` `"u64"`.** CountMinSketchWithHeap, CountSketchWithHeap,
+  their deltas, UnivMon, UnivMonTwoTier, Hydra's UnivMon counter,
+  Space-Saving, CountMinSketchWithSpaceSaving and CountSketchWithSpaceSaving reject one under any other
   name.
-- **CMSHeap, CSHeap, their deltas, UnivMon, UnivMon Optimized and Hydra's
+- **CountMinSketchWithHeap, CountSketchWithHeap, their deltas, UnivMon, UnivMonTwoTier and Hydra's
   UnivMon counter read a `"string"` key from msgpack `str` alone**; UTF-8
   `bin` keys relabelled `"string"` are rejected.
 - **Space-Saving and UnivMon-Q ASAPv1 decodes reject entries out of emitted
@@ -267,17 +271,17 @@ signals a backwards-compatible change.
   two `NaN` keys fail on both doors.
 - **`HyperLogLogImpl::merge_delta` returns `Result<(), String>`**, an `Err`
   when the delta's admission rate differs from the state's.
-- **`EHSketchList::merge` and `EHBucket::to_merge` return `Result<(), String>`**,
+- **`EhBucketSketch::merge` and `EhBucket::merge` return `Result<(), String>`**,
   passing the inner sketch's error through.
-- **The derived serde form of `HyperLogLogImpl`, `HyperLogLogHIPImpl`,
-  `CountMin`, `Count` and `DDSketch` gains a trailing `admission_rate` field**,
+- **The derived serde form of `HyperLogLogImpl`, `HyperLogLogHipImpl`,
+  `CountMinSketch`, `CountSketch` and `DdSketch` gains a trailing `admission_rate` field**,
   `1` when absent and refused outside `(0, 1]`.
 - **DDSketch has one ASAPv1 encoding**: `metadata_version` 1 with all eight
   payload fields, the negative store and zero count included. Bytes change for
   positive-only and empty sketches, and `metadata_version` 2 is rejected.
-- **The CMSHeap and CSHeap ASAPv1 metadata key `k` is renamed `heap_size`**,
-  and the CMSHeap, CSHeap and UnivMon decoders reject heap entries out of
-  emitted order. `HHItem` and `HHHeap` take a count type, `i64` by default.
+- **The CountMinSketchWithHeap and CountSketchWithHeap ASAPv1 metadata key `k` is renamed `heap_size`**,
+  and the CountMinSketchWithHeap, CountSketchWithHeap and UnivMon decoders reject heap entries out of
+  emitted order. `HeapEntry` and `TopKHeap` take a count type, `i64` by default.
 - **ASAPv1 decoders reject a block with bytes after its msgpack value, and a
   float field that is not msgpack float64** (an `f32` key: not float32).
 - **The ASAPv1 golden fixtures live in their own repo**,
@@ -293,9 +297,9 @@ signals a backwards-compatible change.
   once for all of them instead of once per suite. `cargo test --test e2e` runs
   the set; a single suite is a filter, `cargo test --test e2e frequency::`.
 - Two doc comments described behaviour the code does not have, and now say
-  what it does: `HHHeap::update`'s return value reports whether the key took
+  what it does: `TopKHeap::update`'s return value reports whether the key took
   its place without displacing another, not whether every key offered so far
-  is retained; `TumblingWindow::insert` closes a period that saw no arrivals
+  is retained; `TumblingWindow::update_weighted` closes a period that saw no arrivals
   as an empty window like any other, and that window takes a place in
   `max_windows`.
 

@@ -112,7 +112,7 @@ for &(event, true_count) in &events {
 ```rust
 use asap_sketchlib::Kll;
 
-// Kll is a quantile sketch — it tracks the distribution of values so you can
+// KLL is a quantile sketch — it tracks the distribution of values so you can
 // ask questions like "what is the median?" without storing every data point.
 let mut sketch = Kll::<f64>::default();
 

@@ -47,7 +47,7 @@ const COCO_SEED: u64 = 0xC0C0;
 
 /// Matrix dimensions for the counter-backed variants, chosen so their bounds
 /// are meaningful at `N` updates over `DOMAIN` keys.
-/// UnivMon layer geometry used by the `UNIVMON` payload below. Its L2 band is
+/// UnivMon layer geometry used by the `UnivMon` payload below. Its L2 band is
 /// derived from these, so a change here moves the band with it.
 const UNIVMON_ROWS: usize = 5;
 const UNIVMON_COLS: usize = 2_048;
@@ -65,7 +65,7 @@ fn full_span(eh: &ExponentialHistogram) -> (u64, u64) {
 
 // ------------------------------------------------- Norm policy per variant
 
-/// Which merge rule each payload selects. `COUNTL2HH` and `UNIVMON` carry an
+/// Which merge rule each payload selects. `CountSketchWithL2Norm` and `UnivMon` carry an
 /// L2 mass and are merged by it; every other variant has no L2 mass to read
 /// and falls back to the L1 bucket-size rule. Getting this wrong would silently
 /// change how buckets consolidate, and therefore how much of the window a query
@@ -701,7 +701,7 @@ fn tumbling_univmon_q_windows_carry_exact_aggregates_through_rotation() {
 /// `EhBucketSketch::merge`. A missing arm is invisible at runtime — `EhBucket::merge`
 /// discards the `Result` — so the histogram keeps counting bucket sizes while
 /// silently dropping the merged sketch's contents, and every query afterwards
-/// reads a single bucket. `ELASTIC` shipped without its arm and lost the whole
+/// reads a single bucket. `ElasticSketch` shipped without its arm and lost the whole
 /// window; this pins every variant so the next one cannot.
 #[test]
 fn every_eh_variant_can_merge_into_its_own_kind() {
@@ -767,7 +767,7 @@ fn every_eh_variant_can_merge_into_its_own_kind() {
     }
 }
 
-/// `UNIFORM` is the experimental reservoir payload: its window answers are
+/// `Uniform` is the experimental reservoir payload: its window answers are
 /// retained-sample bookkeeping, not an estimate, so they are checked exactly.
 #[cfg(feature = "experimental")]
 #[test]
@@ -1287,7 +1287,7 @@ mod documented_matrix {
     }
 }
 
-// ---------------------------------------------------------------- MicroCM
+// ---------------------------------------------------------------- MicroCm
 
 /// MicroscopeSketch's Count-Min grid over a sliding window.
 ///

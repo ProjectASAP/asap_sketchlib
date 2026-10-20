@@ -73,12 +73,12 @@ impl<T: NumericalValue> Default for KllDynamic<T> {
 }
 
 impl<T: NumericalValue> KllDynamic<T> {
-    /// Creates a KllDynamic sketch with the given `k` and `m` parameters.
+    /// Creates a KLL dynamic sketch with the given `k` and `m` parameters.
     pub fn new(k: usize, m: usize) -> Self {
         Self::init_internal(k, m, Coin::new(), None)
     }
 
-    /// Creates a KllDynamic sketch with an explicit RNG seed for the
+    /// Creates a KLL dynamic sketch with an explicit RNG seed for the
     /// compaction coin. Two sketches built with the same seed and fed the same
     /// input produce identical state, which is what makes reproducible-replay
     /// scenarios and deterministic accuracy tests possible. The seed is also
@@ -114,7 +114,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         s
     }
 
-    /// Creates a KllDynamic sketch with default `m` and the provided `k`.
+    /// Creates a KLL dynamic sketch with default `m` and the provided `k`.
     pub fn with_k(k: i32) -> Self {
         Self::new(k as usize, 8)
     }
@@ -775,7 +775,7 @@ mod tests {
         );
     }
 
-    // General case: merging two NON-empty KllDynamic sketches must still
+    // General case: merging two NON-empty KLL dynamic sketches must still
     // preserve total count (within the same inherent rounding budget as
     // ordinary inserts) and produce quantile estimates consistent with a
     // reference built from the union of both inputs' raw data. Guards

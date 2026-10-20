@@ -1,4 +1,4 @@
-# API: MicroCM (MicroscopeSketch)
+# API: MicroCm (Microscope sketch)
 
 Status: `Experimental`
 

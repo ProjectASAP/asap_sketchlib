@@ -1,5 +1,5 @@
 //! E2E OctoSketch suite: delta-promotion conservation invariants for the
-//! CountMinSketch, Count and HyperLogLog child/parent protocol, and the
+//! CountMinSketch, CountSketch and HyperLogLog child/parent protocol, and the
 //! `octo-runtime` multi-threaded pipeline checked against single-threaded
 //! replays of the same round-robin partition.
 //!

@@ -56,49 +56,49 @@ pub struct CountMinSketch<
     admission_rate: f64,
 }
 
-// Default CountMinSketch sketch for Vector2D<i32> (RegularPath).
+// Default Count-Min sketch for Vector2D<i32> (RegularPath).
 impl Default for CountMinSketch<Vector2D<i32>, RegularPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMinSketch sketch for Vector2D<i32> (FastPath).
+// Default Count-Min sketch for Vector2D<i32> (FastPath).
 impl Default for CountMinSketch<Vector2D<i32>, FastPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMinSketch sketch for Vector2D<i64> (RegularPath).
+// Default Count-Min sketch for Vector2D<i64> (RegularPath).
 impl Default for CountMinSketch<Vector2D<i64>, RegularPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMinSketch sketch for Vector2D<i64> (FastPath).
+// Default Count-Min sketch for Vector2D<i64> (FastPath).
 impl Default for CountMinSketch<Vector2D<i64>, FastPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMinSketch sketch for Vector2D<i128> (RegularPath).
+// Default Count-Min sketch for Vector2D<i128> (RegularPath).
 impl Default for CountMinSketch<Vector2D<i128>, RegularPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMinSketch sketch for Vector2D<i128> (FastPath).
+// Default Count-Min sketch for Vector2D<i128> (FastPath).
 impl Default for CountMinSketch<Vector2D<i128>, FastPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMinSketch sketch for Vector2D<f64> (RegularPath and FastPath).
+// Default Count-Min sketch for Vector2D<f64> (RegularPath and FastPath).
 impl Default for CountMinSketch<Vector2D<f64>, RegularPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
@@ -111,84 +111,84 @@ impl Default for CountMinSketch<Vector2D<f64>, FastPath> {
     }
 }
 
-// Default CountMinSketch sketch for FixedMatrix (RegularPath).
+// Default Count-Min sketch for FixedMatrix (RegularPath).
 impl Default for CountMinSketch<FixedMatrix, RegularPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(FixedMatrix::default())
     }
 }
 
-// Default CountMinSketch sketch for FixedMatrix (FastPath).
+// Default Count-Min sketch for FixedMatrix (FastPath).
 impl Default for CountMinSketch<FixedMatrix, FastPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(FixedMatrix::default())
     }
 }
 
-// Default CountMinSketch sketch for DefaultMatrixI32 (RegularPath).
+// Default Count-Min sketch for DefaultMatrixI32 (RegularPath).
 impl Default for CountMinSketch<DefaultMatrixI32, RegularPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(DefaultMatrixI32::default())
     }
 }
 
-// Default CountMinSketch sketch for DefaultMatrixI32 (FastPath).
+// Default Count-Min sketch for DefaultMatrixI32 (FastPath).
 impl Default for CountMinSketch<DefaultMatrixI32, FastPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(DefaultMatrixI32::default())
     }
 }
 
-// Default CountMinSketch sketch for QuickMatrixI64 (RegularPath).
+// Default Count-Min sketch for QuickMatrixI64 (RegularPath).
 impl Default for CountMinSketch<QuickMatrixI64, RegularPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(QuickMatrixI64::default())
     }
 }
 
-// Default CountMinSketch sketch for QuickMatrixI64 (FastPath).
+// Default Count-Min sketch for QuickMatrixI64 (FastPath).
 impl Default for CountMinSketch<QuickMatrixI64, FastPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(QuickMatrixI64::default())
     }
 }
 
-// Default CountMinSketch sketch for QuickMatrixI128 (RegularPath).
+// Default Count-Min sketch for QuickMatrixI128 (RegularPath).
 impl Default for CountMinSketch<QuickMatrixI128, RegularPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(QuickMatrixI128::default())
     }
 }
 
-// Default CountMinSketch sketch for QuickMatrixI128 (FastPath).
+// Default Count-Min sketch for QuickMatrixI128 (FastPath).
 impl Default for CountMinSketch<QuickMatrixI128, FastPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(QuickMatrixI128::default())
     }
 }
 
-// Default CountMinSketch sketch for DefaultMatrixI64 (RegularPath).
+// Default Count-Min sketch for DefaultMatrixI64 (RegularPath).
 impl Default for CountMinSketch<DefaultMatrixI64, RegularPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(DefaultMatrixI64::default())
     }
 }
 
-// Default CountMinSketch sketch for DefaultMatrixI64 (FastPath).
+// Default Count-Min sketch for DefaultMatrixI64 (FastPath).
 impl Default for CountMinSketch<DefaultMatrixI64, FastPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(DefaultMatrixI64::default())
     }
 }
 
-// Default CountMinSketch sketch for DefaultMatrixI128 (RegularPath).
+// Default Count-Min sketch for DefaultMatrixI128 (RegularPath).
 impl Default for CountMinSketch<DefaultMatrixI128, RegularPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(DefaultMatrixI128::default())
     }
 }
 
-// Default CountMinSketch sketch for DefaultMatrixI128 (FastPath).
+// Default Count-Min sketch for DefaultMatrixI128 (FastPath).
 impl Default for CountMinSketch<DefaultMatrixI128, FastPath> {
     fn default() -> Self {
         CountMinSketch::from_storage(DefaultMatrixI128::default())

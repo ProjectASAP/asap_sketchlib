@@ -292,7 +292,7 @@ impl<T: NumericalValue> Kll<T> {
         Self::new(k as usize, 8)
     }
 
-    /// `with_k` with an explicit RNG seed. See `init_with_seed`.
+    /// `with_k` with an explicit RNG seed. See `with_seed`.
     pub fn with_k_and_seed(k: i32, seed: u64) -> Self {
         Self::with_seed(k as usize, 8, seed)
     }
@@ -731,7 +731,7 @@ impl<T: NumericalValue> Kll<T> {
     // -- Lifecycle -----------------------------------------------------------
 
     /// Resets the sketch to its empty initial state, keeping the same `k` and `m` parameters.
-    /// If the sketch was constructed with an explicit seed (`init_with_seed` /
+    /// If the sketch was constructed with an explicit seed (`with_seed` /
     /// `with_k_and_seed`), the coin is re-seeded from that seed so determinism
     /// survives `clear()` (and therefore window rotation in stateful aggregators).
     pub fn clear(&mut self) {
@@ -1000,7 +1000,7 @@ impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for Kll<T> {
             // round-tripped sketch keeps its current coin state but
             // would re-randomize from time on a subsequent clear().
             // Callers that need clear()-determinism after a deserialize
-            // should rebuild via init_with_seed.
+            // should rebuild via with_seed.
             seed: None,
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,

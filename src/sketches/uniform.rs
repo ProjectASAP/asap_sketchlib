@@ -5,6 +5,7 @@ use crate::DataInput;
 mod wire;
 
 const GOLDEN_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+const DEFAULT_SEED: u64 = GOLDEN_GAMMA;
 const MIX_MULTIPLIER_1: u64 = 0xBF58_476D_1CE4_E5B9;
 const MIX_MULTIPLIER_2: u64 = 0x94D0_49BB_1331_11EB;
 
@@ -30,7 +31,7 @@ pub struct UniformSampling {
 
 impl UniformSampling {
     pub fn new(sample_rate: f64) -> Self {
-        Self::with_seed(sample_rate, GOLDEN_GAMMA)
+        Self::with_seed(sample_rate, DEFAULT_SEED)
     }
 
     pub fn with_seed(sample_rate: f64, seed: u64) -> Self {

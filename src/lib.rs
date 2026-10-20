@@ -9,10 +9,11 @@
 //! - [`sketch_framework`]: higher-level composition layers such as Hydra,
 //!   UnivMon, tumbling windows, and batch/parallel execution helpers.
 //! - [`message_pack_format`]: MessagePack/proto wire format shared with
-//!   `sketchlib-go`. Owns the wire-DTO sketch types consumed by the ASAP
-//!   query engine (`CountMinSketch`, `CountSketch`, `KllSketch`, `HllSketch`,
-//!   `DdSketch`, `HydraKllSketch`, `CountMinSketchWithHeap`,
-//!   `SetAggregator`, `SetAggregatorDelta`).
+//!   `sketchlib-go`. `message_pack_format::portable` owns the legacy wire-DTO
+//!   sketch types consumed by the ASAP query engine (`portable::{CountMinSketch,
+//!   CountSketch, KllSketch, HllSketch, DdSketch, HydraKllSketch,
+//!   CountMinSketchWithHeap}`); `SetAggregator` and `SetAggregatorDelta` are
+//!   re-exported at the crate root.
 //!
 //! Most users can start with the crate-root re-exports such as [`DataInput`],
 //! [`CountMinSketch`], [`HyperLogLog`], [`Kll`], and [`DdSketch`]. Reach for the

@@ -129,7 +129,7 @@ Feature-gated behind `--features experimental`.
 
 ## e2e/frequency
 
-- CountMinSketch sketch
+- Count-Min sketch
   - both vector based and fixed matrix based
   - both FastPath and RegularPath
   - size, combination of row and column:
@@ -529,7 +529,7 @@ Feature-gated behind `--features experimental`.
 
 ## e2e/heavy_hitters
 
-- CountMinSketch sketch
+- Count-Min sketch
   - both vector based and fixed matrix based
   - both FastPath and RegularPath
   - size, combination of row and column:
@@ -968,7 +968,7 @@ Feature-gated behind `--features experimental`.
 ## e2e/nitro
 
 - NitroBatch
-  - target sketches: CountMinSketch (row 5, col 2048, FastPath) and Count sketch (row 5, col 2048, FastPath)
+  - target sketches: CountMinSketch (row 5, col 2048, FastPath) and CountSketch (row 5, col 2048, FastPath)
   - Configuration (sampling rate): 1.0, 0.5
   - Input: one key repeated 100K times, so the rescaling of the estimator is what the bound measures
   - error bound:
@@ -1099,7 +1099,7 @@ Feature-gated behind `--features experimental`.
     - every variant selects the documented merge norm, and can merge into its own kind
     - buckets past the window expire, the retained span is reported, and expiry follows the window length the histogram was last given
     - a custom bucket update matches repeated inserts
-- MicroCM (feature-gated behind `--features experimental`)
+- MicroCm (feature-gated behind `--features experimental`)
   - Configuration: row 4, col 1024, T=8, c=2, count-based clock of 1000 items per sub-window
   - Input: 40K zipf i64, s=1.1, key-size=4096
   - reference window: `DeltaStrategy::Over` charges sub-windows `n-T ..= n` in full, and a count-based clock puts item `i` in sub-window `i / L`, so the exact window is items `[(n-T) * L, seen)` -- no tolerance is spent on granularity
@@ -1111,7 +1111,7 @@ Feature-gated behind `--features experimental`.
 
 ## conformance_kit
 
-- MicroCM (feature-gated behind `--features experimental`)
+- MicroCm (feature-gated behind `--features experimental`)
   - Configuration: row 4, col 4096, T=64, c=2, count-based clock of 1000 items per sub-window
   - Input: the kit's shared 60K zipf i64 stream, s=1.1, key-size=2048
   - batteries: `frequency_battery` with `one_sided: true`, and `merge_equivalence_battery`

@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn insert_many_updates_estimate_and_heap() {
-        // Verifies batched insert_many updates both estimate and heap entry count.
+        // Verifies update_weighted updates both estimate and heap entry count.
         let mut sh = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 1024, 4);
         let key = DataInput::Str("many");
         sh.update_weighted(&key, 11);

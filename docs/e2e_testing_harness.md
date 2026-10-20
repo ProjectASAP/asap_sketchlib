@@ -52,7 +52,7 @@ DDSketch representative that violated the advertised α bound at bucket edges.
 None of these were caught by the existing unit tests.
 
 Tightening the bounds to the ones each family actually promises surfaced more:
-a missing `ELASTIC` arm in `EhBucketSketch::merge` that silently discarded every
+a missing `ElasticSketch` arm in `EhBucketSketch::merge` that silently discarded every
 bucket merge in an exponential histogram, HLL Classic's accuracy cliff at the
 linear-counting switchover, and a structural coupling in `ExponentialHistogramUnivMon` that
 makes its sketch-tier cardinality unrecoverable.

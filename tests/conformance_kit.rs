@@ -792,7 +792,7 @@ fn uniform_sampling_at_full_rate_passes_quantile_conformance() {
     .assert_ok();
 }
 
-// --------------------------------------------------------------- MicroCM
+// --------------------------------------------------------------- MicroCm
 
 /// MicroscopeSketch's Count-Min grid, run at a configuration where it is
 /// exact.

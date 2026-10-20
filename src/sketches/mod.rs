@@ -22,7 +22,7 @@
 //! sketches map values to rows and columns. Several specialized sketches in
 //! this module are feature-gated behind `experimental`.
 //!
-//! ## `*sketch` vs `*sketch_topk` files
+//! ## `*sketch` vs `*sketch_heap` files
 //!
 //! For each Count-Min / Count Sketch style algorithm we ship two files:
 //!
@@ -36,7 +36,7 @@
 //!   specific key appear?"
 //!
 //! The split keeps the core sketch lean for callers that only need point
-//! queries, while the `_topk` variants compose the sketch with heap
+//! queries, while the `_heap` variants compose the sketch with heap
 //! bookkeeping for heavy-hitter workloads.
 
 pub mod coco;

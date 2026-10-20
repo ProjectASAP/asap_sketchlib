@@ -196,7 +196,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
         let lowest = self.buckets[self.bucket_head].count;
         debug_assert!(
             self.discarded_max <= lowest,
-            "the ceiling {} sits above the lowest live weight {lowest}",
+            "the ceiling {} sits above the lowest live count {lowest}",
             self.discarded_max
         );
         self.discarded_max = lowest;

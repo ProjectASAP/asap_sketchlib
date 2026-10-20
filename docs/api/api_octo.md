@@ -432,8 +432,8 @@ copy, made once at the hand-off.
 CocoSketch and Elastic key on a `String`, so their plans render the input
 with `flow_key_string`, which renders every `DataInput` variant: numbers by
 `to_string`, bytes as lowercase hex. `EhBucketSketch` converts differently —
-its `ELASTIC` arm renders bytes with `String::from_utf8_lossy`, and its
-`COCO` arm drops every input that is not `Str` or `String`. The
+its `ElasticSketch` arm renders bytes with `String::from_utf8_lossy`, and its
+`CocoSketch` arm drops every input that is not `Str` or `String`. The
 `flow_key_string` rendering is what the aggregator stores, so it is what
 `CocoSketch::estimate` or `ElasticSketch::estimate` must be asked for. Their payloads
 carry no hashes: the heavy half of an Elastic insert can evict a key the

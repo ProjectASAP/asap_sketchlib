@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn insert_many_updates_estimate_and_heap() {
-        // Verifies insert_many updates estimate and heap count consistently.
+        // Verifies update_weighted updates estimate and heap count consistently.
         let mut sh = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(5, 2048, 4);
         let key = DataInput::Str("many");
         sh.update_weighted(&key, 17);

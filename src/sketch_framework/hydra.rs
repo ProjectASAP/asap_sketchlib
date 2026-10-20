@@ -1138,7 +1138,7 @@ mod tests {
 
     #[test]
     fn test_merge_counters() {
-        // Test merging two CountMinSketch sketches via the Hydra wrapper
+        // Test merging two Count-Min sketches via the Hydra wrapper
         let mut c1 = cm_counter();
         let mut c2 = cm_counter();
 

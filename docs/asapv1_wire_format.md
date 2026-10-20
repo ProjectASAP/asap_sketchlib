@@ -92,7 +92,7 @@ erDiagram
         string input_encoding
         array seed_list
         u32 seed_index "hash-spec group, per-sketch; absent for a non-hashing sketch and for a fixed algorithmic index"
-        mixed structural_params "structural group, per-sketch: precision(HLL); rows+cols+counter_type+mode(CMS); k+m+item_type(Kll); one set per kind, Section 2"
+        mixed structural_params "structural group, per-sketch: precision(HLL); rows+cols+counter_type+mode(CMS); k+m+item_type(KLL); one set per kind, Section 2"
     }
     PAYLOAD {
         msgpack_array raw_state
@@ -1120,7 +1120,7 @@ The four bucket arrays are parallel and equal-length. **The bucket count is not 
 
 **`size` is genuine state.** It counts the updates folded into a bucket — 1 on creation, summed on merge — and is not recoverable from the sketch: an HLL bucket that saw the same key five times has `size = 5` and cardinality 1.
 
-**`l2_mass` and `merge_norm` are derived and are not carried.** `compute_l2_mass(s)` is `s.eh_l2_mass().unwrap_or(0.0)`, and `eh_l2_mass` answers `Some` only for the `COUNTL2HH` and `UNIVMON` arms; both are pure functions of the sketch's decoded state, and both call sites that write the field assign exactly `compute_l2_mass(&bucket)`. `infer_merge_norm(&prototype)` reads `supports_norm` and is a pure function of the prototype's variant. So the decoder recomputes both, per the derived-field rule that keeps Count-Min's `l1` / `l2` off the wire, and the encoder rejects a histogram whose cached `l2_mass` disagrees with its sketch or whose `merge_norm` disagrees with its prototype.
+**`l2_mass` and `merge_norm` are derived and are not carried.** `compute_l2_mass(s)` is `s.eh_l2_mass().unwrap_or(0.0)`, and `eh_l2_mass` answers `Some` only for the `CountSketchWithL2Norm` and `UnivMon` arms; both are pure functions of the sketch's decoded state, and both call sites that write the field assign exactly `compute_l2_mass(&bucket)`. `infer_merge_norm(&prototype)` reads `supports_norm` and is a pure function of the prototype's variant. So the decoder recomputes both, per the derived-field rule that keeps Count-Min's `l1` / `l2` off the wire, and the encoder rejects a histogram whose cached `l2_mass` disagrees with its sketch or whose `merge_norm` disagrees with its prototype.
 
 **The prototype carries its full state.** Nothing constrains it to be empty: `new(k, window, eh_type)` takes whatever the caller hands it, and `update_with` clones it for every new bucket without ever mutating it. A prototype seeded with data therefore seeds every future bucket, so it is carried as a full EhBucketSketch triple, the same shape a bucket uses.
 
