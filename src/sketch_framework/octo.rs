@@ -549,12 +549,12 @@ impl CocoSketchWorker {
     }
 
     /// Buckets per array.
-    pub fn width(&self) -> usize {
+    pub fn cols(&self) -> usize {
         self.cols
     }
 
     /// Number of arrays.
-    pub fn depth(&self) -> usize {
+    pub fn rows(&self) -> usize {
         self.rows
     }
 
@@ -2238,28 +2238,29 @@ pub struct CocoOctoWorker {
 }
 
 impl CocoOctoWorker {
-    /// Creates a worker with a private threshold fixed at `OCTO_COCO_DEFAULT_THRESHOLD`.
-    pub fn new(w: usize, d: usize) -> Self {
-        Self::with_threshold(w, d, OctoThreshold::new(OCTO_COCO_DEFAULT_THRESHOLD))
+    /// Creates a `rows` x `cols` worker with a private threshold fixed at
+    /// `OCTO_COCO_DEFAULT_THRESHOLD`.
+    pub fn new(rows: usize, cols: usize) -> Self {
+        Self::with_threshold(rows, cols, OctoThreshold::new(OCTO_COCO_DEFAULT_THRESHOLD))
     }
 
     /// Creates a worker sharing `threshold` with its peers and the aggregator.
-    pub fn with_threshold(w: usize, d: usize, threshold: OctoThreshold) -> Self {
+    pub fn with_threshold(rows: usize, cols: usize, threshold: OctoThreshold) -> Self {
         Self {
-            sketch: CocoSketchWorker::new(d, w),
+            sketch: CocoSketchWorker::new(rows, cols),
             threshold,
         }
     }
 
     /// As [`Self::with_threshold`], with the worker table drawing from `seed`.
     pub fn with_threshold_and_seed(
-        w: usize,
-        d: usize,
+        rows: usize,
+        cols: usize,
         threshold: OctoThreshold,
         seed: u64,
     ) -> Self {
         Self {
-            sketch: CocoSketchWorker::with_seed(d, w, seed),
+            sketch: CocoSketchWorker::with_seed(rows, cols, seed),
             threshold,
         }
     }
@@ -2307,17 +2308,17 @@ pub struct CocoOctoAggregator {
 }
 
 impl CocoOctoAggregator {
-    /// Creates an aggregator with a `d` x `w` parent table.
-    pub fn new(w: usize, d: usize) -> Self {
+    /// Creates an aggregator with a `rows` x `cols` parent table.
+    pub fn new(rows: usize, cols: usize) -> Self {
         Self {
-            sketch: CocoSketch::with_dimensions(d, w),
+            sketch: CocoSketch::with_dimensions(rows, cols),
         }
     }
 
     /// As [`Self::new`], with the parent table drawing from `seed`.
-    pub fn with_seed(w: usize, d: usize, seed: u64) -> Self {
+    pub fn with_seed(rows: usize, cols: usize, seed: u64) -> Self {
         Self {
-            sketch: CocoSketch::with_dimensions_and_seed(d, w, seed),
+            sketch: CocoSketch::with_dimensions_and_seed(rows, cols, seed),
         }
     }
 }
@@ -2731,23 +2732,23 @@ impl OctoPlan for DdOctoPlan {
 /// Builds `CocoOctoWorker`s; payloads are the rendered flow key.
 #[derive(Clone, Debug)]
 pub struct CocoOctoPlan {
-    w: usize,
-    d: usize,
+    rows: usize,
+    cols: usize,
     threshold: OctoThreshold,
     seed: Option<u64>,
 }
 
 impl CocoOctoPlan {
-    /// Creates a plan at the CocoSketch default threshold.
-    pub fn new(w: usize, d: usize) -> Self {
-        Self::with_threshold(w, d, OctoThreshold::new(OCTO_COCO_DEFAULT_THRESHOLD))
+    /// Creates a plan for `rows` x `cols` tables at the CocoSketch default threshold.
+    pub fn new(rows: usize, cols: usize) -> Self {
+        Self::with_threshold(rows, cols, OctoThreshold::new(OCTO_COCO_DEFAULT_THRESHOLD))
     }
 
     /// Creates a plan whose workers share `threshold`.
-    pub fn with_threshold(w: usize, d: usize, threshold: OctoThreshold) -> Self {
+    pub fn with_threshold(rows: usize, cols: usize, threshold: OctoThreshold) -> Self {
         Self {
-            w,
-            d,
+            rows,
+            cols,
             threshold,
             seed: None,
         }
@@ -2755,20 +2756,25 @@ impl CocoOctoPlan {
 
     /// As [`Self::new`], with every worker and the aggregator drawing from its
     /// own generator derived from `seed` and its worker id.
-    pub fn with_seed(w: usize, d: usize, seed: u64) -> Self {
-        Self::with_threshold_and_seed(w, d, OctoThreshold::new(OCTO_COCO_DEFAULT_THRESHOLD), seed)
+    pub fn with_seed(rows: usize, cols: usize, seed: u64) -> Self {
+        Self::with_threshold_and_seed(
+            rows,
+            cols,
+            OctoThreshold::new(OCTO_COCO_DEFAULT_THRESHOLD),
+            seed,
+        )
     }
 
     /// As [`Self::with_threshold`], seeded as [`Self::with_seed`].
     pub fn with_threshold_and_seed(
-        w: usize,
-        d: usize,
+        rows: usize,
+        cols: usize,
         threshold: OctoThreshold,
         seed: u64,
     ) -> Self {
         Self {
-            w,
-            d,
+            rows,
+            cols,
             threshold,
             seed: Some(seed),
         }
@@ -2782,8 +2788,8 @@ impl CocoOctoPlan {
     /// Builds the parent this plan's workers feed. See `CountMinSketchOctoPlan::aggregator`.
     pub fn aggregator(&self) -> CocoOctoAggregator {
         match self.seed {
-            Some(seed) => CocoOctoAggregator::with_seed(self.w, self.d, derive_seed(seed, 0)),
-            None => CocoOctoAggregator::new(self.w, self.d),
+            Some(seed) => CocoOctoAggregator::with_seed(self.rows, self.cols, derive_seed(seed, 0)),
+            None => CocoOctoAggregator::new(self.rows, self.cols),
         }
     }
 }
@@ -2801,12 +2807,12 @@ impl OctoPlan for CocoOctoPlan {
         let threshold = self.threshold.clone();
         match self.seed {
             Some(seed) => CocoOctoWorker::with_threshold_and_seed(
-                self.w,
-                self.d,
+                self.rows,
+                self.cols,
                 threshold,
                 derive_seed(seed, worker_id as u64 + 1),
             ),
-            None => CocoOctoWorker::with_threshold(self.w, self.d, threshold),
+            None => CocoOctoWorker::with_threshold(self.rows, self.cols, threshold),
         }
     }
 
@@ -3343,17 +3349,17 @@ mod worker_tests {
 
     #[test]
     fn a_seeded_coco_plan_replays_identically() {
-        let (sent, table) = coco_plan_run(&CocoOctoPlan::with_seed(64, 2, 7));
+        let (sent, table) = coco_plan_run(&CocoOctoPlan::with_seed(2, 64, 7));
         assert_eq!(
             (sent.clone(), table),
-            coco_plan_run(&CocoOctoPlan::with_seed(64, 2, 7))
+            coco_plan_run(&CocoOctoPlan::with_seed(2, 64, 7))
         );
-        assert_ne!(sent, coco_plan_run(&CocoOctoPlan::with_seed(64, 2, 9)).0);
+        assert_ne!(sent, coco_plan_run(&CocoOctoPlan::with_seed(2, 64, 9)).0);
     }
 
     #[test]
     fn a_seeded_coco_plan_gives_each_worker_its_own_stream() {
-        let plan = CocoOctoPlan::with_seed(64, 2, 7);
+        let plan = CocoOctoPlan::with_seed(2, 64, 7);
         let run = |id: usize| {
             let mut worker = plan.worker(id);
             let mut sent: Vec<CocoDelta> = Vec::new();
@@ -3393,7 +3399,7 @@ mod worker_tests {
         // Every insert lands in exactly one bucket, so what the parent received
         // plus what the worker still holds is the whole stream.
         let mut worker = CocoSketchWorker::new(2, 16);
-        let mut parent = CocoOctoAggregator::new(16, 2);
+        let mut parent = CocoOctoAggregator::new(2, 16);
         let inserted = 5_000u64;
         for i in 0..inserted {
             worker.update_emit_delta(

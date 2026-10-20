@@ -2964,7 +2964,7 @@ mod heavy_hitters {
 
     impl OctoCoco {
         fn new(workers: usize, w: usize, d: usize, route: Route, seed: u64) -> Self {
-            let plan = CocoOctoPlan::with_seed(w, d, seed);
+            let plan = CocoOctoPlan::with_seed(d, w, seed);
             Self {
                 children: (0..workers).map(|id| plan.worker(id)).collect(),
                 parent: plan.aggregator(),
@@ -3255,7 +3255,7 @@ mod heavy_hitters {
         let stream = flow_stream(40_000, 2_048, 21_001);
         let seen: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
 
-        let mut worker = CocoOctoPlan::with_seed(512, 2, COCO_SEED).worker(0);
+        let mut worker = CocoOctoPlan::with_seed(2, 512, COCO_SEED).worker(0);
         let mut promoted = Vec::new();
         for raw in &stream {
             worker.process(&key_of(*raw), &mut |d: CocoDelta| promoted.push(d));
@@ -3364,7 +3364,7 @@ mod heavy_hitters {
         let mut incumbent = 0usize;
         for seed in 0..4u64 {
             let stream = flow_stream(20_000, 2_048, 21_100 + seed);
-            let mut worker = CocoOctoPlan::with_seed(16, 2, COCO_SEED + seed).worker(0);
+            let mut worker = CocoOctoPlan::with_seed(2, 16, COCO_SEED + seed).worker(0);
             for raw in &stream {
                 let arrival = key_of(*raw);
                 worker.process(&arrival, &mut |d: CocoDelta| {
@@ -3941,9 +3941,9 @@ mod heavy_hitters {
             let distinct: HashSet<String> = stream.iter().map(|raw| key_of(*raw)).collect();
 
             for workers in [1usize, 2, 3, 4, 8] {
-                let plan = CocoOctoPlan::with_seed(512, 2, COCO_SEED);
+                let plan = CocoOctoPlan::with_seed(2, 512, COCO_SEED);
                 let parent = run_octo(&inputs, &config(workers), plan, || {
-                    CocoOctoAggregator::with_seed(512, 2, COCO_SEED)
+                    CocoOctoAggregator::with_seed(2, 512, COCO_SEED)
                 })
                 .parent
                 .sketch;
@@ -5088,7 +5088,7 @@ mod partition_accuracy {
         for route in routes() {
             let mut samples = Vec::with_capacity(TRIALS as usize);
             for trial in 0..TRIALS {
-                let plan = CocoOctoPlan::with_seed(COCO_W, COCO_D, COCO_SEED + trial);
+                let plan = CocoOctoPlan::with_seed(COCO_D, COCO_W, COCO_SEED + trial);
                 let mut workers: Vec<_> = (0..WORKERS).map(|id| plan.worker(id)).collect();
                 let mut parent = plan.aggregator();
                 for (i, k) in stream.iter().enumerate() {

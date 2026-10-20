@@ -621,7 +621,7 @@ proptest! {
         let mut workers: Vec<CocoSketchWorker> = (0..shards)
             .map(|i| CocoSketchWorker::with_seed(d, w, seed.wrapping_add(i as u64 + 1)))
             .collect();
-        let mut parent = CocoOctoAggregator::with_seed(w, d, seed);
+        let mut parent = CocoOctoAggregator::with_seed(d, w, seed);
         for (i, k) in keys.iter().enumerate() {
             workers[i % shards].update_emit_delta(&flow(*k), tau, &mut |delta| parent.apply(delta));
         }

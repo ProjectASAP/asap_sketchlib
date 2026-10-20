@@ -146,7 +146,7 @@ let _ = sk.estimate_projected("region=us", |full| {
 > **Feature gate:** requires `octo-runtime` for the runtime itself.
 
 ```rust
-let plan = CocoOctoPlan::new(1024, 2); // or CocoOctoPlan::with_seed(1024, 2, seed)
+let plan = CocoOctoPlan::new(2, 1024); // or CocoOctoPlan::with_seed(2, 1024, seed)
 let config = OctoConfig { threshold: plan.threshold().clone(), ..OctoConfig::default() };
 let out = run_octo(&inputs, &config, plan.clone(), || plan.aggregator());
 out.parent.sketch.estimate("flow::7");

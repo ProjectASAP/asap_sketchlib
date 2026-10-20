@@ -177,7 +177,9 @@ signals a backwards-compatible change.
   constructors take `(rows, cols)`: `init_with_size(w, d)` ->
   `with_dimensions(rows, cols)`, `init_with_size_and_seed(w, d, seed)` ->
   `with_dimensions_and_seed(rows, cols, seed)`, and `CocoSketchWorker::new` /
-  `with_seed` swap their first two arguments the same way.
+  `with_seed` and the `CocoOctoWorker`, `CocoOctoAggregator` and
+  `CocoOctoPlan` constructors swap their first two arguments the same way.
+  `CocoSketchWorker::width()`/`depth()` -> `cols()`/`rows()`.
 - **KLL, CDF and DDSketch** (breaking). KLL `init`/`init_with_seed`/
   `init_kll`/`init_kll_with_seed` -> `new`/`with_seed`/`with_k`/
   `with_k_and_seed`; `wire_*` accessors -> `level_bounds_top_down()`,
