@@ -283,7 +283,7 @@ impl<H: SketchHasher> ElasticSketch<H> {
 
     /// Frequency estimate for `id`: the resident vote count, plus the light
     /// layer whenever the bucket carries the eviction flag.
-    pub fn query(&self, id: String) -> i32 {
+    pub fn estimate(&self, id: String) -> i32 {
         let idx = self.bucket_index(&id);
         let bucket = &self.heavy[idx];
         if !bucket.is_vacant() && bucket.flow_id == id {
@@ -370,8 +370,8 @@ impl<H: SketchHasher> ElasticSketch<H> {
                     Some(kept)
                 }
                 (Some(mine), Some(theirs)) => {
-                    let my_size = self.query(mine.flow_id.clone());
-                    let their_size = other.query(theirs.flow_id.clone());
+                    let my_size = self.estimate(mine.flow_id.clone());
+                    let their_size = other.estimate(theirs.flow_id.clone());
                     let (kept, lost) = if my_size >= their_size {
                         (mine, theirs)
                     } else {
@@ -436,7 +436,7 @@ impl<H: SketchHasher> ElasticSketch<H> {
             .filter(|idx| !self.heavy[*idx].is_vacant() && !self.stale_at(*idx))
             .map(|idx| {
                 let id = self.heavy[idx].flow_id.clone();
-                let size = self.query(id.clone());
+                let size = self.estimate(id.clone());
                 (id, size)
             })
             .collect();
@@ -478,8 +478,8 @@ impl<H: SketchHasher> ElasticSketch<H> {
 
         ids.into_iter()
             .map(|id| {
-                let before = self.query(id.clone());
-                let after = other.query(id.clone());
+                let before = self.estimate(id.clone());
+                let after = other.estimate(id.clone());
                 (id, before, after)
             })
             .filter(|(_, before, after)| (after - before).abs() > threshold)
@@ -536,7 +536,7 @@ impl<H: SketchHasher> ElasticSketch<H> {
                 flagged[group] |= self.heavy[idx].eviction;
                 continue;
             }
-            let size = self.query(self.heavy[idx].flow_id.clone());
+            let size = self.estimate(self.heavy[idx].flow_id.clone());
             if winner[group].is_none() || size > best[group] {
                 best[group] = size;
                 winner[group] = Some(idx);
@@ -694,8 +694,8 @@ mod tests {
             sketch.update(flow.clone());
         }
 
-        assert_eq!(sketch.query(flow.clone()), 12);
-        assert_eq!(sketch.query("other".to_string()), 0);
+        assert_eq!(sketch.estimate(flow.clone()), 12);
+        assert_eq!(sketch.estimate("other".to_string()), 0);
     }
 
     #[test]
@@ -712,8 +712,8 @@ mod tests {
             sketch.update(secondary.clone());
         }
 
-        let heavy_est = sketch.query(primary.to_string());
-        let light_est = sketch.query(secondary.clone());
+        let heavy_est = sketch.estimate(primary.to_string());
+        let light_est = sketch.estimate(secondary.clone());
 
         assert!(
             heavy_est >= 10,
@@ -747,12 +747,12 @@ mod tests {
         assert_eq!(sketch.heavy[idx].vote_neg, 1);
 
         assert_eq!(
-            sketch.query(primary.to_string()),
+            sketch.estimate(primary.to_string()),
             10,
             "evicted flow keeps its full size in the light layer"
         );
         assert_eq!(
-            sketch.query(secondary.clone()),
+            sketch.estimate(secondary.clone()),
             LAMBDA * 10,
             "arriving flow must not absorb the evicted flow's votes"
         );
@@ -772,8 +772,8 @@ mod tests {
 
         left.merge(&right);
 
-        assert_eq!(left.query("flow::left".to_string()), 30);
-        assert_eq!(left.query("flow::right".to_string()), 18);
+        assert_eq!(left.estimate("flow::left".to_string()), 30);
+        assert_eq!(left.estimate("flow::right".to_string()), 18);
 
         // both keep a bucket: neither was flushed into the light layer
         let residents: Vec<(&str, i32)> = left
@@ -808,8 +808,8 @@ mod tests {
 
         left.merge(&right);
 
-        assert!(left.query(primary.to_string()) >= 20);
-        assert!(left.query(secondary.clone()) >= 9);
+        assert!(left.estimate(primary.to_string()) >= 20);
+        assert!(left.estimate(secondary.clone()) >= 9);
     }
 
     #[test]
@@ -824,7 +824,7 @@ mod tests {
         left.update("flow::left".to_string());
 
         assert_eq!(
-            left.query("flow::left".to_string()),
+            left.estimate("flow::left".to_string()),
             31,
             "a flow that kept its bucket through a merge goes on accumulating"
         );
@@ -850,7 +850,7 @@ mod tests {
         assert_eq!(left.heavy[idx].flow_id, primary, "the larger flow keeps it");
         assert_eq!(left.heavy[idx].vote_pos, 20);
         assert!(
-            left.query(secondary.clone()) >= 9,
+            left.estimate(secondary.clone()) >= 9,
             "the loser's votes must reach the light layer"
         );
     }
@@ -871,7 +871,7 @@ mod tests {
         let idx = bucket_for("flow::shared", &left);
         assert_eq!(left.heavy[idx].flow_id, "flow::shared");
         assert_eq!(left.heavy[idx].vote_pos, 50);
-        assert_eq!(left.query("flow::shared".to_string()), 50);
+        assert_eq!(left.estimate("flow::shared".to_string()), 50);
     }
 
     #[test]
@@ -898,7 +898,7 @@ mod tests {
             "the peer's larger flow takes the bucket"
         );
         assert_eq!(left.heavy[idx].vote_pos, 50);
-        assert!(left.query(primary.to_string()) >= 3);
+        assert!(left.estimate(primary.to_string()) >= 3);
     }
 
     #[test]
@@ -949,7 +949,7 @@ mod tests {
         left.merge(&right);
 
         for (key, count) in &truth {
-            let est = left.query(key.clone());
+            let est = left.estimate(key.clone());
             assert!(est >= *count, "merge underestimated {key}: {est} < {count}");
         }
     }
@@ -973,7 +973,7 @@ mod tests {
         let idx = bucket_for(primary, &left);
         assert_eq!(left.heavy[idx].flow_id, primary);
         assert_eq!(left.heavy[idx].vote_pos, 20);
-        assert!(left.query(secondary.clone()) >= 9);
+        assert!(left.estimate(secondary.clone()) >= 9);
     }
 
     /// Builds two sketches over disjoint flow sets, plus the truth table.
@@ -1007,7 +1007,7 @@ mod tests {
         left.merge_max(&right);
 
         for (key, count) in &truth {
-            let est = left.query(key.clone());
+            let est = left.estimate(key.clone());
             assert!(
                 est >= *count,
                 "maximum merging underestimated {key}: {est} < {count}"
@@ -1024,8 +1024,8 @@ mod tests {
 
         let mut strictly_tighter = 0;
         for (key, _) in &truth {
-            let sum_est = summed.query(key.clone());
-            let max_est = maxed.query(key.clone());
+            let sum_est = summed.estimate(key.clone());
+            let max_est = maxed.estimate(key.clone());
             assert!(
                 max_est <= sum_est,
                 "maximum merging must not be looser on {key}: {max_est} > {sum_est}"
@@ -1069,11 +1069,11 @@ mod tests {
         // shared mouse reads back as the larger side instead of the sum
         let (mut maxed, right) = shared_mouse_pair(30, 20);
         maxed.merge_max(&right);
-        assert_eq!(maxed.query("flow::mouse".to_string()), 30);
+        assert_eq!(maxed.estimate("flow::mouse".to_string()), 30);
 
         let (mut summed, right) = shared_mouse_pair(30, 20);
         summed.merge(&right);
-        assert_eq!(summed.query("flow::mouse".to_string()), 50);
+        assert_eq!(summed.estimate("flow::mouse".to_string()), 50);
     }
 
     #[test]
@@ -1093,7 +1093,7 @@ mod tests {
 
         let idx = bucket_for("flow::shared", &left);
         assert_eq!(left.heavy[idx].vote_pos, 50);
-        assert_eq!(left.query("flow::shared".to_string()), 50);
+        assert_eq!(left.estimate("flow::shared".to_string()), 50);
     }
 
     /// Every counter of the light layer, so a test can prove it went untouched.
@@ -1215,7 +1215,7 @@ mod tests {
         }
 
         assert_eq!(
-            sketch.query(primary.to_string()),
+            sketch.estimate(primary.to_string()),
             0,
             "the evicted flow's 10 packets are gone, not spilled to the light layer"
         );
@@ -1243,8 +1243,8 @@ mod tests {
         for i in 0..6 {
             let flow = format!("flow::{i}");
             assert_eq!(
-                normal.query(flow.clone()),
-                overload.query(flow.clone()),
+                normal.estimate(flow.clone()),
+                overload.estimate(flow.clone()),
                 "seating and matching must agree between the two paths"
             );
         }
@@ -1281,26 +1281,26 @@ mod tests {
     fn expansion_preserves_every_existing_estimate() {
         // lemma 3.2: h(f) % 2w lands on a half that already holds f
         let (mut sk, truth) = seeded_sketch(8, 24);
-        let before: Vec<i32> = truth.iter().map(|(k, _)| sk.query(k.clone())).collect();
+        let before: Vec<i32> = truth.iter().map(|(k, _)| sk.estimate(k.clone())).collect();
 
         sk.expand_heavy();
 
         for ((key, _), was) in truth.iter().zip(before) {
-            assert_eq!(sk.query(key.clone()), was, "estimate for {key} moved");
+            assert_eq!(sk.estimate(key.clone()), was, "estimate for {key} moved");
         }
     }
 
     #[test]
     fn repeated_expansion_keeps_estimates_intact() {
         let (mut sk, truth) = seeded_sketch(8, 24);
-        let before: Vec<i32> = truth.iter().map(|(k, _)| sk.query(k.clone())).collect();
+        let before: Vec<i32> = truth.iter().map(|(k, _)| sk.estimate(k.clone())).collect();
 
         sk.expand_heavy();
         sk.expand_heavy();
 
         assert_eq!(sk.heavy_buckets, 32);
         for ((key, _), was) in truth.iter().zip(before) {
-            assert_eq!(sk.query(key.clone()), was, "estimate for {key} moved");
+            assert_eq!(sk.estimate(key.clone()), was, "estimate for {key} moved");
         }
     }
 
@@ -1324,7 +1324,7 @@ mod tests {
         assert_eq!(sk.heavy[stale_idx].vote_pos, 1);
         assert!(!sk.stale_at(stale_idx));
         // the displaced copy was not the flow's live entry, which still answers
-        assert!(sk.query(displaced.clone()) > 0, "{displaced} lost its mass");
+        assert!(sk.estimate(displaced.clone()) > 0, "{displaced} lost its mass");
     }
 
     #[test]
@@ -1339,7 +1339,7 @@ mod tests {
 
         for (key, count) in &truth {
             assert_eq!(
-                sk.query(key.clone()),
+                sk.estimate(key.clone()),
                 *count,
                 "{key} came back doubled or short after merging an expanded table"
             );
@@ -1357,7 +1357,7 @@ mod tests {
 
         for (key, count) in &truth {
             assert_eq!(
-                left.query(key.clone()),
+                left.estimate(key.clone()),
                 *count,
                 "{key} came back doubled or short after merging an expanded peer"
             );
@@ -1374,7 +1374,7 @@ mod tests {
 
         for (key, count) in &truth {
             assert_eq!(
-                left.query(key.clone()),
+                left.estimate(key.clone()),
                 *count,
                 "{key} came back doubled or short after max merging an expanded peer"
             );
@@ -1397,7 +1397,7 @@ mod tests {
 
     /// Sums every flow's estimate, for checking mass is neither lost nor doubled.
     fn total_estimate(sk: &ElasticSketch, truth: &[(String, i32)]) -> i32 {
-        truth.iter().map(|(k, _)| sk.query(k.clone())).sum()
+        truth.iter().map(|(k, _)| sk.estimate(k.clone())).sum()
     }
 
     #[test]
@@ -1433,15 +1433,15 @@ mod tests {
         sk.compress_heavy(2);
 
         assert_eq!(sk.heavy[0].flow_id, big, "the larger flow keeps the bucket");
-        assert_eq!(sk.query(big.clone()), 30);
+        assert_eq!(sk.estimate(big.clone()), 30);
         assert!(
             sk.heavy.iter().all(|b| b.flow_id != small),
             "the smaller flow must leave the heavy part"
         );
         assert!(
-            sk.query(small.clone()) >= 3,
+            sk.estimate(small.clone()) >= 3,
             "the spilled flow underestimated: {}",
-            sk.query(small.clone())
+            sk.estimate(small.clone())
         );
     }
 
@@ -1454,7 +1454,7 @@ mod tests {
 
         for (key, count) in &truth {
             assert!(
-                sk.query(key.clone()) >= *count,
+                sk.estimate(key.clone()) >= *count,
                 "{key} underestimated after compression"
             );
         }
@@ -1501,7 +1501,7 @@ mod tests {
         sk.merge(&empty);
         for (key, count) in &truth {
             assert_eq!(
-                sk.query(key.clone()),
+                sk.estimate(key.clone()),
                 *count,
                 "{key} came back doubled or short after expand then compress"
             );
@@ -1519,7 +1519,7 @@ mod tests {
         assert_eq!(sk.heavy.len(), 8);
         for (key, count) in &truth {
             assert!(
-                sk.query(key.clone()) >= *count,
+                sk.estimate(key.clone()) >= *count,
                 "{key} underestimated after a round trip"
             );
         }
@@ -1540,7 +1540,7 @@ mod tests {
                 sk.heavy[idx].flow_id, *id,
                 "fixture flow {id} is not resident; pick different keys"
             );
-            assert_eq!(sk.query((*id).to_string()), *count, "fixture flow {id}");
+            assert_eq!(sk.estimate((*id).to_string()), *count, "fixture flow {id}");
         }
         sk
     }

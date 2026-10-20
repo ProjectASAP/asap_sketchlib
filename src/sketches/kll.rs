@@ -106,7 +106,7 @@ impl Coin {
     }
 }
 
-/// A single (value, cumulative-quantile) pair in a CDF table.
+/// A single (value, normalized rank) pair in a CDF table.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CdfEntry {
     value: f64,
@@ -243,7 +243,7 @@ pub struct Kll<T: NumericalValue = f64> {
     m: usize,
     num_levels: usize,
     max_capacity: usize,
-    co: Coin,
+    coin: Coin,
     /// Explicit seed for the compaction RNG, when present. When `Some`, the
     /// sketch's bytes are reproducible across runs and `clear()` re-seeds
     /// from this value. When `None`, the legacy time-based path is used and
@@ -270,7 +270,7 @@ impl<T: NumericalValue> Default for Kll<T> {
 
 impl<T: NumericalValue> Kll<T> {
     /// Creates a new KLL sketch with accuracy parameter `k` and minimum level capacity `m`.
-    pub fn init(k: usize, m: usize) -> Self {
+    pub fn new(k: usize, m: usize) -> Self {
         Self::init_internal(k, m, Coin::new(), None)
     }
 
@@ -283,18 +283,18 @@ impl<T: NumericalValue> Kll<T> {
     ///
     /// Callers that don't care about determinism should keep using `init` /
     /// `with_k`.
-    pub fn init_with_seed(k: usize, m: usize, seed: u64) -> Self {
+    pub fn with_seed(k: usize, m: usize, seed: u64) -> Self {
         Self::init_internal(k, m, Coin::from_seed(seed), Some(seed))
     }
 
     /// Creates a new KLL sketch with the given `k` and a default minimum level capacity of 8.
     pub fn with_k(k: i32) -> Self {
-        Self::init(k as usize, 8)
+        Self::new(k as usize, 8)
     }
 
     /// `with_k` with an explicit RNG seed. See `init_with_seed`.
     pub fn with_k_and_seed(k: i32, seed: u64) -> Self {
-        Self::init_with_seed(k as usize, 8, seed)
+        Self::with_seed(k as usize, 8, seed)
     }
 
     fn init_internal(k: usize, m: usize, coin: Coin, seed: Option<u64>) -> Self {
@@ -317,7 +317,7 @@ impl<T: NumericalValue> Kll<T> {
             m: norm_m,
             num_levels: 1,
             max_capacity: max_cap,
-            co: coin,
+            coin,
             seed,
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
@@ -450,7 +450,7 @@ impl<T: NumericalValue> Kll<T> {
             self.items[beg..end].sort_unstable_by(T::total_cmp);
         }
 
-        let offset = usize::from(self.co.toss());
+        let offset = usize::from(self.coin.toss());
         let num_survivors = randomly_halve_up(&mut self.items, beg, pop, offset);
         let surv_start = beg + pop - num_survivors;
 
@@ -578,7 +578,7 @@ impl<T: NumericalValue> Kll<T> {
 
     /// Cached variant of [`Self::quantile`]: see [`Self::cdf_cached`].
     pub fn quantile_cached(&mut self, q: f64) -> f64 {
-        self.cdf_cached().query(q)
+        self.cdf_cached().value_at(q)
     }
 
     /// Merges another KLL sketch's retained items into this one,
@@ -652,7 +652,7 @@ impl<T: NumericalValue> Kll<T> {
                     work.resize(self.num_levels + 1, Vec::new());
                 }
                 let pop = work[h].len();
-                let offset = usize::from(self.co.toss());
+                let offset = usize::from(self.coin.toss());
                 let num_survivors = randomly_halve_up(work[h].as_mut_slice(), 0, pop, offset);
                 let discard = pop - num_survivors;
                 work[h].drain(0..discard);
@@ -691,7 +691,7 @@ impl<T: NumericalValue> Kll<T> {
     /// Returns the estimated value at quantile `q` (in `[0, 1]`).
     pub fn quantile(&self, q: f64) -> f64 {
         let cdf = self.cdf();
-        cdf.query(q)
+        cdf.value_at(q)
     }
 
     /// Returns the estimated (weighted) rank of value `x`.
@@ -740,7 +740,7 @@ impl<T: NumericalValue> Kll<T> {
         self.levels[0] = mc;
         self.levels[1] = mc;
         self.num_levels = 1;
-        self.co = match self.seed {
+        self.coin = match self.seed {
             Some(s) => Coin::from_seed(s),
             None => Coin::new(),
         };
@@ -794,9 +794,9 @@ impl<T: NumericalValue> Kll<T> {
     #[inline]
     pub fn coin_state(&self) -> (u64, u64, u32) {
         (
-            self.co.state,
-            self.co.bit_cache,
-            self.co.remaining_bits as u32,
+            self.coin.state,
+            self.coin.bit_cache,
+            self.coin.remaining_bits as u32,
         )
     }
 
@@ -907,7 +907,7 @@ impl<T: NumericalValue + Serialize> Serialize for Kll<T> {
             k: self.k,
             m: self.m,
             num_levels: self.num_levels,
-            co: self.co.clone(),
+            co: self.coin.clone(),
         };
         wire.serialize(serializer)
     }
@@ -995,7 +995,7 @@ impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for Kll<T> {
             m: wire.m,
             num_levels: wire.num_levels,
             max_capacity: max_cap,
-            co: wire.co,
+            coin: wire.co,
             // Wire format does not carry the explicit-seed flag — a
             // round-tripped sketch keeps its current coin state but
             // would re-randomize from time on a subsequent clear().
@@ -1021,8 +1021,8 @@ pub struct Cdf {
 }
 
 impl Cdf {
-    /// Returns the quantile for value `x` using the CDF table.
-    pub fn quantile(&self, x: f64) -> f64 {
+    /// Fraction of the total weight at or below `x`, in [0, 1].
+    pub fn normalized_rank(&self, x: f64) -> f64 {
         if self.entries.is_empty() {
             return 0.0;
         }
@@ -1041,8 +1041,8 @@ impl Cdf {
         println!("entries: {:?}", self.entries);
     }
 
-    /// Returns the estimated value corresponding to quantile `p`.
-    pub fn query(&self, p: f64) -> f64 {
+    /// Value at fraction `p` of the total weight.
+    pub fn value_at(&self, p: f64) -> f64 {
         if self.entries.is_empty() {
             return 0.0;
         }
@@ -1058,7 +1058,7 @@ impl Cdf {
         }
     }
 
-    /// Quantile estimation of value `x` using linear interpolation.
+    /// [`Self::normalized_rank`] with linear interpolation.
     pub fn normalized_rank_interpolated(&self, x: f64) -> f64 {
         let slice = self.entries.as_slice();
         if slice.is_empty() {
@@ -1078,7 +1078,7 @@ impl Cdf {
         ((a - x) * bq + (x - b) * aq) / (a - b)
     }
 
-    /// Value estimation given quantile `p`, using linear interpolation.
+    /// [`Self::value_at`] with linear interpolation.
     pub fn value_at_interpolated(&self, p: f64) -> f64 {
         let slice = self.entries.as_slice();
         if slice.is_empty() {
@@ -1108,7 +1108,7 @@ mod tests {
     /// lifecycle stage: fresh, mid-stream, post-merge, and post-clear.
     #[test]
     fn cdf_cached_matches_uncached_across_lifecycle() {
-        let mut sk = Kll::<f64>::init_with_seed(200, 8, 42);
+        let mut sk = Kll::<f64>::with_seed(200, 8, 42);
 
         // Empty sketch.
         for q in [0.1f64, 0.5, 0.9] {
@@ -1127,7 +1127,7 @@ mod tests {
         }
 
         // Post-merge (merge must invalidate).
-        let mut other = Kll::<f64>::init_with_seed(200, 8, 43);
+        let mut other = Kll::<f64>::with_seed(200, 8, 43);
         for &v in &sample_uniform_f64(-5000.0, -4000.0, 5_000, 0xACAC_0002) {
             other.update(&v);
         }
@@ -1147,7 +1147,7 @@ mod tests {
     /// move up.
     #[test]
     fn cdf_cache_invalidated_by_subsequent_updates() {
-        let mut sk = Kll::<f64>::init_with_seed(200, 8, 42);
+        let mut sk = Kll::<f64>::with_seed(200, 8, 42);
         for &v in &sample_uniform_f64(0.0, 100.0, 10_000, 0xACAC_0003) {
             sk.update(&v);
         }
@@ -1354,7 +1354,7 @@ mod tests {
             let upper_q = (quantile + tolerance).min(1.0);
             let truth_min = quantile_from_sorted(sorted_truth, lower_q);
             let truth_max = quantile_from_sorted(sorted_truth, upper_q);
-            let estimate = cdf.query(quantile);
+            let estimate = cdf.value_at(quantile);
             assert!(
                 (truth_min..=truth_max).contains(&estimate),
                 "{label} exceeded tolerance: context={context}, sample_size={sample_size}, seed=0x{seed:08x}, \
@@ -1379,7 +1379,7 @@ mod tests {
         // Query quantiles
         let cdf = kll.cdf();
         // kll.print_compactors();
-        let median = cdf.query(0.5);
+        let median = cdf.value_at(0.5);
 
         // Median should be 30.5
         assert!(median > 20.0 && median < 40.2, "Median = {median}");
@@ -1396,7 +1396,7 @@ mod tests {
     #[test]
     fn test_forced_compact() {
         // force compaction to happen with small k/m
-        let mut kll = Kll::init(3, 3);
+        let mut kll = Kll::new(3, 3);
         // kll.print_compactors();
         kll.update_data_input(&DataInput::F64(10.0)).unwrap();
         // kll.print_compactors();
@@ -1410,7 +1410,7 @@ mod tests {
         // kll.print_compactors();
         let cdf = kll.cdf();
         // cdf.print_entries();
-        let median = cdf.query(0.5);
+        let median = cdf.value_at(0.5);
         // only 30 and 40 is possible
         assert!(median == 30.0 || median == 40.0, "Median = {median}");
     }
@@ -1435,7 +1435,7 @@ mod tests {
         let cdf = kll.cdf();
         // cdf.print_entries();
         // kll.print_compactors();
-        let median = cdf.query(0.5);
+        let median = cdf.value_at(0.5);
         // Median should be 30
         assert!(median == 30.0, "Median = {median}");
     }
@@ -1608,8 +1608,8 @@ mod tests {
     fn cdf_handles_empty_sketch() {
         let sketch = Kll::<f64>::with_k(64);
         let cdf = sketch.cdf();
-        assert_eq!(cdf.quantile(123.0), 0.0);
-        assert_eq!(cdf.query(0.5), 0.0);
+        assert_eq!(cdf.normalized_rank(123.0), 0.0);
+        assert_eq!(cdf.value_at(0.5), 0.0);
         assert_eq!(cdf.value_at_interpolated(0.5), 0.0);
     }
 
@@ -1650,10 +1650,10 @@ mod tests {
         let restored_cdf = restored.cdf();
         for &q in &quantiles {
             assert!(
-                (original_cdf.query(q) - restored_cdf.query(q)).abs() < f64::EPSILON,
+                (original_cdf.value_at(q) - restored_cdf.value_at(q)).abs() < f64::EPSILON,
                 "quantile mismatch at p={q}: original={}, restored={}",
-                original_cdf.query(q),
-                restored_cdf.query(q)
+                original_cdf.value_at(q),
+                restored_cdf.value_at(q)
             );
         }
     }
@@ -1677,8 +1677,8 @@ mod tests {
         );
 
         let cdf = sketch.cdf();
-        let p50 = cdf.query(0.5);
-        let p90 = cdf.query(0.9);
+        let p50 = cdf.value_at(0.5);
+        let p90 = cdf.value_at(0.9);
         let tol = n as f64 * 0.02;
         assert!(
             (p50 - (n as f64 * 0.5)).abs() < tol,
@@ -1701,7 +1701,7 @@ mod tests {
             }
         }
         a.merge(&b);
-        let merged_p50 = a.cdf().query(0.5);
+        let merged_p50 = a.cdf().value_at(0.5);
         assert!(
             (merged_p50 - (n as f64 * 0.5)).abs() < tol,
             "merged p50={merged_p50} out of range"
@@ -1716,7 +1716,7 @@ mod tests {
     #[test]
     fn bulk_update_equivalent_to_loop_and_empty_is_noop() {
         // Empty must be no-op and keep cache/coin.
-        let mut sk = Kll::<f64>::init_with_seed(200, 8, 42);
+        let mut sk = Kll::<f64>::with_seed(200, 8, 42);
         for &v in &[1.0, 2.0, 3.0] {
             sk.update(&v);
         }
@@ -1730,8 +1730,8 @@ mod tests {
 
         // Bulk vs loop equivalence for generic and seeded determinism.
         let vals = sample_uniform_f64(0.0, 1000.0, 20_000, 0xBEEF_1234);
-        let mut a = Kll::<f64>::init_with_seed(200, 8, 99);
-        let mut b = Kll::<f64>::init_with_seed(200, 8, 99);
+        let mut a = Kll::<f64>::with_seed(200, 8, 99);
+        let mut b = Kll::<f64>::with_seed(200, 8, 99);
         for v in &vals {
             a.update(v);
         }
@@ -1744,8 +1744,8 @@ mod tests {
 
         // DataInput batch equivalence.
         let di_vals: Vec<DataInput> = vals[..100].iter().map(|v| DataInput::F64(*v)).collect();
-        let mut c = Kll::<f64>::init_with_seed(200, 8, 77);
-        let mut d = Kll::<f64>::init_with_seed(200, 8, 77);
+        let mut c = Kll::<f64>::with_seed(200, 8, 77);
+        let mut d = Kll::<f64>::with_seed(200, 8, 77);
         for v in &di_vals {
             c.update_data_input(v).unwrap();
         }
@@ -1758,7 +1758,7 @@ mod tests {
             DataInput::String("x".into()),
             DataInput::F64(2.0),
         ];
-        let mut e = Kll::<f64>::init_with_seed(200, 8, 11);
+        let mut e = Kll::<f64>::with_seed(200, 8, 11);
         assert!(e.update_batch_data_input(&bad).is_err());
         assert_eq!(e.count(), 1);
     }

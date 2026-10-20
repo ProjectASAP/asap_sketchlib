@@ -336,7 +336,7 @@ fn score_bundle(sketch: &SpecializedBundle, truth: &Truth) -> Score {
     let cdf = sketch.kll.cdf();
     let quantiles: Vec<i64> = QUANTILES
         .iter()
-        .map(|q| cdf.query(*q).round() as i64)
+        .map(|q| cdf.value_at(*q).round() as i64)
         .collect();
     let ranks: Vec<(i64, f64)> = truth
         .cdf_probes
@@ -986,7 +986,7 @@ fn print_query_latency(
         average_query(|| black_box(matched_view.rank(probe as f64)), QUERY_REPEATS),
         average_query(|| black_box(quality_view.rank(probe as f64)), QUERY_REPEATS),
         average_query(
-            || black_box(bundle_cdf.quantile(probe as f64)),
+            || black_box(bundle_cdf.normalized_rank(probe as f64)),
             QUERY_REPEATS,
         ),
     );
@@ -1001,7 +1001,7 @@ fn print_query_latency(
             QUERY_REPEATS,
         ),
         average_query(
-            || black_box(QUANTILES.map(|q| bundle_cdf.query(q))),
+            || black_box(QUANTILES.map(|q| bundle_cdf.value_at(q))),
             QUERY_REPEATS,
         ),
     );
@@ -1043,7 +1043,7 @@ fn query_all_bundle(bundle: &SpecializedBundle, truth: &Truth) {
     black_box(bundle.heavy_hitters.top(TOP_K));
     black_box(bundle.kll.rank(truth.cdf_probes[50] as f64));
     let cdf = bundle.kll.cdf();
-    black_box(QUANTILES.map(|q| cdf.query(q)));
+    black_box(QUANTILES.map(|q| cdf.value_at(q)));
     black_box(cdf);
 }
 

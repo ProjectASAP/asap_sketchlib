@@ -9,8 +9,8 @@
 //! `docs/asapv1_wire_format.md`.
 //!
 //! Coco is one algorithm — a single kind_id `0x0c 0x00`. Its structural
-//! parameters are the table geometry: `rows` (the sketch's `d`, the arrays an
-//! insert scans) and `cols` (the sketch's `w`, the buckets per array). Both are
+//! parameters are the table geometry: `rows` (the arrays an insert scans) and
+//! `cols` (the buckets per array). Both are
 //! construction config and live in the metadata, so the payload is the bucket
 //! state alone: `[keys, values]`, two parallel row-major arrays of `rows*cols`
 //! entries.
@@ -51,7 +51,7 @@ use super::{CocoBucket, CocoRng, CocoSketch};
 /// Coco descriptor metadata (ASAPv1 §2), a msgpack **map** (`to_vec_named`)
 /// with keys in this declaration order — the canonical order the wire spec
 /// fixes (Go must mirror it). Hash-spec fields first, then the structural
-/// params `rows` / `cols`, which are the sketch's `d` and `w`.
+/// params `rows` / `cols`.
 ///
 /// There is **no seed-index key**: Coco hashes array `i` with
 /// `hash64_seeded(i, ..)`, a fixed part of the algorithm rather than a profile
@@ -71,8 +71,7 @@ struct CocoMetadata {
 
 /// Builds the Coco descriptor metadata from the hasher's [`HashProfile`], so
 /// the wire bytes truthfully describe how the sketch was hashed (rather than
-/// hardcoding the standard profile). `rows` is the sketch's `d`, `cols` its
-/// `w`.
+/// hardcoding the standard profile).
 fn coco_metadata<H: HashProfile>(rows: u32, cols: u32) -> CocoMetadata {
     CocoMetadata {
         metadata_version: 1,
@@ -146,7 +145,7 @@ impl<H: SketchHasher + HashProfile> CocoSketch<H> {
     /// two buckets) are all errors rather than bytes that would be refused on
     /// decode.
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let (rows, cols) = (self.d, self.w);
+        let (rows, cols) = (self.rows, self.cols);
         check_geometry(rows, cols).map_err(RmpEncodeError::Syntax)?;
         let buckets = self.table.as_slice();
         if self.table.rows() != rows
@@ -233,8 +232,8 @@ impl<H: SketchHasher + HashProfile> CocoSketch<H> {
             }
         });
         Ok(CocoSketch {
-            w: cols,
-            d: rows,
+            cols,
+            rows,
             table,
             rng: CocoRng::default(),
             _hasher: std::marker::PhantomData,
@@ -303,8 +302,8 @@ mod tests {
         assert_eq!(&encoded[7..10], &[2u8, 0x0c, 0x00]); // kind_id_len=2, kind_id=[0x0c,0x00]
 
         let decoded: CocoSketch = CocoSketch::from_asapv1(&encoded).expect("deserialize Coco");
-        assert_eq!(decoded.w, 8);
-        assert_eq!(decoded.d, 4);
+        assert_eq!(decoded.cols, 8);
+        assert_eq!(decoded.rows, 4);
         assert_eq!(cells(&sketch), cells(&decoded));
         assert_eq!(decoded.estimate("19.98.10.26|80"), 521);
     }
@@ -499,7 +498,7 @@ mod tests {
     #[test]
     fn coco_rejects_serializing_a_geometry_mismatch() {
         let mut sketch: CocoSketch = CocoSketch::init_with_size(8, 4);
-        sketch.w = 16;
+        sketch.cols = 16;
         assert!(
             sketch.to_asapv1().is_err(),
             "a table whose bucket count disagrees with its geometry must not serialize"

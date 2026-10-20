@@ -16,9 +16,9 @@ Approximate quantile estimation with rank-error guarantees.
 ```rust
 fn default() -> Self
 fn with_k(k: i32) -> Self
-fn init(k: usize, m: usize) -> Self
+fn new(k: usize, m: usize) -> Self
 fn with_k_and_seed(k: i32, seed: u64) -> Self
-fn init_with_seed(k: usize, m: usize, seed: u64) -> Self
+fn with_seed(k: usize, m: usize, seed: u64) -> Self
 ```
 
 The unseeded constructors draw the compaction coin from the wall clock, so two
@@ -26,7 +26,7 @@ runs over the same input produce different sketches. The `*_with_seed` forms
 fix the coin and store the seed, so `clear()` re-seeds from it too — use them
 for reproducible replay, cross-process parity, and any test asserting an
 accuracy bound. `KllDynamic` exposes the same pair
-(`init_with_seed` / `with_k_and_seed`).
+(`with_seed` / `with_k_and_seed`).
 
 ## Insert/Update
 
@@ -49,8 +49,8 @@ fn count(&self) -> usize
 fn cdf(&self) -> Cdf
 
 // Cdf
-fn quantile(&self, x: f64) -> f64
-fn query(&self, p: f64) -> f64
+fn normalized_rank(&self, x: f64) -> f64
+fn value_at(&self, p: f64) -> f64
 fn normalized_rank_interpolated(&self, x: f64) -> f64
 fn value_at_interpolated(&self, p: f64) -> f64
 ```

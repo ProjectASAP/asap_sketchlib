@@ -164,7 +164,7 @@ proptest! {
             E,
             sketch,
             |s: &E| (0..PROBE_KEYS as u64)
-                .map(|k| s.query(format!("flow-{k}")))
+                .map(|k| s.estimate(format!("flow-{k}")))
                 .collect::<Vec<_>>(),
         );
     }
@@ -221,9 +221,9 @@ proptest! {
                 continue;
             }
             prop_assert_eq!(
-                sketch.query(id.clone()) as i64, count,
+                sketch.estimate(id.clone()) as i64, count,
                 "{}: unflagged resident reads {} against a true {}",
-                id, sketch.query(id.clone()), count
+                id, sketch.estimate(id.clone()), count
             );
         }
     }
@@ -236,7 +236,7 @@ proptest! {
 
         for (key, count) in truth_of(&stream) {
             let id = flow(key);
-            let estimate = sketch.query(id.clone()) as i64;
+            let estimate = sketch.estimate(id.clone()) as i64;
             prop_assert!(
                 estimate >= count,
                 "{}: estimate {} below the true {}", id, estimate, count
@@ -309,9 +309,9 @@ proptest! {
         split.merge_heavy(id.clone(), second, eviction);
 
         prop_assert_eq!(
-            split.query(id.clone()), whole.query(id.clone()),
+            split.estimate(id.clone()), whole.estimate(id.clone()),
             "{}: {} + {} split reads {} against {} whole",
-            id, first, second, split.query(id.clone()), whole.query(id.clone())
+            id, first, second, split.estimate(id.clone()), whole.estimate(id.clone())
         );
         prop_assert_eq!(
             resident_bucket(&split, &id).map(|b| b.eviction),
@@ -380,7 +380,7 @@ proptest! {
 
         for (key, count) in truth {
             let id = flow(key);
-            let estimate = a.query(id.clone()) as i64;
+            let estimate = a.estimate(id.clone()) as i64;
             prop_assert!(
                 estimate >= count,
                 "{}: merged estimate {} below the true {}", id, estimate, count

@@ -120,8 +120,8 @@ fn an_elastic_envelope_round_trips_and_names_its_kind() {
     for k in 0..1_024u64 {
         let key = format!("flow-{k}");
         assert_eq!(
-            decoded.query(key.clone()),
-            elastic.query(key),
+            decoded.estimate(key.clone()),
+            elastic.estimate(key),
             "flow {k} changed across the wire"
         );
     }

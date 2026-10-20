@@ -51,11 +51,11 @@ fn main() {
     for v in 1i64..=10_000 {
         kll.update(&v);
     }
-    let p99_before = kll.cdf().query(0.99);
+    let p99_before = kll.cdf().value_at(0.99);
 
     let bytes = kll.to_asapv1().expect("KLL serialize");
     let kll2 = Kll::<i64>::from_asapv1(&bytes).expect("KLL deserialize");
-    let p99_after = kll2.cdf().query(0.99);
+    let p99_after = kll2.cdf().value_at(0.99);
 
     println!(
         "KLL  — p99 before: {p99_before:.1}, after round-trip: {p99_after:.1}  (equal: {})",

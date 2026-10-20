@@ -171,8 +171,8 @@ fn flow(key: u64) -> String {
 
 /// Total mass the parent table holds, over every bucket.
 fn coco_mass(sketch: &CocoSketch) -> u64 {
-    (0..sketch.d)
-        .flat_map(|i| (0..sketch.w).map(move |j| (i, j)))
+    (0..sketch.rows)
+        .flat_map(|i| (0..sketch.cols).map(move |j| (i, j)))
         .map(|(i, j)| sketch.table[i][j].val)
         .sum()
 }

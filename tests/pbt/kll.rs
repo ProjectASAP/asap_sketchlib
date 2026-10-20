@@ -321,7 +321,7 @@ proptest! {
         let mut previous = 0.0f64;
         for i in 0..=40 {
             let x = lo + span * i as f64 / 40.0;
-            let p = cdf.quantile(x);
+            let p = cdf.normalized_rank(x);
 
             prop_assert!((0.0..=1.0).contains(&p), "k={} x={} cdf {} outside [0, 1]", k, x, p);
             prop_assert!(p >= previous, "k={} x={} cdf fell to {} from {}", k, x, p, previous);
@@ -332,8 +332,8 @@ proptest! {
             previous = p;
         }
 
-        prop_assert_eq!(cdf.quantile(lo - span - 1.0), 0.0);
-        prop_assert_eq!(cdf.quantile(hi), 1.0);
+        prop_assert_eq!(cdf.normalized_rank(lo - span - 1.0), 0.0);
+        prop_assert_eq!(cdf.normalized_rank(hi), 1.0);
     }
 
     // ===== Accuracy =====

@@ -114,7 +114,7 @@ Seating and matching behave exactly as in `update`. The two other cases differ:
   than starting at 1 — the paper's "the flow size of `f'` is set to the flow
   size of `f`" — and the evicted flow's size is **discarded**, not spilled.
 
-The light layer is still read by `query`; it is only never written.
+The light layer is still read by `estimate`; it is only never written.
 
 The arrival also **inherits the bucket's eviction flag**, and the negative vote
 resets to `0`. The paper's prose names neither: this path writes only the new
@@ -138,7 +138,7 @@ arrivals there often.
 ## Query
 
 ```rust
-fn query(&self, id: String) -> i32
+fn estimate(&self, id: String) -> i32
 ```
 
 Returns `vote_pos` for a resident flow whose bucket carries no eviction flag,
@@ -295,7 +295,7 @@ leaves behind, so no flow is reported twice.
 
 **Heavy hitter detection.** "For this task, we query the size of each flow in
 the heavy part. If one's size is larger than the predefined threshold, then we
-report this flow as a heavy hitter." Every resident is put through `query`
+report this flow as a heavy hitter." Every resident is put through `estimate`
 rather than read straight off `vote_pos`, so a flow that was once evicted picks
 up its light-layer remainder. The reference reports on `>=`, and so does this.
 
@@ -309,7 +309,7 @@ entry is `(flow, size in self, size in other)`.
 
 ### The other four tasks
 
-- **Flow size estimation** is `query`.
+- **Flow size estimation** is `estimate`.
 - **Cardinality**, **entropy**, and **flow size distribution** are not
   implemented. The paper's estimators for these read the light layer's counter
   value distribution, and the reference builds them on a `d = 1` flat array of
@@ -352,7 +352,7 @@ use asap_sketchlib::ElasticSketch;
 
 let mut sk = ElasticSketch::with_heavy_buckets(8);
 sk.update("flow".to_string());
-let _ = sk.query("flow".to_string());
+let _ = sk.estimate("flow".to_string());
 ```
 
 ## Caveats
@@ -375,7 +375,7 @@ let _ = sk.query("flow".to_string());
 let plan = ElasticOctoPlan::new(256, 3, 4096);
 let config = OctoConfig { threshold: plan.threshold().clone(), ..OctoConfig::default() };
 let out = run_octo(&inputs, &config, plan.clone(), || plan.aggregator());
-out.parent.sketch.query("flow::7".to_string());
+out.parent.sketch.estimate("flow::7".to_string());
 ```
 
 Appendix C of the OctoSketch paper keeps both halves in the worker and promotes
@@ -395,10 +395,10 @@ parent alongside a heavy counter, so it closes the loop while a flow visits one
 worker. Under `RoundRobin` a flow reaches every worker, and one that is a
 stable unflagged resident on one while losing the bucket contest on another is
 seated at the parent unflagged over light-layer mass an unflagged bucket never
-reads: `query` comes back low. Measured counts are in `docs/api/api_octo.md`,
+reads: `estimate` comes back low. Measured counts are in `docs/api/api_octo.md`,
 "The Elastic eviction flag".
 
-Keys are rendered with `flow_key_string`, and that rendering is what `query`
+Keys are rendered with `flow_key_string`, and that rendering is what `estimate`
 must be asked for. See `docs/api/api_octo.md`.
 
 ## Relation to the paper

@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(decoded.light.cols(), 256);
         assert_eq!(buckets(&sketch), buckets(&decoded));
         assert_eq!(light_cells(&sketch), light_cells(&decoded));
-        assert_eq!(decoded.query("19.98.10.26|80".to_string()), 12);
+        assert_eq!(decoded.estimate("19.98.10.26|80".to_string()), 12);
     }
 
     /// Elastic inlines a Count-Min; a stand-alone CMS envelope must not decode
@@ -610,7 +610,7 @@ mod tests {
         );
         let decoded: ElasticSketch = ElasticSketch::from_asapv1(&encoded).expect("deserialize");
         assert_eq!(buckets(&with_empty_flow), buckets(&decoded));
-        assert_eq!(decoded.query(String::new()), 1);
+        assert_eq!(decoded.estimate(String::new()), 1);
     }
 
     /// A table mixing occupied and free buckets, with flows that were evicted
@@ -639,10 +639,10 @@ mod tests {
         assert_eq!(buckets(&sketch), buckets(&decoded));
         assert_eq!(light_cells(&sketch), light_cells(&decoded));
         assert_eq!(
-            sketch.query(primary.to_string()),
-            decoded.query(primary.to_string())
+            sketch.estimate(primary.to_string()),
+            decoded.estimate(primary.to_string())
         );
-        assert_eq!(sketch.query(secondary.clone()), decoded.query(secondary));
+        assert_eq!(sketch.estimate(secondary.clone()), decoded.estimate(secondary));
     }
 
     /// Votes and light counters are signed on the wire and round-trip

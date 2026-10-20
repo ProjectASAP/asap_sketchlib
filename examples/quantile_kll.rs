@@ -23,9 +23,9 @@ fn main() {
     // Build the CDF once after all insertions; subsequent queries are O(log n).
     let cdf: Cdf = sketch.cdf();
 
-    let p50 = cdf.query(0.50);
-    let p90 = cdf.query(0.90);
-    let p99 = cdf.query(0.99);
+    let p50 = cdf.value_at(0.50);
+    let p90 = cdf.value_at(0.90);
+    let p99 = cdf.value_at(0.99);
 
     println!("p50: {p50:.1}  (exact ~5000)");
     println!("p90: {p90:.1}  (exact ~9000)");

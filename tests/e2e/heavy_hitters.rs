@@ -781,7 +781,7 @@ mod keyed_bucket {
             self.0.update(flow_key(*key));
         }
         fn estimate(&self, key: &i64) -> f64 {
-            self.0.query(flow_key(*key)) as f64
+            self.0.estimate(flow_key(*key)) as f64
         }
     }
 
@@ -1067,7 +1067,7 @@ mod keyed_bucket {
         }
 
         for hot in ["hot-alpha", "hot-beta", "hot-gamma"] {
-            let c = sk.query(hot.to_string()) as i64;
+            let c = sk.estimate(hot.to_string()) as i64;
             let t = expected[hot];
             assert_between(
                 c as f64,
@@ -1101,7 +1101,7 @@ mod keyed_bucket {
                 !sk.heavy.iter().any(|b| b.flow_id == "flow::target"),
                 "the target must be evicted for this to measure the light layer"
             );
-            sk.query("flow::target".to_string())
+            sk.estimate("flow::target".to_string())
         };
 
         let narrow = evicted_estimate(1, 64);
@@ -1143,7 +1143,7 @@ mod keyed_bucket {
 
         let mut evicted_seen = 0usize;
         for (id, count) in &truth {
-            let est = sk.query(id.clone()) as i64;
+            let est = sk.estimate(id.clone()) as i64;
             assert!(
                 est >= *count,
                 "elastic underestimated {id}: got {est}, true {count}"
@@ -1163,7 +1163,7 @@ mod keyed_bucket {
         // displaced. The ceiling is Count-Min's on the light layer at its own
         // dimensions — `e * (N - f) / cols` — not a written 5%: the light layer
         // *is* a Count-Min, and this is the bound it promises.
-        let elephant = sk.query("flow::elephant".to_string()) as i64;
+        let elephant = sk.estimate("flow::elephant".to_string()) as i64;
         let true_elephant = truth["flow::elephant"];
         let total: i64 = truth.values().sum();
         let light_ceiling = true_elephant as f64
@@ -1365,14 +1365,14 @@ mod partial_key_and_heavy_maintenance {
 
         for id in left_stream.iter().chain(right_stream.iter()) {
             let own = if id.starts_with("l-") {
-                left.query(id.clone())
+                left.estimate(id.clone())
             } else {
-                right.query(id.clone())
+                right.estimate(id.clone())
             };
             assert!(
-                merged.query(id.clone()) >= own,
+                merged.estimate(id.clone()) >= own,
                 "flow {id}: maximum merging read {} below its own side's {own}",
-                merged.query(id.clone())
+                merged.estimate(id.clone())
             );
         }
     }
@@ -1390,8 +1390,8 @@ mod partial_key_and_heavy_maintenance {
         by_sum.merge(&right);
 
         for (id, _) in by_sum.heavy_hitters(200) {
-            let max_side = by_max.query(id.clone());
-            let sum_side = by_sum.query(id.clone());
+            let max_side = by_max.estimate(id.clone());
+            let sum_side = by_sum.estimate(id.clone());
             assert!(
                 max_side <= sum_side,
                 "flow {id}: maximum merging read {max_side}, above summing at {sum_side}"
@@ -1408,14 +1408,14 @@ mod partial_key_and_heavy_maintenance {
         let mut target = ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(64, 3, 1_024);
         target.merge_heavy("transferred".to_string(), 500, false);
         assert_eq!(
-            target.query("transferred".to_string()),
+            target.estimate("transferred".to_string()),
             500,
             "an unflagged transfer must land its whole vote count in the heavy part"
         );
 
         target.merge_heavy("transferred".to_string(), 0, true);
         assert_eq!(
-            target.query("transferred".to_string()),
+            target.estimate("transferred".to_string()),
             500,
             "a zero-vote transfer must not move the estimate"
         );
@@ -1424,14 +1424,14 @@ mod partial_key_and_heavy_maintenance {
         flagged.merge_heavy("spilled".to_string(), 400, true);
         flagged.absorb_evicted("spilled".to_string(), 90);
         assert!(
-            flagged.query("spilled".to_string()) >= 400,
+            flagged.estimate("spilled".to_string()) >= 400,
             "absorbing an eviction must not lose the heavy votes already held"
         );
 
         let mut light_only = ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(64, 3, 1_024);
         light_only.absorb_evicted("mouse".to_string(), 75);
         assert!(
-            light_only.query("mouse".to_string()) >= 75,
+            light_only.estimate("mouse".to_string()) >= 75,
             "an absorbed flow with no heavy bucket must be readable through the light layer"
         );
     }
@@ -1469,9 +1469,9 @@ mod partial_key_and_heavy_maintenance {
         sk.expand_heavy();
         for (id, size) in &before {
             assert!(
-                sk.query(id.clone()) >= *size,
+                sk.estimate(id.clone()) >= *size,
                 "flow {id}: expansion lost mass, {} < {size}",
-                sk.query(id.clone())
+                sk.estimate(id.clone())
             );
         }
         assert!(
@@ -1482,7 +1482,7 @@ mod partial_key_and_heavy_maintenance {
         sk.compress_heavy(2);
         for (id, size) in &before {
             assert!(
-                sk.query(id.clone()) > 0,
+                sk.estimate(id.clone()) > 0,
                 "flow {id}: compression dropped a flow that held {size}"
             );
         }
@@ -1988,7 +1988,7 @@ mod documented_matrix {
         );
         for hot in HOT {
             let truth = expected[hot] as f64;
-            let est = sk.query(hot.to_string()) as f64;
+            let est = sk.estimate(hot.to_string()) as f64;
             let rel = ((est - truth) / truth).abs();
             assert!(
                 rel <= 0.20,

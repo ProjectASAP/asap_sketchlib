@@ -106,7 +106,7 @@ pub enum DdSign {
 /// Delta emitted by a DDSketch child worker for one bucket.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DdSketchBucketDelta {
-    pub store: DdSign,
+    pub sign: DdSign,
     /// Absolute bucket index, as used by `DdSketch::positive_store_offset`.
     pub index: i32,
     /// Accumulated count for the bucket.

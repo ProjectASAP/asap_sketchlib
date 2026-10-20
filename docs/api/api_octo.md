@@ -374,7 +374,7 @@ by the highest τ that worker has held, which is why
 `RoundRobin` also costs `ElasticSketch` its one-sided guarantee: a flow that is
 a stable, unflagged resident on one worker while losing the bucket contest
 on another reaches the parent unflagged, over light-layer mass an
-unflagged bucket never reads, and `ElasticSketch::query` comes back low. See
+unflagged bucket never reads, and `ElasticSketch::estimate` comes back low. See
 [The Elastic eviction flag](#the-elastic-eviction-flag). The mode is a
 whole-runtime setting, so no individual plan opts out of it.
 
@@ -435,7 +435,7 @@ with `flow_key_string`, which renders every `DataInput` variant: numbers by
 its `ELASTIC` arm renders bytes with `String::from_utf8_lossy`, and its
 `COCO` arm drops every input that is not `Str` or `String`. The
 `flow_key_string` rendering is what the aggregator stores, so it is what
-`CocoSketch::estimate` or `ElasticSketch::query` must be asked for. Their payloads
+`CocoSketch::estimate` or `ElasticSketch::estimate` must be asked for. Their payloads
 carry no hashes: the heavy half of an Elastic insert can evict a key the
 caller never sent, so the worker has to be able to hash for itself anyway,
 and hashing there keeps the work off the dispatching thread.
@@ -568,7 +568,7 @@ That is the whole rule. It says nothing about an eviction flag, and what
 follows is this crate's.
 
 An `ElasticSketch` heavy bucket carries a flag meaning *part of this flow's mass
-is in the light layer*, and `ElasticSketch::query` reads the light layer only
+is in the light layer*, and `ElasticSketch::estimate` reads the light layer only
 when the flag is set. The delta protocol carries it in two places.
 
 1. *The flag rides with the counter.* `ElasticDelta::Heavy` carries the
@@ -604,7 +604,7 @@ stable, unflagged resident on one worker and a perpetual loser of the
 bucket contest on another: the second worker's share of its mass goes out
 unkeyed as `ElasticDelta::Light`, the first worker's `Heavy` messages
 carry `eviction: false`, and the parent seats the flow unflagged over
-light counters it will never read. `ElasticSketch::query` then returns less than
+light counters it will never read. `ElasticSketch::estimate` then returns less than
 the true count, which is the one thing the sketch otherwise never does.
 Same stream and geometry as above, seed 7, over all 11,144 flows it
 contains rather than the top 200:

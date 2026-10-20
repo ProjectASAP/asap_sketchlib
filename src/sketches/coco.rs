@@ -32,8 +32,8 @@ pub struct CocoBucket {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "")]
 pub struct CocoSketch<H: SketchHasher = DefaultXxHasher> {
-    pub w: usize,
-    pub d: usize,
+    pub cols: usize,
+    pub rows: usize,
     pub table: Vector2D<CocoBucket>,
     /// Source of the tie-break and election draws. Not serialized: a decoded
     /// sketch draws from the thread generator.
@@ -138,11 +138,11 @@ impl<H: SketchHasher> CocoSketch<H> {
     }
 
     pub fn debug(&self) {
-        println!("w: {}", self.w);
-        println!("d: {}", self.d);
-        for i in 0..self.d {
+        println!("w: {}", self.cols);
+        println!("d: {}", self.rows);
+        for i in 0..self.rows {
             print!("[ ");
-            for j in 0..self.w {
+            for j in 0..self.cols {
                 self.table[i][j].debug();
             }
             println!(" ]");
@@ -162,8 +162,8 @@ impl<H: SketchHasher> CocoSketch<H> {
 
     fn with_rng(w: usize, d: usize, rng: CocoRng) -> Self {
         CocoSketch {
-            w,
-            d,
+            cols: w,
+            rows: d,
             table: Vector2D::from_fn(d, w, |_, _| CocoBucket::default()),
             rng,
             _hasher: PhantomData,
@@ -177,7 +177,7 @@ impl<H: SketchHasher> CocoSketch<H> {
     /// drawn uniformly at random when several share that smallest value, and
     /// that bucket's key is replaced with `key` with probability `v / val`.
     pub fn update_weighted(&mut self, key: &str, weight: u64) {
-        if self.d == 0 || self.w == 0 {
+        if self.rows == 0 || self.cols == 0 {
             return;
         }
         let key_input = DataInput::Str(key);
@@ -185,8 +185,8 @@ impl<H: SketchHasher> CocoSketch<H> {
         let mut victim_val = u64::MAX;
         let mut tied = 0u32;
 
-        for i in 0..self.d {
-            let idx = H::hash64_seeded(i, &key_input) as usize % self.w;
+        for i in 0..self.rows {
+            let idx = H::hash64_seeded(i, &key_input) as usize % self.cols;
             let bucket = &self.table[i][idx];
             if bucket.full_key.as_deref() == Some(key) {
                 self.table[i][idx].val += weight;
@@ -223,13 +223,13 @@ impl<H: SketchHasher> CocoSketch<H> {
     /// Frequency estimate for `key` as defined by the paper: the sum of the `d`
     /// mapped buckets that currently hold `key`.
     pub fn estimate(&self, key: &str) -> u64 {
-        if self.d == 0 || self.w == 0 {
+        if self.rows == 0 || self.cols == 0 {
             return 0;
         }
         let key_input = DataInput::Str(key);
         let mut total = 0;
-        for i in 0..self.d {
-            let idx = H::hash64_seeded(i, &key_input) as usize % self.w;
+        for i in 0..self.rows {
+            let idx = H::hash64_seeded(i, &key_input) as usize % self.cols;
             if self.table[i][idx].full_key.as_deref() == Some(key) {
                 total += self.table[i][idx].val;
             }
@@ -241,8 +241,8 @@ impl<H: SketchHasher> CocoSketch<H> {
     /// paper's query front-end table. An insert leaves a key in at most one
     /// bucket, so no key is yielded twice.
     pub fn recorded_flows(&self) -> impl Iterator<Item = (&str, u64)> {
-        (0..self.d).flat_map(move |i| {
-            (0..self.w).filter_map(move |j| {
+        (0..self.rows).flat_map(move |i| {
+            (0..self.cols).filter_map(move |j| {
                 let bucket = &self.table[i][j];
                 bucket.full_key.as_deref().map(|key| (key, bucket.val))
             })
@@ -296,10 +296,10 @@ impl<H: SketchHasher> CocoSketch<H> {
     }
 
     pub fn merge(&mut self, other: &CocoSketch<H>) {
-        assert_eq!(self.d, other.d, "Different depth, do nothing");
-        assert_eq!(self.w, other.w, "Different width, do nothing");
-        for i in 0..self.d {
-            for j in 0..self.w {
+        assert_eq!(self.rows, other.rows, "Different depth, do nothing");
+        assert_eq!(self.cols, other.cols, "Different width, do nothing");
+        for i in 0..self.rows {
+            for j in 0..self.cols {
                 if let Some(k) = &other.table[i][j].full_key {
                     self.update_weighted(k.as_str(), other.table[i][j].val);
                 }
@@ -354,8 +354,8 @@ mod tests {
     }
 
     fn table_of(coco: &CocoSketch) -> Vec<(Option<String>, u64)> {
-        (0..coco.d)
-            .flat_map(|i| (0..coco.w).map(move |j| (i, j)))
+        (0..coco.rows)
+            .flat_map(|i| (0..coco.cols).map(move |j| (i, j)))
             .map(|(i, j)| (coco.table[i][j].full_key.clone(), coco.table[i][j].val))
             .collect()
     }

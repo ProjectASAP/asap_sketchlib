@@ -2926,8 +2926,8 @@ mod heavy_hitters {
     /// Every `CocoSketch::update_weighted` adds its whole weight to exactly one bucket, so the
     /// table's total is the mass it has absorbed.
     fn coco_mass(sketch: &CocoSketch) -> u64 {
-        (0..sketch.d)
-            .flat_map(|i| (0..sketch.w).map(move |j| (i, j)))
+        (0..sketch.rows)
+            .flat_map(|i| (0..sketch.cols).map(move |j| (i, j)))
             .map(|(i, j)| sketch.table[i][j].val)
             .sum()
     }
@@ -3190,7 +3190,7 @@ mod heavy_hitters {
             .map(|b| {
                 (
                     b.flow_id.clone(),
-                    sketch.query(b.flow_id.clone()).max(0) as u64,
+                    sketch.estimate(b.flow_id.clone()).max(0) as u64,
                 )
             })
             .filter(|(_, size)| *size > threshold)
@@ -3744,7 +3744,7 @@ mod heavy_hitters {
 
             let mut evicted = 0usize;
             for (key, exact) in &truth {
-                let estimate = octo.sketch().query(key.clone());
+                let estimate = octo.sketch().estimate(key.clone());
                 assert!(
                     estimate >= *exact as i32,
                     "{workers} workers: {key} read back {estimate} against a true {exact}"
@@ -3830,7 +3830,7 @@ mod heavy_hitters {
             "a flow no worker ever evicted must not be flagged"
         );
         assert_eq!(
-            parent.sketch.query(lone.clone()),
+            parent.sketch.estimate(lone.clone()),
             LONE_ARRIVALS as i32,
             "an unspilled heavy flow must read back exactly, not {noise} above"
         );
@@ -3904,7 +3904,7 @@ mod heavy_hitters {
         );
         assert_eq!(bucket.vote_pos, ELASTIC_TAU as i32, "the promoted window");
         assert_eq!(
-            parent.sketch.query(resident.clone()),
+            parent.sketch.estimate(resident.clone()),
             exact,
             "the spilled arrivals must be read back through the light layer"
         );
@@ -3993,7 +3993,7 @@ mod heavy_hitters {
                 }
                 for (key, exact) in &truth {
                     assert!(
-                        parent.query(key.clone()) >= *exact as i32,
+                        parent.estimate(key.clone()) >= *exact as i32,
                         "{workers} workers: {key} underestimated"
                     );
                 }
@@ -4236,9 +4236,9 @@ mod heavy_hitters {
                 let threshold = (seen as f64 * HH_ALPHA) as u64;
                 for key in &watched {
                     let exact = running[key] as f64;
-                    octo_are += (octo.sketch().query(key.clone()) as f64 - exact).abs() / exact;
-                    merge_are += (merge.parent.query(key.clone()) as f64 - exact).abs() / exact;
-                    ideal_are += (ideal.query(key.clone()) as f64 - exact).abs() / exact;
+                    octo_are += (octo.sketch().estimate(key.clone()) as f64 - exact).abs() / exact;
+                    merge_are += (merge.parent.estimate(key.clone()) as f64 - exact).abs() / exact;
+                    ideal_are += (ideal.estimate(key.clone()) as f64 - exact).abs() / exact;
                     samples += 1.0;
                 }
                 let octo_hh = score(
@@ -5176,8 +5176,8 @@ mod partition_accuracy {
             let mut elastic_ceiling = Tally::default();
             for (k, _) in &heavy {
                 let key = key_of(*k as u64);
-                let est = parent.sketch.query(key.clone()) as i64;
-                let single = reference.query(key) as i64;
+                let est = parent.sketch.estimate(key.clone()) as i64;
+                let single = reference.estimate(key) as i64;
                 elastic_ceiling.record(est >= 0 && est <= truth.total(), || {
                     format!(
                         "key {k}: octo {est} outside [0, stream mass {}]",

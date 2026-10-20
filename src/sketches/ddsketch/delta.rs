@@ -172,7 +172,7 @@ impl DdSketch {
             .chain([&delta.zero_count])
             .try_fold(self.count, |acc, &c| acc.checked_add(c))
             .ok_or_else(|| "DDSketch delta: the total sample count overflows".to_string())?;
-        if !grows_within_i32(&self.store, &delta.indices)
+        if !grows_within_i32(&self.positive_store, &delta.indices)
             || !grows_within_i32(&self.negative_store, &delta.negative_indices)
         {
             return Err("DDSketch delta: a store would span past i32".to_string());
@@ -186,7 +186,7 @@ impl DdSketch {
                 let store = if negative {
                     &mut self.negative_store
                 } else {
-                    &mut self.store
+                    &mut self.positive_store
                 };
                 store.ensure(k);
                 store.counts.as_mut_slice()[(k - store.offset) as usize] += c;
@@ -290,8 +290,8 @@ mod tests {
         assert!(sketch.merge_delta(&other).is_err());
         assert_eq!(sketch.get_count(), 1);
 
-        sketch.store.counts = Vector1D::from_vec(vec![u64::MAX - 1]);
-        sketch.store.offset = 55;
+        sketch.positive_store.counts = Vector1D::from_vec(vec![u64::MAX - 1]);
+        sketch.positive_store.offset = 55;
         sketch.count = u64::MAX - 1;
         let before = sketch.to_asapv1().unwrap();
         let rows = [
@@ -311,7 +311,7 @@ mod tests {
     fn merge_delta_rejects_a_store_span_past_i32() {
         let mut sketch = DdSketch::try_from(DdSketchState {
             alpha: ALPHA,
-            store: Buckets {
+            positive_store: Buckets {
                 counts: Vector1D::from_vec(vec![1]),
                 offset: i32::MAX - 1,
             },

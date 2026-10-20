@@ -31,7 +31,7 @@ const DEFAULT_K: i32 = 200;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DynamicCdfEntry {
     value: f64,
-    quantile: f64,
+    normalized_rank: f64,
 }
 
 /// KLL quantile sketch using a dynamic, insert-optimized layout.
@@ -43,13 +43,13 @@ pub struct DynamicCdfEntry {
 pub struct KllDynamic<T: NumericalValue = f64> {
     items: Vector1D<T>, // compactors, packed
     /// Stores the START index of each level in `items`.
-    levels: Vector1D<usize>,
+    level_bounds_top_down: Vector1D<usize>,
     k: usize,
     m: usize, // Minimum buffer size (usually 8)
     num_levels: usize,
-    co: Coin,
+    coin: Coin,
     /// Explicit seed for the compaction coin, when present. Set by
-    /// [`KllDynamic::init_with_seed`] / [`KllDynamic::with_k_and_seed`] so
+    /// [`KllDynamic::with_seed`] / [`KllDynamic::with_k_and_seed`] so
     /// a sketch replays identically across runs and `clear()` re-seeds from
     /// the same value. Not part of the wire format: it describes how the
     /// sketch was built, not what it currently holds.
@@ -74,7 +74,7 @@ impl<T: NumericalValue> Default for KllDynamic<T> {
 
 impl<T: NumericalValue> KllDynamic<T> {
     /// Creates a KllDynamic sketch with the given `k` and `m` parameters.
-    pub fn init(k: usize, m: usize) -> Self {
+    pub fn new(k: usize, m: usize) -> Self {
         Self::init_internal(k, m, Coin::new(), None)
     }
 
@@ -86,8 +86,8 @@ impl<T: NumericalValue> KllDynamic<T> {
     ///
     /// The unseeded [`KllDynamic::init`] draws from the wall clock, so a
     /// sketch built with it cannot be used to assert an accuracy bound
-    /// reproducibly. Mirrors [`crate::Kll::init_with_seed`].
-    pub fn init_with_seed(k: usize, m: usize, seed: u64) -> Self {
+    /// reproducibly. Mirrors [`crate::Kll::with_seed`].
+    pub fn with_seed(k: usize, m: usize, seed: u64) -> Self {
         Self::init_internal(k, m, Coin::from_seed(seed), Some(seed))
     }
 
@@ -100,11 +100,11 @@ impl<T: NumericalValue> KllDynamic<T> {
         }
         let mut s = Self {
             items: Vector1D::init(norm_k * 3),
-            levels: Vector1D::filled(2, 0),
+            level_bounds_top_down: Vector1D::filled(2, 0),
             k: norm_k,
             m: norm_m,
             num_levels: 1,
-            co: coin,
+            coin: coin,
             seed,
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
@@ -116,22 +116,22 @@ impl<T: NumericalValue> KllDynamic<T> {
 
     /// Creates a KllDynamic sketch with default `m` and the provided `k`.
     pub fn with_k(k: i32) -> Self {
-        Self::init(k as usize, 8)
+        Self::new(k as usize, 8)
     }
 
-    /// `with_k` with an explicit RNG seed. See [`KllDynamic::init_with_seed`].
+    /// `with_k` with an explicit RNG seed. See [`KllDynamic::with_seed`].
     pub fn with_k_and_seed(k: i32, seed: u64) -> Self {
-        Self::init_with_seed(k as usize, 8, seed)
+        Self::with_seed(k as usize, 8, seed)
     }
 
     fn push_value(&mut self, value: T) {
         self.items.push(value);
 
-        if let Some(last) = self.levels.last_mut() {
+        if let Some(last) = self.level_bounds_top_down.last_mut() {
             *last = self.items.len();
         }
 
-        let levels_slice = self.levels.as_slice();
+        let levels_slice = self.level_bounds_top_down.as_slice();
         let l0_start = levels_slice[self.num_levels - 1];
         let l0_count = self.items.len() - l0_start;
 
@@ -200,13 +200,13 @@ impl<T: NumericalValue> KllDynamic<T> {
     #[inline]
     fn level_size(&self, h: usize) -> usize {
         let idx = self.num_levels - 1 - h;
-        let slice = self.levels.as_slice();
+        let slice = self.level_bounds_top_down.as_slice();
         slice[idx + 1] - slice[idx]
     }
 
     fn add_new_top_level(&mut self) {
-        self.levels.insert(0, 0);
-        if let Some(last) = self.levels.last_mut() {
+        self.level_bounds_top_down.insert(0, 0);
+        if let Some(last) = self.level_bounds_top_down.last_mut() {
             *last = self.items.len();
         }
         self.num_levels += 1;
@@ -218,7 +218,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         let cur_lvl_idx = self.num_levels - 1 - h;
 
         // Get raw indices first
-        let levels_slice = self.levels.as_mut_slice();
+        let levels_slice = self.level_bounds_top_down.as_mut_slice();
         let start = levels_slice[cur_lvl_idx];
         let end = levels_slice[cur_lvl_idx + 1];
         let count = end - start;
@@ -227,7 +227,7 @@ impl<T: NumericalValue> KllDynamic<T> {
 
         items[start..end].sort_unstable_by(T::total_cmp);
 
-        let offset = usize::from(self.co.toss());
+        let offset = usize::from(self.coin.toss());
         let mut survivors = 0;
         let mut i = offset;
 
@@ -255,7 +255,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         self.items.truncate(new_len);
 
         // Update level pointers after shift
-        let levels_slice = self.levels.as_mut_slice();
+        let levels_slice = self.level_bounds_top_down.as_mut_slice();
         levels_slice[cur_lvl_idx] = start + survivors;
 
         for pos in levels_slice
@@ -275,12 +275,12 @@ impl<T: NumericalValue> KllDynamic<T> {
     /// freshly constructed.
     pub fn clear(&mut self) {
         self.items.clear();
-        self.levels = Vector1D::filled(2, 0);
+        self.level_bounds_top_down = Vector1D::filled(2, 0);
         self.num_levels = 1;
         // Re-seed from the construction seed when there is one, so a cleared
         // sketch replays exactly like a fresh one; fall back to the wall clock
         // for the unseeded constructor.
-        self.co = match self.seed {
+        self.coin = match self.seed {
             Some(s) => Coin::from_seed(s),
             None => Coin::new(),
         };
@@ -298,7 +298,7 @@ impl<T: NumericalValue> KllDynamic<T> {
             self.num_levels,
             self.items.len()
         );
-        let levels = self.levels.as_slice();
+        let levels = self.level_bounds_top_down.as_slice();
         let items = self.items.as_slice();
         for h in (0..self.num_levels).rev() {
             let idx = self.num_levels - 1 - h;
@@ -315,7 +315,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         };
         let mut total_w = 0usize;
 
-        let levels = self.levels.as_slice();
+        let levels = self.level_bounds_top_down.as_slice();
         let items = self.items.as_slice();
 
         for h in 0..self.num_levels {
@@ -326,7 +326,7 @@ impl<T: NumericalValue> KllDynamic<T> {
             for &value in &items[start..end] {
                 cdf.entries.push(DynamicCdfEntry {
                     value: value.to_f64(),
-                    quantile: weight as f64,
+                    normalized_rank: weight as f64,
                 });
             }
             total_w += (end - start) * weight;
@@ -342,8 +342,8 @@ impl<T: NumericalValue> KllDynamic<T> {
 
         let mut cur_w = 0.0;
         for entry in cdf.entries.as_mut_slice() {
-            cur_w += entry.quantile;
-            entry.quantile = cur_w / total_w as f64;
+            cur_w += entry.normalized_rank;
+            entry.normalized_rank = cur_w / total_w as f64;
         }
 
         cdf
@@ -386,7 +386,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         #[allow(clippy::needless_range_loop)] // `h` also indexes self.levels/self.items
         for h in 0..self.num_levels {
             let idx = self.num_levels - 1 - h;
-            let levels = self.levels.as_slice();
+            let levels = self.level_bounds_top_down.as_slice();
             let (s, e) = (levels[idx], levels[idx + 1]);
             work[h].extend_from_slice(&self.items.as_slice()[s..e]);
             work[h].sort_unstable_by(T::total_cmp);
@@ -395,7 +395,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         #[allow(clippy::needless_range_loop)] // `h` also indexes other.levels/other.items
         for h in 0..other.num_levels {
             let idx = other.num_levels - 1 - h;
-            let levels = other.levels.as_slice();
+            let levels = other.level_bounds_top_down.as_slice();
             let (s, e) = (levels[idx], levels[idx + 1]);
             let self_len = work[h].len();
             work[h].extend_from_slice(&other.items.as_slice()[s..e]);
@@ -422,7 +422,7 @@ impl<T: NumericalValue> KllDynamic<T> {
                     work.resize(self.num_levels + 1, Vec::new());
                 }
                 let pop = work[h].len();
-                let offset = usize::from(self.co.toss());
+                let offset = usize::from(self.coin.toss());
                 let num_survivors = randomly_halve_up(work[h].as_mut_slice(), 0, pop, offset);
                 let discard = pop - num_survivors;
                 work[h].drain(0..discard);
@@ -450,19 +450,19 @@ impl<T: NumericalValue> KllDynamic<T> {
             levels.push(items.len());
         }
         self.items = Vector1D::from_vec(items);
-        self.levels = Vector1D::from_vec(levels);
+        self.level_bounds_top_down = Vector1D::from_vec(levels);
     }
 
     /// Returns the estimated value at quantile `q`.
     pub fn quantile(&self, q: f64) -> f64 {
         let cdf = self.cdf();
-        cdf.query(q)
+        cdf.value_at(q)
     }
 
     /// Returns the estimated rank of value `x`.
     pub fn rank(&self, x: f64) -> usize {
         let mut r = 0;
-        let levels = self.levels.as_slice();
+        let levels = self.level_bounds_top_down.as_slice();
         let items = self.items.as_slice();
 
         for h in 0..self.num_levels {
@@ -519,8 +519,8 @@ pub struct DynamicCdf {
 }
 
 impl DynamicCdf {
-    /// Returns the quantile for value `x` using the CDF table.
-    pub fn quantile(&self, x: f64) -> f64 {
+    /// Fraction of the total weight at or below `x`, in [0, 1].
+    pub fn normalized_rank(&self, x: f64) -> f64 {
         if self.entries.is_empty() {
             return 0.0;
         }
@@ -528,9 +528,9 @@ impl DynamicCdf {
         match slice
             .binary_search_by(|e| e.value.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Less))
         {
-            Ok(idx) => slice[idx].quantile,
+            Ok(idx) => slice[idx].normalized_rank,
             Err(0) => 0.0,
-            Err(idx) => slice[idx - 1].quantile,
+            Err(idx) => slice[idx - 1].normalized_rank,
         }
     }
 
@@ -539,14 +539,14 @@ impl DynamicCdf {
         println!("entries: {:?}", self.entries);
     }
 
-    /// Returns the estimated value corresponding to quantile `p`.
-    pub fn query(&self, p: f64) -> f64 {
+    /// Value at fraction `p` of the total weight.
+    pub fn value_at(&self, p: f64) -> f64 {
         if self.entries.is_empty() {
             return 0.0;
         }
         let slice = self.entries.as_slice();
         match slice.binary_search_by(|e| {
-            e.quantile
+            e.normalized_rank
                 .partial_cmp(&p)
                 .unwrap_or(std::cmp::Ordering::Less)
         }) {
@@ -556,7 +556,7 @@ impl DynamicCdf {
         }
     }
 
-    /// Quantile estimation of value `x` using linear interpolation.
+    /// [`Self::normalized_rank`] with linear interpolation.
     pub fn normalized_rank_interpolated(&self, x: f64) -> f64 {
         let slice = self.entries.as_slice();
         if slice.is_empty() {
@@ -570,19 +570,19 @@ impl DynamicCdf {
             return 0.0;
         }
         let a = slice[idx - 1].value;
-        let aq = slice[idx - 1].quantile;
+        let aq = slice[idx - 1].normalized_rank;
         let b = slice[idx].value;
-        let bq = slice[idx].quantile;
+        let bq = slice[idx].normalized_rank;
         ((a - x) * bq + (x - b) * aq) / (a - b)
     }
 
-    /// Value estimation given quantile `p`, using linear interpolation.
+    /// [`Self::value_at`] with linear interpolation.
     pub fn value_at_interpolated(&self, p: f64) -> f64 {
         let slice = self.entries.as_slice();
         if slice.is_empty() {
             return 0.0;
         }
-        let idx = slice.partition_point(|e| e.quantile < p);
+        let idx = slice.partition_point(|e| e.normalized_rank < p);
         if idx == slice.len() {
             return slice[slice.len() - 1].value;
         }
@@ -590,9 +590,9 @@ impl DynamicCdf {
             return slice[0].value;
         }
         let a = slice[idx - 1].value;
-        let aq = slice[idx - 1].quantile;
+        let aq = slice[idx - 1].normalized_rank;
         let b = slice[idx].value;
-        let bq = slice[idx].quantile;
+        let bq = slice[idx].normalized_rank;
         ((aq - p) * b + (p - bq) * a) / (aq - bq)
     }
 }
@@ -633,7 +633,7 @@ mod tests {
             let upper_q = (quantile + tolerance).min(1.0);
             let truth_min = quantile_from_sorted(sorted_truth, lower_q);
             let truth_max = quantile_from_sorted(sorted_truth, upper_q);
-            let estimate = cdf.query(quantile);
+            let estimate = cdf.value_at(quantile);
             assert!(
                 (truth_min..=truth_max).contains(&estimate),
                 "{label} exceeded tolerance: context={context}, sample_size={sample_size}, seed=0x{seed:08x}, \
@@ -657,7 +657,7 @@ mod tests {
 
         // Query quantiles
         let cdf = kll.cdf();
-        let median = cdf.query(0.5);
+        let median = cdf.value_at(0.5);
 
         // Median should be 30.5
         assert!(median > 20.0 && median < 40.2, "Median = {median}");
@@ -674,14 +674,14 @@ mod tests {
     #[test]
     fn test_forced_compact() {
         // force compaction to happen with small k/m
-        let mut kll = KllDynamic::init(3, 3);
+        let mut kll = KllDynamic::new(3, 3);
         kll.update(&10.0);
         kll.update(&20.0);
         kll.update(&30.0);
         kll.update(&40.0);
         kll.update(&50.0);
         let cdf = kll.cdf();
-        let median = cdf.query(0.5);
+        let median = cdf.value_at(0.5);
         // only 30 and 40 is possible
         assert!(median == 30.0 || median == 40.0, "Median = {median}");
     }
@@ -698,7 +698,7 @@ mod tests {
 
         // Query quantiles
         let cdf = kll.cdf();
-        let median = cdf.query(0.5);
+        let median = cdf.value_at(0.5);
         // Median should be 30
         assert!(median == 30.0, "Median = {median}");
     }
@@ -863,9 +863,9 @@ mod tests {
     // test deterministic.
     #[test]
     fn merge_handles_operand_level_that_is_not_a_single_sorted_run() {
-        let mut other = KllDynamic::<f64>::init(50, 4);
+        let mut other = KllDynamic::<f64>::new(50, 4);
         other.items = Vector1D::from_vec(vec![30.0, 40.0, 10.0, 20.0, 5.0]);
-        other.levels = Vector1D::from_vec(vec![0, 4, 5]);
+        other.level_bounds_top_down = Vector1D::from_vec(vec![0, 4, 5]);
         other.num_levels = 2;
         other.rebuild_capacity_cache();
         assert!(
@@ -873,10 +873,10 @@ mod tests {
             "test setup needs level 1 to stay under capacity, uncompacted"
         );
 
-        let mut dst = KllDynamic::<f64>::init(50, 4);
+        let mut dst = KllDynamic::<f64>::new(50, 4);
         dst.merge(&other);
 
-        let levels = dst.levels.as_slice();
+        let levels = dst.level_bounds_top_down.as_slice();
         let items = dst.items.as_slice();
         for h in 1..dst.num_levels {
             let level_idx = dst.num_levels - 1 - h;
@@ -893,8 +893,8 @@ mod tests {
     fn cdf_handles_empty_sketch() {
         let sketch = KllDynamic::<f64>::with_k(64);
         let cdf = sketch.cdf();
-        assert_eq!(cdf.quantile(123.0), 0.0);
-        assert_eq!(cdf.query(0.5), 0.0);
+        assert_eq!(cdf.normalized_rank(123.0), 0.0);
+        assert_eq!(cdf.value_at(0.5), 0.0);
         assert_eq!(cdf.value_at_interpolated(0.5), 0.0);
     }
 
@@ -916,8 +916,8 @@ mod tests {
         assert_eq!(sketch.top_height, restored.top_height);
         assert_eq!(sketch.level0_capacity, restored.level0_capacity);
         assert_eq!(
-            sketch.levels.as_slice(),
-            restored.levels.as_slice(),
+            sketch.level_bounds_top_down.as_slice(),
+            restored.level_bounds_top_down.as_slice(),
             "level boundaries changed after round-trip"
         );
         assert_eq!(
@@ -931,10 +931,10 @@ mod tests {
         let restored_cdf = restored.cdf();
         for &q in &quantiles {
             assert!(
-                (original_cdf.query(q) - restored_cdf.query(q)).abs() < f64::EPSILON,
+                (original_cdf.value_at(q) - restored_cdf.value_at(q)).abs() < f64::EPSILON,
                 "quantile mismatch at p={q}: original={}, restored={}",
-                original_cdf.query(q),
-                restored_cdf.query(q)
+                original_cdf.value_at(q),
+                restored_cdf.value_at(q)
             );
         }
     }
@@ -954,8 +954,8 @@ mod tests {
         );
 
         let cdf = sketch.cdf();
-        let p50 = cdf.query(0.5);
-        let p90 = cdf.query(0.9);
+        let p50 = cdf.value_at(0.5);
+        let p90 = cdf.value_at(0.9);
         let tol = n as f64 * 0.02;
         assert!(
             (p50 - (n as f64 * 0.5)).abs() < tol,

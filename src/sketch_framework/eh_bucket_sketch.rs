@@ -214,7 +214,7 @@ impl EhBucketSketch {
                 _ => Err("Unsupported command for DDSketch"),
             },
             (EhBucketSketch::ElasticSketch(elastic), DataInput::String(s)) => {
-                Ok(elastic.query(s.clone()) as f64)
+                Ok(elastic.estimate(s.clone()) as f64)
             }
             (EhBucketSketch::Hll(hll_df_modified), _) => Ok(hll_df_modified.estimate() as f64),
             (EhBucketSketch::Kll(kll), DataInput::I32(i)) => Ok(kll.quantile(*i as f64)),

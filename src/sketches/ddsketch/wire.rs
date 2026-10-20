@@ -191,11 +191,11 @@ fn check_scalars(
 /// count, the checked sum of both stores and `zero_count`.
 pub(super) fn check_state(state: &DdSketchState) -> Result<u64, String> {
     check_alpha(state.alpha)?;
-    check_store_span(&state.store)?;
+    check_store_span(&state.positive_store)?;
     check_store_span(&state.negative_store)?;
     let overflow = || "DDSketch bucket counts overflow the total sample count".to_string();
     let negative = store_total(&state.negative_store).ok_or_else(overflow)?;
-    let count = store_total(&state.store)
+    let count = store_total(&state.positive_store)
         .and_then(|c| c.checked_add(negative))
         .and_then(|c| c.checked_add(state.zero_count))
         .ok_or_else(overflow)?;
@@ -217,7 +217,7 @@ impl DdSketch {
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let state = DdSketchState {
             alpha: self.alpha,
-            store: self.store.clone(),
+            positive_store: self.positive_store.clone(),
             sum: self.sum,
             min: self.min,
             max: self.max,
@@ -229,8 +229,8 @@ impl DdSketch {
             .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 DDSketch envelope: {e}")))?;
         let metadata = encode_metadata(self.alpha, self.admission_rate)?;
         let payload = rmp_serde::to_vec(&DdPayload {
-            counts: state.store.counts.into_vec(),
-            offset: state.store.offset,
+            counts: state.positive_store.counts.into_vec(),
+            offset: state.positive_store.offset,
             sum: self.sum,
             min: self.min,
             max: self.max,
@@ -256,7 +256,7 @@ impl DdSketch {
         let p: DdPayload = envelope::decode_block(payload)?;
         DdSketch::try_from(DdSketchState {
             alpha,
-            store: Buckets {
+            positive_store: Buckets {
                 counts: Vector1D::from_vec(p.counts),
                 offset: p.offset,
             },
@@ -645,8 +645,8 @@ mod tests {
     fn ddsketch_rejects_serializing_a_store_span_past_i32() {
         let mut sketch = DdSketch::new(ALPHA);
         sketch.add(&1.0f64);
-        sketch.store.counts = Vector1D::from_vec(vec![1u64; 10]);
-        sketch.store.offset = i32::MAX - 2;
+        sketch.positive_store.counts = Vector1D::from_vec(vec![1u64; 10]);
+        sketch.positive_store.offset = i32::MAX - 2;
         assert!(
             sketch.to_asapv1().is_err(),
             "a store spanning past i32 must not serialize"
@@ -659,8 +659,8 @@ mod tests {
     fn ddsketch_rejects_serializing_an_overflowing_bucket_total() {
         let mut sketch = DdSketch::new(ALPHA);
         sketch.add(&1.0f64);
-        sketch.store.counts = Vector1D::from_vec(vec![u64::MAX, 1]);
-        sketch.store.offset = 0;
+        sketch.positive_store.counts = Vector1D::from_vec(vec![u64::MAX, 1]);
+        sketch.positive_store.offset = 0;
         assert!(
             sketch.to_asapv1().is_err(),
             "bucket counts overflowing the total must not serialize"

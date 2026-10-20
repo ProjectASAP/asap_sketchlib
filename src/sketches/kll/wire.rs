@@ -61,7 +61,7 @@ impl KllWireItem for i64 {
 /// closed on any unexpected key.
 ///
 /// `compaction_seed` is the **only optional** field: it is the compaction RNG's reproducible
-/// seed (see [`crate::sketches::kll::Kll::init_with_seed`]). It is present only
+/// seed (see [`crate::sketches::kll::Kll::with_seed`]). It is present only
 /// when the sketch carries one (`Some`), and the key is **omitted** otherwise
 /// (`skip_serializing_if` + `default`), so an unseeded sketch's bytes are
 /// unchanged. It is echoed on decode, never pinned. The compact `Kll` populates
@@ -233,7 +233,7 @@ where
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata =
             rmp_serde::to_vec_named(&kll_metadata::<T>(self.k as u32, self.m as u32, self.seed))?;
-        let (state, bit_cache, remaining_bits) = self.co.to_wire();
+        let (state, bit_cache, remaining_bits) = self.coin.to_wire();
         let payload = rmp_serde::to_vec(&KllPayload {
             levels: self.level_bounds_top_down(),
             items: self.items_top_down(),
@@ -325,7 +325,7 @@ where
             m,
             num_levels,
             max_capacity: max_cap,
-            co: Coin::from_wire(coin.state, coin.bit_cache, coin.remaining_bits as u8),
+            coin: Coin::from_wire(coin.state, coin.bit_cache, coin.remaining_bits as u8),
             // The reproducible compaction seed is restored from the metadata (it
             // is `None` for a sketch that never carried one), so a decoded sketch
             // keeps clear()-determinism when the producer had it.

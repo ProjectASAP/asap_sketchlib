@@ -159,7 +159,7 @@ fn main() {
         (0..N_ITEMS).map(|_| rng.next_f64_unit() * 1000.0).collect()
     };
     bench("kll_update", N_ITEMS, || {
-        let mut sk = Kll::<f64>::init_with_seed(200, 8, 42);
+        let mut sk = Kll::<f64>::with_seed(200, 8, 42);
         let start = Instant::now();
         for &v in &kll_values {
             sk.update_data_input(&DataInput::F64(v)).unwrap();
@@ -169,7 +169,7 @@ fn main() {
         elapsed
     });
 
-    let mut kll_filled = Kll::<f64>::init_with_seed(200, 8, 42);
+    let mut kll_filled = Kll::<f64>::with_seed(200, 8, 42);
     for &v in &kll_values {
         kll_filled.update_data_input(&DataInput::F64(v)).unwrap();
     }
@@ -186,7 +186,7 @@ fn main() {
 
     // Same workload through the memoized CDF: rebuild cost paid once, then
     // binary search per query.
-    let mut kll_cached = Kll::<f64>::init_with_seed(200, 8, 42);
+    let mut kll_cached = Kll::<f64>::with_seed(200, 8, 42);
     for &v in &kll_values {
         kll_cached.update_data_input(&DataInput::F64(v)).unwrap();
     }

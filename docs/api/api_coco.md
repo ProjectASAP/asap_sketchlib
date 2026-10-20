@@ -106,12 +106,12 @@ fn from_asapv1(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
 ```
 
 ASAPv1 MessagePack, kind_id `0x0c 0x00`. The metadata carries the hash spec plus
-the table geometry as `rows` (`d`) and `cols` (`w`); the payload is
+the table geometry as `rows` and `cols`; the payload is
 `[keys, values]`, two dense row-major arrays of `rows * cols` entries. A free
 bucket is msgpack `nil`, so an inserted `""` key stays distinct from a bucket
 that holds nothing. Both methods require `H: HashProfile`.
 
-A zero dimension, a table whose bucket count disagrees with `w`/`d`, a payload
+A zero dimension, a table whose bucket count disagrees with `rows`/`cols`, a payload
 length that disagrees with the declared geometry, and a `nil` key carrying a
 non-zero value are all rejected on both sides. `CocoSketch` also derives serde.
 

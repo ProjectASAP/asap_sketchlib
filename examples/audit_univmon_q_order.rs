@@ -320,7 +320,7 @@ fn score_kll(sketch: &Kll<i64>, truth: &Truth) -> OrderedScore {
     let cdf = sketch.cdf();
     let errors: Vec<_> = QUANTILES
         .iter()
-        .map(|&q| truth.quantile_rank_error(q, cdf.query(q).round() as i64))
+        .map(|&q| truth.quantile_rank_error(q, cdf.value_at(q).round() as i64))
         .collect();
     OrderedScore {
         quantile_mean: errors.iter().sum::<f64>() / errors.len() as f64,
@@ -333,7 +333,7 @@ fn score_kll(sketch: &Kll<i64>, truth: &Truth) -> OrderedScore {
         cdf_max: truth
             .probes
             .iter()
-            .map(|&(value, exact)| (cdf.quantile(value as f64) - exact).abs())
+            .map(|&(value, exact)| (cdf.normalized_rank(value as f64) - exact).abs())
             .fold(0.0, f64::max),
     }
 }
@@ -393,7 +393,7 @@ fn cdf_drift_kll(left: &Kll<i64>, right: &Kll<i64>, truth: &Truth) -> f64 {
     truth
         .probes
         .iter()
-        .map(|&(value, _)| (left.quantile(value as f64) - right.quantile(value as f64)).abs())
+        .map(|&(value, _)| (left.normalized_rank(value as f64) - right.normalized_rank(value as f64)).abs())
         .fold(0.0, f64::max)
 }
 

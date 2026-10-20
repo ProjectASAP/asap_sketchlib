@@ -42,9 +42,9 @@ where
         // `None` and the metadata key is omitted.
         let metadata =
             rmp_serde::to_vec_named(&kll_metadata::<T>(self.k as u32, self.m as u32, None))?;
-        let (state, bit_cache, remaining_bits) = self.co.to_wire();
+        let (state, bit_cache, remaining_bits) = self.coin.to_wire();
         let payload = rmp_serde::to_vec(&KllPayload {
-            levels: self.levels.as_slice().iter().map(|&l| l as u32).collect(),
+            levels: self.level_bounds_top_down.as_slice().iter().map(|&l| l as u32).collect(),
             items: self.items.as_slice().to_vec(),
             coin: KllCoinWire {
                 state,
@@ -70,11 +70,11 @@ where
         } = payload;
         let mut sketch = KllDynamic {
             items: Vector1D::from_vec(items),
-            levels: Vector1D::from_vec(levels.into_iter().map(|l| l as usize).collect()),
+            level_bounds_top_down: Vector1D::from_vec(levels.into_iter().map(|l| l as usize).collect()),
             k: meta.k as usize,
             m: meta.m as usize,
             num_levels,
-            co: Coin::from_wire(coin.state, coin.bit_cache, coin.remaining_bits as u8),
+            coin: Coin::from_wire(coin.state, coin.bit_cache, coin.remaining_bits as u8),
             // The wire carries the coin's live state, not the construction
             // seed, so a decoded sketch has no seed to re-derive on `clear()`.
             seed: None,

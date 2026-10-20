@@ -1003,7 +1003,7 @@ impl Hydra {
             row_num: rows,
             col_num: cols,
             sketches,
-            prototype: HydraCounter::Kll(Kll::init(meta.cell_k as usize, meta.cell_m as usize)),
+            prototype: HydraCounter::Kll(Kll::new(meta.cell_k as usize, meta.cell_m as usize)),
             schema: schema_of(&meta.schema)?,
         })
     }

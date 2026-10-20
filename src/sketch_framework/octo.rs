@@ -519,8 +519,8 @@ impl CountSketchWithL2NormWorker {
 pub struct CocoSketchWorker {
     keys: Vec<Option<String>>,
     counters: Vec<u8>,
-    w: usize,
-    d: usize,
+    cols: usize,
+    rows: usize,
     rng: CocoRng,
 }
 
@@ -540,20 +540,20 @@ impl CocoSketchWorker {
         Self {
             keys: vec![None; w * d],
             counters: vec![0u8; w * d],
-            w,
-            d,
+            cols: w,
+            rows: d,
             rng,
         }
     }
 
     /// Buckets per array.
     pub fn width(&self) -> usize {
-        self.w
+        self.cols
     }
 
     /// Number of arrays.
     pub fn depth(&self) -> usize {
-        self.d
+        self.rows
     }
 
     /// Bytes held by the counter array, excluding the keys.
@@ -577,7 +577,7 @@ impl CocoSketchWorker {
         threshold: u32,
         emit: &mut impl FnMut(CocoDelta),
     ) {
-        if self.d == 0 || self.w == 0 {
+        if self.rows == 0 || self.cols == 0 {
             return;
         }
         let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD) as u8;
@@ -586,8 +586,8 @@ impl CocoSketchWorker {
         let mut victim_val = u8::MAX;
         let mut tied = 0u32;
 
-        for i in 0..self.d {
-            let cell = i * self.w + hash64_seeded(i, &key_input) as usize % self.w;
+        for i in 0..self.rows {
+            let cell = i * self.cols + hash64_seeded(i, &key_input) as usize % self.cols;
             if self.keys[cell].as_deref() == Some(key) {
                 self.counters[cell] += 1;
                 if self.counters[cell] >= threshold {
@@ -1755,7 +1755,7 @@ impl DdSketchWorker {
         for ((store, index), count) in self.counters.drain() {
             if count != 0 {
                 emit(DdSketchBucketDelta {
-                    store,
+                    sign: store,
                     index,
                     value: count as u64,
                 });
@@ -1781,7 +1781,7 @@ impl DdSketchWorker {
         *counter += 1;
         if *counter >= threshold {
             emit(DdSketchBucketDelta {
-                store,
+                sign: store,
                 index,
                 value: *counter as u64,
             });
@@ -2194,7 +2194,7 @@ impl OctoAggregator for UnivMonOctoAggregator {
 ///
 /// Both sketches key on a `String`, so a plan has to settle on one rendering:
 /// this is what the aggregator will hold, and what `CocoSketch::estimate` or
-/// `ElasticSketch::query` must be asked for.
+/// `ElasticSketch::estimate` must be asked for.
 pub fn flow_key_string(input: &DataInput<'_>) -> String {
     use std::fmt::Write as _;
 
@@ -3266,12 +3266,12 @@ mod worker_tests {
         parent.add(&50.0);
         let before = parent.positive_store_counts().len();
         parent.apply_delta(DdSketchBucketDelta {
-            store: Default::default(),
+            sign: Default::default(),
             index: i32::MAX / 2,
             value: 4,
         });
         parent.apply_delta(DdSketchBucketDelta {
-            store: Default::default(),
+            sign: Default::default(),
             index: i32::MIN / 2,
             value: 4,
         });
@@ -3325,8 +3325,8 @@ mod worker_tests {
                 parent.apply(d);
             });
         }
-        let table = (0..parent.sketch.d)
-            .flat_map(|r| (0..parent.sketch.w).map(move |c| (r, c)))
+        let table = (0..parent.sketch.rows)
+            .flat_map(|r| (0..parent.sketch.cols).map(move |c| (r, c)))
             .map(|(r, c)| {
                 let bucket = &parent.sketch.table[r][c];
                 (bucket.full_key.clone(), bucket.val)

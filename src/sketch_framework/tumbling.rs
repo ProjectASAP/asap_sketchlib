@@ -81,7 +81,7 @@ pub struct KllConfig {
     /// Minimum compactor size parameter.
     pub m: usize,
     /// Optional seed for the compaction coin. When `Some`, every pool sketch
-    /// is built with [`Kll::init_with_seed`], so two processes running the
+    /// is built with [`Kll::with_seed`], so two processes running the
     /// same tumbling pipeline produce byte-identical sketches — including
     /// across window rotations, because `tumbling_clear` re-seeds from the
     /// stored seed. When `None`, the legacy wall-clock-seeded [`Kll::init`]
@@ -148,8 +148,8 @@ impl TumblingWindowSketch for Kll {
 
     fn from_config(config: &Self::Config) -> Self {
         match config.seed {
-            Some(seed) => Kll::init_with_seed(config.k, config.m, seed),
-            None => Kll::init(config.k, config.m),
+            Some(seed) => Kll::with_seed(config.k, config.m, seed),
+            None => Kll::new(config.k, config.m),
         }
     }
 
@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn kll_clear_resets_to_empty() {
-        let mut sk = Kll::init(200, 8);
+        let mut sk = Kll::new(200, 8);
         for i in 0..1000 {
             sk.update_data_input(&DataInput::F64(i as f64)).unwrap();
         }
@@ -534,7 +534,7 @@ mod tests {
 
         assert_eq!(sk.count(), 0, "count should be 0 after clear");
         let cdf = sk.cdf();
-        assert_eq!(cdf.query(0.5), 0.0, "empty sketch should return 0.0");
+        assert_eq!(cdf.value_at(0.5), 0.0, "empty sketch should return 0.0");
     }
 
     #[test]
@@ -844,7 +844,7 @@ mod tests {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
         // Check median is roughly correct (within 2% rank tolerance).
-        let est_median = cdf.query(0.5);
+        let est_median = cdf.value_at(0.5);
         let n = sorted.len();
         let lower_idx = ((0.48 * n as f64).ceil() as usize).min(n - 1);
         let upper_idx = ((0.52 * n as f64).ceil() as usize).min(n - 1);
@@ -1186,7 +1186,7 @@ mod tests {
         let tolerance = 0.02;
 
         for &q in &quantiles {
-            let est = cdf.query(q);
+            let est = cdf.value_at(q);
             let lo_idx = (((q - tolerance).max(0.0) * n as f64).ceil() as usize).min(n - 1);
             let hi_idx = (((q + tolerance).min(1.0) * n as f64).ceil() as usize).min(n - 1);
             assert!(
@@ -1238,9 +1238,9 @@ mod tests {
         // - p10 should be solidly in the first distribution (< 200)
         // - p50 should be between the two modes (50 .. 600)
         // - p90 should be solidly in the second distribution (> 350)
-        let p10 = cdf.query(0.10);
-        let p50 = cdf.query(0.50);
-        let p90 = cdf.query(0.90);
+        let p10 = cdf.value_at(0.10);
+        let p50 = cdf.value_at(0.50);
+        let p90 = cdf.value_at(0.90);
 
         eprintln!("[kll_tumbling_distribution_shift] p10={p10:.1}, p50={p50:.1}, p90={p90:.1}");
 
@@ -1796,7 +1796,7 @@ mod tests {
         let tolerance = 0.03;
 
         for &q in &quantiles {
-            let est = cdf.query(q);
+            let est = cdf.value_at(q);
             let lo_idx = (((q - tolerance).max(0.0) * n as f64).ceil() as usize).min(n - 1);
             let hi_idx = (((q + tolerance).min(1.0) * n as f64).ceil() as usize).min(n - 1);
             assert!(
@@ -2044,7 +2044,7 @@ mod tests {
             config.clone(),
             num_windows + 2,
         );
-        let mut mono = Kll::init(config.k, config.m);
+        let mut mono = Kll::new(config.k, config.m);
 
         let values = sample_uniform_f64(0.0, 10_000_000.0, total_samples, 0xDE_AD03);
 
@@ -2066,8 +2066,8 @@ mod tests {
         let mut mono_max_rank_err = 0.0f64;
 
         for &q in &quantiles {
-            let tw_est = tw_cdf.query(q);
-            let mono_est = mono_cdf.query(q);
+            let tw_est = tw_cdf.value_at(q);
+            let mono_est = mono_cdf.value_at(q);
 
             // Compute rank error: how far off is the rank of the estimated value?
             let tw_rank = sorted.partition_point(|&x| x <= tw_est) as f64 / n as f64;
@@ -2205,7 +2205,7 @@ mod tests {
             let n = sorted.len();
 
             for &q in &[0.25, 0.50, 0.75] {
-                let est = cdf.query(q);
+                let est = cdf.value_at(q);
                 let lo = (((q - 0.02).max(0.0) * n as f64).ceil() as usize).min(n - 1);
                 let hi = (((q + 0.02).min(1.0) * n as f64).ceil() as usize).min(n - 1);
                 assert!(

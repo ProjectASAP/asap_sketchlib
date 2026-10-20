@@ -663,7 +663,7 @@ proptest! {
         pool.put(used);
 
         let mut recycled = pool.take();
-        let mut fresh = Kll::init_with_seed(config.k, config.m, config.seed.expect("seeded"));
+        let mut fresh = Kll::with_seed(config.k, config.m, config.seed.expect("seeded"));
 
         prop_assert_eq!(recycled.count(), fresh.count(), "count handed back");
         prop_assert_eq!(recycled.items_top_down(), fresh.items_top_down(), "items handed back");

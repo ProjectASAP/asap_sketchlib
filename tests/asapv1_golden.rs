@@ -1296,7 +1296,7 @@ fn coco_3x7_matches_golden() {
     assert_eq!(got, want, "Coco bytes diverge from golden");
 
     let decoded: CocoSketch = CocoSketch::from_asapv1(&want).expect("decode");
-    assert_eq!((decoded.d, decoded.w), (3, 7));
+    assert_eq!((decoded.rows, decoded.cols), (3, 7));
     let mut expected = vec![(None, 0); 21];
     for (r, c, key, val) in COCO_CELLS {
         expected[r * 7 + c] = (Some(key.to_string()), val);

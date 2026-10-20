@@ -141,7 +141,7 @@ pub struct DdSketch {
     #[serde(skip)]
     inv_log_gamma: f64,
 
-    store: Buckets,
+    positive_store: Buckets,
     #[serde(skip)]
     count: u64,
     sum: f64,
@@ -161,7 +161,7 @@ pub struct DdSketch {
 #[derive(Deserialize)]
 struct DdSketchState {
     alpha: f64,
-    store: Buckets,
+    positive_store: Buckets,
     sum: f64,
     min: f64,
     max: f64,
@@ -186,7 +186,7 @@ impl TryFrom<DdSketchState> for DdSketch {
             gamma,
             log_gamma,
             inv_log_gamma: 1.0 / log_gamma,
-            store: state.store,
+            positive_store: state.positive_store,
             count,
             sum: state.sum,
             min: state.min,
@@ -234,7 +234,7 @@ impl DdSketch {
             gamma,
             log_gamma,
             inv_log_gamma,
-            store: Buckets::new(),
+            positive_store: Buckets::new(),
             count: 0,
             sum: 0.0,
             min: f64::INFINITY,
@@ -301,7 +301,7 @@ impl DdSketch {
             if v < 0.0 {
                 self.negative_store.add_one(key);
             } else {
-                self.store.add_one(key);
+                self.positive_store.add_one(key);
             }
         }
         Ok(())
@@ -348,7 +348,7 @@ impl DdSketch {
     /// estimate a deserialize-and-recompute produces. Quantiles and `count`
     /// stay exact with respect to the bucket store.
     pub fn apply_delta(&mut self, delta: DdSketchBucketDelta) {
-        if delta.store == DdSign::Zero {
+        if delta.sign == DdSign::Zero {
             self.apply_zero_delta(delta.value);
             return;
         }
@@ -366,17 +366,17 @@ impl DdSketch {
         if delta.index < lowest || delta.index > highest {
             return;
         }
-        let store = if delta.store == DdSign::Negative {
+        let store = if delta.sign == DdSign::Negative {
             &mut self.negative_store
         } else {
-            &mut self.store
+            &mut self.positive_store
         };
         store.ensure(delta.index);
         let slot = (delta.index - store.offset) as usize;
         store.counts.as_mut_slice()[slot] += delta.value;
 
         let representative = self.bin_representative(delta.index)
-            * if delta.store == DdSign::Negative {
+            * if delta.sign == DdSign::Negative {
                 -1.0
             } else {
                 1.0
@@ -426,8 +426,8 @@ impl DdSketch {
             return Some(0.0);
         }
 
-        let slice = self.store.counts.as_slice();
-        let offset = self.store.offset;
+        let slice = self.positive_store.counts.as_slice();
+        let offset = self.positive_store.offset;
 
         for (i, &c) in slice.iter().enumerate() {
             if c == 0 {
@@ -489,13 +489,13 @@ impl DdSketch {
     /// Returns the raw bucket-count slice. Each entry is the number of
     /// samples in the bucket whose absolute index is `positive_store_offset() + i`.
     pub fn positive_store_counts(&self) -> &[u64] {
-        self.store.counts.as_slice()
+        self.positive_store.counts.as_slice()
     }
 
     /// Returns the absolute bucket index corresponding to
     /// `positive_store_counts()[0]`.
     pub fn positive_store_offset(&self) -> i32 {
-        self.store.offset
+        self.positive_store.offset
     }
 
     pub fn negative_store_counts(&self) -> &[u64] {
@@ -556,7 +556,7 @@ impl DdSketch {
         }
 
         // Merge bucket vectors
-        Self::merge_store(&mut self.store, &other.store);
+        Self::merge_store(&mut self.positive_store, &other.positive_store);
         Self::merge_store(&mut self.negative_store, &other.negative_store);
         self.zero_count += other.zero_count;
         Ok(())
@@ -625,7 +625,7 @@ impl Clone for DdSketch {
             gamma: self.gamma,
             log_gamma: self.log_gamma,
             inv_log_gamma: self.inv_log_gamma,
-            store: self.store.clone(),
+            positive_store: self.positive_store.clone(),
             count: self.count,
             sum: self.sum,
             min: self.min,
@@ -790,7 +790,7 @@ mod tests {
             d.add(&(f64::from(i)));
         }
         let count_before = d.get_count();
-        let span_before = d.store.counts.as_slice().len();
+        let span_before = d.positive_store.counts.as_slice().len();
 
         let (min_indexable, max_indexable) = ddsketch_indexable_bounds(0.01);
         d.add(&(max_indexable * 10.0));
@@ -801,7 +801,7 @@ mod tests {
             "tiny value belongs to zero bucket"
         );
         assert_eq!(
-            d.store.counts.as_slice().len(),
+            d.positive_store.counts.as_slice().len(),
             span_before,
             "store span grew from an untrackable extreme"
         );
@@ -874,7 +874,7 @@ mod tests {
         #[derive(Serialize)]
         struct CraftedState {
             alpha: f64,
-            store: Buckets,
+            positive_store: Buckets,
             sum: f64,
             min: f64,
             max: f64,
@@ -882,7 +882,7 @@ mod tests {
 
         let crafted = CraftedState {
             alpha: 0.01,
-            store: Buckets {
+            positive_store: Buckets {
                 counts: Vector1D::from_vec(vec![1u64, 2]),
                 offset: -3,
             },
@@ -906,7 +906,7 @@ mod tests {
         #[derive(Serialize)]
         struct CraftedState {
             alpha: f64,
-            store: Buckets,
+            positive_store: Buckets,
             sum: f64,
             min: f64,
             max: f64,
@@ -914,7 +914,7 @@ mod tests {
 
         let crafted = CraftedState {
             alpha: 1.5,
-            store: Buckets {
+            positive_store: Buckets {
                 counts: Vector1D::from_vec(Vec::new()),
                 offset: 0,
             },

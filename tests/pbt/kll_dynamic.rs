@@ -343,12 +343,12 @@ proptest! {
         let sketch = sketch_of(k, seed, &values);
         let cdf = sketch.cdf();
 
-        prop_assert_eq!(cdf.quantile(f64::NEG_INFINITY), 0.0, "k={}: cdf below the stream", k);
-        prop_assert_eq!(cdf.quantile(f64::INFINITY), 1.0, "k={}: cdf above the stream", k);
+        prop_assert_eq!(cdf.normalized_rank(f64::NEG_INFINITY), 0.0, "k={}: cdf below the stream", k);
+        prop_assert_eq!(cdf.normalized_rank(f64::INFINITY), 1.0, "k={}: cdf above the stream", k);
 
         let mut previous = 0.0;
         for x in probe_values(&ascending(&values), &xs) {
-            let c = cdf.quantile(x);
+            let c = cdf.normalized_rank(x);
             prop_assert!((0.0..=1.0).contains(&c), "k={k}: cdf({x}) = {c}");
             prop_assert!(c >= previous, "k={k}: cdf({x}) = {c} fell from {previous}");
             previous = c;
@@ -370,7 +370,7 @@ proptest! {
         let n = sketch.count() as f64;
 
         for x in probe_values(&ascending(&values), &xs) {
-            let scaled = cdf.quantile(x) * n;
+            let scaled = cdf.normalized_rank(x) * n;
             let ranked = sketch.rank(x) as f64;
             prop_assert!(
                 close(scaled, ranked),

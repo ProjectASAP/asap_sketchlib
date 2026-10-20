@@ -109,8 +109,8 @@ for v in &values {
 let cdf: Cdf = sketch.cdf();
 
 // Query any quantile in O(log n) against the cached CDF.
-let p50 = cdf.query(0.50);
-let p99 = cdf.query(0.99);
+let p50 = cdf.value_at(0.50);
+let p99 = cdf.value_at(0.99);
 ```
 
 API reference: [`docs/api/api_kll.md`](./api/api_kll.md)

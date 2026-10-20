@@ -93,9 +93,9 @@ fn mass_of(stream: &[(u64, u64)]) -> u64 {
 /// Every bucket's mass in row-major order, occupied buckets and empty ones
 /// alike.
 fn vals(sketch: &C) -> Vec<u64> {
-    let mut cells = Vec::with_capacity(sketch.d * sketch.w);
-    for i in 0..sketch.d {
-        for j in 0..sketch.w {
+    let mut cells = Vec::with_capacity(sketch.rows * sketch.cols);
+    for i in 0..sketch.rows {
+        for j in 0..sketch.cols {
             cells.push(sketch.table[i][j].val);
         }
     }
@@ -109,11 +109,11 @@ fn table_mass(sketch: &C) -> u64 {
 /// The `d` buckets `key` maps to, as `(row, column)`.
 fn mapped(sketch: &C, key: &str) -> Vec<(usize, usize)> {
     let input = DataInput::Str(key);
-    (0..sketch.d)
+    (0..sketch.rows)
         .map(|i| {
             (
                 i,
-                DefaultXxHasher::hash64_seeded(i, &input) as usize % sketch.w,
+                DefaultXxHasher::hash64_seeded(i, &input) as usize % sketch.cols,
             )
         })
         .collect()
@@ -122,8 +122,8 @@ fn mapped(sketch: &C, key: &str) -> Vec<(usize, usize)> {
 /// Every bucket that holds a key, read off the table in row-major order.
 fn occupied(sketch: &C) -> Vec<(String, u64)> {
     let mut cells = Vec::new();
-    for i in 0..sketch.d {
-        for j in 0..sketch.w {
+    for i in 0..sketch.rows {
+        for j in 0..sketch.cols {
             let bucket = &sketch.table[i][j];
             if let Some(key) = &bucket.full_key {
                 cells.push((key.clone(), bucket.val));
@@ -136,8 +136,8 @@ fn occupied(sketch: &C) -> Vec<(String, u64)> {
 /// Every bucket holding `key`, as `(row, column)`.
 fn homes(sketch: &C, key: &str) -> Vec<(usize, usize)> {
     let mut found = Vec::new();
-    for i in 0..sketch.d {
-        for j in 0..sketch.w {
+    for i in 0..sketch.rows {
+        for j in 0..sketch.cols {
             if sketch.table[i][j].full_key.as_deref() == Some(key) {
                 found.push((i, j));
             }

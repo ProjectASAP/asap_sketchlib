@@ -907,7 +907,7 @@ fn ddsketch_merge_and_delta_replay_preserve_the_relative_error_contract() {
         for (i, &count) in single.positive_store_counts().iter().enumerate() {
             if count > 0 {
                 replayed.apply_delta(DdSketchBucketDelta {
-                    store: Default::default(),
+                    sign: Default::default(),
                     index: single.positive_store_offset() + i as i32,
                     value: count,
                 });
@@ -1822,7 +1822,7 @@ fn kll_minimum_compactor_capacity_axis_keeps_the_count_exact_and_reports_its_own
     let truth = NumericTruth::new(values.clone());
     for &m in &KLL_M_AXIS {
         let seed = kll_axis_seed(m as u64);
-        let mut sketch: Kll<f64> = Kll::init_with_seed(200, m, seed);
+        let mut sketch: Kll<f64> = Kll::with_seed(200, m, seed);
         for v in &values {
             sketch.update(v);
         }
@@ -1849,15 +1849,15 @@ fn kll_minimum_compactor_capacity_axis_keeps_the_count_exact_and_reports_its_own
 
 #[test]
 fn kll_normalizes_a_minimum_compactor_capacity_outside_its_supported_range() {
-    let clamped: Kll<f64> = Kll::init_with_seed(200, 0, kll_axis_seed(0x0100));
+    let clamped: Kll<f64> = Kll::with_seed(200, 0, kll_axis_seed(0x0100));
     assert_eq!(clamped.m(), 2, "m=0 must normalize to 2");
     assert_eq!(clamped.wire_k(), 200, "m=0 must leave k alone");
 
-    let raised: Kll<f64> = Kll::init_with_seed(4, 64, kll_axis_seed(0x0101));
+    let raised: Kll<f64> = Kll::with_seed(4, 64, kll_axis_seed(0x0101));
     assert_eq!(raised.m(), 64, "m=64 must survive");
     assert_eq!(raised.wire_k(), 64, "k below m must be raised to m");
 
-    let mut usable: Kll<f64> = Kll::init_with_seed(4, 64, kll_axis_seed(0x0102));
+    let mut usable: Kll<f64> = Kll::with_seed(4, 64, kll_axis_seed(0x0102));
     let values = kll_axis_values(5_000, 0x4B11_0102);
     for v in &values {
         usable.update(v);
@@ -1879,7 +1879,7 @@ fn kll_minimum_compactor_capacity_at_or_above_the_default_satisfies_the_rank_cha
     for (case, &m) in KLL_M_AT_OR_ABOVE_DEFAULT.iter().enumerate() {
         for (i, (shape, values)) in rank_streams(case, N).into_iter().enumerate() {
             let seed = kll_axis_seed(0x0200 + (case * 16 + i) as u64);
-            let mut sketch: Kll<f64> = Kll::init_with_seed(K, m, seed);
+            let mut sketch: Kll<f64> = Kll::with_seed(K, m, seed);
             for v in &values {
                 sketch.update(v);
             }
@@ -1915,7 +1915,7 @@ fn kll_minimum_compactor_capacity_below_the_default_stays_within_a_widened_rank_
     for (case, &m) in KLL_M_BELOW_DEFAULT.iter().enumerate() {
         for (i, (shape, values)) in rank_streams(case + 8, N).into_iter().enumerate() {
             let seed = kll_axis_seed(0x0300 + (case * 16 + i) as u64);
-            let mut sketch: Kll<f64> = Kll::init_with_seed(K, m, seed);
+            let mut sketch: Kll<f64> = Kll::with_seed(K, m, seed);
             for v in &values {
                 sketch.update(v);
             }
