@@ -124,6 +124,9 @@ signals a backwards-compatible change.
   sketch holds now.
 - **`Kmv::memory_bytes`**: the struct plus the hash slots the heap has
   allocated.
+- **`TopKHeap::estimated_memory_bytes(heap_size, key)`**: the bytes a heap
+  of that capacity holds in steady state once keys shaped like `key` churn
+  through it.
 
 ### Changed
 
@@ -348,6 +351,10 @@ signals a backwards-compatible change.
 - **`Kmv::estimate` takes `&self` and `Kmv::merge` takes `&Kmv`.** A full
   sketch turns away a hash at or above its largest retained one before
   scanning for a duplicate; the retained set is unchanged.
+- **`UnivMonQ::estimated_memory_bytes(&self)` is `UnivMonQ::memory_bytes`**
+  (breaking) and counts what the instance holds now. Across the crate,
+  `memory_bytes(&self)` is what an instance holds and
+  `estimated_memory_bytes(<shape>)` prices a shape before building.
 
 ### Removed
 

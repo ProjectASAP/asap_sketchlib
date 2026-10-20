@@ -72,7 +72,7 @@ fn main() {
             for (trial, (_, data, truth)) in datasets.iter().enumerate() {
                 let config = config(samples, 256, trial);
                 let sketch = build_q(data, config, 1);
-                memory = sketch.estimated_memory_bytes();
+                memory = sketch.memory_bytes();
                 let score = score_q(&sketch, truth);
                 mean_errors.push(score.quantile_mean);
                 cdf_errors.push(score.cdf_max);
@@ -123,7 +123,7 @@ fn main() {
             let data = zipf(n, trial_seed(3, trial));
             let truth = Truth::new(&data);
             let sketch = build_q(&data, config(1_024, candidates, trial), 1);
-            memory = sketch.estimated_memory_bytes();
+            memory = sketch.memory_bytes();
             let score = score_q(&sketch, &truth);
             mean_errors.push(score.quantile_mean);
             cdf_errors.push(score.cdf_max);

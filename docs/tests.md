@@ -2150,6 +2150,14 @@ Test file: [`tests/hll_custom_precision.rs`](../tests/hll_custom_precision.rs)
 | `custom_precisions_estimate_correctly` | Every macro-generated precision reports the right constants and estimates in band. | Through a shared `check_precision` helper, verifies for each precision that `PRECISION` is `lg_k`, `NUM_REGISTERS` is `1 << lg_k`, `RANK_HASH_BITS` is `64 - lg_k` and `INDEX_MASK` is `NUM_REGISTERS - 1`, that a default storage has that length, is non-empty and is zeroed, that at least one register is set after the inserts and none exceeds `RANK_HASH_BITS + 1`, and that the `Classic`, `Ertl` and HIP estimates all fall inside the tolerance; invoked at `lg_k` `4` with 100 items at `0.60`, `8` with 1,000 at `0.30`, `10` with 10,000 at `0.15`, `13` with 50,000 at `0.06` and `18` with 200,000 at `0.02`. |
 | `large_precision_allocates_on_the_heap` | Register storage is allocated on the heap, so a 4 MiB precision constructs on a test thread. | Verifies a fresh `HyperLogLogImpl<Classic, HllBucketListP22>` — `1 << 22` registers, past the 2 MiB test-thread stack — reports `NUM_REGISTERS` registers that are all zero, and that an `HllBucketListP18` sketch over 1,000 `key-{i:08}` items survives an ASAPv1 round trip with an identical register slice. |
 
+### TopKHeap Memory
+
+Test file: [`tests/heap_memory_bytes.rs`](../tests/heap_memory_bytes.rs)
+
+| test_name | test_description | what_is_tested |
+| --- | --- | --- |
+| `estimated_memory_bytes_match_size_of_and_the_allocation` | The memory methods are the bytes an instance holds, counted by a global allocator. | Verifies a capacity-0 `TopKHeap` prices at `size_of` and a 1,024 heap above one entry and one digest per resident; that `i64` heaps of `u64` keys and `f64` heaps of 9-byte keys at `heap_size` in `{1, 3, 7, 8, 20, 100, 1024, 2000, 5000}` hold at most `estimated_memory_bytes` after `heap_size` distinct keys and exactly it after 50 times as many; and that a default `UnivMonQ` holds exactly `memory_bytes` fresh, after 1,000 values and after 200,000 over 50,000 distinct. |
+
 ### Accuracy-Probe Regressions
 
 Test file: [`tests/bug_verification.rs`](../tests/bug_verification.rs)

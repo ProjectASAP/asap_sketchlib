@@ -104,7 +104,7 @@ fn main() {
         print_score(
             "Q-matched",
             q_matched_update,
-            q_matched_one.estimated_memory_bytes(),
+            q_matched_one.memory_bytes(),
             q_matched_merge,
             &q_matched_score,
         );
@@ -115,7 +115,7 @@ fn main() {
         print_score(
             "Q-quality",
             q_quality_update,
-            q_quality_one.estimated_memory_bytes(),
+            q_quality_one.memory_bytes(),
             q_quality_merge,
             &q_quality_score,
         );
@@ -126,7 +126,7 @@ fn main() {
         print_score(
             "bundle",
             bundle_update,
-            bundle_one.estimated_memory_bytes(),
+            bundle_one.memory_bytes(),
             bundle_merge,
             &bundle_score,
         );
@@ -575,7 +575,7 @@ impl SpecializedBundle {
             / self.reservoir.samples.len() as f64
     }
 
-    fn estimated_memory_bytes(&self) -> usize {
+    fn memory_bytes(&self) -> usize {
         self.hll.bytes()
             + self.frequencies.bytes()
             + self.heavy_hitters.bytes()

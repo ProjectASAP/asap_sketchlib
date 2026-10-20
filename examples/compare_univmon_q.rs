@@ -443,15 +443,15 @@ fn main() {
     );
     println!(
         "  UnivMon-Q universal  wire={q_base_wire} bytes, reserved~{} bytes",
-        q_base_sketch.estimated_memory_bytes()
+        q_base_sketch.memory_bytes()
     );
     println!(
         "  UnivMon-Q +quantile  wire={q_ordered_wire} bytes, reserved~{} bytes",
-        q_ordered_sketch.estimated_memory_bytes()
+        q_ordered_sketch.memory_bytes()
     );
     println!(
         "  UnivMon-Q mem-match  wire={q_memory_matched_wire} bytes, reserved~{} bytes",
-        q_memory_matched_sketch.estimated_memory_bytes()
+        q_memory_matched_sketch.memory_bytes()
     );
     println!();
     println!("query latency (mean of {QUERY_REPEATS} release queries):");

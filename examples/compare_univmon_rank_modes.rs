@@ -90,14 +90,13 @@ fn main() {
             let config = config(trial);
 
             let pure = build_pure(&data, config, 1);
-            pure_memory = pure.estimated_memory_bytes();
+            pure_memory = pure.memory_bytes();
             pure_scores.push(score_pure(&pure, &truth));
             pure_query.push(benchmark_pure_queries(&pure, &truth));
 
             for (index, &capacity) in OCCURRENCE_SIZES.iter().enumerate() {
                 let (core, sample) = build_occurrence(&data, config, capacity, seed, 1);
-                occurrence_memory[index] =
-                    core.estimated_memory_bytes() + sample.estimated_memory_bytes();
+                occurrence_memory[index] = core.memory_bytes() + sample.memory_bytes();
                 occurrence_scores[index].push(score_occurrence(&sample, &truth));
                 occurrence_query[index].push(benchmark_occurrence_queries(&sample, &truth));
             }
@@ -490,7 +489,7 @@ impl OccurrenceBottomK {
         records
     }
 
-    fn estimated_memory_bytes(&self) -> usize {
+    fn memory_bytes(&self) -> usize {
         self.capacity * size_of::<Occurrence>()
     }
 }

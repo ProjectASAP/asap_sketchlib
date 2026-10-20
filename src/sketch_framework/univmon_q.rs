@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 
 mod wire;
 
+use crate::common::heap::hash_map_bytes;
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, DefaultXxHasher, SketchHasher};
@@ -335,8 +336,8 @@ impl PackedCountSketch {
 
     fn bytes(&self) -> usize {
         match &self.counters {
-            Counters::I32(counters) => counters.len() * size_of::<i32>(),
-            Counters::I64(counters) => counters.len() * size_of::<i64>(),
+            Counters::I32(counters) => counters.capacity() * size_of::<i32>(),
+            Counters::I64(counters) => counters.capacity() * size_of::<i64>(),
         }
     }
 
@@ -454,18 +455,37 @@ struct Layer {
     candidate_scores: HashMap<u64, u64>,
     candidate_heap: BinaryHeap<Reverse<(u64, u64)>>,
     candidate_capacity: usize,
+    /// Largest `candidate_scores.capacity()` seen, which gives its buckets.
+    candidate_table_peak: usize,
     ever_evicted: bool,
 }
 
 impl Layer {
     fn new(width: usize, depth: usize, counter_bits: u8, candidates: usize) -> Self {
+        let candidate_scores = HashMap::with_capacity(candidates);
         Self {
             sketch: PackedCountSketch::new(width, depth, counter_bits),
-            candidate_scores: HashMap::with_capacity(candidates),
+            candidate_table_peak: candidate_scores.capacity(),
+            candidate_scores,
             candidate_heap: BinaryHeap::with_capacity(candidates),
             candidate_capacity: candidates,
             ever_evicted: false,
         }
+    }
+
+    /// Inserts a candidate, tracking the table's allocation.
+    fn insert_candidate(&mut self, key: u64, score: u64) {
+        self.candidate_scores.insert(key, score);
+        self.candidate_table_peak = self
+            .candidate_table_peak
+            .max(self.candidate_scores.capacity());
+    }
+
+    /// Bytes this layer holds beyond its struct.
+    fn heap_bytes(&self) -> usize {
+        self.sketch.bytes()
+            + hash_map_bytes::<(u64, u64)>(self.candidate_table_peak)
+            + self.candidate_heap.capacity() * size_of::<Reverse<(u64, u64)>>()
     }
 
     fn update(&mut self, key: u64, hash: u128, bucket_bits: u32) {
@@ -476,7 +496,7 @@ impl Layer {
             return;
         }
         if self.candidate_scores.len() < self.candidate_capacity {
-            self.candidate_scores.insert(key, score);
+            self.insert_candidate(key, score);
             self.candidate_heap.push(Reverse((score, key)));
             return;
         }
@@ -484,7 +504,7 @@ impl Layer {
             self.ever_evicted = true;
             if score > minimum {
                 self.candidate_scores.remove(&evicted);
-                self.candidate_scores.insert(key, score);
+                self.insert_candidate(key, score);
                 self.candidate_heap.push(Reverse((score, key)));
             } else {
                 self.candidate_heap.push(Reverse((minimum, evicted)));
@@ -531,7 +551,7 @@ impl Layer {
         self.candidate_scores.clear();
         self.candidate_heap.clear();
         for (key, count) in retained {
-            self.candidate_scores.insert(key, count);
+            self.insert_candidate(key, count);
             self.candidate_heap.push(Reverse((count, key)));
         }
     }
@@ -1223,16 +1243,13 @@ impl<H: SketchHasher> UnivMonQ<H> {
             .collect()
     }
 
-    /// Conservative storage estimate for counters and bounded metadata.
-    pub fn estimated_memory_bytes(&self) -> usize {
-        let counters: usize = self.layers.iter().map(|level| level.sketch.bytes()).sum();
-        let candidates = self.config.layers
-            * self.config.heap_size
-            * (size_of::<(u64, u64)>() + 2 * size_of::<usize>());
-        let candidate_heaps = self.config.layers * self.config.heap_size * size_of::<(u64, u64)>();
-        let eviction_history = self.config.layers * size_of::<bool>();
-        let ordered = self.config.ordered_samples * size_of::<OrderedOccurrence>();
-        counters + candidates + candidate_heaps + eviction_history + ordered
+    /// Bytes this sketch holds: the struct, its layers' counters, candidate
+    /// tables and candidate heaps, and its ordered-sample heap.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.layers.capacity() * size_of::<Layer>()
+            + self.layers.iter().map(Layer::heap_bytes).sum::<usize>()
+            + self.ordered_heap.capacity() * size_of::<OrderedOccurrence>()
     }
 
     fn cdf_keys(&self) -> Vec<(u64, f64)> {

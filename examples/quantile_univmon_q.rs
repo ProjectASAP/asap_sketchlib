@@ -21,6 +21,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("p99: {:.1}", quantiles[2].unwrap());
     println!("distinct: {:.0}", query.estimate_cardinality());
     println!("F2: {:.0}", query.estimate_f2());
-    println!("memory: {} KiB", sketch.estimated_memory_bytes() / 1024);
+    println!("memory: {} KiB", sketch.memory_bytes() / 1024);
     Ok(())
 }

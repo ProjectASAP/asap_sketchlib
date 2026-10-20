@@ -532,6 +532,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
                     depth: config.rows,
                     counters: counters_slice(&counters, cell, span),
                 },
+                candidate_table_peak: candidate_scores.capacity(),
                 candidate_scores,
                 candidate_heap,
                 candidate_capacity: config.heap_size,

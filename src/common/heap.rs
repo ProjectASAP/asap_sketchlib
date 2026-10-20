@@ -191,6 +191,27 @@ impl<C: HeapCount> TopKHeap<C> {
         self.heap_size
     }
 
+    /// Bytes a heap built by [`Self::new`]`(heap_size)` holds in steady state
+    /// once keys shaped like `key` churn through it: the struct, the entry and
+    /// digest arrays, the digest index and each resident's owned key bytes.
+    /// A heap holds at most this, and exactly this once evictions have left
+    /// its index enough tombstones to resize.
+    ///
+    /// The arrays and the index reserve `min(heap_size, 1024)` and grow by
+    /// doubling; the index follows std's `HashMap` layout, growing once more
+    /// under churn when it is over half full.
+    pub fn estimated_memory_bytes(heap_size: usize, key: &DataInput) -> usize {
+        let reserved = heap_size.min(PREALLOCATED_SLOTS);
+        let entry_bytes = size_of::<HeapEntry<C>>();
+        let entry_slots = vec_slots_after_pushes(reserved, heap_size, entry_bytes);
+        let digest_slots = vec_slots_after_pushes(reserved, heap_size, size_of::<u64>());
+        size_of::<Self>()
+            + entry_slots * entry_bytes
+            + digest_slots * size_of::<u64>()
+            + hash_index_bytes::<(u64, Slot)>(reserved, heap_size)
+            + heap_size * owned_key_bytes(key)
+    }
+
     // -- index maintenance ---------------------------------------------------
 
     fn lookup(&self, slot: u64, matches: impl Fn(&HeapEntry<C>) -> bool) -> Option<usize> {
@@ -305,6 +326,128 @@ fn drop_entry(positions: &mut Index, digest: u64, idx: usize) {
             positions.remove(&digest);
         }
     }
+}
+
+/// Bytes a key shaped like `key` owns once copied into a heap entry: a
+/// string's or a byte slice's length, 0 for a number.
+pub(crate) fn owned_key_bytes(key: &DataInput) -> usize {
+    match key {
+        DataInput::Str(s) => s.len(),
+        DataInput::String(s) => s.len(),
+        DataInput::Bytes(b) => b.len(),
+        _ => 0,
+    }
+}
+
+/// Element slots a `Vec` holds after growing from `reserved` slots to `len`
+/// elements one push at a time: std doubles the capacity, with a minimum of
+/// 8 slots for 1-byte elements, 4 up to 1 KiB, and 1 above.
+pub(crate) fn vec_slots_after_pushes(reserved: usize, len: usize, element_bytes: usize) -> usize {
+    let minimum = match element_bytes {
+        1 => 8,
+        2..=1024 => 4,
+        _ => 1,
+    };
+    let mut slots = reserved;
+    while slots < len {
+        slots = (slots * 2).max(slots + 1).max(minimum);
+    }
+    slots
+}
+
+/// Width of std's `HashMap` control group: 16 with SSE2 on x86, 8 elsewhere.
+const HASH_GROUP_WIDTH: usize = if cfg!(all(
+    any(target_arch = "x86", target_arch = "x86_64"),
+    target_feature = "sse2"
+)) {
+    16
+} else {
+    8
+};
+
+/// Buckets std's `HashMap` allocates for `capacity` entries of `entry_bytes`.
+fn hash_buckets_for(capacity: usize, entry_bytes: usize) -> usize {
+    if capacity == 0 {
+        return 0;
+    }
+    if capacity < 15 {
+        // Small tables round up to a minimum capacity that fills the control group.
+        let minimum = match (HASH_GROUP_WIDTH, entry_bytes) {
+            (16, 0..=1) => 14,
+            (16, 2..=3) => 7,
+            (8, 0..=1) => 7,
+            _ => 3,
+        };
+        return match minimum.max(capacity) {
+            0..=3 => 4,
+            4..=7 => 8,
+            _ => 16,
+        };
+    }
+    (capacity * 8 / 7).next_power_of_two()
+}
+
+/// Entries a table of `buckets` holds before it grows (7/8 of its buckets).
+fn hash_capacity_of(buckets: usize) -> usize {
+    if buckets <= 8 {
+        buckets - 1
+    } else {
+        buckets / 8 * 7
+    }
+}
+
+/// Bytes std's `HashMap` allocates for a table of `buckets` holding entries
+/// of type `T`: the entry slots padded to the control alignment, one control
+/// byte per bucket and one trailing control group.
+fn hash_table_bytes<T>(buckets: usize) -> usize {
+    if buckets == 0 {
+        return 0;
+    }
+    let control_align = align_of::<T>().max(HASH_GROUP_WIDTH);
+    (buckets * size_of::<T>()).next_multiple_of(control_align) + buckets + HASH_GROUP_WIDTH
+}
+
+/// Buckets of a std `HashMap` whose largest `capacity()` so far is
+/// `capacity`: right after each allocation `capacity()` is the table's full
+/// capacity, and tombstones only lower it until the next one.
+fn hash_buckets_of_capacity(capacity: usize) -> usize {
+    match capacity {
+        0 => 0,
+        1..=7 => capacity + 1,
+        _ => capacity / 7 * 8,
+    }
+}
+
+/// Bytes a std `HashMap` of entries `T` holds, given the largest `capacity()`
+/// it has reported since it was built.
+pub(crate) fn hash_map_bytes<T>(peak_capacity: usize) -> usize {
+    hash_table_bytes::<T>(hash_buckets_of_capacity(peak_capacity))
+}
+
+/// Bytes std's `HashMap` allocates for entries of type `T` when created with
+/// capacity `reserved`, filled with `len` distinct keys and then churned
+/// (one removal and one insertion at a time, `len` resident).
+///
+/// A full table grows to the buckets for one more entry than it holds. Under
+/// churn, removals inside a run of at least one control group of occupied
+/// slots leave tombstones; once they exhaust the free slots the table
+/// rehashes in place if `len` is at most half its capacity and doubles
+/// otherwise. Fewer than one group of entries never forms such a run.
+pub(crate) fn hash_index_bytes<T>(reserved: usize, len: usize) -> usize {
+    let entry_bytes = size_of::<T>();
+    let mut buckets = hash_buckets_for(reserved, entry_bytes);
+    while (buckets == 0 && len > 0) || (buckets > 0 && hash_capacity_of(buckets) < len) {
+        let held = if buckets == 0 {
+            0
+        } else {
+            hash_capacity_of(buckets)
+        };
+        buckets = hash_buckets_for(held + 1, entry_bytes);
+    }
+    if len >= HASH_GROUP_WIDTH && len > hash_capacity_of(buckets) / 2 {
+        buckets = hash_buckets_for(hash_capacity_of(buckets) + 1, entry_bytes);
+    }
+    hash_table_bytes::<T>(buckets)
 }
 
 /// Every element sits in heap order beneath the parent the array layout gives
