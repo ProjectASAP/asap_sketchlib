@@ -1298,13 +1298,20 @@ mod documented_matrix {
     /// something the top-level heap can enumerate: layer `l` keeps roughly
     /// `F0 / 2^l` keys, so the deepest layer only carries a recoverable
     /// heavy-hitter set once `heap * 2^layers` reaches the stream's distinct
-    /// count. The document's 16 layers reach 2 million keys, which covers every
-    /// numbered input; at 8 layers they reach 8192 and `(1)`'s 99515 distinct
-    /// keys never arrive, which
+    /// count. 16 layers of heap 128 reach 8 million keys, which covers every
+    /// numbered input (`UnivMon::estimate_cardinality` asks for
+    /// `layers >= ceil(log2(F0 / heap)) + 2`, 15 for `(2)`); at 8 layers of
+    /// heap 32 they reach 8192 and `(1)`'s 99515 distinct keys never arrive,
+    /// which
     /// `a_pyramid_too_shallow_for_the_stream_cannot_recover_its_cardinality`
     /// pins.
+    ///
+    /// The heap sets the spread: with a complete top layer the estimate is
+    /// unbiased with variance at most `2 F0² / heap`. At heap 128 the 30% band
+    /// is over three of those standard deviations; at heap 32 it was barely
+    /// two, so whether an input passed came down to its particular hashes.
     fn univmon_documented_cardinality(id: u8) {
-        const HEAP: usize = 32;
+        const HEAP: usize = 128;
         const ROWS: usize = 5;
         const COLS: usize = 2_048;
         const LAYERS: usize = 16;
@@ -1327,6 +1334,10 @@ mod documented_matrix {
             um.estimate_l1(),
             input.keys.len() as f64,
             "UnivMon L1 must be exact. {context}"
+        );
+        assert!(
+            um.top_layer_complete(),
+            "the top layer must hold every key it received for the bound to apply. {context}"
         );
         let card = um.estimate_cardinality();
         let rel = (card - distinct) / distinct;

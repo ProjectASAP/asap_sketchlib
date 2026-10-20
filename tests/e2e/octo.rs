@@ -4995,9 +4995,18 @@ mod partition_accuracy {
     /// the failure message so the size of the lag is visible. See the coverage
     /// matrix's findings section.
     ///
-    /// `estimate_l2` returns the L2 **norm** — `sqrt(F2)` — over the delivered
-    /// counters, so it is squared before being held to the AMS second-moment
-    /// bound the estimator actually satisfies.
+    /// # What `estimate_l2` means for the Octo plan
+    ///
+    /// `estimate_l2` reads layer 0's Count Sketch directly, so on the parent it
+    /// is the AMS estimate over the *delivered* counters. Each worker still
+    /// holds a residual of magnitude below the threshold in every cell it has
+    /// not promoted, so those counters differ from the ones a single sketch fed
+    /// the whole stream would hold, and the AMS bound is not a statement about
+    /// them. The test therefore holds the bound on that single sketch, and
+    /// holds the parent to it within exactly the held-back mass: every cell
+    /// differs by at most `workers * (tau - 1)`, and since each row's norm is
+    /// 1-Lipschitz in the row and the median is 1-Lipschitz in the rows, the
+    /// two L2 norms differ by at most the largest row's residual norm.
     #[test]
     fn univmon_octo_plan_reports_the_delivered_l1_and_holds_its_f2_bound_under_both_partitions() {
         use common::specs::SecondMomentSpec;
@@ -5061,12 +5070,43 @@ mod partition_accuracy {
                  stamped on a delta, so it must equal their sum exactly. {ctx}"
             );
 
-            // `estimate_l2()` is the norm, so square it to get the F2 the AMS
-            // row-median bound is stated over.
-            let f2_estimate = parent.sketch.estimate_l2().powi(2);
-            if let Err(detail) = f2_spec.check(f2_estimate, truth.f2()) {
-                panic!("UnivMonOctoPlan {route:?} L2/F2: {detail}. {ctx}");
+            // The single-pass sketch the parent mirrors holds the AMS
+            // row-median bound; `estimate_l2()` is the norm, so square it.
+            let mut single = UnivMon::new(HEAP, ROWS, COLS, LAYERS);
+            for k in &stream {
+                single.update_weighted(&DataInput::U64(*k), 1);
             }
+            if let Err(detail) = f2_spec.check(single.estimate_l2().powi(2), truth.f2()) {
+                panic!("single-pass UnivMon L2/F2: {detail}. {ctx}");
+            }
+
+            // The parent's layer 0 differs from it only by the residuals the
+            // workers still hold.
+            let full = &single.layer_sketches[0];
+            let delivered = &parent.sketch.layer_sketches[0];
+            let held_cap = (WORKERS * (OCTO_UNIVMON_DEFAULT_THRESHOLD as usize - 1)) as i64;
+            let mut worst_row_residual = 0.0_f64;
+            for row in 0..ROWS {
+                let mut squares = 0.0;
+                for col in 0..COLS {
+                    let residual = full.as_storage()[row][col] - delivered.as_storage()[row][col];
+                    assert!(
+                        residual.abs() <= held_cap,
+                        "cell ({row}, {col}) is short {residual}, more than {WORKERS} workers \
+                         can hold below the threshold. {ctx}"
+                    );
+                    squares += (residual as f64).powi(2);
+                }
+                worst_row_residual = worst_row_residual.max(f64::sqrt(squares));
+            }
+            let gap = (parent.sketch.estimate_l2() - single.estimate_l2()).abs();
+            assert!(
+                gap <= worst_row_residual + 1e-6,
+                "UnivMonOctoPlan {route:?}: L2 {} differs from the single-pass {} by {gap}, \
+                 more than the held-back residual norm {worst_row_residual}. {ctx}",
+                parent.sketch.estimate_l2(),
+                single.estimate_l2()
+            );
         }
     }
 

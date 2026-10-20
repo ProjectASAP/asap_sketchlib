@@ -12,6 +12,10 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **`UnivMon::top_layer_complete()`**: whether the top layer's heap still holds
+  every key that layer received, the precondition of the distinct-count error
+  bound documented in `docs/api/api_univmon.md`.
+
 - **`TupleKey` and `KeyColumn`**, a heap key of typed columns (null, bool,
   `i64`, `f64`, string) encoded into one canonical byte string, so a GROUP BY
   over several columns keeps one CountMinSketchWithHeap or CountSketchWithHeap candidate per tuple under
@@ -355,6 +359,16 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- **`UnivMon::estimate_cardinality` counts every heap key.** It dropped keys
+  whose Count Sketch estimate was not positive or fell under
+  `L2 / sqrt(heap_size)`, which biased the recurrence low; a zero-weight-only
+  stream now reports its distinct keys instead of zero.
+- **`UnivMon::estimate_l2` reads the Count Sketch counters directly**: layer 0
+  in standard mode, the square root of the summed strata's squared estimates
+  in terminal mode, instead of the generic heap recurrence (still available
+  through `estimate_g_sum`). The error bounds and their assumptions are in
+  `docs/api/api_univmon.md`. `estimate_g_sum`'s second parameter is
+  `count_every_candidate`.
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
   stream: the CDF was sorted with `partial_cmp(..).unwrap()`. It sorts with
   `total_cmp`, as the three sibling sorts beside it already did.
