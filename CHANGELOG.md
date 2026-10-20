@@ -119,9 +119,9 @@ signals a backwards-compatible change.
 
 ### Changed
 
-- **`UnivMon::estimate_g_sum`'s flag is `count_every_key`** (breaking), was
-  `heavy_only`. `true` now counts every heap key; `heavy_only = true` applied
-  the `L2 / sqrt(heap_size)` threshold.
+- **`UnivMon::estimate_g_sum` and `UnivMonTwoTier::estimate_g_sum` take
+  `count_every_key`** (breaking), was `heavy_only`. `true` now counts every
+  heap key; `heavy_only = true` applied the `L2 / sqrt(heap_size)` threshold.
 - **The legacy MessagePack wrappers leave the crate root** (breaking).
   `CountMinSketch`, `CountMinSketchDelta`, `CountMinSketchWithHeap`,
   `CmsHeapItem`, `CountSketch`, `CountSketchDelta`,
@@ -360,6 +360,9 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- `UnivMonTwoTier` gets `UnivMon`'s estimator fixes: `estimate_cardinality`
+  counts every heap key, `estimate_l2` reads layer 0's Count Sketch F2 estimate
+  (terminal mode: the summed strata's), and new `top_layer_complete()`.
 - `UnivMon::estimate_cardinality` counts every heap key, zero-weight keys and
   keys with a nonpositive Count Sketch estimate included. `estimate_l2` reads
   layer 0's Count Sketch F2 estimate (terminal mode: the summed strata's), not

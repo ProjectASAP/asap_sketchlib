@@ -1534,7 +1534,9 @@ fn univmon_weighted_metrics_and_update_weighted_terminal_parity() {
 
 #[test]
 fn univmon_two_tier_weighted_metrics() {
-    let mut up = UnivMonTwoTier::with_defaults();
+    // The default tiers with heap 128: the distinct count's standard deviation
+    // is at most `sqrt(2 / heap)` of F0, so the 20% band is over 1.6 of them.
+    let mut up = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
     let mut truth = common::FreqTruth::default();
     let stream = zipf_u64(15_000, 800, 1.3, 4004);
     for (i, k) in stream.iter().enumerate() {
@@ -1555,6 +1557,10 @@ fn univmon_two_tier_weighted_metrics() {
         "pyramid L2",
     );
     let card_truth = truth.distinct() as f64;
+    assert!(
+        up.top_layer_complete(),
+        "the top layer must hold every key it received for the bound to apply"
+    );
     assert_between(
         up.estimate_cardinality(),
         card_truth * 0.80,
