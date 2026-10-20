@@ -1586,8 +1586,8 @@ fn assert_same_grid(got: &Hydra, want: &Hydra) {
     for (i, (g, w)) in cells.enumerate() {
         let same = match (g, w) {
             (HydraCounter::Kll(g), HydraCounter::Kll(w)) => {
-                (g.wire_k(), g.m(), g.level_bounds_top_down(), g.coin_state())
-                    == (w.wire_k(), w.m(), w.level_bounds_top_down(), w.coin_state())
+                (g.k(), g.m(), g.level_bounds_top_down(), g.coin_state())
+                    == (w.k(), w.m(), w.level_bounds_top_down(), w.coin_state())
                     && g.items_top_down() == w.items_top_down()
             }
             (HydraCounter::CountMinSketch(g), HydraCounter::CountMinSketch(w)) => {

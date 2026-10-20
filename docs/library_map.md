@@ -7,7 +7,7 @@
   - `structures/` - High-performance data structures (`Vector1D`, `Vector2D`, `Vector3D`, `BitMatrix`, `CommonHeap`, `MatrixStorage`, `FixedMatrix`)
   - `heap.rs` - `TopKHeap` convenience wrapper for heavy hitter tracking
   - `hash.rs` - Hashing utilities (`hash_for_matrix`, `hash64_seeded`, `SEED_LIST`, `UNIVMON_BOTTOM_LAYER_SEED_INDEX`) plus `SketchHasher` for custom hasher injection and `DigestHasher` / `DigestBuildHasher` for maps keyed by an already-hashed digest
-  - `hashspec.rs` - `HashSpec`/`derive_index`/`derive_sign` byte parity with `sketchlib-go`; `numerical.rs` - `NumericalValue`; `structure_utils.rs` - `Nitro`, `NitroContext`, `ToF64`
+  - `numerical.rs` - `NumericalValue`; `structure_utils.rs` - `Nitro`, `NitroContext`, `ToF64`
 
 - **`src/sketches/`** - Sketch implementations (status source: [apis.md](./apis.md))
   - `Ready` in API index: `countminsketch.rs`, `countsketch.rs`, `hll.rs`, `kll.rs`, `ddsketch.rs`, `countminsketch_heap.rs`, `countsketch_heap.rs`, `countsketch_l2_norm.rs`, `countminsketch_space_saving.rs`, `countsketch_space_saving.rs`, `space_saving.rs`, `bloom.rs`, `elastic.rs`, `coco.rs`
@@ -40,8 +40,7 @@
 
 - The large precomputed hash/sample tables are built lazily at runtime via
   `std::sync::LazyLock` in
-  `src/common/precompute_hash.rs`, `src/common/precompute_sample.rs`, and
-  `src/common/precompute_sample2.rs`.
+  `src/common/precompute_hash.rs` and `src/common/precompute_sample.rs`.
 
 ## Proto code generation
 

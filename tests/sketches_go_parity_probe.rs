@@ -1,12 +1,10 @@
-//! Probe: do `sketches::*` defaults already produce Go-byte-parity output,
-//! making a separate hashspec-direct path inside the wire-format-aligned
-//! types unnecessary?
+//! Probe: `sketches::*` defaults produce Go-byte-parity output.
 //!
 //! Approach: reuse the exact same Go-golden envelopes that the
 //! `message_pack_format::portable` parity tests use, but build the
 //! matrix via `sketches::CountSketch` / `sketches::CountMinSketch` with `FastPath`
 //! and `DefaultXxHasher`. Identical bytes confirm the shared FastPath
-//! math is sufficient — no hashspec bypass needed.
+//! math is sufficient.
 
 use asap_sketchlib::common::DataInput;
 use asap_sketchlib::common::hash::DEFAULT_CANONICAL_SEED_INDEX;

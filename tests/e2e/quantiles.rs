@@ -1833,7 +1833,7 @@ fn kll_minimum_compactor_capacity_axis_keeps_the_count_exact_and_reports_its_own
         let ctx = format!("m={m} k=200 n={} sketch_seed={seed:#x}", values.len());
         assert_eq!(sketch.k(), 200, "{ctx}: k moved");
         assert_eq!(sketch.m() as usize, m, "{ctx}: reported m");
-        assert_eq!(sketch.wire_k() as usize, 200, "{ctx}: reported k");
+        assert_eq!(sketch.k(), 200, "{ctx}: reported k");
         assert_between(
             sketch.count() as f64,
             values.len() as f64 * 0.95,
@@ -1855,11 +1855,11 @@ fn kll_minimum_compactor_capacity_axis_keeps_the_count_exact_and_reports_its_own
 fn kll_normalizes_a_minimum_compactor_capacity_outside_its_supported_range() {
     let clamped: Kll<f64> = Kll::with_seed(200, 0, kll_axis_seed(0x0100));
     assert_eq!(clamped.m(), 2, "m=0 must normalize to 2");
-    assert_eq!(clamped.wire_k(), 200, "m=0 must leave k alone");
+    assert_eq!(clamped.k(), 200, "m=0 must leave k alone");
 
     let raised: Kll<f64> = Kll::with_seed(4, 64, kll_axis_seed(0x0101));
     assert_eq!(raised.m(), 64, "m=64 must survive");
-    assert_eq!(raised.wire_k(), 64, "k below m must be raised to m");
+    assert_eq!(raised.k(), 64, "k below m must be raised to m");
 
     let mut usable: Kll<f64> = Kll::with_seed(4, 64, kll_axis_seed(0x0102));
     let values = kll_axis_values(5_000, 0x4B11_0102);

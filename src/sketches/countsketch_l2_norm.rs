@@ -233,14 +233,6 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
         self.estimate_with_hash(hashed_val)
     }
 
-    /// Update and estimate without L2 with hash optimization.
-    /// due to the limitation of seeds, use fast_insert only
-    pub fn fast_update_and_est_without_l2(&mut self, val: &DataInput, c: i64) -> f64 {
-        let hashed_val = H::hash128_seeded(self.seed_index, val);
-        self.update_weighted_with_hash_without_l2(hashed_val, c);
-        self.estimate_with_hash(hashed_val)
-    }
-
     /// Returns the median estimate of the squared L2 norm across rows.
     pub fn l2_squared(&self) -> f64 {
         let mut values: Vec<f64> = self.row_l2_squared.as_slice()[..self.rows]

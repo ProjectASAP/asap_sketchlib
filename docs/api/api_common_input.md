@@ -27,7 +27,6 @@ fn input_to_owned(input: &DataInput<'_>) -> OwnedDataInput
 // HeapEntry<C>
 fn from_input(k: DataInput, count: C) -> Self
 fn new(key: OwnedDataInput, count: C) -> Self
-fn init_item(k: DataInput, count: C) -> Self
 ```
 
 ## Insert/Update

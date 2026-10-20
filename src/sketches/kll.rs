@@ -767,12 +767,6 @@ impl<T: NumericalValue> Kll<T> {
 
     // -- Wire-format-aligned accessors --------------------------------------
 
-    /// Returns the configured `k` parameter.
-    #[inline]
-    pub fn wire_k(&self) -> u32 {
-        self.k as u32
-    }
-
     /// Returns the configured `m` parameter.
     #[inline]
     pub fn m(&self) -> u32 {

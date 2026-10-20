@@ -528,14 +528,6 @@ impl<C: HeapCount> HeapEntry<C> {
         HeapEntry { key, count }
     }
 
-    /// Legacy constructor for compatibility.
-    pub fn init_item(k: DataInput, count: C) -> Self {
-        HeapEntry {
-            key: input_to_owned(&k),
-            count,
-        }
-    }
-
     /// Prints the item in a human-readable format.
     pub fn print_entry(&self) {
         println!("key: {:?} with count: {}", self.key, self.count);

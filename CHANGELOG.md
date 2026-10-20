@@ -303,6 +303,15 @@ signals a backwards-compatible change.
   as an empty window like any other, and that window takes a place in
   `max_windows`.
 
+### Removed
+
+- **Dead and duplicate APIs** (breaking). `Kll::wire_k` (use `k()`);
+  `PRECOMPUTED_SAMPLE_RATE_1PERCENT` and module `common::precompute_sample2`;
+  module `common::hashspec` (`HashSpec`, `derive_index`, `derive_sign`,
+  `CANONICAL_HASH_SEED_TABLE`); `Vector2D::get_row`/`get_col` (use
+  `rows()`/`cols()`); `HeapEntry::init_item` (use `from_input`);
+  `CountSketchWithL2Norm::fast_update_and_est_without_l2`.
+
 ### Fixed
 
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the

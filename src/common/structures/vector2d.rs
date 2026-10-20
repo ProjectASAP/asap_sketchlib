@@ -675,18 +675,6 @@ impl<T> Vector2D<T> {
         let end = start + self.cols;
         &mut self.data[start..end]
     }
-
-    /// Returns the number of rows (legacy helper).
-    #[inline(always)]
-    pub fn get_row(&self) -> usize {
-        self.rows
-    }
-
-    /// Returns the number of columns (legacy helper).
-    #[inline(always)]
-    pub fn get_col(&self) -> usize {
-        self.cols
-    }
 }
 
 impl<T> MatrixStorage for Vector2D<T>
