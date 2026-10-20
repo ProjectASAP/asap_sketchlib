@@ -17,6 +17,7 @@ free-list pool of scratch `UnivMon`s.
 ```rust
 fn default() -> Self
 fn new(heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self
+fn check_shape(heap_size: usize, rows: usize, cols: usize, layers: usize) -> Result<(), String>
 
 // UnivMonPool
 fn new(initial_size: usize, heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self
@@ -29,7 +30,10 @@ fn total_allocated(&self) -> usize
 `UnivMonPool` is a free-list of scratch `UnivMon`s rather than a sketch, and
 has no wire kind.
 
-`new` panics on a shape whose hashes would not be independent:
+`check_shape` accepts exactly the shapes `new` builds, so a caller can refuse a
+configuration without catching a panic. `new` panics on a zero dimension, on a
+counter count past `usize`, on more than `MATRIX_MAX_ROWS` (20) rows, and on a
+shape whose hashes would not be independent:
 
 - `layers > UNIVMON_MAX_LAYERS` (19). Layer `i` hashes at seed index `i`, and
   the layers a key reaches are read from the hash at `UNIVMON_BOTTOM_LAYER_SEED_INDEX`

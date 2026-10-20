@@ -756,13 +756,15 @@ mod tests {
     }
 
     /// Every layer is a CountSketchWithL2Norm matrix, so a layer past the seed list's row
-    /// bound is refused on both sides.
+    /// bound is refused when built and when decoded.
     #[test]
     fn univmon_rejects_too_many_layer_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
+        let problem = UnivMon::check_shape(4, rows, 16, 3).expect_err("rows past MATRIX_MAX_ROWS");
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
         assert!(
-            UnivMon::new(4, rows, 16, 3).to_asapv1().is_err(),
-            "a layer past MATRIX_MAX_ROWS must not serialize"
+            std::panic::catch_unwind(|| UnivMon::new(4, rows, 16, 3)).is_err(),
+            "a layer past MATRIX_MAX_ROWS must not be built"
         );
 
         let um = populated();
@@ -1191,7 +1193,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "at most UNIVMON_MAX_LAYERS")]
+    #[should_panic(expected = "exceeds UNIVMON_MAX_LAYERS")]
     fn univmon_refuses_constructing_past_the_shift_bound() {
         UnivMon::new(4, 2, 16, UNIVMON_MAX_LAYERS + 1);
     }

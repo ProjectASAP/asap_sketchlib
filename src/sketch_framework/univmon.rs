@@ -124,16 +124,35 @@ impl UnivMon {
             UnivMonUpdateMode::Unset | UnivMonUpdateMode::Standard
         )
     }
+    /// Checks a pyramid shape without building it; [`Self::new`] builds exactly
+    /// the shapes this accepts. `Err` names the broken rule; the rules are in
+    /// `docs/api/api_univmon.md`.
+    pub fn check_shape(
+        heap_size: usize,
+        rows: usize,
+        cols: usize,
+        layers: usize,
+    ) -> Result<(), String> {
+        wire::check_univmon_dimensions(layers, rows, cols, heap_size)?;
+        wire::check_layers("UnivMon", layers)?;
+        crate::sketches::countsketch_l2_norm::wire::check_dimensions(rows, cols)?;
+        rows.checked_mul(cols)
+            .and_then(|cells| cells.checked_mul(layers))
+            .map(|_| ())
+            .ok_or_else(|| {
+                format!("UnivMon {layers} layers of {rows}x{cols} counters overflow usize")
+            })
+    }
+
     /// Creates a UnivMon instance with explicit dimensions.
+    ///
+    /// # Panics
+    ///
+    /// When [`Self::check_shape`] refuses the shape.
     pub fn new(heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self {
-        assert!(heap_size > 0, "heap size must be positive");
-        assert!(rows > 0, "sketch row count must be positive");
-        assert!(cols > 0, "sketch column count must be positive");
-        assert!(layers > 0, "layer count must be positive");
-        assert!(
-            layers <= UNIVMON_MAX_LAYERS,
-            "layer count must be at most UNIVMON_MAX_LAYERS {UNIVMON_MAX_LAYERS}"
-        );
+        if let Err(problem) = Self::check_shape(heap_size, rows, cols, layers) {
+            panic!("{problem}");
+        }
         let sk_vec: Vec<CountSketchWithL2Norm> = (0..layers)
             .map(|i| CountSketchWithL2Norm::with_dimensions_and_seed_index(rows, cols, i))
             .collect();
@@ -696,6 +715,39 @@ mod tests {
     #[should_panic(expected = "hash bits")]
     fn new_rejects_column_bits_that_reach_the_sign_bits() {
         UnivMon::new(4, 11, 2048, 2);
+    }
+
+    /// `check_shape` accepts exactly the shapes `new` builds.
+    #[test]
+    fn check_shape_accepts_exactly_what_new_builds() {
+        use crate::common::MATRIX_MAX_ROWS;
+        for (heap, rows, cols, layers, valid) in [
+            (4, 3, 2048, 8, true),
+            (4, 10, 2048, 2, true),
+            (4, 11, 2048, 2, false),
+            (4, 2, 16, UNIVMON_MAX_LAYERS, true),
+            (4, 2, 16, UNIVMON_MAX_LAYERS + 1, false),
+            (0, 3, 16, 2, false),
+            (4, 0, 16, 2, false),
+            (4, 3, 0, 2, false),
+            (4, 3, 16, 0, false),
+            (4, MATRIX_MAX_ROWS, 2, 1, true),
+            (4, MATRIX_MAX_ROWS + 1, 2, 1, false),
+        ] {
+            assert_eq!(
+                UnivMon::check_shape(heap, rows, cols, layers).is_ok(),
+                valid,
+                "{heap} {rows}x{cols} x{layers}"
+            );
+            let built = std::panic::catch_unwind(|| UnivMon::new(heap, rows, cols, layers));
+            assert_eq!(built.is_ok(), valid, "{heap} {rows}x{cols} x{layers}");
+        }
+    }
+
+    #[test]
+    fn check_shape_rejects_a_counter_count_past_usize() {
+        let problem = UnivMon::check_shape(4, 1, usize::MAX, 2).expect_err("overflow");
+        assert!(problem.contains("overflow usize"), "got {problem}");
     }
 
     /// Persisted terminal states must be distinguishable before standard ingestion.

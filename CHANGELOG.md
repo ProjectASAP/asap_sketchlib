@@ -12,6 +12,8 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **`UnivMon::check_shape`** accepts exactly the pyramid shapes `UnivMon::new`
+  builds, so a caller can refuse a configuration without catching a panic.
 - **`TupleKey` and `KeyColumn`**, a heap key of typed columns (null, bool,
   `i64`, `f64`, string) encoded into one canonical byte string, so a GROUP BY
   over several columns keeps one CountMinSketchWithHeap or CountSketchWithHeap candidate per tuple under
@@ -355,6 +357,8 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- `UnivMon::new` refuses more than `MATRIX_MAX_ROWS` rows, which the ASAPv1
+  wire refuses to encode or decode; it panics exactly when `check_shape` fails.
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
   stream: the CDF was sorted with `partial_cmp(..).unwrap()`. It sorts with
   `total_cmp`, as the three sibling sorts beside it already did.
