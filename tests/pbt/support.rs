@@ -42,15 +42,25 @@ pub const PROBE_KEYS: usize = 64;
 pub const REL_TOL: f64 = 1e-12;
 
 pub fn close(a: f64, b: f64) -> bool {
-    let scale = a.abs().max(b.abs()).max(1.0);
+    close_at_mass(a, b, 0.0)
+}
+
+/// `close` for a signed sum whose terms have magnitudes summing to at most
+/// `mass`: its rounding error scales with `mass`, not with the result.
+pub fn close_at_mass(a: f64, b: f64, mass: f64) -> bool {
+    let scale = a.abs().max(b.abs()).max(mass).max(1.0);
     (a - b).abs() <= REL_TOL * scale
 }
 
 pub fn matrices_close(a: &[Vec<f64>], b: &[Vec<f64>]) -> bool {
+    matrices_close_at_mass(a, b, 0.0)
+}
+
+pub fn matrices_close_at_mass(a: &[Vec<f64>], b: &[Vec<f64>], mass: f64) -> bool {
     a.len() == b.len()
-        && a.iter()
-            .zip(b)
-            .all(|(ra, rb)| ra.len() == rb.len() && ra.iter().zip(rb).all(|(x, y)| close(*x, *y)))
+        && a.iter().zip(b).all(|(ra, rb)| {
+            ra.len() == rb.len() && ra.iter().zip(rb).all(|(x, y)| close_at_mass(*x, *y, mass))
+        })
 }
 
 /// Every cell of a `rows` by `cols` grid in row-major order.

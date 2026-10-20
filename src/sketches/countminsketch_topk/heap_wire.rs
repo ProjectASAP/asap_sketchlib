@@ -24,7 +24,8 @@
 //! mix variants, `String` and `Bytes` included. A `Bytes` key is written as
 //! msgpack `bin` through `WireBytes` and read back from `bin` alone, so any
 //! byte string survives whether or not it is UTF-8 and a `str`-keyed payload
-//! relabelled `"bytes"` is refused.
+//! relabelled `"bytes"` is refused. A `String` key is read from `str` alone
+//! through `WireString`, so `bin` keys relabelled `"string"` are refused too.
 //!
 //! ## Emitted order (byte-stable round trips)
 //!
@@ -50,7 +51,7 @@ use std::collections::HashSet;
 
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
-use crate::message_pack_format::wire_key::{WireBytes, exact_vec};
+use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::{HHHeap, HashProfile, HeapCount, HeapItem};
 
 /// Metadata `key_type` of a heap that holds nothing. A heap with no entries has
@@ -106,6 +107,38 @@ fn key_order(key: &HeapItem) -> (u8, u128, &[u8]) {
 fn emitted_order<N: HeapCount>(a: (&HeapItem, N), b: (&HeapItem, N)) -> Ordering {
     b.1.order(&a.1)
         .then_with(|| key_order(a.0).cmp(&key_order(b.0)))
+}
+
+/// Rejects an empty key set whose `key_type` is not [`EMPTY_KEY_TYPE`], the
+/// one name an empty heap or summary carries.
+pub(crate) fn check_empty_key_type(key_type: &str, is_empty: bool) -> Result<(), String> {
+    if is_empty && key_type != EMPTY_KEY_TYPE {
+        return Err(format!(
+            "ASAPv1: an empty key set carries key_type {key_type:?}, not {EMPTY_KEY_TYPE:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Rewrites the metadata `field` of an envelope from `"u64"` to `to`, leaving
+/// the payload as it is.
+#[cfg(test)]
+pub(crate) fn relabel_u64_key_type(bytes: &[u8], field: &str, to: &str) -> Vec<u8> {
+    let (kind_id, metadata, payload) = envelope::split(bytes).expect("split");
+    let pack = |key: &str, value: &str| {
+        let mut out = rmp_serde::to_vec(key).expect("key");
+        out.extend(rmp_serde::to_vec(value).expect("value"));
+        out
+    };
+    let (from, into) = (pack(field, "u64"), pack(field, to));
+    let at = metadata
+        .windows(from.len())
+        .position(|window| window == from.as_slice())
+        .expect("the metadata names u64");
+    let mut relabelled = metadata[..at].to_vec();
+    relabelled.extend(&into);
+    relabelled.extend(&metadata[at + from.len()..]);
+    envelope::encode(kind_id, &relabelled, payload)
 }
 
 /// The complaint both directions report when one key is on the wire twice.
@@ -463,7 +496,7 @@ pub(crate) fn encode_payload<B: TopKBody, N: HeapCount>(
         "usize" => pack!(USIZE, v => *v),
         "f32" => pack!(F32, v => *v),
         "f64" => pack!(F64, v => *v),
-        "string" => pack!(String, v => v.clone()),
+        "string" => pack!(String, v => WireString(v.clone())),
         "bytes" => pack!(Bytes, v => WireBytes(v.clone())),
         other => Err(RmpEncodeError::Syntax(format!(
             "ASAPv1 top-k heap: key_type {other:?} is not a wire key type"
@@ -503,7 +536,9 @@ pub(crate) fn decode_payload<B: TopKBody, N: HeapCount>(
         "usize" => unpack!(usize, HeapItem::USIZE),
         "f32" => unpack!(f32, HeapItem::F32),
         "f64" => unpack!(f64, HeapItem::F64),
-        "string" => unpack!(String, HeapItem::String),
+        "string" => unpack!(WireString, |key: WireString| HeapItem::String(
+            key.into_string()
+        )),
         "bytes" => unpack!(WireBytes, |key: WireBytes| HeapItem::Bytes(key.into_vec())),
         other => {
             return Err(RmpDecodeError::Uncategorized(format!(
@@ -519,6 +554,7 @@ pub(crate) fn decode_payload<B: TopKBody, N: HeapCount>(
             heap_counts.len()
         )));
     }
+    check_empty_key_type(key_type, keys.is_empty()).map_err(RmpDecodeError::Uncategorized)?;
     Ok((body, keys.into_iter().zip(heap_counts).collect()))
 }
 
@@ -685,6 +721,36 @@ mod tests {
         assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
     }
 
+    /// An empty heap carries `key_type` `"u64"`; any other name is rejected, on
+    /// the state and the delta alike.
+    #[test]
+    fn heap_empty_must_carry_the_u64_key_type() {
+        use crate::sketches::countminsketch_topk::CMSHeapDelta;
+        let state = CMSHeap::<Vector2D<i64>, RegularPath>::new(2, 8, 8)
+            .serialize_to_bytes()
+            .expect("serialize");
+        let delta = CMSHeapDelta::<i64, RegularPath>::new(2, 8, vec![], vec![], HHHeap::new(8))
+            .expect("delta")
+            .serialize_to_bytes()
+            .expect("serialize");
+        for to in ["string", "i64", "bytes"] {
+            let problem = match CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(
+                &relabel_u64_key_type(&state, "key_type", to),
+            ) {
+                Ok(_) => panic!("an empty heap under {to} must be rejected"),
+                Err(err) => err.to_string(),
+            };
+            assert!(problem.contains("empty key set"), "{to}: {problem}");
+            let problem = CMSHeapDelta::<i64, RegularPath>::deserialize_from_bytes(
+                &relabel_u64_key_type(&delta, "key_type", to),
+            )
+            .map(drop)
+            .expect_err("an empty delta heap under another key_type must be rejected")
+            .to_string();
+            assert!(problem.contains("empty key set"), "{to}: {problem}");
+        }
+    }
+
     /// The emitted order is fixed by (count, key_order), not by the sift path,
     /// so the same entries always produce the same bytes. Both count ties below
     /// are broken only by the key.
@@ -744,6 +810,34 @@ mod tests {
                 CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&forged).is_err(),
                 "a payload relabelled {claimed} must be rejected"
             );
+        }
+    }
+
+    /// A `"string"` key is read from msgpack `str` alone: UTF-8 `bin` keys
+    /// relabelled `"string"` are rejected, as `str` keys relabelled `"bytes"` are.
+    #[test]
+    fn heap_string_and_bytes_keys_do_not_decode_as_each_other() {
+        let forge = |sketch: CMSHeap<Vector2D<i64>, RegularPath>, claimed: &str| {
+            let bytes = sketch.serialize_to_bytes().expect("serialize");
+            let (_, _, payload) = envelope::split(&bytes).expect("split");
+            let metadata = rmp_serde::to_vec_named(&topk_metadata::<DefaultXxHasher>(
+                2, 8, "i64", "regular", 8, claimed,
+            ))
+            .expect("metadata");
+            envelope::encode(KIND, &metadata, payload)
+        };
+        let bin = sketch_with(&[(DataInput::Bytes(b"alpha"), 5)]);
+        let str_keys = sketch_with(&[(DataInput::Str("alpha"), 5)]);
+        for (forged, claimed) in [
+            (forge(bin, "string"), "string"),
+            (forge(str_keys, "bytes"), "bytes"),
+        ] {
+            let problem =
+                match CMSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&forged) {
+                    Ok(_) => panic!("keys relabelled {claimed} must be rejected"),
+                    Err(err) => err.to_string(),
+                };
+            assert!(problem.contains("must be msgpack"), "{claimed}: {problem}");
         }
     }
 

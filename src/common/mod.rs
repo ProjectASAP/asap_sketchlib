@@ -32,6 +32,7 @@ pub mod precompute_sample2;
 pub mod structure_utils;
 /// Reusable storage backends and low-level containers.
 pub mod structures;
+pub mod tuple_key;
 
 pub use hash::{
     BOTTOM_LAYER_FINDER, CANONICAL_HASH_SEED, DefaultXxHasher, DigestBuildHasher, DigestHasher,
@@ -55,3 +56,4 @@ pub use structures::{
     MatrixHashType, MatrixStorage, QuickMatrixI32, QuickMatrixI64, QuickMatrixI128, Vector1D,
     Vector2D, Vector3D,
 };
+pub use tuple_key::{KeyColumn, TupleKey};

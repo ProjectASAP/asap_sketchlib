@@ -56,12 +56,11 @@ any other one.
 
 The metadata carries the hash spec (Hydra hashes its subkeys, so it is present
 even for the KLL counter), the grid `rows` / `cols`, the key-column `schema`,
-and the counter's own structural params — `counter_rows`, `counter_cols`,
-`counter_type` (`"i32"`) and `counter_mode` (`"fast"`) for the two matrix
-counters; `counter_precision` for HyperLogLog; `counter_k`, `counter_m` and
-`counter_item_type` (`"f64"`) for KLL; `counter_layer_size`,
-`counter_sketch_row`, `counter_sketch_col`, `counter_heap_size` and
-`counter_key_type` for UnivMon.
+and the counter's own structural params — `cell_rows`, `cell_cols`,
+`cell_counter_type` (`"i32"`) and `cell_mode` (`"fast"`) for the two matrix
+counters; `cell_precision` for HyperLogLog; `cell_k`, `cell_m` and
+`cell_item_type` (`"f64"`) for KLL; `cell_layers`, `cell_rows`, `cell_cols`,
+`cell_heap_size` and `cell_key_type` for UnivMon.
 
 The payload is the counters' raw state, row-major over the grid: `[counts]` for
 the matrix counters, `[registers]` for HyperLogLog, `[cells]` for KLL and
@@ -69,7 +68,7 @@ UnivMon. Counters are inlined, not nested in their own envelopes, and every
 cell shares the prototype's geometry, so it is carried once.
 
 The grid and the matrix counters are both hashed per row, so each carries the
-same bound: `1 <= rows <= 20` and `1 <= counter_rows <= 20` (`MATRIX_MAX_ROWS`,
+same bound: `1 <= rows <= 20` and `1 <= cell_rows <= 20` (`MATRIX_MAX_ROWS`,
 the seed list length).
 
 A grid mixing counter variants, UnivMon cells mixing key variants, a cell whose

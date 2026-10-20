@@ -9,7 +9,7 @@
 //! visibility. See `docs/asapv1_wire_format.md`.
 //!
 //! UnivMon is one algorithm — a single kind_id `0x10 0x00`. The pyramid shape
-//! (`layer_size`, `sketch_row`, `sketch_col`, `heap_size`) and the heaps'
+//! (`layers`, `rows`, `cols`, `heap_size`) and the heaps'
 //! `key_type` are construction config and live in the metadata, so the payload
 //! carries the layers' raw state.
 //!
@@ -35,9 +35,10 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
-use crate::message_pack_format::wire_key::{WireBytes, exact_vec};
+use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::sketches::countminsketch_topk::heap_wire::{
-    EMPTY_KEY_TYPE, check_distinct_keys, heap_entries, key_type_of, rebuild_heap,
+    EMPTY_KEY_TYPE, check_distinct_keys, check_empty_key_type, heap_entries, key_type_of,
+    rebuild_heap,
 };
 use crate::sketches::countsketch_topk::l2hh_wire;
 use crate::{DefaultXxHasher, HHHeap, HashProfile, HeapItem, L2HH, Vector1D};
@@ -50,7 +51,7 @@ const UNIVMON_KIND: &[u8] = &[0x10, 0x00];
 /// UnivMon descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
 /// the wire spec fixes (Go must mirror it). Hash-spec fields first, then the
-/// structural params `layer_size` / `sketch_row` / `sketch_col` / `heap_size`
+/// structural params `layers` / `rows` / `cols` / `heap_size`
 /// / `key_type`.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,9 +62,9 @@ pub(crate) struct UnivMonMetadata {
     pub(crate) seed_derivation: String,
     pub(crate) input_encoding: String,
     pub(crate) seed_list: Vec<u64>,
-    pub(crate) layer_size: u32,
-    pub(crate) sketch_row: u32,
-    pub(crate) sketch_col: u32,
+    pub(crate) layers: u32,
+    pub(crate) rows: u32,
+    pub(crate) cols: u32,
     pub(crate) heap_size: u32,
     pub(crate) key_type: String,
 }
@@ -85,9 +86,9 @@ pub(crate) fn univmon_metadata<H: HashProfile>(
         seed_derivation: H::SEED_DERIVATION.to_string(),
         input_encoding: H::INPUT_ENCODING.to_string(),
         seed_list: H::seed_list(),
-        layer_size,
-        sketch_row,
-        sketch_col,
+        layers: layer_size,
+        rows: sketch_row,
+        cols: sketch_col,
         heap_size,
         key_type: key_type.to_string(),
     }
@@ -323,7 +324,7 @@ pub(crate) fn encode_pyramid(
             let mut keys = Vec::with_capacity(state.entries.len());
             for (key, _) in &state.entries {
                 match key {
-                    HeapItem::String(value) => keys.push(value.clone()),
+                    HeapItem::String(value) => keys.push(WireString(value.clone())),
                     _ => return Err(mixed_variant_error(key_type, key)),
                 }
             }
@@ -382,13 +383,16 @@ pub(crate) fn decode_pyramid(
     payload: &[u8],
 ) -> Result<DecodedPyramid, RmpDecodeError> {
     macro_rules! unpack {
-        ($variant:ident, $ty:ty) => {{
+        ($variant:ident, $ty:ty) => {
+            unpack!($ty, HeapItem::$variant)
+        };
+        ($ty:ty, $into:expr) => {{
             let decoded: PyramidPayload<$ty> = envelope::decode_block(payload)?;
             (
                 decoded
                     .keys
                     .into_iter()
-                    .map(HeapItem::$variant)
+                    .map($into)
                     .collect::<Vec<HeapItem>>(),
                 DecodedPyramid {
                     counts: decoded.counts,
@@ -417,7 +421,9 @@ pub(crate) fn decode_pyramid(
         "usize" => unpack!(USIZE, usize),
         "f32" => unpack!(F32, f32),
         "f64" => unpack!(F64, f64),
-        "string" => unpack!(String, String),
+        "string" => unpack!(WireString, |key: WireString| HeapItem::String(
+            key.into_string()
+        )),
         "bytes" => {
             let decoded: PyramidPayload<WireBytes> = envelope::decode_block(payload)?;
             (
@@ -593,9 +599,9 @@ impl UnivMon {
             })
         };
         let metadata = rmp_serde::to_vec_named(&univmon_metadata::<DefaultXxHasher>(
-            field("layer_size", self.layer_size)?,
-            field("sketch_row", self.sketch_row)?,
-            field("sketch_col", self.sketch_col)?,
+            field("layers", self.layer_size)?,
+            field("rows", self.sketch_row)?,
+            field("cols", self.sketch_col)?,
             field("heap_size", self.heap_size)?,
             key_type,
         ))?;
@@ -622,9 +628,9 @@ impl UnivMon {
         let meta: UnivMonMetadata = envelope::decode_block(metadata)?;
         if meta
             != univmon_metadata::<DefaultXxHasher>(
-                meta.layer_size,
-                meta.sketch_row,
-                meta.sketch_col,
+                meta.layers,
+                meta.rows,
+                meta.cols,
                 meta.heap_size,
                 &meta.key_type,
             )
@@ -634,15 +640,17 @@ impl UnivMon {
             ));
         }
         let (layer_size, sketch_row, sketch_col, heap_size) = (
-            meta.layer_size as usize,
-            meta.sketch_row as usize,
-            meta.sketch_col as usize,
+            meta.layers as usize,
+            meta.rows as usize,
+            meta.cols as usize,
             meta.heap_size as usize,
         );
         check_univmon_dimensions(layer_size, sketch_row, sketch_col, heap_size)
             .map_err(RmpDecodeError::Uncategorized)?;
         check_layer_size("UnivMon", layer_size).map_err(RmpDecodeError::Uncategorized)?;
         let decoded = decode_pyramid(&meta.key_type, payload)?;
+        check_empty_key_type(&meta.key_type, decoded.entries.is_empty())
+            .map_err(RmpDecodeError::Uncategorized)?;
         // The declared layer count is measured against the accumulators the
         // payload actually carries before the geometry is built from it.
         if sketch_row.checked_mul(layer_size) != Some(decoded.l2.len()) {
@@ -701,6 +709,52 @@ mod tests {
         from_slice(payload).expect("payload")
     }
 
+    /// An empty pyramid carries `key_type` `"u64"`; any other name is rejected.
+    #[test]
+    fn univmon_empty_must_carry_the_u64_key_type() {
+        use crate::sketches::countminsketch_topk::heap_wire::relabel_u64_key_type;
+        let bytes = UnivMon::init_univmon(4, 2, 16, 3)
+            .serialize_to_bytes()
+            .expect("serialize");
+        let problem =
+            UnivMon::deserialize_from_bytes(&relabel_u64_key_type(&bytes, "key_type", "string"))
+                .map(drop)
+                .expect_err("an empty pyramid under another key_type must be rejected")
+                .to_string();
+        assert!(problem.contains("empty key set"), "{problem}");
+    }
+
+    /// A `"string"` key is read from msgpack `str` alone: the same keys as
+    /// UTF-8 `bin` under `key_type` `"string"` are rejected.
+    #[test]
+    fn univmon_reads_string_keys_from_str_only() {
+        let encoded = populated().serialize_to_bytes().expect("serialize");
+        let meta = metadata_of(&encoded);
+        assert_eq!(meta.key_type, "string");
+        let payload: PyramidPayload<String> = payload_of(&encoded);
+        assert!(!payload.keys.is_empty());
+        let as_bin = PyramidPayload {
+            counts: payload.counts,
+            l2: payload.l2,
+            heap_lens: payload.heap_lens,
+            keys: payload
+                .keys
+                .iter()
+                .map(|key| WireBytes(key.as_bytes().to_vec()))
+                .collect(),
+            heap_counts: payload.heap_counts,
+            candidate_complete: payload.candidate_complete,
+            bucket_size: payload.bucket_size,
+            update_mode: payload.update_mode,
+        };
+        let problem = UnivMon::deserialize_from_bytes(&crafted(&meta, &as_bin))
+            .map(drop)
+            .expect_err("bin keys under key_type string must be rejected")
+            .to_string();
+        assert!(problem.contains("must be msgpack str"), "{problem}");
+        assert!(UnivMon::deserialize_from_bytes(&encoded).is_ok());
+    }
+
     /// Every layer is a CountL2HH matrix, so a layer past the seed list's row
     /// bound is refused on both sides.
     #[test]
@@ -716,9 +770,9 @@ mod tests {
         let um = populated();
         let encoded = um.serialize_to_bytes().expect("serialize");
         let mut meta = metadata_of(&encoded);
-        meta.sketch_row = rows as u32;
-        let layers = meta.layer_size as usize;
-        let cols = meta.sketch_col as usize;
+        meta.rows = rows as u32;
+        let layers = meta.layers as usize;
+        let cols = meta.cols as usize;
         // Sized to the crafted geometry, so the row bound is what bites.
         let mut payload: PyramidPayload<String> = payload_of(&encoded);
         payload.counts = vec![0; rows * cols * layers];
@@ -746,12 +800,7 @@ mod tests {
         let meta = metadata_of(&encoded);
         assert_eq!(meta.metadata_version, 1);
         assert_eq!(
-            (
-                meta.layer_size,
-                meta.sketch_row,
-                meta.sketch_col,
-                meta.heap_size
-            ),
+            (meta.layers, meta.rows, meta.cols, meta.heap_size),
             (3, 2, 16, 4)
         );
         assert_eq!(meta.key_type, "string");
@@ -909,9 +958,9 @@ mod tests {
         assert_eq!(meta.seed_list, DefaultXxHasher::seed_list());
 
         let alt = univmon_metadata::<AltHasher>(
-            meta.layer_size,
-            meta.sketch_row,
-            meta.sketch_col,
+            meta.layers,
+            meta.rows,
+            meta.cols,
             meta.heap_size,
             &meta.key_type,
         );
@@ -972,9 +1021,9 @@ mod tests {
         let payload = payload_of::<String>(&encoded);
 
         let shaped = |layer_size, sketch_row, sketch_col, heap_size| UnivMonMetadata {
-            layer_size,
-            sketch_row,
-            sketch_col,
+            layers: layer_size,
+            rows: sketch_row,
+            cols: sketch_col,
             heap_size,
             ..univmon_metadata::<DefaultXxHasher>(0, 0, 0, 0, &base.key_type)
         };
@@ -1129,8 +1178,8 @@ mod tests {
 
         let layers = MAX_LAYER_SIZE + 1;
         let mut meta = metadata_of(&encoded);
-        meta.layer_size = layers as u32;
-        let (rows, cols) = (meta.sketch_row as usize, meta.sketch_col as usize);
+        meta.layers = layers as u32;
+        let (rows, cols) = (meta.rows as usize, meta.cols as usize);
         let mut payload: PyramidPayload<u64> = payload_of(&encoded);
         payload.counts = vec![0; rows * cols * layers];
         payload.l2 = vec![0; rows * layers];
@@ -1160,9 +1209,9 @@ mod tests {
             seed_derivation: String,
             input_encoding: String,
             seed_list: Vec<u64>,
-            layer_size: u32,
-            sketch_row: u32,
-            sketch_col: u32,
+            layers: u32,
+            rows: u32,
+            cols: u32,
             heap_size: u32,
             key_type: String,
             bogus_field: u8, // key not in UnivMonMetadata
@@ -1175,9 +1224,9 @@ mod tests {
             seed_derivation: String,
             input_encoding: String,
             seed_list: Vec<u64>,
-            layer_size: u32,
-            sketch_row: u32,
-            sketch_col: u32,
+            layers: u32,
+            rows: u32,
+            cols: u32,
             heap_size: u32,
         }
         let m = univmon_metadata::<DefaultXxHasher>(3, 2, 16, 4, "u64");
@@ -1188,9 +1237,9 @@ mod tests {
             seed_derivation: m.seed_derivation.clone(),
             input_encoding: m.input_encoding.clone(),
             seed_list: m.seed_list.clone(),
-            layer_size: m.layer_size,
-            sketch_row: m.sketch_row,
-            sketch_col: m.sketch_col,
+            layers: m.layers,
+            rows: m.rows,
+            cols: m.cols,
             heap_size: m.heap_size,
             key_type: m.key_type.clone(),
             bogus_field: 7,
@@ -1202,9 +1251,9 @@ mod tests {
             seed_derivation: m.seed_derivation.clone(),
             input_encoding: m.input_encoding.clone(),
             seed_list: m.seed_list.clone(),
-            layer_size: m.layer_size,
-            sketch_row: m.sketch_row,
-            sketch_col: m.sketch_col,
+            layers: m.layers,
+            rows: m.rows,
+            cols: m.cols,
             heap_size: m.heap_size,
         };
         assert!(

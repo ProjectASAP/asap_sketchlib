@@ -243,8 +243,8 @@ These produce/consume the **ASAPv1** wire envelope (kind `0x1a 0x00`) — see th
 sketch is rejected.
 
 The whole `UnivMonQConfig` is construction config and lives in the metadata
-(`seed_index`, `levels`, `width`, `width_halving_period`, `depth`,
-`counter_type`, `candidates`, `ordered_samples`), so every per-level width, the
+(`seed_index`, `layers`, `top_layer_cols`, `cols_halving_period`, `rows`,
+`counter_type`, `heap_size`, `ordered_samples`), so every per-level width, the
 hash layout and each level's candidate capacity are derived and none is stored.
 The payload is `[counters, candidate_lens, candidate_keys, candidate_scores,
 ever_evicted, count, min, max, source_id, next_sequence,
@@ -252,7 +252,8 @@ occurrence_priority_high, occurrence_priority_low, occurrence_keys]`.
 
 Both heaps — a level's candidate min-heap and the ordered sample — are rebuilt
 on decode, so the payload pins an order instead: candidates ascending by key,
-occurrences ascending by `(priority_high, priority_low, key)`. `source_id` and
+occurrences ascending by `(priority_high, priority_low, key)`. A decode rejects
+any other order. `source_id` and
 `next_sequence` are carried so a decoded sketch continues the same occurrence
 draw sequence; `min` and `max` travel as msgpack nil when the sketch is empty.
 `ever_evicted` is carried too — a full candidate table does not say whether it

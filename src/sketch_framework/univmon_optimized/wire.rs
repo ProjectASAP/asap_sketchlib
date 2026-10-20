@@ -26,6 +26,7 @@ use crate::sketch_framework::univmon::wire::{
     check_layer_size, decode_pyramid, encode_pyramid, pyramid_key_type, pyramid_state,
     rebuild_layers, update_mode_of, update_mode_tag,
 };
+use crate::sketches::countminsketch_topk::heap_wire::check_empty_key_type;
 use crate::{DefaultXxHasher, HashProfile};
 
 use super::UnivMonPyramid;
@@ -46,12 +47,12 @@ pub(crate) struct PyramidMetadata {
     pub(crate) seed_derivation: String,
     pub(crate) input_encoding: String,
     pub(crate) seed_list: Vec<u64>,
-    pub(crate) layer_size: u32,
+    pub(crate) layers: u32,
     pub(crate) elephant_layers: u32,
-    pub(crate) elephant_row: u32,
-    pub(crate) elephant_col: u32,
-    pub(crate) mouse_row: u32,
-    pub(crate) mouse_col: u32,
+    pub(crate) elephant_rows: u32,
+    pub(crate) elephant_cols: u32,
+    pub(crate) mouse_rows: u32,
+    pub(crate) mouse_cols: u32,
     pub(crate) heap_size: u32,
     pub(crate) key_type: String,
 }
@@ -59,17 +60,17 @@ pub(crate) struct PyramidMetadata {
 /// The five layout fields, in the order the metadata carries them.
 pub(crate) struct PyramidLayout {
     pub(crate) elephant_layers: u32,
-    pub(crate) elephant_row: u32,
-    pub(crate) elephant_col: u32,
-    pub(crate) mouse_row: u32,
-    pub(crate) mouse_col: u32,
+    pub(crate) elephant_rows: u32,
+    pub(crate) elephant_cols: u32,
+    pub(crate) mouse_rows: u32,
+    pub(crate) mouse_cols: u32,
 }
 
 /// Builds the UnivMonPyramid descriptor metadata from the hasher's
 /// [`HashProfile`], so the wire bytes truthfully describe how the sketch was
 /// hashed.
 pub(crate) fn pyramid_metadata<H: HashProfile>(
-    layer_size: u32,
+    layers: u32,
     layout: &PyramidLayout,
     heap_size: u32,
     key_type: &str,
@@ -81,12 +82,12 @@ pub(crate) fn pyramid_metadata<H: HashProfile>(
         seed_derivation: H::SEED_DERIVATION.to_string(),
         input_encoding: H::INPUT_ENCODING.to_string(),
         seed_list: H::seed_list(),
-        layer_size,
+        layers,
         elephant_layers: layout.elephant_layers,
-        elephant_row: layout.elephant_row,
-        elephant_col: layout.elephant_col,
-        mouse_row: layout.mouse_row,
-        mouse_col: layout.mouse_col,
+        elephant_rows: layout.elephant_rows,
+        elephant_cols: layout.elephant_cols,
+        mouse_rows: layout.mouse_rows,
+        mouse_cols: layout.mouse_cols,
         heap_size,
         key_type: key_type.to_string(),
     }
@@ -94,50 +95,50 @@ pub(crate) fn pyramid_metadata<H: HashProfile>(
 
 /// Per-layer `(rows, cols)`: elephant while `layer < elephant_layers`, mouse
 /// after.
-fn geometry_of(layer_size: usize, layout: &PyramidLayout) -> Vec<(usize, usize)> {
-    (0..layer_size)
+fn geometry_of(layers: usize, layout: &PyramidLayout) -> Vec<(usize, usize)> {
+    (0..layers)
         .map(|layer| {
             if layer < layout.elephant_layers as usize {
-                (layout.elephant_row as usize, layout.elephant_col as usize)
+                (layout.elephant_rows as usize, layout.elephant_cols as usize)
             } else {
-                (layout.mouse_row as usize, layout.mouse_col as usize)
+                (layout.mouse_rows as usize, layout.mouse_cols as usize)
             }
         })
         .collect()
 }
 
-/// Rejects a layout the algorithm never has: `layer_size`, `heap_size` and
+/// Rejects a layout the algorithm never has: `layers`, `heap_size` and
 /// both tiers' dimensions are each positive. The encoder and the decoder both
 /// call this, so the two doors cannot drift.
 fn check_layout_dimensions(
-    layer_size: usize,
+    layers: usize,
     heap_size: usize,
-    elephant_row: usize,
-    elephant_col: usize,
-    mouse_row: usize,
-    mouse_col: usize,
+    elephant_rows: usize,
+    elephant_cols: usize,
+    mouse_rows: usize,
+    mouse_cols: usize,
 ) -> Result<(), String> {
-    if layer_size == 0
+    if layers == 0
         || heap_size == 0
-        || elephant_row == 0
-        || elephant_col == 0
-        || mouse_row == 0
-        || mouse_col == 0
+        || elephant_rows == 0
+        || elephant_cols == 0
+        || mouse_rows == 0
+        || mouse_cols == 0
     {
         return Err(format!(
-            "UnivMonPyramid layer_size, heap_size and both tiers' dimensions must be non-zero: layer_size={layer_size}, elephant_row={elephant_row}, elephant_col={elephant_col}, mouse_row={mouse_row}, mouse_col={mouse_col}, heap_size={heap_size}"
+            "UnivMonPyramid layers, heap_size and both tiers' dimensions must be non-zero: layers={layers}, elephant_rows={elephant_rows}, elephant_cols={elephant_cols}, mouse_rows={mouse_rows}, mouse_cols={mouse_cols}, heap_size={heap_size}"
         ));
     }
     Ok(())
 }
 
 /// Total accumulators the declared layout implies, one per row per layer.
-fn accumulator_count(layer_size: usize, layout: &PyramidLayout) -> Option<usize> {
-    let elephants = layer_size.min(layout.elephant_layers as usize);
-    let mice = layer_size - elephants;
+fn accumulator_count(layers: usize, layout: &PyramidLayout) -> Option<usize> {
+    let elephants = layers.min(layout.elephant_layers as usize);
+    let mice = layers - elephants;
     elephants
-        .checked_mul(layout.elephant_row as usize)?
-        .checked_add(mice.checked_mul(layout.mouse_row as usize)?)
+        .checked_mul(layout.elephant_rows as usize)?
+        .checked_add(mice.checked_mul(layout.mouse_rows as usize)?)
 }
 
 // Wire serialization for UnivMonPyramid. `wire` is a descendant of the sketch
@@ -173,10 +174,10 @@ impl UnivMonPyramid {
         };
         let layout = PyramidLayout {
             elephant_layers: field("elephant_layers", self.elephant_layers)?,
-            elephant_row: field("elephant_row", self.elephant_row)?,
-            elephant_col: field("elephant_col", self.elephant_col)?,
-            mouse_row: field("mouse_row", self.mouse_row)?,
-            mouse_col: field("mouse_col", self.mouse_col)?,
+            elephant_rows: field("elephant_rows", self.elephant_row)?,
+            elephant_cols: field("elephant_cols", self.elephant_col)?,
+            mouse_rows: field("mouse_rows", self.mouse_row)?,
+            mouse_cols: field("mouse_cols", self.mouse_col)?,
         };
         let geometry = geometry_of(self.layer_size, &layout);
         let state = pyramid_state(
@@ -189,7 +190,7 @@ impl UnivMonPyramid {
         )?;
         let key_type = pyramid_key_type(&state.entries)?;
         let metadata = rmp_serde::to_vec_named(&pyramid_metadata::<DefaultXxHasher>(
-            field("layer_size", self.layer_size)?,
+            field("layers", self.layer_size)?,
             &layout,
             field("heap_size", self.heap_size)?,
             key_type,
@@ -217,14 +218,14 @@ impl UnivMonPyramid {
         let meta: PyramidMetadata = envelope::decode_block(metadata)?;
         let layout = PyramidLayout {
             elephant_layers: meta.elephant_layers,
-            elephant_row: meta.elephant_row,
-            elephant_col: meta.elephant_col,
-            mouse_row: meta.mouse_row,
-            mouse_col: meta.mouse_col,
+            elephant_rows: meta.elephant_rows,
+            elephant_cols: meta.elephant_cols,
+            mouse_rows: meta.mouse_rows,
+            mouse_cols: meta.mouse_cols,
         };
         if meta
             != pyramid_metadata::<DefaultXxHasher>(
-                meta.layer_size,
+                meta.layers,
                 &layout,
                 meta.heap_size,
                 &meta.key_type,
@@ -234,44 +235,46 @@ impl UnivMonPyramid {
                 "ASAPv1 UnivMonPyramid envelope: metadata mismatch".to_string(),
             ));
         }
-        let (layer_size, heap_size) = (meta.layer_size as usize, meta.heap_size as usize);
-        let (elephant_row, elephant_col, mouse_row, mouse_col) = (
-            meta.elephant_row as usize,
-            meta.elephant_col as usize,
-            meta.mouse_row as usize,
-            meta.mouse_col as usize,
+        let (layers, heap_size) = (meta.layers as usize, meta.heap_size as usize);
+        let (elephant_rows, elephant_cols, mouse_rows, mouse_cols) = (
+            meta.elephant_rows as usize,
+            meta.elephant_cols as usize,
+            meta.mouse_rows as usize,
+            meta.mouse_cols as usize,
         );
         check_layout_dimensions(
-            layer_size,
+            layers,
             heap_size,
-            elephant_row,
-            elephant_col,
-            mouse_row,
-            mouse_col,
+            elephant_rows,
+            elephant_cols,
+            mouse_rows,
+            mouse_cols,
         )
         .map_err(RmpDecodeError::Uncategorized)?;
-        check_layer_size("UnivMonPyramid", layer_size).map_err(RmpDecodeError::Uncategorized)?;
+        check_layer_size("UnivMonPyramid", layers).map_err(RmpDecodeError::Uncategorized)?;
         let decoded = decode_pyramid(&meta.key_type, payload)?;
+        check_empty_key_type(&meta.key_type, decoded.entries.is_empty())
+            .map_err(RmpDecodeError::Uncategorized)?;
         // The declared layout is measured against the accumulators the payload
         // actually carries before the geometry is built from it.
-        if accumulator_count(layer_size, &layout) != Some(decoded.l2.len()) {
+        if accumulator_count(layers, &layout) != Some(decoded.l2.len()) {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "UnivMonPyramid declares a layout the payload's {} accumulators do not match",
                 decoded.l2.len()
             )));
         }
-        let geometry = geometry_of(layer_size, &layout);
+        let geometry = geometry_of(layers, &layout);
         let (l2_sketch_layers, hh_layers, candidate_complete, bucket_size, mode_tag) =
             rebuild_layers(&geometry, heap_size, decoded)?;
         Ok(UnivMonPyramid {
             l2_sketch_layers,
             hh_layers,
-            layer_size,
+            layer_size: layers,
             elephant_layers: meta.elephant_layers as usize,
-            elephant_row,
-            elephant_col,
-            mouse_row,
-            mouse_col,
+            elephant_row: elephant_rows,
+            elephant_col: elephant_cols,
+            mouse_row: mouse_rows,
+            mouse_col: mouse_cols,
             heap_size,
             bucket_size,
             update_mode: update_mode_of(mode_tag)?,
@@ -327,12 +330,12 @@ mod tests {
         assert_eq!(meta.metadata_version, 1);
         assert_eq!(
             (
-                meta.layer_size,
+                meta.layers,
                 meta.elephant_layers,
-                meta.elephant_row,
-                meta.elephant_col,
-                meta.mouse_row,
-                meta.mouse_col,
+                meta.elephant_rows,
+                meta.elephant_cols,
+                meta.mouse_rows,
+                meta.mouse_cols,
                 meta.heap_size,
             ),
             (4, 2, 3, 16, 2, 8, 4)
@@ -420,6 +423,22 @@ mod tests {
     }
 
     /// An empty pyramid has exactly one encoding.
+    /// An empty pyramid carries `key_type` `"u64"`; any other name is rejected.
+    #[test]
+    fn pyramid_empty_must_carry_the_u64_key_type() {
+        use crate::sketches::countminsketch_topk::heap_wire::relabel_u64_key_type;
+        let bytes = UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4)
+            .serialize_to_bytes()
+            .expect("serialize");
+        let problem = UnivMonPyramid::deserialize_from_bytes(&relabel_u64_key_type(
+            &bytes, "key_type", "string",
+        ))
+        .map(drop)
+        .expect_err("an empty pyramid under another key_type must be rejected")
+        .to_string();
+        assert!(problem.contains("empty key set"), "{problem}");
+    }
+
     #[test]
     fn pyramid_empty_has_one_encoding() {
         let left = UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4);
@@ -508,13 +527,13 @@ mod tests {
 
         let layout = PyramidLayout {
             elephant_layers: meta.elephant_layers,
-            elephant_row: meta.elephant_row,
-            elephant_col: meta.elephant_col,
-            mouse_row: meta.mouse_row,
-            mouse_col: meta.mouse_col,
+            elephant_rows: meta.elephant_rows,
+            elephant_cols: meta.elephant_cols,
+            mouse_rows: meta.mouse_rows,
+            mouse_cols: meta.mouse_cols,
         };
         let alt =
-            pyramid_metadata::<AltHasher>(meta.layer_size, &layout, meta.heap_size, &meta.key_type);
+            pyramid_metadata::<AltHasher>(meta.layers, &layout, meta.heap_size, &meta.key_type);
         let (_, _, payload) = envelope::split(&encoded).expect("split");
         let forged = envelope::encode(
             PYRAMID_KIND,
@@ -562,7 +581,7 @@ mod tests {
     }
 
     /// Fail closed (not panic) on crafted layouts, layer counts and heap
-    /// capacities, including a `layer_size` far larger than the payload
+    /// capacities, including a `layers` far larger than the payload
     /// carries.
     #[test]
     fn pyramid_rejects_crafted_shapes() {
@@ -570,15 +589,15 @@ mod tests {
         let base = metadata_of(&encoded);
         let payload = payload_of::<String>(&encoded);
 
-        let shaped = |layer_size, layout: PyramidLayout, heap_size| {
-            pyramid_metadata::<DefaultXxHasher>(layer_size, &layout, heap_size, &base.key_type)
+        let shaped = |layers, layout: PyramidLayout, heap_size| {
+            pyramid_metadata::<DefaultXxHasher>(layers, &layout, heap_size, &base.key_type)
         };
         let layout = || PyramidLayout {
             elephant_layers: 2,
-            elephant_row: 3,
-            elephant_col: 16,
-            mouse_row: 2,
-            mouse_col: 8,
+            elephant_rows: 3,
+            elephant_cols: 16,
+            mouse_rows: 2,
+            mouse_cols: 8,
         };
         let cases = [
             shaped(u32::MAX, layout(), 4),
@@ -587,7 +606,7 @@ mod tests {
             shaped(
                 4,
                 PyramidLayout {
-                    elephant_col: 0,
+                    elephant_cols: 0,
                     ..layout()
                 },
                 4,
@@ -595,7 +614,7 @@ mod tests {
             shaped(
                 4,
                 PyramidLayout {
-                    elephant_row: 0,
+                    elephant_rows: 0,
                     ..layout()
                 },
                 4,
@@ -603,7 +622,7 @@ mod tests {
             shaped(
                 4,
                 PyramidLayout {
-                    mouse_row: 0,
+                    mouse_rows: 0,
                     ..layout()
                 },
                 4,
@@ -611,7 +630,7 @@ mod tests {
             shaped(
                 4,
                 PyramidLayout {
-                    mouse_col: 0,
+                    mouse_cols: 0,
                     ..layout()
                 },
                 4,
@@ -619,8 +638,8 @@ mod tests {
             shaped(
                 4,
                 PyramidLayout {
-                    mouse_row: MATRIX_MAX_ROWS as u32,
-                    mouse_col: 4096,
+                    mouse_rows: MATRIX_MAX_ROWS as u32,
+                    mouse_cols: 4096,
                     ..layout()
                 },
                 4,
@@ -643,8 +662,8 @@ mod tests {
         empty.keys.clear();
         empty.heap_counts.clear();
         let zero_rows = PyramidLayout {
-            elephant_row: 0,
-            mouse_row: 0,
+            elephant_rows: 0,
+            mouse_rows: 0,
             ..layout()
         };
         let problem = UnivMonPyramid::deserialize_from_bytes(&crafted(
@@ -674,8 +693,8 @@ mod tests {
         one_tier.insert(&DataInput::U64(7), 3);
         let encoded = one_tier.serialize_to_bytes().expect("serialize");
         let mut meta = metadata_of(&encoded);
-        meta.mouse_row = 0;
-        meta.mouse_col = 0;
+        meta.mouse_rows = 0;
+        meta.mouse_cols = 0;
         let payload = payload_of::<u64>(&encoded);
         let problem = UnivMonPyramid::deserialize_from_bytes(&crafted(&meta, &payload))
             .expect_err("a zero mouse dimension must be rejected")
@@ -712,20 +731,20 @@ mod tests {
     #[test]
     fn pyramid_refuses_to_serialize_a_zero_dimension() {
         for zero in [
-            "layer_size",
+            "layers",
             "heap_size",
-            "elephant_row",
-            "elephant_col",
-            "mouse_row",
-            "mouse_col",
+            "elephant_rows",
+            "elephant_cols",
+            "mouse_rows",
+            "mouse_cols",
         ] {
             let mut pyramid = UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4);
             match zero {
-                "layer_size" => pyramid.layer_size = 0,
+                "layers" => pyramid.layer_size = 0,
                 "heap_size" => pyramid.heap_size = 0,
-                "elephant_row" => pyramid.elephant_row = 0,
-                "elephant_col" => pyramid.elephant_col = 0,
-                "mouse_row" => pyramid.mouse_row = 0,
+                "elephant_rows" => pyramid.elephant_row = 0,
+                "elephant_cols" => pyramid.elephant_col = 0,
+                "mouse_rows" => pyramid.mouse_row = 0,
                 _ => pyramid.mouse_col = 0,
             }
             let problem = match pyramid.serialize_to_bytes() {
@@ -736,7 +755,7 @@ mod tests {
         }
     }
 
-    /// The layer finder shifts a 64-bit hash by up to `layer_size - 1`, so
+    /// The layer finder shifts a 64-bit hash by up to `layers - 1`, so
     /// [`MAX_LAYER_SIZE`] layers is the ceiling: the boundary round-trips and a
     /// deeper pyramid is refused at the decode door.
     #[test]
@@ -747,7 +766,7 @@ mod tests {
 
         let layers = MAX_LAYER_SIZE + 1;
         let mut meta = metadata_of(&encoded);
-        meta.layer_size = layers as u32;
+        meta.layers = layers as u32;
         let mut payload: PyramidPayload<u64> = payload_of(&encoded);
         payload.counts = vec![0; 2 * (2 * 16) + (layers - 2) * (2 * 8)];
         payload.l2 = vec![0; 2 * layers];
@@ -795,12 +814,12 @@ mod tests {
             seed_derivation: String,
             input_encoding: String,
             seed_list: Vec<u64>,
-            layer_size: u32,
+            layers: u32,
             elephant_layers: u32,
-            elephant_row: u32,
-            elephant_col: u32,
-            mouse_row: u32,
-            mouse_col: u32,
+            elephant_rows: u32,
+            elephant_cols: u32,
+            mouse_rows: u32,
+            mouse_cols: u32,
             heap_size: u32,
             key_type: String,
             bogus_field: u8, // key not in PyramidMetadata
@@ -813,20 +832,20 @@ mod tests {
             seed_derivation: String,
             input_encoding: String,
             seed_list: Vec<u64>,
-            layer_size: u32,
+            layers: u32,
             elephant_layers: u32,
-            elephant_row: u32,
-            elephant_col: u32,
-            mouse_row: u32,
+            elephant_rows: u32,
+            elephant_cols: u32,
+            mouse_rows: u32,
             heap_size: u32,
             key_type: String,
         }
         let layout = PyramidLayout {
             elephant_layers: 2,
-            elephant_row: 3,
-            elephant_col: 16,
-            mouse_row: 2,
-            mouse_col: 8,
+            elephant_rows: 3,
+            elephant_cols: 16,
+            mouse_rows: 2,
+            mouse_cols: 8,
         };
         let m = pyramid_metadata::<DefaultXxHasher>(4, &layout, 4, "u64");
         let extra = WithExtra {
@@ -836,12 +855,12 @@ mod tests {
             seed_derivation: m.seed_derivation.clone(),
             input_encoding: m.input_encoding.clone(),
             seed_list: m.seed_list.clone(),
-            layer_size: m.layer_size,
+            layers: m.layers,
             elephant_layers: m.elephant_layers,
-            elephant_row: m.elephant_row,
-            elephant_col: m.elephant_col,
-            mouse_row: m.mouse_row,
-            mouse_col: m.mouse_col,
+            elephant_rows: m.elephant_rows,
+            elephant_cols: m.elephant_cols,
+            mouse_rows: m.mouse_rows,
+            mouse_cols: m.mouse_cols,
             heap_size: m.heap_size,
             key_type: m.key_type.clone(),
             bogus_field: 7,
@@ -853,11 +872,11 @@ mod tests {
             seed_derivation: m.seed_derivation.clone(),
             input_encoding: m.input_encoding.clone(),
             seed_list: m.seed_list.clone(),
-            layer_size: m.layer_size,
+            layers: m.layers,
             elephant_layers: m.elephant_layers,
-            elephant_row: m.elephant_row,
-            elephant_col: m.elephant_col,
-            mouse_row: m.mouse_row,
+            elephant_rows: m.elephant_rows,
+            elephant_cols: m.elephant_cols,
+            mouse_rows: m.mouse_rows,
             heap_size: m.heap_size,
             key_type: m.key_type.clone(),
         };

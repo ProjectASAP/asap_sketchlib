@@ -12,6 +12,15 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **`TupleKey` and `KeyColumn`**, a heap key of typed columns (null, bool,
+  `i64`, `f64`, string) encoded into one canonical byte string, so a GROUP BY
+  over several columns keeps one CMSHeap or CSHeap candidate per tuple under
+  `key_type` `"bytes"`. The encoding is ASAPv1's tuple key (spec Section 2);
+  `-0.0` encodes as `0.0` and every `NaN` as one `NaN`.
+- **ASAPv1 golden fixtures for KMV, Bloom, Space-Saving, UniformSampling,
+  UnivMon Optimized, UnivMon-Q, ExponentialHistogram and EHSketchList**, so
+  every kind_id the spec marks implemented has one. The spec fixes Bloom's bit
+  order within a word: column `c` is bit `c mod 64`.
 - **`Vector3D<T>`**, filled in from a stub. A `rows x cols` grid whose every
   cell is a contiguous `depth`-length record, addressed by the same
   `MatrixFastHash` machinery as `Vector2D`. Reach for it when a cell is made
@@ -97,9 +106,38 @@ signals a backwards-compatible change.
   of the admitted updates; a consumer divides them by `p`. States and deltas
   merge only at equal rates. A sketch nested in another kind's state must hold
   `p = 1` to serialize.
+- **`CMSSpaceSaving` and `CSSpaceSaving`**: a Count-Min or Count Sketch
+  matrix beside a `SpaceSaving` summary of `capacity` counters. Every update
+  reaches both; `top_k(k)` ranks the summary's keys by their matrix estimate.
+  `insert_many` gives the summary the weight rounded up, or nothing when it is
+  not positive (`SpaceSavingCounter`). Merge adds the matrices and merges the
+  summaries, and panics on a dimension, admission-rate or capacity mismatch.
+  ASAPv1 kinds `0x1e 0x00` and `0x1f 0x00` (spec §3.24, §3.25) for `i32`,
+  `i64` and `f64` `Vector2D` matrices on either path, with no delta kind.
 
 ### Changed
 
+- **KLL, UnivMon and Hydra metadata keys follow the spec.** Compact KLL
+  writes `compaction_seed`; UnivMon writes `layers`, `rows` and `cols`; Hydra
+  writes `cell_*` for its counter params (`cell_rows`, `cell_cols`,
+  `cell_counter_type`, `cell_mode`, `cell_precision`, `cell_k`, `cell_m`,
+  `cell_item_type`, `cell_layers`, `cell_heap_size`, `cell_key_type`). Bytes
+  with the old keys are rejected; the affected goldens are regenerated.
+- **UnivMon Optimized and UnivMon-Q metadata keys follow the spec.**
+  UnivMon Optimized writes `layers`, `elephant_rows`, `elephant_cols`,
+  `mouse_rows` and `mouse_cols`; UnivMon-Q writes `layers`, `top_layer_cols`,
+  `cols_halving_period`, `rows` and `heap_size`. Bytes with the old keys are
+  rejected.
+- **An empty heap or summary must carry `key_type` `"u64"`.** CMSHeap, CSHeap,
+  their deltas, UnivMon, UnivMon Optimized, Hydra's UnivMon counter,
+  Space-Saving, CMSSpaceSaving and CSSpaceSaving reject one under any other
+  name.
+- **CMSHeap, CSHeap, their deltas, UnivMon, UnivMon Optimized and Hydra's
+  UnivMon counter read a `"string"` key from msgpack `str` alone**; UTF-8
+  `bin` keys relabelled `"string"` are rejected.
+- **Space-Saving and UnivMon-Q ASAPv1 decodes reject entries out of emitted
+  order.** Space-Saving also rejects a key held twice judged by its bits, so
+  two `NaN` keys fail on both doors.
 - **`HyperLogLogImpl::merge_delta` returns `Result<(), String>`**, an `Err`
   when the delta's admission rate differs from the state's.
 - **`EHSketchList::merge` and `EHBucket::to_merge` return `Result<(), String>`**,
@@ -139,6 +177,9 @@ signals a backwards-compatible change.
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
   stream: the CDF was sorted with `partial_cmp(..).unwrap()`. It sorts with
   `total_cmp`, as the three sibling sorts beside it already did.
+- `OctoRuntime::flush` could return before the aggregator had applied every
+  worker's flushed deltas, so a live read right after it could miss inputs. A
+  drain still pending when the workers stop is answered.
 
 ## [0.3.0] - 2026-09-07
 

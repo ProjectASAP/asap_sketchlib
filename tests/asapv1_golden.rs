@@ -14,13 +14,19 @@ use asap_sketchlib::common::input::HydraCounter;
 use asap_sketchlib::sketches::CountSketchDelta;
 use asap_sketchlib::sketches::hll::HllWireVariant;
 use asap_sketchlib::{
-    CMSHeap, CMSHeapDelta, CSHeap, CSHeapDelta, Classic, Coco, CocoBucket, Count, CountDelta,
-    CountL2HH, CountMin, CountMinDelta, DDSketch, DDSketchDelta, DataInput, DeltaResult, Elastic,
-    ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HeavyBucket, HllBucketListP14, HllSketch,
-    HllVariant, Hydra, HyperLogLog, HyperLogLogDelta, HyperLogLogHIPP12, HyperLogLogHIPP14,
-    HyperLogLogP12, HyperLogLogP14, KLL, KLLDynamic, L2HH, MessagePackCodec, RegularPath,
-    SetAggregator, UnivMon, Vector2D, peek_kind_id,
+    Bloom, DefaultXxHasher, EHBucket, EHSketchList, ExponentialHistogram, KeyColumn, SpaceSaving,
+    TupleKey, UnivMonPyramid, UnivMonQ, UnivMonQConfig,
 };
+use asap_sketchlib::{
+    CMSHeap, CMSHeapDelta, CMSSpaceSaving, CSHeap, CSHeapDelta, CSSpaceSaving, Classic, Coco,
+    CocoBucket, Count, CountDelta, CountL2HH, CountMin, CountMinDelta, DDSketch, DDSketchDelta,
+    DataInput, DeltaResult, Elastic, ErtlMLE, FastPath, HHHeap, HeapCount, HeapItem, HeavyBucket,
+    HllBucketListP14, HllSketch, HllVariant, Hydra, HyperLogLog, HyperLogLogDelta,
+    HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogP12, HyperLogLogP14, KLL, KLLDynamic, L2HH,
+    MessagePackCodec, RegularPath, SetAggregator, UnivMon, Vector2D, peek_kind_id,
+};
+#[cfg(feature = "experimental")]
+use asap_sketchlib::{KMV, UniformSampling};
 
 fn decode_hex(s: &str) -> Vec<u8> {
     let s = s.trim();
@@ -64,6 +70,16 @@ const GOLDEN_CMSHEAP_DELTA: &str =
 const GOLDEN_CSHEAP_STR: &str = include_str!("../asapv1_golden/csheap_i64_regular_2x4_strkeys.hex");
 const GOLDEN_CSHEAP_F64: &str = include_str!("../asapv1_golden/csheap_f64_fast_2x4_strkeys.hex");
 const GOLDEN_CSHEAP_DELTA: &str = include_str!("../asapv1_golden/csheap_i64_regular_2x4_delta.hex");
+const GOLDEN_CSHEAP_I64_TIE: &str =
+    include_str!("../asapv1_golden/csheap_i64_regular_2x4_i64tie.hex");
+const GOLDEN_CMSHEAP_TUPLE: &str =
+    include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_tuplekeys.hex");
+const GOLDEN_CSHEAP_TUPLE: &str =
+    include_str!("../asapv1_golden/csheap_i64_regular_2x4_tuplekeys.hex");
+const GOLDEN_CMSSS_STR: &str =
+    include_str!("../asapv1_golden/cmsspacesaving_i64_regular_2x3_strkeys.hex");
+const GOLDEN_CSSS_I64: &str =
+    include_str!("../asapv1_golden/csspacesaving_f64_fast_2x4_i64keys.hex");
 const GOLDEN_DD_POSITIVE: &str = include_str!("../asapv1_golden/ddsketch_positive_a001.hex");
 const GOLDEN_DD_SIGNED: &str = include_str!("../asapv1_golden/ddsketch_signed_a001.hex");
 const GOLDEN_DD_EMPTY: &str = include_str!("../asapv1_golden/ddsketch_empty_a001.hex");
@@ -95,6 +111,20 @@ const GOLDEN_CMS_ADMISSION: &str =
 const GOLDEN_CS_ADMISSION: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4_admission.hex");
 const GOLDEN_DD_ADMISSION: &str =
     include_str!("../asapv1_golden/ddsketch_signed_a001_admission.hex");
+#[cfg(feature = "experimental")]
+const GOLDEN_KMV: &str = include_str!("../asapv1_golden/kmv_k8.hex");
+const GOLDEN_BLOOM_REGULAR: &str = include_str!("../asapv1_golden/bloom_regular_3x128.hex");
+const GOLDEN_BLOOM_FAST: &str = include_str!("../asapv1_golden/bloom_fast_5x32.hex");
+const GOLDEN_SPACE_SAVING_I64: &str = include_str!("../asapv1_golden/space_saving_i64_c8.hex");
+const GOLDEN_SPACE_SAVING_BYTES: &str = include_str!("../asapv1_golden/space_saving_bytes_c3.hex");
+#[cfg(feature = "experimental")]
+const GOLDEN_UNIFORM: &str = include_str!("../asapv1_golden/uniform_sampling_r0p25.hex");
+const GOLDEN_PYRAMID: &str =
+    include_str!("../asapv1_golden/univmon_optimized_l5_e2_3x8_1x4_h6.hex");
+const GOLDEN_UNIVMON_Q: &str = include_str!("../asapv1_golden/univmon_q_i32_l3_c8_r3.hex");
+const GOLDEN_EHSL_CM: &str = include_str!("../asapv1_golden/ehsketchlist_cm_i32_fast_2x4.hex");
+const GOLDEN_EHSL_DD: &str = include_str!("../asapv1_golden/ehsketchlist_ddsketch_a001.hex");
+const GOLDEN_EH: &str = include_str!("../asapv1_golden/eh_w100_k2_cm_2x4.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
 fn p12_registers() -> Vec<u8> {
@@ -641,6 +671,31 @@ fn csheap_i64_regular_2x4_strkeys_matches_golden() {
     assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
+/// Signed heap counts; the `-3` tie emits by two's-complement bits, so
+/// `0, 1, i64::MIN, -1` rather than signed order.
+#[test]
+fn csheap_i64_regular_2x4_i64tie_matches_golden() {
+    type Heap = CSHeap<Vector2D<i64>, RegularPath>;
+    let want = decode_hex(GOLDEN_CSHEAP_I64_TIE);
+    let entries = i64_entries(&[
+        (-1, -3),
+        (-129, -40),
+        (1, -3),
+        (0, -3),
+        (i64::MIN, -3),
+        (2, 9),
+    ]);
+    let mut sketch = Heap::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_VALS[r][c]), 6);
+    *sketch.heap_mut() = heap_of(6, &entries);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Heap::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    assert_heap(decoded.heap(), 6, &entries);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
 /// `f64` heap counts are the unrounded signed median; the `-0.75` tie falls
 /// to the keys.
 #[test]
@@ -690,6 +745,176 @@ fn csheap_i64_regular_2x4_delta_matches_golden() {
     let expected = [-32, -1, 383, 65536, -130, -33, 32767, -4294967297];
     assert_eq!(state.cs().as_storage().as_slice(), expected.as_slice());
     assert_heap(state.heap(), 5, &entries);
+}
+
+// ---------------------------------------------------------------------------
+// Tuple keys: CMSHeap and CSHeap keys made of typed columns, each encoded as a
+// `bytes` key -> serialize == golden, round-trips back to the columns.
+// ---------------------------------------------------------------------------
+
+/// The tuples, named; `-0.0` and `NaN` take their canonical encodings.
+fn tuple(name: &str) -> TupleKey {
+    use KeyColumn::*;
+    TupleKey::new(match name {
+        "east443" => vec![Str("us-east".into()), I64(443), Bool(true)],
+        "east80" => vec![Str("us-east".into()), I64(80), Null],
+        "null" => vec![Null, I64(-1), F64(2.5)],
+        "zero" => vec![Str(String::new()), I64(i64::MIN), F64(-0.0)],
+        "nan" => vec![Str("é".into()), I64(0), F64(f64::NAN), Bool(false)],
+        other => panic!("no tuple {other}"),
+    })
+}
+
+fn tuple_entries(entries: &[(&str, i64)]) -> Vec<(HeapItem, i64)> {
+    entries
+        .iter()
+        .map(|&(name, count)| (HeapItem::Bytes(tuple(name).to_bytes().unwrap()), count))
+        .collect()
+}
+
+/// Every decoded heap key is a canonical tuple key naming one of `entries`.
+fn assert_tuple_keys<N: HeapCount>(heap: &HHHeap<N>, entries: &[(&str, i64)]) {
+    for item in heap.heap() {
+        let HeapItem::Bytes(bytes) = &item.key else {
+            panic!("expected a bytes key, got {:?}", item.key);
+        };
+        let key = TupleKey::from_bytes(bytes).expect("a tuple key");
+        assert_eq!(&key.to_bytes().unwrap(), bytes);
+        assert!(
+            entries
+                .iter()
+                .any(|&(name, _)| tuple(name).to_bytes().unwrap() == *bytes)
+        );
+    }
+}
+
+#[test]
+fn cmsheap_i64_regular_2x3_tuplekeys_matches_golden() {
+    let entries = [
+        ("zero", 1),
+        ("east80", 300),
+        ("null", 65536),
+        ("nan", 127),
+        ("east443", 300),
+    ];
+    check_cmsheap_i64_golden(GOLDEN_CMSHEAP_TUPLE, 5, &tuple_entries(&entries));
+    let decoded = CmsHeapI64::deserialize_from_bytes(&decode_hex(GOLDEN_CMSHEAP_TUPLE)).unwrap();
+    assert_tuple_keys(decoded.heap(), &entries);
+    let positive_zero = TupleKey::new(vec![
+        KeyColumn::Str(String::new()),
+        KeyColumn::I64(i64::MIN),
+        KeyColumn::F64(0.0),
+    ]);
+    let found = decoded
+        .heap()
+        .find_heap_item(&HeapItem::Bytes(positive_zero.to_bytes().unwrap()));
+    assert!(found.is_some(), "-0.0 and 0.0 are one tuple key");
+}
+
+#[test]
+fn csheap_i64_regular_2x4_tuplekeys_matches_golden() {
+    type Heap = CSHeap<Vector2D<i64>, RegularPath>;
+    let want = decode_hex(GOLDEN_CSHEAP_TUPLE);
+    let named = [
+        ("null", -33),
+        ("east443", 127),
+        ("nan", 65536),
+        ("zero", 127),
+    ];
+    let entries = tuple_entries(&named);
+    let mut sketch = Heap::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_VALS[r][c]), 6);
+    *sketch.heap_mut() = heap_of(6, &entries);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Heap::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    assert_heap(decoded.heap(), 6, &entries);
+    assert_tuple_keys(decoded.heap(), &named);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// CMSSpaceSaving / CSSpaceSaving: the matrix set directly and the summary built
+// by weighted inserts, whose triples do not depend on the hash.
+// ---------------------------------------------------------------------------
+
+/// Asserts `summary` has `capacity`, `total` and `ceiling` and holds exactly
+/// `entries` as `(key, count, error)`.
+fn assert_summary(
+    summary: &SpaceSaving,
+    capacity: usize,
+    total: u64,
+    ceiling: u64,
+    entries: &[(DataInput<'_>, u64, u64)],
+) {
+    assert_eq!(summary.capacity(), capacity);
+    assert_eq!(summary.total(), total);
+    assert_eq!(summary.min_count(), ceiling);
+    assert_eq!(summary.len(), entries.len());
+    for (key, count, error) in entries {
+        assert_eq!(summary.estimate(key), *count, "{key:?}");
+        assert_eq!(summary.error(key), *error, "{key:?}");
+    }
+}
+
+/// `aa` displaces `cold` (count 1) and carries it as error; the `7` tie falls
+/// to the keys, so `"aa"` precedes `"b"`.
+#[test]
+fn cmsspacesaving_i64_regular_2x3_strkeys_matches_golden() {
+    type Sketch = CMSSpaceSaving<Vector2D<i64>, RegularPath>;
+    let want = decode_hex(GOLDEN_CMSSS_STR);
+    let mut summary = SpaceSaving::with_capacity(4);
+    for (key, weight) in [
+        ("hot", 300),
+        ("warm", 128),
+        ("cold", 1),
+        ("b", 7),
+        ("aa", 6),
+    ] {
+        summary.insert_many(&DataInput::Str(key), weight);
+    }
+    let matrix = CountMin::from_storage(Vector2D::from_fn(2, 3, |r, c| I64_VALS[r][c]));
+    let sketch = Sketch::from_parts(matrix, summary);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Sketch::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i64> = I64_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cms().as_storage().as_slice(), flat.as_slice());
+    let entries = [
+        (DataInput::Str("hot"), 300, 0),
+        (DataInput::Str("warm"), 128, 0),
+        (DataInput::Str("aa"), 7, 1),
+        (DataInput::Str("b"), 7, 0),
+    ];
+    assert_summary(decoded.space_saving(), 4, 442, 7, &entries);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+/// `7` displaces `128` (count 5) and carries it as error; the `6` tie falls to
+/// the keys' two's-complement bits, so `7` precedes `i64::MIN`.
+#[test]
+fn csspacesaving_f64_fast_2x4_i64keys_matches_golden() {
+    type Sketch = CSSpaceSaving<Vector2D<f64>, FastPath>;
+    let want = decode_hex(GOLDEN_CSSS_I64);
+    let mut summary = SpaceSaving::with_capacity(3);
+    for (key, weight) in [(-1, 65536), (i64::MIN, 5), (128, 5), (7, 1), (i64::MIN, 1)] {
+        summary.insert_many(&DataInput::I64(key), weight);
+    }
+    let matrix = Count::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_F64_VALS[r][c]));
+    let sketch = Sketch::from_parts(matrix, summary);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Sketch::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<f64> = CS_F64_VALS.iter().flatten().copied().collect();
+    assert_eq!(decoded.cs().as_storage().as_slice(), flat.as_slice());
+    let entries = [
+        (DataInput::I64(-1), 65536, 0),
+        (DataInput::I64(7), 6, 5),
+        (DataInput::I64(i64::MIN), 6, 0),
+    ];
+    assert_summary(decoded.space_saving(), 3, 65548, 6, &entries);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
 // ---------------------------------------------------------------------------
@@ -1508,6 +1733,357 @@ fn ddsketch_signed_a001_admission_matches_golden() {
         DDSketch::deserialize_from_bytes(&decode_hex(GOLDEN_DD_ADMISSION)).expect("decode");
     assert_eq!(decoded.admission_rate(), 0.125);
     assert_eq!((decoded.get_count(), decoded.sum()), (18, 2523.90625));
+}
+
+// ---------------------------------------------------------------------------
+// KMV: digests inserted directly -> serialize == golden, round-trips.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "experimental")]
+#[test]
+fn kmv_k8_matches_golden() {
+    let want = decode_hex(GOLDEN_KMV);
+    let digests = [1u64, 127, 128, 65535, 4294967296, 0xfedc_ba98_7654_3210];
+    let mut sketch: KMV = KMV::new(8);
+    for digest in [128, 0xfedc_ba98_7654_3210, 1, 4294967296, 127, 65535] {
+        sketch.insert_by_hash(digest);
+    }
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded: KMV = KMV::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!(decoded.k, 8);
+    let mut held: Vec<u64> = decoded.k_vals.iter().copied().collect();
+    held.sort_unstable();
+    assert_eq!(held, digests);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// Bloom: the bit grid set through the filter's serde form -> serialize ==
+// golden, round-trips. Column `c` of row `r` is bit `c % 64` of word
+// `r * ceil(cols / 64) + c / 64`.
+// ---------------------------------------------------------------------------
+
+fn assert_bloom_golden<Mode: asap_sketchlib::BloomMode>(
+    golden: &str,
+    (rows, cols, mode): (usize, usize, &str),
+    words: &[u64],
+    inserted: u64,
+) {
+    let want = decode_hex(golden);
+    let state = ((words, rows, cols), inserted, mode);
+    let sketch: Bloom<Mode> =
+        rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state");
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = Bloom::<Mode>::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!((decoded.rows(), decoded.cols()), (rows, cols));
+    assert_eq!(decoded.inserted(), inserted);
+    let stride = cols.div_ceil(64);
+    for r in 0..rows {
+        for c in 0..cols {
+            let bit = words[r * stride + c / 64] >> (c % 64) & 1 == 1;
+            assert_eq!(decoded.as_bits().get(r, c), bit, "bit ({r}, {c})");
+        }
+    }
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+#[test]
+fn bloom_regular_3x128_matches_golden() {
+    let words = [1, 1 << 63, 0, 0xff, u64::MAX, 0x10000];
+    assert_bloom_golden::<RegularPath>(GOLDEN_BLOOM_REGULAR, (3, 128, "regular"), &words, 300);
+}
+
+#[test]
+fn bloom_fast_5x32_matches_golden() {
+    let words = [1, 0x8000_0000, 0, 0xffff_ffff, 0x10000];
+    assert_bloom_golden::<FastPath>(GOLDEN_BLOOM_FAST, (5, 32, "fast"), &words, 9);
+}
+
+// ---------------------------------------------------------------------------
+// Space-Saving: the triples set through the summary's serde form, seated out
+// of emitted order -> serialize == golden, round-trips.
+// ---------------------------------------------------------------------------
+
+fn assert_space_saving_golden(
+    golden: &str,
+    capacity: usize,
+    total: u64,
+    discarded_max: u64,
+    emitted: &[(HeapItem, u64, u64)],
+    min_count: u64,
+) {
+    let want = decode_hex(golden);
+    let mut seated = emitted.to_vec();
+    seated.reverse();
+    let state = (capacity, total, discarded_max, seated);
+    let sketch: SpaceSaving =
+        rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state");
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded: SpaceSaving = SpaceSaving::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!((decoded.capacity(), decoded.total()), (capacity, total));
+    assert_eq!(decoded.min_count(), min_count);
+    let mut held = decoded.entries();
+    held.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    let mut expected = emitted.to_vec();
+    expected.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    assert_eq!(held, expected);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+/// The count-5 tie emits by two's-complement bits: `0, 1, i64::MIN, -129`.
+#[test]
+fn space_saving_i64_c8_matches_golden() {
+    let emitted = [
+        (-1, 70000, 0),
+        (300, 9, 2),
+        (0, 5, 0),
+        (1, 5, 1),
+        (i64::MIN, 5, 4),
+        (-129, 5, 0),
+    ]
+    .map(|(key, count, error)| (HeapItem::I64(key), count, error));
+    assert_space_saving_golden(GOLDEN_SPACE_SAVING_I64, 8, 70030, 4, &emitted, 4);
+}
+
+/// A full summary: `min_count` is its smallest count. `b""` precedes `b"ab"`.
+#[test]
+fn space_saving_bytes_c3_matches_golden() {
+    let emitted = [(&b"\xff\x00"[..], 9, 0), (b"", 4, 1), (b"ab", 4, 0)]
+        .map(|(key, count, error)| (HeapItem::Bytes(key.to_vec()), count, error));
+    assert_space_saving_golden(GOLDEN_SPACE_SAVING_BYTES, 3, 20, 3, &emitted, 4);
+}
+
+// ---------------------------------------------------------------------------
+// UniformSampling: entries and running scalars set through the sampler's serde
+// form -> serialize == golden, round-trips.
+// ---------------------------------------------------------------------------
+
+/// The priority-3 tie orders `-0.0` before `0.0`; a `NaN` sample is legal.
+#[cfg(feature = "experimental")]
+#[test]
+fn uniform_sampling_r0p25_matches_golden() {
+    let want = decode_hex(GOLDEN_UNIFORM);
+    let entries = [
+        (3u64, -0.0f64),
+        (3, 0.0),
+        (1 << 63, 1e300),
+        (u64::MAX, f64::NAN),
+    ];
+    let state = (0.25f64, 20u64, 0x0123_4567_89ab_cdefu64, entries);
+    let sketch: UniformSampling =
+        rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state");
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = UniformSampling::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!((decoded.sample_rate(), decoded.total_seen()), (0.25, 20));
+    let bits: Vec<u64> = decoded.samples().iter().map(|v| v.to_bits()).collect();
+    let expected: Vec<u64> = entries.iter().map(|(_, v)| v.to_bits()).collect();
+    assert_eq!(bits, expected);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// UnivMon Optimized: 5 layers, elephant tier 2 layers of 3x8, mouse tier 1x4,
+// heap capacity 6. Cells through `apply_delta`, heap entries through `update`
+// -> serialize == golden, round-trips.
+// ---------------------------------------------------------------------------
+
+/// Each layer's rows, and each layer's heap `(key, count)`.
+fn pyramid_layers() -> Vec<Vec<Vec<i32>>> {
+    vec![
+        vec![
+            vec![0, 127, -1, 0, 0, 128, 0, -33],
+            vec![65536, 0, 0, 0, 0, 0, 0, -32768],
+            vec![0, 0, 0, 0, 0, 0, 300, 0],
+        ],
+        vec![
+            vec![5, 0, 0, 0, 0, 0, 0, 0],
+            vec![0, 0, -3, 0, 0, 0, 0, 0],
+            vec![0, 0, 0, 0, 0, 0, 0, 2],
+        ],
+        vec![vec![0, 4, 0, -2]],
+        vec![vec![1, 0, 0, 0]],
+        vec![vec![0, 0, 0, 0]],
+    ]
+}
+
+const PYRAMID_HEAPS: [&[(&str, i64)]; 5] = [
+    &[("gamma", 7), ("alpha", 40), ("beta", 7)],
+    &[("delta", 3)],
+    &[],
+    &[("eps", 1)],
+    &[],
+];
+
+#[test]
+fn univmon_optimized_l5_e2_3x8_1x4_h6_matches_golden() {
+    let want = decode_hex(GOLDEN_PYRAMID);
+    let mut pyramid = UnivMonPyramid::new(6, 2, 3, 8, 1, 4, 5);
+    for (layer, rows) in pyramid_layers().iter().enumerate() {
+        for (row, values) in rows.iter().enumerate() {
+            for (col, &value) in values.iter().enumerate() {
+                pyramid.l2_sketch_layers[layer].apply_delta(CountDelta {
+                    row: row as u32,
+                    col: col as u32,
+                    value,
+                });
+            }
+        }
+        for &(key, count) in PYRAMID_HEAPS[layer] {
+            pyramid.hh_layers[layer].update(&DataInput::Str(key), count);
+        }
+    }
+    pyramid.bucket_size = 70;
+    assert_eq!(pyramid.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = UnivMonPyramid::deserialize_from_bytes(&want).expect("decode");
+    let shape = (
+        decoded.layer_size,
+        decoded.elephant_layers,
+        decoded.elephant_row,
+        decoded.elephant_col,
+        decoded.mouse_row,
+        decoded.mouse_col,
+        decoded.heap_size,
+        decoded.bucket_size,
+    );
+    assert_eq!(shape, (5, 2, 3, 8, 1, 4, 6, 70));
+    for (layer, rows) in pyramid_layers().iter().enumerate() {
+        let L2HH::COUNT(counter) = &decoded.l2_sketch_layers[layer];
+        let flat: Vec<i64> = rows.iter().flatten().map(|&v| i64::from(v)).collect();
+        assert_eq!(counter.as_storage().as_slice(), flat.as_slice());
+        let mut heap: Vec<(String, i64)> = decoded.hh_layers[layer]
+            .heap()
+            .iter()
+            .map(|item| (format!("{:?}", item.key), item.count))
+            .collect();
+        heap.sort();
+        let mut expected: Vec<(String, i64)> = PYRAMID_HEAPS[layer]
+            .iter()
+            .map(|&(key, count)| (format!("{:?}", HeapItem::String(key.to_string())), count))
+            .collect();
+        expected.sort();
+        assert_eq!(heap, expected, "layer {layer} heap");
+    }
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// UnivMon-Q: decode the golden, check the state through the public accessors,
+// re-serialize byte-identically. Its fields are private, so the known state is
+// reached by decoding; each candidate key hashes into the layer it sits in.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn univmon_q_i32_l3_c8_r3_matches_golden() {
+    let want = decode_hex(GOLDEN_UNIVMON_Q);
+    let decoded = UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&want).expect("decode");
+    let config = decoded.config();
+    let expected = UnivMonQConfig {
+        levels: 3,
+        width: 8,
+        width_halving_period: 1,
+        depth: 3,
+        counter_bits: 32,
+        candidates: 2,
+        ordered_samples: 3,
+        hash_seed: 5,
+    };
+    assert_eq!(config, expected);
+    assert_eq!(decoded.source_id(), 7);
+    assert_eq!(decoded.count(), 12);
+    assert_eq!((decoded.min(), decoded.max()), (Some(-2.5), Some(5.0)));
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+// ---------------------------------------------------------------------------
+// EHSketchList and ExponentialHistogram: nested blocks are the variant's own
+// metadata and payload, verbatim.
+// ---------------------------------------------------------------------------
+
+type EhCm = CountMin<Vector2D<i32>, FastPath>;
+
+fn eh_cm(cells: [[i32; 4]; 2]) -> EHSketchList {
+    EHSketchList::CM(EhCm::from_storage(Vector2D::from_fn(2, 4, |r, c| {
+        cells[r][c]
+    })))
+}
+
+fn eh_cm_cells(sketch: &EHSketchList) -> Vec<i32> {
+    match sketch {
+        EHSketchList::CM(cm) => cm.as_storage().as_slice().to_vec(),
+        other => panic!("expected a Count-Min, got {}", other.sketch_type()),
+    }
+}
+
+#[test]
+fn ehsketchlist_cm_i32_fast_2x4_matches_golden() {
+    let want = decode_hex(GOLDEN_EHSL_CM);
+    let cells = [[127, -1, 0, 65536], [-32768, 128, i32::MAX, i32::MIN]];
+    assert_eq!(eh_cm(cells).serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = EHSketchList::deserialize_from_bytes(&want).expect("decode");
+    let flat: Vec<i32> = cells.iter().flatten().copied().collect();
+    assert_eq!(eh_cm_cells(&decoded), flat);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+/// The nested blocks are `ddsketch_signed_a001`'s metadata and payload.
+#[test]
+fn ehsketchlist_ddsketch_a001_matches_golden() {
+    let want = decode_hex(GOLDEN_EHSL_DD);
+    let dd = DDSketch::deserialize_from_bytes(&decode_hex(GOLDEN_DD_SIGNED)).expect("dd");
+    let sketch = EHSketchList::DDS(dd);
+    assert_eq!(sketch.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = EHSketchList::deserialize_from_bytes(&want).expect("decode");
+    let EHSketchList::DDS(inner) = &decoded else {
+        panic!("expected a DDSketch, got {}", decoded.sketch_type());
+    };
+    assert_eq!(
+        inner.serialize_to_bytes().expect("inner"),
+        decode_hex(GOLDEN_DD_SIGNED)
+    );
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
+}
+
+const EH_BUCKETS: [([[i32; 4]; 2], usize, u64, u64); 2] = [
+    ([[1, 0, 2, 0], [0, 3, 0, 0]], 3, 10, 30),
+    ([[0, 0, 0, 1], [1, 0, 0, 0]], 1, 40, 40),
+];
+
+#[test]
+fn eh_w100_k2_cm_2x4_matches_golden() {
+    let want = decode_hex(GOLDEN_EH);
+    let mut eh = ExponentialHistogram::new(2, 100, eh_cm([[0; 4]; 2]));
+    eh.payload = EH_BUCKETS
+        .iter()
+        .map(|&(cells, size, min_time, max_time)| EHBucket {
+            bucket: eh_cm(cells),
+            size,
+            l2_mass: 0.0,
+            min_time,
+            max_time,
+        })
+        .collect();
+    assert_eq!(eh.serialize_to_bytes().expect("serialize"), want);
+
+    let decoded = ExponentialHistogram::deserialize_from_bytes(&want).expect("decode");
+    assert_eq!((decoded.window, decoded.k), (100, 2));
+    assert_eq!(decoded.payload.len(), EH_BUCKETS.len());
+    for (bucket, &(cells, size, min_time, max_time)) in decoded.payload.iter().zip(&EH_BUCKETS) {
+        let flat: Vec<i32> = cells.iter().flatten().copied().collect();
+        assert_eq!(eh_cm_cells(&bucket.bucket), flat);
+        assert_eq!(
+            (bucket.size, bucket.min_time, bucket.max_time),
+            (size, min_time, max_time)
+        );
+    }
+    assert_eq!(eh_cm_cells(&decoded.type_to_clone), vec![0; 8]);
+    assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), want);
 }
 
 // ---------------------------------------------------------------------------

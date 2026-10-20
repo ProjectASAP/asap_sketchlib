@@ -92,6 +92,27 @@ enum HeapItem {
 }
 ```
 
+## Tuple keys
+
+**File:** [src/common/tuple_key.rs](../../src/common/tuple_key.rs)
+
+```rust
+enum KeyColumn { Null, Bool(bool), I64(i64), F64(f64), Str(String) }
+
+// TupleKey
+fn new(columns: Vec<KeyColumn>) -> Self
+fn columns(&self) -> &[KeyColumn]
+fn to_bytes(&self) -> Result<Vec<u8>, String>
+fn from_bytes(bytes: &[u8]) -> Result<Self, String>
+```
+
+A `TupleKey` is a key of several typed columns. `to_bytes` writes the ASAPv1
+tuple key encoding ([spec](../asapv1_wire_format.md#tuple-keys)): one byte
+string per tuple, `-0.0` written as `0.0` and every `NaN` as one `NaN`, so a
+heap-carrying sketch keeps one candidate per tuple under a `bytes` key.
+`from_bytes` rejects bytes `to_bytes` does not write. Equality and hashing
+follow the bytes: `-0.0 == 0.0` and `NaN == NaN`.
+
 ## Examples
 
 ```rust

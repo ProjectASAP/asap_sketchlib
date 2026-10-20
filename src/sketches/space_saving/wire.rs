@@ -50,15 +50,14 @@ use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::{HashProfile, HeapItem, SketchHasher};
 
+use std::collections::HashSet;
+
+use super::parts::emitted_order;
 use super::{SpaceSaving, SpaceSavingState, key_order};
+use crate::sketches::countminsketch_topk::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
 
 /// Space-Saving kind_id: family `0x18`, single algorithm variant `0x00`.
 const SPACE_SAVING_KIND: &[u8] = &[0x18, 0x00];
-
-/// Metadata `key_type` of a summary that monitors nothing. A summary with no
-/// keys has no variant to report, so the wire pins one rather than leaving the
-/// field free: empty summaries have one encoding.
-const EMPTY_KEY_TYPE: &str = "u64";
 
 /// The metadata `key_type` naming a key's exact [`HeapItem`] variant, or `None`
 /// for the 128-bit variants, which are not wire types.
@@ -157,6 +156,25 @@ fn mixed_variant_error(key_type: &str, key: &HeapItem) -> RmpEncodeError {
         "Space-Saving: monitored keys mix variants — key_type is {key_type}, but a {} key is held",
         key_type_of(key).unwrap_or("128-bit")
     ))
+}
+
+/// Rejects a key held twice, judged by `key_order` (floats by their bits, so
+/// two identical `NaN`s are one key twice), and triples out of emitted order.
+fn check_wire_entries<'a>(
+    entries: impl ExactSizeIterator<Item = (&'a HeapItem, u64)> + Clone,
+) -> Result<(), String> {
+    let mut seen = HashSet::with_capacity(entries.len());
+    if !entries.clone().all(|(key, _)| seen.insert(key_order(key))) {
+        return Err("Space-Saving: the same key appears twice".to_string());
+    }
+    let ordered: Vec<(&HeapItem, u64)> = entries.collect();
+    if ordered
+        .windows(2)
+        .any(|pair| emitted_order(pair[0], pair[1]).is_ge())
+    {
+        return Err("Space-Saving: entries are not in descending count, ties by key".to_string());
+    }
+    Ok(())
 }
 
 /// Packs the emitted triples into the positional payload, with `keys` typed by
@@ -314,6 +332,7 @@ fn decode_payload(
         }
     };
 
+    check_empty_key_type(key_type, keys.is_empty()).map_err(RmpDecodeError::Uncategorized)?;
     if keys.len() != counts.len() || keys.len() != errors.len() {
         return Err(RmpDecodeError::Uncategorized(format!(
             "Space-Saving payload: {} keys against {} counts and {} errors",
@@ -354,7 +373,9 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
                 self.capacity
             ))
         })?;
-        let entries = self.wire_entries();
+        let entries = self.emitted_entries();
+        check_wire_entries(entries.iter().map(|entry| (entry.0, entry.1)))
+            .map_err(RmpEncodeError::Syntax)?;
         let key_type = wire_key_type(&entries)?;
         let metadata = rmp_serde::to_vec_named(&space_saving_metadata::<H>(capacity, key_type))?;
         let payload = encode_payload(key_type, &entries, self.total, self.discarded_max)?;
@@ -384,29 +405,9 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
             ));
         }
         let state = decode_payload(&meta.key_type, meta.capacity as usize, payload)?;
+        check_wire_entries(state.entries.iter().map(|entry| (&entry.0, entry.1)))
+            .map_err(RmpDecodeError::Uncategorized)?;
         Self::rebuild(state).map_err(RmpDecodeError::Uncategorized)
-    }
-
-    /// The monitored triples in emitted order: descending count, ties broken by
-    /// `key_order`. Independent of the arena's seat order, so the bytes are
-    /// stable across a round trip.
-    fn wire_entries(&self) -> Vec<(&HeapItem, u64, u64)> {
-        let mut entries: Vec<(&HeapItem, u64, u64)> = self
-            .monitored
-            .iter()
-            .map(|counter| {
-                (
-                    &counter.key,
-                    self.buckets[counter.bucket].count,
-                    counter.error,
-                )
-            })
-            .collect();
-        entries.sort_unstable_by(|a, b| {
-            b.1.cmp(&a.1)
-                .then_with(|| key_order(a.0).cmp(&key_order(b.0)))
-        });
-        entries
     }
 }
 
@@ -561,6 +562,23 @@ mod tests {
         assert_eq!(decoded.min_count(), 0);
         assert_eq!(decoded.total(), 0);
         assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+    }
+
+    /// An empty summary carries `key_type` `"u64"`; any other name is rejected.
+    #[test]
+    fn space_saving_empty_must_carry_the_u64_key_type() {
+        use crate::sketches::countminsketch_topk::heap_wire::relabel_u64_key_type;
+        let bytes = SpaceSaving::<DefaultXxHasher>::with_capacity(4)
+            .serialize_to_bytes()
+            .expect("serialize");
+        for to in ["string", "i64"] {
+            let problem = SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(
+                &relabel_u64_key_type(&bytes, "key_type", to),
+            )
+            .expect_err("an empty summary under another key_type must be rejected")
+            .to_string();
+            assert!(problem.contains("empty key set"), "{to}: {problem}");
+        }
     }
 
     /// Every wire-eligible key family round-trips, and the decoded key still
@@ -965,7 +983,15 @@ mod tests {
             ),
             (
                 crafted(4, vec![1, 1], vec![2, 1], vec![0, 0], 3, 0),
-                "same key twice",
+                "the same key appears twice",
+            ),
+            (
+                crafted(4, vec![1, 2], vec![2, 3], vec![0, 0], 5, 0),
+                "not in descending count, ties by key",
+            ),
+            (
+                crafted(4, vec![2, 1], vec![2, 2], vec![0, 0], 4, 0),
+                "not in descending count, ties by key",
             ),
             (
                 envelope::encode(SPACE_SAVING_KIND, &unknown_meta, &unknown_payload),
@@ -993,6 +1019,71 @@ mod tests {
                 "expected a complaint about {expected}, got {problem}"
             );
         }
+    }
+
+    /// A count tie is ordered by the key's two's-complement bits, so `1`
+    /// precedes `-1`; the naive signed order is rejected. A `NaN` key held
+    /// twice has no encoding and is refused on both doors.
+    #[test]
+    fn space_saving_rejects_signed_order_and_repeated_nan_keys() {
+        let encoded = |keys: Vec<i64>, counts: Vec<u64>, key_type: &str| {
+            let metadata =
+                rmp_serde::to_vec_named(&space_saving_metadata::<DefaultXxHasher>(4, key_type))
+                    .expect("metadata");
+            let errors = vec![0; keys.len()];
+            let total = counts.iter().sum();
+            let payload = rmp_serde::to_vec(&SpaceSavingPayload {
+                keys,
+                counts,
+                errors,
+                total,
+                discarded_max: 0,
+            })
+            .expect("payload");
+            envelope::encode(SPACE_SAVING_KIND, &metadata, &payload)
+        };
+        let spec = encoded(vec![0, 1, i64::MIN, -1], vec![5; 4], "i64");
+        let decoded = SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&spec)
+            .expect("the spec's tie order decodes");
+        assert_eq!(decoded.serialize_to_bytes().expect("re-encode"), spec);
+        let naive = encoded(vec![i64::MIN, -1, 0, 1], vec![5; 4], "i64");
+        let problem = SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&naive)
+            .expect_err("naive signed order must be rejected")
+            .to_string();
+        assert!(problem.contains("not in descending count"), "{problem}");
+
+        let nan = |count: u64| (HeapItem::F64(f64::NAN), count, 0);
+        let twice = SpaceSaving::<DefaultXxHasher>::rebuild(SpaceSavingState {
+            capacity: 4,
+            total: 5,
+            discarded_max: 0,
+            entries: vec![nan(3), nan(2)],
+        })
+        .expect("NaN never equals itself, so both seat");
+        let problem = twice
+            .serialize_to_bytes()
+            .expect_err("a NaN key held twice must not serialize")
+            .to_string();
+        assert!(problem.contains("the same key appears twice"), "{problem}");
+
+        let metadata = rmp_serde::to_vec_named(&space_saving_metadata::<DefaultXxHasher>(4, "f64"))
+            .expect("metadata");
+        let payload = rmp_serde::to_vec(&SpaceSavingPayload {
+            keys: vec![f64::NAN, f64::NAN],
+            counts: vec![3, 2],
+            errors: vec![0, 0],
+            total: 5,
+            discarded_max: 0,
+        })
+        .expect("payload");
+        let problem = SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&envelope::encode(
+            SPACE_SAVING_KIND,
+            &metadata,
+            &payload,
+        ))
+        .expect_err("a NaN key on the wire twice must be rejected")
+        .to_string();
+        assert!(problem.contains("the same key appears twice"), "{problem}");
     }
 
     /// A capacity past the metadata's `u32` field fails the encode: truncating

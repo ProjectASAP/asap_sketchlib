@@ -10,11 +10,11 @@
   - `hashspec.rs` - `HashSpec`/`derive_index`/`derive_sign` byte parity with `sketchlib-go`; `numerical.rs` - `NumericalValue`; `structure_utils.rs` - `Nitro`, `NitroContext`, `ToF64`
 
 - **`src/sketches/`** - Sketch implementations (status source: [apis.md](./apis.md))
-  - `Ready` in API index: `countminsketch.rs`, `countsketch.rs`, `hll.rs`, `kll.rs`, `ddsketch.rs`, `countminsketch_topk.rs`, `countsketch_topk.rs`, `space_saving.rs`, `bloom.rs`, `elastic.rs`, `coco.rs`
+  - `Ready` in API index: `countminsketch.rs`, `countsketch.rs`, `hll.rs`, `kll.rs`, `ddsketch.rs`, `countminsketch_topk.rs`, `countsketch_topk.rs`, `countminsketch_space_saving.rs`, `countsketch_space_saving.rs`, `space_saving.rs`, `bloom.rs`, `elastic.rs`, `coco.rs`
   - `Unstable` in API index: `uniform.rs`, `kmv.rs`
   - Not in the API index: `fold_cms.rs`, `fold_cs.rs`, `kll_dynamic.rs`, `octo_delta.rs`, `mode.rs` (`RegularPath` / `FastPath`)
-  - A sketch on the ASAPv1 wire format uses a `<sketch>.rs` (algorithm) + `<sketch>/wire.rs` (serialization) split: `hll.rs`, `countminsketch.rs`, `countminsketch_topk.rs`, `countsketch.rs`, `countsketch_topk.rs`, `kll.rs`, `kll_dynamic.rs`, `ddsketch.rs`, `elastic.rs`, `coco.rs`, `uniform.rs`, `kmv.rs`, `bloom.rs` and `space_saving.rs` (see [asapv1_wire_format.md](./asapv1_wire_format.md))
-  - Two of those directories carry a second, shared wire module: `countminsketch_topk/heap_wire.rs` holds the top-k heap encoding CMSHeap and CSHeap share, and `countsketch_topk/l2hh_wire.rs` holds CountL2HH's own encoding plus the layer sub-payload the UnivMon family inlines
+  - A sketch on the ASAPv1 wire format uses a `<sketch>.rs` (algorithm) + `<sketch>/wire.rs` (serialization) split: `hll.rs`, `countminsketch.rs`, `countminsketch_topk.rs`, `countsketch.rs`, `countsketch_topk.rs`, `countminsketch_space_saving.rs`, `countsketch_space_saving.rs`, `kll.rs`, `kll_dynamic.rs`, `ddsketch.rs`, `elastic.rs`, `coco.rs`, `uniform.rs`, `kmv.rs`, `bloom.rs` and `space_saving.rs` (see [asapv1_wire_format.md](./asapv1_wire_format.md))
+  - Three of those directories carry a second, shared wire module: `countminsketch_topk/heap_wire.rs` holds the top-k heap encoding CMSHeap and CSHeap share, `countminsketch_space_saving/summary_wire.rs` holds the encoding CMSSpaceSaving and CSSpaceSaving share, and `countsketch_topk/l2hh_wire.rs` holds CountL2HH's own encoding plus the layer sub-payload the UnivMon family inlines
 
 - **`src/sketch_framework/`** - Orchestration and serving layers (status source: [apis.md](./apis.md))
   - `Ready` in API index: `hydra.rs`, `hashlayer.rs`, `univmon.rs`, `univmon_optimized.rs`, `nitro.rs`, `eh.rs`, `eh_sketch_list.rs`, `octo.rs`

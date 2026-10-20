@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinDelta`), CMSHeap with its delta (`CMSHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap with its delta (`CSHeapDelta`), DDSketch with its delta (`DDSketchDelta`), KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH, UnivMon-Q, and SetAggregator with its delta (`DeltaResult`).
+- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinDelta`), CMSHeap with its delta (`CMSHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CSHeap with its delta (`CSHeapDelta`), DDSketch with its delta (`DDSketchDelta`), KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EHSketchList, Bloom, Space-Saving, CountL2HH, UnivMon-Q, CMSSpaceSaving, CSSpaceSaving, and SetAggregator with its delta (`DeltaResult`).
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -227,13 +227,15 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x1b 0x00` | FoldCMS | - | TBD | reserved / not designed |
 | `0x1c 0x00` | FoldCS | - | TBD | reserved / not designed |
 | `0x1d 0x00` | - | - | TBD | retired / permanently reserved, never reassign |
+| `0x1e 0x00` | Count-Min-with-Space-Saving (CMSSpaceSaving, `Unstable`) | Count-Min + Space-Saving candidates | Section 3.24 | implemented |
+| `0x1f 0x00` | Count-Sketch-with-Space-Saving (CSSpaceSaving, `Unstable`) | Count Sketch + Space-Saving candidates | Section 3.25 | implemented |
 
 **Mapping notes** (mismatches between `apis.md` and Go's `magic_ids.go`):
 
 - **CMSHeap vs CSHeap.** Go's `MagicCountMinSketchWithHeap` (`0x03`) is the Count-*Min*-with-heap sketch (`apis.md` to CMSHeap). The Count-*Sketch*-with-heap sketch (`apis.md` to CSHeap) is a distinct family and gets a fresh byte (`0x0a`), separate from `0x03`.
 - **Hydra.** `apis.md` lists the "Hydra" framework; Go's only Hydra id is `MagicHydraKLLSketch` (`0x07`), so Hydra maps here to the `0x07` family. Each base sketch under Hydra has its own variant: `0x07 0x00` KLL, `0x07 0x01` Count-Min, `0x07 0x02` Count Sketch, `0x07 0x03` HyperLogLog, `0x07 0x04` UnivMon. `0x07 0x05`-`0x07 0x7f` are **reserved for Hydra over further base sketches**; a concrete variant is allocated when that combination's payload is designed.
 - **SetAggregator / DeltaResult** (`0x08 0x00` / `0x08 0x80`) are exact string sets, not sketches, so `apis.md` does not list them.
-- **`0x19`-`0x1c`.** CountL2HH, UnivMon-Q, FoldCMS and FoldCS have no counterpart in Go's `magic_ids.go`; their family bytes are allocated here first, and Go mirrors them from this registry.
+- **`0x19`-`0x1c`, `0x1e`-`0x1f`.** CountL2HH, UnivMon-Q, FoldCMS, FoldCS, CMSSpaceSaving and CSSpaceSaving have no counterpart in Go's `magic_ids.go`; their family bytes are allocated here first, and Go mirrors them from this registry.
 - **`Unstable`** rows mirror the `Unstable` status those sketches carry in `apis.md`. The kind_id is permanent either way; the payload and the sketch API may still change, and a change to the payload takes a new id (Q-VER).
 
 ### Decoder rules
@@ -298,24 +300,24 @@ The two tables below are the field-by-field detail of each group.
 | `input_encoding` | string | yes | `"projectasap.input.v1"` |
 | `seed_list` | `array<u64>` | **yes (inlined)** | the 20 seeds, carried inline so the bytes self-describe the hash |
 | `canonical_seed_index` | u32 | **per-sketch** | index into `seed_list` (`5`); HLL, KMV and Hydra's HLL counter use it |
-| `matrix_seed_index` | u32 | **per-sketch** | `0`; Count-Min, Count Sketch, CMSHeap, CSHeap, Bloom, Elastic and Hydra's matrix counters use it |
+| `matrix_seed_index` | u32 | **per-sketch** | `0`; Count-Min, Count Sketch, CMSHeap, CSHeap, CMSSpaceSaving, CSSpaceSaving, Bloom, Elastic and Hydra's matrix counters use it |
 
 These two are the only seed-index keys, because `HashProfile` declares exactly two seed-index constants — `CANONICAL_SEED_INDEX` and `MATRIX_SEED_INDEX` — and a sketch's key is derived from one of them.
 
-**A sketch carries a seed-index key only for a hash whose index it reads off the profile.** An index fixed by the algorithm gets no key: Space-Saving hashes at `0`, Coco hashes array `i` at index `i`, Elastic's heavy table hashes at the canonical index, Hydra fans a record out at `HYDRA_SEED`, and the UnivMon family finds a bottom layer at `BOTTOM_LAYER_FINDER`. No key would describe those truthfully, and a field that can be wrong is worse than none. A sketch that mixes the two carries a key for the profile-derived hash alone: Elastic carries `matrix_seed_index` for its inlined light Count-Min and nothing for its heavy table.
+**A sketch carries a seed-index key only for a hash whose index it reads off the profile.** An index fixed by the algorithm gets no key: Space-Saving and the summaries of CMSSpaceSaving and CSSpaceSaving hash at `0`, Coco hashes array `i` at index `i`, Elastic's heavy table hashes at the canonical index, Hydra fans a record out at `HYDRA_SEED`, and the UnivMon family finds a bottom layer at `BOTTOM_LAYER_FINDER`. No key would describe those truthfully, and a field that can be wrong is worse than none. A sketch that mixes the two carries a key for the profile-derived hash alone: Elastic carries `matrix_seed_index` for its inlined light Count-Min and nothing for its heavy table.
 
 **Structural params**
 
 | Key | Type | Applies to | Meaning |
 | ------- | ------ | -------- | --------- |
 | `precision` | u8 | HLL | `12` / `14` / `16`; register count = `2^precision` |
-| `rows` | u32 | Count-Min, Count Sketch, CMSHeap, CSHeap, Bloom, Coco, CountL2HH, Hydra, UnivMon, UnivMon-Q | matrix depth; for Bloom the number of slices; for Coco the arrays an insert scans; for Hydra the grid depth |
-| `cols` | u32 | Count-Min, Count Sketch, CMSHeap, CSHeap, Bloom, Coco, CountL2HH, Hydra, UnivMon | matrix width; for Bloom the bits per slice; for Coco the buckets per array; for Hydra the grid width |
-| `counter_type` | string | Count-Min, CMSHeap | `"i32"`, `"i64"` or `"f64"`; element type of `counts`, never widened |
-| `counter_type` | string | Count Sketch, CSHeap | `"i32"`, `"i64"` or `"f64"`; signed cells, never widened |
+| `rows` | u32 | Count-Min, Count Sketch, CMSHeap, CSHeap, CMSSpaceSaving, CSSpaceSaving, Bloom, Coco, CountL2HH, Hydra, UnivMon, UnivMon-Q | matrix depth; for Bloom the number of slices; for Coco the arrays an insert scans; for Hydra the grid depth |
+| `cols` | u32 | Count-Min, Count Sketch, CMSHeap, CSHeap, CMSSpaceSaving, CSSpaceSaving, Bloom, Coco, CountL2HH, Hydra, UnivMon | matrix width; for Bloom the bits per slice; for Coco the buckets per array; for Hydra the grid width |
+| `counter_type` | string | Count-Min, CMSHeap, CMSSpaceSaving | `"i32"`, `"i64"` or `"f64"`; element type of `counts`, never widened |
+| `counter_type` | string | Count Sketch, CSHeap, CSSpaceSaving | `"i32"`, `"i64"` or `"f64"`; signed cells, never widened |
 | `counter_type` | string | UnivMon-Q | `"i32"` or `"i64"`; signed cells. Names a **runtime** counter width rather than a Rust type parameter, so it is echoed back rather than pinned and a relabel between the two widths decodes (§3.20, rule 2) |
-| `mode` | string | Count-Min, CMSHeap, Bloom | `"fast"` or `"regular"`; the key-to-column derivation |
-| `mode` | string | Count Sketch, CSHeap | `"fast"` or `"regular"`; the key-to-column derivation **and the sign derivation** — the two paths take the `±` from different bits (§3.6) |
+| `mode` | string | Count-Min, CMSHeap, CMSSpaceSaving, Bloom | `"fast"` or `"regular"`; the key-to-column derivation |
+| `mode` | string | Count Sketch, CSHeap, CSSpaceSaving | `"fast"` or `"regular"`; the key-to-column derivation **and the sign derivation** — the two paths take the `±` from different bits (§3.6) |
 | `k` | u32 | KLL | compactor capacity (accuracy parameter) |
 | `k` | u32 | KMV, ExponentialHistogram | a retention bound: the digests kept, or the histogram's merge parameter |
 | `heap_size` | u32 | CMSHeap, CSHeap, UnivMon, UnivMon Optimized, UnivMon-Q | entries a heap keeps: the top-k heap, each layer's heap, or each layer's candidate table |
@@ -323,8 +325,8 @@ These two are the only seed-index keys, because `HashProfile` declares exactly t
 | `m` | u32 | KLL | minimum level capacity |
 | `item_type` | string | KLL | `"f64"` or `"i64"`; element type of `items` |
 | `item_type` | string | UniformSampling | `"f64"`; element type of `values` |
-| `capacity` | u32 | Space-Saving | monitored-counter budget |
-| `key_type` | string | Space-Saving, CMSHeap, CSHeap, UnivMon, UnivMon Optimized | exact `HeapItem` variant of `keys`, never widened (Section 3.5) |
+| `capacity` | u32 | Space-Saving, CMSSpaceSaving, CSSpaceSaving | monitored-counter budget |
+| `key_type` | string | Space-Saving, CMSHeap, CSHeap, CMSSpaceSaving, CSSpaceSaving, UnivMon, UnivMon Optimized | exact `HeapItem` variant of `keys`, never widened (Section 3.5) |
 | `seed_index` | u32 | CountL2HH, UnivMon-Q | a per-instance seed offset the caller chose; a structural param, not a profile constant |
 | `alpha` | f64 | DDSketch | relative accuracy, in `(0, 1)`; every bucket index derives from it |
 | `sample_rate` | f64 | UniformSampling | the construction rate, in `(0, 1]` |
@@ -362,6 +364,25 @@ HLL admits by key: all updates of a key are admitted or none are.
 **Merge.** States merge only when their `admission_rate` are equal, an absent key counting as `1`.
 
 A sketch nested in another kind's state holds `p = 1`.
+
+### Tuple keys
+
+A key made of several typed columns, such as one GROUP BY row, is a `"bytes"` key (§3.5) holding its columns encoded in order and concatenated. Each column is a tag byte and a value:
+
+| Tag | Column | Value |
+| --- | ------ | ----- |
+| `0x00` | null | none |
+| `0x01` | `false` | none |
+| `0x02` | `true` | none |
+| `0x03` | i64 | 8 bytes, big-endian two's complement |
+| `0x04` | f64 | 8 bytes, big-endian IEEE-754 bits; `-0.0` is written as `0.0`, and every `NaN` as `0x7ff8000000000000` |
+| `0x05` | string | u32 big-endian byte length, then that many bytes of UTF-8 |
+
+Each column delimits itself, so the column count is not written; the empty tuple is the empty byte string. A tuple has one encoding, so equal tuples are equal keys. A string longer than `2^32 - 1` bytes fails to encode.
+
+**Decode rules** (all fail closed): an unknown tag, a value cut short, a string that is not UTF-8, and an f64 written as `-0.0` or as a `NaN` other than `0x7ff8000000000000` are rejected.
+
+Nothing on the wire marks a `"bytes"` key as a tuple key.
 
 ### Standard ProjectASAP profile (reference values)
 
@@ -465,7 +486,7 @@ On the **fast** path one hash serves the whole matrix wherever it can: the layou
 In the two packed layouts the rows are **bit fields of one hash**, not independent draws, and the seed-list bound does not bind — but `rows <= 20` is declared and enforced on **both** doors whichever layout a geometry selects, so one geometry rule covers the format.
 `with_dimensions` is free to build a wider matrix in memory; such a sketch is rejected on **both** sides, so the format never emits bytes it would refuse to read back.
 
-The same `1 <= rows <= 20` bound is declared by **every matrix-shaped payload**, under whichever name that payload's rows carry: Bloom's slices (`0x17 0x00`, §3.4, as `BLOOM_MAX_SLICES`), Count Sketch (`0x04 0x00`, §3.6), CMSHeap (`0x03 0x00`) and CSHeap (`0x0a 0x00`) with their base matrix, CountL2HH (`0x19 0x00`), Coco's table (`0x0c 0x00`), Elastic's light layer (`0x0b 0x00`), Hydra's grid and its matrix counters (`0x07 0x01` / `0x07 0x02`), and every UnivMon (`0x10 0x00`) and UnivMon Optimized (`0x11 0x00`) layer.
+The same `1 <= rows <= 20` bound is declared by **every matrix-shaped payload**, under whichever name that payload's rows carry: Bloom's slices (`0x17 0x00`, §3.4, as `BLOOM_MAX_SLICES`), Count Sketch (`0x04 0x00`, §3.6), CMSHeap (`0x03 0x00`), CSHeap (`0x0a 0x00`), CMSSpaceSaving (`0x1e 0x00`) and CSSpaceSaving (`0x1f 0x00`) with their base matrix, CountL2HH (`0x19 0x00`), Coco's table (`0x0c 0x00`), Elastic's light layer (`0x0b 0x00`), Hydra's grid and its matrix counters (`0x07 0x01` / `0x07 0x02`), and every UnivMon (`0x10 0x00`) and UnivMon Optimized (`0x11 0x00`) layer.
 Two of them earn the bound outright, on every geometry: Coco's row `i` hashes at seed index `i`, and Elastic's light layer is fixed to the regular path.
 The rest inherit it from the paragraph above — the regular path always, the fast path once the packed layouts run out of bits.
 
@@ -519,7 +540,7 @@ Its structural parameters — the grid dimensions (`rows` / `cols`) and the colu
 
 | Pos | Field | Type | Notes |
 | ----- | ------- | ------ | ------- |
-| 0 | `words` | array | the bit grid packed into `u64`s, **row-major**; each row padded out to whole words, so the stride is `ceil(cols / 64)` and the length is `rows * ceil(cols / 64)` |
+| 0 | `words` | array | the bit grid packed into `u64`s, **row-major**; each row padded out to whole words, so the stride is `ceil(cols / 64)` and the length is `rows * ceil(cols / 64)`. Column `c` of row `r` is bit `c mod 64` (bit 0 the least significant) of `words[r * ceil(cols / 64) + floor(c / 64)]` |
 | 1 | `inserted` | u64 | `insert` calls the filter has seen, duplicates included |
 
 `rows` and `cols` are metadata structural params (Section 2), so the payload omits them and the decoder derives the word stride from `cols`.
@@ -585,7 +606,7 @@ Count-Min's counter type is a Rust type parameter, fixed at compile time. A Spac
 
 **`"isize"` / `"usize"` are platform-width, and the wire does not widen them.** The other twelve names fix a width the same on every target; these two are whatever the encoding host's pointer is. A `usize` key of `1 << 33` encodes on a 64-bit host and fails to decode on a 32-bit one, and a language whose integer types have no pointer-width member — Go among them — has no type to map them to at all. They are wire-eligible because `HeapItem` has the variants and an identity must be recorded exactly, not because they are portable; a producer that needs the bytes to travel should insert `i64` / `u64` keys instead.
 
-`"bytes"` is written as msgpack `bin`, never `str`: a `Bytes` key is an arbitrary byte array with no encoding, so `str` would refuse the byte strings that are not UTF-8 and lose the distinction from a `String` key for the ones that are. `"string"` and `"bytes"` are different key types for the same reason a widened integer is not the key it came from — `HeapItem::Bytes(b"abc")` does **not** equal `DataInput::Str("abc")`, so a summary holding both has no single `key_type` and fails to serialize.
+A key of several typed columns is a `"bytes"` key holding a [tuple key](#tuple-keys). `"bytes"` is written as msgpack `bin`, never `str`: a `Bytes` key is an arbitrary byte array with no encoding, so `str` would refuse the byte strings that are not UTF-8 and lose the distinction from a `String` key for the ones that are. `"string"` and `"bytes"` are different key types for the same reason a widened integer is not the key it came from — `HeapItem::Bytes(b"abc")` does **not** equal `DataInput::Str("abc")`, so a summary holding both has no single `key_type` and fails to serialize.
 
 **Why a key is never widened (e.g. `i32` to `i64`).** A counter is a number, and its width is a storage choice. A Space-Saving key is an *identity*, and the variant is part of it. `HeapItem`'s equality against a query `DataInput` is variant-exact — `HeapItem::I64(5)` does **not** equal `DataInput::I32(5)`. The digest, however, is variant-blind: the whole signed family hashes its value widened to `u64`, so a widened key lands in the **same index slot** and then fails the equality check. The result is not an error; it is `estimate` returning `0` for a key the summary is holding, with nothing anywhere to indicate a problem. So the wire records the variant exactly and the decoder rebuilds it exactly.
 
@@ -594,7 +615,7 @@ Two summaries have no encoding and **fail to serialize** rather than being coerc
 - **Mixed variants.** A summary whose monitored keys are of different `HeapItem` variants has no single `key_type`. Coercing them to a common type would silently break the keys that were coerced (above), so the encode fails with an error naming the mismatch.
 - **128-bit keys.** `HeapItem::I128` / `U128` have no msgpack integer form (msgpack integers stop at 64 bits), so they are not wire types — the same line Count-Min draws at `i128` counters. Convert to a wire-eligible key type first; only the owner knows whether the mapping is lossless (Section 5).
 
-**Empty summary.** A summary that monitors nothing has no variant to report. It emits `key_type = "u64"` with three empty arrays, so an empty summary has exactly one encoding rather than one per producer.
+**Empty summary.** A summary that monitors nothing has no variant to report. It emits `key_type = "u64"` with three empty arrays, so an empty summary has exactly one encoding rather than one per producer; a decoder rejects an empty summary under any other `key_type`.
 
 **Emitted order (cross-language contract).** The payload is **order-defined**: entries are written in **descending `count`**, ties broken by **heap key order**, ascending over the key read as unsigned bits:
 
@@ -611,17 +632,19 @@ This is required, not cosmetic: `entries()` order follows the counter arena and 
 
 1. `kind_id` is `0x18 0x00`.
 2. The hash-spec group matches the **target hasher's** `HashProfile`. `capacity` and `key_type` are properties of the *stored* summary rather than of the target type, so they are echoed back into the expected metadata rather than pinned — the same treatment Count-Min gives `rows`/`cols`.
-3. `key_type` is one of the fourteen names above; anything else is rejected. The `keys` array is then read **as** that type, so every relabel of a non-empty `keys` fails except one integer name as another (Section 4). That one decodes whenever every key is in the new name's range, since a msgpack integer carries its value and not its type, and the summary then answers `0` for every key it holds (see "Why a key is never widened"). Only the producer can get this right.
+3. `key_type` is one of the fourteen names above; anything else is rejected. The `keys` array is then read **as** that type, so every relabel of a non-empty `keys` fails except one integer name as another (Section 4). That one decodes whenever every key is in the new name's range, since a msgpack integer carries its value and not its type, and the summary then answers `0` for every key it holds (see "Why a key is never widened"). Only the producer can get this right. An empty `keys` array requires `key_type` `"u64"`.
 4. `keys`, `counts` and `errors` have equal length.
 5. `capacity >= 1`, and `len(keys) <= capacity`.
 6. Every `counts[i] >= 1` (a counter at zero is not a state the algorithm reaches) and `errors[i] <= counts[i]`.
-7. No key appears twice.
+7. No key appears twice, judged by heap key order: two bit-identical `NaN`s are one key twice.
 8. `capacity` **never sizes an allocation.** The counter arena and the key index both reserve from `len(keys)`, so a payload declaring `capacity = 2^32 - 1` with two counters costs two counters. A decoder must not preallocate from a declared size.
 9. `discarded_max <= min(counts)`. The ceiling records what left the summary, and the algorithm only ever evicts a *smallest* counter, so a ceiling above a count still held describes no reachable state — and it would make `upper_bound` read lower than the count beside it. The comparison uses `0` as the smallest count of an empty summary, so an empty summary carrying a non-zero `discarded_max` is rejected too.
 10. `sum(counts[i] - errors[i]) <= total`, with the sum taken in **saturating** `u64` arithmetic: each term is a saturating subtraction (rule 6 has already forbidden a negative one) and the running total saturates at `u64::MAX` rather than wrapping. Each counter's `count - error` is weight the summary claims to have actually recorded, so a `total` under that sum contradicts its own triples and would make every frequency the summary reports unbounded from below. The saturation is part of the contract, not an implementation detail: a set of triples whose exact sum exceeds `u64::MAX` is **accepted** whenever `total == u64::MAX`, so a decoder computing the sum in unbounded integers would reject bytes this one takes. Mirror the saturation.
 11. Entries are in the emitted order above; any other order is rejected.
 
 Rules 9 and 10 are hard rejections, not repairs: a Go decoder must mirror them.
+
+The encode side refuses a summary holding one key twice, judged as rule 7 judges it: `NaN` never equals itself, so a `NaN` key offered twice seats two counters, and that state has no encoding.
 
 `min_count`, the bucket list, the counter arena and the key index are then recomputed from the validated triples; nothing about them is trusted from the wire.
 
@@ -696,7 +719,7 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 1. `kind_id` is `0x03 0x00`; any other id is rejected — including `0x0a 0x00` (a CSHeap), whose metadata map is structurally identical because both share one schema (§3.10), and `0x02 0x00` (a plain Count-Min), whose is not: Count-Min's map is eleven keys with no `heap_size` and no `key_type`, and its payload is a one-element array. Either way the id check is what separates them, so a decoder must not fall back on telling the maps apart.
 2. The metadata's hash spec, `counter_type` and `mode` must equal the target type's own, with `rows` / `cols` / `heap_size` / `key_type` echoed back since those are properties of the stored sketch rather than of the target. Every key is required: a map missing one, or carrying an unknown one, does not decode.
 3. `rows` and `cols` are both non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — the base matrix is Count-Min's, and declares Count-Min's bound), checked **before** the matrix is built: the column mask is derived from `cols.ilog2()`, which panics on `cols == 0`.
-4. `key_type` is one of §3.5's fourteen names; anything else is rejected before the payload is read. The `keys` array is then read **as** that type; every relabel fails except one integer name as another (§3.5, rule 3).
+4. `key_type` is one of §3.5's fourteen names; anything else is rejected before the payload is read. The `keys` array is then read **as** that type; every relabel fails except one integer name as another (§3.5, rule 3). An empty heap requires `key_type` `"u64"`.
 5. `keys` and `heap_counts` have equal length.
 6. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
 7. `len(keys) <= heap_size`, and no key appears twice. Duplication is judged **before any entry is seated**, by heap key order (§3.5): two bit-identical `NaN`s are one key twice and are rejected, while `+0.0` and `-0.0` are two keys and pass. The seated count is compared against the entry count afterwards, as a second net for a pair that is distinct on the wire but equal to the heap.
@@ -806,7 +829,7 @@ The KLL counter's optional `compaction_seed` is not carried, so the bounded cost
 2. The hash-spec group matches the target's `HashProfile` (Hydra hashes through the crate default, `DefaultXxHasher`). `cell_counter_type` (`"i32"`), `cell_mode` (`"fast"`), `cell_item_type` (`"f64"`) and `cell_precision` are pinned, since the counter variant fixes them; `rows` / `cols` / `schema` and the counter *dimensions* — `cell_rows` / `cell_cols`, `cell_k` / `cell_m`, `cell_layers`, `cell_heap_size` — are properties of the *stored* grid, so they are echoed back and then validated on their own. `0x07 0x04`'s `cell_key_type` belongs to neither list: it is not pinned (the cells' keys are whatever the caller inserted, as §3.5 describes) and it is not a dimension (nothing is sized from it). It is echoed back like the dimensions and validated by rule 5.
 3. `rows` and `cols` are non-zero, `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — the grid places a subkey the way a Count-Min matrix does, and declares the same bound) and `rows * cols` is overflow-checked. For the tiled variants the counter dimensions are non-zero, `cell_rows <= 20` for the two matrix counters and `rows * cols * per_cell` is overflow-checked too, and for `0x07 0x04` every one of `cell_layers` / `cell_rows` / `cell_cols` / `cell_heap_size` is non-zero. All **before** anything is sized from them.
 4. The payload's length is measured against the declared geometry — `len(counts) == rows*cols*cell_rows*cell_cols`, `len(registers) == rows*cols*2^cell_precision`, `len(cells) == rows*cols` — before any grid or matrix is allocated. A declared grid larger than the payload carries costs nothing.
-5. `0x07 0x04` reads `cells` as `cell_key_type`, which must be one of §3.5's fourteen names, with §3.5 rule 3's relabel limits.
+5. `0x07 0x04` reads `cells` as `cell_key_type`, which must be one of §3.5's fourteen names, with §3.5 rule 3's relabel limits. A grid whose cells hold no key requires `cell_key_type` `"u64"`, and a cell holding no key is handed to the UnivMon decoder under `"u64"`.
 6. The three variable-size counters rebuild each cell **through that counter's own decoder** — the cell's blocks are wrapped back into the counter's envelope and handed to it — so every rule that decoder enforces holds for a Hydra cell too: KLL's level layout and `k` / `m` bounds (`0x07 0x00`), HLL's register count (`0x07 0x03`), UnivMon's per-layer geometry and heap runs (`0x07 0x04`). The two tiled matrix variants (`0x07 0x01` / `0x07 0x02`) do not: their cells are cut out of the flat `counts` run and built directly from storage, never through the counter's own `deserialize_from_bytes`, so what guards them is rule 3's geometry bounds and rule 4's length check and nothing further. There is nothing left for a counter decoder to check — a fixed-size matrix has no state beyond its cells — but a Go implementer must not expect a nested decode to run there.
 7. `schema` is re-validated through `KeySchema::try_from`: non-empty, at most `MAX_KEY_COLUMNS` labels, no duplicates.
 8. `type_to_clone` is rebuilt as a fresh counter of the declared geometry; nothing about it is read from the payload.
@@ -1033,7 +1056,7 @@ UnivMon carries the hash-spec group — it hashes, and a consumer must reproduce
 1. `kind_id` is `0x10 0x00`; any other id is rejected.
 2. The hash-spec group matches `DefaultXxHasher`'s `HashProfile`. `layers`, `rows`, `cols`, `heap_size` and `key_type` are properties of the stored sketch, so they are echoed back rather than pinned.
 3. `layers`, `rows`, `cols` and `heap_size` are **all non-zero**, and `layers <= 64` (`MAX_LAYER_SIZE`). All of it is checked **before** the per-layer geometry vector is built, so it is the first thing standing between a declared shape and an allocation. The ceiling is a hash-width bound, and `bottom_layer_for_hash` is where it comes from: the layer finder tests `(hash >> l) & 1` for `l` in `1 .. layers`, and the query recurrences shift the same way, so a 64-layer pyramid shifts a 64-bit key hash by at most 63 and a deeper one would shift past the hash's width. The ceiling is checked on **both** doors; the four non-zero checks are the decode door's, since only a decoder is handed a shape it did not build.
-4. `key_type` is one of §3.5's fourteen names; the `keys` array is read **as** that type, with §3.5 rule 3's relabel limits; and `keys` and `heap_counts` have equal length.
+4. `key_type` is one of §3.5's fourteen names; the `keys` array is read **as** that type, with §3.5 rule 3's relabel limits; and `keys` and `heap_counts` have equal length. A pyramid whose heaps hold no key requires `key_type` `"u64"`.
 5. `rows * layers == len(l2)` exactly, with checked arithmetic, and checked **before** the layer geometry is built. Together with rule 3's ceiling this is what makes a declared `layers` far larger than the payload carries cost nothing: `rows >= 1`, so the equality caps `layers` at `len(l2)`, and the ceiling caps it at 64 regardless.
 6. `len(heap_lens) == len(candidate_complete) == layers`; every layer's `rows` and `cols` are non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — a layer is a CountL2HH matrix; `cols.ilog2()` panics on zero) and its geometry fits the 128-bit key hash, `(ceil_log2(cols) + 1) * rows <= 128` (§3.19); the layers' total cell count and total accumulator count are computed with checked arithmetic and must equal `len(counts)` and `len(l2)`; and `len(keys) == len(heap_counts) == sum(heap_lens)`.
 7. Each layer's entry count is `<= heap_size`, and no key appears twice within a layer — judged on the key's wire representation before any entry is seated, exactly as §3.7's rule 7 describes, since a layer's heap is rebuilt through the same code. `heap_size` **never sizes an allocation**: each heap reserves `min(entries this layer carries, heap_size, 1024)` and grows from there, so a crafted `heap_size` costs nothing and an honest one reserves no more than 1024 slots up front. It still fixes the decoded heap's capacity.
@@ -1268,6 +1291,7 @@ Two things read it, and neither is a stored threshold. A layer's flag joins the 
 8. `count == 0` if and only if `min` and `max` are both nil, and `min <= max` when both are present.
 9. `heap_size` and `ordered_samples` **never size an allocation.** Each layer's candidate map and heap are sized from the run the payload carries, and the ordered heap is built from the occurrences it carries, so a payload declaring `heap_size = 2^32 - 1` with two candidates costs two candidates. The sketch is built field by field rather than through `with_hasher_and_source_id`, which reserves from the declared capacities.
 10. No candidate key repeats within a layer, and each candidate's key hashes into the layer it is stored at.
+11. Candidates are strictly ascending by key within each layer, and occurrences strictly ascending by `(priority_high, priority_low, key)`; any other order is rejected.
 
 The encode side refuses the same states: a layer count that disagrees with the config, a layer whose Count Sketch layout is not the declared one, layers mixing counter widths, an over-capacity candidate table, a candidate at the wrong terminal layer, a duplicate or over-capacity occurrence, and an inconsistent `count` / `min` / `max` triple. So the format never emits bytes it would refuse to read back.
 
@@ -1374,7 +1398,77 @@ Rules 3 through 7 are enforced on the **encode** side too, so the format never e
 2. The state's metadata equals the delta's, key for key, `key_type` excepted for CMSHeap and CSHeap.
 3. An integer add that overflows rejects the delta: a `counter_type` cell, or DDSketch's total count (§3.8 rule 6).
 
-### 3.24: payloads not yet designed
+### 3.24: CMSSpaceSaving payload (`0x1e 0x00`)
+
+`CMSSpaceSaving` is a Count-Min sketch (§3.2) paired with a Space-Saving summary (§3.5). Every update reaches both. A top-k query ranks the summary's monitored keys by their Count-Min estimate: the summary nominates the candidates and the matrix counts them. Both are **inlined**, so the payload is Count-Min's `counts` followed by §3.5's payload, its `counts` renamed `summary_counts`:
+
+| Pos | Field | Type | Notes |
+| ----- | ------- | ------ | ------- |
+| 0 | `counts` | array | the Count-Min matrix, packed **row-major**, `rows*cols` cells; element type = `counter_type` |
+| 1 | `keys` | array | one monitored key per counter; element type = `key_type`; homogeneous (§3.5) |
+| 2 | `summary_counts` | array | u64 recorded count, parallel to `keys` |
+| 3 | `errors` | array | u64 error allowance, parallel to `keys`; `errors[i] <= summary_counts[i]` |
+| 4 | `total` | u64 | total weight the summary recorded |
+| 5 | `discarded_max` | u64 | the largest count known to have left the summary |
+
+The summary's arenas and key index are rebuilt from the triples, and `min_count` is recomputed, exactly as in §3.5.
+
+**Metadata vs payload.** The descriptor keys, in canonical wire order:
+
+```md
+metadata_version, hash_profile_id, hash_algorithm, seed_derivation, input_encoding,
+seed_list, matrix_seed_index, rows, cols, counter_type, mode, capacity, key_type
+```
+
+`rows` / `cols` / `counter_type` / `mode` are Count-Min's (§3.2), in Count-Min's order; `capacity` and `key_type` are §3.5's and follow them. `matrix_seed_index` describes the matrix. The summary hashes every key at seed index `0`, fixed by the algorithm, so it adds no seed-index key (§2). `capacity` is a `u32`; a summary whose capacity exceeds it fails to encode.
+
+Wire counter types are Count-Min's: **`"i32"`, `"i64"` and `"f64"`**, pinned on decode.
+
+**Summary weight.** An update of weight `w` adds `w` to the matrix and `ceil(w)` to the summary, saturating at `2^64 - 1`. A `w` that is not positive adds nothing to the summary.
+
+**No `admission_rate`.** The matrix is a nested sketch and holds `p = 1` (Section 2); a sketch whose matrix holds `p != 1` fails to serialize.
+
+**No delta kind.** CMSSpaceSaving has no delta.
+
+**Emitted order (cross-language contract).** `counts` is row-major. Summary entries are in §3.5's emitted order: descending `summary_counts`, ties broken by heap key order.
+
+**Decode rules.** Fail **closed** on each, with an error and never a panic:
+
+1. `kind_id` is `0x1e 0x00`; any other id is rejected — including `0x1f 0x00` (a CSSpaceSaving, whose metadata schema is this one), `0x03 0x00` (a CMSHeap), `0x02 0x00` (a Count-Min) and `0x18 0x00` (a Space-Saving).
+2. The metadata's hash spec, `counter_type` and `mode` must equal the target type's own, with `rows` / `cols` / `capacity` / `key_type` echoed back. Every key is required: a map missing one, or carrying an unknown one (`admission_rate` included), does not decode.
+3. `rows` and `cols` are both non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2), checked **before** the matrix is built.
+4. `key_type` is one of §3.5's fourteen names; anything else is rejected before the payload is read. The `keys` array is then read **as** that type, with §3.5 rule 3's relabel limits. An empty summary requires `key_type` `"u64"`.
+5. `keys`, `summary_counts` and `errors` have equal length.
+6. `len(counts) == rows * cols` exactly, checked **before** the allocation.
+7. §3.5's rules 5, 6, 7, 8, 9 and 10 hold over `capacity`, `keys`, `summary_counts`, `errors`, `total` and `discarded_max`. Duplication (rule 7) is judged **before any entry is seated**, by heap key order (§3.5), as §3.7's rule 7 judges it: two bit-identical `NaN`s are one key twice, and `+0.0` and `-0.0` are two keys. `capacity` never sizes an allocation.
+8. Summary entries are in the emitted order above; any other order is rejected.
+
+Rules 3, 6 and 7's duplicate check are enforced on the **encode** side too, as are §3.5's mixed-variant and 128-bit-key refusals and the `u32` bounds on `capacity` and `cols`. A summary seats a `NaN` key anew on every insert, since `NaN` never finds itself; a summary holding the same `NaN` twice has no encoding and fails to serialize.
+
+### 3.25: CSSpaceSaving payload (`0x1f 0x00`)
+
+`CSSpaceSaving` is a Count Sketch (§3.6) paired with a Space-Saving summary, and its payload is §3.24's with the Count Sketch matrix as `counts`:
+
+| Pos | Field | Type | Notes |
+| ----- | ------- | ------ | ------- |
+| 0 | `counts` | array | the Count Sketch matrix, packed **row-major**, `rows*cols` cells; element type = `counter_type`, **signed** |
+| 1-5 | `keys`, `summary_counts`, `errors`, `total`, `discarded_max` | | §3.24's |
+
+**Metadata vs payload.** §3.24's schema and canonical key order. Wire counter types are Count Sketch's: **`"i32"`, `"i64"` and `"f64"`** (§3.6), pinned on decode; `mode` fixes the sign derivation as well as the column (§3.6).
+
+A top-k query ranks the summary's keys by the Count Sketch estimate, the median of signed cells. §3.24's summary weight holds: a negative update moves the matrix alone.
+
+**No `admission_rate`, no delta kind**, as in §3.24.
+
+**Emitted order (cross-language contract).** §3.24's.
+
+**Decode rules.** §3.24's rules 2 through 8 apply verbatim, with one difference:
+
+1. `kind_id` is `0x1f 0x00`; any other id is rejected — including `0x1e 0x00` (a CMSSpaceSaving), `0x0a 0x00` (a CSHeap) and `0x04 0x00` (a Count Sketch).
+
+The same encode-side checks apply.
+
+### 3.26: payloads not yet designed
 
 The remaining `kind_id`s reserve a family byte with payload TBD (the Section 1 registry carries their status). Likely shape when designed:
 
@@ -1409,9 +1503,9 @@ Golden byte-vectors lock it.
 
 - metadata: `alpha` (§3.8), `sample_rate` (§3.13), `admission_rate` (Section 2);
 - HLL HIP's `hip_kxq0` / `hip_kxq1` / `hip_est` (§3.1) and DDSketch's `sum` / `min` / `max` (§3.8);
-- `counts`, `heap_counts` and `deltas` elements where `counter_type` reads `"f64"` (§3.2, §3.6, §3.7, §3.10, §3.23);
+- `counts`, `heap_counts` and `deltas` elements where `counter_type` reads `"f64"` (§3.2, §3.6, §3.7, §3.10, §3.23, §3.24, §3.25);
 - `items` / `values` elements where `item_type` or `cell_item_type` reads `"f64"` (§3.3, §3.9, §3.13);
-- `keys` elements where `key_type` or `cell_key_type` reads `"f64"` (§3.5, §3.7, §3.9, §3.10, §3.15, §3.16, §3.23).
+- `keys` elements where `key_type` or `cell_key_type` reads `"f64"` (§3.5, §3.7, §3.9, §3.10, §3.15, §3.16, §3.23, §3.24, §3.25).
 
 A `"f32"` key is float32 (`0xca`); a decoder rejects any other type there (§3.5).
 
@@ -1431,17 +1525,17 @@ A `"f32"` key is float32 (`0xca`); a decoder rejects any other type there (§3.5
 
 *Counter arrays.* Six field names carry counters, and the element type is not always keyed on a `counter_type`:
 
-- `counts` where the kind carries a `counter_type` or `cell_counter_type` — Count-Min (§3.2), Count Sketch (§3.6), CMSHeap (§3.7), CSHeap (§3.10) and Hydra's two matrix variants (§3.9) — is an integer array when that key reads `"i32"` or `"i64"`, and a **float64** array when it reads `"f64"`.
+- `counts` where the kind carries a `counter_type` or `cell_counter_type` — Count-Min (§3.2), Count Sketch (§3.6), CMSHeap (§3.7), CSHeap (§3.10), CMSSpaceSaving (§3.24), CSSpaceSaving (§3.25) and Hydra's two matrix variants (§3.9) — is an integer array when that key reads `"i32"` or `"i64"`, and a **float64** array when it reads `"f64"`.
 - `counts` where the kind carries **no** `counter_type` is fixed by the kind_id: DDSketch's `counts` and `negative_counts` (§3.8) are unsigned integers, and CountL2HH's (§3.19) and the UnivMon family's (§3.15, §3.16) are `i64`, signed.
 - `counters` (§3.20) is UnivMon-Q's counter array under a name of its own — the only payload whose counters are not called `counts` or a prefixed form of it — and is an integer array at the width its `counter_type` names.
 - `light_counts` (§3.11) is Elastic's inlined light Count-Min, `i32` integers, fixed by `light_counter_type`.
 - `deltas` / `negative_deltas` (§3.23) take the element type of the cells they add to.
 
-*Other arrays, by name.* `words` (§3.4) is Bloom's bit grid as unsigned 64-bit integers, one per packed word. `hashes` (§3.14) is KMV's retained digests as unsigned integers — a digest above `2^63` is still `uint`, never the `int` family. `l2` (§3.19, §3.15, §3.16) is one `i64` accumulator per row. `indices` (§3.23) are unsigned integers, except DDSketch's `indices` / `negative_indices`, which are signed bucket indices. `heap_counts` is `i64`, or float64 in §3.7, §3.10 and §3.23 when `counter_type` reads `"f64"`. `levels` and `coin` (§3.3) are integer arrays; `heap_lens` and `candidate_lens` are `u32` counts; `sizes` / `min_times` / `max_times` (§3.17), `priorities` (§3.13), `values` (§3.12), `candidate_keys` / `candidate_scores` / `occurrence_keys` / `occurrence_priority_high` / `occurrence_priority_low` (§3.20) are all unsigned integers; `vote_pos` / `vote_neg` (§3.11) are `i32`.
+*Other arrays, by name.* `words` (§3.4) is Bloom's bit grid as unsigned 64-bit integers, one per packed word. `hashes` (§3.14) is KMV's retained digests as unsigned integers — a digest above `2^63` is still `uint`, never the `int` family. `l2` (§3.19, §3.15, §3.16) is one `i64` accumulator per row. `indices` (§3.23) are unsigned integers, except DDSketch's `indices` / `negative_indices`, which are signed bucket indices. `heap_counts` is `i64`, or float64 in §3.7, §3.10 and §3.23 when `counter_type` reads `"f64"`. Space-Saving's `counts` and `errors` (§3.5) and the `summary_counts` and `errors` of §3.24 and §3.25 are `u64`. `levels` and `coin` (§3.3) are integer arrays; `heap_lens` and `candidate_lens` are `u32` counts; `sizes` / `min_times` / `max_times` (§3.17), `priorities` (§3.13), `values` (§3.12), `candidate_keys` / `candidate_scores` / `occurrence_keys` / `occurrence_priority_high` / `occurrence_priority_low` (§3.20) are all unsigned integers; `vote_pos` / `vote_neg` (§3.11) are `i32`.
 
-*Key and item arrays.* `keys` and `items` take the element type the metadata names — `key_type` for the `HeapItem` keys of §3.5, §3.7, §3.10, §3.15, §3.16, §3.23 and Hydra's `cell_key_type` (§3.9), per §3.5's table; `item_type` for KLL's `items` (§3.3) and UniformSampling's `values` (§3.13). Four payloads name no such key and are fixed by their kind_id instead: Coco's `keys` (§3.12) and Elastic's `flow_ids` (§3.11) are nil-or-`str`, SetAggregator's `values` (§3.21) and DeltaResult's `added` / `removed` (§3.22) are `str`, and Coco's `values` are unsigned integers.
+*Key and item arrays.* `keys` and `items` take the element type the metadata names — `key_type` for the `HeapItem` keys of §3.5, §3.7, §3.10, §3.15, §3.16, §3.23, §3.24, §3.25 and Hydra's `cell_key_type` (§3.9), per §3.5's table; `item_type` for KLL's `items` (§3.3) and UniformSampling's `values` (§3.13). Four payloads name no such key and are fixed by their kind_id instead: Coco's `keys` (§3.12) and Elastic's `flow_ids` (§3.11) are nil-or-`str`, SetAggregator's `values` (§3.21) and DeltaResult's `added` / `removed` (§3.22) are `str`, and Coco's `values` are unsigned integers.
 
-*Scalars.* Float scalars are listed above. Booleans are msgpack `true` / `false` (`0xc3` / `0xc2`) — `evictions` and `stale_copies` (§3.11), `candidate_complete` (§3.15, §3.16), `ever_evicted` (§3.20). Every other scalar is an integer under the family/width rule: `inserted` (§3.4), `total` / `discarded_max` (§3.5), `offset` / `negative_offset` (§3.8, **signed**), `zero_count` (§3.8), `total_seen` / `rng_state` (§3.13), `bucket_size` / `update_mode` (§3.15, §3.16), `count` / `source_id` / `next_sequence` (§3.20).
+*Scalars.* Float scalars are listed above. Booleans are msgpack `true` / `false` (`0xc3` / `0xc2`) — `evictions` and `stale_copies` (§3.11), `candidate_complete` (§3.15, §3.16), `ever_evicted` (§3.20). Every other scalar is an integer under the family/width rule: `inserted` (§3.4), `total` / `discarded_max` (§3.5, §3.24, §3.25), `offset` / `negative_offset` (§3.8, **signed**), `zero_count` (§3.8), `total_seen` / `rng_state` (§3.13), `bucket_size` / `update_mode` (§3.15, §3.16), `count` / `source_id` / `next_sequence` (§3.20).
 
 *Nil.* A nullable slot is msgpack **nil** (`0xc0`), never an empty string and never a zero: an unoccupied Coco bucket, a free Elastic heavy bucket, an absent UnivMon-Q `min` / `max`.
 
@@ -1496,14 +1590,14 @@ Good direction (more compact, higher fidelity, less Rust-internal duplication), 
 2. **Golden byte-vector fixtures** in one shared repo, [`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), which each implementation mounts at `asapv1_golden/`; both languages decode and re-encode them byte-identically. These replace the `portable`-as-oracle round-trip test.
 3. **This registry**, mirrored, never independently allocated.
 
-Fixtures exist for six `kind_id`s — HLL's three estimators, Count-Min, Count Sketch and compact KLL — and `sketchlib-go` mirrors those. Every other kind here has a payload and **no fixture**, so this document is its only contract; `asapv1_golden/README.md` lists the gap. `portable` carries its own Go goldens.
+Every `kind_id` the registry marks *implemented* has at least one fixture; `asapv1_golden/README.md` lists them. `portable` carries its own Go goldens.
 
 **Hash profile on the Go side.**
 Rust derives the hash spec from a generic `HashProfile` bound on the hasher type; Go has no generic hasher type, so there is nothing to derive from.
 On the Go side the profile is simply **written into** the metadata on encode and **read from** it on decode.
 Go MUST validate the profile it reads (same fail-closed intent as Rust): a sketch is only mergeable/queryable if its `hash_profile_id` + seeds match the profile Go is prepared to reproduce.
 
-Sequencing: (2) covers six `kind_id`s, and the one `native bytes == portable bytes` test is HLL-only, since no other `portable` type emits ASAPv1 bytes.
+Sequencing: the one `native bytes == portable bytes` test is HLL-only, since no other `portable` type emits ASAPv1 bytes.
 Retire `portable` once the fixtures cover the rest.
 
 ---
@@ -1520,15 +1614,15 @@ Retire `portable` once the fixtures cover the rest.
 - **Q-CS**: Count Sketch is one `kind_id` (`0x04 0x00`) and mirrors Count-Min's metadata and `[counts]` payload, including `counter_type`. Structural-param order matches Q-CMS: `... matrix_seed_index, rows, cols, counter_type, mode`. **`i32` is not widened to `i64`** — a Count Sketch appears *nested* inside `HydraCounter` and `EHSketchList` as `Vector2D<i32>` and must decode back into that variant, so the width is identity and is recorded exactly. Cells are signed, so a decoder must not assume monotonicity.
 - **Q-CMS-DIMS**: Count-Min `rows`/`cols` are **metadata** and the payload omits them. They are configuration that shapes the payload (like HLL's `precision`), so per the config-to-metadata rule they belong in the descriptor. The payload is then just `[counts]`. Canonical structural-param order: `... matrix_seed_index, rows, cols, counter_type, mode`.
 - **Q-VER**: no payload version field. A new incompatible encoding gets a **new `kind_id`**; retired ids are reserved forever and never recycled.
-- **Q-NEST**: a nested sketch's state is **inlined**, never wrapped in an envelope of its own. By the time a decoder reaches the payload it has read `kind_id` and the metadata, and together those fix the shape completely, so a nested envelope would repeat a magic sentinel, a version, an id, two length prefixes and a metadata map the outer one already carries — and would create a second place for the same fact to live, which a decoder would then have to cross-check. This governs CMSHeap's and CSHeap's base matrix (§3.7, §3.10), Elastic's light Count-Min (§3.11), Hydra's counter cells (§3.9) and UnivMon's `CountL2HH` layers (§3.15).
+- **Q-NEST**: a nested sketch's state is **inlined**, never wrapped in an envelope of its own. By the time a decoder reaches the payload it has read `kind_id` and the metadata, and together those fix the shape completely, so a nested envelope would repeat a magic sentinel, a version, an id, two length prefixes and a metadata map the outer one already carries — and would create a second place for the same fact to live, which a decoder would then have to cross-check. This governs CMSHeap's and CSHeap's base matrix (§3.7, §3.10), CMSSpaceSaving's and CSSpaceSaving's matrix and summary (§3.24, §3.25), Elastic's light Count-Min (§3.11), Hydra's counter cells (§3.9) and UnivMon's `CountL2HH` layers (§3.15).
 - **Q-NEST-HET**: a **heterogeneous** nested sketch — one whose algorithm is data rather than a type — carries the variant's own registry `kind_id` plus its metadata and payload blocks with the framing stripped (§3.18). No name string, no second identity namespace beside the Section 1 registry, and no per-variant encoding to specify: the blocks are byte for byte what that variant's own section fixes, and the variant's own decoder runs on them unchanged, so its geometry checks, allocation guards and hash-profile pin all apply inside the wrapper. `EHSketchList` (`0x14 0x00`) is the triple, and `ExponentialHistogram` (`0x13 0x00`) inlines one per bucket.
 - **Q-NEST-GATE**: the nested-id namespace is **fixed and identical in every build**. An id is registry bytes, never an enum ordinal, so no id's meaning shifts because a variant is compiled out. A decoder that meets an id its build does not carry fails **closed**, before the blocks are assembled, with an error naming the variant and the feature; it never misparses, skips, substitutes, or falls through the unknown-id path.
 - **Q-HYDRA-IDS**: Hydra allocates **one `kind_id` per counter base sketch** (`0x07 0x00` KLL, `0x07 0x01` Count-Min, `0x07 0x02` Count Sketch, `0x07 0x03` HyperLogLog, `0x07 0x04` UnivMon), so the payload carries no variant tag and a grid mixing counter variants has no encoding. `0x07 0x05`-`0x07 0x7f` stay reserved for Hydra over further base sketches. The five ids use four metadata schemas; Count-Min and Count Sketch share one, as the two KLL ids share one.
 - **Q-NOHASH**: a sketch that never hashes its inputs omits the **hash-spec group entirely** — the group answers "how were keys hashed", and there is no truthful answer. This is Q-KLL generalized: KLL (§3.3), DDSketch (§3.8) and UniformSampling (§3.13) never hash, `ExponentialHistogram` (§3.17) and `EHSketchList` (§3.18) do not hash either, since the sketch inside them does, and `SetAggregator` (§3.21) and `DeltaResult` (§3.22) carry their members verbatim. Their metadata is structural-only and is not `HashProfile`-derived. A sketch that *does* hash carries the group, derived live from the hasher's profile, even when its counters do not hash (Hydra's KLL and UnivMon variants, §3.9).
-- **Q-SEEDIDX**: a **seed-index key is carried only for a hash whose index the sketch reads off the profile.** `HashProfile` declares two such constants, `CANONICAL_SEED_INDEX` and `MATRIX_SEED_INDEX`, and the metadata carries `canonical_seed_index` or `matrix_seed_index` accordingly. An index the algorithm fixes gets no key: Space-Saving's `0` (§3.5), Coco's per-array `i` (§3.12), Elastic's heavy table (§3.11), Hydra's subkey fan-out at `HYDRA_SEED` (§3.9) and the UnivMon family's `BOTTOM_LAYER_FINDER` (§3.15). A per-instance seed a caller chose is a **structural param**, not a hash-spec field: `seed_index` on CountL2HH (§3.19) and UnivMon-Q (§3.20) is echoed back on decode rather than pinned against the target.
-- **Q-ORDER**: a payload whose in-memory container order does not survive a rebuild **pins an emitted order**, as a cross-language contract. Heaps, arenas and hash maps all have this property, so the rule reaches Space-Saving's triples (§3.5), the top-k heap entries (§3.7), KMV's digests (§3.14), UniformSampling's entries (§3.13), UnivMon-Q's candidates and occurrences (§3.20), and every layer- and bucket-indexed array. Two sketches holding the same state then emit the same bytes whatever order they were built in, and a decoded sketch re-serializes byte-identically. The heap key comparator is the same everywhere: descending count, ties by heap key order (§3.5).
-- **Q-CAP**: **a declared capacity never sizes an allocation.** Every structure is built from the run the payload actually carries, and the declared bound is checked against that run first; a payload naming a capacity of `2^32 - 1` with two entries costs two entries. This holds for Space-Saving's `capacity`, every `heap_size`, KMV's `k`, UniformSampling's `total_seen`, UnivMon-Q's `ordered_samples`, and Hydra's grid and counter dimensions.
-- **Q-KEYTYPE**: `key_type` names the **exact `HeapItem` variant** and is never widened, wherever heap keys reach the wire — Space-Saving (§3.5), CMSHeap and CSHeap (§3.7, §3.10), the UnivMon family (§3.15, §3.16) and Hydra's UnivMon counter (§3.9). A container whose keys mix variants has no single name and **fails to serialize**; `HeapItem::I128` / `U128` have no msgpack integer form and are not wire types. An empty container emits `"u64"`, so its `key_type` has one value rather than one per producer. That canonicalizes the key naming and nothing else: a UnivMon Optimized pyramid still has more than one encoding per state, since layouts differing only in an `elephant_layers` at or above `layers` build identical layers, and an all-elephant pyramid carries its unused mouse dimensions on the wire regardless (§3.16). What holds everywhere is the round trip: a decoded container re-serializes byte-identically.
+- **Q-SEEDIDX**: a **seed-index key is carried only for a hash whose index the sketch reads off the profile.** `HashProfile` declares two such constants, `CANONICAL_SEED_INDEX` and `MATRIX_SEED_INDEX`, and the metadata carries `canonical_seed_index` or `matrix_seed_index` accordingly. An index the algorithm fixes gets no key: Space-Saving's `0` (§3.5, and the summaries of §3.24 and §3.25), Coco's per-array `i` (§3.12), Elastic's heavy table (§3.11), Hydra's subkey fan-out at `HYDRA_SEED` (§3.9) and the UnivMon family's `BOTTOM_LAYER_FINDER` (§3.15). A per-instance seed a caller chose is a **structural param**, not a hash-spec field: `seed_index` on CountL2HH (§3.19) and UnivMon-Q (§3.20) is echoed back on decode rather than pinned against the target.
+- **Q-ORDER**: a payload whose in-memory container order does not survive a rebuild **pins an emitted order**, as a cross-language contract. Heaps, arenas and hash maps all have this property, so the rule reaches Space-Saving's triples (§3.5, §3.24, §3.25), the top-k heap entries (§3.7), KMV's digests (§3.14), UniformSampling's entries (§3.13), UnivMon-Q's candidates and occurrences (§3.20), and every layer- and bucket-indexed array. Two sketches holding the same state then emit the same bytes whatever order they were built in, and a decoded sketch re-serializes byte-identically. The heap key comparator is the same everywhere: descending count, ties by heap key order (§3.5).
+- **Q-CAP**: **a declared capacity never sizes an allocation.** Every structure is built from the run the payload actually carries, and the declared bound is checked against that run first; a payload naming a capacity of `2^32 - 1` with two entries costs two entries. This holds for every `capacity` (§3.5, §3.24, §3.25), every `heap_size`, KMV's `k`, UniformSampling's `total_seen`, UnivMon-Q's `ordered_samples`, and Hydra's grid and counter dimensions.
+- **Q-KEYTYPE**: `key_type` names the **exact `HeapItem` variant** and is never widened, wherever heap keys reach the wire — Space-Saving (§3.5), CMSHeap and CSHeap (§3.7, §3.10), CMSSpaceSaving and CSSpaceSaving (§3.24, §3.25), the UnivMon family (§3.15, §3.16) and Hydra's UnivMon counter (§3.9). A container whose keys mix variants has no single name and **fails to serialize**; `HeapItem::I128` / `U128` have no msgpack integer form and are not wire types. An empty container emits `"u64"`, and a decoder rejects an empty container under any other name, so its `key_type` has one value rather than one per producer. That canonicalizes the key naming and nothing else: a UnivMon Optimized pyramid still has more than one encoding per state, since layouts differing only in an `elephant_layers` at or above `layers` build identical layers, and an all-elephant pyramid carries its unused mouse dimensions on the wire regardless (§3.16). What holds everywhere is the round trip: a decoded container re-serializes byte-identically.
 - **Q-DERIVED**: state a decoder can recompute exactly is **not carried**, and state it cannot is. Recomputed: DDSketch's `count` from its stores and `zero_count` (§3.8), `ExponentialHistogram`'s `l2_mass` and `merge_norm` (§3.17), Elastic's `bktlen` from the declared bucket count (§3.11), every heap's digest index and array order, and every summary a sketch answers from its own state. Carried: DDSketch's `sum` / `min` / `max`, Elastic's `stale_copies`, UnivMon's `update_mode`, `candidate_complete` and `bucket_size`, UnivMon-Q's `ever_evicted`, `source_id` and `next_sequence`, UniformSampling's `priorities`, `total_seen` and `rng_state`, and CountL2HH's `l2`. Where a cached derived field exists in memory, the encoder rejects a value that disagrees with what the decoder would recompute.
 - **Q-NIL**: an absent slot is msgpack **nil** (`0xc0`), never a sentinel value. An empty string is a reachable key in Coco (§3.12) and a reachable flow id in Elastic (§3.11), so `""` cannot double as "free"; UnivMon-Q's absent extrema are nil for the same reason (§3.20). Go must model these as nullable, never as a zero value standing in for absent.
 - **Q-RNG**: RNG state is carried **resumable** when the generator is cheap to reproduce in another language, and opaque otherwise. UniformSampling's `rng_state` is one SplitMix64 word with published constants, so a decoded sampler continues the same draw sequence (§3.13); KLL's `coin` carries the compaction RNG's position and its `compaction_seed` is opaque state Go preserves without interpreting (Q-KLL-SEED).

@@ -28,7 +28,7 @@
 //! draw sequence instead of re-drawing identities it already used.
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap};
 use std::marker::PhantomData;
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
@@ -59,12 +59,12 @@ pub(crate) struct UnivMonQMetadata {
     pub(crate) input_encoding: String,
     pub(crate) seed_list: Vec<u64>,
     pub(crate) seed_index: u32,
-    pub(crate) levels: u32,
-    pub(crate) width: u32,
-    pub(crate) width_halving_period: u8,
-    pub(crate) depth: u32,
+    pub(crate) layers: u32,
+    pub(crate) top_layer_cols: u32,
+    pub(crate) cols_halving_period: u8,
+    pub(crate) rows: u32,
     pub(crate) counter_type: String,
-    pub(crate) candidates: u32,
+    pub(crate) heap_size: u32,
     pub(crate) ordered_samples: u32,
 }
 
@@ -88,12 +88,12 @@ pub(crate) fn univmon_q_metadata<H: HashProfile>(
         input_encoding: H::INPUT_ENCODING.to_string(),
         seed_list: H::seed_list(),
         seed_index: field("hash_seed", config.hash_seed)?,
-        levels: field("levels", config.levels)?,
-        width: field("width", config.width)?,
-        width_halving_period: config.width_halving_period,
-        depth: field("depth", config.depth)?,
+        layers: field("layers", config.levels)?,
+        top_layer_cols: field("top_layer_cols", config.width)?,
+        cols_halving_period: config.width_halving_period,
+        rows: field("rows", config.depth)?,
         counter_type: counter_type.to_string(),
-        candidates: field("candidates", config.candidates)?,
+        heap_size: field("heap_size", config.candidates)?,
         ordered_samples: field("ordered_samples", config.ordered_samples)?,
     })
 }
@@ -101,12 +101,12 @@ pub(crate) fn univmon_q_metadata<H: HashProfile>(
 /// The config a validated metadata block describes.
 fn config_of(meta: &UnivMonQMetadata) -> Result<UnivMonQConfig, RmpDecodeError> {
     Ok(UnivMonQConfig {
-        levels: meta.levels as usize,
-        width: meta.width as usize,
-        width_halving_period: meta.width_halving_period,
-        depth: meta.depth as usize,
+        levels: meta.layers as usize,
+        width: meta.top_layer_cols as usize,
+        width_halving_period: meta.cols_halving_period,
+        depth: meta.rows as usize,
         counter_bits: counter_bits_of(&meta.counter_type)?,
-        candidates: meta.candidates as usize,
+        candidates: meta.heap_size as usize,
         ordered_samples: meta.ordered_samples as usize,
         hash_seed: meta.seed_index as usize,
     })
@@ -296,10 +296,9 @@ fn validate_shared(config: UnivMonQConfig, shared: &SharedPayload) -> Result<(),
             "UnivMon-Q has ordered state while ordered sampling is disabled".to_string(),
         ));
     }
-    let unique: HashSet<&OrderedOccurrence> = shared.occurrences.iter().collect();
-    if unique.len() != shared.occurrences.len() {
+    if shared.occurrences.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(decode_error(
-            "duplicate UnivMon-Q ordered occurrences".to_string(),
+            "UnivMon-Q ordered occurrences are not strictly ascending".to_string(),
         ));
     }
     let valid_extrema = if shared.count == 0 {
@@ -512,14 +511,18 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
             let run = shared.candidate_lens[index] as usize;
             let mut candidate_scores = HashMap::with_capacity(run);
             let mut candidate_heap = BinaryHeap::with_capacity(run);
+            if shared.candidate_keys[candidate..candidate + run]
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            {
+                return Err(decode_error(format!(
+                    "UnivMon-Q candidate keys at layer {index} are not strictly ascending"
+                )));
+            }
             for offset in candidate..candidate + run {
                 let key = shared.candidate_keys[offset];
                 let score = shared.candidate_scores[offset];
-                if candidate_scores.insert(key, score).is_some() {
-                    return Err(decode_error(
-                        "duplicate UnivMon-Q candidate keys".to_string(),
-                    ));
-                }
+                candidate_scores.insert(key, score);
                 candidate_heap.push(Reverse((score, key)));
             }
             candidate += run;
@@ -625,7 +628,7 @@ mod tests {
 
         let meta = metadata_of(&encoded);
         assert_eq!(meta.metadata_version, 1);
-        assert_eq!((meta.levels, meta.width, meta.depth), (4, 64, 3));
+        assert_eq!((meta.layers, meta.top_layer_cols, meta.rows), (4, 64, 3));
         assert_eq!(meta.counter_type, "i64");
         assert_eq!(meta.seed_index, 5);
 
@@ -900,6 +903,60 @@ mod tests {
         );
     }
 
+    /// Candidates within a layer and the occurrences are each strictly
+    /// ascending; a swapped pair or a repeat is rejected.
+    #[test]
+    fn univmon_q_rejects_entries_out_of_emitted_order() {
+        let encoded = populated().serialize_to_bytes().expect("serialize");
+        let base = metadata_of(&encoded);
+        let decode = |payload: &UnivMonQPayload<i64>| {
+            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&crafted(&base, payload))
+        };
+        assert!(decode(&payload_of(&encoded)).is_ok());
+
+        let payload = payload_of(&encoded);
+        let layer = payload
+            .candidate_lens
+            .iter()
+            .position(|&len| len >= 2)
+            .expect("a layer holding two candidates");
+        let start: usize = payload.candidate_lens[..layer]
+            .iter()
+            .map(|&len| len as usize)
+            .sum();
+        let mut swapped = payload_of(&encoded);
+        swapped.candidate_keys.swap(start, start + 1);
+        swapped.candidate_scores.swap(start, start + 1);
+        let error = decode(&swapped).map(drop).expect_err("swapped candidates");
+        assert!(
+            error.to_string().contains("not strictly ascending"),
+            "{error}"
+        );
+
+        let mut repeated = payload_of(&encoded);
+        repeated.candidate_keys[start + 1] = repeated.candidate_keys[start];
+        assert!(decode(&repeated).is_err(), "a repeated candidate key");
+
+        let mut occurrences = payload_of(&encoded);
+        assert!(occurrences.occurrence_keys.len() >= 2);
+        occurrences.occurrence_priority_high.swap(0, 1);
+        occurrences.occurrence_priority_low.swap(0, 1);
+        occurrences.occurrence_keys.swap(0, 1);
+        let error = decode(&occurrences)
+            .map(drop)
+            .expect_err("swapped occurrences");
+        assert!(
+            error.to_string().contains("not strictly ascending"),
+            "{error}"
+        );
+
+        let mut twice = payload_of(&encoded);
+        twice.occurrence_priority_high[1] = twice.occurrence_priority_high[0];
+        twice.occurrence_priority_low[1] = twice.occurrence_priority_low[0];
+        twice.occurrence_keys[1] = twice.occurrence_keys[0];
+        assert!(decode(&twice).is_err(), "a repeated occurrence");
+    }
+
     /// A sketch whose levels disagree with its own config must not serialize.
     #[test]
     fn univmon_q_rejects_serializing_an_inconsistent_state() {
@@ -938,12 +995,12 @@ mod tests {
             input_encoding: String,
             seed_list: Vec<u64>,
             seed_index: u32,
-            levels: u32,
-            width: u32,
-            width_halving_period: u8,
-            depth: u32,
+            layers: u32,
+            top_layer_cols: u32,
+            cols_halving_period: u8,
+            rows: u32,
             counter_type: String,
-            candidates: u32,
+            heap_size: u32,
             ordered_samples: u32,
             bogus_field: u8, // key not in UnivMonQMetadata
         }
@@ -956,11 +1013,11 @@ mod tests {
             input_encoding: String,
             seed_list: Vec<u64>,
             seed_index: u32,
-            levels: u32,
-            width: u32,
-            width_halving_period: u8,
-            depth: u32,
-            candidates: u32,
+            layers: u32,
+            top_layer_cols: u32,
+            cols_halving_period: u8,
+            rows: u32,
+            heap_size: u32,
             ordered_samples: u32,
         }
         let m = univmon_q_metadata::<DefaultXxHasher>(tiny_config(), "i64").expect("metadata");
@@ -972,12 +1029,12 @@ mod tests {
             input_encoding: m.input_encoding.clone(),
             seed_list: m.seed_list.clone(),
             seed_index: m.seed_index,
-            levels: m.levels,
-            width: m.width,
-            width_halving_period: m.width_halving_period,
-            depth: m.depth,
+            layers: m.layers,
+            top_layer_cols: m.top_layer_cols,
+            cols_halving_period: m.cols_halving_period,
+            rows: m.rows,
             counter_type: m.counter_type.clone(),
-            candidates: m.candidates,
+            heap_size: m.heap_size,
             ordered_samples: m.ordered_samples,
             bogus_field: 7,
         };
@@ -989,11 +1046,11 @@ mod tests {
             input_encoding: m.input_encoding.clone(),
             seed_list: m.seed_list.clone(),
             seed_index: m.seed_index,
-            levels: m.levels,
-            width: m.width,
-            width_halving_period: m.width_halving_period,
-            depth: m.depth,
-            candidates: m.candidates,
+            layers: m.layers,
+            top_layer_cols: m.top_layer_cols,
+            cols_halving_period: m.cols_halving_period,
+            rows: m.rows,
+            heap_size: m.heap_size,
             ordered_samples: m.ordered_samples,
         };
         assert!(
