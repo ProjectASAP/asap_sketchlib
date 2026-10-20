@@ -1,8 +1,8 @@
 //! KLL quantile sketch (dynamic / insert-optimized variant).
 //!
-//! This variant uses a dynamically-growing `Vector1D` buffer instead of a
-//! pre-allocated fixed-size array. Insertion and compaction follow the compact
-//! KLL layout from:
+//! This variant appends items to a `Vector1D` and shifts them during
+//! compaction, instead of `Kll`'s leftward-grown buffer. Insertion and
+//! compaction follow the compact KLL layout from:
 //! "Insert-optimized implementation of streaming data sketches" (Pfeil et al., 2025).
 //! CDF construction follows the pattern described in dgryski/go-kll, based on the
 //! weighted CDF approach from the original KLL paper (Karnin, Lang & Liberty, FOCS 2016).
@@ -33,9 +33,9 @@ pub struct DynamicCdfEntry {
 
 /// KLL quantile sketch using a dynamic, insert-optimized layout.
 ///
-/// Unlike [`Kll`](super::kll::Kll), which pre-allocates a fixed buffer and
-/// grows downward, `KllDynamic` appends items to a growable `Vector1D` and
-/// shifts elements during compaction.
+/// Unlike [`Kll`](super::kll::Kll), which grows its buffer downward,
+/// `KllDynamic` appends items to a growable `Vector1D` and shifts elements
+/// during compaction.
 #[derive(Clone, Debug)]
 pub struct KllDynamic<T: NumericalValue = f64> {
     items: Vector1D<T>, // compactors, packed

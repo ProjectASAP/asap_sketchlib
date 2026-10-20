@@ -337,6 +337,10 @@ signals a backwards-compatible change.
   `total_weight` is the total inserted weight; UnivMon's `estimate_entropy` is
   in bits and UnivMon-Q's in nats. Spec §3.15 / §3.16 rule 3 bounds `layers`
   by 19 (`UNIVMON_MAX_LAYERS`), the seed-table ceiling the code enforces.
+- **`Kll` allocates its item buffer as items arrive.** The buffer starts
+  empty, then holds 16 items and doubles up to the sketch's full capacity; a
+  decoded sketch holds just its retained items. Retained items, coin tosses,
+  quantiles, merges and ASAPv1 bytes do not depend on the buffer's size.
 
 ### Removed
 

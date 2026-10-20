@@ -97,6 +97,8 @@ assert!(q50 >= 10.0);
 - `Kll<T>` is generic over numeric types implementing `NumericalValue`.
 - `update_data_input` exists only on `Kll<f64>` for type-erased `DataInput` call paths.
 - Query-side APIs still return `f64`.
+- The item buffer starts empty and doubles (from 16 items) up to the sketch's
+  full capacity; retained items and coin tosses do not depend on its size.
 
 ## Status
 
