@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "asap_sketchlib"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "core_affinity",
  "crossbeam-channel",

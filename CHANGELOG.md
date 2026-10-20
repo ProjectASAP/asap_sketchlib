@@ -10,6 +10,18 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-20
+
+Breaking release. ASAPv1 is the one serialized form: protobuf, the legacy
+MessagePack wrappers and `serde` on sketch types are removed. Public names
+follow one scheme (every write is `update`, getters drop `get_`, acronyms are
+one word). Adds ASAPv1 deltas for the counter, HLL, DDSketch and SetAggregator
+sketches, `TupleKey` heap keys, `Vector3D`, Count-Min and Count Sketch with
+Space-Saving, and the experimental `CountMinHll` and `MicroCm`. Fixes the
+UnivMon cardinality and L2 estimators, a KllDynamic NaN panic and an
+`OctoRuntime::flush` race. See **Changed** and **Removed** below for the
+renames and wire changes.
+
 ### Added
 
 - **`Hydra::query_group_total(key)`** returns a subpopulation's total mass
@@ -948,7 +960,8 @@ Initial crates.io release.
 
 Pre-release tag. Not published to crates.io.
 
-[Unreleased]: https://github.com/ProjectASAP/asap_sketchlib/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ProjectASAP/asap_sketchlib/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ProjectASAP/asap_sketchlib/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ProjectASAP/asap_sketchlib/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/ProjectASAP/asap_sketchlib/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/ProjectASAP/asap_sketchlib/compare/v0.2.0...v0.2.1

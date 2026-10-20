@@ -43,7 +43,7 @@ cargo add asap_sketchlib
 
 ```toml
 [dependencies]
-asap_sketchlib = "0.3"
+asap_sketchlib = "0.4"
 ```
 
 API docs are hosted on [docs.rs](https://docs.rs/asap_sketchlib).
@@ -52,7 +52,7 @@ Alternatively, pin to a tagged revision from GitHub:
 
 ```toml
 [dependencies]
-asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", tag = "v0.3.0" }
+asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", tag = "v0.4.0" }
 ```
 
 ### Count distinct users with HyperLogLog
