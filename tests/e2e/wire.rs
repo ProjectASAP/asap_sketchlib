@@ -91,7 +91,7 @@ fn a_bloom_envelope_round_trips_on_both_paths_and_names_its_kind() {
 
 #[test]
 fn a_coco_envelope_round_trips_and_names_its_kind() {
-    let mut coco = CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(512, 4, 0xC0C0);
+    let mut coco = CocoSketch::<DefaultXxHasher>::with_dimensions_and_seed(4, 512, 0xC0C0);
     for k in frequency_stream() {
         coco.update_weighted(&format!("flow-{k}"), 1);
     }

@@ -277,7 +277,7 @@ pub(crate) mod tests {
             3, 8
         ))];
         out.push(EhBucketSketch::CocoSketch(
-            crate::CocoSketch::init_with_size(16, 2),
+            crate::CocoSketch::with_dimensions(2, 16),
         ));
         out.push(EhBucketSketch::CountSketchWithL2Norm(
             CountSketchWithL2Norm::with_dimensions(3, 256),

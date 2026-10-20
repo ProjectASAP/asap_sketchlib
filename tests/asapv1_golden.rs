@@ -1319,7 +1319,7 @@ const COCO_CELLS: [(usize, usize, &str, u64); 15] = [
 fn coco_3x7_matches_golden() {
     let want = decode_hex(GOLDEN_COCO);
 
-    let mut sketch: CocoSketch = CocoSketch::init_with_size(7, 3);
+    let mut sketch: CocoSketch = CocoSketch::with_dimensions(3, 7);
     for (r, c, key, val) in COCO_CELLS {
         sketch.table[r][c] = CocoBucket {
             full_key: Some(key.to_string()),

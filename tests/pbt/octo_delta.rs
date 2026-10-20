@@ -583,7 +583,7 @@ proptest! {
         seed in any::<u64>(),
         keys in stream(300),
     ) {
-        let mut worker = CocoSketchWorker::with_seed(w, d, seed);
+        let mut worker = CocoSketchWorker::with_seed(d, w, seed);
         let mut deltas: Vec<CocoDelta> = Vec::new();
         for k in &keys {
             worker.update_emit_delta(&flow(*k), tau, &mut |delta| deltas.push(delta));
@@ -619,7 +619,7 @@ proptest! {
         keys in stream(300),
     ) {
         let mut workers: Vec<CocoSketchWorker> = (0..shards)
-            .map(|i| CocoSketchWorker::with_seed(w, d, seed.wrapping_add(i as u64 + 1)))
+            .map(|i| CocoSketchWorker::with_seed(d, w, seed.wrapping_add(i as u64 + 1)))
             .collect();
         let mut parent = CocoOctoAggregator::with_seed(w, d, seed);
         for (i, k) in keys.iter().enumerate() {
@@ -650,7 +650,7 @@ proptest! {
         n in 2usize..120,
         seed in any::<u64>(),
     ) {
-        let mut worker = CocoSketchWorker::with_seed(1, d, seed);
+        let mut worker = CocoSketchWorker::with_seed(d, 1, seed);
         let mut promoted = 0usize;
         for k in 0..n as u64 {
             worker.update_emit_delta(&flow(k), OCTO_MAX_PROMOTION_THRESHOLD, &mut |_| promoted += 1);
@@ -677,7 +677,7 @@ proptest! {
         seed in any::<u64>(),
         keys in stream(300),
     ) {
-        let mut worker = CocoSketchWorker::with_seed(w, d, seed);
+        let mut worker = CocoSketchWorker::with_seed(d, w, seed);
         for k in &keys {
             let arrival = flow(*k);
             let mut promoted: Vec<CocoDelta> = Vec::new();
@@ -1042,7 +1042,7 @@ proptest! {
             prop_assert_eq!(d.count, u64::from(OCTO_DDSKETCH_DEFAULT_THRESHOLD), "a DDSketch promotion carried {}", d.count);
         }
 
-        let mut coco = CocoSketchWorker::with_seed(8, 2, seed);
+        let mut coco = CocoSketchWorker::with_seed(2, 8, seed);
         let mut coco_deltas: Vec<CocoDelta> = Vec::new();
         for k in &keys {
             coco.update_emit_delta(&flow(*k), OCTO_COCO_DEFAULT_THRESHOLD, &mut |d| coco_deltas.push(d));

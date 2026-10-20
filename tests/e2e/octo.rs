@@ -3031,7 +3031,7 @@ mod heavy_hitters {
             let mut this = Self {
                 children: Vec::with_capacity(workers),
                 seen: vec![0; workers],
-                parent: CocoSketch::init_with_size_and_seed(w, d, seed),
+                parent: CocoSketch::with_dimensions_and_seed(d, w, seed),
                 period,
                 w,
                 d,
@@ -3049,7 +3049,7 @@ mod heavy_hitters {
         /// An empty child table on the next seed.
         fn fresh(&mut self) -> CocoSketch {
             self.next_seed += 1;
-            CocoSketch::init_with_size_and_seed(self.w, self.d, self.next_seed)
+            CocoSketch::with_dimensions_and_seed(self.d, self.w, self.next_seed)
         }
 
         fn insert(&mut self, index: usize, raw: u64) {
@@ -4112,7 +4112,7 @@ mod heavy_hitters {
                 COCO_SEED + 100 + seed,
             );
             let mut ideal: CocoSketch =
-                CocoSketch::init_with_size_and_seed(w, d, COCO_SEED + 200 + seed);
+                CocoSketch::with_dimensions_and_seed(d, w, COCO_SEED + 200 + seed);
             let mut running: HashMap<String, u64> = HashMap::new();
             let mut seen = 0u64;
             let stride = n / 8;

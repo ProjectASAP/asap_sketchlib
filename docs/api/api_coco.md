@@ -18,24 +18,24 @@ subset aggregation.
 
 ```rust
 fn new() -> Self
-fn init_with_size(w: usize, d: usize) -> Self
-fn init_with_size_and_seed(w: usize, d: usize, seed: u64) -> Self
+fn with_dimensions(rows: usize, cols: usize) -> Self
+fn with_dimensions_and_seed(rows: usize, cols: usize, seed: u64) -> Self
 ```
 
-`new()` builds a `1024 x 4` table: 4096 buckets, 128 KiB, plus a heap allocation
+`new()` builds a `4 x 1024` table: 4096 buckets, 128 KiB, plus a heap allocation
 per occupied bucket for its stored key.
 
-`new` and `init_with_size` draw the tie-break and the election from the thread
-generator. `init_with_size_and_seed` draws them from a generator seeded with
+`new` and `with_dimensions` draw the tie-break and the election from the thread
+generator. `with_dimensions_and_seed` draws them from a generator seeded with
 `seed`, so the table is a deterministic function of the seed and the insert
 sequence; a clone copies the generator's state along with the table.
 
-Sizing: `d` is the number of arrays an insert scans, and the paper recommends
-2 to 4 — larger `d` spreads small flows better at the cost of a longer scan per
-packet. `w` is the buckets per array, and it is the parameter to raise: bucket
-count drives the collision rate, and the sketch can attribute mass to at most
-`w * d` distinct keys at once, so size it against the number of heavy flows you
-expect to resolve.
+Sizing: `rows` is the number of arrays an update scans (the paper's `d`), and the
+paper recommends 2 to 4 — more rows spread small flows better at the cost of a
+longer scan per packet. `cols` is the buckets per array (the paper's `w`), and it
+is the parameter to raise: bucket count drives the collision rate, and the
+sketch can attribute mass to at most `rows * cols` distinct keys at once, so size
+it against the number of heavy flows you expect to resolve.
 
 ## Insert/Update
 
@@ -43,7 +43,7 @@ expect to resolve.
 fn update_weighted(&mut self, key: &str, weight: u64)
 ```
 
-The SIGCOMM '21 update: the `d` mapped buckets are scanned for `key` first and a
+The SIGCOMM '21 update: the `rows` mapped buckets are scanned for `key` first and a
 match absorbs `v` directly; otherwise the whole increment lands in the smallest
 of them and that bucket's key is replaced with `key` with probability `v / val`.
 When several buckets share that smallest value the paper draws one of them
@@ -69,19 +69,19 @@ leaves a key in at most one bucket, so no key comes back twice. Step 4 is
 `SELECT g(k_F), SUM(Size) ... GROUP BY g(k_F)`, which is `group_by(g)`.
 
 Reach for `group_by` when you want the whole result table: it folds every
-recorded flow onto its partial key in one `O(w * d)` pass, where asking
+recorded flow onto its partial key in one `O(rows * cols)` pass, where asking
 `estimate_projected` for each partial key separately costs one such pass per
 group. A single known partial key is still cheaper through `estimate_projected`,
 which allocates nothing.
 
-`estimate` is the paper's point query: the sum of the `d` mapped buckets
-that currently hold `key`, in `O(d)`. Because every increment is attributed to
+`estimate` is the paper's point query: the sum of the `rows` mapped buckets
+that currently hold `key`, in `O(rows)`. Because every increment is attributed to
 exactly one bucket, summing it over the observed keys returns the total inserted
 mass.
 
 `estimate_projected` is the paper's partial-key query. Section 4.3 defines it as
 `SELECT g(k_F), SUM(Size) ... GROUP BY g(k_F)`, where `g` maps a full key to a
-partial key; `project` is that `g`. The table is scanned in `O(w * d)` and a
+partial key; `project` is that `g`. The table is scanned in `O(rows * cols)` and a
 bucket counts only when its stored full key projects exactly to `partial_key`.
 
 `estimate_with_udf` is the same scan behind a general predicate over the
@@ -124,7 +124,7 @@ map every key to the same bucket. A wider table is refused on both sides.
 ```rust
 use asap_sketchlib::CocoSketch;
 
-let mut sk = CocoSketch::init_with_size(1024, 4);
+let mut sk = CocoSketch::with_dimensions(4, 1024);
 sk.update_weighted("region=us|id=1", 3);
 let _ = sk.estimate("region=us|id=1");
 let _ = sk.estimate_projected("region=us", |full| {

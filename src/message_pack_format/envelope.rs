@@ -263,7 +263,7 @@ mod tests {
             univmon_bytes.update_weighted(key, 2);
         }
         ss_u64.update(&DataInput::U64(9));
-        let mut coco: CocoSketch = CocoSketch::init_with_size(8, 2);
+        let mut coco: CocoSketch = CocoSketch::with_dimensions(2, 8);
         coco.update_weighted("flow::a", 3);
         let mut elastic: ElasticSketch = ElasticSketch::with_heavy_and_light(4, 2, 16);
         elastic.update("flow::a".to_string());

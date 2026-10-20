@@ -112,8 +112,8 @@ fn every_eh_variant_selects_the_documented_merge_norm() {
         ),
         (
             "CocoSketch",
-            asap_sketchlib::EhBucketSketch::CocoSketch(CocoSketch::init_with_size_and_seed(
-                512, 4, COCO_SEED,
+            asap_sketchlib::EhBucketSketch::CocoSketch(CocoSketch::with_dimensions_and_seed(
+                4, 512, COCO_SEED,
             )),
         ),
         (
@@ -274,7 +274,7 @@ fn eh_elastic_variant_stays_one_sided_over_the_retained_window() {
 fn eh_coco_variant_conserves_the_retained_mass() {
     let (merged, truth, ctx) =
         run_heavy_hitter_variant(asap_sketchlib::EhBucketSketch::CocoSketch(
-            CocoSketch::init_with_size_and_seed(1024, 4, COCO_SEED),
+            CocoSketch::with_dimensions_and_seed(4, 1024, COCO_SEED),
         ));
     let asap_sketchlib::EhBucketSketch::CocoSketch(coco) = &merged else {
         panic!("a CocoSketch histogram merges into a CocoSketch payload");
@@ -722,7 +722,7 @@ fn every_eh_variant_can_merge_into_its_own_kind() {
         ),
         (
             "CocoSketch",
-            EhBucketSketch::CocoSketch(CocoSketch::init_with_size_and_seed(256, 4, COCO_SEED)),
+            EhBucketSketch::CocoSketch(CocoSketch::with_dimensions_and_seed(4, 256, COCO_SEED)),
         ),
         (
             "CountSketchWithL2Norm",

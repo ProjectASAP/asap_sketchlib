@@ -819,9 +819,9 @@ mod keyed_bucket {
         let (mut single, mut merged) = (Vec::new(), Vec::new());
         for trial in 0..TRIALS {
             let seed = COCO_SEED + 3 * trial;
-            let mut one = CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed);
-            let mut left = CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed + 1);
-            let mut right = CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed + 2);
+            let mut one = CocoSketch::<DefaultXxHasher>::with_dimensions_and_seed(D, W, seed);
+            let mut left = CocoSketch::<DefaultXxHasher>::with_dimensions_and_seed(D, W, seed + 1);
+            let mut right = CocoSketch::<DefaultXxHasher>::with_dimensions_and_seed(D, W, seed + 2);
             for (i, k) in stream.iter().enumerate() {
                 let key = flow_key(*k);
                 one.update_weighted(&key, 1);
@@ -879,8 +879,8 @@ mod keyed_bucket {
     /// disjoint one together return the stream mass.
     #[test]
     fn coco_disjoint_prefix_families_partition_the_mass() {
-        let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
-            256, 2, COCO_SEED,
+        let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed(
+            2, 256, COCO_SEED,
         );
         let mut total = 0u64;
         for i in 0..3000u64 {
@@ -908,9 +908,9 @@ mod keyed_bucket {
     #[test]
     fn coco_point_queries_partition_the_inserted_mass() {
         const COCO_BUCKETS: usize = 128;
-        let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
-            COCO_BUCKETS,
+        let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed(
             3,
+            COCO_BUCKETS,
             COCO_SEED,
         );
         let mut truth: HashMap<String, u64> = HashMap::new();
@@ -950,9 +950,9 @@ mod keyed_bucket {
         let mut estimates: Vec<u64> = Vec::with_capacity(TRIALS);
 
         for trial in 0..TRIALS {
-            let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
-                32,
+            let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed(
                 2,
+                32,
                 COCO_SEED + trial as u64,
             );
             let mut sent = 0u64;
@@ -1016,9 +1016,9 @@ mod keyed_bucket {
         let mut recorded = 0usize;
 
         for trial in 0..TRIALS {
-            let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
-                WIDTH,
+            let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed(
                 DEPTH,
+                WIDTH,
                 COCO_SEED + trial as u64,
             );
             let mut sent = 0u64;
@@ -1207,7 +1207,7 @@ mod partial_key_and_heavy_maintenance {
 
     fn filled_coco() -> (CocoSketch<DefaultXxHasher>, u64) {
         let mut coco =
-            CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(2_048, 4, super::COCO_SEED);
+            CocoSketch::<DefaultXxHasher>::with_dimensions_and_seed(4, 2_048, super::COCO_SEED);
         let mut inserted = 0u64;
         for (i, key) in coco_keys().iter().enumerate() {
             let weight = REPEATS + (i % 3) as u64;

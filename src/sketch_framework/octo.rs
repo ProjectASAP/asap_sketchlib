@@ -526,23 +526,23 @@ pub struct CocoSketchWorker {
 }
 
 impl CocoSketchWorker {
-    /// Creates a `d` x `w` worker table, empty and cleared, drawing from the
-    /// thread generator. The argument order is `CocoSketch::init_with_size`'s.
-    pub fn new(w: usize, d: usize) -> Self {
-        Self::with_rng(w, d, CocoRng::default())
+    /// Creates a `rows` x `cols` worker table, empty and cleared, drawing from
+    /// the thread generator. The argument order is `CocoSketch::with_dimensions`'s.
+    pub fn new(rows: usize, cols: usize) -> Self {
+        Self::with_rng(rows, cols, CocoRng::default())
     }
 
     /// As [`Self::new`], drawing from `seed`.
-    pub fn with_seed(w: usize, d: usize, seed: u64) -> Self {
-        Self::with_rng(w, d, CocoRng::seeded(seed))
+    pub fn with_seed(rows: usize, cols: usize, seed: u64) -> Self {
+        Self::with_rng(rows, cols, CocoRng::seeded(seed))
     }
 
-    fn with_rng(w: usize, d: usize, rng: CocoRng) -> Self {
+    fn with_rng(rows: usize, cols: usize, rng: CocoRng) -> Self {
         Self {
-            keys: vec![None; w * d],
-            counters: vec![0u8; w * d],
-            cols: w,
-            rows: d,
+            keys: vec![None; rows * cols],
+            counters: vec![0u8; rows * cols],
+            cols,
+            rows,
             rng,
         }
     }
@@ -2245,7 +2245,7 @@ impl CocoOctoWorker {
     /// Creates a worker sharing `threshold` with its peers and the aggregator.
     pub fn with_threshold(w: usize, d: usize, threshold: OctoThreshold) -> Self {
         Self {
-            sketch: CocoSketchWorker::new(w, d),
+            sketch: CocoSketchWorker::new(d, w),
             threshold,
         }
     }
@@ -2258,7 +2258,7 @@ impl CocoOctoWorker {
         seed: u64,
     ) -> Self {
         Self {
-            sketch: CocoSketchWorker::with_seed(w, d, seed),
+            sketch: CocoSketchWorker::with_seed(d, w, seed),
             threshold,
         }
     }
@@ -2309,14 +2309,14 @@ impl CocoOctoAggregator {
     /// Creates an aggregator with a `d` x `w` parent table.
     pub fn new(w: usize, d: usize) -> Self {
         Self {
-            sketch: CocoSketch::init_with_size(w, d),
+            sketch: CocoSketch::with_dimensions(d, w),
         }
     }
 
     /// As [`Self::new`], with the parent table drawing from `seed`.
     pub fn with_seed(w: usize, d: usize, seed: u64) -> Self {
         Self {
-            sketch: CocoSketch::init_with_size_and_seed(w, d, seed),
+            sketch: CocoSketch::with_dimensions_and_seed(d, w, seed),
         }
     }
 }
@@ -3368,7 +3368,7 @@ mod worker_tests {
 
     #[test]
     fn coco_worker_promotes_the_key_its_bucket_holds_and_clears_it() {
-        let mut worker = CocoSketchWorker::new(64, 2);
+        let mut worker = CocoSketchWorker::new(2, 64);
         let key = "flow::coco";
         let mut deltas: Vec<CocoDelta> = Vec::new();
 
@@ -3391,7 +3391,7 @@ mod worker_tests {
     fn coco_promotion_conserves_the_inserted_mass() {
         // Every insert lands in exactly one bucket, so what the parent received
         // plus what the worker still holds is the whole stream.
-        let mut worker = CocoSketchWorker::new(16, 2);
+        let mut worker = CocoSketchWorker::new(2, 16);
         let mut parent = CocoOctoAggregator::new(16, 2);
         let inserted = 5_000u64;
         for i in 0..inserted {

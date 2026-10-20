@@ -79,7 +79,7 @@ fn crowded_pair(max: usize) -> impl Strategy<Value = CrowdedPair> {
 }
 
 fn filled(w: usize, d: usize, seed: u64, stream: &[(u64, u64)]) -> C {
-    let mut sketch = C::init_with_size_and_seed(w, d, seed);
+    let mut sketch = C::with_dimensions_and_seed(d, w, seed);
     for (id, v) in stream {
         sketch.update_weighted(&key_of(*id), *v);
     }
@@ -166,7 +166,7 @@ proptest! {
         seed in any::<u64>(),
         stream in keys(200),
     ) {
-        let mut sketch = C::init_with_size_and_seed(width, depth, seed);
+        let mut sketch = C::with_dimensions_and_seed(depth, width, seed);
         for k in &stream {
             sketch.update_weighted(&format!("flow-{k}"), 1);
         }

@@ -328,7 +328,7 @@ error against its bound.
   sketch appears only where the assertion holds for every draw. `Kll::with_k_and_seed`,
   `KllDynamic::with_k_and_seed`, `KllSketch::with_seed`,
   `NitroBatch::with_target_and_seed`, `UniformSampling::with_seed`,
-  `CocoSketch::init_with_size_and_seed` and `CocoOctoPlan::with_seed` exist for this.
+  `CocoSketch::with_dimensions_and_seed` and `CocoOctoPlan::with_seed` exist for this.
 - An estimator whose guarantee is unbiasedness gets no per-key band: its
   accuracy is the mean over independent seeds, within standard errors of the
   truth (`specs::assert_unbiased_mean`).
