@@ -1,13 +1,10 @@
-//! Property tests for Count Sketch: the native matrix sketch and the portable
-//! `CountSketch` that carries it over the wire.
+//! Property tests for Count Sketch.
 //!
 //! Charikar, Chen, Farach-Colton, ICALP '02.
 
 use crate::support::{
-    PROBE_KEYS, edge_dimension, edge_rows, grid, keyed_updates, keys, matrices_close_at_mass,
+    PROBE_KEYS, edge_dimension, edge_rows, grid, keys,
 };
-use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch as PortableCountSketch;
 use asap_sketchlib::{CountSketch, DataInput, RegularPath, Vector2D};
 use proptest::prelude::*;
 
@@ -29,28 +26,9 @@ fn weighted(max: usize) -> impl Strategy<Value = Vec<(u64, i32)>> {
     prop::collection::vec((0u64..512, 1i32..8), 0..max)
 }
 
-fn cs_of(rows: usize, cols: usize, updates: &[(String, f64)]) -> PortableCountSketch {
-    let mut s = PortableCountSketch::new(rows, cols);
-    for (k, v) in updates {
-        s.update(k, *v);
-    }
-    s
-}
-
 /// Signed weights small enough that no `i32` cell can overflow.
 fn signed_weights(max: usize) -> impl Strategy<Value = Vec<(u64, i32)>> {
     prop::collection::vec((0u64..512, -1_000i32..1_000), 0..max)
-}
-
-/// Integral weights, so every portable cell stays exact in `f64`.
-fn integral_updates(max: usize) -> impl Strategy<Value = Vec<(String, f64)>> {
-    prop::collection::vec(("[a-z]{1,4}", -1_000i32..1_000), 0..max)
-        .prop_map(|v| v.into_iter().map(|(k, w)| (k, f64::from(w))).collect())
-}
-
-/// Power-of-two widths the packed-64 hash carries at these row counts.
-fn packed_cols() -> impl Strategy<Value = usize> {
-    prop_oneof![Just(2usize), Just(4), Just(8), Just(16), Just(32)]
 }
 
 /// The cell and sign a key holds in each row, read off a sketch holding that
@@ -134,43 +112,7 @@ proptest! {
         prop_assert_eq!(cs_cells(&by_weight), cs_cells(&by_repeat));
     }
 
-    // ===== Merge algebra, on the portable representation =====
-
-    #[test]
-    fn count_sketch_merge_matches_streaming_the_concatenation(
-        rows in 1usize..6,
-        cols in 4usize..64,
-        a in keyed_updates(30),
-        b in keyed_updates(30),
-    ) {
-        let mut merged = cs_of(rows, cols, &a);
-        merged.merge(&cs_of(rows, cols, &b)).expect("merge");
-
-        let concatenated: Vec<_> = a.iter().chain(b.iter()).cloned().collect();
-        let streamed = cs_of(rows, cols, &concatenated);
-        let mass: f64 = concatenated.iter().map(|(_, w)| w.abs()).sum();
-
-        prop_assert!(matrices_close_at_mass(merged.sketch(), streamed.sketch(), mass));
-    }
-
     // ===== Wire =====
-
-    #[test]
-    fn count_sketch_round_trip_preserves_every_cell(
-        rows in 1usize..8,
-        cols in 1usize..128,
-        updates in keyed_updates(40),
-    ) {
-        let s = cs_of(rows, cols, &updates);
-
-        let bytes = s.to_msgpack().expect("encode");
-        let restored = PortableCountSketch::from_msgpack(&bytes).expect("decode");
-
-        prop_assert_eq!(restored.sketch(), s.sketch());
-        for (k, _) in &updates {
-            prop_assert_eq!(restored.estimate(k), s.estimate(k), "key {}", k);
-        }
-    }
 
     #[test]
     fn count_sketch_round_trips_at_edge_geometries(
@@ -331,50 +273,6 @@ proptest! {
                 estimate, ordered[rows / 2],
                 "key {}: estimate {} is not the middle of {:?}", key, estimate, ordered
             );
-        }
-    }
-
-    // ===== Cells are linear in the stream =====
-
-    #[test]
-    fn cells_of_two_streams_add_to_the_cells_of_their_concatenation(
-        rows in 1usize..6,
-        cols in packed_cols(),
-        a in integral_updates(30),
-        b in integral_updates(30),
-    ) {
-        let left = cs_of(rows, cols, &a);
-        let right = cs_of(rows, cols, &b);
-        let concatenated: Vec<_> = a.iter().chain(b.iter()).cloned().collect();
-        let both = cs_of(rows, cols, &concatenated);
-
-        for r in 0..rows {
-            for c in 0..cols {
-                prop_assert_eq!(
-                    left.sketch()[r][c] + right.sketch()[r][c], both.sketch()[r][c],
-                    "cell ({}, {})", r, c
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn negating_every_weight_negates_every_cell(
-        rows in 1usize..6,
-        cols in packed_cols(),
-        updates in integral_updates(40),
-    ) {
-        let forward = cs_of(rows, cols, &updates);
-        let negated: Vec<_> = updates.iter().map(|(k, v)| (k.clone(), -v)).collect();
-        let backward = cs_of(rows, cols, &negated);
-
-        for r in 0..rows {
-            for c in 0..cols {
-                prop_assert_eq!(
-                    backward.sketch()[r][c], -forward.sketch()[r][c],
-                    "cell ({}, {})", r, c
-                );
-            }
         }
     }
 }

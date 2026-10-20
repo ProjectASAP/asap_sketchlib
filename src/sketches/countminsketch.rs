@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use crate::common::structure_utils::AdmittedRows;
-use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
+use crate::asapv1::admission_rate::{admit_all, deserialize_rate};
 use crate::octo_delta::{
     CountMinSketchCellDelta, KeyedCountMinSketchCellDelta, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
     OCTO_MAX_PROMOTION_THRESHOLD,

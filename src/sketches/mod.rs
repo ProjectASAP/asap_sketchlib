@@ -78,6 +78,10 @@ pub use countminsketch::{CountMinSketch, CountMinSketchDelta, QUICKSTART_COLS, Q
 
 pub mod elastic;
 pub use elastic::ElasticSketch;
+
+/// An exact set of string keys and its delta.
+pub mod set_aggregator;
+pub use set_aggregator::{SetAggregator, SetAggregatorDelta};
 pub use elastic::HeavyBucket;
 
 /// HyperLogLog implementations and aliases.

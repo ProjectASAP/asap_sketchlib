@@ -6,8 +6,8 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
+use crate::asapv1::envelope;
+use crate::asapv1::wire_key::{WireBytes, WireString, exact_vec};
 use crate::sketches::countminsketch_heap::heap_wire::{
     EMPTY_KEY_TYPE, check_distinct_keys, check_empty_key_type, check_geometry, key_type_of,
 };
@@ -347,7 +347,7 @@ pub(crate) fn decode<C: DeserializeOwned, H: SketchHasher + HashProfile>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_pack_format::kind;
+    use crate::asapv1::kind;
     use crate::{
         CountMinSketch, CountMinSketchWithHeap, CountMinSketchWithSpaceSaving,
         CountSketchWithSpaceSaving, DataInput, DefaultXxHasher, FastPath, MATRIX_MAX_ROWS,

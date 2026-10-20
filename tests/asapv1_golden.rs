@@ -11,9 +11,6 @@
 use std::collections::HashSet;
 
 use asap_sketchlib::common::input::HydraCounter;
-use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::message_pack_format::portable::hll::HllSketch;
-use asap_sketchlib::message_pack_format::portable::hll::HllVariant;
 use asap_sketchlib::sketches::CountSketchDelta;
 use asap_sketchlib::sketches::hll::HllWireVariant;
 use asap_sketchlib::{
@@ -154,96 +151,38 @@ const CS_VALS: [[i64; 4]; 2] = [[0, 127, 128, 65536], [-1, -33, -32768, -2147483
 const CS_F64_VALS: [[f64; 4]; 2] = [[0.0, -0.0, 1.5, -2.25], [127.0, -32768.5, 0.125, -1e300]];
 
 // ---------------------------------------------------------------------------
-// HLL: build known state -> serialize == golden, and golden round-trips.
+// HLL: golden decodes to the known state and round-trips. Encoding the known
+// state is checked in `src/sketches/hll/wire.rs`, which can build it.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn hll_classic_p12_matches_golden() {
     let want = decode_hex(GOLDEN_CLASSIC);
-    let regs = p12_registers();
-
-    // Build known state and serialize.
-    let got = HllSketch::from_raw(HllVariant::Regular, 12, regs.clone(), 0.0, 0.0, 0.0)
-        .to_msgpack()
-        .expect("serialize");
-    assert_eq!(got, want, "Classic P12 bytes diverge from golden");
-
-    // Native wire path (src/sketches/hll.rs) round-trips the golden identically.
     let native = HyperLogLogP12::<Classic>::from_asapv1(&want).expect("native decode");
-    assert_eq!(native.registers_as_slice(), regs.as_slice());
+    assert_eq!(native.registers_as_slice(), p12_registers().as_slice());
     assert_eq!(native.to_asapv1().expect("re-serialize"), want);
-
-    // Portable decode round-trips to the same known state.
-    let decoded = HllSketch::from_msgpack(&want).expect("decode");
-    assert_eq!(decoded.registers, regs);
-    assert_eq!(decoded.precision, 12);
-    assert_eq!(decoded.variant, HllVariant::Regular);
 }
 
 #[test]
 fn hll_ertl_mle_p12_matches_golden() {
     let want = decode_hex(GOLDEN_ERTL);
-    let regs = p12_registers();
-
-    let got = HllSketch::from_raw(HllVariant::Datafusion, 12, regs.clone(), 0.0, 0.0, 0.0)
-        .to_msgpack()
-        .expect("serialize");
-    assert_eq!(got, want, "Ertl-MLE P12 bytes diverge from golden");
-
     let native = HyperLogLogP12::<Ertl>::from_asapv1(&want).expect("native decode");
-    assert_eq!(native.registers_as_slice(), regs.as_slice());
+    assert_eq!(native.registers_as_slice(), p12_registers().as_slice());
     assert_eq!(native.to_asapv1().expect("re-serialize"), want);
-
-    let decoded = HllSketch::from_msgpack(&want).expect("decode");
-    assert_eq!(decoded.registers, regs);
-    assert_eq!(decoded.variant, HllVariant::Datafusion);
 }
 
 #[test]
 fn hll_hip_p12_matches_golden() {
     let want = decode_hex(GOLDEN_HIP);
-    let regs = p12_registers();
-
-    let got = HllSketch::from_raw(HllVariant::Hip, 12, regs.clone(), 1.5, 2.5, 3.0)
-        .to_msgpack()
-        .expect("serialize");
-    assert_eq!(got, want, "HIP P12 bytes diverge from golden");
-
-    // Native HIP wire path round-trips the golden identically.
     let native = HyperLogLogHipP12::from_asapv1(&want).expect("native decode");
     assert_eq!(native.to_asapv1().expect("re-serialize"), want);
-
-    let decoded = HllSketch::from_msgpack(&want).expect("decode");
-    assert_eq!(decoded.registers, regs);
-    assert_eq!(decoded.variant, HllVariant::Hip);
-    assert_eq!(decoded.hip_kxq0, 1.5);
-    assert_eq!(decoded.hip_kxq1, 2.5);
-    assert_eq!(decoded.hip_est, 3.0);
 }
 
 #[test]
 fn hll_hip_p14_matches_golden() {
     let want = decode_hex(GOLDEN_HIP_P14);
-    let mut regs = vec![0u8; 16384];
-    for (index, value) in [(0, 1), (1, 7), (8192, 42), (16383, 51)] {
-        regs[index] = value;
-    }
-
-    let got = HllSketch::from_raw(HllVariant::Hip, 14, regs.clone(), 16380.5, 0.25, 4.125)
-        .to_msgpack()
-        .expect("serialize");
-    assert_eq!(got, want, "HIP P14 bytes diverge from golden");
-
     let native = HyperLogLogHipP14::from_asapv1(&want).expect("native decode");
     assert_eq!(native.to_asapv1().expect("re-serialize"), want);
-
-    let decoded = HllSketch::from_msgpack(&want).expect("decode");
-    assert_eq!(decoded.registers, regs);
-    assert_eq!(decoded.precision, 14);
-    assert_eq!(decoded.variant, HllVariant::Hip);
-    assert_eq!(decoded.hip_kxq0, 16380.5);
-    assert_eq!(decoded.hip_kxq1, 0.25);
-    assert_eq!(decoded.hip_est, 4.125);
 }
 
 // ---------------------------------------------------------------------------

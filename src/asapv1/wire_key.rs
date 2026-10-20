@@ -253,7 +253,7 @@ impl<'de, V: Visitor<'de>> Visitor<'de> for Float32Only<V> {
 mod tests {
     use super::*;
     use crate::input::HydraCounter;
-    use crate::message_pack_format::envelope::{self, hex};
+    use crate::asapv1::envelope::{self, hex};
     use crate::*;
 
     fn float64(value: f64) -> Vec<u8> {

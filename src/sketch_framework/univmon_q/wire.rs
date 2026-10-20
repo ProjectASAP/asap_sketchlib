@@ -34,9 +34,9 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::UNIVMON_Q;
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::UNIVMON_Q;
 use crate::{HashProfile, SketchHasher};
 
 use super::{

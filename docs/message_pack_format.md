@@ -1,7 +1,7 @@
 # Message Pack Format
 
-`src/message_pack_format/` holds the Rust-side serialization plumbing. The
-current, self-describing wire format is **ASAPv1**; its byte-level layout is the
+`src/asapv1/` holds the Rust-side serialization plumbing (a private module).
+The self-describing wire format is **ASAPv1**; its byte-level layout is the
 single source of truth in
 [**`asapv1_wire_format.md`**](./asapv1_wire_format.md) — read that for the
 authoritative spec. This page describes how the code is organized.
@@ -49,7 +49,7 @@ the metadata field tables, and the byte-level encoding rules.
 
 ### Shared framing — `envelope.rs`
 
-`src/message_pack_format/envelope.rs` is the **one shared, sketch-agnostic**
+`src/asapv1/envelope.rs` is the **one shared, sketch-agnostic**
 module every sketch calls into. It owns the magic sentinel, the layout version,
 and the byte framing (`encode` / `split`). It validates only the magic, version,
 and framing — it does **not** know the `kind_id` registry or any sketch. Rule
@@ -140,29 +140,12 @@ Converted:
   **EhBucketSketch** (`src/sketch_framework/eh_bucket_sketch/wire.rs`, `0x14 0x00`) —
   one `[kind_id, descriptor, state]` triple, standalone and per bucket.
 - **SetAggregator** and **SetAggregatorDelta**
-  (`src/message_pack_format/portable/set_aggregator/wire.rs`, `0x08 0x00` and
+  (`src/sketches/set_aggregator/wire.rs`, `0x08 0x00` and
   `0x08 0x80`) — the members, and the added and removed members, as strictly
   ascending `str` arrays.
 
 NitroBatch, CountMinSketchFold, CountSketchFold, HashSketchEnsemble, ExponentialHistogramUnivMon and OctoSketch
 have **no `wire.rs`**; their `kind_id`s are reserved with payload TBD.
-
-## `portable/` and `native/` are being retired
-
-The `portable/` and `native/` sub-modules (and the `MessagePackCodec` trait /
-unified `Error` at the module root) are the **older** serialization path and are
-being **phased out** in favor of the per-sketch `wire.rs` + the shared
-`envelope.rs`.
-
-- `portable/` holds per-sketch wire types that predate the envelope. They
-  carry their own byte-parity goldens against `sketchlib-go` — HLL, Count-Min,
-  Count Sketch and KLL (both directions) — separate from `asapv1_golden/`.
-- `native/` is a set of thin `MessagePackCodec` shims over the sketches'
-  `to_asapv1` / `from_asapv1`. Every type it wraps emits the
-  ASAPv1 envelope, so each shim is a pass-through.
-
-Sequencing note (from the spec): `portable` is not deleted until the golden
-byte-vector fixtures are the drift guard on both sides.
 
 ## Cross-language parity
 
@@ -178,8 +161,6 @@ That proof covers the eight `kind_id`s the test checks — HLL's three
 estimators, Count-Min, Count Sketch, compact KLL, SetAggregator and its delta.
 Every other implemented kind has **no ASAPv1 golden and therefore no ASAPv1
 drift guard**; [its README](https://github.com/ProjectASAP/sketchlib-golden-bytes#coverage) lists what is covered.
-The older `portable` path is guarded separately, by the `sketchlib-go` goldens
-of its own listed above.
 
 ## Cross-Reference
 

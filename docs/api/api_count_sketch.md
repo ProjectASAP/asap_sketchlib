@@ -111,9 +111,7 @@ as the state serialization: the changed cells as strictly ascending row-major
 indices `row * cols + col`, below `rows * cols`, and the non-zero signed value
 added to each. `new` and the decoder refuse anything else. `merge_delta` adds
 the delta to the counters; a delta of other dimensions or admission rate, or an
-integer add that overflows, fails and leaves the sketch unchanged. The crate
-root's `CountSketchDelta` is the legacy portable type; this one is
-`asap_sketchlib::sketches::CountSketchDelta`.
+integer add that overflows, fails and leaves the sketch unchanged.
 
 ## Admission rate
 

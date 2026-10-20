@@ -72,7 +72,7 @@ tests/
 ├── e2e_matrix_instances.rs  # every (storage, path) instance of the matrix families
 ├── e2e_numeric_types.rs     # every NumericalValue type through Kll / DdSketch
 ├── e2e_windows.rs           # every EhBucketSketch variant + TumblingWindow payloads
-├── e2e_composition.rs       # HashSketchEnsemble, NitroBatch, UnivMonQ config, portable facade
+├── e2e_composition.rs       # HashSketchEnsemble, NitroBatch, UnivMonQ config
 ├── e2e_frameworks.rs        # Hydra and UnivMon composition
 ├── e2e_octo.rs              # …the OctoSketch promotion protocol
 ├── e2e_heavy_hitters.rs     # …Space-Saving, CocoSketch and ElasticSketch
@@ -141,11 +141,9 @@ Keeping these apart is deliberate. There is no shared
 `QuantileSpec { rank_tol }` that KLL and DDSketch both use, because they do not
 promise the same thing: a correct KLL can return a value 100× off on a
 heavy-tailed stream and still be within its rank guarantee, and a correct
-DDSketch has no rank guarantee at all. For the same reason the two DDSketch
-implementations do not share a truth helper: `DdSketch::get_value_at_quantile`
-answers `sorted[ceil(q·n) − 1]` while the portable `DdSketch::quantile` answers
-`sorted[floor(q·(n−1))]`, so `DdRankConvention` carries the choice and each is
-scored on the question it actually answers.
+DDSketch has no rank guarantee at all. `DdSketch::get_value_at_quantile`
+answers `sorted[ceil(q·n) − 1]`, and `DdRankConvention` names that order
+statistic for the truth helper.
 
 Two distinctions are easy to lose:
 
@@ -190,8 +188,7 @@ suite with the matching spec from Layer 2.
 `conformance_kit.rs` wires established sketches through the kit as reference
 adapters. The `e2e_*.rs` suites add depth the kit deliberately does not
 attempt: serialization round trips, window semantics, framework composition
-(Hydra fan-out, tumbling windows, sliding histograms), and cross-implementation
-parity between core types and their portable wire twins.
+(Hydra fan-out, tumbling windows, sliding histograms).
 
 A composition framework can also *be* a battery subject, in the same suite that
 already covers it. `e2e/frameworks.rs` runs a single-column Hydra — where the
@@ -285,8 +282,8 @@ bugs only appeared at deployment-shaped dimensions.
 ### 4. Add depth where the sketch is unusual
 
 Anything not covered by a battery belongs in the matching `e2e_*.rs` suite:
-window semantics, merge order-independence, wire-format parity with the
-portable type, heavy-hitter recall targets, and so on.
+window semantics, merge order-independence, wire round trips, heavy-hitter
+recall targets, and so on.
 
 ## Tolerance policy
 
@@ -326,7 +323,7 @@ error against its bound.
 - No assertion depends on unseeded randomness — no `rand::rng()`, no
   wall-clock seeding, no implicit RNG inside a constructor. An unseeded
   sketch appears only where the assertion holds for every draw. `Kll::with_k_and_seed`,
-  `KllDynamic::with_k_and_seed`, `KllSketch::with_seed`,
+  `KllDynamic::with_k_and_seed`,
   `NitroBatch::with_target_and_seed`, `UniformSampling::with_seed`,
   `CocoSketch::with_dimensions_and_seed` and `CocoOctoPlan::with_seed` exist for this.
 - An estimator whose guarantee is unbiasedness gets no per-key band: its

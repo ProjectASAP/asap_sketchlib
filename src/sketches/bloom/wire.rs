@@ -25,9 +25,9 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::BLOOM;
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::BLOOM;
 use crate::{BitMatrix, HashProfile, SketchHasher};
 
 use super::{BLOOM_MAX_BITS, BLOOM_MAX_SLICES, Bloom, BloomMode};

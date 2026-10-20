@@ -190,8 +190,6 @@ mod tests {
 
     fn decode_paths() -> Vec<Case> {
         use crate::input::HydraCounter;
-        use crate::message_pack_format::MessagePackCodec;
-        use crate::message_pack_format::portable::hll::HllSketch;
         use crate::*;
 
         macro_rules! case {
@@ -300,14 +298,11 @@ mod tests {
         let hydra_kll = hydra(HydraCounter::Kll(Kll::default()), DataInput::F64(2.5));
         let um = UnivMon::new(4, 2, 16, 3);
         let hydra_um = hydra(HydraCounter::UnivMon(um), DataInput::Str("alpha"));
-        let portable = |b: &[u8]| HllSketch::from_msgpack(b).is_ok();
 
         let cases: Vec<Case> = vec![
-            case!("HLL classic", classic.clone(), HllClassic),
-            case!("HLL HIP", hip.clone(), HyperLogLogHipP12),
+            case!("HLL classic", classic, HllClassic),
+            case!("HLL HIP", hip, HyperLogLogHipP12),
             case!("HLL classic delta", classic_delta, HyperLogLogDelta<Classic, HllRegistersP14>),
-            ("HLL portable classic", classic, portable),
-            ("HLL portable HIP", hip, portable),
             case!("CMS", cms, Cms),
             case!("CMS delta", cms_delta, CountMinSketchDelta<i64, RegularPath>),
             case!("CS", cs, Cs),

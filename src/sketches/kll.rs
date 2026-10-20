@@ -331,9 +331,8 @@ impl<T: NumericalValue> Kll<T> {
         s
     }
 
-    /// Reconstruct a KLL directly from portable wire state — the retained
-    /// `items` in level order plus the `levels` boundary array (proto contract:
-    /// `levels[0] == 0`, `levels[num_levels] == items.len()`). Avoids replaying
+    /// Reconstruct a KLL directly from the retained `items` in level order
+    /// plus the `levels` boundary array (`levels[0] == 0`, `levels[num_levels] == items.len()`). Avoids replaying
     /// every item through `update()`: it places the items straight into the
     /// internal buffer and fixes up the level boundaries, so the result is
     /// bit-identical to the source sketch (identical quantiles) at a fraction
@@ -781,12 +780,8 @@ impl<T: NumericalValue> Kll<T> {
         self.num_levels as u32
     }
 
-    /// Returns the compaction-coin state in `sketchlib-go::CoinState`
-    /// shape: `(state, bit_cache, remaining_bits)`. Wire-format wrappers
-    /// pack this directly into the `KLLState.coin` proto field; without
-    /// it the coin state would have to be poked from private internals
-    /// or reconstructed by a serde round-trip, neither of which is
-    /// stable across `asap_sketchlib` releases.
+    /// Returns the compaction-coin state as
+    /// `(state, bit_cache, remaining_bits)`.
     #[inline]
     pub fn coin_state(&self) -> (u64, u64, u32) {
         (
@@ -800,10 +795,8 @@ impl<T: NumericalValue> Kll<T> {
     /// length `num_levels + 1`, starting at 0 and ending at the total
     /// number of retained items. The chunk
     /// `items_top_down()[level_bounds_top_down()[i] .. level_bounds_top_down()[i+1]]` is the
-    /// **top-most-first** run for the proto's `KLLState.levels`/`items`
-    /// fields, matching `sketchlib-go::KLLSketch.SerializePortable`.
-    /// See the `KLLState` docstring in `proto/kll/kll.proto`: index `i`
-    /// in `levels` maps to compactor level `num_levels - 1 - i` in the
+    /// **top-most-first** run of the ASAPv1 KLL payload's `levels`/`items`:
+    /// index `i` in `levels` maps to compactor level `num_levels - 1 - i` in the
     /// in-memory representation.
     pub fn level_bounds_top_down(&self) -> Vec<u32> {
         // Walk from top compactor-level downward, accumulating sizes.
@@ -1180,7 +1173,7 @@ mod tests {
         );
     }
 
-    // Direct reconstruction from portable wire state must be BIT-EXACT:
+    // Direct reconstruction from level state must be BIT-EXACT:
     // identical quantiles to the source sketch (unlike a lossy
     // replay-through-`update()` reconstruction).
     #[test]
@@ -1190,7 +1183,7 @@ mod tests {
         for i in 0..200_000u32 {
             src.update(&((i as f64) * 0.0007 + 3.0));
         }
-        // Extract the compacted portable form (proto contract: levels[0]==0,
+        // Extract the compacted form (levels[0]==0,
         // levels[num_levels]==items.len()).
         let off = src.levels[0];
         let items: Vec<f64> = src.items[off..src.max_capacity].to_vec();

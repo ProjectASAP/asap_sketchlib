@@ -13,10 +13,10 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use crate::message_pack_format::admission_rate;
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::wire_key::exact;
+use crate::asapv1::admission_rate;
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::wire_key::exact;
 use crate::structures::fixed_structure::HllRegisterStorage;
 use crate::{DefaultXxHasher, HashProfile, SketchHasher};
 
@@ -109,7 +109,6 @@ pub(crate) fn hll_metadata<H: HashProfile>(
 }
 
 /// The standard ProjectASAP profile metadata (the [`DefaultXxHasher`] profile).
-/// Used by the portable path, which only represents standard-profile sketches.
 pub(crate) fn standard_hll_metadata(precision: u32) -> HllMetadata {
     hll_metadata::<DefaultXxHasher>(precision, None)
 }
@@ -440,6 +439,86 @@ mod tests {
         assert_serialization_round_trip::<HyperLogLogHipP12>("HllDsP12");
     }
 
+    /// Known register and HIP state serializes to the `asapv1_golden/` bytes,
+    /// and decodes back to that state.
+    #[test]
+    fn known_state_matches_golden() {
+        use crate::asapv1::envelope::hex;
+
+        fn plain<V: HllWireVariant, R: HllRegisterStorage>(
+            regs: &[u8],
+        ) -> HyperLogLogImpl<V, R, DefaultXxHasher> {
+            HyperLogLogImpl {
+                registers: registers_from_bytes(regs).expect("registers"),
+                _marker: PhantomData,
+                _hasher: PhantomData,
+                admission_rate: 1.0,
+            }
+        }
+        fn hip<R: HllRegisterStorage>(regs: &[u8], kxq0: f64, kxq1: f64, est: f64) -> HyperLogLogHipImpl<R> {
+            HyperLogLogHipImpl {
+                registers: registers_from_bytes(regs).expect("registers"),
+                kxq0,
+                kxq1,
+                est,
+                admission_rate: 1.0,
+            }
+        }
+
+        let mut p12 = vec![0u8; 4096];
+        for (index, value) in [(0, 1), (1, 7), (100, 42), (4095, 3)] {
+            p12[index] = value;
+        }
+        let mut p14 = vec![0u8; 16384];
+        for (index, value) in [(0, 1), (1, 7), (8192, 42), (16383, 51)] {
+            p14[index] = value;
+        }
+
+        let classic = hex(include_str!("../../../asapv1_golden/hll_classic_p12.hex"));
+        let sketch = plain::<Classic, HllRegistersP12>(&p12);
+        assert_eq!(sketch.to_asapv1().unwrap(), classic);
+        let decoded = HyperLogLogImpl::<Classic, HllRegistersP12>::from_asapv1(&classic).unwrap();
+        assert_eq!(decoded.registers.as_slice(), p12.as_slice());
+
+        let ertl = hex(include_str!("../../../asapv1_golden/hll_ertl_mle_p12.hex"));
+        let sketch = plain::<Ertl, HllRegistersP12>(&p12);
+        assert_eq!(sketch.to_asapv1().unwrap(), ertl);
+        let decoded = HyperLogLogImpl::<Ertl, HllRegistersP12>::from_asapv1(&ertl).unwrap();
+        assert_eq!(decoded.registers.as_slice(), p12.as_slice());
+
+        for (golden, regs, state) in [
+            (
+                hex(include_str!("../../../asapv1_golden/hll_hip_p12.hex")),
+                &p12,
+                (1.5, 2.5, 3.0),
+            ),
+            (
+                hex(include_str!("../../../asapv1_golden/hll_hip_p14.hex")),
+                &p14,
+                (16380.5, 0.25, 4.125),
+            ),
+        ] {
+            let (kxq0, kxq1, est) = state;
+            let encoded = if regs.len() == 4096 {
+                hip::<HllRegistersP12>(regs, kxq0, kxq1, est).to_asapv1().unwrap()
+            } else {
+                hip::<HllRegistersP14>(regs, kxq0, kxq1, est).to_asapv1().unwrap()
+            };
+            assert_eq!(encoded, golden);
+        }
+        let hip_p14 = hex(include_str!("../../../asapv1_golden/hll_hip_p14.hex"));
+        let decoded = HyperLogLogHipImpl::<HllRegistersP14>::from_asapv1(&hip_p14).unwrap();
+        assert_eq!(decoded.registers.as_slice(), p14.as_slice());
+        assert_eq!(
+            (decoded.kxq0, decoded.kxq1, decoded.est),
+            (16380.5, 0.25, 4.125)
+        );
+        let hip_p12 = hex(include_str!("../../../asapv1_golden/hll_hip_p12.hex"));
+        let decoded = HyperLogLogHipImpl::<HllRegistersP12>::from_asapv1(&hip_p12).unwrap();
+        assert_eq!(decoded.registers.as_slice(), p12.as_slice());
+        assert_eq!((decoded.kxq0, decoded.kxq1, decoded.est), (1.5, 2.5, 3.0));
+    }
+
     #[test]
     fn hll_envelope_structure_and_kind_id_guard() {
         // ASAPv1 envelope header for an Ertl-MLE sketch: magic, version 0x01,
@@ -477,52 +556,6 @@ mod tests {
         assert_eq!(decoded.kxq0, sketch.kxq0);
         assert_eq!(decoded.kxq1, sketch.kxq1);
         assert_eq!(decoded.est, sketch.est);
-    }
-
-    /// Drift guard: the native path and the (deprecated) portable path must emit
-    /// byte-identical ASAPv1 envelopes. Keep until golden byte-vectors exist.
-    #[test]
-    fn native_and_portable_hll_bytes_match() {
-        use crate::message_pack_format::MessagePackCodec;
-        use crate::message_pack_format::portable::hll::{HllSketch, HllVariant};
-
-        // Ertl-MLE / Datafusion: registers-only payload.
-        let mut native = HyperLogLog::<Ertl>::default();
-        for v in 0..1000 {
-            native.update(&DataInput::U64(v));
-        }
-        let native_bytes = native.to_asapv1().expect("native serialize");
-        let portable = HllSketch::from_raw(
-            HllVariant::Datafusion,
-            HllRegisters::PRECISION as u32,
-            native.registers_as_slice().to_vec(),
-            0.0,
-            0.0,
-            0.0,
-        );
-        assert_eq!(
-            native_bytes,
-            portable.to_msgpack().expect("portable serialize")
-        );
-
-        // HIP: registers + three running scalars.
-        let mut hip = HyperLogLogHip::default();
-        for v in 0..1000 {
-            hip.update(&DataInput::U64(v));
-        }
-        let hip_bytes = hip.to_asapv1().expect("native serialize");
-        let portable_hip = HllSketch::from_raw(
-            HllVariant::Hip,
-            HllRegisters::PRECISION as u32,
-            hip.registers.as_slice().to_vec(),
-            hip.kxq0,
-            hip.kxq1,
-            hip.est,
-        );
-        assert_eq!(
-            hip_bytes,
-            portable_hip.to_msgpack().expect("portable serialize")
-        );
     }
 
     // A test-only custom hasher: it hashes exactly like `DefaultXxHasher`

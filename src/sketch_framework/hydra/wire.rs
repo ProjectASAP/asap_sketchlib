@@ -46,13 +46,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::hash::check_matrix_rows;
 use crate::input::HydraCounter;
-use crate::message_pack_format::admission_rate;
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::{
+use crate::asapv1::admission_rate;
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::{
     HYDRA_COUNT_MIN, HYDRA_COUNT_SKETCH, HYDRA_HLL, HYDRA_KLL, HYDRA_UNIVMON,
 };
-use crate::message_pack_format::wire_key::exact_vec;
+use crate::asapv1::wire_key::exact_vec;
 use crate::sketch_framework::univmon::wire::{PyramidPayload, UnivMonMetadata, univmon_metadata};
 use crate::sketches::countminsketch_heap::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
 use crate::{
@@ -1114,8 +1114,8 @@ fn pack_univmon_cells(key_type: &str, payloads: &[&[u8]]) -> Result<Vec<u8>, Rmp
         "usize" => pack!(usize),
         "f32" => pack!(f32),
         "f64" => pack!(f64),
-        "string" => pack!(crate::message_pack_format::wire_key::WireString),
-        "bytes" => pack!(crate::message_pack_format::wire_key::WireBytes),
+        "string" => pack!(crate::asapv1::wire_key::WireString),
+        "bytes" => pack!(crate::asapv1::wire_key::WireBytes),
         other => Err(encode_error(format!(
             "ASAPv1 Hydra: key_type {other:?} is not a wire key type"
         ))),
@@ -1149,8 +1149,8 @@ fn unpack_univmon_cells(key_type: &str, payload: &[u8]) -> Result<Vec<Vec<u8>>, 
         "usize" => unpack!(usize),
         "f32" => unpack!(f32),
         "f64" => unpack!(f64),
-        "string" => unpack!(crate::message_pack_format::wire_key::WireString),
-        "bytes" => unpack!(crate::message_pack_format::wire_key::WireBytes),
+        "string" => unpack!(crate::asapv1::wire_key::WireString),
+        "bytes" => unpack!(crate::asapv1::wire_key::WireBytes),
         other => Err(decode_error(format!(
             "ASAPv1 Hydra: key_type {other:?} is not a wire key type"
         ))),
@@ -1347,7 +1347,7 @@ mod tests {
     /// UTF-8 `bin` under `cell_key_type` `"string"` are rejected.
     #[test]
     fn hydra_univmon_reads_string_keys_from_str_only() {
-        use crate::message_pack_format::wire_key::WireBytes;
+        use crate::asapv1::wire_key::WireBytes;
         let mut hydra = grid(HydraCounter::UnivMon(UnivMon::new(4, 2, 16, 3)));
         let keys = ["alpha", "beta", "gamma", "delta"];
         feed(&mut hydra, (0..40).map(|i| DataInput::Str(keys[i % 4])));

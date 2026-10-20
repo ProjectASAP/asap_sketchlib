@@ -32,9 +32,9 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use crate::common::hash::check_matrix_rows;
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::COUNT_SKETCH_WITH_L2_NORM;
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::COUNT_SKETCH_WITH_L2_NORM;
 use crate::{HashProfile, SketchHasher, Vector1D, Vector2D};
 
 use super::CountSketchWithL2Norm;

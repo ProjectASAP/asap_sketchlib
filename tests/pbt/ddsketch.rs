@@ -1,5 +1,4 @@
-//! Property tests for DDSketch: the native sketch and the portable `DdSketch`
-//! that carries it over the wire.
+//! Property tests for DDSketch.
 //!
 //! Masson, Rim, Lee, VLDB '19. The model is the paper's relative-error
 //! guarantee, not a transcription of the bucket arithmetic: an answer sits
@@ -7,11 +6,7 @@
 
 use crate::support::{QUANTILES, extreme_values};
 use asap_sketchlib::DdSketch;
-use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDdSketch;
 use proptest::prelude::*;
-
-const QUANTILE_PROBES: [f64; 7] = [0.0, 0.01, 0.25, 0.5, 0.75, 0.99, 1.0];
 
 /// First dense allocation, in buckets, and the slot the seeding value lands in.
 /// The Go producer's `Buckets.ensure` seeds a chunk this wide centred on the
@@ -61,24 +56,10 @@ fn signed_values(max: usize) -> impl Strategy<Value = Vec<f64>> {
         })
 }
 
-/// A signed stream or no stream at all: merge and the wire format both answer
-/// for an empty operand.
-fn maybe_signed_values(max: usize) -> impl Strategy<Value = Vec<f64>> {
-    prop_oneof![1 => Just(Vec::new()), 9 => signed_values(max)]
-}
-
 fn dd_of(alpha: f64, values: &[f64]) -> DdSketch {
     let mut s = DdSketch::new(alpha);
     for v in values {
         s.add(v);
-    }
-    s
-}
-
-fn portable_of(alpha: f64, values: &[f64]) -> PortableDdSketch {
-    let mut s = PortableDdSketch::new(alpha);
-    for v in values {
-        s.update(*v);
     }
     s
 }
@@ -124,24 +105,6 @@ proptest! {
         prop_assert_eq!(sketch.get_count(), values.len() as u64, "total count");
     }
 
-    #[test]
-    fn ddsketch_portable_keeps_negative_and_zero_observations(
-        alpha in alpha(),
-        values in signed_values(120),
-    ) {
-        let sketch = portable_of(alpha, &values);
-        let negatives = values.iter().filter(|v| **v < 0.0).count() as u64;
-        let zeros = values.iter().filter(|v| **v == 0.0).count() as u64;
-        let positives = values.iter().filter(|v| **v > 0.0).count() as u64;
-
-        prop_assert_eq!(
-            sketch.negative_store_counts.iter().sum::<u64>(), negatives, "negative store"
-        );
-        prop_assert_eq!(sketch.zero_count, zeros, "zero bucket");
-        prop_assert_eq!(sketch.store_counts.iter().sum::<u64>(), positives, "positive store");
-        prop_assert_eq!(sketch.total_count(), values.len() as u64, "total count");
-    }
-
     /// `sum` is carried on the wire and read back through `sum()`, so it is
     /// the running total of the stream, not an estimate off the buckets.
     #[test]
@@ -160,7 +123,7 @@ proptest! {
     }
 
     /// The first dense allocation is one `GROW_CHUNK` centred on the value's
-    /// bucket, in both implementations and in both signed stores. The layout
+    /// bucket, in both signed stores. The layout
     /// reaches the wire as `positive_store_counts` / `positive_store_offset`, where the Go
     /// producer's bytes have to match it for the same input.
     #[test]
@@ -169,13 +132,10 @@ proptest! {
         value in 1e-6f64..1e9,
     ) {
         let native = dd_of(alpha, &[value, -value]);
-        let portable = portable_of(alpha, &[value, -value]);
 
         for (label, counts) in [
             ("native positive", native.positive_store_counts()),
             ("native negative", native.negative_store_counts()),
-            ("portable positive", portable.store_counts.as_slice()),
-            ("portable negative", portable.negative_store_counts.as_slice()),
         ] {
             prop_assert_eq!(counts.len(), GROW_CHUNK, "{} store width", label);
             prop_assert_eq!(counts[GROW_CHUNK_CENTRE], 1, "{} store centre", label);
@@ -260,58 +220,7 @@ proptest! {
         }
     }
 
-    /// The portable twin answers the floor(q*(n-1)) order statistic, and it
-    /// carries no min/max, so the bound applies at every q including 0 and 1.
-    #[test]
-    fn ddsketch_portable_signed_answers_stay_within_alpha_of_the_exact_order_statistic(
-        alpha in alpha(),
-        values in signed_values(50),
-    ) {
-        let sketch = portable_of(alpha, &values);
-        let ordered = sorted(&values);
-
-        for q in probe_quantiles(40) {
-            let want = ordered[(q * (ordered.len() - 1) as f64).floor() as usize];
-            let got = sketch.quantile(q).expect("a non-empty sketch answers");
-            prop_assert!(
-                (got - want).abs() <= want.abs() * (alpha + 1e-12),
-                "alpha={} q={} n={}: got {}, exact order statistic {}",
-                alpha, q, ordered.len(), got, want
-            );
-        }
-    }
-
     // ===== Merge =====
-
-    #[test]
-    fn ddsketch_merge_is_count_additive_and_commutative(
-        alpha in alpha(),
-        a in maybe_signed_values(40),
-        b in maybe_signed_values(40),
-    ) {
-        let mut ab = portable_of(alpha, &a);
-        ab.merge(&portable_of(alpha, &b)).expect("merge");
-        let mut ba = portable_of(alpha, &b);
-        ba.merge(&portable_of(alpha, &a)).expect("merge");
-
-        prop_assert_eq!(ab.total_count(), (a.len() + b.len()) as u64);
-        prop_assert_eq!(ab.total_count(), ba.total_count());
-        prop_assert_eq!(&ab.store_counts, &ba.store_counts);
-        prop_assert_eq!(ab.store_offset, ba.store_offset);
-        prop_assert_eq!(&ab.negative_store_counts, &ba.negative_store_counts);
-        prop_assert_eq!(ab.negative_store_offset, ba.negative_store_offset);
-        prop_assert_eq!(ab.zero_count, ba.zero_count);
-        prop_assert_eq!(
-            ab.zero_count,
-            a.iter().chain(&b).filter(|v| **v == 0.0).count() as u64,
-            "the merged zero bucket"
-        );
-        prop_assert_eq!(
-            ab.negative_store_counts.iter().sum::<u64>(),
-            a.iter().chain(&b).filter(|v| **v < 0.0).count() as u64,
-            "the merged negative store"
-        );
-    }
 
     /// Merging keeps the paper's guarantee against the combined stream: the
     /// merged answer is still within alpha of the union's order statistic.
@@ -341,8 +250,8 @@ proptest! {
     }
 
     /// Two alphas are two index mappings, so the bucket indices of one sketch
-    /// mean nothing under the other's gamma. Both implementations refuse the
-    /// merge and leave the receiver as it was.
+    /// mean nothing under the other's gamma. The merge is refused and leaves
+    /// the receiver as it was.
     #[test]
     fn ddsketch_merge_refuses_a_different_index_mapping(
         alpha in alpha(),
@@ -358,13 +267,6 @@ proptest! {
         );
         prop_assert_eq!(native.get_count(), values.len() as u64, "refused merge changed the count");
 
-        let mut portable = portable_of(alpha, &values);
-        prop_assert!(
-            portable.merge(&portable_of(other_alpha, &values)).is_err(),
-            "portable alpha {} merged a sketch built with alpha {}", alpha, other_alpha
-        );
-        prop_assert_eq!(portable.total_count(), values.len() as u64, "refused merge changed the count");
-
         prop_assert!(
             dd_of(alpha, &values).merge(&dd_of(alpha, &values)).is_ok(),
             "a shared mapping must still merge"
@@ -372,27 +274,6 @@ proptest! {
     }
 
     // ===== Wire =====
-
-    #[test]
-    fn ddsketch_round_trip_preserves_buckets_and_quantiles(
-        alpha in alpha(),
-        values in maybe_signed_values(120),
-    ) {
-        let s = portable_of(alpha, &values);
-
-        let bytes = s.to_msgpack().expect("encode");
-        let restored = PortableDdSketch::from_msgpack(&bytes).expect("decode");
-
-        prop_assert_eq!(restored.total_count(), s.total_count());
-        prop_assert_eq!(&restored.store_counts, &s.store_counts);
-        prop_assert_eq!(restored.store_offset, s.store_offset);
-        prop_assert_eq!(&restored.negative_store_counts, &s.negative_store_counts);
-        prop_assert_eq!(restored.negative_store_offset, s.negative_store_offset);
-        prop_assert_eq!(restored.zero_count, s.zero_count);
-        for q in QUANTILE_PROBES {
-            prop_assert_eq!(restored.quantile(q), s.quantile(q), "q={}", q);
-        }
-    }
 
     #[test]
     fn ddsketch_round_trips_under_extreme_values(

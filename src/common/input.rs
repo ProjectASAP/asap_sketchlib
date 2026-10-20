@@ -1,7 +1,7 @@
 //! Shared input, query, and counter types used across sketches.
 //! This module defines value wrappers, heap-friendly items, and Hydra/UnivMon helpers.
 
-use crate::message_pack_format::admission_rate;
+use crate::asapv1::admission_rate;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,

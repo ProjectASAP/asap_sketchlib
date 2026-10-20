@@ -1,6 +1,6 @@
 //! Sketch enums used by the exponential histogram framework.
 
-use crate::message_pack_format::admission_rate;
+use crate::asapv1::admission_rate;
 use crate::{DataInput, Vector2D};
 use serde::{Deserialize, Serialize};
 

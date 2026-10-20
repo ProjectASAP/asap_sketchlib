@@ -33,7 +33,7 @@
 // - Refactored into a generic `HyperLogLog<Variant>` structure.
 // ----------------------------------------------------------------
 
-use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
+use crate::asapv1::admission_rate::{admit_all, deserialize_rate};
 use crate::structures::fixed_structure::{
     HllRegisterStorage, HllRegistersP12, HllRegistersP14, HllRegistersP16,
 };

@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinSketchDelta`), CountMinSketchWithHeap with its delta (`CountMinSketchWithHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CountSketchWithHeap with its delta (`CountSketchWithHeapDelta`), DDSketch with its delta (`DdSketchDelta`), KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, Two-tier UnivMon, ExponentialHistogram, EhBucketSketch, Bloom, Space-Saving, CountSketchWithL2Norm, UnivMon-Q, CountMinSketchWithSpaceSaving, CountSketchWithSpaceSaving, and SetAggregator with its delta (`SetAggregatorDelta`).
+- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `asapv1::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinSketchDelta`), CountMinSketchWithHeap with its delta (`CountMinSketchWithHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CountSketchWithHeap with its delta (`CountSketchWithHeapDelta`), DDSketch with its delta (`DdSketchDelta`), KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, Two-tier UnivMon, ExponentialHistogram, EhBucketSketch, Bloom, Space-Saving, CountSketchWithL2Norm, UnivMon-Q, CountMinSketchWithSpaceSaving, CountSketchWithSpaceSaving, and SetAggregator with its delta (`SetAggregatorDelta`).
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -249,7 +249,7 @@ This registry is the master list of algorithms still to design payloads for, and
 7. Hand the payload to the per-sketch payload decoder.
 8. Fail **closed** on any inconsistency; never merge or query a sketch whose hash spec did not validate.
 
-> Implementation note: the shared envelope module (`src/message_pack_format/envelope.rs`) owns rules 1-3 and the byte framing (`encode` / `split`); it is sketch-agnostic and does not know the registry.
+> Implementation note: the shared envelope module (`src/asapv1/envelope.rs`) owns rules 1-3 and the byte framing (`encode` / `split`); it is sketch-agnostic and does not know the registry.
 > Rule 4 (and metadata/kind_id validation) happens in each sketch's decoder, which checks the `kind_id` against the ones it owns.
 > `peek_kind_id` checks rules 2-3 and the length checks of rule 1, not that each block is filled exactly, then returns the `kind_id` bytes; otherwise it fails.
 
@@ -730,8 +730,6 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 
 **A producer-side constraint: a `NaN` key.** `TopKHeap` finds a resident by digest and then compares with `PartialEq`, and `NaN` never equals itself, so offering the same `NaN` key twice seats **two** entries rather than rescoring one. That state is reachable in memory and has **no encoding**: the encode-side duplicate check reads the two keys' bits, sees one key twice, and fails with the same complaint the decoder would make. Nothing repairs it on either door — a producer that inserts float keys must keep `NaN` out of a heap it intends to serialize.
 
-**Not this: `portable/countminsketch_topk.rs`.** Despite the name, that module emits no ASAPv1 bytes. It is a legacy Go-interop struct with its own msgpack shape: an `f64` matrix rounded into the `i64` one on the way in, and heap keys coerced to `String` — a `OwnedDataInput` that is not already a `String` goes through a Rust debug format, which is lossy and reversible by nothing. `0x03 0x00` shares none of that: its matrix travels at the metadata's `counter_type` and its keys travel as the exact `OwnedDataInput` variant `key_type` names.
-
 ### 3.8: DDSketch payload (`0x05 0x00`)
 
 `DdSketch` maps the magnitude of a value `v` to the bucket index `floor(ln(|v|) / ln(gamma))`. Every payload carries all eight fields:
@@ -773,8 +771,6 @@ Rules 3, 5, 6 and 7 are enforced on the **encode** side too, so the format never
 A Hydra is a `rows x cols` grid of counters over a fixed set of named key columns; each record fans out into its `2^D - 1` subpopulations, and each subkey is hashed to one column per row. **The kind_id names the counter variant**, so the five ids are one algorithm over five cell types: `0x07 0x00` KLL, `0x07 0x01` Count-Min, `0x07 0x02` Count Sketch, `0x07 0x03` HyperLogLog, `0x07 0x04` UnivMon. The payload carries no variant tag, per cell or otherwise, and a grid mixing variants has no encoding.
 
 **Counters are inlined, not nested.** A cell's raw state goes straight into Hydra's positional array in the shape that counter's own section fixes; no cell carries an envelope, a magic or a metadata map of its own.
-
-**Not this: `portable/hydra_kll.rs`.** `HydraKllSketch` is a legacy Go-interop type, not `0x07 0x00`, and it is the counter-example this rule exists to rule out: every cell of its matrix carries a **full ASAPv1 KLL envelope** — magic, version, kind_id, both length prefixes and a complete metadata map — plus `k` repeated once per cell beside it, in a msgpack shape of its own with no ASAPv1 envelope around the whole. That is exactly what Q-NEST forbids, and `0x07 0x00` does none of it: one envelope for the grid, `cell_k` / `cell_m` / `cell_item_type` carried once in its metadata, and each cell just the `[levels, items, coin]` array §3.3 fixes.
 
 **`0x07 0x01` Count-Min counter, `0x07 0x02` Count Sketch counter** — the fixed-size matrix counters tile one array:
 
@@ -1583,22 +1579,19 @@ It does not convert the mode (Regular to/from Fast); that would need re-insertin
 
 ## Cross-language contract
 
-Direction: **custom per-sketch payload replaces the `portable` types, and `sketchlib-go` mirrors each payload.**
+Direction: **each sketch has a custom payload, and `sketchlib-go` mirrors each payload.**
 Good direction (more compact, higher fidelity, less Rust-internal duplication), but it moves the contract from shared code to discipline. To keep it safe:
 
 1. **This spec**: byte-level, language-neutral, per sketch.
-2. **Golden byte-vector fixtures** in one shared repo, [`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), which each implementation mounts at `asapv1_golden/`; both languages decode and re-encode them byte-identically. These replace the `portable`-as-oracle round-trip test.
+2. **Golden byte-vector fixtures** in one shared repo, [`sketchlib-golden-bytes`](https://github.com/ProjectASAP/sketchlib-golden-bytes), which each implementation mounts at `asapv1_golden/`; both languages decode and re-encode them byte-identically.
 3. **This registry**, mirrored, never independently allocated.
 
-Every `kind_id` the registry marks *implemented* has at least one fixture; `asapv1_golden/README.md` lists them. `portable` carries its own Go goldens.
+Every `kind_id` the registry marks *implemented* has at least one fixture; `asapv1_golden/README.md` lists them.
 
 **Hash profile on the Go side.**
 Rust derives the hash spec from a generic `HashProfile` bound on the hasher type; Go has no generic hasher type, so there is nothing to derive from.
 On the Go side the profile is simply **written into** the metadata on encode and **read from** it on decode.
 Go MUST validate the profile it reads (same fail-closed intent as Rust): a sketch is only mergeable/queryable if its `hash_profile_id` + seeds match the profile Go is prepared to reproduce.
-
-Sequencing: the one `native bytes == portable bytes` test is HLL-only, since no other `portable` type emits ASAPv1 bytes.
-Retire `portable` once the fixtures cover the rest.
 
 ---
 

@@ -46,10 +46,10 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::SPACE_SAVING;
-use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::SPACE_SAVING;
+use crate::asapv1::wire_key::{WireBytes, WireString, exact_vec};
 use crate::{HashProfile, OwnedDataInput, SketchHasher};
 
 use std::collections::HashSet;

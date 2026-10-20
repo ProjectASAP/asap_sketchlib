@@ -8,7 +8,7 @@
 //!   ICALP 2002. <https://www.cs.rutgers.edu/~farach/pubs/FrequentStream.pdf>
 
 use crate::common::structure_utils::AdmittedRows;
-use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
+use crate::asapv1::admission_rate::{admit_all, deserialize_rate};
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,

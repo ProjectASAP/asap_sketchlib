@@ -71,7 +71,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use crate::input::HydraCounter;
-    use crate::message_pack_format::envelope;
+    use crate::asapv1::envelope;
     use crate::sketch_framework::eh_bucket_sketch::wire::{SketchState, rebuild_sketch};
     use crate::sketches::CountSketchDelta;
     use crate::*;

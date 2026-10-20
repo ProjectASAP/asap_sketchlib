@@ -19,7 +19,7 @@ use crate::DataInput;
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
-use crate::message_pack_format::admission_rate::{self, admit_all};
+use crate::asapv1::admission_rate::{self, admit_all};
 use crate::octo_delta::{DdSign, DdSketchBucketDelta};
 use serde::{Deserialize, Serialize};
 
@@ -205,8 +205,7 @@ impl TryFrom<DdSketchState> for DdSketch {
 /// handled without growing the dense store: smaller magnitudes enter the
 /// zero bucket, while larger magnitudes are rejected.
 ///
-/// Single source of truth shared by core `DdSketch`, the portable wire twin,
-/// and tests, so the two implementations cannot drift algebraically again.
+/// Single source of truth shared by `DdSketch` and tests.
 pub fn ddsketch_indexable_bounds(alpha: f64) -> (f64, f64) {
     let gamma = (1.0 + alpha) / (1.0 - alpha);
     let inv_log_gamma = 1.0 / gamma.ln();
@@ -526,8 +525,7 @@ impl DdSketch {
     /// This is a REAL runtime check, not a `debug_assert!`: a `debug_assert!`
     /// compiles out in release builds, leaving a mismatched merge to corrupt
     /// results with no signal at all. DataDog's `MergeWith` and sketchlib-go's
-    /// Go `Merge` both return an error here; the portable `DdSketch::merge` in
-    /// this same crate does too.
+    /// Go `Merge` both return an error here.
     pub fn merge(&mut self, other: &DdSketch) -> Result<(), String> {
         if (self.alpha - other.alpha).abs() >= 1e-12 || (self.gamma - other.gamma).abs() >= 1e-12 {
             return Err(format!(

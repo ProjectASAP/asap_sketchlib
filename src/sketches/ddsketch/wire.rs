@@ -30,11 +30,11 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 
 use crate::common::structures::Vector1D;
-use crate::message_pack_format::admission_rate;
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::DDSKETCH;
-use crate::message_pack_format::wire_key::exact;
+use crate::asapv1::admission_rate;
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::DDSKETCH;
+use crate::asapv1::wire_key::exact;
 
 use super::{Buckets, DdSketch, DdSketchState};
 

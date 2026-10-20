@@ -334,6 +334,13 @@ signals a backwards-compatible change.
 - **Protobuf** (breaking). Module `proto`, the `.proto` sources,
   `tools/gen-proto` and the `prost`/`bytes` dependencies; with them the KLL
   value-offset sample encoding.
+- **Legacy MessagePack** (breaking). Module `message_pack_format` with
+  `portable`, `native` and `MessagePackCodec`: the wrapper types
+  `CountMinSketch`, `CountSketch`, `CountMinSketchWithHeap`,
+  `CountSketchWithHeap`, `KllSketch`, `HllSketch`, `DdSketch`,
+  `HydraKllSketch`, their deltas and helpers, and the `xxhash-rust`
+  dependency. `SetAggregator` and `SetAggregatorDelta` move to
+  `sketches::set_aggregator`; the ASAPv1 framing is private.
 - **Dead and duplicate APIs** (breaking). `Kll::wire_k` (use `k()`);
   `PRECOMPUTED_SAMPLE_RATE_1PERCENT` and module `common::precompute_sample2`;
   module `common::hashspec` (`HashSpec`, `derive_index`, `derive_sign`,

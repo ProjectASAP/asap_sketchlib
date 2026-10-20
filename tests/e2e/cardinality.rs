@@ -26,7 +26,6 @@ use common::{
 };
 use common::{uniform_u64, zipf_u64};
 
-use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::sketches::hll::{HyperLogLogHipImpl, HyperLogLogImpl};
 use asap_sketchlib::{
     Classic, DataInput, Ertl, HyperLogLogHipP12, HyperLogLogHipP14, HyperLogLogHipP16,
@@ -247,77 +246,6 @@ hll_battery!(
     hll_hip,
     not_mergeable
 );
-
-/// The portable wire type across every variant tag and precision.
-///
-/// `HllVariant` selects the *wire tag*, not the estimator: `HllSketch::estimate`
-/// runs the same register-based Classic formula for `Regular`, `Datafusion` and
-/// `Hip` alike. So all three are held to the register model — checking the
-/// `Hip` tag against HIP's tighter constant would be asserting a property this
-/// type does not implement.
-#[test]
-fn portable_hll_variants_and_precisions_satisfy_the_register_error_model() {
-    const N: usize = 200_000;
-
-    for (v, variant) in [HllVariant::Regular, HllVariant::Datafusion, HllVariant::Hip]
-        .into_iter()
-        .enumerate()
-    {
-        for (p, precision) in [12u32, 14, 16].into_iter().enumerate() {
-            let spec = CardinalityConfidenceSpec::hll(precision, Z);
-            // A distinct stream per (variant, precision). Reusing one stream
-            // across the three variants would feed three estimators the *same*
-            // registers, whose errors are then near-perfectly correlated — nine
-            // readings of at most three independent experiments.
-            let seed = 2001 + (v * 3 + p) as u64;
-            let stream = uniform_u64(N, u64::MAX / 4, seed);
-            let truth: std::collections::HashSet<u64> = stream.iter().copied().collect();
-
-            let mut hll = HllSketch::new(variant, precision);
-            for k in &stream {
-                hll.update(k.to_be_bytes().as_slice());
-            }
-            if let Err(detail) = spec.check(hll.estimate(), truth.len()) {
-                panic!("{variant:?}/p{precision} stream_seed={seed}: {detail}");
-            }
-
-            // Merging a second sketch built over the SAME identities is a
-            // register-wise max with itself: the estimate must not move at all.
-            let mut other = HllSketch::new(variant, precision);
-            for k in &truth {
-                other.update((*k).to_be_bytes().as_slice());
-            }
-            let before = hll.estimate();
-            hll.merge(&other).expect("merge");
-            assert_eq!(
-                hll.estimate(),
-                before,
-                "{variant:?} p{precision}: merging identical identities moved the estimate"
-            );
-
-            // Disjoint shards over the same stream merge by register-wise max,
-            // so the result is the *same* sketch as the single pass and its
-            // estimate is the *same number*. That is an equality, not a second
-            // confidence-band reading.
-            let mut left = HllSketch::new(variant, precision);
-            let mut right = HllSketch::new(variant, precision);
-            for (i, k) in stream.iter().enumerate() {
-                if i % 2 == 0 {
-                    left.update(k.to_be_bytes().as_slice());
-                } else {
-                    right.update(k.to_be_bytes().as_slice());
-                }
-            }
-            left.merge(&right).expect("shard merge");
-            assert_eq!(
-                left.estimate(),
-                before,
-                "{variant:?} p{precision}: an even/odd shard merge must reproduce the \
-                 single pass exactly (registers combine by maximum)"
-            );
-        }
-    }
-}
 
 /// A larger precision must actually buy accuracy. A fixed percentage band
 /// cannot see this — it passes identically at p12 and p16, so it would not
@@ -768,7 +696,6 @@ fn a_custom_precision_merge_reproduces_the_single_pass_registers_for_every_estim
 #[test]
 fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
     use asap_sketchlib::SetAggregatorDelta;
-    use asap_sketchlib::message_pack_format::MessagePackCodec;
     use std::collections::HashSet;
 
     let mut before = SetAggregator::new();
@@ -798,8 +725,8 @@ fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
         "both departing keys are removed"
     );
 
-    let bytes = delta.to_msgpack().expect("encode");
-    let decoded = SetAggregatorDelta::from_msgpack(&bytes).expect("decode");
+    let bytes = delta.to_asapv1().expect("encode");
+    let decoded = SetAggregatorDelta::from_asapv1(&bytes).expect("decode");
     assert_eq!(decoded.added, added, "added set survived the wire");
     assert_eq!(decoded.removed, removed, "removed set survived the wire");
 
@@ -820,7 +747,7 @@ fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
         removed: HashSet::new(),
     };
     let round_tripped =
-        SetAggregatorDelta::from_msgpack(&empty.to_msgpack().expect("encode empty"))
+        SetAggregatorDelta::from_asapv1(&empty.to_asapv1().expect("encode empty"))
             .expect("decode empty");
     assert!(
         round_tripped.added.is_empty() && round_tripped.removed.is_empty(),
