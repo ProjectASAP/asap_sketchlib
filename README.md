@@ -220,31 +220,6 @@ cargo build --features experimental
 cargo test --features "experimental octo-runtime"
 ```
 
-## Protobuf code generation
-
-`asap_sketchlib` is a pure-Rust crate: building it does **not** require
-`protoc` or any build script. The Rust types generated from
-`proto/**/*.proto` are vendored into `src/proto/generated/` and refreshed
-manually by maintainers using the in-repo tool at `tools/gen-proto/`.
-
-Downstream users can therefore simply add the crate to their `Cargo.toml` and
-build it like any other pure-Rust dependency.
-
-### For maintainers
-
-After editing any `.proto` file, regenerate the vendored output and commit
-the result:
-
-```bash
-cargo run --manifest-path tools/gen-proto/Cargo.toml
-git add src/proto/generated
-```
-
-The tool uses `prost-build` together with the `protoc-bin-vendored` binary,
-so no system `protoc` is required to regenerate either. CI rejects any pull
-request whose committed `src/proto/generated/` does not match the result of
-running this command on its current `.proto` sources.
-
 ## FAQ
 
 ### When is Apache DataSketches a better fit?

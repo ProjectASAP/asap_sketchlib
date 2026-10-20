@@ -9,7 +9,6 @@ use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, SketchHash
 
 use super::{CountMinSketch, RegularPath};
 use crate::Vector2D;
-use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 mod wire;
@@ -30,7 +29,7 @@ pub const DEFAULT_LIGHT_COLS: usize = 4096;
 
 /// One slot of the heavy part: the resident flow, its vote pair, and the flag
 /// marking that part of its size lives in the light layer.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct HeavyBucket {
     pub flow_id: String,
     pub vote_pos: i32,
@@ -40,17 +39,14 @@ pub struct HeavyBucket {
 
 /// Heavy/light frequency estimator: a heavy hash table over flow ids backed by
 /// a Count-Min light layer that absorbs evicted and unelected flows.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(bound = "")]
+#[derive(Clone, Debug)]
 pub struct ElasticSketch<H: SketchHasher = DefaultXxHasher> {
     pub heavy: Vec<HeavyBucket>,
     pub light: CountMinSketch<Vector2D<i32>, RegularPath, H>,
     pub heavy_buckets: i32,
     /// Set by [`ElasticSketch::expand_heavy`] while copies of pre-expansion
     /// residents may still sit in the half they no longer hash to.
-    #[serde(default)]
     stale_copies: bool,
-    #[serde(skip)]
     _hasher: PhantomData<H>,
 }
 

@@ -670,19 +670,12 @@ fn nitro_saturates_oversized_weights_instead_of_wrapping() {
 }
 
 // ---------------------------------------------------------------------------
-// Continuation across a serde round trip and across a context snapshot
+// Continuation across a context snapshot
 // ---------------------------------------------------------------------------
 
 /// Rates whose reciprocal is not an integer, so the stochastic-rounding stream
 /// is live and its state actually has to survive.
 const CONTINUATION_RATES: [f64; 2] = [0.3, 0.07];
-
-fn round_trip(
-    cm: &CountMinSketch<Vector2D<i32>, FastPath>,
-) -> CountMinSketch<Vector2D<i32>, FastPath> {
-    let bytes = rmp_serde::to_vec_named(cm).expect("serialize a Nitro-enabled CountMinSketch");
-    rmp_serde::from_slice(&bytes).expect("deserialize a Nitro-enabled CountMinSketch")
-}
 
 fn nitro_enabled(rate: f64, seed: u64) -> CountMinSketch<Vector2D<i32>, FastPath> {
     let mut cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
@@ -696,152 +689,6 @@ fn cells(cm: &CountMinSketch<Vector2D<i32>, FastPath>) -> Vec<i32> {
         .flat_map(|r| (0..s.cols()).map(move |c| (r, c)))
         .map(|(r, c)| s.query_one_counter(r, c))
         .collect()
-}
-
-/// A sketch that is encoded and decoded after every update must end up
-/// identical to one that was never interrupted.
-///
-/// This is the property the sampling state has to be *complete* for. The
-/// rounding stream is part of it: it is serialized, so a decoded sketch
-/// continues the Bernoulli sequence rather than restarting it from a constant,
-/// which matters at any rate whose reciprocal is not an integer.
-#[test]
-fn a_serde_round_trip_after_every_update_reproduces_the_uninterrupted_run() {
-    const UPDATES: usize = 600;
-    const TAIL: usize = 200;
-    let key = DataInput::U64(SOLO_KEY);
-
-    for &rate in &CONTINUATION_RATES {
-        let seed = trial_seed(0);
-        let mut continuous = nitro_enabled(rate, seed);
-        let mut interrupted = nitro_enabled(rate, seed);
-
-        for _ in 0..UPDATES {
-            continuous.nitro_update(&key);
-            interrupted.nitro_update(&key);
-            interrupted = round_trip(&interrupted);
-        }
-
-        assert_eq!(
-            cells(&interrupted),
-            cells(&continuous),
-            "rate={rate}: a sketch round-tripped after every one of {UPDATES} updates \
-             must hold the same counters, cell for cell, as one that was never \
-             serialized"
-        );
-        assert_eq!(
-            interrupted.nitro_estimate(&key),
-            continuous.nitro_estimate(&key),
-            "rate={rate}: the estimates must agree exactly"
-        );
-
-        // And the *future* has to agree too: a decoded sketch that resumed
-        // from a reset rounding stream can hold the right counters and still
-        // diverge on the next update.
-        for _ in 0..TAIL {
-            continuous.nitro_update(&key);
-            interrupted.nitro_update(&key);
-        }
-        assert_eq!(
-            cells(&interrupted),
-            cells(&continuous),
-            "rate={rate}: {TAIL} further updates after the last round trip must follow \
-             the same admission and weight sequence"
-        );
-    }
-}
-
-/// A payload written before `Nitro::rounding_state` existed must still decode.
-///
-/// `rounding_state` is a trailing serialized field carrying
-/// `#[serde(default)]`, so a map-encoded payload that simply lacks the key
-/// decodes with the default stream. This builds exactly that payload from a
-/// mirror of the field layout without it — there is no other way to produce
-/// one once the field exists — and checks that the counters survive and the
-/// decoded sketch is usable.
-///
-/// `mask_bits` and `mask` are present because such payloads carry them;
-/// `Vector2D`'s decoder recomputes both from `cols` and ignores what the
-/// payload says, so the values below only have to be well-formed.
-#[test]
-fn a_payload_written_before_the_rounding_field_existed_still_decodes() {
-    #[derive(serde::Serialize)]
-    struct LegacyNitro {
-        is_nitro_mode: bool,
-        sampling_rate: f64,
-        to_skip: usize,
-        inv_ln_one_minus_p: f64,
-        delta: u64,
-        idx: usize,
-        mask: usize,
-    }
-    #[derive(serde::Serialize)]
-    struct LegacyVector2D {
-        data: Vec<i32>,
-        rows: usize,
-        cols: usize,
-        mask_bits: u32,
-        mask: u128,
-        nitro: LegacyNitro,
-    }
-    #[derive(serde::Serialize)]
-    struct LegacyCountMin {
-        counts: LegacyVector2D,
-        rows: usize,
-        cols: usize,
-    }
-
-    const RATE: f64 = 0.3;
-    // Row 0 column 17 holds 4; nothing else is set. Any recognisable pattern
-    // does, since the point is that the counters survive the decode.
-    let mut data = vec![0i32; ROWS * COLS];
-    data[17] = 4;
-
-    let legacy = LegacyCountMin {
-        counts: LegacyVector2D {
-            data: data.clone(),
-            rows: ROWS,
-            cols: COLS,
-            mask_bits: COLS.trailing_zeros(),
-            mask: (COLS - 1) as u128,
-            nitro: LegacyNitro {
-                is_nitro_mode: true,
-                sampling_rate: RATE,
-                to_skip: 2,
-                inv_ln_one_minus_p: 1.0 / (1.0 - RATE).ln(),
-                delta: (1.0 / RATE).floor() as u64,
-                idx: 9,
-                mask: 0x1_0000,
-            },
-        },
-        rows: ROWS,
-        cols: COLS,
-    };
-
-    let bytes = rmp_serde::to_vec_named(&legacy).expect("encode the legacy shape");
-    let mut decoded: CountMinSketch<Vector2D<i32>, FastPath> =
-        rmp_serde::from_slice(&bytes).expect("a payload without `rounding_state` must decode");
-
-    assert_eq!(
-        cells(&decoded),
-        data,
-        "the counters must survive a decode of the pre-`rounding_state` shape"
-    );
-
-    // And the decoded sketch keeps sampling: the rounding stream starts from
-    // its default rather than failing to decode.
-    let key = DataInput::U64(SOLO_KEY);
-    for _ in 0..2_000 {
-        decoded.nitro_update(&key);
-    }
-    let spec = SamplingConfidenceSpec::new(RATE, Z);
-    let mass = signed_row_masses(decoded.as_storage())[0] - 4.0;
-    assert!(
-        spec.check(mass, 2_000.0, 0.0).is_ok(),
-        "a decoded legacy sketch must keep sampling at its stored rate: row-0 mass \
-         {mass} for 2000 updates at p={RATE}, band +-{:.1}",
-        spec.half_width(2_000.0)
-    );
 }
 
 /// A context snapshot taken mid-stream and restored onto a fresh sketch must

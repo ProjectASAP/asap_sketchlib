@@ -79,13 +79,7 @@ returns an error otherwise, leaving `self` untouched.
 
 ## Serialization
 
-```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
-```
-
-Plain MessagePack, **not** an ASAPv1 envelope: no `kind_id` is allocated for
-this sketch while it is experimental.
+None: no `kind_id` is allocated for this sketch while it is experimental.
 
 ## Accuracy
 

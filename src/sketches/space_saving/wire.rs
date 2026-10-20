@@ -46,10 +46,10 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::SPACE_SAVING;
-use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::SPACE_SAVING;
+use crate::asapv1::wire_key::{WireBytes, WireString, exact_vec};
 use crate::{HashProfile, OwnedDataInput, SketchHasher};
 
 use std::collections::HashSet;
@@ -1112,5 +1112,51 @@ mod tests {
             "a sparse summary has no discarded_max"
         );
         assert_eq!(decoded.top_k(8).len(), 2);
+    }
+
+    /// Known triples, seated out of emitted order, serialize to the
+    /// `asapv1_golden/` bytes.
+    #[test]
+    fn known_state_matches_golden() {
+        use crate::asapv1::envelope::hex;
+
+        let summary = |capacity, total, discarded_max, emitted: Vec<(OwnedDataInput, u64, u64)>| {
+            let mut entries = emitted;
+            entries.reverse();
+            SpaceSaving::<DefaultXxHasher>::rebuild(SpaceSavingState {
+                capacity,
+                total,
+                discarded_max,
+                entries,
+            })
+            .expect("valid state")
+        };
+
+        let i64_keys = [
+            (-1, 70000, 0),
+            (300, 9, 2),
+            (0, 5, 0),
+            (1, 5, 1),
+            (i64::MIN, 5, 4),
+            (-129, 5, 0),
+        ]
+        .map(|(key, count, error)| (OwnedDataInput::I64(key), count, error));
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/space_saving_i64_c8.hex"
+        ));
+        assert_eq!(
+            summary(8, 70030, 4, i64_keys.to_vec()).to_asapv1().unwrap(),
+            golden
+        );
+
+        let byte_keys = [(&b"\xff\x00"[..], 9, 0), (b"", 4, 1), (b"ab", 4, 0)]
+            .map(|(key, count, error)| (OwnedDataInput::Bytes(key.to_vec()), count, error));
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/space_saving_bytes_c3.hex"
+        ));
+        assert_eq!(
+            summary(3, 20, 3, byte_keys.to_vec()).to_asapv1().unwrap(),
+            golden
+        );
     }
 }

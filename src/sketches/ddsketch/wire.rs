@@ -29,12 +29,12 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::asapv1::admission_rate;
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::DDSKETCH;
+use crate::asapv1::wire_key::exact;
 use crate::common::structures::Vector1D;
-use crate::message_pack_format::admission_rate;
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::DDSKETCH;
-use crate::message_pack_format::wire_key::exact;
 
 use super::{Buckets, DdSketch, DdSketchState};
 
@@ -664,5 +664,52 @@ mod tests {
             sketch.to_asapv1().is_err(),
             "bucket counts overflowing the total must not serialize"
         );
+    }
+
+    /// Known stores and scalars serialize to the `asapv1_golden/` bytes.
+    #[test]
+    fn known_state_matches_golden() {
+        use crate::asapv1::envelope::hex;
+
+        let state = |positive: (&[u64], i32), negative: (&[u64], i32), zero_count, scalars| {
+            let (sum, min, max) = scalars;
+            let store = |(counts, offset): (&[u64], i32)| Buckets {
+                counts: Vector1D::from_vec(counts.to_vec()),
+                offset,
+            };
+            DdSketch::try_from(DdSketchState {
+                alpha: 0.01,
+                positive_store: store(positive),
+                sum,
+                min,
+                max,
+                negative_store: store(negative),
+                zero_count,
+                admission_rate: 1.0,
+            })
+            .expect("valid state")
+        };
+
+        let positive = state(
+            (&[1, 0, 127, 128, 300, 65536, 4294967296], -40),
+            (&[], 0),
+            0,
+            (2181071000.0, 0.453125, 0.5078125),
+        );
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/ddsketch_positive_a001.hex"
+        ));
+        assert_eq!(positive.to_asapv1().unwrap(), golden);
+
+        let signed = state(
+            (&[3, 0, 2], 310),
+            (&[5, 1], -208),
+            7,
+            (2523.90625, -0.016, 515.0),
+        );
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/ddsketch_signed_a001.hex"
+        ));
+        assert_eq!(signed.to_asapv1().unwrap(), golden);
     }
 }

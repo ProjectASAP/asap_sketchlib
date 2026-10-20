@@ -120,14 +120,6 @@ word count that disagrees with the declared dimensions, and any bit set in a
 row's trailing padding past `cols` — unreachable by `contains`, but counted by
 `count_ones`, so it would skew `fill_ratio` and `estimated_fpp` alone.
 
-Independently of ASAPv1, `Bloom` is plain `Serialize`/`Deserialize`; that form is
-`{ bits, inserted, mode }`, where `mode` is `"regular"` or `"fast"`. Decoding
-into the other hash path fails rather than producing a filter that reports its
-own members absent, and so does a row count past `BLOOM_MAX_SLICES`. `BitMatrix`
-carries `{ words, rows, cols }` only — the word stride and the fold masks are
-recomputed on decode, and a payload whose word count disagrees with its
-dimensions is rejected there rather than panicking later.
-
 ## Examples
 
 ```rust

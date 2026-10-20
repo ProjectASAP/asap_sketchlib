@@ -33,7 +33,7 @@ const OCCURRENCE_HASH_SEED_DOMAIN: usize = usize::MAX / 3;
 static NEXT_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Memory, accuracy, and hashing controls for [`UnivMonQ`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnivMonQConfig {
     /// Number of geometrically sampled logical substreams.
     pub layers: usize,
@@ -238,13 +238,13 @@ impl HashLayout {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 enum Counters {
     I32(Vec<i32>),
     I64(Vec<i64>),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 struct PackedCountSketch {
     width: usize,
     depth: usize,

@@ -17,13 +17,11 @@
 //! `a_hot_key_saturates_a_pixel_and_forces_a_zoom` pins the generator to a
 //! load that zooms, and every law below re-asserts it on the run it drew.
 
-use crate::support::close;
 use asap_sketchlib::sketches::microscope::{
     DeltaStrategy, MicroLayout, MicroParams, SubWindowClock,
 };
-use asap_sketchlib::{DataInput, DefaultXxHasher, MatrixFastHash, MicroCm, SketchHasher, Vector3D};
+use asap_sketchlib::{DataInput, DefaultXxHasher, MatrixFastHash, MicroCm, SketchHasher};
 use proptest::prelude::*;
-use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 
 /// Key domain the streams draw from. Narrow enough that a handful of columns
@@ -418,12 +416,11 @@ fn the_rounding_seed_reaches_the_zoom() {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
 
-    // ===== A live cell holds what the wire refuses to decode without =====
+    // ===== A live cell never holds a whole unit in its shutter =====
     //
-    // `deserialize` rejects a record whose shutter has reached one `c^Z`
-    // unit, because that is the assumption bounding the carry a merge
-    // computes. A payload cannot be the only way in: the running sketch has
-    // to keep it too, through every zoom-out, boundary and reclaim.
+    // A shutter below one `c^Z` unit is the assumption bounding the carry a
+    // merge computes. The running sketch keeps it through every zoom-out,
+    // boundary and reclaim.
 
     #[test]
     fn a_live_cell_never_holds_a_whole_unit_in_its_shutter(run in zooming_run()) {
@@ -808,81 +805,4 @@ proptest! {
         }
     }
 
-    // ===== A grid that was sized but never filled =====
-    //
-    // `Vector3D::unfilled` leaves the storage empty and every bucket accessor
-    // panics until `fill` has run, so a `MicroCm` around one would panic on
-    // its first insert or query. No public constructor produces that state,
-    // and the wire must not either: the geometry a payload declares has to
-    // match the bytes it carries.
-
-    #[test]
-    fn a_grid_that_was_sized_but_never_filled_is_refused_on_the_wire(
-        rows in 1usize..4,
-        cols in prop_oneof![Just(2usize), Just(4), Just(8)],
-        t in 1usize..5,
-        c in prop_oneof![Just(2u32), Just(3), Just(4)],
-        per_sub_window in 1u64..1000,
-    ) {
-        #[derive(Serialize)]
-        struct Forged {
-            cells: Vector3D<u8>,
-            params: MicroParams,
-            clock: SubWindowClock,
-            rounding: u64,
-        }
-
-        let params = MicroParams::new(t, c);
-        let depth = Micro::with_dimensions(
-            rows, cols, params, SubWindowClock::count_based(per_sub_window), 0,
-        ).cell_bytes();
-
-        let forge = |cells: Vector3D<u8>| {
-            let bytes = rmp_serde::to_vec_named(&Forged {
-                cells,
-                params,
-                clock: SubWindowClock::count_based(per_sub_window),
-                rounding: 1,
-            }).expect("encode");
-            Micro::deserialize_from_bytes(&bytes).map_err(|e| e.to_string())
-        };
-
-        // The same geometry, filled, is the control: the refusal below is
-        // about the missing bytes and nothing else.
-        let mut filled = Vector3D::unfilled(rows, cols, depth);
-        filled.fill(0u8);
-        prop_assert!(forge(filled).is_ok(), "the control payload must decode");
-
-        let refused = forge(Vector3D::unfilled(rows, cols, depth));
-        prop_assert!(refused.is_err(), "a grid with no bytes must be refused");
-        let err = refused.err().unwrap_or_default();
-        prop_assert!(
-            err.contains("does not match rows * cols * bucket_len"),
-            "unexpected refusal for an unfilled {}x{}x{} grid: {}",
-            rows, cols, depth, err
-        );
-    }
-
-    // ===== The wire =====
-
-    #[test]
-    fn a_zoomed_sketch_round_trips_to_the_same_answers(run in zooming_run()) {
-        let mut sketch = run.empty();
-        let peak = run.drive(&mut sketch, &mut Window::new(run.t));
-        prop_assert!(peak > 0, "the run never zoomed: {:?}", run);
-
-        let bytes = sketch.serialize_to_bytes().expect("encode");
-        let decoded = Micro::deserialize_from_bytes(&bytes).expect("decode");
-        prop_assert_eq!(decoded.max_zoom(), sketch.max_zoom());
-        prop_assert_eq!(decoded.sub_window(), sketch.sub_window());
-        for k in 0..DOMAIN {
-            prop_assert!(
-                close(
-                    decoded.estimate_with(&key(k), DeltaStrategy::Over),
-                    sketch.estimate_with(&key(k), DeltaStrategy::Over),
-                ),
-                "key {} answers differently after a round trip", k
-            );
-        }
-    }
 }

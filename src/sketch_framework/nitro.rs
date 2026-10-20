@@ -8,7 +8,6 @@
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng, rng};
-use serde::{Deserialize, Serialize};
 
 use crate::{
     CountMinSketch, CountSketch, DataInput, DefaultXxHasher, FastPath, FastPathHasher,
@@ -119,7 +118,7 @@ impl NitroEstimate for CountSketch<Vector2D<i32>, FastPath> {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 /// Batch-oriented Nitro wrapper around a sketch target.
 pub struct NitroBatch<S: NitroTarget> {
     sampling_rate: f64,
@@ -128,15 +127,10 @@ pub struct NitroBatch<S: NitroTarget> {
     inv_ln_one_minus_p: f64,
     /// Weight applied to each sampled update.
     pub delta: u64,
-    /// Live sampling RNG for [`NitroBatch::update_batch`]. Not serialized: a decoded
-    /// batch restarts it from the OS, so an `update_batch` stream does not resume
-    /// across a round trip. The cached path's state (`idx`, `to_skip`) is
-    /// serialized and does resume.
-    #[serde(skip)]
-    #[serde(default = "new_small_rng")]
+    /// Live sampling RNG for [`NitroBatch::update_batch`].
     generator: SmallRng,
     idx: usize,
-    /// Unused; retained so the serialized field order is unchanged.
+    /// Unused except as the fourth value [`NitroBatch::get_ctx`] reports.
     mask: usize,
     sk: S,
 }

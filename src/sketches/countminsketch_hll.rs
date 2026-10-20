@@ -36,8 +36,8 @@
 //!
 //! # Status
 //!
-//! Experimental: behind the `experimental` cargo feature, and its API and
-//! wire form may change without a major version bump. For a per-key distinct
+//! Experimental: behind the `experimental` cargo feature, and its API may
+//! change without a major version bump. For a per-key distinct
 //! count on a stable API today, reach for `Hydra` with `HydraCounter::Hll`.
 //!
 //! # Related sketches
@@ -59,10 +59,6 @@
 
 use crate::sketches::hll::classic_estimate;
 use crate::{DataInput, DefaultXxHasher, SketchHasher, Vector3D};
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
-use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 const DEFAULT_ROWS: usize = 4;
@@ -80,76 +76,12 @@ const HLL_SEED: usize = 1;
 /// selected `(row, col)` bucket holds a `2^precision`-register HyperLogLog that
 /// records the item. See the [module docs](crate::sketches::countminsketch_hll) for
 /// the supported queries and the performance notes for the optimization strategy.
-#[derive(Clone, Debug, Serialize)]
-#[serde(bound = "")]
+#[derive(Clone, Debug)]
 pub struct CountMinHll<H: SketchHasher = DefaultXxHasher> {
     buckets: Vector3D<u8>,
     precision: u32,
-    #[serde(skip)]
     p_mask: u64,
-    #[serde(skip)]
     _hasher: PhantomData<H>,
-}
-
-// Seed struct: only the two authoritative fields are read from the wire.
-// The derived p_mask is recomputed on load, and column routing is owned by
-// Vector3D, so stale or tampered bytes cannot produce inconsistent routing.
-#[derive(Deserialize)]
-struct CountMinHllSeed {
-    buckets: Vector3D<u8>,
-    precision: u32,
-}
-
-impl<'de, H: SketchHasher> Deserialize<'de> for CountMinHll<H> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let CountMinHllSeed { buckets, precision } = CountMinHllSeed::deserialize(deserializer)?;
-        let rows = buckets.rows();
-        let cols = buckets.cols();
-        if !(1..=18).contains(&precision) {
-            return Err(serde::de::Error::custom(format!(
-                "precision {precision} out of range 1..=18"
-            )));
-        }
-        let expected_depth = 1usize << precision;
-        if buckets.bucket_len() != expected_depth {
-            return Err(serde::de::Error::custom(format!(
-                "buckets bucket_len {} does not match 2^precision {} = {expected_depth}",
-                buckets.bucket_len(),
-                precision
-            )));
-        }
-        if cols < 2 || !cols.is_power_of_two() {
-            return Err(serde::de::Error::custom(format!(
-                "cols ({cols}) must be a power of two and at least 2"
-            )));
-        }
-        let col_bits = buckets.mask_bits() as usize;
-        let required_bits = rows.saturating_mul(col_bits);
-        if required_bits > 128 {
-            return Err(serde::de::Error::custom(format!(
-                "rows ({rows}) × column bits ({col_bits}) = {required_bits} exceeds the \
-                 128-bit packed column hash; reduce rows or cols"
-            )));
-        }
-        // A register holds a rank drawn from the 64 - precision bits below the
-        // register index, so `64 - precision + 1` is the largest an insert can
-        // write. Above that is a state no stream produces, and it skews the
-        // harmonic sum the estimator builds. `hll/wire.rs` holds the standalone
-        // sketch to the same bound.
-        let max_rank = (64 - precision + 1) as u8;
-        if let Some(&rank) = buckets.as_slice().iter().find(|&&rank| rank > max_rank) {
-            return Err(serde::de::Error::custom(format!(
-                "register value {rank} exceeds the maximum rank {max_rank} at \
-                 precision {precision}"
-            )));
-        }
-        Ok(Self {
-            buckets,
-            precision,
-            p_mask: (1u64 << precision) - 1,
-            _hasher: PhantomData,
-        })
-    }
 }
 
 impl Default for CountMinHll<DefaultXxHasher> {
@@ -304,16 +236,6 @@ impl<H: SketchHasher> CountMinHll<H> {
             *reg = (*reg).max(other_reg);
         }
         Ok(())
-    }
-
-    /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-
-    /// Deserializes a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
     }
 }
 
@@ -508,24 +430,6 @@ mod tests {
     }
 
     #[test]
-    fn serialize_round_trip_preserves_estimates() {
-        let mut sk = CountMinHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
-        let k = key("user_A");
-        for i in 0..1500u64 {
-            sk.update(&k, &val(i));
-        }
-        let bytes = sk.serialize_to_bytes().expect("serialize");
-        let restored =
-            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
-
-        assert_eq!(sk.rows(), restored.rows());
-        assert_eq!(sk.cols(), restored.cols());
-        assert_eq!(sk.precision(), restored.precision());
-        assert_eq!(sk.as_storage().as_slice(), restored.as_storage().as_slice());
-        assert_eq!(sk.estimate(&k), restored.estimate(&k));
-    }
-
-    #[test]
     fn update_batch_matches_sequential_updates() {
         let k = key("user_A");
         let vals: Vec<DataInput<'static>> = (0..500u64).map(val).collect();
@@ -558,113 +462,5 @@ mod tests {
         // cols=64 → column bits=6 → 21x6=126 <= 128
         let sk = CountMinHll::<DefaultXxHasher>::with_dimensions(21, 64, 6);
         assert_eq!(sk.rows(), 21);
-    }
-
-    /// Every guard in `deserialize` gets a payload that trips it.
-    ///
-    /// These are forged, not merely decoded: the point is that a crafted
-    /// payload cannot produce a sketch whose accessors read out of bounds or
-    /// whose routing shifts past the packed hash. A test that decodes valid
-    /// bytes and asserts an invariant of the *constructor* proves nothing
-    /// about the decoder.
-    #[test]
-    fn deserialize_rejects_every_state_the_sketch_cannot_represent() {
-        #[derive(Serialize)]
-        struct Forged {
-            buckets: Vector3D<u8>,
-            precision: u32,
-        }
-        fn attempt(rows: usize, cols: usize, depth: usize, precision: u32) -> String {
-            let mut buckets: Vector3D<u8> = Vector3D::unfilled(rows, cols, depth);
-            buckets.fill(0);
-            let bytes = rmp_serde::to_vec_named(&Forged { buckets, precision }).expect("encode");
-            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
-                .err()
-                .map(|e| e.to_string())
-                .unwrap_or_default()
-        }
-
-        // A sane payload decodes, so the cases below fail for their own
-        // reason and not because the shape was wrong to begin with.
-        assert_eq!(
-            attempt(4, 32, 256, 8),
-            "",
-            "the control payload must decode"
-        );
-
-        for (label, err, want) in [
-            ("precision 0", attempt(4, 32, 1, 0), "out of range"),
-            ("precision 19", attempt(4, 32, 1, 19), "out of range"),
-            (
-                "bucket_len mismatch",
-                attempt(4, 32, 128, 8),
-                "does not match",
-            ),
-            (
-                "cols not a power of two",
-                attempt(4, 17, 256, 8),
-                "power of two",
-            ),
-            ("single column", attempt(4, 1, 256, 8), "at least 2"),
-            // 22 rows x 6 column bits = 132 > 128.
-            ("rows past the hash", attempt(22, 64, 256, 8), "exceeds the"),
-        ] {
-            assert!(
-                err.contains(want),
-                "{label}: expected an error containing {want:?}, got {err:?}"
-            );
-        }
-    }
-
-    /// A register holds a rank of at most `64 - precision + 1`. A byte above
-    /// that is a state no insert produces, and it skews the harmonic sum every
-    /// estimate over that bucket is built from. `hll/wire.rs` holds the
-    /// standalone sketch to the same bound.
-    #[test]
-    fn deserialize_rejects_a_register_holding_an_impossible_rank() {
-        #[derive(Serialize)]
-        struct Forged {
-            buckets: Vector3D<u8>,
-            precision: u32,
-        }
-        fn attempt(precision: u32, rank: u8) -> Option<String> {
-            let depth = 1usize << precision;
-            let mut buckets: Vector3D<u8> = Vector3D::unfilled(4, 32, depth);
-            buckets.fill(0);
-            buckets.as_mut_slice()[0] = rank;
-            let bytes = rmp_serde::to_vec_named(&Forged { buckets, precision }).expect("encode");
-            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
-                .err()
-                .map(|e| e.to_string())
-        }
-
-        for precision in [1u32, 8, 18] {
-            let max_rank = (64 - precision + 1) as u8;
-            assert!(
-                attempt(precision, max_rank).is_none(),
-                "precision {precision}: the largest rank an insert can write must decode"
-            );
-            let err = attempt(precision, max_rank + 1).unwrap_or_else(|| {
-                panic!(
-                    "precision {precision}: rank {} must be rejected",
-                    max_rank + 1
-                )
-            });
-            assert!(err.contains("exceeds the maximum rank"), "{err}");
-            let err = attempt(precision, u8::MAX)
-                .unwrap_or_else(|| panic!("precision {precision}: rank 255 must be rejected"));
-            assert!(err.contains("exceeds the maximum rank"), "{err}");
-        }
-    }
-
-    #[test]
-    fn deserialize_recomputes_derived_fields() {
-        let sk = CountMinHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
-        let bytes = sk.serialize_to_bytes().expect("serialize");
-        let restored =
-            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
-        assert_eq!(restored.p_mask, (1u64 << 8) - 1);
-        // Column routing is owned by the storage and rebuilt from `cols`.
-        assert_eq!(restored.as_storage().mask_bits(), 5); // 32.ilog2()
     }
 }

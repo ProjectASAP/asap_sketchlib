@@ -1,9 +1,8 @@
 //! Exercises `impl_hll_registers!` from outside the crate.
 //!
 //! This is an integration test, so it compiles as a separate crate: it only
-//! sees `asap_sketchlib`'s public surface, and it never imports `serde`,
-//! `serde-big-array`, or any of the other names the macro expansion needs.
-//! That makes it a real check that the exported macro is usable downstream.
+//! sees `asap_sketchlib`'s public surface. That makes it a real check that the
+//! exported macro is usable downstream.
 //!
 //! The precisions here are deliberately outside the built-in
 //! {12, 14, 16} set, including `lg_k = 18` (needed by sketch-bench's
@@ -148,21 +147,6 @@ fn custom_precision_indexing_and_iteration() {
     assert_eq!(sum, 7 + 1 + 2 + 3);
 }
 
-#[test]
-fn custom_precision_round_trips_through_serde() {
-    let mut sketch = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
-    for i in 0..5_000 {
-        sketch.update(&DataInput::String(item(i)));
-    }
-
-    let bytes = rmp_serde::to_vec(&sketch).expect("serialize");
-    let restored: HyperLogLogImpl<Classic, HllBucketListP13> =
-        rmp_serde::from_slice(&bytes).expect("deserialize");
-
-    assert_eq!(restored.registers_as_slice(), sketch.registers_as_slice());
-    assert_eq!(restored.estimate(), sketch.estimate());
-}
-
 /// Regression: register storage must be allocated on the heap, never built as
 /// an `[u8; N]` value and copied into the box. Test threads get a 2 MiB stack
 /// and lg_k=22 is a 4 MiB array, so a stack temporary overflows in debug
@@ -181,15 +165,14 @@ fn large_precision_allocates_on_the_heap() {
     for i in 0..1_000 {
         big.update(&DataInput::String(item(i)));
     }
-    let bytes = rmp_serde::to_vec(&big).expect("serialize");
-    let restored: HyperLogLogImpl<Classic, HllBucketListP18> =
-        rmp_serde::from_slice(&bytes).expect("deserialize");
+    let bytes = big.to_asapv1().expect("serialize");
+    let restored =
+        HyperLogLogImpl::<Classic, HllBucketListP18>::from_asapv1(&bytes).expect("deserialize");
     assert_eq!(restored.registers_as_slice(), big.registers_as_slice());
 }
 
-/// The ASAPv1 envelope is the cross-language format, and it is a different
-/// code path from the derive-based serde impls above: it writes `precision`
-/// into the metadata and validates the register length on the way back in.
+/// The ASAPv1 envelope writes `precision` into the metadata and validates the
+/// register length on the way back in.
 /// Covers all three variants, including HIP's extra running scalars.
 #[test]
 fn custom_precision_round_trips_through_the_asapv1_wire_format() {

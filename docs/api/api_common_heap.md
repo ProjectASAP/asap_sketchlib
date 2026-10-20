@@ -52,8 +52,8 @@ No dedicated merge method on `TopKHeap`; reconciliation is sketch-specific.
 
 ## Serialization
 
-No dedicated byte API helpers. Derived serde carries the heap and its capacity;
-the key index is derived data and is rebuilt on load rather than stored.
+None of its own; a sketch holding a `TopKHeap` carries its entries in its
+ASAPv1 payload.
 
 ## Examples
 

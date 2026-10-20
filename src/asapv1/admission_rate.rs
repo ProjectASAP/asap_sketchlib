@@ -3,8 +3,7 @@
 //! producer admitted each update. HLL, Count-Min, Count Sketch and DDSketch
 //! carry it, as the last key of the map, and only when `p < 1`.
 
-use serde::de::Error;
-use serde::{Deserialize, Deserializer};
+use serde::Deserializer;
 
 use super::wire_key::exact;
 
@@ -57,21 +56,12 @@ pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
     exact(deserializer).map(Some)
 }
 
-/// Reads a sketch's rate from its derived serde form: inside `(0, 1]`.
-pub(crate) fn deserialize_rate<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<f64, D::Error> {
-    let p = f64::deserialize(deserializer)?;
-    to_key(p).map_err(D::Error::custom)?;
-    Ok(p)
-}
-
 #[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
+    use crate::asapv1::envelope;
     use crate::input::HydraCounter;
-    use crate::message_pack_format::envelope;
     use crate::sketch_framework::eh_bucket_sketch::wire::{SketchState, rebuild_sketch};
     use crate::sketches::CountSketchDelta;
     use crate::*;

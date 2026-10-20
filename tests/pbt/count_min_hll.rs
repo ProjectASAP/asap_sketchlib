@@ -299,22 +299,6 @@ macro_rules! shape_laws {
                     prop_assert_eq!(with_empty.as_storage().as_slice(), &before[..]);
                 }
 
-                #[test]
-                fn a_round_trip_preserves_the_grid_and_its_answers(groups in groups()) {
-                    let sketch = sketch_of(&groups);
-                    let probed: Vec<u64> = groups.iter().map(|(key, _)| *key).collect();
-
-                    round_trip!(
-                        @raw_serde Sketch,
-                        sketch,
-                        |s: &Sketch| s.as_storage().as_slice().to_vec(),
-                        |s: &Sketch| (s.rows(), s.cols(), s.precision()),
-                        |s: &Sketch| probed
-                            .iter()
-                            .map(|k| s.estimate(&DataInput::U64(*k)).to_bits())
-                            .collect::<Vec<u64>>(),
-                    );
-                }
             }
         }
     };

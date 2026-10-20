@@ -33,36 +33,30 @@
 // - Refactored into a generic `HyperLogLog<Variant>` structure.
 // ----------------------------------------------------------------
 
-use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
+use crate::asapv1::admission_rate::admit_all;
 use crate::structures::fixed_structure::{
     HllRegisterStorage, HllRegistersP12, HllRegistersP14, HllRegistersP16,
 };
 use crate::{
     DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, SketchHasher, hash64_seeded,
 };
-use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 mod delta;
 mod wire;
 pub use delta::HyperLogLogDelta;
 pub use wire::HllWireVariant;
-pub(crate) use wire::{HllMetadata, HllPayloadHip, HllPayloadPlain, standard_hll_metadata};
 
 /// Generic HyperLogLog sketch parameterized by estimation variant, register storage, and hasher.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[derive(Clone, Debug)]
 pub struct HyperLogLogImpl<
     Variant,
     Registers: HllRegisterStorage,
     H: SketchHasher = DefaultXxHasher,
 > {
     registers: Registers,
-    #[serde(skip)]
     _marker: PhantomData<Variant>,
-    #[serde(skip)]
     _hasher: PhantomData<H>,
-    #[serde(default = "admit_all", deserialize_with = "deserialize_rate")]
     admission_rate: f64,
 }
 
@@ -94,21 +88,19 @@ pub(crate) fn classic_estimate(registers: &[u8]) -> f64 {
 }
 
 /// Marker type selecting the classic HyperLogLog estimation algorithm.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Classic;
 /// Marker type selecting the Ertl MLE estimation algorithm (arXiv:1702.01284).
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Ertl;
 
 /// HyperLogLog variant using the Historic Inverse Probability (HIP) estimator for improved accuracy.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[derive(Clone, Debug)]
 pub struct HyperLogLogHipImpl<Registers: HllRegisterStorage> {
     registers: Registers,
     kxq0: f64,
     kxq1: f64,
     est: f64,
-    #[serde(default = "admit_all", deserialize_with = "deserialize_rate")]
     admission_rate: f64,
 }
 

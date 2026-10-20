@@ -8,11 +8,10 @@
 //!   Sketch and its Applications," J. Algorithms 55(1), 2005.
 //!   <https://www.cs.rutgers.edu/~muthu/cm-jal.pdf>
 
-use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::asapv1::admission_rate::admit_all;
 use crate::common::structure_utils::AdmittedRows;
-use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
 use crate::octo_delta::{
     CountMinSketchCellDelta, KeyedCountMinSketchCellDelta, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
     OCTO_MAX_PROMOTION_THRESHOLD,
@@ -33,21 +32,15 @@ pub use crate::common::structures::fixed_structure::{QUICKSTART_COLS, QUICKSTART
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 /// A Count-Min Sketch for estimating item frequencies in a data stream.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
+#[derive(Clone, Debug)]
 pub struct CountMinSketch<
     S: MatrixStorage = Vector2D<i32>,
     Mode = RegularPath,
     H: SketchHasher = DefaultXxHasher,
 > {
     counts: S,
-    rows: usize,
-    cols: usize,
-    #[serde(skip)]
     _mode: PhantomData<Mode>,
-    #[serde(skip)]
     _hasher: PhantomData<H>,
-    #[serde(default = "admit_all", deserialize_with = "deserialize_rate")]
     admission_rate: f64,
 }
 
@@ -199,8 +192,6 @@ where
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
         CountMinSketch {
             counts: Vector2D::filled(rows, cols, T::default()),
-            rows,
-            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),
@@ -212,12 +203,8 @@ where
 impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H> {
     /// Creates a sketch from an existing matrix storage instance.
     pub fn from_storage(counts: S) -> Self {
-        let rows = counts.rows();
-        let cols = counts.cols();
         Self {
             counts,
-            rows,
-            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),

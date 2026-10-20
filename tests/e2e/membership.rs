@@ -482,13 +482,12 @@ fn clearing_restores_an_empty_filter() {
     }
 }
 
-/// A round-trip through serde preserves every answer, members and probes
-/// alike.
+/// An ASAPv1 round trip preserves every answer, members and probes alike.
 #[test]
-fn a_serde_round_trip_preserves_every_answer() {
+fn an_asapv1_round_trip_preserves_every_answer() {
     let filter = filled_regular(0.01);
-    let bytes = rmp_serde::to_vec(&filter).expect("serialize");
-    let decoded: Bloom<RegularPath> = rmp_serde::from_slice(&bytes).expect("deserialize");
+    let bytes = filter.to_asapv1().expect("serialize");
+    let decoded = Bloom::<RegularPath>::from_asapv1(&bytes).expect("deserialize");
 
     assert_eq!(decoded.rows(), filter.rows());
     assert_eq!(decoded.cols(), filter.cols());
@@ -585,7 +584,7 @@ fn the_two_hash_paths_agree_only_where_the_geometry_gives_each_row_its_own_hash(
     );
 }
 
-/// The serialized form carries which path built the filter, so bytes cannot be
+/// The ASAPv1 metadata carries which path built the filter, so bytes cannot be
 /// decoded into the other one. Without the tag this succeeds and the filter
 /// then reports almost every one of its own members absent.
 #[test]
@@ -596,21 +595,19 @@ fn a_filter_cannot_be_decoded_into_the_other_hash_path() {
         fast.update(&DataInput::I64(key));
     }
 
-    let regular_bytes = rmp_serde::to_vec(&regular).expect("serialize");
-    let fast_bytes = rmp_serde::to_vec(&fast).expect("serialize");
+    let regular_bytes = regular.to_asapv1().expect("serialize");
+    let fast_bytes = fast.to_asapv1().expect("serialize");
 
-    let err = rmp_serde::from_slice::<Bloom<FastPath>>(&regular_bytes)
-        .expect_err("regular bytes decoded as fast path");
     assert!(
-        err.to_string().contains("regular") && err.to_string().contains("fast"),
-        "unexpected error: {err}"
+        Bloom::<FastPath>::from_asapv1(&regular_bytes).is_err(),
+        "regular bytes decoded as fast path"
     );
-    assert!(rmp_serde::from_slice::<Bloom<RegularPath>>(&fast_bytes).is_err());
+    assert!(Bloom::<RegularPath>::from_asapv1(&fast_bytes).is_err());
     // `RegularPath` is the default parameter, so the unannotated form is the
     // one a caller reaches for and it must fail too.
-    assert!(rmp_serde::from_slice::<Bloom>(&fast_bytes).is_err());
+    assert!(<Bloom>::from_asapv1(&fast_bytes).is_err());
 
-    let decoded: Bloom<FastPath> = rmp_serde::from_slice(&fast_bytes).expect("same path decodes");
+    let decoded = Bloom::<FastPath>::from_asapv1(&fast_bytes).expect("same path decodes");
     for key in members() {
         assert!(decoded.contains(&DataInput::I64(key)));
     }
@@ -618,13 +615,13 @@ fn a_filter_cannot_be_decoded_into_the_other_hash_path() {
 
 /// The fast path round-trips like the regular one, tag and all.
 #[test]
-fn a_fast_path_serde_round_trip_preserves_every_answer() {
+fn a_fast_path_asapv1_round_trip_preserves_every_answer() {
     let mut filter = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
     for key in members() {
         filter.update(&DataInput::I64(key));
     }
-    let bytes = rmp_serde::to_vec(&filter).expect("serialize");
-    let decoded: Bloom<FastPath> = rmp_serde::from_slice(&bytes).expect("deserialize");
+    let bytes = filter.to_asapv1().expect("serialize");
+    let decoded = Bloom::<FastPath>::from_asapv1(&bytes).expect("deserialize");
 
     assert_eq!(
         (decoded.rows(), decoded.cols()),

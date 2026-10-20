@@ -19,10 +19,10 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::admission_rate;
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::COUNT_MIN_WITH_HEAP;
+use crate::asapv1::admission_rate;
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::COUNT_MIN_WITH_HEAP;
 use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode};
 use crate::{CountMinSketch, HashProfile, HeapCounter, SketchHasher, Vector2D};
 

@@ -49,9 +49,9 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
+use crate::asapv1::envelope;
+use crate::asapv1::wire_key::{WireBytes, WireString, exact_vec};
 use crate::common::hash::check_matrix_rows;
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::{HashProfile, HeapCount, OwnedDataInput, TopKHeap};
 
 /// Metadata `key_type` of a heap that holds nothing. A heap with no entries has
@@ -606,7 +606,7 @@ pub(crate) fn rebuild_heap<N: HeapCount>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_pack_format::envelope;
+    use crate::asapv1::envelope;
     use crate::{DataInput, DefaultXxHasher, RegularPath, Vector2D};
     use rmp_serde::from_slice;
 

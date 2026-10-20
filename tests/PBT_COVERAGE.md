@@ -2,8 +2,8 @@
 
 One `proptest` law per line. Each compares the sketch against an answer
 computed without it; what that answer is comes first in every section. One
-file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 367 laws;
-with `--all-features`, 435, adding the four **experimental** modules. Every
+file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 342 laws;
+with `--all-features`, 407, adding the four **experimental** modules. Every
 law was mutation-checked: break the implementation, the law goes red. Shared
 generators, `grid` and `round_trip!` live in `support.rs`.
 
@@ -56,7 +56,7 @@ Compared against: a `(row, col)` scan of `table[i][j].full_key` / `.val`, and th
 - wire
   - ASAPv1 keeps `estimate` for 64 keys; `edge_dimension` x `edge_rows`
 
-## count_min.rs — 19
+## count_min.rs — 11
 
 Compared against: an exact `HashMap` count, columns via the public `hash_for_matrix`. Path laws compare two real implementations.
 
@@ -68,22 +68,14 @@ Compared against: an exact `HashMap` count, columns via the public `hash_for_mat
 - estimator
   - `estimate(k)` never drops on a non-negative insert; all 32 keys probed after every insert
   - `truth(k) <= estimate(k) <= truth(k) + min over rows of colliding mass`; 1-8 cols x 32 keys, every row collides
-  - portable `CountMinSketch`: `estimate(k) >= truth(k)`
-- merge
-  - commutative, associative, empty is identity
-  - `merge(S(xs), S(ys)) == S(xs ++ ys)`
-  - `merge` never lowers `estimate(k)`; `k` from either stream or from neither
 - `merge_max`
   - disjoint keys: `max(a, b) <= cell <= a + b`; an empty peer cell moves nothing; `estimate(k)` still inside the band above
   - `merge_max(s, s) == s`
   - shared keys: `max(a, b) <= cell <= a + b`, and the same for every estimate
-- model across a rebuilt backend
-  - after any sequence of insert, merge, `apply_delta`, msgpack round trip, mismatched merge: geometry unchanged; every cell `>= 0`; every row sums to total mass; `truth(k) <= estimate(k) <= band`. `apply_delta == merge`; a mismatched merge is refused and changes nothing
 - wire
-  - msgpack keeps geometry, cells, estimates
   - ASAPv1 keeps 64 estimates; `edge_rows` x `edge_dimension`
 
-## count_sketch.rs — 12
+## count_sketch.rs — 8
 
 Compared against: a key's `(col, sign)` per row, read off a one-key sketch; the stream's exact signed sum. Regime: 512 keys; sign law 1-5 rows x 1-7 cols, median law 1-7 rows x 1-5 cols.
 
@@ -97,33 +89,25 @@ Compared against: a key's `(col, sign)` per row, read off a one-key sketch; the 
 - linearity
   - insert `w` then `-w` for every `w`: cells back to start; signed stream over a background
   - `update_weighted(k, -1)` undoes `update(k)`, cell for cell
-  - `cells(S(xs)) + cells(S(ys)) == cells(S(xs ++ ys))`; integral weights, power-of-two widths
-  - negate every weight: every cell negated
-- merge
-  - portable `CountSketch`: `merge(S(xs), S(ys)) == S(xs ++ ys)` to `REL_TOL`
 - wire
-  - msgpack keeps cells and estimates
   - ASAPv1 keeps 64 estimates; `edge_rows` x `edge_dimension`
 
-## ddsketch.rs — 14
+## ddsketch.rs — 10
 
-Compared against: the sorted stream. `DdSketch::get_value_at_quantile` targets the `ceil(q*n)`-th value, portable `DdSketch::quantile` the `floor(q*(n-1))`-th. Streams carry negatives, zeros and positives inside the indexable band.
+Compared against: the sorted stream. `DdSketch::get_value_at_quantile` targets the `ceil(q*n)`-th value. Streams carry negatives, zeros and positives inside the indexable band.
 
 - placement
   - negative store, zero counter, positive store hold exactly the three class counts; `get_count() == arrivals`
-  - portable `DdSketch`: the same three counts
   - `sum() == stream sum`, bit for bit
-  - first dense allocation: one 128-bucket chunk, seed value at its center; both impls, both signed stores
+  - first dense allocation: one 128-bucket chunk, seed value at its center; both signed stores
 - relative error `<= alpha`
-  - `|quantile(q) - exact| <= alpha * |exact|`, across the sign boundary, both impls
+  - `|quantile(q) - exact| <= alpha * |exact|`, across the sign boundary
   - `quantile(q)` non-decreasing in `q`, across the sign boundary
   - single value `v`: `quantile(q) == v` for every `q`; `min`, `max`, `q=0`, `q=1` equal the tracked extremes
 - merge
-  - counts add; both stores, both offsets, zero counter identical either way round
   - merged `quantile(q)` within `alpha` of the combined stream's exact value
-  - different `alpha`: refused, receiver count unchanged, both impls; same `alpha`: merges
+  - different `alpha`: refused, receiver count unchanged; same `alpha`: merges
 - wire
-  - msgpack keeps stores, offsets, zero count, quantiles
   - ASAPv1 keeps count, `alpha`, `sum`, quantiles; stream of NaN, ±inf, ±0, f64 extremes
 
 ## elastic.rs — 12
@@ -228,7 +212,7 @@ Compared against: the offers sorted and truncated. `TopKHeap` is path dependent 
   - one offer per key: the `k` largest counts resident
   - `update` returns true iff the key was resident or there was room, i.e. nothing was displaced
 
-## hll.rs — 101
+## hll.rs — 97
 
 Models use only what the paper fixes; register indexing and rank mapping stay free. For `Classic` and `Ertl`, `estimate` is a function of the registers, so laws relate estimates rather than restate the formula. Registers `<= 40`, so `sum(2^-M[j])` is exact in f64.
 
@@ -247,17 +231,15 @@ Models use only what the paper fixes; register indexing and rank mapping stay fr
   - `merge == elementwise max`
   - commutative, idempotent, empty is identity
   - `merge(S(xs), S(ys)) == S(xs ++ ys)`
-- HIP, per precision (20); registers read back through the wire format
+- HIP, per precision (20); registers read back from the ASAPv1 payload
   - empty: `estimate() == 0`
   - `estimate` non-decreasing; a repeated key adds 0
   - order matters: a descending run into one register estimates exactly 1, an ascending run `> 1`
   - an arrival that raises a register adds `m / sum(2^-M[j])` over the prior registers; one that raises nothing adds 0; both sides exact in f64, compared after truncation to `usize`
-- portable `HllSketch` (5)
-  - merge commutative, idempotent, empty identity, `== S(xs ++ ys)`; precisions 4-11
-  - msgpack keeps variant, precision, registers, estimate; `Regular`, `Datafusion`, `Hip`; precisions 4-13
+- wire
   - ASAPv1 on `HyperLogLog<Ertl>` keeps registers and estimate; empty included
 
-## hydra.rs — 7
+## hydra.rs — 5
 
 Compared against: the map rebuilt from the subkey encoding (`label ":" value`, joined by `";"`, escaped) and the public matrix hash at `HYDRA_SEED_INDEX`. All records share one payload value, so each cell's Count-Min is exact. Labels and values include the escaped characters. Cols in {1, 2, 3, 8, 64, 251, 256}.
 
@@ -268,13 +250,10 @@ Compared against: the map rebuilt from the subkey encoding (`label ":" value`, j
   - an answer is a median of the subkey's cells: at least half the rows `<=` it and at least half `>=` it. Probes: every subset of every record, every single-column equality, one absent value
 - merge
   - `merge(S(xs), S(ys)) == S(xs ++ ys)`, cell for cell
-- `HydraKllSketch`, no schema, no fan-out
-  - one key hits one cell per row at `xxh32(key, row) % cols`, read back as retained count
-  - query == median of its row cells, as an order statistic; an absent key reads 0
 - wire
   - ASAPv1 keeps every subpopulation answer and the schema
 
-## kll.rs — 14
+## kll.rs — 13
 
 Compaction is randomized, so no law names retained items. Compared against: the sorted stream. Rank band `16 * n / k`; worst drift seen about 3.3. The accuracy law draws `k` from {200, 400} and asserts band `< n/10`.
 
@@ -296,7 +275,6 @@ Compaction is randomized, so no law names retained items. Compared against: the 
   - same seed, same stream: same items
   - `clear` re-seeds from the stored seed: replay == fresh, items and levels
 - wire
-  - msgpack keeps `k`, count, quantiles
   - ASAPv1 keeps count and quantiles under NaN, ±inf, ±0, f64 extremes
 
 ## kll_dynamic.rs — 14
@@ -393,7 +371,7 @@ Exact. Compared against: a `HashSet` of the stream. Keys from `[a-c]{0,2}`, so s
   - empty is a two-sided identity
   - `merge_refs` unions all inputs; refuses an empty list
 - wire
-  - msgpack keeps the key set, and again on a second round trip; keys include `""`, non-ASCII, embedded NUL, 300 chars, arbitrary `String`
+  - ASAPv1 keeps the key set, and again on a second round trip; keys include `""`, non-ASCII, embedded NUL, 300 chars, arbitrary `String`
 
 ## space_saving.rs — 19
 
@@ -483,7 +461,7 @@ The u64 key encoding must be injective and order preserving over every f64. Comp
 - wire
   - ASAPv1 keeps count, extrema, CDF breakpoints, F2; both counter widths, even and odd halving period, an overrun ordered sample
 
-## count_min_hll.rs — 25 (experimental)
+## count_min_hll.rs — 24 (experimental)
 
 A Count-Min grid of HLL registers. Compared against: a standalone `HyperLogLogImpl<Classic, _>` on the same value hashes, byte-equal. Column routing read from a one-key probe sketch. 9 laws, 8 expanded over 3 shapes: 4 x 512 at p4 (rows mostly private), 4 x 32 at p6 and 3 x 32 at p8 (collisions).
 
@@ -520,7 +498,7 @@ Retained set == the `k` smallest distinct hashes, so laws are mostly equalities.
 - wire
   - ASAPv1 keeps retained set, `k`, estimate; empty included
 
-## microscope.rs — 15 (experimental)
+## microscope.rs — 13 (experimental)
 
 Sliding-window frequency with adaptive zoom. A cell holds `t + 2` byte **pixels** (a ring indexed by sub-window) sharing one **zoom** exponent `Z`; a pixel is worth `c^Z` items and the cell rescales when a pixel would overflow. The **shutter** is the current sub-window's carry, `< c^Z`, rounded into its pixel at the boundary. A **reclaim** lowers `Z` at a boundary when load has fallen. Compared against: an exact `VecDeque` window tagged by sub-window.
 

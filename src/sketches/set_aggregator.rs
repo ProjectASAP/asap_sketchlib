@@ -1,16 +1,14 @@
-//! Set aggregator: wire-format type for tracking a set of unique string keys.
+//! Set aggregator: an exact set of string keys.
 //!
-//! `SetAggregator` is not a sketch — it's a plain `HashSet<String>` wrapped
-//! for cross-language interop. `to_asapv1` writes ASAPv1 (§3.21);
-//! [`MessagePackCodec`] writes `StringSet { values: HashSet<String> }`.
+//! `SetAggregator` is not a sketch — it is a plain `HashSet<String>` with an
+//! ASAPv1 form (§3.21); [`SetAggregatorDelta`] is its delta (§3.22).
 
 use std::collections::HashSet;
 
-use serde::{Deserialize, Serialize};
-
-use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
-
+mod delta;
 mod wire;
+
+pub use delta::SetAggregatorDelta;
 
 /// Set aggregator for tracking a set of unique string keys.
 #[derive(Debug, Clone)]
@@ -62,41 +60,9 @@ impl Default for SetAggregator {
     }
 }
 
-// ----- Wire format -----
-
-/// Borrowed serialize-side wire DTO. Avoids cloning the underlying set
-/// on the encode path.
-#[derive(Serialize)]
-pub(crate) struct StringSetRef<'a> {
-    pub values: &'a HashSet<String>,
-}
-
-/// Owned deserialize-side wire DTO.
-#[derive(Deserialize)]
-pub(crate) struct StringSetOwned {
-    pub values: HashSet<String>,
-}
-
-impl MessagePackCodec for SetAggregator {
-    fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
-        let wrapper = StringSetRef {
-            values: &self.values,
-        };
-        Ok(rmp_serde::to_vec(&wrapper)?)
-    }
-
-    fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        let wrapper: StringSetOwned = rmp_serde::from_slice(bytes)?;
-        Ok(Self {
-            values: wrapper.values,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Deserialize;
 
     #[test]
     fn test_creation() {
@@ -130,33 +96,5 @@ mod tests {
         assert!(sa1.values.contains("web"));
         assert!(sa1.values.contains("api"));
         assert!(sa1.values.contains("db"));
-    }
-
-    #[test]
-    fn test_msgpack_round_trip() {
-        let mut sa = SetAggregator::new();
-        sa.update("web");
-        sa.update("api");
-
-        let bytes = sa.to_msgpack().unwrap();
-        let deserialized = SetAggregator::from_msgpack(&bytes).unwrap();
-
-        assert_eq!(deserialized.values.len(), 2);
-        assert!(deserialized.values.contains("web"));
-        assert!(deserialized.values.contains("api"));
-    }
-
-    #[test]
-    fn test_msgpack_matches_wire_format() {
-        #[derive(Deserialize)]
-        struct StringSet {
-            values: HashSet<String>,
-        }
-        let mut sa = SetAggregator::new();
-        sa.update("a");
-        let bytes = sa.to_msgpack().unwrap();
-        let decoded: StringSet =
-            rmp_serde::from_slice(&bytes).expect("should decode as StringSet { values: ... }");
-        assert!(decoded.values.contains("a"));
     }
 }

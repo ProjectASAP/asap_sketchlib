@@ -111,14 +111,7 @@ clocks would add unrelated sub-windows. `self` is untouched on error.
 
 ## Serialization
 
-```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
-```
-
-Plain MessagePack, **not** an ASAPv1 envelope: no `kind_id` is allocated while
-this sketch is experimental. The layout is re-derived from the parameters on
-load and a payload whose stored cell depth disagrees with it is refused.
+None: no `kind_id` is allocated while this sketch is experimental.
 
 ## Cost
 

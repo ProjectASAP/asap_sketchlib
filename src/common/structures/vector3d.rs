@@ -1,5 +1,3 @@
-use serde::{Deserialize, Serialize};
-
 use super::matrix_storage::cols_mask_bits;
 use crate::MatrixFastHash;
 
@@ -27,9 +25,8 @@ use crate::MatrixFastHash;
 ///
 /// `Vector2D<[T; N]>` has exactly the same memory layout. The one thing
 /// `Vector3D` adds is a **`bucket_len` chosen at run time**: it comes from a
-/// configuration value (a HyperLogLog precision, a sub-window count) that is
-/// also read back from deserialized bytes, which a const generic cannot
-/// express.
+/// configuration value (a HyperLogLog precision, a sub-window count), which a
+/// const generic cannot express.
 ///
 /// # Layout
 ///
@@ -52,80 +49,6 @@ pub struct Vector3D<T> {
     bucket_len: usize,
     mask_bits: u32,
     mask: u128,
-}
-
-// Only the stored fields travel, in both directions; `mask_bits` and `mask`
-// are functions of `cols` and are recomputed on decode, so tampered bytes
-// cannot produce inconsistent routing. The two field sets must match: a
-// self-describing encoding ignores the extra keys, but the compact one is
-// positional and would reject its own output.
-#[derive(Serialize)]
-#[serde(rename = "Vector3D")]
-struct Vector3DSer<'a, T> {
-    data: &'a [T],
-    rows: usize,
-    cols: usize,
-    bucket_len: usize,
-}
-
-#[derive(Deserialize)]
-#[serde(rename = "Vector3D")]
-struct Vector3DDeserialize<T> {
-    data: Vec<T>,
-    rows: usize,
-    cols: usize,
-    bucket_len: usize,
-}
-
-impl<T: Serialize> Serialize for Vector3D<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        Vector3DSer {
-            data: &self.data,
-            rows: self.rows,
-            cols: self.cols,
-            bucket_len: self.bucket_len,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de, T> Deserialize<'de> for Vector3D<T>
-where
-    T: Deserialize<'de>,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let input = Vector3DDeserialize::deserialize(deserializer)?;
-        if input.rows == 0 || input.cols == 0 || input.bucket_len == 0 {
-            return Err(serde::de::Error::custom(
-                "Vector3D: rows, cols and bucket_len must all be non-zero",
-            ));
-        }
-        let expected = input
-            .rows
-            .checked_mul(input.cols)
-            .and_then(|n| n.checked_mul(input.bucket_len))
-            .ok_or_else(|| {
-                serde::de::Error::custom("Vector3D: rows * cols * bucket_len overflows")
-            })?;
-        if input.data.len() != expected {
-            return Err(serde::de::Error::custom(format!(
-                "Vector3D: data length {} does not match rows * cols * bucket_len = {expected}",
-                input.data.len()
-            )));
-        }
-        let mask_bits = cols_mask_bits(input.cols);
-        Ok(Self {
-            data: input.data,
-            rows: input.rows,
-            cols: input.cols,
-            bucket_len: input.bucket_len,
-            mask_bits,
-            mask: (1u128 << mask_bits) - 1,
-        })
-    }
 }
 
 impl<T> Vector3D<T> {
@@ -401,35 +324,6 @@ mod tests {
     }
 
     #[test]
-    fn serde_round_trip_preserves_shape_and_contents() {
-        let mut v: Vector3D<u8> = Vector3D::unfilled(2, 8, 3);
-        v.fill(0);
-        let at = (8 + 5) * 3 + 2; // bucket (1, 5), slot 2
-        v.as_mut_slice()[at] = 200;
-        let bytes = rmp_serde::to_vec_named(&v).expect("serialize");
-        let back: Vector3D<u8> = rmp_serde::from_slice(&bytes).expect("deserialize");
-        assert_eq!((back.rows(), back.cols(), back.bucket_len()), (2, 8, 3));
-        assert_eq!(back.as_slice(), v.as_slice());
-        // Derived routing state is recomputed, not carried on the wire.
-        assert_eq!(back.mask_bits(), v.mask_bits());
-    }
-
-    /// The compact encoding is positional, so `Serialize` and `Deserialize`
-    /// must agree on the field set exactly. A self-describing encoding hides a
-    /// mismatch by ignoring the extra keys; this one rejects its own output.
-    #[test]
-    fn serde_round_trip_also_holds_for_the_compact_encoding() {
-        let mut v: Vector3D<u8> = Vector3D::unfilled(2, 8, 3);
-        v.fill(0);
-        v.as_mut_slice()[(8 + 5) * 3 + 2] = 200;
-        let bytes = rmp_serde::to_vec(&v).expect("serialize");
-        let back: Vector3D<u8> = rmp_serde::from_slice(&bytes).expect("deserialize");
-        assert_eq!((back.rows(), back.cols(), back.bucket_len()), (2, 8, 3));
-        assert_eq!(back.as_slice(), v.as_slice());
-        assert_eq!(back.mask_bits(), v.mask_bits());
-    }
-
-    #[test]
     #[should_panic(expected = "overflows usize")]
     fn unfilled_rejects_dimensions_whose_product_overflows() {
         // Each dimension is legal on its own; the product is not. Without the
@@ -446,55 +340,5 @@ mod tests {
         // In bounds of `data`, so the slice index alone would return row 1's
         // bucket instead of panicking.
         let _ = v.bucket_slice(0, 5);
-    }
-
-    #[test]
-    fn deserialize_rejects_a_data_length_that_contradicts_the_dimensions() {
-        #[derive(Serialize)]
-        struct Forged {
-            data: Vec<u8>,
-            rows: usize,
-            cols: usize,
-            bucket_len: usize,
-        }
-        // 2 * 8 * 3 = 48 elements are required; supply 47.
-        let forged = Forged {
-            data: vec![0u8; 47],
-            rows: 2,
-            cols: 8,
-            bucket_len: 3,
-        };
-        let bytes = rmp_serde::to_vec_named(&forged).expect("serialize");
-        let err = rmp_serde::from_slice::<Vector3D<u8>>(&bytes)
-            .expect_err("a short payload must be rejected");
-        assert!(
-            err.to_string()
-                .contains("does not match rows * cols * bucket_len"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn deserialize_rejects_zero_dimensions() {
-        #[derive(Serialize)]
-        struct Forged {
-            data: Vec<u8>,
-            rows: usize,
-            cols: usize,
-            bucket_len: usize,
-        }
-        let forged = Forged {
-            data: Vec::new(),
-            rows: 2,
-            cols: 0,
-            bucket_len: 3,
-        };
-        let bytes = rmp_serde::to_vec_named(&forged).expect("serialize");
-        let err =
-            rmp_serde::from_slice::<Vector3D<u8>>(&bytes).expect_err("zero cols must be rejected");
-        assert!(
-            err.to_string().contains("must all be non-zero"),
-            "unexpected error: {err}"
-        );
     }
 }

@@ -25,10 +25,10 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::UNIFORM_SAMPLING;
-use crate::message_pack_format::wire_key::{exact, exact_vec};
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::UNIFORM_SAMPLING;
+use crate::asapv1::wire_key::{exact, exact_vec};
 
 use super::{SampleEntry, UniformSampling};
 
@@ -480,5 +480,30 @@ mod tests {
             sampler.to_asapv1().is_err(),
             "an over-full sampler must not serialize"
         );
+    }
+
+    /// Known entries and running scalars serialize to the `asapv1_golden/`
+    /// bytes.
+    #[test]
+    fn known_state_matches_golden() {
+        use crate::asapv1::envelope::hex;
+
+        let sampler = UniformSampling {
+            sample_rate: 0.25,
+            total_seen: 20,
+            rng_state: 0x0123_4567_89ab_cdef,
+            entries: [
+                (3u64, -0.0f64),
+                (3, 0.0),
+                (1 << 63, 1e300),
+                (u64::MAX, f64::NAN),
+            ]
+            .map(|(priority, value)| SampleEntry::new(priority, value))
+            .to_vec(),
+        };
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/uniform_sampling_r0p25.hex"
+        ));
+        assert_eq!(sampler.to_asapv1().unwrap(), golden);
     }
 }

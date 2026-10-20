@@ -16,12 +16,11 @@
 //!   <https://www.vldb.org/pvldb/vol12/p2195-masson.pdf>
 
 use crate::DataInput;
+use crate::asapv1::admission_rate::{self, admit_all};
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
-use crate::message_pack_format::admission_rate::{self, admit_all};
 use crate::octo_delta::{DdSign, DdSketchBucketDelta};
-use serde::{Deserialize, Serialize};
 
 /// The ASAPv1 DDSketch delta (kind_id `0x05 0x80`).
 mod delta;
@@ -33,7 +32,7 @@ pub use delta::DdSketchDelta;
 // Number of buckets to grow by when expanding.
 const GROW_CHUNK: usize = 128;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 struct Buckets {
     counts: Vector1D<u64>,
     offset: i32,
@@ -125,51 +124,33 @@ impl Buckets {
 /// ASAPv1 serialization lives in the `wire` submodule (kind_id `0x05 0x00`); it
 /// carries `alpha`, both bucket stores, the zero count and `sum` / `min` /
 /// `max`, and recovers `count` by summing them.
-///
-/// The derived `Serialize` / `Deserialize` is a separate, Rust-internal form
-/// used where a `DdSketch` is nested in another type. It carries the same state
-/// as the ASAPv1 payload and rebuilds the index mapping and `count` on the way
-/// in, refusing a state the ASAPv1 decoder would refuse.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(try_from = "DdSketchState")]
+#[derive(Debug)]
 pub struct DdSketch {
     alpha: f64,
-    #[serde(skip)]
     gamma: f64,
-    #[serde(skip)]
     log_gamma: f64,
-    #[serde(skip)]
     inv_log_gamma: f64,
 
     positive_store: Buckets,
-    #[serde(skip)]
     count: u64,
     sum: f64,
     min: f64,
     max: f64,
-    #[serde(default)]
     negative_store: Buckets,
-    #[serde(default)]
     zero_count: u64,
-    #[serde(default = "admit_all")]
     admission_rate: f64,
 }
 
-/// The fields a serialized [`DdSketch`] carries, in the order it emits them.
-/// `gamma` / `log_gamma` / `inv_log_gamma` follow from `alpha` and `count` is
-/// the sum of the buckets, so none of the four reaches the wire.
-#[derive(Deserialize)]
+/// The state a decoded [`DdSketch`] is rebuilt from. `gamma` / `log_gamma` /
+/// `inv_log_gamma` follow from `alpha` and `count` is the sum of the buckets.
 struct DdSketchState {
     alpha: f64,
     positive_store: Buckets,
     sum: f64,
     min: f64,
     max: f64,
-    #[serde(default)]
     negative_store: Buckets,
-    #[serde(default)]
     zero_count: u64,
-    #[serde(default = "admit_all")]
     admission_rate: f64,
 }
 
@@ -205,8 +186,7 @@ impl TryFrom<DdSketchState> for DdSketch {
 /// handled without growing the dense store: smaller magnitudes enter the
 /// zero bucket, while larger magnitudes are rejected.
 ///
-/// Single source of truth shared by core `DdSketch`, the portable wire twin,
-/// and tests, so the two implementations cannot drift algebraically again.
+/// Single source of truth shared by `DdSketch` and tests.
 pub fn ddsketch_indexable_bounds(alpha: f64) -> (f64, f64) {
     let gamma = (1.0 + alpha) / (1.0 - alpha);
     let inv_log_gamma = 1.0 / gamma.ln();
@@ -526,8 +506,7 @@ impl DdSketch {
     /// This is a REAL runtime check, not a `debug_assert!`: a `debug_assert!`
     /// compiles out in release builds, leaving a mismatched merge to corrupt
     /// results with no signal at all. DataDog's `MergeWith` and sketchlib-go's
-    /// Go `Merge` both return an error here; the portable `DdSketch::merge` in
-    /// this same crate does too.
+    /// Go `Merge` both return an error here.
     pub fn merge(&mut self, other: &DdSketch) -> Result<(), String> {
         if (self.alpha - other.alpha).abs() >= 1e-12 || (self.gamma - other.gamma).abs() >= 1e-12 {
             return Err(format!(
@@ -809,122 +788,5 @@ mod tests {
         // A large-but-trackable value is still recorded.
         d.add(&(max_indexable / 2.0));
         assert_eq!(d.get_count(), count_before + 2);
-    }
-
-    fn populated_sketch() -> DdSketch {
-        let mut sketch = DdSketch::new(0.01);
-        for v in [0.25f64, 1.0, 2.0, 3.0, 10.0, 50.0, 100.0, 1000.0] {
-            sketch.add(&v);
-        }
-        sketch
-    }
-
-    /// The derived serde form carries every scalar the buckets do not
-    /// determine, so a round trip continues the run rather than resetting it.
-    #[test]
-    fn serde_round_trip_keeps_the_running_scalars() {
-        let sketch = populated_sketch();
-        let bytes = rmp_serde::to_vec(&sketch).expect("encode");
-        let restored: DdSketch = rmp_serde::from_slice(&bytes).expect("decode");
-
-        assert_eq!(restored.get_count(), sketch.get_count());
-        assert_eq!(restored.sum(), sketch.sum());
-        assert_eq!(restored.min(), sketch.min());
-        assert_eq!(restored.max(), sketch.max());
-        assert_eq!(restored.alpha(), sketch.alpha());
-        assert_eq!(
-            restored.positive_store_counts(),
-            sketch.positive_store_counts()
-        );
-        assert_eq!(
-            restored.positive_store_offset(),
-            sketch.positive_store_offset()
-        );
-        for q in [0.0, 0.25, 0.5, 0.9, 1.0] {
-            assert_eq!(
-                restored.get_value_at_quantile(q),
-                sketch.get_value_at_quantile(q),
-                "quantile {q} moved across the round trip"
-            );
-        }
-    }
-
-    /// A decoded sketch keeps ingesting on top of the state it came back with.
-    #[test]
-    fn serde_round_trip_leaves_the_sketch_usable() {
-        let sketch = populated_sketch();
-        let bytes = rmp_serde::to_vec(&sketch).expect("encode");
-        let mut restored: DdSketch = rmp_serde::from_slice(&bytes).expect("decode");
-
-        restored.add(&5.0f64);
-        assert_eq!(restored.get_count(), sketch.get_count() + 1);
-        assert_eq!(restored.sum(), sketch.sum() + 5.0);
-        assert_eq!(
-            restored.positive_store_counts().iter().sum::<u64>(),
-            restored.get_count(),
-            "the recovered count drifted from the buckets"
-        );
-    }
-
-    /// The scalars are checked against the store the same way the ASAPv1
-    /// decoder checks them: a populated store with an empty sketch's scalars
-    /// is refused rather than decoded into an inconsistent sketch.
-    #[test]
-    fn serde_refuses_scalars_that_disagree_with_the_store() {
-        #[derive(Serialize)]
-        struct CraftedState {
-            alpha: f64,
-            positive_store: Buckets,
-            sum: f64,
-            min: f64,
-            max: f64,
-        }
-
-        let crafted = CraftedState {
-            alpha: 0.01,
-            positive_store: Buckets {
-                counts: Vector1D::from_vec(vec![1u64, 2]),
-                offset: -3,
-            },
-            sum: 0.0,
-            min: f64::INFINITY,
-            max: f64::NEG_INFINITY,
-        };
-        let bytes = rmp_serde::to_vec(&crafted).expect("encode crafted state");
-        let err = rmp_serde::from_slice::<DdSketch>(&bytes)
-            .expect_err("scalars disagreeing with the store must be refused");
-        assert!(
-            err.to_string().contains("DDSketch scalars"),
-            "unexpected error: {err}"
-        );
-    }
-
-    /// An alpha outside `(0, 1)` gives a meaningless index mapping, so it is
-    /// refused on the way in rather than at the first query.
-    #[test]
-    fn serde_refuses_an_out_of_range_alpha() {
-        #[derive(Serialize)]
-        struct CraftedState {
-            alpha: f64,
-            positive_store: Buckets,
-            sum: f64,
-            min: f64,
-            max: f64,
-        }
-
-        let crafted = CraftedState {
-            alpha: 1.5,
-            positive_store: Buckets {
-                counts: Vector1D::from_vec(Vec::new()),
-                offset: 0,
-            },
-            sum: 0.0,
-            min: f64::INFINITY,
-            max: f64::NEG_INFINITY,
-        };
-        let bytes = rmp_serde::to_vec(&crafted).expect("encode crafted state");
-        let err = rmp_serde::from_slice::<DdSketch>(&bytes)
-            .expect_err("an out-of-range alpha must be refused");
-        assert!(err.to_string().contains("alpha"), "unexpected error: {err}");
     }
 }

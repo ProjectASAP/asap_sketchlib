@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use twox_hash::{XxHash3_64, XxHash3_128};
 
@@ -109,7 +108,7 @@ pub trait HashProfile {
 
 /// Default hasher using twox_hash (XxHash3). This is the built-in implementation
 /// used when no custom hasher is specified.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct DefaultXxHasher;
 
 /// The standard ProjectASAP hash profile (`docs/asapv1_wire_format.md` §2).
@@ -360,7 +359,7 @@ fn mask_bits_for_cols(cols: usize) -> u32 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Layout used to store per-row fast-path hashes.
 pub enum MatrixHashLayout {
     /// Packs row hashes into one 64-bit value.

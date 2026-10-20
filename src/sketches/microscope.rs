@@ -61,10 +61,6 @@ pub(crate) mod cell;
 pub use cell::{DeltaStrategy, MAX_SUB_WINDOWS, MAX_ZOOM_BASE, MicroLayout, MicroParams, Rounding};
 
 use crate::{DataInput, DefaultXxHasher, MatrixFastHash, SketchHasher, Vector3D};
-use rmp_serde::{
-    decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice, to_vec_named,
-};
-use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::marker::PhantomData;
 
@@ -75,7 +71,7 @@ use std::marker::PhantomData;
 /// places — when `n` advances, and how the partially expired oldest
 /// sub-window is weighted — so they are one type here rather than two
 /// sketches.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubWindowClock {
     /// A sub-window is a fixed number of items.
     CountBased {
@@ -268,82 +264,14 @@ impl SubWindowClock {
 ///
 /// See the [module docs](crate::sketches::microscope) for the layout rationale and the current
 /// status of this implementation.
-#[derive(Clone, Debug, Serialize)]
-#[serde(bound = "")]
+#[derive(Clone, Debug)]
 pub struct MicroCm<H: SketchHasher = DefaultXxHasher> {
     cells: Vector3D<u8>,
     params: MicroParams,
     clock: SubWindowClock,
     rounding: Rounding,
-    #[serde(skip)]
     layout: MicroLayout,
-    #[serde(skip)]
     _hasher: PhantomData<H>,
-}
-
-// Only the authoritative fields are read from the wire; the layout is
-// re-derived from `params` and then checked against the stored geometry, so
-// a payload cannot describe a record shape the cells do not have.
-#[derive(Deserialize)]
-struct MicroCmSeed {
-    cells: Vector3D<u8>,
-    params: MicroParams,
-    clock: SubWindowClock,
-    rounding: Rounding,
-}
-
-impl<'de, H: SketchHasher> Deserialize<'de> for MicroCm<H> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let MicroCmSeed {
-            cells,
-            params,
-            clock,
-            rounding,
-        } = MicroCmSeed::deserialize(deserializer)?;
-        // Validate before deriving the layout: `MicroLayout::new` computes
-        // `t + 2`, which a crafted `t` could overflow.
-        MicroParams::checked(params.t, params.c).map_err(serde::de::Error::custom)?;
-        let layout = MicroLayout::new(params);
-        if cells.bucket_len() != layout.depth() {
-            return Err(serde::de::Error::custom(format!(
-                "cell bucket_len {} does not match the {} bytes the layout for t={}, c={} needs",
-                cells.bucket_len(),
-                layout.depth(),
-                params.t,
-                params.c
-            )));
-        }
-        let cols = cells.cols();
-        if cols < 2 || !cols.is_power_of_two() {
-            return Err(serde::de::Error::custom(format!(
-                "cols ({cols}) must be a power of two and at least 2"
-            )));
-        }
-        let rows = cells.rows();
-        let col_bits = cells.mask_bits() as usize;
-        let required_bits = rows.saturating_mul(col_bits);
-        if required_bits > 128 {
-            return Err(serde::de::Error::custom(format!(
-                "rows ({rows}) x column bits ({col_bits}) = {required_bits} exceeds the \
-                 128-bit packed column hash; reduce rows or cols"
-            )));
-        }
-        clock.checked().map_err(serde::de::Error::custom)?;
-        // Each record carries a zoom exponent and a shutter that the layout
-        // cannot constrain; a crafted pair panics or wraps on first use.
-        for (index, record) in cells.as_slice().chunks_exact(layout.depth()).enumerate() {
-            cell::validate(record, &layout)
-                .map_err(|detail| serde::de::Error::custom(format!("cell {index}: {detail}")))?;
-        }
-        Ok(Self {
-            cells,
-            params,
-            clock,
-            rounding,
-            layout,
-            _hasher: PhantomData,
-        })
-    }
 }
 
 impl Default for MicroCm<DefaultXxHasher> {
@@ -386,7 +314,6 @@ impl<H: SketchHasher> MicroCm<H> {
         );
         // Both types are public with public fields, so a struct literal
         // arrives here without having passed their constructors' checks.
-        // `deserialize` validates the same two; so must this path.
         let params =
             MicroParams::checked(params.t, params.c).unwrap_or_else(|detail| panic!("{detail}"));
         clock.checked().unwrap_or_else(|detail| panic!("{detail}"));
@@ -659,16 +586,6 @@ impl<H: SketchHasher> MicroCm<H> {
         }
         Ok(())
     }
-
-    /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        to_vec_named(self)
-    }
-
-    /// Deserializes a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        from_slice(bytes)
-    }
 }
 
 #[cfg(test)]
@@ -697,7 +614,7 @@ mod tests {
 
     /// `MicroParams` and `SubWindowClock` are public with public fields, so a
     /// struct literal reaches `with_dimensions` without their constructors'
-    /// checks. `deserialize` rejects both; so must this path.
+    /// checks.
     #[test]
     #[should_panic(expected = "zoom base c must be in 2..=256")]
     fn with_dimensions_rejects_a_params_literal_the_layout_cannot_represent() {
@@ -1002,175 +919,5 @@ mod tests {
         let err = a.merge(&b).expect_err("clocks disagree");
         assert!(err.contains("different sub-windows"), "unexpected: {err}");
         assert_eq!(a.as_storage().as_slice(), before.as_slice());
-    }
-
-    #[test]
-    fn serde_round_trip_preserves_the_answers() {
-        let mut sk = sketch(3, 32, 4, 100);
-        for i in 0..1_000u64 {
-            sk.update(&key(i % 17));
-        }
-        let bytes = sk.serialize_to_bytes().expect("serialize");
-        let back = MicroCm::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
-        assert_eq!(back.sub_window(), sk.sub_window());
-        assert_eq!(back.cell_bytes(), sk.cell_bytes());
-        assert_eq!(back.as_storage().as_slice(), sk.as_storage().as_slice());
-        for k in 0..17u64 {
-            assert_eq!(
-                back.estimate_with(&key(k), DeltaStrategy::Over),
-                sk.estimate_with(&key(k), DeltaStrategy::Over)
-            );
-        }
-    }
-
-    /// Every guard in `deserialize` gets a payload that trips it.
-    ///
-    /// Two of these — the zoom exponent and the shutter — are per-record
-    /// values the layout cannot constrain, so a crafted pair decodes into a
-    /// sketch that panics or wraps on first use rather than one that is
-    /// merely wrong.
-    #[test]
-    fn deserialize_rejects_every_state_the_sketch_cannot_represent() {
-        #[derive(Serialize)]
-        struct Forged {
-            cells: Vector3D<u8>,
-            params: MicroParams,
-            clock: SubWindowClock,
-            rounding: u64,
-        }
-
-        fn cells_for(rows: usize, cols: usize, depth: usize) -> Vector3D<u8> {
-            let mut cells: Vector3D<u8> = Vector3D::unfilled(rows, cols, depth);
-            cells.fill(0);
-            cells
-        }
-        fn attempt(cells: Vector3D<u8>, params: MicroParams, clock: SubWindowClock) -> String {
-            let forged = Forged {
-                cells,
-                params,
-                clock,
-                rounding: 1,
-            };
-            let bytes = rmp_serde::to_vec_named(&forged).expect("encode");
-            MicroCm::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
-                .err()
-                .map(|e| e.to_string())
-                .unwrap_or_default()
-        }
-
-        let good = MicroParams::new(4, 2);
-        let depth = MicroLayout::new(good).depth();
-        let clock = SubWindowClock::count_based(100);
-
-        // A sane payload decodes, so each case below fails for its own
-        // reason rather than because the shape was wrong to begin with.
-        assert_eq!(
-            attempt(cells_for(2, 16, depth), good, clock),
-            "",
-            "the control payload must decode"
-        );
-
-        // A record whose zoom exponent is past the cap: `c^Z` overflows.
-        let mut zoomed = cells_for(2, 16, depth);
-        zoomed.as_mut_slice()[MicroLayout::new(good).pixels()] = 200;
-        // A record whose shutter is not below one unit: the merge carry it
-        // bounds can then overflow the pixel sum.
-        let mut loose = cells_for(2, 16, depth);
-        {
-            let layout = MicroLayout::new(good);
-            let slice = loose.as_mut_slice();
-            slice[layout.pixels()] = 3; // Z = 3, so one unit is 8
-            slice[layout.pixels() + 1] = 99; // shutter low byte
-        }
-
-        for (label, err, want) in [
-            (
-                "t past the cap",
-                attempt(
-                    cells_for(2, 16, depth),
-                    MicroParams {
-                        t: usize::MAX,
-                        c: 2,
-                    },
-                    clock,
-                ),
-                "must be in 1..=",
-            ),
-            (
-                "zoom base below 2",
-                attempt(cells_for(2, 16, depth), MicroParams { t: 4, c: 1 }, clock),
-                "zoom base c must be in",
-            ),
-            (
-                "zoom base past a byte pixel",
-                attempt(
-                    cells_for(2, 16, depth),
-                    MicroParams { t: 4, c: 1_000 },
-                    clock,
-                ),
-                "zoom base c must be in",
-            ),
-            (
-                "bucket_len the layout disagrees with",
-                attempt(cells_for(2, 16, depth + 4), good, clock),
-                "does not match",
-            ),
-            (
-                "cols not a power of two",
-                attempt(cells_for(2, 17, depth), good, clock),
-                "power of two",
-            ),
-            (
-                "single column",
-                attempt(cells_for(2, 1, depth), good, clock),
-                "at least 2",
-            ),
-            (
-                // 22 rows x 6 column bits = 132 > 128.
-                "rows past the packed hash",
-                attempt(cells_for(22, 64, depth), good, clock),
-                "exceeds the",
-            ),
-            (
-                "zero-length sub-window",
-                attempt(
-                    cells_for(2, 16, depth),
-                    good,
-                    SubWindowClock::CountBased {
-                        items_per_sub_window: 0,
-                        seen: 0,
-                    },
-                ),
-                "must be non-zero",
-            ),
-            (
-                "zero-length time sub-window",
-                attempt(
-                    cells_for(2, 16, depth),
-                    good,
-                    SubWindowClock::TimeBased {
-                        sub_window_len: 0,
-                        epoch: 0,
-                        now: 0,
-                    },
-                ),
-                "must be non-zero",
-            ),
-            (
-                "zoom exponent past the cap",
-                attempt(zoomed, good, clock),
-                "exceeds the maximum",
-            ),
-            (
-                "shutter at or above one unit",
-                attempt(loose, good, clock),
-                "not below one unit",
-            ),
-        ] {
-            assert!(
-                err.contains(want),
-                "{label}: expected an error containing {want:?}, got {err:?}"
-            );
-        }
     }
 }

@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 
 /// Trait defining heap ordering behavior.
@@ -13,7 +12,7 @@ pub trait CommonHeapOrder<T> {
 }
 
 /// Root is the smallest value; bounded heap retains the largest values.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct RetainLargest;
 
 impl<T: Ord> CommonHeapOrder<T> for RetainLargest {
@@ -30,7 +29,7 @@ impl<T: Ord> CommonHeapOrder<T> for RetainLargest {
 }
 
 /// Root is the largest value; bounded heap retains the smallest values.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RetainSmallest;
 
 impl<T: Ord> CommonHeapOrder<T> for RetainSmallest {
@@ -46,7 +45,7 @@ impl<T: Ord> CommonHeapOrder<T> for RetainSmallest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 /// Capacity-bounded binary heap with pluggable ordering.
 pub struct CommonHeap<T, O: CommonHeapOrder<T>> {
     data: Vec<T>,
@@ -70,6 +69,16 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
     pub fn with_expected_len(capacity: usize, expected_len: usize, order: O) -> Self {
         Self {
             data: Vec::with_capacity(expected_len.min(capacity).min(PREALLOCATED_SLOTS)),
+            size: capacity,
+            order,
+        }
+    }
+
+    /// Wraps `data` that already satisfies the heap invariant for `order`.
+    #[cfg(feature = "experimental")]
+    pub(crate) fn from_heap_vec(data: Vec<T>, capacity: usize, order: O) -> Self {
+        Self {
+            data,
             size: capacity,
             order,
         }

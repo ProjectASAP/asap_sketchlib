@@ -7,12 +7,12 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::admission_rate;
-use crate::message_pack_format::delta::{add_cells, check_cells};
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::COUNT_MIN_DELTA;
-use crate::message_pack_format::wire_key::exact_vec;
+use crate::asapv1::admission_rate;
+use crate::asapv1::delta::{add_cells, check_cells};
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::COUNT_MIN_DELTA;
+use crate::asapv1::wire_key::exact_vec;
 use crate::{DefaultXxHasher, HashProfile, RegularPath, SketchHasher, Vector2D};
 
 use super::CountMinSketch;
@@ -131,7 +131,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_pack_format::envelope::hex;
+    use crate::asapv1::envelope::hex;
 
     type Delta = CountMinSketchDelta<i64, RegularPath>;
 

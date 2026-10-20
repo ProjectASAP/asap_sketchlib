@@ -113,7 +113,7 @@ that holds nothing. Both methods require `H: HashProfile`.
 
 A zero dimension, a table whose bucket count disagrees with `rows`/`cols`, a payload
 length that disagrees with the declared geometry, and a `nil` key carrying a
-non-zero value are all rejected on both sides. `CocoSketch` also derives serde.
+non-zero value are all rejected on both sides.
 
 Row `i` hashes at seed index `i`, so the wire covers `1 <= d <= 20`
 (`MATRIX_MAX_ROWS`, the seed list length): past that, row `i` and row `i + 20`

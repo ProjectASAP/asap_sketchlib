@@ -25,9 +25,9 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::BLOOM;
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::BLOOM;
 use crate::{BitMatrix, HashProfile, SketchHasher};
 
 use super::{BLOOM_MAX_BITS, BLOOM_MAX_SLICES, Bloom, BloomMode};
@@ -619,5 +619,36 @@ mod tests {
             measured <= predicted + band,
             "decoded filter delivered {measured}, over its predicted {predicted} (+{band})"
         );
+    }
+
+    /// A known bit grid serializes to the `asapv1_golden/` bytes.
+    #[test]
+    fn known_state_matches_golden() {
+        use crate::asapv1::envelope::hex;
+        use std::marker::PhantomData;
+
+        fn bloom<Mode: BloomMode>(
+            rows: usize,
+            cols: usize,
+            words: &[u64],
+            inserted: u64,
+        ) -> Bloom<Mode> {
+            Bloom {
+                bits: BitMatrix::from_words(rows, cols, words.to_vec()).expect("valid grid"),
+                inserted,
+                _mode: PhantomData,
+                _hasher: PhantomData,
+            }
+        }
+
+        let regular = bloom::<RegularPath>(3, 128, &[1, 1 << 63, 0, 0xff, u64::MAX, 0x10000], 300);
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/bloom_regular_3x128.hex"
+        ));
+        assert_eq!(regular.to_asapv1().unwrap(), golden);
+
+        let fast = bloom::<FastPath>(5, 32, &[1, 0x8000_0000, 0, 0xffff_ffff, 0x10000], 9);
+        let golden = hex(include_str!("../../../asapv1_golden/bloom_fast_5x32.hex"));
+        assert_eq!(fast.to_asapv1().unwrap(), golden);
     }
 }

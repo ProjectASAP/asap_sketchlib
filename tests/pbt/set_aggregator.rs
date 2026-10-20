@@ -4,7 +4,6 @@
 //! is a `std::collections::HashSet` built from the stream on the test side.
 
 use asap_sketchlib::SetAggregator;
-use asap_sketchlib::message_pack_format::MessagePackCodec;
 use proptest::prelude::*;
 use std::collections::HashSet;
 
@@ -170,17 +169,17 @@ proptest! {
     // ===== Wire =====
 
     #[test]
-    fn a_msgpack_round_trip_preserves_the_key_set(stream in awkward_keys(120)) {
+    fn an_asapv1_round_trip_preserves_the_key_set(stream in awkward_keys(120)) {
         let s = aggregator_of(&stream);
 
-        let bytes = s.to_msgpack().expect("encode");
-        let restored = SetAggregator::from_msgpack(&bytes).expect("decode");
+        let bytes = s.to_asapv1().expect("encode");
+        let restored = SetAggregator::from_asapv1(&bytes).expect("decode");
 
         prop_assert_eq!(&restored.values, &s.values, "round trip moved the set");
         prop_assert_eq!(restored.values.len(), s.values.len());
 
-        let twice = SetAggregator::from_msgpack(
-            &restored.to_msgpack().expect("re-encode")
+        let twice = SetAggregator::from_asapv1(
+            &restored.to_asapv1().expect("re-encode")
         ).expect("decode a re-encode");
         prop_assert_eq!(&twice.values, &s.values, "the second round trip moved the set");
     }

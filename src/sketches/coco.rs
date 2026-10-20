@@ -16,30 +16,26 @@
 use crate::{DataInput, DefaultXxHasher, SketchHasher, Vector2D};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
 mod wire;
 
 /// One table slot: the key it currently represents and the mass attributed to it.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct CocoBucket {
     pub full_key: Option<String>,
     pub val: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(bound = "")]
+#[derive(Clone, Debug)]
 pub struct CocoSketch<H: SketchHasher = DefaultXxHasher> {
     pub cols: usize,
     pub rows: usize,
     pub table: Vector2D<CocoBucket>,
     /// Source of the tie-break and election draws. Not serialized: a decoded
     /// sketch draws from the thread generator.
-    #[serde(skip)]
     rng: CocoRng,
-    #[serde(skip)]
     _hasher: PhantomData<H>,
 }
 

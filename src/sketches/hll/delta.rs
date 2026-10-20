@@ -7,9 +7,9 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::admission_rate;
-use crate::message_pack_format::delta::check_cells;
-use crate::message_pack_format::envelope;
+use crate::asapv1::admission_rate;
+use crate::asapv1::delta::check_cells;
+use crate::asapv1::envelope;
 use crate::structures::fixed_structure::HllRegisterStorage;
 use crate::{DefaultXxHasher, HashProfile, SketchHasher};
 

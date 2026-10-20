@@ -124,8 +124,7 @@ fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 These produce/consume the **ASAPv1** wire envelope (kind `0x18 0x00`) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). The impl is bounded on
 `H: HashProfile`, so a summary built with an unprofiled hasher cannot serialize
-at all. `SpaceSaving` also implements `serde::Serialize` / `Deserialize` for
-in-Rust use; both forms carry the same state.
+at all.
 
 A summary travels as `capacity`, `total`, the unmonitored ceiling, and one
 `(key, count, error)` triple per monitored key. The bucket and counter lists and

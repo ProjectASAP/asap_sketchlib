@@ -9,7 +9,6 @@ use crate::{
     SketchHasher,
 };
 
-use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 mod wire;
@@ -17,12 +16,10 @@ mod wire;
 // expect error bound to be less than 2%
 const KMV_DEFAULT_K: usize = 4096_usize;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[derive(Clone, Debug)]
 pub struct Kmv<H: SketchHasher = DefaultXxHasher> {
     pub k: usize,
     pub retained_hashes: CommonHeap<u64, RetainSmallest>,
-    #[serde(skip)]
     _hasher: PhantomData<H>,
 }
 

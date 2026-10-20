@@ -7,14 +7,13 @@
 //! - Charikar, Chen & Farach-Colton, "Finding Frequent Items in Data Streams,"
 //!   ICALP 2002. <https://www.cs.rutgers.edu/~farach/pubs/FrequentStream.pdf>
 
+use crate::asapv1::admission_rate::admit_all;
 use crate::common::structure_utils::AdmittedRows;
-use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
     QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded, nitro_delta_saturated_i32,
 };
-use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::ops::Neg;
 
@@ -27,21 +26,15 @@ use crate::common::structures::fixed_structure::{DEFAULT_COLS, DEFAULT_ROWS};
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 /// A frequency-estimation sketch using random sign projections (Count Sketch).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
+#[derive(Clone, Debug)]
 pub struct CountSketch<
     S: MatrixStorage = Vector2D<i32>,
     Mode = RegularPath,
     H: SketchHasher = DefaultXxHasher,
 > {
     counts: S,
-    rows: usize,
-    cols: usize,
-    #[serde(skip)]
     _mode: PhantomData<Mode>,
-    #[serde(skip)]
     _hasher: PhantomData<H>,
-    #[serde(default = "admit_all", deserialize_with = "deserialize_rate")]
     admission_rate: f64,
 }
 
@@ -214,8 +207,6 @@ where
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
         CountSketch {
             counts: Vector2D::filled(rows, cols, T::from(0)),
-            rows,
-            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),
@@ -231,12 +222,8 @@ where
 {
     /// Wraps an existing matrix storage as a Count Sketch.
     pub fn from_storage(counts: S) -> Self {
-        let rows = counts.rows();
-        let cols = counts.cols();
         Self {
             counts,
-            rows,
-            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),

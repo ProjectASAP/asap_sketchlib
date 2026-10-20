@@ -20,8 +20,6 @@
 //! - Manousis et al., VLDB 2022.
 //!   <https://vldb.org/pvldb/vol15/p3249-manousis.pdf>
 
-use serde::{Deserialize, Serialize};
-
 use crate::Vector2D;
 use crate::input::{HydraCounter, HydraQuery};
 use crate::{DataInput, HYDRA_SEED_INDEX, hash_for_matrix_seeded};
@@ -57,10 +55,8 @@ fn push_escaped(out: &mut String, s: &str) {
 /// no longer collide, and a projection of a wide row can no longer alias the full
 /// key of a narrow one.
 ///
-/// Serializes as a plain array of labels; the escaped cache is rebuilt and the
-/// labels re-validated on decode via `TryFrom<Vec<String>>`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(try_from = "Vec<String>", into = "Vec<String>")]
+/// `TryFrom<Vec<String>>` validates the labels and builds the escaped cache.
+#[derive(Clone, Debug)]
 pub struct KeySchema {
     labels: Vec<String>,
     escaped_labels: Vec<String>,
@@ -184,7 +180,7 @@ impl KeySchema {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 /// Sketch grid for subpopulation queries.
 pub struct Hydra {
     /// Number of rows in the sketch grid.

@@ -8,10 +8,10 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::delta::{add_cells, check_cells};
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
-use crate::message_pack_format::kind::COUNT_SKETCH_WITH_HEAP_DELTA;
+use crate::asapv1::delta::{add_cells, check_cells};
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
+use crate::asapv1::kind::COUNT_SKETCH_WITH_HEAP_DELTA;
 use crate::sketches::countminsketch_heap::heap_wire::{
     DeltaCells, check_geometry, decode_metadata, decode_payload, encode_metadata, encode_payload,
     heap_entries, rebuild_heap, wire_key_type,
@@ -148,7 +148,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_pack_format::envelope::hex;
+    use crate::asapv1::envelope::hex;
     use crate::{DataInput, OwnedDataInput};
 
     type Delta = CountSketchWithHeapDelta<i64, RegularPath>;

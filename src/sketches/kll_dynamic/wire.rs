@@ -15,8 +15,8 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 
 use crate::Vector1D;
-use crate::message_pack_format::envelope;
-use crate::message_pack_format::kind;
+use crate::asapv1::envelope;
+use crate::asapv1::kind;
 use crate::sketches::kll::{
     Coin, KllCoinWire, KllPayload, KllWireItem, kll_metadata, split_and_validate_meta,
     validate_kll_payload,
@@ -96,8 +96,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::message_pack_format::envelope;
-    use crate::message_pack_format::kind;
+    use crate::asapv1::envelope;
+    use crate::asapv1::kind;
     use crate::sketches::kll_dynamic::KllDynamic;
 
     fn build_dynamic(k: i32, n: u64) -> KllDynamic<f64> {

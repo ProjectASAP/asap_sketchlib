@@ -1,8 +1,7 @@
 //! Shared input, query, and counter types used across sketches.
 //! This module defines value wrappers, heap-friendly items, and Hydra/UnivMon helpers.
 
-use crate::message_pack_format::admission_rate;
-use serde::{Deserialize, Serialize};
+use crate::asapv1::admission_rate;
 use std::{
     fmt,
     hash::{Hash, Hasher},
@@ -14,7 +13,7 @@ use crate::{
 };
 
 /// Input wrapper for sketch APIs (supports primitive and borrowed values).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub enum DataInput<'a> {
     /// A signed 8-bit integer.
     I8(i8),
@@ -53,7 +52,7 @@ pub enum DataInput<'a> {
 }
 
 /// Owned counterpart to `DataInput` for heap storage.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum OwnedDataInput {
     /// A signed 8-bit integer.
     I8(i8),
@@ -320,7 +319,7 @@ impl<'a> fmt::Display for HydraQuery<'a> {
 }
 
 /// Counter variants supported by Hydra.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub enum HydraCounter {
     /// Count-Min-backed counter.
     CountMinSketch(CountMinSketch<Vector2D<i32>, FastPath>),
@@ -509,8 +508,7 @@ impl HydraCounter {
 }
 
 /// A key-count pair used in heap-based sketches for tracking heavy hitters.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(bound = "")]
+#[derive(Clone, Debug)]
 pub struct HeapEntry<C: HeapCount = i64> {
     /// Stored key.
     pub key: OwnedDataInput,
