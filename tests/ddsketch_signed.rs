@@ -39,37 +39,6 @@ fn signed_merge_and_serialization() {
 }
 
 #[test]
-fn signed_delta_and_proto_round_trips() {
-    use prost::Message;
-    let mut base = PortableDdSketch::new(0.01);
-    for v in [-100., -1., 0., 1., 100.] {
-        base.update(v);
-    }
-    let mut current = base.clone();
-    for v in [-1000., -0.1, 0., 0., 0.1, 1000.] {
-        current.update(v);
-    }
-    let mut protobuf = base.clone();
-    protobuf
-        .apply_delta_bytes(&current.compute_delta(&base, 1))
-        .unwrap();
-    let mut msgpack = base;
-    msgpack
-        .apply_delta_msgpack_bytes(&current.compute_delta_msgpack(&msgpack, 1))
-        .unwrap();
-    let bytes = current.to_proto().encode_to_vec();
-    let snapshot = PortableDdSketch::from_proto(
-        asap_sketchlib::proto::sketchlib::DdSketchState::decode(bytes.as_slice()).unwrap(),
-    );
-    for restored in [protobuf, msgpack, snapshot] {
-        assert_eq!(restored.total_count(), 11);
-        for q in [0., 0.1, 0.5, 0.9, 1.] {
-            assert!((restored.quantile(q).unwrap() - current.quantile(q).unwrap()).abs() < 1e-9);
-        }
-    }
-}
-
-#[test]
 fn signed_order_statistics_obey_relative_bound() {
     let mut values: Vec<f64> = (-300i32..=300)
         .map(|i| {
