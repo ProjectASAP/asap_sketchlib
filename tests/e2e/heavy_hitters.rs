@@ -844,7 +844,7 @@ mod keyed_bucket {
         assert_unbiased_mean(&format!("Coco merged ({ctx})"), &merged, exact, 0.02);
     }
 
-    /// `docs/api/api_elastic.md`: "The estimator is one-sided: it never returns
+    /// `docs/api/api_elastic_sketch.md`: "The estimator is one-sided: it never returns
     /// less than the true count." A resident, unflagged flow reports its own votes
     /// exactly; every other flow reads the light layer, so the excess above the
     /// truth is that layer's Count-Min error and the whole tolerance is absolute.

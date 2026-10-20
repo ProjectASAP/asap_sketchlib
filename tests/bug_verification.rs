@@ -58,7 +58,7 @@ fn portable_ddsketch_respects_alpha_at_bucket_edges() {
 
 // ---------------------------------------------------------------------------
 // Bug 4: CountSketchWithL2Norm's hot-path L2 accumulation ran in plain i64
-// (countsketch_topk.rs:1028: old + new^2 - old^2) and wrapped silently once
+// (old + new^2 - old^2) and wrapped silently once
 // sum(count^2) exceeded i64::MAX (panicking in debug builds). The hot path
 // now saturates in i128, matching the merge path.
 //

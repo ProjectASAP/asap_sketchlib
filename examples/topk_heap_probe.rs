@@ -6,7 +6,7 @@
 //! per second at several capacities. The scan column is what an unindexed heap
 //! costs; the indexed column is the floor `TopKHeap` should stay near.
 //!
-//! Run with `cargo run --release --example hhheap_probe`.
+//! Run with `cargo run --release --example topk_heap_probe`.
 
 use asap_sketchlib::{
     CountMinSketch, CountMinSketchWithHeap, DataInput, FastPath, HeapEntry, OwnedDataInput,

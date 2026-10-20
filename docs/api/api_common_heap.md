@@ -18,7 +18,7 @@ A capacity-bounded min-heap of `HeapEntry<C>` beside an index from key digest to
 heap position, so a keyed update is a lookup and a sift rather than a scan. The
 index is patched through each sift: `update` costs one hash, one map probe and
 `O(log k)` index writes, and its rate does not fall as `k` grows. See
-[TopKHeap acceleration](../hhheap_acceleration.md) for the measurements.
+[TopKHeap acceleration](../topk_heap_acceleration.md) for the measurements.
 
 ## Constructors
 

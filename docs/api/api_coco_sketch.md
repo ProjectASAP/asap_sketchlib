@@ -1,4 +1,4 @@
-# API: Coco
+# API: CocoSketch
 
 Status: `Ready`
 

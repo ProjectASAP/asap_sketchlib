@@ -1,4 +1,4 @@
-# API: Count
+# API: CountSketch
 
 Status: `Ready`
 

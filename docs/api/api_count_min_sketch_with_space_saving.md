@@ -9,7 +9,7 @@ Every update reaches both; a top-k query ranks the summary's monitored keys by
 their Count-Min estimate. The summary picks the candidates and the matrix gives
 each its frequency. The summary's `capacity` is independent of `k`.
 
-[`CountMinSketchWithHeap`](./api_cms_heap.md) keeps an estimate heap instead: a key's count is
+[`CountMinSketchWithHeap`](./api_count_min_sketch_with_heap.md) keeps an estimate heap instead: a key's count is
 its matrix estimate and a newcomer enters only by beating the heap minimum.
 
 ## Type/Struct
