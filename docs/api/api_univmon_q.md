@@ -54,8 +54,7 @@ all merged shards.
 ## Update
 
 ```rust
-fn update(&mut self, value: &f64)
-fn add<T: NumericalValue>(&mut self, value: &T)
+fn update<T: NumericalValue>(&mut self, value: &T)
 fn update_data_input(&mut self, value: &DataInput) -> Result<(), &'static str>
 fn clear(&mut self)
 ```
@@ -109,6 +108,8 @@ original UnivMon recurrence and the coordinated occurrence-sample identity
 `H = E[ln(N/f_X)]`. The recurrence is used for diffuse streams and complete
 candidate recovery; concentrated streams with incomplete recovery use the
 occurrence path. The two component estimators remain exposed for experiments.
+All three entropy estimates are in nats (ln); UnivMon's `estimate_entropy` is in
+bits.
 
 `prepare_queries` reconstructs candidate frequencies, logical sampled levels,
 F2 thresholds, and the ordered CDF once. Its returned immutable view exposes
@@ -270,10 +271,10 @@ let mut left = UnivMonQ::with_source_id(config, 10)?;
 let mut right = UnivMonQ::with_source_id(config, 20)?;
 
 for value in 0..50_000 {
-    left.add(&value);
+    left.update(&value);
 }
 for value in 50_000..100_000 {
-    right.add(&value);
+    right.update(&value);
 }
 left.merge(&right)?;
 

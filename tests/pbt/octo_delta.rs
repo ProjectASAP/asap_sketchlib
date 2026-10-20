@@ -30,8 +30,8 @@ use asap_sketchlib::{
     OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, OCTO_DDSKETCH_DEFAULT_THRESHOLD,
     OCTO_ELASTIC_DEFAULT_THRESHOLD, OCTO_HLL_DEFAULT_THRESHOLD, OCTO_MAX_PROMOTION_THRESHOLD,
     OCTO_UNIVMON_DEFAULT_THRESHOLD, OctoAggregator, OctoPlan, OctoThreshold, OctoWorker,
-    RegularPath, UnivMonCellDelta, UnivMonOctoPlan, Vector2D, heap_item_to_sketch_input,
-    input_to_owned, max_hll_threshold, univmon_layer_threshold,
+    RegularPath, UnivMonCellDelta, UnivMonOctoPlan, Vector2D, max_hll_threshold,
+    univmon_layer_threshold,
 };
 use proptest::prelude::*;
 
@@ -507,7 +507,7 @@ proptest! {
     /// At a threshold of 0 a worker holds nothing back, so the shards need no
     /// flush and the parent is the register-wise maximum outright.
     #[test]
-    fn hll_deltas_merge_to_the_register_wise_maximum(
+    fn hll_register_deltas_merge_to_the_register_wise_maximum(
         shards in 1usize..5,
         keys in stream(400),
     ) {
@@ -545,7 +545,7 @@ proptest! {
     }
 
     #[test]
-    fn hll_delta_application_is_order_independent_and_idempotent(
+    fn hll_register_delta_application_is_order_independent_and_idempotent(
         tau in 0u8..=6,
         keys in stream(400),
         seed in any::<u64>(),
@@ -583,7 +583,7 @@ proptest! {
         seed in any::<u64>(),
         keys in stream(300),
     ) {
-        let mut worker = CocoSketchWorker::with_seed(w, d, seed);
+        let mut worker = CocoSketchWorker::with_seed(d, w, seed);
         let mut deltas: Vec<CocoDelta> = Vec::new();
         for k in &keys {
             worker.update_emit_delta(&flow(*k), tau, &mut |delta| deltas.push(delta));
@@ -619,9 +619,9 @@ proptest! {
         keys in stream(300),
     ) {
         let mut workers: Vec<CocoSketchWorker> = (0..shards)
-            .map(|i| CocoSketchWorker::with_seed(w, d, seed.wrapping_add(i as u64 + 1)))
+            .map(|i| CocoSketchWorker::with_seed(d, w, seed.wrapping_add(i as u64 + 1)))
             .collect();
-        let mut parent = CocoOctoAggregator::with_seed(w, d, seed);
+        let mut parent = CocoOctoAggregator::with_seed(d, w, seed);
         for (i, k) in keys.iter().enumerate() {
             workers[i % shards].update_emit_delta(&flow(*k), tau, &mut |delta| parent.apply(delta));
         }
@@ -650,7 +650,7 @@ proptest! {
         n in 2usize..120,
         seed in any::<u64>(),
     ) {
-        let mut worker = CocoSketchWorker::with_seed(1, d, seed);
+        let mut worker = CocoSketchWorker::with_seed(d, 1, seed);
         let mut promoted = 0usize;
         for k in 0..n as u64 {
             worker.update_emit_delta(&flow(k), OCTO_MAX_PROMOTION_THRESHOLD, &mut |_| promoted += 1);
@@ -677,7 +677,7 @@ proptest! {
         seed in any::<u64>(),
         keys in stream(300),
     ) {
-        let mut worker = CocoSketchWorker::with_seed(w, d, seed);
+        let mut worker = CocoSketchWorker::with_seed(d, w, seed);
         for k in &keys {
             let arrival = flow(*k);
             let mut promoted: Vec<CocoDelta> = Vec::new();
@@ -891,7 +891,7 @@ proptest! {
                 d.total_weight, *i as u64 + 1,
                 "insert {} reported a running weight of {}", i, d.total_weight
             );
-            prop_assert_eq!(&d.key, &input_to_owned(&DataInput::U64(keys[*i])));
+            prop_assert_eq!(&d.key, &DataInput::U64(keys[*i]).to_owned_input());
         }
     }
 
@@ -933,7 +933,7 @@ proptest! {
             parent.sketch.heap().len(), promoted.len(), top_k
         );
         for item in parent.sketch.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             let estimate = i64::from(parent.sketch.count_min_sketch().estimate(&key));
             prop_assert!(
                 matches!(key, DataInput::U64(k) if seen.contains(&k)),
@@ -961,7 +961,7 @@ proptest! {
         for k in &keys {
             let input = DataInput::U64(*k);
             let hashes = CountMinSketchWorker::hashes(rows, &input);
-            let key = input_to_owned(&input);
+            let key = input.to_owned_input();
             worker.update_emit_keyed_delta_with_row_hashes(&hashes, &key, tau, &mut |d| {
                 deltas.push(d.clone());
                 promoted.insert(*k);
@@ -988,7 +988,7 @@ proptest! {
             parent.sketch.heap().len(), promoted.len(), top_k
         );
         for item in parent.sketch.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             prop_assert!(
                 matches!(key, DataInput::U64(k) if seen.contains(&k)),
                 "the heap holds {:?}, which never arrived", item.key
@@ -999,7 +999,7 @@ proptest! {
     // ===== The default thresholds =====
 
     #[test]
-    fn every_promask_is_the_promotion_step_of_its_own_delta_type(
+    fn every_default_threshold_is_the_promotion_step_of_its_own_delta_type(
         seed in any::<u64>(),
         key in 0u64..1024,
         n in 600usize..800,
@@ -1017,7 +1017,7 @@ proptest! {
         for k in &keys {
             cm.update_emit_delta(&DataInput::U64(*k), OCTO_COUNT_MIN_DEFAULT_THRESHOLD, &mut |d| cm_deltas.push(d));
         }
-        prop_assert!(!cm_deltas.is_empty(), "CM_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!cm_deltas.is_empty(), "OCTO_COUNT_MIN_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for d in &cm_deltas {
             prop_assert_eq!(d.count, OCTO_COUNT_MIN_DEFAULT_THRESHOLD, "a Count-Min promotion carried {}", d.count);
         }
@@ -1027,9 +1027,9 @@ proptest! {
         for k in &keys {
             cs.update_emit_delta(&DataInput::U64(*k), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, &mut |d| cs_deltas.push(d));
         }
-        prop_assert!(!cs_deltas.is_empty(), "COUNT_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!cs_deltas.is_empty(), "OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for d in &cs_deltas {
-            prop_assert_eq!(d.count.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, "a Count promotion carried {}", d.count);
+            prop_assert_eq!(d.count.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, "a CountSketch promotion carried {}", d.count);
         }
 
         let mut dd = DdSketchWorker::new(0.05);
@@ -1037,17 +1037,17 @@ proptest! {
         for k in &keys {
             dd.add_emit_delta(f64::from((*k % 8) as u32), OCTO_DDSKETCH_DEFAULT_THRESHOLD, &mut |d| dd_deltas.push(d));
         }
-        prop_assert!(!dd_deltas.is_empty(), "DD_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!dd_deltas.is_empty(), "OCTO_DDSKETCH_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for d in &dd_deltas {
             prop_assert_eq!(d.count, u64::from(OCTO_DDSKETCH_DEFAULT_THRESHOLD), "a DDSketch promotion carried {}", d.count);
         }
 
-        let mut coco = CocoSketchWorker::with_seed(8, 2, seed);
+        let mut coco = CocoSketchWorker::with_seed(2, 8, seed);
         let mut coco_deltas: Vec<CocoDelta> = Vec::new();
         for k in &keys {
             coco.update_emit_delta(&flow(*k), OCTO_COCO_DEFAULT_THRESHOLD, &mut |d| coco_deltas.push(d));
         }
-        prop_assert!(!coco_deltas.is_empty(), "COCO_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!coco_deltas.is_empty(), "OCTO_COCO_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for d in &coco_deltas {
             prop_assert_eq!(d.count, u64::from(OCTO_COCO_DEFAULT_THRESHOLD), "a Coco promotion carried {}", d.count);
         }
@@ -1064,7 +1064,7 @@ proptest! {
                 _ => None,
             })
             .collect();
-        prop_assert!(!heavy.is_empty(), "ELASTIC_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!heavy.is_empty(), "OCTO_ELASTIC_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for value in &heavy {
             prop_assert_eq!(*value, OCTO_ELASTIC_DEFAULT_THRESHOLD, "an Elastic promotion carried {}", value);
         }
@@ -1082,7 +1082,7 @@ proptest! {
             .filter(|d| d.layer == 0)
             .map(|d| d.cell.count)
             .collect();
-        prop_assert!(!top_layer.is_empty(), "UNIVMON_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!top_layer.is_empty(), "OCTO_UNIVMON_DEFAULT_THRESHOLD promoted nothing over {} inserts", n);
         for value in &top_layer {
             prop_assert_eq!(value.unsigned_abs(), OCTO_UNIVMON_DEFAULT_THRESHOLD, "a UnivMon promotion carried {}", value);
         }
@@ -1099,16 +1099,16 @@ proptest! {
             max_hll_threshold(precision), 64 - precision,
             "the HLL threshold ceiling is not 64 minus the precision"
         );
-        prop_assert!(OCTO_HLL_DEFAULT_THRESHOLD < 64 - precision, "HLL_PROMASK can never fire");
+        prop_assert!(OCTO_HLL_DEFAULT_THRESHOLD < 64 - precision, "OCTO_HLL_DEFAULT_THRESHOLD can never fire");
         prop_assert_eq!(
             hll_parent.registers_as_slice(),
             hll_worker.registers_as_slice(),
-            "HLL_PROMASK held a register improvement back"
+            "OCTO_HLL_DEFAULT_THRESHOLD held a register improvement back"
         );
     }
 
     #[test]
-    fn max_promask_is_the_widest_threshold_a_one_byte_counter_survives(
+    fn max_promotion_threshold_is_the_widest_a_one_byte_counter_survives(
         key in 0u64..1024,
         n in 300usize..500,
     ) {
@@ -1123,7 +1123,7 @@ proptest! {
         for k in &keys {
             worker.update_emit_delta(&DataInput::U64(*k), OCTO_MAX_PROMOTION_THRESHOLD, &mut |d| deltas.push(d));
         }
-        prop_assert!(!deltas.is_empty(), "MAX_PROMASK promoted nothing over {} inserts", n);
+        prop_assert!(!deltas.is_empty(), "OCTO_MAX_PROMOTION_THRESHOLD promoted nothing over {} inserts", n);
         for d in &deltas {
             prop_assert_eq!(d.count.unsigned_abs(), OCTO_MAX_PROMOTION_THRESHOLD, "a promotion carried {}", d.count);
             prop_assert!(i8::try_from(d.count).is_ok(), "{} does not fit the worker's counter", d.count);

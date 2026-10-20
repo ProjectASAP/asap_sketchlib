@@ -6,7 +6,7 @@ Status: `Ready`
 
 Group multiple compatible sketches that share a hash layout so the hash is
 computed once per insert and fanned out to every sketch in the ensemble.
-Supports both frequency sketches (CountMinSketch, Count) and cardinality sketches
+Supports both frequency sketches (CountMinSketch, CountSketch) and cardinality sketches
 (HyperLogLog variants).
 
 ### Quick Example
@@ -79,7 +79,7 @@ Sketches are converted into `EnsembleSketch` via `From` impls, so you can use `.
 
 ```rust
 use asap_sketchlib::{
-    CountMinSketch, Count, FastPath, Vector2D, DefaultXxHasher,
+    CountMinSketch, CountSketch, FastPath, Vector2D, DefaultXxHasher,
     HyperLogLog, Ertl,
 };
 use asap_sketchlib::sketch_framework::hashlayer::{EnsembleSketch, HashSketchEnsemble};

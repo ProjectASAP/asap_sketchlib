@@ -1,12 +1,12 @@
 //! ASAPv1 wire serialization for [`CountSketchWithL2Norm`], plus the sub-payload the
 //! UnivMon family reuses.
 //!
-//! Child submodule of [`crate::sketches::countsketch_heap`]: it holds the
-//! metadata/payload DTOs, the kind_id constant and the `to_asapv1` /
-//! `from_asapv1` impls, while the algorithm lives in the parent
-//! module file. Being a descendant module, it reads the private `counts`,
-//! `l2`, `row`, `col` and `seed_index` fields directly without widening any
-//! field visibility. See `docs/asapv1_wire_format.md`.
+//! Child submodule of [`crate::sketches::countsketch_l2_norm`]: it holds the
+//! metadata/payload DTOs and the `to_asapv1` / `from_asapv1` impls, while the
+//! algorithm lives in the parent module file. Being a descendant module, it
+//! reads the private `counts`, `row_l2_squared`, `rows`, `cols` and
+//! `seed_index` fields directly without widening any field visibility. See
+//! `docs/asapv1_wire_format.md`.
 //!
 //! CountSketchWithL2Norm is one algorithm — a single kind_id `0x19 0x00`. The dimensions
 //! (`rows` / `cols`) and the seed-list index the sketch hashes with
@@ -15,8 +15,8 @@
 //!
 //! ## The shared sub-payload
 //!
-//! [`CountSketchWithL2Norm`] is also the per-layer counter of `UnivMon`, `UnivMonTwoTier`
-//! and every other `L2HH::COUNT`. Those sketches inline the same
+//! [`CountSketchWithL2Norm`] is also the per-layer counter of `UnivMon` and
+//! `UnivMonTwoTier`. Those sketches inline the same
 //! `(counts, l2)` state into their own positional arrays instead of nesting an
 //! envelope per layer, so [`layer_state`] and [`rebuild_layer`] are the one
 //! place that state is read and rebuilt.
@@ -104,10 +104,10 @@ struct CountSketchWithL2NormPayload {
 pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
     if rows == 0 || cols == 0 {
         return Err(format!(
-            "CountL2HH dimensions must be non-zero: rows={rows}, cols={cols}"
+            "CountSketchWithL2Norm dimensions must be non-zero: rows={rows}, cols={cols}"
         ));
     }
-    check_matrix_rows("CountL2HH", rows)?;
+    check_matrix_rows("CountSketchWithL2Norm", rows)?;
     CountSketchWithL2Norm::check_hash_bits(rows, cols)
 }
 
@@ -117,7 +117,7 @@ pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
 pub(crate) fn check_seed_index(seed_index: usize, seed_list_len: usize) -> Result<(), String> {
     if seed_index >= seed_list_len {
         return Err(format!(
-            "CountL2HH seed_index {seed_index} is past the seed list's {seed_list_len} entries"
+            "CountSketchWithL2Norm seed_index {seed_index} is past the seed list's {seed_list_len} entries"
         ));
     }
     Ok(())
@@ -136,20 +136,20 @@ pub(crate) fn layer_state<H: SketchHasher>(
     let l2 = sketch.row_l2_squared.as_slice();
     if counts.len() != cells {
         return Err(RmpEncodeError::Syntax(format!(
-            "ASAPv1 CountL2HH state: counts length {} != rows*cols {cells}",
+            "ASAPv1 CountSketchWithL2Norm state: counts length {} != rows*cols {cells}",
             counts.len()
         )));
     }
     if l2.len() != sketch.rows {
         return Err(RmpEncodeError::Syntax(format!(
-            "ASAPv1 CountL2HH state: l2 length {} != rows {}",
+            "ASAPv1 CountSketchWithL2Norm state: l2 length {} != rows {}",
             l2.len(),
             sketch.rows
         )));
     }
     if let Some(negative) = l2.iter().find(|&&value| value < 0) {
         return Err(RmpEncodeError::Syntax(format!(
-            "ASAPv1 CountL2HH state: l2 accumulator {negative} is negative"
+            "ASAPv1 CountSketchWithL2Norm state: l2 accumulator {negative} is negative"
         )));
     }
     Ok((counts, l2))
@@ -169,19 +169,19 @@ pub(crate) fn rebuild_layer<H: SketchHasher>(
     let cells = rows.saturating_mul(cols);
     if counts.len() != cells {
         return Err(RmpDecodeError::Uncategorized(format!(
-            "CountL2HH counts length {} != rows*cols {cells}",
+            "CountSketchWithL2Norm counts length {} != rows*cols {cells}",
             counts.len()
         )));
     }
     if l2.len() != rows {
         return Err(RmpDecodeError::Uncategorized(format!(
-            "CountL2HH l2 length {} != rows {rows}",
+            "CountSketchWithL2Norm l2 length {} != rows {rows}",
             l2.len()
         )));
     }
     if let Some(negative) = l2.iter().find(|&&value| value < 0) {
         return Err(RmpDecodeError::Uncategorized(format!(
-            "CountL2HH l2 accumulator {negative} is negative"
+            "CountSketchWithL2Norm l2 accumulator {negative} is negative"
         )));
     }
     Ok(CountSketchWithL2Norm {
@@ -194,7 +194,7 @@ pub(crate) fn rebuild_layer<H: SketchHasher>(
     })
 }
 
-// Wire serialization for CountSketchWithL2Norm. `l2hh_wire` is a descendant of the sketch
+// Wire serialization for CountSketchWithL2Norm. This module is a descendant of the sketch
 // module, so this impl reads the private fields directly.
 impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope
@@ -213,7 +213,7 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
         let field = |name: &str, value: usize| {
             u32::try_from(value).map_err(|_| {
                 RmpEncodeError::Syntax(format!(
-                    "ASAPv1 CountL2HH envelope: {name} {value} exceeds the u32 metadata field"
+                    "ASAPv1 CountSketchWithL2Norm envelope: {name} {value} exceeds the u32 metadata field"
                 ))
             })
         };
@@ -242,13 +242,13 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != kind::COUNT_SKETCH_WITH_L2_NORM {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "CountL2HH kind_id mismatch: stored {kind_id:?}, expected {COUNT_SKETCH_WITH_L2_NORM:?}"
+                "CountSketchWithL2Norm kind_id mismatch: stored {kind_id:?}, expected {COUNT_SKETCH_WITH_L2_NORM:?}"
             )));
         }
         let meta: CountSketchWithL2NormMetadata = envelope::decode_block(metadata)?;
         if meta != count_sketch_with_l2_norm_metadata::<H>(meta.seed_index, meta.rows, meta.cols) {
             return Err(RmpDecodeError::Uncategorized(
-                "ASAPv1 CountL2HH envelope: metadata mismatch".to_string(),
+                "ASAPv1 CountSketchWithL2Norm envelope: metadata mismatch".to_string(),
             ));
         }
         check_seed_index(meta.seed_index as usize, meta.seed_list.len())
@@ -299,7 +299,7 @@ mod tests {
     /// More rows than the seed list has seeds is outside the wire-eligible
     /// subset, on both sides.
     #[test]
-    fn countl2hh_rejects_too_many_rows() {
+    fn count_sketch_with_l2_norm_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
         assert!(
             Std::with_dimensions(rows, 32).to_asapv1().is_err(),
@@ -325,9 +325,9 @@ mod tests {
     }
 
     #[test]
-    fn count_l2hh_round_trip_serialization() {
+    fn count_sketch_with_l2_norm_round_trip_serialization() {
         let sketch = populated();
-        let encoded = sketch.to_asapv1().expect("serialize CountL2HH");
+        let encoded = sketch.to_asapv1().expect("serialize CountSketchWithL2Norm");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x19, 0x00]); // kind_id_len=2, kind_id=[0x19,0x00]
 
@@ -335,7 +335,7 @@ mod tests {
         assert_eq!(meta.metadata_version, 1);
         assert_eq!((meta.seed_index, meta.rows, meta.cols), (7, 3, 32));
 
-        let decoded = Std::from_asapv1(&encoded).expect("deserialize CountL2HH");
+        let decoded = Std::from_asapv1(&encoded).expect("deserialize CountSketchWithL2Norm");
         assert_eq!(decoded.rows(), 3);
         assert_eq!(decoded.cols(), 32);
         assert_eq!(decoded.seed_index(), 7);
@@ -352,7 +352,7 @@ mod tests {
 
     /// A decoded sketch re-serializes byte-identically.
     #[test]
-    fn count_l2hh_decoded_re_serializes_identically() {
+    fn count_sketch_with_l2_norm_decoded_re_serializes_identically() {
         let sketch = populated();
         let encoded = sketch.to_asapv1().expect("serialize");
         let decoded = Std::from_asapv1(&encoded).expect("decode");
@@ -362,7 +362,7 @@ mod tests {
     /// Count Sketch cells are signed, so a CountSketchWithL2Norm carries negatives through
     /// unchanged.
     #[test]
-    fn count_l2hh_negative_counters_round_trip() {
+    fn count_sketch_with_l2_norm_negative_counters_round_trip() {
         let mut sketch: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(2, 8);
         sketch.update_weighted(&DataInput::U64(11), -25);
         sketch.update_weighted(&DataInput::U64(12), -7);
@@ -381,7 +381,7 @@ mod tests {
     /// The seed index is state, not a profile constant: two sketches that
     /// differ only in it do not share bytes and do not decode into each other.
     #[test]
-    fn count_l2hh_seed_index_travels_with_the_sketch() {
+    fn count_sketch_with_l2_norm_seed_index_travels_with_the_sketch() {
         let zero: CountSketchWithL2Norm =
             CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 8, 0);
         let nine: CountSketchWithL2Norm =
@@ -438,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn count_l2hh_custom_hasher_profile_round_trips_and_is_self_describing() {
+    fn count_sketch_with_l2_norm_custom_hasher_profile_round_trips_and_is_self_describing() {
         // (a) A CountSketchWithL2Norm built with a custom-profile hasher round-trips.
         let mut alt = CountSketchWithL2Norm::<AltHasher>::with_dimensions(3, 32);
         let mut std: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(3, 32);
@@ -464,7 +464,7 @@ mod tests {
     /// Each family's envelope is rejected by the other three, and by a plain
     /// Count Sketch envelope.
     #[test]
-    fn count_l2hh_rejects_foreign_kind_ids() {
+    fn count_sketch_with_l2_norm_rejects_foreign_kind_ids() {
         let count_sketch = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
             .to_asapv1()
             .expect("serialize Count Sketch");
@@ -473,7 +473,7 @@ mod tests {
             .expect("serialize UnivMon");
         let pyramid = crate::UnivMonTwoTier::new(4, 1, 2, 8, 2, 4, 2)
             .to_asapv1()
-            .expect("serialize UnivMonPyramid");
+            .expect("serialize UnivMonTwoTier");
         let univmon_q = crate::UnivMonQ::new(crate::UnivMonQConfig {
             layers: 2,
             top_layer_cols: 8,
@@ -489,7 +489,7 @@ mod tests {
         for foreign in [count_sketch, univmon, pyramid, univmon_q] {
             assert!(
                 Std::from_asapv1(&foreign).is_err(),
-                "a foreign envelope must not decode as a CountL2HH"
+                "a foreign envelope must not decode as a CountSketchWithL2Norm"
             );
         }
     }
@@ -498,7 +498,7 @@ mod tests {
     /// dimension, and on one whose declared geometry the payload does not
     /// carry. Both checks precede any allocation.
     #[test]
-    fn count_l2hh_rejects_crafted_geometry() {
+    fn count_sketch_with_l2_norm_rejects_crafted_geometry() {
         let meta = count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, 4, 0);
         assert!(Std::from_asapv1(&crafted(&meta, Vec::new(), vec![0; 4])).is_err());
 
@@ -522,7 +522,7 @@ mod tests {
     /// An unpopulated matrix carries dimensions its cells do not match.
     /// Serializing it must fail rather than emit bytes the decoder refuses.
     #[test]
-    fn count_l2hh_rejects_serializing_an_unfilled_matrix() {
+    fn count_sketch_with_l2_norm_rejects_serializing_an_unfilled_matrix() {
         let mut sketch: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(2, 4);
         sketch.counts = Vector2D::unfilled(2, 4);
         assert!(
@@ -534,7 +534,7 @@ mod tests {
     /// Fail closed on an unexpected metadata key, and on a missing required
     /// one.
     #[test]
-    fn l2hh_metadata_rejects_unknown_and_missing_keys() {
+    fn count_sketch_with_l2_norm_metadata_rejects_unknown_and_missing_keys() {
         #[derive(Serialize)]
         struct WithExtra {
             metadata_version: u8,
@@ -614,7 +614,7 @@ mod tests {
     /// `rows = 12, cols = 4096` and `rows = 13, cols = 2048` both need 156:
     /// their last row shifts the hash by 132, past the 127-bit ceiling.
     #[test]
-    fn count_l2hh_rejects_a_geometry_past_the_hash_budget() {
+    fn count_sketch_with_l2_norm_rejects_a_geometry_past_the_hash_budget() {
         for (rows, cols) in [(12usize, 4096usize), (13, 2048)] {
             let problem = unchecked(rows, cols)
                 .to_asapv1()
@@ -638,7 +638,7 @@ mod tests {
     /// columns fill bits 0..119 with column fields while the sign bits start at
     /// 118, so two rows would read a column out of bits that are already signs.
     #[test]
-    fn count_l2hh_rejects_column_fields_overlapping_the_sign_bits() {
+    fn count_sketch_with_l2_norm_rejects_column_fields_overlapping_the_sign_bits() {
         assert!(
             unchecked(10, 4096).to_asapv1().is_err(),
             "column fields must not reach into the sign bits"
@@ -656,7 +656,7 @@ mod tests {
     /// encoding of a state an in-range index already encodes — and two such
     /// sketches would refuse to merge. Neither door accepts it.
     #[test]
-    fn count_l2hh_rejects_a_seed_index_past_the_seed_list() {
+    fn count_sketch_with_l2_norm_rejects_a_seed_index_past_the_seed_list() {
         let seeds = <DefaultXxHasher as HashProfile>::seed_list().len();
         let wrapped = seeds + 5;
 
@@ -691,7 +691,7 @@ mod tests {
 
     /// An empty sketch has exactly one encoding.
     #[test]
-    fn count_l2hh_empty_has_one_encoding() {
+    fn count_sketch_with_l2_norm_empty_has_one_encoding() {
         let left: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(3, 32);
         let mut right: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(3, 32);
         right.update_weighted(&DataInput::U64(5), 4);

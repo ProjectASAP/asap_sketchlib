@@ -349,7 +349,7 @@ proptest! {
     }
 
     #[test]
-    fn a_bulk_insert_matches_the_same_values_one_at_a_time(
+    fn an_update_batch_matches_the_same_values_one_at_a_time(
         capacity in 1usize..40,
         stream in keys(400),
     ) {

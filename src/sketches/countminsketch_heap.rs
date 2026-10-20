@@ -7,7 +7,7 @@
 use crate::{
     CountMinSketch, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128,
     DefaultXxHasher, FastPath, FixedMatrix, HeapCounter, MatrixStorage, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, TopKHeap, Vector2D, heap_item_to_sketch_input,
+    QuickMatrixI128, RegularPath, SketchHasher, TopKHeap, Vector2D,
 };
 
 mod delta;
@@ -19,7 +19,7 @@ pub use delta::CountMinSketchWithHeapDelta;
 /// The heap count type of a `CountMinSketchWithHeap` over storage `S`.
 type HeapCountOf<S> = <<S as MatrixStorage>::Counter as HeapCounter>::HeapCount;
 
-const DEFAULT_HEAP_SIZE: usize = 32;
+use crate::common::heap::DEFAULT_HEAP_SIZE;
 
 /// A Count-Min Sketch paired with a top-k heavy-hitter heap.
 ///
@@ -264,7 +264,7 @@ where
         }
         self.heap.clear();
         for key in candidate_keys {
-            let key_ref = heap_item_to_sketch_input(&key);
+            let key_ref = key.as_data_input();
             let est = self.count_min_sketch.estimate(&key_ref);
             self.heap.update(&key_ref, est.into());
         }
@@ -320,7 +320,7 @@ where
         }
         self.heap.clear();
         for key in candidate_keys {
-            let key_ref = heap_item_to_sketch_input(&key);
+            let key_ref = key.as_data_input();
             let est = self.count_min_sketch.estimate(&key_ref);
             self.heap.update(&key_ref, est.into());
         }
@@ -337,7 +337,7 @@ mod tests {
     fn heap_count_for_key<C: crate::HeapCount>(heap: &TopKHeap<C>, key: &DataInput) -> Option<C> {
         heap.heap()
             .iter()
-            .find(|item| heap_item_to_sketch_input(&item.key) == *key)
+            .find(|item| item.key.as_data_input() == *key)
             .map(|item| item.count)
     }
 
@@ -396,7 +396,7 @@ mod tests {
     fn top_k_heap_keys(heap: &TopKHeap) -> HashSet<u64> {
         heap.heap()
             .iter()
-            .map(|item| match heap_item_to_sketch_input(&item.key) {
+            .map(|item| match item.key.as_data_input() {
                 DataInput::U64(v) => v,
                 other => panic!("expected U64 key in zipf tests, got {other:?}"),
             })
@@ -404,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_and_estimate() {
+    fn update_and_estimate() {
         // Verifies single-key inserts update both CMS estimate and visible frequency.
         let mut sh = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 64, 10);
         let key = DataInput::Str("hello");
@@ -461,7 +461,7 @@ mod tests {
             .heap()
             .iter()
             .find(|item| {
-                let k = heap_item_to_sketch_input(&item.key);
+                let k = item.key.as_data_input();
                 k == key
             })
             .expect("key should be in heap");
@@ -487,8 +487,8 @@ mod tests {
     }
 
     #[test]
-    fn insert_many_updates_estimate_and_heap() {
-        // Verifies batched insert_many updates both estimate and heap entry count.
+    fn update_weighted_updates_estimate_and_heap() {
+        // Verifies update_weighted updates both estimate and heap entry count.
         let mut sh = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 1024, 4);
         let key = DataInput::Str("many");
         sh.update_weighted(&key, 11);
@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn bulk_insert_updates_multiple_keys() {
+    fn update_batch_updates_multiple_keys() {
         // Verifies update_batch processes streams correctly across multiple keys.
         let mut sh = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 1024, 4);
         let values = vec![
@@ -564,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_path_insert_and_estimate() {
+    fn fast_path_update_and_estimate() {
         // Verifies FastPath insert and estimate agree on repeated updates.
         let mut sh = CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::new(3, 64, 10);
         let key = DataInput::Str("fast");
@@ -575,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_path_insert_many_and_bulk_insert() {
+    fn fast_path_update_weighted_and_update_batch() {
         // Verifies FastPath batched APIs keep estimate and heap counts in sync.
         let mut sh = CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::new(3, 1024, 4);
         let key = DataInput::Str("fast-many");
@@ -700,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "dimension mismatch while merging CountMin sketches")]
+    #[should_panic(expected = "dimension mismatch while merging Count-Min sketches")]
     fn merge_requires_matching_dimensions_panics() {
         // Verifies merge rejects sketches with incompatible dimensions.
         let mut left = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 256, 4);
@@ -722,7 +722,7 @@ mod tests {
         ]);
 
         for item in sh.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             assert_eq!(item.count, sh.estimate(&key));
         }
 
@@ -732,13 +732,13 @@ mod tests {
         sh.merge(&other);
 
         for item in sh.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             assert_eq!(item.count, sh.estimate(&key));
         }
     }
 
     #[test]
-    fn bulk_insert_equivalent_to_repeated_insert() {
+    fn update_batch_equivalent_to_repeated_update() {
         // Verifies update_batch yields same estimates and heap counts as repeated insert.
         let values = vec![
             DataInput::U64(1),
@@ -846,7 +846,7 @@ mod tests {
             .heap()
             .heap()
             .iter()
-            .filter(|item| heap_item_to_sketch_input(&item.key) == DataInput::Str("dup"))
+            .filter(|item| item.key.as_data_input() == DataInput::Str("dup"))
             .count();
         assert_eq!(dup_entries, 1);
     }
@@ -862,7 +862,7 @@ mod tests {
 
         assert!(sketch.heap().len() <= top_k);
         for item in sketch.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             assert_eq!(item.count, sketch.estimate(&key));
         }
 
@@ -886,7 +886,7 @@ mod tests {
 
         assert!(sketch.heap().len() <= top_k);
         for item in sketch.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             assert_eq!(item.count, sketch.estimate(&key));
         }
 

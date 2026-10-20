@@ -444,7 +444,7 @@ fn a_weighted_arrival_matches_repeating_it_under_eviction() {
 
 /// `update_batch` is the loop it replaces, and a zero weight records nothing.
 #[test]
-fn bulk_insert_matches_repeated_inserts_and_a_zero_weight_is_inert() {
+fn update_batch_matches_repeated_updates_and_a_zero_weight_is_inert() {
     let stream = stream();
     let values: Vec<DataInput> = stream.iter().map(|key| DataInput::I64(*key)).collect();
 
@@ -819,9 +819,9 @@ mod keyed_bucket {
         let (mut single, mut merged) = (Vec::new(), Vec::new());
         for trial in 0..TRIALS {
             let seed = COCO_SEED + 3 * trial;
-            let mut one = CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed);
-            let mut left = CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed + 1);
-            let mut right = CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed + 2);
+            let mut one = CocoSketch::<DefaultXxHasher>::with_dimensions_and_seed(D, W, seed);
+            let mut left = CocoSketch::<DefaultXxHasher>::with_dimensions_and_seed(D, W, seed + 1);
+            let mut right = CocoSketch::<DefaultXxHasher>::with_dimensions_and_seed(D, W, seed + 2);
             for (i, k) in stream.iter().enumerate() {
                 let key = flow_key(*k);
                 one.update_weighted(&key, 1);
@@ -844,7 +844,7 @@ mod keyed_bucket {
         assert_unbiased_mean(&format!("Coco merged ({ctx})"), &merged, exact, 0.02);
     }
 
-    /// `docs/api/api_elastic.md`: "The estimator is one-sided: it never returns
+    /// `docs/api/api_elastic_sketch.md`: "The estimator is one-sided: it never returns
     /// less than the true count." A resident, unflagged flow reports its own votes
     /// exactly; every other flow reads the light layer, so the excess above the
     /// truth is that layer's Count-Min error and the whole tolerance is absolute.
@@ -879,8 +879,8 @@ mod keyed_bucket {
     /// disjoint one together return the stream mass.
     #[test]
     fn coco_disjoint_prefix_families_partition_the_mass() {
-        let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
-            256, 2, COCO_SEED,
+        let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed(
+            2, 256, COCO_SEED,
         );
         let mut total = 0u64;
         for i in 0..3000u64 {
@@ -908,9 +908,9 @@ mod keyed_bucket {
     #[test]
     fn coco_point_queries_partition_the_inserted_mass() {
         const COCO_BUCKETS: usize = 128;
-        let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
-            COCO_BUCKETS,
+        let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed(
             3,
+            COCO_BUCKETS,
             COCO_SEED,
         );
         let mut truth: HashMap<String, u64> = HashMap::new();
@@ -950,9 +950,9 @@ mod keyed_bucket {
         let mut estimates: Vec<u64> = Vec::with_capacity(TRIALS);
 
         for trial in 0..TRIALS {
-            let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
-                32,
+            let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed(
                 2,
+                32,
                 COCO_SEED + trial as u64,
             );
             let mut sent = 0u64;
@@ -1016,9 +1016,9 @@ mod keyed_bucket {
         let mut recorded = 0usize;
 
         for trial in 0..TRIALS {
-            let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
-                WIDTH,
+            let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed(
                 DEPTH,
+                WIDTH,
                 COCO_SEED + trial as u64,
             );
             let mut sent = 0u64;
@@ -1207,7 +1207,7 @@ mod partial_key_and_heavy_maintenance {
 
     fn filled_coco() -> (CocoSketch<DefaultXxHasher>, u64) {
         let mut coco =
-            CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(2_048, 4, super::COCO_SEED);
+            CocoSketch::<DefaultXxHasher>::with_dimensions_and_seed(4, 2_048, super::COCO_SEED);
         let mut inserted = 0u64;
         for (i, key) in coco_keys().iter().enumerate() {
             let weight = REPEATS + (i % 3) as u64;
@@ -1329,7 +1329,7 @@ mod partial_key_and_heavy_maintenance {
                 == partial),
             "a projection predicate must reject a non-projection"
         );
-        assert_eq!(bucket.val, 12, "add_v must accumulate");
+        assert_eq!(bucket.val, 12, "add must accumulate");
     }
 
     fn elephant_stream(prefix: &str, elephants: usize, weight: usize) -> Vec<String> {
@@ -1437,7 +1437,7 @@ mod partial_key_and_heavy_maintenance {
     }
 
     #[test]
-    fn elastic_insert_heavy_only_never_writes_the_light_layer() {
+    fn elastic_update_heavy_only_never_writes_the_light_layer() {
         let mut sk = ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(8, 3, 256);
         for e in 0..64 {
             for _ in 0..20 {
@@ -1728,7 +1728,7 @@ mod documented_matrix {
                     &spec,
                     &truth,
                     &heavy,
-                    &format!("CountMin<Vector2D<i64>, RegularPath> {rows}x{cols}"),
+                    &format!("CountMinSketch<Vector2D<i64>, RegularPath> {rows}x{cols}"),
                     |k| regular.estimate(&input.data(k)) as f64,
                     &context,
                 );
@@ -1736,7 +1736,7 @@ mod documented_matrix {
                     &spec,
                     &truth,
                     &heavy,
-                    &format!("CountMin<Vector2D<i64>, FastPath> {rows}x{cols}"),
+                    &format!("CountMinSketch<Vector2D<i64>, FastPath> {rows}x{cols}"),
                     |k| fast.estimate(&input.data(k)) as f64,
                     &context,
                 );
@@ -1758,7 +1758,7 @@ mod documented_matrix {
                         &spec,
                         &truth,
                         &heavy,
-                        concat!("CountMin<", stringify!($mat), ", RegularPath>"),
+                        concat!("CountMinSketch<", stringify!($mat), ", RegularPath>"),
                         |k| regular.estimate(&input.data(k)) as f64,
                         &context,
                     );
@@ -1766,7 +1766,7 @@ mod documented_matrix {
                         &spec,
                         &truth,
                         &heavy,
-                        concat!("CountMin<", stringify!($mat), ", FastPath>"),
+                        concat!("CountMinSketch<", stringify!($mat), ", FastPath>"),
                         |k| fast.estimate(&input.data(k)) as f64,
                         &context,
                     );
@@ -1814,7 +1814,7 @@ mod documented_matrix {
                     &spec,
                     &truth,
                     &heavy,
-                    &format!("Count<Vector2D<i64>, RegularPath> {rows}x{cols}"),
+                    &format!("CountSketch<Vector2D<i64>, RegularPath> {rows}x{cols}"),
                     |k| regular.estimate(&input.data(k)),
                     &context,
                 );
@@ -1822,7 +1822,7 @@ mod documented_matrix {
                     &spec,
                     &truth,
                     &heavy,
-                    &format!("Count<Vector2D<i64>, FastPath> {rows}x{cols}"),
+                    &format!("CountSketch<Vector2D<i64>, FastPath> {rows}x{cols}"),
                     |k| fast.estimate(&input.data(k)),
                     &context,
                 );
@@ -1844,7 +1844,7 @@ mod documented_matrix {
                         &spec,
                         &truth,
                         &heavy,
-                        concat!("Count<", stringify!($mat), ", RegularPath>"),
+                        concat!("CountSketch<", stringify!($mat), ", RegularPath>"),
                         |k| regular.estimate(&input.data(k)),
                         &context,
                     );
@@ -1852,7 +1852,7 @@ mod documented_matrix {
                         &spec,
                         &truth,
                         &heavy,
-                        concat!("Count<", stringify!($mat), ", FastPath>"),
+                        concat!("CountSketch<", stringify!($mat), ", FastPath>"),
                         |k| fast.estimate(&input.data(k)),
                         &context,
                     );

@@ -1,4 +1,4 @@
-# API: Count
+# API: CountSketch
 
 Status: `Ready`
 
@@ -47,7 +47,6 @@ fn estimate_with_hash(&self, hashed_val: &H::HashType) -> f64
 fn estimate(&self, val: &DataInput) -> f64
 fn estimate_with_hash(&self, hashed_val: u128) -> f64
 fn update_weighted_and_estimate(&mut self, val: &DataInput, weight: i64) -> f64
-fn fast_update_and_est_without_l2(&mut self, val: &DataInput, c: i64) -> f64
 fn l2(&self) -> f64
 fn l2_squared(&self) -> f64
 ```

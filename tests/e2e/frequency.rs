@@ -66,13 +66,13 @@ fn countmin_fast_path_zipf_conforms_to_the_count_min_model_and_merges_shards_exa
     let spec = CountMinSpec::new(ROWS, COLS);
     let context = format!("zipf(1.1) domain=8192 n=100000 stream_seed={STREAM_SEED}");
     spec.assert_contract(
-        "CountMin<Vector2D<i64>, FastPath> single-pass",
+        "CountMinSketch<Vector2D<i64>, FastPath> single-pass",
         &truth,
         |k| single.estimate(&DataInput::I64(k)) as f64,
         &context,
     );
     spec.assert_contract(
-        "CountMin<Vector2D<i64>, FastPath> 3-way shard merge",
+        "CountMinSketch<Vector2D<i64>, FastPath> 3-way shard merge",
         &truth,
         |k| shard_a.estimate(&DataInput::I64(k)) as f64,
         &context,
@@ -88,7 +88,7 @@ fn countmin_fast_path_zipf_conforms_to_the_count_min_model_and_merges_shards_exa
             format!("key {k}: single-pass {a} != shard-merged {b}")
         });
     }
-    merge_equality.assert_none("CountMin merge equality", &context);
+    merge_equality.assert_none("CountMinSketch merge equality", &context);
 }
 
 #[test]
@@ -111,13 +111,13 @@ fn countmin_vecbased_error_bound() {
             let spec = CountMinSpec::new(r, c);
             let context = format!("zipf(1.2) domain=512 n=20000 stream_seed={STREAM_SEED}");
             spec.assert_contract(
-                "CountMin<Vector2D<i64>, RegularPath>",
+                "CountMinSketch<Vector2D<i64>, RegularPath>",
                 &truth,
                 |k| reg.estimate(&DataInput::I64(k)) as f64,
                 &context,
             );
             spec.assert_contract(
-                "CountMin<Vector2D<i32>, FastPath>",
+                "CountMinSketch<Vector2D<i32>, FastPath>",
                 &truth,
                 |k| fast.estimate(&DataInput::I64(k)) as f64,
                 &context,
@@ -146,13 +146,13 @@ fn count_vecbased_error_bound() {
             let spec = CountSketchSpec::new(r, c);
             let context = format!("zipf(1.2) domain=512 n=20000 stream_seed={STREAM_SEED}");
             spec.assert_contract(
-                "Count<Vector2D<i64>, RegularPath>",
+                "CountSketch<Vector2D<i64>, RegularPath>",
                 &truth,
                 |k| reg.estimate(&DataInput::I64(k)),
                 &context,
             );
             spec.assert_contract(
-                "Count<Vector2D<i32>, FastPath>",
+                "CountSketch<Vector2D<i32>, FastPath>",
                 &truth,
                 |k| fast.estimate(&DataInput::I64(k)),
                 &context,
@@ -187,13 +187,13 @@ fn countmin_matbased_error_bound() {
                 }
                 let spec = CountMinSpec::new($rows, $cols);
                 spec.assert_contract(
-                    concat!("CountMin<", stringify!($mat), ", RegularPath>"),
+                    concat!("CountMinSketch<", stringify!($mat), ", RegularPath>"),
                     &truth,
                     |k| reg.estimate(&DataInput::I64(k)) as f64,
                     &context,
                 );
                 spec.assert_contract(
-                    concat!("CountMin<", stringify!($mat), ", FastPath>"),
+                    concat!("CountMinSketch<", stringify!($mat), ", FastPath>"),
                     &truth,
                     |k| fast.estimate(&DataInput::I64(k)) as f64,
                     &context,
@@ -247,13 +247,13 @@ fn count_matbased_error_bound() {
                 }
                 let spec = CountSketchSpec::new($rows, $cols);
                 spec.assert_contract(
-                    concat!("CountMin<", stringify!($mat), ", RegularPath>"),
+                    concat!("CountMinSketch<", stringify!($mat), ", RegularPath>"),
                     &truth,
                     |k| reg.estimate(&DataInput::I64(k)) as f64,
                     &context,
                 );
                 spec.assert_contract(
-                    concat!("CountMin<", stringify!($mat), ", FastPath>"),
+                    concat!("CountMinSketch<", stringify!($mat), ", FastPath>"),
                     &truth,
                     |k| fast.estimate(&DataInput::I64(k)) as f64,
                     &context,
@@ -373,7 +373,7 @@ fn countmin_regular_path_satisfies_the_count_min_theorem() {
                  RegularPath hashes each row with its own seed from the table"
             );
             spec.assert_contract(
-                &format!("CountMin RegularPath {name}"),
+                &format!("CountMinSketch RegularPath {name}"),
                 &truth,
                 |k| regular.estimate(&to_input(k)) as f64,
                 &context,
@@ -410,7 +410,7 @@ fn countmin_fast_path_conforms_to_the_count_min_model() {
                  row independence is a model, not a hypothesis the theorem supplies"
             );
             spec.assert_contract(
-                &format!("CountMin FastPath {name}"),
+                &format!("CountMinSketch FastPath {name}"),
                 &truth,
                 |k| fast.estimate(&to_input(k)) as f64,
                 &context,
@@ -488,9 +488,12 @@ fn countsketch_both_paths_meet_the_l2_median_bound() {
              — the keys of one sketch share it and are not independent trials)",
             spec.kappa
         );
-        simul.assert_none(&format!("Count {label} / simultaneous L2 bound"), &context);
+        simul.assert_none(
+            &format!("CountSketch {label} / simultaneous L2 bound"),
+            &context,
+        );
         marg.assert_rate_at_most(
-            &format!("Count {label} / marginal L2 median bound"),
+            &format!("CountSketch {label} / marginal L2 median bound"),
             spec.marginal_failure(),
             &context,
         );
@@ -555,7 +558,7 @@ fn countsketch_error_stays_rank_independent_within_the_documented_empirical_band
 /// CountSketchWithL2Norm is a Count Sketch carrying a running F2, so its point estimates
 /// obey the Count Sketch L2 bound and its `l2_squared` tracks the exact F2.
 #[test]
-fn countl2hh_weighted_turnstile_satisfies_the_l2_median_bound() {
+fn count_sketch_with_l2_norm_weighted_turnstile_satisfies_the_l2_median_bound() {
     const ROWS: usize = 4;
     const COLS: usize = 2048;
     const HASH_SEED_IDX: usize = 11;
@@ -583,7 +586,7 @@ fn countl2hh_weighted_turnstile_satisfies_the_l2_median_bound() {
          stream_seed={STREAM_SEED} hash_seed_idx={HASH_SEED_IDX}"
     );
     CountSketchSpec::new(ROWS, COLS).assert_contract(
-        "CountL2HH point estimate",
+        "CountSketchWithL2Norm point estimate",
         &truth,
         |k| sk.estimate(&DataInput::I64(k)),
         &context,
@@ -594,14 +597,14 @@ fn countl2hh_weighted_turnstile_satisfies_the_l2_median_bound() {
     // real bound, not an exactly maintained total.
     let f2_spec = SecondMomentSpec::new(ROWS, COLS);
     if let Err(detail) = f2_spec.check(sk.l2_squared(), truth.f2()) {
-        panic!("CountL2HH F2: {detail}\n  context: {context}");
+        panic!("CountSketchWithL2Norm F2: {detail}\n  context: {context}");
     }
 }
 
 // ------------------------------------------- CountMinSketchFold / CountSketchFold counts + merge
 
 #[test]
-fn fold_cms_foldcs_counts_and_hierarchical_merge() {
+fn count_min_sketch_fold_and_count_sketch_fold_counts_and_hierarchical_merge() {
     // Weighted per-key counts stay exact on sparse dims.
     let mut a = CountMinSketchFold::<DefaultXxHasher>::new(3, 2048, 0, 32);
     let mut b = CountMinSketchFold::<DefaultXxHasher>::new(3, 2048, 0, 32);
@@ -688,13 +691,13 @@ fn folded_sketches_keep_their_own_bounds_through_a_sixteen_way_merge() {
     );
 
     CountMinSpec::new(ROWS, folded_cols).assert_contract(
-        "FoldCMS after a 16-way hierarchical merge",
+        "CountMinSketchFold after a 16-way hierarchical merge",
         &truth,
         |k| cms_merged.estimate(&DataInput::U64(k as u64)) as f64,
         &context,
     );
     CountSketchSpec::new(ROWS, folded_cols).assert_contract(
-        "FoldCS after a 16-way hierarchical merge",
+        "CountSketchFold after a 16-way hierarchical merge",
         &truth,
         |k| cs_merged.estimate(&DataInput::U64(k as u64)) as f64,
         &context,
@@ -780,13 +783,13 @@ fn countmin_documented_vector_grid(
             }
             let spec = CountMinSpec::new(rows, cols);
             spec.assert_contract(
-                &format!("CountMin<Vector2D<i64>, RegularPath> {rows}x{cols}"),
+                &format!("CountMinSketch<Vector2D<i64>, RegularPath> {rows}x{cols}"),
                 truth,
                 |k| regular.estimate(&input.data(k)) as f64,
                 context,
             );
             spec.assert_contract(
-                &format!("CountMin<Vector2D<i64>, FastPath> {rows}x{cols}"),
+                &format!("CountMinSketch<Vector2D<i64>, FastPath> {rows}x{cols}"),
                 truth,
                 |k| fast.estimate(&input.data(k)) as f64,
                 context,
@@ -814,13 +817,13 @@ fn countmin_documented_fixed_grid(
                 }
                 let spec = CountMinSpec::new($rows, $cols);
                 spec.assert_contract(
-                    concat!("CountMin<", stringify!($mat), ", RegularPath>"),
+                    concat!("CountMinSketch<", stringify!($mat), ", RegularPath>"),
                     truth,
                     |k| regular.estimate(&input.data(k)) as f64,
                     context,
                 );
                 spec.assert_contract(
-                    concat!("CountMin<", stringify!($mat), ", FastPath>"),
+                    concat!("CountMinSketch<", stringify!($mat), ", FastPath>"),
                     truth,
                     |k| fast.estimate(&input.data(k)) as f64,
                     context,
@@ -873,13 +876,13 @@ fn countsketch_documented_vector_grid(
             }
             let spec = CountSketchSpec::new(rows, cols);
             spec.assert_contract(
-                &format!("Count<Vector2D<i64>, RegularPath> {rows}x{cols}"),
+                &format!("CountSketch<Vector2D<i64>, RegularPath> {rows}x{cols}"),
                 truth,
                 |k| regular.estimate(&input.data(k)),
                 context,
             );
             spec.assert_contract(
-                &format!("Count<Vector2D<i64>, FastPath> {rows}x{cols}"),
+                &format!("CountSketch<Vector2D<i64>, FastPath> {rows}x{cols}"),
                 truth,
                 |k| fast.estimate(&input.data(k)),
                 context,
@@ -905,13 +908,13 @@ fn countsketch_documented_fixed_grid(
                 }
                 let spec = CountSketchSpec::new($rows, $cols);
                 spec.assert_contract(
-                    concat!("Count<", stringify!($mat), ", RegularPath>"),
+                    concat!("CountSketch<", stringify!($mat), ", RegularPath>"),
                     truth,
                     |k| regular.estimate(&input.data(k)),
                     context,
                 );
                 spec.assert_contract(
-                    concat!("Count<", stringify!($mat), ", FastPath>"),
+                    concat!("CountSketch<", stringify!($mat), ", FastPath>"),
                     truth,
                     |k| fast.estimate(&input.data(k)),
                     context,
@@ -1030,7 +1033,7 @@ fn countl2hh_documented_input(id: u8) {
     );
 
     CountSketchSpec::new(ROWS, COLS).assert_contract(
-        "CountL2HH point estimate",
+        "CountSketchWithL2Norm point estimate",
         &truth,
         |k| sk.estimate(&input.data(k)),
         &context,
@@ -1041,7 +1044,7 @@ fn countl2hh_documented_input(id: u8) {
     let hot_rel = ((hot_est - hot_truth) / hot_truth).abs();
     assert!(
         hot_rel <= 0.02,
-        "CountL2HH hottest key after the decrement: est {hot_est:.1} vs true {hot_truth} \
+        "CountSketchWithL2Norm hottest key after the decrement: est {hot_est:.1} vs true {hot_truth} \
          is {:.3}% off, past the documented 2%. {context}",
         hot_rel * 100.0
     );
@@ -1051,14 +1054,14 @@ fn countl2hh_documented_input(id: u8) {
     let f2_rel = ((f2_est - f2_truth) / f2_truth).abs();
     assert!(
         f2_rel <= 0.10,
-        "CountL2HH F2: est {f2_est:.3e} vs true {f2_truth:.3e} is {:.2}% off, past the \
+        "CountSketchWithL2Norm F2: est {f2_est:.3e} vs true {f2_truth:.3e} is {:.2}% off, past the \
          documented 10%. {context}",
         f2_rel * 100.0
     );
 
     let f2_spec = SecondMomentSpec::new(ROWS, COLS);
     if let Err(detail) = f2_spec.check(f2_est, f2_truth) {
-        panic!("CountL2HH F2 model: {detail}\n  context: {context}");
+        panic!("CountSketchWithL2Norm F2 model: {detail}\n  context: {context}");
     }
 }
 

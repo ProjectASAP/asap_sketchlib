@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "SketchHasher hash type u64 cannot represent fast-path hash for rows=8, cols=4096; use u128 or MatrixHashType"
+        expected = "SketchHasher hash type u64 cannot represent fast-path hash for rows=8, cols=4096; use u128 or MatrixHash"
     )]
     fn packed64_hasher_rejects_oversized_dimensions() {
         let key = DataInput::U64(19);

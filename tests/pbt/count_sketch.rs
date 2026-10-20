@@ -117,7 +117,7 @@ proptest! {
     // ===== A weighted arrival must match repeating it =====
 
     #[test]
-    fn count_sketch_weighted_matches_repeating_the_insert(
+    fn count_sketch_weighted_matches_repeating_the_update(
         rows in 1usize..6,
         cols in 1usize..64,
         updates in weighted(120),
@@ -218,7 +218,7 @@ proptest! {
     }
 
     #[test]
-    fn a_weight_of_minus_one_undoes_a_unit_insert(
+    fn a_weight_of_minus_one_undoes_a_unit_update(
         rows in 1usize..6,
         cols in 1usize..8,
         background in keys(150),

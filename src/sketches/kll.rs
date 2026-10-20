@@ -26,7 +26,9 @@ pub(crate) use wire::{
 const MAX_LEVELS: usize = 61;
 
 const CAPACITY_CACHE_LEN: usize = 20;
-const MAX_K: usize = 26_602;
+pub(crate) const MAX_K: usize = 26_602;
+/// Minimum level capacity `m` that `with_k` and `with_k_and_seed` use.
+pub const DEFAULT_M: usize = 8;
 const CAPACITY_DECAY: f64 = 2.0 / 3.0;
 const DEFAULT_K: i32 = 200;
 
@@ -287,14 +289,14 @@ impl<T: NumericalValue> Kll<T> {
         Self::init_internal(k, m, Coin::from_seed(seed), Some(seed))
     }
 
-    /// Creates a new KLL sketch with the given `k` and a default minimum level capacity of 8.
+    /// Creates a new KLL sketch with the given `k` and `m` = [`DEFAULT_M`].
     pub fn with_k(k: i32) -> Self {
-        Self::new(k as usize, 8)
+        Self::new(k as usize, DEFAULT_M)
     }
 
-    /// `with_k` with an explicit RNG seed. See `init_with_seed`.
+    /// `with_k` with an explicit RNG seed. See `with_seed`.
     pub fn with_k_and_seed(k: i32, seed: u64) -> Self {
-        Self::with_seed(k as usize, 8, seed)
+        Self::with_seed(k as usize, DEFAULT_M, seed)
     }
 
     fn init_internal(k: usize, m: usize, coin: Coin, seed: Option<u64>) -> Self {
@@ -731,7 +733,7 @@ impl<T: NumericalValue> Kll<T> {
     // -- Lifecycle -----------------------------------------------------------
 
     /// Resets the sketch to its empty initial state, keeping the same `k` and `m` parameters.
-    /// If the sketch was constructed with an explicit seed (`init_with_seed` /
+    /// If the sketch was constructed with an explicit seed (`with_seed` /
     /// `with_k_and_seed`), the coin is re-seeded from that seed so determinism
     /// survives `clear()` (and therefore window rotation in stateful aggregators).
     pub fn clear(&mut self) {
@@ -766,12 +768,6 @@ impl<T: NumericalValue> Kll<T> {
     }
 
     // -- Wire-format-aligned accessors --------------------------------------
-
-    /// Returns the configured `k` parameter.
-    #[inline]
-    pub fn wire_k(&self) -> u32 {
-        self.k as u32
-    }
 
     /// Returns the configured `m` parameter.
     #[inline]
@@ -1000,7 +996,7 @@ impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for Kll<T> {
             // round-tripped sketch keeps its current coin state but
             // would re-randomize from time on a subsequent clear().
             // Callers that need clear()-determinism after a deserialize
-            // should rebuild via init_with_seed.
+            // should rebuild via with_seed.
             seed: None,
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
@@ -1708,13 +1704,13 @@ mod tests {
         );
 
         // Serialization round-trip for the generic specialization.
-        let bytes = a.to_asapv1().expect("serialize KLL<i64>");
-        let restored = Kll::<i64>::from_asapv1(&bytes).expect("deserialize KLL<i64>");
+        let bytes = a.to_asapv1().expect("serialize Kll<i64>");
+        let restored = Kll::<i64>::from_asapv1(&bytes).expect("deserialize Kll<i64>");
         assert_eq!(a.count(), restored.count());
     }
 
     #[test]
-    fn bulk_update_equivalent_to_loop_and_empty_is_noop() {
+    fn update_batch_equivalent_to_loop_and_empty_is_noop() {
         // Empty must be no-op and keep cache/coin.
         let mut sk = Kll::<f64>::with_seed(200, 8, 42);
         for &v in &[1.0, 2.0, 3.0] {

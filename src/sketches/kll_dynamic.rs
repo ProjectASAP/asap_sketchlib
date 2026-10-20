@@ -18,12 +18,11 @@ use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};
 
-use super::kll::{Coin, merge_sorted_runs, randomly_halve_up};
+use super::kll::{Coin, DEFAULT_M, MAX_K, merge_sorted_runs, randomly_halve_up};
 
 mod wire;
 
 const CAPACITY_CACHE_LEN: usize = 20;
-const MAX_K: usize = 26_602;
 const CAPACITY_DECAY: f64 = 2.0 / 3.0;
 const DEFAULT_K: i32 = 200;
 
@@ -73,12 +72,12 @@ impl<T: NumericalValue> Default for KllDynamic<T> {
 }
 
 impl<T: NumericalValue> KllDynamic<T> {
-    /// Creates a KllDynamic sketch with the given `k` and `m` parameters.
+    /// Creates a KLL dynamic sketch with the given `k` and `m` parameters.
     pub fn new(k: usize, m: usize) -> Self {
         Self::init_internal(k, m, Coin::new(), None)
     }
 
-    /// Creates a KllDynamic sketch with an explicit RNG seed for the
+    /// Creates a KLL dynamic sketch with an explicit RNG seed for the
     /// compaction coin. Two sketches built with the same seed and fed the same
     /// input produce identical state, which is what makes reproducible-replay
     /// scenarios and deterministic accuracy tests possible. The seed is also
@@ -114,14 +113,14 @@ impl<T: NumericalValue> KllDynamic<T> {
         s
     }
 
-    /// Creates a KllDynamic sketch with default `m` and the provided `k`.
+    /// Creates a KLL dynamic sketch with the given `k` and `m` = [`DEFAULT_M`].
     pub fn with_k(k: i32) -> Self {
-        Self::new(k as usize, 8)
+        Self::new(k as usize, DEFAULT_M)
     }
 
     /// `with_k` with an explicit RNG seed. See [`KllDynamic::with_seed`].
     pub fn with_k_and_seed(k: i32, seed: u64) -> Self {
-        Self::with_seed(k as usize, 8, seed)
+        Self::with_seed(k as usize, DEFAULT_M, seed)
     }
 
     fn push_value(&mut self, value: T) {
@@ -293,7 +292,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         T: std::fmt::Debug,
     {
         println!(
-            "KLLDynamic Packed (k={}, levels={}, items={})",
+            "KllDynamic Packed (k={}, levels={}, items={})",
             self.k,
             self.num_levels,
             self.items.len()
@@ -775,7 +774,7 @@ mod tests {
         );
     }
 
-    // General case: merging two NON-empty KllDynamic sketches must still
+    // General case: merging two NON-empty KLL dynamic sketches must still
     // preserve total count (within the same inherent rounding budget as
     // ordinary inserts) and produce quantile estimates consistent with a
     // reference built from the union of both inputs' raw data. Guards
@@ -906,10 +905,10 @@ mod tests {
             sketch.update(value);
         }
 
-        let bytes = sketch.to_asapv1().expect("serialize KLLDynamic with rmp");
+        let bytes = sketch.to_asapv1().expect("serialize KllDynamic with rmp");
         assert!(!bytes.is_empty(), "serialized bytes should not be empty");
 
-        let restored = KllDynamic::from_asapv1(&bytes).expect("deserialize KLLDynamic with rmp");
+        let restored = KllDynamic::from_asapv1(&bytes).expect("deserialize KllDynamic with rmp");
         assert_eq!(sketch.k, restored.k);
         assert_eq!(sketch.m, restored.m);
         assert_eq!(sketch.num_levels, restored.num_levels);
@@ -966,13 +965,13 @@ mod tests {
             "p90={p90} out of range for n={n}"
         );
 
-        let bytes = sketch.to_asapv1().expect("serialize KLLDynamic<i64>");
-        let restored = KllDynamic::<i64>::from_asapv1(&bytes).expect("deserialize KLLDynamic<i64>");
+        let bytes = sketch.to_asapv1().expect("serialize KllDynamic<i64>");
+        let restored = KllDynamic::<i64>::from_asapv1(&bytes).expect("deserialize KllDynamic<i64>");
         assert_eq!(sketch.count(), restored.count());
     }
 
     #[test]
-    fn bulk_update_equivalent_to_loop() {
+    fn update_batch_equivalent_to_loop() {
         let vals = sample_uniform_f64(0.0, 1000.0, 10_000, 0xCAFE_1234);
         let mut a = KllDynamic::<f64>::with_k(200);
         let mut b = KllDynamic::<f64>::with_k(200);

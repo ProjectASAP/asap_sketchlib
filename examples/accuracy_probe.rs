@@ -128,7 +128,7 @@ fn main() {
 // ---------------------------------------------------------------- CountMinSketch
 fn probe_countmin() {
     let mut p = Probe::new();
-    println!("--- CountMin (core, Vector2D<i32>) ---");
+    println!("--- CountMinSketch (core, Vector2D<i32>) ---");
 
     // Sparse dims: no collisions => exact counts, incl. turnstile negatives.
     let mut cm =
@@ -184,13 +184,13 @@ fn probe_countmin() {
         ),
         worst_excess <= eps * n as f64,
     );
-    p.finish("CountMin");
+    p.finish("CountMinSketch");
 }
 
 // ------------------------------------------------------------- CountSketch
 fn probe_countsketch() {
     let mut p = Probe::new();
-    println!("--- CountSketch (core Count, Vector2D<i64>) ---");
+    println!("--- CountSketch (core, Vector2D<i64>) ---");
 
     // True turnstile: net-zero stream must estimate ~0.
     let mut cs =
@@ -248,7 +248,7 @@ fn probe_countsketch() {
 // -------------------------------------------------------------- Top-K heaps
 fn probe_topk_heaps() {
     let mut p = Probe::new();
-    println!("--- CMSHeap / CSHeap top-k recall ---");
+    println!("--- CountMinSketchWithHeap / CountSketchWithHeap top-k recall ---");
     let (n, domain, top_k) = (20_000usize, 1024usize, 16usize);
     let mut z = Zipf::new(domain, 1.1, 44);
     let mut truth: HashMap<u32, i64> = HashMap::new();
@@ -277,8 +277,8 @@ fn probe_topk_heaps() {
         cs_heap.update(&d);
     }
     for (label, heap_items) in [
-        ("CMSHeap", cms_heap.heap().heap().to_vec()),
-        ("CSHeap", cs_heap.heap().heap().to_vec()),
+        ("CountMinSketchWithHeap", cms_heap.heap().heap().to_vec()),
+        ("CountSketchWithHeap", cs_heap.heap().heap().to_vec()),
     ] {
         let found = heap_items
             .iter()
@@ -307,7 +307,7 @@ fn probe_topk_heaps() {
         .find(|it| matches!(it.key, asap_sketchlib::OwnedDataInput::U32(999)))
     {
         let cnt = it.count;
-        p.note(&format!("CSHeap stores negative heap count {cnt} for pure-decrement key (design wart, not a crash)"));
+        p.note(&format!("CountSketchWithHeap stores negative heap count {cnt} for pure-decrement key (design wart, not a crash)"));
     }
     p.finish("TopK heaps");
 }
@@ -315,7 +315,7 @@ fn probe_topk_heaps() {
 // --------------------------------------------------------------- CountSketchWithL2Norm
 fn probe_countl2hh() {
     let mut p = Probe::new();
-    println!("--- CountL2HH (F2 / L2 estimation) ---");
+    println!("--- CountSketchWithL2Norm (F2 / L2 estimation) ---");
 
     // Moderate stream F2 accuracy (truth = sum over KEYS of count^2).
     let mut sk =
@@ -375,13 +375,13 @@ fn probe_countl2hh() {
         },
         saturated,
     );
-    p.finish("CountL2HH");
+    p.finish("CountSketchWithL2Norm");
 }
 
 // --------------------------------------------------------------------- HLL
 fn probe_hll() {
     let mut p = Probe::new();
-    println!("--- HLL cardinality (Classic / ErtlMLE / HIP, p14) ---");
+    println!("--- HLL cardinality (Classic / Ertl / HIP, p14) ---");
     let checkpoints: [u64; 4] = [10_000, 100_000, 1_000_000, 10_000_000];
     let mut classic = HyperLogLog::<asap_sketchlib::Classic>::new();
     let mut ertl = HyperLogLog::<asap_sketchlib::Ertl>::new();
@@ -405,7 +405,7 @@ fn probe_hll() {
             rel_err(ec, t) <= 0.02,
         );
         p.check(
-            &format!("ErtlMLE @ {target} within 2%"),
+            &format!("Ertl @ {target} within 2%"),
             format!("rel {:.4}", rel_err(ee, t)),
             rel_err(ee, t) <= 0.02,
         );
@@ -437,7 +437,7 @@ fn probe_hll() {
 // --------------------------------------------------------------------- KLL
 fn probe_kll() {
     let mut p = Probe::new();
-    println!("--- KLL / KLLDynamic quantiles (k=200) ---");
+    println!("--- KLL / KllDynamic quantiles (k=200) ---");
     let qs = [0.1f64, 0.25, 0.5, 0.75, 0.9];
 
     let n = 100_000usize;
@@ -445,7 +445,7 @@ fn probe_kll() {
     let mut data: Vec<f64> = (0..n).map(|_| rng.random::<f64>() * 1_000_000.0).collect();
     data.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-    for label in ["KLL", "KLLDynamic"] {
+    for label in ["KLL", "KllDynamic"] {
         let (e1, w1) = if label == "KLL" {
             let mut sk = asap_sketchlib::Kll::with_k(200);
             for v in &data {
@@ -636,9 +636,9 @@ fn probe_hydra() {
     let x = 500.0;
     let got = hydra.query_cdf(&[Some("eu")], x).expect("cdf");
     let truth_cdf = sorted.partition_point(|v| *v <= x) as f64 / n as f64;
-    p.note("Hydra::query_quantile(key, threshold) returns CDF(threshold), NOT a quantile value (name inversion)");
+    p.note("Hydra::query_cdf(key, threshold) returns CDF(threshold), NOT a quantile value (name inversion)");
     p.check(
-        "query_quantile(x)=CDF fraction <= x",
+        "query_cdf(x)=CDF fraction <= x",
         format!("x={x}, expected ~{truth_cdf:.3}, got {got:.3}"),
         (got - truth_cdf).abs() < 0.03,
     );
@@ -725,7 +725,7 @@ fn probe_univmon() {
     );
 
     // Entropy unit sanity: bits value should be log2 larger than nats value.
-    p.note("UnivMon calc_entropy returns BITS (log2); UnivMonQ estimate_entropy returns NATS (ln). Cross-family comparisons need conversion.");
+    p.note("UnivMon estimate_entropy returns BITS (log2); UnivMonQ estimate_entropy returns NATS (ln). Cross-family comparisons need conversion.");
     p.finish("UnivMon");
 }
 
@@ -733,7 +733,7 @@ fn probe_univmon() {
 fn probe_univmon_pyramid() {
     use asap_sketchlib::UnivMonTwoTier;
     let mut p = Probe::new();
-    println!("--- UnivMonPyramid (experimental) ---");
+    println!("--- UnivMonTwoTier (experimental) ---");
     let mut up = UnivMonTwoTier::with_defaults();
     let mut truth_w: HashMap<u32, i64> = HashMap::new();
     let mut z = Zipf::new(1000, 1.2, 50);
@@ -757,7 +757,7 @@ fn probe_univmon_pyramid() {
         format!("expected {card_truth}, got {card}"),
         rel_err(card, card_truth) < 0.10,
     );
-    p.finish("UnivMonPyramid");
+    p.finish("UnivMonTwoTier");
 }
 
 // ---------------------------------------------------------------- UnivMonQ
@@ -916,7 +916,7 @@ fn probe_nitro() {
             (est - n as f64).abs() <= 0.05 * n as f64,
         );
     }
-    p.note("Pre-fix: insert hashed with raw hash128_seeded while estimation used the Packed64 matrix hash (estimates read empty cells), each sample updated ONE row (truth/rows bias), and the skip draw used ceil instead of floor (effective rate 1/(1/p+2)).");
+    p.note("Pre-fix: update hashed with raw hash128_seeded while estimation used the Packed64 matrix hash (estimates read empty cells), each sample updated ONE row (truth/rows bias), and the skip draw used ceil instead of floor (effective rate 1/(1/p+2)).");
     p.finish("Nitro");
 }
 
@@ -925,7 +925,7 @@ fn probe_nitro() {
 fn probe_eh_univ() {
     use asap_sketchlib::ExponentialHistogramUnivMon;
     let mut p = Probe::new();
-    println!("--- EHUnivOptimized exact map tier (experimental) ---");
+    println!("--- ExponentialHistogramUnivMon exact map tier (experimental) ---");
     let window = 100u64;
     let mut eh = ExponentialHistogramUnivMon::with_defaults(2, window);
     // Stream updates over times 0..150; only [50,149] survive at t=149+window semantics.
@@ -965,7 +965,7 @@ fn probe_eh_univ() {
             false,
         ),
     }
-    p.finish("EHUnivOptimized");
+    p.finish("ExponentialHistogramUnivMon");
 }
 
 // ---------------------------------------------------------------- Tumbling
@@ -973,7 +973,7 @@ fn probe_tumbling() {
     use asap_sketchlib::{CountMinSketchFoldConfig, TumblingWindow};
 
     let mut p = Probe::new();
-    println!("--- TumblingWindow FoldCMS + KLL ---");
+    println!("--- TumblingWindow CountMinSketchFold + KLL ---");
 
     // CountMinSketchFold: weighted counts per key.
     let cfg = CountMinSketchFoldConfig {
@@ -992,12 +992,12 @@ fn probe_tumbling() {
     let fa = merged.estimate(&DataInput::Str("A"));
     let fb = merged.estimate(&DataInput::Str("B"));
     p.check(
-        "FoldCMS key A == 50",
+        "CountMinSketchFold key A == 50",
         format!("expected 50, got {fa}"),
         fa == 50,
     );
     p.check(
-        "FoldCMS key B == 25",
+        "CountMinSketchFold key B == 25",
         format!("expected 25, got {fb}"),
         fb == 25,
     );
@@ -1022,7 +1022,7 @@ fn probe_tumbling() {
     let merged_k = tkw.query_all();
     let med = merged_k.quantile(0.5);
     let truth_med = all_vals[all_vals.len() / 2];
-    p.note("TumblingWindow<KLL>::insert ignores its numeric `value` param; observations are the keys themselves");
+    p.note("TumblingWindow<Kll>::update_weighted ignores its numeric `weight` param; observations are the keys themselves");
     p.check(
         "tumbling KLL median approx",
         format!("expected ~{truth_med:.1}, got {med:.1}"),

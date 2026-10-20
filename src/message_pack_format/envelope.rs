@@ -263,7 +263,7 @@ mod tests {
             univmon_bytes.update_weighted(key, 2);
         }
         ss_u64.update(&DataInput::U64(9));
-        let mut coco: CocoSketch = CocoSketch::init_with_size(8, 2);
+        let mut coco: CocoSketch = CocoSketch::with_dimensions(2, 8);
         coco.update_weighted("flow::a", 3);
         let mut elastic: ElasticSketch = ElasticSketch::with_heavy_and_light(4, 2, 16);
         elastic.update("flow::a".to_string());
@@ -314,13 +314,13 @@ mod tests {
             case!("CS delta", cs_delta, sketches::CountSketchDelta<i64, RegularPath>),
             case!("KLL", kll, Kll<f64>),
             case!("SetAggregator", set, SetAggregator),
-            case!("DeltaResult", delta, SetAggregatorDelta),
+            case!("SetAggregatorDelta", delta, SetAggregatorDelta),
             sketch!("KLL dynamic", kll_dynamic, KllDynamic<f64>),
-            sketch!("CMSHeap", cms_heap, CmsHeap),
-            sketch!("CMSHeap bytes", cms_heap_bytes, CmsHeap),
-            case!("CMSHeap delta", cms_heap_delta, CountMinSketchWithHeapDelta<i64, RegularPath>),
-            sketch!("CSHeap", cs_heap, CsHeap),
-            sketch!("CountL2HH", l2hh, CountSketchWithL2Norm),
+            sketch!("CountMinSketchWithHeap", cms_heap, CmsHeap),
+            sketch!("CountMinSketchWithHeap bytes", cms_heap_bytes, CmsHeap),
+            case!("CountMinSketchWithHeap delta", cms_heap_delta, CountMinSketchWithHeapDelta<i64, RegularPath>),
+            sketch!("CountSketchWithHeap", cs_heap, CsHeap),
+            sketch!("CountSketchWithL2Norm", l2hh, CountSketchWithL2Norm),
             sketch!("DDSketch", positive, DdSketch),
             case!("DDSketch delta", dd_delta, DdSketchDelta),
             sketch!("Bloom", bloom, Bloom<RegularPath>),
@@ -331,10 +331,10 @@ mod tests {
             sketch!("Elastic", elastic, ElasticSketch),
             sketch!("UnivMon", univmon, UnivMon),
             sketch!("UnivMon bytes", univmon_bytes, UnivMon),
-            sketch!("UnivMonPyramid", pyramid, UnivMonTwoTier),
+            sketch!("UnivMonTwoTier", pyramid, UnivMonTwoTier),
             sketch!("UnivMonQ", univmon_q, UnivMonQ<DefaultXxHasher>),
             sketch!("ExponentialHistogram", eh, ExponentialHistogram),
-            sketch!("EHSketchList", eh_list, EhBucketSketch),
+            sketch!("EhBucketSketch", eh_list, EhBucketSketch),
             sketch!("Hydra CM", hydra_cm, Hydra),
             sketch!("Hydra HLL", hydra_hll, Hydra),
             sketch!("Hydra KLL", hydra_kll, Hydra),

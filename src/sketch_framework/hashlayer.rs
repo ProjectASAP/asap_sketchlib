@@ -80,8 +80,8 @@ impl EnsembleSketch {
     /// Returns a short sketch family label.
     pub fn sketch_type(&self) -> &'static str {
         match self {
-            EnsembleSketch::CountMinFast(_) => "CountMin",
-            EnsembleSketch::CountSketchFast(_) => "Count",
+            EnsembleSketch::CountMinFast(_) => "CountMinSketch",
+            EnsembleSketch::CountSketchFast(_) => "CountSketch",
             EnsembleSketch::HllErtl(_)
             | EnsembleSketch::HllClassic(_)
             | EnsembleSketch::HllHip(_) => "HLL",
@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_and_estimate() {
+    fn test_update_and_estimate() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
         let baseline = create_baseline(&data);
 
@@ -464,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_at() {
+    fn test_update_at_indices() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
         let baseline = create_baseline(&data);
 
@@ -485,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_with_hash_matches_insert() {
+    fn test_update_with_hash_matches_update() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
 
         let mut layer_a = default_layer();
@@ -557,7 +557,7 @@ mod tests {
         assert!(layer.get(2).is_none());
 
         let sketch = layer.get_mut(0).expect("mutable ref");
-        assert_eq!(sketch.sketch_type(), "CountMin");
+        assert_eq!(sketch.sketch_type(), "CountMinSketch");
     }
 
     #[test]

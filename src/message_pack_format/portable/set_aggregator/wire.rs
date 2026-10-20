@@ -67,7 +67,7 @@ fn read_ascending(
 fn check_disjoint(added: &HashSet<String>, removed: &HashSet<String>) -> Result<(), String> {
     match added.intersection(removed).next() {
         Some(member) => Err(format!(
-            "ASAPv1 DeltaResult: member {member:?} is both added and removed"
+            "ASAPv1 SetAggregatorDelta: member {member:?} is both added and removed"
         )),
         None => Ok(()),
     }
@@ -133,10 +133,10 @@ impl SetAggregatorDelta {
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let payload = open(bytes, kind::SET_AGGREGATOR_DELTA, "DeltaResult")?;
+        let payload = open(bytes, kind::SET_AGGREGATOR_DELTA, "SetAggregatorDelta")?;
         let p: DeltaPayload<WireString> = envelope::decode_block(payload)?;
-        let added = read_ascending("DeltaResult added", p.added)?;
-        let removed = read_ascending("DeltaResult removed", p.removed)?;
+        let added = read_ascending("SetAggregatorDelta added", p.added)?;
+        let removed = read_ascending("SetAggregatorDelta removed", p.removed)?;
         check_disjoint(&added, &removed).map_err(RmpDecodeError::Uncategorized)?;
         Ok(SetAggregatorDelta { added, removed })
     }

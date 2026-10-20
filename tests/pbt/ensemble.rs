@@ -47,8 +47,8 @@ impl Kind {
     /// The label the layer reports for the family.
     fn label(self) -> &'static str {
         match self {
-            Kind::CountMinSketch => "CountMin",
-            Kind::Count => "Count",
+            Kind::CountMinSketch => "CountMinSketch",
+            Kind::Count => "CountSketch",
             Kind::Ertl | Kind::Classic | Kind::Hip => "HLL",
         }
     }
@@ -331,7 +331,7 @@ proptest! {
     // ===== An insert reaches the members it names and no others =====
 
     #[test]
-    fn an_insert_at_reaches_the_named_members_and_leaves_the_rest_empty(
+    fn an_update_at_reaches_the_named_members_and_leaves_the_rest_empty(
         (rows, pool) in geometry(),
         members in mixed_members(3),
         picks in prop::collection::vec(0usize..8, 0..8),
@@ -354,7 +354,7 @@ proptest! {
             prop_assert_eq!(
                 layer_answers(&named, i, *kind, &probes),
                 layer_answers(expected, i, *kind, &probes),
-                "member {} ({:?}) under insert_at {:?}", i, kind, chosen
+                "member {} ({:?}) under update_at {:?}", i, kind, chosen
             );
         }
     }

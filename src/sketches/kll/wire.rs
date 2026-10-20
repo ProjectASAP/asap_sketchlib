@@ -5,7 +5,7 @@
 //! variants, the [`KllWireItem`] marker trait, and the `to_asapv1` /
 //! `from_asapv1` impls for the compact [`Kll`]. Being a descendant
 //! module, it reads the sketch's private fields (`self.items`, `self.levels`,
-//! `self.co`, …) and constructs the struct directly without widening any field
+//! `self.coin`, …) and constructs the struct directly without widening any field
 //! visibility. The sibling `kll_dynamic::wire` reuses these DTOs for the dynamic
 //! variant. See `docs/asapv1_wire_format.md` §3.
 //!

@@ -211,7 +211,7 @@ fn build_q_shards(
             .wrapping_add(shard as u64 + 1);
         let mut sketch = UnivMonQ::with_source_id(config, source_id).unwrap();
         for value in &data[start..end] {
-            sketch.add(value);
+            sketch.update(value);
         }
         shards.push(sketch);
     }

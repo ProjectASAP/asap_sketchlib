@@ -57,9 +57,9 @@ where
         deltas: Vec<T>,
         heap: TopKHeap<T::HeapCount>,
     ) -> Result<Self, String> {
-        check_geometry("CMSHeap", rows, cols)?;
+        check_geometry("CountMinSketchWithHeap", rows, cols)?;
         check_cells(&indices, &deltas, ..rows as u64 * cols as u64)
-            .map_err(|e| format!("CMSHeap delta: {e}"))?;
+            .map_err(|e| format!("CountMinSketchWithHeap delta: {e}"))?;
         Ok(Self {
             rows,
             cols,
@@ -77,7 +77,7 @@ where
         let entries = heap_entries(&self.heap);
         let key_type = wire_key_type(&entries)?;
         let metadata = encode_metadata::<H>(
-            "CMSHeap",
+            "CountMinSketchWithHeap",
             self.rows,
             self.cols,
             T::COUNTER_TYPE,
@@ -103,10 +103,15 @@ where
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != kind::COUNT_MIN_WITH_HEAP_DELTA {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "CMSHeap delta kind_id mismatch: stored {kind_id:?}, expected {COUNT_MIN_WITH_HEAP_DELTA:?}"
+                "CountMinSketchWithHeap delta kind_id mismatch: stored {kind_id:?}, expected {COUNT_MIN_WITH_HEAP_DELTA:?}"
             )));
         }
-        let shape = decode_metadata::<H>("CMSHeap", metadata, T::COUNTER_TYPE, Mode::MODE)?;
+        let shape = decode_metadata::<H>(
+            "CountMinSketchWithHeap",
+            metadata,
+            T::COUNTER_TYPE,
+            Mode::MODE,
+        )?;
         let (cells, entries) = decode_payload::<DeltaCells<T>, _>(&shape.key_type, payload)?;
         let heap = rebuild_heap(shape.heap_size, entries)?;
         Self::new(shape.rows, shape.cols, cells.indices, cells.deltas, heap)
@@ -130,7 +135,7 @@ where
         let (rows, cols, heap_size) = (self.rows(), self.cols(), self.heap.capacity());
         if (rows, cols, heap_size) != (delta.rows, delta.cols, delta.heap.capacity()) {
             return Err(format!(
-                "CMSHeap delta: metadata mismatch: a {}x{} delta with heap_size {} for a \
+                "CountMinSketchWithHeap delta: metadata mismatch: a {}x{} delta with heap_size {} for a \
                  {rows}x{cols} sketch with heap_size {heap_size}",
                 delta.rows,
                 delta.cols,
@@ -142,7 +147,7 @@ where
             &delta.indices,
             &delta.deltas,
         )
-        .map_err(|e| format!("CMSHeap delta: {e}"))?;
+        .map_err(|e| format!("CountMinSketchWithHeap delta: {e}"))?;
         self.heap = delta.heap.clone();
         Ok(())
     }
@@ -161,9 +166,16 @@ mod tests {
 
     /// A 2x3 `i64` delta envelope, heap_size 2, around the given payload arrays.
     fn delta_bytes(indices: &[u64], keys: &[u64], heap_counts: &[i64]) -> Vec<u8> {
-        let metadata =
-            encode_metadata::<DefaultXxHasher>("CMSHeap", 2, 3, "i64", "regular", 2, "u64")
-                .unwrap();
+        let metadata = encode_metadata::<DefaultXxHasher>(
+            "CountMinSketchWithHeap",
+            2,
+            3,
+            "i64",
+            "regular",
+            2,
+            "u64",
+        )
+        .unwrap();
         let deltas = vec![1i64; indices.len()];
         let payload = rmp_serde::to_vec(&(indices, deltas, keys, heap_counts)).unwrap();
         envelope::encode(kind::COUNT_MIN_WITH_HEAP_DELTA, &metadata, &payload)

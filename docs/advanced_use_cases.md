@@ -86,4 +86,4 @@ sketch answers, while `MicroCm` answers frequency only. `MicroCm` is
 | Sliding window, frequency only, tight memory | `MicroCm` (Experimental) |
 | Sliding window + universal monitoring | `ExponentialHistogramUnivMon` (Unstable) |
 
-API references: [`docs/api/api_exponential_histogram.md`](./api/api_exponential_histogram.md), [`docs/api/api_ehsketchlist.md`](./api/api_ehsketchlist.md), [`docs/api/api_microscope.md`](./api/api_microscope.md)
+API references: [`docs/api/api_exponential_histogram.md`](./api/api_exponential_histogram.md), [`docs/api/api_eh_bucket_sketch.md`](./api/api_eh_bucket_sketch.md), [`docs/api/api_microscope.md`](./api/api_microscope.md)

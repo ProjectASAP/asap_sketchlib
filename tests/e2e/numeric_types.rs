@@ -102,7 +102,7 @@ macro_rules! kll_type_case {
                 }
                 s
             });
-            trial!(("KLLDynamic", "single pass"), |seed| {
+            trial!(("KllDynamic", "single pass"), |seed| {
                 let mut s = KllDynamic::<$ty>::with_k_and_seed(K, seed);
                 for v in &values {
                     s.update(v);
@@ -124,7 +124,7 @@ macro_rules! kll_type_case {
                 left.merge(&right);
                 left
             });
-            trial!(("KLLDynamic", "two-shard merge"), |seed: u64| {
+            trial!(("KllDynamic", "two-shard merge"), |seed: u64| {
                 let mut left = KllDynamic::<$ty>::with_k_and_seed(K, seed);
                 let mut right = KllDynamic::<$ty>::with_k_and_seed(K, seed ^ 0x5555);
                 for (i, v) in values.iter().enumerate() {
@@ -144,7 +144,7 @@ macro_rules! kll_type_case {
                 s.update_batch(&values);
                 s
             });
-            trial!(("KLLDynamic", "bulk update"), |seed| {
+            trial!(("KllDynamic", "bulk update"), |seed| {
                 let mut s = KllDynamic::<$ty>::with_k_and_seed(K, seed);
                 s.update_batch(&values);
                 s
@@ -179,7 +179,7 @@ fn every_numeric_type_satisfies_the_kll_rank_error_characterization() {
     kll_type_case!(tally, trial, f64, 1_000_000_000_000_000);
 
     tally.assert_independent_binomial(
-        "KLL<T> / KLLDynamic<T> across every built-in NumericalValue type",
+        "Kll<T> / KllDynamic<T> across every built-in NumericalValue type",
         KllRankSpec::datasketches(K as usize).trial_failure_probability,
         &format!(
             "one trial = one sketch with its own compaction seed, scored on its worst \
@@ -215,7 +215,7 @@ fn signed_numeric_types_order_negative_values_correctly_in_kll() {
                 }
                 spec.record_trial(
                     &mut $tally,
-                    &format!("KLL<{type_name}> mixed-sign seed={seed:#x}"),
+                    &format!("Kll<{type_name}> mixed-sign seed={seed:#x}"),
                     truth.sorted(),
                     &QS,
                     |q| fixed.quantile(q),
@@ -229,7 +229,7 @@ fn signed_numeric_types_order_negative_values_correctly_in_kll() {
                 }
                 spec.record_trial(
                     &mut $tally,
-                    &format!("KLLDynamic<{type_name}> mixed-sign seed={seed:#x}"),
+                    &format!("KllDynamic<{type_name}> mixed-sign seed={seed:#x}"),
                     truth.sorted(),
                     &QS,
                     |q| dynamic.quantile(q),
@@ -350,7 +350,7 @@ fn every_numeric_type_satisfies_the_ddsketch_relative_value_error_contract() {
         // Deterministic guarantee: no hashing, no sampling, so no violations
         // are tolerated at any alpha.
         tally.assert_none(
-            "DDSketch::add<T> across every built-in NumericalValue type",
+            "DdSketch::add<T> across every built-in NumericalValue type",
             &format!("alpha={alpha} stream_seed={STREAM_SEED:#x} n={N} q grid {QS:?}"),
         );
     }
@@ -425,14 +425,14 @@ fn the_f64_projection_is_exact_below_two_to_the_53() {
         }
         spec.record_trial(
             &mut rank_tally,
-            &format!("KLL<u128> above 2^70 seed={seed:#x}"),
+            &format!("Kll<u128> above 2^70 seed={seed:#x}"),
             truth.sorted(),
             &QS,
             |q| kll.quantile(q),
         );
     }
     rank_tally.assert_independent_binomial(
-        "KLL<u128> over values above 2^70",
+        "Kll<u128> over values above 2^70",
         spec.trial_failure_probability,
         &format!("k={K}, 16 seeds from kll_trial_seed(0x2E70_0000..)"),
     );

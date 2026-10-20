@@ -1,89 +1,18 @@
-//! Optimized UnivMon variants and pooling.
-//!
-//! - `UnivMonPool`: free-list pool for `UnivMon` sketch reuse.
-//! - `UnivMonTwoTier`: pyramid-structured UnivMon with two-tier sketch
-//!   dimensions — larger "elephant" layers for heavy hitters and smaller
-//!   "mouse" layers for the long tail, matching the PromSketch design.
+//! `UnivMonTwoTier`: pyramid-structured UnivMon with two-tier sketch
+//! dimensions — larger "elephant" layers for heavy hitters and smaller
+//! "mouse" layers for the long tail, matching the PromSketch design.
 
 use crate::UnivMon;
-use crate::common::heap::TopKHeap;
+use crate::common::Vector1D;
+use crate::common::heap::{DEFAULT_HEAP_SIZE, TopKHeap};
 use crate::common::{
     DataInput, OwnedDataInput, UNIVMON_BOTTOM_LAYER_SEED_INDEX, hash64_seeded, hash64_seeded_owned,
-    heap_item_to_sketch_input,
 };
-use crate::common::{L2HH, Vector1D};
 use crate::sketch_framework::univmon::{UNIVMON_MAX_LAYERS, UnivMonUpdateMode};
-use crate::sketches::countsketch_heap::CountSketchWithL2Norm;
+use crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm;
 use std::collections::{HashMap, HashSet};
 
 mod wire;
-
-/// Object pool for `UnivMon` sketches.
-///
-/// Maintains a free-list of pre-allocated sketches. Callers take ownership
-/// via `take()` and return sketches via `put()`, which resets and recycles
-/// them. This avoids repeated heap allocation/deallocation for large sketch
-/// matrices during promotion, merge, and expiration cycles.
-pub struct UnivMonPool {
-    free_list: Vec<UnivMon>,
-    total_allocated: usize,
-    heap_size: usize,
-    rows: usize,
-    cols: usize,
-    layers: usize,
-}
-
-impl UnivMonPool {
-    /// Creates a new pool with `initial_size` pre-allocated sketches.
-    pub fn new(
-        initial_size: usize,
-        heap_size: usize,
-        rows: usize,
-        cols: usize,
-        layers: usize,
-    ) -> Self {
-        let free_list: Vec<UnivMon> = (0..initial_size)
-            .map(|_| UnivMon::new(heap_size, rows, cols, layers))
-            .collect();
-        UnivMonPool {
-            free_list,
-            total_allocated: initial_size,
-            heap_size,
-            rows,
-            cols,
-            layers,
-        }
-    }
-
-    /// Takes ownership of a clean sketch from the pool.
-    ///
-    /// Pops a recycled sketch from the free-list if available, otherwise
-    /// allocates a fresh one.
-    pub fn take(&mut self) -> UnivMon {
-        if let Some(sketch) = self.free_list.pop() {
-            sketch
-        } else {
-            self.total_allocated += 1;
-            UnivMon::new(self.heap_size, self.rows, self.cols, self.layers)
-        }
-    }
-
-    /// Returns a sketch to the pool for reuse. Resets all internal state.
-    pub fn put(&mut self, mut sketch: UnivMon) {
-        sketch.clear();
-        self.free_list.push(sketch);
-    }
-
-    /// Number of sketches currently available in the pool.
-    pub fn available(&self) -> usize {
-        self.free_list.len()
-    }
-
-    /// Total number of sketches ever allocated by this pool.
-    pub fn total_allocated(&self) -> usize {
-        self.total_allocated
-    }
-}
 
 // ---------------------------------------------------------------------------
 // UnivMonTwoTier
@@ -94,7 +23,6 @@ const DEFAULT_ELEPHANT_ROWS: usize = 3;
 const DEFAULT_ELEPHANT_COLS: usize = 2048;
 const DEFAULT_MOUSE_ROWS: usize = 3;
 const DEFAULT_MOUSE_COLS: usize = 512;
-const DEFAULT_PYRAMID_HEAP: usize = 32;
 const DEFAULT_LAYERS: usize = 16;
 
 /// Pyramid-structured UnivMon with two-tier sketch dimensions.
@@ -107,7 +35,7 @@ const DEFAULT_LAYERS: usize = 16;
 /// Optimized UnivMon variant with separate elephant and mouse layers.
 pub struct UnivMonTwoTier {
     /// Per-layer L2/heavy-hitter sketches.
-    pub layer_sketches: Vector1D<L2HH>,
+    pub layer_sketches: Vector1D<CountSketchWithL2Norm>,
     /// Per-layer heavy-hitter heaps.
     pub layer_heaps: Vector1D<TopKHeap>,
     /// Total number of layers.
@@ -124,7 +52,7 @@ pub struct UnivMonTwoTier {
     pub mouse_cols: usize,
     /// Heap capacity per layer.
     pub heap_size: usize,
-    /// Bucket size used for hashing decisions.
+    /// Total inserted weight (the exact L1 norm).
     pub total_weight: usize,
     update_mode: UnivMonUpdateMode,
     candidate_complete: Vec<bool>,
@@ -153,31 +81,29 @@ impl UnivMonTwoTier {
         assert!(layers > 0, "layer count must be positive");
         assert!(
             layers <= UNIVMON_MAX_LAYERS,
-            "layer count must be at most MAX_LAYER_SIZE {UNIVMON_MAX_LAYERS}"
+            "layer count must be at most UNIVMON_MAX_LAYERS {UNIVMON_MAX_LAYERS}"
         );
-        let sk_vec: Vec<L2HH> = if layers <= elephant_layers {
+        let sk_vec: Vec<CountSketchWithL2Norm> = if layers <= elephant_layers {
             (0..layers)
                 .map(|i| {
-                    L2HH::COUNT(CountSketchWithL2Norm::with_dimensions_and_seed_index(
+                    CountSketchWithL2Norm::with_dimensions_and_seed_index(
                         elephant_rows,
                         elephant_cols,
                         i,
-                    ))
+                    )
                 })
                 .collect()
         } else {
             (0..elephant_layers)
                 .map(|i| {
-                    L2HH::COUNT(CountSketchWithL2Norm::with_dimensions_and_seed_index(
+                    CountSketchWithL2Norm::with_dimensions_and_seed_index(
                         elephant_rows,
                         elephant_cols,
                         i,
-                    ))
+                    )
                 })
                 .chain((elephant_layers..layers).map(|i| {
-                    L2HH::COUNT(CountSketchWithL2Norm::with_dimensions_and_seed_index(
-                        mouse_rows, mouse_cols, i,
-                    ))
+                    CountSketchWithL2Norm::with_dimensions_and_seed_index(mouse_rows, mouse_cols, i)
                 }))
                 .collect()
         };
@@ -217,7 +143,7 @@ impl UnivMonTwoTier {
     /// Creates a pyramid using built-in default dimensions.
     pub fn with_defaults() -> Self {
         Self::new(
-            DEFAULT_PYRAMID_HEAP,
+            DEFAULT_HEAP_SIZE,
             DEFAULT_ELEPHANT_LAYERS,
             DEFAULT_ELEPHANT_ROWS,
             DEFAULT_ELEPHANT_COLS,
@@ -227,23 +153,13 @@ impl UnivMonTwoTier {
         )
     }
 
-    #[inline(always)]
-    fn find_bottom_layer_num(&self, hash: u64) -> usize {
-        for l in 1..self.layers {
-            if ((hash >> l) & 1) == 0 {
-                return l - 1;
-            }
-        }
-        self.layers - 1
-    }
-
     /// Standard insert: updates sketch + heap at every layer 0..=bottom.
     pub fn update_weighted(&mut self, key: &DataInput, weight: i64) {
         self.begin_update(weight, UnivMonUpdateMode::Standard);
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
-        let bottom = self.find_bottom_layer_num(h);
+        let bottom = UnivMon::bottom_layer_for_hash(h, self.layers);
         for i in 0..=bottom {
-            let count = self.layer_sketches[i].update_and_est(key, weight);
+            let count = self.layer_sketches[i].update_weighted_and_estimate(key, weight);
             if !self.layer_heaps[i].update(key, count as i64) {
                 self.candidate_complete[i] = false;
             }
@@ -257,8 +173,8 @@ impl UnivMonTwoTier {
     pub fn update_weighted_terminal(&mut self, key: &DataInput, weight: i64) {
         self.begin_update(weight, UnivMonUpdateMode::Terminal);
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
-        let bottom = self.find_bottom_layer_num(h);
-        let count = self.layer_sketches[bottom].update_and_est(key, weight);
+        let bottom = UnivMon::bottom_layer_for_hash(h, self.layers);
+        let count = self.layer_sketches[bottom].update_weighted_and_estimate(key, weight);
         if !self.layer_heaps[bottom].update(key, count as i64) {
             self.candidate_complete[bottom] = false;
         }
@@ -289,7 +205,7 @@ impl UnivMonTwoTier {
 
         let mut tmp = 0.0;
         for item in self.layer_heaps[self.layers - 1].heap() {
-            let input = heap_item_to_sketch_input(&item.key);
+            let input = item.key.as_data_input();
             let count = self.layer_sketches[self.layers - 1].estimate(&input) as i64;
             if count > threshold_top {
                 tmp += g(count as f64);
@@ -307,7 +223,7 @@ impl UnivMonTwoTier {
             };
 
             for item in self.layer_heaps[i].heap() {
-                let input = heap_item_to_sketch_input(&item.key);
+                let input = item.key.as_data_input();
                 let count = self.layer_sketches[i].estimate(&input) as i64;
                 if count > threshold {
                     let hash = (hash64_seeded_owned(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &item.key)
@@ -369,7 +285,7 @@ impl UnivMonTwoTier {
         for level in (0..self.layers).rev() {
             suffix_complete &= self.candidate_complete[level];
             for item in self.layer_heaps[level].heap() {
-                let input = heap_item_to_sketch_input(&item.key);
+                let input = item.key.as_data_input();
                 let count = self.layer_sketches[level].estimate(&input) as i64;
                 cumulative
                     .entry(item.key.clone())
@@ -414,7 +330,7 @@ impl UnivMonTwoTier {
         self.estimate_g_sum(|x| x * x, false).sqrt()
     }
 
-    /// Returns the estimated entropy.
+    /// Returns the estimated Shannon entropy, in bits (log2).
     pub fn estimate_entropy(&self) -> f64 {
         if self.total_weight == 0 {
             return 0.0;
@@ -488,7 +404,7 @@ impl UnivMonTwoTier {
             self.layer_sketches[i].merge(&other.layer_sketches[i]);
             self.layer_heaps[i].clear();
             for key in candidate_keys {
-                let input = heap_item_to_sketch_input(&key);
+                let input = key.as_data_input();
                 let count = self.layer_sketches[i].estimate(&input) as i64;
                 self.layer_heaps[i].update(&input, count);
             }
@@ -507,63 +423,12 @@ mod tests {
     use super::*;
     use crate::DataInput;
 
-    #[test]
-    fn pool_basic_take_put() {
-        let mut pool = UnivMonPool::new(2, 16, 2, 5, 2);
-        assert_eq!(pool.available(), 2);
-        assert_eq!(pool.total_allocated(), 2);
-
-        let s0 = pool.take();
-        assert_eq!(pool.available(), 1);
-
-        let s1 = pool.take();
-        assert_eq!(pool.available(), 0);
-
-        // Pool is empty — next take allocates a new one
-        let s2 = pool.take();
-        assert_eq!(pool.available(), 0);
-        assert_eq!(pool.total_allocated(), 3);
-
-        // Return one
-        pool.put(s1);
-        assert_eq!(pool.available(), 1);
-
-        // Should reuse the returned sketch
-        let s3 = pool.take();
-        assert_eq!(pool.available(), 0);
-        assert_eq!(pool.total_allocated(), 3); // no new allocation
-
-        // Return all
-        pool.put(s0);
-        pool.put(s2);
-        pool.put(s3);
-        assert_eq!(pool.available(), 3);
-    }
-
-    #[test]
-    fn pool_free_resets_sketch() {
-        let mut pool = UnivMonPool::new(1, 16, 2, 5, 2);
-
-        // Take a sketch, insert some data
-        let mut sketch = pool.take();
-        sketch.update_weighted(&DataInput::I64(42), 100);
-        assert!(sketch.total_weight > 0);
-
-        // Return it — should reset
-        pool.put(sketch);
-
-        // Take it back — should be clean
-        let sketch2 = pool.take();
-        assert_eq!(sketch2.total_weight, 0);
-        assert!((sketch2.layer_sketches[0].l2()).abs() < 1e-9);
-    }
-
     // =======================================================================
     //                    UnivMonTwoTier tests
     // =======================================================================
 
     #[test]
-    fn pyramid_basic_insert_and_query() {
+    fn univmon_two_tier_basic_update_and_query() {
         let mut um = UnivMonTwoTier::with_defaults();
 
         let cases: Vec<(&str, i64)> = vec![("hello", 10), ("world", 20), ("hello", 5), ("foo", 30)];
@@ -582,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_fast_insert_matches_standard() {
+    fn univmon_two_tier_update_weighted_terminal_matches_standard() {
         // Both insert paths should produce identical sketches.
         // Retain the complete 100-key support so this tests construction
         // equivalence rather than independent candidate-sampling variance.
@@ -616,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_two_tier_dimensions() {
+    fn univmon_two_tier_dimensions() {
         // Verify elephant layers are larger than mouse layers.
         let um = UnivMonTwoTier::new(32, 4, 5, 2048, 3, 256, 8);
 
@@ -627,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_free_resets_state() {
+    fn univmon_two_tier_clear_resets_state() {
         let mut um = UnivMonTwoTier::with_defaults();
         for i in 0..100i64 {
             um.update_weighted(&DataInput::I64(i), 10);
@@ -640,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_merge_combines_data() {
+    fn univmon_two_tier_merge_combines_data() {
         let mut one_pass = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
         let mut left = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
         let mut right = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
@@ -659,8 +524,8 @@ mod tests {
         assert_eq!(left.total_weight, 1000);
         assert!(left.estimate_entropy().is_finite());
         for level in 0..left.layers {
-            let L2HH::COUNT(merged_count) = &left.layer_sketches[level];
-            let L2HH::COUNT(one_pass_count) = &one_pass.layer_sketches[level];
+            let merged_count = &left.layer_sketches[level];
+            let one_pass_count = &one_pass.layer_sketches[level];
             assert_eq!(
                 merged_count.as_storage().as_slice(),
                 one_pass_count.as_storage().as_slice(),
@@ -702,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_accuracy_zipf() {
+    fn univmon_two_tier_accuracy_zipf() {
         use std::collections::HashMap;
 
         let mut um = UnivMonTwoTier::new(64, 8, 5, 2048, 3, 512, 16);
@@ -732,7 +597,7 @@ mod tests {
             let rel = (est - truth).abs() / truth.max(1e-12);
             assert!(
                 rel < 0.15,
-                "Pyramid {name}: error {:.2}%, est={est:.2}, truth={truth:.2}",
+                "UnivMonTwoTier {name}: error {:.2}%, est={est:.2}, truth={truth:.2}",
                 rel * 100.0
             );
         };
@@ -744,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_fast_insert_accuracy() {
+    fn univmon_two_tier_update_weighted_terminal_accuracy() {
         use std::collections::HashMap;
 
         let mut um = UnivMonTwoTier::new(64, 8, 5, 2048, 3, 512, 16);
@@ -768,7 +633,7 @@ mod tests {
             let rel = (est - truth).abs() / truth.max(1e-12);
             assert!(
                 rel < 0.15,
-                "Pyramid fast {name}: error {:.2}%, est={est:.2}, truth={truth:.2}",
+                "UnivMonTwoTier terminal {name}: error {:.2}%, est={est:.2}, truth={truth:.2}",
                 rel * 100.0
             );
         };
@@ -780,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_memory_savings_vs_uniform() {
+    fn univmon_two_tier_memory_savings_vs_uniform() {
         // Pyramid with 16 layers should use less memory than a uniform
         // UnivMon with the same elephant dimensions at all 16 layers.
         // We verify this by comparing total sketch column counts.
@@ -795,7 +660,7 @@ mod tests {
 
         assert!(
             pyramid_cols < uniform_cols,
-            "Pyramid ({pyramid_cols}) should use fewer columns than uniform ({uniform_cols})"
+            "UnivMonTwoTier ({pyramid_cols}) should use fewer columns than uniform ({uniform_cols})"
         );
         // With defaults: pyramid = 8*2048 + 8*512 = 20480, uniform = 16*2048 = 32768
         // Savings = ~37.5%

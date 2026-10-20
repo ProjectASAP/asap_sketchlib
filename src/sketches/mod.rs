@@ -22,7 +22,7 @@
 //! sketches map values to rows and columns. Several specialized sketches in
 //! this module are feature-gated behind `experimental`.
 //!
-//! ## `*sketch` vs `*sketch_topk` files
+//! ## `*sketch` vs `*sketch_heap` files
 //!
 //! For each Count-Min / Count Sketch style algorithm we ship two files:
 //!
@@ -31,12 +31,12 @@
 //!   appear?" These do not track which keys are heavy hitters.
 //! - [`countminsketch_heap`] / [`countsketch_heap`] — the same sketch paired
 //!   with a min-heap that tracks the top-`k` heavy hitters as items stream in
-//!   ([`CountMinSketchWithHeap`], [`CountSketchWithHeap`] / [`CountSketchWithL2Norm`]). Use these when the question is
+//!   ([`CountMinSketchWithHeap`], [`CountSketchWithHeap`]). Use these when the question is
 //!   "which keys are the most frequent?" rather than "how often did this
 //!   specific key appear?"
 //!
 //! The split keeps the core sketch lean for callers that only need point
-//! queries, while the `_topk` variants compose the sketch with heap
+//! queries, while the `_heap` variants compose the sketch with heap
 //! bookkeeping for heavy-hitter workloads.
 
 pub mod coco;
@@ -110,10 +110,10 @@ pub mod countminsketch_heap;
 pub use countminsketch_heap::{CountMinSketchWithHeap, CountMinSketchWithHeapDelta};
 
 pub mod countsketch_heap;
-pub use countsketch_heap::CountSketchWithL2Norm;
-pub use countsketch_heap::{
-    CountSketchHeapCounter, CountSketchWithHeap, CountSketchWithHeapDelta, heap_count_from_estimate,
-};
+pub use countsketch_heap::{CountSketchHeapCounter, CountSketchWithHeap, CountSketchWithHeapDelta};
+
+pub mod countsketch_l2_norm;
+pub use countsketch_l2_norm::CountSketchWithL2Norm;
 
 pub mod countminsketch_space_saving;
 pub use countminsketch_space_saving::{CandidateCounter, CountMinSketchWithSpaceSaving};

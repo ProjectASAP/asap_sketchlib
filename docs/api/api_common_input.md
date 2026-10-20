@@ -15,30 +15,26 @@ Canonical input and ownership model shared across sketches/frameworks.
 - `HeapEntry<C: HeapCount = i64>`
 - `HydraQuery<'a>`
 - `HydraCounter`
-- `L2HH`
 
 `HydraQuery` and `HydraCounter` are defined in `asap_sketchlib::common::input`.
 
 ## Constructors / Conversions
 
 ```rust
-fn heap_item_to_sketch_input(item: &OwnedDataInput) -> DataInput<'_>
-fn input_to_owned(input: &DataInput<'_>) -> OwnedDataInput
+// OwnedDataInput
+fn as_data_input(&self) -> DataInput<'_>
+
+// DataInput
+fn to_owned_input(&self) -> OwnedDataInput
 
 // HeapEntry<C>
 fn from_input(k: DataInput, count: C) -> Self
 fn new(key: OwnedDataInput, count: C) -> Self
-fn init_item(k: DataInput, count: C) -> Self
 ```
 
 ## Insert/Update
 
 ```rust
-// L2HH
-fn update_and_est(&mut self, key: &DataInput, value: i64) -> f64
-fn update_and_est_without_l2(&mut self, key: &DataInput, value: i64) -> f64
-fn clear(&mut self)
-
 // HydraCounter
 fn update(&mut self, value: &DataInput, weight: Option<i32>)
 fn update_with_hash(
@@ -52,9 +48,6 @@ fn update_with_hash(
 ## Query
 
 ```rust
-// L2HH
-fn l2(&self) -> f64
-
 // HydraCounter
 fn query(&self, query: &HydraQuery) -> Result<f64, String>
 ```
@@ -62,16 +55,13 @@ fn query(&self, query: &HydraQuery) -> Result<f64, String>
 ## Merge
 
 ```rust
-// L2HH
-fn merge(&mut self, other: &L2HH)
-
 // HydraCounter
 fn merge(&mut self, other: &HydraCounter) -> Result<(), String>
 ```
 
 ## Serialization
 
-- `DataInput`, `OwnedDataInput`, `HeapEntry`, `HydraCounter`, and `L2HH` derive serde traits.
+- `DataInput`, `OwnedDataInput`, `HeapEntry`, and `HydraCounter` derive serde traits.
 - `HydraQuery` is query-only and does not derive serde in current code.
 
 ## Variants (Core)
@@ -116,14 +106,14 @@ follow the bytes: `-0.0 == 0.0` and `NaN == NaN`.
 ## Examples
 
 ```rust
-use asap_sketchlib::{DataInput, input_to_owned};
+use asap_sketchlib::DataInput;
 use asap_sketchlib::common::input::HydraQuery;
 
 let q = HydraQuery::Frequency(DataInput::Str("key"));
 let _ = q;
 
 let key = DataInput::String("flow".to_string());
-let _owned = input_to_owned(&key);
+let _owned = key.to_owned_input();
 ```
 
 ## See Also

@@ -244,7 +244,7 @@ impl FrequencyOps<i64> for HydraCsAdapter {
                 &[Some(key.to_string().as_str())],
                 &HydraQuery::Frequency(DataInput::Str(MEASURE)),
             )
-            .expect("Count counters answer frequency queries")
+            .expect("CountSketch counters answer frequency queries")
     }
 }
 
@@ -1277,7 +1277,7 @@ fn hydra_univmon_head_subpopulation_metrics() {
         if l1 != exact.total() as f64 {
             failures.push(format!("{key:?}: L1 {l1} != exact {}", exact.total()));
         }
-        // Bands from `univmon_weighted_metrics_and_fast_insert_parity`.
+        // Bands from `univmon_weighted_metrics_and_update_weighted_terminal_parity`.
         for (label, est, want, tol) in [
             (
                 "L2",
@@ -1482,7 +1482,7 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
 // ----------------------------------------------------------------- UnivMon
 
 #[test]
-fn univmon_weighted_metrics_and_fast_insert_parity() {
+fn univmon_weighted_metrics_and_update_weighted_terminal_parity() {
     let build = || UnivMon::new(32, 5, 2048, 8);
     let mut um = build();
     let mut fast = build();
@@ -1501,7 +1501,7 @@ fn univmon_weighted_metrics_and_fast_insert_parity() {
     assert_eq!(
         fast.estimate_l1(),
         total as f64,
-        "fast-insert L1 must be exact"
+        "terminal-update L1 must be exact"
     );
 
     let l2_truth = truth.l2_norm();
@@ -1533,7 +1533,7 @@ fn univmon_weighted_metrics_and_fast_insert_parity() {
 }
 
 #[test]
-fn univmon_pyramid_weighted_metrics() {
+fn univmon_two_tier_weighted_metrics() {
     let mut up = UnivMonTwoTier::with_defaults();
     let mut truth = common::FreqTruth::default();
     let stream = zipf_u64(15_000, 800, 1.3, 4004);
@@ -1699,7 +1699,7 @@ fn hydra_query_frequency_is_the_frequency_query_it_wraps() {
 }
 
 #[test]
-fn hydra_query_quantile_is_the_cumulative_query_it_wraps() {
+fn hydra_query_cdf_is_the_cumulative_query_it_wraps() {
     let mut hydra = Hydra::with_schema(
         4,
         512,
@@ -1728,13 +1728,13 @@ fn hydra_query_quantile_is_the_cumulative_query_it_wraps() {
             .expect("cdf query");
         assert_eq!(
             wrapper, explicit,
-            "x={x}: query_quantile disagreed with the query it wraps"
+            "x={x}: query_cdf disagreed with the query it wraps"
         );
         assert_between(
             wrapper,
             truth.cdf(x) - kll_eps,
             truth.cdf(x) + kll_eps,
-            &format!("Hydra query_quantile at x={x}"),
+            &format!("Hydra query_cdf at x={x}"),
         );
     }
 
@@ -1778,11 +1778,6 @@ fn univmon_generic_g_sum_reproduces_every_named_estimator() {
         um.estimate_l1().log2() - x_log_x / um.estimate_l1() - 1e-9,
         um.estimate_l1().log2() - x_log_x / um.estimate_l1() + 1e-9,
         "the entropy estimator is the x*log2(x) g-sum rearranged",
-    );
-    assert_eq!(
-        um.estimate_g_sum(|x| x * x, false),
-        um.calc_g_sum_heuristic(|x| x * x, false),
-        "the public g-sum must be the heuristic it delegates to"
     );
     assert_eq!(
         um.estimate_g_sum(|_| 0.0, false),
@@ -1915,12 +1910,12 @@ mod documented_matrix {
         assert_eq!(
             fast.estimate_l1(),
             l1,
-            "the fast-insert path's L1 must be exact. {context}"
+            "the terminal-update path's L1 must be exact. {context}"
         );
         assert_eq!(
             pyramid.estimate_l1(),
             l1,
-            "UnivMonPyramid L1 must be exact. {context}"
+            "UnivMonTwoTier L1 must be exact. {context}"
         );
 
         let entropy = truth.entropy(true);
@@ -1942,13 +1937,13 @@ mod documented_matrix {
             fast.estimate_l2(),
             l2 * (1.0 - UM_FAST_L2),
             l2 * (1.0 + UM_FAST_L2),
-            &format!("UnivMon fast-insert L2 on ({id}); {context}"),
+            &format!("UnivMon terminal-update L2 on ({id}); {context}"),
         );
         assert_between(
             pyramid.estimate_l2(),
             l2 * (1.0 - PYRAMID_L2),
             l2 * (1.0 + PYRAMID_L2),
-            &format!("UnivMonPyramid L2 on ({id}); {context}"),
+            &format!("UnivMonTwoTier L2 on ({id}); {context}"),
         );
 
         let distinct = truth.distinct() as f64;
@@ -1962,7 +1957,7 @@ mod documented_matrix {
             pyramid.estimate_cardinality(),
             distinct * (1.0 - PYRAMID_CARDINALITY),
             distinct * (1.0 + PYRAMID_CARDINALITY),
-            &format!("UnivMonPyramid cardinality on ({id}); {context}"),
+            &format!("UnivMonTwoTier cardinality on ({id}); {context}"),
         );
     }
 

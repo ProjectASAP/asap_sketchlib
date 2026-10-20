@@ -1,4 +1,4 @@
-# API: Elastic
+# API: ElasticSketch
 
 Status: `Ready`
 

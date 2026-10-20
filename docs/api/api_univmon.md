@@ -4,18 +4,30 @@ Status: `Ready`
 
 ## Purpose
 
-Universal stream-monitoring sketch for L1/L2/cardinality/entropy.
+Universal stream-monitoring sketch for L1/L2/cardinality/entropy, and a
+free-list pool of scratch `UnivMon`s.
 
 ## Type/Struct
 
 - `UnivMon`
+- `UnivMonPool`
 
 ## Constructors
 
 ```rust
 fn default() -> Self
 fn new(heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self
+
+// UnivMonPool
+fn new(initial_size: usize, heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self
+fn take(&mut self) -> UnivMon
+fn put(&mut self, sketch: UnivMon)
+fn available(&self) -> usize
+fn total_allocated(&self) -> usize
 ```
+
+`UnivMonPool` is a free-list of scratch `UnivMon`s rather than a sketch, and
+has no wire kind.
 
 `new` panics on a shape whose hashes would not be independent:
 
@@ -51,7 +63,8 @@ fn estimate_g_sum<F>(&self, g: F, heavy_only: bool) -> f64
 ```
 
 Because UnivMon accepts only non-negative updates, `estimate_l1()` returns the
-exact tracked total weight. The generic recurrence remains available through
+exact tracked total weight. `estimate_entropy()` is Shannon entropy in bits
+(log2); UnivMon-Q's is in nats. The generic recurrence remains available through
 `estimate_g_sum` for compatible frequency functions.
 
 ## Merge

@@ -350,7 +350,7 @@ fn build_pure(data: &[i64], config: UnivMonQConfig, fanout: usize) -> UnivMonQ {
         let end = (shard + 1) * data.len() / fanout;
         let mut sketch = UnivMonQ::new(config).unwrap();
         for value in &data[start..end] {
-            sketch.add(value);
+            sketch.update(value);
         }
         shards.push(sketch);
     }
@@ -372,7 +372,7 @@ fn build_occurrence(
         let mut core = UnivMonQ::new(config).unwrap();
         let mut sample = OccurrenceBottomK::new(capacity, seed);
         for (offset, &value) in data[start..end].iter().enumerate() {
-            core.add(&value);
+            core.update(&value);
             sample.update(value, (start + offset) as u64);
         }
         shards.push((core, sample));

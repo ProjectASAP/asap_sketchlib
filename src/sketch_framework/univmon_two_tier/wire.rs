@@ -15,7 +15,7 @@
 //! and the mouse dimensions after, so every per-layer geometry is derived and
 //! none is stored.
 //!
-//! [`UnivMonPool`](super::UnivMonPool) is a free-list of scratch
+//! [`UnivMonPool`](crate::UnivMonPool) is a free-list of scratch
 //! `UnivMon`s rather than a sketch, and has no wire kind.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
@@ -125,7 +125,7 @@ fn check_layout_dimensions(
         || mouse_cols == 0
     {
         return Err(format!(
-            "UnivMonPyramid layers, heap_size and both tiers' dimensions must be non-zero: layers={layers}, elephant_rows={elephant_rows}, elephant_cols={elephant_cols}, mouse_rows={mouse_rows}, mouse_cols={mouse_cols}, heap_size={heap_size}"
+            "UnivMonTwoTier layers, heap_size and both tiers' dimensions must be non-zero: layers={layers}, elephant_rows={elephant_rows}, elephant_cols={elephant_cols}, mouse_rows={mouse_rows}, mouse_cols={mouse_cols}, heap_size={heap_size}"
         ));
     }
     Ok(())
@@ -163,11 +163,11 @@ impl UnivMonTwoTier {
             self.mouse_cols,
         )
         .map_err(RmpEncodeError::Syntax)?;
-        check_layers("UnivMonPyramid", self.layers).map_err(RmpEncodeError::Syntax)?;
+        check_layers("UnivMonTwoTier", self.layers).map_err(RmpEncodeError::Syntax)?;
         let field = |name: &str, value: usize| {
             u32::try_from(value).map_err(|_| {
                 RmpEncodeError::Syntax(format!(
-                    "ASAPv1 UnivMonPyramid envelope: {name} {value} exceeds the u32 metadata field"
+                    "ASAPv1 UnivMonTwoTier envelope: {name} {value} exceeds the u32 metadata field"
                 ))
             })
         };
@@ -215,7 +215,7 @@ impl UnivMonTwoTier {
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != kind::UNIVMON_TWO_TIER {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "UnivMonPyramid kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_TWO_TIER:?}"
+                "UnivMonTwoTier kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_TWO_TIER:?}"
             )));
         }
         let meta: UnivMonTwoTierMetadata = envelope::decode_block(metadata)?;
@@ -235,7 +235,7 @@ impl UnivMonTwoTier {
             )
         {
             return Err(RmpDecodeError::Uncategorized(
-                "ASAPv1 UnivMonPyramid envelope: metadata mismatch".to_string(),
+                "ASAPv1 UnivMonTwoTier envelope: metadata mismatch".to_string(),
             ));
         }
         let (layers, heap_size) = (meta.layers as usize, meta.heap_size as usize);
@@ -254,7 +254,7 @@ impl UnivMonTwoTier {
             mouse_cols,
         )
         .map_err(RmpDecodeError::Uncategorized)?;
-        check_layers("UnivMonPyramid", layers).map_err(RmpDecodeError::Uncategorized)?;
+        check_layers("UnivMonTwoTier", layers).map_err(RmpDecodeError::Uncategorized)?;
         let decoded = decode_pyramid(&meta.key_type, payload)?;
         check_empty_key_type(&meta.key_type, decoded.entries.is_empty())
             .map_err(RmpDecodeError::Uncategorized)?;
@@ -262,7 +262,7 @@ impl UnivMonTwoTier {
         // actually carries before the geometry is built from it.
         if accumulator_count(layers, &layout) != Some(decoded.l2.len()) {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "UnivMonPyramid declares a layout the payload's {} accumulators do not match",
+                "UnivMonTwoTier declares a layout the payload's {} accumulators do not match",
                 decoded.l2.len()
             )));
         }
@@ -291,10 +291,10 @@ mod tests {
     use super::*;
     use crate::sketch_framework::univmon::UNIVMON_MAX_LAYERS;
     use crate::sketch_framework::univmon::wire::PyramidPayload;
-    use crate::sketches::countsketch_heap::CountSketchWithL2Norm;
+    use crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm;
     use crate::{
-        DEFAULT_CANONICAL_SEED_INDEX, DataInput, L2HH, MATRIX_MAX_ROWS, OwnedDataInput,
-        RegularPath, SketchHasher, Vector2D,
+        DEFAULT_CANONICAL_SEED_INDEX, DataInput, MATRIX_MAX_ROWS, OwnedDataInput, RegularPath,
+        SketchHasher, Vector2D,
     };
     use rmp_serde::from_slice;
 
@@ -326,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_round_trip_serialization() {
+    fn univmon_two_tier_round_trip_serialization() {
         let pyramid = populated();
         let encoded = pyramid.to_asapv1().expect("serialize");
         assert!(encoded.starts_with(b"ASAPv1"));
@@ -368,13 +368,13 @@ mod tests {
     /// The two tiers are derived from the layer's position: the elephant
     /// layers keep their dimensions and the mouse layers keep theirs.
     #[test]
-    fn pyramid_two_tier_geometry_survives() {
+    fn univmon_two_tier_geometry_survives() {
         let pyramid = populated();
         let encoded = pyramid.to_asapv1().expect("serialize");
         let decoded = UnivMonTwoTier::from_asapv1(&encoded).expect("decode");
         for layer in 0..pyramid.layers {
-            let L2HH::COUNT(original) = &pyramid.layer_sketches[layer];
-            let L2HH::COUNT(rebuilt) = &decoded.layer_sketches[layer];
+            let original = &pyramid.layer_sketches[layer];
+            let rebuilt = &decoded.layer_sketches[layer];
             let expected = if layer < 2 { (3, 16) } else { (2, 8) };
             assert_eq!((rebuilt.rows(), rebuilt.cols()), expected);
             assert_eq!(rebuilt.seed_index(), layer);
@@ -388,7 +388,7 @@ mod tests {
     /// Layers hold different numbers of entries: each layer's heap contents
     /// survive the round trip.
     #[test]
-    fn pyramid_layers_with_different_heap_loads_round_trip() {
+    fn univmon_two_tier_layers_with_different_heap_loads_round_trip() {
         let mut pyramid = UnivMonTwoTier::new(8, 2, 3, 32, 2, 16, 4);
         for key in 0..40u64 {
             pyramid.update_weighted(&DataInput::U64(key), 1 + (key as i64 % 5));
@@ -419,13 +419,13 @@ mod tests {
     /// A pyramid with no mouse layers is the one-tier case and still
     /// round-trips.
     #[test]
-    fn pyramid_without_mouse_layers_round_trips() {
+    fn univmon_two_tier_without_mouse_layers_round_trips() {
         let mut pyramid = UnivMonTwoTier::new(4, 4, 2, 16, 2, 8, 3);
         pyramid.update_weighted(&DataInput::U64(7), 3);
         let encoded = pyramid.to_asapv1().expect("serialize");
         let decoded = UnivMonTwoTier::from_asapv1(&encoded).expect("decode");
         for layer in 0..3 {
-            let L2HH::COUNT(rebuilt) = &decoded.layer_sketches[layer];
+            let rebuilt = &decoded.layer_sketches[layer];
             assert_eq!((rebuilt.rows(), rebuilt.cols()), (2, 16));
         }
         assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
@@ -434,7 +434,7 @@ mod tests {
     /// An empty pyramid has exactly one encoding.
     /// An empty pyramid carries `key_type` `"u64"`; any other name is rejected.
     #[test]
-    fn pyramid_empty_must_carry_the_u64_key_type() {
+    fn univmon_two_tier_empty_must_carry_the_u64_key_type() {
         use crate::sketches::countminsketch_heap::heap_wire::relabel_u64_key_type;
         let bytes = UnivMonTwoTier::new(4, 2, 3, 16, 2, 8, 4)
             .to_asapv1()
@@ -448,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_empty_has_one_encoding() {
+    fn univmon_two_tier_empty_has_one_encoding() {
         let left = UnivMonTwoTier::new(4, 2, 3, 16, 2, 8, 4);
         let mut right = UnivMonTwoTier::new(4, 2, 3, 16, 2, 8, 4);
         right.update_weighted(&DataInput::Str("alpha"), 5);
@@ -463,7 +463,7 @@ mod tests {
 
     /// `update_mode` and `candidate_complete` are state, not derived.
     #[test]
-    fn pyramid_carries_update_mode_and_candidate_flags() {
+    fn univmon_two_tier_carries_update_mode_and_candidate_flags() {
         let mut terminal = UnivMonTwoTier::new(2, 1, 2, 8, 2, 8, 3);
         for key in 0..20u64 {
             terminal.update_weighted_terminal(&DataInput::U64(key), 3);
@@ -530,7 +530,7 @@ mod tests {
     /// profile: (a) it emits that profile, (b) a custom-profile envelope is
     /// different bytes, and (c) decode fails closed on it.
     #[test]
-    fn pyramid_pins_its_hash_profile() {
+    fn univmon_two_tier_pins_its_hash_profile() {
         let encoded = populated().to_asapv1().expect("serialize");
         let meta = metadata_of(&encoded);
         assert_eq!(meta.hash_profile_id, DefaultXxHasher::PROFILE_ID);
@@ -565,13 +565,13 @@ mod tests {
     /// Each family's envelope is rejected by the other three, and by a plain
     /// Count Sketch envelope.
     #[test]
-    fn pyramid_rejects_foreign_kind_ids() {
+    fn univmon_two_tier_rejects_foreign_kind_ids() {
         let count_sketch = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
             .to_asapv1()
             .expect("serialize Count Sketch");
         let count_l2hh = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(2, 8)
             .to_asapv1()
-            .expect("serialize CountL2HH");
+            .expect("serialize CountSketchWithL2Norm");
         let univmon = crate::UnivMon::new(4, 2, 8, 2)
             .to_asapv1()
             .expect("serialize UnivMon");
@@ -590,7 +590,7 @@ mod tests {
         for foreign in [count_sketch, count_l2hh, univmon, univmon_q] {
             assert!(
                 UnivMonTwoTier::from_asapv1(&foreign).is_err(),
-                "a foreign envelope must not decode as a UnivMonPyramid"
+                "a foreign envelope must not decode as a UnivMonTwoTier"
             );
         }
     }
@@ -599,7 +599,7 @@ mod tests {
     /// capacities, including a `layers` far larger than the payload
     /// carries.
     #[test]
-    fn pyramid_rejects_crafted_shapes() {
+    fn univmon_two_tier_rejects_crafted_shapes() {
         let encoded = populated().to_asapv1().expect("serialize");
         let base = metadata_of(&encoded);
         let payload = payload_of::<String>(&encoded);
@@ -701,7 +701,7 @@ mod tests {
     /// a pyramid decoded with zero mouse dimensions panics on any merge
     /// against a normally built one.
     #[test]
-    fn pyramid_rejects_zero_dimensions_of_a_tier_it_never_materializes() {
+    fn univmon_two_tier_rejects_zero_dimensions_of_a_tier_it_never_materializes() {
         let mut one_tier = UnivMonTwoTier::new(4, 4, 2, 16, 2, 8, 3);
         one_tier.update_weighted(&DataInput::U64(7), 3);
         let encoded = one_tier.to_asapv1().expect("serialize");
@@ -721,7 +721,7 @@ mod tests {
     /// runs the same `check_distinct_keys` per layer, so the pyramid never
     /// emits it.
     #[test]
-    fn pyramid_refuses_to_serialize_a_layer_holding_a_key_twice() {
+    fn univmon_two_tier_refuses_to_serialize_a_layer_holding_a_key_twice() {
         let mut nans = UnivMonTwoTier::new(4, 2, 3, 16, 2, 8, 4);
         nans.layer_heaps[2].update(&DataInput::F64(f64::NAN), 5);
         nans.layer_heaps[2].update(&DataInput::F64(f64::NAN), 4);
@@ -746,7 +746,7 @@ mod tests {
     /// refuses a zero dimension, so the encoder must too. Each case below is
     /// built by writing the public field directly.
     #[test]
-    fn pyramid_refuses_to_serialize_a_zero_dimension() {
+    fn univmon_two_tier_refuses_to_serialize_a_zero_dimension() {
         for zero in [
             "layers",
             "heap_size",
@@ -776,7 +776,7 @@ mod tests {
     /// [`UNIVMON_MAX_LAYERS`] layers is the ceiling: the boundary round-trips and a
     /// deeper pyramid is refused at the decode door.
     #[test]
-    fn pyramid_rejects_layers_past_the_shift_bound() {
+    fn univmon_two_tier_rejects_layers_past_the_shift_bound() {
         let deepest = UnivMonTwoTier::new(4, 2, 2, 16, 2, 8, UNIVMON_MAX_LAYERS);
         let encoded = deepest.to_asapv1().expect("serialize");
         assert!(UnivMonTwoTier::from_asapv1(&encoded).is_ok());
@@ -792,32 +792,30 @@ mod tests {
         let problem = UnivMonTwoTier::from_asapv1(&crafted(&meta, &payload))
             .expect_err("a pyramid past the shift bound must be rejected")
             .to_string();
-        assert!(problem.contains("MAX_LAYER_SIZE"), "got {problem}");
+        assert!(problem.contains("UNIVMON_MAX_LAYERS"), "got {problem}");
     }
 
     #[test]
-    #[should_panic(expected = "at most MAX_LAYER_SIZE")]
-    fn pyramid_refuses_constructing_past_the_shift_bound() {
+    #[should_panic(expected = "at most UNIVMON_MAX_LAYERS")]
+    fn univmon_two_tier_refuses_constructing_past_the_shift_bound() {
         UnivMonTwoTier::new(4, 2, 2, 16, 2, 8, UNIVMON_MAX_LAYERS + 1);
     }
 
     /// A pyramid whose layers disagree with their declared tier or seed index
     /// must not serialize.
     #[test]
-    fn pyramid_rejects_serializing_an_inconsistent_layout() {
+    fn univmon_two_tier_rejects_serializing_an_inconsistent_layout() {
         let mut wrong_tier = UnivMonTwoTier::new(4, 2, 3, 16, 2, 8, 4);
-        wrong_tier.layer_sketches[3] = L2HH::COUNT(
-            CountSketchWithL2Norm::with_dimensions_and_seed_index(3, 16, 3),
-        );
+        wrong_tier.layer_sketches[3] =
+            CountSketchWithL2Norm::with_dimensions_and_seed_index(3, 16, 3);
         assert!(
             wrong_tier.to_asapv1().is_err(),
             "a mouse layer holding elephant dimensions must not serialize"
         );
 
         let mut wrong_seed = UnivMonTwoTier::new(4, 2, 3, 16, 2, 8, 4);
-        wrong_seed.layer_sketches[3] = L2HH::COUNT(
-            CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 8, 0),
-        );
+        wrong_seed.layer_sketches[3] =
+            CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 8, 0);
         assert!(
             wrong_seed.to_asapv1().is_err(),
             "a layer hashing at another layer's seed index must not serialize"
@@ -826,7 +824,7 @@ mod tests {
     /// Fail closed on an unexpected metadata key, and on a missing required
     /// one.
     #[test]
-    fn pyramid_metadata_rejects_unknown_and_missing_keys() {
+    fn univmon_two_tier_metadata_rejects_unknown_and_missing_keys() {
         #[derive(Serialize)]
         struct WithExtra {
             metadata_version: u8,

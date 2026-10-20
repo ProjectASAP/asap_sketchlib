@@ -26,7 +26,7 @@ use asap_sketchlib::{
     CountSketchWithHeap, CountSketchWithHeapDelta, CountSketchWithL2Norm,
     CountSketchWithSpaceSaving, DataInput, DdSketch, DdSketchDelta, ElasticSketch, Ertl, FastPath,
     HeapCount, HeavyBucket, HllRegistersP14, Hydra, HyperLogLog, HyperLogLogDelta,
-    HyperLogLogHipP12, HyperLogLogHipP14, HyperLogLogP12, HyperLogLogP14, Kll, KllDynamic, L2HH,
+    HyperLogLogHipP12, HyperLogLogHipP14, HyperLogLogP12, HyperLogLogP14, Kll, KllDynamic,
     OwnedDataInput, RegularPath, SetAggregator, SetAggregatorDelta, TopKHeap, UnivMon, Vector2D,
     peek_kind_id,
 };
@@ -1052,7 +1052,7 @@ fn kll_dynamic_f64_k200_matches_golden() {
 
     let sketch = kll_dynamic_of(&KLL_DYN_F64_VALS);
     let got = sketch.to_asapv1().expect("serialize");
-    assert_eq!(got, want, "KLLDynamic f64 bytes diverge from golden");
+    assert_eq!(got, want, "KllDynamic f64 bytes diverge from golden");
 
     let decoded = KllDynamic::<f64>::from_asapv1(&want).expect("decode");
     assert_eq!(decoded.count(), KLL_DYN_F64_VALS.len());
@@ -1073,7 +1073,7 @@ fn kll_dynamic_i64_k200_matches_golden() {
 
     let sketch = kll_dynamic_of(&KLL_DYN_I64_VALS);
     let got = sketch.to_asapv1().expect("serialize");
-    assert_eq!(got, want, "KLLDynamic i64 bytes diverge from golden");
+    assert_eq!(got, want, "KllDynamic i64 bytes diverge from golden");
 
     let decoded = KllDynamic::<i64>::from_asapv1(&want).expect("decode");
     assert_eq!(decoded.count(), KLL_DYN_I64_VALS.len());
@@ -1319,7 +1319,7 @@ const COCO_CELLS: [(usize, usize, &str, u64); 15] = [
 fn coco_3x7_matches_golden() {
     let want = decode_hex(GOLDEN_COCO);
 
-    let mut sketch: CocoSketch = CocoSketch::init_with_size(7, 3);
+    let mut sketch: CocoSketch = CocoSketch::with_dimensions(3, 7);
     for (r, c, key, val) in COCO_CELLS {
         sketch.table[r][c] = CocoBucket {
             full_key: Some(key.to_string()),
@@ -1467,7 +1467,7 @@ fn univmon_known(keys: [DataInput<'_>; 6]) -> UnivMon {
 fn univmon_counts(um: &UnivMon) -> Vec<i64> {
     (0..um.layers)
         .flat_map(|layer| {
-            let L2HH::COUNT(counter) = &um.layer_sketches[layer];
+            let counter = &um.layer_sketches[layer];
             counter.as_storage().as_slice().to_vec()
         })
         .collect()
@@ -1549,7 +1549,7 @@ fn count_l2hh_2x4_seed7_matches_golden() {
     let sketch: CountSketchWithL2Norm =
         rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state");
     let got = sketch.to_asapv1().expect("serialize");
-    assert_eq!(got, want, "CountL2HH bytes diverge from golden");
+    assert_eq!(got, want, "CountSketchWithL2Norm bytes diverge from golden");
 
     let decoded: CountSketchWithL2Norm = CountSketchWithL2Norm::from_asapv1(&want).expect("decode");
     assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
@@ -1586,8 +1586,8 @@ fn assert_same_grid(got: &Hydra, want: &Hydra) {
     for (i, (g, w)) in cells.enumerate() {
         let same = match (g, w) {
             (HydraCounter::Kll(g), HydraCounter::Kll(w)) => {
-                (g.wire_k(), g.m(), g.level_bounds_top_down(), g.coin_state())
-                    == (w.wire_k(), w.m(), w.level_bounds_top_down(), w.coin_state())
+                (g.k(), g.m(), g.level_bounds_top_down(), g.coin_state())
+                    == (w.k(), w.m(), w.level_bounds_top_down(), w.coin_state())
                     && g.items_top_down() == w.items_top_down()
             }
             (HydraCounter::CountMinSketch(g), HydraCounter::CountMinSketch(w)) => {
@@ -2003,7 +2003,7 @@ fn univmon_optimized_l5_e2_3x8_1x4_h6_matches_golden() {
     );
     assert_eq!(shape, (5, 2, 3, 8, 1, 4, 6, 70));
     for (layer, rows) in pyramid_layers().iter().enumerate() {
-        let L2HH::COUNT(counter) = &decoded.layer_sketches[layer];
+        let counter = &decoded.layer_sketches[layer];
         let flat: Vec<i64> = rows.iter().flatten().map(|&v| i64::from(v)).collect();
         assert_eq!(counter.as_storage().as_slice(), flat.as_slice());
         let mut heap: Vec<(String, i64)> = decoded.layer_heaps[layer]

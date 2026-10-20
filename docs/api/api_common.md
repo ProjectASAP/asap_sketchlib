@@ -21,7 +21,6 @@ src/common/
 ├── structure_utils.rs      # Nitro and median utility
 ├── precompute_hash.rs      # PRECOMPUTED_HASH
 ├── precompute_sample.rs    # LN_ONE_MINUS_U_TABLE
-├── precompute_sample2.rs   # PRECOMPUTED_SAMPLE_RATE_1PERCENT
 └── structures/
     ├── vector1d.rs
     ├── vector2d.rs
@@ -37,8 +36,7 @@ src/common/
 ```rust
 use asap_sketchlib::common::{
     // Input layer
-    DataInput, OwnedDataInput, HeapEntry, L2HH,
-    input_to_owned, heap_item_to_sketch_input,
+    DataInput, OwnedDataInput, HeapEntry,
 
     // Hash layer
     SketchHasher, DefaultXxHasher,
@@ -69,7 +67,6 @@ use asap_sketchlib::common::{
     // Precomputed assets
     PRECOMPUTED_HASH,
     LN_ONE_MINUS_U_TABLE,
-    PRECOMPUTED_SAMPLE_RATE_1PERCENT,
 };
 ```
 

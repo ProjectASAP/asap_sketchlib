@@ -1,12 +1,10 @@
-//! Probe: do `sketches::*` defaults already produce Go-byte-parity output,
-//! making a separate hashspec-direct path inside the wire-format-aligned
-//! types unnecessary?
+//! Probe: `sketches::*` defaults produce Go-byte-parity output.
 //!
 //! Approach: reuse the exact same Go-golden envelopes that the
 //! `message_pack_format::portable` parity tests use, but build the
 //! matrix via `sketches::CountSketch` / `sketches::CountMinSketch` with `FastPath`
 //! and `DefaultXxHasher`. Identical bytes confirm the shared FastPath
-//! math is sufficient — no hashspec bypass needed.
+//! math is sufficient.
 
 use asap_sketchlib::common::DataInput;
 use asap_sketchlib::common::hash::DEFAULT_CANONICAL_SEED_INDEX;
@@ -49,7 +47,7 @@ const HLL_GOLDEN_HEX: &str = include_str!("../src/sketches/testdata/hll_envelope
 const DDSKETCH_GOLDEN_HEX: &str = "0801728e03096214ae47e17a843f128003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000100000000000000000000000000000100000000000000000000010000000000000000010000000000000001000000000001000000000001000000000001000000010000000001000000010000010000000100000100000100000100000100010000010001000100010001000100010001000100010100010100010100010101000101010100010101010101010100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000187f";
 
 #[test]
-fn sketches_count_fastpath_matches_go_count_sketch_envelope() {
+fn sketches_count_sketch_fastpath_matches_go_count_sketch_envelope() {
     let rows = 3usize;
     let cols = 512usize;
 
@@ -96,7 +94,7 @@ fn sketches_count_fastpath_matches_go_count_sketch_envelope() {
     assert_eq!(
         got,
         want,
-        "sketches::Count<Vector2D<i64>, FastPath> envelope diverges from Go golden \
+        "sketches::CountSketch<Vector2D<i64>, FastPath> envelope diverges from Go golden \
          ({} bytes got vs {} bytes want)",
         got.len(),
         want.len(),
@@ -157,13 +155,13 @@ fn sketches_countmin_fastpath_matches_go_count_min_envelope() {
     assert_eq!(
         got.len(),
         want.len(),
-        "CountMin envelope length: got {} want {}",
+        "CountMinSketch envelope length: got {} want {}",
         got.len(),
         want.len(),
     );
     assert_eq!(
         got, want,
-        "sketches::CountMin<Vector2D<f64>, FastPath> envelope diverges from Go golden",
+        "sketches::CountMinSketch<Vector2D<f64>, FastPath> envelope diverges from Go golden",
     );
 }
 
@@ -214,7 +212,7 @@ fn sketches_hll_classic_matches_go_envelope() {
     );
     assert_eq!(
         got, want,
-        "sketches::HyperLogLogImpl<ErtlMLE, P14> envelope diverges from Go golden",
+        "sketches::HyperLogLogImpl<Ertl, P14> envelope diverges from Go golden",
     );
 }
 

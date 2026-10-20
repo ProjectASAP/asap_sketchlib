@@ -55,7 +55,7 @@ fn main() {
         "bundle: HLL(p=14) + {DEPTH}x{BUNDLE_WIDTH} CountSketch(i32) + SpaceSaving({BUNDLE_CANDIDATES}) + occurrence bottom-k({BUNDLE_RESERVOIR}) + KLL(k={BUNDLE_KLL_K}) + exact count/extrema"
     );
     println!(
-        "Q-matched: width={}, candidates={}; Q-quality: width={}, candidates={}; both use {} ordered samples",
+        "Q-matched: top_layer_cols={}, heap_size={}; Q-quality: top_layer_cols={}, heap_size={}; both use {} ordered samples",
         q_matched.top_layer_cols,
         q_matched.heap_size,
         q_quality.top_layer_cols,
@@ -196,7 +196,7 @@ fn timed_q(data: &[i64], config: UnivMonQConfig) -> (UnivMonQ, Duration) {
         let mut sketch = UnivMonQ::new(config).unwrap();
         let start = Instant::now();
         for value in data {
-            sketch.add(value);
+            sketch.update(value);
         }
         times.push(start.elapsed());
         retained = Some(sketch);
@@ -224,10 +224,10 @@ fn merged_q(data: &[i64], config: UnivMonQConfig) -> (UnivMonQ, Duration) {
     let mut left = UnivMonQ::new(config).unwrap();
     let mut right = UnivMonQ::new(config).unwrap();
     for value in &data[..midpoint] {
-        left.add(value);
+        left.update(value);
     }
     for value in &data[midpoint..] {
-        right.add(value);
+        right.update(value);
     }
     let mut times = Vec::with_capacity(MERGE_REPEATS);
     for _ in 0..MERGE_REPEATS {

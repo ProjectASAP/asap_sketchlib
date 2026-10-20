@@ -63,7 +63,7 @@ Compared against: an exact `HashMap` count, columns via the public `hash_for_mat
 - paths
   - `cells(S(xs)) == cells(S(perm(xs)))`
   - `update_weighted(k, n) == n x update(k)`, cell for cell
-  - `update_weighted_batch_with_hashes == insert_many`, cell for cell
+  - `update_weighted_batch_with_hashes == update_weighted`, cell for cell
   - `DefaultMatrixI32`, `QuickMatrixI64` == `Vector2D`, cell for cell, at their fixed geometries
 - estimator
   - `estimate(k)` never drops on a non-negative insert; all 32 keys probed after every insert

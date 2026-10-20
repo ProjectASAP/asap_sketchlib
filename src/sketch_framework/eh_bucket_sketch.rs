@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::sketches::*;
 use super::UnivMon;
-use crate::sketches::countsketch_heap::CountSketchWithL2Norm;
+use crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm;
 
 pub(crate) mod wire;
 
@@ -272,9 +272,9 @@ impl EhBucketSketch {
     /// Get the type of sketch as a string
     pub fn sketch_type(&self) -> &'static str {
         match self {
-            EhBucketSketch::CountMinSketch(_) => "CountMin",
+            EhBucketSketch::CountMinSketch(_) => "CountMinSketch",
             EhBucketSketch::CocoSketch(_) => "Coco",
-            EhBucketSketch::CountSketchWithL2Norm(_) => "CountL2HH",
+            EhBucketSketch::CountSketchWithL2Norm(_) => "CountSketchWithL2Norm",
             EhBucketSketch::CountSketch(_) => "CountSketch",
             EhBucketSketch::DdSketch(_) => "DDSketch",
             EhBucketSketch::ElasticSketch(_) => "Elastic",
@@ -292,7 +292,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn insert_routes_to_countl2hh_and_univmon() {
+    fn update_routes_to_count_sketch_with_l2_norm_and_univmon() {
         let key = DataInput::I64(7);
 
         let mut count_l2hh =
@@ -300,10 +300,10 @@ mod tests {
         for _ in 0..9 {
             count_l2hh.update(&key);
         }
-        let l2hh_est = count_l2hh.query(&key).expect("query COUNTL2HH");
+        let l2hh_est = count_l2hh.query(&key).expect("query CountSketchWithL2Norm");
         assert!(
             l2hh_est >= 9.0,
-            "expected COUNTL2HH estimate >= 9, got {l2hh_est}"
+            "expected CountSketchWithL2Norm estimate >= 9, got {l2hh_est}"
         );
 
         let mut um = EhBucketSketch::UnivMon(UnivMon::default());
@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn count_sketch_insert_and_query_round_trip() {
+    fn count_sketch_update_and_query_round_trip() {
         let mut cs = EhBucketSketch::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::default());
         let key = DataInput::I64(11);
         cs.update(&key);
@@ -326,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn ddsketch_insert_and_quantile_query_round_trip() {
+    fn ddsketch_update_and_quantile_query_round_trip() {
         let mut dd = EhBucketSketch::DdSketch(DdSketch::new(0.01));
         dd.update(&DataInput::F64(10.0));
         dd.update(&DataInput::F64(20.0));

@@ -9,7 +9,7 @@ use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, grid, keys};
 use asap_sketchlib::{
     CountMinSketch, CountMinSketchWithHeap, CountSketch, CountSketchWithHeap,
     CountSketchWithL2Norm, DataInput, DefaultXxHasher, FastPath, RegularPath, TopKHeap, Vector2D,
-    heap_count_from_estimate, heap_item_to_sketch_input,
+    sketches::CountSketchHeapCounter,
 };
 use proptest::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -150,7 +150,7 @@ proptest! {
     // ===== A top-k wrapper must not disturb its inner matrix =====
 
     #[test]
-    fn cms_heap_leaves_the_matrix_a_bare_count_min_would_build(
+    fn count_min_sketch_with_heap_leaves_the_matrix_a_bare_count_min_would_build(
         rows in 1usize..6,
         cols in 1usize..64,
         top_k in 1usize..16,
@@ -167,7 +167,7 @@ proptest! {
     }
 
     #[test]
-    fn cs_heap_leaves_the_matrix_a_bare_count_sketch_would_build(
+    fn count_sketch_with_heap_leaves_the_matrix_a_bare_count_sketch_would_build(
         rows in 1usize..6,
         cols in 1usize..64,
         top_k in 1usize..16,
@@ -186,7 +186,7 @@ proptest! {
     // ===== Wire =====
 
     #[test]
-    fn cms_heap_round_trips_at_edge_geometries(
+    fn count_min_sketch_with_heap_round_trips_at_edge_geometries(
         rows in edge_rows(),
         cols in edge_dimension(),
         top_k in 0usize..16,
@@ -208,7 +208,7 @@ proptest! {
     }
 
     #[test]
-    fn cs_heap_round_trips_at_edge_geometries(
+    fn count_sketch_with_heap_round_trips_at_edge_geometries(
         rows in edge_rows(),
         cols in edge_dimension(),
         top_k in 0usize..16,
@@ -260,7 +260,7 @@ proptest! {
     /// A Count Sketch estimate is a signed median and moves either way, so the
     /// resident's count is pinned to the reading its own last insert took.
     #[test]
-    fn a_cs_resident_carries_the_estimate_its_last_insert_read(
+    fn a_cs_resident_carries_the_estimate_its_last_update_read(
         rows in 1usize..5,
         cols in 1usize..32,
         top_k in 1usize..12,
@@ -271,7 +271,7 @@ proptest! {
         for k in &stream {
             let probe = DataInput::U64(*k);
             wrapped.update(&probe);
-            read_at_last_insert.insert(*k, heap_count_from_estimate(wrapped.estimate(&probe)));
+            read_at_last_insert.insert(*k, <i64 as CountSketchHeapCounter>::heap_count(wrapped.estimate(&probe)));
         }
 
         for (key, expected) in read_at_last_insert {
@@ -282,7 +282,7 @@ proptest! {
     }
 
     #[test]
-    fn neither_wrapper_lets_its_heap_outgrow_top_k(
+    fn neither_wrapper_lets_its_heap_outgrow_heap_size(
         rows in 1usize..5,
         cols in 1usize..32,
         top_k in 0usize..12,
@@ -410,7 +410,7 @@ proptest! {
         cs.merge(&cs_other);
 
         for item in cms.heap().heap() {
-            let probe = heap_item_to_sketch_input(&item.key);
+            let probe = item.key.as_data_input();
             prop_assert_eq!(
                 item.count,
                 i64::from(cms.estimate(&probe)),
@@ -418,10 +418,10 @@ proptest! {
             );
         }
         for item in cs.heap().heap() {
-            let probe = heap_item_to_sketch_input(&item.key);
+            let probe = item.key.as_data_input();
             prop_assert_eq!(
                 item.count,
-                heap_count_from_estimate(cs.estimate(&probe)),
+                <i64 as CountSketchHeapCounter>::heap_count(cs.estimate(&probe)),
                 "CS key {:?}", item.key
             );
         }
@@ -468,7 +468,7 @@ proptest! {
     /// An OctoSketch worker addresses cells with `CountSketchWithL2Norm::cell_for_row` and its
     /// parent with the sketch's own insert, so the two must name one cell.
     #[test]
-    fn count_l2hh_writes_the_cells_the_shared_map_names(
+    fn count_sketch_with_l2_norm_writes_the_cells_the_shared_map_names(
         rows in 1usize..6,
         cols in edge_dimension(),
         updates in hashed_updates(64),
@@ -494,7 +494,7 @@ proptest! {
     /// The read path resolves its own cells and signs; a key inserted alone
     /// comes back exactly, whatever cells the map chose for it.
     #[test]
-    fn count_l2hh_reads_back_the_cells_the_shared_map_names(
+    fn count_sketch_with_l2_norm_reads_back_the_cells_the_shared_map_names(
         rows in 1usize..6,
         cols in edge_dimension(),
         updates in hashed_updates(64),
@@ -539,7 +539,7 @@ proptest! {
     }
 
     #[test]
-    fn merging_count_l2hh_adds_the_cells_and_re_derives_the_l2(
+    fn merging_count_sketch_with_l2_norm_adds_the_cells_and_re_derives_the_l2(
         rows in 1usize..6,
         cols in edge_dimension(),
         left in hashed_updates(64),

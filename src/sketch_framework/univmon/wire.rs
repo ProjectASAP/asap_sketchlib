@@ -17,7 +17,7 @@
 //!
 //! Each layer is a `CountSketchWithL2Norm` plus an `TopKHeap`. Their state is written
 //! straight into UnivMon's own positional array through
-//! [`l2hh_wire::layer_state`] and [`heap_entries`]; no layer carries an
+//! [`l2_norm_wire::layer_state`] and [`heap_entries`]; no layer carries an
 //! envelope, a magic or a metadata map of its own.
 //!
 //! ## The hash profile is the crate default
@@ -42,8 +42,10 @@ use crate::sketches::countminsketch_heap::heap_wire::{
     EMPTY_KEY_TYPE, check_distinct_keys, check_empty_key_type, heap_entries, key_type_of,
     rebuild_heap,
 };
-use crate::sketches::countsketch_heap::l2hh_wire;
-use crate::{DefaultXxHasher, HashProfile, L2HH, OwnedDataInput, TopKHeap, Vector1D};
+use crate::sketches::countsketch_l2_norm::wire as l2_norm_wire;
+use crate::{
+    CountSketchWithL2Norm, DefaultXxHasher, HashProfile, OwnedDataInput, TopKHeap, Vector1D,
+};
 
 use super::{UNIVMON_MAX_LAYERS, UnivMon, UnivMonUpdateMode};
 
@@ -145,7 +147,7 @@ pub(crate) fn update_mode_of(tag: u8) -> Result<UnivMonUpdateMode, RmpDecodeErro
 pub(crate) fn check_layers(sketch: &str, layers: usize) -> Result<(), String> {
     if layers > UNIVMON_MAX_LAYERS {
         return Err(format!(
-            "{sketch} layer_size {layers} exceeds MAX_LAYER_SIZE {UNIVMON_MAX_LAYERS}"
+            "{sketch} layers {layers} exceeds UNIVMON_MAX_LAYERS {UNIVMON_MAX_LAYERS}"
         ));
     }
     Ok(())
@@ -162,7 +164,7 @@ pub(crate) fn check_univmon_dimensions(
 ) -> Result<(), String> {
     if layers == 0 || rows == 0 || cols == 0 || heap_size == 0 {
         return Err(format!(
-            "UnivMon layer_size, sketch_row, sketch_col and heap_size must be non-zero: layer_size={layers}, sketch_row={rows}, sketch_col={cols}, heap_size={heap_size}"
+            "UnivMon layers, rows, cols and heap_size must be non-zero: layers={layers}, rows={rows}, cols={cols}, heap_size={heap_size}"
         ));
     }
     Ok(())
@@ -187,7 +189,7 @@ pub(crate) struct PyramidState<'a> {
 /// layer's seed index is not its position, when a layer's heap holds the same
 /// wire key twice, or when the heaps hold more entries than `u32` can name.
 pub(crate) fn pyramid_state<'a>(
-    sketches: &'a Vector1D<L2HH>,
+    sketches: &'a Vector1D<CountSketchWithL2Norm>,
     heaps: &'a Vector1D<TopKHeap>,
     geometry: &[(usize, usize)],
     bucket_size: usize,
@@ -223,7 +225,7 @@ pub(crate) fn pyramid_state<'a>(
         update_mode,
     };
     for (layer, &(rows, cols)) in geometry.iter().enumerate() {
-        let L2HH::COUNT(counter) = &sketches[layer];
+        let counter = &sketches[layer];
         if (counter.rows(), counter.cols()) != (rows, cols) {
             return Err(RmpEncodeError::Syntax(format!(
                 "ASAPv1 UnivMon envelope: layer {layer} is {}x{} against the declared {rows}x{cols}",
@@ -237,7 +239,7 @@ pub(crate) fn pyramid_state<'a>(
                 counter.seed_index()
             )));
         }
-        let (counts, l2) = l2hh_wire::layer_state(counter)?;
+        let (counts, l2) = l2_norm_wire::layer_state(counter)?;
         state.counts.extend_from_slice(counts);
         state.l2.extend_from_slice(l2);
         let entries = heap_entries(&heaps[layer]);
@@ -462,7 +464,13 @@ pub(crate) fn decode_pyramid(
 }
 
 /// The counters and heaps one decoded pyramid rebuilds into.
-pub(crate) type DecodedLayers = (Vector1D<L2HH>, Vector1D<TopKHeap>, Vec<bool>, usize, u8);
+pub(crate) type DecodedLayers = (
+    Vector1D<CountSketchWithL2Norm>,
+    Vector1D<TopKHeap>,
+    Vec<bool>,
+    usize,
+    u8,
+);
 
 /// Seats the decoded layers, rebuilding every counter matrix and heap index.
 ///
@@ -478,20 +486,20 @@ pub(crate) fn rebuild_layers(
     let complain = |problem: String| RmpDecodeError::Uncategorized(problem);
     if decoded.heap_lens.len() != layers {
         return Err(complain(format!(
-            "UnivMon heap_lens length {} != layer_size {layers}",
+            "UnivMon heap_lens length {} != layers {layers}",
             decoded.heap_lens.len()
         )));
     }
     if decoded.candidate_complete.len() != layers {
         return Err(complain(format!(
-            "UnivMon candidate_complete length {} != layer_size {layers}",
+            "UnivMon candidate_complete length {} != layers {layers}",
             decoded.candidate_complete.len()
         )));
     }
     let mut cells = 0usize;
     let mut accumulators = 0usize;
     for &(rows, cols) in geometry {
-        l2hh_wire::check_dimensions(rows, cols).map_err(complain)?;
+        l2_norm_wire::check_dimensions(rows, cols).map_err(complain)?;
         cells = cells
             .checked_add(rows.checked_mul(cols).ok_or_else(|| {
                 complain(format!("UnivMon layer geometry {rows}x{cols} overflows"))
@@ -533,13 +541,13 @@ pub(crate) fn rebuild_layers(
     for (layer, &(rows, cols)) in geometry.iter().enumerate() {
         let next_cell = cell + rows * cols;
         let next_accumulator = accumulator + rows;
-        sketches.push(L2HH::COUNT(l2hh_wire::rebuild_layer::<DefaultXxHasher>(
+        sketches.push(l2_norm_wire::rebuild_layer::<DefaultXxHasher>(
             rows,
             cols,
             layer,
             &decoded.counts[cell..next_cell],
             &decoded.l2[accumulator..next_accumulator],
-        )?));
+        )?);
         cell = next_cell;
         accumulator = next_accumulator;
         let run: Vec<(OwnedDataInput, i64)> = entries
@@ -973,13 +981,14 @@ mod tests {
         let count_sketch = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
             .to_asapv1()
             .expect("serialize Count Sketch");
-        let count_l2hh =
-            crate::sketches::countsketch_heap::CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(2, 8)
-                .to_asapv1()
-                .expect("serialize CountL2HH");
+        let count_l2hh = crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm::<
+            DefaultXxHasher,
+        >::with_dimensions(2, 8)
+        .to_asapv1()
+        .expect("serialize CountSketchWithL2Norm");
         let pyramid = crate::UnivMonTwoTier::new(4, 1, 2, 8, 2, 4, 2)
             .to_asapv1()
-            .expect("serialize UnivMonPyramid");
+            .expect("serialize UnivMonTwoTier");
         let univmon_q = crate::UnivMonQ::new(crate::UnivMonQConfig {
             layers: 2,
             top_layer_cols: 8,
@@ -1067,23 +1076,20 @@ mod tests {
     #[test]
     fn univmon_rejects_serializing_an_inconsistent_pyramid() {
         let mut wrong_layer = UnivMon::new(4, 2, 16, 3);
-        wrong_layer.layer_sketches[1] = L2HH::COUNT(
-            crate::sketches::countsketch_heap::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 16, 1),
-        );
+        wrong_layer.layer_sketches[1] =
+            crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 16, 1);
         assert!(wrong_layer.to_asapv1().is_ok());
 
-        wrong_layer.layer_sketches[1] = L2HH::COUNT(
-            crate::sketches::countsketch_heap::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 32, 1),
-        );
+        wrong_layer.layer_sketches[1] =
+            crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 32, 1);
         assert!(
             wrong_layer.to_asapv1().is_err(),
             "a layer that is not the declared size must not serialize"
         );
 
         let mut wrong_seed = UnivMon::new(4, 2, 16, 3);
-        wrong_seed.layer_sketches[1] = L2HH::COUNT(
-            crate::sketches::countsketch_heap::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 16, 5),
-        );
+        wrong_seed.layer_sketches[1] =
+            crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 16, 5);
         assert!(
             wrong_seed.to_asapv1().is_err(),
             "a layer hashing at another layer's seed index must not serialize"
@@ -1144,12 +1150,12 @@ mod tests {
     /// built by writing the public field directly.
     #[test]
     fn univmon_refuses_to_serialize_a_zero_dimension() {
-        for zero in ["layer_size", "sketch_row", "sketch_col", "heap_size"] {
+        for zero in ["layers", "rows", "cols", "heap_size"] {
             let mut um = UnivMon::new(4, 2, 16, 3);
             match zero {
-                "layer_size" => um.layers = 0,
-                "sketch_row" => um.rows = 0,
-                "sketch_col" => um.cols = 0,
+                "layers" => um.layers = 0,
+                "rows" => um.rows = 0,
+                "cols" => um.cols = 0,
                 _ => um.heap_size = 0,
             }
             let problem = match um.to_asapv1() {
@@ -1181,11 +1187,11 @@ mod tests {
         let problem = UnivMon::from_asapv1(&crafted(&meta, &payload))
             .expect_err("a pyramid past the shift bound must be rejected")
             .to_string();
-        assert!(problem.contains("MAX_LAYER_SIZE"), "got {problem}");
+        assert!(problem.contains("UNIVMON_MAX_LAYERS"), "got {problem}");
     }
 
     #[test]
-    #[should_panic(expected = "at most MAX_LAYER_SIZE")]
+    #[should_panic(expected = "at most UNIVMON_MAX_LAYERS")]
     fn univmon_refuses_constructing_past_the_shift_bound() {
         UnivMon::new(4, 2, 16, UNIVMON_MAX_LAYERS + 1);
     }

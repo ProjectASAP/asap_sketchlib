@@ -4,17 +4,16 @@
 //! buckets use full UnivMon sketches. When a map bucket grows too large,
 //! it is promoted to a UnivMon sketch.
 //!
-//! Uses `UnivMonPool` (from `univmon_two_tier`) to recycle `UnivMon`
+//! Uses `UnivMonPool` (from `univmon`) to recycle `UnivMon`
 //! instances across promotion, merge, and expiration cycles.
 
 use std::collections::HashMap;
 
-use crate::common::input::{heap_item_to_sketch_input, input_to_owned};
-use crate::sketch_framework::univmon_two_tier::UnivMonPool;
+use crate::common::heap::DEFAULT_HEAP_SIZE;
+use crate::sketch_framework::univmon::UnivMonPool;
 use crate::{DataInput, OwnedDataInput, UnivMon};
 
 const MASS_EPSILON: f64 = 1e-9;
-const DEFAULT_HEAP_SIZE: usize = 32;
 const DEFAULT_ROWS: usize = 5;
 const DEFAULT_COLS: usize = 2048;
 const DEFAULT_LAYERS: usize = 8;
@@ -89,6 +88,7 @@ impl EhUnivMonQueryResult {
         }
     }
 
+    /// Shannon entropy of the interval, in bits (log2).
     pub fn estimate_entropy(&self) -> f64 {
         match self {
             Self::Sketch(um) => um.estimate_entropy(),
@@ -202,7 +202,7 @@ impl ExponentialHistogramUnivMon {
         }
 
         // 3. Create new map bucket
-        let owned_key = input_to_owned(key);
+        let owned_key = key.to_owned_input();
         let mut counts = HashMap::new();
         counts.insert(owned_key, weight);
         self.exact_buckets.push(EhUnivMonExactBucket {
@@ -257,7 +257,7 @@ impl ExponentialHistogramUnivMon {
         // if the pool has a recycled sketch available.
         let mut sketch = self.pool.take();
         for (key, value) in &oldest.counts {
-            let input = heap_item_to_sketch_input(key);
+            let input = key.as_data_input();
             sketch.update_weighted(&input, *value);
         }
 
@@ -421,7 +421,7 @@ impl ExponentialHistogramUnivMon {
 
             // Insert map entries into merged sketch
             for (key, value) in &map_merged {
-                let input = heap_item_to_sketch_input(key);
+                let input = key.as_data_input();
                 merged.update_weighted(&input, *value);
             }
 
@@ -472,9 +472,9 @@ impl ExponentialHistogramUnivMon {
     }
 
     pub fn print_buckets(&self) {
-        println!("=== EHUnivOptimized Buckets ===");
+        println!("=== ExponentialHistogramUnivMon Buckets ===");
         println!(
-            "k: {}, window: {}, max_map_size: {}",
+            "k: {}, window: {}, exact_bucket_budget: {}",
             self.k, self.window, self.exact_bucket_budget
         );
         println!(
@@ -485,14 +485,14 @@ impl ExponentialHistogramUnivMon {
         println!("Sketch buckets ({}):", self.sketch_buckets.len());
         for (i, b) in self.sketch_buckets.iter().enumerate() {
             println!(
-                "  [S{}] min_time={}, max_time={}, bucket_size={}, l22={:.2}",
+                "  [S{}] min_time={}, max_time={}, total_weight={}, l2_squared={:.2}",
                 i, b.min_time, b.max_time, b.total_weight, b.l2_squared
             );
         }
-        println!("Map buckets ({}):", self.exact_buckets.len());
+        println!("Exact buckets ({}):", self.exact_buckets.len());
         for (i, b) in self.exact_buckets.iter().enumerate() {
             println!(
-                "  [M{}] min_time={}, max_time={}, bucket_size={}, l22={:.2}, keys={}",
+                "  [E{}] min_time={}, max_time={}, total_weight={}, l2_squared={:.2}, keys={}",
                 i,
                 b.min_time,
                 b.max_time,
@@ -941,7 +941,7 @@ mod tests {
             let rel_diff = (b.l2_squared - actual_l22).abs() / actual_l22.max(1e-12);
             assert!(
                 rel_diff < 0.01,
-                "Sketch bucket {i}: stored l22={:.4} vs actual={actual_l22:.4}",
+                "Sketch bucket {i}: stored l2_squared={:.4} vs actual={actual_l22:.4}",
                 b.l2_squared
             );
         }

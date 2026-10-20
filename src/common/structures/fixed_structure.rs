@@ -83,11 +83,11 @@ macro_rules! impl_hll_registers {
         const _: () = {
             ::std::assert!(
                 $num_registers == 1_usize << $precision,
-                "impl_hll_bucket_list!: num_registers must equal 1 << precision",
+                "impl_hll_registers!: num_registers must equal 1 << precision",
             );
             ::std::assert!(
                 $precision >= 1,
-                "impl_hll_bucket_list!: precision must be at least 1",
+                "impl_hll_registers!: precision must be at least 1",
             );
         };
 

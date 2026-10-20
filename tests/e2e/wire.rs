@@ -91,7 +91,7 @@ fn a_bloom_envelope_round_trips_on_both_paths_and_names_its_kind() {
 
 #[test]
 fn a_coco_envelope_round_trips_and_names_its_kind() {
-    let mut coco = CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(512, 4, 0xC0C0);
+    let mut coco = CocoSketch::<DefaultXxHasher>::with_dimensions_and_seed(4, 512, 0xC0C0);
     for k in frequency_stream() {
         coco.update_weighted(&format!("flow-{k}"), 1);
     }
@@ -152,7 +152,7 @@ fn a_kll_dynamic_envelope_round_trips_and_names_its_kind() {
         sketch.update(&(v as f64));
     }
     let bytes = sketch.to_asapv1().expect("encode");
-    assert_kind(&bytes, 0x06, 0x01, "KLLDynamic");
+    assert_kind(&bytes, 0x06, 0x01, "KllDynamic");
     let decoded = KllDynamic::<f64>::from_asapv1(&bytes).expect("decode");
     assert_eq!(decoded.count(), sketch.count(), "retained mass");
     for q in [0.0f64, 0.1, 0.5, 0.9, 1.0] {
@@ -180,13 +180,13 @@ fn the_heap_backed_matrix_envelopes_round_trip_and_name_their_kinds() {
         cs.update(&DataInput::U64(*k));
     }
 
-    let cms_bytes = cms.to_asapv1().expect("encode CMSHeap");
-    assert_kind(&cms_bytes, 0x03, 0x00, "CMSHeap");
+    let cms_bytes = cms.to_asapv1().expect("encode CountMinSketchWithHeap");
+    assert_kind(&cms_bytes, 0x03, 0x00, "CountMinSketchWithHeap");
     let decoded_cms =
         CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::from_asapv1(&cms_bytes).expect("decode");
 
-    let cs_bytes = cs.to_asapv1().expect("encode CSHeap");
-    assert_kind(&cs_bytes, 0x0a, 0x00, "CSHeap");
+    let cs_bytes = cs.to_asapv1().expect("encode CountSketchWithHeap");
+    assert_kind(&cs_bytes, 0x0a, 0x00, "CountSketchWithHeap");
     let decoded_cs =
         CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&cs_bytes).expect("decode");
 
@@ -194,23 +194,23 @@ fn the_heap_backed_matrix_envelopes_round_trip_and_name_their_kinds() {
         assert_eq!(
             decoded_cms.estimate(&DataInput::U64(k)),
             cms.estimate(&DataInput::U64(k)),
-            "CMSHeap key {k} changed across the wire"
+            "CountMinSketchWithHeap key {k} changed across the wire"
         );
         assert_eq!(
             decoded_cs.estimate(&DataInput::U64(k)),
             cs.estimate(&DataInput::U64(k)),
-            "CSHeap key {k} changed across the wire"
+            "CountSketchWithHeap key {k} changed across the wire"
         );
     }
     assert_eq!(
         decoded_cms.heap().len(),
         cms.heap().len(),
-        "CMSHeap heap size changed across the wire"
+        "CountMinSketchWithHeap heap size changed across the wire"
     );
     assert_eq!(
         decoded_cs.heap().len(),
         cs.heap().len(),
-        "CSHeap heap size changed across the wire"
+        "CountSketchWithHeap heap size changed across the wire"
     );
 }
 
@@ -249,13 +249,13 @@ fn an_exponential_histogram_envelope_round_trips_and_names_its_kind() {
 }
 
 #[test]
-fn an_eh_sketch_list_envelope_round_trips_and_names_its_kind() {
+fn an_eh_bucket_sketch_envelope_round_trips_and_names_its_kind() {
     let mut payload = eh_prototype();
     for k in frequency_stream().iter().take(5_000) {
         payload.update(&DataInput::U64(*k));
     }
     let bytes = payload.to_asapv1().expect("encode");
-    assert_kind(&bytes, 0x14, 0x00, "EHSketchList");
+    assert_kind(&bytes, 0x14, 0x00, "EhBucketSketch");
     let decoded = EhBucketSketch::from_asapv1(&bytes).expect("decode");
     assert_eq!(
         decoded.sketch_type(),
@@ -292,7 +292,7 @@ fn a_hydra_envelope_round_trips_and_names_the_counter_it_carries() {
         }
     }
     let bytes = hydra.to_asapv1().expect("encode");
-    assert_kind(&bytes, 0x07, 0x01, "Hydra<CountMin>");
+    assert_kind(&bytes, 0x07, 0x01, "Hydra<CountMinSketch>");
     let decoded = Hydra::from_asapv1(&bytes).expect("decode");
     assert_eq!(decoded.schema(), hydra.schema(), "schema");
     for r in ["eu", "us", "apac"] {
@@ -335,19 +335,19 @@ fn the_univmon_family_envelopes_round_trip_and_name_their_kinds() {
         "UnivMon cardinality"
     );
 
-    let pyramid_bytes = pyramid.to_asapv1().expect("encode UnivMonPyramid");
-    assert_kind(&pyramid_bytes, 0x11, 0x00, "UnivMonPyramid");
+    let pyramid_bytes = pyramid.to_asapv1().expect("encode UnivMonTwoTier");
+    assert_kind(&pyramid_bytes, 0x11, 0x00, "UnivMonTwoTier");
     let decoded_pyramid =
-        UnivMonTwoTier::from_asapv1(&pyramid_bytes).expect("decode UnivMonPyramid");
+        UnivMonTwoTier::from_asapv1(&pyramid_bytes).expect("decode UnivMonTwoTier");
     assert_eq!(
         decoded_pyramid.estimate_l1(),
         pyramid.estimate_l1(),
-        "UnivMonPyramid L1"
+        "UnivMonTwoTier L1"
     );
     assert_eq!(
         decoded_pyramid.estimate_l2(),
         pyramid.estimate_l2(),
-        "UnivMonPyramid L2"
+        "UnivMonTwoTier L2"
     );
 
     let q_bytes = q.to_asapv1().expect("encode UnivMonQ");
@@ -412,10 +412,10 @@ fn the_matrix_and_quantile_envelopes_carry_their_answers_unchanged() {
         hll.update(&DataInput::U64(*k));
     }
 
-    let cm_bytes = cm.to_asapv1().expect("encode CountMin");
-    assert_kind(&cm_bytes, 0x02, 0x00, "CountMin");
-    let cs_bytes = cs.to_asapv1().expect("encode Count");
-    assert_kind(&cs_bytes, 0x04, 0x00, "Count");
+    let cm_bytes = cm.to_asapv1().expect("encode CountMinSketch");
+    assert_kind(&cm_bytes, 0x02, 0x00, "CountMinSketch");
+    let cs_bytes = cs.to_asapv1().expect("encode CountSketch");
+    assert_kind(&cs_bytes, 0x04, 0x00, "CountSketch");
     let kll_bytes = kll.to_asapv1().expect("encode KLL");
     assert_kind(&kll_bytes, 0x06, 0x00, "KLL");
     let hll_bytes = hll.to_asapv1().expect("encode HyperLogLog");
@@ -432,12 +432,12 @@ fn the_matrix_and_quantile_envelopes_carry_their_answers_unchanged() {
         assert_eq!(
             decoded_cm.estimate(&DataInput::U64(k)),
             cm.estimate(&DataInput::U64(k)),
-            "CountMin key {k}"
+            "CountMinSketch key {k}"
         );
         assert_eq!(
             decoded_cs.estimate(&DataInput::U64(k)),
             cs.estimate(&DataInput::U64(k)),
-            "Count key {k}"
+            "CountSketch key {k}"
         );
     }
     for q in [0.0f64, 0.5, 1.0] {

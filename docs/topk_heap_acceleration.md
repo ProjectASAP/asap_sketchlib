@@ -5,7 +5,7 @@
 them, so its cost per update is theirs. This page describes what it does per
 update and what that measures at.
 
-Reproduce with `cargo run --release --example hhheap_probe`. Numbers below are
+Reproduce with `cargo run --release --example topk_heap_probe`. Numbers below are
 from an Apple M-series laptop, 200k updates drawn from a Zipf(1.1) stream over
 20k distinct keys.
 

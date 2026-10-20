@@ -82,7 +82,7 @@ for &user_id in &user_ids {
 let estimated_count = cms.estimate(&DataInput::U64(101));
 ```
 
-API reference: [`docs/api/api_countmin.md`](./api/api_countmin.md)
+API reference: [`docs/api/api_count_min_sketch.md`](./api/api_count_min_sketch.md)
 
 ---
 

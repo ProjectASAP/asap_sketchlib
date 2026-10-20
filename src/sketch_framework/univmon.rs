@@ -23,14 +23,14 @@
 //!
 //! This implementation is part of the `asap_sketchlib` library.
 
-use crate::common::heap::TopKHeap;
+use crate::common::Vector1D;
+use crate::common::heap::{DEFAULT_HEAP_SIZE, TopKHeap};
 use crate::common::{
     DataInput, OwnedDataInput, SEED_LIST, UNIVMON_BOTTOM_LAYER_SEED_INDEX, hash64_seeded,
-    hash64_seeded_owned, heap_item_to_sketch_input,
+    hash64_seeded_owned,
 };
-use crate::common::{L2HH, Vector1D};
 use crate::octo_delta::UnivMonCellDelta;
-use crate::sketches::countsketch_heap::CountSketchWithL2Norm;
+use crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -38,7 +38,6 @@ pub(crate) mod wire;
 
 const DEFAULT_ROWS: usize = 5;
 const DEFAULT_COLS: usize = 2048;
-const DEFAULT_HEAP_SIZE: usize = 32;
 const DEFAULT_LAYERS: usize = 8;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -53,7 +52,7 @@ pub(crate) enum UnivMonUpdateMode {
 /// UnivMon sketch pyramid for multi-metric stream estimation.
 pub struct UnivMon {
     /// Per-layer L2/heavy-hitter sketches.
-    pub layer_sketches: Vector1D<L2HH>,
+    pub layer_sketches: Vector1D<CountSketchWithL2Norm>,
     /// Per-layer heavy-hitter heaps.
     pub layer_heaps: Vector1D<TopKHeap>,
     /// Number of pyramid layers.
@@ -64,7 +63,7 @@ pub struct UnivMon {
     pub cols: usize,
     /// Heap capacity per layer.
     pub heap_size: usize,
-    /// Bucket size used for hashing decisions.
+    /// Total inserted weight (the exact L1 norm).
     pub total_weight: usize,
     #[serde(default)]
     update_mode: UnivMonUpdateMode,
@@ -136,14 +135,10 @@ impl UnivMon {
         assert!(layers > 0, "layer count must be positive");
         assert!(
             layers <= UNIVMON_MAX_LAYERS,
-            "layer count must be at most MAX_LAYER_SIZE {UNIVMON_MAX_LAYERS}"
+            "layer count must be at most UNIVMON_MAX_LAYERS {UNIVMON_MAX_LAYERS}"
         );
-        let sk_vec: Vec<L2HH> = (0..layers)
-            .map(|i| {
-                L2HH::COUNT(CountSketchWithL2Norm::with_dimensions_and_seed_index(
-                    rows, cols, i,
-                ))
-            })
+        let sk_vec: Vec<CountSketchWithL2Norm> = (0..layers)
+            .map(|i| CountSketchWithL2Norm::with_dimensions_and_seed_index(rows, cols, i))
             .collect();
 
         let hh_vec: Vec<TopKHeap> = (0..layers).map(|_| TopKHeap::new(heap_size)).collect();
@@ -173,11 +168,6 @@ impl UnivMon {
             .total_weight
             .checked_add(value as usize)
             .expect("UnivMon total weight overflowed usize");
-    }
-
-    #[inline(always)]
-    fn find_bottom_layer_num(&self, hash: u64, layer: usize) -> usize {
-        UnivMon::bottom_layer_for_hash(hash, layer)
     }
 
     /// Deepest pyramid layer an insert of `key` reaches; it touches `0..=this`.
@@ -250,7 +240,7 @@ impl UnivMon {
         );
 
         self.layer_sketches[layer].apply_delta(delta.cell);
-        let key = heap_item_to_sketch_input(&delta.key);
+        let key = delta.key.as_data_input();
         let count = self.layer_sketches[layer].estimate(&key);
         let heap_kept_everything = self.layer_heaps[layer].update(&key, count as i64);
 
@@ -268,7 +258,7 @@ impl UnivMon {
     #[inline(always)]
     fn update(&mut self, key: &DataInput, value: i64, bottom_layer_num: usize) {
         for i in 0..=bottom_layer_num {
-            let count = self.layer_sketches[i].update_and_est(key, value);
+            let count = self.layer_sketches[i].update_weighted_and_estimate(key, value);
             if !self.layer_heaps[i].update(key, count as i64) {
                 self.candidate_complete[i] = false;
             }
@@ -284,7 +274,7 @@ impl UnivMon {
     pub fn update_weighted(&mut self, key: &DataInput, weight: i64) {
         self.begin_update(weight, UnivMonUpdateMode::Standard);
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
-        let bottom_layer_num = self.find_bottom_layer_num(h, self.layers);
+        let bottom_layer_num = UnivMon::bottom_layer_for_hash(h, self.layers);
         self.process_univmon(key, weight, bottom_layer_num)
     }
 
@@ -296,8 +286,8 @@ impl UnivMon {
     pub fn update_weighted_terminal(&mut self, key: &DataInput, weight: i64) {
         self.begin_update(weight, UnivMonUpdateMode::Terminal);
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
-        let bottom_layer_num = self.find_bottom_layer_num(h, self.layers);
-        let count = self.layer_sketches[bottom_layer_num].update_and_est(key, weight);
+        let bottom_layer_num = UnivMon::bottom_layer_for_hash(h, self.layers);
+        let count = self.layer_sketches[bottom_layer_num].update_weighted_and_estimate(key, weight);
         if !self.layer_heaps[bottom_layer_num].update(key, count as i64) {
             self.candidate_complete[bottom_layer_num] = false;
         }
@@ -312,8 +302,8 @@ impl UnivMon {
         }
     }
 
-    /// Computes a g-sum estimate using the heuristic recurrence.
-    pub fn calc_g_sum_heuristic<F>(&self, g: F, heavy_only: bool) -> f64
+    /// Computes a g-sum estimate with the UnivMon recurrence.
+    pub fn estimate_g_sum<F>(&self, g: F, heavy_only: bool) -> f64
     where
         F: Fn(f64) -> f64,
     {
@@ -336,7 +326,7 @@ impl UnivMon {
 
         tmp = 0.0;
         for item in self.layer_heaps[self.layers - 1].heap() {
-            let input = heap_item_to_sketch_input(&item.key);
+            let input = item.key.as_data_input();
             let count = self.layer_sketches[self.layers - 1].estimate(&input) as i64;
             if count > threshold {
                 tmp += g(count as f64);
@@ -354,7 +344,7 @@ impl UnivMon {
             };
 
             for item in self.layer_heaps[i].heap() {
-                let input = heap_item_to_sketch_input(&item.key);
+                let input = item.key.as_data_input();
                 let count = self.layer_sketches[i].estimate(&input) as i64;
                 if count > threshold {
                     let hash = (hash64_seeded_owned(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &item.key)
@@ -419,7 +409,7 @@ impl UnivMon {
         for level in (0..self.layers).rev() {
             suffix_complete &= self.candidate_complete[level];
             for item in self.layer_heaps[level].heap() {
-                let input = heap_item_to_sketch_input(&item.key);
+                let input = item.key.as_data_input();
                 let count = self.layer_sketches[level].estimate(&input) as i64;
                 cumulative
                     .entry(item.key.clone())
@@ -454,14 +444,6 @@ impl UnivMon {
         }
     }
 
-    /// Computes a g-sum estimate.
-    pub fn estimate_g_sum<F>(&self, g: F, heavy_only: bool) -> f64
-    where
-        F: Fn(f64) -> f64,
-    {
-        self.calc_g_sum_heuristic(g, heavy_only)
-    }
-
     /// Returns the exact L1 norm for the supported non-negative update stream.
     pub fn estimate_l1(&self) -> f64 {
         self.total_weight as f64
@@ -473,7 +455,7 @@ impl UnivMon {
         tmp.sqrt()
     }
 
-    /// Returns the estimated entropy.
+    /// Returns the estimated Shannon entropy, in bits (log2).
     pub fn estimate_entropy(&self) -> f64 {
         if self.total_weight == 0 {
             return 0.0;
@@ -544,7 +526,7 @@ impl UnivMon {
             self.layer_sketches[i].merge(&other.layer_sketches[i]);
             self.layer_heaps[i].clear();
             for key in candidate_keys {
-                let input = heap_item_to_sketch_input(&key);
+                let input = key.as_data_input();
                 let count = self.layer_sketches[i].estimate(&input) as i64;
                 self.layer_heaps[i].update(&input, count);
             }
@@ -558,12 +540,130 @@ impl UnivMon {
     }
 }
 
+/// Object pool for `UnivMon` sketches.
+///
+/// Maintains a free-list of pre-allocated sketches. Callers take ownership
+/// via `take()` and return sketches via `put()`, which resets and recycles
+/// them. This avoids repeated heap allocation/deallocation for large sketch
+/// matrices during promotion, merge, and expiration cycles.
+pub struct UnivMonPool {
+    free_list: Vec<UnivMon>,
+    total_allocated: usize,
+    heap_size: usize,
+    rows: usize,
+    cols: usize,
+    layers: usize,
+}
+
+impl UnivMonPool {
+    /// Creates a new pool with `initial_size` pre-allocated sketches.
+    pub fn new(
+        initial_size: usize,
+        heap_size: usize,
+        rows: usize,
+        cols: usize,
+        layers: usize,
+    ) -> Self {
+        let free_list: Vec<UnivMon> = (0..initial_size)
+            .map(|_| UnivMon::new(heap_size, rows, cols, layers))
+            .collect();
+        UnivMonPool {
+            free_list,
+            total_allocated: initial_size,
+            heap_size,
+            rows,
+            cols,
+            layers,
+        }
+    }
+
+    /// Takes ownership of a clean sketch from the pool.
+    ///
+    /// Pops a recycled sketch from the free-list if available, otherwise
+    /// allocates a fresh one.
+    pub fn take(&mut self) -> UnivMon {
+        if let Some(sketch) = self.free_list.pop() {
+            sketch
+        } else {
+            self.total_allocated += 1;
+            UnivMon::new(self.heap_size, self.rows, self.cols, self.layers)
+        }
+    }
+
+    /// Returns a sketch to the pool for reuse. Resets all internal state.
+    pub fn put(&mut self, mut sketch: UnivMon) {
+        sketch.clear();
+        self.free_list.push(sketch);
+    }
+
+    /// Number of sketches currently available in the pool.
+    pub fn available(&self) -> usize {
+        self.free_list.len()
+    }
+
+    /// Total number of sketches ever allocated by this pool.
+    pub fn total_allocated(&self) -> usize {
+        self.total_allocated
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{DataInput, OwnedDataInput};
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use std::collections::HashMap;
+
+    #[test]
+    fn pool_basic_take_put() {
+        let mut pool = UnivMonPool::new(2, 16, 2, 5, 2);
+        assert_eq!(pool.available(), 2);
+        assert_eq!(pool.total_allocated(), 2);
+
+        let s0 = pool.take();
+        assert_eq!(pool.available(), 1);
+
+        let s1 = pool.take();
+        assert_eq!(pool.available(), 0);
+
+        // Pool is empty — next take allocates a new one
+        let s2 = pool.take();
+        assert_eq!(pool.available(), 0);
+        assert_eq!(pool.total_allocated(), 3);
+
+        // Return one
+        pool.put(s1);
+        assert_eq!(pool.available(), 1);
+
+        // Should reuse the returned sketch
+        let s3 = pool.take();
+        assert_eq!(pool.available(), 0);
+        assert_eq!(pool.total_allocated(), 3); // no new allocation
+
+        // Return all
+        pool.put(s0);
+        pool.put(s2);
+        pool.put(s3);
+        assert_eq!(pool.available(), 3);
+    }
+
+    #[test]
+    fn pool_free_resets_sketch() {
+        let mut pool = UnivMonPool::new(1, 16, 2, 5, 2);
+
+        // Take a sketch, insert some data
+        let mut sketch = pool.take();
+        sketch.update_weighted(&DataInput::I64(42), 100);
+        assert!(sketch.total_weight > 0);
+
+        // Return it — should reset
+        pool.put(sketch);
+
+        // Take it back — should be clean
+        let sketch2 = pool.take();
+        assert_eq!(sketch2.total_weight, 0);
+        assert!((sketch2.layer_sketches[0].l2()).abs() < 1e-9);
+    }
 
     /// Every layer hashes at its own seed, inside the seed list (no wrap onto
     /// layer 0) and never at the seed that picks the layers.
@@ -573,7 +673,7 @@ mod tests {
         let deepest = UnivMon::new(4, 2, 16, UNIVMON_MAX_LAYERS);
         let seeds: Vec<usize> = (0..UNIVMON_MAX_LAYERS)
             .map(|layer| {
-                let L2HH::COUNT(counter) = &deepest.layer_sketches[layer];
+                let counter = &deepest.layer_sketches[layer];
                 counter.seed_index()
             })
             .collect();
@@ -590,14 +690,14 @@ mod tests {
 
     /// Layer `UNIVMON_BOTTOM_LAYER_SEED_INDEX` would hash at the finder's own seed.
     #[test]
-    #[should_panic(expected = "MAX_LAYER_SIZE")]
-    fn init_univmon_rejects_a_layer_on_the_finder_seed() {
+    #[should_panic(expected = "UNIVMON_MAX_LAYERS")]
+    fn new_rejects_a_layer_on_the_bottom_layer_seed_index() {
         UnivMon::new(4, 2, 16, UNIVMON_BOTTOM_LAYER_SEED_INDEX + 1);
     }
 
     #[test]
     #[should_panic(expected = "hash bits")]
-    fn init_univmon_rejects_column_bits_that_reach_the_sign_bits() {
+    fn new_rejects_column_bits_that_reach_the_sign_bits() {
         UnivMon::new(4, 11, 2048, 2);
     }
 
@@ -669,7 +769,7 @@ mod tests {
     }
 
     #[test]
-    fn update_populates_bucket_size_and_heavy_hitters() {
+    fn update_populates_total_weight_and_heavy_hitters() {
         // processing a single hot key should record its weight in the heavy hitter layers
         let mut um = UnivMon::new(16, 3, 32, 4);
         let key = "alpha";
@@ -809,11 +909,11 @@ mod tests {
             .map(DataInput::U64)
             .find(|key| {
                 let hash = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
-                sketch.find_bottom_layer_num(hash, sketch.layers) >= 2
+                UnivMon::bottom_layer_for_hash(hash, sketch.layers) >= 2
             })
             .expect("find a key sampled into multiple layers");
         let hash = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &key);
-        let bottom = sketch.find_bottom_layer_num(hash, sketch.layers);
+        let bottom = UnivMon::bottom_layer_for_hash(hash, sketch.layers);
         sketch.update_weighted(&key, 3);
         for level in 0..=bottom {
             assert_eq!(sketch.layer_sketches[level].l2(), 3.0);
@@ -827,11 +927,11 @@ mod tests {
             .map(DataInput::U64)
             .find(|key| {
                 let hash = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
-                sketch.find_bottom_layer_num(hash, sketch.layers) >= 2
+                UnivMon::bottom_layer_for_hash(hash, sketch.layers) >= 2
             })
             .expect("find a key sampled into multiple layers");
         let hash = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &key);
-        let bottom = sketch.find_bottom_layer_num(hash, sketch.layers);
+        let bottom = UnivMon::bottom_layer_for_hash(hash, sketch.layers);
         sketch.update_weighted_terminal(&key, 3);
 
         for level in 0..sketch.layers {
@@ -888,7 +988,7 @@ mod tests {
     }
 
     #[test]
-    fn univmon_bucket_size_tracked_correctly() {
+    fn univmon_total_weight_tracked_correctly() {
         // Verify that total_weight is correctly tracked with seed configuration
         let mut um = UnivMon::new(20, 3, 1024, 6);
 

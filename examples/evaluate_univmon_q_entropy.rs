@@ -29,7 +29,7 @@ fn main() {
     for profile in &profiles {
         let empty = UnivMonQ::new(profile.config).unwrap();
         println!(
-            "profile={}: {:.3} MiB, width={}, halve/{}, candidates={}, samples={}",
+            "profile={}: {:.3} MiB, top_layer_cols={}, halve/{}, heap_size={}, samples={}",
             profile.name,
             empty.estimated_memory_bytes() as f64 / (1024.0 * 1024.0),
             profile.config.top_layer_cols,
@@ -307,7 +307,7 @@ fn build_shards(data: &[usize], config: UnivMonQConfig, seed: u64) -> Vec<UnivMo
             let end = (shard + 1) * data.len() / SHARDS;
             let mut sketch = UnivMonQ::with_source_id(config, seed ^ (shard as u64 + 1)).unwrap();
             for &value in &data[start..end] {
-                sketch.add(&value);
+                sketch.update(&value);
             }
             sketch
         })

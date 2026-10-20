@@ -19,16 +19,11 @@
 
 /// Hashing utilities and seed definitions shared across sketches.
 pub mod hash;
-/// Cross-language hash spec (`HashSpec`/`derive_index`/`derive_sign`)
-/// shared by matrix-backed sketches that need byte parity with
-/// `sketchlib-go`.
-pub mod hashspec;
 pub mod heap;
 pub mod input;
 pub mod numerical;
 pub mod precompute_hash;
 pub mod precompute_sample;
-pub mod precompute_sample2;
 pub mod structure_utils;
 /// Reusable storage backends and low-level containers.
 pub mod structures;
@@ -43,13 +38,10 @@ pub use hash::{
     hash64_seeded_owned, hash128_seeded, hash128_seeded_owned,
 };
 pub use heap::{HeapCount, HeapCounter, TopKHeap};
-pub use input::{
-    DataInput, HeapEntry, L2HH, OwnedDataInput, heap_item_to_sketch_input, input_to_owned,
-};
+pub use input::{DataInput, HeapEntry, OwnedDataInput};
 pub use numerical::NumericalValue;
 pub use precompute_hash::PRECOMPUTED_HASH;
 pub use precompute_sample::LN_ONE_MINUS_U_TABLE;
-pub use precompute_sample2::PRECOMPUTED_SAMPLE_RATE_1PERCENT;
 pub use structure_utils::{Nitro, NitroContext, compute_median_inline_f64};
 pub use structures::{
     BitMatrix, CommonHeap, CommonHeapOrder, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128,

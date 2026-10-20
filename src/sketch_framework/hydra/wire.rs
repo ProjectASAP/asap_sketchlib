@@ -611,7 +611,7 @@ impl Hydra {
             return Ok(());
         }
         Err(encode_error(format!(
-            "ASAPv1 Hydra envelope: type_to_clone holds data; the {} prototype carries only its geometry",
+            "ASAPv1 Hydra envelope: prototype holds data; the {} prototype carries only its geometry",
             self.prototype
         )))
     }
@@ -702,19 +702,19 @@ impl Hydra {
         self.check_fresh_prototype(
             prototype.num_levels() == 1 && prototype.items_top_down().is_empty(),
         )?;
-        let (k, m) = (prototype.wire_k(), prototype.m());
+        let (k, m) = (prototype.k() as u32, prototype.m());
         let counters = self.cells(|counter| match counter {
             HydraCounter::Kll(kll) => Some(kll),
             _ => None,
         })?;
         let mut cells = Vec::with_capacity(counters.len());
         for (i, kll) in counters.iter().enumerate() {
-            if (kll.wire_k(), kll.m()) != (k, m) {
+            if (kll.k() as u32, kll.m()) != (k, m) {
                 return Err(encode_error(format!(
                     "ASAPv1 Hydra envelope: cell ({}, {}) has k={}, m={} against the prototype's k={k}, m={m}",
                     i / self.cols,
                     i % self.cols,
-                    kll.wire_k(),
+                    kll.k(),
                     kll.m()
                 )));
             }
@@ -1539,10 +1539,7 @@ mod tests {
             .to_asapv1()
             .expect_err("a prototype holding data must not serialize")
             .to_string();
-        assert!(
-            problem.contains("type_to_clone holds data"),
-            "got {problem}"
-        );
+        assert!(problem.contains("prototype holds data"), "got {problem}");
     }
 
     /// A UnivMon grid whose cells hold different `OwnedDataInput` variants has no
@@ -1841,7 +1838,7 @@ mod tests {
             },
         };
         assert_eq!(
-            kll_cell_envelope(kll.wire_k(), kll.m(), &cell).expect("KLL cell"),
+            kll_cell_envelope(kll.k() as u32, kll.m(), &cell).expect("KLL cell"),
             kll.to_asapv1().expect("KLL envelope")
         );
 

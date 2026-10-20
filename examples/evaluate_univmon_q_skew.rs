@@ -62,7 +62,7 @@ fn main() {
         seed_index: 5,
     }
     .with_window_bound(n as u64, 1e-9)
-    .expect("the evaluation window must fit within 63 levels");
+    .expect("the evaluation window must fit within 63 layers");
     let um_candidates = candidates;
     let um_counter_bytes =
         base_config.layers * base_config.rows * base_config.top_layer_cols * size_of::<i64>();
@@ -78,7 +78,7 @@ fn main() {
     println!("n={n}, trials={trials}, domain={domain}, shards={SHARDS}");
     println!("profile={profile}");
     println!(
-        "config: levels={}, width={}, halve/{} levels, depth={}, candidates={}, ordered_samples={}",
+        "config: layers={}, top_layer_cols={}, halve/{} layers, rows={}, heap_size={}, ordered_samples={}",
         base_config.layers,
         base_config.top_layer_cols,
         base_config.cols_halving_period,
@@ -227,7 +227,9 @@ fn main() {
             .map(|summary| summary.warm_p50_ns / 1_000.0)
             .fold(0.0, f64::max),
     );
-    println!("  UnivMon uses terminal-only `fast_insert`; cumulative-layer `insert` is excluded.");
+    println!(
+        "  UnivMon uses terminal-only `update_weighted_terminal`; cumulative-layer `update_weighted` is excluded."
+    );
 
     let q_violations: usize = summaries.iter().map(|summary| summary.q_violations).sum();
     let um_violations: usize = summaries.iter().map(|summary| summary.um_violations).sum();
@@ -384,7 +386,7 @@ fn build_shards(data: &[i64], config: UnivMonQConfig, seed: u64) -> Vec<UnivMonQ
             let end = (shard + 1) * data.len() / SHARDS;
             let mut sketch = UnivMonQ::with_source_id(config, source_id(seed, shard + 1)).unwrap();
             for value in &data[start..end] {
-                sketch.add(value);
+                sketch.update(value);
             }
             sketch
         })

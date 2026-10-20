@@ -66,6 +66,16 @@ impl<T> Vector2D<T> {
         }
     }
 
+    /// Creates a `rows` x `cols` matrix whose every cell holds `value`.
+    pub fn filled(rows: usize, cols: usize, value: T) -> Self
+    where
+        T: Clone,
+    {
+        let mut matrix = Self::unfilled(rows, cols);
+        matrix.fill(value);
+        matrix
+    }
+
     /// Builds a matrix by invoking a generator for every `(row, col)` position.
     /// Useful for types that require per-cell construction logic (e.g., heaps or buckets)
     /// instead of cloning a single value across all cells.
@@ -318,7 +328,7 @@ impl<T> Vector2D<T> {
 
     #[inline(always)]
     /// Returns the current Nitro skip counter.
-    pub fn nitro_skip(&mut self) -> usize {
+    pub fn nitro_skip(&self) -> usize {
         self.nitro.to_skip
     }
 
@@ -674,18 +684,6 @@ impl<T> Vector2D<T> {
         let start = row * self.cols;
         let end = start + self.cols;
         &mut self.data[start..end]
-    }
-
-    /// Returns the number of rows (legacy helper).
-    #[inline(always)]
-    pub fn get_row(&self) -> usize {
-        self.rows
-    }
-
-    /// Returns the number of columns (legacy helper).
-    #[inline(always)]
-    pub fn get_col(&self) -> usize {
-        self.cols
     }
 }
 

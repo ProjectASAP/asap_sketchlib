@@ -531,7 +531,9 @@ mod tests {
                 &relabel_u64_key_type(&cs, "key_type", to),
             )
             .map(drop)
-            .expect_err("an empty CSSpaceSaving under another key_type must be rejected")
+            .expect_err(
+                "an empty CountSketchWithSpaceSaving under another key_type must be rejected",
+            )
             .to_string();
             assert!(problem.contains("empty key set"), "{to}: {problem}");
         }
@@ -544,14 +546,20 @@ mod tests {
         let cms = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(2, 8);
         let summary = SpaceSaving::<DefaultXxHasher>::with_capacity(3);
         for (bytes, what) in [
-            (cms_heap.to_asapv1().expect("CMSHeap"), "CMSHeap"),
-            (cs_ss.to_asapv1().expect("CSSpaceSaving"), "CSSpaceSaving"),
+            (
+                cms_heap.to_asapv1().expect("CountMinSketchWithHeap"),
+                "CountMinSketchWithHeap",
+            ),
+            (
+                cs_ss.to_asapv1().expect("CountSketchWithSpaceSaving"),
+                "CountSketchWithSpaceSaving",
+            ),
             (cms.to_asapv1().expect("Count-Min"), "Count-Min"),
             (summary.to_asapv1().expect("Space-Saving"), "Space-Saving"),
         ] {
             assert!(
                 decode_error(&bytes).contains("kind_id mismatch"),
-                "{what} bytes must not decode as a CMSSpaceSaving"
+                "{what} bytes must not decode as a CountMinSketchWithSpaceSaving"
             );
         }
     }
@@ -826,7 +834,10 @@ mod tests {
             SpaceSaving::with_capacity(4),
         );
         let problem = sampled.to_asapv1().expect_err("sampled").to_string();
-        assert!(problem.contains("CMSSpaceSaving"), "got {problem}");
+        assert!(
+            problem.contains("CountMinSketchWithSpaceSaving"),
+            "got {problem}"
+        );
 
         let mut mixed = Target::new(2, 3, 4);
         mixed.update(&DataInput::U64(1));

@@ -80,7 +80,7 @@ where
         assert_eq!(
             self.summary.capacity(),
             other.summary.capacity(),
-            "Space-Saving capacity mismatch while merging CSSpaceSaving sketches"
+            "Space-Saving capacity mismatch while merging CountSketchWithSpaceSaving sketches"
         );
         self.count_sketch.merge(&other.count_sketch);
         self.summary.merge(&other.summary);

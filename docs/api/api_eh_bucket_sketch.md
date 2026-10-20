@@ -10,17 +10,17 @@ Unified enum wrapper for sketch payloads used by EH-style frameworks.
 
 ```rust
 enum EhBucketSketch {
-    CM(CountMinSketch<Vector2D<i32>, FastPath>),
-    COCO(CocoSketch),
-    COUNTL2HH(CountSketchWithL2Norm),
-    CS(CountSketch<Vector2D<i32>, FastPath>),
-    DDS(DdSketch),
-    ELASTIC(ElasticSketch),
-    HLL(HyperLogLog<Ertl>),
+    CountMinSketch(CountMinSketch<Vector2D<i32>, FastPath>),
+    CocoSketch(CocoSketch),
+    CountSketchWithL2Norm(CountSketchWithL2Norm),
+    CountSketch(CountSketch<Vector2D<i32>, FastPath>),
+    DdSketch(DdSketch),
+    ElasticSketch(ElasticSketch),
+    Hll(HyperLogLog<Ertl>),
     Kll(Kll),
     #[cfg(feature = "experimental")]
-    UNIFORM(UniformSampling),
-    UNIVMON(UnivMon),
+    Uniform(UniformSampling),
+    UnivMon(UnivMon),
 }
 ```
 
@@ -67,18 +67,18 @@ The ten nested kind_ids:
 
 | Variant | Nested kind_id | Registry name | Feature |
 | ------- | -------------- | ------------- | ------- |
-| `CM` | `0x02 0x00` | Count-Min | default |
-| `COCO` | `0x0c 0x00` | Coco | default |
-| `COUNTL2HH` | `0x19 0x00` | CountSketchWithL2Norm | default |
-| `CS` | `0x04 0x00` | Count Sketch | default |
-| `DDS` | `0x05 0x00` | DDSketch | default |
-| `ELASTIC` | `0x0b 0x00` | Elastic | default |
-| `HLL` | `0x01 0x02` | HLL Ertl-MLE | default |
+| `CountMinSketch` | `0x02 0x00` | Count-Min | default |
+| `CocoSketch` | `0x0c 0x00` | Coco | default |
+| `CountSketchWithL2Norm` | `0x19 0x00` | CountSketchWithL2Norm | default |
+| `CountSketch` | `0x04 0x00` | Count Sketch | default |
+| `DdSketch` | `0x05 0x00` | DDSketch | default |
+| `ElasticSketch` | `0x0b 0x00` | Elastic | default |
+| `Hll` | `0x01 0x02` | HLL Ertl-MLE | default |
 | `Kll` | `0x06 0x00` | KLL compact | default |
-| `UNIFORM` | `0x0d 0x00` | UniformSampling | `experimental` |
-| `UNIVMON` | `0x10 0x00` | UnivMon | default |
+| `Uniform` | `0x0d 0x00` | UniformSampling | `experimental` |
+| `UnivMon` | `0x10 0x00` | UnivMon | default |
 
-Each id is pinned to one algorithm: `HLL` is Ertl-MLE, so `0x01 0x01` (Classic)
+Each id is pinned to one algorithm: `Hll` is Ertl-MLE, so `0x01 0x01` (Classic)
 and `0x01 0x03` (HIP) are rejected, and `Kll` is compact, so `0x06 0x01`
 (dynamic) is rejected. The dispatch is the same in every build: a decoder built
 without `experimental` rejects `0x0d 0x00` with an error naming the variant and

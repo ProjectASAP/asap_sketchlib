@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sketch = UnivMonQ::new(config)?;
 
     for value in 1..=100_000 {
-        sketch.add(&value);
+        sketch.update(&value);
     }
 
     let query = sketch.prepare_queries();

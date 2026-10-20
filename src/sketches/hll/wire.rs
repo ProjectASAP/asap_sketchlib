@@ -384,14 +384,14 @@ mod tests {
 
         let encoded = sketch
             .to_asapv1()
-            .unwrap_or_else(|err| panic!("{name} serialize_to_bytes failed: {err}"));
+            .unwrap_or_else(|err| panic!("{name} to_asapv1 failed: {err}"));
         assert!(
             !encoded.is_empty(),
             "{name} serialization output should not be empty"
         );
 
         let decoded = S::from_asapv1(&encoded)
-            .unwrap_or_else(|err| panic!("{name} deserialize_from_bytes failed: {err}"));
+            .unwrap_or_else(|err| panic!("{name} from_asapv1 failed: {err}"));
 
         let reencoded = decoded
             .to_asapv1()

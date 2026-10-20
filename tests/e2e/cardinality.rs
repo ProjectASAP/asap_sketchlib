@@ -756,12 +756,12 @@ fn a_custom_precision_merge_reproduces_the_single_pass_registers_for_every_estim
     assert_eq!(
         ertl_even.registers_as_slice(),
         ertl_single.registers_as_slice(),
-        "ErtlMLE p13 shard merge must reproduce the single pass register for register"
+        "Ertl p13 shard merge must reproduce the single pass register for register"
     );
     assert_eq!(
         ertl_even.estimate(),
         ertl_single.estimate(),
-        "ErtlMLE p13 identical registers must give an identical estimate"
+        "Ertl p13 identical registers must give an identical estimate"
     );
 }
 
@@ -1193,7 +1193,7 @@ mod documented_matrix {
 
                     for (label, spec, estimate) in [
                         ("Classic", register_spec, classic.estimate() as f64),
-                        ("ErtlMLE", register_spec, ertl.estimate() as f64),
+                        ("Ertl", register_spec, ertl.estimate() as f64),
                         ("HIP", hip_spec, hip.estimate() as f64),
                     ] {
                         if let Err(detail) = spec.check(estimate, distinct) {

@@ -10,7 +10,7 @@ their Count Sketch estimate (row median). The summary picks the candidates and
 the matrix gives each its frequency. The summary's `capacity` is independent
 of `k`.
 
-[`CountSketchWithHeap`](./api_cs_heap.md) keeps an estimate heap instead.
+[`CountSketchWithHeap`](./api_count_sketch_with_heap.md) keeps an estimate heap instead.
 
 ## Type/Struct
 
@@ -69,7 +69,7 @@ fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 The **ASAPv1** envelope, kind `0x1f 0x00` (spec §3.25), for
 `CountSketchWithSpaceSaving<Vector2D<T>, Mode, H>` with `T` `i32`, `i64` or `f64`, `Mode`
 `FastPath` or `RegularPath`, and `H: HashProfile`. Same layout as
-[CountMinSketchWithSpaceSaving](./api_cms_space_saving.md). There is no delta kind.
+[CountMinSketchWithSpaceSaving](./api_count_min_sketch_with_space_saving.md). There is no delta kind.
 
 ## Examples
 

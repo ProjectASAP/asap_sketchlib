@@ -642,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn init_with_dimensions_sizes_both_parts() {
+    fn with_heavy_and_light_sizes_both_parts() {
         let sketch: ElasticSketch = ElasticSketch::with_heavy_and_light(12, 2, 256);
 
         assert_eq!(sketch.heavy.len(), 12);
@@ -652,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn init_with_length_keeps_the_default_light_layer() {
+    fn with_heavy_buckets_keeps_the_default_light_layer() {
         let sketch: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
 
         assert_eq!(sketch.heavy.len(), 8);
@@ -721,7 +721,7 @@ mod tests {
         );
         assert!(
             light_est >= 6,
-            "colliding flow should accumulate in CountMin, expected >= 6, got {light_est}"
+            "colliding flow should accumulate in CountMinSketch, expected >= 6, got {light_est}"
         );
     }
 
@@ -1106,7 +1106,7 @@ mod tests {
     }
 
     #[test]
-    fn heavy_only_insert_never_touches_the_light_layer() {
+    fn heavy_only_update_never_touches_the_light_layer() {
         // seed the light layer through the normal path so the comparison is
         // against real counters rather than an all-zero table
         let mut sketch: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 64);
@@ -1222,7 +1222,7 @@ mod tests {
     }
 
     #[test]
-    fn heavy_only_matches_insert_while_buckets_seat_and_match() {
+    fn heavy_only_matches_update_while_buckets_seat_and_match() {
         let mut normal: ElasticSketch = ElasticSketch::with_heavy_buckets(16);
         let mut overload: ElasticSketch = ElasticSketch::with_heavy_buckets(16);
 
@@ -1305,7 +1305,7 @@ mod tests {
     }
 
     #[test]
-    fn an_insert_onto_a_stale_copy_replaces_it() {
+    fn an_update_onto_a_stale_copy_replaces_it() {
         let (mut sk, _) = seeded_sketch(8, 24);
         sk.expand_heavy();
 

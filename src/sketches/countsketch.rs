@@ -23,8 +23,7 @@ mod wire;
 pub use delta::CountSketchDelta;
 pub(crate) use wire::{CsWireCounter, CsWireMode};
 
-const DEFAULT_ROWS: usize = 3;
-const DEFAULT_COLS: usize = 4096;
+use crate::common::structures::fixed_structure::{DEFAULT_COLS, DEFAULT_ROWS};
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 /// A frequency-estimation sketch using random sign projections (Count Sketch).
@@ -213,16 +212,14 @@ where
 {
     /// Creates a sketch with the requested number of rows and columns.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
-        let mut sk = CountSketch {
-            counts: Vector2D::unfilled(rows, cols),
+        CountSketch {
+            counts: Vector2D::filled(rows, cols, T::from(0)),
             rows,
             cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),
-        };
-        sk.counts.fill(T::from(0));
-        sk
+        }
     }
 }
 
@@ -276,11 +273,11 @@ where
         assert_eq!(
             (self_rows, self_cols),
             (other.counts.rows(), other.counts.cols()),
-            "dimension mismatch while merging CountMin sketches"
+            "dimension mismatch while merging Count Sketches"
         );
         assert_eq!(
             self.admission_rate, other.admission_rate,
-            "admission rate mismatch while merging Count sketches"
+            "admission rate mismatch while merging Count Sketches"
         );
 
         for i in 0..self_rows {
@@ -564,7 +561,6 @@ impl<H: SketchHasher> NitroTarget for CountSketch<Vector2D<i32>, FastPath, H> {
     }
 }
 
-use crate::input_to_owned;
 use crate::octo_delta::{
     CountSketchCellDelta, KeyedCountSketchCellDelta, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
     OCTO_MAX_PROMOTION_THRESHOLD,
@@ -622,7 +618,7 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountSketch<S, RegularPat
     ) {
         self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
             emit(KeyedCountSketchCellDelta {
-                key: input_to_owned(value),
+                key: value.to_owned_input(),
                 delta,
             })
         });
@@ -681,7 +677,7 @@ where
     ) {
         self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
             emit(KeyedCountSketchCellDelta {
-                key: input_to_owned(value),
+                key: value.to_owned_input(),
                 delta,
             })
         });
@@ -710,7 +706,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn count_child_insert_emits_at_threshold() {
+    fn count_sketch_child_update_emits_at_threshold() {
         let mut child = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::U64(99);
         let mut deltas: Vec<CountSketchCellDelta> = Vec::new();
@@ -775,7 +771,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_updates_signed_counters_per_row() {
+    fn update_writes_signed_counters_per_row() {
         let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::Str("alpha");
 
@@ -793,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_insert_produces_consistent_estimates() {
+    fn fast_path_update_produces_consistent_estimates() {
         let mut fast = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(4, 128);
 
         let keys = vec![
@@ -818,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_produces_consistent_estimates() {
+    fn update_produces_consistent_estimates() {
         let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
 
         let keys = vec![
@@ -923,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "dimension mismatch while merging CountMin sketches")]
+    #[should_panic(expected = "dimension mismatch while merging Count Sketches")]
     fn merge_requires_matching_dimensions() {
         let mut left = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
         let right = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 32);

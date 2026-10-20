@@ -76,7 +76,7 @@ beside `wire.rs`, declared `pub(crate)` so the other user can import it by path:
 - `src/sketches/countminsketch_heap/heap_wire.rs` — the top-k heap metadata
   schema, payload, `key_type` mapping, emitted order and heap rebuild that
   CountMinSketchWithHeap (`0x03 0x00`) and CountSketchWithHeap (`0x0a 0x00`) share.
-- `src/sketches/countsketch_heap/l2hh_wire.rs` — CountSketchWithL2Norm (`0x19 0x00`), plus
+- `src/sketches/countsketch_l2_norm/wire.rs` — CountSketchWithL2Norm (`0x19 0x00`), plus
   the `[counts, l2]` layer sub-payload the whole UnivMon family inlines.
 
 Converted:
@@ -127,7 +127,7 @@ Converted:
   hash-spec group.
 - **KMV** (`src/sketches/kmv/wire.rs`, `0x0e 0x00`) — the retained digests,
   strictly ascending.
-- **CountSketchWithL2Norm** (`src/sketches/countsketch_heap/l2hh_wire.rs`, `0x19 0x00`) —
+- **CountSketchWithL2Norm** (`src/sketches/countsketch_l2_norm/wire.rs`, `0x19 0x00`) —
   `[counts, l2]`.
 - **Hydra** (`src/sketch_framework/hydra/wire.rs`, `0x07 0x00`-`0x07 0x04`) — one
   `kind_id` per counter variant; the cells' state tiles or nests one array.

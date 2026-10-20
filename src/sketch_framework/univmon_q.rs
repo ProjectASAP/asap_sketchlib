@@ -79,7 +79,7 @@ impl UnivMonQConfig {
         failure_probability: f64,
     ) -> Result<Self, UnivMonQError> {
         if self.heap_size == 0 {
-            return Err(UnivMonQError::new("candidates must be positive"));
+            return Err(UnivMonQError::new("heap_size must be positive"));
         }
         if !failure_probability.is_finite() || !(0.0..1.0).contains(&failure_probability) {
             return Err(UnivMonQError::new("failure probability must be in (0, 1)"));
@@ -95,7 +95,7 @@ impl UnivMonQConfig {
             }
         }
         Err(UnivMonQError::new(
-            "window bound does not fit the candidate table within 63 levels",
+            "window bound does not fit the candidate table within 63 layers",
         ))
     }
 }
@@ -840,15 +840,9 @@ impl<H: SketchHasher> UnivMonQ<H> {
         self.source_id
     }
 
-    /// Adds one numeric value.
+    /// Adds one numeric value, projected to `f64`.
     #[inline(always)]
-    pub fn update(&mut self, value: &f64) {
-        self.update_value(*value);
-    }
-
-    /// Adds any Sketchlib numeric primitive after projection to `f64`.
-    #[inline(always)]
-    pub fn add<T: NumericalValue>(&mut self, value: &T) {
+    pub fn update<T: NumericalValue>(&mut self, value: &T) {
         self.update_value(value.to_f64());
     }
 
@@ -1553,19 +1547,19 @@ fn allocate_source_id() -> u64 {
 
 fn validate_config(config: UnivMonQConfig) -> Result<(), UnivMonQError> {
     if !(2..=63).contains(&config.layers) {
-        return Err(UnivMonQError::new("levels must be in 2..=63"));
+        return Err(UnivMonQError::new("layers must be in 2..=63"));
     }
     if config.top_layer_cols == 0 {
-        return Err(UnivMonQError::new("width must be positive"));
+        return Err(UnivMonQError::new("top_layer_cols must be positive"));
     }
     if config.rows == 0 || config.rows % 2 == 0 {
-        return Err(UnivMonQError::new("depth must be a positive odd number"));
+        return Err(UnivMonQError::new("rows must be a positive odd number"));
     }
     if !matches!(config.counter_bits, 32 | 64) {
         return Err(UnivMonQError::new("counter_bits must be 32 or 64"));
     }
     if config.heap_size == 0 {
-        return Err(UnivMonQError::new("candidates must be positive"));
+        return Err(UnivMonQError::new("heap_size must be positive"));
     }
     Ok(())
 }
@@ -1892,13 +1886,13 @@ mod tests {
             .find(|value| sketch.sample_level(float_to_ordered(*value as f64)) == terminal)
             .unwrap();
         for _ in 0..200 {
-            sketch.add(&target);
+            sketch.update(&target);
         }
 
         let mut distinct_tail = 0_usize;
         for value in 1_u64.. {
             if value != target && sketch.sample_level(float_to_ordered(value as f64)) == terminal {
-                sketch.add(&value);
+                sketch.update(&value);
                 distinct_tail += 1;
                 if distinct_tail == 50_000 {
                     break;
@@ -2248,7 +2242,7 @@ mod tests {
         fn shard(source_id: u64, offset: u64) -> UnivMonQ {
             let mut sketch = UnivMonQ::with_source_id(tiny_config(), source_id).unwrap();
             for index in 0..1_000_u64 {
-                sketch.add(&((index.wrapping_mul(17) + offset) % 991));
+                sketch.update(&((index.wrapping_mul(17) + offset) % 991));
             }
             sketch
         }

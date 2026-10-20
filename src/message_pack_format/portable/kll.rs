@@ -513,7 +513,7 @@ mod tests {
 
         let (state, bit_cache, remaining_bits) = sk.coin_state();
         let kll_state = KllState {
-            k: sk.wire_k(),
+            k: sk.k() as u32,
             m: sk.m(),
             num_levels: sk.num_levels(),
             levels: sk.level_bounds_top_down(),
@@ -630,7 +630,7 @@ mod tests {
 
         // Raw-f64 form.
         let raw_state = KllState {
-            k: sk.wire_k(),
+            k: sk.k() as u32,
             m: sk.m(),
             num_levels,
             levels: levels.clone(),
@@ -646,7 +646,7 @@ mod tests {
         let (offset, scale, residuals) =
             encode_value_offset(&raw_items).expect("integer items representable");
         let fp_state = KllState {
-            k: sk.wire_k(),
+            k: sk.k() as u32,
             m: sk.m(),
             num_levels,
             levels,

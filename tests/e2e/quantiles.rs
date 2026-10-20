@@ -262,7 +262,7 @@ fn kll_family_stays_within_the_datasketches_maximum_rank_error_characterization(
                     trial += 1;
                     if let Some(dynamic) = feed_kll_dynamic(feed, k, seed, &values) {
                         spec.record_trial(
-                            tallies.entry(format!("KLLDynamic/{feed:?}")).or_default(),
+                            tallies.entry(format!("KllDynamic/{feed:?}")).or_default(),
                             &format!("k={k} shape={shape} seed={seed:#x} n={N}"),
                             truth.sorted(),
                             &RANK_QS,
@@ -392,7 +392,7 @@ fn bulk_cases(trial: usize, n: usize) -> Vec<(&'static str, Vec<f64>)> {
 /// still legal — sketch, so what is asserted here is equality: serialized
 /// bytes, retained count, and quantile bits over `RANK_QS`.
 #[test]
-fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
+fn kll_update_batch_is_byte_identical_to_the_update_loop() {
     const N: usize = 20_000;
     for (case, (shape, values)) in bulk_cases(0, N).iter().enumerate() {
         let seed = kll_bulk_seed(case as u64);
@@ -426,7 +426,7 @@ fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
 
 /// `KllDynamic` under the same equality, on its own wire form.
 #[test]
-fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
+fn kll_dynamic_update_batch_is_byte_identical_to_the_update_loop() {
     const N: usize = 10_000;
     for (case, (shape, values)) in bulk_cases(1, N).iter().enumerate() {
         let seed = kll_bulk_seed(0x0100 + case as u64);
@@ -462,7 +462,7 @@ fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
 /// byte-for-byte untouched, and a one-element `update_batch` equals a single
 /// `update`.
 #[test]
-fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
+fn kll_update_batch_on_a_degenerate_slice_matches_the_loop() {
     let seed = kll_bulk_seed(0x0200);
     let mut sk: Kll<f64> = Kll::with_k_and_seed(200, seed);
     for v in &[1.0f64, 2.0, 3.0] {
@@ -473,16 +473,16 @@ fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
     let bytes = sk.to_asapv1().unwrap();
 
     sk.update_batch(&[]);
-    assert_eq!(sk.count(), count, "an empty bulk_update changed the count");
+    assert_eq!(sk.count(), count, "an empty update_batch changed the count");
     assert_eq!(
         sk.quantile(0.5).to_bits(),
         median.to_bits(),
-        "an empty bulk_update moved the median"
+        "an empty update_batch moved the median"
     );
     assert_eq!(
         sk.to_asapv1().unwrap(),
         bytes,
-        "an empty bulk_update changed the serialized state"
+        "an empty update_batch changed the serialized state"
     );
 
     let mut one: Kll<f64> = Kll::with_k_and_seed(200, seed);
@@ -492,14 +492,14 @@ fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
     assert_eq!(
         one.to_asapv1().unwrap(),
         once.to_asapv1().unwrap(),
-        "a one-element bulk_update diverged from one update"
+        "a one-element update_batch diverged from one update"
     );
 }
 
 /// The `DataInput` batch path matches the loop, and a non-numeric element
 /// stops it at that element with the preceding prefix already applied.
 #[test]
-fn kll_bulk_update_data_input_matches_the_loop_and_stops_at_the_first_non_numeric() {
+fn kll_update_batch_data_input_matches_the_loop_and_stops_at_the_first_non_numeric() {
     let seed = kll_bulk_seed(0x0300);
     let values = normal_f64(5_000, 100.0, 20.0, 8001);
     let inputs: Vec<DataInput> = values.iter().map(|v| DataInput::F64(*v)).collect();
@@ -1022,7 +1022,7 @@ fn univmonq_frequency_and_f2_satisfy_the_count_sketch_bounds() {
     }
 
     let context = format!(
-        "UnivMonQConfig {{ levels: {}, width: {}, depth: {}, hash_seed: {} }}, \
+        "UnivMonQConfig {{ layers: {}, top_layer_cols: {}, rows: {}, seed_index: {} }}, \
          40 separated heavy keys + uniform background (stream seed 3008)",
         config.layers, config.top_layer_cols, config.rows, config.seed_index
     );
@@ -1171,7 +1171,7 @@ fn univmonq_ordered_queries_satisfy_the_documented_cdf_and_rank_bounds() {
             let eta = 2.0 * e_h + p_hat_r * eps_r;
 
             let context = format!(
-                "{regime} trial {t}: hash_seed={} source_id={:#x}, n={n}, gate \
+                "{regime} trial {t}: seed_index={} source_id={:#x}, n={n}, gate \
                  F2_hat/N^2={gate:.3e} vs 1/ordered_samples={threshold:.3e}, heavy set \
                  {} values, E_H={e_h:.6} (sum form), P_hat_R={p_hat_r:.6}, m_R={m_r}, \
                  epsilon_R={eps_r:.6} at delta={DELTA} -> eta {eta:.6}; \
@@ -1833,7 +1833,7 @@ fn kll_minimum_compactor_capacity_axis_keeps_the_count_exact_and_reports_its_own
         let ctx = format!("m={m} k=200 n={} sketch_seed={seed:#x}", values.len());
         assert_eq!(sketch.k(), 200, "{ctx}: k moved");
         assert_eq!(sketch.m() as usize, m, "{ctx}: reported m");
-        assert_eq!(sketch.wire_k() as usize, 200, "{ctx}: reported k");
+        assert_eq!(sketch.k(), 200, "{ctx}: reported k");
         assert_between(
             sketch.count() as f64,
             values.len() as f64 * 0.95,
@@ -1855,11 +1855,11 @@ fn kll_minimum_compactor_capacity_axis_keeps_the_count_exact_and_reports_its_own
 fn kll_normalizes_a_minimum_compactor_capacity_outside_its_supported_range() {
     let clamped: Kll<f64> = Kll::with_seed(200, 0, kll_axis_seed(0x0100));
     assert_eq!(clamped.m(), 2, "m=0 must normalize to 2");
-    assert_eq!(clamped.wire_k(), 200, "m=0 must leave k alone");
+    assert_eq!(clamped.k(), 200, "m=0 must leave k alone");
 
     let raised: Kll<f64> = Kll::with_seed(4, 64, kll_axis_seed(0x0101));
     assert_eq!(raised.m(), 64, "m=64 must survive");
-    assert_eq!(raised.wire_k(), 64, "k below m must be raised to m");
+    assert_eq!(raised.k(), 64, "k below m must be raised to m");
 
     let mut usable: Kll<f64> = Kll::with_seed(4, 64, kll_axis_seed(0x0102));
     let values = kll_axis_values(5_000, 0x4B11_0102);
@@ -2317,10 +2317,10 @@ mod documented_matrix {
                 );
 
                 let dynamic = feed_kll_dynamic(feed, k, seed, &values)
-                    .expect("both feeds are supported by KLLDynamic");
+                    .expect("both feeds are supported by KllDynamic");
                 spec.record_trial(
                     &mut tally,
-                    &format!("KLLDynamic {label}"),
+                    &format!("KllDynamic {label}"),
                     truth.sorted(),
                     &DOC_QS,
                     |q| dynamic.quantile(q),

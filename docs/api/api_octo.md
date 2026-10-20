@@ -432,8 +432,8 @@ copy, made once at the hand-off.
 CocoSketch and Elastic key on a `String`, so their plans render the input
 with `flow_key_string`, which renders every `DataInput` variant: numbers by
 `to_string`, bytes as lowercase hex. `EhBucketSketch` converts differently —
-its `ELASTIC` arm renders bytes with `String::from_utf8_lossy`, and its
-`COCO` arm drops every input that is not `Str` or `String`. The
+its `ElasticSketch` arm renders bytes with `String::from_utf8_lossy`, and its
+`CocoSketch` arm drops every input that is not `Str` or `String`. The
 `flow_key_string` rendering is what the aggregator stores, so it is what
 `CocoSketch::estimate` or `ElasticSketch::estimate` must be asked for. Their payloads
 carry no hashes: the heavy half of an Elastic insert can evict a key the
@@ -542,7 +542,9 @@ heap, which is Algorithm 2.
 The two keyed-bucket pairs instead replay the key, per §4.4.
 `CocoOctoAggregator` calls the weighted `CocoSketch::update_weighted`, so the promoted
 mass contests the parent's own buckets and runs the parent's own `v/val`
-election. Both halves of the Coco pair draw from the thread generator;
+election. `CocoOctoWorker`, `CocoOctoAggregator` and `CocoOctoPlan` take
+`(rows, cols)`, as `CocoSketch::with_dimensions` does. Both halves of the Coco
+pair draw from the thread generator;
 `CocoSketchWorker::with_seed`, `CocoOctoWorker::with_threshold_and_seed`,
 `CocoOctoAggregator::with_seed` and `CocoOctoPlan::with_seed` /
 `with_threshold_and_seed` draw from a seeded one instead. A seeded plan

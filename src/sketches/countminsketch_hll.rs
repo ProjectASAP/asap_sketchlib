@@ -113,7 +113,7 @@ impl<'de, H: SketchHasher> Deserialize<'de> for CountMinHll<H> {
         let expected_depth = 1usize << precision;
         if buckets.bucket_len() != expected_depth {
             return Err(serde::de::Error::custom(format!(
-                "buckets depth {} does not match 2^precision {} = {expected_depth}",
+                "buckets bucket_len {} does not match 2^precision {} = {expected_depth}",
                 buckets.bucket_len(),
                 precision
             )));
@@ -526,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_many_matches_sequential_inserts() {
+    fn update_batch_matches_sequential_updates() {
         let k = key("user_A");
         let vals: Vec<DataInput<'static>> = (0..500u64).map(val).collect();
         let pairs: Vec<(&DataInput, &DataInput)> = vals.iter().map(|v| (&k, v)).collect();
@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(
             sk_seq.as_storage().as_slice(),
             sk_batch.as_storage().as_slice(),
-            "insert_many must produce identical state to sequential inserts"
+            "update_batch must produce identical state to sequential updates"
         );
     }
 
@@ -595,7 +595,11 @@ mod tests {
         for (label, err, want) in [
             ("precision 0", attempt(4, 32, 1, 0), "out of range"),
             ("precision 19", attempt(4, 32, 1, 19), "out of range"),
-            ("depth mismatch", attempt(4, 32, 128, 8), "does not match"),
+            (
+                "bucket_len mismatch",
+                attempt(4, 32, 128, 8),
+                "does not match",
+            ),
             (
                 "cols not a power of two",
                 attempt(4, 17, 256, 8),

@@ -79,7 +79,7 @@ fn crowded_pair(max: usize) -> impl Strategy<Value = CrowdedPair> {
 }
 
 fn filled(w: usize, d: usize, seed: u64, stream: &[(u64, u64)]) -> C {
-    let mut sketch = C::init_with_size_and_seed(w, d, seed);
+    let mut sketch = C::with_dimensions_and_seed(d, w, seed);
     for (id, v) in stream {
         sketch.update_weighted(&key_of(*id), *v);
     }
@@ -166,7 +166,7 @@ proptest! {
         seed in any::<u64>(),
         stream in keys(200),
     ) {
-        let mut sketch = C::init_with_size_and_seed(width, depth, seed);
+        let mut sketch = C::with_dimensions_and_seed(depth, width, seed);
         for k in &stream {
             sketch.update_weighted(&format!("flow-{k}"), 1);
         }
@@ -360,7 +360,7 @@ proptest! {
     }
 
     #[test]
-    fn estimate_key_reports_the_mass_of_the_bucket_that_holds_the_key(
+    fn estimate_reports_the_mass_of_the_bucket_that_holds_the_key(
         (w, d, seed, stream) in crowded_stream(300),
     ) {
         let sketch = filled(w, d, seed, &stream);
@@ -376,8 +376,8 @@ proptest! {
                 .map(|&(_, val)| val)
                 .sum();
             let estimate = sketch.estimate(&key);
-            prop_assert_eq!(estimate, expected, "estimate_key({})", key);
-            prop_assert!(estimate <= total, "estimate_key({}) exceeds {}", key, total);
+            prop_assert_eq!(estimate, expected, "estimate({})", key);
+            prop_assert!(estimate <= total, "estimate({}) exceeds {}", key, total);
         }
     }
 

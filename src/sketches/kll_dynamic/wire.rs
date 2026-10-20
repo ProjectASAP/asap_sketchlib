@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(
             decoded.to_asapv1().expect("re-serialize"),
             bytes,
-            "KLLDynamic serialized bytes differed after round trip"
+            "KllDynamic serialized bytes differed after round trip"
         );
         for &q in &[0.0, 0.01, 0.25, 0.5, 0.75, 0.99, 1.0] {
             assert_eq!(
@@ -159,7 +159,7 @@ mod tests {
         let bytes = sketch.to_asapv1().expect("serialize");
         assert!(
             KllDynamic::<i64>::from_asapv1(&bytes).is_err(),
-            "f64 KLLDynamic bytes must be rejected by an i64 decoder"
+            "f64 KllDynamic bytes must be rejected by an i64 decoder"
         );
     }
 }

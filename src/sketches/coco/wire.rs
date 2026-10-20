@@ -107,7 +107,7 @@ fn check_geometry(rows: usize, cols: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// Rejects a bucket layout no insert could produce. `update_weighted` scans all `d`
+/// Rejects a bucket layout no insert could produce. `update_weighted` scans all `rows`
 /// mapped buckets before electing one, so a stored key sits in row `r` only at
 /// column `hash64_seeded(r, key) % cols`, and holds at most one bucket in the
 /// whole table. `keys` must already be `rows*cols` long and `cols` non-zero.
@@ -253,7 +253,7 @@ mod tests {
     fn coco_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
         assert!(
-            CocoSketch::<DefaultXxHasher>::init_with_size(8, rows)
+            CocoSketch::<DefaultXxHasher>::with_dimensions(rows, 8)
                 .to_asapv1()
                 .is_err(),
             "a table past MATRIX_MAX_ROWS must not serialize"
@@ -274,7 +274,7 @@ mod tests {
 
         // The boundary itself is eligible.
         assert!(
-            CocoSketch::<DefaultXxHasher>::init_with_size(8, MATRIX_MAX_ROWS)
+            CocoSketch::<DefaultXxHasher>::with_dimensions(MATRIX_MAX_ROWS, 8)
                 .to_asapv1()
                 .is_ok()
         );
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn coco_round_trip_serialization() {
-        let mut sketch: CocoSketch = CocoSketch::init_with_size(8, 4);
+        let mut sketch: CocoSketch = CocoSketch::with_dimensions(4, 8);
         sketch.update_weighted("19.98.10.26|80", 521);
         sketch.update_weighted("34.52.73.17|118", 856);
 
@@ -496,14 +496,14 @@ mod tests {
     /// bytes the decoder would refuse.
     #[test]
     fn coco_rejects_serializing_a_geometry_mismatch() {
-        let mut sketch: CocoSketch = CocoSketch::init_with_size(8, 4);
+        let mut sketch: CocoSketch = CocoSketch::with_dimensions(4, 8);
         sketch.cols = 16;
         assert!(
             sketch.to_asapv1().is_err(),
             "a table whose bucket count disagrees with its geometry must not serialize"
         );
 
-        let empty: CocoSketch = CocoSketch::init_with_size(8, 0);
+        let empty: CocoSketch = CocoSketch::with_dimensions(0, 8);
         assert!(
             empty.to_asapv1().is_err(),
             "a zero-dimension geometry must not serialize"
@@ -516,7 +516,7 @@ mod tests {
     #[test]
     fn coco_rejects_serializing_a_hand_built_table() {
         let key = "flow::misplaced";
-        let mut misplaced: CocoSketch = CocoSketch::init_with_size(2, 1);
+        let mut misplaced: CocoSketch = CocoSketch::with_dimensions(1, 2);
         let wrong = 1 - mapped_col(0, key, 2);
         misplaced.table.as_mut_slice()[wrong] = CocoBucket {
             full_key: Some(key.to_string()),
@@ -529,7 +529,7 @@ mod tests {
         assert!(problem.contains("maps to column"), "got {problem}");
 
         let (rows, cols) = (2, 2);
-        let mut twice: CocoSketch = CocoSketch::init_with_size(cols, rows);
+        let mut twice: CocoSketch = CocoSketch::with_dimensions(rows, cols);
         for row in 0..rows {
             twice.table.as_mut_slice()[row * cols + mapped_col(row, key, cols)] = CocoBucket {
                 full_key: Some(key.to_string()),
@@ -547,7 +547,7 @@ mod tests {
     /// key stays distinguishable from the buckets that hold nothing.
     #[test]
     fn coco_empty_buckets_are_nil_and_never_collide_with_an_empty_key() {
-        let all_empty: CocoSketch = CocoSketch::init_with_size(4, 2);
+        let all_empty: CocoSketch = CocoSketch::with_dimensions(2, 4);
         let encoded = all_empty.to_asapv1().expect("serialize");
         let (_, _, payload) = envelope::split(&encoded).expect("split");
         assert_eq!(
@@ -560,7 +560,7 @@ mod tests {
         assert_eq!(cells(&all_empty), cells(&decoded));
         assert!(decoded.recorded_flows().next().is_none());
 
-        let mut with_empty_key: CocoSketch = CocoSketch::init_with_size(4, 2);
+        let mut with_empty_key: CocoSketch = CocoSketch::with_dimensions(2, 4);
         with_empty_key.update_weighted("", 5);
         let encoded = with_empty_key.to_asapv1().expect("serialize");
         let (_, _, payload) = envelope::split(&encoded).expect("split");
@@ -574,7 +574,7 @@ mod tests {
     /// A table mixing occupied and free buckets round-trips bucket for bucket.
     #[test]
     fn coco_mixed_occupancy_round_trips() {
-        let mut sketch: CocoSketch = CocoSketch::init_with_size(16, 3);
+        let mut sketch: CocoSketch = CocoSketch::with_dimensions(3, 16);
         for i in 0..10u64 {
             sketch.update_weighted(&format!("flow::{i}"), i + 1);
         }
@@ -594,7 +594,7 @@ mod tests {
     /// re-serializes to the bytes it came from.
     #[test]
     fn coco_decoded_sketch_reserializes_byte_identically() {
-        let mut sketch: CocoSketch = CocoSketch::init_with_size(16, 3);
+        let mut sketch: CocoSketch = CocoSketch::with_dimensions(3, 16);
         for i in 0..12u64 {
             sketch.update_weighted(&format!("fam{}|item{i}", i % 4), i % 5 + 1);
         }
@@ -649,8 +649,8 @@ mod tests {
     #[test]
     fn coco_custom_hasher_profile_round_trips_and_is_self_describing() {
         // (a) A Coco built with a custom-profile hasher round-trips.
-        let mut alt: CocoSketch<AltHasher> = CocoSketch::init_with_size(8, 4);
-        let mut std: CocoSketch = CocoSketch::init_with_size(8, 4);
+        let mut alt: CocoSketch<AltHasher> = CocoSketch::with_dimensions(4, 8);
+        let mut std: CocoSketch = CocoSketch::with_dimensions(4, 8);
         alt.update_weighted("flow::42", 7);
         alt.update_weighted("flow::7", 3);
         std.update_weighted("flow::42", 7);

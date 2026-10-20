@@ -6,11 +6,11 @@
 //! per second at several capacities. The scan column is what an unindexed heap
 //! costs; the indexed column is the floor `TopKHeap` should stay near.
 //!
-//! Run with `cargo run --release --example hhheap_probe`.
+//! Run with `cargo run --release --example topk_heap_probe`.
 
 use asap_sketchlib::{
     CountMinSketch, CountMinSketchWithHeap, DataInput, FastPath, HeapEntry, OwnedDataInput,
-    TopKHeap, Vector2D, hash64_seeded, input_to_owned,
+    TopKHeap, Vector2D, hash64_seeded,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
@@ -81,7 +81,7 @@ impl IndexedHeap {
         let retained_every_key = self.data.len() < self.k;
         if self.data.len() < self.k {
             let idx = self.data.len();
-            self.data.push(HeapEntry::new(input_to_owned(key), count));
+            self.data.push(HeapEntry::new(key.to_owned_input(), count));
             self.slots.push(slot);
             self.register(slot, idx);
             self.bubble_up(idx);
@@ -94,7 +94,7 @@ impl IndexedHeap {
 
         let old_slot = self.slots[0];
         self.unregister(old_slot, 0);
-        self.data[0] = HeapEntry::new(input_to_owned(key), count);
+        self.data[0] = HeapEntry::new(key.to_owned_input(), count);
         self.slots[0] = slot;
         self.register(slot, 0);
         self.bubble_down(0);
@@ -218,14 +218,14 @@ impl ScanHeap {
 
         let retained_every_key = self.data.len() < self.k;
         if self.data.len() < self.k {
-            self.data.push(HeapEntry::new(input_to_owned(key), count));
+            self.data.push(HeapEntry::new(key.to_owned_input(), count));
             self.bubble_up(self.data.len() - 1);
             return retained_every_key;
         }
         if count <= self.data[0].count {
             return retained_every_key;
         }
-        self.data[0] = HeapEntry::new(input_to_owned(key), count);
+        self.data[0] = HeapEntry::new(key.to_owned_input(), count);
         self.bubble_down(0);
         retained_every_key
     }
@@ -335,9 +335,12 @@ fn sketch_ceiling() {
     }
     let plain_rate = stream.len() as f64 / started.elapsed().as_secs_f64() / 1e6;
 
-    println!("\nCMSHeap::insert with the current HHHeap (rows=4, cols=4096)");
-    println!("  bare CountMin::insert: {plain_rate:.3} Minsert/s");
-    println!("{:>6}  {:>16}  {:>12}", "top_k", "Minsert/s", "heap share");
+    println!("\nCountMinSketchWithHeap::update with the current TopKHeap (rows=4, cols=4096)");
+    println!("  bare CountMinSketch::update: {plain_rate:.3} Minsert/s");
+    println!(
+        "{:>6}  {:>16}  {:>12}",
+        "heap_size", "Minsert/s", "heap share"
+    );
     for cap in CAPACITIES {
         let mut sketch = CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::new(4, 4096, cap);
         let started = Instant::now();
@@ -364,7 +367,7 @@ fn main() {
         );
         println!(
             "{:>6}  {:>14}  {:>14}  {:>14}  {:>8}",
-            "cap", "HHHeap Mups/s", "indexed Mups/s", "scan Mups/s", "speedup"
+            "cap", "TopKHeap Mups/s", "indexed Mups/s", "scan Mups/s", "speedup"
         );
 
         for cap in CAPACITIES {

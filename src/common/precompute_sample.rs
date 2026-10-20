@@ -33,9 +33,8 @@ pub static LN_ONE_MINUS_U_TABLE: LazyLock<Box<[f64]>> =
 /// `ln(1 - u_i) * scale`, where `u_i ∈ (0, 1)` is drawn from a `SmallRng`
 /// seeded with [`SEED`].
 ///
-/// Shared by [`LN_ONE_MINUS_U_TABLE`] and
-/// [`super::precompute_sample2::PRECOMPUTED_SAMPLE_RATE_1PERCENT`].
-pub(super) fn build_ln_one_minus_u_table(scale: f64) -> Box<[f64]> {
+/// Backs [`LN_ONE_MINUS_U_TABLE`].
+fn build_ln_one_minus_u_table(scale: f64) -> Box<[f64]> {
     let mut generator = SmallRng::seed_from_u64(SEED);
     (0..LN_ONE_MINUS_U_TABLE_LEN)
         .map(|_| {

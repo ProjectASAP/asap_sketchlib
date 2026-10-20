@@ -501,7 +501,7 @@ mod nitro_tests {
         assert_eq!(
             nitro.cursor(),
             1,
-            "init_nitro must draw the first skip from entry 0 and leave the cursor at 1"
+            "new must draw the first skip from entry 0 and leave the cursor at 1"
         );
 
         let mut seen = std::collections::HashSet::new();

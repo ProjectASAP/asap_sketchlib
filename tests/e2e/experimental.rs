@@ -127,7 +127,7 @@ fn kmv_estimates_stay_inside_their_relative_standard_error_band_over_independent
                 let outcome = spec.check(estimate, n);
                 tally.record(outcome.is_ok(), || {
                     format!(
-                        "k={k} seed_idx={seed_index} (trial {s}) {regime:?} n={n} \
+                        "k={k} seed_index={seed_index} (trial {s}) {regime:?} n={n} \
                          namespace={namespace:#x}: {}",
                         outcome.unwrap_err()
                     )
@@ -535,7 +535,7 @@ const EH_LAYERS: usize = 2;
 const EH_K: usize = 2;
 
 #[test]
-fn eh_univ_optimized_map_tier_exact_windows() {
+fn exponential_histogram_univmon_exact_tier_windows() {
     let window = 100u64;
     let mut eh = ExponentialHistogramUnivMon::with_defaults(2, window);
 
@@ -591,7 +591,7 @@ fn eh_univ_optimized_map_tier_exact_windows() {
 /// over 30k keys, n=200k, k=2, rows=3, cols=512, layers=2, stream seed 4242),
 /// where L2 lands 3.0% below exact and entropy 20.4% above it.
 #[test]
-fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
+fn exponential_histogram_univmon_promotes_into_the_sketch_tier_and_answers_from_it() {
     const N: usize = 80_000;
     const DOMAIN: usize = 30_000;
     const STREAM_SEED: u64 = 4242;
@@ -605,7 +605,7 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
     assert!(
         eh.sketch_buckets.len() >= 2,
         "test premise: the map tier must have promoted at least two sketch \
-         buckets (max_map_size={}, got {} sketch and {} map buckets)",
+         buckets (exact_bucket_budget={}, got {} sketch and {} map buckets)",
         eh.exact_bucket_budget,
         eh.sketch_buckets.len(),
         eh.exact_buckets.len()
@@ -649,7 +649,7 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
         result.estimate_l2(),
         l2_truth * 0.90,
         l2_truth * 1.10,
-        &format!("EHUnivOptimized sketch-tier L2 (empirical band). {context}"),
+        &format!("ExponentialHistogramUnivMon sketch-tier L2 (empirical band). {context}"),
     );
 
     let entropy_bits = truth.entropy(true);
@@ -657,7 +657,9 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
         result.estimate_entropy(),
         entropy_bits * 0.90,
         entropy_bits * 1.40,
-        &format!("EHUnivOptimized sketch-tier entropy in bits (empirical band). {context}"),
+        &format!(
+            "ExponentialHistogramUnivMon sketch-tier entropy in bits (empirical band). {context}"
+        ),
     );
 }
 
@@ -683,7 +685,7 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
 /// The lower guard makes a future fix fail this test loudly instead of leaving
 /// a stale claim in the suite.
 #[test]
-fn eh_univ_optimized_sketch_tier_cardinality_is_documented_as_unrecoverable() {
+fn exponential_histogram_univmon_sketch_tier_cardinality_is_documented_as_unrecoverable() {
     const N: usize = 80_000;
     const DOMAIN: usize = 30_000;
 
@@ -713,8 +715,8 @@ fn eh_univ_optimized_sketch_tier_cardinality_is_documented_as_unrecoverable() {
     assert!(
         reported < distinct * 0.10,
         "sketch-tier cardinality reported {reported} for {distinct} distinct keys. \
-         If UnivMon's F0 recovery was fixed or EHUnivOptimized stopped coupling the \
-         promotion threshold to layer_size, delete this test and assert a real band \
+         If UnivMon's F0 recovery was fixed or ExponentialHistogramUnivMon stopped coupling the \
+         promotion threshold to layers, delete this test and assert a real band \
          instead of leaving this stale documentation in place"
     );
 }
@@ -723,7 +725,7 @@ fn eh_univ_optimized_sketch_tier_cardinality_is_documented_as_unrecoverable() {
 /// inside the interval are replayed into a merged UnivMon. The result must
 /// still carry the whole window's L1 exactly.
 #[test]
-fn eh_univ_optimized_answers_a_mixed_map_and_sketch_interval() {
+fn exponential_histogram_univmon_answers_a_mixed_exact_and_sketch_interval() {
     const N: u64 = 60_000;
     const DOMAIN: u64 = 20_000;
 
@@ -759,7 +761,7 @@ fn eh_univ_optimized_answers_a_mixed_map_and_sketch_interval() {
 /// span shrinks accordingly. Bucket bookkeeping is arithmetic, so these are
 /// equalities rather than bands.
 #[test]
-fn eh_univ_optimized_expires_buckets_past_the_window() {
+fn exponential_histogram_univmon_expires_buckets_past_the_window() {
     const WINDOW: u64 = 5_000;
     let mut eh = promoting_eh(8, WINDOW);
     for t in 0..40_000u64 {
@@ -819,7 +821,7 @@ fn eh_univ_optimized_expires_buckets_past_the_window() {
 /// Recycling through the sketch pool must not leak state between windows: a
 /// sketch taken from the pool has to behave like a fresh one.
 #[test]
-fn eh_univ_optimized_reuses_pooled_sketches_without_leaking_state() {
+fn exponential_histogram_univmon_reuses_pooled_sketches_without_leaking_state() {
     const DOMAIN: u64 = 20_000;
     // Long run with a short window, so buckets are created, promoted, merged
     // and expired repeatedly and the pool is exercised.
@@ -850,7 +852,7 @@ fn eh_univ_optimized_reuses_pooled_sketches_without_leaking_state() {
 /// counts, which is the reference the sketch tier's estimates are compared to
 /// elsewhere in this file.
 #[test]
-fn eh_univ_optimized_map_tier_matches_exact_per_key_counts_on_a_skewed_stream() {
+fn exponential_histogram_univmon_exact_tier_matches_exact_per_key_counts_on_a_skewed_stream() {
     const N: u64 = 4_000;
     let mut eh = ExponentialHistogramUnivMon::with_defaults(4, 1_000_000);
     let keys = zipf_u64(N as usize, 64, 1.2, 9_001);
