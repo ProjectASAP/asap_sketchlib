@@ -18,8 +18,9 @@ use crate::octo_delta::{
 };
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
-    FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded, nitro_delta_saturated_i32,
+    FastPathHasher, FixedMatrix, MATRIX_MAX_ROWS, MatrixFastHash, MatrixStorage, NitroTarget,
+    QuickMatrixI64, QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded,
+    nitro_delta_saturated_i32,
 };
 
 mod delta;
@@ -196,6 +197,20 @@ where
             _hasher: PhantomData,
             admission_rate: admit_all(),
         }
+    }
+
+    /// Checks a shape before building it: `1 <= rows <= MATRIX_MAX_ROWS`, so
+    /// every row hashes with its own seed, `1 <= cols <= u32::MAX`, as the
+    /// ASAPv1 encoding requires, and a counter array whose byte size fits a
+    /// `Vec`. [`Self::with_dimensions`] builds such a shape without panicking,
+    /// and the sketch encodes.
+    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
+        wire::check_geometry(rows, cols)?;
+        rows.checked_mul(cols)
+            .and_then(|cells| cells.checked_mul(std::mem::size_of::<T>()))
+            .filter(|&bytes| bytes <= isize::MAX as usize)
+            .map(|_| ())
+            .ok_or_else(|| format!("CMS of {rows} x {cols} counters exceeds the address space"))
     }
 }
 
@@ -375,6 +390,42 @@ where
 
 /// Count-Min sketch with floating-point counters (no integer rounding).
 pub type CountMinF64<H = DefaultXxHasher> = CountMinSketch<Vector2D<f64>, RegularPath, H>;
+
+// Checked updates for f64 counters.
+impl<H: SketchHasher> CountMinSketch<Vector2D<f64>, RegularPath, H> {
+    /// Checks a weight [`Self::try_update_weighted`] accepts: finite and
+    /// nonnegative, since a Count-Min estimate is a minimum over rows and is an
+    /// upper bound only while every update adds.
+    pub fn check_weight(weight: f64) -> Result<(), String> {
+        if weight.is_finite() && weight >= 0.0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "CMS weight {weight} must be finite and nonnegative"
+            ))
+        }
+    }
+
+    /// [`Self::update_weighted`] that rejects a weight [`Self::check_weight`]
+    /// rejects, and an update that would carry a probed counter past
+    /// `f64::MAX`. On an error the sketch is unchanged.
+    pub fn try_update_weighted(&mut self, value: &DataInput, weight: f64) -> Result<(), String> {
+        Self::check_weight(weight)?;
+        let cols = self.counts.cols();
+        let probed_cols = (0..self.counts.rows())
+            .map(|r| ((H::hash64_seeded(r, value) & LOWER_32_MASK) as usize) % cols)
+            .collect::<smallvec::SmallVec<[usize; MATRIX_MAX_ROWS]>>();
+        for (r, &col) in probed_cols.iter().enumerate() {
+            if !(self.counts.query_one_counter(r, col) + weight).is_finite() {
+                return Err(format!("CMS counter overflow adding weight {weight}"));
+            }
+        }
+        for (r, col) in probed_cols.into_iter().enumerate() {
+            self.counts.increment_by_row(r, col, weight);
+        }
+        Ok(())
+    }
+}
 
 impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMinSketch<S, RegularPath, H> {
     /// Inserts an observation, emitting a delta at every promotion of the
@@ -903,5 +954,31 @@ mod tests {
         }
 
         assert_eq!(storage.as_slice(), expected_once.as_slice());
+    }
+
+    // `check_shape` accepts exactly the shapes that build, hash every row with
+    // its own seed and encode; past MATRIX_MAX_ROWS a row would reuse a seed.
+    #[test]
+    fn check_shape_accepts_buildable_encodable_shapes() {
+        for (rows, cols, accepted) in [
+            (3, 64, true),
+            (MATRIX_MAX_ROWS, 8, true),
+            (0, 64, false),
+            (3, 0, false),
+            (MATRIX_MAX_ROWS + 1, 8, false),
+            (1, u32::MAX as usize + 1, false),
+        ] {
+            assert_eq!(
+                CountMinF64::<DefaultXxHasher>::check_shape(rows, cols).is_ok(),
+                accepted,
+                "{rows} x {cols}"
+            );
+            if accepted {
+                let mut sketch = CountMinF64::<DefaultXxHasher>::with_dimensions(rows, cols);
+                sketch.try_update_weighted(&DataInput::I64(1), 0.5).unwrap();
+                assert_eq!(sketch.estimate(&DataInput::I64(1)), 0.5);
+                assert!(sketch.to_asapv1().is_ok());
+            }
+        }
     }
 }

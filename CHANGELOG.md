@@ -12,6 +12,19 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **Checked f64 updates, shape checks and an in-place `clear` for the
+  Count-Min and Count Sketch heap sketches.** `check_shape(rows, cols)` on
+  `Vector2D`-backed `CountMinSketch` and `CountSketch` accepts exactly the
+  shapes that build, hash every row with its own seed (`rows <=
+  MATRIX_MAX_ROWS`) and encode in ASAPv1, so a caller rejects a configuration
+  before building it. Over `Vector2D<f64>` counters, `check_weight` and
+  `try_update_weighted` reject a non-finite weight (and a negative one for
+  Count-Min) and a counter overflow, leaving the sketch unchanged; the heap
+  sketches' `try_update_weighted` then updates the heap. `clear` on
+  `CountMinSketchWithHeap` and `CountSketchWithHeap` zeroes the counters and
+  empties the heap in place, where `clear_heap` keeps the counters, and
+  `rescore_heap` re-reads every resident's count from the counters, since an
+  update rescores only the key it touches.
 - **`TupleKey` and `KeyColumn`**, a heap key of typed columns (null, bool,
   `i64`, `f64`, string) encoded into one canonical byte string, so a GROUP BY
   over several columns keeps one CountMinSketchWithHeap or CountSketchWithHeap candidate per tuple under

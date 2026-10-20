@@ -17,6 +17,9 @@ Status: `Ready`
 fn default() -> Self
 fn with_dimensions(rows: usize, cols: usize) -> Self
 fn from_storage(counts: S) -> Self
+// Vector2D storage: Ok for 1 <= rows <= MATRIX_MAX_ROWS (one seed per row) and
+// 1 <= cols <= u32::MAX (ASAPv1-encodable); an even rows averages the middle two
+fn check_shape(rows: usize, cols: usize) -> Result<(), String>
 
 // CountSketchWithL2Norm
 fn default() -> Self
@@ -30,6 +33,11 @@ fn with_dimensions_and_seed_index(rows: usize, cols: usize, seed_index: usize) -
 fn update(&mut self, value: &DataInput)
 fn update_weighted(&mut self, value: &DataInput, weight: S::Counter)
 fn update_with_hash(&mut self, hashed_val: &H::HashType)
+
+// Vector2D<f64>, RegularPath: weights finite (signed); an error (a bad weight
+// or a counter overflow) leaves the sketch unchanged
+fn check_weight(weight: f64) -> Result<(), String>
+fn try_update_weighted(&mut self, value: &DataInput, weight: f64) -> Result<(), String>
 
 // CountSketchWithL2Norm
 fn update_weighted(&mut self, val: &DataInput, weight: i64)

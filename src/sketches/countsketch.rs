@@ -11,8 +11,9 @@ use crate::asapv1::admission_rate::admit_all;
 use crate::common::structure_utils::AdmittedRows;
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
-    FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded, nitro_delta_saturated_i32,
+    FastPathHasher, FixedMatrix, MATRIX_MAX_ROWS, MatrixFastHash, MatrixStorage, NitroTarget,
+    QuickMatrixI64, QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded,
+    nitro_delta_saturated_i32,
 };
 use std::marker::PhantomData;
 use std::ops::Neg;
@@ -212,6 +213,23 @@ where
             admission_rate: admit_all(),
         }
     }
+
+    /// Checks a shape before building it: `1 <= rows <= MATRIX_MAX_ROWS`, so
+    /// every row hashes with its own seed, `1 <= cols <= u32::MAX`, as the
+    /// ASAPv1 encoding requires, and a counter array whose byte size fits a
+    /// `Vec`. [`Self::with_dimensions`] builds such a shape without panicking,
+    /// and the sketch encodes. An even `rows` is accepted: the estimate then
+    /// averages the two middle rows.
+    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
+        wire::check_geometry(rows, cols)?;
+        rows.checked_mul(cols)
+            .and_then(|cells| cells.checked_mul(std::mem::size_of::<T>()))
+            .filter(|&bytes| bytes <= isize::MAX as usize)
+            .map(|_| ())
+            .ok_or_else(|| {
+                format!("Count Sketch of {rows} x {cols} counters exceeds the address space")
+            })
+    }
 }
 
 // Core Count API for any storage/counter.
@@ -357,6 +375,51 @@ where
         } else {
             (estimates[mid - 1] + estimates[mid]) / 2.0
         }
+    }
+}
+
+// Checked updates for f64 counters.
+impl<H: SketchHasher> CountSketch<Vector2D<f64>, RegularPath, H> {
+    /// Checks a weight [`Self::try_update_weighted`] accepts: finite. A
+    /// negative weight is a signed update.
+    pub fn check_weight(weight: f64) -> Result<(), String> {
+        if weight.is_finite() {
+            Ok(())
+        } else {
+            Err(format!("Count Sketch weight {weight} must be finite"))
+        }
+    }
+
+    /// [`Self::update_weighted`] that rejects a weight [`Self::check_weight`]
+    /// rejects, and an update that would carry a probed counter past
+    /// `f64::MAX` in either direction. On an error the sketch is unchanged.
+    pub fn try_update_weighted(&mut self, value: &DataInput, weight: f64) -> Result<(), String> {
+        Self::check_weight(weight)?;
+        let cols = self.counts.cols();
+        let probed = (0..self.counts.rows())
+            .map(|r| {
+                let hashed = H::hash64_seeded(r, value);
+                let col = ((hashed & LOWER_32_MASK) as usize) % cols;
+                let delta = if (hashed >> 63) & 1 == 1 {
+                    weight
+                } else {
+                    -weight
+                };
+                (col, delta)
+            })
+            .collect::<smallvec::SmallVec<[(usize, f64); MATRIX_MAX_ROWS]>>();
+        for (r, &(col, delta)) in probed.iter().enumerate() {
+            if !(self.counts.query_one_counter(r, col) + delta).is_finite() {
+                return Err(format!(
+                    "Count Sketch counter overflow adding weight {weight}"
+                ));
+            }
+        }
+        for (r, (col, delta)) in probed.into_iter().enumerate() {
+            self.counts
+                .update_one_counter(r, col, |a, b| *a += b, delta);
+        }
+        Ok(())
     }
 }
 
@@ -1051,5 +1114,35 @@ mod tests {
              stream_seed={STREAM_SEED} rows={ROWS} cols={COLS} deciles={means:?}",
             hi / lo
         );
+    }
+
+    // `check_shape` accepts exactly the shapes that build, hash every row with
+    // its own seed and encode; an even row count is accepted.
+    #[test]
+    fn check_shape_accepts_buildable_encodable_shapes() {
+        type CountSketchF64 = CountSketch<Vector2D<f64>, RegularPath>;
+        for (rows, cols, accepted) in [
+            (3, 64, true),
+            (4, 64, true),
+            (MATRIX_MAX_ROWS, 8, true),
+            (0, 64, false),
+            (3, 0, false),
+            (MATRIX_MAX_ROWS + 1, 8, false),
+            (1, u32::MAX as usize + 1, false),
+        ] {
+            assert_eq!(
+                CountSketchF64::check_shape(rows, cols).is_ok(),
+                accepted,
+                "{rows} x {cols}"
+            );
+            if accepted {
+                let mut sketch = CountSketchF64::with_dimensions(rows, cols);
+                sketch
+                    .try_update_weighted(&DataInput::I64(1), -0.5)
+                    .unwrap();
+                assert_eq!(sketch.estimate(&DataInput::I64(1)), -0.5);
+                assert!(sketch.to_asapv1().is_ok());
+            }
+        }
     }
 }
