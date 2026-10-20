@@ -251,6 +251,20 @@ where
     }
 }
 
+// -- Checked f64 updates ------------------------------------------------------
+
+impl<H: SketchHasher> CountMinSketchWithHeap<Vector2D<f64>, RegularPath, H> {
+    /// [`Self::update_weighted`] through [`CountMinSketch::try_update_weighted`]:
+    /// rejects a negative or non-finite weight and a counter overflow, leaving
+    /// the counters and the heap unchanged on an error.
+    pub fn try_update_weighted(&mut self, key: &DataInput, weight: f64) -> Result<(), String> {
+        self.count_min_sketch.try_update_weighted(key, weight)?;
+        let est = self.count_min_sketch.estimate(key);
+        self.heap.update(key, est);
+        Ok(())
+    }
+}
+
 // -- RegularPath insert / estimate / merge -----------------------------------
 
 impl<S: MatrixStorage, H: SketchHasher> CountMinSketchWithHeap<S, RegularPath, H>
@@ -305,6 +319,26 @@ where
             let key_ref = key.as_data_input();
             let est = self.count_min_sketch.estimate(&key_ref);
             self.heap.update(&key_ref, est.into());
+        }
+    }
+
+    /// Re-reads every heap resident's count from the counters, keeping the
+    /// same residents. An update rescores only the key it touches, so a
+    /// resident sharing a cell with it keeps its earlier count; a caller that
+    /// needs every resident's count to equal its current estimate calls this
+    /// before reading the heap. Costs one estimate per resident.
+    pub fn rescore_heap(&mut self) {
+        let rescored = self
+            .heap
+            .heap()
+            .iter()
+            .map(|item| {
+                let est = self.count_min_sketch.estimate(&item.key.as_data_input());
+                (item.key.clone(), est.into())
+            })
+            .collect::<Vec<_>>();
+        for (key, count) in rescored {
+            self.heap.update_owned(&key, count);
         }
     }
 }
@@ -995,5 +1029,74 @@ mod tests {
             (overlap as f64) / (top_k as f64) >= 0.8,
             "heap overlap too low: overlap={overlap}, regular={regular_heap_keys:?}, fast={fast_heap_keys:?}"
         );
+    }
+
+    fn f64_heap_entries(
+        sketch: &CountMinSketchWithHeap<Vector2D<f64>, RegularPath>,
+    ) -> Vec<(crate::OwnedDataInput, f64)> {
+        let mut entries = sketch
+            .heap()
+            .heap()
+            .iter()
+            .map(|item| (item.key.clone(), item.count))
+            .collect::<Vec<_>>();
+        entries.sort_by(|a, b| a.1.total_cmp(&b.1));
+        entries
+    }
+
+    // A checked f64 update adds fractional weights, rejects a negative or
+    // non-finite weight and a counter overflow, and on an error leaves the
+    // counters and the heap as they were.
+    #[test]
+    fn f64_checked_updates_are_all_or_nothing() {
+        let mut sketch = CountMinSketchWithHeap::<Vector2D<f64>, RegularPath>::new(3, 64, 4);
+        let key = DataInput::I64(7);
+        sketch.try_update_weighted(&key, 0.125).unwrap();
+        sketch.try_update_weighted(&key, 0.25).unwrap();
+        assert_eq!(sketch.estimate(&key), 0.375);
+        assert_eq!(heap_count_for_key(sketch.heap(), &key), Some(0.375));
+        sketch
+            .try_update_weighted(&DataInput::I64(8), f64::MAX)
+            .unwrap();
+
+        let cells = sketch.count_min_sketch().as_storage().as_slice().to_vec();
+        let heap = f64_heap_entries(&sketch);
+        for weight in [-0.5, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(CountMinSketch::<Vector2D<f64>, RegularPath>::check_weight(weight).is_err());
+            assert!(sketch.try_update_weighted(&key, weight).is_err());
+        }
+        assert!(
+            sketch
+                .try_update_weighted(&DataInput::I64(8), f64::MAX)
+                .is_err()
+        );
+        assert_eq!(sketch.count_min_sketch().as_storage().as_slice(), cells);
+        assert_eq!(f64_heap_entries(&sketch), heap);
+    }
+
+    // Under heavy collisions an update moves cells other residents share, so
+    // their heap counts go stale; `rescore_heap` re-reads every resident and
+    // leaves each count equal to its current estimate.
+    #[test]
+    fn rescore_heap_rereads_every_resident() {
+        let mut sketch = CountMinSketchWithHeap::<Vector2D<f64>, RegularPath>::new(3, 8, 4);
+        let mut stale = 0;
+        for step in 0..60i64 {
+            sketch
+                .try_update_weighted(&DataInput::I64(step % 7), 0.5 + (step % 3) as f64)
+                .unwrap();
+            stale += sketch
+                .heap()
+                .heap()
+                .iter()
+                .filter(|item| item.count != sketch.estimate(&item.key.as_data_input()))
+                .count();
+            sketch.rescore_heap();
+            assert!(sketch.heap().len() <= 4);
+            for item in sketch.heap().heap() {
+                assert_eq!(item.count, sketch.estimate(&item.key.as_data_input()));
+            }
+        }
+        assert!(stale > 0, "8 columns must leave some resident stale");
     }
 }
