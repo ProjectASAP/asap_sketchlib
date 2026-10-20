@@ -683,7 +683,7 @@ This is Count-Min's list exactly (§3.2, Q-CMS-DIMS), key for key and in the sam
 4. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
 5. An optional `admission_rate` is accepted (Section 2, [admission rate](#admission-rate-admission_rate)).
 
-Rules 3 and 4 are enforced on the **encode** side too: a matrix past `MATRIX_MAX_ROWS`, one with a zero dimension, and one whose cell count disagrees with its own dimensions (`Vector2D::init` reserves without filling) all fail to serialize. `cols` must also fit the metadata's `u32` field, so a matrix wider than `u32::MAX` fails the encode rather than emitting a width no decode would read back. The format never emits bytes it would refuse to read back.
+Rules 3 and 4 are enforced on the **encode** side too: a matrix past `MATRIX_MAX_ROWS`, one with a zero dimension, and one whose cell count disagrees with its own dimensions (`Vector2D::unfilled` reserves without filling) all fail to serialize. `cols` must also fit the metadata's `u32` field, so a matrix wider than `u32::MAX` fails the encode rather than emitting a width no decode would read back. The format never emits bytes it would refuse to read back.
 
 ### 3.7: CountMinSketchWithHeap payload (`0x03 0x00`)
 
@@ -726,7 +726,7 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 8. `heap_size` **never sizes an allocation.** Rule 7 is checked before the heap is built, and the heap then reserves from the **entry count** rather than from `heap_size`: its array, its per-entry digest column and its digest index each reserve `min(len(keys), heap_size, 1024)` and grow from there as the entries are seated. So a payload declaring `heap_size = 2^32 - 1` with two entries costs two entries, and even an honest `heap_size` never reserves more than 1024 slots up front. `heap_size` still fixes the decoded heap's capacity — it is what `is_full` and every later eviction answer to — it just does not fix its allocation.
 9. Heap entries are in the emitted order above; any other order is rejected.
 
-`slots`, `positions` and the heap array are recomputed from the validated entries; nothing about them is trusted from the wire. Rules 6, 7 and 9 are enforced on the **encode** side too — a matrix whose cell count disagrees with its own dimensions (`Vector2D::init` reserves without filling) fails to serialize, and so does a heap holding the same key twice, judged as rule 7 judges it — as is the `heap_size` bound. `cols` must fit the metadata's `u32` field on the way out as well. So the format never emits bytes it would refuse to read back.
+`slots`, `positions` and the heap array are recomputed from the validated entries; nothing about them is trusted from the wire. Rules 6, 7 and 9 are enforced on the **encode** side too — a matrix whose cell count disagrees with its own dimensions (`Vector2D::unfilled` reserves without filling) fails to serialize, and so does a heap holding the same key twice, judged as rule 7 judges it — as is the `heap_size` bound. `cols` must fit the metadata's `u32` field on the way out as well. So the format never emits bytes it would refuse to read back.
 
 **A producer-side constraint: a `NaN` key.** `TopKHeap` finds a resident by digest and then compares with `PartialEq`, and `NaN` never equals itself, so offering the same `NaN` key twice seats **two** entries rather than rescoring one. That state is reachable in memory and has **no encoding**: the encode-side duplicate check reads the two keys' bits, sees one key twice, and fails with the same complaint the decoder would make. Nothing repairs it on either door — a producer that inserts float keys must keep `NaN` out of a heap it intends to serialize.
 
@@ -904,7 +904,7 @@ The same encode-side checks apply — the wire-representation duplicate-key chec
 4. `len(flow_ids) == len(vote_pos) == len(vote_neg) == len(evictions) == heavy_buckets`, and `len(light_counts) == light_rows * light_cols`, both checked before the table and the matrix are built.
 5. `flow_ids[i]` is `nil` **exactly when** `vote_pos[i] == 0`. The two encode the same fact, occupancy, and a payload where they disagree describes a table no insert could produce.
 
-Rules 3, 4 and 5 are enforced on the **encode** side too, along with `heavy_buckets == heavy.len()` and a light layer whose cell count agrees with its own dimensions (`Vector2D::init` reserves without filling), so the format never emits bytes it would refuse to read back.
+Rules 3, 4 and 5 are enforced on the **encode** side too, along with `heavy_buckets == heavy.len()` and a light layer whose cell count agrees with its own dimensions (`Vector2D::unfilled` reserves without filling), so the format never emits bytes it would refuse to read back.
 
 ### 3.12: Coco payload (`0x0c 0x00`)
 

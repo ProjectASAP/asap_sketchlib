@@ -493,7 +493,7 @@ mod tests {
     /// Serializing it must fail rather than emit bytes the decoder refuses.
     #[test]
     fn count_sketch_rejects_serializing_an_unfilled_matrix() {
-        let sketch = CountSketch::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::<i64>::init(2, 4));
+        let sketch = CountSketch::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::<i64>::unfilled(2, 4));
         assert!(
             sketch.to_asapv1().is_err(),
             "a matrix whose cell count disagrees with its dimensions must not serialize"

@@ -220,7 +220,7 @@ impl Hydra {
         let mut h = Hydra {
             rows,
             cols,
-            cells: Vector2D::init(rows, cols),
+            cells: Vector2D::unfilled(rows, cols),
             prototype: prototype.clone(),
             schema,
         };

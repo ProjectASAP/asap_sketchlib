@@ -9,7 +9,7 @@ pub struct Vector1D<T> {
 
 impl<T> Vector1D<T> {
     /// Creates an empty vector with reserved capacity.
-    pub fn init(capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
         }

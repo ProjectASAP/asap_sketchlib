@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn cs_heap_rejects_serializing_an_unfilled_matrix() {
         let sketch = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
-            Vector2D::<i64>::init(2, 4),
+            Vector2D::<i64>::unfilled(2, 4),
             4,
         );
         assert!(

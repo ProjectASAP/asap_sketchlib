@@ -203,7 +203,7 @@ where
     /// Creates a sketch with the requested number of rows and columns.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
         let mut sk = CountMinSketch {
-            counts: Vector2D::init(rows, cols),
+            counts: Vector2D::unfilled(rows, cols),
             rows: rows,
             cols: cols,
             _mode: PhantomData,

@@ -1507,7 +1507,7 @@ mod tests {
         );
 
         let mut unfilled = cm_grid();
-        unfilled.cells = Vector2D::init(3, 8);
+        unfilled.cells = Vector2D::unfilled(3, 8);
         assert!(
             unfilled.to_asapv1().is_err(),
             "an unfilled grid must not serialize"

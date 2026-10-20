@@ -869,7 +869,7 @@ mod tests {
         );
 
         let unfilled = Target::from_parts(
-            CountMinSketch::from_storage(Vector2D::<i64>::init(2, 3)),
+            CountMinSketch::from_storage(Vector2D::<i64>::unfilled(2, 3)),
             SpaceSaving::with_capacity(4),
         );
         assert!(unfilled.to_asapv1().is_err());

@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn from_storage_uses_storage_dimensions() {
         // Verifies from_storage preserves backend dimensions and requested heap capacity.
-        let storage = Vector2D::<i64>::init(4, 128);
+        let storage = Vector2D::<i64>::unfilled(4, 128);
         let sh = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(storage, 9);
 
         assert_eq!(sh.rows(), 4);

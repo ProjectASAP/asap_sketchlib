@@ -197,7 +197,7 @@ mod tests {
         );
 
         let mut unfilled =
-            CountMinSketch::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::init(2, 3));
+            CountMinSketch::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::unfilled(2, 3));
         assert!(unfilled.merge_delta(&delta(vec![0], vec![1])).is_err());
     }
 }

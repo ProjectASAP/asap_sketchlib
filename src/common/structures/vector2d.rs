@@ -53,7 +53,7 @@ impl<T> Vector2D<T> {
     /// Creates an empty matrix with reserved capacity for `rows * cols` elements.
     /// The underlying storage is left uninitialized until `fill` or similar methods are called,
     /// allowing callers to decide when and how counters are populated.
-    pub fn init(rows: usize, cols: usize) -> Self {
+    pub fn unfilled(rows: usize, cols: usize) -> Self {
         let mask_bits = super::matrix_storage::cols_mask_bits(cols);
         let mask = super::matrix_storage::cols_mask(cols);
         Self {
@@ -786,13 +786,13 @@ mod tests {
     // placeholder, potentially useful
     #[test]
     fn required_bits_match_expected_thresholds() {
-        let default_dims: Vector2D<u64> = Vector2D::init(3, 4096);
+        let default_dims: Vector2D<u64> = Vector2D::unfilled(3, 4096);
         assert_eq!(default_dims.required_bits(), 64);
 
-        let smaller_cols: Vector2D<u64> = Vector2D::init(3, 64);
+        let smaller_cols: Vector2D<u64> = Vector2D::unfilled(3, 64);
         assert_eq!(smaller_cols.required_bits(), 32);
 
-        let larger_shape: Vector2D<u64> = Vector2D::init(5, 1_048_576);
+        let larger_shape: Vector2D<u64> = Vector2D::unfilled(5, 1_048_576);
         assert_eq!(larger_shape.required_bits(), 128);
     }
 

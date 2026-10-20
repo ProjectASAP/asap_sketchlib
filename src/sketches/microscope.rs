@@ -304,10 +304,10 @@ impl<'de, H: SketchHasher> Deserialize<'de> for MicroCm<H> {
         // `t + 2`, which a crafted `t` could overflow.
         MicroParams::checked(params.t, params.c).map_err(serde::de::Error::custom)?;
         let layout = MicroLayout::new(params);
-        if cells.depth() != layout.depth() {
+        if cells.bucket_len() != layout.depth() {
             return Err(serde::de::Error::custom(format!(
                 "cell depth {} does not match the {} bytes the layout for t={}, c={} needs",
-                cells.depth(),
+                cells.bucket_len(),
                 layout.depth(),
                 params.t,
                 params.c
@@ -391,7 +391,7 @@ impl<H: SketchHasher> MicroCm<H> {
             MicroParams::checked(params.t, params.c).unwrap_or_else(|detail| panic!("{detail}"));
         clock.checked().unwrap_or_else(|detail| panic!("{detail}"));
         let layout = MicroLayout::new(params);
-        let mut cells = Vector3D::init(rows, cols, layout.depth());
+        let mut cells = Vector3D::unfilled(rows, cols, layout.depth());
         cells.fill(0);
         let col_bits = cells.mask_bits() as usize;
         assert!(
@@ -1040,7 +1040,7 @@ mod tests {
         }
 
         fn cells_for(rows: usize, cols: usize, depth: usize) -> Vector3D<u8> {
-            let mut cells: Vector3D<u8> = Vector3D::init(rows, cols, depth);
+            let mut cells: Vector3D<u8> = Vector3D::unfilled(rows, cols, depth);
             cells.fill(0);
             cells
         }

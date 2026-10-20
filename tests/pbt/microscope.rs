@@ -810,7 +810,7 @@ proptest! {
 
     // ===== A grid that was sized but never filled =====
     //
-    // `Vector3D::init` leaves the storage empty and every bucket accessor
+    // `Vector3D::unfilled` leaves the storage empty and every bucket accessor
     // panics until `fill` has run, so a `MicroCm` around one would panic on
     // its first insert or query. No public constructor produces that state,
     // and the wire must not either: the geometry a payload declares has to
@@ -849,11 +849,11 @@ proptest! {
 
         // The same geometry, filled, is the control: the refusal below is
         // about the missing bytes and nothing else.
-        let mut filled = Vector3D::init(rows, cols, depth);
+        let mut filled = Vector3D::unfilled(rows, cols, depth);
         filled.fill(0u8);
         prop_assert!(forge(filled).is_ok(), "the control payload must decode");
 
-        let refused = forge(Vector3D::init(rows, cols, depth));
+        let refused = forge(Vector3D::unfilled(rows, cols, depth));
         prop_assert!(refused.is_err(), "a grid with no bytes must be refused");
         let err = refused.err().unwrap_or_default();
         prop_assert!(

@@ -525,7 +525,7 @@ impl<T: NumericalValue> Kll<T> {
     /// Builds and returns the cumulative distribution function (CDF) from the current sketch state.
     pub fn cdf(&self) -> Cdf {
         let mut cdf = Cdf {
-            entries: Vector1D::init(self.buffer_size()),
+            entries: Vector1D::with_capacity(self.buffer_size()),
         };
         let mut total_w = 0usize;
 

@@ -624,7 +624,7 @@ mod tests {
     #[test]
     fn from_storage_uses_storage_dimensions() {
         // Verifies from_storage keeps backend dimensions and heap capacity.
-        let storage = Vector2D::<i64>::init(4, 128);
+        let storage = Vector2D::<i64>::unfilled(4, 128);
         let sh = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(storage, 9);
 
         assert_eq!(sh.rows(), 4);
@@ -1101,7 +1101,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
             panic!("{problem}");
         }
         let mut sk = CountSketchWithL2Norm {
-            counts: Vector2D::init(rows, cols),
+            counts: Vector2D::unfilled(rows, cols),
             row_l2_squared: Vector1D::filled(rows, 0),
             rows: rows,
             cols: cols,

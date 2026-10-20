@@ -159,7 +159,7 @@ impl Default for NitroBatch<Vector2D<u32>> {
             generator: new_small_rng(),
             idx: 0,
             mask: SKIP_TABLE_LEN - 1,
-            sk: Vector2D::init(5, 2048),
+            sk: Vector2D::unfilled(5, 2048),
         };
         n.sk.fill(0);
         n
@@ -169,7 +169,7 @@ impl Default for NitroBatch<Vector2D<u32>> {
 impl NitroBatch<Vector2D<u32>> {
     /// Creates a Nitro sketch with the given sampling rate.
     pub fn new(rate: f64) -> Self {
-        let mut sk = Vector2D::init(5, 2048);
+        let mut sk = Vector2D::unfilled(5, 2048);
         sk.fill(0);
         Self::with_target(rate, sk)
     }
@@ -177,7 +177,7 @@ impl NitroBatch<Vector2D<u32>> {
     /// [`NitroBatch::new`] with an explicit sampling-RNG seed. See
     /// [`NitroBatch::with_target_and_seed`].
     pub fn with_seed(rate: f64, seed: u64) -> Self {
-        let mut sk = Vector2D::init(5, 2048);
+        let mut sk = Vector2D::unfilled(5, 2048);
         sk.fill(0);
         Self::with_target_and_seed(rate, sk, seed)
     }

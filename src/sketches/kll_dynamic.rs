@@ -99,7 +99,7 @@ impl<T: NumericalValue> KllDynamic<T> {
             norm_k = MAX_K;
         }
         let mut s = Self {
-            items: Vector1D::init(norm_k * 3),
+            items: Vector1D::with_capacity(norm_k * 3),
             level_bounds_top_down: Vector1D::filled(2, 0),
             k: norm_k,
             m: norm_m,
@@ -311,7 +311,7 @@ impl<T: NumericalValue> KllDynamic<T> {
     /// Builds a CDF representation of the sketch.
     pub fn cdf(&self) -> DynamicCdf {
         let mut cdf = DynamicCdf {
-            entries: Vector1D::init(self.buffer_size()),
+            entries: Vector1D::with_capacity(self.buffer_size()),
         };
         let mut total_w = 0usize;
 

@@ -101,7 +101,7 @@ use asap_sketchlib::common::{
 use asap_sketchlib::{hash64_seeded, DataInput, Vector2D, DEFAULT_CANONICAL_SEED_INDEX};
 
 let _h = hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, &DataInput::U64(42));
-let matrix = Vector2D::<i32>::init(3, 16);
+let matrix = Vector2D::<i32>::unfilled(3, 16);
 assert_eq!(matrix.rows(), 3);
 ```
 

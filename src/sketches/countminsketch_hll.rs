@@ -111,10 +111,10 @@ impl<'de, H: SketchHasher> Deserialize<'de> for CountMinHll<H> {
             )));
         }
         let expected_depth = 1usize << precision;
-        if buckets.depth() != expected_depth {
+        if buckets.bucket_len() != expected_depth {
             return Err(serde::de::Error::custom(format!(
                 "buckets depth {} does not match 2^precision {} = {expected_depth}",
-                buckets.depth(),
+                buckets.bucket_len(),
                 precision
             )));
         }
@@ -180,7 +180,7 @@ impl<H: SketchHasher> CountMinHll<H> {
              minimum across rows to one HyperLogLog"
         );
         let depth = 1usize << precision;
-        let mut buckets = Vector3D::init(rows, cols, depth);
+        let mut buckets = Vector3D::unfilled(rows, cols, depth);
         buckets.fill(0);
         let col_bits = buckets.mask_bits() as usize;
         assert!(
@@ -214,7 +214,7 @@ impl<H: SketchHasher> CountMinHll<H> {
 
     /// Number of HLL registers per `(row, col)` bucket.
     pub fn registers_per_bucket(&self) -> usize {
-        self.buckets.depth()
+        self.buckets.bucket_len()
     }
 
     /// Exposes the backing storage for inspection/testing.
@@ -574,7 +574,7 @@ mod tests {
             precision: u32,
         }
         fn attempt(rows: usize, cols: usize, depth: usize, precision: u32) -> String {
-            let mut buckets: Vector3D<u8> = Vector3D::init(rows, cols, depth);
+            let mut buckets: Vector3D<u8> = Vector3D::unfilled(rows, cols, depth);
             buckets.fill(0);
             let bytes = rmp_serde::to_vec_named(&Forged { buckets, precision }).expect("encode");
             CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
@@ -624,7 +624,7 @@ mod tests {
         }
         fn attempt(precision: u32, rank: u8) -> Option<String> {
             let depth = 1usize << precision;
-            let mut buckets: Vector3D<u8> = Vector3D::init(4, 32, depth);
+            let mut buckets: Vector3D<u8> = Vector3D::unfilled(4, 32, depth);
             buckets.fill(0);
             buckets.as_mut_slice()[0] = rank;
             let bytes = rmp_serde::to_vec_named(&Forged { buckets, precision }).expect("encode");

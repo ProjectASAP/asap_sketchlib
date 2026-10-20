@@ -4,9 +4,9 @@ use crate::DataInput;
 
 mod wire;
 
-const DEFAULT_SEED: u64 = 0x9E37_79B9_7F4A_7C15;
-const GAMMA: u64 = 0xBF58_476D_1CE4_E5B9;
-const DELTA: u64 = 0x94D0_49BB_1331_11EB;
+const GOLDEN_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+const MIX_MULTIPLIER_1: u64 = 0xBF58_476D_1CE4_E5B9;
+const MIX_MULTIPLIER_2: u64 = 0x94D0_49BB_1331_11EB;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct SampleEntry {
@@ -30,7 +30,7 @@ pub struct UniformSampling {
 
 impl UniformSampling {
     pub fn new(sample_rate: f64) -> Self {
-        Self::with_seed(sample_rate, DEFAULT_SEED)
+        Self::with_seed(sample_rate, GOLDEN_GAMMA)
     }
 
     pub fn with_seed(sample_rate: f64, seed: u64) -> Self {
@@ -38,7 +38,7 @@ impl UniformSampling {
             (0.0..=1.0).contains(&sample_rate) && sample_rate > 0.0,
             "uniform sampling rate must be within (0, 1]"
         );
-        let init_state = if seed == 0 { DEFAULT_SEED } else { seed };
+        let init_state = if seed == 0 { GOLDEN_GAMMA } else { seed };
         Self {
             sample_rate,
             total_seen: 0,
@@ -151,16 +151,16 @@ impl UniformSampling {
     }
 
     fn next_random(&mut self) -> u64 {
-        self.rng_state = self.rng_state.wrapping_add(DEFAULT_SEED);
+        self.rng_state = self.rng_state.wrapping_add(GOLDEN_GAMMA);
         let mut z = self.rng_state;
-        z = (z ^ (z >> 30)).wrapping_mul(GAMMA);
-        z = (z ^ (z >> 27)).wrapping_mul(DELTA);
+        z = (z ^ (z >> 30)).wrapping_mul(MIX_MULTIPLIER_1);
+        z = (z ^ (z >> 27)).wrapping_mul(MIX_MULTIPLIER_2);
         z ^ (z >> 31)
     }
 
     fn mix_state(&mut self, other: u64) {
         let mixed = self.rng_state ^ other.rotate_left(19);
-        self.rng_state = if mixed == 0 { DEFAULT_SEED } else { mixed };
+        self.rng_state = if mixed == 0 { GOLDEN_GAMMA } else { mixed };
     }
 }
 

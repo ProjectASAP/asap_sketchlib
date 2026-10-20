@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn count_l2hh_rejects_serializing_an_unfilled_matrix() {
         let mut sketch: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(2, 4);
-        sketch.counts = Vector2D::init(2, 4);
+        sketch.counts = Vector2D::unfilled(2, 4);
         assert!(
             sketch.to_asapv1().is_err(),
             "a matrix whose cell count disagrees with its dimensions must not serialize"
@@ -594,7 +594,7 @@ mod tests {
     /// as a struct deserialized by another route could be.
     fn unchecked(rows: usize, cols: usize) -> Std {
         CountSketchWithL2Norm {
-            counts: Vector2D::init(rows, cols),
+            counts: Vector2D::unfilled(rows, cols),
             row_l2_squared: Vector1D::filled(rows, 0),
             rows: rows,
             cols: cols,
