@@ -19,11 +19,10 @@ fn from_storage(counts: S) -> Self
 fn check_shape(rows: usize, cols: usize) -> Result<(), String>
 ```
 
-`check_shape` accepts the ASAPv1 geometry, `1 <= rows <= MATRIX_MAX_ROWS` (20)
-and `1 <= cols <= u32::MAX`, on every hashing path; `with_dimensions` and
-`from_storage` panic on any other shape. Past 20 rows the regular path and the
-fast path's per-row (`Rows`) layout would hash row `r + 20` with row `r`'s
-seed; the packed layouts carve one hash and reuse no seed.
+`check_shape` accepts any shape with both dimensions non-zero and
+`rows * cols` within `usize`; `with_dimensions` and `from_storage` panic on any
+other shape. Every row draws its own seed (`seed_for_index`), so any row count
+hashes independently.
 
 ## Insert/Update
 
@@ -79,9 +78,8 @@ on every `CountMinSketch`: the impl exists only for wire-eligible configs
 `i128` / other exotic-counter or non-`Vector2D` sketch must be converted to a
 wire-eligible storage first (only you know if the mapping is lossless).
 `rows`/`cols` are carried in the envelope metadata; the payload is just
-`[counts]`. The wire covers `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed
-list length): past that, the regular path gives row `r` and row `r + 20` the
-same seed and identical counters, so a wider matrix is refused on both sides in
+`[counts]`. The wire covers `1 <= rows <= 20` (`MATRIX_MAX_ROWS`) and
+`cols <= u32::MAX`; `to_asapv1` and `from_asapv1` refuse a wider matrix in
 either mode.
 
 ## Deltas

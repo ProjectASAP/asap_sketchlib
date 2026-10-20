@@ -385,13 +385,15 @@ mod tests {
         );
     }
 
-    /// More rows than the seed list has seeds is refused by the constructors
-    /// and by the decoder.
+    /// More than `MATRIX_MAX_ROWS` rows builds in memory but is refused by the
+    /// encoder and by the decoder.
     #[test]
     fn count_min_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
-        let problem = CountMinSketch::<Vector2D<i64>, RegularPath>::check_shape(rows, 8)
-            .expect_err("a matrix past MATRIX_MAX_ROWS must not be built");
+        let problem = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, 8)
+            .to_asapv1()
+            .expect_err("a matrix past MATRIX_MAX_ROWS must not serialize")
+            .to_string();
         assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
 
         let metadata = rmp_serde::to_vec_named(&cms_metadata::<DefaultXxHasher>(

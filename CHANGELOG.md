@@ -128,7 +128,8 @@ signals a backwards-compatible change.
   of that capacity holds in steady state once keys shaped like `key` churn
   through it.
 - **`check_shape(rows, cols)`** on `CountMinSketch`, `CountSketch`, their
-  WithHeap and WithSpaceSaving forms: the shapes their constructors build.
+  WithHeap and WithSpaceSaving forms: the shapes their constructors build,
+  both dimensions non-zero and `rows * cols` within `usize`.
 - **`clear`** on `CountMinSketch`, `CountSketch` and their WithHeap forms:
   zeroes the counters (and empties the heap) and returns the Nitro sampler to
   its start, keeping shape and allocation. With it, `Nitro::reset` and
@@ -366,11 +367,15 @@ signals a backwards-compatible change.
   `memory_bytes(&self)` is what an instance holds and
   `estimated_memory_bytes(<shape>)` prices a shape before building.
 - **`CountMinSketch`, `CountSketch`, their WithHeap and WithSpaceSaving forms
-  refuse shapes outside the ASAPv1 geometry** (breaking): their constructors
-  and `from_storage` panic unless `1 <= rows <= MATRIX_MAX_ROWS` (20) and
-  `1 <= cols <= u32::MAX`, on every hashing path. Past 20 rows the regular
-  path and the fast path's per-row (`Rows`) layout would reuse row `r`'s seed
-  for row `r + 20`; the packed layouts reuse no seed.
+  refuse a zero dimension and a counter count past `usize`** (breaking): their
+  constructors and `from_storage` panic on such a shape.
+- **Seed index `i` hashes with `seed_for_index(i)`** (new, public):
+  `SEED_LIST[i % 20] * (i / 20 + 1) + i / 20` in wrapping `u64` arithmetic.
+  Indexes below 20 keep their seed; an index past 20 draws its own, so matrix
+  rows past 20 hash independently and UnivMon-Q's occurrence priorities hash at
+  their own seed. Count-Min, Count Sketch, their WithHeap and WithSpaceSaving
+  forms, Elastic, Hydra and UnivMon build any row count in memory; `to_asapv1`
+  refuses more than `MATRIX_MAX_ROWS`.
 
 ### Removed
 
@@ -406,8 +411,6 @@ signals a backwards-compatible change.
   layer 0's Count Sketch F2 estimate (terminal mode: the summed strata's), not
   the heap recurrence. New `top_layer_complete()`; the error bounds, stated
   jointly with `top_layer_complete()`, are in `docs/api/api_univmon.md`.
-- `UnivMon::new` refuses more than `MATRIX_MAX_ROWS` rows, which the ASAPv1
-  wire refuses to encode or decode; it panics exactly when `check_shape` fails.
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
   stream: the CDF was sorted with `partial_cmp(..).unwrap()`. It sorts with
   `total_cmp`, as the three sibling sorts beside it already did.

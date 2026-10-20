@@ -1623,7 +1623,14 @@ mod tests {
             .to_string();
         assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
 
-        assert!(CountMinSketch::<Vector2D<i32>, FastPath>::check_shape(rows, 16).is_err());
+        let wide_counter = HydraCounter::CountMinSketch(
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(rows, 16),
+        );
+        let problem = grid(wide_counter)
+            .to_asapv1()
+            .expect_err("a counter past MATRIX_MAX_ROWS must not serialize")
+            .to_string();
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
 
         // The boundary itself is eligible.
         assert!(

@@ -90,9 +90,9 @@ pub struct NitroContext {
     pub rounding_state: u64,
 }
 
-/// Rows one update's admission walk can report without allocating.
-/// [`MATRIX_MAX_ROWS`] is the widest matrix the hash family supports, so the
-/// fast path never touches the heap.
+/// Rows one update's admission walk can report without allocating:
+/// [`MATRIX_MAX_ROWS`], the widest matrix ASAPv1 carries. A wider matrix
+/// spills to the heap.
 pub(crate) type AdmittedRows = SmallVec<[(usize, u64); MATRIX_MAX_ROWS]>;
 
 impl Default for Nitro {
@@ -790,14 +790,13 @@ mod nitro_tests {
         }
     }
 
-    /// The admission buffer must stay inline for every matrix the hash family
-    /// supports, at every rate — including `p = 1`, where every row is
-    /// admitted at once.
+    /// The admission buffer stays inline for every matrix ASAPv1 carries, at
+    /// every rate — including `p = 1`, where every row is admitted at once.
     ///
     /// `SmallVec::spilled()` is the direct question: it is true exactly when
     /// the buffer has moved to the heap.
     #[test]
-    fn the_admission_buffer_never_reaches_the_heap_within_the_supported_row_count() {
+    fn the_admission_buffer_never_reaches_the_heap_within_matrix_max_rows() {
         let mut out = AdmittedRows::new();
         for &rate in &[1.0f64, 0.9, 0.5, 0.3, 0.07, 0.01] {
             let mut nitro = Nitro::with_seed(rate, 0x0117_0042);

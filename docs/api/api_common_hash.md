@@ -28,6 +28,7 @@ Not applicable.
 ```rust
 pub const SEED_LIST: [u64; 20]
 pub const MATRIX_MAX_ROWS: usize
+const fn seed_for_index(index: usize) -> u64
 pub const DEFAULT_CANONICAL_SEED_INDEX: usize
 pub const UNIVMON_BOTTOM_LAYER_SEED_INDEX: usize
 pub const HYDRA_SEED_INDEX: usize
@@ -75,8 +76,12 @@ assert!(h > 0 || h == 0);
 ## Caveats
 
 - Matrix hash helper selection depends on row/column shape.
-- Seed indices wrap at `SEED_LIST.len()`, so a matrix row `r` and row
-  `r + MATRIX_MAX_ROWS` draw the same seed and place every key identically.
+- Seed index `i` hashes with `seed_for_index(i)`:
+  `SEED_LIST[i % 20] * (i / 20 + 1) + i / 20` in wrapping `u64` arithmetic, so
+  indexes below 20 draw their `SEED_LIST` entry and a matrix row past 20 draws a
+  seed of its own.
+- `MATRIX_MAX_ROWS` (20) is the most rows an ASAPv1 matrix payload carries; in
+  memory a matrix takes any row count.
 
 ## See Also
 

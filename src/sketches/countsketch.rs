@@ -8,6 +8,7 @@
 //!   ICALP 2002. <https://www.cs.rutgers.edu/~farach/pubs/FrequentStream.pdf>
 
 use crate::asapv1::admission_rate::admit_all;
+use crate::common::hash::check_matrix_shape;
 use crate::common::structure_utils::AdmittedRows;
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
@@ -207,7 +208,7 @@ where
     ///
     /// Panics when [`CountSketch::check_shape`] refuses the shape.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
-        if let Err(problem) = wire::check_geometry(rows, cols) {
+        if let Err(problem) = check_matrix_shape("Count Sketch", rows, cols) {
             panic!("{problem}");
         }
         CountSketch {
@@ -225,11 +226,12 @@ where
     S: MatrixStorage<Counter = C>,
     C: CountSketchCounter,
 {
-    /// The shapes this sketch builds, the ASAPv1 geometry on every path:
-    /// `1 <= rows <= MATRIX_MAX_ROWS` and `1 <= cols <= u32::MAX`. The
-    /// constructors panic on any other shape.
+    /// The shapes this sketch builds: both dimensions non-zero and
+    /// `rows * cols` within `usize`. The constructors panic on any other
+    /// shape; `to_asapv1` also needs `rows <= MATRIX_MAX_ROWS` and
+    /// `cols <= u32::MAX`.
     pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
-        wire::check_geometry(rows, cols)
+        check_matrix_shape("Count Sketch", rows, cols)
     }
 
     /// Wraps an existing matrix storage as a Count Sketch.
@@ -724,7 +726,8 @@ mod tests {
     use std::panic::catch_unwind;
 
     /// `with_dimensions` and `from_storage` panic on both paths exactly when
-    /// `check_shape` refuses the shape.
+    /// `check_shape` refuses the shape: a zero dimension or a counter count
+    /// past `usize`. Any row count builds.
     #[test]
     fn constructors_panic_exactly_when_check_shape_refuses() {
         type Regular = CountSketch<Vector2D<i64>, RegularPath>;
@@ -740,7 +743,7 @@ mod tests {
         ] {
             let accepted = Regular::check_shape(rows, cols).is_ok();
             assert_eq!(accepted, Fast::check_shape(rows, cols).is_ok());
-            assert_eq!(accepted, (1..=MATRIX_MAX_ROWS).contains(&rows) && cols >= 1);
+            assert_eq!(accepted, rows >= 1 && cols >= 1);
             let shape = format!("{rows}x{cols}");
             assert_eq!(
                 catch_unwind(|| Regular::with_dimensions(rows, cols)).is_ok(),
@@ -764,7 +767,9 @@ mod tests {
                 "{shape}"
             );
         }
-        assert!(Regular::check_shape(1, u32::MAX as usize + 1).is_err());
+        let problem = Regular::check_shape(2, usize::MAX).expect_err("overflow");
+        assert!(problem.contains("overflow usize"), "got {problem}");
+        assert!(catch_unwind(|| Regular::with_dimensions(2, usize::MAX)).is_err());
     }
 
     /// `clear` returns the Nitro sampler to its start: a cleared sketch fed

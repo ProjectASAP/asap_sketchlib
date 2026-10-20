@@ -294,17 +294,16 @@ mod tests {
         DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS, RegularPath,
     };
 
-    /// The light layer is a Count-Min matrix, so it carries the same row bound:
-    /// more rows than the seed list has seeds is refused on both sides.
+    /// The light layer is a Count-Min matrix, so it carries the same wire row
+    /// bound: past `MATRIX_MAX_ROWS` it builds but is refused on both sides.
     #[test]
     fn elastic_rejects_too_many_light_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
         assert!(
-            std::panic::catch_unwind(|| {
-                ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(4, rows, 256)
-            })
-            .is_err(),
-            "a light layer past MATRIX_MAX_ROWS must not be built"
+            ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(4, rows, 256)
+                .to_asapv1()
+                .is_err(),
+            "a light layer past MATRIX_MAX_ROWS must not serialize"
         );
 
         let metadata =

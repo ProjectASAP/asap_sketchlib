@@ -115,9 +115,8 @@ A zero dimension, a table whose bucket count disagrees with `rows`/`cols`, a pay
 length that disagrees with the declared geometry, and a `nil` key carrying a
 non-zero value are all rejected on both sides.
 
-Row `i` hashes at seed index `i`, so the wire covers `1 <= d <= 20`
-(`MATRIX_MAX_ROWS`, the seed list length): past that, row `i` and row `i + 20`
-map every key to the same bucket. A wider table is refused on both sides.
+Row `i` hashes at seed index `i`. The wire covers `1 <= d <= 20`
+(`MATRIX_MAX_ROWS`); a wider table is refused on both sides.
 
 ## Examples
 

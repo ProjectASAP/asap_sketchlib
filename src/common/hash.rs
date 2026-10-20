@@ -35,13 +35,19 @@ pub const SEED_LIST: [u64; 20] = [
     0xdb0c2e0d,
 ];
 
+/// The seed that seed index `index` hashes with: `SEED_LIST[index % 20]`
+/// times `index / 20 + 1`, plus `index / 20`, in wrapping `u64` arithmetic.
+/// Indexes below 20 draw their [`SEED_LIST`] entry.
 #[inline(always)]
-fn normalized_seed_index(d: usize) -> usize {
-    d % SEED_LIST.len()
+pub const fn seed_for_index(index: usize) -> u64 {
+    let round = (index / SEED_LIST.len()) as u64;
+    SEED_LIST[index % SEED_LIST.len()]
+        .wrapping_mul(round + 1)
+        .wrapping_add(round)
 }
 
-/// Rows a per-row-seeded matrix sketch hashes independently. Row `r` and row
-/// `r + MATRIX_MAX_ROWS` draw the same [`SEED_LIST`] entry.
+/// Most rows an ASAPv1 matrix payload carries, the length of [`SEED_LIST`].
+/// In memory a matrix sketch takes any row count.
 pub const MATRIX_MAX_ROWS: usize = SEED_LIST.len();
 
 /// Checks a matrix sketch's row count against [`MATRIX_MAX_ROWS`], naming
@@ -51,6 +57,20 @@ pub(crate) fn check_matrix_rows(sketch: &str, rows: usize) -> Result<(), String>
         return Err(format!(
             "{sketch} rows {rows} exceeds MATRIX_MAX_ROWS {MATRIX_MAX_ROWS}"
         ));
+    }
+    Ok(())
+}
+
+/// Checks the shape a matrix sketch builds in memory: both dimensions
+/// non-zero and `rows * cols` within `usize`. Names `sketch` in the error.
+pub(crate) fn check_matrix_shape(sketch: &str, rows: usize, cols: usize) -> Result<(), String> {
+    if rows == 0 || cols == 0 {
+        return Err(format!(
+            "{sketch} dimensions must be non-zero: rows={rows}, cols={cols}"
+        ));
+    }
+    if rows.checked_mul(cols).is_none() {
+        return Err(format!("{sketch} {rows}x{cols} counters overflow usize"));
     }
     Ok(())
 }
@@ -130,7 +150,7 @@ impl SketchHasher for DefaultXxHasher {
 
     #[inline(always)]
     fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64 {
-        let seed = SEED_LIST[normalized_seed_index(seed_index)];
+        let seed = seed_for_index(seed_index);
         match key {
             DataInput::I32(i) => XxHash3_64::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
             DataInput::I64(i) => XxHash3_64::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
@@ -154,7 +174,7 @@ impl SketchHasher for DefaultXxHasher {
 
     #[inline(always)]
     fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128 {
-        let seed = SEED_LIST[normalized_seed_index(seed_index)];
+        let seed = seed_for_index(seed_index);
         match key {
             DataInput::I32(i) => XxHash3_128::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
             DataInput::I64(i) => XxHash3_128::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
@@ -178,7 +198,7 @@ impl SketchHasher for DefaultXxHasher {
 
     #[inline(always)]
     fn hash128_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u128 {
-        let seed = SEED_LIST[normalized_seed_index(seed_index)];
+        let seed = seed_for_index(seed_index);
         match key {
             OwnedDataInput::I32(i) => {
                 XxHash3_128::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes())
@@ -221,7 +241,7 @@ impl SketchHasher for DefaultXxHasher {
 
     #[inline(always)]
     fn hash64_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u64 {
-        let seed = SEED_LIST[normalized_seed_index(seed_index)];
+        let seed = seed_for_index(seed_index);
         match key {
             OwnedDataInput::I32(i) => {
                 XxHash3_64::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes())
@@ -424,17 +444,12 @@ pub fn hash_for_matrix_seeded_with_layout_generic<H: SketchHasher>(
     key: &DataInput,
 ) -> MatrixHash {
     match layout {
-        MatrixHashLayout::Packed64 => {
-            MatrixHash::Packed64(H::hash64_seeded(seed_index % SEED_LIST.len(), key))
-        }
-        MatrixHashLayout::Packed128 => {
-            MatrixHash::Packed128(H::hash128_seeded(seed_index % SEED_LIST.len(), key))
-        }
+        MatrixHashLayout::Packed64 => MatrixHash::Packed64(H::hash64_seeded(seed_index, key)),
+        MatrixHashLayout::Packed128 => MatrixHash::Packed128(H::hash128_seeded(seed_index, key)),
         MatrixHashLayout::Rows => {
             let mut hashes = SmallVec::<[u64; 8]>::with_capacity(rows);
             for row in 0..rows {
-                let seed = (seed_index + row) % SEED_LIST.len();
-                hashes.push(H::hash64_seeded(seed, key));
+                hashes.push(H::hash64_seeded(seed_index.wrapping_add(row), key));
             }
             MatrixHash::Rows(hashes)
         }
@@ -624,17 +639,73 @@ mod tests {
     }
 
     #[test]
-    fn hash_seed_index_wraps_like_go() {
+    fn seed_indexes_below_the_seed_list_length_keep_their_seed() {
         let key = DataInput::Bytes(b"projectasap");
+        for (index, &seed) in SEED_LIST.iter().enumerate() {
+            assert_eq!(seed_for_index(index), seed);
+            assert_eq!(
+                hash64_seeded(index, &key),
+                XxHash3_64::oneshot_with_seed(seed, b"projectasap")
+            );
+            assert_eq!(
+                hash128_seeded(index, &key),
+                XxHash3_128::oneshot_with_seed(seed, b"projectasap")
+            );
+        }
+        assert_eq!(
+            seed_for_index(20),
+            SEED_LIST[0].wrapping_mul(2).wrapping_add(1)
+        );
+        assert_eq!(
+            seed_for_index(45),
+            SEED_LIST[5].wrapping_mul(3).wrapping_add(2)
+        );
+    }
 
+    /// Rows 20..64 of a 64-row matrix draw seeds of their own, so no row's
+    /// counters repeat another's, on the regular path and the fast path's
+    /// per-row layout.
+    #[test]
+    fn rows_past_the_seed_list_length_hash_independently() {
+        use crate::{CountMinSketch, CountSketch, FastPath, RegularPath, Vector2D};
+
+        const ROWS: usize = 64;
+        const COLS: usize = 1024;
+        let seeds: HashSet<u64> = (0..ROWS).map(seed_for_index).collect();
+        assert_eq!(seeds.len(), ROWS, "two rows share a seed");
         assert_eq!(
-            hash64_seeded(SEED_LIST.len() + DEFAULT_CANONICAL_SEED_INDEX, &key),
-            hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, &key)
+            hash_layout_for_matrix(ROWS, COLS),
+            MatrixHashLayout::Rows,
+            "the fast path must hash per row at this shape"
         );
-        assert_eq!(
-            hash128_seeded(SEED_LIST.len() + DEFAULT_CANONICAL_SEED_INDEX, &key),
-            hash128_seeded(DEFAULT_CANONICAL_SEED_INDEX, &key)
-        );
+
+        fn assert_rows_distinct<T: PartialEq + Copy>(rows: Vec<Vec<T>>, what: &str) {
+            for a in 0..rows.len() {
+                for b in a + 1..rows.len() {
+                    assert!(rows[a] != rows[b], "{what}: row {b} repeats row {a}");
+                }
+            }
+        }
+        let keys = || (0..2_000u64).map(DataInput::U64);
+
+        let mut cms_regular =
+            CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
+        let mut cms_fast = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+        let mut cs_regular = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
+        let mut cs_fast = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+        for key in keys() {
+            cms_regular.update(&key);
+            cms_fast.update(&key);
+            cs_regular.update(&key);
+            cs_fast.update(&key);
+        }
+        let rows_of = |m: &Vector2D<i64>| -> Vec<Vec<i64>> {
+            (0..ROWS).map(|r| m.row_slice(r).to_vec()).collect()
+        };
+        assert_rows_distinct(rows_of(cms_regular.as_storage()), "Count-Min regular");
+        assert_rows_distinct(rows_of(cms_fast.as_storage()), "Count-Min fast");
+        assert_rows_distinct(rows_of(cs_regular.as_storage()), "Count Sketch regular");
+        assert_rows_distinct(rows_of(cs_fast.as_storage()), "Count Sketch fast");
     }
 
     #[test]

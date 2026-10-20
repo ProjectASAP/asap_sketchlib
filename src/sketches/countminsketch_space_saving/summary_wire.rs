@@ -661,6 +661,7 @@ mod tests {
         c.rows = MATRIX_MAX_ROWS as u32 + 1;
         c.counts = vec![0; (MATRIX_MAX_ROWS + 1) * 3];
         assert!(decode_error(&c.bytes()).contains("MATRIX_MAX_ROWS"));
+        assert!(Target::new(MATRIX_MAX_ROWS + 1, 3, 4).to_asapv1().is_err());
 
         let mut c = craft();
         c.rows = MATRIX_MAX_ROWS as u32;

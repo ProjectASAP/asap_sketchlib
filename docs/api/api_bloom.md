@@ -24,7 +24,7 @@ fn with_capacity(expected_items: usize, target_fpp: f64) -> Self
 fn with_dimensions(rows: usize, cols: usize) -> Self
 fn dimensions_for(expected_items: usize, target_fpp: f64) -> (usize, usize)
 
-const BLOOM_MAX_SLICES: usize   // MATRIX_MAX_ROWS (20), the hasher's seed count
+const BLOOM_MAX_SLICES: usize   // MATRIX_MAX_ROWS (20), the most rows ASAPv1 carries
 const BLOOM_MAX_BITS: usize     // 2^31, the sizing ceiling
 ```
 
@@ -36,8 +36,8 @@ delivered rate lands under the target rather than over it. `dimensions_for`
 reports the choice without allocating.
 
 The cap is the reason the width is solved for `k` rather than taken as the
-`k`-optimal split `m/k`. The hasher has 20 seeds, so 20 slices is as many as can
-hash independently. Capping `k` and widening the slices to compensate costs
+`k`-optimal split `m/k`. A filter has at most 20 slices, the most an ASAPv1
+matrix carries. Capping `k` and widening the slices to compensate costs
 bits — about 20% more at `p = 1e-12` — and delivers the target, where the
 `k`-optimal split would have delivered `2^-20` no matter what was asked for.
 
@@ -147,7 +147,7 @@ if !seen.contains(&DataInput::Str("10.0.0.2:443")) {
   as non-interchangeable regardless — a filter validated on an agreeing
   geometry will lose almost every member on a packed one. The `mode` tag makes
   a cross-path decode fail rather than fail silently.
-- `BLOOM_MAX_SLICES` (20), the hasher's seed count, is the most slices a filter
+- `BLOOM_MAX_SLICES` (20), `MATRIX_MAX_ROWS`, is the most slices a filter
   can have. `with_capacity` never asks for more, and `with_dimensions` panics if
   asked.
 - `with_dimensions(1, 1)` is legal and answers yes to everything after the

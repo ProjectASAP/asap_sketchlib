@@ -30,7 +30,8 @@ pub const BLOOM_DEFAULT_ROWS: usize = 7;
 /// Bits per hash function in a default filter.
 pub const BLOOM_DEFAULT_COLS: usize = 1 << 16;
 
-/// Slices that can hash independently, the matrix row bound under Bloom's name.
+/// Most slices a filter has: [`MATRIX_MAX_ROWS`], the ASAPv1 matrix row bound
+/// under Bloom's name.
 pub const BLOOM_MAX_SLICES: usize = MATRIX_MAX_ROWS;
 
 /// Ceiling on the bits [`Bloom::with_capacity`] will size to, 256 MiB packed.

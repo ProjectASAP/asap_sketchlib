@@ -453,8 +453,8 @@ mod tests {
                 .all(|&c| c == 0)
         );
         assert_eq!(sketch.memory_bytes(), held);
-        assert!(CountSketchWithHeap::<Vector2D<i64>, RegularPath>::check_shape(21, 64).is_err());
-        assert!(CountSketchWithHeap::<Vector2D<i64>, RegularPath>::check_shape(20, 64).is_ok());
+        assert!(CountSketchWithHeap::<Vector2D<i64>, RegularPath>::check_shape(21, 64).is_ok());
+        assert!(CountSketchWithHeap::<Vector2D<i64>, RegularPath>::check_shape(0, 64).is_err());
     }
 
     fn heap_count_for_key<C: crate::HeapCount>(heap: &TopKHeap<C>, key: &DataInput) -> Option<C> {

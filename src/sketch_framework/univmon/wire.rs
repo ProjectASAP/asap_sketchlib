@@ -755,17 +755,16 @@ mod tests {
         assert!(UnivMon::from_asapv1(&encoded).is_ok());
     }
 
-    /// Every layer is a CountSketchWithL2Norm matrix, so a layer past the seed list's row
-    /// bound is refused when built and when decoded.
+    /// A layer past `MATRIX_MAX_ROWS` rows builds in memory but is refused
+    /// when encoded and when decoded.
     #[test]
     fn univmon_rejects_too_many_layer_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
-        let problem = UnivMon::check_shape(4, rows, 16, 3).expect_err("rows past MATRIX_MAX_ROWS");
+        let problem = UnivMon::new(4, rows, 16, 3)
+            .to_asapv1()
+            .expect_err("a layer past MATRIX_MAX_ROWS must not serialize")
+            .to_string();
         assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
-        assert!(
-            std::panic::catch_unwind(|| UnivMon::new(4, rows, 16, 3)).is_err(),
-            "a layer past MATRIX_MAX_ROWS must not be built"
-        );
 
         let um = populated();
         let encoded = um.to_asapv1().expect("serialize");

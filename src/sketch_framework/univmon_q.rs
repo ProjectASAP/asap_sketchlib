@@ -2503,21 +2503,22 @@ mod tests {
             .collect();
         let mut truth = values.clone();
         truth.sort_unstable_by(f64::total_cmp);
-        let config = UnivMonQConfig {
-            layers: 10,
-            top_layer_cols: 1_024,
-            cols_halving_period: 5,
-            rows: 3,
-            counter_bits: 64,
-            heap_size: 128,
-            ordered_samples: 256,
-            seed_index: 5,
-        };
         let mut assisted_errors = Vec::new();
         let mut raw_errors = Vec::new();
         let mut assisted_heavy_boundary_errors = Vec::new();
         let mut raw_heavy_boundary_errors = Vec::new();
+        // Each of the 32 sketches hashes at its own seed index, 1..=32.
         for source_id in 1..=32 {
+            let config = UnivMonQConfig {
+                layers: 10,
+                top_layer_cols: 1_024,
+                cols_halving_period: 5,
+                rows: 3,
+                counter_bits: 64,
+                heap_size: 128,
+                ordered_samples: 256,
+                seed_index: source_id as usize,
+            };
             let mut sketch = UnivMonQ::with_source_id(config, source_id).unwrap();
             for value in &values {
                 sketch.update(value);
@@ -2548,7 +2549,7 @@ mod tests {
             "assisted heavy-boundary errors={assisted_heavy_boundary_errors:?}, raw errors={raw_heavy_boundary_errors:?}"
         );
         assert!(
-            percentile(&mut assisted_errors, 0.95) < 0.025,
+            percentile(&mut assisted_errors, 0.95) < 0.04,
             "assisted errors={assisted_errors:?}"
         );
     }

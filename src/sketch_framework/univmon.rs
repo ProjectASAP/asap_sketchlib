@@ -85,8 +85,7 @@ impl Default for UnivMon {
 /// reaches is read from the hash at seed index [`UNIVMON_BOTTOM_LAYER_SEED_INDEX`]. The
 /// error bounds need every layer's hash independent of the bits that select
 /// its keys and of the other layers' hashes, so no layer may hash at the
-/// finder's seed, and none past the seed list, where indices wrap onto layer
-/// 0's. Layers `0..UNIVMON_BOTTOM_LAYER_SEED_INDEX` are exactly the distinct seeds below
+/// finder's seed. Layers `0..UNIVMON_BOTTOM_LAYER_SEED_INDEX` are exactly the seeds below
 /// the finder. (The finder's bits are read by shifting a 64-bit hash right by
 /// up to `layers - 1`, which this cap also keeps in range.)
 pub const UNIVMON_MAX_LAYERS: usize = UNIVMON_BOTTOM_LAYER_SEED_INDEX;
@@ -135,7 +134,7 @@ impl UnivMon {
     ) -> Result<(), String> {
         wire::check_univmon_dimensions(layers, rows, cols, heap_size)?;
         wire::check_layers("UnivMon", layers)?;
-        crate::sketches::countsketch_l2_norm::wire::check_dimensions(rows, cols)?;
+        CountSketchWithL2Norm::check_hash_bits(rows, cols)?;
         rows.checked_mul(cols)
             .and_then(|cells| cells.checked_mul(layers))
             .map(|_| ())
@@ -684,8 +683,8 @@ mod tests {
         assert!((sketch2.layer_sketches[0].l2()).abs() < 1e-9);
     }
 
-    /// Every layer hashes at its own seed, inside the seed list (no wrap onto
-    /// layer 0) and never at the seed that picks the layers.
+    /// Every layer hashes at its own seed index, inside the seed list, and
+    /// never at the seed that picks the layers.
     #[test]
     fn layer_seeds_are_distinct_and_never_the_layer_finder() {
         use crate::common::SEED_LIST;
@@ -697,7 +696,10 @@ mod tests {
             })
             .collect();
         for &seed in &seeds {
-            assert!(seed < SEED_LIST.len(), "seed index {seed} wraps");
+            assert!(
+                seed < SEED_LIST.len(),
+                "seed index {seed} is past the seed list"
+            );
             assert_ne!(
                 seed, UNIVMON_BOTTOM_LAYER_SEED_INDEX,
                 "a layer hashes at the finder seed"
@@ -735,7 +737,7 @@ mod tests {
             (4, 3, 0, 2, false),
             (4, 3, 16, 0, false),
             (4, MATRIX_MAX_ROWS, 2, 1, true),
-            (4, MATRIX_MAX_ROWS + 1, 2, 1, false),
+            (4, MATRIX_MAX_ROWS + 1, 2, 1, true),
         ] {
             assert_eq!(
                 UnivMon::check_shape(heap, rows, cols, layers).is_ok(),

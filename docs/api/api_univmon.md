@@ -32,13 +32,12 @@ has no wire kind.
 
 `check_shape` accepts exactly the shapes `new` builds, so a caller can refuse a
 configuration without catching a panic. `new` panics on a zero dimension, on a
-counter count past `usize`, on more than `MATRIX_MAX_ROWS` (20) rows, and on a
-shape whose hashes would not be independent:
+counter count past `usize`, and on a shape whose hashes would not be
+independent:
 
 - `layers > UNIVMON_MAX_LAYERS` (19). Layer `i` hashes at seed index `i`, and
   the layers a key reaches are read from the hash at `UNIVMON_BOTTOM_LAYER_SEED_INDEX`
-  (19). A 20th layer would hash at the finder's seed, and later ones would wrap
-  onto layer 0's.
+  (19). A 20th layer would hash at the finder's seed.
 - `rows * (ceil_log2(cols) + 1) > 128`. Every row of a layer reads
   its column and its sign from one 128-bit hash; past this budget a deep row's
   column reuses a shallow row's sign bit.
@@ -110,9 +109,9 @@ pyramid re-serializes byte-identically. `update_mode` and `candidate_complete`
 are carried: they are acquired from the stream, and a decoder that guessed them
 would pick the wrong query recurrence or report a widened threshold as zero.
 
-Every layer is a `CountSketchWithL2Norm` matrix hashed per row, so `rows` carries that
-sketch's bound: `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list
-length), refused on both sides past it.
+Every layer is a `CountSketchWithL2Norm` matrix, so `rows` carries that
+sketch's wire bound: `1 <= rows <= 20` (`MATRIX_MAX_ROWS`), refused by
+`to_asapv1` and `from_asapv1` past it.
 
 ## Examples
 

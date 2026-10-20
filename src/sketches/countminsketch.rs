@@ -11,6 +11,7 @@
 use std::marker::PhantomData;
 
 use crate::asapv1::admission_rate::admit_all;
+use crate::common::hash::check_matrix_shape;
 use crate::common::structure_utils::AdmittedRows;
 use crate::octo_delta::{
     CountMinSketchCellDelta, KeyedCountMinSketchCellDelta, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
@@ -192,7 +193,7 @@ where
     ///
     /// Panics when [`CountMinSketch::check_shape`] refuses the shape.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
-        if let Err(problem) = wire::check_geometry(rows, cols) {
+        if let Err(problem) = check_matrix_shape("CMS", rows, cols) {
             panic!("{problem}");
         }
         CountMinSketch {
@@ -206,11 +207,12 @@ where
 
 // Core CountMinSketch API for any storage.
 impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H> {
-    /// The shapes this sketch builds, the ASAPv1 geometry on every path:
-    /// `1 <= rows <= MATRIX_MAX_ROWS` and `1 <= cols <= u32::MAX`. The
-    /// constructors panic on any other shape.
+    /// The shapes this sketch builds: both dimensions non-zero and
+    /// `rows * cols` within `usize`. The constructors panic on any other
+    /// shape; `to_asapv1` also needs `rows <= MATRIX_MAX_ROWS` and
+    /// `cols <= u32::MAX`.
     pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
-        wire::check_geometry(rows, cols)
+        check_matrix_shape("CMS", rows, cols)
     }
 
     /// Creates a sketch from an existing matrix storage instance.
@@ -726,13 +728,12 @@ mod tests {
     use std::panic::catch_unwind;
 
     /// `with_dimensions` and `from_storage` panic on both paths exactly when
-    /// `check_shape` refuses the shape; row `MATRIX_MAX_ROWS` would reuse row
-    /// 0's seed.
+    /// `check_shape` refuses the shape: a zero dimension or a counter count
+    /// past `usize`. Any row count builds.
     #[test]
     fn constructors_panic_exactly_when_check_shape_refuses() {
         type Regular = CountMinSketch<Vector2D<i64>, RegularPath>;
         type Fast = CountMinSketch<Vector2D<i64>, FastPath>;
-        let too_wide = u32::MAX as usize + 1;
         for (rows, cols) in [
             (0, 8),
             (1, 0),
@@ -741,18 +742,10 @@ mod tests {
             (MATRIX_MAX_ROWS, 7),
             (MATRIX_MAX_ROWS + 1, 7),
             (2 * MATRIX_MAX_ROWS, 64),
-            (1, too_wide),
         ] {
             let accepted = Regular::check_shape(rows, cols).is_ok();
             assert_eq!(accepted, Fast::check_shape(rows, cols).is_ok());
-            assert_eq!(
-                accepted,
-                (1..=MATRIX_MAX_ROWS).contains(&rows) && cols >= 1 && cols < too_wide
-            );
-            if cols == too_wide {
-                assert!(catch_unwind(|| Regular::with_dimensions(rows, cols)).is_err());
-                continue;
-            }
+            assert_eq!(accepted, rows >= 1 && cols >= 1);
             let shape = format!("{rows}x{cols}");
             assert_eq!(
                 catch_unwind(|| Regular::with_dimensions(rows, cols)).is_ok(),
@@ -776,6 +769,9 @@ mod tests {
                 "{shape}"
             );
         }
+        let problem = Regular::check_shape(2, usize::MAX).expect_err("overflow");
+        assert!(problem.contains("overflow usize"), "got {problem}");
+        assert!(catch_unwind(|| Regular::with_dimensions(2, usize::MAX)).is_err());
     }
 
     /// `clear` returns the Nitro sampler to its start: a cleared sketch fed

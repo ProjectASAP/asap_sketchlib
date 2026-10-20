@@ -65,9 +65,8 @@ const DEFAULT_ROWS: usize = 4;
 const DEFAULT_COLS: usize = 64;
 const DEFAULT_PRECISION: u32 = 8;
 
-/// Seed index for the value hash. Any non-zero index works; what matters is
-/// that it is not the column hash's seed 0 and does not depend on `rows`,
-/// since `SEED_LIST` indices wrap at [`MATRIX_MAX_ROWS`].
+/// Seed index for the value hash: fixed, non-zero (not the column hash's
+/// seed 0) and independent of `rows`.
 const HLL_SEED: usize = 1;
 
 /// A Count-Min-shaped grid whose cells are per-bucket HyperLogLog sketches.
@@ -172,10 +171,7 @@ impl<H: SketchHasher> CountMinHll<H> {
     ///    rank.
     ///
     /// The two use different seeds, so column placement and register
-    /// selection are independent. The HLL seed is a fixed constant rather
-    /// than a function of `rows`: `SEED_LIST` has `MATRIX_MAX_ROWS` entries
-    /// and the index wraps, so a row count equal to that length would have
-    /// selected seed 0 — the column seed — and tied the two together.
+    /// selection are independent.
     pub fn update(&mut self, key: &DataInput, distinct_value: &DataInput) {
         let col_hash = H::hash128_seeded(0, key);
         let hll_hash = H::hash64_seeded(HLL_SEED, distinct_value);
