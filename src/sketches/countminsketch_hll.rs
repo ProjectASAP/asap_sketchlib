@@ -38,13 +38,13 @@
 //!
 //! Experimental: behind the `experimental` cargo feature, and its API and
 //! wire form may change without a major version bump. For a per-key distinct
-//! count on a stable API today, reach for `Hydra` with `HydraCounter::HLL`.
+//! count on a stable API today, reach for `Hydra` with `HydraCounter::Hll`.
 //!
 //! # Related sketches
 //!
 //! - [`crate::sketches::hll`] — a single HyperLogLog for total-stream distinct
 //!   counting (no per-key breakdown).
-//! - [`crate::sketch_framework::hydra`] (`Hydra` with `HydraCounter::HLL`) —
+//! - [`crate::sketch_framework::hydra`] (`Hydra` with `HydraCounter::Hll`) —
 //!   also answers per-key distinct-count queries, but stores one heap-allocated
 //!   HLL object per grid cell. `CountMinHll` holds every register in a single
 //!   contiguous `Vector3D<u8>`, so the whole grid is one allocation.
@@ -65,13 +65,13 @@ use rmp_serde::{
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-const DEFAULT_ROW_NUM: usize = 4;
-const DEFAULT_COL_NUM: usize = 64;
+const DEFAULT_ROWS: usize = 4;
+const DEFAULT_COLS: usize = 64;
 const DEFAULT_PRECISION: u32 = 8;
 
 /// Seed index for the value hash. Any non-zero index works; what matters is
 /// that it is not the column hash's seed 0 and does not depend on `rows`,
-/// since `SEEDLIST` indices wrap at [`MATRIX_MAX_ROWS`].
+/// since `SEED_LIST` indices wrap at [`MATRIX_MAX_ROWS`].
 const HLL_SEED: usize = 1;
 
 /// A Count-Min-shaped grid whose cells are per-bucket HyperLogLog sketches.
@@ -123,7 +123,7 @@ impl<'de, H: SketchHasher> Deserialize<'de> for CountMinHll<H> {
                 "cols ({cols}) must be a power of two and at least 2"
             )));
         }
-        let col_bits = buckets.get_mask_bits() as usize;
+        let col_bits = buckets.mask_bits() as usize;
         let required_bits = rows.saturating_mul(col_bits);
         if required_bits > 128 {
             return Err(serde::de::Error::custom(format!(
@@ -154,7 +154,7 @@ impl<'de, H: SketchHasher> Deserialize<'de> for CountMinHll<H> {
 
 impl Default for CountMinHll<DefaultXxHasher> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM, DEFAULT_PRECISION)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS, DEFAULT_PRECISION)
     }
 }
 
@@ -182,7 +182,7 @@ impl<H: SketchHasher> CountMinHll<H> {
         let depth = 1usize << precision;
         let mut buckets = Vector3D::init(rows, cols, depth);
         buckets.fill(0);
-        let col_bits = buckets.get_mask_bits() as usize;
+        let col_bits = buckets.mask_bits() as usize;
         assert!(
             rows.saturating_mul(col_bits) <= 128,
             "rows ({rows}) × column bits ({col_bits}) = {} exceeds the 128-bit packed \
@@ -241,7 +241,7 @@ impl<H: SketchHasher> CountMinHll<H> {
     ///
     /// The two use different seeds, so column placement and register
     /// selection are independent. The HLL seed is a fixed constant rather
-    /// than a function of `rows`: `SEEDLIST` has `MATRIX_MAX_ROWS` entries
+    /// than a function of `rows`: `SEED_LIST` has `MATRIX_MAX_ROWS` entries
     /// and the index wraps, so a row count equal to that length would have
     /// selected seed 0 — the column seed — and tied the two together.
     pub fn update(&mut self, key: &DataInput, distinct_value: &DataInput) {
@@ -307,12 +307,12 @@ impl<H: SketchHasher> CountMinHll<H> {
     }
 
     /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         to_vec_named(self)
     }
 
     /// Deserializes a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         from_slice(bytes)
     }
 }
@@ -344,8 +344,8 @@ mod tests {
     #[test]
     fn default_initializes_expected_dimensions() {
         let sk = CountMinHll::default();
-        assert_eq!(sk.rows(), DEFAULT_ROW_NUM);
-        assert_eq!(sk.cols(), DEFAULT_COL_NUM);
+        assert_eq!(sk.rows(), DEFAULT_ROWS);
+        assert_eq!(sk.cols(), DEFAULT_COLS);
         assert_eq!(sk.precision(), DEFAULT_PRECISION);
         assert_eq!(sk.registers_per_bucket(), 1 << DEFAULT_PRECISION);
         assert!(sk.as_storage().as_slice().iter().all(|&r| r == 0));
@@ -514,9 +514,8 @@ mod tests {
         for i in 0..1500u64 {
             sk.update(&k, &val(i));
         }
-        let bytes = sk.serialize_to_bytes().expect("serialize");
-        let restored =
-            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let bytes = sk.to_asapv1().expect("serialize");
+        let restored = CountMinHll::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
 
         assert_eq!(sk.rows(), restored.rows());
         assert_eq!(sk.cols(), restored.cols());
@@ -578,7 +577,7 @@ mod tests {
             let mut buckets: Vector3D<u8> = Vector3D::init(rows, cols, depth);
             buckets.fill(0);
             let bytes = rmp_serde::to_vec_named(&Forged { buckets, precision }).expect("encode");
-            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
+            CountMinHll::<DefaultXxHasher>::from_asapv1(&bytes)
                 .err()
                 .map(|e| e.to_string())
                 .unwrap_or_default()
@@ -629,7 +628,7 @@ mod tests {
             buckets.fill(0);
             buckets.as_mut_slice()[0] = rank;
             let bytes = rmp_serde::to_vec_named(&Forged { buckets, precision }).expect("encode");
-            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
+            CountMinHll::<DefaultXxHasher>::from_asapv1(&bytes)
                 .err()
                 .map(|e| e.to_string())
         }
@@ -656,11 +655,10 @@ mod tests {
     #[test]
     fn deserialize_recomputes_derived_fields() {
         let sk = CountMinHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
-        let bytes = sk.serialize_to_bytes().expect("serialize");
-        let restored =
-            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let bytes = sk.to_asapv1().expect("serialize");
+        let restored = CountMinHll::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
         assert_eq!(restored.p_mask, (1u64 << 8) - 1);
         // Column routing is owned by the storage and rebuilt from `cols`.
-        assert_eq!(restored.as_storage().get_mask_bits(), 5); // 32.ilog2()
+        assert_eq!(restored.as_storage().mask_bits(), 5); // 32.ilog2()
     }
 }

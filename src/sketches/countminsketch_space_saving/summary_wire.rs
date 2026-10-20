@@ -1,5 +1,5 @@
-//! ASAPv1 metadata and payload shared by CMSSpaceSaving (`0x1e 0x00`) and
-//! CSSpaceSaving (`0x1f 0x00`): `[counts, keys, summary_counts, errors, total,
+//! ASAPv1 metadata and payload shared by CountMinSketchWithSpaceSaving (`0x1e 0x00`) and
+//! CountSketchWithSpaceSaving (`0x1f 0x00`): `[counts, keys, summary_counts, errors, total,
 //! discarded_max]` (`docs/asapv1_wire_format.md` §3.24, §3.25).
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
@@ -8,11 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
-use crate::sketches::countminsketch_topk::heap_wire::{
+use crate::sketches::countminsketch_heap::heap_wire::{
     EMPTY_KEY_TYPE, check_distinct_keys, check_empty_key_type, check_geometry, key_type_of,
 };
 use crate::sketches::space_saving::parts::emitted_order;
-use crate::{HashProfile, HeapItem, SketchHasher, SpaceSaving};
+use crate::{HashProfile, OwnedDataInput, SketchHasher, SpaceSaving};
 
 /// Descriptor metadata, a msgpack **map** with keys in declaration order: the
 /// hash-spec group, the matrix's `rows` / `cols` / `counter_type` / `mode`, then
@@ -87,7 +87,7 @@ fn encode_payload<C: Serialize + Clone>(
     sketch: &str,
     key_type: &str,
     counts: &[C],
-    entries: &[(&HeapItem, u64, u64)],
+    entries: &[(&OwnedDataInput, u64, u64)],
     total: u64,
     discarded_max: u64,
 ) -> Result<Vec<u8>, RmpEncodeError> {
@@ -95,10 +95,10 @@ fn encode_payload<C: Serialize + Clone>(
         sketch: &str,
         key_type: &str,
         counts: &[C],
-        entries: &[(&HeapItem, u64, u64)],
+        entries: &[(&OwnedDataInput, u64, u64)],
         total: u64,
         discarded_max: u64,
-        wire: impl Fn(&HeapItem) -> Option<K>,
+        wire: impl Fn(&OwnedDataInput) -> Option<K>,
     ) -> Result<Vec<u8>, RmpEncodeError> {
         let mut keys = Vec::with_capacity(entries.len());
         for (key, _, _) in entries {
@@ -129,7 +129,7 @@ fn encode_payload<C: Serialize + Clone>(
                 total,
                 discarded_max,
                 |key| match key {
-                    HeapItem::$variant($value) => Some($wire),
+                    OwnedDataInput::$variant($value) => Some($wire),
                     _ => None,
                 },
             )
@@ -141,12 +141,12 @@ fn encode_payload<C: Serialize + Clone>(
         "i16" => pack!(I16, v => *v),
         "i32" => pack!(I32, v => *v),
         "i64" => pack!(I64, v => *v),
-        "isize" => pack!(ISIZE, v => *v),
+        "isize" => pack!(Isize, v => *v),
         "u8" => pack!(U8, v => *v),
         "u16" => pack!(U16, v => *v),
         "u32" => pack!(U32, v => *v),
         "u64" => pack!(U64, v => *v),
-        "usize" => pack!(USIZE, v => *v),
+        "usize" => pack!(Usize, v => *v),
         "f32" => pack!(F32, v => *v),
         "f64" => pack!(F64, v => *v),
         "string" => pack!(String, v => WireString(v.clone())),
@@ -263,7 +263,7 @@ pub(crate) fn decode<C: DeserializeOwned, H: SketchHasher + HashProfile>(
     macro_rules! unpack {
         ($ty:ty, $into:expr) => {{
             let p: SummaryTopKPayload<C, $ty> = envelope::decode_block(payload)?;
-            let keys: Vec<HeapItem> = p.keys.into_iter().map($into).collect();
+            let keys: Vec<OwnedDataInput> = p.keys.into_iter().map($into).collect();
             (
                 p.counts,
                 keys,
@@ -277,22 +277,24 @@ pub(crate) fn decode<C: DeserializeOwned, H: SketchHasher + HashProfile>(
 
     let (counts, keys, summary_counts, errors, total, discarded_max) = match meta.key_type.as_str()
     {
-        "i8" => unpack!(i8, HeapItem::I8),
-        "i16" => unpack!(i16, HeapItem::I16),
-        "i32" => unpack!(i32, HeapItem::I32),
-        "i64" => unpack!(i64, HeapItem::I64),
-        "isize" => unpack!(isize, HeapItem::ISIZE),
-        "u8" => unpack!(u8, HeapItem::U8),
-        "u16" => unpack!(u16, HeapItem::U16),
-        "u32" => unpack!(u32, HeapItem::U32),
-        "u64" => unpack!(u64, HeapItem::U64),
-        "usize" => unpack!(usize, HeapItem::USIZE),
-        "f32" => unpack!(f32, HeapItem::F32),
-        "f64" => unpack!(f64, HeapItem::F64),
-        "string" => unpack!(WireString, |key: WireString| HeapItem::String(
+        "i8" => unpack!(i8, OwnedDataInput::I8),
+        "i16" => unpack!(i16, OwnedDataInput::I16),
+        "i32" => unpack!(i32, OwnedDataInput::I32),
+        "i64" => unpack!(i64, OwnedDataInput::I64),
+        "isize" => unpack!(isize, OwnedDataInput::Isize),
+        "u8" => unpack!(u8, OwnedDataInput::U8),
+        "u16" => unpack!(u16, OwnedDataInput::U16),
+        "u32" => unpack!(u32, OwnedDataInput::U32),
+        "u64" => unpack!(u64, OwnedDataInput::U64),
+        "usize" => unpack!(usize, OwnedDataInput::Usize),
+        "f32" => unpack!(f32, OwnedDataInput::F32),
+        "f64" => unpack!(f64, OwnedDataInput::F64),
+        "string" => unpack!(WireString, |key: WireString| OwnedDataInput::String(
             key.into_string()
         )),
-        "bytes" => unpack!(WireBytes, |key: WireBytes| HeapItem::Bytes(key.into_vec())),
+        "bytes" => unpack!(WireBytes, |key: WireBytes| OwnedDataInput::Bytes(
+            key.into_vec()
+        )),
         other => {
             return Err(complain(format!(
                 "key_type {other:?} is not a wire key type"
@@ -347,12 +349,13 @@ mod tests {
     use super::*;
     use crate::sketches::countminsketch_space_saving::wire::CMS_SPACE_SAVING_KIND;
     use crate::{
-        CMSHeap, CMSSpaceSaving, CSSpaceSaving, CountMin, DataInput, DefaultXxHasher, FastPath,
-        MATRIX_MAX_ROWS, RegularPath, Vector2D,
+        CountMinSketch, CountMinSketchWithHeap, CountMinSketchWithSpaceSaving,
+        CountSketchWithSpaceSaving, DataInput, DefaultXxHasher, FastPath, MATRIX_MAX_ROWS,
+        RegularPath, Vector2D,
     };
     use rmp_serde::from_slice;
 
-    type Target = CMSSpaceSaving<Vector2D<i64>, RegularPath>;
+    type Target = CountMinSketchWithSpaceSaving<Vector2D<i64>, RegularPath>;
 
     /// A 2x8 sketch whose 3-counter summary evicted key `2` (count 5) for key
     /// `4`, which carries that 5 as error: entries `1:9`, `3:7`, `4:7/5`.
@@ -365,7 +368,7 @@ mod tests {
     }
 
     fn decode_error(bytes: &[u8]) -> String {
-        match Target::deserialize_from_bytes(bytes) {
+        match Target::from_asapv1(bytes) {
             Ok(_) => panic!("a crafted envelope must be rejected, not decoded"),
             Err(err) => err.to_string(),
         }
@@ -376,7 +379,7 @@ mod tests {
         from_slice(metadata).expect("metadata")
     }
 
-    fn entries_of<H: SketchHasher>(summary: &SpaceSaving<H>) -> Vec<(HeapItem, u64, u64)> {
+    fn entries_of<H: SketchHasher>(summary: &SpaceSaving<H>) -> Vec<(OwnedDataInput, u64, u64)> {
         summary
             .emitted_entries()
             .into_iter()
@@ -441,7 +444,7 @@ mod tests {
     #[test]
     fn round_trip_keeps_matrix_summary_and_bytes() {
         let sketch = populated();
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
+        let encoded = sketch.to_asapv1().expect("serialize");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x1e, 0x00]);
 
@@ -454,7 +457,7 @@ mod tests {
         );
         assert_eq!(meta.key_type, "u64");
 
-        let decoded = Target::deserialize_from_bytes(&encoded).expect("decode");
+        let decoded = Target::from_asapv1(&encoded).expect("decode");
         assert_eq!(
             decoded.cms().as_storage().as_slice(),
             sketch.cms().as_storage().as_slice()
@@ -462,51 +465,52 @@ mod tests {
         assert_eq!(
             entries_of(decoded.space_saving()),
             vec![
-                (HeapItem::U64(1), 9, 0),
-                (HeapItem::U64(3), 7, 0),
-                (HeapItem::U64(4), 7, 5),
+                (OwnedDataInput::U64(1), 9, 0),
+                (OwnedDataInput::U64(3), 7, 0),
+                (OwnedDataInput::U64(4), 7, 5),
             ]
         );
         assert_eq!(decoded.space_saving().total(), 23);
         assert_eq!(decoded.space_saving().discarded_max(), 5);
         assert_eq!(decoded.capacity(), 3);
         assert_eq!(decoded.top_k(3), sketch.top_k(3));
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), encoded);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
     }
 
     #[test]
     fn every_wire_counter_type_and_mode_round_trips() {
-        let mut fast = CMSSpaceSaving::<Vector2D<i32>, FastPath>::new(3, 16, 2);
+        let mut fast = CountMinSketchWithSpaceSaving::<Vector2D<i32>, FastPath>::new(3, 16, 2);
         fast.update_weighted(&DataInput::Str("a"), 4);
         fast.update_weighted(&DataInput::Str("b"), 1);
         fast.update_weighted(&DataInput::Str("c"), 2);
-        let bytes = fast.serialize_to_bytes().expect("i32");
+        let bytes = fast.to_asapv1().expect("i32");
         let meta = metadata_of(&bytes);
         assert_eq!(
             (meta.counter_type.as_str(), meta.mode.as_str()),
             ("i32", "fast")
         );
         assert_eq!(meta.key_type, "string");
-        let back =
-            CMSSpaceSaving::<Vector2D<i32>, FastPath>::deserialize_from_bytes(&bytes).expect("i32");
+        let back = CountMinSketchWithSpaceSaving::<Vector2D<i32>, FastPath>::from_asapv1(&bytes)
+            .expect("i32");
         assert_eq!(back.top_k(2), fast.top_k(2));
-        assert_eq!(back.serialize_to_bytes().expect("i32"), bytes);
+        assert_eq!(back.to_asapv1().expect("i32"), bytes);
 
-        let mut floating = CMSSpaceSaving::<Vector2D<f64>, RegularPath>::new(2, 4, 5);
+        let mut floating =
+            CountMinSketchWithSpaceSaving::<Vector2D<f64>, RegularPath>::new(2, 4, 5);
         floating.update_weighted(&DataInput::Bytes(&[0xff, 0x00]), 2.5);
-        let bytes = floating.serialize_to_bytes().expect("f64");
+        let bytes = floating.to_asapv1().expect("f64");
         assert_eq!(metadata_of(&bytes).key_type, "bytes");
-        let back = CMSSpaceSaving::<Vector2D<f64>, RegularPath>::deserialize_from_bytes(&bytes)
+        let back = CountMinSketchWithSpaceSaving::<Vector2D<f64>, RegularPath>::from_asapv1(&bytes)
             .expect("f64");
         assert_eq!(back.estimate(&DataInput::Bytes(&[0xff, 0x00])), 2.5);
-        assert_eq!(back.serialize_to_bytes().expect("f64"), bytes);
+        assert_eq!(back.to_asapv1().expect("f64"), bytes);
     }
 
     #[test]
     fn an_empty_summary_has_one_encoding() {
-        let bytes = Target::new(2, 3, 4).serialize_to_bytes().expect("empty");
+        let bytes = Target::new(2, 3, 4).to_asapv1().expect("empty");
         assert_eq!(metadata_of(&bytes).key_type, "u64");
-        let back = Target::deserialize_from_bytes(&bytes).expect("empty");
+        let back = Target::from_asapv1(&bytes).expect("empty");
         assert!(back.space_saving().is_empty());
         assert_eq!(back.capacity(), 4);
     }
@@ -515,15 +519,15 @@ mod tests {
     /// for both kinds.
     #[test]
     fn an_empty_summary_must_carry_the_u64_key_type() {
-        use crate::sketches::countminsketch_topk::heap_wire::relabel_u64_key_type;
-        let cms = Target::new(2, 3, 4).serialize_to_bytes().expect("empty");
-        let cs = CSSpaceSaving::<Vector2D<i64>, RegularPath>::new(2, 8, 3)
-            .serialize_to_bytes()
+        use crate::sketches::countminsketch_heap::heap_wire::relabel_u64_key_type;
+        let cms = Target::new(2, 3, 4).to_asapv1().expect("empty");
+        let cs = CountSketchWithSpaceSaving::<Vector2D<i64>, RegularPath>::new(2, 8, 3)
+            .to_asapv1()
             .expect("empty");
         for to in ["string", "f64"] {
             let problem = decode_error(&relabel_u64_key_type(&cms, "key_type", to));
             assert!(problem.contains("empty key set"), "{to}: {problem}");
-            let problem = CSSpaceSaving::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(
+            let problem = CountSketchWithSpaceSaving::<Vector2D<i64>, RegularPath>::from_asapv1(
                 &relabel_u64_key_type(&cs, "key_type", to),
             )
             .map(drop)
@@ -535,21 +539,15 @@ mod tests {
 
     #[test]
     fn foreign_kind_ids_are_rejected() {
-        let cms_heap = CMSHeap::<Vector2D<i64>, RegularPath>::new(2, 8, 3);
-        let cs_ss = CSSpaceSaving::<Vector2D<i64>, RegularPath>::new(2, 8, 3);
-        let cms = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(2, 8);
+        let cms_heap = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(2, 8, 3);
+        let cs_ss = CountSketchWithSpaceSaving::<Vector2D<i64>, RegularPath>::new(2, 8, 3);
+        let cms = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(2, 8);
         let summary = SpaceSaving::<DefaultXxHasher>::with_capacity(3);
         for (bytes, what) in [
-            (cms_heap.serialize_to_bytes().expect("CMSHeap"), "CMSHeap"),
-            (
-                cs_ss.serialize_to_bytes().expect("CSSpaceSaving"),
-                "CSSpaceSaving",
-            ),
-            (cms.serialize_to_bytes().expect("Count-Min"), "Count-Min"),
-            (
-                summary.serialize_to_bytes().expect("Space-Saving"),
-                "Space-Saving",
-            ),
+            (cms_heap.to_asapv1().expect("CMSHeap"), "CMSHeap"),
+            (cs_ss.to_asapv1().expect("CSSpaceSaving"), "CSSpaceSaving"),
+            (cms.to_asapv1().expect("Count-Min"), "Count-Min"),
+            (summary.to_asapv1().expect("Space-Saving"), "Space-Saving"),
         ] {
             assert!(
                 decode_error(&bytes).contains("kind_id mismatch"),
@@ -560,14 +558,18 @@ mod tests {
 
     #[test]
     fn counter_type_mode_and_profile_are_pinned() {
-        let bytes = populated().serialize_to_bytes().expect("serialize");
+        let bytes = populated().to_asapv1().expect("serialize");
         assert!(
-            CMSSpaceSaving::<Vector2D<f64>, RegularPath>::deserialize_from_bytes(&bytes).is_err()
+            CountMinSketchWithSpaceSaving::<Vector2D<f64>, RegularPath>::from_asapv1(&bytes)
+                .is_err()
         );
         assert!(
-            CMSSpaceSaving::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&bytes).is_err()
+            CountMinSketchWithSpaceSaving::<Vector2D<i32>, RegularPath>::from_asapv1(&bytes)
+                .is_err()
         );
-        assert!(CMSSpaceSaving::<Vector2D<i64>, FastPath>::deserialize_from_bytes(&bytes).is_err());
+        assert!(
+            CountMinSketchWithSpaceSaving::<Vector2D<i64>, FastPath>::from_asapv1(&bytes).is_err()
+        );
 
         let mut meta = metadata_of(&bytes);
         meta.hash_profile_id = "test.alt.profile.v1".to_string();
@@ -632,7 +634,7 @@ mod tests {
 
     #[test]
     fn the_crafted_baseline_decodes() {
-        let decoded = Target::deserialize_from_bytes(&craft().bytes()).expect("baseline");
+        let decoded = Target::from_asapv1(&craft().bytes()).expect("baseline");
         assert_eq!(decoded.space_saving().len(), 3);
         assert_eq!(decoded.cms().as_storage().as_slice(), &[0, 1, 2, 3, 4, 5]);
     }
@@ -648,11 +650,7 @@ mod tests {
         c.rows = MATRIX_MAX_ROWS as u32 + 1;
         c.counts = vec![0; (MATRIX_MAX_ROWS + 1) * 3];
         assert!(decode_error(&c.bytes()).contains("MATRIX_MAX_ROWS"));
-        assert!(
-            Target::new(MATRIX_MAX_ROWS + 1, 3, 4)
-                .serialize_to_bytes()
-                .is_err()
-        );
+        assert!(Target::new(MATRIX_MAX_ROWS + 1, 3, 4).to_asapv1().is_err());
 
         let mut c = craft();
         c.rows = MATRIX_MAX_ROWS as u32;
@@ -668,14 +666,14 @@ mod tests {
 
         let mut c = craft();
         c.key_type = "string";
-        assert!(Target::deserialize_from_bytes(&c.bytes()).is_err());
+        assert!(Target::from_asapv1(&c.bytes()).is_err());
 
         let strings = Craft {
             key_type: "bytes",
             keys: vec!["a".to_string(), "b".to_string(), "c".to_string()],
             ..craft_with_keys()
         };
-        assert!(Target::deserialize_from_bytes(&strings.bytes()).is_err());
+        assert!(Target::from_asapv1(&strings.bytes()).is_err());
     }
 
     fn craft_with_keys<K>() -> Craft<K> {
@@ -748,7 +746,7 @@ mod tests {
             total: 22,
             ..craft_with_keys()
         };
-        assert!(Target::deserialize_from_bytes(&zeros.bytes()).is_ok());
+        assert!(Target::from_asapv1(&zeros.bytes()).is_ok());
     }
 
     #[test]
@@ -758,7 +756,7 @@ mod tests {
         assert!(decode_error(&c.bytes()).contains("ceiling of 5"));
         let mut c = craft();
         c.discarded_max = 4;
-        assert!(Target::deserialize_from_bytes(&c.bytes()).is_ok());
+        assert!(Target::from_asapv1(&c.bytes()).is_ok());
 
         let mut empty = craft();
         empty.keys.clear();
@@ -777,7 +775,7 @@ mod tests {
         let mut c = craft();
         c.summary_counts = vec![u64::MAX, u64::MAX, 4];
         c.total = u64::MAX;
-        assert!(Target::deserialize_from_bytes(&c.bytes()).is_ok());
+        assert!(Target::from_asapv1(&c.bytes()).is_ok());
     }
 
     #[test]
@@ -805,29 +803,26 @@ mod tests {
             summary_counts: vec![9, 4, 4],
             ..craft_with_keys()
         };
-        assert!(Target::deserialize_from_bytes(&signed.bytes()).is_ok());
+        assert!(Target::from_asapv1(&signed.bytes()).is_ok());
     }
 
     #[test]
     fn a_declared_capacity_never_sizes_an_allocation() {
         let mut c = craft();
         c.capacity = u32::MAX;
-        let decoded = Target::deserialize_from_bytes(&c.bytes()).expect("decode");
+        let decoded = Target::from_asapv1(&c.bytes()).expect("decode");
         assert_eq!(decoded.capacity(), u32::MAX as usize);
         assert_eq!(decoded.space_saving().len(), 3);
-        assert_eq!(decoded.serialize_to_bytes().expect("re-encode"), c.bytes());
+        assert_eq!(decoded.to_asapv1().expect("re-encode"), c.bytes());
     }
 
     #[test]
     fn states_with_no_encoding_fail_to_serialize() {
         let sampled = Target::from_parts(
-            CountMin::with_dimensions(2, 3).with_admission_rate(0.5),
+            CountMinSketch::with_dimensions(2, 3).with_admission_rate(0.5),
             SpaceSaving::with_capacity(4),
         );
-        let problem = sampled
-            .serialize_to_bytes()
-            .expect_err("sampled")
-            .to_string();
+        let problem = sampled.to_asapv1().expect_err("sampled").to_string();
         assert!(problem.contains("CMSSpaceSaving"), "got {problem}");
 
         let mut mixed = Target::new(2, 3, 4);
@@ -835,7 +830,7 @@ mod tests {
         mixed.update(&DataInput::I64(2));
         assert!(
             mixed
-                .serialize_to_bytes()
+                .to_asapv1()
                 .expect_err("mixed")
                 .to_string()
                 .contains("mix variants")
@@ -844,7 +839,7 @@ mod tests {
         let mut wide = Target::new(2, 3, 4);
         wide.update(&DataInput::I128(1));
         assert!(
-            wide.serialize_to_bytes()
+            wide.to_asapv1()
                 .expect_err("128-bit")
                 .to_string()
                 .contains("128-bit")
@@ -855,27 +850,28 @@ mod tests {
         nan.update(&DataInput::F64(f64::NAN));
         assert_eq!(nan.space_saving().len(), 2);
         assert!(
-            nan.serialize_to_bytes()
+            nan.to_asapv1()
                 .expect_err("NaN twice")
                 .to_string()
                 .contains("twice")
         );
 
         let huge = Target::from_parts(
-            CountMin::with_dimensions(2, 3),
-            SpaceSaving::from_parts(1 << 40, 3, 0, vec![(HeapItem::U64(1), 3, 0)]).expect("sparse"),
+            CountMinSketch::with_dimensions(2, 3),
+            SpaceSaving::from_parts(1 << 40, 3, 0, vec![(OwnedDataInput::U64(1), 3, 0)])
+                .expect("sparse"),
         );
         assert!(
-            huge.serialize_to_bytes()
+            huge.to_asapv1()
                 .expect_err("capacity")
                 .to_string()
                 .contains("exceeds the u32 metadata field")
         );
 
         let unfilled = Target::from_parts(
-            CountMin::from_storage(Vector2D::<i64>::init(2, 3)),
+            CountMinSketch::from_storage(Vector2D::<i64>::init(2, 3)),
             SpaceSaving::with_capacity(4),
         );
-        assert!(unfilled.serialize_to_bytes().is_err());
+        assert!(unfilled.to_asapv1().is_err());
     }
 }

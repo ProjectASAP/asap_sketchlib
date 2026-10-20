@@ -36,9 +36,10 @@ use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, Tally};
 use common::{FreqTruth, zipf_u64};
 
 use asap_sketchlib::{
-    CMSHeap, CSHeap, Count, CountMin, DataInput, DefaultMatrixI32, DefaultMatrixI64,
-    DefaultMatrixI128, FastPath, FixedMatrix, HeapItem, QuickMatrixI64, QuickMatrixI128,
-    RegularPath, Vector2D, cs_heap_count, hash_for_matrix,
+    Count, CountMinSketch, CountMinSketchWithHeap, CountSketchWithHeap, DataInput,
+    DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, FastPath, FixedMatrix, OwnedDataInput,
+    QuickMatrixI64, QuickMatrixI128, RegularPath, Vector2D, hash_for_matrix,
+    heap_count_from_estimate,
 };
 
 /// Medium stream: large enough that collisions are statistically meaningful at
@@ -87,16 +88,16 @@ impl CounterValue for f64 {
     }
 }
 
-// ----------------------------------------------------------------- CountMin
+// ----------------------------------------------------------------- CountMinSketch
 
-/// One `CountMin<$storage, $path>` instance: build it from `Default` (which is
+/// One `CountMinSketch<$storage, $path>` instance: build it from `Default` (which is
 /// what fixes each fixed-layout storage's dimensions), run the stream, and
 /// assert Count-Min's own contract at the dimensions it reports.
 macro_rules! countmin_instance {
     ($storage:ty, $path:ty, $stream:expr, $truth:expr) => {{
-        let mut single = CountMin::<$storage, $path>::default();
-        let mut left = CountMin::<$storage, $path>::default();
-        let mut right = CountMin::<$storage, $path>::default();
+        let mut single = CountMinSketch::<$storage, $path>::default();
+        let mut left = CountMinSketch::<$storage, $path>::default();
+        let mut right = CountMinSketch::<$storage, $path>::default();
         for (i, k) in $stream.iter().enumerate() {
             let d = DataInput::U64(*k);
             single.update(&d);
@@ -244,16 +245,40 @@ countmin_matrix_test!(
 
 #[test]
 fn countmin_both_paths_are_exact_on_a_collision_free_workload() {
-    assert_both_paths_exact_without_collisions!(CountMin, Vector2D<i32>, COLLISION_FREE_KEYS);
-    assert_both_paths_exact_without_collisions!(CountMin, Vector2D<i64>, COLLISION_FREE_KEYS);
-    assert_both_paths_exact_without_collisions!(CountMin, Vector2D<i128>, COLLISION_FREE_KEYS);
-    assert_both_paths_exact_without_collisions!(CountMin, Vector2D<f64>, COLLISION_FREE_KEYS);
-    assert_both_paths_exact_without_collisions!(CountMin, FixedMatrix, COLLISION_FREE_KEYS);
-    assert_both_paths_exact_without_collisions!(CountMin, DefaultMatrixI32, COLLISION_FREE_KEYS);
-    assert_both_paths_exact_without_collisions!(CountMin, QuickMatrixI64, COLLISION_FREE_KEYS);
-    assert_both_paths_exact_without_collisions!(CountMin, QuickMatrixI128, COLLISION_FREE_KEYS);
-    assert_both_paths_exact_without_collisions!(CountMin, DefaultMatrixI64, COLLISION_FREE_KEYS);
-    assert_both_paths_exact_without_collisions!(CountMin, DefaultMatrixI128, COLLISION_FREE_KEYS);
+    assert_both_paths_exact_without_collisions!(CountMinSketch, Vector2D<i32>, COLLISION_FREE_KEYS);
+    assert_both_paths_exact_without_collisions!(CountMinSketch, Vector2D<i64>, COLLISION_FREE_KEYS);
+    assert_both_paths_exact_without_collisions!(
+        CountMinSketch,
+        Vector2D<i128>,
+        COLLISION_FREE_KEYS
+    );
+    assert_both_paths_exact_without_collisions!(CountMinSketch, Vector2D<f64>, COLLISION_FREE_KEYS);
+    assert_both_paths_exact_without_collisions!(CountMinSketch, FixedMatrix, COLLISION_FREE_KEYS);
+    assert_both_paths_exact_without_collisions!(
+        CountMinSketch,
+        DefaultMatrixI32,
+        COLLISION_FREE_KEYS
+    );
+    assert_both_paths_exact_without_collisions!(
+        CountMinSketch,
+        QuickMatrixI64,
+        COLLISION_FREE_KEYS
+    );
+    assert_both_paths_exact_without_collisions!(
+        CountMinSketch,
+        QuickMatrixI128,
+        COLLISION_FREE_KEYS
+    );
+    assert_both_paths_exact_without_collisions!(
+        CountMinSketch,
+        DefaultMatrixI64,
+        COLLISION_FREE_KEYS
+    );
+    assert_both_paths_exact_without_collisions!(
+        CountMinSketch,
+        DefaultMatrixI128,
+        COLLISION_FREE_KEYS
+    );
 }
 
 // -------------------------------------------------------------- CountSketch
@@ -388,14 +413,14 @@ fn countsketch_both_paths_are_exact_on_a_collision_free_workload() {
 
 // ------------------------------------------------------------ Heap variants
 
-/// `CMSHeap` is a Count-Min plus a top-k heap. The point estimate carries
+/// `CountMinSketchWithHeap` is a Count-Min plus a top-k heap. The point estimate carries
 /// Count-Min's bound; the heap must stay consistent with it and must recover
 /// the keys the top-k contract actually guarantees.
 macro_rules! cmsheap_instance {
     ($storage:ty, $path:ty, $stream:expr, $truth:expr) => {{
-        let mut single = CMSHeap::<$storage, $path>::default();
-        let mut left = CMSHeap::<$storage, $path>::default();
-        let mut right = CMSHeap::<$storage, $path>::default();
+        let mut single = CountMinSketchWithHeap::<$storage, $path>::default();
+        let mut left = CountMinSketchWithHeap::<$storage, $path>::default();
+        let mut right = CountMinSketchWithHeap::<$storage, $path>::default();
         for (i, k) in $stream.iter().enumerate() {
             let d = DataInput::U64(*k);
             single.update(&d);
@@ -440,23 +465,23 @@ macro_rules! cmsheap_instance {
     }};
 }
 
-/// `CSHeap` is a Count Sketch plus the same heap, so the point estimate
+/// `CountSketchWithHeap` is a Count Sketch plus the same heap, so the point estimate
 /// carries the L2 bound instead.
 macro_rules! csheap_instance {
     ($storage:ty, $path:ty, $stream:expr, $truth:expr) => {
         csheap_instance!(
             @build $storage, $path, $stream, $truth,
-            CSHeap::<$storage, $path>::default()
+            CountSketchWithHeap::<$storage, $path>::default()
         )
     };
     // `Vector2D<i128>` has no `Default` impl for either heap family, but it is
-    // a perfectly ordinary public instance through `CSHeap::new`; it is built
+    // a perfectly ordinary public instance through `CountSketchWithHeap::new`; it is built
     // at the same 3x4096 / top-32 geometry the `Default` impls use so it is
     // judged at comparable dimensions.
     (sized $storage:ty, $path:ty, $stream:expr, $truth:expr) => {
         csheap_instance!(
             @build $storage, $path, $stream, $truth,
-            CSHeap::<$storage, $path>::new(3, 4096, 32)
+            CountSketchWithHeap::<$storage, $path>::new(3, 4096, 32)
         )
     };
     (@build $storage:ty, $path:ty, $stream:expr, $truth:expr, $ctor:expr) => {{
@@ -502,7 +527,7 @@ macro_rules! csheap_instance {
             single.heap().heap(),
             $truth,
             |k| single.estimate(&DataInput::U64(k as u64)),
-            cs_heap_count,
+            heap_count_from_estimate,
         );
     }};
 }
@@ -511,13 +536,13 @@ macro_rules! csheap_instance {
 /// the heap holds keys the top-k contract guarantees.
 ///
 /// `count_of` maps the sketch's estimate to the integer a heap entry holds. It
-/// is the identity for `CMSHeap`, whose estimate is already the counter type,
-/// and `cs_heap_count` for `CSHeap`, whose estimate is an `f64` median and is
+/// is the identity for `CountMinSketchWithHeap`, whose estimate is already the counter type,
+/// and `heap_count_from_estimate` for `CountSketchWithHeap`, whose estimate is an `f64` median and is
 /// documented to reach the heap by a saturating, truncating conversion.
 fn assert_heap_matches_sketch<F, C>(
     label: &str,
     ctx: &str,
-    items: &[asap_sketchlib::HHItem],
+    items: &[asap_sketchlib::HeapEntry],
     truth: &FreqTruth,
     estimate: F,
     count_of: C,
@@ -531,7 +556,7 @@ fn assert_heap_matches_sketch<F, C>(
     let mut recall = 0usize;
     for it in items {
         let key = match it.key {
-            HeapItem::U64(v) => v as i64,
+            OwnedDataInput::U64(v) => v as i64,
             ref other => panic!("{label}: unexpected heap key {other:?}"),
         };
         let est = estimate(key);
@@ -574,12 +599,12 @@ macro_rules! heap_matrix_test {
 // The two heap families do **not** have the same instance coverage, and the
 // reason is a difference in their insert bounds rather than an oversight:
 //
-// - `CMSHeap`'s insert path needs the counter to convert into its heap count
+// - `CountMinSketchWithHeap`'s insert path needs the counter to convert into its heap count
 //   (`i64`, or `f64` for an `f64` counter). `i128` has no `Into<i64>`, so those
 //   instances construct but have no `update`, `estimate` or `merge` at all.
 //   They are enumerated and pinned as inert by
 //   `cmsheap_inert_instances_construct_and_report_their_geometry`.
-// - `CSHeap`'s insert path is bounded on `S::Counter: CsHeapCounter`,
+// - `CountSketchWithHeap`'s insert path is bounded on `S::Counter: CountSketchHeapCounter`,
 //   which `i128` *does* satisfy. All six `i128` instances are fully
 //   operational and are covered below; the previous revision of this file and
 //   of the coverage matrix wrongly claimed they were not insertable.
@@ -639,20 +664,20 @@ heap_matrix_test!(
 
 // ------------------------------------------------- 128-bit heap semantics
 
-/// `CSHeap` over an `i128` counter really does accept counts past `i64::MAX`,
+/// `CountSketchWithHeap` over an `i128` counter really does accept counts past `i64::MAX`,
 /// and this pins what happens to the heap entry when it does.
 ///
-/// The insert path is `heap.update(key, cs_heap_count(estimate))`, where the
+/// The insert path is `heap.update(key, heap_count_from_estimate(estimate))`, where the
 /// estimate is the row **median** as `f64`. Two lossy steps are unavoidable and
 /// both are documented API rather than accidents:
 ///
 /// 1. `i128 -> f64` inside `Count::estimate`, exact only below `2^53`;
-/// 2. `f64 -> i64` in `cs_heap_count`, which **saturates** at `i64::MAX`.
+/// 2. `f64 -> i64` in `heap_count_from_estimate`, which **saturates** at `i64::MAX`.
 ///
 /// Saturating is the chosen semantics. Wrapping would turn a huge positive
 /// count into a negative one and corrupt the heap's ordering, which is the one
 /// failure mode a top-k structure cannot survive; returning an error would put
-/// a fallible result on an infallible `update`; and widening `HHItem::count` to
+/// a fallible result on an infallible `update`; and widening `HeapEntry::count` to
 /// `i128` would change the heap wire payload for every family that shares it.
 /// This test fails if any of that silently changes.
 #[test]
@@ -695,7 +720,7 @@ fn csheap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
                 "{label}: the sketch itself must still hold the i128 mass, got {est}"
             );
             assert_eq!(
-                cs_heap_count(est),
+                heap_count_from_estimate(est),
                 i64::MAX,
                 "{label}: cs_heap_count must saturate at i64::MAX"
             );
@@ -720,47 +745,47 @@ fn csheap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
     probe!(
         Vector2D<i128>,
         RegularPath,
-        CSHeap::<Vector2D<i128>, RegularPath>::new(3, 4096, 32)
+        CountSketchWithHeap::<Vector2D<i128>, RegularPath>::new(3, 4096, 32)
     );
     probe!(
         Vector2D<i128>,
         FastPath,
-        CSHeap::<Vector2D<i128>, FastPath>::new(3, 4096, 32)
+        CountSketchWithHeap::<Vector2D<i128>, FastPath>::new(3, 4096, 32)
     );
     probe!(
         QuickMatrixI128,
         RegularPath,
-        CSHeap::<QuickMatrixI128, RegularPath>::default()
+        CountSketchWithHeap::<QuickMatrixI128, RegularPath>::default()
     );
     probe!(
         QuickMatrixI128,
         FastPath,
-        CSHeap::<QuickMatrixI128, FastPath>::default()
+        CountSketchWithHeap::<QuickMatrixI128, FastPath>::default()
     );
     probe!(
         DefaultMatrixI128,
         RegularPath,
-        CSHeap::<DefaultMatrixI128, RegularPath>::default()
+        CountSketchWithHeap::<DefaultMatrixI128, RegularPath>::default()
     );
     probe!(
         DefaultMatrixI128,
         FastPath,
-        CSHeap::<DefaultMatrixI128, FastPath>::default()
+        CountSketchWithHeap::<DefaultMatrixI128, FastPath>::default()
     );
 }
 
 /// The count a heap holds for `key`, or `None` if it is not in the heap.
-fn heap_count(items: &[asap_sketchlib::HHItem], key: &DataInput) -> Option<i64> {
+fn heap_count(items: &[asap_sketchlib::HeapEntry], key: &DataInput) -> Option<i64> {
     items
         .iter()
         .find(|it| asap_sketchlib::heap_item_to_sketch_input(&it.key) == *key)
         .map(|it| it.count)
 }
 
-/// The `CMSHeap` instances that construct but have no operations at all.
+/// The `CountMinSketchWithHeap` instances that construct but have no operations at all.
 ///
-/// `CMSHeap::update` / `update_weighted` / `estimate` / `merge` all live in an impl
-/// bounded on the counter converting into its heap count (`TopKCounter`):
+/// `CountMinSketchWithHeap::update` / `update_weighted` / `estimate` / `merge` all live in an impl
+/// bounded on the counter converting into its heap count (`HeapCounter`):
 ///
 /// | counter | heap count | operations |
 /// | --- | --- | --- |
@@ -768,8 +793,8 @@ fn heap_count(items: &[asap_sketchlib::HHItem], key: &DataInput) -> Option<i64> 
 /// | `f64` | `f64` | full |
 /// | `i128` | `i64`, no `Into<i64>` | none |
 ///
-/// So `CMSHeap<Vector2D<i128>>`, `CMSHeap<QuickMatrixI128>` and
-/// `CMSHeap<DefaultMatrixI128>` are *constructible but inert* on both hashing
+/// So `CountMinSketchWithHeap<Vector2D<i128>>`, `CountMinSketchWithHeap<QuickMatrixI128>` and
+/// `CountMinSketchWithHeap<DefaultMatrixI128>` are *constructible but inert* on both hashing
 /// paths — six instances that allocate a sketch and a heap and can then do
 /// nothing but report their dimensions.
 ///
@@ -794,10 +819,10 @@ fn heap_count(items: &[asap_sketchlib::HHItem], key: &DataInput) -> Option<i64> 
 ///
 /// Every alternative costs more than it buys: `TryInto<i64>` would make
 /// `update` fallible or silently lossy for exactly the counters that motivated
-/// `i128`; widening `HHItem::count` to `i128` changes the heap wire payload
-/// shared with `CSHeap`, Space-Saving and the Octo top-k plans; and removing
+/// `i128`; widening `HeapEntry::count` to `i128` changes the heap wire payload
+/// shared with `CountSketchWithHeap`, Space-Saving and the Octo top-k plans; and removing
 /// the constructors is a breaking change to a type that composes generically.
-/// `CSHeap` already covers `i128` end to end for callers who need it.
+/// `CountSketchWithHeap` already covers `i128` end to end for callers who need it.
 #[test]
 fn cmsheap_inert_instances_construct_and_report_their_geometry() {
     macro_rules! inert {
@@ -825,42 +850,42 @@ fn cmsheap_inert_instances_construct_and_report_their_geometry() {
     inert!(
         Vector2D<i128>,
         RegularPath,
-        CMSHeap::<Vector2D<i128>, RegularPath>::new(3, 4096, 32),
+        CountMinSketchWithHeap::<Vector2D<i128>, RegularPath>::new(3, 4096, 32),
         3,
         4096
     );
     inert!(
         Vector2D<i128>,
         FastPath,
-        CMSHeap::<Vector2D<i128>, FastPath>::new(3, 4096, 32),
+        CountMinSketchWithHeap::<Vector2D<i128>, FastPath>::new(3, 4096, 32),
         3,
         4096
     );
     inert!(
         QuickMatrixI128,
         RegularPath,
-        CMSHeap::<QuickMatrixI128, RegularPath>::default(),
+        CountMinSketchWithHeap::<QuickMatrixI128, RegularPath>::default(),
         5,
         2048
     );
     inert!(
         QuickMatrixI128,
         FastPath,
-        CMSHeap::<QuickMatrixI128, FastPath>::default(),
+        CountMinSketchWithHeap::<QuickMatrixI128, FastPath>::default(),
         5,
         2048
     );
     inert!(
         DefaultMatrixI128,
         RegularPath,
-        CMSHeap::<DefaultMatrixI128, RegularPath>::default(),
+        CountMinSketchWithHeap::<DefaultMatrixI128, RegularPath>::default(),
         3,
         4096
     );
     inert!(
         DefaultMatrixI128,
         FastPath,
-        CMSHeap::<DefaultMatrixI128, FastPath>::default(),
+        CountMinSketchWithHeap::<DefaultMatrixI128, FastPath>::default(),
         3,
         4096
     );
@@ -877,7 +902,7 @@ fn countmin_counter_widths_carry_the_mass_their_type_allows() {
     let key = DataInput::U64(0xFEED_FACE);
 
     // i32: just under the signed 32-bit ceiling.
-    let mut cm32 = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+    let mut cm32 = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
     let near_i32 = i32::MAX - 1;
     cm32.update_weighted(&key, near_i32);
     assert_eq!(
@@ -887,7 +912,7 @@ fn countmin_counter_widths_carry_the_mass_their_type_allows() {
     );
 
     // i64: a count an i32 cell could not represent at all.
-    let mut cm64 = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, 64);
+    let mut cm64 = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 64);
     let beyond_i32 = i32::MAX as i64 * 4;
     cm64.update_weighted(&key, beyond_i32);
     assert_eq!(
@@ -897,7 +922,7 @@ fn countmin_counter_widths_carry_the_mass_their_type_allows() {
     );
 
     // i128: a count an i64 cell could not represent.
-    let mut cm128 = CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
+    let mut cm128 = CountMinSketch::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
     let beyond_i64 = i64::MAX as i128 * 4;
     cm128.update_weighted(&key, beyond_i64);
     assert_eq!(
@@ -908,8 +933,8 @@ fn countmin_counter_widths_carry_the_mass_their_type_allows() {
 
     // Merging two sketches each holding half the i64 range must not wrap the
     // i128 target either.
-    let mut a = CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
-    let mut b = CountMin::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
+    let mut a = CountMinSketch::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
+    let mut b = CountMinSketch::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
     a.update_weighted(&key, i64::MAX as i128);
     b.update_weighted(&key, i64::MAX as i128);
     a.merge(&b);
@@ -1002,8 +1027,9 @@ fn countmin_holds_its_contract_across_the_depth_and_width_axis_on_both_paths() {
     let (stream, truth) = stream_and_truth();
     for &rows in &DEPTH_AXIS {
         for &cols in &WIDTH_AXIS {
-            let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
-            let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            let mut regular =
+                CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut fast = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for k in &stream {
                 regular.update(&DataInput::U64(*k));
                 fast.update(&DataInput::U64(*k));
@@ -1032,7 +1058,7 @@ fn countmin_mean_excess_falls_as_the_width_axis_grows() {
     for &rows in &DEPTH_AXIS {
         let mut previous: Option<(usize, f64)> = None;
         for &cols in &[64usize, 512, 4_096] {
-            let mut sketch = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            let mut sketch = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for k in &stream {
                 sketch.update(&DataInput::U64(*k));
             }
@@ -1098,8 +1124,8 @@ fn countmin_answers_a_non_power_of_two_width_on_both_paths() {
             !cols.is_power_of_two(),
             "the width axis must stay off the power-of-two grid, got {cols}"
         );
-        let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, cols);
-        let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(3, cols);
+        let mut regular = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, cols);
+        let mut fast = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(3, cols);
         for k in &stream {
             regular.update(&DataInput::U64(*k));
             fast.update(&DataInput::U64(*k));
@@ -1163,7 +1189,7 @@ fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
 #[test]
 fn a_non_power_of_two_width_keeps_every_column_index_inside_the_matrix() {
     for &cols in &NON_POWER_OF_TWO_WIDTHS {
-        let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(3, cols);
+        let mut fast = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(3, cols);
         for k in 0..20_000u64 {
             fast.update(&DataInput::U64(k.wrapping_mul(0x9E37_79B9_7F4A_7C15)));
         }
@@ -1193,8 +1219,8 @@ fn a_non_power_of_two_width_keeps_every_column_index_inside_the_matrix() {
 #[test]
 fn countmin_merge_max_dominates_both_sides_on_disjoint_key_sets() {
     let (stream, _) = stream_and_truth();
-    let mut left = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
-    let mut right = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
+    let mut left = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
+    let mut right = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
     let mut left_truth = FreqTruth::default();
     let mut right_truth = FreqTruth::default();
     for k in &stream {
@@ -1264,7 +1290,7 @@ fn countmin_merge_max_dominates_both_sides_on_disjoint_key_sets() {
 #[test]
 fn countmin_merge_max_is_idempotent_and_absorbs_an_empty_sketch() {
     let (stream, truth) = stream_and_truth();
-    let mut sketch = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
+    let mut sketch = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
     for k in &stream {
         sketch.update(&DataInput::U64(*k));
     }
@@ -1274,7 +1300,7 @@ fn countmin_merge_max_is_idempotent_and_absorbs_an_empty_sketch() {
         .map(|(key, _)| (key, sketch.estimate(&DataInput::U64(key as u64))))
         .collect();
 
-    let empty = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
+    let empty = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(4, 2_048);
     let mut with_empty = sketch.clone();
     with_empty.merge_max(&empty);
     let mut with_self = sketch.clone();
@@ -1301,9 +1327,9 @@ fn countmin_precomputed_hash_entry_points_match_the_value_entry_points() {
     const COLS: usize = 2_048;
     let (stream, truth) = stream_and_truth();
 
-    let mut by_value = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
-    let mut by_hash = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
-    let mut by_bulk_hash = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_value = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_hash = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_bulk_hash = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
     let hashes: Vec<_> = stream
         .iter()
         .map(|k| hash_for_matrix(ROWS, COLS, &DataInput::U64(*k)))
@@ -1312,7 +1338,7 @@ fn countmin_precomputed_hash_entry_points_match_the_value_entry_points() {
         by_value.update(&DataInput::U64(*k));
     }
     for h in &hashes {
-        by_hash.fast_insert_with_hash_value(h);
+        by_hash.update_with_hash(h);
     }
     by_bulk_hash.update_batch_with_hashes(&hashes);
 
@@ -1331,7 +1357,7 @@ fn countmin_precomputed_hash_entry_points_match_the_value_entry_points() {
             "key {key}: bulk_insert_with_hashes diverged from insert"
         );
         assert_eq!(
-            by_value.fast_estimate_with_hash(&hashed),
+            by_value.estimate_with_hash(&hashed),
             expected,
             "key {key}: fast_estimate_with_hash diverged from estimate"
         );
@@ -1344,9 +1370,9 @@ fn countmin_weighted_batch_entry_points_match_a_loop_of_single_inserts() {
     const COLS: usize = 2_048;
     let (stream, truth) = stream_and_truth();
 
-    let mut by_loop = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
-    let mut by_bulk_many = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
-    let mut by_hashed_many = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_loop = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_bulk_many = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_hashed_many = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
 
     let weighted: Vec<(DataInput, i64)> = stream
         .iter()
@@ -1385,9 +1411,9 @@ fn countmin_weighted_batch_entry_points_match_a_loop_of_single_inserts() {
         );
     }
 
-    let mut single = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut single = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
     let hashed = hash_for_matrix(ROWS, COLS, &DataInput::U64(7));
-    single.fast_insert_many_with_hash_value(&hashed, 9);
+    single.update_weighted_with_hash(&hashed, 9);
     assert_eq!(
         single.estimate(&DataInput::U64(7)),
         9,
@@ -1405,7 +1431,7 @@ fn countsketch_precomputed_hash_entry_points_match_the_value_entry_points() {
     let mut by_hash = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
     for k in &stream {
         by_value.update(&DataInput::U64(*k));
-        by_hash.fast_insert_with_hash_value(&hash_for_matrix(ROWS, COLS, &DataInput::U64(*k)));
+        by_hash.update_with_hash(&hash_for_matrix(ROWS, COLS, &DataInput::U64(*k)));
     }
 
     for (key, _) in truth.pairs() {
@@ -1418,7 +1444,7 @@ fn countsketch_precomputed_hash_entry_points_match_the_value_entry_points() {
             "key {key}: fast_insert_with_hash_value diverged from insert"
         );
         assert_eq!(
-            by_value.fast_estimate_with_hash(&hashed),
+            by_value.estimate_with_hash(&hashed),
             expected,
             "key {key}: fast_estimate_with_hash diverged from estimate"
         );
@@ -1426,7 +1452,7 @@ fn countsketch_precomputed_hash_entry_points_match_the_value_entry_points() {
 
     let mut weighted = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
     let hashed = hash_for_matrix(ROWS, COLS, &DataInput::U64(11));
-    weighted.fast_insert_many_with_hash_value(&hashed, 6);
+    weighted.update_weighted_with_hash(&hashed, 6);
     assert_eq!(
         weighted.estimate(&DataInput::U64(11)),
         6.0,

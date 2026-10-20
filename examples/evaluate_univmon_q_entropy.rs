@@ -33,7 +33,7 @@ fn main() {
             profile.name,
             empty.estimated_memory_bytes() as f64 / (1024.0 * 1024.0),
             profile.config.width,
-            profile.config.width_halving_period,
+            profile.config.cols_halving_period,
             profile.config.candidates,
             profile.config.ordered_samples,
         );
@@ -59,8 +59,8 @@ fn main() {
                 );
                 results[profile_index][workload_index].push(ResultRow::new(
                     truth,
-                    query.estimate_entropy_universal(),
-                    query.estimate_entropy_occurrence(),
+                    query.estimate_entropy_from_g_sum(),
+                    query.estimate_entropy_from_samples(),
                     query.estimate_entropy(),
                 ));
             }
@@ -135,12 +135,12 @@ fn profiles(n: usize) -> Vec<Profile> {
     let compact = UnivMonQConfig {
         levels: 12,
         width: 4_096,
-        width_halving_period: 3,
+        cols_halving_period: 3,
         depth: 5,
         counter_bits: 32,
         candidates: 256,
         ordered_samples: 4_096,
-        hash_seed: 5,
+        seed_index: 5,
     }
     .with_window_bound(n as u64, 1e-9)
     .unwrap();
@@ -149,7 +149,7 @@ fn profiles(n: usize) -> Vec<Profile> {
     let mut large_sample = compact;
     large_sample.ordered_samples = 16_384;
     let mut equal_memory = compact;
-    equal_memory.width_halving_period = 0;
+    equal_memory.cols_halving_period = 0;
     let target = compact.levels * compact.depth * compact.width * size_of::<i64>();
     equal_memory.candidates = largest_candidate_budget(equal_memory, target);
     vec![
@@ -305,8 +305,7 @@ fn build_shards(data: &[usize], config: UnivMonQConfig, seed: u64) -> Vec<UnivMo
         .map(|shard| {
             let start = shard * data.len() / SHARDS;
             let end = (shard + 1) * data.len() / SHARDS;
-            let mut sketch =
-                UnivMonQ::new_with_source_id(config, seed ^ (shard as u64 + 1)).unwrap();
+            let mut sketch = UnivMonQ::with_source_id(config, seed ^ (shard as u64 + 1)).unwrap();
             for &value in &data[start..end] {
                 sketch.add(&value);
             }

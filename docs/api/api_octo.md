@@ -15,7 +15,7 @@ The paper's three ideas map onto this module as:
 | --- | --- |
 | Idea 1 — change-based updates (§3.2) | `OctoWorker` emits one counter at a time |
 | Idea 2 — adaptive resource allocation (§4.3) | `OctoAdaptiveThreshold` drives a shared `OctoThreshold` |
-| Idea 3 — reconstructed data structures (§3.2) | `CmWorkerSketch` / `CountWorkerSketch` drop key storage and use one-byte counters; only the `*TopK*` aggregators hold a heap |
+| Idea 3 — reconstructed data structures (§3.2) | `CountMinSketchWorker` / `CountSketchWorker` drop key storage and use one-byte counters; only the `*TopK*` aggregators hold a heap |
 
 ### Two Usage Levels
 
@@ -30,19 +30,19 @@ The paper's three ideas map onto this module as:
 Defined in `src/sketches/octo_delta.rs`.
 
 ```rust
-pub struct CmDelta    { pub row: u32, pub col: u32, pub value: u32 }
-pub struct CountDelta { pub row: u32, pub col: u32, pub value: i32 }
-pub struct HllDelta   { pub pos: u32, pub value: u8 }
-pub struct DdDelta    { pub index: i32, pub value: u64 }
+pub struct CountMinSketchCellDelta    { pub row: u32, pub col: u32, pub value: u32 }
+pub struct CountSketchCellDelta { pub row: u32, pub col: u32, pub value: i32 }
+pub struct HllRegisterDelta   { pub pos: u32, pub value: u8 }
+pub struct DdSketchBucketDelta    { pub index: i32, pub value: u64 }
 
-pub struct KeyedCmDelta    { pub key: HeapItem, pub delta: CmDelta }
-pub struct KeyedCountDelta { pub key: HeapItem, pub delta: CountDelta }
+pub struct KeyedCountMinSketchCellDelta    { pub key: OwnedDataInput, pub delta: CountMinSketchCellDelta }
+pub struct KeyedCountSketchCellDelta { pub key: OwnedDataInput, pub delta: CountSketchCellDelta }
 
 pub struct CocoDelta { pub key: String, pub value: u64 }
 pub enum ElasticDelta {
     Heavy { key: String, value: u32, eviction: bool },
     Evicted { key: String, votes: u32 },
-    Light(CmDelta),
+    Light(CountMinSketchCellDelta),
 }
 ```
 
@@ -71,20 +71,20 @@ defaults used when a worker is built without an explicit threshold.
 
 | Sketch | Default | Rule |
 | --- | --- | --- |
-| CountMin | `CM_PROMASK` = 31 | Emit and clear when a counter reaches τ |
-| Count | `COUNT_PROMASK` = 31 | Emit and clear when `\|counter\|` reaches τ |
-| DDSketch | `DD_PROMASK` = 4 | Emit and clear when a bucket reaches τ |
-| HyperLogLog | `HLL_PROMASK` = 0 | Emit when `\|2^C' - 2^C\| >= 2^τ`; never cleared |
-| UnivMon | `UNIVMON_PROMASK` = 64 | As Count, with τ halved per layer |
-| CocoSketch | `COCO_PROMASK` = 31 | Emit the bucket's `<key, counter>` and clear when the counter reaches τ |
-| Elastic | `ELASTIC_PROMASK` = 31 | One τ for both halves: heavy votes and light counters alike |
+| CountMinSketch | `OCTO_COUNT_MIN_DEFAULT_THRESHOLD` = 31 | Emit and clear when a counter reaches τ |
+| Count | `OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD` = 31 | Emit and clear when `\|counter\|` reaches τ |
+| DDSketch | `OCTO_DDSKETCH_DEFAULT_THRESHOLD` = 4 | Emit and clear when a bucket reaches τ |
+| HyperLogLog | `OCTO_HLL_DEFAULT_THRESHOLD` = 0 | Emit when `\|2^C' - 2^C\| >= 2^τ`; never cleared |
+| UnivMon | `OCTO_UNIVMON_DEFAULT_THRESHOLD` = 64 | As Count, with τ halved per layer |
+| CocoSketch | `OCTO_COCO_DEFAULT_THRESHOLD` = 31 | Emit the bucket's `<key, counter>` and clear when the counter reaches τ |
+| Elastic | `OCTO_ELASTIC_DEFAULT_THRESHOLD` = 31 | One τ for both halves: heavy votes and light counters alike |
 
-`DD_PROMASK` is much lower on purpose: a bucket that never reaches τ
+`OCTO_DDSKETCH_DEFAULT_THRESHOLD` is much lower on purpose: a bucket that never reaches τ
 never reaches the aggregator at all, so DDSketch loses its sparse tail
 rather than merely lagging. Size it against your samples-per-bucket, and
-read `DdWorkerSketch::held_back` to bound the rank error it costs.
+read `DdSketchWorker::held_back` to bound the rank error it costs.
 
-`HLL_PROMASK = 0` makes the parent's registers bit-identical to a
+`OCTO_HLL_DEFAULT_THRESHOLD = 0` makes the parent's registers bit-identical to a
 single-threaded sketch at any cardinality — stronger than the paper's
 Theorem 4, which only guarantees equality above `2·α_m·m²·2^(τ-2)`. The
 cost is that every register improvement is sent.
@@ -111,9 +111,9 @@ Equation 4 of the paper, `τ = εL1/k'`. `k_prime` is the number of
 workers one flow may reach: 1 under `OctoPartition::HashByKey`, the
 worker count under `OctoPartition::RoundRobin`.
 
-The return is clamped to the same `1..=MAX_PROMASK` band as
+The return is clamped to the same `1..=OCTO_MAX_PROMOTION_THRESHOLD` band as
 `OctoThreshold`, so an accuracy target loose enough to want a wider
-threshold than a one-byte worker counter gets `MAX_PROMASK` (127), not
+threshold than a one-byte worker counter gets `OCTO_MAX_PROMOTION_THRESHOLD` (127), not
 the raw `εL1/k'` — `threshold_for_error(0.001, 1e6, 1)` is 127, not
 1000. A `k_prime` of 0, or a non-finite `epsilon` or `l1`, returns the
 floor of 1. Pinned by `threshold_for_error_follows_equation_four`.
@@ -125,7 +125,7 @@ let tau = OctoThreshold::new(31);
 tau.get(); tau.set(64); tau.increase(1); tau.decrease(1);
 ```
 
-`OctoThreshold` is an `Arc<AtomicU32>` clamped to `1..=MAX_PROMASK`
+`OctoThreshold` is an `Arc<AtomicU32>` clamped to `1..=OCTO_MAX_PROMOTION_THRESHOLD`
 (127). The ceiling is a *signed* one-byte worker counter, and it is the
 same for every sketch on purpose: one shared threshold serves workers of
 different kinds, so a τ that meant 200 in one and 127 in another would
@@ -133,16 +133,16 @@ leave the aggregator's controller a band in which raising τ changes
 nothing. Clone it into every worker and into `OctoConfig::threshold` so
 the controller and the workers refer to the same value.
 
-## CountMin Delta API
+## CountMinSketch Delta API
 
-Available on `CountMin<S, RegularPath, H>` and `CountMin<S, FastPath, H>`
+Available on `CountMinSketch<S, RegularPath, H>` and `CountMinSketch<S, FastPath, H>`
 where `S::Counter = i32`.
 
 ```rust
-fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CmDelta))
-fn update_emit_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(CmDelta))
-fn update_emit_keyed_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(KeyedCmDelta))
-fn apply_delta(&mut self, delta: CmDelta)
+fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountMinSketchCellDelta))
+fn update_emit_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(CountMinSketchCellDelta))
+fn update_emit_keyed_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(KeyedCountMinSketchCellDelta))
+fn apply_delta(&mut self, delta: CountMinSketchCellDelta)
 ```
 
 `update_emit_delta` inserts a key and, for each row counter that reaches
@@ -150,32 +150,32 @@ fn apply_delta(&mut self, delta: CmDelta)
 1 of the paper. What the child still holds plus what the parent received
 always reconstructs a single-threaded pass.
 
-### CountMin Delta Example
+### CountMinSketch Delta Example
 
 ```rust
-use asap_sketchlib::{CountMin, RegularPath, DataInput, Vector2D};
-use asap_sketchlib::sketches::octo_delta::CmDelta;
+use asap_sketchlib::{CountMinSketch, RegularPath, DataInput, Vector2D};
+use asap_sketchlib::sketches::octo_delta::CountMinSketchCellDelta;
 
-let mut child = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
-let mut parent = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
+let mut child = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
+let mut parent = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 4096);
 
 let key = DataInput::U64(42);
-child.update_emit_delta(&key, &mut |delta: CmDelta| {
+child.update_emit_delta(&key, &mut |delta: CountMinSketchCellDelta| {
     parent.apply_delta(delta);
 });
 ```
 
 ## Count Sketch Delta API
 
-Same shape as CountMin, on `Count<S, RegularPath, H>` and
+Same shape as CountMinSketch, on `Count<S, RegularPath, H>` and
 `Count<S, FastPath, H>` where `S::Counter = i32`. Counters are signed, so
 the threshold is applied to `|counter|` (§4.4).
 
 ```rust
-fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta))
-fn update_emit_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(CountDelta))
-fn update_emit_keyed_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(KeyedCountDelta))
-fn apply_delta(&mut self, delta: CountDelta)
+fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountSketchCellDelta))
+fn update_emit_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(CountSketchCellDelta))
+fn update_emit_keyed_delta_with_threshold(&mut self, value: &DataInput, threshold: u32, emit: &mut impl FnMut(KeyedCountSketchCellDelta))
+fn apply_delta(&mut self, delta: CountSketchCellDelta)
 ```
 
 ## HyperLogLog Delta API
@@ -183,11 +183,11 @@ fn apply_delta(&mut self, delta: CountDelta)
 Available on all `HyperLogLogImpl<Variant, Registers, H>` variants.
 
 ```rust
-fn update_emit_delta(&mut self, obj: &DataInput, emit: &mut impl FnMut(HllDelta))
-fn update_emit_delta_with_threshold(&mut self, obj: &DataInput, threshold: u8, emit: &mut impl FnMut(HllDelta))
-fn update_emit_delta_with_hash(&mut self, hashed_val: u64, emit: &mut impl FnMut(HllDelta))
-fn update_emit_delta_with_hash_and_threshold(&mut self, hashed_val: u64, threshold: u8, emit: &mut impl FnMut(HllDelta))
-fn apply_delta(&mut self, delta: HllDelta)
+fn update_emit_delta(&mut self, obj: &DataInput, emit: &mut impl FnMut(HllRegisterDelta))
+fn update_emit_delta_with_threshold(&mut self, obj: &DataInput, threshold: u8, emit: &mut impl FnMut(HllRegisterDelta))
+fn update_emit_delta_with_hash(&mut self, hashed_val: u64, emit: &mut impl FnMut(HllRegisterDelta))
+fn update_emit_delta_with_hash_and_threshold(&mut self, hashed_val: u64, threshold: u8, emit: &mut impl FnMut(HllRegisterDelta))
+fn apply_delta(&mut self, delta: HllRegisterDelta)
 ```
 
 `apply_delta` applies a max-update: the parent register is set to
@@ -197,7 +197,7 @@ fn apply_delta(&mut self, delta: HllDelta)
 
 ```rust
 fn bucket_index_for(&self, value: f64) -> Option<i32>
-fn apply_delta(&mut self, delta: DdDelta)
+fn apply_delta(&mut self, delta: DdSketchBucketDelta)
 ```
 
 `bucket_index_for` exposes the logarithmic mapping so a worker can hold
@@ -217,25 +217,25 @@ silently — match the worker's α to the parent's. Pinned by
 
 ```rust
 fn bottom_layer_for(&self, key: &DataInput) -> usize
-fn apply_layered_delta(&mut self, delta: &LayeredCountDelta, fidelity: UnivMonDeltaFidelity)
+fn apply_delta(&mut self, delta: &UnivMonCellDelta, fidelity: UnivMonDeltaFidelity)
 fn set_total_weight(&mut self, weight: usize)
 fn mark_candidates_incomplete(&mut self)
 fn candidates_complete(&self) -> &[bool]
 ```
 
 ```rust
-pub struct LayeredCountDelta {
+pub struct UnivMonCellDelta {
     pub layer: u32,
-    pub key: HeapItem,
-    pub delta: CountDelta,
+    pub key: OwnedDataInput,
+    pub delta: CountSketchCellDelta,
     pub worker_id: u32,
-    pub weight_total: u64,
+    pub total_weight: u64,
 }
 ```
 
 An insert reaches layers `0..=bottom_layer_for(key)`, which is a pure
 function of the key's hash, so a worker selects exactly the layers a
-single-threaded insert would. `apply_layered_delta` writes the counter,
+single-threaded insert would. `apply_delta` writes the counter,
 re-reads the layer's estimate and updates that layer's heap — Algorithm
 2, per layer.
 
@@ -256,7 +256,7 @@ throughput against messages rather than against error.
 `cargo run --release --example octo_throughput_probe` measures the three
 stages separately on your hardware and prints the host it ran on.
 
-The aggregator's own ceiling is `HHHeap`, not the delta protocol: its
+The aggregator's own ceiling is `TopKHeap`, not the delta protocol: its
 rate falls off as `1/heap_size`, because the heap rebuilds its whole
 position index on every accepted update. Single-threaded UnivMon pays the
 same cost on every insert rather than every promotion.
@@ -278,9 +278,9 @@ structural half only.
 Three pieces of state a delta stream would otherwise lose are handled
 explicitly:
 
-- **L2 per row.** `CountL2HH` carries `l2[row] += new² − old²` on every
-  counter write, so `CountL2HH::apply_delta` does the same fix-up and a
-  parent fed only deltas reports the same `get_l2` as one fed the stream.
+- **L2 per row.** `CountSketchWithL2Norm` carries `l2[row] += new² − old²` on every
+  counter write, so `CountSketchWithL2Norm::apply_delta` does the same fix-up and a
+  parent fed only deltas reports the same `l2` as one fed the stream.
 - **Total weight.** `bucket_size` is what g-sum queries divide by and it
   cannot be recovered from thresholded counters, so each delta carries the
   emitting worker's running total. The aggregator keeps the newest report
@@ -288,7 +288,7 @@ explicitly:
   only what arrived after each worker's last promotion.
 - **Candidate completeness.** See the caveats below.
 
-The worker mirrors `CountL2HH`'s cell mapping through the shared
+The worker mirrors `CountSketchWithL2Norm`'s cell mapping through the shared
 `l2hh_cell_for_row`, not a copy of it: a UnivMon layer slices one
 128-bit hash into per-row columns and takes each row's sign from a
 different high bit, under a per-layer seed, so a hand-written copy would
@@ -297,25 +297,25 @@ be easy to drift.
 ## Compact Worker Sketches
 
 ```rust
-pub struct CmWorkerSketch { /* Vec<u8> */ }
-pub struct CountWorkerSketch { /* Vec<i8> */ }
-pub struct DdWorkerSketch { /* HashMap<i32, u8> */ }
-pub struct L2hhWorkerSketch { /* Vec<i8>, one per UnivMon layer */ }
+pub struct CountMinSketchWorker { /* Vec<u8> */ }
+pub struct CountSketchWorker { /* Vec<i8> */ }
+pub struct DdSketchWorker { /* HashMap<i32, u8> */ }
+pub struct CountSketchWithL2NormWorker { /* Vec<i8>, one per UnivMon layer */ }
 
-pub struct CocoWorkerSketch { /* Vec<Option<String>> + Vec<u8> */ }
-pub struct ElasticWorkerSketch { /* heavy buckets + a CmWorkerSketch light layer */ }
+pub struct CocoSketchWorker { /* Vec<Option<String>> + Vec<u8> */ }
+pub struct ElasticSketchWorker { /* heavy buckets + a CountMinSketchWorker light layer */ }
 ```
 
-`L2hhWorkerSketch::new` panics when `rows · ⌈log2 cols⌉` exceeds 128:
+`CountSketchWithL2NormWorker::new` panics when `rows · ⌈log2 cols⌉` exceeds 128:
 every row slices its column out of the same 128-bit hash, and past that
 budget the shift is undefined — debug builds panic and release builds
 wrap, aliasing a deep row onto a shallow one's column bits. 13 rows over
 2048 columns (11 bits) is the first geometry that trips it.
 
 A worker counter is cleared the moment it reaches τ, so it never exceeds
-one byte. Against the 32-bit counters a full `CountMin` uses that is the
+one byte. Against the 32-bit counters a full `CountMinSketch` uses that is the
 paper's 4× memory saving, and the workers keep no flow-key storage at
-all. Use these when you drive the protocol yourself; `CmOctoWorker` and
+all. Use these when you drive the protocol yourself; `CountMinSketchOctoWorker` and
 friends already do.
 
 The two keyed-bucket workers are the exception to "no flow-key storage".
@@ -340,7 +340,7 @@ pub struct OctoConfig {
     pub num_workers: usize,                          // default: 4
     pub pin_cores: bool,                             // default: true
     pub queue_capacity: usize,                       // default: 65536
-    pub threshold: OctoThreshold,                    // default: CM_PROMASK
+    pub threshold: OctoThreshold,                    // default: OCTO_COUNT_MIN_DEFAULT_THRESHOLD
     pub partition: OctoPartition,                    // default: HashByKey
     pub adaptive: Option<OctoAdaptiveThreshold>,     // default: None
 }
@@ -369,12 +369,12 @@ reaches τ; a τ the controller has *lowered* mid-run leaves residues sized
 by the highest τ that worker has held, which is why
 `run_octo_cm_tracks_a_single_threaded_sketch` and
 `the_adaptive_controller_moves_tau_during_a_real_run` pin
-`workers · τ` and `workers · MAX_PROMASK` respectively.
+`workers · τ` and `workers · OCTO_MAX_PROMOTION_THRESHOLD` respectively.
 
-`RoundRobin` also costs `Elastic` its one-sided guarantee: a flow that is
+`RoundRobin` also costs `ElasticSketch` its one-sided guarantee: a flow that is
 a stable, unflagged resident on one worker while losing the bucket contest
 on another reaches the parent unflagged, over light-layer mass an
-unflagged bucket never reads, and `Elastic::query` comes back low. See
+unflagged bucket never reads, and `ElasticSketch::query` comes back low. See
 [The Elastic eviction flag](#the-elastic-eviction-flag). The mode is a
 whole-runtime setting, so no individual plan opts out of it.
 
@@ -422,35 +422,35 @@ copy, made once at the hand-off.
 
 | Worker | Payload | Copies the key |
 | --- | --- | --- |
-| CountMin, Count | `RowHashes` (`SmallVec<[u64; 8]>`) | no — inline for any realistic row count |
+| CountMinSketch, Count | `RowHashes` (`SmallVec<[u64; 8]>`) | no — inline for any realistic row count |
 | HyperLogLog | `u64` | no |
 | DDSketch | `Option<f64>` | no |
-| CountMin/Count top-k | `KeyedHashes` | yes, unavoidably |
-| UnivMon | `UnivMonInput` | yes, unavoidably |
+| CountMinSketch/Count top-k | `KeyedHashes` | yes, unavoidably |
+| UnivMon | `KeyedLayerHashes` | yes, unavoidably |
 | CocoSketch, Elastic | `String` | yes, unavoidably |
 
 CocoSketch and Elastic key on a `String`, so their plans render the input
 with `flow_key_string`, which renders every `DataInput` variant: numbers by
-`to_string`, bytes as lowercase hex. `EHSketchList` converts differently —
+`to_string`, bytes as lowercase hex. `EhBucketSketch` converts differently —
 its `ELASTIC` arm renders bytes with `String::from_utf8_lossy`, and its
 `COCO` arm drops every input that is not `Str` or `String`. The
 `flow_key_string` rendering is what the aggregator stores, so it is what
-`Coco::estimate_key` or `Elastic::query` must be asked for. Their payloads
+`CocoSketch::estimate` or `ElasticSketch::query` must be asked for. Their payloads
 carry no hashes: the heavy half of an Elastic insert can evict a key the
 caller never sent, so the worker has to be able to hash for itself anyway,
 and hashing there keeps the work off the dispatching thread.
 
-`UnivMonInput` hashes only the layers a key actually reaches. Layer depth
+`KeyedLayerHashes` hashes only the layers a key actually reaches. Layer depth
 is geometric, so that is nearly always one or two.
 
-The shipped plans are `CmOctoPlan`, `CountOctoPlan`, `CmTopKOctoPlan`,
-`CountTopKOctoPlan`, `HllOctoPlan`, `DdOctoPlan`, `UnivMonOctoPlan`,
+The shipped plans are `CountMinSketchOctoPlan`, `CountSketchOctoPlan`, `CountMinSketchWithHeapOctoPlan`,
+`CountSketchWithHeapOctoPlan`, `HllOctoPlan`, `DdOctoPlan`, `UnivMonOctoPlan`,
 `CocoOctoPlan` and `ElasticOctoPlan`.
 Each takes the same dimensions its worker did, plus an optional shared
 `OctoThreshold`:
 
 ```rust
-let plan = CmOctoPlan::new(4, 4096);
+let plan = CountMinSketchOctoPlan::new(4, 4096);
 let result = run_octo(&inputs, &config, plan.clone(), || plan.aggregator());
 ```
 
@@ -507,8 +507,8 @@ cells are collision-free; collisions move it either way — the
 `octo_topk_promotion_probe` example sweeps geometries and worker counts and
 prints where the boundary lands.
 
-At the low level, `CmWorkerSketch`, `CountWorkerSketch`, `DdWorkerSketch`
-and `L2hhWorkerSketch` each expose `flush` directly.
+At the low level, `CountMinSketchWorker`, `CountSketchWorker`, `DdSketchWorker`
+and `CountSketchWithL2NormWorker` each expose `flush` directly.
 
 ### run_octo (Batch)
 
@@ -525,13 +525,13 @@ pub fn run_octo<L, P>(
 
 | Sketch | Worker | Aggregator | Delta Type |
 | --- | --- | --- | --- |
-| CountMin | `CmOctoWorker` | `CmOctoAggregator` | `CmDelta` |
-| CountMin + top-k | `CmTopKOctoWorker` | `CmTopKOctoAggregator` | `KeyedCmDelta` |
-| Count | `CountOctoWorker` | `CountOctoAggregator` | `CountDelta` |
-| Count + top-k | `CountTopKOctoWorker` | `CountTopKOctoAggregator` | `KeyedCountDelta` |
-| DDSketch | `DdOctoWorker` | `DdOctoAggregator` | `DdDelta` |
-| UnivMon | `UnivMonOctoWorker` | `UnivMonOctoAggregator` | `LayeredCountDelta` |
-| HyperLogLog | `HllOctoWorker` | `HllOctoAggregator` | `HllDelta` |
+| CountMinSketch | `CountMinSketchOctoWorker` | `CountMinSketchOctoAggregator` | `CountMinSketchCellDelta` |
+| CountMinSketch + top-k | `CountMinSketchWithHeapOctoWorker` | `CountMinSketchWithHeapOctoAggregator` | `KeyedCountMinSketchCellDelta` |
+| Count | `CountSketchOctoWorker` | `CountSketchOctoAggregator` | `CountSketchCellDelta` |
+| Count + top-k | `CountSketchWithHeapOctoWorker` | `CountSketchWithHeapOctoAggregator` | `KeyedCountSketchCellDelta` |
+| DDSketch | `DdOctoWorker` | `DdOctoAggregator` | `DdSketchBucketDelta` |
+| UnivMon | `UnivMonOctoWorker` | `UnivMonOctoAggregator` | `UnivMonCellDelta` |
+| HyperLogLog | `HllOctoWorker` | `HllOctoAggregator` | `HllRegisterDelta` |
 | CocoSketch | `CocoOctoWorker` | `CocoOctoAggregator` | `CocoDelta` |
 | Elastic | `ElasticOctoWorker` | `ElasticOctoAggregator` | `ElasticDelta` |
 
@@ -540,19 +540,19 @@ aggregator: each keyed delta updates the parent counter and then the
 heap, which is Algorithm 2.
 
 The two keyed-bucket pairs instead replay the key, per §4.4.
-`CocoOctoAggregator` calls the weighted `Coco::update_weighted`, so the promoted
+`CocoOctoAggregator` calls the weighted `CocoSketch::update_weighted`, so the promoted
 mass contests the parent's own buckets and runs the parent's own `v/val`
 election. Both halves of the Coco pair draw from the thread generator;
-`CocoWorkerSketch::with_seed`, `CocoOctoWorker::with_threshold_and_seed`,
+`CocoSketchWorker::with_seed`, `CocoOctoWorker::with_threshold_and_seed`,
 `CocoOctoAggregator::with_seed` and `CocoOctoPlan::with_seed` /
 `with_threshold_and_seed` draw from a seeded one instead. A seeded plan
 derives each worker's and the aggregator's seed from its own seed and the
 worker id. Under `run_octo` the parent applies deltas in arrival order,
 so only a single-threaded replay of a seeded plan reproduces exactly.
 `ElasticOctoAggregator` splits the halves: a `Heavy` message
-goes through `Elastic::merge_heavy`, a `Light` message is an ordinary
+goes through `ElasticSketch::merge_heavy`, a `Light` message is an ordinary
 Count-Min cell delta applied to `sketch.light`, and an `Evicted` message
-goes through `Elastic::absorb_evicted`. Neither aggregator keeps a heap:
+goes through `ElasticSketch::absorb_evicted`. Neither aggregator keeps a heap:
 Appendix C notes both sketches already carry their own heavy-key storage,
 which is also why Table 1 gives them a throughput ratio near 1 (1.01× and
 0.93×) while still reporting 37.25× and 14.03× better accuracy.
@@ -567,8 +567,8 @@ into the sketch using the same insertion logic as the original sketch."
 That is the whole rule. It says nothing about an eviction flag, and what
 follows is this crate's.
 
-An `Elastic` heavy bucket carries a flag meaning *part of this flow's mass
-is in the light layer*, and `Elastic::query` reads the light layer only
+An `ElasticSketch` heavy bucket carries a flag meaning *part of this flow's mass
+is in the light layer*, and `ElasticSketch::query` reads the light layer only
 when the flag is set. The delta protocol carries it in two places.
 
 1. *The flag rides with the counter.* `ElasticDelta::Heavy` carries the
@@ -587,7 +587,7 @@ when the flag is set. The delta protocol carries it in two places.
    remaining mass will now arrive through the light layer.
 
 The ordinary "an arrival that loses a bucket contest spills 1" path is
-unkeyed, batched through the light `CmWorkerSketch`, and promoted at τ
+unkeyed, batched through the light `CountMinSketchWorker`, and promoted at τ
 like any other Count-Min cell. The keyed spill costs +0.1–0.6% more
 worker→aggregator messages at 4 and 8 workers, +7% at the degenerate
 1-worker setting.
@@ -595,7 +595,7 @@ worker→aggregator messages at 4 and 8 workers, +7% at the degenerate
 Measured on a Zipf-1.2 stream (20k keys, 200k packets, 1024 heavy
 buckets, 3×4096 light, τ=31, hash-by-key, ARE over the true top-200,
 seed 7; seeds 11 and 23 agree): 0.0167 at 1 worker, 0.0071 at 4 and
-0.0055 at 8, against 0.0067 for a single-threaded `Elastic`, with no flow
+0.0055 at 8, against 0.0067 for a single-threaded `ElasticSketch`, with no flow
 under-estimated at any width.
 
 **Where the flag stops closing the loop.** It closes it only while a flow
@@ -604,7 +604,7 @@ stable, unflagged resident on one worker and a perpetual loser of the
 bucket contest on another: the second worker's share of its mass goes out
 unkeyed as `ElasticDelta::Light`, the first worker's `Heavy` messages
 carry `eviction: false`, and the parent seats the flow unflagged over
-light counters it will never read. `Elastic::query` then returns less than
+light counters it will never read. `ElasticSketch::query` then returns less than
 the true count, which is the one thing the sketch otherwise never does.
 Same stream and geometry as above, seed 7, over all 11,144 flows it
 contains rather than the top 200:
@@ -625,14 +625,14 @@ for it on its own.
 ### Sharing a threshold across the fleet
 
 ```rust
-let plan = CmOctoPlan::with_threshold(4, 4096, OctoThreshold::new(31));
+let plan = CountMinSketchOctoPlan::with_threshold(4, 4096, OctoThreshold::new(31));
 let config = OctoConfig {
     num_workers: 8,
     threshold: plan.threshold().clone(),
     adaptive: Some(OctoAdaptiveThreshold::default()),
     ..OctoConfig::default()
 };
-let result = run_octo(&inputs, &config, plan, || CmOctoAggregator::new(4, 4096));
+let result = run_octo(&inputs, &config, plan, || CountMinSketchOctoAggregator::new(4, 4096));
 ```
 
 ## Caveats

@@ -27,7 +27,7 @@
 //!   ICDT 2005. <https://doi.org/10.1007/978-3-540-30570-5_27>
 
 use crate::common::DigestBuildHasher;
-use crate::{DataInput, DefaultXxHasher, HeapItem, SketchHasher, input_to_owned};
+use crate::{DataInput, DefaultXxHasher, OwnedDataInput, SketchHasher, input_to_owned};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smallvec::SmallVec;
 use std::collections::HashMap;
@@ -51,7 +51,7 @@ type Index = HashMap<u64, Slot, DigestBuildHasher>;
 /// One monitored key.
 #[derive(Clone, Debug)]
 struct MonitoredKey {
-    key: HeapItem,
+    key: OwnedDataInput,
     digest: u64,
     error: u64,
     bucket: usize,
@@ -268,7 +268,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
 
     /// The `k` monitored keys with the largest counts, highest first, as
     /// `(key, count, error)`.
-    pub fn top_k(&self, k: usize) -> Vec<(HeapItem, u64, u64)> {
+    pub fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, u64, u64)> {
         let mut out = Vec::with_capacity(k.min(self.monitored.len()));
         let mut bid = self.bucket_tail;
         while bid != NIL && out.len() < k {
@@ -288,7 +288,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
     }
 
     /// Every monitored key as `(key, count, error)`, in no particular order.
-    pub fn entries(&self) -> Vec<(HeapItem, u64, u64)> {
+    pub fn entries(&self) -> Vec<(OwnedDataInput, u64, u64)> {
         self.monitored
             .iter()
             .map(|c| (c.key.clone(), self.buckets[c.bucket].count, c.error))
@@ -378,7 +378,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
         })
     }
 
-    fn find_key(&self, digest: u64, key: &HeapItem) -> Option<usize> {
+    fn find_key(&self, digest: u64, key: &OwnedDataInput) -> Option<usize> {
         self.index.get(&digest).and_then(|ids| {
             ids.iter()
                 .copied()
@@ -396,7 +396,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
     }
 
     /// Takes a free counter for `key` at `count` with `error`.
-    fn seat(&mut self, digest: u64, key: HeapItem, count: u64, error: u64) {
+    fn seat(&mut self, digest: u64, key: OwnedDataInput, count: u64, error: u64) {
         let cid = self.monitored.len();
         self.monitored.push(MonitoredKey {
             key,
@@ -526,7 +526,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
 /// One key of the union while a merge is in flight. `paired` marks an entry
 /// that has already taken the other side's contribution.
 struct MergeEntry {
-    key: HeapItem,
+    key: OwnedDataInput,
     digest: u64,
     count: u64,
     error: u64,
@@ -534,24 +534,24 @@ struct MergeEntry {
 }
 
 /// A total order over keys, breaking the ties that counts leave open.
-fn key_order(key: &HeapItem) -> (u8, u128, &[u8]) {
+fn key_order(key: &OwnedDataInput) -> (u8, u128, &[u8]) {
     match key {
-        HeapItem::I8(v) => (0, *v as i128 as u128, b""),
-        HeapItem::I16(v) => (1, *v as i128 as u128, b""),
-        HeapItem::I32(v) => (2, *v as i128 as u128, b""),
-        HeapItem::I64(v) => (3, *v as i128 as u128, b""),
-        HeapItem::I128(v) => (4, *v as u128, b""),
-        HeapItem::ISIZE(v) => (5, *v as i128 as u128, b""),
-        HeapItem::U8(v) => (6, u128::from(*v), b""),
-        HeapItem::U16(v) => (7, u128::from(*v), b""),
-        HeapItem::U32(v) => (8, u128::from(*v), b""),
-        HeapItem::U64(v) => (9, u128::from(*v), b""),
-        HeapItem::U128(v) => (10, *v, b""),
-        HeapItem::USIZE(v) => (11, *v as u128, b""),
-        HeapItem::F32(v) => (12, u128::from(v.to_bits()), b""),
-        HeapItem::F64(v) => (13, u128::from(v.to_bits()), b""),
-        HeapItem::String(v) => (14, 0, v.as_bytes()),
-        HeapItem::Bytes(v) => (15, 0, v.as_slice()),
+        OwnedDataInput::I8(v) => (0, *v as i128 as u128, b""),
+        OwnedDataInput::I16(v) => (1, *v as i128 as u128, b""),
+        OwnedDataInput::I32(v) => (2, *v as i128 as u128, b""),
+        OwnedDataInput::I64(v) => (3, *v as i128 as u128, b""),
+        OwnedDataInput::I128(v) => (4, *v as u128, b""),
+        OwnedDataInput::Isize(v) => (5, *v as i128 as u128, b""),
+        OwnedDataInput::U8(v) => (6, u128::from(*v), b""),
+        OwnedDataInput::U16(v) => (7, u128::from(*v), b""),
+        OwnedDataInput::U32(v) => (8, u128::from(*v), b""),
+        OwnedDataInput::U64(v) => (9, u128::from(*v), b""),
+        OwnedDataInput::U128(v) => (10, *v, b""),
+        OwnedDataInput::Usize(v) => (11, *v as u128, b""),
+        OwnedDataInput::F32(v) => (12, u128::from(v.to_bits()), b""),
+        OwnedDataInput::F64(v) => (13, u128::from(v.to_bits()), b""),
+        OwnedDataInput::String(v) => (14, 0, v.as_bytes()),
+        OwnedDataInput::Bytes(v) => (15, 0, v.as_slice()),
     }
 }
 
@@ -562,7 +562,7 @@ struct SpaceSavingRef<'a> {
     capacity: usize,
     total: u64,
     discarded_max: u64,
-    entries: Vec<(&'a HeapItem, u64, u64)>,
+    entries: Vec<(&'a OwnedDataInput, u64, u64)>,
 }
 
 #[derive(Deserialize)]
@@ -570,7 +570,7 @@ struct SpaceSavingState {
     capacity: usize,
     total: u64,
     discarded_max: u64,
-    entries: Vec<(HeapItem, u64, u64)>,
+    entries: Vec<(OwnedDataInput, u64, u64)>,
 }
 
 impl<H: SketchHasher> Serialize for SpaceSaving<H> {
@@ -639,7 +639,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
             _hasher: PhantomData,
         };
         for (key, count, error) in entries {
-            let digest = H::hash_item64_seeded(0, &key);
+            let digest = H::hash64_seeded_owned(0, &key);
             if summary.find_key(digest, &key).is_some() {
                 return Err("space-saving carries the same key twice".to_string());
             }
@@ -841,9 +841,9 @@ impl<H: SketchHasher> SpaceSaving<H> {
 mod tests {
     use super::*;
 
-    fn key_of(item: &HeapItem) -> i64 {
+    fn key_of(item: &OwnedDataInput) -> i64 {
         match item {
-            HeapItem::I64(v) => *v,
+            OwnedDataInput::I64(v) => *v,
             other => panic!("unexpected key form {other:?}"),
         }
     }
@@ -1330,7 +1330,7 @@ mod tests {
                 .entries()
                 .iter()
                 .map(|(key, _, _)| match key {
-                    HeapItem::I64(v) => *v,
+                    OwnedDataInput::I64(v) => *v,
                     other => panic!("unexpected key form {other:?}"),
                 })
                 .collect()
@@ -1367,16 +1367,14 @@ mod tests {
         );
         for dropped in [40i64, 50, 60] {
             assert!(
-                key_order(&HeapItem::I64(30)) < key_order(&HeapItem::I64(dropped)),
+                key_order(&OwnedDataInput::I64(30)) < key_order(&OwnedDataInput::I64(dropped)),
                 "key {dropped} was dropped although it sorts before the last survivor"
             );
         }
 
-        let bytes = merged
-            .serialize_to_bytes()
-            .expect("serialize the survivors");
+        let bytes = merged.to_asapv1().expect("serialize the survivors");
         let emitted: SpaceSaving =
-            SpaceSaving::deserialize_from_bytes(&bytes).expect("deserialize the survivors");
+            SpaceSaving::from_asapv1(&bytes).expect("deserialize the survivors");
         assert_eq!(
             keys_of(&emitted),
             vec![1, 10, 20, 30],
@@ -1520,7 +1518,10 @@ mod tests {
             capacity: 1,
             total: 4,
             discarded_max: 0,
-            entries: vec![(HeapItem::I64(1), 2, 0), (HeapItem::I64(2), 2, 0)],
+            entries: vec![
+                (OwnedDataInput::I64(1), 2, 0),
+                (OwnedDataInput::I64(2), 2, 0),
+            ],
         };
         let cases = [
             (
@@ -1538,7 +1539,7 @@ mod tests {
                     capacity: 4,
                     total: 1,
                     discarded_max: 0,
-                    entries: vec![(HeapItem::I64(1), 0, 0)],
+                    entries: vec![(OwnedDataInput::I64(1), 0, 0)],
                 },
                 "at zero",
             ),
@@ -1547,7 +1548,7 @@ mod tests {
                     capacity: 4,
                     total: 1,
                     discarded_max: 0,
-                    entries: vec![(HeapItem::I64(1), 3, 4)],
+                    entries: vec![(OwnedDataInput::I64(1), 3, 4)],
                 },
                 "error of 4",
             ),
@@ -1556,7 +1557,10 @@ mod tests {
                     capacity: 4,
                     total: 2,
                     discarded_max: 0,
-                    entries: vec![(HeapItem::I64(1), 2, 0), (HeapItem::I64(1), 1, 0)],
+                    entries: vec![
+                        (OwnedDataInput::I64(1), 2, 0),
+                        (OwnedDataInput::I64(1), 1, 0),
+                    ],
                 },
                 "same key twice",
             ),
@@ -1565,7 +1569,7 @@ mod tests {
                     capacity: 4,
                     total: 3,
                     discarded_max: u64::MAX,
-                    entries: vec![(HeapItem::I64(1), 3, 0)],
+                    entries: vec![(OwnedDataInput::I64(1), 3, 0)],
                 },
                 "ceiling of 18446744073709551615 above its lowest count of 3",
             ),
@@ -1574,7 +1578,7 @@ mod tests {
                     capacity: 4,
                     total: 0,
                     discarded_max: 0,
-                    entries: vec![(HeapItem::I64(1), 9, 0)],
+                    entries: vec![(OwnedDataInput::I64(1), 9, 0)],
                 },
                 "total of 0 under the 9",
             ),
@@ -1595,7 +1599,7 @@ mod tests {
             capacity: 1 << 40,
             total: 3,
             discarded_max: 0,
-            entries: vec![(HeapItem::I64(1), 3, 0)],
+            entries: vec![(OwnedDataInput::I64(1), 3, 0)],
         };
         let summary = SpaceSaving::<DefaultXxHasher>::rebuild(state).expect("a sparse state");
         summary.validate().expect("decoded summary");
@@ -1614,7 +1618,7 @@ mod tests {
             .entries()
             .iter()
             .map(|(key, _, _)| match key {
-                HeapItem::Bytes(v) => v.clone(),
+                OwnedDataInput::Bytes(v) => v.clone(),
                 other => panic!("unexpected key form {other:?}"),
             })
             .collect();
@@ -1747,19 +1751,19 @@ mod collisions {
         fn hash128_seeded(_: usize, _: &DataInput) -> u128 {
             u128::from(ONE)
         }
-        fn hash_item64_seeded(_: usize, _: &HeapItem) -> u64 {
+        fn hash64_seeded_owned(_: usize, _: &OwnedDataInput) -> u64 {
             ONE
         }
-        fn hash_item128_seeded(_: usize, _: &HeapItem) -> u128 {
+        fn hash128_seeded_owned(_: usize, _: &OwnedDataInput) -> u128 {
             u128::from(ONE)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -1770,7 +1774,7 @@ mod collisions {
             .entries()
             .iter()
             .map(|(key, _, _)| match key {
-                HeapItem::I64(v) => *v,
+                OwnedDataInput::I64(v) => *v,
                 other => panic!("unexpected key form {other:?}"),
             })
             .collect();
@@ -1889,7 +1893,10 @@ mod collisions {
             capacity: 4,
             total: 9,
             discarded_max: 0,
-            entries: vec![(HeapItem::I64(10), 5, 0), (HeapItem::I64(10), 4, 0)],
+            entries: vec![
+                (OwnedDataInput::I64(10), 5, 0),
+                (OwnedDataInput::I64(10), 4, 0),
+            ],
         };
         let problem = Colliding::rebuild(repeated).expect_err("a repeated key");
         assert!(problem.contains("same key twice"), "got {problem}");

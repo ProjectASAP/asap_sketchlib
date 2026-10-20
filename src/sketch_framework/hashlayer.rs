@@ -12,9 +12,9 @@
 //!
 //! Only sketches with a true prehashed insertion path are accepted:
 //!
-//! * `CountMin<_, FastPath, _>` — Count-Min Sketch (fast path)
+//! * `CountMinSketch<_, FastPath, _>` — Count-Min Sketch (fast path)
 //! * `Count<_, FastPath, _>` — Count Sketch (fast path)
-//! * `HyperLogLog<ErtlMLE>` / `HyperLogLog<Classic>` / `HyperLogLogHIP`
+//! * `HyperLogLog<Ertl>` / `HyperLogLog<Classic>` / `HyperLogLogHip`
 //!
 //! All matrix-backed sketches (CMS / Count) in one layer must agree on the
 //! same hash layout (determined by rows × cols dimensions).  HLL sketches can
@@ -31,10 +31,10 @@
 //! * [`HashSketchEnsemble::cardinality`] — distinct-count estimate (HLL only).
 
 use crate::{
-    Classic, Count, CountMin, DataInput, DefaultXxHasher, ErtlMLE, FastPath, HyperLogLog,
-    HyperLogLogHIP, MatrixHashMode, MatrixHashType, SketchHasher, Vector1D,
-    hash_for_matrix_seeded_with_mode_generic, hash_mode_for_matrix,
-    sketch_framework::sketch_catalog::{CountFastOps, CountMinFastOps},
+    Classic, Count, CountMinSketch, DataInput, DefaultXxHasher, Ertl, FastPath, HyperLogLog,
+    HyperLogLogHip, MatrixHash, MatrixHashLayout, SketchHasher, Vector1D,
+    hash_for_matrix_seeded_with_layout_generic, hash_layout_for_matrix,
+    sketch_framework::sketch_catalog::{CountMinFastOps, CountSketchFastOps},
 };
 use std::marker::PhantomData;
 
@@ -42,23 +42,23 @@ use std::marker::PhantomData;
 // Stored once so `hash_input` can avoid recomputing the mode on every call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct HashConfig {
-    mode: MatrixHashMode,
+    mode: MatrixHashLayout,
     rows: usize,
 }
 
 impl HashConfig {
     fn from_dimensions(rows: usize, cols: usize) -> Self {
         HashConfig {
-            mode: hash_mode_for_matrix(rows, cols),
+            mode: hash_layout_for_matrix(rows, cols),
             rows,
         }
     }
 
-    fn hash_for_input<H>(&self, input: &DataInput) -> MatrixHashType
+    fn hash_for_input<H>(&self, input: &DataInput) -> MatrixHash
     where
-        H: SketchHasher<HashType = MatrixHashType>,
+        H: SketchHasher<HashType = MatrixHash>,
     {
-        hash_for_matrix_seeded_with_mode_generic::<H>(0, self.mode, self.rows, input)
+        hash_for_matrix_seeded_with_layout_generic::<H>(0, self.mode, self.rows, input)
     }
 }
 
@@ -67,13 +67,13 @@ pub enum EnsembleSketch {
     /// Fast-path Count-Min sketch.
     CountMinFast(Box<dyn CountMinFastOps>),
     /// Fast-path Count Sketch.
-    CountFast(Box<dyn CountFastOps>),
+    CountSketchFast(Box<dyn CountSketchFastOps>),
     /// Ertl-MLE HyperLogLog.
-    HllErtl(HyperLogLog<ErtlMLE>),
+    HllErtl(HyperLogLog<Ertl>),
     /// Classic HyperLogLog.
     HllClassic(HyperLogLog<Classic>),
     /// HIP HyperLogLog.
-    HllHip(HyperLogLogHIP),
+    HllHip(HyperLogLogHip),
 }
 
 impl EnsembleSketch {
@@ -81,7 +81,7 @@ impl EnsembleSketch {
     pub fn sketch_type(&self) -> &'static str {
         match self {
             EnsembleSketch::CountMinFast(_) => "CountMin",
-            EnsembleSketch::CountFast(_) => "Count",
+            EnsembleSketch::CountSketchFast(_) => "Count",
             EnsembleSketch::HllErtl(_)
             | EnsembleSketch::HllClassic(_)
             | EnsembleSketch::HllHip(_) => "HLL",
@@ -93,7 +93,9 @@ impl EnsembleSketch {
             EnsembleSketch::CountMinFast(s) => {
                 Some(HashConfig::from_dimensions(s.rows(), s.cols()))
             }
-            EnsembleSketch::CountFast(s) => Some(HashConfig::from_dimensions(s.rows(), s.cols())),
+            EnsembleSketch::CountSketchFast(s) => {
+                Some(HashConfig::from_dimensions(s.rows(), s.cols()))
+            }
             EnsembleSketch::HllErtl(_)
             | EnsembleSketch::HllClassic(_)
             | EnsembleSketch::HllHip(_) => None,
@@ -101,10 +103,10 @@ impl EnsembleSketch {
     }
 
     /// Inserts a precomputed hash into the sketch.
-    pub fn update_with_hash(&mut self, hash: &MatrixHashType) {
+    pub fn update_with_hash(&mut self, hash: &MatrixHash) {
         match self {
             EnsembleSketch::CountMinFast(sketch) => sketch.fast_insert(hash),
-            EnsembleSketch::CountFast(sketch) => sketch.fast_insert(hash),
+            EnsembleSketch::CountSketchFast(sketch) => sketch.fast_insert(hash),
             EnsembleSketch::HllErtl(hll) => hll.update_with_hash(hash.lower_64()),
             EnsembleSketch::HllClassic(hll) => hll.update_with_hash(hash.lower_64()),
             EnsembleSketch::HllHip(hll) => hll.update_with_hash(hash.lower_64()),
@@ -113,10 +115,10 @@ impl EnsembleSketch {
 
     /// Returns the frequency estimate for a key.
     /// `Some(f64)` for CMS / Count, `None` for HLL.
-    pub fn estimate_with_hash(&self, hash: &MatrixHashType) -> Option<f64> {
+    pub fn estimate_with_hash(&self, hash: &MatrixHash) -> Option<f64> {
         match self {
             EnsembleSketch::CountMinFast(sketch) => Some(sketch.fast_estimate(hash)),
-            EnsembleSketch::CountFast(sketch) => Some(sketch.fast_estimate(hash)),
+            EnsembleSketch::CountSketchFast(sketch) => Some(sketch.fast_estimate(hash)),
             EnsembleSketch::HllErtl(_)
             | EnsembleSketch::HllClassic(_)
             | EnsembleSketch::HllHip(_) => None,
@@ -130,14 +132,14 @@ impl EnsembleSketch {
             EnsembleSketch::HllErtl(hll) => Some(hll.estimate() as f64),
             EnsembleSketch::HllClassic(hll) => Some(hll.estimate() as f64),
             EnsembleSketch::HllHip(hll) => Some(hll.estimate() as f64),
-            EnsembleSketch::CountMinFast(_) | EnsembleSketch::CountFast(_) => None,
+            EnsembleSketch::CountMinFast(_) | EnsembleSketch::CountSketchFast(_) => None,
         }
     }
 }
 
-impl<S, H> From<CountMin<S, FastPath, H>> for EnsembleSketch
+impl<S, H> From<CountMinSketch<S, FastPath, H>> for EnsembleSketch
 where
-    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    H: SketchHasher<HashType = MatrixHash> + 'static,
     S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
     S::Counter: Copy
         + PartialOrd
@@ -146,24 +148,24 @@ where
         + crate::common::structure_utils::ToF64
         + 'static,
 {
-    fn from(value: CountMin<S, FastPath, H>) -> Self {
+    fn from(value: CountMinSketch<S, FastPath, H>) -> Self {
         EnsembleSketch::CountMinFast(Box::new(value))
     }
 }
 
 impl<S, H> From<Count<S, FastPath, H>> for EnsembleSketch
 where
-    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    H: SketchHasher<HashType = MatrixHash> + 'static,
     S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
     S::Counter: crate::sketches::countsketch::CountSketchCounter + 'static,
 {
     fn from(value: Count<S, FastPath, H>) -> Self {
-        EnsembleSketch::CountFast(Box::new(value))
+        EnsembleSketch::CountSketchFast(Box::new(value))
     }
 }
 
-impl From<HyperLogLog<ErtlMLE>> for EnsembleSketch {
-    fn from(value: HyperLogLog<ErtlMLE>) -> Self {
+impl From<HyperLogLog<Ertl>> for EnsembleSketch {
+    fn from(value: HyperLogLog<Ertl>) -> Self {
         EnsembleSketch::HllErtl(value)
     }
 }
@@ -174,8 +176,8 @@ impl From<HyperLogLog<Classic>> for EnsembleSketch {
     }
 }
 
-impl From<HyperLogLogHIP> for EnsembleSketch {
-    fn from(value: HyperLogLogHIP) -> Self {
+impl From<HyperLogLogHip> for EnsembleSketch {
+    fn from(value: HyperLogLogHip) -> Self {
         EnsembleSketch::HllHip(value)
     }
 }
@@ -183,7 +185,7 @@ impl From<HyperLogLogHIP> for EnsembleSketch {
 /// A group of sketches that reuse one shared hash per insert.
 pub struct HashSketchEnsemble<H = DefaultXxHasher>
 where
-    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    H: SketchHasher<HashType = MatrixHash> + 'static,
 {
     sketches: Vector1D<EnsembleSketch>,
     hash_config: Option<HashConfig>,
@@ -192,7 +194,7 @@ where
 
 impl<H> HashSketchEnsemble<H>
 where
-    H: SketchHasher<HashType = MatrixHashType> + 'static,
+    H: SketchHasher<HashType = MatrixHash> + 'static,
 {
     /// Creates an ensemble from a list of compatible sketches.
     pub fn new(sketches: Vec<EnsembleSketch>) -> Result<Self, &'static str> {
@@ -248,7 +250,7 @@ where
         if let Some(cfg) = self.hash_config {
             cfg.hash_for_input::<H>(input)
         } else {
-            MatrixHashType::Packed64(H::hash64_seeded(crate::CANONICAL_HASH_SEED, input))
+            MatrixHash::Packed64(H::hash64_seeded(crate::DEFAULT_CANONICAL_SEED_INDEX, input))
         }
     }
 
@@ -396,7 +398,7 @@ where
 mod tests {
     use super::*;
     use crate::test_utils::sample_zipf_u64;
-    use crate::{ErtlMLE, HyperLogLog, Vector2D};
+    use crate::{Ertl, HyperLogLog, Vector2D};
     use std::collections::HashMap;
 
     const SAMPLE_SIZE: usize = 10_000;
@@ -423,7 +425,7 @@ mod tests {
 
     fn default_layer() -> HashSketchEnsemble<DefaultXxHasher> {
         HashSketchEnsemble::new(vec![
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
             Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
         ])
         .expect("compatible sketches")
@@ -512,7 +514,7 @@ mod tests {
         let true_cardinality = baseline.len();
 
         let mut layer: HashSketchEnsemble<DefaultXxHasher> =
-            HashSketchEnsemble::new(vec![HyperLogLog::<ErtlMLE>::default().into()])
+            HashSketchEnsemble::new(vec![HyperLogLog::<Ertl>::default().into()])
                 .expect("HLL-only layer");
 
         for &value in &data {
@@ -532,7 +534,7 @@ mod tests {
     #[test]
     fn test_estimate_on_hll_returns_error() {
         let layer: HashSketchEnsemble<DefaultXxHasher> =
-            HashSketchEnsemble::new(vec![HyperLogLog::<ErtlMLE>::default().into()])
+            HashSketchEnsemble::new(vec![HyperLogLog::<Ertl>::default().into()])
                 .expect("HLL-only layer");
 
         let result = layer.estimate(0, &DataInput::U64(42));
@@ -572,7 +574,7 @@ mod tests {
     #[test]
     fn test_custom_dimensions() {
         let mut layer: HashSketchEnsemble<DefaultXxHasher> = HashSketchEnsemble::new(vec![
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
             Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
         ])
         .expect("compatible sketches");
@@ -592,8 +594,8 @@ mod tests {
     #[test]
     fn test_mixed_matrix_and_hll() {
         let mut layer = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
-            CountMin::<Vector2D<i32>, FastPath>::default().into(),
-            HyperLogLog::<ErtlMLE>::default().into(),
+            CountMinSketch::<Vector2D<i32>, FastPath>::default().into(),
+            HyperLogLog::<Ertl>::default().into(),
         ])
         .expect("CMS + HLL layer");
 
@@ -617,7 +619,7 @@ mod tests {
     #[test]
     fn test_push_compatible() {
         let mut layer: HashSketchEnsemble<DefaultXxHasher> = HashSketchEnsemble::new(vec![
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
         ])
         .expect("single CMS");
 
@@ -629,7 +631,7 @@ mod tests {
     #[test]
     fn test_push_incompatible_rejected() {
         let mut layer: HashSketchEnsemble<DefaultXxHasher> = HashSketchEnsemble::new(vec![
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
         ])
         .expect("single CMS");
 

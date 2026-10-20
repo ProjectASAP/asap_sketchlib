@@ -6,7 +6,7 @@
 //   cargo run --example cardinality_hll
 use std::collections::HashSet;
 
-use asap_sketchlib::{DataInput, ErtlMLE, HyperLogLog};
+use asap_sketchlib::{DataInput, Ertl, HyperLogLog};
 
 fn main() {
     // 50_000 events drawn from 1_000 distinct user IDs.
@@ -16,9 +16,9 @@ fn main() {
     let exact: HashSet<u64> = user_ids.iter().copied().collect();
     let exact_count = exact.len();
 
-    // Sketch: HyperLogLog<ErtlMLE> estimates distinct count in fixed memory.
-    // ErtlMLE is more accurate than Classic at very low or very high cardinalities.
-    let mut hll = HyperLogLog::<ErtlMLE>::default();
+    // Sketch: HyperLogLog<Ertl> estimates distinct count in fixed memory.
+    // Ertl is more accurate than Classic at very low or very high cardinalities.
+    let mut hll = HyperLogLog::<Ertl>::default();
     for &id in &user_ids {
         hll.update(&DataInput::U64(id));
     }

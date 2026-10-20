@@ -46,8 +46,8 @@ fn merge(&mut self, other: &UniformSampling) -> Result<(), &'static str>
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, rmp_serde::encode::Error>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
+fn to_asapv1(&self) -> Result<Vec<u8>, rmp_serde::encode::Error>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
 ```
 
 ASAPv1 wire format, kind_id `0x0d 0x00`. Metadata carries `metadata_version`,

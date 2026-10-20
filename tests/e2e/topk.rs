@@ -3,11 +3,13 @@ use crate::common;
 use common::specs::{CountMinSpec, CountSketchSpec, Tally};
 use common::{FreqTruth, zipf_u64};
 
-use asap_sketchlib::{CMSHeap, CSHeap, DataInput, HeapItem, RegularPath, Vector2D};
+use asap_sketchlib::{
+    CountMinSketchWithHeap, CountSketchWithHeap, DataInput, OwnedDataInput, RegularPath, Vector2D,
+};
 
 /// The two heap-backed sketches share heap bookkeeping but not an error
-/// metric: `CMSHeap` carries Count-Min's one-sided additive bound and
-/// `CSHeap` carries Count Sketch's L2 bound. Both must keep every heap entry
+/// metric: `CountMinSketchWithHeap` carries Count-Min's one-sided additive bound and
+/// `CountSketchWithHeap` carries Count Sketch's L2 bound. Both must keep every heap entry
 /// equal to what the sketch itself estimates, and both must recover the true
 /// heavy hitters that the top-k contract actually guarantees.
 #[test]
@@ -19,8 +21,9 @@ fn heaps_satisfy_their_own_bounds_and_stay_heap_consistent() {
     const COLS: usize = 4096;
     const STREAM_SEED: u64 = 1004;
 
-    let mut cms_heap = CMSHeap::<Vector2D<i64>, RegularPath>::new(CM_ROWS, COLS, TOP_K);
-    let mut cs_heap = CSHeap::<Vector2D<i64>, RegularPath>::new(CS_ROWS, COLS, TOP_K);
+    let mut cms_heap =
+        CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(CM_ROWS, COLS, TOP_K);
+    let mut cs_heap = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(CS_ROWS, COLS, TOP_K);
     let stream = zipf_u64(20_000, DOMAIN, 1.1, STREAM_SEED);
     let mut truth = FreqTruth::default();
     for k in &stream {
@@ -57,7 +60,7 @@ fn heaps_satisfy_their_own_bounds_and_stay_heap_consistent() {
         let mut recall = 0usize;
         for it in &items {
             let key = match &it.key {
-                HeapItem::I64(v) => *v,
+                OwnedDataInput::I64(v) => *v,
                 other => panic!("{label}: unexpected heap key {other:?}"),
             };
             let est = if cms {
@@ -117,10 +120,10 @@ mod documented_matrix {
     /// The document's per-item relative error for the heaps.
     const HEAP_RELATIVE_ERROR: f64 = 0.02;
 
-    fn key_of(item: &HeapItem) -> i64 {
+    fn key_of(item: &OwnedDataInput) -> i64 {
         match item {
-            HeapItem::I64(v) => *v,
-            HeapItem::F64(v) => v.to_bits() as i64,
+            OwnedDataInput::I64(v) => *v,
+            OwnedDataInput::F64(v) => v.to_bits() as i64,
             other => panic!("unexpected heap key form {other:?}"),
         }
     }
@@ -130,10 +133,11 @@ mod documented_matrix {
         let truth = input.truth();
 
         for top_k in TOP_KS {
-            let mut cms_heap =
-                CMSHeap::<Vector2D<i64>, RegularPath>::new(HEAP_ROWS, HEAP_COLS, top_k);
+            let mut cms_heap = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(
+                HEAP_ROWS, HEAP_COLS, top_k,
+            );
             let mut cs_heap =
-                CSHeap::<Vector2D<i64>, RegularPath>::new(HEAP_ROWS, HEAP_COLS, top_k);
+                CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(HEAP_ROWS, HEAP_COLS, top_k);
             for key in &input.keys {
                 let d = input.data(*key);
                 cms_heap.update(&d);

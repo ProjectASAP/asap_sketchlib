@@ -253,11 +253,11 @@ impl<T> Vector3D<T> {
 
     /// Returns the bit width needed to represent one column index.
     ///
-    /// A packed fast-path hash carries `rows * get_mask_bits()` bits of column
+    /// A packed fast-path hash carries `rows * mask_bits()` bits of column
     /// selection; callers that pack all rows into one `u128` must check that
     /// product against 128 before hashing.
     #[inline(always)]
-    pub fn get_mask_bits(&self) -> u32 {
+    pub fn mask_bits(&self) -> u32 {
         self.mask_bits
     }
 
@@ -310,7 +310,7 @@ impl<T> Vector3D<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MatrixHashType;
+    use crate::MatrixHash;
 
     #[test]
     fn fill_initializes_every_cell() {
@@ -367,18 +367,18 @@ mod tests {
 
     #[test]
     fn mask_bits_cover_the_column_index() {
-        assert_eq!(Vector3D::<u8>::init(1, 64, 1).get_mask_bits(), 6);
-        assert_eq!(Vector3D::<u8>::init(1, 1, 1).get_mask_bits(), 0);
+        assert_eq!(Vector3D::<u8>::init(1, 64, 1).mask_bits(), 6);
+        assert_eq!(Vector3D::<u8>::init(1, 1, 1).mask_bits(), 0);
         // Non-power-of-two widths round up to the next bit.
-        assert_eq!(Vector3D::<u8>::init(1, 17, 1).get_mask_bits(), 5);
-        assert_eq!(Vector3D::<u8>::init(1, 4096, 1).get_mask_bits(), 12);
+        assert_eq!(Vector3D::<u8>::init(1, 17, 1).mask_bits(), 5);
+        assert_eq!(Vector3D::<u8>::init(1, 4096, 1).mask_bits(), 12);
     }
 
     #[test]
     fn fast_insert_and_query_min_agree_on_the_same_columns() {
         let mut v: Vector3D<u32> = Vector3D::init(3, 64, 2);
         v.fill(0);
-        let hash = MatrixHashType::Packed64(0x0123_4567_89AB_CDEF);
+        let hash = MatrixHash::Packed64(0x0123_4567_89AB_CDEF);
         // Write a per-row marker into the selected bucket of every row.
         v.fast_insert(
             |bucket, &delta: &u32, row| {
@@ -409,7 +409,7 @@ mod tests {
         assert_eq!((back.rows(), back.cols(), back.depth()), (2, 8, 3));
         assert_eq!(back.as_slice(), v.as_slice());
         // Derived routing state is recomputed, not carried on the wire.
-        assert_eq!(back.get_mask_bits(), v.get_mask_bits());
+        assert_eq!(back.mask_bits(), v.mask_bits());
     }
 
     /// The compact encoding is positional, so `Serialize` and `Deserialize`
@@ -424,7 +424,7 @@ mod tests {
         let back: Vector3D<u8> = rmp_serde::from_slice(&bytes).expect("deserialize");
         assert_eq!((back.rows(), back.cols(), back.depth()), (2, 8, 3));
         assert_eq!(back.as_slice(), v.as_slice());
-        assert_eq!(back.get_mask_bits(), v.get_mask_bits());
+        assert_eq!(back.mask_bits(), v.mask_bits());
     }
 
     #[test]

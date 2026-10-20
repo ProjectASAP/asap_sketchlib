@@ -10,7 +10,7 @@ use std::hint::black_box;
 use std::mem::size_of;
 use std::time::{Duration, Instant};
 
-use asap_sketchlib::{KLL, UnivMonQ, UnivMonQConfig};
+use asap_sketchlib::{Kll, UnivMonQ, UnivMonQConfig};
 
 const LEVELS: usize = 12;
 const DEPTH: usize = 5;
@@ -36,12 +36,12 @@ fn main() {
     let q_matched = UnivMonQConfig {
         levels: LEVELS,
         width: 256,
-        width_halving_period: 3,
+        cols_halving_period: 3,
         depth: DEPTH,
         counter_bits: 32,
         candidates: 128,
         ordered_samples: ORDERED_SAMPLES,
-        hash_seed: 5,
+        seed_index: 5,
     };
     let q_quality = UnivMonQConfig {
         width: 1_024,
@@ -315,7 +315,7 @@ fn score_q(sketch: &UnivMonQ, truth: &Truth) -> Score {
         .collect();
     truth.score(
         &points,
-        query.estimate_distinct(),
+        query.estimate_cardinality(),
         query.estimate_f2(),
         query.estimate_entropy(),
         &heavy,
@@ -510,7 +510,7 @@ struct SpecializedBundle {
     frequencies: FrequencyCountSketch,
     heavy_hitters: SpaceSaving,
     reservoir: OccurrenceBottomK,
-    kll: KLL<i64>,
+    kll: Kll<i64>,
     count: u64,
     min: Option<i64>,
     max: Option<i64>,
@@ -523,7 +523,7 @@ impl SpecializedBundle {
             frequencies: FrequencyCountSketch::new(BUNDLE_WIDTH, DEPTH, seed ^ 0x4353),
             heavy_hitters: SpaceSaving::new(BUNDLE_CANDIDATES),
             reservoir: OccurrenceBottomK::new(BUNDLE_RESERVOIR, seed ^ 0x0052_4553, stream_id),
-            kll: KLL::init_kll_with_seed(BUNDLE_KLL_K as i32, seed ^ stream_id ^ 0x004b_4c4c),
+            kll: Kll::with_k_and_seed(BUNDLE_KLL_K as i32, seed ^ stream_id ^ 0x004b_4c4c),
             count: 0,
             min: None,
             max: None,
@@ -945,11 +945,11 @@ fn print_query_latency(
     columns(
         "F0",
         average_query(
-            || black_box(matched_view.estimate_distinct()),
+            || black_box(matched_view.estimate_cardinality()),
             QUERY_REPEATS,
         ),
         average_query(
-            || black_box(quality_view.estimate_distinct()),
+            || black_box(quality_view.estimate_cardinality()),
             QUERY_REPEATS,
         ),
         average_query(|| black_box(bundle.hll.estimate()), QUERY_REPEATS),
@@ -1024,7 +1024,7 @@ fn query_all_q(sketch: &UnivMonQ, truth: &Truth) {
     black_box(query.count());
     black_box((query.min(), query.max()));
     black_box(query.estimate_frequency(truth.cdf_probes[50] as f64));
-    black_box(query.estimate_distinct());
+    black_box(query.estimate_cardinality());
     black_box(query.estimate_f2());
     black_box(query.estimate_entropy());
     black_box(query.heavy_hitters(TOP_K));

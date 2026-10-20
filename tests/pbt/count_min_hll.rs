@@ -21,9 +21,9 @@ use asap_sketchlib::{Classic, CountMinHll, DataInput, DefaultXxHasher, SketchHas
 use proptest::prelude::*;
 use std::collections::HashSet;
 
-asap_sketchlib::impl_hll_bucket_list!(BucketsP4, 4, 1_usize << 4);
-asap_sketchlib::impl_hll_bucket_list!(BucketsP6, 6, 1_usize << 6);
-asap_sketchlib::impl_hll_bucket_list!(BucketsP8, 8, 1_usize << 8);
+asap_sketchlib::impl_hll_registers!(BucketsP4, 4, 1_usize << 4);
+asap_sketchlib::impl_hll_registers!(BucketsP6, 6, 1_usize << 6);
+asap_sketchlib::impl_hll_registers!(BucketsP8, 8, 1_usize << 8);
 
 type Sketch = CountMinHll<DefaultXxHasher>;
 

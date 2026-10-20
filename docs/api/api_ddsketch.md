@@ -8,7 +8,7 @@ Approximate quantile estimation with relative error guarantees.
 
 ## Type/Struct
 
-- `DDSketch`
+- `DdSketch`
 
 ## Constructors
 
@@ -40,14 +40,14 @@ fn max(&self) -> Option<f64>
 ## Merge
 
 ```rust
-fn merge(&mut self, other: &DDSketch) -> Result<(), String>
+fn merge(&mut self, other: &DdSketch) -> Result<(), String>
 ```
 
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 These produce/consume the **ASAPv1** wire envelope (kind `0x05 0x00`) — see the
@@ -67,17 +67,17 @@ exactly on decode. `sum`, `min` and `max` come back exactly rather than as
 Bucket indices are signed, so either offset may be negative. Decode rejects a
 `metadata_version` other than `1`, an `alpha` outside `(0, 1)`, a store span
 past `i32`, a non-zero offset on an empty store, counts that overflow the total,
-and scalars inconsistent with that total; `serialize_to_bytes` enforces the same
+and scalars inconsistent with that total; `to_asapv1` enforces the same
 rules, so the format never emits bytes it would refuse to read back.
 
-Independently of ASAPv1, `DDSketch` is plain `Serialize`/`Deserialize` for use
-where it is nested in another type (`EHSketchList`); that form skips the four
+Independently of ASAPv1, `DdSketch` is plain `Serialize`/`Deserialize` for use
+where it is nested in another type (`EhBucketSketch`); that form skips the four
 running scalars.
 
 ## Deltas
 
 ```rust
-DDSketchDelta
+DdSketchDelta
 
 fn new(
     alpha: f64,
@@ -87,14 +87,14 @@ fn new(
     negative_deltas: Vec<u64>,
     zero_count: u64,
 ) -> Result<Self, String>
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 
-// on DDSketch
-fn merge_delta(&mut self, delta: &DDSketchDelta) -> Result<(), String>
+// on DdSketch
+fn merge_delta(&mut self, delta: &DdSketchDelta) -> Result<(), String>
 ```
 
-A `DDSketchDelta` is the ASAPv1 delta kind `0x05 0x80`: the changed buckets of
+A `DdSketchDelta` is the ASAPv1 delta kind `0x05 0x80`: the changed buckets of
 each store as strictly ascending bucket indices inside the range `alpha`'s
 mapping produces, the non-zero count added to each, and a count added to the
 zero count. `new` and the decoder refuse anything else. `merge_delta` adds each
@@ -109,7 +109,7 @@ would grow a store past `i32`, fails and leaves the sketch unchanged.
 fn with_admission_rate(self, p: f64) -> Self
 fn admission_rate(&self) -> f64
 
-// on DDSketchDelta
+// on DdSketchDelta
 fn with_admission_rate(self, p: f64) -> Self
 ```
 
@@ -118,15 +118,15 @@ fn with_admission_rate(self, p: f64) -> Self
 Quantiles, `min` and `max` need no rescaling. The ASAPv1 metadata carries `p` as
 its last key, `admission_rate`, when `p < 1`; a `p` outside `(0, 1]` fails to
 serialize. `merge` and `merge_delta` fail when the two rates differ. A sketch
-nested in another kind (`EHSketchList`, `Hydra`, CMSHeap, CSHeap, Elastic) must
+nested in another kind (`EhBucketSketch`, `Hydra`, CountMinSketchWithHeap, CountSketchWithHeap, Elastic) must
 hold `p = 1` to serialize.
 
 ## Examples
 
 ```rust
-use asap_sketchlib::DDSketch;
+use asap_sketchlib::DdSketch;
 
-let mut dds = DDSketch::new(0.01);
+let mut dds = DdSketch::new(0.01);
 dds.add(&1.0_f64);
 dds.add(&2_i32);
 let p50 = dds.get_value_at_quantile(0.5).unwrap();

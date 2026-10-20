@@ -4,7 +4,7 @@
 //! the crate small enough to publish to crates.io while preserving the same
 //! `PRECOMPUTED_SAMPLE_RATE_1PERCENT[i]` access pattern. The table is
 //! generated once per process from a [`rand::rngs::SmallRng`] with the same
-//! fixed seed as [`super::precompute_sample::PRECOMPUTED_SAMPLE`], so values
+//! fixed seed as [`super::precompute_sample::LN_ONE_MINUS_U_TABLE`], so values
 //! are stable across runs and across versions of this crate.
 
 use std::sync::LazyLock;

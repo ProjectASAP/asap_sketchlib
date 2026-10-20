@@ -7,14 +7,14 @@
 // Run with:
 //
 //   cargo run --example quantile_kll
-use asap_sketchlib::KLL;
+use asap_sketchlib::Kll;
 use asap_sketchlib::sketches::kll::Cdf;
 
 fn main() {
     // Insert 1..=10_000 as i64 values (exact p50 ≈ 5000, p90 ≈ 9000, p99 ≈ 9900).
     let values: Vec<i64> = (1..=10_000).collect();
 
-    let mut sketch = KLL::<i64>::init_kll(200);
+    let mut sketch = Kll::<i64>::with_k(200);
     // Single-item path:
     for v in &values {
         sketch.update(v);

@@ -1,4 +1,4 @@
-//! The CMSHeap delta, ASAPv1 kind `0x03 0x80` (`docs/asapv1_wire_format.md`
+//! The CountMinSketchWithHeap delta, ASAPv1 kind `0x03 0x80` (`docs/asapv1_wire_format.md`
 //! §3.23). Its metadata is the state's (§3.7); its payload is
 //! `[indices, deltas, keys, heap_counts]`: the changed cells and the producer's
 //! whole heap.
@@ -12,35 +12,39 @@ use crate::message_pack_format::delta::{add_cells, check_cells};
 use crate::message_pack_format::envelope;
 use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode};
 use crate::{
-    DefaultXxHasher, HHHeap, HashProfile, RegularPath, SketchHasher, TopKCounter, Vector2D,
+    DefaultXxHasher, HashProfile, HeapCounter, RegularPath, SketchHasher, TopKHeap, Vector2D,
 };
 
-use super::CMSHeap;
+use super::CountMinSketchWithHeap;
 use super::heap_wire::{
     DeltaCells, check_geometry, decode_metadata, decode_payload, encode_metadata, encode_payload,
     heap_entries, rebuild_heap, wire_key_type,
 };
 
-/// CMSHeap delta kind_id: the state's `0x03 0x00` with the variant's top bit set.
+/// CountMinSketchWithHeap delta kind_id: the state's `0x03 0x00` with the variant's top bit set.
 const CMS_HEAP_DELTA_KIND: &[u8] = &[0x03, 0x80];
 
-/// A change to a `rows x cols` [`CMSHeap`] state: each value of `deltas` is
+/// A change to a `rows x cols` [`CountMinSketchWithHeap`] state: each value of `deltas` is
 /// added to the cell its position names in `indices`, a row-major index
 /// `row * cols + col`, and `heap` replaces the state's heap. Indices are
 /// strictly ascending and below `rows * cols`, and no delta is zero.
 #[derive(Clone, Debug)]
-pub struct CMSHeapDelta<T: TopKCounter = i64, Mode = RegularPath, H = DefaultXxHasher> {
+pub struct CountMinSketchWithHeapDelta<
+    T: HeapCounter = i64,
+    Mode = RegularPath,
+    H = DefaultXxHasher,
+> {
     rows: usize,
     cols: usize,
     indices: Vec<u64>,
     deltas: Vec<T>,
-    heap: HHHeap<T::HeapCount>,
+    heap: TopKHeap<T::HeapCount>,
     _config: PhantomData<(Mode, H)>,
 }
 
-impl<T, Mode, H> CMSHeapDelta<T, Mode, H>
+impl<T, Mode, H> CountMinSketchWithHeapDelta<T, Mode, H>
 where
-    T: CmsWireCounter + TopKCounter + Serialize + for<'de> Deserialize<'de>,
+    T: CmsWireCounter + HeapCounter + Serialize + for<'de> Deserialize<'de>,
     Mode: CmsWireMode,
     H: SketchHasher + HashProfile,
 {
@@ -52,7 +56,7 @@ where
         cols: usize,
         indices: Vec<u64>,
         deltas: Vec<T>,
-        heap: HHHeap<T::HeapCount>,
+        heap: TopKHeap<T::HeapCount>,
     ) -> Result<Self, String> {
         check_geometry("CMSHeap", rows, cols)?;
         check_cells(&indices, &deltas, ..rows as u64 * cols as u64)
@@ -68,9 +72,9 @@ where
     }
 
     /// Serializes the delta into an ASAPv1 MessagePack envelope. Fails as the
-    /// state's encode does on the heap: keys that mix `HeapItem` variants, a
+    /// state's encode does on the heap: keys that mix `OwnedDataInput` variants, a
     /// 128-bit key, or a `heap_size` past `u32`.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let entries = heap_entries(&self.heap);
         let key_type = wire_key_type(&entries)?;
         let metadata = encode_metadata::<H>(
@@ -91,7 +95,7 @@ where
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != CMS_HEAP_DELTA_KIND {
@@ -107,16 +111,19 @@ where
     }
 }
 
-impl<T, Mode, H> CMSHeap<Vector2D<T>, Mode, H>
+impl<T, Mode, H> CountMinSketchWithHeap<Vector2D<T>, Mode, H>
 where
-    T: CmsWireCounter + TopKCounter + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
+    T: CmsWireCounter + HeapCounter + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
     Mode: CmsWireMode,
     H: SketchHasher + HashProfile,
 {
     /// Adds a delta's cells to the counters and replaces the heap with the
     /// delta's. Fails, changing nothing, when the delta is for another geometry
     /// or heap capacity, or an integer add overflows.
-    pub fn merge_delta(&mut self, delta: &CMSHeapDelta<T, Mode, H>) -> Result<(), String> {
+    pub fn merge_delta(
+        &mut self,
+        delta: &CountMinSketchWithHeapDelta<T, Mode, H>,
+    ) -> Result<(), String> {
         let (rows, cols, heap_size) = (self.rows(), self.cols(), self.heap.capacity());
         if (rows, cols, heap_size) != (delta.rows, delta.cols, delta.heap.capacity()) {
             return Err(format!(
@@ -142,10 +149,10 @@ where
 mod tests {
     use super::*;
     use crate::message_pack_format::envelope::hex;
-    use crate::{DataInput, HeapItem};
+    use crate::{DataInput, OwnedDataInput};
 
-    type Delta = CMSHeapDelta<i64, RegularPath>;
-    type Sketch = CMSHeap<Vector2D<i64>, RegularPath>;
+    type Delta = CountMinSketchWithHeapDelta<i64, RegularPath>;
+    type Sketch = CountMinSketchWithHeap<Vector2D<i64>, RegularPath>;
 
     const DELTA: &str = include_str!("../../../asapv1_golden/cmsheap_i64_regular_2x3_delta.hex");
 
@@ -161,7 +168,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_each_payload_rule() {
-        let decodes = |bytes: Vec<u8>| Delta::deserialize_from_bytes(&bytes).is_ok();
+        let decodes = |bytes: Vec<u8>| Delta::from_asapv1(&bytes).is_ok();
         assert!(decodes(delta_bytes(&[0, 5], &[1, 2], &[9, 4])));
         assert!(!decodes(delta_bytes(&[6], &[1], &[9])), "index rows * cols");
         assert!(
@@ -173,24 +180,24 @@ mod tests {
     #[test]
     fn decode_rejects_another_kind() {
         let delta = hex(DELTA);
-        assert!(Delta::deserialize_from_bytes(&delta).is_ok());
+        assert!(Delta::from_asapv1(&delta).is_ok());
         let mut state_kind = delta.clone();
         state_kind[9] = 0x00;
-        assert!(Delta::deserialize_from_bytes(&state_kind).is_err());
+        assert!(Delta::from_asapv1(&state_kind).is_err());
     }
 
     #[test]
     fn merge_delta_rejects_without_changing_the_state() {
-        let mut heap = HHHeap::new(2);
+        let mut heap = TopKHeap::new(2);
         heap.update(&DataInput::U64(7), 3);
         let delta =
-            |heap: HHHeap, deltas: Vec<i64>| Delta::new(2, 3, vec![0, 5], deltas, heap).unwrap();
+            |heap: TopKHeap, deltas: Vec<i64>| Delta::new(2, 3, vec![0, 5], deltas, heap).unwrap();
         let cells = |_, c| if c == 2 { i64::MAX } else { 0 };
         let mut state = Sketch::from_storage(Vector2D::from_fn(2, 3, cells), 2);
         state.heap_mut().update(&DataInput::Str("kept"), 1);
 
-        let transposed = Delta::new(3, 2, vec![0, 5], vec![1, -1], HHHeap::new(2)).unwrap();
-        let wider = delta(HHHeap::new(3), vec![1, -1]);
+        let transposed = Delta::new(3, 2, vec![0, 5], vec![1, -1], TopKHeap::new(2)).unwrap();
+        let wider = delta(TopKHeap::new(3), vec![1, -1]);
         let overflowing = delta(heap, vec![1, 1]);
         for rejected in [transposed, wider, overflowing] {
             assert!(state.merge_delta(&rejected).is_err());
@@ -202,7 +209,7 @@ mod tests {
             assert!(
                 state
                     .heap()
-                    .find_heap_item(&HeapItem::String("kept".into()))
+                    .find_owned(&OwnedDataInput::String("kept".into()))
                     .is_some()
             );
         }

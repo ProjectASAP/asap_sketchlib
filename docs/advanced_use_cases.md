@@ -17,7 +17,7 @@ This page covers three distinct categories of advanced usage in `asap_sketchlib`
 ```rust
 use asap_sketchlib::{DataInput, Hydra, input::HydraCounter};
 
-let counter = HydraCounter::CM(Default::default());
+let counter = HydraCounter::CountMinSketch(Default::default());
 let mut hydra = Hydra::with_schema(4, 4096, ["region", "service"], counter).unwrap();
 hydra.update(&["us", "api"], &DataInput::Str("err"), None).unwrap();
 hydra.update(&["eu", "db"], &DataInput::Str("err"), None).unwrap();
@@ -60,13 +60,13 @@ API references: [`docs/api/api_hashlayer.md`](./api/api_hashlayer.md), [`docs/ap
 
 **Solution: `ExponentialHistogram`**
 
-`ExponentialHistogram` (EH) provides sliding-window semantics. It maintains a sequence of sketch "buckets" of geometrically increasing age. When two same-size buckets accumulate, they are merged pairwise. This keeps the total number of buckets logarithmic in the window size. `EHSketchList` provides a unified enum for inserting into and querying across heterogeneous bucket types.
+`ExponentialHistogram` (EH) provides sliding-window semantics. It maintains a sequence of sketch "buckets" of geometrically increasing age. When two same-size buckets accumulate, they are merged pairwise. This keeps the total number of buckets logarithmic in the window size. `EhBucketSketch` provides a unified enum for inserting into and querying across heterogeneous bucket types.
 
-`EHUnivOptimized` is an experimental two-tier EH that integrates `UnivMon` with sketch memory reuse (currently `Unstable`).
+`ExponentialHistogramUnivMon` is an experimental two-tier EH that integrates `UnivMon` with sketch memory reuse (currently `Unstable`).
 
-**Alternative: `MicroCM`**
+**Alternative: `MicroCm`**
 
-`MicroCM` (MicroscopeSketch) puts the window *inside* the cells instead of
+`MicroCm` (MicroscopeSketch) puts the window *inside* the cells instead of
 wrapping whole sketches in buckets. Each cell holds `T+2` byte-wide counters — enough
 for the `T` sub-windows of the window, the one partially expired behind it,
 and the one being cleared ahead — plus a shared zoom exponent that rescales
@@ -75,7 +75,7 @@ have to be widened for the largest count they might see. There is one sketch, no
 them, and expiry is a single sequential pass at each sub-window boundary.
 
 The trade is coverage: EH wraps any mergeable sketch and answers whatever that
-sketch answers, while `MicroCM` answers frequency only. `MicroCM` is
+sketch answers, while `MicroCm` answers frequency only. `MicroCm` is
 `Experimental` and behind the `experimental` feature.
 
 **When to use which**:
@@ -83,7 +83,7 @@ sketch answers, while `MicroCM` answers frequency only. `MicroCM` is
 | Use Case | Recommended |
 | --- | --- |
 | Sliding window, standard memory | `ExponentialHistogram` + any mergeable sketch |
-| Sliding window, frequency only, tight memory | `MicroCM` (Experimental) |
-| Sliding window + universal monitoring | `EHUnivOptimized` (Unstable) |
+| Sliding window, frequency only, tight memory | `MicroCm` (Experimental) |
+| Sliding window + universal monitoring | `ExponentialHistogramUnivMon` (Unstable) |
 
 API references: [`docs/api/api_exponential_histogram.md`](./api/api_exponential_histogram.md), [`docs/api/api_ehsketchlist.md`](./api/api_ehsketchlist.md), [`docs/api/api_microscope.md`](./api/api_microscope.md)

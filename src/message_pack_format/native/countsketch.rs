@@ -21,10 +21,10 @@ where
     H: SketchHasher + HashProfile,
 {
     fn to_msgpack(&self) -> Result<Vec<u8>, Error> {
-        Ok(self.serialize_to_bytes()?)
+        Ok(self.to_asapv1()?)
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, Error> {
-        Ok(Self::deserialize_from_bytes(bytes)?)
+        Ok(Self::from_asapv1(bytes)?)
     }
 }

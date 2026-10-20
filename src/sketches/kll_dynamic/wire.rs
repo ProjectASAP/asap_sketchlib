@@ -1,13 +1,13 @@
 //! ASAPv1 wire serialization for the dynamic KLL quantile sketch.
 //!
 //! Child submodule of [`crate::sketches::kll_dynamic`]: it holds the
-//! `serialize_to_bytes` / `deserialize_from_bytes` impls for [`KLLDynamic`]
+//! `to_asapv1` / `from_asapv1` impls for [`KllDynamic`]
 //! (kind_id `0x06 0x01`). The wire DTOs (metadata, payload, coin) and the
 //! fail-closed validation are **shared** with the compact KLL and live in
 //! [`crate::sketches::kll::wire`]; only the kind_id differs. See
 //! `docs/asapv1_wire_format.md` §3.
 //!
-//! Unlike the compact KLL, `KLLDynamic` already stores its retained samples in
+//! Unlike the compact KLL, `KllDynamic` already stores its retained samples in
 //! the wire's top-most-level-first order with level 0 in input order (it appends
 //! to the end of a growable buffer), so encode/decode are a direct copy — no
 //! buffer reversal is needed.
@@ -21,11 +21,11 @@ use crate::sketches::kll::{
     split_and_validate_meta, validate_kll_payload,
 };
 
-use super::{CAPACITY_CACHE_LEN, KLLDynamic};
+use super::{CAPACITY_CACHE_LEN, KllDynamic};
 
 // `wire` is a descendant of the sketch module, so these impls read the private
 // fields and construct the struct directly.
-impl<T> KLLDynamic<T>
+impl<T> KllDynamic<T>
 where
     T: crate::common::numerical::NumericalValue
         + KllWireItem
@@ -33,11 +33,11 @@ where
         + for<'de> serde::Deserialize<'de>,
 {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope
-    /// (kind_id `0x06 0x01`). `KLLDynamic`'s buffer is already in the wire's
+    /// (kind_id `0x06 0x01`). `KllDynamic`'s buffer is already in the wire's
     /// top-most-level-first / input-order-L0 layout, so `levels` and `items` are
     /// copied straight out.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        // `KLLDynamic` has no reproducible-seed concept, so `compaction_seed` is always
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        // `KllDynamic` has no reproducible-seed concept, so `compaction_seed` is always
         // `None` and the metadata key is omitted.
         let metadata =
             rmp_serde::to_vec_named(&kll_metadata::<T>(self.k as u32, self.m as u32, None))?;
@@ -54,10 +54,10 @@ where
         Ok(envelope::encode(KLL_KIND_DYNAMIC, &metadata, &payload))
     }
 
-    /// Deserializes a `KLLDynamic` from an ASAPv1 MessagePack envelope. Bytes
+    /// Deserializes a `KllDynamic` from an ASAPv1 MessagePack envelope. Bytes
     /// whose metadata does not match this item type are rejected (fail closed),
     /// as are inconsistent level layouts.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (meta, payload_bytes) = split_and_validate_meta::<T>(bytes, KLL_KIND_DYNAMIC)?;
         let payload: KllPayload<T> = envelope::decode_block(payload_bytes)?;
         let num_levels = validate_kll_payload(&payload.levels, &payload.items, &payload.coin)?;
@@ -67,7 +67,7 @@ where
             items,
             coin,
         } = payload;
-        let mut sketch = KLLDynamic {
+        let mut sketch = KllDynamic {
             items: Vector1D::from_vec(items),
             levels: Vector1D::from_vec(levels.into_iter().map(|l| l as usize).collect()),
             k: meta.k as usize,
@@ -90,10 +90,10 @@ where
 mod tests {
     use crate::message_pack_format::envelope;
     use crate::sketches::kll::KLL_KIND_DYNAMIC;
-    use crate::sketches::kll_dynamic::KLLDynamic;
+    use crate::sketches::kll_dynamic::KllDynamic;
 
-    fn build_dynamic(k: i32, n: u64) -> KLLDynamic<f64> {
-        let mut sketch = KLLDynamic::<f64>::init_kll(k);
+    fn build_dynamic(k: i32, n: u64) -> KllDynamic<f64> {
+        let mut sketch = KllDynamic::<f64>::with_k(k);
         for v in 1..=n {
             sketch.update(&(v as f64));
         }
@@ -103,16 +103,16 @@ mod tests {
     #[test]
     fn kll_dynamic_envelope_structure_and_round_trip() {
         let sketch = build_dynamic(200, 200_000);
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
+        let bytes = sketch.to_asapv1().expect("serialize");
 
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
         assert_eq!(&bytes[8..10], KLL_KIND_DYNAMIC);
 
-        let decoded = KLLDynamic::<f64>::deserialize_from_bytes(&bytes).expect("decode");
+        let decoded = KllDynamic::<f64>::from_asapv1(&bytes).expect("decode");
         assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
+            decoded.to_asapv1().expect("re-serialize"),
             bytes,
             "KLLDynamic serialized bytes differed after round trip"
         );
@@ -127,30 +127,30 @@ mod tests {
 
     #[test]
     fn kll_dynamic_empty_round_trip() {
-        let sketch = KLLDynamic::<f64>::init_kll(200);
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
-        let decoded = KLLDynamic::<f64>::deserialize_from_bytes(&bytes).expect("decode");
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        let sketch = KllDynamic::<f64>::with_k(200);
+        let bytes = sketch.to_asapv1().expect("serialize");
+        let decoded = KllDynamic::<f64>::from_asapv1(&bytes).expect("decode");
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
     #[test]
     fn kll_dynamic_i64_round_trip() {
-        let mut sketch = KLLDynamic::<i64>::init_kll(200);
+        let mut sketch = KllDynamic::<i64>::with_k(200);
         for v in 1..=50_000i64 {
             sketch.update(&v);
         }
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
+        let bytes = sketch.to_asapv1().expect("serialize");
         assert_eq!(&bytes[8..10], KLL_KIND_DYNAMIC);
-        let decoded = KLLDynamic::<i64>::deserialize_from_bytes(&bytes).expect("decode");
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        let decoded = KllDynamic::<i64>::from_asapv1(&bytes).expect("decode");
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
     #[test]
     fn kll_dynamic_item_type_cross_rejection() {
         let sketch = build_dynamic(200, 1000);
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
+        let bytes = sketch.to_asapv1().expect("serialize");
         assert!(
-            KLLDynamic::<i64>::deserialize_from_bytes(&bytes).is_err(),
+            KllDynamic::<i64>::from_asapv1(&bytes).is_err(),
             "f64 KLLDynamic bytes must be rejected by an i64 decoder"
         );
     }

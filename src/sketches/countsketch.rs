@@ -23,8 +23,8 @@ mod wire;
 pub use delta::CountSketchDelta;
 pub(crate) use wire::{CsWireCounter, CsWireMode};
 
-const DEFAULT_ROW_NUM: usize = 3;
-const DEFAULT_COL_NUM: usize = 4096;
+const DEFAULT_ROWS: usize = 3;
+const DEFAULT_COLS: usize = 4096;
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 /// A frequency-estimation sketch using random sign projections (Count Sketch).
@@ -83,42 +83,42 @@ impl CountSketchCounter for f64 {
 // Default Count sketch for Vector2D<i32> (RegularPath).
 impl Default for Count<Vector2D<i32>, RegularPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i32> (FastPath).
 impl Default for Count<Vector2D<i32>, FastPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i64> (RegularPath).
 impl Default for Count<Vector2D<i64>, RegularPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i64> (FastPath).
 impl Default for Count<Vector2D<i64>, FastPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i128> (RegularPath).
 impl Default for Count<Vector2D<i128>, RegularPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i128> (FastPath).
 impl Default for Count<Vector2D<i128>, FastPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
@@ -430,7 +430,7 @@ where
     /// Inserts an observation using a pre-computed hash value.
     /// Hash value can be reused with other sketches.
     #[inline(always)]
-    pub fn fast_insert_with_hash_value(&mut self, hashed_val: &H::HashType) {
+    pub fn update_with_hash(&mut self, hashed_val: &H::HashType) {
         self.counts.fast_insert(
             |counter, value, row| {
                 let sign = hashed_val.sign_for_row(row);
@@ -444,7 +444,7 @@ where
 
     /// Inserts an observation with the given count using a pre-computed hash value.
     #[inline(always)]
-    pub fn fast_insert_many_with_hash_value(&mut self, hashed_val: &H::HashType, many: S::Counter) {
+    pub fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, many: S::Counter) {
         self.counts.fast_insert(
             |counter, value, row| {
                 let sign = hashed_val.sign_for_row(row);
@@ -458,7 +458,7 @@ where
 
     /// Returns the frequency estimate using a pre-computed hash value.
     #[inline(always)]
-    pub fn fast_estimate_with_hash(&self, hashed_val: &H::HashType) -> f64 {
+    pub fn estimate_with_hash(&self, hashed_val: &H::HashType) -> f64 {
         self.counts.fast_query_median(hashed_val, |val, row, hash| {
             let sign = hash.sign_for_row(row);
             if sign > 0 {
@@ -489,7 +489,7 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
 
     /// Enables Nitro sampling with a reproducible, seed-selected schedule.
     ///
-    /// See [`crate::Nitro::init_nitro_seeded`]: the unseeded path starts every
+    /// See [`crate::Nitro::with_seed`]: the unseeded path starts every
     /// sketch at the same point in the skip table, so two sketches at the same
     /// rate admit the same subset and are not independent trials.
     pub fn enable_nitro_with_seed(&mut self, sampling_rate: f64, seed: u64) {
@@ -504,7 +504,7 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
     /// computed once per observation, and the admitted rows are collected into
     /// an inline buffer, so the hot path does not allocate.
     #[inline(always)]
-    pub fn fast_insert_nitro(&mut self, value: &DataInput) {
+    pub fn nitro_update(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
         let mut admitted = AdmittedRows::new();
         self.counts.nitro_mut().admit_rows(rows, &mut admitted);
@@ -565,14 +565,21 @@ impl<H: SketchHasher> NitroTarget for Count<Vector2D<i32>, FastPath, H> {
 }
 
 use crate::input_to_owned;
-use crate::octo_delta::{COUNT_PROMASK, CountDelta, KeyedCountDelta, MAX_PROMASK};
+use crate::octo_delta::{
+    CountSketchCellDelta, KeyedCountSketchCellDelta, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
+    OCTO_MAX_PROMOTION_THRESHOLD,
+};
 
 impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> {
     /// Inserts a value, emitting a delta at every promotion of the default
-    /// threshold `COUNT_PROMASK`.
+    /// threshold `OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD`.
     #[inline(always)]
-    pub fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
-        self.update_emit_delta_with_threshold(value, COUNT_PROMASK, emit);
+    pub fn update_emit_delta(
+        &mut self,
+        value: &DataInput,
+        emit: &mut impl FnMut(CountSketchCellDelta),
+    ) {
+        self.update_emit_delta_with_threshold(value, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, emit);
     }
 
     /// Inserts a value, emitting a delta and clearing the counter each time
@@ -583,9 +590,9 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> 
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(CountDelta),
+        emit: &mut impl FnMut(CountSketchCellDelta),
     ) {
-        let threshold = threshold.clamp(1, MAX_PROMASK);
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD);
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -595,7 +602,7 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> 
             self.counts.increment_by_row(r, col, sign);
             let current = self.counts.query_one_counter(r, col);
             if current.unsigned_abs() >= threshold {
-                emit(CountDelta {
+                emit(CountSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
                     value: current,
@@ -611,10 +618,10 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> 
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(KeyedCountDelta),
+        emit: &mut impl FnMut(KeyedCountSketchCellDelta),
     ) {
         self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
-            emit(KeyedCountDelta {
+            emit(KeyedCountSketchCellDelta {
                 key: input_to_owned(value),
                 delta,
             })
@@ -627,10 +634,14 @@ where
     S: MatrixStorage<Counter = i32> + FastPathHasher<H>,
 {
     /// Inserts a value using the fast path, emitting a delta at every
-    /// promotion of the default threshold `COUNT_PROMASK`.
+    /// promotion of the default threshold `OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD`.
     #[inline(always)]
-    pub fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
-        self.update_emit_delta_with_threshold(value, COUNT_PROMASK, emit);
+    pub fn update_emit_delta(
+        &mut self,
+        value: &DataInput,
+        emit: &mut impl FnMut(CountSketchCellDelta),
+    ) {
+        self.update_emit_delta_with_threshold(value, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, emit);
     }
 
     /// Fast-path counterpart of the regular-path threshold API.
@@ -639,9 +650,9 @@ where
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(CountDelta),
+        emit: &mut impl FnMut(CountSketchCellDelta),
     ) {
-        let threshold = threshold.clamp(1, MAX_PROMASK);
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD);
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         let rows = self.counts.rows();
         let cols = self.counts.cols();
@@ -651,7 +662,7 @@ where
             self.counts.increment_by_row(r, col, sign);
             let current = self.counts.query_one_counter(r, col);
             if current.unsigned_abs() >= threshold {
-                emit(CountDelta {
+                emit(CountSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
                     value: current,
@@ -666,10 +677,10 @@ where
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(KeyedCountDelta),
+        emit: &mut impl FnMut(KeyedCountSketchCellDelta),
     ) {
         self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
-            emit(KeyedCountDelta {
+            emit(KeyedCountSketchCellDelta {
                 key: input_to_owned(value),
                 delta,
             })
@@ -682,7 +693,7 @@ where
     S::Counter: Copy + std::ops::AddAssign + From<i32>,
 {
     /// Applies a previously emitted delta to this sketch.
-    pub fn apply_delta(&mut self, delta: CountDelta) {
+    pub fn apply_delta(&mut self, delta: CountSketchCellDelta) {
         self.counts.increment_by_row(
             delta.row as usize,
             delta.col as usize,
@@ -702,7 +713,7 @@ mod tests {
     fn count_child_insert_emits_at_threshold() {
         let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::U64(99);
-        let mut deltas: Vec<CountDelta> = Vec::new();
+        let mut deltas: Vec<CountSketchCellDelta> = Vec::new();
 
         for _ in 0..200 {
             child.update_emit_delta(&key, &mut |d| deltas.push(d));
@@ -997,7 +1008,7 @@ mod tests {
         let storage = sk.as_storage();
         let rows = storage.rows();
         let cols = storage.cols();
-        let mask_bits = storage.get_mask_bits();
+        let mask_bits = storage.mask_bits();
         let mask = (1u128 << mask_bits) - 1;
         let mut expected_once = vec![0_i32; rows * cols];
 

@@ -14,7 +14,10 @@ use std::marker::PhantomData;
 use crate::common::structure_utils::AdmittedRows;
 use crate::input_to_owned;
 use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
-use crate::octo_delta::{CM_PROMASK, CmDelta, KeyedCmDelta, MAX_PROMASK};
+use crate::octo_delta::{
+    CountMinSketchCellDelta, KeyedCountMinSketchCellDelta, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
+    OCTO_MAX_PROMOTION_THRESHOLD,
+};
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
@@ -23,21 +26,21 @@ use crate::{
 
 mod delta;
 mod wire;
-pub use delta::CountMinDelta;
+pub use delta::CountMinSketchDelta;
 pub(crate) use wire::{CmsWireCounter, CmsWireMode};
 
-const DEFAULT_ROW_NUM: usize = 3;
-const DEFAULT_COL_NUM: usize = 4096;
+const DEFAULT_ROWS: usize = 3;
+const DEFAULT_COLS: usize = 4096;
 /// Recommended row count for quick-start examples.
-pub const QUICKSTART_ROW_NUM: usize = 5;
+pub const QUICKSTART_ROWS: usize = 5;
 /// Recommended column count for quick-start examples.
-pub const QUICKSTART_COL_NUM: usize = 2048;
+pub const QUICKSTART_COLS: usize = 2048;
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 /// A Count-Min Sketch for estimating item frequencies in a data stream.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
-pub struct CountMin<
+pub struct CountMinSketch<
     S: MatrixStorage = Vector2D<i32>,
     Mode = RegularPath,
     H: SketchHasher = DefaultXxHasher,
@@ -53,153 +56,153 @@ pub struct CountMin<
     admission_rate: f64,
 }
 
-// Default CountMin sketch for Vector2D<i32> (RegularPath).
-impl Default for CountMin<Vector2D<i32>, RegularPath> {
+// Default CountMinSketch sketch for Vector2D<i32> (RegularPath).
+impl Default for CountMinSketch<Vector2D<i32>, RegularPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMin sketch for Vector2D<i32> (FastPath).
-impl Default for CountMin<Vector2D<i32>, FastPath> {
+// Default CountMinSketch sketch for Vector2D<i32> (FastPath).
+impl Default for CountMinSketch<Vector2D<i32>, FastPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMin sketch for Vector2D<i64> (RegularPath).
-impl Default for CountMin<Vector2D<i64>, RegularPath> {
+// Default CountMinSketch sketch for Vector2D<i64> (RegularPath).
+impl Default for CountMinSketch<Vector2D<i64>, RegularPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMin sketch for Vector2D<i64> (FastPath).
-impl Default for CountMin<Vector2D<i64>, FastPath> {
+// Default CountMinSketch sketch for Vector2D<i64> (FastPath).
+impl Default for CountMinSketch<Vector2D<i64>, FastPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMin sketch for Vector2D<i128> (RegularPath).
-impl Default for CountMin<Vector2D<i128>, RegularPath> {
+// Default CountMinSketch sketch for Vector2D<i128> (RegularPath).
+impl Default for CountMinSketch<Vector2D<i128>, RegularPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMin sketch for Vector2D<i128> (FastPath).
-impl Default for CountMin<Vector2D<i128>, FastPath> {
+// Default CountMinSketch sketch for Vector2D<i128> (FastPath).
+impl Default for CountMinSketch<Vector2D<i128>, FastPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMin sketch for Vector2D<f64> (RegularPath and FastPath).
-impl Default for CountMin<Vector2D<f64>, RegularPath> {
+// Default CountMinSketch sketch for Vector2D<f64> (RegularPath and FastPath).
+impl Default for CountMinSketch<Vector2D<f64>, RegularPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-impl Default for CountMin<Vector2D<f64>, FastPath> {
+impl Default for CountMinSketch<Vector2D<f64>, FastPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
-// Default CountMin sketch for FixedMatrix (RegularPath).
-impl Default for CountMin<FixedMatrix, RegularPath> {
+// Default CountMinSketch sketch for FixedMatrix (RegularPath).
+impl Default for CountMinSketch<FixedMatrix, RegularPath> {
     fn default() -> Self {
-        CountMin::from_storage(FixedMatrix::default())
+        CountMinSketch::from_storage(FixedMatrix::default())
     }
 }
 
-// Default CountMin sketch for FixedMatrix (FastPath).
-impl Default for CountMin<FixedMatrix, FastPath> {
+// Default CountMinSketch sketch for FixedMatrix (FastPath).
+impl Default for CountMinSketch<FixedMatrix, FastPath> {
     fn default() -> Self {
-        CountMin::from_storage(FixedMatrix::default())
+        CountMinSketch::from_storage(FixedMatrix::default())
     }
 }
 
-// Default CountMin sketch for DefaultMatrixI32 (RegularPath).
-impl Default for CountMin<DefaultMatrixI32, RegularPath> {
+// Default CountMinSketch sketch for DefaultMatrixI32 (RegularPath).
+impl Default for CountMinSketch<DefaultMatrixI32, RegularPath> {
     fn default() -> Self {
-        CountMin::from_storage(DefaultMatrixI32::default())
+        CountMinSketch::from_storage(DefaultMatrixI32::default())
     }
 }
 
-// Default CountMin sketch for DefaultMatrixI32 (FastPath).
-impl Default for CountMin<DefaultMatrixI32, FastPath> {
+// Default CountMinSketch sketch for DefaultMatrixI32 (FastPath).
+impl Default for CountMinSketch<DefaultMatrixI32, FastPath> {
     fn default() -> Self {
-        CountMin::from_storage(DefaultMatrixI32::default())
+        CountMinSketch::from_storage(DefaultMatrixI32::default())
     }
 }
 
-// Default CountMin sketch for QuickMatrixI64 (RegularPath).
-impl Default for CountMin<QuickMatrixI64, RegularPath> {
+// Default CountMinSketch sketch for QuickMatrixI64 (RegularPath).
+impl Default for CountMinSketch<QuickMatrixI64, RegularPath> {
     fn default() -> Self {
-        CountMin::from_storage(QuickMatrixI64::default())
+        CountMinSketch::from_storage(QuickMatrixI64::default())
     }
 }
 
-// Default CountMin sketch for QuickMatrixI64 (FastPath).
-impl Default for CountMin<QuickMatrixI64, FastPath> {
+// Default CountMinSketch sketch for QuickMatrixI64 (FastPath).
+impl Default for CountMinSketch<QuickMatrixI64, FastPath> {
     fn default() -> Self {
-        CountMin::from_storage(QuickMatrixI64::default())
+        CountMinSketch::from_storage(QuickMatrixI64::default())
     }
 }
 
-// Default CountMin sketch for QuickMatrixI128 (RegularPath).
-impl Default for CountMin<QuickMatrixI128, RegularPath> {
+// Default CountMinSketch sketch for QuickMatrixI128 (RegularPath).
+impl Default for CountMinSketch<QuickMatrixI128, RegularPath> {
     fn default() -> Self {
-        CountMin::from_storage(QuickMatrixI128::default())
+        CountMinSketch::from_storage(QuickMatrixI128::default())
     }
 }
 
-// Default CountMin sketch for QuickMatrixI128 (FastPath).
-impl Default for CountMin<QuickMatrixI128, FastPath> {
+// Default CountMinSketch sketch for QuickMatrixI128 (FastPath).
+impl Default for CountMinSketch<QuickMatrixI128, FastPath> {
     fn default() -> Self {
-        CountMin::from_storage(QuickMatrixI128::default())
+        CountMinSketch::from_storage(QuickMatrixI128::default())
     }
 }
 
-// Default CountMin sketch for DefaultMatrixI64 (RegularPath).
-impl Default for CountMin<DefaultMatrixI64, RegularPath> {
+// Default CountMinSketch sketch for DefaultMatrixI64 (RegularPath).
+impl Default for CountMinSketch<DefaultMatrixI64, RegularPath> {
     fn default() -> Self {
-        CountMin::from_storage(DefaultMatrixI64::default())
+        CountMinSketch::from_storage(DefaultMatrixI64::default())
     }
 }
 
-// Default CountMin sketch for DefaultMatrixI64 (FastPath).
-impl Default for CountMin<DefaultMatrixI64, FastPath> {
+// Default CountMinSketch sketch for DefaultMatrixI64 (FastPath).
+impl Default for CountMinSketch<DefaultMatrixI64, FastPath> {
     fn default() -> Self {
-        CountMin::from_storage(DefaultMatrixI64::default())
+        CountMinSketch::from_storage(DefaultMatrixI64::default())
     }
 }
 
-// Default CountMin sketch for DefaultMatrixI128 (RegularPath).
-impl Default for CountMin<DefaultMatrixI128, RegularPath> {
+// Default CountMinSketch sketch for DefaultMatrixI128 (RegularPath).
+impl Default for CountMinSketch<DefaultMatrixI128, RegularPath> {
     fn default() -> Self {
-        CountMin::from_storage(DefaultMatrixI128::default())
+        CountMinSketch::from_storage(DefaultMatrixI128::default())
     }
 }
 
-// Default CountMin sketch for DefaultMatrixI128 (FastPath).
-impl Default for CountMin<DefaultMatrixI128, FastPath> {
+// Default CountMinSketch sketch for DefaultMatrixI128 (FastPath).
+impl Default for CountMinSketch<DefaultMatrixI128, FastPath> {
     fn default() -> Self {
-        CountMin::from_storage(DefaultMatrixI128::default())
+        CountMinSketch::from_storage(DefaultMatrixI128::default())
     }
 }
 
-// CountMin constructors for Vector2D-backed storage.
-impl<T, M, H: SketchHasher> CountMin<Vector2D<T>, M, H>
+// CountMinSketch constructors for Vector2D-backed storage.
+impl<T, M, H: SketchHasher> CountMinSketch<Vector2D<T>, M, H>
 where
     T: Copy + Default + std::ops::AddAssign,
 {
     /// Creates a sketch with the requested number of rows and columns.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
-        let mut sk = CountMin {
+        let mut sk = CountMinSketch {
             counts: Vector2D::init(rows, cols),
             row: rows,
             col: cols,
@@ -212,8 +215,8 @@ where
     }
 }
 
-// Core CountMin API for any storage.
-impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
+// Core CountMinSketch API for any storage.
+impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H> {
     /// Creates a sketch from an existing matrix storage instance.
     pub fn from_storage(counts: S) -> Self {
         let row = counts.rows();
@@ -324,8 +327,8 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H> {
 }
 
 // DataInput adapters for the regular Count-Min update rule.
-// Regular-path CountMin operations. Uses PartialOrd to support both integer and f64 counters.
-impl<S: MatrixStorage, H: SketchHasher> CountMin<S, RegularPath, H>
+// Regular-path CountMinSketch operations. Uses PartialOrd to support both integer and f64 counters.
+impl<S: MatrixStorage, H: SketchHasher> CountMinSketch<S, RegularPath, H>
 where
     S::Counter: Copy + PartialOrd + From<i32> + std::ops::AddAssign,
 {
@@ -391,14 +394,18 @@ where
 }
 
 /// Count-Min sketch with floating-point counters (no integer rounding).
-pub type CountMinF64<H = DefaultXxHasher> = CountMin<Vector2D<f64>, RegularPath, H>;
+pub type CountMinF64<H = DefaultXxHasher> = CountMinSketch<Vector2D<f64>, RegularPath, H>;
 
-impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMin<S, RegularPath, H> {
+impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMinSketch<S, RegularPath, H> {
     /// Inserts an observation, emitting a delta at every promotion of the
-    /// default threshold `CM_PROMASK`.
+    /// default threshold `OCTO_COUNT_MIN_DEFAULT_THRESHOLD`.
     #[inline(always)]
-    pub fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CmDelta)) {
-        self.update_emit_delta_with_threshold(value, CM_PROMASK, emit);
+    pub fn update_emit_delta(
+        &mut self,
+        value: &DataInput,
+        emit: &mut impl FnMut(CountMinSketchCellDelta),
+    ) {
+        self.update_emit_delta_with_threshold(value, OCTO_COUNT_MIN_DEFAULT_THRESHOLD, emit);
     }
 
     /// Inserts an observation, emitting a delta and clearing the counter each
@@ -408,9 +415,9 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMin<S, RegularPath, 
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(CmDelta),
+        emit: &mut impl FnMut(CountMinSketchCellDelta),
     ) {
-        let threshold = threshold.clamp(1, MAX_PROMASK) as i32;
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD) as i32;
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -419,7 +426,7 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMin<S, RegularPath, 
             self.counts.increment_by_row(r, col, 1);
             let current = self.counts.query_one_counter(r, col);
             if current >= threshold {
-                emit(CmDelta {
+                emit(CountMinSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
                     value: current as u32,
@@ -436,10 +443,10 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMin<S, RegularPath, 
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(KeyedCmDelta),
+        emit: &mut impl FnMut(KeyedCountMinSketchCellDelta),
     ) {
         self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
-            emit(KeyedCmDelta {
+            emit(KeyedCountMinSketchCellDelta {
                 key: input_to_owned(value),
                 delta,
             })
@@ -447,15 +454,19 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMin<S, RegularPath, 
     }
 }
 
-impl<S, H: SketchHasher> CountMin<S, FastPath, H>
+impl<S, H: SketchHasher> CountMinSketch<S, FastPath, H>
 where
     S: MatrixStorage<Counter = i32> + FastPathHasher<H>,
 {
     /// Inserts an observation via fast-path, emitting a delta at every
-    /// promotion of the default threshold `CM_PROMASK`.
+    /// promotion of the default threshold `OCTO_COUNT_MIN_DEFAULT_THRESHOLD`.
     #[inline(always)]
-    pub fn update_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CmDelta)) {
-        self.update_emit_delta_with_threshold(value, CM_PROMASK, emit);
+    pub fn update_emit_delta(
+        &mut self,
+        value: &DataInput,
+        emit: &mut impl FnMut(CountMinSketchCellDelta),
+    ) {
+        self.update_emit_delta_with_threshold(value, OCTO_COUNT_MIN_DEFAULT_THRESHOLD, emit);
     }
 
     /// Fast-path counterpart of the regular-path threshold API.
@@ -464,9 +475,9 @@ where
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(CmDelta),
+        emit: &mut impl FnMut(CountMinSketchCellDelta),
     ) {
-        let threshold = threshold.clamp(1, MAX_PROMASK) as i32;
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD) as i32;
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         let rows = self.counts.rows();
         let cols = self.counts.cols();
@@ -475,7 +486,7 @@ where
             self.counts.increment_by_row(r, col, 1);
             let current = self.counts.query_one_counter(r, col);
             if current >= threshold {
-                emit(CmDelta {
+                emit(CountMinSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
                     value: current as u32,
@@ -490,10 +501,10 @@ where
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(KeyedCmDelta),
+        emit: &mut impl FnMut(KeyedCountMinSketchCellDelta),
     ) {
         self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
-            emit(KeyedCmDelta {
+            emit(KeyedCountMinSketchCellDelta {
                 key: input_to_owned(value),
                 delta,
             })
@@ -501,12 +512,12 @@ where
     }
 }
 
-impl<S: MatrixStorage, Mode, H: SketchHasher> CountMin<S, Mode, H>
+impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H>
 where
     S::Counter: Copy + std::ops::AddAssign + From<i32>,
 {
     /// Applies a delta update to the sketch counters.
-    pub fn apply_delta(&mut self, delta: CmDelta) {
+    pub fn apply_delta(&mut self, delta: CountMinSketchCellDelta) {
         self.counts.increment_by_row(
             delta.row as usize,
             delta.col as usize,
@@ -516,8 +527,8 @@ where
 }
 
 // DataInput adapters for the fast-path Count-Min update rule.
-// Fast-path CountMin operations using precomputed hashes. Uses PartialOrd for f64 support.
-impl<S, H: SketchHasher> CountMin<S, FastPath, H>
+// Fast-path CountMinSketch operations using precomputed hashes. Uses PartialOrd for f64 support.
+impl<S, H: SketchHasher> CountMinSketch<S, FastPath, H>
 where
     S: MatrixStorage + crate::FastPathHasher<H>,
     S::Counter: Copy + PartialOrd + From<i32> + std::ops::AddAssign,
@@ -563,7 +574,7 @@ where
 }
 
 // Core fast-path operations that operate on pre-computed hashes.
-impl<S, H: SketchHasher> CountMin<S, FastPath, H>
+impl<S, H: SketchHasher> CountMinSketch<S, FastPath, H>
 where
     S: MatrixStorage,
     S::Counter: Copy + PartialOrd + From<i32> + std::ops::AddAssign,
@@ -571,14 +582,14 @@ where
     /// Inserts an observation using the combined hash optimization.
     /// Hash value can be reused with other sketches.
     #[inline(always)]
-    pub fn fast_insert_with_hash_value(&mut self, hashed_val: &H::HashType) {
+    pub fn update_with_hash(&mut self, hashed_val: &H::HashType) {
         self.counts
             .fast_insert(|a, b, _| *a += *b, S::Counter::from(1), hashed_val);
     }
 
     #[inline(always)]
     /// Inserts multiple observations using a pre-computed hash value.
-    pub fn fast_insert_many_with_hash_value(&mut self, hashed_val: &H::HashType, many: S::Counter) {
+    pub fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, many: S::Counter) {
         self.counts
             .fast_insert(|a, b, _| *a += *b, many, hashed_val);
     }
@@ -587,7 +598,7 @@ where
     #[inline(always)]
     pub fn update_batch_with_hashes(&mut self, hashes: &[H::HashType]) {
         for hashed_val in hashes {
-            self.fast_insert_with_hash_value(hashed_val);
+            self.update_with_hash(hashed_val);
         }
     }
 
@@ -595,19 +606,19 @@ where
     #[inline(always)]
     pub fn update_weighted_batch_with_hashes(&mut self, hashes: &[(H::HashType, S::Counter)]) {
         for (hashed_val, many) in hashes {
-            self.fast_insert_many_with_hash_value(hashed_val, *many);
+            self.update_weighted_with_hash(hashed_val, *many);
         }
     }
 
     /// Returns the frequency estimate using a pre-computed hash value.
     #[inline(always)]
-    pub fn fast_estimate_with_hash(&self, hashed_val: &H::HashType) -> S::Counter {
+    pub fn estimate_with_hash(&self, hashed_val: &H::HashType) -> S::Counter {
         self.counts.fast_query_min(hashed_val, |val, _, _| *val)
     }
 }
 
-// Nitro sampling helpers for fast-path CountMin.
-impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
+// Nitro sampling helpers for fast-path CountMinSketch.
+impl<H: SketchHasher> CountMinSketch<Vector2D<i32>, FastPath, H> {
     /// Enables Nitro sampling with the provided rate.
     pub fn enable_nitro(&mut self, sampling_rate: f64) {
         self.counts.enable_nitro(sampling_rate);
@@ -615,7 +626,7 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
 
     /// Enables Nitro sampling with a reproducible, seed-selected schedule.
     ///
-    /// See [`crate::Nitro::init_nitro_seeded`]: the unseeded path starts every
+    /// See [`crate::Nitro::with_seed`]: the unseeded path starts every
     /// sketch at the same point in the skip table, so two sketches at the same
     /// rate admit the same subset and are not independent trials.
     pub fn enable_nitro_with_seed(&mut self, sampling_rate: f64, seed: u64) {
@@ -636,7 +647,7 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
     /// is computed once per observation, and the admitted rows are collected
     /// into an inline buffer, so the hot path does not allocate.
     #[inline(always)]
-    pub fn fast_insert_nitro(&mut self, value: &DataInput) {
+    pub fn nitro_update(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
         let mut admitted = AdmittedRows::new();
         self.counts.nitro_mut().admit_rows(rows, &mut admitted);
@@ -661,9 +672,9 @@ impl<H: SketchHasher> CountMin<Vector2D<i32>, FastPath, H> {
     }
 }
 
-/// Thin wrappers to satisfy the NitroTarget trait for CountMin.
-// NitroTarget integration for fast-path CountMin.
-impl<H: SketchHasher> NitroTarget for CountMin<Vector2D<i32>, FastPath, H> {
+/// Thin wrappers to satisfy the NitroTarget trait for CountMinSketch.
+// NitroTarget integration for fast-path CountMinSketch.
+impl<H: SketchHasher> NitroTarget for CountMinSketch<Vector2D<i32>, FastPath, H> {
     #[inline(always)]
     fn rows(&self) -> usize {
         self.counts.rows()
@@ -705,11 +716,11 @@ mod tests {
 
     #[test]
     fn countmin_insert_emit_delta_emits_at_threshold_and_resets_period() {
-        let mut sketch = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let mut sketch = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::U64(42);
-        let mut deltas: Vec<CmDelta> = Vec::new();
+        let mut deltas: Vec<CountMinSketchCellDelta> = Vec::new();
 
-        for _ in 0..(CM_PROMASK - 1) {
+        for _ in 0..(OCTO_COUNT_MIN_DEFAULT_THRESHOLD - 1) {
             sketch.update_emit_delta(&key, &mut |d| deltas.push(d));
         }
         assert!(
@@ -723,9 +734,13 @@ mod tests {
             3,
             "should emit one delta per row at threshold"
         );
-        assert!(deltas.iter().all(|d| d.value == CM_PROMASK));
+        assert!(
+            deltas
+                .iter()
+                .all(|d| d.value == OCTO_COUNT_MIN_DEFAULT_THRESHOLD)
+        );
 
-        for _ in 0..(CM_PROMASK - 1) {
+        for _ in 0..(OCTO_COUNT_MIN_DEFAULT_THRESHOLD - 1) {
             sketch.update_emit_delta(&key, &mut |d| deltas.push(d));
         }
         assert_eq!(deltas.len(), 3, "no second emission before next threshold");
@@ -735,16 +750,16 @@ mod tests {
 
     #[test]
     fn countmin_apply_delta_increments_parent_counter() {
-        let mut parent = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
-        let delta = CmDelta {
+        let mut parent = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let delta = CountMinSketchCellDelta {
             row: 1,
             col: 5,
-            value: CM_PROMASK,
+            value: OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
         };
         parent.apply_delta(delta);
         assert_eq!(
             parent.as_storage().query_one_counter(1, 5),
-            CM_PROMASK as i32
+            OCTO_COUNT_MIN_DEFAULT_THRESHOLD as i32
         );
     }
 
@@ -752,14 +767,14 @@ mod tests {
     #[test]
     fn dimension_test() {
         // test default sketch dimension
-        let cm = CountMin::<Vector2D<i32>, RegularPath>::default();
+        let cm = CountMinSketch::<Vector2D<i32>, RegularPath>::default();
         assert_eq!(cm.rows(), 3);
         assert_eq!(cm.cols(), 4096);
         let storage = cm.as_storage();
         all_counter_zero_i32(storage);
 
         // test for custom dimension size
-        let cm_customize = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 17);
+        let cm_customize = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 17);
         assert_eq!(cm_customize.rows(), 3);
         assert_eq!(cm_customize.cols(), 17);
 
@@ -769,8 +784,8 @@ mod tests {
 
     #[test]
     fn fast_insert_same_estimate() {
-        let mut slow = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
-        let mut fast = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 64);
+        let mut slow = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let mut fast = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 64);
 
         let keys = vec![
             DataInput::Str("alpha"),
@@ -796,7 +811,7 @@ mod tests {
 
     #[test]
     fn estimate_does_not_clamp_i64_counts_above_i32_max() {
-        let mut sk = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, 64);
+        let mut sk = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::Str("pkt_len");
         let count: i64 = 35_000_000_000; // ~35 billion, well past i32::MAX
 
@@ -812,8 +827,8 @@ mod tests {
 
     #[test]
     fn merge_adds_counters_element_wise() {
-        let mut left = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
-        let mut right = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
+        let mut left = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
+        let mut right = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
         let key = DataInput::Str("delta");
 
         left.update(&key);
@@ -834,14 +849,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "dimension mismatch while merging CountMin sketches")]
     fn merge_requires_matching_dimensions() {
-        let mut left = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
-        let right = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(3, 32);
+        let mut left = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
+        let right = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 32);
         left.merge(&right);
     }
 
     #[test]
     fn cm_regular_path_correctness() {
-        let mut sk = CountMin::<Vector2D<i32>, RegularPath>::default();
+        let mut sk = CountMinSketch::<Vector2D<i32>, RegularPath>::default();
         // Insert values 0..9 once using the regular path.
         for i in 0..10 {
             sk.update(&DataInput::I32(i));
@@ -884,7 +899,7 @@ mod tests {
 
     #[test]
     fn cm_fast_path_correctness() {
-        let mut sk = CountMin::<Vector2D<i32>, FastPath>::default();
+        let mut sk = CountMinSketch::<Vector2D<i32>, FastPath>::default();
         for i in 0..10 {
             sk.update(&DataInput::I32(i));
         }
@@ -892,7 +907,7 @@ mod tests {
         let storage = sk.as_storage();
         let rows = storage.rows();
         let cols = storage.cols();
-        let mask_bits = storage.get_mask_bits();
+        let mask_bits = storage.mask_bits();
         let mask = (1u64 << mask_bits) - 1;
         let mut expected_once = vec![0_i32; rows * cols];
 

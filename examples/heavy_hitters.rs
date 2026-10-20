@@ -1,19 +1,19 @@
-// Top-K heavy hitter detection with CMSHeap.
+// Top-K heavy hitter detection with CountMinSketchWithHeap.
 //
-// CMSHeap combines a Count-Min Sketch with a min-heap to track the top-K most
+// CountMinSketchWithHeap combines a Count-Min Sketch with a min-heap to track the top-K most
 // frequent items automatically. Each insert updates both the frequency estimate
 // and the heap — no separate query loop needed.
 //
 // Run with:
 //
 //   cargo run --example heavy_hitters
-use asap_sketchlib::{CMSHeap, DataInput, RegularPath, Vector2D};
+use asap_sketchlib::{CountMinSketchWithHeap, DataInput, RegularPath, Vector2D};
 
 fn main() {
     // Track the top-5 most frequent user IDs across 10_000 events.
     // Users 0-4 each appear ~1_000 times; users 5-99 share the remaining ~5_000.
     let top_k = 5;
-    let mut sketch = CMSHeap::<Vector2D<i64>, RegularPath>::new(5, 1024, top_k);
+    let mut sketch = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(5, 1024, top_k);
 
     for i in 0u64..10_000 {
         let user_id = if i % 2 == 0 { i % 5 } else { 5 + (i % 95) };

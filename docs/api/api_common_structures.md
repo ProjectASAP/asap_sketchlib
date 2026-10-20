@@ -12,7 +12,7 @@ Shared matrix, vector, and bit storage plus utility structures used by sketch im
 - `Vector3D<T>`
 - `BitMatrix`
 - `MatrixStorage` / `FastPathHasher`
-- `MatrixHashType`
+- `MatrixHash`
 - `Nitro`
 
 ## Constructors
@@ -30,7 +30,7 @@ fn fill(&mut self, value: T)
 fn new(rows: usize, cols: usize) -> Self
 
 // Nitro
-fn init_nitro(rate: f64) -> Self
+fn new(rate: f64) -> Self
 ```
 
 ## Insert/Update
@@ -38,7 +38,7 @@ fn init_nitro(rate: f64) -> Self
 ```rust
 // Vector2D
 fn update_one_counter<F, V>(&mut self, row: usize, col: usize, op: F, value: V)
-fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: &MatrixHashType)
+fn fast_insert<F, V>(&mut self, op: F, value: V, hashed_val: &MatrixHash)
 fn update_by_row<F, V>(&mut self, row: usize, hashed: u128, op: F, value: V)
 
 // Vector3D — the closure receives a whole `depth`-length bucket
@@ -65,9 +65,9 @@ fn rows(&self) -> usize
 fn cols(&self) -> usize
 fn get(&self, row: usize, col: usize) -> Option<&T>
 fn row_slice(&self, row: usize) -> &[T]
-fn fast_query_min<F, R>(&self, hashed_val: &MatrixHashType, op: F) -> R
-fn fast_query_median<F>(&self, hashed_val: &MatrixHashType, op: F) -> f64
-fn fast_query_max<F, R>(&self, hashed_val: &MatrixHashType, op: F) -> R
+fn fast_query_min<F, R>(&self, hashed_val: &MatrixHash, op: F) -> R
+fn fast_query_median<F>(&self, hashed_val: &MatrixHash, op: F) -> f64
+fn fast_query_max<F, R>(&self, hashed_val: &MatrixHash, op: F) -> R
 
 // Vector3D
 fn rows(&self) -> usize
@@ -75,7 +75,7 @@ fn cols(&self) -> usize
 fn depth(&self) -> usize
 fn bucket_slice(&self, row: usize, col: usize) -> &[T]
 fn as_slice(&self) -> &[T]
-fn get_mask_bits(&self) -> u32
+fn mask_bits(&self) -> u32
 fn fast_query_min<Hash, F, R>(&self, hashed_val: &Hash, op: F) -> R  // op: Fn(&[T], usize)
 
 // BitMatrix
@@ -128,7 +128,7 @@ read or write those fields as a unit.
 
 | Structure | Fields in a cell | Coupled how | Vector3D? |
 | --- | --- | --- | --- |
-| `MicroCM` | `T+2` pixels, zoom `Z`, shutter `S` | every pixel is scaled by the one shared `Z`, and a zoom rescales all of them at once | Yes |
+| `MicroCm` | `T+2` pixels, zoom `Z`, shutter `S` | every pixel is scaled by the one shared `Z`, and a zoom rescales all of them at once | Yes |
 | `CountMinHll` | `2^p` HyperLogLog registers | the estimator reads the whole register array | Yes |
 | A hypothetical multi-metric Count-Min (bytes and packets side by side) | `k` independent counters | not coupled at all | No — `k` separate `Vector2D`s are the same thing |
 
@@ -142,7 +142,7 @@ The layout is array-of-structs: a cell's elements are adjacent and
 consecutive cells follow one another, so a per-item path touches one
 contiguous run and a whole-table pass over
 `as_mut_slice().chunks_exact_mut(depth())` walks the storage in order. How
-much of a cell a given sketch reads per item is its own business — `MicroCM`
+much of a cell a given sketch reads per item is its own business — `MicroCm`
 rewrites the record, `CountMinHll` touches one byte of a 256-byte one. A
 sketch whose *hot* path instead touches one field across all cells is not a
 fit either way.

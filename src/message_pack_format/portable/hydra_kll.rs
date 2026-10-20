@@ -173,7 +173,7 @@ impl MessagePackCodec for HydraKllSketch {
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
-        use crate::sketches::kll::KLL;
+        use crate::sketches::kll::Kll;
         use rmp_serde::decode::Error as RmpDecodeError;
 
         let wire: HydraKllSketchWire = rmp_serde::from_slice(bytes)?;
@@ -202,7 +202,7 @@ impl MessagePackCodec for HydraKllSketch {
             }
             let mut accum_row: Vec<KllSketch> = Vec::with_capacity(wire.cols);
             for cell in row {
-                let backend = KLL::deserialize_from_bytes(&cell.sketch_bytes)?;
+                let backend = Kll::from_asapv1(&cell.sketch_bytes)?;
                 accum_row.push(KllSketch { k: cell.k, backend });
             }
             sketch.push(accum_row);

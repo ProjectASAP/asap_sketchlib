@@ -1,19 +1,19 @@
 //! Optimized UnivMon variants and pooling.
 //!
-//! - `UnivSketchPool`: free-list pool for `UnivMon` sketch reuse.
-//! - `UnivMonPyramid`: pyramid-structured UnivMon with two-tier sketch
+//! - `UnivMonPool`: free-list pool for `UnivMon` sketch reuse.
+//! - `UnivMonTwoTier`: pyramid-structured UnivMon with two-tier sketch
 //!   dimensions — larger "elephant" layers for heavy hitters and smaller
 //!   "mouse" layers for the long tail, matching the PromSketch design.
 
 use crate::UnivMon;
-use crate::common::heap::HHHeap;
+use crate::common::heap::TopKHeap;
 use crate::common::{
-    BOTTOM_LAYER_FINDER, DataInput, HeapItem, hash_item64_seeded, hash64_seeded,
+    DataInput, OwnedDataInput, UNIVMON_BOTTOM_LAYER_SEED_INDEX, hash64_seeded, hash64_seeded_owned,
     heap_item_to_sketch_input,
 };
 use crate::common::{L2HH, Vector1D};
-use crate::sketch_framework::univmon::{MAX_LAYER_SIZE, UnivMonUpdateMode};
-use crate::sketches::countsketch_topk::CountL2HH;
+use crate::sketch_framework::univmon::{UNIVMON_MAX_LAYERS, UnivMonUpdateMode};
+use crate::sketches::countsketch_heap::CountSketchWithL2Norm;
 use std::collections::{HashMap, HashSet};
 
 mod wire;
@@ -24,34 +24,28 @@ mod wire;
 /// via `take()` and return sketches via `put()`, which resets and recycles
 /// them. This avoids repeated heap allocation/deallocation for large sketch
 /// matrices during promotion, merge, and expiration cycles.
-pub struct UnivSketchPool {
+pub struct UnivMonPool {
     free_list: Vec<UnivMon>,
     total_allocated: usize,
     heap_size: usize,
-    sketch_row: usize,
-    sketch_col: usize,
-    layer_size: usize,
+    rows: usize,
+    cols: usize,
+    layers: usize,
 }
 
-impl UnivSketchPool {
+impl UnivMonPool {
     /// Creates a new pool with `cap` pre-allocated sketches.
-    pub fn new(
-        cap: usize,
-        heap_size: usize,
-        sketch_row: usize,
-        sketch_col: usize,
-        layer_size: usize,
-    ) -> Self {
+    pub fn new(cap: usize, heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self {
         let free_list: Vec<UnivMon> = (0..cap)
-            .map(|_| UnivMon::init_univmon(heap_size, sketch_row, sketch_col, layer_size))
+            .map(|_| UnivMon::new(heap_size, rows, cols, layers))
             .collect();
-        UnivSketchPool {
+        UnivMonPool {
             free_list,
             total_allocated: cap,
             heap_size,
-            sketch_row,
-            sketch_col,
-            layer_size,
+            rows,
+            cols,
+            layers,
         }
     }
 
@@ -64,12 +58,7 @@ impl UnivSketchPool {
             sketch
         } else {
             self.total_allocated += 1;
-            UnivMon::init_univmon(
-                self.heap_size,
-                self.sketch_row,
-                self.sketch_col,
-                self.layer_size,
-            )
+            UnivMon::new(self.heap_size, self.rows, self.cols, self.layers)
         }
     }
 
@@ -91,42 +80,42 @@ impl UnivSketchPool {
 }
 
 // ---------------------------------------------------------------------------
-// UnivMonPyramid
+// UnivMonTwoTier
 // ---------------------------------------------------------------------------
 
 const DEFAULT_ELEPHANT_LAYERS: usize = 8;
-const DEFAULT_ELEPHANT_ROW: usize = 3;
-const DEFAULT_ELEPHANT_COL: usize = 2048;
-const DEFAULT_MOUSE_ROW: usize = 3;
-const DEFAULT_MOUSE_COL: usize = 512;
+const DEFAULT_ELEPHANT_ROWS: usize = 3;
+const DEFAULT_ELEPHANT_COLS: usize = 2048;
+const DEFAULT_MOUSE_ROWS: usize = 3;
+const DEFAULT_MOUSE_COLS: usize = 512;
 const DEFAULT_PYRAMID_HEAP: usize = 32;
-const DEFAULT_PYRAMID_LAYERS: usize = 16;
+const DEFAULT_LAYERS: usize = 16;
 
 /// Pyramid-structured UnivMon with two-tier sketch dimensions.
 ///
 /// Layers `0..elephant_layers` ("elephant") use larger sketches for accurate
-/// heavy-hitter tracking. Layers `elephant_layers..layer_size` ("mouse") use
+/// heavy-hitter tracking. Layers `elephant_layers..layers` ("mouse") use
 /// smaller sketches, saving memory since deeper layers sample exponentially
 /// fewer items.
 #[derive(Clone, Debug)]
 /// Optimized UnivMon variant with separate elephant and mouse layers.
-pub struct UnivMonPyramid {
+pub struct UnivMonTwoTier {
     /// Per-layer L2/heavy-hitter sketches.
-    pub l2_sketch_layers: Vector1D<L2HH>,
+    pub layer_sketches: Vector1D<L2HH>,
     /// Per-layer heavy-hitter heaps.
-    pub hh_layers: Vector1D<HHHeap>,
+    pub layer_heaps: Vector1D<TopKHeap>,
     /// Total number of layers.
-    pub layer_size: usize,
+    pub layers: usize,
     /// Number of elephant layers.
     pub elephant_layers: usize,
     /// Row count for elephant layers.
-    pub elephant_row: usize,
+    pub elephant_rows: usize,
     /// Column count for elephant layers.
-    pub elephant_col: usize,
+    pub elephant_cols: usize,
     /// Row count for mouse layers.
-    pub mouse_row: usize,
+    pub mouse_rows: usize,
     /// Column count for mouse layers.
-    pub mouse_col: usize,
+    pub mouse_cols: usize,
     /// Heap capacity per layer.
     pub heap_size: usize,
     /// Bucket size used for hashing decisions.
@@ -135,37 +124,37 @@ pub struct UnivMonPyramid {
     candidate_complete: Vec<bool>,
 }
 
-impl UnivMonPyramid {
+impl UnivMonTwoTier {
     /// Creates an optimized UnivMon pyramid.
     pub fn new(
         heap_size: usize,
         elephant_layers: usize,
-        elephant_row: usize,
-        elephant_col: usize,
-        mouse_row: usize,
-        mouse_col: usize,
-        total_layers: usize,
+        elephant_rows: usize,
+        elephant_cols: usize,
+        mouse_rows: usize,
+        mouse_cols: usize,
+        layers: usize,
     ) -> Self {
         assert!(heap_size > 0, "heap size must be positive");
         assert!(
-            elephant_row > 0 && mouse_row > 0,
+            elephant_rows > 0 && mouse_rows > 0,
             "sketch row counts must be positive"
         );
         assert!(
-            elephant_col > 0 && mouse_col > 0,
+            elephant_cols > 0 && mouse_cols > 0,
             "sketch column counts must be positive"
         );
-        assert!(total_layers > 0, "layer count must be positive");
+        assert!(layers > 0, "layer count must be positive");
         assert!(
-            total_layers <= MAX_LAYER_SIZE,
-            "layer count must be at most MAX_LAYER_SIZE {MAX_LAYER_SIZE}"
+            layers <= UNIVMON_MAX_LAYERS,
+            "layer count must be at most MAX_LAYER_SIZE {UNIVMON_MAX_LAYERS}"
         );
-        let sk_vec: Vec<L2HH> = if total_layers <= elephant_layers {
-            (0..total_layers)
+        let sk_vec: Vec<L2HH> = if layers <= elephant_layers {
+            (0..layers)
                 .map(|i| {
-                    L2HH::COUNT(CountL2HH::with_dimensions_and_seed(
-                        elephant_row,
-                        elephant_col,
+                    L2HH::COUNT(CountSketchWithL2Norm::with_dimensions_and_seed_index(
+                        elephant_rows,
+                        elephant_cols,
                         i,
                     ))
                 })
@@ -173,33 +162,35 @@ impl UnivMonPyramid {
         } else {
             (0..elephant_layers)
                 .map(|i| {
-                    L2HH::COUNT(CountL2HH::with_dimensions_and_seed(
-                        elephant_row,
-                        elephant_col,
+                    L2HH::COUNT(CountSketchWithL2Norm::with_dimensions_and_seed_index(
+                        elephant_rows,
+                        elephant_cols,
                         i,
                     ))
                 })
-                .chain((elephant_layers..total_layers).map(|i| {
-                    L2HH::COUNT(CountL2HH::with_dimensions_and_seed(mouse_row, mouse_col, i))
+                .chain((elephant_layers..layers).map(|i| {
+                    L2HH::COUNT(CountSketchWithL2Norm::with_dimensions_and_seed_index(
+                        mouse_rows, mouse_cols, i,
+                    ))
                 }))
                 .collect()
         };
 
-        let hh_vec: Vec<HHHeap> = (0..total_layers).map(|_| HHHeap::new(heap_size)).collect();
+        let hh_vec: Vec<TopKHeap> = (0..layers).map(|_| TopKHeap::new(heap_size)).collect();
 
-        UnivMonPyramid {
-            l2_sketch_layers: Vector1D::from_vec(sk_vec),
-            hh_layers: Vector1D::from_vec(hh_vec),
-            layer_size: total_layers,
+        UnivMonTwoTier {
+            layer_sketches: Vector1D::from_vec(sk_vec),
+            layer_heaps: Vector1D::from_vec(hh_vec),
+            layers: layers,
             elephant_layers,
-            elephant_row,
-            elephant_col,
-            mouse_row,
-            mouse_col,
+            elephant_rows,
+            elephant_cols,
+            mouse_rows,
+            mouse_cols,
             heap_size,
             bucket_size: 0,
             update_mode: UnivMonUpdateMode::Unset,
-            candidate_complete: vec![true; total_layers],
+            candidate_complete: vec![true; layers],
         }
     }
 
@@ -222,32 +213,32 @@ impl UnivMonPyramid {
         Self::new(
             DEFAULT_PYRAMID_HEAP,
             DEFAULT_ELEPHANT_LAYERS,
-            DEFAULT_ELEPHANT_ROW,
-            DEFAULT_ELEPHANT_COL,
-            DEFAULT_MOUSE_ROW,
-            DEFAULT_MOUSE_COL,
-            DEFAULT_PYRAMID_LAYERS,
+            DEFAULT_ELEPHANT_ROWS,
+            DEFAULT_ELEPHANT_COLS,
+            DEFAULT_MOUSE_ROWS,
+            DEFAULT_MOUSE_COLS,
+            DEFAULT_LAYERS,
         )
     }
 
     #[inline(always)]
     fn find_bottom_layer_num(&self, hash: u64) -> usize {
-        for l in 1..self.layer_size {
+        for l in 1..self.layers {
             if ((hash >> l) & 1) == 0 {
                 return l - 1;
             }
         }
-        self.layer_size - 1
+        self.layers - 1
     }
 
     /// Standard insert: updates sketch + heap at every layer 0..=bottom.
     pub fn update_weighted(&mut self, key: &DataInput, weight: i64) {
         self.begin_update(weight, UnivMonUpdateMode::Standard);
-        let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
+        let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
         let bottom = self.find_bottom_layer_num(h);
         for i in 0..=bottom {
-            let count = self.l2_sketch_layers[i].update_and_est(key, weight);
-            if !self.hh_layers[i].update(key, count as i64) {
+            let count = self.layer_sketches[i].update_and_est(key, weight);
+            if !self.layer_heaps[i].update(key, count as i64) {
                 self.candidate_complete[i] = false;
             }
         }
@@ -259,10 +250,10 @@ impl UnivMonPyramid {
     /// Do not mix this method with [`Self::update`] on the same sketch.
     pub fn fast_insert(&mut self, key: &DataInput, value: i64) {
         self.begin_update(value, UnivMonUpdateMode::Terminal);
-        let h = hash64_seeded(BOTTOM_LAYER_FINDER, key);
+        let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
         let bottom = self.find_bottom_layer_num(h);
-        let count = self.l2_sketch_layers[bottom].update_and_est(key, value);
-        if !self.hh_layers[bottom].update(key, count as i64) {
+        let count = self.layer_sketches[bottom].update_and_est(key, value);
+        if !self.layer_heaps[bottom].update(key, count as i64) {
             self.candidate_complete[bottom] = false;
         }
     }
@@ -270,7 +261,7 @@ impl UnivMonPyramid {
     // -- Query methods (identical to UnivMon) --------------------------------
 
     /// Computes a g-sum estimate.
-    pub fn calc_g_sum<F>(&self, g: F, is_card: bool) -> f64
+    pub fn estimate_g_sum<F>(&self, g: F, heavy_only: bool) -> f64
     where
         F: Fn(f64) -> f64,
     {
@@ -281,39 +272,41 @@ impl UnivMonPyramid {
             return self.calc_terminal_g_sum(g);
         }
 
-        let mut y = vec![0.0; self.layer_size];
+        let mut y = vec![0.0; self.layers];
 
-        let l2_top = self.l2_sketch_layers[self.layer_size - 1].get_l2();
-        let threshold_top = if is_card {
-            self.heavy_threshold(l2_top, self.candidate_complete[self.layer_size - 1])
+        let l2_top = self.layer_sketches[self.layers - 1].l2();
+        let threshold_top = if heavy_only {
+            self.heavy_threshold(l2_top, self.candidate_complete[self.layers - 1])
         } else {
             0
         };
 
         let mut tmp = 0.0;
-        for item in self.hh_layers[self.layer_size - 1].heap() {
+        for item in self.layer_heaps[self.layers - 1].heap() {
             let input = heap_item_to_sketch_input(&item.key);
-            let count = self.l2_sketch_layers[self.layer_size - 1].estimate(&input) as i64;
+            let count = self.layer_sketches[self.layers - 1].estimate(&input) as i64;
             if count > threshold_top {
                 tmp += g(count as f64);
             }
         }
-        y[self.layer_size - 1] = tmp;
+        y[self.layers - 1] = tmp;
 
-        for i in (0..(self.layer_size - 1)).rev() {
+        for i in (0..(self.layers - 1)).rev() {
             tmp = 0.0;
-            let l2_val = self.l2_sketch_layers[i].get_l2();
-            let threshold = if is_card {
+            let l2_val = self.layer_sketches[i].l2();
+            let threshold = if heavy_only {
                 self.heavy_threshold(l2_val, self.candidate_complete[i])
             } else {
                 0
             };
 
-            for item in self.hh_layers[i].heap() {
+            for item in self.layer_heaps[i].heap() {
                 let input = heap_item_to_sketch_input(&item.key);
-                let count = self.l2_sketch_layers[i].estimate(&input) as i64;
+                let count = self.layer_sketches[i].estimate(&input) as i64;
                 if count > threshold {
-                    let hash = (hash_item64_seeded(BOTTOM_LAYER_FINDER, &item.key) >> (i + 1)) & 1;
+                    let hash = (hash64_seeded_owned(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &item.key)
+                        >> (i + 1))
+                        & 1;
                     let coe = 1.0 - 2.0 * (hash as f64);
                     tmp += coe * g(count as f64);
                 }
@@ -328,16 +321,16 @@ impl UnivMonPyramid {
         F: Fn(f64) -> f64,
     {
         let (candidates, complete) = self.logical_terminal_candidates();
-        let mut logical_l2 = vec![0.0; self.layer_size];
+        let mut logical_l2 = vec![0.0; self.layers];
         let mut suffix_l2_squared = 0.0;
-        for level in (0..self.layer_size).rev() {
-            let terminal_l2 = self.l2_sketch_layers[level].get_l2();
+        for level in (0..self.layers).rev() {
+            let terminal_l2 = self.layer_sketches[level].l2();
             suffix_l2_squared += terminal_l2 * terminal_l2;
             logical_l2[level] = suffix_l2_squared.sqrt();
         }
 
-        let mut y = vec![0.0; self.layer_size];
-        let last = self.layer_size - 1;
+        let mut y = vec![0.0; self.layers];
+        let last = self.layers - 1;
         let threshold = self.heavy_threshold(logical_l2[last], complete[last]);
         y[last] = candidates[last]
             .iter()
@@ -351,7 +344,9 @@ impl UnivMonPyramid {
                 .iter()
                 .filter(|(_, count)| *count > threshold)
                 .map(|(key, count)| {
-                    let hash = (hash_item64_seeded(BOTTOM_LAYER_FINDER, key) >> (level + 1)) & 1;
+                    let hash = (hash64_seeded_owned(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key)
+                        >> (level + 1))
+                        & 1;
                     (1.0 - 2.0 * hash as f64) * g(*count as f64)
                 })
                 .sum::<f64>();
@@ -360,16 +355,16 @@ impl UnivMonPyramid {
         y[0]
     }
 
-    fn logical_terminal_candidates(&self) -> (Vec<Vec<(HeapItem, i64)>>, Vec<bool>) {
-        let mut logical = vec![Vec::new(); self.layer_size];
-        let mut complete = vec![false; self.layer_size];
-        let mut cumulative = HashMap::<HeapItem, i64>::with_capacity(self.heap_size * 2);
+    fn logical_terminal_candidates(&self) -> (Vec<Vec<(OwnedDataInput, i64)>>, Vec<bool>) {
+        let mut logical = vec![Vec::new(); self.layers];
+        let mut complete = vec![false; self.layers];
+        let mut cumulative = HashMap::<OwnedDataInput, i64>::with_capacity(self.heap_size * 2);
         let mut suffix_complete = true;
-        for level in (0..self.layer_size).rev() {
+        for level in (0..self.layers).rev() {
             suffix_complete &= self.candidate_complete[level];
-            for item in self.hh_layers[level].heap() {
+            for item in self.layer_heaps[level].heap() {
                 let input = heap_item_to_sketch_input(&item.key);
-                let count = self.l2_sketch_layers[level].estimate(&input) as i64;
+                let count = self.layer_sketches[level].estimate(&input) as i64;
                 cumulative
                     .entry(item.key.clone())
                     .and_modify(|old| *old = (*old).max(count))
@@ -381,8 +376,9 @@ impl UnivMonPyramid {
                 .collect();
             retained.sort_unstable_by(|left, right| {
                 right.1.cmp(&left.1).then_with(|| {
-                    hash_item64_seeded(BOTTOM_LAYER_FINDER, &left.0)
-                        .cmp(&hash_item64_seeded(BOTTOM_LAYER_FINDER, &right.0))
+                    hash64_seeded_owned(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &left.0).cmp(
+                        &hash64_seeded_owned(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &right.0),
+                    )
                 })
             });
             complete[level] = suffix_complete && retained.len() <= self.heap_size;
@@ -403,27 +399,27 @@ impl UnivMonPyramid {
     }
 
     /// Returns the exact L1 norm for the supported non-negative update stream.
-    pub fn calc_l1(&self) -> f64 {
+    pub fn estimate_l1(&self) -> f64 {
         self.bucket_size as f64
     }
 
     /// Returns the estimated L2 norm.
-    pub fn calc_l2(&self) -> f64 {
-        self.calc_g_sum(|x| x * x, false).sqrt()
+    pub fn estimate_l2(&self) -> f64 {
+        self.estimate_g_sum(|x| x * x, false).sqrt()
     }
 
     /// Returns the estimated entropy.
-    pub fn calc_entropy(&self) -> f64 {
+    pub fn estimate_entropy(&self) -> f64 {
         if self.bucket_size == 0 {
             return 0.0;
         }
-        let tmp = self.calc_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 }, false);
+        let tmp = self.estimate_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 }, false);
         (self.bucket_size as f64).log2() - tmp / (self.bucket_size as f64)
     }
 
     /// Returns the estimated cardinality.
-    pub fn calc_card(&self) -> f64 {
-        self.calc_g_sum(|_| 1.0, true)
+    pub fn estimate_cardinality(&self) -> f64 {
+        self.estimate_g_sum(|_| 1.0, true)
     }
 
     // -- Lifecycle -----------------------------------------------------------
@@ -433,33 +429,30 @@ impl UnivMonPyramid {
         self.bucket_size = 0;
         self.update_mode = UnivMonUpdateMode::Unset;
         self.candidate_complete.fill(true);
-        for i in 0..self.layer_size {
-            self.l2_sketch_layers[i].clear();
-            self.hh_layers[i].clear();
+        for i in 0..self.layers {
+            self.layer_sketches[i].clear();
+            self.layer_heaps[i].clear();
         }
     }
 
     /// Merges another compatible pyramid and rebuilds its candidate heaps.
-    pub fn merge(&mut self, other: &UnivMonPyramid) {
-        assert_eq!(
-            self.layer_size, other.layer_size,
-            "layer size must match for merge"
-        );
+    pub fn merge(&mut self, other: &UnivMonTwoTier) {
+        assert_eq!(self.layers, other.layers, "layer size must match for merge");
         assert_eq!(
             (
                 self.elephant_layers,
-                self.elephant_row,
-                self.elephant_col,
-                self.mouse_row,
-                self.mouse_col,
+                self.elephant_rows,
+                self.elephant_cols,
+                self.mouse_rows,
+                self.mouse_cols,
                 self.heap_size,
             ),
             (
                 other.elephant_layers,
-                other.elephant_row,
-                other.elephant_col,
-                other.mouse_row,
-                other.mouse_col,
+                other.elephant_rows,
+                other.elephant_cols,
+                other.mouse_rows,
+                other.mouse_cols,
                 other.heap_size,
             ),
             "UnivMon pyramid layouts must match for merge"
@@ -476,30 +469,30 @@ impl UnivMonPyramid {
             .bucket_size
             .checked_add(other.bucket_size)
             .expect("merged UnivMon total weight overflowed usize");
-        for i in 0..self.layer_size {
+        for i in 0..self.layers {
             let sources_complete = self.candidate_complete[i] && other.candidate_complete[i];
-            let candidate_keys: HashSet<HeapItem> = self.hh_layers[i]
+            let candidate_keys: HashSet<OwnedDataInput> = self.layer_heaps[i]
                 .heap()
                 .iter()
-                .chain(other.hh_layers[i].heap())
+                .chain(other.layer_heaps[i].heap())
                 .map(|item| item.key.clone())
                 .collect();
             let merged_candidates_complete =
                 sources_complete && candidate_keys.len() <= self.heap_size;
-            self.l2_sketch_layers[i].merge(&other.l2_sketch_layers[i]);
-            self.hh_layers[i].clear();
+            self.layer_sketches[i].merge(&other.layer_sketches[i]);
+            self.layer_heaps[i].clear();
             for key in candidate_keys {
                 let input = heap_item_to_sketch_input(&key);
-                let count = self.l2_sketch_layers[i].estimate(&input) as i64;
-                self.hh_layers[i].update(&input, count);
+                let count = self.layer_sketches[i].estimate(&input) as i64;
+                self.layer_heaps[i].update(&input, count);
             }
             self.candidate_complete[i] = merged_candidates_complete;
         }
     }
 
     /// Returns the heap for one layer.
-    pub fn heap_at_layer(&mut self, layer: usize) -> &mut HHHeap {
-        &mut self.hh_layers[layer]
+    pub fn layer_heap_mut(&mut self, layer: usize) -> &mut TopKHeap {
+        &mut self.layer_heaps[layer]
     }
 }
 
@@ -510,7 +503,7 @@ mod tests {
 
     #[test]
     fn pool_basic_take_put() {
-        let mut pool = UnivSketchPool::new(2, 16, 2, 5, 2);
+        let mut pool = UnivMonPool::new(2, 16, 2, 5, 2);
         assert_eq!(pool.available(), 2);
         assert_eq!(pool.total_allocated(), 2);
 
@@ -543,7 +536,7 @@ mod tests {
 
     #[test]
     fn pool_free_resets_sketch() {
-        let mut pool = UnivSketchPool::new(1, 16, 2, 5, 2);
+        let mut pool = UnivMonPool::new(1, 16, 2, 5, 2);
 
         // Take a sketch, insert some data
         let mut sketch = pool.take();
@@ -556,16 +549,16 @@ mod tests {
         // Take it back — should be clean
         let sketch2 = pool.take();
         assert_eq!(sketch2.bucket_size, 0);
-        assert!((sketch2.l2_sketch_layers[0].get_l2()).abs() < 1e-9);
+        assert!((sketch2.layer_sketches[0].l2()).abs() < 1e-9);
     }
 
     // =======================================================================
-    //                    UnivMonPyramid tests
+    //                    UnivMonTwoTier tests
     // =======================================================================
 
     #[test]
     fn pyramid_basic_insert_and_query() {
-        let mut um = UnivMonPyramid::with_defaults();
+        let mut um = UnivMonTwoTier::with_defaults();
 
         let cases: Vec<(&str, i64)> = vec![("hello", 10), ("world", 20), ("hello", 5), ("foo", 30)];
 
@@ -574,8 +567,12 @@ mod tests {
         }
 
         assert_eq!(um.bucket_size, 65);
-        assert!((um.calc_l1() - 65.0).abs() < 1e-6, "L1 = {}", um.calc_l1());
-        assert_eq!(um.calc_card(), 3.0);
+        assert!(
+            (um.estimate_l1() - 65.0).abs() < 1e-6,
+            "L1 = {}",
+            um.estimate_l1()
+        );
+        assert_eq!(um.estimate_cardinality(), 3.0);
     }
 
     #[test]
@@ -583,8 +580,8 @@ mod tests {
         // Both insert paths should produce identical sketches.
         // Retain the complete 100-key support so this tests construction
         // equivalence rather than independent candidate-sampling variance.
-        let mut standard = UnivMonPyramid::new(128, 8, 3, 2048, 3, 512, 16);
-        let mut fast = UnivMonPyramid::new(128, 8, 3, 2048, 3, 512, 16);
+        let mut standard = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
+        let mut fast = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
 
         for i in 0..500i64 {
             let key = DataInput::I64(i % 100);
@@ -596,36 +593,36 @@ mod tests {
 
         // Standard cumulative layers and Joltik terminal strata must yield
         // the same logical estimates when all candidates are retained.
-        let l1_diff = (standard.calc_l1() - fast.calc_l1()).abs();
-        let card_diff = (standard.calc_card() - fast.calc_card()).abs();
+        let l1_diff = (standard.estimate_l1() - fast.estimate_l1()).abs();
+        let card_diff = (standard.estimate_cardinality() - fast.estimate_cardinality()).abs();
         assert!(
-            l1_diff / standard.calc_l1() < 0.10,
+            l1_diff / standard.estimate_l1() < 0.10,
             "L1 diverged: std={}, fast={}",
-            standard.calc_l1(),
-            fast.calc_l1()
+            standard.estimate_l1(),
+            fast.estimate_l1()
         );
         assert!(
-            card_diff / standard.calc_card().max(1.0) < 0.15,
+            card_diff / standard.estimate_cardinality().max(1.0) < 0.15,
             "Card diverged: std={}, fast={}",
-            standard.calc_card(),
-            fast.calc_card()
+            standard.estimate_cardinality(),
+            fast.estimate_cardinality()
         );
     }
 
     #[test]
     fn pyramid_two_tier_dimensions() {
         // Verify elephant layers are larger than mouse layers.
-        let um = UnivMonPyramid::new(32, 4, 5, 2048, 3, 256, 8);
+        let um = UnivMonTwoTier::new(32, 4, 5, 2048, 3, 256, 8);
 
         // Layers 0..4 = elephant (5 rows × 2048 cols)
         // Layers 4..8 = mouse   (3 rows × 256 cols)
-        assert_eq!(um.layer_size, 8);
+        assert_eq!(um.layers, 8);
         assert_eq!(um.elephant_layers, 4);
     }
 
     #[test]
     fn pyramid_free_resets_state() {
-        let mut um = UnivMonPyramid::with_defaults();
+        let mut um = UnivMonTwoTier::with_defaults();
         for i in 0..100i64 {
             um.update_weighted(&DataInput::I64(i), 10);
         }
@@ -633,14 +630,14 @@ mod tests {
 
         um.free();
         assert_eq!(um.bucket_size, 0);
-        assert!((um.l2_sketch_layers[0].get_l2()).abs() < 1e-9);
+        assert!((um.layer_sketches[0].l2()).abs() < 1e-9);
     }
 
     #[test]
     fn pyramid_merge_combines_data() {
-        let mut one_pass = UnivMonPyramid::new(128, 8, 3, 2048, 3, 512, 16);
-        let mut left = UnivMonPyramid::new(128, 8, 3, 2048, 3, 512, 16);
-        let mut right = UnivMonPyramid::new(128, 8, 3, 2048, 3, 512, 16);
+        let mut one_pass = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
+        let mut left = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
+        let mut right = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
 
         for i in 0..50i64 {
             left.update_weighted(&DataInput::I64(i), 10);
@@ -654,10 +651,10 @@ mod tests {
         left.merge(&right);
 
         assert_eq!(left.bucket_size, 1000);
-        assert!(left.calc_entropy().is_finite());
-        for level in 0..left.layer_size {
-            let L2HH::COUNT(merged_count) = &left.l2_sketch_layers[level];
-            let L2HH::COUNT(one_pass_count) = &one_pass.l2_sketch_layers[level];
+        assert!(left.estimate_entropy().is_finite());
+        for level in 0..left.layers {
+            let L2HH::COUNT(merged_count) = &left.layer_sketches[level];
+            let L2HH::COUNT(one_pass_count) = &one_pass.layer_sketches[level];
             assert_eq!(
                 merged_count.as_storage().as_slice(),
                 one_pass_count.as_storage().as_slice(),
@@ -665,14 +662,14 @@ mod tests {
             );
         }
         assert!(
-            (left.calc_l1() - one_pass.calc_l1()).abs() < 1e-9,
+            (left.estimate_l1() - one_pass.estimate_l1()).abs() < 1e-9,
             "merged L1={}, one-pass L1={}",
-            left.calc_l1(),
-            one_pass.calc_l1()
+            left.estimate_l1(),
+            one_pass.estimate_l1()
         );
-        assert!((left.calc_l2() - one_pass.calc_l2()).abs() < 1e-9);
-        assert!((left.calc_card() - one_pass.calc_card()).abs() < 1e-9);
-        assert!((left.calc_entropy() - one_pass.calc_entropy()).abs() < 1e-9);
+        assert!((left.estimate_l2() - one_pass.estimate_l2()).abs() < 1e-9);
+        assert!((left.estimate_cardinality() - one_pass.estimate_cardinality()).abs() < 1e-9);
+        assert!((left.estimate_entropy() - one_pass.estimate_entropy()).abs() < 1e-9);
     }
 
     fn ground_truth(freq: &std::collections::HashMap<i64, i64>) -> (f64, f64, f64, f64) {
@@ -702,7 +699,7 @@ mod tests {
     fn pyramid_accuracy_zipf() {
         use std::collections::HashMap;
 
-        let mut um = UnivMonPyramid::new(64, 8, 5, 2048, 3, 512, 16);
+        let mut um = UnivMonTwoTier::new(64, 8, 5, 2048, 3, 512, 16);
         let mut freq: HashMap<i64, i64> = HashMap::new();
 
         // Heavy hitter
@@ -734,17 +731,17 @@ mod tests {
             );
         };
 
-        err("L1", um.calc_l1(), true_l1);
-        err("L2", um.calc_l2(), true_l2);
-        err("Card", um.calc_card(), true_card);
-        err("Entropy", um.calc_entropy(), true_entropy);
+        err("L1", um.estimate_l1(), true_l1);
+        err("L2", um.estimate_l2(), true_l2);
+        err("Card", um.estimate_cardinality(), true_card);
+        err("Entropy", um.estimate_entropy(), true_entropy);
     }
 
     #[test]
     fn pyramid_fast_insert_accuracy() {
         use std::collections::HashMap;
 
-        let mut um = UnivMonPyramid::new(64, 8, 5, 2048, 3, 512, 16);
+        let mut um = UnivMonTwoTier::new(64, 8, 5, 2048, 3, 512, 16);
         let mut freq: HashMap<i64, i64> = HashMap::new();
 
         // Use fast_insert for everything.
@@ -770,10 +767,10 @@ mod tests {
             );
         };
 
-        err("L1", um.calc_l1(), true_l1);
-        err("L2", um.calc_l2(), true_l2);
-        err("Card", um.calc_card(), true_card);
-        err("Entropy", um.calc_entropy(), true_entropy);
+        err("L1", um.estimate_l1(), true_l1);
+        err("L2", um.estimate_l2(), true_l2);
+        err("Card", um.estimate_cardinality(), true_card);
+        err("Entropy", um.estimate_entropy(), true_entropy);
     }
 
     #[test]
@@ -781,14 +778,14 @@ mod tests {
         // Pyramid with 16 layers should use less memory than a uniform
         // UnivMon with the same elephant dimensions at all 16 layers.
         // We verify this by comparing total sketch column counts.
-        let elephant_col = 2048;
-        let mouse_col = 512;
+        let elephant_cols = 2048;
+        let mouse_cols = 512;
         let elephant_layers = 8;
-        let total_layers = 16;
+        let layers = 16;
 
-        let uniform_cols = elephant_col * total_layers;
+        let uniform_cols = elephant_cols * layers;
         let pyramid_cols =
-            elephant_col * elephant_layers + mouse_col * (total_layers - elephant_layers);
+            elephant_cols * elephant_layers + mouse_cols * (layers - elephant_layers);
 
         assert!(
             pyramid_cols < uniform_cols,

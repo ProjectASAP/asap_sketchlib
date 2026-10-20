@@ -10,7 +10,7 @@ Heavy/light split frequency estimator with a heavy bucket plus Count-Min backing
 
 ## Type/Struct
 
-- `Elastic<H = DefaultXxHasher>`
+- `ElasticSketch<H = DefaultXxHasher>`
 - `HeavyBucket`
 - `LAMBDA` — the paper's eviction threshold (8).
 - `DEFAULT_LIGHT_ROWS` / `DEFAULT_LIGHT_COLS` — the default light layer (3 x 4096).
@@ -19,11 +19,11 @@ Heavy/light split frequency estimator with a heavy bucket plus Count-Min backing
 
 ```rust
 fn new() -> Self
-fn init_with_length(l: i32) -> Self
-fn init_with_dimensions(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self
+fn with_heavy_buckets(l: i32) -> Self
+fn with_heavy_and_light(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self
 ```
 
-`new()` builds 8 heavy buckets over a 3 x 4096 light layer; `init_with_length`
+`new()` builds 8 heavy buckets over a 3 x 4096 light layer; `with_heavy_buckets`
 takes the bucket count and keeps that same light layer. Both panic on a
 non-positive bucket count or an empty light layer.
 
@@ -150,8 +150,8 @@ Multi-core, below.
 ## Merge
 
 ```rust
-fn merge(&mut self, other: &Elastic<H>)
-fn merge_max(&mut self, other: &Elastic<H>)
+fn merge(&mut self, other: &ElasticSketch<H>)
+fn merge_max(&mut self, other: &ElasticSketch<H>)
 ```
 
 Both combine the heavy parts bucket by bucket and then combine the light
@@ -286,7 +286,7 @@ doubled to 24 and compressed by 3.
 
 ```rust
 fn heavy_hitters(&self, threshold: i32) -> Vec<(String, i32)>
-fn heavy_changes(&self, other: &Elastic<H>, threshold: i32) -> Vec<(String, i32, i32)>
+fn heavy_changes(&self, other: &ElasticSketch<H>, threshold: i32) -> Vec<(String, i32, i32)>
 ```
 
 Section 5 lists six tasks the sketch is meant to serve. Two are implemented
@@ -322,8 +322,8 @@ entry is `(flow, size in self, size in other)`.
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, rmp_serde::encode::Error>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
+fn to_asapv1(&self) -> Result<Vec<u8>, rmp_serde::encode::Error>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
 ```
 
 ASAPv1 MessagePack, kind_id `0x0b 0x00`. The metadata carries the hash spec plus
@@ -340,17 +340,17 @@ The light layer is a Count-Min matrix, so it carries that sketch's row bound:
 `1 <= light_rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length), refused on
 both sides past it.
 
-A zero dimension, a `bktlen` disagreeing with the heavy table, a free bucket
+A zero dimension, a `heavy_buckets` disagreeing with the heavy table, a free bucket
 that still names a flow, a payload length that disagrees with the declared
 geometry, and a `nil` flow id whose `vote_pos` is non-zero are all rejected on
-both sides. `Elastic` also derives serde.
+both sides. `ElasticSketch` also derives serde.
 
 ## Examples
 
 ```rust
-use asap_sketchlib::Elastic;
+use asap_sketchlib::ElasticSketch;
 
-let mut sk = Elastic::init_with_length(8);
+let mut sk = ElasticSketch::with_heavy_buckets(8);
 sk.update("flow".to_string());
 let _ = sk.query("flow".to_string());
 ```

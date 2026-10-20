@@ -2,8 +2,8 @@
 //!
 //! Child submodule of [`crate::sketches::hll`]: it holds HLL's state
 //! serialization (the metadata/payload DTOs, kind_id constants, the
-//! [`HllWireVariant`] mapping, and the `serialize_to_bytes` /
-//! `deserialize_from_bytes` impls) while the algorithm lives in the parent
+//! [`HllWireVariant`] mapping, and the `to_asapv1` /
+//! `from_asapv1` impls) while the algorithm lives in the parent
 //! module file (`hll.rs`) and the delta kinds in `delta.rs`. Being a
 //! descendant module, it can read the sketch structs' private fields
 //! (`self.registers`) and construct them directly without widening any field
@@ -19,7 +19,7 @@ use crate::message_pack_format::wire_key::exact;
 use crate::structures::fixed_structure::HllRegisterStorage;
 use crate::{DefaultXxHasher, HashProfile, SketchHasher};
 
-use super::{Classic, ErtlMLE, HyperLogLogHIPImpl, HyperLogLogImpl};
+use super::{Classic, Ertl, HyperLogLogHipImpl, HyperLogLogImpl};
 
 /// Maps an in-memory HLL estimator variant to its ASAPv1 `kind_id`.
 pub trait HllWireVariant {
@@ -31,7 +31,7 @@ impl HllWireVariant for Classic {
     const WIRE_KIND_ID: &'static [u8] = HLL_KIND_CLASSIC;
 }
 
-impl HllWireVariant for ErtlMLE {
+impl HllWireVariant for Ertl {
     const WIRE_KIND_ID: &'static [u8] = HLL_KIND_ERTL_MLE;
 }
 
@@ -154,13 +154,13 @@ pub(super) fn validated_hll_payload<'a, H: HashProfile>(
 }
 
 /// Rejects a register bin holding a rank no insert could have produced. A
-/// register holds a rank of at most `REGISTER_BITS + 1`, so a byte above that
+/// register holds a rank of at most `RANK_HASH_BITS + 1`, so a byte above that
 /// bound is an impossible state. Both directions call this, so the encode and
 /// decode predicates cannot drift.
 pub(super) fn check_register_range<Registers: HllRegisterStorage>(
     registers: &[u8],
 ) -> Result<(), String> {
-    let max_rank = (Registers::REGISTER_BITS + 1) as u8;
+    let max_rank = (Registers::RANK_HASH_BITS + 1) as u8;
     match registers.iter().find(|&&rank| rank > max_rank) {
         Some(&rank) => Err(format!(
             "HLL register value {rank} exceeds the maximum rank {max_rank} at precision {}",
@@ -211,7 +211,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     ///
     /// A register above the maximum rank for this precision is an error rather
     /// than bytes that would be refused on decode.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
     where
         Variant: HllWireVariant,
         H: HashProfile,
@@ -224,7 +224,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. Bytes whose
     /// metadata does not match this hasher's [`HashProfile`] are rejected.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
     where
         Variant: HllWireVariant,
         H: HashProfile,
@@ -243,12 +243,12 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 }
 
 // Wire serialization for the HIP estimator.
-impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
+impl<Registers: HllRegisterStorage> HyperLogLogHipImpl<Registers> {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope.
     ///
     /// A register above the maximum rank for this precision is an error rather
     /// than bytes that would be refused on decode.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let registers = registers_to_bytes(&self.registers)?;
         let metadata = encode_metadata::<Registers, DefaultXxHasher>(self.admission_rate)?;
         let payload = rmp_serde::to_vec(&HllPayloadHip {
@@ -261,7 +261,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (payload, admission_rate) = validated_hll_payload::<DefaultXxHasher>(
             bytes,
             HLL_KIND_HIP,
@@ -282,9 +282,9 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketches::hll::{HyperLogLog, HyperLogLogHIP, HyperLogLogHIPP12, HyperLogLogP12};
-    use crate::structures::fixed_structure::{HllBucketListP12, HllBucketListP14};
-    use crate::{DataInput, HllBucketList};
+    use crate::sketches::hll::{HyperLogLog, HyperLogLogHip, HyperLogLogHipP12, HyperLogLogP12};
+    use crate::structures::fixed_structure::{HllRegistersP12, HllRegistersP14};
+    use crate::{DataInput, HllRegisters};
 
     const ERROR_TOLERANCE: f64 = 0.02;
     const SERDE_SAMPLE: usize = 100_000;
@@ -298,8 +298,8 @@ mod tests {
     }
 
     trait HllSerializable: HllEstimator {
-        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>;
-        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+        fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>;
+        fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
         where
             Self: Sized;
     }
@@ -319,56 +319,56 @@ mod tests {
     impl<Registers: HllRegisterStorage, H: SketchHasher + HashProfile> HllSerializable
         for HyperLogLogImpl<Classic, Registers, H>
     {
-        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-            HyperLogLogImpl::<Classic, Registers, H>::serialize_to_bytes(self)
+        fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
+            HyperLogLogImpl::<Classic, Registers, H>::to_asapv1(self)
         }
 
-        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-            HyperLogLogImpl::<Classic, Registers, H>::deserialize_from_bytes(bytes)
+        fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+            HyperLogLogImpl::<Classic, Registers, H>::from_asapv1(bytes)
         }
     }
 
     impl<Registers: HllRegisterStorage, H: SketchHasher> HllEstimator
-        for HyperLogLogImpl<ErtlMLE, Registers, H>
+        for HyperLogLogImpl<Ertl, Registers, H>
     {
         fn push(&mut self, input: &DataInput) {
             self.update(input);
         }
 
         fn estimate(&self) -> f64 {
-            HyperLogLogImpl::<ErtlMLE, Registers, H>::estimate(self) as f64
+            HyperLogLogImpl::<Ertl, Registers, H>::estimate(self) as f64
         }
     }
 
     impl<Registers: HllRegisterStorage, H: SketchHasher + HashProfile> HllSerializable
-        for HyperLogLogImpl<ErtlMLE, Registers, H>
+        for HyperLogLogImpl<Ertl, Registers, H>
     {
-        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-            HyperLogLogImpl::<ErtlMLE, Registers, H>::serialize_to_bytes(self)
+        fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
+            HyperLogLogImpl::<Ertl, Registers, H>::to_asapv1(self)
         }
 
-        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-            HyperLogLogImpl::<ErtlMLE, Registers, H>::deserialize_from_bytes(bytes)
+        fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+            HyperLogLogImpl::<Ertl, Registers, H>::from_asapv1(bytes)
         }
     }
 
-    impl<Registers: HllRegisterStorage> HllEstimator for HyperLogLogHIPImpl<Registers> {
+    impl<Registers: HllRegisterStorage> HllEstimator for HyperLogLogHipImpl<Registers> {
         fn push(&mut self, input: &DataInput) {
             self.update(input);
         }
 
         fn estimate(&self) -> f64 {
-            HyperLogLogHIPImpl::<Registers>::estimate(self) as f64
+            HyperLogLogHipImpl::<Registers>::estimate(self) as f64
         }
     }
 
-    impl<Registers: HllRegisterStorage> HllSerializable for HyperLogLogHIPImpl<Registers> {
-        fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-            HyperLogLogHIPImpl::<Registers>::serialize_to_bytes(self)
+    impl<Registers: HllRegisterStorage> HllSerializable for HyperLogLogHipImpl<Registers> {
+        fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
+            HyperLogLogHipImpl::<Registers>::to_asapv1(self)
         }
 
-        fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-            HyperLogLogHIPImpl::<Registers>::deserialize_from_bytes(bytes)
+        fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+            HyperLogLogHipImpl::<Registers>::from_asapv1(bytes)
         }
     }
 
@@ -383,18 +383,18 @@ mod tests {
         }
 
         let encoded = sketch
-            .serialize_to_bytes()
+            .to_asapv1()
             .unwrap_or_else(|err| panic!("{name} serialize_to_bytes failed: {err}"));
         assert!(
             !encoded.is_empty(),
             "{name} serialization output should not be empty"
         );
 
-        let decoded = S::deserialize_from_bytes(&encoded)
+        let decoded = S::from_asapv1(&encoded)
             .unwrap_or_else(|err| panic!("{name} deserialize_from_bytes failed: {err}"));
 
         let reencoded = decoded
-            .serialize_to_bytes()
+            .to_asapv1()
             .unwrap_or_else(|err| panic!("{name} re-serialize failed: {err}"));
 
         assert_eq!(
@@ -417,12 +417,12 @@ mod tests {
 
     #[test]
     fn hll_ertl_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLog<ErtlMLE>>("HllErtl");
+        assert_serialization_round_trip::<HyperLogLog<Ertl>>("HllErtl");
     }
 
     #[test]
     fn hllds_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLogHIP>("HllDs");
+        assert_serialization_round_trip::<HyperLogLogHip>("HllDs");
     }
 
     #[test]
@@ -432,47 +432,47 @@ mod tests {
 
     #[test]
     fn hll_ertl_p12_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLogP12<ErtlMLE>>("HllErtlP12");
+        assert_serialization_round_trip::<HyperLogLogP12<Ertl>>("HllErtlP12");
     }
 
     #[test]
     fn hllds_p12_round_trip_serialization() {
-        assert_serialization_round_trip::<HyperLogLogHIPP12>("HllDsP12");
+        assert_serialization_round_trip::<HyperLogLogHipP12>("HllDsP12");
     }
 
     #[test]
     fn hll_envelope_structure_and_kind_id_guard() {
         // ASAPv1 envelope header for an Ertl-MLE sketch: magic, version 0x01,
         // kind_id_len 2, kind_id [0x01, 0x02].
-        let mut sketch = HyperLogLog::<ErtlMLE>::default();
+        let mut sketch = HyperLogLog::<Ertl>::default();
         for value in 0..1000 {
             sketch.update(&DataInput::U64(value));
         }
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
+        let bytes = sketch.to_asapv1().expect("serialize");
 
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
         assert_eq!(&bytes[8..10], HLL_KIND_ERTL_MLE);
 
-        let decoded = HyperLogLog::<ErtlMLE>::deserialize_from_bytes(&bytes).expect("decode");
+        let decoded = HyperLogLog::<Ertl>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.registers_as_slice(), sketch.registers_as_slice());
 
         // A Classic decoder must reject Ertl-MLE bytes (kind_id mismatch).
-        assert!(HyperLogLog::<Classic>::deserialize_from_bytes(&bytes).is_err());
+        assert!(HyperLogLog::<Classic>::from_asapv1(&bytes).is_err());
     }
 
     #[test]
     fn hll_hip_round_trip_preserves_state() {
-        let mut sketch = HyperLogLogHIP::default();
+        let mut sketch = HyperLogLogHip::default();
         for value in 0..1000 {
             sketch.update(&DataInput::U64(value));
         }
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
+        let bytes = sketch.to_asapv1().expect("serialize");
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(&bytes[8..10], HLL_KIND_HIP);
 
-        let decoded = HyperLogLogHIP::deserialize_from_bytes(&bytes).expect("decode");
+        let decoded = HyperLogLogHip::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.registers.as_slice(), sketch.registers.as_slice());
         assert_eq!(decoded.kxq0, sketch.kxq0);
         assert_eq!(decoded.kxq1, sketch.kxq1);
@@ -487,14 +487,14 @@ mod tests {
         use crate::message_pack_format::portable::hll::{HllSketch, HllVariant};
 
         // Ertl-MLE / Datafusion: registers-only payload.
-        let mut native = HyperLogLog::<ErtlMLE>::default();
+        let mut native = HyperLogLog::<Ertl>::default();
         for v in 0..1000 {
             native.update(&DataInput::U64(v));
         }
-        let native_bytes = native.serialize_to_bytes().expect("native serialize");
+        let native_bytes = native.to_asapv1().expect("native serialize");
         let portable = HllSketch::from_raw(
             HllVariant::Datafusion,
-            HllBucketList::PRECISION as u32,
+            HllRegisters::PRECISION as u32,
             native.registers_as_slice().to_vec(),
             0.0,
             0.0,
@@ -506,14 +506,14 @@ mod tests {
         );
 
         // HIP: registers + three running scalars.
-        let mut hip = HyperLogLogHIP::default();
+        let mut hip = HyperLogLogHip::default();
         for v in 0..1000 {
             hip.update(&DataInput::U64(v));
         }
-        let hip_bytes = hip.serialize_to_bytes().expect("native serialize");
+        let hip_bytes = hip.to_asapv1().expect("native serialize");
         let portable_hip = HllSketch::from_raw(
             HllVariant::Hip,
-            HllBucketList::PRECISION as u32,
+            HllRegisters::PRECISION as u32,
             hip.registers.as_slice().to_vec(),
             hip.kxq0,
             hip.kxq1,
@@ -532,7 +532,7 @@ mod tests {
     // standard profile on the wire.
     //
     // Note: that an *unprofiled* hasher cannot be serialized is a compile-time
-    // guarantee — `serialize_to_bytes`/`deserialize_from_bytes` are bounded on
+    // guarantee — `to_asapv1`/`from_asapv1` are bounded on
     // `H: HashProfile`, so a hasher that impls only `SketchHasher` fails to
     // compile. There is nothing to assert at runtime.
     #[derive(Clone, Debug)]
@@ -547,19 +547,19 @@ mod tests {
         fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
             DefaultXxHasher::hash128_seeded(d, key)
         }
-        fn hash_item64_seeded(d: usize, key: &crate::HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(d: usize, key: &crate::OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(d, key)
         }
-        fn hash_item128_seeded(d: usize, key: &crate::HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(d: usize, key: &crate::OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(d, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -572,30 +572,27 @@ mod tests {
             // A deliberately different seed list so the wire bytes differ.
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = crate::CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = crate::DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
     #[test]
     fn hll_custom_hasher_profile_round_trips_and_is_self_describing() {
         // (a) An HLL built with a custom-profile hasher round-trips.
-        let mut alt = HyperLogLogImpl::<ErtlMLE, HllBucketListP14, AltHasher>::default();
-        let mut std = HyperLogLog::<ErtlMLE>::default();
+        let mut alt = HyperLogLogImpl::<Ertl, HllRegistersP14, AltHasher>::default();
+        let mut std = HyperLogLog::<Ertl>::default();
         for v in 0..1000 {
             alt.update(&DataInput::U64(v));
             std.update(&DataInput::U64(v));
         }
-        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
-        let decoded =
-            HyperLogLogImpl::<ErtlMLE, HllBucketListP14, AltHasher>::deserialize_from_bytes(
-                &alt_bytes,
-            )
+        let alt_bytes = alt.to_asapv1().expect("alt serialize");
+        let decoded = HyperLogLogImpl::<Ertl, HllRegistersP14, AltHasher>::from_asapv1(&alt_bytes)
             .expect("alt decode");
         assert_eq!(decoded.registers_as_slice(), alt.registers_as_slice());
 
         // (b) Its bytes differ from the DefaultXxHasher sketch's bytes: the
         // metadata is derived from the (different) profile, so it is not a lie.
-        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        let std_bytes = std.to_asapv1().expect("std serialize");
         assert_ne!(
             alt_bytes, std_bytes,
             "a custom profile must serialize different metadata than the standard profile"
@@ -604,7 +601,7 @@ mod tests {
         // (c) Decoding AltHasher bytes into a DefaultXxHasher-typed HLL fails
         // closed (profile mismatch), never silently accepted.
         assert!(
-            HyperLogLog::<ErtlMLE>::deserialize_from_bytes(&alt_bytes).is_err(),
+            HyperLogLog::<Ertl>::from_asapv1(&alt_bytes).is_err(),
             "standard-profile decode must reject custom-profile bytes"
         );
     }
@@ -652,9 +649,9 @@ mod tests {
         for v in 0..100 {
             p12.update(&DataInput::U64(v));
         }
-        let bytes = p12.serialize_to_bytes().expect("serialize");
+        let bytes = p12.to_asapv1().expect("serialize");
         assert!(
-            HyperLogLog::<Classic>::deserialize_from_bytes(&bytes).is_err(),
+            HyperLogLog::<Classic>::from_asapv1(&bytes).is_err(),
             "P12 bytes must be rejected by a P14 decoder"
         );
     }
@@ -674,26 +671,26 @@ mod tests {
     /// the HIP shift.
     #[test]
     fn hll_rejects_out_of_range_register_values() {
-        const P14_MAX: u8 = (HllBucketListP14::REGISTER_BITS + 1) as u8; // 51
-        const P12_MAX: u8 = (HllBucketListP12::REGISTER_BITS + 1) as u8; // 53
+        const P14_MAX: u8 = (HllRegistersP14::RANK_HASH_BITS + 1) as u8; // 51
+        const P12_MAX: u8 = (HllRegistersP12::RANK_HASH_BITS + 1) as u8; // 53
 
         let bin = |len: usize, rank: u8| {
             let mut registers = vec![0u8; len];
             registers[7] = rank;
             registers
         };
-        let p14 = HllBucketListP14::NUM_REGISTERS;
-        let p12 = HllBucketListP12::NUM_REGISTERS;
+        let p14 = HllRegistersP14::NUM_REGISTERS;
+        let p12 = HllRegistersP12::NUM_REGISTERS;
 
         // The bound itself decodes, one past it does not — for both estimators
         // sharing the plain payload, and at a second precision.
         let ok = crafted_plain(HLL_KIND_CLASSIC, 14, bin(p14, P14_MAX));
-        assert!(HyperLogLog::<Classic>::deserialize_from_bytes(&ok).is_ok());
+        assert!(HyperLogLog::<Classic>::from_asapv1(&ok).is_ok());
         let ok = crafted_plain(HLL_KIND_ERTL_MLE, 12, bin(p12, P12_MAX));
-        assert!(HyperLogLogP12::<ErtlMLE>::deserialize_from_bytes(&ok).is_ok());
+        assert!(HyperLogLogP12::<Ertl>::from_asapv1(&ok).is_ok());
 
         let over = crafted_plain(HLL_KIND_CLASSIC, 14, bin(p14, P14_MAX + 1));
-        let problem = HyperLogLog::<Classic>::deserialize_from_bytes(&over)
+        let problem = HyperLogLog::<Classic>::from_asapv1(&over)
             .expect_err("a register past the maximum rank must be rejected")
             .to_string();
         assert!(
@@ -703,12 +700,12 @@ mod tests {
 
         let over = crafted_plain(HLL_KIND_ERTL_MLE, 14, bin(p14, u8::MAX));
         assert!(
-            HyperLogLog::<ErtlMLE>::deserialize_from_bytes(&over).is_err(),
+            HyperLogLog::<Ertl>::from_asapv1(&over).is_err(),
             "a register past the Ertl histogram must be rejected"
         );
 
         let over = crafted_plain(HLL_KIND_ERTL_MLE, 12, bin(p12, P12_MAX + 1));
-        let problem = HyperLogLogP12::<ErtlMLE>::deserialize_from_bytes(&over)
+        let problem = HyperLogLogP12::<Ertl>::from_asapv1(&over)
             .expect_err("a register past the maximum rank must be rejected")
             .to_string();
         assert!(
@@ -726,7 +723,7 @@ mod tests {
         })
         .expect("payload");
         let over = envelope::encode(HLL_KIND_HIP, &metadata, &payload);
-        let problem = HyperLogLogHIP::deserialize_from_bytes(&over)
+        let problem = HyperLogLogHip::from_asapv1(&over)
             .expect_err("a register past the maximum rank must be rejected")
             .to_string();
         assert!(
@@ -740,24 +737,24 @@ mod tests {
     /// such a sketch has no encoding rather than bytes its own decoder refuses.
     #[test]
     fn hll_refuses_to_serialize_an_out_of_range_register() {
-        use crate::octo_delta::HllDelta;
-        const P14_MAX: u8 = (HllBucketListP14::REGISTER_BITS + 1) as u8; // 51
+        use crate::octo_delta::HllRegisterDelta;
+        const P14_MAX: u8 = (HllRegistersP14::RANK_HASH_BITS + 1) as u8; // 51
 
         let mut classic = HyperLogLog::<Classic>::default();
-        classic.apply_delta(HllDelta {
+        classic.apply_delta(HllRegisterDelta {
             pos: 7,
             value: P14_MAX,
         });
         assert!(
-            classic.serialize_to_bytes().is_ok(),
+            classic.to_asapv1().is_ok(),
             "the bound itself must still serialize"
         );
-        classic.apply_delta(HllDelta {
+        classic.apply_delta(HllRegisterDelta {
             pos: 7,
             value: P14_MAX + 1,
         });
         let problem = classic
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a register past the maximum rank must not serialize")
             .to_string();
         assert!(
@@ -765,23 +762,23 @@ mod tests {
             "got {problem}"
         );
 
-        let mut ertl = HyperLogLog::<ErtlMLE>::default();
-        ertl.apply_delta(HllDelta {
+        let mut ertl = HyperLogLog::<Ertl>::default();
+        ertl.apply_delta(HllRegisterDelta {
             pos: 7,
             value: u8::MAX,
         });
         assert!(
-            ertl.serialize_to_bytes().is_err(),
+            ertl.to_asapv1().is_err(),
             "a register past the Ertl histogram must not serialize"
         );
 
-        let mut p12 = HyperLogLogP12::<ErtlMLE>::default();
-        p12.apply_delta(HllDelta {
+        let mut p12 = HyperLogLogP12::<Ertl>::default();
+        p12.apply_delta(HllRegisterDelta {
             pos: 7,
-            value: (HllBucketListP12::REGISTER_BITS + 2) as u8,
+            value: (HllRegistersP12::RANK_HASH_BITS + 2) as u8,
         });
         let problem = p12
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a register past the maximum rank must not serialize")
             .to_string();
         assert!(
@@ -790,10 +787,10 @@ mod tests {
         );
 
         // HIP carries the same bin and is held to the same bound.
-        let mut hip = HyperLogLogHIP::default();
+        let mut hip = HyperLogLogHip::default();
         hip.registers.as_mut_slice()[7] = P14_MAX + 1;
         let problem = hip
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a register past the maximum rank must not serialize")
             .to_string();
         assert!(
@@ -805,13 +802,13 @@ mod tests {
     /// A Classic decoder rejects HIP bytes (kind_id mismatch).
     #[test]
     fn hll_hip_kind_id_rejected_by_classic() {
-        let mut hip = HyperLogLogHIP::default();
+        let mut hip = HyperLogLogHip::default();
         for v in 0..100 {
             hip.update(&DataInput::U64(v));
         }
-        let bytes = hip.serialize_to_bytes().expect("serialize");
+        let bytes = hip.to_asapv1().expect("serialize");
         assert!(
-            HyperLogLog::<Classic>::deserialize_from_bytes(&bytes).is_err(),
+            HyperLogLog::<Classic>::from_asapv1(&bytes).is_err(),
             "HIP bytes must be rejected by a Classic decoder"
         );
     }

@@ -26,7 +26,7 @@ to incomplete logical candidate sets.
 - `UnivMonQ<H = DefaultXxHasher>`
 - `UnivMonQQuery<'a, H = DefaultXxHasher>`
 - `UnivMonQConfig`
-- `UnivMonQPoint`
+- `UnivMonQCdfEntry`
 - `UnivMonQError`
 
 ## Constructors
@@ -34,7 +34,7 @@ to incomplete logical candidate sets.
 ```rust
 fn default() -> Self
 fn new(config: UnivMonQConfig) -> Result<Self, UnivMonQError>
-fn new_with_source_id(config: UnivMonQConfig, source_id: u64)
+fn with_source_id(config: UnivMonQConfig, source_id: u64)
     -> Result<Self, UnivMonQError>
 fn with_hasher(config: UnivMonQConfig) -> Result<Self, UnivMonQError>
 fn with_hasher_and_source_id(config: UnivMonQConfig, source_id: u64)
@@ -42,7 +42,7 @@ fn with_hasher_and_source_id(config: UnivMonQConfig, source_id: u64)
 ```
 
 `new` selects `DefaultXxHasher` and allocates a process-local source ID. Use
-`new_with_source_id` with a stable, globally unique partition or shard ID for
+`with_source_id` with a stable, globally unique partition or shard ID for
 distributed or cross-process merging. The `with_hasher` variants provide the
 same choices for a custom hash implementation.
 
@@ -79,21 +79,21 @@ fn max(&self) -> Option<f64>
 fn source_id(&self) -> u64
 
 fn estimate_frequency(&self, value: f64) -> u64
-fn estimate_distinct(&self) -> f64
+fn estimate_cardinality(&self) -> f64
 fn estimate_f2(&self) -> f64
 fn estimate_l1(&self) -> f64
 fn estimate_g_sum<F>(&self, g: F) -> f64 where F: Fn(f64) -> f64
 fn estimate_entropy(&self) -> f64
-fn estimate_entropy_universal(&self) -> f64
-fn estimate_entropy_occurrence(&self) -> Option<f64>
+fn estimate_entropy_from_g_sum(&self) -> f64
+fn estimate_entropy_from_samples(&self) -> Option<f64>
 fn heavy_hitters(&self, k: usize) -> Vec<(f64, u64)>
 
-fn estimate_rank_universal(&self, value: f64) -> Option<u64>
+fn estimate_rank_from_g_sum(&self, value: f64) -> Option<u64>
 fn rank(&self, value: f64) -> Option<u64>
 fn quantile(&self, q: f64) -> Option<f64>
 fn quantiles(&self, quantiles: &[f64]) -> Vec<Option<f64>>
 fn get_value_at_quantile(&self, q: f64) -> Option<f64>
-fn cdf(&self) -> Vec<UnivMonQPoint>
+fn cdf(&self) -> Vec<UnivMonQCdfEntry>
 fn prepare_queries(&self) -> UnivMonQQuery<'_, H>
 fn estimated_memory_bytes(&self) -> usize
 ```
@@ -118,7 +118,7 @@ multiple metrics from one snapshot:
 
 ```rust
 let query = sketch.prepare_queries();
-let f0 = query.estimate_distinct();
+let f0 = query.estimate_cardinality();
 let f2 = query.estimate_f2();
 let entropy = query.estimate_entropy();
 let percentiles = query.quantiles(&[0.5, 0.9, 0.99]);
@@ -128,7 +128,7 @@ let cdf = query.cdf();
 The direct methods remain convenient for isolated queries. `quantiles` is the
 batched alternative to repeated `quantile` calls and constructs the CDF once.
 
-`estimate_rank_universal(x)` is the most direct extension of the original
+`estimate_rank_from_g_sum(x)` is the most direct extension of the original
 UnivMon construction. It evaluates the key-dependent separable function
 `g_x(v, f_v) = f_v * I[v <= x]` through the usual sampled-level recurrence and
 does not require `ordered_samples`. It is intended for a small, predetermined
@@ -172,7 +172,7 @@ experimental.
 
 There are two rank mechanisms with different guarantee boundaries:
 
-1. `estimate_rank_universal(x)` stays within the original UnivMon hierarchy.
+1. `estimate_rank_from_g_sum(x)` stays within the original UnivMon hierarchy.
    Subject to the standard L2-heavy recovery assumptions, it estimates one
    fixed threshold using the same recurrence as other separable sums. In a
    diffuse stream its additive error has the sampling scale `N / sqrt(k)`, so
@@ -217,7 +217,7 @@ use KLL when optimal quantile-only space is the primary requirement.
 fn merge(&mut self, other: &Self) -> Result<(), UnivMonQError>
 ```
 
-Merges require identical dimensions and `hash_seed`, the same compile-time
+Merges require identical dimensions and `seed_index`, the same compile-time
 hasher type, and globally unique occurrence source IDs. Terminal counters add,
 candidate identities are unioned and rescored from the merged CountSketch,
 eviction history is ORed with any merge-time truncation, and occurrence samples
@@ -233,8 +233,8 @@ as the numeric observation, like the existing KLL adapter.
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 These produce/consume the **ASAPv1** wire envelope (kind `0x1a 0x00`) — see the
@@ -266,8 +266,8 @@ use asap_sketchlib::{UnivMonQ, UnivMonQConfig};
 
 let config = UnivMonQConfig::default()
     .with_window_bound(100_000, 1e-6)?;
-let mut left = UnivMonQ::new_with_source_id(config, 10)?;
-let mut right = UnivMonQ::new_with_source_id(config, 20)?;
+let mut left = UnivMonQ::with_source_id(config, 10)?;
+let mut right = UnivMonQ::with_source_id(config, 20)?;
 
 for value in 0..50_000 {
     left.add(&value);
@@ -278,7 +278,7 @@ for value in 50_000..100_000 {
 left.merge(&right)?;
 
 assert!(left.quantile(0.5).is_some());
-assert!(left.estimate_distinct() > 0.0);
+assert!(left.estimate_cardinality() > 0.0);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

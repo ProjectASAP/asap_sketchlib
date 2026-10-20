@@ -6,7 +6,7 @@ Status: `Ready`
 
 Group multiple compatible sketches that share a hash layout so the hash is
 computed once per insert and fanned out to every sketch in the ensemble.
-Supports both frequency sketches (CountMin, Count) and cardinality sketches
+Supports both frequency sketches (CountMinSketch, Count) and cardinality sketches
 (HyperLogLog variants).
 
 ### Quick Example
@@ -17,9 +17,9 @@ use asap_sketchlib::HashSketchEnsemble;
 
 // Two CMS + one HLL sharing one hash per insert
 let mut ensemble = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
-    CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
-    CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
-    HyperLogLog::<ErtlMLE>::default().into(),
+    CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+    CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+    HyperLogLog::<Ertl>::default().into(),
 ]).unwrap();
 
 // Insert — hashes once, updates all 3 sketches
@@ -44,8 +44,8 @@ coordination:
 
 ```rust
 let hash = hash_for_matrix_seeded_generic::<MyHasher>(0, rows, cols, &input);
-cms_a.fast_insert_with_hash_value(&hash);
-cms_b.fast_insert_with_hash_value(&hash);
+cms_a.update_with_hash(&hash);
+cms_b.update_with_hash(&hash);
 hll.update_with_hash(hash.lower_64());
 ```
 
@@ -56,15 +56,15 @@ uniform insert/query API.
 ## Types
 
 - `HashSketchEnsemble<H = DefaultXxHasher>` — the ensemble container, generic over the hasher.
-- `EnsembleSketch` — enum wrapping the sketch variants that can live inside an ensemble: `CountMinFast`, `CountFast`, `HllErtl`, `HllClassic`, `HllHip`.
+- `EnsembleSketch` — enum wrapping the sketch variants that can live inside an ensemble: `CountMinFast`, `CountSketchFast`, `HllErtl`, `HllClassic`, `HllHip`.
 
 ## Compatible Sketches
 
 Only sketches with a prehashed insertion path are accepted:
 
-- `CountMin<_, FastPath, _>` — Count-Min Sketch (fast path)
+- `CountMinSketch<_, FastPath, _>` — Count-Min Sketch (fast path)
 - `Count<_, FastPath, _>` — Count (Count Sketch, fast path)
-- `HyperLogLog<ErtlMLE>` / `HyperLogLog<Classic>` / `HyperLogLogHIP`
+- `HyperLogLog<Ertl>` / `HyperLogLog<Classic>` / `HyperLogLogHip`
 
 All matrix-backed sketches (CMS / `Count`) in one ensemble must share the same hash layout (rows × cols dimensions). HLL sketches can coexist with them because they only consume the lower 64 bits of the shared hash.
 
@@ -79,15 +79,15 @@ Sketches are converted into `EnsembleSketch` via `From` impls, so you can use `.
 
 ```rust
 use asap_sketchlib::{
-    CountMin, Count, FastPath, Vector2D, DefaultXxHasher,
-    HyperLogLog, ErtlMLE,
+    CountMinSketch, Count, FastPath, Vector2D, DefaultXxHasher,
+    HyperLogLog, Ertl,
 };
 use asap_sketchlib::sketch_framework::hashlayer::{EnsembleSketch, HashSketchEnsemble};
 
 let ensemble = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
-    CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+    CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
     Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
-    HyperLogLog::<ErtlMLE>::default().into(),
+    HyperLogLog::<Ertl>::default().into(),
 ]).expect("compatible sketches");
 ```
 

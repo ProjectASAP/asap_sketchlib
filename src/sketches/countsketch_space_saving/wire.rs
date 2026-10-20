@@ -1,6 +1,6 @@
-//! ASAPv1 wire serialization for CSSpaceSaving (kind_id `0x1f 0x00`,
+//! ASAPv1 wire serialization for CountSketchWithSpaceSaving (kind_id `0x1f 0x00`,
 //! `docs/asapv1_wire_format.md` §3.25), through the encoding it shares with
-//! CMSSpaceSaving.
+//! CountMinSketchWithSpaceSaving.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
@@ -12,12 +12,12 @@ use crate::sketches::countminsketch_space_saving::summary_wire::{
 use crate::sketches::countsketch::{CountSketchCounter, CsWireCounter, CsWireMode};
 use crate::{Count, HashProfile, SketchHasher, Vector2D};
 
-use super::CSSpaceSaving;
+use super::CountSketchWithSpaceSaving;
 
-/// CSSpaceSaving kind_id: family `0x1f`, variant `0x00`.
+/// CountSketchWithSpaceSaving kind_id: family `0x1f`, variant `0x00`.
 const CS_SPACE_SAVING_KIND: &[u8] = &[0x1f, 0x00];
 
-impl<T, Mode, H> CSSpaceSaving<Vector2D<T>, Mode, H>
+impl<T, Mode, H> CountSketchWithSpaceSaving<Vector2D<T>, Mode, H>
 where
     T: CsWireCounter + CountSketchCounter + Serialize + for<'de> Deserialize<'de>,
     Mode: CsWireMode,
@@ -33,7 +33,7 @@ where
     /// Serializes the sketch into an ASAPv1 envelope (kind_id `0x1f 0x00`). Fails
     /// when the matrix samples its updates or the state breaks a §3.24 decode
     /// rule, and on mixed-variant or 128-bit keys.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         admission_rate::check_admits_all(self.cs.admission_rate())
             .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CSSpaceSaving envelope: {e}")))?;
         summary_wire::encode::<T, H>(
@@ -48,7 +48,7 @@ where
     /// Deserializes a sketch from an ASAPv1 envelope. The hash spec, counter
     /// type and mode are pinned against this target; `rows`, `cols`,
     /// `capacity` and `key_type` are echoed back.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let DecodedSummaryTopK {
             rows,
             cols,
@@ -56,7 +56,7 @@ where
             summary,
         } = summary_wire::decode::<T, H>(&Self::KIND, bytes)?;
         let storage = Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]);
-        Ok(CSSpaceSaving {
+        Ok(CountSketchWithSpaceSaving {
             cs: Count::from_storage(storage),
             summary,
         })
@@ -67,11 +67,11 @@ where
 mod tests {
     use super::*;
     use crate::{
-        CMSSpaceSaving, CSHeap, DataInput, DefaultXxHasher, FastPath, HeapItem, RegularPath,
-        SpaceSaving,
+        CountMinSketchWithSpaceSaving, CountSketchWithHeap, DataInput, DefaultXxHasher, FastPath,
+        OwnedDataInput, RegularPath, SpaceSaving,
     };
 
-    type Target = CSSpaceSaving<Vector2D<i64>, RegularPath>;
+    type Target = CountSketchWithSpaceSaving<Vector2D<i64>, RegularPath>;
 
     #[test]
     fn round_trip_keeps_matrix_summary_and_bytes() {
@@ -79,55 +79,59 @@ mod tests {
         for (key, weight) in [(1u64, 9i64), (2, 5), (3, -4), (4, 2)] {
             sketch.update_weighted(&DataInput::U64(key), weight);
         }
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
+        let encoded = sketch.to_asapv1().expect("serialize");
         assert_eq!(&encoded[7..10], &[2u8, 0x1f, 0x00]);
 
-        let decoded = Target::deserialize_from_bytes(&encoded).expect("decode");
+        let decoded = Target::from_asapv1(&encoded).expect("decode");
         assert_eq!(
             decoded.cs().as_storage().as_slice(),
             sketch.cs().as_storage().as_slice()
         );
         assert_eq!(
             decoded.space_saving().emitted_entries(),
-            vec![(&HeapItem::U64(1), 9, 0), (&HeapItem::U64(4), 7, 5)]
+            vec![
+                (&OwnedDataInput::U64(1), 9, 0),
+                (&OwnedDataInput::U64(4), 7, 5)
+            ]
         );
         assert_eq!(decoded.top_k(2), sketch.top_k(2));
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), encoded);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
     }
 
     #[test]
     fn f64_counters_round_trip_on_the_fast_path() {
-        let mut sketch = CSSpaceSaving::<Vector2D<f64>, FastPath>::new(3, 16, 4);
+        let mut sketch = CountSketchWithSpaceSaving::<Vector2D<f64>, FastPath>::new(3, 16, 4);
         sketch.update_weighted(&DataInput::I32(-7), 2.5);
         sketch.update_weighted(&DataInput::I32(3), 0.25);
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
-        let decoded = CSSpaceSaving::<Vector2D<f64>, FastPath>::deserialize_from_bytes(&encoded)
+        let encoded = sketch.to_asapv1().expect("serialize");
+        let decoded = CountSketchWithSpaceSaving::<Vector2D<f64>, FastPath>::from_asapv1(&encoded)
             .expect("f64");
         assert_eq!(decoded.estimate(&DataInput::I32(-7)), 2.5);
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), encoded);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
         assert!(
-            CSSpaceSaving::<Vector2D<f64>, RegularPath>::deserialize_from_bytes(&encoded).is_err()
+            CountSketchWithSpaceSaving::<Vector2D<f64>, RegularPath>::from_asapv1(&encoded)
+                .is_err()
         );
         assert!(
-            CSSpaceSaving::<Vector2D<i64>, FastPath>::deserialize_from_bytes(&encoded).is_err()
+            CountSketchWithSpaceSaving::<Vector2D<i64>, FastPath>::from_asapv1(&encoded).is_err()
         );
     }
 
     #[test]
     fn foreign_kind_ids_are_rejected() {
-        let cms_ss = CMSSpaceSaving::<Vector2D<i64>, RegularPath>::new(3, 8, 2);
-        let cs_heap = CSHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 2);
+        let cms_ss = CountMinSketchWithSpaceSaving::<Vector2D<i64>, RegularPath>::new(3, 8, 2);
+        let cs_heap = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 2);
         let count = Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
         for (bytes, what) in [
             (
-                cms_ss.serialize_to_bytes().expect("CMSSpaceSaving"),
+                cms_ss.to_asapv1().expect("CMSSpaceSaving"),
                 "CMSSpaceSaving",
             ),
-            (cs_heap.serialize_to_bytes().expect("CSHeap"), "CSHeap"),
-            (count.serialize_to_bytes().expect("Count"), "Count Sketch"),
+            (cs_heap.to_asapv1().expect("CSHeap"), "CSHeap"),
+            (count.to_asapv1().expect("Count"), "Count Sketch"),
         ] {
             assert!(
-                Target::deserialize_from_bytes(&bytes).is_err(),
+                Target::from_asapv1(&bytes).is_err(),
                 "{what} bytes must not decode as a CSSpaceSaving"
             );
         }
@@ -139,6 +143,6 @@ mod tests {
             Count::with_dimensions(3, 8).with_admission_rate(0.25),
             SpaceSaving::<DefaultXxHasher>::with_capacity(2),
         );
-        assert!(sampled.serialize_to_bytes().is_err());
+        assert!(sampled.to_asapv1().is_err());
     }
 }

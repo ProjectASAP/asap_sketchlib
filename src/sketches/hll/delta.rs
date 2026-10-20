@@ -69,7 +69,7 @@ where
     }
 
     /// Serializes the delta into an ASAPv1 MessagePack envelope.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata = encode_metadata::<Registers, H>(self.admission_rate)?;
         let payload = rmp_serde::to_vec(&HllDeltaPayload {
             indices: self.indices.clone(),
@@ -83,7 +83,7 @@ where
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (payload, admission_rate) = validated_hll_payload::<H>(
             bytes,
             &delta_kind::<Variant>(),
@@ -120,13 +120,13 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 mod tests {
     use super::*;
     use crate::sketches::hll::Classic;
-    use crate::structures::fixed_structure::{HllBucketListP12, HllBucketListP14};
+    use crate::structures::fixed_structure::{HllRegistersP12, HllRegistersP14};
 
-    type Delta = HyperLogLogDelta<Classic, HllBucketListP14>;
+    type Delta = HyperLogLogDelta<Classic, HllRegistersP14>;
 
     /// A P14 Classic delta envelope around the given indices and registers.
     fn delta_bytes(indices: &[u64], registers: &[u8]) -> Vec<u8> {
-        let metadata = encode_metadata::<HllBucketListP14, DefaultXxHasher>(1.0).unwrap();
+        let metadata = encode_metadata::<HllRegistersP14, DefaultXxHasher>(1.0).unwrap();
         let payload = rmp_serde::to_vec(&HllDeltaPayload {
             indices: indices.to_vec(),
             registers: registers.to_vec(),
@@ -137,14 +137,14 @@ mod tests {
 
     #[test]
     fn decode_rejects_each_payload_rule() {
-        assert!(Delta::deserialize_from_bytes(&delta_bytes(&[0, 16383], &[1, 51])).is_ok());
+        assert!(Delta::from_asapv1(&delta_bytes(&[0, 16383], &[1, 51])).is_ok());
         let rows: [(&str, &[u64], &[u8]); 2] = [
             ("index 2^precision", &[16384], &[1]),
             ("register past the maximum rank", &[0], &[52]),
         ];
         for (label, indices, registers) in rows {
             assert!(
-                Delta::deserialize_from_bytes(&delta_bytes(indices, registers)).is_err(),
+                Delta::from_asapv1(&delta_bytes(indices, registers)).is_err(),
                 "{label}"
             );
         }
@@ -153,9 +153,7 @@ mod tests {
     #[test]
     fn decode_pins_the_precision() {
         let delta = delta_bytes(&[0], &[1]);
-        assert!(Delta::deserialize_from_bytes(&delta).is_ok());
-        assert!(
-            HyperLogLogDelta::<Classic, HllBucketListP12>::deserialize_from_bytes(&delta).is_err()
-        );
+        assert!(Delta::from_asapv1(&delta).is_ok());
+        assert!(HyperLogLogDelta::<Classic, HllRegistersP12>::from_asapv1(&delta).is_err());
     }
 }

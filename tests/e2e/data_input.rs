@@ -1,6 +1,6 @@
 use asap_sketchlib::{
-    Bloom, Classic, Count, CountMin, DDSketch, DataInput, FastPath, HyperLogLog, KLL, RegularPath,
-    SpaceSaving, Vector2D, hash64_seeded, hash128_seeded,
+    Bloom, Classic, Count, CountMinSketch, DataInput, DdSketch, FastPath, HyperLogLog, Kll,
+    RegularPath, SpaceSaving, Vector2D, hash64_seeded, hash128_seeded,
 };
 
 const SEEDS: [usize; 4] = [0, 1, 3, 7];
@@ -12,13 +12,13 @@ fn every_variant() -> Vec<(&'static str, DataInput<'static>)> {
         ("I32", DataInput::I32(-32)),
         ("I64", DataInput::I64(-64)),
         ("I128", DataInput::I128(-128)),
-        ("ISIZE", DataInput::ISIZE(-1_000)),
+        ("ISIZE", DataInput::Isize(-1_000)),
         ("U8", DataInput::U8(8)),
         ("U16", DataInput::U16(16)),
         ("U32", DataInput::U32(32)),
         ("U64", DataInput::U64(64)),
         ("U128", DataInput::U128(128)),
-        ("USIZE", DataInput::USIZE(1_000)),
+        ("USIZE", DataInput::Usize(1_000)),
         ("F32", DataInput::F32(1.5)),
         ("F64", DataInput::F64(2.5)),
         ("Str", DataInput::Str("borrowed")),
@@ -93,7 +93,7 @@ fn signed_integer_variants_sign_extend_to_one_canonical_digest() {
             &format!("I32({probe}) must sign-extend onto I64"),
         );
         assert_same_digest(
-            &DataInput::ISIZE(probe as isize),
+            &DataInput::Isize(probe as isize),
             &widened,
             &format!("ISIZE({probe}) must sign-extend onto I64"),
         );
@@ -120,7 +120,7 @@ fn unsigned_integer_variants_zero_extend_to_one_canonical_digest() {
             &format!("U32({probe}) must zero-extend onto U64"),
         );
         assert_same_digest(
-            &DataInput::USIZE(probe as usize),
+            &DataInput::Usize(probe as usize),
             &widened,
             &format!("USIZE({probe}) must zero-extend onto U64"),
         );
@@ -226,8 +226,8 @@ fn the_string_and_byte_variants_share_one_digest_for_one_encoding() {
 
 #[test]
 fn count_min_answers_every_variant_and_folds_the_aliasing_ones_together() {
-    let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(4, 4_096);
-    let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(4, 4_096);
+    let mut regular = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(4, 4_096);
+    let mut fast = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(4, 4_096);
     for (name, value) in every_variant() {
         for _ in 0..10 {
             regular.update(&value);
@@ -243,7 +243,7 @@ fn count_min_answers_every_variant_and_folds_the_aliasing_ones_together() {
         );
     }
 
-    let mut aliasing = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(4, 4_096);
+    let mut aliasing = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(4, 4_096);
     for _ in 0..5 {
         aliasing.update(&DataInput::I8(7));
         aliasing.update(&DataInput::U16(7));
@@ -350,19 +350,19 @@ fn the_numeric_variants_reach_the_quantile_sketches_and_the_others_are_refused()
         ("I32", DataInput::I32(3)),
         ("I64", DataInput::I64(4)),
         ("I128", DataInput::I128(5)),
-        ("ISIZE", DataInput::ISIZE(6)),
+        ("ISIZE", DataInput::Isize(6)),
         ("U8", DataInput::U8(7)),
         ("U16", DataInput::U16(8)),
         ("U32", DataInput::U32(9)),
         ("U64", DataInput::U64(10)),
         ("U128", DataInput::U128(11)),
-        ("USIZE", DataInput::USIZE(12)),
+        ("USIZE", DataInput::Usize(12)),
         ("F32", DataInput::F32(13.0)),
         ("F64", DataInput::F64(14.0)),
     ];
 
-    let mut kll: KLL<f64> = KLL::init_kll_with_seed(200, 0xDA7A_0001);
-    let mut dds = DDSketch::new(0.01);
+    let mut kll: Kll<f64> = Kll::with_k_and_seed(200, 0xDA7A_0001);
+    let mut dds = DdSketch::new(0.01);
     for (name, value) in &numeric {
         kll.update_data_input(value)
             .unwrap_or_else(|e| panic!("{name}: KLL refused a numeric variant: {e}"));

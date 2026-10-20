@@ -19,7 +19,7 @@ is about to overflow. The counters stay narrow; the exponent buys the range.
 
 ## Type/Struct
 
-- `MicroCM<H = DefaultXxHasher>` — a Count-Min-shaped grid of cells.
+- `MicroCm<H = DefaultXxHasher>` — a Count-Min-shaped grid of cells.
 - `MicroParams { t, c }` — sub-windows per window, and the zoom base.
 - `SubWindowClock` — `CountBased` or `TimeBased`.
 - `DeltaStrategy` — `Over`, `Under`, `Linear(f64)`.
@@ -47,7 +47,7 @@ every row to the same cell — and `rows * log2(cols)` must not exceed 128.
 would collapse every byte-wide pixel to 0 or 1. `rounding_seed` seeds the probabilistic rounding a
 zoom-out uses; a fixed value makes a run reproducible.
 
-`MicroCM::default()` is a 4 x 1024 grid at `T = 12`, `c = 2`, over
+`MicroCm::default()` is a 4 x 1024 grid at `T = 12`, `c = 2`, over
 count-based sub-windows of 4096 items.
 
 ## Insert/Update
@@ -112,8 +112,8 @@ clocks would add unrelated sub-windows. `self` is untouched on error.
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 Plain MessagePack, **not** an ASAPv1 envelope: no `kind_id` is allocated while
@@ -152,11 +152,11 @@ up to a multiple of four: 20 bytes at `T = 12`, 8 bytes at `T = 1`.
 ## Examples
 
 ```rust
-use asap_sketchlib::sketches::microscope::{DeltaStrategy, MicroCM, MicroParams, SubWindowClock};
+use asap_sketchlib::sketches::microscope::{DeltaStrategy, MicroCm, MicroParams, SubWindowClock};
 use asap_sketchlib::DataInput;
 
 // A window of 8 sub-windows of 1000 items: the last ~8000 items.
-let mut sk: MicroCM = MicroCM::with_dimensions(
+let mut sk: MicroCm = MicroCm::with_dimensions(
     4,
     1024,
     MicroParams::new(8, 2),

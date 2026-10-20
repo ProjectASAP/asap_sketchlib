@@ -29,16 +29,16 @@ Every serialized sketch is one self-delimiting envelope:
   keys). A sketch that never hashes its inputs omits the hash-spec group
   entirely and carries structural params alone — KLL, DDSketch and
   UniformSampling, plus the two wrappers `ExponentialHistogram` and
-  `EHSketchList`, whose hash specs live inside the sketch each one carries.
+  `EhBucketSketch`, whose hash specs live inside the sketch each one carries.
 - **Payload** — a positional msgpack **array** of the raw sketch state only
   (registers, counter matrix). No field names, and nothing the `kind_id` or
   metadata already determines.
 - **A nested sketch is inlined, not wrapped in an envelope of its own.** A
-  CMSHeap's base matrix, an Elastic's light Count-Min, a Hydra cell and a
+  CountMinSketchWithHeap's base matrix, an Elastic's light Count-Min, a Hydra cell and a
   UnivMon layer all write their raw state straight into the enclosing positional
   array. Where the nested algorithm is data rather than a type, the nested block
   is that variant's own envelope with the framing stripped: the
-  `[kind_id, descriptor, state]` triple `EHSketchList` carries and
+  `[kind_id, descriptor, state]` triple `EhBucketSketch` carries and
   `ExponentialHistogram` inlines per bucket.
 
 `kind_id` + metadata together fix the payload structure completely. See
@@ -65,7 +65,7 @@ Serialization lives **with each sketch**, split from the algorithm, under
   insert/estimate/merge). It declares `mod wire;`.
 - `<sketch>/wire.rs` — the **serialization** (metadata/payload DTOs,
   `kind_id` consts, wire-variant/counter/mode marker traits, and the
-  `serialize_to_bytes` / `deserialize_from_bytes` impls). Because `wire` is a
+  `to_asapv1` / `from_asapv1` impls). Because `wire` is a
   child submodule of the sketch, it reads the struct's **private** fields
   (`self.registers`, `self.counts`) directly — no field is widened for
   serialization.
@@ -73,10 +73,10 @@ Serialization lives **with each sketch**, split from the algorithm, under
 Two encodings are shared by more than one sketch and live in a second module
 beside `wire.rs`, declared `pub(crate)` so the other user can import it by path:
 
-- `src/sketches/countminsketch_topk/heap_wire.rs` — the top-k heap metadata
+- `src/sketches/countminsketch_heap/heap_wire.rs` — the top-k heap metadata
   schema, payload, `key_type` mapping, emitted order and heap rebuild that
-  CMSHeap (`0x03 0x00`) and CSHeap (`0x0a 0x00`) share.
-- `src/sketches/countsketch_topk/l2hh_wire.rs` — CountL2HH (`0x19 0x00`), plus
+  CountMinSketchWithHeap (`0x03 0x00`) and CountSketchWithHeap (`0x0a 0x00`) share.
+- `src/sketches/countsketch_heap/l2hh_wire.rs` — CountSketchWithL2Norm (`0x19 0x00`), plus
   the `[counts, l2]` layer sub-payload the whole UnivMon family inlines.
 
 Converted:
@@ -88,7 +88,7 @@ Converted:
   profile only.)
 - **Count-Min** (`src/sketches/countminsketch/wire.rs`, kind `0x02 0x00`) —
   restricted to wire-eligible configs:
-  `CountMin<Vector2D<T>, Mode, H>` where `T` is `i32`, `i64` or `f64`
+  `CountMinSketch<Vector2D<T>, Mode, H>` where `T` is `i32`, `i64` or `f64`
   (`CmsWireCounter`), `Mode` is `FastPath` or `RegularPath` (`CmsWireMode`), and
   `H: HashProfile`. `i32` is carried at its own width rather than widened.
   `i128` and non-`Vector2D` storage must be converted first. `rows`
@@ -112,8 +112,8 @@ Converted:
 - **Space-Saving** (`src/sketches/space_saving/wire.rs`, kind `0x18 0x00`) — the
   payload is the `(key, count, error)` triples plus `total` and `discarded_max`; the
   Stream-Summary's links and arenas are rebuilt on decode.
-- **CMSHeap** (`src/sketches/countminsketch_topk/wire.rs`, `0x03 0x00`) and
-  **CSHeap** (`src/sketches/countsketch_topk/wire.rs`, `0x0a 0x00`) — a base
+- **CountMinSketchWithHeap** (`src/sketches/countminsketch_heap/wire.rs`, `0x03 0x00`) and
+  **CountSketchWithHeap** (`src/sketches/countsketch_heap/wire.rs`, `0x0a 0x00`) — a base
   matrix inlined ahead of the shared top-k heap entries.
 - **DDSketch** (`src/sketches/ddsketch/wire.rs`, `0x05 0x00`) — both bucket
   stores verbatim with their offsets, `sum`, `min`, `max` and `zero_count`; no
@@ -127,24 +127,24 @@ Converted:
   hash-spec group.
 - **KMV** (`src/sketches/kmv/wire.rs`, `0x0e 0x00`) — the retained digests,
   strictly ascending.
-- **CountL2HH** (`src/sketches/countsketch_topk/l2hh_wire.rs`, `0x19 0x00`) —
+- **CountSketchWithL2Norm** (`src/sketches/countsketch_heap/l2hh_wire.rs`, `0x19 0x00`) —
   `[counts, l2]`.
 - **Hydra** (`src/sketch_framework/hydra/wire.rs`, `0x07 0x00`-`0x07 0x04`) — one
   `kind_id` per counter variant; the cells' state tiles or nests one array.
 - **UnivMon** (`src/sketch_framework/univmon/wire.rs`, `0x10 0x00`) and
-  **UnivMon Optimized** (`src/sketch_framework/univmon_optimized/wire.rs`,
+  **UnivMon Optimized** (`src/sketch_framework/univmon_two_tier/wire.rs`,
   `0x11 0x00`) — one payload shape, two metadata schemas.
 - **UnivMon-Q** (`src/sketch_framework/univmon_q/wire.rs`, `0x1a 0x00`) — the
   levels' counters, candidates, extrema and coordinated occurrence sample.
 - **ExponentialHistogram** (`src/sketch_framework/eh/wire.rs`, `0x13 0x00`) and
-  **EHSketchList** (`src/sketch_framework/eh_sketch_list/wire.rs`, `0x14 0x00`) —
+  **EhBucketSketch** (`src/sketch_framework/eh_bucket_sketch/wire.rs`, `0x14 0x00`) —
   one `[kind_id, descriptor, state]` triple, standalone and per bucket.
-- **SetAggregator** and **DeltaResult**
+- **SetAggregator** and **SetAggregatorDelta**
   (`src/message_pack_format/portable/set_aggregator/wire.rs`, `0x08 0x00` and
   `0x08 0x80`) — the members, and the added and removed members, as strictly
   ascending `str` arrays.
 
-NitroBatch, FoldCMS, FoldCS, HashSketchEnsemble, EHUnivOptimized and OctoSketch
+NitroBatch, CountMinSketchFold, CountSketchFold, HashSketchEnsemble, ExponentialHistogramUnivMon and OctoSketch
 have **no `wire.rs`**; their `kind_id`s are reserved with payload TBD.
 
 ## `portable/` and `native/` are being retired
@@ -158,7 +158,7 @@ being **phased out** in favor of the per-sketch `wire.rs` + the shared
   carry their own byte-parity goldens against `sketchlib-go` — HLL, Count-Min,
   Count Sketch and KLL (both directions) — separate from `asapv1_golden/`.
 - `native/` is a set of thin `MessagePackCodec` shims over the sketches'
-  `serialize_to_bytes` / `deserialize_from_bytes`. Every type it wraps emits the
+  `to_asapv1` / `from_asapv1`. Every type it wraps emits the
   ASAPv1 envelope, so each shim is a pass-through.
 
 Sequencing note (from the spec): `portable` is not deleted until the golden

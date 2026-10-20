@@ -1,4 +1,4 @@
-# API: CMSSpaceSaving
+# API: CountMinSketchWithSpaceSaving
 
 Status: `Unstable`
 
@@ -9,20 +9,20 @@ Every update reaches both; a top-k query ranks the summary's monitored keys by
 their Count-Min estimate. The summary picks the candidates and the matrix gives
 each its frequency. The summary's `capacity` is independent of `k`.
 
-[`CMSHeap`](./api_cms_heap.md) keeps an estimate heap instead: a key's count is
+[`CountMinSketchWithHeap`](./api_cms_heap.md) keeps an estimate heap instead: a key's count is
 its matrix estimate and a newcomer enters only by beating the heap minimum.
 
 ## Type/Struct
 
-- `CMSSpaceSaving<S = Vector2D<i64>, M = RegularPath, H = DefaultXxHasher>`
-- `SpaceSavingCounter`: the matrix counter types the summary sits beside
+- `CountMinSketchWithSpaceSaving<S = Vector2D<i64>, M = RegularPath, H = DefaultXxHasher>`
+- `CandidateCounter`: the matrix counter types the summary sits beside
   (`i32`, `i64`, `i128`, `f64`).
 
 ## Constructors
 
 ```rust
 fn new(rows: usize, cols: usize, capacity: usize) -> Self
-fn from_parts(cms: CountMin<S, M, H>, space_saving: SpaceSaving<H>) -> Self
+fn from_parts(cms: CountMinSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self
 ```
 
 ## Insert/Update
@@ -41,11 +41,11 @@ weight is not positive.
 
 ```rust
 fn estimate(&self, key: &DataInput) -> S::Counter
-fn top_k(&self, k: usize) -> Vec<(HeapItem, S::Counter)>
+fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, S::Counter)>
 fn rows(&self) -> usize
 fn cols(&self) -> usize
 fn capacity(&self) -> usize
-fn cms(&self) -> &CountMin<S, M, H>
+fn cms(&self) -> &CountMinSketch<S, M, H>
 fn space_saving(&self) -> &SpaceSaving<H>
 ```
 
@@ -64,12 +64,12 @@ when the dimensions, the admission rates or the capacities differ.
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 The **ASAPv1** envelope, kind `0x1e 0x00` (spec §3.24), for
-`CMSSpaceSaving<Vector2D<T>, Mode, H>` with `T` `i32`, `i64` or `f64`, `Mode`
+`CountMinSketchWithSpaceSaving<Vector2D<T>, Mode, H>` with `T` `i32`, `i64` or `f64`, `Mode`
 `FastPath` or `RegularPath`, and `H: HashProfile`. The metadata is Count-Min's
 plus `capacity` and `key_type`; the payload is the matrix followed by the
 summary's triples and running scalars. A matrix holding `p != 1` does not
@@ -78,9 +78,9 @@ serialize. There is no delta kind.
 ## Examples
 
 ```rust
-use asap_sketchlib::{CMSSpaceSaving, DataInput, RegularPath, Vector2D};
+use asap_sketchlib::{CountMinSketchWithSpaceSaving, DataInput, RegularPath, Vector2D};
 
-let mut sk = CMSSpaceSaving::<Vector2D<i64>, RegularPath>::new(4, 1024, 64);
+let mut sk = CountMinSketchWithSpaceSaving::<Vector2D<i64>, RegularPath>::new(4, 1024, 64);
 sk.update_weighted(&DataInput::Str("flow"), 3);
 assert_eq!(sk.top_k(1)[0].1, 3);
 ```

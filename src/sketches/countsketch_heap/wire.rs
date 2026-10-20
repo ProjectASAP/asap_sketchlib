@@ -1,14 +1,14 @@
-//! ASAPv1 wire serialization for CSHeap.
+//! ASAPv1 wire serialization for CountSketchWithHeap.
 //!
-//! Child submodule of [`crate::sketches::countsketch_topk`]: it holds the
-//! kind_id constant and the `serialize_to_bytes` / `deserialize_from_bytes`
+//! Child submodule of [`crate::sketches::countsketch_heap`]: it holds the
+//! kind_id constant and the `to_asapv1` / `from_asapv1`
 //! impls while the algorithm lives in the parent module file. Being a
 //! descendant module, it reads the sketch's private `cs` / `heap` fields
 //! directly without widening any field visibility. The metadata DTO, the
-//! payload DTO and the heap encoding are shared with CMSHeap and live in
-//! [`crate::sketches::countminsketch_topk::heap_wire`].
+//! payload DTO and the heap encoding are shared with CountMinSketchWithHeap and live in
+//! [`crate::sketches::countminsketch_heap::heap_wire`].
 //!
-//! CSHeap is one algorithm — a single kind_id `0x0a 0x00`. The structural
+//! CountSketchWithHeap is one algorithm — a single kind_id `0x0a 0x00`. The structural
 //! parameters — the matrix dimensions (`rows` / `cols`), the base **counter
 //! type** (i32/i64/f64), the column-derivation **mode** (fast/regular), the heap
 //! capacity `heap_size` and the heap's `key_type` — all live in the metadata, so
@@ -16,7 +16,7 @@
 //! followed by the heap's entries, whose counts are `f64` under `f64` counters
 //! and `i64` otherwise.
 //!
-//! [`CountL2HH`](super::CountL2HH) is a different algorithm and is not covered
+//! [`CountSketchWithL2Norm`](super::CountSketchWithL2Norm) is a different algorithm and is not covered
 //! here.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
@@ -24,27 +24,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
-use crate::sketches::countminsketch_topk::heap_wire::{
+use crate::sketches::countminsketch_heap::heap_wire::{
     decode_metadata, decode_payload, encode_metadata, encode_payload, heap_entries, rebuild_heap,
     wire_key_type,
 };
 use crate::sketches::countsketch::{CsWireCounter, CsWireMode};
 use crate::{Count, HashProfile, SketchHasher, Vector2D};
 
-use super::{CSHeap, CsHeapCounter};
+use super::{CountSketchHeapCounter, CountSketchWithHeap};
 
-/// CSHeap kind_id: family `0x0a`, single algorithm variant `0x00`.
+/// CountSketchWithHeap kind_id: family `0x0a`, single algorithm variant `0x00`.
 const CS_HEAP_KIND: &[u8] = &[0x0a, 0x00];
 
-// Wire serialization for the canonical CSHeap configs only. `wire` is a
+// Wire serialization for the canonical CountSketchWithHeap configs only. `wire` is a
 // descendant of the sketch module, so this impl reads the private fields
 // directly.
-impl<T, Mode, H> CSHeap<Vector2D<T>, Mode, H>
+impl<T, Mode, H> CountSketchWithHeap<Vector2D<T>, Mode, H>
 where
-    // `CsHeapCounter` carries `Count::from_storage`'s `CountSketchCounter` and
-    // the heap's `TopKCounter`; `AddAssign` is required by
+    // `CountSketchHeapCounter` carries `Count::from_storage`'s `CountSketchCounter` and
+    // the heap's `HeapCounter`; `AddAssign` is required by
     // `Vector2D<T>: MatrixStorage`.
-    T: CsWireCounter + CsHeapCounter + std::ops::AddAssign + Serialize + for<'de> Deserialize<'de>,
+    T: CsWireCounter
+        + CountSketchHeapCounter
+        + std::ops::AddAssign
+        + Serialize
+        + for<'de> Deserialize<'de>,
     Mode: CsWireMode,
     H: SketchHasher + HashProfile,
 {
@@ -54,9 +58,9 @@ where
     ///
     /// Fails when the matrix has a zero dimension, more than `MATRIX_MAX_ROWS`
     /// rows or a cell count that disagrees with its own dimensions, when the
-    /// heap's keys mix `HeapItem` variants or hold a 128-bit key, or when
+    /// heap's keys mix `OwnedDataInput` variants or hold a 128-bit key, or when
     /// `heap_size` or `cols` overflows the metadata's `u32` field.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         admission_rate::check_admits_all(self.cs.admission_rate())
             .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 CSHeap envelope: {e}")))?;
         let rows = self.cs.rows();
@@ -93,7 +97,7 @@ where
     /// Every state the algorithm could not have produced is rejected with an
     /// error rather than a panic, and neither the declared geometry nor
     /// `heap_size` sizes an allocation before the payload is measured against it.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != CS_HEAP_KIND {
@@ -115,7 +119,7 @@ where
         }
         let heap = rebuild_heap(shape.heap_size, entries)?;
         let storage = Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]);
-        Ok(CSHeap {
+        Ok(CountSketchWithHeap {
             cs: Count::from_storage(storage),
             heap,
         })
@@ -125,16 +129,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketches::countminsketch_topk::heap_wire::{
-        TopKMetadata, TopKPayload, topk_metadata,
+    use crate::sketches::countminsketch_heap::heap_wire::{
+        HeapMetadata, HeapPayload, heap_metadata,
     };
     use crate::{
-        CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, FastPath, MATRIX_MAX_ROWS, RegularPath,
+        DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, FastPath, MATRIX_MAX_ROWS,
+        RegularPath,
     };
     use rmp_serde::from_slice;
 
-    fn populated() -> CSHeap<Vector2D<i64>, RegularPath> {
-        let mut sketch = CSHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
+    fn populated() -> CountSketchWithHeap<Vector2D<i64>, RegularPath> {
+        let mut sketch = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
         for (key, weight) in [(1u64, 9i64), (2, 5), (3, 7)] {
             sketch.update_weighted(&DataInput::U64(key), weight);
         }
@@ -144,13 +149,13 @@ mod tests {
     /// The complaint a crafted envelope draws, with no `Debug` bound on the
     /// sketch.
     fn decode_error(bytes: &[u8]) -> String {
-        match CSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(bytes) {
+        match CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(bytes) {
             Ok(_) => panic!("a crafted envelope must be rejected, not decoded"),
             Err(err) => err.to_string(),
         }
     }
 
-    fn metadata_of(bytes: &[u8]) -> TopKMetadata {
+    fn metadata_of(bytes: &[u8]) -> HeapMetadata {
         let (_, metadata, _) = envelope::split(bytes).expect("split");
         from_slice(metadata).expect("metadata")
     }
@@ -158,7 +163,7 @@ mod tests {
     #[test]
     fn cs_heap_round_trip_serialization() {
         let sketch = populated();
-        let encoded = sketch.serialize_to_bytes().expect("serialize CSHeap");
+        let encoded = sketch.to_asapv1().expect("serialize CSHeap");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x0a, 0x00]); // kind_id_len=2, kind_id=[0x0a,0x00]
 
@@ -170,7 +175,7 @@ mod tests {
         assert_eq!(meta.heap_size, 4);
         assert_eq!(meta.key_type, "u64");
 
-        let decoded = CSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded)
+        let decoded = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&encoded)
             .expect("deserialize CSHeap");
         assert_eq!(sketch.rows(), decoded.rows());
         assert_eq!(sketch.cols(), decoded.cols());
@@ -189,14 +194,14 @@ mod tests {
                 sketch.heap().heap()[sketch.heap().find(&probe).expect("heap key")].count
             );
         }
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), encoded);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
     }
 
     /// Count Sketch cells are signed — the payload must carry negatives through
     /// unchanged.
     #[test]
     fn cs_heap_negative_counters_round_trip() {
-        let mut sketch = CSHeap::<Vector2D<i64>, RegularPath>::from_storage(
+        let mut sketch = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
             Vector2D::from_fn(2, 4, |r, c| {
                 let v = (r * 4 + c) as i64;
                 if v % 2 == 0 { v } else { -v }
@@ -205,17 +210,17 @@ mod tests {
         );
         sketch.heap_mut().update(&DataInput::Str("flow"), 11);
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
+        let encoded = sketch.to_asapv1().expect("serialize");
         assert_eq!(metadata_of(&encoded).key_type, "string");
-        let decoded =
-            CSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded).expect("decode");
+        let decoded = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&encoded)
+            .expect("decode");
         assert_eq!(
             sketch.cs().as_storage().as_slice(),
             decoded.cs().as_storage().as_slice()
         );
         assert!(decoded.cs().as_storage().as_slice().iter().any(|&v| v < 0));
         assert!(decoded.heap().find(&DataInput::Str("flow")).is_some());
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), encoded);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
     }
 
     /// The `i32` wire config round-trips, and the counter type is pinned by the
@@ -226,16 +231,18 @@ mod tests {
             let v = (r * 4 + c) as i32;
             if v % 2 == 0 { v } else { -v }
         };
-        let narrow =
-            CSHeap::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, cells), 4);
-        let wide = CSHeap::<Vector2D<i64>, RegularPath>::from_storage(
+        let narrow = CountSketchWithHeap::<Vector2D<i32>, RegularPath>::from_storage(
+            Vector2D::from_fn(2, 4, cells),
+            4,
+        );
+        let wide = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
             Vector2D::from_fn(2, 4, |r, c| cells(r, c) as i64),
             4,
         );
 
-        let narrow_bytes = narrow.serialize_to_bytes().expect("serialize i32");
+        let narrow_bytes = narrow.to_asapv1().expect("serialize i32");
         assert_eq!(metadata_of(&narrow_bytes).counter_type, "i32");
-        let decoded = CSHeap::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&narrow_bytes)
+        let decoded = CountSketchWithHeap::<Vector2D<i32>, RegularPath>::from_asapv1(&narrow_bytes)
             .expect("decode i32");
         assert_eq!(
             narrow.cs().as_storage().as_slice(),
@@ -244,27 +251,27 @@ mod tests {
 
         // The two sketches hold numerically equal cells, so only the metadata
         // `counter_type` separates their bytes.
-        let wide_bytes = wide.serialize_to_bytes().expect("serialize i64");
+        let wide_bytes = wide.to_asapv1().expect("serialize i64");
         assert_ne!(narrow_bytes, wide_bytes);
         assert!(
-            CSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&narrow_bytes).is_err(),
+            CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&narrow_bytes).is_err(),
             "i32 bytes must not decode as an i64 sketch"
         );
         assert!(
-            CSHeap::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&wide_bytes).is_err(),
+            CountSketchWithHeap::<Vector2D<i32>, RegularPath>::from_asapv1(&wide_bytes).is_err(),
             "i64 bytes must not decode as an i32 sketch"
         );
     }
 
     #[test]
     fn cs_heap_mode_in_metadata_round_trips() {
-        let mut sketch = CSHeap::<Vector2D<i64>, FastPath>::new(4, 16, 8);
+        let mut sketch = CountSketchWithHeap::<Vector2D<i64>, FastPath>::new(4, 16, 8);
         sketch.update_weighted(&DataInput::U64(1), 5);
         sketch.update_weighted(&DataInput::U64(2), 3);
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
+        let encoded = sketch.to_asapv1().expect("serialize");
         assert_eq!(metadata_of(&encoded).mode, "fast");
-        let decoded = CSHeap::<Vector2D<i64>, FastPath>::deserialize_from_bytes(&encoded)
+        let decoded = CountSketchWithHeap::<Vector2D<i64>, FastPath>::from_asapv1(&encoded)
             .expect("deserialize");
         assert_eq!(
             sketch.cs().as_storage().as_slice(),
@@ -273,24 +280,24 @@ mod tests {
 
         // Mode is pinned by the target: a fast payload must not decode into a
         // regular sketch.
-        assert!(CSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded).is_err());
+        assert!(CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&encoded).is_err());
     }
 
-    /// CSHeap, CMSHeap and the two base sketches all carry different kind_ids;
-    /// a foreign envelope must not decode as a CSHeap.
+    /// CountSketchWithHeap, CountMinSketchWithHeap and the two base sketches all carry different kind_ids;
+    /// a foreign envelope must not decode as a CountSketchWithHeap.
     #[test]
     fn cs_heap_rejects_foreign_kind_ids() {
-        let cms_heap = crate::CMSHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
-        let cms = crate::CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
+        let cms_heap = crate::CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
+        let cms = crate::CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
         let count = crate::Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
 
         for (bytes, what) in [
-            (cms_heap.serialize_to_bytes().expect("CMSHeap"), "CMSHeap"),
-            (cms.serialize_to_bytes().expect("CMS"), "Count-Min"),
-            (count.serialize_to_bytes().expect("Count"), "Count Sketch"),
+            (cms_heap.to_asapv1().expect("CMSHeap"), "CMSHeap"),
+            (cms.to_asapv1().expect("CMS"), "Count-Min"),
+            (count.to_asapv1().expect("Count"), "Count Sketch"),
         ] {
             assert!(
-                CSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes).is_err(),
+                CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&bytes).is_err(),
                 "{what} bytes must not decode as a CSHeap"
             );
         }
@@ -299,11 +306,11 @@ mod tests {
     /// Builds a well-framed envelope around crafted metadata and a `u64`-keyed
     /// payload.
     fn crafted(rows: u32, cols: u32, heap_size: u32, counts: Vec<i64>) -> Vec<u8> {
-        let metadata = rmp_serde::to_vec_named(&topk_metadata::<DefaultXxHasher>(
+        let metadata = rmp_serde::to_vec_named(&heap_metadata::<DefaultXxHasher>(
             rows, cols, "i64", "regular", heap_size, "u64",
         ))
         .expect("metadata");
-        let payload = rmp_serde::to_vec(&TopKPayload::<i64, u64, i64> {
+        let payload = rmp_serde::to_vec(&HeapPayload::<i64, u64, i64> {
             counts,
             keys: Vec::new(),
             heap_counts: Vec::new(),
@@ -337,8 +344,8 @@ mod tests {
     fn cs_heap_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
         assert!(
-            CSHeap::<Vector2D<i64>, RegularPath>::new(rows, 8, 4)
-                .serialize_to_bytes()
+            CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(rows, 8, 4)
+                .to_asapv1()
                 .is_err(),
             "a matrix past MATRIX_MAX_ROWS must not serialize"
         );
@@ -348,8 +355,8 @@ mod tests {
 
         // The boundary itself is eligible.
         assert!(
-            CSHeap::<Vector2D<i64>, RegularPath>::new(MATRIX_MAX_ROWS, 8, 4)
-                .serialize_to_bytes()
+            CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(MATRIX_MAX_ROWS, 8, 4)
+                .to_asapv1()
                 .is_ok()
         );
     }
@@ -358,10 +365,12 @@ mod tests {
     /// Serializing it must fail rather than emit bytes the decoder refuses.
     #[test]
     fn cs_heap_rejects_serializing_an_unfilled_matrix() {
-        let sketch =
-            CSHeap::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::<i64>::init(2, 4), 4);
+        let sketch = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
+            Vector2D::<i64>::init(2, 4),
+            4,
+        );
         assert!(
-            sketch.serialize_to_bytes().is_err(),
+            sketch.to_asapv1().is_err(),
             "a matrix whose cell count disagrees with its dimensions must not serialize"
         );
     }
@@ -384,9 +393,9 @@ mod tests {
             mode: String,
             heap_size: u32,
             key_type: String,
-            bogus_field: u8, // key not in TopKMetadata
+            bogus_field: u8, // key not in HeapMetadata
         }
-        let m = topk_metadata::<DefaultXxHasher>(2, 4, "i64", "regular", 4, "u64");
+        let m = heap_metadata::<DefaultXxHasher>(2, 4, "i64", "regular", 4, "u64");
         let extra = WithExtra {
             metadata_version: m.metadata_version,
             hash_profile_id: m.hash_profile_id.clone(),
@@ -405,7 +414,7 @@ mod tests {
         };
         let bytes = rmp_serde::to_vec_named(&extra).expect("encode");
         assert!(
-            from_slice::<TopKMetadata>(&bytes).is_err(),
+            from_slice::<HeapMetadata>(&bytes).is_err(),
             "an unexpected metadata key must be rejected"
         );
     }
@@ -429,7 +438,7 @@ mod tests {
             mode: String,
             heap_size: u32,
         }
-        let m = topk_metadata::<DefaultXxHasher>(2, 4, "i64", "regular", 4, "u64");
+        let m = heap_metadata::<DefaultXxHasher>(2, 4, "i64", "regular", 4, "u64");
         let without = WithoutKeyType {
             metadata_version: m.metadata_version,
             hash_profile_id: m.hash_profile_id.clone(),
@@ -446,7 +455,7 @@ mod tests {
         };
         let bytes = rmp_serde::to_vec_named(&without).expect("encode");
         assert!(
-            from_slice::<TopKMetadata>(&bytes).is_err(),
+            from_slice::<HeapMetadata>(&bytes).is_err(),
             "a missing key_type must be rejected"
         );
     }
@@ -454,11 +463,11 @@ mod tests {
     /// An `f64`-labelled envelope decodes into neither integer sketch.
     #[test]
     fn cs_heap_rejects_f64_into_an_integer_sketch() {
-        let metadata = rmp_serde::to_vec_named(&topk_metadata::<DefaultXxHasher>(
+        let metadata = rmp_serde::to_vec_named(&heap_metadata::<DefaultXxHasher>(
             2, 4, "f64", "regular", 4, "u64",
         ))
         .expect("metadata");
-        let payload = rmp_serde::to_vec(&TopKPayload::<i64, u64, i64> {
+        let payload = rmp_serde::to_vec(&HeapPayload::<i64, u64, i64> {
             counts: vec![0; 8],
             keys: Vec::new(),
             heap_counts: Vec::new(),
@@ -466,17 +475,17 @@ mod tests {
         .expect("payload");
         let bytes = envelope::encode(CS_HEAP_KIND, &metadata, &payload);
         assert!(
-            CSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes).is_err(),
+            CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&bytes).is_err(),
             "an i64 sketch must reject an f64-labelled envelope"
         );
         assert!(
-            CSHeap::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&bytes).is_err(),
+            CountSketchWithHeap::<Vector2D<i32>, RegularPath>::from_asapv1(&bytes).is_err(),
             "an i32 sketch must reject an f64-labelled envelope"
         );
     }
 
     // A test-only custom hasher: hashes exactly like `DefaultXxHasher` but
-    // declares a DIFFERENT `HashProfile`. CSHeap metadata is derived from the
+    // declares a DIFFERENT `HashProfile`. CountSketchWithHeap metadata is derived from the
     // profile, so an `AltHasher` sketch serializes truthfully. (An *unprofiled*
     // hasher cannot serialize at all — that is a compile-time guarantee, since
     // the wire methods are bounded on `H: HashProfile`.)
@@ -492,19 +501,19 @@ mod tests {
         fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
             DefaultXxHasher::hash128_seeded(d, key)
         }
-        fn hash_item64_seeded(d: usize, key: &crate::HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(d: usize, key: &crate::OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(d, key)
         }
-        fn hash_item128_seeded(d: usize, key: &crate::HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(d: usize, key: &crate::OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(d, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -516,23 +525,23 @@ mod tests {
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
     #[test]
     fn cs_heap_custom_hasher_profile_round_trips_and_is_self_describing() {
-        // (a) A CSHeap built with a custom-profile hasher round-trips.
-        let mut alt = CSHeap::<Vector2D<i64>, RegularPath, AltHasher>::new(3, 8, 4);
-        let mut std = CSHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
+        // (a) A CountSketchWithHeap built with a custom-profile hasher round-trips.
+        let mut alt = CountSketchWithHeap::<Vector2D<i64>, RegularPath, AltHasher>::new(3, 8, 4);
+        let mut std = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
         for key in [42u64, 7] {
             alt.update(&DataInput::U64(key));
             std.update(&DataInput::U64(key));
         }
 
-        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
+        let alt_bytes = alt.to_asapv1().expect("alt serialize");
         let decoded =
-            CSHeap::<Vector2D<i64>, RegularPath, AltHasher>::deserialize_from_bytes(&alt_bytes)
+            CountSketchWithHeap::<Vector2D<i64>, RegularPath, AltHasher>::from_asapv1(&alt_bytes)
                 .expect("alt decode");
         assert_eq!(
             alt.cs().as_storage().as_slice(),
@@ -542,12 +551,12 @@ mod tests {
 
         // (b) Bytes differ from the standard-profile sketch (metadata derived
         // from the different profile).
-        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        let std_bytes = std.to_asapv1().expect("std serialize");
         assert_ne!(alt_bytes, std_bytes);
 
         // (c) Standard-profile decode fails closed on custom-profile bytes.
         assert!(
-            CSHeap::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&alt_bytes).is_err(),
+            CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&alt_bytes).is_err(),
             "standard-profile decode must reject custom-profile bytes"
         );
     }
@@ -556,12 +565,12 @@ mod tests {
     /// emitting a truncated capacity.
     #[test]
     fn cs_heap_refuses_a_heap_size_the_metadata_cannot_carry() {
-        let sketch = CSHeap::<Vector2D<i64>, RegularPath>::from_storage(
+        let sketch = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
             Vector2D::from_fn(2, 4, |_, _| 0i64),
             1usize << 40,
         );
         let problem = sketch
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("an oversized heap_size must not serialize")
             .to_string();
         assert!(

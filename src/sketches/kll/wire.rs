@@ -2,8 +2,8 @@
 //!
 //! Child submodule of [`crate::sketches::kll`]: it holds the shared KLL wire
 //! DTOs (metadata + payload + coin), the kind_id constants for both KLL
-//! variants, the [`KllWireItem`] marker trait, and the `serialize_to_bytes` /
-//! `deserialize_from_bytes` impls for the compact [`KLL`]. Being a descendant
+//! variants, the [`KllWireItem`] marker trait, and the `to_asapv1` /
+//! `from_asapv1` impls for the compact [`Kll`]. Being a descendant
 //! module, it reads the sketch's private fields (`self.items`, `self.levels`,
 //! `self.co`, …) and constructs the struct directly without widening any field
 //! visibility. The sibling `kll_dynamic::wire` reuses these DTOs for the dynamic
@@ -22,8 +22,8 @@
 //! The payload's `levels` / `items` use the **top-most-level-first** layout,
 //! byte-for-byte matching `sketchlib-go`'s `KLLState` (index `i` in `levels`
 //! maps to compactor level `num_levels - 1 - i`; level 0's run is in input
-//! order). For the compact KLL this is exactly what [`KLL::wire_levels`] /
-//! [`KLL::wire_items`] emit (they reverse the leftward-grown L0 buffer back to
+//! order). For the compact KLL this is exactly what [`Kll::level_bounds_top_down`] /
+//! [`Kll::items_top_down`] emit (they reverse the leftward-grown L0 buffer back to
 //! input order); decode inverts that mapping.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
@@ -34,19 +34,18 @@ use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact_vec;
 
 use super::{
-    CAPACITY_CACHE_LEN, Coin, KLL, MAX_CACHEABLE_K, MAX_LEVELS, checked_weighted_count,
-    compute_max_capacity,
+    CAPACITY_CACHE_LEN, Coin, Kll, MAX_K, MAX_LEVELS, checked_weighted_count, compute_max_capacity,
 };
 
 const KLL_KIND_FAMILY: u8 = 0x06;
-/// kind_id for the compact, fixed-buffer [`KLL`] (`0x06 0x00`).
+/// kind_id for the compact, fixed-buffer [`Kll`] (`0x06 0x00`).
 pub(crate) const KLL_KIND_COMPACT: &[u8] = &[KLL_KIND_FAMILY, 0x00];
-/// kind_id for the dynamic-buffer `KLLDynamic` (`0x06 0x01`).
+/// kind_id for the dynamic-buffer `KllDynamic` (`0x06 0x01`).
 pub(crate) const KLL_KIND_DYNAMIC: &[u8] = &[KLL_KIND_FAMILY, 0x01];
 
 /// Names the wire item type carried in the KLL metadata (`item_type`).
 /// Implemented only for the two wire-eligible retained-sample types; an exotic
-/// `KLL<T>` (any other `NumericalValue`) is not wire-serializable and must be
+/// `Kll<T>` (any other `NumericalValue`) is not wire-serializable and must be
 /// converted to one of these first.
 pub trait KllWireItem: Copy {
     /// Metadata `item_type` string — `"f64"` or `"i64"`.
@@ -66,11 +65,11 @@ impl KllWireItem for i64 {
 /// closed on any unexpected key.
 ///
 /// `compaction_seed` is the **only optional** field: it is the compaction RNG's reproducible
-/// seed (see [`crate::sketches::kll::KLL::init_with_seed`]). It is present only
+/// seed (see [`crate::sketches::kll::Kll::init_with_seed`]). It is present only
 /// when the sketch carries one (`Some`), and the key is **omitted** otherwise
 /// (`skip_serializing_if` + `default`), so an unseeded sketch's bytes are
-/// unchanged. It is echoed on decode, never pinned. The compact `KLL` populates
-/// it; `KLLDynamic` has no seed and always omits it.
+/// unchanged. It is echoed on decode, never pinned. The compact `Kll` populates
+/// it; `KllDynamic` has no seed and always omits it.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KllMetadata {
@@ -214,11 +213,11 @@ pub(crate) fn split_and_validate_meta<'a, T: KllWireItem>(
     // pin them — without this bound a crafted `k`/`m` near `u32::MAX` would drive
     // `compute_max_capacity` (compact decode) into a multi-terabyte allocation
     // and abort the process. A legitimately serialized sketch always has
-    // `2 <= m <= k <= MAX_CACHEABLE_K` because the constructor clamps to that
+    // `2 <= m <= k <= MAX_K` because the constructor clamps to that
     // range (`init_internal`), so this never rejects real bytes.
-    if meta.m < 2 || meta.m > meta.k || meta.k > MAX_CACHEABLE_K as u32 {
+    if meta.m < 2 || meta.m > meta.k || meta.k > MAX_K as u32 {
         return Err(RmpDecodeError::Uncategorized(format!(
-            "ASAPv1 KLL envelope: k={}, m={} outside valid range (2 <= m <= k <= {MAX_CACHEABLE_K})",
+            "ASAPv1 KLL envelope: k={}, m={} outside valid range (2 <= m <= k <= {MAX_K})",
             meta.k, meta.m
         )));
     }
@@ -228,20 +227,20 @@ pub(crate) fn split_and_validate_meta<'a, T: KllWireItem>(
 // Wire serialization for the compact KLL. `wire` is a descendant of the sketch
 // module, so these impls read the private fields and construct the struct
 // directly.
-impl<T> KLL<T>
+impl<T> Kll<T>
 where
     T: NumericalValue + KllWireItem + Serialize + for<'de> Deserialize<'de>,
 {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope
     /// (kind_id `0x06 0x00`). The retained samples use the top-most-level-first
     /// layout that matches `sketchlib-go`'s `KLLState`.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata =
             rmp_serde::to_vec_named(&kll_metadata::<T>(self.k as u32, self.m as u32, self.seed))?;
         let (state, bit_cache, remaining_bits) = self.co.to_wire();
         let payload = rmp_serde::to_vec(&KllPayload {
-            levels: self.wire_levels(),
-            items: self.wire_items(),
+            levels: self.level_bounds_top_down(),
+            items: self.items_top_down(),
             coin: KllCoinWire {
                 state,
                 bit_cache,
@@ -254,7 +253,7 @@ where
     /// Deserializes a compact KLL from an ASAPv1 MessagePack envelope. Bytes
     /// whose metadata does not match this item type are rejected (fail closed),
     /// as are inconsistent level layouts.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (meta, payload_bytes) = split_and_validate_meta::<T>(bytes, KLL_KIND_COMPACT)?;
         let payload: KllPayload<T> = envelope::decode_block(payload_bytes)?;
         let num_levels = validate_kll_payload(&payload.levels, &payload.items, &payload.coin)?;
@@ -268,7 +267,7 @@ where
     }
 
     /// Rebuilds the compact leftward-grown buffer from the top-most-first wire
-    /// payload. Inverse of [`KLL::wire_levels`] / [`KLL::wire_items`]: L0's
+    /// payload. Inverse of [`Kll::level_bounds_top_down`] / [`Kll::items_top_down`]: L0's
     /// input-order run is reversed back into the buffer (which stores L0
     /// reverse-input), and higher levels are copied as-is, so a round-trip
     /// re-serializes to byte-identical output.
@@ -323,7 +322,7 @@ where
         internal_levels[num_levels] = cursor;
         debug_assert_eq!(cursor, max_cap);
 
-        let mut sketch = KLL {
+        let mut sketch = Kll {
             items: buf,
             levels: internal_levels,
             k,
@@ -350,10 +349,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketches::kll::KLL;
+    use crate::sketches::kll::Kll;
 
-    fn build_kll(k: i32, seed: u64, n: u64) -> KLL<f64> {
-        let mut sketch = KLL::<f64>::init_kll_with_seed(k, seed);
+    fn build_kll(k: i32, seed: u64, n: u64) -> Kll<f64> {
+        let mut sketch = Kll::<f64>::with_k_and_seed(k, seed);
         for v in 1..=n {
             sketch.update(&(v as f64));
         }
@@ -364,17 +363,17 @@ mod tests {
     fn kll_envelope_structure_and_round_trip() {
         // Enough data to force several compaction levels.
         let sketch = build_kll(200, 42, 200_000);
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
+        let bytes = sketch.to_asapv1().expect("serialize");
 
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
         assert_eq!(&bytes[8..10], KLL_KIND_COMPACT);
 
-        let decoded = KLL::<f64>::deserialize_from_bytes(&bytes).expect("decode");
+        let decoded = Kll::<f64>::from_asapv1(&bytes).expect("decode");
         // Byte-stable round trip.
         assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
+            decoded.to_asapv1().expect("re-serialize"),
             bytes,
             "KLL serialized bytes differed after round trip"
         );
@@ -390,23 +389,23 @@ mod tests {
 
     #[test]
     fn kll_empty_round_trip() {
-        let sketch = KLL::<f64>::init_kll_with_seed(200, 7);
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
-        let decoded = KLL::<f64>::deserialize_from_bytes(&bytes).expect("decode");
+        let sketch = Kll::<f64>::with_k_and_seed(200, 7);
+        let bytes = sketch.to_asapv1().expect("serialize");
+        let decoded = Kll::<f64>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.count(), 0);
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
     #[test]
     fn kll_i64_round_trip() {
-        let mut sketch = KLL::<i64>::init_kll_with_seed(200, 5);
+        let mut sketch = Kll::<i64>::with_k_and_seed(200, 5);
         for v in 1..=50_000i64 {
             sketch.update(&v);
         }
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
+        let bytes = sketch.to_asapv1().expect("serialize");
         assert_eq!(&bytes[8..10], KLL_KIND_COMPACT);
-        let decoded = KLL::<i64>::deserialize_from_bytes(&bytes).expect("decode");
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        let decoded = Kll::<i64>::from_asapv1(&bytes).expect("decode");
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
         assert_eq!(decoded.count(), sketch.count());
     }
 
@@ -414,9 +413,9 @@ mod tests {
     fn kll_item_type_cross_rejection() {
         // f64 bytes must not decode into an i64 KLL (metadata item_type mismatch).
         let sketch = build_kll(200, 1, 1000);
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
+        let bytes = sketch.to_asapv1().expect("serialize");
         assert!(
-            KLL::<i64>::deserialize_from_bytes(&bytes).is_err(),
+            Kll::<i64>::from_asapv1(&bytes).is_err(),
             "f64 KLL bytes must be rejected by an i64 decoder"
         );
     }
@@ -461,7 +460,7 @@ mod tests {
         .unwrap();
         let bytes = envelope::encode(KLL_KIND_COMPACT, &metadata, &payload);
         assert!(
-            KLL::<f64>::deserialize_from_bytes(&bytes).is_err(),
+            Kll::<f64>::from_asapv1(&bytes).is_err(),
             "inconsistent level layout must be rejected, not panic"
         );
     }
@@ -483,15 +482,11 @@ mod tests {
             })
             .unwrap()
         };
-        for (k, m) in [
-            (u32::MAX, u32::MAX),
-            (MAX_CACHEABLE_K as u32 + 1, 8),
-            (200, 1),
-        ] {
+        for (k, m) in [(u32::MAX, u32::MAX), (MAX_K as u32 + 1, 8), (200, 1)] {
             let metadata = rmp_serde::to_vec_named(&kll_metadata::<f64>(k, m, None)).unwrap();
             let bytes = envelope::encode(KLL_KIND_COMPACT, &metadata, &empty_payload());
             assert!(
-                KLL::<f64>::deserialize_from_bytes(&bytes).is_err(),
+                Kll::<f64>::from_asapv1(&bytes).is_err(),
                 "k={k}, m={m} must be rejected, not allocated"
             );
         }
@@ -501,8 +496,8 @@ mod tests {
     fn kll_seed_present_when_seeded_omitted_when_unseeded() {
         // A seeded sketch records its seed in the metadata; an unseeded one omits
         // the key entirely (so its bytes are unaffected by the optional field).
-        let seeded = KLL::<f64>::init_kll_with_seed(200, 42);
-        let bytes = seeded.serialize_to_bytes().expect("serialize");
+        let seeded = Kll::<f64>::with_k_and_seed(200, 42);
+        let bytes = seeded.to_asapv1().expect("serialize");
         let (_k, meta_bytes, _p) = envelope::split(&bytes).expect("split");
         let meta: KllMetadata = rmp_serde::from_slice(meta_bytes).expect("meta");
         assert_eq!(
@@ -511,9 +506,9 @@ mod tests {
             "seeded KLL must record its seed"
         );
 
-        let mut unseeded = KLL::<f64>::init_kll(200); // Coin::new(); seed = None
+        let mut unseeded = Kll::<f64>::with_k(200); // Coin::new(); seed = None
         unseeded.update(&1.0);
-        let bytes = unseeded.serialize_to_bytes().expect("serialize");
+        let bytes = unseeded.to_asapv1().expect("serialize");
         let (_k, meta_bytes, _p) = envelope::split(&bytes).expect("split");
         let meta: KllMetadata = rmp_serde::from_slice(meta_bytes).expect("meta");
         assert_eq!(
@@ -527,14 +522,14 @@ mod tests {
         // An unseeded compact KLL (seed = None, so the metadata key is omitted)
         // must decode end-to-end and re-serialize byte-identically — exercises the
         // optional-key-absent path through decode, not just encode.
-        let mut s = KLL::<f64>::init_kll(200); // Coin::new(); seed = None
+        let mut s = Kll::<f64>::with_k(200); // Coin::new(); seed = None
         for v in 1..=2000u64 {
             s.update(&(v as f64));
         }
-        let bytes = s.serialize_to_bytes().expect("serialize");
-        let decoded = KLL::<f64>::deserialize_from_bytes(&bytes).expect("decode");
+        let bytes = s.to_asapv1().expect("serialize");
+        let decoded = Kll::<f64>::from_asapv1(&bytes).expect("decode");
         assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
+            decoded.to_asapv1().expect("re-serialize"),
             bytes,
             "unseeded KLL round trip not byte-stable"
         );
@@ -546,12 +541,12 @@ mod tests {
         // The point of carrying seed: a decoded seeded sketch must re-seed clear()
         // from the original seed (not wall-clock). If seed were dropped on decode,
         // `a` below would re-randomize on clear() and diverge from `b`.
-        let mut src = KLL::<f64>::init_kll_with_seed(200, 42);
+        let mut src = Kll::<f64>::with_k_and_seed(200, 42);
         for v in 1..=5000u64 {
             src.update(&(v as f64));
         }
-        let mut a = KLL::<f64>::deserialize_from_bytes(&src.serialize_to_bytes().unwrap()).unwrap();
-        let mut b = KLL::<f64>::init_kll_with_seed(200, 42);
+        let mut a = Kll::<f64>::from_asapv1(&src.to_asapv1().unwrap()).unwrap();
+        let mut b = Kll::<f64>::with_k_and_seed(200, 42);
 
         a.clear();
         b.clear();
@@ -560,8 +555,8 @@ mod tests {
             b.update(&(v as f64));
         }
         assert_eq!(
-            a.serialize_to_bytes().unwrap(),
-            b.serialize_to_bytes().unwrap(),
+            a.to_asapv1().unwrap(),
+            b.to_asapv1().unwrap(),
             "decoded sketch lost its seed: clear() diverged from a fresh seeded sketch"
         );
     }
@@ -590,7 +585,7 @@ mod tests {
         .unwrap();
         let bytes = envelope::encode(KLL_KIND_COMPACT, &metadata, &payload);
         assert!(
-            KLL::<f64>::deserialize_from_bytes(&bytes).is_err(),
+            Kll::<f64>::from_asapv1(&bytes).is_err(),
             "a level layout that overflows the weighted count must be rejected"
         );
     }
@@ -611,7 +606,7 @@ mod tests {
         .unwrap();
         let bytes = envelope::encode(KLL_KIND_DYNAMIC, &metadata, &payload);
         assert!(
-            KLL::<f64>::deserialize_from_bytes(&bytes).is_err(),
+            Kll::<f64>::from_asapv1(&bytes).is_err(),
             "dynamic kind_id must be rejected by the compact decoder"
         );
     }

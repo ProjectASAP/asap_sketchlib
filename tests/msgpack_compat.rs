@@ -32,7 +32,7 @@ use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
 };
 use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch;
-use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaResult;
+use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::SetAggregatorDelta;
 use asap_sketchlib::message_pack_format::portable::hll::HllSketch;
 use asap_sketchlib::message_pack_format::portable::hll::HllVariant;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
@@ -141,9 +141,9 @@ fn delta_result_round_trip() {
     added.insert("a".to_string());
     let mut removed = HashSet::new();
     removed.insert("b".to_string());
-    let dr = DeltaResult { added, removed };
+    let dr = SetAggregatorDelta { added, removed };
     let bytes = dr.to_msgpack().expect("encode");
-    let restored = DeltaResult::from_msgpack(&bytes).expect("decode");
+    let restored = SetAggregatorDelta::from_msgpack(&bytes).expect("decode");
     assert!(restored.added.contains("a"));
     assert!(restored.removed.contains("b"));
 }

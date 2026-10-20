@@ -4,21 +4,21 @@
 //!
 //! Approach: reuse the exact same Go-golden envelopes that the
 //! `message_pack_format::portable` parity tests use, but build the
-//! matrix via `sketches::Count` / `sketches::CountMin` with `FastPath`
+//! matrix via `sketches::Count` / `sketches::CountMinSketch` with `FastPath`
 //! and `DefaultXxHasher`. Identical bytes confirm the shared FastPath
 //! math is sufficient — no hashspec bypass needed.
 
 use asap_sketchlib::common::DataInput;
-use asap_sketchlib::common::hash::CANONICAL_HASH_SEED;
-use asap_sketchlib::common::structures::HllBucketListP14;
+use asap_sketchlib::common::hash::DEFAULT_CANONICAL_SEED_INDEX;
+use asap_sketchlib::common::structures::HllRegistersP14;
 use asap_sketchlib::proto::sketchlib::{
     CountMinState, CountSketchState, CounterType, DdSketchState, HyperLogLogState, SketchEnvelope,
     sketch_envelope::SketchState,
 };
-use asap_sketchlib::sketches::countminsketch::CountMin;
+use asap_sketchlib::sketches::countminsketch::CountMinSketch;
 use asap_sketchlib::sketches::countsketch::Count;
-use asap_sketchlib::sketches::ddsketch::DDSketch;
-use asap_sketchlib::sketches::hll::{ErtlMLE, HyperLogLogImpl};
+use asap_sketchlib::sketches::ddsketch::DdSketch;
+use asap_sketchlib::sketches::hll::{Ertl, HyperLogLogImpl};
 use asap_sketchlib::{DefaultXxHasher, FastPath, Vector2D};
 use prost::Message;
 
@@ -108,8 +108,8 @@ fn sketches_countmin_fastpath_matches_go_count_min_envelope() {
     let rows = 4usize;
     let cols = 2048usize;
 
-    let mut sk: CountMin<Vector2D<f64>, FastPath, DefaultXxHasher> =
-        CountMin::with_dimensions(rows, cols);
+    let mut sk: CountMinSketch<Vector2D<f64>, FastPath, DefaultXxHasher> =
+        CountMinSketch::with_dimensions(rows, cols);
     for i in 0..50u64 {
         let key = format!("flow-{}", i % 10);
         sk.update_weighted(&DataInput::String(key), 1.0f64);
@@ -170,21 +170,21 @@ fn sketches_countmin_fastpath_matches_go_count_min_envelope() {
 #[test]
 fn sketches_hll_classic_matches_go_envelope() {
     // Go's `HyperLogLog.SerializePortable` emits variant=DATAFUSION=2
-    // (ErtlMLE). Use the same variant + precision=14 + same input here.
-    let mut sk: HyperLogLogImpl<ErtlMLE, HllBucketListP14, DefaultXxHasher> =
-        <HyperLogLogImpl<ErtlMLE, HllBucketListP14, DefaultXxHasher>>::new();
+    // (Ertl). Use the same variant + precision=14 + same input here.
+    let mut sk: HyperLogLogImpl<Ertl, HllRegistersP14, DefaultXxHasher> =
+        <HyperLogLogImpl<Ertl, HllRegistersP14, DefaultXxHasher>>::new();
     for i in 1..=50i32 {
         let v = i as f64;
         let bytes = v.to_le_bytes();
         let hashed = <DefaultXxHasher as asap_sketchlib::common::SketchHasher>::hash64_seeded(
-            CANONICAL_HASH_SEED,
+            DEFAULT_CANONICAL_SEED_INDEX,
             &DataInput::Bytes(&bytes),
         );
         sk.update_with_hash(hashed);
     }
 
     let state = HyperLogLogState {
-        // 2 = DATAFUSION on the Go wire (matches ErtlMLE)
+        // 2 = DATAFUSION on the Go wire (matches Ertl)
         variant: 2,
         precision: 14,
         registers: sk.registers_as_slice().to_vec(),
@@ -220,7 +220,7 @@ fn sketches_hll_classic_matches_go_envelope() {
 
 #[test]
 fn sketches_ddsketch_matches_go_envelope() {
-    let mut sk = DDSketch::new(0.01);
+    let mut sk = DdSketch::new(0.01);
     for i in 1..=50i32 {
         sk.add(&(i as f64));
     }
@@ -235,8 +235,8 @@ fn sketches_ddsketch_matches_go_envelope() {
     // wire; only alpha + the bucket array.
     let state = DdSketchState {
         alpha: alpha_wire,
-        store_counts: sk.store_counts().to_vec(),
-        store_offset: sk.store_offset(),
+        store_counts: sk.positive_store_counts().to_vec(),
+        store_offset: sk.positive_store_offset(),
         ..Default::default()
     };
     let envelope = SketchEnvelope {

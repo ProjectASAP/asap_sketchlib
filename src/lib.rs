@@ -12,10 +12,10 @@
 //!   `sketchlib-go`. Owns the wire-DTO sketch types consumed by the ASAP
 //!   query engine (`CountMinSketch`, `CountSketch`, `KllSketch`, `HllSketch`,
 //!   `DdSketch`, `HydraKllSketch`, `CountMinSketchWithHeap`,
-//!   `SetAggregator`, `DeltaResult`).
+//!   `SetAggregator`, `SetAggregatorDelta`).
 //!
 //! Most users can start with the crate-root re-exports such as [`DataInput`],
-//! [`CountMin`], [`HyperLogLog`], [`KLL`], and [`DDSketch`]. Reach for the
+//! [`CountMinSketch`], [`HyperLogLog`], [`Kll`], and [`DdSketch`]. Reach for the
 //! submodules directly when you need lower-level storage, hashing, or
 //! framework-specific APIs.
 
@@ -41,7 +41,7 @@ pub mod __private {
 
 pub use common::*;
 pub use message_pack_format::envelope::peek_kind_id;
-pub use message_pack_format::portable::delta_set_aggregator::DeltaResult;
+pub use message_pack_format::portable::delta_set_aggregator::SetAggregatorDelta;
 pub use message_pack_format::portable::set_aggregator::SetAggregator;
 pub use sketch_framework::*;
 pub use sketches::*;

@@ -1,21 +1,21 @@
-//! ASAPv1 wire serialization for [`CountL2HH`], plus the sub-payload the
+//! ASAPv1 wire serialization for [`CountSketchWithL2Norm`], plus the sub-payload the
 //! UnivMon family reuses.
 //!
-//! Child submodule of [`crate::sketches::countsketch_topk`]: it holds the
-//! metadata/payload DTOs, the kind_id constant and the `serialize_to_bytes` /
-//! `deserialize_from_bytes` impls, while the algorithm lives in the parent
+//! Child submodule of [`crate::sketches::countsketch_heap`]: it holds the
+//! metadata/payload DTOs, the kind_id constant and the `to_asapv1` /
+//! `from_asapv1` impls, while the algorithm lives in the parent
 //! module file. Being a descendant module, it reads the private `counts`,
-//! `l2`, `row`, `col` and `seed_idx` fields directly without widening any
+//! `l2`, `row`, `col` and `seed_index` fields directly without widening any
 //! field visibility. See `docs/asapv1_wire_format.md`.
 //!
-//! CountL2HH is one algorithm — a single kind_id `0x19 0x00`. The dimensions
+//! CountSketchWithL2Norm is one algorithm — a single kind_id `0x19 0x00`. The dimensions
 //! (`rows` / `cols`) and the seed-list index the sketch hashes with
 //! (`seed_index`) are construction config and live in the metadata, so the
 //! payload is `[counts, l2]`.
 //!
 //! ## The shared sub-payload
 //!
-//! [`CountL2HH`] is also the per-layer counter of `UnivMon`, `UnivMonPyramid`
+//! [`CountSketchWithL2Norm`] is also the per-layer counter of `UnivMon`, `UnivMonTwoTier`
 //! and every other `L2HH::COUNT`. Those sketches inline the same
 //! `(counts, l2)` state into their own positional arrays instead of nesting an
 //! envelope per layer, so [`layer_state`] and [`rebuild_layer`] are the one
@@ -24,7 +24,7 @@
 //! ## `l2` is carried, not recomputed
 //!
 //! A row's `l2` is its running sum of squares, clamped to `[0, i64::MAX]`. It
-//! is not `sum(counts[row]^2)`: `fast_insert_with_count_without_l2_and_hash`
+//! is not `sum(counts[row]^2)`: `update_weighted_with_hash_without_l2`
 //! moves counters without it and saturation is one-way, so it is state.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
@@ -35,12 +35,12 @@ use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::{HashProfile, SketchHasher, Vector1D, Vector2D};
 
-use super::{CountL2HH, check_l2hh_hash_bits};
+use super::{CountSketchWithL2Norm, check_l2hh_hash_bits};
 
-/// CountL2HH kind_id: family `0x19`, single algorithm variant `0x00`.
+/// CountSketchWithL2Norm kind_id: family `0x19`, single algorithm variant `0x00`.
 const L2HH_KIND: &[u8] = &[0x19, 0x00];
 
-/// CountL2HH descriptor metadata (ASAPv1 §2), a msgpack **map**
+/// CountSketchWithL2Norm descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
 /// the wire spec fixes (Go must mirror it). Hash-spec fields first, then the
 /// structural params `seed_index` / `rows` / `cols`.
@@ -50,7 +50,7 @@ const L2HH_KIND: &[u8] = &[0x19, 0x00];
 /// determines both.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct L2hhMetadata {
+pub(crate) struct CountSketchWithL2NormMetadata {
     pub(crate) metadata_version: u8,
     pub(crate) hash_profile_id: String,
     pub(crate) hash_algorithm: String,
@@ -62,12 +62,16 @@ pub(crate) struct L2hhMetadata {
     pub(crate) cols: u32,
 }
 
-/// Builds the CountL2HH descriptor metadata from the hasher's [`HashProfile`],
+/// Builds the CountSketchWithL2Norm descriptor metadata from the hasher's [`HashProfile`],
 /// so the wire bytes truthfully describe how the sketch was hashed.
 /// `seed_index` is the sketch's own seed offset, a construction parameter
 /// rather than a profile constant, so it is carried as a structural param.
-pub(crate) fn l2hh_metadata<H: HashProfile>(seed_index: u32, rows: u32, cols: u32) -> L2hhMetadata {
-    L2hhMetadata {
+pub(crate) fn count_sketch_with_l2_norm_metadata<H: HashProfile>(
+    seed_index: u32,
+    rows: u32,
+    cols: u32,
+) -> CountSketchWithL2NormMetadata {
+    CountSketchWithL2NormMetadata {
         metadata_version: 1,
         hash_profile_id: H::PROFILE_ID.to_string(),
         hash_algorithm: H::ALGORITHM.to_string(),
@@ -80,11 +84,11 @@ pub(crate) fn l2hh_metadata<H: HashProfile>(seed_index: u32, rows: u32, cols: u3
     }
 }
 
-/// CountL2HH payload (ASAPv1 §3.x), a msgpack **array** (`to_vec`,
+/// CountSketchWithL2Norm payload (ASAPv1 §3.x), a msgpack **array** (`to_vec`,
 /// positional): `[counts, l2]`. `counts` is packed row-major over `rows*cols`
 /// signed cells; `l2` is one accumulator per row.
 #[derive(Debug, Serialize, Deserialize)]
-struct L2hhPayload {
+struct CountSketchWithL2NormPayload {
     counts: Vec<i64>,
     l2: Vec<i64>,
 }
@@ -109,23 +113,23 @@ pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
 }
 
 /// Rejects a seed index the hasher's seed list does not hold. Seed selection
-/// wraps (`seed_idx % seed_list.len()`), so an out-of-range index would give a
+/// wraps (`seed_index % seed_list.len()`), so an out-of-range index would give a
 /// second encoding of a state the in-range index already encodes.
-pub(crate) fn check_seed_index(seed_idx: usize, seed_list_len: usize) -> Result<(), String> {
-    if seed_idx >= seed_list_len {
+pub(crate) fn check_seed_index(seed_index: usize, seed_list_len: usize) -> Result<(), String> {
+    if seed_index >= seed_list_len {
         return Err(format!(
-            "CountL2HH seed_index {seed_idx} is past the seed list's {seed_list_len} entries"
+            "CountL2HH seed_index {seed_index} is past the seed list's {seed_list_len} entries"
         ));
     }
     Ok(())
 }
 
-/// The `(counts, l2)` sub-payload one CountL2HH contributes, in the order the
+/// The `(counts, l2)` sub-payload one CountSketchWithL2Norm contributes, in the order the
 /// wire emits it. Rejects a matrix whose cell count disagrees with its own
 /// dimensions, a mis-sized `l2`, and a negative accumulator — states the
 /// decoder refuses.
 pub(crate) fn layer_state<H: SketchHasher>(
-    sketch: &CountL2HH<H>,
+    sketch: &CountSketchWithL2Norm<H>,
 ) -> Result<(&[i64], &[i64]), RmpEncodeError> {
     check_dimensions(sketch.row, sketch.col).map_err(RmpEncodeError::Syntax)?;
     let cells = sketch.row.saturating_mul(sketch.col);
@@ -152,16 +156,16 @@ pub(crate) fn layer_state<H: SketchHasher>(
     Ok((counts, l2))
 }
 
-/// Rebuilds one CountL2HH from a validated sub-payload. The lengths are
+/// Rebuilds one CountSketchWithL2Norm from a validated sub-payload. The lengths are
 /// checked against the declared geometry before the matrix is built, so a
 /// crafted `rows`/`cols` never drives an allocation.
 pub(crate) fn rebuild_layer<H: SketchHasher>(
     rows: usize,
     cols: usize,
-    seed_idx: usize,
+    seed_index: usize,
     counts: &[i64],
     l2: &[i64],
-) -> Result<CountL2HH<H>, RmpDecodeError> {
+) -> Result<CountSketchWithL2Norm<H>, RmpDecodeError> {
     check_dimensions(rows, cols).map_err(RmpDecodeError::Uncategorized)?;
     let cells = rows.saturating_mul(cols);
     if counts.len() != cells {
@@ -181,19 +185,19 @@ pub(crate) fn rebuild_layer<H: SketchHasher>(
             "CountL2HH l2 accumulator {negative} is negative"
         )));
     }
-    Ok(CountL2HH {
+    Ok(CountSketchWithL2Norm {
         counts: Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]),
         l2: Vector1D::from_vec(l2.to_vec()),
         row: rows,
         col: cols,
-        seed_idx,
+        seed_index,
         _hasher: PhantomData,
     })
 }
 
-// Wire serialization for CountL2HH. `l2hh_wire` is a descendant of the sketch
+// Wire serialization for CountSketchWithL2Norm. `l2hh_wire` is a descendant of the sketch
 // module, so this impl reads the private fields directly.
-impl<H: SketchHasher + HashProfile> CountL2HH<H> {
+impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope
     /// (kind_id `0x19 0x00`). The metadata is derived from the hasher's
     /// [`HashProfile`], so it truthfully describes how the sketch was hashed.
@@ -203,9 +207,9 @@ impl<H: SketchHasher + HashProfile> CountL2HH<H> {
     /// the 128-bit key hash carries, when the seed index is past the hasher's
     /// seed list, or when a dimension or the seed index overflows its `u32`
     /// metadata field.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         check_dimensions(self.row, self.col).map_err(RmpEncodeError::Syntax)?;
-        check_seed_index(self.seed_idx, H::seed_list().len()).map_err(RmpEncodeError::Syntax)?;
+        check_seed_index(self.seed_index, H::seed_list().len()).map_err(RmpEncodeError::Syntax)?;
         let (counts, l2) = layer_state(self)?;
         let field = |name: &str, value: usize| {
             u32::try_from(value).map_err(|_| {
@@ -214,12 +218,12 @@ impl<H: SketchHasher + HashProfile> CountL2HH<H> {
                 ))
             })
         };
-        let metadata = rmp_serde::to_vec_named(&l2hh_metadata::<H>(
-            field("seed_index", self.seed_idx)?,
+        let metadata = rmp_serde::to_vec_named(&count_sketch_with_l2_norm_metadata::<H>(
+            field("seed_index", self.seed_index)?,
             field("rows", self.row)?,
             field("cols", self.col)?,
         ))?;
-        let payload = rmp_serde::to_vec(&L2hhPayload {
+        let payload = rmp_serde::to_vec(&CountSketchWithL2NormPayload {
             counts: counts.to_vec(),
             l2: l2.to_vec(),
         })?;
@@ -230,7 +234,7 @@ impl<H: SketchHasher + HashProfile> CountL2HH<H> {
     /// dimensions and the seed index are structural (they are properties of
     /// the stored sketch, not of the target), so they are echoed back into the
     /// expected metadata; the hash spec is pinned against this target.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != L2HH_KIND {
@@ -238,15 +242,15 @@ impl<H: SketchHasher + HashProfile> CountL2HH<H> {
                 "CountL2HH kind_id mismatch: stored {kind_id:?}, expected {L2HH_KIND:?}"
             )));
         }
-        let meta: L2hhMetadata = envelope::decode_block(metadata)?;
-        if meta != l2hh_metadata::<H>(meta.seed_index, meta.rows, meta.cols) {
+        let meta: CountSketchWithL2NormMetadata = envelope::decode_block(metadata)?;
+        if meta != count_sketch_with_l2_norm_metadata::<H>(meta.seed_index, meta.rows, meta.cols) {
             return Err(RmpDecodeError::Uncategorized(
                 "ASAPv1 CountL2HH envelope: metadata mismatch".to_string(),
             ));
         }
         check_seed_index(meta.seed_index as usize, meta.seed_list.len())
             .map_err(RmpDecodeError::Uncategorized)?;
-        let p: L2hhPayload = envelope::decode_block(payload)?;
+        let p: CountSketchWithL2NormPayload = envelope::decode_block(payload)?;
         rebuild_layer::<H>(
             meta.rows as usize,
             meta.cols as usize,
@@ -261,29 +265,31 @@ impl<H: SketchHasher + HashProfile> CountL2HH<H> {
 mod tests {
     use super::*;
     use crate::{
-        CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, HeapItem, MATRIX_MAX_ROWS, RegularPath,
+        DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS, OwnedDataInput,
+        RegularPath,
     };
     use rmp_serde::from_slice;
 
     /// The standard-profile sketch, named so decode calls can pick a hasher.
-    type Std = CountL2HH<DefaultXxHasher>;
+    type Std = CountSketchWithL2Norm<DefaultXxHasher>;
 
-    fn populated() -> CountL2HH {
-        let mut sketch = CountL2HH::with_dimensions_and_seed(3, 32, 7);
+    fn populated() -> CountSketchWithL2Norm {
+        let mut sketch = CountSketchWithL2Norm::with_dimensions_and_seed_index(3, 32, 7);
         for (key, weight) in [("alpha", 9i64), ("beta", 5), ("gamma", -4)] {
-            sketch.fast_insert_with_count(&DataInput::Str(key), weight);
+            sketch.update_weighted(&DataInput::Str(key), weight);
         }
         sketch
     }
 
-    fn metadata_of(bytes: &[u8]) -> L2hhMetadata {
+    fn metadata_of(bytes: &[u8]) -> CountSketchWithL2NormMetadata {
         let (_, metadata, _) = envelope::split(bytes).expect("split");
         from_slice(metadata).expect("metadata")
     }
 
-    fn crafted(meta: &L2hhMetadata, counts: Vec<i64>, l2: Vec<i64>) -> Vec<u8> {
+    fn crafted(meta: &CountSketchWithL2NormMetadata, counts: Vec<i64>, l2: Vec<i64>) -> Vec<u8> {
         let metadata = rmp_serde::to_vec_named(meta).expect("metadata");
-        let payload = rmp_serde::to_vec(&L2hhPayload { counts, l2 }).expect("payload");
+        let payload =
+            rmp_serde::to_vec(&CountSketchWithL2NormPayload { counts, l2 }).expect("payload");
         envelope::encode(L2HH_KIND, &metadata, &payload)
     }
 
@@ -293,16 +299,16 @@ mod tests {
     fn countl2hh_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
         assert!(
-            Std::with_dimensions(rows, 32).serialize_to_bytes().is_err(),
+            Std::with_dimensions(rows, 32).to_asapv1().is_err(),
             "a matrix past MATRIX_MAX_ROWS must not serialize"
         );
 
         let bytes = crafted(
-            &l2hh_metadata::<DefaultXxHasher>(0, rows as u32, 32),
+            &count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, rows as u32, 32),
             vec![0; rows * 32],
             vec![0; rows],
         );
-        let problem = Std::deserialize_from_bytes(&bytes)
+        let problem = Std::from_asapv1(&bytes)
             .expect_err("rows past MATRIX_MAX_ROWS must be rejected")
             .to_string();
         assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
@@ -310,7 +316,7 @@ mod tests {
         // The boundary itself is eligible.
         assert!(
             Std::with_dimensions(MATRIX_MAX_ROWS, 32)
-                .serialize_to_bytes()
+                .to_asapv1()
                 .is_ok()
         );
     }
@@ -318,7 +324,7 @@ mod tests {
     #[test]
     fn count_l2hh_round_trip_serialization() {
         let sketch = populated();
-        let encoded = sketch.serialize_to_bytes().expect("serialize CountL2HH");
+        let encoded = sketch.to_asapv1().expect("serialize CountL2HH");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x19, 0x00]); // kind_id_len=2, kind_id=[0x19,0x00]
 
@@ -326,59 +332,59 @@ mod tests {
         assert_eq!(meta.metadata_version, 1);
         assert_eq!((meta.seed_index, meta.rows, meta.cols), (7, 3, 32));
 
-        let decoded = Std::deserialize_from_bytes(&encoded).expect("deserialize CountL2HH");
+        let decoded = Std::from_asapv1(&encoded).expect("deserialize CountL2HH");
         assert_eq!(decoded.rows(), 3);
         assert_eq!(decoded.cols(), 32);
-        assert_eq!(decoded.seed_idx(), 7);
+        assert_eq!(decoded.seed_index(), 7);
         assert_eq!(
             sketch.as_storage().as_slice(),
             decoded.as_storage().as_slice()
         );
         assert_eq!(sketch.l2.as_slice(), decoded.l2.as_slice());
-        assert_eq!(sketch.get_l2(), decoded.get_l2());
+        assert_eq!(sketch.l2(), decoded.l2());
     }
 
     /// A decoded sketch re-serializes byte-identically.
     #[test]
     fn count_l2hh_decoded_re_serializes_identically() {
         let sketch = populated();
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
-        let decoded = Std::deserialize_from_bytes(&encoded).expect("decode");
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), encoded);
+        let encoded = sketch.to_asapv1().expect("serialize");
+        let decoded = Std::from_asapv1(&encoded).expect("decode");
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
     }
 
-    /// Count Sketch cells are signed, so a CountL2HH carries negatives through
+    /// Count Sketch cells are signed, so a CountSketchWithL2Norm carries negatives through
     /// unchanged.
     #[test]
     fn count_l2hh_negative_counters_round_trip() {
-        let mut sketch: CountL2HH = CountL2HH::with_dimensions(2, 8);
-        sketch.fast_insert_with_count(&DataInput::U64(11), -25);
-        sketch.fast_insert_with_count(&DataInput::U64(12), -7);
+        let mut sketch: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(2, 8);
+        sketch.update_weighted(&DataInput::U64(11), -25);
+        sketch.update_weighted(&DataInput::U64(12), -7);
         assert!(sketch.as_storage().as_slice().iter().any(|&v| v < 0));
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
-        let decoded = Std::deserialize_from_bytes(&encoded).expect("decode");
+        let encoded = sketch.to_asapv1().expect("serialize");
+        let decoded = Std::from_asapv1(&encoded).expect("decode");
         assert_eq!(
             sketch.as_storage().as_slice(),
             decoded.as_storage().as_slice()
         );
         assert!(decoded.as_storage().as_slice().iter().any(|&v| v < 0));
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), encoded);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
     }
 
     /// The seed index is state, not a profile constant: two sketches that
     /// differ only in it do not share bytes and do not decode into each other.
     #[test]
     fn count_l2hh_seed_index_travels_with_the_sketch() {
-        let zero: CountL2HH = CountL2HH::with_dimensions_and_seed(2, 8, 0);
-        let nine: CountL2HH = CountL2HH::with_dimensions_and_seed(2, 8, 9);
-        let zero_bytes = zero.serialize_to_bytes().expect("serialize");
-        let nine_bytes = nine.serialize_to_bytes().expect("serialize");
+        let zero: CountSketchWithL2Norm =
+            CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 8, 0);
+        let nine: CountSketchWithL2Norm =
+            CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 8, 9);
+        let zero_bytes = zero.to_asapv1().expect("serialize");
+        let nine_bytes = nine.to_asapv1().expect("serialize");
         assert_ne!(zero_bytes, nine_bytes);
         assert_eq!(
-            Std::deserialize_from_bytes(&nine_bytes)
-                .expect("decode")
-                .seed_idx(),
+            Std::from_asapv1(&nine_bytes).expect("decode").seed_index(),
             9
         );
     }
@@ -397,19 +403,19 @@ mod tests {
         fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
             DefaultXxHasher::hash128_seeded(d, key)
         }
-        fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(d: usize, key: &OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(d, key)
         }
-        fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(d: usize, key: &OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(d, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -421,30 +427,30 @@ mod tests {
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
     #[test]
     fn count_l2hh_custom_hasher_profile_round_trips_and_is_self_describing() {
-        // (a) A CountL2HH built with a custom-profile hasher round-trips.
-        let mut alt = CountL2HH::<AltHasher>::with_dimensions(3, 32);
-        let mut std: CountL2HH = CountL2HH::with_dimensions(3, 32);
-        alt.fast_insert_with_count(&DataInput::U64(42), 5);
-        std.fast_insert_with_count(&DataInput::U64(42), 5);
+        // (a) A CountSketchWithL2Norm built with a custom-profile hasher round-trips.
+        let mut alt = CountSketchWithL2Norm::<AltHasher>::with_dimensions(3, 32);
+        let mut std: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(3, 32);
+        alt.update_weighted(&DataInput::U64(42), 5);
+        std.update_weighted(&DataInput::U64(42), 5);
 
-        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
+        let alt_bytes = alt.to_asapv1().expect("alt serialize");
         let decoded =
-            CountL2HH::<AltHasher>::deserialize_from_bytes(&alt_bytes).expect("alt decode");
+            CountSketchWithL2Norm::<AltHasher>::from_asapv1(&alt_bytes).expect("alt decode");
         assert_eq!(alt.as_storage().as_slice(), decoded.as_storage().as_slice());
 
         // (b) Bytes differ from the standard-profile sketch.
-        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        let std_bytes = std.to_asapv1().expect("std serialize");
         assert_ne!(alt_bytes, std_bytes);
 
         // (c) Standard-profile decode fails closed on custom-profile bytes.
         assert!(
-            Std::deserialize_from_bytes(&alt_bytes).is_err(),
+            Std::from_asapv1(&alt_bytes).is_err(),
             "standard-profile decode must reject custom-profile bytes"
         );
     }
@@ -454,13 +460,13 @@ mod tests {
     #[test]
     fn count_l2hh_rejects_foreign_kind_ids() {
         let count_sketch = crate::Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect("serialize Count Sketch");
-        let univmon = crate::UnivMon::init_univmon(4, 2, 8, 2)
-            .serialize_to_bytes()
+        let univmon = crate::UnivMon::new(4, 2, 8, 2)
+            .to_asapv1()
             .expect("serialize UnivMon");
-        let pyramid = crate::UnivMonPyramid::new(4, 1, 2, 8, 2, 4, 2)
-            .serialize_to_bytes()
+        let pyramid = crate::UnivMonTwoTier::new(4, 1, 2, 8, 2, 4, 2)
+            .to_asapv1()
             .expect("serialize UnivMonPyramid");
         let univmon_q = crate::UnivMonQ::new(crate::UnivMonQConfig {
             levels: 2,
@@ -471,12 +477,12 @@ mod tests {
             ..Default::default()
         })
         .expect("config")
-        .serialize_to_bytes()
+        .to_asapv1()
         .expect("serialize UnivMonQ");
 
         for foreign in [count_sketch, univmon, pyramid, univmon_q] {
             assert!(
-                Std::deserialize_from_bytes(&foreign).is_err(),
+                Std::from_asapv1(&foreign).is_err(),
                 "a foreign envelope must not decode as a CountL2HH"
             );
         }
@@ -487,22 +493,22 @@ mod tests {
     /// carry. Both checks precede any allocation.
     #[test]
     fn count_l2hh_rejects_crafted_geometry() {
-        let meta = l2hh_metadata::<DefaultXxHasher>(0, 4, 0);
-        assert!(Std::deserialize_from_bytes(&crafted(&meta, Vec::new(), vec![0; 4])).is_err());
+        let meta = count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, 4, 0);
+        assert!(Std::from_asapv1(&crafted(&meta, Vec::new(), vec![0; 4])).is_err());
 
-        let huge = l2hh_metadata::<DefaultXxHasher>(0, 1, 1 << 24);
+        let huge = count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, 1, 1 << 24);
         assert!(
-            Std::deserialize_from_bytes(&crafted(&huge, vec![1, 2, 3], vec![0; 1])).is_err(),
+            Std::from_asapv1(&crafted(&huge, vec![1, 2, 3], vec![0; 1])).is_err(),
             "counts length must match rows*cols"
         );
 
-        let meta = l2hh_metadata::<DefaultXxHasher>(0, 2, 4);
+        let meta = count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, 2, 4);
         assert!(
-            Std::deserialize_from_bytes(&crafted(&meta, vec![0; 8], vec![0; 5])).is_err(),
+            Std::from_asapv1(&crafted(&meta, vec![0; 8], vec![0; 5])).is_err(),
             "l2 length must match rows"
         );
         assert!(
-            Std::deserialize_from_bytes(&crafted(&meta, vec![0; 8], vec![-1, 0])).is_err(),
+            Std::from_asapv1(&crafted(&meta, vec![0; 8], vec![-1, 0])).is_err(),
             "a negative l2 accumulator is not a state the algorithm reaches"
         );
     }
@@ -511,10 +517,10 @@ mod tests {
     /// Serializing it must fail rather than emit bytes the decoder refuses.
     #[test]
     fn count_l2hh_rejects_serializing_an_unfilled_matrix() {
-        let mut sketch: CountL2HH = CountL2HH::with_dimensions(2, 4);
+        let mut sketch: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(2, 4);
         sketch.counts = Vector2D::init(2, 4);
         assert!(
-            sketch.serialize_to_bytes().is_err(),
+            sketch.to_asapv1().is_err(),
             "a matrix whose cell count disagrees with its dimensions must not serialize"
         );
     }
@@ -534,7 +540,7 @@ mod tests {
             seed_index: u32,
             rows: u32,
             cols: u32,
-            bogus_field: u8, // key not in L2hhMetadata
+            bogus_field: u8, // key not in CountSketchWithL2NormMetadata
         }
         #[derive(Serialize)]
         struct WithoutCols {
@@ -547,7 +553,7 @@ mod tests {
             seed_index: u32,
             rows: u32,
         }
-        let m = l2hh_metadata::<DefaultXxHasher>(0, 2, 4);
+        let m = count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, 2, 4);
         let extra = WithExtra {
             metadata_version: m.metadata_version,
             hash_profile_id: m.hash_profile_id.clone(),
@@ -571,11 +577,15 @@ mod tests {
             rows: m.rows,
         };
         assert!(
-            from_slice::<L2hhMetadata>(&rmp_serde::to_vec_named(&extra).unwrap()).is_err(),
+            from_slice::<CountSketchWithL2NormMetadata>(&rmp_serde::to_vec_named(&extra).unwrap())
+                .is_err(),
             "an unknown metadata key must be rejected"
         );
         assert!(
-            from_slice::<L2hhMetadata>(&rmp_serde::to_vec_named(&without).unwrap()).is_err(),
+            from_slice::<CountSketchWithL2NormMetadata>(
+                &rmp_serde::to_vec_named(&without).unwrap()
+            )
+            .is_err(),
             "a missing required key must be rejected"
         );
     }
@@ -583,12 +593,12 @@ mod tests {
     /// A sketch past the hash budget, built without the constructor's check,
     /// as a struct deserialized by another route could be.
     fn unchecked(rows: usize, cols: usize) -> Std {
-        CountL2HH {
+        CountSketchWithL2Norm {
             counts: Vector2D::init(rows, cols),
             l2: Vector1D::filled(rows, 0),
             row: rows,
             col: cols,
-            seed_idx: 0,
+            seed_index: 0,
             _hasher: PhantomData,
         }
     }
@@ -601,17 +611,17 @@ mod tests {
     fn count_l2hh_rejects_a_geometry_past_the_hash_budget() {
         for (rows, cols) in [(12usize, 4096usize), (13, 2048)] {
             let problem = unchecked(rows, cols)
-                .serialize_to_bytes()
+                .to_asapv1()
                 .expect_err("a geometry past the hash budget must not serialize")
                 .to_string();
             assert!(problem.contains("hash bits"), "got {problem}");
 
             let bytes = crafted(
-                &l2hh_metadata::<DefaultXxHasher>(0, rows as u32, cols as u32),
+                &count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, rows as u32, cols as u32),
                 vec![0; rows * cols],
                 vec![0; rows],
             );
-            let problem = Std::deserialize_from_bytes(&bytes)
+            let problem = Std::from_asapv1(&bytes)
                 .expect_err("a geometry past the hash budget must not decode")
                 .to_string();
             assert!(problem.contains("hash bits"), "got {problem}");
@@ -624,14 +634,14 @@ mod tests {
     #[test]
     fn count_l2hh_rejects_column_fields_overlapping_the_sign_bits() {
         assert!(
-            unchecked(10, 4096).serialize_to_bytes().is_err(),
+            unchecked(10, 4096).to_asapv1().is_err(),
             "column fields must not reach into the sign bits"
         );
         // The widest geometry each column count still admits.
-        assert!(Std::with_dimensions(9, 4096).serialize_to_bytes().is_ok());
-        assert!(Std::with_dimensions(10, 2048).serialize_to_bytes().is_ok());
+        assert!(Std::with_dimensions(9, 4096).to_asapv1().is_ok());
+        assert!(Std::with_dimensions(10, 2048).to_asapv1().is_ok());
         assert!(
-            unchecked(11, 2048).serialize_to_bytes().is_err(),
+            unchecked(11, 2048).to_asapv1().is_err(),
             "column fields must not reach into the sign bits"
         );
     }
@@ -644,40 +654,45 @@ mod tests {
         let seeds = <DefaultXxHasher as HashProfile>::seed_list().len();
         let wrapped = seeds + 5;
 
-        let problem = CountL2HH::<DefaultXxHasher>::with_dimensions_and_seed(2, 8, wrapped)
-            .serialize_to_bytes()
-            .expect_err("a wrapped seed index must not serialize")
-            .to_string();
+        let problem =
+            CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions_and_seed_index(2, 8, wrapped)
+                .to_asapv1()
+                .expect_err("a wrapped seed index must not serialize")
+                .to_string();
         assert!(problem.contains("seed_index"), "got {problem}");
 
         let bytes = crafted(
-            &l2hh_metadata::<DefaultXxHasher>(wrapped as u32, 2, 8),
+            &count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(wrapped as u32, 2, 8),
             vec![0; 16],
             vec![0; 2],
         );
-        let problem = Std::deserialize_from_bytes(&bytes)
+        let problem = Std::from_asapv1(&bytes)
             .expect_err("a wrapped seed index must not decode")
             .to_string();
         assert!(problem.contains("seed_index"), "got {problem}");
 
         // The last in-range index is eligible.
         assert!(
-            CountL2HH::<DefaultXxHasher>::with_dimensions_and_seed(2, 8, seeds - 1)
-                .serialize_to_bytes()
-                .is_ok()
+            CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions_and_seed_index(
+                2,
+                8,
+                seeds - 1
+            )
+            .to_asapv1()
+            .is_ok()
         );
     }
 
     /// An empty sketch has exactly one encoding.
     #[test]
     fn count_l2hh_empty_has_one_encoding() {
-        let left: CountL2HH = CountL2HH::with_dimensions(3, 32);
-        let mut right: CountL2HH = CountL2HH::with_dimensions(3, 32);
-        right.fast_insert_with_count(&DataInput::U64(5), 4);
+        let left: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(3, 32);
+        let mut right: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(3, 32);
+        right.update_weighted(&DataInput::U64(5), 4);
         right.clear();
         assert_eq!(
-            left.serialize_to_bytes().expect("serialize"),
-            right.serialize_to_bytes().expect("serialize")
+            left.to_asapv1().expect("serialize"),
+            right.to_asapv1().expect("serialize")
         );
     }
 }

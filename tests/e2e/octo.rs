@@ -1,5 +1,5 @@
 //! E2E OctoSketch suite: delta-promotion conservation invariants for the
-//! CountMin, Count and HyperLogLog child/parent protocol, and the
+//! CountMinSketch, Count and HyperLogLog child/parent protocol, and the
 //! `octo-runtime` multi-threaded pipeline checked against single-threaded
 //! replays of the same round-robin partition.
 //!
@@ -31,23 +31,25 @@
 use crate::common;
 
 #[cfg(feature = "octo-runtime")]
-use asap_sketchlib::DD_PROMASK;
-use asap_sketchlib::common::BOTTOM_LAYER_FINDER;
+use asap_sketchlib::OCTO_DDSKETCH_DEFAULT_THRESHOLD;
+use asap_sketchlib::common::UNIVMON_BOTTOM_LAYER_SEED_INDEX;
 use asap_sketchlib::{
-    CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin, DDSketch, DataInput,
-    DdWorkerSketch, ErtlMLE, FastPath, HLL_PROMASK, HllDelta, HyperLogLog, HyperLogLogP12,
-    HyperLogLogP16, L2HH, L2hhWorkerSketch, LayeredCountDelta, OctoAggregator, OctoPlan,
-    OctoThreshold, OctoWorker, RegularPath, UnivMon, UnivMonDeltaFidelity, UnivMonOctoAggregator,
-    UnivMonOctoPlan, UnivMonOctoWorker, Vector2D, bottom_layer_for_hash, hash64_seeded,
-    hash128_seeded, input_to_owned, univmon_layer_threshold,
+    Classic, Count, CountMinSketch, CountMinSketchCellDelta, CountSketchCellDelta,
+    CountSketchWithL2NormWorker, DataInput, DdSketch, DdSketchWorker, Ertl, FastPath,
+    HllRegisterDelta, HyperLogLog, HyperLogLogP12, HyperLogLogP16, L2HH,
+    OCTO_COUNT_MIN_DEFAULT_THRESHOLD, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
+    OCTO_HLL_DEFAULT_THRESHOLD, OctoAggregator, OctoPlan, OctoThreshold, OctoWorker, RegularPath,
+    UnivMon, UnivMonCellDelta, UnivMonDeltaFidelity, UnivMonOctoAggregator, UnivMonOctoPlan,
+    UnivMonOctoWorker, Vector2D, bottom_layer_for_hash, hash64_seeded, hash128_seeded,
+    input_to_owned, univmon_layer_threshold,
 };
 use common::{FreqTruth, zipf_u64};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 
-type Cm = CountMin<Vector2D<i32>, RegularPath>;
-type CmFast = CountMin<Vector2D<i32>, FastPath>;
+type Cm = CountMinSketch<Vector2D<i32>, RegularPath>;
+type CmFast = CountMinSketch<Vector2D<i32>, FastPath>;
 type Cs = Count<Vector2D<i32>, RegularPath>;
 type CsFast = Count<Vector2D<i32>, FastPath>;
 
@@ -55,7 +57,7 @@ const ROWS: usize = 5;
 const COLS: usize = 2048;
 
 /// τ in the paper's notation (NSDI '24, §4.1): the worker promotion threshold.
-const TAU: i32 = CM_PROMASK as i32;
+const TAU: i32 = OCTO_COUNT_MIN_DEFAULT_THRESHOLD as i32;
 
 /// Largest amount a single cell can lag its exact count: promotion fires at a
 /// multiple of τ, so at most `τ - 1` un-promoted increments remain.
@@ -77,7 +79,7 @@ fn inputs_from(keys: &[u64]) -> Vec<DataInput<'static>> {
 // Child-run helpers: drive one child sketch over a stream, capture its deltas
 // ---------------------------------------------------------------------------
 
-fn cm_child_run(stream: &[u64], rows: usize, cols: usize) -> (Cm, Vec<CmDelta>) {
+fn cm_child_run(stream: &[u64], rows: usize, cols: usize) -> (Cm, Vec<CountMinSketchCellDelta>) {
     let mut child = Cm::with_dimensions(rows, cols);
     let mut deltas = Vec::new();
     for k in stream {
@@ -86,7 +88,7 @@ fn cm_child_run(stream: &[u64], rows: usize, cols: usize) -> (Cm, Vec<CmDelta>) 
     (child, deltas)
 }
 
-fn cs_child_run(stream: &[u64], rows: usize, cols: usize) -> (Cs, Vec<CountDelta>) {
+fn cs_child_run(stream: &[u64], rows: usize, cols: usize) -> (Cs, Vec<CountSketchCellDelta>) {
     let mut child = Cs::with_dimensions(rows, cols);
     let mut deltas = Vec::new();
     for k in stream {
@@ -95,7 +97,7 @@ fn cs_child_run(stream: &[u64], rows: usize, cols: usize) -> (Cs, Vec<CountDelta
     (child, deltas)
 }
 
-fn hll_child_run(stream: &[u64]) -> (HyperLogLog<Classic>, Vec<HllDelta>) {
+fn hll_child_run(stream: &[u64]) -> (HyperLogLog<Classic>, Vec<HllRegisterDelta>) {
     let mut child = HyperLogLog::<Classic>::default();
     let mut deltas = Vec::new();
     for k in stream {
@@ -121,7 +123,7 @@ fn cs_cells(sketch: &Cs) -> Vec<i32> {
 }
 
 // ---------------------------------------------------------------------------
-// CountMin delta protocol
+// CountMinSketch delta protocol
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -160,7 +162,10 @@ fn cm_deltas_are_well_formed_and_carry_exactly_one_promotion() {
 
     assert!(!deltas.is_empty(), "a 20k stream must promote something");
     for d in &deltas {
-        assert_eq!(d.value, CM_PROMASK, "CM promotes exactly the mask value");
+        assert_eq!(
+            d.value, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
+            "CM promotes exactly the mask value"
+        );
         assert!((d.row as usize) < ROWS, "row {} out of range", d.row);
         assert!((d.col as usize) < COLS, "col {} out of range", d.col);
     }
@@ -181,7 +186,7 @@ fn cm_parent_holds_every_completed_promotion() {
         reference.update(&DataInput::U64(*k));
     }
 
-    let mask = CM_PROMASK as i32;
+    let mask = OCTO_COUNT_MIN_DEFAULT_THRESHOLD as i32;
     let (parent_cells, ref_cells) = (cm_cells(&parent), cm_cells(&reference));
     let mut worst_residual = 0;
     for (i, (&p, &r)) in parent_cells.iter().zip(ref_cells.iter()).enumerate() {
@@ -240,7 +245,7 @@ fn cm_fast_path_promotes_on_the_same_schedule_as_the_regular_path() {
     let mut fast_deltas = 0usize;
     for k in &stream {
         fast_child.update_emit_delta(&DataInput::U64(*k), &mut |d| {
-            assert_eq!(d.value, CM_PROMASK);
+            assert_eq!(d.value, OCTO_COUNT_MIN_DEFAULT_THRESHOLD);
             fast_parent.apply_delta(d);
             fast_deltas += 1;
         });
@@ -269,19 +274,19 @@ fn cm_fast_path_promotes_on_the_same_schedule_as_the_regular_path() {
 
 #[test]
 fn cm_delta_addressing_survives_columns_past_the_u16_ceiling() {
-    // `CmDelta`'s row and col fields are u32, so a geometry wider than
+    // `CountMinSketchCellDelta`'s row and col fields are u32, so a geometry wider than
     // 65_536 columns addresses every cell exactly.
     let rows = 3;
     let cols = 100_000;
     let stream = keys(60_000, 4_096, 9_108);
 
-    let mut child = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
-    let mut parent = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
+    let mut child = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
+    let mut parent = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
     for k in &stream {
         child.update_emit_delta(&DataInput::U64(*k), &mut |d| parent.apply_delta(d));
     }
 
-    let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
+    let mut reference = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
     for k in &stream {
         reference.update(&DataInput::U64(*k));
     }
@@ -377,7 +382,7 @@ fn count_deltas_carry_exactly_the_signed_threshold() {
     for d in &deltas {
         assert_eq!(
             d.value.unsigned_abs(),
-            COUNT_PROMASK,
+            OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
             "Count resets on promotion, so a delta is always ±the mask"
         );
         assert!((d.row as usize) < ROWS, "row {} out of range", d.row);
@@ -454,7 +459,7 @@ fn count_fast_path_conserves_counts_like_the_regular_path() {
     let mut parent = CsFast::with_dimensions(ROWS, COLS);
     for k in &stream {
         child.update_emit_delta(&DataInput::U64(*k), &mut |d| {
-            assert_eq!(d.value.unsigned_abs(), COUNT_PROMASK);
+            assert_eq!(d.value.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD);
             parent.apply_delta(d);
         });
     }
@@ -552,7 +557,7 @@ fn hll_promotion_reproduces_the_single_thread_registers_exactly() {
     }
 
     assert_eq!(
-        HLL_PROMASK, 0,
+        OCTO_HLL_DEFAULT_THRESHOLD, 0,
         "the exactness argument relies on every improvement being promoted"
     );
     assert_eq!(
@@ -603,9 +608,9 @@ fn hll_promotion_is_exact_for_every_variant_and_precision() {
     check!(HyperLogLogP12<Classic>, "P12/Classic");
     check!(HyperLogLog<Classic>, "P14/Classic");
     check!(HyperLogLogP16<Classic>, "P16/Classic");
-    check!(HyperLogLogP12<ErtlMLE>, "P12/ErtlMLE");
-    check!(HyperLogLog<ErtlMLE>, "P14/ErtlMLE");
-    check!(HyperLogLogP16<ErtlMLE>, "P16/ErtlMLE");
+    check!(HyperLogLogP12<Ertl>, "P12/ErtlMLE");
+    check!(HyperLogLog<Ertl>, "P14/ErtlMLE");
+    check!(HyperLogLogP16<Ertl>, "P16/ErtlMLE");
 }
 
 #[test]
@@ -707,7 +712,7 @@ fn hll_cardinality_survives_the_delta_round_trip_exactly() {
         reference.update(&DataInput::U64(*k));
     }
 
-    // At HLL_PROMASK = 0 every improvement is promoted, so this is an equality,
+    // At OCTO_HLL_DEFAULT_THRESHOLD = 0 every improvement is promoted, so this is an equality,
     // not a tolerance: a band would pass on an implementation that dropped a
     // slice of the register improvements.
     assert_eq!(
@@ -730,9 +735,10 @@ fn hll_cardinality_survives_the_delta_round_trip_exactly() {
 mod runtime {
     use super::*;
     use asap_sketchlib::{
-        CmOctoAggregator, CmOctoPlan, CmTopKOctoAggregator, CmTopKOctoPlan, CountOctoAggregator,
-        CountOctoPlan, DdOctoAggregator, DdOctoPlan, HllOctoAggregator, HllOctoPlan,
-        OctoAggregator, OctoConfig, OctoPartition, OctoPlan, OctoRuntime, OctoWorker, run_octo,
+        CountMinSketchOctoAggregator, CountMinSketchOctoPlan, CountMinSketchWithHeapOctoAggregator,
+        CountMinSketchWithHeapOctoPlan, CountSketchOctoAggregator, CountSketchOctoPlan,
+        DdOctoAggregator, DdOctoPlan, HllOctoAggregator, HllOctoPlan, OctoAggregator, OctoConfig,
+        OctoPartition, OctoPlan, OctoRuntime, OctoWorker, run_octo,
     };
 
     fn config(num_workers: usize) -> OctoConfig {
@@ -749,8 +755,8 @@ mod runtime {
         run_octo(
             inputs,
             &config(workers),
-            CmOctoPlan::new(rows, cols),
-            || CmOctoAggregator {
+            CountMinSketchOctoPlan::new(rows, cols),
+            || CountMinSketchOctoAggregator {
                 sketch: Cm::with_dimensions(rows, cols),
             },
         )
@@ -796,8 +802,8 @@ mod runtime {
             let got = run_octo(
                 &inputs,
                 &config(workers),
-                CountOctoPlan::new(ROWS, COLS),
-                || CountOctoAggregator {
+                CountSketchOctoPlan::new(ROWS, COLS),
+                || CountSketchOctoAggregator {
                     sketch: Cs::with_dimensions(ROWS, COLS),
                 },
             )
@@ -854,7 +860,7 @@ mod runtime {
 
         let mut replay = OctoDd::new(workers, alpha);
         for (i, value) in values.iter().enumerate() {
-            replay.insert(i, *value, DD_PROMASK);
+            replay.insert(i, *value, OCTO_DDSKETCH_DEFAULT_THRESHOLD);
         }
         // `run_octo` flushes when the stream ends, so the replay must too.
         let mut children = std::mem::take(&mut replay.children);
@@ -865,13 +871,13 @@ mod runtime {
         // The dense store grows in chunks anchored on whichever bucket is
         // touched first, so its offset and array length depend on delta arrival
         // order. What must match is the logical bucket-to-count mapping.
-        let buckets = |sketch: &DDSketch| -> Vec<(i32, u64)> {
+        let buckets = |sketch: &DdSketch| -> Vec<(i32, u64)> {
             sketch
-                .store_counts()
+                .positive_store_counts()
                 .iter()
                 .enumerate()
                 .filter(|(_, count)| **count != 0)
-                .map(|(i, count)| (sketch.store_offset() + i as i32, *count))
+                .map(|(i, count)| (sketch.positive_store_offset() + i as i32, *count))
                 .collect()
         };
         assert_eq!(got.get_count(), replay.parent.get_count());
@@ -895,11 +901,12 @@ mod runtime {
         let inputs = inputs_from(&keys(30_000, 512, 9_404));
         let batch = cm_runtime(&inputs, 4, ROWS, COLS);
 
-        let mut runtime = OctoRuntime::new(&config(4), CmOctoPlan::new(ROWS, COLS), || {
-            CmOctoAggregator {
-                sketch: Cm::with_dimensions(ROWS, COLS),
-            }
-        });
+        let mut runtime =
+            OctoRuntime::new(&config(4), CountMinSketchOctoPlan::new(ROWS, COLS), || {
+                CountMinSketchOctoAggregator {
+                    sketch: Cm::with_dimensions(ROWS, COLS),
+                }
+            });
         for input in &inputs {
             runtime.update(input.clone());
         }
@@ -912,20 +919,22 @@ mod runtime {
     fn insert_batch_matches_element_wise_inserts() {
         let inputs = inputs_from(&keys(20_000, 512, 9_405));
 
-        let mut one_by_one = OctoRuntime::new(&config(3), CmOctoPlan::new(ROWS, COLS), || {
-            CmOctoAggregator {
-                sketch: Cm::with_dimensions(ROWS, COLS),
-            }
-        });
+        let mut one_by_one =
+            OctoRuntime::new(&config(3), CountMinSketchOctoPlan::new(ROWS, COLS), || {
+                CountMinSketchOctoAggregator {
+                    sketch: Cm::with_dimensions(ROWS, COLS),
+                }
+            });
         for input in &inputs {
             one_by_one.update(input.clone());
         }
 
-        let mut batched = OctoRuntime::new(&config(3), CmOctoPlan::new(ROWS, COLS), || {
-            CmOctoAggregator {
-                sketch: Cm::with_dimensions(ROWS, COLS),
-            }
-        });
+        let mut batched =
+            OctoRuntime::new(&config(3), CountMinSketchOctoPlan::new(ROWS, COLS), || {
+                CountMinSketchOctoAggregator {
+                    sketch: Cm::with_dimensions(ROWS, COLS),
+                }
+            });
         batched.update_batch(&inputs);
 
         assert_eq!(
@@ -1014,9 +1023,11 @@ mod runtime {
         // place a copy is unavoidable - and it happens on this thread, so the
         // borrow still ends at the call.
         let (rows, cols, top_k) = (4usize, 2048usize, 8usize);
-        let mut runtime = OctoRuntime::new(&config(4), CmTopKOctoPlan::new(rows, cols), || {
-            CmTopKOctoAggregator::new(rows, cols, top_k)
-        });
+        let mut runtime = OctoRuntime::new(
+            &config(4),
+            CountMinSketchWithHeapOctoPlan::new(rows, cols),
+            || CountMinSketchWithHeapOctoAggregator::new(rows, cols, top_k),
+        );
         for _ in 0..4_000 {
             for hot in 0..3usize {
                 let owned = format!("hot-{hot}");
@@ -1041,11 +1052,14 @@ mod runtime {
 
     #[test]
     fn an_empty_stream_finishes_with_a_pristine_parent() {
-        let got = run_octo(&[], &config(4), CmOctoPlan::new(ROWS, COLS), || {
-            CmOctoAggregator {
+        let got = run_octo(
+            &[],
+            &config(4),
+            CountMinSketchOctoPlan::new(ROWS, COLS),
+            || CountMinSketchOctoAggregator {
                 sketch: Cm::with_dimensions(ROWS, COLS),
-            }
-        })
+            },
+        )
         .parent
         .sketch;
         assert!(cm_cells(&got).iter().all(|&c| c == 0));
@@ -1301,11 +1315,14 @@ mod runtime {
             truth.observe(*k as i64);
         }
 
-        let parent = run_octo(&inputs, &config(4), CountOctoPlan::new(rows, cols), || {
-            CountOctoAggregator {
+        let parent = run_octo(
+            &inputs,
+            &config(4),
+            CountSketchOctoPlan::new(rows, cols),
+            || CountSketchOctoAggregator {
                 sketch: Cs::with_dimensions(rows, cols),
-            }
-        })
+            },
+        )
         .parent
         .sketch;
 
@@ -1403,7 +1420,7 @@ impl OctoCm {
                 for col in 0..cols {
                     let held = child.as_storage().query_one_counter(row, col);
                     if held != 0 {
-                        self.parent.apply_delta(CmDelta {
+                        self.parent.apply_delta(CountMinSketchCellDelta {
                             row: row as u32,
                             col: col as u32,
                             value: held as u32,
@@ -1499,7 +1516,7 @@ impl OctoCs {
                 for col in 0..cols {
                     let held = child.as_storage().query_one_counter(row, col);
                     if held != 0 {
-                        self.parent.apply_delta(CountDelta {
+                        self.parent.apply_delta(CountSketchCellDelta {
                             row: row as u32,
                             col: col as u32,
                             value: held,
@@ -1609,7 +1626,7 @@ fn theorem_3_bounds_the_count_sketch_error() {
     // "let d = O(log2 δ⁻¹) and l = 8ε⁻². For any flow e and any traffic whose
     //  L2 > 2ε⁻¹k'τ, Pr[|f̂(e) − f(e)| > εL2] < δ"
     assert_eq!(
-        COUNT_PROMASK, CM_PROMASK,
+        OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
         "both sketches share one τ in this implementation"
     );
     let d = 5usize;
@@ -1690,10 +1707,10 @@ fn theorem_3_bounds_the_count_sketch_error() {
 fn theorem_4_holds_unconditionally_because_this_implementation_pins_tau_to_zero() {
     // Theorem 4 only promises Ẑ = Ẑ' once Ẑ > 2·α_m·m²·2^(τ−2), because a
     // worker holds back register improvements below τ−1. This implementation
-    // sets HLL_PROMASK = 0, so C'[i] = C[i] for every i and the equality holds
+    // sets OCTO_HLL_DEFAULT_THRESHOLD = 0, so C'[i] = C[i] for every i and the equality holds
     // at any cardinality - including ones orders of magnitude below the
     // precondition the paper would otherwise need.
-    assert_eq!(HLL_PROMASK, 0);
+    assert_eq!(OCTO_HLL_DEFAULT_THRESHOLD, 0);
 
     let m = HyperLogLog::<Classic>::default().registers_as_slice().len() as f64;
     let alpha_m = 0.7213 / (1.0 + 1.079 / m);
@@ -1794,7 +1811,7 @@ fn theorem_2_delta_promotion_sends_l_times_fewer_counters_for_the_same_goal() {
 
     // Counting bytes rather than counters keeps the claim honest: an Octo
     // message carries indices as well as a value, a merged counter does not.
-    let octo_bytes = octo.sent_counters * std::mem::size_of::<CmDelta>();
+    let octo_bytes = octo.sent_counters * std::mem::size_of::<CountMinSketchCellDelta>();
     let merge_bytes = merge.sent_counters * std::mem::size_of::<i32>();
     let byte_ratio = merge_bytes as f64 / octo_bytes as f64;
     println!("Theorem 2 (bytes): octo={octo_bytes} merge={merge_bytes} ratio={byte_ratio:.0}x");
@@ -2295,16 +2312,16 @@ fn hyperloglog_online_accuracy_beats_sketch_merge() {
 // -------------------------------------------------------------------- DDSketch
 
 struct OctoDd {
-    children: Vec<DdWorkerSketch>,
-    parent: DDSketch,
+    children: Vec<DdSketchWorker>,
+    parent: DdSketch,
     sent_counters: usize,
 }
 
 impl OctoDd {
     fn new(workers: usize, alpha: f64) -> Self {
         Self {
-            children: (0..workers).map(|_| DdWorkerSketch::new(alpha)).collect(),
-            parent: DDSketch::new(alpha),
+            children: (0..workers).map(|_| DdSketchWorker::new(alpha)).collect(),
+            parent: DdSketch::new(alpha),
             sent_counters: 0,
         }
     }
@@ -2322,9 +2339,9 @@ impl OctoDd {
 }
 
 struct MergeDd {
-    children: Vec<DDSketch>,
+    children: Vec<DdSketch>,
     seen: Vec<usize>,
-    parent: DDSketch,
+    parent: DdSketch,
     period: usize,
     alpha: f64,
     sent_counters: usize,
@@ -2333,9 +2350,9 @@ struct MergeDd {
 impl MergeDd {
     fn new(workers: usize, alpha: f64, period: usize) -> Self {
         Self {
-            children: (0..workers).map(|_| DDSketch::new(alpha)).collect(),
+            children: (0..workers).map(|_| DdSketch::new(alpha)).collect(),
             seen: vec![0; workers],
-            parent: DDSketch::new(alpha),
+            parent: DdSketch::new(alpha),
             period,
             alpha,
             sent_counters: 0,
@@ -2347,11 +2364,11 @@ impl MergeDd {
         self.children[worker].add(&value);
         self.seen[worker] += 1;
         if self.seen[worker] % self.period == 0 {
-            self.sent_counters += self.children[worker].store_counts().len();
+            self.sent_counters += self.children[worker].positive_store_counts().len();
             self.parent
                 .merge(&self.children[worker])
                 .expect("same alpha");
-            self.children[worker] = DDSketch::new(self.alpha);
+            self.children[worker] = DdSketch::new(self.alpha);
         }
     }
 }
@@ -2366,11 +2383,11 @@ fn ddsketch_online_comparison(
     let workers = 4usize;
     let n = values.len();
 
-    let mut sizing = DDSketch::new(alpha);
+    let mut sizing = DdSketch::new(alpha);
     for v in values {
         sizing.add(v);
     }
-    let sketch_counters = sizing.store_counts().len();
+    let sketch_counters = sizing.positive_store_counts().len();
 
     let mut probe = OctoDd::new(workers, alpha);
     for (i, v) in values.iter().enumerate() {
@@ -2380,7 +2397,7 @@ fn ddsketch_online_comparison(
     let (parity_period, ten_x_period) = merge_periods(octo_counters, sketch_counters, n / workers);
 
     let mut octo = OctoDd::new(workers, alpha);
-    let mut ideal = DDSketch::new(alpha);
+    let mut ideal = DdSketch::new(alpha);
     let mut parity = MergeDd::new(workers, alpha, parity_period);
     let mut ten_x = MergeDd::new(workers, alpha, ten_x_period);
     let mut seen: Vec<f64> = Vec::with_capacity(n);
@@ -2399,7 +2416,7 @@ fn ddsketch_online_comparison(
             sorted.sort_by(f64::total_cmp);
             for q in [0.1, 0.5, 0.9] {
                 let exact = sorted[((sorted.len() - 1) as f64 * q) as usize];
-                let rel = |sketch: &DDSketch| {
+                let rel = |sketch: &DdSketch| {
                     sketch
                         .get_value_at_quantile(q)
                         .map(|got| (got - exact).abs() / exact)
@@ -2527,10 +2544,10 @@ impl MergeUniv {
     ) -> Self {
         Self {
             children: (0..workers)
-                .map(|_| UnivMon::init_univmon(heap, rows, cols, layers))
+                .map(|_| UnivMon::new(heap, rows, cols, layers))
                 .collect(),
             seen: vec![0; workers],
-            parent: UnivMon::init_univmon(heap, rows, cols, layers),
+            parent: UnivMon::new(heap, rows, cols, layers),
             period,
             dims: (heap, rows, cols, layers),
             sent_counters: 0,
@@ -2544,7 +2561,7 @@ impl MergeUniv {
         if self.seen[worker] % self.period == 0 {
             let (heap, rows, cols, layers) = self.dims;
             self.parent.merge(&self.children[worker]);
-            self.children[worker] = UnivMon::init_univmon(heap, rows, cols, layers);
+            self.children[worker] = UnivMon::new(heap, rows, cols, layers);
             self.sent_counters += rows * cols * layers;
         }
     }
@@ -2558,7 +2575,7 @@ fn univmon_online_accuracy_beats_sketch_merge() {
     // swamps anything a distribution scheme does to it.
     let (workers, heap, rows, cols, layers) = (4usize, 64usize, 5usize, 1_024usize, 12usize);
     let n = 60_000usize;
-    let tau = COUNT_PROMASK;
+    let tau = OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD;
     let stream = zipf_u64(n, 4_096, 1.1, 12_201);
 
     let mut probe = OctoUniv::new(workers, heap, rows, cols, layers, tau);
@@ -2571,7 +2588,7 @@ fn univmon_online_accuracy_beats_sketch_merge() {
 
     let mut truth = FreqTruth::default();
     let mut octo = OctoUniv::new(workers, heap, rows, cols, layers, tau);
-    let mut ideal = UnivMon::init_univmon(heap, rows, cols, layers);
+    let mut ideal = UnivMon::new(heap, rows, cols, layers);
     let mut parity = MergeUniv::new(workers, heap, rows, cols, layers, parity_period);
     let mut ten_x = MergeUniv::new(workers, heap, rows, cols, layers, ten_x_period);
 
@@ -2593,11 +2610,13 @@ fn univmon_online_accuracy_beats_sketch_merge() {
             // paper's Definition 1: what is being measured here is the gap a
             // distributed scheme opens up, not UnivMon's own approximation
             // error, which at these dimensions dwarfs it.
-            let (ideal_card, ideal_entropy) = (ideal.calc_card(), ideal.calc_entropy());
+            let (ideal_card, ideal_entropy) =
+                (ideal.estimate_cardinality(), ideal.estimate_entropy());
             let gap_to_ideal = |sketch: &UnivMon| {
-                let card = (sketch.calc_card() - ideal_card).abs() / ideal_card.abs().max(1.0);
-                let entropy =
-                    (sketch.calc_entropy() - ideal_entropy).abs() / ideal_entropy.abs().max(1e-9);
+                let card =
+                    (sketch.estimate_cardinality() - ideal_card).abs() / ideal_card.abs().max(1.0);
+                let entropy = (sketch.estimate_entropy() - ideal_entropy).abs()
+                    / ideal_entropy.abs().max(1e-9);
                 (card + entropy) / 2.0
             };
             let exact_card = truth.distinct() as f64;
@@ -2650,7 +2669,7 @@ fn univmon_online_accuracy_beats_sketch_merge() {
 fn univmon_heavy_hitter_recall_beats_sketch_merge() {
     let (workers, heap, rows, cols, layers) = (4usize, 64usize, 5usize, 1_024usize, 12usize);
     let n = 60_000usize;
-    let tau = COUNT_PROMASK;
+    let tau = OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD;
     let stream = zipf_u64(n, 4_096, 1.1, 12_203);
 
     let mut truth = FreqTruth::default();
@@ -2680,7 +2699,7 @@ fn univmon_heavy_hitter_recall_beats_sketch_merge() {
                 hottest
                     .iter()
                     .filter(|k| {
-                        sketch.hh_layers[0]
+                        sketch.layer_heaps[0]
                             .find(&DataInput::U64(**k as u64))
                             .is_some()
                     })
@@ -2733,30 +2752,34 @@ fn univmon_through_deltas(
     layers: usize,
     layer_threshold: impl Fn(usize) -> u32,
 ) -> UnivMon {
-    let mut workers: Vec<L2hhWorkerSketch> = (0..layers)
-        .map(|layer| L2hhWorkerSketch::new(rows, cols, layer))
+    let mut workers: Vec<CountSketchWithL2NormWorker> = (0..layers)
+        .map(|layer| CountSketchWithL2NormWorker::new(rows, cols, layer))
         .collect();
-    let mut parent = UnivMon::init_univmon(heap, rows, cols, layers);
+    let mut parent = UnivMon::new(heap, rows, cols, layers);
     let mut weight = 0u64;
 
     for key in stream {
         let input = DataInput::U64(*key);
         weight += 1;
-        let bottom = bottom_layer_for_hash(hash64_seeded(BOTTOM_LAYER_FINDER, &input), layers);
+        let bottom = bottom_layer_for_hash(
+            hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &input),
+            layers,
+        );
         let owned = input_to_owned(&input);
         for (layer, worker) in workers.iter_mut().enumerate().take(bottom + 1) {
             let hashed = hash128_seeded(layer, &input);
             let mut promoted = Vec::new();
-            worker
-                .update_emit_delta_with_hash(hashed, layer_threshold(layer), &mut |d| promoted.push(d));
+            worker.update_emit_delta_with_hash(hashed, layer_threshold(layer), &mut |d| {
+                promoted.push(d)
+            });
             for delta in promoted {
-                parent.apply_layered_delta(
-                    &LayeredCountDelta {
+                parent.apply_delta(
+                    &UnivMonCellDelta {
                         layer: layer as u32,
                         key: owned.clone(),
                         delta,
                         worker_id: 0,
-                        weight_total: weight,
+                        total_weight: weight,
                     },
                     if layer_threshold(layer) <= 1 {
                         UnivMonDeltaFidelity::EveryInsert
@@ -2782,7 +2805,7 @@ fn a_flat_threshold_starves_the_deep_univmon_layers() {
     let base = 31u32;
     let stream = zipf_u64(60_000, 4_096, 1.1, 12_201);
 
-    let mut ideal = UnivMon::init_univmon(heap, rows, cols, layers);
+    let mut ideal = UnivMon::new(heap, rows, cols, layers);
     for key in &stream {
         ideal.update_weighted(&DataInput::U64(*key), 1);
     }
@@ -2793,7 +2816,7 @@ fn a_flat_threshold_starves_the_deep_univmon_layers() {
     });
 
     let nonzero = |sketch: &UnivMon, layer: usize| -> usize {
-        let L2HH::COUNT(inner) = &sketch.l2_sketch_layers[layer];
+        let L2HH::COUNT(inner) = &sketch.layer_sketches[layer];
         (0..inner.rows())
             .flat_map(|r| (0..inner.cols()).map(move |c| (r, c)))
             .filter(|(r, c)| inner.as_storage().query_one_counter(*r, *c) != 0)
@@ -2803,9 +2826,9 @@ fn a_flat_threshold_starves_the_deep_univmon_layers() {
     println!(
         "UnivMon card: ideal={:.0} flat-tau={:.0} scaled-tau={:.0} | deepest layer non-zero cells: \
          ideal={} flat={} scaled={}",
-        ideal.calc_card(),
-        flat.calc_card(),
-        scaled.calc_card(),
+        ideal.estimate_cardinality(),
+        flat.estimate_cardinality(),
+        scaled.estimate_cardinality(),
         nonzero(&ideal, deepest),
         nonzero(&flat, deepest),
         nonzero(&scaled, deepest),
@@ -2829,7 +2852,8 @@ fn a_flat_threshold_starves_the_deep_univmon_layers() {
 
     // And that is what wrecks the estimate the deep layers feed.
     let relative = |sketch: &UnivMon| {
-        (sketch.calc_card() - ideal.calc_card()).abs() / ideal.calc_card().abs().max(1.0)
+        (sketch.estimate_cardinality() - ideal.estimate_cardinality()).abs()
+            / ideal.estimate_cardinality().abs().max(1.0)
     };
     assert!(
         relative(&flat) > 0.5,
@@ -2861,18 +2885,19 @@ fn a_flat_threshold_starves_the_deep_univmon_layers() {
 
 mod heavy_hitters {
     use super::*;
-    use asap_sketchlib::CmWorkerSketch;
+    use asap_sketchlib::CountMinSketchWorker;
     use asap_sketchlib::sketches::elastic::LAMBDA;
     use asap_sketchlib::{
-        CANONICAL_HASH_SEED, COCO_PROMASK, Coco, CocoDelta, CocoOctoAggregator, CocoOctoPlan,
-        CocoOctoWorker, ELASTIC_PROMASK, Elastic, ElasticDelta, ElasticOctoAggregator,
-        ElasticOctoPlan, ElasticOctoWorker, flow_key_string,
+        CocoDelta, CocoOctoAggregator, CocoOctoPlan, CocoOctoWorker, CocoSketch,
+        DEFAULT_CANONICAL_SEED_INDEX, ElasticDelta, ElasticOctoAggregator, ElasticOctoPlan,
+        ElasticOctoWorker, ElasticSketch, OCTO_COCO_DEFAULT_THRESHOLD,
+        OCTO_ELASTIC_DEFAULT_THRESHOLD, flow_key_string,
     };
     use std::collections::{HashMap, HashSet};
 
     /// τ for both families.
-    const COCO_TAU: u64 = COCO_PROMASK as u64;
-    const ELASTIC_TAU: u32 = ELASTIC_PROMASK;
+    const COCO_TAU: u64 = OCTO_COCO_DEFAULT_THRESHOLD as u64;
+    const ELASTIC_TAU: u32 = OCTO_ELASTIC_DEFAULT_THRESHOLD;
 
     /// The paper's heavy-hitter threshold: a flow is heavy when its count is
     /// *strictly* above `ALPHA * N`.
@@ -2898,9 +2923,9 @@ mod heavy_hitters {
 
     // -- mass accessors ------------------------------------------------------
 
-    /// Every `Coco::update_weighted` adds its whole weight to exactly one bucket, so the
+    /// Every `CocoSketch::update_weighted` adds its whole weight to exactly one bucket, so the
     /// table's total is the mass it has absorbed.
-    fn coco_mass(sketch: &Coco) -> u64 {
+    fn coco_mass(sketch: &CocoSketch) -> u64 {
         (0..sketch.d)
             .flat_map(|i| (0..sketch.w).map(move |j| (i, j)))
             .map(|(i, j)| sketch.table[i][j].val)
@@ -2908,13 +2933,13 @@ mod heavy_hitters {
     }
 
     /// Mass resident in the heavy part: one positive vote per absorbed packet.
-    fn elastic_heavy_mass(sketch: &Elastic) -> i64 {
+    fn elastic_heavy_mass(sketch: &ElasticSketch) -> i64 {
         sketch.heavy.iter().map(|b| b.vote_pos as i64).sum()
     }
 
     /// Mass in one light-layer row. An Elastic spill adds its weight to every
     /// row, so each row independently accounts for the light half.
-    fn elastic_light_row(sketch: &Elastic, row: usize) -> i64 {
+    fn elastic_light_row(sketch: &ElasticSketch, row: usize) -> i64 {
         (0..sketch.light.cols())
             .map(|col| sketch.light.as_storage().query_one_counter(row, col) as i64)
             .sum()
@@ -2981,18 +3006,18 @@ mod heavy_hitters {
             shipped
         }
 
-        fn sketch(&self) -> &Coco {
+        fn sketch(&self) -> &CocoSketch {
             &self.parent.sketch
         }
     }
 
     /// Sketch-merge over CocoSketch: each worker keeps a full table and replays
     /// every occupied bucket into the parent every `period` items, then starts
-    /// over. `Coco::merge` is the paper's baseline "merge the whole sketch".
+    /// over. `CocoSketch::merge` is the paper's baseline "merge the whole sketch".
     struct MergeCoco {
-        children: Vec<Coco>,
+        children: Vec<CocoSketch>,
         seen: Vec<usize>,
-        parent: Coco,
+        parent: CocoSketch,
         period: usize,
         w: usize,
         d: usize,
@@ -3006,7 +3031,7 @@ mod heavy_hitters {
             let mut this = Self {
                 children: Vec::with_capacity(workers),
                 seen: vec![0; workers],
-                parent: Coco::init_with_size_and_seed(w, d, seed),
+                parent: CocoSketch::init_with_size_and_seed(w, d, seed),
                 period,
                 w,
                 d,
@@ -3022,9 +3047,9 @@ mod heavy_hitters {
         }
 
         /// An empty child table on the next seed.
-        fn fresh(&mut self) -> Coco {
+        fn fresh(&mut self) -> CocoSketch {
             self.next_seed += 1;
-            Coco::init_with_size_and_seed(self.w, self.d, self.next_seed)
+            CocoSketch::init_with_size_and_seed(self.w, self.d, self.next_seed)
         }
 
         fn insert(&mut self, index: usize, raw: u64) {
@@ -3085,16 +3110,16 @@ mod heavy_hitters {
             shipped
         }
 
-        fn sketch(&self) -> &Elastic {
+        fn sketch(&self) -> &ElasticSketch {
             &self.parent.sketch
         }
     }
 
     /// Sketch-merge over the Elastic sketch, using the paper's Sum merging.
     struct MergeElastic {
-        children: Vec<Elastic>,
+        children: Vec<ElasticSketch>,
         seen: Vec<usize>,
-        parent: Elastic,
+        parent: ElasticSketch,
         period: usize,
         buckets: i32,
         rows: usize,
@@ -3114,10 +3139,10 @@ mod heavy_hitters {
         ) -> Self {
             Self {
                 children: (0..workers)
-                    .map(|_| Elastic::init_with_dimensions(buckets, rows, cols))
+                    .map(|_| ElasticSketch::with_heavy_and_light(buckets, rows, cols))
                     .collect(),
                 seen: vec![0; workers],
-                parent: Elastic::init_with_dimensions(buckets, rows, cols),
+                parent: ElasticSketch::with_heavy_and_light(buckets, rows, cols),
                 period,
                 buckets,
                 rows,
@@ -3135,7 +3160,7 @@ mod heavy_hitters {
             if self.seen[worker] % self.period == 0 {
                 let full = std::mem::replace(
                     &mut self.children[worker],
-                    Elastic::init_with_dimensions(self.buckets, self.rows, self.cols),
+                    ElasticSketch::with_heavy_and_light(self.buckets, self.rows, self.cols),
                 );
                 self.parent.merge(&full);
                 self.sent_counters += self.buckets as usize + self.rows * self.cols;
@@ -3147,7 +3172,7 @@ mod heavy_hitters {
 
     /// `<flow, estimate>` for every flow the sketch currently records above
     /// `threshold`.
-    fn coco_reported(sketch: &Coco, threshold: u64) -> HashMap<String, u64> {
+    fn coco_reported(sketch: &CocoSketch, threshold: u64) -> HashMap<String, u64> {
         sketch
             .recorded_flows()
             .filter(|(_, size)| *size > threshold)
@@ -3157,7 +3182,7 @@ mod heavy_hitters {
 
     /// The Elastic counterpart: `query_all` reports only heavy-part residents,
     /// each estimated as its bucket plus the light layer.
-    fn elastic_reported(sketch: &Elastic, threshold: u64) -> HashMap<String, u64> {
+    fn elastic_reported(sketch: &ElasticSketch, threshold: u64) -> HashMap<String, u64> {
         sketch
             .heavy
             .iter()
@@ -3383,10 +3408,7 @@ mod heavy_hitters {
                 stream.len() as u64,
                 "{workers} workers lost mass"
             );
-            let attributed: u64 = distinct
-                .iter()
-                .map(|key| octo.sketch().estimate_key(key))
-                .sum();
+            let attributed: u64 = distinct.iter().map(|key| octo.sketch().estimate(key)).sum();
             assert_eq!(
                 attributed,
                 stream.len() as u64,
@@ -3426,7 +3448,7 @@ mod heavy_hitters {
             totals.push(
                 watched
                     .iter()
-                    .map(|key| octo.sketch().estimate_key(key))
+                    .map(|key| octo.sketch().estimate(key))
                     .sum::<u64>() as f64,
             );
         }
@@ -3643,7 +3665,8 @@ mod heavy_hitters {
         let resident = "flow::resident".to_string();
         let challenger = "flow::challenger".to_string();
         let cell_of = |key: &str| {
-            (CmWorkerSketch::hashes(rows, &DataInput::Str(key))[0] & 0xffff_ffff) as usize % cols
+            (CountMinSketchWorker::hashes(rows, &DataInput::Str(key))[0] & 0xffff_ffff) as usize
+                % cols
         };
         let (resident_cell, challenger_cell) = (cell_of(&resident), cell_of(&challenger));
         assert_ne!(
@@ -3754,7 +3777,8 @@ mod heavy_hitters {
         let (rows, cols) = (1usize, 1usize);
 
         let bucket_of = |key: &str| {
-            hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(key)) as usize % BUCKETS as usize
+            hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, &DataInput::Str(key)) as usize
+                % BUCKETS as usize
         };
         let in_bucket = |bucket: usize, want: usize| -> Vec<String> {
             (0..10_000usize)
@@ -3825,7 +3849,8 @@ mod heavy_hitters {
         let (rows, cols) = (1usize, 64usize);
 
         let cell_of = |key: &str| {
-            (CmWorkerSketch::hashes(rows, &DataInput::Str(key))[0] & 0xffff_ffff) as usize % cols
+            (CountMinSketchWorker::hashes(rows, &DataInput::Str(key))[0] & 0xffff_ffff) as usize
+                % cols
         };
         let resident = "flow::resident".to_string();
         let challenger = (0..10_000usize)
@@ -3929,7 +3954,7 @@ mod heavy_hitters {
                     stream.len() as u64,
                     "{workers} workers: the parent table lost mass"
                 );
-                let attributed: u64 = distinct.iter().map(|k| parent.estimate_key(k)).sum();
+                let attributed: u64 = distinct.iter().map(|k| parent.estimate(k)).sum();
                 assert_eq!(
                     attributed,
                     stream.len() as u64,
@@ -4086,7 +4111,8 @@ mod heavy_hitters {
                 Route::HashByKey,
                 COCO_SEED + 100 + seed,
             );
-            let mut ideal: Coco = Coco::init_with_size_and_seed(w, d, COCO_SEED + 200 + seed);
+            let mut ideal: CocoSketch =
+                CocoSketch::init_with_size_and_seed(w, d, COCO_SEED + 200 + seed);
             let mut running: HashMap<String, u64> = HashMap::new();
             let mut seen = 0u64;
             let stride = n / 8;
@@ -4101,9 +4127,9 @@ mod heavy_hitters {
                     let threshold = (seen as f64 * HH_ALPHA) as u64;
                     for key in &watched {
                         let exact = running[key] as f64;
-                        octo_are += (octo.sketch().estimate_key(key) as f64 - exact).abs() / exact;
-                        merge_are += (merge.parent.estimate_key(key) as f64 - exact).abs() / exact;
-                        ideal_are += (ideal.estimate_key(key) as f64 - exact).abs() / exact;
+                        octo_are += (octo.sketch().estimate(key) as f64 - exact).abs() / exact;
+                        merge_are += (merge.parent.estimate(key) as f64 - exact).abs() / exact;
+                        ideal_are += (ideal.estimate(key) as f64 - exact).abs() / exact;
                         samples += 1.0;
                     }
                     let octo_hh = score(
@@ -4190,7 +4216,7 @@ mod heavy_hitters {
 
         let mut octo = OctoElastic::new(workers, buckets, rows, cols, Route::HashByKey);
         let mut merge = MergeElastic::new(workers, buckets, rows, cols, period, Route::HashByKey);
-        let mut ideal: Elastic = Elastic::init_with_dimensions(buckets, rows, cols);
+        let mut ideal: ElasticSketch = ElasticSketch::with_heavy_and_light(buckets, rows, cols);
         let mut running: HashMap<String, u64> = HashMap::new();
         let mut seen = 0u64;
         let stride = n / 8;
@@ -4271,10 +4297,10 @@ mod heavy_hitters {
 }
 
 // ---------------------------------------------------------------------------
-// The top-k plans: CmTopKOctoPlan and CountTopKOctoPlan
+// The top-k plans: CountMinSketchWithHeapOctoPlan and CountSketchWithHeapOctoPlan
 // ---------------------------------------------------------------------------
 
-/// `CmTopKOctoPlan` / `CountTopKOctoPlan` are the plans in which the *aggregator*
+/// `CountMinSketchWithHeapOctoPlan` / `CountSketchWithHeapOctoPlan` are the plans in which the *aggregator*
 /// owns the pipeline's only heavy-hitter heap: workers keep no flow keys, and
 /// instead ship the key alongside every promoted counter (§3.2, Idea 3).
 ///
@@ -4286,8 +4312,9 @@ mod heavy_hitters {
 mod top_k_plans {
     use super::*;
     use asap_sketchlib::{
-        CMSHeap, CSHeap, CmTopKOctoAggregator, CmTopKOctoPlan, CountTopKOctoAggregator,
-        CountTopKOctoPlan, HeapItem, KeyedHashes,
+        CountMinSketchWithHeap, CountMinSketchWithHeapOctoAggregator,
+        CountMinSketchWithHeapOctoPlan, CountSketchWithHeap, CountSketchWithHeapOctoAggregator,
+        CountSketchWithHeapOctoPlan, KeyedHashes, OwnedDataInput,
     };
     use common::specs::{CountMinSpec, CountSketchSpec, Tally};
 
@@ -4318,8 +4345,8 @@ mod top_k_plans {
 
     /// Drives a top-k plan across `WORKERS` workers under one partition rule
     /// and returns the aggregator.
-    fn drive_cm(route: Route, stream: &[u64]) -> CmTopKOctoAggregator {
-        let plan = CmTopKOctoPlan::new(ROWS, COLS);
+    fn drive_cm(route: Route, stream: &[u64]) -> CountMinSketchWithHeapOctoAggregator {
+        let plan = CountMinSketchWithHeapOctoPlan::new(ROWS, COLS);
         let mut workers: Vec<_> = (0..WORKERS).map(|i| plan.worker(i)).collect();
         let mut parent = plan.aggregator(TOP_K);
         for (i, k) in stream.iter().enumerate() {
@@ -4335,8 +4362,8 @@ mod top_k_plans {
         parent
     }
 
-    fn drive_count(route: Route, stream: &[u64]) -> CountTopKOctoAggregator {
-        let plan = CountTopKOctoPlan::new(ROWS, COLS);
+    fn drive_count(route: Route, stream: &[u64]) -> CountSketchWithHeapOctoAggregator {
+        let plan = CountSketchWithHeapOctoPlan::new(ROWS, COLS);
         let mut workers: Vec<_> = (0..WORKERS).map(|i| plan.worker(i)).collect();
         let mut parent = plan.aggregator(TOP_K);
         for (i, k) in stream.iter().enumerate() {
@@ -4354,16 +4381,18 @@ mod top_k_plans {
 
     /// Single-threaded reference: the same sketch fed the same stream with no
     /// promotion protocol in between.
-    fn reference_cm(stream: &[u64]) -> CMSHeap<Vector2D<i32>, RegularPath> {
-        let mut sk: CMSHeap<Vector2D<i32>, RegularPath> = CMSHeap::new(ROWS, COLS, TOP_K);
+    fn reference_cm(stream: &[u64]) -> CountMinSketchWithHeap<Vector2D<i32>, RegularPath> {
+        let mut sk: CountMinSketchWithHeap<Vector2D<i32>, RegularPath> =
+            CountMinSketchWithHeap::new(ROWS, COLS, TOP_K);
         for k in stream {
             sk.update(&DataInput::U64(*k));
         }
         sk
     }
 
-    fn reference_cs(stream: &[u64]) -> CSHeap<Vector2D<i32>, RegularPath> {
-        let mut sk: CSHeap<Vector2D<i32>, RegularPath> = CSHeap::new(ROWS, COLS, TOP_K);
+    fn reference_cs(stream: &[u64]) -> CountSketchWithHeap<Vector2D<i32>, RegularPath> {
+        let mut sk: CountSketchWithHeap<Vector2D<i32>, RegularPath> =
+            CountSketchWithHeap::new(ROWS, COLS, TOP_K);
         for k in stream {
             sk.update(&DataInput::U64(*k));
         }
@@ -4371,11 +4400,11 @@ mod top_k_plans {
     }
 
     /// `(key, count)` pairs out of an aggregator's heap.
-    fn heap_entries(items: &[asap_sketchlib::HHItem]) -> Vec<(i64, i64)> {
+    fn heap_entries(items: &[asap_sketchlib::HeapEntry]) -> Vec<(i64, i64)> {
         items
             .iter()
             .map(|it| match it.key {
-                HeapItem::U64(v) => (v as i64, it.count),
+                OwnedDataInput::U64(v) => (v as i64, it.count),
                 ref other => panic!("unexpected heap key {other:?}"),
             })
             .collect()
@@ -4684,7 +4713,7 @@ mod top_k_plans {
     /// deficit above a *deficit* rather than an unbounded miss.
     #[test]
     fn a_key_below_the_promotion_threshold_never_reaches_the_top_k_aggregator() {
-        let plan = CmTopKOctoPlan::new(ROWS, COLS);
+        let plan = CountMinSketchWithHeapOctoPlan::new(ROWS, COLS);
         let mut worker = plan.worker(0);
         let mut parent = plan.aggregator(TOP_K);
 
@@ -4767,8 +4796,8 @@ mod top_k_plans {
 mod partition_accuracy {
     use super::*;
     use asap_sketchlib::{
-        CocoDelta, CocoOctoPlan, DdOctoPlan, Elastic, ElasticDelta, ElasticOctoPlan, HllOctoPlan,
-        UNIVMON_PROMASK, flow_key_string,
+        CocoDelta, CocoOctoPlan, DdOctoPlan, ElasticDelta, ElasticOctoPlan, ElasticSketch,
+        HllOctoPlan, OCTO_UNIVMON_DEFAULT_THRESHOLD, flow_key_string,
     };
     use common::specs::{CardinalityConfidenceSpec, Tally, assert_unbiased_mean};
 
@@ -4809,7 +4838,7 @@ mod partition_accuracy {
     /// HLL promotion carries **no partition penalty at all**.
     ///
     /// A register only ever moves to a larger leading-zero count, and
-    /// `HLL_PROMASK` promotes every improvement, so the parent's registers are
+    /// `OCTO_HLL_DEFAULT_THRESHOLD` promotes every improvement, so the parent's registers are
     /// the elementwise maximum of what any worker saw — which is the
     /// single-threaded sketch, byte for byte, under any routing. That is an
     /// equality, and stating it as one is strictly stronger than a band: a
@@ -4875,7 +4904,7 @@ mod partition_accuracy {
         let mut sorted = values.clone();
         sorted.sort_by(f64::total_cmp);
 
-        let mut reference = DDSketch::new(ALPHA);
+        let mut reference = DdSketch::new(ALPHA);
         for v in &values {
             reference.add(v);
         }
@@ -4903,8 +4932,14 @@ mod partition_accuracy {
             );
             // Bucket-for-bucket equality, allowing for the two stores having
             // grown to different offsets: compare the shared index range.
-            let (p_off, r_off) = (parent.sketch.store_offset(), reference.store_offset());
-            let (p, r) = (parent.sketch.store_counts(), reference.store_counts());
+            let (p_off, r_off) = (
+                parent.sketch.positive_store_offset(),
+                reference.positive_store_offset(),
+            );
+            let (p, r) = (
+                parent.sketch.positive_store_counts(),
+                reference.positive_store_counts(),
+            );
             let lo = p_off.min(r_off);
             let hi = (p_off + p.len() as i32).max(r_off + r.len() as i32);
             let at = |counts: &[u64], off: i32, k: i32| -> u64 {
@@ -4941,13 +4976,13 @@ mod partition_accuracy {
     /// UnivMon promotion under both partitions, judged on the quantity the
     /// aggregator actually reports.
     ///
-    /// # What `calc_l1` means for the Octo plan, and why it is not `N`
+    /// # What `estimate_l1` means for the Octo plan, and why it is not `N`
     ///
-    /// `UnivMon::calc_l1` returns the sketch's `bucket_size`, which for an Octo
-    /// parent is restored from the `weight_total` each worker stamps on the
+    /// `UnivMon::estimate_l1` returns the sketch's `bucket_size`, which for an Octo
+    /// parent is restored from the `total_weight` each worker stamps on the
     /// deltas it emits. `UnivMonOctoWorker` is the one shipped worker with **no
-    /// `flush`**, and it cannot have one: `LayeredCountDelta` carries the flow
-    /// key that triggered the promotion, because `apply_layered_delta` needs it
+    /// `flush`**, and it cannot have one: `UnivMonCellDelta` carries the flow
+    /// key that triggered the promotion, because `apply_delta` needs it
     /// to update the aggregator's heavy-hitter heap — and a counter flushed at
     /// end-of-stream has no single key to name. So a worker's updates after its
     /// last emitted delta never reach the parent, and the parent's L1 is a
@@ -4959,7 +4994,7 @@ mod partition_accuracy {
     /// the failure message so the size of the lag is visible. See the coverage
     /// matrix's findings section.
     ///
-    /// `calc_l2` returns the L2 **norm** — `sqrt(F2)` — over the delivered
+    /// `estimate_l2` returns the L2 **norm** — `sqrt(F2)` — over the delivered
     /// counters, so it is squared before being held to the AMS second-moment
     /// bound the estimator actually satisfies.
     #[test]
@@ -4979,7 +5014,7 @@ mod partition_accuracy {
             let plan = UnivMonOctoPlan::new(ROWS, COLS, LAYERS);
             let mut workers: Vec<_> = (0..WORKERS).map(|id| plan.worker(id)).collect();
             let mut parent = plan.aggregator(HEAP);
-            // The last `weight_total` each worker stamped on a delta. The
+            // The last `total_weight` each worker stamped on a delta. The
             // parent's L1 is restored from exactly these, so this is the
             // predicted value rather than a band around it.
             let mut last_reported = vec![0u64; WORKERS];
@@ -4990,8 +5025,8 @@ mod partition_accuracy {
                 processed[w] += 1;
                 let payload = plan.prepare(&input);
                 let mut reported = last_reported[w];
-                workers[w].process(&payload, &mut |d: LayeredCountDelta| {
-                    reported = reported.max(d.weight_total);
+                workers[w].process(&payload, &mut |d: UnivMonCellDelta| {
+                    reported = reported.max(d.total_weight);
                     parent.apply(d);
                 });
                 last_reported[w] = reported;
@@ -4999,7 +5034,7 @@ mod partition_accuracy {
             // The default `OctoWorker::flush` is a no-op here, which is the
             // whole point: nothing further arrives.
             for w in workers.iter_mut() {
-                w.flush(&mut |d: LayeredCountDelta| parent.apply(d));
+                w.flush(&mut |d: UnivMonCellDelta| parent.apply(d));
             }
 
             let delivered: u64 = last_reported.iter().sum();
@@ -5008,7 +5043,7 @@ mod partition_accuracy {
                 route,
                 &format!(
                     "UnivMonOctoPlan rows={ROWS} cols={COLS} layers={LAYERS} heap={HEAP} \
-                     tau={UNIVMON_PROMASK}; per-worker processed {processed:?}, last \
+                     tau={OCTO_UNIVMON_DEFAULT_THRESHOLD}; per-worker processed {processed:?}, last \
                      reported {last_reported:?}, so {in_flight} updates are still held by \
                      workers that emitted no further delta"
                 ),
@@ -5019,15 +5054,15 @@ mod partition_accuracy {
                 "a worker cannot report more weight than it processed. {ctx}"
             );
             assert_eq!(
-                parent.sketch.calc_l1(),
+                parent.sketch.estimate_l1(),
                 delivered as f64,
                 "the parent's L1 is restored from the last weight_total each worker \
                  stamped on a delta, so it must equal their sum exactly. {ctx}"
             );
 
-            // `calc_l2()` is the norm, so square it to get the F2 the AMS
+            // `estimate_l2()` is the norm, so square it to get the F2 the AMS
             // row-median bound is stated over.
-            let f2_estimate = parent.sketch.calc_l2().powi(2);
+            let f2_estimate = parent.sketch.estimate_l2().powi(2);
             if let Err(detail) = f2_spec.check(f2_estimate, truth.f2()) {
                 panic!("UnivMonOctoPlan {route:?} L2/F2: {detail}. {ctx}");
             }
@@ -5074,7 +5109,7 @@ mod partition_accuracy {
                 samples.push(
                     heavy
                         .iter()
-                        .map(|(k, _)| parent.sketch.estimate_key(&key_of(*k as u64)))
+                        .map(|(k, _)| parent.sketch.estimate(&key_of(*k as u64)))
                         .sum::<u64>() as f64,
                 );
             }
@@ -5120,8 +5155,8 @@ mod partition_accuracy {
                 w.flush(&mut |d: ElasticDelta| parent.apply(d));
             }
 
-            let mut reference: Elastic =
-                Elastic::init_with_dimensions(ELASTIC_BUCKETS, ELASTIC_ROWS, ELASTIC_COLS);
+            let mut reference: ElasticSketch =
+                ElasticSketch::with_heavy_and_light(ELASTIC_BUCKETS, ELASTIC_ROWS, ELASTIC_COLS);
             for k in &stream {
                 reference.update(key_of(*k));
             }

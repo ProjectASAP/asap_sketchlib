@@ -5,7 +5,7 @@
 //! equality rather than a probabilistic statement.
 //!
 //! The oracle for layer membership is the trailing-ones closed form read off
-//! `hash64_seeded(BOTTOM_LAYER_FINDER, key)`, which owes nothing to the
+//! `hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key)`, which owes nothing to the
 //! pyramid's own `bottom_layer_for_hash` loop. The oracle for per-layer state
 //! is a direct scan of the counter grids and the heaps, so the merge laws pin
 //! the merge against the layers it claims to rebuild.
@@ -17,8 +17,8 @@
 
 use crate::support::{PROBE_KEYS, close, grid};
 use asap_sketchlib::{
-    BOTTOM_LAYER_FINDER, DataInput, HHItem, HeapItem, L2HH, UnivMon, bottom_layer_for_hash,
-    hash64_seeded, hash128_seeded, l2hh_cell_for_row,
+    DataInput, HeapEntry, L2HH, OwnedDataInput, UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon,
+    bottom_layer_for_hash, hash64_seeded, hash128_seeded, l2hh_cell_for_row,
 };
 use proptest::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -31,49 +31,49 @@ const DOMAIN: u64 = 48;
 /// Heap capacity that holds the whole key domain.
 const WIDE_HEAP: usize = DOMAIN as usize;
 
-fn key_of(item: &HHItem) -> u64 {
+fn key_of(item: &HeapEntry) -> u64 {
     match item.key {
-        HeapItem::U64(k) => k,
+        OwnedDataInput::U64(k) => k,
         ref other => panic!("heap holds a non-u64 key {other:?}"),
     }
 }
 
 /// Deepest layer `key` reaches, as the count of set bits above bit 0 of its
 /// finder hash, capped by the pyramid depth.
-fn deepest_layer(key: u64, layer_size: usize) -> usize {
-    let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &DataInput::U64(key));
-    ((hash >> 1).trailing_ones() as usize).min(layer_size - 1)
+fn deepest_layer(key: u64, layers: usize) -> usize {
+    let hash = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &DataInput::U64(key));
+    ((hash >> 1).trailing_ones() as usize).min(layers - 1)
 }
 
 /// The keys each layer's heap holds, layer by layer.
 fn layer_keys(sketch: &UnivMon) -> Vec<HashSet<u64>> {
-    (0..sketch.layer_size)
-        .map(|i| sketch.hh_layers[i].heap().iter().map(key_of).collect())
+    (0..sketch.layers)
+        .map(|i| sketch.layer_heaps[i].heap().iter().map(key_of).collect())
         .collect()
 }
 
 /// One layer's counter grid in row-major order.
 fn cells(sketch: &UnivMon, layer: usize) -> Vec<i64> {
-    let L2HH::COUNT(cs) = &sketch.l2_sketch_layers[layer];
+    let L2HH::COUNT(cs) = &sketch.layer_sketches[layer];
     grid(cs.rows(), cs.cols(), |r, c| {
         cs.as_storage().query_one_counter(r, c)
     })
 }
 
 fn estimates(sketch: &UnivMon) -> Vec<Vec<f64>> {
-    (0..sketch.layer_size)
+    (0..sketch.layers)
         .map(|i| {
             (0..PROBE_KEYS as u64)
-                .map(|k| sketch.l2_sketch_layers[i].estimate(&DataInput::U64(k)))
+                .map(|k| sketch.layer_sketches[i].estimate(&DataInput::U64(k)))
                 .collect()
         })
         .collect()
 }
 
 fn heap_entries(sketch: &UnivMon) -> Vec<Vec<(u64, i64)>> {
-    (0..sketch.layer_size)
+    (0..sketch.layers)
         .map(|i| {
-            let mut entries: Vec<(u64, i64)> = sketch.hh_layers[i]
+            let mut entries: Vec<(u64, i64)> = sketch.layer_heaps[i]
                 .heap()
                 .iter()
                 .map(|item| (key_of(item), item.count))
@@ -85,7 +85,7 @@ fn heap_entries(sketch: &UnivMon) -> Vec<Vec<(u64, i64)>> {
 }
 
 fn filled(layers: usize, rows: usize, cols: usize, stream: &[(u64, i64)]) -> UnivMon {
-    let mut sketch = UnivMon::init_univmon(WIDE_HEAP, rows, cols, layers);
+    let mut sketch = UnivMon::new(WIDE_HEAP, rows, cols, layers);
     for (k, w) in stream {
         sketch.update_weighted(&DataInput::U64(*k), *w);
     }
@@ -150,7 +150,7 @@ proptest! {
         layers in 1usize..=8,
         key in any::<u64>(),
     ) {
-        let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &DataInput::U64(key));
+        let hash = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &DataInput::U64(key));
 
         prop_assert_eq!(
             bottom_layer_for_hash(hash, layers),
@@ -198,28 +198,28 @@ proptest! {
         key in any::<u64>(),
         weights in prop::collection::vec(1i64..1_000, 1..20),
     ) {
-        let mut sketch = UnivMon::init_univmon(8, rows, cols, layers);
+        let mut sketch = UnivMon::new(8, rows, cols, layers);
         for w in &weights {
             sketch.update_weighted(&DataInput::U64(key), *w);
         }
         let total: i64 = weights.iter().sum();
         let at = deepest_layer(key, layers);
 
-        prop_assert_eq!(sketch.calc_l1(), total as f64, "key {} at layer {}", key, at);
+        prop_assert_eq!(sketch.estimate_l1(), total as f64, "key {} at layer {}", key, at);
         prop_assert!(
-            close(sketch.calc_l2(), total as f64),
+            close(sketch.estimate_l2(), total as f64),
             "key {} at layer {} of {}: l2 {} is not its weight {}",
-            key, at, layers, sketch.calc_l2(), total
+            key, at, layers, sketch.estimate_l2(), total
         );
         prop_assert!(
-            close(sketch.calc_card(), 1.0),
+            close(sketch.estimate_cardinality(), 1.0),
             "key {} at layer {} of {}: cardinality {} is not 1",
-            key, at, layers, sketch.calc_card()
+            key, at, layers, sketch.estimate_cardinality()
         );
         prop_assert!(
-            close(sketch.calc_entropy(), 0.0),
+            close(sketch.estimate_entropy(), 0.0),
             "key {} at layer {} of {}: entropy {} is not 0",
-            key, at, layers, sketch.calc_entropy()
+            key, at, layers, sketch.estimate_entropy()
         );
     }
 
@@ -245,8 +245,8 @@ proptest! {
             prop_assert_eq!(cells(&merged, i), expected, "layer {} of {}", i, layers);
         }
         prop_assert_eq!(
-            merged.calc_l1(),
-            left.calc_l1() + right.calc_l1(),
+            merged.estimate_l1(),
+            left.estimate_l1() + right.estimate_l1(),
             "{} layers",
             layers
         );
@@ -277,9 +277,9 @@ proptest! {
                 union
             );
 
-            for item in merged.hh_layers[i].heap() {
+            for item in merged.layer_heaps[i].heap() {
                 let k = key_of(item);
-                let fresh = merged.l2_sketch_layers[i].estimate(&DataInput::U64(k)) as i64;
+                let fresh = merged.layer_sketches[i].estimate(&DataInput::U64(k)) as i64;
                 prop_assert_eq!(
                     item.count,
                     fresh,
@@ -313,7 +313,7 @@ proptest! {
             prop_assert_eq!(cells(&merged, i), cells(&streamed, i), "layer {}", i);
         }
         prop_assert_eq!(layer_keys(&merged), layer_keys(&streamed), "{} layers", layers);
-        prop_assert_eq!(merged.calc_l1(), streamed.calc_l1(), "{} layers", layers);
+        prop_assert_eq!(merged.estimate_l1(), streamed.estimate_l1(), "{} layers", layers);
     }
 
     #[test]
@@ -390,7 +390,7 @@ proptest! {
         heap_size in 1usize..=WIDE_HEAP,
         stream in stream(120),
     ) {
-        let mut sketch = UnivMon::init_univmon(heap_size, rows, cols, layers);
+        let mut sketch = UnivMon::new(heap_size, rows, cols, layers);
         for (k, w) in &stream {
             sketch.update_weighted(&DataInput::U64(*k), *w);
         }
@@ -400,9 +400,9 @@ proptest! {
             sketch,
             estimates,
             heap_entries,
-            |s: &UnivMon| s.calc_l1(),
+            |s: &UnivMon| s.estimate_l1(),
             |s: &UnivMon| s.candidates_complete().to_vec(),
-            |s: &UnivMon| (s.layer_size, s.sketch_row, s.sketch_col, s.heap_size),
+            |s: &UnivMon| (s.layers, s.rows, s.cols, s.heap_size),
         );
     }
 }

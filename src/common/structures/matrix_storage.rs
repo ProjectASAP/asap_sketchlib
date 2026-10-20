@@ -6,7 +6,7 @@ use crate::DataInput;
 
 /// Fast-path hash container for matrix-backed sketches.
 #[derive(Clone, Debug)]
-pub enum MatrixHashType {
+pub enum MatrixHash {
     /// Packed per-row hashes stored in one `u64`.
     Packed64(u64),
     /// Packed per-row hashes stored in one `u128`.
@@ -15,17 +15,17 @@ pub enum MatrixHashType {
     Rows(SmallVec<[u64; 8]>),
 }
 
-impl MatrixHashType {
+impl MatrixHash {
     #[inline(always)]
     /// Extracts the row-local hash bits for one row.
     pub fn row_hash(&self, row: usize, mask_bits: u32, mask: u128) -> u128 {
         match self {
-            MatrixHashType::Packed64(value) => {
+            MatrixHash::Packed64(value) => {
                 let shifted = (*value >> (mask_bits as usize * row)) as u128;
                 shifted & mask
             }
-            MatrixHashType::Packed128(value) => (value >> (mask_bits as usize * row)) & mask,
-            MatrixHashType::Rows(values) => {
+            MatrixHash::Packed128(value) => (value >> (mask_bits as usize * row)) & mask,
+            MatrixHash::Rows(values) => {
                 debug_assert!(row < values.len(), "row index out of bounds for hash rows");
                 (values[row] as u128) & mask
             }
@@ -36,9 +36,9 @@ impl MatrixHashType {
     /// Returns the Count-Sketch sign for one row.
     pub fn sign_for_row(&self, row: usize) -> i32 {
         let bit = match self {
-            MatrixHashType::Packed64(value) => (value >> (63 - row)) & 1,
-            MatrixHashType::Packed128(value) => ((value >> (127 - row)) & 1) as u64,
-            MatrixHashType::Rows(values) => {
+            MatrixHash::Packed64(value) => (value >> (63 - row)) & 1,
+            MatrixHash::Packed128(value) => ((value >> (127 - row)) & 1) as u64,
+            MatrixHash::Rows(values) => {
                 debug_assert!(row < values.len(), "row index out of bounds for hash rows");
                 (values[row] >> 63) & 1
             }
@@ -50,9 +50,9 @@ impl MatrixHashType {
     /// Returns the lower 64 bits of the stored hash.
     pub fn lower_64(&self) -> u64 {
         match self {
-            MatrixHashType::Packed64(value) => *value,
-            MatrixHashType::Packed128(value) => *value as u64,
-            MatrixHashType::Rows(values) => values.first().copied().unwrap_or(0),
+            MatrixHash::Packed64(value) => *value,
+            MatrixHash::Packed128(value) => *value as u64,
+            MatrixHash::Rows(values) => values.first().copied().unwrap_or(0),
         }
     }
 }
@@ -105,13 +105,13 @@ pub(crate) fn fold_to_col(raw: u128, cols: usize) -> usize {
     }
 }
 
-impl MatrixFastHash for MatrixHashType {
+impl MatrixFastHash for MatrixHash {
     #[inline(always)]
     fn assert_compatible(_rows: usize, _cols: usize) {}
 
     #[inline(always)]
     fn row_hash(&self, row: usize, mask_bits: u32, mask: u128) -> u128 {
-        MatrixHashType::row_hash(self, row, mask_bits, mask)
+        MatrixHash::row_hash(self, row, mask_bits, mask)
     }
 
     #[inline(always)]
@@ -123,7 +123,7 @@ impl MatrixFastHash for MatrixHashType {
 
     #[inline(always)]
     fn sign_for_row(&self, row: usize) -> i32 {
-        MatrixHashType::sign_for_row(self, row)
+        MatrixHash::sign_for_row(self, row)
     }
 }
 
@@ -257,8 +257,8 @@ mod tests {
     fn col_decode_matches_reference_for_all_dim_classes() {
         let hash64 = 0x0123_4567_89AB_CDEF_u64;
         let hash128 = 0x0011_2233_4455_6677_8899_AABB_CCDD_EEFF_u128;
-        let packed = MatrixHashType::Packed64(hash64);
-        let packed_wide = MatrixHashType::Packed128(hash128);
+        let packed = MatrixHash::Packed64(hash64);
+        let packed_wide = MatrixHash::Packed128(hash128);
 
         for &cols in &[1usize, 2, 3, 5, 7, 8, 10, 100, 1000, 2048, 4096, 5003] {
             let mask_bits = if cols.is_power_of_two() {

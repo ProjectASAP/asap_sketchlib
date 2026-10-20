@@ -7,19 +7,20 @@
 // Run with:
 //
 //   cargo run --example serialize_deserialize
-use asap_sketchlib::{CountMin, DataInput, ErtlMLE, HyperLogLog, KLL, RegularPath, Vector2D};
+use asap_sketchlib::{CountMinSketch, DataInput, Ertl, HyperLogLog, Kll, RegularPath, Vector2D};
 
 fn main() {
     // --- Count-Min Sketch ---
-    let mut cms: CountMin<Vector2D<i64>, RegularPath> = CountMin::with_dimensions(5, 1024);
+    let mut cms: CountMinSketch<Vector2D<i64>, RegularPath> =
+        CountMinSketch::with_dimensions(5, 1024);
     for id in 0u64..1_000 {
         cms.update(&DataInput::U64(id % 100)); // 100 distinct IDs
     }
     let before = cms.estimate(&DataInput::U64(42));
 
-    let bytes = cms.serialize_to_bytes().expect("CMS serialize");
-    let cms2 = CountMin::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes)
-        .expect("CMS deserialize");
+    let bytes = cms.to_asapv1().expect("CMS serialize");
+    let cms2 =
+        CountMinSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&bytes).expect("CMS deserialize");
     let after = cms2.estimate(&DataInput::U64(42));
 
     println!(
@@ -29,14 +30,14 @@ fn main() {
     println!("CMS  — serialized size: {} bytes", bytes.len());
 
     // --- HyperLogLog ---
-    let mut hll = HyperLogLog::<ErtlMLE>::default();
+    let mut hll = HyperLogLog::<Ertl>::default();
     for id in 0u64..10_000 {
         hll.update(&DataInput::U64(id));
     }
     let card_before = hll.estimate();
 
-    let bytes = hll.serialize_to_bytes().expect("HLL serialize");
-    let hll2 = HyperLogLog::<ErtlMLE>::deserialize_from_bytes(&bytes).expect("HLL deserialize");
+    let bytes = hll.to_asapv1().expect("HLL serialize");
+    let hll2 = HyperLogLog::<Ertl>::from_asapv1(&bytes).expect("HLL deserialize");
     let card_after = hll2.estimate();
 
     println!(
@@ -46,14 +47,14 @@ fn main() {
     println!("HLL  — serialized size: {} bytes", bytes.len());
 
     // --- KLL ---
-    let mut kll = KLL::<i64>::init_kll(200);
+    let mut kll = Kll::<i64>::with_k(200);
     for v in 1i64..=10_000 {
         kll.update(&v);
     }
     let p99_before = kll.cdf().query(0.99);
 
-    let bytes = kll.serialize_to_bytes().expect("KLL serialize");
-    let kll2 = KLL::<i64>::deserialize_from_bytes(&bytes).expect("KLL deserialize");
+    let bytes = kll.to_asapv1().expect("KLL serialize");
+    let kll2 = Kll::<i64>::from_asapv1(&bytes).expect("KLL deserialize");
     let p99_after = kll2.cdf().query(0.99);
 
     println!(

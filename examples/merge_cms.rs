@@ -7,17 +7,19 @@
 // Run with:
 //
 //   cargo run --example merge_cms
-use asap_sketchlib::{CountMin, DataInput, RegularPath, Vector2D};
+use asap_sketchlib::{CountMinSketch, DataInput, RegularPath, Vector2D};
 
 fn main() {
     // Worker A sees even user IDs.
-    let mut cms_a: CountMin<Vector2D<i32>, RegularPath> = CountMin::with_dimensions(5, 1024);
+    let mut cms_a: CountMinSketch<Vector2D<i32>, RegularPath> =
+        CountMinSketch::with_dimensions(5, 1024);
     for id in (0u64..10_000).step_by(2) {
         cms_a.update(&DataInput::U64(id));
     }
 
     // Worker B sees odd user IDs, plus extra occurrences of user 42.
-    let mut cms_b: CountMin<Vector2D<i32>, RegularPath> = CountMin::with_dimensions(5, 1024);
+    let mut cms_b: CountMinSketch<Vector2D<i32>, RegularPath> =
+        CountMinSketch::with_dimensions(5, 1024);
     for id in (1u64..10_000).step_by(2) {
         cms_b.update(&DataInput::U64(id));
     }

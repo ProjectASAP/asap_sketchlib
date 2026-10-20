@@ -104,7 +104,7 @@ pub trait MergeOps {
 
 #[derive(Clone, Copy)]
 pub struct FrequencySpec {
-    /// One-sided sketches (e.g. CountMin) must never underestimate.
+    /// One-sided sketches (e.g. CountMinSketch) must never underestimate.
     pub one_sided: bool,
     /// Relative tolerance applied to dense keys (hot-key accuracy).
     pub rel_tol: f64,
@@ -430,7 +430,7 @@ where
 /// relative-value band says nothing about KLL's.
 ///
 /// The order statistic compared against comes from the spec's own
-/// `DdRankConvention`, so a core `DDSketch` (`ceil(q*n)`) and the portable
+/// `DdRankConvention`, so a core `DdSketch` (`ceil(q*n)`) and the portable
 /// `DdSketch` (`floor(q*(n-1))`) are each scored on the question they actually
 /// answer.
 pub fn relative_quantile_battery<S, F>(

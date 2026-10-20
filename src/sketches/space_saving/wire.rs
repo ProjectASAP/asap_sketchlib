@@ -2,8 +2,8 @@
 //!
 //! Child submodule of [`crate::sketches::space_saving`]: it holds ALL of
 //! Space-Saving's serialization (the metadata/payload DTOs, the kind_id
-//! constant, the `key_type` mapping, and the `serialize_to_bytes` /
-//! `deserialize_from_bytes` impls) while the algorithm lives in the parent
+//! constant, the `key_type` mapping, and the `to_asapv1` /
+//! `from_asapv1` impls) while the algorithm lives in the parent
 //! module file. Being a descendant module, it reads the summary's private
 //! `monitored` / `buckets` / `total` / `discarded_max` fields and reuses the private
 //! `rebuild` entry point directly, without widening any field visibility. See
@@ -16,16 +16,16 @@
 //! bucket list, the counter arena and the key index are all derived and are
 //! rebuilt on load, so no arena index reaches the wire.
 //!
-//! ## `key_type` names the exact `HeapItem` variant
+//! ## `key_type` names the exact `OwnedDataInput` variant
 //!
 //! Unlike Count-Min's counters, a Space-Saving key's type is a **runtime**
-//! property: keys are [`HeapItem`]s, a 16-variant enum. One metadata `key_type`
+//! property: keys are [`OwnedDataInput`]s, a 16-variant enum. One metadata `key_type`
 //! names the exact variant and the payload's `keys` array is homogeneous in it.
 //! The variant is never widened (an `i32` key is `"i32"`, not `"i64"`) because
-//! `HeapItem`'s `PartialEq<DataInput>` and `Hash` both discriminate on the
+//! `OwnedDataInput`'s `PartialEq<DataInput>` and `Hash` both discriminate on the
 //! variant: a widened key would hash to the same digest but stop comparing
 //! equal to the caller's `DataInput`, so `estimate` would silently read zero.
-//! `HeapItem::I128` / `U128` have no msgpack integer form and are not wire
+//! `OwnedDataInput::I128` / `U128` have no msgpack integer form and are not wire
 //! types, so a summary holding one refuses to serialize — as does one whose
 //! monitored keys mix variants, `String` and `Bytes` included. A `Bytes` key is
 //! written as msgpack `bin` through `WireBytes` and read back from `bin` alone,
@@ -39,7 +39,7 @@
 //! `entries()` order follows the counter arena and `top_k` order follows the
 //! bucket walk, neither of which survives a rebuild. The payload is therefore
 //! **order-defined**: descending count, ties broken by the crate's `key_order`
-//! total order over [`HeapItem`] (the same one `merge` uses). Two summaries
+//! total order over [`OwnedDataInput`] (the same one `merge` uses). Two summaries
 //! holding the same triples emit the same bytes whatever order they were seated
 //! in, and re-serializing a decoded summary reproduces its bytes exactly.
 
@@ -48,36 +48,36 @@ use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
-use crate::{HashProfile, HeapItem, SketchHasher};
+use crate::{HashProfile, OwnedDataInput, SketchHasher};
 
 use std::collections::HashSet;
 
 use super::parts::emitted_order;
 use super::{SpaceSaving, SpaceSavingState, key_order};
-use crate::sketches::countminsketch_topk::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
+use crate::sketches::countminsketch_heap::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
 
 /// Space-Saving kind_id: family `0x18`, single algorithm variant `0x00`.
 const SPACE_SAVING_KIND: &[u8] = &[0x18, 0x00];
 
-/// The metadata `key_type` naming a key's exact [`HeapItem`] variant, or `None`
+/// The metadata `key_type` naming a key's exact [`OwnedDataInput`] variant, or `None`
 /// for the 128-bit variants, which are not wire types.
-fn key_type_of(key: &HeapItem) -> Option<&'static str> {
+fn key_type_of(key: &OwnedDataInput) -> Option<&'static str> {
     Some(match key {
-        HeapItem::I8(_) => "i8",
-        HeapItem::I16(_) => "i16",
-        HeapItem::I32(_) => "i32",
-        HeapItem::I64(_) => "i64",
-        HeapItem::ISIZE(_) => "isize",
-        HeapItem::U8(_) => "u8",
-        HeapItem::U16(_) => "u16",
-        HeapItem::U32(_) => "u32",
-        HeapItem::U64(_) => "u64",
-        HeapItem::USIZE(_) => "usize",
-        HeapItem::F32(_) => "f32",
-        HeapItem::F64(_) => "f64",
-        HeapItem::String(_) => "string",
-        HeapItem::Bytes(_) => "bytes",
-        HeapItem::I128(_) | HeapItem::U128(_) => return None,
+        OwnedDataInput::I8(_) => "i8",
+        OwnedDataInput::I16(_) => "i16",
+        OwnedDataInput::I32(_) => "i32",
+        OwnedDataInput::I64(_) => "i64",
+        OwnedDataInput::Isize(_) => "isize",
+        OwnedDataInput::U8(_) => "u8",
+        OwnedDataInput::U16(_) => "u16",
+        OwnedDataInput::U32(_) => "u32",
+        OwnedDataInput::U64(_) => "u64",
+        OwnedDataInput::Usize(_) => "usize",
+        OwnedDataInput::F32(_) => "f32",
+        OwnedDataInput::F64(_) => "f64",
+        OwnedDataInput::String(_) => "string",
+        OwnedDataInput::Bytes(_) => "bytes",
+        OwnedDataInput::I128(_) | OwnedDataInput::U128(_) => return None,
     })
 }
 
@@ -105,7 +105,7 @@ struct SpaceSavingMetadata {
 /// Builds the Space-Saving descriptor metadata from the hasher's
 /// [`HashProfile`], so the wire bytes truthfully describe how the summary
 /// hashed its keys. `capacity` is the counter budget; `key_type` is the exact
-/// [`HeapItem`] variant the payload's `keys` array carries.
+/// [`OwnedDataInput`] variant the payload's `keys` array carries.
 fn space_saving_metadata<H: HashProfile>(capacity: u32, key_type: &str) -> SpaceSavingMetadata {
     SpaceSavingMetadata {
         metadata_version: 1,
@@ -140,7 +140,7 @@ struct SpaceSavingPayload<K> {
 /// The `key_type` the payload will be written in, taken from the first key in
 /// emitted order. Rejects a 128-bit key outright; the homogeneity of the rest
 /// is enforced by [`encode_payload`].
-fn wire_key_type(entries: &[(&HeapItem, u64, u64)]) -> Result<&'static str, RmpEncodeError> {
+fn wire_key_type(entries: &[(&OwnedDataInput, u64, u64)]) -> Result<&'static str, RmpEncodeError> {
     match entries.first() {
         None => Ok(EMPTY_KEY_TYPE),
         Some((key, _, _)) => key_type_of(key).ok_or_else(|| {
@@ -151,7 +151,7 @@ fn wire_key_type(entries: &[(&HeapItem, u64, u64)]) -> Result<&'static str, RmpE
     }
 }
 
-fn mixed_variant_error(key_type: &str, key: &HeapItem) -> RmpEncodeError {
+fn mixed_variant_error(key_type: &str, key: &OwnedDataInput) -> RmpEncodeError {
     RmpEncodeError::Syntax(format!(
         "Space-Saving: monitored keys mix variants — key_type is {key_type}, but a {} key is held",
         key_type_of(key).unwrap_or("128-bit")
@@ -161,13 +161,13 @@ fn mixed_variant_error(key_type: &str, key: &HeapItem) -> RmpEncodeError {
 /// Rejects a key held twice, judged by `key_order` (floats by their bits, so
 /// two identical `NaN`s are one key twice), and triples out of emitted order.
 fn check_wire_entries<'a>(
-    entries: impl ExactSizeIterator<Item = (&'a HeapItem, u64)> + Clone,
+    entries: impl ExactSizeIterator<Item = (&'a OwnedDataInput, u64)> + Clone,
 ) -> Result<(), String> {
     let mut seen = HashSet::with_capacity(entries.len());
     if !entries.clone().all(|(key, _)| seen.insert(key_order(key))) {
         return Err("Space-Saving: the same key appears twice".to_string());
     }
-    let ordered: Vec<(&HeapItem, u64)> = entries.collect();
+    let ordered: Vec<(&OwnedDataInput, u64)> = entries.collect();
     if ordered
         .windows(2)
         .any(|pair| emitted_order(pair[0], pair[1]).is_ge())
@@ -181,7 +181,7 @@ fn check_wire_entries<'a>(
 /// `key_type`. Any key that is not of that variant fails the encode.
 fn encode_payload(
     key_type: &str,
-    entries: &[(&HeapItem, u64, u64)],
+    entries: &[(&OwnedDataInput, u64, u64)],
     total: u64,
     discarded_max: u64,
 ) -> Result<Vec<u8>, RmpEncodeError> {
@@ -193,7 +193,7 @@ fn encode_payload(
             let mut keys = Vec::with_capacity(entries.len());
             for (key, _, _) in entries {
                 match key {
-                    HeapItem::$variant(value) => keys.push(*value),
+                    OwnedDataInput::$variant(value) => keys.push(*value),
                     _ => return Err(mixed_variant_error(key_type, key)),
                 }
             }
@@ -212,19 +212,19 @@ fn encode_payload(
         "i16" => pack!(I16),
         "i32" => pack!(I32),
         "i64" => pack!(I64),
-        "isize" => pack!(ISIZE),
+        "isize" => pack!(Isize),
         "u8" => pack!(U8),
         "u16" => pack!(U16),
         "u32" => pack!(U32),
         "u64" => pack!(U64),
-        "usize" => pack!(USIZE),
+        "usize" => pack!(Usize),
         "f32" => pack!(F32),
         "f64" => pack!(F64),
         "string" => {
             let mut keys = Vec::with_capacity(entries.len());
             for (key, _, _) in entries {
                 match key {
-                    HeapItem::String(value) => keys.push(WireString(value.clone())),
+                    OwnedDataInput::String(value) => keys.push(WireString(value.clone())),
                     _ => return Err(mixed_variant_error(key_type, key)),
                 }
             }
@@ -240,7 +240,7 @@ fn encode_payload(
             let mut keys = Vec::with_capacity(entries.len());
             for (key, _, _) in entries {
                 match key {
-                    HeapItem::Bytes(value) => keys.push(WireBytes(value.clone())),
+                    OwnedDataInput::Bytes(value) => keys.push(WireBytes(value.clone())),
                     _ => return Err(mixed_variant_error(key_type, key)),
                 }
             }
@@ -274,8 +274,8 @@ fn decode_payload(
                 decoded
                     .keys
                     .into_iter()
-                    .map(HeapItem::$variant)
-                    .collect::<Vec<HeapItem>>(),
+                    .map(OwnedDataInput::$variant)
+                    .collect::<Vec<OwnedDataInput>>(),
                 decoded.counts,
                 decoded.errors,
                 decoded.total,
@@ -289,12 +289,12 @@ fn decode_payload(
         "i16" => unpack!(I16, i16),
         "i32" => unpack!(I32, i32),
         "i64" => unpack!(I64, i64),
-        "isize" => unpack!(ISIZE, isize),
+        "isize" => unpack!(Isize, isize),
         "u8" => unpack!(U8, u8),
         "u16" => unpack!(U16, u16),
         "u32" => unpack!(U32, u32),
         "u64" => unpack!(U64, u64),
-        "usize" => unpack!(USIZE, usize),
+        "usize" => unpack!(Usize, usize),
         "f32" => unpack!(F32, f32),
         "f64" => unpack!(F64, f64),
         "string" => {
@@ -303,8 +303,8 @@ fn decode_payload(
                 decoded
                     .keys
                     .into_iter()
-                    .map(|key| HeapItem::String(key.into_string()))
-                    .collect::<Vec<HeapItem>>(),
+                    .map(|key| OwnedDataInput::String(key.into_string()))
+                    .collect::<Vec<OwnedDataInput>>(),
                 decoded.counts,
                 decoded.errors,
                 decoded.total,
@@ -317,8 +317,8 @@ fn decode_payload(
                 decoded
                     .keys
                     .into_iter()
-                    .map(|key| HeapItem::Bytes(key.into_vec()))
-                    .collect::<Vec<HeapItem>>(),
+                    .map(|key| OwnedDataInput::Bytes(key.into_vec()))
+                    .collect::<Vec<OwnedDataInput>>(),
                 decoded.counts,
                 decoded.errors,
                 decoded.total,
@@ -363,10 +363,10 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
     /// (kind_id `0x18 0x00`). The metadata is derived from the hasher's
     /// [`HashProfile`], so it truthfully describes how the keys were hashed.
     ///
-    /// Fails when the monitored keys mix [`HeapItem`] variants, when any of
+    /// Fails when the monitored keys mix [`OwnedDataInput`] variants, when any of
     /// them is 128-bit (no msgpack integer form), or when `capacity` overflows
     /// the metadata's `u32` field.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let capacity = u32::try_from(self.capacity).map_err(|_| {
             RmpEncodeError::Syntax(format!(
                 "Space-Saving capacity {} exceeds the u32 metadata field",
@@ -390,7 +390,7 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
     /// Every state the algorithm could not have produced is rejected with an
     /// error rather than a panic, and the declared `capacity` never sizes an
     /// allocation.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != SPACE_SAVING_KIND {
@@ -414,7 +414,7 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher};
+    use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher};
     use rmp_serde::from_slice;
 
     fn next_random(state: &mut u64) -> u64 {
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(summary.len(), summary.capacity(), "eviction was not forced");
         assert!(summary.min_count() > 0, "the ceiling was never raised");
 
-        let bytes = summary.serialize_to_bytes().expect("serialize");
+        let bytes = summary.to_asapv1().expect("serialize");
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
@@ -473,10 +473,9 @@ mod tests {
             "the fixture cannot tell descending from ascending"
         );
 
-        let decoded =
-            SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let decoded = SpaceSaving::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
         assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
+            decoded.to_asapv1().expect("re-serialize"),
             bytes,
             "Space-Saving bytes differed after a round trip"
         );
@@ -534,9 +533,8 @@ mod tests {
         assert!(left.len() < left.capacity(), "the merge left room to spare");
         assert!(left.min_count() >= 10, "the merge did not raise a ceiling");
 
-        let bytes = left.serialize_to_bytes().expect("serialize");
-        let decoded =
-            SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let bytes = left.to_asapv1().expect("serialize");
+        let decoded = SpaceSaving::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
 
         assert_eq!(decoded.min_count(), left.min_count());
         assert_eq!(
@@ -545,36 +543,35 @@ mod tests {
             "the ceiling on the key the other side dropped was lost"
         );
         assert!(decoded.upper_bound(&DataInput::I64(7)) >= 10);
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
     #[test]
     fn space_saving_empty_round_trip() {
         let summary: SpaceSaving = SpaceSaving::with_capacity(16);
-        let bytes = summary.serialize_to_bytes().expect("serialize");
+        let bytes = summary.to_asapv1().expect("serialize");
         assert_eq!(metadata_of(&bytes).key_type, "u64");
         assert_eq!(metadata_of(&bytes).metadata_version, 1);
 
-        let decoded =
-            SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let decoded = SpaceSaving::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.len(), 0);
         assert_eq!(decoded.capacity(), 16);
         assert_eq!(decoded.min_count(), 0);
         assert_eq!(decoded.total(), 0);
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
     /// An empty summary carries `key_type` `"u64"`; any other name is rejected.
     #[test]
     fn space_saving_empty_must_carry_the_u64_key_type() {
-        use crate::sketches::countminsketch_topk::heap_wire::relabel_u64_key_type;
+        use crate::sketches::countminsketch_heap::heap_wire::relabel_u64_key_type;
         let bytes = SpaceSaving::<DefaultXxHasher>::with_capacity(4)
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect("serialize");
         for to in ["string", "i64"] {
-            let problem = SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(
-                &relabel_u64_key_type(&bytes, "key_type", to),
-            )
+            let problem = SpaceSaving::<DefaultXxHasher>::from_asapv1(&relabel_u64_key_type(
+                &bytes, "key_type", to,
+            ))
             .expect_err("an empty summary under another key_type must be rejected")
             .to_string();
             assert!(problem.contains("empty key set"), "{to}: {problem}");
@@ -584,7 +581,7 @@ mod tests {
     /// Every wire-eligible key family round-trips, and the decoded key still
     /// answers to the caller's original `DataInput`. A widened `key_type`
     /// (i32 to i64, say) keeps the same digest but rebuilds a different
-    /// `HeapItem` variant, so `estimate` would read zero here.
+    /// `OwnedDataInput` variant, so `estimate` would read zero here.
     #[test]
     fn space_saving_every_key_type_round_trips_and_keeps_its_variant() {
         fn check(expected: &str, values: &[DataInput]) {
@@ -594,12 +591,11 @@ mod tests {
             }
             assert_eq!(summary.len(), values.len(), "{expected}: keys collided");
 
-            let bytes = summary.serialize_to_bytes().expect("serialize");
+            let bytes = summary.to_asapv1().expect("serialize");
             assert_eq!(metadata_of(&bytes).key_type, expected);
 
-            let decoded =
-                SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
-            assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+            let decoded = SpaceSaving::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
+            assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
             for (i, value) in values.iter().enumerate() {
                 assert_eq!(
                     decoded.estimate(value),
@@ -616,12 +612,12 @@ mod tests {
         check("i16", &[DataInput::I16(-3000), DataInput::I16(9)]);
         check("i32", &[DataInput::I32(-7), DataInput::I32(65_537)]);
         check("i64", &[DataInput::I64(-1), DataInput::I64(1 << 40)]);
-        check("isize", &[DataInput::ISIZE(-11), DataInput::ISIZE(11)]);
+        check("isize", &[DataInput::Isize(-11), DataInput::Isize(11)]);
         check("u8", &[DataInput::U8(0), DataInput::U8(255)]);
         check("u16", &[DataInput::U16(1), DataInput::U16(65_535)]);
         check("u32", &[DataInput::U32(7), DataInput::U32(u32::MAX)]);
         check("u64", &[DataInput::U64(9), DataInput::U64(u64::MAX)]);
-        check("usize", &[DataInput::USIZE(4), DataInput::USIZE(1 << 33)]);
+        check("usize", &[DataInput::Usize(4), DataInput::Usize(1 << 33)]);
         check("f32", &[DataInput::F32(-0.5), DataInput::F32(3.25)]);
         check("f64", &[DataInput::F64(2.5), DataInput::F64(-1e300)]);
         check("string", &[DataInput::Str("alpha"), DataInput::Str("beta")]);
@@ -652,7 +648,7 @@ mod tests {
             summary.update_weighted(&DataInput::Bytes(key), 3 * (i as u64 + 1));
         }
 
-        let bytes = summary.serialize_to_bytes().expect("serialize");
+        let bytes = summary.to_asapv1().expect("serialize");
         assert_eq!(metadata_of(&bytes).key_type, "bytes");
 
         let (_, _, payload) = envelope::split(&bytes).expect("split");
@@ -663,8 +659,7 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(emitted_keys, expected, "the raw bytes did not survive");
 
-        let decoded =
-            SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let decoded = SpaceSaving::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
         for (i, key) in keys.iter().enumerate() {
             assert_eq!(
                 decoded.estimate(&DataInput::Bytes(key)),
@@ -672,7 +667,7 @@ mod tests {
                 "{key:?} no longer matches its DataInput"
             );
         }
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
     /// A byte key and a string key are different key types, so a summary
@@ -685,7 +680,7 @@ mod tests {
         summary.update_weighted(&DataInput::Str("abc"), 2);
         assert_eq!(summary.len(), 2);
 
-        let problem = summary.serialize_to_bytes().expect_err("mixed variants");
+        let problem = summary.to_asapv1().expect_err("mixed variants");
         assert!(
             problem.to_string().contains("mix variants"),
             "got {problem}"
@@ -698,10 +693,10 @@ mod tests {
     #[test]
     fn space_saving_emitted_order_is_independent_of_seat_order() {
         let entries = vec![
-            (HeapItem::U64(3), 5u64, 1u64),
-            (HeapItem::U64(1), 9, 0),
-            (HeapItem::U64(2), 5, 2),
-            (HeapItem::U64(4), 9, 3),
+            (OwnedDataInput::U64(3), 5u64, 1u64),
+            (OwnedDataInput::U64(1), 9, 0),
+            (OwnedDataInput::U64(2), 5, 2),
+            (OwnedDataInput::U64(4), 9, 3),
         ];
         let mut reversed = entries.clone();
         reversed.reverse();
@@ -721,10 +716,10 @@ mod tests {
         })
         .expect("rebuild");
 
-        let bytes = seated.serialize_to_bytes().expect("serialize");
+        let bytes = seated.to_asapv1().expect("serialize");
         assert_eq!(
             bytes,
-            reseated.serialize_to_bytes().expect("serialize"),
+            reseated.to_asapv1().expect("serialize"),
             "the emitted order followed the seat order"
         );
 
@@ -742,17 +737,14 @@ mod tests {
         mixed.update(&DataInput::I64(2));
         assert_eq!(mixed.len(), 2);
         assert!(
-            mixed.serialize_to_bytes().is_err(),
+            mixed.to_asapv1().is_err(),
             "a summary mixing key variants must not serialize"
         );
 
         for key in [DataInput::I128(1), DataInput::U128(2)] {
             let mut wide: SpaceSaving = SpaceSaving::with_capacity(4);
             wide.update(&key);
-            assert!(
-                wide.serialize_to_bytes().is_err(),
-                "{key:?} is not a wire key type"
-            );
+            assert!(wide.to_asapv1().is_err(), "{key:?} is not a wire key type");
         }
 
         // A 128-bit key behind a wire-eligible one is caught on the way into
@@ -760,31 +752,31 @@ mod tests {
         let mut trailing: SpaceSaving = SpaceSaving::with_capacity(4);
         trailing.update_weighted(&DataInput::U64(1), 9);
         trailing.update_weighted(&DataInput::U128(2), 1);
-        assert!(trailing.serialize_to_bytes().is_err());
+        assert!(trailing.to_asapv1().is_err());
     }
 
     #[test]
     fn space_saving_rejects_a_key_type_the_payload_does_not_carry() {
         let mut strings: SpaceSaving = SpaceSaving::with_capacity(4);
         strings.update(&DataInput::Str("alpha"));
-        let string_bytes = strings.serialize_to_bytes().expect("serialize");
+        let string_bytes = strings.to_asapv1().expect("serialize");
         let (_, _, string_payload) = envelope::split(&string_bytes).expect("split");
 
         let mut numbers: SpaceSaving = SpaceSaving::with_capacity(4);
         numbers.update(&DataInput::U64(11));
-        let number_bytes = numbers.serialize_to_bytes().expect("serialize");
+        let number_bytes = numbers.to_asapv1().expect("serialize");
         let (_, _, number_payload) = envelope::split(&number_bytes).expect("split");
 
         let mut raw: SpaceSaving = SpaceSaving::with_capacity(4);
         raw.update(&DataInput::Bytes(&[0xff, 0x00, 0xfe]));
-        let raw_bytes = raw.serialize_to_bytes().expect("serialize");
+        let raw_bytes = raw.to_asapv1().expect("serialize");
         let (_, _, raw_payload) = envelope::split(&raw_bytes).expect("split");
 
         // Bytes that ARE valid UTF-8: relabelled "string" they would decode
-        // into `HeapItem::String` keys unless the string decode refuses `bin`.
+        // into `OwnedDataInput::String` keys unless the string decode refuses `bin`.
         let mut utf8: SpaceSaving = SpaceSaving::with_capacity(4);
         utf8.update(&DataInput::Bytes(b"alpha"));
-        let utf8_bytes = utf8.serialize_to_bytes().expect("serialize");
+        let utf8_bytes = utf8.to_asapv1().expect("serialize");
         let (_, _, utf8_payload) = envelope::split(&utf8_bytes).expect("split");
 
         for (claimed, payload) in [
@@ -801,7 +793,7 @@ mod tests {
                     .expect("metadata");
             let forged = envelope::encode(SPACE_SAVING_KIND, &metadata, payload);
             assert!(
-                SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&forged).is_err(),
+                SpaceSaving::<DefaultXxHasher>::from_asapv1(&forged).is_err(),
                 "a payload relabelled {claimed} must be rejected"
             );
         }
@@ -824,19 +816,19 @@ mod tests {
         fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
             DefaultXxHasher::hash128_seeded(d, key)
         }
-        fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(d: usize, key: &OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(d, key)
         }
-        fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(d: usize, key: &OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(d, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -848,7 +840,7 @@ mod tests {
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
@@ -862,21 +854,18 @@ mod tests {
         }
 
         // (a) A summary built with a custom-profile hasher round-trips.
-        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
-        let decoded = SpaceSaving::<AltHasher>::deserialize_from_bytes(&alt_bytes).expect("decode");
+        let alt_bytes = alt.to_asapv1().expect("alt serialize");
+        let decoded = SpaceSaving::<AltHasher>::from_asapv1(&alt_bytes).expect("decode");
         assert_eq!(decoded.estimate(&DataInput::U64(1)), 5);
-        assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
-            alt_bytes
-        );
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), alt_bytes);
 
         // (b) Bytes differ from the standard-profile summary.
-        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        let std_bytes = std.to_asapv1().expect("std serialize");
         assert_ne!(alt_bytes, std_bytes);
 
         // (c) Standard-profile decode fails closed on custom-profile bytes.
         assert!(
-            SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&alt_bytes).is_err(),
+            SpaceSaving::<DefaultXxHasher>::from_asapv1(&alt_bytes).is_err(),
             "standard-profile decode must reject custom-profile bytes"
         );
     }
@@ -1011,7 +1000,7 @@ mod tests {
             ),
         ];
         for (bytes, expected) in cases {
-            let problem = SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
+            let problem = SpaceSaving::<DefaultXxHasher>::from_asapv1(&bytes)
                 .expect_err("a crafted envelope must be rejected, not decoded")
                 .to_string();
             assert!(
@@ -1043,16 +1032,16 @@ mod tests {
             envelope::encode(SPACE_SAVING_KIND, &metadata, &payload)
         };
         let spec = encoded(vec![0, 1, i64::MIN, -1], vec![5; 4], "i64");
-        let decoded = SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&spec)
+        let decoded = SpaceSaving::<DefaultXxHasher>::from_asapv1(&spec)
             .expect("the spec's tie order decodes");
-        assert_eq!(decoded.serialize_to_bytes().expect("re-encode"), spec);
+        assert_eq!(decoded.to_asapv1().expect("re-encode"), spec);
         let naive = encoded(vec![i64::MIN, -1, 0, 1], vec![5; 4], "i64");
-        let problem = SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&naive)
+        let problem = SpaceSaving::<DefaultXxHasher>::from_asapv1(&naive)
             .expect_err("naive signed order must be rejected")
             .to_string();
         assert!(problem.contains("not in descending count"), "{problem}");
 
-        let nan = |count: u64| (HeapItem::F64(f64::NAN), count, 0);
+        let nan = |count: u64| (OwnedDataInput::F64(f64::NAN), count, 0);
         let twice = SpaceSaving::<DefaultXxHasher>::rebuild(SpaceSavingState {
             capacity: 4,
             total: 5,
@@ -1061,7 +1050,7 @@ mod tests {
         })
         .expect("NaN never equals itself, so both seat");
         let problem = twice
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a NaN key held twice must not serialize")
             .to_string();
         assert!(problem.contains("the same key appears twice"), "{problem}");
@@ -1076,7 +1065,7 @@ mod tests {
             discarded_max: 0,
         })
         .expect("payload");
-        let problem = SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&envelope::encode(
+        let problem = SpaceSaving::<DefaultXxHasher>::from_asapv1(&envelope::encode(
             SPACE_SAVING_KIND,
             &metadata,
             &payload,
@@ -1094,13 +1083,13 @@ mod tests {
             capacity: 1 << 40,
             total: 3,
             discarded_max: 0,
-            entries: vec![(HeapItem::U64(1), 3, 0)],
+            entries: vec![(OwnedDataInput::U64(1), 3, 0)],
         })
         .expect("a sparse state");
         assert_eq!(summary.capacity(), 1 << 40);
 
         let problem = summary
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("an oversized capacity must not serialize")
             .to_string();
         assert!(
@@ -1114,8 +1103,7 @@ mod tests {
     #[test]
     fn space_saving_does_not_allocate_a_declared_capacity() {
         let bytes = crafted(u32::MAX, vec![7, 8], vec![9, 4], vec![0, 1], 13, 0);
-        let decoded =
-            SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let decoded = SpaceSaving::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.capacity(), u32::MAX as usize);
         assert_eq!(decoded.len(), 2);
         assert_eq!(decoded.estimate(&DataInput::U64(7)), 9);

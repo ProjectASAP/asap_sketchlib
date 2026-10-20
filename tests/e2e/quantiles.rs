@@ -17,7 +17,7 @@
 //!
 //! Every sketch here is built with an explicit compaction seed. KLL's coin is
 //! the sketch's own randomness and is entirely separate from the stream seed;
-//! the wall-clock-seeded `KLL::init_kll` / `KLLDynamic::init_kll` constructors
+//! the wall-clock-seeded `Kll::with_k` / `KllDynamic::with_k` constructors
 //! cannot be used in an accuracy test because a failure would not reproduce.
 //!
 //! # Trial units
@@ -46,7 +46,7 @@ use common::{
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::{
-    DDSketch, DataInput, KLL, KLLConfig, KLLDynamic, TumblingWindow, UnivMonQ, UnivMonQConfig,
+    DataInput, DdSketch, Kll, KllConfig, KllDynamic, TumblingWindow, UnivMonQ, UnivMonQConfig,
 };
 use std::collections::HashMap;
 
@@ -124,25 +124,25 @@ const FEEDS: [Feed; 4] = [
     Feed::TumblingMerge,
 ];
 
-fn feed_kll(feed: Feed, k: i32, seed: u64, values: &[f64]) -> KLL<f64> {
+fn feed_kll(feed: Feed, k: i32, seed: u64, values: &[f64]) -> Kll<f64> {
     match feed {
         Feed::SinglePass => {
-            let mut s = KLL::init_kll_with_seed(k, seed);
+            let mut s = Kll::with_k_and_seed(k, seed);
             for v in values {
                 s.update(v);
             }
             s
         }
         Feed::BulkUpdate => {
-            let mut s = KLL::init_kll_with_seed(k, seed);
+            let mut s = Kll::with_k_and_seed(k, seed);
             s.update_batch(values);
             s
         }
         Feed::ShardMerge => {
             // Four shards, each with its own coin seed, merged pairwise into a
             // tree rather than a chain so merge order is exercised too.
-            let mut shards: Vec<KLL<f64>> = (0..4)
-                .map(|i| KLL::init_kll_with_seed(k, seed.wrapping_add(0x1000 * (i + 1))))
+            let mut shards: Vec<Kll<f64>> = (0..4)
+                .map(|i| Kll::with_k_and_seed(k, seed.wrapping_add(0x1000 * (i + 1))))
                 .collect();
             for (i, v) in values.iter().enumerate() {
                 shards[i % 4].update(v);
@@ -159,13 +159,13 @@ fn feed_kll(feed: Feed, k: i32, seed: u64, values: &[f64]) -> KLL<f64> {
             // merges every retained window plus the active one. Pool reuse
             // runs `clear()`, which re-seeds from the stored seed, so the
             // result is reproducible across rotations.
-            let cfg = KLLConfig {
+            let cfg = KllConfig {
                 k: k as usize,
                 m: 8,
                 seed: Some(seed),
             };
             let window = (values.len() / 8).max(1) as u64;
-            let mut tw: TumblingWindow<KLL> = TumblingWindow::new(window, 32, cfg, 4);
+            let mut tw: TumblingWindow<Kll> = TumblingWindow::new(window, 32, cfg, 4);
             for (t, v) in values.iter().enumerate() {
                 tw.update_weighted(t as u64, &DataInput::F64(*v), 0);
             }
@@ -174,23 +174,23 @@ fn feed_kll(feed: Feed, k: i32, seed: u64, values: &[f64]) -> KLL<f64> {
     }
 }
 
-fn feed_kll_dynamic(feed: Feed, k: i32, seed: u64, values: &[f64]) -> Option<KLLDynamic<f64>> {
+fn feed_kll_dynamic(feed: Feed, k: i32, seed: u64, values: &[f64]) -> Option<KllDynamic<f64>> {
     match feed {
         Feed::SinglePass => {
-            let mut s = KLLDynamic::init_kll_with_seed(k, seed);
+            let mut s = KllDynamic::with_k_and_seed(k, seed);
             for v in values {
                 s.update(v);
             }
             Some(s)
         }
         Feed::BulkUpdate => {
-            let mut s = KLLDynamic::init_kll_with_seed(k, seed);
+            let mut s = KllDynamic::with_k_and_seed(k, seed);
             s.update_batch(values);
             Some(s)
         }
         Feed::ShardMerge => {
-            let mut shards: Vec<KLLDynamic<f64>> = (0..4)
-                .map(|i| KLLDynamic::init_kll_with_seed(k, seed.wrapping_add(0x1000 * (i + 1))))
+            let mut shards: Vec<KllDynamic<f64>> = (0..4)
+                .map(|i| KllDynamic::with_k_and_seed(k, seed.wrapping_add(0x1000 * (i + 1))))
                 .collect();
             for (i, v) in values.iter().enumerate() {
                 shards[i % 4].update(v);
@@ -202,8 +202,8 @@ fn feed_kll_dynamic(feed: Feed, k: i32, seed: u64, values: &[f64]) -> Option<KLL
             a.merge(&c);
             Some(a)
         }
-        // KLLDynamic is not a `TumblingWindowSketch`; the framework hosts the
-        // fixed-layout `KLL` only. Nothing to cover.
+        // KllDynamic is not a `TumblingWindowSketch`; the framework hosts the
+        // fixed-layout `Kll` only. Nothing to cover.
         Feed::TumblingMerge => None,
     }
 }
@@ -318,7 +318,7 @@ fn kll_rank_error_shrinks_with_k_as_the_characterization_predicts() {
     for k in [64i32, 256, 1024] {
         let mut w: f64 = 0.0;
         for &seed in &KLL_SKETCH_SEEDS {
-            let mut s = KLL::init_kll_with_seed(k, seed);
+            let mut s = Kll::with_k_and_seed(k, seed);
             for v in &values {
                 s.update(v);
             }
@@ -396,11 +396,11 @@ fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
     const N: usize = 20_000;
     for (case, (shape, values)) in bulk_cases(0, N).iter().enumerate() {
         let seed = kll_bulk_seed(case as u64);
-        let mut via_loop: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+        let mut via_loop: Kll<f64> = Kll::with_k_and_seed(200, seed);
         for v in values {
             via_loop.update(v);
         }
-        let mut via_bulk: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+        let mut via_bulk: Kll<f64> = Kll::with_k_and_seed(200, seed);
         via_bulk.update_batch(values);
 
         let ctx = format!("{shape} n={} sketch_seed={seed:#x}", values.len());
@@ -410,8 +410,8 @@ fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
             "{ctx}: retained count diverged"
         );
         assert_eq!(
-            via_loop.serialize_to_bytes().unwrap(),
-            via_bulk.serialize_to_bytes().unwrap(),
+            via_loop.to_asapv1().unwrap(),
+            via_bulk.to_asapv1().unwrap(),
             "{ctx}: serialized bytes diverged"
         );
         for &q in &RANK_QS {
@@ -424,17 +424,17 @@ fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
     }
 }
 
-/// `KLLDynamic` under the same equality, on its own wire form.
+/// `KllDynamic` under the same equality, on its own wire form.
 #[test]
 fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
     const N: usize = 10_000;
     for (case, (shape, values)) in bulk_cases(1, N).iter().enumerate() {
         let seed = kll_bulk_seed(0x0100 + case as u64);
-        let mut via_loop = KLLDynamic::<f64>::init_kll_with_seed(200, seed);
+        let mut via_loop = KllDynamic::<f64>::with_k_and_seed(200, seed);
         for v in values {
             via_loop.update(v);
         }
-        let mut via_bulk = KLLDynamic::<f64>::init_kll_with_seed(200, seed);
+        let mut via_bulk = KllDynamic::<f64>::with_k_and_seed(200, seed);
         via_bulk.update_batch(values);
 
         let ctx = format!("{shape} n={} sketch_seed={seed:#x}", values.len());
@@ -444,8 +444,8 @@ fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
             "{ctx}: retained mass diverged"
         );
         assert_eq!(
-            via_loop.serialize_to_bytes().unwrap(),
-            via_bulk.serialize_to_bytes().unwrap(),
+            via_loop.to_asapv1().unwrap(),
+            via_bulk.to_asapv1().unwrap(),
             "{ctx}: serialized bytes diverged"
         );
         for &q in &RANK_QS {
@@ -464,13 +464,13 @@ fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
 #[test]
 fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
     let seed = kll_bulk_seed(0x0200);
-    let mut sk: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    let mut sk: Kll<f64> = Kll::with_k_and_seed(200, seed);
     for v in &[1.0f64, 2.0, 3.0] {
         sk.update(v);
     }
     let count = sk.count();
     let median = sk.quantile(0.5);
-    let bytes = sk.serialize_to_bytes().unwrap();
+    let bytes = sk.to_asapv1().unwrap();
 
     sk.update_batch(&[]);
     assert_eq!(sk.count(), count, "an empty bulk_update changed the count");
@@ -480,18 +480,18 @@ fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
         "an empty bulk_update moved the median"
     );
     assert_eq!(
-        sk.serialize_to_bytes().unwrap(),
+        sk.to_asapv1().unwrap(),
         bytes,
         "an empty bulk_update changed the serialized state"
     );
 
-    let mut one: KLL<f64> = KLL::init_kll_with_seed(200, seed);
-    let mut once: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    let mut one: Kll<f64> = Kll::with_k_and_seed(200, seed);
+    let mut once: Kll<f64> = Kll::with_k_and_seed(200, seed);
     one.update_batch(&[42.0]);
     once.update(&42.0);
     assert_eq!(
-        one.serialize_to_bytes().unwrap(),
-        once.serialize_to_bytes().unwrap(),
+        one.to_asapv1().unwrap(),
+        once.to_asapv1().unwrap(),
         "a one-element bulk_update diverged from one update"
     );
 }
@@ -504,15 +504,15 @@ fn kll_bulk_update_data_input_matches_the_loop_and_stops_at_the_first_non_numeri
     let values = normal_f64(5_000, 100.0, 20.0, 8001);
     let inputs: Vec<DataInput> = values.iter().map(|v| DataInput::F64(*v)).collect();
 
-    let mut via_loop: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    let mut via_loop: Kll<f64> = Kll::with_k_and_seed(200, seed);
     for v in &inputs {
         via_loop.update_data_input(v).unwrap();
     }
-    let mut via_bulk: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    let mut via_bulk: Kll<f64> = Kll::with_k_and_seed(200, seed);
     via_bulk.update_batch_data_input(&inputs).unwrap();
     assert_eq!(
-        via_loop.serialize_to_bytes().unwrap(),
-        via_bulk.serialize_to_bytes().unwrap(),
+        via_loop.to_asapv1().unwrap(),
+        via_bulk.to_asapv1().unwrap(),
         "DataInput bulk vs loop bytes diverged (sketch_seed={seed:#x}, stream seed 8001)"
     );
 
@@ -521,7 +521,7 @@ fn kll_bulk_update_data_input_matches_the_loop_and_stops_at_the_first_non_numeri
         DataInput::String("x".into()),
         DataInput::F64(2.0),
     ];
-    let mut stopped: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    let mut stopped: Kll<f64> = Kll::with_k_and_seed(200, seed);
     assert!(
         stopped.update_batch_data_input(&mixed).is_err(),
         "a non-numeric element must return an error"
@@ -532,7 +532,7 @@ fn kll_bulk_update_data_input_matches_the_loop_and_stops_at_the_first_non_numeri
         "the prefix before the non-numeric element must stay applied"
     );
 
-    let mut empty: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+    let mut empty: Kll<f64> = Kll::with_k_and_seed(200, seed);
     empty.update_batch_data_input(&[]).unwrap();
     assert_eq!(empty.count(), 0, "an empty DataInput batch must be a no-op");
 }
@@ -591,7 +591,7 @@ fn dds_streams(alpha: f64, n: usize, seed: u64) -> Vec<(&'static str, Vec<f64>)>
 /// portable wire twin, at every supported alpha.
 ///
 /// Each implementation is compared against the exact order statistic **of its
-/// own rank convention**: `DDSketch::get_value_at_quantile` answers
+/// own rank convention**: `DdSketch::get_value_at_quantile` answers
 /// `sorted[ceil(q*n) - 1]`, while the portable `DdSketch::quantile` answers
 /// `sorted[floor(q*(n-1))]`. They are different questions (see
 /// `ddsketch_core_and_portable_answer_different_order_statistics`), so a single
@@ -613,7 +613,7 @@ fn ddsketch_core_and_portable_satisfy_the_relative_value_error_contract() {
         for (i, &n) in SAMPLE_SIZES.iter().enumerate() {
             let seed = 3_005_000u64 + i as u64 * 101 + (alpha * 1e6) as u64;
             for (label, values) in dds_streams(alpha, n, seed) {
-                let mut core = DDSketch::new(alpha);
+                let mut core = DdSketch::new(alpha);
                 let mut port = PortableDds::new(alpha);
                 for v in &values {
                     core.add(v);
@@ -657,7 +657,7 @@ fn ddsketch_core_and_portable_satisfy_the_relative_value_error_contract() {
 /// statistics**, and this pins the divergence rather than letting `alpha`
 /// absorb it.
 ///
-/// - `DDSketch::get_value_at_quantile` uses `rank = ceil(q * n)`, 1-based.
+/// - `DdSketch::get_value_at_quantile` uses `rank = ceil(q * n)`, 1-based.
 /// - Portable `DdSketch::quantile` uses `target = floor(q * (n - 1))`, 0-based
 ///   — the lower-quantile convention of the DDSketch paper and of DataDog's
 ///   reference implementation, which is also what the wire format's Go twin
@@ -711,7 +711,7 @@ fn ddsketch_core_and_portable_answer_different_order_statistics() {
             "portable convention floor(q*(n-1)) at n={n} q={q}"
         );
 
-        let mut core = DDSketch::new(ALPHA);
+        let mut core = DdSketch::new(ALPHA);
         let mut port = PortableDds::new(ALPHA);
         for v in &values {
             core.add(v);
@@ -764,7 +764,7 @@ fn ddsketch_core_endpoints_are_exact_and_portable_endpoints_are_alpha_relative()
     for &alpha in &DDS_ALPHAS {
         let values = log_uniform_f64(5_000, (1.0 + alpha) / (1.0 - alpha), 3..30, 4_242);
         let truth = NumericTruth::new(values.clone());
-        let mut core = DDSketch::new(alpha);
+        let mut core = DdSketch::new(alpha);
         let mut port = PortableDds::new(alpha);
         for v in &values {
             core.add(v);
@@ -831,7 +831,7 @@ fn ddsketch_satisfies_the_relative_error_contract_at_bucket_boundaries() {
                 edge * gamma * (1.0 - 1e-12), // just under the upper edge
             ];
             for probe in probes {
-                let mut core = DDSketch::new(alpha);
+                let mut core = DdSketch::new(alpha);
                 let mut port = PortableDds::new(alpha);
                 core.add(&probe);
                 port.update(probe);
@@ -859,7 +859,7 @@ fn ddsketch_satisfies_the_relative_error_contract_at_bucket_boundaries() {
 #[test]
 fn ddsketch_merge_and_delta_replay_preserve_the_relative_error_contract() {
     use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketchDelta;
-    use asap_sketchlib::octo_delta::DdDelta;
+    use asap_sketchlib::octo_delta::DdSketchBucketDelta;
 
     const N: usize = 40_000;
     for &alpha in &DDS_ALPHAS {
@@ -869,7 +869,7 @@ fn ddsketch_merge_and_delta_replay_preserve_the_relative_error_contract() {
         let truth = NumericTruth::new(values.clone());
 
         // Four-way shard merge, core side.
-        let mut shards: Vec<DDSketch> = (0..4).map(|_| DDSketch::new(alpha)).collect();
+        let mut shards: Vec<DdSketch> = (0..4).map(|_| DdSketch::new(alpha)).collect();
         for (i, v) in values.iter().enumerate() {
             shards[i % 4].add(v);
         }
@@ -897,18 +897,18 @@ fn ddsketch_merge_and_delta_replay_preserve_the_relative_error_contract() {
         // within alpha rather than exact — the interior q grid is what the
         // contract covers here.
         let single = {
-            let mut s = DDSketch::new(alpha);
+            let mut s = DdSketch::new(alpha);
             for v in &values {
                 s.add(v);
             }
             s
         };
-        let mut replayed = DDSketch::new(alpha);
-        for (i, &count) in single.store_counts().iter().enumerate() {
+        let mut replayed = DdSketch::new(alpha);
+        for (i, &count) in single.positive_store_counts().iter().enumerate() {
             if count > 0 {
-                replayed.apply_delta(DdDelta {
+                replayed.apply_delta(DdSketchBucketDelta {
                     store: Default::default(),
-                    index: single.store_offset() + i as i32,
+                    index: single.positive_store_offset() + i as i32,
                     value: count,
                 });
             }
@@ -1024,7 +1024,7 @@ fn univmonq_frequency_and_f2_satisfy_the_count_sketch_bounds() {
     let context = format!(
         "UnivMonQConfig {{ levels: {}, width: {}, depth: {}, hash_seed: {} }}, \
          40 separated heavy keys + uniform background (stream seed 3008)",
-        config.levels, config.width, config.depth, config.hash_seed
+        config.levels, config.width, config.depth, config.seed_index
     );
     CountSketchSpec::new(config.depth, config.width).assert_contract(
         "UnivMonQ::estimate_frequency (bottom layer Count Sketch)",
@@ -1051,7 +1051,7 @@ fn univmonq_frequency_and_f2_satisfy_the_count_sketch_bounds() {
 /// ```
 ///
 /// `m_R` is the number of retained occurrence samples backing the residual —
-/// `OrderedQueryDiagnostics::residual_samples` — and nothing else. The CDF's
+/// `UnivMonQOrderedQueryDiagnostics::residual_samples` — and nothing else. The CDF's
 /// breakpoint count is not a sample count: it also carries the heavy values and
 /// the retained minimum and maximum, so substituting it inflates `m_R` and
 /// quietly shrinks `epsilon_R`. `m_R = 0` with `P_hat_R > 0` is an invalid
@@ -1079,7 +1079,7 @@ fn univmonq_frequency_and_f2_satisfy_the_count_sketch_bounds() {
 /// # Trial unit
 ///
 /// One trial is one sketch. Independent trials come from the two places
-/// UnivMon-Q's randomness lives — the CountSketch hash (`config.hash_seed`)
+/// UnivMon-Q's randomness lives — the CountSketch hash (`config.seed_index`)
 /// and the occurrence-priority stream (`source_id`) — and both move per trial.
 #[test]
 fn univmonq_ordered_queries_satisfy_the_documented_cdf_and_rank_bounds() {
@@ -1107,7 +1107,7 @@ fn univmonq_ordered_queries_satisfy_the_documented_cdf_and_rank_bounds() {
 
         for t in 0..TRIALS {
             let config = UnivMonQConfig {
-                hash_seed: 3 + t,
+                seed_index: 3 + t,
                 ..UnivMonQConfig::default()
             };
             let mut q: UnivMonQ =
@@ -1172,7 +1172,7 @@ fn univmonq_ordered_queries_satisfy_the_documented_cdf_and_rank_bounds() {
                  {} values, E_H={e_h:.6} (sum form), P_hat_R={p_hat_r:.6}, m_R={m_r}, \
                  epsilon_R={eps_r:.6} at delta={DELTA} -> eta {eta:.6}; \
                  {} CDF breakpoints, {} distinct truth values",
-                config.hash_seed,
+                config.seed_index,
                 0x0DDE_1000 + t as u64,
                 diag.heavy.len(),
                 estimated.len(),
@@ -1417,7 +1417,7 @@ fn univmonq_distinct_entropy_and_recall_stay_within_the_documented_empirical_ban
 
     let distinct = truth.distinct() as f64;
     assert_between(
-        q.estimate_distinct(),
+        q.estimate_cardinality(),
         distinct * 0.90,
         distinct * 1.10,
         "UnivMonQ distinct (empirical band, stream seed 3008)",
@@ -1458,12 +1458,12 @@ fn tumbling_kll_windows_are_exact_and_answers_satisfy_the_rank_contract() {
     const N: usize = 4_000;
     const WINDOW: u64 = 400;
 
-    let cfg = KLLConfig {
+    let cfg = KllConfig {
         k: K as usize,
         m: 8,
         seed: Some(SKETCH_SEED),
     };
-    let mut tw: TumblingWindow<KLL> = TumblingWindow::new(WINDOW, 16, cfg, 4);
+    let mut tw: TumblingWindow<Kll> = TumblingWindow::new(WINDOW, 16, cfg, 4);
     let all: Vec<f64> = uniform_u64(N, 1_000_000, 3009)
         .iter()
         .map(|v| *v as f64)
@@ -1494,16 +1494,16 @@ fn tumbling_kll_windows_are_exact_and_answers_satisfy_the_rank_contract() {
     let mut tally = Tally::default();
     for t in 0..TRIAL_SEEDS {
         let seed = kll_trial_seed(0x7717_0000 + t as u64);
-        let cfg = KLLConfig {
+        let cfg = KllConfig {
             k: K as usize,
             m: 8,
             seed: Some(seed),
         };
-        let mut w: TumblingWindow<KLL> = TumblingWindow::new(WINDOW, 16, cfg, 4);
+        let mut w: TumblingWindow<Kll> = TumblingWindow::new(WINDOW, 16, cfg, 4);
         for (t, v) in all.iter().enumerate() {
             w.update_weighted(t as u64, &DataInput::F64(*v), 0);
         }
-        let views: [(&str, KLL<f64>, &[f64]); 3] = [
+        let views: [(&str, Kll<f64>, &[f64]); 3] = [
             ("query_all", w.query_all(), &all[..]),
             // query_recent(1) = the active window plus the last closed one.
             (
@@ -1540,7 +1540,7 @@ fn tumbling_kll_windows_are_exact_and_answers_satisfy_the_rank_contract() {
         &context,
     );
 
-    // Rotation must not drop windows. `KLL::count()` is the *retained weighted
+    // Rotation must not drop windows. `Kll::count()` is the *retained weighted
     // mass*, not an exact counter — compaction promotes half a buffer at
     // double weight, so the total is an unbiased randomized estimate of `n`
     // and single-pass sketches already report `n +- a few` before any merge.
@@ -1627,7 +1627,7 @@ fn portable_hydra_kll_per_key_medians_satisfy_the_rank_characterization() {
 #[test]
 fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
     let alpha = 0.01;
-    let mut core = DDSketch::new(alpha);
+    let mut core = DdSketch::new(alpha);
     let mut port = PortableDds::new(alpha);
 
     // Non-finite / above-maximum-magnitude values must be
@@ -1680,7 +1680,7 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
     let (min_idx, max_idx) = asap_sketchlib::sketches::ddsketch::ddsketch_indexable_bounds(alpha);
 
     let mut port_boundary = PortableDds::new(alpha);
-    let mut core_boundary = DDSketch::new(alpha);
+    let mut core_boundary = DdSketch::new(alpha);
     let just_inside_min = min_idx * (1.0 + 1e-9); // a hair above the floor
     let just_inside_max = max_idx * (1.0 - 1e-9); // a hair below the ceiling
     port_boundary.update(just_inside_min);
@@ -1716,7 +1716,7 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
     // Item 2 contract: mismatched mappings are a runtime error in BOTH types,
     // not a debug-only assertion.
     let other_alpha = 0.05;
-    let mut core_other = DDSketch::new(other_alpha);
+    let mut core_other = DdSketch::new(other_alpha);
     core_other.add(&1.0);
     assert!(
         core.merge(&core_other).is_err(),
@@ -1734,7 +1734,7 @@ fn ddsketch_rejects_untrackable_values_and_mapping_mismatches() {
     // v=1e-300 whose bucket index saturates i32 and overflows ensure_bucket.
     // Both implementations count it as zero without allocating a bucket.
     let mut tiny = PortableDds::new(1e-9);
-    let mut tiny_core = DDSketch::new(1e-9);
+    let mut tiny_core = DdSketch::new(1e-9);
     tiny.update(1e-300);
     tiny_core.add(&1e-300);
     assert_eq!(
@@ -1822,13 +1822,13 @@ fn kll_minimum_compactor_capacity_axis_keeps_the_count_exact_and_reports_its_own
     let truth = NumericTruth::new(values.clone());
     for &m in &KLL_M_AXIS {
         let seed = kll_axis_seed(m as u64);
-        let mut sketch: KLL<f64> = KLL::init_with_seed(200, m, seed);
+        let mut sketch: Kll<f64> = Kll::init_with_seed(200, m, seed);
         for v in &values {
             sketch.update(v);
         }
         let ctx = format!("m={m} k=200 n={} sketch_seed={seed:#x}", values.len());
         assert_eq!(sketch.k(), 200, "{ctx}: k moved");
-        assert_eq!(sketch.wire_m() as usize, m, "{ctx}: reported m");
+        assert_eq!(sketch.m() as usize, m, "{ctx}: reported m");
         assert_eq!(sketch.wire_k() as usize, 200, "{ctx}: reported k");
         assert_between(
             sketch.count() as f64,
@@ -1849,15 +1849,15 @@ fn kll_minimum_compactor_capacity_axis_keeps_the_count_exact_and_reports_its_own
 
 #[test]
 fn kll_normalizes_a_minimum_compactor_capacity_outside_its_supported_range() {
-    let clamped: KLL<f64> = KLL::init_with_seed(200, 0, kll_axis_seed(0x0100));
-    assert_eq!(clamped.wire_m(), 2, "m=0 must normalize to 2");
+    let clamped: Kll<f64> = Kll::init_with_seed(200, 0, kll_axis_seed(0x0100));
+    assert_eq!(clamped.m(), 2, "m=0 must normalize to 2");
     assert_eq!(clamped.wire_k(), 200, "m=0 must leave k alone");
 
-    let raised: KLL<f64> = KLL::init_with_seed(4, 64, kll_axis_seed(0x0101));
-    assert_eq!(raised.wire_m(), 64, "m=64 must survive");
+    let raised: Kll<f64> = Kll::init_with_seed(4, 64, kll_axis_seed(0x0101));
+    assert_eq!(raised.m(), 64, "m=64 must survive");
     assert_eq!(raised.wire_k(), 64, "k below m must be raised to m");
 
-    let mut usable: KLL<f64> = KLL::init_with_seed(4, 64, kll_axis_seed(0x0102));
+    let mut usable: Kll<f64> = Kll::init_with_seed(4, 64, kll_axis_seed(0x0102));
     let values = kll_axis_values(5_000, 0x4B11_0102);
     for v in &values {
         usable.update(v);
@@ -1879,7 +1879,7 @@ fn kll_minimum_compactor_capacity_at_or_above_the_default_satisfies_the_rank_cha
     for (case, &m) in KLL_M_AT_OR_ABOVE_DEFAULT.iter().enumerate() {
         for (i, (shape, values)) in rank_streams(case, N).into_iter().enumerate() {
             let seed = kll_axis_seed(0x0200 + (case * 16 + i) as u64);
-            let mut sketch: KLL<f64> = KLL::init_with_seed(K, m, seed);
+            let mut sketch: Kll<f64> = Kll::init_with_seed(K, m, seed);
             for v in &values {
                 sketch.update(v);
             }
@@ -1915,7 +1915,7 @@ fn kll_minimum_compactor_capacity_below_the_default_stays_within_a_widened_rank_
     for (case, &m) in KLL_M_BELOW_DEFAULT.iter().enumerate() {
         for (i, (shape, values)) in rank_streams(case + 8, N).into_iter().enumerate() {
             let seed = kll_axis_seed(0x0300 + (case * 16 + i) as u64);
-            let mut sketch: KLL<f64> = KLL::init_with_seed(K, m, seed);
+            let mut sketch: Kll<f64> = Kll::init_with_seed(K, m, seed);
             for v in &values {
                 sketch.update(v);
             }
@@ -1948,7 +1948,7 @@ fn kll_small_k_satisfies_the_rank_characterization_at_its_own_epsilon() {
         described.push(format!("k={k} eps={:.6}", spec.epsilon()));
         for (i, (shape, values)) in rank_streams(case + 16, N).into_iter().enumerate() {
             let seed = kll_axis_seed(0x0400 + (case * 16 + i) as u64);
-            let mut sketch: KLL<f64> = KLL::init_kll_with_seed(k, seed);
+            let mut sketch: Kll<f64> = Kll::with_k_and_seed(k, seed);
             for v in &values {
                 sketch.update(v);
             }
@@ -1980,7 +1980,7 @@ fn a_kll_stream_shorter_than_k_is_answered_exactly() {
     for (case, &n) in KLL_EXACT_REGIME_N.iter().enumerate() {
         let seed = kll_axis_seed(0x0500 + case as u64);
         let values = kll_axis_values(n, 0x4B11_0500 + case as u64);
-        let mut sketch: KLL<f64> = KLL::init_kll_with_seed(200, seed);
+        let mut sketch: Kll<f64> = Kll::with_k_and_seed(200, seed);
         for v in &values {
             sketch.update(v);
         }
@@ -2034,7 +2034,7 @@ fn ddsketch_satisfies_the_relative_value_error_contract_at_extreme_accuracy_para
             if values.len() < 100 {
                 continue;
             }
-            let mut core = DDSketch::new(alpha);
+            let mut core = DdSketch::new(alpha);
             let mut port = PortableDds::new(alpha);
             for v in &values {
                 core.add(v);
@@ -2075,7 +2075,7 @@ fn ddsketch_bucket_width_widens_monotonically_with_the_accuracy_parameter() {
         .collect::<Vec<f64>>();
     let mut previous: Option<(f64, usize)> = None;
     for &alpha in &DDS_EXTREME_ALPHAS {
-        let mut sketch = DDSketch::new(alpha);
+        let mut sketch = DdSketch::new(alpha);
         for v in &values {
             sketch.add(v);
         }
@@ -2084,7 +2084,11 @@ fn ddsketch_bucket_width_widens_monotonically_with_the_accuracy_parameter() {
             values.len(),
             "alpha={alpha}: dropped a trackable sample"
         );
-        let buckets = sketch.store_counts().iter().filter(|c| **c > 0).count();
+        let buckets = sketch
+            .positive_store_counts()
+            .iter()
+            .filter(|c| **c > 0)
+            .count();
         if let Some((prev_alpha, prev_buckets)) = previous {
             assert!(
                 buckets <= prev_buckets,
@@ -2115,7 +2119,7 @@ fn univmonq_l1_is_exact_and_the_generic_g_sum_reproduces_the_named_estimators() 
     );
     assert_eq!(
         q.estimate_g_sum(|_| 1.0).clamp(0.0, q.count() as f64),
-        q.estimate_distinct(),
+        q.estimate_cardinality(),
         "g(f)=1 is the distinct-count estimator"
     );
     assert_eq!(
@@ -2142,7 +2146,7 @@ fn univmonq_universal_entropy_tracks_the_exact_entropy_on_a_diffuse_stream() {
     }
     let exact = truth.entropy(false);
     assert_between(
-        q.estimate_entropy_universal(),
+        q.estimate_entropy_from_g_sum(),
         exact * 0.80,
         exact * 1.20,
         "UnivMonQ universal entropy in nats (diffuse stream, seed 0x0DDE9101)",
@@ -2166,11 +2170,11 @@ fn univmonq_occurrence_entropy_is_present_only_when_ordered_samples_are_configur
         unsampled.update(&v);
     }
     assert!(
-        unsampled.estimate_entropy_occurrence().is_none(),
+        unsampled.estimate_entropy_from_samples().is_none(),
         "no ordered sample means no occurrence entropy"
     );
     let occurrence = sampled
-        .estimate_entropy_occurrence()
+        .estimate_entropy_from_samples()
         .expect("a configured ordered sample must produce an occurrence entropy");
     assert!(
         occurrence.is_finite() && occurrence >= 0.0,
@@ -2193,24 +2197,24 @@ fn univmonq_universal_rank_is_exact_outside_the_observed_range_and_banded_inside
     let n = values.len() as f64;
 
     assert_eq!(
-        q.estimate_rank_universal(truth.min() - 1.0),
+        q.estimate_rank_from_g_sum(truth.min() - 1.0),
         Some(0),
         "a value below the observed minimum has rank 0"
     );
     assert_eq!(
-        q.estimate_rank_universal(truth.max()),
+        q.estimate_rank_from_g_sum(truth.max()),
         Some(values.len() as u64),
         "the observed maximum carries the whole stream"
     );
     assert_eq!(
-        q.estimate_rank_universal(truth.max() + 1.0),
+        q.estimate_rank_from_g_sum(truth.max() + 1.0),
         Some(values.len() as u64),
         "a value above the observed maximum carries the whole stream"
     );
 
     let empty = UnivMonQ::new(Default::default()).expect("default config valid");
     assert_eq!(
-        empty.estimate_rank_universal(1.0),
+        empty.estimate_rank_from_g_sum(1.0),
         None,
         "an empty sketch has no rank to report"
     );
@@ -2220,7 +2224,7 @@ fn univmonq_universal_rank_is_exact_outside_the_observed_range_and_banded_inside
         let probe = truth.quantile(probe_q);
         let exact = truth.sorted().partition_point(|v| *v <= probe) as f64;
         let estimated =
-            q.estimate_rank_universal(probe)
+            q.estimate_rank_from_g_sum(probe)
                 .expect("a populated sketch answers every interior rank") as f64;
         let error = (estimated - exact).abs() / n;
         tally.record(error <= 0.25, || {
@@ -2349,7 +2353,7 @@ mod documented_matrix {
                 input.context()
             );
 
-            let mut single = DDSketch::new(alpha);
+            let mut single = DdSketch::new(alpha);
             for v in &values {
                 single.add(v);
             }
@@ -2365,7 +2369,7 @@ mod documented_matrix {
             tally.assert_none(&format!("core DDSketch alpha={alpha}"), &context);
 
             // Four-way shard merge: the same contract.
-            let mut shards: Vec<DDSketch> = (0..4).map(|_| DDSketch::new(alpha)).collect();
+            let mut shards: Vec<DdSketch> = (0..4).map(|_| DdSketch::new(alpha)).collect();
             for (i, v) in values.iter().enumerate() {
                 shards[i % 4].add(v);
             }
@@ -2424,7 +2428,7 @@ mod documented_matrix {
 
             for alpha in DOC_ALPHAS {
                 let spec = RelativeQuantileSpec::core(alpha);
-                let mut dd = DDSketch::new(alpha);
+                let mut dd = DdSketch::new(alpha);
                 for v in &positive {
                     dd.add(v);
                 }
@@ -2447,7 +2451,7 @@ mod documented_matrix {
             let (label, values) = common::inputs::ddsketch_edge_input(alpha);
             let truth = NumericTruth::new(values.clone());
             let spec = RelativeQuantileSpec::core(alpha);
-            let mut dd = DDSketch::new(alpha);
+            let mut dd = DdSketch::new(alpha);
             for v in &values {
                 dd.add(v);
             }

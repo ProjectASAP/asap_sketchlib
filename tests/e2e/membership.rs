@@ -9,8 +9,8 @@
 
 use asap_sketchlib::bloom::{BLOOM_MAX_BITS, BLOOM_MAX_SLICES};
 use asap_sketchlib::{
-    BLOOM_DEFAULT_COLS, BLOOM_DEFAULT_ROWS, BitMatrix, Bloom, DataInput, FastPath, MatrixHashMode,
-    RegularPath, hash_mode_for_matrix,
+    BLOOM_DEFAULT_COLS, BLOOM_DEFAULT_ROWS, BitMatrix, Bloom, DataInput, FastPath,
+    MatrixHashLayout, RegularPath, hash_layout_for_matrix,
 };
 
 const MEMBERS: i64 = 20_000;
@@ -401,8 +401,8 @@ fn a_packed_64_geometry_gives_each_row_its_own_window() {
     const COLS: usize = 1024;
     const KEYS: i64 = 300;
     assert_eq!(
-        hash_mode_for_matrix(ROWS, COLS),
-        MatrixHashMode::Packed64,
+        hash_layout_for_matrix(ROWS, COLS),
+        MatrixHashLayout::Packed64,
         "{ROWS}x{COLS} no longer selects the packed 64-bit layout"
     );
 

@@ -17,7 +17,7 @@
 //! pixel per zoom, compounding as a cell zooms further.
 //!
 //! The `cell` module holds the record layout and the per-cell algorithm, on
-//! `&[u8]` and nothing else. [`MicroCM`] puts a Count-Min-shaped grid of
+//! `&[u8]` and nothing else. [`MicroCm`] puts a Count-Min-shaped grid of
 //! those cells behind a hash: `rows` independent rows, one cell per row per
 //! key, and a minimum across rows taken **per sub-window** and summed over
 //! the window — `sum(min) <= min(sum)`, so letting a different row supply
@@ -270,7 +270,7 @@ impl SubWindowClock {
 /// status of this implementation.
 #[derive(Clone, Debug, Serialize)]
 #[serde(bound = "")]
-pub struct MicroCM<H: SketchHasher = DefaultXxHasher> {
+pub struct MicroCm<H: SketchHasher = DefaultXxHasher> {
     cells: Vector3D<u8>,
     params: MicroParams,
     clock: SubWindowClock,
@@ -285,21 +285,21 @@ pub struct MicroCM<H: SketchHasher = DefaultXxHasher> {
 // re-derived from `params` and then checked against the stored geometry, so
 // a payload cannot describe a record shape the cells do not have.
 #[derive(Deserialize)]
-struct MicroCMSeed {
+struct MicroCmSeed {
     cells: Vector3D<u8>,
     params: MicroParams,
     clock: SubWindowClock,
     rounding: Rounding,
 }
 
-impl<'de, H: SketchHasher> Deserialize<'de> for MicroCM<H> {
+impl<'de, H: SketchHasher> Deserialize<'de> for MicroCm<H> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let MicroCMSeed {
+        let MicroCmSeed {
             cells,
             params,
             clock,
             rounding,
-        } = MicroCMSeed::deserialize(deserializer)?;
+        } = MicroCmSeed::deserialize(deserializer)?;
         // Validate before deriving the layout: `MicroLayout::new` computes
         // `t + 2`, which a crafted `t` could overflow.
         MicroParams::checked(params.t, params.c).map_err(serde::de::Error::custom)?;
@@ -320,7 +320,7 @@ impl<'de, H: SketchHasher> Deserialize<'de> for MicroCM<H> {
             )));
         }
         let rows = cells.rows();
-        let col_bits = cells.get_mask_bits() as usize;
+        let col_bits = cells.mask_bits() as usize;
         let required_bits = rows.saturating_mul(col_bits);
         if required_bits > 128 {
             return Err(serde::de::Error::custom(format!(
@@ -346,7 +346,7 @@ impl<'de, H: SketchHasher> Deserialize<'de> for MicroCM<H> {
     }
 }
 
-impl Default for MicroCM<DefaultXxHasher> {
+impl Default for MicroCm<DefaultXxHasher> {
     /// A 4 x 1024 grid at `T = 12`, `c = 2`, over count-based sub-windows of
     /// 4096 items — a sliding window of roughly 49k items.
     fn default() -> Self {
@@ -360,7 +360,7 @@ impl Default for MicroCM<DefaultXxHasher> {
     }
 }
 
-impl<H: SketchHasher> MicroCM<H> {
+impl<H: SketchHasher> MicroCm<H> {
     /// Builds a `rows x cols` grid of cells shaped by `params`, driven by
     /// `clock`.
     ///
@@ -393,7 +393,7 @@ impl<H: SketchHasher> MicroCM<H> {
         let layout = MicroLayout::new(params);
         let mut cells = Vector3D::init(rows, cols, layout.depth());
         cells.fill(0);
-        let col_bits = cells.get_mask_bits() as usize;
+        let col_bits = cells.mask_bits() as usize;
         assert!(
             rows.saturating_mul(col_bits) <= 128,
             "rows ({rows}) x column bits ({col_bits}) = {} exceeds the 128-bit packed \
@@ -661,12 +661,12 @@ impl<H: SketchHasher> MicroCM<H> {
     }
 
     /// Serializes the sketch into MessagePack bytes.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         to_vec_named(self)
     }
 
     /// Deserializes a sketch from MessagePack bytes.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         from_slice(bytes)
     }
 }
@@ -679,8 +679,8 @@ mod tests {
         DataInput::U64(n)
     }
 
-    fn sketch(rows: usize, cols: usize, t: usize, per_sub_window: u64) -> MicroCM {
-        MicroCM::with_dimensions(
+    fn sketch(rows: usize, cols: usize, t: usize, per_sub_window: u64) -> MicroCm {
+        MicroCm::with_dimensions(
             rows,
             cols,
             MicroParams::new(t, 2),
@@ -701,7 +701,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "zoom base c must be in 2..=256")]
     fn with_dimensions_rejects_a_params_literal_the_layout_cannot_represent() {
-        let _: MicroCM = MicroCM::with_dimensions(
+        let _: MicroCm = MicroCm::with_dimensions(
             2,
             16,
             MicroParams { t: 4, c: 0 },
@@ -713,7 +713,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "t (sub-windows per window) must be in 1..=4096")]
     fn with_dimensions_rejects_a_sub_window_count_that_overflows_the_layout() {
-        let _: MicroCM = MicroCM::with_dimensions(
+        let _: MicroCm = MicroCm::with_dimensions(
             2,
             16,
             MicroParams {
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "items_per_sub_window must be non-zero")]
     fn with_dimensions_rejects_a_clock_literal_that_divides_by_zero() {
-        let _: MicroCM = MicroCM::with_dimensions(
+        let _: MicroCm = MicroCm::with_dimensions(
             2,
             16,
             MicroParams::default(),
@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn merge_rejects_clocks_of_different_kinds() {
         let mut a = sketch(2, 16, 4, 10);
-        let b = MicroCM::with_dimensions(
+        let b = MicroCm::with_dimensions(
             2,
             16,
             MicroParams::new(4, 2),
@@ -894,7 +894,7 @@ mod tests {
     /// it skipped over.
     #[test]
     fn a_time_jump_expires_the_sub_windows_it_skipped() {
-        let mut sk: MicroCM = MicroCM::with_dimensions(
+        let mut sk: MicroCm = MicroCm::with_dimensions(
             2,
             32,
             MicroParams::new(3, 2),
@@ -913,7 +913,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "use insert_at()")]
     fn insert_refuses_a_time_based_clock() {
-        let mut sk: MicroCM = MicroCM::with_dimensions(
+        let mut sk: MicroCm = MicroCm::with_dimensions(
             1,
             16,
             MicroParams::default(),
@@ -1010,8 +1010,8 @@ mod tests {
         for i in 0..1_000u64 {
             sk.update(&key(i % 17));
         }
-        let bytes = sk.serialize_to_bytes().expect("serialize");
-        let back = MicroCM::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let bytes = sk.to_asapv1().expect("serialize");
+        let back = MicroCm::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
         assert_eq!(back.sub_window(), sk.sub_window());
         assert_eq!(back.cell_bytes(), sk.cell_bytes());
         assert_eq!(back.as_storage().as_slice(), sk.as_storage().as_slice());
@@ -1052,7 +1052,7 @@ mod tests {
                 rounding: 1,
             };
             let bytes = rmp_serde::to_vec_named(&forged).expect("encode");
-            MicroCM::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
+            MicroCm::<DefaultXxHasher>::from_asapv1(&bytes)
                 .err()
                 .map(|e| e.to_string())
                 .unwrap_or_default()

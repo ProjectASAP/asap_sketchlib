@@ -26,7 +26,7 @@ pub(crate) use wire::{
 const MAX_LEVELS: usize = 61;
 
 const CAPACITY_CACHE_LEN: usize = 20;
-const MAX_CACHEABLE_K: usize = 26_602;
+const MAX_K: usize = 26_602;
 const CAPACITY_DECAY: f64 = 2.0 / 3.0;
 const DEFAULT_K: i32 = 200;
 
@@ -236,7 +236,7 @@ pub(crate) fn merge_sorted_runs<T: NumericalValue>(
 ///
 /// `levels[h]` = start of level h.  `levels[h+1] - levels[h]` = size of level h.
 #[derive(Clone, Debug)]
-pub struct KLL<T: NumericalValue = f64> {
+pub struct Kll<T: NumericalValue = f64> {
     items: Box<[T]>,
     levels: Box<[usize]>,
     k: usize,
@@ -262,13 +262,13 @@ pub struct KLL<T: NumericalValue = f64> {
     cdf_cache: Option<Cdf>,
 }
 
-impl<T: NumericalValue> Default for KLL<T> {
+impl<T: NumericalValue> Default for Kll<T> {
     fn default() -> Self {
-        Self::init_kll(DEFAULT_K)
+        Self::with_k(DEFAULT_K)
     }
 }
 
-impl<T: NumericalValue> KLL<T> {
+impl<T: NumericalValue> Kll<T> {
     /// Creates a new KLL sketch with accuracy parameter `k` and minimum level capacity `m`.
     pub fn init(k: usize, m: usize) -> Self {
         Self::init_internal(k, m, Coin::new(), None)
@@ -282,27 +282,27 @@ impl<T: NumericalValue> KLL<T> {
     /// rotations rather than silently jumping back to the wall clock.
     ///
     /// Callers that don't care about determinism should keep using `init` /
-    /// `init_kll`.
+    /// `with_k`.
     pub fn init_with_seed(k: usize, m: usize, seed: u64) -> Self {
         Self::init_internal(k, m, Coin::from_seed(seed), Some(seed))
     }
 
     /// Creates a new KLL sketch with the given `k` and a default minimum level capacity of 8.
-    pub fn init_kll(k: i32) -> Self {
+    pub fn with_k(k: i32) -> Self {
         Self::init(k as usize, 8)
     }
 
-    /// `init_kll` with an explicit RNG seed. See `init_with_seed`.
-    pub fn init_kll_with_seed(k: i32, seed: u64) -> Self {
+    /// `with_k` with an explicit RNG seed. See `init_with_seed`.
+    pub fn with_k_and_seed(k: i32, seed: u64) -> Self {
         Self::init_with_seed(k as usize, 8, seed)
     }
 
     fn init_internal(k: usize, m: usize, coin: Coin, seed: Option<u64>) -> Self {
-        let mut norm_m = m.min(MAX_CACHEABLE_K);
+        let mut norm_m = m.min(MAX_K);
         norm_m = norm_m.max(2);
         let mut norm_k = k.max(norm_m);
-        if norm_k > MAX_CACHEABLE_K {
-            norm_k = MAX_CACHEABLE_K;
+        if norm_k > MAX_K {
+            norm_k = MAX_K;
         }
         let max_cap = compute_max_capacity(norm_k, norm_m);
         let mut s = Self {
@@ -342,7 +342,7 @@ impl<T: NumericalValue> KLL<T> {
         levels: &[usize],
         num_levels: usize,
     ) -> Result<Self, String> {
-        let mut s = Self::init_kll(k as i32);
+        let mut s = Self::with_k(k as i32);
         if items.is_empty() {
             return Ok(s);
         }
@@ -567,7 +567,7 @@ impl<T: NumericalValue> KLL<T> {
     /// O(n log n) sort is paid once per mutation instead of once per query.
     ///
     /// Takes `&mut self` so the cache can live in the sketch without
-    /// interior mutability (keeping `KLL: Send`). The uncached [`Self::cdf`]
+    /// interior mutability (keeping `Kll: Send`). The uncached [`Self::cdf`]
     /// stays available for shared-reference call sites.
     pub fn cdf_cached(&mut self) -> &Cdf {
         if self.cdf_cache.is_none() {
@@ -598,7 +598,7 @@ impl<T: NumericalValue> KLL<T> {
     /// over capacity, unlike a single `push_value`, which can only overshoot
     /// by one element, so unlike `compress_while_updating` this cascade can
     /// revisit the same level more than once.
-    pub fn merge(&mut self, other: &KLL<T>) {
+    pub fn merge(&mut self, other: &Kll<T>) {
         let other_start = other.levels[0];
         let other_end = other.levels[other.num_levels];
         if other_end == other_start {
@@ -732,7 +732,7 @@ impl<T: NumericalValue> KLL<T> {
 
     /// Resets the sketch to its empty initial state, keeping the same `k` and `m` parameters.
     /// If the sketch was constructed with an explicit seed (`init_with_seed` /
-    /// `init_kll_with_seed`), the coin is re-seeded from that seed so determinism
+    /// `with_k_and_seed`), the coin is re-seeded from that seed so determinism
     /// survives `clear()` (and therefore window rotation in stateful aggregators).
     pub fn clear(&mut self) {
         let mc = self.max_capacity;
@@ -775,13 +775,13 @@ impl<T: NumericalValue> KLL<T> {
 
     /// Returns the configured `m` parameter.
     #[inline]
-    pub fn wire_m(&self) -> u32 {
+    pub fn m(&self) -> u32 {
         self.m as u32
     }
 
     /// Returns the number of currently populated compactor levels.
     #[inline]
-    pub fn wire_num_levels(&self) -> u32 {
+    pub fn num_levels(&self) -> u32 {
         self.num_levels as u32
     }
 
@@ -792,7 +792,7 @@ impl<T: NumericalValue> KLL<T> {
     /// or reconstructed by a serde round-trip, neither of which is
     /// stable across `asap_sketchlib` releases.
     #[inline]
-    pub fn wire_coin(&self) -> (u64, u64, u32) {
+    pub fn coin_state(&self) -> (u64, u64, u32) {
         (
             self.co.state,
             self.co.bit_cache,
@@ -803,13 +803,13 @@ impl<T: NumericalValue> KLL<T> {
     /// Returns the level-boundary array in `sketchlib-go`'s wire shape:
     /// length `num_levels + 1`, starting at 0 and ending at the total
     /// number of retained items. The chunk
-    /// `wire_items()[wire_levels()[i] .. wire_levels()[i+1]]` is the
+    /// `items_top_down()[level_bounds_top_down()[i] .. level_bounds_top_down()[i+1]]` is the
     /// **top-most-first** run for the proto's `KLLState.levels`/`items`
     /// fields, matching `sketchlib-go::KLLSketch.SerializePortable`.
     /// See the `KLLState` docstring in `proto/kll/kll.proto`: index `i`
     /// in `levels` maps to compactor level `num_levels - 1 - i` in the
     /// in-memory representation.
-    pub fn wire_levels(&self) -> Vec<u32> {
+    pub fn level_bounds_top_down(&self) -> Vec<u32> {
         // Walk from top compactor-level downward, accumulating sizes.
         let n = self.num_levels;
         let mut out = Vec::with_capacity(n + 1);
@@ -841,7 +841,7 @@ impl<T: NumericalValue> KLL<T> {
     /// `ASAPCollector::cross_language_parity::kll_byte_parity_with_go`
     /// uses `(1..=50)` with `k=200`, well below the L0 capacity, so
     /// this caveat does not affect the parity guard.
-    pub fn wire_items(&self) -> Vec<T> {
+    pub fn items_top_down(&self) -> Vec<T> {
         let mut out = Vec::with_capacity(self.buffer_size());
         for h in (0..self.num_levels).rev() {
             let start = self.levels[h];
@@ -861,11 +861,11 @@ impl<T: NumericalValue> KLL<T> {
 
     // -- Serialization -------------------------------------------------------
     //
-    // The ASAPv1 wire methods (`serialize_to_bytes` / `deserialize_from_bytes`)
+    // The ASAPv1 wire methods (`to_asapv1` / `from_asapv1`)
     // live in the `wire` submodule, which authors the envelope + metadata +
     // payload. The `serde::{Serialize, Deserialize}` impls below stay: they are
-    // the *nested* codec used when a `KLL` is embedded in a larger serde value
-    // (e.g. `HydraCounter::KLL`), which is a different concern from the
+    // the *nested* codec used when a `Kll` is embedded in a larger serde value
+    // (e.g. `HydraCounter::Kll`), which is a different concern from the
     // standalone ASAPv1 envelope.
 
     fn ensure_levels_sorted(&mut self) {
@@ -894,7 +894,7 @@ struct KLLWire<T> {
     co: Coin,
 }
 
-impl<T: NumericalValue + Serialize> Serialize for KLL<T> {
+impl<T: NumericalValue + Serialize> Serialize for Kll<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let used_start = self.levels[0];
         let used_end = self.levels[self.num_levels];
@@ -913,8 +913,8 @@ impl<T: NumericalValue + Serialize> Serialize for KLL<T> {
     }
 }
 
-impl KLL<f64> {
-    /// Inserts a value from a [`DataInput`] into a `KLL<f64>` sketch.
+impl Kll<f64> {
+    /// Inserts a value from a [`DataInput`] into a `Kll<f64>` sketch.
     ///
     /// This adapter exists for the `HydraCounter` dispatch path, which stores a
     /// type-erased `DataInput`. Non-numeric variants return an error.
@@ -937,21 +937,21 @@ impl KLL<f64> {
     }
 }
 
-impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for KLL<T> {
+impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for Kll<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error as _;
         let wire = KLLWire::<T>::deserialize(deserializer)?;
 
         // Fail closed on crafted bytes. This nested serde path is reachable with
-        // untrusted input via `HydraCounter::KLL` (`Hydra::deserialize_from_bytes`)
-        // and direct `rmp_serde::from_slice::<KLL<_>>`, so it must guard the same
+        // untrusted input via `HydraCounter::Kll` (`Hydra::from_asapv1`)
+        // and direct `rmp_serde::from_slice::<Kll<_>>`, so it must guard the same
         // way the ASAPv1 decoder does: bound `k`/`m` to the range the constructor
         // clamps to (else `compute_max_capacity` / `Vec::with_capacity` blow up),
         // and validate the level layout (else the buffer math below underflows or
         // indexes out of bounds, and `count()` overflows on a later query).
-        if wire.m < 2 || wire.m > wire.k || wire.k > MAX_CACHEABLE_K {
+        if wire.m < 2 || wire.m > wire.k || wire.k > MAX_K {
             return Err(D::Error::custom(format!(
-                "KLL: k={}, m={} outside valid range (2 <= m <= k <= {MAX_CACHEABLE_K})",
+                "KLL: k={}, m={} outside valid range (2 <= m <= k <= {MAX_K})",
                 wire.k, wire.m
             )));
         }
@@ -988,7 +988,7 @@ impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for KLL<T> {
             levels[i] = l + offset;
         }
 
-        let mut sketch = KLL {
+        let mut sketch = Kll {
             items,
             levels,
             k: wire.k,
@@ -1059,7 +1059,7 @@ impl Cdf {
     }
 
     /// Quantile estimation of value `x` using linear interpolation.
-    pub fn quantile_li(&self, x: f64) -> f64 {
+    pub fn normalized_rank_interpolated(&self, x: f64) -> f64 {
         let slice = self.entries.as_slice();
         if slice.is_empty() {
             return 0.0;
@@ -1079,7 +1079,7 @@ impl Cdf {
     }
 
     /// Value estimation given quantile `p`, using linear interpolation.
-    pub fn query_li(&self, p: f64) -> f64 {
+    pub fn value_at_interpolated(&self, p: f64) -> f64 {
         let slice = self.entries.as_slice();
         if slice.is_empty() {
             return 0.0;
@@ -1108,7 +1108,7 @@ mod tests {
     /// lifecycle stage: fresh, mid-stream, post-merge, and post-clear.
     #[test]
     fn cdf_cached_matches_uncached_across_lifecycle() {
-        let mut sk = KLL::<f64>::init_with_seed(200, 8, 42);
+        let mut sk = Kll::<f64>::init_with_seed(200, 8, 42);
 
         // Empty sketch.
         for q in [0.1f64, 0.5, 0.9] {
@@ -1127,7 +1127,7 @@ mod tests {
         }
 
         // Post-merge (merge must invalidate).
-        let mut other = KLL::<f64>::init_with_seed(200, 8, 43);
+        let mut other = Kll::<f64>::init_with_seed(200, 8, 43);
         for &v in &sample_uniform_f64(-5000.0, -4000.0, 5_000, 0xACAC_0002) {
             other.update(&v);
         }
@@ -1147,7 +1147,7 @@ mod tests {
     /// move up.
     #[test]
     fn cdf_cache_invalidated_by_subsequent_updates() {
-        let mut sk = KLL::<f64>::init_with_seed(200, 8, 42);
+        let mut sk = Kll::<f64>::init_with_seed(200, 8, 42);
         for &v in &sample_uniform_f64(0.0, 100.0, 10_000, 0xACAC_0003) {
             sk.update(&v);
         }
@@ -1164,7 +1164,7 @@ mod tests {
         );
     }
 
-    // Crafted nested-serde bytes (the `HydraCounter::KLL` path, reachable with
+    // Crafted nested-serde bytes (the `HydraCounter::Kll` path, reachable with
     // untrusted input) with an out-of-range `k` must fail closed, not overflow
     // `compute_max_capacity` / drive a huge allocation.
     #[test]
@@ -1179,7 +1179,7 @@ mod tests {
         };
         let bytes = rmp_serde::to_vec(&wire).expect("encode crafted wire");
         assert!(
-            rmp_serde::from_slice::<KLL<f64>>(&bytes).is_err(),
+            rmp_serde::from_slice::<Kll<f64>>(&bytes).is_err(),
             "an out-of-range k must be rejected by the nested serde decoder"
         );
     }
@@ -1190,7 +1190,7 @@ mod tests {
     #[test]
     fn from_portable_state_reproduces_source_exactly() {
         let k = 200usize;
-        let mut src = KLL::<f64>::init_kll(k as i32);
+        let mut src = Kll::<f64>::with_k(k as i32);
         for i in 0..200_000u32 {
             src.update(&((i as f64) * 0.0007 + 3.0));
         }
@@ -1202,7 +1202,7 @@ mod tests {
         let n = src.num_levels;
 
         // (A) bit-exact: direct reconstruction reproduces the source exactly.
-        let rebuilt = KLL::<f64>::from_portable_state(k, &items, &levels, n).unwrap();
+        let rebuilt = Kll::<f64>::from_portable_state(k, &items, &levels, n).unwrap();
         for &q in &[0.0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0] {
             assert_eq!(
                 rebuilt.quantile(q),
@@ -1212,7 +1212,7 @@ mod tests {
         }
 
         // An empty sketch round-trips to an empty sketch.
-        let empty = KLL::<f64>::from_portable_state(k, &[], &[], 0).unwrap();
+        let empty = Kll::<f64>::from_portable_state(k, &[], &[], 0).unwrap();
         assert_eq!(empty.num_levels, 1);
         assert_eq!(empty.levels[0], empty.max_capacity);
     }
@@ -1258,14 +1258,14 @@ mod tests {
         const SEED: u64 = 42;
         let values = sample_uniform_f64(0.0, 1_000_000.0, 5000, 7);
 
-        let mut a: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, SEED);
-        let mut b: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, SEED);
+        let mut a: Kll<f64> = Kll::with_k_and_seed(SKETCH_K, SEED);
+        let mut b: Kll<f64> = Kll::with_k_and_seed(SKETCH_K, SEED);
         for v in &values {
             a.update(v);
             b.update(v);
         }
-        let bytes_a = a.serialize_to_bytes().expect("serialize a");
-        let bytes_b = b.serialize_to_bytes().expect("serialize b");
+        let bytes_a = a.to_asapv1().expect("serialize a");
+        let bytes_b = b.to_asapv1().expect("serialize b");
         assert_eq!(
             bytes_a, bytes_b,
             "seeded KLL sketches with identical inputs produced different bytes"
@@ -1279,14 +1279,14 @@ mod tests {
     fn different_seeds_produce_different_bytes() {
         let values = sample_uniform_f64(0.0, 1_000_000.0, 5000, 11);
 
-        let mut a: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, 1);
-        let mut b: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, 2);
+        let mut a: Kll<f64> = Kll::with_k_and_seed(SKETCH_K, 1);
+        let mut b: Kll<f64> = Kll::with_k_and_seed(SKETCH_K, 2);
         for v in &values {
             a.update(v);
             b.update(v);
         }
-        let bytes_a = a.serialize_to_bytes().expect("serialize a");
-        let bytes_b = b.serialize_to_bytes().expect("serialize b");
+        let bytes_a = a.to_asapv1().expect("serialize a");
+        let bytes_b = b.to_asapv1().expect("serialize b");
         assert_ne!(
             bytes_a, bytes_b,
             "seeds 1 and 2 should not produce identical sketch bytes"
@@ -1302,7 +1302,7 @@ mod tests {
         const SEED: u64 = 1234;
         let values = sample_uniform_f64(0.0, 1_000_000.0, 3000, 13);
 
-        let mut a: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, SEED);
+        let mut a: Kll<f64> = Kll::with_k_and_seed(SKETCH_K, SEED);
         // Burn a partial window with unrelated data, then clear.
         let noise = sample_uniform_f64(0.0, 1_000_000.0, 1500, 99);
         for v in &noise {
@@ -1310,13 +1310,13 @@ mod tests {
         }
         a.clear();
 
-        let mut b: KLL<f64> = KLL::init_kll_with_seed(SKETCH_K, SEED);
+        let mut b: Kll<f64> = Kll::with_k_and_seed(SKETCH_K, SEED);
         for v in &values {
             a.update(v);
             b.update(v);
         }
-        let bytes_a = a.serialize_to_bytes().expect("serialize a");
-        let bytes_b = b.serialize_to_bytes().expect("serialize b");
+        let bytes_a = a.to_asapv1().expect("serialize a");
+        let bytes_b = b.to_asapv1().expect("serialize b");
         assert_eq!(
             bytes_a, bytes_b,
             "clear() lost determinism: post-clear sketch diverges from a fresh seeded sketch"
@@ -1340,7 +1340,7 @@ mod tests {
     }
 
     fn assert_quantiles_within_error(
-        sketch: &KLL,
+        sketch: &Kll,
         sorted_truth: &[f64],
         quantiles: &[(f64, &str)],
         tolerance: f64,
@@ -1367,7 +1367,7 @@ mod tests {
 
     #[test]
     fn test_data_input_api() {
-        let mut kll = KLL::init_kll(128);
+        let mut kll = Kll::with_k(128);
 
         // Test with different numeric types
         kll.update_data_input(&DataInput::I32(10)).unwrap();
@@ -1396,7 +1396,7 @@ mod tests {
     #[test]
     fn test_forced_compact() {
         // force compaction to happen with small k/m
-        let mut kll = KLL::init(3, 3);
+        let mut kll = Kll::init(3, 3);
         // kll.print_compactors();
         kll.update_data_input(&DataInput::F64(10.0)).unwrap();
         // kll.print_compactors();
@@ -1418,7 +1418,7 @@ mod tests {
     #[test]
     fn test_no_compact() {
         // no compaction should happen
-        let mut kll = KLL::init_kll(8);
+        let mut kll = Kll::with_k(8);
         // kll.print_compactors();
         kll.update_data_input(&DataInput::F64(10.0)).unwrap();
         // kll.print_compactors();
@@ -1454,8 +1454,8 @@ mod tests {
         ];
 
         let values = sample_uniform_f64(1_000_000.0, 10_000_000.0, 10_000, 0xC0FFEE);
-        let mut sketch_a = KLL::init_kll(SKETCH_K);
-        let mut sketch_b = KLL::init_kll(SKETCH_K);
+        let mut sketch_a = Kll::with_k(SKETCH_K);
+        let mut sketch_b = Kll::with_k(SKETCH_K);
 
         for (idx, value) in values.iter().copied().enumerate() {
             if idx % 2 == 0 {
@@ -1493,7 +1493,7 @@ mod tests {
     // to `src.count()`, whatever that value is.
     #[test]
     fn merge_into_empty_target_preserves_weight_issue_68_repro() {
-        let mut src = KLL::<f64>::init_kll(SKETCH_K);
+        let mut src = Kll::<f64>::with_k(SKETCH_K);
         for i in 1..=1000u32 {
             src.update(&(i as f64));
         }
@@ -1506,7 +1506,7 @@ mod tests {
             "source sketch count before merge should track N=1000 closely, got {src_count}"
         );
 
-        let mut dst = KLL::<f64>::init_kll(SKETCH_K);
+        let mut dst = Kll::<f64>::with_k(SKETCH_K);
         assert_eq!(dst.count(), 0, "target must start empty for this repro");
 
         dst.merge(&src);
@@ -1557,11 +1557,11 @@ mod tests {
         let values_a = sample_uniform_f64(0.0, 1_000_000.0, 50_000, 0xA11CE);
         let values_b = sample_zipf_f64(0.0, 1_000_000.0, 8_192, 1.1, 50_000, 0xB0B);
 
-        let mut a = KLL::<f64>::init_kll(SKETCH_K);
+        let mut a = Kll::<f64>::with_k(SKETCH_K);
         for v in &values_a {
             a.update(v);
         }
-        let mut b = KLL::<f64>::init_kll(SKETCH_K);
+        let mut b = Kll::<f64>::with_k(SKETCH_K);
         for v in &values_b {
             b.update(v);
         }
@@ -1606,25 +1606,25 @@ mod tests {
 
     #[test]
     fn cdf_handles_empty_sketch() {
-        let sketch = KLL::<f64>::init_kll(64);
+        let sketch = Kll::<f64>::with_k(64);
         let cdf = sketch.cdf();
         assert_eq!(cdf.quantile(123.0), 0.0);
         assert_eq!(cdf.query(0.5), 0.0);
-        assert_eq!(cdf.query_li(0.5), 0.0);
+        assert_eq!(cdf.value_at_interpolated(0.5), 0.0);
     }
 
     #[test]
     fn kll_round_trip_rmp() {
-        let mut sketch = KLL::init_kll(256);
+        let mut sketch = Kll::with_k(256);
         let samples = sample_uniform_f64(0.0, 1_000_000.0, 5_000, 0xDEAD_BEEF);
         for value in &samples {
             sketch.update_data_input(&DataInput::F64(*value)).unwrap();
         }
 
-        let bytes = sketch.serialize_to_bytes().expect("serialize KLL with rmp");
+        let bytes = sketch.to_asapv1().expect("serialize KLL with rmp");
         assert!(!bytes.is_empty(), "serialized bytes should not be empty");
 
-        let restored = KLL::deserialize_from_bytes(&bytes).expect("deserialize KLL with rmp");
+        let restored = Kll::from_asapv1(&bytes).expect("deserialize KLL with rmp");
         assert_eq!(sketch.k, restored.k);
         assert_eq!(sketch.m, restored.m);
         assert_eq!(sketch.num_levels, restored.num_levels);
@@ -1663,7 +1663,7 @@ mod tests {
     // quantiles. Tolerance is loose — this is a smoke test, not an accuracy bound.
     #[test]
     fn generic_kll_i64_sanity() {
-        let mut sketch = KLL::<i64>::init_kll(200);
+        let mut sketch = Kll::<i64>::with_k(200);
         let n: i64 = 20_000;
         for v in 1..=n {
             sketch.update(&v);
@@ -1691,8 +1691,8 @@ mod tests {
 
         // Merge between KLL<i64> sketches should work and preserve roughly the
         // same quantiles.
-        let mut a = KLL::<i64>::init_kll(200);
-        let mut b = KLL::<i64>::init_kll(200);
+        let mut a = Kll::<i64>::with_k(200);
+        let mut b = Kll::<i64>::with_k(200);
         for v in 1..=n {
             if v % 2 == 0 {
                 a.update(&v);
@@ -1708,55 +1708,49 @@ mod tests {
         );
 
         // Serialization round-trip for the generic specialization.
-        let bytes = a.serialize_to_bytes().expect("serialize KLL<i64>");
-        let restored = KLL::<i64>::deserialize_from_bytes(&bytes).expect("deserialize KLL<i64>");
+        let bytes = a.to_asapv1().expect("serialize KLL<i64>");
+        let restored = Kll::<i64>::from_asapv1(&bytes).expect("deserialize KLL<i64>");
         assert_eq!(a.count(), restored.count());
     }
 
     #[test]
     fn bulk_update_equivalent_to_loop_and_empty_is_noop() {
         // Empty must be no-op and keep cache/coin.
-        let mut sk = KLL::<f64>::init_with_seed(200, 8, 42);
+        let mut sk = Kll::<f64>::init_with_seed(200, 8, 42);
         for &v in &[1.0, 2.0, 3.0] {
             sk.update(&v);
         }
         let cnt_before = sk.count();
         let q_before = sk.quantile_cached(0.5);
-        let bytes_before = sk.serialize_to_bytes().unwrap();
+        let bytes_before = sk.to_asapv1().unwrap();
         sk.update_batch(&[]);
         assert_eq!(sk.count(), cnt_before);
         assert_eq!(sk.quantile(0.5), q_before);
-        assert_eq!(sk.serialize_to_bytes().unwrap(), bytes_before);
+        assert_eq!(sk.to_asapv1().unwrap(), bytes_before);
 
         // Bulk vs loop equivalence for generic and seeded determinism.
         let vals = sample_uniform_f64(0.0, 1000.0, 20_000, 0xBEEF_1234);
-        let mut a = KLL::<f64>::init_with_seed(200, 8, 99);
-        let mut b = KLL::<f64>::init_with_seed(200, 8, 99);
+        let mut a = Kll::<f64>::init_with_seed(200, 8, 99);
+        let mut b = Kll::<f64>::init_with_seed(200, 8, 99);
         for v in &vals {
             a.update(v);
         }
         b.update_batch(&vals);
         assert_eq!(a.count(), b.count());
-        assert_eq!(
-            a.serialize_to_bytes().unwrap(),
-            b.serialize_to_bytes().unwrap()
-        );
+        assert_eq!(a.to_asapv1().unwrap(), b.to_asapv1().unwrap());
         for q in [0.1, 0.5, 0.9] {
             assert_eq!(a.quantile(q), b.quantile(q), "q={q}");
         }
 
         // DataInput batch equivalence.
         let di_vals: Vec<DataInput> = vals[..100].iter().map(|v| DataInput::F64(*v)).collect();
-        let mut c = KLL::<f64>::init_with_seed(200, 8, 77);
-        let mut d = KLL::<f64>::init_with_seed(200, 8, 77);
+        let mut c = Kll::<f64>::init_with_seed(200, 8, 77);
+        let mut d = Kll::<f64>::init_with_seed(200, 8, 77);
         for v in &di_vals {
             c.update_data_input(v).unwrap();
         }
         d.update_batch_data_input(&di_vals).unwrap();
-        assert_eq!(
-            c.serialize_to_bytes().unwrap(),
-            d.serialize_to_bytes().unwrap()
-        );
+        assert_eq!(c.to_asapv1().unwrap(), d.to_asapv1().unwrap());
 
         // Non-numeric stops on first error, same as per-element.
         let bad = vec![
@@ -1764,7 +1758,7 @@ mod tests {
             DataInput::String("x".into()),
             DataInput::F64(2.0),
         ];
-        let mut e = KLL::<f64>::init_with_seed(200, 8, 11);
+        let mut e = Kll::<f64>::init_with_seed(200, 8, 11);
         assert!(e.update_batch_data_input(&bad).is_err());
         assert_eq!(e.count(), 1);
     }

@@ -8,7 +8,7 @@
 //!
 //! The oracle rebuilds that map from two things the sketch does not own: the
 //! documented subkey encoding (`label ":" value` joined by `";"`, separators
-//! escaped) and the public matrix hash at `HYDRA_SEED`. The counts it predicts
+//! escaped) and the public matrix hash at `HYDRA_SEED_INDEX`. The counts it predicts
 //! are a grouping of the generated stream, not a reading of the grid.
 //!
 //! Every record carries the same payload value, so each cell's Count-Min holds
@@ -29,7 +29,7 @@
 use asap_sketchlib::common::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::{
-    CountMin, DataInput, FastPath, HYDRA_SEED, Hydra, MatrixFastHash, Vector2D,
+    CountMinSketch, DataInput, FastPath, HYDRA_SEED_INDEX, Hydra, MatrixFastHash, Vector2D,
     hash_for_matrix_seeded,
 };
 use proptest::prelude::*;
@@ -56,7 +56,9 @@ fn payload() -> DataInput<'static> {
 /// A per-cell counter small enough that a whole grid of them is cheap: the
 /// default Count-Min is ~49 KB per cell.
 fn counter() -> HydraCounter {
-    HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(2, 64))
+    HydraCounter::CountMinSketch(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+        2, 64,
+    ))
 }
 
 fn escaped(s: &str) -> String {
@@ -82,7 +84,7 @@ fn subkey(labels: &[String], values: &[&str], mask: u32) -> String {
 
 /// The column a subkey occupies on each row.
 fn columns(rows: usize, cols: usize, key: &str) -> Vec<usize> {
-    let hashed = hash_for_matrix_seeded(HYDRA_SEED, rows, cols, &DataInput::Str(key));
+    let hashed = hash_for_matrix_seeded(HYDRA_SEED_INDEX, rows, cols, &DataInput::Str(key));
     (0..rows).map(|r| hashed.col_for_row(r, cols)).collect()
 }
 

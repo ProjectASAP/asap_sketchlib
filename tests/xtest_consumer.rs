@@ -7,11 +7,11 @@
 //! Files consumed (from $XTEST_DIR/):
 //!   countmin.pb    — CountMinState with float64 counters
 //!   kll.pb         — KLLState with quantile items and coin RNG state
-//!   ddsketch.pb    — DDSketchState with alpha + bucket array
-//!   hll.pb         — HyperLogLogState (ErtlMLE variant)
+//!   ddsketch.pb    — DdSketchState with alpha + bucket array
+//!   hll.pb         — HyperLogLogState (Ertl variant)
 //!   countsketch.pb — CountSketchState with float64 signed counters
 //!   coco.pb        — CocoSketchState (hash+val+hasKey buckets)
-//!   elastic.pb     — ElasticState (heavy buckets + light CountMin)
+//!   elastic.pb     — ElasticState (heavy buckets + light CountMinSketch)
 //!   univmon.pb     — UnivMonState (layered CountSketch + TopK heaps)
 //!   hydra.pb       — HydraState (CM-cell grid)
 //!
@@ -48,7 +48,7 @@ fn cross_language_proto() {
     let mut all_ok = true;
 
     // -----------------------------------------------------------------------
-    // CountMin
+    // CountMinSketch
     // -----------------------------------------------------------------------
     println!();
     println!("[CountMin] Step 1/3 — Read countmin.pb");
@@ -212,7 +212,7 @@ fn cross_language_proto() {
     }
 
     // -----------------------------------------------------------------------
-    // HLL (ErtlMLE estimator)
+    // HLL (Ertl estimator)
     // -----------------------------------------------------------------------
     println!();
     println!("[HLL] Step 1/3 — Read hll.pb");
@@ -438,7 +438,7 @@ fn cross_language_proto() {
     }
 
     // -----------------------------------------------------------------------
-    // Sampled CountMin (geometric skip-sampling, p=0.1) — exercises the
+    // Sampled CountMinSketch (geometric skip-sampling, p=0.1) — exercises the
     // sample_p envelope field + the backend ×1/p rescale at query.
     // -----------------------------------------------------------------------
     let sampled_cms_path = in_dir.join("countmin_sampled.pb");
@@ -720,7 +720,7 @@ fn xxh3_64_seeded(seed: u64, data: &[u8]) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// HLL ErtlMLE estimator (Ertl 2017)
+// HLL Ertl estimator (Ertl 2017)
 // ---------------------------------------------------------------------------
 // Mirrors Go's HyperLogLog.Estimate() which uses HLLRegisterBits = 50,
 // HLLPrecision = 14, HLLRegisterCount = 16384.
@@ -803,7 +803,7 @@ fn count_sketch_query_float(state: &CountSketchState, hash: u64) -> f64 {
     let bits_per_row = col_bits(cols);
     let mask = (cols as u64) - 1;
     // Read whichever counter field the producer populated (int vs float),
-    // discriminated by counter_type — same as CountMin.
+    // discriminated by counter_type — same as CountMinSketch.
     let counts: Vec<f64> = if !state.counts_float.is_empty() {
         state.counts_float.clone()
     } else {
@@ -1010,7 +1010,7 @@ fn median_of_three_f64(a: f64, b: f64, c: f64) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
-// HydraSketch CountMin frequency query
+// HydraSketch CountMinSketch frequency query
 // ---------------------------------------------------------------------------
 // Routing (mirrors Go's fillPositionsFromHash with default seeds):
 //   seedCM1 = 0x1111111111111111, seedCM2 = 0x2222222222222222
@@ -1073,7 +1073,7 @@ fn hydra_query_cm(state: &HydraState, subkey_hash: u64, value_hash: u64) -> f64 
     median_f64(&mut estimates)
 }
 
-/// CountMin min-frequency query with packed hash.
+/// CountMinSketch min-frequency query with packed hash.
 fn cm_query_min(cm: &CountMinState, hash: u64) -> f64 {
     let rows = cm.rows as usize;
     let cols = cm.cols as usize;
@@ -1174,8 +1174,8 @@ struct DdFromProto {
     gamma: f64,
     #[allow(dead_code)]
     inv_log_gamma: f64,
-    store_counts: Vec<u64>,
-    store_offset: i32,
+    positive_store_counts: Vec<u64>,
+    positive_store_offset: i32,
     // Total count is recovered by summing the bucket array; the
     // DataPoint-level count/min/max scalars are not on the wire.
     count: u64,
@@ -1190,8 +1190,8 @@ impl DdFromProto {
         Self {
             gamma,
             inv_log_gamma,
-            store_counts: s.store_counts.clone(),
-            store_offset: s.store_offset,
+            positive_store_counts: s.store_counts.clone(),
+            positive_store_offset: s.store_offset,
             count: s.store_counts.iter().copied().sum(),
         }
     }
@@ -1204,19 +1204,19 @@ impl DdFromProto {
     /// α-bounded estimate of the minimum now that the `min` scalar is
     /// gone from the wire.
     fn min_estimate(&self) -> Option<f64> {
-        self.store_counts
+        self.positive_store_counts
             .iter()
             .position(|&c| c > 0)
-            .map(|i| self.bin_representative(self.store_offset + i as i32))
+            .map(|i| self.bin_representative(self.positive_store_offset + i as i32))
     }
 
     /// Representative value of the highest non-empty bucket — the
     /// α-bounded estimate of the maximum.
     fn max_estimate(&self) -> Option<f64> {
-        self.store_counts
+        self.positive_store_counts
             .iter()
             .rposition(|&c| c > 0)
-            .map(|i| self.bin_representative(self.store_offset + i as i32))
+            .map(|i| self.bin_representative(self.positive_store_offset + i as i32))
     }
 
     fn quantile(&self, q: f64) -> Option<f64> {
@@ -1231,13 +1231,13 @@ impl DdFromProto {
         }
         let rank = (q * self.count as f64).ceil() as u64;
         let mut seen = 0u64;
-        for (i, &c) in self.store_counts.iter().enumerate() {
+        for (i, &c) in self.positive_store_counts.iter().enumerate() {
             if c == 0 {
                 continue;
             }
             seen += c;
             if seen >= rank {
-                let bin = self.store_offset + i as i32;
+                let bin = self.positive_store_offset + i as i32;
                 return Some(self.bin_representative(bin));
             }
         }

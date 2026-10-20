@@ -2,11 +2,11 @@
 //!
 //! `CommonHeap` is checked against the obvious model - sort the offered values
 //! and keep the end the ordering asks for - and against the heap property of
-//! its own array. `HHHeap` is path dependent once it overflows, so the exact
+//! its own array. `TopKHeap` is path dependent once it overflows, so the exact
 //! model is asserted only in the regimes where the path cannot matter.
 
-use asap_sketchlib::common::{CommonHeap, KeepLargest, KeepSmallest};
-use asap_sketchlib::{DataInput, HHHeap};
+use asap_sketchlib::common::{CommonHeap, RetainLargest, RetainSmallest};
+use asap_sketchlib::{DataInput, TopKHeap};
 use proptest::prelude::*;
 use std::collections::HashMap;
 
@@ -29,7 +29,7 @@ fn roomy(max: usize) -> impl Strategy<Value = (usize, Vec<(u64, i64)>)> {
     })
 }
 
-fn min_heap_of(capacity: usize, pushed: &[i64]) -> CommonHeap<i64, KeepSmallest> {
+fn min_heap_of(capacity: usize, pushed: &[i64]) -> CommonHeap<i64, RetainLargest> {
     let mut h = CommonHeap::new_min(capacity);
     for v in pushed {
         h.push(*v);
@@ -37,7 +37,7 @@ fn min_heap_of(capacity: usize, pushed: &[i64]) -> CommonHeap<i64, KeepSmallest>
     h
 }
 
-fn max_heap_of(capacity: usize, pushed: &[i64]) -> CommonHeap<i64, KeepLargest> {
+fn max_heap_of(capacity: usize, pushed: &[i64]) -> CommonHeap<i64, RetainSmallest> {
     let mut h = CommonHeap::new_max(capacity);
     for v in pushed {
         h.push(*v);
@@ -164,7 +164,7 @@ proptest! {
         k in 1usize..24,
         updates in keyed(300),
     ) {
-        let mut heap = HHHeap::new(k);
+        let mut heap = TopKHeap::new(k);
         for (key, count) in &updates {
             heap.update(&DataInput::U64(*key), *count);
             prop_assert!(heap.len() <= heap.capacity(), "{} over {}", heap.len(), heap.capacity());
@@ -178,7 +178,7 @@ proptest! {
         k in 1usize..24,
         updates in keyed(300),
     ) {
-        let mut heap = HHHeap::new(k);
+        let mut heap = TopKHeap::new(k);
         let mut latest: HashMap<u64, i64> = HashMap::new();
         for (key, count) in &updates {
             heap.update(&DataInput::U64(*key), *count);
@@ -196,7 +196,7 @@ proptest! {
     fn nothing_is_turned_away_while_the_heap_has_room(
         (k, updates) in roomy(300),
     ) {
-        let mut heap = HHHeap::new(k);
+        let mut heap = TopKHeap::new(k);
         let mut latest: HashMap<u64, i64> = HashMap::new();
         for (key, count) in &updates {
             heap.update(&DataInput::U64(*key), *count);
@@ -223,7 +223,7 @@ proptest! {
             }
         }
 
-        let mut heap = HHHeap::new(k);
+        let mut heap = TopKHeap::new(k);
         for (key, count) in &once {
             heap.update(&DataInput::U64(*key), *count);
         }
@@ -244,7 +244,7 @@ proptest! {
         k in 1usize..24,
         updates in keyed(300),
     ) {
-        let mut heap = HHHeap::new(k);
+        let mut heap = TopKHeap::new(k);
         for (key, count) in &updates {
             let probe = DataInput::U64(*key);
             let resident = heap.find(&probe).is_some();

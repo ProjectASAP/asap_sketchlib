@@ -4,7 +4,7 @@
 //!
 //!   cargo run --release --example audit_univmon_q_order -- 50000 5
 
-use asap_sketchlib::{KLL, UnivMonQ, UnivMonQConfig};
+use asap_sketchlib::{Kll, UnivMonQ, UnivMonQConfig};
 
 const SAMPLE_SIZES: [usize; 7] = [128, 256, 512, 1_024, 2_048, 4_096, 8_192];
 const CANDIDATE_SIZES: [usize; 5] = [64, 128, 256, 512, 1_024];
@@ -182,12 +182,12 @@ fn config(ordered_samples: usize, candidates: usize, trial: usize) -> UnivMonQCo
     UnivMonQConfig {
         levels: 12,
         width: 1_024,
-        width_halving_period: 3,
+        cols_halving_period: 3,
         depth: 5,
         counter_bits: 32,
         candidates,
         ordered_samples,
-        hash_seed: 5 + trial,
+        seed_index: 5 + trial,
     }
 }
 
@@ -209,7 +209,7 @@ fn build_q_shards(
         let source_id = source_base
             .wrapping_mul(0x9e37_79b9_7f4a_7c15)
             .wrapping_add(shard as u64 + 1);
-        let mut sketch = UnivMonQ::new_with_source_id(config, source_id).unwrap();
+        let mut sketch = UnivMonQ::with_source_id(config, source_id).unwrap();
         for value in &data[start..end] {
             sketch.add(value);
         }
@@ -241,17 +241,17 @@ fn merge_q_left(mut sketches: Vec<UnivMonQ>) -> UnivMonQ {
     merged
 }
 
-fn build_kll(data: &[i64], seed: u64, fanout: usize) -> KLL<i64> {
+fn build_kll(data: &[i64], seed: u64, fanout: usize) -> Kll<i64> {
     merge_kll_tree(build_kll_shards(data, seed, fanout))
 }
 
-fn build_kll_shards(data: &[i64], seed: u64, fanout: usize) -> Vec<KLL<i64>> {
+fn build_kll_shards(data: &[i64], seed: u64, fanout: usize) -> Vec<Kll<i64>> {
     let fanout = fanout.min(data.len()).max(1);
     let mut shards = Vec::with_capacity(fanout);
     for shard in 0..fanout {
         let start = shard * data.len() / fanout;
         let end = (shard + 1) * data.len() / fanout;
-        let mut sketch = KLL::init_kll_with_seed(KLL_K, seed ^ shard as u64);
+        let mut sketch = Kll::with_k_and_seed(KLL_K, seed ^ shard as u64);
         for value in &data[start..end] {
             sketch.update(value);
         }
@@ -260,7 +260,7 @@ fn build_kll_shards(data: &[i64], seed: u64, fanout: usize) -> Vec<KLL<i64>> {
     shards
 }
 
-fn merge_kll_tree(mut shards: Vec<KLL<i64>>) -> KLL<i64> {
+fn merge_kll_tree(mut shards: Vec<Kll<i64>>) -> Kll<i64> {
     while shards.len() > 1 {
         let mut merged = Vec::with_capacity(shards.len().div_ceil(2));
         let mut iter = shards.into_iter();
@@ -275,7 +275,7 @@ fn merge_kll_tree(mut shards: Vec<KLL<i64>>) -> KLL<i64> {
     shards.pop().unwrap()
 }
 
-fn merge_kll_left(mut sketches: Vec<KLL<i64>>) -> KLL<i64> {
+fn merge_kll_left(mut sketches: Vec<Kll<i64>>) -> Kll<i64> {
     let mut merged = sketches.remove(0);
     for sketch in sketches {
         merged.merge(&sketch);
@@ -316,7 +316,7 @@ fn score_q(sketch: &UnivMonQ, truth: &Truth) -> OrderedScore {
     }
 }
 
-fn score_kll(sketch: &KLL<i64>, truth: &Truth) -> OrderedScore {
+fn score_kll(sketch: &Kll<i64>, truth: &Truth) -> OrderedScore {
     let cdf = sketch.cdf();
     let errors: Vec<_> = QUANTILES
         .iter()
@@ -350,7 +350,7 @@ fn score_universal_rank(sketch: &UnivMonQ, truth: &Truth) -> UniversalRankScore 
         .iter()
         .map(|&(value, exact)| {
             let estimate =
-                query.estimate_rank_universal(value as f64).unwrap() as f64 / truth.n as f64;
+                query.estimate_rank_from_g_sum(value as f64).unwrap() as f64 / truth.n as f64;
             (estimate - exact).abs()
         })
         .collect();
@@ -387,7 +387,7 @@ fn worst_cdf_q(sketch: &UnivMonQ, truth: &Truth) -> (i64, f64, f64, f64) {
         .unwrap()
 }
 
-fn cdf_drift_kll(left: &KLL<i64>, right: &KLL<i64>, truth: &Truth) -> f64 {
+fn cdf_drift_kll(left: &Kll<i64>, right: &Kll<i64>, truth: &Truth) -> f64 {
     let left = left.cdf();
     let right = right.cdf();
     truth

@@ -1,5 +1,5 @@
 //! `NumericalValue` trait: the minimal numeric contract for generic numeric sketches
-//! (e.g., the generic `KLL<T>`).
+//! (e.g., the generic `Kll<T>`).
 //!
 //! Implementors must be cheaply copyable, have a meaningful total ordering (even for
 //! floats, where `PartialOrd` isn't total), a zero-like default, and a lossless-enough

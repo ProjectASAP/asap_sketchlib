@@ -196,20 +196,18 @@ mod tests {
 
         macro_rules! case {
             ($label:expr, $bytes:expr, $ty:ty) => {
-                ($label, $bytes, |b: &[u8]| {
-                    <$ty>::deserialize_from_bytes(b).is_ok()
-                })
+                ($label, $bytes, |b: &[u8]| <$ty>::from_asapv1(b).is_ok())
             };
         }
         macro_rules! sketch {
             ($label:expr, $sketch:expr, $ty:ty) => {
-                case!($label, $sketch.serialize_to_bytes().unwrap(), $ty)
+                case!($label, $sketch.to_asapv1().unwrap(), $ty)
             };
         }
-        type Cms = CountMin<Vector2D<i64>, RegularPath>;
+        type Cms = CountMinSketch<Vector2D<i64>, RegularPath>;
         type Cs = Count<Vector2D<i64>, RegularPath>;
-        type CmsHeap = CMSHeap<Vector2D<i64>, RegularPath>;
-        type CsHeap = CSHeap<Vector2D<i64>, RegularPath>;
+        type CmsHeap = CountMinSketchWithHeap<Vector2D<i64>, RegularPath>;
+        type CsHeap = CountSketchWithHeap<Vector2D<i64>, RegularPath>;
         type HllClassic = HyperLogLogP12<Classic>;
 
         let classic = hex(include_str!("../../asapv1_golden/hll_classic_p12.hex"));
@@ -242,18 +240,18 @@ mod tests {
         let mut cms_heap = CmsHeap::new(3, 8, 4);
         let mut cms_heap_bytes = CmsHeap::new(3, 8, 4);
         let mut cs_heap = CsHeap::new(3, 8, 4);
-        let mut l2hh: CountL2HH = CountL2HH::with_dimensions(2, 8);
+        let mut l2hh: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(2, 8);
         let mut bloom = Bloom::<RegularPath>::with_dimensions(3, 64);
         let mut ss: SpaceSaving = SpaceSaving::with_capacity(4);
         let mut ss_u64: SpaceSaving = SpaceSaving::with_capacity(4);
         let mut ss_bytes: SpaceSaving = SpaceSaving::with_capacity(4);
-        let mut univmon = UnivMon::init_univmon(4, 2, 16, 3);
-        let mut univmon_bytes = UnivMon::init_univmon(4, 2, 16, 3);
-        let mut pyramid = UnivMonPyramid::new(4, 2, 3, 16, 2, 8, 4);
+        let mut univmon = UnivMon::new(4, 2, 16, 3);
+        let mut univmon_bytes = UnivMon::new(4, 2, 16, 3);
+        let mut pyramid = UnivMonTwoTier::new(4, 2, 3, 16, 2, 8, 4);
         for key in &str_keys {
             cms_heap.update(key);
             cs_heap.update(key);
-            l2hh.fast_insert_with_count(key, 2);
+            l2hh.update_weighted(key, 2);
             bloom.update(key);
             ss.update(key);
             univmon.update_weighted(key, 2);
@@ -265,78 +263,78 @@ mod tests {
             univmon_bytes.update_weighted(key, 2);
         }
         ss_u64.update(&DataInput::U64(9));
-        let mut coco: Coco = Coco::init_with_size(8, 2);
+        let mut coco: CocoSketch = CocoSketch::init_with_size(8, 2);
         coco.update_weighted("flow::a", 3);
-        let mut elastic: Elastic = Elastic::init_with_dimensions(4, 2, 16);
+        let mut elastic: ElasticSketch = ElasticSketch::with_heavy_and_light(4, 2, 16);
         elastic.update("flow::a".to_string());
-        let mut kll_dynamic = KLLDynamic::<f64>::init_kll(200);
-        let mut positive = DDSketch::new(0.01);
+        let mut kll_dynamic = KllDynamic::<f64>::with_k(200);
+        let mut positive = DdSketch::new(0.01);
         let config = UnivMonQConfig {
             levels: 4,
             width: 64,
-            width_halving_period: 0,
+            cols_halving_period: 0,
             depth: 3,
             counter_bits: 64,
             candidates: 16,
             ordered_samples: 16,
-            hash_seed: 5,
+            seed_index: 5,
         };
-        let mut univmon_q = UnivMonQ::<DefaultXxHasher>::new_with_source_id(config, 7).unwrap();
+        let mut univmon_q = UnivMonQ::<DefaultXxHasher>::with_source_id(config, 7).unwrap();
         for value in [1.0, 2.5, 7.0] {
             kll_dynamic.update(&value);
             positive.add(&value);
             univmon_q.update(&value);
         }
-        let cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8);
-        let mut eh = ExponentialHistogram::new(2, 1000, EHSketchList::CM(cm.clone()));
+        let cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8);
+        let mut eh = ExponentialHistogram::new(2, 1000, EhBucketSketch::CountMinSketch(cm.clone()));
         eh.update(10, &DataInput::U64(1));
-        let eh_list = EHSketchList::DDS(positive.clone());
+        let eh_list = EhBucketSketch::DdSketch(positive.clone());
         let hydra = |counter: HydraCounter, value: DataInput<'static>| {
             let mut hydra = Hydra::with_schema(2, 8, ["region"], counter).expect("schema");
             hydra.update(&["eu"], &value, None).expect("arity");
             hydra
         };
-        let hydra_cm = hydra(HydraCounter::CM(cm), DataInput::U64(1));
-        let hll = HyperLogLog::<ErtlMLE>::default();
-        let hydra_hll = hydra(HydraCounter::HLL(hll), DataInput::U64(1));
-        let hydra_kll = hydra(HydraCounter::KLL(KLL::default()), DataInput::F64(2.5));
-        let um = UnivMon::init_univmon(4, 2, 16, 3);
-        let hydra_um = hydra(HydraCounter::UNIVERSAL(um), DataInput::Str("alpha"));
+        let hydra_cm = hydra(HydraCounter::CountMinSketch(cm), DataInput::U64(1));
+        let hll = HyperLogLog::<Ertl>::default();
+        let hydra_hll = hydra(HydraCounter::Hll(hll), DataInput::U64(1));
+        let hydra_kll = hydra(HydraCounter::Kll(Kll::default()), DataInput::F64(2.5));
+        let um = UnivMon::new(4, 2, 16, 3);
+        let hydra_um = hydra(HydraCounter::UnivMon(um), DataInput::Str("alpha"));
         let portable = |b: &[u8]| HllSketch::from_msgpack(b).is_ok();
 
         let cases: Vec<Case> = vec![
             case!("HLL classic", classic.clone(), HllClassic),
-            case!("HLL HIP", hip.clone(), HyperLogLogHIPP12),
-            case!("HLL classic delta", classic_delta, HyperLogLogDelta<Classic, HllBucketListP14>),
+            case!("HLL HIP", hip.clone(), HyperLogLogHipP12),
+            case!("HLL classic delta", classic_delta, HyperLogLogDelta<Classic, HllRegistersP14>),
             ("HLL portable classic", classic, portable),
             ("HLL portable HIP", hip, portable),
             case!("CMS", cms, Cms),
-            case!("CMS delta", cms_delta, CountMinDelta<i64, RegularPath>),
+            case!("CMS delta", cms_delta, CountMinSketchDelta<i64, RegularPath>),
             case!("CS", cs, Cs),
             case!("CS delta", cs_delta, sketches::CountSketchDelta<i64, RegularPath>),
-            case!("KLL", kll, KLL<f64>),
+            case!("KLL", kll, Kll<f64>),
             case!("SetAggregator", set, SetAggregator),
-            case!("DeltaResult", delta, DeltaResult),
-            sketch!("KLL dynamic", kll_dynamic, KLLDynamic<f64>),
+            case!("DeltaResult", delta, SetAggregatorDelta),
+            sketch!("KLL dynamic", kll_dynamic, KllDynamic<f64>),
             sketch!("CMSHeap", cms_heap, CmsHeap),
             sketch!("CMSHeap bytes", cms_heap_bytes, CmsHeap),
-            case!("CMSHeap delta", cms_heap_delta, CMSHeapDelta<i64, RegularPath>),
+            case!("CMSHeap delta", cms_heap_delta, CountMinSketchWithHeapDelta<i64, RegularPath>),
             sketch!("CSHeap", cs_heap, CsHeap),
-            sketch!("CountL2HH", l2hh, CountL2HH),
-            sketch!("DDSketch", positive, DDSketch),
-            case!("DDSketch delta", dd_delta, DDSketchDelta),
+            sketch!("CountL2HH", l2hh, CountSketchWithL2Norm),
+            sketch!("DDSketch", positive, DdSketch),
+            case!("DDSketch delta", dd_delta, DdSketchDelta),
             sketch!("Bloom", bloom, Bloom<RegularPath>),
             sketch!("SpaceSaving string", ss, SpaceSaving),
             sketch!("SpaceSaving u64", ss_u64, SpaceSaving),
             sketch!("SpaceSaving bytes", ss_bytes, SpaceSaving),
-            sketch!("Coco", coco, Coco),
-            sketch!("Elastic", elastic, Elastic),
+            sketch!("Coco", coco, CocoSketch),
+            sketch!("Elastic", elastic, ElasticSketch),
             sketch!("UnivMon", univmon, UnivMon),
             sketch!("UnivMon bytes", univmon_bytes, UnivMon),
-            sketch!("UnivMonPyramid", pyramid, UnivMonPyramid),
+            sketch!("UnivMonPyramid", pyramid, UnivMonTwoTier),
             sketch!("UnivMonQ", univmon_q, UnivMonQ<DefaultXxHasher>),
             sketch!("ExponentialHistogram", eh, ExponentialHistogram),
-            sketch!("EHSketchList", eh_list, EHSketchList),
+            sketch!("EHSketchList", eh_list, EhBucketSketch),
             sketch!("Hydra CM", hydra_cm, Hydra),
             sketch!("Hydra HLL", hydra_hll, Hydra),
             sketch!("Hydra KLL", hydra_kll, Hydra),
@@ -345,11 +343,11 @@ mod tests {
         #[cfg(feature = "experimental")]
         let cases = {
             let mut cases = cases;
-            let mut kmv: KMV = KMV::new(4);
+            let mut kmv: Kmv = Kmv::new(4);
             kmv.update(&DataInput::U64(9));
             let mut uniform = UniformSampling::with_seed(1.0, 7);
             uniform.update(2.5);
-            cases.push(sketch!("KMV", kmv, KMV));
+            cases.push(sketch!("KMV", kmv, Kmv));
             cases.push(sketch!("Uniform", uniform, UniformSampling));
             cases
         };

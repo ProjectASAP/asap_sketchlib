@@ -78,7 +78,7 @@ where
     }
 
     /// Serializes the delta into an ASAPv1 MessagePack envelope.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata = encode_metadata::<T, Mode, H>(self.rows, self.cols, self.admission_rate)?;
         let payload = rmp_serde::to_vec(&CsDeltaPayload {
             indices: self.indices.clone(),
@@ -88,7 +88,7 @@ where
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != CS_DELTA_KIND {
@@ -145,8 +145,8 @@ mod tests {
 
     #[test]
     fn decode_rejects_an_index_past_the_matrix() {
-        assert!(Delta::deserialize_from_bytes(&delta_bytes(&[7], &[-1])).is_ok());
-        assert!(Delta::deserialize_from_bytes(&delta_bytes(&[8], &[-1])).is_err());
+        assert!(Delta::from_asapv1(&delta_bytes(&[7], &[-1])).is_ok());
+        assert!(Delta::from_asapv1(&delta_bytes(&[8], &[-1])).is_err());
     }
 
     #[test]
@@ -154,10 +154,10 @@ mod tests {
         let delta = hex(include_str!(
             "../../../asapv1_golden/cs_i64_regular_2x4_delta.hex"
         ));
-        assert!(Delta::deserialize_from_bytes(&delta).is_ok());
+        assert!(Delta::from_asapv1(&delta).is_ok());
         let mut state_kind = delta.clone();
         state_kind[9] = 0x00;
-        assert!(Delta::deserialize_from_bytes(&state_kind).is_err());
+        assert!(Delta::from_asapv1(&state_kind).is_err());
     }
 
     #[test]

@@ -11,7 +11,7 @@ subset aggregation.
 
 ## Type/Struct
 
-- `Coco<H = DefaultXxHasher>`
+- `CocoSketch<H = DefaultXxHasher>`
 - `CocoBucket`
 
 ## Constructors
@@ -56,7 +56,7 @@ bucket still holds `0`.
 fn recorded_flows(&self) -> impl Iterator<Item = (&str, u64)>
 fn group_by<F>(&self, project: F) -> HashMap<String, u64>
 
-fn estimate_key(&self, key: &str) -> u64
+fn estimate(&self, key: &str) -> u64
 fn estimate_projected<F>(&self, partial_key: &str, project: F) -> u64
 fn estimate_with_udf<F>(&self, partial_key: &str, udf: F) -> u64
 fn estimate_substring(&self, partial_key: &str) -> u64
@@ -74,7 +74,7 @@ recorded flow onto its partial key in one `O(w * d)` pass, where asking
 group. A single known partial key is still cheaper through `estimate_projected`,
 which allocates nothing.
 
-`estimate_key` is the paper's point query: the sum of the `d` mapped buckets
+`estimate` is the paper's point query: the sum of the `d` mapped buckets
 that currently hold `key`, in `O(d)`. Because every increment is attributed to
 exactly one bucket, summing it over the observed keys returns the total inserted
 mass.
@@ -89,20 +89,20 @@ bucket counts only when its stored full key projects exactly to `partial_key`.
 
 `estimate_substring` sums every bucket whose stored key *contains*
 `partial_key`. Containment is not a key projection, so `estimate_substring("k1")`
-also collects `k10`, `k11`, and `k100`. Reach for `estimate_key` or
+also collects `k10`, `k11`, and `k100`. Reach for `estimate` or
 `estimate_projected` unless substring matching is what you actually want.
 
 ## Merge
 
 ```rust
-fn merge(&mut self, other: &Coco<H>)
+fn merge(&mut self, other: &CocoSketch<H>)
 ```
 
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, rmp_serde::encode::Error>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
+fn to_asapv1(&self) -> Result<Vec<u8>, rmp_serde::encode::Error>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
 ```
 
 ASAPv1 MessagePack, kind_id `0x0c 0x00`. The metadata carries the hash spec plus
@@ -113,7 +113,7 @@ that holds nothing. Both methods require `H: HashProfile`.
 
 A zero dimension, a table whose bucket count disagrees with `w`/`d`, a payload
 length that disagrees with the declared geometry, and a `nil` key carrying a
-non-zero value are all rejected on both sides. `Coco` also derives serde.
+non-zero value are all rejected on both sides. `CocoSketch` also derives serde.
 
 Row `i` hashes at seed index `i`, so the wire covers `1 <= d <= 20`
 (`MATRIX_MAX_ROWS`, the seed list length): past that, row `i` and row `i + 20`
@@ -122,11 +122,11 @@ map every key to the same bucket. A wider table is refused on both sides.
 ## Examples
 
 ```rust
-use asap_sketchlib::Coco;
+use asap_sketchlib::CocoSketch;
 
-let mut sk = Coco::init_with_size(1024, 4);
+let mut sk = CocoSketch::init_with_size(1024, 4);
 sk.update_weighted("region=us|id=1", 3);
-let _ = sk.estimate_key("region=us|id=1");
+let _ = sk.estimate("region=us|id=1");
 let _ = sk.estimate_projected("region=us", |full| {
     full.split('|').next().unwrap_or(full)
 });
@@ -138,7 +138,7 @@ let _ = sk.estimate_projected("region=us", |full| {
 - Replacement behavior is probabilistic. Only a seeded sketch reproduces.
 - The seed is not serialized: a decoded sketch draws from the thread generator.
 - Clones of a seeded sketch draw the same sequence. `ExponentialHistogram`
-  clones its prototype for every bucket, so over a seeded `Coco` every bucket's
+  clones its prototype for every bucket, so over a seeded `CocoSketch` every bucket's
   elections are correlated; use an unseeded prototype when that matters.
 
 ## Multi-core (OctoSketch)
@@ -149,7 +149,7 @@ let _ = sk.estimate_projected("region=us", |full| {
 let plan = CocoOctoPlan::new(1024, 2); // or CocoOctoPlan::with_seed(1024, 2, seed)
 let config = OctoConfig { threshold: plan.threshold().clone(), ..OctoConfig::default() };
 let out = run_octo(&inputs, &config, plan.clone(), || plan.aggregator());
-out.parent.sketch.estimate_key("flow::7");
+out.parent.sketch.estimate("flow::7");
 ```
 
 `CocoOctoWorker` keeps a table of the same shape with one-byte counters and
@@ -160,7 +160,7 @@ this sketch's own insertion logic, which is what appendix C of the OctoSketch
 paper prescribes. Mass is conserved exactly; residency churns faster than a
 single-threaded pass, because a promoted batch of τ takes a bucket with
 probability `τ/val` rather than `1/val`. Keys are rendered with
-`flow_key_string`, and that rendering is what `estimate_key` must be asked for.
+`flow_key_string`, and that rendering is what `estimate` must be asked for.
 `CocoOctoPlan::with_seed` gives the aggregator and each worker its own generator
 derived from one seed and the worker id. See `docs/api/api_octo.md`.
 

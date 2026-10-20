@@ -20,8 +20,8 @@ use asap_sketchlib::message_pack_format::portable::countminsketch_topk::CountMin
 use asap_sketchlib::message_pack_format::portable::countsketch_topk::CountSketchWithHeap;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketch;
 use asap_sketchlib::{
-    Classic, Count, CountMin, DataInput, EnsembleSketch, ErtlMLE, FastPath, HashSketchEnsemble,
-    HyperLogLog, HyperLogLogHIP, UnivMonQ, UnivMonQConfig, Vector2D,
+    Classic, Count, CountMinSketch, DataInput, EnsembleSketch, Ertl, FastPath, HashSketchEnsemble,
+    HyperLogLog, HyperLogLogHip, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 
 const ROWS: usize = 3;
@@ -39,7 +39,7 @@ const STREAM_SEED: u64 = 0xC090_5101;
 /// The two kinds of member have different obligations, and conflating them
 /// would make this test either vacuous or wrong:
 ///
-/// - **matrix members** (`CountMinFast`, `CountFast`) receive exactly the hash
+/// - **matrix members** (`CountMinFast`, `CountSketchFast`) receive exactly the hash
 ///   their own fast path would have computed, so they must match a standalone
 ///   sketch *exactly*, key for key;
 /// - **HLL members** receive the low 64 bits of that shared matrix hash, not
@@ -53,23 +53,23 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
     let stream = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
 
     let mut ens: HashSketchEnsemble = HashSketchEnsemble::new(vec![
-        EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
         EnsembleSketch::from(Count::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
-        EnsembleSketch::from(HyperLogLog::<ErtlMLE>::new()),
+        EnsembleSketch::from(HyperLogLog::<Ertl>::new()),
         EnsembleSketch::from(HyperLogLog::<Classic>::new()),
-        EnsembleSketch::from(HyperLogLogHIP::new()),
+        EnsembleSketch::from(HyperLogLogHip::new()),
     ])
     .expect("all matrix members share dimensions");
 
-    let mut ref_cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut ref_cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
     let mut ref_cs = Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
-    let mut ref_ertl = HyperLogLog::<ErtlMLE>::new();
+    let mut ref_ertl = HyperLogLog::<Ertl>::new();
     let mut ref_classic = HyperLogLog::<Classic>::new();
-    let mut ref_hip = HyperLogLogHIP::new();
+    let mut ref_hip = HyperLogLogHip::new();
 
     let mut truth = FreqTruth::default();
     for k in &stream {
@@ -166,21 +166,21 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
 }
 
 /// Every member still satisfies its own family's bound after riding the shared
-/// hash path. `CountFast` gets the L2 bound, not Count-Min's; the HLL members
+/// hash path. `CountSketchFast` gets the L2 bound, not Count-Min's; the HLL members
 /// get their register models.
 #[test]
 fn ensemble_members_stay_inside_their_own_error_models() {
     let stream = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
     let mut ens: HashSketchEnsemble = HashSketchEnsemble::new(vec![
-        EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
         EnsembleSketch::from(Count::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
-        EnsembleSketch::from(HyperLogLog::<ErtlMLE>::new()),
+        EnsembleSketch::from(HyperLogLog::<Ertl>::new()),
         EnsembleSketch::from(HyperLogLog::<Classic>::new()),
-        EnsembleSketch::from(HyperLogLogHIP::new()),
+        EnsembleSketch::from(HyperLogLogHip::new()),
     ])
     .expect("ensemble");
 
@@ -238,7 +238,7 @@ fn ensemble_members_stay_inside_their_own_error_models() {
 /// Compatibility inside an ensemble is by **hash layout**, not by literal
 /// dimensions.
 ///
-/// The shared hash is `hash_for_matrix_seeded_with_mode(0, mode, rows, input)`,
+/// The shared hash is `hash_for_matrix_seeded_with_layout(0, mode, rows, input)`,
 /// where `mode` is chosen from `rows * mask_bits(cols)`: it decides whether the
 /// row hashes are packed into one `u64`, one `u128`, or one value per row. Two
 /// sketches with the same `(mode, rows)` can share that hash even at different
@@ -252,10 +252,10 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     // Same rows, same packing mode, *different* widths: compatible, and each
     // member must answer correctly at its own width.
     let mut mixed = HashSketchEnsemble::<asap_sketchlib::DefaultXxHasher>::new(vec![
-        EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
-        EnsembleSketch::from(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(
             ROWS,
             COLS / 2,
         )),
@@ -298,10 +298,10 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     // construction and on push.
     assert!(
         HashSketchEnsemble::<asap_sketchlib::DefaultXxHasher>::new(vec![
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 ROWS, COLS
             )),
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 ROWS + 2,
                 COLS
             )),
@@ -331,10 +331,10 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     // 5 * 13 = 65 and spills into a `u128`.
     assert!(
         HashSketchEnsemble::<asap_sketchlib::DefaultXxHasher>::new(vec![
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 5, 1024
             )),
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 5, 4096
             )),
         ])
@@ -344,8 +344,10 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     // ...while two widths on the same side of that boundary compose fine.
     assert!(
         HashSketchEnsemble::<asap_sketchlib::DefaultXxHasher>::new(vec![
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 512)),
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+                5, 512
+            )),
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 5, 1024
             )),
         ])
@@ -356,7 +358,7 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     // HLL members carry no matrix dimensions, so they compose with any grid.
     assert!(
         mixed
-            .push(EnsembleSketch::from(HyperLogLogHIP::new()))
+            .push(EnsembleSketch::from(HyperLogLogHip::new()))
             .is_ok(),
         "an HLL member has no dimensions to clash with"
     );
@@ -387,14 +389,14 @@ fn univmonq_configuration_variants_all_build_and_keep_exact_aggregates() {
         (
             "width_halving_period=2",
             UnivMonQConfig {
-                width_halving_period: 2,
+                cols_halving_period: 2,
                 ..base
             },
         ),
         (
             "explicit hash_seed",
             UnivMonQConfig {
-                hash_seed: 3,
+                seed_index: 3,
                 ..base
             },
         ),
@@ -447,7 +449,7 @@ fn univmonq_with_ordered_samples_disabled_answers_everything_except_ordered_quer
         "F2 does not depend on ordered samples"
     );
     assert!(
-        q.estimate_distinct() > 0.0,
+        q.estimate_cardinality() > 0.0,
         "distinct does not depend on ordered samples"
     );
 
@@ -796,7 +798,7 @@ fn portable_kll_sketch_satisfies_the_rank_error_characterization_through_merge_a
 // ---------------------------------------------------------------------------
 
 /// `tests/TEST_COVERAGE.md` specifies the ensemble as a Count-Min cell at
-/// `row 3, col 4096` on the fast path beside a `HyperLogLog<ErtlMLE>` cell,
+/// `row 3, col 4096` on the fast path beside a `HyperLogLog<Ertl>` cell,
 /// over the twelve numbered inputs, with both cells required to answer as their
 /// standalone instances do.
 ///
@@ -826,16 +828,16 @@ mod documented_matrix {
 
     fn ensemble_documented_input(input: &KeyInput) {
         let mut ens: HashSketchEnsemble = HashSketchEnsemble::new(vec![
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 DOC_ROWS, DOC_COLS,
             )),
-            EnsembleSketch::from(HyperLogLog::<ErtlMLE>::new()),
+            EnsembleSketch::from(HyperLogLog::<Ertl>::new()),
         ])
         .expect("one matrix member cannot disagree with itself about dimensions");
 
         let mut reference_cm =
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(DOC_ROWS, DOC_COLS);
-        let mut reference_hll = HyperLogLog::<ErtlMLE>::new();
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(DOC_ROWS, DOC_COLS);
+        let mut reference_hll = HyperLogLog::<Ertl>::new();
         let mut truth = FreqTruth::default();
         for key in &input.keys {
             let d = input.data(*key);

@@ -6,7 +6,7 @@
 //!
 //! The oracle is a direct scan of the table - `(row, column)` loops that read
 //! `full_key` and `val` - plus the exact sum of the generated stream. That
-//! scan owes nothing to `recorded_flows`, `estimate_key` or the hash seeds, so
+//! scan owes nothing to `recorded_flows`, `estimate` or the hash seeds, so
 //! the laws below pin the query paths against the state they claim to read.
 //!
 //! The update rule the paper does fix is where a new key's weight lands: in a
@@ -17,11 +17,11 @@
 //! Zhang, Liu, Chen, Yang, Tu, Cui, SIGCOMM '21.
 
 use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, keys};
-use asap_sketchlib::{Coco, DataInput, DefaultXxHasher, SketchHasher};
+use asap_sketchlib::{CocoSketch, DataInput, DefaultXxHasher, SketchHasher};
 use proptest::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-type C = Coco<DefaultXxHasher>;
+type C = CocoSketch<DefaultXxHasher>;
 
 /// The field before the `|`, the partial key the grouping laws project onto.
 fn family(full: &str) -> &str {
@@ -175,7 +175,7 @@ proptest! {
             C,
             sketch,
             |s: &C| (0..PROBE_KEYS as u64)
-                .map(|k| s.estimate_key(&format!("flow-{k}")))
+                .map(|k| s.estimate(&format!("flow-{k}")))
                 .collect::<Vec<_>>(),
         );
     }
@@ -375,7 +375,7 @@ proptest! {
                 .filter(|(full, _)| *full == key)
                 .map(|&(_, val)| val)
                 .sum();
-            let estimate = sketch.estimate_key(&key);
+            let estimate = sketch.estimate(&key);
             prop_assert_eq!(estimate, expected, "estimate_key({})", key);
             prop_assert!(estimate <= total, "estimate_key({}) exceeds {}", key, total);
         }

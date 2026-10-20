@@ -1,4 +1,4 @@
-//! Property tests for `KLLDynamic`, the KLL variant that widens its item type
+//! Property tests for `KllDynamic`, the KLL variant that widens its item type
 //! at runtime.
 //!
 //! The quantile laws are P-13's, restated here against the dynamic item path.
@@ -16,7 +16,7 @@
 //! two-sided bracket and the `O(n / k)` rank band survive.
 
 use crate::support::{QUANTILES, close, extreme_f64, extreme_values};
-use asap_sketchlib::KLLDynamic;
+use asap_sketchlib::KllDynamic;
 use proptest::prelude::*;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -110,8 +110,8 @@ fn ascending_probes() -> impl Strategy<Value = Vec<f64>> {
     })
 }
 
-fn sketch_of(k: i32, seed: u64, values: &[f64]) -> KLLDynamic<f64> {
-    let mut sketch = KLLDynamic::<f64>::init_kll_with_seed(k, seed);
+fn sketch_of(k: i32, seed: u64, values: &[f64]) -> KllDynamic<f64> {
+    let mut sketch = KllDynamic::<f64>::with_k_and_seed(k, seed);
     for v in values {
         sketch.update(v);
     }
@@ -153,16 +153,16 @@ proptest! {
         k in prop_oneof![Just(1i32), Just(8), Just(64), Just(200), Just(1_024)],
         values in extreme_values(300),
     ) {
-        let mut sketch = KLLDynamic::<f64>::init_kll_with_seed(k, 0x5EED_0002);
+        let mut sketch = KllDynamic::<f64>::with_k_and_seed(k, 0x5EED_0002);
         for v in &values {
             sketch.update(v);
         }
 
         round_trip!(
-            KLLDynamic<f64>,
+            KllDynamic<f64>,
             sketch,
-            |s: &KLLDynamic<f64>| s.count(),
-            |s: &KLLDynamic<f64>| QUANTILES.iter().map(|q| s.quantile(*q).to_bits()).collect::<Vec<_>>(),
+            |s: &KllDynamic<f64>| s.count(),
+            |s: &KllDynamic<f64>| QUANTILES.iter().map(|q| s.quantile(*q).to_bits()).collect::<Vec<_>>(),
         );
     }
 }
@@ -182,8 +182,8 @@ proptest! {
         more in prop::collection::vec(ordinary(), 200..400),
     ) {
         let mut original = sketch_of(k, seed, &values);
-        let bytes = original.serialize_to_bytes().expect("encode");
-        let mut decoded = KLLDynamic::<f64>::deserialize_from_bytes(&bytes).expect("decode");
+        let bytes = original.to_asapv1().expect("encode");
+        let mut decoded = KllDynamic::<f64>::from_asapv1(&bytes).expect("decode");
 
         for v in &more {
             original.update(v);
@@ -192,8 +192,8 @@ proptest! {
 
         prop_assert_eq!(decoded.count(), original.count(), "k={}: count after the replay", k);
         prop_assert_eq!(
-            decoded.serialize_to_bytes().expect("encode"),
-            original.serialize_to_bytes().expect("encode"),
+            decoded.to_asapv1().expect("encode"),
+            original.to_asapv1().expect("encode"),
             "k={}: a decoded sketch took a different compaction than the original", k
         );
     }
@@ -459,7 +459,7 @@ proptest! {
         xs in ascending_probes(),
     ) {
         let source = sketch_of(k, seed, &values);
-        let mut target = KLLDynamic::<f64>::init_kll_with_seed(k, seed);
+        let mut target = KllDynamic::<f64>::with_k_and_seed(k, seed);
         target.merge(&source);
 
         prop_assert_eq!(target.count(), source.count(), "k={}: count after the merge", k);
@@ -525,8 +525,8 @@ proptest! {
 
         prop_assert_eq!(first.count(), second.count(), "k={}, seed={}", k, seed);
         prop_assert_eq!(
-            first.serialize_to_bytes().expect("encode"),
-            second.serialize_to_bytes().expect("encode"),
+            first.to_asapv1().expect("encode"),
+            second.to_asapv1().expect("encode"),
             "k={}, seed={}: same seed and stream, different state", k, seed
         );
     }
@@ -541,11 +541,11 @@ proptest! {
         let mut reused = sketch_of(k, seed, &values);
         reused.clear();
 
-        let empty = KLLDynamic::<f64>::init_kll_with_seed(k, seed);
+        let empty = KllDynamic::<f64>::with_k_and_seed(k, seed);
         prop_assert_eq!(reused.count(), 0, "k={}, seed={}: cleared count", k, seed);
         prop_assert_eq!(
-            reused.serialize_to_bytes().expect("encode"),
-            empty.serialize_to_bytes().expect("encode"),
+            reused.to_asapv1().expect("encode"),
+            empty.to_asapv1().expect("encode"),
             "k={}, seed={}: a cleared sketch is not an empty one", k, seed
         );
 
@@ -554,8 +554,8 @@ proptest! {
         }
         let fresh = sketch_of(k, seed, &values);
         prop_assert_eq!(
-            reused.serialize_to_bytes().expect("encode"),
-            fresh.serialize_to_bytes().expect("encode"),
+            reused.to_asapv1().expect("encode"),
+            fresh.to_asapv1().expect("encode"),
             "k={}, seed={}: a cleared sketch does not replay as a new one", k, seed
         );
     }

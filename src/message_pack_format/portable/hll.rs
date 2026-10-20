@@ -2,14 +2,14 @@
 //!
 //! Self-contained: maintains its own `Vec<u8>` register array. Parity
 //! with Go's `HyperLogLog.SerializePortable` (and equivalence with
-//! `sketches::HyperLogLogImpl<.., ErtlMLE, P14>`) is locked in by the
+//! `sketches::HyperLogLogImpl<.., Ertl, P14>`) is locked in by the
 //! `test_update_then_envelope_matches_sketchlib_go_bytes` test below and
 //! by `tests/sketches_go_parity_probe.rs`.
 
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
-use crate::{CANONICAL_HASH_SEED, DataInput, hash64_seeded};
+use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, hash64_seeded};
 
 // ---------------------------------------------------------------------------
 // DEPRECATED — temporary compatibility shim, slated for removal.
@@ -17,11 +17,11 @@ use crate::{CANONICAL_HASH_SEED, DataInput, hash64_seeded};
 // A few call sites still depend on this portable `HllSketch`. Its ASAPv1 codec
 // now reuses the shared `envelope` framing plus the HLL metadata/payload types
 // in `crate::sketches::hll`, so it stays byte-identical with the native
-// `HyperLogLogImpl` / `HyperLogLogHIPImpl` serialization. Do NOT add new callers.
+// `HyperLogLogImpl` / `HyperLogLogHipImpl` serialization. Do NOT add new callers.
 //
 // Prefer instead the native path:
-// `sketches::hll::HyperLogLogImpl::serialize_to_bytes` /
-// `HyperLogLogHIPImpl::serialize_to_bytes` (+ `deserialize_from_bytes`).
+// `sketches::hll::HyperLogLogImpl::to_asapv1` /
+// `HyperLogLogHipImpl::to_asapv1` (+ `from_asapv1`).
 // ---------------------------------------------------------------------------
 
 use crate::message_pack_format::envelope;
@@ -338,10 +338,10 @@ impl HllSketch {
     }
 
     /// Insert a value. Math mirrors `sketches::HyperLogLogImpl::update_with_hash`
-    /// (CANONICAL_HASH_SEED, packed bucket/leading-zero); locked in by
+    /// (DEFAULT_CANONICAL_SEED_INDEX, packed bucket/leading-zero); locked in by
     /// `tests/sketches_go_parity_probe.rs`.
     pub fn update(&mut self, value: &[u8]) {
-        let hashed_val = hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Bytes(value));
+        let hashed_val = hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, &DataInput::Bytes(value));
         let p = self.precision as usize;
         let register_bits = (u64::BITS as usize) - p;
         let p_mask: u64 = (1u64 << p) - 1;
@@ -804,9 +804,9 @@ mod tests {
 
     #[test]
     fn from_msgpack_rejects_a_sampled_hll() {
-        let sampled = crate::HyperLogLog::<crate::ErtlMLE>::default()
+        let sampled = crate::HyperLogLog::<crate::Ertl>::default()
             .with_admission_rate(0.5)
-            .serialize_to_bytes()
+            .to_asapv1()
             .unwrap();
         let err = HllSketch::from_msgpack(&sampled).unwrap_err().to_string();
         assert!(err.contains("does not carry admission_rate"), "{err}");

@@ -4,7 +4,7 @@ Status: `Experimental`
 
 > Warning: Behind the `experimental` cargo feature. The API and the wire form
 > may change without a major version bump. For a per-key distinct count on a
-> stable API today, use [`Hydra`](./api_hydra.md) with `HydraCounter::HLL`.
+> stable API today, use [`Hydra`](./api_hydra.md) with `HydraCounter::Hll`.
 
 ## Purpose
 
@@ -49,7 +49,7 @@ Two hash calls per insert regardless of row count: one `hash128_seeded(0, ..)`
 over the key, which `Vector3D` slices into one column index per row, and one
 `hash64_seeded` over the value for the register index and rank. The value
 hash uses a fixed non-zero seed index — not one derived from `rows`, since
-`SEEDLIST` indices wrap and a row count equal to its length would have
+`SEED_LIST` indices wrap and a row count equal to its length would have
 selected the column hash's own seed.
 
 ## Query
@@ -80,8 +80,8 @@ returns an error otherwise, leaving `self` untouched.
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 Plain MessagePack, **not** an ASAPv1 envelope: no `kind_id` is allocated for

@@ -6,7 +6,7 @@
 //! counterexample is a defect rather than an unlucky draw.
 
 use crate::support::{PROBE_KEYS, edge_dimension};
-use asap_sketchlib::{DataInput, DefaultXxHasher, HeapItem, SpaceSaving};
+use asap_sketchlib::{DataInput, DefaultXxHasher, OwnedDataInput, SpaceSaving};
 use proptest::prelude::*;
 use std::collections::HashMap;
 
@@ -111,9 +111,9 @@ fn weighted_summary_of(capacity: usize, stream: &[(i64, u64)]) -> SpaceSaving {
     s
 }
 
-fn key_of(item: &HeapItem) -> i64 {
+fn key_of(item: &OwnedDataInput) -> i64 {
     match item {
-        HeapItem::I64(v) => *v,
+        OwnedDataInput::I64(v) => *v,
         other => panic!("unexpected key form {other:?}"),
     }
 }

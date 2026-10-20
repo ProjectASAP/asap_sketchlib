@@ -1,17 +1,17 @@
-//! ASAPv1 wire serialization for [`EHSketchList`], plus the sub-payload
+//! ASAPv1 wire serialization for [`EhBucketSketch`], plus the sub-payload
 //! [`ExponentialHistogram`] reuses.
 //!
-//! Child submodule of [`crate::sketch_framework::eh_sketch_list`]: it holds the
-//! metadata/payload DTOs, the kind_id constants and the `serialize_to_bytes` /
-//! `deserialize_from_bytes` impls.
+//! Child submodule of [`crate::sketch_framework::eh_bucket_sketch`]: it holds the
+//! metadata/payload DTOs, the kind_id constants and the `to_asapv1` /
+//! `from_asapv1` impls.
 //!
-//! EHSketchList is one kind_id, `0x14 0x00`. It is a tagged union over ten
+//! EhBucketSketch is one kind_id, `0x14 0x00`. It is a tagged union over ten
 //! sketch algorithms, so the encoding is the triple
 //! `[kind_id, descriptor, state]`.
 //!
 //! ## One encoding, used in both places
 //!
-//! [`sketch_state`] and [`rebuild_sketch`] are the only place an EHSketchList is
+//! [`sketch_state`] and [`rebuild_sketch`] are the only place an EhBucketSketch is
 //! read or rebuilt. The standalone `0x14 0x00` payload is one triple; an
 //! [`ExponentialHistogram`] bucket inlines the same triple.
 //!
@@ -33,32 +33,32 @@ use serde::{Deserialize, Serialize};
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 
-use super::EHSketchList;
+use super::EhBucketSketch;
 
-/// EHSketchList kind_id: family `0x14`, single algorithm variant `0x00`.
+/// EhBucketSketch kind_id: family `0x14`, single algorithm variant `0x00`.
 pub(crate) const EH_SKETCH_LIST_KIND: &[u8] = &[0x14, 0x00];
 
-/// Count-Min, the blocks [`EHSketchList::CM`] carries.
+/// Count-Min, the blocks [`EhBucketSketch::CountMinSketch`] carries.
 pub(crate) const CM_KIND: &[u8] = &[0x02, 0x00];
-/// Coco, the blocks [`EHSketchList::COCO`] carries.
+/// Coco, the blocks [`EhBucketSketch::CocoSketch`] carries.
 pub(crate) const COCO_KIND: &[u8] = &[0x0c, 0x00];
-/// CountL2HH, the blocks [`EHSketchList::COUNTL2HH`] carries.
+/// CountSketchWithL2Norm, the blocks [`EhBucketSketch::CountSketchWithL2Norm`] carries.
 pub(crate) const COUNTL2HH_KIND: &[u8] = &[0x19, 0x00];
-/// Count Sketch, the blocks [`EHSketchList::CS`] carries.
+/// Count Sketch, the blocks [`EhBucketSketch::CountSketch`] carries.
 pub(crate) const CS_KIND: &[u8] = &[0x04, 0x00];
-/// DDSketch, the blocks [`EHSketchList::DDS`] carries.
+/// DDSketch, the blocks [`EhBucketSketch::DdSketch`] carries.
 pub(crate) const DDS_KIND: &[u8] = &[0x05, 0x00];
-/// Elastic, the blocks [`EHSketchList::ELASTIC`] carries.
+/// Elastic, the blocks [`EhBucketSketch::ElasticSketch`] carries.
 pub(crate) const ELASTIC_KIND: &[u8] = &[0x0b, 0x00];
-/// HLL Ertl-MLE, the blocks [`EHSketchList::HLL`] carries. Classic
+/// HLL Ertl-MLE, the blocks [`EhBucketSketch::Hll`] carries. Classic
 /// (`0x01 0x01`) and HIP (`0x01 0x03`) are other algorithms.
 pub(crate) const HLL_KIND: &[u8] = &[0x01, 0x02];
-/// Compact KLL, the blocks [`EHSketchList::KLL`] carries. Dynamic KLL
+/// Compact KLL, the blocks [`EhBucketSketch::Kll`] carries. Dynamic KLL
 /// (`0x06 0x01`) is another algorithm.
 pub(crate) const KLL_KIND: &[u8] = &[0x06, 0x00];
-/// UniformSampling, the blocks `EHSketchList::UNIFORM` carries.
+/// UniformSampling, the blocks `EhBucketSketch::Uniform` carries.
 pub(crate) const UNIFORM_KIND: &[u8] = &[0x0d, 0x00];
-/// UnivMon, the blocks [`EHSketchList::UNIVMON`] carries.
+/// UnivMon, the blocks [`EhBucketSketch::UnivMon`] carries.
 pub(crate) const UNIVMON_KIND: &[u8] = &[0x10, 0x00];
 
 /// The registry name of a nested kind_id. Error messages only: encoding and
@@ -79,7 +79,7 @@ pub(crate) fn variant_name(kind_id: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// EHSketchList descriptor metadata (ASAPv1 §2), a msgpack **map**
+/// EhBucketSketch descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`). The union has no construction config of its own: the
 /// kind_id belongs to the triple, which travels whole.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -88,14 +88,14 @@ pub(crate) struct EhSketchListMetadata {
     pub(crate) metadata_version: u8,
 }
 
-/// Builds the EHSketchList descriptor metadata.
+/// Builds the EhBucketSketch descriptor metadata.
 pub(crate) fn eh_sketch_list_metadata() -> EhSketchListMetadata {
     EhSketchListMetadata {
         metadata_version: 1,
     }
 }
 
-/// One EHSketchList as a msgpack **array** (`to_vec`, positional):
+/// One EhBucketSketch as a msgpack **array** (`to_vec`, positional):
 /// `[kind_id, descriptor, state]`. All three are msgpack `bin`: the variant's
 /// own kind_id bytes, its ASAPv1 metadata block and its ASAPv1 payload block.
 #[derive(Debug, Serialize, Deserialize)]
@@ -150,47 +150,47 @@ fn triple(kind: &'static [u8], bytes: &[u8]) -> Result<SketchState, RmpEncodeErr
 }
 
 /// Rejects a variant whose admission rate is not `1`.
-fn check_admits_all(sketch: &EHSketchList) -> Result<(), String> {
+fn check_admits_all(sketch: &EhBucketSketch) -> Result<(), String> {
     let rate = match sketch {
-        EHSketchList::CM(s) => s.admission_rate(),
-        EHSketchList::CS(s) => s.admission_rate(),
-        EHSketchList::DDS(s) => s.admission_rate(),
-        EHSketchList::HLL(s) => s.admission_rate(),
+        EhBucketSketch::CountMinSketch(s) => s.admission_rate(),
+        EhBucketSketch::CountSketch(s) => s.admission_rate(),
+        EhBucketSketch::DdSketch(s) => s.admission_rate(),
+        EhBucketSketch::Hll(s) => s.admission_rate(),
         _ => return Ok(()),
     };
     admission_rate::check_admits_all(rate).map_err(|e| format!("ASAPv1 EHSketchList: {e}"))
 }
 
-/// The triple one EHSketchList contributes, in the order the wire emits it.
+/// The triple one EhBucketSketch contributes, in the order the wire emits it.
 /// Every state the variant's own encoder refuses is refused here too.
-pub(crate) fn sketch_state(sketch: &EHSketchList) -> Result<SketchState, RmpEncodeError> {
+pub(crate) fn sketch_state(sketch: &EhBucketSketch) -> Result<SketchState, RmpEncodeError> {
     check_admits_all(sketch).map_err(RmpEncodeError::Syntax)?;
     match sketch {
-        EHSketchList::CM(s) => triple(CM_KIND, &s.serialize_to_bytes()?),
-        EHSketchList::COCO(s) => triple(COCO_KIND, &s.serialize_to_bytes()?),
-        EHSketchList::COUNTL2HH(s) => triple(COUNTL2HH_KIND, &s.serialize_to_bytes()?),
-        EHSketchList::CS(s) => triple(CS_KIND, &s.serialize_to_bytes()?),
-        EHSketchList::DDS(s) => triple(DDS_KIND, &s.serialize_to_bytes()?),
-        EHSketchList::ELASTIC(s) => triple(ELASTIC_KIND, &s.serialize_to_bytes()?),
-        EHSketchList::HLL(s) => triple(HLL_KIND, &s.serialize_to_bytes()?),
-        EHSketchList::KLL(s) => triple(KLL_KIND, &s.serialize_to_bytes()?),
+        EhBucketSketch::CountMinSketch(s) => triple(CM_KIND, &s.to_asapv1()?),
+        EhBucketSketch::CocoSketch(s) => triple(COCO_KIND, &s.to_asapv1()?),
+        EhBucketSketch::CountSketchWithL2Norm(s) => triple(COUNTL2HH_KIND, &s.to_asapv1()?),
+        EhBucketSketch::CountSketch(s) => triple(CS_KIND, &s.to_asapv1()?),
+        EhBucketSketch::DdSketch(s) => triple(DDS_KIND, &s.to_asapv1()?),
+        EhBucketSketch::ElasticSketch(s) => triple(ELASTIC_KIND, &s.to_asapv1()?),
+        EhBucketSketch::Hll(s) => triple(HLL_KIND, &s.to_asapv1()?),
+        EhBucketSketch::Kll(s) => triple(KLL_KIND, &s.to_asapv1()?),
         #[cfg(feature = "experimental")]
-        EHSketchList::UNIFORM(s) => triple(UNIFORM_KIND, &s.serialize_to_bytes()?),
-        EHSketchList::UNIVMON(s) => triple(UNIVMON_KIND, &s.serialize_to_bytes()?),
+        EhBucketSketch::Uniform(s) => triple(UNIFORM_KIND, &s.to_asapv1()?),
+        EhBucketSketch::UnivMon(s) => triple(UNIVMON_KIND, &s.to_asapv1()?),
     }
 }
 
-/// Rebuilds one EHSketchList from a triple, through the variant's own decoder.
+/// Rebuilds one EhBucketSketch from a triple, through the variant's own decoder.
 /// An unknown kind_id, and one this build does not carry, are rejected before
 /// any block is assembled. A descriptor carrying `admission_rate` is rejected.
-pub(crate) fn rebuild_sketch(triple: &SketchState) -> Result<EHSketchList, RmpDecodeError> {
+pub(crate) fn rebuild_sketch(triple: &SketchState) -> Result<EhBucketSketch, RmpDecodeError> {
     let sketch = rebuild_variant(triple)?;
     check_admits_all(&sketch).map_err(RmpDecodeError::Uncategorized)?;
     Ok(sketch)
 }
 
 /// [`rebuild_sketch`] before the `admission_rate` check.
-fn rebuild_variant(triple: &SketchState) -> Result<EHSketchList, RmpDecodeError> {
+fn rebuild_variant(triple: &SketchState) -> Result<EhBucketSketch, RmpDecodeError> {
     let kind_id = triple.kind_id.as_slice();
     check_variant_available(kind_id)?;
     if variant_name(kind_id).is_none() {
@@ -198,51 +198,49 @@ fn rebuild_variant(triple: &SketchState) -> Result<EHSketchList, RmpDecodeError>
     }
     let bytes = envelope::encode(kind_id, &triple.descriptor, &triple.state);
     match kind_id {
-        CM_KIND => Ok(EHSketchList::CM(crate::CountMin::deserialize_from_bytes(
-            &bytes,
-        )?)),
-        COCO_KIND => Ok(EHSketchList::COCO(crate::Coco::deserialize_from_bytes(
-            &bytes,
-        )?)),
-        COUNTL2HH_KIND => Ok(EHSketchList::COUNTL2HH(
-            crate::CountL2HH::deserialize_from_bytes(&bytes)?,
+        CM_KIND => Ok(EhBucketSketch::CountMinSketch(
+            crate::CountMinSketch::from_asapv1(&bytes)?,
         )),
-        CS_KIND => Ok(EHSketchList::CS(crate::Count::deserialize_from_bytes(
+        COCO_KIND => Ok(EhBucketSketch::CocoSketch(crate::CocoSketch::from_asapv1(
             &bytes,
         )?)),
-        DDS_KIND => Ok(EHSketchList::DDS(crate::DDSketch::deserialize_from_bytes(
-            &bytes,
-        )?)),
-        ELASTIC_KIND => Ok(EHSketchList::ELASTIC(
-            crate::Elastic::deserialize_from_bytes(&bytes)?,
+        COUNTL2HH_KIND => Ok(EhBucketSketch::CountSketchWithL2Norm(
+            crate::CountSketchWithL2Norm::from_asapv1(&bytes)?,
         )),
-        HLL_KIND => Ok(EHSketchList::HLL(
-            crate::HyperLogLog::<crate::ErtlMLE>::deserialize_from_bytes(&bytes)?,
-        )),
-        KLL_KIND => Ok(EHSketchList::KLL(crate::KLL::deserialize_from_bytes(
+        CS_KIND => Ok(EhBucketSketch::CountSketch(crate::Count::from_asapv1(
             &bytes,
         )?)),
+        DDS_KIND => Ok(EhBucketSketch::DdSketch(crate::DdSketch::from_asapv1(
+            &bytes,
+        )?)),
+        ELASTIC_KIND => Ok(EhBucketSketch::ElasticSketch(
+            crate::ElasticSketch::from_asapv1(&bytes)?,
+        )),
+        HLL_KIND => Ok(EhBucketSketch::Hll(
+            crate::HyperLogLog::<crate::Ertl>::from_asapv1(&bytes)?,
+        )),
+        KLL_KIND => Ok(EhBucketSketch::Kll(crate::Kll::from_asapv1(&bytes)?)),
         #[cfg(feature = "experimental")]
-        UNIFORM_KIND => Ok(EHSketchList::UNIFORM(
-            crate::UniformSampling::deserialize_from_bytes(&bytes)?,
+        UNIFORM_KIND => Ok(EhBucketSketch::Uniform(
+            crate::UniformSampling::from_asapv1(&bytes)?,
         )),
-        UNIVMON_KIND => Ok(EHSketchList::UNIVMON(
-            crate::UnivMon::deserialize_from_bytes(&bytes)?,
-        )),
+        UNIVMON_KIND => Ok(EhBucketSketch::UnivMon(crate::UnivMon::from_asapv1(
+            &bytes,
+        )?)),
         other => Err(unknown_variant(other)),
     }
 }
 
-// Wire serialization for EHSketchList. `wire` is a descendant of the union's
+// Wire serialization for EhBucketSketch. `wire` is a descendant of the union's
 // module, so this impl matches its variants directly.
-impl EHSketchList {
+impl EhBucketSketch {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope
     /// (kind_id `0x14 0x00`). The payload is the triple
     /// `[kind_id, descriptor, state]`.
     ///
     /// A state the variant's own encoder refuses is an error rather than bytes
     /// that would be refused on decode.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata = rmp_serde::to_vec_named(&eh_sketch_list_metadata())?;
         let payload = rmp_serde::to_vec(&sketch_state(self)?)?;
         Ok(envelope::encode(EH_SKETCH_LIST_KIND, &metadata, &payload))
@@ -250,7 +248,7 @@ impl EHSketchList {
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The nested
     /// kind_id selects the decoder, which validates its own blocks.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != EH_SKETCH_LIST_KIND {
@@ -274,11 +272,12 @@ pub(crate) mod tests {
     use super::*;
     use crate::sketch_framework::univmon::UnivMon;
     use crate::{
-        CANONICAL_HASH_SEED, Count, CountL2HH, CountMin, DDSketch, DataInput, DefaultXxHasher,
-        ErtlMLE, FastPath, HashProfile, HyperLogLog, KLL, SketchHasher, Vector2D,
+        Count, CountMinSketch, CountSketchWithL2Norm, DEFAULT_CANONICAL_SEED_INDEX, DataInput,
+        DdSketch, DefaultXxHasher, Ertl, FastPath, HashProfile, HyperLogLog, Kll, SketchHasher,
+        Vector2D,
     };
 
-    /// An input the named variant accepts. UnivMon's heaps hold one `HeapItem`
+    /// An input the named variant accepts. UnivMon's heaps hold one `OwnedDataInput`
     /// variant at a time, so its keys stay strings.
     pub(crate) fn sample_input(sketch_type: &str) -> DataInput<'static> {
         match sketch_type {
@@ -288,24 +287,31 @@ pub(crate) mod tests {
     }
 
     /// One populated sketch per variant this build carries, in kind_id order.
-    pub(crate) fn populated_variants() -> Vec<EHSketchList> {
-        let mut out = vec![EHSketchList::CM(
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
-        )];
-        out.push(EHSketchList::COCO(crate::Coco::init_with_size(16, 2)));
-        out.push(EHSketchList::COUNTL2HH(CountL2HH::with_dimensions(3, 256)));
-        out.push(EHSketchList::CS(
+    pub(crate) fn populated_variants() -> Vec<EhBucketSketch> {
+        let mut out = vec![EhBucketSketch::CountMinSketch(CountMinSketch::<
+            Vector2D<i32>,
+            FastPath,
+        >::with_dimensions(
+            3, 8
+        ))];
+        out.push(EhBucketSketch::CocoSketch(
+            crate::CocoSketch::init_with_size(16, 2),
+        ));
+        out.push(EhBucketSketch::CountSketchWithL2Norm(
+            CountSketchWithL2Norm::with_dimensions(3, 256),
+        ));
+        out.push(EhBucketSketch::CountSketch(
             Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
         ));
-        out.push(EHSketchList::DDS(DDSketch::new(0.01)));
-        out.push(EHSketchList::ELASTIC(crate::Elastic::init_with_dimensions(
-            8, 2, 256,
-        )));
-        out.push(EHSketchList::HLL(HyperLogLog::<ErtlMLE>::default()));
-        out.push(EHSketchList::KLL(KLL::init_kll(200)));
+        out.push(EhBucketSketch::DdSketch(DdSketch::new(0.01)));
+        out.push(EhBucketSketch::ElasticSketch(
+            crate::ElasticSketch::with_heavy_and_light(8, 2, 256),
+        ));
+        out.push(EhBucketSketch::Hll(HyperLogLog::<Ertl>::default()));
+        out.push(EhBucketSketch::Kll(Kll::with_k(200)));
         #[cfg(feature = "experimental")]
-        out.push(EHSketchList::UNIFORM(crate::UniformSampling::new(0.5)));
-        out.push(EHSketchList::UNIVMON(UnivMon::default()));
+        out.push(EhBucketSketch::Uniform(crate::UniformSampling::new(0.5)));
+        out.push(EhBucketSketch::UnivMon(UnivMon::default()));
         for sketch in &mut out {
             let key = sample_input(sketch.sketch_type());
             for _ in 0..5 {
@@ -329,19 +335,19 @@ pub(crate) mod tests {
         fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
             DefaultXxHasher::hash128_seeded(d, key)
         }
-        fn hash_item64_seeded(d: usize, key: &crate::HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(d: usize, key: &crate::OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(d, key)
         }
-        fn hash_item128_seeded(d: usize, key: &crate::HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(d: usize, key: &crate::OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(d, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -353,14 +359,14 @@ pub(crate) mod tests {
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
     /// A Count-Min triple whose descriptor names a custom hash profile.
     pub(crate) fn alt_profile_triple() -> SketchState {
-        let sketch = CountMin::<Vector2D<i32>, FastPath, AltHasher>::with_dimensions(3, 8);
-        let bytes = sketch.serialize_to_bytes().expect("serialize alt CM");
+        let sketch = CountMinSketch::<Vector2D<i32>, FastPath, AltHasher>::with_dimensions(3, 8);
+        let bytes = sketch.to_asapv1().expect("serialize alt CM");
         let (_, descriptor, state) = envelope::split(&bytes).expect("split alt CM");
         SketchState {
             kind_id: CM_KIND.to_vec(),
@@ -370,7 +376,7 @@ pub(crate) mod tests {
     }
 
     /// The triple a variant contributes, with the nested kind_id replaced.
-    pub(crate) fn relabelled(sketch: &EHSketchList, kind_id: &[u8]) -> SketchState {
+    pub(crate) fn relabelled(sketch: &EhBucketSketch, kind_id: &[u8]) -> SketchState {
         let mut triple = sketch_state(sketch).expect("state");
         triple.kind_id = kind_id.to_vec();
         triple
@@ -385,15 +391,16 @@ pub(crate) mod tests {
 
     #[test]
     fn eh_sketch_list_round_trip_serialization() {
-        let mut sketch =
-            EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
+        let mut sketch = EhBucketSketch::CountMinSketch(
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
+        );
         sketch.update(&DataInput::U64(42));
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize EHSketchList");
+        let encoded = sketch.to_asapv1().expect("serialize EHSketchList");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x14, 0x00]); // kind_id_len=2, kind_id=[0x14,0x00]
 
-        let decoded = EHSketchList::deserialize_from_bytes(&encoded).expect("deserialize");
+        let decoded = EhBucketSketch::from_asapv1(&encoded).expect("deserialize");
         assert_eq!(decoded.sketch_type(), "CountMin");
         assert_eq!(
             decoded.query(&DataInput::U64(42)),
@@ -407,12 +414,12 @@ pub(crate) mod tests {
     fn eh_sketch_list_every_variant_round_trips() {
         for sketch in populated_variants() {
             let encoded = sketch
-                .serialize_to_bytes()
+                .to_asapv1()
                 .unwrap_or_else(|e| panic!("serialize {}: {e}", sketch.sketch_type()));
-            let decoded = EHSketchList::deserialize_from_bytes(&encoded)
+            let decoded = EhBucketSketch::from_asapv1(&encoded)
                 .unwrap_or_else(|e| panic!("deserialize {}: {e}", sketch.sketch_type()));
             assert_eq!(decoded.sketch_type(), sketch.sketch_type());
-            let again = decoded.serialize_to_bytes().expect("re-serialize");
+            let again = decoded.to_asapv1().expect("re-serialize");
             assert_eq!(
                 encoded,
                 again,
@@ -463,7 +470,7 @@ pub(crate) mod tests {
             descriptor: Vec::new(),
             state: Vec::new(),
         };
-        let message = EHSketchList::deserialize_from_bytes(&envelope_for(&triple))
+        let message = EhBucketSketch::from_asapv1(&envelope_for(&triple))
             .expect_err("an empty variant state must not decode")
             .to_string();
         assert!(!message.is_empty());
@@ -476,9 +483,11 @@ pub(crate) mod tests {
 
     #[test]
     fn eh_sketch_list_rejects_an_unknown_kind_id() {
-        let sketch = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
+        let sketch = EhBucketSketch::CountMinSketch(
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
+        );
         let triple = relabelled(&sketch, &[0xff, 0xff]);
-        let message = EHSketchList::deserialize_from_bytes(&envelope_for(&triple))
+        let message = EhBucketSketch::from_asapv1(&envelope_for(&triple))
             .expect_err("an unknown kind_id must not decode")
             .to_string();
         assert!(message.contains("not a wire variant"), "{message}");
@@ -494,7 +503,7 @@ pub(crate) mod tests {
                 descriptor: Vec::new(),
                 state: Vec::new(),
             };
-            let message = EHSketchList::deserialize_from_bytes(&envelope_for(&triple))
+            let message = EhBucketSketch::from_asapv1(&envelope_for(&triple))
                 .expect_err("an over-long kind_id must not decode")
                 .to_string();
             assert!(message.contains("not a wire variant"), "{message}");
@@ -505,43 +514,45 @@ pub(crate) mod tests {
     /// is compact, so their siblings' ids are unknown here.
     #[test]
     fn eh_sketch_list_rejects_sibling_algorithm_kind_ids() {
-        let hll = EHSketchList::HLL(HyperLogLog::<ErtlMLE>::default());
+        let hll = EhBucketSketch::Hll(HyperLogLog::<Ertl>::default());
         for sibling in [[0x01u8, 0x01], [0x01, 0x03]] {
             let triple = relabelled(&hll, &sibling);
             assert!(
-                EHSketchList::deserialize_from_bytes(&envelope_for(&triple)).is_err(),
+                EhBucketSketch::from_asapv1(&envelope_for(&triple)).is_err(),
                 "{sibling:02x?} must not decode as the HLL arm"
             );
         }
-        let kll = EHSketchList::KLL(KLL::init_kll(200));
+        let kll = EhBucketSketch::Kll(Kll::with_k(200));
         let triple = relabelled(&kll, &[0x06, 0x01]);
-        assert!(EHSketchList::deserialize_from_bytes(&envelope_for(&triple)).is_err());
+        assert!(EhBucketSketch::from_asapv1(&envelope_for(&triple)).is_err());
     }
 
     /// A kind_id that does not match the blocks it carries is rejected by the
     /// variant's own decoder.
     #[test]
     fn eh_sketch_list_rejects_a_mismatched_kind_id_and_descriptor() {
-        let sketch = EHSketchList::HLL(HyperLogLog::<ErtlMLE>::default());
+        let sketch = EhBucketSketch::Hll(HyperLogLog::<Ertl>::default());
         let triple = relabelled(&sketch, CM_KIND);
-        assert!(EHSketchList::deserialize_from_bytes(&envelope_for(&triple)).is_err());
+        assert!(EhBucketSketch::from_asapv1(&envelope_for(&triple)).is_err());
     }
 
     /// A Count-Min envelope and an ExponentialHistogram envelope are not
-    /// EHSketchList envelopes.
+    /// EhBucketSketch envelopes.
     #[test]
     fn eh_sketch_list_rejects_foreign_kind_ids() {
-        let cms = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8);
-        let cms_bytes = cms.serialize_to_bytes().expect("serialize CMS");
-        assert!(EHSketchList::deserialize_from_bytes(&cms_bytes).is_err());
+        let cms = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8);
+        let cms_bytes = cms.to_asapv1().expect("serialize CMS");
+        assert!(EhBucketSketch::from_asapv1(&cms_bytes).is_err());
 
         let eh = crate::ExponentialHistogram::new(
             2,
             100,
-            EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8)),
+            EhBucketSketch::CountMinSketch(
+                CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
+            ),
         );
-        let eh_bytes = eh.serialize_to_bytes().expect("serialize EH");
-        assert!(EHSketchList::deserialize_from_bytes(&eh_bytes).is_err());
+        let eh_bytes = eh.to_asapv1().expect("serialize EH");
+        assert!(EhBucketSketch::from_asapv1(&eh_bytes).is_err());
     }
 
     /// Fail closed on an unexpected metadata key.
@@ -572,7 +583,9 @@ pub(crate) mod tests {
     /// Crafted blocks fail closed with an error, never a panic.
     #[test]
     fn eh_sketch_list_rejects_crafted_blocks() {
-        let sketch = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
+        let sketch = EhBucketSketch::CountMinSketch(
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
+        );
         let good = sketch_state(&sketch).expect("state");
 
         let truncated = SketchState {
@@ -580,14 +593,14 @@ pub(crate) mod tests {
             descriptor: good.descriptor[..good.descriptor.len() / 2].to_vec(),
             state: good.state.clone(),
         };
-        assert!(EHSketchList::deserialize_from_bytes(&envelope_for(&truncated)).is_err());
+        assert!(EhBucketSketch::from_asapv1(&envelope_for(&truncated)).is_err());
 
         let garbage = SketchState {
             kind_id: CM_KIND.to_vec(),
             descriptor: good.descriptor.clone(),
             state: vec![0xc1, 0xc1, 0xc1],
         };
-        assert!(EHSketchList::deserialize_from_bytes(&envelope_for(&garbage)).is_err());
+        assert!(EhBucketSketch::from_asapv1(&envelope_for(&garbage)).is_err());
     }
 
     /// A descriptor naming a custom hash profile is rejected: the variant's
@@ -595,7 +608,7 @@ pub(crate) mod tests {
     #[test]
     fn eh_sketch_list_rejects_a_custom_hash_profile_descriptor() {
         let triple = alt_profile_triple();
-        assert!(EHSketchList::deserialize_from_bytes(&envelope_for(&triple)).is_err());
+        assert!(EhBucketSketch::from_asapv1(&envelope_for(&triple)).is_err());
     }
 
     /// A decoded union answers a query the way the original did.
@@ -603,8 +616,8 @@ pub(crate) mod tests {
     fn eh_sketch_list_query_agrees_after_decode() {
         for sketch in populated_variants() {
             let key = sample_input(sketch.sketch_type());
-            let encoded = sketch.serialize_to_bytes().expect("serialize");
-            let decoded = EHSketchList::deserialize_from_bytes(&encoded).expect("deserialize");
+            let encoded = sketch.to_asapv1().expect("serialize");
+            let decoded = EhBucketSketch::from_asapv1(&encoded).expect("deserialize");
             assert_eq!(
                 sketch.query(&key).ok(),
                 decoded.query(&key).ok(),

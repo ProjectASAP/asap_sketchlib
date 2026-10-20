@@ -13,7 +13,7 @@ inserted, and says yes about a bounded fraction of keys that were not.
 - `BitMatrix` — the packed bit grid, a `MatrixStorage` in its own right
 
 This is the *partitioned* variant: the filter is `rows` slices of `cols` bits,
-one slice per hash function, which is the `rows x cols` shape `CountMin` probes.
+one slice per hash function, which is the `rows x cols` shape `CountMinSketch` probes.
 A membership query is the minimum across rows, which over single bits is their
 AND.
 
@@ -100,8 +100,8 @@ makes the filter shardable without loss. Mismatched dimensions assert.
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 These produce/consume the **ASAPv1** wire envelope (kind `0x17 0x00`) — see the
@@ -114,7 +114,7 @@ row-major plus the insert counter, with the word stride derived from `cols`.
 The wire covers the geometries `with_capacity` produces: at most
 `BLOOM_MAX_SLICES` slices, a power-of-two `cols`, and at most `BLOOM_MAX_BITS`
 bits. `with_dimensions` can build a non-power-of-two `cols` outside that subset,
-and both `serialize_to_bytes` and `deserialize_from_bytes` reject it, so the
+and both `to_asapv1` and `from_asapv1` reject it, so the
 format never emits bytes it would refuse to read back. Decode also rejects a
 word count that disagrees with the declared dimensions, and any bit set in a
 row's trailing padding past `cols` — unreachable by `contains`, but counted by

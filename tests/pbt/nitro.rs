@@ -10,10 +10,10 @@
 //! below rate 1.0 are the ones sampling does not disturb.
 
 use crate::support::grid;
-use asap_sketchlib::{Count, CountMin, DataInput, FastPath, NitroBatch, Vector2D};
+use asap_sketchlib::{Count, CountMinSketch, DataInput, FastPath, NitroBatch, Vector2D};
 use proptest::prelude::*;
 
-type CmTarget = CountMin<Vector2D<i32>, FastPath>;
+type CmTarget = CountMinSketch<Vector2D<i32>, FastPath>;
 type CsTarget = Count<Vector2D<i32>, FastPath>;
 
 fn cm_cells(sketch: &CmTarget) -> Vec<i32> {
@@ -147,8 +147,8 @@ proptest! {
         seed in any::<u64>(),
         data in stream(400),
     ) {
-        let mut left = NitroBatch::init_nitro_with_seed(rate, seed);
-        let mut right = NitroBatch::init_nitro_with_seed(rate, seed);
+        let mut left = NitroBatch::with_seed(rate, seed);
+        let mut right = NitroBatch::with_seed(rate, seed);
         left.update_batch(&data);
         right.update_batch(&data);
         prop_assert_eq!(
@@ -156,8 +156,8 @@ proptest! {
             "live path, rate {}, seed {}, {} arrivals", rate, seed, data.len()
         );
 
-        let mut left = NitroBatch::init_nitro_with_seed(rate, seed);
-        let mut right = NitroBatch::init_nitro_with_seed(rate, seed);
+        let mut left = NitroBatch::with_seed(rate, seed);
+        let mut right = NitroBatch::with_seed(rate, seed);
         left.update_batch_cached_step(&data);
         right.update_batch_cached_step(&data);
         prop_assert_eq!(
@@ -232,7 +232,7 @@ proptest! {
         data in long_stream(),
     ) {
         let reciprocal = 1u64 << shift;
-        let mut nitro = NitroBatch::init_nitro_with_seed(1.0 / reciprocal as f64, seed);
+        let mut nitro = NitroBatch::with_seed(1.0 / reciprocal as f64, seed);
         nitro.update_batch(&data);
 
         let target = nitro.target();
@@ -279,13 +279,13 @@ proptest! {
         let reciprocal = 1u64 << shift;
         let rate = 1.0 / reciprocal as f64;
 
-        let mut probed = NitroBatch::init_nitro_with_seed(rate, seed);
+        let mut probed = NitroBatch::with_seed(rate, seed);
         for _ in 0..probes {
             probed.admitted_weight(1);
         }
         probed.update_batch(&data);
 
-        let mut untouched = NitroBatch::init_nitro_with_seed(rate, seed);
+        let mut untouched = NitroBatch::with_seed(rate, seed);
         untouched.update_batch(&data);
 
         prop_assert_eq!(

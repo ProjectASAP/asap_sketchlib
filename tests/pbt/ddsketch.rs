@@ -6,16 +6,16 @@
 //! within a relative alpha of the exact order statistic of the stream.
 
 use crate::support::{QUANTILES, extreme_values};
-use asap_sketchlib::DDSketch;
+use asap_sketchlib::DdSketch;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch;
+use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDdSketch;
 use proptest::prelude::*;
 
 const QUANTILE_PROBES: [f64; 7] = [0.0, 0.01, 0.25, 0.5, 0.75, 0.99, 1.0];
 
 /// First dense allocation, in buckets, and the slot the seeding value lands in.
 /// The Go producer's `Buckets.ensure` seeds a chunk this wide centred on the
-/// first index, and the `store_counts` / `store_offset` bytes are compared
+/// first index, and the `positive_store_counts` / `positive_store_offset` bytes are compared
 /// across the two languages.
 const GROW_CHUNK: usize = 128;
 const GROW_CHUNK_CENTRE: usize = GROW_CHUNK / 2;
@@ -67,16 +67,16 @@ fn maybe_signed_values(max: usize) -> impl Strategy<Value = Vec<f64>> {
     prop_oneof![1 => Just(Vec::new()), 9 => signed_values(max)]
 }
 
-fn dd_of(alpha: f64, values: &[f64]) -> DDSketch {
-    let mut s = DDSketch::new(alpha);
+fn dd_of(alpha: f64, values: &[f64]) -> DdSketch {
+    let mut s = DdSketch::new(alpha);
     for v in values {
         s.add(v);
     }
     s
 }
 
-fn portable_of(alpha: f64, values: &[f64]) -> DdSketch {
-    let mut s = DdSketch::new(alpha);
+fn portable_of(alpha: f64, values: &[f64]) -> PortableDdSketch {
+    let mut s = PortableDdSketch::new(alpha);
     for v in values {
         s.update(*v);
     }
@@ -90,7 +90,7 @@ fn sorted(values: &[f64]) -> Vec<f64> {
 }
 
 /// Rank of the q-quantile in the paper's convention, which is the one
-/// `DDSketch::get_value_at_quantile` answers: the ceil(q*n)-th smallest.
+/// `DdSketch::get_value_at_quantile` answers: the ceil(q*n)-th smallest.
 fn ceil_rank(q: f64, n: usize) -> usize {
     ((q * n as f64).ceil() as usize).max(1)
 }
@@ -118,7 +118,7 @@ proptest! {
         );
         prop_assert_eq!(sketch.zero_count(), zeros, "zero bucket");
         prop_assert_eq!(
-            sketch.store_counts().iter().sum::<u64>(), positives,
+            sketch.positive_store_counts().iter().sum::<u64>(), positives,
             "positive store holds the wrong number of the {} positives", positives
         );
         prop_assert_eq!(sketch.get_count(), values.len() as u64, "total count");
@@ -161,7 +161,7 @@ proptest! {
 
     /// The first dense allocation is one `GROW_CHUNK` centred on the value's
     /// bucket, in both implementations and in both signed stores. The layout
-    /// reaches the wire as `store_counts` / `store_offset`, where the Go
+    /// reaches the wire as `positive_store_counts` / `positive_store_offset`, where the Go
     /// producer's bytes have to match it for the same input.
     #[test]
     fn ddsketch_seeds_its_dense_store_as_one_centered_grow_chunk(
@@ -172,7 +172,7 @@ proptest! {
         let portable = portable_of(alpha, &[value, -value]);
 
         for (label, counts) in [
-            ("native positive", native.store_counts()),
+            ("native positive", native.positive_store_counts()),
             ("native negative", native.negative_store_counts()),
             ("portable positive", portable.store_counts.as_slice()),
             ("portable negative", portable.negative_store_counts.as_slice()),
@@ -381,7 +381,7 @@ proptest! {
         let s = portable_of(alpha, &values);
 
         let bytes = s.to_msgpack().expect("encode");
-        let restored = DdSketch::from_msgpack(&bytes).expect("decode");
+        let restored = PortableDdSketch::from_msgpack(&bytes).expect("decode");
 
         prop_assert_eq!(restored.total_count(), s.total_count());
         prop_assert_eq!(&restored.store_counts, &s.store_counts);
@@ -401,18 +401,18 @@ proptest! {
         ],
         values in extreme_values(200),
     ) {
-        let mut sketch = DDSketch::new(alpha);
+        let mut sketch = DdSketch::new(alpha);
         for v in &values {
             sketch.add(v);
         }
 
         round_trip!(
-            DDSketch,
+            DdSketch,
             sketch,
-            |s: &DDSketch| s.get_count(),
-            |s: &DDSketch| s.alpha().to_bits(),
-            |s: &DDSketch| s.sum().to_bits(),
-            |s: &DDSketch| QUANTILES.iter()
+            |s: &DdSketch| s.get_count(),
+            |s: &DdSketch| s.alpha().to_bits(),
+            |s: &DdSketch| s.sum().to_bits(),
+            |s: &DdSketch| QUANTILES.iter()
                 .map(|q| s.get_value_at_quantile(*q).map(f64::to_bits))
                 .collect::<Vec<_>>(),
         );

@@ -31,12 +31,12 @@ fn config(ordered_samples: usize) -> UnivMonQConfig {
     UnivMonQConfig {
         levels: 4,
         width: 32,
-        width_halving_period: 0,
+        cols_halving_period: 0,
         depth: 3,
         counter_bits: 32,
         candidates: 8,
         ordered_samples,
-        hash_seed: 5,
+        seed_index: 5,
     }
 }
 
@@ -56,7 +56,7 @@ fn shapes() -> impl Strategy<Value = UnivMonQConfig> {
             |(
                 levels,
                 width,
-                width_halving_period,
+                cols_halving_period,
                 depth,
                 counter_bits,
                 candidates,
@@ -65,12 +65,12 @@ fn shapes() -> impl Strategy<Value = UnivMonQConfig> {
                 UnivMonQConfig {
                     levels,
                     width,
-                    width_halving_period,
+                    cols_halving_period,
                     depth,
                     counter_bits,
                     candidates,
                     ordered_samples,
-                    hash_seed: 5,
+                    seed_index: 5,
                 }
             },
         )

@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
-use crate::sketches::countminsketch::CountMin;
+use crate::sketches::countminsketch::CountMinSketch as NativeCountMinSketch;
 use crate::{DataInput, FastPath, Vector2D};
 
 // =====================================================================
@@ -26,7 +26,7 @@ use crate::{DataInput, FastPath, Vector2D};
 /// integer rounding, and the `FastPath` packed-hash strategy so the
 /// matrix-cell layout is byte-parity with `sketchlib-go`. Locked in by
 /// `tests/sketches_go_parity_probe.rs`.
-pub type SketchlibCms = CountMin<Vector2D<f64>, FastPath>;
+pub type SketchlibCms = NativeCountMinSketch<Vector2D<f64>, FastPath>;
 
 /// Creates a fresh sketchlib Count-Min sketch with the given dimensions.
 pub fn new_sketchlib_cms(row_num: usize, col_num: usize) -> SketchlibCms {

@@ -1,8 +1,8 @@
 //! ASAPv1 wire serialization for [`UnivMonQ`].
 //!
 //! Child submodule of [`crate::sketch_framework::univmon_q`]: it holds the
-//! metadata/payload DTOs, the kind_id constant and the `serialize_to_bytes` /
-//! `deserialize_from_bytes` impls, while the algorithm lives in the parent
+//! metadata/payload DTOs, the kind_id constant and the `to_asapv1` /
+//! `from_asapv1` impls, while the algorithm lives in the parent
 //! module file. Being a descendant module, it reads the private `levels`,
 //! `count`, `min`, `max`, `source_id`, `next_sequence` and `ordered_heap`
 //! fields directly without widening any field visibility. See
@@ -70,7 +70,7 @@ pub(crate) struct UnivMonQMetadata {
 
 /// Builds the UnivMon-Q descriptor metadata from the hasher's [`HashProfile`],
 /// so the wire bytes truthfully describe how the sketch was hashed.
-/// `seed_index` is the config's own `hash_seed`, a construction parameter
+/// `seed_index` is the config's own `seed_index`, a construction parameter
 /// rather than a profile constant, so it is carried as a structural param.
 pub(crate) fn univmon_q_metadata<H: HashProfile>(
     config: UnivMonQConfig,
@@ -87,10 +87,10 @@ pub(crate) fn univmon_q_metadata<H: HashProfile>(
         seed_derivation: H::SEED_DERIVATION.to_string(),
         input_encoding: H::INPUT_ENCODING.to_string(),
         seed_list: H::seed_list(),
-        seed_index: field("hash_seed", config.hash_seed)?,
+        seed_index: field("hash_seed", config.seed_index)?,
         layers: field("layers", config.levels)?,
         top_layer_cols: field("top_layer_cols", config.width)?,
-        cols_halving_period: config.width_halving_period,
+        cols_halving_period: config.cols_halving_period,
         rows: field("rows", config.depth)?,
         counter_type: counter_type.to_string(),
         heap_size: field("heap_size", config.candidates)?,
@@ -103,12 +103,12 @@ fn config_of(meta: &UnivMonQMetadata) -> Result<UnivMonQConfig, RmpDecodeError> 
     Ok(UnivMonQConfig {
         levels: meta.layers as usize,
         width: meta.top_layer_cols as usize,
-        width_halving_period: meta.cols_halving_period,
+        cols_halving_period: meta.cols_halving_period,
         depth: meta.rows as usize,
         counter_bits: counter_bits_of(&meta.counter_type)?,
         candidates: meta.heap_size as usize,
         ordered_samples: meta.ordered_samples as usize,
-        hash_seed: meta.seed_index as usize,
+        seed_index: meta.seed_index as usize,
     })
 }
 
@@ -334,7 +334,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
     /// does not match the config's layout, a candidate table over capacity, an
     /// ordered sample over capacity, or a `count`/`min`/`max` triple that
     /// cannot have arisen.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let syntax = |problem: String| RmpEncodeError::Syntax(problem);
         let counter_type = counter_type_of(self.config.counter_bits).map_err(syntax)?;
         let metadata = rmp_serde::to_vec_named(
@@ -467,7 +467,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
     /// error rather than a panic, and no declared capacity — `candidates`,
     /// `ordered_samples` or a level width — sizes an allocation before the
     /// payload is measured against it.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != UNIVMON_Q_KIND {
@@ -572,24 +572,27 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, HeapItem, RegularPath, Vector2D};
+    use crate::{
+        DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, OwnedDataInput, RegularPath,
+        Vector2D,
+    };
     use rmp_serde::from_slice;
 
     fn tiny_config() -> UnivMonQConfig {
         UnivMonQConfig {
             levels: 4,
             width: 64,
-            width_halving_period: 0,
+            cols_halving_period: 0,
             depth: 3,
             counter_bits: 64,
             candidates: 16,
             ordered_samples: 16,
-            hash_seed: 5,
+            seed_index: 5,
         }
     }
 
     fn populated() -> UnivMonQ<DefaultXxHasher> {
-        let mut sketch = UnivMonQ::new_with_source_id(tiny_config(), 7).expect("config");
+        let mut sketch = UnivMonQ::with_source_id(tiny_config(), 7).expect("config");
         for value in (0..200).map(|value| (value % 23) as f64) {
             sketch.update(&value);
         }
@@ -622,7 +625,7 @@ mod tests {
     #[test]
     fn univmon_q_round_trip_serialization() {
         let sketch = populated();
-        let encoded = sketch.serialize_to_bytes().expect("serialize UnivMon-Q");
+        let encoded = sketch.to_asapv1().expect("serialize UnivMon-Q");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x1a, 0x00]); // kind_id_len=2, kind_id=[0x1a,0x00]
 
@@ -632,8 +635,8 @@ mod tests {
         assert_eq!(meta.counter_type, "i64");
         assert_eq!(meta.seed_index, 5);
 
-        let decoded = UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&encoded)
-            .expect("deserialize UnivMon-Q");
+        let decoded =
+            UnivMonQ::<DefaultXxHasher>::from_asapv1(&encoded).expect("deserialize UnivMon-Q");
         assert_eq!(decoded.config(), sketch.config());
         assert_eq!(decoded.source_id(), sketch.source_id());
         assert_eq!(decoded.count(), sketch.count());
@@ -642,7 +645,7 @@ mod tests {
         assert_eq!(decoded.cdf(), sketch.cdf());
         assert_eq!(decoded.estimate_f2(), sketch.estimate_f2());
         assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
+            decoded.to_asapv1().expect("re-serialize"),
             encoded,
             "a decoded sketch re-serialized to different bytes"
         );
@@ -652,13 +655,12 @@ mod tests {
     /// updates agrees with the original fed those updates.
     #[test]
     fn univmon_q_ordering_state_continues_after_a_round_trip() {
-        let mut original = UnivMonQ::new_with_source_id(tiny_config(), 991).expect("config");
+        let mut original = UnivMonQ::with_source_id(tiny_config(), 991).expect("config");
         for value in (0..300).map(|value| (value % 37) as f64) {
             original.update(&value);
         }
-        let encoded = original.serialize_to_bytes().expect("serialize");
-        let mut resumed =
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&encoded).expect("decode");
+        let encoded = original.to_asapv1().expect("serialize");
+        let mut resumed = UnivMonQ::<DefaultXxHasher>::from_asapv1(&encoded).expect("decode");
 
         for value in (300..700).map(|value| (value % 53) as f64) {
             original.update(&value);
@@ -672,8 +674,8 @@ mod tests {
         );
         assert_eq!(resumed.cdf(), original.cdf());
         assert_eq!(
-            resumed.serialize_to_bytes().expect("serialize"),
-            original.serialize_to_bytes().expect("serialize")
+            resumed.to_asapv1().expect("serialize"),
+            original.to_asapv1().expect("serialize")
         );
     }
 
@@ -682,25 +684,23 @@ mod tests {
     /// deliberately not the same bytes as a fresh one.
     #[test]
     fn univmon_q_empty_has_one_encoding() {
-        let left = UnivMonQ::<DefaultXxHasher>::new_with_source_id(tiny_config(), 3).expect("left");
-        let right =
-            UnivMonQ::<DefaultXxHasher>::new_with_source_id(tiny_config(), 3).expect("right");
+        let left = UnivMonQ::<DefaultXxHasher>::with_source_id(tiny_config(), 3).expect("left");
+        let right = UnivMonQ::<DefaultXxHasher>::with_source_id(tiny_config(), 3).expect("right");
         let mut cleared =
-            UnivMonQ::<DefaultXxHasher>::new_with_source_id(tiny_config(), 3).expect("cleared");
+            UnivMonQ::<DefaultXxHasher>::with_source_id(tiny_config(), 3).expect("cleared");
         cleared.update(&5.0);
         cleared.clear();
 
-        let encoded = left.serialize_to_bytes().expect("serialize");
-        assert_eq!(right.serialize_to_bytes().expect("serialize"), encoded);
-        assert_ne!(cleared.serialize_to_bytes().expect("serialize"), encoded);
+        let encoded = left.to_asapv1().expect("serialize");
+        assert_eq!(right.to_asapv1().expect("serialize"), encoded);
+        assert_ne!(cleared.to_asapv1().expect("serialize"), encoded);
         let payload = payload_of(&encoded);
         assert_eq!(payload.count, 0);
         assert!(payload.min.is_none() && payload.max.is_none());
 
-        let decoded =
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&encoded).expect("decode");
+        let decoded = UnivMonQ::<DefaultXxHasher>::from_asapv1(&encoded).expect("decode");
         assert!(decoded.is_empty());
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), encoded);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
     }
 
     /// The counter width is pinned by `counter_type`: an i32 sketch and an i64
@@ -708,21 +708,20 @@ mod tests {
     #[test]
     fn univmon_q_counter_type_is_pinned() {
         let narrow_config = config_with(|config| config.counter_bits = 32);
-        let mut narrow = UnivMonQ::<DefaultXxHasher>::new_with_source_id(narrow_config, 7)
-            .expect("narrow config");
+        let mut narrow =
+            UnivMonQ::<DefaultXxHasher>::with_source_id(narrow_config, 7).expect("narrow config");
         let mut wide =
-            UnivMonQ::<DefaultXxHasher>::new_with_source_id(tiny_config(), 7).expect("wide config");
+            UnivMonQ::<DefaultXxHasher>::with_source_id(tiny_config(), 7).expect("wide config");
         for value in (0..50).map(|value| value as f64) {
             narrow.update(&value);
             wide.update(&value);
         }
 
-        let narrow_bytes = narrow.serialize_to_bytes().expect("serialize i32");
+        let narrow_bytes = narrow.to_asapv1().expect("serialize i32");
         assert_eq!(metadata_of(&narrow_bytes).counter_type, "i32");
-        let decoded =
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&narrow_bytes).expect("decode i32");
+        let decoded = UnivMonQ::<DefaultXxHasher>::from_asapv1(&narrow_bytes).expect("decode i32");
         assert_eq!(decoded.estimate_f2(), narrow.estimate_f2());
-        assert_ne!(narrow_bytes, wide.serialize_to_bytes().expect("serialize"));
+        assert_ne!(narrow_bytes, wide.to_asapv1().expect("serialize"));
 
         let mut relabelled = metadata_of(&narrow_bytes);
         relabelled.counter_type = "f64".to_string();
@@ -733,7 +732,7 @@ mod tests {
             payload,
         );
         assert!(
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&forged).is_err(),
+            UnivMonQ::<DefaultXxHasher>::from_asapv1(&forged).is_err(),
             "f64 is not a UnivMon-Q wire counter type"
         );
     }
@@ -752,19 +751,19 @@ mod tests {
         fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
             DefaultXxHasher::hash128_seeded(d, key)
         }
-        fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(d: usize, key: &OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(d, key)
         }
-        fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(d: usize, key: &OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(d, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -776,7 +775,7 @@ mod tests {
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
@@ -786,24 +785,23 @@ mod tests {
         let mut alt =
             UnivMonQ::<AltHasher>::with_hasher_and_source_id(tiny_config(), 7).expect("alt config");
         let mut std =
-            UnivMonQ::<DefaultXxHasher>::new_with_source_id(tiny_config(), 7).expect("std config");
+            UnivMonQ::<DefaultXxHasher>::with_source_id(tiny_config(), 7).expect("std config");
         for value in (0..100).map(|value| (value % 13) as f64) {
             alt.update(&value);
             std.update(&value);
         }
 
-        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
-        let decoded =
-            UnivMonQ::<AltHasher>::deserialize_from_bytes(&alt_bytes).expect("alt decode");
+        let alt_bytes = alt.to_asapv1().expect("alt serialize");
+        let decoded = UnivMonQ::<AltHasher>::from_asapv1(&alt_bytes).expect("alt decode");
         assert_eq!(decoded.estimate_f2(), alt.estimate_f2());
 
         // (b) Bytes differ from the standard-profile sketch.
-        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        let std_bytes = std.to_asapv1().expect("std serialize");
         assert_ne!(alt_bytes, std_bytes);
 
         // (c) Standard-profile decode fails closed on custom-profile bytes.
         assert!(
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&alt_bytes).is_err(),
+            UnivMonQ::<DefaultXxHasher>::from_asapv1(&alt_bytes).is_err(),
             "standard-profile decode must reject custom-profile bytes"
         );
     }
@@ -813,22 +811,22 @@ mod tests {
     #[test]
     fn univmon_q_rejects_foreign_kind_ids() {
         let count_sketch = crate::Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect("serialize Count Sketch");
         let count_l2hh =
-            crate::sketches::countsketch_topk::CountL2HH::<DefaultXxHasher>::with_dimensions(2, 8)
-                .serialize_to_bytes()
+            crate::sketches::countsketch_heap::CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(2, 8)
+                .to_asapv1()
                 .expect("serialize CountL2HH");
-        let univmon = crate::UnivMon::init_univmon(4, 2, 8, 2)
-            .serialize_to_bytes()
+        let univmon = crate::UnivMon::new(4, 2, 8, 2)
+            .to_asapv1()
             .expect("serialize UnivMon");
-        let pyramid = crate::UnivMonPyramid::new(4, 1, 2, 8, 2, 4, 2)
-            .serialize_to_bytes()
+        let pyramid = crate::UnivMonTwoTier::new(4, 1, 2, 8, 2, 4, 2)
+            .to_asapv1()
             .expect("serialize UnivMonPyramid");
 
         for foreign in [count_sketch, count_l2hh, univmon, pyramid] {
             assert!(
-                UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&foreign).is_err(),
+                UnivMonQ::<DefaultXxHasher>::from_asapv1(&foreign).is_err(),
                 "a foreign envelope must not decode as a UnivMon-Q"
             );
         }
@@ -839,7 +837,7 @@ mod tests {
     /// check precedes an allocation.
     #[test]
     fn univmon_q_rejects_crafted_shapes() {
-        let encoded = populated().serialize_to_bytes().expect("serialize");
+        let encoded = populated().to_asapv1().expect("serialize");
         let base = metadata_of(&encoded);
         let payload = payload_of(&encoded);
 
@@ -853,52 +851,39 @@ mod tests {
             shaped(config_with(|config| config.depth = 4)),
             shaped(config_with(|config| config.candidates = 0)),
             shaped(config_with(|config| config.ordered_samples = 0)),
-            shaped(config_with(|config| config.hash_seed = 6)),
+            shaped(config_with(|config| config.seed_index = 6)),
         ];
         for meta in cases {
             assert!(
-                UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&crafted(&meta, &payload))
-                    .is_err(),
+                UnivMonQ::<DefaultXxHasher>::from_asapv1(&crafted(&meta, &payload)).is_err(),
                 "a crafted shape must be rejected, not decoded"
             );
         }
 
         let mut short = payload_of(&encoded);
         short.candidate_scores.pop();
-        assert!(
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&crafted(&base, &short)).is_err()
-        );
+        assert!(UnivMonQ::<DefaultXxHasher>::from_asapv1(&crafted(&base, &short)).is_err());
 
         let mut flags = payload_of(&encoded);
         flags.ever_evicted.pop();
-        assert!(
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&crafted(&base, &flags)).is_err()
-        );
+        assert!(UnivMonQ::<DefaultXxHasher>::from_asapv1(&crafted(&base, &flags)).is_err());
 
         let mut extrema = payload_of(&encoded);
         extrema.min = None;
-        assert!(
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&crafted(&base, &extrema)).is_err()
-        );
+        assert!(UnivMonQ::<DefaultXxHasher>::from_asapv1(&crafted(&base, &extrema)).is_err());
 
         let mut swapped = payload_of(&encoded);
         std::mem::swap(&mut swapped.min, &mut swapped.max);
-        assert!(
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&crafted(&base, &swapped)).is_err()
-        );
+        assert!(UnivMonQ::<DefaultXxHasher>::from_asapv1(&crafted(&base, &swapped)).is_err());
 
         let mut truncated = payload_of(&encoded);
         truncated.occurrence_keys.pop();
-        assert!(
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&crafted(&base, &truncated))
-                .is_err()
-        );
+        assert!(UnivMonQ::<DefaultXxHasher>::from_asapv1(&crafted(&base, &truncated)).is_err());
 
         let mut misplaced = payload_of(&encoded);
         misplaced.candidate_keys.reverse();
         assert!(
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&crafted(&base, &misplaced))
-                .is_err(),
+            UnivMonQ::<DefaultXxHasher>::from_asapv1(&crafted(&base, &misplaced)).is_err(),
             "a candidate must live in the level its own key hashes into"
         );
     }
@@ -907,10 +892,10 @@ mod tests {
     /// ascending; a swapped pair or a repeat is rejected.
     #[test]
     fn univmon_q_rejects_entries_out_of_emitted_order() {
-        let encoded = populated().serialize_to_bytes().expect("serialize");
+        let encoded = populated().to_asapv1().expect("serialize");
         let base = metadata_of(&encoded);
         let decode = |payload: &UnivMonQPayload<i64>| {
-            UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&crafted(&base, payload))
+            UnivMonQ::<DefaultXxHasher>::from_asapv1(&crafted(&base, payload))
         };
         assert!(decode(&payload_of(&encoded)).is_ok());
 
@@ -963,21 +948,21 @@ mod tests {
         let mut wrong_layout = populated();
         wrong_layout.levels[1].sketch = PackedCountSketch::new(8, 3, 64);
         assert!(
-            wrong_layout.serialize_to_bytes().is_err(),
+            wrong_layout.to_asapv1().is_err(),
             "a level whose CountSketch is not the config's size must not serialize"
         );
 
         let mut wrong_extrema = populated();
         wrong_extrema.min = None;
         assert!(
-            wrong_extrema.serialize_to_bytes().is_err(),
+            wrong_extrema.to_asapv1().is_err(),
             "a count/min/max triple the algorithm cannot reach must not serialize"
         );
 
         let mut over_capacity = populated();
         over_capacity.config.candidates = 1;
         assert!(
-            over_capacity.serialize_to_bytes().is_err(),
+            over_capacity.to_asapv1().is_err(),
             "a candidate table over its capacity must not serialize"
         );
     }

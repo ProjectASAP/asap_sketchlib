@@ -1,4 +1,4 @@
-//! Property tests for `FoldCMS` and `FoldCS`.
+//! Property tests for `CountMinSketchFold` and `CountSketchFold`.
 //!
 //! The family's claim is an exact equality: folding introduces no additional
 //! approximation error, so a query must not depend on the fold level.
@@ -18,7 +18,7 @@
 //! Farach-Colton, ICALP '02.
 
 use crate::support::grid;
-use asap_sketchlib::{DataInput, FoldCMS, FoldCS, FoldCell};
+use asap_sketchlib::{CountMinSketchFold, CountSketchFold, DataInput, FoldCell};
 use proptest::prelude::*;
 use std::collections::HashMap;
 
@@ -80,16 +80,16 @@ fn truth_of(stream: &[(u64, i64)]) -> HashMap<u64, i64> {
     counts
 }
 
-fn cms_of(rows: usize, full_cols: usize, level: u32, stream: &[(u64, i64)]) -> FoldCMS {
-    let mut sketch = FoldCMS::new(rows, full_cols, level, TOP_K);
+fn cms_of(rows: usize, full_cols: usize, level: u32, stream: &[(u64, i64)]) -> CountMinSketchFold {
+    let mut sketch = CountMinSketchFold::new(rows, full_cols, level, TOP_K);
     for (key, delta) in stream {
         sketch.update_weighted(&DataInput::U64(*key), *delta);
     }
     sketch
 }
 
-fn cs_of(rows: usize, full_cols: usize, level: u32, stream: &[(u64, i64)]) -> FoldCS {
-    let mut sketch = FoldCS::new(rows, full_cols, level, TOP_K);
+fn cs_of(rows: usize, full_cols: usize, level: u32, stream: &[(u64, i64)]) -> CountSketchFold {
+    let mut sketch = CountSketchFold::new(rows, full_cols, level, TOP_K);
     for (key, delta) in stream {
         sketch.update_weighted(&DataInput::U64(*key), *delta);
     }
@@ -104,13 +104,13 @@ fn cell_entries(cell: &FoldCell) -> Vec<(u16, i64)> {
     entries
 }
 
-fn cms_cells(sketch: &FoldCMS) -> Vec<Vec<(u16, i64)>> {
+fn cms_cells(sketch: &CountMinSketchFold) -> Vec<Vec<(u16, i64)>> {
     grid(sketch.rows(), sketch.fold_cols(), |r, c| {
         cell_entries(sketch.cell(r, c))
     })
 }
 
-fn cs_cells(sketch: &FoldCS) -> Vec<Vec<(u16, i64)>> {
+fn cs_cells(sketch: &CountSketchFold) -> Vec<Vec<(u16, i64)>> {
     grid(sketch.rows(), sketch.fold_cols(), |r, c| {
         cell_entries(sketch.cell(r, c))
     })
@@ -366,8 +366,8 @@ macro_rules! fold_laws {
     };
 }
 
-fold_laws!(cms, FoldCMS, cms_of, cms_cells);
-fold_laws!(cs, FoldCS, cs_of, cs_cells);
+fold_laws!(cms, CountMinSketchFold, cms_of, cms_cells);
+fold_laws!(cs, CountSketchFold, cs_of, cs_cells);
 
 // ===== Count-Min: the counters and the minimum over them =====
 

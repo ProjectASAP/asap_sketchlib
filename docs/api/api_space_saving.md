@@ -64,8 +64,8 @@ fn estimate(&self, value: &DataInput) -> u64
 fn upper_bound(&self, value: &DataInput) -> u64
 fn error(&self, value: &DataInput) -> u64
 fn is_guaranteed(&self, value: &DataInput) -> bool
-fn top_k(&self, k: usize) -> Vec<(HeapItem, u64, u64)>
-fn entries(&self) -> Vec<(HeapItem, u64, u64)>
+fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, u64, u64)>
+fn entries(&self) -> Vec<(OwnedDataInput, u64, u64)>
 fn min_count(&self) -> u64
 fn total(&self) -> u64
 fn len(&self) -> usize
@@ -117,8 +117,8 @@ longer a frequency.
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 These produce/consume the **ASAPv1** wire envelope (kind `0x18 0x00`) — see the
@@ -134,7 +134,7 @@ index reaches the wire and no crafted state can point one out of bounds or into
 a loop. `capacity` and the key type are ASAPv1 metadata; the payload is
 `[keys, counts, errors, total, discarded_max]`.
 
-Keys are `HeapItem`s, so the key type is a runtime property: the metadata's
+Keys are `OwnedDataInput`s, so the key type is a runtime property: the metadata's
 `key_type` names the **exact** variant (`"i32"` stays `"i32"`, never widened to
 `"i64"`) and the payload's key array is homogeneous in it, because a decoded key
 of a different variant would stop matching the caller's `DataInput` and read

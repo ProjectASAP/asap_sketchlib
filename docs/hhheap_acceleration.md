@@ -1,6 +1,6 @@
-# HHHeap acceleration
+# TopKHeap acceleration
 
-`HHHeap` is the top-k structure behind `CMSHeap`, `CSHeap`, `FoldCMS`, `FoldCS`,
+`TopKHeap` is the top-k structure behind `CountMinSketchWithHeap`, `CountSketchWithHeap`, `CountMinSketchFold`, `CountSketchFold`,
 `UnivMon`, and the Octo aggregator. It sits on the insert path of every one of
 them, so its cost per update is theirs. This page describes what it does per
 update and what that measures at.
@@ -11,7 +11,7 @@ from an Apple M-series laptop, 200k updates drawn from a Zipf(1.1) stream over
 
 ## The structure
 
-A capacity-bounded min-heap of `HHItem`, and an index from key digest to heap
+A capacity-bounded min-heap of `HeapEntry`, and an index from key digest to heap
 position.
 
 - `positions: HashMap<u64, SmallVec<[usize; 2]>>` holds heap indices only.
@@ -25,7 +25,7 @@ position.
 
 `CommonHeap` reports movement through `push_back_with`, `replace_root_with` and
 `update_at_with`, each taking `&mut impl FnMut(usize, usize)` called once per
-swap the sift performs. `HHHeap` patches only the entries a sift touched;
+swap the sift performs. `TopKHeap` patches only the entries a sift touched;
 residents sharing a digest sit in the same bucket, so exchanging their two
 positions leaves that bucket unchanged and writes nothing.
 
@@ -36,7 +36,7 @@ first use.
 
 ## What it measures at
 
-`HHHeap::update`, string keys and `u64` keys:
+`TopKHeap::update`, string keys and `u64` keys:
 
 | capacity | string Mups/s | u64 Mups/s |
 | --- | --- | --- |
@@ -49,9 +49,9 @@ first use.
 The rate is flat in `k`, which is the property that matters: capacity is an
 accuracy parameter, not a throughput one.
 
-At the sketch level, against a bare `CountMin` at 210.1 Minsert/s:
+At the sketch level, against a bare `CountMinSketch` at 210.1 Minsert/s:
 
-| `CMSHeap` top_k | Minsert/s | share of time spent in the heap |
+| `CountMinSketchWithHeap` top_k | Minsert/s | share of time spent in the heap |
 | --- | --- | --- |
 | 8 | 31.2 | 85.1% |
 | 32 | 28.4 | 86.5% |
@@ -66,7 +66,7 @@ the sketch's four counter writes - but its share is flat in capacity.
 
 A `SpaceSaving` summary gives `O(1)` amortized updates, and this crate ships
 one. It is not a substitute here. Its `O(1)` rests on an arrival moving a
-counter to the *neighbouring* count bucket, while `HHHeap` takes its counts from
+counter to the *neighbouring* count bucket, while `TopKHeap` takes its counts from
 the sketch it is attached to, where an estimate can jump by any amount. The two
 also retain different keys: Space-Saving owns its counters and its eviction
 rule, so it answers a different question. See
@@ -74,7 +74,7 @@ rule, so it answers a different question. See
 
 ## Equivalence
 
-`HHHeap` is compared element for element against a reference that rebuilds the
+`TopKHeap` is compared element for element against a reference that rebuilds the
 whole index after every accepted update, at capacities 0 through 257, over 30k
 updates, on both key forms, and with counts that fall as well as rise - see
 `differential` in `src/common/heap.rs`. Which key is seated, which is evicted,
@@ -87,7 +87,7 @@ the structure carries no run-to-run state at all.
 
 ## Compatibility
 
-`HHHeap`'s serialized form is the heap and its capacity. The key index is
+`TopKHeap`'s serialized form is the heap and its capacity. The key index is
 derived rather than carried, and a decoded heap rebuilds it before first use.
 A named-map encoding that carries an index field still decodes, since the extra
 key is skipped; a positional encoding of the three-field form does not. Nothing

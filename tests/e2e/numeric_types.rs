@@ -1,5 +1,5 @@
 //! Every built-in `NumericalValue` type carried through the generic sketches:
-//! `KLL<T>`, `KLLDynamic<T>` and `DDSketch::add<T>`.
+//! `Kll<T>`, `KllDynamic<T>` and `DdSketch::add<T>`.
 //!
 //! The library implements `NumericalValue` for fourteen concrete types —
 //! `i8 i16 i32 i64 i128 isize`, `u8 u16 u32 u64 u128 usize`, `f32 f64` — and
@@ -27,7 +27,7 @@ use crate::common;
 use common::specs::{KllRankSpec, RelativeQuantileSpec, Tally};
 use common::{NumericTruth, uniform_u64};
 
-use asap_sketchlib::{DDSketch, KLL, KLLDynamic, NumericalValue};
+use asap_sketchlib::{DdSketch, Kll, KllDynamic, NumericalValue};
 
 /// KLL parameter used throughout; `eps(200) = 1.65%` at 99% confidence.
 const K: i32 = 200;
@@ -71,7 +71,7 @@ fn projected_truth<T: NumericalValue>(values: &[T]) -> NumericTruth {
 /// Each sketch is a **trial**: it gets its own compaction seed and is scored on
 /// its worst rank error over the whole `q` grid, because that maximum is the
 /// quantity the characterization's 1% is quoted for. Six trials per repeat per
-/// type — `KLL` and `KLLDynamic` x {single pass, two-shard merge, bulk}.
+/// type — `Kll` and `KllDynamic` x {single pass, two-shard merge, bulk}.
 macro_rules! kll_type_case {
     ($tally:ident, $trial:ident, $ty:ty, $span:expr) => {{
         let values = typed_stream!($ty, $span);
@@ -96,14 +96,14 @@ macro_rules! kll_type_case {
 
         for _ in 0..SKETCH_SEEDS.len() {
             trial!(("KLL", "single pass"), |seed| {
-                let mut s = KLL::<$ty>::init_kll_with_seed(K, seed);
+                let mut s = Kll::<$ty>::with_k_and_seed(K, seed);
                 for v in &values {
                     s.update(v);
                 }
                 s
             });
             trial!(("KLLDynamic", "single pass"), |seed| {
-                let mut s = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
+                let mut s = KllDynamic::<$ty>::with_k_and_seed(K, seed);
                 for v in &values {
                     s.update(v);
                 }
@@ -112,8 +112,8 @@ macro_rules! kll_type_case {
 
             // Two shards merged must answer under the same characterization.
             trial!(("KLL", "two-shard merge"), |seed: u64| {
-                let mut left = KLL::<$ty>::init_kll_with_seed(K, seed);
-                let mut right = KLL::<$ty>::init_kll_with_seed(K, seed ^ 0x5555);
+                let mut left = Kll::<$ty>::with_k_and_seed(K, seed);
+                let mut right = Kll::<$ty>::with_k_and_seed(K, seed ^ 0x5555);
                 for (i, v) in values.iter().enumerate() {
                     if i % 2 == 0 {
                         left.update(v);
@@ -125,8 +125,8 @@ macro_rules! kll_type_case {
                 left
             });
             trial!(("KLLDynamic", "two-shard merge"), |seed: u64| {
-                let mut left = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
-                let mut right = KLLDynamic::<$ty>::init_kll_with_seed(K, seed ^ 0x5555);
+                let mut left = KllDynamic::<$ty>::with_k_and_seed(K, seed);
+                let mut right = KllDynamic::<$ty>::with_k_and_seed(K, seed ^ 0x5555);
                 for (i, v) in values.iter().enumerate() {
                     if i % 2 == 0 {
                         left.update(v);
@@ -140,12 +140,12 @@ macro_rules! kll_type_case {
 
             // Bulk ingestion must be equivalent to the loop.
             trial!(("KLL", "bulk update"), |seed| {
-                let mut s = KLL::<$ty>::init_kll_with_seed(K, seed);
+                let mut s = Kll::<$ty>::with_k_and_seed(K, seed);
                 s.update_batch(&values);
                 s
             });
             trial!(("KLLDynamic", "bulk update"), |seed| {
-                let mut s = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
+                let mut s = KllDynamic::<$ty>::with_k_and_seed(K, seed);
                 s.update_batch(&values);
                 s
             });
@@ -153,7 +153,7 @@ macro_rules! kll_type_case {
     }};
 }
 
-/// Every built-in `NumericalValue` type through `KLL<T>` and `KLLDynamic<T>`.
+/// Every built-in `NumericalValue` type through `Kll<T>` and `KllDynamic<T>`.
 ///
 /// The spans are the type's own usable range, so the narrow types genuinely
 /// exercise the tie-dense case: an `i8` stream of 20,000 observations over 127
@@ -209,7 +209,7 @@ fn signed_numeric_types_order_negative_values_correctly_in_kll() {
             for _ in 0..SKETCH_SEEDS.len() {
                 let seed = kll_trial_seed($trial);
                 $trial += 1;
-                let mut fixed = KLL::<$ty>::init_kll_with_seed(K, seed);
+                let mut fixed = Kll::<$ty>::with_k_and_seed(K, seed);
                 for v in &values {
                     fixed.update(v);
                 }
@@ -223,7 +223,7 @@ fn signed_numeric_types_order_negative_values_correctly_in_kll() {
 
                 let seed = kll_trial_seed($trial);
                 $trial += 1;
-                let mut dynamic = KLLDynamic::<$ty>::init_kll_with_seed(K, seed);
+                let mut dynamic = KllDynamic::<$ty>::with_k_and_seed(K, seed);
                 for v in &values {
                     dynamic.update(v);
                 }
@@ -242,7 +242,7 @@ fn signed_numeric_types_order_negative_values_correctly_in_kll() {
             // value: every answer must lie inside the observed range, on the
             // correct side of zero. A `total_cmp` that ordered negatives by
             // their bit pattern would break this immediately.
-            let mut probe = KLL::<$ty>::init_kll_with_seed(K, kll_trial_seed($trial));
+            let mut probe = Kll::<$ty>::with_k_and_seed(K, kll_trial_seed($trial));
             for v in &values {
                 probe.update(v);
             }
@@ -301,7 +301,7 @@ fn signed_numeric_types_order_negative_values_correctly_in_kll() {
 
 // ------------------------------------------------------------------ DDSketch
 
-/// `DDSketch::add<T>` accepts any `NumericalValue`. The relative-error
+/// `DdSketch::add<T>` accepts any `NumericalValue`. The relative-error
 /// guarantee is on the projected value, so converting through a wider integer
 /// type must not change it: the same numbers must come back within `alpha`
 /// whether they arrived as `u8` or `u128`.
@@ -310,7 +310,7 @@ macro_rules! dds_type_case {
         let values = typed_stream!($ty, $span);
         let truth = projected_truth(&values);
         let spec = RelativeQuantileSpec::core($alpha);
-        let mut sketch = DDSketch::new($alpha);
+        let mut sketch = DdSketch::new($alpha);
         for v in &values {
             sketch.add(v);
         }
@@ -398,7 +398,7 @@ fn the_f64_projection_is_exact_below_two_to_the_53() {
         .map(|v| (v as u128 + 1) * (1u128 << 70))
         .collect();
     let truth = projected_truth(&values);
-    let mut sketch = DDSketch::new(ALPHA);
+    let mut sketch = DdSketch::new(ALPHA);
     for v in &values {
         sketch.add(v);
     }
@@ -419,7 +419,7 @@ fn the_f64_projection_is_exact_below_two_to_the_53() {
     let mut rank_tally = Tally::default();
     for t in 0..16u64 {
         let seed = kll_trial_seed(0x2E70_0000 + t);
-        let mut kll = KLL::<u128>::init_kll_with_seed(K, seed);
+        let mut kll = Kll::<u128>::with_k_and_seed(K, seed);
         for v in &values {
             kll.update(v);
         }

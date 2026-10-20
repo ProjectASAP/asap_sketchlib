@@ -12,11 +12,11 @@
 
 use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, keys};
 use asap_sketchlib::sketches::elastic::LAMBDA;
-use asap_sketchlib::{DefaultXxHasher, Elastic};
+use asap_sketchlib::{DefaultXxHasher, ElasticSketch};
 use proptest::prelude::*;
 use std::collections::HashMap;
 
-type E = Elastic<DefaultXxHasher>;
+type E = ElasticSketch<DefaultXxHasher>;
 
 fn flow(key: u64) -> String {
     format!("flow-{key}")
@@ -76,7 +76,7 @@ fn truth_of(stream: &[u64]) -> HashMap<u64, i64> {
 }
 
 fn sketch_of(buckets: i32, light_rows: usize, light_cols: usize, stream: &[u64]) -> E {
-    let mut sketch = E::init_with_dimensions(buckets, light_rows, light_cols);
+    let mut sketch = E::with_heavy_and_light(buckets, light_rows, light_cols);
     for key in stream {
         sketch.update(flow(*key));
     }
@@ -155,7 +155,7 @@ proptest! {
         light_cols in edge_dimension(),
         stream in keys(200),
     ) {
-        let mut sketch = E::init_with_dimensions(buckets as i32, light_rows, light_cols);
+        let mut sketch = E::with_heavy_and_light(buckets as i32, light_rows, light_cols);
         for k in &stream {
             sketch.update(format!("flow-{k}"));
         }
@@ -191,7 +191,7 @@ proptest! {
     fn weighted_arrivals_keep_the_same_mass_account(
         (buckets, light_rows, light_cols, stream) in crowded_weighted(300),
     ) {
-        let mut sketch = E::init_with_dimensions(buckets, light_rows, light_cols);
+        let mut sketch = E::with_heavy_and_light(buckets, light_rows, light_cols);
         for (key, weight) in &stream {
             sketch.update_weighted(flow(*key), *weight);
         }
@@ -250,7 +250,7 @@ proptest! {
     fn the_eviction_flag_is_never_cleared_by_an_insert(
         (buckets, light_rows, light_cols, stream) in crowded(300),
     ) {
-        let mut sketch = E::init_with_dimensions(buckets, light_rows, light_cols);
+        let mut sketch = E::with_heavy_and_light(buckets, light_rows, light_cols);
         let mut before = flags(&sketch);
 
         for (step, key) in stream.iter().enumerate() {
@@ -271,7 +271,7 @@ proptest! {
     fn an_occupied_bucket_holds_fewer_than_lambda_negative_votes_per_positive(
         (buckets, light_rows, light_cols, stream) in crowded(300),
     ) {
-        let mut sketch = E::init_with_dimensions(buckets, light_rows, light_cols);
+        let mut sketch = E::with_heavy_and_light(buckets, light_rows, light_cols);
 
         for (step, key) in stream.iter().enumerate() {
             sketch.update(flow(*key));

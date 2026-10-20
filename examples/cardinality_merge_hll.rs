@@ -7,16 +7,16 @@
 // Run with:
 //
 //   cargo run --example cardinality_merge_hll
-use asap_sketchlib::{DataInput, ErtlMLE, HyperLogLog};
+use asap_sketchlib::{DataInput, Ertl, HyperLogLog};
 
 fn main() {
     // Three shards, each with 10_000 distinct user IDs. IDs do not overlap.
     let shard_size = 10_000u64;
     let num_shards = 3u64;
 
-    let mut shards: Vec<HyperLogLog<ErtlMLE>> = (0..num_shards)
+    let mut shards: Vec<HyperLogLog<Ertl>> = (0..num_shards)
         .map(|shard| {
-            let mut hll = HyperLogLog::<ErtlMLE>::default();
+            let mut hll = HyperLogLog::<Ertl>::default();
             let start = shard * shard_size;
             for id in start..start + shard_size {
                 hll.update(&DataInput::U64(id));

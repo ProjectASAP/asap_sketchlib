@@ -13,26 +13,26 @@
 //!
 //! A layer holding a matrix sketch hashes at seed index 0, and an HLL member
 //! of it therefore diverges from a bare HLL, which hashes at
-//! `CANONICAL_HASH_SEED`. The bare-HLL equality covers HLL members of layers
+//! `DEFAULT_CANONICAL_SEED_INDEX`. The bare-HLL equality covers HLL members of layers
 //! with no matrix sketch, where the layer hashes at the canonical seed too;
 //! the layer that adopts its first matrix member mid-stream is a law of its
 //! own.
 
 use crate::support::keys;
 use asap_sketchlib::{
-    Classic, Count, CountMin, DataInput, DefaultXxHasher, EnsembleSketch, ErtlMLE, FastPath,
-    HashSketchEnsemble, HyperLogLog, HyperLogLogHIP, Vector2D,
+    Classic, Count, CountMinSketch, DataInput, DefaultXxHasher, EnsembleSketch, Ertl, FastPath,
+    HashSketchEnsemble, HyperLogLog, HyperLogLogHip, Vector2D,
 };
 use proptest::prelude::*;
 
-type CmFast = CountMin<Vector2D<i32>, FastPath>;
+type CmFast = CountMinSketch<Vector2D<i32>, FastPath>;
 type CsFast = Count<Vector2D<i32>, FastPath>;
 type Layer = HashSketchEnsemble<DefaultXxHasher>;
 
 /// The member families one layer accepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
-    CountMin,
+    CountMinSketch,
     Count,
     Ertl,
     Classic,
@@ -41,13 +41,13 @@ enum Kind {
 
 impl Kind {
     fn answers_frequency(self) -> bool {
-        matches!(self, Kind::CountMin | Kind::Count)
+        matches!(self, Kind::CountMinSketch | Kind::Count)
     }
 
     /// The label the layer reports for the family.
     fn label(self) -> &'static str {
         match self {
-            Kind::CountMin => "CountMin",
+            Kind::CountMinSketch => "CountMin",
             Kind::Count => "Count",
             Kind::Ertl | Kind::Classic | Kind::Hip => "HLL",
         }
@@ -56,17 +56,19 @@ impl Kind {
 
 /// A sketch of a member's type living outside any layer.
 enum Bare {
-    CountMin(Box<CmFast>),
+    CountMinSketch(Box<CmFast>),
     Count(Box<CsFast>),
-    Ertl(Box<HyperLogLog<ErtlMLE>>),
+    Ertl(Box<HyperLogLog<Ertl>>),
     Classic(Box<HyperLogLog<Classic>>),
-    Hip(Box<HyperLogLogHIP>),
+    Hip(Box<HyperLogLogHip>),
 }
 
 impl Bare {
     fn new(kind: Kind, rows: usize, cols: usize) -> Self {
         match kind {
-            Kind::CountMin => Bare::CountMin(Box::new(CmFast::with_dimensions(rows, cols))),
+            Kind::CountMinSketch => {
+                Bare::CountMinSketch(Box::new(CmFast::with_dimensions(rows, cols)))
+            }
             Kind::Count => Bare::Count(Box::new(CsFast::with_dimensions(rows, cols))),
             Kind::Ertl => Bare::Ertl(Box::default()),
             Kind::Classic => Bare::Classic(Box::default()),
@@ -76,7 +78,7 @@ impl Bare {
 
     fn insert(&mut self, value: &DataInput) {
         match self {
-            Bare::CountMin(s) => s.update(value),
+            Bare::CountMinSketch(s) => s.update(value),
             Bare::Count(s) => s.update(value),
             Bare::Ertl(s) => s.update(value),
             Bare::Classic(s) => s.update(value),
@@ -88,7 +90,7 @@ impl Bare {
     /// HLL: everything the family answers.
     fn answers(&self, probes: &[u64]) -> Vec<f64> {
         match self {
-            Bare::CountMin(s) => probes
+            Bare::CountMinSketch(s) => probes
                 .iter()
                 .map(|k| f64::from(s.estimate(&DataInput::U64(*k))))
                 .collect(),
@@ -110,11 +112,11 @@ fn cols_at(pool: &[usize], index: usize) -> usize {
 
 fn member(kind: Kind, rows: usize, cols: usize) -> EnsembleSketch {
     match kind {
-        Kind::CountMin => CmFast::with_dimensions(rows, cols).into(),
+        Kind::CountMinSketch => CmFast::with_dimensions(rows, cols).into(),
         Kind::Count => CsFast::with_dimensions(rows, cols).into(),
-        Kind::Ertl => HyperLogLog::<ErtlMLE>::default().into(),
+        Kind::Ertl => HyperLogLog::<Ertl>::default().into(),
         Kind::Classic => HyperLogLog::<Classic>::default().into(),
-        Kind::Hip => HyperLogLogHIP::default().into(),
+        Kind::Hip => HyperLogLogHip::default().into(),
     }
 }
 
@@ -174,7 +176,7 @@ fn probes(stream: &[u64]) -> Vec<u64> {
 
 fn kind() -> impl Strategy<Value = Kind> {
     prop_oneof![
-        Just(Kind::CountMin),
+        Just(Kind::CountMinSketch),
         Just(Kind::Count),
         Just(Kind::Ertl),
         Just(Kind::Classic),
@@ -183,7 +185,7 @@ fn kind() -> impl Strategy<Value = Kind> {
 }
 
 fn matrix_kind() -> impl Strategy<Value = Kind> {
-    prop_oneof![Just(Kind::CountMin), Just(Kind::Count)]
+    prop_oneof![Just(Kind::CountMinSketch), Just(Kind::Count)]
 }
 
 fn hll_kind() -> impl Strategy<Value = Kind> {
@@ -196,7 +198,7 @@ fn mixed_members(extra: usize) -> impl Strategy<Value = Vec<Kind>> {
     prop::collection::vec(kind(), 0..extra)
         .prop_map(|mut v| {
             v.extend([
-                Kind::CountMin,
+                Kind::CountMinSketch,
                 Kind::Count,
                 Kind::Ertl,
                 Kind::Classic,

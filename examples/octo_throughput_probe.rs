@@ -13,8 +13,9 @@
 use std::time::Instant;
 
 use asap_sketchlib::{
-    DataInput, MAX_PROMASK, OctoAggregator, OctoPlan, OctoThreshold, OctoWorker, UNIVMON_PROMASK,
-    UnivMon, UnivMonOctoAggregator, UnivMonOctoPlan, UnivMonOctoWorker, univmon_layer_threshold,
+    DataInput, OCTO_MAX_PROMOTION_THRESHOLD, OCTO_UNIVMON_DEFAULT_THRESHOLD, OctoAggregator,
+    OctoPlan, OctoThreshold, OctoWorker, UnivMon, UnivMonOctoAggregator, UnivMonOctoPlan,
+    UnivMonOctoWorker, univmon_layer_threshold,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -80,13 +81,13 @@ fn main() {
         }
     );
 
-    let mut ideal = UnivMon::init_univmon(heap, rows, cols, layers);
+    let mut ideal = UnivMon::new(heap, rows, cols, layers);
     let started = Instant::now();
     for input in &inputs {
         ideal.update_weighted(input, 1);
     }
     let single_rate = n as f64 / started.elapsed().as_secs_f64() / 1e6;
-    let (ideal_card, ideal_entropy) = (ideal.calc_card(), ideal.calc_entropy());
+    let (ideal_card, ideal_entropy) = (ideal.estimate_cardinality(), ideal.estimate_entropy());
     println!(
         "single-threaded UnivMon: {single_rate:.2} Mops/s  \
          (heap={heap} rows={rows} cols={cols} layers={layers}, n={n} Zipf 1.1 over 4096)"
@@ -98,8 +99,8 @@ fn main() {
 
     // A geometric sweep of the usable range. Powers of two are the natural
     // grid because `univmon_layer_threshold` halves tau per layer, so a base of
-    // 2^k walks down to 1 exactly at layer k. 127 is MAX_PROMASK, the widest a
-    // signed one-byte worker counter holds; 64 is UNIVMON_PROMASK.
+    // 2^k walks down to 1 exactly at layer k. 127 is OCTO_MAX_PROMOTION_THRESHOLD, the widest a
+    // signed one-byte worker counter holds; 64 is OCTO_UNIVMON_DEFAULT_THRESHOLD.
     for tau in [1u32, 2, 4, 8, 16, 32, 64, 127] {
         let plan = UnivMonOctoPlan::with_threshold(rows, cols, layers, OctoThreshold::new(tau));
         // Preparation runs on the dispatching thread in the real pipeline, so
@@ -129,12 +130,12 @@ fn main() {
 
         let per_insert = emitted as f64 / n as f64;
         let parent = &aggregator.sketch;
-        let gap = ((parent.calc_card() - ideal_card).abs() / ideal_card.abs().max(1.0)
-            + (parent.calc_entropy() - ideal_entropy).abs() / ideal_entropy.abs().max(1e-9))
+        let gap = ((parent.estimate_cardinality() - ideal_card).abs() / ideal_card.abs().max(1.0)
+            + (parent.estimate_entropy() - ideal_entropy).abs() / ideal_entropy.abs().max(1e-9))
             / 2.0;
         let note = match tau {
-            UNIVMON_PROMASK => "  <- UnivMon default",
-            MAX_PROMASK => "  <- ceiling",
+            OCTO_UNIVMON_DEFAULT_THRESHOLD => "  <- UnivMon default",
+            OCTO_MAX_PROMOTION_THRESHOLD => "  <- ceiling",
             _ => "",
         };
         println!(
@@ -146,9 +147,9 @@ fn main() {
     }
 
     println!(
-        "\nper-layer tau at base {MAX_PROMASK}: {:?}",
+        "\nper-layer tau at base {OCTO_MAX_PROMOTION_THRESHOLD}: {:?}",
         (0..layers)
-            .map(|l| univmon_layer_threshold(MAX_PROMASK, l))
+            .map(|l| univmon_layer_threshold(OCTO_MAX_PROMOTION_THRESHOLD, l))
             .collect::<Vec<_>>()
     );
 

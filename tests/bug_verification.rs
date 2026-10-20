@@ -11,7 +11,7 @@
 //! that already exercises every ingestion path.
 
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
-use asap_sketchlib::{CountL2HH, DDSketch, DataInput, DefaultXxHasher};
+use asap_sketchlib::{CountSketchWithL2Norm, DataInput, DdSketch, DefaultXxHasher};
 
 // ---------------------------------------------------------------------------
 // Bug 3: portable DdSketch reports gamma^(k+0.5) (bucket log-midpoint) as the
@@ -31,7 +31,7 @@ fn portable_ddsketch_respects_alpha_at_bucket_edges() {
     let v = gamma.powi(20) * (1.0 + 1e-6);
 
     let mut port = PortableDds::new(alpha);
-    let mut core = DDSketch::new(alpha);
+    let mut core = DdSketch::new(alpha);
     for _ in 0..10_000 {
         port.update(v);
         core.add(&v);
@@ -57,7 +57,7 @@ fn portable_ddsketch_respects_alpha_at_bucket_edges() {
 }
 
 // ---------------------------------------------------------------------------
-// Bug 4: CountL2HH's hot-path L2 accumulation ran in plain i64
+// Bug 4: CountSketchWithL2Norm's hot-path L2 accumulation ran in plain i64
 // (countsketch_topk.rs:1028: old + new^2 - old^2) and wrapped silently once
 // sum(count^2) exceeded i64::MAX (panicking in debug builds). The hot path
 // now saturates in i128, matching the merge path.
@@ -68,21 +68,22 @@ fn portable_ddsketch_respects_alpha_at_bucket_edges() {
 #[test]
 fn countl2hh_f2_survives_beyond_i64_max() {
     let c = 3_000_000_000i64;
-    let mut sk = CountL2HH::<DefaultXxHasher>::with_dimensions_and_seed(4, 2048, 7);
-    sk.fast_insert_with_count(&DataInput::U32(1), c);
+    let mut sk =
+        CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions_and_seed_index(4, 2048, 7);
+    sk.update_weighted(&DataInput::U32(1), c);
 
     // Single key: true F2 = 9e18 < i64::MAX => must stay exact.
     let single_truth = (c as f64) * (c as f64);
-    let got_single = sk.get_l2_sqr();
+    let got_single = sk.l2_squared();
     assert!(
         (got_single - single_truth).abs() / single_truth < 1e-12,
         "exact-range F2 drifted: got {got_single}, expected {single_truth:.3e}"
     );
 
     // Second key pushes the true F2 to 1.8e19 — beyond any i64 counter.
-    sk.fast_insert_with_count(&DataInput::U32(2), c);
+    sk.update_weighted(&DataInput::U32(2), c);
     let truth = 2.0f64 * (c as f64) * (c as f64); // 1.8e19 > i64::MAX
-    let got = sk.get_l2_sqr();
+    let got = sk.l2_squared();
 
     // Must saturate at i64::MAX rather than wrap to garbage or panic.
     let i64_max = i64::MAX as f64;

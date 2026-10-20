@@ -2,7 +2,7 @@
 //!
 //! Child submodule of [`crate::sketch_framework::hydra`]: it holds ALL of
 //! Hydra's serialization (the metadata/payload DTOs, the five kind_id
-//! constants, and the `serialize_to_bytes` / `deserialize_from_bytes` impls)
+//! constants, and the `to_asapv1` / `from_asapv1` impls)
 //! while the algorithm lives in the parent module file. Being a descendant
 //! module, it reads the private `schema` field directly without widening any
 //! field visibility. See `docs/asapv1_wire_format.md`.
@@ -23,14 +23,14 @@
 //!
 //! ## The grid, the schema and the counter geometry live in the metadata
 //!
-//! Every cell is a clone of `type_to_clone`, so the counter geometry is carried
+//! Every cell is a clone of `prototype`, so the counter geometry is carried
 //! once rather than per cell, and the prototype itself reaches the wire only
 //! through that geometry.
 //!
 //! ## Hashing
 //!
 //! Hydra places subkeys with the free-function matrix hash at
-//! [`crate::HYDRA_SEED`], so its metadata carries [`DefaultXxHasher`]'s hash
+//! [`crate::HYDRA_SEED_INDEX`], so its metadata carries [`DefaultXxHasher`]'s hash
 //! spec. That index is fixed by the algorithm rather than by the profile, so no
 //! seed-index key names it.
 //!
@@ -50,10 +50,10 @@ use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact_vec;
 use crate::sketch_framework::univmon::wire::{PyramidPayload, UnivMonMetadata, univmon_metadata};
-use crate::sketches::countminsketch_topk::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
+use crate::sketches::countminsketch_heap::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
 use crate::{
-    Count, CountMin, DefaultXxHasher, ErtlMLE, FastPath, HashProfile, HllBucketListP14,
-    HyperLogLog, KLL, UnivMon, Vector2D,
+    Count, CountMinSketch, DefaultXxHasher, Ertl, FastPath, HashProfile, HllRegistersP14,
+    HyperLogLog, Kll, UnivMon, Vector2D,
 };
 
 use super::{Hydra, KeySchema};
@@ -257,9 +257,9 @@ fn hydra_univmon_metadata<H: HashProfile>(
         rows: grid.rows,
         cols: grid.cols,
         schema: grid.schema.clone(),
-        cell_layers: shape.layer_size,
-        cell_rows: shape.sketch_row,
-        cell_cols: shape.sketch_col,
+        cell_layers: shape.layers,
+        cell_rows: shape.rows,
+        cell_cols: shape.cols,
         cell_heap_size: shape.heap_size,
         cell_key_type: cell_key_type.to_string(),
     }
@@ -347,17 +347,17 @@ struct KllCellMetadata {
 
 /// The pyramid dimensions every UnivMon cell shares.
 struct UnivMonShape {
-    layer_size: u32,
-    sketch_row: u32,
-    sketch_col: u32,
+    layers: u32,
+    rows: u32,
+    cols: u32,
     heap_size: u32,
 }
 
 /// Register count of one HyperLogLog cell.
-const HLL_CELL_REGISTERS: usize = HllBucketListP14::NUM_REGISTERS;
+const HLL_CELL_REGISTERS: usize = HllRegistersP14::NUM_REGISTERS;
 
 /// Precision of one HyperLogLog cell.
-const HLL_CELL_PRECISION: u32 = HllBucketListP14::PRECISION as u32;
+const HLL_CELL_PRECISION: u32 = HllRegistersP14::PRECISION as u32;
 
 fn encode_error(problem: String) -> RmpEncodeError {
     RmpEncodeError::Syntax(problem)
@@ -455,9 +455,9 @@ fn univmon_cell_envelope(
     payload: &[u8],
 ) -> Result<Vec<u8>, RmpEncodeError> {
     let metadata = rmp_serde::to_vec_named(&univmon_metadata::<DefaultXxHasher>(
-        shape.layer_size,
-        shape.sketch_row,
-        shape.sketch_col,
+        shape.layers,
+        shape.rows,
+        shape.cols,
         shape.heap_size,
         key_type,
     ))?;
@@ -478,21 +478,21 @@ impl Hydra {
     /// Serializes the grid into an ASAPv1 MessagePack envelope, one kind_id per
     /// counter variant (`0x07 0x00`-`0x07 0x04`). The metadata is derived from
     /// [`DefaultXxHasher`]'s [`HashProfile`], the profile the subkey hash at
-    /// [`crate::HYDRA_SEED`] uses.
+    /// [`crate::HYDRA_SEED_INDEX`] uses.
     ///
     /// A grid mixing counter variants, a cell whose geometry differs from the
     /// prototype's, a prototype holding data, and a declared geometry the
     /// storage does not match are errors rather than bytes that would be
     /// refused on decode.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let grid = self.wire_grid()?;
         self.check_admits_all()?;
-        match &self.type_to_clone {
-            HydraCounter::KLL(prototype) => self.encode_kll(&grid, prototype),
-            HydraCounter::CM(prototype) => self.encode_cm(&grid, prototype),
-            HydraCounter::CS(prototype) => self.encode_cs(&grid, prototype),
-            HydraCounter::HLL(prototype) => self.encode_hll(&grid, prototype),
-            HydraCounter::UNIVERSAL(prototype) => self.encode_univmon(&grid, prototype),
+        match &self.prototype {
+            HydraCounter::Kll(prototype) => self.encode_kll(&grid, prototype),
+            HydraCounter::CountMinSketch(prototype) => self.encode_cm(&grid, prototype),
+            HydraCounter::CountSketch(prototype) => self.encode_cs(&grid, prototype),
+            HydraCounter::Hll(prototype) => self.encode_hll(&grid, prototype),
+            HydraCounter::UnivMon(prototype) => self.encode_univmon(&grid, prototype),
         }
     }
 
@@ -502,7 +502,7 @@ impl Hydra {
     /// Every declared count is measured against what the payload actually
     /// carries before anything is sized from it, so crafted geometry fails
     /// closed with an error rather than a panic or an allocation.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, _, _) = envelope::split(bytes).map_err(decode_error)?;
         match kind_id {
             id if id == HYDRA_KIND_KLL => Self::decode_kll(bytes),
@@ -555,7 +555,7 @@ impl Hydra {
                         "ASAPv1 Hydra envelope: cell ({}, {}) holds a {counter}, the grid holds a {}",
                         i / self.col_num,
                         i % self.col_num,
-                        self.type_to_clone
+                        self.prototype
                     )));
                 }
             }
@@ -600,12 +600,12 @@ impl Hydra {
 
     /// Rejects a prototype or cell whose admission rate is not `1`.
     fn check_admits_all(&self) -> Result<(), RmpEncodeError> {
-        for counter in std::iter::once(&self.type_to_clone).chain(self.sketches.as_slice()) {
+        for counter in std::iter::once(&self.prototype).chain(self.sketches.as_slice()) {
             let rate = match counter {
-                HydraCounter::CM(cm) => cm.admission_rate(),
-                HydraCounter::CS(cs) => cs.admission_rate(),
-                HydraCounter::HLL(hll) => hll.admission_rate(),
-                HydraCounter::KLL(_) | HydraCounter::UNIVERSAL(_) => continue,
+                HydraCounter::CountMinSketch(cm) => cm.admission_rate(),
+                HydraCounter::CountSketch(cs) => cs.admission_rate(),
+                HydraCounter::Hll(hll) => hll.admission_rate(),
+                HydraCounter::Kll(_) | HydraCounter::UnivMon(_) => continue,
             };
             admission_rate::check_admits_all(rate)
                 .map_err(|e| encode_error(format!("ASAPv1 Hydra envelope: {e}")))?;
@@ -621,18 +621,18 @@ impl Hydra {
         }
         Err(encode_error(format!(
             "ASAPv1 Hydra envelope: type_to_clone holds data; the {} prototype carries only its geometry",
-            self.type_to_clone
+            self.prototype
         )))
     }
 
     fn encode_cm(
         &self,
         grid: &HydraGrid,
-        prototype: &CountMin<Vector2D<i32>, FastPath>,
+        prototype: &CountMinSketch<Vector2D<i32>, FastPath>,
     ) -> Result<Vec<u8>, RmpEncodeError> {
         self.check_fresh_prototype(prototype.as_storage().as_slice().iter().all(|&c| c == 0))?;
         let cells = self.cells(|counter| match counter {
-            HydraCounter::CM(cm) => Some(cm.as_storage()),
+            HydraCounter::CountMinSketch(cm) => Some(cm.as_storage()),
             _ => None,
         })?;
         self.encode_matrix(
@@ -651,7 +651,7 @@ impl Hydra {
     ) -> Result<Vec<u8>, RmpEncodeError> {
         self.check_fresh_prototype(prototype.as_storage().as_slice().iter().all(|&c| c == 0))?;
         let cells = self.cells(|counter| match counter {
-            HydraCounter::CS(cs) => Some(cs.as_storage()),
+            HydraCounter::CountSketch(cs) => Some(cs.as_storage()),
             _ => None,
         })?;
         self.encode_matrix(
@@ -686,11 +686,11 @@ impl Hydra {
     fn encode_hll(
         &self,
         grid: &HydraGrid,
-        prototype: &HyperLogLog<ErtlMLE>,
+        prototype: &HyperLogLog<Ertl>,
     ) -> Result<Vec<u8>, RmpEncodeError> {
         self.check_fresh_prototype(prototype.registers_as_slice().iter().all(|&r| r == 0))?;
         let cells = self.cells(|counter| match counter {
-            HydraCounter::HLL(hll) => Some(hll.registers_as_slice()),
+            HydraCounter::Hll(hll) => Some(hll.registers_as_slice()),
             _ => None,
         })?;
         let total =
@@ -707,30 +707,30 @@ impl Hydra {
         Ok(envelope::encode(HYDRA_KIND_HLL, &metadata, &payload))
     }
 
-    fn encode_kll(&self, grid: &HydraGrid, prototype: &KLL) -> Result<Vec<u8>, RmpEncodeError> {
+    fn encode_kll(&self, grid: &HydraGrid, prototype: &Kll) -> Result<Vec<u8>, RmpEncodeError> {
         self.check_fresh_prototype(
-            prototype.wire_num_levels() == 1 && prototype.wire_items().is_empty(),
+            prototype.num_levels() == 1 && prototype.items_top_down().is_empty(),
         )?;
-        let (k, m) = (prototype.wire_k(), prototype.wire_m());
+        let (k, m) = (prototype.wire_k(), prototype.m());
         let counters = self.cells(|counter| match counter {
-            HydraCounter::KLL(kll) => Some(kll),
+            HydraCounter::Kll(kll) => Some(kll),
             _ => None,
         })?;
         let mut cells = Vec::with_capacity(counters.len());
         for (i, kll) in counters.iter().enumerate() {
-            if (kll.wire_k(), kll.wire_m()) != (k, m) {
+            if (kll.wire_k(), kll.m()) != (k, m) {
                 return Err(encode_error(format!(
                     "ASAPv1 Hydra envelope: cell ({}, {}) has k={}, m={} against the prototype's k={k}, m={m}",
                     i / self.col_num,
                     i % self.col_num,
                     kll.wire_k(),
-                    kll.wire_m()
+                    kll.m()
                 )));
             }
-            let (state, bit_cache, remaining_bits) = kll.wire_coin();
+            let (state, bit_cache, remaining_bits) = kll.coin_state();
             cells.push(HydraKllCell {
-                levels: kll.wire_levels(),
-                items: kll.wire_items(),
+                levels: kll.level_bounds_top_down(),
+                items: kll.items_top_down(),
                 coin: HydraKllCoin {
                     state,
                     bit_cache,
@@ -748,34 +748,31 @@ impl Hydra {
         grid: &HydraGrid,
         prototype: &UnivMon,
     ) -> Result<Vec<u8>, RmpEncodeError> {
-        if prototype.layer_size == 0
-            || prototype.sketch_row == 0
-            || prototype.sketch_col == 0
+        if prototype.layers == 0
+            || prototype.rows == 0
+            || prototype.cols == 0
             || prototype.heap_size == 0
         {
             return Err(encode_error(format!(
                 "ASAPv1 Hydra envelope: UnivMon counter dimensions must be non-zero: layers={}, {}x{}, heap={}",
-                prototype.layer_size,
-                prototype.sketch_row,
-                prototype.sketch_col,
-                prototype.heap_size
+                prototype.layers, prototype.rows, prototype.cols, prototype.heap_size
             )));
         }
-        let fresh = UnivMon::init_univmon(
+        let fresh = UnivMon::new(
             prototype.heap_size,
-            prototype.sketch_row,
-            prototype.sketch_col,
-            prototype.layer_size,
+            prototype.rows,
+            prototype.cols,
+            prototype.layers,
         );
-        self.check_fresh_prototype(prototype.serialize_to_bytes()? == fresh.serialize_to_bytes()?)?;
+        self.check_fresh_prototype(prototype.to_asapv1()? == fresh.to_asapv1()?)?;
         let shape = UnivMonShape {
-            layer_size: to_u32("cell_layers", prototype.layer_size)?,
-            sketch_row: to_u32("cell_rows", prototype.sketch_row)?,
-            sketch_col: to_u32("cell_cols", prototype.sketch_col)?,
+            layers: to_u32("cell_layers", prototype.layers)?,
+            rows: to_u32("cell_rows", prototype.rows)?,
+            cols: to_u32("cell_cols", prototype.cols)?,
             heap_size: to_u32("cell_heap_size", prototype.heap_size)?,
         };
         let counters = self.cells(|counter| match counter {
-            HydraCounter::UNIVERSAL(um) => Some(um),
+            HydraCounter::UnivMon(um) => Some(um),
             _ => None,
         })?;
 
@@ -783,7 +780,7 @@ impl Hydra {
         // codec enforces holds for a Hydra cell too.
         let encoded: Vec<Vec<u8>> = counters
             .iter()
-            .map(|um| um.serialize_to_bytes())
+            .map(|um| um.to_asapv1())
             .collect::<Result<_, _>>()?;
         let mut payloads = Vec::with_capacity(encoded.len());
         let mut key_type: Option<&str> = None;
@@ -797,12 +794,7 @@ impl Hydra {
         }
         for (i, meta) in metas.iter().enumerate() {
             if (meta.layers, meta.rows, meta.cols, meta.heap_size)
-                != (
-                    shape.layer_size,
-                    shape.sketch_row,
-                    shape.sketch_col,
-                    shape.heap_size,
-                )
+                != (shape.layers, shape.rows, shape.cols, shape.heap_size)
             {
                 return Err(encode_error(format!(
                     "ASAPv1 Hydra envelope: cell ({}, {}) is a {}x{}x{} pyramid against the prototype's {}x{}x{}",
@@ -811,9 +803,9 @@ impl Hydra {
                     meta.layers,
                     meta.rows,
                     meta.cols,
-                    shape.layer_size,
-                    shape.sketch_row,
-                    shape.sketch_col
+                    shape.layers,
+                    shape.rows,
+                    shape.cols
                 )));
             }
             // A cell holding no keys carries no variant, so only the cells that
@@ -854,7 +846,7 @@ impl Hydra {
         let (cell_rows, cell_cols) = (meta.cell_rows as usize, meta.cell_cols as usize);
         let sketches = Vector2D::from_fn(rows, cols, |r, c| {
             let base = (r * cols + c) * per_cell;
-            HydraCounter::CM(CountMin::from_storage(Vector2D::from_fn(
+            HydraCounter::CountMinSketch(CountMinSketch::from_storage(Vector2D::from_fn(
                 cell_rows,
                 cell_cols,
                 |i, j| counts[base + i * cell_cols + j],
@@ -864,7 +856,9 @@ impl Hydra {
             row_num: rows,
             col_num: cols,
             sketches,
-            type_to_clone: HydraCounter::CM(CountMin::with_dimensions(cell_rows, cell_cols)),
+            prototype: HydraCounter::CountMinSketch(CountMinSketch::with_dimensions(
+                cell_rows, cell_cols,
+            )),
             schema: schema_of(&meta.schema)?,
         })
     }
@@ -875,7 +869,7 @@ impl Hydra {
         let (cell_rows, cell_cols) = (meta.cell_rows as usize, meta.cell_cols as usize);
         let sketches = Vector2D::from_fn(rows, cols, |r, c| {
             let base = (r * cols + c) * per_cell;
-            HydraCounter::CS(Count::from_storage(Vector2D::from_fn(
+            HydraCounter::CountSketch(Count::from_storage(Vector2D::from_fn(
                 cell_rows,
                 cell_cols,
                 |i, j| counts[base + i * cell_cols + j],
@@ -885,7 +879,7 @@ impl Hydra {
             row_num: rows,
             col_num: cols,
             sketches,
-            type_to_clone: HydraCounter::CS(Count::with_dimensions(cell_rows, cell_cols)),
+            prototype: HydraCounter::CountSketch(Count::with_dimensions(cell_rows, cell_cols)),
             schema: schema_of(&meta.schema)?,
         })
     }
@@ -960,9 +954,9 @@ impl Hydra {
         for cell in p.registers.chunks_exact(HLL_CELL_REGISTERS) {
             let envelope_bytes =
                 hll_cell_envelope(cell).map_err(|e| decode_error(e.to_string()))?;
-            counters.push(HydraCounter::HLL(
-                HyperLogLog::<ErtlMLE>::deserialize_from_bytes(&envelope_bytes)?,
-            ));
+            counters.push(HydraCounter::Hll(HyperLogLog::<Ertl>::from_asapv1(
+                &envelope_bytes,
+            )?));
         }
         let mut counters = counters.into_iter();
         let sketches = Vector2D::from_fn(rows, cols, |_, _| {
@@ -972,7 +966,7 @@ impl Hydra {
             row_num: rows,
             col_num: cols,
             sketches,
-            type_to_clone: HydraCounter::HLL(HyperLogLog::<ErtlMLE>::default()),
+            prototype: HydraCounter::Hll(HyperLogLog::<Ertl>::default()),
             schema: schema_of(&meta.schema)?,
         })
     }
@@ -1008,9 +1002,7 @@ impl Hydra {
         for cell in &p.cells {
             let envelope_bytes = kll_cell_envelope(meta.cell_k, meta.cell_m, cell)
                 .map_err(|e| decode_error(e.to_string()))?;
-            counters.push(HydraCounter::KLL(KLL::deserialize_from_bytes(
-                &envelope_bytes,
-            )?));
+            counters.push(HydraCounter::Kll(Kll::from_asapv1(&envelope_bytes)?));
         }
         let mut counters = counters.into_iter();
         let sketches = Vector2D::from_fn(rows, cols, |_, _| {
@@ -1020,7 +1012,7 @@ impl Hydra {
             row_num: rows,
             col_num: cols,
             sketches,
-            type_to_clone: HydraCounter::KLL(KLL::init(meta.cell_k as usize, meta.cell_m as usize)),
+            prototype: HydraCounter::Kll(Kll::init(meta.cell_k as usize, meta.cell_m as usize)),
             schema: schema_of(&meta.schema)?,
         })
     }
@@ -1029,9 +1021,9 @@ impl Hydra {
         let (metadata, payload) = split_for(bytes, HYDRA_KIND_UNIVMON)?;
         let meta: HydraUnivMonMetadata = envelope::decode_block(metadata)?;
         let shape = UnivMonShape {
-            layer_size: meta.cell_layers,
-            sketch_row: meta.cell_rows,
-            sketch_col: meta.cell_cols,
+            layers: meta.cell_layers,
+            rows: meta.cell_rows,
+            cols: meta.cell_cols,
             heap_size: meta.cell_heap_size,
         };
         if meta
@@ -1051,14 +1043,10 @@ impl Hydra {
         }
         let (rows, cols) = (meta.rows as usize, meta.cols as usize);
         let cells = checked_cells("grid", rows, cols).map_err(decode_error)?;
-        if shape.layer_size == 0
-            || shape.sketch_row == 0
-            || shape.sketch_col == 0
-            || shape.heap_size == 0
-        {
+        if shape.layers == 0 || shape.rows == 0 || shape.cols == 0 || shape.heap_size == 0 {
             return Err(decode_error(format!(
                 "Hydra UnivMon counter dimensions must be non-zero: layers={}, {}x{}, heap={}",
-                shape.layer_size, shape.sketch_row, shape.sketch_col, shape.heap_size
+                shape.layers, shape.rows, shape.cols, shape.heap_size
             )));
         }
         let payloads = unpack_univmon_cells(&meta.cell_key_type, payload)?;
@@ -1082,7 +1070,7 @@ impl Hydra {
             };
             let envelope_bytes = univmon_cell_envelope(&shape, key_type, cell)
                 .map_err(|e| decode_error(e.to_string()))?;
-            counters.push(HydraCounter::UNIVERSAL(UnivMon::deserialize_from_bytes(
+            counters.push(HydraCounter::UnivMon(UnivMon::from_asapv1(
                 &envelope_bytes,
             )?));
         }
@@ -1094,11 +1082,11 @@ impl Hydra {
             row_num: rows,
             col_num: cols,
             sketches,
-            type_to_clone: HydraCounter::UNIVERSAL(UnivMon::init_univmon(
+            prototype: HydraCounter::UnivMon(UnivMon::new(
                 shape.heap_size as usize,
-                shape.sketch_row as usize,
-                shape.sketch_col as usize,
-                shape.layer_size as usize,
+                shape.rows as usize,
+                shape.cols as usize,
+                shape.layers as usize,
             )),
             schema: schema_of(&meta.schema)?,
         })
@@ -1180,7 +1168,9 @@ fn unpack_univmon_cells(key_type: &str, payload: &[u8]) -> Result<Vec<Vec<u8>>, 
 mod tests {
     use super::*;
     use crate::input::HydraQuery;
-    use crate::{CANONICAL_HASH_SEED, DataInput, HeapItem, MATRIX_MAX_ROWS, SketchHasher};
+    use crate::{
+        DEFAULT_CANONICAL_SEED_INDEX, DataInput, MATRIX_MAX_ROWS, OwnedDataInput, SketchHasher,
+    };
 
     /// The row bound as a metadata field width.
     const MAX_ROWS: u32 = MATRIX_MAX_ROWS as u32;
@@ -1204,11 +1194,13 @@ mod tests {
     }
 
     fn cm_counter() -> HydraCounter {
-        HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(2, 16))
+        HydraCounter::CountMinSketch(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+            2, 16,
+        ))
     }
 
     fn cs_counter() -> HydraCounter {
-        HydraCounter::CS(Count::<Vector2D<i32>, FastPath>::with_dimensions(2, 16))
+        HydraCounter::CountSketch(Count::<Vector2D<i32>, FastPath>::with_dimensions(2, 16))
     }
 
     fn cm_grid() -> Hydra {
@@ -1224,19 +1216,19 @@ mod tests {
     }
 
     fn hll_grid() -> Hydra {
-        let mut hydra = grid(HydraCounter::HLL(HyperLogLog::<ErtlMLE>::default()));
+        let mut hydra = grid(HydraCounter::Hll(HyperLogLog::<Ertl>::default()));
         feed(&mut hydra, (0..300u64).map(DataInput::U64));
         hydra
     }
 
     fn kll_grid() -> Hydra {
-        let mut hydra = grid(HydraCounter::KLL(KLL::default()));
+        let mut hydra = grid(HydraCounter::Kll(Kll::default()));
         feed(&mut hydra, (0..300u64).map(|i| DataInput::F64(i as f64)));
         hydra
     }
 
     fn univmon_grid() -> Hydra {
-        let mut hydra = grid(HydraCounter::UNIVERSAL(UnivMon::init_univmon(4, 2, 16, 3)));
+        let mut hydra = grid(HydraCounter::UnivMon(UnivMon::new(4, 2, 16, 3)));
         feed(&mut hydra, (0..120u64).map(|i| DataInput::U64(i % 20)));
         hydra
     }
@@ -1274,10 +1266,10 @@ mod tests {
     /// One round trip: the envelope names the variant, the schema and every
     /// answer survive, and the decoded grid re-serializes byte-identically.
     fn assert_round_trip(hydra: &Hydra, kind_id: &[u8], probes: &[Probe<'_>]) -> Hydra {
-        let encoded = hydra.serialize_to_bytes().expect("serialize Hydra");
+        let encoded = hydra.to_asapv1().expect("serialize Hydra");
         assert_envelope(&encoded, kind_id);
 
-        let decoded = Hydra::deserialize_from_bytes(&encoded).expect("deserialize Hydra");
+        let decoded = Hydra::from_asapv1(&encoded).expect("deserialize Hydra");
         assert_eq!(decoded.row_num, hydra.row_num);
         assert_eq!(decoded.col_num, hydra.col_num);
         assert_eq!(decoded.sketches.rows(), hydra.sketches.rows());
@@ -1289,7 +1281,7 @@ mod tests {
             "answers changed across the wire"
         );
         assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
+            decoded.to_asapv1().expect("re-serialize"),
             encoded,
             "a decoded Hydra re-serialized to different bytes"
         );
@@ -1340,21 +1332,20 @@ mod tests {
     /// other name is rejected. A grid holding keys decodes with empty cells.
     #[test]
     fn hydra_univmon_empty_grid_must_carry_the_u64_key_type() {
-        use crate::sketches::countminsketch_topk::heap_wire::relabel_u64_key_type;
-        let empty = grid(HydraCounter::UNIVERSAL(UnivMon::init_univmon(4, 2, 16, 3)));
-        let bytes = empty.serialize_to_bytes().expect("serialize");
-        let problem =
-            Hydra::deserialize_from_bytes(&relabel_u64_key_type(&bytes, "cell_key_type", "string"))
-                .map(drop)
-                .expect_err("an empty grid under another cell_key_type must be rejected")
-                .to_string();
+        use crate::sketches::countminsketch_heap::heap_wire::relabel_u64_key_type;
+        let empty = grid(HydraCounter::UnivMon(UnivMon::new(4, 2, 16, 3)));
+        let bytes = empty.to_asapv1().expect("serialize");
+        let problem = Hydra::from_asapv1(&relabel_u64_key_type(&bytes, "cell_key_type", "string"))
+            .map(drop)
+            .expect_err("an empty grid under another cell_key_type must be rejected")
+            .to_string();
         assert!(problem.contains("empty key set"), "{problem}");
 
-        let mut sparse = grid(HydraCounter::UNIVERSAL(UnivMon::init_univmon(4, 2, 16, 3)));
+        let mut sparse = grid(HydraCounter::UnivMon(UnivMon::new(4, 2, 16, 3)));
         feed(&mut sparse, std::iter::once(DataInput::Str("alpha")));
-        let bytes = sparse.serialize_to_bytes().expect("serialize");
-        let decoded = Hydra::deserialize_from_bytes(&bytes).expect("decode");
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        let bytes = sparse.to_asapv1().expect("serialize");
+        let decoded = Hydra::from_asapv1(&bytes).expect("decode");
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
     /// A `"string"` cell key is read from msgpack `str` alone: the same keys as
@@ -1362,10 +1353,10 @@ mod tests {
     #[test]
     fn hydra_univmon_reads_string_keys_from_str_only() {
         use crate::message_pack_format::wire_key::WireBytes;
-        let mut hydra = grid(HydraCounter::UNIVERSAL(UnivMon::init_univmon(4, 2, 16, 3)));
+        let mut hydra = grid(HydraCounter::UnivMon(UnivMon::new(4, 2, 16, 3)));
         let keys = ["alpha", "beta", "gamma", "delta"];
         feed(&mut hydra, (0..40).map(|i| DataInput::Str(keys[i % 4])));
-        let encoded = hydra.serialize_to_bytes().expect("serialize");
+        let encoded = hydra.to_asapv1().expect("serialize");
         let (kind, metadata, payload) = envelope::split(&encoded).expect("split");
         let meta: HydraUnivMonMetadata = from_slice(metadata).expect("metadata");
         assert_eq!(meta.cell_key_type, "string");
@@ -1392,12 +1383,12 @@ mod tests {
                 .collect(),
         };
         let forged = envelope::encode(kind, metadata, &rmp_serde::to_vec(&as_bin).unwrap());
-        let problem = Hydra::deserialize_from_bytes(&forged)
+        let problem = Hydra::from_asapv1(&forged)
             .map(drop)
             .expect_err("bin keys under cell_key_type string must be rejected")
             .to_string();
         assert!(problem.contains("must be msgpack str"), "{problem}");
-        assert!(Hydra::deserialize_from_bytes(&encoded).is_ok());
+        assert!(Hydra::from_asapv1(&encoded).is_ok());
     }
 
     /// Count Sketch cells are signed: the payload must carry negatives through
@@ -1410,7 +1401,7 @@ mod tests {
                 .as_slice()
                 .iter()
                 .flat_map(|counter| match counter {
-                    HydraCounter::CS(cs) => cs.as_storage().as_slice().to_vec(),
+                    HydraCounter::CountSketch(cs) => cs.as_storage().as_slice().to_vec(),
                     other => panic!("expected a Count Sketch cell, got {other}"),
                 })
                 .collect()
@@ -1419,8 +1410,8 @@ mod tests {
             cells(&hydra).iter().any(|&c| c < 0),
             "expected a negative counter in the grid"
         );
-        let encoded = hydra.serialize_to_bytes().expect("serialize");
-        let decoded = Hydra::deserialize_from_bytes(&encoded).expect("decode");
+        let encoded = hydra.to_asapv1().expect("serialize");
+        let decoded = Hydra::from_asapv1(&encoded).expect("decode");
         assert_eq!(cells(&decoded), cells(&hydra));
     }
 
@@ -1457,25 +1448,17 @@ mod tests {
         let envelopes: [(&[u8], Vec<u8>); 5] = [
             (
                 HYDRA_KIND_KLL,
-                kll_grid().serialize_to_bytes().expect("serialize KLL"),
+                kll_grid().to_asapv1().expect("serialize KLL"),
             ),
-            (
-                HYDRA_KIND_CM,
-                cm_grid().serialize_to_bytes().expect("serialize CM"),
-            ),
-            (
-                HYDRA_KIND_CS,
-                cs_grid().serialize_to_bytes().expect("serialize CS"),
-            ),
+            (HYDRA_KIND_CM, cm_grid().to_asapv1().expect("serialize CM")),
+            (HYDRA_KIND_CS, cs_grid().to_asapv1().expect("serialize CS")),
             (
                 HYDRA_KIND_HLL,
-                hll_grid().serialize_to_bytes().expect("serialize HLL"),
+                hll_grid().to_asapv1().expect("serialize HLL"),
             ),
             (
                 HYDRA_KIND_UNIVMON,
-                univmon_grid()
-                    .serialize_to_bytes()
-                    .expect("serialize UnivMon"),
+                univmon_grid().to_asapv1().expect("serialize UnivMon"),
             ),
         ];
         let decoders: [(&[u8], Decoder); 5] = [
@@ -1485,8 +1468,8 @@ mod tests {
             (HYDRA_KIND_HLL, Hydra::decode_hll),
             (HYDRA_KIND_UNIVMON, Hydra::decode_univmon),
         ];
-        let foreign = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(2, 16)
-            .serialize_to_bytes()
+        let foreign = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(2, 16)
+            .to_asapv1()
             .expect("serialize Count-Min");
         for (owned, decode) in decoders {
             for (kind_id, bytes) in &envelopes {
@@ -1501,7 +1484,7 @@ mod tests {
                 "a Count-Min envelope must not decode as a Hydra"
             );
         }
-        assert!(Hydra::deserialize_from_bytes(&foreign).is_err());
+        assert!(Hydra::from_asapv1(&foreign).is_err());
     }
 
     /// A grid mixing counter variants has no encoding: the kind_id names one
@@ -1509,9 +1492,9 @@ mod tests {
     #[test]
     fn hydra_rejects_a_mixed_variant_grid() {
         let mut hydra = cm_grid();
-        hydra.sketches.as_mut_slice()[9] = HydraCounter::HLL(HyperLogLog::<ErtlMLE>::default());
+        hydra.sketches.as_mut_slice()[9] = HydraCounter::Hll(HyperLogLog::<Ertl>::default());
         let problem = hydra
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a mixed grid must not serialize")
             .to_string();
         assert!(problem.contains("cell (1, 1)"), "got {problem}");
@@ -1528,30 +1511,31 @@ mod tests {
         let mut declared = cm_grid();
         declared.row_num = 4;
         assert!(
-            declared.serialize_to_bytes().is_err(),
+            declared.to_asapv1().is_err(),
             "a declared grid the storage does not match must not serialize"
         );
 
         let mut unfilled = cm_grid();
         unfilled.sketches = Vector2D::init(3, 8);
         assert!(
-            unfilled.serialize_to_bytes().is_err(),
+            unfilled.to_asapv1().is_err(),
             "an unfilled grid must not serialize"
         );
 
         let mut resized = cm_grid();
-        resized.sketches.as_mut_slice()[2] = HydraCounter::CM(CountMin::with_dimensions(2, 8));
+        resized.sketches.as_mut_slice()[2] =
+            HydraCounter::CountMinSketch(CountMinSketch::with_dimensions(2, 8));
         assert!(
-            resized.serialize_to_bytes().is_err(),
+            resized.to_asapv1().is_err(),
             "a cell that is not the prototype's size must not serialize"
         );
 
         let mut primed = cm_grid();
-        let mut counter = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(2, 16);
+        let mut counter = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(2, 16);
         counter.update(&DataInput::U64(1));
-        primed.type_to_clone = HydraCounter::CM(counter);
+        primed.prototype = HydraCounter::CountMinSketch(counter);
         let problem = primed
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a prototype holding data must not serialize")
             .to_string();
         assert!(
@@ -1560,16 +1544,16 @@ mod tests {
         );
     }
 
-    /// A UnivMon grid whose cells hold different `HeapItem` variants has no
+    /// A UnivMon grid whose cells hold different `OwnedDataInput` variants has no
     /// single `cell_key_type`.
     #[test]
     fn hydra_univmon_rejects_cells_mixing_key_variants() {
         let mut hydra = univmon_grid();
-        let mut strings = UnivMon::init_univmon(4, 2, 16, 3);
+        let mut strings = UnivMon::new(4, 2, 16, 3);
         strings.update_weighted(&DataInput::Str("alpha"), 5);
-        hydra.sketches.as_mut_slice()[0] = HydraCounter::UNIVERSAL(strings);
+        hydra.sketches.as_mut_slice()[0] = HydraCounter::UnivMon(strings);
         let problem = hydra
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a grid mixing key variants must not serialize")
             .to_string();
         assert!(problem.contains("mix key variants"), "got {problem}");
@@ -1580,7 +1564,7 @@ mod tests {
     #[test]
     fn hydra_rejects_crafted_geometry() {
         let hydra = cm_grid();
-        let encoded = hydra.serialize_to_bytes().expect("serialize");
+        let encoded = hydra.to_asapv1().expect("serialize");
         let (_, metadata, payload) = envelope::split(&encoded).expect("split");
         let base: HydraMatrixMetadata = from_slice(metadata).expect("metadata");
         let blank = || HydraGrid {
@@ -1612,7 +1596,7 @@ mod tests {
                 &rmp_serde::to_vec_named(&meta).expect("metadata"),
                 payload,
             );
-            let problem = Hydra::deserialize_from_bytes(&bytes)
+            let problem = Hydra::from_asapv1(&bytes)
                 .expect_err("a crafted geometry must be rejected, not decoded")
                 .to_string();
             assert!(problem.contains(expected), "got {problem}");
@@ -1626,7 +1610,7 @@ mod tests {
             &rmp_serde::to_vec_named(&empty).expect("metadata"),
             payload,
         );
-        assert!(Hydra::deserialize_from_bytes(&bytes).is_err());
+        assert!(Hydra::from_asapv1(&bytes).is_err());
     }
 
     /// The grid and the counters are both matrices, so each carries the seed
@@ -1636,16 +1620,16 @@ mod tests {
         let rows = MATRIX_MAX_ROWS + 1;
         let wide_grid = Hydra::with_schema(rows, 8, SCHEMA, cm_counter()).expect("valid schema");
         let problem = wide_grid
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a grid past MATRIX_MAX_ROWS must not serialize")
             .to_string();
         assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
 
-        let wide_counter = HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
-            rows, 16,
-        ));
+        let wide_counter = HydraCounter::CountMinSketch(
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(rows, 16),
+        );
         let problem = grid(wide_counter)
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a counter past MATRIX_MAX_ROWS must not serialize")
             .to_string();
         assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
@@ -1654,7 +1638,7 @@ mod tests {
         assert!(
             Hydra::with_schema(MATRIX_MAX_ROWS, 8, SCHEMA, cm_counter())
                 .expect("valid schema")
-                .serialize_to_bytes()
+                .to_asapv1()
                 .is_ok()
         );
     }
@@ -1663,7 +1647,7 @@ mod tests {
     /// than the payload carries, and a zero counter dimension, are rejected.
     #[test]
     fn hydra_rejects_crafted_geometry_for_the_variable_counters() {
-        let encoded = kll_grid().serialize_to_bytes().expect("serialize");
+        let encoded = kll_grid().to_asapv1().expect("serialize");
         let (_, metadata, payload) = envelope::split(&encoded).expect("split");
         let base: HydraKllMetadata = from_slice(metadata).expect("metadata");
         let huge = HydraKllMetadata {
@@ -1684,9 +1668,9 @@ mod tests {
             &rmp_serde::to_vec_named(&huge).expect("metadata"),
             payload,
         );
-        assert!(Hydra::deserialize_from_bytes(&bytes).is_err());
+        assert!(Hydra::from_asapv1(&bytes).is_err());
 
-        let encoded = univmon_grid().serialize_to_bytes().expect("serialize");
+        let encoded = univmon_grid().to_asapv1().expect("serialize");
         let (_, metadata, payload) = envelope::split(&encoded).expect("split");
         let base: HydraUnivMonMetadata = from_slice(metadata).expect("metadata");
         let shaped = |rows, cols, shape: UnivMonShape| HydraUnivMonMetadata {
@@ -1703,26 +1687,19 @@ mod tests {
             )
         };
         let shape = || UnivMonShape {
-            layer_size: base.cell_layers,
-            sketch_row: base.cell_rows,
-            sketch_col: base.cell_cols,
+            layers: base.cell_layers,
+            rows: base.cell_rows,
+            cols: base.cell_cols,
             heap_size: base.cell_heap_size,
         };
         let cases = [
             shaped(MAX_ROWS, 4096, shape()),
+            shaped(3, 8, UnivMonShape { cols: 0, ..shape() }),
             shaped(
                 3,
                 8,
                 UnivMonShape {
-                    sketch_col: 0,
-                    ..shape()
-                },
-            ),
-            shaped(
-                3,
-                8,
-                UnivMonShape {
-                    layer_size: 0,
+                    layers: 0,
                     ..shape()
                 },
             ),
@@ -1742,7 +1719,7 @@ mod tests {
                 payload,
             );
             assert!(
-                Hydra::deserialize_from_bytes(&bytes).is_err(),
+                Hydra::from_asapv1(&bytes).is_err(),
                 "a crafted UnivMon shape must be rejected, not decoded"
             );
         }
@@ -1841,21 +1818,21 @@ mod tests {
     /// carries, so the envelope a decode rebuilds it from is the counter's own.
     #[test]
     fn hydra_cell_envelopes_mirror_the_counters_own_bytes() {
-        let mut hll = HyperLogLog::<ErtlMLE>::default();
+        let mut hll = HyperLogLog::<Ertl>::default();
         hll.update(&DataInput::U64(7));
         assert_eq!(
             hll_cell_envelope(hll.registers_as_slice()).expect("HLL cell"),
-            hll.serialize_to_bytes().expect("HLL envelope")
+            hll.to_asapv1().expect("HLL envelope")
         );
 
-        let mut kll = KLL::default();
+        let mut kll = Kll::default();
         for v in 0..500u64 {
             kll.update(&(v as f64));
         }
-        let (state, bit_cache, remaining_bits) = kll.wire_coin();
+        let (state, bit_cache, remaining_bits) = kll.coin_state();
         let cell = HydraKllCell {
-            levels: kll.wire_levels(),
-            items: kll.wire_items(),
+            levels: kll.level_bounds_top_down(),
+            items: kll.items_top_down(),
             coin: HydraKllCoin {
                 state,
                 bit_cache,
@@ -1863,19 +1840,19 @@ mod tests {
             },
         };
         assert_eq!(
-            kll_cell_envelope(kll.wire_k(), kll.wire_m(), &cell).expect("KLL cell"),
-            kll.serialize_to_bytes().expect("KLL envelope")
+            kll_cell_envelope(kll.wire_k(), kll.m(), &cell).expect("KLL cell"),
+            kll.to_asapv1().expect("KLL envelope")
         );
 
-        let mut um = UnivMon::init_univmon(4, 2, 16, 3);
+        let mut um = UnivMon::new(4, 2, 16, 3);
         um.update_weighted(&DataInput::U64(9), 3);
-        let bytes = um.serialize_to_bytes().expect("UnivMon envelope");
+        let bytes = um.to_asapv1().expect("UnivMon envelope");
         let (_, metadata, payload) = envelope::split(&bytes).expect("split");
         let meta: UnivMonMetadata = from_slice(metadata).expect("metadata");
         let shape = UnivMonShape {
-            layer_size: meta.layers,
-            sketch_row: meta.rows,
-            sketch_col: meta.cols,
+            layers: meta.layers,
+            rows: meta.rows,
+            cols: meta.cols,
             heap_size: meta.heap_size,
         };
         assert_eq!(
@@ -1898,19 +1875,19 @@ mod tests {
         fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
             DefaultXxHasher::hash128_seeded(d, key)
         }
-        fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(d: usize, key: &OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(d, key)
         }
-        fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(d: usize, key: &OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(d, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -1922,7 +1899,7 @@ mod tests {
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
@@ -1932,7 +1909,7 @@ mod tests {
     #[test]
     fn hydra_pins_its_hash_profile() {
         let hydra = cm_grid();
-        let encoded = hydra.serialize_to_bytes().expect("serialize");
+        let encoded = hydra.to_asapv1().expect("serialize");
         let (_, metadata, payload) = envelope::split(&encoded).expect("split");
         let meta: HydraMatrixMetadata = from_slice(metadata).expect("metadata");
         assert_eq!(meta.hash_profile_id, DefaultXxHasher::PROFILE_ID);
@@ -1954,7 +1931,7 @@ mod tests {
         );
         assert_ne!(forged, encoded);
         assert!(
-            Hydra::deserialize_from_bytes(&forged).is_err(),
+            Hydra::from_asapv1(&forged).is_err(),
             "a custom-profile envelope must be rejected"
         );
     }

@@ -1,5 +1,5 @@
 //! ASAPv1 wire serialization for [`SetAggregator`] (`0x08 0x00`, §3.21) and
-//! its delta [`DeltaResult`] (`0x08 0x80`, §3.22).
+//! its delta [`SetAggregatorDelta`] (`0x08 0x80`, §3.22).
 //!
 //! Neither type hashes or takes a construction parameter, so the metadata map
 //! is exactly `{metadata_version: 1}`. Every member array is strictly ascending
@@ -11,7 +11,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::envelope;
-use crate::message_pack_format::portable::delta_set_aggregator::DeltaResult;
+use crate::message_pack_format::portable::delta_set_aggregator::SetAggregatorDelta;
 use crate::message_pack_format::wire_key::WireString;
 
 use super::SetAggregator;
@@ -39,7 +39,7 @@ struct SetPayload<S> {
     values: Vec<S>,
 }
 
-/// DeltaResult payload (§3.22), positional: `[added, removed]`.
+/// SetAggregatorDelta payload (§3.22), positional: `[added, removed]`.
 #[derive(Debug, Serialize, Deserialize)]
 struct DeltaPayload<S> {
     added: Vec<S>,
@@ -100,7 +100,7 @@ fn open<'a>(bytes: &'a [u8], kind: &[u8], name: &str) -> Result<&'a [u8], RmpDec
 impl SetAggregator {
     /// Serializes the set into an ASAPv1 MessagePack envelope, members in
     /// ascending UTF-8 byte order.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata = rmp_serde::to_vec_named(&SET_METADATA)?;
         let payload = rmp_serde::to_vec(&SetPayload {
             values: ascending(&self.values),
@@ -109,7 +109,7 @@ impl SetAggregator {
     }
 
     /// Deserializes a set from an ASAPv1 MessagePack envelope.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let payload = open(bytes, SET_AGGREGATOR_KIND, "SetAggregator")?;
         let p: SetPayload<WireString> = envelope::decode_block(payload)?;
         Ok(SetAggregator {
@@ -118,11 +118,11 @@ impl SetAggregator {
     }
 }
 
-impl DeltaResult {
+impl SetAggregatorDelta {
     /// Serializes the delta into an ASAPv1 MessagePack envelope under the
     /// SetAggregator delta kind_id, each side in ascending UTF-8 byte order.
     /// A member in both `added` and `removed` is an error.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         check_disjoint(&self.added, &self.removed).map_err(RmpEncodeError::Syntax)?;
         let metadata = rmp_serde::to_vec_named(&SET_METADATA)?;
         let payload = rmp_serde::to_vec(&DeltaPayload {
@@ -137,13 +137,13 @@ impl DeltaResult {
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let payload = open(bytes, SET_AGGREGATOR_DELTA_KIND, "DeltaResult")?;
         let p: DeltaPayload<WireString> = envelope::decode_block(payload)?;
         let added = read_ascending("DeltaResult added", p.added)?;
         let removed = read_ascending("DeltaResult removed", p.removed)?;
         check_disjoint(&added, &removed).map_err(RmpDecodeError::Uncategorized)?;
-        Ok(DeltaResult { added, removed })
+        Ok(SetAggregatorDelta { added, removed })
     }
 }
 
@@ -178,8 +178,8 @@ mod tests {
 
     #[test]
     fn set_aggregator_rejects_unordered_and_duplicate_members() {
-        assert!(SetAggregator::deserialize_from_bytes(&crafted_set(&["b", "a"])).is_err());
-        assert!(SetAggregator::deserialize_from_bytes(&crafted_set(&["a", "a"])).is_err());
+        assert!(SetAggregator::from_asapv1(&crafted_set(&["b", "a"])).is_err());
+        assert!(SetAggregator::from_asapv1(&crafted_set(&["a", "a"])).is_err());
     }
 
     /// A `bin` member is rejected even when it holds valid UTF-8.
@@ -188,7 +188,7 @@ mod tests {
         let bin = || vec![serde_bytes::Bytes::new(b"a")];
         let set = rmp_serde::to_vec(&SetPayload { values: bin() }).unwrap();
         let bytes = envelope::encode(SET_AGGREGATOR_KIND, &metadata_bytes(), &set);
-        assert!(SetAggregator::deserialize_from_bytes(&bytes).is_err());
+        assert!(SetAggregator::from_asapv1(&bytes).is_err());
 
         let delta = rmp_serde::to_vec(&DeltaPayload {
             added: vec![],
@@ -196,7 +196,7 @@ mod tests {
         })
         .unwrap();
         let bytes = envelope::encode(SET_AGGREGATOR_DELTA_KIND, &metadata_bytes(), &delta);
-        assert!(DeltaResult::deserialize_from_bytes(&bytes).is_err());
+        assert!(SetAggregatorDelta::from_asapv1(&bytes).is_err());
     }
 
     #[test]
@@ -220,7 +220,7 @@ mod tests {
         ];
         for meta in metas {
             let bytes = envelope::encode(SET_AGGREGATOR_KIND, &meta, &payload);
-            assert!(SetAggregator::deserialize_from_bytes(&bytes).is_err());
+            assert!(SetAggregator::from_asapv1(&bytes).is_err());
         }
     }
 
@@ -232,28 +232,28 @@ mod tests {
         let delta = crafted_delta(&["a"], &[]);
         let (_, metadata, payload) = envelope::split(&set).unwrap();
         let bytes = envelope::encode(SET_AGGREGATOR_DELTA_KIND, metadata, payload);
-        assert!(SetAggregator::deserialize_from_bytes(&bytes).is_err());
+        assert!(SetAggregator::from_asapv1(&bytes).is_err());
         for kind in [SET_AGGREGATOR_KIND, &[0x09, 0x00]] {
             let (_, metadata, payload) = envelope::split(&delta).unwrap();
             let bytes = envelope::encode(kind, metadata, payload);
-            assert!(DeltaResult::deserialize_from_bytes(&bytes).is_err());
+            assert!(SetAggregatorDelta::from_asapv1(&bytes).is_err());
         }
     }
 
     #[test]
     fn delta_result_rejects_a_member_both_added_and_removed() {
         let both = crafted_delta(&["a", "b"], &["b"]);
-        assert!(DeltaResult::deserialize_from_bytes(&both).is_err());
-        let delta = DeltaResult {
+        assert!(SetAggregatorDelta::from_asapv1(&both).is_err());
+        let delta = SetAggregatorDelta {
             added: set_of(&["a"]),
             removed: set_of(&["a"]),
         };
-        assert!(delta.serialize_to_bytes().is_err());
+        assert!(delta.to_asapv1().is_err());
     }
 
     #[test]
     fn delta_result_rejects_unordered_sides() {
-        assert!(DeltaResult::deserialize_from_bytes(&crafted_delta(&["b", "a"], &[])).is_err());
-        assert!(DeltaResult::deserialize_from_bytes(&crafted_delta(&[], &["c", "c"])).is_err());
+        assert!(SetAggregatorDelta::from_asapv1(&crafted_delta(&["b", "a"], &[])).is_err());
+        assert!(SetAggregatorDelta::from_asapv1(&crafted_delta(&[], &["c", "c"])).is_err());
     }
 }

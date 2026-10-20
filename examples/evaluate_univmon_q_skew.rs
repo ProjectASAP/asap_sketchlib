@@ -15,8 +15,8 @@ use std::mem::size_of;
 use std::time::{Duration, Instant};
 
 use asap_sketchlib::{
-    BOTTOM_LAYER_FINDER, DataInput, DefaultXxHasher, HeapItem, UnivMon, UnivMonQ, UnivMonQConfig,
-    hash64_seeded,
+    DataInput, DefaultXxHasher, OwnedDataInput, UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon, UnivMonQ,
+    UnivMonQConfig, hash64_seeded,
 };
 
 const SKEWS: [f64; 7] = [0.0, 0.5, 0.9, 1.1, 1.3, 1.6, 2.0];
@@ -54,12 +54,12 @@ fn main() {
     let mut base_config = UnivMonQConfig {
         levels: 12,
         width: 4_096,
-        width_halving_period: 3,
+        cols_halving_period: 3,
         depth: 5,
         counter_bits: 32,
         candidates,
         ordered_samples: 4_096,
-        hash_seed: 5,
+        seed_index: 5,
     }
     .with_window_bound(n as u64, 1e-9)
     .expect("the evaluation window must fit within 63 levels");
@@ -67,7 +67,7 @@ fn main() {
     let um_counter_bytes =
         base_config.levels * base_config.depth * base_config.width * size_of::<i64>();
     if profile == "equal-memory" {
-        base_config.width_halving_period = 0;
+        base_config.cols_halving_period = 0;
         base_config.candidates = largest_candidate_budget(base_config, um_counter_bytes);
     }
     let q_reserved_bytes = UnivMonQ::new(base_config)
@@ -81,7 +81,7 @@ fn main() {
         "config: levels={}, width={}, halve/{} levels, depth={}, candidates={}, ordered_samples={}",
         base_config.levels,
         base_config.width,
-        base_config.width_halving_period,
+        base_config.cols_halving_period,
         base_config.depth,
         base_config.candidates,
         base_config.ordered_samples,
@@ -330,13 +330,13 @@ fn evaluate_trial(
         }
     }
 
-    let q_wire = q_merged_tree.serialize_to_bytes().unwrap();
-    let q_decoded = UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&q_wire).unwrap();
+    let q_wire = q_merged_tree.to_asapv1().unwrap();
+    let q_decoded = UnivMonQ::<DefaultXxHasher>::from_asapv1(&q_wire).unwrap();
     if !equivalent_queries(&q_merged_tree, &q_decoded, truth) {
         q_violations += 1;
     }
-    let um_wire = um_merged_tree.serialize_to_bytes().unwrap();
-    let um_decoded = UnivMon::deserialize_from_bytes(&um_wire).unwrap();
+    let um_wire = um_merged_tree.to_asapv1().unwrap();
+    let um_decoded = UnivMon::from_asapv1(&um_wire).unwrap();
     let um_wire_mismatches = um_query_mismatches(&um_merged_tree, &um_decoded, truth);
     if !um_wire_mismatches.is_empty() {
         eprintln!("UM wire mismatch seed={seed:#x}: {um_wire_mismatches:?}");
@@ -368,7 +368,7 @@ fn evaluate_trial(
 }
 
 fn new_univmon(config: UnivMonQConfig, candidates: usize) -> UnivMon {
-    UnivMon::init_univmon(candidates, config.depth, config.width, config.levels)
+    UnivMon::new(candidates, config.depth, config.width, config.levels)
 }
 
 fn build_shards(data: &[i64], config: UnivMonQConfig, seed: u64) -> Vec<UnivMonQ> {
@@ -376,8 +376,7 @@ fn build_shards(data: &[i64], config: UnivMonQConfig, seed: u64) -> Vec<UnivMonQ
         .map(|shard| {
             let start = shard * data.len() / SHARDS;
             let end = (shard + 1) * data.len() / SHARDS;
-            let mut sketch =
-                UnivMonQ::new_with_source_id(config, source_id(seed, shard + 1)).unwrap();
+            let mut sketch = UnivMonQ::with_source_id(config, source_id(seed, shard + 1)).unwrap();
             for value in &data[start..end] {
                 sketch.add(value);
             }
@@ -464,7 +463,7 @@ fn benchmark_warm_queries(sketch: &UnivMonQ, truth: &Truth) -> f64 {
         black_box(query.count());
         black_box((query.min(), query.max()));
         black_box(query.estimate_frequency(black_box(probe as f64)));
-        black_box(query.estimate_distinct());
+        black_box(query.estimate_cardinality());
         black_box(query.estimate_f2());
         black_box(query.estimate_entropy());
         black_box(query.estimate_g_sum(|frequency| frequency));
@@ -482,10 +481,10 @@ fn benchmark_um_queries(sketch: &UnivMon, truth: &Truth) -> f64 {
         let start = Instant::now();
         black_box(sketch.bucket_size);
         black_box(univmon_frequency(sketch, truth.domain / 2));
-        black_box(sketch.calc_card());
-        black_box(sketch.calc_l2());
-        black_box(sketch.calc_entropy());
-        black_box(sketch.calc_l1());
+        black_box(sketch.estimate_cardinality());
+        black_box(sketch.estimate_l2());
+        black_box(sketch.estimate_entropy());
+        black_box(sketch.estimate_l1());
         black_box(univmon_heavy_hitters(sketch, TOP_K));
         durations.push(start.elapsed());
     }
@@ -545,7 +544,7 @@ fn score(sketch: &UnivMonQ, truth: &Truth) -> Accuracy {
     let estimated_entropy = query.estimate_entropy();
     Accuracy {
         point_nrmse: (squared_error / point_count as f64).sqrt() / truth.f2.sqrt().max(1.0),
-        f0_rel: relative_error(query.estimate_distinct(), truth.distinct as f64),
+        f0_rel: relative_error(query.estimate_cardinality(), truth.distinct as f64),
         f2_rel: relative_error(query.estimate_f2(), truth.f2),
         entropy_rel: relative_error(estimated_entropy, truth.entropy),
         entropy_abs: (estimated_entropy - truth.entropy).abs(),
@@ -582,14 +581,14 @@ fn score_um(sketch: &UnivMon, truth: &Truth) -> Accuracy {
         .iter()
         .filter_map(|key| truth.counts.get(*key))
         .sum();
-    let entropy = sketch.calc_entropy() * std::f64::consts::LN_2;
+    let entropy = sketch.estimate_entropy() * std::f64::consts::LN_2;
     Accuracy {
         point_nrmse: (squared_error / point_count as f64).sqrt() / truth.f2.sqrt().max(1.0),
-        f0_rel: relative_error(sketch.calc_card(), truth.distinct as f64),
-        f2_rel: relative_error(sketch.calc_l2().powi(2), truth.f2),
+        f0_rel: relative_error(sketch.estimate_cardinality(), truth.distinct as f64),
+        f2_rel: relative_error(sketch.estimate_l2().powi(2), truth.f2),
         entropy_rel: relative_error(entropy, truth.entropy),
         entropy_abs: (entropy - truth.entropy).abs(),
-        l1_rel: relative_error(sketch.calc_l1(), truth.n as f64),
+        l1_rel: relative_error(sketch.estimate_l1(), truth.n as f64),
         hh_mass: (captured_mass as f64 / truth.top_mass.max(1) as f64).min(1.0),
         quantile_mean: 0.0,
         tail_max: 0.0,
@@ -599,22 +598,22 @@ fn score_um(sketch: &UnivMon, truth: &Truth) -> Accuracy {
 
 fn univmon_frequency(sketch: &UnivMon, value: usize) -> f64 {
     let input = DataInput::U64(value as u64);
-    let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &input);
-    let mut terminal = sketch.layer_size - 1;
-    for level in 1..sketch.layer_size {
+    let hash = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &input);
+    let mut terminal = sketch.layers - 1;
+    for level in 1..sketch.layers {
         if ((hash >> level) & 1) == 0 {
             terminal = level - 1;
             break;
         }
     }
-    sketch.l2_sketch_layers[terminal].estimate(&input).max(0.0)
+    sketch.layer_sketches[terminal].estimate(&input).max(0.0)
 }
 
 fn univmon_heavy_hitters(sketch: &UnivMon, k: usize) -> Vec<(usize, u64)> {
     let mut keys = HashSet::new();
-    for heap in sketch.hh_layers.iter() {
+    for heap in sketch.layer_heaps.iter() {
         for item in heap.heap() {
-            if let HeapItem::U64(value) = item.key {
+            if let OwnedDataInput::U64(value) = item.key {
                 keys.insert(value as usize);
             }
         }
@@ -634,11 +633,11 @@ fn validate(sketch: &UnivMonQ, truth: &Truth) -> usize {
     violations += usize::from(query.count() != truth.n as u64);
     violations += usize::from(query.min() != Some(truth.min as f64));
     violations += usize::from(query.max() != Some(truth.max as f64));
-    violations += usize::from(!query.estimate_distinct().is_finite());
+    violations += usize::from(!query.estimate_cardinality().is_finite());
     violations += usize::from(!query.estimate_f2().is_finite());
     violations += usize::from(!query.estimate_entropy().is_finite());
-    violations += usize::from(query.estimate_distinct() < 0.0);
-    violations += usize::from(query.estimate_distinct() > truth.n as f64);
+    violations += usize::from(query.estimate_cardinality() < 0.0);
+    violations += usize::from(query.estimate_cardinality() > truth.n as f64);
     violations += usize::from(query.estimate_f2() < 0.0);
 
     let cdf = query.cdf();
@@ -667,10 +666,10 @@ fn validate(sketch: &UnivMonQ, truth: &Truth) -> usize {
 
 fn validate_um(sketch: &UnivMon, truth: &Truth) -> usize {
     let estimates = [
-        sketch.calc_card(),
-        sketch.calc_l2(),
-        sketch.calc_entropy(),
-        sketch.calc_l1(),
+        sketch.estimate_cardinality(),
+        sketch.estimate_l2(),
+        sketch.estimate_entropy(),
+        sketch.estimate_l1(),
     ];
     usize::from(sketch.bucket_size != truth.n)
         + estimates.iter().filter(|value| !value.is_finite()).count()
@@ -683,7 +682,7 @@ fn equivalent_queries(left: &UnivMonQ, right: &UnivMonQ, truth: &Truth) -> bool 
     left.count() == right.count()
         && left.min().map(f64::to_bits) == right.min().map(f64::to_bits)
         && left.max().map(f64::to_bits) == right.max().map(f64::to_bits)
-        && left.estimate_distinct().to_bits() == right.estimate_distinct().to_bits()
+        && left.estimate_cardinality().to_bits() == right.estimate_cardinality().to_bits()
         && left.estimate_f2().to_bits() == right.estimate_f2().to_bits()
         && left.estimate_entropy().to_bits() == right.estimate_entropy().to_bits()
         && left.heavy_hitters(TOP_K) == right.heavy_hitters(TOP_K)
@@ -704,16 +703,16 @@ fn um_query_mismatches(left: &UnivMon, right: &UnivMon, truth: &Truth) -> Vec<&'
     if left.bucket_size != right.bucket_size {
         mismatches.push("count");
     }
-    if left.calc_card().to_bits() != right.calc_card().to_bits() {
+    if left.estimate_cardinality().to_bits() != right.estimate_cardinality().to_bits() {
         mismatches.push("F0");
     }
-    if left.calc_l2().to_bits() != right.calc_l2().to_bits() {
+    if left.estimate_l2().to_bits() != right.estimate_l2().to_bits() {
         mismatches.push("F2");
     }
-    if left.calc_entropy().to_bits() != right.calc_entropy().to_bits() {
+    if left.estimate_entropy().to_bits() != right.estimate_entropy().to_bits() {
         mismatches.push("entropy");
     }
-    if left.calc_l1().to_bits() != right.calc_l1().to_bits() {
+    if left.estimate_l1().to_bits() != right.estimate_l1().to_bits() {
         mismatches.push("L1");
     }
     if univmon_heavy_hitters(left, TOP_K) != univmon_heavy_hitters(right, TOP_K) {

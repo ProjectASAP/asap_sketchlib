@@ -2,7 +2,7 @@
 //!
 //! Child submodule of [`crate::sketches::elastic`]: it holds ALL of Elastic's
 //! serialization (the metadata/payload DTOs, the kind_id constant, and the
-//! `serialize_to_bytes` / `deserialize_from_bytes` impls) while the algorithm
+//! `to_asapv1` / `from_asapv1` impls) while the algorithm
 //! lives in the parent module file. Being a descendant module, it reads the
 //! sketch's private `stale_copies` flag and `_hasher` marker and rebuilds the
 //! struct directly, without widening any field visibility. See the Elastic
@@ -15,7 +15,7 @@
 //!
 //! ## The light layer is inlined
 //!
-//! `Elastic::light` is a `CountMin<Vector2D<i32>, RegularPath, H>`. Its
+//! `ElasticSketch::light` is a `CountMinSketch<Vector2D<i32>, RegularPath, H>`. Its
 //! counters are inlined into this payload as one row-major array and its
 //! structural params (`light_rows`, `light_cols`, `light_counter_type`,
 //! `light_mode`) into this metadata, so an Elastic binary is one envelope.
@@ -39,9 +39,9 @@ use std::marker::PhantomData;
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
-use crate::{CountMin, HashProfile, SketchHasher, Vector2D};
+use crate::{CountMinSketch, HashProfile, SketchHasher, Vector2D};
 
-use super::{Elastic, HeavyBucket};
+use super::{ElasticSketch, HeavyBucket};
 
 /// Elastic kind_id: family `0x0b`, single algorithm variant `0x00`.
 const ELASTIC_KIND: &[u8] = &[0x0b, 0x00];
@@ -119,7 +119,7 @@ struct ElasticPayload {
 }
 
 /// Rejects a geometry the format cannot carry and returns the light layer's
-/// cell count. Zero is out in every dimension, `bktlen` is an `i32`, and the
+/// cell count. Zero is out in every dimension, `heavy_buckets` is an `i32`, and the
 /// light cell count must not overflow.
 fn check_geometry(
     heavy_buckets: usize,
@@ -145,24 +145,24 @@ fn check_geometry(
 // Wire serialization for Elastic. `wire` is a descendant of the sketch module,
 // so this impl reads the private stale-copy flag and rebuilds the struct
 // directly.
-impl<H: SketchHasher + HashProfile> Elastic<H> {
+impl<H: SketchHasher + HashProfile> ElasticSketch<H> {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope. The metadata
     /// is derived from the hasher's [`HashProfile`], so it truthfully describes
     /// how the sketch was hashed.
     ///
-    /// A `bktlen` disagreeing with the heavy table, a light layer whose cell
+    /// A `heavy_buckets` disagreeing with the heavy table, a light layer whose cell
     /// count disagrees with its own dimensions, a zero dimension, and a free
     /// bucket still naming a flow are errors rather than bytes that would be
     /// refused on decode.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let heavy_buckets = self.heavy.len();
         let (light_rows, light_cols) = (self.light.rows(), self.light.cols());
         let light_cells = check_geometry(heavy_buckets, light_rows, light_cols)
             .map_err(RmpEncodeError::Syntax)?;
-        if self.bktlen <= 0 || self.bktlen as usize != heavy_buckets {
+        if self.heavy_buckets <= 0 || self.heavy_buckets as usize != heavy_buckets {
             return Err(RmpEncodeError::Syntax(format!(
                 "ASAPv1 Elastic envelope: bktlen {} != heavy table length {heavy_buckets}",
-                self.bktlen
+                self.heavy_buckets
             )));
         }
         admission_rate::check_admits_all(self.light.admission_rate()).map_err(|e| {
@@ -214,7 +214,7 @@ impl<H: SketchHasher + HashProfile> Elastic<H> {
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. Both
     /// geometries are read from the (validated) metadata; the payload carries
     /// the heavy buckets, the stale-copy flag, and the light counters.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != ELASTIC_KIND {
@@ -274,13 +274,14 @@ impl<H: SketchHasher + HashProfile> Elastic<H> {
                 eviction: p.evictions[i],
             })
             .collect();
-        let light = CountMin::from_storage(Vector2D::from_fn(light_rows, light_cols, |r, c| {
-            p.light_counts[r * light_cols + c]
-        }));
-        Ok(Elastic {
+        let light =
+            CountMinSketch::from_storage(Vector2D::from_fn(light_rows, light_cols, |r, c| {
+                p.light_counts[r * light_cols + c]
+            }));
+        Ok(ElasticSketch {
             heavy,
             light,
-            bktlen: heavy_buckets as i32,
+            heavy_buckets: heavy_buckets as i32,
             stale_copies: p.stale_copies,
             _hasher: PhantomData,
         })
@@ -290,7 +291,9 @@ impl<H: SketchHasher + HashProfile> Elastic<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS, RegularPath};
+    use crate::{
+        DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS, RegularPath,
+    };
 
     /// The light layer is a Count-Min matrix, so it carries the same row bound:
     /// more rows than the seed list has seeds is refused on both sides.
@@ -298,8 +301,8 @@ mod tests {
     fn elastic_rejects_too_many_light_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
         assert!(
-            Elastic::<DefaultXxHasher>::init_with_dimensions(4, rows, 256)
-                .serialize_to_bytes()
+            ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(4, rows, 256)
+                .to_asapv1()
                 .is_err(),
             "a light layer past MATRIX_MAX_ROWS must not serialize"
         );
@@ -317,22 +320,22 @@ mod tests {
         })
         .unwrap();
         let bytes = envelope::encode(ELASTIC_KIND, &metadata, &payload);
-        let problem = Elastic::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
+        let problem = ElasticSketch::<DefaultXxHasher>::from_asapv1(&bytes)
             .expect_err("light rows past MATRIX_MAX_ROWS must be rejected")
             .to_string();
         assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
 
         // The boundary itself is eligible.
         assert!(
-            Elastic::<DefaultXxHasher>::init_with_dimensions(4, MATRIX_MAX_ROWS, 256)
-                .serialize_to_bytes()
+            ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(4, MATRIX_MAX_ROWS, 256)
+                .to_asapv1()
                 .is_ok()
         );
     }
 
     /// The whole heavy table as `(flow_id, vote_pos, vote_neg, eviction)` in
     /// bucket index order.
-    fn buckets<H: SketchHasher>(sketch: &Elastic<H>) -> Vec<(String, i32, i32, bool)> {
+    fn buckets<H: SketchHasher>(sketch: &ElasticSketch<H>) -> Vec<(String, i32, i32, bool)> {
         sketch
             .heavy
             .iter()
@@ -341,12 +344,12 @@ mod tests {
     }
 
     /// The light layer's counters in row-major order.
-    fn light_cells<H: SketchHasher>(sketch: &Elastic<H>) -> Vec<i32> {
+    fn light_cells<H: SketchHasher>(sketch: &ElasticSketch<H>) -> Vec<i32> {
         sketch.light.as_storage().as_slice().to_vec()
     }
 
     /// A key that lands in the same heavy bucket as `primary`.
-    fn colliding_key(primary: &str, sketch: &Elastic) -> String {
+    fn colliding_key(primary: &str, sketch: &ElasticSketch) -> String {
         let target = sketch.bucket_index(primary);
         (0..10_000)
             .map(|i| format!("flow::secondary::{i}"))
@@ -356,19 +359,19 @@ mod tests {
 
     #[test]
     fn elastic_round_trip_serialization() {
-        let mut sketch: Elastic = Elastic::init_with_dimensions(8, 2, 256);
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 256);
         for _ in 0..12 {
             sketch.update("19.98.10.26|80".to_string());
         }
         sketch.update("34.52.73.17|118".to_string());
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize Elastic");
+        let encoded = sketch.to_asapv1().expect("serialize Elastic");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x0b, 0x00]); // kind_id_len=2, kind_id=[0x0b,0x00]
 
-        let decoded: Elastic =
-            Elastic::deserialize_from_bytes(&encoded).expect("deserialize Elastic");
-        assert_eq!(decoded.bktlen, 8);
+        let decoded: ElasticSketch =
+            ElasticSketch::from_asapv1(&encoded).expect("deserialize Elastic");
+        assert_eq!(decoded.heavy_buckets, 8);
         assert_eq!(decoded.light.rows(), 2);
         assert_eq!(decoded.light.cols(), 256);
         assert_eq!(buckets(&sketch), buckets(&decoded));
@@ -380,10 +383,10 @@ mod tests {
     /// as an Elastic.
     #[test]
     fn elastic_rejects_foreign_kind_id() {
-        let cms = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(2, 256);
-        let cms_bytes = cms.serialize_to_bytes().expect("serialize CMS");
+        let cms = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 256);
+        let cms_bytes = cms.to_asapv1().expect("serialize CMS");
         assert!(
-            Elastic::<DefaultXxHasher>::deserialize_from_bytes(&cms_bytes).is_err(),
+            ElasticSketch::<DefaultXxHasher>::from_asapv1(&cms_bytes).is_err(),
             "CMS bytes must not decode as an Elastic"
         );
     }
@@ -483,7 +486,7 @@ mod tests {
                     .unwrap();
             let bytes = envelope::encode(ELASTIC_KIND, &metadata, &payload);
             assert!(
-                Elastic::<DefaultXxHasher>::deserialize_from_bytes(&bytes).is_err(),
+                ElasticSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
                 "zero-dimension metadata must be rejected, not panic"
             );
         }
@@ -510,7 +513,7 @@ mod tests {
         .unwrap();
         let bytes = envelope::encode(ELASTIC_KIND, &metadata, &payload);
         assert!(
-            Elastic::<DefaultXxHasher>::deserialize_from_bytes(&bytes).is_err(),
+            ElasticSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "payload lengths must match the declared geometry"
         );
 
@@ -528,7 +531,7 @@ mod tests {
         .unwrap();
         let bytes = envelope::encode(ELASTIC_KIND, &metadata, &payload);
         assert!(
-            Elastic::<DefaultXxHasher>::deserialize_from_bytes(&bytes).is_err(),
+            ElasticSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "light_counts must match light_rows*light_cols"
         );
     }
@@ -554,7 +557,7 @@ mod tests {
             .unwrap();
             let bytes = envelope::encode(ELASTIC_KIND, &metadata, &payload);
             assert!(
-                Elastic::<DefaultXxHasher>::deserialize_from_bytes(&bytes).is_err(),
+                ElasticSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
                 "occupancy must agree between flow_ids and vote_pos"
             );
         }
@@ -563,17 +566,17 @@ mod tests {
     /// A sketch the decoder would refuse must not serialize.
     #[test]
     fn elastic_rejects_serializing_an_inconsistent_sketch() {
-        let mut desynced: Elastic = Elastic::init_with_dimensions(8, 2, 256);
-        desynced.bktlen = 16;
+        let mut desynced: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 256);
+        desynced.heavy_buckets = 16;
         assert!(
-            desynced.serialize_to_bytes().is_err(),
+            desynced.to_asapv1().is_err(),
             "a bktlen disagreeing with the heavy table must not serialize"
         );
 
-        let mut named_free: Elastic = Elastic::init_with_dimensions(8, 2, 256);
+        let mut named_free: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 256);
         named_free.heavy[3].flow_id = "ghost".to_string();
         assert!(
-            named_free.serialize_to_bytes().is_err(),
+            named_free.to_asapv1().is_err(),
             "a free bucket naming a flow must not serialize"
         );
     }
@@ -582,8 +585,8 @@ mod tests {
     /// stays distinguishable from the buckets that hold nothing.
     #[test]
     fn elastic_free_buckets_are_nil_and_never_collide_with_an_empty_flow_id() {
-        let all_free: Elastic = Elastic::init_with_dimensions(4, 1, 2);
-        let encoded = all_free.serialize_to_bytes().expect("serialize");
+        let all_free: ElasticSketch = ElasticSketch::with_heavy_and_light(4, 1, 2);
+        let encoded = all_free.to_asapv1().expect("serialize");
         let (_, _, payload) = envelope::split(&encoded).expect("split");
         assert_eq!(
             payload.iter().filter(|&&b| b == 0xc0).count(),
@@ -594,18 +597,18 @@ mod tests {
             !payload.contains(&0xa0),
             "no empty-string flow id is emitted"
         );
-        let decoded: Elastic = Elastic::deserialize_from_bytes(&encoded).expect("deserialize");
+        let decoded: ElasticSketch = ElasticSketch::from_asapv1(&encoded).expect("deserialize");
         assert_eq!(buckets(&all_free), buckets(&decoded));
 
-        let mut with_empty_flow: Elastic = Elastic::init_with_dimensions(4, 1, 2);
+        let mut with_empty_flow: ElasticSketch = ElasticSketch::with_heavy_and_light(4, 1, 2);
         with_empty_flow.update(String::new());
-        let encoded = with_empty_flow.serialize_to_bytes().expect("serialize");
+        let encoded = with_empty_flow.to_asapv1().expect("serialize");
         let (_, _, payload) = envelope::split(&encoded).expect("split");
         assert!(
             payload.contains(&0xa0),
             "the inserted empty flow id is a str"
         );
-        let decoded: Elastic = Elastic::deserialize_from_bytes(&encoded).expect("deserialize");
+        let decoded: ElasticSketch = ElasticSketch::from_asapv1(&encoded).expect("deserialize");
         assert_eq!(buckets(&with_empty_flow), buckets(&decoded));
         assert_eq!(decoded.query(String::new()), 1);
     }
@@ -614,7 +617,7 @@ mod tests {
     /// into the light layer, round-trips bucket for bucket.
     #[test]
     fn elastic_mixed_occupancy_round_trips() {
-        let mut sketch: Elastic = Elastic::init_with_dimensions(16, 3, 512);
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_and_light(16, 3, 512);
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &sketch);
         for _ in 0..10 {
@@ -631,8 +634,8 @@ mod tests {
             "mix free, occupied and flagged buckets"
         );
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
-        let decoded: Elastic = Elastic::deserialize_from_bytes(&encoded).expect("deserialize");
+        let encoded = sketch.to_asapv1().expect("serialize");
+        let decoded: ElasticSketch = ElasticSketch::from_asapv1(&encoded).expect("deserialize");
         assert_eq!(buckets(&sketch), buckets(&decoded));
         assert_eq!(light_cells(&sketch), light_cells(&decoded));
         assert_eq!(
@@ -646,7 +649,7 @@ mod tests {
     /// unchanged.
     #[test]
     fn elastic_negative_votes_and_light_counters_round_trip() {
-        let mut sketch: Elastic = Elastic::init_with_dimensions(4, 2, 8);
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_and_light(4, 2, 8);
         sketch.update("flow::signed".to_string());
         let idx = sketch.bucket_index("flow::signed");
         sketch.heavy[idx].vote_neg = -300;
@@ -656,8 +659,8 @@ mod tests {
             .update_weighted(&DataInput::String("flow::mouse".to_string()), -9);
         assert!(light_cells(&sketch).iter().any(|&c| c < 0));
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
-        let decoded: Elastic = Elastic::deserialize_from_bytes(&encoded).expect("deserialize");
+        let encoded = sketch.to_asapv1().expect("serialize");
+        let decoded: ElasticSketch = ElasticSketch::from_asapv1(&encoded).expect("deserialize");
         assert_eq!(buckets(&sketch), buckets(&decoded));
         assert_eq!(light_cells(&sketch), light_cells(&decoded));
     }
@@ -666,23 +669,23 @@ mod tests {
     /// decoder that dropped it would report every expanded flow twice.
     #[test]
     fn elastic_stale_copies_round_trips_in_both_states() {
-        let mut sketch: Elastic = Elastic::init_with_dimensions(8, 2, 256);
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 256);
         for i in 0..5u32 {
             for _ in 0..(i + 3) {
                 sketch.update(format!("flow::{i}"));
             }
         }
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
-        let decoded: Elastic = Elastic::deserialize_from_bytes(&encoded).expect("deserialize");
+        let encoded = sketch.to_asapv1().expect("serialize");
+        let decoded: ElasticSketch = ElasticSketch::from_asapv1(&encoded).expect("deserialize");
         assert!(!decoded.stale_copies);
 
         sketch.expand_heavy();
         assert!(sketch.stale_copies);
-        let encoded = sketch.serialize_to_bytes().expect("serialize expanded");
-        let decoded: Elastic =
-            Elastic::deserialize_from_bytes(&encoded).expect("deserialize expanded");
+        let encoded = sketch.to_asapv1().expect("serialize expanded");
+        let decoded: ElasticSketch =
+            ElasticSketch::from_asapv1(&encoded).expect("deserialize expanded");
         assert!(decoded.stale_copies);
-        assert_eq!(decoded.bktlen, 16);
+        assert_eq!(decoded.heavy_buckets, 16);
         assert_eq!(buckets(&sketch), buckets(&decoded));
 
         // A query path that reads the flag: stale copies are skipped, so no
@@ -703,14 +706,14 @@ mod tests {
     /// bytes it came from.
     #[test]
     fn elastic_decoded_sketch_reserializes_byte_identically() {
-        let mut sketch: Elastic = Elastic::init_with_dimensions(16, 3, 512);
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_and_light(16, 3, 512);
         for i in 0..40u32 {
             sketch.update(format!("fam{}|item{i}", i % 5));
         }
         sketch.expand_heavy();
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
-        let decoded: Elastic = Elastic::deserialize_from_bytes(&encoded).expect("deserialize");
-        assert_eq!(encoded, decoded.serialize_to_bytes().expect("re-serialize"));
+        let encoded = sketch.to_asapv1().expect("serialize");
+        let decoded: ElasticSketch = ElasticSketch::from_asapv1(&encoded).expect("deserialize");
+        assert_eq!(encoded, decoded.to_asapv1().expect("re-serialize"));
     }
 
     // A test-only custom hasher: hashes exactly like `DefaultXxHasher` but
@@ -728,19 +731,19 @@ mod tests {
         fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
             DefaultXxHasher::hash128_seeded(d, key)
         }
-        fn hash_item64_seeded(d: usize, key: &crate::HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(d: usize, key: &crate::OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(d, key)
         }
-        fn hash_item128_seeded(d: usize, key: &crate::HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(d: usize, key: &crate::OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(d, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -752,15 +755,15 @@ mod tests {
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
     #[test]
     fn elastic_custom_hasher_profile_round_trips_and_is_self_describing() {
         // (a) An Elastic built with a custom-profile hasher round-trips.
-        let mut alt: Elastic<AltHasher> = Elastic::init_with_dimensions(8, 2, 256);
-        let mut std: Elastic = Elastic::init_with_dimensions(8, 2, 256);
+        let mut alt: ElasticSketch<AltHasher> = ElasticSketch::with_heavy_and_light(8, 2, 256);
+        let mut std: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 256);
         for _ in 0..4 {
             alt.update("flow::42".to_string());
             std.update("flow::42".to_string());
@@ -768,19 +771,19 @@ mod tests {
         alt.update("flow::7".to_string());
         std.update("flow::7".to_string());
 
-        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
-        let decoded = Elastic::<AltHasher>::deserialize_from_bytes(&alt_bytes).expect("alt decode");
+        let alt_bytes = alt.to_asapv1().expect("alt serialize");
+        let decoded = ElasticSketch::<AltHasher>::from_asapv1(&alt_bytes).expect("alt decode");
         assert_eq!(buckets(&alt), buckets(&decoded));
         assert_eq!(light_cells(&alt), light_cells(&decoded));
 
         // (b) Bytes differ from the standard-profile sketch (metadata derived
         // from the different profile).
-        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        let std_bytes = std.to_asapv1().expect("std serialize");
         assert_ne!(alt_bytes, std_bytes);
 
         // (c) Standard-profile decode fails closed on custom-profile bytes.
         assert!(
-            Elastic::<DefaultXxHasher>::deserialize_from_bytes(&alt_bytes).is_err(),
+            ElasticSketch::<DefaultXxHasher>::from_asapv1(&alt_bytes).is_err(),
             "standard-profile decode must reject custom-profile bytes"
         );
     }

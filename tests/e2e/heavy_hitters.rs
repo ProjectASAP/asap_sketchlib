@@ -23,7 +23,7 @@
 //!
 //! `tests/e2e/octo.rs` covers the multi-threaded OctoSketch variants of Coco
 //! and Elastic in its `heavy_hitters` module; everything here is the
-//! single-threaded sketch. The top-k heap sketches (`CMSHeap`, `CSHeap`) answer
+//! single-threaded sketch. The top-k heap sketches (`CountMinSketchWithHeap`, `CountSketchWithHeap`) answer
 //! the same question from an unkeyed sketch plus a heap, and stay with their
 //! own family in `tests/e2e/frequency.rs`.
 
@@ -31,7 +31,7 @@ use crate::common;
 
 use common::{FreqTruth, zipf_u64};
 
-use asap_sketchlib::{DataInput, HeapItem, SPACE_SAVING_DEFAULT_CAPACITY, SpaceSaving};
+use asap_sketchlib::{DataInput, OwnedDataInput, SPACE_SAVING_DEFAULT_CAPACITY, SpaceSaving};
 use std::collections::{HashMap, HashSet};
 
 const STREAM: usize = 60_000;
@@ -63,9 +63,9 @@ fn filled(capacity: usize, stream: &[i64]) -> SpaceSaving {
     summary
 }
 
-fn key_of(item: &HeapItem) -> i64 {
+fn key_of(item: &OwnedDataInput) -> i64 {
     match item {
-        HeapItem::I64(v) => *v,
+        OwnedDataInput::I64(v) => *v,
         other => panic!("unexpected key form {other:?}"),
     }
 }
@@ -251,7 +251,7 @@ fn the_stream_summary_lists_stay_well_formed_under_eviction() {
 
         // `entries` reaches the counters directly; the two views must agree on
         // every triple, not just on which keys are held.
-        let triples = |view: &[(HeapItem, u64, u64)]| {
+        let triples = |view: &[(OwnedDataInput, u64, u64)]| {
             let mut out: Vec<(i64, u64, u64)> = view
                 .iter()
                 .map(|(key, count, error)| (key_of(key), *count, *error))
@@ -636,19 +636,21 @@ fn crafted_state_fails_closed() {
         capacity: usize,
         total: u64,
         discarded_max: u64,
-        entries: Vec<(HeapItem, u64, u64)>,
+        entries: Vec<(OwnedDataInput, u64, u64)>,
     }
 
-    let crafted =
-        |capacity: usize, total: u64, discarded_max: u64, entries: Vec<(HeapItem, u64, u64)>| {
-            rmp_serde::to_vec(&CraftedState {
-                capacity,
-                total,
-                discarded_max,
-                entries,
-            })
-            .expect("serialize")
-        };
+    let crafted = |capacity: usize,
+                   total: u64,
+                   discarded_max: u64,
+                   entries: Vec<(OwnedDataInput, u64, u64)>| {
+        rmp_serde::to_vec(&CraftedState {
+            capacity,
+            total,
+            discarded_max,
+            entries,
+        })
+        .expect("serialize")
+    };
 
     let refused = [
         (crafted(0, 100, 0, Vec::new()), "capacity is zero"),
@@ -657,16 +659,19 @@ fn crafted_state_fails_closed() {
                 1,
                 100,
                 0,
-                vec![(HeapItem::I64(1), 2, 0), (HeapItem::I64(2), 2, 0)],
+                vec![
+                    (OwnedDataInput::I64(1), 2, 0),
+                    (OwnedDataInput::I64(2), 2, 0),
+                ],
             ),
             "over a capacity of 1",
         ),
         (
-            crafted(4, 100, 0, vec![(HeapItem::I64(1), 0, 0)]),
+            crafted(4, 100, 0, vec![(OwnedDataInput::I64(1), 0, 0)]),
             "counter at zero",
         ),
         (
-            crafted(4, 100, 0, vec![(HeapItem::I64(1), 3, 9)]),
+            crafted(4, 100, 0, vec![(OwnedDataInput::I64(1), 3, 9)]),
             "error of 9 against a count of 3",
         ),
         (
@@ -674,16 +679,19 @@ fn crafted_state_fails_closed() {
                 4,
                 100,
                 0,
-                vec![(HeapItem::I64(1), 3, 0), (HeapItem::I64(1), 2, 0)],
+                vec![
+                    (OwnedDataInput::I64(1), 3, 0),
+                    (OwnedDataInput::I64(1), 2, 0),
+                ],
             ),
             "same key twice",
         ),
         (
-            crafted(4, 100, 200, vec![(HeapItem::I64(1), 3, 0)]),
+            crafted(4, 100, 200, vec![(OwnedDataInput::I64(1), 3, 0)]),
             "ceiling of 200 above its lowest count of 3",
         ),
         (
-            crafted(4, 2, 0, vec![(HeapItem::I64(1), 9, 0)]),
+            crafted(4, 2, 0, vec![(OwnedDataInput::I64(1), 9, 0)]),
             "total of 2 under the 9",
         ),
     ];
@@ -701,7 +709,10 @@ fn crafted_state_fails_closed() {
         4,
         100,
         0,
-        vec![(HeapItem::I64(1), 3, 1), (HeapItem::I64(2), 9, 2)],
+        vec![
+            (OwnedDataInput::I64(1), 3, 1),
+            (OwnedDataInput::I64(2), 9, 2),
+        ],
     );
     let decoded: SpaceSaving = rmp_serde::from_slice(&bytes).expect("a well formed state");
     assert_eq!(decoded.top_k(8).len(), 2);
@@ -740,7 +751,7 @@ mod keyed_bucket {
     use super::common::specs::assert_unbiased_mean;
     use super::*;
 
-    use asap_sketchlib::{Coco, DefaultXxHasher, Elastic};
+    use asap_sketchlib::{CocoSketch, DefaultXxHasher, ElasticSketch};
 
     // -----------------------------------------------------------------------
     // Conformance adapters: both sketches are string-keyed, so the kit's integer
@@ -757,11 +768,11 @@ mod keyed_bucket {
     /// the buckets hold more than one elephant. Contested buckets are the point:
     /// the losers read through the light layer, which is where the one-sided claim
     /// is worth checking.
-    struct ElasticAdapter(Elastic<DefaultXxHasher>);
+    struct ElasticAdapter(ElasticSketch<DefaultXxHasher>);
 
     impl ElasticAdapter {
         fn new() -> Self {
-            Self(Elastic::init_with_length(256))
+            Self(ElasticSketch::with_heavy_buckets(256))
         }
     }
 
@@ -801,16 +812,16 @@ mod keyed_bucket {
             .map(|(k, c)| (flow_key(k), c))
             .collect();
         let exact = dense.iter().map(|(_, c)| *c).sum::<i64>() as f64;
-        let dense_mass = |coco: &Coco<DefaultXxHasher>| {
-            dense.iter().map(|(k, _)| coco.estimate_key(k)).sum::<u64>() as f64
+        let dense_mass = |coco: &CocoSketch<DefaultXxHasher>| {
+            dense.iter().map(|(k, _)| coco.estimate(k)).sum::<u64>() as f64
         };
 
         let (mut single, mut merged) = (Vec::new(), Vec::new());
         for trial in 0..TRIALS {
             let seed = COCO_SEED + 3 * trial;
-            let mut one = Coco::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed);
-            let mut left = Coco::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed + 1);
-            let mut right = Coco::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed + 2);
+            let mut one = CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed);
+            let mut left = CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed + 1);
+            let mut right = CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(W, D, seed + 2);
             for (i, k) in stream.iter().enumerate() {
                 let key = flow_key(*k);
                 one.update_weighted(&key, 1);
@@ -868,8 +879,9 @@ mod keyed_bucket {
     /// disjoint one together return the stream mass.
     #[test]
     fn coco_disjoint_prefix_families_partition_the_mass() {
-        let mut coco =
-            Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(256, 2, COCO_SEED);
+        let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
+            256, 2, COCO_SEED,
+        );
         let mut total = 0u64;
         for i in 0..3000u64 {
             coco.update_weighted(&format!("aaa{}", i % 50), 7);
@@ -896,7 +908,7 @@ mod keyed_bucket {
     #[test]
     fn coco_point_queries_partition_the_inserted_mass() {
         const COCO_BUCKETS: usize = 128;
-        let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
+        let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
             COCO_BUCKETS,
             3,
             COCO_SEED,
@@ -911,7 +923,7 @@ mod keyed_bucket {
             total += 2;
         }
 
-        let attributed: u64 = truth.keys().map(|k| coco.estimate_key(k)).sum();
+        let attributed: u64 = truth.keys().map(|k| coco.estimate(k)).sum();
         assert_eq!(
             attributed, total,
             "point queries must partition the inserted mass"
@@ -938,7 +950,7 @@ mod keyed_bucket {
         let mut estimates: Vec<u64> = Vec::with_capacity(TRIALS);
 
         for trial in 0..TRIALS {
-            let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
+            let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
                 32,
                 2,
                 COCO_SEED + trial as u64,
@@ -958,7 +970,7 @@ mod keyed_bucket {
                 coco.update_weighted("flow::target", 1);
                 sent += 1;
             }
-            estimates.push(coco.estimate_key("flow::target"));
+            estimates.push(coco.estimate("flow::target"));
         }
 
         let dropped = estimates.iter().filter(|est| **est == 0).count();
@@ -1004,7 +1016,7 @@ mod keyed_bucket {
         let mut recorded = 0usize;
 
         for trial in 0..TRIALS {
-            let mut coco = Coco::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
+            let mut coco = CocoSketch::<asap_sketchlib::DefaultXxHasher>::init_with_size_and_seed(
                 WIDTH,
                 DEPTH,
                 COCO_SEED + trial as u64,
@@ -1039,7 +1051,7 @@ mod keyed_bucket {
 
     #[test]
     fn elastic_tracks_hot_flows() {
-        let mut sk = Elastic::<asap_sketchlib::DefaultXxHasher>::init_with_length(64);
+        let mut sk = ElasticSketch::<asap_sketchlib::DefaultXxHasher>::with_heavy_buckets(64);
 
         // Three hot flows amid background chatter.
         let mut expected: HashMap<String, i64> = HashMap::new();
@@ -1076,8 +1088,9 @@ mod keyed_bucket {
 
         // 8 heavy buckets against 20k distinct flows evicts the target every time.
         let evicted_estimate = |rows: usize, cols: usize| {
-            let mut sk =
-                Elastic::<asap_sketchlib::DefaultXxHasher>::init_with_dimensions(8, rows, cols);
+            let mut sk = ElasticSketch::<asap_sketchlib::DefaultXxHasher>::with_heavy_and_light(
+                8, rows, cols,
+            );
             for _ in 0..TARGET {
                 sk.update("flow::target".to_string());
             }
@@ -1115,7 +1128,7 @@ mod keyed_bucket {
     #[test]
     fn elastic_never_underestimates_under_eviction_pressure() {
         // A small heavy table against a wide key space forces repeated takeovers.
-        let mut sk = Elastic::<asap_sketchlib::DefaultXxHasher>::init_with_length(16);
+        let mut sk = ElasticSketch::<asap_sketchlib::DefaultXxHasher>::with_heavy_buckets(16);
         let mut truth: HashMap<String, i64> = HashMap::new();
 
         for (i, key) in zipf_u64(60_000, 4_000, 1.1, 909).into_iter().enumerate() {
@@ -1169,7 +1182,9 @@ mod keyed_bucket {
 }
 
 mod partial_key_and_heavy_maintenance {
-    use asap_sketchlib::{Coco, CocoBucket, DataInput, DefaultXxHasher, Elastic, HeavyBucket};
+    use asap_sketchlib::{
+        CocoBucket, CocoSketch, DataInput, DefaultXxHasher, ElasticSketch, HeavyBucket,
+    };
     use std::collections::HashMap;
 
     const TENANTS: usize = 8;
@@ -1190,8 +1205,9 @@ mod partial_key_and_heavy_maintenance {
         keys
     }
 
-    fn filled_coco() -> (Coco<DefaultXxHasher>, u64) {
-        let mut coco = Coco::<DefaultXxHasher>::init_with_size_and_seed(2_048, 4, super::COCO_SEED);
+    fn filled_coco() -> (CocoSketch<DefaultXxHasher>, u64) {
+        let mut coco =
+            CocoSketch::<DefaultXxHasher>::init_with_size_and_seed(2_048, 4, super::COCO_SEED);
         let mut inserted = 0u64;
         for (i, key) in coco_keys().iter().enumerate() {
             let weight = REPEATS + (i % 3) as u64;
@@ -1329,8 +1345,8 @@ mod partial_key_and_heavy_maintenance {
         out
     }
 
-    fn filled_elastic(stream: &[String]) -> Elastic<DefaultXxHasher> {
-        let mut sk = Elastic::<DefaultXxHasher>::init_with_dimensions(64, 3, 1_024);
+    fn filled_elastic(stream: &[String]) -> ElasticSketch<DefaultXxHasher> {
+        let mut sk = ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(64, 3, 1_024);
         for id in stream {
             sk.update(id.clone());
         }
@@ -1389,7 +1405,7 @@ mod partial_key_and_heavy_maintenance {
 
     #[test]
     fn elastic_merge_heavy_and_absorb_evicted_carry_a_transferred_resident() {
-        let mut target = Elastic::<DefaultXxHasher>::init_with_dimensions(64, 3, 1_024);
+        let mut target = ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(64, 3, 1_024);
         target.merge_heavy("transferred".to_string(), 500, false);
         assert_eq!(
             target.query("transferred".to_string()),
@@ -1404,7 +1420,7 @@ mod partial_key_and_heavy_maintenance {
             "a zero-vote transfer must not move the estimate"
         );
 
-        let mut flagged = Elastic::<DefaultXxHasher>::init_with_dimensions(64, 3, 1_024);
+        let mut flagged = ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(64, 3, 1_024);
         flagged.merge_heavy("spilled".to_string(), 400, true);
         flagged.absorb_evicted("spilled".to_string(), 90);
         assert!(
@@ -1412,7 +1428,7 @@ mod partial_key_and_heavy_maintenance {
             "absorbing an eviction must not lose the heavy votes already held"
         );
 
-        let mut light_only = Elastic::<DefaultXxHasher>::init_with_dimensions(64, 3, 1_024);
+        let mut light_only = ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(64, 3, 1_024);
         light_only.absorb_evicted("mouse".to_string(), 75);
         assert!(
             light_only.query("mouse".to_string()) >= 75,
@@ -1422,7 +1438,7 @@ mod partial_key_and_heavy_maintenance {
 
     #[test]
     fn elastic_insert_heavy_only_never_writes_the_light_layer() {
-        let mut sk = Elastic::<DefaultXxHasher>::init_with_dimensions(8, 3, 256);
+        let mut sk = ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(8, 3, 256);
         for e in 0..64 {
             for _ in 0..20 {
                 sk.update_heavy_only(format!("flow-{e:03}"));
@@ -1566,7 +1582,7 @@ mod documented_matrix {
     };
     use super::*;
 
-    use asap_sketchlib::{Count, CountMin, FastPath, RegularPath, Vector2D};
+    use asap_sketchlib::{Count, CountMinSketch, FastPath, RegularPath, Vector2D};
 
     /// The document's `(row, column)` grid.
     const DOC_ROWS: [usize; 3] = [3, 5, 7];
@@ -1699,8 +1715,9 @@ mod documented_matrix {
         for rows in DOC_ROWS {
             for cols in DOC_COLS {
                 let mut regular =
-                    CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
-                let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+                    CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+                let mut fast =
+                    CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
                 for key in &input.keys {
                     let d = input.data(*key);
                     regular.update(&d);
@@ -1729,8 +1746,8 @@ mod documented_matrix {
         macro_rules! assert_fixed_matrix {
             ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
                 $({
-                    let mut regular = CountMin::<$mat, RegularPath>::from_storage($mat::default());
-                    let mut fast = CountMin::<$mat, FastPath>::from_storage($mat::default());
+                    let mut regular = CountMinSketch::<$mat, RegularPath>::from_storage($mat::default());
+                    let mut fast = CountMinSketch::<$mat, FastPath>::from_storage($mat::default());
                     for key in &input.keys {
                         let d = input.data(*key);
                         regular.update(&d);
@@ -1934,7 +1951,7 @@ mod documented_matrix {
     /// bound is the document's own 20% per hot flow, which is empirical
     /// because the split between the heavy and light parts is data dependent.
     fn elastic_documented_hot_flows(input: &KeyInput) {
-        use asap_sketchlib::{DefaultXxHasher, Elastic};
+        use asap_sketchlib::{DefaultXxHasher, ElasticSketch};
 
         const HOT: [&str; 3] = ["hot-alpha", "hot-beta", "hot-gamma"];
         const HOT_SHARE: f64 = 0.10;
@@ -1945,7 +1962,7 @@ mod documented_matrix {
         let per_hot =
             (background as f64 * HOT_SHARE / (1.0 - HOT.len() as f64 * HOT_SHARE)).round() as usize;
 
-        let mut sk = Elastic::<DefaultXxHasher>::init_with_length(64);
+        let mut sk = ElasticSketch::<DefaultXxHasher>::with_heavy_buckets(64);
         let mut expected: HashMap<String, i64> = HashMap::new();
         let mut hot_cursor = 0usize;
         let stride = background / (per_hot * HOT.len()).max(1);

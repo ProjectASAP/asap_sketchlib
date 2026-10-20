@@ -40,7 +40,7 @@ pub struct UnivMonQConfig {
     /// Counters in each row of the upper-level CountSketch.
     pub width: usize,
     /// Levels between width halvings. Zero keeps the same width at every level.
-    pub width_halving_period: u8,
+    pub cols_halving_period: u8,
     /// CountSketch rows. This must be odd so the median is unambiguous.
     pub depth: usize,
     /// Counter representation: compact saturating 32-bit or wide 64-bit.
@@ -51,7 +51,7 @@ pub struct UnivMonQConfig {
     /// Set to zero when rank/CDF/quantile queries are not required.
     pub ordered_samples: usize,
     /// Seed index passed to [`SketchHasher::hash128_seeded`].
-    pub hash_seed: usize,
+    pub seed_index: usize,
 }
 
 impl Default for UnivMonQConfig {
@@ -59,12 +59,12 @@ impl Default for UnivMonQConfig {
         Self {
             levels: 10,
             width: 4096,
-            width_halving_period: 0,
+            cols_halving_period: 0,
             depth: 5,
             counter_bits: 32,
             candidates: 1024,
             ordered_samples: 1024,
-            hash_seed: 5,
+            seed_index: 5,
         }
     }
 }
@@ -120,7 +120,7 @@ impl Error for UnivMonQError {}
 
 /// A recovered value and its normalized cumulative rank.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct UnivMonQPoint {
+pub struct UnivMonQCdfEntry {
     /// Recovered numeric value.
     pub value: f64,
     /// Monotone CDF estimate in `[0, 1]`.
@@ -163,7 +163,7 @@ pub struct UnivMonQQuery<'a, H: SketchHasher = DefaultXxHasher> {
     heavy_hitters: Vec<RecoveredCandidate>,
     occurrence_entropy: Option<f64>,
     candidate_recovery_complete: bool,
-    cdf: Vec<UnivMonQPoint>,
+    cdf: Vec<UnivMonQCdfEntry>,
     cdf_composition: CdfComposition,
 }
 
@@ -179,7 +179,7 @@ struct CdfComposition {
 /// Read-only view of the two quantities the ordered-query error bound
 /// `sup_x |F_hat(x) - F(x)| <= 2 E_H + P_hat_R * epsilon_R` is stated over.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct OrderedQueryDiagnostics {
+pub struct UnivMonQOrderedQueryDiagnostics {
     /// The values the CDF treated as heavy, with the frequency it credited to
     /// each. `E_H` is the error of these frequencies against the truth,
     /// normalized by the observation count.
@@ -193,7 +193,7 @@ pub struct OrderedQueryDiagnostics {
     pub residual_samples: usize,
 }
 
-impl OrderedQueryDiagnostics {
+impl UnivMonQOrderedQueryDiagnostics {
     /// `P_hat_R` — the residual's share of the total mass.
     pub fn residual_mass_fraction(&self, count: u64) -> f64 {
         if count == 0 {
@@ -592,7 +592,7 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
     /// hierarchy. Individual thresholds inherit UnivMon's candidate-recovery
     /// assumptions; estimates at different thresholds are not jointly forced
     /// to be monotone.
-    pub fn estimate_rank_universal(&self, value: f64) -> Option<u64> {
+    pub fn estimate_rank_from_g_sum(&self, value: f64) -> Option<u64> {
         if self.count() == 0 {
             return None;
         }
@@ -625,7 +625,7 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
     }
 
     /// UnivMon estimate of the number of distinct numeric values.
-    pub fn estimate_distinct(&self) -> f64 {
+    pub fn estimate_cardinality(&self) -> f64 {
         self.estimate_g_sum(|_| 1.0).clamp(0.0, self.count() as f64)
     }
 
@@ -641,7 +641,7 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
     }
 
     /// Shannon entropy estimate from the original UnivMon recurrence, in nats.
-    pub fn estimate_entropy_universal(&self) -> f64 {
+    pub fn estimate_entropy_from_g_sum(&self) -> f64 {
         if self.count() == 0 {
             return 0.0;
         }
@@ -661,7 +661,7 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
     /// candidate recovery. Concentrated streams with incomplete recovery use
     /// the coordinated occurrence sample instead.
     pub fn estimate_entropy(&self) -> f64 {
-        let universal = self.estimate_entropy_universal();
+        let universal = self.estimate_entropy_from_g_sum();
         if self.count() == 0
             || self.occurrence_entropy.is_none()
             || self.candidate_recovery_complete
@@ -672,7 +672,7 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
         if concentration < 1.0 / self.sketch.ordered_heap.len() as f64 {
             universal
         } else {
-            self.estimate_entropy_occurrence().unwrap_or(universal)
+            self.estimate_entropy_from_samples().unwrap_or(universal)
         }
     }
 
@@ -682,7 +682,7 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
     /// with frequencies supplied by the terminal CountSketch. It requires the
     /// coordinated ordered sample and is primarily useful as an assisted
     /// alternative to the universal recurrence.
-    pub fn estimate_entropy_occurrence(&self) -> Option<f64> {
+    pub fn estimate_entropy_from_samples(&self) -> Option<f64> {
         self.occurrence_entropy
     }
 
@@ -755,7 +755,7 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
     }
 
     /// Returns the prepared monotone CDF without rebuilding it.
-    pub fn cdf(&self) -> &[UnivMonQPoint] {
+    pub fn cdf(&self) -> &[UnivMonQCdfEntry] {
         &self.cdf
     }
 
@@ -767,8 +767,8 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
     /// evaluated in full rather than only in the diffuse special case where the
     /// heavy set is empty. Purely observational: it returns state the CDF
     /// construction already produced.
-    pub fn ordered_query_diagnostics(&self) -> OrderedQueryDiagnostics {
-        OrderedQueryDiagnostics {
+    pub fn ordered_query_diagnostics(&self) -> UnivMonQOrderedQueryDiagnostics {
+        UnivMonQOrderedQueryDiagnostics {
             heavy: self
                 .cdf_composition
                 .heavy
@@ -894,11 +894,11 @@ impl<H: SketchHasher> UnivMonQ<H> {
             (Some(left), Some(right)) => Some(left.max(right)),
             (left, right) => left.or(right),
         };
-        let hash_seed = self.config.hash_seed;
+        let seed_index = self.config.seed_index;
         let bucket_bits = self.hash_layout.bucket_bits;
         for (left, right) in self.levels.iter_mut().zip(&other.levels) {
             left.merge(right, bucket_bits, |key| {
-                H::hash128_seeded(hash_seed, &DataInput::U64(key))
+                H::hash128_seeded(seed_index, &DataInput::U64(key))
             });
         }
         self.merge_ordered_samples(other);
@@ -954,11 +954,11 @@ impl<H: SketchHasher> UnivMonQ<H> {
     ///
     /// This path is independent of `ordered_samples`. Prefer
     /// [`Self::prepare_queries`] when evaluating more than one threshold.
-    pub fn estimate_rank_universal(&self, value: f64) -> Option<u64> {
+    pub fn estimate_rank_from_g_sum(&self, value: f64) -> Option<u64> {
         if self.is_empty() {
             return None;
         }
-        self.prepare_queries().estimate_rank_universal(value)
+        self.prepare_queries().estimate_rank_from_g_sum(value)
     }
 
     /// Reconstructs a reusable query snapshot.
@@ -977,7 +977,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
         let (points, cdf_composition) = self.cdf_keys_and_composition_from(&ordered_heavy);
         let cdf = points
             .into_iter()
-            .map(|(value, rank)| UnivMonQPoint {
+            .map(|(value, rank)| UnivMonQCdfEntry {
                 value: ordered_to_float(value),
                 rank,
             })
@@ -1010,7 +1010,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
     }
 
     /// UnivMon estimate of the number of distinct numeric values.
-    pub fn estimate_distinct(&self) -> f64 {
+    pub fn estimate_cardinality(&self) -> f64 {
         self.estimate_g_sum(|_| 1.0).clamp(0.0, self.count as f64)
     }
 
@@ -1026,7 +1026,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
     }
 
     /// Shannon entropy estimate from the original UnivMon recurrence, in nats.
-    pub fn estimate_entropy_universal(&self) -> f64 {
+    pub fn estimate_entropy_from_g_sum(&self) -> f64 {
         if self.is_empty() {
             return 0.0;
         }
@@ -1071,7 +1071,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
     }
 
     /// Experimental occurrence-sample entropy estimate in nats.
-    pub fn estimate_entropy_occurrence(&self) -> Option<f64> {
+    pub fn estimate_entropy_from_samples(&self) -> Option<f64> {
         if self.is_empty() {
             return Some(0.0);
         }
@@ -1217,10 +1217,10 @@ impl<H: SketchHasher> UnivMonQ<H> {
     }
 
     /// Recovered monotone CDF breakpoints.
-    pub fn cdf(&self) -> Vec<UnivMonQPoint> {
+    pub fn cdf(&self) -> Vec<UnivMonQCdfEntry> {
         self.cdf_keys()
             .into_iter()
-            .map(|(value, rank)| UnivMonQPoint {
+            .map(|(value, rank)| UnivMonQCdfEntry {
                 value: ordered_to_float(value),
                 rank,
             })
@@ -1481,7 +1481,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
     fn occurrence(&self, key: u64, sequence: u64) -> OrderedOccurrence {
         let identity = (u128::from(self.source_id) << 64) | u128::from(sequence);
         let priority = H::hash128_seeded(
-            self.config.hash_seed ^ OCCURRENCE_HASH_SEED_DOMAIN,
+            self.config.seed_index ^ OCCURRENCE_HASH_SEED_DOMAIN,
             &DataInput::U128(identity),
         );
         OrderedOccurrence {
@@ -1493,7 +1493,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
 
     #[inline(always)]
     fn hash_key(&self, key: u64) -> u128 {
-        H::hash128_seeded(self.config.hash_seed, &DataInput::U64(key))
+        H::hash128_seeded(self.config.seed_index, &DataInput::U64(key))
     }
 
     #[inline(always)]
@@ -1524,7 +1524,7 @@ impl UnivMonQ<DefaultXxHasher> {
     /// Creates an empty sketch using Sketchlib's default XXH3 hasher.
     ///
     /// The generated occurrence-sampling source ID is unique only within the
-    /// current process. Use [`Self::new_with_source_id`] with a globally unique
+    /// current process. Use [`Self::with_source_id`] with a globally unique
     /// shard ID when sketches may be merged across processes.
     pub fn new(config: UnivMonQConfig) -> Result<Self, UnivMonQError> {
         Self::with_hasher(config)
@@ -1534,10 +1534,7 @@ impl UnivMonQ<DefaultXxHasher> {
     ///
     /// Use a stable, globally unique partition or shard ID when sketches may
     /// be serialized or merged across processes.
-    pub fn new_with_source_id(
-        config: UnivMonQConfig,
-        source_id: u64,
-    ) -> Result<Self, UnivMonQError> {
+    pub fn with_source_id(config: UnivMonQConfig, source_id: u64) -> Result<Self, UnivMonQError> {
         Self::with_hasher_and_source_id(config, source_id)
     }
 }
@@ -1572,10 +1569,10 @@ fn validate_config(config: UnivMonQConfig) -> Result<(), UnivMonQError> {
 }
 
 fn level_width(config: UnivMonQConfig, level: usize) -> usize {
-    let shift = if config.width_halving_period == 0 {
+    let shift = if config.cols_halving_period == 0 {
         0
     } else {
-        level as u32 / u32::from(config.width_halving_period)
+        level as u32 / u32::from(config.cols_halving_period)
     };
     let recovery_floor = config.candidates.min(config.width);
     config
@@ -1692,12 +1689,12 @@ mod tests {
         UnivMonQConfig {
             levels: 8,
             width: 128,
-            width_halving_period: 0,
+            cols_halving_period: 0,
             depth: 5,
             counter_bits: 64,
             candidates: 32,
             ordered_samples: 32,
-            hash_seed: 9,
+            seed_index: 9,
         }
     }
 
@@ -1790,12 +1787,12 @@ mod tests {
         let config = UnivMonQConfig {
             levels: 8,
             width: 4_096,
-            width_halving_period: 0,
+            cols_halving_period: 0,
             depth: 5,
             counter_bits: 64,
             candidates: 1,
             ordered_samples: 100,
-            hash_seed: 17,
+            seed_index: 17,
         };
         let mut sketch = UnivMonQ::new(config).unwrap();
         for _ in 0..80 {
@@ -1807,7 +1804,7 @@ mod tests {
 
         let expected_entropy = -(0.8_f64 * 0.8_f64.ln() + 0.2_f64 * 0.2_f64.ln());
         assert_eq!(sketch.estimate_l1(), 100.0);
-        assert!((sketch.estimate_entropy_occurrence().unwrap() - expected_entropy).abs() < 1e-12);
+        assert!((sketch.estimate_entropy_from_samples().unwrap() - expected_entropy).abs() < 1e-12);
         assert!((sketch.estimate_entropy() - expected_entropy).abs() < 1e-12);
 
         let query = sketch.prepare_queries();
@@ -1861,8 +1858,8 @@ mod tests {
         }
         assert!(sketch.levels.iter().any(|level| level.ever_evicted));
 
-        let bytes = sketch.serialize_to_bytes().unwrap();
-        let decoded = UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&bytes).unwrap();
+        let bytes = sketch.to_asapv1().unwrap();
+        let decoded = UnivMonQ::<DefaultXxHasher>::from_asapv1(&bytes).unwrap();
         let original: Vec<bool> = sketch
             .levels
             .iter()
@@ -1933,13 +1930,13 @@ mod tests {
             sketch.update(&value);
         }
         assert_eq!(sketch.rank(2.0), Some(3));
-        assert_eq!(sketch.estimate_rank_universal(2.0), Some(3));
+        assert_eq!(sketch.estimate_rank_from_g_sum(2.0), Some(3));
         assert_eq!(sketch.rank(5.0), Some(6));
         assert_eq!(sketch.quantile(0.5), Some(5.0));
         assert_eq!(sketch.quantile(0.0), Some(1.0));
         assert_eq!(sketch.quantile(1.0), Some(9.0));
         assert_eq!(sketch.estimate_frequency(5.0), 3);
-        assert_eq!(sketch.estimate_distinct(), 4.0);
+        assert_eq!(sketch.estimate_cardinality(), 4.0);
         assert_eq!(sketch.estimate_f2(), 15.0);
         assert_eq!(sketch.estimate_g_sum(|frequency| frequency), 7.0);
         assert_eq!(sketch.heavy_hitters(1), vec![(5.0, 3)]);
@@ -1947,12 +1944,12 @@ mod tests {
         let query = sketch.prepare_queries();
         assert_eq!(query.count(), sketch.count());
         assert_eq!(query.estimate_frequency(5.0), 3);
-        assert_eq!(query.estimate_distinct(), 4.0);
+        assert_eq!(query.estimate_cardinality(), 4.0);
         assert_eq!(query.estimate_f2(), 15.0);
         assert_eq!(query.estimate_g_sum(|frequency| frequency), 7.0);
         assert_eq!(query.heavy_hitters(1), vec![(5.0, 3)]);
         assert_eq!(query.rank(2.0), Some(3));
-        assert_eq!(query.estimate_rank_universal(2.0), Some(3));
+        assert_eq!(query.estimate_rank_from_g_sum(2.0), Some(3));
         assert_eq!(
             query.quantiles(&[0.0, 0.5, 1.0]),
             vec![Some(1.0), Some(5.0), Some(9.0)]
@@ -1981,7 +1978,7 @@ mod tests {
             ordered_samples: values.len(),
             ..tiny_config()
         };
-        let mut sketch = UnivMonQ::new_with_source_id(config, 0xfeed).unwrap();
+        let mut sketch = UnivMonQ::with_source_id(config, 0xfeed).unwrap();
         for value in values {
             sketch.update(&value);
         }
@@ -2086,20 +2083,20 @@ mod tests {
             sketch.update(&value);
         }
 
-        let direct_f0 = sketch.estimate_distinct();
+        let direct_f0 = sketch.estimate_cardinality();
         let direct_f2 = sketch.estimate_f2();
         let direct_l1 = sketch.estimate_l1();
         let direct_linear_g_sum = sketch.estimate_g_sum(|frequency| frequency);
         let direct_entropy = sketch.estimate_entropy();
-        let direct_universal_entropy = sketch.estimate_entropy_universal();
+        let direct_universal_entropy = sketch.estimate_entropy_from_g_sum();
         let direct_heavy = sketch.heavy_hitters(5);
         let direct_rank = sketch.rank(500.0);
-        let direct_universal_rank = sketch.estimate_rank_universal(500.0);
+        let direct_universal_rank = sketch.estimate_rank_from_g_sum(500.0);
         let direct_quantiles = sketch.quantiles(&[0.1, 0.5, 0.9, 0.99]);
         let direct_cdf = sketch.cdf();
 
         let query = sketch.prepare_queries();
-        assert_eq!(query.estimate_distinct(), direct_f0);
+        assert_eq!(query.estimate_cardinality(), direct_f0);
         assert_eq!(query.estimate_f2(), direct_f2);
         assert_eq!(query.estimate_l1(), direct_l1);
         assert_eq!(
@@ -2107,10 +2104,13 @@ mod tests {
             direct_linear_g_sum
         );
         assert_eq!(query.estimate_entropy(), direct_entropy);
-        assert_eq!(query.estimate_entropy_universal(), direct_universal_entropy);
+        assert_eq!(
+            query.estimate_entropy_from_g_sum(),
+            direct_universal_entropy
+        );
         assert_eq!(query.heavy_hitters(5), direct_heavy);
         assert_eq!(query.rank(500.0), direct_rank);
-        assert_eq!(query.estimate_rank_universal(500.0), direct_universal_rank);
+        assert_eq!(query.estimate_rank_from_g_sum(500.0), direct_universal_rank);
         assert_eq!(query.quantiles(&[0.1, 0.5, 0.9, 0.99]), direct_quantiles);
         assert_eq!(query.cdf(), direct_cdf);
     }
@@ -2122,7 +2122,7 @@ mod tests {
             ordered_samples: 64,
             ..tiny_config()
         };
-        let mut sketch = UnivMonQ::new_with_source_id(config, 787).unwrap();
+        let mut sketch = UnivMonQ::with_source_id(config, 787).unwrap();
         for index in 0..5_000_u64 {
             let value = if index % 4 == 0 {
                 42.0
@@ -2164,8 +2164,8 @@ mod tests {
         for value in (0..1000).map(|value| (value % 97) as f64) {
             sketch.update(&value);
         }
-        let bytes = sketch.serialize_to_bytes().unwrap();
-        let decoded = UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&bytes).unwrap();
+        let bytes = sketch.to_asapv1().unwrap();
+        let decoded = UnivMonQ::<DefaultXxHasher>::from_asapv1(&bytes).unwrap();
         assert_eq!(decoded.config(), sketch.config());
         assert_eq!(decoded.source_id(), sketch.source_id());
         assert_eq!(decoded.count(), sketch.count());
@@ -2189,14 +2189,14 @@ mod tests {
                 }
             })
             .collect();
-        let mut uninterrupted = UnivMonQ::new_with_source_id(config, 991).unwrap();
-        let mut checkpointed = UnivMonQ::new_with_source_id(config, 991).unwrap();
+        let mut uninterrupted = UnivMonQ::with_source_id(config, 991).unwrap();
+        let mut checkpointed = UnivMonQ::with_source_id(config, 991).unwrap();
         for value in &values[..1_337] {
             uninterrupted.update(value);
             checkpointed.update(value);
         }
-        let bytes = checkpointed.serialize_to_bytes().unwrap();
-        let mut resumed = UnivMonQ::<DefaultXxHasher>::deserialize_from_bytes(&bytes).unwrap();
+        let bytes = checkpointed.to_asapv1().unwrap();
+        let mut resumed = UnivMonQ::<DefaultXxHasher>::from_asapv1(&bytes).unwrap();
         for value in &values[1_337..] {
             uninterrupted.update(value);
             resumed.update(value);
@@ -2218,7 +2218,7 @@ mod tests {
             ordered_samples: 128,
             ..tiny_config()
         };
-        let mut sketch = UnivMonQ::new_with_source_id(config, 31337).unwrap();
+        let mut sketch = UnivMonQ::with_source_id(config, 31337).unwrap();
         for value in 0..100_u64 {
             sketch.update(&(value as f64));
         }
@@ -2243,7 +2243,7 @@ mod tests {
     #[test]
     fn occurrence_sample_merge_is_associative() {
         fn shard(source_id: u64, offset: u64) -> UnivMonQ {
-            let mut sketch = UnivMonQ::new_with_source_id(tiny_config(), source_id).unwrap();
+            let mut sketch = UnivMonQ::with_source_id(tiny_config(), source_id).unwrap();
             for index in 0..1_000_u64 {
                 sketch.add(&((index.wrapping_mul(17) + offset) % 991));
             }
@@ -2277,7 +2277,7 @@ mod tests {
         let mut shards = Vec::new();
         let mut expected = Vec::new();
         for source_id in [101, 202, 303, 404] {
-            let mut shard = UnivMonQ::new_with_source_id(config, source_id).unwrap();
+            let mut shard = UnivMonQ::with_source_id(config, source_id).unwrap();
             for sequence in 0..500_u64 {
                 let value = ((sequence.wrapping_mul(37) + source_id) % 251) as f64;
                 let key = float_to_ordered(value);
@@ -2309,7 +2309,7 @@ mod tests {
         };
         let mut inclusion_counts = vec![0_u64; stream_length];
         for source_id in 1..=source_trials {
-            let mut sketch = UnivMonQ::new_with_source_id(config, source_id).unwrap();
+            let mut sketch = UnivMonQ::with_source_id(config, source_id).unwrap();
             for position in 0..stream_length {
                 sketch.update(&(position as f64));
             }
@@ -2339,16 +2339,16 @@ mod tests {
         let config = UnivMonQConfig {
             levels: 10,
             width: 2048,
-            width_halving_period: 5,
+            cols_halving_period: 5,
             depth: 3,
             counter_bits: 32,
             candidates: 256,
             ordered_samples: 512,
-            hash_seed: 5,
+            seed_index: 5,
         };
         // A fixed source identity makes this regression independent of the
         // number and order of tests that allocated automatic source IDs.
-        let mut sketch = UnivMonQ::new_with_source_id(config, 1).unwrap();
+        let mut sketch = UnivMonQ::with_source_id(config, 1).unwrap();
         let n = 100_000_u64;
         let mut truth = Vec::with_capacity(n as usize);
         for value in 0..n {
@@ -2372,12 +2372,12 @@ mod tests {
         let config = UnivMonQConfig {
             levels: 10,
             width: 2048,
-            width_halving_period: 5,
+            cols_halving_period: 5,
             depth: 3,
             counter_bits: 32,
             candidates: 256,
             ordered_samples: 512,
-            hash_seed: 5,
+            seed_index: 5,
         };
         let n = 50_000_u64;
         let distributions: [Vec<f64>; 3] = [
@@ -2408,7 +2408,7 @@ mod tests {
             let mut rank_errors = Vec::new();
             let mut cdf_errors = Vec::new();
             for source_id in 1..=32 {
-                let mut sketch = UnivMonQ::new_with_source_id(config, source_id).unwrap();
+                let mut sketch = UnivMonQ::with_source_id(config, source_id).unwrap();
                 for value in &values {
                     sketch.update(value);
                 }
@@ -2440,16 +2440,16 @@ mod tests {
             let config = UnivMonQConfig {
                 levels: 10,
                 width: 1_024,
-                width_halving_period: 5,
+                cols_halving_period: 5,
                 depth: 3,
                 counter_bits: 32,
                 candidates: 128,
                 ordered_samples,
-                hash_seed: 5,
+                seed_index: 5,
             };
             let mut errors = Vec::new();
             for source_id in 1..=24 {
-                let mut sketch = UnivMonQ::new_with_source_id(config, source_id).unwrap();
+                let mut sketch = UnivMonQ::with_source_id(config, source_id).unwrap();
                 for value in &values {
                     sketch.update(value);
                 }
@@ -2492,19 +2492,19 @@ mod tests {
         let config = UnivMonQConfig {
             levels: 10,
             width: 1_024,
-            width_halving_period: 5,
+            cols_halving_period: 5,
             depth: 3,
             counter_bits: 64,
             candidates: 128,
             ordered_samples: 256,
-            hash_seed: 5,
+            seed_index: 5,
         };
         let mut assisted_errors = Vec::new();
         let mut raw_errors = Vec::new();
         let mut assisted_heavy_boundary_errors = Vec::new();
         let mut raw_heavy_boundary_errors = Vec::new();
         for source_id in 1..=32 {
-            let mut sketch = UnivMonQ::new_with_source_id(config, source_id).unwrap();
+            let mut sketch = UnivMonQ::with_source_id(config, source_id).unwrap();
             for value in &values {
                 sketch.update(value);
             }
@@ -2544,12 +2544,12 @@ mod tests {
         let config = UnivMonQConfig {
             levels: 10,
             width: 4096,
-            width_halving_period: 7,
+            cols_halving_period: 7,
             depth: 3,
             counter_bits: 64,
             candidates: 512,
             ordered_samples: 1024,
-            hash_seed: 5,
+            seed_index: 5,
         };
         let mut shards: Vec<UnivMonQ> = (0..8).map(|_| UnivMonQ::new(config).unwrap()).collect();
         let mut truth = Vec::with_capacity(100_000);
@@ -2599,7 +2599,7 @@ mod tests {
             .values()
             .map(|frequency| (*frequency as f64).powi(2))
             .sum();
-        assert!((merged.estimate_distinct() / exact_f0 - 1.0).abs() < 0.1);
+        assert!((merged.estimate_cardinality() / exact_f0 - 1.0).abs() < 0.1);
         assert!((merged.estimate_f2() / exact_f2 - 1.0).abs() < 0.1);
         assert_eq!(merged.heavy_hitters(1)[0].0, 42.0);
     }

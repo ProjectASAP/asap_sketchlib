@@ -1,7 +1,7 @@
 //! Wire-format DTO for the delta set aggregator.
 //!
-//! Owns the [`DeltaResult`] wire DTO and its [`MessagePackCodec`] impl; its
-//! ASAPv1 `serialize_to_bytes` (§3.22) is beside `SetAggregator`'s.
+//! Owns the [`SetAggregatorDelta`] wire DTO and its [`MessagePackCodec`] impl; its
+//! ASAPv1 `to_asapv1` (§3.22) is beside `SetAggregator`'s.
 //! The streaming/state-tracking logic lives in the downstream consumer
 //! (ASAPQuery's accumulators) — only the over-the-wire shape lives here.
 
@@ -14,12 +14,12 @@ use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 /// Wire DTO for the delta set aggregator: a snapshot of added/removed
 /// string keys between two consecutive observations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeltaResult {
+pub struct SetAggregatorDelta {
     pub added: HashSet<String>,
     pub removed: HashSet<String>,
 }
 
-impl MessagePackCodec for DeltaResult {
+impl MessagePackCodec for SetAggregatorDelta {
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
         Ok(rmp_serde::to_vec(self)?)
     }
@@ -42,8 +42,8 @@ mod tests {
         let mut removed = HashSet::new();
         removed.insert("db".to_string());
 
-        let bytes = DeltaResult { added, removed }.to_msgpack().unwrap();
-        let result = DeltaResult::from_msgpack(&bytes).unwrap();
+        let bytes = SetAggregatorDelta { added, removed }.to_msgpack().unwrap();
+        let result = SetAggregatorDelta::from_msgpack(&bytes).unwrap();
 
         assert_eq!(result.added.len(), 2);
         assert!(result.added.contains("web"));
@@ -54,12 +54,12 @@ mod tests {
 
     #[test]
     fn test_empty_sets() {
-        let dr = DeltaResult {
+        let dr = SetAggregatorDelta {
             added: HashSet::new(),
             removed: HashSet::new(),
         };
         let bytes = dr.to_msgpack().unwrap();
-        let result = DeltaResult::from_msgpack(&bytes).unwrap();
+        let result = SetAggregatorDelta::from_msgpack(&bytes).unwrap();
         assert!(result.added.is_empty());
         assert!(result.removed.is_empty());
     }

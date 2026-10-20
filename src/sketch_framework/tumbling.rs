@@ -8,13 +8,13 @@
 //! # Supported sketch types
 //!
 //! Any type implementing [`TumblingWindowSketch`] can be used. Built-in
-//! implementations are provided for [`FoldCMS`], [`FoldCS`], [`KLL`], and
+//! implementations are provided for [`CountMinSketchFold`], [`CountSketchFold`], [`Kll`], and
 //! experimental [`UnivMonQ`].
 
 use crate::DataInput;
-use crate::fold_cms::FoldCMS;
-use crate::fold_cs::FoldCS;
-use crate::kll::KLL;
+use crate::count_min_fold::CountMinSketchFold;
+use crate::count_sketch_fold::CountSketchFold;
+use crate::kll::Kll;
 use crate::{UnivMonQ, UnivMonQConfig};
 
 // ---------------------------------------------------------------------------
@@ -47,9 +47,9 @@ pub trait TumblingWindowSketch: Clone + Sized {
 // Config structs
 // ---------------------------------------------------------------------------
 
-/// Configuration for constructing a [`FoldCMS`] via [`TumblingWindowSketch`].
+/// Configuration for constructing a [`CountMinSketchFold`] via [`TumblingWindowSketch`].
 #[derive(Clone, Debug)]
-pub struct FoldCMSConfig {
+pub struct CountMinSketchFoldConfig {
     /// Number of sketch rows.
     pub rows: usize,
     /// Full-width column count before folding.
@@ -60,9 +60,9 @@ pub struct FoldCMSConfig {
     pub top_k: usize,
 }
 
-/// Configuration for constructing a [`FoldCS`] via [`TumblingWindowSketch`].
+/// Configuration for constructing a [`CountSketchFold`] via [`TumblingWindowSketch`].
 #[derive(Clone, Debug)]
-pub struct FoldCSConfig {
+pub struct CountSketchFoldConfig {
     /// Number of sketch rows.
     pub rows: usize,
     /// Full-width column count before folding.
@@ -73,18 +73,18 @@ pub struct FoldCSConfig {
     pub top_k: usize,
 }
 
-/// Configuration for constructing a [`KLL`] via [`TumblingWindowSketch`].
+/// Configuration for constructing a [`Kll`] via [`TumblingWindowSketch`].
 #[derive(Clone, Debug)]
-pub struct KLLConfig {
+pub struct KllConfig {
     /// Main KLL capacity parameter.
     pub k: usize,
     /// Minimum compactor size parameter.
     pub m: usize,
     /// Optional seed for the compaction coin. When `Some`, every pool sketch
-    /// is built with [`KLL::init_with_seed`], so two processes running the
+    /// is built with [`Kll::init_with_seed`], so two processes running the
     /// same tumbling pipeline produce byte-identical sketches — including
     /// across window rotations, because `tumbling_clear` re-seeds from the
-    /// stored seed. When `None`, the legacy wall-clock-seeded [`KLL::init`]
+    /// stored seed. When `None`, the legacy wall-clock-seeded [`Kll::init`]
     /// path is used and cross-process agreement is not achievable.
     pub seed: Option<u64>,
 }
@@ -93,11 +93,11 @@ pub struct KLLConfig {
 // TumblingWindowSketch impls
 // ---------------------------------------------------------------------------
 
-impl TumblingWindowSketch for FoldCMS {
-    type Config = FoldCMSConfig;
+impl TumblingWindowSketch for CountMinSketchFold {
+    type Config = CountMinSketchFoldConfig;
 
     fn from_config(config: &Self::Config) -> Self {
-        FoldCMS::new(
+        CountMinSketchFold::new(
             config.rows,
             config.full_cols,
             config.fold_level,
@@ -118,11 +118,11 @@ impl TumblingWindowSketch for FoldCMS {
     }
 }
 
-impl TumblingWindowSketch for FoldCS {
-    type Config = FoldCSConfig;
+impl TumblingWindowSketch for CountSketchFold {
+    type Config = CountSketchFoldConfig;
 
     fn from_config(config: &Self::Config) -> Self {
-        FoldCS::new(
+        CountSketchFold::new(
             config.rows,
             config.full_cols,
             config.fold_level,
@@ -143,13 +143,13 @@ impl TumblingWindowSketch for FoldCS {
     }
 }
 
-impl TumblingWindowSketch for KLL {
-    type Config = KLLConfig;
+impl TumblingWindowSketch for Kll {
+    type Config = KllConfig;
 
     fn from_config(config: &Self::Config) -> Self {
         match config.seed {
-            Some(seed) => KLL::init_with_seed(config.k, config.m, seed),
-            None => KLL::init(config.k, config.m),
+            Some(seed) => Kll::init_with_seed(config.k, config.m, seed),
+            None => Kll::init(config.k, config.m),
         }
     }
 
@@ -281,10 +281,15 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
     /// * `window_size` — duration of each window in abstract time units.
     /// * `max_windows` — maximum number of closed windows to retain.
     /// * `config`      — sketch configuration for constructing fresh sketches.
-    /// * `pool_cap`    — initial number of pre-allocated pool sketches.
-    pub fn new(window_size: u64, max_windows: usize, config: S::Config, pool_cap: usize) -> Self {
+    /// * `pool_initial_size`    — initial number of pre-allocated pool sketches.
+    pub fn new(
+        window_size: u64,
+        max_windows: usize,
+        config: S::Config,
+        pool_initial_size: usize,
+    ) -> Self {
         assert!(window_size > 0, "window_size must be > 0");
-        let mut pool = SketchPool::new(pool_cap, config.clone());
+        let mut pool = SketchPool::new(pool_initial_size, config.clone());
         let active = pool.take();
         TumblingWindow {
             active,
@@ -381,35 +386,35 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
 }
 
 // ---------------------------------------------------------------------------
-// Specialized hierarchical merge queries for FoldCMS / FoldCS
+// Specialized hierarchical merge queries for CountMinSketchFold / CountSketchFold
 // ---------------------------------------------------------------------------
 
-impl TumblingWindow<FoldCMS> {
-    /// Hierarchically merges all windows into one FoldCMS.
+impl TumblingWindow<CountMinSketchFold> {
+    /// Hierarchically merges all windows into one CountMinSketchFold.
     ///
     /// This produces a progressively unfolded result — more accurate than
     /// repeated `merge_same_level` when the fold level is > 0.
-    pub fn query_all_hierarchical(&self) -> FoldCMS {
-        let sketches: Vec<FoldCMS> = self
+    pub fn query_all_hierarchical(&self) -> CountMinSketchFold {
+        let sketches: Vec<CountMinSketchFold> = self
             .closed
             .iter()
             .map(|cw| cw.sketch.clone())
             .chain(std::iter::once(self.active.clone()))
             .collect();
-        FoldCMS::hierarchical_merge(&sketches)
+        CountMinSketchFold::hierarchical_merge(&sketches)
     }
 }
 
-impl TumblingWindow<FoldCS> {
-    /// Hierarchically merges all windows into one FoldCS.
-    pub fn query_all_hierarchical(&self) -> FoldCS {
-        let sketches: Vec<FoldCS> = self
+impl TumblingWindow<CountSketchFold> {
+    /// Hierarchically merges all windows into one CountSketchFold.
+    pub fn query_all_hierarchical(&self) -> CountSketchFold {
+        let sketches: Vec<CountSketchFold> = self
             .closed
             .iter()
             .map(|cw| cw.sketch.clone())
             .chain(std::iter::once(self.active.clone()))
             .collect();
-        FoldCS::hierarchical_merge(&sketches)
+        CountSketchFold::hierarchical_merge(&sketches)
     }
 }
 
@@ -427,13 +432,13 @@ mod tests {
 
     #[test]
     fn pool_take_returns_preallocated() {
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let mut pool = SketchPool::<FoldCMS>::new(4, config);
+        let mut pool = SketchPool::<CountMinSketchFold>::new(4, config);
         assert_eq!(pool.available(), 4);
         assert_eq!(pool.total_allocated(), 4);
 
@@ -444,13 +449,13 @@ mod tests {
 
     #[test]
     fn pool_take_allocates_when_empty() {
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let mut pool = SketchPool::<FoldCMS>::new(0, config);
+        let mut pool = SketchPool::<CountMinSketchFold>::new(0, config);
         assert_eq!(pool.available(), 0);
         assert_eq!(pool.total_allocated(), 0);
 
@@ -460,13 +465,13 @@ mod tests {
 
     #[test]
     fn pool_put_recycles() {
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let mut pool = SketchPool::<FoldCMS>::new(1, config);
+        let mut pool = SketchPool::<CountMinSketchFold>::new(1, config);
         let s = pool.take();
         assert_eq!(pool.available(), 0);
 
@@ -479,7 +484,7 @@ mod tests {
 
     #[test]
     fn fold_cms_clear_resets_to_empty() {
-        let mut sk: FoldCMS = FoldCMS::new(3, 1024, 3, 10);
+        let mut sk: CountMinSketchFold = CountMinSketchFold::new(3, 1024, 3, 10);
         for i in 0..50u64 {
             sk.update_weighted(&DataInput::U64(i), 1);
         }
@@ -499,7 +504,7 @@ mod tests {
 
     #[test]
     fn fold_cs_clear_resets_to_empty() {
-        let mut sk: FoldCS = FoldCS::new(3, 1024, 3, 10);
+        let mut sk: CountSketchFold = CountSketchFold::new(3, 1024, 3, 10);
         for i in 0..50u64 {
             sk.update_weighted(&DataInput::U64(i), 1);
         }
@@ -519,7 +524,7 @@ mod tests {
 
     #[test]
     fn kll_clear_resets_to_empty() {
-        let mut sk = KLL::init(200, 8);
+        let mut sk = Kll::init(200, 8);
         for i in 0..1000 {
             sk.update_data_input(&DataInput::F64(i as f64)).unwrap();
         }
@@ -537,12 +542,12 @@ mod tests {
         let config = UnivMonQConfig {
             levels: 8,
             width: 256,
-            width_halving_period: 0,
+            cols_halving_period: 0,
             depth: 5,
             counter_bits: 64,
             candidates: 64,
             ordered_samples: 64,
-            hash_seed: 5,
+            seed_index: 5,
         };
         let mut windows: TumblingWindow<UnivMonQ> = TumblingWindow::new(100, 4, config, 2);
         for value in 0..300_u64 {
@@ -551,7 +556,7 @@ mod tests {
         let merged = windows.query_all();
         assert_eq!(merged.count(), 300);
         assert_eq!(merged.quantile(0.5), Some(24.0));
-        assert_eq!(merged.estimate_distinct(), 50.0);
+        assert_eq!(merged.estimate_cardinality(), 50.0);
     }
 
     // -- Construction guard tests --------------------------------------------
@@ -559,26 +564,26 @@ mod tests {
     #[test]
     #[should_panic(expected = "window_size must be > 0")]
     fn zero_window_size_panics() {
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let _tw = TumblingWindow::<FoldCMS>::new(0, 5, config, 4);
+        let _tw = TumblingWindow::<CountMinSketchFold>::new(0, 5, config, 4);
     }
 
     // -- Window mechanics tests ----------------------------------------------
 
     #[test]
     fn window_closes_on_time_advance() {
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 10, config, 4);
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(100, 10, config, 4);
 
         // Insert into window 0 (time 0..99).
         tw.update_weighted(0, &DataInput::Str("a"), 1);
@@ -596,13 +601,13 @@ mod tests {
 
     #[test]
     fn window_evicts_oldest_beyond_max() {
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 3, config, 4);
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(100, 3, config, 4);
 
         // One key per window: five windows open, four of them close, and the
         // fourth close pushes the retained count past max_windows.
@@ -635,13 +640,13 @@ mod tests {
 
     #[test]
     fn window_pool_recycles_on_eviction() {
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 2, config, 4);
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(100, 2, config, 4);
 
         let initial_total = tw.pool_total_allocated();
 
@@ -683,15 +688,16 @@ mod tests {
 
     #[test]
     fn query_all_matches_manual_merge() {
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 10, config.clone(), 4);
+        let mut tw: TumblingWindow<CountMinSketchFold> =
+            TumblingWindow::new(100, 10, config.clone(), 4);
 
-        let mut manual: FoldCMS = FoldCMS::new(
+        let mut manual: CountMinSketchFold = CountMinSketchFold::new(
             config.rows,
             config.full_cols,
             config.fold_level,
@@ -717,13 +723,13 @@ mod tests {
 
     #[test]
     fn query_recent_selects_subset() {
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 10, config, 4);
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(100, 10, config, 4);
 
         // Window 0: key "old"
         tw.update_weighted(0, &DataInput::Str("old"), 5);
@@ -740,7 +746,7 @@ mod tests {
         assert_eq!(recent.query(&DataInput::Str("old")), 0);
     }
 
-    // -- FoldCMS hierarchical merge via tumbling windows ----------------------
+    // -- CountMinSketchFold hierarchical merge via tumbling windows ----------------------
 
     #[test]
     fn fold_cms_tumbling_hierarchical_merge() {
@@ -753,13 +759,13 @@ mod tests {
         let samples_per_window = 10_000;
         let num_windows = 8;
 
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
             top_k,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config,
@@ -805,7 +811,7 @@ mod tests {
 
     #[test]
     fn kll_tumbling_quantile_accuracy() {
-        let config = KLLConfig {
+        let config = KllConfig {
             k: 200,
             m: 8,
             seed: None,
@@ -813,7 +819,7 @@ mod tests {
         let samples_per_window = 5000;
         let num_windows = 4;
 
-        let mut tw: TumblingWindow<KLL> = TumblingWindow::new(
+        let mut tw: TumblingWindow<Kll> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config,
@@ -854,13 +860,13 @@ mod tests {
 
     #[test]
     fn flush_closes_active_window() {
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(100, 10, config, 4);
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(100, 10, config, 4);
 
         tw.update_weighted(10, &DataInput::Str("x"), 5);
         assert_eq!(tw.closed_count(), 0);
@@ -876,17 +882,17 @@ mod tests {
         assert_eq!(all.query(&DataInput::Str("x")), 5);
     }
 
-    // -- FoldCS tumbling test ------------------------------------------------
+    // -- CountSketchFold tumbling test ------------------------------------------------
 
     #[test]
     fn fold_cs_tumbling_basic() {
-        let config = FoldCSConfig {
+        let config = CountSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(100, 10, config, 4);
+        let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(100, 10, config, 4);
 
         tw.update_weighted(0, &DataInput::Str("hello"), 5);
         tw.update_weighted(100, &DataInput::Str("hello"), 3);
@@ -898,13 +904,13 @@ mod tests {
 
     #[test]
     fn fold_cs_tumbling_hierarchical_merge() {
-        let config = FoldCSConfig {
+        let config = CountSketchFoldConfig {
             rows: 5,
             full_cols: 4096,
             fold_level: 2,
             top_k: 10,
         };
-        let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(100, 10, config, 6);
+        let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(100, 10, config, 6);
 
         for w in 0..4u64 {
             for i in (w * 10)..((w + 1) * 10) {
@@ -943,13 +949,13 @@ mod tests {
         let num_windows = 16;
         let samples_per_window = total_samples / num_windows;
 
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
             top_k,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config,
@@ -1015,7 +1021,7 @@ mod tests {
         let num_windows = 8;
         let samples_per_window = total_samples / num_windows;
 
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
@@ -1025,13 +1031,13 @@ mod tests {
         let stream = sample_zipf_u64(domain, exponent, total_samples, 0xF1A7_CAFE);
 
         // Build two identical tumbling window instances.
-        let mut tumbling_flat: TumblingWindow<FoldCMS> = TumblingWindow::new(
+        let mut tumbling_flat: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config.clone(),
             num_windows + 2,
         );
-        let mut tumbling_hier: TumblingWindow<FoldCMS> = TumblingWindow::new(
+        let mut tumbling_hier: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config,
@@ -1084,13 +1090,13 @@ mod tests {
         let num_windows = 16;
         let samples_per_window = total_samples / num_windows;
 
-        let config = FoldCSConfig {
+        let config = CountSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
             top_k,
         };
-        let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(
+        let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config,
@@ -1147,7 +1153,7 @@ mod tests {
 
     #[test]
     fn kll_tumbling_multi_quantile_accuracy() {
-        let config = KLLConfig {
+        let config = KllConfig {
             k: 200,
             m: 8,
             seed: None,
@@ -1156,7 +1162,7 @@ mod tests {
         let num_windows = 8;
         let samples_per_window = total_samples / num_windows;
 
-        let mut tw: TumblingWindow<KLL> = TumblingWindow::new(
+        let mut tw: TumblingWindow<Kll> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config,
@@ -1194,7 +1200,7 @@ mod tests {
 
     #[test]
     fn kll_tumbling_distribution_shift() {
-        let config = KLLConfig {
+        let config = KllConfig {
             k: 400,
             m: 8,
             seed: None,
@@ -1204,7 +1210,7 @@ mod tests {
         let samples_per_window = samples_per_phase / windows_per_phase;
         let num_windows = windows_per_phase * 2;
 
-        let mut tw: TumblingWindow<KLL> = TumblingWindow::new(
+        let mut tw: TumblingWindow<Kll> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config,
@@ -1261,10 +1267,10 @@ mod tests {
     #[test]
     fn kll_tumbling_seeded_is_byte_identical_across_instances() {
         let make = || {
-            TumblingWindow::<KLL>::new(
+            TumblingWindow::<Kll>::new(
                 1000,
                 4,
-                KLLConfig {
+                KllConfig {
                     k: 200,
                     m: 8,
                     seed: Some(0x5EED_CAFE),
@@ -1283,18 +1289,18 @@ mod tests {
             tw_b.update_weighted(t, &DataInput::F64(v), 1);
         }
 
-        let bytes_a = tw_a.query_all().serialize_to_bytes().unwrap();
-        let bytes_b = tw_b.query_all().serialize_to_bytes().unwrap();
+        let bytes_a = tw_a.query_all().to_asapv1().unwrap();
+        let bytes_b = tw_b.query_all().to_asapv1().unwrap();
         assert_eq!(
             bytes_a, bytes_b,
             "same KLLConfig seed must give byte-identical tumbling state"
         );
 
         // A different seed must not silently alias onto the same coin stream.
-        let mut tw_c: TumblingWindow<KLL> = TumblingWindow::new(
+        let mut tw_c: TumblingWindow<Kll> = TumblingWindow::new(
             1000,
             4,
-            KLLConfig {
+            KllConfig {
                 k: 200,
                 m: 8,
                 seed: Some(0x5EED_CAFE + 1),
@@ -1304,7 +1310,7 @@ mod tests {
         for (i, &v) in values.iter().enumerate() {
             tw_c.update_weighted(i as u64, &DataInput::F64(v), 1);
         }
-        let bytes_c = tw_c.query_all().serialize_to_bytes().unwrap();
+        let bytes_c = tw_c.query_all().to_asapv1().unwrap();
         assert_ne!(
             bytes_a, bytes_c,
             "different KLLConfig seeds must produce different state"
@@ -1323,13 +1329,13 @@ mod tests {
         let total_windows = 8;
         let samples_per_window = 10_000;
 
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
             top_k,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             max_windows,
             config,
@@ -1438,13 +1444,13 @@ mod tests {
         let recent_n = 3;
         let samples_per_window = 10_000;
 
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
             top_k,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             total_windows, // keep all closed
             config,
@@ -1537,13 +1543,13 @@ mod tests {
         let num_windows = 8;
         let samples_per_window = total_samples / num_windows;
 
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
             top_k,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config,
@@ -1579,7 +1585,7 @@ mod tests {
         // one-sided error puts that estimate at or above the truth.
         let mut smallest = i64::MAX;
         for item in heap_entries {
-            let crate::HeapItem::U64(key) = item.key else {
+            let crate::OwnedDataInput::U64(key) = item.key else {
                 panic!("a U64 stream seats U64 keys, got {:?}", item.key);
             };
             let estimate = merged.query(&DataInput::U64(key));
@@ -1610,7 +1616,7 @@ mod tests {
         for &true_key in &true_top_k {
             let in_heap = heap_entries
                 .iter()
-                .any(|item| item.key == crate::HeapItem::U64(true_key));
+                .any(|item| item.key == crate::OwnedDataInput::U64(true_key));
             if in_heap {
                 found_in_heap += 1;
             }
@@ -1630,7 +1636,7 @@ mod tests {
         );
     }
 
-    // -- Gap 1: FoldCS query_recent accuracy ---------------------------------
+    // -- Gap 1: CountSketchFold query_recent accuracy ---------------------------------
 
     #[test]
     fn fold_cs_tumbling_query_recent_accuracy() {
@@ -1644,13 +1650,13 @@ mod tests {
         let recent_n = 3;
         let samples_per_window = 10_000;
 
-        let config = FoldCSConfig {
+        let config = CountSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
             top_k,
         };
-        let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(
+        let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             total_windows,
             config,
@@ -1742,7 +1748,7 @@ mod tests {
 
     #[test]
     fn kll_tumbling_query_recent_accuracy() {
-        let config = KLLConfig {
+        let config = KllConfig {
             k: 200,
             m: 8,
             seed: None,
@@ -1752,7 +1758,7 @@ mod tests {
         let recent_n = 3;
         let samples_per_window = total_samples / num_windows;
 
-        let mut tw: TumblingWindow<KLL> = TumblingWindow::new(
+        let mut tw: TumblingWindow<Kll> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config,
@@ -1802,7 +1808,7 @@ mod tests {
         }
     }
 
-    // -- Gap 3: FoldCS heap correctness --------------------------------------
+    // -- Gap 3: CountSketchFold heap correctness --------------------------------------
 
     #[test]
     fn fold_cs_tumbling_heap_correctness() {
@@ -1816,13 +1822,13 @@ mod tests {
         let num_windows = 8;
         let samples_per_window = total_samples / num_windows;
 
-        let config = FoldCSConfig {
+        let config = CountSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
             top_k,
         };
-        let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(
+        let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config,
@@ -1855,7 +1861,7 @@ mod tests {
         // against the truth as a relative band rather than as a floor.
         let mut smallest = i64::MAX;
         for item in heap_entries {
-            let crate::HeapItem::U64(key) = item.key else {
+            let crate::OwnedDataInput::U64(key) = item.key else {
                 panic!("a U64 stream seats U64 keys, got {:?}", item.key);
             };
             assert!(item.count > 0, "resident {key} carries a count of zero");
@@ -1882,7 +1888,7 @@ mod tests {
         for &true_key in &true_top_k {
             let in_heap = heap_entries
                 .iter()
-                .any(|item| item.key == crate::HeapItem::U64(true_key));
+                .any(|item| item.key == crate::OwnedDataInput::U64(true_key));
             if in_heap {
                 found_in_heap += 1;
             }
@@ -1914,19 +1920,20 @@ mod tests {
         let num_windows = 8;
         let samples_per_window = total_samples / num_windows;
 
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
             top_k,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config.clone(),
             num_windows + 2,
         );
-        let mut mono: FoldCMS = FoldCMS::new(rows, full_cols, fold_level, top_k);
+        let mut mono: CountMinSketchFold =
+            CountMinSketchFold::new(rows, full_cols, fold_level, top_k);
 
         let stream = sample_zipf_u64(domain, exponent, total_samples, 0xDE_AD01);
         let mut truth = HashMap::<u64, i64>::new();
@@ -1973,19 +1980,19 @@ mod tests {
         let num_windows = 8;
         let samples_per_window = total_samples / num_windows;
 
-        let config = FoldCSConfig {
+        let config = CountSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
             top_k,
         };
-        let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(
+        let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config.clone(),
             num_windows + 2,
         );
-        let mut mono: FoldCS = FoldCS::new(rows, full_cols, fold_level, top_k);
+        let mut mono: CountSketchFold = CountSketchFold::new(rows, full_cols, fold_level, top_k);
 
         let stream = sample_zipf_u64(domain, exponent, total_samples, 0xDE_AD02);
         let mut truth = HashMap::<u64, i64>::new();
@@ -2022,7 +2029,7 @@ mod tests {
 
     #[test]
     fn kll_tumbling_vs_monolithic() {
-        let config = KLLConfig {
+        let config = KllConfig {
             k: 200,
             m: 8,
             seed: None,
@@ -2031,13 +2038,13 @@ mod tests {
         let num_windows = 8;
         let samples_per_window = total_samples / num_windows;
 
-        let mut tw: TumblingWindow<KLL> = TumblingWindow::new(
+        let mut tw: TumblingWindow<Kll> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config.clone(),
             num_windows + 2,
         );
-        let mut mono = KLL::init(config.k, config.m);
+        let mut mono = Kll::init(config.k, config.m);
 
         let values = sample_uniform_f64(0.0, 10_000_000.0, total_samples, 0xDE_AD03);
 
@@ -2087,15 +2094,15 @@ mod tests {
         // All data fits in one window (no window closes).
         let total_samples = 50_000;
 
-        // --- FoldCMS subsection ---
+        // --- CountMinSketchFold subsection ---
         {
-            let config = FoldCMSConfig {
+            let config = CountMinSketchFoldConfig {
                 rows: 3,
                 full_cols: 4096,
                 fold_level: 4,
                 top_k: 20,
             };
-            let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(
+            let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
                 total_samples as u64 + 1, // window_size > total_samples → never closes
                 10,
                 config,
@@ -2130,15 +2137,15 @@ mod tests {
             );
         }
 
-        // --- FoldCS subsection ---
+        // --- CountSketchFold subsection ---
         {
-            let config = FoldCSConfig {
+            let config = CountSketchFoldConfig {
                 rows: 5,
                 full_cols: 4096,
                 fold_level: 4,
                 top_k: 20,
             };
-            let mut tw: TumblingWindow<FoldCS> =
+            let mut tw: TumblingWindow<CountSketchFold> =
                 TumblingWindow::new(total_samples as u64 + 1, 10, config, 4);
 
             let stream = sample_zipf_u64(5000, 1.1, total_samples, 0x51_0002);
@@ -2175,12 +2182,12 @@ mod tests {
 
         // --- KLL subsection ---
         {
-            let config = KLLConfig {
+            let config = KllConfig {
                 k: 200,
                 m: 8,
                 seed: None,
             };
-            let mut tw: TumblingWindow<KLL> =
+            let mut tw: TumblingWindow<Kll> =
                 TumblingWindow::new(total_samples as u64 + 1, 10, config, 4);
 
             let values = sample_uniform_f64(0.0, 1_000_000.0, total_samples, 0x51_0003);
@@ -2217,14 +2224,14 @@ mod tests {
         let total_samples = 5000;
         let max_windows = 50;
 
-        // FoldCMS with tiny windows — many rotations.
-        let config = FoldCMSConfig {
+        // CountMinSketchFold with tiny windows — many rotations.
+        let config = CountMinSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
             fold_level: 3,
             top_k: 10,
         };
-        let mut tw: TumblingWindow<FoldCMS> =
+        let mut tw: TumblingWindow<CountMinSketchFold> =
             TumblingWindow::new(window_size, max_windows, config, max_windows + 2);
 
         let stream = sample_zipf_u64(500, 1.2, total_samples, 0x77_1100);
@@ -2287,13 +2294,13 @@ mod tests {
         let heavy_samples = 36_000; // window 2 gets ~90% of 40k total
         let samples_per_window = 10_000; // large enough that light samples fit in one window
 
-        let config = FoldCMSConfig {
+        let config = CountMinSketchFoldConfig {
             rows,
             full_cols,
             fold_level,
             top_k,
         };
-        let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(
+        let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(
             samples_per_window as u64,
             num_windows,
             config,

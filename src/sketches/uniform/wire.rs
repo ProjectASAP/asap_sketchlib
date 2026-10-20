@@ -2,7 +2,7 @@
 //!
 //! Child submodule of [`crate::sketches::uniform`]: it holds ALL of the
 //! sampler's serialization (the metadata/payload DTOs, the kind_id constant,
-//! and the `serialize_to_bytes` / `deserialize_from_bytes` impls).
+//! and the `to_asapv1` / `from_asapv1` impls).
 //!
 //! Being a descendant module, it reads the private `sample_rate`, `total_seen`,
 //! `rng_state` and `entries` fields directly and rebuilds the struct without
@@ -105,7 +105,7 @@ impl UniformSampling {
     /// A sampler holding more entries than its own rate allows, or carrying a
     /// rate outside `(0, 1]`, is an error rather than bytes that would be
     /// refused on decode.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         check_sample_rate(self.sample_rate).map_err(RmpEncodeError::Syntax)?;
         let target = Self::target_size(self.total_seen, self.sample_rate);
         if self.entries.len() > target {
@@ -134,7 +134,7 @@ impl UniformSampling {
     /// Deserializes a sampler from an ASAPv1 MessagePack envelope. The rate is
     /// read from the (validated) metadata; the payload carries the retained
     /// entries plus the two running scalars.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
         if kind_id != US_KIND {
@@ -221,12 +221,11 @@ mod tests {
     fn uniform_sampling_round_trip_serialization() {
         let sampler = filled(0.25, 0xBEEF_FACE, 40);
 
-        let encoded = sampler.serialize_to_bytes().expect("serialize sampler");
+        let encoded = sampler.to_asapv1().expect("serialize sampler");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x0d, 0x00]); // kind_id_len=2, kind_id=[0x0d,0x00]
 
-        let decoded =
-            UniformSampling::deserialize_from_bytes(&encoded).expect("deserialize sampler");
+        let decoded = UniformSampling::from_asapv1(&encoded).expect("deserialize sampler");
 
         assert_eq!(sampler.sample_rate(), decoded.sample_rate());
         assert_eq!(sampler.total_seen(), decoded.total_seen());
@@ -239,9 +238,9 @@ mod tests {
     #[test]
     fn uniform_sampling_re_encodes_byte_identically() {
         let sampler = filled(0.5, 0xFACE_FACE, 33);
-        let encoded = sampler.serialize_to_bytes().expect("serialize");
-        let decoded = UniformSampling::deserialize_from_bytes(&encoded).expect("decode");
-        assert_eq!(encoded, decoded.serialize_to_bytes().expect("re-serialize"));
+        let encoded = sampler.to_asapv1().expect("serialize");
+        let decoded = UniformSampling::from_asapv1(&encoded).expect("decode");
+        assert_eq!(encoded, decoded.to_asapv1().expect("re-serialize"));
     }
 
     /// The payload carries the RNG position, so a decoded sampler fed the same
@@ -249,8 +248,8 @@ mod tests {
     #[test]
     fn uniform_sampling_rng_state_resumes_the_same_sequence() {
         let mut sampler = filled(0.3, 0x1234_5678, 25);
-        let encoded = sampler.serialize_to_bytes().expect("serialize");
-        let mut decoded = UniformSampling::deserialize_from_bytes(&encoded).expect("decode");
+        let encoded = sampler.to_asapv1().expect("serialize");
+        let mut decoded = UniformSampling::from_asapv1(&encoded).expect("decode");
 
         for value in 100..140 {
             sampler.update(value as f64);
@@ -259,8 +258,8 @@ mod tests {
         assert_eq!(sampler.samples(), decoded.samples());
         assert_eq!(sampler.total_seen(), decoded.total_seen());
         assert_eq!(
-            sampler.serialize_to_bytes().expect("re-serialize source"),
-            decoded.serialize_to_bytes().expect("re-serialize decoded")
+            sampler.to_asapv1().expect("re-serialize source"),
+            decoded.to_asapv1().expect("re-serialize decoded")
         );
     }
 
@@ -271,15 +270,15 @@ mod tests {
         let empty = UniformSampling::with_seed(0.1, 0xABC1);
         assert!(empty.is_empty());
 
-        let encoded = empty.serialize_to_bytes().expect("serialize empty");
-        let decoded = UniformSampling::deserialize_from_bytes(&encoded).expect("decode empty");
+        let encoded = empty.to_asapv1().expect("serialize empty");
+        let decoded = UniformSampling::from_asapv1(&encoded).expect("decode empty");
         assert!(decoded.is_empty());
         assert_eq!(decoded.total_seen(), 0);
         assert_eq!(decoded.sample_rate(), 0.1);
 
         let twin = UniformSampling::with_seed(0.1, 0xABC1);
-        assert_eq!(encoded, twin.serialize_to_bytes().expect("serialize twin"));
-        assert_eq!(encoded, decoded.serialize_to_bytes().expect("re-serialize"));
+        assert_eq!(encoded, twin.to_asapv1().expect("serialize twin"));
+        assert_eq!(encoded, decoded.to_asapv1().expect("re-serialize"));
     }
 
     /// A Count-Min envelope carries a different kind_id and must not decode as
@@ -287,10 +286,12 @@ mod tests {
     #[test]
     fn uniform_sampling_rejects_foreign_kind_id() {
         let cms =
-            crate::CountMin::<crate::Vector2D<i64>, crate::RegularPath>::with_dimensions(3, 8);
-        let cms_bytes = cms.serialize_to_bytes().expect("serialize CMS");
+            crate::CountMinSketch::<crate::Vector2D<i64>, crate::RegularPath>::with_dimensions(
+                3, 8,
+            );
+        let cms_bytes = cms.to_asapv1().expect("serialize CMS");
         assert!(
-            UniformSampling::deserialize_from_bytes(&cms_bytes).is_err(),
+            UniformSampling::from_asapv1(&cms_bytes).is_err(),
             "CMS bytes must not decode as a UniformSampling"
         );
     }
@@ -349,7 +350,7 @@ mod tests {
             rng_state: 9,
         };
         assert!(
-            UniformSampling::deserialize_from_bytes(&crafted(&meta, &payload)).is_err(),
+            UniformSampling::from_asapv1(&crafted(&meta, &payload)).is_err(),
             "an i64-labelled envelope must not decode as an f64 sampler"
         );
     }
@@ -366,7 +367,7 @@ mod tests {
         for rate in [0.0, -0.5, 1.5, f64::NAN, f64::INFINITY] {
             let meta = us_metadata(rate);
             assert!(
-                UniformSampling::deserialize_from_bytes(&crafted(&meta, &payload)).is_err(),
+                UniformSampling::from_asapv1(&crafted(&meta, &payload)).is_err(),
                 "sample_rate {rate} must be rejected, not panic"
             );
         }
@@ -383,7 +384,7 @@ mod tests {
             total_seen: u64::MAX,
             rng_state: 3,
         };
-        let decoded = UniformSampling::deserialize_from_bytes(&crafted(&meta, &payload))
+        let decoded = UniformSampling::from_asapv1(&crafted(&meta, &payload))
             .expect("a huge declared stream length is legal state");
         assert_eq!(decoded.len(), 2);
         assert_eq!(decoded.samples(), vec![1.0, 2.0]);
@@ -401,7 +402,7 @@ mod tests {
             rng_state: 5,
         };
         assert!(
-            UniformSampling::deserialize_from_bytes(&crafted(&meta, &payload)).is_err(),
+            UniformSampling::from_asapv1(&crafted(&meta, &payload)).is_err(),
             "3 samples must not decode at total_seen 2 and rate 0.5"
         );
     }
@@ -416,7 +417,7 @@ mod tests {
             total_seen: 3,
             rng_state: 5,
         };
-        assert!(UniformSampling::deserialize_from_bytes(&crafted(&meta, &payload)).is_err());
+        assert!(UniformSampling::from_asapv1(&crafted(&meta, &payload)).is_err());
     }
 
     /// Entries are held in ascending priority; an unordered payload is
@@ -431,7 +432,7 @@ mod tests {
             total_seen: 3,
             rng_state: 5,
         };
-        assert!(UniformSampling::deserialize_from_bytes(&crafted(&meta, &payload)).is_err());
+        assert!(UniformSampling::from_asapv1(&crafted(&meta, &payload)).is_err());
 
         // Equal priorities must still be ordered by `total_cmp` on the value.
         let tied = UsPayload {
@@ -440,24 +441,22 @@ mod tests {
             total_seen: 2,
             rng_state: 5,
         };
-        assert!(UniformSampling::deserialize_from_bytes(&crafted(&meta, &tied)).is_err());
+        assert!(UniformSampling::from_asapv1(&crafted(&meta, &tied)).is_err());
     }
 
     /// Truncated, foreign and garbage bytes are errors, never panics.
     #[test]
     fn uniform_sampling_rejects_crafted_bytes_without_panicking() {
-        let encoded = filled(0.5, 0x99, 10)
-            .serialize_to_bytes()
-            .expect("serialize");
+        let encoded = filled(0.5, 0x99, 10).to_asapv1().expect("serialize");
         for cut in [0, 1, 6, 9, 14, encoded.len() - 1] {
-            assert!(UniformSampling::deserialize_from_bytes(&encoded[..cut]).is_err());
+            assert!(UniformSampling::from_asapv1(&encoded[..cut]).is_err());
         }
-        assert!(UniformSampling::deserialize_from_bytes(&[0xff; 64]).is_err());
+        assert!(UniformSampling::from_asapv1(&[0xff; 64]).is_err());
 
         // Valid envelope + valid metadata, garbage payload.
         let metadata = rmp_serde::to_vec_named(&us_metadata(0.5)).unwrap();
         let bytes = envelope::encode(US_KIND, &metadata, &[0xc1, 0xc1, 0xc1]);
-        assert!(UniformSampling::deserialize_from_bytes(&bytes).is_err());
+        assert!(UniformSampling::from_asapv1(&bytes).is_err());
     }
 
     /// The format never emits bytes it would refuse to read back: a sampler
@@ -471,11 +470,11 @@ mod tests {
             total_seen: 2,
             rng_state: 5,
         };
-        let mut sampler = UniformSampling::deserialize_from_bytes(&crafted(&meta, &payload))
+        let mut sampler = UniformSampling::from_asapv1(&crafted(&meta, &payload))
             .expect("two samples at total_seen 2");
         sampler.total_seen = 1;
         assert!(
-            sampler.serialize_to_bytes().is_err(),
+            sampler.to_asapv1().is_err(),
             "an over-full sampler must not serialize"
         );
     }

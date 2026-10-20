@@ -20,7 +20,7 @@ use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
 use crate::message_pack_format::admission_rate::{self, admit_all};
-use crate::octo_delta::{DdDelta, DdStore};
+use crate::octo_delta::{DdSign, DdSketchBucketDelta};
 use serde::{Deserialize, Serialize};
 
 /// The ASAPv1 DDSketch delta (kind_id `0x05 0x80`).
@@ -28,7 +28,7 @@ mod delta;
 /// ASAPv1 wire serialization (kind_id `0x05 0x00`).
 mod wire;
 
-pub use delta::DDSketchDelta;
+pub use delta::DdSketchDelta;
 
 // Number of buckets to grow by when expanding.
 const GROW_CHUNK: usize = 128;
@@ -127,12 +127,12 @@ impl Buckets {
 /// `max`, and recovers `count` by summing them.
 ///
 /// The derived `Serialize` / `Deserialize` is a separate, Rust-internal form
-/// used where a `DDSketch` is nested in another type. It carries the same state
+/// used where a `DdSketch` is nested in another type. It carries the same state
 /// as the ASAPv1 payload and rebuilds the index mapping and `count` on the way
 /// in, refusing a state the ASAPv1 decoder would refuse.
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(try_from = "DDSketchState")]
-pub struct DDSketch {
+#[serde(try_from = "DdSketchState")]
+pub struct DdSketch {
     alpha: f64,
     #[serde(skip)]
     gamma: f64,
@@ -155,11 +155,11 @@ pub struct DDSketch {
     admission_rate: f64,
 }
 
-/// The fields a serialized [`DDSketch`] carries, in the order it emits them.
+/// The fields a serialized [`DdSketch`] carries, in the order it emits them.
 /// `gamma` / `log_gamma` / `inv_log_gamma` follow from `alpha` and `count` is
 /// the sum of the buckets, so none of the four reaches the wire.
 #[derive(Deserialize)]
-struct DDSketchState {
+struct DdSketchState {
     alpha: f64,
     store: Buckets,
     sum: f64,
@@ -173,10 +173,10 @@ struct DDSketchState {
     admission_rate: f64,
 }
 
-impl TryFrom<DDSketchState> for DDSketch {
+impl TryFrom<DdSketchState> for DdSketch {
     type Error = String;
 
-    fn try_from(state: DDSketchState) -> Result<Self, Self::Error> {
+    fn try_from(state: DdSketchState) -> Result<Self, Self::Error> {
         let count = wire::check_state(&state)?;
         admission_rate::to_key(state.admission_rate).map_err(|e| format!("DDSketch {e}"))?;
         let gamma = (1.0 + state.alpha) / (1.0 - state.alpha);
@@ -205,7 +205,7 @@ impl TryFrom<DDSketchState> for DDSketch {
 /// handled without growing the dense store: smaller magnitudes enter the
 /// zero bucket, while larger magnitudes are rejected.
 ///
-/// Single source of truth shared by core `DDSketch`, the portable wire twin,
+/// Single source of truth shared by core `DdSketch`, the portable wire twin,
 /// and tests, so the two implementations cannot drift algebraically again.
 pub fn ddsketch_indexable_bounds(alpha: f64) -> (f64, f64) {
     let gamma = (1.0 + alpha) / (1.0 - alpha);
@@ -221,7 +221,7 @@ pub fn ddsketch_indexable_bounds(alpha: f64) -> (f64, f64) {
     (min, max)
 }
 
-impl DDSketch {
+impl DdSketch {
     /// Creates a new DDSketch with relative accuracy guarantee `alpha` (must be in `(0, 1)`).
     pub fn new(alpha: f64) -> Self {
         assert!(alpha > 0.0 && alpha < 1.0, "alpha must be in (0,1)");
@@ -323,19 +323,19 @@ impl DDSketch {
     }
 
     /// Select the signed store and magnitude index for an accepted observation.
-    pub fn signed_bucket_for(&self, value: f64) -> Option<(DdStore, i32)> {
+    pub fn signed_bucket_for(&self, value: f64) -> Option<(DdSign, i32)> {
         let (min, max) = ddsketch_indexable_bounds(self.alpha);
         if !value.is_finite() || value.abs() > max {
             return None;
         }
         if value.abs() < min {
-            return Some((DdStore::Zero, 0));
+            return Some((DdSign::Zero, 0));
         }
         Some((
             if value < 0.0 {
-                DdStore::Negative
+                DdSign::Negative
             } else {
-                DdStore::Positive
+                DdSign::Positive
             },
             self.key_for(value.abs()),
         ))
@@ -347,8 +347,8 @@ impl DDSketch {
     /// advanced with the bucket's representative value - the same α-bounded
     /// estimate a deserialize-and-recompute produces. Quantiles and `count`
     /// stay exact with respect to the bucket store.
-    pub fn apply_delta(&mut self, delta: DdDelta) {
-        if delta.store == DdStore::Zero {
+    pub fn apply_delta(&mut self, delta: DdSketchBucketDelta) {
+        if delta.store == DdSign::Zero {
             self.apply_zero_delta(delta.value);
             return;
         }
@@ -366,7 +366,7 @@ impl DDSketch {
         if delta.index < lowest || delta.index > highest {
             return;
         }
-        let store = if delta.store == DdStore::Negative {
+        let store = if delta.store == DdSign::Negative {
             &mut self.negative_store
         } else {
             &mut self.store
@@ -376,7 +376,7 @@ impl DDSketch {
         store.counts.as_mut_slice()[slot] += delta.value;
 
         let representative = self.bin_representative(delta.index)
-            * if delta.store == DdStore::Negative {
+            * if delta.store == DdSign::Negative {
                 -1.0
             } else {
                 1.0
@@ -487,14 +487,14 @@ impl DDSketch {
     }
 
     /// Returns the raw bucket-count slice. Each entry is the number of
-    /// samples in the bucket whose absolute index is `store_offset() + i`.
-    pub fn store_counts(&self) -> &[u64] {
+    /// samples in the bucket whose absolute index is `positive_store_offset() + i`.
+    pub fn positive_store_counts(&self) -> &[u64] {
         self.store.counts.as_slice()
     }
 
     /// Returns the absolute bucket index corresponding to
-    /// `store_counts()[0]`.
-    pub fn store_offset(&self) -> i32 {
+    /// `positive_store_counts()[0]`.
+    pub fn positive_store_offset(&self) -> i32 {
         self.store.offset
     }
 
@@ -528,7 +528,7 @@ impl DDSketch {
     /// results with no signal at all. DataDog's `MergeWith` and sketchlib-go's
     /// Go `Merge` both return an error here; the portable `DdSketch::merge` in
     /// this same crate does too.
-    pub fn merge(&mut self, other: &DDSketch) -> Result<(), String> {
+    pub fn merge(&mut self, other: &DdSketch) -> Result<(), String> {
         if (self.alpha - other.alpha).abs() >= 1e-12 || (self.gamma - other.gamma).abs() >= 1e-12 {
             return Err(format!(
                 "cannot merge DDSketches with different index mappings: alpha {} vs {}",
@@ -618,7 +618,7 @@ impl DDSketch {
     }
 }
 
-impl Clone for DDSketch {
+impl Clone for DdSketch {
     fn clone(&self) -> Self {
         Self {
             alpha: self.alpha,
@@ -637,7 +637,7 @@ impl Clone for DDSketch {
     }
 }
 
-impl DDSketch {
+impl DdSketch {
     /// Adds a sample converted from a [`DataInput`]; returns an error for non-numeric inputs.
     #[inline(always)]
     pub fn add_input(&mut self, v: &DataInput) -> Result<(), &'static str> {
@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn insert_and_query_basic() {
-        let mut s = DDSketch::new(0.01);
+        let mut s = DdSketch::new(0.01);
         let vals = [0.0, -5.0, 1.0, 2.0, 3.0, 10.0, 50.0, 100.0, 1000.0];
         for &v in &vals {
             s.add(&v);
@@ -674,7 +674,7 @@ mod tests {
 
     #[test]
     fn empty_quantile_returns_none() {
-        let s = DDSketch::new(0.01);
+        let s = DdSketch::new(0.01);
         assert!(s.get_value_at_quantile(0.5).is_none());
         assert!(s.get_value_at_quantile(0.0).is_none());
         assert!(s.get_value_at_quantile(1.0).is_none());
@@ -685,8 +685,8 @@ mod tests {
     fn merge_two_sketches_combines_counts_and_bounds() {
         const ALPHA: f64 = 0.01;
 
-        let mut s1 = DDSketch::new(ALPHA);
-        let mut s2 = DDSketch::new(ALPHA);
+        let mut s1 = DdSketch::new(ALPHA);
+        let mut s2 = DdSketch::new(ALPHA);
 
         let vals1 = [1.0, 2.0, 3.0, 4.0];
         let vals2 = [5.0, 10.0, 20.0];
@@ -716,18 +716,17 @@ mod tests {
 
     #[test]
     fn dds_serialization_round_trip() {
-        let mut s = DDSketch::new(0.01);
+        let mut s = DdSketch::new(0.01);
         for v in [1.0, 2.0, 3.0, 10.0, 50.0, 100.0, 1000.0] {
             s.add(&v);
         }
 
-        let encoded = s.serialize_to_bytes().expect("DDSketch serialization fail");
+        let encoded = s.to_asapv1().expect("DDSketch serialization fail");
         assert!(
             !encoded.is_empty(),
             "encoded bytes should not be empty for DDSketch"
         );
-        let decoded =
-            DDSketch::deserialize_from_bytes(&encoded).expect("DDSketch deserialization fail");
+        let decoded = DdSketch::from_asapv1(&encoded).expect("DDSketch deserialization fail");
 
         // `count` is summed back from the buckets; `sum`/`min`/`max` are carried
         // on the wire, so every scalar and every quantile comes back exact.
@@ -749,7 +748,7 @@ mod tests {
     #[test]
     fn representative_within_alpha_at_bucket_edges() {
         for &alpha in &[0.001, 0.01, 0.05, 0.1] {
-            let d = DDSketch::new(alpha);
+            let d = DdSketch::new(alpha);
             for &k in &[-100i32, -1, 0, 1, 7, 500] {
                 let lo = d.lower_bound(k);
                 let hi = d.lower_bound(k + 1);
@@ -769,13 +768,13 @@ mod tests {
 
     #[test]
     fn merge_alpha_mismatch_is_a_real_runtime_error() {
-        let mut a = DDSketch::new(0.01);
-        let b = DDSketch::new(0.02);
+        let mut a = DdSketch::new(0.01);
+        let b = DdSketch::new(0.02);
         a.add(&5.0);
         assert!(a.merge(&b).is_err(), "mismatched-mapping merge must Err");
 
-        let mut c = DDSketch::new(0.01);
-        let mut d = DDSketch::new(0.01);
+        let mut c = DdSketch::new(0.01);
+        let mut d = DdSketch::new(0.01);
         c.add(&3.0);
         d.add(&7.0);
         assert!(c.merge(&d).is_ok(), "matched-mapping merge must succeed");
@@ -786,7 +785,7 @@ mod tests {
     fn untrackable_extreme_is_dropped() {
         // A single finite-but-extreme outlier outside the indexable range must
         // not be recorded, so the dense bucket store never spans the whole gap.
-        let mut d = DDSketch::new(0.01);
+        let mut d = DdSketch::new(0.01);
         for i in 1..=2000 {
             d.add(&(f64::from(i)));
         }
@@ -812,8 +811,8 @@ mod tests {
         assert_eq!(d.get_count(), count_before + 2);
     }
 
-    fn populated_sketch() -> DDSketch {
-        let mut sketch = DDSketch::new(0.01);
+    fn populated_sketch() -> DdSketch {
+        let mut sketch = DdSketch::new(0.01);
         for v in [0.25f64, 1.0, 2.0, 3.0, 10.0, 50.0, 100.0, 1000.0] {
             sketch.add(&v);
         }
@@ -826,15 +825,21 @@ mod tests {
     fn serde_round_trip_keeps_the_running_scalars() {
         let sketch = populated_sketch();
         let bytes = rmp_serde::to_vec(&sketch).expect("encode");
-        let restored: DDSketch = rmp_serde::from_slice(&bytes).expect("decode");
+        let restored: DdSketch = rmp_serde::from_slice(&bytes).expect("decode");
 
         assert_eq!(restored.get_count(), sketch.get_count());
         assert_eq!(restored.sum(), sketch.sum());
         assert_eq!(restored.min(), sketch.min());
         assert_eq!(restored.max(), sketch.max());
         assert_eq!(restored.alpha(), sketch.alpha());
-        assert_eq!(restored.store_counts(), sketch.store_counts());
-        assert_eq!(restored.store_offset(), sketch.store_offset());
+        assert_eq!(
+            restored.positive_store_counts(),
+            sketch.positive_store_counts()
+        );
+        assert_eq!(
+            restored.positive_store_offset(),
+            sketch.positive_store_offset()
+        );
         for q in [0.0, 0.25, 0.5, 0.9, 1.0] {
             assert_eq!(
                 restored.get_value_at_quantile(q),
@@ -849,13 +854,13 @@ mod tests {
     fn serde_round_trip_leaves_the_sketch_usable() {
         let sketch = populated_sketch();
         let bytes = rmp_serde::to_vec(&sketch).expect("encode");
-        let mut restored: DDSketch = rmp_serde::from_slice(&bytes).expect("decode");
+        let mut restored: DdSketch = rmp_serde::from_slice(&bytes).expect("decode");
 
         restored.add(&5.0f64);
         assert_eq!(restored.get_count(), sketch.get_count() + 1);
         assert_eq!(restored.sum(), sketch.sum() + 5.0);
         assert_eq!(
-            restored.store_counts().iter().sum::<u64>(),
+            restored.positive_store_counts().iter().sum::<u64>(),
             restored.get_count(),
             "the recovered count drifted from the buckets"
         );
@@ -886,7 +891,7 @@ mod tests {
             max: f64::NEG_INFINITY,
         };
         let bytes = rmp_serde::to_vec(&crafted).expect("encode crafted state");
-        let err = rmp_serde::from_slice::<DDSketch>(&bytes)
+        let err = rmp_serde::from_slice::<DdSketch>(&bytes)
             .expect_err("scalars disagreeing with the store must be refused");
         assert!(
             err.to_string().contains("DDSketch scalars"),
@@ -918,7 +923,7 @@ mod tests {
             max: f64::NEG_INFINITY,
         };
         let bytes = rmp_serde::to_vec(&crafted).expect("encode crafted state");
-        let err = rmp_serde::from_slice::<DDSketch>(&bytes)
+        let err = rmp_serde::from_slice::<DdSketch>(&bytes)
             .expect_err("an out-of-range alpha must be refused");
         assert!(err.to_string().contains("alpha"), "unexpected error: {err}");
     }

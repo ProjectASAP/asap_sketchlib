@@ -16,14 +16,14 @@ use proptest::prelude::*;
 macro_rules! round_trip {
     ($ty:ty, $sketch:expr, $($probe:expr),+ $(,)?) => {{
         let original = &$sketch;
-        if let Ok(bytes) = original.serialize_to_bytes() {
-            let decoded = <$ty>::deserialize_from_bytes(&bytes)
+        if let Ok(bytes) = original.to_asapv1() {
+            let decoded = <$ty>::from_asapv1(&bytes)
                 .expect("bytes the encoder produced must decode");
             $(
                 prop_assert_eq!($probe(&decoded), $probe(original));
             )+
             prop_assert_eq!(
-                decoded.serialize_to_bytes().expect("a decoded sketch must re-encode"),
+                decoded.to_asapv1().expect("a decoded sketch must re-encode"),
                 bytes,
                 "the re-encode is not byte-identical"
             );

@@ -11,8 +11,8 @@ Canonical input and ownership model shared across sketches/frameworks.
 ## Type/Struct
 
 - `DataInput<'a>`
-- `HeapItem`
-- `HHItem<C: HeapCount = i64>`
+- `OwnedDataInput`
+- `HeapEntry<C: HeapCount = i64>`
 - `HydraQuery<'a>`
 - `HydraCounter`
 - `L2HH`
@@ -22,12 +22,12 @@ Canonical input and ownership model shared across sketches/frameworks.
 ## Constructors / Conversions
 
 ```rust
-fn heap_item_to_sketch_input(item: &HeapItem) -> DataInput<'_>
-fn input_to_owned(input: &DataInput<'_>) -> HeapItem
+fn heap_item_to_sketch_input(item: &OwnedDataInput) -> DataInput<'_>
+fn input_to_owned(input: &DataInput<'_>) -> OwnedDataInput
 
-// HHItem<C>
+// HeapEntry<C>
 fn new(k: DataInput, count: C) -> Self
-fn create_item(k: HeapItem, count: C) -> Self
+fn create_item(k: OwnedDataInput, count: C) -> Self
 fn init_item(k: DataInput, count: C) -> Self
 ```
 
@@ -44,7 +44,7 @@ fn update(&mut self, value: &DataInput, weight: Option<i32>)
 fn update_with_hash(
     &mut self,
     value: &DataInput,
-    hashed_val: &MatrixHashType,
+    hashed_val: &MatrixHash,
     count: Option<i32>,
 )
 ```
@@ -53,7 +53,7 @@ fn update_with_hash(
 
 ```rust
 // L2HH
-fn get_l2(&self) -> f64
+fn l2(&self) -> f64
 
 // HydraCounter
 fn query(&self, query: &HydraQuery) -> Result<f64, String>
@@ -71,7 +71,7 @@ fn merge(&mut self, other: &HydraCounter) -> Result<(), String>
 
 ## Serialization
 
-- `DataInput`, `HeapItem`, `HHItem`, `HydraCounter`, and `L2HH` derive serde traits.
+- `DataInput`, `OwnedDataInput`, `HeapEntry`, `HydraCounter`, and `L2HH` derive serde traits.
 - `HydraQuery` is query-only and does not derive serde in current code.
 
 ## Variants (Core)
@@ -84,7 +84,7 @@ enum DataInput<'a> {
     Str(&'a str), String(String), Bytes(&'a [u8]),
 }
 
-enum HeapItem {
+enum OwnedDataInput {
     I8(i8), I16(i16), I32(i32), I64(i64), I128(i128), ISIZE(isize),
     U8(u8), U16(u16), U32(u32), U64(u64), U128(u128), USIZE(usize),
     F32(f32), F64(f64),

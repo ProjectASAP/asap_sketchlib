@@ -29,15 +29,15 @@ for &user_id in &user_ids {
 let unique_users = unique_user_ids.len();
 ```
 
-**Sketch version** — `HyperLogLog<ErtlMLE>` estimates the count in fixed, bounded memory.
+**Sketch version** — `HyperLogLog<Ertl>` estimates the count in fixed, bounded memory.
 
 ```rust
-use asap_sketchlib::{ErtlMLE, HyperLogLog, DataInput};
+use asap_sketchlib::{Ertl, HyperLogLog, DataInput};
 
 let user_ids: Vec<u64> = get_user_ids();
 
-// ErtlMLE is more accurate than Classic at very low or very high cardinalities.
-let mut hll = HyperLogLog::<ErtlMLE>::default();
+// Ertl is more accurate than Classic at very low or very high cardinalities.
+let mut hll = HyperLogLog::<Ertl>::default();
 for &user_id in &user_ids {
     hll.update(&DataInput::U64(user_id));
 }
@@ -66,16 +66,16 @@ for &user_id in &user_ids {
 let exact_count = user_counts.get(&101).copied().unwrap_or(0);
 ```
 
-**Sketch version** — `CountMin<FixedMatrix, FastPath>` estimates frequencies in a compact, fixed-size matrix.
+**Sketch version** — `CountMinSketch<FixedMatrix, FastPath>` estimates frequencies in a compact, fixed-size matrix.
 
 ```rust
-use asap_sketchlib::{CountMin, DataInput, FixedMatrix, FastPath};
+use asap_sketchlib::{CountMinSketch, DataInput, FixedMatrix, FastPath};
 
 let user_ids: Vec<u64> = get_user_ids();
 
 // FixedMatrix: statically-sized backing array.
 // FastPath: optimized hashing route for throughput-critical workloads.
-let mut cms = CountMin::<FixedMatrix, FastPath>::default();
+let mut cms = CountMinSketch::<FixedMatrix, FastPath>::default();
 for &user_id in &user_ids {
     cms.update(&DataInput::U64(user_id));
 }
@@ -92,15 +92,15 @@ Compute quantiles (p50, p90, p99, …) over a large stream of values.
 
 On a 10M-item Zipf workload (101 quantiles), KLL completes in ~214 ms versus ~7,980 ms for Polars. The difference is the sort phase: Polars must sort all buffered values at query time, while KLL does the maintenance work incrementally during insertion.
 
-**Sketch version** — `KLL` maintains a compact sketch during insertion; the CDF is built once and queries are O(log n).
+**Sketch version** — `Kll` maintains a compact sketch during insertion; the CDF is built once and queries are O(log n).
 
 ```rust
 use asap_sketchlib::sketches::kll::Cdf;
-use asap_sketchlib::KLL;
+use asap_sketchlib::Kll;
 
 let values: Vec<i64> = get_values();
 
-let mut sketch = KLL::<i64>::init_kll(200);
+let mut sketch = Kll::<i64>::with_k(200);
 for v in &values {
     sketch.update(v);
 }
@@ -137,7 +137,7 @@ for value in 1..=100_000 {
 
 let query = sketch.prepare_queries();
 let percentiles = query.quantiles(&[0.50, 0.90, 0.99]);
-let distinct = query.estimate_distinct();
+let distinct = query.estimate_cardinality();
 let f2 = query.estimate_f2();
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```

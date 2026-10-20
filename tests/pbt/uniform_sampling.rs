@@ -480,8 +480,8 @@ proptest! {
         let later: Vec<f64> = (0..later_len).map(|position| -(position as f64) - 1.0).collect();
         let mut original = fed(rate, seed, &values);
 
-        if let Ok(bytes) = original.serialize_to_bytes() {
-            let mut decoded = UniformSampling::deserialize_from_bytes(&bytes)
+        if let Ok(bytes) = original.to_asapv1() {
+            let mut decoded = UniformSampling::from_asapv1(&bytes)
                 .expect("bytes the encoder produced must decode");
             for value in &later {
                 original.update(*value);

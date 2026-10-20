@@ -11,8 +11,8 @@ use rand::{Rng, SeedableRng, rng};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Count, CountMin, DataInput, DefaultXxHasher, FastPath, FastPathHasher, MatrixFastHash,
-    PRECOMPUTED_SAMPLE, Vector2D,
+    Count, CountMinSketch, DataInput, DefaultXxHasher, FastPath, FastPathHasher,
+    LN_ONE_MINUS_U_TABLE, MatrixFastHash, Vector2D,
 };
 
 /// Trait for sketch backends that support Nitro row updates.
@@ -91,14 +91,14 @@ impl NitroTarget for Vector2D<u32> {
     }
 }
 
-impl NitroMerge for CountMin<Vector2D<i32>, FastPath> {
+impl NitroMerge for CountMinSketch<Vector2D<i32>, FastPath> {
     #[inline(always)]
     fn merge(&mut self, other: &Self) {
-        CountMin::merge(self, other);
+        CountMinSketch::merge(self, other);
     }
 }
 
-impl NitroEstimate for CountMin<Vector2D<i32>, FastPath> {
+impl NitroEstimate for CountMinSketch<Vector2D<i32>, FastPath> {
     #[inline(always)]
     fn estimate_median(&self, value: &DataInput) -> f64 {
         self.nitro_estimate(value)
@@ -142,7 +142,7 @@ pub struct NitroBatch<S: NitroTarget> {
 }
 
 /// Length of the shared `ln(1 - u)` skip table.
-const SKIP_TABLE_LEN: usize = crate::common::precompute_sample::PRECOMPUTED_SAMPLE_LEN;
+const SKIP_TABLE_LEN: usize = crate::common::precompute_sample::LN_ONE_MINUS_U_TABLE_LEN;
 
 fn new_small_rng() -> SmallRng {
     let mut seed_rng = rng();
@@ -168,15 +168,15 @@ impl Default for NitroBatch<Vector2D<u32>> {
 
 impl NitroBatch<Vector2D<u32>> {
     /// Creates a Nitro sketch with the given sampling rate.
-    pub fn init_nitro(rate: f64) -> Self {
+    pub fn new(rate: f64) -> Self {
         let mut sk = Vector2D::init(5, 2048);
         sk.fill(0);
         Self::with_target(rate, sk)
     }
 
-    /// [`NitroBatch::init_nitro`] with an explicit sampling-RNG seed. See
+    /// [`NitroBatch::new`] with an explicit sampling-RNG seed. See
     /// [`NitroBatch::with_target_and_seed`].
-    pub fn init_nitro_with_seed(rate: f64, seed: u64) -> Self {
+    pub fn with_seed(rate: f64, seed: u64) -> Self {
         let mut sk = Vector2D::init(5, 2048);
         sk.fill(0);
         Self::with_target_and_seed(rate, sk, seed)
@@ -300,7 +300,7 @@ impl<S: NitroTarget> NitroBatch<S> {
             return;
         }
         self.to_skip =
-            (PRECOMPUTED_SAMPLE[self.cursor()] * self.inv_ln_one_minus_p).floor() as usize;
+            (LN_ONE_MINUS_U_TABLE[self.cursor()] * self.inv_ln_one_minus_p).floor() as usize;
         self.next_cursor();
     }
 
@@ -318,7 +318,7 @@ impl<S: NitroTarget> NitroBatch<S> {
 
     #[inline(always)]
     /// Returns the configured sampling rate.
-    pub fn get_sampling_rate(&self) -> f64 {
+    pub fn sampling_rate(&self) -> f64 {
         self.sampling_rate
     }
 
@@ -469,7 +469,7 @@ mod tests {
 
         let mut nitro = NitroBatch::with_target_and_seed(
             RATE,
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 1024),
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 1024),
             0,
         );
         assert_eq!(nitro.cursor(), 0, "seed 0 starts at entry 0");
@@ -487,7 +487,7 @@ mod tests {
         let start = SKIP_TABLE_LEN - 8;
         let mut wrapping = NitroBatch::with_target_and_seed(
             RATE,
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 1024),
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 1024),
             start as u64,
         );
         assert_eq!(wrapping.cursor(), start);
@@ -500,7 +500,7 @@ mod tests {
         // A cursor decoded from an older payload can be past the table.
         let mut hostile = NitroBatch::with_target_and_seed(
             RATE,
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 1024),
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 1024),
             1,
         );
         hostile.commit_ctx(usize::MAX, 0);
@@ -527,7 +527,7 @@ mod tests {
             })
             .collect();
 
-        let cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
+        let cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
         let mut batch = NitroBatch::with_target_and_seed(1.0, cm, NITRO_TEST_SEED);
         batch.update_batch(&data);
 

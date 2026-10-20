@@ -14,16 +14,16 @@ Universal stream-monitoring sketch for L1/L2/cardinality/entropy.
 
 ```rust
 fn default() -> Self
-fn init_univmon(heap_size: usize, sketch_row: usize, sketch_col: usize, layer_size: usize) -> Self
+fn new(heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self
 ```
 
-`init_univmon` panics on a shape whose hashes would not be independent:
+`new` panics on a shape whose hashes would not be independent:
 
-- `layer_size > MAX_LAYER_SIZE` (19). Layer `i` hashes at seed index `i`, and
-  the layers a key reaches are read from the hash at `BOTTOM_LAYER_FINDER`
+- `layers > UNIVMON_MAX_LAYERS` (19). Layer `i` hashes at seed index `i`, and
+  the layers a key reaches are read from the hash at `UNIVMON_BOTTOM_LAYER_SEED_INDEX`
   (19). A 20th layer would hash at the finder's seed, and later ones would wrap
   onto layer 0's.
-- `sketch_row * (ceil_log2(sketch_col) + 1) > 128`. Every row of a layer reads
+- `rows * (ceil_log2(cols) + 1) > 128`. Every row of a layer reads
   its column and its sign from one 128-bit hash; past this budget a deep row's
   column reuses a shallow row's sign bit.
 
@@ -43,16 +43,16 @@ mixing the two physical layouts is rejected.
 ## Query
 
 ```rust
-fn calc_l1(&self) -> f64
-fn calc_l2(&self) -> f64
-fn calc_entropy(&self) -> f64
-fn calc_card(&self) -> f64
-fn calc_g_sum<F>(&self, g: F, is_card: bool) -> f64
+fn estimate_l1(&self) -> f64
+fn estimate_l2(&self) -> f64
+fn estimate_entropy(&self) -> f64
+fn estimate_cardinality(&self) -> f64
+fn estimate_g_sum<F>(&self, g: F, heavy_only: bool) -> f64
 ```
 
-Because UnivMon accepts only non-negative updates, `calc_l1()` returns the
+Because UnivMon accepts only non-negative updates, `estimate_l1()` returns the
 exact tracked total weight. The generic recurrence remains available through
-`calc_g_sum` for compatible frequency functions.
+`estimate_g_sum` for compatible frequency functions.
 
 ## Merge
 
@@ -63,8 +63,8 @@ fn merge(&mut self, other: &UnivMon)
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 These produce/consume the **ASAPv1** wire envelope (kind `0x10 0x00`) — see the
@@ -76,7 +76,7 @@ counter hashes at seed index `i`.
 The pyramid shape (`layers`, `rows`, `cols`, `heap_size`) and
 the heaps' `key_type` live in the metadata; the payload is
 `[counts, l2, heap_lens, keys, heap_counts, candidate_complete, bucket_size,
-update_mode]`. Each layer's `CountL2HH` state is inlined rather than nested in
+update_mode]`. Each layer's `CountSketchWithL2Norm` state is inlined rather than nested in
 an envelope of its own, and the heap indexes are rebuilt on load, so no index
 reaches the wire. Heap entries are emitted layer by layer, each layer in
 descending count with ties broken by a total order over the key, so a decoded
@@ -84,8 +84,8 @@ pyramid re-serializes byte-identically. `update_mode` and `candidate_complete`
 are carried: they are acquired from the stream, and a decoder that guessed them
 would pick the wrong query recurrence or report a widened threshold as zero.
 
-Every layer is a `CountL2HH` matrix hashed per row, so `sketch_row` carries that
-sketch's bound: `1 <= sketch_row <= 20` (`MATRIX_MAX_ROWS`, the seed list
+Every layer is a `CountSketchWithL2Norm` matrix hashed per row, so `rows` carries that
+sketch's bound: `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list
 length), refused on both sides past it.
 
 ## Examples
@@ -93,9 +93,9 @@ length), refused on both sides past it.
 ```rust
 use asap_sketchlib::{DataInput, UnivMon};
 
-let mut um = UnivMon::init_univmon(32, 3, 1024, 4);
+let mut um = UnivMon::new(32, 3, 1024, 4);
 um.update_weighted(&DataInput::Str("flow"), 1);
-assert!(um.calc_l1() >= 1.0);
+assert!(um.estimate_l1() >= 1.0);
 ```
 
 ## Caveats

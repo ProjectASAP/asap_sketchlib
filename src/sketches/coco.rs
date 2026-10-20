@@ -31,7 +31,7 @@ pub struct CocoBucket {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "")]
-pub struct Coco<H: SketchHasher = DefaultXxHasher> {
+pub struct CocoSketch<H: SketchHasher = DefaultXxHasher> {
     pub w: usize,
     pub d: usize,
     pub table: Vector2D<CocoBucket>,
@@ -70,11 +70,11 @@ impl CocoRng {
     }
 }
 
-/// Buckets per array in a default `Coco`. Width sets the collision rate, and
+/// Buckets per array in a default `CocoSketch`. Width sets the collision rate, and
 /// `w * d` buckets at 32 bytes each set the table footprint.
 const DEFAULT_WIDTH: usize = 1024;
 
-/// Arrays in a default `Coco`, inside the paper's recommended 2..=4. Every
+/// Arrays in a default `CocoSketch`, inside the paper's recommended 2..=4. Every
 /// insert scans the `d` buckets its key maps to.
 const DEFAULT_DEPTH: usize = 4;
 
@@ -126,15 +126,15 @@ impl CocoBucket {
     }
 }
 
-impl Default for Coco {
+impl Default for CocoSketch {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<H: SketchHasher> Coco<H> {
+impl<H: SketchHasher> CocoSketch<H> {
     pub fn new() -> Self {
-        Coco::init_with_size(DEFAULT_WIDTH, DEFAULT_DEPTH)
+        CocoSketch::init_with_size(DEFAULT_WIDTH, DEFAULT_DEPTH)
     }
 
     pub fn debug(&self) {
@@ -161,7 +161,7 @@ impl<H: SketchHasher> Coco<H> {
     }
 
     fn with_rng(w: usize, d: usize, rng: CocoRng) -> Self {
-        Coco {
+        CocoSketch {
             w,
             d,
             table: Vector2D::from_fn(d, w, |_, _| CocoBucket::default()),
@@ -222,7 +222,7 @@ impl<H: SketchHasher> Coco<H> {
 
     /// Frequency estimate for `key` as defined by the paper: the sum of the `d`
     /// mapped buckets that currently hold `key`.
-    pub fn estimate_key(&self, key: &str) -> u64 {
+    pub fn estimate(&self, key: &str) -> u64 {
         if self.d == 0 || self.w == 0 {
             return 0;
         }
@@ -287,7 +287,7 @@ impl<H: SketchHasher> Coco<H> {
 
     /// Sums every bucket whose stored key contains `partial_key` anywhere.
     /// Containment is not a key projection: `"k1"` also collects `k10` and
-    /// `k100`. Use [`Self::estimate_projected`] or [`Self::estimate_key`].
+    /// `k100`. Use [`Self::estimate_projected`] or [`Self::estimate`].
     pub fn estimate_substring(&self, partial_key: &str) -> u64 {
         self.recorded_flows()
             .filter(|&(full, _)| full.contains(partial_key))
@@ -295,7 +295,7 @@ impl<H: SketchHasher> Coco<H> {
             .sum()
     }
 
-    pub fn merge(&mut self, other: &Coco<H>) {
+    pub fn merge(&mut self, other: &CocoSketch<H>) {
         assert_eq!(self.d, other.d, "Different depth, do nothing");
         assert_eq!(self.w, other.w, "Different width, do nothing");
         for i in 0..self.d {
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn insert_then_estimate_matches_full_value_for_partial_key() {
         // cover end-to-end flow of inserting a key and querying with a substring
-        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut coco: CocoSketch = CocoSketch::init_with_size(TEST_W, TEST_D);
         let key = "user:1234";
 
         coco.update_weighted(key, 3);
@@ -332,13 +332,13 @@ mod tests {
 
         let estimate = coco.estimate_substring("user");
         assert_eq!(estimate, 5);
-        assert_eq!(coco.estimate_key(key), 5);
+        assert_eq!(coco.estimate(key), 5);
     }
 
     #[test]
     fn estimate_with_udf_allows_custom_partial_matching() {
         // ensure custom UDF matching logic aggregates only intended buckets
-        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut coco: CocoSketch = CocoSketch::init_with_size(TEST_W, TEST_D);
         coco.update_weighted("region=us|id=1", 4);
         coco.update_weighted("region=eu|id=2", 6);
 
@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(total_all, 10);
     }
 
-    fn table_of(coco: &Coco) -> Vec<(Option<String>, u64)> {
+    fn table_of(coco: &CocoSketch) -> Vec<(Option<String>, u64)> {
         (0..coco.d)
             .flat_map(|i| (0..coco.w).map(move |j| (i, j)))
             .map(|(i, j)| (coco.table[i][j].full_key.clone(), coco.table[i][j].val))
@@ -363,8 +363,8 @@ mod tests {
     #[test]
     fn equal_seeds_build_identical_tables() {
         let build = |seed: u64| {
-            let mut left: Coco = Coco::init_with_size_and_seed(64, 2, seed);
-            let mut right: Coco = Coco::init_with_size_and_seed(64, 2, seed + 1);
+            let mut left: CocoSketch = CocoSketch::init_with_size_and_seed(64, 2, seed);
+            let mut right: CocoSketch = CocoSketch::init_with_size_and_seed(64, 2, seed + 1);
             for i in 0..20_000u64 {
                 let key = format!("flow::{}", (i * i + 7 * i) % 512);
                 if i % 2 == 0 {
@@ -388,7 +388,8 @@ mod tests {
         let mut landings = [0usize; TEST_D];
 
         for trial in 0..TRIALS {
-            let mut coco: Coco = Coco::init_with_size_and_seed(TEST_W, TEST_D, trial as u64);
+            let mut coco: CocoSketch =
+                CocoSketch::init_with_size_and_seed(TEST_W, TEST_D, trial as u64);
             coco.update_weighted("flow::tie-probe", 1);
             let row = (0..TEST_D)
                 .find(|i| {
@@ -411,19 +412,19 @@ mod tests {
     #[test]
     fn the_three_queries_disagree_on_a_key_that_prefixes_another() {
         // substring containment is not a key projection: "k1" also matches "k10"
-        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut coco: CocoSketch = CocoSketch::init_with_size(TEST_W, TEST_D);
         coco.update_weighted("k1", 7);
         coco.update_weighted("k10", 5);
 
         assert_eq!(coco.estimate_substring("k1"), 12);
-        assert_eq!(coco.estimate_key("k1"), 7);
+        assert_eq!(coco.estimate("k1"), 7);
         assert_eq!(coco.estimate_projected("k1", |full| full), 7);
     }
 
     #[test]
     fn estimate_projected_aggregates_full_keys_sharing_a_partial_key() {
         // the paper's figure 7: two full keys on one srcip sum to that srcip
-        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut coco: CocoSketch = CocoSketch::init_with_size(TEST_W, TEST_D);
         coco.update_weighted("19.98.10.26|80", 521);
         coco.update_weighted("19.98.10.26|443", 520);
         coco.update_weighted("34.52.73.17|118", 856);
@@ -438,7 +439,7 @@ mod tests {
 
     #[test]
     fn recorded_flows_yields_each_occupied_bucket_once() {
-        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut coco: CocoSketch = CocoSketch::init_with_size(TEST_W, TEST_D);
         for i in 0..20u64 {
             coco.update_weighted(&format!("flow::{i}"), i + 1);
         }
@@ -458,7 +459,7 @@ mod tests {
     #[test]
     fn group_by_agrees_with_per_key_projected_queries() {
         // the one-pass grouping and the per-key scan must never disagree
-        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut coco: CocoSketch = CocoSketch::init_with_size(TEST_W, TEST_D);
         for i in 0..60u64 {
             coco.update_weighted(&format!("fam{}|item{i}", i % 5), i % 7 + 1);
         }
@@ -477,7 +478,7 @@ mod tests {
     #[test]
     fn group_by_preserves_the_inserted_mass() {
         // an 8x2 table against far more keys forces eviction; mass still holds
-        let mut coco: Coco = Coco::init_with_size(8, 2);
+        let mut coco: CocoSketch = CocoSketch::init_with_size(8, 2);
         let mut total = 0u64;
         for i in 0..400u64 {
             coco.update_weighted(&format!("fam{}|item{}", i % 6, i % 37), 3);
@@ -490,7 +491,7 @@ mod tests {
 
     #[test]
     fn group_by_reproduces_the_papers_figure_seven() {
-        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut coco: CocoSketch = CocoSketch::init_with_size(TEST_W, TEST_D);
         coco.update_weighted("19.98.10.26|80", 521);
         coco.update_weighted("19.98.10.26|443", 520);
         coco.update_weighted("34.52.73.17|118", 856);
@@ -505,7 +506,7 @@ mod tests {
     fn a_key_occupies_at_most_one_bucket_per_row() {
         // the match scan covers every row before a victim is chosen, so a key
         // already resident in a later row never gains a second home
-        let mut coco: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut coco: CocoSketch = CocoSketch::init_with_size(TEST_W, TEST_D);
         let key = "flow::single-home";
 
         for _ in 0..64 {
@@ -517,14 +518,14 @@ mod tests {
             .filter(|(i, j)| coco.table[*i][*j].full_key.as_deref() == Some(key))
             .count();
         assert_eq!(homes, 1, "key must live in exactly one bucket");
-        assert_eq!(coco.estimate_key(key), 64);
+        assert_eq!(coco.estimate(key), 64);
     }
 
     #[test]
     fn estimate_key_never_exceeds_the_inserted_mass() {
         // biased replacement is unbiased in expectation but never invents mass
         // beyond what the whole table holds
-        let mut coco: Coco = Coco::init_with_size(8, 2);
+        let mut coco: CocoSketch = CocoSketch::init_with_size(8, 2);
         let mut total = 0u64;
         for i in 0..500u64 {
             coco.update_weighted(&format!("k{}", i % 40), 3);
@@ -537,15 +538,15 @@ mod tests {
             .sum();
         assert_eq!(table_mass, total, "the table conserves the inserted mass");
         for i in 0..40u64 {
-            assert!(coco.estimate_key(&format!("k{i}")) <= total);
+            assert!(coco.estimate(&format!("k{i}")) <= total);
         }
     }
 
     #[test]
     fn merge_combines_tables_without_losing_counts() {
         // verify merging replays entries so both sketches contribute to totals
-        let mut left: Coco = Coco::init_with_size(TEST_W, TEST_D);
-        let mut right: Coco = Coco::init_with_size(TEST_W, TEST_D);
+        let mut left: CocoSketch = CocoSketch::init_with_size(TEST_W, TEST_D);
+        let mut right: CocoSketch = CocoSketch::init_with_size(TEST_W, TEST_D);
 
         left.update_weighted("alpha:key", 7);
         right.update_weighted("beta:key", 11);

@@ -3,11 +3,11 @@
 //! heap-carrying sketch keeps as a `bytes` key.
 //!
 //! ```
-//! use asap_sketchlib::{CMSHeap, DataInput, KeyColumn, TupleKey};
+//! use asap_sketchlib::{CountMinSketchWithHeap, DataInput, KeyColumn, TupleKey};
 //!
-//! let key = TupleKey::new(vec![KeyColumn::Str("us-east".into()), KeyColumn::I64(443)]);
+//! let key = TupleKey::new(vec![KeyColumn::String("us-east".into()), KeyColumn::I64(443)]);
 //! let bytes = key.to_bytes().unwrap();
-//! let mut sketch: CMSHeap = CMSHeap::new(3, 64, 8);
+//! let mut sketch: CountMinSketchWithHeap = CountMinSketchWithHeap::new(3, 64, 8);
 //! sketch.update(&DataInput::Bytes(&bytes));
 //! assert_eq!(TupleKey::from_bytes(&bytes).unwrap(), key);
 //! ```
@@ -37,7 +37,7 @@ pub enum KeyColumn {
     /// A 64-bit float. `-0.0` encodes as `0.0`, and every `NaN` as one `NaN`.
     F64(f64),
     /// A UTF-8 string.
-    Str(String),
+    String(String),
 }
 
 impl PartialEq for KeyColumn {
@@ -47,7 +47,7 @@ impl PartialEq for KeyColumn {
             (Self::Bool(a), Self::Bool(b)) => a == b,
             (Self::I64(a), Self::I64(b)) => a == b,
             (Self::F64(a), Self::F64(b)) => canonical_f64_bits(*a) == canonical_f64_bits(*b),
-            (Self::Str(a), Self::Str(b)) => a == b,
+            (Self::String(a), Self::String(b)) => a == b,
             _ => false,
         }
     }
@@ -63,7 +63,7 @@ impl Hash for KeyColumn {
             Self::Bool(value) => value.hash(state),
             Self::I64(value) => value.hash(state),
             Self::F64(value) => canonical_f64_bits(*value).hash(state),
-            Self::Str(value) => value.hash(state),
+            Self::String(value) => value.hash(state),
         }
     }
 }
@@ -101,7 +101,7 @@ impl TupleKey {
                     out.push(TAG_F64);
                     out.extend_from_slice(&canonical_f64_bits(*value).to_be_bytes());
                 }
-                KeyColumn::Str(value) => {
+                KeyColumn::String(value) => {
                     let len = u32::try_from(value.len()).map_err(|_| {
                         format!(
                             "tuple key string of {} bytes exceeds the u32 length prefix",
@@ -150,7 +150,7 @@ impl TupleKey {
                     rest = tail;
                     let text = std::str::from_utf8(text)
                         .map_err(|error| format!("tuple key string is not UTF-8: {error}"))?;
-                    KeyColumn::Str(text.to_string())
+                    KeyColumn::String(text.to_string())
                 }
                 other => return Err(format!("tuple key tag {other:#04x} is unknown")),
             };
@@ -205,7 +205,7 @@ mod tests {
             KeyColumn::Bool(true),
             KeyColumn::I64(-2),
             KeyColumn::F64(1.5),
-            KeyColumn::Str("é".into()),
+            KeyColumn::String("é".into()),
         ]);
         let mut expected = vec![0x00, 0x01, 0x02, 0x03];
         expected.extend_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe]);
@@ -219,14 +219,14 @@ mod tests {
     #[test]
     fn round_trip_restores_every_column() {
         let columns = vec![
-            KeyColumn::Str(String::new()),
+            KeyColumn::String(String::new()),
             KeyColumn::I64(i64::MIN),
             KeyColumn::I64(i64::MAX),
             KeyColumn::Null,
             KeyColumn::F64(-1e300),
             KeyColumn::F64(f64::INFINITY),
             KeyColumn::Bool(true),
-            KeyColumn::Str("us-east-1 😀".into()),
+            KeyColumn::String("us-east-1 😀".into()),
         ];
         let original = key(columns);
         let bytes = original.to_bytes().expect("encode");
@@ -298,13 +298,13 @@ mod tests {
     #[test]
     fn distinct_tuples_are_distinct_bytes() {
         let tuples = [
-            vec![KeyColumn::Str("ab".into())],
-            vec![KeyColumn::Str("a".into()), KeyColumn::Str("b".into())],
+            vec![KeyColumn::String("ab".into())],
+            vec![KeyColumn::String("a".into()), KeyColumn::String("b".into())],
             vec![KeyColumn::Null],
             vec![KeyColumn::Bool(false)],
             vec![KeyColumn::I64(0)],
             vec![KeyColumn::F64(0.0)],
-            vec![KeyColumn::Str(String::new())],
+            vec![KeyColumn::String(String::new())],
             vec![KeyColumn::I64(0), KeyColumn::Null],
             vec![KeyColumn::Null, KeyColumn::I64(0)],
         ];

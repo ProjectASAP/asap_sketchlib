@@ -7,14 +7,14 @@
 //! printing EXPECTED vs ACTUAL and a theory-based verdict.
 
 use asap_sketchlib::common::input::{HydraCounter, HydraQuery};
-use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
+use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch as PortableCountMinSketch;
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketch as PortableKll;
 use asap_sketchlib::{
-    CMSHeap, CSHeap, Count as CoreCount, CountL2HH, CountMin, DDSketch, DataInput, Hydra,
-    HyperLogLog, KLL, UnivMon,
+    Count as CoreCount, CountMinSketch, CountMinSketchWithHeap, CountSketchWithHeap,
+    CountSketchWithL2Norm, DataInput, DdSketch, Hydra, HyperLogLog, Kll, UnivMon,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -125,14 +125,14 @@ fn main() {
     println!("Probe complete. FAIL lines above are candidate wrong-query-results.");
 }
 
-// ---------------------------------------------------------------- CountMin
+// ---------------------------------------------------------------- CountMinSketch
 fn probe_countmin() {
     let mut p = Probe::new();
     println!("--- CountMin (core, Vector2D<i32>) ---");
 
     // Sparse dims: no collisions => exact counts, incl. turnstile negatives.
     let mut cm =
-        CountMin::<asap_sketchlib::Vector2D<i32>, asap_sketchlib::RegularPath>::with_dimensions(
+        CountMinSketch::<asap_sketchlib::Vector2D<i32>, asap_sketchlib::RegularPath>::with_dimensions(
             3, 256,
         );
     cm.update_weighted(&DataInput::U32(7), 100);
@@ -147,7 +147,7 @@ fn probe_countmin() {
     // Zipf stream: one-sided CMS guarantee est >= true, excess <= eps*N.
     let (rows, cols, n, domain) = (3usize, 4096usize, 200_000usize, 8192usize);
     let mut cm =
-        CountMin::<asap_sketchlib::Vector2D<i64>, asap_sketchlib::FastPath>::with_dimensions(
+        CountMinSketch::<asap_sketchlib::Vector2D<i64>, asap_sketchlib::FastPath>::with_dimensions(
             rows, cols,
         );
     let mut truth: HashMap<i64, i64> = HashMap::new();
@@ -263,10 +263,14 @@ fn probe_topk_heaps() {
     let true_top_set: std::collections::HashSet<u32> =
         true_top.iter().take(top_k).map(|(k, _)| *k).collect();
 
-    let mut cms_heap =
-        CMSHeap::<asap_sketchlib::Vector2D<i64>, asap_sketchlib::RegularPath>::new(3, 4096, top_k);
-    let mut cs_heap =
-        CSHeap::<asap_sketchlib::Vector2D<i64>, asap_sketchlib::RegularPath>::new(5, 4096, top_k);
+    let mut cms_heap = CountMinSketchWithHeap::<
+        asap_sketchlib::Vector2D<i64>,
+        asap_sketchlib::RegularPath,
+    >::new(3, 4096, top_k);
+    let mut cs_heap = CountSketchWithHeap::<
+        asap_sketchlib::Vector2D<i64>,
+        asap_sketchlib::RegularPath,
+    >::new(5, 4096, top_k);
     for k in &stream {
         let d = DataInput::U32(*k);
         cms_heap.update(&d);
@@ -279,7 +283,7 @@ fn probe_topk_heaps() {
         let found = heap_items
             .iter()
             .filter(|it| match it.key {
-                asap_sketchlib::HeapItem::U32(v) => true_top_set.contains(&v),
+                asap_sketchlib::OwnedDataInput::U32(v) => true_top_set.contains(&v),
                 _ => false,
             })
             .count();
@@ -290,15 +294,17 @@ fn probe_topk_heaps() {
         );
     }
 
-    // CSHeap turnstile can push NEGATIVE counts into the heap (legal CS estimate).
-    let mut cs_neg =
-        CSHeap::<asap_sketchlib::Vector2D<i64>, asap_sketchlib::RegularPath>::new(3, 4096, 8);
+    // CountSketchWithHeap turnstile can push NEGATIVE counts into the heap (legal CS estimate).
+    let mut cs_neg = CountSketchWithHeap::<
+        asap_sketchlib::Vector2D<i64>,
+        asap_sketchlib::RegularPath,
+    >::new(3, 4096, 8);
     cs_neg.update_weighted(&DataInput::U32(999), -5);
     if let Some(it) = cs_neg
         .heap()
         .heap()
         .iter()
-        .find(|it| matches!(it.key, asap_sketchlib::HeapItem::U32(999)))
+        .find(|it| matches!(it.key, asap_sketchlib::OwnedDataInput::U32(999)))
     {
         let cnt = it.count;
         p.note(&format!("CSHeap stores negative heap count {cnt} for pure-decrement key (design wart, not a crash)"));
@@ -306,24 +312,27 @@ fn probe_topk_heaps() {
     p.finish("TopK heaps");
 }
 
-// --------------------------------------------------------------- CountL2HH
+// --------------------------------------------------------------- CountSketchWithL2Norm
 fn probe_countl2hh() {
     let mut p = Probe::new();
     println!("--- CountL2HH (F2 / L2 estimation) ---");
 
     // Moderate stream F2 accuracy (truth = sum over KEYS of count^2).
-    let mut sk = CountL2HH::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed(4, 2048, 7);
+    let mut sk =
+        CountSketchWithL2Norm::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed_index(
+            4, 2048, 7,
+        );
     let mut z = Zipf::new(1024, 1.2, 45);
     let mut per_key: HashMap<u32, i64> = HashMap::new();
     for i in 0..50_000u32 {
         let k = z.sample_usize() as u32;
         let w = 1 + (i % 3) as i64;
-        sk.fast_insert_with_count(&DataInput::U32(k), w);
+        sk.update_weighted(&DataInput::U32(k), w);
         *per_key.entry(k).or_insert(0) += w;
     }
     let truth_f2: f64 = per_key.values().map(|c| (*c as f64) * (*c as f64)).sum();
-    let l2 = sk.get_l2();
-    let got_f2 = sk.get_l2_sqr();
+    let l2 = sk.l2();
+    let got_f2 = sk.l2_squared();
     p.check(
         "F2 within 15% of truth",
         format!(
@@ -335,10 +344,12 @@ fn probe_countl2hh() {
 
     // Turnstile decrement support.
     let mut sk2 =
-        CountL2HH::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed(4, 2048, 7);
-    sk2.fast_insert_with_count(&DataInput::U32(1), 5);
-    sk2.fast_insert_with_count(&DataInput::U32(1), -2);
-    let est = sk2.fast_update_and_est(&DataInput::U32(1), 0);
+        CountSketchWithL2Norm::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed_index(
+            4, 2048, 7,
+        );
+    sk2.update_weighted(&DataInput::U32(1), 5);
+    sk2.update_weighted(&DataInput::U32(1), -2);
+    let est = sk2.update_weighted_and_estimate(&DataInput::U32(1), 0);
     p.check(
         "turnstile 5 then -2 estimates 3",
         format!("expected 3, got {est}"),
@@ -347,10 +358,12 @@ fn probe_countl2hh() {
 
     // i64 overflow probe: two 3e9-count keys => true F2 = 1.8e19 > i64::MAX.
     let mut sk3 =
-        CountL2HH::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed(4, 2048, 7);
-    sk3.fast_insert_with_count(&DataInput::U32(1), 3_000_000_000);
-    sk3.fast_insert_with_count(&DataInput::U32(2), 3_000_000_000);
-    let got = sk3.get_l2_sqr();
+        CountSketchWithL2Norm::<asap_sketchlib::DefaultXxHasher>::with_dimensions_and_seed_index(
+            4, 2048, 7,
+        );
+    sk3.update_weighted(&DataInput::U32(1), 3_000_000_000);
+    sk3.update_weighted(&DataInput::U32(2), 3_000_000_000);
+    let got = sk3.l2_squared();
     let truth = 2.0f64 * (3_000_000_000f64).powi(2);
     let saturated = got > i64::MAX as f64 * 0.999;
     p.check(
@@ -371,8 +384,8 @@ fn probe_hll() {
     println!("--- HLL cardinality (Classic / ErtlMLE / HIP, p14) ---");
     let checkpoints: [u64; 4] = [10_000, 100_000, 1_000_000, 10_000_000];
     let mut classic = HyperLogLog::<asap_sketchlib::Classic>::new();
-    let mut ertl = HyperLogLog::<asap_sketchlib::ErtlMLE>::new();
-    let mut hip = asap_sketchlib::HyperLogLogHIP::new();
+    let mut ertl = HyperLogLog::<asap_sketchlib::Ertl>::new();
+    let mut hip = asap_sketchlib::HyperLogLogHip::new();
     let mut inserted: u64 = 0;
     for &target in &checkpoints {
         while inserted < target {
@@ -434,13 +447,13 @@ fn probe_kll() {
 
     for label in ["KLL", "KLLDynamic"] {
         let (e1, w1) = if label == "KLL" {
-            let mut sk = asap_sketchlib::KLL::init_kll(200);
+            let mut sk = asap_sketchlib::Kll::with_k(200);
             for v in &data {
                 sk.update(v);
             }
             check_quantiles(&sk, &data, &qs)
         } else {
-            let mut sk = asap_sketchlib::KLLDynamic::<f64>::init_kll(200);
+            let mut sk = asap_sketchlib::KllDynamic::<f64>::with_k(200);
             for v in &data {
                 sk.update(v);
             }
@@ -457,8 +470,8 @@ fn probe_kll() {
         );
 
         // Merge preservation: split halves into two sketches, merge, re-check.
-        let mut a = asap_sketchlib::KLL::init_kll_with_seed(200, 99);
-        let mut b = asap_sketchlib::KLL::init_kll_with_seed(200, 123);
+        let mut a = asap_sketchlib::Kll::with_k_and_seed(200, 99);
+        let mut b = asap_sketchlib::Kll::with_k_and_seed(200, 123);
         for (i, v) in data.iter().enumerate() {
             if i % 2 == 0 {
                 a.update(v);
@@ -482,12 +495,12 @@ fn probe_kll() {
     p.finish("KLL");
 }
 
-fn check_quantiles(sk: &asap_sketchlib::KLL, data: &[f64], qs: &[f64]) -> (f64, String) {
+fn check_quantiles(sk: &asap_sketchlib::Kll, data: &[f64], qs: &[f64]) -> (f64, String) {
     quantile_report(|q| sk.quantile(q), data, qs)
 }
 
 fn check_quantiles_dyn(
-    sk: &asap_sketchlib::KLLDynamic<f64>,
+    sk: &asap_sketchlib::KllDynamic<f64>,
     data: &[f64],
     qs: &[f64],
 ) -> (f64, String) {
@@ -524,7 +537,7 @@ fn probe_ddsketch() {
         let v = gamma.powi(k) * (1.0 + 1e-6); // just inside bucket k
         let n = 10_000u64;
 
-        let mut core = DDSketch::new(alpha);
+        let mut core = DdSketch::new(alpha);
         let mut port = PortableDds::new(alpha);
         for _ in 0..n {
             core.add(&v);
@@ -548,7 +561,7 @@ fn probe_ddsketch() {
 
     // Mixed-stream sanity on both.
     let mut rng = StdRng::seed_from_u64(47);
-    let mut core = DDSketch::new(alpha);
+    let mut core = DdSketch::new(alpha);
     let mut port = PortableDds::new(alpha);
     let mut truth: Vec<f64> = Vec::new();
     for _ in 0..20_000 {
@@ -595,7 +608,7 @@ fn qs_max_rel(truth: &[f64], qf: impl Fn(f64) -> f64, qs: &[f64]) -> f64 {
 fn probe_hydra() {
     let mut p = Probe::new();
     println!("--- Hydra (KLL-backed counter) ---");
-    let mut hydra = Hydra::with_schema(4, 512, ["region"], HydraCounter::KLL(KLL::init_kll(200)))
+    let mut hydra = Hydra::with_schema(4, 512, ["region"], HydraCounter::Kll(Kll::with_k(200)))
         .expect("schema");
     let mut rng = StdRng::seed_from_u64(48);
     let mut samples: Vec<f64> = (0..10_000).map(|_| rng.random::<f64>() * 1000.0).collect();
@@ -619,9 +632,9 @@ fn probe_hydra() {
         (med - truth_med).abs() / truth_med < 0.05,
     );
 
-    // query_quantile(name says quantile, actually returns CDF(threshold)).
+    // query_cdf(name says quantile, actually returns CDF(threshold)).
     let x = 500.0;
-    let got = hydra.query_quantile(&[Some("eu")], x).expect("cdf");
+    let got = hydra.query_cdf(&[Some("eu")], x).expect("cdf");
     let truth_cdf = sorted.partition_point(|v| *v <= x) as f64 / n as f64;
     p.note("Hydra::query_quantile(key, threshold) returns CDF(threshold), NOT a quantile value (name inversion)");
     p.check(
@@ -631,8 +644,13 @@ fn probe_hydra() {
     );
 
     // Frequency through a CM-backed head is exact-ish.
-    let mut hcm = Hydra::with_schema(4, 512, ["region"], HydraCounter::CM(Default::default()))
-        .expect("schema2");
+    let mut hcm = Hydra::with_schema(
+        4,
+        512,
+        ["region"],
+        HydraCounter::CountMinSketch(Default::default()),
+    )
+    .expect("schema2");
     for _ in 0..37 {
         hcm.update(&["us"], &DataInput::Str("click"), None)
             .expect("upd");
@@ -653,7 +671,7 @@ fn probe_hydra() {
 fn probe_univmon() {
     let mut p = Probe::new();
     println!("--- UnivMon weighted metrics ---");
-    let mut um = UnivMon::init_univmon(32, 5, 2048, 8);
+    let mut um = UnivMon::new(32, 5, 2048, 8);
     let mut truth_w: HashMap<u32, i64> = HashMap::new();
     let mut z = Zipf::new(1000, 1.2, 49);
     for i in 0..20_000usize {
@@ -678,10 +696,10 @@ fn probe_univmon() {
         .sum::<f64>();
     let card_truth = truth_w.len() as f64;
 
-    let l1 = um.calc_l1();
-    let l2 = um.calc_l2();
-    let ent = um.calc_entropy();
-    let card = um.calc_card();
+    let l1 = um.estimate_l1();
+    let l2 = um.estimate_l2();
+    let ent = um.estimate_entropy();
+    let card = um.estimate_cardinality();
     p.check(
         "L1 exact",
         format!("expected {l1_truth}, got {l1}"),
@@ -713,10 +731,10 @@ fn probe_univmon() {
 
 #[cfg(feature = "experimental")]
 fn probe_univmon_pyramid() {
-    use asap_sketchlib::UnivMonPyramid;
+    use asap_sketchlib::UnivMonTwoTier;
     let mut p = Probe::new();
     println!("--- UnivMonPyramid (experimental) ---");
-    let mut up = UnivMonPyramid::with_defaults();
+    let mut up = UnivMonTwoTier::with_defaults();
     let mut truth_w: HashMap<u32, i64> = HashMap::new();
     let mut z = Zipf::new(1000, 1.2, 50);
     for i in 0..20_000usize {
@@ -727,8 +745,8 @@ fn probe_univmon_pyramid() {
     }
     let l1_truth: i64 = truth_w.values().sum();
     let card_truth = truth_w.len() as f64;
-    let l1 = up.calc_l1();
-    let card = up.calc_card();
+    let l1 = up.estimate_l1();
+    let card = up.estimate_cardinality();
     p.check(
         "L1 exact",
         format!("expected {l1_truth}, got {l1}"),
@@ -791,7 +809,7 @@ fn probe_univmon_q() {
     );
 
     let distinct_truth = freq.len() as f64;
-    let dist = q.estimate_distinct();
+    let dist = q.estimate_cardinality();
     p.check(
         "distinct within 10%",
         format!("expected {distinct_truth}, got {dist}"),
@@ -886,7 +904,7 @@ fn probe_nitro() {
     for rate in [1.0f64, 0.5, 0.25] {
         let mut nb = asap_sketchlib::NitroBatch::with_target(
             rate,
-            CountMin::<asap_sketchlib::Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(
+            CountMinSketch::<asap_sketchlib::Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(
                 5, 2048,
             ),
         );
@@ -905,11 +923,11 @@ fn probe_nitro() {
 // ------------------------------------------------------- EH univ optimized
 #[cfg(feature = "experimental")]
 fn probe_eh_univ() {
-    use asap_sketchlib::EHUnivOptimized;
+    use asap_sketchlib::ExponentialHistogramUnivMon;
     let mut p = Probe::new();
     println!("--- EHUnivOptimized exact map tier (experimental) ---");
     let window = 100u64;
-    let mut eh = EHUnivOptimized::with_defaults(2, window);
+    let mut eh = ExponentialHistogramUnivMon::with_defaults(2, window);
     // Stream updates over times 0..150; only [50,149] survive at t=149+window semantics.
     for t in 0..150u64 {
         eh.update(t, &DataInput::U32((t % 10) as u32), (t as i64 % 3) + 1);
@@ -917,8 +935,8 @@ fn probe_eh_univ() {
     // Query recent interval fully inside surviving range.
     let res = eh.query_interval(120, 149);
     match res {
-        Some(asap_sketchlib::EHUnivQueryResult::Map {
-            freq_map,
+        Some(asap_sketchlib::EhUnivMonQueryResult::Exact {
+            counts,
             total_count,
         }) => {
             let expect_total: usize = (120..=149u64).map(|t| (t as i64 % 3 + 1) as usize).sum();
@@ -933,11 +951,11 @@ fn probe_eh_univ() {
             }
             let exact = expect_freq
                 .iter()
-                .all(|(k, v)| freq_map.get(&asap_sketchlib::HeapItem::U32(*k)) == Some(v))
-                && expect_freq.len() == freq_map.len();
+                .all(|(k, v)| counts.get(&asap_sketchlib::OwnedDataInput::U32(*k)) == Some(v))
+                && expect_freq.len() == counts.len();
             p.check(
                 "interval map tier per-key exact",
-                format!("{} entries", freq_map.len()),
+                format!("{} entries", counts.len()),
                 exact,
             );
         }
@@ -952,19 +970,19 @@ fn probe_eh_univ() {
 
 // ---------------------------------------------------------------- Tumbling
 fn probe_tumbling() {
-    use asap_sketchlib::{FoldCMSConfig, TumblingWindow};
+    use asap_sketchlib::{CountMinSketchFoldConfig, TumblingWindow};
 
     let mut p = Probe::new();
     println!("--- TumblingWindow FoldCMS + KLL ---");
 
-    // FoldCMS: weighted counts per key.
-    let cfg = FoldCMSConfig {
+    // CountMinSketchFold: weighted counts per key.
+    let cfg = CountMinSketchFoldConfig {
         rows: 3,
         full_cols: 2048,
         fold_level: 0,
         top_k: 32,
     };
-    let mut tw: TumblingWindow<asap_sketchlib::FoldCMS> =
+    let mut tw: TumblingWindow<asap_sketchlib::CountMinSketchFold> =
         TumblingWindow::new(10, 8, cfg.clone(), 4);
     for t in 0..25u64 {
         tw.update_weighted(t, &DataInput::Str("A"), 2);
@@ -986,12 +1004,12 @@ fn probe_tumbling() {
 
     // KLL tumbling: the numeric `value` arg is IGNORED; the KEY doubles as the
     // observation (tumbling.rs:146-149). Feed values via the key.
-    let kcfg = asap_sketchlib::KLLConfig {
+    let kcfg = asap_sketchlib::KllConfig {
         k: 200,
         m: 8,
         seed: None,
     };
-    let mut tkw: TumblingWindow<KLL> = TumblingWindow::new(100, 4, kcfg, 2);
+    let mut tkw: TumblingWindow<Kll> = TumblingWindow::new(100, 4, kcfg, 2);
     let mut rng = StdRng::seed_from_u64(53);
     let mut all_vals: Vec<f64> = Vec::new();
     for t in 0..1000u64 {
@@ -1018,8 +1036,8 @@ fn probe_portable_wire_types() {
     let mut p = Probe::new();
     println!("--- Portable wire types (Go-parity DTOs) ---");
 
-    // Portable CountMin.
-    let mut pcs = CountMinSketch::new(3, 4096);
+    // Portable CountMinSketch.
+    let mut pcs = PortableCountMinSketch::new(3, 4096);
     let mut truth: HashMap<String, f64> = HashMap::new();
     let mut z = Zipf::new(2048, 1.1, 54);
     for _ in 0..50_000 {
